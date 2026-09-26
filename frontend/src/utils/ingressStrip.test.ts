@@ -199,46 +199,87 @@ describe("parseGameplayMessage rebuilds every kind from its declared fields (LIV
 });
 
 describe("the closed control frames (LIVE-2 §11.2)", () => {
+  /* LIVE-2D: every game is addressed by its server-minted `gameId`; the legacy room protocol is gone. */
+  const GAME = "g_0123456789abcdefghjkmnpqr0";
+  const VARIANTS = { length: "standard", mode: "live", delayedAuction: false, gentleRust: false, unpredictableRevenue: false, dynamicStockMarket: false, expandedMap: false, plusTiles: false, levelPlayingField: false };
+
   it("accepts what today's client sends, field for field", () => {
     const good = [
-      { kind: "hello", room: "JUNO-4T2", build: "dev", pin: "1234", token: "k3-abc", baseIndex: 7, baseId: "s1-1" },
+      { kind: "hello", gameId: GAME, build: "dev", baseIndex: 7, baseId: "s1-1" },
+      { kind: "hello", gameId: GAME, build: "dev", baseIndex: -1 },
       { kind: "submit", build: "dev", msg: { PassTurn: {} }, baseIndex: -1, baseId: "s1-1", submissionId: "ab12-3" },
-      { kind: "room-hello", room: "~lobby", build: "dev" },
-      { kind: "room-write", room: "JUNO-4T2", write: { op: "upsert-player", player: { id: "p-abc", nickname: "A", isReady: true, hasPin: false, color: "red" } } },
-      { kind: "room-write", room: "JUNO-4T2", write: { op: "host", hostId: "p-abc", nickname: "Host", variants: { length: "standard", mode: "live", delayedAuction: false, gentleRust: false, unpredictableRevenue: false, dynamicStockMarket: false, expandedMap: false, plusTiles: false, levelPlayingField: false, rules: 1 }, visibility: "public", playerCount: null, anteUjuno: "0" } },
-      { kind: "room-write", room: "JUNO-4T2", write: { op: "status", status: "playing" } },
-      { kind: "room-write", room: "JUNO-4T2", write: { op: "kick", playerId: "p-def" } },
-      { kind: "seat-pin", room: "JUNO-4T2", requestId: "r1-x", playerId: "p-abc", pin: "1234" },
-      { kind: "claim-seat", room: "JUNO-4T2", requestId: "r1-x", playerId: "p-abc", pin: "1234" },
-      { kind: "chat-send", room: "JUNO-4T2", text: "x".repeat(MAX_CHAT_TEXT_LENGTH), displayName: "A" },
-      { kind: "presence-set", room: "JUNO-4T2", state: { playerId: "p-abc", at: 1, routeDrafts: { 0: [[1, 2]] }, routeValues: { 0: 90 }, actingCompanyId: 3 } },
-      { kind: "presence-set", room: "JUNO-4T2", state: null },
-      { kind: "lobby-hello" },
-      { kind: "lobby-watch", roomId: null },
-      { kind: "lobby-write", requestId: "r2", write: { op: "heartbeat", roomId: "r1" } },
+      { kind: "room-hello", gameId: GAME },
+      { kind: "chat-send", gameId: GAME, text: "x".repeat(MAX_CHAT_TEXT_LENGTH) },
+      { kind: "presence-set", gameId: GAME, state: { playerId: "p-abc", at: 1, routeDrafts: { 0: [[1, 2]] }, routeValues: { 0: 90 }, actingCompanyId: 3 } },
+      { kind: "presence-set", gameId: GAME, state: null },
+      { kind: "rooms-watch", on: true },
+      { kind: "rooms-watch", on: false },
+      { kind: "room-op", requestId: "rmf2k1", op: { type: "create", visibility: "public", exactPlayers: null, variants: VARIANTS, nickname: "Host" } },
+      { kind: "room-op", requestId: "rmf2k2", op: { type: "create", visibility: "private", exactPlayers: 4, variants: VARIANTS, nickname: "Host", color: null, stake: "5000000" } },
+      { kind: "room-op", requestId: "rmf2k3", op: { type: "join", code: "JUNO-7K4M-Q2ZP", takeSeat: true } },
+      { kind: "room-op", requestId: "rmf2k4", gameId: GAME, op: { type: "take-seat" } },
+      { kind: "room-op", requestId: "rmf2k5", gameId: GAME, op: { type: "release-seat" } },
+      { kind: "room-op", requestId: "rmf2k6", gameId: GAME, op: { type: "leave" } },
+      { kind: "room-op", requestId: "rmf2k7", gameId: GAME, op: { type: "set-ready", ready: true } },
+      { kind: "room-op", requestId: "rmf2k8", gameId: GAME, op: { type: "set-profile", nickname: "Ada", color: null } },
+      { kind: "room-op", requestId: "rmf2k9", gameId: GAME, op: { type: "set-visibility", visibility: "private" } },
+      { kind: "room-op", requestId: "rmf2ka", gameId: GAME, op: { type: "rotate-code" } },
+      { kind: "room-op", requestId: "rmf2kb", gameId: GAME, op: { type: "kick", playerId: "p-0123456789abcdef" } },
+      { kind: "room-op", requestId: "rmf2kc", gameId: GAME, op: { type: "transfer-host", toPlayerId: "p-0123456789abcdef" } },
+      { kind: "room-op", requestId: "rmf2kd", gameId: GAME, op: { type: "start-game" } },
+      { kind: "room-op", requestId: "rmf2ke", gameId: GAME, op: { type: "cancel-room" } },
     ];
-    for (const frame of good) expect([frame.kind, parseClientFrame(JSON.parse(JSON.stringify(frame))).ok]).toEqual([frame.kind, true]);
+    for (const frame of good) {
+      const label = `${frame.kind}${"op" in frame ? `:${(frame.op as { type: string }).type}` : ""}`;
+      expect([label, parseClientFrame(JSON.parse(JSON.stringify(frame))).ok]).toEqual([label, true]);
+    }
   });
 
   it("refuses an unknown field, a deleted op, a deleted frame kind, and an oversized value", () => {
     const bad = [
-      { kind: "hello", room: "JUNO-4T2", build: "dev", extra: 1 },
+      { kind: "hello", gameId: GAME, build: "dev", extra: 1 },
       /* LIVE-2B: identity is the upgrade's; a frame that names one is refused. */
-      { kind: "hello", room: "JUNO-4T2", build: "dev", claim: "p-abc" },
-      { kind: "room-hello", room: "JUNO-4T2", build: "dev", claim: "p-abc" },
+      { kind: "hello", gameId: GAME, build: "dev", claim: "p-abc" },
+      { kind: "room-hello", gameId: GAME, claim: "p-abc" },
+      /* LIVE-2D: no room code as a key, and no seat PIN or token, on any frame. */
+      { kind: "hello", room: "JUNO-4T2", build: "dev" },
+      { kind: "hello", gameId: GAME, build: "dev", pin: "1234" },
+      { kind: "hello", gameId: GAME, build: "dev", token: "k3-abc" },
+      { kind: "hello", build: "dev" },
+      { kind: "hello", gameId: "JUNO-7K4M-Q2ZP", build: "dev" },
+      { kind: "room-hello", room: "JUNO-4T2" },
+      { kind: "room-hello", room: "~lobby" },
+      { kind: "chat-send", room: "JUNO-4T2", text: "hi" },
+      /* The server signs a chat line; a frame cannot name its author. */
+      { kind: "chat-send", gameId: GAME, text: "hi", displayName: "A" },
+      { kind: "chat-send", gameId: GAME, text: "hi", author: "p-0123456789abcdef" },
+      { kind: "presence-set", room: "JUNO-4T2", state: null },
+      /* The retired legacy protocol, kind by kind. */
       { kind: "find-seats", requestId: "r1", pin: "1234" },
-      { kind: "room-write", room: "JUNO-4T2", write: { op: "variants", variants: {} } },
+      { kind: "room-write", room: "JUNO-4T2", write: { op: "upsert-player", player: { id: "p-abc", nickname: "A", isReady: true } } },
       { kind: "room-write", room: "JUNO-4T2", write: { op: "forced-sign", stage: "mark" } },
-      { kind: "room-write", room: "JUNO-4T2", write: { op: "host", hostId: "p-abc", nickname: "H", variants: { rules: 1, huge: "x" } } },
-      { kind: "room-write", room: "JUNO-4T2", write: { op: "upsert-player", player: { id: "p-abc", nickname: "A", isReady: true, admin: true } } },
-      { kind: "chat-send", room: "JUNO-4T2", text: "x".repeat(MAX_CHAT_TEXT_LENGTH + 1) },
-      { kind: "presence-set", room: "JUNO-4T2", state: { routeDrafts: { 16: [[1, 2]] } } },
-      { kind: "presence-set", room: "JUNO-4T2", state: { routeDrafts: { 0: [[1, 257]] } } },
-      { kind: "presence-set", room: "JUNO-4T2", state: { routeValues: { 0: 1_000_001 } } },
-      { kind: "hello", room: "x".repeat(41), build: "dev" },
+      { kind: "seat-pin", room: "JUNO-4T2", requestId: "r1-x", playerId: "p-abc", pin: "1234" },
+      { kind: "claim-seat", room: "JUNO-4T2", requestId: "r1-x", playerId: "p-abc", pin: "1234" },
+      { kind: "lobby-hello" },
+      { kind: "lobby-watch", roomId: null },
+      { kind: "lobby-write", requestId: "r2", write: { op: "heartbeat", roomId: "r1" } },
+      /* No room op names who is asking, a host, a record field, or a rules revision. */
+      { kind: "room-op", requestId: "r3", op: { type: "create", visibility: "public", exactPlayers: null, variants: { ...VARIANTS, rules: 1 }, nickname: "H" } },
+      { kind: "room-op", requestId: "r3", op: { type: "create", visibility: "public", exactPlayers: null, variants: VARIANTS, nickname: "H", hostId: "p-0123456789abcdef" } },
+      { kind: "room-op", requestId: "r3", op: { type: "join", code: "JUNO-7K4M-Q2ZP", takeSeat: true, playerId: "p-0123456789abcdef" } },
+      { kind: "room-op", requestId: "r3", gameId: GAME, op: { type: "set-ready", ready: true, playerId: "p-0123456789abcdef" } },
+      { kind: "room-op", requestId: "r3", gameId: GAME, op: { type: "kick", playerId: "alice" } },
+      { kind: "room-op", requestId: "r3", gameId: GAME, op: { type: "set-variants", variants: VARIANTS } },
+      { kind: "room-op", requestId: "r3", gameId: GAME, op: { type: "start-game", deal: { players: [] } } },
+      { kind: "room-op", requestId: "r3", gameId: GAME, actor: "p-0123456789abcdef", op: { type: "start-game" } },
+      { kind: "chat-send", gameId: GAME, text: "x".repeat(MAX_CHAT_TEXT_LENGTH + 1) },
+      { kind: "presence-set", gameId: GAME, state: { routeDrafts: { 16: [[1, 2]] } } },
+      { kind: "presence-set", gameId: GAME, state: { routeDrafts: { 0: [[1, 257]] } } },
+      { kind: "presence-set", gameId: GAME, state: { routeValues: { 0: 1_000_001 } } },
+      { kind: "hello", gameId: `${GAME}${"x".repeat(41)}`, build: "dev" },
       { kind: "submit", build: "dev", msg: {}, baseIndex: 0, submissionId: "a", sneaky: true },
     ];
-    for (const frame of bad) expect([frame.kind, parseClientFrame(frame).ok]).toEqual([frame.kind, false]);
+    for (const frame of bad) expect([JSON.stringify(frame).slice(0, 90), parseClientFrame(frame).ok]).toEqual([JSON.stringify(frame).slice(0, 90), false]);
   });
 });
 

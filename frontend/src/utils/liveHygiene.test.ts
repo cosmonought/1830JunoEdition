@@ -139,30 +139,28 @@ describe("the game server binds loopback and parks the staging lobby (LIVE-0)", 
     expect(START).not.toContain("ws://127.0.0.1:${port}");
   });
 
-  it("parks the staging lobby behind one constant", () => {
-    expect(SERVER).toContain("const STAGING_LOBBY_ENABLED: boolean = false;");
+  /* LIVE-2D (RUST-RETIRE-1 2B.3): THE STAGING LOBBY IS DELETED, NOT PARKED. LIVE-0 parked it behind
+     `STAGING_LOBBY_ENABLED = false` and answered its three frames with empty or refused replies; LIVE-2D removes the
+     frames themselves. `lobby-hello`, `lobby-watch` and `lobby-write` are not kinds this server knows -- a client
+     that sends one is answered `bad-frame`, like any other unknown kind, and no lobby state exists to touch. */
+  it("has no staging lobby left to park: no flag, no handler, no state", () => {
+    expect(SERVER).not.toContain("STAGING_LOBBY_ENABLED");
+    for (const kind of ["lobby-hello", "lobby-watch", "lobby-write"]) {
+      expect([kind, SERVER.includes(`frame.kind === "${kind}"`)]).toEqual([kind, false]);
+    }
+    expect(SERVER).not.toContain("applyLobbyWrite");
+    expect(SERVER).not.toContain("lobbyWatch.set");
   });
 
-  it("keeps lobby-hello for the public sandbox list and answers the staging list empty", () => {
-    const hello = sliceBetween(SERVER, 'if (frame.kind === "lobby-hello") {', "return;");
-    expect(hello).toContain('{ kind: "lobby", rooms: STAGING_LOBBY_ENABLED ? lobbyRooms() : [] }');
-    expect(hello).toContain('{ kind: "rooms", rooms: await sandboxRooms() }');
-  });
-
-  it("refuses lobby-watch and lobby-write before any lobby state is touched, in their own reply frames", () => {
-    const watch = sliceBetween(SERVER, 'if (frame.kind === "lobby-watch") {', "await lobbyReady;");
-    expect(watch).toContain("if (!STAGING_LOBBY_ENABLED) {");
-    expect(watch).toContain("room: null, seats: []");
-    expect(watch).not.toContain("lobbyWatch.set");
-    const write = sliceBetween(SERVER, 'if (frame.kind === "lobby-write") {', "await lobbyReady;");
-    expect(write).toContain("if (!STAGING_LOBBY_ENABLED) {");
-    expect(write).toContain('kind: "lobby-ack"');
-    expect(write).toContain("ok: false");
-    expect(write).not.toContain("applyLobbyWrite");
-    expect(write).not.toContain("saveLobbyQuietly");
-    // Not `error`: the client fans that out to every error listener on the socket, the live lobby's too.
-    expect(watch).not.toContain('kind: "error"');
-    expect(write).not.toContain('kind: "error"');
+  it("refuses every retired frame kind as unknown, before any state is touched", () => {
+    const schema = require("../gameEngine/messageSchema") as typeof import("../gameEngine/messageSchema");
+    for (const kind of ["lobby-hello", "lobby-watch", "lobby-write", "room-write", "seat-pin", "claim-seat", "find-seats"]) {
+      expect([kind, schema.RETIRED_CLIENT_FRAME_KINDS.includes(kind)]).toEqual([kind, true]);
+      expect([kind, schema.CLIENT_FRAME_KINDS.includes(kind)]).toEqual([kind, false]);
+      expect([kind, schema.parseClientFrame({ kind })]).toEqual([kind, { ok: false, reason: schema.BAD_FRAME_REASONS.unknownKind, kind: null }]);
+    }
+    /* The public list is `rooms-watch` now, on the server-owned room protocol. */
+    expect(schema.CLIENT_FRAME_KINDS).toContain("rooms-watch");
   });
 });
 

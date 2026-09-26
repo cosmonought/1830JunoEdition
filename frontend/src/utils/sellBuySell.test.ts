@@ -151,7 +151,12 @@ describe("the shell walks the stages (design notes #1443/#1444)", () => {
   const bar = readStripped("panels/ContextualActionBar.tsx");
 
   it("stamps the revision when it deals, and hands the bar the stage", () => {
-    expect(app).toContain("variants: { ...sandboxRoom.variants, rules: CURRENT_RULES_REVISION }");
+    /* LIVE-2D: the SERVER deals now (`start-game`), and stamps the revision exactly as the shell used to. */
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    const service = fs.readFileSync(path.join(__dirname, "..", "..", "..", "server", "src", "rooms", "roomService.ts"), "utf8");
+    expect(service).toContain("variants: { ...plan.variants, rules: CURRENT_RULES_REVISION },");
+    expect(app).not.toContain("rules: CURRENT_RULES_REVISION }");
     expect(app).toContain("? stockTurnStage(gameState)");
     expect(app).toContain('onShowStocks={() => setActiveMainTab("corps")}');
   });

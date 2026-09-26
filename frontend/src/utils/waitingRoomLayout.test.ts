@@ -101,14 +101,27 @@ describe("what a viewer is entitled to (design note #1443)", () => {
     expect(WAITING).toContain("{!isWatching && (");
   });
 
-  it("leaves the seat-PIN rejoin in reach, because it is proof of a seat rather than a way round one", () => {
-    /* That path needs the seat's PIN, and `adoptSeat` retires the watch intent on its way through (#1442) --
-       so it is the device-switch case #1341 built, not a second door past #1441's Join. */
-    expect(WAITING).toContain('setSeatPin({ mode: "rejoin", seatId: player.id })');
-    expect(WAITING).toContain("<SeatPinModal");
-    // And no new seat-claim path was invented on this screen.
+  it("offers a watcher a seat by one op, and no seat-PIN door survives (LIVE-2D)", () => {
+    /* #1341's rejoin needed the seat's PIN; the PINs are gone with it -- a seat is its principal's, bound by the
+       server, and comes back with the session. What a watcher of a waiting table gets instead is the one door the
+       server authorizes: `take-seat`, offered only when the shell says the table can seat them. */
+    expect(WAITING).toContain("{onTakeSeat && (");
+    expect(WAITING).toContain('data-testid="take-seat"');
+    expect(WAITING).toContain("onClick={onTakeSeat}");
+    for (const gone of ["SeatPinModal", "setSeatPin", "Set PIN", "PIN set", "hasPin"]) {
+      expect([gone, WAITING.includes(gone)]).toEqual([gone, false]);
+    }
+    // And no seat-claim path of its own: the screen asks, the server seats.
     expect(WAITING).not.toContain("upsertSandboxPlayer");
     expect(WAITING).not.toContain("joinSandboxRoom");
+    expect(WAITING).not.toContain("roomOp(");
+  });
+
+  it("reads who it is at the table from the server's view, never from a stored id (LIVE-2D)", () => {
+    expect(WAITING).toContain('const isHost = room?.you.role === "host";');
+    expect(WAITING).toContain("const wasKicked = room !== null && room.you.kicked;");
+    expect(WAITING).toContain("const canStart = isHost && (room?.you.canStart ?? false) && enough && allReady;");
+    expect(WAITING).not.toContain("room?.hostId === localPlayerId");
   });
 
   it("keeps every start-gate and readiness reader it had", () => {
@@ -335,7 +348,10 @@ describe("a description adds meaning rather than repeating the value (design not
        -- but they come from `anteBreakdown`, never from a hand-written sentence. */
     expect(WAITING).toContain("formatJuno(ante.subsidyUjuno)");
     expect(WAITING).toContain("formatJuno(ante.netUjuno)");
-    expect(WAITING).toContain("const ante = anteBreakdown(room?.anteUjuno);");
+    /* LIVE-2D: every table on this server is a no-money table; the RoomView carries no stake, so the figures are
+       derived from zero rather than read off a document field that no longer exists. */
+    expect(WAITING).toContain('const ante = anteBreakdown("0");');
+    expect(WAITING).not.toContain("room?.anteUjuno");
     // The total is printed once, as the row's value.
     const anteRow = WAITING.slice(WAITING.indexOf('label="Ante"'));
     expect(anteRow.slice(0, 500).split("formatJuno(ante.anteUjuno)").length - 1).toBe(1);

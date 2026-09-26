@@ -19,6 +19,7 @@
 import React, { useLayoutEffect, useRef, useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { JOIN_CODE_EXAMPLE } from "../utils/roomProtocol";
 import { NativeModal } from "./NativeModal";
 
 export interface JoinGameCardProps {
@@ -27,8 +28,6 @@ export interface JoinGameCardProps {
   busy: boolean;
   onClose: () => void;
   onJoin: (code: string) => void;
-  /** Design note #1352: the by-code rejoin. Absent hides the button. */
-  onRejoin?: (code: string) => void;
   onClearError: () => void;
 }
 
@@ -63,7 +62,7 @@ export interface JoinGameCardProps {
  * beat the hook's opener capture and the card would record its own input as the thing to restore focus to --
  * a node that leaves with the card. The hook is called first, its capture is a layout effect, and this is the
  * layout effect after it. */
-export function JoinGameCard({ error, busy, onClose, onJoin, onRejoin, onClearError }: JoinGameCardProps) {
+export function JoinGameCard({ error, busy, onClose, onJoin, onClearError }: JoinGameCardProps) {
   const [codeText, setCodeText] = useState("");
   const codeRef = useRef<HTMLInputElement | null>(null);
 
@@ -116,24 +115,12 @@ export function JoinGameCard({ error, busy, onClose, onJoin, onRejoin, onClearEr
               if (codeText !== event.target.value) onClearError();
               setCodeText(event.target.value);
             }}
-            placeholder="JUNO-4T2"
+            placeholder={JOIN_CODE_EXAMPLE}
             aria-label="Room code"
           />
           <button type="submit" style={{ ...styles.primaryButton, ...(busy ? styles.disabled : {}) }} disabled={busy} data-testid="join-by-code">
             Join by code
           </button>
-          {onRejoin && (
-            <button
-              type="button"
-              style={styles.secondaryButton}
-              onClick={() => onRejoin(codeText)}
-              disabled={busy}
-              title="Already in this game on another device? Rejoin your seat with its four-digit PIN."
-              data-testid="rejoin-by-code"
-            >
-              Rejoin seat
-            </button>
-          )}
         </form>
 
         {error && <p style={styles.warning}>{error}</p>}

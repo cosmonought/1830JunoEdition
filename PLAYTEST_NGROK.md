@@ -148,15 +148,25 @@ build *is* where the tunnel hostname lives. Any frontend change from here means 
 ```powershell
 cd C:\Users\Bradshaw\Documents\GitHub\1830Juno\server
 npm run build
-node dist/server/src/start.js --insecure-local-identity --build dev
+$env:GS_MODE = "production"
+$env:GS_ALLOWED_ORIGINS = "https://PASTE-THE-HOST-HERE"
+$env:GS_TRUSTED_PROXY_HOPS = "1"
+node dist/server/src/start.js --build dev
 ```
+
+LIVE-2D: a remote playtest is a **production-mode** server. Every browser gets a guest session from
+`POST /gs/api/session` (an HttpOnly `__Host-` cookie, which is why the tunnel's `https` matters), the only origin
+allowed is the tunnel's own, and ngrok is the one proxy hop that appends `X-Forwarded-For` (so `1`). Development
+identity (`?dev_claim=`) is loopback-only and is refused here by design.
 
 Expect:
 
 ```
-1830 game server listening on ws://127.0.0.1:8917 (build "dev", INSECURE local identity)
+1830 game server listening on ws://127.0.0.1:8917 (build "dev", GS_MODE=production)
+  PRODUCTION IDENTITY: the __Host-gs_session cookie (...), bootstrapped at POST /gs/api/session; trusted proxy hops 1
+  rooms: the server-owned protocol (room-op, GameRecords in games/)
+  allowed origins: https://PASTE-THE-HOST-HERE
   compiled <stamp> UTC -- if a fix you just made is not in this stamp, the server was not rebuilt
-  rooms stored in ...\server\data -- one .log.jsonl per room
 ```
 
 **Check the stamp.** Older than a fix you were told about means the server did not pick it up — `npm run
@@ -205,25 +215,20 @@ actually from outside your machine.
 Send players the `https://` URL, and tell them two things:
 
 - **ngrok shows a warning page first.** Click **Visit Site**. It appears once per browser.
-- **One tab each.** Not a duplicated tab — seats live in `sessionStorage` (#528) and Chrome *copies* it into
-  a duplicate, so both tabs would be the same player and every turn-authority check would pass for the wrong
-  reason. This only really binds you: everyone else is on their own machine.
+- **One browser each.** A guest is its browser's session cookie, so every tab of one browser is the same player
+  (a reload keeps the seat). To play two seats yourself, use a second browser or a private window. This only
+  really binds you: everyone else is on their own machine.
 
 **Use the ngrok URL yourself too**, rather than `localhost`. One origin for everybody is one story to debug.
 
-Then: you host a sandbox room and read out the code (`JUNO-4T2`); everybody else joins with it. The roster
-comes from the game server (#1215), so Firestore is not needed for any of this.
+Then: you **Host** a game and read out the code (`JUNO-7K4M-Q2ZP`); everybody else **Joins** with it. The
+server mints the table, the code and every seat (LIVE-2D) -- there are no seat PINs. The waiting room shows who is
+seated and ready; you start the game when it says it can, and the server deals.
 
-### The line that proves each player is really connected
+### The proof each player is really connected
 
-**Window 2**, one line per player, and the ids must all differ:
-
-```
-[INSECURE] accepted a self-declared identity "p-a1b2c3d4". Local play only -- see #1210.
-```
-
-Four players, four lines, four different ids. No line for someone means their browser never reached the
-server, whatever their screen says.
+The waiting room's roster is the server's (`RoomView`), with an online dot per seat. A player missing from it, or
+shown offline, never reached the server, whatever their own screen says.
 
 ---
 
@@ -257,17 +262,18 @@ Two things will not work, and are not worth reporting:
 - **Server change:** `Ctrl+C` in window 2, then `npm run build` and the `node dist\...\start.js` line again.
   Check the compiled stamp.
 - **Changing a lot, fast:** stop the proxy and start it as `node playtest-proxy.js --dev`, then run
-  `npm start` in `frontend` in a fourth window. That serves the dev server through the tunnel, hot reload and
+  `$env:REACT_APP_DEV_IDENTITY = "0"; npm start` in `frontend` in a fourth window (the production-mode server
+  refuses a development claim, so the dev server must bootstrap a guest session like a build does). That serves the dev server through the tunnel, hot reload and
   all — but it is tens of megabytes per load against a 1 GB month, so switch back before real players arrive.
 
 ---
 
 ## The two things worth knowing
 
-**`--insecure-local-identity` on a public URL.** Every client is believed about who it is (#1210). At a
-kitchen table that is fine. On a URL anyone can reach, anyone who has the link can join a room and claim any
-name in it. The link is unguessable and the game is a sandbox with no money in it — but the tunnel is not a
-thing to leave running overnight, and the domain is static, so it is the *same* link tomorrow.
+**A public URL.** Production mode authenticates every browser as its own guest session and the server owns every
+seat, so nobody can claim another player's seat. But anyone with the link can open the lobby, see public tables and
+join one with its code. The game is a sandbox with no money in it — still, the tunnel is not a thing to leave
+running overnight, and the domain is static, so it is the *same* link tomorrow.
 
 **The free plan's meter:** 1 GB out and 20,000 requests a month, 3 endpoints at once. The production build and
 the immutable cache headers exist to keep a four-player evening in the low tens of megabytes. Source maps are
@@ -284,7 +290,7 @@ Debug against `localhost` on this machine instead.
 | `playtest-proxy: nothing answered on 127.0.0.1:8917` | Window 2. The game server is not running. |
 | `no build at ...\frontend\build` | You skipped `npm run build`, or ran it somewhere else. |
 | Page loads, but *"Could not reach the room — that action was not sent."* | The socket. Check `.env.local` says `wss://...**/gs**` — and that you rebuilt the frontend *after* editing it. |
-| A player is on the board but window 2 never printed their `[INSECURE]` line | Their bundle is older than the fix. Hard reload. |
+| The lobby never loads tables; the console shows `POST /gs/api/session` refused (403) | The page's origin is not `GS_ALLOWED_ORIGINS`, or the page is not `https`. Use the tunnel URL. |
 | *"It is not your turn."* when it is | Real, and a finding. Export the log. |
 
 **Export the log** (`Ctrl+Shift+L`, host tab) and it can be replayed headless to the exact index:

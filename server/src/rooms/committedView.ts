@@ -20,14 +20,14 @@
 //   watermark     the last durable index; -1 when the log is empty (§7: w = log_next_index - 1)
 //   entries       exactly the durable log, frozen
 //   digest        the board at the watermark; `fields` beside it when the server explains divergences (#1225)
-//   roomDoc       the legacy room document as last durably saved -- authority-bearing today (host, PINs)
+//   record        LIVE-2C: the GameRecord as last durably committed -- the room's authority (LIVE-2D: the only one;
+//                 the legacy room document is gone)
 //   hold          why the game will not take a write: `version` (#1520), `uncertain` (a store outcome not
 //                 yet known) or `corrupt` (LIVE-3B: a damaged log, held for an operator); `incompatible` is the
 //                 frame a version hold answers with
 //   version       +1 per publish, for diagnostics and tests
 
 import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/roomSession";
-import type { SandboxRoomDoc } from "../../../frontend/src/utils/sandboxRoom";
 import type { GameRecord } from "./gameRecord";
 import type { BuildId, ServerMessage } from "../../../frontend/src/utils/serverProtocol";
 import { fieldDigests, stateDigest } from "../../../frontend/src/gameEngine";
@@ -50,8 +50,8 @@ export interface CommittedView {
   readonly entries: readonly ServerLogEntry[];
   readonly digest: string;
   readonly fields?: Readonly<Record<string, string>>;
-  readonly roomDoc: Readonly<SandboxRoomDoc> | null;
-  /** LIVE-2C: the server-owned GameRecord -- the room's authority -- as committed. `null` for a legacy room. */
+  /** LIVE-2C: the server-owned GameRecord -- the room's authority -- as committed. `null` only while a game that does
+   *  not exist is being looked at (the registry never keeps one). */
   readonly record: Readonly<GameRecord> | null;
   readonly hold: Hold | null;
   readonly incompatible: ServerMessage | null;
@@ -70,7 +70,6 @@ function frozenEntries(entries: readonly ServerLogEntry[]): readonly ServerLogEn
 export function buildCommittedView(input: {
   gameId: string;
   session: RoomSession;
-  roomDoc: Readonly<SandboxRoomDoc> | null;
   record?: Readonly<GameRecord> | null;
   /** An `uncertain` hold carried across a publish; a version hold is read off the session itself. */
   hold?: Hold | null;
@@ -90,17 +89,11 @@ export function buildCommittedView(input: {
     entries: frozenEntries(session.entries),
     digest: stateDigest(session.state),
     ...(input.explainDivergence ? { fields: Object.freeze(fieldDigests(session.state)) } : {}),
-    roomDoc: input.roomDoc,
     record: input.record ?? null,
     hold,
     incompatible,
     version: input.version,
   });
-}
-
-/** The same view with a different room document, for a publish that changed only the document. */
-export function withRoomDoc(view: CommittedView, roomDoc: Readonly<SandboxRoomDoc>): CommittedView {
-  return Object.freeze({ ...view, roomDoc, version: view.version + 1 });
 }
 
 /** LIVE-2C: the same view with a different GameRecord, for a publish that changed only the record. */

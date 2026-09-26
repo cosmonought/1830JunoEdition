@@ -23,15 +23,13 @@ param(
 
 $ProgressPreference = 'SilentlyContinue'
 
-# ---------------------------------------------------------------- LIVE-2B: not from this revision
-# The game server now requires GS_MODE. Development identity is loopback-only and refuses a tunnel by design
-# (no remote escape hatch), and production mode cannot seat players until LIVE-2C/2D. So a remote (ngrok)
-# playtest runs from the last pre-LIVE-2B revision: git checkout 90838071, then run this script there.
-# See claude/live2b-identity-sessions-2026-09-26.md.
-Write-Host "start-playtest.ps1: remote (ngrok) playtests are not supported from LIVE-2B until LIVE-2D." -ForegroundColor Red
-Write-Host "  Use the last pre-LIVE-2B revision:  git checkout 90838071   then run this script there." -ForegroundColor Red
-Write-Host "  Local play on this machine: node dist/server/src/start.js --mode development, and npm start in frontend." -ForegroundColor Red
-exit 2
+# ---------------------------------------------------------------- LIVE-2D: production mode behind the tunnel
+# A remote playtest runs the game server in PRODUCTION mode: every browser gets a guest session from
+# POST /gs/api/session (an HttpOnly __Host- cookie over the tunnel's https), rooms are server-owned (room-op),
+# and only the tunnel's own https origin is allowed. The proxy chain is ngrok -> playtest-proxy -> game server,
+# and ngrok is the one hop that appends X-Forwarded-For, so GS_TRUSTED_PROXY_HOPS is 1.
+# Development identity (?dev_claim=) is loopback-only and is never used here.
+# See claude/live2d-client-cutover-2026-09-26.md and PLAYTEST_TRANSPORT.md.
 
 # ---------------------------------------------------------------- helpers
 
@@ -214,7 +212,10 @@ Start-Window -Title '1830 playtest: game server' -WorkDir $server -Body @(
   "Write-Host 'Keep this window visible: it prints a line for every action it does not apply.' -ForegroundColor Yellow",
   "Write-Host 'Check the compiled stamp below -- older than a fix you just made means it was not rebuilt.' -ForegroundColor Yellow",
   "Write-Host ''",
-  "node dist/server/src/start.js --insecure-local-identity --build $buildId"
+  "`$env:GS_MODE = 'production'",
+  "`$env:GS_ALLOWED_ORIGINS = 'https://$tunnelHost'",
+  "`$env:GS_TRUSTED_PROXY_HOPS = '1'",
+  "node dist/server/src/start.js --build $buildId"
 )
 if (Wait-ForPort -Port 8917 -Seconds 30) { Ok "listening on 8917" } else { Die "the game server never reached 8917 -- read window 2." }
 
@@ -222,7 +223,9 @@ if (Wait-ForPort -Port 8917 -Seconds 30) { Ok "listening on 8917" } else { Die "
 
 if ($Dev) {
   Step "Window 4 -- the CRA dev server"
-  Start-Window -Title '1830 playtest: dev server' -WorkDir $frontend -Body @("npm.cmd start")
+  # The tunnel's game server is in production mode, which refuses a development claim: this dev server must
+  # bootstrap a guest session like a built bundle does. A shell variable beats .env.development in CRA.
+  Start-Window -Title '1830 playtest: dev server' -WorkDir $frontend -Body @("`$env:REACT_APP_DEV_IDENTITY = '0'", "npm.cmd start")
   Say "   waiting for :3000..."
   if (-not (Wait-ForPort -Port 3000 -Seconds 120)) { Warn "the dev server is not on 3000 yet -- the proxy will answer once it is" }
 }
@@ -266,10 +269,10 @@ Write-Host "====================================================================
 Write-Host "  Send players:  https://$tunnelHost"                                   -ForegroundColor White
 Write-Host ""
 Write-Host "  - ngrok shows a warning page first. Click Visit Site. Once per browser."
-Write-Host "  - ONE TAB EACH. A duplicated tab copies sessionStorage and becomes the same player (#528)."
+Write-Host "  - ONE BROWSER EACH. A browser's guest session is its cookie, so every tab of one browser is one player."
 Write-Host "  - Use the ngrok URL yourself too, not localhost. One origin for everybody."
-Write-Host "  - Window 2 prints one [INSECURE] line per player, all with different ids."
-Write-Host "    No line for someone means their browser never reached the server."
+Write-Host "  - Host: Host a game, then read the JUNO-XXXX-XXXX code out. Guests: Join with that code."
+Write-Host "    Seats, ready, start and undo are all the server's; a refusal says why on screen."
 Write-Host ""
 Write-Host "  The only test that is really from outside: open that URL on your phone with wifi off."
 Write-Host ""

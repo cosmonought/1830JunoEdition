@@ -17,6 +17,8 @@ import {
   validateGameplayMessage,
   validateSubmitEnvelope,
   isRecognisedClientFrame,
+  CLIENT_FRAME_KINDS,
+  RETIRED_CLIENT_FRAME_KINDS,
   GAMEPLAY_MESSAGE_KINDS,
 } from "../gameEngine/messageSchema";
 import { turnRefusal } from "../gameEngine/turnAuthority";
@@ -171,6 +173,19 @@ describe("the frame envelope", () => {
     for (const junk of [null, 7, "submit", [], {}, { kind: 1 }]) {
       expect(isRecognisedClientFrame(junk)).toBe(false);
     }
+  });
+
+  it("LIVE-2D: recognises none of the retired legacy room protocol -- they are unknown kinds, never handlers", () => {
+    /* The client-owned room document (`room-write`), the seat PINs (`seat-pin`, `claim-seat`, `find-seats`) and the
+       staging lobby (`lobby-hello`, `lobby-watch`, `lobby-write`) are gone. A frame of any of them is `bad-frame`. */
+    expect([...RETIRED_CLIENT_FRAME_KINDS].sort()).toEqual(
+      ["claim-seat", "find-seats", "lobby-hello", "lobby-watch", "lobby-write", "room-write", "seat-pin"].sort(),
+    );
+    for (const kind of RETIRED_CLIENT_FRAME_KINDS) {
+      expect([kind, isRecognisedClientFrame({ kind })]).toEqual([kind, false]);
+      expect([kind, CLIENT_FRAME_KINDS.includes(kind)]).toEqual([kind, false]);
+    }
+    expect([...CLIENT_FRAME_KINDS].sort()).toEqual(["chat-send", "hello", "presence-set", "room-hello", "room-op", "rooms-watch", "submit"]);
   });
 });
 

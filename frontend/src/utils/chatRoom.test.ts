@@ -15,26 +15,37 @@
 
 import { readStripped } from "./sourceScan";
 
-describe("a room's transcript rides the room-doc socket (design note #1361a)", () => {
+describe("a game's transcript rides the game's room socket (design note #1361a; LIVE-2D: keyed by gameId)", () => {
   const CHAT = readStripped("components/ChatBox.tsx");
-  const LINK = readStripped("utils/roomDocLink.ts");
+  const LINK = readStripped("utils/roomLink.ts");
   const APP = readStripped("App.tsx");
 
-  it("subscribes and sends through roomDocLink, keyed by the room alone", () => {
-    expect(CHAT).toContain('import { roomDocOnServer, sendChat, subscribeChat, type RoomChatEntry } from "../utils/roomDocLink";');
+  it("subscribes and sends through roomLink, keyed by the game alone", () => {
+    expect(CHAT).toContain('import { roomLinkAvailable, sendChat, subscribeChat } from "../utils/roomLink";');
     expect(CHAT).toContain("subscribeChat(");
-    expect(CHAT).toContain("sendChat(roomId, sender, trimmed, name);");
+    /* LIVE-2D: the frame carries the game and the text -- never an author or a display name. The server signs
+       the line with the seat it derives from the socket's principal. */
+    expect(CHAT).toContain("sendChat(roomId, trimmed);");
+    expect(CHAT).not.toMatch(/sendChat\([^)]*(sender|name)/);
+    expect(CHAT).not.toContain("roomDocLink");
     expect(CHAT).not.toContain("firebase");
   });
 
-  it("the link filters frames to the room it was asked about", () => {
-    // Two rooms cannot see each other's messages: a `chat` frame for another room is dropped at the link.
-    expect(LINK).toContain('return subscribeFrame<ChatFrame>(room, claim, "chat", (frame) => {');
-    expect(LINK).toContain("if (frame.room === room) onChat(");
+  it("the link filters frames to the game it was asked about", () => {
+    // Two games cannot see each other's messages: a `chat` frame for another game is dropped at the link.
+    const chatCase = LINK.slice(LINK.indexOf('case "chat": {'), LINK.indexOf('case "presence": {'));
+    expect(chatCase).toContain("if (chat.gameId !== channel.key) return;");
+    expect(LINK).toContain('send(channel, { kind: "chat-send", gameId, text });');
   });
 
-  it("the sandbox's transcript hangs off the sandbox room code", () => {
-    // #644's fix, restated: the shell passes the sandbox room, not a lobby room, and no collection name.
+  it("a spectator is not offered Send, and a refusal is said in words", () => {
+    /* OD-L2-4: spectators may not chat. The seat (`you.playerId`) decides only whether Send is worth offering. */
+    expect(APP).toContain("sandbox ? (localId || null) : wallet.address,");
+    expect(CHAT).toContain('if (code === "forbidden" || code === "not-seated") setError("Only seated players can chat at this table.");');
+  });
+
+  it("the sandbox's transcript hangs off the table's game id", () => {
+    // #644's fix, restated: the shell passes the table, not a lobby room, and no collection name.
     expect(APP).toContain("} = useRoomChat(");
     expect(APP).toContain("sandbox ? sandboxRoomCode : roomId,");
     expect(APP).not.toContain("SANDBOX_ROOMS_COLLECTION");

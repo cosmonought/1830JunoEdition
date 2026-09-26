@@ -1,6 +1,6 @@
 // server/src/fileLogStore.test.ts
 //
-// LIVE-3B: the hardened local log store (LIVE-3 §8) -- format, write protocol, recovery, room documents -- against
+// LIVE-3B: the hardened local log store (LIVE-3 §8) -- format, write protocol, recovery, whole-file replacement -- against
 // real files in temporary directories, with a file-system adapter that injects the faults a disk actually produces
 // (short writes, a full disk part-way, `fsync` errors with the bytes still cached, failed renames). Numbered cases
 // are the LIVE-3B brief's mandatory list; FI-22 and FI-23 are LIVE-3 §20.2's. Nothing here touches `server/data`.
@@ -19,8 +19,10 @@ import {
   type StoreFileHandle,
   type StoreFs,
 } from "./fileLogStore";
+import { durableReplace } from "./persistence/durableReplace";
 import { scanLog, serializeBatch, stripStoreMetadata } from "./persistence/logFormat";
 import { StoreCorruptError, StoreUncertainError } from "./persistence/storeResult";
+import { createMemoryRecordStore } from "./rooms/recordStore";
 import { diagnose, repairBytes, verifyReplay } from "./tools/logDoctor";
 import type { ServerLogEntry } from "../../frontend/src/utils/roomSession";
 import { logHash, stateDigest } from "../../frontend/src/gameEngine";
@@ -29,11 +31,11 @@ import {
   BOB,
   BUY,
   Client,
-  SETUP,
   controlledStore,
-  hostedDoc,
+  openGame,
   probeSession,
   quietConsole,
+  seedGame,
   sleep,
   startServer,
   stopServer,
@@ -50,12 +52,6 @@ const LOG = `${ROOM}.log.jsonl`;
 function tmpDir(tag: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), `live3b-${tag}-`));
 }
-/** LIVE-2A (LIVE-2 §15 #9): the room's document, hosted by Alice, written beside its log before the server starts --
- *  a deal is taken only by a hosted room now. Written directly, so no store write is counted against a test. */
-function seedHostedRoom(dir: string): void {
-  fs.writeFileSync(path.join(dir, `${ROOM}.room.json`), JSON.stringify(hostedDoc(ROOM, ALICE)));
-}
-
 function withDir<T>(tag: string, body: (dir: string) => Promise<T>): Promise<T> {
   const dir = tmpDir(tag);
   return body(dir).finally(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -516,7 +512,6 @@ describe("the write protocol (§8.2)", () => {
       assert.equal((await store.appendBatch(ROOM, entries(1))).kind, "committed");
       owner = false;
       assert.equal((await store.appendBatch(ROOM, entries(1, 1))).kind, "definite");
-      assert.equal((await store.replaceRoomDoc(ROOM, { hostId: ALICE } as never)).kind, "definite");
       assert.deepEqual(indices(await createFileLogStore(dir, quiet).loadLog(ROOM)), [0]);
     }));
 
@@ -550,67 +545,70 @@ describe("the write protocol (§8.2)", () => {
 });
 
 /* ==================================================================
-    §8.7: THE ROOM DOCUMENT
-   ================================================================== */
-describe("durable room-document replacement (§8.7)", () => {
-  const doc = (hostId: string) => ({ hostId, players: [], status: "waiting" }) as never;
-  const DOC = `${ROOM}.room.json`;
+    §8.7: WHOLE-FILE REPLACEMENT
+   ==================================================================
+   LIVE-2D: the room document that first carried this protocol is gone with the legacy room protocol; the protocol
+   itself is `persistence/durableReplace.ts`, and what it replaces now is the GameRecord and the join-code index
+   (`rooms/recordStore.ts`). Tested here at that seam, with the same misbehaving file system. The record store's own
+   "held for a restart, never read back" after a failed redo is LIVE-2C's (live2cRooms.test: the file adapter). */
+describe("durable whole-file replacement (§8.7)", () => {
+  const RECORD = "g_record.json";
+  const bytes = (hostId: string) => Buffer.from(JSON.stringify({ hostId }), "utf8");
+  const hostOf = (dir: string) => JSON.parse(fs.readFileSync(path.join(dir, RECORD), "utf8")).hostId as string;
 
   test("24, 25: unique temporary, written, synced, renamed, directory synced -- in that order", () =>
     withDir("doc", async (dir) => {
       const { io, ops } = faultyFs();
-      const store = createFileLogStore(dir, { ...quiet, fs: io });
-      assert.equal((await store.replaceRoomDoc(ROOM, doc(ALICE))).kind, "committed");
-      assert.equal((await store.replaceRoomDoc(ROOM, doc(BOB))).kind, "committed");
+      const target = path.join(dir, RECORD);
+      assert.equal((await durableReplace(io, target, bytes(ALICE))).kind, "committed");
+      assert.equal((await durableReplace(io, target, bytes(BOB))).kind, "committed");
       const temps = ops.filter((op) => op.startsWith("open wx ")).map((op) => op.slice("open wx ".length));
       assert.equal(temps.length, 2);
       assert.notEqual(temps[0], temps[1], "a temporary name is never reused");
-      for (const temp of temps) assert.match(temp, new RegExp(`^${DOC.replace(".", "\\.")}\\.${process.pid}\\.\\d+\\.tmp$`));
-      const first = ops.slice(0, ops.indexOf(`rename ${temps[0]} -> ${DOC}`) + 2);
+      for (const temp of temps) assert.match(temp, new RegExp(`^${RECORD.replace(".", "\\.")}\\.${process.pid}\\.[0-9a-f]+\\.tmp$`));
+      const first = ops.slice(0, ops.indexOf(`rename ${temps[0]} -> ${RECORD}`) + 2);
       assert.deepEqual(first.slice(0, 4), [`open wx ${temps[0]}`, `write ${temps[0]} @0 ${first[1].split(" ")[3]}`, `sync ${temps[0]}`, `close ${temps[0]}`]);
-      assert.equal(first[4], `rename ${temps[0]} -> ${DOC}`);
+      assert.equal(first[4], `rename ${temps[0]} -> ${RECORD}`);
       if (process.platform !== "win32") assert.equal(first[5], `open r ${path.basename(dir)}`);
-      assert.equal(JSON.parse(fs.readFileSync(path.join(dir, DOC), "utf8")).hostId, BOB);
+      assert.equal(hostOf(dir), BOB);
       assert.deepEqual(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")), [], "no temporaries left");
     }));
 
-  test("a failure BEFORE the rename is definite: the previous document stands", () =>
+  test("a failure BEFORE the rename is definite: the previous file stands", () =>
     withDir("docpre", async (dir) => {
+      const target = path.join(dir, RECORD);
+      assert.equal((await durableReplace(nodeStoreFs, target, bytes(ALICE))).kind, "committed");
       const { io } = faultyFs({ sync: ({ file }) => (file.endsWith(".tmp") ? "EIO" : undefined) });
-      const good = createFileLogStore(dir, quiet);
-      await good.replaceRoomDoc(ROOM, doc(ALICE));
-      const store = createFileLogStore(dir, { ...quiet, fs: io });
-      assert.equal((await store.replaceRoomDoc(ROOM, doc(BOB))).kind, "definite");
-      assert.equal(JSON.parse(fs.readFileSync(path.join(dir, DOC), "utf8")).hostId, ALICE);
+      assert.equal((await durableReplace(io, target, bytes(BOB))).kind, "definite");
+      assert.equal(hostOf(dir), ALICE);
       assert.deepEqual(fs.readdirSync(dir).filter((name) => name.endsWith(".tmp")), []);
     }));
 
-  test("26: a failure AT or AFTER the rename is uncertain: redone; if the redo fails, held for a restart and never read back", () =>
+  test("26: a failure AT or AFTER the rename is uncertain: redone once; if the redo fails too, uncertain -- never definite", () =>
     withDir("docpost", async (dir) => {
+      const target = path.join(dir, RECORD);
       const once = faultyFs({ rename: ({ n }) => (n === 1 ? { error: "EIO", afterRename: true } : undefined) });
-      const store = createFileLogStore(dir, { ...quiet, fs: once.io });
-      assert.deepEqual(await store.replaceRoomDoc(ROOM, doc(ALICE)), { kind: "committed", redone: true });
-      assert.equal(JSON.parse(fs.readFileSync(path.join(dir, DOC), "utf8")).hostId, ALICE);
+      assert.deepEqual(await durableReplace(once.io, target, bytes(ALICE)), { kind: "committed", redone: true });
+      assert.equal(hostOf(dir), ALICE);
 
       const always = faultyFs({ rename: () => ({ error: "EIO", afterRename: true }) });
-      const restarts: string[] = [];
-      const stuck = createFileLogStore(dir, { ...quiet, fs: always.io, onRestartRequired: (room) => restarts.push(room) });
-      const outcome = await stuck.replaceRoomDoc(ROOM, doc(BOB));
-      assert.equal(outcome.kind, "uncertain");
-      assert.deepEqual(restarts, [ROOM]);
-      // The new document may well be the one on disk -- the store does not look; it refuses until a restart.
-      await assert.rejects(stuck.loadRoomDoc(ROOM), StoreUncertainError);
-      assert.equal((await stuck.replaceRoomDoc(ROOM, doc(ALICE))).kind, "definite");
+      const outcome = await durableReplace(always.io, target, bytes(BOB));
+      assert.equal(outcome.kind, "uncertain", "the new file may well be the one on disk -- the caller must hold it, not guess");
+      assert.match((outcome as { detail: string }).detail, /redo failed too/);
+      assert.equal(always.counts.renames, 2, "exactly one redo");
     }));
 });
 
 /* ==================================================================
     THE SERVER OVER THE HARDENED STORE
-   ================================================================== */
+   ==================================================================
+   LIVE-2D: over server-owned games. The deal is the server's (`start-game`); a restart finds the GameRecord where the
+   file adapter would (a record store shared by both servers) and the log in the directory under the game's id. */
 describe("the server over the hardened store", () => {
+  const isDeal = (entry: { payload?: string }) => typeof entry.payload === "string" && "SetupGame" in (JSON.parse(entry.payload) as object);
+
   test("E-11 with the real file store: a write held at the disk holds the game, issues no second write, and lands once", () =>
     withDir("e11", async (dir) => {
-      seedHostedRoom(dir); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
       let release: () => void = () => undefined;
       let holding = false;
       const gate = () => (holding ? new Promise<void>((resolve) => (release = resolve)) : undefined);
@@ -618,14 +616,18 @@ describe("the server over the hardened store", () => {
       const store = createFileLogStore(dir, { ...quiet, fs: io });
       const { server, port } = await startServer({ store, storeTimeoutMs: 50 });
       try {
+        const { gameId } = await openGame(port, ALICE, [BOB], { start: false });
         const alice = await Client.open(port, ALICE);
-        alice.hello(ROOM);
+        alice.hello(gameId);
         await alice.next((f) => f.kind === "catch-up");
         holding = true;
-        alice.submit(SETUP, { baseIndex: -1, submissionId: "deal" });
-        assert.equal((await alice.answerTo("deal")).code, "unavailable");
+        /* The server's deal, held at the disk past the store timeout: the game is held `unavailable` for every reader.
+           (LIVE-2D note: the host's `start-game` is answered only when that write settles -- below -- where a submit is
+           answered `unavailable` at the timeout itself; reported with LIVE-2D's test migration.) */
+        const start = alice.roomOp({ type: "start-game" }, gameId);
+        assert.equal((await alice.next((f) => f.kind === "status")).state, "unavailable");
         const bob = await Client.open(port, BOB);
-        bob.hello(ROOM);
+        bob.hello(gameId);
         assert.equal((await bob.next((f) => f.kind === "status")).state, "unavailable");
         bob.submit(BUY, { baseIndex: -1, submissionId: "queued" });
         await sleep(120);
@@ -633,9 +635,12 @@ describe("the server over the hardened store", () => {
         holding = false;
         release();
         const landed = await bob.next((f) => f.kind === "applied");
-        assert.deepEqual((landed.entries as SeenEntry[]).map((e) => e.submission_id), ["deal"]);
+        const dealt = landed.entries as Array<SeenEntry & { payload: string }>;
+        assert.equal(dealt.length, 1);
+        assert.ok(isDeal(dealt[0]), "the late write was the deal, adopted once");
         assert.equal((await bob.answerTo("queued")).kind, "catch-up");
-        assert.deepEqual(indices(await createFileLogStore(dir, quiet).loadLog(ROOM)), [0]);
+        assert.equal((await alice.ack(start)).ok, true, "the late deal landed, so the start stands");
+        assert.deepEqual(indices(await createFileLogStore(dir, quiet).loadLog(gameId)), [0]);
         await Promise.all([alice.close(), bob.close()]);
       } finally {
         await stopServer(server);
@@ -644,16 +649,18 @@ describe("the server over the hardened store", () => {
 
   test("a CORRUPT log is held: no history served, no move taken, the file untouched; logDoctor's verified copy then loads", () =>
     withDir("held", async (dir) => {
+      const records = createMemoryRecordStore();
+      const gameId = await seedGame(records, [ALICE, BOB], { dealt: true });
       const log = storedLog(3);
-      const file = path.join(dir, LOG);
+      const file = path.join(dir, `${gameId}.log.jsonl`);
       const torn = JSON.stringify(log[2]).slice(0, 50);
       // F-8: [0,1], a torn fragment of 2, then 2 and 3 appended behind it by the old O_APPEND store.
       fs.writeFileSync(file, legacy(log.slice(0, 2)) + torn + legacy(log.slice(2)));
       const before = fs.readFileSync(file);
-      const first = await startServer({ store: createFileLogStore(dir, quiet) });
+      const first = await startServer({ store: createFileLogStore(dir, quiet), records });
       try {
         const alice = await Client.open(first.port, ALICE);
-        alice.hello(ROOM);
+        alice.hello(gameId);
         const answer = await alice.next((f) => f.kind === "error" || f.kind === "catch-up");
         assert.deepEqual([answer.kind, answer.code], ["error", "held"]);
         assert.equal(alice.seen().length, 0, "no history served");
@@ -678,10 +685,10 @@ describe("the server over the hardened store", () => {
       assert.ok(fs.readFileSync(file).equals(before), "the original is still untouched");
       fs.renameSync(file, `${file}.original`);
       fs.writeFileSync(file, repair.bytes);
-      const second = await startServer({ store: createFileLogStore(dir, quiet) });
+      const second = await startServer({ store: createFileLogStore(dir, quiet), records });
       try {
         const back = await Client.open(second.port, ALICE);
-        back.hello(ROOM);
+        back.hello(gameId);
         const hello = await back.next((f) => f.kind === "catch-up");
         assert.deepEqual((hello.entries as SeenEntry[]).map((e) => e.id), log.map((e) => e.id));
         await back.close();
@@ -692,25 +699,24 @@ describe("the server over the hardened store", () => {
 
   test("the 3A regressions over the real file store: the smoke shape, a restart, and the file one entry per line", () =>
     withDir("restart", async (dir) => {
-      seedHostedRoom(dir); // LIVE-2A: a room nobody hosted is not dealt (§15 #9)
-      const first = await startServer({ store: createFileLogStore(dir, quiet) });
+      const records = createMemoryRecordStore();
+      const first = await startServer({ store: createFileLogStore(dir, quiet), records });
+      const { gameId } = await openGame(first.port, ALICE, [BOB]); // the server deals, host first
       const alice = await Client.open(first.port, ALICE);
-      alice.hello(ROOM);
-      await alice.next((f) => f.kind === "catch-up");
-      alice.submit(SETUP, { baseIndex: -1, submissionId: "deal" });
-      const dealt = await alice.answerTo("deal");
-      assert.equal(dealt.kind, "applied");
-      alice.submit(BUY, { baseIndex: (dealt.entries as SeenEntry[]).length - 1, submissionId: "buy" });
+      alice.hello(gameId);
+      const dealt = await alice.next((f) => f.kind === "catch-up");
+      assert.equal((dealt.entries as SeenEntry[]).length, 1);
+      alice.submit(BUY, { baseIndex: 0, submissionId: "buy" });
       assert.equal((await alice.answerTo("buy")).kind, "applied");
       await alice.close();
       await stopServer(first.server);
-      const stored = await createFileLogStore(dir, quiet).loadLog(ROOM);
-      const lines = fs.readFileSync(path.join(dir, LOG), "utf8").trim().split("\n");
+      const stored = await createFileLogStore(dir, quiet).loadLog(gameId);
+      const lines = fs.readFileSync(path.join(dir, `${gameId}.log.jsonl`), "utf8").trim().split("\n");
       assert.equal(lines.length, stored.length, "one line per entry");
-      const second = await startServer({ store: createFileLogStore(dir, quiet) });
+      const second = await startServer({ store: createFileLogStore(dir, quiet), records });
       try {
         const back = await Client.open(second.port, BOB);
-        back.hello(ROOM);
+        back.hello(gameId);
         const hello = await back.next((f) => f.kind === "catch-up");
         assert.deepEqual(hello.entries, stored);
         const replay = probeSession("restart-verify");

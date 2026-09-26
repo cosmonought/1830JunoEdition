@@ -26,9 +26,14 @@ describe("the variant blurbs have one home (design note #961)", () => {
   it("is the only place the sentences are written", () => {
     /* THE ACTUAL FAULT, as an absence. Both components must reference the constant rather than carry a copy;
        a surviving literal is a second copy waiting to drift, which is exactly how this batch started. */
-    const lobby = readStripped("components/Lobby.tsx");
+    /* LIVE-2D (RUST-RETIRE-1 2B.3): the Lobby's copy went with the on-chain staging lobby's create form; the two
+       screens a table reads its terms on are the host's setup card and the waiting room. The Lobby writes none. */
+    const host = readStripped("components/HostSetupCard.tsx");
     const waiting = readStripped("components/SandboxWaitingRoom.tsx");
-    for (const source of [lobby, waiting]) {
+    const lobby = readStripped("components/Lobby.tsx");
+    expect(lobby).not.toContain("rolls a d6 against its printed run");
+    expect(lobby).not.toContain("adds drama without changing how long the bank lasts");
+    for (const source of [host, waiting]) {
       expect(source).toContain("VARIANT_COPY");
       /* The old texts, by their most distinctive fragments. Any of these still in a component means that
          component is writing its own copy again. */
@@ -168,14 +173,16 @@ describe("the difficulty qualifiers ride on the titles (design note #961a)", () 
     /* THE DRIFT THIS FOUND. The Lobby's fourth toggle read "Delayed auction" and the waiting room's read
        "Delayed private auction" -- one variant, two names, on the two screens a table reads before agreeing
        to it. Neither may write its own now. */
-    const lobby = readStripped("components/Lobby.tsx");
+    /* LIVE-2D: the two screens are the host's setup card and the waiting room (the Lobby's copy went with the
+       staging lobby). Both read the record by key. */
+    const host = readStripped("components/HostSetupCard.tsx");
     const waiting = readStripped("components/SandboxWaitingRoom.tsx");
-    for (const source of [lobby, waiting]) {
+    for (const source of [host, waiting, readStripped("components/Lobby.tsx")]) {
       expect(source).not.toContain('"Delayed auction"');
       expect(source).not.toContain('"Delayed private auction"');
       expect(source).not.toContain("<strong>Gentle rust</strong>");
     }
-    expect(lobby).toContain("VARIANT_COPY.gentleRust.label");
+    expect(host).toContain("blurb={VARIANT_COPY[row.key].blurb}");
     expect(waiting).toContain("VARIANT_COPY[key]");
   });
 

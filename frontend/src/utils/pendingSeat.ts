@@ -1,4 +1,10 @@
-import type { SandboxRoomDoc, SandboxRoomPlayer } from "./sandboxRoom";
+import type { RoomView, RoomViewPlayer } from "./roomProtocol";
+
+/* LIVE-2D: the overlay is drawn over the server's RoomView -- the only room the client holds. The writes behind it
+   are `room-op set-profile` / `set-ready`, answered by an ack and then by the next view; the echo covers the round
+   trip exactly as it covered the old transaction's. */
+type SandboxRoomDoc = RoomView;
+type SandboxRoomPlayer = RoomViewPlayer;
 
 /* ==================================================================
    DESIGN NOTE 1169: THE THREE CONTROLS THAT WAIT FOR A SERVER, ON A SCREEN WHERE NOTHING ELSE DOES

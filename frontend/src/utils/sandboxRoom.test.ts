@@ -16,17 +16,16 @@
 //   deterministic across clients that received the same entries in
 //   different arrival orders.
 //
-//   THE ROOM CODE. Its job is to survive being spoken aloud and typed by
-//   somebody else. A code that round-trips through a voice call wrong sends
-//   a player to an empty room, which looks like the feature is broken.
+//   THE ROOM CODE. LIVE-2D: the server mints it now (`JUNO-XXXX-XXXX`, a rotatable
+//   invite), and the join box's reader is `parseJoinCode` -- pinned in
+//   `roomProtocol.test.ts`. What stays here is that the client mints none.
 //
 //   THE DECODE. One corrupt entry must not take a room down.
 
+import * as sandboxRoomModule from "./sandboxRoom";
 import {
   appliedPrefixHolds,
   decodeAction,
-  generateRoomCode,
-  parseRoomCode,
   sortActions,
   type SandboxAction,
 } from "./sandboxRoom";
@@ -34,51 +33,24 @@ import {
   waitingRoomBlock,
   waitingRoomNotice,
   canStartSandboxGame,
-  type SandboxRoomDoc,
+  type WaitingRoomLike,
 } from "./sandboxRoom";
 
 function action(index: number, id: string, payload = '{"PassTurn":{"game_id":1}}'): SandboxAction {
   return { index, id, actor: "alice", payload, derived: false };
 }
 
-describe("the room code", () => {
-  it("is prefixed and the right shape", () => {
-    for (let i = 0; i < 50; i += 1) {
-      expect(generateRoomCode()).toMatch(/^JUNO-[A-Z0-9]{3}$/);
+describe("the room code (LIVE-2D: the server's to mint)", () => {
+  it("is not minted, parsed or retried in the browser any more", () => {
+    /* Design note #520's read-aloud alphabet survives in the server's minting and in `parseJoinCode`
+       (`roomProtocol.test.ts`). A client that minted its own code was a client that could collide with one --
+       which is why LIVE-2A needed a retry loop, and why LIVE-2D needs neither. */
+    const exported = Object.keys(sandboxRoomModule);
+    for (const gone of ["generateRoomCode", "parseRoomCode", "hostSandboxRoom", "HOST_CODE_ATTEMPTS", "upsertSandboxPlayer", "markSandboxRoomPlaying", "toSetupPlayers", "subscribeSandboxRoom", "kickSandboxPlayer"]) {
+      expect([gone, exported.includes(gone)]).toEqual([gone, false]);
     }
-  });
-
-  it("avoids the characters that get misheard", () => {
-    /* Design note #520: `0/O`, `1/I/L` and `5/S` are the pairs that fail
-       when a code is read over a call. A generator that emitted them would
-       pass the shape test above and still send players to the wrong room. */
-    const forbidden = /[01OIL5S]/;
-    for (let i = 0; i < 200; i += 1) {
-      expect(generateRoomCode().slice(5)).not.toMatch(forbidden);
-    }
-  });
-
-  it("round-trips its own output", () => {
-    // The property that matters most: a hosted code must be joinable.
-    for (let i = 0; i < 50; i += 1) {
-      const code = generateRoomCode();
-      expect(parseRoomCode(code)).toBe(code);
-    }
-  });
-
-  it("forgives how a player types it", () => {
-    // Lower case, no prefix, stray spaces, and a pasted whole code.
-    expect(parseRoomCode("juno-4t2")).toBe("JUNO-4T2");
-    expect(parseRoomCode("4T2")).toBe("JUNO-4T2");
-    expect(parseRoomCode("  JUNO-4T2  ")).toBe("JUNO-4T2");
-    expect(parseRoomCode("JUNO- 4T2")).toBe("JUNO-4T2");
-  });
-
-  it("rejects a code rather than inventing a room", () => {
-    /* A mistyped code must FAIL, not resolve to a plausible room the player
-       then sits alone in wondering why nobody joined. */
-    for (const bad of ["", "JUNO-", "JUNO-12", "JUNO-4T2X", "JUNO-4O2", "!!!"]) {
-      expect(parseRoomCode(bad)).toBeNull();
+    for (const asks of ["createHostedGame", "joinHostedGame", "gameIdOf"]) {
+      expect([asks, exported.includes(asks)]).toEqual([asks, true]);
     }
   });
 });
@@ -215,16 +187,17 @@ describe("decodeAction", () => {
 // AND "WAITING FOR THE HOST" IS NOT ALWAYS TRUE, which is why this is a reason rather than a sentence: a
 // player alone in a room is not waiting for the host, because the host cannot start either.
 
+/* LIVE-2D: the readers take the server's RoomView -- the fields they need of it, `WaitingRoomLike`. */
 const room = (
   players: ReadonlyArray<{ id: string; isReady: boolean }>,
-  status: SandboxRoomDoc["status"] = "waiting",
-): SandboxRoomDoc =>
+  status: WaitingRoomLike["status"] = "waiting",
+): WaitingRoomLike =>
   ({
-    code: "JUNO-1A1",
-    hostId: "h",
     status,
-    players: players.map((entry) => ({ id: entry.id, nickname: entry.id, isReady: entry.isReady })),
-  }) as SandboxRoomDoc;
+    playerCount: null,
+    variants: {},
+    players: players.map((entry) => ({ id: entry.id, nickname: entry.id, isReady: entry.isReady, online: true })),
+  }) as unknown as WaitingRoomLike;
 
 const GUEST = { isHost: false, isReady: true };
 
@@ -257,7 +230,7 @@ describe("waitingRoomBlock", () => {
     /* ONE RULE, TWO READERS, PINNED TOGETHER. Two functions answering "is this room startable" is the shape
        this codebase keeps finding wrong; they are not merged because they answer different questions (a
        boolean and a reason), so instead they are checked against each other. */
-    const cases: SandboxRoomDoc[] = [
+    const cases: WaitingRoomLike[] = [
       room([]),
       room([{ id: "h", isReady: true }]),
       room([{ id: "h", isReady: true }, { id: "b", isReady: false }]),

@@ -36,8 +36,7 @@ import {
   type GameMode,
   type GameVariants,
 } from "../gameEngine/gameVariants";
-import type { SandboxRoomSummary } from "../utils/sandboxRoomSummary";
-import { formatJuno } from "../utils/anteMath";
+import type { RoomSummary } from "../utils/roomProtocol";
 
 /** The rule variants a row names, in the house-rules order, by their short titles (#1415). */
 const RULE_TITLES: ReadonlyArray<{
@@ -65,14 +64,15 @@ export function ruleTitlesFor(variants: GameVariants): string[] {
 
 /** What one row shows, derived once so the sort, the filter and the render read the same facts. */
 export interface PublicRoomRow {
+  /** LIVE-2D: the table's game id -- what Watch opens (a public table is readable without an op). Never shown. */
+  gameId: string;
   code: string;
   hostNickname: string;
-  status: SandboxRoomSummary["status"];
+  status: RoomSummary["status"];
   variants: GameVariants;
   typeLabel: string;
   paceLabel: string;
   bankLabel: string;
-  anteLabel: string | null;
   seated: number;
   seatCap: number;
   exactCount: boolean;
@@ -81,10 +81,12 @@ export interface PublicRoomRow {
   createdAtMs: number;
 }
 
-export function publicRoomRow(room: SandboxRoomSummary): PublicRoomRow {
+export function publicRoomRow(room: RoomSummary): PublicRoomRow {
   const variants = resolveVariants(room.variants);
-  const seated = room.players.length;
+  const seated = room.seated;
+  const capacity = typeof room.playerCount === "number" && room.playerCount >= 2 ? Math.min(room.playerCount, room.seatCap) : room.seatCap;
   return {
+    gameId: room.gameId,
     code: room.code,
     hostNickname: room.hostNickname,
     status: room.status,
@@ -92,13 +94,12 @@ export function publicRoomRow(room: SandboxRoomSummary): PublicRoomRow {
     typeLabel: GAME_TYPE_COPY[gameTypeOf(variants)].label,
     paceLabel: GAME_MODE_COPY[variants.mode].label,
     bankLabel: bankSizeLabel(variants.length),
-    /* The ante is off for the playtest (#1415) and a column of "0 JUNO" twenty-four times is not a fact
-       anybody is choosing on. Shown only once there is one. */
-    anteLabel: room.anteUjuno === "0" ? null : formatJuno(room.anteUjuno),
     seated,
-    seatCap: room.seatCap,
+    /* LIVE-2D: an "exactly N" table holds N -- the summary's `seatCap` is the board's maximum. Read as the cap, a full
+       exact table would still offer Join, and the server would answer it with a watcher's admission. */
+    seatCap: capacity,
     exactCount: room.playerCount !== null,
-    full: seated >= room.seatCap,
+    full: seated >= capacity,
     rules: ruleTitlesFor(variants),
     createdAtMs: room.createdAtMs,
   };
@@ -135,7 +136,7 @@ export function sortRooms(rows: readonly PublicRoomRow[]): PublicRoomRow[] {
 }
 
 export interface LobbyRoomListProps {
-  rooms: readonly SandboxRoomSummary[];
+  rooms: readonly RoomSummary[];
   loading: boolean;
   /** The list's own error -- the server could not be reached. */
   error: string | null;
@@ -146,7 +147,8 @@ export interface LobbyRoomListProps {
    *  the button row at the top of the page. */
   refusal: { code: string; reason: string } | null;
   onJoin: (code: string) => void;
-  onWatch: (code: string) => void;
+  /** LIVE-2D: watching opens the table by its game id. */
+  onWatch: (gameId: string) => void;
 }
 
 export function LobbyRoomList({ rooms, loading, error, available, busy, refusal, onJoin, onWatch }: LobbyRoomListProps) {
@@ -263,7 +265,8 @@ function RoomGroup({
   busy: boolean;
   refusal: { code: string; reason: string } | null;
   onJoin: (code: string) => void;
-  onWatch: (code: string) => void;
+  /** LIVE-2D: watching opens the table by its game id. */
+  onWatch: (gameId: string) => void;
 }) {
   if (rows.length === 0) return null;
   return (
@@ -311,7 +314,8 @@ function RoomRow({
   row: PublicRoomRow;
   busy: boolean;
   onJoin: (code: string) => void;
-  onWatch: (code: string) => void;
+  /** LIVE-2D: watching opens the table by its game id. */
+  onWatch: (gameId: string) => void;
 }) {
   const seats = `${row.seated}/${row.seatCap}${row.exactCount ? " exactly" : ""}`;
   const table = `${row.hostNickname}’s table, ${row.code}`;
@@ -321,7 +325,6 @@ function RoomRow({
         <span style={styles.name}>{row.typeLabel}</span>
         <span style={styles.meta}>
           <span style={styles.code}>{row.code}</span> · {row.hostNickname}
-          {row.anteLabel !== null ? ` · ante ${row.anteLabel}` : ""}
         </span>
       </span>
       <span className="lobby-rooms-facts">
@@ -357,7 +360,7 @@ function RoomRow({
           type="button"
           style={{ ...styles.watchButton, ...(busy ? styles.disabled : {}) }}
           disabled={busy}
-          onClick={() => onWatch(row.code)}
+          onClick={() => onWatch(row.gameId)}
           aria-label={`Watch ${table}`}
           title="Watch this game. You will not have a seat."
           data-testid={`lobby-watch-${row.code}`}

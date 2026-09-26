@@ -18,6 +18,9 @@ const { connectServerLink } = require("./serverLink") as typeof import("./server
 
 type SocketLike = import("./serverLink").SocketLike;
 
+/** LIVE-2D: the link is keyed by the server-minted game id, never a room code. */
+const GAME = "g_0123456789abcdefghjkmnpqr0";
+
 /** A socket the test drives by hand. */
 function fakeSocket() {
   const sent: string[] = [];
@@ -36,6 +39,7 @@ function fakeSocket() {
     open: () => socket.onopen?.({}),
     deliver: (frame: unknown) => socket.onmessage?.({ data: JSON.stringify(frame) }),
     drop: () => socket.onclose?.({}),
+    closeWith: (code: number) => socket.onclose?.({ code }),
   };
 }
 
@@ -47,9 +51,8 @@ function link(over: Partial<Parameters<typeof connectServerLink>[0]> = {}) {
   let ids = 0;
   const client = connectServerLink({
     url: "ws://test",
-    room: "ROOM",
+    gameId: GAME,
     build: "build-1",
-    claim: "p-alice",
     onEntries: (batch) => entries.push([...batch]),
     onRefused: (reason) => refusals.push(reason),
     onError: (message) => errors.push(message),
@@ -69,16 +72,29 @@ const entry = (index: number, over: Record<string, unknown> = {}) => ({
 });
 
 describe("connecting", () => {
-  it("says hello with the room, the build and what it has applied -- and no identity (LIVE-2B: that is the upgrade's)", () => {
+  it("says hello with the game id, the build and what it has applied -- and no identity (LIVE-2B: that is the upgrade's)", () => {
     const { wire } = link();
     wire.open();
     expect(wire.frames()[0]).toMatchObject({
       kind: "hello",
-      room: "ROOM",
+      gameId: GAME,
       build: "build-1",
       baseIndex: -1,
     });
-    expect(wire.frames()[0]).not.toHaveProperty("claim");
+    /* LIVE-2D: no room code, no claim, no seat PIN, no seat token -- who this socket is was settled at the upgrade,
+       and which seat it plays is the server's to derive for every move. */
+    for (const field of ["room", "claim", "pin", "token", "playerId", "actor"]) {
+      expect(wire.frames()[0]).not.toHaveProperty(field);
+    }
+  });
+
+  it("never names an actor on a submission: the server derives who moved (LIVE-2D)", () => {
+    const { client, wire } = link();
+    wire.open();
+    void client.submit({ PassTurn: { game_id: 0 } } as never);
+    const submit = wire.frames().find((frame) => frame.kind === "submit") as Record<string, unknown>;
+    expect(Object.keys(submit).sort()).toEqual(["baseIndex", "build", "kind", "msg", "submissionId"]);
+    for (const field of ["actor", "playerId", "claim", "pin", "token", "room"]) expect(submit).not.toHaveProperty(field);
   });
 
   it("holds a dispatch made before the socket opens, and sends it after hello", () => {
@@ -105,6 +121,7 @@ describe("applying what comes back", () => {
       build: "build-1",
       digest: "0".repeat(16),
       entries: [entry(0, { submission_id: "n1" })],
+      inReplyTo: "n1",
     });
     await expect(pending).resolves.toBe(0);
     expect(entries).toEqual([[entry(0, { submission_id: "n1" })]]);
@@ -141,10 +158,11 @@ describe("applying what comes back", () => {
   });
 });
 
-describe("a burst, answered in order", () => {
+describe("a burst, each answer naming its own submission", () => {
   it("resolves three submissions with their own indices", async () => {
     /* THE SHELL DISPATCHES IN LOOPS (#941 records why), so several are outstanding at once and each caller
-       is waiting for ITS index. FIFO is the mechanism; the nonce is the check. */
+       is waiting for ITS index. LIVE-2D: the answer's `inReplyTo` is the mechanism -- the FIFO fallback for a
+       server older than LIVE-3A is deleted. */
     const { client, wire } = link();
     wire.open();
     const a = client.submit({ PassTurn: { game_id: 0 } } as never);
@@ -157,25 +175,34 @@ describe("a burst, answered in order", () => {
         build: "build-1",
         digest: "0".repeat(16),
         entries: [entry(n, { submission_id: id })],
+        inReplyTo: id,
       });
     }
     await expect(Promise.all([a, b, c])).resolves.toEqual([0, 1, 2]);
   });
 
-  it("reports rather than shrugs when a reply arrives out of order", async () => {
-    /* IF THE ORDERING ASSUMPTION EVER BREAKS, resolving anyway hands this reply's index to a different
-       dispatch -- a board disagreeing with its own log, and the hardest possible thing to trace back. */
-    const { client, wire, errors } = link();
+  it("an answer naming a submission this client does not hold resolves nobody else's", async () => {
+    /* Resolving anyway would hand this reply's index to a different dispatch -- a board disagreeing with its own
+       log. With FIFO gone the link cannot even be tempted: an answer settles exactly the submission it names. */
+    const { client, wire } = link();
     wire.open();
     const first = client.submit({ PassTurn: { game_id: 0 } } as never);
+    let settled = false;
+    void first.then(() => {
+      settled = true;
+    });
     wire.deliver({
       kind: "applied",
       build: "build-1",
       digest: "0".repeat(16),
       entries: [entry(0, { submission_id: "n9" })],
+      inReplyTo: "n9",
     });
-    await first;
-    expect(errors.join(" ")).toContain("out of order");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    wire.deliver({ kind: "applied", build: "build-1", digest: "0".repeat(16), entries: [entry(1, { submission_id: "n1" })], inReplyTo: "n1" });
+    await expect(first).resolves.toBe(1);
   });
 });
 
@@ -186,7 +213,7 @@ describe("the answers that are not an application", () => {
     const { client, wire, refusals } = link();
     wire.open();
     const pending = client.submit({ PassTurn: { game_id: 0 } } as never);
-    wire.deliver({ kind: "refused", build: "build-1", reason: "It is not your turn." });
+    wire.deliver({ kind: "refused", build: "build-1", reason: "It is not your turn.", inReplyTo: "n1" });
     await expect(pending).resolves.toBeNull();
     expect(refusals).toEqual(["It is not your turn."]);
   });
@@ -206,6 +233,7 @@ describe("the answers that are not an application", () => {
       build: "build-1",
       digest: "0".repeat(16),
       entries: [entry(0, { submission_id: "n1" })],
+      inReplyTo: "n1",
     });
     await expect(pending).resolves.toBe(0);
   });
@@ -217,7 +245,7 @@ describe("the answers that are not an application", () => {
     });
     wire.open();
     const pending = client.submit({ PassTurn: { game_id: 0 } } as never);
-    wire.deliver({ kind: "build-skew", clientBuild: "build-1", serverBuild: "build-2" });
+    wire.deliver({ kind: "build-skew", clientBuild: "build-1", serverBuild: "build-2", inReplyTo: "n1" });
     await expect(pending).resolves.toBeNull();
     expect(skews).toEqual([["build-1", "build-2"]]);
   });
@@ -334,7 +362,7 @@ describe("reconnection, #1253", () => {
     expect(frames[1]).toMatchObject({ kind: "submit", submissionId: "n1", baseIndex: 0 });
     // The hello's catch-up settles nothing of this one; its own answer does.
     wire.deliver(catchUp([]));
-    wire.deliver({ kind: "applied", build: "build-1", digest: "0".repeat(16), entries: [entry(1, { submission_id: "n1" })] });
+    wire.deliver({ kind: "applied", build: "build-1", digest: "0".repeat(16), entries: [entry(1, { submission_id: "n1" })], inReplyTo: "n1" });
     await expect(queued).resolves.toBe(1);
   });
 });
@@ -608,12 +636,79 @@ describe("LIVE-3A: answers are matched by the submission they name", () => {
     expect(client.appliedIndex).toBe(0);
   });
 
-  it("keeps FIFO for a server whose hello answer carries no `inFlight` (older than LIVE-3A)", async () => {
+  it("LIVE-2D: a hello answer without `inFlight` does not bring FIFO back -- an unnamed answer is still history", async () => {
+    /* The fallback for a server older than LIVE-3A is DELETED: every server this client can reach names the
+       submission it answers, so a frame without `inReplyTo` never settles anybody's move. */
     const { client, wire } = live();
     wire.open();
     wire.deliver({ kind: "catch-up", build: "build-1", digest, entries: [] });
     const first = client.submit(PASS);
     wire.deliver(applied([entry(0, { submission_id: "n1" })]));
-    await expect(first).resolves.toBe(0);
+    expect(await settledYet(first)).toBe(false);
+    wire.deliver(applied([entry(1, { submission_id: "n1" })], "n1"));
+    await expect(first).resolves.toBe(1);
+  });
+});
+
+/* ==================================================================
+    LIVE-2D: ACCESS LOST IS TERMINAL
+   ==================================================================
+   A server that says this tab may not read the game (`not-found`, `gone`, `forbidden`, `room-full` at the hello, or
+   a 4410 close when access is removed mid-game) is answered once, through `onAccessLost`, and the link stops: a
+   reconnect would earn the same answer, so looping on it is the one wrong response. */
+describe("LIVE-2D: access lost is terminal", () => {
+  const PASS = { PassTurn: { game_id: 0 } } as never;
+  const terminal = () => {
+    const scheduled: Array<() => void> = [];
+    const lost: Array<[string, string]> = [];
+    const made = link({
+      schedule: (callback) => scheduled.push(callback),
+      onAccessLost: (code, reason) => lost.push([code, reason]),
+    });
+    return { ...made, scheduled, lost };
+  };
+
+  it.each(["not-found", "gone", "forbidden", "room-full"])("a hello refused `%s` is said once, settles what was pending, and never reconnects", async (code) => {
+    const { client, wire, scheduled, lost, errors } = terminal();
+    wire.open();
+    const pending = client.submit(PASS);
+    wire.deliver({ kind: "error", code, reason: "You cannot read that game." });
+    await expect(pending).resolves.toBeNull();
+    expect(lost).toEqual([[code, "You cannot read that game."]]);
+    expect(errors).toEqual([]);
+    // The close that follows is ours: nothing is scheduled, and a second refusal is not said twice.
+    wire.drop();
+    wire.deliver({ kind: "error", code, reason: "again" });
+    expect(scheduled).toHaveLength(0);
+    expect(lost).toHaveLength(1);
+  });
+
+  it("a 4410 close mid-game (kicked, cancelled, a private deal without this tab) is terminal too", async () => {
+    const { client, wire, scheduled, lost } = terminal();
+    wire.open();
+    wire.deliver({ kind: "catch-up", build: "build-1", digest: "0".repeat(16), entries: [entry(0)] });
+    const pending = client.submit(PASS);
+    wire.closeWith(4410);
+    await expect(pending).resolves.toBeNull();
+    expect(lost).toEqual([["not-found", "You no longer have access to this game."]]);
+    expect(scheduled).toHaveLength(0);
+  });
+
+  it("an ordinary drop still reconnects -- only a refusal of ACCESS stops the link", () => {
+    const { wire, scheduled, lost } = terminal();
+    wire.open();
+    wire.closeWith(1006);
+    expect(scheduled).toHaveLength(1);
+    expect(lost).toEqual([]);
+  });
+
+  it("a refusal that is not about access is reported and is not terminal", () => {
+    const { wire, scheduled, lost, errors } = terminal();
+    wire.open();
+    wire.deliver({ kind: "error", code: "bad-frame", reason: "The server did not accept that request." });
+    expect(lost).toEqual([]);
+    expect(errors).toEqual(["The server did not accept that request."]);
+    wire.drop();
+    expect(scheduled).toHaveLength(1);
   });
 });

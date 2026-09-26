@@ -162,14 +162,17 @@ describe("the stage that replaced the dashboard", () => {
     expect(LOBBY).not.toContain("styles.stage}");
   });
 
-  it("still keeps the room browser out of it", () => {
-    /* #1123's ONE SURVIVING CLAIM, through three layouts: the Web3 branch is not inside whatever holds the
-       sandbox controls, because the moment that flag turns on it renders a room list and a staging table. */
+  it("still keeps the room browser out of it -- and now there is none (LIVE-2D)", () => {
+    /* #1123's ONE SURVIVING CLAIM, through three layouts, was that the Web3 branch stays outside whatever holds
+       the sandbox controls. RUST-RETIRE-1 2B.3 deleted that branch -- the room browser, the staging table and
+       the flag -- so the claim closes as an absence. The only list on this screen is the public one, which is
+       flow content below the hero, never inside the anchored controls. */
     const anchor = LOBBY.indexOf("styles.tableAnchor");
-    const branch = LOBBY.indexOf("!WEB3_LOBBY_ENABLED ? null :");
     expect(anchor).toBeGreaterThan(-1);
-    expect(branch).toBeGreaterThan(anchor);
-    expect(LOBBY.indexOf("<RoomBrowser")).toBeGreaterThan(branch);
+    expect(LOBBY).not.toContain("WEB3_LOBBY_ENABLED");
+    expect(LOBBY).not.toContain("<RoomBrowser");
+    expect(LOBBY).not.toContain("StagingRoom");
+    expect(LOBBY.indexOf("<LobbyRoomList")).toBeGreaterThan(anchor);
   });
 
   it("needs no breakpoint, and spends its stylesheet on the title instead", () => {

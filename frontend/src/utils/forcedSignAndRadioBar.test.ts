@@ -140,58 +140,26 @@ describe("a forced stage skips the chance, not the story", () => {
   });
 });
 
-describe("the flag crosses the machine it was armed on", () => {
-  it("lives on the room document, not in the host's React state", () => {
-    /* ==================================================================
-        DESIGN NOTE 1128: THE BUG THE PROMPT WOULD HAVE SHIPPED
-       ==================================================================
-       The sign is resolved by the client DISPATCHING the run. A flag in the host's memory is armed on one
-       machine and read on another, so it would have done nothing whenever the host was not the acting player
-       -- silently, and only sometimes, which is the worst way for a debug tool to fail. #910 had already made
-       this argument about the house rules. */
-    expect(ROOM).toContain("forcedSign: ForcedSignStage | null;");
-    expect(ROOM).toContain("export async function setSandboxForcedSign");
-    expect(APP).toContain("sandboxRoomDocRef.current?.forcedSign");
+/* LIVE-2D (LIVE-2 §9.4, §13.1): #1128's flag lived on the legacy room DOCUMENT so it could cross machines. The document
+   is gone, and every table is server-dealt and pinned -- where the waiver was always dropped at ingress and refused by
+   the reducer -- so the tool is deleted end to end. What stays pinned is that nothing of it survives to be armed. */
+describe("the flag is gone with the room document it lived on (LIVE-2D)", () => {
+  it("is on no room, in no shell state, and sent by no one", () => {
+    expect(ROOM).not.toContain("forcedSign");
+    expect(ROOM).not.toContain("setSandboxForcedSign");
+    for (const gone of ["sandboxRoomDocRef", "setSandboxForcedSign", "cycleForcedSign", "const forcedSign = sandbox ?", "debug_force: true"]) {
+      expect([gone, APP.includes(gone)]).toEqual([gone, false]);
+    }
+    expect(APP).toContain("const signForced = null;");
   });
 
-  it("validates the field rather than casting it", () => {
-    /* Untrusted wire data. An unknown string would be a flag that matches no stage and never clears. #1361b
-       moved the room document to the game server, so the check moved with it: the server's write handler
-       admits the three stages and nulls anything else. */
+  it("no stage is taken from the wire: the server has no forced-sign op to answer", () => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const SERVER = fs.readFileSync(path.join(__dirname, "../../../server/src/gameServer.ts"), "utf8");
-    /* LIVE-2A (LIVE-2 §9.4, §15 #13): the `forced-sign` write is DELETED -- a pinned (server-dealt) table drops and
-       refuses the waiver anyway -- so no stage is taken from the wire at all: the frame schema has no such op
-       (`bad-frame`) and the document's `forcedSign` stays null. */
-    expect(SERVER).not.toContain('case "forced-sign"');
-    expect(SERVER).toContain("forcedSign: null,");
-  });
-
-  it("clears on the stage that fired, not on the attempt", () => {
-    /* A forced Mark on a trainless corporation resolves to `null`, and the flag has to STAY ARMED. Comparing
-       `resolved.stage` against what was armed is what makes that true. */
-    expect(APP).toContain("resolved.stage === sandboxRoomDocRef.current?.forcedSign");
-    expect(APP).toContain("setSandboxForcedSign(sandboxRoomRef.current ?? \"\", null)");
-  });
-
-  it("is gated on host AND on sandbox, both", () => {
-    expect(APP).toContain("sandboxRoom.hostId === localId");
-    expect(APP).toContain("const forcedSign = sandbox ?");
-    /* #1661 (S9-1): the armed stage is read behind the same `sandbox` gate, and what crosses the wire is a
-       BOOLEAN -- the board says which stage a waiver lands on, so no message can name one. */
-    /* #1662 (S9-1): and on a LOCAL board, third. An authoritative room deals pinned and refuses the waiver,
-       so arming it there would narrate a stage the board never wrote. */
-    expect(APP).toContain("const signArmed = sandbox && signLocal ?");
-    expect(APP).toContain("const signLocal = before?.rules_engine_version == null;");
-    expect(APP).toContain("const signForce = signArmed === null ? {} : { debug_force: true as const };");
-  });
-
-  it("has a readout, not just a shortcut", () => {
-    /* IT MAY SIT ARMED FOR SEVERAL TURNS while it waits for a corporation that can carry its stage, so a
-       hidden tool with no state display would be unusable exactly when it is working correctly. */
-    expect(APP).toContain("styles.forcedSignChip");
-    expect(APP).toContain('event.key.toLowerCase() !== "y"');
+    for (const file of ["gameServer.ts", "rooms/roomHost.ts"]) {
+      const server = fs.readFileSync(path.join(__dirname, "../../../server/src", file), "utf8");
+      expect([file, server.includes('case "forced-sign"')]).toEqual([file, false]);
+    }
   });
 });
 

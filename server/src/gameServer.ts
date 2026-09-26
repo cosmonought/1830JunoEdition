@@ -30,16 +30,22 @@
 // `hello`. `claim` is gone from the wire. A socket carries a FROZEN context -- { principalId, sessionId,
 // sessionExpiresAt, ipKey, openedAt } -- for its whole life, checked against the session on every frame (4401 when
 // it expired or was revoked). Production authenticates the `__Host-gs_session` cookie; development authenticates
-// `?dev_claim=` through the loopback-only development authenticator, and nothing else. The LEGACY room protocol's
-// actor is the development claim; a cookie principal has no seat identity until LIVE-2C binds one from its
-// GameRecord, so in production the legacy room frames answer `no-seat-identity` (the explicit 2C seam).
+// `?dev_claim=` through the loopback-only development authenticator, and nothing else.
+//
+// LIVE-2D: ONE ROOM PROTOCOL, IN BOTH MODES. The legacy room protocol (`room-write`, `seat-pin`, `claim-seat`,
+// `lobby-*`, and the `room`-keyed hello, room-hello, chat and presence) is DELETED -- its handlers, its room
+// documents, its PINs and tokens and its staging lobby. What a socket may say about rooms is `room-op`,
+// `rooms-watch`, and `hello` / `room-hello` / `chat-send` / `presence-set` by `gameId` (`rooms/roomHost.ts`); any
+// legacy frame is an unknown kind to the closed schema (`bad-frame`), in development exactly as in production. The
+// actor of every move is the seat the authenticated principal holds in the game's committed record -- never a
+// claim, never a frame field.
 
 import { randomBytes } from "crypto";
 import { createServer, type Server as HttpServer } from "http";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { decideUpgrade, refuseUpgrade, type ConnectionContext } from "./identity/authenticateUpgrade";
-import { devClaimOf, type DevAuthenticator } from "./identity/devAuthenticator";
+import type { DevAuthenticator } from "./identity/devAuthenticator";
 import { handleIdentityHttp } from "./identity/httpApi";
 import { IdentityLimiter } from "./identity/limiter";
 import type { GsMode } from "./identity/mode";
@@ -65,7 +71,6 @@ import {
    `frontend/src/gameEngine` -- one import, one surface, and no second implementation of any rule. */
 import {
   DEFAULT_SANDBOX_SCENARIO,
-  STANDARD_VARIANTS,
   effectiveActions,
   logHash,
   sandboxReplayProviders,
@@ -81,39 +86,9 @@ import {
   SUBMISSION_ID_PATTERN,
   parseClientFrame,
   parseGameplayMessage,
-  sanitizeName,
-  sanitizeText,
 } from "../../frontend/src/gameEngine/messageSchema";
-import { dealEntryOf, revertTargetOf } from "../../frontend/src/gameEngine/logRevert";
 import type { ServerFrame, ServerMessage } from "../../frontend/src/utils/serverProtocol";
 import type { SandboxLogMsg } from "../../frontend/src/gameEngine/gameSetup";
-import type {
-  ChatSendRequest,
-  PresenceSetRequest,
-  RoomChatEntry,
-  RoomDocWrite,
-} from "../../frontend/src/utils/roomDocLink";
-import type { PresenceState } from "../../frontend/src/utils/presence";
-import type {
-  LobbyHelloRequest,
-  LobbyWatchRequest,
-  LobbyWriteRequest,
-  RoomDoc,
-  SeatDoc,
-  StagingRoomRecord,
-} from "../../frontend/src/utils/lobbyProtocol";
-import { ROOM_LIST_LIMIT } from "../../frontend/src/utils/lobbyProtocol";
-import type { SandboxRoomDoc, SandboxRoomPlayer } from "../../frontend/src/utils/sandboxRoom";
-/* #1415: the room's terms -- values, from the pure module (`sandboxRoom.ts` itself is type-only here because it
-   imports the browser's socket). */
-import {
-  normaliseAnte,
-  normalisePlayerCount,
-  roomSeatCap,
-  roomVisibility,
-  summariseSandboxRoom,
-  type SandboxRoomSummary,
-} from "../../frontend/src/utils/sandboxRoomSummary";
 import type { LogStore } from "./fileLogStore";
 import { COMMITTED, outcomeOf } from "./persistence/storeResult";
 /* LIVE-3A: every mutation of a game runs on that game's actor, and every read comes from its committed view. */
@@ -124,7 +99,6 @@ import {
   newActorCounters,
   type ActorCounters,
   type BatchSettlement,
-  type DocSettlement,
   type GameFaults,
   type GameStorePort,
   type Subscriber,
@@ -146,14 +120,11 @@ import {
    (`identity/authenticateUpgrade.ts`): production authenticates the session cookie, development the loopback-only
    `?dev_claim=` authenticator (`identity/devAuthenticator.ts`), and both run before a WebSocket exists. */
 
+/** LIVE-2D: the log subscription of a server-owned game -- `gameId` only (the schema refuses `room`). */
 interface HelloFrame {
   kind: "hello";
-  room: string;
+  gameId: string;
   build: string;
-  /** Design note #1341: the seat PIN, demanded when the claimed seat has one. */
-  pin?: unknown;
-  /** Design note #1341: the seat's session token; an older one than the seat's latest is superseded. */
-  token?: unknown;
   /** What this client has already applied, so a reconnect is answered rather than guessed at. */
   baseIndex?: number;
   /** LIVE-3A (L3-3): the id of the entry the client holds at `baseIndex` -- the anchor. */
@@ -170,154 +141,14 @@ interface SubmitFrame {
   submissionId?: string;
 }
 
-/* ==================================================================
-    DESIGN NOTE 1215: THE WAITING ROOM, AND WHY IT IS NOT THE LOG
-   ==================================================================
-   The roster used to live on Firestore, and when Firestore went unreachable the table could not be seated:
-   `hostSandboxRoom` awaited a write that never landed and the button did nothing at all. `roomDocLink.ts`
-   carries the argument in full; what matters HERE is the separation.
-
-   THE LOG IS APPENDED, ORDERED, REPLAYED, HASHED AND SETTLED. THIS IS NONE OF THOSE THINGS. It is
-   last-write-wins, it is never replayed, no reducer sees it, and it is thrown away when the game starts for
-   real. Keeping it in a different map from `rooms` is what stops that distinction eroding.
-
-   NO RULE MAY BE DECIDED FROM IT. `turnAuthority` reads the board. If a check ever reaches for the roster to
-   answer "may this player act", the answer is being taken from a record any client can overwrite. */
-interface RoomHelloFrame {
-  kind: "room-hello";
-  room: string;
-  build: string;
-  /** Design note #1341: the seat PIN, demanded when the claimed seat has one. */
-  pin?: unknown;
-  /** Design note #1341: the seat's session token; an older one than the seat's latest is superseded. */
-  token?: unknown;
+/** LIVE-2D: every other frame (`room-op`, `rooms-watch`, `room-hello`, `chat-send`, `presence-set`) is the room
+ *  host's, by `gameId` (`rooms/roomHost.ts`); the closed schema has already refused anything else. */
+interface RoomFrame {
+  kind: "room-op" | "rooms-watch" | "room-hello" | "chat-send" | "presence-set";
+  [field: string]: unknown;
 }
 
-interface RoomWriteFrame {
-  kind: "room-write";
-  room: string;
-  write: RoomDocWrite;
-}
-
-/* ==================================================================
-    DESIGN NOTE 1341: THE SEAT PIN, SERVER SIDE
-   ==================================================================
-   `sandboxRoom.ts` #1341 is the design. Here: two frames on the room-doc socket, one gate on both hellos.
-     seat-pin    the socket's OWN seat sets its PIN; changing one needs the current one.
-     claim-seat  any socket takes over a seat by giving its PIN. A seat that HAS one must be given that one.
-                 A seat that has none ADOPTS the PIN offered (#1341a) -- the migration path for seats claimed
-                 before the PIN existed. Read the addendum at the branch before relying on this: an unPINned
-                 seat is first-come, and that is a property of the seat having no PIN, not of this branch.
-     the gate    a `hello` or `room-hello` claiming an id that has a PIN must carry it, or is refused and
-                 closed. This is what makes the PIN protect a seat rather than merely decorate it: the
-                 identity resolver still believes the claim (#1210), the PIN is the one fact it checks.
-   ON A SUCCESSFUL CLAIM the log sockets attached to that actor in that room are told they were SUPERSEDED and
-   closed -- "gracefully close the old connection" -- and a fresh SESSION TOKEN is minted for the seat and
-   handed to the claimant. Both devices know the PIN from then on, so the PIN alone cannot keep the old one
-   out when its socket reconnects on a backoff; the token can. A hello carrying a stale token is refused with
-   the same superseded code, and the client's answer to that code is to forget the seat and reload as a
-   visitor (`seatPin.ts`). Tokens are in memory only: a restart lets any device with the PIN back in.
-   PLAIN STRINGS, in the room document, persisted with it, and stripped from every broadcast by `publicDoc`.
-   Ruled so for closed playtests: no hashing, a key to one room's seat and to nothing else. */
-interface SeatPinFrame {
-  kind: "seat-pin";
-  room: string;
-  requestId: string;
-  playerId: string;
-  pin: unknown;
-  currentPin?: unknown;
-}
-
-interface ClaimSeatFrame {
-  kind: "claim-seat";
-  room: string;
-  requestId: string;
-  playerId: string;
-  pin: unknown;
-}
-
-/* LIVE-2A (LIVE-2 §10.5, §15 #6): `find-seats` -- DESIGN NOTE 1355, "A PIN FINDS ITS SEATS" -- IS DELETED. It
-   answered any socket, before any hello, with every seat on the server carrying a four-digit PIN: an oracle that
-   enumerated all 10,000 PINs in 0.65 s (LIVE-1). The frame kind is no longer recognised (`bad-frame`), and the
-   lobby's PIN-first card is gone with it. A new device rejoins its seat by room code and PIN (#1352) until LIVE-2E's
-   transfer codes replace PINs altogether. */
-
-/* ==================================================================
-    DESIGN NOTE 1361: CHAT, PRESENCE AND THE STAGING LOBBY, ON THE ROOM-DOC SOCKET
-   ==================================================================
-   Firestore's test-mode window closed and the three records that had stayed there -- the transcript, the
-   route-presence hints and the parked on-chain staging lobby -- became CORS errors. They move here, onto the
-   socket that already carries the room document, and #1215's separation is the rule for all of them: NONE OF
-   THIS IS THE LOG. Nothing here is appended, replayed, hashed or settled; no rule is decided from any of it.
-     chat        (#1361a) one transcript per room, capped, persisted as a sidecar, broadcast whole.
-     presence    (#1361a) one current value per seat, in memory only, cleared when the socket closes.
-     the lobby   (#1361b) the staging rooms and their seats, persisted whole; every write is a named op the
-                 server applies under the rule its Firestore transaction used to carry.
-   THE ACTOR IS THE CONNECTION'S, for chat and presence -- the same posture as the log (#1207): a chat line
-   is stamped with who the socket said it was at `room-hello`, and a presence write can only ever set the
-   sender's own seat. The lobby writes carry a wallet address in the frame because that lobby is keyed by
-   wallet and the socket is keyed by player id; it is the parked Web3 path, believed the way the local
-   identity is believed (#1210). */
-interface ChatSendFrame extends ChatSendRequest {}
-interface PresenceSetFrame extends PresenceSetRequest {}
-interface LobbyHelloFrame extends LobbyHelloRequest {}
-interface LobbyWatchFrame extends LobbyWatchRequest {}
-interface LobbyWriteFrame extends LobbyWriteRequest {}
-
-type ClientFrame =
-  | HelloFrame
-  | SubmitFrame
-  | RoomHelloFrame
-  | RoomWriteFrame
-  | SeatPinFrame
-  | ClaimSeatFrame
-  | ChatSendFrame
-  | PresenceSetFrame
-  | LobbyHelloFrame
-  | LobbyWatchFrame
-  | LobbyWriteFrame;
-
-/* ==================================================================
-    LIVE-0: THE STAGING LOBBY IS PARKED ON THE SERVER TOO
-   ==================================================================
-   #525 parked the on-chain staging lobby's UI behind `WEB3_LOBBY_ENABLED` (`Lobby.tsx`), but this process
-   kept answering its frames -- unauthenticated, a wallet address believed from the frame, and a first-writer
-   `bind-chain-game-id` (LIVE-1 B-6). Parked here the same way: one constant, nothing deleted. The escrow
-   integration replaces it properly; until then no staging room can be read or written through this server.
-   `lobby-hello` STAYS ANSWERED, because it is also the subscription the PUBLIC SANDBOX ROOM LIST rides
-   (#1415, `useSandboxRooms`). Its `rooms` frame is live; only its staging `lobby` frame is parked, as an
-   empty list. `lobby-watch` is answered with no room and watches nothing. `lobby-write` is refused in its
-   own `lobby-ack`, applies nothing and saves nothing, so `lobby.json` is never rewritten.
-   EACH REFUSAL IS THE FRAME ITS CALLER ALREADY LISTENS FOR, NOT AN `error`. `roomDocLink.ts` fans an `error`
-   out to every error listener on the lobby socket -- the Join Game list's among them -- and `Lobby.tsx`
-   renders those banners outside the Web3 gate, so a refusal sent as `error` would put a red banner on the
-   live lobby. */
-const STAGING_LOBBY_ENABLED: boolean = false;
-const STAGING_LOBBY_PARKED_REASON = "The on-chain staging lobby is switched off on this server.";
-
-/** #1361a: how much of a transcript a room keeps and sends. Mirrors `CHAT_HISTORY_LIMIT` in `ChatBox.tsx`. */
-const CHAT_HISTORY_LIMIT = 200;
-const MAX_CHAT_MESSAGE_LENGTH = 500;
-const MAX_DISPLAY_NAME_LENGTH = 24;
-
-const isValidSeatPin = (pin: unknown): pin is string => typeof pin === "string" && /^[0-9]{4}$/.test(pin);
-const SEAT_SUPERSEDED_CODE = "seat-superseded";
-/** #1346: a hello turned away for a seat reason -- a wrong or missing PIN. Terminal for the client: retrying
- *  the same hello cannot change the answer, so it must not loop. */
-const SEAT_REFUSED_CODE = "seat-refused";
-/** #1415: a room write the document did not take (full table, kicked seat, a kick by a non-host). */
-const ROOM_WRITE_REFUSED_CODE = "room-write-refused";
-const mintSeatToken = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
-
-/** The document as the wire sees it: `seatPins` stripped, `hasPin` stamped on each seat. */
-const publicDoc = (doc: SandboxRoomDoc | null): SandboxRoomDoc | null => {
-  if (!doc) return null;
-  const { seatPins, ...rest } = doc;
-  return {
-    ...rest,
-    players: doc.players.map((player) => ({ ...player, hasPin: Boolean(seatPins?.[player.id]) })),
-  };
-};
+type ClientFrame = HelloFrame | SubmitFrame | RoomFrame;
 
 /* ==================================================================
     LIVE-0: LOOPBACK ONLY
@@ -355,10 +186,6 @@ export interface GameServerOptions {
   /** LIVE-2C: the server-owned GameRecords and the join-code index. In memory when absent; `start.ts` passes the
    *  file adapter. */
   records?: RecordStore;
-  /** LIVE-2C (LIVE-2 §13.4 step 3): the LEGACY room protocol (`room-write`, `seat-pin`, `claim-seat`, `lobby-*`, and the
-   *  `room`-keyed hello, room-hello, chat and presence). Registered in DEVELOPMENT mode only (on unless `false`);
-   *  a production server REFUSES to exist with it. LIVE-2D deletes it. */
-  legacyRoomProtocol?: boolean;
   /** LIVE-2C (LIVE-2 §8.3): where a start's roster comes from. `NoMoneyRosterSource` when absent. */
   rosterSource?: RosterSource;
   /** LIVE-2C: the start's shuffle -- `crypto.randomInt` Fisher-Yates when absent; tests inject a fixed one. */
@@ -371,8 +198,7 @@ export interface GameServerOptions {
      `applied` frame and the fan-out both describe entries the disk has synced; a write the store DEFINITELY did
      not take rolls the session back and the submitter is told `retry`, because a move the disk does not hold did
      not happen (#1209, read literally) -- and one whose outcome the store could not settle holds the room
-     (LIVE-3B). The room document is saved through the same store, before it is published, and loaded with the
-     log, so a restart restores a game whose roster still has names. */
+     (LIVE-3B). LIVE-2D: the room's roster is its GameRecord (`records`), never a document in this store. */
   store?: LogStore;
   /** #1225: send per-field digests with every answer so a diverged client can name the field itself. A
    *  local-play diagnostic; `start.ts` turns it on wherever it turns on the insecure identity, because those
@@ -400,14 +226,11 @@ export interface GameServerOptions {
   limits?: IngressLimitOverrides;
 }
 
+/** A socket's log subscription: the game it said `hello` for, and its principal. The actor of a move is NOT here --
+ *  it is the seat this principal holds in the record committed when each submit runs (LIVE-2C §14). */
 interface Attached {
   room: string;
-  /** The legacy actor (a development claim). Empty for a server-owned game: its actor is the seat's `player_id`,
-   *  resolved from the record committed when each submit runs. */
-  actor: string;
-  /** LIVE-2C: the connection's principal, and whether `room` is a server-owned game (`g_…`). */
   principalId: string;
-  owned: boolean;
 }
 
 /* ==================================================================
@@ -421,13 +244,6 @@ const BUSY_REASON = "The game server is busy with this game. Try again in a mome
 const EXPIRED_REASON = "The game server did not get to that move in time, so it was not made. Try again.";
 /** A room that could not be loaded from the store. */
 const LOAD_FAILED_REASON = "The game server could not load this room right now. It will keep trying.";
-/** F-10: a room document the store did not take. */
-const ROOM_SAVE_FAILED_REASON = "The server could not record that change to the room, so it was not made. Try again.";
-/** LIVE-3B (§8.7): a room document whose save could not be confirmed either way; the room is held for a restart. */
-const ROOM_SAVE_UNCONFIRMED_REASON =
-  "The server could not confirm that change to the room was recorded. The room is paused until the server restarts.";
-const docRefusal = (settled: DocSettlement): string =>
-  settled.kind === "unresolved" ? ROOM_SAVE_UNCONFIRMED_REASON : ROOM_SAVE_FAILED_REASON;
 /** E-9: a reference ties the sentence a player reads to the line in this window (LIVE-2 §11.5). */
 const REF_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford base32
 const errorRef = (): string => Array.from(randomBytes(6), (byte) => REF_ALPHABET[byte % 32]).join("");
@@ -447,27 +263,12 @@ const REVERT_BUDGET_REASON = "Too many undos in the last hour. Play on, and undo
 const LOG_FULL_REASON = "This game has reached the server's limit on its length and cannot take another move.";
 /** LIVE-2C (LIVE-2 §6.3 #20): the deal of a server-owned game is the server's. */
 const SERVER_DEALS_REASON = "The deal is made by the server \u2014 press Start.";
-/** LIVE-2C: the legacy room protocol's frames -- answered in development only (LIVE-2 §13.4 step 3). */
-const LEGACY_KINDS = new Set(["room-write", "seat-pin", "claim-seat", "lobby-hello", "lobby-watch", "lobby-write"]);
-const ROUTED_KINDS = new Set(["hello", "room-hello", "chat-send", "presence-set"]);
-const isLegacyFrame = (frame: { kind: string; room?: unknown }): boolean =>
-  LEGACY_KINDS.has(frame.kind) || (ROUTED_KINDS.has(frame.kind) && frame.room !== undefined);
-/** LIVE-2C (the frozen rollout invariant, LIVE-2 §13.4 step 3): THE LEGACY ROOM HANDLERS COMPILED INTO THIS BUILD.
- *  A development server registers them; a production server never does, and `createGameServer` throws if asked to.
- *  `start.ts` refuses `GS_MODE=production` outright (exit 2) while this list is not empty -- LIVE-2D deletes the
- *  handlers and empties it, and only then is production startable. */
-export const LEGACY_ROOM_HANDLERS: readonly string[] = Object.freeze([
-  ...LEGACY_KINDS,
-  ...[...ROUTED_KINDS].map((kind) => `${kind} {room}`),
-]);
-/** LIVE-2B: a cookie principal has no seat in the legacy room protocol; LIVE-2C binds seats from the GameRecord. */
-const NO_SEAT_IDENTITY_CODE = "no-seat-identity";
-const NO_SEAT_IDENTITY_REASON = "This server cannot seat you in a room yet.";
-/** LIVE-2B (the activation seam): the store did not take the guest this room change needed made durable. */
-const IDENTITY_SAVE_FAILED_REASON = "The server could not record who you are, so that change was not made. Try again.";
-/** LIVE-2A (LIVE-2 §13.4 step 1): `host` over a room that already exists. The client picks a fresh code. */
-const ROOM_CODE_TAKEN_CODE = "room-code-taken";
-const ROOM_CODE_TAKEN_REASON = "That room code is already in use.";
+/** LIVE-2D (LIVE-2 §13.4 step 4): THE LEGACY ROOM HANDLERS COMPILED INTO THIS BUILD -- none. LIVE-2C registered
+ *  `room-write`, `seat-pin`, `claim-seat`, `lobby-*` and the `room`-keyed hello, room-hello, chat and presence in
+ *  development only and refused production while this list was not empty; LIVE-2D deleted every one of them, and the
+ *  closed frame schema no longer knows their kinds. Kept, frozen and empty, as the invariant a test pins: a legacy
+ *  handler that came back would have to be added here, in plain sight. */
+export const LEGACY_ROOM_HANDLERS: readonly string[] = Object.freeze([]);
 
 /** A direct answer to a submit names the submission it answers (L3-3); fan-out never does. */
 const answering = <T extends object>(message: T, inReplyTo: string | undefined): T =>
@@ -510,8 +311,6 @@ export function createGameServer(options: GameServerOptions): {
   /** LIVE-2C: the GameRecord store and the server-owned room authority (tests read their counters). */
   records: RecordStore;
   rooms: RoomHost;
-  /** LIVE-2C: whether this server registered the legacy room handlers (development only; never in production). */
-  legacyRoomProtocol: boolean;
   /** LIVE-2C: how many game actors (each with its RoomSession) are resident -- the allocation-flood tests read it. */
   residentGames(): number;
   /** LIVE-2B: the live socket indexes, for tests: how many sockets a session / principal / IP key / game holds. */
@@ -545,37 +344,11 @@ export function createGameServer(options: GameServerOptions): {
   } else {
     throw new Error("createGameServer: identity.mode must be \"development\" or \"production\"");
   }
-  /* LIVE-2C (the frozen rollout invariant, LIVE-2 §13.4 step 3): legacy room handlers exist in DEVELOPMENT only, and a
-     production server refuses to be built with them. */
-  if (mode === "production" && options.legacyRoomProtocol === true) {
-    throw new Error("createGameServer: production mode refuses the legacy room protocol (LIVE-2C; LIVE-2D deletes it)");
-  }
-  const legacyRooms = mode === "development" && options.legacyRoomProtocol !== false;
-  /* Fail closed on the invariant itself: whatever the options said, a production server holds no legacy handler. */
-  if (mode === "production" && legacyRooms) throw new Error("createGameServer: a production server may not register a legacy room handler");
   const identityNow = identityOptions.now ?? (() => Date.now());
   const identity = identityOptions.service ?? IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
   /** Who each LOG socket said it was at `hello`, and which room. Identity only: the subscription itself lives on
    *  the room's actor (LIVE-3A), which is what fan-out reads. */
   const sockets = new Map<WebSocket, Attached>();
-  /** #1215. A separate map from the log on purpose: this one holds no history and decides nothing.
-   *
-   *  LIVE-3A: THE COMMITTED DOCUMENTS, AND ONLY THOSE. An entry changes here in exactly two places -- the
-   *  single-flight load below, which fills a room nobody has read yet, and the publish of a room-authority task
-   *  on the room's actor, after the store has taken the document (F-10). It is the committed view's `roomDoc`,
-   *  kept by code so the public list and the PIN lookup can read a room without loading its game. */
-  const roomDocs = new Map<string, SandboxRoomDoc>();
-  const roomDocSockets = new Map<WebSocket, string>();
-  /** #1341: who each room-doc socket said it was, so a seat-pin write can be checked against its own seat. */
-  const roomDocActors = new Map<WebSocket, string>();
-  /** #1341: the latest session token per seat, by room then player id. In memory only. */
-  const seatTokens = new Map<string, Map<string, string>>();
-  const tokenFor = (code: string, playerId: string) => seatTokens.get(code)?.get(playerId);
-  const setToken = (code: string, playerId: string, token: string) => {
-    const room = seatTokens.get(code) ?? new Map<string, string>();
-    room.set(playerId, token);
-    seatTokens.set(code, room);
-  };
   /* LIVE-2A: the transport's limits, and what they have refused. */
   const limits = resolveLimits(options.limits);
   const ingress = {
@@ -615,34 +388,6 @@ export function createGameServer(options: GameServerOptions): {
      already holds. The tag makes ids unique across restarts; the counter inside it keeps #1238's evidence
      (a new tag says "restarted" the way `s58` said "did not"). */
   const processTag = Date.now().toString(36);
-
-  /* #1250: the document is loaded once per room, and thereafter lives in the map.
-     LIVE-3A: SINGLE-FLIGHT, and read AFTER the wait. The old version marked a room loaded before its read had
-     finished, so a second caller in the meantime was answered `null` -- a PIN gate that found no PIN (the LIVE-3
-     verifier's caveat) -- and it wrote whatever it read over the map, however stale. Now every caller for a room
-     waits on the one read, and each answers with the map as it stands when the wait ends, which is never older
-     than anything already published to a socket that was registered before it asked. */
-  const roomDocKnown = new Set<string>();
-  const roomDocLoads = new Map<string, Promise<void>>();
-  async function roomDocFor(code: string): Promise<SandboxRoomDoc | null> {
-    if (!roomDocKnown.has(code)) {
-      let load = roomDocLoads.get(code);
-      if (load === undefined) {
-        load = (async () => {
-          try {
-            const stored = await options.store?.loadRoomDoc(code);
-            if (stored && !roomDocs.has(code)) roomDocs.set(code, stored);
-            roomDocKnown.add(code);
-          } finally {
-            roomDocLoads.delete(code);
-          }
-        })();
-        roomDocLoads.set(code, load);
-      }
-      await load;
-    }
-    return roomDocs.get(code) ?? null;
-  }
 
   /** A room's session at the seed, nothing applied: what a game is loaded into. */
   const newRoomSession = (): RoomSession =>
@@ -725,8 +470,8 @@ export function createGameServer(options: GameServerOptions): {
       LIVE-3A: ONE ACTOR PER GAME, AND THE STORE BEHIND IT
      ==================================================================
      `roomFor` is gone. A game is reached through `games.get`, which creates its actor once however many frames
-     ask at the same moment (LIVE-3 P2), and every change to it -- a move, a room write, a PIN -- is a task on that
-     actor (`rooms/gameActor.ts`). The store is today's `LogStore`, seen through the port the actor commits to;
+     ask at the same moment (LIVE-3 P2), and every change to it -- a move, a room operation, the deal -- is a task on
+     that actor (`rooms/gameActor.ts`). The store is today's `LogStore`, seen through the port the actor commits to;
      without one (a test, the smoke run) the game lives in memory, exactly as before. */
   const counters = { ...newActorCounters(), submitAhead: 0, submitResync: 0, internal: 0 };
   const store = options.store;
@@ -745,20 +490,9 @@ export function createGameServer(options: GameServerOptions): {
         return outcomeOf(error);
       }
     },
-    loadRoomDoc: async (code) => (store ? await store.loadRoomDoc(code) : null),
-    /* LIVE-2C: only a server-owned game id has a record; a legacy room code never reads the record store. */
+    /* LIVE-2C: only a server-owned game id has a record. LIVE-2D: and only a server-owned game is ever loaded. */
     loadRecord: async (code) => (GAME_ID_PATTERN.test(code) ? await recordStore.load(code) : null),
     saveRecord: (record, expected) => recordStore.put(record, expected),
-    saveRoomDoc: async (code, doc) => {
-      if (!store) return COMMITTED;
-      if (store.replaceRoomDoc) return store.replaceRoomDoc(code, doc);
-      try {
-        await store.saveRoomDoc(code, doc);
-        return COMMITTED;
-      } catch (error) {
-        return outcomeOf(error);
-      }
-    },
   };
   const recordStore: RecordStore = options.records ?? createMemoryRecordStore();
   let roomHost: RoomHost | null = null;
@@ -773,12 +507,6 @@ export function createGameServer(options: GameServerOptions): {
         store: storePort,
         newSession: newRoomSession,
         restore: (session, stored) => restoreRoom(code, session, stored),
-        loadRoomDoc: () => roomDocFor(code),
-        /* The committed document, published: the map is the view's document, set in the publish itself. */
-        onRoomDocPublished: (doc) => {
-          roomDocs.set(code, doc as SandboxRoomDoc);
-          roomDocKnown.add(code);
-        },
         onEntriesPublished: (entries) => options.onAppend?.(code, entries),
         /* LIVE-2C: a committed record, published: indexes, re-authorized room views, the public list. */
         onRecordPublished: (record) => roomHost?.onRecordPublished(record as GameRecord),
@@ -802,443 +530,12 @@ export function createGameServer(options: GameServerOptions): {
     send: (frame) => send(socket, frame),
   });
 
-  /** A log subscriber: the same socket, seen as a reader of the room's committed history. */
-  const subscriberFor = (socket: WebSocket, principal: string): Subscriber => ({
-    principal,
-    isOpen: () => socket.readyState === socket.OPEN,
-    send: (frame) => send(socket, frame),
-  });
-
   /** Which actor each log socket is subscribed to, so a second hello -- a resync, or another room -- replaces the
    *  subscription rather than adding one, and a close removes it. */
   const logSubscriptions = new Map<WebSocket, GameActor>();
   const unsubscribeLog = (socket: WebSocket) => {
     logSubscriptions.get(socket)?.unsubscribe(socket);
     logSubscriptions.delete(socket);
-  };
-
-  /** #1215. Applies one named write and hands back the document, or `null` if the room does not exist yet
-   *  and this write was not the one that creates it.
-   *
-   *  LIVE-3A: PURE. It hands back the PROSPECTIVE document and changes nothing: the caller is a task on the
-   *  room's actor, which makes the document durable and only then publishes it (F-10). Called only inside that
-   *  task, where `roomDocs` holds the committed document the task started from (E-2).
-   *
-   *  EVERY OP MIRRORS A FIRESTORE WRITER ONE FOR ONE, including the rule each carried. The upsert is the one
-   *  with a rule worth restating: an existing player is replaced IN PLACE (#541), because `toSetupPlayers`
-   *  reads this order to build the deal and a filter-and-append would move a player to the back of the table
-   *  every time they typed a character of their name. */
-  /* ==================================================================
-      DESIGN NOTE 1415 (server): THE TABLE'S TERMS ARE ENFORCED WHERE EVERY WRITE PASSES
-     ==================================================================
-     ASKED: the host sets the table before the room exists -- exactly N players or any, public or private, an
-     ante -- and may remove a joiner; the server "refuses join past N".
-     THREE RULES, ALL HERE, because this is the one place every write goes through (#1337 made the same point
-     about colours). A NEW joiner is refused when the table is full, when the room is no longer waiting, or when
-     the host removed them -- a kicked player who could rejoin by refreshing was not kicked. An EXISTING seat's
-     upsert (a rename, a Ready) is never refused by the cap: they already hold the seat. The `kick` op is gated on
-     the WRITER -- `roomDocActors` knows who each socket said it was, and only the host's word removes anybody --
-     and on the room still waiting, since a seat in a dealt game is a roster the log has already read.
-     A REFUSAL IS A RESULT, NOT A SILENT DROP. The writer is told why; the document is unchanged. */
-  type RoomWriteResult = {
-    doc: SandboxRoomDoc | null;
-    refused?: string;
-    /** LIVE-2A: a `host` over a room that exists -- answered `room-code-taken`, and the room is not re-sent. */
-    codeTaken?: boolean;
-    /** LIVE-2A: a `status` write the server's own derivation leaves unchanged -- answered to the writer alone. */
-    echo?: boolean;
-  };
-
-  /* ==================================================================
-      LIVE-2A (LIVE-2 §13.4 step 1): THE LEGACY WRITES, HARDENED IN PLACE
-     ==================================================================
-     The room document stays last-write-wins until LIVE-2C replaces it with a server-owned record, but the writes
-     that let one client rewrite another's table are closed now:
-       host           creates a room and never overwrites one (LIVE-1 probe A: `host` took over any room). The
-                      writer must be the host it names. A taken code is answered `room-code-taken`, and the
-                      client picks a fresh one (up to five times, `sandboxRoom.ts`).
-       upsert-player  the writer's OWN seat only (`player.id === actor`, §15 #4); a new seat is refused once the
-                      room is dealt -- read off the committed log, not off the document's `status`.
-       status         a server-derived echo: the server sets `playing` itself when the deal is committed
-                      (`markPlayingAfterDeal`); a client's `playing` is answered with the room as the log makes
-                      it, and any other value is refused (§15 #12). LIVE-2D deletes the op.
-       variants,      DELETED (LIVE-2 §9.1, §9.4). The variants are fixed when the room is hosted; forced-sign was
-       forced-sign    a playtest waiver a pinned table never honours. Neither is in the frame schema: `bad-frame`.
-     Nicknames pass through the single sanitizer (§11.2) and are capped at 24 (§11.3). */
-  const applyRoomWrite = (
-    code: string,
-    write: RoomDocWrite,
-    actor: string | undefined,
-    dealt: boolean,
-  ): RoomWriteResult => {
-    const existing = roomDocs.get(code) ?? null;
-
-    if (write.op === "host") {
-      if (existing) return { doc: existing, refused: ROOM_CODE_TAKEN_REASON, codeTaken: true };
-      if (!actor || write.hostId !== actor) return { doc: null, refused: "A room is hosted by the player who opens it." };
-      /* #527: every room opens in the anteroom with its host already seated, so the roster is never briefly
-         empty in a room that plainly has somebody in it. */
-      const variants = write.variants ?? STANDARD_VARIANTS;
-      const created: SandboxRoomDoc = {
-        code,
-        hostId: write.hostId,
-        status: "waiting",
-        players: [{ id: write.hostId, nickname: sanitizeName(write.nickname, MAX_DISPLAY_NAME_LENGTH) || "Host", isReady: false }],
-        variants,
-        forcedSign: null,
-        /* #1415: validated, not cast -- untrusted wire data. */
-        visibility: write.visibility === "private" ? "private" : "public",
-        playerCount: normalisePlayerCount(write.playerCount, variants),
-        anteUjuno: normaliseAnte(write.anteUjuno),
-        createdAtMs: Date.now(),
-        kicked: [],
-      };
-      return { doc: created };
-    }
-
-    /* A WRITE TO A ROOM NOBODY HOSTED IS DROPPED, not made to create one. A room whose `hostId` was invented
-       from whoever wrote first would hand the Start button to an arbitrary player. */
-    if (!existing) return { doc: null };
-
-    let next: SandboxRoomDoc;
-    switch (write.op) {
-      case "upsert-player": {
-        /* LIVE-2A (§15 #4): A SEAT IS WRITTEN BY ITS OWN PLAYER. Anybody could rename, ready or un-ready any seat
-           by naming its id (LIVE-1 probe C). */
-        if (!actor || write.player.id !== actor) {
-          return { doc: existing, refused: "You can only change your own seat." };
-        }
-        const at = existing.players.findIndex((entry) => entry.id === write.player.id);
-        if (at === -1) {
-          if (existing.kicked?.includes(write.player.id)) {
-            return { doc: existing, refused: "The host removed you from this table." };
-          }
-          if (existing.status !== "waiting" || dealt) {
-            return { doc: existing, refused: "This game has already started." };
-          }
-          if (existing.players.length >= roomSeatCap(existing)) {
-            return { doc: existing, refused: `This table is full (${roomSeatCap(existing)} seats).` };
-          }
-        }
-        /* The seat as stored: the declared fields only (`hasPin` is the server's own stamp, never a client's), the
-           nickname through the single sanitizer. */
-        const incoming: SandboxRoomPlayer = {
-          id: write.player.id,
-          nickname: sanitizeName(write.player.nickname, MAX_DISPLAY_NAME_LENGTH),
-          isReady: write.player.isReady === true,
-          ...(typeof write.player.color === "string" ? { color: write.player.color } : {}),
-        };
-        /* Design note #1337: A COLOUR ANOTHER SEAT HOLDS IS NOT TAKEN -- first write wins. The client greys
-           out held swatches, but two clicks in flight at once both see a free swatch; the server is the one
-           place both writes pass through, so the second keeps whatever colour it had before. */
-        const wanted = incoming.color;
-        const heldElsewhere =
-          typeof wanted === "string" &&
-          existing.players.some((entry, index) => index !== at && entry.color === wanted);
-        const player = heldElsewhere
-          ? (() => {
-              const { color: _refused, ...rest } = incoming;
-              const previous = at === -1 ? undefined : existing.players[at].color;
-              return previous === undefined ? rest : { ...rest, color: previous };
-            })()
-          : incoming;
-        next = {
-          ...existing,
-          players:
-            at === -1
-              ? [...existing.players, player]
-              : existing.players.map((entry, index) => (index === at ? player : entry)),
-        };
-        break;
-      }
-      case "status": {
-        /* LIVE-2A (§15 #12, the NO-OP ECHO): the status is the server's to set. `playing` is answered with the room
-           as the committed log makes it -- `playing` once dealt, which also repairs a document a crash left
-           `waiting` behind a durable deal -- and nothing else is a value a client may write. */
-        if (write.status !== "playing") return { doc: existing, refused: "The room's status is set by the server." };
-        if (dealt && existing.status === "waiting") {
-          next = { ...existing, status: "playing" };
-          break;
-        }
-        return { doc: existing, echo: true };
-      }
-      case "kick": {
-        if (!actor || actor !== existing.hostId) return { doc: existing, refused: "Only the host can remove a player." };
-        if (existing.status !== "waiting" || dealt) return { doc: existing, refused: "Players cannot be removed once the game has started." };
-        if (write.playerId === existing.hostId) return { doc: existing, refused: "The host cannot remove themselves." };
-        if (!existing.players.some((entry) => entry.id === write.playerId)) return { doc: existing };
-        next = {
-          ...existing,
-          players: existing.players.filter((entry) => entry.id !== write.playerId),
-          kicked: [...(existing.kicked ?? []), write.playerId],
-        };
-        break;
-      }
-      default:
-        /* `variants`, `forced-sign` (deleted) and anything else: the frame schema refuses them first. */
-        return { doc: existing, refused: "That is not a room write this server accepts." };
-    }
-
-    return { doc: next };
-  };
-
-  /** Everyone watching this room's document, the writer included -- unlike the log's fan-out, where the
-   *  submitter's own answer is a different message. Here there is no answer: the document IS the answer. */
-  const broadcastRoomDoc = (code: string) => {
-    const doc = publicDoc(roomDocs.get(code) ?? null);
-    for (const [socket, watching] of roomDocSockets) {
-      if (watching === code) send(socket, { kind: "room", room: code, doc } as never);
-    }
-  };
-
-  /** #1341: the PIN and token gate for both hellos. `null` when the claim may proceed, else the refusal. */
-  const seatRefusal = async (
-    code: string,
-    actor: string,
-    offeredPin: unknown,
-    offeredToken: unknown,
-  ): Promise<{ reason: string; code?: string } | null> => {
-    const required = (await roomDocFor(code))?.seatPins?.[actor];
-    if (!required) return null;
-    if (required !== offeredPin) {
-      return { reason: "This seat has a PIN. Rejoin it from the room screen with the PIN.", code: SEAT_REFUSED_CODE };
-    }
-    const latest = tokenFor(code, actor);
-    if (latest && latest !== offeredToken) {
-      return { reason: "This seat is now on another device.", code: SEAT_SUPERSEDED_CODE };
-    }
-    return null;
-  };
-
-  /* LIVE-3A: `saveRoomDocQuietly` is gone. It saved AFTER the document had already changed in memory and
-     swallowed a failure, so a PIN or a seat could be shown, believed by the next hello, and silently lost at the
-     next restart (LIVE-3 F-10). A seat write is now a task that commits the document before anybody sees it. */
-
-  /* ---- #1361a: chat ---- */
-  const roomChats = new Map<string, RoomChatEntry[]>();
-  const chatLoaded = new Set<string>();
-  async function chatFor(code: string): Promise<RoomChatEntry[]> {
-    if (!chatLoaded.has(code)) {
-      chatLoaded.add(code);
-      if (!roomChats.has(code)) {
-        try {
-          const stored = (await options.store?.loadChat?.(code)) ?? [];
-          roomChats.set(code, stored.slice(-CHAT_HISTORY_LIMIT));
-        } catch (error) {
-          // eslint-disable-next-line no-console
-          console.error(`  store: could not load the transcript for ${code}`, error);
-        }
-      }
-    }
-    return roomChats.get(code) ?? [];
-  }
-  let chatMinted = 0;
-  const broadcastChat = (code: string) => {
-    const messages = roomChats.get(code) ?? [];
-    for (const [socket, watching] of roomDocSockets) {
-      if (watching === code) send(socket, { kind: "chat", room: code, messages } as never);
-    }
-  };
-
-  /* ---- #1361a: presence ---- */
-  const presence = new Map<string, Map<string, PresenceState>>();
-  /* #1397: STAMPED ON THIS CLOCK, SENT WITH THIS CLOCK. A presence entry's `at` decides on every other screen
-     whether the entry is fresh, and it was the sender's wall clock compared against the reader's -- two
-     machines that need only disagree by six seconds for one player's routes to be invisible to another for
-     the whole game. The server overwrites `at` on receipt and sends its own `now` with every frame, so a
-     reader measures age as (server now - server at) and rebases into its own clock. No clock is compared
-     with any other. */
-  const presenceFrame = (code: string) => ({
-    kind: "presence",
-    room: code,
-    now: Date.now(),
-    entries: [...(presence.get(code)?.values() ?? [])],
-  });
-  const broadcastPresence = (code: string) => {
-    const frame = presenceFrame(code);
-    for (const [socket, watching] of roomDocSockets) {
-      if (watching === code) send(socket, frame as never);
-    }
-  };
-
-  /* ---- #1361b: the staging lobby ---- */
-  const stagingRooms = new Map<string, StagingRoomRecord>();
-  const lobbySockets = new Set<WebSocket>();
-  const lobbyWatch = new Map<WebSocket, string>();
-  const lobbyReady: Promise<void> = (async () => {
-    try {
-      for (const record of (await options.store?.loadLobby?.()) ?? []) {
-        if (record?.room?.id) stagingRooms.set(record.room.id, record);
-      }
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error("  store: could not load the staging lobby", error);
-    }
-  })();
-  const saveLobbyQuietly = async () => {
-    if (!options.store?.saveLobby) return;
-    try {
-      await options.store.saveLobby([...stagingRooms.values()]);
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error("  store: could not save the staging lobby", error);
-    }
-  };
-  /** Newest first, closed rooms omitted, bounded -- the query the Firestore list used to run. */
-  const lobbyRooms = (): RoomDoc[] =>
-    [...stagingRooms.values()]
-      .map((record) => record.room)
-      .filter((room) => room.status !== "closed")
-      .sort((a, b) => b.createdAtMs - a.createdAtMs)
-      .slice(0, ROOM_LIST_LIMIT);
-  const broadcastLobby = () => {
-    const rooms = lobbyRooms();
-    for (const socket of lobbySockets) send(socket, { kind: "lobby", rooms } as never);
-  };
-  /* ---- #1415: the PUBLIC sandbox room list ---- the one Join Game shows. Every room the server holds or the
-     store remembers, public, newest first; a private room is never listed. Loads every stored document once
-     (`roomDocFor` caches), so a restart re-lists the tables it was holding. */
-  const sandboxRooms = async (): Promise<SandboxRoomSummary[]> => {
-    const codes = new Set<string>(roomDocs.keys());
-    try {
-      for (const code of (await options.store?.listRooms?.()) ?? []) codes.add(code);
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error("  store: could not list rooms for the public list", error);
-    }
-    const out: SandboxRoomSummary[] = [];
-    for (const code of codes) {
-      const doc = await roomDocFor(code);
-      /* The FIELD, not the reader's default: a room from before this note never chose to be listed, and the
-         store holds every finished playtest -- none of which belongs on the Ongoing tab. */
-      if (!doc || doc.visibility !== "public") continue;
-      out.push(summariseSandboxRoom(doc));
-    }
-    return out.sort((a, b) => b.createdAtMs - a.createdAtMs).slice(0, ROOM_LIST_LIMIT);
-  };
-  const broadcastSandboxRooms = async () => {
-    if (lobbySockets.size === 0) return;
-    const rooms = await sandboxRooms();
-    for (const socket of lobbySockets) send(socket, { kind: "rooms", rooms } as never);
-  };
-  const broadcastLobbyRoom = (roomId: string) => {
-    const record = stagingRooms.get(roomId) ?? null;
-    const frame = { kind: "lobby-room", roomId, room: record?.room ?? null, seats: record?.seats ?? [] };
-    for (const [socket, watching] of lobbyWatch) {
-      if (watching === roomId) send(socket, frame as never);
-    }
-  };
-  let lobbyMinted = 0;
-  const mintLobbyRoomId = () => `r${processTag}-${(lobbyMinted += 1)}`;
-  const cleanName = (raw: unknown, limit: number) =>
-    typeof raw === "string" ? raw.replace(/\s+/g, " ").trim().slice(0, limit) : "";
-
-  /** Applies one lobby write. EVERY OP MIRRORS A FIRESTORE WRITER ONE FOR ONE, including the rule each
-   *  carried: the capacity check and the seat write are one step; releasing decrements the counter; the
-   *  chain id is write-once. `lastSeenMs` is this process's clock -- the one clock `derivePresence` needs. */
-  const applyLobbyWrite = (write: LobbyWriteFrame["write"]): { ok: boolean; reason?: string; roomId?: string } => {
-    const now = Date.now();
-    const stamp = (seat: SeatDoc, patch: Partial<SeatDoc>): SeatDoc => ({ ...seat, ...patch, lastSeenMs: now });
-
-    if (write.op === "create-room") {
-      const id = mintLobbyRoomId();
-      const room: RoomDoc = {
-        id,
-        name: cleanName(write.name, 48) || "Untitled room",
-        hostAddress: String(write.hostAddress ?? ""),
-        hostDisplayName: cleanName(write.hostDisplayName, MAX_DISPLAY_NAME_LENGTH),
-        maxPlayers: Number.isFinite(write.maxPlayers) ? Math.round(write.maxPlayers) : 6,
-        seatCount: 0,
-        status: "staging",
-        chainGameId: null,
-        anteUjuno: /^\d+$/.test(String(write.anteUjuno)) ? String(write.anteUjuno) : "0",
-        virtualBankStart: /^\d+$/.test(String(write.virtualBankStart)) ? String(write.virtualBankStart) : "0",
-        variants: write.variants ?? STANDARD_VARIANTS,
-        createdAtMs: now,
-        launchError: null,
-      };
-      stagingRooms.set(id, { room, seats: [] });
-      /* Separate step, not part of the create: the claim is the ONE place a seat is ever created, so its
-         capacity accounting cannot drift from a second inlined copy here. */
-      const seated = applyLobbyWrite({
-        op: "claim-seat",
-        roomId: id,
-        address: room.hostAddress,
-        displayName: room.hostDisplayName,
-        asHost: true,
-      });
-      return seated.ok ? { ok: true, roomId: id } : seated;
-    }
-
-    const record = stagingRooms.get(write.roomId);
-    if (!record) return { ok: false, reason: "That room no longer exists." };
-    const { room, seats } = record;
-    const seatAt = "address" in write ? seats.findIndex((seat) => seat.address === write.address) : -1;
-    const patchSeat = (patch: Partial<SeatDoc>) => {
-      if (seatAt === -1) return { ok: false, reason: "You do not hold a seat in that room." };
-      record.seats = seats.map((seat, index) => (index === seatAt ? stamp(seat, patch) : seat));
-      return { ok: true };
-    };
-
-    switch (write.op) {
-      case "claim-seat": {
-        if (seatAt !== -1) return patchSeat({ displayName: cleanName(write.displayName, MAX_DISPLAY_NAME_LENGTH) });
-        if (room.status !== "staging") {
-          return { ok: false, reason: "That room has already launched and is no longer accepting new seats." };
-        }
-        if (room.seatCount >= room.maxPlayers) return { ok: false, reason: "That room is full." };
-        if (!write.address) return { ok: false, reason: "A seat needs an address." };
-        record.seats = [
-          ...seats,
-          {
-            address: String(write.address),
-            displayName: cleanName(write.displayName, MAX_DISPLAY_NAME_LENGTH),
-            ready: write.asHost === true, // the host is implicitly ready; they are the one launching
-            isHost: write.asHost === true,
-            onChain: false,
-            joinedAtMs: now,
-            lastSeenMs: now,
-          },
-        ];
-        record.room = { ...room, seatCount: room.seatCount + 1 };
-        return { ok: true };
-      }
-      case "release-seat": {
-        if (seatAt === -1) return { ok: true };
-        record.seats = seats.filter((_seat, index) => index !== seatAt);
-        record.room = { ...room, seatCount: Math.max(0, room.seatCount - 1) };
-        return { ok: true };
-      }
-      case "set-ready":
-        return patchSeat({ ready: write.ready === true });
-      case "set-display-name":
-        return patchSeat({ displayName: cleanName(write.displayName, MAX_DISPLAY_NAME_LENGTH) });
-      case "mark-on-chain":
-        return patchSeat({ onChain: true });
-      case "heartbeat":
-        return patchSeat({});
-      case "set-status": {
-        const status = write.status;
-        if (status !== "staging" && status !== "launching" && status !== "live" && status !== "closed") {
-          return { ok: false, reason: "That is not a room status." };
-        }
-        record.room = { ...room, status, launchError: typeof write.launchError === "string" ? write.launchError : null };
-        return { ok: true };
-      }
-      case "bind-chain-game-id": {
-        if (!Number.isSafeInteger(write.chainGameId) || write.chainGameId < 0) {
-          return { ok: false, reason: `Refusing to bind a non-integer on-chain game id: ${write.chainGameId}` };
-        }
-        /* WRITE-ONCE, as `firestore.rules` used to enforce: the one field other clients act on unverified. */
-        if (room.chainGameId !== null && room.chainGameId !== write.chainGameId) {
-          return { ok: false, reason: "That room is already bound to an on-chain game." };
-        }
-        record.room = { ...room, chainGameId: write.chainGameId, status: "live", launchError: null };
-        return { ok: true };
-      }
-      default:
-        return { ok: false, reason: "That is not a lobby write." };
-    }
   };
 
   /* ==================================================================
@@ -1276,27 +573,20 @@ export function createGameServer(options: GameServerOptions): {
         LIVE-2C: THE ACTOR IS THE SEAT, READ FROM THE RECORD COMMITTED NOW
        ==================================================================
        authenticated principal -> the current GameRecord -> its bound seat -> that seat's `player_id`, the actor. The
-       frame never names one. Legacy (development) rooms keep the claim and the room document's host. */
-    let actor = attached.actor;
-    let hostId: string | null = roomDocs.get(attached.room)?.hostId ?? null;
-    let seated: boolean | undefined;
-    let undoPolicy: UndoPolicy | undefined;
-    if (attached.owned) {
-      const bound = host.seatActor(tx, attached.principalId);
-      if (!bound.ok) {
-        answer({ kind: "refused", code: bound.code, reason: bound.reason, build: options.build });
-        return;
-      }
-      actor = bound.actor;
-      hostId = bound.host;
-      seated = true;
-      undoPolicy = { host_undo: bound.policy };
-      const wait = host.submitBudget(attached.room, actor);
-      if (wait > 0) {
-        ingress.rateLimited += 1;
-        answer({ kind: "refused", code: RATE_LIMITED_CODE, reason: SUBMIT_RATE_LIMITED_REASON, retryAfterMs: wait, build: options.build });
-        return;
-      }
+       frame never names one. LIVE-2D: there is no other kind of room -- the legacy claim and document host are gone. */
+    const bound = host.seatActor(tx, attached.principalId);
+    if (!bound.ok) {
+      answer({ kind: "refused", code: bound.code, reason: bound.reason, build: options.build });
+      return;
+    }
+    const actor = bound.actor;
+    const hostId = bound.host;
+    const undoPolicy: UndoPolicy = { host_undo: bound.policy };
+    const wait = host.submitBudget(attached.room, actor);
+    if (wait > 0) {
+      ingress.rateLimited += 1;
+      answer({ kind: "refused", code: RATE_LIMITED_CODE, reason: SUBMIT_RATE_LIMITED_REASON, retryAfterMs: wait, build: options.build });
+      return;
     }
     /* ==================================================================
         LIVE-2A (LIVE-2 §12.2): THE LOG HAS A LENGTH, AND UNDO HAS A BUDGET
@@ -1357,12 +647,10 @@ export function createGameServer(options: GameServerOptions): {
         baseIndex: frame.baseIndex,
         baseId: frame.baseId,
         submissionId: frame.submissionId,
-        /* #1249: the host, from the room document this process already keeps (#1215), so the
-           messages that are the host's to send can be refused to everybody else. `null` for a room
-           with no document -- the authority skips the host-only checks then rather than refusing
-           everyone. LIVE-3A: the COMMITTED document -- inside this task the map holds exactly the view's. */
+        /* #1249: the host, so the messages that are the host's to send can be refused to everybody else.
+           LIVE-2C/2D: from the GameRecord committed when this task runs -- the record's `host_player_id`. */
         host: hostId,
-        seated,
+        seated: true,
         undoPolicy,
       });
     } catch (error) {
@@ -1372,7 +660,7 @@ export function createGameServer(options: GameServerOptions): {
       const reason = error instanceof Error ? error.message : String(error);
       // eslint-disable-next-line no-console
       console.log(
-        `  threw: ${attached.actor} sent ${Object.keys(frame.msg)[0]} — ${reason} (ref ${ref}); rolled back, nothing recorded\n` +
+        `  threw: ${actor} sent ${Object.keys(frame.msg)[0]} — ${reason} (ref ${ref}); rolled back, nothing recorded\n` +
           `    payload ${excerpt(frame.msg, limits.logExcerptBytes)}`,
       );
       answer({ kind: "refused", code: "internal", reason: MOVE_INTERNAL_REASON(ref), build: options.build });
@@ -1398,13 +686,13 @@ export function createGameServer(options: GameServerOptions): {
           ? `client ${(result as { clientBuild?: string }).clientBuild} vs server ${options.build}`
           : `client was at ${frame.baseIndex}, room is at ${session.nextIndex - 1}`);
       // eslint-disable-next-line no-console
-      console.log(`  ${result.kind}${code ? ` (${code})` : ""}: ${attached.actor} sent ${Object.keys(frame.msg)[0]} — ${why}`);
+      console.log(`  ${result.kind}${code ? ` (${code})` : ""}: ${actor} sent ${Object.keys(frame.msg)[0]} — ${why}`);
       if (code === "ahead" || code === "resync") {
         /* LIVE-3 §5.2: A DURABILITY TRIPWIRE. Under durable-before-visible no client can hold an entry the
            store does not; on one process with one store, any of these means history was lost or forked. */
         // eslint-disable-next-line no-console
         console.warn(
-          `  resync: ${attached.actor} in ${attached.room} claims index ${frame.baseIndex}; the room's durable ` +
+          `  resync: ${actor} in ${attached.room} claims index ${frame.baseIndex}; the room's durable ` +
             `history ends at ${(result as { watermark?: number }).watermark} -- counted as a durability alarm`,
         );
       }
@@ -1421,37 +709,10 @@ export function createGameServer(options: GameServerOptions): {
     const endedAfter = board.current_round_type === "GameEnd";
     const closedAfter = board.room_closed === true;
     const settled = await tx.commitBatch(batch, (settled) => submitDelivery(settled, batch, result, inReplyTo));
-    if (settled.kind === "committed" && attached.owned) host.afterGameplay(game, endedAfter, closedAfter);
+    if (settled.kind === "committed") host.afterGameplay(game, endedAfter, closedAfter);
     if (settled.kind !== "committed" || result.kind !== "applied") return;
     /* LIVE-2A: a revert that landed spends its budget. */
     revertBudget?.record();
-    /* LIVE-2A (§13.4 step 1, §15 #23): THE SERVER MARKS THE ROOM PLAYING WHEN THE DEAL IS COMMITTED -- the client's
-       `status` write is only an echo now. A separate task on the same actor (a task commits once, E-6), queued
-       behind this one, so the document it writes is derived from a durable deal. */
-    if ("SetupGame" in frame.msg) markPlayingAfterDeal(game, attached.room);
-  };
-
-  /** The room document's `status: "playing"`, derived from the committed deal, made durable before it is shown. */
-  const markPlayingAfterDeal = (game: GameActor, room: string): void => {
-    void game
-      .run("room-op", async (tx) => {
-        const doc = tx.view.roomDoc as SandboxRoomDoc | null;
-        if (!doc || doc.status !== "waiting") return false;
-        if (dealEntryOf(effectiveActions(tx.view.entries)) === null) return false;
-        let taken = false;
-        await tx.commitRoomDoc({ ...doc, status: "playing" }, (settled) => ({
-          after: () => {
-            if (settled.kind !== "committed") return;
-            taken = true;
-            broadcastRoomDoc(room);
-          },
-        }));
-        return taken;
-      })
-      .then(async (outcome) => {
-        if (outcome.kind === "ran" && outcome.value === true) await broadcastSandboxRooms();
-      })
-      .catch(() => undefined);
   };
 
   /** What a settled batch owes its submitter and the room. */
@@ -1516,7 +777,7 @@ export function createGameServer(options: GameServerOptions): {
   /** IPv6 /48 aggregates (not part of the frozen context, so kept beside it). */
   const socketsByAggregate = new Map<string, Set<WebSocket>>();
   const aggregateOf = new Map<WebSocket, string>();
-  /** Which rooms a socket watches -- its room-doc room and its log room -- and the reverse (LIVE-2 §4.4). */
+  /** Which games a socket reads -- its room view and its log -- and the reverse (LIVE-2 §4.4). */
   const socketsByGame = new Map<string, Set<WebSocket>>();
   const gamesOfSocket = new Map<WebSocket, Set<string>>();
   const addTo = (index: Map<string, Set<WebSocket>>, key: string, socket: WebSocket) => {
@@ -1536,8 +797,6 @@ export function createGameServer(options: GameServerOptions): {
   const reindexGames = (socket: WebSocket) => {
     for (const room of gamesOfSocket.get(socket) ?? []) removeFrom(socketsByGame, room, socket);
     const rooms = new Set<string>();
-    const docRoom = roomDocSockets.get(socket);
-    if (docRoom !== undefined) rooms.add(docRoom);
     const logRoom = sockets.get(socket)?.room;
     if (logRoom !== undefined) rooms.add(logRoom);
     const ownedRoom = roomHost?.viewGameOf(socket);
@@ -1555,9 +814,8 @@ export function createGameServer(options: GameServerOptions): {
     upgrades.sessionClosed += 1;
     socket.close(4401, why === "expired" ? "session expired" : "session ended");
   };
-  /* LIVE-2C: THE ACTIVATION SEAM MOVED to the server-owned room boundary (`rooms/roomHost.ts`): create, join and
-     take-seat make the principal durable BEFORE the task that writes a GameRecord naming it. The legacy room
-     document never names a principal (development claims only), so its writes no longer activate anything. */
+  /* LIVE-2C: THE ACTIVATION SEAM is at the server-owned room boundary (`rooms/roomHost.ts`): create, join and
+     take-seat make the principal durable BEFORE the task that writes a GameRecord naming it. */
   identity.setHooks({
     onSessionsEnded: (sessionIds) => {
       for (const sessionId of sessionIds) for (const socket of [...(socketsBySession.get(sessionId) ?? [])]) closeForSession(socket, "revoked");
@@ -1750,13 +1008,7 @@ export function createGameServer(options: GameServerOptions): {
       "presence-set": "presence",
       hello: "hello",
       "room-hello": "control",
-      "lobby-hello": "control",
-      "lobby-watch": "control",
-      "room-write": "roomOps",
-      "seat-pin": "roomOps",
-      "claim-seat": "roomOps",
-      "lobby-write": "roomOps",
-      /* LIVE-2C: the server-owned room protocol. */
+      /* LIVE-2C: the server-owned room protocol -- LIVE-2D: the only one. */
       "room-op": "roomOps",
       "rooms-watch": "control",
     }),
@@ -1765,11 +1017,9 @@ export function createGameServer(options: GameServerOptions): {
   wss.on("connection", (socket) => {
     /* LIVE-2B: THE FROZEN CONTEXT, set by the upgrade before this event -- never from a frame. */
     const ctx = contexts.get(socket) as ConnectionContext;
-    /** The legacy room protocol's actor: the development claim; `null` for a cookie principal (the LIVE-2C seam). */
-    const legacyActor: string | null = mode === "development" ? devClaimOf(ctx.principalId) : null;
     /** LIVE-2C (LIVE-2 §12.2): a socket that authenticated but never subscribed to anything is closed after 60 s. */
     const reapTimer = setTimeout(() => {
-      const subscribed = sockets.has(socket) || roomDocSockets.has(socket) || lobbySockets.has(socket) || host.hasSubscription(socket);
+      const subscribed = sockets.has(socket) || host.hasSubscription(socket);
       if (!subscribed && socket.readyState === socket.OPEN) {
         upgrades.reaped += 1;
         socket.close(1000, "no subscription");
@@ -1872,12 +1122,11 @@ export function createGameServer(options: GameServerOptions): {
         socket.close(4429, "rate limited");
         return;
       }
-      if ((frame.kind as string) === "room-op") {
-        /* LIVE-2C: a named operation is answered in its own ack, with the retry hint -- never the legacy `room-write-refused`. */
-        send(socket, { kind: "room-ack", requestId: (frame as unknown as { requestId: string }).requestId, ok: false, code: RATE_LIMITED_CODE, reason: RATE_LIMITED_REASON, retryAfterMs } as never);
-        return;
-      }
       switch (frame.kind) {
+        case "room-op":
+          /* LIVE-2C: a named operation is answered in its own ack, with the retry hint. */
+          send(socket, { kind: "room-ack", requestId: frame.requestId, ok: false, code: RATE_LIMITED_CODE, reason: RATE_LIMITED_REASON, retryAfterMs });
+          return;
         case "submit":
           send(
             socket,
@@ -1889,19 +1138,6 @@ export function createGameServer(options: GameServerOptions): {
           return;
         case "presence-set":
           return; // a hint over its rate is dropped; the next one supersedes it anyway
-        case "room-write": {
-          const room = roomDocSockets.get(socket);
-          send(socket, { kind: "error", reason: RATE_LIMITED_REASON, code: ROOM_WRITE_REFUSED_CODE, retryAfterMs } as never);
-          if (room !== undefined) send(socket, { kind: "room", room, doc: publicDoc(roomDocs.get(room) ?? null) } as never);
-          return;
-        }
-        case "seat-pin":
-        case "claim-seat":
-          send(socket, { kind: "seat", requestId: frame.requestId, ok: false, reason: RATE_LIMITED_REASON } as never);
-          return;
-        case "lobby-write":
-          send(socket, { kind: "lobby-ack", requestId: frame.requestId, ok: false, reason: RATE_LIMITED_REASON } as never);
-          return;
         default:
           send(socket, { kind: "error", code: RATE_LIMITED_CODE, reason: RATE_LIMITED_REASON, retryAfterMs });
       }
@@ -1951,30 +1187,18 @@ export function createGameServer(options: GameServerOptions): {
       buckets.consecutiveLimited = 0;
 
       /* ==================================================================
-          LIVE-2C: THE LEGACY ROOM PROTOCOL IS DEVELOPMENT-ONLY; THE SERVER-OWNED ONE IS HERE
+          LIVE-2D: ONE ROOM PROTOCOL, BY `gameId`
          ==================================================================
-         In production no legacy handler is registered: its frames are answered exactly like an unknown kind. */
-      if (!legacyRooms && isLegacyFrame(frame as unknown as { kind: string; room?: unknown })) {
-        badFrame(raw, null, BAD_FRAME_REASONS.unknownKind, undefined);
-        return;
-      }
-      /* The two namespaces never meet: a legacy frame naming a server-owned game id (any case -- a case-insensitive
-         disk maps `G_…` onto `g_…`) is refused, so the development protocol can never attach to, write a document
-         for, chat in or submit into a server-owned game. */
-      const legacyRoom = (frame as unknown as { room?: unknown }).room;
-      /* Judged on the STORAGE key, not the raw string (review M3): the file store writes a room as its code with every
-         character outside [A-Za-z0-9_-] made `_`, so `g.…` and `g~…` name the same files as `g_…`. */
-      if (typeof legacyRoom === "string" && /^g_/i.test(legacyRoom.replace(/[^A-Za-z0-9_-]/g, "_"))) {
-        badFrame(raw, frame.kind, BAD_FRAME_REASONS.malformed, submissionIdOf(frame));
-        return;
-      }
+         The legacy room frames are not in the closed schema any more, so they never get this far: `parseClientFrame`
+         answered them `bad-frame` above, exactly like any kind this server has never heard of -- in development as in
+         production. There is no compatibility translation and no legacy registry to fall through to. */
       const routedGame = (frame as unknown as { gameId?: unknown }).gameId;
       const gameId = typeof routedGame === "string" ? routedGame : null;
-      if ((frame.kind as string) === "room-op") {
+      if (frame.kind === "room-op") {
         await host.handleRoomOp(socket, frame as unknown as { requestId: string; gameId?: string; op: Record<string, unknown> });
         return;
       }
-      if ((frame.kind as string) === "rooms-watch") {
+      if (frame.kind === "rooms-watch") {
         await host.handleRoomsWatch(socket, (frame as unknown as { on: boolean }).on);
         return;
       }
@@ -2008,7 +1232,7 @@ export function createGameServer(options: GameServerOptions): {
           send(socket, { kind: "error", code: "room-full", reason: "This table has as many watchers as it takes." });
           return;
         }
-        sockets.set(socket, { room: gameId, actor: "", principalId: ctx.principalId, owned: true });
+        sockets.set(socket, { room: gameId, principalId: ctx.principalId });
         reindexGames(socket);
         const helloFrame = frame as unknown as { baseIndex?: unknown; baseId?: unknown };
         const fromIndex = Number.isInteger(helloFrame.baseIndex) && (helloFrame.baseIndex as number) >= -1 ? (helloFrame.baseIndex as number) : -1;
@@ -2024,487 +1248,6 @@ export function createGameServer(options: GameServerOptions): {
           return;
         }
         counters.helloResync += 1;
-        send(socket, { kind: "error", code: "resync", reason: subscribed.reason, watermark: subscribed.watermark });
-        return;
-      }
-
-      /* ---- THE WAITING ROOM (#1215) ----
-         Answered before the log's frames and kept entirely separate from them. A socket that said
-         `room-hello` is watching a roster and is not in `sockets`, so it never receives log fan-out and
-         can never submit a move -- which is the property that keeps a lobby connection from being a way
-         into the game. */
-      if (frame.kind === "room-hello") {
-        /* LIVE-2B: the actor is the connection's, frozen at the upgrade -- never the frame's. */
-        const actor = legacyActor;
-        if (!actor) {
-          send(socket, { kind: "error", code: NO_SEAT_IDENTITY_CODE, reason: NO_SEAT_IDENTITY_REASON });
-          return;
-        }
-        const refused = await seatRefusal(frame.room, actor, frame.pin, frame.token);
-        if (refused) {
-          /* #1346: SAID IN THE WINDOW. A hello turned away silently looked, from the outside, like a wire
-             that kept dropping -- the identity line printed on every attempt and nothing said why the
-             socket closed a moment later. */
-          // eslint-disable-next-line no-console
-          console.warn(`  seat: refused room-hello from "${actor}" in ${frame.room} — ${refused.reason}`);
-          send(socket, { kind: "error", ...refused } as never);
-          socket.close();
-          return;
-        }
-        roomDocSockets.set(socket, frame.room);
-        roomDocActors.set(socket, actor);
-        reindexGames(socket);
-        send(socket, {
-          kind: "room",
-          room: frame.room,
-          doc: publicDoc(await roomDocFor(frame.room)),
-        } as never);
-        /* #1361a: the transcript and the current hints, so a joining or reconnecting tab is caught up on
-           both without asking -- the same courtesy the document gets. */
-        send(socket, { kind: "chat", room: frame.room, messages: await chatFor(frame.room) } as never);
-        send(socket, presenceFrame(frame.room) as never);
-        return;
-      }
-
-      /* ---- CHAT (#1361a) ---- stamped with the connection's identity and the server's clock. */
-      if (frame.kind === "chat-send") {
-        const actor = roomDocActors.get(socket);
-        const room = roomDocSockets.get(socket);
-        if (!actor || room !== frame.room) {
-          send(socket, { kind: "error", reason: "say room-hello first" });
-          return;
-        }
-        /* LIVE-2A (§11.2, §11.3): the single sanitizer, on the line and on the name it is signed with. The frame's
-           500-character ceiling is its schema's (longer is `bad-frame`). */
-        const text = sanitizeText(frame.text.trim(), MAX_CHAT_MESSAGE_LENGTH).trim();
-        if (!text) return;
-        const entry: RoomChatEntry = {
-          id: `c${processTag}-${(chatMinted += 1)}`,
-          author: actor,
-          displayName: sanitizeName(frame.displayName, MAX_DISPLAY_NAME_LENGTH),
-          text,
-          at: Date.now(),
-        };
-        const transcript = [...(await chatFor(room)), entry].slice(-CHAT_HISTORY_LIMIT);
-        roomChats.set(room, transcript);
-        if (options.store?.appendChat) {
-          try {
-            await options.store.appendChat(room, entry);
-          } catch (error) {
-            // eslint-disable-next-line no-console
-            console.error(`  store: could not save a chat line for ${room}`, error);
-          }
-        }
-        broadcastChat(room);
-        return;
-      }
-
-      /* ---- PRESENCE (#1361a) ---- the sender's own seat, and only that. */
-      if (frame.kind === "presence-set") {
-        const actor = roomDocActors.get(socket);
-        const room = roomDocSockets.get(socket);
-        if (!actor || room !== frame.room) {
-          send(socket, { kind: "error", reason: "say room-hello first" });
-          return;
-        }
-        const seats = presence.get(room) ?? new Map<string, PresenceState>();
-        if (frame.state && typeof frame.state === "object") {
-          // #1397: the server's clock, not the sender's -- see `presenceFrame`.
-          seats.set(actor, { ...(frame.state as PresenceState), playerId: actor, at: Date.now() });
-        } else {
-          seats.delete(actor);
-        }
-        presence.set(room, seats);
-        broadcastPresence(room);
-        return;
-      }
-
-      /* ---- THE STAGING LOBBY (#1361b) ---- on any socket; the list is public. PARKED (LIVE-0): see
-         `STAGING_LOBBY_ENABLED` -- the hello still carries the public sandbox list, and nothing else. */
-      if (frame.kind === "lobby-hello") {
-        await lobbyReady;
-        lobbySockets.add(socket);
-        send(socket, { kind: "lobby", rooms: STAGING_LOBBY_ENABLED ? lobbyRooms() : [] } as never);
-        /* #1415: and the list a table actually joins by. */
-        send(socket, { kind: "rooms", rooms: await sandboxRooms() } as never);
-        return;
-      }
-      if (frame.kind === "lobby-watch") {
-        if (!STAGING_LOBBY_ENABLED) {
-          lobbyWatch.delete(socket);
-          if (typeof frame.roomId === "string" && frame.roomId) {
-            send(socket, { kind: "lobby-room", roomId: frame.roomId, room: null, seats: [] } as never);
-          }
-          return;
-        }
-        await lobbyReady;
-        if (typeof frame.roomId === "string" && frame.roomId) {
-          lobbyWatch.set(socket, frame.roomId);
-          const record = stagingRooms.get(frame.roomId) ?? null;
-          send(socket, {
-            kind: "lobby-room",
-            roomId: frame.roomId,
-            room: record?.room ?? null,
-            seats: record?.seats ?? [],
-          } as never);
-        } else {
-          lobbyWatch.delete(socket);
-        }
-        return;
-      }
-      if (frame.kind === "lobby-write") {
-        const ask: LobbyWriteFrame = frame;
-        if (!STAGING_LOBBY_ENABLED) {
-          // eslint-disable-next-line no-console
-          console.log("  lobby: refused a staging-lobby write -- the staging lobby is parked on this server (LIVE-0)");
-          send(socket, { kind: "lobby-ack", requestId: ask.requestId, ok: false, reason: STAGING_LOBBY_PARKED_REASON } as never);
-          return;
-        }
-        await lobbyReady;
-        const write = ask.write;
-        if (!write || typeof write !== "object" || typeof write.op !== "string") {
-          send(socket, { kind: "lobby-ack", requestId: ask.requestId, ok: false, reason: "That is not a lobby write." } as never);
-          return;
-        }
-        const outcome = applyLobbyWrite(write);
-        if (outcome.ok) {
-          await saveLobbyQuietly();
-          broadcastLobby();
-          const touched = write.op === "create-room" ? outcome.roomId : write.roomId;
-          if (touched) broadcastLobbyRoom(touched);
-        } else {
-          // eslint-disable-next-line no-console
-          console.log(`  lobby: refused ${write.op} — ${outcome.reason}`);
-        }
-        send(socket, { kind: "lobby-ack", requestId: ask.requestId, ...outcome } as never);
-        return;
-      }
-
-      /* ---- THE SEAT PIN (#1341) ---- answered on the room-doc socket, to the asker alone.
-         LIVE-3A: A TASK ON THE ROOM'S ACTOR, because a PIN is authority -- the hello gate reads it -- and it
-         changes only after the store has the document (F-10). A save the store refused is answered as a failed
-         claim with nothing changed; no token is minted and no socket is superseded for a PIN nobody holds. */
-      if (frame.kind === "seat-pin" || frame.kind === "claim-seat") {
-        const seatFrame: SeatPinFrame | ClaimSeatFrame = frame;
-        const actor = roomDocActors.get(socket);
-        const answer = (ok: boolean, reason?: string, token?: string) =>
-          send(socket, { kind: "seat", requestId: seatFrame.requestId, ok, reason, token } as never);
-        if (!actor || roomDocSockets.get(socket) !== frame.room) {
-          answer(false, "say room-hello first");
-          return;
-        }
-        let game: GameActor;
-        try {
-          game = await games.get(frame.room);
-        } catch (error) {
-          // eslint-disable-next-line no-console
-          console.error(`  store: could not load ${frame.room} for a seat request`, error);
-          answer(false, LOAD_FAILED_REASON);
-          return;
-        }
-        const outcome = await game.run(
-          "room-op",
-          async (tx) => {
-            const doc = tx.view.roomDoc;
-            if (!doc) {
-              answer(false, "That room does not exist.");
-              return;
-            }
-            if (!isValidSeatPin(frame.pin)) {
-              answer(false, "A PIN is exactly four digits.");
-              return;
-            }
-            const seat = doc.players.find((player) => player.id === seatFrame.playerId);
-            if (!seat) {
-              answer(false, "That seat is not in this room.");
-              return;
-            }
-            const pins = doc.seatPins ?? {};
-
-            if (frame.kind === "seat-pin") {
-              if (seatFrame.playerId !== actor) {
-                answer(false, "Only the seat's own player may set its PIN.");
-                return;
-              }
-              const current = pins[actor];
-              if (current && current !== frame.currentPin) {
-                answer(false, "That is not this seat's current PIN.");
-                return;
-              }
-              await tx.commitRoomDoc({ ...doc, seatPins: { ...pins, [actor]: frame.pin } }, (settled) => ({
-                after: () => {
-                  if (settled.kind !== "committed") {
-                    answer(false, docRefusal(settled));
-                    return;
-                  }
-                  /* The setter's own device holds the seat's first token, so its own log socket -- which said
-                     hello without one -- stays valid: a hello carrying NO token is only refused once one exists,
-                     and this device's next hello will carry this one. */
-                  const token = tokenFor(frame.room, actor) ?? mintSeatToken();
-                  setToken(frame.room, actor, token);
-                  answer(true, undefined, token);
-                  broadcastRoomDoc(frame.room); // `hasPin` changed for this seat
-                },
-              }));
-              return;
-            }
-
-            // claim-seat
-            const required = pins[seatFrame.playerId];
-
-            /* ==================================================================
-                DESIGN NOTE 1341a: A SEAT WITH NO PIN ADOPTS THE ONE IT IS OFFERED
-               ==================================================================
-               THE SEATS THAT EXIST ALREADY HAVE NO PIN. #1341 shipped into a live playtest whose seats were
-               claimed before it existed, and the rule above -- "a seat without a PIN cannot be claimed" --
-               locked exactly those players out of their own seats the moment they changed device. A rule that
-               is right for every future room and wrong for every present one needs a migration, not an
-               argument.
-
-               SO THE FIRST PIN OFFERED FOR AN UNPINNED SEAT BECOMES ITS PIN, and from that moment the seat is
-               an ordinary #1341 seat: the branch below demands this exact PIN of every later device, the gate
-               demands it of every later hello, and the token supersedes whoever held it. One seat crosses over
-               per claim, at the moment somebody needs it to, and no room has to be restarted to get there.
-
-               WHAT THIS IS NOT: protection. An unPINned seat was ALREADY open to anybody who claimed its id --
-               `seatRefusal` returns `null` when there is no PIN, so any hello naming that id was, and still
-               is, believed (#1210). This branch does not open a door; it lets the person walking through it
-               lock the door behind them. The cost it DOES carry is that the lock then works against the seat's
-               own player too, so on a public URL the honest instruction is the one the playtest was given:
-               set your PIN now, from the device you are already on, and the question stops being open.
-
-               LOGGED LOUDLY for the same reason the insecure identity is: it is a thing the operator should be
-               able to see happen in the window, not infer afterwards from a locked-out player. */
-            /* The old device is told and closed; the new one adopts the id and reloads with the PIN and a fresh
-               token in hand. The old device's reconnect then carries a stale token and is turned away. */
-            const takeOver = () => {
-              const token = mintSeatToken();
-              setToken(seatFrame.room, seatFrame.playerId, token);
-              for (const [other, attached] of sockets) {
-                if (attached.room === seatFrame.room && attached.actor === seatFrame.playerId && other !== socket) {
-                  send(other, {
-                    kind: "error",
-                    reason: "This seat was rejoined from another device.",
-                    code: SEAT_SUPERSEDED_CODE,
-                  } as never);
-                  other.close();
-                }
-              }
-              answer(true, undefined, token);
-              /* #1341a: `hasPin` just changed for an adopting seat, and the roster is how every other screen
-                 learns it. Harmless for a seat that already had one -- the document is identical. */
-              broadcastRoomDoc(frame.room);
-            };
-            if (!required) {
-              await tx.commitRoomDoc(
-                {
-                  ...doc,
-                  seatPins: { ...pins, [seatFrame.playerId]: frame.pin },
-                },
-                (settled) => ({
-                  after: () => {
-                    if (settled.kind !== "committed") {
-                      answer(false, docRefusal(settled));
-                      return;
-                    }
-                    // eslint-disable-next-line no-console
-                    console.warn(
-                      `[#1341a] seat "${seat.nickname || seatFrame.playerId}" in ${frame.room} had no PIN and adopted ` +
-                        `the one just offered. Every later device needs it. See design note 1341a.`,
-                    );
-                    takeOver();
-                  },
-                }),
-              );
-              return;
-            } else if (required !== frame.pin) {
-              answer(false, "Wrong PIN for that seat.");
-              return;
-            }
-            takeOver();
-          },
-          { origin: originFor(socket, actor) },
-        );
-        if (outcome.kind === "busy") answer(false, BUSY_REASON);
-        else if (outcome.kind === "expired") answer(false, EXPIRED_REASON);
-        else if (outcome.kind === "failed") answer(false, ROOM_SAVE_FAILED_REASON);
-        return;
-      }
-
-      /* ==================================================================
-          LIVE-3A: A ROOM WRITE IS A TASK ON THE ROOM'S ACTOR, AND DURABLE BEFORE IT IS VISIBLE
-         ==================================================================
-         The document is authority today -- the host a submit is judged under (#1249), the seats a PIN guards --
-         so it is serialized with the room's moves: a write queued behind a move sees that move's committed
-         result, and a move queued behind a write is judged under the committed document (E-1, E-2).
-         THE OLD ORDER WAS "change the map, then try the disk", and a failed save was logged and ignored, so a
-         roster, a PIN or a host that every screen had been shown silently reverted at the next restart (LIVE-3
-         F-10). Now the prospective document is saved first and published only if the store took it; a save
-         the store refused is answered exactly as a refused write is -- `room-write-refused` and the unchanged
-         document -- and the previous document stays authoritative. */
-      if (frame.kind === "room-write") {
-        /* ==================================================================
-            LIVE-2A (LIVE-2 §13.4, §15 #2): THE WRITE GOES TO THE SOCKET'S OWN ROOM
-           ==================================================================
-           The room is the one this connection said `room-hello` for, read from this server's own state -- never
-           `frame.room`, which used to select whichever room a frame named (LIVE-1: a socket watching X wrote Y). A
-           frame naming another room is refused outright rather than silently redirected. */
-        const room = roomDocSockets.get(socket);
-        if (room === undefined) {
-          send(socket, { kind: "error", reason: "say room-hello first" });
-          return;
-        }
-        const refuse = (reason: string, doc: SandboxRoomDoc | null) => {
-          /* #1415: told, not dropped -- and the current document re-sent, so a joiner whose optimistic
-             "I am seated" the client may have painted is corrected by the roster that does not hold them. */
-          send(socket, { kind: "error", reason, code: ROOM_WRITE_REFUSED_CODE } as never);
-          send(socket, { kind: "room", room, doc: publicDoc(doc) } as never);
-        };
-        if (frame.room !== room) {
-          // eslint-disable-next-line no-console
-          console.warn(`  room-write: refused a write naming another room than the one this socket watches (${room})`);
-          refuse("That change names a different room from the one you are in.", roomDocs.get(room) ?? null);
-          return;
-        }
-        const actor = roomDocActors.get(socket);
-        let game: GameActor;
-        try {
-          game = await games.get(room);
-        } catch (error) {
-          // eslint-disable-next-line no-console
-          console.error(`  store: could not load ${room} for a room write`, error);
-          refuse(LOAD_FAILED_REASON, roomDocs.get(room) ?? null);
-          return;
-        }
-        let taken = false;
-        const outcome = await game.run(
-          "room-op",
-          async (tx) => {
-            /* Dealt is the COMMITTED LOG's fact, not the document's `status` (which a client used to write). */
-            const dealt = dealEntryOf(effectiveActions(tx.view.entries)) !== null;
-            const result = applyRoomWrite(room, frame.write, actor, dealt);
-            if (result.codeTaken) {
-              /* The existing room is not re-sent: the writer asked to CREATE a room, and is told only to pick
-                 another code (the client retries with a fresh one, `sandboxRoom.ts`). */
-              send(socket, { kind: "error", reason: ROOM_CODE_TAKEN_REASON, code: ROOM_CODE_TAKEN_CODE } as never);
-              return;
-            }
-            if (result.refused) {
-              refuse(result.refused, result.doc);
-              return;
-            }
-            if (result.echo) {
-              send(socket, { kind: "room", room, doc: publicDoc(result.doc) } as never);
-              return;
-            }
-            const { doc } = result;
-            const committed = tx.view.roomDoc;
-            /* Nothing to make durable -- a write to a room nobody hosted, or one that changed nothing: the
-               committed document is re-sent as it stands, as it always was. */
-            if (!doc || doc === committed) {
-              taken = true;
-              broadcastRoomDoc(room);
-              return;
-            }
-            await tx.commitRoomDoc(doc, (settled) => ({
-              after: () => {
-                if (settled.kind !== "committed") {
-                  refuse(docRefusal(settled), committed as SandboxRoomDoc | null);
-                  return;
-                }
-                taken = true;
-                broadcastRoomDoc(room);
-              },
-            }));
-          },
-          { origin: originFor(socket, actor ?? "") },
-        );
-        if (outcome.kind === "busy") refuse(BUSY_REASON, roomDocs.get(room) ?? null);
-        else if (outcome.kind === "expired") refuse(EXPIRED_REASON, roomDocs.get(room) ?? null);
-        else if (outcome.kind === "failed") refuse(ROOM_SAVE_FAILED_REASON, roomDocs.get(room) ?? null);
-        /* #1415: the public list changed with this write -- a seat, a Ready, a status, a new room. Outside the
-           actor: it reads committed documents only, and no game waits on it (E-3). */
-        if (taken) await broadcastSandboxRooms();
-        return;
-      }
-
-      if (frame.kind === "hello") {
-        /* LIVE-2B: the actor is the connection's, frozen at the upgrade -- never the frame's. */
-        const actor = legacyActor;
-        if (!actor) {
-          send(socket, { kind: "error", code: NO_SEAT_IDENTITY_CODE, reason: NO_SEAT_IDENTITY_REASON });
-          return;
-        }
-        const refused = await seatRefusal(frame.room, actor, frame.pin, frame.token);
-        if (refused) {
-          // eslint-disable-next-line no-console
-          console.warn(`  seat: refused hello from "${actor}" in ${frame.room} — ${refused.reason}`);
-          send(socket, { kind: "error", ...refused } as never);
-          socket.close();
-          return;
-        }
-        /* #1415: A PRIVATE GAME HAS NO SPECTATORS. The log socket is the game; once a private room is dealt
-           it admits its own seats and nobody else -- the code is not a door to watching. Checked HERE and
-           not on `room-hello`, because the roster socket is also how a new device claims a seat by PIN
-           (#1341/#1355), and that device's id is not on the roster until the claim succeeds. */
-        const privateDoc = await roomDocFor(frame.room);
-        if (
-          privateDoc &&
-          privateDoc.status !== "waiting" &&
-          roomVisibility(privateDoc) === "private" &&
-          !privateDoc.players.some((player) => player.id === actor)
-        ) {
-          // eslint-disable-next-line no-console
-          console.warn(`  seat: refused hello from "${actor}" in ${frame.room} — private game, not a seat`);
-          send(socket, { kind: "error", reason: "This is a private game and cannot be watched.", code: SEAT_REFUSED_CODE } as never);
-          socket.close();
-          return;
-        }
-        sockets.set(socket, { room: frame.room, actor, principalId: ctx.principalId, owned: false });
-        reindexGames(socket);
-        let game: GameActor;
-        try {
-          game = await games.get(frame.room);
-        } catch (error) {
-          // eslint-disable-next-line no-console
-          console.error(`  store: could not load ${frame.room} for a hello`, error);
-          send(socket, { kind: "error", code: "unavailable", reason: LOAD_FAILED_REASON });
-          socket.close();
-          return;
-        }
-        /* A JOINING CLIENT IS ALWAYS BEHIND, so the first thing it gets is everything it missed. `-1` for a
-           client with nothing means "send me the game", which is the same path as a reconnect.
-           ==================================================================
-            LIVE-3A (§3.5): FROM HERE TO THE ANSWER IS ONE SYNCHRONOUS STEP
-           ==================================================================
-           The catch-up used to be read off the live session, so a hello that landed while a move awaited the
-           disk was handed the move before the disk had it (LIVE-3 P1, F-3). `subscribe` registers this socket
-           and answers it from the COMMITTED view with no await in between, and a publish is synchronous too:
-           a socket registered before a publish receives its fan-out, one registered after sees it in this
-           catch-up -- never neither, never both. The answer carries `inFlight`, this player's submissions still
-           being committed, so a reconnecting tab does not call a move lost that is about to land (§4.2).
-           A `baseIndex` above the room's durable watermark, or a `baseId` naming an entry the room does not
-           hold there, is a history this room does not share: `resync`, and nothing registered (L3-3). */
-        const fromIndex =
-          Number.isInteger(frame.baseIndex) && (frame.baseIndex as number) >= -1 ? (frame.baseIndex as number) : -1;
-        const baseId = typeof frame.baseId === "string" ? frame.baseId : undefined;
-        unsubscribeLog(socket);
-        const subscribed = game.subscribe(socket, subscriberFor(socket, actor), fromIndex, baseId);
-        if (subscribed.kind === "subscribed") {
-          logSubscriptions.set(socket, game);
-          return;
-        }
-        if (subscribed.kind === "held") {
-          send(socket, subscribed.frame);
-          return;
-        }
-        counters.helloResync += 1;
-        // eslint-disable-next-line no-console
-        console.warn(
-          `  resync: ${actor}'s hello in ${frame.room} holds index ${fromIndex}${baseId ? ` (${baseId})` : ""} but the ` +
-            `room's durable history ends at ${subscribed.watermark} or holds another entry there -- counted as a ` +
-            `durability alarm (LIVE-3 §5.2)`,
-        );
         send(socket, { kind: "error", code: "resync", reason: subscribed.reason, watermark: subscribed.watermark });
         return;
       }
@@ -2553,8 +1296,9 @@ export function createGameServer(options: GameServerOptions): {
           console.log(`  ingress: stripped ${shape.stripped} undeclared field(s) from a ${shape.kind} (LIVE-2 §11.2)`);
         }
         const parsedFrame: SubmitFrame = { ...frame, msg: shape.value as unknown as SandboxLogMsg };
-        /* LIVE-2C (§6.3 #20): a server-owned game's deal is built by `start-game`; a client's is refused. */
-        if (attached.owned && "SetupGame" in parsedFrame.msg) {
+        /* LIVE-2C (§6.3 #20): the deal is built by `start-game`; a client's is refused. LIVE-2D: every game is
+           server-owned, so no client ever deals. */
+        if ("SetupGame" in parsedFrame.msg) {
           answer({ kind: "refused", code: BAD_FRAME_CODE, reason: SERVER_DEALS_REASON, build: options.build });
           return;
         }
@@ -2573,16 +1317,13 @@ export function createGameServer(options: GameServerOptions): {
            has it. Awaited here, so this socket's frames stay in the order it sent them (#1216). */
         /* LIVE-2C (RV-1): the seat gate BEFORE the actor, against the committed record -- and again inside the task,
            against the record committed when it runs, and a third time at `RoomSession.submit` step 1b. */
-        let originKey = attached.actor;
-        if (attached.owned) {
-          const committedRecord = game.view.record;
-          const seatNow = committedRecord === null ? null : seatOf(committedRecord, attached.principalId);
-          if (seatNow === null) {
-            answer({ kind: "refused", code: "not-seated", reason: "You do not have a seat in this game.", build: options.build });
-            return;
-          }
-          originKey = seatNow.player_id;
+        const committedRecord = game.view.record;
+        const seatNow = committedRecord === null ? null : seatOf(committedRecord, attached.principalId);
+        if (seatNow === null) {
+          answer({ kind: "refused", code: "not-seated", reason: "You do not have a seat in this game.", build: options.build });
+          return;
         }
+        const originKey = seatNow.player_id;
         const outcome = await game.run("submit", (tx) => submitOnActor(tx, game, attached, parsedFrame, inReplyTo), {
           origin: originFor(socket, originKey, inReplyTo),
         });
@@ -2649,21 +1390,10 @@ export function createGameServer(options: GameServerOptions): {
       games.forEach((game) => game.cancelQueuedFrom(socket));
       unsubscribeLog(socket);
       sockets.delete(socket);
-      /* #1215: the roster keeps the player. A closed tab is not a player leaving the table -- they refresh,
-         they lose wifi, they come back -- and dropping them from the roster would empty a waiting room every
-         time somebody reloaded. Rooms are in memory and die with the process, which is the only cleanup
-         there is until `loadLog` and its equivalent for this record are wired. */
-      /* #1361a: PRESENCE DOES NOT OUTLIVE THE SOCKET. A hint from a tab that is gone is a set of routes
-         nobody is drafting; the client's staleness window would clear it in six seconds, and this clears it
-         now. The transcript stays -- it is the room's, not the socket's. */
-      const room = roomDocSockets.get(socket);
-      const actor = roomDocActors.get(socket);
-      if (room && actor && presence.get(room)?.delete(actor)) broadcastPresence(room);
-      roomDocSockets.delete(socket);
-      roomDocActors.delete(socket);
-      lobbySockets.delete(socket);
-      lobbyWatch.delete(socket);
-      /* LIVE-2C: out of the server-owned room subscriptions and the reap. A close handler has no caller to answer:
+      /* #1215: the seat stays the player's. A closed tab is not a player leaving the table -- they refresh, they lose
+         wifi, they come back -- and the seat is the principal's in the GameRecord, whatever its sockets do.
+         #1361a: PRESENCE DOES NOT OUTLIVE THE SOCKET -- `dropSocket` clears it with the room view (roomHost.ts).
+         LIVE-2C: out of the server-owned room subscriptions and the reap. A close handler has no caller to answer:
          nothing may escape it, and the identity cleanup below must always run (review H1). */
       clearTimeout(reapTimer);
       try {
@@ -2697,7 +1427,6 @@ export function createGameServer(options: GameServerOptions): {
     upgrades,
     records: recordStore,
     rooms: host,
-    legacyRoomProtocol: legacyRooms,
     residentGames: () => games.size,
     socketCounts: () => ({
       total: contexts.size,
@@ -2711,8 +1440,7 @@ export function createGameServer(options: GameServerOptions): {
         clearInterval(keepalive);
         clearInterval(identitySweep);
         games.close();
-        for (const socket of sockets.keys()) socket.close();
-        for (const socket of contexts.keys()) if (!sockets.has(socket)) socket.close(1001, "server stopping");
+        for (const socket of contexts.keys()) socket.close(1001, "server stopping");
         void identity
           .flush(identityNow())
           .catch(() => undefined) // reported by the identity hook

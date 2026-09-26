@@ -7,7 +7,7 @@
 // HttpOnly cookie.
 
 import { connectServerLink, type SocketLike } from "./serverLink";
-import { resetRoomDocLinks, sendFrame, setRoomDocSocketFactory } from "./roomDocLink";
+import { resetRoomLinks, setRoomSocketFactory, watchRoom, type SocketLike as RoomSocketLike } from "./roomLink";
 import { httpSessionPort, installSessionPort, readySessionPort, sessionEndpointFor, sessionPort } from "./sessionBootstrap";
 
 interface Call {
@@ -43,13 +43,16 @@ function sockets() {
   return { made, factory };
 }
 
+/** A server-minted game id: LIVE-2D keys every link by one, and names no player in any frame. */
+const GAME = "g_0123456789abcdefghjkmnpqr0";
+
 const flush = async () => {
   for (let n = 0; n < 10; n += 1) await Promise.resolve();
 };
 
 afterEach(() => {
   installSessionPort(null);
-  resetRoomDocLinks();
+  resetRoomLinks();
 });
 
 describe("the hosted session bootstrap (LIVE-2B)", () => {
@@ -59,9 +62,8 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
     const wire = sockets();
     const link = connectServerLink({
       url: "wss://play.example/gs",
-      room: "ROOM",
+      gameId: GAME,
       build: "b",
-      claim: "p-alice",
       session,
       onEntries: () => undefined,
       socketFactory: wire.factory,
@@ -84,9 +86,8 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
     const later: Array<() => void> = [];
     const link = connectServerLink({
       url: "wss://play.example/gs",
-      room: "ROOM",
+      gameId: GAME,
       build: "b",
-      claim: "p-alice",
       session,
       onEntries: () => undefined,
       socketFactory: wire.factory,
@@ -119,9 +120,8 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
     const later: Array<() => void> = [];
     connectServerLink({
       url: "wss://play.example/gs",
-      room: "ROOM",
+      gameId: GAME,
       build: "b",
-      claim: "p-alice",
       onEntries: () => undefined,
       socketFactory: wire.factory,
       schedule: (callback) => later.push(callback),
@@ -141,15 +141,16 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
     expect(await fresh).toBe("ready");
   });
 
-  it("the room-document link waits for the session too", async () => {
+  it("the room link waits for the session too (LIVE-2D: `roomLink`, keyed by game id)", async () => {
     const http = manualFetch();
     installSessionPort(httpSessionPort({ endpoint: "https://play.example/gs/api/session", fetch: http.fetch }));
     const wire = sockets();
-    setRoomDocSocketFactory(wire.factory as unknown as Parameters<typeof setRoomDocSocketFactory>[0]);
-    sendFrame("JUNO-ABC", "p-alice", { kind: "lobby-hello" });
+    setRoomSocketFactory(wire.factory as unknown as (url: string) => RoomSocketLike);
+    const stop = watchRoom(GAME, { onView: () => undefined });
     expect(wire.made).toHaveLength(0);
     await http.answer(201, { ok: true });
     expect(wire.made).toHaveLength(1);
+    stop();
   });
 
   it("the page never reads the cookie: it is HttpOnly and the browser's alone", async () => {

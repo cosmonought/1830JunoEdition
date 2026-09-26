@@ -26,7 +26,7 @@
 import { effectiveActions, dealEntryOf } from "../../../frontend/src/gameEngine/logRevert";
 import { resolveVariants } from "../../../frontend/src/gameEngine/gameVariants";
 import { sanitizeText } from "../../../frontend/src/gameEngine/messageSchema";
-import type { RoomChatEntry } from "../../../frontend/src/utils/roomDocLink";
+import type { RoomChatEntry } from "../../../frontend/src/utils/roomProtocol";
 import type { PresenceState } from "../../../frontend/src/utils/presence";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import type { ServerMessage } from "../../../frontend/src/utils/serverProtocol";
@@ -403,7 +403,9 @@ export function createRoomHost(deps: RoomHostDeps) {
     const kicked = record.kicked_principals.filter((id) => !(previous?.kicked_principals ?? []).includes(id));
     if (kicked.length > 0) {
       for (const socket of [...(viewSubs.get(record.game_id) ?? [])]) {
-        if (kicked.includes(principalOf(socket) ?? "")) evict(socket, "not-found", "You no longer have access to that game.");
+        /* LIVE-2D: said as `kicked` -- the principal was seated here, so naming the kick tells it nothing it did not
+           know, and the player reads "the host removed you" rather than "that table is not available". */
+        if (kicked.includes(principalOf(socket) ?? "")) evict(socket, "kicked", "The host removed you from that game.");
       }
     }
     const seats = presence.get(record.game_id);

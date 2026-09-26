@@ -634,8 +634,9 @@ describe("#1651 three families, on the same boundary", () => {
   it("leaves the excluded surfaces exactly as they were", () => {
     /* PIN and Tutorial are named exclusions; `PrivateTradePanel` is an embedded panel, not a modal; the two
        forced prompts and the intro overlay are excluded for reasons recorded in the note. None of them may
-       have acquired the boundary by accident. */
-    for (const name of ["SeatPinModal", "TutorialModal", "PrivateTradePanel", "HomeStationPrompt", "AuctionPromptModal", "GameIntroOverlay"]) {
+       have acquired the boundary by accident. LIVE-2D: the PIN exclusion, `SeatPinModal`, is deleted with the
+       seat PINs (`settingsDialogDismissal.test.tsx` pins that it stays gone). */
+    for (const name of ["TutorialModal", "PrivateTradePanel", "HomeStationPrompt", "AuctionPromptModal", "GameIntroOverlay"]) {
       const source = readStripped(`components/${name}.tsx`);
       expect([name, "untouched by the boundary", source.includes("NativeModal")]).toEqual([
         name,
@@ -643,7 +644,7 @@ describe("#1651 three families, on the same boundary", () => {
         false,
       ]);
     }
-    for (const name of ["SeatPinModal", "TutorialModal"]) {
+    for (const name of ["TutorialModal"]) {
       const source = readStripped(`components/${name}.tsx`);
       expect([name, "still on useDialogDismissal", source.includes("useDialogDismissal(")]).toEqual([
         name,

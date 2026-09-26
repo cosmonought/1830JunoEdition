@@ -2,12 +2,19 @@
 //
 // LIVE-3A test support: a store the test controls, a raw socket client, and a probe session. Used by the
 // `node --test` suites beside it (`npm test` in server/, after `npm run build`). Not imported by the server.
+//
+// LIVE-2D: every game is server-owned. There is no room document to seed and no `room`-keyed frame to send: a game is
+// a GameRecord (`g_…`), reached by `gameId`, whose seats bind development principals (`pr_dev_<claim>`) to the log's
+// actors (`player_id`). Two ways to get one: `openGame` walks the protocol a table walks (create, join by code, take
+// a seat, ready, start-game), and `seedGame` writes the record straight into a record store -- for a game whose log
+// is already on "disk" before the server starts (a restart, a stored history), exactly as the file adapter would find
+// it.
 
 import { WebSocket } from "ws";
 
 import { createGameServer, type GameServerIdentity, type GameServerOptions } from "../gameServer";
-import { createDevAuthenticator } from "../identity/devAuthenticator";
-import type { IdentityLimits } from "../ingress/limits";
+import { createDevAuthenticator, DEV_PRINCIPAL_PREFIX } from "../identity/devAuthenticator";
+import type { IdentityLimits, RoomLimits } from "../ingress/limits";
 import type { LogStore } from "../fileLogStore";
 import { StoreDefiniteError } from "../persistence/storeResult";
 import { RoomSession, type ServerLogEntry } from "../../../frontend/src/utils/roomSession";
@@ -20,12 +27,20 @@ import {
   waterfallForRoster,
   withEmptyRoster,
 } from "../../../frontend/src/gameEngine";
-import type { SandboxRoomDoc } from "../../../frontend/src/utils/sandboxRoom";
+import { resolveVariants } from "../../../frontend/src/gameEngine/gameVariants";
+import { mintGameId, type GameRecord, type Seat } from "./gameRecord";
+import type { RecordStore } from "./recordStore";
+import { createRecord } from "./roomService";
 
 export const BUILD = "live3a-build";
+/** LIVE-2D: each of these is BOTH a development claim and the `player_id` of the seat that claim holds in a seeded
+ *  game (`seedGame`), so the actor a log names is the socket that made it. A server-minted id is `p-` + 16 base32; the
+ *  record accepts any `p-` id, which is what lets a stored log's actors be readable. */
 export const ALICE = "p-alice";
 export const BOB = "p-bob";
 export const CAROL = "p-carol";
+/** A deal in the reducer's shape. LIVE-2D: never sent by a client (the server deals at `start-game`, and a client's
+ *  `SetupGame` is refused) -- it builds stored logs, and the refusal tests send it. */
 export const SETUP = {
   SetupGame: {
     players: [
@@ -70,34 +85,20 @@ export interface HeldAppend {
   fail(landed?: boolean): void;
 }
 
-export interface HeldSave {
-  room: string;
-  doc: SandboxRoomDoc;
-  release(): void;
-  /** A definite failure (before the rename): the previous document stands. */
-  fail(): void;
-}
-
 /** An in-memory `LogStore` whose every call the test can hold, fail or slow. Its log only ever grows, exactly
- *  like a file: an entry that is in it has been "on disk" since it arrived. */
+ *  like a file: an entry that is in it has been "on disk" since it arrived. LIVE-2D: logs only -- a game's roster is
+ *  its GameRecord, in the record store. */
 export function controlledStore() {
   const logs = new Map<string, ServerLogEntry[]>();
-  const docs = new Map<string, string>();
-  const calls = { loadLog: 0, appendLog: 0, loadRoomDoc: 0, saveRoomDoc: 0 };
+  const calls = { loadLog: 0, appendLog: 0 };
   const control = {
     holdAppends: false,
-    holdSaves: false,
     /** Immediate append failures, in order: `landed: false` is definite, `landed: true` uncertain (LIVE-3B). */
     failAppends: [] as Array<{ landed: boolean }>,
-    /** Definite room-document failures (before the rename). */
-    failSaves: 0,
-    /** Uncertain room-document failures (after the rename), which the actor holds for a restart. */
-    failSavesUncertain: 0,
     failLoads: 0,
     loadDelayMs: 0,
   };
   const heldAppends: HeldAppend[] = [];
-  const heldSaves: HeldSave[] = [];
   const land = (room: string, entries: readonly ServerLogEntry[]) =>
     logs.set(room, [...(logs.get(room) ?? []), ...copy(entries)]);
 
@@ -139,65 +140,19 @@ export function controlledStore() {
       land(room, entries);
       return Promise.resolve();
     },
-    async loadRoomDoc(room) {
-      calls.loadRoomDoc += 1;
-      const text = docs.get(room);
-      return text === undefined ? null : (JSON.parse(text) as SandboxRoomDoc);
-    },
-    saveRoomDoc(room, doc) {
-      calls.saveRoomDoc += 1;
-      if (control.holdSaves) {
-        return new Promise<void>((resolve, reject) => {
-          heldSaves.push({
-            room,
-            doc: copy(doc),
-            release: () => {
-              docs.set(room, JSON.stringify(doc));
-              resolve();
-            },
-            fail: () => reject(new StoreDefiniteError("injected save failure")),
-          });
-        });
-      }
-      if (control.failSaves > 0) {
-        control.failSaves -= 1;
-        return Promise.reject(new StoreDefiniteError("injected save failure"));
-      }
-      if (control.failSavesUncertain > 0) {
-        // The rename landed, then an error the store could not settle: the new document IS stored.
-        control.failSavesUncertain -= 1;
-        docs.set(room, JSON.stringify(doc));
-        return Promise.reject(new Error("injected uncertain save failure"));
-      }
-      docs.set(room, JSON.stringify(doc));
-      return Promise.resolve();
-    },
-    async listRooms() {
-      return [...docs.keys()];
-    },
   };
 
   return {
     store,
     logs,
-    docs,
     calls,
     control,
     heldAppends,
-    heldSaves,
     log: (room: string): ServerLogEntry[] => logs.get(room) ?? [],
     indices: (room: string): number[] => (logs.get(room) ?? []).map((entry) => entry.index),
-    doc: (room: string): SandboxRoomDoc | null => {
-      const text = docs.get(room);
-      return text === undefined ? null : (JSON.parse(text) as SandboxRoomDoc);
-    },
     async nextHeldAppend(): Promise<HeldAppend> {
       await until(() => heldAppends.length > 0, "a held append");
       return heldAppends.shift() as HeldAppend;
-    },
-    async nextHeldSave(): Promise<HeldSave> {
-      await until(() => heldSaves.length > 0, "a held room-document save");
-      return heldSaves.shift() as HeldSave;
     },
   };
 }
@@ -224,6 +179,9 @@ export function devIdentity(over: Partial<GameServerIdentity> = {}): GameServerI
 /** The development socket URL for `claim` on a test server. */
 export const devSocketUrl = (port: number, claim: string): string => `ws://127.0.0.1:${port}/?dev_claim=${encodeURIComponent(claim)}`;
 
+/** The principal the development authenticator gives `claim` -- what a seeded seat is bound to. */
+export const devPrincipal = (claim: string): string => `${DEV_PRINCIPAL_PREFIX}${claim}`;
+
 /** The LIVE-3A / LIVE-2A suites open sockets far faster than a table does, all from 127.0.0.1; they are not about
  *  the identity limits, so those are opened wide for them (the LIVE-2B suite sets its own). */
 export const ROOMY_IDENTITY_LIMITS: Partial<IdentityLimits> = Object.freeze({
@@ -234,13 +192,33 @@ export const ROOMY_IDENTITY_LIMITS: Partial<IdentityLimits> = Object.freeze({
   maxSocketsPerIp: 10_000,
 });
 
+/** LIVE-2D: every game is server-owned now, so every suite meets the room limits (creates, membership ops, the
+ *  per-seat and per-game submit budgets). Suites that are not about them get them wide; the LIVE-2C suite sets its own
+ *  and tests each one. */
+export const ROOMY_ROOM_LIMITS: Partial<RoomLimits> = Object.freeze({
+  createsPerPrincipal: { capacity: 1e6, refillPerSecond: 1e6 },
+  createsPerIp: { capacity: 1e6, refillPerSecond: 1e6 },
+  createsGlobal: { capacity: 1e6, refillPerSecond: 1e6 },
+  membershipOpsPerPrincipal: { capacity: 1e6, refillPerSecond: 1e6 },
+  submitsPerSeat: { capacity: 1e6, refillPerSecond: 1e6 },
+  submitsPerGame: { capacity: 1e6, refillPerSecond: 1e6 },
+});
+
+/** The deal in seat order (host first), so a test knows who is on turn. Pass `shuffle: undefined` for the crypto one. */
+export const IN_SEAT_ORDER = <T>(items: readonly T[]): T[] => [...items];
+
 export async function startServer(over: Partial<GameServerOptions> = {}) {
   const server = createGameServer({
     port: 0,
     build: BUILD,
     identity: devIdentity(),
+    shuffle: IN_SEAT_ORDER,
     ...over,
-    limits: { ...(over.limits ?? {}), identity: { ...ROOMY_IDENTITY_LIMITS, ...(over.limits?.identity ?? {}) } },
+    limits: {
+      ...(over.limits ?? {}),
+      identity: { ...ROOMY_IDENTITY_LIMITS, ...(over.limits?.identity ?? {}) },
+      rooms: { ...ROOMY_ROOM_LIMITS, ...(over.limits?.rooms ?? {}) },
+    },
   });
   const port = await new Promise<number>((resolve) => {
     const read = () => {
@@ -266,41 +244,8 @@ export interface SeenEntry {
 }
 
 /** Every client a test opened and has not closed, so a failed assertion cannot leave a socket that keeps the
- *  server's `close()` waiting (it closes the LOG sockets it knows; a room-doc socket would hold `http.close`). */
+ *  server's `close()` waiting. */
 const openClients = new Set<Client>();
-
-/** LIVE-2A (LIVE-2 §15 #9): a room nobody hosted is not dealt. The document a `host` write creates, for seeding a
- *  store before a server starts. */
-export function hostedDoc(room: string, host: string = ALICE): SandboxRoomDoc {
-  return {
-    code: room,
-    hostId: host,
-    status: "waiting",
-    players: [{ id: host, nickname: host, isReady: false }],
-    variants: {} as SandboxRoomDoc["variants"],
-    forcedSign: null,
-    visibility: "public",
-    playerCount: null,
-    anteUjuno: "0",
-    createdAtMs: 0,
-    kicked: [],
-  };
-}
-
-/** LIVE-2A: host `room` on a running server, as the client does -- `room-hello`, then the `host` write -- and wait
- *  for the document (or `room-code-taken`: already hosted, which is as good). */
-export async function hostRoom(port: number, room: string, host: string = ALICE): Promise<void> {
-  const client = await Client.open(port, host);
-  client.roomHello(room);
-  client.roomWrite(room, { op: "host", hostId: host, nickname: host, variants: {} });
-  await client.next(
-    (frame) =>
-      (frame.kind === "room" && (frame.doc as { hostId?: string } | null)?.hostId === host) ||
-      (frame.kind === "error" && frame.code === "room-code-taken"),
-    `the room ${room} hosted by ${host}`,
-  );
-  await client.close();
-}
 
 /** Stop a server started by `startServer`, closing every client still open first. */
 export async function stopServer(server: { close(): Promise<void> }): Promise<void> {
@@ -309,7 +254,10 @@ export async function stopServer(server: { close(): Promise<void> }): Promise<vo
   await server.close();
 }
 
-/** A raw socket client: records every frame in order. */
+let requests = 0;
+
+/** A raw socket client: records every frame in order. LIVE-2D: it speaks only the server-owned protocol -- `hello`,
+ *  `room-hello` and every room operation name a `gameId`. */
 export class Client {
   readonly frames: Frame[] = [];
   private cursor = 0;
@@ -335,20 +283,38 @@ export class Client {
     this.socket.send(JSON.stringify(frame));
   }
 
-  hello(room: string, baseIndex = -1, baseId?: string): void {
-    this.send({ kind: "hello", room, build: BUILD, baseIndex, ...(baseId ? { baseId } : {}) });
+  /** The log subscription of a server-owned game. */
+  hello(gameId: string, baseIndex = -1, baseId?: string): void {
+    this.send({ kind: "hello", gameId, build: BUILD, baseIndex, ...(baseId ? { baseId } : {}) });
   }
 
   submit(msg: object, over: { baseIndex: number; submissionId?: string; baseId?: string }): void {
     this.send({ kind: "submit", build: BUILD, msg, ...over });
   }
 
-  roomHello(room: string): void {
-    this.send({ kind: "room-hello", room, build: BUILD });
+  /** The room view (and chat and presence) of a server-owned game. */
+  roomHello(gameId: string): void {
+    this.send({ kind: "room-hello", gameId, build: BUILD });
   }
 
-  roomWrite(room: string, write: object): void {
-    this.send({ kind: "room-write", room, write });
+  /** Send one room operation; the answer is the `room-ack` naming the returned request id. */
+  roomOp(body: Record<string, unknown>, gameId?: string): string {
+    requests += 1;
+    const requestId = `rq-${requests}`;
+    this.send({ kind: "room-op", requestId, ...(gameId !== undefined ? { gameId } : {}), op: body });
+    return requestId;
+  }
+
+  /** The `room-ack` for `requestId` (found anywhere in the frames; the cursor is not moved). */
+  async ack(requestId: string): Promise<Frame> {
+    const match = (frame: Frame) => frame.kind === "room-ack" && frame.requestId === requestId;
+    await until(() => this.frames.some(match), `the ack ${requestId} for ${this.claim} (saw ${this.frames.map((f) => f.kind).join(",")})`);
+    return this.frames.find(match) as Frame;
+  }
+
+  /** A room operation, answered. */
+  op(body: Record<string, unknown>, gameId?: string): Promise<Frame> {
+    return this.ack(this.roomOp(body, gameId));
   }
 
   /** The next frame after the cursor that matches, waiting for it if it has not arrived. */
@@ -394,6 +360,100 @@ export class Client {
   }
 }
 
+/* ==================================================================
+    LIVE-2D: OWNED GAMES FOR THE SUITES
+   ================================================================== */
+
+export interface OpenedGame {
+  gameId: string;
+  code: string;
+  /** Each claim's seat. */
+  playerIds: Record<string, string>;
+  /** The claims, host first -- the deal's turn order under `IN_SEAT_ORDER`. */
+  seats: string[];
+}
+
+/** A table walked through the protocol, as clients walk it: `host` creates, each guest joins by code and takes a
+ *  seat, everyone marks ready, and -- unless `start: false` -- the host sends `start-game` and the SERVER deals. The
+ *  sockets used are closed before it returns; a test opens its own log clients. */
+export async function openGame(
+  port: number,
+  host: string,
+  guests: readonly string[],
+  over: { start?: boolean; visibility?: "public" | "private" } = {},
+): Promise<OpenedGame> {
+  const hostClient = await Client.open(port, host);
+  const created = await hostClient.op({ type: "create", visibility: over.visibility ?? "public", exactPlayers: null, variants: {}, nickname: host });
+  if (created.ok !== true) throw new Error(`create refused: ${JSON.stringify(created)}`);
+  const { gameId, code, playerId } = created.data as { gameId: string; code: string; playerId: string };
+  const playerIds: Record<string, string> = { [host]: playerId };
+  const clients = [hostClient];
+  for (const guest of guests) {
+    const client = await Client.open(port, guest);
+    clients.push(client);
+    const joined = await client.op({ type: "join", code, takeSeat: true });
+    if (joined.ok !== true) throw new Error(`join refused for ${guest}: ${JSON.stringify(joined)}`);
+    playerIds[guest] = (joined.data as { playerId: string }).playerId;
+  }
+  for (const client of clients) {
+    const ready = await client.op({ type: "set-ready", ready: true }, gameId);
+    if (ready.ok !== true) throw new Error(`set-ready refused for ${client.claim}: ${JSON.stringify(ready)}`);
+  }
+  if (over.start !== false) {
+    const started = await hostClient.op({ type: "start-game" }, gameId);
+    if (started.ok !== true) throw new Error(`start-game refused: ${JSON.stringify(started)}`);
+  }
+  await Promise.all(clients.map((client) => client.close()));
+  return { gameId, code, playerIds, seats: [host, ...guests] };
+}
+
+/** A GameRecord whose seats are bound to development claims, each seat's `player_id` the claim itself (ALICE, BOB...).
+ *  The first claim holds the host seat. `dealt`: the record as it stands once its log holds a deal (active, started,
+ *  the turn order cached -- nothing for a load to repair); otherwise waiting, every seat ready. */
+export function seededRecord(claims: readonly string[] = [ALICE, BOB], over: { dealt?: boolean; gameId?: string; now?: number } = {}): GameRecord {
+  const now = over.now ?? Date.now();
+  const made = createRecord({
+    gameId: over.gameId ?? mintGameId(),
+    joinCode: "JUNO-AAAA-AAAA",
+    principalId: devPrincipal(claims[0]),
+    now,
+    visibility: "public",
+    exactPlayers: null,
+    variants: resolveVariants({}),
+    nickname: claims[0],
+    color: null,
+    hostPlayerId: claims[0],
+  });
+  if (!made.ok || made.record === null) throw new Error("seededRecord: createRecord refused");
+  const record = made.record;
+  const seat = (claim: string): Seat => ({
+    player_id: claim,
+    principal_id: devPrincipal(claim),
+    binding_epoch: 0,
+    joined_at: now,
+    bound_at: now,
+    ready: true,
+    nickname: claim,
+    color: null,
+    payout_address: null,
+    chain_seat_index: null,
+  });
+  /* The join code is dropped: a seeded game is reached by id, and no index entry exists for a code to resolve to. */
+  const seeded: GameRecord = { ...record, join_code: null, seats: claims.map(seat) };
+  if (over.dealt) {
+    return { ...seeded, status: "active", started_at: now, expires_at: null, turn_order: [...claims] };
+  }
+  return seeded;
+}
+
+/** Put a seeded record in `records` (before the server starts, as a restart finds it) and answer its game id. */
+export async function seedGame(records: RecordStore, claims: readonly string[] = [ALICE, BOB], over: { dealt?: boolean; gameId?: string } = {}): Promise<string> {
+  const record = seededRecord(claims, over);
+  const put = await records.put(record, null);
+  if (put.kind !== "committed") throw new Error(`seedGame: the record store refused the seed (${JSON.stringify(put)})`);
+  return record.game_id;
+}
+
 /** A session built exactly as the server builds one, for computing logs and boards outside it. */
 export function probeSession(tag = "probe"): RoomSession {
   let n = 0;
@@ -409,7 +469,8 @@ export function probeSession(tag = "probe"): RoomSession {
   });
 }
 
-/** A stored log: the deal, and `buys` purchases alternating from the first seat. */
+/** A stored log: the deal, and `buys` purchases alternating from the first seat. Seated as `seedGame` seats a game
+ *  (ALICE, BOB), so the pair is a dealt game a restarted server finds on disk. */
 export function storedLog(buys = 0): ServerLogEntry[] {
   const session = probeSession("stored");
   session.submit({ actor: ALICE, build: BUILD, msg: SETUP as never, baseIndex: -1, submissionId: "stored-deal" });

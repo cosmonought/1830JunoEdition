@@ -27,6 +27,8 @@
 //
 // LIVE-2A (LIVE-2 §10.5, §15 #6): `RejoinByPinCard` -- #1355's PIN-first lookup -- is DELETED with the server's
 // `find-seats`, and its cases with it. The table above is kept as the record of what was measured.
+// LIVE-2D: the join card's by-code "Rejoin seat" (#1352, the code then the seat's PIN) is deleted with the seat
+// PINs. The card's one submit is "Join by code"; a seat comes back with the session, by reopening the table.
 //
 // WHAT THIS FILE DOES NOT ASSERT: tab containment, scroll lock, portals, `inert`, backdrop mechanics. None of
 // those is in this batch; the background-Tab defect (audit H1) is deferred to its own.
@@ -51,16 +53,11 @@ declare global {
 }
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
-jest.mock("../utils/roomDocLink", () => ({
-  claimSeat: () => new Promise(() => {}),
-}));
-
 let host: HTMLDivElement;
 let root: Root;
 let closes = 0;
 let keydownListeners = 0;
 let joinCalls: string[] = [];
-let rejoinCalls: string[] = [];
 let clearErrorCalls = 0;
 
 function spyListeners() {
@@ -109,7 +106,6 @@ function Harness({ which, busy, extraOpener }: { which: Which; busy: boolean; ex
           busy={busy}
           onClose={close}
           onJoin={(code) => joinCalls.push(code)}
-          onRejoin={(code) => rejoinCalls.push(code)}
           onClearError={() => {
             clearErrorCalls += 1;
           }}
@@ -144,7 +140,6 @@ function unmountLayer() {
 function mount(which: Which, busy = false, extraOpener = false) {
   closes = 0;
   joinCalls = [];
-  rejoinCalls = [];
   clearErrorCalls = 0;
   spyListeners();
   mountLayer();
@@ -344,13 +339,14 @@ describe("Join by room code", () => {
     expect(document.activeElement).toBe(at("bystander"));
   });
 
-  it("still submits the typed code, and still offers the by-code rejoin", () => {
+  it("still submits the typed code, and offers no PIN rejoin any more (LIVE-2D)", () => {
     open();
-    type("JUNO-4T2");
+    expect(field().placeholder).toBe("JUNO-7K4M-Q2ZP");
+    type("JUNO-7K4M-Q2ZP");
     submit();
-    expect(joinCalls).toEqual(["JUNO-4T2"]);
-    click(buttonLabelled("Rejoin seat"));
-    expect(rejoinCalls).toEqual(["JUNO-4T2"]);
+    expect(joinCalls).toEqual(["JUNO-7K4M-Q2ZP"]);
+    expect(buttonLabelled("Rejoin seat")).toBeUndefined();
+    expect(card()!.textContent ?? "").not.toMatch(/\bPIN\b/);
   });
 
   it("still clears the parent's verdict when the code changes, and not when it does not", () => {
@@ -383,10 +379,10 @@ describe("Join by room code, while a join is in flight", () => {
     expect(closes).toBe(0);
   });
 
-  it("still disables the two submit controls, unchanged", () => {
+  it("still disables the submit control, unchanged", () => {
     open();
     expect(buttonLabelled("Join by code")!.disabled).toBe(true);
-    expect(buttonLabelled("Rejoin seat")!.disabled).toBe(true);
+    expect(buttonLabelled("Rejoin seat")).toBeUndefined();
   });
 
   it("still opens with the room-code field focused while busy", () => {
@@ -395,10 +391,6 @@ describe("Join by room code, while a join is in flight", () => {
     expect(document.activeElement).toBe(field());
   });
 });
-
-/* ================================================================== */
-/*  Rejoin by PIN                                                      */
-/* ================================================================== */
 
 /* ================================================================== */
 /*  Structure: the two things that are ordering, not behaviour         */

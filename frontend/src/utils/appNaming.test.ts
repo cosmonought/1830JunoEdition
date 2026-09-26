@@ -151,9 +151,11 @@ describe("the name is stated once", () => {
        `${...}` inside a plain string, and `no-template-curly-in-string` flags every one as a template the
        author forgot to write. The interpolation is the POINT here, so the rule is sidestepped rather than
        silenced -- `APP_NAME}` is just as unambiguous a match. */
+    /* LIVE-2D (RUST-RETIRE-1 2B.3): the Lobby's two chain prompts -- "create room" and "join room" -- went with the
+       on-chain staging lobby they signed for. The three that remain are still read from the constant, and the Lobby
+       signs nothing: a table is a server `room-op`, not a transaction. */
+    expect(fs.readFileSync(path.join(SRC, "components", "Lobby.tsx"), "utf8")).not.toMatch(/: (create|join) room/);
     for (const [file, needle] of [
-      ["components/Lobby.tsx", "APP_NAME}: create room"],
-      ["components/Lobby.tsx", "APP_NAME}: join room"],
       ["context/WalletContext.tsx", "APP_NAME}: authorize session key"],
       ["context/WalletContext.tsx", "APP_NAME}: revoke session key"],
       ["utils/sessionKey.ts", "APP_NAME} move"],

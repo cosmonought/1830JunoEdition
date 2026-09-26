@@ -102,49 +102,29 @@ describe("on a hosted PINNED table the force cannot change canonical state (no b
   });
 });
 
-describe("the shell: the chip and its shortcut ask forcedSignToolInForce (source pins -- App.tsx cannot be mounted headless)", () => {
+/* LIVE-2D (LIVE-2 §9.4, §13.1): THE CHIP, ITS SHORTCUT AND ITS NARRATION HOOK ARE DELETED. The armed stage lived on the
+   legacy room DOCUMENT, which is gone; every table is server-dealt and pinned, where the waiver was always dropped at
+   ingress and refused by the reducer (pinned above). The engine keeps the unpinned legacy force for replays (UR-N28,
+   above); the shell can no longer arm, show or send one. */
+describe("the shell: the forced-sign chip is gone with the room document (LIVE-2D)", () => {
   const APP = readStripped("App.tsx");
 
-  it("the chip renders only for a sandbox host on a board where the force can act", () => {
-    const gate = anchorIndex(APP, "{isSandboxHost && forcedSignToolInForce(sandboxState) && (");
-    const chip = anchorIndex(APP, '{forcedSign ? `⚠ SIGN: ${forcedSign.toUpperCase()}` : "SIGN: OFF"}');
-    expect(gate).toBeLessThan(chip);
-    // No other render path for the chip: exactly one readout.
-    expect(APP.split('"SIGN: OFF"').length - 1).toBe(1);
-    expect(APP).not.toContain("{isSandboxHost && (");
-  });
-
-  it("every tooltip naming a phase window or whom the Sign visits sits inside that gated button", () => {
-    const gate = anchorIndex(APP, "{isSandboxHost && forcedSignToolInForce(sandboxState) && (");
-    const end = anchorIndex(APP, '{forcedSign ? `⚠ SIGN: ${forcedSign.toUpperCase()}` : "SIGN: OFF"}');
-    for (const phrase of ["phases 2-4", "phases 5-D", "MARKED corporation's next run", "Carcosan corporation's next run"]) {
-      const at = anchorIndex(APP, phrase);
-      expect([phrase, at > gate && at < end]).toEqual([phrase, true]);
-      expect([phrase, APP.split(phrase).length - 1]).toEqual([phrase, 1]);
+  it("renders no chip and binds no shortcut", () => {
+    for (const gone of ['"SIGN: OFF"', "cycleForcedSign", "forcedSignToolInForce(", "setSandboxForcedSign", 'event.key.toLowerCase() !== "y"', "forcedSignChipArmed", "nextForcedSign("]) {
+      expect([gone, APP.includes(gone)]).toEqual([gone, false]);
     }
   });
 
-  it("the shortcut's cycle writes nothing on such a board: host, then the board, before the room document", () => {
-    const cycle = APP.slice(
-      anchorIndex(APP, "const cycleForcedSign = useCallback(() => {"),
-      anchorIndex(APP, "}, [forcedSign, isSandboxHost]);"),
-    );
-    expect(cycle).toContain("if (!isSandboxHost) return;");
-    expect(cycle).toContain("if (!forcedSignToolInForce(state)) return;");
-    expect(cycle.indexOf("if (!forcedSignToolInForce(state)) return;")).toBeLessThan(cycle.indexOf("setSandboxForcedSign("));
+  it("carries none of the tooltips that named the Sign's hidden windows (OD-UR-8, D-42)", () => {
+    for (const phrase of ["phases 2-4", "phases 5-D", "MARKED corporation's next run", "Carcosan corporation's next run"]) {
+      expect([phrase, APP.includes(phrase)]).toEqual([phrase, false]);
+    }
   });
 
-  it("the shortcut is not even swallowed on such a board: the listener leaves Ctrl+Shift+Y to the browser there", () => {
-    const listener = APP.slice(
-      anchorIndex(APP, 'if (event.key.toLowerCase() !== "y") return;'),
-      anchorIndex(APP, "}, [isSandboxHost, cycleForcedSign]);"),
-    );
-    expect(listener.indexOf("if (!forcedSignToolInForce(sandboxStateRef.current)) return;")).toBeGreaterThanOrEqual(0);
-    expect(listener.indexOf("if (!forcedSignToolInForce(sandboxStateRef.current)) return;")).toBeLessThan(listener.indexOf("event.preventDefault();"));
-  });
-
-  it("the narration still arms the waiver only on a local board, as S9-1 left it", () => {
-    expect(APP).toContain("const signLocal = before?.rules_engine_version == null;");
-    expect(APP).toContain("const signArmed = sandbox && signLocal ?");
+  it("the narration forces nothing and sends no waiver", () => {
+    expect(APP).toContain("const signForced = null;");
+    expect(APP).toContain("const signForce = {};");
+    expect(APP).not.toContain("debug_force: true");
+    expect(APP).not.toContain("sandboxRoomDocRef");
   });
 });

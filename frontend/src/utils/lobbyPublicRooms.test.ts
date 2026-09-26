@@ -19,8 +19,9 @@
 // button would be testing React rather than the agreement.
 
 import { readStripped } from "./sourceScan";
-import { summariseSandboxRoom, type SandboxRoomSummary } from "./sandboxRoomSummary";
+import type { RoomSummary } from "./roomProtocol";
 import { filterByPace, publicRoomRow, ruleTitlesFor, sortRooms } from "../components/LobbyRoomList";
+import { maxPlayersFor } from "../gameEngine/gameSetup";
 import {
   BANK_SIZE_BY_LENGTH,
   GAME_LENGTH_BLURB,
@@ -39,29 +40,33 @@ const LOBBY = readStripped("components/Lobby.tsx");
 const HOST = readStripped("components/HostSetupCard.tsx");
 const WAITING = readStripped("components/SandboxWaitingRoom.tsx");
 
-const seat = (id: string, isReady = false) => ({ id, nickname: id, isReady });
-
+/** LIVE-2D: a public list entry exactly as the server builds it (`roomSummaryOf`, `server/src/rooms/gameRecord.ts`):
+ *  names and readiness, no seat ids, and `seatCap` is the RECORD's cap -- the board's maximum -- with the host's
+ *  exact count, if any, in `playerCount`. */
 function room(over: {
   code: string;
   status?: "waiting" | "playing";
   seats?: number;
   playerCount?: number | null;
   variants?: Partial<GameVariants>;
-  anteUjuno?: string;
   createdAtMs?: number;
-}): SandboxRoomSummary {
-  const players = [];
-  for (let index = 0; index < (over.seats ?? 1); index += 1) players.push(seat(`p${index}`, index === 0));
-  return summariseSandboxRoom({
+}): RoomSummary {
+  const seats = over.seats ?? 1;
+  const nicknames = Array.from({ length: seats }, (_unused, index) => `p${index}`);
+  const variants = { ...STANDARD_VARIANTS, ...over.variants };
+  return {
+    gameId: `g_${over.code.replace(/[^A-Z0-9]/g, "").toLowerCase()}`,
     code: over.code,
     status: over.status ?? "waiting",
-    hostId: "p0",
-    players,
-    variants: { ...STANDARD_VARIANTS, ...over.variants },
+    hostNickname: "p0",
+    nicknames,
+    readyCount: seats > 0 ? 1 : 0,
+    seated: seats,
+    seatCap: maxPlayersFor(variants),
     playerCount: over.playerCount ?? null,
-    anteUjuno: over.anteUjuno ?? "0",
+    variants,
     createdAtMs: over.createdAtMs ?? 0,
-  });
+  };
 }
 
 describe("public is browsed, private is told (design note #1440)", () => {
@@ -69,14 +74,15 @@ describe("public is browsed, private is told (design note #1440)", () => {
     /* THE DIALOG'S SIDE IS ASSERTED AS AN ABSENCE, which is the only way this claim can be held: a card that
        merely "does not show" a list today is one prop away from showing one again. */
     expect(LOBBY).toContain("<LobbyRoomList");
-    expect(LOBBY).toContain("rooms={sandboxRooms.rooms}");
+    expect(LOBBY).toContain("rooms={publicRooms.rooms}");
+    expect(LOBBY).toContain("const publicRooms = usePublicRooms();");
     expect(CARD).not.toContain("SandboxRoomSummary");
+    expect(CARD).not.toContain("RoomSummary");
     expect(CARD).not.toContain("rooms");
     expect(CARD).not.toContain("onSpectate");
     expect(CARD).not.toContain("join-tab-");
     // What the card keeps is the one thing a list cannot do.
     expect(CARD).toContain('data-testid="join-by-code"');
-    expect(CARD).toContain('data-testid="rejoin-by-code"');
     expect(CARD).toContain("the code is their only door, and they cannot be watched");
   });
 
@@ -87,10 +93,11 @@ describe("public is browsed, private is told (design note #1440)", () => {
     const summary = room({ code: "JUNO-1A1" });
     expect(Object.keys(summary)).not.toContain("visibility");
     expect(LIST).not.toContain("visibility");
+    /* LIVE-2D: the server builds each entry from its GameRecord and builds none for a private table. */
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const server = fs.readFileSync(path.join(__dirname, "../../../server/src/gameServer.ts"), "utf8");
-    expect(server).toContain('doc.visibility !== "public") continue;');
+    const server = fs.readFileSync(path.join(__dirname, "../../../server/src/rooms/gameRecord.ts"), "utf8");
+    expect(server).toContain('if (record.visibility !== "public" || record.join_code === null || record.archived_at !== null) return null;');
   });
 
   it("lets the picture fall into shadow rather than stop at a line", () => {
@@ -100,13 +107,21 @@ describe("public is browsed, private is told (design note #1440)", () => {
     expect(LOBBY).toContain("linear-gradient(rgba(8, 8, 8, 0), #080808)");
   });
 
-  it("rejoin stays its own door, not a row in the list", () => {
-    /* RULED: "Keep Rejoin Game / Rejoin Seat findable as a distinct returning-player path; do not make
-       someone browse public rooms to reclaim a seat." LIVE-2A (LIVE-2 §10.5, §15 #6): the PIN-first button (#1355)
-       is deleted with the server's `find-seats` PIN oracle; the by-code rejoin (#1352) -- code, then the seat's
-       PIN -- stays, in the join dialog and the bar, as the returning player's own door. */
-    expect(LOBBY).toContain("onRejoin={roomDocOnServer() ? handleRejoinSandboxRoom : undefined}");
-    expect(LOBBY).toContain("<SeatPinModal");
+  it("a seat comes back with the session, not a PIN: no seat-PIN door survives anywhere (LIVE-2D)", () => {
+    /* #1352's by-code rejoin -- the code, then the seat's four-digit PIN -- is DELETED with the seat PINs. A seat
+       is this principal's in the server's GameRecord: the same browser gets it back by opening the table again
+       (the stored resume pointer is the table's game id), and moving a seat to another device is LIVE-2E's. */
+    for (const [name, text] of [
+      ["Lobby", LOBBY],
+      ["JoinGameCard", CARD],
+      ["LobbyRoomList", LIST],
+      ["SandboxRoomBar", readStripped("components/SandboxRoomBar.tsx")],
+    ] as const) {
+      for (const gone of ["SeatPinModal", "onRejoin", "handleRejoinSandboxRoom", "rejoin-by-code", "Rejoin seat", "roomDocOnServer"]) {
+        expect([name, gone, text.includes(gone)]).toEqual([name, gone, false]);
+      }
+      expect([name, /\bPIN\b/.test(text)]).toEqual([name, false]);
+    }
     expect(LOBBY).not.toContain("RejoinByPinCard");
     expect(LOBBY).not.toContain("onRejoinByPin");
     expect(LIST).not.toContain("Rejoin");
@@ -127,8 +142,16 @@ describe("a row offers what the server would allow (design note #1440)", () => {
 
     // "Exactly four" is a cap of four, so the fourth seat fills it.
     const exact = publicRoomRow(room({ code: "JUNO-1A3", seats: 4, playerCount: 4 }));
-    expect(exact.seatCap).toBe(4);
     expect(exact.exactCount).toBe(true);
+  });
+
+  it("an 'exactly N' table is full at N, though the server's summary carries the board's cap beside the count", () => {
+    /* LIVE-2D: `RoomSummary.seatCap` is the RECORD's cap (the board's maximum, `record.seat_cap`) and the host's exact
+       count rides in `playerCount` -- the server's own capacity is `exact_players ?? seat_cap`. A row must read the
+       same capacity, or an exact-four table with four seated reads "4/6 exactly" and offers a Join the server can only
+       answer as a watcher admission. */
+    const exact = publicRoomRow(room({ code: "JUNO-1A3", seats: 4, playerCount: 4 }));
+    expect(exact.seatCap).toBe(4);
     expect(exact.full).toBe(true);
   });
 
@@ -170,28 +193,20 @@ describe("a row offers what the server would allow (design note #1440)", () => {
     expect(watch.slice(0, watch.indexOf("},"))).toContain("INK_TEXT_MUTED");
   });
 
-  it("holds the seat claim for a viewer who pressed Watch on a room still waiting", () => {
-    /* ==================================================================
-        #1415's INFERENCE EXPIRED WITH THE DOOR #1441 OPENED
-       ==================================================================
-       The shell claims a seat on arriving at a `waiting` room -- it decided who was a spectator from the
-       room's STATUS, which was true of every door that existed then. Watch on an OPEN table is the first one
-       it is wrong about, and without the flag the button would have seated the very player it invited to
-       watch. Same path, told which of the two things it is. */
+  it("Watch opens the table by its game id and takes no seat -- there is no watch intent to carry (LIVE-2D)", () => {
+    /* #1441/#1442 carried a watch intent so the shell's auto-seat would not seat a viewer who pressed Watch. The
+       auto-seat is gone: a seat is taken at the server by Host, Join or "Take a seat", never by entering a table --
+       so Watch is simply entering, by the id the server listed, with no op in front of it. */
     const app = readStripped("App.tsx");
-    /* Design note #1442: THE SEED IS THE ROOM, not a flag -- see the lifecycle cases below for why. */
-    expect(app).toContain("sandboxWatchSeed?: string | null;");
-    expect(app).toContain("sandboxWatchRoom === sandboxRoomCode ||");
-    expect(app).toContain('sandboxRoom.status !== "waiting" ||');
-    expect(app).toContain("(sandboxRoom.kicked ?? []).includes(localId)");
-    expect(app).toContain("const handleEnterSandbox = useCallback((roomCode?: string | null, watchOnly?: boolean) => {");
-    expect(app).toContain('sandboxWatchSeed={activeGame.mode === "sandbox" ? sandboxWatchRoom : null}');
-    expect(LOBBY).toContain("onWatch={(code) => onEnterSandbox(code, true)}");
+    for (const gone of ["sandboxWatchSeed", "sandboxWatchRoom", "writeSandboxWatchRoom", "readSandboxWatchRoom", "watchOnly"]) {
+      expect([gone, app.includes(gone)]).toEqual([gone, false]);
+    }
+    expect(app).toContain("const handleEnterSandbox = useCallback((gameIdToEnter: string) => {");
+    expect(LOBBY).toContain("onWatch={(gameId) => onEnterSandbox(gameId)}");
+    expect(LIST).toContain("onClick={() => onWatch(row.gameId)}");
     // And the room they land in says why none of its controls are theirs.
-    expect(readStripped("components/SandboxWaitingRoom.tsx")).toContain(
-      "const isWatching = room !== null && me === null && !wasKicked;",
-    );
-    expect(readStripped("components/SandboxWaitingRoom.tsx")).toContain("You are watching this table.");
+    expect(WAITING).toContain("const isWatching = room !== null && me === null && !wasKicked;");
+    expect(WAITING).toContain("You are watching this table.");
   });
 
   it("names the facts the room actually carries, and no others", () => {
@@ -199,17 +214,18 @@ describe("a row offers what the server would allow (design note #1440)", () => {
       room({
         code: "JUNO-1C1",
         seats: 3,
-        anteUjuno: "1500000",
         variants: { mode: "async", length: "long", expandedMap: true, gentleRust: true },
       }),
     );
     expect(row.typeLabel).toBe("18XX+");
     expect(row.paceLabel).toBe("Async");
     expect(row.bankLabel).toBe("$20,000");
-    expect(row.anteLabel).toBe("1.5 JUNO");
     expect(row.rules).toEqual(["Gentle Rust"]);
-    // A playtest ante of zero is not a fact anybody chooses on; it is left out rather than printed 24 times.
-    expect(publicRoomRow(room({ code: "JUNO-1C2" })).anteLabel).toBeNull();
+    expect(row.gameId).toBe("g_juno1c1");
+    /* LIVE-2D: every table on this server is a no-money table, and the summary carries no ante to print. */
+    expect(row).not.toHaveProperty("anteLabel");
+    expect(LIST).not.toContain("anteLabel");
+    expect(LIST).not.toContain("formatJuno");
   });
 
   it("does not name the tray the type already brings", () => {
@@ -319,7 +335,10 @@ describe("twenty-four rooms stay scannable (design note #1440)", () => {
        `handleJoinSandboxRoom` returns the reason as well as setting the bar's error, so both callers can say
        it where the player is looking. */
     expect(LOBBY).toContain("async (raw: string): Promise<string | null> =>");
-    expect(LOBBY).toContain("return answer.reason;");
+    /* LIVE-2D: the reason returned is the player's sentence for the refusal, never the server's raw text. */
+    expect(LOBBY).toContain('const reason = answer.ok ? refusalMessage("internal") : sayRefusal(answer.code, answer.reason);');
+    expect(LOBBY).toContain("return reason;");
+    expect(LOBBY).not.toContain("return answer.reason;");
     expect(LOBBY).toContain("setRoomRefusal(reason === null ? null : { code, reason });");
     expect(LIST).toContain("refusal.code === row.code");
   });

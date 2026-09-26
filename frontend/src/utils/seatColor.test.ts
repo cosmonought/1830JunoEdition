@@ -211,7 +211,10 @@ describe("#1337: the roster resolves to distinct colours", () => {
     expect(readStripped("App.tsx")).toContain("setRoomColors(resolveSeatColors(msg.SetupGame.players));");
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const SERVER = fs.readFileSync(path.join(__dirname, "..", "..", "..", "server", "src", "gameServer.ts"), "utf8");
-    expect(SERVER).toContain("existing.players.some((entry, index) => index !== at && entry.color === wanted)");
+    /* LIVE-2D: the server's `set-profile` (`rooms/roomService.ts`) -- first write wins; a colour another seat holds is
+       refused `color-taken`, and the client withdraws its echo on that answer. */
+    const SERVER = fs.readFileSync(path.join(__dirname, "..", "..", "..", "server", "src", "rooms", "roomService.ts"), "utf8");
+    expect(SERVER).toContain('return refused("color-taken", "Another player has that colour.");');
+    expect(readStripped("App.tsx")).toContain('if (!ok) setPendingSeat((current) => dropSeatKeys(current, ["color"]));');
   });
 });

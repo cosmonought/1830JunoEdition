@@ -23,6 +23,7 @@ import { randomBytes, randomInt } from "crypto";
 
 import { base32Lower } from "../identity/ids";
 import type { GameVariants } from "../../../frontend/src/gameEngine/gameVariants";
+import type { UndoPolicy } from "../../../frontend/src/gameEngine/logRevert";
 
 /* ---------------------------------------------------------------------------
     IDENTIFIERS (LIVE-2 §3.2)
@@ -317,6 +318,9 @@ export interface RoomView {
   seatCap: number;
   variants: GameVariants;
   createdAtMs: number;
+  /** LIVE-2D: the room's undo policy, so the client's Undo button asks exactly the server's question (LIVE-2 §9.2,
+   *  RV-7). A projection of `policy.host_undo` only -- no other policy internal is projected. */
+  undoPolicy: UndoPolicy;
   you: {
     role: "host" | "player" | "member" | "viewer";
     playerId: string | null;
@@ -372,6 +376,7 @@ export function roomViewFor(
     seatCap: record.seat_cap,
     variants: record.variants,
     createdAtMs: record.created_at,
+    undoPolicy: { host_undo: record.policy.host_undo },
     you: { role, playerId: seat?.player_id ?? null, kicked: isKicked(record, principalId), canStart: host && context.canStart },
   };
 }

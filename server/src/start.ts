@@ -21,7 +21,7 @@
 
 import * as path from "path";
 
-import { createGameServer, GAME_SERVER_BIND_HOST, LEGACY_ROOM_HANDLERS } from "./gameServer";
+import { createGameServer, GAME_SERVER_BIND_HOST } from "./gameServer";
 import { createFileRecordStore } from "./rooms/recordStore";
 import { createFileLogStore } from "./fileLogStore";
 import { SESSION_COOKIE_NAME } from "./identity/cookies";
@@ -63,21 +63,13 @@ if (!resolved.ok) {
 }
 const config = resolved.config;
 /* ==================================================================
-    LIVE-2C (LIVE-2 §13.4 step 3): PRODUCTION IS NOT STARTABLE WHILE THE LEGACY ROOM PROTOCOL IS IN THE BUILD
+    LIVE-2D (LIVE-2 §13.4 step 4): PRODUCTION IS STARTABLE -- THE LEGACY ROOM PROTOCOL IS GONE
    ==================================================================
-   The legacy room handlers (`room-write`, `seat-pin`, `claim-seat`, `lobby-*`, the `room`-keyed hello, chat and
-   presence) are registered in DEVELOPMENT only, and `createGameServer` refuses to build a production server with any
-   of them. This build still carries them for local testing, so a production start is refused here -- exit 2, before
-   the data directory is touched -- until LIVE-2D deletes them (and empties `LEGACY_ROOM_HANDLERS`). */
-if (config.mode === "production" && LEGACY_ROOM_HANDLERS.length > 0) {
-  // eslint-disable-next-line no-console
-  console.error(
-    `Refusing to start: GS_MODE=production is not available in this build -- it still carries the legacy room protocol ` +
-      `(${LEGACY_ROOM_HANDLERS.length} handlers: ${LEGACY_ROOM_HANDLERS.join(", ")}), which production never serves. ` +
-      "LIVE-2D removes it; until then run GS_MODE=development for local play.",
-  );
-  process.exit(2);
-}
+   LIVE-2C refused `GS_MODE=production` here while the build still carried the legacy room handlers. LIVE-2D deleted
+   them (`LEGACY_ROOM_HANDLERS` is empty and pinned so by a test), so a production start with a valid, secure
+   configuration now runs -- every LIVE-2B refusal above is unchanged: the mode is required, insecure flags exit 2,
+   origins must be https and exact, the trusted proxy hops must be stated, and the development authenticator can
+   never be built here. */
 /* `createDevAuthenticator` reads GS_MODE at call time; a mode given as `--mode` is made the environment's too. */
 process.env.GS_MODE = config.mode;
 
@@ -198,8 +190,6 @@ async function main(): Promise<void> {
       writerCheck: () => held.verify(),
       onRestartRequired: (key, detail) => failFast(`the game records (${key})`, detail),
     }),
-    /* The legacy room protocol: development only (LIVE-2C). Production never reaches this line (refused above). */
-    legacyRoomProtocol: config.mode === "development",
     legacyLogs,
     onRestartRequired: failFast,
   });
@@ -244,10 +234,10 @@ function identityBanner(): string {
   const posture =
     config.mode === "development"
       ? "  DEVELOPMENT IDENTITY: each tab is who its ?dev_claim= says, loopback only (Origin, Host and peer) -- NEVER point a tunnel at this server\n" +
-        "  rooms: the server-owned protocol (room-op, GameRecords in games/) and, for local testing only, the legacy room protocol beside it\n" +
-        "  remote playtests are not supported by this revision: use the last pre-LIVE-2B revision (90838071) until LIVE-2D\n"
+        "  rooms: the server-owned protocol (room-op, GameRecords in games/) -- the same one production runs\n" +
+        "  remote playtests: run GS_MODE=production behind the tunnel (see PLAYTEST_TRANSPORT.md), never this mode\n"
       : `  PRODUCTION IDENTITY: the ${SESSION_COOKIE_NAME} cookie (Secure; HttpOnly; SameSite=Strict), bootstrapped at POST /gs/api/session; trusted proxy hops ${config.trustedProxyHops}\n` +
-        "  rooms: the server-owned protocol only (room-op); the legacy room protocol is not registered\n";
+        "  rooms: the server-owned protocol (room-op, GameRecords in games/)\n";
   return (
     posture +
     `  allowed origins: ${config.allowedOrigins.join(", ")}${config.notes.length > 0 ? ` (${config.notes.join("; ")})` : ""}\n` +
@@ -262,12 +252,13 @@ function printBanner(instanceId: string): void {
     `1830 game server listening on ws://${GAME_SERVER_BIND_HOST}:${port} (build "${build}", GS_MODE=${config.mode})\n` +
       identityBanner() +
       `  compiled ${builtAt} UTC -- if a fix you just made is not in this stamp, the server was not rebuilt\n` +
-      `  rooms stored in ${dataDir} -- one .log.jsonl per room, synced before any client is answered (#1250)\n` +
+      `  games stored in ${dataDir} -- one .log.jsonl per game and games/<game_id>.json records, synced before any client is answered (#1250)\n` +
       `  data directory locked by instance ${instanceId} (pid ${process.pid}); a second server on it is refused (LIVE-3B)\n` +
       `  rules engine version ${RULES_ENGINE_VERSION} (supports [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]); ` +
       (legacyLogs === "development-corpus"
-        ? "LEGACY LOGS ADMITTED (--legacy-logs development-corpus): unpinned rooms replay under this engine (#1520)"
-        : "unpinned (legacy) rooms are held, not replayed -- pass --legacy-logs development-corpus for local playtests (#1520)"),
+        ? "LEGACY LOGS ADMITTED (--legacy-logs development-corpus): an unpinned log replays under this engine (#1520)"
+        : "an unpinned (legacy) log is held, not replayed (#1520)") +
+      "\n  legacy JUNO-XXX rooms are not served (LIVE-2D); read their logs with `npm run replay` / `npm run logDoctor`",
   );
 }
 

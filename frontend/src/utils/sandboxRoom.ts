@@ -16,50 +16,25 @@
 // conventions are unchanged, so no caller moved.
 //
 // See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #0, #1, #2
+//
+// ==================================================================
+//  LIVE-2D: THE ROOM IS THE SERVER'S; THIS FILE ASKS, IT NEVER WRITES
+// ==================================================================
+//
+// The room-document half of this file -- `hostSandboxRoom` minting a `JUNO-XXX` code in the browser,
+// `upsertSandboxPlayer` rewriting a seat, `markSandboxRoomPlaying` latching the status, `toSetupPlayers` handing the
+// client's own roster to the deal -- is DELETED with the legacy protocol. A table is created, joined, seated, readied
+// and started by named operations (`roomOp`, `roomLink.ts`) that the server authorizes against its GameRecord, and
+// what the waiting room renders is the server's `RoomView`. The pure readers below (`waitingRoomBlock`,
+// `waitingRoomNotice`, `canStartSandboxGame`) read a RoomView and say the same thing the server's start gate says,
+// in the same words; they grey a control, and the server's refusal is still the answer.
 
-import { STANDARD_VARIANTS, type GameVariants } from "../gameEngine/gameVariants";
-// Design note #1215: the room document lives on the server. The routing is in this file so no caller has any.
-import { hostRoomDoc, joinRoomDoc, retireRoomDocLink, roomDocOnServer, subscribeRoomDoc, writeRoomDoc } from "./roomDocLink";
-import { localPlayerId } from "./seatPin";
-
-/* Design note #530: `GameplayExecuteMsg` is no longer imported here --
-   `SandboxLogMsg` is the union of it and the setup event, and this module
-   only ever handles the union. */
-import type { SandboxLogMsg, SetupPlayer } from "../gameEngine/gameSetup";
+import type { GameVariants } from "../gameEngine/gameVariants";
+import { roomOp } from "./roomLink";
+import { type RoomOpResult, type RoomView } from "./roomProtocol";
+import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 // #1415: the room's terms and their readers, in a module the server can import as values.
-import { DEFAULT_ROOM_SETUP, seatsNeeded, type RoomSetup, type RoomVisibility } from "./sandboxRoomSummary";
-// Design note #1128: the stage union is owned by the module that resolves it, not redeclared here.
-import type { ForcedSignStage } from "../gameEngine/yellowSign";
-
-
-/* The alphabet drops 0/O, 1/I/L and 5/S because the code is read aloud; the JUNO- prefix is part of it. The harness asserts the PROPERTY, since the first draft kept 0 despite the rule written to remove it.
-   See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #520 */
-const ROOM_CODE_ALPHABET = "ABCDEFGHJKMNPQRTUVWXYZ2346789";
-const ROOM_CODE_LENGTH = 3;
-const ROOM_CODE_PREFIX = "JUNO-";
-
-/** A fresh room code, e.g. `JUNO-4T2`. */
-export function generateRoomCode(): string {
-  let out = "";
-  for (let i = 0; i < ROOM_CODE_LENGTH; i += 1) {
-    out += ROOM_CODE_ALPHABET[Math.floor(Math.random() * ROOM_CODE_ALPHABET.length)];
-  }
-  return `${ROOM_CODE_PREFIX}${out}`;
-}
-
-/** Forgiving on input, strict on output: a bad code resolves to null rather than to a plausible room nobody is in.
- *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #520 */
-export function parseRoomCode(raw: string): string | null {
-  const cleaned = raw.trim().toUpperCase().replace(/\s+/g, "");
-  const body = cleaned.startsWith(ROOM_CODE_PREFIX)
-    ? cleaned.slice(ROOM_CODE_PREFIX.length)
-    : cleaned;
-  if (body.length !== ROOM_CODE_LENGTH) return null;
-  for (const character of body) {
-    if (!ROOM_CODE_ALPHABET.includes(character)) return null;
-  }
-  return `${ROOM_CODE_PREFIX}${body}`;
-}
+import { DEFAULT_ROOM_SETUP, seatsNeeded, type RoomSetup } from "./sandboxRoomSummary";
 
 /** One entry in the room's append-only log. */
 export interface SandboxAction {
@@ -132,63 +107,6 @@ export function appliedPrefixHolds(
     if (appliedIds[at] !== history[at].id) return false;
   }
   return true;
-}
-
-/** Creates the room document. Returns the code, or `null` when no game server is configured -- which is a
- *  legitimate state (the sandbox runs with no backend at all), so the caller reports it rather than this
- *  throwing. */
-export async function hostSandboxRoom(
-  hostId: string,
-  nickname: string,
-  /* #1415: the terms, chosen before the room exists. Defaults keep every older caller (and test) exactly as
-     it was: the printed game, public, any number of players, no ante. */
-  variants: GameVariants = STANDARD_VARIANTS,
-  setup: RoomSetup = DEFAULT_ROOM_SETUP,
-): Promise<string | null> {
-  /* ==================================================================
-      DESIGN NOTE 1215: SIX FUNCTIONS THAT ANSWER TO THE SERVER
-     ==================================================================
-     THE BRANCH IS HERE RATHER THAN AT THE CALL SITES, and that is the whole design. These six have callers in
-     `Lobby.tsx` and in five places in `App.tsx` -- an effect, a join handler, and three waiting-room controls
-     -- and routing at each of them would have meant a dozen edits to the file this migration exists to stop
-     editing. #1213 made the same choice for the log: `serverLink` was shaped like `appendSandboxAction` so
-     the shell could not tell them apart.
-     THE CODE IS MINTED LOCALLY. There is nothing to ask for: a room code is a name, not an allocation, and a
-     round trip to learn one would be a round trip that can fail.
-     ==================================================================
-      LIVE-2A (LIVE-2 §13.4 step 1): AND IT MAY ALREADY BE TAKEN
-     ==================================================================
-     The server no longer lets `host` overwrite a room that exists (a host write used to take over any room by its
-     code). So the create is now a write with an answer: the room this tab hosted, or `room-code-taken` -- and on
-     that, a fresh code, up to five times. With 24,389 three-symbol codes a collision is rare; five in a row is
-     a server that is full of rooms, and is said so. LIVE-2C replaces the client-minted code with a server-minted
-     game id and join code. */
-  if (!roomDocOnServer()) return null;
-  for (let attempt = 0; attempt < HOST_CODE_ATTEMPTS; attempt += 1) {
-    const code = generateRoomCode();
-    const answer = await hostRoomDoc(code, hostId, {
-      op: "host",
-      hostId,
-      nickname,
-      variants,
-      visibility: setup.visibility,
-      playerCount: setup.playerCount,
-      anteUjuno: setup.anteUjuno,
-    });
-    if (answer.ok) return code;
-    retireRoomDocLink(code);
-    if (!answer.taken) throw new Error(answer.reason);
-  }
-  throw new Error("Could not find a free room code. Try again in a moment.");
-}
-
-/** LIVE-2A: how many fresh codes a host tries before giving up (LIVE-2 §13.4 step 1). */
-export const HOST_CODE_ATTEMPTS = 5;
-
-/** #1415: the host removes a joiner. Before the game starts only; the server checks who is asking. */
-export async function kickSandboxPlayer(roomCode: string, playerId: string): Promise<void> {
-  if (!roomDocOnServer()) return;
-  writeRoomDoc(roomCode, localPlayerId(), { op: "kick", playerId });
 }
 
 /** The room field that hands out indices -- design note #1026. */
@@ -284,168 +202,54 @@ export function subscribeSandboxLog(
   return () => undefined;
 }
 
-/* The room document is the ANTEROOM: unordered lobby facts where a late write simply wins. status: "playing" is the latch, and everything after it comes from the log.
-   See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #527 */
+/** The room's status as the waiting room reads it: `waiting` until the deal, `playing` from it (RoomView.status). */
 export type SandboxRoomStatus = "waiting" | "playing";
 
-export interface SandboxRoomPlayer {
-  id: string;
-  nickname: string;
-  isReady: boolean;
-  /** Design note #569: this seat's chosen colour, or absent for "assign me
-   *  one". Absent rather than pre-filled so the roster can tell a deliberate
-   *  choice from a default -- only the former should block another player
-   *  from picking it. */
-  color?: string;
-  /** Design note #1341: whether this seat has a PIN on the server. BROADCAST; the PIN itself never is. Read
-   *  by the roster to offer "Rejoin" on a seat that can be rejoined, and "Set PIN" on one that cannot yet. */
-  hasPin?: boolean;
+/* The pure readers of the table's terms live in `sandboxRoomSummary.ts`; re-exported here so callers keep one import. */
+export { DEFAULT_ROOM_SETUP, roomSeatCap, roomVisibility, seatsNeeded, type RoomSetup, type RoomVisibility } from "./sandboxRoomSummary";
+
+/* ==================================================================
+    LIVE-2D: THE FOUR ASKS THE LOBBY AND THE SHELL MAKE
+   ================================================================== */
+
+/** Host a table (`room-op create`). The server mints the game id, the `JUNO-XXXX-XXXX` code and the host's seat,
+ *  and answers `{gameId, code, playerId}`. A stake other than "0" is sent as asked and refused
+ *  `money-games-disabled` by this server -- the client never decides that a stake is allowed. */
+export async function createHostedGame(
+  variants: GameVariants,
+  setup: RoomSetup = DEFAULT_ROOM_SETUP,
+  nickname = "Host",
+): Promise<RoomOpResult> {
+  const { rules: _rules, ...terms } = variants as GameVariants & { rules?: unknown };
+  void _rules;
+  const stake = /^0*$/.test(setup.anteUjuno ?? "0") ? undefined : setup.anteUjuno;
+  return roomOp({
+    type: "create",
+    visibility: setup.visibility,
+    exactPlayers: setup.playerCount,
+    variants: terms as GameVariants,
+    nickname,
+    ...(stake !== undefined ? { stake } : {}),
+  });
 }
 
-export interface SandboxRoomDoc {
-  code: string;
-  /** The `id` of whoever opened the room -- the only seat that may start. */
-  hostId: string;
-  status: SandboxRoomStatus;
-  players: SandboxRoomPlayer[];
-  /* ==================================================================
-      DESIGN NOTE 1341: THE SEAT PIN -- A ROOM-SCOPED KEY TO A PLAYER ID
-     ==================================================================
-     ASKED: playtests span hours and a player may move from a laptop to an iPad "without losing their seat or
-     requiring us to build a massive, permanent identity database right now."
-     THE SEAT IS THE PLAYER ID. Every action is authored by a `p-xxxx` id (#549), the board keys cash and
-     holdings by it, and a browser's id lives in `sessionStorage` (#528) -- so a second device is simply a
-     device with a different id, and "rejoining a seat" is that device ADOPTING the seat's id. The PIN is what
-     gates the adoption: four digits chosen by the seat's owner, held by the server against the id, demanded
-     from any connection that later claims that id (`hello` / `room-hello`) and from a `claim-seat` frame that
-     wants to take it over. On a match the server tells the old connection it has been superseded and closes
-     it; the new device writes the id and the PIN into its own `sessionStorage` and reloads, and the log
-     rebuilds the game for it as it would for any refresh (#551).
-     SERVER-ONLY FIELD. `seatPins` is persisted in the room file and NEVER put on the wire -- `publicDoc`
-     strips it and stamps `hasPin` on each player instead. Plain strings, per the ruling: closed playtests,
-     no hashing, a key to a seat in one room and to nothing else. */
-  seatPins?: Record<string, string>;
-  /* ==================================================================
-      DESIGN NOTE 910: THE HOUSE RULES BELONG TO THE ROOM, NOT TO THE HOST'S BROWSER
-     ==================================================================
-     REPORTED: "there are no options visible in the Lobby to actually select them."
-     AND THE CONTROLS WERE REAL -- in the wrong lobby. #902 put them on `Lobby.tsx`'s create-room form, which
-     builds a `RoomDoc` for the on-chain staging path. The screen a table actually starts a sandbox game from
-     is `SandboxWaitingRoom`, backed by THIS document, and `handleStartSandboxGame` dispatched
-     `SetupGame: { players: seated }` with no variants at all. So the schema was wired end to end along a road
-     nobody drives, and the road they do drive carried nothing.
-     ON THE ROOM DOCUMENT, which is the part worth stating as a rule: every seat is subscribed to it, so the
-     variants are visible to everyone BEFORE they ready up. A table's house rules are terms rather than
-     preferences -- #902 -- and terms only one person can see are not terms. Holding them in the host's React
-     state would show them to the host alone and hand everybody else a different game at the deal. */
-  variants: GameVariants;
-  /* ==================================================================
-      DESIGN NOTE 1128: THE DEBUG FLAG IS ON THE ROOM FOR #910's REASON
-     ==================================================================
-     RULED: "in the game room, but only the host should be able to see/trigger it, and it should trigger on
-     the next available window, whoever that player is."
-     THOSE TWO HALVES ARE WHY IT CANNOT LIVE IN THE HOST'S BROWSER. The sign is resolved by the client
-     DISPATCHING the run -- so a flag in React state would be armed on one machine and read on another, and
-     would simply never fire unless the host happened to be the acting player. #910 already made this exact
-     argument about the house rules: "holding them in the host's React state would show them to the host alone
-     and hand everybody else a different game at the deal."
-     ONE FIELD, NOT A QUEUE. Arming twice replaces rather than stacks; the tool is "make the next one happen",
-     and a backlog of forced events is not a thing a playtest wants to reason about.
-     CLEARED BY WHOEVER CONSUMES IT, in the same breath as the run that used it. The board is turn-based, so
-     the acting client is unique and there is no race worth guarding -- and if a write were somehow lost, the
-     worst case is the stage fires twice, which for a debug tool is a nuisance and not a corruption. */
-  forcedSign: ForcedSignStage | null;
-  /* ==================================================================
-      DESIGN NOTE 1415: THE TABLE'S TERMS ARE SET BEFORE THE ROOM EXISTS
-     ==================================================================
-     ASKED: Host Game opens a setup flow -- game type, pace, public or private, then the house rules, then
-     "Create Room" -- and the waiting room shows the host's choices as terms rather than controls. Join Game
-     lists every open PUBLIC room. A host may want exactly N players, and may remove a joiner.
-     FOUR MORE FIELDS ON THE DOCUMENT, all written once by the `host` op and read by everyone: `visibility`
-     decides whether the room is listed; `playerCount` is `null` for "any, two or more" or the exact number
-     of seats the host wants (the server refuses a join past it and Start waits for it); `anteUjuno` is the
-     deposit each seat makes on Ready -- a placeholder figure until the wallet is wired, carried now so the
-     card, the confirmation and the receipt all read one number; `kicked` is who the host removed, so a kick
-     is not merely a nudge. All optional on the type because rooms persisted before this carry none of them,
-     and `roomVisibility` / `roomSeatCap` supply the reading for those. */
-  visibility?: RoomVisibility;
-  playerCount?: number | null;
-  anteUjuno?: string;
-  createdAtMs?: number;
-  kicked?: string[];
+/** Join by code (`room-op join`): with a seat (`takeSeat`), or -- a public table -- to watch. The server answers
+ *  `{gameId, playerId, code}`; `playerId` is `null` for a watcher. */
+export function joinHostedGame(code: string, takeSeat: boolean): Promise<RoomOpResult> {
+  return roomOp({ type: "join", code, takeSeat });
 }
 
-/* The pure readers of these fields live in `sandboxRoomSummary.ts` so the server can import them as values;
-   re-exported here so client callers keep one import. */
-export {
-  DEFAULT_ROOM_SETUP,
-  roomSeatCap,
-  roomVisibility,
-  seatsNeeded,
-  summariseSandboxRoom,
-  type RoomSetup,
-  type RoomVisibility,
-  type SandboxRoomSummary,
-} from "./sandboxRoomSummary";
-
-/** Subscribes to the room document -- the waiting room's own state. */
-export function subscribeSandboxRoom(
-  roomCode: string,
-  onRoom: (room: SandboxRoomDoc | null) => void,
-  onError?: (message: string) => void,
-): () => void {
-  // #1215. The server's frame is already this shape, so there is nothing to translate.
-  if (!roomDocOnServer()) return () => undefined;
-  return subscribeRoomDoc(roomCode, localPlayerId(), onRoom, onError);
+/** The game id a successful create / join answered with, or `null`. */
+export function gameIdOf(result: RoomOpResult): string | null {
+  return result.ok && typeof result.data.gameId === "string" ? result.data.gameId : null;
 }
 
-/** One writer applying one op at a time: the in-place rule (#541) lives in the server's `applyRoomWrite`. */
-export async function upsertSandboxPlayer(
-  roomCode: string,
-  player: SandboxRoomPlayer,
-): Promise<boolean> {
-  if (!roomDocOnServer()) return false;
-  writeRoomDoc(roomCode, player.id, { op: "upsert-player", player });
-  return true;
-}
-
-/** #1415: take a seat, and hear whether the room gave one. `upsertSandboxPlayer` stays fire-and-forget for the
- *  seat's own later writes (a rename, a Ready); a first join is the write the server may refuse -- full table,
- *  kicked, already started -- and the joiner must not be walked into a waiting room that does not hold them. */
-export async function joinSandboxRoom(
-  roomCode: string,
-  player: SandboxRoomPlayer,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
-  if (!roomDocOnServer()) return { ok: false, reason: "No game server is configured in this build." };
-  return joinRoomDoc(roomCode, player.id, player);
-}
-
-/** Design note #1128: arms or clears the forced-sign flag.
- *
- *  LIVE-2A: A NO-OP. The server's `forced-sign` room write is DELETED (LIVE-2 §9.1, §9.4) -- the waiver it armed is
- *  dropped and refused on every pinned (server-dealt) table anyway, and the chip that calls this renders only on an
- *  unpinned Unpredictable Revenue board (`forcedSignToolInForce`). Kept as a function so its two callers stand until
- *  LIVE-2D removes the chip; it sends nothing, so it can never draw a `bad-frame`.
- *  (`setSandboxRoomVariants`, which had no caller since #1415, is deleted with the `variants` write.) */
-export async function setSandboxForcedSign(
-  roomCode: string,
-  stage: ForcedSignStage | null,
-): Promise<void> {
-  void roomCode;
-  void stage;
-}
-
-/** Latches the room into play. Design note #527: the handover.
- *  LIVE-2A: the server now sets `status: "playing"` itself when the deal is committed; this write is answered as a
- *  server-derived echo (and repairs a room a crash left `waiting` behind its deal). LIVE-2D deletes it. */
-export async function markSandboxRoomPlaying(roomCode: string): Promise<void> {
-  if (!roomDocOnServer()) return;
-  writeRoomDoc(roomCode, localPlayerId(), { op: "status", status: "playing" });
-}
+/** What a waiting-room reader needs of a room -- a structural subset of `RoomView`. */
+export type WaitingRoomLike = Pick<RoomView, "status" | "players" | "playerCount" | "variants">;
 
 /** Both conditions: all ready AND enough players. One person alone satisfies "all ready" trivially, and 1830 needs two.
  *  See docs/ai_architecture/firebase_middleware.md - sandboxRoom.ts #527 */
-export function canStartSandboxGame(room: SandboxRoomDoc | null, minPlayers: number): boolean {
+export function canStartSandboxGame(room: WaitingRoomLike | null, minPlayers: number): boolean {
   if (!room || room.status !== "waiting") return false;
   if (room.players.length < seatsNeeded(room, minPlayers)) return false;
   return room.players.every((player) => player.isReady);
@@ -476,7 +280,7 @@ export function canStartSandboxGame(room: SandboxRoomDoc | null, minPlayers: num
 export type WaitingRoomBlock = "need-players" | "need-ready" | "host-to-start" | "not-waiting";
 
 export function waitingRoomBlock(
-  room: SandboxRoomDoc | null,
+  room: WaitingRoomLike | null,
   minPlayers: number,
 ): WaitingRoomBlock {
   if (!room || room.status !== "waiting") return "not-waiting";
@@ -491,7 +295,7 @@ export function waitingRoomBlock(
  *  player who has not pressed Ready has not. Telling them what the room lacks before they have done their own
  *  part would read as a refusal of a button they have not tried. */
 export function waitingRoomNotice(
-  room: SandboxRoomDoc | null,
+  room: WaitingRoomLike | null,
   minPlayers: number,
   viewer: { isHost: boolean; isReady: boolean },
 ): string | null {
@@ -511,20 +315,3 @@ export function waitingRoomNotice(
       return null;
   }
 }
-
-/** The waiting room's roster, as the setup payload wants it. */
-export function toSetupPlayers(room: SandboxRoomDoc): SetupPlayer[] {
-  return room.players.map((player) => ({
-    id: player.id,
-    nickname: player.nickname,
-    // Design note #569: carried into the game, so every client paints the
-    // same seat the same colour.
-    color: player.color,
-  }));
-}
-
-/* Design note #1341: the player-id store, `adoptSeat` and `forgetSeat` live in `seatPin.ts` now, beside the
-   PIN and token they travel with -- `roomDocLink.ts` needs `forgetSeat`, and this module imports
-   `roomDocLink.ts`, so the identity block moved to the leaf rather than closing a cycle. Re-exported here so
-   every existing import of `localPlayerId` stands. */
-export { localPlayerId, adoptLocalPlayerId, adoptSeat, forgetSeat } from "./seatPin";

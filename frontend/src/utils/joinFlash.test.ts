@@ -56,18 +56,23 @@ describe("joining holds until the room answers", () => {
 
   it("puts that gate BEFORE the waiting-room gate", () => {
     /* ORDER IS THE FIX. Both conditions can be false at once -- that is the whole bug -- so the unresolved
-       check has to come first or the fall-through still reaches the board. */
+       check has to come first or the fall-through still reaches the board.
+       LIVE-2D: the waiting-room gate reads the view's LIFECYCLE, and a table LOST to this tab (kicked, cancelled,
+       expired, a private deal without it) is said before either -- a loss also resolves the wait. */
+    const lost = CODE.indexOf("if (sandbox && sandboxRoomCode && roomLost !== null) {");
     const unresolved = CODE.indexOf("!sandboxRoomResolved");
-    const waiting = CODE.indexOf('sandboxRoom?.status === "waiting"');
+    const waiting = CODE.indexOf('sandboxRoom?.lifecycle === "waiting"');
+    expect(lost).toBeGreaterThan(-1);
     expect(unresolved).toBeGreaterThan(-1);
     expect(waiting).toBeGreaterThan(-1);
+    expect(lost).toBeLessThan(unresolved);
     expect(unresolved).toBeLessThan(waiting);
   });
 
   it("offers a way out of the wait", () => {
     /* A screen with no exit is how a wrong room code becomes a stuck tab. Cancel leaves the room, which is
        the same handler the room bar uses. */
-    const gate = CODE.slice(CODE.indexOf("!sandboxRoomResolved"), CODE.indexOf('sandboxRoom?.status === "waiting"'));
+    const gate = CODE.slice(CODE.indexOf("!sandboxRoomResolved"), CODE.indexOf('sandboxRoom?.lifecycle === "waiting"'));
     expect(gate).toContain("handleLeaveSandboxRoom");
   });
 });
@@ -75,13 +80,15 @@ describe("joining holds until the room answers", () => {
 describe("the waiting room still works the way it did", () => {
   it("keeps its own condition", () => {
     // #764 adds a gate ahead of this one; it must not have changed what this one asks.
-    expect(CODE).toContain('if (sandbox && sandboxRoomCode && sandboxRoom?.status === "waiting") {');
+    /* LIVE-2D: the server's lifecycle, not the document's status -- `status` stays "waiting" for a cancelled or
+       expired table, which must not be drawn as a waiting room. */
+    expect(CODE).toContain('if (sandbox && sandboxRoomCode && sandboxRoom?.lifecycle === "waiting") {');
   });
 
   it("still starts the room doc at null", () => {
     /* The resolved flag is ADDITIONAL, not a replacement. `null` remains the right value for "no such room",
        which is a real state a bad code produces and which the waiting-room gate correctly declines. */
-    expect(CODE).toContain("useState<SandboxRoomDoc | null>(null)");
+    expect(CODE).toContain("useState<RoomView | null>(null)");
   });
 });
 
@@ -104,41 +111,27 @@ describe("the waiting room still works the way it did", () => {
 // THIS FILE, because #764 is the other half of the same screen: that note made joining WAIT for the room to
 // answer, and this one makes the room have something to say.
 
-describe("joining a room seats you in it (design note #856)", () => {
-  it("writes the local player when the roster does not have them", () => {
-    expect(CODE).toContain("void upsertSandboxPlayer(sandboxRoomCode, {");
-    expect(CODE).toContain("sandboxRoom.players.some((player) => player.id === localId)");
+describe("joining a room seats you in it (design note #856; LIVE-2D: the server seats you)", () => {
+  /* #856's diagnosis stands -- a joiner nobody had written into the roster could not be seen or started with --
+     and LIVE-2D moves the fix to where the roster lives. Join is `room-op join {code, takeSeat: true}`: the server
+     seats the principal in its GameRecord and pushes a fresh RoomView to every reader, the host included. There is
+     no client-side seat write left, so there is no loop to guard and no roster to wait for. */
+  it("asks the server for a seat when joining by code", () => {
+    expect(CODE).toContain("const answer = await joinHostedGame(code, true);");
+    expect(CODE).toContain("enterHostedGame(joined);");
   });
 
-  it("waits for the first snapshot before deciding they are absent", () => {
-    /* #764's third state, reused: `null` means both "no such room" and "have not heard yet", and writing a
-       seat into the second one would be answering a question nobody has asked yet. */
-    expect(CODE).toContain("if (!sandboxRoomResolved || !sandboxRoom) return;");
+  it("learns every change, a joiner included, from the server's pushed view", () => {
+    const watch = CODE.slice(CODE.indexOf("return watchRoom(sandboxRoomCode, {"), CODE.indexOf("const replayingRef"));
+    expect(watch).toContain("onView: (view) => {");
+    expect(watch).toContain("setSandboxRoom(view);");
   });
 
-  it("claims the room through a ref so the write cannot loop", () => {
-    /* `upsertSandboxPlayer` is a read-modify-write transaction and this effect depends on the roster it
-       writes. Without the guard, every snapshot triggers another write, which triggers another snapshot. */
-    expect(CODE).toContain("const seatedRoomRef = useRef<string | null>(null);");
-    expect(CODE).toContain("if (seatedRoomRef.current === sandboxRoomCode) return;");
-  });
-
-  it("claims the room for someone already seated, rather than rewriting them", () => {
-    /* THE HOST'S CASE, and a rejoin. Writing over an existing entry would reset a nickname and a colour the
-       player had already chosen -- #569's rule that the upsert REPLACES, so a field left out is erased. */
-    const effect = CODE.slice(
-      CODE.indexOf("const seatedRoomRef"),
-      CODE.indexOf("const replayingRef"),
-    );
-    expect(effect.length).toBeGreaterThan(0);
-    const guard = effect.indexOf("players.some((player) => player.id === localId)");
-    const write = effect.indexOf("void upsertSandboxPlayer");
-    expect(guard).toBeGreaterThan(-1);
-    expect(write).toBeGreaterThan(guard);
-  });
-
-  it("re-arms when the room code changes", () => {
-    // Leaving and joining a second room must seat you there too.
-    expect(CODE).toContain("seatedRoomRef.current = null;");
+  it("writes no seat of its own and needs no loop guard (#856's effect is gone)", () => {
+    for (const gone of ["upsertSandboxPlayer", "seatedRoomRef", "sandboxSeatRef.current || \"Player\""]) {
+      expect([gone, CODE.includes(gone)]).toEqual([gone, false]);
+    }
+    /* The only seat op the shell sends by itself is the watcher's explicit "Take a seat". */
+    expect(CODE.match(/type: "take-seat"/g) ?? []).toHaveLength(1);
   });
 });

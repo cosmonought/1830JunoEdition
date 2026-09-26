@@ -36,68 +36,78 @@ const BOOLEAN_FLAGS = (Object.keys(STANDARD_VARIANTS) as Array<keyof GameVariant
   (key) => typeof STANDARD_VARIANTS[key] === "boolean",
 );
 
-describe("the room document carries the table's house rules (design note #910)", () => {
+/** A server source, comment-stripped (read-only). */
+function serverSource(relative: string): string {
+  const fs = require("fs") as typeof import("fs");
+  const path = require("path") as typeof import("path");
+  return fs
+    .readFileSync(path.join(__dirname, "../../../server/src", relative), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+/* LIVE-2D: THE ROOM DOCUMENT IS GONE; THE CHAIN #910 PINNED RUNS THROUGH THE SERVER NOW. The host's `create` op carries
+   the variants; the server stores them on its GameRecord (every seat reads them off the RoomView), and at Start the
+   SERVER builds the `SetupGame` from that record -- the one deal every client replays. */
+describe("the table's house rules travel with `create` and live on the server's record (design note #910, LIVE-2D)", () => {
   const source = readStripped("utils/sandboxRoom.ts");
 
   it("is really the module", () => {
     // #490a: an absence proves nothing about a file that failed to load.
-    expect(source).toContain("SandboxRoomDoc");
+    expect(source).toContain("export async function createHostedGame(");
   });
 
-  it("reads variants off the document rather than defaulting per client", () => {
-    /* THE POINT OF PUTTING THEM ON THE ROOM. Every seat is subscribed to it, so the host and the guests are
-       looking at one answer -- and a guest pressing Ready is agreeing to terms they can see. Held in the
-       host's component state instead, they would be visible to one person and applied to everybody. */
-    /* #1361b: the document lives on the game server and reaches every seat as one frame, so there is no
-       per-client parse to default in; the writer sends the whole object and the server stores the whole
-       object (#910: "one agreement, never a field patch"). */
-    /* LIVE-2A (LIVE-2 §9.1, §13.2): the variants are FIXED WHEN THE ROOM IS HOSTED -- the `host` write carries the
-       whole object, the server stores it with the room, and every seat reads it off the one document. The
-       `variants` rewrite (no caller since #1415) is deleted, so no later write can change a table's terms. */
-    expect(source).toContain('op: "host",');
+  it("sends the whole terms once, when the table is created, and the server stores them as sent", () => {
+    /* THE POINT OF PUTTING THEM ON THE TABLE. Every seat reads the server's one copy, so the host and the guests
+       are looking at one answer -- and a guest pressing Ready is agreeing to terms they can see. */
+    const create = sliceBetween(source, "export async function createHostedGame(", "\n}");
+    expect(create).toContain('type: "create",');
+    expect(create).toContain("variants: terms as GameVariants,");
     expect(source).not.toContain('op: "variants"');
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const SERVER = fs.readFileSync(path.join(__dirname, "../../../server/src/gameServer.ts"), "utf8");
-    expect(SERVER).toContain("const variants = write.variants ?? STANDARD_VARIANTS;");
-    expect(SERVER).not.toContain("next = { ...existing, variants: write.variants };");
+    const host = serverSource("rooms/roomHost.ts");
+    expect(host).toContain("variants: resolveVariants(op.variants as never),");
+    expect(serverSource("rooms/gameRecord.ts")).toContain("variants: record.variants,");
   });
 
-  it("has no writer that rewrites them after the room is hosted (LIVE-2A)", () => {
+  it("has no op that rewrites them after the table is created (LIVE-2A, LIVE-2D)", () => {
     expect(source).not.toContain("setSandboxRoomVariants");
+    const protocol = readStripped("utils/roomProtocol.ts");
+    const ops = sliceBetween(protocol, "export type RoomOpBody =", "export type RoomOpType");
+    expect(ops).not.toContain("set-variants");
+    expect((ops.match(/variants:/g) ?? []).length).toBe(1); // `create` alone carries them
   });
 
-  it("opens a new room on the printed game", () => {
-    /* A room that opened on `undefined` would deal 1830 anyway -- `resolveVariants` sees to that -- but the
-       waiting room would render its controls from a config nobody had chosen. */
-    /* #1415: the terms arrive as a parameter now; the DEFAULT is still the printed game. */
-    expect(source).toContain("variants: GameVariants = STANDARD_VARIANTS");
+  it("opens a table from the shell's own gate on the printed game", () => {
+    /* A table that opened on `undefined` would deal 1830 anyway -- `resolveVariants` sees to that -- but the
+       waiting room would render its terms from a config nobody had chosen. */
+    expect(readStripped("App.tsx")).toContain("createHostedGame(STANDARD_VARIANTS, undefined, sandboxSeatRef.current || \"Host\")");
   });
 });
 
-describe("the setup dispatch carries them (design note #910)", () => {
+describe("the setup dispatch carries them (design note #910; LIVE-2D: the server deals)", () => {
   const source = readStripped("App.tsx");
 
-  it("puts the room's variants into the SetupGame action", () => {
+  it("puts the table's variants into the SetupGame action -- built by the server, from its record", () => {
     /* ==================================================================
         THE ASSERTION WHOSE ABSENCE WAS THE BUG
        ==================================================================
-       This dispatch read `SetupGame: { players: seated }`. Every client deals from that one action, so a
-       config that is not IN it does not exist -- and the reducer, which handles `msg.SetupGame.variants`
-       perfectly, was being handed `undefined` on every game this path started. */
-    /* #1252: the deal also names the build that made it. The property here -- the variants are IN the
-       action, from the room -- is unchanged; the literal has one more field. Both dispatch sites carry it. */
-    expect(source).toContain(
-      "SetupGame: { players: seated, variants: { ...sandboxRoom.variants, rules: CURRENT_RULES_REVISION }, build: CLIENT_BUILD_ID }", // #1443
-    );
-    expect(source).not.toContain("SetupGame: { players: seated, variants: sandboxRoom.variants }");
+       This dispatch once read `SetupGame: { players: seated }`. Every client deals from that one action, so a
+       config that is not IN it does not exist. LIVE-2D: the SERVER builds it from the GameRecord at `start-game`
+       -- the variants, the rules revision and the build stamped exactly as the client used to. */
+    const service = serverSource("rooms/roomService.ts");
+    const build = sliceBetween(service, "export function buildSetupGame(", "\n}\n");
+    expect(build).toContain("variants: { ...plan.variants, rules: CURRENT_RULES_REVISION },");
+    expect(service).toContain("return { turnOrder: ctx.shuffle(record.seats), variants: record.variants };");
   });
 
-  it("takes them from the room and not from a local selection", () => {
-    /* #550's rule: a decision only one browser holds is a decision only one browser plays. Asserted as the
-       ABSENCE of the tempting alternative as well as the presence of the right one, because both would make
-       the case above pass on a day when a local `variants` state also existed. */
-    expect(source).not.toContain("SetupGame: { players: seated, variants }");
+  it("takes them from the table and never from a local selection: the client sends no deal at all", () => {
+    /* #550's rule: a decision only one browser holds is a decision only one browser plays. */
+    expect(source).not.toContain("SetupGame: { players: seated");
+    expect(source).not.toContain("shuffleForTurnOrder(");
+    expect(source).not.toContain("toSetupPlayers(");
+    const start = sliceBetween(source, "const handleStartSandboxGame = useCallback(async () => {", "}, [sandboxRoom, runRoomOp]);");
+    expect(start).toContain('await runRoomOp({ type: "start-game" });');
+    expect(start).not.toContain("SetupGame");
   });
 });
 

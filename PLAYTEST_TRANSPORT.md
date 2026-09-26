@@ -8,8 +8,15 @@ touches Vercel, and no push is needed.
 > TCP peer must all be loopback and no forwarding header may be present, so a tunnel is refused. The app must be
 > the CRA dev server (`npm start` in `frontend`, which reads `REACT_APP_DEV_IDENTITY=1` from
 > `frontend/.env.development`); a production build carries no dev claim and cannot sign in to a development
-> server. **Remote (ngrok) playtests are not supported from this revision until LIVE-2D** -- run them from the
-> last pre-LIVE-2B revision (`git checkout 90838071`). `--insecure-local-identity` is gone.
+> server. `--insecure-local-identity` is gone.
+>
+> **LIVE-2D (2026-09-26): rooms are the server's, and remote playtests run in production mode.** Host sends
+> `room-op create` and the server answers with the table's `g_…` id and its `JUNO-XXXX-XXXX` code; Join sends the
+> code; seats, ready, start (the server deals), kick, host transfer and undo are all server-authorized ops. There are
+> no seat PINs and no room documents. A remote (ngrok) playtest runs the game server with `GS_MODE=production`,
+> `GS_ALLOWED_ORIGINS=https://<tunnel host>` and `GS_TRUSTED_PROXY_HOPS=1` (ngrok is the one hop that appends
+> `X-Forwarded-For`); `start-playtest.ps1` does exactly that. Every browser is one guest principal (its session
+> cookie), so two players need two browsers (or one normal and one private window), not two tabs.
 
 ---
 
@@ -81,11 +88,12 @@ Get-NetTCPConnection -LocalPort 3000 -State Listen | Select-Object -ExpandProper
 **Both tabs are `http://localhost:3000`. Not Vercel** — Vercel has no `.env.local` and cannot reach
 `127.0.0.1` on your machine, so it would be a normal Firestore game wearing the same clothes.
 
-**Open the second tab by typing the URL, not by duplicating the first.** Seats are kept in `sessionStorage`
-(#528), and Chrome *copies* sessionStorage into a duplicated tab — both tabs would be the same player, and
-every turn-authority check below would pass for the wrong reason.
+**Open the second tab by typing the URL, not by duplicating the first.** A development tab's principal claim is
+kept in `sessionStorage`, and Chrome *copies* sessionStorage into a duplicated tab — both tabs would be the same
+player, and every turn-authority check below would pass for the wrong reason.
 
-Then: **tab 1 hosts** a sandbox room and gets a code like `JUNO-4T2`; **tab 2 joins** with that code.
+Then: **tab 1 hosts** a room and gets a code like `JUNO-7K4M-Q2ZP`; **tab 2 joins** with that code (LIVE-2D: the
+server mints the table's id and code, and seats both tabs itself).
 
 The roster now comes from the game server too (#1215), so **Firestore is not needed for any of this**. It
 was, until a Firestore outage stopped a playtest dead: "Host game" awaited a write that never landed and the
@@ -94,8 +102,9 @@ button simply did nothing.
 ### The one line that proves it is really on the server
 
 LIVE-2B: identity is decided at the socket's upgrade, silently -- the old per-tab `[INSECURE]` line is gone. Two
-tabs are two players because each tab mints its own `p-…` id (per-tab `sessionStorage`) and puts it on its socket
-URL; a duplicated tab copies that storage and is the same player.
+tabs are two players because each tab mints its own development principal claim (per-tab `sessionStorage`) and
+puts it on its socket URL; a duplicated tab copies that storage and is the same principal. LIVE-2D: the seat is the
+server's (`RoomView.you.playerId`), so a reload keeps its seat because it keeps its principal.
 
 ### Stopping
 
@@ -277,7 +286,7 @@ the rest):
 - **Chat does not work.** It is the one thing still on Firestore (#644), and Firestore is unreachable. Not
   worth its own transport today; it degrades quietly rather than breaking the game (ledger S10-11).
 - **Any local tab can claim any name.** That is what development mode's `?dev_claim=` means -- on this machine
-  only (LIVE-2B). Hosted identity is the session cookie; seat authority over it is LIVE-2C.
+  only (LIVE-2B). Hosted identity is the session cookie; seat authority over it is the server's GameRecord (LIVE-2C/2D).
 - **A room dealt before the rules-version pin (#1520) is held, not rebuilt,** by a server started without
   `--legacy-logs development-corpus`. Every room in `server/data/` from before Batch 4.5 is in that state;
   the banner says so. Development only — never the production restore policy.

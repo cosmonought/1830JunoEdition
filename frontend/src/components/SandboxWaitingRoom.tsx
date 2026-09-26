@@ -10,7 +10,17 @@
 // with different shuffles in the log, each replayed by every client.
 //
 // See docs/ai_architecture/firebase_middleware.md, SandboxWaitingRoom.tsx #529.
-
+//
+// ==================================================================
+//  LIVE-2D: DRAWN FROM THE SERVER'S RoomView, AND EVERY CONTROL IS A NAMED OP
+// ==================================================================
+//
+// `room` is the server's per-recipient projection; `room.you` is who this tab is at the table -- its role and its
+// seat's `player_id` -- and is the only place this screen learns either. Every button here sends one `room-op` the
+// server authorizes against its own record: take a seat, give it up, ready, name and colour, and for the host the
+// table itself -- public or private, a new code, remove a player, hand the host role on, cancel, start. A control is
+// shown to the role that may use it (the same table the server enforces, LIVE-2 §6.4) and greyed while a request is
+// in flight; the server's refusal, when there is one, is shown as the sentence it is.
 import React, { useState } from "react";
 import {
   bankSizeLabel,
@@ -30,8 +40,8 @@ import {
   seatsNeeded,
   waitingRoomBlock,
   waitingRoomNotice,
-  type SandboxRoomDoc,
 } from "../utils/sandboxRoom";
+import type { RoomView, RoomVisibility } from "../utils/roomProtocol";
 import { MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../gameEngine/gameSetup";
 // #1415: the ante's figures and the subsidy line, the same ones the host's setup card showed.
 import { ANTE_SUBSIDY_NOTE, VISIBILITY_COPY } from "./HostSetupCard";
@@ -42,8 +52,6 @@ import { type AudioControlsProps } from "./AudioControls";
    anteroom and the table. */
 import TopBar from "./TopBar";
 import AppFooter from "./AppFooter";
-// Design note #1341: the seat PIN, set and rejoined from the roster.
-import { SeatPinModal } from "./SeatPinModal";
 import { setSkipIntroPreferred, skipIntroPreferred } from "../utils/introPreference";
 import { chromeZoomFor } from "../styles/appStyles";
 /* Design note #1294: the chrome scale, live. */
@@ -88,9 +96,10 @@ const VARIANT_TOGGLES: ReadonlyArray<{
 ).map((key) => ({ key, ...VARIANT_COPY[key] }));
 
 export interface SandboxWaitingRoomProps {
+  /** LIVE-2D: what the bar and the title show -- the table's code, or "Private game" to an outsider. */
   roomCode: string;
-  room: SandboxRoomDoc | null;
-  /** This browser's seat -- design note #528. */
+  room: RoomView | null;
+  /** LIVE-2D: this tab's seat, from `room.you.playerId` ("" when it holds none). Presentation only. */
   localPlayerId: string;
   error: string | null;
   busy: boolean;
@@ -110,6 +119,18 @@ export interface SandboxWaitingRoomProps {
      form. A host who wants different terms hosts a different room.
      `onKick` IS NEW: the host removes a joiner, before the start only. `undefined` for a guest. */
   onKick?: (playerId: string) => void;
+  /** LIVE-2D: a watcher of a waiting table takes a seat (`take-seat`). Absent when the table cannot seat them. */
+  onTakeSeat?: () => void;
+  /** LIVE-2D: a seated player gives the seat up and keeps watching (`release-seat`); a host's passes the host role on. */
+  onReleaseSeat?: () => void;
+  /** LIVE-2D, host only: public or private (`set-visibility`; going private rotates the code). */
+  onSetVisibility?: (visibility: RoomVisibility) => void;
+  /** LIVE-2D, host only: a new code; the old one stops working at once (`rotate-code`). */
+  onRotateCode?: () => void;
+  /** LIVE-2D, host only: hand the host role to another seated player (`transfer-host`). */
+  onTransferHost?: (playerId: string) => void;
+  /** LIVE-2D, host only: close the table for everybody (`cancel-room`). */
+  onCancelRoom?: () => void;
   /** ==================================================================
    *   DESIGN NOTE 1101: THE RADIO WAS ALREADY PLAYING HERE, WITH NOTHING TO PRESS
    *  ==================================================================
@@ -148,6 +169,12 @@ export function SandboxWaitingRoom({
   onStart,
   onLeave,
   onKick,
+  onTakeSeat,
+  onReleaseSeat,
+  onSetVisibility,
+  onRotateCode,
+  onTransferHost,
+  onCancelRoom,
   audio,
 }: SandboxWaitingRoomProps) {
   /* Design note #1294: the chrome scale, live. */
@@ -156,17 +183,20 @@ export function SandboxWaitingRoom({
   const me = players.find((player) => player.id === localPlayerId) ?? null;
   /* Design note #1337: one colour per seat, chosen or assigned, the same on every client. */
   const resolvedColors = resolveSeatColors(players);
-  const isHost = room?.hostId === localPlayerId;
+  /* LIVE-2D: the ROLE is the server's (`you.role`), never inferred from a stored id or a nickname. */
+  const isHost = room?.you.role === "host";
   /* Design note #910: read off the ROOM, so a guest and the host are looking at one answer. */
   const variants = room?.variants ?? STANDARD_VARIANTS;
   /* #1415: the table's terms beyond the variants -- who may join, how many, and what a seat puts in. */
   const visibility = roomVisibility(room);
   const seatCap = roomSeatCap(room);
   const exactCount = typeof room?.playerCount === "number" ? room.playerCount : null;
-  const ante = anteBreakdown(room?.anteUjuno);
+  /* LIVE-2: no-money tables only -- the ante is always off (`RoomView` carries no stake). */
+  const ante = anteBreakdown("0");
   const canKick = isHost && room?.status === "waiting" && !busy && onKick !== undefined;
-  /* #1415: this seat was removed -- the roster no longer holds it and the document says why. */
-  const wasKicked = room !== null && me === null && (room.kicked ?? []).includes(localPlayerId);
+  const canTransfer = isHost && !busy && onTransferHost !== undefined;
+  /* #1415: this seat was removed -- the server says so in `you.kicked`. */
+  const wasKicked = room !== null && room.you.kicked;
   /* ==================================================================
       DESIGN NOTE 1441: WATCHING AN OPEN TABLE, SAID OUT LOUD
      ==================================================================
@@ -180,6 +210,10 @@ export function SandboxWaitingRoom({
   /* #1415: Ready is the deposit, so it asks first; un-Ready is the withdrawal and asks too. */
   const [readyConfirm, setReadyConfirm] = useState<"deposit" | "withdraw" | null>(null);
   const [kicking, setKicking] = useState<string | null>(null);
+  /* LIVE-2D: the host's two-step confirmations -- hand the host role over, and cancel the table. */
+  const [handingOver, setHandingOver] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+  const [copied, setCopied] = useState(false);
   /* ==================================================================
      DESIGN NOTE 1169a: AN INITIALISER IS NOT A SUBSCRIPTION
      ==================================================================
@@ -191,8 +225,6 @@ export function SandboxWaitingRoom({
      SEEDED ONCE, AND NEVER OVER TYPING. `touched` is what separates "has not been filled in yet" from "is
      deliberately empty because I am clearing it", which a `!nicknameText` test would run together. */
   const [skipIntro, setSkipIntro] = useState(() => skipIntroPreferred());
-  /* Design note #1341: the seat-PIN card -- set mine, or rejoin another seat from this device. */
-  const [seatPin, setSeatPin] = useState<{ mode: "set" | "rejoin"; seatId: string | null } | null>(null);
   const [nicknameText, setNicknameText] = useState(me?.nickname ?? "");
   const [nicknameTouched, setNicknameTouched] = useState(false);
   const knownNickname = me?.nickname ?? "";
@@ -205,7 +237,21 @@ export function SandboxWaitingRoom({
   const needed = seatsNeeded(room, MIN_PLAYERS);
   const enough = players.length >= needed;
   const allReady = players.length > 0 && players.every((player) => player.isReady);
-  const canStart = isHost && enough && allReady;
+  /* LIVE-2D: the server's own start gate (`you.canStart`), with the local readers agreeing for the tooltip. */
+  const canStart = isHost && (room?.you.canStart ?? false) && enough && allReady;
+  const code = room?.code ?? null;
+  const copyCode = () => {
+    if (code === null) return;
+    const done = () => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1_500);
+    };
+    try {
+      void navigator.clipboard?.writeText(code).then(done, () => undefined);
+    } catch {
+      /* no clipboard on an insecure origin: the code is `user-select: all` and can be copied by hand */
+    }
+  };
   /* Design note #857: what the ROOM is short of, from the same reader `canStartSandboxGame` uses -- so the
      host's tooltip and the guest's line cannot describe the same room differently. */
   const block = waitingRoomBlock(room, MIN_PLAYERS);
@@ -301,7 +347,25 @@ export function SandboxWaitingRoom({
               <p style={styles.gameName}>{GAME_TYPE_COPY[gameTypeOf(variants)].label}</p>
               <p style={styles.roomLine}>
                 <span style={styles.roomLabel}>Room</span>
-                <code style={styles.code}>{roomCode}</code>
+                <code style={styles.code} data-testid="waiting-room-code">{code ?? roomCode}</code>
+                {code !== null && (
+                  <button type="button" className="wr-touch" style={styles.quietButton} onClick={copyCode} data-testid="copy-code">
+                    {copied ? "Copied" : "Copy code"}
+                  </button>
+                )}
+                {isHost && onRotateCode && (
+                  <button
+                    type="button"
+                    className="wr-touch"
+                    style={styles.quietButton}
+                    onClick={onRotateCode}
+                    disabled={busy}
+                    title="A new code for this table. The old one stops working at once; anyone already here stays."
+                    data-testid="rotate-code"
+                  >
+                    New code
+                  </button>
+                )}
               </p>
               {/* #1445: the game's own sentence, kept when its row left the settings list. The TITLE is not
                   duplicated by it (that is why the row went), but the description is the only statement on
@@ -410,32 +474,42 @@ export function SandboxWaitingRoom({
                           {player.isReady ? "Ready" : "Not ready"}
                         </span>
                         <span style={styles.seatControls}>
-                          {/* Design note #1341: my seat sets its PIN; another seat can be rejoined from here.
-                              #1341a: offered for a seat with NO PIN too -- it adopts the one typed. */}
-                          {player.id === localPlayerId ? (
-                            <button
-                              type="button"
-                              className="wr-touch"
-                              style={styles.quietButton}
-                              onClick={() => setSeatPin({ mode: "set", seatId: null })}
-                              title="A four-digit PIN, for this room only, so you can pick this seat up on another device."
-                            >
-                              {player.hasPin ? "PIN set" : "Set PIN"}
-                            </button>
-                          ) : (
-                            <button
-                              type="button"
-                              className="wr-touch"
-                              style={styles.quietButton}
-                              onClick={() => setSeatPin({ mode: "rejoin", seatId: player.id })}
-                              title={
-                                player.hasPin
-                                  ? `Rejoin ${player.nickname || "this seat"} on this device with its PIN.`
-                                  : `${player.nickname || "This seat"} has no PIN yet -- rejoining it here sets one.`
-                              }
-                            >
-                              Rejoin
-                            </button>
+                          {/* LIVE-2D: the seat PINs are gone -- a seat is its principal's, bound by the server. */}
+                          {!player.online && player.id !== localPlayerId && (
+                            <span style={styles.faintNote} title="This player has no table open right now.">away</span>
+                          )}
+                          {/* LIVE-2D: the host hands the host role on -- asked twice, inline, like a removal. */}
+                          {canTransfer && player.id !== room?.hostId && (
+                            handingOver === player.id ? (
+                              <span style={styles.kickConfirm}>
+                                <button
+                                  type="button"
+                                  className="wr-touch"
+                                  style={styles.quietButton}
+                                  onClick={() => {
+                                    setHandingOver(null);
+                                    onTransferHost?.(player.id);
+                                  }}
+                                  data-testid={`transfer-confirm-${player.id}`}
+                                >
+                                  Make host
+                                </button>
+                                <button type="button" className="wr-touch" style={styles.quietButton} onClick={() => setHandingOver(null)}>
+                                  Keep
+                                </button>
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                className="wr-touch"
+                                style={styles.quietButton}
+                                onClick={() => setHandingOver(player.id)}
+                                title={`Make ${player.nickname || "this player"} the host. You keep your seat.`}
+                                data-testid={`transfer-${player.id}`}
+                              >
+                                Host ⇄
+                              </button>
+                            )
                           )}
                           {/* #1415: the host removes a joiner -- never themselves, never after the start.
                               Asked twice, inline: a seat is a person, and a mis-click here is a person gone. */}
@@ -492,9 +566,9 @@ export function SandboxWaitingRoom({
                     `Project 18XX is dealt for ${MIN_PLAYERS}–${maxPlayers} players. Waiting for more.`
                   )}
                 </p>
-                {/* Design note #1341: said once, under the roster, so nobody takes the PIN for an account. */}
+                {/* LIVE-2D: the seat is this browser's -- reload or reconnect and it is still yours. */}
                 <p style={styles.faintNote}>
-                  Seat PINs are for this room only: set one to move your seat between devices mid-game.
+                  Your seat is kept for this browser: reload or reconnect and you are still seated.
                 </p>
               </section>
 
@@ -557,9 +631,8 @@ export function SandboxWaitingRoom({
                   AND IT IS THE SAME FAULT #1441 REMOVED FROM THE LOBBY one screen earlier: a full table's
                   disabled Join took the one place a control can be, said no, and hid what the room could
                   still do. The answer there and here is that a fact about the viewer is written as a fact.
-                  THE WATCHER KEEPS THE ROSTER'S `Rejoin`, deliberately: that path needs the seat's PIN, so it
-                  is proof of a seat already held rather than a way around #1441's Join -- and `adoptSeat`
-                  retires the watch intent on its way through (#1442). */}
+                  LIVE-2D: a watcher's way to a seat is "Take a seat" -- a server op, refused when the table is
+                  full or the watcher was removed. There is no PIN rejoin and no watch intent any more. */}
               <div style={styles.actionArea}>
                 {/* #1443: the ready control belongs to a SEAT. A watcher has none and a removed player has
                     had one taken away -- and a green button that merely happens to be disabled promises
@@ -603,20 +676,54 @@ export function SandboxWaitingRoom({
                         Start game
                       </button>
                     )}
+                    {/* LIVE-2D: give the seat up and keep watching (`release-seat`). The host's seat passes the host
+                        role to the next player who joined; a table left with nobody seated closes. */}
+                    {onReleaseSeat && (
+                      <button
+                        type="button"
+                        className="wr-touch"
+                        style={styles.quietButton}
+                        onClick={onReleaseSeat}
+                        disabled={busy}
+                        title={
+                          isHost
+                            ? "Give up your seat. The host role passes to the next player who joined; with nobody left, the table closes."
+                            : "Give up your seat and keep watching this table."
+                        }
+                        data-testid="release-seat"
+                      >
+                        Give up seat
+                      </button>
+                    )}
                   </div>
                 ) : isWatching ? (
-                  <p style={styles.watchStatus} data-testid="waiting-room-watching">
-                    <span style={styles.watchTag}>Watching</span>
-                    You are watching this table. Take a seat from the Lobby if you want to play; the host may
-                    start without you.
-                  </p>
+                  <div style={styles.actionRow}>
+                    <p style={styles.watchStatus} data-testid="waiting-room-watching">
+                      <span style={styles.watchTag}>Watching</span>
+                      {onTakeSeat
+                        ? "You are watching this table. Take a seat to play; the host may start without you."
+                        : "You are watching this table. There is no seat free; the host may start without you."}
+                    </p>
+                    {onTakeSeat && (
+                      <button
+                        type="button"
+                        className="wr-touch"
+                        style={styles.buttonPrimary}
+                        onClick={onTakeSeat}
+                        disabled={busy}
+                        data-testid="take-seat"
+                      >
+                        Take a seat
+                      </button>
+                    )}
+                  </div>
                 ) : null}
 
                 {/* Design note #857: the guest is told what the host was only hovering. Below the row, because
                     it is the ANSWER to the button just pressed. Not an error, and drawn so. */}
                 {wasKicked ? (
                   <span style={styles.error}>
-                    The host removed you from this table. You cannot rejoin this room; leave and join or host another.
+                    The host removed you from this table. You cannot rejoin it; leave and join or host another.
                   </span>
                 ) : (
                   notice && <span style={styles.notice}>{notice}</span>
@@ -657,6 +764,64 @@ export function SandboxWaitingRoom({
                   reading order is the same on both layouts because there is only one source order.
                   DESIGN NOTE 910 survives every re-layout: a seat reads the TERMS IN FORCE, not the menu, and
                   they live on the room document so the host and a guest are looking at one answer. */}
+              {/* LIVE-2D: THE HOST'S TABLE CONTROLS -- who may find it, and closing it. Shown to the host only (the
+                  server refuses anybody else); each is one named op. */}
+              {isHost && (onSetVisibility || onCancelRoom) && (
+                <section style={styles.flowSection} aria-labelledby="wr-host" data-testid="waiting-room-host-controls">
+                  <h2 id="wr-host" style={styles.sectionHeading}>Your table</h2>
+                  <div style={styles.actionRow}>
+                    {onSetVisibility && (
+                      <button
+                        type="button"
+                        className="wr-touch"
+                        style={styles.button}
+                        onClick={() => onSetVisibility(visibility === "public" ? "private" : "public")}
+                        disabled={busy}
+                        title={
+                          visibility === "public"
+                            ? "Take this table off the Lobby. The code changes; players already seated stay, watchers are sent back."
+                            : "List this table on the Lobby, so anyone can find it and join."
+                        }
+                        data-testid="toggle-visibility"
+                      >
+                        {visibility === "public" ? "Make private" : "Make public"}
+                      </button>
+                    )}
+                    {onCancelRoom &&
+                      (cancelling ? (
+                        <span style={styles.kickConfirm}>
+                          <button
+                            type="button"
+                            className="wr-touch"
+                            style={styles.kickButtonConfirm}
+                            onClick={() => {
+                              setCancelling(false);
+                              onCancelRoom();
+                            }}
+                            data-testid="cancel-room-confirm"
+                          >
+                            Close the table for everyone
+                          </button>
+                          <button type="button" className="wr-touch" style={styles.quietButton} onClick={() => setCancelling(false)}>
+                            Keep it
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="wr-touch"
+                          style={styles.quietButton}
+                          onClick={() => setCancelling(true)}
+                          disabled={busy}
+                          data-testid="cancel-room"
+                        >
+                          Cancel table
+                        </button>
+                      ))}
+                  </div>
+                </section>
+              )}
+
               <section style={styles.flowSection} aria-labelledby="wr-settings">
                 <h2 id="wr-settings" style={styles.sectionHeading}>Game settings</h2>
                 {/* #1446: "you are agreeing to them when you press Ready" was false for a watcher, who has
@@ -735,17 +900,6 @@ export function SandboxWaitingRoom({
           </div>
         </div>
       </div>
-      {/* Design note #1341: the seat-PIN card, owned here so the shell carries none of it. */}
-      {seatPin && (
-        <SeatPinModal
-          mode={seatPin.mode}
-          roomCode={roomCode}
-          localPlayerId={localPlayerId}
-          players={players}
-          initialSeatId={seatPin.seatId}
-          onClose={() => setSeatPin(null)}
-        />
-      )}
       {/* Design note #1113: the meta-UI credit, the same component and the same moving mark the lobby
           carries. The waiting room is the one screen between them and had no footer at all. */}
       <AppFooter surface="meta" />

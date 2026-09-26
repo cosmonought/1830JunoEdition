@@ -276,7 +276,10 @@ describe("the credit and the room name swapped places", () => {
   it("names the room in one place, not two", () => {
     /* THE FAULT THIS BATCH IS REMOVING, so re-introducing it one line up would be the bad joke. `roomName` is
        the sandbox code only; an on-chain game's identity is already in the strip beside it. */
-    expect(APP).toContain("roomName={sandboxRoomCode}");
+    /* LIVE-2D: the table's CODE, from the server's view -- never the game id held in `sandboxRoomCode`, which is a
+       key, not a name -- and "Private game" to a reader who may not see the code. */
+    expect(APP).toContain('roomName={sandboxRoomCode ? (sandboxRoom?.code ?? "Private game") : null}');
+    expect(APP).not.toContain("roomName={sandboxRoomCode}");
     expect(APP).not.toContain("roomName={roomId}");
   });
 

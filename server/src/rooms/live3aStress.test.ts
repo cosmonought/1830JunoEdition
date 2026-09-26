@@ -3,6 +3,9 @@
 // LIVE-3A: a bounded, seeded stress run -- LIVE-3's P5 model check, promoted into a test against the real
 // server, the real `RoomSession`, the real client link (`serverLink.ts`) and real sockets.
 //
+// LIVE-2D: the game is server-owned -- created, joined by code, readied and started (the SERVER deals) through the
+// room protocol before the faults are armed -- and each client's actor is the seat the server minted for it.
+//
 // Several clients submit into one game at once, from seeded choices, while the store delays every append and
 // fails some, and sockets are dropped and reconnect. LIVE-3B: the store answers with its classified outcomes --
 // some appends DEFINITELY fail (nothing written), some are uncertain and REDONE by the store (written once,
@@ -35,11 +38,11 @@ import {
   Client,
   DEV_ORIGIN,
   devSocketUrl,
+  openGame,
   PASS,
   probeSession,
   quietConsole,
   sleep,
-  hostedDoc,
   startServer,
   stopServer,
   until,
@@ -49,9 +52,7 @@ quietConsole();
 
 const SEEDS = Number(process.env.LIVE3A_SEEDS ?? 30);
 const STEPS = 40;
-const ROOM = "STRESS";
 const PLAYERS = [ALICE, BOB, CAROL] as const;
-const DEAL = { SetupGame: { players: PLAYERS.map((id) => ({ id, nickname: id })), variants: {} } };
 
 /** A small, well-known 32-bit generator: the same seed, the same schedule of choices. */
 function mulberry32(seed: number): () => number {
@@ -70,13 +71,17 @@ const STORE_TIMEOUT_MS = 12;
 
 /** Appends are delayed 0-3 ms. 5% definitely fail (nothing written); 5% were uncertain and the store's REDO made them
  *  durable (written once, `committed`, `redone`); 4% answer only after the actor's timeout (E-11) and then land or
- *  definitely fail, half each. The log only grows, as a file does. */
+ *  definitely fail, half each. The log only grows, as a file does. LIVE-2D: faults start once `armed` -- the table's
+ *  setup and the server's deal are written plainly, so every schedule starts from a dealt game. */
 function faultyStore(random: () => number) {
   const log: ServerLogEntry[] = [];
-  /* LIVE-2A (LIVE-2 §15 #9): the room is hosted by the player who deals it -- a doc-less deal is refused now. */
-  let doc: string | null = JSON.stringify(hostedDoc(ROOM, ALICE));
   const stats = { appends: 0, lost: 0, landed: 0, late: 0, inFlight: 0 };
+  const control = { armed: false };
   const appendBatch = async (_room: string, entries: readonly ServerLogEntry[]): Promise<StoreWriteOutcome> => {
+    if (!control.armed) {
+      log.push(...(JSON.parse(JSON.stringify(entries)) as ServerLogEntry[]));
+      return COMMITTED;
+    }
     stats.appends += 1;
     stats.inFlight += 1;
     try {
@@ -107,12 +112,8 @@ function faultyStore(random: () => number) {
     loadLog: async () => JSON.parse(JSON.stringify(log)) as ServerLogEntry[],
     appendBatch,
     appendLog: async (room, entries) => throwUnlessCommitted(await appendBatch(room, entries)),
-    loadRoomDoc: async () => (doc === null ? null : JSON.parse(doc)),
-    saveRoomDoc: async (_room, next) => {
-      doc = JSON.stringify(next);
-    },
   };
-  return { store, log, stats };
+  return { store, log, stats, control };
 }
 
 interface Player {
@@ -124,16 +125,15 @@ interface Player {
   drop(): void;
 }
 
-function player(port: number, claim: string, durable: () => readonly ServerLogEntry[]): Player {
+function player(port: number, gameId: string, claim: string, durable: () => readonly ServerLogEntry[]): Player {
   let socket: WebSocket | null = null;
   let minted = 0;
   const history = new Map<number, string>();
   const violations: string[] = [];
   const link = connectServerLink({
     url: `ws://127.0.0.1:${port}`,
-    room: ROOM,
+    gameId,
     build: BUILD,
-    claim,
     mintSubmissionId: () => `${claim}-${(minted += 1)}`,
     schedule: (callback) => {
       setTimeout(callback, 3);
@@ -196,7 +196,10 @@ test(`seeded concurrent submits, faulty appends and reconnects: ${SEEDS} schedul
     const choose = mulberry32(seed);
     const faults = faultyStore(mulberry32(seed * 7919));
     const { server, port } = await startServer({ store: faults.store, storeTimeoutMs: STORE_TIMEOUT_MS });
-    const players = PLAYERS.map((claim) => player(port, claim, () => faults.log));
+    /* The table, through the room protocol, and the server's deal (index 0) -- then the faults. */
+    const { gameId, playerIds } = await openGame(port, ALICE, [BOB, CAROL]);
+    faults.control.armed = true;
+    const players = PLAYERS.map((claim) => player(port, gameId, claim, () => faults.log));
     const pending: Array<Promise<void>> = [];
     const submit = (who: Player, msg: object) => {
       const outcome: Player["outcomes"][number] = { id: "", result: "pending" };
@@ -208,7 +211,6 @@ test(`seeded concurrent submits, faulty appends and reconnects: ${SEEDS} schedul
       pending.push(settled);
     };
     try {
-      submit(players[0], DEAL);
       for (let step = 0; step < STEPS; step += 1) {
         const who = players[Math.floor(choose() * players.length)];
         const roll = choose();
@@ -222,7 +224,7 @@ test(`seeded concurrent submits, faulty appends and reconnects: ${SEEDS} schedul
               ? BUY
               : pick < 0.75
                 ? PASS
-                : { RevertTo: { index: 1_000_000, player: who.claim, summary: "stress" } };
+                : { RevertTo: { index: 1_000_000, player: playerIds[who.claim], summary: "stress" } };
           submit(who, msg);
         }
         await sleep(Math.floor(choose() * 4));
@@ -253,7 +255,7 @@ test(`seeded concurrent submits, faulty appends and reconnects: ${SEEDS} schedul
         for (const entry of faults.log) assert.equal(each.history.get(entry.index), entry.id, `seed ${seed}: ${each.claim} diverged`);
         // An index exactly when the store holds the submission there; null exactly when it never landed.
         for (const outcome of each.outcomes) {
-          const at = faults.log.findIndex((entry) => entry.submission_id === outcome.id && entry.actor === each.claim);
+          const at = faults.log.findIndex((entry) => entry.submission_id === outcome.id && entry.actor === playerIds[each.claim]);
           if (typeof outcome.result === "number") {
             assert.equal(at, outcome.result, `seed ${seed}: ${outcome.id} resolved ${outcome.result} but is stored at ${at}`);
           } else {
@@ -265,7 +267,7 @@ test(`seeded concurrent submits, faulty appends and reconnects: ${SEEDS} schedul
 
       // The committed view is the store's board.
       const observer = await Client.open(port, "p-observer");
-      observer.hello(ROOM);
+      observer.hello(gameId);
       const view = await observer.next((frame) => frame.kind === "catch-up");
       const restored = probeSession("stress-verify");
       if (faults.log.length > 0) restored.restore(faults.log);

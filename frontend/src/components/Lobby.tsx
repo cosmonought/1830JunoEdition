@@ -18,24 +18,13 @@
 //
 // Design notes #3/#24/#524/#525/#527/#586: see `docs/ai_architecture/firebase_middleware.md`.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { Coin } from "@cosmjs/stargate";
-import type { ExecuteResult } from "@cosmjs/cosmwasm-stargate";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { useWallet } from "../context/WalletContext";
 import { ConnectWalletButton } from "./ConnectWalletButton";
 import { UiScalePicker } from "./UiScalePicker";
-import {
-  NATIVE_DENOM,
-  NATIVE_DENOM_DISPLAY,
-  NATIVE_DENOM_EXPONENT,
-  chainConfigError,
-  formatNativeAmount,
-  requireContractAddress,
-  APP_NAME,
-} from "../config";
+import { NATIVE_DENOM_DISPLAY, chainConfigError, formatNativeAmount } from "../config";
 import { isBackendConfigured, backendConfigError } from "../config/backend";
-import ChatBox from "./ChatBox";
 import { preloadWaitingRoomScene } from "./SandboxWaitingRoom";
 import {
   CARD_SURFACE,
@@ -52,62 +41,20 @@ import AppFooter from "./AppFooter";
 import { chromeZoomFor } from "../styles/appStyles";
 /* Design note #1294: the chrome scale, live, for the root's zoom and the scene's viewport arithmetic. */
 import { useUiScale } from "../utils/useUiScale";
-// Design note #524: the Firebase sandbox lobby lives on this screen now.
+// Design note #524: the sandbox lobby lives on this screen now.
 import SandboxRoomBar from "./SandboxRoomBar";
-import {
-  hostSandboxRoom,
-  joinSandboxRoom,
-  localPlayerId,
-  parseRoomCode,
-  readSandboxLog,
-  subscribeSandboxRoom,
-  type RoomSetup,
-  type SandboxRoomPlayer,
-} from "../utils/sandboxRoom";
-// Design note #1352: rejoin a seat from the lobby -- the PIN card over this room's roster, then a reload into it.
-// (LIVE-2A: #1355's PIN-first card, `RejoinByPinCard`, is deleted with the server's `find-seats`.)
-import { SeatPinModal } from "./SeatPinModal";
+import { createHostedGame, gameIdOf, joinHostedGame, type RoomSetup } from "../utils/sandboxRoom";
 // #1415: the host's setup card -- type, pace, visibility, then the house rules -- before the room exists; and
-// the join card, the public list with the code box beside it.
+// the join card, the code box for an unlisted table.
 import { HostSetupCard } from "./HostSetupCard";
 import { ModalPortal } from "./ModalPortal";
 import { JoinGameCard } from "./JoinGameCard";
 import { LobbyRoomList } from "./LobbyRoomList";
-import { roomDocOnServer } from "../utils/roomDocLink";
-import { writeSandboxResume } from "../utils/activeGame";
+import { roomLinkAvailable } from "../utils/roomLink";
+import { JOIN_CODE_EXAMPLE, parseJoinCode, refusalMessage, supportRefOf } from "../utils/roomProtocol";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
-import {
-  MIN_PLAYERS,
-  bindChainGameId,
-  maxPlayersForVariants,
-  claimSeat,
-  createStagingRoom,
-  loadDisplayName,
-  markSeatOnChain,
-  releaseSeat,
-  saveDisplayName,
-  seatLabel,
-  setRoomStatus,
-  setSeatDisplayName,
-  setSeatReady,
-  truncateAddress,
-  useLobbyRooms,
-  usePresenceHeartbeat,
-  useRoom,
-  useSandboxRooms,
-  type PresenceState,
-  type RoomDoc,
-  type SeatDoc,
-} from "../utils/lobby";
-import {
-  BANK_SIZE_BY_LENGTH,
-  bankStartFor,
-  GAME_LENGTH_BLURB,
-  STANDARD_VARIANTS,
-  type GameLength,
-  type GameVariants,
-  VARIANT_COPY,
-} from "../gameEngine/gameVariants";
+import { truncateAddress, usePublicRooms } from "../utils/lobby";
+import type { GameVariants } from "../gameEngine/gameVariants";
 
 // Design note #3: THE SILENT-BUTTON BUG, AND THE RULE THAT REPLACED IT. Reported: clicking "Create Room" did
 // nothing -- no UI change, no error banner, and NOTHING in the console. Cause: the button was `disabled`, so
@@ -135,94 +82,21 @@ function disabledButtonStyle(
   return { ...base, opacity: 0.4, cursor: "not-allowed" };
 }
 
-/** Survives a page reload so a player who refreshes mid-staging lands back
- *  in their room instead of at the room list wondering where it went.
- *  `sessionStorage`, not `localStorage`: rejoining a stale room in a new
- *  browser session a week later is not helpful. */
-const ACTIVE_ROOM_STORAGE_KEY = "18cosmos.active_room.v1";
-
-/** Default `CreateGameRoom { virtual_bank_start }`. Matches the figure
- *  `msg.rs` uses in its own doc comment example. */
-const DEFAULT_VIRTUAL_BANK_START = "12000";
-
-/** Default ante, in display `JUNO`. Small on purpose -- this is real money
- *  and the field is prefilled, so the prefill must not be a number anyone
- *  would regret confirming without reading. */
-const DEFAULT_ANTE_DISPLAY = "1";
-
 export interface LobbyProps {
-  /** Called with the CONTRACT's game id once the player is genuinely in the
-   *  room's on-chain roster. `roomId` rides along because the dashboard
-   *  still needs the Firestore room for chat and presence -- the two ids
-   *  are different things and both are load-bearing after this point. */
-  onEnterGame: (chainGameId: number, roomId: string) => void;
-  /** Opens a game the viewer is NOT playing in, read-only. A separate callback rather than a flag, because the
-   *  two are different in kind and confusing them would be expensive: entering means "I am in this contract's
-   *  roster and may act", spectating means "I may look and may not". Distinct entry points mean a caller cannot
-   *  accidentally open a playable board by forgetting a boolean. */
-  onSpectateGame: (chainGameId: number, roomId: string) => void;
-  /** The escape hatch -- `App.tsx #24`. With a mock contract address you cannot launch, and with a fresh Firebase
-   *  there is nothing to spectate, so without this the lobby has no exit at all.
-   *  Design note #524: carries the Firebase sandbox room code, or `null` for an ordinary solo sandbox. */
-  /** Design note #1441: `watchOnly` marks the Lobby's Watch -- the shell then holds the seat claim it would
-   *  otherwise make on a room that is still waiting. */
-  onEnterSandbox: (sandboxRoomCode?: string | null, watchOnly?: boolean) => void;
+  /** LIVE-2D: enter a server-owned table by its `gameId` -- after Host (the server seated the host), Join (the server
+   *  seated this principal, or admitted it to watch), or Watch on a public row (no op at all: a public table is
+   *  readable by any authenticated guest). The shell opens the table's RoomView and log by that id; the seat, if
+   *  any, is the server's answer in `RoomView.you`, never this screen's. */
+  onEnterSandbox: (gameId: string) => void;
 }
 
-/** Which half of the room browser is showing.
- *  NAMING NOTE: the requested filter was `status: "active"`. This schema has no `"active"` -- the equivalent is
- *  `"live"`, and a second status string meaning the same thing as an existing one is exactly the drift
- *  `config.ts #1` is about, so the tab is LABELLED "Live Games" and filters on `"live"`. The contract's own
- *  `is_active` is a different flag again -- running versus finished, a question only the chain can answer and
- *  Firestore deliberately does not mirror. */
-type BrowserTab = "open" | "live";
-
-/* ------------------------------------------------------------------ */
-/* Amount conversion -- design note #1, integer string math only       */
-/* ------------------------------------------------------------------ */
-
-/** Display units -> base-denom integer string. Returns `null` for anything malformed, including more fractional
- *  digits than the denom actually has -- silently truncating a player's stated amount is not an acceptable
- *  failure mode when the amount is a deposit. */
-export function toBaseAmount(display: string): string | null {
-  const trimmed = display.trim();
-  if (!/^\d+(\.\d*)?$/.test(trimmed)) return null;
-
-  const [whole, fraction = ""] = trimmed.split(".");
-  if (fraction.length > NATIVE_DENOM_EXPONENT) return null;
-
-  const padded = fraction.padEnd(NATIVE_DENOM_EXPONENT, "0");
-  const combined = `${whole}${padded}`.replace(/^0+(?=\d)/, "");
-  return combined.length === 0 ? "0" : combined;
-}
-
-/* ------------------------------------------------------------------ */
-/* Transaction event parsing -- design note #2                         */
-/* ------------------------------------------------------------------ */
-
-/** Pulls the contract-assigned `game_id` out of a confirmed `CreateGameRoom` transaction. Reads the `wasm`
- *  event specifically: every attribute a CosmWasm contract adds is emitted under that type, and scoping to it
- *  avoids picking up a same-named attribute from an unrelated module in a multi-message transaction. */
-export function parseGameIdFromExecuteResult(result: ExecuteResult): number | null {
-  for (const event of result.events ?? []) {
-    if (event.type !== "wasm") continue;
-    for (const attribute of event.attributes ?? []) {
-      if (attribute.key !== "game_id") continue;
-      const parsed = Number(attribute.value);
-      if (Number.isSafeInteger(parsed) && parsed >= 0) return parsed;
-    }
-  }
-  return null;
-}
-
-/* ------------------------------------------------------------------ */
-/* Lobby                                                               */
-/* ------------------------------------------------------------------ */
-
-/* Design note #525: the Web3 lobby's on-switch. `false` parks the room browser and the staging room together
-   for sandbox playtesting; `true` restores the screen exactly as it was. One flag, one place, no other edits --
-   so turning it back on is a one-character change rather than a revert somebody has to reconstruct. */
-const WEB3_LOBBY_ENABLED = false;
+/* ==================================================================
+    LIVE-2D (RUST-RETIRE-1 2B.3): THE ON-CHAIN STAGING LOBBY IS DELETED
+   ==================================================================
+   #525 parked it behind `WEB3_LOBBY_ENABLED = false`, LIVE-0 switched its server half off, and LIVE-2 scheduled its
+   removal here: the room browser, the staging table, `CreateGameRoom` / `JoinGameRoom` launch and ante,
+   `bind-chain-game-id`, the wallet-keyed seats and heartbeats. Money tables return through the escrow contract
+   (ESCROW-3), not through this path. The wallet furniture in the corner stays -- Keplr connect is kept. */
 
 /** Design note #1144's cover arithmetic (see `scene`), as a function of the live scale (#1294): every viewport
  *  term is divided by the zoom, so both sides of each `max()` are in layout space. */
@@ -312,7 +186,7 @@ function titleBottomFor(scale: number, utilityRowPx: number): React.CSSPropertie
   };
 }
 
-export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProps) {
+export function Lobby({ onEnterSandbox }: LobbyProps) {
   /* Design note #1294: the chrome scale, live. */
   const uiScale = useUiScale();
   /* Design note #1354: the utility row's measured height, for the title's safe line. */
@@ -325,9 +199,8 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
     observer.observe(node);
     return () => observer.disconnect();
   }, [uiScale]);
-  /* Design note #524: the sandbox room handlers. Local to this screen -- the
-     code is handed straight to `onEnterSandbox` and this component unmounts,
-     so there is nothing to keep. */
+  /* Design note #524: the sandbox room handlers. Local to this screen -- the game id is handed straight to
+     `onEnterSandbox` and this component unmounts, so there is nothing to keep. */
   const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
   const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
 
@@ -336,79 +209,74 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
     preloadWaitingRoomScene();
   }, []);
 
-  /* #1415: Host opens the setup card; the room is created with what the host chose there. Join opens the
-     list-and-code card over the public rooms the server is pushing. */
+  /* #1415: Host opens the setup card; the table is created with what the host chose there. Join opens the code box.
+     LIVE-2D: both are `room-op`s the server answers -- a game id, a code and a seat it minted, or a named refusal. */
   const [hostSetup, setHostSetup] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
-  const sandboxRooms = useSandboxRooms();
+  const publicRooms = usePublicRooms();
+
+  /** A refusal, said as a sentence a player can act on; an internal failure's reference goes to the console only. */
+  const sayRefusal = useCallback((code: string, reason: string): string => {
+    const ref = supportRefOf(reason);
+    // eslint-disable-next-line no-console
+    if (ref !== null) console.warn(`[lobby] the server refused (${code}); support reference ${ref}`);
+    return refusalMessage(code, reason);
+  }, []);
+
   const handleHostSandboxRoom = useCallback(
     async (variants: GameVariants, setup: RoomSetup) => {
       setSandboxRoomBusy(true);
       setSandboxRoomError(null);
       try {
-        const code = await hostSandboxRoom(localPlayerId(), "Host", variants, setup);
-        if (!code) {
+        if (!roomLinkAvailable()) {
           setSandboxRoomError("The game server is not configured in this build.");
           return;
         }
+        const answer = await createHostedGame(variants, setup, "Host");
+        const gameId = gameIdOf(answer);
+        if (!answer.ok || gameId === null) {
+          setSandboxRoomError(answer.ok ? refusalMessage("internal") : sayRefusal(answer.code, answer.reason));
+          return;
+        }
         setHostSetup(false);
-        onEnterSandbox(code);
-      } catch (error) {
-        setSandboxRoomError(error instanceof Error ? error.message : "Could not open the room.");
+        onEnterSandbox(gameId);
       } finally {
         setSandboxRoomBusy(false);
       }
     },
-    [onEnterSandbox],
+    [onEnterSandbox, sayRefusal],
   );
 
-  /* Design note #1440: the join, with its verdict RETURNED as well as shown. `SandboxRoomBar` reports the
-     bar's errors beside the buttons, which is the right place for a code somebody typed there and the wrong
-     place for a row far down the public list -- so the one path both use hands the reason back and each
-     caller says it where the player is looking. */
+  /* Design note #1440: the join, with its verdict RETURNED as well as shown -- the code box reports beside its own
+     field, a listed row beside that row. LIVE-2D: `room-op join {code, takeSeat: true}`; the server answers the game
+     id and the seat it gave, or `invalid-or-expired` / `room-full` / `kicked` / `rate-limited` / `limit-reached`. */
   const [roomRefusal, setRoomRefusal] = useState<{ code: string; reason: string } | null>(null);
   const handleJoinSandboxRoom = useCallback(
     async (raw: string): Promise<string | null> => {
-      const code = parseRoomCode(raw);
+      const code = parseJoinCode(raw);
       if (!code) {
-        const reason = "That is not a room code — they look like JUNO-4T2.";
+        const reason = `That is not a table code — they look like ${JOIN_CODE_EXAMPLE}.`;
         setSandboxRoomError(reason);
         return reason;
       }
       setSandboxRoomBusy(true);
       setSandboxRoomError(null);
       try {
-        /* Read the log once purely to TELL THE PLAYER whether the room is real before the board opens. An empty log
-           and a wrong code are indistinguishable once you are inside, and the second is a much more common mistake.
-           The replay itself belongs to the shell's listener; doing it here would apply the history twice. */
-        await readSandboxLog(code);
-        /* Design note #527: joining means taking a seat in the anteroom. Done here rather than in the waiting room so
-           a player who joins and then closes the tab has still been seen -- and so the room's roster is correct the
-           moment the screen opens rather than one round trip later.
-           #1415: AND THE ROOM MAY SAY NO -- a full table, a seat the host removed, a game already dealt. The
-           answer is awaited, and a refusal is shown here rather than walking the player into a room that does
-           not hold them. */
-        const answer = await joinSandboxRoom(code, {
-          id: localPlayerId(),
-          nickname: "Player",
-          isReady: false,
-        });
-        if (!answer.ok) {
-          setSandboxRoomError(answer.reason);
-          return answer.reason;
+        const answer = await joinHostedGame(code, true);
+        const gameId = gameIdOf(answer);
+        if (!answer.ok || gameId === null) {
+          const reason = answer.ok ? refusalMessage("internal") : sayRefusal(answer.code, answer.reason);
+          setSandboxRoomError(reason);
+          return reason;
         }
         setJoinOpen(false);
-        onEnterSandbox(code);
+        onEnterSandbox(gameId);
         return null;
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : "Could not join that room.";
-        setSandboxRoomError(reason);
-        return reason;
       } finally {
         setSandboxRoomBusy(false);
       }
     },
-    [onEnterSandbox],
+    [onEnterSandbox, sayRefusal],
   );
 
   /* The same join, said on the row it was asked from. A success unmounts this screen, so the only state kept
@@ -422,341 +290,11 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
     [handleJoinSandboxRoom],
   );
 
-  /* ==================================================================
-      DESIGN NOTE 1352: "REJOIN SEAT" LIVES ON THE LOBBY
-     ==================================================================
-     ASKED: "where do players use it? If they already have a game going, I think they should enter their PIN
-     on the lobby screen and then have an option to 'Rejoin' the current game."
-     #1341 put the rejoin card in the waiting room and on the in-game room strip -- both screens a player
-     only reaches AFTER joining as a fresh seat. The device-switch case starts here, on a device that has
-     never seen the room: code, then PIN, then the game. So the join form grows a "Rejoin seat" button; it
-     opens the room's roster (one room-doc subscription, the same one the waiting room uses) under the PIN
-     card, and on success the next load is pointed at the room (`writeSandboxResume`) before `adoptSeat`
-     reloads into it as that seat. */
-  const [rejoin, setRejoin] = useState<{ code: string; players: readonly SandboxRoomPlayer[] } | null>(null);
-  useEffect(() => {
-    if (!rejoin) return undefined;
-    return subscribeSandboxRoom(
-      rejoin.code,
-      (room) => {
-        if (room) setRejoin((current) => (current ? { ...current, players: room.players } : current));
-      },
-      (message) => setSandboxRoomError(message),
-    );
-  }, [rejoin?.code]); // eslint-disable-line react-hooks/exhaustive-deps -- the players are what the subscription writes
-  const handleRejoinSandboxRoom = useCallback((raw: string) => {
-    const code = parseRoomCode(raw);
-    if (!code) {
-      setSandboxRoomError("That is not a room code — they look like JUNO-4T2.");
-      return;
-    }
-    setSandboxRoomError(null);
-    setRejoin({ code, players: [] });
-  }, []);
-
   const wallet = useWallet();
   const address = wallet.address;
-
-  const [activeRoomId, setActiveRoomId] = useState<string | null>(() => {
-    try {
-      return window.sessionStorage.getItem(ACTIVE_ROOM_STORAGE_KEY);
-    } catch {
-      return null;
-    }
-  });
-
-  const [displayName, setDisplayNameState] = useState<string>(() => loadDisplayName() ?? "");
-  const [busy, setBusy] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-
-  const { rooms, loading: roomsLoading, error: roomsError, available } = useLobbyRooms();
-  const { room, seats, presence, error: roomError } = useRoom(activeRoomId);
-
-  // Design note #1 of `utils/lobby.ts`: this runs for as long as the player
-  // is in a room, keeping their seat marked alive.
-  usePresenceHeartbeat(activeRoomId, address);
-
-  useEffect(() => {
-    try {
-      if (activeRoomId) window.sessionStorage.setItem(ACTIVE_ROOM_STORAGE_KEY, activeRoomId);
-      else window.sessionStorage.removeItem(ACTIVE_ROOM_STORAGE_KEY);
-    } catch {
-      /* private browsing -- the room is still usable, just not resumable */
-    }
-  }, [activeRoomId]);
-
-  // A room the player has stored but which no longer exists (host cancelled
-  // while they were away) must not strand them on a blank screen.
-  useEffect(() => {
-    if (activeRoomId && room === null && !roomError) {
-      const timer = window.setTimeout(() => setActiveRoomId((current) => (current === activeRoomId ? null : current)), 4000);
-      return () => window.clearTimeout(timer);
-    }
-    return undefined;
-  }, [activeRoomId, room, roomError]);
-
-  const mySeat = useMemo(
-    () => (address ? seats.find((seat) => seat.address === address) ?? null : null),
-    [seats, address],
-  );
-  const isHost = room !== null && address !== null && room.hostAddress === address;
-
   const chainError = chainConfigError();
   const backendError = backendConfigError();
 
-  const runAction = useCallback(
-    async (label: string, action: () => Promise<void>) => {
-      setBusy(label);
-      setActionError(null);
-      try {
-        await action();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        setActionError(message);
-        // Design note #3: ALSO log. The banner is for the user; this is for the next person debugging with the console
-        // open. The original report came with "there are no errors in the console", which was true and was itself the
-        // clue -- an empty console should mean nothing ran, never that something failed quietly.
-        // eslint-disable-next-line no-console
-        console.error(`[lobby] ${label} failed:`, error);
-      } finally {
-        setBusy(null);
-      }
-    },
-    [],
-  );
-
-  /** Reports a precondition failure through the same banner real errors use
-   *  -- design note #3, rule 2. */
-  const reportBlocked = useCallback((message: string) => {
-    setActionError(message);
-    // eslint-disable-next-line no-console
-    console.warn(`[lobby] action blocked: ${message}`);
-  }, []);
-
-  /* ---------------- Display name ---------------- */
-
-  const commitDisplayName = useCallback(
-    (value: string) => {
-      setDisplayNameState(value);
-      saveDisplayName(value);
-      if (activeRoomId && address) {
-        void setSeatDisplayName(activeRoomId, address, value).catch(() => {
-          /* cosmetic; the next heartbeat or ready-toggle carries it anyway */
-        });
-      }
-    },
-    [activeRoomId, address],
-  );
-
-  /* ---------------- Room list actions ---------------- */
-
-  /* Design note #902: the variants come UP from the form rather than being held here. `RoomBrowser` owns every
-     other field of this form -- name, players, ante -- and splitting one of them into the parent would mean
-     two components had to agree about which. */
-  const handleCreate = useCallback(
-    (name: string, maxPlayers: number, anteDisplay: string, variants: GameVariants) =>
-      runAction("create", async () => {
-        if (!address) throw new Error("Connect a wallet before creating a room.");
-        const anteUjuno = toBaseAmount(anteDisplay);
-        if (anteUjuno === null) {
-          throw new Error(
-            `"${anteDisplay}" is not a valid ${NATIVE_DENOM_DISPLAY} amount. ` +
-              `Use up to ${NATIVE_DENOM_EXPONENT} decimal places, e.g. "1.5".`,
-          );
-        }
-        const roomId = await createStagingRoom({
-          name,
-          maxPlayers,
-          hostAddress: address,
-          hostDisplayName: displayName,
-          anteUjuno,
-          /* Design note #902: THE VARIANT'S BANK, not the constant. This figure is what the room advertises
-             to joiners, so a short game must say $4,500 here or players sit down expecting a different game
-             from the one that will be dealt. */
-          virtualBankStart: String(bankStartFor(variants)),
-          variants,
-        });
-        setActiveRoomId(roomId);
-      }),
-    [address, displayName, runAction],
-  );
-
-  const handleJoin = useCallback(
-    (target: RoomDoc) =>
-      runAction(`join:${target.id}`, async () => {
-        if (!address) throw new Error("Connect a wallet before joining a room.");
-        await claimSeat(target.id, address, displayName);
-        setActiveRoomId(target.id);
-      }),
-    [address, displayName, runAction],
-  );
-
-  /** Opens a live game read-only. Deliberately claims NO seat and requires NO wallet -- a spectator is not a
-   *  participant in either system. They are not in the contract's roster, so the chain would reject any action
-   *  from them regardless, and they get no seat doc, so they never appear in the player list or occupy capacity. */
-  const handleSpectate = useCallback(
-    (target: RoomDoc) => {
-      if (target.chainGameId === null) {
-        setActionError("That game has not finished launching yet — there is nothing on-chain to watch.");
-        return;
-      }
-      onSpectateGame(target.chainGameId, target.id);
-    },
-    [onSpectateGame],
-  );
-
-  /* ---------------- Staging room actions ---------------- */
-
-  const handleLeave = useCallback(
-    () =>
-      runAction("leave", async () => {
-        if (activeRoomId && address) await releaseSeat(activeRoomId, address);
-        setActiveRoomId(null);
-      }),
-    [activeRoomId, address, runAction],
-  );
-
-  const handleToggleReady = useCallback(
-    () =>
-      runAction("ready", async () => {
-        if (!activeRoomId || !address || !mySeat) return;
-        await setSeatReady(activeRoomId, address, !mySeat.ready);
-      }),
-    [activeRoomId, address, mySeat, runAction],
-  );
-
-  const handleRemoveSeat = useCallback(
-    (seat: SeatDoc) =>
-      runAction(`remove:${seat.address}`, async () => {
-        if (!activeRoomId) return;
-        await releaseSeat(activeRoomId, seat.address);
-      }),
-    [activeRoomId, runAction],
-  );
-
-  const handleCancelRoom = useCallback(
-    () =>
-      runAction("cancel", async () => {
-        if (!activeRoomId) return;
-        await setRoomStatus(activeRoomId, "closed");
-        setActiveRoomId(null);
-      }),
-    [activeRoomId, runAction],
-  );
-
-  /* ---------------- The launch -- design note #0 / #2 ---------------- */
-
-  const handleLaunch = useCallback(
-    () =>
-      runAction("launch", async () => {
-        if (!room || !activeRoomId) throw new Error("No room is open.");
-        if (!address || !wallet.signingClient) {
-          throw new Error("Connect a wallet before launching — this transaction moves real JUNO.");
-        }
-        // Throws naming the exact missing variable if the chain is
-        // unconfigured. This is the first thing here that genuinely needs a
-        // contract, so it is the right place to fail (config.ts note #0).
-        const contractAddress = requireContractAddress();
-
-        if (seats.length < MIN_PLAYERS) {
-          throw new Error(`A game needs at least ${MIN_PLAYERS} players. This room has ${seats.length}.`);
-        }
-        if (!seats.every((seat) => seat.ready)) {
-          throw new Error("Every player must be Ready before the room can launch.");
-        }
-
-        const funds: Coin[] = [{ denom: NATIVE_DENOM, amount: room.anteUjuno }];
-
-        await setRoomStatus(activeRoomId, "launching");
-        let result: ExecuteResult;
-        try {
-          result = await wallet.signingClient.execute(
-            address,
-            contractAddress,
-            {
-              CreateGameRoom: {
-                virtual_bank_start: room.virtualBankStart,
-                // `max_players` fixes the denominator for EVERY player's
-                // starting capital (msg.rs), so it is the room's
-                // configured size, never the current headcount -- using the
-                // latter would hand different players different capital.
-                max_players: room.maxPlayers,
-              },
-            },
-            "auto",
-            `${APP_NAME}: create room "${room.name}"`,
-            funds,
-          );
-        } catch (error) {
-          // The transaction failed, so nothing moved. Safe to return the
-          // room to staging and let the host retry.
-          const message = error instanceof Error ? error.message : String(error);
-          await setRoomStatus(activeRoomId, "staging", message);
-          throw error;
-        }
-
-        const chainGameId = parseGameIdFromExecuteResult(result);
-        if (chainGameId === null) {
-          // Design note #2: the tx SUCCEEDED and real JUNO has moved. Do not
-          // retry, do not guess -- surface the hash so the id can be
-          // recovered by hand.
-          const message =
-            `The room was created on-chain (tx ${result.transactionHash}) but no game_id ` +
-            "attribute could be read from the transaction. Recover the id from that " +
-            "transaction before retrying — launching again would create a second paid room.";
-          await setRoomStatus(activeRoomId, "staging", message);
-          throw new Error(message);
-        }
-
-        await bindChainGameId(activeRoomId, chainGameId);
-        // The contract registers the creator as the room's first player, so
-        // the host is in the roster the moment this confirms.
-        await markSeatOnChain(activeRoomId, address);
-        await wallet.refreshNativeBalance();
-
-        onEnterGame(chainGameId, activeRoomId);
-      }),
-    [room, activeRoomId, address, wallet, seats, runAction, onEnterGame],
-  );
-
-  /* ---------------- The ante -- joiners, once live ---------------- */
-
-  const handleAnte = useCallback(
-    () =>
-      runAction("ante", async () => {
-        if (!room || !activeRoomId) throw new Error("No room is open.");
-        if (room.chainGameId === null) throw new Error("This room has not launched yet.");
-        if (!address || !wallet.signingClient) throw new Error("Connect a wallet to ante in.");
-        const contractAddress = requireContractAddress();
-
-        // Design note #1: EXACTLY the creator's deposit. The contract
-        // rejects anything else outright.
-        const funds: Coin[] = [{ denom: NATIVE_DENOM, amount: room.anteUjuno }];
-
-        await wallet.signingClient.execute(
-          address,
-          contractAddress,
-          { JoinGameRoom: { game_id: room.chainGameId } },
-          "auto",
-          `${APP_NAME}: join room ${room.chainGameId}`,
-          funds,
-        );
-
-        await markSeatOnChain(activeRoomId, address);
-        await wallet.refreshNativeBalance();
-        onEnterGame(room.chainGameId, activeRoomId);
-      }),
-    [room, activeRoomId, address, wallet, runAction, onEnterGame],
-  );
-
-  const handleEnter = useCallback(() => {
-    if (room?.chainGameId !== null && room?.chainGameId !== undefined && activeRoomId) {
-      onEnterGame(room.chainGameId, activeRoomId);
-    }
-  }, [room, activeRoomId, onEnterGame]);
-
-  /* Design note #1130: whether the wordmark artwork failed to load. State rather than a ref, because the
-     render branches on it -- see the fallback note in the header. */
   const [titleArtFailed, setTitleArtFailed] = useState(false);
 
   /* ---------------- Render ---------------- */
@@ -798,7 +336,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
         {chainError && (
           <div
             style={styles.chainPill}
-            title={`${chainError}\n\nOn-chain rooms are switched off while sandbox multiplayer is being tested. Flip WEB3_LOBBY_ENABLED in Lobby.tsx to bring them back.`}
+            title={`${chainError}\n\nOn-chain tables return with the escrow contract; every table on this server is a no-money table.`}
           >
             <span style={styles.chainDot} aria-hidden="true" />
             Offline · sandbox active
@@ -808,30 +346,8 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
         {/* Design note #1336: the text-size control, on the first screen a player sees. The same component
             as the bars'; the scale it writes is the one every later screen reads. */}
         <UiScalePicker />
-        {/* ==================================================================
-             DESIGN NOTE 1133: THE DISPLAY NAME DOES NOTHING ON THIS SCREEN
-            ==================================================================
-            ASKED: "does the Display Name field actually do anything or need to be there? It doesn't seem to
-            have any confirm button, and players already set a name when they join a game." BOTH HALVES ARE
-            RIGHT, and the second explains the first.
-            `handleHostSandboxRoom` PASSES THE LITERAL "Host". It never reads this field. The name a sandbox
-            player actually uses is set in the waiting room, which has its own input and its own Save -- so
-            this one has no confirm because there is nothing to confirm it to.
-            IT IS NOT DEAD, THOUGH, WHICH IS WHY IT IS GATED RATHER THAN DELETED: `hostDisplayName`,
-            `claimSeat` and `ChatBox` all read it, and every one of them is inside the Web3 branch. #525's
-            rule for that branch is "parked, not deleted", and a control that serves only the parked path
-            belongs behind the same flag it does -- exactly where #1130 put the paused card's sentence. */}
-        {WEB3_LOBBY_ENABLED && (
-          <input
-            type="text"
-            value={displayName}
-            onChange={(event) => commitDisplayName(event.target.value)}
-            placeholder="Display name"
-            aria-label="Your display name"
-            style={styles.nameInput}
-            maxLength={24}
-          />
-        )}
+        {/* Design note #1133: the lobby's Display Name field served only the parked Web3 staging lobby, and went with
+            it (LIVE-2D). A seat's name is set in the waiting room. */}
         <div style={styles.headerControls}>
           {address ? (
             <>
@@ -946,14 +462,13 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
               }}
               onJoin={handleJoinSandboxRoom}
               onOpenJoin={
-                roomDocOnServer()
+                roomLinkAvailable()
                   ? () => {
                       setSandboxRoomError(null);
                       setJoinOpen(true);
                     }
                   : undefined
               }
-              onRejoin={roomDocOnServer() ? handleRejoinSandboxRoom : undefined}
             />
           </div>
         </div>
@@ -1010,25 +525,9 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
             setSandboxRoomError(null);
           }}
           onJoin={(code) => void handleJoinSandboxRoom(code)}
-          onRejoin={(code) => {
-            setJoinOpen(false);
-            handleRejoinSandboxRoom(code);
-          }}
           onClearError={() => setSandboxRoomError(null)}
         />
       )}
-      {/* Design note #1352: the PIN card over the room's roster, from the lobby. */}
-      {rejoin && (
-        <SeatPinModal
-          mode="rejoin"
-          roomCode={rejoin.code}
-          localPlayerId={localPlayerId()}
-          players={rejoin.players}
-          onAdopt={(code) => writeSandboxResume(code)}
-          onClose={() => setRejoin(null)}
-        />
-      )}
-
       <div style={styles.content}>
 
       {/* ==================================================================
@@ -1045,14 +544,16 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           bar's own errors; `attemptJoinSandboxRoom` returns the reason so both callers can say it where
           the player is looking. */}
       <LobbyRoomList
-        rooms={sandboxRooms.rooms}
-        loading={sandboxRooms.loading}
-        error={sandboxRooms.error}
-        available={sandboxRooms.available}
+        rooms={publicRooms.rooms}
+        loading={publicRooms.loading}
+        error={publicRooms.error}
+        available={publicRooms.available}
         busy={sandboxRoomBusy}
         refusal={roomRefusal}
         onJoin={(code) => void handleJoinListedRoom(code)}
-        onWatch={(code) => onEnterSandbox(code, true)}
+        /* LIVE-2D: Watch needs no op -- a public table is readable by any authenticated guest; the shell opens its
+           RoomView and log by game id, and the viewer holds no seat and is never given one. */
+        onWatch={(gameId) => onEnterSandbox(gameId)}
       />
 
       {/* Honest, specific banners -- never a silently empty screen. Each
@@ -1071,9 +572,7 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           quieter than that: nothing here is wrong, the app is doing exactly what an unconfigured build
           should. The neutral chip is the same one `CHIP_INERT` uses for a genuinely inert fact. */}
       {wallet.error && <Banner tone="error" text={wallet.error} />}
-      {actionError && <Banner tone="error" text={actionError} />}
-      {roomsError && <Banner tone="error" text={roomsError} />}
-      {roomError && <Banner tone="error" text={roomError} />}
+
 
       {/* The escape hatch (`App.tsx #24`), placed OUTSIDE the room-browser branch so it is reachable in every state
          this screen can be in -- including the states that motivated it: Firebase unconfigured, no wallet, no rooms,
@@ -1145,50 +644,6 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
           is off, and its tooltip carries the rest for whoever needs it. Nothing left here is unexplained --
           it is a title, and two buttons that say what they do. */}
 
-      {/* Design note #525: THE WEB3 LOBBY IS PARKED, NOT DELETED. Gated behind ONE flag rather than removed, and the
-         constant is at the top of this file where it can be found -- deleting a working staging room to run a
-         playtest would cost far more to rebuild than it costs to switch off, and #24 already records what happens
-         when the lobby becomes unreachable by accident.
-         WHAT IS HIDDEN IS THE WHOLE BRANCH, browser and staging room alike. Hiding only the create button would leave
-         a room list that cannot be joined, which is a worse trap than the one being removed: a control that looks
-         live and refuses is harder to dismiss than one that is absent.
-         THE SANDBOX PATHS ARE OUTSIDE IT and unaffected -- the same placement argument #24 made for the hatch. */}
-      {/* Design note #1123: FULL WIDTH, BELOW THE GRID. The paused card above is status; everything this
-          branch renders is a primary surface, and it gets the whole page the moment the flag turns on. */}
-      {!WEB3_LOBBY_ENABLED ? null : activeRoomId && room ? (
-        <StagingRoom
-          room={room}
-          seats={seats}
-          presence={presence}
-          mySeat={mySeat}
-          isHost={isHost}
-          address={address}
-          displayName={displayName}
-          busy={busy}
-          onToggleReady={handleToggleReady}
-          onLeave={handleLeave}
-          onRemoveSeat={handleRemoveSeat}
-          onLaunch={handleLaunch}
-          onAnte={handleAnte}
-          onEnter={handleEnter}
-          onCancelRoom={handleCancelRoom}
-        />
-      ) : activeRoomId ? (
-        <p style={styles.hint}>Loading room...</p>
-      ) : (
-        <RoomBrowser
-          rooms={rooms}
-          loading={roomsLoading}
-          available={available}
-          address={address}
-          busy={busy}
-          onCreate={handleCreate}
-          onJoin={handleJoin}
-          onSpectate={handleSpectate}
-          onBlocked={reportBlocked}
-        />
-      )}
-
       {/* ==================================================================
            DESIGN NOTE 1099: THE LOBBY GETS THE GAME'S FOOTER, NOT ITS OWN
           ==================================================================
@@ -1209,697 +664,6 @@ export function Lobby({ onEnterGame, onSpectateGame, onEnterSandbox }: LobbyProp
 }
 
 export default Lobby;
-
-/* ------------------------------------------------------------------ */
-/* Room browser                                                        */
-/* ------------------------------------------------------------------ */
-
-function RoomBrowser({
-  rooms,
-  loading,
-  available,
-  address,
-  busy,
-  onCreate,
-  onJoin,
-  onSpectate,
-  onBlocked,
-}: {
-  rooms: RoomDoc[];
-  loading: boolean;
-  available: boolean;
-  address: string | null;
-  busy: string | null;
-  onCreate: (
-    name: string,
-    maxPlayers: number,
-    anteDisplay: string,
-    variants: GameVariants,
-  ) => void;
-  onJoin: (room: RoomDoc) => void;
-  onSpectate: (room: RoomDoc) => void;
-  /** Raises a precondition failure into the parent's error banner --
-   *  design note #3, rule 2. */
-  onBlocked: (message: string) => void;
-}) {
-  const [name, setName] = useState("");
-  const [maxPlayers, setMaxPlayers] = useState(4);
-  /* Design note #902: the house rules, chosen before the room exists. Held as one object rather than four
-     `useState`s so what gets written to the room is the same shape the reducer resolves -- four separate
-     pieces of state assembled at the call site is where a fifth variant gets forgotten. */
-  const [variants, setVariants] = useState<GameVariants>(STANDARD_VARIANTS);
-  const [ante, setAnte] = useState(DEFAULT_ANTE_DISPLAY);
-  const [tab, setTab] = useState<BrowserTab>("open");
-
-  const anteBase = toBaseAmount(ante);
-  const anteValid = anteBase !== null;
-
-  /** Why creating is currently impossible, or `null` if it is possible. Ordered most-fundamental first, so the
-   *  message names the thing to fix FIRST rather than the last check that happened to fail -- and each string is
-   *  written to be actionable on its own, because this is the entire explanation the user gets. */
-  const createBlockedReason: string | null = !available
-    ? "The real-time lobby is offline, so a room cannot be created. Check the REACT_APP_FIREBASE_* values in frontend/.env, then restart the dev server."
-    : !address
-      ? "Connect a wallet first — the room is stored under your address as its host."
-      : !anteValid
-        ? `"${ante}" is not a valid ${NATIVE_DENOM_DISPLAY} amount. Use up to ${NATIVE_DENOM_EXPONENT} decimal places, for example 1.5.`
-        : null;
-
-  // Partitioned once rather than filtered twice, so the tab COUNTS and the
-  // tab CONTENTS can never disagree -- two independent filters over the same
-  // array is how a badge ends up saying "3" above an empty list.
-  const { openRooms, liveRooms } = useMemo(() => {
-    const open: RoomDoc[] = [];
-    const live: RoomDoc[] = [];
-    for (const room of rooms) {
-      if (room.status === "staging") open.push(room);
-      // `launching` belongs here, not in Open Lobbies: the host has already signed, so the room is no longer
-      // joinable -- but it has no `chainGameId` yet, so it is not watchable either. It appears in this tab with
-      // Spectate disabled, which is the honest representation of a transient state, rather than vanishing from both
-      // tabs for the duration of a block time.
-      else if (room.status === "live" || room.status === "launching") live.push(room);
-    }
-    return { openRooms: open, liveRooms: live };
-  }, [rooms]);
-
-  const visibleRooms = tab === "open" ? openRooms : liveRooms;
-
-  return (
-    <div style={styles.browserGrid}>
-      <section style={styles.panel}>
-        <h2 style={styles.panelTitle}>Create a room</h2>
-        <p style={styles.panelNote}>
-          Costs nothing. The room stays off-chain while players gather — the on-chain game is
-          created when you launch.
-        </p>
-
-        <label style={styles.label}>
-          Room name
-          <input
-            type="text"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="Friday night 18XX"
-            style={styles.input}
-            maxLength={48}
-          />
-        </label>
-
-        <label style={styles.label}>
-          Players
-          <select
-            value={maxPlayers}
-            onChange={(event) => setMaxPlayers(Number(event.target.value))}
-            style={styles.input}
-          >
-            {/* #1320: a seventh seat appears when the Level Playing Field is ticked below. */}
-            {Array.from(
-              { length: maxPlayersForVariants(variants) - MIN_PLAYERS + 1 },
-              (_, index) => MIN_PLAYERS + index,
-            ).map(
-              (count) => (
-                <option key={count} value={count}>
-                  {count} players
-                </option>
-              ),
-            )}
-          </select>
-        </label>
-
-        {/* ==================================================================
-             DESIGN NOTE 902: THE HOUSE RULES, AGREED BEFORE THE DEAL
-            ==================================================================
-            AT ROOM CREATION rather than in a settings panel, because these are not preferences -- they are
-            terms. A player taking a seat is agreeing to a game, and a variant discovered after the deal is
-            not something they chose. The room list shows them for the same reason.
-            ALL FIVE ARE LIVE NOW. Two of them shipped disabled for one batch, labelled "not built yet" -- a
-            toggle that silently does nothing is a lie the table only discovers three hours in, and saying so
-            in the label was the cheap honest option while they were being built. Both are implemented, so
-            both are switches again. */}
-        <label style={styles.label}>
-          Game length
-          <select
-            value={variants.length}
-            onChange={(event) =>
-              setVariants((current) => ({
-                ...current,
-                length: event.target.value as GameLength,
-              }))
-            }
-            style={styles.input}
-          >
-            {(Object.keys(BANK_SIZE_BY_LENGTH) as GameLength[]).map((option) => (
-              <option key={option} value={option}>
-                {option === "short" ? "Short" : option === "long" ? "Long" : "Standard"} &mdash; $
-                {BANK_SIZE_BY_LENGTH[option].toLocaleString()} bank
-              </option>
-            ))}
-          </select>
-        </label>
-        <p style={styles.panelNote}>{GAME_LENGTH_BLURB[variants.length]}</p>
-
-        <label style={styles.variantRow}>
-          <input
-            type="checkbox"
-            checked={variants.unpredictableRevenue}
-            onChange={(event) =>
-              setVariants((current) => ({
-                ...current,
-                unpredictableRevenue: event.target.checked,
-              }))
-            }
-          />
-          <span>
-            <strong>{VARIANT_COPY.unpredictableRevenue.label}</strong>
-            <span style={styles.variantNote}>{VARIANT_COPY.unpredictableRevenue.blurb}</span>
-          </span>
-        </label>
-
-        <label style={styles.variantRow}>
-          <input
-            type="checkbox"
-            checked={variants.dynamicStockMarket}
-            onChange={(event) =>
-              setVariants((current) => ({
-                ...current,
-                dynamicStockMarket: event.target.checked,
-              }))
-            }
-          />
-          <span>
-            <strong>{VARIANT_COPY.dynamicStockMarket.label}</strong>
-            <span style={styles.variantNote}>{VARIANT_COPY.dynamicStockMarket.blurb}</span>
-          </span>
-        </label>
-
-        <label style={styles.variantRow}>
-          <input
-            type="checkbox"
-            checked={variants.gentleRust}
-            onChange={(event) =>
-              setVariants((current) => ({ ...current, gentleRust: event.target.checked }))
-            }
-          />
-          <span>
-            <strong>{VARIANT_COPY.gentleRust.label}</strong>
-            <span style={styles.variantNote}>{VARIANT_COPY.gentleRust.blurb}</span>
-          </span>
-        </label>
-
-        <label style={styles.variantRow}>
-          <input
-            type="checkbox"
-            checked={variants.delayedAuction}
-            onChange={(event) =>
-              setVariants((current) => ({ ...current, delayedAuction: event.target.checked }))
-            }
-          />
-          <span>
-            <strong>{VARIANT_COPY.delayedAuction.label}</strong>
-            <span style={styles.variantNote}>{VARIANT_COPY.delayedAuction.blurb}</span>
-          </span>
-        </label>
-
-        <label style={styles.variantRow}>
-          <input
-            type="checkbox"
-            checked={variants.expandedMap}
-            // Design note #1320: locked on while the Level Playing Field is chosen -- it is that map.
-            disabled={variants.levelPlayingField}
-            onChange={(event) =>
-              setVariants((current) => ({
-                ...current,
-                expandedMap: event.target.checked,
-                // #1310: the tray leaves with the map.
-                plusTiles: event.target.checked && current.plusTiles,
-              }))
-            }
-          />
-          <span>
-            <strong>{VARIANT_COPY.expandedMap.label}</strong>
-            <span style={styles.variantNote}>{VARIANT_COPY.expandedMap.blurb}</span>
-          </span>
-        </label>
-
-        <label style={styles.variantRow}>
-          <input
-            type="checkbox"
-            checked={variants.plusTiles}
-            // Design note #1310: the tile set needs the map. #1320: and the Level Playing Field needs the set.
-            disabled={!variants.expandedMap || variants.levelPlayingField}
-            onChange={(event) =>
-              setVariants((current) => ({ ...current, plusTiles: event.target.checked }))
-            }
-          />
-          <span>
-            <strong>{VARIANT_COPY.plusTiles.label}</strong>
-            <span style={styles.variantNote}>{VARIANT_COPY.plusTiles.blurb}</span>
-          </span>
-        </label>
-
-        <label style={styles.variantRow}>
-          <input
-            type="checkbox"
-            checked={variants.levelPlayingField}
-            onChange={(event) => {
-              const on = event.target.checked;
-              setVariants((current) => ({
-                ...current,
-                levelPlayingField: on,
-                // #1320: ticking it brings the map and the tile set; unticking leaves them as they were.
-                ...(on ? { expandedMap: true, plusTiles: true } : {}),
-              }));
-              // And a table of seven cannot survive the variant going away.
-              if (!on) setMaxPlayers((count) => Math.min(count, maxPlayersForVariants(null)));
-            }}
-          />
-          <span>
-            <strong>{VARIANT_COPY.levelPlayingField.label}</strong>
-            <span style={styles.variantNote}>{VARIANT_COPY.levelPlayingField.blurb}</span>
-          </span>
-        </label>
-
-        <label style={styles.label}>
-          Ante per player ({NATIVE_DENOM_DISPLAY})
-          <input
-            type="text"
-            inputMode="decimal"
-            value={ante}
-            onChange={(event) => setAnte(event.target.value)}
-            style={{ ...styles.input, ...(anteValid ? {} : styles.inputInvalid) }}
-          />
-        </label>
-        <p style={styles.panelNote}>
-          {anteValid
-            ? `Every player deposits exactly ${anteBase} ${NATIVE_DENOM} — the contract enforces this to the last unit.`
-            : `Not a valid amount. Up to ${NATIVE_DENOM_EXPONENT} decimal places.`}
-        </p>
-
-        {/* Design note #3. Disabled ONLY while a create is in flight;
-            every other precondition leaves the button live and explains
-            itself on click instead of silently eating the event. */}
-        <button
-          type="button"
-          style={disabledButtonStyle(styles.primaryButton, busy !== null)}
-          disabled={busy !== null}
-          onClick={() => {
-            if (createBlockedReason) {
-              onBlocked(createBlockedReason);
-              return;
-            }
-            onCreate(name, maxPlayers, ante, variants);
-          }}
-        >
-          {busy === "create" ? "Creating..." : "Create room"}
-        </button>
-
-        {/* The same reason, shown before the click as well as after it --
-            an explanation that only appears once you have already been
-            refused is half an explanation. */}
-        {createBlockedReason && <p style={styles.blockedNote}>⚠ {createBlockedReason}</p>}
-      </section>
-
-      <section style={styles.panel}>
-        <div style={styles.tabBar} role="tablist" aria-label="Room browser">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "open"}
-            style={{ ...styles.tabButton, ...(tab === "open" ? styles.tabButtonActive : {}) }}
-            onClick={() => setTab("open")}
-          >
-            Open Lobbies
-            <span style={styles.tabCount}>{openRooms.length}</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "live"}
-            style={{ ...styles.tabButton, ...(tab === "live" ? styles.tabButtonActive : {}) }}
-            onClick={() => setTab("live")}
-          >
-            Live Games
-            <span style={styles.tabCount}>{liveRooms.length}</span>
-          </button>
-        </div>
-
-        <p style={styles.panelNote}>
-          {tab === "open"
-            ? "Rooms still gathering players. Nothing is on-chain yet — joining costs no gas."
-            : "Rooms that have launched on-chain. Spectating is read-only: you can watch the board, ledger and market, but every action control is disabled."}
-        </p>
-
-        {!available && <p style={styles.hint}>Real-time lobby is offline — no rooms can be listed.</p>}
-        {available && loading && <p style={styles.hint}>Loading rooms...</p>}
-        {available && !loading && visibleRooms.length === 0 && (
-          <p style={styles.hint}>
-            {tab === "open"
-              ? "No open lobbies. Create one and invite the table."
-              : "No games in progress right now."}
-          </p>
-        )}
-
-        <div style={styles.roomList}>
-          {visibleRooms.map((room) =>
-            tab === "open" ? (
-              <OpenLobbyRow
-                key={room.id}
-                room={room}
-                address={address}
-                busy={busy}
-                onJoin={() => onJoin(room)}
-                onBlocked={onBlocked}
-              />
-            ) : (
-              <LiveGameRow key={room.id} room={room} onSpectate={() => onSpectate(room)} />
-            ),
-          )}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-/** One row in the Open Lobbies tab. */
-function OpenLobbyRow({
-  room,
-  address,
-  busy,
-  onJoin,
-  onBlocked,
-}: {
-  room: RoomDoc;
-  address: string | null;
-  busy: string | null;
-  onJoin: () => void;
-  onBlocked: (message: string) => void;
-}) {
-  const full = room.seatCount >= room.maxPlayers;
-
-  // Design note #3, rule 2. "Full" stays a genuine `disabled` -- it is a
-  // property of the room that no action by this user can change, so there
-  // is nothing to explain and nothing to try. "No wallet" is the opposite:
-  // entirely fixable, and worth saying out loud.
-  const joinBlockedReason: string | null = !address
-    ? "Connect a wallet first — a seat is claimed under your address."
-    : null;
-
-  return (
-    <div style={styles.roomRow}>
-      <div style={styles.roomRowMain}>
-        <span style={styles.roomName}>{room.name}</span>
-        <span style={styles.roomMeta}>
-          Host {room.hostDisplayName || truncateAddress(room.hostAddress)} &middot;{" "}
-          {formatNativeAmount(room.anteUjuno)} {NATIVE_DENOM_DISPLAY} ante
-        </span>
-      </div>
-      <span style={styles.seatPill}>
-        {room.seatCount}/{room.maxPlayers}
-      </span>
-      <button
-        type="button"
-        style={disabledButtonStyle(styles.secondaryButton, full || busy !== null)}
-        disabled={full || busy !== null}
-        onClick={() => {
-          if (joinBlockedReason) {
-            onBlocked(joinBlockedReason);
-            return;
-          }
-          onJoin();
-        }}
-        title={joinBlockedReason ?? undefined}
-      >
-        {busy === `join:${room.id}` ? "Joining..." : full ? "Full" : "Join"}
-      </button>
-    </div>
-  );
-}
-
-/** One row in the Live Games tab. No wallet check on Spectate, unlike Join: watching requires no identity
- *  because it performs no write in either system -- no seat is claimed and no transaction is signed. */
-function LiveGameRow({ room, onSpectate }: { room: RoomDoc; onSpectate: () => void }) {
-  const launching = room.status === "launching" || room.chainGameId === null;
-
-  return (
-    <div style={styles.roomRow}>
-      <div style={styles.roomRowMain}>
-        <span style={styles.roomName}>{room.name}</span>
-        <span style={styles.roomMeta}>
-          {room.chainGameId !== null ? `On-chain game #${room.chainGameId}` : "Awaiting confirmation"} &middot; Host{" "}
-          {room.hostDisplayName || truncateAddress(room.hostAddress)}
-        </span>
-      </div>
-      <span style={styles.seatPill}>
-        {room.seatCount}/{room.maxPlayers}
-      </span>
-      <StatusPill status={room.status} />
-      <button
-        type="button"
-        style={disabledButtonStyle(styles.secondaryButton, launching)}
-        disabled={launching}
-        onClick={onSpectate}
-        title={launching ? "The launch transaction has not confirmed yet" : "Watch this game read-only"}
-      >
-        {launching ? "Launching..." : "👁 Spectate"}
-      </button>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Staging room                                                        */
-/* ------------------------------------------------------------------ */
-
-function StagingRoom({
-  room,
-  seats,
-  presence,
-  mySeat,
-  isHost,
-  address,
-  displayName,
-  busy,
-  onToggleReady,
-  onLeave,
-  onRemoveSeat,
-  onLaunch,
-  onAnte,
-  onEnter,
-  onCancelRoom,
-}: {
-  room: RoomDoc;
-  seats: SeatDoc[];
-  presence: Map<string, PresenceState>;
-  mySeat: SeatDoc | null;
-  isHost: boolean;
-  address: string | null;
-  displayName: string;
-  busy: string | null;
-  onToggleReady: () => void;
-  onLeave: () => void;
-  onRemoveSeat: (seat: SeatDoc) => void;
-  onLaunch: () => void;
-  onAnte: () => void;
-  onEnter: () => void;
-  onCancelRoom: () => void;
-}) {
-  const everyoneReady = seats.length >= MIN_PLAYERS && seats.every((seat) => seat.ready);
-  const openSeats = Math.max(0, room.maxPlayers - seats.length);
-  const isLive = room.status === "live" && room.chainGameId !== null;
-
-  return (
-    <div style={styles.roomGrid}>
-      <section style={styles.panel}>
-        <div style={styles.roomHeader}>
-          <div>
-            <h2 style={styles.panelTitle}>{room.name}</h2>
-            <p style={styles.panelNote}>
-              {formatNativeAmount(room.anteUjuno)} {NATIVE_DENOM_DISPLAY} ante &middot; {room.maxPlayers} players
-              {room.chainGameId !== null && ` · on-chain game #${room.chainGameId}`}
-            </p>
-          </div>
-          <StatusPill status={room.status} />
-        </div>
-
-        {room.launchError && <Banner tone="error" text={room.launchError} />}
-
-        <div style={styles.seatList}>
-          {seats.map((seat) => (
-            <SeatCard
-              key={seat.address}
-              seat={seat}
-              presence={presence.get(seat.address) ?? "online"}
-              isSelf={seat.address === address}
-              canRemove={isHost && seat.address !== address && room.status === "staging"}
-              removing={busy === `remove:${seat.address}`}
-              onRemove={() => onRemoveSeat(seat)}
-            />
-          ))}
-          {Array.from({ length: openSeats }, (_, index) => (
-            <div key={`open-${index}`} style={styles.openSeat}>
-              Open seat
-            </div>
-          ))}
-        </div>
-
-        <div style={styles.roomActions}>
-          {mySeat && room.status === "staging" && (
-            <button
-              type="button"
-              style={disabledButtonStyle(mySeat.ready ? styles.secondaryButton : styles.primaryButton, busy !== null)}
-              onClick={onToggleReady}
-              disabled={busy !== null}
-            >
-              {mySeat.ready ? "✓ Ready — click to unready" : "Mark me Ready"}
-            </button>
-          )}
-
-          {isHost && room.status === "staging" && (
-            <button
-              type="button"
-              style={disabledButtonStyle(styles.launchButton, !everyoneReady || busy !== null)}
-              onClick={onLaunch}
-              disabled={!everyoneReady || busy !== null}
-              title={
-                everyoneReady
-                  ? "Signs CreateGameRoom and deposits your ante"
-                  : `All ${MIN_PLAYERS}+ players must be Ready first`
-              }
-            >
-              {busy === "launch" ? "Launching on-chain..." : "🚀 Launch Game"}
-            </button>
-          )}
-
-          {isLive && mySeat && !mySeat.onChain && (
-            <button
-              type="button"
-              style={disabledButtonStyle(styles.launchButton, busy !== null)}
-              onClick={onAnte}
-              disabled={busy !== null}
-            >
-              {busy === "ante"
-                ? "Anteing in..."
-                : `Ante ${formatNativeAmount(room.anteUjuno)} ${NATIVE_DENOM_DISPLAY} & join`}
-            </button>
-          )}
-
-          {isLive && mySeat?.onChain && (
-            <button type="button" style={styles.launchButton} onClick={onEnter}>
-              Enter game →
-            </button>
-          )}
-
-          <button
-            type="button"
-            style={disabledButtonStyle(styles.secondaryButton, busy !== null)}
-            onClick={onLeave}
-            disabled={busy !== null}
-          >
-            {busy === "leave" ? "Leaving..." : "Leave room"}
-          </button>
-
-          {isHost && room.status === "staging" && (
-            <button
-              type="button"
-              style={disabledButtonStyle(styles.dangerButton, busy !== null)}
-              onClick={onCancelRoom}
-              disabled={busy !== null}
-            >
-              Cancel room
-            </button>
-          )}
-        </div>
-
-        {isHost && room.status === "staging" && !everyoneReady && (
-          <p style={styles.panelNote}>
-            Waiting on {seats.filter((seat) => !seat.ready).length || MIN_PLAYERS - seats.length} more
-            {seats.length < MIN_PLAYERS ? " player(s) to join" : " player(s) to ready up"}.
-          </p>
-        )}
-        {isLive && (
-          <p style={styles.panelNote}>
-            This room is live on-chain as game #{room.chainGameId}. Every player must ante in
-            before they can act — the contract's roster, not this list, decides who is playing.
-          </p>
-        )}
-      </section>
-
-      <ChatBox roomId={room.id} address={address} displayName={displayName} title={`${room.name} chat`} />
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* Small presentational pieces                                         */
-/* ------------------------------------------------------------------ */
-
-function SeatCard({
-  seat,
-  presence,
-  isSelf,
-  canRemove,
-  removing,
-  onRemove,
-}: {
-  seat: SeatDoc;
-  presence: PresenceState;
-  isSelf: boolean;
-  canRemove: boolean;
-  removing: boolean;
-  onRemove: () => void;
-}) {
-  const dropped = presence === "dropped";
-  return (
-    <div style={{ ...styles.seatCard, ...(dropped ? styles.seatCardDropped : {}) }}>
-      <span style={styles.presenceDot} title={dropped ? "No heartbeat for over a minute" : "Online"}>
-        {dropped ? "⚫" : "🟢"}
-      </span>
-      <div style={styles.seatMain}>
-        <span style={styles.seatName}>
-          {seatLabel(seat)}
-          {isSelf && <span style={styles.selfTag}>you</span>}
-          {seat.isHost && <span style={styles.hostTag}>host</span>}
-        </span>
-        {/* The display name is self-asserted, so the address stays visible
-            -- it is the only identity the contract knows. */}
-        <span style={styles.seatAddress} title={seat.address}>
-          {truncateAddress(seat.address)}
-        </span>
-      </div>
-
-      {seat.onChain ? (
-        <span style={styles.antedTag}>⛓ anted</span>
-      ) : seat.ready ? (
-        <span style={styles.readyTag}>✓ ready</span>
-      ) : (
-        <span style={styles.waitingTag}>waiting</span>
-      )}
-
-      {canRemove && (
-        <button
-          type="button"
-          style={disabledButtonStyle(styles.removeButton, removing)}
-          onClick={onRemove}
-          disabled={removing}
-        >
-          {removing ? "..." : "Remove"}
-        </button>
-      )}
-    </div>
-  );
-}
-
-function StatusPill({ status }: { status: RoomDoc["status"] }) {
-  const tone =
-    status === "live"
-      ? styles.pillLive
-      : status === "launching"
-        ? styles.pillLaunching
-        : status === "closed"
-          ? styles.pillClosed
-          : styles.pillStaging;
-  return <span style={{ ...styles.pill, ...tone }}>{status}</span>;
-}
 
 function Banner({ tone, text }: { tone: "error" | "warn"; text: string }) {
   return (

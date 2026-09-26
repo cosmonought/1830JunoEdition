@@ -18,6 +18,10 @@
 // own batch; introducing it here would be a change nobody asked this batch for, so the cases below assert it
 // is UNCHANGED rather than fixed.
 //
+// LIVE-2D: `SeatPinModal` is DELETED with the seat PINs -- a seat is the principal's in the server's GameRecord and
+// comes back with the session, so there is no PIN to set or to rejoin with. Its rows above are the record of what
+// was measured; its cases are gone, and one case below pins that no PIN surface comes back.
+//
 // AND THE DISMISSIBLE READING, taken from the controls rather than from a variable's name. All three pass no
 // `dismissible` at all, and each for its own measured reason:
 //
@@ -44,7 +48,6 @@ import { createRoot, type Root } from "react-dom/client";
 
 import { ModalLayerHost } from "./ModalPortal";
 
-import SeatPinModal from "./SeatPinModal";
 import AutoBuyModal from "./AutoBuyModal";
 import AutoPassModal from "./AutoPassModal";
 import { readStripped } from "../utils/sourceScan";
@@ -55,27 +58,6 @@ declare global {
 }
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
-let mockSetPinCalls: unknown[][] = [];
-let mockSettleSetPin: (answer: unknown) => void = () => {};
-jest.mock("../utils/roomDocLink", () => ({
-  roomDocOnServer: () => true,
-  setSeatPin: (...args: unknown[]) => {
-    mockSetPinCalls.push(args);
-    return new Promise((resolve) => {
-      mockSettleSetPin = resolve;
-    });
-  },
-  claimSeat: () => new Promise(() => {}),
-}));
-
-const PLAYERS = [
-  { id: "me", nickname: "Me", isReady: true, hasPin: false },
-  { id: "them", nickname: "Them", isReady: true, hasPin: true },
-] as never;
-const PLAYERS_I_HAVE_A_PIN = [
-  { id: "me", nickname: "Me", isReady: true, hasPin: true },
-  { id: "them", nickname: "Them", isReady: true, hasPin: true },
-] as never;
 const CORPS = [
   { companyId: 1, ticker: "PRR", holdingPercent: 10, parValue: "67", ipoPercent: 50, bankPoolPercent: 10, marketPrice: 70 },
   { companyId: 2, ticker: "B&O", holdingPercent: 0, parValue: "71", ipoPercent: 100, bankPoolPercent: 0, marketPrice: null },
@@ -99,10 +81,8 @@ function spyListeners() {
   } as never);
 }
 
-type Which = "seatpin" | "autobuy" | "autopass";
+type Which = "autobuy" | "autopass";
 let setOpen: (open: boolean) => void = () => {};
-let setMode: (mode: "set" | "rejoin") => void = () => {};
-let setPlayers: (players: unknown) => void = () => {};
 let setDoomed: (present: boolean) => void = () => {};
 
 /** `mountAlways` reproduces `App.tsx`'s wiring for `AutoPassModal`: the component is in the tree whether or
@@ -119,12 +99,8 @@ function Harness({
   extraOpener: boolean;
 }) {
   const [open, setOpenState] = useState(false);
-  const [mode, setModeState] = useState<"set" | "rejoin">("set");
-  const [players, setPlayersState] = useState<unknown>(PLAYERS);
   const [doomedPresent, setDoomedState] = useState(extraOpener);
   setOpen = setOpenState;
-  setMode = setModeState;
-  setPlayers = setPlayersState;
   setDoomed = setDoomedState;
   const close = () => {
     closes += 1;
@@ -142,9 +118,6 @@ function Harness({
         <button type="button" data-testid="doomed">
           Doomed opener
         </button>
-      )}
-      {which === "seatpin" && open && (
-        <SeatPinModal mode={mode} roomCode="HARNES" localPlayerId="me" players={players as never} onClose={close} />
       )}
       {which === "autobuy" && (mountAlways || open) && (
         <AutoBuyModal open={open} corporations={CORPS} onArm={(s) => arms.push(s)} onClose={close} />
@@ -181,7 +154,6 @@ function unmountLayer() {
 function mount(which: Which, opts: { mountAlways?: boolean; exposed?: readonly string[]; extraOpener?: boolean } = {}) {
   closes = 0;
   arms = [];
-  mockSetPinCalls = [];
   spyListeners();
   mountLayer();
   host = document.createElement("div");
@@ -212,10 +184,9 @@ const at = (testid: string) => {
   if (!node) throw new Error("no " + testid);
   return node;
 };
-/* #1651: TWO DIALECTS ON PURPOSE. `AutoBuyModal` and `AutoPassModal` are native `<dialog>` elements now;
-   `SeatPinModal` is a NAMED EXCLUSION (every PIN surface is) and is still the custom `role="dialog"` card it
-   was. This accessor finds whichever of the two is up, which is how one file can hold both and show the
-   difference rather than hide it. */
+/* #1651: `AutoBuyModal` and `AutoPassModal` are native `<dialog>` elements. The custom `role="dialog"` dialect
+   this accessor also finds was `SeatPinModal`'s, deleted in LIVE-2D; the case below asserts nothing of that
+   dialect is left up. */
 const dialog = () =>
   document.querySelector<HTMLElement>('dialog[data-native-modal]') ??
   document.querySelector<HTMLElement>('[role="dialog"]');
@@ -231,13 +202,11 @@ const btn = (text: string) =>
     | HTMLButtonElement
     | undefined;
 const boxes = () => Array.from(openDialog().querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
-const pinField = () => openDialog().querySelector<HTMLInputElement>('input:not([type="checkbox"])')!;
 
 const open = () => act(() => setOpen(true));
 const click = (node: Element | null | undefined) =>
   act(() => void node?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })));
-/** `role="dialog"` sits on the backdrop in the two auto modals and on the card in `SeatPinModal`, so the
- *  element a backdrop click must land on differs. Both dialects are driven here, neither is changed. */
+/** A backdrop click lands on the dialog element itself (#1651). */
 const clickBackdrop = () => {
   const node = openDialog();
   const target = node.getAttribute("aria-modal") === "true" && node.tagName === "FORM" ? node.parentElement! : node;
@@ -260,7 +229,6 @@ const clickBackdrop = () => {
    writes `closedby` whether or not the engine understands it. */
 function deliverCloseRequest(keydown: KeyboardEvent) {
   if (keydown.defaultPrevented) return;
-  /* Nothing to deliver for the excluded custom surface: `SeatPinModal` still hears the keydown itself. */
   const node = document.querySelector<HTMLDialogElement>("dialog[data-native-modal]");
   if (!node) return;
   if (node.getAttribute("closedby") === "none") return;
@@ -292,7 +260,6 @@ const typeInto = (input: HTMLInputElement, value: string) =>
 /* ================================================================== */
 
 const SURFACES: Array<{ label: string; which: Which; mountAlways?: boolean }> = [
-  { label: "SeatPinModal", which: "seatpin" },
   { label: "AutoBuyModal", which: "autobuy" },
   { label: "AutoPassModal", which: "autopass", mountAlways: true },
 ];
@@ -352,7 +319,7 @@ describe.each(SURFACES)("$label dismisses and sends focus home", ({ label, which
     expect(keydownListeners).toBe(0);
     for (let cycle = 0; cycle < 10; cycle += 1) {
       open();
-      expect(keydownListeners).toBe(label === "SeatPinModal" ? 1 : 0);
+      expect(keydownListeners).toBe(0);
       escape();
       expect(keydownListeners).toBe(0);
     }
@@ -374,7 +341,6 @@ describe.each(SURFACES)("$label dismisses and sends focus home", ({ label, which
   it(`keeps ${label}'s accessible name and modality exactly as they were`, () => {
     open();
     const names: Record<string, string> = {
-      SeatPinModal: "Set a seat PIN",
       AutoBuyModal: "Auto-Buy settings",
       AutoPassModal: "Auto-Pass conditions",
     };
@@ -383,31 +349,20 @@ describe.each(SURFACES)("$label dismisses and sends focus home", ({ label, which
        comes from `showModal()` and whose role is implicit -- an `aria-modal` attribute on it would be
        redundant, and a nested `role="dialog"` inside it was the defect the correction removed. The excluded
        PIN surface still declares both, because nothing about it changed. */
-    if (isNative()) {
-      expect(openDialog().tagName).toBe("DIALOG");
-      expect(openDialog().getAttribute("aria-modal")).toBeNull();
-      expect(openDialog().getAttribute("role")).toBeNull();
-      expect(openDialog().querySelectorAll('[role="dialog"], [aria-modal]')).toHaveLength(0);
-    } else {
-      expect(openDialog().getAttribute("aria-modal")).toBe("true");
-      expect(openDialog().getAttribute("role")).toBe("dialog");
-    }
+    expect(isNative()).toBe(true);
+    expect(openDialog().tagName).toBe("DIALOG");
+    expect(openDialog().getAttribute("aria-modal")).toBeNull();
+    expect(openDialog().getAttribute("role")).toBeNull();
+    expect(openDialog().querySelectorAll('[role="dialog"], [aria-modal]')).toHaveLength(0);
   });
 });
 
 /* ================================================================== */
-/*  Initial focus: unchanged on all three, in two different ways       */
+/*  Initial focus: unchanged on both                                   */
 /* ================================================================== */
 
 describe("initial focus is exactly what it was", () => {
   afterEach(() => unmount());
-
-  it("SeatPinModal still lands on the PIN field", () => {
-    mount("seatpin");
-    at("opener").focus();
-    open();
-    expect(document.activeElement).toBe(pinField());
-  });
 
   it("AutoBuyModal still leaves focus on the opener, because it never moved it", () => {
     /* AUDIT H2, LEFT ALONE ON PURPOSE. Introducing initial focus here is a change this batch was told not to
@@ -423,78 +378,6 @@ describe("initial focus is exactly what it was", () => {
     at("opener").focus();
     open();
     expect(document.activeElement).toBe(at("opener"));
-  });
-});
-
-/* ================================================================== */
-/*  Seat PIN: naming, pending save, validation, reset                  */
-/* ================================================================== */
-
-describe("SeatPinModal keeps the rest of its contract", () => {
-  beforeEach(() => mount("seatpin"));
-  afterEach(() => unmount());
-
-  it("names itself by mode, and the name does not follow the roster", () => {
-    /* THE MEASURED CONTRACT, PINNED RATHER THAN CHANGED. `mode` is a prop and all three call sites fix it for
-       the life of one mount, so a mode-specific name is legitimate. What DOES move under a mounted dialog is
-       the VISIBLE HEADING, which follows the roster's `hasPin` while the accessible name does not -- the
-       audit's M4, recorded here so a later semantic pass changes it on purpose. */
-    open();
-    expect(openDialog().getAttribute("aria-label")).toBe("Set a seat PIN");
-    expect(openDialog().querySelector("span")!.textContent).toBe("Set a PIN for your seat");
-    act(() => setPlayers(PLAYERS_I_HAVE_A_PIN));
-    expect(openDialog().getAttribute("aria-label")).toBe("Set a seat PIN");
-    expect(openDialog().querySelector("span")!.textContent).toBe("Change your seat PIN");
-  });
-
-  it("names itself 'Rejoin a seat' in rejoin mode", () => {
-    act(() => setMode("rejoin"));
-    open();
-    expect(openDialog().getAttribute("aria-label")).toBe("Rejoin a seat");
-  });
-
-  it("still refuses a PIN that is not four digits, and still strips non-digits", () => {
-    open();
-    typeInto(pinField(), "12");
-    act(() => void openDialog().dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
-    expect(mockSetPinCalls).toHaveLength(0);
-    expect(openDialog().textContent).toContain("A PIN is exactly four digits.");
-    typeInto(pinField(), "9a8b7c6d5");
-    expect(pinField().value).toBe("9876");
-  });
-
-  it("still saves the PIN through the server, with the room and the seat it was opened for", () => {
-    open();
-    typeInto(pinField(), "1234");
-    act(() => void openDialog().dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
-    expect(mockSetPinCalls).toHaveLength(1);
-    expect(mockSetPinCalls[0].slice(0, 3)).toEqual(["HARNES", "me", "1234"]);
-    mockSettleSetPin({ ok: true });
-  });
-
-  it("stays dismissible while a save is in flight, because every visible route is", () => {
-    at("opener").focus();
-    open();
-    typeInto(pinField(), "1234");
-    act(() => void openDialog().dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
-    expect(btn("Save PIN")!.disabled).toBe(true);
-    expect(closeButton().disabled).toBe(false);
-    expect(btn("Cancel")!.disabled).toBe(false);
-    closeButton().focus();
-    escape();
-    expect(dialog()).toBeNull();
-    expect(closes).toBe(1);
-    expect(document.activeElement).toBe(at("opener"));
-    mockSettleSetPin({ ok: true });
-  });
-
-  it("resets the typed PIN by unmounting, and reopens at the default", () => {
-    open();
-    typeInto(pinField(), "4321");
-    expect(pinField().value).toBe("4321");
-    escape();
-    open();
-    expect(pinField().value).toBe("");
   });
 });
 
@@ -590,20 +473,18 @@ describe("AutoPassModal keeps the rest of its contract", () => {
 /* ================================================================== */
 
 describe("the migrated sources keep the ordering the hook depends on", () => {
-  it("leaves no native autoFocus in SeatPinModal, whose initial focus would otherwise defeat the capture", () => {
-    /* React applies `autoFocus` during the commit's mutation phase, before every effect, so a surviving one
-       would move focus into the card before the opener is captured -- and the card would then try to restore
-       focus to its own PIN field. Comments are stripped first, because the file explains this in prose. */
-    expect(readStripped("components/SeatPinModal.tsx").includes("autoFocus")).toBe(false);
-  });
-
-  it("calls useDialogDismissal before SeatPinModal's local initial-focus layout effect", () => {
-    const body = readStripped("components/SeatPinModal.tsx");
-    const hookAt = body.indexOf("useDialogDismissal({");
-    const focusAt = body.indexOf("useLayoutEffect(");
-    expect(hookAt).toBeGreaterThanOrEqual(0);
-    expect(focusAt).toBeGreaterThanOrEqual(0);
-    expect(hookAt).toBeLessThan(focusAt);
+  it("LIVE-2D: no seat-PIN surface survives -- the modal, its call sites and its store are gone", () => {
+    const fs = require("fs") as typeof import("fs");
+    const path = require("path") as typeof import("path");
+    for (const gone of ["components/SeatPinModal.tsx", "utils/seatPin.ts"]) {
+      expect([gone, fs.existsSync(path.join(__dirname, "..", gone))]).toEqual([gone, false]);
+    }
+    for (const file of ["App.tsx", "components/Lobby.tsx", "components/SandboxWaitingRoom.tsx", "components/JoinGameCard.tsx"]) {
+      const source = readStripped(file);
+      for (const name of ["SeatPinModal", "seatPin", "setSeatPin", "claimSeat", "readSeatPin", "readSeatToken"]) {
+        expect([file, name, source.includes(name)]).toEqual([file, name, false]);
+      }
+    }
   });
 
   it("keeps the two auto modals' lifecycle out of the component body entirely", () => {

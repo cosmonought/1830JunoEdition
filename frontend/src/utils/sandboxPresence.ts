@@ -21,8 +21,9 @@
 //   the record IS the seat, so a reconnecting client overwrites its own entry rather than accumulating; and
 //   it is separately subscribable, so nothing that does not care about presence pays for it.
 //
-// #1361a: THE RECORD LIVES ON THE GAME SERVER, in memory, and travels on the room-doc socket (`roomDocLink`)
-// as `presence-set` up and `presence` down. It was a Firestore subcollection; Firestore is gone. Nothing
+// #1361a: THE RECORD LIVES ON THE GAME SERVER, in memory, and travels on the game's room socket (`roomLink`, LIVE-2D:
+// keyed by `gameId`) as `presence-set` up and `presence` down. The server stamps each entry with the sender's own
+// seat (`playerId`) and its clock; the client never names a seat, and a spectator's hint is refused. It was a Firestore subcollection; Firestore is gone. Nothing
 // about the shape changed -- `PresenceState` goes on the wire as JSON, which unlike Firestore is happy to
 // carry `[[q, r], ...]` as it is, so the old flattening is gone with the reason for it.
 //
@@ -31,8 +32,7 @@
 //
 // See docs/ai_architecture/firebase_middleware.md, sandboxPresence.ts #740.
 
-import { localPlayerId } from "./seatPin";
-import { roomDocOnServer, sendPresence, subscribePresence } from "./roomDocLink";
+import { roomLinkAvailable, sendPresence, subscribePresence } from "./roomLink";
 import type { PresenceState } from "./presence";
 
 function toPresence(raw: unknown): PresenceState | null {
@@ -83,14 +83,14 @@ function toPresence(raw: unknown): PresenceState | null {
  *  Design note #740: SWALLOWS ITS ERRORS, unlike `appendSandboxAction`, which reports them because a lost
  *  ACTION is a lost move. A lost presence update costs a rival one stale frame and the next publish fixes it;
  *  raising a room error for that would train players to ignore room errors. */
-export async function publishPresence(roomCode: string, state: PresenceState): Promise<void> {
-  if (!roomDocOnServer()) return;
+export async function publishPresence(gameId: string, state: PresenceState): Promise<void> {
+  if (!roomLinkAvailable()) return;
   const drafts: Record<string, Array<[number, number]>> = {};
   for (const [index, hexes] of Object.entries(state.routeDrafts ?? {})) {
     if (hexes.length > 0) drafts[index] = hexes.map(([q, r]) => [q, r]);
   }
   try {
-    sendPresence(roomCode, localPlayerId(), {
+    sendPresence(gameId, {
       playerId: state.playerId,
       at: state.at,
       routeDrafts: drafts as unknown as PresenceState["routeDrafts"],
@@ -108,12 +108,11 @@ export async function publishPresence(roomCode: string, state: PresenceState): P
  *  Design note #740: called when a turn ends, so a president's routes vanish the moment they stop drafting
  *  rather than lingering until they go stale. Staleness is the SAFETY NET, not the mechanism -- relying on it
  *  alone would leave every finished turn's routes on screen for six seconds. */
-export async function clearPresence(roomCode: string, playerId: string): Promise<void> {
-  if (!roomDocOnServer()) return;
+export async function clearPresence(gameId: string, playerId: string): Promise<void> {
+  if (!roomLinkAvailable()) return;
+  void playerId; // the server clears the CONNECTION's seat; the caller's belief about which seat that is is not sent
   try {
-    /* The server clears the entry for the CONNECTION's seat; `playerId` is what the caller believes that is,
-       and is sent for the record. */
-    sendPresence(roomCode, playerId, null);
+    sendPresence(gameId, null);
   } catch {
     // Same reasoning: a failed clear resolves itself when the record goes stale.
   }
@@ -121,14 +120,12 @@ export async function clearPresence(roomCode: string, playerId: string): Promise
 
 /** Subscribe to every seat's presence in this room. */
 export function subscribeSandboxPresence(
-  roomCode: string,
+  gameId: string,
   onPresence: (entries: PresenceState[]) => void,
-  onError?: (message: string) => void,
 ): () => void {
-  if (!roomDocOnServer()) return () => undefined;
+  if (!roomLinkAvailable()) return () => undefined;
   return subscribePresence(
-    roomCode,
-    localPlayerId(),
+    gameId,
     (entries, serverNow) => {
       /* #1397: REBASED INTO THIS CLOCK. The server stamps `at` and sends its own `now`; the entry's age is
          their difference, and `at` becomes "that long ago, here". A frame without `now` (an older server)
@@ -146,6 +143,5 @@ export function subscribeSandboxPresence(
       }
       onPresence(parsed);
     },
-    onError,
   );
 }

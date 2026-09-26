@@ -3,7 +3,7 @@
 // LIVE-2C: the server-owned GameRecord and everything that reads it -- the identifiers, the record and its stores
 // (memory and the interim file adapter), the pure authorization table (every op x role x stage), the named room ops,
 // the server-built deal, the submit seat gate, the undo policy, read gating and per-push re-authorization, the
-// resource bounds, the §14.3 races, the production fail-closed invariant, and the ordinary local flow
+// resource bounds, the §14.3 races, the one room protocol in both modes (LIVE-2D), and the ordinary local flow
 // host -> join -> ready -> start -> move -> undo -> close. Real server, real WebSockets, development authenticator
 // (`?dev_claim=`) except where a case needs cookie principals and a real activation.
 
@@ -750,7 +750,6 @@ describe("LIVE-2C create, join and seats", () => {
     const records = createMemoryRecordStore();
     const { server, port } = await serve({ records, identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, service } });
     try {
-      assert.equal(server.legacyRoomProtocol, false);
       const cookie = await prodCookie(port);
       const socket = await prodSocket(port, cookie);
       assert.equal(identityStore.snapshot().principals.length, 0, "a fresh guest is provisional: nothing durable yet");
@@ -884,6 +883,8 @@ describe("LIVE-2C reads and access loss", () => {
       const kicked = await op(table.host, { type: "kick", playerId: gone.playerId }, table.gameId);
       assert.equal(kicked.ok, true);
       assert.equal(await closed, 4410);
+      // LIVE-2D: the eviction names the kick, so the kicked player reads why (and learns nothing it did not know).
+      assert.equal(gone.client.frames.filter((frame) => frame.kind === "error").pop()?.code, "kicked");
       const lastRoomFrame = gone.client.frames.filter((frame) => frame.kind === "room").pop();
       assert.equal((lastRoomFrame?.view as WireView).players.length, 3, "no view after the kick reached the kicked socket");
       // Later activity is never delivered to it.
@@ -1732,36 +1733,37 @@ describe("LIVE-2C review fixes", () => {
 });
 
 /* ==================================================================
-    MODE: the legacy room protocol is development-only; production fails closed
-   ================================================================== */
+    MODE: LIVE-2D -- one room protocol in both modes, and no legacy handler in the build
+   ==================================================================
+   LIVE-2C registered the legacy room handlers in development only and refused production (in `createGameServer` and
+   in `start.ts`) while any was compiled in. LIVE-2D deleted them: the list is empty and frozen, production is
+   constructible and startable with a secure configuration, and a legacy frame is `bad-frame` in either mode. */
 
-describe("LIVE-2C mode", () => {
-  test("a production server refuses to exist with any legacy handler; development registers them beside the new protocol", async () => {
-    assert.ok(LEGACY_ROOM_HANDLERS.length > 0, "this build still carries the legacy handlers (LIVE-2D deletes them)");
-    for (const kind of ["room-write", "seat-pin", "claim-seat", "lobby-hello", "lobby-watch", "lobby-write", "hello {room}", "room-hello {room}", "chat-send {room}", "presence-set {room}"]) {
-      assert.ok(LEGACY_ROOM_HANDLERS.includes(kind), kind);
-    }
-    assert.throws(
-      () => createGameServer({ port: 0, build: BUILD, identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0 }, legacyRoomProtocol: true }),
-      /production mode refuses the legacy room protocol/,
-    );
-    const { server } = await serve();
+describe("LIVE-2C mode (LIVE-2D: the legacy protocol is gone)", () => {
+  test("no legacy handler is compiled in; a production server is constructible; every legacy frame is bad-frame", async () => {
+    assert.deepEqual([...LEGACY_ROOM_HANDLERS], [], "LIVE-2D deleted every legacy room handler");
+    assert.ok(Object.isFrozen(LEGACY_ROOM_HANDLERS), "and none can be registered at run time");
+    const prod = createGameServer({ port: 0, build: BUILD, identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0 } });
+    await stopServer(prod);
+    // The production fail-closed checks that remain are LIVE-2B's, unchanged.
+    assert.throws(() => createGameServer({ port: 0, build: BUILD, identity: { mode: "production", allowedOrigins: ["http://play.example"], trustedProxyHops: 0 } }), /https allowed origins/);
+    assert.throws(() => createGameServer({ port: 0, build: BUILD, identity: { mode: "production", allowedOrigins: [], trustedProxyHops: 0 } }), /https allowed origins/);
+    const { server, port } = await serve();
     try {
-      assert.equal(server.legacyRoomProtocol, true);
-    } finally {
-      await stopServer(server);
-    }
-    const off = await serve({ legacyRoomProtocol: false });
-    try {
-      assert.equal(off.server.legacyRoomProtocol, false);
-      const client = await Client.open(off.port, "no-legacy");
-      client.roomHello("JUNO-OLD");
-      client.send({ kind: "lobby-hello" });
-      await until(() => client.of("error").length === 2, "two refusals");
+      const client = await Client.open(port, "no-legacy");
+      const legacy = [
+        { kind: "room-hello", room: "JUNO-OLD", build: BUILD },
+        { kind: "lobby-hello" },
+        { kind: "lobby-watch", on: true },
+        { kind: "room-write", room: "JUNO-OLD", write: { op: "host", hostId: "no-legacy", nickname: "N", variants: {} } },
+      ];
+      for (const frame of legacy) client.send(frame);
+      await until(() => client.of("error").length === legacy.length, "every legacy frame refused");
       assert.ok(client.of("error").every((frame) => frame.code === "bad-frame"));
+      assert.equal(server.residentGames(), 0);
       await client.close();
     } finally {
-      await stopServer(off.server);
+      await stopServer(server);
     }
   });
 
@@ -1770,6 +1772,7 @@ describe("LIVE-2C mode", () => {
     const { server, port } = await serve({ store: control.store });
     try {
       const table = await startedTable(port, 2);
+      const before = control.log(table.gameId).length;
       /* Every spelling that reaches the same storage key: the case (a case-insensitive disk), and any character the
          file store maps to `_` (review M3). */
       const ids = [table.gameId, table.gameId.toUpperCase(), `G_${table.gameId.slice(2)}`, `g.${table.gameId.slice(2)}`, `g~${table.gameId.slice(2)}`];
@@ -1777,16 +1780,22 @@ describe("LIVE-2C mode", () => {
       for (const room of ids) {
         const intruder = await Client.open(port, "intruder"); // one socket each: inside LIVE-2A's malformed budget
         intruders.push(intruder);
-        intruder.hello(room);
-        intruder.roomHello(room);
-        intruder.roomWrite(room, { op: "host", hostId: "intruder", nickname: "I", variants: {} });
-        intruder.send({ kind: "chat-send", room, text: "hi" });
-        await until(() => intruder.of("error").length === 4, "every legacy frame refused");
+        const frames: object[] = [
+          { kind: "hello", room, build: BUILD, baseIndex: -1 },
+          { kind: "room-hello", room, build: BUILD },
+          { kind: "room-write", room, write: { op: "host", hostId: "intruder", nickname: "I", variants: {} } },
+          { kind: "chat-send", room, text: "hi" },
+        ];
+        /* The new protocol's frames take only the canonical id: any other spelling is malformed, not an alias. */
+        if (room !== table.gameId) frames.push({ kind: "hello", gameId: room, build: BUILD, baseIndex: -1 }, { kind: "room-hello", gameId: room, build: BUILD });
+        for (const frame of frames) intruder.send(frame);
+        await until(() => intruder.of("error").length === frames.length, "every legacy frame refused");
         assert.ok(intruder.of("error").every((frame) => frame.code === "bad-frame"));
         intruder.submit(BUY, { baseIndex: 5, submissionId: "sneak" });
         assert.notEqual((await intruder.answerTo("sneak")).kind, "applied", "never attached, so nothing to submit into");
       }
-      assert.equal(control.doc(table.gameId), null, "no legacy room document was written for the game");
+      assert.deepEqual([...control.logs.keys()], [table.gameId], "nothing was written under any other key");
+      assert.equal(control.log(table.gameId).length, before);
       assert.equal(control.log(table.gameId).filter((entry) => entry.actor === "intruder").length, 0);
       await Promise.all([...everyone(table), ...intruders].map((who) => who.close()));
     } finally {
@@ -1794,7 +1803,7 @@ describe("LIVE-2C mode", () => {
     }
   });
 
-  test("spawned: GS_MODE=production exits 2 while the build carries the legacy protocol; development starts and says so", async () => {
+  test("spawned: GS_MODE=production with a secure config starts (LIVE-2D); development starts; both run the server-owned protocol", async () => {
     const start = path.join(__dirname, "..", "start.js");
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "live2c-start-"));
     const run = (env: Record<string, string>) => {
@@ -1807,15 +1816,22 @@ describe("LIVE-2C mode", () => {
       const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
       return { child, output: () => out, exited };
     };
+    const started = async (child: ReturnType<typeof run>, mode: string) => {
+      const deadline = Date.now() + 20_000;
+      while (!new RegExp(`GS_MODE=${mode}`).test(child.output()) && child.child.exitCode === null && Date.now() < deadline) await sleep(20);
+      assert.equal(child.child.exitCode, null, child.output());
+    };
     try {
       const prod = run({ GS_MODE: "production", GS_ALLOWED_ORIGINS: PROD_ORIGIN, GS_TRUSTED_PROXY_HOPS: "1" });
-      assert.equal(await prod.exited, 2, prod.output());
-      assert.match(prod.output(), /Refusing to start: GS_MODE=production is not available in this build/);
-      assert.match(prod.output(), /room-write/);
-      assert.equal(fs.existsSync(path.join(dir, "production")), false, "refused before the data directory was touched");
+      await started(prod, "production");
+      assert.doesNotMatch(prod.output(), /Refusing to start/);
+      assert.match(prod.output(), /rooms: the server-owned protocol \(room-op, GameRecords in games\/\)/);
+      assert.match(prod.output(), /legacy JUNO-XXX rooms are not served \(LIVE-2D\)/);
+      assert.ok(fs.existsSync(path.join(dir, "production")));
+      prod.child.kill("SIGTERM");
+      await prod.exited;
       const dev = run({ GS_MODE: "development" });
-      const deadline = Date.now() + 20_000;
-      while (!/GS_MODE=development/.test(dev.output()) && Date.now() < deadline) await sleep(20);
+      await started(dev, "development");
       assert.match(dev.output(), /the server-owned protocol \(room-op, GameRecords in games\/\)/);
       assert.ok(fs.existsSync(path.join(dir, "development")));
       dev.child.kill("SIGTERM");

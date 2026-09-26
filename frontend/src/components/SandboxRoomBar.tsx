@@ -14,6 +14,7 @@
 import React, { useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { JOIN_CODE_EXAMPLE } from "../utils/roomProtocol";
 import { BRAND_PINK } from "../styles/palette";
 
 export interface SandboxRoomBarProps {
@@ -28,9 +29,6 @@ export interface SandboxRoomBarProps {
   busy: boolean;
   onHost: () => void;
   onJoin: (code: string) => void;
-  /** Design note #1352: rejoin a seat in `code` with its PIN -- the by-code path, inside the join form. Absent
-   *  hides the button (a build without the game server has no PINs). */
-  onRejoin?: (code: string) => void;
   /** ==================================================================
    *   DESIGN NOTE 1137: THE ERROR HAD NO WAY TO BE WRONG ABOUT ITSELF
    *  ==================================================================
@@ -69,7 +67,6 @@ export function SandboxRoomBar({
   busy,
   onHost,
   onJoin,
-  onRejoin,
   onClearError,
   onOpenJoin,
   bare = false,
@@ -164,7 +161,7 @@ export function SandboxRoomBar({
               if (codeText !== event.target.value) onClearError?.();
               setCodeText(event.target.value);
             }}
-            placeholder="JUNO-4T2"
+            placeholder={JOIN_CODE_EXAMPLE}
             aria-label="Room code"
             autoFocus
           />
@@ -176,19 +173,6 @@ export function SandboxRoomBar({
           >
             Join
           </button>
-          {/* Design note #1352: the way back into YOUR seat from a new device -- the same code, then the PIN. */}
-          {onRejoin && (
-            <button
-              type="button"
-              className={bare ? "sandbox-bare-btn" : undefined}
-              style={bare ? styles.bareButton : styles.button}
-              onClick={() => onRejoin(codeText)}
-              disabled={busy}
-              title="Already in this game on another device? Rejoin your seat with its four-digit PIN."
-            >
-              Rejoin seat
-            </button>
-          )}
           <button
             type="button"
             className={bare ? "sandbox-bare-btn" : undefined}
@@ -218,9 +202,8 @@ export function SandboxRoomBar({
           Join game
         </button>
       )}
-      {/* LIVE-2A (LIVE-2 §10.5, §15 #6): #1355's "Rejoin game" -- one PIN, then every seat on the server carrying it
-          -- is gone with the server's `find-seats`. The device-switch path is the join form's "Rejoin seat" (#1352):
-          the room's code, then the seat's PIN. */}
+      {/* LIVE-2D: the seat PINs are gone. A seat is this browser's session's (the same browser rejoins it by simply
+          opening the table again); moving a seat to another device is LIVE-2E's transfer code. */}
       {error && <span style={styles.error}>{error}</span>}
     </div>
   );

@@ -31,7 +31,27 @@ describe("development identity is build-time only (LIVE-2B)", () => {
   it("outside a REACT_APP_DEV_IDENTITY=1 build the socket URL is untouched", () => {
     expect(process.env.REACT_APP_DEV_IDENTITY).toBeUndefined();
     expect(DEV_IDENTITY_BUILD).toBe(false);
-    expect(socketUrlFor("wss://play.example/gs", "p-alice")).toBe("wss://play.example/gs");
+    expect(socketUrlFor("wss://play.example/gs")).toBe("wss://play.example/gs");
+    expect(socketUrlFor("wss://play.example/gs?x=1")).toBe("wss://play.example/gs?x=1");
+  });
+
+  it("LIVE-2D: the claim is the tab's development principal, minted only inside the guarded branch", () => {
+    /* The claim used to be this tab's client-minted `p-…` player id, which was also its seat. Seats are the
+       server's now (`RoomView.you.playerId`): `socketUrlFor` takes no claim argument, and the only place a tab
+       principal is read or minted is the dev-guarded branch -- a production build never stores one. */
+    expect(socketUrlFor.length).toBe(1);
+    const text = fs.readFileSync(path.join(SRC, "utils", "devIdentity.ts"), "utf8");
+    const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+    const guard = code.indexOf(GUARD);
+    const end = code.indexOf("\n  }\n", guard);
+    /* A CALL, not the declaration (`function tabPrincipal(): string`). */
+    const calls = Array.from(code.matchAll(/tabPrincipal\(\)(?!\s*:)/g), (match) => match.index ?? -1);
+    expect(calls.length).toBe(1);
+    expect(calls[0]).toBeGreaterThan(guard);
+    expect(calls[0]).toBeLessThan(end);
+    /* Per TAB, not per browser: two tabs are two principals, and nothing outlives the tab. */
+    expect(code).toContain("window.sessionStorage");
+    expect(code).not.toContain("localStorage");
   });
 
   it("the claim parameter is named in one source file only, and only inside the guarded branch", () => {

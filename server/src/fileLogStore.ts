@@ -64,9 +64,7 @@ import { promises as fs } from "fs";
 import * as path from "path";
 
 import type { ServerLogEntry } from "../../frontend/src/utils/roomSession";
-import type { SandboxRoomDoc } from "../../frontend/src/utils/sandboxRoom";
-import type { RoomChatEntry } from "../../frontend/src/utils/roomDocLink";
-import type { StagingRoomRecord } from "../../frontend/src/utils/lobbyProtocol";
+import type { RoomChatEntry } from "../../frontend/src/utils/roomProtocol";
 import { scanLog, serializeBatch } from "./persistence/logFormat";
 import {
   COMMITTED,
@@ -85,24 +83,17 @@ export interface LogStore {
   appendLog(room: string, entries: readonly ServerLogEntry[]): Promise<void>;
   /** LIVE-3B: one batch with a classified outcome (storeResult.ts). Never rejects. Preferred when present. */
   appendBatch?(room: string, entries: readonly ServerLogEntry[]): Promise<StoreWriteOutcome>;
-  loadRoomDoc(room: string): Promise<SandboxRoomDoc | null>;
-  saveRoomDoc(room: string, doc: SandboxRoomDoc): Promise<void>;
-  /** LIVE-3B: the room document with a classified outcome (§8.7). Never rejects. Preferred when present. */
-  replaceRoomDoc?(room: string, doc: SandboxRoomDoc): Promise<StoreWriteOutcome>;
-  /** Design note #1355: every room this store holds a document for, so a seat can be found by its PIN
-   *  without the player naming the room. Optional: an in-memory store answers with what it has. */
-  listRooms?(): Promise<readonly string[]>;
   /* ==================================================================
-      DESIGN NOTE 1361: THE TRANSCRIPT AND THE STAGING LOBBY, ON THE SAME DISK
+      DESIGN NOTE 1361: THE TRANSCRIPT, ON THE SAME DISK
      ==================================================================
-     Chat left Firestore for the server (#1361a). One append-only sidecar per room, the log's shape
-     (`<code>.chat.jsonl`), unsynced: a lost chat line is not a lost move (LIVE-3 §9.5 keeps it so).
-     The staging lobby (#1361b) is one small document rewritten whole, like the room document. Optional on
-     the interface, because the in-memory store the tests and the smoke run use has no reason to keep either. */
+     Chat left Firestore for the server (#1361a). One append-only sidecar per game, the log's shape
+     (`<game_id>.chat.jsonl`), unsynced: a lost chat line is not a lost move (LIVE-3 §9.5 keeps it so). Optional on
+     the interface, because the in-memory store the tests and the smoke run use has no reason to keep one.
+     LIVE-2D: the legacy room document (`<code>.room.json`) and the staging lobby (`lobby.json`) are gone from this
+     store with the protocol that wrote them; a game's roster is its GameRecord (`rooms/recordStore.ts`). Old files of
+     either kind are left on disk untouched and never read. */
   loadChat?(room: string): Promise<readonly RoomChatEntry[]>;
   appendChat?(room: string, entry: RoomChatEntry): Promise<void>;
-  loadLobby?(): Promise<readonly StagingRoomRecord[]>;
-  saveLobby?(records: readonly StagingRoomRecord[]): Promise<void>;
 }
 
 /* ==================================================================
@@ -173,7 +164,6 @@ export interface FileLogStoreStats {
 
 export interface FileLogStore extends LogStore {
   appendBatch(room: string, entries: readonly ServerLogEntry[]): Promise<StoreWriteOutcome>;
-  replaceRoomDoc(room: string, doc: SandboxRoomDoc): Promise<StoreWriteOutcome>;
   readonly stats: Readonly<FileLogStoreStats>;
   readonly directory: string;
 }
@@ -209,9 +199,7 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
   // eslint-disable-next-line no-console
   const warn = options.warn ?? ((line: string) => console.warn(line));
   const logPath = (room: string) => path.join(directory, `${safeName(room)}.log.jsonl`);
-  const docPath = (room: string) => path.join(directory, `${safeName(room)}.room.json`);
   const chatPath = (room: string) => path.join(directory, `${safeName(room)}.chat.jsonl`);
-  const lobbyPath = path.join(directory, "lobby.json");
   const stats: FileLogStoreStats = {
     appends: 0,
     shortWrites: 0,
@@ -227,8 +215,6 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
     docReplaced: 0,
   };
   const states = new Map<string, LogState>();
-  const poisonedDocs = new Map<string, string>();
-  let temporaries = 0;
   let dirSyncNoted = false;
 
   const ready = io.mkdir(directory);
@@ -487,78 +473,6 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
     });
   }
 
-  /* ---------------------------------------------------------------------------
-      WHOLE-FILE REPLACEMENT (§8.7): unique temporary, write, sync, rename, sync the directory
-     --------------------------------------------------------------------------- */
-
-  async function replaceOnce(target: string, bytes: Uint8Array, redo: boolean): Promise<StoreWriteOutcome> {
-    temporaries += 1;
-    const temporary = `${target}.${process.pid}.${temporaries}.tmp`;
-    let handle: StoreFileHandle | null = null;
-    /* BEFORE THE RENAME the target is untouched: a failure here is definite (unless an earlier attempt's rename may
-       already have landed -- then the whole replacement is still uncertain). */
-    try {
-      handle = await io.open(temporary, "wx");
-      await writeFully(handle, bytes, 0);
-      await handle.sync();
-      const closing = handle;
-      handle = null;
-      await closing.close();
-    } catch (error) {
-      if (handle !== null) await handle.close().catch(() => undefined);
-      await io.unlink(temporary).catch(() => undefined);
-      const detail = `could not write ${temporary}: ${describe(error)}`;
-      return redo ? { kind: "uncertain", detail } : definite(detail);
-    }
-    /* AT OR AFTER THE RENAME the change may already be the authoritative name: uncertain. */
-    try {
-      await io.rename(temporary, target);
-    } catch (error) {
-      await io.unlink(temporary).catch(() => undefined);
-      return { kind: "uncertain", detail: `renaming ${temporary} to ${target}: ${describe(error)}` };
-    }
-    try {
-      await syncDirectory(path.dirname(target));
-    } catch (error) {
-      return { kind: "uncertain", detail: `syncing the directory after renaming ${target}: ${describe(error)}` };
-    }
-    return COMMITTED;
-  }
-
-  function durableReplace(key: string, target: string, contents: string): Promise<StoreWriteOutcome> {
-    return serial(target, async () => {
-      try {
-        await ready;
-      } catch (error) {
-        return definite(`the data directory ${directory} is not usable: ${describe(error)}`);
-      }
-      const held = poisonedDocs.get(target);
-      if (held) return definite(`${target} is held after an unresolved write (${held}); nothing was written`);
-      if (options.writerCheck && !(await options.writerCheck().catch(() => false))) {
-        return definite("this server no longer owns the data directory (its lock was taken over); nothing was written");
-      }
-      const bytes = Buffer.from(contents, "utf8");
-      const first = await replaceOnce(target, bytes, false);
-      if (first.kind !== "uncertain") {
-        if (first.kind === "committed") stats.docReplaced += 1;
-        return first;
-      }
-      /* The replacement is idempotent -- the same full contents -- so an uncertain one is REDONE, never read back. */
-      warn(`  store: ${first.detail}; redoing the replacement of ${target} (LIVE-3 §8.7)`);
-      const redo = await replaceOnce(target, bytes, true);
-      if (redo.kind === "committed") {
-        stats.docReplaced += 1;
-        stats.redone += 1;
-        return { kind: "committed", redone: true };
-      }
-      const detail = `${first.detail}; the redo failed too: ${(redo as { detail: string }).detail}`;
-      poisonedDocs.set(target, detail);
-      stats.uncertain += 1;
-      restartRequired(key, detail);
-      return { kind: "uncertain", detail };
-    });
-  }
-
   return {
     directory,
     stats,
@@ -571,34 +485,6 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
 
     async appendLog(room, entries) {
       throwUnlessCommitted(await appendBatch(room, entries));
-    },
-
-    async listRooms() {
-      await ready;
-      const names = await io.readdir(directory);
-      return names.filter((name) => name.endsWith(".room.json")).map((name) => name.slice(0, -".room.json".length));
-    },
-
-    async loadRoomDoc(room) {
-      await ready;
-      const target = docPath(room);
-      if (poisonedDocs.has(target)) {
-        throw new StoreUncertainError(`${target} is held after an unresolved write; restart the server`);
-      }
-      try {
-        return JSON.parse((await io.readFile(target)).toString("utf8")) as SandboxRoomDoc;
-      } catch (error) {
-        if (codeOf(error) === "ENOENT") return null;
-        throw error;
-      }
-    },
-
-    replaceRoomDoc(room, doc) {
-      return durableReplace(room, docPath(room), JSON.stringify(doc));
-    },
-
-    async saveRoomDoc(room, doc) {
-      throwUnlessCommitted(await durableReplace(room, docPath(room), JSON.stringify(doc)));
     },
 
     async loadChat(room) {
@@ -625,21 +511,6 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
     async appendChat(room, entry) {
       await ready;
       await io.appendFile(chatPath(room), `${JSON.stringify(entry)}\n`);
-    },
-
-    async loadLobby() {
-      await ready;
-      try {
-        const parsed = JSON.parse((await io.readFile(lobbyPath)).toString("utf8")) as unknown;
-        return Array.isArray(parsed) ? (parsed as StagingRoomRecord[]) : [];
-      } catch (error) {
-        if (codeOf(error) === "ENOENT") return [];
-        throw error;
-      }
-    },
-
-    async saveLobby(records) {
-      throwUnlessCommitted(await durableReplace("lobby", lobbyPath, JSON.stringify(records)));
     },
   };
 }

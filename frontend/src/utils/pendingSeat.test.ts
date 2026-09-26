@@ -32,52 +32,49 @@ const APP = readStripped("App.tsx");
 const ROOM = readStripped("utils/sandboxRoom.ts");
 const WAITING = readStripped("components/SandboxWaitingRoom.tsx");
 
-type Room = import("./sandboxRoom").SandboxRoomDoc;
+/* LIVE-2D: the echo is drawn over the server's RoomView -- the only room the client holds. */
+type Room = import("./roomProtocol").RoomView;
 
 const room = (players: Room["players"]): Room =>
   ({
-    code: "JUNO-4T2",
+    gameId: "g_pendingseat01",
+    code: "JUNO-7K4M-Q2ZP",
     hostId: "a",
     status: "waiting",
+    lifecycle: "waiting",
     players,
   }) as Room;
 
 const BASE = room([
-  { id: "a", nickname: "B", isReady: false, color: "#d94f4f" },
-  { id: "b", nickname: "Rival", isReady: true, color: "#4f8fd9" },
+  { id: "a", nickname: "B", isReady: false, color: "#d94f4f", online: true },
+  { id: "b", nickname: "Rival", isReady: true, color: "#4f8fd9", online: true },
 ]);
 
 describe("the difference that made three controls lag", () => {
-  it("has no transactional writer left on the room document (#1361b)", () => {
+  it("has no room writer left in the client at all (LIVE-2D)", () => {
     /* THE BUG THIS FILE WAS WRITTEN AGAINST WAS FIRESTORE'S: a `runTransaction` write is not echoed by the
-       listener, so a control that read its own field back lagged a round trip. The room document lives on
-       the game server now and every write is one `writeRoomDoc` frame, applied and fanned out in order --
-       there is no transaction to inherit the bug from. The tripwire inverts: none may come back. */
+       listener, so a control that read its own field back lagged a round trip. #1361b moved the room document to
+       the game server; LIVE-2D deleted it. The client holds a RoomView and ASKS -- a named `room-op` the server
+       authorizes -- so there is no writer, transactional or otherwise, to inherit the bug from. */
     expect(ROOM).not.toContain("runTransaction(");
-    expect(sliceBetween(ROOM, "export async function upsertSandboxPlayer(", "\n}")).toContain(
-      'writeRoomDoc(roomCode, player.id, { op: "upsert-player", player });',
-    );
-  });
-
-  it("leaves the compensated writers compensated", () => {
-    /* The proof that this was never "rooms are slow": three writers to the SAME document through the SAME
-       listener were always instant. */
-    /* LIVE-2A: `setSandboxRoomVariants` is deleted and `setSandboxForcedSign` sends nothing (both server ops are
-       gone, LIVE-2 §9.1/§9.4); the one legacy writer left is the status echo. */
-    for (const fn of ["markSandboxRoomPlaying"]) {
-      const body = sliceBetween(ROOM, `export async function ${fn}(`, "\n}");
-      // #1361b: every writer is the same frame on the same socket; the echo is the server's fan-out.
-      expect([fn, body.includes("writeRoomDoc(")]).toEqual([fn, true]);
-      expect([fn, body.includes("runTransaction")]).toEqual([fn, false]);
+    for (const gone of ["upsertSandboxPlayer", "writeRoomDoc", "markSandboxRoomPlaying", "hostSandboxRoom"]) {
+      expect([gone, ROOM.includes(gone)]).toEqual([gone, false]);
+      expect([gone, APP.includes(gone)]).toEqual([gone, false]);
     }
+    expect(ROOM).toContain('import { roomOp } from "./roomLink";');
   });
 
-  it("does not opt the room listener out of latency compensation", () => {
-    /* `includeMetadataChanges` / a `hasPendingWrites` filter here would break the echo for the three writers
-       that still have one, and would make this diagnosis wrong in a way nothing else would catch. */
-    const sub = sliceBetween(ROOM, "export function subscribeSandboxRoom(", "\n}");
-    expect(sub).not.toContain("hasPendingWrites");
-    expect(sub).not.toContain("includeMetadataChanges");
+  it("sends each seat control as the one op that changes only this principal's own seat", () => {
+    /* The frame names no seat: the server derives it from the socket's principal. */
+    expect(APP).toContain('runRoomOp({ type: "set-profile", nickname: named }, { busy: false })');
+    expect(APP).toContain('runRoomOp({ type: "set-profile", color }, { busy: false })');
+    expect(APP).toContain('runRoomOp({ type: "set-ready", ready: isReady }, { busy: false })');
+  });
+
+  it("takes the server's view as it comes, with nothing filtered out of it", () => {
+    /* The view is pushed on every committed change; the echo covers the round trip, the view ends it. */
+    const watch = sliceBetween(APP, "return watchRoom(sandboxRoomCode, {", "\n    });");
+    expect(watch).toContain("setSandboxRoom(view);");
   });
 });
 
@@ -125,7 +122,7 @@ describe("the echo says what is in flight", () => {
 
 describe("the echo stops when the commit lands", () => {
   it("releases a field the snapshot has caught up with", () => {
-    const landed = room([{ id: "a", nickname: "B", isReady: false, color: "#3fae72" }]);
+    const landed = room([{ id: "a", nickname: "B", isReady: false, color: "#3fae72", online: true }]);
     expect(settledSeatKeys(landed, "a", { color: "#3fae72", isReady: true })).toEqual(["color"]);
   });
 
@@ -136,7 +133,7 @@ describe("the echo stops when the commit lands", () => {
   it("counts a cleared colour as settled once the key is gone", () => {
     /* The write spreads `...(color ? { color } : {})`, so a cleared colour comes back ABSENT rather than
        null. Comparing the two shapes directly would hold this echo until the backstop killed it. */
-    const landed = room([{ id: "a", nickname: "B", isReady: false }]);
+    const landed = room([{ id: "a", nickname: "B", isReady: false, online: true }]);
     expect(settledSeatKeys(landed, "a", { color: null })).toEqual(["color"]);
   });
 
@@ -146,13 +143,11 @@ describe("the echo stops when the commit lands", () => {
   });
 
   it("cannot outlive a plausible round trip", () => {
-    /* `upsertSandboxPlayer` returns `true` when the room is MISSING -- it opens a transaction, finds nothing
-       and returns without writing -- so a "successful" write can leave a field no snapshot will ever settle. */
-    /* #1361b: the server answers a write on a room it does not hold with an error frame rather than a silent
-       no-op, but the backstop stays -- a dropped socket is the same silence from the seat's point of view. */
-    expect(sliceBetween(ROOM, "export async function upsertSandboxPlayer(", "\n}")).toContain(
-      "if (!roomDocOnServer()) return false;",
-    );
+    /* LIVE-2D: an op the server refuses (or never answers) withdraws its echo at once; a dropped socket is the same
+       silence from the seat's point of view, so the backstop stays. */
+    const runRoomOp = sliceBetween(APP, "const runRoomOp = useCallback(", "[sayRoomRefusal],");
+    expect(runRoomOp).toContain("if (!answer.ok) {");
+    expect(runRoomOp).toContain("return false;");
     expect(PENDING_SEAT_BACKSTOP_MS).toBe(6000);
     expect(APP).toContain("setTimeout(() => setPendingSeat(null), PENDING_SEAT_BACKSTOP_MS)");
   });
@@ -162,7 +157,7 @@ describe("the shell draws one room, not a room and three opinions", () => {
   it("overlays once, where every reader is looking", () => {
     /* #891 is this codebase's most-repeated fault. A swatch holding a private idea of its own colour while
        the roster underneath shows another is that fault with a 400ms lifetime. */
-    expect(APP).toContain("const [sandboxRoomDoc, setSandboxRoom] = useState<SandboxRoomDoc | null>(null);");
+    expect(APP).toContain("const [sandboxRoomDoc, setSandboxRoom] = useState<RoomView | null>(null);");
     expect(APP).toContain("applyPendingSeat(sandboxRoomDoc, localId, pendingSeat)");
   });
 
@@ -173,14 +168,14 @@ describe("the shell draws one room, not a room and three opinions", () => {
     expect(APP).not.toContain("settledSeatKeys(sandboxRoom,");
   });
 
-  it("keeps the forced-sign ref on the server's copy", () => {
-    /* Its readers want a flag OTHER clients write; the seat overlay is noise to them. */
-    expect(APP).toContain("sandboxRoomDocRef.current = sandboxRoomDoc;");
+  it("keeps no second copy of the room for a forced-sign tool that is gone (LIVE-2D)", () => {
+    /* The ref existed for the forced-sign debug flag, which lived on the deleted room document. */
+    expect(APP).not.toContain("sandboxRoomDocRef");
   });
 
   it("marks all three seat writes pending, and unmarks them if the write fails", () => {
-    /* All three go through the one transactional writer, so all three had the same silence -- including
-       Ready, which gates Start. */
+    /* All three had the same silence -- including Ready, which gates Start. LIVE-2D: an op resolves `false` on a
+       refusal (never rejects), so the echo is withdrawn on that answer rather than on a thrown write. */
     for (const field of ["nickname: named", "color", "isReady"]) {
       expect([field, APP.includes(`setPendingSeat((current) => ({ ...current, ${field} }))`)]).toEqual([
         field,
@@ -188,7 +183,7 @@ describe("the shell draws one room, not a room and three opinions", () => {
       ]);
     }
     for (const key of ["nickname", "color", "isReady"]) {
-      expect([key, APP.includes(`.catch(() => setPendingSeat((current) => dropSeatKeys(current, ["${key}"])))`)]).toEqual([key, true]);
+      expect([key, APP.includes(`if (!ok) setPendingSeat((current) => dropSeatKeys(current, ["${key}"]));`)]).toEqual([key, true]);
     }
   });
 });

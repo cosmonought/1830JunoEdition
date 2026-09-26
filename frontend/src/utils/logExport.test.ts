@@ -123,8 +123,8 @@ describe("the trigger is every seat's, and it cannot fail silently", () => {
     expect(APP).toContain("const isInSandboxRoom = sandbox && sandboxRoom !== null;");
     const key = sliceBetween(APP, 'if (event.key.toLowerCase() !== "l") return;', "}, [isInSandboxRoom, copySandboxLog]);");
     expect(key).toContain("copySandboxLog()");
-    const sign = sliceBetween(APP, "const cycleForcedSign = useCallback(() => {", "}, [forcedSign, isSandboxHost]);");
-    expect(sign).toContain("if (!isSandboxHost) return;");
+    /* LIVE-2D: the Sign's host-gated chip is deleted with the room document it armed (the export was never it). */
+    expect(APP).not.toContain("cycleForcedSign");
   });
 
   it("says what happened either way", () => {
@@ -136,11 +136,10 @@ describe("the trigger is every seat's, and it cannot fail silently", () => {
     expect(tool).toContain("catch");
   });
 
-  it("stays out of the Yellow Sign's handler", () => {
-    /* Merging them would have put this several hundred lines above `logInfo`, which is what the first draft
-       did and `tsc` refused. They share a modifier key and nothing else. */
-    const sign = sliceBetween(APP, 'if (event.key.toLowerCase() !== "y") return;', "}, [isSandboxHost, cycleForcedSign]);");
-    expect(sign).not.toContain("copySandboxLog");
+  it("is its own handler, and the only Ctrl+Shift shortcut left in the shell", () => {
+    /* It was kept out of the Yellow Sign's handler; LIVE-2D deleted that handler with the forced-sign tool, so
+       the export's own key is the one left. */
+    expect(APP).not.toContain('if (event.key.toLowerCase() !== "y") return;');
     expect(APP).toContain('if (event.key.toLowerCase() !== "l") return;');
   });
 });

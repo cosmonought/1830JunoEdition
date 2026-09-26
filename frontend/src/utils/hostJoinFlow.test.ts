@@ -5,17 +5,14 @@
 // the server enforces them (the cap, the kick, the private game nobody watches), and the waiting room and the
 // join list read them back. The pure readers are tested as functions; the enforcement and the wiring are
 // source scans, because "does the server refuse the seventh seat" is a question about a join between modules.
+//
+// LIVE-2D: the room document and its writes are gone. The server's GameRecord holds the terms
+// (`server/src/rooms/roomService.ts`, `roomAuthz.ts`, `gameRecord.ts`), every change is a named `room-op`, and the
+// client reads back the server's RoomView and RoomSummary -- it validates nothing off the wire itself any more.
 
 import { readStripped, sliceBetween } from "./sourceScan";
-import {
-  DEFAULT_ROOM_SETUP,
-  normaliseAnte,
-  normalisePlayerCount,
-  roomSeatCap,
-  roomVisibility,
-  seatsNeeded,
-  summariseSandboxRoom,
-} from "./sandboxRoomSummary";
+import * as sandboxRoomSummary from "./sandboxRoomSummary";
+import { DEFAULT_ROOM_SETUP, roomSeatCap, roomVisibility, seatsNeeded } from "./sandboxRoomSummary";
 import { anteBreakdown, formatBps, formatJuno } from "./anteMath";
 import {
   STANDARD_VARIANTS,
@@ -25,20 +22,19 @@ import {
   resolveVariants,
   withGameType,
 } from "../gameEngine/gameVariants";
-import { canStartSandboxGame, waitingRoomBlock, waitingRoomNotice, type SandboxRoomDoc } from "./sandboxRoom";
+import { canStartSandboxGame, waitingRoomBlock, waitingRoomNotice, type WaitingRoomLike } from "./sandboxRoom";
 
 const LPF = withGameType(STANDARD_VARIANTS, "levelPlayingField");
 
+/* LIVE-2D: the readers take the server's RoomView -- the fields of it they need (`WaitingRoomLike`). */
 const room = (
   players: ReadonlyArray<{ id: string; isReady: boolean }>,
-  extra: Partial<SandboxRoomDoc> = {},
-): SandboxRoomDoc => ({
-  code: "JUNO-1A1",
-  hostId: "h",
+  extra: Partial<WaitingRoomLike> = {},
+): WaitingRoomLike => ({
   status: "waiting",
-  players: players.map((entry) => ({ id: entry.id, nickname: entry.id, isReady: entry.isReady })),
+  players: players.map((entry) => ({ id: entry.id, nickname: entry.id, isReady: entry.isReady, online: true })),
+  playerCount: null,
   variants: STANDARD_VARIANTS,
-  forcedSign: null,
   ...extra,
 });
 
@@ -59,18 +55,14 @@ describe("the table's terms (design note #1415)", () => {
     expect(roomSeatCap(null)).toBe(6);
   });
 
-  it("validates a player count and an ante off the wire", () => {
-    expect(normalisePlayerCount(4, STANDARD_VARIANTS)).toBe(4);
-    expect(normalisePlayerCount(7, STANDARD_VARIANTS)).toBeNull();
-    expect(normalisePlayerCount(7, LPF)).toBe(7);
-    expect(normalisePlayerCount(2.5, STANDARD_VARIANTS)).toBeNull();
-    expect(normalisePlayerCount("4", STANDARD_VARIANTS)).toBeNull();
-    expect(normalisePlayerCount(undefined, STANDARD_VARIANTS)).toBeNull();
-    expect(normaliseAnte("1500000")).toBe("1500000");
-    expect(normaliseAnte("0001")).toBe("1");
-    expect(normaliseAnte("1.5")).toBe("0");
-    expect(normaliseAnte(undefined)).toBe("0");
-    expect(normaliseAnte(-3)).toBe("0");
+  it("validates nothing off the wire any more: the server's GameRecord is the only copy of the terms (LIVE-2D)", () => {
+    /* `normalisePlayerCount` / `normaliseAnte` validated a legacy room document's fields as the client read them
+       back. There is no document to read back: the server checks `create`'s fields against its schema and its own
+       bounds, and answers a RoomView. */
+    const exported = Object.keys(sandboxRoomSummary);
+    for (const gone of ["normalisePlayerCount", "normaliseAnte", "summariseSandboxRoom"]) {
+      expect([gone, exported.includes(gone)]).toEqual([gone, false]);
+    }
   });
 
   it("'exactly N' is what the start gate waits for; 'any' is the game's minimum", () => {
@@ -97,30 +89,14 @@ describe("the table's terms (design note #1415)", () => {
     expect(canStartSandboxGame(full, 2)).toBe(true);
   });
 
-  it("summarises a room as the public list shows it -- names and readiness, never the PINs", () => {
-    const doc = room([{ id: "h", isReady: true }, { id: "b", isReady: false }], {
-      visibility: "public",
-      playerCount: 4,
-      anteUjuno: "2000000",
-      createdAtMs: 5,
-      seatPins: { h: "1234" },
-    });
-    const summary = summariseSandboxRoom(doc);
-    expect(summary).toEqual({
-      code: "JUNO-1A1",
-      status: "waiting",
-      hostNickname: "h",
-      players: [
-        { id: "h", nickname: "h", isReady: true },
-        { id: "b", nickname: "b", isReady: false },
-      ],
-      seatCap: 4,
-      playerCount: 4,
-      variants: STANDARD_VARIANTS,
-      anteUjuno: "2000000",
-      createdAtMs: 5,
-    });
-    expect(JSON.stringify(summary)).not.toContain("1234");
+  it("the public list is the server's summary -- names and readiness, no seat ids, no principals, no PINs", () => {
+    /* The client used to summarise its own room document for the list (and had to leave the PINs out). The server
+       builds `RoomSummary` from its GameRecord now, and only for a PUBLIC table. */
+    const server = serverSource("rooms/gameRecord.ts");
+    const summary = sliceBetween(server, "export function roomSummaryOf(", "\n}\n");
+    expect(summary).toContain('record.visibility !== "public"');
+    expect(summary).toContain("nicknames: record.seats.map((seat) => seat.nickname),");
+    for (const secret of ["principal_id", "player_id,", "pin", "token"]) expect([secret, summary.includes(secret)]).toEqual([secret, false]);
   });
 });
 
@@ -183,62 +159,63 @@ describe("what each type recommends (design note #1415)", () => {
   });
 });
 
-describe("the server enforces the terms (design note #1415)", () => {
+/** A server source, comment-stripped (read-only: this suite never writes the server). */
+function serverSource(relative: string): string {
   const fs = require("fs") as typeof import("fs");
   const path = require("path") as typeof import("path");
-  const SERVER = fs.readFileSync(path.join(__dirname, "../../../server/src/gameServer.ts"), "utf8");
+  return fs
+    .readFileSync(path.join(__dirname, "../../../server/src", relative), "utf8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+describe("the server enforces the terms (design note #1415; LIVE-2D: the GameRecord)", () => {
+  const SERVICE = serverSource("rooms/roomService.ts");
+  const AUTHZ = serverSource("rooms/roomAuthz.ts");
+  const HOST = serverSource("rooms/roomHost.ts");
 
   it("validates the host's fields rather than casting them", () => {
-    expect(SERVER).toContain('visibility: write.visibility === "private" ? "private" : "public"');
-    expect(SERVER).toContain("playerCount: normalisePlayerCount(write.playerCount, variants)");
-    expect(SERVER).toContain("anteUjuno: normaliseAnte(write.anteUjuno)");
-    expect(SERVER).toContain("kicked: []");
+    expect(HOST).toContain('visibility: op.visibility === "private" ? "private" : "public"');
+    const create = sliceBetween(SERVICE, "export function createRecord(", "\n}\n");
+    expect(create).toContain("input.exactPlayers < MIN_PLAYERS || input.exactPlayers > seatCap");
+    expect(create).toContain("kicked_principals: []");
+    /* The host's seat is minted by the server, never taken from the frame. */
+    expect(HOST).toContain("hostPlayerId: mintPlayerId()");
   });
 
   it("refuses a NEW joiner past the cap, after the start, or after a kick -- and tells them", () => {
-    const upsert = sliceBetween(SERVER, 'case "upsert-player": {', "break;");
-    expect(upsert).toContain("if (at === -1) {");
-    expect(upsert).toContain("existing.kicked?.includes(write.player.id)");
-    expect(upsert).toContain('existing.status !== "waiting"');
-    expect(upsert).toContain("existing.players.length >= roomSeatCap(existing)");
-    expect(SERVER).toContain("code: ROOM_WRITE_REFUSED_CODE");
+    const join = sliceBetween(SERVICE, "export function joinByCode(", "\n}\n");
+    expect(join).toContain('if (isKicked(env.record, env.principalId)) return refused("kicked"');
+    expect(join).toContain("const seatWanted = takeSeatToo && waiting && env.record.seats.length < capacityOf(env.record);");
+    const take = sliceBetween(SERVICE, "export function takeSeat(", "\n}\n");
+    expect(take).toContain('refused("kicked"');
+    expect(take).toContain('refused("room-full"');
   });
 
   it("lets only the host kick, only while waiting, never themselves", () => {
-    const kick = sliceBetween(SERVER, 'case "kick": {', "break;");
-    expect(kick).toContain("actor !== existing.hostId");
-    expect(kick).toContain('existing.status !== "waiting"');
-    expect(kick).toContain("write.playerId === existing.hostId");
-    expect(kick).toContain("kicked: [...(existing.kicked ?? []), write.playerId]");
-    // LIVE-2A (§15 #2): applied to the socket's OWN room, read from server state -- never the frame's `room`.
-    expect(SERVER).toContain("applyRoomWrite(room, frame.write, actor, dealt)");
-    expect(SERVER).toContain("const room = roomDocSockets.get(socket);");
+    expect(AUTHZ).toContain('kick: { stages: { W: R("H") }, denial: "forbidden" }');
+    const kick = sliceBetween(SERVICE, "export function kick(", "\n}\n");
+    expect(kick).toContain('if (playerId === env.record.host_player_id) return refused("forbidden"');
+    expect(kick).toContain("draft.kicked_principals.push(target.principal_id)");
   });
 
-  it("lists only rooms that chose to be public, and pushes the list on every write", () => {
-    expect(SERVER).toContain('doc.visibility !== "public") continue;');
-    expect(SERVER).toContain('{ kind: "rooms", rooms: await sandboxRooms() }');
-    expect(SERVER).toContain("await broadcastSandboxRooms();");
-  });
-
-  it("admits no spectator to a private game once dealt", () => {
-    /* LIVE-2C: the legacy (development) hello now also records the socket's principal, and that its room is legacy. */
-    const hello = sliceBetween(SERVER, 'if (frame.kind === "hello") {', "sockets.set(socket, { room: frame.room, actor, principalId: ctx.principalId, owned: false });");
-    expect(hello).toContain('roomVisibility(privateDoc) === "private"');
-    expect(hello).toContain("This is a private game and cannot be watched.");
+  it("admits no outsider to a private game once dealt", () => {
+    expect(AUTHZ).toContain('if (role === "M" && stage !== "W") role = "O";');
+    expect(AUTHZ).toContain('if (role === "O" && !(op === "join" && stage === "W")) return refuse("not-found", role, stage);');
   });
 });
 
 describe("the client reads them back (design note #1415)", () => {
-  it("a join awaits the room's answer and shows a refusal on the lobby", () => {
+  it("a join awaits the server's answer and shows a refusal on the lobby, in words", () => {
     const lobby = readStripped("components/Lobby.tsx");
-    expect(lobby).toContain("const answer = await joinSandboxRoom(code, {");
-    expect(lobby).toContain("setSandboxRoomError(answer.reason);");
+    expect(lobby).toContain("const answer = await joinHostedGame(code, true);");
+    expect(lobby).toContain("sayRefusal(answer.code, answer.reason)");
+    /* A refusal is the sentence for its code; the raw reason (which may carry a support reference) is not shown. */
+    expect(lobby).not.toContain("setSandboxRoomError(answer.reason)");
     expect(lobby).toContain("<HostSetupCard");
     expect(lobby).toContain("<JoinGameCard");
-    const link = readStripped("utils/roomDocLink.ts");
-    expect(link).toContain("export function joinRoomDoc(");
-    expect(link).toContain("code === ROOM_WRITE_REFUSED_CODE && connection.refusals.size > 0");
+    const room = readStripped("utils/sandboxRoom.ts");
+    expect(sliceBetween(room, "export function joinHostedGame(", "\n}")).toContain('return roomOp({ type: "join", code, takeSeat });');
   });
 
   it("the waiting room shows the terms, asks before the ante, and offers the host a kick", () => {
@@ -251,16 +228,20 @@ describe("the client reads them back (design note #1415)", () => {
   });
 
   it("a spectator takes no seat, and a kicked seat does not ask for one back", () => {
-    /* Design note #1441 WIDENS THIS GUARD, and the claim is the one that matters rather than its spelling:
-       #1415 inferred "spectator" from the room's STATUS, which was true of every door that existed then and
-       is wrong about Watch on a table that is still waiting. The intent travels with the code now. */
+    /* LIVE-2D: THE AUTO-SEAT IS GONE (#856, #1415, #1441, #1442). Entering a table never takes a seat by itself --
+       Host and Join asked the server for one, Watch did not -- so there is no watch intent to carry and nothing to
+       hold back. A watcher of a waiting table is OFFERED "Take a seat"; a kicked principal is not. */
     const app = readStripped("App.tsx");
-    /* Design note #1442 makes the intent a ROOM rather than a flag; the three reasons not to claim a seat are
-       the same three, and the first of them now has to be about THIS room. */
-    expect(app).toContain("sandboxWatchRoom === sandboxRoomCode ||");
-    expect(app).toContain('sandboxRoom.status !== "waiting" ||');
-    expect(app).toContain("(sandboxRoom.kicked ?? []).includes(localId)");
-    expect(app).toContain("onKick={sandboxRoom?.hostId === localId ? handleKickSandboxPlayer : undefined}");
+    for (const gone of ["seatedRoomRef", "sandboxWatchRoom", "sandboxWatchSeed", "upsertSandboxPlayer"]) {
+      expect([gone, app.includes(gone)]).toEqual([gone, false]);
+    }
+    expect(app.match(/\{ type: "take-seat" \}/g) ?? []).toHaveLength(1);
+    expect(app).toContain('const handleTakeSeat = useCallback(() => void runRoomOp({ type: "take-seat" }), [runRoomOp]);');
+    expect(app).toContain("onTakeSeat={!seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}");
+    /* The host is the server's answer (`you.role`), never "my id equals the document's hostId". */
+    expect(app).toContain('const isSandboxHost = sandbox && sandboxRoom !== null && sandboxRoom.you.role === "host";');
+    expect(app).toContain("onKick={isSandboxHost ? handleKickSandboxPlayer : undefined}");
+    expect(app).not.toContain("hostId === localId");
     expect(app).not.toContain("handleSetSandboxVariants");
   });
 
@@ -276,7 +257,9 @@ describe("the client reads them back (design note #1415)", () => {
     const list = readStripped("components/LobbyRoomList.tsx");
     expect(list).toContain('row.status === "waiting"');
     expect(list).toContain('row.status === "playing"');
-    expect(list).toContain("full: seated >= room.seatCap,");
+    // LIVE-2D: an "exactly N" table is full at N, not at the board's maximum (the summary's `seatCap`).
+    expect(list).toContain("full: seated >= capacity,");
+    expect(list).toMatch(/const capacity = typeof room\.playerCount === "number"/);
     /* Design note #1441 SUPERSEDES THE LAST CLAUSE: a full table offered a disabled button, which occupied
        the one place a control can be, said no, and hid the thing the room could still do. "Full" is written
        as status and Watch is drawn as the door it always was -- the server having refused a WATCHER only for

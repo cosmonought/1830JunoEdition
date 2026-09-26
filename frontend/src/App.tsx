@@ -99,7 +99,6 @@ import {
   isSetBoParMsg,
   chainGameplayMsg,
   isSetupGameMsg,
-  shuffleForTurnOrder,
   waterfallForRoster,
   withEmptyRoster,
   type SandboxLogMsg,
@@ -115,25 +114,31 @@ import {
   appendSandboxAction,
   appliedPrefixHolds,
   canStartSandboxGame,
+  createHostedGame,
   decodeAction,
-  hostSandboxRoom,
-  kickSandboxPlayer,
-  localPlayerId,
-  markSandboxRoomPlaying,
-  parseRoomCode,
-  readSandboxLog,
+  gameIdOf,
+  joinHostedGame,
   subscribeSandboxLog,
-  subscribeSandboxRoom,
-  toSetupPlayers,
-  upsertSandboxPlayer,
   /* Design note #668: NAMED, at last. #643 noted that the drain's hand-written
      copy of this shape had gone stale and dropped `at`; importing the type is
      the fix that note asked for, and it is what stops `derived` going the same
      way. */
   type SandboxAction,
-  setSandboxForcedSign,
-  type SandboxRoomDoc,
 } from "./utils/sandboxRoom";
+/* LIVE-2D: the server-owned room protocol -- the room socket, the RoomView the waiting room renders, and the
+   refusal sentences. */
+import { roomOp, watchRoom, type RoomLoss } from "./utils/roomLink";
+import { DEV_IDENTITY_BUILD } from "./utils/devIdentity";
+import {
+  JOIN_CODE_EXAMPLE,
+  parseJoinCode,
+  refusalMessage,
+  supportRefOf,
+  withoutSupportRef,
+  type RoomOpBody,
+  type RoomView,
+  type RoomVisibility,
+} from "./utils/roomProtocol";
 /* Design note #1169: the in-flight seat, and the rules for when it stops being in flight. */
 import {
   applyPendingSeat,
@@ -259,8 +264,6 @@ import { cashByPlayer } from "./utils/cashDelta";
 import { auctionCashMovement } from "./utils/auctionCashMovement";
 // Design note #1340a: the auction's sentences, read off the two states.
 import { describeAuctionTransition } from "./utils/auctionTransition";
-// Design note #1341: the seat PIN, for the hello.
-import { readSeatPin, readSeatToken } from "./utils/seatPin";
 import {
   depotInventory,
   openDepotTiers,
@@ -381,8 +384,6 @@ import PhaseThreeNoticeModal from "./components/PhaseThreeNoticeModal";
 import BuyLicenseModal from "./components/BuyLicenseModal";
 // Design note #1332: the herald-home float, announced.
 import HeraldHomeFloatModal from "./components/HeraldHomeFloatModal";
-// Design note #1341: rejoin a seat from another device.
-import { SeatPinModal } from "./components/SeatPinModal";
 // Design note #818: the D&H's free station, asked for rather than left to be noticed.
 import { filterSandboxPlacements, isTokenableHex } from "./components/sandboxTileLegality";
 // Design note #716: the whole tray at every facing, so the glow can ask what actually fits a hex.
@@ -448,9 +449,6 @@ import {
   // Design note #1092: the doom clock, asked at the run rather than at the boundary.
   fogIsDue,
   yellowSignStateOf,
-  forcedSignStagesAvailable,
-  nextForcedSign,
-  forcedSignToolInForce, // UR-7 (UR-N62): the chip only where its force can act
   // UR-3 (OD-UR-1, OD-UR-2): a pinned table's Sign is read off the run it rode; its fog off the set boundary.
   CARCOSA_FOG_LINE,
   describeFogAtSetEnd,
@@ -555,6 +553,7 @@ import {
      every client and must never invent a number, so the die is thrown once here and travels in the log. */
   randomTurnSeed,
   resolveVariants,
+  STANDARD_VARIANTS,
   /* Rules Reference header: the ruleset's display name. */
   GAME_TYPE_COPY,
   gameTypeOf,
@@ -657,7 +656,7 @@ import TutorialModal, {
 import { useRoomChat } from "./components/ChatBox";
 // truncateAddress comes from utils/address.ts (configurable lead/trail), not utils/lobby.
 // Importing both would collide. See docs/ai_architecture/ui_shell_layout.md - App.tsx #382
-import { loadDisplayName, usePresenceHeartbeat } from "./utils/lobby";
+import { loadDisplayName } from "./utils/lobby";
 
 // ---- Extracted from this file; see design note #382 below. ----
 import ContextualActionBar from "./panels/ContextualActionBar";
@@ -693,9 +692,7 @@ import {
   ACTIVE_GAME_STORAGE_KEY,
   readActiveGame,
   readActiveSandboxRoom,
-  readSandboxWatchRoom,
   writeActiveSandboxRoom,
-  writeSandboxWatchRoom,
   SANDBOX_GAME_ID,
   SANDBOX_ROOM_ID,
   type ActiveGame,
@@ -961,24 +958,11 @@ interface AppShellProps {
    *  A different identifier for a different system; see design note #22. */
   roomId: string;
   /* The room is chosen in the Lobby and handed down as the starting value; the shell owns the listener.
-     See docs/ai_architecture/firebase_middleware.md - App.tsx #524 */
+     See docs/ai_architecture/firebase_middleware.md - App.tsx #524
+     LIVE-2D: it is the table's server-minted `gameId` (`g_…`), never a room code. The seat, if any, is the server's
+     answer (`RoomView.you`); there is no watch intent to carry, because entering a table never takes a seat on its
+     own -- Host and Join took one at the server, Watch did not ask for one. */
   sandboxRoomSeed?: string | null;
-  /** ==================================================================
-   *   DESIGN NOTE 1441: THE SPECTATOR SAYS SO, RATHER THAN BEING INFERRED
-   *  ==================================================================
-   *
-   * #1415's seat claim below decided who was a watcher from the room's STATUS -- "a dealt game takes no new
-   * seats, so a client here is a spectator". That inference was right about every door that existed then and
-   * is wrong about the one #1441 opens: Watch on a public table that is still WAITING, which the server has
-   * always permitted and which the seat claim would have turned into a Join the moment the room resolved.
-   * SO THE INTENT TRAVELS WITH THE CODE. Not a second spectator path -- the same `onEnterSandbox` with no
-   * join write in front of it -- just told which of the two things it is being used for.
-   *
-   * DESIGN NOTE 1442: AND IT IS THE CODE, NOT A FLAG. A boolean cannot say WHICH room it was granted for, and
-   * this shell is not remounted between rooms (its key is the game and the mode, both constant for the
-   * sandbox) -- so a `true` survived "leave the room, join another from the gate" and held back the seat
-   * claim for a room nobody had asked to watch. A code can only ever match its own room. */
-  sandboxWatchSeed?: string | null;
   /** Returns to the Lobby. */
   onLeaveGame: () => void;
   /** Which of the three ways of looking at a board this is -- design note
@@ -1039,7 +1023,7 @@ function withSeededChart(
   };
 }
 
-function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, sandboxWatchSeed = null }: AppShellProps) {
+function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }: AppShellProps) {
   const wallet = useWallet();
   const session = useGameSession();
 
@@ -1116,25 +1100,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     writeActiveSandboxRoom(sandboxRoomCode);
   }, [sandboxRoomCode]);
   /* ==================================================================
-      DESIGN NOTE 1442: THE WATCH INTENT IS CONSUMED BY ITS OWN ROOM, AND RETIRED BY ANY OTHER
+      LIVE-2D: WHO THIS TAB IS AT THE TABLE IS THE SERVER'S ANSWER
      ==================================================================
-     A COPY RATHER THAN THE PROP, for the same reason the room code above is one: the gate below can change
-     the room without this shell remounting, and an intent that only the ROOT could retire would still be in
-     force when it did. Held here, it expires the moment this shell looks at anything else -- including at
-     nothing, which is what "Back to the lobby" from the gate leaves behind.
-     THE STORE IS CLEARED WITH IT, so the refresh that #1442 exists to survive cannot resurrect an intent the
-     player has already navigated away from. */
-  const [sandboxWatchRoom, setSandboxWatchRoom] = useState<string | null>(sandboxWatchSeed);
-  useEffect(() => {
-    if (sandboxWatchRoom === null || sandboxWatchRoom === sandboxRoomCode) return;
-    setSandboxWatchRoom(null);
-    writeSandboxWatchRoom(null);
-  }, [sandboxWatchRoom, sandboxRoomCode]);
-  const localId = localPlayerId();
+     `sandboxRoomDoc` is the server's RoomView of this game FOR THIS PRINCIPAL -- recomputed per recipient and pushed
+     on every committed change -- and `you.playerId` is this tab's seat in it. `localId` keeps its meaning across
+     every one of the shell's readers ("my in-game id in this room") but is now LEARNED, never minted: "" until the
+     view arrives and for a watcher, which no seat, turn or payout ever matches. It is PRESENTATION -- "your turn",
+     your cash, your colour. It never authorizes anything: the server derives every move's actor itself (principal
+     -> seat -> player id), and the submit frame names none. */
+  const [sandboxRoomDoc, setSandboxRoom] = useState<RoomView | null>(null);
+  /** LIVE-2D: this tab lost the table for good -- kicked, the table cancelled or expired, a private game dealt
+   *  without it. Terminal; the shell says so and offers the lobby. */
+  const [roomLost, setRoomLost] = useState<RoomLoss | null>(null);
+  const localId = sandboxRoomDoc?.you.playerId ?? "";
 
   /* In a room this browser is one person with one id, which makes every existing turn/president gate correct at once.
      See docs/ai_architecture/session_keys_wallet.md - App.tsx #534 */
   const viewerAddress = sandbox ? localId : wallet.address;
+  /** LIVE-2D: the seat id, for callbacks that must not rebuild when the view does. */
+  const localIdRef = useRef(localId);
+  localIdRef.current = localId;
 
   /* Design note #573: read synchronously by `handleUsePrivateAbility`, which
      must not name `viewerAddress` as a dependency -- it feeds
@@ -1174,9 +1159,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
   // See docs/ai_architecture/firebase_middleware.md - App.tsx #22
   const [displayName] = useState<string>(() => loadDisplayName() ?? "");
 
-  // Presence heartbeat: a UI hint with no authority. Suppressed for spectators (no seat doc) and sandbox (no room).
-  // See docs/ai_architecture/firebase_middleware.md - App.tsx #22
-  usePresenceHeartbeat(spectator || sandbox ? null : roomId, wallet.address);
+  /* LIVE-2D: the staging lobby's wallet heartbeat is gone with the staging lobby (RUST-RETIRE-1 2B.3). */
 
   // A spectator may have no signing client, so fall back to an anonymous read-only CosmWasmClient.
   // See docs/ai_architecture/session_keys_wallet.md - App.tsx #23
@@ -2175,8 +2158,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
 
   useEffect(() => {
     if (autoCloseRemaining === null || autoCloseRemaining > 0) return;
+    /* LIVE-2 §9.3 / LIVE-2D: only a SEATED client dispatches the timer's CloseRoom -- a watcher's would be refused
+       `not-seated`, and every seat's clock is running anyway (#546: the reducer takes the first). */
+    if (sandbox && localIdRef.current === "") return;
     closeRoom("timer");
-  }, [autoCloseRemaining, closeRoom]);
+  }, [autoCloseRemaining, closeRoom, sandbox]);
 
   /* Design note #905's arming of the auction atom when the round reaches it -- a condition, not an event --
      is the reducer's now (#1340, `settleAuctionLifecycle`), applied after every action to the atom on the
@@ -2895,8 +2881,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     setSrParValues({});
   }, [activeSeatLabel]);
 
-  const [sandboxRoomDoc, setSandboxRoom] = useState<SandboxRoomDoc | null>(null);
-
   /* Design note #1169: the seat's in-flight choices, drawn over the snapshot until the snapshot agrees.
      `upsertSandboxPlayer` is a TRANSACTION, and a transaction is the one Firestore write that cannot be
      latency-compensated -- so nickname, colour and ready were the only three controls on this screen that
@@ -2962,7 +2946,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
      who joins a table already in progress -- or reloads mid-game -- must not be shown the opening titles for
      a game that started an hour ago. Seeding from what is actually there is what makes the first snapshot
      not an edge. */
-  const previousRoomStatus = useRef<SandboxRoomDoc["status"] | null>(null);
+  const previousRoomStatus = useRef<RoomView["status"] | null>(null);
   const [introPlaying, setIntroPlaying] = useState(false);
   /* Design note #1143: the same fact as `introPlaying`, in the one form that is true early enough. The
      status effect below and the whistle's effect run in the SAME commit, and state queued by the first is
@@ -3066,7 +3050,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     // See docs/ai_architecture/firebase_middleware.md - App.tsx #644
   } = useRoomChat(
     sandbox ? sandboxRoomCode : roomId,
-    sandbox ? localId : wallet.address,
+    /* LIVE-2D: the seat decides only whether Send is offered (a spectator may not chat); the server signs the line. */
+    sandbox ? (localId || null) : wallet.address,
     // Design note #765: the roster nickname in a sandbox room, the lobby name outside one.
     sandboxChatName,
   );
@@ -4177,13 +4162,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     const timer = window.setTimeout(() => setPendingAppendIndex(null), ACTION_LATCH_BACKSTOP_MS);
     return () => window.clearTimeout(timer);
   }, [pendingAppendIndex]);
-  /* Design note #527: the anteroom's own state, from the room DOCUMENT
-     rather than the log. `null` while it loads or when there is no room. */
+  /* Design note #527: the table's game id, in a ref for the dispatch callbacks. `null` when there is no table. */
   const sandboxRoomRef = useRef<string | null>(null);
-  /* Design note #1128: the room DOCUMENT, held in a ref beside the code that fetches it. A ref rather than
-     the state itself because the only reader is inside a dispatch callback, and putting `sandboxRoom` in that
-     closure's dependencies would rebuild every turn handler each time any seat toggled ready. */
-  const sandboxRoomDocRef = useRef<SandboxRoomDoc | null>(null);
   /** The next LOG index to append at -- the log's own length, which never
    *  shrinks even when the game is rewound. */
   const appliedIndexRef = useRef(0);
@@ -4259,59 +4239,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
   useEffect(() => {
     sandboxRoomRef.current = sandboxRoomCode;
   }, [sandboxRoomCode]);
-  useEffect(() => {
-    /* Design note #1169: the RAW snapshot, not the echoed room. Its only readers want `forcedSign` -- a flag
-       other clients write -- so the seat overlay is noise to them, and pointing this at the overlay would
-       re-arm the ref on every keystroke-committed rename for a field the echo never touches. */
-    sandboxRoomDocRef.current = sandboxRoomDoc;
-  }, [sandboxRoomDoc]);
 
   /* ==================================================================
-      DESIGN NOTE 1128: THE HOST'S SHORTCUT, AND WHY IT IS ALSO A VISIBLE CHIP
+      LIVE-2D: THE FORCED-SIGN DEBUG TOOL IS DELETED (#1128, LIVE-2 §9.4, §13.1)
      ==================================================================
-     RULED: host-only, in the game room, firing at the next available window for whoever is acting.
-     A KEYBOARD SHORTCUT ALONE IS A FEATURE NOBODY FINDS. Ctrl+Shift+Y is what was asked for and it is here,
-     but a hidden tool with no readout cannot say whether it is armed -- and this one may sit armed for
-     several turns while it waits for a corporation that can carry its stage. So the chip beside the sandbox
-     badge is the state, and the shortcut is the accelerator; pressing either cycles the same value.
-     THE CYCLE IS null -> mark -> carcosa -> fog -> null, so one control reaches all three stages and a fourth
-     press disarms. A picker with three buttons would be three controls in a strip that is already carrying a
-     badge and a room code, for a tool that is used a handful of times a playtest.
-     GATED ON HOST AND ON SANDBOX, both. `sandbox` because a chain game has no room document and no business
-     with this; host because that is the ruling. Neither gate is decorative -- a non-host pressing the keys
-     writes nothing, and the chip does not render for them either. */
-  const forcedSign = sandbox ? (sandboxRoom?.forcedSign ?? null) : null;
-  const isSandboxHost = sandbox && sandboxRoom !== null && sandboxRoom.hostId === localId;
-  const cycleForcedSign = useCallback(() => {
-    if (!isSandboxHost) return;
-    /* #1404: the cycle offers only the stages the game can still reach -- see `forcedSignStagesAvailable`. */
-    const state = sandboxStateRef.current;
-    /* UR-7 (UR-N62): and only on a board where the force can act -- an unpinned Unpredictable Revenue board. A pinned
-       table drops and refuses the waiver, so arming it there would write a flag nothing reads. */
-    if (!forcedSignToolInForce(state)) return;
-    const next = nextForcedSign(
-      forcedSign,
-      yellowSignStateOf(state?.public_companies ?? [], actionLogRef.current.map((entry) => entry.label)),
-      derivePhase(state)?.tier ?? "2",
-    );
-    void setSandboxForcedSign(sandboxRoomRef.current ?? "", next);
-  }, [forcedSign, isSandboxHost]);
-
-  useEffect(() => {
-    if (!isSandboxHost) return undefined;
-    const onKey = (event: KeyboardEvent) => {
-      /* `event.key` is "Y" while Shift is held, so it is compared case-insensitively rather than against the
-         shifted glyph -- the same trap `ConnectWalletButton`'s Escape handler avoids by comparing a name. */
-      if (!event.ctrlKey || !event.shiftKey) return;
-      if (event.key.toLowerCase() !== "y") return;
-      /* UR-7 (UR-N62): no tool on this board, so the keystroke is left to the browser rather than swallowed. */
-      if (!forcedSignToolInForce(sandboxStateRef.current)) return;
-      event.preventDefault();
-      cycleForcedSign();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [isSandboxHost, cycleForcedSign]);
+     It armed a Yellow Sign stage on the room DOCUMENT for the next run -- a waiver only an unpinned (client-dealt)
+     board honoured. Every table is server-dealt and pinned now, so the waiver is dropped at ingress and refused by
+     the reducer everywhere it could be sent (UR-7), and the room document it lived on is gone. The host is read
+     from the server's view: `you.role`. */
+  const isSandboxHost = sandbox && sandboxRoom !== null && sandboxRoom.you.role === "host";
   /* Who the log records as having acted. A LABEL, not an identity -- the
      sandbox has no authentication and this is for the readout, not for
      permission. */
@@ -6317,7 +6253,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
         if (roomCode && options?.isRemoteReplay !== true) {
           /* actor is the SEAT the action acts for, not the browser that sent it - a nickname could never match player_addresses.
              See docs/ai_architecture/firebase_middleware.md - App.tsx #549 */
-          const authorId = localPlayerId();
+          /* LIVE-2D: only the no-server fallback reads this (it writes nothing); a hosted move names no actor. */
+          const authorId = localIdRef.current;
           /* ==================================================================
               DESIGN NOTE 916: A BATCH OF ACTIONS NEEDS A BATCH OF INDICES
              ==================================================================
@@ -7281,14 +7218,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                  waiver at ingress and refuses it in the reducer, so a forced stage there would be a sentence
                  the board never wrote -- the narration/board divergence #1375 exists to prevent. The chip
                  keeps working in a Firestore sandbox room, which is where #1128 asked for it. */
-              const signLocal = before?.rules_engine_version == null;
-              const signArmed = sandbox && signLocal ? (sandboxRoomDocRef.current?.forcedSign ?? null) : null;
-              const signForcePhase = derivePhase(before)?.tier ?? "2";
-              const signForced =
-                signArmed === null
-                  ? null
-                  : (forcedSignStagesAvailable(signState, signForcePhase)[0] ?? null);
-              const signForce = signArmed === null ? {} : { debug_force: true as const };
+              /* LIVE-2D: the forced-sign tool is deleted with the room document it lived on (every table is
+                 server-dealt and pinned, where the waiver was always refused): nothing is ever forced here. */
+              const signForced = null;
+              const signForce = {};
               /* THE NATURAL DRAW FIRST, then the Easter egg's rules applied to it -- so this cannot disagree
                  with `revenueFlavourClause` about what would otherwise have been printed. */
               /* One call site for the turn's sentence (#940/#941 pin it to exactly one); the Mark's re-rolled
@@ -7328,9 +7261,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
                  FIRE AND FORGET. The write is not awaited: it is a debug flag, the log line has already been
                  composed from it, and blocking a turn resolution on a Firestore round trip to tidy up would
                  be the one way this tool could affect a real game's pacing. */
-              if (sandbox && resolved.stage !== null && resolved.stage === sandboxRoomDocRef.current?.forcedSign) {
-                void setSandboxForcedSign(sandboxRoomRef.current ?? "", null);
-              }
               /* THE SENTENCE IS REBUILT ONLY WHEN THE EGG CHANGED THE CLAUSE, so an ordinary turn goes
                  through exactly the path it always did and the opening/tense rules (#944, #950) are not
                  restated here. */
@@ -9015,13 +8945,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
   const undoBlockedReason = useMemo(() => {
     if (!sandbox) return controlsEnabled ? null : "Initialize the session key to act.";
     if (!controlsEnabled) return "Initialize the session key to act.";
+    /* LIVE-2D: a watcher holds no seat, and the server refuses its every move (`not-seated`, RV-1) -- so the button
+       says so rather than offering a press the server will refuse. */
+    if (localId === "") return "You are watching this table; you have no seat.";
     const reach = undoReachFor(
       sandboxLogRef.current,
       localId,
-      sandboxRoom?.hostId === localId,
+      /* LIVE-2D: the host ROLE and the room's undo POLICY, both from the server's RoomView -- the same two facts the
+         server judges a `RevertTo` with (RV-7), so the button and the server cannot disagree. */
+      sandboxRoom?.you.role === "host",
       describeLoggedAction,
       /* LIVE-2A (LIVE-2 §9.2): the board, so the button disables at GameEnd with the server's own sentence. */
       sandboxStateRef.current ?? undefined,
+      sandboxRoom?.undoPolicy,
     );
     return reach.index === null ? (reach.blockedReason ?? "There is nothing to undo.") : null;
     // sandboxAppliedCount is the real dependency and the linter cannot see it:
@@ -9036,12 +8972,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
       void runGameplayAction("UndoLastAction", { UndoLastAction: { game_id: gameId } });
       return;
     }
+    if (localId === "") {
+      logInfo("Undo", "You are watching this table; you have no seat.");
+      return;
+    }
     const reach = undoReachFor(
       sandboxLogRef.current,
       localId,
-      sandboxRoom?.hostId === localId,
+      sandboxRoom?.you.role === "host",
       (action) => describeLoggedAction(action),
       sandboxStateRef.current ?? undefined,
+      sandboxRoom?.undoPolicy,
     );
     if (reach.index === null) {
       logInfo("Undo", reach.blockedReason ?? "There is nothing to undo.");
@@ -9803,10 +9744,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
   const [autoBuyPlan, setAutoBuyPlan] = useState<AutoBuyPlan | null>(null);
   const autoBoughtAtLogIndexRef = useRef<number | null>(null);
   const [autoBuyOpen, setAutoBuyOpen] = useState(false);
-  /* Design note #1341: the in-game "Rejoin a seat" card. One flag and one mount; the card owns the rest. */
-  /* #1341a: a MODE rather than a flag, because the shell now opens this card two ways -- to set my own
-     seat's PIN, and to rejoin somebody's seat from this device. One mount, one piece of state. */
-  const [seatPinMode, setSeatPinMode] = useState<"set" | "rejoin" | null>(null);
   /* Design note #1333: the whole instruction -- per-corporation caps, source, the two off-switches. */
   const [autoBuyChoices, setAutoBuyChoices] = useState<AutoBuySettings>({
     targets: [],
@@ -12151,95 +12088,45 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     return { ticker, color: stationTickerColor(companyId) };
   }, [homeStationPlacement, tokenTargetMode, actingProtocolId, gameState]);
 
-  /* The listener is the only writer: the tail past appliedIndexRef, replayed through runGameplayAction, sequential and awaited. #527: the room doc is a separate subscription.
-     See docs/ai_architecture/firebase_middleware.md - App.tsx #523 */
+  /* The listener is the only writer: the tail past appliedIndexRef, replayed through runGameplayAction, sequential and awaited. #527: the room is a separate subscription.
+     See docs/ai_architecture/firebase_middleware.md - App.tsx #523
+     ==================================================================
+      LIVE-2D: THE ROOM IS THE SERVER'S RoomView, BY `gameId`
+     ==================================================================
+     `room-hello {gameId}` on the game's own room socket; the server answers with this principal's view and pushes a
+     fresh one on every committed change (a seat, a Ready, a name, the host, the code, the deal). A view refused or
+     withdrawn -- `not-found` (kicked, a private table dealt without this tab, or no such table), `gone` (cancelled or
+     expired) -- is TERMINAL: the shell says so once and offers the lobby; nothing reconnects into a refusal.
+     THE AUTO-SEAT EFFECT IS GONE (#856, #1415, #1441, #1442). It wrote this tab into the roster the moment the room
+     resolved, which is why a watch intent had to be carried to hold it back. Seats are taken by the server now --
+     Host and Join ask for one, Watch does not, and a watcher of a waiting table has a "Take a seat" button -- so
+     entering a table never takes a seat by itself, and a reload keeps exactly the seat this principal holds. */
   useEffect(() => {
     if (!sandbox || !sandboxRoomCode) {
       setSandboxRoom(null);
+      setRoomLost(null);
       return undefined;
     }
-    return subscribeSandboxRoom(
-      sandboxRoomCode,
-      (room) => {
-        setSandboxRoom(room);
-        // Design note #764: the FIRST snapshot is what ends the not-knowing, whatever it contains.
+    setRoomLost(null);
+    return watchRoom(sandboxRoomCode, {
+      onView: (view) => {
+        setSandboxRoom(view);
+        // Design note #764: the FIRST view is what ends the not-knowing.
         setSandboxRoomResolved(true);
       },
-      (message) => setSandboxRoomError(message),
-    );
-  }, [sandbox, sandboxRoomCode]);
-
-  /* ==================================================================
-     DESIGN NOTE 856: JOINING A ROOM DID NOT PUT YOU IN IT
-     ==================================================================
-
-     REPORTED: "When I Host Game and a player joins, it does not update on my screen until/unless I refresh
-     the page." And, decisively, on being asked which way round it failed: "the joiner sees the host, but the
-     host doesn't see joiners."
-
-     THAT ASYMMETRY IS THE WHOLE DIAGNOSIS. `hostSandboxRoom` writes the host into the room document, so a
-     joiner's FIRST SNAPSHOT already contains them -- which is why the joiner's screen looked correct and made
-     the listeners look healthy. `handleJoinSandboxRoom` reads the log and sets the room code, and writes
-     NOTHING. `upsertSandboxPlayer` had exactly three callers, all of them waiting-room controls: set a
-     nickname, pick a colour, press Ready. So a joiner who had not yet touched one of those three was not in
-     the document at all, and the host's listener had nothing to fire on.
-
-     IT WAS NEVER LAG, which is what it looks like from the host's chair -- "the joining player showed up on
-     the host's browser while talking to you". The delay is exactly how long the joiner takes to type a name
-     or press Ready, which is unbounded and feels like a slow network. Refreshing the host appeared to fix it
-     because by then the joiner had usually interacted.
-
-     AND IT IS NOT A REGRESSION, though it was reported as one. `git log -S upsertSandboxPlayer` finds three
-     commits, all ADDING call sites, none in the join path; nothing was removed in the last two pushes or in
-     any before them. What changed is probably the playtest habit, not the code.
-
-     THE ROSTER IS LOAD-BEARING, which is why this is more than cosmetic: `SandboxWaitingRoom` derives
-     `players.length` from it, and the host's Start button is gated on `MIN_PLAYERS` -- so an unseated joiner
-     does not merely fail to appear, they cannot be started with.
-
-     ONCE PER ROOM, THROUGH A REF. The effect must not re-fire on every snapshot: `upsertSandboxPlayer` is a
-     read-modify-write transaction, and an effect keyed on the roster that writes the roster is a loop. The
-     ref records which room code has been claimed, so a second room re-arms it and a failed write does not
-     spin. #573's rule, applied to a write rather than to a power: an attempt that changes nothing must leave
-     the world alone.
-
-     THE NAME IS THE ONE THE HOST USES for itself -- `sandboxSeatRef`, falling back to "Player". #765 records
-     that a code-joiner never touches the lobby's `displayName`, so anything read from there would be blank;
-     the roster nickname is the name of record and the waiting room is where it is chosen. */
-  const seatedRoomRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (!sandbox || !sandboxRoomCode) {
-      seatedRoomRef.current = null;
-      return;
-    }
-    // Not until the first snapshot: "no such room" and "have not heard yet" are different (#764).
-    if (!sandboxRoomResolved || !sandboxRoom) return;
-    if (seatedRoomRef.current === sandboxRoomCode) return;
-    if (sandboxRoom.players.some((player) => player.id === localId)) {
-      // Already in the roster -- the host, or a rejoin. Claim it so this cannot write over them later.
-      seatedRoomRef.current = sandboxRoomCode;
-      return;
-    }
-    seatedRoomRef.current = sandboxRoomCode;
-    /* #1415: NOT A SEAT IF THE ROOM WOULD REFUSE ONE. A dealt game takes no new seats -- a client here is a
-       spectator (the Ongoing tab's door), and asking would only earn the refusal. A seat the host removed is
-       the same: the document says so, and the write would be turned away with the same sentence the waiting
-       room already shows. */
-    /* #1441: a viewer who pressed Watch is not asking for a seat, whatever the room's status says.
-       #1442: and only in the room they asked to watch -- the comparison is what makes the intent one-shot. */
-    if (
-      sandboxWatchRoom === sandboxRoomCode ||
-      sandboxRoom.status !== "waiting" ||
-      (sandboxRoom.kicked ?? []).includes(localId)
-    ) {
-      return;
-    }
-    void upsertSandboxPlayer(sandboxRoomCode, {
-      id: localId,
-      nickname: sandboxSeatRef.current || "Player",
-      isReady: false,
+      onLost: (loss) => {
+        writeActiveSandboxRoom(null); // terminal: a reload lands on the Lobby, not on a table this tab cannot read
+        setRoomLost(loss);
+        setSandboxRoomResolved(true);
+      },
+      onError: (code, reason) => {
+        /* Chat and presence refusals are the chat line's to say (`useRoomChat`); a presence hint after the game
+           ended is refused `wrong-state` and is nothing a player needs to read. */
+        if (code === "forbidden" || code === "rate-limited" || code === "wrong-state") return;
+        setSandboxRoomError(refusalMessage(code, reason));
+      },
     });
-  }, [sandbox, sandboxRoomCode, sandboxRoomResolved, sandboxRoom, localId, sandboxWatchRoom]);
+  }, [sandbox, sandboxRoomCode]);
 
   const replayingRef = useRef(false);
   /* Design note #668: the ids of the entries this client has already applied,
@@ -12522,20 +12409,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
           let roomStatusBanner: string | null = null;
           const link = connectServerLink({
             url: GAME_SERVER_URL,
-            room: sandboxRoomCode,
+            /* LIVE-2D: the game's server-minted id. The link says nothing about who this tab is -- the socket was
+               authenticated at the upgrade, and the server derives this tab's seat for every move it submits. */
+            gameId: sandboxRoomCode,
             build: CLIENT_BUILD_ID,
-            /* #1210: what this client SAYS it is. The server decides whether to believe it -- and on
-               anything with money in it, `trustClaimedIdentity` is not what will be answering. */
-            claim: localPlayerId(),
-            // Design note #1341: the seat PIN and session token this tab holds for the room, if any.
-            pin: readSeatPin(sandboxRoomCode) ?? undefined,
-            token: readSeatToken(sandboxRoomCode) ?? undefined,
-            /* #1364: and again at every reconnect's hello, from the store the PIN modal writes to -- a PIN set
-               after this link opened must not get the link refused on its next hello. */
-            seat: () => ({
-              pin: readSeatPin(sandboxRoomCode) ?? undefined,
-              token: readSeatToken(sandboxRoomCode) ?? undefined,
-            }),
             onEntries: (entries, serverDigest, serverFields, source) => {
               // #1238: a batch with any catch-up in it is history. Consumed by the drain's next pass.
               if (source === "catch-up") serverBatchIsHistoryRef.current = true;
@@ -12551,7 +12428,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             },
             onRefused: (reason) => {
               linkExplainedRef.current = true;
-              setSandboxRoomError(reason);
+              setSandboxRoomError(withoutSupportRef(reason));
             },
             onStale: () => {
               linkExplainedRef.current = true;
@@ -12577,7 +12454,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             },
             onError: (message) => {
               linkExplainedRef.current = true;
-              setSandboxRoomError(message);
+              setSandboxRoomError(withoutSupportRef(message));
+            },
+            /* LIVE-2D: read access to this game was withdrawn (kicked, the table cancelled or expired, a private
+               table dealt without this tab, a full watcher cap). The link has stopped; the shell says so once. */
+            onAccessLost: (code, reason) => {
+              linkExplainedRef.current = true;
+              writeActiveSandboxRoom(null); // a reload lands on the Lobby, not on a table this tab cannot read
+              setRoomLost((current) => current ?? { code, reason });
             },
             /* LIVE-3A (L3-3): THE ROOM SAYS THIS TAB'S HISTORY IS NOT ITS OWN -- ahead of it, or anchored to an
                entry it does not hold. The link has dropped its applied index and is rejoining from -1; what this
@@ -12655,63 +12539,93 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
        that should ever open or close it. */
   }, [sandbox, sandboxRoomCode]);
 
-  /** Design note #522: opens a room and publishes its code. */
+  /* ==================================================================
+      LIVE-2D: EVERY WAITING-ROOM CONTROL IS ONE NAMED OP, ANSWERED BY THE SERVER
+     ==================================================================
+     `room-op {gameId, op}` on the game's room socket. The server authorizes it against its committed record and
+     answers an ack; the change itself arrives as the next RoomView, so nothing here writes the room locally except
+     the #1169 echo for the three seat controls. A refusal is shown as the sentence it is (`refusalMessage`) --
+     never an internal reference, which goes to the console for support. */
+  const sayRoomRefusal = useCallback((code: string, reason: string) => {
+    const ref = supportRefOf(reason);
+    // eslint-disable-next-line no-console
+    if (ref !== null) console.warn(`[room] the server refused (${code}); support reference ${ref}`);
+    setSandboxRoomError(refusalMessage(code, reason));
+  }, []);
+  const runRoomOp = useCallback(
+    async (op: RoomOpBody, options?: { busy?: boolean }): Promise<boolean> => {
+      const gameIdNow = sandboxRoomRef.current;
+      if (!gameIdNow) return false;
+      if (options?.busy !== false) setSandboxRoomBusy(true);
+      setSandboxRoomError(null);
+      try {
+        const answer = await roomOp(op, gameIdNow);
+        if (!answer.ok) {
+          sayRoomRefusal(answer.code, answer.reason);
+          return false;
+        }
+        return true;
+      } finally {
+        if (options?.busy !== false) setSandboxRoomBusy(false);
+      }
+    },
+    [sayRoomRefusal],
+  );
+
+  /** Enter a table this principal was just seated at (or may watch): the game id is the only thing kept. */
+  const enterHostedGame = useCallback((gameIdNow: string) => {
+    appliedIndexRef.current = 0;
+    setSandboxAppliedCount(0);
+    setSandboxRoomCode(gameIdNow);
+  }, []);
+
+  /** Design note #522: opens a table from the shell's own gate -- `room-op create` with the printed game's terms. */
   const handleHostSandboxRoom = useCallback(async () => {
     setSandboxRoomBusy(true);
     setSandboxRoomError(null);
     try {
-      const code = await hostSandboxRoom(localPlayerId(), sandboxSeatRef.current || "Host");
-      if (!code) {
-        setSandboxRoomError("Firestore is not configured in this build.");
+      const answer = await createHostedGame(STANDARD_VARIANTS, undefined, sandboxSeatRef.current || "Host");
+      const created = gameIdOf(answer);
+      if (!answer.ok || created === null) {
+        if (!answer.ok) sayRoomRefusal(answer.code, answer.reason);
+        else setSandboxRoomError(refusalMessage("internal"));
         return;
       }
-      /* The cursor starts at zero for a room that starts empty, so the host
-         replays its own actions from the log exactly as a joiner does --
-         one code path, no host special case. */
-      appliedIndexRef.current = 0;
-      setSandboxAppliedCount(0);
-      setSandboxRoomCode(code);
-    } catch (error) {
-      setSandboxRoomError(error instanceof Error ? error.message : "Could not open the room.");
+      enterHostedGame(created);
     } finally {
       setSandboxRoomBusy(false);
     }
-  }, []);
+  }, [enterHostedGame, sayRoomRefusal]);
 
-  /** Design note #522: joins an existing room and fast-forwards to it. */
+  /** Design note #522: joins a table by its code, with a seat -- `room-op join {code, takeSeat: true}`. */
   const handleJoinSandboxRoom = useCallback(async (raw: string) => {
-    const code = parseRoomCode(raw);
+    const code = parseJoinCode(raw);
     if (!code) {
-      setSandboxRoomError("That is not a room code — they look like JUNO-4T2.");
+      setSandboxRoomError(`That is not a table code — they look like ${JOIN_CODE_EXAMPLE}.`);
       return;
     }
     setSandboxRoomBusy(true);
     setSandboxRoomError(null);
     try {
-      /* Read once before subscribing only to tell the player the room exists; the listener owns the replay.
-         See docs/ai_architecture/firebase_middleware.md - App.tsx #465
-         #1367: THE COURTESY LINE IS GONE. "Joined -- no actions in this room yet" was set whenever this read
-         came back empty, and on the server path it ALWAYS comes back empty (#1215: the log arrives through the
-         shell's own listener, and `readSandboxLog` answers `[]` by design). So every rejoin by code pinned a
-         red line to the top of a live game -- "even though we're all taking actions" -- and nothing ever
-         cleared it, because it was an error slot holding a sentence that was not an error. The read stays for
-         its one remaining job, refusing a code that throws. */
-      await readSandboxLog(code);
-      appliedIndexRef.current = 0;
-      setSandboxAppliedCount(0);
-      setSandboxRoomCode(code);
-    } catch (error) {
-      setSandboxRoomError(error instanceof Error ? error.message : "Could not join that room.");
+      const answer = await joinHostedGame(code, true);
+      const joined = gameIdOf(answer);
+      if (!answer.ok || joined === null) {
+        if (!answer.ok) sayRoomRefusal(answer.code, answer.reason);
+        else setSandboxRoomError(refusalMessage("internal"));
+        return;
+      }
+      enterHostedGame(joined);
     } finally {
       setSandboxRoomBusy(false);
     }
-  }, []);
+  }, [enterHostedGame, sayRoomRefusal]);
 
-  /** Leaves the room. The BOARD IS LEFT WHERE IT IS rather than reset: the
-   *  player is dropping out of the sync, not abandoning the position, and
-   *  wiping a game they can still look at would be a surprising amount of
-   *  destruction for a button labelled "Leave". */
+  /** Leaves the table. LIVE-2D: `room-op leave` first -- while the table waits that gives up this seat (and a private
+   *  table's admission); once it is dealt a seat is never abandoned, and leaving only stops watching. Then the shell
+   *  forgets the table, so a refresh does not reopen it. The BOARD IS LEFT WHERE IT IS rather than reset. */
   const handleLeaveSandboxRoom = useCallback(() => {
+    const leaving = sandboxRoomRef.current;
+    if (leaving && roomLost === null) void roomOp({ type: "leave" }, leaving);
     // Design note #537b: release the roster, so a solo session afterwards
     // resolves the fixture's own names again rather than staying blank.
     clearRoomNicknames();
@@ -12722,152 +12636,72 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     setSandboxRoomError(null);
     appliedIndexRef.current = 0;
     setSandboxAppliedCount(0);
-  }, []);
+  }, [roomLost]);
 
-  /* Append the setup event FIRST, then latch status to playing - the flag is what sends every client to the board.
-     See docs/ai_architecture/firebase_middleware.md - App.tsx #532 */
-  /* #1415: the house rules are chosen on the host's setup card before the room exists and are frozen after;
-     `handleSetSandboxVariants` (#910) went with the controls. What the host CAN still do in the anteroom is
-     remove a joiner -- the server checks it is the host asking and the room is still waiting. */
-  const handleKickSandboxPlayer = useCallback(
-    async (playerId: string) => {
-      if (!sandboxRoomCode) return;
-      try {
-        await kickSandboxPlayer(sandboxRoomCode, playerId);
-      } catch (error) {
-        setSandboxRoomError(error instanceof Error ? error.message : "Could not remove that player.");
-      }
-    },
-    [sandboxRoomCode],
-  );
+  /* #1415: the house rules are chosen on the host's setup card before the table exists and are frozen after. What
+     the host can still do in the anteroom is the table itself: remove a joiner, hand the host role on, make it
+     public or private, give it a new code, cancel it, and start it. The server checks it is the host asking and
+     that the table is still waiting. */
+  const handleKickSandboxPlayer = useCallback((playerId: string) => void runRoomOp({ type: "kick", playerId }), [runRoomOp]);
+  const handleTransferHost = useCallback((toPlayerId: string) => void runRoomOp({ type: "transfer-host", toPlayerId }), [runRoomOp]);
+  const handleSetVisibility = useCallback((visibility: RoomVisibility) => void runRoomOp({ type: "set-visibility", visibility }), [runRoomOp]);
+  const handleRotateCode = useCallback(() => void runRoomOp({ type: "rotate-code" }), [runRoomOp]);
+  const handleCancelRoom = useCallback(() => void runRoomOp({ type: "cancel-room" }), [runRoomOp]);
+  /** A watcher of a waiting table takes a seat; a seated player gives theirs up and keeps watching. */
+  const handleTakeSeat = useCallback(() => void runRoomOp({ type: "take-seat" }), [runRoomOp]);
+  const handleReleaseSeat = useCallback(() => void runRoomOp({ type: "release-seat" }), [runRoomOp]);
 
+  /* ==================================================================
+      LIVE-2D (LIVE-2 §8): START IS ONE OP, AND THE DEAL IS THE SERVER'S
+     ==================================================================
+     #1217 and #910 were about this handler building the deal right: the roster from the document, shuffled here,
+     the variants and the build stamped here, submitted as `SetupGame`, then `status: "playing"` latched. ALL OF IT
+     IS THE SERVER'S NOW. The host sends `start-game` and nothing else; the server takes the roster from its own
+     seats, shuffles with `crypto.randomInt`, stamps the variants, the rules revision and the build, and commits the
+     deal durably before anybody sees it. This tab then learns the deal exactly as every other seat does -- from the
+     log's `applied` fan-out and the RoomView turning `playing` -- so no browser ever shows a deal the server has not
+     committed. A second press (or a lost ack) is answered `alreadyStarted`. */
   const handleStartSandboxGame = useCallback(async () => {
-    if (!sandboxRoomCode || !sandboxRoom) return;
-    if (!canStartSandboxGame(sandboxRoom, MIN_PLAYERS)) return;
-    setSandboxRoomBusy(true);
-    setSandboxRoomError(null);
-    try {
-      const seated = shuffleForTurnOrder(toSetupPlayers(sandboxRoom));
-      /* ==================================================================
-          DESIGN NOTE 1217: THE DEAL WAS THE ONE DISPATCH THAT NEVER LEARNED ABOUT THE SERVER
-         ==================================================================
-         REPORTED: "I went through the waiting room this time, but in the game room there still aren't any
-         players and I can't take any actions."
+    if (!sandboxRoom || !canStartSandboxGame(sandboxRoom, MIN_PLAYERS)) return;
+    await runRoomOp({ type: "start-game" });
+  }, [sandboxRoom, runRoomOp]);
 
-         EVERY OTHER ACTION IN THE GAME GOES THROUGH ONE FUNCTION, and #1213 taught that function to prefer
-         the link. THIS ONE DOES NOT, and could not: the main dispatch is gated on `isMyTurnRef`, and at the
-         deal there is no turn to be on -- there is no game yet. So it called `appendSandboxAction` directly,
-         and kept calling it after the transport moved.
-
-         WHICH MEANT THE DEAL WENT TO FIRESTORE WHILE EVERYTHING ELSE WENT TO THE SERVER. With Firestore
-         reachable that is merely wrong -- the server's log would never contain the setup, so every client
-         would sit at an empty board. With Firestore unreachable it is what the player saw: no players, no
-         actions, no error.
-
-         THE LESSON IS THE SHAPE, NOT THE LINE. #1184 is "one rule implemented twice"; this is the sibling --
-         ONE RULE IMPLEMENTED ONCE AND BYPASSED ONCE. A search for `appendSandboxAction` would have found it
-         in either session; the swap was verified by playing, and the deal is the one action a playtest
-         performs before it can tell whether anything is working. */
-      const link = serverLinkRef.current;
-      linkExplainedRef.current = false; // #1218
-      const allocated = link
-        ? /* Stage 10.5 (S10-9): NO CAST. `SetupGame` is a `SandboxLogMsg` and `ServerLink.submit` takes that union
-             -- the room wire carries the deal beside gameplay, and the server's `RoomEngine` applies setup entries
-             by the same path the replay harness does, which is what the smoke test's opening deal proves. */
-          await link.submit({
-            /* #1252: the deal names the reducer that made it, so the room is pinned to this build. The
-               server has already matched this client's build to its own (#1206). */
-            SetupGame: { players: seated, variants: { ...sandboxRoom.variants, rules: CURRENT_RULES_REVISION }, build: CLIENT_BUILD_ID }, // #1443
-          })
-        : /* ==================================================================
-              DESIGN NOTE 910: THE VARIANTS TRAVEL WITH THE SETUP, OR THEY DO NOT EXIST
-             ==================================================================
-             This read `SetupGame: { players: seated }` and carried no config at all, which is why every table
-             played the printed game however the room was configured -- the schema (#902) was wired end to end
-             and nothing ever put anything into it on this path.
-             FROM THE ROOM DOCUMENT, exactly like the roster beside it. Every client deals from this one
-             action, so the variants have to be IN it: reading a local selection at deal time would give the
-             host's browser one game and every other browser another, which is #550's rule and the deepest
-             desync available here. */
-          await appendSandboxAction(sandboxRoomCode, appliedIndexRef.current, localId, {
-            SetupGame: { players: seated, variants: { ...sandboxRoom.variants, rules: CURRENT_RULES_REVISION }, build: CLIENT_BUILD_ID }, // #1443
-          });
-      // Design note #1026: `null` is the failure; the setup event legitimately lands on index 0.
-      if (allocated === null) {
-        // #1218: the link's own sentence wins here too.
-        if (!linkExplainedRef.current) {
-          setSandboxRoomError("Could not reach the room — the game was not started.");
-        }
-        return;
-      }
-      await markSandboxRoomPlaying(sandboxRoomCode);
-    } catch (error) {
-      setSandboxRoomError(error instanceof Error ? error.message : "Could not start the game.");
-    } finally {
-      setSandboxRoomBusy(false);
-    }
-  }, [sandboxRoomCode, sandboxRoom, localId]);
-
-  /** Design note #527: nickname and ready are document writes, not log
-   *  entries -- they toggle, and a toggle in an append-only log is two
-   *  entries the replay would have to reconcile. */
+  /** Design note #527: nickname and ready are ROOM operations, not log entries -- they toggle, and a toggle in an
+   *  append-only log is two entries the replay would have to reconcile. LIVE-2D: `set-profile` / `set-ready`, which
+   *  change only THIS principal's own seat; the frame names no seat. */
   const handleSetSandboxNickname = useCallback(
     (nickname: string) => {
-      if (!sandboxRoomCode) return;
-      const mine = sandboxRoom?.players.find((player) => player.id === localId);
       const named = nickname.trim() || "Player";
-      /* Design note #1169: shown before it is written, because the transaction behind this cannot echo. */
+      /* Design note #1169: shown before it is written, so the control answers at once. */
       setPendingSeat((current) => ({ ...current, nickname: named }));
-      void upsertSandboxPlayer(sandboxRoomCode, {
-        id: localId,
-        nickname: named,
-        isReady: mine?.isReady ?? false,
-        // Design note #569: carried, not dropped. The upsert REPLACES the
-        // entry, so a field left out of one write is erased by it.
-        ...(mine?.color ? { color: mine.color } : {}),
-      }).catch(() => setPendingSeat((current) => dropSeatKeys(current, ["nickname"])));
+      void runRoomOp({ type: "set-profile", nickname: named }, { busy: false }).then((ok) => {
+        if (!ok) setPendingSeat((current) => dropSeatKeys(current, ["nickname"]));
+      });
     },
-    [sandboxRoomCode, sandboxRoom, localId],
+    [runRoomOp],
   );
 
-  /* Design note #569: `null` clears the choice and returns this seat to the
-     assigned default. Written through the same upsert as the nickname, so
-     design note #541's in-place update keeps the roster order. */
+  /* Design note #569: `null` clears the choice and returns this seat to the assigned default. #1337: a colour
+     another seat holds is refused (`color-taken`) and the echo withdrawn. */
   const handleSetSandboxColor = useCallback(
     (color: string | null) => {
-      if (!sandboxRoomCode) return;
-      const mine = sandboxRoom?.players.find((player) => player.id === localId);
-      /* Design note #1169: the swatch's ring is the ONLY answer this control gives, and it was drawn from the
-         server's copy -- so until the commit landed, a click did nothing visible at all. `null` is a choice
-         here, not an absence, so it is written into the echo rather than skipped. */
       setPendingSeat((current) => ({ ...current, color }));
-      void upsertSandboxPlayer(sandboxRoomCode, {
-        id: localId,
-        nickname: mine?.nickname ?? "Player",
-        isReady: mine?.isReady ?? false,
-        ...(color ? { color } : {}),
-      }).catch(() => setPendingSeat((current) => dropSeatKeys(current, ["color"])));
+      void runRoomOp({ type: "set-profile", color }, { busy: false }).then((ok) => {
+        if (!ok) setPendingSeat((current) => dropSeatKeys(current, ["color"]));
+      });
     },
-    [sandboxRoomCode, sandboxRoom, localId],
+    [runRoomOp],
   );
 
   const handleToggleSandboxReady = useCallback(
     (isReady: boolean) => {
-      if (!sandboxRoomCode) return;
-      const mine = sandboxRoom?.players.find((player) => player.id === localId);
-      /* Design note #1169: this one gates Start, so its lag was the most expensive of the three -- a player
-         tapping Ready twice because the first tap looked ignored toggles themselves back out. */
+      /* Design note #1169: this one gates Start, so its lag was the most expensive of the three. */
       setPendingSeat((current) => ({ ...current, isReady }));
-      void upsertSandboxPlayer(sandboxRoomCode, {
-        id: localId,
-        nickname: mine?.nickname || "Player",
-        isReady,
-        // Design note #569: carried, for the same reason the nickname write
-        // carries the ready flag -- this replaces the whole entry.
-        ...(mine?.color ? { color: mine.color } : {}),
-      }).catch(() => setPendingSeat((current) => dropSeatKeys(current, ["isReady"])));
+      void runRoomOp({ type: "set-ready", ready: isReady }, { busy: false }).then((ok) => {
+        if (!ok) setPendingSeat((current) => dropSeatKeys(current, ["isReady"]));
+      });
     },
-    [sandboxRoomCode, sandboxRoom, localId],
+    [runRoomOp],
   );
 
   const previewRotateArmed = radialSelector !== null && previewTile !== null;
@@ -13312,8 +13146,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             one you have been given.
           </p>
           <p style={styles.sandboxGateBody}>
-            Testing alone? Open a room here, then join it from a second browser tab —
-            each tab is its own player.
+            {DEV_IDENTITY_BUILD
+              ? "Testing alone? Open a room here, then join it from a second browser tab — each tab is its own player."
+              : "Testing alone? Open a room here, then join it from a second browser or a private window — every tab of one browser is the same player."}
           </p>
           <SandboxRoomBar
             roomCode={sandboxRoomCode}
@@ -13331,24 +13166,49 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     );
   }
 
-  /* Design note #764: HOLD BEFORE THE FIRST SNAPSHOT. The board is not a safe default -- it renders the seeded
+  /* LIVE-2D: THE TABLE IS GONE FOR THIS TAB -- kicked, cancelled, expired, or a private table dealt without it. Said
+     once, in words (never a code or a reference), with the one way on: back to the lobby. Nothing reconnects. */
+  if (sandbox && sandboxRoomCode && roomLost !== null) {
+    return (
+      <div style={styles.sandboxGateRoot}>
+        <div style={styles.sandboxGateCard} data-testid="room-lost">
+          <h1 style={styles.sandboxGateTitle}>{roomLost.code === "gone" ? "This table has closed" : "This table is not open to you"}</h1>
+          <p style={styles.sandboxGateBody}>{refusalMessage(roomLost.code === "not-found" && sandboxRoom?.you.kicked ? "kicked" : roomLost.code, roomLost.reason)}</p>
+          <button
+            type="button"
+            style={styles.sandboxGateQuiet}
+            onClick={() => {
+              handleLeaveSandboxRoom();
+              onLeaveGame();
+            }}
+          >
+            Back to the lobby
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  /* Design note #764: HOLD BEFORE THE FIRST VIEW. The board is not a safe default -- it renders the seeded
      Waterfall Auction, which is a screen from the middle of a game the player has not started. Waiting is the
      honest answer while the room's own state is still in flight, and it is one round trip. */
-  /* Design note #1258: the hold is drawn as the waiting room itself, so Host is one transition, not two. */
+  /* Design note #1258: the hold is drawn as the waiting room itself, so Host is one transition, not two.
+     LIVE-2D: it shows no code yet -- the game id is a key, never a name, and the code arrives with the view. */
   if (sandbox && sandboxRoomCode && !sandboxRoomResolved) {
     return (
       <SandboxWaitingRoomHold
-        roomCode={sandboxRoomCode}
+        roomCode=""
         audio={audioControls}
         onLeave={handleLeaveSandboxRoom}
       />
     );
   }
 
-  if (sandbox && sandboxRoomCode && sandboxRoom?.status === "waiting") {
+  if (sandbox && sandboxRoomCode && sandboxRoom?.lifecycle === "waiting") {
+    const seated = localId !== "";
     return (
       <SandboxWaitingRoom
-        roomCode={sandboxRoomCode}
+        roomCode={sandboxRoom.code ?? "Private game"}
         room={sandboxRoom}
         localPlayerId={localId}
         error={sandboxRoomError}
@@ -13362,10 +13222,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
            different control rather than for a smaller prop, and the whole point now is that there is not a
            different control. One object, one component, both screens. */
         audio={audioControls}
-        /* #1415: host-only, and `undefined` for a guest -- the kick control is absent for them, not
-           disabled, since it is not a term they are agreeing to. */
-        onKick={sandboxRoom?.hostId === localId ? handleKickSandboxPlayer : undefined}
-        onLeave={handleLeaveSandboxRoom}
+        /* #1415: host-only, and `undefined` for a guest -- a control is absent for a role that may not use it,
+           not disabled, since it is not a term they are agreeing to. LIVE-2D: the role is the server's. */
+        onKick={isSandboxHost ? handleKickSandboxPlayer : undefined}
+        onTransferHost={isSandboxHost ? handleTransferHost : undefined}
+        onSetVisibility={isSandboxHost ? handleSetVisibility : undefined}
+        onRotateCode={isSandboxHost ? handleRotateCode : undefined}
+        onCancelRoom={isSandboxHost ? handleCancelRoom : undefined}
+        onTakeSeat={!seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}
+        onReleaseSeat={seated ? handleReleaseSeat : undefined}
+        onLeave={() => {
+          handleLeaveSandboxRoom();
+          onLeaveGame();
+        }}
       />
     );
   }
@@ -13692,62 +13561,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
           // for game 0 on chain.
           <>
             <span style={styles.sandboxBadge}>🧪 OFFLINE SANDBOX</span>
-            {/* Design note #1128: host only, and it says what is armed rather than merely that something is.
-                A tool that waits for its prerequisites needs to be readable while it waits. */}
-            {/* Design note #1341 / #1341a: the seat PIN, mid-game -- set mine, or rejoin one on this device.
-                SETTING A PIN WAS ONLY EVER ON THE WAITING-ROOM ROSTER, which is a screen nobody can reach
-                once the game has started. A player who wanted to lock their seat mid-game was offered the
-                rejoin card and nothing else -- and rejoining is the one thing that does not set your own
-                PIN, because the card deliberately lists every seat except yours. The button was missing,
-                not hidden.
-                THE REJOIN BUTTON IS NO LONGER GATED on some other seat already having one, either: the
-                seats this whole affordance exists for are the ones claimed before PINs did, and not one of
-                them has a PIN to be gated on. */}
-            {sandboxRoom?.players.some((player) => player.id === localId) && (
-              <button
-                type="button"
-                style={styles.forcedSignChip}
-                onClick={() => setSeatPinMode("set")}
-                title="A four-digit PIN for this room only, so you can pick this seat up on another device."
-              >
-                {sandboxRoom.players.find((player) => player.id === localId)?.hasPin
-                  ? "Change my PIN"
-                  : "Set my PIN"}
-              </button>
-            )}
-            {sandboxRoom && sandboxRoom.players.some((player) => player.id !== localId) && (
-              <button
-                type="button"
-                style={styles.forcedSignChip}
-                onClick={() => setSeatPinMode("rejoin")}
-                title="Switched devices? Rejoin your seat here with its four-digit PIN (this room only)."
-              >
-                Rejoin a seat
-              </button>
-            )}
-            {/* UR-7 (UR-N62): only where the force can act (`forcedSignToolInForce`: an unpinned Unpredictable Revenue
-                board). On a pinned table the chip changed nothing, and its tooltips named the Sign's hidden windows to
-                a host who is also a player (OD-UR-8, D-42) and called the fog a run stage (OD-UR-2 retired that). */}
-            {isSandboxHost && forcedSignToolInForce(sandboxState) && (
-              <button
-                type="button"
-                style={{
-                  ...styles.forcedSignChip,
-                  ...(forcedSign ? styles.forcedSignChipArmed : {}),
-                }}
-                onClick={cycleForcedSign}
-                title={
-                  forcedSign
-                    ? forcedSign === "mark"
-                      ? "Yellow Sign: Mark armed. Fires on the next run by any corporation with a train, phases 2-4. Ctrl+Shift+Y to change."
-                      : forcedSign === "carcosa"
-                        ? "Yellow Sign: Carcosa armed. Fires on the MARKED corporation's next run, phases 5-D -- nobody else's. Ctrl+Shift+Y to change."
-                        : "Yellow Sign: Fog armed. Fires on the Carcosan corporation's next run. Ctrl+Shift+Y to change."
-                    : "Yellow Sign debug: force a stage on the next run. Ctrl+Shift+Y."
-                }
-              >
-                {forcedSign ? `⚠ SIGN: ${forcedSign.toUpperCase()}` : "SIGN: OFF"}
-              </button>
+            {/* LIVE-2D: the seat-PIN chips (#1341) and the forced-sign chip (#1128) are gone with the seat PINs and the
+                room document. A watcher is told so here, since nothing on the board is theirs to press. */}
+            {sandboxRoom !== null && localId === "" && (
+              <span style={styles.forcedSignChip} title="You are watching this table; you have no seat in it." data-testid="watching-badge">
+                👁 Watching
+              </span>
             )}
             {/* ==================================================================
                 DESIGN NOTE 1119: A LABEL THAT OUTLIVED BOTH THINGS IT NAMED
@@ -13784,7 +13603,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
         }
         /* Design note #1083: the sandbox room's code, in the slot the Neta DAO credit vacated. `null` for a
            solo sandbox and for an on-chain game, whose identity the strip above already names. */
-        roomName={sandboxRoomCode}
+        /* LIVE-2D: the table's CODE, never its game id (a key, not a name); "Private game" to one who may not see it. */
+        roomName={sandboxRoomCode ? (sandboxRoom?.code ?? "Private game") : null}
       />
 
 
@@ -15100,16 +14920,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
           corporation that acts first. The ordering is enforced in `dueFleetNotice` (#1049a) rather than by
           this position or by z-index; source order here simply agrees with it, so a reader is not looking at
           two files that appear to disagree about which comes first. */}
-      {/* Design note #1341: rejoin a seat from this device, mid-game. */}
-      {seatPinMode && sandboxRoomCode && sandboxRoom && (
-        <SeatPinModal
-          mode={seatPinMode}
-          roomCode={sandboxRoomCode}
-          localPlayerId={localId}
-          players={sandboxRoom.players}
-          onClose={() => setSeatPinMode(null)}
-        />
-      )}
       {/* Design note #1332: PRR on the Level Playing Field / 18XX+ floats owing no token -- said, not left to
           be noticed. */}
       <HeraldHomeFloatModal
@@ -15471,13 +15281,8 @@ function GameRouter() {
     }
   }, [activeGame]);
 
-  const handleEnterGame = useCallback((gameId: number, roomId: string) => {
-    setActiveGame({ gameId, roomId, mode: "play" });
-  }, []);
-
-  const handleSpectateGame = useCallback((gameId: number, roomId: string) => {
-    setActiveGame({ gameId, roomId, mode: "spectate" });
-  }, []);
+  /* LIVE-2D (RUST-RETIRE-1 2B.3): `handleEnterGame` / `handleSpectateGame` served only the deleted on-chain staging
+     lobby's launch and spectate. Every table is entered by its server-minted game id below. */
 
   /** The escape hatch needs no wallet, contract or room. #524: the sandbox room code is held above AppShell, which remounts; #551 seeds it from the session.
    *  See docs/ai_architecture/session_keys_wallet.md - App.tsx #24 */
@@ -15486,17 +15291,10 @@ function GameRouter() {
     writeActiveSandboxRoom(sandboxRoomCode);
   }, [sandboxRoomCode]);
 
-  /* Design note #1441: `watchOnly` is the Lobby's Watch button -- the same door, with the seat claim held.
-     #1442: recorded as the ROOM it was granted for, and seeded from the session so a refresh while watching
-     does not reset it to "seat me". EVERY entry writes this, which is what keeps it from going stale: Host,
-     Join, the code box and Watch all arrive here, and only Watch arrives with a room. */
-  const [sandboxWatchRoom, setSandboxWatchRoom] = useState<string | null>(readSandboxWatchRoom);
-  const handleEnterSandbox = useCallback((roomCode?: string | null, watchOnly?: boolean) => {
-    const code = roomCode ?? null;
-    const watching = watchOnly === true ? code : null;
-    setSandboxRoomCode(code);
-    setSandboxWatchRoom(watching);
-    writeSandboxWatchRoom(watching);
+  /* LIVE-2D: one door for Host, Join and Watch -- the table's game id. There is no watch intent to carry: entering a
+     table never takes a seat by itself (the server seated a host or a joiner already; a watcher asked for none). */
+  const handleEnterSandbox = useCallback((gameIdToEnter: string) => {
+    setSandboxRoomCode(gameIdToEnter);
     setActiveGame({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox" });
   }, []);
 
@@ -15513,11 +15311,7 @@ function GameRouter() {
   if (!activeGame) {
     return (
       <>
-        <Lobby
-          onEnterGame={handleEnterGame}
-          onSpectateGame={handleSpectateGame}
-          onEnterSandbox={handleEnterSandbox}
-        />
+        <Lobby onEnterSandbox={handleEnterSandbox} />
         <ModalLayerHost />
       </>
     );
@@ -15534,7 +15328,6 @@ function GameRouter() {
       mode={activeGame.mode}
       // Design note #524: `null` for every mode but a joined sandbox room.
       sandboxRoomSeed={activeGame.mode === "sandbox" ? sandboxRoomCode : null}
-      sandboxWatchSeed={activeGame.mode === "sandbox" ? sandboxWatchRoom : null}
       onLeaveGame={handleLeaveGame}
     />
       <ModalLayerHost />

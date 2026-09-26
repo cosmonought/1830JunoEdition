@@ -8,8 +8,8 @@
     "build": "node ../frontend/node_modules/typescript/bin/tsc -p tsconfig.json",
     "start": "node dist/server/src/start.js",
     "smoke": "node dist/server/src/smokeTest.js",
-    "_comment_test": "LIVE-3A/3B/2A/2B/2C: the per-game actor's regressions and the seeded stress run, against the compiled output -- run `npm run build` first. Explicit file paths rather than a directory or a glob, because `node --test` does not read either the same way on every Node version a playtest machine may have.",
-    "test": "node --test dist/server/src/rooms/gameActor.test.js dist/server/src/rooms/live3aStress.test.js dist/server/src/fileLogStore.test.js dist/server/src/persistence/processLock.test.js dist/server/src/ingress/live2aIngress.test.js dist/server/src/identity/identityUnits.test.js dist/server/src/identity/live2bIdentity.test.js dist/server/src/rooms/live2cRooms.test.js",
+    "_comment_test": "LIVE-3A/3B/2A/2B/2C/2D: the per-game actor's regressions and the seeded stress run, against the compiled output -- run `npm run build` first. Explicit file paths rather than a directory or a glob, because `node --test` does not read either the same way on every Node version a playtest machine may have.",
+    "test": "node --test dist/server/src/rooms/gameActor.test.js dist/server/src/rooms/live3aStress.test.js dist/server/src/fileLogStore.test.js dist/server/src/persistence/processLock.test.js dist/server/src/ingress/live2aIngress.test.js dist/server/src/identity/identityUnits.test.js dist/server/src/identity/live2bIdentity.test.js dist/server/src/rooms/live2cRooms.test.js dist/server/src/rooms/live2dCutover.test.js",
     "_comment_logDoctor": "LIVE-3B: the offline operator tool for a room log the server holds as damaged. STOP THE SERVER FIRST. `npm run logDoctor -- data/JUNO-XXX.log.jsonl` inspects; add `--repair` (and `--split-poisoned` for the F-8 shape) to write a verified copy beside it. See claude/live3b-hardened-local-store-2026-09-25.md.",
     "logDoctor": "node dist/server/src/tools/logDoctor.js",
     "replay": "node dist/server/src/replayCli.js"

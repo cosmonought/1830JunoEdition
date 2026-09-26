@@ -131,10 +131,13 @@ describe("the shell reads that return correctly", () => {
   it("treats null as the failure, not falsiness", () => {
     /* THE FAULT THE FIX NEARLY INTRODUCED. `if (!ok)` was correct against a boolean and is wrong against an
        index: `0` is a real allocation -- the `SetupGame` event that deals the game -- so a truthiness test
-       would report the first action of every room as a failed write. Both call sites, because one of them is
-       precisely the index-0 case. */
+       would report the first action of every room as a failed write.
+       LIVE-2D: ONE call site now. The other was the deal itself -- the index-0 case -- and the client no longer
+       submits the deal: Start sends `start-game` and the server builds, shuffles and commits `SetupGame`. */
     expect(APP).toContain("if (allocated === null) {");
-    expect(APP.split("if (allocated === null) {").length - 1).toBe(2);
+    expect(APP.split("if (allocated === null) {").length - 1).toBe(1);
+    expect(APP).not.toContain("SetupGame: { players: seated");
+    expect(APP).toContain('await runRoomOp({ type: "start-game" });');
   });
 
   it("no longer coerces the result to a boolean on the error path", () => {

@@ -239,24 +239,31 @@ describe("presence stays outside the one source of truth", () => {
   });
 
   it("is its own record on the socket rather than the room document (#1361a)", () => {
-    /* The room doc is what `upsertSandboxPlayer` writes. Publishing twice a second into the same document
-       would rewrite the roster under joins and colour changes, and re-render every waiting-room subscriber
-       on a game they are not in. So presence is its own frame kind, and the transport never touches
-       `writeRoomDoc`. */
+    /* Publishing twice a second into the room would rewrite the roster under joins and colour changes, and
+       re-render every waiting-room subscriber on a game they are not in. So presence is its own frame kind.
+       LIVE-2D: there is no room document to touch at all -- the transport is the game's room socket, by id. */
     const transport = code("sandboxPresence.ts");
     expect(transport).toContain("sendPresence(");
     expect(transport).toContain("subscribePresence(");
+    expect(transport).toContain('from "./roomLink";');
     expect(transport).not.toContain("writeRoomDoc");
+    expect(transport).not.toContain("roomDocLink");
     expect(transport).not.toContain("firebase");
   });
 
   it("overwrites per seat rather than accumulating", () => {
     /* Presence is a CURRENT VALUE, not an event: the server keys one entry per seat and the newest write
-       wins, and a clear is a `null` state rather than a second kind of record. */
-    const server = code("../../../server/src/gameServer.ts");
-    expect(server).toContain("seats.set(actor, { ...(frame.state as PresenceState), playerId: actor, at: Date.now() });");
-    expect(server).toContain("seats.delete(actor);");
-    expect(code("sandboxPresence.ts")).toContain("sendPresence(roomCode, playerId, null);");
+       wins, and a clear is a `null` state rather than a second kind of record.
+       LIVE-2D: the SEAT is the server's -- derived from the socket's principal, stamped over whatever the client
+       sent -- and the frame names none. */
+    const server = code("../../../server/src/rooms/roomHost.ts");
+    expect(server).toContain("seats.set(seat.player_id, { ...(state as PresenceState), playerId: seat.player_id, at: now() });");
+    expect(server).toContain("else seats.delete(seat.player_id);");
+    expect(code("sandboxPresence.ts")).toContain("sendPresence(gameId, null);");
+    /* No seat argument beside the game (the old `sendPresence(room, playerId, state)`): the state's own
+       `playerId` is overwritten by the server's stamp, and a clear names nobody. */
+    expect(code("sandboxPresence.ts")).not.toMatch(/sendPresence\(\s*\w+\s*,\s*\w+\s*,/);
+    expect(code("roomLink.ts")).toContain('send(channel, { kind: "presence-set", gameId, state });');
   });
 
   it("clears a seat when its turn ends rather than waiting for staleness", () => {
@@ -278,9 +285,10 @@ describe("the president's figure reaches every screen (design note #1397)", () =
   const code = (rel: string) => read(rel).replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 
   it("the server stamps `at` on its own clock and sends `now` with every frame", () => {
-    const server = code("../../../server/src/gameServer.ts");
-    expect(server).toContain("now: Date.now(),");
-    expect(server).toContain("send(socket, presenceFrame(frame.room) as never);");
+    /* LIVE-2D: the game's presence frame (`roomHost.ts`), keyed by game id, sent with the room view. */
+    const server = code("../../../server/src/rooms/roomHost.ts");
+    expect(server).toContain('return { kind: "presence", gameId, now: now(), entries: [...(presence.get(gameId)?.values() ?? [])] };');
+    expect(server).toContain("deps.send(socket, presenceFrame(gameId));");
   });
 
   it("the client rebases `at` into its own clock from the server's `now`", () => {

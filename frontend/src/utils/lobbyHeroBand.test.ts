@@ -345,8 +345,8 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(spacer).toBeGreaterThan(-1);
     expect(list).toBeGreaterThan(spacer);
     expect(LOBBY.indexOf("<div style={styles.content}>")).toBeLessThan(list);
-    // The same subscription #1415 opened, read here rather than handed to a modal.
-    expect(LOBBY).toContain("rooms={sandboxRooms.rooms}");
+    // The public list, read here rather than handed to a modal. LIVE-2D: the server's `rooms-watch`.
+    expect(LOBBY).toContain("rooms={publicRooms.rooms}");
   });
 
   it("keeps the layer over the page from eating the page", () => {
@@ -370,18 +370,18 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(LOBBY).toContain("styles.tableAnchor");
   });
 
-  it("keeps the display name behind the flag it actually serves", () => {
+  it("has no display-name field: its only readers went with the staging lobby (LIVE-2D)", () => {
     /* ==================================================================
-        DESIGN NOTE 1133: A FIELD WITH NO CONFIRM, BECAUSE IT HAD NOTHING TO CONFIRM TO
+        DESIGN NOTE 1133, CLOSED BY RUST-RETIRE-1 2B.3
        ==================================================================
-       `handleHostSandboxRoom` passes the literal "Host" -- it never reads this input. The name a sandbox
-       player uses is set in the waiting room, which has its own field AND its own Save. What DOES read it is
-       `hostDisplayName`, `claimSeat` and `ChatBox`, every one of them inside the Web3 branch -- so it is
-       gated with that branch rather than deleted, which is #525's standing rule for it. */
-    expect(LOBBY).toContain("{WEB3_LOBBY_ENABLED && (");
-    expect(LOBBY).toContain('placeholder="Display name"');
-    // #1415: the terms ride along now; the nickname is still the literal.
-    expect(LOBBY).toContain('hostSandboxRoom(localPlayerId(), "Host", variants, setup)');
+       `handleHostSandboxRoom` passes the literal "Host" -- it never read this input. The name a player uses is
+       set in the waiting room, which has its own field AND its own Save. What DID read it was the Web3 staging
+       lobby behind `WEB3_LOBBY_ENABLED`, and that branch is deleted -- so the field goes with it. */
+    expect(LOBBY).not.toContain("WEB3_LOBBY_ENABLED");
+    expect(LOBBY).not.toContain('placeholder="Display name"');
+    // #1415: the terms ride along; the nickname is still the literal. LIVE-2D: a `create` op, no client id.
+    expect(LOBBY).toContain('const answer = await createHostedGame(variants, setup, "Host");');
+    expect(LOBBY).not.toContain("localPlayerId");
   });
 
   it("shrinks the connect button to the row it lives in", () => {
@@ -397,9 +397,10 @@ describe("the room is the page, and the text carries its own ground", () => {
     expect(LOBBY).toContain("styles.utilityAccount");
     expect(LOBBY).toContain('justifyContent: "space-between"');
     expect(LOBBY.indexOf("Offline · sandbox active")).toBeLessThan(LOBBY.indexOf("styles.utilityAccount"));
-    // The paused card's sentence survives where a developer will look and a player will not.
+    // The paused card's sentence survives where a developer will look and a player will not. LIVE-2D: it no
+    // longer names a flag to flip -- the staging lobby is deleted, and money tables return with the escrow contract.
     expect(LOBBY).not.toContain("On-chain rooms — paused");
-    expect(LOBBY).toContain("WEB3_LOBBY_ENABLED in Lobby.tsx to bring them back");
+    expect(LOBBY).toContain("On-chain tables return with the escrow contract; every table on this server is a no-money table.");
   });
 
   it("drops the three lines of copy that captioned labelled controls", () => {

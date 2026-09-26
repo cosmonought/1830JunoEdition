@@ -54,7 +54,6 @@
 import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import { isStoreCorrupt, outcomeOf, type StoreWriteOutcome } from "../persistence/storeResult";
 import { AHEAD_REASON, RESYNC_REASON } from "../../../frontend/src/utils/roomSession";
-import type { SandboxRoomDoc } from "../../../frontend/src/utils/sandboxRoom";
 import type { GameRecord } from "./gameRecord";
 import type { BuildId } from "../../../frontend/src/utils/serverProtocol";
 import {
@@ -64,7 +63,6 @@ import {
   extendsHistory,
   withHold,
   withRecord,
-  withRoomDoc,
   type CommittedView,
   type Hold,
 } from "./committedView";
@@ -151,17 +149,10 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-/** LIVE-2C: how a GameRecord commit settled -- exactly like the room document's (durable before visible). */
+/** LIVE-2C: how a GameRecord commit settled (durable before visible). */
 export type RecordSettlement =
   | { readonly kind: "committed"; readonly view: CommittedView }
   | { readonly kind: "failed"; readonly reason: string }
-  | { readonly kind: "unresolved"; readonly reason: string };
-
-export type DocSettlement =
-  | { readonly kind: "committed"; readonly view: CommittedView }
-  /** The store did not take the document; the previous one stands. */
-  | { readonly kind: "failed"; readonly reason: string }
-  /** LIVE-3B: unknown -- the rename may have landed. The game is held until the process restarts (§8.7). */
   | { readonly kind: "unresolved"; readonly reason: string };
 
 /** What a task is handed. */
@@ -182,8 +173,6 @@ export interface Tx {
     batch: readonly ServerLogEntry[],
     deliver: (settled: BatchSettlement) => Delivery,
   ): Promise<BatchSettlement>;
-  /** Durable-before-visible for the legacy room document (§21 LIVE-3A, F-10). Never throws. */
-  commitRoomDoc(doc: SandboxRoomDoc, deliver: (settled: DocSettlement) => Delivery): Promise<DocSettlement>;
   /** LIVE-2C: durable-before-visible for the GameRecord, CONDITIONAL on the committed `record_version` (OCC): the
    *  record must be the committed one advanced by exactly one (or the first, version 1). Never throws. */
   commitRecord(record: GameRecord, deliver: (settled: RecordSettlement) => Delivery): Promise<RecordSettlement>;
@@ -196,9 +185,7 @@ export interface GameStorePort {
   loadLog(gameId: string): Promise<readonly ServerLogEntry[]>;
   /** One submission's whole burst (L3-4): committed, definitely not written, or uncertain. */
   appendBatch(gameId: string, entries: readonly ServerLogEntry[]): Promise<StoreWriteOutcome>;
-  loadRoomDoc(gameId: string): Promise<SandboxRoomDoc | null>;
-  saveRoomDoc(gameId: string, doc: SandboxRoomDoc): Promise<StoreWriteOutcome>;
-  /** LIVE-2C: the GameRecord (`null` for a legacy room or a game that does not exist). */
+  /** LIVE-2C: the GameRecord (`null` for a game that does not exist). */
   loadRecord?(gameId: string): Promise<GameRecord | null>;
   /** LIVE-2C: conditional put -- `expected` is the committed version (`null`: must not exist). */
   saveRecord?(record: GameRecord, expected: number | null): Promise<StoreWriteOutcome>;
@@ -263,10 +250,6 @@ export interface GameActorDeps {
   newSession(): RoomSession;
   /** Restores a session from a stored log (and says so in the window). */
   restore(session: RoomSession, entries: readonly ServerLogEntry[]): void;
-  /** The committed room document, through the server's single-flight document cache. */
-  loadRoomDoc(): Promise<SandboxRoomDoc | null>;
-  /** Called synchronously inside the publish that changed the committed room document. */
-  onRoomDocPublished?(doc: Readonly<SandboxRoomDoc>): void;
   /** LIVE-2C: called synchronously inside the publish that changed the committed GameRecord. */
   onRecordPublished?(record: Readonly<GameRecord>): void;
   /** Called inside the publish that made entries durable and visible (`GameServerOptions.onAppend`). */
@@ -415,8 +398,7 @@ export class GameActor {
          until an operator repairs it offline (`tools/logDoctor.ts`) and the server is restarted. */
       corrupt = describe(error);
     }
-    const roomDoc = await this.deps.loadRoomDoc();
-    /* LIVE-2C: the GameRecord, read in the same single-flight load (a legacy room has none). */
+    /* LIVE-2C: the GameRecord, read in the same single-flight load. */
     const record = this.deps.store.loadRecord ? await this.awaitRead(this.deps.store.loadRecord(this.gameId), "load of the game record") : null;
     const session = this.deps.newSession();
     if (entries.length > 0) this.deps.restore(session, entries);
@@ -424,7 +406,6 @@ export class GameActor {
     this.committed = buildCommittedView({
       gameId: this.gameId,
       session,
-      roomDoc,
       record,
       explainDivergence: this.deps.explainDivergence,
       version: 1,
@@ -622,7 +603,6 @@ export class GameActor {
         this.rollbackSession();
       },
       commitBatch: (batch, deliver) => this.commitBatch(task, run, batch, deliver),
-      commitRoomDoc: (doc, deliver) => this.commitRoomDoc(task, run, doc, deliver),
       commitRecord: (record, deliver) => this.commitRecord(task, run, record, deliver),
     };
   }
@@ -775,49 +755,6 @@ export class GameActor {
     }
   }
 
-  /** The room document, durable before it is visible (F-10: it used to change in memory first and be saved
-   *  "quietly", so a failed save silently reverted the roster, a PIN or the host at the next restart).
-   *  LIVE-3B: the store answers how the save ended (§8.7) -- a failure BEFORE the rename leaves the previous document
-   *  standing; one at or after it is uncertain, redone by the store, and if that fails the game is held for a
-   *  restart. The 3A read-back ("does the store hold the new document?") is gone for the same reason as the log's. */
-  private async commitRoomDoc(
-    task: Task<unknown>,
-    run: RunState,
-    doc: SandboxRoomDoc,
-    deliver: (settled: DocSettlement) => Delivery,
-  ): Promise<DocSettlement> {
-    if (run.commitIssued) throw new Error("E-6: a task commits at most once");
-    run.commitIssued = true;
-    const priorHold = this.view.hold;
-    const { outcome, late } = await this.awaitWrite(
-      () => this.deps.store.saveRoomDoc(this.gameId, doc),
-      "room document save",
-      (detail) => this.publish(withHold(this.view, { reason: "uncertain", detail }), null, {}),
-    );
-    if (outcome.kind === "committed") {
-      const base = late ? withHold(this.view, priorHold) : this.view;
-      const view = withRoomDoc(base, Object.freeze(doc));
-      const settled: DocSettlement = { kind: "committed", view };
-      this.publish(view, task, deliver(settled));
-      return settled;
-    }
-    this.deps.counters.storeDocFailed += 1;
-    if (outcome.kind === "definite") {
-      this.deps.warn(
-        `  store: could not save the room document for ${this.gameId} — ${outcome.detail}; the previous document stands`,
-      );
-      if (late) this.publish(withHold(this.view, priorHold), null, {});
-      const settled: DocSettlement = { kind: "failed", reason: outcome.detail };
-      this.deliverOnly(task, deliver(settled));
-      return settled;
-    }
-    this.deps.counters.storeUncertain += 1;
-    const settled: DocSettlement = { kind: "unresolved", reason: outcome.detail };
-    this.deliverOnly(task, deliver(settled));
-    this.hold(outcome.detail, null, null, true);
-    return settled;
-  }
-
   /** LIVE-2C: the GameRecord, durable before visible, conditional on the committed version (OCC). A failure before
    *  the store's rename leaves the committed record standing; an unresolved one holds the game for a restart. */
   private async commitRecord(
@@ -873,7 +810,6 @@ export class GameActor {
     return buildCommittedView({
       gameId: this.gameId,
       session,
-      roomDoc: before.roomDoc,
       record: before.record,
       explainDivergence: this.deps.explainDivergence,
       version: before.version + 1,
@@ -1030,7 +966,6 @@ export class GameActor {
   ): void {
     const previous = this.committed;
     this.committed = view; // 1. the committed view, replaced synchronously
-    if (view.roomDoc !== null && view.roomDoc !== previous?.roomDoc) this.deps.onRoomDocPublished?.(view.roomDoc);
     if (view.record !== null && view.record !== previous?.record) this.deps.onRecordPublished?.(view.record);
     const origin = task?.origin;
     if (delivery.reply && origin !== undefined) this.deliverTo(origin, delivery.reply); // 2. the answer

@@ -1,5 +1,4 @@
-// Real-time chat transport over the game server's room-doc socket, plus one standalone view for the
-// pre-game staging room.
+// Real-time chat transport over the game server's room socket (`roomLink`, keyed by `gameId`).
 //
 // The primary export is `useRoomChat`, NOT the component: the dashboard's chat surface is `TopTicker`'s
 // accordion fed by `mergeFeedItems`. Chat is off-chain and carries NO AUTHORITY -- no code path in this app
@@ -12,15 +11,20 @@
 // fall out of. The hook's contract is unchanged: `ChatMessage[]` oldest-first, `sendMessage`, `error`,
 // `available`.
 //
+// LIVE-2D: CHAT IS KEYED BY `gameId` AND SIGNED BY THE SERVER. The frame carries the text and nothing else -- the
+// server stamps `author` (the speaking seat's `player_id`) and `displayName` (that seat's nickname) itself, and
+// refuses a spectator (OD-L2-4: only seated players chat). The staging lobby's standalone chat box went with the
+// staging lobby.
+//
 // See docs/ai_architecture/firebase_middleware.md, ChatBox.tsx #0 / #1 / #2.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { backendConfigError } from "../config/backend";
 import { seatLabel } from "../utils/lobby";
-import { roomDocOnServer, sendChat, subscribeChat, type RoomChatEntry } from "../utils/roomDocLink";
-import { colorForAuthor, type ChatMessage } from "../utils/feed";
-import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, RADIUS } from "../styles/typography";
+import { roomLinkAvailable, sendChat, subscribeChat } from "../utils/roomLink";
+import type { RoomChatEntry } from "../utils/roomProtocol";
+import type { ChatMessage } from "../utils/feed";
 
 /** How much scrollback a room keeps. Bounded because a transcript only ever grows and the server sends the
  *  whole of it on every change -- an unbounded one would re-send an entire game's chat per message. The
@@ -74,13 +78,11 @@ export interface RoomChatResult {
  * Subscribes to a room's transcript on the game server and returns it in the exact `ChatMessage[]` shape
  * `utils/feed.ts` already defines.
  *
- * @param roomId  The room the transcript hangs off -- a sandbox room code, or a staging room's id. Chat is
- *                an off-chain concern keyed to the off-chain room, which is what lets a staging room have a
- *                transcript before it has any on-chain identity at all. Pass `null` to subscribe to nothing.
- * @param address The sender's identity, stamped on outgoing messages: a wallet address, or the sandbox
- *                player id. `null` disables sending (but not reading).
- * @param displayName Denormalised onto each message on purpose: a player who later renames themselves should
- *                not retroactively rewrite the byline on things they already said.
+ * @param roomId  LIVE-2D: the game's `gameId`. Pass `null` to subscribe to nothing.
+ * @param address This tab's seat (`RoomView.you.playerId`) -- used ONLY to decide whether a Send is worth offering
+ *                (a spectator may not chat). It is never sent: the server signs every line with the seat it derives.
+ *                `null` disables sending (but not reading).
+ * @param displayName Used only for the offline echo; the server signs delivered lines with the seat's nickname.
  */
 /* Design note #644: the sandbox had no chat, twice over. Two independent gates,
    either enough on its own: `App.tsx` passed `sandbox ? null : roomId` on design
@@ -107,7 +109,7 @@ export function useRoomChat(
   const [localMessages, setLocalMessages] = useState<ChatMessage[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const onServer = roomDocOnServer();
+  const onServer = roomLinkAvailable();
   const available = onServer && roomId !== null;
 
   // Kept in a ref so `sendMessage` stays referentially stable across
@@ -124,12 +126,10 @@ export function useRoomChat(
       return;
     }
 
-    /* #1361a: the connection's identity is whoever this tab is -- the same claim the room document's
-       subscription made for this room, so the two share one socket. `address` may be null for a reader. */
-    const claim = identityRef.current.address ?? "";
+    /* LIVE-2D: the game's own room socket -- the one its RoomView rides -- so a line is authorized against the same
+       record the view is. */
     const unsubscribe = subscribeChat(
       roomId,
-      claim,
       (entries) => {
         const decoded = entries
           .map(decodeMessage)
@@ -138,8 +138,11 @@ export function useRoomChat(
         setMessages(decoded);
         setError(null);
       },
-      (message) => {
-        setError(`[server] Chat is unavailable: ${message}`);
+      (code) => {
+        /* Said as the refusal it is. A spectator's line is refused `forbidden` (OD-L2-4). */
+        if (code === "forbidden" || code === "not-seated") setError("Only seated players can chat at this table.");
+        else if (code === "rate-limited") setError("You are chatting too quickly. Wait a moment.");
+        else if (code !== "wrong-state") setError("Chat is unavailable right now.");
       },
     );
 
@@ -179,14 +182,15 @@ export function useRoomChat(
         return;
       }
       if (!sender) {
-        setError("Connect a wallet before sending a message.");
+        setError("Only seated players can chat at this table.");
         return;
       }
 
       try {
-        /* #1361a: fire-and-forget, like every other write on this socket. The message is visible when the
-           server's next `chat` frame arrives -- the server is the one clock and the one order. */
-        sendChat(roomId, sender, trimmed, name);
+        /* #1361a: fire-and-forget. The message is visible when the server's next `chat` frame arrives -- the server
+           is the one clock, the one order, and (LIVE-2D) the one that says who said it. */
+        void name;
+        sendChat(roomId, trimmed);
         setError(null);
       } catch (sendError) {
         setError(
@@ -209,211 +213,3 @@ export function useRoomChat(
 
   return { messages: allMessages, sendMessage, error, available };
 }
-
-/* ------------------------------------------------------------------ */
-/* Standalone view -- staging room only, design note #0                */
-/* ------------------------------------------------------------------ */
-
-export interface ChatBoxProps {
-  roomId: string | null;
-  address: string | null;
-  displayName: string;
-  /** Rendered above the transcript. */
-  title?: string;
-}
-
-/**
- * A compact scrolling transcript + composer, for the pre-game staging room
- * in `Lobby.tsx`. NOT used on the dashboard -- see design note #0.
- */
-export function ChatBox({ roomId, address, displayName, title = "Room chat" }: ChatBoxProps) {
-  const { messages, sendMessage, error, available } = useRoomChat(roomId, address, displayName);
-  const [draft, setDraft] = useState("");
-  const listRef = useRef<HTMLDivElement>(null);
-
-  // Scroll-to-bottom on new arrivals -- the same convention `TopTicker`'s
-  // own design note #5 established for the accordion history, so both chat
-  // surfaces behave identically.
-  useEffect(() => {
-    const node = listRef.current;
-    if (node) node.scrollTop = node.scrollHeight;
-  }, [messages.length]);
-
-  const handleSend = useCallback(() => {
-    const text = draft;
-    setDraft(""); // cleared optimistically; the write is visible immediately
-    void sendMessage(text);
-  }, [draft, sendMessage]);
-
-  const canSend = available && address !== null && draft.trim().length > 0;
-
-  const body = useMemo(() => {
-    if (!available) {
-      return <p style={styles.hint}>Real-time chat is offline. {error ?? ""}</p>;
-    }
-    if (messages.length === 0) {
-      return <p style={styles.hint}>No messages yet — say hello while the table fills up.</p>;
-    }
-    return messages.map((message) => (
-      <div key={message.id} style={styles.message}>
-        <div style={styles.messageHeader}>
-          <span style={{ ...styles.messageAuthor, color: colorForAuthor(message.author) }}>
-            {message.author}
-          </span>
-          <span style={styles.messageTime}>{message.timestamp}</span>
-        </div>
-        <div style={styles.messageText}>{message.text}</div>
-      </div>
-    ));
-  }, [available, error, messages]);
-
-  return (
-    <section style={styles.root} aria-label={title}>
-      <header style={styles.header}>
-        <span>💬 {title}</span>
-        {messages.length > 0 && <span style={styles.count}>{messages.length}</span>}
-      </header>
-
-      <div style={styles.list} ref={listRef}>
-        {body}
-      </div>
-
-      {error && available && <p style={styles.error}>{error}</p>}
-
-      <div style={styles.composer}>
-        <input
-          type="text"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              event.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder={address ? "Type a message..." : "Connect a wallet to chat"}
-          aria-label="Room chat message"
-          disabled={!available || address === null}
-          style={styles.input}
-        />
-        <button type="button" onClick={handleSend} disabled={!canSend} style={styles.sendButton}>
-          Send
-        </button>
-      </div>
-    </section>
-  );
-}
-
-export default ChatBox;
-
-// Inline styles, matching this codebase's escape hatch (`TopTicker`,
-// `InlineQuickChat`), on the same #0F172A / #1E293B recessed-surface palette so
-// the staging room reads as part of the same application as the dashboard.
-
-const styles: Record<string, React.CSSProperties> = {
-  root: {
-    display: "flex",
-    flexDirection: "column",
-    minHeight: 0,
-    backgroundColor: "#0f0f0f",
-    border: "1px solid #1c1c1c",
-    borderRadius: RADIUS.layer,
-    overflow: "hidden",
-    fontFamily: FONT_FAMILY,
-  },
-  header: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: "12px 16px",
-    backgroundColor: "#1c1c1c",
-    borderBottom: "1px solid #2a2a2a",
-    fontSize: FONT_SIZE.control,
-    fontWeight: 700,
-    color: "#f2f0eb",
-  },
-  count: {
-    fontSize: FONT_SIZE.small,
-    fontWeight: 700,
-    padding: "2px 8px",
-    borderRadius: RADIUS.pill,
-    backgroundColor: "#2a2a2a",
-    color: "#a8a6a0",
-  },
-  list: {
-    flex: 1,
-    minHeight: "200px",
-    maxHeight: "360px",
-    overflowY: "auto",
-    display: "flex",
-    flexDirection: "column",
-    gap: "8px",
-    padding: "12px 16px",
-  },
-  hint: {
-    fontSize: FONT_SIZE.body,
-    color: "#6e6c68",
-    margin: 0,
-  },
-  message: {
-    borderLeft: "3px solid #2a2a2a",
-    backgroundColor: "#1c1c1c",
-    borderRadius: `0 ${RADIUS.card} ${RADIUS.card} ${RADIUS.card}`,
-    padding: "6px 12px",
-  },
-  messageHeader: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: "8px",
-  },
-  messageAuthor: {
-    fontSize: FONT_SIZE.body,
-    fontWeight: 700,
-  },
-  messageTime: {
-    fontSize: FONT_SIZE.small,
-    color: "#6e6c68",
-  },
-  messageText: {
-    fontSize: FONT_SIZE.body,
-    color: "#c8c6c0",
-    marginTop: "1px",
-    overflowWrap: "anywhere",
-  },
-  error: {
-    margin: 0,
-    padding: "8px 16px",
-    fontSize: FONT_SIZE.small,
-    color: "#f0b0a8",
-    backgroundColor: "#2a1614",
-    borderTop: "1px solid #5a2a24",
-  },
-  composer: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-    padding: "10px 16px",
-    borderTop: "1px solid #1c1c1c",
-  },
-  input: {
-    flex: 1,
-    fontSize: FONT_SIZE.control,
-    padding: CONTROL_PADDING.input,
-    borderRadius: RADIUS.card,
-    border: "1px solid #3a3a3a",
-    backgroundColor: "#0f0f0f",
-    color: "#f2f0eb",
-    boxSizing: "border-box",
-  },
-  sendButton: {
-    fontSize: FONT_SIZE.control,
-    fontWeight: 600,
-    padding: CONTROL_PADDING.button,
-    borderRadius: RADIUS.card,
-    border: "1px solid #3a3a3a",
-    backgroundColor: "#1c1c1c",
-    color: "#f2f0eb",
-    cursor: "pointer",
-    flexShrink: 0,
-  },
-};

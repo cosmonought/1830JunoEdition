@@ -7,6 +7,8 @@
 // should not live inside that component's file. `readActiveGame` comes with it
 // because the key, the type and the parser are one unit.
 
+import { isGameId } from "./roomProtocol";
+
 export const ACTIVE_GAME_STORAGE_KEY = "18cosmos.active_game.v1";
 
 // Design note #24: `play` is a real on-chain game; `spectate` is somebody
@@ -60,17 +62,15 @@ export function readActiveGame(): ActiveGame | null {
       (parsed as ActiveGame).roomId.length > 0
     ) {
       const storedMode = (parsed as ActiveGame).mode;
+      /* LIVE-2D (RUST-RETIRE-1 2B.3): ONLY A SANDBOX TABLE IS RESUMED. `play` and `spectate` were the deleted
+         on-chain staging lobby's launch and spectate doors; nothing enters them any more, so a pointer to one left
+         in a session from before is not a board to reopen -- it fails closed to the Lobby, which can recover from
+         anything. (The shell's chain branches themselves are RUST-RETIRE 2B.2's to delete.) */
+      if (storedMode !== "sandbox") return null;
       return {
         gameId: (parsed as ActiveGame).gameId,
         roomId: (parsed as ActiveGame).roomId,
-        // Fails CLOSED: only the three known modes are accepted, and anything else --
-        // including an entry written before this field existed -- degrades to
-        // `spectate`, the least privileged. The cost is one trip back through the lobby,
-        // versus handing a non-player a board full of live controls.
-        mode:
-          storedMode === "play" || storedMode === "spectate" || storedMode === "sandbox"
-            ? storedMode
-            : "spectate",
+        mode: "sandbox",
       };
     }
     return null;
@@ -104,9 +104,19 @@ export function readActiveGame(): ActiveGame | null {
    would rejoin a finished game as a stranger. */
 export const ACTIVE_SANDBOX_ROOM_STORAGE_KEY = "juno.activeSandboxRoom";
 
+/* LIVE-2D: THE POINTER IS A SERVER-MINTED GAME ID, AND NOTHING ELSE IS BELIEVED. A reload resumes the table this tab
+   was at by its `g_…` id -- the seat comes back with it, because the seat is this principal's in the GameRecord. A
+   value that is not a game id (a legacy `JUNO-XXX` room code from before LIVE-2D, or anything else) is forgotten and
+   the tab lands on the Lobby: a room code is an invite, never a key, and the server would refuse it anyway. The
+   principal itself is never stored (it lives in the HttpOnly session cookie, or a development tab's claim). */
 export function readActiveSandboxRoom(): string | null {
   try {
-    return window.sessionStorage.getItem(ACTIVE_SANDBOX_ROOM_STORAGE_KEY);
+    const stored = window.sessionStorage.getItem(ACTIVE_SANDBOX_ROOM_STORAGE_KEY);
+    if (stored !== null && !isGameId(stored)) {
+      window.sessionStorage.removeItem(ACTIVE_SANDBOX_ROOM_STORAGE_KEY);
+      return null;
+    }
+    return stored;
   } catch {
     /* Private browsing. The game runs; it just is not resumable, which is
        the same bargain `readActiveGame` above already makes. */
@@ -114,68 +124,16 @@ export function readActiveSandboxRoom(): string | null {
   }
 }
 
-export function writeActiveSandboxRoom(code: string | null): void {
+export function writeActiveSandboxRoom(gameId: string | null): void {
   try {
-    if (code) window.sessionStorage.setItem(ACTIVE_SANDBOX_ROOM_STORAGE_KEY, code);
+    if (gameId && isGameId(gameId)) window.sessionStorage.setItem(ACTIVE_SANDBOX_ROOM_STORAGE_KEY, gameId);
     else window.sessionStorage.removeItem(ACTIVE_SANDBOX_ROOM_STORAGE_KEY);
   } catch {
     /* as above */
   }
 }
 
-/* ==================================================================
-    DESIGN NOTE 1442: THE WATCH INTENT IS A ROOM, AND IT OUTLIVES A REFRESH
-   ==================================================================
-   #1441 told the shell "this arrival is a watch" so the seat claim would be held on a table that is still
-   waiting. It travelled as a BOOLEAN PROP, and a boolean has two faults that only appear at the navigation
-   boundary:
-     THE WRONG ROOM. `AppShell` is keyed on the game and the mode, both constant for the sandbox, so leaving
-     a room and joining another from the shell's own gate does not remount it. The flag stayed true across
-     that change, and the seat claim for the SECOND room was suppressed by an intent granted for the first.
-     THE WRONG DIRECTION ON A REFRESH. `writeActiveSandboxRoom` persists a watcher's room like anybody's, so
-     a reload restored the room with the intent reset to false -- and silently seated the watcher at a table
-     they had asked only to look at, where they then count toward the host's start gate.
-   BOTH ARE FIXED BY THE SAME CHANGE: the intent is the ROOM CODE it was granted for, and it is stored beside
-   the room pointer it qualifies. A code can only ever suppress the claim for its own room, and the two keys
-   are read and written together.
-   `sessionStorage`, FOR THE REASON THE ROOM POINTER GIVES: in `localStorage` this would outlive the identity
-   that earned it, and a tab weeks later would hold back a seat in a room it has no memory of. */
-export const SANDBOX_WATCH_ROOM_STORAGE_KEY = "juno.sandboxWatchRoom";
-
-/** The room this browser asked to WATCH rather than join, or `null`. */
-export function readSandboxWatchRoom(): string | null {
-  try {
-    return window.sessionStorage.getItem(SANDBOX_WATCH_ROOM_STORAGE_KEY);
-  } catch {
-    /* Private browsing: the watch still works for this load, it just is not resumable -- the same bargain
-       `readActiveSandboxRoom` makes, and it fails toward "ask for a seat", which is the recoverable half. */
-    return null;
-  }
-}
-
-export function writeSandboxWatchRoom(code: string | null): void {
-  try {
-    if (code) window.sessionStorage.setItem(SANDBOX_WATCH_ROOM_STORAGE_KEY, code);
-    else window.sessionStorage.removeItem(SANDBOX_WATCH_ROOM_STORAGE_KEY);
-  } catch {
-    /* as above */
-  }
-}
-
-/** Design note #1352: RESUME INTO THE SANDBOX ROOM ON THE NEXT LOAD. The lobby's "Rejoin seat" adopts a seat
- *  and reloads (`adoptSeat`, #1341); without this the reload would land back on the lobby, seat in hand and
- *  nowhere to use it. The same two keys `AppRoot` writes when a player enters a room, written once, here. */
-export function writeSandboxResume(roomCode: string): void {
-  try {
-    window.sessionStorage.setItem(
-      ACTIVE_GAME_STORAGE_KEY,
-      JSON.stringify({ gameId: SANDBOX_GAME_ID, roomId: SANDBOX_ROOM_ID, mode: "sandbox" } satisfies ActiveGame),
-    );
-  } catch {
-    /* as above */
-  }
-  writeActiveSandboxRoom(roomCode);
-  /* #1442: a resume is a SEATED entry by definition -- it exists to put a player back in a seat they already
-     hold. Any watch intent left over from earlier in this session is not about this arrival. */
-  writeSandboxWatchRoom(null);
-}
+/* LIVE-2D: DESIGN NOTE 1442's WATCH INTENT and #1352's `writeSandboxResume` are DELETED. The intent held back the
+   shell's auto-seat on a table somebody had only asked to watch; the auto-seat is gone (a seat is taken at the server
+   by Host, Join or "Take a seat", never by entering a table), so there is nothing to hold back. The resume served the
+   seat-PIN rejoin, which is gone with the PINs. */

@@ -300,7 +300,14 @@ export function privateHexFor(
    `owner_protocol_id` -- the two are mutually exclusive by `gameState.ts`'s contract; a corporation owner wins if
    a hand-built state ever carries both). AN UNSOLD PRIVATE DOES NOT RESTRICT: the rule, as the owner stated it and
    as S6-7 was filed, is the PLAYER-OWNED private; nothing in the project's rule authority blocks a hex for a
-   private still in the auction (and in the standard game no tile is laid before the auction has sold everything).
+   private still in the auction.
+   [DA-5, D-54 (OD-DA-3, 2026-09-25) -- RATIONALE AMENDED, BEHAVIOUR UNCHANGED. This paragraph used to add "and in the
+   standard game no tile is laid before the auction has sold everything" -- a premise the Delayed Auction removes: its
+   privates are unsold through Stock Round 1 and every Operating Round before the first 3-train's set ends. The
+   release is BY RULING, not by timing: "Before the delayed auction, ordinary track construction is governed by the
+   ordinary track rules. An unsold private does not create a blanket prohibition on laying ordinary track on its
+   printed hex. Ownership-specific private powers remain unavailable until that private is owned." The powers need
+   nothing here: each is exercised by an owner (below), and an unsold private has none. #1694a (F16) is unchanged.]
 
    ON A PINNED BOARD ONLY (#1696, `stage106LayAuthorityInForce`): a legacy development log keeps the reading it was
    played under, and -- because this one function feeds the authority, the markers and the click -- the board never

@@ -114,7 +114,14 @@ import {
   rescindPrivateTradeRefusal,
   stockRoundSeat,
 } from "./privateTradeAuthority";
-import { CA_BONUS_TICKER, CA_PRIVATE_ID, applyPrivateExchange } from "./privateExchange";
+import {
+  CA_PRIVATE_ID,
+  applyPrivateBenefitGrant,
+  releaseReservedCertificates,
+  withCamdenReservation,
+} from "./privateExchange";
+/* DA-5 (D-53, D-58): the must-sell hold on the Stock Round pass -- only a curable excess is owed. */
+import { divestmentPassRefusal } from "./forcedDivestment";
 /* Design note #1630 (Slice 8.4, S8-10): the M&H exchange's authority -- request legality, the
    execute-or-queue disposition, the atomic execution and the between-turns settlement of a queued request.
    The reducer states no M&H rule of its own; it asks these, and so does ingress (`turnAuthority.ts`). */
@@ -1390,13 +1397,48 @@ export function applyPhaseChange(
     provenanceBefore && doomed.size > 0 ? provenanceBefore.filter((model) => !doomed.has(model)) : provenanceBefore;
   const provenanceChanged = provenanceAfter?.length !== provenanceBefore?.length;
 
-  if (!changed && !privatesChanged && !returnedChanged && !provenanceChanged) return state;
-  return {
+  /* DA-5 (D-55, DA-F9): the privates this closure reached may include a pending Delayed Auction's whole offer -- asked
+     before the no-change return, so a board whose privates were already marked closed still has the auction cancelled. */
+  const cancelsAuction =
+    closesPrivateCompanies(arrivingTier) && variants.delayedAuction && state.private_auction_complete !== true;
+  if (!changed && !privatesChanged && !returnedChanged && !provenanceChanged && !cancelsAuction) return state;
+  const phased: GameStateResponse = {
     ...state,
     ...(changed ? { public_companies: companies } : {}),
     ...(privatesChanged ? { private_companies: privates } : {}),
     ...(returnedChanged ? { returned_trains: returnedAfter } : {}),
     ...(provenanceChanged ? { returned_ghost_trains: provenanceAfter } : {}),
+  };
+  return cancelsAuction ? cancelPendingDelayedAuction(phased) : phased;
+}
+
+/* ==================================================================
+    DA-5 (D-55, DA-F9): PHASE 5 WINS -- THE FIRST 5-TRAIN CANCELS A DELAYED AUCTION THAT HAS NOT HAPPENED
+   ==================================================================
+   OWNER RULING D-55 (OD-DA-4): "Phase 5 wins. If the first 5-train is bought before the pending delayed auction
+   occurs, unsold privates close and the delayed auction is cancelled. Any reserved/attached stock associated with an
+   unsold private returns to ordinary corporate stock supply. In particular, the reserved C&A PRR certificate returns
+   to normal PRR supply and B&O must no longer remain locked merely because its private can no longer be sold."
+
+   #736 CLOSES THE PRIVATES ABOVE; THIS CANCELS WHAT THEY WERE WAITING FOR, in the same transition, so no board
+   exists on which they are closed and still owed an auction (the atom offered them after the closure -- DA-F9):
+     `private_auction_complete: true` -- the pending auction is over for good: the round transition never inserts it
+       (its branch asks `!== true`), the atom is never armed, and `boIsLocked` releases the B&O, whose private can no
+       longer be sold. The flag already means "no auction is owed"; D-55 is a second way of arriving there.
+     the atom's offer emptied and closed -- nothing closed is ever offered, and every auction message stays refused
+       at both locks (DA-3's gate: no open auction).
+     the C&A's reserved PRR certificate released to ordinary supply (`releaseReservedCertificates`) -- it never
+       left the IPO, so the float and the pool read exactly as before and only its availability changes.
+   NO AUCTION RAN, SO NOTHING IS HANDED OVER: the Stock Round after this set opens through the ORDINARY opening
+   (`settleRoundTransitions` -> `openingStockRoundReset`), seating the Priority Deal holder the last Stock Round left.
+   The dormant cursor -- still dealt seat 0 -- is never read (DA-4's pointer belongs to an auction that ran). A bank
+   break in the same set still ends the game first, as certified. */
+function cancelPendingDelayedAuction(state: GameStateResponse): GameStateResponse {
+  const atom = state.waterfall;
+  return {
+    ...releaseReservedCertificates(state),
+    private_auction_complete: true,
+    ...(atom ? { waterfall: { ...atom, privates: [], mini_auction: null, waterfall_auction_active: false } } : {}),
   };
 }
 
@@ -2941,7 +2983,11 @@ export function applySandboxAction(
    the auction arm talks to this function -- but nothing outside reads its flags. Narration (the "Private
    Won" line, the markdown, the payout lines) is derived by the shell from the two states, the way every
    other line has been since #704: "the reducer settles, the shell narrates." */
-function applyAuctionStep(state: GameStateResponse, msg: SandboxLogMsg): GameStateResponse {
+function applyAuctionStep(
+  state: GameStateResponse,
+  msg: SandboxLogMsg,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
   if (!state.waterfall) return state;
   const result = applySandboxWaterfallAction(state.waterfall, msg, state.player_addresses ?? []);
   let next: GameStateResponse = { ...state, waterfall: result.waterfall };
@@ -2975,18 +3021,7 @@ function applyAuctionStep(state: GameStateResponse, msg: SandboxLogMsg): GameSta
       ),
     };
     if (privateId === CA_PRIVATE_ID) {
-      const prr = next.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
-      if (prr) {
-        next = applyPrivateExchange(next, {
-          ok: true,
-          privateId,
-          companyId: prr.company_id,
-          ticker: CA_BONUS_TICKER,
-          player,
-          source: prr.ipo_pool_percentage >= 10 ? "Ipo" : "Bank",
-          keepOpen: true,
-        });
-      }
+      next = grantCamdenBenefit(next, player, ctx);
     }
   }
 
@@ -2994,6 +3029,27 @@ function applyAuctionStep(state: GameStateResponse, msg: SandboxLogMsg): GameSta
     next = applyPrivateRevenue(next)?.state ?? next;
   }
   return next;
+}
+
+/* ==================================================================
+    DA-5 (DA-F6): THE C&A'S PRR CERTIFICATE ARRIVES WITH ITS CONSEQUENCES
+   ==================================================================
+   The certificate (`applyPrivateBenefitGrant`: under the Delayed Auction the one D-52 reserved, never a minted one)
+   and then, at once, what any share arriving in a hand does -- the float at 60% out of the IPO (§5.3) and the
+   presidency (§5.4, "immediately"), through the SAME two calls the `BuyStock` arm makes, in the same order and under
+   the same gate (`applyFloatThreshold` when the context carries the label table, then `settlePresidencies`). They
+   waited for somebody's next share trade before (probes Q2/Q3: PRR at 60% sold entered the Operating Round
+   unfloated; a grantee holding more than the president did not take the chair). In the standard game the PRR is
+   unstarted at its auction, so both are identity there -- no presidency to settle, 10% sold. */
+function grantCamdenBenefit(
+  state: GameStateResponse,
+  player: string,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
+  const granted = applyPrivateBenefitGrant(state, CA_PRIVATE_ID, player);
+  if (granted === state) return state;
+  const floated = ctx?.homeHexToAxial ? applyFloatThreshold(granted, ctx.homeHexToAxial) : granted;
+  return settlePresidencies(floated).state;
 }
 
 /** #1340: the auction's lifecycle, after the board has moved -- close, re-seat, arm. */
@@ -3124,7 +3180,7 @@ function applySandboxActionOnBoard(
   if (gate === "held") return retireRefusedSettlement(state, msg);
   if (gate === "auction") return state;
   // #1340: the auction first, as `App.tsx` always ran it -- its charges land before the board is judged.
-  const afterAuction = applyAuctionStep(state, msg);
+  const afterAuction = applyAuctionStep(state, msg, ctx);
   return settleAuctionLifecycle(applySandboxActionAfterAuction(afterAuction, msg, ctx), msg);
 }
 
@@ -3910,6 +3966,10 @@ function applySandboxActionCoreJudged(
       return state;
     }
   }
+  /* DA-5 (D-53, D-58): #759's rule (iii) at the reducer's lock -- a Stock Round seat that owes a CURABLE excess may
+     not pass or end the turn until the sale is made. Beside the stock predicates and after the holds, on #1019's
+     rule: refused by identity before any stage runs. Only the curable part is owed, so it never deadlocks. */
+  if ("PassTurn" in msg && divestmentPassRefusal(state) !== null) return state;
   /* #1570: the B&O's private grants its President's Certificate without a purchase and without a charge
      (rulebook p.27) -- and still may not choose a price the board has no par box for (S8-9). The ownership
      and presidency preconditions stay `boPresidencyRefusal`'s, asked by the arm as they always were. */
@@ -5026,7 +5086,12 @@ function applyOneAction(
     };
     /* #1320 / #1322: the Level Playing Field's two corporations and its seventh private join HERE, on the
        deal, so every client and the server hold the same roster from index 0. The fixture never carries them. */
-    return dealt.variants.levelPlayingField ? withLevelPlayingFieldEntities(dealtState) : dealtState;
+    const rostered = dealt.variants.levelPlayingField ? withLevelPlayingFieldEntities(dealtState) : dealtState;
+    /* DA-5 (D-52): under the Delayed Auction the C&A is sold after Stock Rounds in which the PRR can be bought out,
+       so its certificate is held back from the deal -- one specific ordinary 10% of the PRR's IPO, unavailable to
+       ordinary purchase until the C&A's first purchaser receives it (or D-55 releases it). The standard game's
+       auction precedes every purchase, so it reserves nothing and no standard IPO share is withheld. */
+    return opensOnStockRound ? withCamdenReservation(rostered) : rostered;
   }
 
   if (isOpenStockRoundMsg(msg)) {

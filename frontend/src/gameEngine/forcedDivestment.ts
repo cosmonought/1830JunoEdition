@@ -1,6 +1,11 @@
-import { certificateBreakdown, type GameStateResponse } from "./gameState";
+import { certificateBreakdown, type GameStateResponse, type PublicCompanyState } from "./gameState";
 import { PLAYER_HOLDING_CAP_PERCENT } from "./privateExchange";
 import { SHARE_BLOCK_PERCENT } from "./endgame";
+// DA-5 (curable excess): the sale rules are asked, not restated -- the same three predicates `stockSaleRefusal` asks.
+import { shareSaleBlock } from "./shareSale";
+import { certificateCardsHeld, doubleSaleEffect } from "./doubleCertificate";
+import { presidentAfterSale } from "./presidencyTransfer";
+import { marketZoneForPrice } from "./marketGeometry";
 
 /* ==================================================================
  *  DESIGN NOTE 759: WHAT HAPPENS WHEN THE EXEMPTION GOES AWAY
@@ -52,8 +57,9 @@ export interface DivestmentDebt {
   /** The limit itself, for the message. `null` where the player count is off the table. */
   certificateLimit: number | null;
   counted: number;
-  /** Corporations held above 60% whose price no longer waives it. */
-  overCapCompanies: readonly { companyId: number; ticker: string; percentage: number }[];
+  /** Corporations held above 60% whose price no longer waives it. DA-5: only those where a legal sale can cure
+   *  some of it, and `mustSellPercent` says how much can -- the part the player owes. */
+  overCapCompanies: readonly { companyId: number; ticker: string; percentage: number; mustSellPercent?: number }[];
   /** Anything owed at all. */
   owed: boolean;
 }
@@ -72,12 +78,157 @@ function capWaived(zone: string | null): boolean {
   return zone === "Orange" || zone === "Brown";
 }
 
+/* ==================================================================
+    DA-5 (D-53, D-57, D-58, D-59): ONLY A CURABLE EXCESS IS OWED
+   ==================================================================
+   OWNER RULINGS (Delayed Auction, 2026-09-25): a mandatory acquisition -- the forced $0 SV, the C&A's PRR share,
+   an award from a bid that was legal when placed -- may put a player over the certificate limit or a 60% cap, and
+   "the must-sell obligation applies only to excess that can actually be cured by legal sales"; "the player may not
+   make an ordinary stock purchase while any curable excess remains"; "an excess that cannot legally be cured does
+   not deadlock the game".
+
+   #759'S DEBT WAS THE WHOLE EXCESS, and it has three doors -- no buying (`sharePurchaseBlock`, both locks), no
+   passing (now both locks too, `divestmentPassRefusal`), no auto-passing. With nothing the player can legally
+   sell, every door stays shut and the game stops. Classic reaches that too: a zone-exit debt in a corporation
+   whose Bank Pool already holds five certificates.
+
+   SO THE DEBT IS NOW THE CURABLE PART, judged by the SALE RULES THEMSELVES -- the ones `stockSaleRefusal` asks:
+   a Stock Round other than the first (§5.1), a started corporation (p.15, S8-8), a chart price on a pinned board
+   (§7.2 rule 5), `shareSaleBlock` (the Bank Pool's five cards, the President's Certificate) and the double's
+   half-sale (`doubleSaleEffect`). For each corporation the largest legal sale is found; a 60% excess is curable
+   up to what that sale removes, and a certificate excess up to the cards all of them together remove. Judged AT
+   THE PRICES ON THE BOARD: a sale's own drop in price, which can carry a corporation into an exempt zone, is not
+   credited in advance -- the debt is re-read after every real sale, so it is credited the moment it happens.
+   The part no legal sale can reach is incurable: it is reported (`assessExcess`) and owes nothing. */
+
+/** A player's position against the certificate limit and the 60% cap, and how much of each excess legal
+ *  sales could cure at the prices on the board. PURE; the board may be hypothetical (the auction's
+ *  acquisition check asks it of the Stock Round that would follow). */
+export interface ExcessAssessment {
+  certificateLimit: number | null;
+  counted: number;
+  /** `counted - limit`, or 0. */
+  certificatesOver: number;
+  /** How much of `certificatesOver` legal sales could remove. */
+  curableCertificates: number;
+  /** Every corporation held above 60% whose price does not waive it. */
+  overCap: readonly {
+    companyId: number;
+    ticker: string;
+    percentage: number;
+    /** `percentage - 60`. */
+    excessPercent: number;
+    /** How much of `excessPercent` legal sales could remove. */
+    curablePercent: number;
+  }[];
+}
+
+/** Whether sales are open on this board at all: a Stock Round other than the first (§5.1). The same reading as
+ *  `stockTransactionAuthority.isFirstStockRound`, restated because that module imports this one. */
+function salesOpen(state: GameStateResponse): boolean {
+  return state.current_round_type === "StockRound" && (state.macro_round_number ?? 0) !== 1;
+}
+
+function heldBy(company: Pick<PublicCompanyState, "player_holdings">, player: string): number {
+  return company.player_holdings.find((entry) => entry.player === player)?.percentage ?? 0;
+}
+
+/** Whether `player` may sell `percentage` of this corporation now -- the sale rules, asked. */
+function saleLegal(state: GameStateResponse, company: PublicCompanyState, player: string, percentage: number): boolean {
+  if (!salesOpen(state)) return false;
+  if (company.par_value === null || company.par_value === undefined) return false;
+  const pinned = typeof state.rules_engine_version === "number";
+  if (pinned && state.market_positions && !(Number(state.market_positions[company.company_id]?.price) > 0)) {
+    return false;
+  }
+  if (shareSaleBlock({ state, seller: player, companyId: company.company_id, percentage }) !== null) return false;
+  return doubleSaleEffect(company, player, percentage).kind !== "refused";
+}
+
+/** The cards `player` still holds of this corporation after selling `percentage` of it: the crown settled by the
+ *  canonical selector (`presidentAfterSale`), the double gone to the pool when the sale reached it. */
+function cardsAfterSale(
+  state: GameStateResponse,
+  company: PublicCompanyState,
+  player: string,
+  percentage: number,
+): number {
+  const remaining = heldBy(company, player) - percentage;
+  const effect = doubleSaleEffect(company, player, percentage);
+  const after: PublicCompanyState = {
+    ...company,
+    president: presidentAfterSale(company, player, percentage, state.player_addresses ?? []) ?? company.president,
+    player_holdings: company.player_holdings
+      .map((entry) => (entry.player === player ? { ...entry, percentage: remaining } : entry))
+      .filter((entry) => entry.percentage > 0),
+    bank_pool_percentage: company.bank_pool_percentage + percentage,
+    ...(effect.kind === "block" || effect.kind === "half" ? { double_certificate: { at: "Bank" } } : {}),
+  };
+  return remaining > 0 ? certificateCardsHeld(after, player) : 0;
+}
+
+/** DA-5: the player's excess over the certificate limit and the 60% cap, and the part of each legal sales cure. */
+export function assessExcess(input: DivestmentInput): ExcessAssessment {
+  const { state, player, marketPrices, zoneForPrice } = input;
+  const breakdown = certificateBreakdown(player, state, marketPrices, zoneForPrice as never);
+  const certificatesOver = breakdown.limit === null ? 0 : Math.max(0, breakdown.counted - breakdown.limit);
+  const zoneOf = (companyId: number) => (zoneForPrice ? zoneForPrice(marketPrices?.[companyId]) : null);
+  const exempt = (zone: string | null) => zone === "Yellow" || zone === "Orange" || zone === "Brown";
+
+  let removableCards = 0;
+  const overCap: Array<ExcessAssessment["overCap"][number]> = [];
+  for (const company of state.public_companies) {
+    const held = heldBy(company, player);
+    if (held <= 0) continue;
+    const zone = zoneOf(company.company_id);
+    /* The largest legal sale, and the most cards any legal sale removes. Every bundle is asked: legality is not
+       monotonic in size at the President's Certificate or the double. */
+    let largestSale = 0;
+    let mostCards = 0;
+    const cardsNow = certificateCardsHeld(company, player);
+    for (let percentage = SHARE_BLOCK_PERCENT; percentage <= held; percentage += SHARE_BLOCK_PERCENT) {
+      if (!saleLegal(state, company, player, percentage)) continue;
+      largestSale = percentage;
+      mostCards = Math.max(mostCards, cardsNow - cardsAfterSale(state, company, player, percentage));
+    }
+    if (!exempt(zone)) removableCards += mostCards;
+    if (held > PLAYER_HOLDING_CAP_PERCENT && !capWaived(zone)) {
+      const excessPercent = held - PLAYER_HOLDING_CAP_PERCENT;
+      overCap.push({
+        companyId: company.company_id,
+        ticker: company.ticker,
+        percentage: held,
+        excessPercent,
+        curablePercent: Math.min(excessPercent, largestSale),
+      });
+    }
+  }
+
+  return {
+    certificateLimit: breakdown.limit,
+    counted: breakdown.counted,
+    certificatesOver,
+    curableCertificates: Math.min(certificatesOver, removableCards),
+    overCap,
+  };
+}
+
+/** The part of an excess no legal sale can reach: certificates over the limit, and percentage points over the
+ *  cap, summed across corporations. D-57/D-58's measure of an acquisition that must not be made voluntarily. */
+export function incurableExcess(assessment: ExcessAssessment): { certificates: number; capPercent: number } {
+  return {
+    certificates: assessment.certificatesOver - assessment.curableCertificates,
+    capPercent: assessment.overCap.reduce((sum, entry) => sum + (entry.excessPercent - entry.curablePercent), 0),
+  };
+}
+
 /** What this player must sell before they may do anything else in a Stock Round.
  *
  *  RETURNS AN EMPTY DEBT OUTSIDE A STOCK ROUND, which is rule (i) and rule (ii) both. The caller does not
- *  have to remember to ask only at the right time, because asking at the wrong time answers "nothing owed". */
+ *  have to remember to ask only at the right time, because asking at the wrong time answers "nothing owed".
+ *  DA-5: AND ONLY THE CURABLE PART IS OWED -- see the note above `ExcessAssessment`. */
 export function divestmentDebt(input: DivestmentInput): DivestmentDebt {
-  const { state, player, marketPrices, zoneForPrice } = input;
+  const { state } = input;
   const empty: DivestmentDebt = {
     certificatesOver: 0,
     certificateLimit: null,
@@ -88,32 +239,52 @@ export function divestmentDebt(input: DivestmentInput): DivestmentDebt {
 
   if (state.current_round_type !== "StockRound") return empty;
 
-  const breakdown = certificateBreakdown(player, state, marketPrices, zoneForPrice as never);
-  const certificatesOver =
-    breakdown.limit === null ? 0 : Math.max(0, breakdown.counted - breakdown.limit);
-
-  const overCapCompanies = state.public_companies
-    .filter((company) => {
-      const held =
-        company.player_holdings.find((entry) => entry.player === player)?.percentage ?? 0;
-      if (held <= PLAYER_HOLDING_CAP_PERCENT) return false;
-      const zone = zoneForPrice ? zoneForPrice(marketPrices?.[company.company_id]) : null;
-      return !capWaived(zone);
-    })
-    .map((company) => ({
-      companyId: company.company_id,
-      ticker: company.ticker,
-      percentage:
-        company.player_holdings.find((entry) => entry.player === player)?.percentage ?? 0,
+  const assessment = assessExcess(input);
+  const overCapCompanies = assessment.overCap
+    .filter((entry) => entry.curablePercent > 0)
+    .map((entry) => ({
+      companyId: entry.companyId,
+      ticker: entry.ticker,
+      percentage: entry.percentage,
+      mustSellPercent: entry.curablePercent,
     }));
 
   return {
-    certificatesOver,
-    certificateLimit: breakdown.limit,
-    counted: breakdown.counted,
+    certificatesOver: assessment.curableCertificates,
+    certificateLimit: assessment.certificateLimit,
+    counted: assessment.counted,
     overCapCompanies,
-    owed: certificatesOver > 0 || overCapCompanies.length > 0,
+    owed: assessment.curableCertificates > 0 || overCapCompanies.length > 0,
   };
+}
+
+/** The chart a board carries, in the shape `divestmentDebt` takes: its market positions' prices and the chart's own
+ *  zone table -- the same reading the room's providers inject (`replayProviders.chartInjections`) and
+ *  `chartContextFromState` gives the stock authority. A board with no positions has no zones: everything counts,
+ *  #7's conservative answer. */
+export function chartForDivestment(
+  state: GameStateResponse,
+): Pick<DivestmentInput, "marketPrices" | "zoneForPrice"> {
+  const positions = state.market_positions;
+  if (!positions) return { marketPrices: null, zoneForPrice: undefined };
+  return {
+    marketPrices: Object.fromEntries(
+      Object.entries(positions).map(([id, mark]) => [Number(id), mark?.price ?? null]),
+    ) as Record<number, number | null>,
+    zoneForPrice: marketZoneForPrice,
+  };
+}
+
+/** DA-5 (D-53, D-58): why the Stock Round seat may not pass or end the turn yet, or `null` -- #759's rule (iii),
+ *  "they should not be able to buy shares OR skip/pass/auto-pass their turn until these sales have been made",
+ *  which only the shell's button and auto-pass enforced. Asked by BOTH locks now (`turnRefusal`, and the reducer's
+ *  core gate beside the stock transaction predicates), and only for the CURABLE excess, so a player no legal sale
+ *  can bring under the limit is never held. */
+export function divestmentPassRefusal(state: GameStateResponse): string | null {
+  if (state.current_round_type !== "StockRound") return null;
+  const player = state.player_addresses?.[state.active_player_index];
+  if (!player) return null;
+  return divestmentRefusal(divestmentDebt({ state, player, ...chartForDivestment(state) }));
 }
 
 /** Why this player may not buy, pass or auto-pass yet, or `null`.
@@ -131,7 +302,7 @@ export function divestmentRefusal(debt: DivestmentDebt): string | null {
     );
   }
   for (const company of debt.overCapCompanies) {
-    const excess = company.percentage - PLAYER_HOLDING_CAP_PERCENT;
+    const excess = company.mustSellPercent ?? company.percentage - PLAYER_HOLDING_CAP_PERCENT;
     parts.push(
       `${excess}% over the ${PLAYER_HOLDING_CAP_PERCENT}% cap in ${company.ticker} ` +
         `(${company.percentage}% held)`,
@@ -154,7 +325,10 @@ export function divestmentRefusal(debt: DivestmentDebt): string | null {
 export function minimumCertificatesToSell(debt: DivestmentDebt): number {
   const fromCap = debt.overCapCompanies.reduce(
     (most, company) =>
-      Math.max(most, Math.ceil((company.percentage - PLAYER_HOLDING_CAP_PERCENT) / SHARE_BLOCK_PERCENT)),
+      Math.max(
+        most,
+        Math.ceil((company.mustSellPercent ?? company.percentage - PLAYER_HOLDING_CAP_PERCENT) / SHARE_BLOCK_PERCENT),
+      ),
     0,
   );
   return Math.max(debt.certificatesOver, fromCap);

@@ -240,14 +240,23 @@ export function isPresidentPurchase(
 export function ordinaryPercentAvailable(
   company: Pick<
     PublicCompanyState,
-    "ipo_pool_percentage" | "bank_pool_percentage" | "president" | "double_certificate"
+    "ipo_pool_percentage" | "bank_pool_percentage" | "president" | "double_certificate" | "reserved_certificate"
   >,
   source: "Ipo" | "Bank",
 ): number {
   const total = source === "Bank" ? company.bank_pool_percentage : company.ipo_pool_percentage;
   const president = source === "Ipo" && company.president === null ? PRESIDENT_SHARE_PERCENT : 0;
   const double = doubleCertificateAt(company) === source ? DOUBLE_CERTIFICATE_PERCENT : 0;
-  return Math.max(0, (Number.isFinite(total) ? total : 0) - president - double);
+  /* D-52 (Delayed Auction): the C&A's reserved PRR certificate sits in the IPO but is not for sale -- "unavailable
+     for ordinary stock purchase while reserved". Absent everywhere else, so every other board reads as before. */
+  const reserved = source === "Ipo" ? reservedPercentOf(company) : 0;
+  return Math.max(0, (Number.isFinite(total) ? total : 0) - president - double - reserved);
+}
+
+/** D-52: the IPO percentage held back for a private company's grant, or 0. */
+export function reservedPercentOf(company: Pick<PublicCompanyState, "reserved_certificate">): number {
+  const percentage = Number(company.reserved_certificate?.percentage ?? 0);
+  return Number.isFinite(percentage) && percentage > 0 ? percentage : 0;
 }
 
 const sourceName = (source: "Ipo" | "Bank"): string => (source === "Bank" ? "Bank Pool" : "IPO");

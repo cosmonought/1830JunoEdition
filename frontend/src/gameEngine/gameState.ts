@@ -179,6 +179,13 @@ export interface PublicCompanyState {
    *  percentages; this is the one extra fact the percentage cannot carry -- which 20% of a holder's stake is
    *  one card rather than two. */
   double_certificate?: { at: string } | null;
+  /** D-52 (Delayed Auction, OD-DA-1): ONE ORDINARY CERTIFICATE OF THIS CORPORATION'S IPO HELD BACK FOR A PRIVATE
+   *  COMPANY'S PURCHASE BENEFIT -- the PRR's 10% that the Camden & Amboy's first purchaser receives. It stays IN
+   *  `ipo_pool_percentage` (the bank still owns it: it counts as unsold for the float and the sold-out rise, and
+   *  holdings + IPO + pool stay 100%), but no ordinary purchase may take it (`ordinaryPercentAvailable`). Written
+   *  by the Delayed Auction's deal; removed when the certificate is granted (`grantPrivateBenefit`) or released
+   *  to ordinary supply because its private closed unsold (D-55). Absent in every other game. */
+  reserved_certificate?: { private_id: number; percentage: number } | null;
   /** Audit G-15c: the MODEL of every train this corporation owns, e.g. `["2", "2", "4"]` -- duplicates are
    *  meaningful. OPTIONAL, and the optionality carries meaning the UI must respect: `undefined` means a
    *  contract predating the field, i.e. UNKNOWN, not "owns nothing". Conflating the two would grey out every

@@ -19,6 +19,7 @@
 // See docs/ai_architecture/contract_economy.md, privateExchange.ts #573.
 
 import type { GameStateResponse } from "./gameState";
+import { DOUBLE_CERTIFICATE_PERCENT, doubleCertificateAt } from "./doubleCertificate";
 
 /** 1830: no player may hold more than 60% of one corporation. */
 export const PLAYER_HOLDING_CAP_PERCENT = 60;
@@ -155,6 +156,13 @@ export function applyPrivateExchange(
 ): GameStateResponse {
   const priv = state.private_companies.find((entry) => entry.private_id === grant.privateId);
   if (!priv || priv.closed) return state;
+  /* DA-5 (DA-F6): A CERTIFICATE THE PILE DOES NOT HOLD IS NOT GRANTED. The two subtractions below are floored at
+     zero, so a pile short of 10% gave the holder a share and removed less than one -- probe Q2's PRR at 110%, the
+     board SET-0A's appraiser refuses. Every caller now names a pile it has checked (`resolvePrivateExchange`,
+     `camdenGrantSource`); this is the boundary that makes minting impossible rather than merely avoided. */
+  const target = state.public_companies.find((company) => company.company_id === grant.companyId);
+  const pile = grant.source === "Ipo" ? target?.ipo_pool_percentage : target?.bank_pool_percentage;
+  if (!target || !(Number(pile) >= EXCHANGE_SHARE_PERCENT)) return state;
 
   return {
     ...state,
@@ -196,5 +204,104 @@ export function applyPrivateExchange(
             ? { ...entry, closed: true, owner: null, owner_protocol_id: null }
             : entry,
         ),
+  };
+}
+
+/* ==================================================================
+    DA-5 (D-52, DA-F6): THE C&A'S PRR CERTIFICATE -- RESERVED UNDER THE DELAYED AUCTION, GRANTED WITHOUT MINTING
+   ==================================================================
+   OWNER RULING D-52 (OD-DA-1): "Reserve one specific 10% PRR certificate from setup until C&A's initial purchase.
+   It is unavailable for ordinary stock purchase while reserved. When C&A is acquired, transfer that reserved
+   certificate to the buyer and run the ordinary post-share consequences, including float and presidency
+   reconciliation if applicable. The reserved certificate counts as sold only when granted."
+
+   THE SMALLEST REPRESENTATION: the certificate stays in the PRR's IPO and the IPO says one of its certificates is
+   held back (`reserved_certificate`). So the bank still owns it -- the float measure (`100 - ipo`) counts it unsold,
+   the sold-out rise sees the IPO non-empty, holdings + IPO + pool stay 100% -- and `ordinaryPercentAvailable` keeps
+   every ordinary purchase off it. Granting moves exactly that 10% from the IPO and lifts the reservation; D-55
+   lifts it without moving anything when the C&A closes unsold. Nothing is created and nothing is duplicated.
+
+   THE STANDARD GAME HAS NO RESERVATION: its auction precedes every Stock Round, so the PRR's IPO holds the whole
+   corporation when the C&A sells and the certificate comes from it, as it always did. The old "IPO if it holds
+   10%, otherwise the Bank Pool" fallback is kept only for that no-reservation path, and asks for an ORDINARY
+   certificate in either pile; a pile without one grants nothing rather than floor itself below zero (DA-F6). */
+
+/** D-52: the reserved certificate's size -- one ordinary PRR certificate. */
+export const CA_RESERVED_PERCENT = EXCHANGE_SHARE_PERCENT;
+
+/** D-52: the Delayed Auction's deal holds one ordinary PRR certificate back for the C&A. Identity when there is no
+ *  PRR or it is already reserved. */
+export function withCamdenReservation(state: GameStateResponse): GameStateResponse {
+  const prr = state.public_companies.find((company) => company.ticker === CA_BONUS_TICKER);
+  if (!prr || prr.reserved_certificate) return state;
+  return {
+    ...state,
+    public_companies: state.public_companies.map((company) =>
+      company.company_id === prr.company_id
+        ? { ...company, reserved_certificate: { private_id: CA_PRIVATE_ID, percentage: CA_RESERVED_PERCENT } }
+        : company,
+    ),
+  };
+}
+
+/** D-55: every certificate held back for a private that can no longer be sold goes back to ordinary supply -- the
+ *  reservation is lifted; the certificate never left the IPO. Identity when nothing is reserved. */
+export function releaseReservedCertificates(state: GameStateResponse): GameStateResponse {
+  if (!state.public_companies.some((company) => company.reserved_certificate)) return state;
+  return {
+    ...state,
+    public_companies: state.public_companies.map((company) =>
+      company.reserved_certificate ? { ...company, reserved_certificate: undefined } : company,
+    ),
+  };
+}
+
+/** DA-5 (D-52, DA-F6): the pile the C&A's PRR certificate comes from, or `null` when no certificate exists to give. */
+export function camdenGrantSource(
+  state: GameStateResponse,
+): { companyId: number; source: "Ipo" | "Bank"; reserved: boolean } | null {
+  const prr = state.public_companies.find((company) => company.ticker === CA_BONUS_TICKER);
+  if (!prr) return null;
+  const reserved = prr.reserved_certificate;
+  if (reserved && reserved.private_id === CA_PRIVATE_ID) {
+    return prr.ipo_pool_percentage >= reserved.percentage
+      ? { companyId: prr.company_id, source: "Ipo", reserved: true }
+      : null;
+  }
+  const double = (pool: "Ipo" | "Bank") => (doubleCertificateAt(prr) === pool ? DOUBLE_CERTIFICATE_PERCENT : 0);
+  const ipoOrdinary = prr.ipo_pool_percentage - (prr.president === null ? 20 : 0) - double("Ipo");
+  if (ipoOrdinary >= EXCHANGE_SHARE_PERCENT) return { companyId: prr.company_id, source: "Ipo", reserved: false };
+  const poolOrdinary = prr.bank_pool_percentage - double("Bank");
+  if (poolOrdinary >= EXCHANGE_SHARE_PERCENT) return { companyId: prr.company_id, source: "Bank", reserved: false };
+  return null;
+}
+
+/** DA-5: the SHARE half of a private company's purchase benefit -- the C&A's PRR certificate, the one private whose
+ *  purchase grants a share -- moved and conserved, the reservation lifted when it was the reserved certificate.
+ *  The consequences of the share (float, presidency) are the caller's, through the machinery a purchase uses.
+ *  Identity for any other private, and when there is no certificate to give. */
+export function applyPrivateBenefitGrant(
+  state: GameStateResponse,
+  privateId: number,
+  player: string,
+): GameStateResponse {
+  if (privateId !== CA_PRIVATE_ID) return state;
+  const grant = camdenGrantSource(state);
+  if (!grant) return state;
+  const moved = applyPrivateExchange(state, {
+    ok: true,
+    privateId,
+    companyId: grant.companyId,
+    ticker: CA_BONUS_TICKER,
+    player,
+    source: grant.source,
+    keepOpen: true,
+  });
+  if (moved === state || !grant.reserved) return moved;
+  return {
+    ...moved,
+    public_companies: moved.public_companies.map((company) =>
+      company.company_id === grant.companyId ? { ...company, reserved_certificate: undefined } : company,
+    ),
   };
 }

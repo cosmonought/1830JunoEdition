@@ -80,6 +80,7 @@ import { resolveVariants } from "./gameVariants";
 /* Design note #1580 (Batch 7.3): the private auction's rules, from the one module that owns them. Not a
    second implementation -- `turnAuthority` states no auction rule of its own. */
 import { auctionHandoffRefusal, auctionRefusal, boParRefusal, isAuctionMessage } from "./auctionAuthority";
+import { divestmentPassRefusal } from "./forcedDivestment";
 /* Design notes #1590-#1595 (Batch 7.4): the ordinary offers' hold and their three authorities -- the same
    predicates the reducer's core asks, so the two locks cannot disagree; ingress answers with the sentence. */
 import { legacyOfferMessageRefusal, pendingOfferBlock } from "./pendingOfferHold";
@@ -396,6 +397,12 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
         ctx: chartContextFromState(state),
       }),
     );
+  }
+  /* DA-5 (D-53, D-58): #759's must-sell hold on the Stock Round pass, with its sentence -- the reducer's core gate
+     asks the same predicate. Only a CURABLE excess is owed, so a player no legal sale can help is never held. */
+  if ("PassTurn" in msg) {
+    const owed = divestmentPassRefusal(state);
+    if (owed !== null) return owed;
   }
   /* ==================================================================
       DESIGN NOTE 1580 (ingress): THE AUCTION IS ANSWERED WITH ITS REASON (Batch 7.3)

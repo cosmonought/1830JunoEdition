@@ -17,6 +17,11 @@ opens the auction on the Priority Deal holder and hands the card over at the han
 §22); test gaps DA-T7 and DA-T12 closed and DA-T6 closed in part (§20); one new finding, DA-F12 (§18), left open for the
 owner. Standard proof: "Standard auction behavior and replay remain unchanged except for the explicitly certified DA-F5
 Priority Deal correction." (§22, DA-4 record). Still NOT certified.
+**rev 8** (2026-09-25): **DA-5 implemented** — DA-F6 and DA-F9 FIXED; D-52, D-53, D-54 (rationale only), D-55, D-57,
+D-58 and D-59 implemented (§18, §19, §22 — DA-5 record): the reserved PRR certificate, the grant's immediate presidency and
+float, the acquisition-solvency refusal, the curable-only must-sell hold at both locks, and the Phase-5 cancellation.
+Test gap DA-T9 closed and DA-T11 closed in part (§20). DA-F12 **ROUTED TO DA-8**, untouched. `RULES_ENGINE_VERSION` still 10.
+Still NOT certified.
 
 **Date:** 2026-09-25 · **Pass:** DA-1 (audit / design only — no gameplay code changed) · **Status of the variant:**
 `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` (S9-7). **NOT certified.**
@@ -501,14 +506,14 @@ OD-DA-3.
 | R11 | B&O locked for `SetBoPar` / par only by the BO owner | A3; §3.0, §5.2 | `turnAuthority.ts:561-567`; `5021-5034`; `7273-7292` | **anyone, while unowned** | pinned permissive (`turnAuthority.test.ts:333`) | **BUG DA-F2** — *(rev 6)* **FIXED by DA-3** |
 | R12 | B&O par immediate; certificate reserved for the BO owner | §3.0 "immediately" | UI-only | not enforced | none | **BUG DA-F7** — *(rev 6)* **FIXED by DA-3** |
 | R13 | B&O unlocks when the auction concludes | A3 | `5015` | at `OpenStockRound` | none end-to-end | PASS; MISSING TEST |
-| R14 | C&A grant conserves shares | §3.0 | `2972-2985`; `privateExchange.ts:176-183` | **creates a share when piles are short** | none | **BUG DA-F6**; source → OD-DA-1 *(rev 2: decided — reserved certificate, D-52)* |
-| R15 | Grant → immediate presidency change; float at 60% | §5.4, §5.3 | no `settlePresidencies` / `applyFloatThreshold` after the grant | **both late** — only at the next `BuyStock` (either) / `SellStock` (presidency) of any corporation | none | **BUG DA-F6** |
+| R14 | C&A grant conserves shares | §3.0 | `2972-2985`; `privateExchange.ts:176-183` | **creates a share when piles are short** | none | **BUG DA-F6**; source → OD-DA-1 *(rev 2: decided — reserved certificate, D-52)* — *(rev 8)* **FIXED by DA-5** |
+| R15 | Grant → immediate presidency change; float at 60% | §5.4, §5.3 | no `settlePresidencies` / `applyFloatThreshold` after the grant | **both late** — only at the next `BuyStock` (either) / `SellStock` (presidency) of any corporation | none | **BUG DA-F6** — *(rev 8)* **FIXED by DA-5** |
 | R16 | Private revenue only to owners | §6.0 | `applyPrivateRevenue` | correct | `privateRevenue.test.ts:157` | PASS |
 | R17 | No corporate purchase of unsold privates | §3.1 | `BuyPrivateCompany` owner check | refused | `moneyConservation.test.ts:385` | PASS; UI false affordance DA-F8k |
 | R18 | Corporate window after the auction (phases 3–4, ½–2×) | §3.1 | offer authority | correct | `offerMatrix74PrivatePurchase.test.ts` | PASS; MISSING TEST (DA) |
-| R19 | Privates close with the first 5-train, also unsold ones | §2.5 | `1349-1356` | closed in `private_companies`, **still offered by the atom** | none | **BUG DA-F9 (LOW)** — *(rev 2)* intended behaviour decided (D-55: the delayed auction is cancelled) |
-| R20 | Certificate limit / 60% when the auction pushes a player over | §4.3 (silent for this case) | divestment debt | allowed; conform at next SR turn | none | **OWNER DECISION OD-DA-2** — *(rev 2)* decided (D-53; OD-DA-2b → D-57, rev 3; OD-DA-2c → D-58, rev 4; OD-DA-2d → D-59, rev 5) |
-| R21 | Private hexes before the auction | §6.2.1(4) + S6-7 / #1694 (recorded reading: an unsold private releases — made on the premise that no tile is laid before the auction) | `privateReservations.ts:296-303` | open | `stage106LayTileClosure.test.ts:531` | **OWNER DECISION OD-DA-3** — *(rev 2)* decided (D-54): current behaviour stands; rationale amended |
+| R19 | Privates close with the first 5-train, also unsold ones | §2.5 | `1349-1356` | closed in `private_companies`, **still offered by the atom** | none | **BUG DA-F9 (LOW)** — *(rev 2)* intended behaviour decided (D-55: the delayed auction is cancelled) — *(rev 8)* **FIXED by DA-5** |
+| R20 | Certificate limit / 60% when the auction pushes a player over | §4.3 (silent for this case) | divestment debt | allowed; conform at next SR turn | none | **OWNER DECISION OD-DA-2** — *(rev 2)* decided (D-53; OD-DA-2b → D-57, rev 3; OD-DA-2c → D-58, rev 4; OD-DA-2d → D-59, rev 5) — *(rev 8)* **implemented by DA-5** |
+| R21 | Private hexes before the auction | §6.2.1(4) + S6-7 / #1694 (recorded reading: an unsold private releases — made on the premise that no tile is laid before the auction) | `privateReservations.ts:296-303` | open | `stage106LayTileClosure.test.ts:531` | **OWNER DECISION OD-DA-3** — *(rev 2)* decided (D-54): current behaviour stands; rationale amended — *(rev 8: the #1694 comment corrected by DA-5)* |
 | R22 | Bank break in the trigger set → end, no auction | §8 / rulebook end rule | `4668-4674` | GameEnd first | none (DA) | PASS; MISSING TEST |
 | R23 | Replay / restore / undo | architecture | rebuild from log | correct by construction | standard only | PASS; MISSING TEST |
 | R24 | Server / room parity | architecture | `RoomSession` → reducer | same predicates | standard only | PASS; MISSING TEST |
@@ -525,13 +530,13 @@ OD-DA-3.
 | **DA-F3** *(FIXED — DA-4, rev 7)* | HIGH | DA-only | The delayed auction's first actor is dealt seat 0, not the PD holder | `gameSetup.ts:763`; `sandboxSession.ts:3010-3018, 4715-4729`; probe Q1 |
 | **DA-F4** *(FIXED — DA-4, rev 7)* | HIGH | DA-only | The PD after the delayed auction comes from the seat pointer, which steps once per main-rotation action but **starts from the last operating president** instead of the auction's first actor (probe: the PD went to the last buyer himself) | `sandboxSession.ts:4970-5019`; `operatingOrder.ts:211-221`; probe Q1 |
 | **DA-F5** *(FIXED — DA-4, rev 7)* | MEDIUM | **Classic (legitimate play)** and DA | The $0-SV branch moves the cursor two seats and the seat one; the SR PD after such an auction is the last buyer instead of his left neighbour | `sandboxSession.ts:2463, 2475` vs `547-590`; probe R1 |
-| **DA-F6** | HIGH | DA-only | C&A grant: share creation when IPO < 10% and pool < 10%; presidency and float not settled at the grant (only at a later share trade) | `sandboxSession.ts:2972-2985`; `privateExchange.ts:176-183`; probes Q2, Q3 |
+| **DA-F6** *(FIXED — DA-5, rev 8)* | HIGH | DA-only | C&A grant: share creation when IPO < 10% and pool < 10%; presidency and float not settled at the grant (only at a later share trade) | `sandboxSession.ts:2972-2985`; `privateExchange.ts:176-183`; probes Q2, Q3 |
 | **DA-F7** *(FIXED — DA-3, rev 6)* | MEDIUM | Classic + DA | B&O par not required before the handoff; President's Certificate not reserved for the BO owner once the B&O unlocks | `turnAuthority.ts:552-559`; `sandboxSession.ts:4970-5019`; `sharePurchase.ts:107-116`; UI-only gate; probe R2 |
 | **DA-F8** | — | UI | Stale / pre-game-assuming copy and one false affordance (§14, a–n) | §14 |
-| **DA-F9** | LOW | DA-only edge | First 5-train inside the trigger set closes the privates, but the atom still offers them | `sandboxSession.ts:1349-1356` vs atom `privates`; code-traced |
+| **DA-F9** *(FIXED — DA-5, rev 8)* | LOW | DA-only edge | First 5-train inside the trigger set closes the privates, but the atom still offers them | `sandboxSession.ts:1349-1356` vs atom `privates`; code-traced |
 | **DA-F10** | — | tests | No end-to-end delayed-auction test, no delayed fixture (§20) | test inventory |
 | **DA-F11** | DEFERRED NONBLOCKER | DA | No 3-train ever → auction never happens (acknowledged by #905); document in the Rules Reference and test on a short bank | `sandboxSession.ts:4712-4714` |
-| **DA-F12** *(new — found by DA-4, rev 7; OPEN)* | LOW | Classic (legitimate play) + DA | After an all-pass once the SV has sold, the buy-bid-turn sequence resumes with the seat after the last passer, not with the Priority Deal holder — C-2.2 / §1.2.3: "Then the buy-bid-turn sequence resumes with the player with the priority deal card." The two differ only when a bid preceded the passing lap (DA-4 probe: A buys the SV, B bids, C / A / B pass, income is paid, and C acts next instead of B). Turn order only: the Priority Deal handed to the Stock Round is unaffected (DA-4's pointer is exact at every auction end). Not fixed by DA-4 — it would change standard behaviour beyond the certified DA-F5 correction, and resuming on the holder mid-auction needs a record of the holder the atom does not keep. The corpus's three revenue all-passes (JUNO-G6J; JUNO-Z6C × 2) already resume on the holder | `sandboxSession.ts` `WaterfallPass` revenue branch (`nextSeat` of the last passer); DA-4 probe |
+| **DA-F12** *(new — found by DA-4, rev 7; OPEN — **ROUTED TO DA-8**, rev 8)* | LOW | Classic (legitimate play) + DA | After an all-pass once the SV has sold, the buy-bid-turn sequence resumes with the seat after the last passer, not with the Priority Deal holder — C-2.2 / §1.2.3: "Then the buy-bid-turn sequence resumes with the player with the priority deal card." The two differ only when a bid preceded the passing lap (DA-4 probe: A buys the SV, B bids, C / A / B pass, income is paid, and C acts next instead of B). Turn order only: the Priority Deal handed to the Stock Round is unaffected (DA-4's pointer is exact at every auction end). Not fixed by DA-4 — it would change standard behaviour beyond the certified DA-F5 correction, and resuming on the holder mid-auction needs a record of the holder the atom does not keep. The corpus's three revenue all-passes (JUNO-G6J; JUNO-Z6C × 2) already resume on the holder. *(rev 8: routed to DA-8, which owns its implementation together with the deliberate v10 → v11 compatibility boundary and must certify it with targeted Standard and Delayed tests; DA-5 left Priority Deal / cursor behaviour untouched and added no second auction pointer.)* | `sandboxSession.ts` `WaterfallPass` revenue branch (`nextSeat` of the last passer); DA-4 probe |
 
 **Counts.** Requirement rows: PASS 15 of 27 (ten with a MISSING TEST rider) · BUG 8 rows · OWNER DECISION 2 rows
 (R20, R21; OD-DA-1 rides on R14) · STALE COPY/UI 1 row · DEFERRED NONBLOCKER 1 row. Findings: **BUG — 8 defects**
@@ -540,7 +545,7 @@ code-traced) · **MISSING TEST — 12** (DA-T1 … T12)
 · **STALE COPY/UI — 14 surfaces** (DA-F8a–n) · **OWNER DECISION — 3** (OD-DA-1 … 3) · **DEFERRED NONBLOCKER — 1**
 (DA-F11). *(rev 2: every OWNER DECISION above is now decided — §19 — except OD-DA-2b, the residual scope of
 OD-DA-2; OD-DA-4 was raised and decided on review.)* *(rev 3: OD-DA-2b decided — D-57.)* *(rev 4: OD-DA-2c decided — D-58;
-OD-DA-2d open.)* *(rev 5: OD-DA-2d decided — D-59; no owner decision remains open.)* *(rev 7: DA-F3, DA-F4 and DA-F5 fixed by DA-4; DA-F12 found by DA-4 — LOW, open.)*
+OD-DA-2d open.)* *(rev 5: OD-DA-2d decided — D-59; no owner decision remains open.)* *(rev 7: DA-F3, DA-F4 and DA-F5 fixed by DA-4; DA-F12 found by DA-4 — LOW, open.)* *(rev 8: DA-F6 and DA-F9 fixed by DA-5; DA-F12 routed to DA-8.)*
 
 **Stop-condition note.** DA-F1, DA-F2, DA-F5 and DA-F7 reach the standard game; DA-F5 does so in legitimate play
 (probe R1). None invalidates the certification premise: the auction's own buy / bid / contest / markdown / revenue rules
@@ -562,12 +567,13 @@ rev-1 analysis that follows is kept as the record of the options considered.**
   applicable. The reserved certificate counts as sold only when granted." This is option (c) below. It removes DA-F6's
   share-creation case at its source; DA-F6's presidency / float half is delivered as the ordinary post-share consequences.
   *Observation, not part of the ruling:* in the standard game the reservation is consumed by the opening auction before any
-  Stock Round, so no standard purchase can meet it. Implementation: DA-5.
+  Stock Round, so no standard purchase can meet it. Implementation: DA-5. *(rev 8: implemented — DA-5; §22 DA-5 record.)*
 - **OD-DA-2 — certificate limit / 60% cap — DECIDED (D-53).** "A forced C&A share grant may temporarily place the recipient
   over the certificate limit and/or 60% ownership cap. The recipient must cure the violation at the first legal opportunity
   in the immediately following Stock Round and may not make an ordinary stock purchase while illegally over the applicable
   limit." DA-5 checks that the existing divestment debt (`forcedDivestment.ts`; S8-11 m5 — it blocks buying and passing)
-  implements "first legal opportunity" exactly, including a turn on which no legal sale exists.
+  implements "first legal opportunity" exactly, including a turn on which no legal sale exists. *(rev 8: implemented —
+  DA-5: the debt is the curable part, held at both locks for the pass and the purchase; no legal sale, no hold.)*
   **OD-DA-2b — DECIDED (D-57, rev 3).** "A player may acquire a private company through the delayed auction even if
   that acquisition, or a mandatory share benefit attached to it, temporarily puts the player over the overall
   certificate limit or an applicable corporation ownership limit. This applies to: a competitive auction win; a
@@ -591,7 +597,8 @@ rev-1 analysis that follows is kept as the record of the options considered.**
   next Stock Round, the must-sell obligation applies only to excess that can actually be cured by legal sales. The
   player may not make an ordinary stock purchase while any curable excess remains." (The owner's bullet lists are
   flattened with semicolons; the words are the owner's.) This settles the rev-3 wording check and the deadlock note
-  above: the next Stock Round's must-sell obligation is limited to curable excess. Implementation: DA-5.
+  above: the next Stock Round's must-sell obligation is limited to curable excess. Implementation: DA-5. *(rev 8:
+  implemented — DA-5, with D-57 and D-59.)*
   **OD-DA-2d — resolution-time mechanics — raised at rev 4; DECIDED at rev 5 (D-59): honour the award.** A win or single-bid award is decided at
   resolution, after the bid was placed. Between the two, a mandatory event outside the bidder's control — the forced
   $0 SV taking, or a PRR presidency exchange caused by another player's C&A grant (the outgoing president trades one
@@ -615,19 +622,21 @@ rev-1 analysis that follows is kept as the record of the options considered.**
   Mechanical consequence for DA-5 (D-58 with D-59, not a new decision): D-58 forbids a voluntary win or award that
   creates an incurable excess, and D-59 exempts only involuntary intervening changes, so the acceptance-time check
   must count the player's other standing bids as potential wins; otherwise the player's own later awards could create
-  the excess D-58 forbids.
+  the excess D-58 forbids. *(rev 8: implemented — DA-5: awards and the $0 taking are never judged; the acceptance-time
+  check counts every other standing bid as won.)*
 - **OD-DA-3 — unsold private-company hexes — DECIDED (D-54).** "Before the delayed auction, ordinary track construction is
   governed by the ordinary track rules. An unsold private does not create a blanket prohibition on laying ordinary track on
   its printed hex. Ownership-specific private powers remain unavailable until that private is owned. Amend the prior
   #1694/S6-7 rationale accordingly." Current behaviour already matches. The ledger's S6-7 entry is amended; the
   `privateReservations.ts:296-303` comment (the superseded premise "in the standard game no tile is laid before the auction
   has sold everything") is corrected in the implementing pass (DA-6), not in DA-1. #1694a (F16) is unchanged by the ruling.
+  *(rev 8: corrected in DA-5, with the other rulings; behaviour unchanged.)*
 - **OD-DA-4 — first 5-train before the delayed auction — DECIDED (D-55).** "Phase 5 wins. If the first 5-train is bought
   before the pending delayed auction occurs, unsold privates close and the delayed auction is cancelled. Any
   reserved/attached stock associated with an unsold private returns to ordinary corporate stock supply. In particular, the
   reserved C&A PRR certificate returns to normal PRR supply and B&O must no longer remain locked merely because its private
   can no longer be sold." This fixes the intended behaviour for DA-F9 (today the armed atom would still offer the closed
-  privates). Implementation: DA-5.
+  privates). Implementation: DA-5. *(rev 8: implemented — DA-5.)*
 - **Lobby copy — DECIDED (D-56).** Replace the stale "start of Phase 3" description with wording equivalent to: "after the
   Operating Round set in which the first 3-train is purchased, immediately before the next Stock Round." The ruling
   addresses the timing description; the closing sentence ("Watch your cash carefully …", pinned by
@@ -723,9 +732,9 @@ the corporate window after it, and the closure of unsold privates by the first 5
 | DA-T6 | S10-6: lone-bid cascade; multi-company cascade; $0 taking followed by a cascade; contest cascading into a contest | state-machine | *(rev 7: CLOSED IN PART by DA-4 — the lone-bid, multi-company and $0-then-cascade shapes, standard and delayed, in `da4AuctionPriorityDeal.test.ts` cases 7 and 10; a contest cascading into a contest is exercised only by the stored JUNO-8E8 log)* |
 | DA-T7 | PD after an auction ending in a cascade / contest / after a $0 taking — standard and delayed (DA-F3/F4/F5) | state-machine | *(rev 7: CLOSED by DA-4 — `da4AuctionPriorityDeal.test.ts` cases 4–11: face-value, contest, lone-bid cascade, resumption after a contest and the $0 path, each in the standard game and the Delayed Auction)* |
 | DA-T8 | Corporate purchase of a private in the first OR after the delayed auction; BO closure on B&O's first train after a delayed auction | rule-semantics |
-| DA-T9 | C&A grant: share conservation invariant; presidency change; float at 60% (DA-F6 + OD-DA-1) | rule-semantics |
+| DA-T9 | C&A grant: share conservation invariant; presidency change; float at 60% (DA-F6 + OD-DA-1) | rule-semantics | *(rev 8: CLOSED by DA-5 — `da5PrivateConsequences.test.ts` cases 1–8: the reservation, its refusal to ordinary purchase in a real Stock Round 1, the exact certificate granted, conservation asserted after every applied message, the presidency and the float settled at the grant, the standard control, and restore / replay / `RevertTo`; on real Stock Rounds and hand-built trigger sets)* |
 | DA-T10 | Composition: GR + UR on the trigger set (fog order, grace trains) | composition |
-| DA-T11 | Bank break inside the trigger set → GameEnd with the auction owed; first 5-train inside the trigger set (DA-F9) | edge |
+| DA-T11 | Bank break inside the trigger set → GameEnd with the auction owed; first 5-train inside the trigger set (DA-F9) | edge | *(rev 8: CLOSED IN PART by DA-5 — the first 5-train inside the trigger set, bought for real through both locks, with restore and `RevertTo` across the cancellation: `da5PrivateConsequences.test.ts` cases 18–24; the bank break inside the trigger set remains open)* |
 | DA-T12 | Server-room parity + `RevertTo` across the boundary for a delayed game (`RoomSession`, digest) | server / replay-undo | *(rev 6: CLOSED IN PART by DA-3 — room refusal with nothing appended in a delayed room; restore and `RevertTo` of the B&O-par obligation in a standard room)* *(rev 7: CLOSED by DA-4 — a Delayed Auction room restored to the same digest, `RevertTo` behind and inside the arming, and room / replay / reducer parity on the Priority Deal: `da4AuctionPriorityDeal.test.ts` cases 12–14, on a hand-built trigger set; the full real run remains DA-T3)* |
 
 Low-value permutation tests deliberately not listed.
@@ -766,7 +775,7 @@ $0 path, `SetBoPar` ownership, Waterfall* gate). T9 synthetic board: first 5-tra
 | **DA-2** | Owner rulings OD-DA-1 … 3; copy sign-off for DA-F8a — *(rev 2)* **done on owner review 2026-09-25** (D-52 … D-56); OD-DA-2b decided (D-57, rev 3); OD-DA-2c decided (D-58, rev 4); OD-DA-2d decided (D-59, rev 5) | — (owner) | DA-1 | — | the rulings |
 | **DA-3** | *(rev 6)* **DONE 2026-09-25.** Authority gates: DA-F1 (round / activity gate for every auction message, both locks), DA-F2 (`SetBoPar` requires the named player to own the BO private + `boIsLocked`), DA-F7 (B&O par owed before handoff / certificate reserved); standard-game goldens and a corpus sweep for refusal-added effects | **Extra** (mechanical, but touches Classic authority — review the corpus sweep carefully) | DA-1 | refusal-added (Classic + DA) | full-suite gate |
 | **DA-4** | *(rev 7)* **DONE 2026-09-25.** Seating and Priority Deal: DA-F3 (seed the delayed auction from the PD holder), DA-F4 + DA-F5 (derive the post-auction PD from the auction's own record of the last face-value purchase, not from the seat mirror), reconciling #905 / #1235 in one rule for both openings | **MAX** (touches the standard auction's PD and #1235's reasoning; proof obligation *(rev 2 review correction)*: "Standard auction behavior and replay remain unchanged except for the explicitly certified DA-F5 Priority Deal correction.") | DA-3 | yes (DA logs; standard logs with a $0 taking) | full-suite gate |
-| **DA-5** | Private-grant consequences: DA-F6 (conservation, presidency, float) implementing D-52 (reserved PRR certificate), D-53, D-54 (no behaviour change; comment rationale) and D-55 (the first 5-train cancels the pending auction, releases the reservation, unlocks the B&O — DA-F9) *(rev 2)*; D-57 (auction overage rule: bid / raise refusal for an incurable excess, curable-only divestment, no deadlock) *(rev 3)*; D-58 (the same refusal for a face-value purchase, a win and a single-bid award; must-sell limited to curable excess) and D-59 (an award from a bid legal when accepted is honoured after an involuntary change and exempt like a mandatory acquisition; the acceptance check counts the player's other standing bids) *(rev 4, rev 5)* | **Extra** | DA-2, DA-3 | yes (DA only; OD-DA-3 possibly both) | full-suite gate |
+| **DA-5** | *(rev 8)* **DONE 2026-09-25.** Private-grant consequences: DA-F6 (conservation, presidency, float) implementing D-52 (reserved PRR certificate), D-53, D-54 (no behaviour change; comment rationale) and D-55 (the first 5-train cancels the pending auction, releases the reservation, unlocks the B&O — DA-F9) *(rev 2)*; D-57 (auction overage rule: bid / raise refusal for an incurable excess, curable-only divestment, no deadlock) *(rev 3)*; D-58 (the same refusal for a face-value purchase, a win and a single-bid award; must-sell limited to curable excess) and D-59 (an award from a bid legal when accepted is honoured after an involuntary change and exempt like a mandatory acquisition; the acceptance check counts the player's other standing bids) *(rev 4, rev 5)* | **Extra** | DA-2, DA-3 | yes (DA only; OD-DA-3 possibly both) | full-suite gate |
 | **DA-6** | UI / copy: DA-F8a–n (DA-F8a per D-56 *(rev 2)*), Rules Reference variant branches, the false affordance, the Activity Log line at the boundary | **Extra** | DA-2 … DA-5 | no | owner copy review |
 | **DA-7** | Certification game G-DA + tails + DA-T1 … T12; S10-6(A) / S10-18(B) residue closed by tests | **Extra** (MAX only if the game design needs rework) | DA-3 … DA-6 | no (tests) | full-suite gate |
 | **DA-8** | Version closure v10 → v11, changelog, backlog closure, certification record | **Extra** | DA-7 | the boundary itself | owner full-suite gate + commit |
@@ -790,6 +799,44 @@ contest's winner) does not move it, and a contest resumes on it; the auction end
 purchase, so at the handoff it names the player to the left of the last direct purchaser. No new field: a second record
 would have changed every standard board and the frozen goldens. `active_player_index` stays a mirror — re-seated on the
 cursor after every main-rotation auction message, and seated with it on the holder at the delayed arming.
+
+**DA-5 record (rev 8).** *Reserved certificate (D-52):* `reserved_certificate: { private_id: 5, percentage: 10 }` on the
+PRR, written by the Delayed Auction's deal (`SetupGame`) and never in any other game. The certificate stays IN
+`ipo_pool_percentage` — the bank still owns it, so it counts as unsold for the float and the sold-out rise, and holdings +
+IPO + pool stay 100% — while `ordinaryPercentAvailable` subtracts it, so no ordinary purchase can take it at either lock
+(no "IPO if it holds 10%, otherwise the Bank Pool" rule for it). Before the grant: holdings + available IPO + pool +
+reserved = 100%; after: holdings + IPO + pool = 100%, nothing reserved. *Grant (DA-F6):* `applyPrivateBenefitGrant` moves
+exactly that 10% from the IPO to the C&A's first owner and lifts the reservation; then, in the same message and in the
+`BuyStock` arm's order, `applyFloatThreshold` (60% sold → floated, 10 × par from the bank) and `settlePresidencies` (the
+chair at once, with the certificate exchange). `applyPrivateExchange` now grants nothing from a pile holding less than 10%
+— the minting boundary — and the no-reservation (standard) path asks for an ORDINARY certificate: IPO, else Bank Pool.
+*Acquisition solvency (D-57, D-58, D-59):* asked only at the voluntary choices — the face-value purchase, a bid (initial or
+increased) and a contest raise — through the predicates both locks already ask (`waterfallBuyRefusal`,
+`waterfallBidRefusal`, `miniRaiseRefusal`); Delayed Auction only. It builds the board the next Stock Round would open on:
+the target and every private the player holds a standing bid on awarded to him, with their mandatory shares (the C&A's
+reserved PRR certificate, the B&O's President's Certificate), presidencies settled; and refuses when the incurable excess
+(certificates over the limit, points over a 60% cap) is larger than the same position without the target. Awards (lone
+bids in the cascade, contest wins) and the $0 SV taking are never judged: D-59's honour and the mandatory exemption.
+*Curable excess (D-53, D-58):* `assessExcess` asks the sale rules themselves — a Stock Round other than the first, a started
+corporation, a chart price on a pinned board, `shareSaleBlock` (the pool's five cards; the President's Certificate needs a
+20% successor), the double's half-sale — for each corporation's largest legal sale, at the prices on the board (a sale's own
+price drop is credited when it happens: the debt is re-read after every sale). The divestment debt is now that curable part
+only; it holds purchases (`sharePurchaseBlock`, as before) and now the Stock Round pass at both locks
+(`divestmentPassRefusal` in `turnRefusal` and the reducer's core gate). An incurable remainder is reported and owes nothing,
+so nothing deadlocks. *Phase 5 (D-55, DA-F9):* inside `applyPhaseChange`, when the arriving tier closes the privates under
+the Delayed Auction with the auction still owed: `private_auction_complete: true`, the atom's offer emptied and inactive,
+every reservation released. The set's end then opens the Stock Round through the ordinary opening
+(`openingStockRoundReset`), on the Priority Deal holder; the dormant cursor is never read and no second pointer exists.
+*Standard-game effects, each reported:* (1) the curable-only debt applies in every game — a Classic zone-exit excess that
+no legal sale can cure (a full Bank Pool, say) no longer holds its player; a curable one holds exactly as before; (2)
+#759's pass hold, previously the shell's alone (button and auto-pass), is enforced at both locks for a curable debt; (3)
+`applyPrivateExchange` never mints — unreachable in the standard game, whose C&A grant (one 10% of the unstarted PRR's IPO)
+is otherwise unchanged, its float and presidency calls identity. The solvency refusal and the cancellation are the Delayed
+Auction's alone. *Corpus:* all 18 stored files (12 games; none a Delayed Auction game) replay to the same digest at every one
+of their 3,763 entries, and to the same final board and atom, before and after DA-5; their 1,394 Stock Round entries hold
+no player over the limit or a 60% cap. No stored Standard log changed. *Tests:* `da5PrivateConsequences.test.ts`, 21 cases
+(brief items 1–24; 19 fail on the pre-DA-5 engine). *DA-F8 note:* the must-sell sentence is #759's zone-exit wording ("Those
+shares left the Yellow/Orange/Brown zones …"), wrong for an auction overage — DA-6's copy pass.
 
 ---
 
@@ -830,6 +877,7 @@ D-52 … D-56; OD-DA-2b open; review corrections recorded in §22 and §23. Stil
 *(rev 5: OD-DA-2d decided — D-59; no Delayed Auction owner decision remains open. Still NOT certified.)*
 *(rev 6: DA-3 implemented — DA-F1, DA-F2, DA-F7 fixed; `RULES_ENGINE_VERSION` still 10. Still NOT certified.)*
 *(rev 7: DA-4 implemented — DA-F3, DA-F4, DA-F5 fixed; DA-F12 found (LOW, open); `RULES_ENGINE_VERSION` still 10. Still NOT certified.)*
+*(rev 8: DA-5 implemented — DA-F6, DA-F9 fixed; D-52 … D-55 and D-57 … D-59 implemented; DA-F12 routed to DA-8; `RULES_ENGINE_VERSION` still 10. Still NOT certified.)*
 
 Delayed Auction remains `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` and is **not certified**. The owner spec
 is confirmed and consistently implemented at the trigger; the general auction is sound; eight defects (five HIGH, two

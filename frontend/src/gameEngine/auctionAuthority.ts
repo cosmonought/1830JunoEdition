@@ -62,7 +62,10 @@ import {
 } from "./auctionEscrow";
 import type { SandboxLogMsg } from "./gameSetup";
 import { BO_PRIVATE_ID, BO_TICKER } from "./gameConstants";
-import { PRESIDENT_CERTIFICATE_PERCENT } from "./presidencyTransfer";
+import { PRESIDENT_CERTIFICATE_PERCENT, settlePresidencies } from "./presidencyTransfer";
+import { resolveVariants } from "./gameVariants";
+import { assessExcess, chartForDivestment, incurableExcess } from "./forcedDivestment";
+import { CA_PRIVATE_ID, PLAYER_HOLDING_CAP_PERCENT, applyPrivateBenefitGrant } from "./privateExchange";
 
 /** The player the auction atom is waiting on -- the same derivation `applySandboxWaterfallAction` applies
  *  every action under, so the rule and the mutation judge one person (#1232/#544). */
@@ -221,8 +224,19 @@ export function auctionHandoffRefusal(
 
 /* ---- the three main-rotation actions --------------------------------------------------------- */
 
-/** Why the lowest-offered private cannot be bought at face value right now, or `null`. */
+/** Why the lowest-offered private cannot be bought at face value right now, or `null`. DA-5: the purchase is also
+ *  a voluntary acquisition (D-58), so the limit check follows the purchase's own rules. */
 export function waterfallBuyRefusal(
+  state: GameStateResponse,
+  waterfall: WaterfallStateResponse | null,
+): string | null {
+  return (
+    waterfallBuyRuleRefusal(state, waterfall) ??
+    acquisitionSolvencyRefusal(state, waterfall, auctionActor(waterfall), lowestOffered(waterfall)?.private_id ?? null)
+  );
+}
+
+function waterfallBuyRuleRefusal(
   state: GameStateResponse,
   waterfall: WaterfallStateResponse | null,
 ): string | null {
@@ -252,8 +266,20 @@ export function waterfallBuyRefusal(
   return null;
 }
 
-/** Why this bid cannot be placed, or `null`. */
+/** Why this bid cannot be placed, or `null`. DA-5: an initial or increased bid is a voluntary commitment to
+ *  acquire (D-57, D-58), judged with the bidder's other standing bids counted as wins (D-59). */
 export function waterfallBidRefusal(
+  state: GameStateResponse,
+  waterfall: WaterfallStateResponse | null,
+  bid: { private_id: number; bid_amount: string | number },
+): string | null {
+  return (
+    waterfallBidRuleRefusal(state, waterfall, bid) ??
+    acquisitionSolvencyRefusal(state, waterfall, auctionActor(waterfall), bid.private_id)
+  );
+}
+
+function waterfallBidRuleRefusal(
   state: GameStateResponse,
   waterfall: WaterfallStateResponse | null,
   bid: { private_id: number; bid_amount: string | number },
@@ -302,8 +328,19 @@ export function waterfallPassRefusal(
 
 /* ---- the contest ------------------------------------------------------------------------------ */
 
-/** Why this mini-auction raise is illegal, or `null`. */
+/** Why this mini-auction raise is illegal, or `null`. DA-5: a raise is a voluntary commitment to acquire (D-57). */
 export function miniRaiseRefusal(
+  state: GameStateResponse,
+  waterfall: WaterfallStateResponse | null,
+  raise: { bid_amount: string | number },
+): string | null {
+  return (
+    miniRaiseRuleRefusal(state, waterfall, raise) ??
+    acquisitionSolvencyRefusal(state, waterfall, auctionActor(waterfall), contestOf(waterfall)?.private_id ?? null)
+  );
+}
+
+function miniRaiseRuleRefusal(
   state: GameStateResponse,
   waterfall: WaterfallStateResponse | null,
   raise: { bid_amount: string | number },
@@ -491,4 +528,110 @@ export function auctionCursorSeat(state: GameStateResponse): number | null {
  *  A board with no seated auction atom has no auction record to read, so the Priority Deal stays where it was. */
 export function auctionPriorityDealSeat(state: GameStateResponse): number {
   return auctionCursorSeat(state) ?? state.priority_deal_index;
+}
+
+/* ---- DA-5: an acquisition a player may not choose (D-57, D-58, D-59) -------------------------------- */
+
+/* ==================================================================
+    DA-5 (D-57, D-58, D-59): NO VOLUNTARY ACQUISITION MAY CREATE AN EXCESS THE NEXT STOCK ROUND CANNOT CURE
+   ==================================================================
+   OWNER RULINGS (Delayed Auction): "A player may not voluntarily acquire a private -- whether by: face-value
+   purchase; initial bid; increased bid; competitive-auction win; or single-bid award -- if that acquisition would
+   create an excess over the certificate limit or an applicable corporation ownership limit that cannot be cured by
+   legal stock sales at the first legal opportunity in the immediately following Stock Round" (D-58, extending D-57).
+   Mandatory acquisitions are exempt -- the forced $0 SV taking and the share a private brings with it. And D-59:
+   "Bid legality is judged when the bid or raise is accepted"; an award whose excess became incurable through a later
+   involuntary event is HONOURED -- so the check at acceptance must count the bidder's OTHER standing bids as wins,
+   or his own later awards could create the excess D-58 forbids.
+
+   WHERE IT IS ASKED: at the three voluntary choices, and only there -- the face-value purchase, the bid (initial or
+   increased) and the contest raise, through the predicates both locks already ask (`auctionRefusal`: ingress and the
+   reducer's board gate, DA-3). A win or a single-bid award is the consequence of a bid already judged, and nothing
+   judges it again: that is how D-59 honours it. The $0 taking is a pass's consequence and is never judged.
+
+   WHAT IS ASKED: the board the next Stock Round would open on -- this board, the player owning the private and
+   every private he holds a standing bid on, each with its mandatory share (the C&A's reserved PRR certificate, the
+   B&O's President's Certificate), crowns settled -- measured by the SAME curable-excess reading the next Stock
+   Round's must-sell hold uses (`assessExcess`). The choice is refused when it leaves more incurable excess than the
+   same position without it. The prices do not move between the auction and that Stock Round, so they are read as
+   they stand; the standard game is exempt by construction (its auction precedes every holding, so no private can
+   put anybody over) and by the gate below, since these are the Delayed Auction's rulings. */
+
+/** Every private this player holds a standing bid on. */
+function standingBidPrivates(waterfall: WaterfallStateResponse | null, player: string): number[] {
+  return (waterfall?.privates ?? [])
+    .filter((entry) => entry.bids.some((bid) => bid.bidder === player))
+    .map((entry) => entry.private_id);
+}
+
+/** The hypothetical B&O President's Certificate a BO private brings: 20% out of the IPO, the owner presiding. The
+ *  par is his to choose later, so the corporation stays unpriced here -- which also makes the lone 20% unsellable,
+ *  as it is (no other holder could take the crown). */
+function withBoPresidentCertificate(board: GameStateResponse, player: string): GameStateResponse {
+  const bo = board.public_companies.find((company) => company.ticker === BO_TICKER);
+  if (!bo || bo.president !== null || bo.ipo_pool_percentage < PRESIDENT_CERTIFICATE_PERCENT) return board;
+  const held = bo.player_holdings.find((entry) => entry.player === player)?.percentage ?? 0;
+  return {
+    ...board,
+    public_companies: board.public_companies.map((company) =>
+      company.company_id === bo.company_id
+        ? {
+            ...company,
+            president: player,
+            ipo_pool_percentage: company.ipo_pool_percentage - PRESIDENT_CERTIFICATE_PERCENT,
+            player_holdings: [
+              ...company.player_holdings.filter((entry) => entry.player !== player),
+              { player, percentage: held + PRESIDENT_CERTIFICATE_PERCENT },
+            ],
+          }
+        : company,
+    ),
+  };
+}
+
+/** The board the next Stock Round would open on if `player` acquired these privates, with their mandatory shares. */
+function boardAfterAcquiring(
+  state: GameStateResponse,
+  player: string,
+  privateIds: readonly number[],
+): GameStateResponse {
+  let board: GameStateResponse = {
+    ...state,
+    private_companies: state.private_companies.map((entry) =>
+      privateIds.includes(entry.private_id) ? { ...entry, owner: player, owner_protocol_id: null } : entry,
+    ),
+  };
+  for (const privateId of privateIds) {
+    if (privateId === CA_PRIVATE_ID) board = applyPrivateBenefitGrant(board, privateId, player);
+    if (privateId === BO_PRIVATE_ID) board = withBoPresidentCertificate(board, player);
+  }
+  return { ...settlePresidencies(board).state, current_round_type: "StockRound" };
+}
+
+/** DA-5 (D-57, D-58, D-59): why this player may not voluntarily take on this private, or `null`. */
+export function acquisitionSolvencyRefusal(
+  state: GameStateResponse,
+  waterfall: WaterfallStateResponse | null,
+  player: string | null,
+  privateId: number | null,
+): string | null {
+  if (!player || privateId === null) return null;
+  if (!resolveVariants(state.variants).delayedAuction) return null;
+  const others = standingBidPrivates(waterfall, player).filter((id) => id !== privateId);
+  const chart = chartForDivestment(state);
+  const incurableWith = (ids: readonly number[]) =>
+    incurableExcess(assessExcess({ state: boardAfterAcquiring(state, player, ids), player, ...chart }));
+  const without = incurableWith(others);
+  const withIt = incurableWith([...others, privateId]);
+  const moreCertificates = withIt.certificates - without.certificates;
+  const moreCap = withIt.capPercent - without.capPercent;
+  if (moreCertificates <= 0 && moreCap <= 0) return null;
+
+  const name = state.private_companies.find((entry) => entry.private_id === privateId)?.name ?? "That private company";
+  const counting = others.length > 0 ? ", counting the private companies you already have bids on as won" : "";
+  const excess =
+    moreCertificates > 0
+      ? `${moreCertificates} certificate${moreCertificates === 1 ? "" : "s"} over the limit`
+      : `${moreCap}% over the ${PLAYER_HOLDING_CAP_PERCENT}% cap`;
+  return `${name} would leave you ${excess}${counting}, and no legal sale in the next Stock Round could bring you back — a private company may not be taken on by choice when that is so.`;
 }

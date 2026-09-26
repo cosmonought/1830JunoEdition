@@ -1,0 +1,779 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GameResponse",
+  "type": "object",
+  "required": [
+    "deadlines",
+    "game",
+    "paused"
+  ],
+  "properties": {
+    "deadlines": {
+      "$ref": "#/definitions/GameDeadlines"
+    },
+    "game": {
+      "$ref": "#/definitions/Game"
+    },
+    "latest_checkpoint": {
+      "description": "The highest-seq checkpoint accepted for this game, if any.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CheckpointRecord"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "paused": {
+      "description": "Global pause flag at query time.",
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "Addr": {
+      "description": "A human readable address.\n\nIn Cosmos, this is typically bech32 encoded. But for multi-chain smart contracts no assumptions should be made other than being UTF-8 encoded and of reasonable length.\n\nThis type represents a validated address. It can be created in the following ways 1. Use `Addr::unchecked(input)` 2. Use `let checked: Addr = deps.api.addr_validate(input)?` 3. Use `let checked: Addr = deps.api.addr_humanize(canonical_addr)?` 4. Deserialize from JSON. This must only be done from JSON that was validated before such as a contract's state. `Addr` must not be used in messages sent by the user because this would result in unvalidated instances.\n\nThis type is immutable. If you really need to mutate it (Really? Are you sure?), create a mutable copy using `let mut mutable = Addr::to_string()` and operate on that `String` instance.",
+      "type": "string"
+    },
+    "CheckpointRecord": {
+      "description": "A checkpoint the contract accepted. The latest one per signer key is kept, so `LivenessSettle` can fall back past a key retired as compromised.",
+      "type": "object",
+      "required": [
+        "accepted_at",
+        "payload"
+      ],
+      "properties": {
+        "accepted_at": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "payload": {
+          "$ref": "#/definitions/PayloadRecord"
+        }
+      },
+      "additionalProperties": false
+    },
+    "DisputeRecord": {
+      "type": "object",
+      "required": [
+        "bond",
+        "challenger",
+        "disputed_at",
+        "evidence_hash"
+      ],
+      "properties": {
+        "bond": {
+          "$ref": "#/definitions/Uint128"
+        },
+        "challenger": {
+          "$ref": "#/definitions/Addr"
+        },
+        "disputed_at": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "evidence_hash": {
+          "$ref": "#/definitions/HexBinary"
+        },
+        "resolution": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DisputeResolution"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolved_at": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "DisputeResolution": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "upheld",
+            "replaced",
+            "annulled"
+          ]
+        },
+        {
+          "description": "Nobody adjudicated before the resolver timeout; the bond went back.",
+          "type": "string",
+          "enum": [
+            "resolver_timeout"
+          ]
+        }
+      ]
+    },
+    "Game": {
+      "type": "object",
+      "required": [
+        "ante_gross",
+        "ante_net",
+        "chain_game_id",
+        "consent_bitmap",
+        "created_at",
+        "creator",
+        "denom",
+        "funding_deadline",
+        "last_seq",
+        "max_players",
+        "mode",
+        "pool",
+        "rules_engine_version",
+        "seats",
+        "state",
+        "subsidy_per_seat",
+        "terms",
+        "variants_digest"
+      ],
+      "properties": {
+        "ante_gross": {
+          "description": "The creator's gross deposit; every joiner must send exactly this.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint128"
+            }
+          ]
+        },
+        "ante_net": {
+          "description": "Per-seat net ante (identical for every seat).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint128"
+            }
+          ]
+        },
+        "bond": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Uint128"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chain_game_id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "consent_bitmap": {
+          "description": "Bit i set = seat i's consent to the stored settlement verified.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "created_at": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "creator": {
+          "description": "Sender of `CreateGame`. May `Cancel` before `Start`; nothing after.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Addr"
+            }
+          ]
+        },
+        "denom": {
+          "type": "string"
+        },
+        "dispute": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DisputeRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HexBinary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "funding_deadline": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "last_activity": {
+          "description": "Block time of the last `Start` or accepted `Checkpoint`.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_seq": {
+          "description": "Highest accepted payload seq; never decreases.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint64"
+            }
+          ]
+        },
+        "max_players": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "mode": {
+          "$ref": "#/definitions/Mode"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Outcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "pool": {
+          "description": "Σ net deposits until a payout or refund zeroes it.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint128"
+            }
+          ]
+        },
+        "roster_hash": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/HexBinary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rules_engine_version": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0.0
+        },
+        "seats": {
+          "description": "Deposit order; frozen at `Start`.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Seat"
+          }
+        },
+        "settlement": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SettlementRecord"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/definitions/GameState"
+        },
+        "subsidy_per_seat": {
+          "$ref": "#/definitions/Uint128"
+        },
+        "terms": {
+          "$ref": "#/definitions/GameTerms"
+        },
+        "variants_digest": {
+          "$ref": "#/definitions/HexBinary"
+        }
+      },
+      "additionalProperties": false
+    },
+    "GameDeadlines": {
+      "description": "Deadlines derived from block-time bookkeeping, for display and relayers.",
+      "type": "object",
+      "required": [
+        "funding_deadline"
+      ],
+      "properties": {
+        "challenge_window_end": {
+          "description": "SETTLEABLE: `Challenge` before, `Finalize` from this time.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "funding_deadline": {
+          "description": "`Join` needs block time before this; anyone may `Cancel` from it on.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Timestamp"
+            }
+          ]
+        },
+        "liveness_available_at": {
+          "description": "IN_PROGRESS: `LivenessSettle` from this time.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "resolver_timeout_at": {
+          "description": "DISPUTED: `LivenessSettle` from this time.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "GameState": {
+      "description": "The frozen game lifecycle (ESCROW-1.5 §9). SETTLED, CANCELLED and ANNULLED are terminal and accept no message.",
+      "type": "string",
+      "enum": [
+        "funding",
+        "funded",
+        "in_progress",
+        "settleable",
+        "disputed",
+        "settled",
+        "cancelled",
+        "annulled"
+      ]
+    },
+    "GameTerms": {
+      "description": "Terms copied from the configuration when the game was created.",
+      "type": "object",
+      "required": [
+        "bond_bps",
+        "bond_floor",
+        "challenge_window_secs",
+        "liveness_window_secs",
+        "resolver_timeout_secs",
+        "subsidy_bps",
+        "treasury"
+      ],
+      "properties": {
+        "bond_bps": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "bond_floor": {
+          "$ref": "#/definitions/Uint128"
+        },
+        "challenge_window_secs": {
+          "description": "This game's challenge window (its mode's value).",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "liveness_window_secs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "resolver_timeout_secs": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "subsidy_bps": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "treasury": {
+          "description": "Where this game's subsidies and dust go.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Addr"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "HexBinary": {
+      "description": "This is a wrapper around Vec<u8> to add hex de/serialization with serde. It also adds some helper methods to help encode inline.\n\nThis is similar to `cosmwasm_std::Binary` but uses hex. See also <https://github.com/CosmWasm/cosmwasm/blob/main/docs/MESSAGE_TYPES.md>.",
+      "type": "string"
+    },
+    "Mode": {
+      "description": "Live or async; its byte (0 or 1) is part of the settlement domain.",
+      "type": "string",
+      "enum": [
+        "live",
+        "async"
+      ]
+    },
+    "Outcome": {
+      "description": "The terminal money movement of a game.",
+      "type": "object",
+      "required": [
+        "amounts",
+        "at",
+        "bond_returned",
+        "bond_to_pool",
+        "distributed",
+        "dust",
+        "route"
+      ],
+      "properties": {
+        "amounts": {
+          "description": "Per seat, in `chain_seat_index` order: payout or refund.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Uint128"
+          }
+        },
+        "at": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "bond_returned": {
+          "description": "Challenger's bond sent back to the challenger in this transaction.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint128"
+            }
+          ]
+        },
+        "bond_to_pool": {
+          "description": "Challenger's bond added to the pool before the split (Uphold).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint128"
+            }
+          ]
+        },
+        "distributed": {
+          "description": "The pool the amounts and dust were drawn from.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint128"
+            }
+          ]
+        },
+        "dust": {
+          "description": "Sent to the treasury (payouts only).",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint128"
+            }
+          ]
+        },
+        "route": {
+          "$ref": "#/definitions/Route"
+        }
+      },
+      "additionalProperties": false
+    },
+    "PayloadRecord": {
+      "description": "The fields of an accepted `SettlementPayloadV1`, plus its SETTLE digest.",
+      "type": "object",
+      "required": [
+        "appraisal_log_len",
+        "appraisal_state_hash",
+        "issued_at",
+        "kind",
+        "log_hash",
+        "log_len",
+        "payload_digest",
+        "reason",
+        "seq",
+        "settlement_weights",
+        "signer_key_id",
+        "state_schema_version"
+      ],
+      "properties": {
+        "appraisal_log_len": {
+          "$ref": "#/definitions/Uint64"
+        },
+        "appraisal_state_hash": {
+          "$ref": "#/definitions/HexBinary"
+        },
+        "issued_at": {
+          "description": "Informational; the contract only ever compares block time.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint64"
+            }
+          ]
+        },
+        "kind": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "log_hash": {
+          "$ref": "#/definitions/HexBinary"
+        },
+        "log_len": {
+          "$ref": "#/definitions/Uint64"
+        },
+        "payload_digest": {
+          "description": "`SHA-256(\"18JUNO/SETTLE/v1\" ‖ encode(payload))`, what consents sign over.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HexBinary"
+            }
+          ]
+        },
+        "reason": {
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0.0
+        },
+        "seq": {
+          "$ref": "#/definitions/Uint64"
+        },
+        "settlement_weights": {
+          "description": "In `chain_seat_index` order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Uint128"
+          }
+        },
+        "signer_key_id": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        },
+        "state_schema_version": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0.0
+        }
+      },
+      "additionalProperties": false
+    },
+    "Route": {
+      "description": "Which path moved the money out of a game.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "finalized",
+            "resolver_uphold",
+            "resolver_replace",
+            "resolver_annul",
+            "annul_by_consent",
+            "creator_cancel",
+            "deadline_cancel"
+          ]
+        },
+        {
+          "description": "`Settle` carried a valid consent from every seat.",
+          "type": "string",
+          "enum": [
+            "all_consents_at_settle"
+          ]
+        },
+        {
+          "description": "A `Consent` supplied the last missing seat.",
+          "type": "string",
+          "enum": [
+            "consent_completed"
+          ]
+        },
+        {
+          "description": "DISPUTED + resolver timeout, stored settlement paid (uphold-like).",
+          "type": "string",
+          "enum": [
+            "resolver_timeout_payout"
+          ]
+        },
+        {
+          "description": "DISPUTED + resolver timeout, no usable settlement or checkpoint: refund.",
+          "type": "string",
+          "enum": [
+            "resolver_timeout_refund"
+          ]
+        },
+        {
+          "description": "IN_PROGRESS + liveness window, no usable checkpoint: refund.",
+          "type": "string",
+          "enum": [
+            "liveness_refund"
+          ]
+        }
+      ]
+    },
+    "Seat": {
+      "description": "One seat, in deposit order. `seats[i]` is `chain_seat_index` i.",
+      "type": "object",
+      "required": [
+        "consent_pubkey",
+        "gross_deposit",
+        "join_ticket",
+        "joined_at",
+        "net_deposit",
+        "subsidy_paid",
+        "wallet"
+      ],
+      "properties": {
+        "consent_key_rotated_at": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "consent_pubkey": {
+          "description": "33-byte compressed secp256k1 key for CONSENT and ANNUL signatures. The key current at verification time is the one checked.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HexBinary"
+            }
+          ]
+        },
+        "gross_deposit": {
+          "$ref": "#/definitions/Uint128"
+        },
+        "join_ticket": {
+          "description": "The server-issued opaque join ticket (32 bytes), stored verbatim.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HexBinary"
+            }
+          ]
+        },
+        "joined_at": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "net_deposit": {
+          "description": "What entered the pool, and exactly what a refund returns.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint128"
+            }
+          ]
+        },
+        "subsidy_paid": {
+          "$ref": "#/definitions/Uint128"
+        },
+        "wallet": {
+          "description": "Deposit signer: payout and refund destination. Never a gameplay actor.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Addr"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SettlementRecord": {
+      "type": "object",
+      "required": [
+        "accepted_at",
+        "payload",
+        "source",
+        "window_end"
+      ],
+      "properties": {
+        "accepted_at": {
+          "$ref": "#/definitions/Timestamp"
+        },
+        "payload": {
+          "$ref": "#/definitions/PayloadRecord"
+        },
+        "source": {
+          "$ref": "#/definitions/SettlementSource"
+        },
+        "window_end": {
+          "description": "`Finalize` is possible from here on; `Challenge` only before.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Timestamp"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SettlementSource": {
+      "description": "Where a stored settlement came from.",
+      "oneOf": [
+        {
+          "description": "A signed Terminal payload submitted with `Settle`.",
+          "type": "string",
+          "enum": [
+            "terminal_payload"
+          ]
+        },
+        {
+          "description": "The best usable checkpoint, promoted by `LivenessSettle`.",
+          "type": "string",
+          "enum": [
+            "liveness_checkpoint"
+          ]
+        },
+        {
+          "description": "A resolver `Replace` (reason ResolverCorrection), authorised by the resolver's transaction rather than a signature.",
+          "type": "string",
+          "enum": [
+            "resolver_replacement"
+          ]
+        }
+      ]
+    },
+    "Timestamp": {
+      "description": "A point in time in nanosecond precision.\n\nThis type can represent times from 1970-01-01T00:00:00Z to 2554-07-21T23:34:33Z.\n\n## Examples\n\n``` # use cosmwasm_std::Timestamp; let ts = Timestamp::from_nanos(1_000_000_202); assert_eq!(ts.nanos(), 1_000_000_202); assert_eq!(ts.seconds(), 1); assert_eq!(ts.subsec_nanos(), 202);\n\nlet ts = ts.plus_seconds(2); assert_eq!(ts.nanos(), 3_000_000_202); assert_eq!(ts.seconds(), 3); assert_eq!(ts.subsec_nanos(), 202); ```",
+      "allOf": [
+        {
+          "$ref": "#/definitions/Uint64"
+        }
+      ]
+    },
+    "Uint128": {
+      "description": "A thin wrapper around u128 that is using strings for JSON encoding/decoding, such that the full u128 range can be used for clients that convert JSON numbers to floats, like JavaScript and jq.\n\n# Examples\n\nUse `from` to create instances of this and `u128` to get the value out:\n\n``` # use cosmwasm_std::Uint128; let a = Uint128::from(123u128); assert_eq!(a.u128(), 123);\n\nlet b = Uint128::from(42u64); assert_eq!(b.u128(), 42);\n\nlet c = Uint128::from(70u32); assert_eq!(c.u128(), 70); ```",
+      "type": "string"
+    },
+    "Uint64": {
+      "description": "A thin wrapper around u64 that is using strings for JSON encoding/decoding, such that the full u64 range can be used for clients that convert JSON numbers to floats, like JavaScript and jq.\n\n# Examples\n\nUse `from` to create instances of this and `u64` to get the value out:\n\n``` # use cosmwasm_std::Uint64; let a = Uint64::from(42u64); assert_eq!(a.u64(), 42);\n\nlet b = Uint64::from(70u32); assert_eq!(b.u64(), 70); ```",
+      "type": "string"
+    }
+  }
+}

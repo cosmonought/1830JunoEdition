@@ -1,0 +1,704 @@
+//! The full permission matrix: EVERY execute message × every game state ×
+//! paused/unpaused × every caller role, against an independent oracle written
+//! from the frozen transition table (ESCROW-1.5 §9.1).
+//!
+//! Each cell runs in a fresh environment. The message carries everything else
+//! it needs to succeed (exact funds, a valid signature, the right time), so the
+//! oracle only has to decide state → role → pause, in that order. Every cell
+//! also checks custody, and a refused cell checks that nothing changed.
+
+mod common;
+
+use common::*;
+use cosmwasm_std::{coins, Addr, Coin, HexBinary, Uint128};
+use eighteen_cosmos_escrow::msg::{ExecuteMsg, ResolveOutcome, SeatSignature};
+use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
+use eighteen_cosmos_escrow::state::{GameParams, GameState, Mode};
+use eighteen_cosmos_escrow::ContractError;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Role {
+    Admin,
+    Operator,
+    Resolver,
+    Creator,
+    Seat1,
+    Outsider,
+}
+
+const ROLES: [Role; 6] = [
+    Role::Admin,
+    Role::Operator,
+    Role::Resolver,
+    Role::Creator,
+    Role::Seat1,
+    Role::Outsider,
+];
+
+const STATES: [GameState; 8] = [
+    GameState::Funding,
+    GameState::Funded,
+    GameState::InProgress,
+    GameState::Settleable,
+    GameState::Disputed,
+    GameState::Settled,
+    GameState::Cancelled,
+    GameState::Annulled,
+];
+
+#[derive(Clone, Copy, Debug)]
+enum Msg {
+    Join,
+    Withdraw,
+    /// Cancel before the funding deadline (creator only).
+    CancelNow,
+    /// Cancel once the funding deadline has passed (anyone).
+    CancelAfterDeadline,
+    SetConsentKey,
+    Start,
+    Checkpoint,
+    Settle,
+    Consent,
+    Finalize,
+    Challenge,
+    Resolve,
+    AnnulByConsent,
+    LivenessSettle,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Expect {
+    Ok(GameState),
+    WrongState,
+    NotSeated,
+    AlreadyJoined,
+    Unauthorized(&'static str),
+    Paused,
+}
+
+fn addr(s: &Suite, role: Role) -> Addr {
+    match role {
+        Role::Admin => s.admin.clone(),
+        Role::Operator => s.operator.clone(),
+        Role::Resolver => s.resolver.clone(),
+        Role::Creator => s.players[0].clone(),
+        Role::Seat1 => s.players[1].clone(),
+        Role::Outsider => s.outsider.clone(),
+    }
+}
+
+/// The oracle, written from the transition table rather than from the code.
+fn oracle(msg: Msg, state: GameState, role: Role, paused: bool) -> Expect {
+    use GameState::*;
+    let seated = matches!(role, Role::Creator | Role::Seat1);
+    let within = |allowed: &[GameState]| allowed.contains(&state);
+    match msg {
+        Msg::Join => {
+            if !within(&[Funding]) {
+                Expect::WrongState
+            } else if seated {
+                Expect::AlreadyJoined
+            } else if paused {
+                Expect::Paused
+            } else {
+                Expect::Ok(Funded) // the fixture leaves one seat of three free
+            }
+        }
+        Msg::Withdraw => {
+            if !within(&[Funding, Funded]) {
+                Expect::WrongState
+            } else if !seated {
+                Expect::NotSeated
+            } else {
+                Expect::Ok(Funding) // works while paused
+            }
+        }
+        Msg::CancelNow => {
+            if !within(&[Funding, Funded]) {
+                Expect::WrongState
+            } else if role != Role::Creator {
+                Expect::Unauthorized("creator (or anyone after the funding deadline)")
+            } else {
+                Expect::Ok(Cancelled)
+            }
+        }
+        Msg::CancelAfterDeadline => {
+            if !within(&[Funding, Funded]) {
+                Expect::WrongState
+            } else {
+                Expect::Ok(Cancelled)
+            }
+        }
+        Msg::SetConsentKey => {
+            if !within(&[Funding, Funded, InProgress, Settleable]) {
+                Expect::WrongState
+            } else if !seated {
+                Expect::NotSeated
+            } else {
+                Expect::Ok(state)
+            }
+        }
+        Msg::Start => {
+            if !within(&[Funded]) {
+                Expect::WrongState
+            } else if role != Role::Operator {
+                Expect::Unauthorized("operator")
+            } else if paused {
+                Expect::Paused
+            } else {
+                Expect::Ok(InProgress)
+            }
+        }
+        Msg::Checkpoint | Msg::Settle => {
+            if !within(&[InProgress]) {
+                Expect::WrongState
+            } else if paused {
+                Expect::Paused
+            } else if matches!(msg, Msg::Checkpoint) {
+                Expect::Ok(InProgress)
+            } else {
+                Expect::Ok(Settleable) // no consents attached
+            }
+        }
+        Msg::Consent | Msg::Finalize => {
+            if !within(&[Settleable]) {
+                Expect::WrongState
+            } else if paused {
+                Expect::Paused
+            } else if matches!(msg, Msg::Consent) {
+                Expect::Ok(Settleable) // one consent of three
+            } else {
+                Expect::Ok(Settled)
+            }
+        }
+        Msg::Challenge => {
+            if !within(&[Settleable]) {
+                Expect::WrongState
+            } else if !seated {
+                Expect::NotSeated
+            } else {
+                Expect::Ok(Disputed) // works while paused
+            }
+        }
+        Msg::Resolve => {
+            if !within(&[Disputed]) {
+                Expect::WrongState
+            } else if role != Role::Resolver {
+                Expect::Unauthorized("resolver")
+            } else {
+                Expect::Ok(Settled) // Uphold; works while paused
+            }
+        }
+        Msg::AnnulByConsent => {
+            if !within(&[InProgress, Settleable]) {
+                Expect::WrongState
+            } else {
+                Expect::Ok(Annulled) // anyone relays; works while paused
+            }
+        }
+        Msg::LivenessSettle => {
+            if !within(&[InProgress, Disputed]) {
+                Expect::WrongState
+            } else if !seated {
+                Expect::NotSeated
+            } else if state == InProgress {
+                Expect::Ok(Cancelled) // no checkpoint was posted
+            } else {
+                Expect::Ok(Settled) // resolver timeout pays the stored vector
+            }
+        }
+    }
+}
+
+/// A game in `state` with max 3 seats: FUNDING holds [creator, alice]; every
+/// later state holds [creator, alice, bob]. Returns the stored settlement
+/// payload where there is one.
+fn fixture(s: &mut Suite, state: GameState) -> (u64, Option<Payload>) {
+    match state {
+        GameState::Funding => {
+            let id = s.create(0, 3, Mode::Live, ANTE);
+            s.join(id, 1, ANTE);
+            (id, None)
+        }
+        GameState::Funded => (s.funded(3), None),
+        GameState::InProgress => (s.started(3), None),
+        GameState::Settleable => {
+            let (id, p) = s.settleable(3);
+            (id, Some(p))
+        }
+        GameState::Disputed => {
+            let (id, p) = s.disputed(3);
+            (id, Some(p))
+        }
+        GameState::Settled => (s.settled(3), None),
+        GameState::Cancelled => {
+            let id = s.create(0, 3, Mode::Live, ANTE);
+            s.join(id, 1, ANTE);
+            let creator = s.players[0].clone();
+            s.exec(&creator, &ExecuteMsg::Cancel { chain_game_id: id }, &[])
+                .unwrap();
+            (id, None)
+        }
+        GameState::Annulled => (s.annulled(3), None),
+    }
+}
+
+fn domain_or_zero(s: &Suite, id: u64) -> [u8; 32] {
+    s.game(id)
+        .game
+        .domain
+        .map(|d| <[u8; 32]>::try_from(d.as_slice()).unwrap())
+        .unwrap_or([0u8; 32])
+}
+
+fn fresh_payload(s: &Suite, id: u64, kind: u8, reason: u8) -> Payload {
+    let mut p = s.payload_unchecked(id, kind, reason, 1_000);
+    p.domain = domain_or_zero(s, id);
+    p
+}
+
+fn build(
+    s: &Suite,
+    msg: Msg,
+    id: u64,
+    role: Role,
+    stored: &Option<Payload>,
+) -> (ExecuteMsg, Vec<Coin>) {
+    let fresh_key = Key::from_label(&format!("18JUNO/TEST/matrix/{role:?}"));
+    match msg {
+        Msg::Join => (
+            ExecuteMsg::Join {
+                chain_game_id: id,
+                consent_pubkey: fresh_key.pubkey,
+                join_ticket: ticket("matrix"),
+            },
+            coins(ANTE, DENOM),
+        ),
+        Msg::Withdraw => (ExecuteMsg::Withdraw { chain_game_id: id }, vec![]),
+        Msg::CancelNow | Msg::CancelAfterDeadline => {
+            (ExecuteMsg::Cancel { chain_game_id: id }, vec![])
+        }
+        Msg::SetConsentKey => (
+            ExecuteMsg::SetConsentKey {
+                chain_game_id: id,
+                new_pubkey: fresh_key.pubkey,
+            },
+            vec![],
+        ),
+        Msg::Start => (
+            ExecuteMsg::Start {
+                chain_game_id: id,
+                roster_hash: s.roster_hash(id),
+            },
+            vec![],
+        ),
+        Msg::Checkpoint => {
+            let p = fresh_payload(s, id, KIND_CHECKPOINT, 0);
+            let (payload, signature) = s.signed(&p);
+            (
+                ExecuteMsg::Checkpoint {
+                    chain_game_id: id,
+                    payload,
+                    signature,
+                },
+                vec![],
+            )
+        }
+        Msg::Settle => {
+            let p = fresh_payload(s, id, KIND_TERMINAL, 1);
+            let (payload, signature) = s.signed(&p);
+            (
+                ExecuteMsg::Settle {
+                    chain_game_id: id,
+                    payload,
+                    signature,
+                    consents: vec![],
+                },
+                vec![],
+            )
+        }
+        Msg::Consent => {
+            let signature = match stored {
+                Some(p) => Key::seat(0).sign(&s.consent_digest(id, p)),
+                None => Key::seat(0).sign(&[7u8; 32]),
+            };
+            (
+                ExecuteMsg::Consent {
+                    chain_game_id: id,
+                    seat_index: 0,
+                    signature,
+                },
+                vec![],
+            )
+        }
+        Msg::Finalize => (ExecuteMsg::Finalize { chain_game_id: id }, vec![]),
+        Msg::Challenge => {
+            let bond = s.game(id).game.bond.map(|b| b.u128()).unwrap_or(1_000_000);
+            (
+                ExecuteMsg::Challenge {
+                    chain_game_id: id,
+                    evidence_hash: HexBinary::from(vec![0xeeu8; 32]),
+                },
+                coins(bond, DENOM),
+            )
+        }
+        Msg::Resolve => (
+            ExecuteMsg::Resolve {
+                chain_game_id: id,
+                outcome: ResolveOutcome::Uphold {},
+            },
+            vec![],
+        ),
+        Msg::AnnulByConsent => {
+            let g = s.game(id).game;
+            let consents = match g.domain {
+                Some(_) => s.annul_sigs(id, &[0, 1, 2], g.last_seq.u64()),
+                None => vec![SeatSignature {
+                    seat_index: 0,
+                    signature: Key::seat(0).sign(&[8u8; 32]),
+                }],
+            };
+            (
+                ExecuteMsg::AnnulByConsent {
+                    chain_game_id: id,
+                    consents,
+                },
+                vec![],
+            )
+        }
+        Msg::LivenessSettle => (ExecuteMsg::LivenessSettle { chain_game_id: id }, vec![]),
+    }
+}
+
+trait Unchecked {
+    fn payload_unchecked(&self, id: u64, kind: u8, reason: u8, log_len: u64) -> Payload;
+}
+
+impl Unchecked for Suite {
+    /// `Suite::payload` without requiring a started game.
+    fn payload_unchecked(&self, id: u64, kind: u8, reason: u8, log_len: u64) -> Payload {
+        let seats = self.game(id).game.seats.len();
+        Payload {
+            version: 1,
+            domain: [0u8; 32],
+            seq: 2 * log_len + u64::from(kind),
+            kind,
+            reason,
+            log_len,
+            log_hash: sha256(&[b"log", &log_len.to_be_bytes()]),
+            appraisal_log_len: log_len,
+            appraisal_state_hash: sha256(&[b"state", &log_len.to_be_bytes()]),
+            state_schema_version: 1,
+            settlement_weights: (1..=seats as u128).collect(),
+            signer_key_id: 1,
+            issued_at: 1_790_000_000,
+        }
+    }
+}
+
+/// Runs one cell; returns whether the message succeeded.
+fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
+    let mut s = Suite::new();
+    let (id, stored) = fixture(&mut s, state);
+    match msg {
+        Msg::CancelAfterDeadline | Msg::Finalize => s.advance(DAY),
+        Msg::LivenessSettle => s.advance(30 * DAY),
+        _ => {}
+    }
+    if paused {
+        s.pause();
+    }
+    let (execute, funds) = build(&s, msg, id, role, &stored);
+    let who = addr(&s, role);
+    let before = s.game(id).game;
+    let balance = s.contract_balance();
+    let caller_balance = s.balance(&who);
+    let expected = oracle(msg, state, role, paused);
+    let got = s.exec(&who, &execute, &funds);
+    let cell = format!("{msg:?} × {state:?} × {role:?} × paused={paused}");
+    match (&got, &expected) {
+        (Ok(_), Expect::Ok(next)) => {
+            assert_eq!(s.state(id), *next, "{cell}");
+        }
+        (Err(ContractError::WrongState { actual, .. }), Expect::WrongState) => {
+            assert_eq!(actual, state.as_str(), "{cell}");
+        }
+        (Err(ContractError::NotSeated { .. }), Expect::NotSeated) => {}
+        (Err(ContractError::AlreadyJoined { .. }), Expect::AlreadyJoined) => {}
+        (Err(ContractError::Unauthorized { role: r }), Expect::Unauthorized(want)) => {
+            assert_eq!(r, want, "{cell}");
+        }
+        (Err(ContractError::Paused {}), Expect::Paused) => {}
+        _ => panic!("{cell}: got {got:?}, oracle says {expected:?}"),
+    }
+    if got.is_err() {
+        assert_eq!(
+            s.game(id).game,
+            before,
+            "{cell}: a refusal changed the game"
+        );
+        assert_eq!(s.contract_balance(), balance, "{cell}");
+        assert_eq!(s.balance(&who), caller_balance, "{cell}");
+    }
+    s.assert_custody();
+    got.is_ok()
+}
+
+fn run_row(msg: Msg) {
+    let (mut cells, mut accepted) = (0, 0);
+    for state in STATES {
+        for paused in [false, true] {
+            for role in ROLES {
+                if run_cell(msg, state, role, paused) {
+                    accepted += 1;
+                }
+                cells += 1;
+            }
+        }
+    }
+    assert_eq!(cells, 96);
+    // Every row exercises both sides of the oracle.
+    assert!(
+        accepted > 0 && accepted < cells,
+        "{msg:?}: {accepted} of {cells}"
+    );
+}
+
+macro_rules! row {
+    ($($name:ident => $msg:expr),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                run_row($msg);
+            }
+        )*
+    };
+}
+
+row! {
+    matrix_join => Msg::Join,
+    matrix_withdraw => Msg::Withdraw,
+    matrix_cancel_before_deadline => Msg::CancelNow,
+    matrix_cancel_after_deadline => Msg::CancelAfterDeadline,
+    matrix_set_consent_key => Msg::SetConsentKey,
+    matrix_start => Msg::Start,
+    matrix_checkpoint => Msg::Checkpoint,
+    matrix_settle => Msg::Settle,
+    matrix_consent => Msg::Consent,
+    matrix_finalize => Msg::Finalize,
+    matrix_challenge => Msg::Challenge,
+    matrix_resolve => Msg::Resolve,
+    matrix_annul_by_consent => Msg::AnnulByConsent,
+    matrix_liveness_settle => Msg::LivenessSettle,
+}
+
+// ------------------------------------------------------------ global messages
+
+#[derive(Clone, Copy, Debug)]
+enum Global {
+    CreateGame,
+    Pause,
+    Unpause,
+    AddSignerKey,
+    RetireSignerKey,
+    SetOperator,
+    SetResolver,
+    SetTreasury,
+    SetParams,
+}
+
+const GLOBALS: [Global; 9] = [
+    Global::CreateGame,
+    Global::Pause,
+    Global::Unpause,
+    Global::AddSignerKey,
+    Global::RetireSignerKey,
+    Global::SetOperator,
+    Global::SetResolver,
+    Global::SetTreasury,
+    Global::SetParams,
+];
+
+fn global_msg(s: &Suite, g: Global, role: Role) -> (ExecuteMsg, Vec<Coin>) {
+    match g {
+        Global::CreateGame => (
+            ExecuteMsg::CreateGame {
+                max_players: 2,
+                mode: Mode::Async,
+                rules_engine_version: RULES_ENGINE_VERSION,
+                variants_digest: variants_digest(),
+                consent_pubkey: Key::from_label(&format!("18JUNO/TEST/matrix/{role:?}")).pubkey,
+                join_ticket: ticket("matrix-create"),
+            },
+            coins(ANTE, DENOM),
+        ),
+        Global::Pause => (ExecuteMsg::Pause {}, vec![]),
+        Global::Unpause => (ExecuteMsg::Unpause {}, vec![]),
+        Global::AddSignerKey => (
+            ExecuteMsg::AddSignerKey {
+                pubkey: Key::signer(5).pubkey,
+            },
+            vec![],
+        ),
+        Global::RetireSignerKey => (
+            ExecuteMsg::RetireSignerKey {
+                key_id: 1,
+                compromised: false,
+            },
+            vec![],
+        ),
+        Global::SetOperator => (
+            ExecuteMsg::SetOperator {
+                operator: s.addr("operator-next").to_string(),
+            },
+            vec![],
+        ),
+        Global::SetResolver => (
+            ExecuteMsg::SetResolver {
+                resolver: s.addr("resolver-next").to_string(),
+            },
+            vec![],
+        ),
+        Global::SetTreasury => (
+            ExecuteMsg::SetTreasury {
+                treasury: s.addr("treasury-next").to_string(),
+            },
+            vec![],
+        ),
+        Global::SetParams => (
+            ExecuteMsg::SetParams {
+                params: GameParams {
+                    min_ante: Uint128::new(3_000_000),
+                    ..default_params()
+                },
+            },
+            vec![],
+        ),
+    }
+}
+
+#[test]
+fn matrix_global_messages() {
+    let mut cells = 0;
+    for g in GLOBALS {
+        for paused in [false, true] {
+            for role in ROLES {
+                let mut s = Suite::new();
+                // Some games in flight, so "global" really is global.
+                let live = s.started(2);
+                let (open, _) = s.settleable(2);
+                if paused {
+                    s.pause();
+                }
+                let games_before = (s.game(live).game, s.game(open).game);
+                let (msg, funds) = global_msg(&s, g, role);
+                let who = addr(&s, role);
+                let got = s.exec(&who, &msg, &funds);
+                let cell = format!("{g:?} × {role:?} × paused={paused}");
+                match g {
+                    Global::CreateGame => {
+                        if paused {
+                            assert_eq!(got.unwrap_err(), ContractError::Paused {}, "{cell}");
+                        } else {
+                            got.unwrap();
+                        }
+                    }
+                    _ => {
+                        if role == Role::Admin {
+                            got.unwrap();
+                        } else {
+                            assert_eq!(
+                                got.unwrap_err(),
+                                ContractError::Unauthorized {
+                                    role: "admin".to_string()
+                                },
+                                "{cell}"
+                            );
+                        }
+                    }
+                }
+                assert_eq!(
+                    (s.game(live).game, s.game(open).game),
+                    games_before,
+                    "{cell}: a global message changed an existing game"
+                );
+                s.assert_custody();
+                cells += 1;
+            }
+        }
+    }
+    assert_eq!(cells, 9 * 2 * 6);
+}
+
+#[test]
+fn matrix_unknown_game() {
+    for msg in [
+        Msg::Join,
+        Msg::Withdraw,
+        Msg::CancelNow,
+        Msg::SetConsentKey,
+        Msg::Checkpoint,
+        Msg::Settle,
+        Msg::Finalize,
+        Msg::Resolve,
+        Msg::LivenessSettle,
+    ] {
+        for role in ROLES {
+            let mut s = Suite::new();
+            let (id, stored) = fixture(&mut s, GameState::InProgress);
+            let (execute, funds) = build(&s, msg, id, role, &stored);
+            let execute = retarget(execute, 404);
+            let who = addr(&s, role);
+            assert_eq!(
+                s.exec(&who, &execute, &funds).unwrap_err(),
+                ContractError::GameNotFound { chain_game_id: 404 },
+                "{msg:?} {role:?}"
+            );
+        }
+    }
+}
+
+fn retarget(msg: ExecuteMsg, to: u64) -> ExecuteMsg {
+    match msg {
+        ExecuteMsg::Join {
+            consent_pubkey,
+            join_ticket,
+            ..
+        } => ExecuteMsg::Join {
+            chain_game_id: to,
+            consent_pubkey,
+            join_ticket,
+        },
+        ExecuteMsg::Withdraw { .. } => ExecuteMsg::Withdraw { chain_game_id: to },
+        ExecuteMsg::Cancel { .. } => ExecuteMsg::Cancel { chain_game_id: to },
+        ExecuteMsg::SetConsentKey { new_pubkey, .. } => ExecuteMsg::SetConsentKey {
+            chain_game_id: to,
+            new_pubkey,
+        },
+        ExecuteMsg::Checkpoint {
+            payload, signature, ..
+        } => ExecuteMsg::Checkpoint {
+            chain_game_id: to,
+            payload,
+            signature,
+        },
+        ExecuteMsg::Settle {
+            payload,
+            signature,
+            consents,
+            ..
+        } => ExecuteMsg::Settle {
+            chain_game_id: to,
+            payload,
+            signature,
+            consents,
+        },
+        ExecuteMsg::Finalize { .. } => ExecuteMsg::Finalize { chain_game_id: to },
+        ExecuteMsg::Resolve { outcome, .. } => ExecuteMsg::Resolve {
+            chain_game_id: to,
+            outcome,
+        },
+        ExecuteMsg::LivenessSettle { .. } => ExecuteMsg::LivenessSettle { chain_game_id: to },
+        other => panic!("not retargeted: {other:?}"),
+    }
+}

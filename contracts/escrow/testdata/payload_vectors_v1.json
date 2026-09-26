@@ -1,0 +1,569 @@
+{
+ "format": "18JUNO/ESCROW2/payload-vectors/v1",
+ "spec": "ESCROW-1.5 section 6 as amended by SET-0A rev 2 section 21 (A1-A3); payload = 136 + 16*n bytes, all integers big-endian",
+ "generator": "contracts/escrow/testdata/gen_payload_vectors.py (independent Python: hashlib + python-ecdsa RFC 6979, low-s canonical); not the Rust encoder",
+ "keys": {
+  "note": "secret = SHA-256(label) as a big-endian scalar; test keys only",
+  "signer": {
+   "label": "18JUNO/TEST/signer/1",
+   "pubkey": "02c1c7c47cfadb0f2b7c8db3c40fbc2e22b228c7315bae4666bb829311a265ca1f"
+  },
+  "seats": [
+   {
+    "label": "18JUNO/TEST/seat/0",
+    "pubkey": "02f1dd30481fdaad6b26ab9be8fad88e55ca530516882e8e0095e9aa45e6cdf2d4"
+   },
+   {
+    "label": "18JUNO/TEST/seat/1",
+    "pubkey": "03346c3180a0b68922f81f0092a78e124c32bf5575860c1daec7de9d0b405c19fd"
+   },
+   {
+    "label": "18JUNO/TEST/seat/2",
+    "pubkey": "03ca95953413ad64aacbbea3fefac48769938460d27cf4970422883dfb0640a23d"
+   },
+   {
+    "label": "18JUNO/TEST/seat/3",
+    "pubkey": "02356133eb4caf2a10ee2087f82c9abf87b68bfb499fd8d5ce524b10edf1b09186"
+   },
+   {
+    "label": "18JUNO/TEST/seat/4",
+    "pubkey": "0228398782a8fd9ad0aaa5a5cabbcc9647cf977faf9300318faa153eaef8c03a70"
+   },
+   {
+    "label": "18JUNO/TEST/seat/5",
+    "pubkey": "03142db3114ff29db464b30c311d4468be22b002c3ed45c5799b6c5f0b6f24c27f"
+   },
+   {
+    "label": "18JUNO/TEST/seat/6",
+    "pubkey": "0237c4474d73e321605f6bcfadc0cd8b23609d62cdbbc7f90d1b5b2e901e0ef644"
+   }
+  ]
+ },
+ "roster_vectors": [
+  {
+   "name": "two-seat",
+   "wallets": [
+    "juno1h34lmpywh4upnjdg90cjf4j70aee6z8qqfspugamjp42e4q28kqsksmtyp",
+    "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh"
+   ],
+   "roster_hash": "244180e17a78479725b7104766d233f69dcd0aa1477b05ee471488381f8244af"
+  },
+  {
+   "name": "three-seat",
+   "wallets": [
+    "juno1h34lmpywh4upnjdg90cjf4j70aee6z8qqfspugamjp42e4q28kqsksmtyp",
+    "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+    "juno1sxmr0k8u6trd5c6eu6trzyapzux7090ykujmsng7pdx0m8k93n5srrjzje"
+   ],
+   "roster_hash": "5550acc1deeb47357c57cdc27a09229d997625d9a6e745646c019ea301be54c4"
+  },
+  {
+   "name": "seven-seat",
+   "wallets": [
+    "juno1yxqzpenrqn360xpeulrswp60lf6h70n9xl43ns7kwm2s54wkez0sl747zq",
+    "juno1z509dt8ka965wz66xu9paw7x77wy354xrea8zq5exceu5cqvl2ase9d808",
+    "juno1u5jw7vqvgdu476qsdsyu8mdq0au8zxtfmxqdsfwn5aqa93hep2mse3rl4u",
+    "juno1xvj02dscgmvnywggdtzlg2a2k7htmurguk930txp60mzr7tldsnq4waajj",
+    "juno1xykx2xxl2j7mu4q3dmz0n8wxhxsur49gsta0v8tmhtnak5k2jugsjsxxkv",
+    "juno1d0hveaq5fyscns4mppguejd24mf363dyp7zgtcg8gnmsvc9fyu3qvgk38r",
+    "juno1kfnw7e27pzuqxa9zzk6w6hq64tafrgr5kassrw8qc6fkkk5pmzlqqkq8x9"
+   ],
+   "roster_hash": "caf34c0aa0e970e9d0574a22eeb8c8fe975001f27045f3903ff583635616ff70"
+  }
+ ],
+ "domain_vectors": [
+  {
+   "name": "mainnet-two-seat-live",
+   "chain_id": "juno-1",
+   "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+   "chain_game_id": 1,
+   "roster": "two-seat",
+   "roster_hash": "244180e17a78479725b7104766d233f69dcd0aa1477b05ee471488381f8244af",
+   "rules_engine_version": 10,
+   "variants_digest": "eee48d67d5c299ac1290a92c2cace45e0dce9a91d48dae5b751b9860c7f8b3fc",
+   "ante_gross": "2000000",
+   "mode": 0,
+   "domain": "8e6b9e84b402e19d8c735271655044a8a6efa8594e3762f5ad8935d2003aed56"
+  },
+  {
+   "name": "testnet-two-seat-live",
+   "chain_id": "uni-7",
+   "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+   "chain_game_id": 1,
+   "roster": "two-seat",
+   "roster_hash": "244180e17a78479725b7104766d233f69dcd0aa1477b05ee471488381f8244af",
+   "rules_engine_version": 10,
+   "variants_digest": "eee48d67d5c299ac1290a92c2cace45e0dce9a91d48dae5b751b9860c7f8b3fc",
+   "ante_gross": "2000000",
+   "mode": 0,
+   "domain": "299c95b54064eeb93dc2216568c8480bd1f4e21359252214cedfbfb747f7f5ca"
+  },
+  {
+   "name": "mainnet-three-seat-async",
+   "chain_id": "juno-1",
+   "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+   "chain_game_id": 7,
+   "roster": "three-seat",
+   "roster_hash": "5550acc1deeb47357c57cdc27a09229d997625d9a6e745646c019ea301be54c4",
+   "rules_engine_version": 10,
+   "variants_digest": "eee48d67d5c299ac1290a92c2cace45e0dce9a91d48dae5b751b9860c7f8b3fc",
+   "ante_gross": "5000000",
+   "mode": 1,
+   "domain": "c43e95cf543dd37fead286369e390e7160a4505dec70582ba5e43ddcd828441b"
+  },
+  {
+   "name": "mainnet-seven-seat-live",
+   "chain_id": "juno-1",
+   "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+   "chain_game_id": 42,
+   "roster": "seven-seat",
+   "roster_hash": "caf34c0aa0e970e9d0574a22eeb8c8fe975001f27045f3903ff583635616ff70",
+   "rules_engine_version": 10,
+   "variants_digest": "eee48d67d5c299ac1290a92c2cace45e0dce9a91d48dae5b751b9860c7f8b3fc",
+   "ante_gross": "2000000",
+   "mode": 0,
+   "domain": "f951022d90efe140f22ded526579aa528789959a8aa78fabb9ca335e52484320"
+  },
+  {
+   "name": "mainnet-two-seat-live-game-2",
+   "chain_id": "juno-1",
+   "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+   "chain_game_id": 2,
+   "roster": "two-seat",
+   "roster_hash": "244180e17a78479725b7104766d233f69dcd0aa1477b05ee471488381f8244af",
+   "rules_engine_version": 10,
+   "variants_digest": "eee48d67d5c299ac1290a92c2cace45e0dce9a91d48dae5b751b9860c7f8b3fc",
+   "ante_gross": "2000000",
+   "mode": 0,
+   "domain": "69a5ce587e5d3f28971036b9bc67237d995194bfc5165396ce5210ec6ec6cf98"
+  }
+ ],
+ "payload_vectors": [
+  {
+   "name": "two-seat-checkpoint",
+   "description": "Checkpoint, 2 seats",
+   "payload": {
+    "version": 1,
+    "domain": "8e6b9e84b402e19d8c735271655044a8a6efa8594e3762f5ad8935d2003aed56",
+    "seq": "240",
+    "kind": 0,
+    "reason": 0,
+    "log_len": "120",
+    "log_hash": "29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c3599",
+    "appraisal_log_len": "120",
+    "appraisal_state_hash": "ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5",
+    "state_schema_version": 1,
+    "seat_count": 2,
+    "settlement_weights": [
+     "1205",
+     "1230"
+    ],
+    "signer_key_id": 1,
+    "issued_at": "1758844800"
+   },
+   "encoded_len": 168,
+   "encoded": "018e6b9e84b402e19d8c735271655044a8a6efa8594e3762f5ad8935d2003aed5600000000000000f00000000000000000007829897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c35990000000000000078ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5000102000000000000000000000000000004b5000000000000000000000000000004ce00010000000068d5d780",
+   "settle_digest": "0983faa7b45f386bc85d5f3247da66225187e18d7921bf830533b17de58525d6",
+   "signer_signature": "56662e41435a2179ec5637c7e7c8ef4326a9f0c5b8a6bb9cd2c9bca7528bcce26b217b745b72ece425b9750f217b43f3d3861c12a306c85f698dc7e9da9937bf",
+   "consent_digest": "726f9e86c28e55295061b09d12a734fd6a0fab6b559f0693da324c61c28278a3",
+   "consent_signatures": [
+    "aa1d399aacf82784760922b8b7af16843c18324328521afba2651c0d64bf76af54343a6ce42044a16f4be3c62418f45defae041d43e8ba3f745c8902d724a222",
+    "c7e854fd6d381a8da3938073c831f724609fed3a4bc53419a6af27270193edd1609ac1d18a15931d36ec1c81a668882d3c9c6180de758e29ebdb5e9d0154911d"
+   ]
+  },
+  {
+   "name": "two-seat-terminal-bankbroken",
+   "description": "Terminal BankBroken, 2 seats (SYN-13 weights)",
+   "payload": {
+    "version": 1,
+    "domain": "8e6b9e84b402e19d8c735271655044a8a6efa8594e3762f5ad8935d2003aed56",
+    "seq": "755",
+    "kind": 1,
+    "reason": 1,
+    "log_len": "377",
+    "log_hash": "29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c3599",
+    "appraisal_log_len": "377",
+    "appraisal_state_hash": "ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5",
+    "state_schema_version": 1,
+    "seat_count": 2,
+    "settlement_weights": [
+     "1791",
+     "1858"
+    ],
+    "signer_key_id": 1,
+    "issued_at": "1758844800"
+   },
+   "encoded_len": 168,
+   "encoded": "018e6b9e84b402e19d8c735271655044a8a6efa8594e3762f5ad8935d2003aed5600000000000002f30101000000000000017929897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c35990000000000000179ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5000102000000000000000000000000000006ff0000000000000000000000000000074200010000000068d5d780",
+   "settle_digest": "575484f71ec9a451306ce961b151aea193a57d1bdc3d8118efeb8298e64c2d1e",
+   "signer_signature": "955ec1ae961becd003d7eae481128458cea134a58fee8c702ba079c94a890bcb2c65cd215506a94a15189262583669baab228a8d765a4ca1b50c372c88e8cbb0",
+   "consent_digest": "f938da8091fddd317059c7ffc7418c76e65044c55ebdb991c1c57e7ae227c196",
+   "consent_signatures": [
+    "c88b985ea7d8f12196be5db2f98e4144b722803a881054d15d1368c934de041a529bf3b06f34e27e641e2d219b81edb60916f2bcaad0cf2184c40175606801aa",
+    "665bad6f134c527f4ad862ffc8ebff122fee9198450e3f3e2815dcb002f0163e336861551501aa18d50d173ba9cb7c1e73da8c44cbc734836e772027a9ebc60d"
+   ]
+  },
+  {
+   "name": "three-seat-terminal-bankruptcy",
+   "description": "Terminal Bankruptcy, 3 seats (SYN-04 weights)",
+   "payload": {
+    "version": 1,
+    "domain": "c43e95cf543dd37fead286369e390e7160a4505dec70582ba5e43ddcd828441b",
+    "seq": "1801",
+    "kind": 1,
+    "reason": 2,
+    "log_len": "900",
+    "log_hash": "29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c3599",
+    "appraisal_log_len": "900",
+    "appraisal_state_hash": "ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5",
+    "state_schema_version": 1,
+    "seat_count": 3,
+    "settlement_weights": [
+     "2018",
+     "1578",
+     "2409"
+    ],
+    "signer_key_id": 1,
+    "issued_at": "1758844800"
+   },
+   "encoded_len": 184,
+   "encoded": "01c43e95cf543dd37fead286369e390e7160a4505dec70582ba5e43ddcd828441b00000000000007090102000000000000038429897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c35990000000000000384ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5000103000000000000000000000000000007e20000000000000000000000000000062a0000000000000000000000000000096900010000000068d5d780",
+   "settle_digest": "386b79c3c25ffee98bf73170be2d3602cdb78920f2223af37a2016c7d3eb59ca",
+   "signer_signature": "c65f247846136025bebfe2fa2ea68d7f82f23dd21ec1ceaacd80ba6490e7e9812b9ada0993d0cb7904177fa799d1e4958c7cc428b8bc2b8a790ad3f52ac751c6",
+   "consent_digest": "eca0d946f0d84ded4cb896dfceb0104d8154cd6698f73d5e4d84692e2eb5af13",
+   "consent_signatures": [
+    "0ecdeab32f17b42c222e8c64ff2b8d147da7705772a519193eda78f53bea21f0665848d5239ab7907a1bb0dc9d0cee3bb77adfe38e79a773840bcad7b13faba1",
+    "fd3c4f5f2064b2053e187a7c8ecf1548c9a7aa103c72290150b331081c25424909699c3580f926bcffc34460ee57979dff1ea1ed072c1ff55e3ce03563868059",
+    "cd1a012608cc55fd5249396c06a5d706decfe0384a3c95f5545872eb3e9327d0443f2dc7ca9916a330f945fc98a323e1c50698d24a0b586c6fab8b5836a27fe4"
+   ]
+  },
+  {
+   "name": "three-seat-resolver-correction",
+   "description": "Terminal ResolverCorrection (reason 5), 3 seats",
+   "payload": {
+    "version": 1,
+    "domain": "c43e95cf543dd37fead286369e390e7160a4505dec70582ba5e43ddcd828441b",
+    "seq": "1803",
+    "kind": 1,
+    "reason": 5,
+    "log_len": "901",
+    "log_hash": "29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c3599",
+    "appraisal_log_len": "901",
+    "appraisal_state_hash": "ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5",
+    "state_schema_version": 1,
+    "seat_count": 3,
+    "settlement_weights": [
+     "2018",
+     "1600",
+     "2409"
+    ],
+    "signer_key_id": 1,
+    "issued_at": "1758844800"
+   },
+   "encoded_len": 184,
+   "encoded": "01c43e95cf543dd37fead286369e390e7160a4505dec70582ba5e43ddcd828441b000000000000070b0105000000000000038529897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c35990000000000000385ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5000103000000000000000000000000000007e2000000000000000000000000000006400000000000000000000000000000096900010000000068d5d780",
+   "settle_digest": "d09f91e55db765fec1815a59a0f16fa94bc5b1f2d71caa701f0e4ea50bd5bdc4",
+   "signer_signature": "38ced7e37309014b1a4ca9ac20eae8f169a0024138929536bea81c0ef5b3835335648ca3e33a29a20e9e5978ce4c1489a4cd0e637c2c08d3e30750cf7267b618",
+   "consent_digest": "26c2f46e5a7bc337cf2c2b12f98e1784fe196c1a5b600c5f1f6bddb0228ef030",
+   "consent_signatures": [
+    "2a54d14d4114c1903283bce344deebe52aa32f0be4c393703ffd563b35afd56108db5ea96a5d369facd34baf591453c59c3e5682d8f2f36b5150eeff595ae391",
+    "b6f1aa6cddd856cef5b18df31cec634676c58767510d7867199f8c9a0993e06d0d31a81d0c40af56cbe424460081642be1698e7205a0327179551241d9f88915",
+    "b7fc22b58b87479c130d590c41c0e3fc47e8da7f8784ca13fd2659f0bcb10966454cb4eeffca4a25635925eca3e2f5e7be4623b09d277b0341919d4814e5de0d"
+   ]
+  },
+  {
+   "name": "three-seat-forfeit-earlier-appraisal",
+   "description": "Terminal Forfeit, appraisal_log_len < log_len (P8 weights)",
+   "payload": {
+    "version": 1,
+    "domain": "c43e95cf543dd37fead286369e390e7160a4505dec70582ba5e43ddcd828441b",
+    "seq": "1901",
+    "kind": 1,
+    "reason": 3,
+    "log_len": "950",
+    "log_hash": "29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c3599",
+    "appraisal_log_len": "880",
+    "appraisal_state_hash": "ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5",
+    "state_schema_version": 1,
+    "seat_count": 3,
+    "settlement_weights": [
+     "0",
+     "1000",
+     "500"
+    ],
+    "signer_key_id": 1,
+    "issued_at": "1758844800"
+   },
+   "encoded_len": 184,
+   "encoded": "01c43e95cf543dd37fead286369e390e7160a4505dec70582ba5e43ddcd828441b000000000000076d010300000000000003b629897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c35990000000000000370ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb500010300000000000000000000000000000000000000000000000000000000000003e8000000000000000000000000000001f400010000000068d5d780",
+   "settle_digest": "7684d0e01d0cb21752458f9c6febcd4efb7a6cefda77e2769c675686d7aa36f0",
+   "signer_signature": "dfe02e7d9e49d9f271282346e2981e4c2869a62766809490b1fa3bb38c369ed802060de09f1d5607b1341081823d4f9e976a82cfe5c40f853f1cf0d3aee363b9",
+   "consent_digest": "fbf1c3fdf6b1ff4373e9abf7153c97e0f144bb292657d2f62d2a3892397bedac",
+   "consent_signatures": [
+    "a1a904c5a933af86f3cedb2fa4e3006cff4becafdb9b5088eb62173b1c3aeab6783edd30882cd0e0481f032a15b69a7113c7e0f0b4294b4c44015ee848dccbd4",
+    "f8502a4fdd8b6496c1d482f03c2c490bfb2219865e768c6657c070c8305399346bcd8b61f6e1170892552971414f2088d07beeb78cd65652e2e1c50a0be78be8",
+    "a656f145e071da5fc5bacc0c2c8db37ea0705e4571dcc74d61e89753140c11b7041819f9e7f9e171225aa292a42ccf5e5d6cc3c8d56e01f682994717399868a1"
+   ]
+  },
+  {
+   "name": "three-seat-clemency-earlier-appraisal",
+   "description": "Terminal Clemency, appraisal_log_len < log_len (P9 weights)",
+   "payload": {
+    "version": 1,
+    "domain": "c43e95cf543dd37fead286369e390e7160a4505dec70582ba5e43ddcd828441b",
+    "seq": "1901",
+    "kind": 1,
+    "reason": 4,
+    "log_len": "950",
+    "log_hash": "29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c3599",
+    "appraisal_log_len": "880",
+    "appraisal_state_hash": "ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5",
+    "state_schema_version": 1,
+    "seat_count": 3,
+    "settlement_weights": [
+     "2925000000",
+     "3900000000",
+     "1950000000"
+    ],
+    "signer_key_id": 1,
+    "issued_at": "1758844800"
+   },
+   "encoded_len": 184,
+   "encoded": "01c43e95cf543dd37fead286369e390e7160a4505dec70582ba5e43ddcd828441b000000000000076d010400000000000003b629897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c35990000000000000370ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5000103000000000000000000000000ae57f540000000000000000000000000e8754700000000000000000000000000743aa38000010000000068d5d780",
+   "settle_digest": "55f292d6d6fcd07250dc42ca374116fb26410498414007992ad39e8109bf4288",
+   "signer_signature": "58a39639512e69788b544f6d300eaa3a8cf7996a315c1ebbe74a89ac11b5db5950ac173f606b23f81afc87d4ab2adf887e5835b8ded4707c8adf75d2e2ac09c4",
+   "consent_digest": "8f8ea0d1c1d0cb780a586633583ea2654d5275f69e1a8b7bddb608f2b9edce5e",
+   "consent_signatures": [
+    "1a4087a98f25ff3292f60b067a3ce18a72515515dc488429ca16e9aa3582f5761f0ee2fa57c8b06591b23902a1f6c8d269e619eb286d270a9ce760ba0eb5b91c",
+    "d073e7a4b63c7aa637d41dc2b570a036e94505266f1ee640c7fc7386cf72f86a53ac662a6e8154d031ee376876757227c4efa80e7b1f40b8ed89e60ff23958c0",
+    "1a2c08a6f901836063b92be3cee3476b4c8db87bb0f960ad26f0de12744e39a55ea805d92aaba616b668190ebcb4f6d7233d9fbc3cd261dabc8e7adec38398a0"
+   ]
+  },
+  {
+   "name": "seven-seat-checkpoint",
+   "description": "Checkpoint, 7 seats (SYN-12 weights)",
+   "payload": {
+    "version": 1,
+    "domain": "f951022d90efe140f22ded526579aa528789959a8aa78fabb9ca335e52484320",
+    "seq": "3000",
+    "kind": 0,
+    "reason": 0,
+    "log_len": "1500",
+    "log_hash": "29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c3599",
+    "appraisal_log_len": "1500",
+    "appraisal_state_hash": "ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5",
+    "state_schema_version": 1,
+    "seat_count": 7,
+    "settlement_weights": [
+     "0",
+     "360",
+     "360",
+     "2409",
+     "2018",
+     "2448",
+     "5"
+    ],
+    "signer_key_id": 1,
+    "issued_at": "1758844800"
+   },
+   "encoded_len": 248,
+   "encoded": "01f951022d90efe140f22ded526579aa528789959a8aa78fabb9ca335e524843200000000000000bb8000000000000000005dc29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c359900000000000005dcccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb500010700000000000000000000000000000000000000000000000000000000000001680000000000000000000000000000016800000000000000000000000000000969000000000000000000000000000007e2000000000000000000000000000009900000000000000000000000000000000500010000000068d5d780",
+   "settle_digest": "c762ea9c55a289994499ef043972e9aa3500cd336bb7ddca92d7a6f7098925b1",
+   "signer_signature": "fe628b3452aac582b48a6309d1f02f001d5966ca1634ad7324049fbf057b2453294c287e462779dfdb13581a62dd78ba1c49adcba0aac056d6b2c9512557b8c1",
+   "consent_digest": "d662de12b1485b5d5a21821ed53ce49074690590f4bc4bcbd26cae5c5d2f50e1",
+   "consent_signatures": [
+    "8d7fe772ae6bd38ffcd2cdc4e82bb3f834263503cfa6fde84a12f85713a66b4515e7f8604d1126b8285847378840c0f9019b2ab25edc2d58aac7ce2c3f8c51c5",
+    "9d46a981a1cce20884896e9479c65172008e3ed5e16b015e28a93d357f49377045945e284342190461559bc54b7fce405d605a287c60410d6c82af50a844cc5a",
+    "941e73bf0a97640cd728349d5cfd81de7b16859a00e7687c3737568a9af6eab47d8fe9a36a248e3af227bee53f388731928f4e0424d4f3e2fc689b6cbefdfe23",
+    "fba8757c0e8eda2e05c04a98ca0b7fbfff491b62012ab509d85d81d6736cb2e84d6bdaf261798362523d42ff1724b34933827624c37b035fb686259e88226f30",
+    "895a8e26beafe824450a509bed7dcc3fd4ddeaadfb32cdcdba93ebf2fb9f9cd33eaf16e846865d801350863a72fa168718d2b7ed778958f5bd7aead41cdccac7",
+    "d30f36a43f04f0dd2c59115211e80ce4ac94aebff5fc0c8010aa9f6762fcabc2639af9b393b19c80903580af161166f3f8624f3896e4ffece2ce541f9799ad59",
+    "665797a286a18a0e1fca958587fe2f0d4bae445aca2b929c93540d109ba22d99752fb50ecc2e6166d6fa2afd00e789735c45d28b4ee86c9a533bd95e34736853"
+   ]
+  },
+  {
+   "name": "seven-seat-terminal-bankbroken",
+   "description": "Terminal BankBroken, 7 seats (SYN-12 weights)",
+   "payload": {
+    "version": 1,
+    "domain": "f951022d90efe140f22ded526579aa528789959a8aa78fabb9ca335e52484320",
+    "seq": "3025",
+    "kind": 1,
+    "reason": 1,
+    "log_len": "1512",
+    "log_hash": "29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c3599",
+    "appraisal_log_len": "1512",
+    "appraisal_state_hash": "ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5",
+    "state_schema_version": 1,
+    "seat_count": 7,
+    "settlement_weights": [
+     "0",
+     "360",
+     "360",
+     "2409",
+     "2018",
+     "2448",
+     "5"
+    ],
+    "signer_key_id": 1,
+    "issued_at": "1758844800"
+   },
+   "encoded_len": 248,
+   "encoded": "01f951022d90efe140f22ded526579aa528789959a8aa78fabb9ca335e524843200000000000000bd1010100000000000005e829897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c359900000000000005e8ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb500010700000000000000000000000000000000000000000000000000000000000001680000000000000000000000000000016800000000000000000000000000000969000000000000000000000000000007e2000000000000000000000000000009900000000000000000000000000000000500010000000068d5d780",
+   "settle_digest": "da758b3b7a0c6f55949f47059cbe19c3a4d064c551b9b818414954b5c9f2e7ed",
+   "signer_signature": "311707837ccc3bd2fb12c4f22f372898f5438682de6741a0d208c70d6e4a713c672b9d07538d05ca8d0b9c0449c61fe5fd9eaae91348670990454963c7d056fe",
+   "consent_digest": "06180c8ede34a7c3f62dbce16d1148e7b9afbec900412ed7a1e7031a50b24c88",
+   "consent_signatures": [
+    "df3c739f5420c8d8759975d547ba554308935678743b7aac548a7a4100f30a6f0dc08e7bf329ddad32671c6b7a90a33dc92deef8069214d0a48afa821c7702e2",
+    "ad0e4aa11678d4aecf7e2828a1e5ca1c157b0b609a8888b2126dad494d69054b12dd6e8b69604950107adaa1113200c5a5a93cc95c141b925b99e107c296dc5b",
+    "fcd42f0e23bec6aa6983d0c8e50aa6819372808d1f94b57f39b7fa261696928a3d4210a2b0d003d0db9cc42325c4fa9c0c7dc36f14aa9364c749cc3cedc55355",
+    "f2884b62e03f5bed9eb0a82ab3da73dbb5c0a0cf495e083c62a75ad11f8c1915687e54c17346f297419478491b7e51af32739419890851effdf266144383e320",
+    "e9ada6a81e4e92022d2e851308001ef1ab2b490971ed4df63b1b28cdfdfa7daf02ccc8a80c0d46650758d60f4fbb9aa90a98a203429da51b352c7296d0450f0d",
+    "d1bd754053c7716431a4d68585535e944cc806851f93ecbf428c0cfeec591fee4b8d8fa2dde8fc1f766683fb37bcdcff0fdf61dca68bb49b17475f9ea15d5e40",
+    "dac84eb8bdfd4adf3949fb9ed7bf36a08bc7d0dc3672dcee8846de57a3dd4dfc19ecb607409eaf6a80bc899948ce94ab8722ea30a41fbd6094ca494df5b6b5e0"
+   ]
+  },
+  {
+   "name": "two-seat-max-u128-weights",
+   "description": "Terminal BankBroken, both weights u128::MAX (P11)",
+   "payload": {
+    "version": 1,
+    "domain": "8e6b9e84b402e19d8c735271655044a8a6efa8594e3762f5ad8935d2003aed56",
+    "seq": "801",
+    "kind": 1,
+    "reason": 1,
+    "log_len": "400",
+    "log_hash": "29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c3599",
+    "appraisal_log_len": "400",
+    "appraisal_state_hash": "ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5",
+    "state_schema_version": 1,
+    "seat_count": 2,
+    "settlement_weights": [
+     "340282366920938463463374607431768211455",
+     "340282366920938463463374607431768211455"
+    ],
+    "signer_key_id": 1,
+    "issued_at": "1758844800"
+   },
+   "encoded_len": 168,
+   "encoded": "018e6b9e84b402e19d8c735271655044a8a6efa8594e3762f5ad8935d2003aed5600000000000003210101000000000000019029897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c35990000000000000190ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5000102ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff00010000000068d5d780",
+   "settle_digest": "c38333606b7e087c6d10f740edd6a1a389a93cc806902940d34e44f8e4089d97",
+   "signer_signature": "2e874eec89a3076038453bb6ebf43477841db5e4ceaf4bbdeb9ab0c437118b357f4cadfb46ba841f1d3379e599f51009596d378d0afb495a43c5e6d776690afd",
+   "consent_digest": "3278c633d9bb666e1708be3f2de62d9cba11b9581dc52924b75fe5678a9c496a",
+   "consent_signatures": [
+    "d7af29d5538b419ae4f9ccbfc31d76390b3f185e8ec44e5ceb816e2dc8985e201d1ec40435b6c269e0d570b74a8deee529a4045cae4e658698652f00ec25b192",
+    "8b1d54c05dd046a2ef151cebaa0f438c01b05466e6a63a4b49be1f511ea642f26da8f52b20040abde13678058d65a50fe53fca2500f524eb47832b5d5e2622c3"
+   ]
+  },
+  {
+   "name": "seven-seat-max-u128-weights",
+   "description": "Terminal BankBroken, six u128::MAX weights and 1 (P13)",
+   "payload": {
+    "version": 1,
+    "domain": "f951022d90efe140f22ded526579aa528789959a8aa78fabb9ca335e52484320",
+    "seq": "3201",
+    "kind": 1,
+    "reason": 1,
+    "log_len": "1600",
+    "log_hash": "29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c3599",
+    "appraisal_log_len": "1600",
+    "appraisal_state_hash": "ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5",
+    "state_schema_version": 1,
+    "seat_count": 7,
+    "settlement_weights": [
+     "340282366920938463463374607431768211455",
+     "340282366920938463463374607431768211455",
+     "340282366920938463463374607431768211455",
+     "340282366920938463463374607431768211455",
+     "340282366920938463463374607431768211455",
+     "340282366920938463463374607431768211455",
+     "1"
+    ],
+    "signer_key_id": 1,
+    "issued_at": "1758844800"
+   },
+   "encoded_len": 248,
+   "encoded": "01f951022d90efe140f22ded526579aa528789959a8aa78fabb9ca335e524843200000000000000c810101000000000000064029897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c35990000000000000640ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5000107ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff0000000000000000000000000000000100010000000068d5d780",
+   "settle_digest": "8fdbcd430093fa68bca89e2573490bfee13ff0f57c65a5960a88fcd07e585495",
+   "signer_signature": "8a565e814119dd2b28278385e764647cb7f2ef0e62e5199a9c0ffb3273a94ca96e4fb2948a13d8a7772c76deed60b74c32cde2ca1c8a01471d5364056be80f70",
+   "consent_digest": "55d4e1cad7958046f13287269532b24c5a4e8a3740aa6829ef60d2b7ac278998",
+   "consent_signatures": [
+    "2637cd738b9382b7578fec6073849d916c5b045d871d1411bbe396c609b32ac56e118edc9ae4f5bc3aef8c2e8e7e9e715f49ebaa4dc0910f0f1245269b125fa9",
+    "1d644be46b3a6e719c06425f9ac58afe9cf5b5757e036ab354976c3874a856794d590e998d7cd3372b08369dc66d4209cec0ea2f1b9ace58a6b204b1eb4bec2b",
+    "b353a933b6b37a152320eec08c1f9e79dace39a26cddeabfe222a865f57605156148119130033d39c6275a4c281fd4efa47f7ddbbef0ecd6451aa56127201e72",
+    "bb576f5460ca56c5dc9547e8b53b9cd72836bb7894e8bc5c0f086dbc9dfe8e9141ae595af50bf72e2e139f1a3f3ba3cc55436b0be602051dbcd94fc7cce62b3f",
+    "c8798fae9b1c6ee75340bf94be85934beb867a16647425d60689addb6de7b1ee709cdac7ca7ff26bb2da1ca09ec07bba82fc106a6a926cb59a7bf9338391f3ee",
+    "d0399b0bb06eeff69e297e7040deac11842c04b95b29e150fb9639dda6aad8c00ec184b949217f121ebac4f00b7d7dcbc3e943331450ab7c23e94b720f65468c",
+    "bb571619f25506405f247163228887de27dfb525fc07cb297ad0cc29cc7fad402698d9c9de1c03af0585e1b37bb9a58822e9d32f76d2e88a7209aeec64da774b"
+   ]
+  },
+  {
+   "name": "two-seat-byte-order-sentinel",
+   "description": "every integer field has distinct bytes, to catch byte-order bugs",
+   "payload": {
+    "version": 1,
+    "domain": "8e6b9e84b402e19d8c735271655044a8a6efa8594e3762f5ad8935d2003aed56",
+    "seq": "145247719580765713",
+    "kind": 1,
+    "reason": 1,
+    "log_len": "72623859790382856",
+    "log_hash": "29897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c3599",
+    "appraisal_log_len": "72623859790382856",
+    "appraisal_state_hash": "ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb5",
+    "state_schema_version": 8482,
+    "seat_count": 2,
+    "settlement_weights": [
+     "1339673755198158349044581307228491536",
+     "22690724228668807036942595891182575392"
+    ],
+    "signer_key_id": 12594,
+    "issued_at": "4702394921427289928"
+   },
+   "encoded_len": 168,
+   "encoded": "018e6b9e84b402e19d8c735271655044a8a6efa8594e3762f5ad8935d2003aed56020406080a0c0e110101010203040506070829897fc80df21427a94a5892baed2ade307a01f41110a8c40ba3cfa3ad0c35990102030405060708ccd6cd9e92a36657f862ad31e286c0c4488797e43179a49763f3d52eade3acb52122020102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2031324142434445464748",
+   "settle_digest": "43d36629eb5ff4f070e87406dfbccd83ed94c5ed78eb04a22daca6ce78c76c0c",
+   "signer_signature": "bec1111b10d2009cded01f7ba5c016998af1f66ef18b1cad62380a73ed78a085260c295ad3e20c880e74c7d67b85f6decf7e020ed14568c8c80e205c9118a3f3",
+   "consent_digest": "8ed1f2450f7e9125930d0057c931710265811209267b880418f1d667c14b8a51",
+   "consent_signatures": [
+    "2056da08e2abc85916786bafc29534f4307bb5aad324995db53f28393a3e88ca0336444e25cfe8a772c9a7887732497394b0034d96aba759f0fd7d55c88a2af6",
+    "589a3b3c8525ffe78be88117624463f897107b7f97c8dab3e8d99cdaf6754fb62f272dcd4e806f2c33e37a202ee600cc9687633627f1ca2a556287d1769e1716"
+   ]
+  }
+ ],
+ "annul_vectors": [
+  {
+   "domain_vector": "mainnet-three-seat-async",
+   "last_seq": "0",
+   "annul_digest": "48cf269ffb32f9127a1f3464cfdf65b078ef2780cf058d7e2c869e87fdb8f12c",
+   "seat_signatures": [
+    "da548d3be66d6e19eccee36af4411d4a5f9717942ace96a9cfea84bf51256d3e0285a9c7a6f45732e7d3f89351894a7992a73153b03819b793351d243c4ff235",
+    "1790bd4365e6b5f4acbc89f11b73ec080ac982a1e7a38b325e7f7c0005c67abb26afee51fce66a8240c17c02f3cb6b9814247846d49d2bba05f339194b91b5df",
+    "029e7fcb92d53f904da7b3138aeabf8fb6be3091db0b3c5a154930e2841a6198186a5147ebb5dcec4e8ad9e169ff7f47d2b1d63c48ff74d5bab552b9326fb28d"
+   ]
+  },
+  {
+   "domain_vector": "mainnet-three-seat-async",
+   "last_seq": "1801",
+   "annul_digest": "4a4836feef96f9807b9f06048d75ad6a6816f1a565661043aff0d6e4a6766e50",
+   "seat_signatures": [
+    "4740c90991a789387cf7360045d6a9e550d910ba3ac0ce87df66c1c061a8c71f28a5bf38130da1094ffa5e723c47ff370c5eac498eebc9067a6b96ea9f3766d6",
+    "a6b07904fe721ce24a167648bb1e79669706f78ba9971faee1b089003587a9294741705f0ab8efa869f9c236dcb7f65e8f15763efc7a174a062bfeb90b370d47",
+    "34b8cd0367afd5c55a0f4ba2470fa76872dacfacff2a3e8e148e4a9483892f2a1124c43e4eb4099814b29c29525a03138f3c5aa7c9ef17246703f06c9af86150"
+   ]
+  },
+  {
+   "domain_vector": "mainnet-seven-seat-live",
+   "last_seq": "3000",
+   "annul_digest": "1bee6d5c524bab7451f01f696354c5a1fcf7ae4d35b3767359c98ee2b17df5f3",
+   "seat_signatures": [
+    "559472b68c6d20b138b650ad743765baf9be7fdf5f3db1b4e480145aa5d2f1626c405b1293208e6e5b8f8c371751ec0574a9ac61407557d2fa1f52d1899cd63a",
+    "ff79c9052365739a7cdb9c394a8ff00fbd2c9a7403ea0d6ad674cfc56caaeb5e4966f9a3dc80b9337691a39874c8a6312869d939b568c8b0c12a8159aeef1ebb",
+    "ad9f7d4ad2a493390f965eddd212763ee3565d48a1db624f41433a7a67df3049774f0c58b8c8c6f3e5d26f93e056c764d38b9657a2297605534424c1c8a0c684",
+    "ea44198961fed89bc6f013bdf393de49297444c7eddefb40b972466fd7aea9472c8a02b1745ed3832804d0441d0cbd2c4d710e5c9ac50f3ef826b16fe6532f50",
+    "2f87bb9c3f076aa6d7111e84a2ecda1e4b4c9eca1a31a1f20a14ad04bbf7281158f7b4ab2250712e1484ceb1fc0529cade59231b57c5a44ccbfa15b45fb17fee",
+    "4793acef686449941d6ed8b5cffadc493d51b244f4561fbc1a33354bde51e7526c652411f1e718cc033ce78b23697a16aab224c83e110973d04fa62fad6550d1",
+    "3a84758f7ac35dbfe373628a08a80ee2c0483c3df4ed009e2671a48ba791893f387b4d9266a05dc1f10641c22a2a5fb7d7619d54a7fb58aac796051b315b4435"
+   ]
+  }
+ ]
+}

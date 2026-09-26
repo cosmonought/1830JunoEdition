@@ -1,0 +1,41 @@
+[package]
+name = "eighteen-cosmos-escrow"
+version = "1.0.0"
+edition = "2021"
+description = "18Cosmos settlement escrow: vault, roster, signature verifier and proportional payout calculator (ESCROW-2). Not a rules engine."
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "schema"
+path = "src/bin/schema.rs"
+
+[features]
+# Compile the crate as a library only (no entry points), e.g. to embed its types
+# in another contract or tool.
+library = []
+
+[dependencies]
+# Same CosmWasm 1.5 line as the legacy crate; the shared Cargo.lock resolves
+# cosmwasm-std 1.5.11, whose Uint256 provides the checked wide arithmetic the
+# payout formula needs (SET-0A rev 2 A2).
+cosmwasm-std = "1.5.0"
+cosmwasm-schema = "1.5.0"
+cw-storage-plus = "1.1.0"
+cw2 = "1.1.0"
+schemars = "0.8.15"
+serde = { version = "1.0.188", default-features = false, features = ["derive"] }
+sha2 = { version = "0.10", default-features = false }
+thiserror = "1.0.49"
+
+[dev-dependencies]
+# cw-multi-test 0.20 is the last line that supports cosmwasm-std 1.5 (see the
+# root Cargo.toml note). k256 is only used by tests, to produce deterministic
+# RFC 6979 secp256k1 signatures; it is the same version and feature set that
+# cosmwasm-crypto already pulls in. serde_json reads the SET-0A golden file.
+anyhow = "1"
+cw-multi-test = "0.20"
+k256 = { version = "0.13", features = ["ecdsa"] }
+serde_json = "1.0"

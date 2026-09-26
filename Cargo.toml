@@ -23,3 +23,16 @@ cw-multi-test = "0.20"
 [features]
 # for more explicit smart contract library compilation
 library = []
+
+# ESCROW-2: the settlement escrow contract is a separate crate in this workspace.
+# The root package stays the default member, so a bare `cargo build` / `cargo test`
+# here still builds and tests only the legacy crate; use `-p eighteen-cosmos-escrow`
+# for the escrow contract. The two crates share this Cargo.lock.
+[workspace]
+members = ["contracts/escrow"]
+
+# Release builds of the escrow contract panic (and so revert the transaction) on
+# integer overflow instead of wrapping. Scoped to that package only: the legacy
+# crate's release profile is unchanged.
+[profile.release.package.eighteen-cosmos-escrow]
+overflow-checks = true

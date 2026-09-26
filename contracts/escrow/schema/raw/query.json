@@ -1,0 +1,199 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "QueryMsg",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": [
+        "config"
+      ],
+      "properties": {
+        "config": {
+          "type": "object",
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "game"
+      ],
+      "properties": {
+        "game": {
+          "type": "object",
+          "required": [
+            "chain_game_id"
+          ],
+          "properties": {
+            "chain_game_id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "games"
+      ],
+      "properties": {
+        "games": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "start_after": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "The roster in `chain_seat_index` order.",
+      "type": "object",
+      "required": [
+        "seats"
+      ],
+      "properties": {
+        "seats": {
+          "type": "object",
+          "required": [
+            "chain_game_id"
+          ],
+          "properties": {
+            "chain_game_id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "The latest checkpoint per signer key, newest first, and which one `LivenessSettle` would use now.",
+      "type": "object",
+      "required": [
+        "checkpoints"
+      ],
+      "properties": {
+        "checkpoints": {
+          "type": "object",
+          "required": [
+            "chain_game_id"
+          ],
+          "properties": {
+            "chain_game_id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "signer_key"
+      ],
+      "properties": {
+        "signer_key": {
+          "type": "object",
+          "required": [
+            "key_id"
+          ],
+          "properties": {
+            "key_id": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "required": [
+        "signer_keys"
+      ],
+      "properties": {
+        "signer_keys": {
+          "type": "object",
+          "properties": {
+            "limit": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "start_after": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint16",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    {
+      "description": "What paying the stored settlement's weights from the current pool would send each seat (and the treasury) right now.",
+      "type": "object",
+      "required": [
+        "settlement_preview"
+      ],
+      "properties": {
+        "settlement_preview": {
+          "type": "object",
+          "required": [
+            "chain_game_id"
+          ],
+          "properties": {
+            "chain_game_id": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  ]
+}

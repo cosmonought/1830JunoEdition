@@ -1,0 +1,371 @@
+//! Disputes and exits: Challenge, Resolve, AnnulByConsent, LivenessSettle.
+
+use cosmwasm_std::{
+    BankMsg, DepsMut, Env, HexBinary, MessageInfo, Response, Storage, Timestamp, Uint128, Uint64,
+};
+
+use crate::crypto::{annul_digest, settle_digest};
+use crate::error::ContractError;
+use crate::helpers::{
+    add_secs, best_checkpoint, check_payload_for_game, game_domain, key_usable_for_liveness,
+    load_game, nonpayable, pay_out, payload_record, refund_all, require_seated, require_state,
+    save_game, send, verify_seat_signatures,
+};
+use crate::msg::{ResolveOutcome, SeatSignature};
+use crate::payload::{fixed_bytes, Payload, PayloadUse};
+use crate::state::{
+    DisputeRecord, DisputeResolution, Game, GameState, Route, SettlementRecord, SettlementSource,
+    CONFIG,
+};
+
+/// A seated wallet challenges the stored settlement before the window closes,
+/// with exactly the game's bond (no funds at all when the bond is zero).
+/// Works while paused.
+pub fn challenge(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    chain_game_id: u64,
+    evidence_hash: HexBinary,
+) -> Result<Response, ContractError> {
+    let mut game = load_game(deps.storage, chain_game_id)?;
+    require_state(&game, &[GameState::Settleable])?;
+    require_seated(&game, &info.sender)?;
+    let window_end = game
+        .settlement
+        .as_ref()
+        .map(|s| s.window_end)
+        .ok_or_else(|| ContractError::Invariant {
+            reason: "no stored settlement".to_string(),
+        })?;
+    let now = env.block.time;
+    if now >= window_end {
+        return Err(ContractError::WindowClosed { closed: window_end });
+    }
+    fixed_bytes::<32>("evidence_hash", &evidence_hash)?;
+    let bond = game.bond.ok_or_else(|| ContractError::Invariant {
+        reason: "no frozen bond".to_string(),
+    })?;
+    if bond.is_zero() {
+        nonpayable(&info)?;
+    } else {
+        let paid = match info.funds.as_slice() {
+            [coin] if coin.denom == game.denom => coin.amount,
+            [] => Uint128::zero(),
+            _ => {
+                return Err(ContractError::InvalidFunds {
+                    denom: game.denom.clone(),
+                })
+            }
+        };
+        if paid != bond {
+            return Err(ContractError::WrongBond {
+                expected: bond,
+                got: paid,
+            });
+        }
+    }
+    game.dispute = Some(DisputeRecord {
+        challenger: info.sender.clone(),
+        bond,
+        evidence_hash,
+        disputed_at: now,
+        resolution: None,
+        resolved_at: None,
+    });
+    game.state = GameState::Disputed;
+    save_game(deps.storage, &game)?;
+    Ok(Response::new()
+        .add_attribute("action", "challenge")
+        .add_attribute("chain_game_id", chain_game_id.to_string())
+        .add_attribute("challenger", info.sender.as_str())
+        .add_attribute("bond", bond)
+        .add_attribute("state", game.state.as_str()))
+}
+
+/// Marks the dispute resolved and returns the bond message to the challenger
+/// (or nothing when the bond is zero or goes to the pool).
+fn close_dispute(
+    game: &mut Game,
+    resolution: DisputeResolution,
+    now: Timestamp,
+    return_bond: bool,
+) -> Result<(Uint128, Option<BankMsg>), ContractError> {
+    let denom = game.denom.clone();
+    let dispute = game
+        .dispute
+        .as_mut()
+        .ok_or_else(|| ContractError::Invariant {
+            reason: "no dispute record".to_string(),
+        })?;
+    dispute.resolution = Some(resolution);
+    dispute.resolved_at = Some(now);
+    let bond = dispute.bond;
+    let msg = if return_bond {
+        send(&dispute.challenger, bond, &denom)
+    } else {
+        None
+    };
+    Ok((bond, msg))
+}
+
+fn stored_weights(game: &Game) -> Result<Vec<Uint128>, ContractError> {
+    game.settlement
+        .as_ref()
+        .map(|s| s.payload.settlement_weights.clone())
+        .ok_or_else(|| ContractError::Invariant {
+            reason: "no stored settlement".to_string(),
+        })
+}
+
+/// The resolver adjudicates a disputed game. Not blocked by pause (the frozen
+/// transition table gives `Resolve` no pause prerequisite).
+pub fn resolve(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    chain_game_id: u64,
+    outcome: ResolveOutcome,
+) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+    let config = CONFIG.load(deps.storage)?;
+    let mut game = load_game(deps.storage, chain_game_id)?;
+    require_state(&game, &[GameState::Disputed])?;
+    if info.sender != config.resolver {
+        return Err(ContractError::Unauthorized {
+            role: "resolver".to_string(),
+        });
+    }
+    let now = env.block.time;
+    let mut msgs: Vec<BankMsg> = Vec::new();
+    let label = match outcome {
+        ResolveOutcome::Uphold {} => {
+            // The bond joins the pool, then the pool is paid by the stored vector.
+            let (bond, _) = close_dispute(&mut game, DisputeResolution::Upheld, now, false)?;
+            let weights = stored_weights(&game)?;
+            let pool = game.pool.checked_add(bond)?;
+            msgs.extend(pay_out(
+                &mut game,
+                &weights,
+                pool,
+                Route::ResolverUphold,
+                now,
+                Uint128::zero(),
+                bond,
+            )?);
+            "uphold"
+        }
+        ResolveOutcome::Replace { payload: wire } => {
+            // Authorised by this transaction's sender, not by a signature: the
+            // settlement signer may be the party that cheated.
+            let payload = Payload::try_from(&wire)?;
+            check_payload_for_game(&game, &payload, PayloadUse::ResolverReplace)?;
+            let digest = settle_digest(&payload.encode()?);
+            let record = payload_record(&payload, &digest);
+            let weights = record.settlement_weights.clone();
+            game.settlement = Some(SettlementRecord {
+                source: SettlementSource::ResolverReplacement,
+                payload: record,
+                accepted_at: now,
+                window_end: now,
+            });
+            game.last_seq = Uint64::new(payload.seq);
+            game.consent_bitmap = 0;
+            let (bond, bond_msg) =
+                close_dispute(&mut game, DisputeResolution::Replaced, now, true)?;
+            msgs.extend(bond_msg);
+            let pool = game.pool;
+            msgs.extend(pay_out(
+                &mut game,
+                &weights,
+                pool,
+                Route::ResolverReplace,
+                now,
+                bond,
+                Uint128::zero(),
+            )?);
+            "replace"
+        }
+        ResolveOutcome::Annul {} => {
+            let (bond, bond_msg) =
+                close_dispute(&mut game, DisputeResolution::Annulled, now, true)?;
+            msgs.extend(bond_msg);
+            msgs.extend(refund_all(
+                &mut game,
+                GameState::Annulled,
+                Route::ResolverAnnul,
+                now,
+                bond,
+            )?);
+            "annul"
+        }
+    };
+    save_game(deps.storage, &game)?;
+    Ok(Response::new()
+        .add_messages(msgs)
+        .add_attribute("action", "resolve")
+        .add_attribute("chain_game_id", chain_game_id.to_string())
+        .add_attribute("outcome", label)
+        .add_attribute("state", game.state.as_str()))
+}
+
+/// Every seat signs the ANNUL digest over (domain, last_seq). Anyone may submit
+/// it while IN_PROGRESS or SETTLEABLE; works while paused. Net antes refunded.
+pub fn annul_by_consent(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    chain_game_id: u64,
+    consents: Vec<SeatSignature>,
+) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+    let mut game = load_game(deps.storage, chain_game_id)?;
+    require_state(&game, &[GameState::InProgress, GameState::Settleable])?;
+    let digest = annul_digest(&game_domain(&game)?, game.last_seq.u64());
+    verify_seat_signatures(deps.api, &game, &digest, &consents, true)?;
+    let now = env.block.time;
+    let msgs = refund_all(
+        &mut game,
+        GameState::Annulled,
+        Route::AnnulByConsent,
+        now,
+        Uint128::zero(),
+    )?;
+    save_game(deps.storage, &game)?;
+    Ok(Response::new()
+        .add_messages(msgs)
+        .add_attribute("action", "annul_by_consent")
+        .add_attribute("chain_game_id", chain_game_id.to_string())
+        .add_attribute("state", game.state.as_str()))
+}
+
+/// Moves the game to SETTLEABLE on the best usable checkpoint, or refunds
+/// everyone (CANCELLED) when there is none. `bond_returned` is recorded in the
+/// outcome when the refund happens.
+fn settle_on_checkpoint_or_refund(
+    storage: &dyn Storage,
+    game: &mut Game,
+    now: Timestamp,
+    refund_route: Route,
+    bond_returned: Uint128,
+) -> Result<(Vec<BankMsg>, &'static str), ContractError> {
+    match best_checkpoint(storage, game.chain_game_id, true)? {
+        Some(checkpoint) => {
+            game.settlement = Some(SettlementRecord {
+                source: SettlementSource::LivenessCheckpoint,
+                payload: checkpoint.payload,
+                accepted_at: now,
+                window_end: add_secs(now, game.terms.challenge_window_secs)?,
+            });
+            game.consent_bitmap = 0;
+            game.state = GameState::Settleable;
+            Ok((Vec::new(), "checkpoint"))
+        }
+        None => {
+            let msgs = refund_all(game, GameState::Cancelled, refund_route, now, bond_returned)?;
+            Ok((msgs, "refund"))
+        }
+    }
+}
+
+/// The liveness exit, for any seated wallet, working while paused:
+///
+/// * IN_PROGRESS, once `max(started_at, last_activity) + liveness_window` has
+///   passed: SETTLEABLE on the highest-seq checkpoint whose signer key was not
+///   retired as compromised (a fresh challenge window applies), or CANCELLED
+///   with every net ante refunded when there is none.
+/// * DISPUTED, once `disputed_at + resolver_timeout` has passed: nobody
+///   adjudicated, so the challenger's bond is returned and the stored settlement
+///   is paid as if upheld, unless its signer key was retired as compromised, in
+///   which case the game falls back as above (checkpoint or refund).
+pub fn liveness_settle(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    chain_game_id: u64,
+) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+    let mut game = load_game(deps.storage, chain_game_id)?;
+    require_state(&game, &[GameState::InProgress, GameState::Disputed])?;
+    require_seated(&game, &info.sender)?;
+    let now = env.block.time;
+    let mut msgs: Vec<BankMsg> = Vec::new();
+    let path: &'static str;
+    if game.state == GameState::InProgress {
+        let started = game.started_at.ok_or_else(|| ContractError::Invariant {
+            reason: "no start time".to_string(),
+        })?;
+        let active = game.last_activity.unwrap_or(started);
+        let reference = if active > started { active } else { started };
+        let available = add_secs(reference, game.terms.liveness_window_secs)?;
+        if now < available {
+            return Err(ContractError::LivenessNotReached { at: available });
+        }
+        let (refund, label) = settle_on_checkpoint_or_refund(
+            deps.storage,
+            &mut game,
+            now,
+            Route::LivenessRefund,
+            Uint128::zero(),
+        )?;
+        msgs.extend(refund);
+        path = label;
+    } else {
+        let disputed_at = game
+            .dispute
+            .as_ref()
+            .map(|d| d.disputed_at)
+            .ok_or_else(|| ContractError::Invariant {
+                reason: "no dispute record".to_string(),
+            })?;
+        let available = add_secs(disputed_at, game.terms.resolver_timeout_secs)?;
+        if now < available {
+            return Err(ContractError::ResolverTimeoutNotReached { at: available });
+        }
+        let (bond, bond_msg) =
+            close_dispute(&mut game, DisputeResolution::ResolverTimeout, now, true)?;
+        msgs.extend(bond_msg);
+        let settlement_key = game
+            .settlement
+            .as_ref()
+            .map(|s| s.payload.signer_key_id)
+            .ok_or_else(|| ContractError::Invariant {
+                reason: "no stored settlement".to_string(),
+            })?;
+        if key_usable_for_liveness(deps.storage, settlement_key)? {
+            let weights = stored_weights(&game)?;
+            let pool = game.pool;
+            msgs.extend(pay_out(
+                &mut game,
+                &weights,
+                pool,
+                Route::ResolverTimeoutPayout,
+                now,
+                bond,
+                Uint128::zero(),
+            )?);
+            path = "resolver_timeout_payout";
+        } else {
+            let (refund, label) = settle_on_checkpoint_or_refund(
+                deps.storage,
+                &mut game,
+                now,
+                Route::ResolverTimeoutRefund,
+                bond,
+            )?;
+            msgs.extend(refund);
+            path = if label == "refund" {
+                "resolver_timeout_refund"
+            } else {
+                "resolver_timeout_checkpoint"
+            };
+        }
+    }
+    save_game(deps.storage, &game)?;
+    Ok(Response::new()
+        .add_messages(msgs)
+        .add_attribute("action", "liveness_settle")
+        .add_attribute("chain_game_id", chain_game_id.to_string())
+        .add_attribute("path", path)
+        .add_attribute("state", game.state.as_str()))
+}

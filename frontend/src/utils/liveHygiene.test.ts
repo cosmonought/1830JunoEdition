@@ -101,13 +101,22 @@ describe("the playtest proxy serves the build directory and nothing beside it (L
   });
 });
 
-describe("the playtest proxy routes exactly /gs to the game server (LIVE-0)", () => {
+describe("the playtest proxy routes exactly /gs to the game server (LIVE-0), and /gs/api/ + /gs/healthz (LIVE-2B)", () => {
   it("takes /gs, with or without a query string", () => {
     for (const url of ["/gs", "/gs?", "/gs?room=JUNO-4T2"]) expect(proxy.isGame(url)).toBe(true);
   });
 
+  it("takes the identity API and the health check (LIVE-2 §4.1), and nothing else under /gs/", () => {
+    for (const url of ["/gs/api/session", "/gs/api/session/revoke", "/gs/api/me/games", "/gs/healthz", "/gs/healthz?x=1"]) {
+      expect(proxy.isGame(url)).toBe(true);
+    }
+    for (const url of ["/gs/api", "/gs/apix/session", "/gs/api/../../static/js/main.js", "/gs/api/%2e%2e/x", "/gs/healthz/x"]) {
+      expect(proxy.isGame(url)).toBe(false);
+    }
+  });
+
   it("leaves everything else to the app -- including what used to ride along under /gs/", () => {
-    for (const url of ["/gs/", "/gs/anything", "/gs/../static/js/main.js", "/gsx", "/GS", "//gs", "/static/gs", "/", ""]) {
+    for (const url of ["/gs/", "/gs/anything", "/gs/../static/js/main.js", "/gsx", "/GS", "//gs", "/static/gs", "/", "", "/GS/api/session"]) {
       expect(proxy.isGame(url)).toBe(false);
     }
     expect(proxy.isGame(undefined)).toBe(false);

@@ -23,13 +23,29 @@
 // the strength of that identity. A transport that accepted a claimed id would quietly undo both, and it
 // would do so while every test still passed.
 //
-// SO `resolveIdentity` IS REQUIRED AND HAS NO DEFAULT. There is no fallback that trusts the connection,
-// because a fallback is what gets reached for at four in the afternoon. `trustClaimedIdentity` below exists
-// for local play, is named to be embarrassing in a diff, and shouts on every connection.
+// SO IDENTITY IS REQUIRED AND HAS NO DEFAULT. There is no fallback that trusts the connection, because a fallback
+// is what gets reached for at four in the afternoon.
+//
+// LIVE-2B: AUTHENTICATION HAPPENS ONCE, AT THE HTTP UPGRADE (`identity/authenticateUpgrade.ts`), and no longer at
+// `hello`. `claim` is gone from the wire. A socket carries a FROZEN context -- { principalId, sessionId,
+// sessionExpiresAt, ipKey, openedAt } -- for its whole life, checked against the session on every frame (4401 when
+// it expired or was revoked). Production authenticates the `__Host-gs_session` cookie; development authenticates
+// `?dev_claim=` through the loopback-only development authenticator, and nothing else. The LEGACY room protocol's
+// actor is the development claim; a cookie principal has no seat identity until LIVE-2C binds one from its
+// GameRecord, so in production the legacy room frames answer `no-seat-identity` (the explicit 2C seam).
 
 import { randomBytes } from "crypto";
 import { createServer, type Server as HttpServer } from "http";
 import { WebSocketServer, type WebSocket } from "ws";
+
+import { decideUpgrade, refuseUpgrade, type ConnectionContext } from "./identity/authenticateUpgrade";
+import { devClaimOf, type DevAuthenticator } from "./identity/devAuthenticator";
+import { handleIdentityHttp } from "./identity/httpApi";
+import { IdentityLimiter } from "./identity/limiter";
+import type { GsMode } from "./identity/mode";
+import { isLoopbackOrigin } from "./identity/origins";
+import { IdentityService } from "./identity/sessions";
+import { createMemoryIdentityStore } from "./identity/store";
 
 import { RoomSession, type ServerLogEntry } from "../../frontend/src/utils/roomSession";
 import {
@@ -119,36 +135,14 @@ import {
   type IngressLimitOverrides,
 } from "./ingress/limits";
 
-/** Resolves the player behind a connection, or `null` to reject it.
- *
- *  ASYNC BECAUSE A REAL ONE WILL BE -- a signature check or a session lookup. Making the shape right now
- *  costs nothing and stops the eventual implementation from being a refactor of every caller. */
-export type ResolveIdentity = (input: {
-  claim: unknown;
-  headers: Record<string, string | string[] | undefined>;
-}) => Promise<string | null>;
-
-/** Local-play identity: believes whatever the client says it is.
- *
- *  NOT FOR ANYTHING WITH MONEY IN IT, and the name is chosen so that a reviewer reading a diff cannot miss
- *  what has been wired up. A room using this has no authority worth the word: any client may claim any seat
- *  and `turnAuthority` will faithfully enforce the rules on behalf of the wrong person. */
-export const trustClaimedIdentity: ResolveIdentity = async ({ claim }) => {
-  const id = typeof claim === "string" && claim !== "" ? claim : null;
-  if (id) {
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[INSECURE] accepted a self-declared identity "${id}". Local play only -- see #1210.`,
-    );
-  }
-  return id;
-};
+/* LIVE-2B: `ResolveIdentity` and `trustClaimedIdentity` are gone. Their successor is the upgrade gate
+   (`identity/authenticateUpgrade.ts`): production authenticates the session cookie, development the loopback-only
+   `?dev_claim=` authenticator (`identity/devAuthenticator.ts`), and both run before a WebSocket exists. */
 
 interface HelloFrame {
   kind: "hello";
   room: string;
   build: string;
-  claim?: unknown;
   /** Design note #1341: the seat PIN, demanded when the claimed seat has one. */
   pin?: unknown;
   /** Design note #1341: the seat's session token; an older one than the seat's latest is superseded. */
@@ -186,7 +180,6 @@ interface RoomHelloFrame {
   kind: "room-hello";
   room: string;
   build: string;
-  claim?: unknown;
   /** Design note #1341: the seat PIN, demanded when the claimed seat has one. */
   pin?: unknown;
   /** Design note #1341: the seat's session token; an older one than the seat's latest is superseded. */
@@ -330,10 +323,28 @@ const publicDoc = (doc: SandboxRoomDoc | null): SandboxRoomDoc | null => {
    another. Where a deployment binds is LIVE-5's question, deliberately not a flag here. */
 export const GAME_SERVER_BIND_HOST = "127.0.0.1";
 
+/** LIVE-2B: who may open a socket, and how that is decided (LIVE-2 §4). Required; there is no default mode. */
+export interface GameServerIdentity {
+  mode: GsMode;
+  /** Exact origins (LIVE-2 §4.3 step 4). Production: https only, at least one. Development: loopback only. */
+  allowedOrigins: readonly string[];
+  /** LIVE-2 §12.1. Development: 0. */
+  trustedProxyHops: number;
+  /** Development only, and only as `createDevAuthenticator()` returned it. Refused in production. */
+  devAuthenticator?: DevAuthenticator;
+  /** Principals and sessions. An empty in-memory service when absent; `start.ts` passes the file-backed one. */
+  service?: IdentityService;
+  /** The production socket path, `/gs` when absent; development also accepts `/`. */
+  wsPath?: string;
+  /** The identity clock (expiry, rotation, limits). `Date.now` when absent; tests step it. */
+  now?: () => number;
+}
+
 export interface GameServerOptions {
   port: number;
   build: string;
-  resolveIdentity: ResolveIdentity;
+  /** LIVE-2B: authentication at the upgrade (the successor of `resolveIdentity`). */
+  identity: GameServerIdentity;
   /* ==================================================================
       DESIGN NOTE 1250: THE STORE IS AWAITED BEFORE ANYBODY IS TOLD
      ==================================================================
@@ -411,6 +422,11 @@ const RATE_LIMITED_REASON = "Too many requests too quickly. Wait a moment and tr
 const SUBMIT_RATE_LIMITED_REASON = "You are sending moves too quickly. Wait a moment and try again.";
 const REVERT_BUDGET_REASON = "Too many undos in the last hour. Play on, and undo again later.";
 const LOG_FULL_REASON = "This game has reached the server's limit on its length and cannot take another move.";
+/** LIVE-2B: a cookie principal has no seat in the legacy room protocol; LIVE-2C binds seats from the GameRecord. */
+const NO_SEAT_IDENTITY_CODE = "no-seat-identity";
+const NO_SEAT_IDENTITY_REASON = "This server cannot seat you in a room yet.";
+/** LIVE-2B (the activation seam): the store did not take the guest this room change needed made durable. */
+const IDENTITY_SAVE_FAILED_REASON = "The server could not record who you are, so that change was not made. Try again.";
 /** LIVE-2A (LIVE-2 §13.4 step 1): `host` over a room that already exists. The client picks a fresh code. */
 const ROOM_CODE_TAKEN_CODE = "room-code-taken";
 const ROOM_CODE_TAKEN_REASON = "That room code is already in use.";
@@ -448,7 +464,44 @@ export function createGameServer(options: GameServerOptions): {
   }>;
   /** LIVE-2A: the limits this server runs with. */
   limits: Readonly<ReturnType<typeof resolveLimits>>;
+  /** LIVE-2B: principals and sessions (the operator's revoke / disable reach the running process here). */
+  identity: IdentityService;
+  /** LIVE-2B: the identity limiters, their refusals by name, and the upgrade/socket counters. */
+  identityLimiter: IdentityLimiter;
+  upgrades: Readonly<{ accepted: number; refused: Readonly<Record<string, number>>; sessionClosed: number; malformedCooldowns: number }>;
+  /** LIVE-2B: the live socket indexes, for tests: how many sockets a session / principal / IP key / game holds. */
+  socketCounts(): { total: number; bySession(id: string): number; byPrincipal(id: string): number; byIp(key: string): number; byGame(room: string): number };
 } {
+  /* ==================================================================
+      LIVE-2B: THE IDENTITY CONFIGURATION IS CHECKED HERE TOO, NOT ONLY IN `start.ts`
+     ==================================================================
+     A misassembled server refuses to exist rather than run looser than its mode: production takes no development
+     authenticator, no divergence explainer and no legacy-log admission, and only https origins; development takes
+     only loopback origins and no proxy hops. */
+  const identityOptions = options.identity;
+  if (identityOptions === undefined || identityOptions === null) throw new Error("createGameServer: `identity` is required (LIVE-2B)");
+  const mode = identityOptions.mode;
+  const allowedOriginList = [...identityOptions.allowedOrigins];
+  if (mode === "production") {
+    if (identityOptions.devAuthenticator !== undefined) throw new Error("createGameServer: production mode refuses a development authenticator");
+    if (options.explainDivergence === true) throw new Error("createGameServer: production mode refuses explainDivergence");
+    if (options.legacyLogs === "development-corpus") throw new Error("createGameServer: production mode refuses legacy-log admission");
+    if (allowedOriginList.length === 0 || allowedOriginList.some((origin) => !origin.startsWith("https://"))) {
+      throw new Error("createGameServer: production mode needs https allowed origins");
+    }
+  } else if (mode === "development") {
+    if (identityOptions.devAuthenticator === undefined || identityOptions.devAuthenticator.kind !== "development") {
+      throw new Error("createGameServer: development mode needs createDevAuthenticator()");
+    }
+    if (identityOptions.trustedProxyHops !== 0) throw new Error("createGameServer: development mode refuses trusted proxy hops");
+    if (allowedOriginList.length === 0 || !allowedOriginList.every(isLoopbackOrigin)) {
+      throw new Error("createGameServer: development mode needs loopback allowed origins");
+    }
+  } else {
+    throw new Error("createGameServer: identity.mode must be \"development\" or \"production\"");
+  }
+  const identityNow = identityOptions.now ?? (() => Date.now());
+  const identity = identityOptions.service ?? IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
   /** Who each LOG socket said it was at `hello`, and which room. Identity only: the subscription itself lives on
    *  the room's actor (LIVE-3A), which is what fan-out reads. */
   const sockets = new Map<WebSocket, Attached>();
@@ -1355,7 +1408,104 @@ export function createGameServer(options: GameServerOptions): {
     return { reply: answering(reply, inReplyTo), fanout };
   };
 
-  const http = createServer((_req, res) => {
+  /* ==================================================================
+      LIVE-2B: THE IDENTITY SURFACES -- the HTTP API, the limiters, the socket indexes
+     ================================================================== */
+  const identityLimiter = new IdentityLimiter(limits.identity, identityNow);
+  const allowedOrigins: ReadonlySet<string> = new Set(allowedOriginList);
+  const upgrades = { accepted: 0, refused: {} as Record<string, number>, sessionClosed: 0, malformedCooldowns: 0 };
+  /** Every live socket's frozen context, and the indexes over it (LIVE-2 §4.4). In memory; they die with the process. */
+  const contexts = new Map<WebSocket, ConnectionContext>();
+  const socketsBySession = new Map<string, Set<WebSocket>>();
+  const socketsByPrincipal = new Map<string, Set<WebSocket>>();
+  const socketsByIp = new Map<string, Set<WebSocket>>();
+  /** IPv6 /48 aggregates (not part of the frozen context, so kept beside it). */
+  const socketsByAggregate = new Map<string, Set<WebSocket>>();
+  const aggregateOf = new Map<WebSocket, string>();
+  /** Which rooms a socket watches -- its room-doc room and its log room -- and the reverse (LIVE-2 §4.4). */
+  const socketsByGame = new Map<string, Set<WebSocket>>();
+  const gamesOfSocket = new Map<WebSocket, Set<string>>();
+  const addTo = (index: Map<string, Set<WebSocket>>, key: string, socket: WebSocket) => {
+    let set = index.get(key);
+    if (set === undefined) {
+      set = new Set();
+      index.set(key, set);
+    }
+    set.add(socket);
+  };
+  const removeFrom = (index: Map<string, Set<WebSocket>>, key: string, socket: WebSocket) => {
+    const set = index.get(key);
+    if (set === undefined) return;
+    set.delete(socket);
+    if (set.size === 0) index.delete(key);
+  };
+  const reindexGames = (socket: WebSocket) => {
+    for (const room of gamesOfSocket.get(socket) ?? []) removeFrom(socketsByGame, room, socket);
+    const rooms = new Set<string>();
+    const docRoom = roomDocSockets.get(socket);
+    if (docRoom !== undefined) rooms.add(docRoom);
+    const logRoom = sockets.get(socket)?.room;
+    if (logRoom !== undefined) rooms.add(logRoom);
+    if (rooms.size === 0 || !contexts.has(socket)) {
+      gamesOfSocket.delete(socket);
+      return;
+    }
+    gamesOfSocket.set(socket, rooms);
+    for (const room of rooms) addTo(socketsByGame, room, socket);
+  };
+  /** A session that ended for a security reason, or expired: every socket on it closes 4401 (LIVE-2 §4.4). */
+  const closeForSession = (socket: WebSocket, why: "expired" | "revoked") => {
+    if (socket.readyState !== socket.OPEN && socket.readyState !== socket.CONNECTING) return;
+    upgrades.sessionClosed += 1;
+    socket.close(4401, why === "expired" ? "session expired" : "session ended");
+  };
+  /* ==================================================================
+      LIVE-2B (§2): THE ACTIVATION SEAM
+     ==================================================================
+     Before the first DURABLE room action of a principal -- a room document it hosts, a seat it takes or pins --
+     the principal and its sessions are made durable, so a restart can never keep a room whose owner it forgot.
+     Idempotent; a development principal is synthetic and never stored. A store failure refuses the room action. */
+  const activated = async (principalId: string): Promise<boolean> => {
+    try {
+      await identity.activate(principalId, identityNow());
+      return true;
+    } catch (error) {
+      const ref = errorRef();
+      // eslint-disable-next-line no-console
+      console.error(`  identity: could not make a guest durable before a room change (ref ${ref}) -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
+      return false;
+    }
+  };
+  identity.setHooks({
+    onSessionsEnded: (sessionIds) => {
+      for (const sessionId of sessionIds) for (const socket of [...(socketsBySession.get(sessionId) ?? [])]) closeForSession(socket, "revoked");
+    },
+    onStoreFailure: (what, error) => {
+      // eslint-disable-next-line no-console
+      console.error(`  identity store: ${what} was not recorded -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
+    },
+  });
+
+  const http = createServer((req, res) => {
+    if (
+      handleIdentityHttp(req, res, {
+        mode,
+        allowedOrigins,
+        trustedProxyHops: identityOptions.trustedProxyHops,
+        identity,
+        limiter: identityLimiter,
+        limits: limits.identity,
+        now: identityNow,
+        onError: (what, error) => {
+          const ref = errorRef();
+          // eslint-disable-next-line no-console
+          console.error(`  identity: ${what} failed (ref ${ref}) -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
+          return ref;
+        },
+      })
+    ) {
+      return;
+    }
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("1830 game server\n");
   });
@@ -1366,7 +1516,77 @@ export function createGameServer(options: GameServerOptions): {
      `maxPayload` 32 KiB: a larger frame is closed 1009 by `ws` itself and not a byte of it is parsed -- LIVE-1's
      probe committed a 3 MB field. `perMessageDeflate: false`: no compression is negotiated, so there is no
      deflate bomb to inflate. */
-  const wss = new WebSocketServer({ server: http, maxPayload: limits.maxPayloadBytes, perMessageDeflate: false });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: limits.maxPayloadBytes, perMessageDeflate: false });
+
+  /* ==================================================================
+      LIVE-2B (LIVE-2 §4.3): EVERY SOCKET IS AUTHENTICATED BEFORE IT EXISTS
+     ==================================================================
+     `decideUpgrade` runs path, capacity, IP, Origin, authentication and the principal cap in that order, with no
+     await anywhere, and `handleUpgrade` completes synchronously on the same tick -- so the socket is registered in
+     the indexes before any other upgrade can be counted against them. A refusal is a minimal HTTP response and a
+     destroyed socket: no WebSocket object, no `connection` event, nothing to clean up. */
+  http.on("upgrade", (request, raw, head) => {
+    raw.on("error", () => raw.destroy()); // a peer that resets mid-handshake must not become an uncaught error
+    let decision: ReturnType<typeof decideUpgrade>;
+    try {
+      decision = decideUpgrade(request, {
+        mode,
+        wsPath: identityOptions.wsPath ?? "/gs",
+        allowedOrigins,
+        allowedOriginList,
+        trustedProxyHops: identityOptions.trustedProxyHops,
+        identity,
+        devAuthenticator: identityOptions.devAuthenticator ?? null,
+        limiter: identityLimiter,
+        limits: limits.identity,
+        counts: {
+          global: () => contexts.size,
+          forIp: (key) => socketsByIp.get(key)?.size ?? 0,
+          forAggregate: (aggregate) => socketsByAggregate.get(aggregate)?.size ?? 0,
+          forPrincipal: (principalId) => socketsByPrincipal.get(principalId)?.size ?? 0,
+        },
+        now: identityNow,
+      });
+    } catch (error) {
+      const ref = errorRef();
+      // eslint-disable-next-line no-console
+      console.error(`  upgrade: the gate failed (ref ${ref}) -- refused 503`, error instanceof Error ? error.message : String(error));
+      refuseUpgrade(raw, 503, 5_000);
+      return;
+    }
+    if (!decision.ok) {
+      const key = `${decision.step}:${decision.status}`;
+      upgrades.refused[key] = (upgrades.refused[key] ?? 0) + 1;
+      refuseUpgrade(raw, decision.status, decision.retryAfterMs);
+      return;
+    }
+    const { ctx, ip } = decision;
+    wss.handleUpgrade(request, raw, head, (socket) => {
+      upgrades.accepted += 1;
+      contexts.set(socket, ctx);
+      addTo(socketsBySession, ctx.sessionId, socket);
+      addTo(socketsByPrincipal, ctx.principalId, socket);
+      addTo(socketsByIp, ctx.ipKey, socket);
+      if (ip.aggregate !== null) {
+        aggregateOf.set(socket, ip.aggregate);
+        addTo(socketsByAggregate, ip.aggregate, socket);
+      }
+      wss.emit("connection", socket, request);
+    });
+  });
+
+  /* LIVE-2B (LIVE-2 §4.4): THE 60-SECOND SWEEP -- idle sockets whose session expired or was revoked close 4401, the
+     identity write-behind is flushed, and full limiter buckets are forgotten. */
+  const identitySweep = setInterval(() => {
+    const now = identityNow();
+    for (const [socket, ctx] of contexts) {
+      const verdict = identity.socketVerdict(ctx, now);
+      if (verdict !== "ok") closeForSession(socket, verdict);
+    }
+    identityLimiter.prune();
+    void identity.sweep(now).catch(() => undefined); // a store failure is reported by the identity hook
+  }, limits.identity.sweepIntervalMs);
+  identitySweep.unref?.();
 
   /* LIVE-2A (§12.2): KEEPALIVE. A ping every 25 s; a socket that has not answered one in 60 s is half-open and is
      terminated, so it holds no subscription, no queue slot and no presence entry (LIVE-1 R-7). */
@@ -1406,7 +1626,27 @@ export function createGameServer(options: GameServerOptions): {
     }),
   );
 
-  wss.on("connection", (socket, request) => {
+  wss.on("connection", (socket) => {
+    /* LIVE-2B: THE FROZEN CONTEXT, set by the upgrade before this event -- never from a frame. */
+    const ctx = contexts.get(socket) as ConnectionContext;
+    /** The legacy room protocol's actor: the development claim; `null` for a cookie principal (the LIVE-2C seam). */
+    const legacyActor: string | null = mode === "development" ? devClaimOf(ctx.principalId) : null;
+    /** LIVE-2 §4.4: on EVERY inbound frame, a session that has expired or been revoked closes the socket 4401. */
+    const sessionHolds = (): boolean => {
+      const verdict = identity.socketVerdict(ctx, identityNow());
+      if (verdict === "ok") return true;
+      closeForSession(socket, verdict);
+      return false;
+    };
+    /** LIVE-2 §11.4 item 2: a malformed-flood close counts against the socket's IP key; three in ten minutes and
+     *  that key's upgrades are refused for five. */
+    const recordMalformedClose = () => {
+      if (identityLimiter.cooldowns.record(ctx.ipKey)) {
+        upgrades.malformedCooldowns += 1;
+        // eslint-disable-next-line no-console
+        console.warn(`  ingress: an address closed ${limits.identity.malformedClosesForCooldown} times for malformed frames -- its upgrades are refused for ${Math.round(limits.identity.malformedCooldownMs / 1000)} s`);
+      }
+    };
     /* ==================================================================
         DESIGN NOTE 1216: TWO FRAMES, ONE SOCKET, AND THE HANDLER THAT YIELDED
        ==================================================================
@@ -1447,6 +1687,8 @@ export function createGameServer(options: GameServerOptions): {
     socket.on("error", (error) => {
       // eslint-disable-next-line no-console
       console.warn(`  ingress: socket error -- ${excerpt(error instanceof Error ? error.message : String(error), 200)}`);
+      /* LIVE-2 §11.4 item 3: an oversize frame (1009) counts as malformed for the cooldown. */
+      if ((error as { code?: unknown }).code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH") recordMalformedClose();
     });
 
     /** A frame that is not one this server accepts: counted against the socket's malformed budget, logged as a
@@ -1462,6 +1704,7 @@ export function createGameServer(options: GameServerOptions): {
         // eslint-disable-next-line no-console
         console.warn("  ingress: closed a socket for a malformed-frame flood -- 1008");
         socket.close(1008, "malformed frames");
+        recordMalformedClose();
         return;
       }
       if (kind === "submit") {
@@ -1515,6 +1758,8 @@ export function createGameServer(options: GameServerOptions): {
     };
 
     const handleFrame = async (raw: unknown): Promise<void> => {
+      /* LIVE-2B: checked again when the frame's turn comes -- a revocation while it waited behind others counts. */
+      if (!sessionHolds()) return;
       /* ==================================================================
           DESIGN NOTE 1449: THE PARSE IS NOT THE CHECK
          ==================================================================
@@ -1561,13 +1806,10 @@ export function createGameServer(options: GameServerOptions): {
          can never submit a move -- which is the property that keeps a lobby connection from being a way
          into the game. */
       if (frame.kind === "room-hello") {
-        const actor = await options.resolveIdentity({
-          claim: frame.claim,
-          headers: request.headers as Record<string, string | string[] | undefined>,
-        });
+        /* LIVE-2B: the actor is the connection's, frozen at the upgrade -- never the frame's. */
+        const actor = legacyActor;
         if (!actor) {
-          send(socket, { kind: "error", reason: "not authenticated" });
-          socket.close();
+          send(socket, { kind: "error", code: NO_SEAT_IDENTITY_CODE, reason: NO_SEAT_IDENTITY_REASON });
           return;
         }
         const refused = await seatRefusal(frame.room, actor, frame.pin, frame.token);
@@ -1583,6 +1825,7 @@ export function createGameServer(options: GameServerOptions): {
         }
         roomDocSockets.set(socket, frame.room);
         roomDocActors.set(socket, actor);
+        reindexGames(socket);
         send(socket, {
           kind: "room",
           room: frame.room,
@@ -1760,6 +2003,10 @@ export function createGameServer(options: GameServerOptions): {
                 answer(false, "That is not this seat's current PIN.");
                 return;
               }
+              if (!(await activated(ctx.principalId))) {
+                answer(false, IDENTITY_SAVE_FAILED_REASON);
+                return;
+              }
               await tx.commitRoomDoc({ ...doc, seatPins: { ...pins, [actor]: frame.pin } }, (settled) => ({
                 after: () => {
                   if (settled.kind !== "committed") {
@@ -1824,6 +2071,10 @@ export function createGameServer(options: GameServerOptions): {
                  learns it. Harmless for a seat that already had one -- the document is identical. */
               broadcastRoomDoc(frame.room);
             };
+            if (!(await activated(ctx.principalId))) {
+              answer(false, IDENTITY_SAVE_FAILED_REASON);
+              return;
+            }
             if (!required) {
               await tx.commitRoomDoc(
                 {
@@ -1935,6 +2186,10 @@ export function createGameServer(options: GameServerOptions): {
               broadcastRoomDoc(room);
               return;
             }
+            if (!(await activated(ctx.principalId))) {
+              refuse(IDENTITY_SAVE_FAILED_REASON, committed as SandboxRoomDoc | null);
+              return;
+            }
             await tx.commitRoomDoc(doc, (settled) => ({
               after: () => {
                 if (settled.kind !== "committed") {
@@ -1958,13 +2213,10 @@ export function createGameServer(options: GameServerOptions): {
       }
 
       if (frame.kind === "hello") {
-        const actor = await options.resolveIdentity({
-          claim: frame.claim,
-          headers: request.headers as Record<string, string | string[] | undefined>,
-        });
+        /* LIVE-2B: the actor is the connection's, frozen at the upgrade -- never the frame's. */
+        const actor = legacyActor;
         if (!actor) {
-          send(socket, { kind: "error", reason: "not authenticated" });
-          socket.close();
+          send(socket, { kind: "error", code: NO_SEAT_IDENTITY_CODE, reason: NO_SEAT_IDENTITY_REASON });
           return;
         }
         const refused = await seatRefusal(frame.room, actor, frame.pin, frame.token);
@@ -1993,6 +2245,7 @@ export function createGameServer(options: GameServerOptions): {
           return;
         }
         sockets.set(socket, { room: frame.room, actor });
+        reindexGames(socket);
         let game: GameActor;
         try {
           game = await games.get(frame.room);
@@ -2118,6 +2371,8 @@ export function createGameServer(options: GameServerOptions): {
     };
 
     socket.on("message", (raw) => {
+      /* LIVE-2B (LIVE-2 §4.4): EVERY INBOUND FRAME first asks whether the socket's session still holds. */
+      if (!sessionHolds()) return;
       /* LIVE-2A (§11.3): AT MOST 64 FRAMES IN FLIGHT PER SOCKET. The in-order chain below is a queue, and a queue
          a client can lengthen at will is memory a client can take; past the cap the socket is closed 1008. */
       if (pendingFrames >= limits.maxPendingFrames) {
@@ -2175,6 +2430,15 @@ export function createGameServer(options: GameServerOptions): {
       roomDocActors.delete(socket);
       lobbySockets.delete(socket);
       lobbyWatch.delete(socket);
+      /* LIVE-2B: out of every identity index. */
+      contexts.delete(socket);
+      reindexGames(socket);
+      removeFrom(socketsBySession, ctx.sessionId, socket);
+      removeFrom(socketsByPrincipal, ctx.principalId, socket);
+      removeFrom(socketsByIp, ctx.ipKey, socket);
+      const aggregate = aggregateOf.get(socket);
+      if (aggregate !== undefined) removeFrom(socketsByAggregate, aggregate, socket);
+      aggregateOf.delete(socket);
     });
   });
 
@@ -2185,12 +2449,27 @@ export function createGameServer(options: GameServerOptions): {
     counters,
     ingress,
     limits,
+    identity,
+    identityLimiter,
+    upgrades,
+    socketCounts: () => ({
+      total: contexts.size,
+      bySession: (id: string) => socketsBySession.get(id)?.size ?? 0,
+      byPrincipal: (id: string) => socketsByPrincipal.get(id)?.size ?? 0,
+      byIp: (key: string) => socketsByIp.get(key)?.size ?? 0,
+      byGame: (room: string) => socketsByGame.get(room)?.size ?? 0,
+    }),
     close: () =>
       new Promise<void>((resolve) => {
         clearInterval(keepalive);
+        clearInterval(identitySweep);
         games.close();
         for (const socket of sockets.keys()) socket.close();
-        wss.close(() => http.close(() => resolve()));
+        for (const socket of contexts.keys()) if (!sockets.has(socket)) socket.close(1001, "server stopping");
+        void identity
+          .flush(identityNow())
+          .catch(() => undefined) // reported by the identity hook
+          .then(() => wss.close(() => http.close(() => resolve())));
       }),
   };
 }

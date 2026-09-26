@@ -95,6 +95,8 @@ import type { ReplayEntry } from "../gameEngine/replayLog";
 import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { BuildId, ServerFrame } from "./serverProtocol";
 import { SEAT_REFUSED_CODE, SEAT_SUPERSEDED_CODE, forgetSeat } from "./seatPin";
+import { socketUrlFor } from "./devIdentity";
+import { sessionPort as appSessionPort, type SessionPort } from "./sessionBootstrap";
 
 /** The slice of `WebSocket` this file uses. Injected so a test needs no browser and no server. */
 export interface SocketLike {
@@ -110,8 +112,12 @@ export interface ServerLinkOptions {
   url: string;
   room: string;
   build: BuildId;
-  /** What this client says it is. The server decides whether to believe it (#1210). */
+  /** This tab's player id. LIVE-2B: it is NOT sent in any frame -- identity is the socket's, authenticated at the
+   *  upgrade. A development-identity build puts it on the socket URL (`devIdentity.ts`); a hosted build's identity
+   *  is the session cookie, bootstrapped first. */
   claim: string;
+  /** LIVE-2B: the session this link waits for before opening a socket. The app's installed port when absent. */
+  session?: SessionPort;
   /** Design note #1341: the seat PIN this tab holds for the room, demanded by the server when the claimed seat
    *  has one. Absent for a seat without a PIN. */
   pin?: string;
@@ -274,7 +280,6 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       kind: "hello",
       room: options.room,
       build: options.build,
-      claim: options.claim,
       pin: seat.pin ?? options.pin,
       token: seat.token ?? options.token,
       baseIndex: appliedIndex,
@@ -410,13 +415,56 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     options.onEntries(fresh.length === entries.length ? entries : fresh, serverDigest, serverFields, source);
   };
 
+  /* ==================================================================
+      LIVE-2B (LIVE-2 §4.3): NO SOCKET BEFORE A SESSION, AND A FRESH ONE AFTER THREE FAILED OPENS
+     ==================================================================
+     A refused upgrade reaches the browser only as a close before `onopen` (1006). Three of those in a row -- or a
+     4401, the server saying the session ended under an open socket -- and the next attempt bootstraps again first
+     (a cookie rotated by another tab, or lost with a response, is recovered to the same guest), then the existing
+     backoff resumes. A session the server says has ended stops the link: `SessionEndedNotice` asks the player. */
+  const session = options.session ?? appSessionPort();
+  let failedOpens = 0;
+  let rebootstrap = false;
+
   /** #1253: open a socket and wire it. Called once at construction and once per reconnection. */
   const connect = () => {
-    const current = make(options.url);
+    if (closedByUs) return;
+    if (session.state === "ready" && !(rebootstrap && session.refreshable)) {
+      rebootstrap = false;
+      openSocket();
+      return;
+    }
+    const force = rebootstrap;
+    rebootstrap = false;
+    void session.ensure(force).then((state) => {
+      if (closedByUs) return;
+      if (state === "ready") {
+        openSocket();
+        return;
+      }
+      if (state === "ended") {
+        /* Terminal for this page: nothing reconnects under an identity the server has ended. */
+        options.onStatus?.("reconnecting");
+        return;
+      }
+      if (attempts === 0) options.onStatus?.("reconnecting");
+      const delay = reconnectDelayMs(attempts);
+      attempts += 1;
+      schedule(() => {
+        if (!closedByUs) connect();
+      }, delay);
+    });
+  };
+
+  const openSocket = () => {
+    const current = make(socketUrlFor(options.url, options.claim));
     socket = current;
+    let opened = false;
 
     current.onopen = () => {
       if (socket !== current) return;
+      opened = true;
+      failedOpens = 0;
       open = true;
       /* #1346: `attempts` is NOT reset here. It used to be, and a socket the server accepted and then closed
          at the hello (a seat refusal, a handler that threw) counted as a fresh outage every time: a 0.5s
@@ -445,10 +493,16 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       if (socket === current) options.onError?.("connection error");
     };
 
-    current.onclose = () => {
+    current.onclose = (event) => {
       if (socket !== current) return;
       open = false;
       awaitingHello = false;
+      /* LIVE-2B: a close before `onopen` is a failed open (a refused upgrade looks exactly like this). */
+      if (!opened) failedOpens += 1;
+      if ((event as { code?: unknown } | null)?.code === 4401 || failedOpens >= 3) {
+        failedOpens = 0;
+        rebootstrap = true;
+      }
       /* LIVE-3A: a resync the drop interrupted is finished by the next hello, which says -1 anyway; submissions the
          server had called in flight are orphans again, and the next hello says whether they still are. */
       resyncing = false;

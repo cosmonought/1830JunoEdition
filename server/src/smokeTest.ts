@@ -20,7 +20,8 @@ import type { Server as HttpServer } from "http";
 
 import { WebSocket } from "ws";
 
-import { createGameServer, GAME_SERVER_BIND_HOST, trustClaimedIdentity } from "./gameServer";
+import { createGameServer, GAME_SERVER_BIND_HOST } from "./gameServer";
+import { DEV_ORIGIN, devIdentity, devSocketUrl } from "./rooms/testSupport";
 import type { LogStore } from "./fileLogStore";
 import type { StagingRoomRecord } from "../../frontend/src/utils/lobbyProtocol";
 import type { SandboxRoomDoc } from "../../frontend/src/utils/sandboxRoom";
@@ -63,7 +64,8 @@ function connect(claim: string, room: string): Promise<{
   send: (frame: unknown) => void;
 }> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    /* LIVE-2B: identity is the upgrade's -- `?dev_claim=` from a loopback Origin -- never a frame's. */
+    const socket = new WebSocket(devSocketUrl(port, claim), { origin: DEV_ORIGIN });
     const queue: Frame[] = [];
     let waiting: ((frame: Frame) => void) | null = null;
 
@@ -79,7 +81,7 @@ function connect(claim: string, room: string): Promise<{
     });
     socket.on("error", reject);
     socket.on("open", () => {
-      socket.send(JSON.stringify({ kind: "hello", room, build: BUILD, claim, baseIndex: -1 }));
+      socket.send(JSON.stringify({ kind: "hello", room, build: BUILD, baseIndex: -1 }));
       resolve({
         socket,
         send: (frame) => socket.send(JSON.stringify(frame)),
@@ -122,7 +124,8 @@ function connectRoom(claim: string, room: string): Promise<{
   send: (frame: unknown) => void;
 }> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+    /* LIVE-2B: identity is the upgrade's -- `?dev_claim=` from a loopback Origin -- never a frame's. */
+    const socket = new WebSocket(devSocketUrl(port, claim), { origin: DEV_ORIGIN });
     const queues = new Map<string, Frame[]>();
     const waiting = new Map<string, (frame: Frame) => void>();
     const seen: string[] = [];
@@ -151,7 +154,7 @@ function connectRoom(claim: string, room: string): Promise<{
         `a ${kind} frame for ${claim} in ${room}`,
       );
     socket.on("open", () => {
-      socket.send(JSON.stringify({ kind: "room-hello", room, build: BUILD, claim }));
+      socket.send(JSON.stringify({ kind: "room-hello", room, build: BUILD }));
       resolve({
         socket,
         write: (write) => socket.send(JSON.stringify({ kind: "room-write", room, write })),
@@ -196,7 +199,7 @@ async function main(): Promise<void> {
   const server = createGameServer({
     port: 0,
     build: BUILD,
-    resolveIdentity: trustClaimedIdentity,
+    identity: devIdentity(),
   });
   port = await listeningPort(server.http);
 
@@ -518,7 +521,7 @@ async function durableLog(): Promise<void> {
   const first = createGameServer({
     port: 0,
     build: BUILD,
-    resolveIdentity: trustClaimedIdentity,
+    identity: devIdentity(),
     store: createFileLogStore(directory),
   });
   port = await listeningPort(first.http);
@@ -559,7 +562,7 @@ async function durableLog(): Promise<void> {
   const second = createGameServer({
     port: 0,
     build: BUILD,
-    resolveIdentity: trustClaimedIdentity,
+    identity: devIdentity(),
     store: createFileLogStore(directory),
   });
   port = await listeningPort(second.http);
@@ -655,7 +658,7 @@ async function stagingLobbyParked(): Promise<void> {
       lobbySaves += 1;
     },
   };
-  const server = createGameServer({ port: 0, build: BUILD, resolveIdentity: trustClaimedIdentity, store });
+  const server = createGameServer({ port: 0, build: BUILD, identity: devIdentity(), store });
   port = await listeningPort(server.http);
 
   const probe = await connectRoom(CAROL, "LIVE0-PROBE");
@@ -760,7 +763,7 @@ async function durableBeforeVisible(): Promise<void> {
         : null,
     saveRoomDoc: async () => undefined,
   };
-  const server = createGameServer({ port: 0, build: BUILD, resolveIdentity: trustClaimedIdentity, store });
+  const server = createGameServer({ port: 0, build: BUILD, identity: devIdentity(), store });
   port = await listeningPort(server.http);
   const room = "LIVE3A";
   const next = async (client: { next: () => Promise<Frame> }, wanted: (frame: Frame) => boolean) => {

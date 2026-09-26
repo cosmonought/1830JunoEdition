@@ -69,16 +69,16 @@ const entry = (index: number, over: Record<string, unknown> = {}) => ({
 });
 
 describe("connecting", () => {
-  it("says hello with the room, the build and what it has applied", () => {
+  it("says hello with the room, the build and what it has applied -- and no identity (LIVE-2B: that is the upgrade's)", () => {
     const { wire } = link();
     wire.open();
     expect(wire.frames()[0]).toMatchObject({
       kind: "hello",
       room: "ROOM",
       build: "build-1",
-      claim: "p-alice",
       baseIndex: -1,
     });
+    expect(wire.frames()[0]).not.toHaveProperty("claim");
   });
 
   it("holds a dispatch made before the socket opens, and sends it after hello", () => {

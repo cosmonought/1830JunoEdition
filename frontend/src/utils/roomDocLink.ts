@@ -47,6 +47,8 @@ import { CLIENT_BUILD_ID, GAME_SERVER_URL } from "../config";
 import type { GameVariants } from "../gameEngine/gameVariants";
 import type { PresenceState } from "./presence";
 import { ROOM_WRITE_REFUSED_CODE, SEAT_SUPERSEDED_CODE, forgetSeat, readSeatPin, readSeatToken } from "./seatPin";
+import { socketUrlFor } from "./devIdentity";
+import { sessionPort } from "./sessionBootstrap";
 import type {
   RoomVisibility,
   SandboxRoomDoc,
@@ -244,6 +246,10 @@ interface Connection {
   /** #1361: the reconnect, when one is scheduled; `null` once the connection is let go. */
   reconnect: number | null;
   attempts: number;
+  /** LIVE-2B: consecutive closes before `onopen` (a refused upgrade), and whether the next attempt bootstraps the
+   *  session first -- after three of them, or a 4401 (see `sessionBootstrap.ts`). */
+  failedOpens: number;
+  rebootstrap: boolean;
   /** Set by `resetRoomDocLinks` and by the socket being let go: a close after this schedules nothing. */
   retired: boolean;
   /** #1363: a `host` write has been sent on this connection and no document has come back yet. */
@@ -292,12 +298,59 @@ function anybodyListening(connection: Connection): boolean {
   return listening;
 }
 
-/** Opens (or reopens) the socket for a connection and wires its handlers. */
+/** LIVE-2B: what `connection.socket` holds while the session is being bootstrapped -- nothing is sent on it (the
+ *  connection is not open, so frames wait in the backlog) and closing it does nothing. */
+const NO_SOCKET_YET: SocketLike = {
+  send: () => undefined,
+  close: () => undefined,
+  onopen: null,
+  onmessage: null,
+  onclose: null,
+  onerror: null,
+};
+
+/** The reconnect, after the backoff -- unless nobody is listening any more. */
+function scheduleReconnect(room: string, connection: Connection): void {
+  const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** Math.min(connection.attempts, 4));
+  connection.attempts += 1;
+  connection.reconnect = window.setTimeout(() => {
+    connection.reconnect = null;
+    if (connection.retired || !anybodyListening(connection)) {
+      if (connections.get(room) === connection) connections.delete(room);
+      return;
+    }
+    attach(room, connection);
+  }, delay);
+}
+
+/** Opens (or reopens) the socket for a connection -- LIVE-2B: once the session is bootstrapped (LIVE-2 §4.3). */
 function attach(room: string, connection: Connection): void {
-  const socket = socketFactory(GAME_SERVER_URL ?? "");
+  const session = sessionPort();
+  if (session.state === "ready" && !(connection.rebootstrap && session.refreshable)) {
+    connection.rebootstrap = false;
+    attachNow(room, connection);
+    return;
+  }
+  const force = connection.rebootstrap;
+  connection.rebootstrap = false;
+  connection.socket = NO_SOCKET_YET;
+  void session.ensure(force).then((state) => {
+    if (connection.retired || connections.get(room) !== connection) return;
+    if (state === "ready") attachNow(room, connection);
+    else if (state === "unknown") scheduleReconnect(room, connection);
+    /* "ended": terminal for this page -- `SessionEndedNotice` asks the player; nothing reconnects. */
+  });
+}
+
+/** Opens the socket for a connection and wires its handlers. */
+function attachNow(room: string, connection: Connection): void {
+  const socket = socketFactory(socketUrlFor(GAME_SERVER_URL ?? "", connection.claim));
   connection.socket = socket;
+  let opened = false;
 
   socket.onopen = () => {
+    opened = true;
+    connection.failedOpens = 0;
     connection.open = true;
     connection.attempts = 0;
     /* #1341: the PIN this tab holds for the room, if any -- the server demands it for a seat that has one. */
@@ -306,7 +359,6 @@ function attach(room: string, connection: Connection): void {
         kind: "room-hello",
         room,
         build: CLIENT_BUILD_ID,
-        claim: connection.claim,
         pin: readSeatPin(room) ?? undefined,
         token: readSeatToken(room) ?? undefined,
       }),
@@ -401,8 +453,14 @@ function attach(room: string, connection: Connection): void {
     connection.errors.forEach((onError) => onError("lost the connection to the game server"));
   };
 
-  socket.onclose = () => {
+  socket.onclose = (event) => {
     connection.open = false;
+    /* LIVE-2B: a close before `onopen` is a failed open; three in a row, or a 4401, bootstrap the session again. */
+    if (!opened) connection.failedOpens += 1;
+    if ((event as { code?: unknown } | null)?.code === 4401 || connection.failedOpens >= 3) {
+      connection.failedOpens = 0;
+      connection.rebootstrap = true;
+    }
     // #1341: a request the wire dropped is answered as a refusal rather than left hanging.
     connection.pending.forEach((settle) => settle({ kind: "seat", requestId: "", ok: false, reason: "lost the connection to the game server" }));
     connection.pending.clear();
@@ -413,16 +471,7 @@ function attach(room: string, connection: Connection): void {
       if (connections.get(room) === connection) connections.delete(room);
       return;
     }
-    const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** Math.min(connection.attempts, 4));
-    connection.attempts += 1;
-    connection.reconnect = window.setTimeout(() => {
-      connection.reconnect = null;
-      if (connection.retired || !anybodyListening(connection)) {
-        if (connections.get(room) === connection) connections.delete(room);
-        return;
-      }
-      attach(room, connection);
-    }, delay);
+    scheduleReconnect(room, connection);
   };
 }
 
@@ -445,6 +494,8 @@ function connect(room: string, claim: string): Connection {
     pending: new Map(),
     reconnect: null,
     attempts: 0,
+    failedOpens: 0,
+    rebootstrap: false,
     retired: false,
     hosting: false,
     refusals: new Set(),

@@ -174,7 +174,8 @@ describe("FI-28: processes", () => {
   test("two game servers started at once on one data directory: one serves, one refuses with exit 2; nothing is shared", () =>
     withDir("servers", async (dir) => {
       const start = path.join(COMPILED, "..", "start.js");
-      const args = [start, "--insecure-local-identity", "--port", "0", "--data", dir];
+      /* LIVE-2B: the mode is required (and `--insecure-local-identity` is gone); development is the local one. */
+      const args = [start, "--mode", "development", "--port", "0", "--data", dir];
       const a = run(args);
       const b = run(args);
       const refused = await Promise.race([

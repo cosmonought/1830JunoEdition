@@ -13,6 +13,13 @@
 // legacy claimed identity a "per seat" bucket is exactly as strong as a per-socket one: a claim costs nothing.
 // Per-IP, per-principal, per-game and global buckets arrive with the identities they are keyed by (2B/2C); the
 // edge's limits are LIVE-5's. Tests override any value through `GameServerOptions.limits`.
+//
+// LIVE-2B adds the IDENTITY limits (`identity` below): per IP key (IPv4 /32, IPv6 /64 with a /48 aggregate at ten
+// times the limit), per session, per principal and global -- the upgrade and bootstrap budgets, the socket caps
+// and the malformed-close cooldown of LIVE-2 §12.2. Every per-socket bucket above stays, as defence in depth. The
+// §12.2 limits keyed by GAME or SEAT (room creation, join-code failures, membership ops per principal, per-game
+// submits, transfer codes, viewers per room) wait for LIVE-2C's GameRecord: there is nothing honest to key them by
+// before a seat has an authoritative owner.
 
 /** LIVE-2 §11.3 / §12.2. */
 export interface IngressLimits {
@@ -36,6 +43,45 @@ export interface IngressLimits {
   /** Server-log payload excerpts (LIVE-2 §11.6). */
   logExcerptBytes: number;
   buckets: Record<BucketName, BucketSpec>;
+  /** LIVE-2B (LIVE-2 §12.2): identity, upgrade and socket limits. */
+  identity: IdentityLimits;
+}
+
+/** LIVE-2B (LIVE-2 §4.3, §12.2). */
+export interface IdentityLimits {
+  /** Upgrades that failed (Origin, authentication, principal cap), per IP key: burst 20, 30 a minute. */
+  failedUpgradesPerIp: BucketSpec;
+  /** Every upgrade attempt, per IP key: 60 a minute. */
+  upgradesPerIp: BucketSpec;
+  /** Every upgrade attempt, the whole server: 50 a second (503 beyond). */
+  upgradesGlobal: BucketSpec;
+  /** Bootstraps that create a principal, per IP key: burst 10, then 20 an hour. */
+  guestCreatesPerIp: BucketSpec;
+  /** Bootstraps that create a principal, the whole server: 600 an hour. */
+  guestCreatesGlobal: BucketSpec;
+  /** Bootstraps (and revokes) presenting an existing session, per session: 60 a minute. */
+  bootstrapsPerSession: BucketSpec;
+  /** LIVE-2B adversarial review: successors minted from rotated sessions inside their 24-hour grace, PER PRINCIPAL
+   *  (each is a new durable session record for an activated guest): burst 5, then 10 an hour. Two tabs and a lost
+   *  Set-Cookie need two or three; a replayed or stolen rotated cookie gets no more. */
+  graceMintsPerSession: BucketSpec;
+  maxSocketsPerPrincipal: number;
+  maxSocketsPerProvisionalPrincipal: number;
+  maxSocketsPerIp: number;
+  maxSocketsGlobal: number;
+  /** Malformed-flood closes (LIVE-2A's 1008, and ws's 1009) from one IP key within the window that start a cooldown. */
+  malformedClosesForCooldown: number;
+  malformedCloseWindowMs: number;
+  /** How long an IP key's upgrades are refused 429 after that. */
+  malformedCooldownMs: number;
+  /** An IPv6 /48 is allowed this many times a /64's budget. */
+  ipv6AggregateFactor: number;
+  /** Keys a keyed limiter holds before it forgets its oldest (full buckets are pruned every sweep). */
+  maxTrackedKeys: number;
+  /** The session sweep, the identity write-behind and the limiter pruning: every 60 s. */
+  sweepIntervalMs: number;
+  /** `/gs/api/*` request bodies. */
+  maxApiBodyBytes: number;
 }
 
 export type BucketName = "submit" | "chat" | "presence" | "hello" | "control" | "roomOps" | "malformed";
@@ -76,15 +122,41 @@ export const DEFAULT_INGRESS_LIMITS: IngressLimits = Object.freeze({
     /* Malformed frames: 10 a minute; the eleventh inside the window closes the socket 1008. */
     malformed: { capacity: 10, refillPerSecond: perMinute(10) },
   }),
+  identity: Object.freeze({
+    failedUpgradesPerIp: { capacity: 20, refillPerSecond: perMinute(30) },
+    upgradesPerIp: { capacity: 60, refillPerSecond: perMinute(60) },
+    upgradesGlobal: { capacity: 50, refillPerSecond: 50 },
+    guestCreatesPerIp: { capacity: 10, refillPerSecond: 20 / 3600 },
+    guestCreatesGlobal: { capacity: 600, refillPerSecond: 600 / 3600 },
+    bootstrapsPerSession: { capacity: 60, refillPerSecond: perMinute(60) },
+    graceMintsPerSession: { capacity: 5, refillPerSecond: 10 / 3600 },
+    maxSocketsPerPrincipal: 12,
+    maxSocketsPerProvisionalPrincipal: 3,
+    maxSocketsPerIp: 64,
+    maxSocketsGlobal: 2_000,
+    malformedClosesForCooldown: 3,
+    malformedCloseWindowMs: 10 * 60 * 1000,
+    malformedCooldownMs: 5 * 60 * 1000,
+    ipv6AggregateFactor: 10,
+    maxTrackedKeys: 100_000,
+    sweepIntervalMs: 60_000,
+    maxApiBodyBytes: 4 * 1024,
+  }),
 }) as IngressLimits;
 
 /** The defaults with a test's (or an operator's) overrides; bucket specs merge per bucket. */
-export function resolveLimits(over: Partial<Omit<IngressLimits, "buckets">> & { buckets?: Partial<Record<BucketName, BucketSpec>> } = {}): IngressLimits {
-  const { buckets, ...rest } = over;
+export function resolveLimits(
+  over: Partial<Omit<IngressLimits, "buckets" | "identity">> & {
+    buckets?: Partial<Record<BucketName, BucketSpec>>;
+    identity?: Partial<IdentityLimits>;
+  } = {},
+): IngressLimits {
+  const { buckets, identity, ...rest } = over;
   return {
     ...DEFAULT_INGRESS_LIMITS,
     ...rest,
     buckets: { ...DEFAULT_INGRESS_LIMITS.buckets, ...(buckets ?? {}) },
+    identity: { ...DEFAULT_INGRESS_LIMITS.identity, ...(identity ?? {}) },
   };
 }
 
@@ -112,13 +184,148 @@ export class TokenBucket {
 
   /** Take one token: `0` when granted, else the milliseconds until one would be. */
   take(): number {
+    const wait = this.peek();
+    if (wait === 0) this.tokens -= 1;
+    return wait;
+  }
+
+  /** What `take` would answer, without taking. */
+  peek(): number {
     this.refill();
-    if (this.tokens >= 1) {
-      this.tokens -= 1;
-      return 0;
-    }
+    if (this.tokens >= 1) return 0;
     if (this.spec.refillPerSecond <= 0) return Number.MAX_SAFE_INTEGER;
     return Math.max(1, Math.ceil(((1 - this.tokens) / this.spec.refillPerSecond) * 1000));
+  }
+
+  /** Refilled to capacity: indistinguishable from a bucket never made, so a keyed limiter may forget it. */
+  full(): boolean {
+    this.refill();
+    return this.tokens >= this.spec.capacity;
+  }
+}
+
+/** LIVE-2B: token buckets by key (an IP key, a session id, "global"), bounded in memory. A full bucket is the same as
+ *  no bucket, so `prune` forgets every full one; past `maxKeys` the oldest key is forgotten too (a flood of fresh
+ *  keys is already bounded by the global buckets, which have one key). */
+export class KeyedBuckets {
+  private readonly buckets = new Map<string, TokenBucket>();
+
+  constructor(
+    private readonly spec: BucketSpec,
+    private readonly now: () => number,
+    private readonly maxKeys = 100_000,
+  ) {}
+
+  private bucket(key: string): TokenBucket {
+    let bucket = this.buckets.get(key);
+    if (bucket === undefined) {
+      bucket = new TokenBucket(this.spec, this.now);
+      this.buckets.set(key, bucket);
+      while (this.buckets.size > this.maxKeys) this.buckets.delete(this.buckets.keys().next().value as string);
+    }
+    return bucket;
+  }
+
+  take(key: string): number {
+    return this.bucket(key).take();
+  }
+
+  peek(key: string): number {
+    const bucket = this.buckets.get(key);
+    return bucket === undefined ? 0 : bucket.peek();
+  }
+
+  prune(): void {
+    for (const [key, bucket] of this.buckets) if (bucket.full()) this.buckets.delete(key);
+  }
+
+  get size(): number {
+    return this.buckets.size;
+  }
+}
+
+/** LIVE-2B: an IP-keyed budget: the /64 (or /32) bucket, and for IPv6 its /48 aggregate at `factor` times the spec. */
+export class IpBuckets {
+  private readonly keyed: KeyedBuckets;
+  private readonly aggregate: KeyedBuckets;
+
+  constructor(spec: BucketSpec, now: () => number, factor: number, maxKeys: number) {
+    this.keyed = new KeyedBuckets(spec, now, maxKeys);
+    this.aggregate = new KeyedBuckets({ capacity: spec.capacity * factor, refillPerSecond: spec.refillPerSecond * factor }, now, maxKeys);
+  }
+
+  /** Both or neither: a refusal by either spends nothing. */
+  take(ip: { key: string; aggregate: string | null }): number {
+    const wait = this.peek(ip);
+    if (wait > 0) return wait;
+    this.keyed.take(ip.key);
+    if (ip.aggregate !== null) this.aggregate.take(ip.aggregate);
+    return 0;
+  }
+
+  peek(ip: { key: string; aggregate: string | null }): number {
+    return Math.max(this.keyed.peek(ip.key), ip.aggregate === null ? 0 : this.aggregate.peek(ip.aggregate));
+  }
+
+  prune(): void {
+    this.keyed.prune();
+    this.aggregate.prune();
+  }
+
+  get size(): number {
+    return this.keyed.size + this.aggregate.size;
+  }
+}
+
+/** LIVE-2B (LIVE-2 §11.4 item 2): malformed-flood closes by IP key; `threshold` inside `windowMs` refuses that key's
+ *  upgrades for `cooldownMs`. Bounded: a key's history never exceeds the threshold, and expired keys are pruned. */
+export class MalformedCooldowns {
+  private readonly closes = new Map<string, number[]>();
+  private readonly until = new Map<string, number>();
+
+  constructor(
+    private readonly threshold: number,
+    private readonly windowMs: number,
+    private readonly cooldownMs: number,
+    private readonly now: () => number,
+    private readonly maxKeys = 100_000,
+  ) {}
+
+  /** Record one close; true when it started a cooldown. */
+  record(key: string): boolean {
+    const now = this.now();
+    const recent = (this.closes.get(key) ?? []).filter((at) => now - at < this.windowMs);
+    recent.push(now);
+    if (recent.length >= this.threshold) {
+      this.closes.delete(key);
+      this.until.set(key, now + this.cooldownMs);
+      return true;
+    }
+    this.closes.set(key, recent);
+    while (this.closes.size > this.maxKeys) this.closes.delete(this.closes.keys().next().value as string);
+    return false;
+  }
+
+  /** Milliseconds of cooldown left for `key`, or 0. */
+  remaining(key: string): number {
+    const until = this.until.get(key);
+    if (until === undefined) return 0;
+    const left = until - this.now();
+    if (left <= 0) {
+      this.until.delete(key);
+      return 0;
+    }
+    return left;
+  }
+
+  prune(): void {
+    const now = this.now();
+    for (const [key, at] of this.closes) if (at.every((time) => now - time >= this.windowMs)) this.closes.delete(key);
+    for (const [key, until] of this.until) if (until <= now) this.until.delete(key);
+  }
+
+  get size(): number {
+    return this.closes.size + this.until.size;
   }
 }
 

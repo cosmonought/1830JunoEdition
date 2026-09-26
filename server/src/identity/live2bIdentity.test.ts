@@ -1,0 +1,784 @@
+// server/src/identity/live2bIdentity.test.ts
+//
+// LIVE-2B against the real server (`createGameServer`) over real HTTP and real WebSockets: the bootstrap and revoke
+// API, the upgrade order and its refusals, the frozen socket context, revocation / eviction / rotation as they reach
+// open sockets, the identity limits, the malformed-close cooldown, the startup mode lock (spawned processes), and the
+// ordinary local development flow. Production-mode cases present real cookies and an Origin, as a browser does.
+
+import { describe, test } from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "child_process";
+import * as fs from "fs";
+import * as http from "http";
+import * as os from "os";
+import * as path from "path";
+import { WebSocket } from "ws";
+
+import type { IdentityLimits } from "../ingress/limits";
+import {
+  ALICE,
+  BOB,
+  BUILD,
+  BUY,
+  Client,
+  DEV_ORIGIN,
+  controlledStore,
+  devIdentity,
+  devSocketUrl,
+  quietConsole,
+  startServer,
+  stopServer,
+  until,
+} from "../rooms/testSupport";
+import { decideUpgrade } from "./authenticateUpgrade";
+import { IdentityLimiter } from "./limiter";
+import { IdentityService } from "./sessions";
+import { createMemoryIdentityStore } from "./store";
+import { DEFAULT_INGRESS_LIMITS } from "../ingress/limits";
+
+quietConsole();
+
+const DAY = 24 * 60 * 60 * 1000;
+const PROD_ORIGIN = "https://play.example";
+
+interface Clock {
+  now: number;
+}
+
+async function prodServer(over: { clock?: Clock; limits?: Partial<IdentityLimits>; service?: IdentityService } = {}) {
+  const clock = over.clock ?? { now: 1_750_000_000_000 };
+  const started = await startServer({
+    identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, now: () => clock.now, ...(over.service ? { service: over.service } : {}) },
+    limits: { identity: { ...(over.limits ?? {}) } },
+  });
+  return { ...started, clock };
+}
+
+interface Answer {
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  body: string;
+}
+
+function request(port: number, pathname: string, options: { method?: string; origin?: string | null; cookie?: string; body?: string; contentType?: string | null; headers?: Record<string, string> } = {}): Promise<Answer> {
+  return new Promise((resolve, reject) => {
+    const headers: Record<string, string> = { ...(options.headers ?? {}) };
+    if (options.origin !== null) headers.Origin = options.origin ?? PROD_ORIGIN;
+    if (options.contentType !== null) headers["Content-Type"] = options.contentType ?? "application/json";
+    if (options.cookie) headers.Cookie = options.cookie;
+    const body = options.body ?? "{}";
+    const req = http.request({ host: "127.0.0.1", port, path: pathname, method: options.method ?? "POST", headers }, (res) => {
+      let text = "";
+      res.on("data", (chunk) => (text += String(chunk)));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text }));
+    });
+    req.on("error", reject);
+    if ((options.method ?? "POST") !== "GET") req.end(body);
+    else req.end();
+  });
+}
+
+/** The cookie a Set-Cookie delivered, as the browser sends it back. */
+const cookieFrom = (answer: Answer): string => {
+  const set = answer.headers["set-cookie"];
+  assert.ok(set && set.length === 1, "one Set-Cookie");
+  return set[0].split(";")[0];
+};
+
+const bootstrap = (port: number, cookie?: string, body = "{}") => request(port, "/gs/api/session", { cookie, body });
+
+interface Upgrade {
+  status: number;
+  retryAfter?: string;
+  socket?: WebSocket;
+  frames: Array<Record<string, unknown>>;
+  closed: Promise<number>;
+}
+
+function upgrade(port: number, options: { path?: string; origin?: string | null; cookie?: string; headers?: Record<string, string> } = {}): Promise<Upgrade> {
+  return new Promise((resolve) => {
+    const headers: Record<string, string> = { ...(options.headers ?? {}) };
+    if (options.cookie) headers.Cookie = options.cookie;
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${options.path ?? "/gs"}`, {
+      headers,
+      ...(options.origin === null ? {} : { origin: options.origin ?? PROD_ORIGIN }),
+    });
+    const frames: Array<Record<string, unknown>> = [];
+    const closed = new Promise<number>((done) => socket.once("close", (code) => done(code)));
+    socket.on("message", (raw) => frames.push(JSON.parse(String(raw)) as Record<string, unknown>));
+    socket.on("error", () => undefined);
+    socket.once("open", () => resolve({ status: 101, socket, frames, closed }));
+    socket.once("unexpected-response", (req, res) => {
+      resolve({ status: res.statusCode ?? 0, retryAfter: res.headers["retry-after"] as string | undefined, frames, closed });
+      res.resume();
+      req.destroy();
+    });
+  });
+}
+
+const sessionIdOf = (cookie: string) => cookie.split("=")[1].split(".")[1];
+
+describe("LIVE-2B bootstrap and revoke API", () => {
+  test("no cookie: 201 + the frozen Set-Cookie; valid: 200 without one; no CORS header, no-store, no principal id", async () => {
+    const { server, port } = await prodServer();
+    try {
+      const first = await bootstrap(port);
+      assert.equal(first.status, 201);
+      const setCookie = (first.headers["set-cookie"] ?? [])[0];
+      assert.match(setCookie, /^__Host-gs_session=v1\.se_[0-9a-hjkmnp-tv-z]{25}[048cgmrw]\.[A-Za-z0-9_-]{43}; Path=\/; Secure; HttpOnly; SameSite=Strict; Max-Age=15552000$/);
+      assert.equal(first.headers["cache-control"], "no-store");
+      assert.ok(!Object.keys(first.headers).some((name) => name.startsWith("access-control")), "no CORS");
+      assert.ok(!first.body.includes("pr_") && !first.body.includes("se_"), "no id on the wire");
+      const cookie = cookieFrom(first);
+      const again = await bootstrap(port, cookie);
+      assert.equal(again.status, 200);
+      assert.equal(again.headers["set-cookie"], undefined);
+      assert.equal(server.identity.sizes().principals, 1);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("the request is policed before it is read: Origin (403), method (405), media type (415), size (413), shape (400); /me/games is 2C's", async () => {
+    const { server, port } = await prodServer();
+    try {
+      assert.equal((await request(port, "/gs/api/session", { origin: "https://evil.example" })).status, 403);
+      assert.equal((await request(port, "/gs/api/session", { origin: null })).status, 403);
+      assert.equal((await request(port, "/gs/api/session", { origin: "null" })).status, 403);
+      assert.equal((await request(port, "/gs/api/session", { origin: `${PROD_ORIGIN}/` })).status, 403);
+      assert.equal((await request(port, "/gs/api/session", { method: "GET" })).status, 405);
+      assert.equal((await request(port, "/gs/api/session", { contentType: "text/plain" })).status, 415);
+      assert.equal((await request(port, "/gs/api/session", { contentType: null })).status, 415);
+      assert.equal((await request(port, "/gs/api/session", { body: JSON.stringify({ pad: "x".repeat(5000) }) })).status, 413);
+      assert.equal((await request(port, "/gs/api/session", { body: '{"fresh":"yes"}' })).status, 400);
+      assert.equal((await request(port, "/gs/api/session", { body: '{"principal":"pr_x"}' })).status, 400);
+      assert.equal((await request(port, "/gs/api/me/games", { method: "GET" })).status, 404);
+      const health = await request(port, "/gs/healthz", { method: "GET", origin: null, contentType: null });
+      assert.equal(health.status, 200);
+      assert.equal(health.body, "ok\n");
+      assert.equal(server.identity.sizes().principals, 0, "nothing minted by a refused request");
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("revoke: 204, the cookie cleared, every socket of the session closed 4401, and the session never comes back", async () => {
+    const { server, port } = await prodServer();
+    try {
+      const cookie = cookieFrom(await bootstrap(port));
+      const a = await upgrade(port, { cookie });
+      const b = await upgrade(port, { cookie });
+      assert.equal(a.status, 101);
+      assert.equal(b.status, 101);
+      assert.equal((await request(port, "/gs/api/session/revoke", { cookie, origin: "https://evil.example" })).status, 403);
+      const revoked = await request(port, "/gs/api/session/revoke", { cookie });
+      assert.equal(revoked.status, 204);
+      assert.match((revoked.headers["set-cookie"] ?? [])[0], /^__Host-gs_session=; Path=\/; Secure; HttpOnly; SameSite=Strict; Max-Age=0$/);
+      assert.equal(await a.closed, 4401);
+      assert.equal(await b.closed, 4401);
+      assert.equal((await upgrade(port, { cookie })).status, 401);
+      const after = await bootstrap(port, cookie);
+      assert.equal(after.status, 401);
+      assert.deepEqual(JSON.parse(after.body), { error: "session-ended", reason: "logout" });
+      assert.equal(after.headers["set-cookie"], undefined, "the ended cookie is not cleared: a reload reaches the same answer");
+      assert.equal((await request(port, "/gs/api/session/revoke", { cookie })).status, 401);
+      const fresh = await bootstrap(port, cookie, '{"fresh":true}');
+      assert.equal(fresh.status, 201, "only the explicit fresh path mints a new guest");
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("rotation after 7 days: the open socket stays; the old cookie cannot upgrade but still bootstraps for 24 h to the same principal", async () => {
+    const { server, port, clock } = await prodServer();
+    try {
+      const old = cookieFrom(await bootstrap(port));
+      const open = await upgrade(port, { cookie: old });
+      assert.equal(open.status, 101);
+      clock.now += 8 * DAY;
+      const rotated = await bootstrap(port, old);
+      assert.equal(rotated.status, 200);
+      assert.equal(JSON.parse(rotated.body).rotated, true);
+      const next = cookieFrom(rotated);
+      assert.notEqual(next, old);
+      // The socket opened on the old session is untouched, and still answered.
+      open.socket?.send(JSON.stringify({ kind: "lobby-hello" }));
+      await until(() => open.frames.some((frame) => frame.kind === "rooms"), "a lobby answer on the rotated session's socket");
+      assert.equal(open.socket?.readyState, WebSocket.OPEN);
+      assert.equal((await upgrade(port, { cookie: old })).status, 401, "a rotated session opens no new socket");
+      const fresh = await upgrade(port, { cookie: next });
+      assert.equal(fresh.status, 101);
+      const lost = await bootstrap(port, old);
+      assert.equal(lost.status, 200, "the grace path");
+      assert.equal(server.identity.sizes().principals, 1, "every cookie on the same principal");
+      clock.now += DAY;
+      assert.deepEqual(JSON.parse((await bootstrap(port, old)).body), { error: "session-ended", reason: "rotated" });
+      open.socket?.terminate();
+      fresh.socket?.terminate();
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("eviction: the 11th active session evicts the oldest, and its open socket closes 4401", async () => {
+    const { server, port, clock } = await prodServer({ limits: { graceMintsPerSession: { capacity: 100, refillPerSecond: 1 } } });
+    try {
+      const s0 = cookieFrom(await bootstrap(port));
+      clock.now += 8 * DAY;
+      const successors: string[] = [];
+      successors.push(cookieFrom(await bootstrap(port, s0)));
+      const oldest = await upgrade(port, { cookie: successors[0] });
+      assert.equal(oldest.status, 101);
+      for (let n = 1; n <= 10; n += 1) {
+        clock.now += 1;
+        successors.push(cookieFrom(await bootstrap(port, s0)));
+      }
+      assert.equal(await oldest.closed, 4401);
+      assert.equal(server.identity.peekSession(sessionIdOf(successors[0]))?.revoke_reason, "evicted");
+      assert.equal((await upgrade(port, { cookie: successors[10] })).status, 101);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("a rotated cookie's grace successors are budgeted (burst 5): a replayed rotated cookie is not a stream of store writes", async () => {
+    const { server, port, clock } = await prodServer();
+    try {
+      const old = cookieFrom(await bootstrap(port));
+      clock.now += 8 * DAY;
+      assert.equal((await bootstrap(port, old)).status, 200, "the rotation itself");
+      for (let n = 0; n < 5; n += 1) assert.equal((await bootstrap(port, old)).status, 200, `grace successor ${n + 1}`);
+      const limited = await bootstrap(port, old);
+      assert.equal(limited.status, 429);
+      assert.equal(server.identityLimiter.denied["bootstrap-grace"], 1);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("an operator disable reaches the running process: the principal's sockets close 4401 and its cookie ends", async () => {
+    const { server, port, clock } = await prodServer();
+    try {
+      const cookie = cookieFrom(await bootstrap(port));
+      const socket = await upgrade(port, { cookie });
+      const principalId = (server.identity.authenticate({ kind: "session", sessionId: sessionIdOf(cookie), secret: cookie.split(".")[2] }, clock.now) as { principalId: string }).principalId;
+      await server.identity.disablePrincipal(principalId, clock.now);
+      assert.equal(await socket.closed, 4401);
+      assert.deepEqual(JSON.parse((await bootstrap(port, cookie)).body), { error: "session-ended", reason: "principal-disabled" });
+    } finally {
+      await stopServer(server);
+    }
+  });
+});
+
+describe("LIVE-2B upgrade", () => {
+  test("each refusal class, before any WebSocket exists: 404, 403, 401, and a forged or malformed cookie is 401", async () => {
+    const { server, port } = await prodServer();
+    try {
+      const cookie = cookieFrom(await bootstrap(port));
+      assert.equal((await upgrade(port, { path: "/", cookie })).status, 404, "production accepts /gs only");
+      assert.equal((await upgrade(port, { path: "/gs/", cookie })).status, 404);
+      assert.equal((await upgrade(port, { cookie, origin: "https://evil.example" })).status, 403);
+      assert.equal((await upgrade(port, { cookie, origin: null })).status, 403, "a missing Origin");
+      assert.equal((await upgrade(port, { cookie, origin: "null" })).status, 403);
+      assert.equal((await upgrade(port, {})).status, 401, "no cookie");
+      const forged = cookie.replace(/\.[^.]+$/, `.${"A".repeat(43)}`);
+      assert.equal((await upgrade(port, { cookie: forged })).status, 401);
+      assert.equal((await upgrade(port, { cookie: `${cookie}; ${cookie}` })).status, 401, "a duplicate cookie");
+      assert.equal((await upgrade(port, { path: "/gs?dev_claim=p-alice" })).status, 401, "production ignores a dev claim");
+      assert.equal(server.upgrades.accepted, 0);
+      assert.equal(server.socketCounts().total, 0, "no socket was ever made");
+      const ok = await upgrade(port, { cookie });
+      assert.equal(ok.status, 101);
+      ok.socket?.terminate();
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("the order is frozen: the first failing step answers", async () => {
+    const limits = { ...DEFAULT_INGRESS_LIMITS.identity };
+    const identity = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
+    const counts = { global: 0, ip: 0, principal: 0 };
+    const gate = (over: { counts?: Partial<typeof counts> } = {}) => {
+      const limiter = new IdentityLimiter(limits, () => 0);
+      const c = { ...counts, ...(over.counts ?? {}) };
+      return {
+        mode: "production" as const,
+        wsPath: "/gs",
+        allowedOrigins: new Set([PROD_ORIGIN]),
+        allowedOriginList: [PROD_ORIGIN],
+        trustedProxyHops: 0,
+        identity,
+        devAuthenticator: null,
+        limiter,
+        limits,
+        counts: { global: () => c.global, forIp: () => c.ip, forPrincipal: () => c.principal, forAggregate: () => 0 },
+        now: () => 0,
+      };
+    };
+    const req = (url: string, headers: Record<string, string>, remoteAddress = "203.0.113.1") => ({ url, headers, socket: { remoteAddress } as never });
+    const status = (decision: ReturnType<typeof decideUpgrade>) => (decision.ok ? 101 : `${decision.step}:${decision.status}`);
+    // Everything wrong at once: the path answers.
+    assert.equal(status(decideUpgrade(req("/nope", { origin: "https://evil.example" }), gate({ counts: { global: 5000, ip: 500 } }))), "path:404");
+    // Path right, capacity full, origin wrong: capacity answers.
+    assert.equal(status(decideUpgrade(req("/gs", { origin: "https://evil.example" }), gate({ counts: { global: 5000 } }))), "capacity:503");
+    // Capacity fine, the IP at its socket cap, origin wrong: the IP answers.
+    assert.equal(status(decideUpgrade(req("/gs", { origin: "https://evil.example" }), gate({ counts: { ip: 64 } }))), "ip:429");
+    // An unreadable client address (hops 0, no peer): the IP step answers 400.
+    assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN }, ""), gate())), "ip:400");
+    // IP fine, origin wrong, no cookie: the Origin answers.
+    assert.equal(status(decideUpgrade(req("/gs", { origin: "https://evil.example" }), gate())), "origin:403");
+    // Origin fine, no cookie: authentication answers.
+    assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN }), gate())), "authenticate:401");
+    // Authenticated, principal at its cap: the cap answers -- 3 for a provisional guest.
+    const created = await identity.bootstrap({ kind: "none" }, false, 0);
+    const cookie = (created.kind === "ok" ? created.setCookie ?? "" : "").split(";")[0];
+    assert.equal(status(decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 3 } }))), "principal-cap:429");
+    const accepted = decideUpgrade(req("/gs", { origin: PROD_ORIGIN, cookie }), gate({ counts: { principal: 2 } }));
+    assert.ok(accepted.ok);
+    assert.ok(accepted.ok && Object.isFrozen(accepted.ctx), "the context is frozen");
+    assert.deepEqual(accepted.ok ? Object.keys(accepted.ctx).sort() : [], ["ipKey", "openedAt", "principalId", "sessionExpiresAt", "sessionId"]);
+  });
+
+  test("global, IP, principal and provisional socket caps; 503/429 carry Retry-After", async () => {
+    const { server, port } = await prodServer({ limits: { maxSocketsGlobal: 4, maxSocketsPerIp: 3, maxSocketsPerProvisionalPrincipal: 2 } });
+    try {
+      const guest = cookieFrom(await bootstrap(port));
+      const opened = [await upgrade(port, { cookie: guest }), await upgrade(port, { cookie: guest })];
+      const capped = await upgrade(port, { cookie: guest });
+      assert.equal(capped.status, 429, "a provisional guest holds at most its cap");
+      assert.ok(capped.retryAfter);
+      const other = cookieFrom(await bootstrap(port));
+      opened.push(await upgrade(port, { cookie: other }));
+      const ipCapped = await upgrade(port, { cookie: other });
+      assert.equal(ipCapped.status, 429, "the address holds at most its cap");
+      for (const each of opened) assert.equal(each.status, 101);
+      for (const each of opened) each.socket?.terminate();
+      await until(() => server.socketCounts().total === 0, "the sockets to go");
+    } finally {
+      await stopServer(server);
+    }
+    const tight = await prodServer({ limits: { maxSocketsGlobal: 1 } });
+    try {
+      const cookie = cookieFrom(await bootstrap(tight.port));
+      const one = await upgrade(tight.port, { cookie });
+      const two = await upgrade(tight.port, { cookie });
+      assert.equal(one.status, 101);
+      assert.equal(two.status, 503);
+      assert.equal(two.retryAfter, "5");
+      one.socket?.terminate();
+    } finally {
+      await stopServer(tight.server);
+    }
+  });
+
+  test("a socket's identity is frozen: no frame can change it (a `claim` is bad-frame; another seat's write is refused)", async () => {
+    const { server, port } = await startServer({ store: controlledStore().store });
+    try {
+      const alice = await Client.open(port, ALICE);
+      alice.send({ kind: "hello", room: "JUNO-ID", build: BUILD, claim: BOB, baseIndex: -1 });
+      assert.equal((await alice.next((f) => f.kind === "error", "bad-frame")).code, "bad-frame");
+      alice.send({ kind: "room-hello", room: "JUNO-ID", build: BUILD, claim: BOB });
+      assert.equal((await alice.next((f) => f.kind === "error", "bad-frame")).code, "bad-frame");
+      alice.roomHello("JUNO-ID");
+      alice.roomWrite("JUNO-ID", { op: "host", hostId: BOB, nickname: "Bob", variants: {} });
+      const refused = await alice.next((f) => f.kind === "error" && f.code === "room-write-refused", "the refusal");
+      assert.match(String(refused.reason), /hosted by the player who opens it/);
+      assert.equal(server.socketCounts().byPrincipal(`pr_dev_${ALICE}`), 1);
+      assert.equal(server.socketCounts().byPrincipal(`pr_dev_${BOB}`), 0);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("production: a cookie principal has no seat in the legacy room protocol (the explicit 2C seam)", async () => {
+    const { server, port } = await prodServer();
+    try {
+      const cookie = cookieFrom(await bootstrap(port));
+      const socket = await upgrade(port, { cookie });
+      socket.socket?.send(JSON.stringify({ kind: "room-hello", room: "JUNO-ABC", build: BUILD }));
+      socket.socket?.send(JSON.stringify({ kind: "hello", room: "JUNO-ABC", build: BUILD, baseIndex: -1 }));
+      await until(() => socket.frames.filter((frame) => frame.code === "no-seat-identity").length === 2, "two no-seat-identity answers");
+      assert.equal(server.socketCounts().byGame("JUNO-ABC"), 0);
+      socket.socket?.terminate();
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("an expired session's socket closes 4401 at its next frame; the sweep closes an idle one", async () => {
+    const clock = { now: 1_750_000_000_000 };
+    const { server, port } = await prodServer({ clock, limits: { sweepIntervalMs: 50 } });
+    try {
+      const cookie = cookieFrom(await bootstrap(port));
+      const active = await upgrade(port, { cookie });
+      const idle = await upgrade(port, { cookie });
+      clock.now += 30 * DAY;
+      active.socket?.send(JSON.stringify({ kind: "lobby-hello" }));
+      assert.equal(await active.closed, 4401);
+      assert.equal(await idle.closed, 4401);
+    } finally {
+      await stopServer(server);
+    }
+  });
+});
+
+describe("LIVE-2B limits", () => {
+  test("failed upgrades: after the burst the address is refused 429 before its Origin is even read", async () => {
+    const { server, port } = await prodServer({ limits: { failedUpgradesPerIp: { capacity: 3, refillPerSecond: 0.001 } } });
+    try {
+      for (let n = 0; n < 3; n += 1) assert.equal((await upgrade(port, {})).status, 401);
+      const limited = await upgrade(port, {});
+      assert.equal(limited.status, 429);
+      assert.ok(Number(limited.retryAfter) >= 1);
+      assert.equal(server.upgrades.refused["ip:429"], 1);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("every upgrade: per address (429) and for the whole server (503)", async () => {
+    const perIp = await prodServer({ limits: { upgradesPerIp: { capacity: 2, refillPerSecond: 0.001 } } });
+    try {
+      const cookie = cookieFrom(await bootstrap(perIp.port));
+      const a = await upgrade(perIp.port, { cookie });
+      const b = await upgrade(perIp.port, { cookie });
+      assert.equal((await upgrade(perIp.port, { cookie })).status, 429);
+      a.socket?.terminate();
+      b.socket?.terminate();
+    } finally {
+      await stopServer(perIp.server);
+    }
+    const global = await prodServer({ limits: { upgradesGlobal: { capacity: 1, refillPerSecond: 0.001 } } });
+    try {
+      const cookie = cookieFrom(await bootstrap(global.port));
+      const a = await upgrade(global.port, { cookie });
+      assert.equal((await upgrade(global.port, { cookie })).status, 503);
+      a.socket?.terminate();
+    } finally {
+      await stopServer(global.server);
+    }
+  });
+
+  test("principal-creating bootstrap: per address and global budgets (429); existing sessions have their own", async () => {
+    const { server, port } = await prodServer({
+      limits: { guestCreatesPerIp: { capacity: 2, refillPerSecond: 0.0001 }, bootstrapsPerSession: { capacity: 2, refillPerSecond: 0.0001 } },
+    });
+    try {
+      const cookie = cookieFrom(await bootstrap(port));
+      assert.equal((await bootstrap(port)).status, 201);
+      const limited = await bootstrap(port);
+      assert.equal(limited.status, 429);
+      assert.equal(JSON.parse(limited.body).error, "rate-limited");
+      assert.equal(server.identity.sizes().principals, 2, "no principal for a refused bootstrap");
+      assert.equal((await bootstrap(port, cookie)).status, 200);
+      assert.equal((await bootstrap(port, cookie)).status, 200);
+      assert.equal((await bootstrap(port, cookie)).status, 429, "60 a minute per session (2 here)");
+    } finally {
+      await stopServer(server);
+    }
+    const global = await prodServer({ limits: { guestCreatesGlobal: { capacity: 1, refillPerSecond: 0.0001 } } });
+    try {
+      assert.equal((await bootstrap(global.port)).status, 201);
+      assert.equal((await bootstrap(global.port)).status, 429);
+    } finally {
+      await stopServer(global.server);
+    }
+  });
+
+  test("malformed-flood cooldown: three 1008 closes from one address in ten minutes refuse its upgrades 429", async () => {
+    const { server, port } = await startServer({ store: controlledStore().store, limits: { identity: { failedUpgradesPerIp: { capacity: 1e6, refillPerSecond: 1e6 } } } });
+    try {
+      for (let round = 0; round < 3; round += 1) {
+        const client = await Client.open(port, ALICE);
+        const closed = new Promise<number>((resolve) => client.socket.once("close", (code) => resolve(code)));
+        for (let n = 0; n < 11; n += 1) client.socket.send("not json");
+        assert.equal(await closed, 1008);
+      }
+      assert.equal(server.upgrades.malformedCooldowns, 1);
+      const refused = await new Promise<{ status: number; retryAfter?: string }>((resolve) => {
+        const socket = new WebSocket(devSocketUrl(port, BOB), { origin: DEV_ORIGIN });
+        socket.on("error", () => undefined);
+        socket.once("open", () => resolve({ status: 101 }));
+        socket.once("unexpected-response", (req, res) => {
+          resolve({ status: res.statusCode ?? 0, retryAfter: res.headers["retry-after"] as string | undefined });
+          res.resume();
+          req.destroy();
+        });
+      });
+      assert.equal(refused.status, 429);
+      assert.ok(Number(refused.retryAfter) > 200, "about five minutes");
+    } finally {
+      await stopServer(server);
+    }
+  });
+});
+
+describe("LIVE-2B development mode", () => {
+  test("development accepts a loopback dev claim at / and /gs; a forwarded or remote-looking upgrade is 403; no claim is 401", async () => {
+    const { server, port } = await startServer({ store: controlledStore().store });
+    try {
+      const direct = await upgrade(port, { path: "/?dev_claim=p-alice", origin: DEV_ORIGIN });
+      const gs = await upgrade(port, { path: "/gs?dev_claim=p-alice", origin: DEV_ORIGIN });
+      assert.equal(direct.status, 101);
+      assert.equal(gs.status, 101);
+      assert.equal(server.socketCounts().byPrincipal("pr_dev_p-alice"), 2);
+      assert.equal((await upgrade(port, { path: "/?dev_claim=p-alice", origin: DEV_ORIGIN, headers: { "X-Forwarded-For": "203.0.113.9" } })).status, 403);
+      assert.equal((await upgrade(port, { path: "/?dev_claim=p-alice", origin: DEV_ORIGIN, headers: { "X-Real-IP": "127.0.0.1" } })).status, 403);
+      assert.equal((await upgrade(port, { path: "/?dev_claim=p-alice", origin: DEV_ORIGIN, headers: { Forwarded: "for=127.0.0.1" } })).status, 403);
+      assert.equal((await upgrade(port, { path: "/?dev_claim=p-alice", origin: DEV_ORIGIN, headers: { "X-Forwarded-Host": "localhost" } })).status, 403);
+      assert.equal((await upgrade(port, { path: "/?dev_claim=p-alice", origin: DEV_ORIGIN, headers: { Host: "abc.ngrok.app" } })).status, 403, "a tunnel's Host");
+      assert.equal((await upgrade(port, { path: "/?dev_claim=p-alice", origin: "https://abc.ngrok.app" })).status, 403, "a tunnel's Origin");
+      assert.equal((await upgrade(port, { path: "/", origin: DEV_ORIGIN })).status, 401);
+      direct.socket?.terminate();
+      gs.socket?.terminate();
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("a development authenticator cannot be handed to a production server, nor built outside development", async () => {
+    const identity = devIdentity();
+    await assert.rejects(
+      startServer({ identity: { ...identity, mode: "production", allowedOrigins: [PROD_ORIGIN] } }),
+      /refuses a development authenticator/,
+    );
+    await assert.rejects(startServer({ identity: { ...identity, trustedProxyHops: 1 } }), /refuses trusted proxy hops/);
+    await assert.rejects(startServer({ identity: { ...identity, allowedOrigins: ["https://abc.ngrok.app"] } }), /loopback allowed origins/);
+    await assert.rejects(
+      startServer({ identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0 }, explainDivergence: true }),
+      /refuses explainDivergence/,
+    );
+  });
+
+  test("the ordinary local development flow: host -> join -> ready -> start -> play -> undo -> close, then back", async () => {
+    const control = controlledStore();
+    const { server, port } = await startServer({ store: control.store });
+    const room = "JUNO-DEV";
+    try {
+      const hostDoc = await Client.open(port, ALICE);
+      hostDoc.roomHello(room);
+      hostDoc.roomWrite(room, { op: "host", hostId: ALICE, nickname: "Alice", variants: {} });
+      await hostDoc.next((f) => f.kind === "room" && (f.doc as { hostId?: string } | null)?.hostId === ALICE, "the hosted room");
+      const joinDoc = await Client.open(port, BOB);
+      joinDoc.roomHello(room);
+      joinDoc.roomWrite(room, { op: "upsert-player", player: { id: BOB, nickname: "Bob", isReady: false } });
+      await hostDoc.next((f) => f.kind === "room" && ((f.doc as { players?: unknown[] } | null)?.players?.length ?? 0) === 2, "Bob seated");
+      hostDoc.roomWrite(room, { op: "upsert-player", player: { id: ALICE, nickname: "Alice", isReady: true } });
+      joinDoc.roomWrite(room, { op: "upsert-player", player: { id: BOB, nickname: "Bob", isReady: true } });
+      await hostDoc.next(
+        (f) => f.kind === "room" && ((f.doc as { players?: Array<{ isReady: boolean }> } | null)?.players ?? []).filter((p) => p.isReady).length === 2,
+        "both ready",
+      );
+      const alice = await Client.open(port, ALICE);
+      const bob = await Client.open(port, BOB);
+      alice.hello(room);
+      bob.hello(room);
+      await alice.next((f) => f.kind === "catch-up", "alice's catch-up");
+      await bob.next((f) => f.kind === "catch-up", "bob's catch-up");
+      alice.submit(
+        { SetupGame: { players: [{ id: ALICE, nickname: "Alice" }, { id: BOB, nickname: "Bob" }], variants: {} } },
+        { baseIndex: -1, submissionId: "dev-deal" },
+      );
+      assert.equal((await alice.answerTo("dev-deal")).kind, "applied");
+      await hostDoc.next((f) => f.kind === "room" && (f.doc as { status?: string } | null)?.status === "playing", "the room playing");
+      alice.submit(BUY, { baseIndex: 0, submissionId: "dev-buy" });
+      const bought = await alice.answerTo("dev-buy");
+      assert.equal(bought.kind, "applied");
+      const boughtIndex = (bought.entries as Array<{ index: number; actor: string }>).find((entry) => entry.actor === ALICE)?.index ?? -1;
+      assert.ok(boughtIndex > 0);
+      const at = Math.max(...control.log(room).map((entry) => entry.index));
+      alice.submit({ RevertTo: { index: boughtIndex, player: ALICE, summary: "undo" } }, { baseIndex: at, submissionId: "dev-undo" });
+      assert.equal((await alice.answerTo("dev-undo")).kind, "applied", "one-step undo of her own move");
+      assert.equal(server.socketCounts().byGame(room), 4);
+      for (const client of [alice, bob, hostDoc, joinDoc]) await client.close();
+      await until(() => server.socketCounts().total === 0, "every socket closed");
+      // And back: a reconnecting player is caught up from the durable log.
+      const again = await Client.open(port, BOB);
+      again.hello(room);
+      const catchUp = await again.next((f) => f.kind === "catch-up", "the catch-up");
+      assert.equal((catchUp.entries as unknown[]).length, control.log(room).length);
+      await again.close();
+    } finally {
+      await stopServer(server);
+    }
+  });
+});
+
+describe("LIVE-2B startup (spawned processes)", () => {
+  const start = path.join(__dirname, "..", "start.js");
+  const run = (args: string[], env: Record<string, string | undefined>) => {
+    const clean: NodeJS.ProcessEnv = { ...process.env };
+    for (const name of ["GS_MODE", "GS_ALLOWED_ORIGINS", "GS_TRUSTED_PROXY_HOPS", "INSECURE_LOCAL_IDENTITY", "LEGACY_LOGS", "EXPLAIN_DIVERGENCE"]) delete clean[name];
+    for (const [name, value] of Object.entries(env)) if (value !== undefined) clean[name] = value;
+    const child = spawn(process.execPath, [start, "--port", "0", ...args], { env: clean, stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    child.stdout.on("data", (chunk) => (out += String(chunk)));
+    child.stderr.on("data", (chunk) => (out += String(chunk)));
+    const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
+    return { child, output: () => out, exited };
+  };
+  const PROD = { GS_MODE: "production", GS_ALLOWED_ORIGINS: PROD_ORIGIN, GS_TRUSTED_PROXY_HOPS: "1" };
+
+  test("no mode, and every insecure production setting, exit 2 with a named reason -- and a clean production config starts", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "live2b-start-"));
+    try {
+      const cases: Array<[string[], Record<string, string | undefined>, RegExp]> = [
+        [[], {}, /GS_MODE is not set/],
+        [[], { GS_MODE: "staging" }, /must be "development" or "production"/],
+        [["--insecure-local-identity"], PROD, /--insecure-local-identity/],
+        [[], { ...PROD, INSECURE_LOCAL_IDENTITY: "1" }, /INSECURE_LOCAL_IDENTITY/],
+        [[], { ...PROD, LEGACY_LOGS: "development-corpus" }, /legacy-logs/],
+        [["--explain-divergence"], PROD, /explain-divergence/],
+        [[], { ...PROD, GS_ALLOWED_ORIGINS: "" }, /GS_ALLOWED_ORIGINS/],
+        [[], { ...PROD, GS_ALLOWED_ORIGINS: "http://play.example" }, /non-https/],
+        [[], { ...PROD, GS_TRUSTED_PROXY_HOPS: undefined }, /GS_TRUSTED_PROXY_HOPS/],
+        [[], { GS_MODE: "development", GS_TRUSTED_PROXY_HOPS: "1" }, /loopback-only/],
+        [[], { GS_MODE: "development", GS_ALLOWED_ORIGINS: "https://abc.ngrok.app" }, /non-loopback/],
+      ];
+      await Promise.all(
+        cases.map(async ([args, env, reason]) => {
+          const child = run([...args, "--data", path.join(dir, String(Math.random()).slice(2))], env);
+          assert.equal(await child.exited, 2, child.output());
+          assert.match(child.output(), reason);
+          assert.match(child.output(), /Refusing to start/);
+        }),
+      );
+      const ok = run(["--data", path.join(dir, "ok")], PROD);
+      const deadline = Date.now() + 20_000;
+      while (!/GS_MODE=production/.test(ok.output()) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.match(ok.output(), /GS_MODE=production/);
+      assert.match(ok.output(), /PRODUCTION IDENTITY: the __Host-gs_session cookie/);
+      ok.child.kill("SIGTERM");
+      await ok.exited;
+      const dev = run(["--data", path.join(dir, "dev")], { GS_MODE: "development" });
+      const devDeadline = Date.now() + 20_000;
+      while (!/GS_MODE=development/.test(dev.output()) && Date.now() < devDeadline) await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.match(dev.output(), /NEVER point a tunnel at this server/);
+      dev.child.kill("SIGTERM");
+      await dev.exited;
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("LIVE-2B nothing secret reaches a log line", () => {
+  test("a full cookie lifecycle, with failures, prints no cookie, secret or hash", async () => {
+    const lines: string[] = [];
+    const saved = { log: console.log, warn: console.warn, error: console.error };
+    const capture = (...args: unknown[]) => lines.push(args.map((arg) => (arg instanceof Error ? `${arg.message} ${arg.stack}` : String(arg))).join(" "));
+    console.log = capture;
+    console.warn = capture;
+    console.error = capture;
+    const store = createMemoryIdentityStore();
+    const service = IdentityService.fromSnapshot(store, { principals: [], sessions: [] });
+    const { server, port, clock } = await prodServer({ service });
+    const secrets: string[] = [];
+    try {
+      const cookie = cookieFrom(await bootstrap(port));
+      secrets.push(cookie, cookie.split(".")[2]);
+      const session = service.peekSession(sessionIdOf(cookie));
+      if (session) secrets.push(session.secret_hash);
+      await upgrade(port, { cookie: `${cookie}x` });
+      await upgrade(port, { cookie, origin: "https://evil.example" });
+      const socket = await upgrade(port, { cookie });
+      socket.socket?.send("not json");
+      clock.now += 8 * DAY;
+      store.failNext.push("definite");
+      await bootstrap(port, cookie);
+      const rotated = cookieFrom(await bootstrap(port, cookie));
+      secrets.push(rotated, rotated.split(".")[2]);
+      await request(port, "/gs/api/session/revoke", { cookie: rotated });
+      socket.socket?.terminate();
+    } finally {
+      console.log = saved.log;
+      console.warn = saved.warn;
+      console.error = saved.error;
+      await stopServer(server);
+    }
+    const printed = lines.join("\n");
+    for (const secret of secrets) assert.ok(!printed.includes(secret), "a secret reached the window");
+  });
+});
+
+describe("LIVE-2B adversarial-review regressions", () => {
+  const limitsWith = (over: Partial<IdentityLimits>) => ({ ...DEFAULT_INGRESS_LIMITS.identity, ...over });
+  function gateFor(identity: IdentityService, limits: ReturnType<typeof limitsWith>, counts: { principal?: number; aggregate?: number } = {}) {
+    return {
+      mode: "production" as const,
+      wsPath: "/gs",
+      allowedOrigins: new Set([PROD_ORIGIN]),
+      allowedOriginList: [PROD_ORIGIN],
+      trustedProxyHops: 0,
+      identity,
+      devAuthenticator: null,
+      limiter: new IdentityLimiter(limits, () => 0),
+      limits,
+      counts: { global: () => 0, forIp: () => 0, forPrincipal: () => counts.principal ?? 0, forAggregate: () => counts.aggregate ?? 0 },
+      now: () => 0,
+    };
+  }
+  const req = (headers: Record<string, string>, remoteAddress = "203.0.113.1") => ({ url: "/gs", headers, socket: { remoteAddress } as never });
+  const verdict = (decision: ReturnType<typeof decideUpgrade>) => (decision.ok ? 101 : `${decision.step}:${decision.status}`);
+  async function guestCookie(identity: IdentityService, now = 0): Promise<string> {
+    const created = await identity.bootstrap({ kind: "none" }, false, now);
+    return (created.kind === "ok" ? created.setCookie ?? "" : "").split(";")[0];
+  }
+
+  test("High: one address refused by its own limits cannot drain the server's 50/s budget", async () => {
+    const identity = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
+    const gate = gateFor(identity, limitsWith({ upgradesGlobal: { capacity: 3, refillPerSecond: 0.0001 }, failedUpgradesPerIp: { capacity: 2, refillPerSecond: 0.0001 } }));
+    const attacker = (n: number) => verdict(decideUpgrade(req({ origin: "https://evil.example" }), gate));
+    assert.deepEqual([0, 1, 2, 3, 4, 5].map(attacker), ["origin:403", "origin:403", "ip:429", "ip:429", "ip:429", "ip:429"]);
+    const cookie = await guestCookie(identity);
+    assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie }, "198.51.100.2"), gate)), 101, "another address is served");
+  });
+
+  test("Medium: a principal at its socket cap does not spend its address's failed-upgrade budget (NAT neighbours)", async () => {
+    const identity = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
+    const limits = limitsWith({ failedUpgradesPerIp: { capacity: 1, refillPerSecond: 0.0001 } });
+    const capped = gateFor(identity, limits, { principal: 3 });
+    const a = await guestCookie(identity);
+    for (let n = 0; n < 5; n += 1) assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie: a }), capped)), "principal-cap:429");
+    const b = await guestCookie(identity);
+    const neighbour = { ...capped, counts: { ...capped.counts, forPrincipal: () => 0 } };
+    assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie: b }), neighbour)), 101);
+  });
+
+  test("Low/Medium: an IPv6 /48 holds at most ten addresses' worth of sockets", async () => {
+    const identity = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
+    const cookie = await guestCookie(identity);
+    const full = gateFor(identity, limitsWith({}), { aggregate: 640 });
+    assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie }, "2001:db8:1:2::5"), full)), "ip:429");
+    assert.equal(verdict(decideUpgrade(req({ origin: PROD_ORIGIN, cookie }, "203.0.113.7"), full)), 101, "IPv4 has no aggregate");
+  });
+
+  test("Medium: concurrent bootstraps with a week-old cookie mint one rotation and only the grace budget's successors", async () => {
+    const store = createMemoryIdentityStore();
+    const identity = IdentityService.fromSnapshot(store, { principals: [], sessions: [] });
+    const cookie = await guestCookie(identity);
+    const read = { kind: "session" as const, sessionId: cookie.split("=")[1].split(".")[1], secret: cookie.split(".")[2] };
+    let granted = 0;
+    const budget = () => (granted < 3 ? ((granted += 1), 0) : 60_000);
+    const at = 8 * DAY;
+    const outcomes = await Promise.all(Array.from({ length: 10 }, () => identity.bootstrap(read, false, at, { graceBudget: budget })));
+    assert.equal(outcomes.filter((o) => o.kind === "ok").length, 4, "the rotation and three grace successors");
+    assert.equal(outcomes.filter((o) => o.kind === "rate-limited").length, 6);
+    assert.equal(identity.stats.graceRotations, 3);
+  });
+
+  test("Medium: a logout also ends the rotated predecessor still in its grace -- no resurrection through the older cookie", async () => {
+    const ended: string[][] = [];
+    const identity = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] }, { hooks: { onSessionsEnded: (ids) => ended.push([...ids]) } });
+    const s0 = await guestCookie(identity);
+    const r0 = { kind: "session" as const, sessionId: s0.split("=")[1].split(".")[1], secret: s0.split(".")[2] };
+    const rotated = await identity.bootstrap(r0, false, 8 * DAY);
+    const s1 = (rotated.kind === "ok" ? rotated.setCookie ?? "" : "").split(";")[0];
+    const s1Id = s1.split("=")[1].split(".")[1];
+    await identity.revoke(s1Id, "logout", 8 * DAY + 1);
+    assert.deepEqual(ended, [[s1Id, r0.sessionId]], "both sessions' sockets are closed");
+    assert.deepEqual(await identity.bootstrap(r0, false, 8 * DAY + 2), { kind: "ended", reason: "logout" });
+  });
+});

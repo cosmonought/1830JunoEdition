@@ -743,8 +743,6 @@ const isObject: FrameCheck = (value) => isPlainObject(value);
 
 /** The legacy room code (`JUNO-XXX`), the lobby socket's `~lobby`, and a test's room name. */
 export const ROOM_PATTERN = /^[A-Za-z0-9~_.-]{1,40}$/;
-/** A claimed identity: a `p-` player id or a wallet address. Believed (#1210) -- but bounded. */
-const CLAIM_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
 /** LIVE-2 §11.3: a chat line is at most 500 characters; longer is refused, not truncated. */
 export const MAX_CHAT_TEXT_LENGTH = 500;
 
@@ -807,6 +805,10 @@ function variantsOk(value: unknown): boolean {
   return Object.keys(value).every((key) => hasOwn(VARIANT_FIELDS, key));
 }
 
+/** A legacy player id in a room write (`p-…`, or a wallet address). Bounded; LIVE-2C replaces it with a
+ *  server-minted `player_id`. (LIVE-2B removed the same pattern's other use, the `claim` field.) */
+const CLAIM_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+
 const SEAT_PLAYER_FIELDS: FrameFields = nullTable({
   id: req(str(128, CLAIM_PATTERN)),
   nickname: req(str(MAX_NARRATION_LENGTH)),
@@ -863,7 +865,8 @@ const CONTROL_FRAMES: Readonly<Record<string, FrameFields>> = nullTable<FrameFie
     kind: req(str(16)),
     room: req(str(40, ROOM_PATTERN)),
     build: req(str(64, BUILD_PATTERN)),
-    claim: opt(str(128, CLAIM_PATTERN)),
+    /* LIVE-2B: no `claim`. Identity is the connection's, authenticated at the upgrade; a frame naming one is
+       `bad-frame` (LIVE-2 §4, §11.2). `pin` and `token` stay until the seat-transfer pass (2D/2E). */
     pin: opt(str(16)),
     token: opt(str(64, REQUEST_ID_PATTERN)),
     baseIndex: opt(isBaseIndex),
@@ -882,7 +885,7 @@ const CONTROL_FRAMES: Readonly<Record<string, FrameFields>> = nullTable<FrameFie
     kind: req(str(16)),
     room: req(str(40, ROOM_PATTERN)),
     build: opt(str(64, BUILD_PATTERN)),
-    claim: opt(str(128, CLAIM_PATTERN)),
+    /* LIVE-2B: no `claim` (see `hello`). */
     pin: opt(str(16)),
     token: opt(str(64, REQUEST_ID_PATTERN)),
   }),

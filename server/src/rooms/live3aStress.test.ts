@@ -33,6 +33,8 @@ import {
   BUY,
   CAROL,
   Client,
+  DEV_ORIGIN,
+  devSocketUrl,
   PASS,
   probeSession,
   quietConsole,
@@ -136,8 +138,10 @@ function player(port: number, claim: string, durable: () => readonly ServerLogEn
     schedule: (callback) => {
       setTimeout(callback, 3);
     },
-    socketFactory: (url) => {
-      const current = new WebSocket(url);
+    /* LIVE-2B: the link's URL carries no dev claim in this (non-browser, non-dev-build) process, so the factory
+       opens the development socket for this player itself -- identity at the upgrade, never in a frame. */
+    socketFactory: () => {
+      const current = new WebSocket(devSocketUrl(port, claim), { origin: DEV_ORIGIN });
       socket = current;
       const like: SocketLike = {
         send: (data) => {

@@ -6,22 +6,29 @@
 //  DESIGN NOTE 1213: THE PROCESS, AND THE ONE SETTING THAT MATTERS
 // ==================================================================
 //
-// `createGameServer` takes an identity resolver and has no default (#1210), which means this file has to
-// choose one -- and choosing is exactly what an entry point is for. It chooses the INSECURE one only when
-// told to, in as many words, and refuses to start otherwise.
+// `createGameServer` takes an identity configuration and has no default (#1210), which means this file has to
+// choose one -- and choosing is exactly what an entry point is for.
 //
-// THAT REFUSAL IS THE POINT. Every check built in Phase 2 rests on the server knowing who is speaking:
-// #1207 keeps the actor off the wire so a client cannot claim a seat, and `turnAuthority` then enforces the
-// rules on the strength of that identity. A process that quietly believed whatever a client said would keep
-// every test green while enforcing the rules on behalf of the wrong person.
+// LIVE-2B: THE CHOICE IS `GS_MODE`, AND IT HAS NO DEFAULT (`identity/mode.ts`). `development` runs the loopback-only
+// development authenticator (`?dev_claim=`, local tabs only -- NEVER behind a tunnel); `production` authenticates
+// the `__Host-gs_session` cookie and refuses to start, exit 2, on any insecure setting. A missing or invalid mode is
+// exit 2 too. Every check built in Phase 2 rests on the server knowing who is speaking, so a process that is not
+// told how to know refuses rather than guesses.
 //
-// Usage:
-//   BUILD_ID=$(git rev-parse --short HEAD) INSECURE_LOCAL_IDENTITY=1 node dist/server/src/start.js
+// Usage (local play, two tabs on this machine):
+//   GS_MODE=development BUILD_ID=$(git rev-parse --short HEAD) node dist/server/src/start.js
+//   node dist/server/src/start.js --mode development --build dev          (PowerShell / cmd)
 
 import * as path from "path";
 
-import { createGameServer, GAME_SERVER_BIND_HOST, trustClaimedIdentity } from "./gameServer";
+import { createGameServer, GAME_SERVER_BIND_HOST } from "./gameServer";
 import { createFileLogStore } from "./fileLogStore";
+import { SESSION_COOKIE_NAME } from "./identity/cookies";
+import { createDevAuthenticator } from "./identity/devAuthenticator";
+import { createFileIdentityStore } from "./identity/fileStore";
+import { resolveServerConfig } from "./identity/mode";
+import { IdentityService } from "./identity/sessions";
+import { DEFAULT_INGRESS_LIMITS } from "./ingress/limits";
 import { acquireDataLock, LOCK_STALE_AFTER_MS, type DataLock } from "./persistence/processLock";
 import { RULES_ENGINE_VERSION, SUPPORTED_RULES_ENGINE_VERSIONS } from "../../frontend/src/gameEngine/rulesVersion";
 
@@ -43,20 +50,19 @@ const port = Number(process.env.PORT ?? flagValue("--port") ?? 8917);
  *  answered with `build-skew` rather than treated as a divergence -- but only if both sides were told. */
 const build = process.env.BUILD_ID ?? flagValue("--build") ?? "dev";
 
-if (process.env.INSECURE_LOCAL_IDENTITY !== "1" && !flags.includes("--insecure-local-identity")) {
+/* ==================================================================
+    LIVE-2B (LIVE-2 §4.8): THE MODE, AND EVERY INSECURE SETTING PRODUCTION REFUSES -- BEFORE ANYTHING ELSE RUNS
+   ==================================================================
+   Refused, never warned about: exit 2 with the reason. See `identity/mode.ts` for the whole list. */
+const resolved = resolveServerConfig(flags, process.env);
+if (!resolved.ok) {
   // eslint-disable-next-line no-console
-  console.error(
-    [
-      "Refusing to start: no identity resolver is configured.",
-      "",
-      "For local play, pass --insecure-local-identity (or set INSECURE_LOCAL_IDENTITY=1). Every client is",
-      "then believed about who it is, which is fine at a kitchen table and is not fine anywhere a payout",
-      "can happen (design note #1210).",
-      "For anything else, wire a real `resolveIdentity` into `createGameServer` first.",
-    ].join("\n"),
-  );
+  console.error(`Refusing to start: ${resolved.reason}`);
   process.exit(2);
 }
+const config = resolved.config;
+/* `createDevAuthenticator` reads GS_MODE at call time; a mode given as `--mode` is made the environment's too. */
+process.env.GS_MODE = config.mode;
 
 /** #1250: where the rooms live between restarts. A directory beside the server by default, so `cat` is the
  *  whole of the tooling needed to read a game back; `--data <dir>` or `DATA_DIR` to put it elsewhere. */
@@ -65,15 +71,9 @@ const dataDir = path.resolve(process.env.DATA_DIR ?? flagValue("--data") ?? path
 /* #1520: THE ONE WAY A ROOM DEALT BEFORE RULES-ENGINE VERSIONING IS LOADED. Absent, such a room is held: a
    deal with no `rules_engine_version` is never read as "the current version". `--legacy-logs
    development-corpus` (or `LEGACY_LOGS=development-corpus`) admits the local playtest rooms under the engine
-   this process carries, and says so at startup and per room. Any other value is refused here rather than
-   silently read as "refuse", so a typo cannot hide a policy. */
-const legacyLogsFlag = process.env.LEGACY_LOGS ?? flagValue("--legacy-logs") ?? "refuse";
-if (legacyLogsFlag !== "refuse" && legacyLogsFlag !== "development-corpus") {
-  // eslint-disable-next-line no-console
-  console.error(`Refusing to start: --legacy-logs must be "refuse" or "development-corpus", not "${legacyLogsFlag}".`);
-  process.exit(2);
-}
-const legacyLogs: "refuse" | "development-corpus" = legacyLogsFlag;
+   this process carries, and says so at startup and per room -- in DEVELOPMENT mode only (LIVE-2B: production
+   refuses it). Parsed with the mode, in `identity/mode.ts`; any other value is refused there. */
+const legacyLogs = config.legacyLogs;
 
 /* ==================================================================
     LIVE-3B (§8.8, F-12): ONE SERVER PER DATA DIRECTORY
@@ -142,14 +142,35 @@ async function main(): Promise<void> {
     }, 1_500).unref();
   };
 
+  /* LIVE-2B: principals and sessions live beside the rooms, under the same lock -- written only for guests who own
+     something (activation), durably (LIVE-3B's replacement protocol), and a file that cannot be read without
+     guessing refuses the start. */
+  let identity: IdentityService;
+  try {
+    identity = await IdentityService.open(
+      createFileIdentityStore(dataDir, {
+        writerCheck: () => held.verify(),
+        onRestartRequired: (detail) => failFast("the identity store", detail),
+      }),
+    );
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(`Refusing to start: the identity store in ${dataDir} cannot be read -- ${error instanceof Error ? error.message : String(error)}`);
+    held.releaseSync();
+    process.exit(EXIT_LOCK_REFUSED);
+  }
   createGameServer({
     port,
     build,
-    resolveIdentity: trustClaimedIdentity,
-    /* #1225: local play explains itself. The same condition as the insecure identity, because they describe
-       the same situation -- a table at a kitchen table, where the cost of a verbose frame is nothing and the
-       cost of an unexplained divergence is an evening. */
-    explainDivergence: true,
+    identity: {
+      mode: config.mode,
+      allowedOrigins: config.allowedOrigins,
+      trustedProxyHops: config.trustedProxyHops,
+      service: identity,
+      ...(config.mode === "development" ? { devAuthenticator: createDevAuthenticator() } : {}),
+    },
+    /* #1225: local play explains itself -- development only; production refuses it (LIVE-2B). */
+    explainDivergence: config.explainDivergence,
     /* #1250: the log is on disk and synced before any client is answered, so a restart restores every room
        it was serving. LIVE-3B: positional, looped, synced writes; a torn tail repaired at load; a damaged log held
        for `tools/logDoctor.ts`; and every write first checks that this process still holds the lock. */
@@ -192,10 +213,28 @@ const builtAt = (() => {
   }
 })();
 
+/** LIVE-2 §4.8 item 6: the mode and the security posture, said at startup. */
+function identityBanner(): string {
+  const limits = DEFAULT_INGRESS_LIMITS.identity;
+  const posture =
+    config.mode === "development"
+      ? "  DEVELOPMENT IDENTITY: each tab is who its ?dev_claim= says, loopback only (Origin, Host and peer) -- NEVER point a tunnel at this server\n" +
+        "  remote playtests are not supported by this revision: use the last pre-LIVE-2B revision (90838071) until production mode can seat players (LIVE-2C/2D)\n"
+      : `  PRODUCTION IDENTITY: the ${SESSION_COOKIE_NAME} cookie (Secure; HttpOnly; SameSite=Strict), bootstrapped at POST /gs/api/session; trusted proxy hops ${config.trustedProxyHops}\n` +
+        "  the legacy room protocol has no seat identity for a cookie principal yet: rooms answer no-seat-identity until LIVE-2C/2D\n";
+  return (
+    posture +
+    `  allowed origins: ${config.allowedOrigins.join(", ")}${config.notes.length > 0 ? ` (${config.notes.join("; ")})` : ""}\n` +
+    `  limits: ${limits.maxSocketsGlobal} sockets, ${limits.maxSocketsPerIp} per address, ${limits.maxSocketsPerPrincipal} per player ` +
+    `(${limits.maxSocketsPerProvisionalPrincipal} new guest); upgrades 60/min per address, 50/s in all\n`
+  );
+}
+
 function printBanner(instanceId: string): void {
   // eslint-disable-next-line no-console
   console.log(
-    `1830 game server listening on ws://${GAME_SERVER_BIND_HOST}:${port} (build "${build}", INSECURE local identity)\n` +
+    `1830 game server listening on ws://${GAME_SERVER_BIND_HOST}:${port} (build "${build}", GS_MODE=${config.mode})\n` +
+      identityBanner() +
       `  compiled ${builtAt} UTC -- if a fix you just made is not in this stamp, the server was not rebuilt\n` +
       `  rooms stored in ${dataDir} -- one .log.jsonl per room, synced before any client is answered (#1250)\n` +
       `  data directory locked by instance ${instanceId} (pid ${process.pid}); a second server on it is refused (LIVE-3B)\n` +

@@ -3,6 +3,14 @@
 First time the game runs against the Node server instead of Firestore. Everything here is local; nothing
 touches Vercel, and no push is needed.
 
+> **LIVE-2B (2026-09-26): the server needs a mode.** `--mode development` (or `GS_MODE=development`) is local
+> play: each tab is who the `?dev_claim=` on its socket says, and ONLY from this machine -- Origin, Host and the
+> TCP peer must all be loopback and no forwarding header may be present, so a tunnel is refused. The app must be
+> the CRA dev server (`npm start` in `frontend`, which reads `REACT_APP_DEV_IDENTITY=1` from
+> `frontend/.env.development`); a production build carries no dev claim and cannot sign in to a development
+> server. **Remote (ngrok) playtests are not supported from this revision until LIVE-2D** -- run them from the
+> last pre-LIVE-2B revision (`git checkout 90838071`). `--insecure-local-identity` is gone.
+
 ---
 
 ## Setup
@@ -25,14 +33,14 @@ npm install
 ```powershell
 cd C:\Users\Bradshaw\Documents\GitHub\1830Juno\server
 npm run build
-node dist/server/src/start.js --insecure-local-identity --build dev
+node dist/server/src/start.js --mode development --build dev
 ```
 
-Expect two lines:
+Expect the banner to begin:
 
 ```
-1830 game server listening on ws://127.0.0.1:8917 (build "dev", INSECURE local identity)
-  compiled 2026-09-07 00:51:41 UTC -- if a fix you just made is not in this stamp, the server was not rebuilt
+1830 game server listening on ws://127.0.0.1:8917 (build "dev", GS_MODE=development)
+  DEVELOPMENT IDENTITY: each tab is who its ?dev_claim= says, loopback only (Origin, Host and peer) -- NEVER point a tunnel at this server
 ```
 
 **Check the stamp after every fix.** If it is older than the change you were told about, the server did not
@@ -85,14 +93,9 @@ button simply did nothing.
 
 ### The one line that proves it is really on the server
 
-Watch **window 1**. Each tab that connects prints:
-
-```
-[INSECURE] accepted a self-declared identity "p-a1b2c3d4". Local play only -- see #1210.
-```
-
-**Two tabs, two lines, two different ids.** If no line appears, the browser is still on Firestore and
-nothing below is being tested. If both ids are the same, you duplicated the tab.
+LIVE-2B: identity is decided at the socket's upgrade, silently -- the old per-tab `[INSECURE]` line is gone. Two
+tabs are two players because each tab mints its own `p-…` id (per-tab `sessionStorage`) and puts it on its socket
+URL; a duplicated tab copies that storage and is the same player.
 
 ### Stopping
 
@@ -105,7 +108,7 @@ nothing below is being tested. If both ids are the same, you duplicated the tab.
 ```powershell
 cd C:\Users\Bradshaw\Documents\GitHub\1830Juno\server
 npm run build
-node dist/server/src/start.js --insecure-local-identity --build dev
+node dist/server/src/start.js --mode development --build dev
 ```
 
 The APP window needs nothing — it recompiles on its own.
@@ -273,8 +276,8 @@ the rest):
 
 - **Chat does not work.** It is the one thing still on Firestore (#644), and Firestore is unreachable. Not
   worth its own transport today; it degrades quietly rather than breaking the game (ledger S10-11).
-- **Any client can claim any name.** That is what `--insecure-local-identity` means; session-key signatures
-  are the settlement track's 2.5b (ledger S10-10).
+- **Any local tab can claim any name.** That is what development mode's `?dev_claim=` means -- on this machine
+  only (LIVE-2B). Hosted identity is the session cookie; seat authority over it is LIVE-2C.
 - **A room dealt before the rules-version pin (#1520) is held, not rebuilt,** by a server started without
   `--legacy-logs development-corpus`. Every room in `server/data/` from before Batch 4.5 is in that state;
   the banner says so. Development only — never the production restore policy.

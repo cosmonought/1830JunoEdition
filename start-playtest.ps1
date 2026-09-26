@@ -23,6 +23,16 @@ param(
 
 $ProgressPreference = 'SilentlyContinue'
 
+# ---------------------------------------------------------------- LIVE-2B: not from this revision
+# The game server now requires GS_MODE. Development identity is loopback-only and refuses a tunnel by design
+# (no remote escape hatch), and production mode cannot seat players until LIVE-2C/2D. So a remote (ngrok)
+# playtest runs from the last pre-LIVE-2B revision: git checkout 90838071, then run this script there.
+# See claude/live2b-identity-sessions-2026-09-26.md.
+Write-Host "start-playtest.ps1: remote (ngrok) playtests are not supported from LIVE-2B until LIVE-2D." -ForegroundColor Red
+Write-Host "  Use the last pre-LIVE-2B revision:  git checkout 90838071   then run this script there." -ForegroundColor Red
+Write-Host "  Local play on this machine: node dist/server/src/start.js --mode development, and npm start in frontend." -ForegroundColor Red
+exit 2
+
 # ---------------------------------------------------------------- helpers
 
 function Say    { param([string]$m) Write-Host $m }

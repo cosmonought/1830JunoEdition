@@ -38,16 +38,21 @@ const GAME_PREFIX = "/gs";
 const DEV = process.argv.includes("--dev") || process.env.APP_MODE === "dev";
 const BUILD_DIR = path.resolve(__dirname, "..", "frontend", "build");
 
-/** THE PATH DECIDES. The game server's WebSocketServer is attached with no `path`, so it accepts the
- *  upgrade whatever the URL says -- the prefix is for this file to route on, not for it to read.
+/** THE PATH DECIDES.
  *  LIVE-0: EXACTLY `/gs`, a query string allowed, and nothing below it. The route used to be "`/gs` and
  *  below", which handed `/gs/anything` -- and `/gs/../anything` -- to the game server as well. Both client
  *  sockets open exactly the URL `.env.local` names (`wss://<host>/gs`) and the probe in PLAYTEST_NGROK.md
- *  asks for exactly `/gs`, so that is the whole route; every other path is the app's. */
+ *  asks for exactly `/gs`, so that is the whole socket route; every other path is the app's.
+ *  LIVE-2B (LIVE-2 §4.1): PLUS THE IDENTITY API AND THE HEALTH CHECK -- `/gs/api/<segment>[/<segment>...]` of
+ *  lowercase letters, digits and hyphens only (no dots, no escapes, so no `..` can ride along) and exactly
+ *  `/gs/healthz`. Cookie and Origin are forwarded verbatim, as the upgrade's are. The game server now checks the
+ *  socket path itself too (`/gs`), so this route and its own agree. */
+const API_ROUTE = /^\/gs\/api(\/[a-z][a-z0-9-]*)+$/;
 const isGame = (url) => {
   const u = String(url || "/");
   const query = u.indexOf("?");
-  return (query === -1 ? u : u.slice(0, query)) === GAME_PREFIX;
+  const pathname = query === -1 ? u : u.slice(0, query);
+  return pathname === GAME_PREFIX || pathname === `${GAME_PREFIX}/healthz` || API_ROUTE.test(pathname);
 };
 
 /** LIVE-0: A MALFORMED ESCAPE IS THE CLIENT'S ERROR, NOT THE PROXY'S DEATH. `decodeURIComponent` throws on a
@@ -181,7 +186,7 @@ if (require.main === module) {
   server.listen(LISTEN_PORT, "127.0.0.1", () => {
     console.log(
       `playtest proxy on http://127.0.0.1:${LISTEN_PORT}\n` +
-        `  ${GAME_PREFIX}            -> 127.0.0.1:${GAME_PORT}   game server\n` +
+        `  ${GAME_PREFIX}, ${GAME_PREFIX}/api/*, ${GAME_PREFIX}/healthz -> 127.0.0.1:${GAME_PORT}   game server\n` +
         `  everything else -> ${DEV ? `127.0.0.1:${APP_PORT}   app (CRA dev server, hot reload)` : BUILD_DIR + "  (production build, gzipped)"}\n` +
         `  point the tunnel at ${LISTEN_PORT}; .env.local needs REACT_APP_GAME_SERVER_URL=wss://<tunnel-host>${GAME_PREFIX}`,
     );

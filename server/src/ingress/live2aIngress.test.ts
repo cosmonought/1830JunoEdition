@@ -25,6 +25,8 @@ import {
   BUY,
   CAROL,
   Client,
+  DEV_ORIGIN,
+  devSocketUrl,
   type Frame,
   SETUP,
   controlledStore,
@@ -115,7 +117,7 @@ describe("LIVE-2A transport limits", () => {
   test("2 (§15 #17): permessage-deflate is not negotiated even when the client offers it", async () => {
     const { server, port } = await startServer();
     try {
-      const offered = new WebSocket(`ws://127.0.0.1:${port}`, { perMessageDeflate: true });
+      const offered = new WebSocket(devSocketUrl(port, ALICE), { perMessageDeflate: true, origin: DEV_ORIGIN });
       await new Promise<void>((resolve, reject) => {
         offered.once("open", () => resolve());
         offered.once("error", reject);
@@ -130,8 +132,8 @@ describe("LIVE-2A transport limits", () => {
   test("3 (§12.2 keepalive): a socket that never answers a ping is terminated; one that does stays", async () => {
     const { server, port } = await startServer({ limits: { pingIntervalMs: 40, pongTimeoutMs: 150 } });
     try {
-      const silent = new WebSocket(`ws://127.0.0.1:${port}`, { autoPong: false } as unknown as ConstructorParameters<typeof WebSocket>[1]);
-      const polite = new WebSocket(`ws://127.0.0.1:${port}`);
+      const silent = new WebSocket(devSocketUrl(port, ALICE), { autoPong: false, origin: DEV_ORIGIN } as unknown as ConstructorParameters<typeof WebSocket>[1]);
+      const polite = new WebSocket(devSocketUrl(port, BOB), { origin: DEV_ORIGIN });
       await Promise.all(
         [silent, polite].map((socket) => new Promise<void>((resolve) => socket.once("open", () => resolve()))),
       );
@@ -420,12 +422,12 @@ describe("LIVE-2A gameplay parse, over the wire", () => {
         `{"kind":"toString"}`,
         `{"kind":"__proto__"}`,
         `{"kind":"please-echo-me-7731"}`,
-        `{"kind":"room-hello","room":"${ROOM}","claim":"${ALICE}","__proto__":{"polluted":1}}`,
-        `{"kind":"room-hello","room":"${ROOM}","claim":"${ALICE}","extra-field-7731":1}`,
+        `{"kind":"room-hello","room":"${ROOM}","__proto__":{"polluted":1}}`,
+        `{"kind":"room-hello","room":"${ROOM}","extra-field-7731":1}`,
         `{"kind":"room-write","room":"${ROOM}","write":{"op":"constructor"}}`,
         `{"kind":"room-write","room":"${ROOM}","write":{"op":"__proto__"}}`,
         `{"kind":"presence-set","room":"${ROOM}","state":{"routeDrafts":{"0":[[1,2]]},"sneaky":true}}`,
-        `{"kind":"hello","room":"${ROOM}","build":"${BUILD}","claim":"${ALICE}","pin":"1234","debug":true}`,
+        `{"kind":"hello","room":"${ROOM}","build":"${BUILD}","pin":"1234","debug":true}`,
       ];
       for (const text of texts) alice.socket.send(text);
       await until(() => alice.of("error").filter((f) => f.code === "bad-frame").length === texts.length, "every bad-frame");
@@ -450,13 +452,14 @@ describe("LIVE-2A gameplay parse, over the wire", () => {
       }
       return original.apply(this, args);
     } as typeof original;
-    const { server, port } = await startServer({
-      store: control.store,
-      resolveIdentity: async ({ claim }) => {
-        if (claim === "p-thrower") throw new Error("SECRET-IDENTITY-7731");
-        return typeof claim === "string" && claim !== "" ? claim : null;
-      },
-    });
+    /* LIVE-2B: identity is no longer resolved inside a handler (it is the upgrade's), so the handler that throws
+       here is `room-hello`'s room load: a store whose read of one room fails with a secret in its message. */
+    const loadRoomDoc = control.store.loadRoomDoc.bind(control.store);
+    control.store.loadRoomDoc = async (room: string) => {
+      if (room === "JUNO-THROW") throw new Error("SECRET-STORE-7731 at /home/server/internal.ts:42");
+      return loadRoomDoc(room);
+    };
+    const { server, port } = await startServer({ store: control.store });
     try {
       const alice = await logClient(port, ALICE);
       alice.submit(SETUP, { baseIndex: -1, submissionId: "boom" });
@@ -467,7 +470,7 @@ describe("LIVE-2A gameplay parse, over the wire", () => {
       assert.deepEqual(control.indices(ROOM), []);
       // Any handler's throw: the same shape.
       const thrower = await Client.open(port, "p-thrower");
-      thrower.roomHello(ROOM);
+      thrower.roomHello("JUNO-THROW");
       const generic = await thrower.next((f) => f.kind === "error", "the generic internal error");
       assert.equal(generic.code, "internal");
       assert.match(String(generic.reason), /\(ref [0-9A-Z]{6}\)$/);

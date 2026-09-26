@@ -201,9 +201,9 @@ describe("parseGameplayMessage rebuilds every kind from its declared fields (LIV
 describe("the closed control frames (LIVE-2 §11.2)", () => {
   it("accepts what today's client sends, field for field", () => {
     const good = [
-      { kind: "hello", room: "JUNO-4T2", build: "dev", claim: "p-abc", pin: "1234", token: "k3-abc", baseIndex: 7, baseId: "s1-1" },
+      { kind: "hello", room: "JUNO-4T2", build: "dev", pin: "1234", token: "k3-abc", baseIndex: 7, baseId: "s1-1" },
       { kind: "submit", build: "dev", msg: { PassTurn: {} }, baseIndex: -1, baseId: "s1-1", submissionId: "ab12-3" },
-      { kind: "room-hello", room: "~lobby", build: "dev", claim: "p-abc" },
+      { kind: "room-hello", room: "~lobby", build: "dev" },
       { kind: "room-write", room: "JUNO-4T2", write: { op: "upsert-player", player: { id: "p-abc", nickname: "A", isReady: true, hasPin: false, color: "red" } } },
       { kind: "room-write", room: "JUNO-4T2", write: { op: "host", hostId: "p-abc", nickname: "Host", variants: { length: "standard", mode: "live", delayedAuction: false, gentleRust: false, unpredictableRevenue: false, dynamicStockMarket: false, expandedMap: false, plusTiles: false, levelPlayingField: false, rules: 1 }, visibility: "public", playerCount: null, anteUjuno: "0" } },
       { kind: "room-write", room: "JUNO-4T2", write: { op: "status", status: "playing" } },
@@ -222,7 +222,10 @@ describe("the closed control frames (LIVE-2 §11.2)", () => {
 
   it("refuses an unknown field, a deleted op, a deleted frame kind, and an oversized value", () => {
     const bad = [
-      { kind: "hello", room: "JUNO-4T2", build: "dev", claim: "p-abc", extra: 1 },
+      { kind: "hello", room: "JUNO-4T2", build: "dev", extra: 1 },
+      /* LIVE-2B: identity is the upgrade's; a frame that names one is refused. */
+      { kind: "hello", room: "JUNO-4T2", build: "dev", claim: "p-abc" },
+      { kind: "room-hello", room: "JUNO-4T2", build: "dev", claim: "p-abc" },
       { kind: "find-seats", requestId: "r1", pin: "1234" },
       { kind: "room-write", room: "JUNO-4T2", write: { op: "variants", variants: {} } },
       { kind: "room-write", room: "JUNO-4T2", write: { op: "forced-sign", stage: "mark" } },

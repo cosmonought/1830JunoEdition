@@ -5,7 +5,9 @@
 
 import { WebSocket } from "ws";
 
-import { createGameServer, type GameServerOptions } from "../gameServer";
+import { createGameServer, type GameServerIdentity, type GameServerOptions } from "../gameServer";
+import { createDevAuthenticator } from "../identity/devAuthenticator";
+import type { IdentityLimits } from "../ingress/limits";
 import type { LogStore } from "../fileLogStore";
 import { StoreDefiniteError } from "../persistence/storeResult";
 import { RoomSession, type ServerLogEntry } from "../../../frontend/src/utils/roomSession";
@@ -200,12 +202,46 @@ export function controlledStore() {
   };
 }
 
-/** Believes the claim, without shouting about it on every connection. */
-export const quietIdentity: GameServerOptions["resolveIdentity"] = async ({ claim }) =>
-  typeof claim === "string" && claim !== "" ? claim : null;
+/* ==================================================================
+    LIVE-2B: THE SUITES RUN UNDER THE DEVELOPMENT AUTHENTICATOR
+   ==================================================================
+   A socket says who it is with `?dev_claim=` on its URL, from a loopback Origin -- the only way development mode
+   knows anybody -- and never in a frame. `devIdentity` builds the server's side exactly as `start.ts` does
+   (`createDevAuthenticator` refuses unless GS_MODE is "development" at the call, so it is set around the call). */
+export const DEV_ORIGIN = "http://localhost:3000";
+
+export function devIdentity(over: Partial<GameServerIdentity> = {}): GameServerIdentity {
+  const previous = process.env.GS_MODE;
+  process.env.GS_MODE = "development";
+  try {
+    return { mode: "development", allowedOrigins: [DEV_ORIGIN], trustedProxyHops: 0, devAuthenticator: createDevAuthenticator(), ...over };
+  } finally {
+    if (previous === undefined) delete process.env.GS_MODE;
+    else process.env.GS_MODE = previous;
+  }
+}
+
+/** The development socket URL for `claim` on a test server. */
+export const devSocketUrl = (port: number, claim: string): string => `ws://127.0.0.1:${port}/?dev_claim=${encodeURIComponent(claim)}`;
+
+/** The LIVE-3A / LIVE-2A suites open sockets far faster than a table does, all from 127.0.0.1; they are not about
+ *  the identity limits, so those are opened wide for them (the LIVE-2B suite sets its own). */
+export const ROOMY_IDENTITY_LIMITS: Partial<IdentityLimits> = Object.freeze({
+  failedUpgradesPerIp: { capacity: 1e6, refillPerSecond: 1e6 },
+  upgradesPerIp: { capacity: 1e6, refillPerSecond: 1e6 },
+  upgradesGlobal: { capacity: 1e6, refillPerSecond: 1e6 },
+  maxSocketsPerPrincipal: 1_000,
+  maxSocketsPerIp: 10_000,
+});
 
 export async function startServer(over: Partial<GameServerOptions> = {}) {
-  const server = createGameServer({ port: 0, build: BUILD, resolveIdentity: quietIdentity, ...over });
+  const server = createGameServer({
+    port: 0,
+    build: BUILD,
+    identity: devIdentity(),
+    ...over,
+    limits: { ...(over.limits ?? {}), identity: { ...ROOMY_IDENTITY_LIMITS, ...(over.limits?.identity ?? {}) } },
+  });
   const port = await new Promise<number>((resolve) => {
     const read = () => {
       const address = server.http.address();
@@ -285,7 +321,7 @@ export class Client {
 
   static open(port: number, claim: string): Promise<Client> {
     return new Promise((resolve, reject) => {
-      const socket = new WebSocket(`ws://127.0.0.1:${port}`);
+      const socket = new WebSocket(devSocketUrl(port, claim), { origin: DEV_ORIGIN });
       const client = new Client(socket, claim);
       openClients.add(client);
       socket.on("close", () => openClients.delete(client));
@@ -300,7 +336,7 @@ export class Client {
   }
 
   hello(room: string, baseIndex = -1, baseId?: string): void {
-    this.send({ kind: "hello", room, build: BUILD, claim: this.claim, baseIndex, ...(baseId ? { baseId } : {}) });
+    this.send({ kind: "hello", room, build: BUILD, baseIndex, ...(baseId ? { baseId } : {}) });
   }
 
   submit(msg: object, over: { baseIndex: number; submissionId?: string; baseId?: string }): void {
@@ -308,7 +344,7 @@ export class Client {
   }
 
   roomHello(room: string): void {
-    this.send({ kind: "room-hello", room, build: BUILD, claim: this.claim });
+    this.send({ kind: "room-hello", room, build: BUILD });
   }
 
   roomWrite(room: string, write: object): void {

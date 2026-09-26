@@ -267,3 +267,45 @@ export {
   tradeCounterparty,
   type PrivateTradeIntent,
 } from "./privateTradeAuthority";
+
+/* SET-0B (2026-09-25): the canonical settlement primitives -- the integer appraisal of a committed board, the board
+   commitment (`terminal_state_hash_v1`) and the appraisal of exactly those bytes, the terminal policy layer, and the
+   bigint payout preview. On the server's surface because ESCROW-3 builds the settlement payload from them; the
+   specification is SET-0A rev 2 (`claude/SET0A_NET_WORTH_VALUATION_AUDIT_2026-09-25.md`). */
+export {
+  appraiseSeats,
+  baseNetWorthVector,
+  parseBoardAmount,
+  settlementSnapshot,
+  SettlementAppraisalError,
+  MIN_SETTLEMENT_SEATS,
+  MAX_SETTLEMENT_SEATS,
+  type SeatAppraisal,
+  type SettlementErrorCode,
+  type SettlementHoldingLine,
+  type SettlementPrivateLine,
+  type SettlementSeat,
+} from "./settlementAppraisal";
+export {
+  STATE_HASH_TAG_V1,
+  appraiseCommittedState,
+  commitAndAppraise,
+  canonicalStateText,
+  terminalStateHashV1,
+  terminalStateHashV1OfText,
+  type CommittedAppraisal,
+} from "./settlementDigest";
+export {
+  SETTLEMENT_REASON_CODE,
+  terminalSettlementWeights,
+  type EscrowTerms,
+  type TerminalOutcome,
+  type TerminalReason,
+} from "./settlementPolicy";
+export {
+  U128_MAX,
+  parseSettlementDecimal,
+  payoutPreview,
+  payoutPreviewDecimal,
+  type PayoutPreview,
+} from "./settlementPreview";

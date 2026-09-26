@@ -301,8 +301,10 @@ export function resolveEmergencyFunding(args: {
 /* Design note #3: 1830 ranks players by NET WORTH -- personal cash plus the
    market value of every certificate held. Two things it does not count, and both
    are worth stating because both look like money: CORPORATE TREASURIES belong to
-   the company, not the president; and UNFLOATED SHARES have no market price and
-   count at zero, because par is what they COST, not what they are worth.
+   the company, not the president; and UNPARRED SHARES have no market price and
+   count at zero, because no par has set their value. (SET-0A F-2: this said
+   "unfloated"; a PARRED-but-unfloated corporation's shares are worth its market
+   token -- #711 -- and the code below always keyed on the price, not the float.)
 
    PRIVATE COMPANIES count at face value -- the one asset here whose value is
    printed rather than derived. */

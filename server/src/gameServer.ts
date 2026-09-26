@@ -42,20 +42,18 @@ import {
 import {
   DEFAULT_SANDBOX_SCENARIO,
   STANDARD_VARIANTS,
-  fieldDigests,
   isRecognisedClientFrame,
   logHash,
   sandboxReplayProviders,
   sandboxScenario,
   sandboxScenarioState,
   sandboxWaterfallState,
-  stateDigest,
   validateGameplayMessage,
   validateSubmitEnvelope,
   waterfallForRoster,
   withEmptyRoster,
 } from "../../frontend/src/gameEngine";
-import type { ServerMessage } from "../../frontend/src/utils/serverProtocol";
+import type { ServerFrame, ServerMessage } from "../../frontend/src/utils/serverProtocol";
 import type { SandboxLogMsg } from "../../frontend/src/gameEngine/gameSetup";
 import type {
   ChatSendRequest,
@@ -85,6 +83,20 @@ import {
   type SandboxRoomSummary,
 } from "../../frontend/src/utils/sandboxRoomSummary";
 import type { LogStore } from "./fileLogStore";
+/* LIVE-3A: every mutation of a game runs on that game's actor, and every read comes from its committed view. */
+import {
+  GameActor,
+  UNAVAILABLE_REASON,
+  newActorCounters,
+  type ActorCounters,
+  type BatchSettlement,
+  type GameFaults,
+  type GameStorePort,
+  type Subscriber,
+  type TaskOrigin,
+  type Tx,
+} from "./rooms/gameActor";
+import { GameRegistry } from "./rooms/gameRegistry";
 
 /** Resolves the player behind a connection, or `null` to reject it.
  *
@@ -122,6 +134,8 @@ interface HelloFrame {
   token?: unknown;
   /** What this client has already applied, so a reconnect is answered rather than guessed at. */
   baseIndex?: number;
+  /** LIVE-3A (L3-3): the id of the entry the client holds at `baseIndex` -- the anchor. */
+  baseId?: unknown;
 }
 
 interface SubmitFrame {
@@ -129,6 +143,8 @@ interface SubmitFrame {
   build: string;
   msg: SandboxLogMsg;
   baseIndex: number;
+  /** LIVE-3A (L3-3): the anchor, validated by `validateSubmitEnvelope`. */
+  baseId?: string;
   submissionId?: string;
 }
 
@@ -330,7 +346,10 @@ export interface GameServerOptions {
    *  local playtest rooms, announced at startup and again per room. A room pinned to a version this server
    *  does not carry is held under either setting. */
   legacyLogs?: ReplayPolicy["legacyLogs"];
+  /** Called when entries become durable and visible, inside the publish that shows them (LIVE-3A). */
   onAppend?: (room: string, entries: readonly ServerLogEntry[]) => void;
+  /** Test-only fault injection for the LIVE-3A regressions (LIVE-3D generalises it). Never set by `start.ts`. */
+  faults?: GameFaults;
 }
 
 interface Attached {
@@ -338,13 +357,41 @@ interface Attached {
   actor: string;
 }
 
+/* ==================================================================
+    LIVE-3A: THE SENTENCES THE TRANSPORT OWNS
+   ================================================================== */
+/** §4.1: the store definitely did not take the move (nothing past the committed history), so it was not made. */
+const RECORD_FAILED_REASON = "The server could not record that move, so it was not made. Try again.";
+/** E-7: the game's queue is full. */
+const BUSY_REASON = "The game server is busy with this game. Try again in a moment.";
+/** E-8: the task was never run -- its deadline passed while it waited behind other work. */
+const EXPIRED_REASON = "The game server did not get to that move in time, so it was not made. Try again.";
+/** A room that could not be loaded from the store. */
+const LOAD_FAILED_REASON = "The game server could not load this room right now. It will keep trying.";
+/** F-10: a room document the store did not take. */
+const ROOM_SAVE_FAILED_REASON = "The server could not record that change to the room, so it was not made. Try again.";
+/** E-9: a reference ties the sentence a player reads to the line in this window (LIVE-2 §11.5). */
+const errorRef = (): string => Math.random().toString(36).slice(2, 8).toUpperCase().padEnd(6, "0");
+
+/** A direct answer to a submit names the submission it answers (L3-3); fan-out never does. */
+const answering = <T extends object>(message: T, inReplyTo: string | undefined): T =>
+  inReplyTo === undefined ? message : { ...message, inReplyTo };
+
 export function createGameServer(options: GameServerOptions): {
   http: HttpServer;
   close: () => Promise<void>;
+  /** LIVE-3A: the executor's counters (expiries, store failures, resyncs...), for tests and the smoke run. */
+  counters: Readonly<ActorCounters & { submitAhead: number; submitResync: number; internal: number }>;
 } {
-  const rooms = new Map<string, RoomSession>();
+  /** Who each LOG socket said it was at `hello`, and which room. Identity only: the subscription itself lives on
+   *  the room's actor (LIVE-3A), which is what fan-out reads. */
   const sockets = new Map<WebSocket, Attached>();
-  /** #1215. A separate map from `rooms` on purpose: this one holds no history and decides nothing. */
+  /** #1215. A separate map from the log on purpose: this one holds no history and decides nothing.
+   *
+   *  LIVE-3A: THE COMMITTED DOCUMENTS, AND ONLY THOSE. An entry changes here in exactly two places -- the
+   *  single-flight load below, which fills a room nobody has read yet, and the publish of a room-authority task
+   *  on the room's actor, after the store has taken the document (F-10). It is the committed view's `roomDoc`,
+   *  kept by code so the public list and the PIN lookup can read a room without loading its game. */
   const roomDocs = new Map<string, SandboxRoomDoc>();
   const roomDocSockets = new Map<WebSocket, string>();
   /** #1341: who each room-doc socket said it was, so a seat-pin write can be checked against its own seat. */
@@ -364,24 +411,37 @@ export function createGameServer(options: GameServerOptions): {
      (a new tag says "restarted" the way `s58` said "did not"). */
   const processTag = Date.now().toString(36);
 
-  /* #1250: the document is loaded with the room's log, once, and thereafter lives in the map as before. */
-  const roomDocLoaded = new Set<string>();
+  /* #1250: the document is loaded once per room, and thereafter lives in the map.
+     LIVE-3A: SINGLE-FLIGHT, and read AFTER the wait. The old version marked a room loaded before its read had
+     finished, so a second caller in the meantime was answered `null` -- a PIN gate that found no PIN (the LIVE-3
+     verifier's caveat) -- and it wrote whatever it read over the map, however stale. Now every caller for a room
+     waits on the one read, and each answers with the map as it stands when the wait ends, which is never older
+     than anything already published to a socket that was registered before it asked. */
+  const roomDocKnown = new Set<string>();
+  const roomDocLoads = new Map<string, Promise<void>>();
   async function roomDocFor(code: string): Promise<SandboxRoomDoc | null> {
-    if (!roomDocLoaded.has(code)) {
-      roomDocLoaded.add(code);
-      if (!roomDocs.has(code)) {
-        const stored = await options.store?.loadRoomDoc(code);
-        if (stored) roomDocs.set(code, stored);
+    if (!roomDocKnown.has(code)) {
+      let load = roomDocLoads.get(code);
+      if (load === undefined) {
+        load = (async () => {
+          try {
+            const stored = await options.store?.loadRoomDoc(code);
+            if (stored && !roomDocs.has(code)) roomDocs.set(code, stored);
+            roomDocKnown.add(code);
+          } finally {
+            roomDocLoads.delete(code);
+          }
+        })();
+        roomDocLoads.set(code, load);
       }
+      await load;
     }
     return roomDocs.get(code) ?? null;
   }
 
-  async function roomFor(code: string): Promise<RoomSession> {
-    const existing = rooms.get(code);
-    if (existing) return existing;
-
-    const session = new RoomSession({
+  /** A room's session at the seed, nothing applied: what a game is loaded into. */
+  const newRoomSession = (): RoomSession =>
+    new RoomSession({
       providers: sandboxReplayProviders(),
       seed: {
         state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
@@ -399,68 +459,125 @@ export function createGameServer(options: GameServerOptions): {
       replayPolicy: options.legacyLogs === "development-corpus" ? DEVELOPMENT_CORPUS_POLICY : SERVER_REPLAY_POLICY,
     });
 
+  /** A stored log into a session, said in the window. */
+  const restoreRoom = (code: string, session: RoomSession, stored: readonly ServerLogEntry[]): void => {
     /* RESTORED THROUGH `apply`, NEVER `submit` (#1203): a stored log already holds its derived entries. */
-    const stored = (await options.store?.loadLog(code)) ?? [];
-    if (stored.length > 0) {
-      session.restore(stored);
+    session.restore(stored);
+    // eslint-disable-next-line no-console
+    console.log(
+      `  restored ${code}: ${stored.length} entries from the store, log hash ${logHash(stored).slice(0, 16)}… (#1251)`,
+    );
+    /* #1252: said once here, and again in every refusal -- a room this server cannot continue is a room
+       somebody will try to continue. */
+    const dealt = session.dealtBuild();
+    if (dealt !== null && dealt !== options.build) {
       // eslint-disable-next-line no-console
-      console.log(
-        `  restored ${code}: ${stored.length} entries from the store, log hash ${logHash(stored).slice(0, 16)}… (#1251)`,
+      console.warn(
+        `  ${code} was dealt on build "${dealt}"; this server is "${options.build}" and will refuse to continue it (#1252)`,
       );
-      /* #1252: said once here, and again in every refusal -- a room this server cannot continue is a room
-         somebody will try to continue. */
-      const dealt = session.dealtBuild();
-      if (dealt !== null && dealt !== options.build) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `  ${code} was dealt on build "${dealt}"; this server is "${options.build}" and will refuse to continue it (#1252)`,
-        );
-      }
-      /* #1520: A HELD ROOM, SAID ONCE HERE. `restore` did not interpret a single entry: the deal names a
-         rules-engine version this server does not carry (or names none -- a legacy log, which this server
-         refuses rather than guesses at). The log on disk is exactly as it was found; every hello and every
-         submit on this room is answered `incompatible` until a server with the pinned version loads it. */
-      const held = session.incompatible;
-      if (held === null && session.replayCompatibility().kind === "legacy") {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `  ${code} is a LEGACY room (its deal carries no rules_engine_version) admitted under --legacy-logs ` +
-            `development-corpus and replayed with engine version(s) [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]. ` +
-            `A deployment refuses this room (#1520).`,
-        );
-      }
-      if (held !== null) {
-        const pinned = held.compatibility.kind === "incompatible" ? String(held.compatibility.version) : "none (legacy)";
-        // eslint-disable-next-line no-console
-        console.warn(
-          `  ${code} is HELD, not rebuilt: pinned rules-engine version ${pinned}, this server supports ` +
-            `[${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}] (#1520). ${held.reason}`,
-        );
-      }
     }
-    await roomDocFor(code);
+    /* #1520: A HELD ROOM, SAID ONCE HERE. `restore` did not interpret a single entry: the deal names a
+       rules-engine version this server does not carry (or names none -- a legacy log, which this server
+       refuses rather than guesses at). The log on disk is exactly as it was found; every hello and every
+       submit on this room is answered `incompatible` until a server with the pinned version loads it. */
+    const held = session.incompatible;
+    if (held === null && session.replayCompatibility().kind === "legacy") {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `  ${code} is a LEGACY room (its deal carries no rules_engine_version) admitted under --legacy-logs ` +
+          `development-corpus and replayed with engine version(s) [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]. ` +
+          `A deployment refuses this room (#1520).`,
+      );
+    }
+    if (held !== null) {
+      const pinned = held.compatibility.kind === "incompatible" ? String(held.compatibility.version) : "none (legacy)";
+      // eslint-disable-next-line no-console
+      console.warn(
+        `  ${code} is HELD, not rebuilt: pinned rules-engine version ${pinned}, this server supports ` +
+          `[${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}] (#1520). ${held.reason}`,
+      );
+    }
+  };
 
-    rooms.set(code, session);
-    return session;
-  }
-
-  const send = (socket: WebSocket, message: ServerMessage | { kind: "error"; reason: string }) => {
+  const send = (socket: WebSocket, message: ServerFrame | object) => {
     if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(message));
   };
 
-  /** Everyone in the room except the sender.
-   *
-   *  THE SAME MESSAGE THE SUBMITTER GOT, because it is the same news. A watcher applies the entries through
-   *  its own engine exactly as the actor does -- which is what keeps every client's reducer live, and the
-   *  divergence check with it (#1207). */
-  const broadcast = (room: string, except: WebSocket, message: ServerMessage) => {
-    for (const [socket, attached] of sockets) {
-      if (socket !== except && attached.room === room) send(socket, message);
-    }
+  /* ==================================================================
+      LIVE-3A: ONE ACTOR PER GAME, AND THE STORE BEHIND IT
+     ==================================================================
+     `roomFor` is gone. A game is reached through `games.get`, which creates its actor once however many frames
+     ask at the same moment (LIVE-3 P2), and every change to it -- a move, a room write, a PIN -- is a task on that
+     actor (`rooms/gameActor.ts`). The store is today's `LogStore`, seen through the port the actor commits to;
+     without one (a test, the smoke run) the game lives in memory, exactly as before. */
+  const counters = { ...newActorCounters(), submitAhead: 0, submitResync: 0, internal: 0 };
+  const store = options.store;
+  const storePort: GameStorePort = {
+    loadLog: async (code) => (store ? await store.loadLog(code) : []),
+    appendBatch: async (code, entries) => {
+      if (store && entries.length > 0) await store.appendLog(code, entries);
+    },
+    loadRoomDoc: async (code) => (store ? await store.loadRoomDoc(code) : null),
+    saveRoomDoc: async (code, doc) => {
+      if (store) await store.saveRoomDoc(code, doc);
+    },
+  };
+  const games = new GameRegistry({
+    evictable: store !== undefined,
+    now: () => Date.now(),
+    create: (code) =>
+      new GameActor({
+        gameId: code,
+        build: options.build,
+        explainDivergence: options.explainDivergence === true,
+        store: storePort,
+        newSession: newRoomSession,
+        restore: (session, stored) => restoreRoom(code, session, stored),
+        loadRoomDoc: () => roomDocFor(code),
+        /* The committed document, published: the map is the view's document, set in the publish itself. */
+        onRoomDocPublished: (doc) => {
+          roomDocs.set(code, doc as SandboxRoomDoc);
+          roomDocKnown.add(code);
+        },
+        onEntriesPublished: (entries) => options.onAppend?.(code, entries),
+        now: () => Date.now(),
+        // eslint-disable-next-line no-console
+        warn: (line) => console.warn(line),
+        counters,
+        faults: options.faults,
+      }),
+  });
+
+  /** A task's origin: the socket, who it said it was, and -- for a submit -- the nonce `inFlight` reports. */
+  const originFor = (socket: WebSocket, principal: string, submissionId?: string): TaskOrigin => ({
+    key: socket,
+    principal,
+    submissionId,
+    isOpen: () => socket.readyState === socket.OPEN,
+    send: (frame) => send(socket, frame),
+  });
+
+  /** A log subscriber: the same socket, seen as a reader of the room's committed history. */
+  const subscriberFor = (socket: WebSocket, principal: string): Subscriber => ({
+    principal,
+    isOpen: () => socket.readyState === socket.OPEN,
+    send: (frame) => send(socket, frame),
+  });
+
+  /** Which actor each log socket is subscribed to, so a second hello -- a resync, or another room -- replaces the
+   *  subscription rather than adding one, and a close removes it. */
+  const logSubscriptions = new Map<WebSocket, GameActor>();
+  const unsubscribeLog = (socket: WebSocket) => {
+    logSubscriptions.get(socket)?.unsubscribe(socket);
+    logSubscriptions.delete(socket);
   };
 
   /** #1215. Applies one named write and hands back the document, or `null` if the room does not exist yet
    *  and this write was not the one that creates it.
+   *
+   *  LIVE-3A: PURE. It hands back the PROSPECTIVE document and changes nothing: the caller is a task on the
+   *  room's actor, which makes the document durable and only then publishes it (F-10). Called only inside that
+   *  task, where `roomDocs` holds the committed document the task started from (E-2).
    *
    *  EVERY OP MIRRORS A FIRESTORE WRITER ONE FOR ONE, including the rule each carried. The upsert is the one
    *  with a rule worth restating: an existing player is replaced IN PLACE (#541), because `toSetupPlayers`
@@ -501,7 +618,6 @@ export function createGameServer(options: GameServerOptions): {
         createdAtMs: Date.now(),
         kicked: [],
       };
-      roomDocs.set(code, created);
       return { doc: created };
     }
 
@@ -580,7 +696,6 @@ export function createGameServer(options: GameServerOptions): {
         return { doc: existing };
     }
 
-    roomDocs.set(code, next);
     return { doc: next };
   };
 
@@ -612,17 +727,9 @@ export function createGameServer(options: GameServerOptions): {
     return null;
   };
 
-  /** #1341: persist the room document after a seat write, the way `room-write` does. */
-  const saveRoomDocQuietly = async (code: string) => {
-    const doc = roomDocs.get(code);
-    if (!doc || !options.store) return;
-    try {
-      await options.store.saveRoomDoc(code, doc);
-    } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error(`  store: could not save the room document for ${code}`, error);
-    }
-  };
+  /* LIVE-3A: `saveRoomDocQuietly` is gone. It saved AFTER the document had already changed in memory and
+     swallowed a failure, so a PIN or a seat could be shown, believed by the next hello, and silently lost at the
+     next restart (LIVE-3 F-10). A seat write is now a task that commits the document before anybody sees it. */
 
   /* ---- #1361a: chat ---- */
   const roomChats = new Map<string, RoomChatEntry[]>();
@@ -849,6 +956,168 @@ export function createGameServer(options: GameServerOptions): {
       default:
         return { ok: false, reason: "That is not a lobby write." };
     }
+  };
+
+  /* ==================================================================
+      LIVE-3 §4: THE SUBMIT PIPELINE, AS ONE TASK ON THE ROOM'S ACTOR
+     ==================================================================
+     The frame has been parsed and shape-checked and the connection's identity is known (steps 0-1, in the
+     socket's #1216 chain). From here every step reads the COMMITTED view and a private session that equals it:
+       3a  a game held for an unknown store outcome takes no move (E-10)
+       4-12 `RoomSession.submit`, unchanged: build, held room, ahead / anchor (new), deal pin, duplicate, stale,
+           repair, authority, reducer and derived entries -- all SPECULATIVE on the private session
+       13  the durable commit of everything the submit appended, as one batch -- the point of no return (E-13)
+       15-17 publish: the committed view replaced, the submitter answered, the room fanned out, in one
+           synchronous step, so fan-out order is commit order (LIVE-3 F-6) and nobody reads a move before the
+           disk has it (F-1, F-3)
+     A later submit can never build on an earlier one whose append is still pending: it does not start until
+     that one has published or rolled back (E-1, LIVE-1's failure). */
+  const submitOnActor = async (
+    tx: Tx,
+    attached: Attached,
+    frame: SubmitFrame,
+    inReplyTo: string | undefined,
+  ): Promise<void> => {
+    const answer = (message: object) => tx.reply(answering(message, inReplyTo));
+    if (tx.view.hold?.reason === "uncertain") {
+      answer({ kind: "refused", code: "unavailable", reason: UNAVAILABLE_REASON, build: options.build });
+      return;
+    }
+    const session = tx.session;
+    const before = session.entries.length;
+
+    /* THE ACTOR COMES FROM THE CONNECTION, NEVER FROM THE FRAME (#1207). This line is the whole of the
+       security posture; a `frame.actor` here would undo `turnAuthority` entirely. */
+    /* ==================================================================
+        DESIGN NOTE 1241: A THROWN SUBMIT IS ANSWERED, NOT SWALLOWED
+       ==================================================================
+       REPORTED: with Auto-Buy armed, every turn began with "Sending your last action — one moment" and
+       the controls stayed grey until the client's six-second backstop (#1173) gave up. A throw inside
+       `session.submit` was never answered; now it is refused and the client's latch released at once.
+       LIVE-3A (E-9, F-13): AND NOTHING IT TOUCHED SURVIVES. The entry is pushed BEFORE the reducer runs, so a
+       reducer that threw used to leave its entry on the log, where the append below stored it and the fan-out
+       broadcast it as `applied` -- to everyone but the submitter, who was told `refused`. The private session
+       is now rolled back to the committed view before anything is written, and the refusal carries a
+       reference to the line printed here instead of the exception's own text. */
+    let result: ServerMessage;
+    try {
+      result = session.submit({
+        actor: attached.actor,
+        build: frame.build,
+        msg: frame.msg,
+        baseIndex: frame.baseIndex,
+        baseId: frame.baseId,
+        submissionId: frame.submissionId,
+        /* #1249: the host, from the room document this process already keeps (#1215), so the
+           messages that are the host's to send can be refused to everybody else. `null` for a room
+           with no document -- the authority skips the host-only checks then rather than refusing
+           everyone. LIVE-3A: the COMMITTED document -- inside this task the map holds exactly the view's. */
+        host: roomDocs.get(attached.room)?.hostId ?? null,
+      });
+    } catch (error) {
+      tx.rollback();
+      counters.internal += 1;
+      const ref = errorRef();
+      const reason = error instanceof Error ? error.message : String(error);
+      // eslint-disable-next-line no-console
+      console.log(
+        `  threw: ${attached.actor} sent ${Object.keys(frame.msg)[0]} — ${reason} (ref ${ref}); rolled back, nothing recorded\n` +
+          `    payload ${JSON.stringify(frame.msg)}`,
+      );
+      answer({
+        kind: "refused",
+        code: "internal",
+        reason: `The server could not process that move, so it was not made. (ref ${ref})`,
+        build: options.build,
+      });
+      return;
+    }
+
+    /* ==================================================================
+        DESIGN NOTE 1218: THE SERVER SAYS WHY, IN THE WINDOW THAT IS ALREADY OPEN
+       ==================================================================
+       A refusal, a build skew and a catch-up all reach the shell as "the action was not sent", and two
+       of the three arrive with no explanation at all. THE SERVER KNOWS EXACTLY WHICH IT WAS and was
+       throwing that away -- so diagnosing a stuck button meant opening DevTools, which is a different
+       skill from playing a game and a poor thing to require of a playtester.
+       ONLY THE NON-APPLIED ANSWERS ARE LOGGED. An applied move is the normal case and one line per
+       action would bury the interesting ones. */
+    if (result.kind !== "applied") {
+      const code = (result as { code?: string }).code;
+      if (code === "ahead") counters.submitAhead += 1;
+      if (code === "resync") counters.submitResync += 1;
+      const why =
+        (result as { reason?: string }).reason ??
+        (result.kind === "build-skew"
+          ? `client ${(result as { clientBuild?: string }).clientBuild} vs server ${options.build}`
+          : `client was at ${frame.baseIndex}, room is at ${session.nextIndex - 1}`);
+      // eslint-disable-next-line no-console
+      console.log(`  ${result.kind}${code ? ` (${code})` : ""}: ${attached.actor} sent ${Object.keys(frame.msg)[0]} — ${why}`);
+      if (code === "ahead" || code === "resync") {
+        /* LIVE-3 §5.2: A DURABILITY TRIPWIRE. Under durable-before-visible no client can hold an entry the
+           store does not; on one process with one store, any of these means history was lost or forked. */
+        // eslint-disable-next-line no-console
+        console.warn(
+          `  resync: ${attached.actor} in ${attached.room} claims index ${frame.baseIndex}; the room's durable ` +
+            `history ends at ${(result as { watermark?: number }).watermark} -- counted as a durability alarm`,
+        );
+      }
+    }
+
+    /* Everything this submit appended -- a repair, the move, its derived burst -- is ONE batch (L3-4). Nothing
+       appended (a refusal, a duplicate, a stale catch-up, `ahead`) is answered now, from the committed state. */
+    const batch = session.entries.slice(before);
+    if (batch.length === 0) {
+      answer(result);
+      return;
+    }
+    await tx.commitBatch(batch, (settled) => submitDelivery(settled, batch, result, inReplyTo));
+  };
+
+  /** What a settled batch owes its submitter and the room. */
+  const submitDelivery = (
+    settled: BatchSettlement,
+    batch: readonly ServerLogEntry[],
+    result: ServerMessage,
+    inReplyTo: string | undefined,
+  ): { reply: object; fanout?: object } => {
+    if (settled.kind === "absent") {
+      /* §4.1: definitely not durable -- the store holds nothing past the committed history. Nothing happened,
+         and the nonce was forgotten with the rolled-back entries, so a retry is judged afresh. */
+      return {
+        reply: answering({ kind: "refused", code: "retry", reason: RECORD_FAILED_REASON, build: options.build }, inReplyTo),
+      };
+    }
+    if (settled.kind === "unresolved") {
+      return {
+        reply: answering({ kind: "refused", code: "unavailable", reason: UNAVAILABLE_REASON, build: options.build }, inReplyTo),
+      };
+    }
+    const { view, entries } = settled;
+    const fields = view.fields ? { fields: { ...view.fields } } : {};
+    /* FAN-OUT CARRIES WHAT WAS APPENDED, not the answer the submitter got -- a refusal is that client's
+       business, and a catch-up is about how far behind IT was.
+       #1223: THE WATCHERS' DIGEST IS COMPUTED, NOT BORROWED -- a refusal that carried repairs has no digest of
+       its own, and an empty digest is "no verdict" (#232). The committed view's is the board as published.
+       #1225: and the per-field digests with it, when the server explains itself. */
+    const fanout = { kind: "applied", entries, digest: view.digest, ...fields, build: options.build };
+    if (entries === batch) return { reply: answering(result, inReplyTo), fanout };
+    /* THE STORE WAS READ BACK -- after a failed append, or a next view that could not be built (E-13) -- and
+       what it holds is what stands. The submitter is told by whether its own entry, the one non-derived entry
+       of the batch, is among the entries that stand: applied if so, and if not, the entries that DID land as
+       history with a `retry`, never a refusal of a move the store holds (F-13's shape, one layer down). */
+    const own = batch.find((entry) => !entry.derived);
+    const landed = own !== undefined && entries.some((entry) => entry.id === own.id);
+    const reply = landed
+      ? { kind: "applied", entries, digest: view.digest, ...fields, build: options.build }
+      : {
+          kind: "refused",
+          code: "retry",
+          reason: RECORD_FAILED_REASON,
+          catchUp: { entries, digest: view.digest, ...fields },
+          build: options.build,
+        };
+    return { reply: answering(reply, inReplyTo), fanout };
   };
 
   const http = createServer((_req, res) => {
@@ -1096,7 +1365,10 @@ export function createGameServer(options: GameServerOptions): {
           return;
         }
 
-        /* ---- THE SEAT PIN (#1341) ---- answered on the room-doc socket, to the asker alone. */
+        /* ---- THE SEAT PIN (#1341) ---- answered on the room-doc socket, to the asker alone.
+           LIVE-3A: A TASK ON THE ROOM'S ACTOR, because a PIN is authority -- the hello gate reads it -- and it
+           changes only after the store has the document (F-10). A save the store refused is answered as a failed
+           claim with nothing changed; no token is minted and no socket is superseded for a PIN nobody holds. */
         if (frame.kind === "seat-pin" || frame.kind === "claim-seat") {
           const seatFrame: SeatPinFrame | ClaimSeatFrame = frame;
           const actor = roomDocActors.get(socket);
@@ -1106,133 +1378,211 @@ export function createGameServer(options: GameServerOptions): {
             answer(false, "say room-hello first");
             return;
           }
-          const doc = await roomDocFor(frame.room);
-          if (!doc) {
-            answer(false, "That room does not exist.");
-            return;
-          }
-          if (!isValidSeatPin(frame.pin)) {
-            answer(false, "A PIN is exactly four digits.");
-            return;
-          }
-          const seat = doc.players.find((player) => player.id === seatFrame.playerId);
-          if (!seat) {
-            answer(false, "That seat is not in this room.");
-            return;
-          }
-          const pins = doc.seatPins ?? {};
-
-          if (frame.kind === "seat-pin") {
-            if (seatFrame.playerId !== actor) {
-              answer(false, "Only the seat's own player may set its PIN.");
-              return;
-            }
-            const current = pins[actor];
-            if (current && current !== frame.currentPin) {
-              answer(false, "That is not this seat's current PIN.");
-              return;
-            }
-            roomDocs.set(frame.room, { ...doc, seatPins: { ...pins, [actor]: frame.pin } });
-            await saveRoomDocQuietly(frame.room);
-            /* The setter's own device holds the seat's first token, so its own log socket -- which said hello
-               without one -- stays valid: a hello carrying NO token is only refused once one exists, and this
-               device's next hello will carry this one. */
-            const token = tokenFor(frame.room, actor) ?? mintSeatToken();
-            setToken(frame.room, actor, token);
-            answer(true, undefined, token);
-            broadcastRoomDoc(frame.room); // `hasPin` changed for this seat
-            return;
-          }
-
-          // claim-seat
-          const required = pins[seatFrame.playerId];
-
-          /* ==================================================================
-              DESIGN NOTE 1341a: A SEAT WITH NO PIN ADOPTS THE ONE IT IS OFFERED
-             ==================================================================
-             THE SEATS THAT EXIST ALREADY HAVE NO PIN. #1341 shipped into a live playtest whose seats were
-             claimed before it existed, and the rule above -- "a seat without a PIN cannot be claimed" --
-             locked exactly those players out of their own seats the moment they changed device. A rule that
-             is right for every future room and wrong for every present one needs a migration, not an
-             argument.
-
-             SO THE FIRST PIN OFFERED FOR AN UNPINNED SEAT BECOMES ITS PIN, and from that moment the seat is
-             an ordinary #1341 seat: the branch below demands this exact PIN of every later device, the gate
-             demands it of every later hello, and the token supersedes whoever held it. One seat crosses over
-             per claim, at the moment somebody needs it to, and no room has to be restarted to get there.
-
-             WHAT THIS IS NOT: protection. An unPINned seat was ALREADY open to anybody who claimed its id --
-             `seatRefusal` returns `null` when there is no PIN, so any hello naming that id was, and still
-             is, believed (#1210). This branch does not open a door; it lets the person walking through it
-             lock the door behind them. The cost it DOES carry is that the lock then works against the seat's
-             own player too, so on a public URL the honest instruction is the one the playtest was given:
-             set your PIN now, from the device you are already on, and the question stops being open.
-
-             LOGGED LOUDLY for the same reason the insecure identity is: it is a thing the operator should be
-             able to see happen in the window, not infer afterwards from a locked-out player. */
-          if (!required) {
-            roomDocs.set(frame.room, {
-              ...doc,
-              seatPins: { ...pins, [seatFrame.playerId]: frame.pin },
-            });
-            await saveRoomDocQuietly(frame.room);
+          let game: GameActor;
+          try {
+            game = await games.get(frame.room);
+          } catch (error) {
             // eslint-disable-next-line no-console
-            console.warn(
-              `[#1341a] seat "${seat.nickname || seatFrame.playerId}" in ${frame.room} had no PIN and adopted ` +
-                `the one just offered. Every later device needs it. See design note 1341a.`,
-            );
-          } else if (required !== frame.pin) {
-            answer(false, "Wrong PIN for that seat.");
+            console.error(`  store: could not load ${frame.room} for a seat request`, error);
+            answer(false, LOAD_FAILED_REASON);
             return;
           }
-          /* The old device is told and closed; the new one adopts the id and reloads with the PIN and a fresh
-             token in hand. The old device's reconnect then carries a stale token and is turned away. */
-          const token = mintSeatToken();
-          setToken(seatFrame.room, seatFrame.playerId, token);
-          for (const [other, attached] of sockets) {
-            if (attached.room === seatFrame.room && attached.actor === seatFrame.playerId && other !== socket) {
-              send(other, {
-                kind: "error",
-                reason: "This seat was rejoined from another device.",
-                code: SEAT_SUPERSEDED_CODE,
-              } as never);
-              other.close();
-            }
-          }
-          answer(true, undefined, token);
-          /* #1341a: `hasPin` just changed for an adopting seat, and the roster is how every other screen
-             learns it. Harmless for a seat that already had one -- the document is identical. */
-          broadcastRoomDoc(frame.room);
+          const outcome = await game.run(
+            "room-op",
+            async (tx) => {
+              const doc = tx.view.roomDoc;
+              if (!doc) {
+                answer(false, "That room does not exist.");
+                return;
+              }
+              if (!isValidSeatPin(frame.pin)) {
+                answer(false, "A PIN is exactly four digits.");
+                return;
+              }
+              const seat = doc.players.find((player) => player.id === seatFrame.playerId);
+              if (!seat) {
+                answer(false, "That seat is not in this room.");
+                return;
+              }
+              const pins = doc.seatPins ?? {};
+
+              if (frame.kind === "seat-pin") {
+                if (seatFrame.playerId !== actor) {
+                  answer(false, "Only the seat's own player may set its PIN.");
+                  return;
+                }
+                const current = pins[actor];
+                if (current && current !== frame.currentPin) {
+                  answer(false, "That is not this seat's current PIN.");
+                  return;
+                }
+                await tx.commitRoomDoc({ ...doc, seatPins: { ...pins, [actor]: frame.pin } }, (settled) => ({
+                  after: () => {
+                    if (settled.kind !== "committed") {
+                      answer(false, ROOM_SAVE_FAILED_REASON);
+                      return;
+                    }
+                    /* The setter's own device holds the seat's first token, so its own log socket -- which said
+                       hello without one -- stays valid: a hello carrying NO token is only refused once one exists,
+                       and this device's next hello will carry this one. */
+                    const token = tokenFor(frame.room, actor) ?? mintSeatToken();
+                    setToken(frame.room, actor, token);
+                    answer(true, undefined, token);
+                    broadcastRoomDoc(frame.room); // `hasPin` changed for this seat
+                  },
+                }));
+                return;
+              }
+
+              // claim-seat
+              const required = pins[seatFrame.playerId];
+
+              /* ==================================================================
+                  DESIGN NOTE 1341a: A SEAT WITH NO PIN ADOPTS THE ONE IT IS OFFERED
+                 ==================================================================
+                 THE SEATS THAT EXIST ALREADY HAVE NO PIN. #1341 shipped into a live playtest whose seats were
+                 claimed before it existed, and the rule above -- "a seat without a PIN cannot be claimed" --
+                 locked exactly those players out of their own seats the moment they changed device. A rule that
+                 is right for every future room and wrong for every present one needs a migration, not an
+                 argument.
+
+                 SO THE FIRST PIN OFFERED FOR AN UNPINNED SEAT BECOMES ITS PIN, and from that moment the seat is
+                 an ordinary #1341 seat: the branch below demands this exact PIN of every later device, the gate
+                 demands it of every later hello, and the token supersedes whoever held it. One seat crosses over
+                 per claim, at the moment somebody needs it to, and no room has to be restarted to get there.
+
+                 WHAT THIS IS NOT: protection. An unPINned seat was ALREADY open to anybody who claimed its id --
+                 `seatRefusal` returns `null` when there is no PIN, so any hello naming that id was, and still
+                 is, believed (#1210). This branch does not open a door; it lets the person walking through it
+                 lock the door behind them. The cost it DOES carry is that the lock then works against the seat's
+                 own player too, so on a public URL the honest instruction is the one the playtest was given:
+                 set your PIN now, from the device you are already on, and the question stops being open.
+
+                 LOGGED LOUDLY for the same reason the insecure identity is: it is a thing the operator should be
+                 able to see happen in the window, not infer afterwards from a locked-out player. */
+              /* The old device is told and closed; the new one adopts the id and reloads with the PIN and a fresh
+                 token in hand. The old device's reconnect then carries a stale token and is turned away. */
+              const takeOver = () => {
+                const token = mintSeatToken();
+                setToken(seatFrame.room, seatFrame.playerId, token);
+                for (const [other, attached] of sockets) {
+                  if (attached.room === seatFrame.room && attached.actor === seatFrame.playerId && other !== socket) {
+                    send(other, {
+                      kind: "error",
+                      reason: "This seat was rejoined from another device.",
+                      code: SEAT_SUPERSEDED_CODE,
+                    } as never);
+                    other.close();
+                  }
+                }
+                answer(true, undefined, token);
+                /* #1341a: `hasPin` just changed for an adopting seat, and the roster is how every other screen
+                   learns it. Harmless for a seat that already had one -- the document is identical. */
+                broadcastRoomDoc(frame.room);
+              };
+              if (!required) {
+                await tx.commitRoomDoc(
+                  {
+                    ...doc,
+                    seatPins: { ...pins, [seatFrame.playerId]: frame.pin },
+                  },
+                  (settled) => ({
+                    after: () => {
+                      if (settled.kind !== "committed") {
+                        answer(false, ROOM_SAVE_FAILED_REASON);
+                        return;
+                      }
+                      // eslint-disable-next-line no-console
+                      console.warn(
+                        `[#1341a] seat "${seat.nickname || seatFrame.playerId}" in ${frame.room} had no PIN and adopted ` +
+                          `the one just offered. Every later device needs it. See design note 1341a.`,
+                      );
+                      takeOver();
+                    },
+                  }),
+                );
+                return;
+              } else if (required !== frame.pin) {
+                answer(false, "Wrong PIN for that seat.");
+                return;
+              }
+              takeOver();
+            },
+            { origin: originFor(socket, actor) },
+          );
+          if (outcome.kind === "busy") answer(false, BUSY_REASON);
+          else if (outcome.kind === "expired") answer(false, EXPIRED_REASON);
+          else if (outcome.kind === "failed") answer(false, ROOM_SAVE_FAILED_REASON);
           return;
         }
 
+        /* ==================================================================
+            LIVE-3A: A ROOM WRITE IS A TASK ON THE ROOM'S ACTOR, AND DURABLE BEFORE IT IS VISIBLE
+           ==================================================================
+           The document is authority today -- the host a submit is judged under (#1249), the seats a PIN guards --
+           so it is serialized with the room's moves: a write queued behind a move sees that move's committed
+           result, and a move queued behind a write is judged under the committed document (E-1, E-2).
+           THE OLD ORDER WAS "change the map, then try the disk", and a failed save was logged and ignored, so a
+           roster, a PIN or a host that every screen had been shown silently reverted at the next restart (LIVE-3
+           F-10). Now the prospective document is saved first and published only if the store took it; a save
+           the store refused is answered exactly as a refused write is -- `room-write-refused` and the unchanged
+           document -- and the previous document stays authoritative. */
         if (frame.kind === "room-write") {
           if (!roomDocSockets.has(socket)) {
             send(socket, { kind: "error", reason: "say room-hello first" });
             return;
           }
-          const { doc, refused } = applyRoomWrite(frame.room, frame.write, roomDocActors.get(socket));
-          if (refused) {
+          const refuse = (reason: string, doc: SandboxRoomDoc | null) => {
             /* #1415: told, not dropped -- and the current document re-sent, so a joiner whose optimistic
                "I am seated" the client may have painted is corrected by the roster that does not hold them. */
-            send(socket, { kind: "error", reason: refused, code: ROOM_WRITE_REFUSED_CODE } as never);
+            send(socket, { kind: "error", reason, code: ROOM_WRITE_REFUSED_CODE } as never);
             send(socket, { kind: "room", room: frame.room, doc: publicDoc(doc) } as never);
+          };
+          let game: GameActor;
+          try {
+            game = await games.get(frame.room);
+          } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(`  store: could not load ${frame.room} for a room write`, error);
+            refuse(LOAD_FAILED_REASON, roomDocs.get(frame.room) ?? null);
             return;
           }
-          /* #1250: saved before the fan-out, like the log. Last-write-wins, so a failed save is logged and
-             the in-memory document stands -- the roster is not the game (#1215), and refusing a nickname
-             because the disk hiccuped would be the wrong severity. */
-          if (doc && options.store) {
-            try {
-              await options.store.saveRoomDoc(frame.room, doc);
-            } catch (error) {
-              // eslint-disable-next-line no-console
-              console.error(`  store: could not save the room document for ${frame.room}`, error);
-            }
-          }
-          broadcastRoomDoc(frame.room);
-          /* #1415: the public list changed with this write -- a seat, a Ready, a status, a new room. */
-          await broadcastSandboxRooms();
+          let taken = false;
+          const outcome = await game.run(
+            "room-op",
+            async (tx) => {
+              const { doc, refused } = applyRoomWrite(frame.room, frame.write, roomDocActors.get(socket));
+              if (refused) {
+                refuse(refused, doc);
+                return;
+              }
+              const committed = tx.view.roomDoc;
+              /* Nothing to make durable -- a write to a room nobody hosted, or one that changed nothing: the
+                 committed document is re-sent as it stands, as it always was. */
+              if (!doc || doc === committed) {
+                taken = true;
+                broadcastRoomDoc(frame.room);
+                return;
+              }
+              await tx.commitRoomDoc(doc, (settled) => ({
+                after: () => {
+                  if (settled.kind !== "committed") {
+                    refuse(ROOM_SAVE_FAILED_REASON, committed as SandboxRoomDoc | null);
+                    return;
+                  }
+                  taken = true;
+                  broadcastRoomDoc(frame.room);
+                },
+              }));
+            },
+            { origin: originFor(socket, roomDocActors.get(socket) ?? "") },
+          );
+          if (outcome.kind === "busy") refuse(BUSY_REASON, roomDocs.get(frame.room) ?? null);
+          else if (outcome.kind === "expired") refuse(EXPIRED_REASON, roomDocs.get(frame.room) ?? null);
+          else if (outcome.kind === "failed") refuse(ROOM_SAVE_FAILED_REASON, roomDocs.get(frame.room) ?? null);
+          /* #1415: the public list changed with this write -- a seat, a Ready, a status, a new room. Outside the
+             actor: it reads committed documents only, and no game waits on it (E-3). */
+          if (taken) await broadcastSandboxRooms();
           return;
         }
 
@@ -1272,17 +1622,63 @@ export function createGameServer(options: GameServerOptions): {
             return;
           }
           sockets.set(socket, { room: frame.room, actor });
-          const session = await roomFor(frame.room);
+          let game: GameActor;
+          try {
+            game = await games.get(frame.room);
+          } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(`  store: could not load ${frame.room} for a hello`, error);
+            send(socket, { kind: "error", code: "unavailable", reason: LOAD_FAILED_REASON });
+            socket.close();
+            return;
+          }
           /* A JOINING CLIENT IS ALWAYS BEHIND, so the first thing it gets is everything it missed. `-1` for a
-             client with nothing means "send me the game", which is the same path as a reconnect. */
-          send(socket, session.catchUp(frame.baseIndex ?? -1));
+             client with nothing means "send me the game", which is the same path as a reconnect.
+             ==================================================================
+              LIVE-3A (§3.5): FROM HERE TO THE ANSWER IS ONE SYNCHRONOUS STEP
+             ==================================================================
+             The catch-up used to be read off the live session, so a hello that landed while a move awaited the
+             disk was handed the move before the disk had it (LIVE-3 P1, F-3). `subscribe` registers this socket
+             and answers it from the COMMITTED view with no await in between, and a publish is synchronous too:
+             a socket registered before a publish receives its fan-out, one registered after sees it in this
+             catch-up -- never neither, never both. The answer carries `inFlight`, this player's submissions still
+             being committed, so a reconnecting tab does not call a move lost that is about to land (§4.2).
+             A `baseIndex` above the room's durable watermark, or a `baseId` naming an entry the room does not
+             hold there, is a history this room does not share: `resync`, and nothing registered (L3-3). */
+          const fromIndex =
+            Number.isInteger(frame.baseIndex) && (frame.baseIndex as number) >= -1 ? (frame.baseIndex as number) : -1;
+          const baseId = typeof frame.baseId === "string" ? frame.baseId : undefined;
+          unsubscribeLog(socket);
+          const subscribed = game.subscribe(socket, subscriberFor(socket, actor), fromIndex, baseId);
+          if (subscribed.kind === "subscribed") {
+            logSubscriptions.set(socket, game);
+            return;
+          }
+          if (subscribed.kind === "held") {
+            send(socket, subscribed.frame);
+            return;
+          }
+          counters.helloResync += 1;
+          // eslint-disable-next-line no-console
+          console.warn(
+            `  resync: ${actor}'s hello in ${frame.room} holds index ${fromIndex}${baseId ? ` (${baseId})` : ""} but the ` +
+              `room's durable history ends at ${subscribed.watermark} or holds another entry there -- counted as a ` +
+              `durability alarm (LIVE-3 §5.2)`,
+          );
+          send(socket, { kind: "error", code: "resync", reason: subscribed.reason, watermark: subscribed.watermark });
           return;
         }
 
         if (frame.kind === "submit") {
+          /* LIVE-3A (L3-3): EVERY DIRECT ANSWER NAMES THE SUBMISSION IT ANSWERS, the refusals before the actor
+             included. The actor serializes a room, so another player's fan-out now reaches this socket before
+             its own queued answer, and a client matching replies first-in-first-out took the other player's
+             index for its own (LIVE-3 P4). */
+          const inReplyTo = typeof frame.submissionId === "string" ? frame.submissionId : undefined;
+          const answer = (message: object) => send(socket, answering(message, inReplyTo));
           const attached = sockets.get(socket);
           if (!attached) {
-            send(socket, { kind: "error", reason: "say hello first" });
+            answer({ kind: "error", reason: "say hello first" });
             return;
           }
           /* ==================================================================
@@ -1293,7 +1689,7 @@ export function createGameServer(options: GameServerOptions): {
              object were every one of them answered `applied` and appended a permanent entry to the room's
              log. The reducer no-opped most of them, which is why nobody noticed: the BOARD was unchanged and
              the HISTORY was not, and `logHash` commits over the history.
-             SO THE REFUSAL HAS TO LAND HERE, above `roomFor`. Inside `RoomSession.submit` the append is
+             SO THE REFUSAL HAS TO LAND HERE, before the room's actor. Inside `RoomSession.submit` the append is
              the commit point (#1209) and the authority runs before it -- but the authority asks whose turn
              it is, which is a question about a message that has already been assumed to be one. A frame
              that is not a move must not reach a function whose job is deciding whose move it is.
@@ -1307,124 +1703,44 @@ export function createGameServer(options: GameServerOptions): {
               `  malformed: ${attached.actor} sent a frame that is not a move — ${shape.reason}\n` +
                 `    payload ${JSON.stringify(frame.msg)}`,
             );
-            send(socket, { kind: "refused", reason: shape.reason, build: options.build });
+            answer({ kind: "refused", reason: shape.reason, build: options.build });
             return;
           }
 
-          const session = await roomFor(attached.room);
-          const before = session.entries.length;
-
-          /* THE ACTOR COMES FROM THE CONNECTION, NEVER FROM THE FRAME (#1207). This line is the whole of the
-             security posture; a `frame.actor` here would undo `turnAuthority` entirely. */
-          /* ==================================================================
-              DESIGN NOTE 1241: A THROWN SUBMIT IS ANSWERED, NOT SWALLOWED
-             ==================================================================
-             REPORTED: with Auto-Buy armed, every turn began with "Sending your last action — one moment" and
-             the controls stayed grey until the client's six-second backstop (#1173) gave up. A refusal, a
-             build skew or a catch-up would have released that latch at once AND printed here (#1218). Six
-             seconds of nothing means the server never replied -- and the only path with no reply is an
-             exception inside `session.submit`, which the chain guard below catches so one bad frame cannot
-             poison the socket. Correct for the socket, silent for the fault: the reducer threw, nobody was
-             told, and the shell had to time out to find out.
-             SO A THROW BECOMES A REFUSAL WITH THE ERROR'S OWN SENTENCE, logged in the window that is already
-             open and sent to the client whose move it was. The log is untouched -- the append is the commit
-             point (#1209) and a throw before it appends nothing; a throw AFTER it would have appended an entry
-             the engine could not apply, which is a divergence the digest will name on the next frame. */
-          let result: ReturnType<typeof session.submit>;
+          let game: GameActor;
           try {
-            result = session.submit({
-              actor: attached.actor,
-              build: frame.build,
-              msg: frame.msg,
-              baseIndex: frame.baseIndex,
-              submissionId: frame.submissionId,
-              /* #1249: the host, from the room document this process already keeps (#1215), so the
-                 messages that are the host's to send can be refused to everybody else. `null` for a room
-                 with no document -- the authority skips the host-only checks then rather than refusing
-                 everyone. */
-              host: roomDocs.get(attached.room)?.hostId ?? null,
-            });
+            game = await games.get(attached.room);
           } catch (error) {
-            const reason = error instanceof Error ? error.message : String(error);
             // eslint-disable-next-line no-console
-            console.log(
-              `  threw: ${attached.actor} sent ${Object.keys(frame.msg)[0]} — ${reason}\n` +
-                `    payload ${JSON.stringify(frame.msg)}`,
-            );
-            result = { kind: "refused", reason: `The server could not apply that move: ${reason}`, build: options.build };
+            console.error(`  store: could not load ${attached.room} for a submit`, error);
+            answer({ kind: "refused", code: "unavailable", reason: LOAD_FAILED_REASON, build: options.build });
+            return;
           }
-
-          /* ==================================================================
-              DESIGN NOTE 1218: THE SERVER SAYS WHY, IN THE WINDOW THAT IS ALREADY OPEN
-             ==================================================================
-             A refusal, a build skew and a catch-up all reach the shell as "the action was not sent", and two
-             of the three arrive with no explanation at all. THE SERVER KNOWS EXACTLY WHICH IT WAS and was
-             throwing that away -- so diagnosing a stuck button meant opening DevTools, which is a different
-             skill from playing a game and a poor thing to require of a playtester.
-             ONLY THE NON-APPLIED ANSWERS ARE LOGGED. An applied move is the normal case and one line per
-             action would bury the interesting ones. */
-          /* #1250: THE DISK, BEFORE THE ANSWER. Everything this submit appended -- the move, its derived
-             burst, any repair -- goes to the store and is synced before the submitter hears `applied` and
-             before anybody else hears anything. A store that rejects rolls the session back to the length
-             the disk last acknowledged and the submitter is refused: the move did not happen, and the log
-             on disk, the board in memory and every client agree that it did not. */
-          let appended = session.entries.slice(before);
-          if (appended.length > 0 && options.store) {
-            try {
-              await options.store.appendLog(attached.room, appended);
-            } catch (error) {
-              const reason = error instanceof Error ? error.message : String(error);
-              // eslint-disable-next-line no-console
-              console.error(
-                `  store: could not append ${appended.length} entries for ${attached.room} — ${reason}; ` +
-                  `rolled back to index ${before - 1}`,
-              );
-              session.discardAfter(before);
-              appended = [];
-              result = {
-                kind: "refused",
-                reason: "The server could not record that move, so it was not made. Try again.",
-                build: options.build,
-              };
-            }
-          }
-
-          if (result.kind !== "applied") {
-            const why =
-              (result as { reason?: string }).reason ??
-              (result.kind === "build-skew"
-                ? `client ${(result as { clientBuild?: string }).clientBuild} vs server ${options.build}`
-                : `client was at ${frame.baseIndex}, room is at ${session.nextIndex - 1}`);
+          /* LIVE-3 §4 STEPS 2-17 ARE ONE TASK ON THE ROOM'S ACTOR (`submitOnActor`). It starts only after every
+             task queued before it has published or rolled back, and nothing it does is visible until the store
+             has it. Awaited here, so this socket's frames stay in the order it sent them (#1216). */
+          const outcome = await game.run("submit", (tx) => submitOnActor(tx, attached, frame, inReplyTo), {
+            origin: originFor(socket, attached.actor, inReplyTo),
+          });
+          if (outcome.kind === "busy") {
+            answer({ kind: "refused", code: "busy", reason: BUSY_REASON, build: options.build });
+          } else if (outcome.kind === "expired") {
+            // E-8: never ran, so nothing happened and the game is not held -- the client may simply act again.
+            answer({ kind: "refused", code: "retry", reason: EXPIRED_REASON, build: options.build });
+          } else if (outcome.kind === "failed") {
+            // The task threw outside its own guard; the actor rolled it back (E-9). Said, with a reference.
+            counters.internal += 1;
+            const ref = errorRef();
             // eslint-disable-next-line no-console
-            console.log(
-              `  ${result.kind}: ${attached.actor} sent ${Object.keys(frame.msg)[0]} — ${why}`,
-            );
-          }
-
-          send(socket, result);
-
-          if (appended.length > 0) {
-            options.onAppend?.(attached.room, appended);
-            /* FAN-OUT CARRIES WHAT WAS APPENDED, not the answer the submitter got -- a refusal is that
-               client's business, and a catch-up is about how far behind IT was. */
-            broadcast(attached.room, socket, {
-              kind: "applied",
-              entries: appended,
-              /* #1223: THE WATCHERS' DIGEST IS COMPUTED, NOT BORROWED. This read
-                 `(result as { digest?: string }).digest ?? ""`, and the fallback is reachable -- a refusal
-                 that still carried repairs appends entries and answers `refused`, which has no digest. Every
-                 watcher then received `""`, and an empty digest is "no verdict" (#232), so the divergence
-                 check would have been silently unavailable to exactly the clients that are not driving. The
-                 board is right here; hashing it costs nothing and means something. */
-              digest: stateDigest(session.state),
-              /* #1225: a WATCHER needs these as much as the actor -- more, since a watcher's board is the one
-                 nobody is looking at. Recomputed rather than borrowed, for #1223's reason. */
-              ...(options.explainDivergence === true
-                ? { fields: fieldDigests(session.state) }
-                : {}),
+            console.error(`  threw: a submit task for ${attached.room} failed (ref ${ref}); rolled back`, outcome.error);
+            answer({
+              kind: "refused",
+              code: "internal",
+              reason: `The server could not process that move, so it was not made. (ref ${ref})`,
               build: options.build,
             });
           }
+          return;
         }
       });
       /* A THROWN HANDLER MUST NOT POISON THE CHAIN. Without this, one bad frame would reject `inOrder` and
@@ -1436,7 +1752,12 @@ export function createGameServer(options: GameServerOptions): {
     socket.on("close", () => {
       /* NOTHING IS ROLLED BACK ON A DISCONNECT, and #1209 is why: the append is the commit point and the
          response is only news. A player who vanishes mid-burst has still made their move, and the burst
-         finishes itself on the next submission. */
+         finishes itself on the next submission.
+         LIVE-3A (E-8): A RUNNING TASK FINISHES -- its commit stands, and a reconnecting hello reports it in
+         `inFlight` until it does. What this socket QUEUED and had not started is cancelled now, so it never
+         runs after the player has gone and a reconnecting hello never reports it as pending. */
+      games.forEach((game) => game.cancelQueuedFrom(socket));
+      unsubscribeLog(socket);
       sockets.delete(socket);
       /* #1215: the roster keeps the player. A closed tab is not a player leaving the table -- they refresh,
          they lose wifi, they come back -- and dropping them from the roster would empty a waiting room every
@@ -1459,8 +1780,10 @@ export function createGameServer(options: GameServerOptions): {
 
   return {
     http,
+    counters,
     close: () =>
       new Promise<void>((resolve) => {
+        games.close();
         for (const socket of sockets.keys()) socket.close();
         wss.close(() => http.close(() => resolve()));
       }),

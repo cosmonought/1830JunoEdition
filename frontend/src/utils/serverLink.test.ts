@@ -378,3 +378,229 @@ describe("a batch says whether it is live or history, #1238", () => {
     expect(seen).toEqual(["applied"]);
   });
 });
+
+/* ==================================================================
+    LIVE-3A (L3-3): THE ANSWER NAMES ITS SUBMISSION
+   ==================================================================
+   The server now runs a room's submissions one at a time, so another player's fan-out reaches this socket BEFORE
+   this client's own queued answer -- deterministically. FIFO then took the other player's index for this
+   client's move (LIVE-3 P4). A LIVE-3A server marks its hello answer with `inFlight`; from then on a frame WITH
+   `inReplyTo` settles exactly that submission and a frame without one is history. */
+describe("LIVE-3A: answers are matched by the submission they name", () => {
+  const PASS = { PassTurn: { game_id: 0 } } as never;
+  const digest = "0".repeat(16);
+  const hello = (entries: unknown[] = [], inFlight: string[] = []) => ({ kind: "catch-up", build: "build-1", digest, entries, inFlight });
+  const applied = (entries: unknown[], inReplyTo?: string) => ({
+    kind: "applied",
+    build: "build-1",
+    digest,
+    entries,
+    ...(inReplyTo === undefined ? {} : { inReplyTo }),
+  });
+  const live = (over: Partial<Parameters<typeof connectServerLink>[0]> = {}) => {
+    const scheduled: Array<() => void> = [];
+    const stale: number[] = [];
+    const resyncs: string[] = [];
+    const statuses: Array<[string, string | undefined]> = [];
+    const made = link({
+      schedule: (callback) => scheduled.push(callback),
+      onStale: () => stale.push(1),
+      onResync: (reason) => resyncs.push(reason),
+      onRoomStatus: (state, reason) => statuses.push([state, reason]),
+      ...over,
+    });
+    const reconnect = () => {
+      made.wire.drop();
+      const next = scheduled.shift();
+      if (!next) throw new Error("nothing scheduled");
+      next();
+      made.wire.sent.length = 0;
+      made.wire.open();
+    };
+    return { ...made, stale, resyncs, statuses, reconnect };
+  };
+  const settledYet = async (promise: Promise<unknown>) => {
+    let done = false;
+    void promise.then(() => {
+      done = true;
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    return done;
+  };
+
+  it("P4: another player's fan-out that arrives first does not resolve this client's submission", async () => {
+    const { client, wire, errors, stale } = live();
+    wire.open();
+    wire.deliver(hello([entry(0)]));
+    const mine = client.submit(PASS); // n1, sent from index 0
+    // Alice's move committed first, so her fan-out reaches this socket before the answer to n1.
+    const alices = entry(1, { actor: "p-alice", submission_id: "alice-7" });
+    wire.deliver(applied([alices]));
+    expect(await settledYet(mine)).toBe(false);
+    // The real answer: n1 was behind. It names n1 and resolves exactly it.
+    wire.deliver({ kind: "catch-up", build: "build-1", digest, entries: [alices], inReplyTo: "n1" });
+    await expect(mine).resolves.toBeNull();
+    expect(stale).toEqual([1]);
+    expect(errors).toEqual([]); // no "out of order": nothing is out of order any more
+  });
+
+  it("settles each submission by the id its answer names, in whatever order the answers arrive", async () => {
+    const { client, wire, refusals } = live();
+    wire.open();
+    wire.deliver(hello());
+    const a = client.submit(PASS);
+    const b = client.submit(PASS);
+    const c = client.submit(PASS);
+    wire.deliver(applied([entry(1, { submission_id: "n2" })], "n2"));
+    wire.deliver({ kind: "refused", build: "build-1", reason: "It is not your turn.", inReplyTo: "n3" });
+    wire.deliver(applied([entry(0, { submission_id: "n1" })], "n1"));
+    await expect(Promise.all([a, b, c])).resolves.toEqual([0, 1, null]);
+    expect(refusals).toEqual(["It is not your turn."]);
+  });
+
+  it("a frame that names no submission is history and settles nothing", async () => {
+    const { client, wire, entries } = live();
+    wire.open();
+    wire.deliver(hello());
+    const mine = client.submit(PASS);
+    wire.deliver(applied([entry(0, { actor: "p-bob", submission_id: "bob-1" })]));
+    wire.deliver({ kind: "refused", build: "build-1", reason: "an answer to nobody" });
+    expect(await settledYet(mine)).toBe(false);
+    expect(entries.flat()).toEqual([entry(0, { actor: "p-bob", submission_id: "bob-1" })]);
+    wire.deliver(applied([entry(1, { submission_id: "n1" })], "n1"));
+    await expect(mine).resolves.toBe(1);
+  });
+
+  it("names the anchor: every submit and the next hello carry the id of the entry at baseIndex", () => {
+    const { client, wire, reconnect } = live();
+    wire.open();
+    expect(wire.frames()[0]).toMatchObject({ kind: "hello", baseIndex: -1 });
+    expect(wire.frames()[0].baseId).toBeUndefined();
+    wire.deliver(hello([entry(0), entry(1)]));
+    void client.submit(PASS);
+    expect(wire.frames()[wire.frames().length - 1]).toMatchObject({ kind: "submit", baseIndex: 1, baseId: "e1" });
+    reconnect();
+    expect(wire.frames()[0]).toMatchObject({ kind: "hello", baseIndex: 1, baseId: "e1" });
+  });
+
+  it("a stale answer's catch-up does not hand the shell entries it already has", () => {
+    const { client, wire, entries } = live();
+    wire.open();
+    wire.deliver(hello([entry(0)]));
+    void client.submit(PASS);
+    wire.deliver(applied([entry(1, { actor: "p-bob" })])); // the move that made n1 stale
+    wire.deliver({ kind: "catch-up", build: "build-1", digest, entries: [entry(1, { actor: "p-bob" })], inReplyTo: "n1" });
+    expect(entries).toEqual([[entry(0)], [entry(1, { actor: "p-bob" })], []]);
+  });
+
+  it("a reconnect keeps an IN-FLIGHT submission pending, and settles it when its entry lands", async () => {
+    const { client, wire, stale, reconnect } = live();
+    wire.open();
+    wire.deliver(hello());
+    const flying = client.submit(PASS);
+    reconnect();
+    // The server is still committing n1: not in the catch-up, but named in `inFlight`.
+    wire.deliver(hello([], ["n1"]));
+    expect(await settledYet(flying)).toBe(false);
+    expect(stale).toEqual([]);
+    expect(wire.frames().filter((frame) => frame.kind === "submit")).toHaveLength(0); // never re-sent
+    // It lands: the fan-out (no inReplyTo -- this socket did not send it) carries its entry.
+    wire.deliver(applied([entry(0, { submission_id: "n1" })]));
+    await expect(flying).resolves.toBe(0);
+    expect(stale).toEqual([]);
+  });
+
+  it("an in-flight submission that ends without committing is `abandoned`: null, and the board is current", async () => {
+    const { client, wire, stale, reconnect } = live();
+    wire.open();
+    wire.deliver(hello());
+    const flying = client.submit(PASS);
+    reconnect();
+    wire.deliver(hello([], ["n1"]));
+    wire.deliver({ kind: "abandoned", inReplyTo: "n1", reason: "not recorded" });
+    await expect(flying).resolves.toBeNull();
+    expect(stale).toEqual([1]);
+  });
+
+  it("an orphan the server does NOT call in flight is settled by the catch-up as before", async () => {
+    const { client, wire, stale, reconnect } = live();
+    wire.open();
+    wire.deliver(hello());
+    const flying = client.submit(PASS);
+    reconnect();
+    wire.deliver(hello([], []));
+    await expect(flying).resolves.toBeNull();
+    expect(stale).toEqual([1]);
+  });
+
+  it("`unavailable` keeps the submission pending until the room resumes and says whether it landed", async () => {
+    const { client, wire, refusals, statuses } = live();
+    wire.open();
+    wire.deliver(hello());
+    const unsure = client.submit(PASS);
+    wire.deliver({ kind: "refused", build: "build-1", code: "unavailable", reason: "could not confirm", inReplyTo: "n1" });
+    wire.deliver({ kind: "status", state: "unavailable", reason: "paused" });
+    expect(await settledYet(unsure)).toBe(false);
+    expect(refusals).toEqual(["could not confirm"]);
+    wire.deliver(applied([entry(0, { submission_id: "n1" })]));
+    wire.deliver({ kind: "status", state: "live" });
+    await expect(unsure).resolves.toBe(0);
+    expect(statuses).toEqual([
+      ["unavailable", "paused"],
+      ["live", undefined],
+    ]);
+  });
+
+  it("`ahead`: everything pending resolves null, the history is dropped, and the link rejoins from -1 on the same socket", async () => {
+    const { client, wire, stale, resyncs, entries } = live();
+    wire.open();
+    wire.deliver(hello([entry(0), entry(1)]));
+    const a = client.submit(PASS);
+    const b = client.submit(PASS);
+    wire.sent.length = 0;
+    wire.deliver({ kind: "refused", build: "build-1", code: "ahead", watermark: 0, reason: "ahead", inReplyTo: "n1" });
+    await expect(Promise.all([a, b])).resolves.toEqual([null, null]);
+    expect(stale).toEqual([1]);
+    expect(resyncs).toEqual(["ahead"]);
+    expect(client.resyncs).toBe(1);
+    expect(client.appliedIndex).toBe(-1);
+    expect(wire.frames()).toHaveLength(1);
+    expect(wire.frames()[0]).toMatchObject({ kind: "hello", baseIndex: -1 });
+    expect(wire.frames()[0].baseId).toBeUndefined();
+    // Anything before the fresh catch-up is in it, so it is dropped rather than applied twice.
+    const before = entries.length;
+    wire.deliver(applied([entry(1)]));
+    wire.deliver({ kind: "refused", build: "build-1", reason: "late", inReplyTo: "n2" });
+    expect(entries).toHaveLength(before);
+    // The fresh catch-up is the room's history, delivered whole -- including ids delivered before the resync.
+    wire.deliver(hello([entry(0)]));
+    expect(entries[entries.length - 1]).toEqual([entry(0)]);
+    expect(client.appliedIndex).toBe(0);
+  });
+
+  it("a hello answered `error{code:\"resync\"}` takes the same path", () => {
+    const { client, wire, resyncs, reconnect } = live();
+    wire.open();
+    wire.deliver(hello([entry(0), entry(1)]));
+    // A reconnect's hello names index 1 and its anchor; the room no longer holds that history.
+    reconnect();
+    expect(wire.frames()[0]).toMatchObject({ kind: "hello", baseIndex: 1, baseId: "e1" });
+    wire.sent.length = 0;
+    wire.deliver({ kind: "error", code: "resync", reason: "diverged", watermark: 0 });
+    expect(resyncs).toEqual(["diverged"]);
+    expect(client.appliedIndex).toBe(-1);
+    expect(wire.frames()[0]).toMatchObject({ kind: "hello", baseIndex: -1 });
+    wire.deliver(hello([entry(0)]));
+    expect(client.appliedIndex).toBe(0);
+  });
+
+  it("keeps FIFO for a server whose hello answer carries no `inFlight` (older than LIVE-3A)", async () => {
+    const { client, wire } = live();
+    wire.open();
+    wire.deliver({ kind: "catch-up", build: "build-1", digest, entries: [] });
+    const first = client.submit(PASS);
+    wire.deliver(applied([entry(0, { submission_id: "n1" })]));
+    await expect(first).resolves.toBe(0);
+  });
+});

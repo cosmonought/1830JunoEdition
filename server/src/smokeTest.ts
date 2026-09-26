@@ -463,6 +463,8 @@ async function main(): Promise<void> {
 
   await stagingLobbyParked();
 
+  await durableBeforeVisible();
+
   // eslint-disable-next-line no-console
   console.log(process.exitCode === 1 ? "\nSMOKE FAILED" : "\nSMOKE PASSED");
 }
@@ -680,6 +682,112 @@ async function stagingLobbyParked(): Promise<void> {
 
   host.socket.close();
   probe.socket.close();
+  await server.close();
+}
+
+/* ==================================================================
+    LIVE-3A: DURABLE BEFORE VISIBLE, OVER A REAL SOCKET
+   ==================================================================
+   The checks `rooms/gameActor.test.ts` makes in depth, made once here where anybody runs them: a hello's answer
+   marks the protocol (`inFlight`); a move held at the store is invisible to a hello until the store has it; the
+   submitter's answer names its submission and the watcher's copy does not; two sockets' back-to-back moves reach
+   a watcher in commit order; and a client claiming history the room does not hold is refused `ahead`. The store
+   here holds each append until the check lets it go. */
+async function durableBeforeVisible(): Promise<void> {
+  const gates: Array<{ reached: () => void; opened: Promise<void> }> = [];
+  const hold = () => {
+    let open: () => void = () => undefined;
+    let reached: () => void = () => undefined;
+    const arrived = new Promise<void>((resolve) => (reached = resolve));
+    const opened = new Promise<void>((resolve) => (open = resolve));
+    gates.push({ reached, opened });
+    return { arrived, open };
+  };
+  const store: LogStore = {
+    loadLog: async () => [],
+    appendLog: async () => {
+      const held = gates.shift();
+      if (held) {
+        held.reached();
+        await held.opened;
+      }
+    },
+    loadRoomDoc: async () => null,
+    saveRoomDoc: async () => undefined,
+  };
+  const server = createGameServer({ port: 0, build: BUILD, resolveIdentity: trustClaimedIdentity, store });
+  port = await listeningPort(server.http);
+  const room = "LIVE3A";
+  const next = async (client: { next: () => Promise<Frame> }, wanted: (frame: Frame) => boolean) => {
+    for (;;) {
+      const frame = await client.next();
+      if (wanted(frame)) return frame;
+    }
+  };
+  const indexOf = (frame: Frame) => (frame.entries as { index: number }[] | undefined)?.[0]?.index;
+
+  const alice = await connect(ALICE, room);
+  const aliceHello = await alice.next();
+  check(
+    "a hello's answer carries `inFlight`: replies now name the submission they answer (LIVE-3A)",
+    aliceHello.kind === "catch-up" && Array.isArray(aliceHello.inFlight),
+    aliceHello,
+  );
+
+  const deal = hold();
+  alice.send({
+    kind: "submit",
+    build: BUILD,
+    baseIndex: -1,
+    submissionId: "held-deal",
+    msg: { SetupGame: { players: [{ id: ALICE, nickname: "Alice" }, { id: BOB, nickname: "Bob" }], variants: {} } },
+  });
+  await deal.arrived;
+  const bob = await connect(BOB, room);
+  const bobHello = await bob.next();
+  check(
+    "a hello while the deal awaits the disk is answered from what is durable -- nothing (LIVE-3 P1)",
+    bobHello.kind === "catch-up" && Array.isArray(bobHello.entries) && (bobHello.entries as unknown[]).length === 0,
+    bobHello,
+  );
+  deal.open();
+  const dealt = await alice.next();
+  check("once durable, the submitter's answer names its submission", dealt.kind === "applied" && dealt.inReplyTo === "held-deal", dealt);
+  const heard = await bob.next();
+  check(
+    "and the watcher's copy of the same news names none",
+    heard.kind === "applied" && heard.inReplyTo === undefined && JSON.stringify(heard.entries) === JSON.stringify(dealt.entries),
+    heard,
+  );
+
+  const carol = await connect(CAROL, room);
+  await carol.next();
+  const first = hold();
+  alice.send({ kind: "submit", build: BUILD, baseIndex: 0, submissionId: "a-buy", msg: { WaterfallBuyLowest: { game_id: 0 } } });
+  await first.arrived;
+  // Bob's move for the board after Alice's is sent while hers is still at the disk: it waits for it.
+  bob.send({ kind: "submit", build: BUILD, baseIndex: 1, submissionId: "b-buy", msg: { WaterfallBuyLowest: { game_id: 0 } } });
+  first.open();
+  const watched = [await carol.next(), await carol.next()];
+  check(
+    "back-to-back moves from two sockets reach a watcher in commit order (LIVE-3 F-6)",
+    watched.every((frame) => frame.kind === "applied") && indexOf(watched[0]) === 1 && indexOf(watched[1]) === 2,
+    watched,
+  );
+  const bobs = await next(bob, (frame) => frame.inReplyTo === "b-buy");
+  check("and the second one was judged on the first, durable: applied at index 2", bobs.kind === "applied" && indexOf(bobs) === 2, bobs);
+
+  alice.send({ kind: "submit", build: BUILD, baseIndex: 9, submissionId: "a-ahead", msg: { PassTurn: { game_id: 0 } } });
+  const ahead = await next(alice, (frame) => frame.inReplyTo === "a-ahead");
+  check(
+    "a client claiming history the room does not hold is refused `ahead`, and counted (LIVE-3 §5.2)",
+    ahead.kind === "refused" && ahead.code === "ahead" && ahead.watermark === 2 && server.counters.submitAhead === 1,
+    ahead,
+  );
+
+  alice.socket.close();
+  bob.socket.close();
+  carol.socket.close();
   await server.close();
 }
 

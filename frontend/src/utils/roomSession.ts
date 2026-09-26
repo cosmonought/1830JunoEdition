@@ -124,11 +124,21 @@ export interface SubmitInput {
    *  gameplay alike; `messageSchema.ts` admits exactly this family at the server's ingress. */
   msg: SandboxLogMsg;
   baseIndex: number;
+  /** LIVE-3A (L3-3): the `id` of the entry the client holds at `baseIndex` -- the anchor. Absent when `baseIndex`
+   *  is -1 and from an older client, which then gets the index-only rules. */
+  baseId?: string;
   submissionId?: string;
   /** #1249: the room's host from the room document, for the messages whose owner is the host. `null` when
    *  the room has no document (a test); the authority skips the host-only checks then. */
   host?: string | null;
 }
+
+/** LIVE-3A: the sentences on the two refusals that send a client back to rebuild the room from the start. The
+ *  client does not show them -- it resyncs -- but they are what the server's window says. */
+export const AHEAD_REASON =
+  "This tab holds entries the room does not. It is reloading the room's history from the server.";
+export const RESYNC_REASON =
+  "This tab's history does not match the room's. It is reloading the room's history from the server.";
 
 export class RoomSession {
   /** Reassigned on a live `RevertTo` (#1233): a rewind is a rebuild, not a step. */
@@ -291,6 +301,39 @@ export class RoomSession {
     this.rebuild();
   }
 
+  /** LIVE-3A (E-4, E-9): back to exactly `length` entries AND a rebuilt engine, whatever the log's length now.
+   *
+   *  NOT `discardAfter`, which rebuilds only when the log grew. The actor calls this when a task threw before its
+   *  commit, and a throw can leave the ENGINE half-moved with the log untouched -- `RoomEngine` moves the grid
+   *  before the reducer runs -- so the only rollback that guarantees "the session equals the committed view" is a
+   *  rebuild from the seed. A full replay, on a path that exists only for faults. */
+  rollbackTo(length: number): void {
+    if (this.log.length > length) this.log.length = length;
+    this.submissions.clear();
+    for (const entry of this.log) {
+      if (entry.submission_id) {
+        this.submissions.set(this.submissionKey(entry.actor, entry.submission_id), entry.index);
+      }
+    }
+    this.rebuild();
+  }
+
+  /** LIVE-3A: the `incompatible` frame this room answers every hello and submit with while it is held (#1520), or
+   *  `null` while it is being played -- what the committed view carries, so a reader never asks the session. */
+  heldAnswer(): ServerMessage | null {
+    return this.incompatibility === null ? null : this.incompatibleFrame(this.incompatibility.reason);
+  }
+
+  /** LIVE-3A: the id of the entry at `index`, or `undefined` when the log holds none there. From the END, so a
+   *  legacy log that repeats an index (LIVE-3 P2's `[0,1,1]`) answers with the entry that counted last -- which is
+   *  also the one a client that received them in order holds. */
+  entryIdAt(index: number): string | undefined {
+    for (let at = this.log.length - 1; at >= 0; at -= 1) {
+      if (this.log[at].index === index) return this.log[at].id;
+    }
+    return undefined;
+  }
+
   get state(): GameStateResponse {
     return this.engine.snapshot.state;
   }
@@ -358,6 +401,25 @@ export class RoomSession {
        reads or moves a board this engine has not built. Nothing is appended, whatever the message -- a
        `RevertTo` included, since a rewind is a rebuild under the same unsupported version. */
     if (this.incompatibility !== null) return this.incompatibleFrame(this.incompatibility.reason);
+
+    /* ==================================================================
+        LIVE-3A (L3-3): `baseIndex` IS TWO-SIDED, AND ANCHORED
+       ==================================================================
+       `baseIndex` is the last index the client has applied (unchanged wire meaning). BELOW the watermark is the
+       stale case (step 3); EQUAL is eligible. ABOVE it is impossible under durable-before-visible -- no entry is
+       ever sent before it is on disk -- so a client that claims one has been served history the store later lost,
+       or is buggy or hostile, and the server never infers what it is missing: `ahead`, nothing run (LIVE-3 F-4).
+       `baseId` names the entry the client holds at `baseIndex`. A different id there -- or none -- is a history
+       that DIVERGED even though it is not ahead (a restored store the room has since played past): `resync`.
+       BEFORE the deal pin and the nonce, in that fixed order: a diverged client's duplicate answer would be
+       computed from a history it does not share. Both are counted and alarmed by the caller (LIVE-3 §5.2). */
+    const watermark = this.nextIndex - 1;
+    if (input.baseIndex > watermark) {
+      return { kind: "refused", code: "ahead", watermark, reason: AHEAD_REASON, build: this.options.build };
+    }
+    if (input.baseId !== undefined && input.baseIndex >= 0 && this.entryIdAt(input.baseIndex) !== input.baseId) {
+      return { kind: "refused", code: "resync", watermark, reason: RESYNC_REASON, build: this.options.build };
+    }
 
     /* ==================================================================
         DESIGN NOTE 1252: A ROOM IS PINNED TO THE REDUCER THAT DEALT IT

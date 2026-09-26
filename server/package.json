@@ -8,6 +8,8 @@
     "build": "node ../frontend/node_modules/typescript/bin/tsc -p tsconfig.json",
     "start": "node dist/server/src/start.js",
     "smoke": "node dist/server/src/smokeTest.js",
+    "_comment_test": "LIVE-3A: the per-game actor's regressions and the seeded stress run, against the compiled output -- run `npm run build` first. Explicit file paths rather than a directory or a glob, because `node --test` does not read either the same way on every Node version a playtest machine may have.",
+    "test": "node --test dist/server/src/rooms/gameActor.test.js dist/server/src/rooms/live3aStress.test.js",
     "replay": "node dist/server/src/replayCli.js"
   },
   "dependencies": {

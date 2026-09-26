@@ -828,6 +828,10 @@ const RECONNECTING_BANNER = "Connection to the room was lost — reconnecting…
 const TURN_REFUSAL = "It is not your turn.";
 /** #1407: what a click during the reload's replay is told, in place of a turn refusal about a historical board. */
 const CATCHING_UP_BANNER = "Catching up with the room — try that again in a moment.";
+/** LIVE-3A: while this tab rebuilds a room whose history it turned out not to share (`ahead` / `resync`). */
+const RESYNC_BANNER = "This tab's copy of the room did not match the server's — reloading the room's history.";
+/** LIVE-3A: while the server holds the room (`status`) and gave no sentence of its own. */
+const ROOM_PAUSED_BANNER = "The game server has paused this room. It will resume on its own.";
 
 /* Design note #875: `RIVAL_ROUTE_INDEX_BASE` lives in `watcherRouteChips.ts`, which is now the only thing
    that applies it -- for chip rows built with `watcherTrainDrafts` outside an Operating Round's Routes step,
@@ -12511,6 +12515,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
     const unsubscribe = GAME_SERVER_URL
       ? (() => {
           const accumulated: SandboxAction[] = [];
+          /** LIVE-3A: the room-status banner this link put up, so `live` clears only its own. */
+          let roomStatusBanner: string | null = null;
           const link = connectServerLink({
             url: GAME_SERVER_URL,
             room: sandboxRoomCode,
@@ -12569,6 +12575,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, s
             onError: (message) => {
               linkExplainedRef.current = true;
               setSandboxRoomError(message);
+            },
+            /* LIVE-3A (L3-3): THE ROOM SAYS THIS TAB'S HISTORY IS NOT ITS OWN -- ahead of it, or anchored to an
+               entry it does not hold. The link has dropped its applied index and is rejoining from -1; what this
+               effect accumulated goes with it, so the full catch-up that follows is not appended to a history it
+               contradicts, and the drain's prefix check (#668) rebuilds the board from the room's history. */
+            onResync: () => {
+              accumulated.length = 0;
+              linkExplainedRef.current = true;
+              setSandboxRoomError(RESYNC_BANNER);
+            },
+            /* LIVE-3A (E-10): the room's availability. `live` clears the banner this link put up, and only that. */
+            onRoomStatus: (state, reason) => {
+              if (state === "live") {
+                const shown = roomStatusBanner;
+                roomStatusBanner = null;
+                setSandboxRoomError((current) => (current !== null && current === shown ? null : current));
+                return;
+              }
+              roomStatusBanner = reason ?? ROOM_PAUSED_BANNER;
+              linkExplainedRef.current = true;
+              setSandboxRoomError(roomStatusBanner);
             },
             /* #1253: the wire's own state, so a player can tell "the server is thinking" from "the wire is
                down". The banner is cleared only if it is still this one -- a refusal that arrived meanwhile

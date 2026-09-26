@@ -1,0 +1,134 @@
+// server/src/rooms/committedView.ts
+//
+// LIVE-3A: the only thing a reader of a game may see.
+//
+// ==================================================================
+//  LIVE-3 L3-1 / L3-2: READS ARE SERVED FROM WHAT IS DURABLE, NEVER FROM THE LIVE SESSION
+// ==================================================================
+//
+// LIVE-1's failure, reproduced by LIVE-3 as P1: a `hello` arriving while a move's append was still awaiting the
+// disk was answered from the live `RoomSession`, so a client applied -- and then built on -- an entry the store
+// later refused. The session is where a task SPECULATES (the reducer runs on it before the append), so it can
+// never be a read authority while a task is in flight.
+//
+// SO READERS GET THIS INSTEAD. A `CommittedView` is built from the session only at a publish, after the append
+// that covers every entry in it has resolved, and it is frozen: a publish REPLACES it, nothing mutates it. A
+// hello's catch-up, the digest a watcher checks itself against, the anchor a submission names, the host a
+// submit is judged under -- every one is read from here.
+//
+// WHAT IT CARRIES BEFORE LIVE-2C (LIVE-3 §3.2, the fields that apply to a legacy room):
+//   watermark     the last durable index; -1 when the log is empty (§7: w = log_next_index - 1)
+//   entries       exactly the durable log, frozen
+//   digest        the board at the watermark; `fields` beside it when the server explains divergences (#1225)
+//   roomDoc       the legacy room document as last durably saved -- authority-bearing today (host, PINs)
+//   hold          why the game will not take a write: `version` (#1520) or `uncertain` (a store outcome not
+//                 yet known); `incompatible` is the frame a version hold answers with
+//   version       +1 per publish, for diagnostics and tests
+
+import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/roomSession";
+import type { SandboxRoomDoc } from "../../../frontend/src/utils/sandboxRoom";
+import type { BuildId, ServerMessage } from "../../../frontend/src/utils/serverProtocol";
+import { fieldDigests, stateDigest } from "../../../frontend/src/gameEngine";
+
+export type HoldReason = "version" | "uncertain";
+
+export interface Hold {
+  readonly reason: HoldReason;
+  readonly detail: string;
+}
+
+export interface CommittedView {
+  readonly gameId: string;
+  readonly watermark: number;
+  readonly entries: readonly ServerLogEntry[];
+  readonly digest: string;
+  readonly fields?: Readonly<Record<string, string>>;
+  readonly roomDoc: Readonly<SandboxRoomDoc> | null;
+  readonly hold: Hold | null;
+  readonly incompatible: ServerMessage | null;
+  readonly version: number;
+}
+
+/** Freeze the committed history. Entries are already immutable by convention -- `RoomSession` never edits one
+ *  after minting it -- and this makes the convention a fact for every reader of a view. */
+function frozenEntries(entries: readonly ServerLogEntry[]): readonly ServerLogEntry[] {
+  for (const entry of entries) if (!Object.isFrozen(entry)) Object.freeze(entry);
+  return Object.freeze(entries.slice());
+}
+
+/** The view a publish installs, read off a session whose every entry is durable. THROWS if the board cannot be
+ *  hashed -- which is why the actor, not this function, decides what a failed build means (E-13). */
+export function buildCommittedView(input: {
+  gameId: string;
+  session: RoomSession;
+  roomDoc: Readonly<SandboxRoomDoc> | null;
+  /** An `uncertain` hold carried across a publish; a version hold is read off the session itself. */
+  hold?: Hold | null;
+  explainDivergence: boolean;
+  version: number;
+}): CommittedView {
+  const { session } = input;
+  const incompatible = session.heldAnswer();
+  const hold: Hold | null =
+    input.hold ??
+    (incompatible !== null && incompatible.kind === "incompatible"
+      ? { reason: "version", detail: incompatible.reason }
+      : null);
+  return Object.freeze({
+    gameId: input.gameId,
+    watermark: session.nextIndex - 1,
+    entries: frozenEntries(session.entries),
+    digest: stateDigest(session.state),
+    ...(input.explainDivergence ? { fields: Object.freeze(fieldDigests(session.state)) } : {}),
+    roomDoc: input.roomDoc,
+    hold,
+    incompatible,
+    version: input.version,
+  });
+}
+
+/** The same view with a different room document, for a publish that changed only the document. */
+export function withRoomDoc(view: CommittedView, roomDoc: Readonly<SandboxRoomDoc>): CommittedView {
+  return Object.freeze({ ...view, roomDoc, version: view.version + 1 });
+}
+
+/** The same view with a different hold, for a publish that changed only whether the game takes writes. */
+export function withHold(view: CommittedView, hold: Hold | null): CommittedView {
+  return Object.freeze({ ...view, hold, version: view.version + 1 });
+}
+
+/** Everything after `fromIndex`, as a catch-up frame. The filter rather than a slice keeps today's behaviour on a
+ *  legacy log whose indices are not contiguous (LIVE-3 P2/P2b shapes written before this pass). */
+export function catchUpFrom(
+  view: CommittedView,
+  fromIndex: number,
+  build: BuildId,
+  extra: { inReplyTo?: string; inFlight?: string[] } = {},
+): ServerMessage {
+  if (view.incompatible !== null) return view.incompatible;
+  return {
+    kind: "catch-up",
+    entries: view.entries.filter((entry) => entry.index > fromIndex),
+    digest: view.digest,
+    ...(view.fields ? { fields: { ...view.fields } } : {}),
+    build,
+    ...extra,
+  };
+}
+
+/** The entry at `index` in the committed log, from the end (see `RoomSession.entryIdAt`). */
+export function entryAt(view: CommittedView, index: number): ServerLogEntry | undefined {
+  for (let at = view.entries.length - 1; at >= 0; at -= 1) {
+    if (view.entries[at].index === index) return view.entries[at];
+  }
+  return undefined;
+}
+
+/** Whether `longer` begins with exactly `prefix`, entry for entry (index and id). */
+export function extendsHistory(prefix: readonly ServerLogEntry[], longer: readonly ServerLogEntry[]): boolean {
+  if (longer.length < prefix.length) return false;
+  for (let at = 0; at < prefix.length; at += 1) {
+    if (longer[at].index !== prefix[at].index || longer[at].id !== prefix[at].id) return false;
+  }
+  return true;
+}

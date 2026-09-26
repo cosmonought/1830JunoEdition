@@ -429,11 +429,16 @@ export function validateGameplayMessage(msg: unknown): MessageValidation {
 export function validateSubmitEnvelope(frame: {
   build?: unknown;
   baseIndex?: unknown;
+  baseId?: unknown;
   submissionId?: unknown;
 }): MessageValidation {
   if (typeof frame.build !== "string") return { ok: false, reason: "That frame names no build." };
   if (!Number.isInteger(frame.baseIndex) || (frame.baseIndex as number) < -1) {
     return { ok: false, reason: "That frame's baseIndex is not a log position." };
+  }
+  /* LIVE-3A: the anchor is an entry id or absent. Anything else is not a claim about history at all. */
+  if (frame.baseId !== undefined && typeof frame.baseId !== "string") {
+    return { ok: false, reason: "That frame's baseId is not an entry id." };
   }
   if (frame.submissionId !== undefined && typeof frame.submissionId !== "string") {
     return { ok: false, reason: "That frame's submissionId is not a string." };

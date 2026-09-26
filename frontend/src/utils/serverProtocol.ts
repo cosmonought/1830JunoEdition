@@ -73,6 +73,11 @@ export interface SubmitRequest {
    *  saw the previous one, and derive a board nobody has -- a divergence manufactured by the transport
    *  rather than found by it. */
   baseIndex: number;
+  /** LIVE-3A (L3-3): the `id` of the entry this client holds at `baseIndex` -- the anchor. The server refuses a
+   *  submission whose anchor names an entry the room does not hold there (`resync`), which catches a history that
+   *  diverged even when it is BEHIND rather than ahead. Absent when `baseIndex` is -1, and from an older client,
+   *  which then gets the index-only rules. */
+  baseId?: string;
   /** The digest of this client's board BEFORE the move.
    *
    *  Optional because a client that has just joined has nothing to compare, and because a divergence report
@@ -97,11 +102,53 @@ export interface DivergenceReport {
   serverDigest: string;
 }
 
+/** The log subscription (#1209 mechanism 2): what this client has applied, so a reconnect is answered rather than
+ *  guessed at. `claim`, `pin` and `token` are the legacy identity fields LIVE-2 removes. */
+export interface HelloRequest {
+  kind: "hello";
+  room: string;
+  build: BuildId;
+  claim?: unknown;
+  pin?: unknown;
+  token?: unknown;
+  /** The last index this client has applied; -1 for nothing. */
+  baseIndex?: number;
+  /** LIVE-3A: the anchor, exactly as on `SubmitRequest`. */
+  baseId?: string;
+}
+
 export type ClientMessage = SubmitRequest | DivergenceReport;
 
 // ---------------------------------------------------------------------------
 // Server -> client
 // ---------------------------------------------------------------------------
+
+/* ==================================================================
+    LIVE-3A (L3-3): A DIRECT ANSWER NAMES THE SUBMISSION IT ANSWERS
+   ==================================================================
+   The per-game actor serializes a room's submissions, so another player's fan-out now arrives, deterministically,
+   BEFORE this client's own queued answer -- and a client that matched replies first-in-first-out resolved its
+   submission with the other player's index (LIVE-3 P4). So every DIRECT answer to a `submit` -- applied, refused,
+   catch-up, build-skew, incompatible -- carries `inReplyTo: submissionId`, and fan-out frames never do. The client
+   settles exactly the submission a frame names; a frame that names none is history. */
+
+/** The machine code on a refusal the transport decided rather than the rules. Absent on a rules refusal
+ *  (`turnAuthority`'s or the reducer's sentence), which every client already shows as-is. */
+export type RefusalCode =
+  /** `baseIndex` is above the room's durable watermark: this client holds history the room does not. */
+  | "ahead"
+  /** `baseId` names an entry the room does not hold at `baseIndex`: the two histories diverged. */
+  | "resync"
+  /** Nothing was recorded -- the store definitely did not take it, or the task never ran. Act again. */
+  | "retry"
+  /** The store's outcome is not known yet. The move appears when the game resumes, if it landed. */
+  | "unavailable"
+  /** The game is held and cannot be changed. */
+  | "held"
+  /** The game's queue is full. */
+  | "busy"
+  /** The server failed before anything was committed; the sentence carries a reference to its log line. */
+  | "internal";
 
 export interface AppliedResponse {
   kind: "applied";
@@ -118,12 +165,20 @@ export interface AppliedResponse {
    *  a deployment that leaves it off. */
   fields?: Record<string, string>;
   build: BuildId;
+  /** LIVE-3A: the submission this answers. Absent on fan-out: a watcher's copy of somebody else's move. */
+  inReplyTo?: string;
 }
 
 export interface RefusedResponse {
   kind: "refused";
   /** `turnAuthority`'s sentence, or a reducer refusal. Shown to the player as-is. */
   reason: string;
+  /** LIVE-3A: present when the transport, not the rules, refused (see `RefusalCode`). */
+  code?: RefusalCode;
+  /** LIVE-3A: the room's durable watermark, on `ahead` and `resync`. */
+  watermark?: number;
+  /** LIVE-3A: the submission this answers. */
+  inReplyTo?: string;
   /** #1685 (Stage 10.2): the entries this submit appended BEFORE it was refused -- the repair of a burst a crash
    *  interrupted (#1209) -- which the submitter has not seen. Present only when there were any; applied by the
    *  client exactly as a catch-up, before the refusal is shown. Never contains the refused move: that was not
@@ -145,6 +200,13 @@ export interface CatchUpResponse {
    *  a deployment that leaves it off. */
   fields?: Record<string, string>;
   build: BuildId;
+  /** LIVE-3A: the submission this answers (a duplicate or a stale submit). Absent on the hello's catch-up. */
+  inReplyTo?: string;
+  /** LIVE-3A: on the hello's catch-up only -- the submissions this principal originated that are still being
+   *  committed. A reconnecting client keeps those pending instead of calling them lost; each settles when its
+   *  entry arrives or when `abandoned` names it. ALWAYS present on a LIVE-3A server's hello answer, empty or not:
+   *  its presence is how a client knows the server answers by `inReplyTo`. */
+  inFlight?: string[];
 }
 
 /** The two halves are not running the same code.
@@ -156,6 +218,8 @@ export interface BuildSkewResponse {
   kind: "build-skew";
   clientBuild: BuildId;
   serverBuild: BuildId;
+  /** LIVE-3A: the submission this answers. */
+  inReplyTo?: string;
 }
 
 /** #1520: the room's deal is pinned to a rules-engine version this server does not carry (or to none at all,
@@ -172,6 +236,8 @@ export interface IncompatibleResponse {
   pinnedRulesEngineVersion: number | null;
   supportedRulesEngineVersions: readonly number[];
   build: BuildId;
+  /** LIVE-3A: the submission this answers, when it answers one (a hello's is not an answer to a submission). */
+  inReplyTo?: string;
 }
 
 export type ServerMessage =
@@ -180,6 +246,39 @@ export type ServerMessage =
   | CatchUpResponse
   | BuildSkewResponse
   | IncompatibleResponse;
+
+/** LIVE-3A (§4.2): a submission whose origin socket went away while it was being committed ended WITHOUT
+ *  committing. Sent to the principal's current sockets, so a reconnected client that kept it pending (`inFlight`)
+ *  settles it as not landed -- the one answer that may be followed by trying again. */
+export interface AbandonedFrame {
+  kind: "abandoned";
+  inReplyTo: string;
+  reason: string;
+}
+
+/** LIVE-3A (E-10): the game's availability, sent to every subscriber on each hold and resume. `unavailable`
+ *  while the server cannot establish what its store holds; `held` when it will not interpret the room; `live`
+ *  when submitting works again. */
+export interface RoomStatusFrame {
+  kind: "status";
+  state: "live" | "unavailable" | "held";
+  reason?: string;
+}
+
+/** A subscription-level refusal (and the few transport replies that are not a `ServerMessage`). LIVE-3A adds the
+ *  codes: `resync` answers a hello whose history the room does not hold (with the room's `watermark`);
+ *  `unavailable` a room that could not be loaded. */
+export interface ServerErrorFrame {
+  kind: "error";
+  reason: string;
+  code?: string;
+  watermark?: number;
+  /** LIVE-3A: present when the error answers a `submit`. */
+  inReplyTo?: string;
+}
+
+/** Everything a game-server socket may carry to a client. */
+export type ServerFrame = ServerMessage | AbandonedFrame | RoomStatusFrame | ServerErrorFrame;
 
 // ---------------------------------------------------------------------------
 // Minting

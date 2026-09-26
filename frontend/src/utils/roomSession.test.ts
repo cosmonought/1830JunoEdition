@@ -385,3 +385,112 @@ describe("a live revert is a rebuild, not a step (#1233)", () => {
     expect(restarted.nextIndex).toBe(room.nextIndex);
   });
 });
+
+/* ==================================================================
+    LIVE-3A (L3-3): `baseIndex` IS TWO-SIDED, AND ANCHORED BY `baseId`
+   ==================================================================
+   Below the watermark is stale, equal is eligible, above is `ahead` -- impossible under durable-before-visible,
+   so it means lost history or a broken client, and nothing is run. `baseId` catches the history that diverged
+   while BEHIND. Both come before the nonce: a diverged client's duplicate answer would be computed from a history
+   it does not share. */
+describe("LIVE-3A: baseIndex is two-sided and anchored", () => {
+  it("refuses a baseIndex above the watermark as `ahead`, with the watermark, appending nothing", () => {
+    const room = session();
+    submit(room);
+    const ahead = submit(room, { actor: room.state.player_addresses[0], msg: BUY_LOWEST, baseIndex: 5 });
+    expect(ahead).toMatchObject({ kind: "refused", code: "ahead", watermark: 0 });
+    expect(room.entries).toHaveLength(1);
+  });
+
+  it("answers `ahead` before the nonce: a known submission id sent from ahead is not a duplicate", () => {
+    const room = session();
+    submit(room, { submissionId: "nonce-1" });
+    const retry = submit(room, { submissionId: "nonce-1", baseIndex: 7 });
+    expect(retry).toMatchObject({ kind: "refused", code: "ahead" });
+  });
+
+  it("an empty room's watermark is -1: baseIndex 0 is ahead of it", () => {
+    const room = session();
+    expect(submit(room, { baseIndex: 0 })).toMatchObject({ kind: "refused", code: "ahead", watermark: -1 });
+    expect(room.entries).toHaveLength(0);
+  });
+
+  it("equal is eligible and below is stale, exactly as before", () => {
+    const room = session();
+    submit(room);
+    const first = room.state.player_addresses[0];
+    expect(submit(room, { actor: first, msg: BUY_LOWEST, baseIndex: 0 }).kind).toBe("applied");
+    expect(submit(room, { actor: first, msg: BUY_LOWEST, baseIndex: 0 }).kind).toBe("catch-up");
+  });
+
+  it("a baseId that is not the room's entry at baseIndex is `resync` -- even for a client that is BEHIND", () => {
+    const room = session();
+    submit(room);
+    const first = room.state.player_addresses[0];
+    submit(room, { actor: first, msg: BUY_LOWEST });
+    // Behind (baseIndex 0 < 1), but anchored to an entry this room never held there: diverged, not merely stale.
+    const diverged = submit(room, { baseIndex: 0, baseId: "not-this-rooms", msg: { PassTurn: { game_id: 0 } } as never });
+    expect(diverged).toMatchObject({ kind: "refused", code: "resync", watermark: 1 });
+    // The right anchor is the ordinary stale answer.
+    const stale = submit(room, { baseIndex: 0, baseId: room.entries[0].id, msg: { PassTurn: { game_id: 0 } } as never });
+    expect(stale.kind).toBe("catch-up");
+    expect(room.entries).toHaveLength(2);
+  });
+
+  it("the right anchor at the watermark is eligible; an older client that sends none gets the index-only rules", () => {
+    const room = session();
+    submit(room);
+    const first = room.state.player_addresses[0];
+    expect(submit(room, { actor: first, msg: BUY_LOWEST, baseIndex: 0, baseId: room.entries[0].id }).kind).toBe("applied");
+    const second = room.state.player_addresses[1];
+    expect(submit(room, { actor: second, msg: BUY_LOWEST, baseIndex: 1 }).kind).toBe("applied");
+  });
+
+  it("an anchor is ignored at baseIndex -1, where there is no entry to name", () => {
+    const room = session();
+    expect(submit(room, { baseIndex: -1, baseId: "anything" }).kind).toBe("applied");
+  });
+});
+
+describe("LIVE-3A: rollbackTo returns the session to exactly the committed prefix (E-4, E-9)", () => {
+  it("drops the entries, forgets their nonces and rebuilds the board", () => {
+    const room = session();
+    submit(room);
+    const committed = room.entries.length;
+    const digestAtCommit = JSON.stringify(room.state);
+    const first = room.state.player_addresses[0];
+    expect(submit(room, { actor: first, msg: BUY_LOWEST, submissionId: "buy-1" }).kind).toBe("applied");
+    room.rollbackTo(committed);
+    expect(room.entries).toHaveLength(committed);
+    expect(JSON.stringify(room.state)).toBe(digestAtCommit);
+    // The nonce went with its entry, so the same submission is judged afresh rather than answered as made.
+    expect(submit(room, { actor: first, msg: BUY_LOWEST, submissionId: "buy-1" }).kind).toBe("applied");
+  });
+
+  it("rebuilds even when the log did not grow -- a throw can move the engine without touching the log", () => {
+    const room = session();
+    submit(room);
+    const before = JSON.stringify(room.state);
+    // A private engine touched by nothing the log records: exactly what `discardAfter` would leave in place.
+    (room as unknown as { engine: { state: unknown } }).engine.state = { corrupted: true };
+    room.rollbackTo(room.entries.length);
+    expect(JSON.stringify(room.state)).toBe(before);
+  });
+});
+
+describe("LIVE-3A: the committed view reads a held room's answer without asking it to catch up", () => {
+  it("heldAnswer is null while the room is played and the incompatible frame while it is held", () => {
+    const played = session();
+    submit(played);
+    expect(played.heldAnswer()).toBeNull();
+    const foreign = played.entries.map((entry) => {
+      const parsed = JSON.parse(entry.payload) as { SetupGame?: Record<string, unknown> };
+      if (!parsed.SetupGame) return { ...entry };
+      return { ...entry, payload: JSON.stringify({ SetupGame: { ...parsed.SetupGame, rules_engine_version: 999 } }) };
+    });
+    const held = session(foreign);
+    expect(held.heldAnswer()).toMatchObject({ kind: "incompatible", pinnedRulesEngineVersion: 999 });
+    expect(held.entryIdAt(0)).toBe(foreign[0].id);
+    expect(held.entryIdAt(5)).toBeUndefined();
+  });
+});

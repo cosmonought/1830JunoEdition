@@ -38,6 +38,30 @@
 // somebody else's dispatch with this one's index -- so it is reported rather than shrugged at.
 //
 // ==================================================================
+//  LIVE-3A (L3-3): THE ANSWER NAMES ITS SUBMISSION, AND FIFO IS ONLY THE FALLBACK
+// ==================================================================
+//
+// THE ORDERING ASSUMPTION ABOVE BROKE, AND ON PURPOSE. The server now runs each room's submissions one at a
+// time on the room's actor, so another player's move that committed first is fanned out to this socket BEFORE
+// this client's own queued answer -- deterministically. FIFO then resolved this client's submission with the
+// other player's index, reported "out of order", and dropped the real answer (LIVE-3 P4). So every DIRECT answer
+// to a submit carries `inReplyTo`, and the rule is:
+//   a frame WITH `inReplyTo` settles exactly that submission;
+//   a frame WITHOUT one is history -- its entries are applied and it settles nothing.
+// A LIVE-3A server says so by putting `inFlight` on the hello's catch-up (empty or not); until a hello's answer
+// has said it, the link keeps FIFO, which is right only for a server older than LIVE-3A. #1206's build pin
+// makes that server unreachable in practice, and LIVE-2D deletes the fallback.
+//
+// THREE MORE THINGS THE ANSWER CAN SAY NOW:
+//   `inFlight` on a reconnecting hello: a submission of this player's that is still being committed. It stays
+//      pending -- NOT "try again", or the player makes a move twice (LIVE-3 Appendix C.2 #7) -- until its entry
+//      arrives (it landed) or `abandoned` names it (it did not).
+//   `ahead` / `resync`: this client holds history the room does not. Everything pending resolves `null`, the
+//      local history is dropped (`onResync` -- the shell clears what it accumulated), and the link says hello
+//      again from -1. Frames that arrive before that fresh catch-up are dropped: it carries all of them.
+//   `status`: the room's availability, for a banner (`onRoomStatus`).
+//
+// ==================================================================
 //  DESIGN NOTE 1253: RECONNECTION, AND WHAT HAPPENS TO A MOVE THAT WAS IN THE AIR
 // ==================================================================
 //
@@ -69,7 +93,7 @@
 
 import type { ReplayEntry } from "../gameEngine/replayLog";
 import type { SandboxLogMsg } from "../gameEngine/gameSetup";
-import type { BuildId, ServerMessage } from "./serverProtocol";
+import type { BuildId, ServerFrame } from "./serverProtocol";
 import { SEAT_REFUSED_CODE, SEAT_SUPERSEDED_CODE, forgetSeat } from "./seatPin";
 
 /** The slice of `WebSocket` this file uses. Injected so a test needs no browser and no server. */
@@ -142,6 +166,13 @@ export interface ServerLinkOptions {
   onError?: (message: string) => void;
   /** #1253: the link's state, for a banner. `reconnecting` from a socket's close to the next socket's open. */
   onStatus?: (status: "open" | "reconnecting") => void;
+  /** LIVE-3A: the server answered `ahead` or `resync` -- this client's history is not the room's. The link has
+   *  already resolved everything pending `null`, forgotten its applied index, and is saying hello again from -1;
+   *  the shell must drop the entries it accumulated, or the full catch-up that follows is appended to a history
+   *  it contradicts. Counted in `resyncs`: on one server with one store, any resync is a durability alarm. */
+  onResync?: (reason: string) => void;
+  /** LIVE-3A (E-10): the room's availability. `live` re-enables submitting after `unavailable` or `held`. */
+  onRoomStatus?: (state: "live" | "unavailable" | "held", reason?: string) => void;
   /** Defaults to the global `WebSocket`. */
   socketFactory?: (url: string) => SocketLike;
   /** Defaults to a counter-based nonce. Injected for deterministic tests. */
@@ -159,6 +190,8 @@ export interface ServerLink {
   submit(msg: SandboxLogMsg): Promise<number | null>;
   /** The highest index this client has applied. What a catch-up is measured from. */
   readonly appliedIndex: number;
+  /** LIVE-3A: how many times this link has had to rebuild the room's history from the start. */
+  readonly resyncs: number;
   close(): void;
 }
 
@@ -216,6 +249,38 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
   /** The submissions that were on the wire when the last socket dropped, by nonce. Settled by the next
    *  hello's catch-up and never re-sent. */
   let orphaned = new Set<string>();
+  /** LIVE-3A: the id of the entry at `appliedIndex` -- the anchor every hello and submit names (`baseId`). */
+  let appliedId: string | undefined;
+  /** LIVE-3A: how answers are matched. FIFO until a hello's answer carries `inFlight`, which is how a LIVE-3A
+   *  server says it names the submission every direct answer is for. */
+  let replyTo = false;
+  /** LIVE-3A: submissions the server is still committing (or could not yet confirm), kept pending until their
+   *  entry arrives or `abandoned` names them. */
+  let inFlight = new Set<string>();
+  /** LIVE-3A: between a resync and the fresh catch-up that answers it, every other frame is dropped. */
+  let resyncing = false;
+  let resyncs = 0;
+  /** LIVE-3A: every entry id already handed to `onEntries` since the last resync. The actor answers a stale
+   *  submit AFTER the fan-out of the moves that made it stale, so its catch-up repeats entries this client has
+   *  just been given; the shell accumulates without deduplicating (App.tsx #1213), and an entry handed over twice
+   *  would be applied twice. By id, not index, so a legacy log whose indices repeat still arrives whole. */
+  let delivered = new Set<string>();
+
+  /** The hello, with what this client has applied and the anchor for it. */
+  const helloFrame = () => {
+    // #1364: read now, not at connect -- a PIN set since the last hello is the one this hello must carry.
+    const seat = options.seat?.() ?? {};
+    return JSON.stringify({
+      kind: "hello",
+      room: options.room,
+      build: options.build,
+      claim: options.claim,
+      pin: seat.pin ?? options.pin,
+      token: seat.token ?? options.token,
+      baseIndex: appliedIndex,
+      baseId: appliedIndex >= 0 ? appliedId : undefined,
+    });
+  };
 
   /** Put a frame on the wire now if there is one, else leave it for the next hello. */
   const flushUnsent = () => {
@@ -229,10 +294,54 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
             build: options.build,
             msg: item.msg,
             baseIndex: appliedIndex,
+            baseId: appliedIndex >= 0 ? appliedId : undefined,
             submissionId: item.id,
           }),
         );
       }
+    }
+  };
+
+  /** LIVE-3A: settle exactly the submission a frame names. A frame naming one this link no longer holds (an
+   *  orphan the hello already settled, a submission a resync cleared) settles nothing. */
+  const settleById = (id: string, index: number | null): boolean => {
+    const at = pending.findIndex((item) => item.id === id);
+    inFlight.delete(id);
+    orphaned.delete(id);
+    if (at === -1) return false;
+    const [item] = pending.splice(at, 1);
+    item.resolve(index);
+    return true;
+  };
+
+  /** LIVE-3A: entries that arrived as history may be an in-flight submission landing. */
+  const settleLanded = (entries: readonly ReplayEntry[]) => {
+    if (inFlight.size === 0) return;
+    for (const entry of entries) {
+      const id = (entry as { submission_id?: string }).submission_id;
+      if (id !== undefined && inFlight.has(id)) settleById(id, entry.index);
+    }
+  };
+
+  /** LIVE-3A: this client's history is not the room's. Settle everything, forget what was applied, and say hello
+   *  again from -1 on the same socket. Never a merge: the room's history is the only one there is. */
+  const resync = (reason: string) => {
+    resyncs += 1;
+    // eslint-disable-next-line no-console
+    console.warn(`[resync] room ${options.room}: ${reason} (resync ${resyncs}; LIVE-3 §5.2 counts every one)`);
+    const settled = pending.splice(0);
+    orphaned = new Set<string>();
+    inFlight = new Set<string>();
+    delivered = new Set<string>();
+    appliedIndex = -1;
+    appliedId = undefined;
+    if (settled.length > 0) options.onStale?.();
+    options.onResync?.(reason);
+    for (const item of settled) item.resolve(null);
+    resyncing = true;
+    if (open && socket) {
+      awaitingHello = true;
+      socket.send(helloFrame());
     }
   };
 
@@ -254,7 +363,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
    *  Found in it: landed, resolve with the index. Not found: did not land (or its answer was lost), resolve
    *  `null` and say the board is current. Never re-sent -- see the header. Submissions made since -- queued
    *  during the outage and sent after the hello -- are not orphans and are answered in their own turn. */
-  const reconcileOrphans = (entries: readonly ReplayEntry[]) => {
+  const reconcileOrphans = (entries: readonly ReplayEntry[], running?: readonly string[]) => {
     if (orphaned.size === 0) return;
     const landed = new Map<string, number>();
     for (const entry of entries) {
@@ -262,8 +371,14 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       if (id !== undefined) landed.set(id, entry.index);
     }
     for (const item of pending.filter((candidate) => orphaned.has(candidate.id))) {
-      pending.splice(pending.indexOf(item), 1);
       const index = landed.get(item.id);
+      /* LIVE-3A (§4.2): STILL BEING COMMITTED. Not landed yet, and not lost either -- calling it lost would invite
+         the player to make it again. It stays pending until its entry arrives or `abandoned` names it. */
+      if (index === undefined && running?.includes(item.id)) {
+        inFlight.add(item.id);
+        continue;
+      }
+      pending.splice(pending.indexOf(item), 1);
       if (index === undefined) options.onStale?.();
       item.resolve(index ?? null);
     }
@@ -280,10 +395,19 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
        most useful one: a catch-up with nothing in it is the server saying "you are level with me", and that
        is precisely when a silent drift is worth catching. Returning early on an empty batch -- as this did --
        threw away the cheapest verdict available. */
+    const fresh: ReplayEntry[] = [];
     for (const entry of entries) {
-      if (entry.index > appliedIndex) appliedIndex = entry.index;
+      if (delivered.has(entry.id)) continue;
+      delivered.add(entry.id);
+      fresh.push(entry);
+      /* `>=`: the anchor is the entry this client holds at `appliedIndex` -- for a legacy log that repeats an
+         index, the one it received last, which is the one the server's own lookup answers with. */
+      if (entry.index >= appliedIndex) {
+        appliedIndex = entry.index;
+        appliedId = entry.id;
+      }
     }
-    options.onEntries(entries, serverDigest, serverFields, source);
+    options.onEntries(fresh.length === entries.length ? entries : fresh, serverDigest, serverFields, source);
   };
 
   /** #1253: open a socket and wire it. Called once at construction and once per reconnection. */
@@ -302,19 +426,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
          sent the whole thing: `-1` on a fresh join, the last applied index on a reconnect (#1209 mechanism
          2). The catch-up it earns is the reconciliation point for anything that was in flight. */
       awaitingHello = true;
-      // #1364: read now, not at connect -- a PIN set since the last hello is the one this hello must carry.
-      const seat = options.seat?.() ?? {};
-      current.send(
-        JSON.stringify({
-          kind: "hello",
-          room: options.room,
-          build: options.build,
-          claim: options.claim,
-          pin: seat.pin ?? options.pin,
-          token: seat.token ?? options.token,
-          baseIndex: appliedIndex,
-        }),
-      );
+      current.send(helloFrame());
       if (everOpened) options.onStatus?.("open");
       everOpened = true;
       /* WHATEVER WAS QUEUED WHILE THE WIRE WAS DOWN GOES OUT NOW, behind the hello. The server reads frames in
@@ -337,6 +449,10 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       if (socket !== current) return;
       open = false;
       awaitingHello = false;
+      /* LIVE-3A: a resync the drop interrupted is finished by the next hello, which says -1 anyway; submissions the
+         server had called in flight are orphans again, and the next hello says whether they still are. */
+      resyncing = false;
+      inFlight = new Set<string>();
       if (closedByUs) {
         /* THE LINK IS BEING CLOSED ON PURPOSE (the room was left). Every outstanding submission resolves
            `null` rather than hanging: `null` means "this client did not see it applied", which is the honest
@@ -357,17 +473,45 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
   };
 
   const onFrame = (event: { data: unknown }) => {
-    let message: ServerMessage | { kind: "error"; reason: string };
+    let message: ServerFrame;
     try {
       message = JSON.parse(String(event.data)) as typeof message;
     } catch {
       options.onError?.("unparseable frame from server");
       return;
     }
+    const inReplyTo = (message as { inReplyTo?: unknown }).inReplyTo;
+    const answers = typeof inReplyTo === "string" ? inReplyTo : undefined;
+
+    /* LIVE-3A: BETWEEN A RESYNC AND ITS FRESH CATCH-UP, NOTHING ELSE IS APPLIED. Every entry in a frame that
+       arrives in between is in that catch-up too -- the server computes it from everything committed before it
+       read the hello -- and applying both would hand the shell each of them twice. */
+    if (
+      resyncing &&
+      !(message.kind === "catch-up" && answers === undefined) &&
+      message.kind !== "incompatible" &&
+      message.kind !== "status" &&
+      message.kind !== "error"
+    ) {
+      return;
+    }
 
     switch (message.kind) {
       case "applied": {
         applyEntries(message.entries, message.digest ?? null, message.fields ?? null, "applied");
+        if (replyTo) {
+          /* LIVE-3A: the submitter's own answer names it; a watcher's copy of somebody's move names nothing and
+             settles nothing -- except a submission this client was told is still in flight, landing now. */
+          if (answers !== undefined) {
+            const mine = message.entries.find(
+              (entry) => (entry as { submission_id?: string }).submission_id === answers,
+            );
+            settleById(answers, mine?.index ?? message.entries[0]?.index ?? null);
+          } else {
+            settleLanded(message.entries);
+          }
+          return;
+        }
         /* THE OWN-SUBMISSION CASE AND THE WATCHER CASE ARRIVE AS THE SAME FRAME, deliberately (#1210: the
            fan-out carries what was appended, because it is the same news). The queue is what tells them
            apart: a client with nothing outstanding is watching somebody else's move. */
@@ -381,14 +525,34 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         return;
       }
       case "catch-up": {
-        applyEntries(message.entries, message.digest ?? null, message.fields ?? null, "catch-up");
         /* #1253: THE HELLO'S CATCH-UP IS NOT AN ANSWER TO ANY SUBMISSION. It reconciles whatever was in
            flight when the previous socket dropped, and then the submissions queued while the wire was down
-           go out -- after it, so their `baseIndex` and the server's idea of this client agree. */
-        if (awaitingHello) {
+           go out -- after it, so their `baseIndex` and the server's idea of this client agree.
+           LIVE-3A: it names no submission, and on a LIVE-3A server it carries `inFlight` -- which is how this
+           link learns that every direct answer from here on will name its submission. */
+        if (awaitingHello && answers === undefined) {
+          if (Array.isArray(message.inFlight)) replyTo = true;
+          resyncing = false;
+          applyEntries(message.entries, message.digest ?? null, message.fields ?? null, "catch-up");
           awaitingHello = false;
           attempts = 0; // #1346: the socket is up and answered; only now is the outage over.
-          reconcileOrphans(message.entries);
+          reconcileOrphans(message.entries, message.inFlight);
+          settleLanded(message.entries);
+          return;
+        }
+        applyEntries(message.entries, message.digest ?? null, message.fields ?? null, "catch-up");
+        if (replyTo) {
+          if (answers !== undefined) {
+            /* #1218: A CATCH-UP THAT DOES NOT CONTAIN THIS CLIENT'S OWN ENTRY answered the move by resyncing
+               instead of applying it -- the client was behind. Not an error; the move is worth making again. */
+            const mine = message.entries.find(
+              (entry) => (entry as { submission_id?: string }).submission_id === answers,
+            );
+            if (mine === undefined && pending.some((item) => item.id === answers)) options.onStale?.();
+            settleById(answers, mine?.index ?? null);
+          } else {
+            settleLanded(message.entries);
+          }
           return;
         }
         /* A CATCH-UP CAN ALSO BE AN ANSWER. #1209 returns one to a client whose retry was already applied,
@@ -420,6 +584,30 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         if (message.catchUp !== undefined) {
           applyEntries(message.catchUp.entries, message.catchUp.digest ?? null, message.catchUp.fields ?? null, "catch-up");
         }
+        /* LIVE-3A: `ahead` / `resync` -- this client holds history the room does not. Not a refusal to show: the
+           room is rebuilt from the start. */
+        if (message.code === "ahead" || message.code === "resync") {
+          resync(message.reason);
+          return;
+        }
+        if (replyTo) {
+          if (answers === undefined) {
+            options.onRefused?.(message.reason);
+            return;
+          }
+          if (message.code === "unavailable") {
+            /* §17 class 4: the server could not confirm the move was recorded. It is kept pending -- it appears
+               when the game resumes if it landed, and `abandoned` says so if it did not. Never re-sent. */
+            if (pending.some((item) => item.id === answers)) {
+              inFlight.add(answers);
+              options.onRefused?.(message.reason);
+            }
+            return;
+          }
+          if (pending.some((item) => item.id === answers)) options.onRefused?.(message.reason);
+          settleById(answers, null);
+          return;
+        }
         options.onRefused?.(message.reason);
         // No entry, so no nonce: FIFO is the only thing that can match this, which is why it is the mechanism.
         settleHead(null);
@@ -427,6 +615,10 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       }
       case "build-skew": {
         options.onBuildSkew?.(message.clientBuild, message.serverBuild);
+        if (replyTo) {
+          if (answers !== undefined) settleById(answers, null);
+          return;
+        }
         settleHead(null);
         return;
       }
@@ -436,6 +628,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
            reason names the pinned and supported versions; nothing else is applied and nothing is retried. */
         closedByUs = true;
         awaitingHello = false;
+        resyncing = false;
         if (options.onIncompatible) {
           options.onIncompatible(message.reason, message.pinnedRulesEngineVersion, message.supportedRulesEngineVersions);
         } else {
@@ -445,21 +638,41 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         socket?.close();
         return;
       }
+      case "abandoned": {
+        /* LIVE-3A (§4.2): a submission that was still being committed when its socket went away ended without
+           committing. It did not land, so it is the one answer after which trying again is right. */
+        if (settleById(message.inReplyTo, null)) options.onStale?.();
+        return;
+      }
+      case "status": {
+        options.onRoomStatus?.(message.state, message.reason);
+        return;
+      }
       default: {
+        const code = (message as { code?: string }).code;
         /* #1341: superseded -- another device took this seat. Forget it, reload as a visitor; no reconnect. */
-        if ((message as { code?: string }).code === SEAT_SUPERSEDED_CODE) {
+        if (code === SEAT_SUPERSEDED_CODE) {
           closedByUs = true;
           forgetSeat(options.room);
           return;
         }
         /* #1346: a seat refusal is TERMINAL -- the same hello cannot earn a different answer, so retrying it
            on a backoff is a loop. Say why, once, and stop. */
-        if ((message as { code?: string }).code === SEAT_REFUSED_CODE) {
+        if (code === SEAT_REFUSED_CODE) {
           closedByUs = true;
           options.onError?.((message as { reason?: string }).reason ?? "This seat refused the connection.");
           return;
         }
+        /* LIVE-3A: the hello's history is not the room's -- the same resync as a submit's `ahead`. */
+        if (code === "resync") {
+          resync((message as { reason?: string }).reason ?? "This tab's history does not match the room's.");
+          return;
+        }
         options.onError?.((message as { reason?: string }).reason ?? "unknown frame from server");
+        if (replyTo) {
+          if (answers !== undefined) settleById(answers, null);
+          return;
+        }
         settleHead(null);
       }
     }
@@ -478,6 +691,9 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     },
     get appliedIndex() {
       return appliedIndex;
+    },
+    get resyncs() {
+      return resyncs;
     },
     close() {
       closedByUs = true;

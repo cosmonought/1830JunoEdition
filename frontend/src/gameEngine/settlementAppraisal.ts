@@ -319,13 +319,30 @@ interface CompanyFacts {
   order: Array<{ player: string; percent: number }>;
 }
 
+/**
+ * The rules engines whose boards this appraisal is CERTIFIED for (SET-0A rev 2 was audited at v10). Deliberately a
+ * literal, NOT `SUPPORTED_RULES_ENGINE_VERSIONS`: that list follows `RULES_ENGINE_VERSION`, so a gameplay bump (DA-8
+ * moves the game to v11) would otherwise extend money settlement to boards nobody has recertified. A board is
+ * appraised only when its pin is BOTH supported by this build and certified here (SET-0C, 2026-09-26).
+ *
+ * BEFORE A v11 MONEY GAME CAN SETTLE: recertify the appraisal for v11 (rerun SET-0A's audit questions against the v11
+ * reducer, rebuild the golden boards, re-pin their hashes) and only then add 11 here, in its own reviewed change.
+ */
+export const SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10]);
+
+/** Supported by this build AND certified for settlement. */
+function settleableRulesEngineVersions(): number[] {
+  return SUPPORTED_RULES_ENGINE_VERSIONS.filter((version) => SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS.indexOf(version) >= 0);
+}
+
 function checkPin(state: Record<string, unknown>): void {
   const version = own(state, "rules_engine_version");
   if (absent(version)) refuse("UNPINNED_BOARD", `rules_engine_version=${String(version)}`);
-  if (typeof version !== "number" || !Number.isSafeInteger(version) || SUPPORTED_RULES_ENGINE_VERSIONS.indexOf(version) < 0) {
+  const settleable = settleableRulesEngineVersions();
+  if (typeof version !== "number" || !Number.isSafeInteger(version) || settleable.indexOf(version) < 0) {
     refuse(
       "UNSUPPORTED_RULES_ENGINE_VERSION",
-      `rules_engine_version=${describe(version)} (supported: ${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")})`,
+      `rules_engine_version=${describe(version)} (supported: ${settleable.length > 0 ? settleable.join(", ") : "none certified for settlement"})`,
     );
   }
 }

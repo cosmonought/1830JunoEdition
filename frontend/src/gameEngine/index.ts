@@ -278,6 +278,7 @@ export {
   parseBoardAmount,
   settlementSnapshot,
   SettlementAppraisalError,
+  SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS,
   MIN_SETTLEMENT_SEATS,
   MAX_SETTLEMENT_SEATS,
   type SeatAppraisal,
@@ -309,3 +310,49 @@ export {
   payoutPreviewDecimal,
   type PayoutPreview,
 } from "./settlementPreview";
+
+/* SET-0C (2026-09-26): the settlement wire -- SettlementPayloadV1's canonical 136 + 16·n byte encoding, the frozen
+   18JUNO/{SETTLE,DOMAIN,ROSTER,CONSENT,ANNUL}/v1 digests, the contract ABI's JSON form, the game-independent contract
+   rules, and the one builder ESCROW-3 makes payloads with (from ONE commitAndAppraise snapshot). Proven byte-identical
+   to the Rust escrow crate and its independent Python generator (`settlementPayloadConformance.test.ts`). Bytes and
+   digests only: no signing, no chain client. */
+export {
+  ANNUL_TAG_V1,
+  CONSENT_TAG_V1,
+  DOMAIN_TAG_V1,
+  ROSTER_TAG_V1,
+  SETTLE_TAG_V1,
+  SETTLEMENT_PAYLOAD_FIELDS,
+  SETTLEMENT_PAYLOAD_FIXED_LEN,
+  SETTLEMENT_PAYLOAD_KIND,
+  SETTLEMENT_PAYLOAD_REASON,
+  SETTLEMENT_PAYLOAD_VERSION,
+  SETTLEMENT_PAYLOAD_WEIGHT_LEN,
+  SettlementPayloadError,
+  annulDigestV1,
+  buildSettlementPayloadV1,
+  checkSettlementPayloadShape,
+  checkSettlementPayloadV1,
+  consentDigestV1,
+  encodeSettlementPayloadV1,
+  encodeSettlementPayloadV1Hex,
+  rosterHashV1,
+  settleDigestOfEncodedHex,
+  settleDigestV1,
+  settlementDomainV1,
+  settlementPayloadEncodedLength,
+  settlementPayloadFromWire,
+  settlementPayloadToWire,
+  settlementSeatMapping,
+  type BuildSettlementPayloadArgs,
+  type BuiltSettlementPayload,
+  type SettlementDomainInputs,
+  type SettlementPayloadErrorCode,
+  type SettlementPayloadIntent,
+  type SettlementPayloadUse,
+  type SettlementPayloadV1,
+  type SettlementPayloadV1Wire,
+  type SettlementSeatBinding,
+  type SettlementSeatMapping,
+} from "./settlementPayload";
+export { verifySettlementPayloadV1, type SettlementPayloadVerification } from "./settlementConformance";

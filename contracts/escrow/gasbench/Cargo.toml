@@ -1,0 +1,21 @@
+[package]
+name = "escrow-gasbench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Runs the optimized escrow wasm in cosmwasm-vm 3.0.5 (the VM Juno v30.0.0 bundles via wasmvm v3.0.4) and reports VM gas plus modelled SDK KV/event gas per message."
+
+# Stand-alone: not a member of the repository workspace, with its own lockfile,
+# so the contract's Cargo.lock never gains the VM's dependency tree.
+[workspace]
+
+[dependencies]
+cosmwasm-vm = { version = "=3.0.5", features = ["iterator", "staking", "stargate"] }
+cosmwasm-std = "=3.0.5"
+cosmwasm-std-v1 = { package = "cosmwasm-std", version = "=1.5.11" }
+eighteen-cosmos-escrow = { path = "..", features = ["library"] }
+bech32 = "0.11"
+k256 = { version = "0.13", features = ["ecdsa"] }
+sha2 = "0.10"
+serde_json = "1.0"
+tempfile = "3"

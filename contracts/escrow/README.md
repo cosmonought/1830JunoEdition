@@ -38,6 +38,7 @@ profile, and the library denies `clippy::arithmetic_side_effects` outside tests.
 | `src/query.rs` | config, games (with `trusted_seq` and every open deadline), seats, checkpoints (with the liveness candidate), signer keys, settlement preview |
 | `schema/` | generated JSON schema of every message and response (the ESCROW-3 client ABI) |
 | `testdata/` | independent Python vector generator, its output (`payload_vectors_v1.json`), and the SET-0A rev 2 payout goldens |
+| `gasbench/` | stand-alone gas harness that runs the optimized wasm in cosmwasm-vm 3.0.5 (own workspace and lockfile; see its README) |
 
 ## Tests
 
@@ -119,6 +120,38 @@ path pays that settlement. It stays on record as evidence only.
   names no key-trust condition, so an `Uphold` of a compromised settlement is
   still possible. The resolver should `Replace` or `Annul` such a dispute
   instead.
+
+## Predeployment gate: wasm, `cosmwasm-check`, gas
+
+The deployable artifact must come from the official optimizer
+(`cosmwasm/optimizer:0.16.1`, which builds only `contracts/*` members). Record
+the image digest and the artifact's SHA-256. `gasbench/` holds the full recipe.
+
+**Acceptance.** Run `cosmwasm-check` from every VM line the target chain may
+run: 1.5.x, 2.2.9, 3.0.5 and 3.0.9.
+* cosmwasm-vm 2.2.9 and 3.0.9 (bundled by wasmvm v2.2.8 and v3.0.7) reject any
+  function with more than 100 locals.
+* A 2026-09-26 MVP build of this crate (Rust 1.95 + binaryen 116) failed that
+  check. `cosmwasm_std::from_json::<state::Game>` reaches 135 locals after
+  `wasm-opt -Os` inlines the whole `Game` deserializer.
+* Setting `opt-level` `s` or `z` for the package still gives 130 or 124 locals.
+* Profile-wide `lto = true`, `codegen-units = 1` and `opt-level` `s`/`z` reach 98 locals.
+  That margin is only 2, and VM gas roughly doubles.
+* The durable fix is a storage-only `Game` representation with fewer top-level
+  fields (ESCROW-2.3).
+* Chains on those VMs refuse to store such an artifact. Check every new
+  artifact before a StoreCode.
+
+**Gas.** `gasbench/` runs the optimized wasm in cosmwasm-vm 3.0.5 and reports
+VM gas plus modelled KV/event gas for every path.
+* The whole-`Game` rewrite (≈4.6 KB for 7 seats, ≈138k SDK gas) dominates most
+  transactions.
+* Paths that compute the trusted sequence grow by ≈3.5k SDK gas per stored
+  checkpoint. A `LivenessSettle` that carries a checkpoint scans twice, ≈7k per
+  checkpoint.
+* The largest modelled execution is that carried-checkpoint liveness exit at the
+  64-checkpoint cap: ≈0.67M SDK gas before ante costs.
+* Chain figures come only from simulating on the target chain.
 
 ## Trust roots and residuals
 

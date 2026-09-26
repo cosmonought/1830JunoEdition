@@ -129,6 +129,17 @@ The deployable artifact must come from the official optimizer
 (`cosmwasm/optimizer:0.16.1`, which builds only `contracts/*` members). Record
 the image digest and the artifact's SHA-256. `gasbench/` holds the full recipe.
 
+**Optimizer toolchain (ESCROW-B2).** `cosmwasm/optimizer:0.16.1` builds with
+Rust and Cargo 1.81.
+* The crate declares `rust-version = "1.81"`, so clippy's `incompatible_msrv`
+  lint rejects any std API stabilized later (`Option::is_none_or` is 1.82).
+* Before building, Cargo downloads and parses every package the lockfile's
+  dependency graph reaches for wasm32 *or* the host, including platform-gated
+  and inactive optional ones: 76 packages, of which 41 are compiled. Cargo 1.81
+  cannot parse an edition-2024 manifest, so `Cargo.lock` pins `base64ct 1.7.3`
+  and `zeroize 1.8.2` (via `cosmwasm-crypto`, host-only). A `cargo update` that
+  raises either breaks the optimizer build.
+
 **Acceptance.** Run `scripts/wasm-gate.sh`. It fails when any function
 declares more than 90 locals, and it runs every `cosmwasm-check` listed in
 `COSMWASM_CHECK`. Use 1.5.x, 2.2.9, 3.0.5 and 3.0.9; at least one must be

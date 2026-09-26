@@ -172,8 +172,8 @@ fn checkpoints(deps: Deps, chain_game_id: u64) -> StdResult<CheckpointsResponse>
         let key = SIGNER_KEYS.may_load(deps.storage, key_id)?;
         views.push(CheckpointView {
             checkpoint,
-            signer_key_retired: key.as_ref().is_none_or(|k| k.retired_at.is_some()),
-            signer_key_compromised: key.as_ref().is_none_or(|k| k.compromised),
+            signer_key_retired: key.as_ref().map_or(true, |k| k.retired_at.is_some()),
+            signer_key_compromised: key.as_ref().map_or(true, |k| k.compromised),
         });
     }
     views.sort_by_key(|v| std::cmp::Reverse(v.checkpoint.payload.seq));

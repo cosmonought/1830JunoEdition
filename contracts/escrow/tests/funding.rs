@@ -135,6 +135,19 @@ fn join_must_match_the_creators_gross_ante() {
             denom: DENOM.to_string()
         }
     );
+    // Exactly one coin: none at all, or the right ante beside a second denom,
+    // is refused and seats nobody.
+    let invalid = ContractError::InvalidFunds {
+        denom: DENOM.to_string(),
+    };
+    assert_eq!(s.exec(&who, &msg, &[]).unwrap_err(), invalid);
+    assert_eq!(
+        s.exec(&who, &msg, &[coin(ANTE, DENOM), coin(ANTE, "uatom")])
+            .unwrap_err(),
+        invalid
+    );
+    assert_eq!(s.game(id).game.seats.len(), 1);
+    assert_eq!(s.contract_balance(), NET);
     s.exec(&who, &msg, &coins(ANTE, DENOM)).unwrap();
 }
 

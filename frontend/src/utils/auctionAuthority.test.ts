@@ -715,3 +715,57 @@ describe("10. the predicates themselves, and the two locks' agreement", () => {
     expect(miniRaiseRefusal(c, c.waterfall ?? null, { bid_amount: "91" })).toContain("at least $5");
   });
 });
+
+/* ==================================================================================================== */
+
+describe("11. a lone standing bid is awarded in the cascade, mid-auction (RUST-RETIRE-2A H1)", () => {
+  /* THE RETIRED RUST ENGINE'S `waterfall_single_bid_cascade_auto_wins`, KEPT FOR ITS RULE AND NOT ITS ENGINE.
+     A face-value purchase of the cheapest private makes the next one the cheapest; a private with EXACTLY ONE
+     standing bid then goes to that bidder, at the bid, with no contest; and the cascade carries on until the
+     cheapest private is one nobody has bid on, where the auction resumes with the next seat.
+     TWO OF THAT TEST'S ASSERTIONS ARE DELIBERATELY NOT CARRIED OVER:
+       * its opening bid was $40 on the $40 C&SL -- below the $5 minimum (#1184, §1.2.1), so the bid here is $45;
+       * it moved the Priority Deal to the cascade winner's left. DA-4 (DA-F4/F5) ruled that an award never moves
+         the Priority Deal; that is pinned where it is decided, at the auction's end, by
+         `da4AuctionPriorityDeal.test.ts` cases 7 and 10, and is not re-asserted here.
+     WHAT IS KEPT is the part no named case asserted: the MID-auction continuation, with three seats, so the
+     cursor has a seat to land on that is neither the buyer nor the bidder -- and a second lone bid standing
+     BEYOND the unbid D&H, so "the cascade stops there" is a fact the board can contradict. */
+  it("awards the C&SL to its lone bidder at the bid, stops at the unbid D&H, and advances one seat", () => {
+    const before = board({
+      currentTurn: B,
+      privates: [priv(SV_PRIVATE_ID, 20, [], true), priv(2, 40, [[A, 45]]), priv(3, 70), priv(4, 110, [[C, 115]])],
+    });
+    expect(ingress(before, B, BUY)).toBeNull();
+    const after = apply(before, BUY);
+    expect(refused(before, after)).toBe(false);
+
+    // The face-value purchase, and the award it cascaded into -- at the bid, charged to the bidder, once.
+    expect(ownerOf(after, SV_PRIVATE_ID)).toBe(B);
+    expect(ownerOf(after, 2)).toBe(A);
+    expect(cashOf(after, B)).toBe(600 - 20);
+    expect(cashOf(after, A)).toBe(600 - 45);
+    expect(cashOf(after, C)).toBe(600);
+    expect(bankOf(after)).toBe(9000 + 20 + 45);
+    expect(moneyConservationBreach(before, after)).toBeNull();
+
+    /* The cascade stopped at the first private with no bid, which is now the cheapest. C's lone bid on the M&H,
+       beyond it, is still a bid: not awarded, not charged. */
+    expect(offered(after, SV_PRIVATE_ID)).toBeNull();
+    expect(offered(after, 2)).toBeNull();
+    expect(offered(after, 3)).toMatchObject({ is_lowest_offered: true, bids: [] });
+    expect(offered(after, 4)).toMatchObject({ is_lowest_offered: false, bids: [{ bidder: C, bid_amount: "115" }] });
+    expect(ownerOf(after, 3)).toBeNull();
+    expect(ownerOf(after, 4)).toBeNull();
+    expect(wf(after)!.waterfall_auction_active).toBe(true);
+    expect(contest(after)).toBeNull();
+
+    /* ONE seat advance for the whole purchase: the buyer's left (C). The award did not move the cursor to the
+       bidder's left (B), and the next action belongs to C at both locks. */
+    expect(wf(after)!.current_turn).toBe(C);
+    expect(after.player_addresses[after.active_player_index]).toBe(C);
+    expect(ingress(after, C, PASS)).toBeNull();
+    expect(ingress(after, A, PASS)).not.toBeNull();
+    expect(ingress(after, B, PASS)).not.toBeNull();
+  });
+});

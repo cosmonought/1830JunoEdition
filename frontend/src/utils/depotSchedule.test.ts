@@ -26,6 +26,14 @@ import {
   rustLabel,
   type DepotTierSchedule,
 } from "../gameEngine/depotSchedule";
+import { depotInventory, tierOrderFor } from "../gameEngine/gamePhase";
+import { trainCapacityFor } from "../gameEngine/routeAuthority";
+import { isUnlimitedReach } from "../gameEngine/trainReach";
+import { applyPhaseChange } from "../gameEngine/sandboxSession";
+import { withEmptyRoster } from "../gameEngine/gameSetup";
+import { DEFAULT_SANDBOX_SCENARIO, sandboxScenarioState } from "../gameEngine/sandboxState";
+import { MOCK_TRAIN_CATALOG } from "../gameEngine/mockFixtures";
+import type { GameStateResponse } from "../gameEngine/gameState";
 
 const TIERS = ["2", "3", "4", "5", "6", "D"] as const;
 
@@ -161,5 +169,100 @@ describe("the table reads the data rather than re-stating it", () => {
     const entries = Object.values(DEPOT_SCHEDULE) as DepotTierSchedule[];
     expect(entries).toHaveLength(6);
     expect(entries.every((entry) => entry.phase.length > 0)).toBe(true);
+  });
+});
+
+/* ==================================================================
+    RUST-RETIRE-2A (H3): THE PRINTED 1830 ROSTER, ASKED OF THE RUNTIME
+   ==================================================================
+   The retired Rust engine pinned its own `TRAIN_CATALOG` against the printed roster
+   (`train_catalog_matches_printed_1830_roster`). With that crate gone, the roster exists only in this engine --
+   and in more than one table: the depot's counts, prices and limits (`gamePhase.ts`), the reach the route judge
+   enforces (`trainCapacityFor`, over `MOCK_TRAIN_CATALOG`), and the reducer's own rust table (`sandboxSession.ts`
+   `RUSTS_ON`, which `depotInventory`'s `rustedBy` mirrors for the card and the countdown).
+   SO EACH COLUMN BELOW IS READ BACK THROUGH THE FUNCTION PLAY CONSULTS, never from a copy, on the board a new
+   room opens with. The `PRINTED` rows are the certification evidence -- the rulebook's train table as the in-app
+   Rules Reference prints it -- and an edit to any one runtime table fails here.
+   THE STANDARD GAME ONLY. The Level Playing Field's 7-train and $900 Diesel are pinned in
+   `levelPlayingFieldRules.test.ts`; no other variant changes the roster. The Diesel's inexhaustible supply is
+   asserted at the purchase itself, in `trainLifecycle.test.ts` (H4). */
+describe("the printed 1830 train roster, read through the runtime authorities (RUST-RETIRE-2A H3)", () => {
+  type Reach = number | "unlimited";
+  //                                           tier  printed  price  reach  limit*  rusted by   (* while the phase)
+  const PRINTED: ReadonlyArray<readonly [string, number | null, number, Reach, number, string | null]> = [
+    ["2", 6, 80, 2, 4, "4"],
+    ["3", 5, 180, 3, 4, "6"],
+    ["4", 4, 300, 4, 3, "D"],
+    ["5", 3, 450, 5, 2, null],
+    ["6", 2, 630, 6, 2, null],
+    ["D", null, 1_100, "unlimited", 2, null], // null: no ceiling -- the Bank never runs out of Diesels
+  ];
+  const tiers = PRINTED.map(([tier]) => tier);
+  /* The base a room's log replays onto (`roundReplay.ts`, `gameHistory.ts`): the board with every trace of a
+     played game removed, every fleet `[]`. */
+  const fresh = () => withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default"));
+
+  it("is six tiers, in the order the depot sells them, with no 7-train", () => {
+    expect(tierOrderFor(fresh())).toEqual(tiers);
+    expect(depotInventory(fresh()).map((row) => row.tier)).toEqual(tiers);
+  });
+
+  it("opens every new game on the full printed depot: count, price and train limit, tier by tier", () => {
+    expect(depotInventory(fresh()).map((row) => [row.tier, row.total, row.remaining, row.cost, row.trainLimit])).toEqual(
+      PRINTED.map(([tier, printed, price, , limit]) => [tier, printed, printed, price, limit]),
+    );
+  });
+
+  it("gives each train the reach the route judge enforces -- and the Diesel an unlimited one", () => {
+    expect(
+      tiers.map((tier) => {
+        const capacity = trainCapacityFor(tier);
+        return [tier, isUnlimitedReach(capacity) ? "unlimited" : capacity];
+      }),
+    ).toEqual(PRINTED.map(([tier, , , reach]) => [tier, reach]));
+  });
+
+  it("rusts exactly the printed victims when each tier arrives, and never a 5, a 6 or a Diesel", () => {
+    /* One train of every tier, each in its own corporation so no train limit is in play; every arrival is the
+       reducer's own `applyPhaseChange`, the call the depot purchase makes. */
+    const base = fresh();
+    const holders = base.public_companies.slice(0, tiers.length).map((company) => company.company_id);
+    expect(holders).toHaveLength(tiers.length);
+    const fleet: GameStateResponse = {
+      ...base,
+      public_companies: base.public_companies.map((company) => {
+        const at = holders.indexOf(company.company_id);
+        return at < 0 ? company : { ...company, owned_trains: [tiers[at]] };
+      }),
+    };
+    const survivors = (state: GameStateResponse) =>
+      state.public_companies.flatMap((company) => company.owned_trains ?? []);
+    expect(survivors(fleet)).toEqual(tiers);
+
+    expect(tiers.map((arriving) => [arriving, tiers.filter((tier) => !survivors(applyPhaseChange(fleet, arriving)).includes(tier))])).toEqual([
+      ["2", []],
+      ["3", []],
+      ["4", ["2"]],
+      ["5", []],
+      ["6", ["3"]],
+      ["D", ["4"]],
+    ]);
+    // ...and the depot's rust column, which the card and the countdown print, says the same thing.
+    expect(depotInventory(fresh()).map((row) => [row.tier, row.rustedBy])).toEqual(
+      PRINTED.map(([tier, , , , , rustedBy]) => [tier, rustedBy]),
+    );
+  });
+
+  it("holds the stand-in catalog's prices and counts to the depot (`MOCK_TRAIN_CATALOG`)", () => {
+    /* Only this catalog's REACH is read at runtime (`trainCapacityFor`, above). Its `costVgp` and `bankQuantity`
+       are read by nothing outside tests -- leftovers of the retired Rust array it mirrored -- and are held to the
+       depot here only so the stand-in cannot quietly disagree with the rule before it is retired. NOT its Diesel
+       `bankQuantity: 20`, which already does: the depot's `total: null` is the rule. */
+    expect(
+      depotInventory(fresh()).map((row) => {
+        const entry = MOCK_TRAIN_CATALOG.find((train) => train.modelType === row.tier);
+        return [row.tier, entry?.costVgp, row.total === null ? null : entry?.bankQuantity];
+      }),
+    ).toEqual(PRINTED.map(([tier, printed, price]) => [tier, price, printed]));
   });
 });

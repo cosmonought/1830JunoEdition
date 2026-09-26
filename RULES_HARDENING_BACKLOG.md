@@ -3524,6 +3524,18 @@ taking `17150`) have TS equivalents except a dedicated lone-bid cascade test; ne
 $0 taking followed by a cascade, a contest cascading into a contest, or the Priority Deal after an auction ending in a
 cascade / contest (Rust: left of the last winner; TS #1235: left of the last actor — see DA-F4 / DA-F5). Rust has no
 delayed auction. The tests are DA-T6 / DA-T7 (S9-7, Variant Certification 1C). (B) unchanged. S10-6 stays `DEFERRED` for (B).
+**RUST-RETIRE-2A (2026-09-26): (B) MINED — S10-6 has no mining left.** Forced purchase / bankruptcy: nothing to port
+(`bankrupt` has no hit in `src/tests.rs`; its emergency-purchase tests `14312` / `14426` are covered by `offerMatrix74Hold`,
+`offerMatrix74Settlement` R74-B.1, `batch33` and the emergency-funding suites). The five harvest items of
+`RUST_RETIREMENT_AUDIT_2026-09-26.md` §6.3 are pinned: H1 the lone-bid cascade mid-auction (`auctionAuthority.test.ts` §11,
+the dedicated test DA-1 found missing; the Rust $40 opening bid and cascade-winner Priority Deal are deliberately not carried
+over); H2 the auction's gates (BuyStock and legacy `BidOnPrivate` already pinned; SellStock newly pinned in
+`stockTransactionAuthority.test.ts` §7; **`BeginOperatingRound` from the seat to act is accepted on a pinned board in any round,
+mid-auction included — RR2A-F1, routed to the owner, not fixed**); H3 the printed roster through its runtime readers (`depotSchedule.test.ts`); H4 the 21st and 22nd Diesel through
+the depot purchase (`trainLifecycle.test.ts`); H5 the escrow `Join` with no coin / two coins (`contracts/escrow/tests/funding.rs`,
+a patch on the ESCROW-2 lineage, which is not yet on `main`). Not rules evidence, left to 2E: the `MOCK_TRAIN_CATALOG`
+"mirror of `hardware::TRAIN_CATALOG`" comment and its unread Diesel `bankQuantity: 20`, and the two `tests.rs:5205` comment
+citations. Record: `claude/rust-retire-2a-harvest-2026-09-26.md`.
 
 **S10-7. Engine tests and packaging.** 304 engine-adjacent suites still live in `frontend/src/utils/` (Jest
 `roots` + per-suite classification, Batch 1 §6d); a repo-root `shared/` package needs CRA's `ModuleScopePlugin`,

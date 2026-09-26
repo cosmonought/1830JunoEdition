@@ -21,7 +21,7 @@ import {
 } from "../gameEngine/trainAvailability";
 import { hasLegalRouteFor } from "../gameEngine/derivedActions";
 import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
-import { depotInventory, derivePhase } from "../gameEngine/gamePhase";
+import { depotInventory, derivePhase, openDepotTiers } from "../gameEngine/gamePhase";
 import { countableTrainCount, isTrainLocked } from "../gameEngine/trainLimit";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { GameStateResponse } from "../gameEngine/gameState";
@@ -339,6 +339,81 @@ describe("one answer to what is for sale (design note #1512)", () => {
     expect(applySandboxAction(state, EMERGENCY(CO), { actor: P1, mapGrid: CORRIDOR })).toBe(state);
     expect(trainObligationFor(state, CO, CORRIDOR).owed).toBe(true);
     expect(applySandboxAction(state, PASS, { actor: P1, mapGrid: CORRIDOR })).toBe(state);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* The Diesel never runs out (RUST-RETIRE-2A H4)                       */
+/* ------------------------------------------------------------------ */
+
+describe("the Bank never runs out of Diesels (RUST-RETIRE-2A H4)", () => {
+  /* The retired Rust engine's `the_diesel_supply_is_inexhaustible` asked a pool-refill helper that no purchase
+     test reached, and its catalog -- which `MOCK_TRAIN_CATALOG` still mirrors -- printed the Diesel as TWENTY.
+     THIS ENGINE'S RULE IS "NO CEILING" (`DEPOT_TOTALS.D = null`), and this case asks it where it is spent: the
+     depot purchase, through the reducer.
+     THE TWENTY DIESELS ALREADY OUT OF THE DEPOT are counted everywhere `depotInventory` subtracts a train that
+     has left it. Eight corporations at the phase-D limit of two can hold sixteen trains at most, so the twenty
+     are split across the fleets (12), the Bank Pool (4) and the trains removed from the game (4). A Diesel stock
+     of twenty is exhausted on this board -- remaining 20 - 12 - 4 - 4 = 0, D off the shelf, the purchase refused
+     unchanged -- and the unlimited one sells the twenty-first, and the twenty-second. Both printed 6s are
+     owned, so the Diesel is the depot's only open row and the ORDINARY purchase, unnamed, is the one asked.
+     THE BOARD IS SYNTHETIC ON PURPOSE. No standard game reaches it (only the Yellow Sign's Mark writes
+     `removed_trains`, and a Diesel reaches the Bank Pool only by discard), and no board a standard game CAN
+     reach tells a finite Diesel total of 16 or more from `null`. So the purchases prove "at least twenty-two",
+     and the `total: null` / `remaining: null` rows prove "no ceiling". */
+  const twentyOut = (): GameStateResponse => ({
+    ...board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "3500" },
+        { id: PRR, ticker: "PRR", president: P2, trains: ["6", "D"] },
+        { id: NYC, ticker: "NYC", president: P2, trains: ["6", "D"] },
+        { id: 3, ticker: "CPR", president: P2, trains: ["D", "D"] },
+        { id: 4, ticker: "B&O", president: P2, trains: ["D", "D"] },
+        { id: 6, ticker: "ERIE", president: P2, trains: ["D", "D"] },
+        { id: 7, ticker: "NYNH", president: P2, trains: ["D", "D"] },
+        { id: 8, ticker: "B&M", president: P2, trains: ["D", "D"] },
+      ],
+      operating: CO,
+      returned: ["D", "D", "D", "D"],
+    }),
+    removed_trains: ["D", "D", "D", "D"],
+  });
+  const dieselsOut = (state: GameStateResponse) =>
+    [
+      ...state.public_companies.flatMap((c) => c.owned_trains ?? []),
+      ...(state.returned_trains ?? []),
+      ...(state.removed_trains ?? []),
+    ].filter((model) => model === "D").length;
+
+  it("sells the 21st Diesel, and the 22nd, through the ordinary depot purchase", () => {
+    const before = twentyOut();
+    expect(dieselsOut(before)).toBe(20);
+    expect(derivePhase(before)?.tier).toBe("D");
+    expect(depotRow(before, "6").remaining).toBe(0);
+    expect(depotRow(before, "D")).toMatchObject({ cost: 1100, total: null, remaining: null, soldOut: false });
+    expect(openDepotTiers(before).map((row) => row.tier)).toEqual(["D"]);
+
+    const twentyFirst = applySandboxAction(before, BUY(CO), { actor: P1, mapGrid: CORRIDOR });
+    expect(company(twentyFirst, CO).owned_trains).toEqual(["D"]);
+    expect(Number(company(twentyFirst, CO).treasury)).toBe(3500 - 1100);
+    // The depot sold it: the pooled and removed Diesels are exactly where they were.
+    expect(twentyFirst.returned_trains).toEqual(before.returned_trains);
+    expect(twentyFirst.removed_trains).toEqual(before.removed_trains);
+    expect(dieselsOut(twentyFirst)).toBe(21);
+    expect(depotRow(twentyFirst, "D")).toMatchObject({ total: null, remaining: null, soldOut: false });
+    expect(openDepotTiers(twentyFirst).map((row) => row.tier)).toEqual(["D"]);
+
+    const twentySecond = applySandboxAction(twentyFirst, BUY(CO), { actor: P1, mapGrid: CORRIDOR });
+    expect(company(twentySecond, CO).owned_trains).toEqual(["D", "D"]);
+    expect(Number(company(twentySecond, CO).treasury)).toBe(3500 - 2 * 1100);
+    expect(dieselsOut(twentySecond)).toBe(22);
+    expect(openDepotTiers(twentySecond).map((row) => row.tier)).toEqual(["D"]);
+
+    /* THE CONTROL: what stops a third purchase is C&O's train limit, not the supply -- and not the money, since
+       $1,300 still covers a Diesel. Refused by identity, with the Diesel still on the depot's shelf. */
+    expect(Number(company(twentySecond, CO).treasury)).toBeGreaterThanOrEqual(1100);
+    expect(applySandboxAction(twentySecond, BUY(CO), { actor: P1, mapGrid: CORRIDOR })).toBe(twentySecond);
+    expect(depotRow(twentySecond, "D")).toMatchObject({ remaining: null, soldOut: false });
   });
 });
 

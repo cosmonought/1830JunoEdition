@@ -478,6 +478,23 @@ describe("7. a sale is a Stock Round action, with the §6.6.3 exception (S7-13 /
     expect(ingress(before, P2, SELL(PRR, 10))).toContain("only be sold during a Stock Round");
   });
 
+  it("refuses a sale while the private company auction runs -- the Delayed Auction's, where shares are held (RUST-RETIRE-2A H2)", () => {
+    /* The retired Rust engine refused BuyStock (§1 above) and SellStock while the auction ran
+       (`waterfall_gates_stock_round_and_operating_round_and_legacy_auction_actions`). The sale matters under the
+       Delayed Auction, which holds the auction AFTER the first Stock Round (#905): macro round 2, with P1 holding
+       PRR -- so neither §8's first-Stock-Round ban nor an empty holding is what refuses it. */
+    const delayed = { rules: 1, delayedAuction: true };
+    const auction = stockRound({ current_round_type: "WaterfallAuction", macro_round_number: 2, variants: delayed } as Partial<GameStateResponse>);
+    expect(heldBy(auction, PRR, P1)).toBeGreaterThanOrEqual(10);
+    expect(refused(auction, apply(auction, SELL(PRR, 10), P1))).toBe(true);
+    expect(ingress(auction, P1, SELL(PRR, 10))).toContain("only be sold during a Stock Round");
+
+    // The control: the Stock Round after the auction (macro round 3 on this variant, §8) sells the same certificate.
+    const next = stockRound({ macro_round_number: 3, variants: delayed } as Partial<GameStateResponse>);
+    expect(refused(next, apply(next, SELL(PRR, 10), P1))).toBe(false);
+    expect(ingress(next, P1, SELL(PRR, 10))).toBeNull();
+  });
+
   /* The Batch-5 board: C&O operates at Buy Trains with no train, a legal route and no money, so its
      president must sell. The corridor is the two-tile grid `emergencyFunding.test.ts` runs on.
      P1 holds 30 % of PRR at $100 against a $30 shortfall, so ONE certificate is "only enough" (§6.6.3) and

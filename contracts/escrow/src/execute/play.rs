@@ -10,8 +10,8 @@ use crate::crypto::{
 use crate::error::ContractError;
 use crate::helpers::{
     active_signer_key, add_secs, check_payload_for_game, full_mask, load_game, nonpayable, pay_out,
-    payload_record, require_not_paused, require_state, save_game, seat_bit, stored_consent_digest,
-    trusted_seq, verify_seat_signatures,
+    payload_record, require_not_paused, require_state, require_trusted_settlement, save_game,
+    seat_bit, stored_consent_digest, trusted_seq, verify_seat_signatures,
 };
 use crate::msg::{SeatSignature, SettlementPayloadV1};
 use crate::payload::{fixed_bytes, Payload, PayloadUse};
@@ -233,7 +233,11 @@ pub fn settle(
 
 /// Anyone may add one seat's consent to the stored settlement while SETTLEABLE
 /// and not paused (it can pay out). Idempotent per seat; the last missing
-/// consent settles the game.
+/// consent settles the game. Refused outright, before any signature is checked
+/// or any bit is recorded, when the stored settlement's signer key has been
+/// marked compromised (ESCROW-2.2): such a settlement can never be paid by
+/// consent, so recording further bits would only build toward a payout that
+/// must not happen.
 pub fn consent(
     deps: DepsMut,
     env: Env,
@@ -247,6 +251,7 @@ pub fn consent(
     let mut game = load_game(deps.storage, chain_game_id)?;
     require_state(&game, &[GameState::Settleable])?;
     require_not_paused(&config)?;
+    require_trusted_settlement(deps.storage, &game)?;
     let digest = stored_consent_digest(&game)?;
     let mask = verify_seat_signatures(
         deps.api,
@@ -291,7 +296,11 @@ pub fn consent(
     Ok(response.add_attribute("state", game.state.as_str()))
 }
 
-/// Anyone, SETTLEABLE, once block time reaches the window end, not paused.
+/// Anyone, SETTLEABLE, once block time reaches the window end, not paused. A
+/// stored settlement whose signer key has since been marked compromised has
+/// lost its payout authority and is refused (ESCROW-2.2); the SETTLEABLE
+/// `LivenessSettle` exit then recovers the game (trusted checkpoint or
+/// refund).
 pub fn finalize(
     deps: DepsMut,
     env: Env,
@@ -303,6 +312,7 @@ pub fn finalize(
     let mut game = load_game(deps.storage, chain_game_id)?;
     require_state(&game, &[GameState::Settleable])?;
     require_not_paused(&config)?;
+    require_trusted_settlement(deps.storage, &game)?;
     let settlement = game
         .settlement
         .as_ref()

@@ -11,6 +11,13 @@
 //! so a forged payload under a key later marked compromised cannot block honest
 //! progress (OD-ESC2-3).
 //!
+//! Payout authority (ESCROW-2.2): a stored settlement whose signer key is
+//! marked compromised is never paid by an ordinary path. `Finalize` and
+//! `Consent` refuse it ([`require_trusted_settlement`]); the SETTLEABLE and
+//! DISPUTED liveness exits already pay only a trusted settlement and otherwise
+//! fall back to a trusted checkpoint or refund. A resolver `Uphold` remains the
+//! resolver's decision.
+//!
 //! Every payout goes through [`pay_out`] and every refund through [`refund_all`].
 //! Both zero the pool and move the game to a terminal state in the same
 //! transaction as their `BankMsg`s, and neither ever emits a zero-amount coin
@@ -237,6 +244,25 @@ pub fn trusted_seq(storage: &dyn Storage, game: &Game) -> Result<u64, ContractEr
         }
     }
     Ok(floor)
+}
+
+/// The stored settlement may still be paid by an ordinary path: its signer key
+/// is not compromised. A key retired without compromise stays trusted. Checked
+/// by `Finalize` and `Consent` before anything else is read or written, so a
+/// refusal moves no funds and changes no state.
+pub fn require_trusted_settlement(storage: &dyn Storage, game: &Game) -> Result<(), ContractError> {
+    let key_id = game
+        .settlement
+        .as_ref()
+        .map(|s| s.payload.signer_key_id)
+        .ok_or_else(|| ContractError::Invariant {
+            reason: "no stored settlement".to_string(),
+        })?;
+    if key_is_trusted(storage, key_id)? {
+        Ok(())
+    } else {
+        Err(ContractError::CompromisedSettlement { key_id })
+    }
 }
 
 /// The index of a seat other than `except` whose current consent key is `key`.

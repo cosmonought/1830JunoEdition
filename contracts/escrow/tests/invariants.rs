@@ -23,6 +23,11 @@
 //! 14. a compromised signer's seq cannot permanently block trusted progress
 //! 15. a resolver change cannot affect an already-started game
 //! 16. consent keys are unique within a game
+//! 17. a stored settlement signed by a currently compromised signer is never
+//!     the source of a direct payout (Finalize, the completing Consent, the
+//!     liveness timeouts); Finalize and Consent refuse it with
+//!     `CompromisedSettlement` (ESCROW-2.2). A resolver Uphold is an
+//!     adjudicated payout and outside this rule.
 
 mod common;
 
@@ -168,6 +173,12 @@ struct Fuzz {
     carried_ok: usize,
     /// Ordinary checkpoints accepted while paused (OD-ESC2-2).
     paused_checkpoints: usize,
+    /// Signer keys marked compromised, as the model knows them (17).
+    compromised: BTreeSet<u16>,
+    /// Finalize/Consent refused with `CompromisedSettlement` (17).
+    compromised_refusals: usize,
+    /// Direct payouts checked against (17).
+    direct_payouts: usize,
 }
 
 const MAX_GAMES: usize = 24;
@@ -201,6 +212,9 @@ impl Fuzz {
             current_resolver: resolver,
             carried_ok: 0,
             paused_checkpoints: 0,
+            compromised: BTreeSet::new(),
+            compromised_refusals: 0,
+            direct_payouts: 0,
         }
     }
 
@@ -923,6 +937,9 @@ impl Fuzz {
                         &[],
                     );
                     self.retired.insert(victim);
+                    if compromised {
+                        self.compromised.insert(victim);
+                    }
                     let mut d = Self::done(act, None, admin, res);
                     d.compromise = compromised;
                     d
@@ -992,6 +1009,7 @@ impl Fuzz {
                 )
                 .unwrap();
                 self.retired.insert(leaked_id);
+                self.compromised.insert(leaked_id);
                 let honest = Self::payload_for(
                     &g,
                     KIND_CHECKPOINT,
@@ -1286,6 +1304,33 @@ impl Fuzz {
                 ) {
                     assert_ne!(*e, ContractError::Paused {}, "{:?} blocked by pause", d.act);
                 }
+                // (17) Finalize and Consent refuse a stored settlement whose
+                // key is compromised with exactly this error, and only then.
+                if let (Some(id), true) = (d.game, matches!(d.act, Act::Finalize | Act::Consent)) {
+                    let key = before
+                        .games
+                        .get(&id)
+                        .filter(|g| g.state == GameState::Settleable)
+                        .and_then(|g| g.settlement.as_ref())
+                        .map(|st| st.payload.signer_key_id)
+                        .filter(|k| self.compromised.contains(k));
+                    match (key, self.paused) {
+                        (Some(key_id), false) => {
+                            assert_eq!(
+                                *e,
+                                ContractError::CompromisedSettlement { key_id },
+                                "{:?}",
+                                d.act
+                            );
+                            self.compromised_refusals += 1;
+                        }
+                        _ => assert!(
+                            !matches!(e, ContractError::CompromisedSettlement { .. }),
+                            "{:?}: {e:?}",
+                            d.act
+                        ),
+                    }
+                }
             }
             Ok(res) => {
                 *self.ok.entry(d.act).or_default() += 1;
@@ -1307,6 +1352,44 @@ impl Fuzz {
                 );
                 // (8)
                 assert!(!d.retired_signer, "a retired signer's payload was accepted");
+                // (17) Finalize and Consent never accept a stored settlement
+                // whose key is compromised, and no direct payout ever comes
+                // from one.
+                if let (Some(id), true) = (d.game, matches!(d.act, Act::Finalize | Act::Consent)) {
+                    if let Some(st) = before.games.get(&id).and_then(|g| g.settlement.as_ref()) {
+                        assert!(
+                            !self.compromised.contains(&st.payload.signer_key_id),
+                            "{:?} accepted on a compromised settlement",
+                            d.act
+                        );
+                    }
+                }
+                for (id, a) in &after.games {
+                    let Some(b) = before.games.get(id) else {
+                        continue;
+                    };
+                    if b.state.is_terminal() || !a.state.is_terminal() {
+                        continue;
+                    }
+                    let direct = matches!(
+                        a.outcome.as_ref().map(|o| &o.route),
+                        Some(
+                            Route::AllConsentsAtSettle
+                                | Route::ConsentCompleted
+                                | Route::Finalized
+                                | Route::SettleableTimeoutPayout
+                                | Route::ResolverTimeoutPayout
+                        )
+                    );
+                    if direct {
+                        let key = a.settlement.as_ref().unwrap().payload.signer_key_id;
+                        assert!(
+                            !self.compromised.contains(&key),
+                            "(17) game {id} paid a settlement signed by compromised key {key}"
+                        );
+                        self.direct_payouts += 1;
+                    }
+                }
                 // (16) a real key rotation withdraws that seat's recorded
                 // consent and nothing else; re-setting the same key is a no-op.
                 if d.act == Act::SetKey {
@@ -1485,7 +1568,27 @@ impl Fuzz {
             .map(|(k, _)| *k)
             .filter(|k| !self.retired.contains(k))
             .collect();
-        let victim = self.rng.pick(&active);
+        // Prefer the signer of a stored SETTLEABLE settlement, so rule (17) is
+        // exercised on real settlements.
+        let settleable_keys: Vec<u16> = self
+            .games
+            .iter()
+            .copied()
+            .filter(|id| !self.frozen.contains_key(id))
+            .filter_map(|id| {
+                let g = self.s.game(id).game;
+                match (g.state, g.settlement) {
+                    (GameState::Settleable, Some(st)) => Some(st.payload.signer_key_id),
+                    _ => None,
+                }
+            })
+            .filter(|k| active.contains(k))
+            .collect();
+        let victim = if !settleable_keys.is_empty() && self.rng.chance(60) {
+            self.rng.pick(&settleable_keys)
+        } else {
+            self.rng.pick(&active)
+        };
         let before = self.begin();
         let res = self.exec(
             &admin,
@@ -1496,6 +1599,7 @@ impl Fuzz {
             &[],
         );
         self.retired.insert(victim);
+        self.compromised.insert(victim);
         let mut d = Self::done(Act::RotateSigner, None, admin.clone(), res);
         d.admin = true;
         d.compromise = true;
@@ -1579,6 +1683,53 @@ impl Fuzz {
         let mut d = Self::done(Act::PauseToggle, None, admin, res);
         d.admin = true;
         self.check(&d, &before);
+
+        // (17) After the deliberate Unpause, neither Finalize nor a valid
+        // missing consent may pay a stored settlement whose key is now
+        // compromised; `check` asserts the exact refusal.
+        let exposed: Vec<u64> = self
+            .games
+            .iter()
+            .copied()
+            .filter(|id| !self.frozen.contains_key(id))
+            .filter(|id| {
+                let g = self.s.game(*id).game;
+                g.state == GameState::Settleable
+                    && g.settlement
+                        .as_ref()
+                        .is_some_and(|st| self.compromised.contains(&st.payload.signer_key_id))
+            })
+            .collect();
+        for id in exposed {
+            let before = self.begin();
+            let who = self.any_caller();
+            let res = self.exec(&who, &ExecuteMsg::Finalize { chain_game_id: id }, &[]);
+            let d = Self::done(Act::Finalize, Some(id), who, res);
+            self.check(&d, &before);
+
+            let before = self.begin();
+            let g = self.game_of(id);
+            let seat = (0..g.seats.len())
+                .find(|i| g.consent_bitmap & (1u8 << i) == 0)
+                .unwrap_or(0);
+            let st = g.settlement.as_ref().unwrap();
+            let settle: [u8; 32] = st.payload.payload_digest.as_slice().try_into().unwrap();
+            let digest =
+                crypto::consent_digest(&Self::domain_of(&g), st.payload.seq.u64(), &settle);
+            let signature = self.current_key(id, &g, seat).sign(&digest);
+            let who = self.any_caller();
+            let res = self.exec(
+                &who,
+                &ExecuteMsg::Consent {
+                    chain_game_id: id,
+                    seat_index: seat as u8,
+                    signature,
+                },
+                &[],
+            );
+            let d = Self::done(Act::Consent, Some(id), who, res);
+            self.check(&d, &before);
+        }
         *self.ok.entry(Act::EmergencyRotation).or_default() += 1;
     }
 
@@ -1762,12 +1913,16 @@ fn seeded_random_sequences_preserve_every_invariant() {
     let mut games = 0;
     let mut carried = 0;
     let mut paused_checkpoints = 0;
+    let mut compromised_refusals = 0;
+    let mut direct_payouts = 0;
     for seed in 0..10u64 {
         let mut f = Fuzz::new(0x18_c0_5e_5e_ed ^ seed.wrapping_mul(0x1000_0001));
         f.run(500);
         games += f.games.len();
         carried += f.carried_ok;
         paused_checkpoints += f.paused_checkpoints;
+        compromised_refusals += f.compromised_refusals;
+        direct_payouts += f.direct_payouts;
         for (act, n) in &f.ok {
             *ok.entry(*act).or_default() += n;
         }
@@ -1788,6 +1943,15 @@ fn seeded_random_sequences_preserve_every_invariant() {
     assert!(
         paused_checkpoints > 0,
         "no checkpoint was ever accepted under pause"
+    );
+    eprintln!(
+        "fuzz (17): {direct_payouts} direct payouts checked; \
+         {compromised_refusals} Finalize/Consent refused as compromised"
+    );
+    assert!(direct_payouts > 0, "no direct payout was ever checked");
+    assert!(
+        compromised_refusals > 0,
+        "no Finalize/Consent ever met a compromised settlement"
     );
     // The sequences must actually reach deep states for the checks to mean
     // anything.
@@ -2925,4 +3089,94 @@ fn set_key(id: u64, key: &Key) -> ExecuteMsg {
         chain_game_id: id,
         new_pubkey: key.pubkey.clone(),
     }
+}
+
+#[test]
+fn inv17_a_compromised_settlement_is_never_the_source_of_a_direct_payout() {
+    // Stored vector [0, 0, 1] on both games: paying it would send each whole
+    // pool to seat 2. `settleable` also holds a key-2 checkpoint [1, 1, 1].
+    let mut s = Suite::new();
+    let key2 = Key::signer(2);
+    let k2 = s.add_key(&key2);
+    let who = s.outsider.clone();
+    let settleable = s.started(3);
+    let (_, cp) = s.signed_checkpoint(settleable, k2, &key2, 10, &[1, 1, 1]);
+    s.exec(
+        &who,
+        &ExecuteMsg::Checkpoint {
+            chain_game_id: settleable,
+            payload: cp.payload,
+            signature: cp.signature,
+        },
+        &[],
+    )
+    .unwrap();
+    let p = s.settle(settleable, 1, 20, &[0, 0, 1], &[0, 1]);
+    let disputed = s.started(3);
+    s.settle(disputed, 1, 20, &[0, 0, 1], &[]);
+    s.challenge(disputed, 0);
+    s.retire_key(1, true);
+
+    let seat2 = s.players[2].to_string();
+    let mut sends: Vec<(String, u128)> = Vec::new();
+    // Every ordinary path that could pay the stored vector, in turn.
+    s.advance(DAY);
+    assert_eq!(
+        s.exec(
+            &who,
+            &ExecuteMsg::Finalize {
+                chain_game_id: settleable
+            },
+            &[]
+        )
+        .unwrap_err(),
+        ContractError::CompromisedSettlement { key_id: 1 }
+    );
+    let digest = s.consent_digest(settleable, &p);
+    assert_eq!(
+        s.exec(
+            &who,
+            &ExecuteMsg::Consent {
+                chain_game_id: settleable,
+                seat_index: 2,
+                signature: Key::seat(2).sign(&digest),
+            },
+            &[]
+        )
+        .unwrap_err(),
+        ContractError::CompromisedSettlement { key_id: 1 }
+    );
+    s.advance(30 * DAY);
+    for id in [settleable, disputed] {
+        sends.extend(bank_sends(&s.liveness(id, 0, None).unwrap()));
+    }
+    assert_eq!(s.state(settleable), GameState::Settleable);
+    assert_eq!(
+        s.game(disputed).game.outcome.unwrap().route,
+        Route::ResolverTimeoutRefund
+    );
+    s.advance(DAY);
+    let res = s
+        .exec(
+            &who,
+            &ExecuteMsg::Finalize {
+                chain_game_id: settleable,
+            },
+            &[],
+        )
+        .unwrap();
+    sends.extend(bank_sends(&res));
+    let g = s.game(settleable).game;
+    assert_eq!(g.settlement.unwrap().payload.signer_key_id, k2);
+    assert_eq!(g.outcome.unwrap().route, Route::Finalized);
+    // Seat 2 received a third of `settleable` (trusted checkpoint) and its net
+    // refund from `disputed`; the compromised vector would have given it 6·NET.
+    let to_seat2: u128 = sends
+        .iter()
+        .filter(|(to, _)| *to == seat2)
+        .map(|(_, a)| *a)
+        .sum();
+    assert_eq!(to_seat2, 2 * NET);
+    assert_eq!(s.contract_balance(), 0);
+    s.assert_custody();
 }

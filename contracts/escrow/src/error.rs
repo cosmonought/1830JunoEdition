@@ -132,6 +132,15 @@ pub enum ContractError {
     #[error("signer key {key_id} is retired")]
     RetiredSignerKey { key_id: u16 },
 
+    /// The stored settlement was signed by a key that has since been marked
+    /// compromised. It stays on record as evidence but has lost its payout
+    /// authority: `Finalize` and `Consent` refuse it, while `Challenge`,
+    /// `AnnulByConsent` and the SETTLEABLE `LivenessSettle` recovery remain.
+    /// Distinct from `RetiredSignerKey`: a key retired without compromise stays
+    /// trusted.
+    #[error("the stored settlement's signer key {key_id} is compromised; it can no longer be finalized or consented to")]
+    CompromisedSettlement { key_id: u16 },
+
     #[error("a signature must be 64 bytes r||s, got {got}")]
     BadSignatureLength { got: usize },
 

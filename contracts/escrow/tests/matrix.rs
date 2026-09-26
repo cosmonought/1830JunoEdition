@@ -11,6 +11,10 @@
 //! LivenessSettle covers SETTLEABLE (OD-ESC2-1) and may carry a checkpoint
 //! (OD-ESC2-4); Resolve checks the game's frozen resolver, including after
 //! `SetResolver` moved the global one (OD-ESC2-5).
+//!
+//! ESCROW-2.2 rows: Finalize and Consent after the stored settlement's signer
+//! key was marked compromised. No cell of these rows can succeed; the key
+//! check comes after state and pause.
 
 mod common;
 
@@ -73,6 +77,11 @@ enum Msg {
     LivenessSettle,
     /// LivenessSettle carrying a newer signed checkpoint.
     LivenessSettleWithCheckpoint,
+    /// Finalize after the window, once key 1 (the signer of every fixture's
+    /// stored settlement) was marked compromised.
+    FinalizeCompromised,
+    /// Consent once key 1 was marked compromised.
+    ConsentCompromised,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -83,6 +92,7 @@ enum Expect {
     AlreadyJoined,
     Unauthorized(&'static str),
     Paused,
+    CompromisedSettlement,
 }
 
 fn addr(s: &Suite, role: Role) -> Addr {
@@ -225,6 +235,16 @@ fn oracle(msg: Msg, state: GameState, role: Role, paused: bool) -> Expect {
                 Expect::Ok(Settled)
             }
         }
+        Msg::FinalizeCompromised | Msg::ConsentCompromised => {
+            // ESCROW-2.2: the stored settlement has lost its payout authority.
+            if !within(&[Settleable]) {
+                Expect::WrongState
+            } else if paused {
+                Expect::Paused
+            } else {
+                Expect::CompromisedSettlement
+            }
+        }
         Msg::LivenessSettleWithCheckpoint => {
             if !within(&[InProgress, Settleable, Disputed]) {
                 Expect::WrongState
@@ -346,7 +366,7 @@ fn build(
                 vec![],
             )
         }
-        Msg::Consent => {
+        Msg::Consent | Msg::ConsentCompromised => {
             let signature = match stored {
                 Some(p) => Key::seat(0).sign(&s.consent_digest(id, p)),
                 None => Key::seat(0).sign(&[7u8; 32]),
@@ -360,7 +380,9 @@ fn build(
                 vec![],
             )
         }
-        Msg::Finalize => (ExecuteMsg::Finalize { chain_game_id: id }, vec![]),
+        Msg::Finalize | Msg::FinalizeCompromised => {
+            (ExecuteMsg::Finalize { chain_game_id: id }, vec![])
+        }
         Msg::Challenge => {
             let bond = s.game(id).game.bond.map(|b| b.u128()).unwrap_or(1_000_000);
             (
@@ -442,6 +464,12 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
     let (id, stored) = fixture(&mut s, state);
     match msg {
         Msg::CancelAfterDeadline | Msg::Finalize => s.advance(DAY),
+        Msg::FinalizeCompromised | Msg::ConsentCompromised => {
+            if matches!(msg, Msg::FinalizeCompromised) {
+                s.advance(DAY);
+            }
+            s.retire_key(1, true);
+        }
         Msg::LivenessSettle | Msg::LivenessSettleWithCheckpoint => s.advance(30 * DAY),
         Msg::ResolveAfterResolverChange => {
             let admin = s.admin.clone();
@@ -483,6 +511,9 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
             assert_eq!(r, want, "{cell}");
         }
         (Err(ContractError::Paused {}), Expect::Paused) => {}
+        (Err(ContractError::CompromisedSettlement { key_id }), Expect::CompromisedSettlement) => {
+            assert_eq!(*key_id, 1, "{cell}");
+        }
         _ => panic!("{cell}: got {got:?}, oracle says {expected:?}"),
     }
     if got.is_err() {
@@ -499,23 +530,34 @@ fn run_cell(msg: Msg, state: GameState, role: Role, paused: bool) -> bool {
 }
 
 fn run_row(msg: Msg) {
-    let (mut cells, mut accepted) = (0, 0);
+    let (mut cells, mut accepted, mut compromised) = (0, 0, 0);
     for state in STATES {
         for paused in [false, true] {
             for role in ROLES {
                 if run_cell(msg, state, role, paused) {
                     accepted += 1;
                 }
+                if oracle(msg, state, role, paused) == Expect::CompromisedSettlement {
+                    compromised += 1;
+                }
                 cells += 1;
             }
         }
     }
     assert_eq!(cells, 96);
-    // Every row exercises both sides of the oracle.
-    assert!(
-        accepted > 0 && accepted < cells,
-        "{msg:?}: {accepted} of {cells}"
-    );
+    if matches!(msg, Msg::FinalizeCompromised | Msg::ConsentCompromised) {
+        // Nothing may pay or record consent to a compromised settlement: the
+        // unpaused SETTLEABLE cells (one per role) answer CompromisedSettlement.
+        assert_eq!(accepted, 0, "{msg:?}");
+        assert_eq!(compromised, 6, "{msg:?}");
+    } else {
+        // Every other row exercises both sides of the oracle.
+        assert!(
+            accepted > 0 && accepted < cells,
+            "{msg:?}: {accepted} of {cells}"
+        );
+        assert_eq!(compromised, 0);
+    }
 }
 
 macro_rules! row {
@@ -546,6 +588,8 @@ row! {
     matrix_annul_by_consent => Msg::AnnulByConsent,
     matrix_liveness_settle => Msg::LivenessSettle,
     matrix_liveness_settle_with_checkpoint => Msg::LivenessSettleWithCheckpoint,
+    matrix_finalize_compromised => Msg::FinalizeCompromised,
+    matrix_consent_compromised => Msg::ConsentCompromised,
 }
 
 // ------------------------------------------------------------ global messages

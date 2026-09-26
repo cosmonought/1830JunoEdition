@@ -1,4 +1,4 @@
-# eighteen-cosmos-escrow (ESCROW-2, corrected by ESCROW-2.1)
+# eighteen-cosmos-escrow (ESCROW-2, corrected by ESCROW-2.1 and ESCROW-2.2)
 
 A CosmWasm 1.5 settlement escrow for Juno money rooms. It is a vault, a deposit
 holder, a roster record, a secp256k1 signature verifier, a settlement/challenge
@@ -47,8 +47,9 @@ profile, and the library denies `clippy::arithmetic_side_effects` outside tests.
 | `golden` | SET-0A P1–P13, Q16 and the 13 case previews, off chain and on chain |
 | `funding`, `start`, `consent_key`, `checkpoint`, `settlement`, `challenge`, `resolver`, `liveness`, `annul`, `admin`, `terminal` | each message's rules, refusals and boundaries |
 | `matrix` | every execute message × every state × paused/unpaused × six caller roles, against an oracle written from §9.1 as amended by the closed decisions |
-| `invariants` | the sixteen escrow invariants: targeted tests plus a seeded random-sequence checker with an independent payout/refund model, which also runs the emergency rotation and finally drains every live game under a permanent pause |
+| `invariants` | the seventeen escrow invariants: targeted tests plus a seeded random-sequence checker with an independent payout/refund model, which also runs the emergency rotation and finally drains every live game under a permanent pause |
 | `closed_decisions` | regressions for OD-ESC2-1…5 and consent-key uniqueness (see below) |
+| `compromised_settlement` | ESCROW-2.2: a stored settlement under a compromised signer key is never paid by Finalize or Consent; recovery by LivenessSettle |
 
 ## Owner decisions (closed in ESCROW-2.1)
 
@@ -95,6 +96,29 @@ controls, or the second public key recoverable from another seat's ECDSA
 signature (which that one signature also satisfies). Only binding the seat into
 the frozen CONSENT/ANNUL digests or a proof of possession would close that.
 
+## Compromised settlements lose payout authority (ESCROW-2.2)
+
+Once the signer key of a stored settlement is marked compromised, no ordinary
+path pays that settlement. It stays on record as evidence only.
+
+* `Finalize` refuses with `CompromisedSettlement{key_id}`, before or after the
+  window.
+* `Consent` refuses every new consent, not only the one that would complete
+  N-of-N. The check runs before any signature is verified or any bit is
+  recorded, so a refusal moves no funds and changes nothing. Bits recorded
+  before the compromise stay as history; nothing can complete them.
+* Recovery is unchanged from ESCROW-2.1. From `window_end + liveness_window`,
+  `LivenessSettle` (paused or not) promotes the best trusted checkpoint into a
+  fresh SETTLEABLE window, or refunds every net deposit when there is none.
+  `Challenge` (inside the window) and `AnnulByConsent` remain available.
+* The DISPUTED resolver-timeout exit already paid only a trusted settlement.
+* A key retired **without** compromise stays trusted: its settlements finalize
+  and complete by consent as before.
+* A resolver `Uphold` is an adjudicated payout. The frozen resolver policy
+  names no key-trust condition, so an `Uphold` of a compromised settlement is
+  still possible. The resolver should `Replace` or `Annul` such a dispute
+  instead.
+
 ## Trust roots and residuals
 
 * The admin controls the signer registry (`AddSignerKey`), so an admin
@@ -105,10 +129,9 @@ the frozen CONSENT/ANNUL digests or a proof of possession would close that.
   cannot withdraw after `Start`.
 * The chain-level wasm admin (the code-migration admin set at instantiate) can
   replace the contract code and is the ultimate trust root.
-* `Finalize` still pays a stored settlement whose signer key was marked
-  compromised after it was accepted, once its challenge window has closed. Keep
-  the contract paused until such games have been challenged or have reached
-  their SETTLEABLE liveness exit (which does not pay a compromised settlement).
+* A compromised stored settlement waits for its SETTLEABLE liveness exit
+  (`window_end + liveness_window`) unless a seat challenges it or every seat
+  signs an annul. Recovery is delayed, never blocked.
 * Emergency rotation: submit `RetireSignerKey{compromised: true}` and the fresh
   checkpoints in one transaction. Otherwise a leaked key can still post between
   `Pause` and the retirement (Checkpoint works while paused), and ANNUL

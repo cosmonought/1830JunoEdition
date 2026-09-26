@@ -17,7 +17,7 @@ use crate::msg::{
 };
 use crate::payout::proportional_split;
 use crate::state::{
-    Game, GameState, CHECKPOINTS, CONFIG, GAMES, NEXT_GAME_ID, NEXT_SIGNER_KEY_ID, SIGNER_KEYS,
+    Game, GameState, CHECKPOINTS, CONFIG, NEXT_GAME_ID, NEXT_SIGNER_KEY_ID, SIGNER_KEYS,
 };
 
 const DEFAULT_LIMIT: u32 = 10;
@@ -119,16 +119,11 @@ fn game(deps: Deps, chain_game_id: u64) -> StdResult<GameResponse> {
 
 fn games(deps: Deps, start_after: Option<u64>, limit: Option<u32>) -> StdResult<GamesResponse> {
     let limit = limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT) as usize;
-    let games = GAMES
-        .range(
-            deps.storage,
-            start_after.map(Bound::exclusive),
-            None,
-            Order::Ascending,
-        )
+    // `storage::games_after` converts every stored game to the public `Game`.
+    let games = crate::storage::games_after(deps.storage, start_after)
         .take(limit)
         .map(|item| {
-            item.map(|(_, g)| GameSummary {
+            item.map(|g| GameSummary {
                 chain_game_id: g.chain_game_id,
                 state: g.state,
                 creator: g.creator.to_string(),

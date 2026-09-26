@@ -34,7 +34,7 @@ use crate::payload::{fixed_bytes, Payload, PayloadUse};
 use crate::payout::{proportional_split, weights_have_positive_sum};
 use crate::state::{
     CheckpointRecord, Config, Game, GameState, Outcome, PayloadRecord, Route, SignerKey,
-    CHECKPOINTS, GAMES, SIGNER_KEYS,
+    CHECKPOINTS, SIGNER_KEYS,
 };
 
 /// Roster bounds (A3: Level Playing Field money rooms may seat 7).
@@ -61,14 +61,16 @@ pub fn one_coin(info: &MessageInfo, denom: &str) -> Result<Uint128, ContractErro
     }
 }
 
+/// Reads a game (stored in the storage-only shape, converted losslessly; see
+/// `storage`).
 pub fn load_game(storage: &dyn Storage, chain_game_id: u64) -> Result<Game, ContractError> {
-    GAMES
-        .may_load(storage, chain_game_id)?
+    crate::storage::load_game(storage, chain_game_id)?
         .ok_or(ContractError::GameNotFound { chain_game_id })
 }
 
+/// Writes a game in the storage-only shape (see `storage`).
 pub fn save_game(storage: &mut dyn Storage, game: &Game) -> Result<(), ContractError> {
-    GAMES.save(storage, game.chain_game_id, game)?;
+    crate::storage::save_game(storage, game)?;
     Ok(())
 }
 

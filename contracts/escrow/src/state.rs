@@ -332,6 +332,9 @@ pub const SIGNER_KEYS: Map<u16, SignerKey> = Map::new("signer_keys");
 /// Compressed pubkey → key_id, so one key can never be registered twice (a
 /// compromised key could otherwise live on under a second id).
 pub const SIGNER_PUBKEY_INDEX: Map<&[u8], u16> = Map::new("signer_pubkey_index");
-pub const GAMES: Map<u64, Game> = Map::new("games");
+// Games live under the `games` namespace, owned by the private `storage`
+// module (storage-only `StoredGame` shape; read and written only through
+// `helpers::{load_game, save_game}` and the `Games` query).
+
 /// (chain_game_id, signer key_id) → the latest checkpoint signed by that key.
 pub const CHECKPOINTS: Map<(u64, u16), CheckpointRecord> = Map::new("checkpoints");

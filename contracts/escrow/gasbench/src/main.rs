@@ -19,7 +19,11 @@
 //!   size / signature costs of the enclosing transaction are not modelled.
 //!
 //! Output: a Markdown report on stdout and every row as JSON (argv[2]).
+//! With GASBENCH_TRACE=<file>, it also writes a semantic trace (see
+//! `World::trace`) for comparing two builds of the contract.
+use std::io::Write;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Mutex};
 
 use bech32::{Bech32, Hrp};
@@ -86,10 +90,14 @@ impl Ops {
     }
 }
 
+/// Every write of one call: (key, Some(value)) for a set, (key, None) for a remove.
+type WriteLog = Arc<Mutex<Vec<(Vec<u8>, Option<Vec<u8>>)>>>;
+
 /// MockStorage plus an exact count of what the contract asked of the store.
 struct Metered {
     inner: MockStorage,
     ops: Arc<Mutex<Ops>>,
+    log: WriteLog,
 }
 
 impl Storage for Metered {
@@ -130,16 +138,28 @@ impl Storage for Metered {
             o.writes += 1;
             o.write_bytes += PREFIX_LEN + key.len() as u64 + value.len() as u64;
         }
+        self.log
+            .lock()
+            .unwrap()
+            .push((key.to_vec(), Some(value.to_vec())));
         self.inner.set(key, value)
     }
 
     fn remove(&mut self, key: &[u8]) -> BackendResult<()> {
         self.ops.lock().unwrap().removes += 1;
+        self.log.lock().unwrap().push((key.to_vec(), None));
         self.inner.remove(key)
     }
 }
 
 type VmCache = Cache<MockApi, Metered, MockQuerier>;
+
+static TRACE: Mutex<Option<std::io::BufWriter<std::fs::File>>> = Mutex::new(None);
+static WORLD_SEQ: AtomicUsize = AtomicUsize::new(0);
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
 
 // ------------------------------------------------------------------ keys
 fn sha256(parts: &[&[u8]]) -> [u8; 32] {
@@ -298,6 +318,9 @@ struct World {
     checksum: Checksum,
     storage: Option<MockStorage>,
     ops: Arc<Mutex<Ops>>,
+    log: WriteLog,
+    world_id: usize,
+    step: usize,
     api: MockApi,
     height: u64,
     time: u64,
@@ -333,6 +356,9 @@ impl World {
             checksum,
             storage: Some(MockStorage::new()),
             ops: Arc::new(Mutex::new(Ops::default())),
+            log: Arc::new(Mutex::new(Vec::new())),
+            world_id: WORLD_SEQ.fetch_add(1, AtomicOrdering::SeqCst),
+            step: 0,
             api: MockApi::default().with_prefix("juno"),
             height: 1_000,
             time: GENESIS,
@@ -380,12 +406,14 @@ impl World {
 
     fn run(&mut self, call: Call) -> Result<Outcome, String> {
         *self.ops.lock().unwrap() = Ops::default();
+        self.log.lock().unwrap().clear();
         self.height += 1;
         let backend = Backend {
             api: self.api,
             storage: Metered {
                 inner: self.storage.take().unwrap(),
                 ops: self.ops.clone(),
+                log: self.log.clone(),
             },
             querier: MockQuerier::new(&[]),
         };
@@ -431,13 +459,95 @@ impl World {
     fn exec(&mut self, sender: &str, msg: &ExecuteMsg, funds: u128) -> Outcome {
         let bytes = serde_json::to_vec(msg).unwrap();
         let sender = sender.to_string();
-        self.run(Call::Execute(&sender, &bytes, funds))
+        let out = self
+            .run(Call::Execute(&sender, &bytes, funds))
             .unwrap_or_else(|e| {
                 panic!(
                     "execute failed: {e}\nmsg: {}",
                     String::from_utf8_lossy(&bytes)
                 )
+            });
+        if TRACE.lock().unwrap().is_some() {
+            self.trace(&sender, msg, funds, &out);
+        }
+        out
+    }
+
+    /// Trace mode (GASBENCH_TRACE=<file>): one JSON line per execute with the
+    /// response (attributes, events, messages, data), every storage write, and
+    /// every query-visible view of every game afterwards. Values under the
+    /// `games` namespace are replaced by a marker, because their storage shape
+    /// may legitimately change; the public views must not. Two traces of the
+    /// same scenarios on different builds are compared byte for byte.
+    fn trace(&mut self, sender: &str, msg: &ExecuteMsg, funds: u128, out: &Outcome) {
+        const GAMES_NS: &[u8] = b"\x00\x05games";
+        let writes: Vec<Value> = self
+            .log
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| {
+                let value = match v {
+                    Some(_) if k.starts_with(GAMES_NS) => json!("<games record>"),
+                    Some(v) => json!(hex(v)),
+                    None => Value::Null,
+                };
+                json!({"key": hex(k), "value": value})
             })
+            .collect();
+        let saved_height = self.height;
+        let views = self.views();
+        self.height = saved_height;
+        self.step += 1;
+        let line = json!({
+            "world": self.world_id, "step": self.step, "sender": sender, "funds": funds.to_string(),
+            "msg": serde_json::to_value(msg).unwrap(), "response": out.ok, "writes": writes, "views": views,
+        });
+        let mut t = TRACE.lock().unwrap();
+        let w = t.as_mut().unwrap();
+        writeln!(w, "{line}").unwrap();
+    }
+
+    fn query_try(&mut self, msg: &QueryMsg) -> Value {
+        let bytes = serde_json::to_vec(msg).unwrap();
+        match self.run(Call::Query(&bytes)) {
+            Ok(out) => {
+                let b64: String = serde_json::from_value(out.ok).unwrap();
+                serde_json::from_slice(&Binary::from_base64(&b64).unwrap()).unwrap()
+            }
+            Err(e) => json!({ "error": e }),
+        }
+    }
+
+    /// Every query-visible view: config, the games list, and per game the
+    /// Game, Seats, Checkpoints and SettlementPreview responses.
+    fn views(&mut self) -> Value {
+        let config = self.query_try(&QueryMsg::Config {});
+        let games = self.query_try(&QueryMsg::Games {
+            start_after: None,
+            limit: Some(30),
+        });
+        let ids: Vec<u64> = games["games"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|g| g["chain_game_id"].as_u64().unwrap())
+            .collect();
+        assert!(
+            ids.len() < 30,
+            "trace views assume fewer than 30 games per world"
+        );
+        let mut per_game = serde_json::Map::new();
+        for id in ids {
+            let v = json!({
+                "game": self.query_try(&QueryMsg::Game { chain_game_id: id }),
+                "seats": self.query_try(&QueryMsg::Seats { chain_game_id: id }),
+                "checkpoints": self.query_try(&QueryMsg::Checkpoints { chain_game_id: id }),
+                "preview": self.query_try(&QueryMsg::SettlementPreview { chain_game_id: id }),
+            });
+            per_game.insert(id.to_string(), v);
+        }
+        json!({"config": config, "games": games, "per_game": per_game})
     }
 
     fn query_raw(&mut self, msg: &QueryMsg) -> (Vec<u8>, Outcome) {
@@ -822,6 +932,10 @@ impl Report {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let wasm = std::fs::read(&args[1]).expect("wasm path");
+    if let Ok(path) = std::env::var("GASBENCH_TRACE") {
+        let file = std::fs::File::create(path).expect("trace file");
+        *TRACE.lock().unwrap() = Some(std::io::BufWriter::new(file));
+    }
     let json_out = args
         .get(2)
         .cloned()
@@ -1553,5 +1667,8 @@ fn main() {
             x.sends,
             x.est_total()
         );
+    }
+    if let Some(w) = TRACE.lock().unwrap().as_mut() {
+        w.flush().unwrap();
     }
 }

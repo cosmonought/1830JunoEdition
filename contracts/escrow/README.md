@@ -1,4 +1,4 @@
-# eighteen-cosmos-escrow (ESCROW-2, corrected by ESCROW-2.1 and ESCROW-2.2)
+# eighteen-cosmos-escrow (ESCROW-2, corrected by ESCROW-2.1 and ESCROW-2.2; storage reshaped by ESCROW-2.3)
 
 A CosmWasm 1.5 settlement escrow for Juno money rooms. It is a vault, a deposit
 holder, a roster record, a secp256k1 signature verifier, a settlement/challenge
@@ -35,9 +35,11 @@ profile, and the library denies `clippy::arithmetic_side_effects` outside tests.
 | `src/payout.rs` | `floor(pool·wᵢ/Σw)` in `Uint256`, checked downcast, dust; subsidy and bond arithmetic |
 | `src/helpers.rs` | guards (state → role → pause → rest), payload-vs-game checks, the trusted sequence floor, consent-key uniqueness and verification, `pay_out`, `refund_all` |
 | `src/execute/*.rs` | funding (create/join/withdraw/cancel/consent key), play (start/checkpoint/settle/consent/finalize), dispute (challenge/resolve/annul/liveness), admin |
+| `src/storage.rs` | the storage-only `StoredGame` shape under `games`: private map, lossless `Game` conversions, and the only read/write/range paths (ESCROW-2.3) |
 | `src/query.rs` | config, games (with `trusted_seq` and every open deadline), seats, checkpoints (with the liveness candidate), signer keys, settlement preview |
 | `schema/` | generated JSON schema of every message and response (the ESCROW-3 client ABI) |
 | `testdata/` | independent Python vector generator, its output (`payload_vectors_v1.json`), and the SET-0A rev 2 payout goldens |
+| `scripts/` | `wasm-gate.sh` (optimizer build, ≤ 90 locals per function, every `cosmwasm-check`) and `wasm_locals.py` (the per-function local count) |
 | `gasbench/` | stand-alone gas harness that runs the optimized wasm in cosmwasm-vm 3.0.5 (own workspace and lockfile; see its README) |
 
 ## Tests
@@ -127,20 +129,26 @@ The deployable artifact must come from the official optimizer
 (`cosmwasm/optimizer:0.16.1`, which builds only `contracts/*` members). Record
 the image digest and the artifact's SHA-256. `gasbench/` holds the full recipe.
 
-**Acceptance.** Run `cosmwasm-check` from every VM line the target chain may
-run: 1.5.x, 2.2.9, 3.0.5 and 3.0.9.
+**Acceptance.** Run `scripts/wasm-gate.sh`. It fails when any function
+declares more than 90 locals, and it runs every `cosmwasm-check` listed in
+`COSMWASM_CHECK`. Use 1.5.x, 2.2.9, 3.0.5 and 3.0.9; at least one must be
+2.2.9+ or 3.0.9+.
 * cosmwasm-vm 2.2.9 and 3.0.9 (bundled by wasmvm v2.2.8 and v3.0.7) reject any
   function with more than 100 locals.
-* A 2026-09-26 MVP build of this crate (Rust 1.95 + binaryen 116) failed that
-  check. `cosmwasm_std::from_json::<state::Game>` reaches 135 locals after
-  `wasm-opt -Os` inlines the whole `Game` deserializer.
-* Setting `opt-level` `s` or `z` for the package still gives 130 or 124 locals.
-* Profile-wide `lto = true`, `codegen-units = 1` and `opt-level` `s`/`z` reach 98 locals.
-  That margin is only 2, and VM gas roughly doubles.
-* The durable fix is a storage-only `Game` representation with fewer top-level
-  fields (ESCROW-2.3).
-* Chains on those VMs refuse to store such an artifact. Check every new
-  artifact before a StoreCode.
+* Before ESCROW-2.3, `cosmwasm_std::from_json::<state::Game>` reached 135
+  locals after `wasm-opt -Os`. The derived visitor of the flat 27-field `Game`
+  alone had 100, and the optimizer inlined every nested visitor into it.
+  Profile settings (`opt-level`, `lto`) reached 98 at best.
+* ESCROW-2.3 stores games in a storage-only shape instead (`src/storage.rs`):
+  the same fields, regrouped into four boxed objects.
+  * With the same build route, the largest function now declares 63 locals, and
+    all four checkers pass.
+  * The public `Game`, every message, query and the schema are unchanged.
+  * Each stored record is 46 bytes larger (≈ +1.5k SDK gas per game write).
+* **No migration:** the stored shape changed without a state migration. That is
+  safe only because the contract has never been deployed. A pre-2.3 instance,
+  if one ever existed, must not be migrated in place to this code: every game
+  would stop loading.
 
 **Gas.** `gasbench/` runs the optimized wasm in cosmwasm-vm 3.0.5 and reports
 VM gas plus modelled KV/event gas for every path.

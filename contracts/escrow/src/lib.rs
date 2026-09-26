@@ -20,5 +20,6 @@ pub mod payload;
 pub mod payout;
 pub mod query;
 pub mod state;
+mod storage;
 
 pub use crate::error::ContractError;

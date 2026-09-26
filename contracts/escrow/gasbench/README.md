@@ -51,6 +51,27 @@ cd contracts/escrow/gasbench
 cargo run --release -- ../../../artifacts/eighteen_cosmos_escrow.wasm gas-rows.json > gas-table.md
 ```
 
+### Semantic trace: compare two builds
+
+With `GASBENCH_TRACE=<file>`, the harness also writes one JSON line per
+execute. Each line holds:
+- the message, sender and funds;
+- the full response (attributes, events, messages, data);
+- every storage write (key and value). Values under the `games` namespace are
+  masked, because their storage shape may change;
+- every query-visible view after the call: `Config`, `Games`, and per game
+  `Game`, `Seats`, `Checkpoints` and `SettlementPreview`.
+
+Two builds that must behave identically produce byte-identical traces:
+
+```sh
+GASBENCH_TRACE=before.jsonl cargo run --release -- before.wasm before.json > /dev/null
+GASBENCH_TRACE=after.jsonl  cargo run --release -- after.wasm  after.json  > /dev/null
+cmp before.jsonl after.jsonl
+```
+
+The gas rows are identical with and without tracing.
+
 ### Linking on recent Rust toolchains (Linux x86_64)
 
 wasmer-vm 4.x/5.x imports the unmangled symbol `__rust_probestack`. Recent Rust

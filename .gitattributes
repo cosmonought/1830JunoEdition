@@ -1,2 +1,11 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# INTEGRATION-1 (2026-09-26): byte-exact certified fixtures stay LF in every checkout, including Git for
+# Windows' default core.autocrlf=true. The escrow Juno regression oracle and the SET-0B goldens compare these
+# files' raw bytes (SHA-256 pins); a CRLF checkout would report a certified-byte change that never happened.
+# Only the working-tree line ending is pinned: the committed blobs are LF already and do not change.
+contracts/escrow/testdata/** eol=lf
+contracts/escrow/schema/** eol=lf
+contracts/escrow/scripts/*.sh eol=lf
+frontend/src/utils/__fixtures__/settlement/** eol=lf

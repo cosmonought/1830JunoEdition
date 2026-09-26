@@ -440,3 +440,55 @@ export function auctionLifecycleRefusal(
   }
   return auctionRefusal(state, waterfall, msg);
 }
+
+/* ---- DA-4: the auction's own pointer -- who opens it, who acts, and who holds the Priority Deal after it ---- */
+
+/* ==================================================================
+    DA-4 (DA-F3, DA-F4, DA-F5): ONE POINTER FOR THE AUCTION'S TURN AND ITS PRIORITY DEAL
+   ==================================================================
+   THE RULE (2018 §1.2, §1.2.2, §1.2.3; the 48-page book's C-2.2, which prints the same text). The buy-bid-turn
+   sequence starts with the Priority Deal holder. A face-value purchase of the lowest private gives the Priority
+   Deal to "the player to your left", and the sequence goes on from him. The SV marked down to $0 is bought by "the
+   next player to take his buy-bid-turn ... (i.e., it is free but is treated as a purchase)" -- a purchase, so the
+   card passes to the taker's left as well. A bid award -- a lone bid in the cascade, or a contest's winner --
+   does NOT move the card ("The Priority Deal does not change hands after an auction"), and after one "the buy-bid-
+   turn sequence then resumes with the player with the priority deal card".
+
+   THE ATOM'S CURSOR ALREADY CARRIES THAT HISTORY, and it is the one pointer the auction owns. A direct purchase
+   leaves `current_turn` on the purchaser's left -- the card's new holder (`WaterfallBuyLowest`: `nextSeat` of the
+   buyer; the $0 branch: `nextSeat` of the taker). A contest does not move it (#338 preserves it; the main rotation
+   is frozen until the contest resolves, S7-15), and neither does the cascade that awards the lone bids. Every
+   contest opens INSIDE the cascade of a direct purchase or of the contest before it -- a bid on the lowest private
+   is refused (A1 / M2), so there is no other door -- which is why the preserved cursor is still the card's holder
+   when a contest ends and the sequence resumes. The auction ENDS only inside such a chain, since its last private
+   leaves by a direct purchase or by a resolution cascading from one; nothing else removes a private. So once no
+   private remains (the only board `OpenStockRound` applies to, DA-3), the cursor names the player to the left of
+   the last direct purchaser -- the Priority Deal the auction hands over -- and no second record of it is kept.
+
+   WHY NOT A NEW FIELD. An explicit "holder" or "last purchaser" on the atom would be a second record of what the
+   cursor already says, updated by the same arms; and every standard board carries the atom, so the field would
+   change every stored board and the frozen goldens, which DA-4 must not repin. The cursor is authoritative state
+   already: rebuilt from the log on every replay, restore and `RevertTo`, and read by `actingAddress` (#1232).
+
+   WHAT CHANGED. The seat (`active_player_index`) was the pointer `OpenStockRound` read (#1235), and the seat is a
+   MIRROR: it steps once per main-rotation message, so it drifts wherever the cursor moves by any other amount --
+   by two on the $0 taking (DA-F5), and not at all across the Operating Rounds the Delayed Auction follows (DA-F4).
+   Now the handoff reads the cursor (`auctionPriorityDealSeat`), the reducer re-seats the mirror on the cursor after
+   every main-rotation auction message (`sandboxSession.ts`), and the Delayed Auction's arming seats BOTH on the
+   Priority Deal holder going in (DA-F3) -- which the standard deal already does, seat 0 being that holder. */
+
+/** The seat the auction atom's cursor names, or `null` when there is no atom or its cursor names nobody seated
+ *  (before a deal, `current_turn` is `""` -- #542). The same guard `actingAddress` applies (#1232). */
+export function auctionCursorSeat(state: GameStateResponse): number | null {
+  const cursor = state.waterfall?.current_turn;
+  if (!cursor) return null;
+  const seat = state.player_addresses.indexOf(cursor);
+  return seat === -1 ? null : seat;
+}
+
+/** DA-4 (DA-F4, DA-F5): the seat the auction hands the Priority Deal to when it closes -- the player to the left of
+ *  its last direct purchaser, which is where the atom's cursor stands once no private remains (see the note above).
+ *  A board with no seated auction atom has no auction record to read, so the Priority Deal stays where it was. */
+export function auctionPriorityDealSeat(state: GameStateResponse): number {
+  return auctionCursorSeat(state) ?? state.priority_deal_index;
+}

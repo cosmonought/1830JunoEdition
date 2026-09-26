@@ -77,7 +77,12 @@ import {
 import { BO_TICKER, SV_PRIVATE_ID, eraForPhase } from "./gameConstants";
 /* Design note #1580 (Batch 7.3): the private auction's one authority. Asked ABOVE the auction atom, because
    that atom runs before the board -- see `applySandboxActionOnBoard`. */
-import { auctionLifecycleRefusal, isAuctionLifecycleMessage } from "./auctionAuthority";
+import {
+  auctionCursorSeat,
+  auctionLifecycleRefusal,
+  auctionPriorityDealSeat,
+  isAuctionLifecycleMessage,
+} from "./auctionAuthority";
 /* Design notes #1590-#1595 (Batch 7.4): the ordinary offers' one hold and their three authorities -- the
    corporation's private purchase, the intercorporate train sale, and the player <-> player private trade --
    asked here by identity and at ingress with the sentence, the #1570/#1580 shape. */
@@ -3014,9 +3019,56 @@ function settleAuctionLifecycle(state: GameStateResponse, msg: SandboxLogMsg): G
     state.current_round_type === "WaterfallAuction" &&
     state.private_auction_complete !== true
   ) {
-    waterfall = { ...waterfall, waterfall_auction_active: true };
+    return openAuctionOnPriorityDeal(state, waterfall);
   }
   return waterfall === state.waterfall ? state : { ...state, waterfall };
+}
+
+/* ==================================================================
+    DA-4 (DA-F3): THE AUCTION OPENS WITH THE PRIORITY DEAL HOLDER -- ON BOTH ATOMS
+   ==================================================================
+   §1.2: "Beginning with the player with the priority deal card and proceeding clockwise, each player takes a
+   buy-bid-turn." The standard deal already begins there: the atom is seated on dealt seat 0 (`waterfallForRoster`),
+   and seat 0 holds the Priority Deal at genesis (`priority_deal_index: 0`). The Delayed Auction armed an atom that
+   was still seated where the DEAL left it -- dealt seat 0 -- while the board's seat stood on the last operating
+   president (the Operating Round's cursor, `operatingOrder.ts`) and the card was wherever the last Stock Round put
+   it (probe Q1: acting A, holder B, last president C). #905's "the Priority Deal is untouched ... seeded by whoever
+   holds it going into the auction" was the ruling; nothing had written it down.
+
+   SO THE ARMING SEATS BOTH: the atom's cursor on the holder (`priority_deal_index`, authoritative since the last
+   Stock Round ended), and the board's seat on the same player, so the mirror starts where the auction does rather
+   than where the Operating Round left it. The turn flags die with the seat, as they do on every seat move made
+   outside the two seat-moving functions (#745 / #1172 / #1570 / #1443, the Stock Round opening's rule). Replayed
+   from the log alone: the holder is on the board at the trigger, so a `RevertTo` behind the trigger and a replay
+   back into it seat whoever holds the card on the rebuilt board. */
+function openAuctionOnPriorityDeal(
+  state: GameStateResponse,
+  waterfall: WaterfallStateResponse,
+): GameStateResponse {
+  const opener = state.player_addresses[state.priority_deal_index];
+  if (!opener) return { ...state, waterfall: { ...waterfall, waterfall_auction_active: true } };
+  return {
+    ...state,
+    waterfall: { ...waterfall, waterfall_auction_active: true, current_turn: opener },
+    active_player_index: state.priority_deal_index,
+    turn_action_taken: false,
+    bought_this_turn: 0,
+    bought_this_turn_company: undefined,
+    stock_turn_stage: undefined,
+  };
+}
+
+/** DA-4 (DA-F5): during the auction the board's seat MIRRORS the auction's cursor -- re-seated on it after every
+ *  main-rotation auction message, rather than trusted to have stepped by the same amount. It steps by one in the
+ *  seat-moving function every arm below still calls (which keeps their turn flags and pass streak exactly as they
+ *  were); the cursor steps by one too, EXCEPT on the $0 taking, where it passes the taker as well (§1.2.3, "treated
+ *  as a purchase") and the one-step mirror fell a seat behind for the rest of the auction. #1232's lesson from the
+ *  other side: the seat is a mirror, and a mirror is re-read from what it mirrors. A board whose atom names nobody
+ *  seated (before a deal, or a legacy board with no atom) keeps the one-step seat it always had. */
+function seatOnAuctionCursor(state: GameStateResponse): GameStateResponse {
+  if (state.current_round_type !== "WaterfallAuction") return state;
+  const seat = auctionCursorSeat(state);
+  return seat === null || seat === state.active_player_index ? state : { ...state, active_player_index: seat };
 }
 
 /* Design note #1613: the four authoritative holds in their priority. The composition itself lives in
@@ -4714,6 +4766,10 @@ function settleRoundTransitions(
      * THE PRIORITY DEAL IS UNTOUCHED and that is the ruling: seeded by whoever holds it going into the
      * auction. It is already in `priority_deal_index`, and `OpenStockRound` seats it when the auction hands
      * off to the Stock Round that follows.
+     * DA-4 (DA-F3, DA-F4): the ruling is now carried out, not assumed. The holder going in OPENS the auction --
+     * `openAuctionOnPriorityDeal` seats the atom's cursor and the board's seat on him when the atom is armed
+     * (below, `settleAuctionLifecycle`) -- and `OpenStockRound` hands the card to whoever the auction's own
+     * pointer names when it closes (`auctionPriorityDealSeat`), never to the seat the Operating Round left.
      *
      * IF NO 3-TRAIN IS EVER BOUGHT, no auction ever happens and the privates never enter play. That is the
      * honest consequence of a dynamic trigger rather than a bug, and it is reachable on a short bank -- see
@@ -5013,8 +5069,18 @@ function applyOneAction(
 
        APPLIED TO BOTH OPENINGS. The delayed variant (#905) closes its auction mid-game and the same rule
        reads the same seat; #905's "priority untouched" was the same constant misread as a ruling, and one
-       rule for "who opens after an auction" is what the physical game has. */
-    const priority = state.active_player_index;
+       rule for "who opens after an auction" is what the physical game has.
+
+       DA-4 (DA-F4, DA-F5): THE SAME ANSWER, READ FROM THE AUCTION'S OWN POINTER. The rule is §1.2's: the card
+       goes to the left of each face-value buyer (the $0 SV "is treated as a purchase") and does not change
+       hands after a bid award -- so "the last player who acted" above is precisely the last DIRECT purchaser.
+       The seat was a mirror of the atom's cursor and held that answer only while the two stepped together.
+       They did not on the $0 taking (the cursor passes the taker too; the seat stepped once -- DA-F5, probe R1:
+       SR1 opened by the last buyer himself), nor under the Delayed Auction (the seat began on the last
+       operating president -- DA-F4, probe Q1). `auctionPriorityDealSeat` reads the cursor, which at this point
+       -- no private left, DA-3's gate -- names the player to the left of the last direct purchaser. Every stored
+       standard log without a $0 taking hands off to the same seat as before (the DA-4 corpus scan). */
+    const priority = auctionPriorityDealSeat(state);
     return {
       ...state,
       current_round_type: "StockRound",
@@ -5434,7 +5500,8 @@ function applyOneAction(
   }
 
   if ("WaterfallPass" in msg) {
-    return recordPass(state);
+    // DA-4 (DA-F5): re-seated on the auction's cursor, which the $0 taking moves past the taker as well.
+    return seatOnAuctionCursor(recordPass(state));
   }
 
   // ---- Seat-driven rounds: the Waterfall Auction and the Stock Round.
@@ -5773,7 +5840,12 @@ function applyOneAction(
     return state;
   }
 
-  if ("WaterfallBuyLowest" in msg || "WaterfallBidHigher" in msg || "BidOnPrivate" in msg) {
+  if ("WaterfallBuyLowest" in msg || "WaterfallBidHigher" in msg) {
+    return seatOnAuctionCursor(advanceSeat(state)); // DA-4 (DA-F5): the seat mirrors the auction's cursor
+  }
+  /* The legacy message is not the atom's (it has no arm there, D-23), so there is no cursor to mirror: a legacy
+     board that still applies it (D-9) steps the seat as it always did. */
+  if ("BidOnPrivate" in msg) {
     return advanceSeat(state);
   }
 

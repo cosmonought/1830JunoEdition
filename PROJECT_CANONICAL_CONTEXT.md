@@ -3,7 +3,7 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-09-27, by the repository/context prune (Phase 2.5), on top of `81fd037` (DA-8).
+**Last updated:** 2026-09-27, by the repository/context prune (Phase 2.5, `68f6baf`) and the follow-up that recorded the roadmap. It builds on DA-8 (`81fd037`).
 
 **Where the documents live.** They are in two places:
 
@@ -13,7 +13,7 @@ are the current truth, what must not change, and how work is done here.
 When this file names a Project document, it writes `Project: claude/<name>`.
 
 > **For future implementation sessions:**
-> 1. Read this file first.
+> 1. Read this file first, then the roadmap in `ROADMAP_3_2_REMAINING_WORK.md`.
 > 2. Then read only the canonical documents listed in §C for the current phase. For ESCROW-3A, use the reading order in §C.3.
 > 3. Do not read the whole of `RULES_HARDENING_BACKLOG.md`: it is 600 KB. Read the Part or item you need.
 > 4. Do not recursively read `archive/`, `docs/ai_architecture/` or the Project's historical reports unless the current task requires historical provenance, or a current document points you there.
@@ -62,27 +62,28 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 
 ---
 
-## B. Current roadmap (remaining dependency path)
+## B. Current roadmap
+
+**The canonical roadmap is [`ROADMAP_3_2_REMAINING_WORK.md`](ROADMAP_3_2_REMAINING_WORK.md)** (the owner's ROADMAP 3.2). It holds the phases, their status, their estimates and where each phase's scope is defined.
+The owner's brief for each pass sets that pass's exact scope.
 
 ```text
-Repo prune (this pass, done)
-→ ESCROW-3A
-→ ESCROW-3B
-→ ESCROW-4
-→ LIVE-4 / LIVE-5 / LIVE-6
-→ Junox E2E
-→ Rust retirement
-→ frontend cleanup
-→ production repo extraction
-→ UX backlog/polish
-→ production playtest
-→ release hardening
+Phases 1, 2 and 2.5: COMPLETE
+→ 3: ESCROW-3A → ESCROW-3B → ESCROW-4
+→ 4: LIVE-4/5/6
+→ 5: Junox E2E
+→ 6: Rust retirement
+→ 7: frontend cleanup
+→ 8: production repo extraction
+→ 9: UI/UX backlog consolidation
+→ 10: UI/UX polish
+→ 11: near-production playtest
+→ 12: release hardening
 ```
 
-The owner's roadmap (ROADMAP 3.2) governs. It is **held by the owner and is not stored in the repository or the Project**.
-The owner's brief for each pass defines its scope. Where each step is defined today:
+Gno is parked.
 
-**ESCROW-3A — first gate** (Project `claude/DA8_RULES_V11_CLOSURE_2026-09-27.md` §10, §17), in order:
+**Next pass: ESCROW-3A.** Its first gate (Project `claude/DA8_RULES_V11_CLOSURE_2026-09-27.md` §10, §17), in order:
 1. Rerun the SET-0A audit against the v11 reducer.
 2. Build v11 goldens **beside** the v10 ones.
 3. Add `11` to `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` in its own reviewed change. `da8RulesV11Closure.test.ts` owns that literal.
@@ -90,7 +91,7 @@ The owner's brief for each pass defines its scope. Where each step is defined to
 
 DA-8 expects this to be mechanical, because the SYN boards rebuild byte-for-byte under v11 and only the pin differs.
 
-**ESCROW-3 — overall scope**, which 3A and 3B divide between them. The owner's brief sets the split; the docs do not record it.
+**ESCROW-3 — overall scope.** The roadmap names the split: 3A covers the money-game hosted prerequisites; 3B covers the Juno backend, signing and durable intents. The sources are:
 - Project `claude/GNOLAND1_CHAIN_NEUTRAL_ESCROW_INTERFACE_2026-09-26.md` §23:
   - items 1–9: `record_schema: 2` / `EscrowMoney`, deployment and trust policies, the Juno transport, the KMS signer, `SigningJournal`, `EscrowService`, `variantsDigestV1`, `SetupGame.escrow`, and tests;
   - obligations O-1…O-10.
@@ -98,22 +99,10 @@ DA-8 expects this to be mechanical, because the SYN boards rebuild byte-for-byte
 - RUST-RETIRE 2B.4, the config/env rename (`REACT_APP_CONTRACT_ADDRESS`) and the cw2 contract-name check (Project `claude/RUST_RETIREMENT_AUDIT_2026-09-26.md` §10).
 - Do not confuse ESCROW-3A/3B with `MIGRATION_PLAN.md`'s lowercase "3a/3b/3c" (legacy, archived), or with "ESCROW-3c" (forfeit/clemency weights, still `REASON_NOT_SUPPORTED`).
 
-**ESCROW-4** is the client: consent key, pinned deployment allowlist, independent consent verification (GNOLAND-1 F4), and multi-device consent keys (F-3).
-
-**LIVE-4 / 5 / 6** are defined only in Project `claude/LIVE_MULTIPLAYER_AWS_ARCHITECTURE_AUDIT_2026-09-25.md` §25:
-- LIVE-4: RNG and the compatibility tuple;
-- LIVE-5: AWS/DynamoDB, which must pass LIVE-3 design §20.3 and FI-1…29;
-- LIVE-6: certification.
-
-**Junox E2E** is the testnet (Junox / uni-7) end-to-end proof. Older docs call it "ESCROW-5".
-
-**Rust retirement**
-- Crate deletion (2C) comes after the Junox proof.
-- The escrow artifact built after deletion must be **byte-identical** to the one proven on Junox.
-- Plan: Project `claude/RUST_RETIREMENT_AUDIT_2026-09-26.md`. It is partly stale:
-  - the optimizer pin is now settled by ESCROW-B2;
-  - 2A is done;
-  - 2B.3 was done in LIVE-2D.
+**Also note.** "Junox E2E" is called "ESCROW-5" in older docs. The Rust-retirement plan (`claude/RUST_RETIREMENT_AUDIT_2026-09-26.md`) is partly stale:
+- the optimizer pin is now settled by ESCROW-B2;
+- 2A is done;
+- 2B.3 was done in LIVE-2D.
 
 ---
 
@@ -124,6 +113,7 @@ DA-8 expects this to be mechanical, because the SYN boards rebuild byte-for-byte
 | Document | What it is |
 |---|---|
 | `PROJECT_CANONICAL_CONTEXT.md` | This file |
+| `ROADMAP_3_2_REMAINING_WORK.md` | **The canonical roadmap:** phases, status, estimates and scope sources |
 | `RULES_HARDENING_BACKLOG.md` | The living ledger. Read it by section, never whole. Part B: open rules items. **Part C: the one UI/UX backlog (U-items).** Part D: owner decisions (D-n). Part E: the replay/version ledger |
 | `VARIANT_CERT_DELAYED_AUCTION_AUDIT_2026-09-25.md` | The current Delayed Auction audit, at revision 11 (the DA closure record in the repo) |
 | `VISUAL_FLOURISH_BACKLOG.md` | The visual-polish backlog. Only for the UX backlog/polish phase |
@@ -270,6 +260,7 @@ npm run gamesDoctor -- scan-v10
 - Each pass writes one concise report to the Project as `claude/<PASS>_<DATE>.md`.
 - Update `RULES_HARDENING_BACKLOG.md` when rules items change.
 - Update this file when the current state, the canonical set or the invariants change.
+- Update `ROADMAP_3_2_REMAINING_WORK.md` when a phase closes, is re-scoped or is re-estimated.
 
 ---
 

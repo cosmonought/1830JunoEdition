@@ -188,16 +188,40 @@ describe("LIVE-2A transport limits", () => {
     try {
       assert.equal(DEFAULT_INGRESS_LIMITS.maxOutboundBufferedBytes, 8 * 1024 * 1024);
       const watcher = await roomDoc(port, BOB, gameId);
-      (watcher.socket as unknown as { _socket: { pause(): void } })._socket.pause();
+      const watcherTcp = (watcher.socket as unknown as { _socket: { pause(): void; resume(): void } })._socket;
+      watcherTcp.pause();
       const talker = await roomDoc(port, ALICE, gameId);
-      const line = "z".repeat(480);
-      for (let batch = 0; batch < 40 && server.ingress.slowConsumerClosed === 0; batch += 1) {
-        const before = talker.of("chat").length;
-        for (let n = 0; n < 25; n += 1) talker.send({ kind: "chat-send", gameId, text: line });
-        await until(() => talker.of("chat").length >= before + 25, "the talker's own chat frames");
+      /* LIVE-2F/3D (native Windows): ONE LINE AT A TIME, each echo read before the next line is sent. A chat push is the
+         whole transcript (up to 200 lines -- ~112 KB here, more than this test's 64 KiB cap), and server, watcher and
+         talker share this process's event loop. The old loop sent 25 lines, then waited: the server wrote up to 25
+         transcripts to the TALKER before the talker could read one. Linux loopback buffers absorb megabytes; Windows'
+         are far smaller, so the talker itself crossed the cap and was closed 1013 -- and the test timed out waiting for
+         its echoes. Paced like this, the talker's server-side buffer is empty before every send, so only the consumer
+         that really stopped reading can cross the cap. That, and the 1013 it is told, is the property. */
+      const lastLine = (): string | undefined => {
+        const frame = [...talker.frames].reverse().find((candidate) => candidate.kind === "chat");
+        const messages = (frame?.messages ?? []) as Array<{ text: string }>;
+        return messages[messages.length - 1]?.text;
+      };
+      const MAX_LINES = 2_000;
+      let sent = 0;
+      while (sent < MAX_LINES && server.ingress.slowConsumerClosed === 0) {
+        const text = `${sent}:${"z".repeat(470)}`;
+        talker.send({ kind: "chat-send", gameId, text });
+        sent += 1;
+        await until(() => lastLine() === text || server.ingress.slowConsumerClosed > 0 || !talker.open, `the talker's echo of line ${sent}`);
+        talker.frames.splice(0, talker.frames.length - 1); // only the newest transcript is needed: memory stays flat
       }
-      assert.equal(server.ingress.slowConsumerClosed, 1, "the paused watcher was closed as a slow consumer");
+      assert.equal(server.ingress.slowConsumerClosed, 1, `exactly one consumer -- the paused watcher -- crossed the cap (${sent} lines sent)`);
       assert.equal(talker.open, true, "the reader that keeps up is untouched");
+      /* What the watcher is TOLD: resumed, it reads what the kernel held, then the server's close frame. */
+      watcherTcp.resume();
+      assert.equal(await watcher.closed, 1013, "the consumer that stopped reading is closed 1013 (try again later)");
+      /* And the talker is still served after it. */
+      const after = `${sent}:after the close`;
+      talker.send({ kind: "chat-send", gameId, text: after });
+      await until(() => lastLine() === after, "the talker's echo after the watcher was closed");
+      assert.equal(server.ingress.slowConsumerClosed, 1);
     } finally {
       await stopServer(server);
     }

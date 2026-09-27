@@ -1896,7 +1896,7 @@ const STOCK_CARDS: readonly StockCard[] = [
       "Overall limit: a total number of certificates per player, Private Company certificates included, set by the player count — see Tables.",
       "Individual corporation limit: normally 5 certificates in one corporation (50–60%, since the President's Certificate is 20% but counts as one).",
       "Bank Pool limit: never more than 5 certificates of one corporation in the Bank Pool, which is what caps a sale.",
-      "A token in a yellow, orange or brown box relaxes the first two — see Special Stock Market Effects. A player pushed over a limit must sell down on their next Stock Round turn.",
+      "A token in a yellow, orange or brown box relaxes the first two — see Special Stock Market Effects. A player pushed over a limit must sell down on their next Stock Round turn, before buying or passing — as far as a legal sale can fix it; an excess no legal sale could cure is not owed.",
     ],
     detail: [],
   },

@@ -3582,6 +3582,26 @@ identically with `0ae252d`'s source and pass with only DA-5's reducer pass hold 
 player holding 100% of each corporation at a normal-zone price -- a curable cap excess #759 (iii) holds the pass for --
 so they were never a legal close; the two fixture builders now hold the sold-out corporations within the cap (60 / 40).
 No production code changed; RR2A-F1 and DA-5's pass hold are intact.
+**DA-7 (2026-09-27): RR2A-F2 CLOSED, C2-02 CLOSED, DA6-O1 / DA6-O2 CLOSED; the Delayed Auction certified on v10.**
+RR2A-F2: the four failures (`offerMatrix74Settlement` §15 :751, three `offerVerify74Final` V§4) were STALE TESTS -- each
+asked for a deep `RevertTo` the one-step undo (RV-6, LIVE-2A) correctly refuses; production was right (a revert
+rebuilds the engine, so a discarded future's `offer:<kind>:N` never survives, and a rebuilt legal prefix re-derives the
+same instance). The rewinds are now walked one decision at a time (`walkBack`, each step the Undo button's own reach),
+the deep jump is pinned refused with nothing appended, and §15's case undoes the acceptance and re-gives it (the same
+key, one settlement, byte-identical derived entries, a restore agreeing) -- no expectation was flipped to `refused`.
+C2-02: `RoomSession.submit` now settles a harmless duplicate consent answer (`harmlessDuplicateAnswer` on the judged
+board, the board unchanged, nothing derived) exactly as it settles an unchanged answer -- popped off the log, its nonce
+forgotten -- with the no-blame sentence `HARMLESS_DUPLICATE_ANSWER_SENTENCE`; ingress's #662 exemption and the shell's
+receipt (`actionWasRefused`, no REFUSED line) are unchanged; stored duplicates still replay as no-ops (no replay moves).
+`c202HarmlessDuplicate.test.ts` (5) and `stage102RefusalTransport` D1-D4 (expectations moved from "applied, appended" to
+"settled, nothing appended"). DA6-O1: the auction tutorial's all-pass page now states §1.2.3's two exclusive outcomes
+(the SV alone is marked down; once it is sold, the owned privates pay). DA6-O2: the Stock page's limit sentence carries
+the curable-only qualifier. Certification: `da7DelayedAuctionCertification.test.ts` (50) -- G-DA from the deal through a
+pinned room, T3 / T4 / T5 tails, the standard control, GR + UR composition, restore / replay / `RevertTo` at eight cut
+points. Filed, not fixed: **DA7-L1** (LOW, `OPEN`) -- outside the auction an off-turn seat's auction message is refused
+"It is not your turn." (the seat question runs before DA-3's round gate at ingress); refused at every layer, wording only.
+Fixture-shape sweep (tests closing a Stock Round through the reducer with a seat over a cap): none exercised; three
+latent shapes noted, unchanged. Record: `claude/DA7_DELAYED_AUCTION_CERTIFICATION_2026-09-27.md`.
 
 **S10-7. Engine tests and packaging.** 304 engine-adjacent suites still live in `frontend/src/utils/` (Jest
 `roots` + per-suite classification, Batch 1 §6d); a repo-root `shared/` package needs CRA's `ModuleScopePlugin`,

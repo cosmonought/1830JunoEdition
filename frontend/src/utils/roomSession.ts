@@ -84,6 +84,8 @@ import { normalizeForCommit } from "./serverIngress";
 /* #1685 (Stage 10.2, S10-1): the one definition of "the authority declined this" (`actionOutcome.ts`), and the
    reducer's own sentence for it where one owns up (#784) -- the same function the shell's receipt asks. */
 import { unchangedMeansRefused } from "../gameEngine/actionOutcome";
+/* C2-02 (DA-7): the consent answer that found nothing to answer -- settled for its sender, never recorded. */
+import { HARMLESS_DUPLICATE_ANSWER_SENTENCE, harmlessDuplicateAnswer } from "../gameEngine/harmlessDuplicate";
 import { refusalReasonFor } from "./refusedAction";
 
 /** An entry as this server stores it: the shared shape plus the nonce that makes a retry safe. */
@@ -630,17 +632,39 @@ export class RoomSession {
            (#784 -- the same function, on the same board, the shell's receipt asks), and a plain one otherwise.
        Stored logs are untouched: a no-op already on disk still replays as the no-op it always was. */
     /* #1687 (follow-up): asked of the board the message was judged on, so a consent answer that found nothing
-       to answer -- #662's harmless duplicate -- stays applied, and one that answered a standing offer does not. */
-    if (!settled.changed && settled.derived.length === 0 && unchangedMeansRefused(input.msg, boardBefore)) {
-      this.log.pop();
-      if (input.submissionId !== undefined) {
-        this.submissions.delete(this.submissionKey(input.actor, input.submissionId));
+       to answer -- #662's harmless duplicate -- is told apart from one that answered a standing offer and changed
+       nothing (a refusal like any other).
+       ==================================================================
+        C2-02 (DA-7, 2026-09-27): THE HARMLESS DUPLICATE IS SETTLED, NOT RECORDED
+       ==================================================================
+       FOUND BY LIVE-2F/3D: #1687 kept the harmless duplicate APPLIED AND APPENDED, like `CloseRoom`'s race loser. But
+       a consent answer's ingress exemption asks no seat question once there is nothing to answer, so ANY seated
+       player -- off turn, no party to any offer -- could commit one: an entry that did nothing, became the table's
+       last action (so the one-step undo of the real move beneath it was refused, RV-6), and could be repeated at the
+       submit budget until the log hit its 10,000-entry cap.
+       "HARMLESS" SAYS THE BOARD NEED NOT MOVE; IT NEVER SAID THE LOG MUST. It is now answered exactly as the other
+       unchanged answers below are -- taken back off the log (still the last entry: an unchanged board owes no derived
+       action, and `derived` is checked), its nonce forgotten, the engine not rebuilt -- with a sentence that says what
+       happened and blames nobody: there is no open offer, so nothing was recorded. What stays true of #662: the board
+       is untouched, no error of the rules is claimed, and a retry is idempotent (it meets the same board and the same
+       answer). The answer that DID answer -- the counterparty's first legal response -- changed the board and is
+       applied as always, and a retried copy of THAT submission is still the #1209 catch-up carrying its own entry.
+       Stored logs are untouched: a duplicate already committed replays as the no-op it always was. The shell's own
+       receipt (`actionWasRefused`) still reads the duplicate as no refusal, so a solo table stays silent. */
+    if (!settled.changed && settled.derived.length === 0) {
+      const harmless = harmlessDuplicateAnswer(boardBefore, input.msg);
+      if (harmless || unchangedMeansRefused(input.msg, boardBefore)) {
+        this.log.pop();
+        if (input.submissionId !== undefined) {
+          this.submissions.delete(this.submissionKey(input.actor, input.submissionId));
+        }
+        const kind = Object.keys(input.msg as Record<string, unknown>)[0] ?? "That move";
+        const reason = harmless
+          ? HARMLESS_DUPLICATE_ANSWER_SENTENCE
+          : refusalReasonFor(boardBefore, input.msg, { actor: input.actor, mapGrid: gridBefore }) ??
+            `${kind} was declined by the rules: the board did not change, and nothing was recorded.`;
+        return this.refusedFrame(reason, repaired, input.baseIndex);
       }
-      const kind = Object.keys(input.msg as Record<string, unknown>)[0] ?? "That move";
-      const reason =
-        refusalReasonFor(boardBefore, input.msg, { actor: input.actor, mapGrid: gridBefore }) ??
-        `${kind} was declined by the rules: the board did not change, and nothing was recorded.`;
-      return this.refusedFrame(reason, repaired, input.baseIndex);
     }
 
     return {

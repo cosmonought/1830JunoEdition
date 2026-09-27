@@ -27,7 +27,17 @@
 //   AnswerPrivateTrade        no trade offer (the trade settles in its answer, so there is no accepted state).
 //   AnswerFundingPrivateOffer no private offer, or one that is not a funding offer (settled or withdrawn).
 
+//
+// C2-02 (DA-7, 2026-09-27): WHAT A ROOM DOES WITH ONE. Still no refusal of the rules, and the board still does not move --
+// but a hosted room no longer RECORDS it (`RoomSession.submit`): the entry is taken back and the sender is told, in the
+// sentence below, that there was nothing to answer. The exemption at ingress is unchanged, and so is the shell's
+// receipt, which prints no REFUSED line for it.
+
 import type { GameStateResponse } from "./gameState";
+
+/** C2-02: the room's answer to a harmless duplicate -- what happened, blaming nobody. Nothing is appended. */
+export const HARMLESS_DUPLICATE_ANSWER_SENTENCE =
+  "There is no open offer to answer \u2014 it has already been answered or withdrawn, so nothing was recorded.";
 
 /** #1687: whether `msg` is a consent answer that finds nothing to answer on `state` -- a harmless duplicate. */
 export function harmlessDuplicateAnswer(state: GameStateResponse, msg: unknown): boolean {

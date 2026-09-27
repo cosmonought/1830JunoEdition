@@ -19,6 +19,7 @@ const { pendingOfferBlock } = require("../gameEngine/pendingOfferHold") as typeo
 const { RoomEngine } = require("../gameEngine/replayLog") as typeof import("../gameEngine/replayLog");
 const { sandboxReplayProviders } = require("../gameEngine/replayProviders") as typeof import("../gameEngine/replayProviders");
 const { stateDigest } = require("../gameEngine/stateDigest") as typeof import("../gameEngine/stateDigest");
+const { effectiveActions, REVERT_ONE_STEP } = require("../gameEngine/logRevert") as typeof import("../gameEngine/logRevert");
 const { operatingCorporationId } = require("../gameEngine/dividendGate") as typeof import("../gameEngine/dividendGate");
 const F = require("./offerFixtures74") as typeof import("./offerFixtures74");
 const S = require("./offerMatrix74Support") as typeof import("./offerMatrix74Support");
@@ -61,6 +62,35 @@ function table(seed: GameStateResponse) {
   return { ...harness, applied };
 }
 
+/* ==================================================================
+    RR2A-F2 (DA-7, 2026-09-27): THE REWIND IS WALKED, ONE ACTION AT A TIME
+   ==================================================================
+   V§4 was written when the host's `RevertTo` could reach any index, and rewound to BEFORE proposal A in one jump.
+   LIVE-2A (RV-6, OD-L2-1 (a)) made undo one step at a time for everyone, the host included -- the Undo button's own
+   reach -- so that jump is refused ("Only the most recent action can be undone.") and the three cases failed from
+   LIVE-2A on. The policy stands. The PROPERTY stands too, and is reached the legal way: the host takes back the last
+   decision, then the one before it, until proposal A is gone. `walkBack` asserts every step is exactly the reach
+   `revertRefusal` grants (the last non-derived live entry) and applied; the deep jump is asserted refused first, with
+   nothing appended, so the case also pins that the alternate history was NOT reached by a bypass. */
+function walkBack(harness: ReturnType<typeof table>, target: number): number[] {
+  const { room } = harness;
+  const lastDecision = () => [...effectiveActions(room.entries)].reverse().find((entry) => !entry.derived);
+  expect(lastDecision()?.index).not.toBe(target); // a walk, not a single step
+  const before = { length: room.entries.length, digest: stateDigest(room.state) };
+  const deep = room.submit({ actor: P1, build: "b", host: P1, msg: M.revert(target) as never, baseIndex: room.nextIndex - 1 });
+  expect(deep).toMatchObject({ kind: "refused", reason: REVERT_ONE_STEP });
+  expect([room.entries.length, stateDigest(room.state)]).toEqual([before.length, before.digest]);
+  const steps: number[] = [];
+  for (let guard = 0; ; guard += 1) {
+    if (guard > 16) throw new Error("the walk back did not reach its target");
+    const last = lastDecision();
+    if (last === undefined || last.index < target) throw new Error(`nothing left to undo before reaching ${target}`);
+    expect(harness.applied(P1, M.revert(last.index))[0]).toBe("RevertTo");
+    steps.push(last.index);
+    if (last.index === target) return steps;
+  }
+}
+
 /* ================================================================== */
 /* §4 RevertTo alternate history                                        */
 /* ================================================================== */
@@ -68,7 +98,8 @@ function table(seed: GameStateResponse) {
 describe("V§4 RevertTo alternate history: a discarded future's offer key does not survive the rebuild", () => {
   it("TRAIN: A (instance 1) settles, more play, RevertTo before A, a DIFFERENT offer reuses instance 1 and settles once; two restores agree", () => {
     const seed = rustBoard();
-    const { room, applied, logged } = table(seed);
+    const game = table(seed);
+    const { room, applied, logged } = game;
     applied(P1, M.proposeTrain(NYC, PRR, "3", "150")); // idx 0
     expect(room.state.train_purchase_offer?.instance).toBe(1);
     expect(applied(P2, M.answerTrain(NYC, true)).slice(0, 2)).toEqual(["AnswerTrainPurchase", "BuyTrainFromCorporation*"]);
@@ -77,11 +108,11 @@ describe("V§4 RevertTo alternate history: a discarded future's offer key does n
     expect(trains(room.state, PRR)).toEqual(["3", "4"]);
     const futureLength = room.entries.length;
 
-    // Host rewinds to BEFORE proposal A.
+    // Host rewinds to BEFORE proposal A -- one decision at a time (RR2A-F2): the depot purchase, the acceptance (its
+    // settlement with it), the proposal.
     const reverted = S.roomFor(seed); // (kept for the twin comparison below)
-    const response = room.submit({ actor: P1, build: "b", host: P1, msg: M.revert(0) as never, baseIndex: room.nextIndex - 1 });
-    expect(response.kind).toBe("applied");
-    expect(room.entries.length).toBe(futureLength + 1);
+    expect(walkBack(game, 0)).toEqual([3, 1, 0]);
+    expect(room.entries.length).toBe(futureLength + 3);
     // THE BLOCKER CHECK: the rebuilt engine holds no key from the discarded future.
     expect(offerKeys(room)).toEqual([]);
     expect(emittedOf(room).has("offer:train:1")).toBe(false);
@@ -127,11 +158,12 @@ describe("V§4 RevertTo alternate history: a discarded future's offer key does n
 
   it("TRAIN, strongest form: after the rewind the IDENTICAL offer (same seller, model, buyer, fleet, price) is re-proposed as instance 1 and settles once", () => {
     const seed = rustBoard();
-    const { room, applied, logged } = table(seed);
+    const game = table(seed);
+    const { room, applied, logged } = game;
     applied(P1, M.proposeTrain(NYC, PRR, "3", "150"));
     applied(P2, M.answerTrain(NYC, true));
     applied(P1, M.depot(PRR));
-    applied(P1, M.revert(0));
+    walkBack(game, 0); // RR2A-F2: one decision at a time
     expect(offerKeys(room)).toEqual([]);
     applied(P1, M.proposeTrain(NYC, PRR, "3", "150"));
     expect(room.state.train_purchase_offer?.instance).toBe(1);
@@ -145,12 +177,13 @@ describe("V§4 RevertTo alternate history: a discarded future's offer key does n
 
   it("PRIVATE: the same alternate-history attack on `offer:private:N`", () => {
     const seed = rustBoard();
-    const { room, applied } = table(seed);
+    const game = table(seed);
+    const { room, applied } = game;
     applied(P1, M.proposePrivate(DH, PRR, 100));
     applied(P2, M.answerPrivate(DH, true));
     expect(emittedOf(room).has("offer:private:1")).toBe(true);
     applied(P1, M.depot(PRR));
-    applied(P1, M.revert(0));
+    expect(walkBack(game, 0)).toEqual([3, 1, 0]); // RR2A-F2: one decision at a time
     expect(offerKeys(room)).toEqual([]);
     expect(priv(room.state, DH).owner).toBe(P2);
     applied(P1, M.proposePrivate(CA, PRR, 120));

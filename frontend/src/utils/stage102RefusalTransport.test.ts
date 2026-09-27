@@ -34,7 +34,7 @@ const { DEVELOPMENT_CORPUS_POLICY } = require("../gameEngine/rulesVersion") as t
 const { moneyTotal } = require("../gameEngine/cashLedger") as typeof import("../gameEngine/cashLedger");
 const { trainSaleRefusal } = require("../gameEngine/trainSaleAuthority") as typeof import("../gameEngine/trainSaleAuthority");
 const { pendingTrainDiscards, pendingDiscardBlock } = require("../gameEngine/trainDiscard") as typeof import("../gameEngine/trainDiscard");
-const { harmlessDuplicateAnswer } = require("../gameEngine/harmlessDuplicate") as typeof import("../gameEngine/harmlessDuplicate");
+const { harmlessDuplicateAnswer, HARMLESS_DUPLICATE_ANSWER_SENTENCE } = require("../gameEngine/harmlessDuplicate") as typeof import("../gameEngine/harmlessDuplicate");
 const { unchangedMeansRefused } = require("../gameEngine/actionOutcome") as typeof import("../gameEngine/actionOutcome");
 const F = require("./offerFixtures74") as typeof import("./offerFixtures74");
 const S = require("./offerMatrix74Support") as typeof import("./offerMatrix74Support");
@@ -480,21 +480,24 @@ describe("C. S10-24 reachability after 10.2: `RevertTo` never reaches the reduce
 });
 
 /* ================================================================================================= */
-/* D. #1687 -- THE HARMLESS DUPLICATE ANSWER STAYS A SUCCESS; A REAL ANSWER REFUSAL DOES NOT          */
+/* D. #1687 -- THE HARMLESS DUPLICATE ANSWER IS NO RULES REFUSAL; A REAL ANSWER REFUSAL IS           */
+/*    (C2-02, DA-7: and a hosted room no longer RECORDS it -- `c202HarmlessDuplicate.test.ts`)          */
 /* ================================================================================================= */
 
 describe("D. a consent answer that finds nothing to answer is #662's harmless duplicate, not a refusal (#1687)", () => {
-  /** The duplicate's full transport outcome: applied, appended (as before 10.2), board unchanged, no REFUSED receipt. */
+  /** The duplicate's full transport outcome. #1687: board unchanged, no REFUSED receipt in the shell. C2-02 (DA-7):
+   *  the room settles it for its sender with the no-blame sentence and appends NOTHING (it used to be applied and
+   *  appended, which let any seat grow the log and displace the last decision from the one-step undo). */
   function expectHarmless(room: InstanceType<typeof RoomSession>, answer: ServerMessage, handed: GameStateResponse, msg: unknown, logBefore: number) {
-    expect(answer.kind).toBe("applied");
-    expect(room.entries).toHaveLength(logBefore + 1);
+    expect(answer).toMatchObject({ kind: "refused", reason: HARMLESS_DUPLICATE_ANSWER_SENTENCE });
+    expect(room.entries).toHaveLength(logBefore);
     expect(atomsUnchanged({ state: handed }, { state: room.state })).toBe(true);
     expect(harmlessDuplicateAnswer(handed, msg)).toBe(true);
     // The shell's receipt, over the same atoms: no REFUSED line, and not the CloseRoom silence either.
     expect(actionWasRefused(handed, { ...room.state }, msg as never)).toBe(false);
   }
 
-  it("D1. AnswerPrivatePurchase after the offer has settled: applied, nothing moves, no REFUSED line", () => {
+  it("D1. AnswerPrivatePurchase after the offer has settled: nothing moves, nothing recorded, no REFUSED line", () => {
     const { room, submit, logged } = S.roomFor(operatingBoard());
     expect(submit(P1, M.proposePrivate(DH, PRR, 100)).kind).toBe("applied");
     expect(submit(P2, M.answerPrivate(DH, true)).kind).toBe("applied");
@@ -509,7 +512,7 @@ describe("D. a consent answer that finds nothing to answer is #662's harmless du
     expect(logged("BuyPrivateCompany")).toHaveLength(1);
   });
 
-  it("D2. AnswerTrainPurchase after the settlement: applied, no second train, no money, not a refusal", () => {
+  it("D2. AnswerTrainPurchase after the settlement: no second train, no money, nothing recorded, not a rules refusal", () => {
     const { room, submit, logged } = S.roomFor(withCorp(operatingBoard(), NYC, { owned_trains: ["3", "3", "2"] }));
     submit(P1, M.proposeTrain(NYC, PRR, "3", "150"));
     submit(P2, M.answerTrain(NYC, true));
@@ -524,7 +527,7 @@ describe("D. a consent answer that finds nothing to answer is #662's harmless du
     expect(logged("BuyTrainFromCorporation")).toHaveLength(1);
   });
 
-  it("D3. AnswerPrivateTrade with no remaining offer (after a decline): applied, not a refusal", () => {
+  it("D3. AnswerPrivateTrade with no remaining offer (after a decline): nothing recorded, not a rules refusal", () => {
     const { room, submit } = S.roomFor(stockRoundBoard());
     expect(submit(P1, M.proposeTrade(DH, P2, P1, 50)).kind).toBe("applied");
     expect(submit(P2, M.answerTrade(DH, false)).kind).toBe("applied"); // declined: the offer is gone
@@ -534,7 +537,7 @@ describe("D. a consent answer that finds nothing to answer is #662's harmless du
     expectHarmless(room, submit(P2, M.answerTrade(DH, true)), handed, M.answerTrade(DH, true), log);
   });
 
-  it("D4. AnswerFundingPrivateOffer after the offer is settled, and after it is withdrawn: applied, not a refusal", () => {
+  it("D4. AnswerFundingPrivateOffer after the offer is settled, and after it is withdrawn: nothing recorded, not a rules refusal", () => {
     const held = S.fundingBoard(100, { privates: [{ id: DH, owner: P1, cost: "70" }] });
     const answer = { AnswerFundingPrivateOffer: { game_id: 1, private_id: DH, accept: true } };
     // Settled: the buyer's president accepts, the sale lands in the answer; a second yes finds nothing.

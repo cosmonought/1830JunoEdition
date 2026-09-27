@@ -83,8 +83,10 @@ export function atomsUnchanged(before: AuthoritativeAtoms, after: AuthoritativeA
    `AnswerTrainPurchase`, `AnswerPrivateTrade`, `AnswerFundingPrivateOffer` -- sent when the board it was judged
    on has NOTHING TO ANSWER (#662 / #701 / #1541: "a harmless duplicate", never an error). Asked of the board
    BEFORE the message, never of the message type alone: the same answer while its offer stands is judged in
-   full and, if it changes nothing, is a refusal. Such a duplicate stays APPLIED and appended, exactly as before
-   10.2, like `CloseRoom`'s race loser.
+   full and, if it changes nothing, is a refusal. Such a duplicate is not a refusal for this predicate -- the shell's
+   receipt prints nothing for it. (C2-02, DA-7: a hosted room no longer APPENDS it either -- `RoomSession.submit`
+   settles it for its sender with `HARMLESS_DUPLICATE_ANSWER_SENTENCE` and records nothing; this predicate's answer
+   is unchanged.)
 
    DELIBERATELY NOT ON THE LIST (they were on #778's, and 10.2 moves them): `SetupGame` (a deal that changes
    nothing was refused -- an undealable roster -- and must not pin a room's build or rules version, which both

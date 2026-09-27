@@ -48,6 +48,7 @@ const { pendingTrainDiscards } = require("../gameEngine/trainDiscard") as typeof
 const { operatingCorporationId } = require("../gameEngine/dividendGate") as typeof import("../gameEngine/dividendGate");
 const F = require("./offerFixtures74") as typeof import("./offerFixtures74");
 const S = require("./offerMatrix74Support") as typeof import("./offerMatrix74Support");
+const { REVERT_ONE_STEP } = require("../gameEngine/logRevert") as typeof import("../gameEngine/logRevert");
 
 type GameStateResponse = import("../gameEngine/gameState").GameStateResponse;
 type ServerLogEntry = import("./roomSession").ServerLogEntry;
@@ -742,22 +743,52 @@ describe("§15 (#1597) the offer instance is a function of the log: replay, Reve
     expect(priv(pending.state, DH).owner).toBe(P2);
   });
 
-  it("through a room: a revert to after the acceptance re-derives the settlement under the same instance key, once", () => {
-    const { room, submit, kinds, logged } = S.roomFor(operatingBoard());
+  /* RR2A-F2 (DA-7, 2026-09-27): THIS CASE ASKED FOR AN UNDO THE ROOM NO LONGER HAS. It sent `RevertTo(2)` -- a revert
+     landing ON the derived settlement, so as to keep the acceptance and drop only the purchase. Since LIVE-2A (RV-6,
+     OD-L2-1 (a)) an undo takes back exactly the LAST NON-DERIVED live entry, for everyone, the host included -- the
+     Undo button's own reach (#668: "undo lands on a decision, not on whatever is on top"). A derived entry is never a
+     target; the room refused it, and the case failed from LIVE-2A on. The policy is right and is not weakened here.
+     The PROPERTY the case exists for is kept, played the one legal way: the host takes back the acceptance (its derived
+     settlement goes with it), the owner gives the same acceptance again, and the settlement is re-derived under the
+     SAME instance key -- once, with one purchase in effect -- and a restore of the whole log, dead entries and all,
+     lands on the same board and the same keys. */
+  it("through a room: undoing the acceptance takes its settlement with it; the re-given acceptance re-derives it under the same instance key, once (RR2A-F2)", () => {
+    const seed = operatingBoard();
+    const { room, submit, kinds, logged } = S.roomFor(seed);
     submit(P1, M.proposePrivate(DH, PRR, 100));
     expect(kinds(submit(P2, M.answerPrivate(DH, true))).slice(0, 2)).toEqual(["AnswerPrivatePurchase", "BuyPrivateCompany*"]);
-    // Entries: 0 propose, 1 answer, 2 settlement*. Revert to 2 keeps the acceptance and drops the settlement.
-    const reverted = submit(P1, M.revert(2));
-    expect(reverted.kind).toBe("applied");
-    expect(kinds(reverted)).toEqual(["RevertTo", "BuyPrivateCompany*"]);
+    // Entries: 0 propose, 1 answer, 2 settlement*. A revert ONTO the derived settlement is not an undo there is (RV-6).
+    const entries = room.entries.length;
+    expect(submit(P1, M.revert(2))).toMatchObject({ kind: "refused", reason: REVERT_ONE_STEP });
+    expect(room.entries).toHaveLength(entries);
+    // The legal undo: the last decision -- the owner's acceptance -- and everything derived from it.
+    const undone = submit(P1, M.revert(1));
+    expect(undone.kind).toBe("applied");
+    expect(kinds(undone)).toEqual(["RevertTo"]); // a pending, unanswered offer owes nothing
+    expect(room.state.private_purchase_offer).toMatchObject({ private_id: DH, owner: P2, instance: 1 });
+    expect(room.state.private_purchase_offer?.accepted).toBeUndefined();
+    expect(room.state.offer_serial).toBe(1);
+    expect(priv(room.state, DH).owner).toBe(P2);
+    expect(emittedOf(room).has("offer:private:1")).toBe(false); // the discarded settlement's key did not survive the rebuild
+    // The same acceptance again: the SAME instance, the SAME key, one settlement.
+    expect(kinds(submit(P2, M.answerPrivate(DH, true))).slice(0, 2)).toEqual(["AnswerPrivatePurchase", "BuyPrivateCompany*"]);
     expect(priv(room.state, DH).owner_protocol_id).toBe(PRR);
     expect(room.state.private_purchase_offer).toBeNull();
     expect(room.state.offer_serial).toBe(1);
     expect(emittedOf(room).has("offer:private:1")).toBe(true);
-    // Two settlement entries in the raw log (one dead), one in effect, one purchase paid.
-    expect(logged("BuyPrivateCompany")).toHaveLength(2);
-    expect(S.cash(room.state, P2)).toBe(S.cash(operatingBoard(), P2) + 100);
+    // Two settlement entries in the raw log (one dead), byte-identical -- the derivation is a function of the history --
+    // one in effect, one purchase paid.
+    const settlements = logged("BuyPrivateCompany");
+    expect(settlements).toHaveLength(2);
+    expect(settlements[1].payload).toBe(settlements[0].payload);
+    expect(S.cash(room.state, P2)).toBe(S.cash(seed, P2) + 100);
+    expect(moneyTotal(room.state)).toBe(moneyTotal(seed));
     expect(nextDerivedAction({ state: room.state, mapGrid: GRID, emitted: new Set() })).toBeNull();
+    // A restore of the whole log -- the revert, the dead acceptance and the dead settlement included -- agrees.
+    const restored = S.roomFor(seed);
+    restored.room.restore(room.entries as ServerLogEntry[]);
+    expect(stateDigest(restored.room.state)).toBe(stateDigest(room.state));
+    expect(Array.from(emittedOf(restored.room)).filter((key) => key.startsWith("offer:"))).toEqual(["offer:private:1"]);
   });
 
   it("a later offer is a later instance -- after a settlement, a rejection and a rescission alike -- and a rebuild of the same history agrees", () => {

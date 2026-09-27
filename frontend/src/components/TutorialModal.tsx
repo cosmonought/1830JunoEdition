@@ -118,25 +118,27 @@ export const WATERFALL_AUCTION_TUTORIAL: readonly TutorialPage[] = [
   },
   {
     title: "When everybody passes",
+    /* DA-7 (DA6-O1): rulebook §1.2.3's two outcomes, which are exclusive (D-21, #1580) -- the page used to list a
+       markdown of "the lowest" private, the revenue and the free taking as three things that all happen at once. */
     body:
       "Passing does not stall the auction — it moves it. If every player passes in a row " +
-      "without anyone buying or bidding, three things happen before your turn comes back " +
+      "without anyone buying or bidding, one of two things happens before your turn comes back " +
       "around:\n" +
-      "• The face value of the lowest unowned private company drops by $5. The auction is " +
-      "designed to keep getting cheaper until somebody finally wants it.\n" +
-      "• Every private company already owned immediately pays its printed revenue to its " +
-      "owner. Passing is not free for the players still waiting: it pays the players who " +
-      "already bought.\n" +
-      "• If that price ever reaches $0, the player whose turn it is has no choice — they must " +
-      "take the company for free.",
+      "• While the Schuylkill Valley is still unsold, its price drops by $5 — it is the only " +
+      "private company ever marked down. If its price reaches $0, the player whose turn it is " +
+      "has no choice — they must take it for free.\n" +
+      "• Once the Schuylkill Valley has been bought, no price drops. Instead every private " +
+      "company already owned immediately pays its printed revenue to its owner. Passing is not " +
+      "free for the players still waiting: it pays the players who already bought.",
   },
   {
     title: "So passing has a cost",
     body:
-      "Those two facts together are the whole tension of this phase. Waiting makes the cheapest " +
-      "company cheaper, which is good for you — but it also hands income to everyone who " +
-      "already committed, which is good for them. A private you keep refusing eventually " +
-      "becomes free, and then it becomes yours whether you wanted it or not.",
+      "Those two facts together are the whole tension of this phase. Waiting can make the " +
+      "Schuylkill Valley cheaper, which is good for you — but once it is sold, waiting hands income " +
+      "to everyone who already committed, which is good for them. And if nobody will buy the " +
+      "Schuylkill Valley it eventually becomes free, and then it becomes yours whether you wanted " +
+      "it or not.",
   },
   {
     title: "Watch your cash",

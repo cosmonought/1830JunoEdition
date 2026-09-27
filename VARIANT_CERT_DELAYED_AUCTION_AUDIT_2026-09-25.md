@@ -26,6 +26,13 @@ Still NOT certified.
 DA-6 record); two surfaces found beside them and fixed (DA6-N1, the Phase 3 notice; DA6-N2, the reserved C&A share's Buy
 affordance); the must-sell sentence corrected (the DA-5 note); §24's stale comments corrected. `RULES_ENGINE_VERSION`
 still 10. Still NOT certified — DA-7 next.
+**rev 10** (2026-09-27, DA-7): **certified on rules-engine v10** — the certification game G-DA played from the deal
+through a pinned `RoomSession` (§21's main path, boundaries A–G), with tails T3 (C&A with the PRR IPO exhausted), T4 (a
+curable auction overage), T5 (D-55 through the room) and the standard control; restore / replay / one-step `RevertTo` at
+eight cut points; room / reducer / ingress parity for every refusal (§22 — DA-7 record). Test gaps DA-T1, DA-T2, DA-T3,
+DA-T4, DA-T8 and DA-T12 closed; DA-T10 closed in part; DA-T6's contest-into-contest and DA-T11's bank break remain as
+recorded (§20). RR2A-F2 and C2-02 closed; DA6-O1 / DA6-O2 corrected. No finding forces a replay change; DA-F12 stays
+DA-8's. `RULES_ENGINE_VERSION` still 10 — DA-8 owns the 10 → 11 boundary.
 
 **Date:** 2026-09-25 · **Pass:** DA-1 (audit / design only — no gameplay code changed) · **Status of the variant:**
 `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` (S9-7). **NOT certified.**
@@ -747,6 +754,22 @@ the corporate window after it, and the closure of unsold privates by the first 5
 
 Low-value permutation tests deliberately not listed.
 
+*(rev 10, DA-7 — `da7DelayedAuctionCertification.test.ts`:)* **DA-T1 CLOSED** — the SR1 sale refused at ingress, the
+reducer and the room in a real run (G-DA A); the post-auction Stock Round's sale of the C&A's PRR certificate applied
+(G-DA F). **DA-T2 CLOSED** — the B&O par purchase refused at all three layers in SR1, and the B&O purchase refused
+mid-auction (A, D). **DA-T3 CLOSED** — the real run: deal → SR1 → OR1 → SR2 → OR2 (the first 3-train by the EARLIER
+corporation, a second 3 by the later one in the same set) → the auction armed on the Priority Deal holder → handoff →
+SR3 → the next set; and the alternate history (a one-step undo of the first 3-train, the LAST corporation buying it
+instead) arms at the same boundary. **DA-T4 CLOSED** — escrow with shares and cash in play: two standing bids on the D&H,
+the money in the game constant after every message, the contest's winner paying once and the loser nothing. **DA-T8
+CLOSED** — in the first set after the auction the NYC buys the C&SL from its president at a band price (twice face + $1
+refused) and the B&O's first train closes the BO private. **DA-T10 CLOSED IN PART** — Gentle Rust + Unpredictable Revenue on
+the same run arm the auction on the same entry, opener and board facts (no route is run, so the die and the fog never
+fire; §16's structural analysis stands for those). **DA-T12 CLOSED** — the whole run through `RoomSession`, restored and
+replayed to the same digest at eight cut points, `RevertTo` across the arming, a mid-auction purchase, the C&A grant, the
+last private, the par and the handoff. DA-T6 (contest cascading into a contest) and DA-T11 (bank break inside the trigger
+set) unchanged.
+
 ---
 
 ## 21. Certification-game design (to build in DA-7; nothing built here)
@@ -865,6 +888,18 @@ said the privates were for sale at the first 3-train) and DA6-N2 (the reserved s
 `rr2aF1AuctionEscape.test.ts` (15), `da6DelayedAuctionCopy.test.ts` (18), `da6DelayedAuctionUi.test.tsx` (12). No
 replay semantics, golden, corpus or settlement artifact changed; `RULES_ENGINE_VERSION` still 10.
 
+**DA-7 record (rev 10, 2026-09-27).** *Certification game:* G-DA through a pinned `RoomSession` from the deal, no board
+patched (`da7DelayedAuctionCertification.test.ts`, 50 cases); every applied message conserves every corporation's
+certificates and the money in the game; every refusal is asserted at ingress, on a replica of the room's engine and in the
+room (nothing appended, no digest move). The only refusals the reducer does not repeat are the SENDER questions — turn,
+the B&O owner naming themself, the one-step undo — which are ingress's and the transport's by design (#1174, #1207).
+*Closed beside it:* RR2A-F2 (the four deep-`RevertTo` cases were stale tests; the rewinds are now walked one decision at a
+time and the deep jump is pinned refused — the offer-instance property holds); C2-02 (a harmless duplicate consent answer
+is settled for its sender and never appended — `RoomSession`; stored duplicates still replay as no-ops); DA6-O1 and
+DA6-O2 (copy). *Recorded, not fixed:* DA7-L1 (LOW) — outside the auction an off-turn seat's auction message hears "It is
+not your turn." (the seat question precedes DA-3's round gate at ingress), the on-turn seat the auction sentence. No
+finding moves replay; DA-F12 stays DA-8's. Record: `claude/DA7_DELAYED_AUCTION_CERTIFICATION_2026-09-27.md`.
+
 ---
 
 ## 23. Version-boundary recommendation
@@ -906,6 +941,7 @@ D-52 … D-56; OD-DA-2b open; review corrections recorded in §22 and §23. Stil
 *(rev 7: DA-4 implemented — DA-F3, DA-F4, DA-F5 fixed; DA-F12 found (LOW, open); `RULES_ENGINE_VERSION` still 10. Still NOT certified.)*
 *(rev 8: DA-5 implemented — DA-F6, DA-F9 fixed; D-52 … D-55 and D-57 … D-59 implemented; DA-F12 routed to DA-8; `RULES_ENGINE_VERSION` still 10. Still NOT certified.)*
 *(rev 9: RR2A-F1 closed and DA-6 implemented — DA-F8 resolved; DA6-N1 / DA6-N2 found and fixed; `RULES_ENGINE_VERSION` still 10. Still NOT certified — DA-7 next.)*
+*(rev 10: DA-7 — **certified on rules-engine v10**, subject to the owner's full-suite gate; DA-F12 and the 10 → 11 boundary are DA-8's.)*
 
 Delayed Auction remains `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` and is **not certified**. The owner spec
 is confirmed and consistently implemented at the trigger; the general auction is sound; eight defects (five HIGH, two

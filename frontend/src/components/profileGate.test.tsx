@@ -192,7 +192,7 @@ describe("the profile gate (LIVE-2E)", () => {
     expect(server.urls.join(" ")).not.toContain(KEY);
   });
 
-  it("'Save as file' downloads the key as a text file and revokes the object URL at once", async () => {
+  it("'Save as file' downloads the key as a text file and revokes the object URL right after the click", async () => {
     const server = fakeServer(null);
     await mount(server.port);
     type(byTestId<HTMLInputElement>("profile-name"), "Brad");
@@ -211,10 +211,24 @@ describe("the profile gate (LIVE-2E)", () => {
     jest.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
       downloads.push({ href: this.href, download: this.download });
     });
-    await click(buttonNamed("Save as file"));
+    /* THE CLICK ALONE, then the cleanup it scheduled. `saveKeyFile` revokes the object URL with
+       `window.setTimeout(revoke, 0)` -- on purpose: revoking in the click's own task can abort the download in some
+       browsers (LIVE-2E review I1). This case used to assert the revocation after `click()`'s `act` settle, which
+       React resolves on a `setImmediate`; Node's 0 ms timer is really 1 ms, so whether the revoke had run by then
+       depended on how long that loop turn took -- a race that a cold owner run lost (and a 60-iteration probe lost
+       44 times). Now: the download happens inside the click, the URL is NOT revoked inside it, and the test waits
+       for exactly the cleanup's turn -- a 0 ms timer set after the component's own, which runs after it because
+       timers of equal delay fire in the order they were set. No sleep; the cleanup requirement is unchanged. */
+    const save = buttonNamed("Save as file");
+    expect(save).toBeTruthy();
+    act(() => save!.click());
     expect(downloads).toEqual([{ href: "blob:https://play.example/1", download: RECOVERY_KEY_FILE }]);
     expect(RECOVERY_KEY_FILE).toBe("18cosmos-recovery-key.txt");
+    expect(revoked).not.toHaveBeenCalled(); // the URL outlives the click's task
+    await act(() => new Promise<void>((resolve) => window.setTimeout(resolve, 0)));
+    expect(revoked).toHaveBeenCalledTimes(1);
     expect(revoked).toHaveBeenCalledWith("blob:https://play.example/1");
+    await settle();
     expect(blobs[0].type).toMatch(/^text\/plain/);
     expect(container.querySelector('a[download]')).toBeNull(); // the link was removed with the URL
   });

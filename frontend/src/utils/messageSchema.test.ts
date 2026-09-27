@@ -264,9 +264,14 @@ describe("a malformed frame never becomes history (#1449)", () => {
   });
 
   it("still lets a well-formed move through to the reducer", () => {
+    /* FIXTURE REPAIR (Phase 2A, RR2A-F1): the move must be one the board can take. `room()` deals a standard game,
+       so the table is in its opening private company auction, where the pass is the auction's own `WaterfallPass`.
+       This sent a Stock Round `PassTurn`, which the auction used to swallow as a junk entry; it is refused now
+       (`roundTransitionAuthority.ts`). Well-formed AND legal is what "reaches the reducer and becomes history" needs;
+       p-a is the seat the auction opens on. */
     const session = room();
     const before = session.entries.length;
-    expect(submitLikeTheServer(session, { PassTurn: { game_id: 0 } })).toBe("submitted");
+    expect(submitLikeTheServer(session, { WaterfallPass: { game_id: 0 } })).toBe("submitted");
     expect(session.entries.length).toBeGreaterThan(before);
   });
 });

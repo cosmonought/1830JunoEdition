@@ -258,6 +258,21 @@ describe("there is one trigger and one moment", () => {
   });
 });
 
+/* ==================================================================
+    FIXTURE REPAIR (Phase 2A follow-up, 2026-09-27): A SOLD-OUT CORPORATION HELD WITHIN THE 60% CAP
+   ==================================================================
+   The cases below close a Stock Round through the reducer with the seat's player (p0) holding 100% of every
+   corporation at a normal-zone price -- 40 points over the 60% cap, with a legal sale open. #759's rule (iii) holds
+   that player's pass until the sale is made, and DA-5 (`a6ef5e7`, D-53 / D-58) made the reducer enforce it
+   (`divestmentPassRefusal` beside the stock predicates) -- so the closing pass was refused by identity and these cases
+   have failed since DA-5, first surfaced by the owner's full run of 2026-09-27. The board was never a legal Stock
+   Round close. Sold out is "both pools empty", not "one player holds it all": the same corporations, sold out across
+   the two seats within the cap, close the round exactly as the cases intend. Nothing about the rise changes. */
+const SOLD_OUT_WITHIN_CAP = [
+  { player: "p0", percentage: 60 },
+  { player: "p1", percentage: 40 },
+];
+
 describe("the reducer raises before it orders the Operating Round", () => {
   /* ==================================================================
    *  DESIGN NOTE 746a (harness): THE QUEUE SORTS ON POST-RISE PRICES
@@ -284,8 +299,9 @@ describe("the reducer raises before it orders the Operating Round", () => {
     return board({
       consecutive_passes: 1,
       public_companies: [
-        company({ company_id: BO, ticker: "B&O", ipo_pool_percentage: 40 }),
-        company(),
+        // Fixture repair: 60% held, 40% still in the IPO (not sold out), and PRR sold out within the cap.
+        company({ company_id: BO, ticker: "B&O", ipo_pool_percentage: 40, player_holdings: [{ player: "p0", percentage: 60 }] }),
+        company({ player_holdings: SOLD_OUT_WITHIN_CAP }),
       ],
       market_positions: {
         [BO]: { ...cellFor(BO), enteredAt: 1 },
@@ -392,7 +408,10 @@ describe("the risers move in share-value order, not catalog order (#1601, S8-4)"
     const byId = new Map(tokens.map((token) => [token.id, token]));
     const before = board({
       consecutive_passes: 1,
-      public_companies: catalog.map((id) => company({ company_id: id, ticker: byId.get(id)!.ticker })),
+      // Fixture repair: sold out within the cap (see `SOLD_OUT_WITHIN_CAP`).
+      public_companies: catalog.map((id) =>
+        company({ company_id: id, ticker: byId.get(id)!.ticker, player_holdings: SOLD_OUT_WITHIN_CAP }),
+      ),
       market_positions: Object.fromEntries(
         tokens.map((token) => [token.id, { ...cell(token.x, token.y), enteredAt: token.enteredAt }]),
       ),

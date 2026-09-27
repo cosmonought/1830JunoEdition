@@ -3573,6 +3573,15 @@ things" at once; the rule is the SV only (D-21), and the markdown and the revenu
 §1.2.3. **DA6-O2** (LOW, `OPEN`) -- the Rules Reference's Stock page says "A player pushed over a limit must sell down on
 their next Stock Round turn" without DA-5's common curable-only qualifier (the Delayed Auction's own note now states it).
 Record: `claude/DA6_RR2A_F1_AUTHORITY_UI_CLOSURE_2026-09-27.md`.
+**Phase 2A owner gate (2026-09-27): 9 failures beyond RR2A-F2's four, diagnosed and repaired in fixtures only.** (1)
+`messageSchema.test.ts` #1449 "still lets a well-formed move through" -- a Phase 2A consequence: its standard room is in
+the opening auction and the "well-formed move" was a Stock Round `PassTurn`, the junk entry RR2A-F1's gate now refuses;
+the case sends the auction's own `WaterfallPass`. (2) `soldOutRise.test.ts`, 8 cases -- NOT Phase 2A: they fail
+identically with `0ae252d`'s source and pass with only DA-5's reducer pass hold disabled, so they have failed since DA-5
+(`a6ef5e7`, validated on focused suites that did not include this file). Their boards closed a Stock Round with the seat's
+player holding 100% of each corporation at a normal-zone price -- a curable cap excess #759 (iii) holds the pass for --
+so they were never a legal close; the two fixture builders now hold the sold-out corporations within the cap (60 / 40).
+No production code changed; RR2A-F1 and DA-5's pass hold are intact.
 
 **S10-7. Engine tests and packaging.** 304 engine-adjacent suites still live in `frontend/src/utils/` (Jest
 `roots` + per-suite classification, Batch 1 §6d); a repo-root `shared/` package needs CRA's `ModuleScopePlugin`,

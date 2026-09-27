@@ -1182,7 +1182,7 @@ describe("LIVE-2C start", () => {
       assert.equal(deal.variants.rules, CURRENT_RULES_REVISION);
       assert.equal(deal.build, BUILD);
       assert.equal(deal.rules_engine_version, RULES_ENGINE_VERSION);
-      assert.equal(RULES_ENGINE_VERSION, 10);
+      assert.ok(RULES_ENGINE_VERSION >= 10, "DA-8: was `=== 10`; the deal pins whatever the current engine is (11 since DA-8)");
       assert.equal(deals[0].actor, table.hostPlayerId, "the deal's actor is the host's seat");
       // The equality fixture: the client-shaped deal (App.tsx) with the same roster reaches the same board.
       const probe = probeSession("fixture");

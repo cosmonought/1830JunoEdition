@@ -24,7 +24,8 @@
 // overage -- the must-sell hold, cured, no permanent hold), T5 / D-55 (the first 5-train before the auction cancels it,
 // through the room, and no later set re-arms it) and the standard-game control (the same flow with the auction first:
 // nothing delayed leaks in). Restore / replay / one-step `RevertTo` are certified at the cut points of §8 of the DA-7
-// brief. `RULES_ENGINE_VERSION` is 10 throughout; nothing here is a golden or a corpus entry.
+// brief. Every game here is dealt at the CURRENT engine (`RULES_ENGINE_VERSION`: 10 when DA-7 certified it, 11 since DA-8's
+// closure, which carries DA-7's semantics unchanged); nothing here is a golden or a corpus entry.
 
 export {};
 
@@ -1589,7 +1590,12 @@ describe("DA-T11: a bank break inside the trigger set -- the set finishes, the g
 
   it("the settlement reads the ended board as it stands: no seat is credited an unsold private", () => {
     const seats = game.state.player_addresses.map((player_id, seat_index) => ({ seat_index, player_id }));
-    const appraisal = appraiseSeats(game.state, seats);
+    /* DA-8: the game plays v11, and settlement is certified for v10 only (the owner's two-axis ruling) -- so the v11 board
+       itself is refused, and the certified appraiser reads the same board at the certified pin. The rule under test (an
+       unsold private is nobody's) is the appraiser's, not the pin's. */
+    expect(game.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
+    expect(() => appraiseSeats(game.state, seats)).toThrow("UNSUPPORTED_RULES_ENGINE_VERSION");
+    const appraisal = appraiseSeats({ ...game.state, rules_engine_version: 10 } as State, seats);
     for (const seat of appraisal) {
       expect([seat.player_id, seat.privates, seat.bankrupt]).toEqual([seat.player_id, BigInt(0), false]);
       expect(seat.total).toBe(seat.cash_counted + seat.shares);

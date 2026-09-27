@@ -32,6 +32,7 @@ const { stateDigest } = require("../gameEngine/stateDigest") as typeof import(".
 const { refusalReasonFor } = require("./refusedAction") as typeof import("./refusedAction");
 const RT = require("../gameEngine/roundTransitionAuthority") as typeof import("../gameEngine/roundTransitionAuthority");
 const { RoomSession } = require("./roomSession") as typeof import("./roomSession");
+const { RULES_ENGINE_VERSION } = require("../gameEngine/rulesVersion") as typeof import("../gameEngine/rulesVersion");
 const { STATIC_BOARD_HEXES } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
 
 const A = "p-rr2a-a01";
@@ -88,7 +89,8 @@ function applied(room: Room, actor: string, msg: unknown) {
 function standardRoom(): Room {
   const room = roomFrom();
   applied(room, A, SETUP(false));
-  expect(room.state.rules_engine_version).toBe(10);
+  // DA-8: was `toBe(10)`; the room pins the current engine (v11 since DA-8). RR2A-F1 asks presence, not the value.
+  expect(room.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
   expect(room.state.current_round_type).toBe("WaterfallAuction");
   expect(room.state.waterfall?.waterfall_auction_active).toBe(true);
   return room;
@@ -135,7 +137,7 @@ function delayedArmedBoard(): State {
   const board = boardOf(armed);
   expect(board.current_round_type).toBe("WaterfallAuction");
   expect(board.waterfall?.waterfall_auction_active).toBe(true);
-  return { ...board, rules_engine_version: 10 } as State;
+  return { ...board, rules_engine_version: RULES_ENGINE_VERSION } as State; // DA-8: the current pin (was the literal 10)
 }
 function delayedRoom(): Room {
   const armed = delayedArmedBoard();

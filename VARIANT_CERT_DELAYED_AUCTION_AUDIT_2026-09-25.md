@@ -34,9 +34,17 @@ DA-T4, DA-T6, DA-T8, DA-T11 and DA-T12 closed; DA-T10 closed in part (§20). DA-
 DA-T11's bank break inside the trigger set were closed in DA-7's closure commit, before the push: both are reachable
 behaviour, now certified through the room. RR2A-F2 and C2-02 closed; DA6-O1 / DA6-O2 corrected. No finding forces a
 replay change; DA-F12 stays DA-8's. `RULES_ENGINE_VERSION` still 10 — DA-8 owns the 10 → 11 boundary.
+**rev 11** (2026-09-27, DA-8): **the Delayed Auction is CERTIFIED and closed at rules engine v11.** DA-F12 FIXED (§18 — the
+revenue all-pass resumes with the Priority Deal holder, derived from the board; every table); the one deliberate
+`RULES_ENGINE_VERSION` 10 → 11 boundary taken (changelog row 11 — exactly ten replay semantics: DA-F1, DA-F2, DA-F7, DA-F3,
+DA-F4 / DA-F5, D-52 / DA-F6, D-53 / D-57 / D-58 / D-59, D-55 / DA-F9, RR2A-F1 and DA-F12); §23's pre-closure scans run and
+CLEAN (no stored log is pinned to 10 — the corpus and the live `DATA_DIR` — and no stored log holds a $0 SV taking); DA-T10
+closed by disposition (§20); DA7-L1 left open (LOW, copy / ingress). Settlement stays certified for v10 only, a separate
+axis (owner ruling, §22 — DA-8 record). Record: `claude/DA8_RULES_V11_CLOSURE_2026-09-27.md`.
 
 **Date:** 2026-09-25 · **Pass:** DA-1 (audit / design only — no gameplay code changed) · **Status of the variant:**
-`DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` (S9-7). **NOT certified.**
+`DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` (S9-7). **NOT certified.** *(rev 11: **CERTIFIED** — DA-7 on v10,
+closed at rules engine **v11** by DA-8, 2026-09-27. This line is DA-1's status as written.)*
 
 **Starting state (verified before any work):** branch `main`; local HEAD `8d42d68011fb18c73611e5ebd4941b28b1c50501`
 ("Certify Unpredictable Revenue at rules engine v10") == `origin/main` (0 ahead / 0 behind; the remote was also
@@ -391,7 +399,8 @@ auction; the only delayed-specific interaction is this hex question.)
 - Restore and undo rebuild from the seed by replaying the effective log; no authoritative field is restored from a
   snapshot (`roomSession.ts:212-272, 511-521`). Every delayed-auction fact (trigger, arming, escrow,
   `private_auction_complete`, the lock, the phase) is re-derived. **PASS by construction.**
-- `RULES_ENGINE_VERSION` is 10 and gates no delayed-auction behaviour; the changelog (`rulesVersion.ts:72-312`) has
+- *(rev 11: `RULES_ENGINE_VERSION` is **11** since DA-8 — row 11 carries the Delayed Auction's semantics; still no
+  authority asks the pin's value.)* `RULES_ENGINE_VERSION` is 10 and gates no delayed-auction behaviour; the changelog (`rulesVersion.ts:72-312`) has
   no delayed-auction entry; `SetupGame` is stamped at commit (`serverIngress.ts:77-80`). The only auction pin check is
   `legacyBidRefusal`.
 - **Stored logs:** no fixture, golden or corpus log in the repository has `delayedAuction: true` (10 files carry the
@@ -535,7 +544,7 @@ OD-DA-3.
 | R24 | Server / room parity | architecture | `RoomSession` → reducer | same predicates | standard only | PASS; MISSING TEST |
 | R25 | Player-facing copy | A1–A3 | §14 | several stale | pinned strings §14 | **STALE COPY/UI DA-F8** |
 | R26 | No 3-train ever → no auction | A2 (mechanical) | `4712-4714` | privates never in play | none | DEFERRED NONBLOCKER (DA-F11: document + short-bank test) |
-| R27 | Composition with GR / UR / GR+UR | S9-7 | §16 | no defect found | schema only | PASS; MISSING TEST (DA-T10) |
+| R27 | Composition with GR / UR / GR+UR | S9-7 | §16 | no defect found | schema only | PASS; MISSING TEST (DA-T10) *(rev 11: CLOSED by disposition — DA-8 pins that a synthetic 3-train does not arm the auction; §20)* |
 
 **Defect list.**
 
@@ -552,7 +561,7 @@ OD-DA-3.
 | **DA-F9** *(FIXED — DA-5, rev 8)* | LOW | DA-only edge | First 5-train inside the trigger set closes the privates, but the atom still offers them | `sandboxSession.ts:1349-1356` vs atom `privates`; code-traced |
 | **DA-F10** | — | tests | No end-to-end delayed-auction test, no delayed fixture (§20) | test inventory |
 | **DA-F11** | DEFERRED NONBLOCKER | DA | No 3-train ever → auction never happens (acknowledged by #905); document in the Rules Reference and test on a short bank | `sandboxSession.ts:4712-4714` |
-| **DA-F12** *(new — found by DA-4, rev 7; OPEN — **ROUTED TO DA-8**, rev 8)* | LOW | Classic (legitimate play) + DA | After an all-pass once the SV has sold, the buy-bid-turn sequence resumes with the seat after the last passer, not with the Priority Deal holder — C-2.2 / §1.2.3: "Then the buy-bid-turn sequence resumes with the player with the priority deal card." The two differ only when a bid preceded the passing lap (DA-4 probe: A buys the SV, B bids, C / A / B pass, income is paid, and C acts next instead of B). Turn order only: the Priority Deal handed to the Stock Round is unaffected (DA-4's pointer is exact at every auction end). Not fixed by DA-4 — it would change standard behaviour beyond the certified DA-F5 correction, and resuming on the holder mid-auction needs a record of the holder the atom does not keep. The corpus's three revenue all-passes (JUNO-G6J; JUNO-Z6C × 2) already resume on the holder. *(rev 8: routed to DA-8, which owns its implementation together with the deliberate v10 → v11 compatibility boundary and must certify it with targeted Standard and Delayed tests; DA-5 left Priority Deal / cursor behaviour untouched and added no second auction pointer.)* | `sandboxSession.ts` `WaterfallPass` revenue branch (`nextSeat` of the last passer); DA-4 probe |
+| **DA-F12** *(new — found by DA-4, rev 7; routed to DA-8, rev 8; **FIXED — DA-8, rev 11**: the revenue all-pass resumes on `auctionPriorityHolder` — the seat left of the last direct purchaser, read off the board, no new field — on every table; changelog row 11 (10))* | LOW | Classic (legitimate play) + DA | After an all-pass once the SV has sold, the buy-bid-turn sequence resumes with the seat after the last passer, not with the Priority Deal holder — C-2.2 / §1.2.3: "Then the buy-bid-turn sequence resumes with the player with the priority deal card." The two differ only when a bid preceded the passing lap (DA-4 probe: A buys the SV, B bids, C / A / B pass, income is paid, and C acts next instead of B). Turn order only: the Priority Deal handed to the Stock Round is unaffected (DA-4's pointer is exact at every auction end). Not fixed by DA-4 — it would change standard behaviour beyond the certified DA-F5 correction, and resuming on the holder mid-auction needs a record of the holder the atom does not keep. The corpus's three revenue all-passes (JUNO-G6J; JUNO-Z6C × 2) already resume on the holder. *(rev 8: routed to DA-8, which owns its implementation together with the deliberate v10 → v11 compatibility boundary and must certify it with targeted Standard and Delayed tests; DA-5 left Priority Deal / cursor behaviour untouched and added no second auction pointer.)* | `sandboxSession.ts` `WaterfallPass` revenue branch (`nextSeat` of the last passer); DA-4 probe |
 
 **Counts.** Requirement rows: PASS 15 of 27 (ten with a MISSING TEST rider) · BUG 8 rows · OWNER DECISION 2 rows
 (R20, R21; OD-DA-1 rides on R14) · STALE COPY/UI 1 row · DEFERRED NONBLOCKER 1 row. Findings: **BUG — 8 defects**
@@ -561,7 +570,8 @@ code-traced) · **MISSING TEST — 12** (DA-T1 … T12)
 · **STALE COPY/UI — 14 surfaces** (DA-F8a–n) · **OWNER DECISION — 3** (OD-DA-1 … 3) · **DEFERRED NONBLOCKER — 1**
 (DA-F11). *(rev 2: every OWNER DECISION above is now decided — §19 — except OD-DA-2b, the residual scope of
 OD-DA-2; OD-DA-4 was raised and decided on review.)* *(rev 3: OD-DA-2b decided — D-57.)* *(rev 4: OD-DA-2c decided — D-58;
-OD-DA-2d open.)* *(rev 5: OD-DA-2d decided — D-59; no owner decision remains open.)* *(rev 7: DA-F3, DA-F4 and DA-F5 fixed by DA-4; DA-F12 found by DA-4 — LOW, open.)* *(rev 8: DA-F6 and DA-F9 fixed by DA-5; DA-F12 routed to DA-8.)*
+OD-DA-2d open.)* *(rev 5: OD-DA-2d decided — D-59; no owner decision remains open.)* *(rev 7: DA-F3, DA-F4 and DA-F5 fixed by DA-4; DA-F12 found by DA-4 — LOW, open.)* *(rev 8: DA-F6 and DA-F9 fixed by DA-5; DA-F12 routed to DA-8.)* *(rev 11: DA-F12 fixed by DA-8. Open: DA-F11 (deferred
+non-blocker) and DA-7's DA7-L1 (LOW, wording) only.)*
 
 **Stop-condition note.** DA-F1, DA-F2, DA-F5 and DA-F7 reach the standard game; DA-F5 does so in legitimate play
 (probe R1). None invalidates the certification premise: the auction's own buy / bid / contest / markdown / revenue rules
@@ -766,7 +776,15 @@ the money in the game constant after every message, the contest's winner paying 
 CLOSED** — in the first set after the auction the NYC buys the C&SL from its president at a band price (twice face + $1
 refused) and the B&O's first train closes the BO private. **DA-T10 CLOSED IN PART** — Gentle Rust + Unpredictable Revenue on
 the same run arm the auction on the same entry, opener and board facts (no route is run, so the die and the fog never
-fire; §16's structural analysis stands for those). **DA-T12 CLOSED** — the whole run through `RoomSession`, restored and
+fire; §16's structural analysis stands for those). *(rev 11, DA-8: **DA-T10 CLOSED by disposition.** The trigger is one
+predicate -- `derivePhase(state).tier >= 3` with the auction owed (design note 905) -- so the only rules-version question
+GR / UR can raise at the auction's boundary is whether a train that is not a Depot purchase can move that phase. A
+Carcosa gift cannot (UR-3, OD-UR-3: a ghost train is never the phase), and DA-8 pins it at a Delayed Auction table: the
+same trigger-set board with the NYC's 3-train gifted ends in a Stock Round with the auction still owed; with a bought one
+it arms (`da8RulesV11Closure.test.ts`). The fog that falls first at that boundary removes only a gilded -- ghost -- train, so
+the phase it leaves is the phase it found; a Mark-taken train stays counted (`removed_trains`, OD-UR-13), so the phase never
+falls back; Gentle Rust's marks and Final Runs change no tier. The die and the fog themselves are certified by the GR / UR
+suites, and no DA authority path reads them -- no combinatorial game is owed.)* **DA-T12 CLOSED** — the whole run through `RoomSession`, restored and
 replayed to the same digest at eight cut points, `RevertTo` across the arming, a mid-auction purchase, the C&A grant, the
 last private, the par and the handoff. **DA-T6 CLOSED** — a contest that cascades into a contest is reachable (two bids on
 each of two adjacent privates, then a face-value purchase below them) and is now certified in the Delayed Auction through
@@ -916,6 +934,26 @@ DA6-O2 (copy). *Recorded, not fixed:* DA7-L1 (LOW) — outside the auction an of
 not your turn." (the seat question precedes DA-3's round gate at ingress), the on-turn seat the auction sentence. No
 finding moves replay; DA-F12 stays DA-8's. Record: `claude/DA7_DELAYED_AUCTION_CERTIFICATION_2026-09-27.md`.
 
+**DA-8 record (rev 11, 2026-09-27).** *DA-F12:* the revenue all-pass re-seats the atom's cursor on `auctionPriorityHolder`
+(`auctionAuthority.ts`) -- the seat left of the last private sold at `settled_price <= cost` in the deal's private order (a
+direct purchase: a face-value buy or the $0 taking; an award is always at least face + $5), or the auction's opener when
+no direct purchase has happened; the board's seat follows (DA-4's mirror). No new field, so no stored board, golden or
+settlement hash moves; every stored revenue all-pass (JUNO-G6J; JUNO-Z6C x 2) already resumed on the holder. *The boundary:*
+`RULES_ENGINE_VERSION` 10 → 11, changelog row 11 (ten semantics, the non-rules behind a marker); a v10 room is held
+(`incompatible`; discovery `rules-version-older`) under every policy and across restarts, never rewritten; a new deal is
+stamped 11. *The scans (§23):* `gamesDoctor scan-v10` / `rulesBoundaryScan.ts` (read-only; replays each v10 log for
+inspection and flags `BeginOperatingRound`, an auction `PassTurn`, the $0 taking, a revenue all-pass resumed off the
+holder, and any other committed entry the current engine would refuse; C2-02 duplicates informational) -- over the corpus
+(18 files) and the live `DATA_DIR` (`server/data`, 8 logs): every log unpinned, no v10 game, no hit; the directory
+byte-identical afterwards. *Settlement (owner ruling):* the appraiser accepts a board whose pin is in
+`SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` ([10]) -- no longer "supported AND certified", which the bump would have turned
+into "nothing settles" -- and the SET-0A golden builder stamps the certified pin; all 13 golden boards, rebuilt by the v11
+reducer, hash to their certified values; a v11 board is refused until the appraisal is recertified for v11. *Delayed
+Auction on v11:* the deal, the dormant auction, the reserved C&A share, the round authority, the arming on the holder and
+DA-F12 at a delayed table pinned in `da8RulesV11Closure.test.ts` (29); DA-7's certification cases (the deal, the arming,
+the completion and par handoff, T3, T4, T5, DA-T11, the composition smoke) re-run green on v11. Record:
+`claude/DA8_RULES_V11_CLOSURE_2026-09-27.md`.
+
 ---
 
 ## 23. Version-boundary recommendation
@@ -928,6 +966,8 @@ every v10 room, not only delayed ones (`rulesVersion.ts:429-459`) — the same t
 delayed-auction rooms, and including the live `DATA_DIR` — for an SV marked down to $0 followed by the forced $0
 purchase, because DA-F5 changes legitimate Classic play (the repository corpus has no delayed log at all); **old v10 rooms
 must not be silently reinterpreted under v11 semantics**. `RULES_ENGINE_VERSION` remains 10 after DA-1.
+*(rev 11: **taken by DA-8** -- one bump, 10 → 11, at closure and none before; the pre-closure scans ran over the corpus and
+the live `DATA_DIR` and found no v10 game at all, so no v10 room is reinterpreted -- it is held, as caution (1) accepted.)*
 
 ---
 
@@ -958,6 +998,8 @@ D-52 … D-56; OD-DA-2b open; review corrections recorded in §22 and §23. Stil
 *(rev 8: DA-5 implemented — DA-F6, DA-F9 fixed; D-52 … D-55 and D-57 … D-59 implemented; DA-F12 routed to DA-8; `RULES_ENGINE_VERSION` still 10. Still NOT certified.)*
 *(rev 9: RR2A-F1 closed and DA-6 implemented — DA-F8 resolved; DA6-N1 / DA6-N2 found and fixed; `RULES_ENGINE_VERSION` still 10. Still NOT certified — DA-7 next.)*
 *(rev 10: DA-7 — **certified on rules-engine v10**, subject to the owner's full-suite gate; DA-F12 and the 10 → 11 boundary are DA-8's.)*
+*(rev 11: DA-8 — **the Delayed Auction is CERTIFIED at rules engine v11**: DA-F12 fixed, the 10 → 11 boundary taken, the v10
+history scans clean, DA-T10 closed by disposition; DA-F11 (deferred) and DA7-L1 (LOW) remain. Phase 2 closed.)*
 
 Delayed Auction remains `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` and is **not certified**. The owner spec
 is confirmed and consistently implemented at the trigger; the general auction is sound; eight defects (five HIGH, two

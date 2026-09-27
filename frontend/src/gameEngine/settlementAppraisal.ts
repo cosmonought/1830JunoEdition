@@ -34,7 +34,6 @@
 // the preview's job (`SETTLEMENT_ZERO_SUM`, `settlementPreview.ts`), not the appraiser's.
 
 import type { GameStateResponse } from "./gameState";
-import { SUPPORTED_RULES_ENGINE_VERSIONS } from "./rulesVersion";
 
 /* ------------------------------------------------------------------ */
 /* Errors                                                             */
@@ -321,18 +320,27 @@ interface CompanyFacts {
 
 /**
  * The rules engines whose boards this appraisal is CERTIFIED for (SET-0A rev 2 was audited at v10). Deliberately a
- * literal, NOT `SUPPORTED_RULES_ENGINE_VERSIONS`: that list follows `RULES_ENGINE_VERSION`, so a gameplay bump (DA-8
- * moves the game to v11) would otherwise extend money settlement to boards nobody has recertified. A board is
- * appraised only when its pin is BOTH supported by this build and certified here (SET-0C, 2026-09-26).
+ * literal, NOT `SUPPORTED_RULES_ENGINE_VERSIONS`: that list follows `RULES_ENGINE_VERSION`, so a gameplay bump would
+ * otherwise extend money settlement to boards nobody has recertified (SET-0C, 2026-09-26).
  *
- * BEFORE A v11 MONEY GAME CAN SETTLE: recertify the appraisal for v11 (rerun SET-0A's audit questions against the v11
- * reducer, rebuild the golden boards, re-pin their hashes) and only then add 11 here, in its own reviewed change.
+ * DA-8 (2026-09-27, owner ruling): TWO AXES, INDEPENDENT. The gameplay engine moved to v11; this list did not. A board
+ * is appraised when its pin is CERTIFIED HERE -- whether or not this build still PLAYS that engine. SET-0C first asked
+ * for both (supported AND certified), which a bump turns into "nothing settles": v11 is supported but not certified,
+ * and v10 is certified but no longer supported, so every certified v10 golden board, the Juno oracle and a game that
+ * had ended under v10 would all have been refused. The appraisal never replays a log -- it reads a sealed board -- so
+ * whether this build can still REPLAY v10 history (it cannot: `SUPPORTED_RULES_ENGINE_VERSIONS` is [11], and a v10
+ * room is held) says nothing about whether a sealed v10 board is appraised as certified. It is: byte-for-byte, the same
+ * appraiser (GNOLAND-1 §21 (4): "games already bound to 10 keep settling under 10"). And a v11 board stays REFUSED
+ * (`UNSUPPORTED_RULES_ENGINE_VERSION ... (supported: 10)`) until the appraisal is recertified for v11 -- SET-0A's audit
+ * questions rerun against the v11 reducer, v11 golden boards built and pinned beside the v10 ones -- and 11 is added
+ * here in its own reviewed change. What the SET-0C tripwire protected is kept: a gameplay bump alone never widens
+ * settlement.
  */
 export const SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10]);
 
-/** Supported by this build AND certified for settlement. */
-function settleableRulesEngineVersions(): number[] {
-  return SUPPORTED_RULES_ENGINE_VERSIONS.filter((version) => SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS.indexOf(version) >= 0);
+/** The engines a board may be appraised under: the certified list, and only it (DA-8 -- see above). */
+function settleableRulesEngineVersions(): readonly number[] {
+  return SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS;
 }
 
 function checkPin(state: Record<string, unknown>): void {

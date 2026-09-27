@@ -163,9 +163,28 @@ export function syn02GentleRustBankBreak(): Board {
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 
+/* ==================================================================
+    DA-8: THE GOLDEN BOARDS CARRY THE CERTIFIED PIN, NOT THE ENGINE'S
+   ==================================================================
+   SET-0A certified these thirteen boards at rules engine 10, and their `terminal_state_hash_v1` covers the pin like every
+   other field. Nine of them are dealt through a room (SYN-01's and SYN-02's GR-4 rooms, SYN-03's UR-7 game, and the
+   grafts on SYN-01), and a room stamps the CURRENT engine -- 11 since DA-8 -- so, left alone, the rebuild would follow the
+   gameplay engine and every certified hash would move with a number that says nothing about the appraisal. The owner's
+   DA-8 ruling keeps the two axes apart: settlement is certified for v10, and these ARE the v10 boards. So every board is
+   stamped with the certified pin at the end of its recipe (the corpus grafts always were). The hash test in
+   `settlementGoldens.test.ts` is then the proof that the v11 reducer rebuilds each certified board byte for byte, the
+   pin aside -- no appraisal input moved across the bump -- and `da8RulesV11Closure.test.ts` pins that the unstamped
+   rebuild carries the current engine and differs in that one field only. A v11 golden set is the v11 recertification's
+   to build, beside these, never over them. */
+export const SET0A_CERTIFIED_RULES_ENGINE_VERSION = 10;
+
+/** A board stamped with the pin SET-0A certified it at (see above). Never the engine's current version. */
+export const atCertifiedSettlementPin = (board: Board): Board =>
+  ({ ...board, rules_engine_version: SET0A_CERTIFIED_RULES_ENGINE_VERSION }) as Board;
+
 /** The corpus graft (SYN-05, 06, 13): terminal, bank broken, pinned so the strict appraiser accepts the board. */
 export const corpusTerminalGraft = (board: Board): Board =>
-  ({ ...board, current_round_type: "GameEnd", bank_broken: true, rules_engine_version: 10 }) as Board;
+  atCertifiedSettlementPin({ ...board, current_round_type: "GameEnd", bank_broken: true } as Board);
 
 function syn03(): Board {
   const board = UR.playCertificationGame({ tail: "A", stop: UR.atStockRound(7) }).room.state;
@@ -238,10 +257,13 @@ let cache: GoldenBoards | null = null;
  *  shared objects -- clone before grafting). */
 export function goldenBoards(): GoldenBoards {
   if (cache) return cache;
-  const { board: s01, submissions } = syn01ClassicBankBreak();
+  const built = syn01ClassicBankBreak();
+  // DA-8: SYN-01 is dealt by a room at the current engine; the certified board is the same board at the certified pin.
+  const s01 = atCertifiedSettlementPin(built.board);
+  const submissions = built.submissions;
   const s05 = corpusTerminalGraft(replayBoards(readExport(join(__dirname, "__fixtures__z6cLog.json"))));
   const s08 = syn08(s01);
-  const boards: Record<string, Board> = {
+  const recipes: Record<string, Board> = {
     "SYN-01-CLASSIC-BANKBREAK": s01,
     "SYN-02-GENTLE-RUST-BANKBREAK": syn02GentleRustBankBreak(),
     "SYN-03-UNPREDICTABLE-REVENUE-END": syn03(),
@@ -260,6 +282,9 @@ export function goldenBoards(): GoldenBoards {
     ),
     "SYN-13-CV4-TWO-PLAYER-END": corpusTerminalGraft(replayBoards(readJsonl(join(FROZEN_LOG_DIR, "JUNO-CV4.log.jsonl")))),
   };
+  // DA-8: every recipe ends at the certified pin (SYN-02 and SYN-03 are room-dealt too).
+  const boards: Record<string, Board> = {};
+  for (const [name, board] of Object.entries(recipes)) boards[name] = atCertifiedSettlementPin(board);
   cache = { boards, syn01Submissions: submissions };
   return cache;
 }

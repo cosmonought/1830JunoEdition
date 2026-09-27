@@ -61,7 +61,7 @@ import {
 } from "../gameEngine/escrow/escrowModel";
 import { freezeEscrowRoster, joinTicketV1, type EscrowTrustPolicy } from "../gameEngine/escrow/escrowRoster";
 import { checkSettlementKeyConfig, selectSettlementKey, settlementDigestToSign, type SettlementKeyConfig } from "../../../server/src/escrow/escrowPorts";
-import { goldenBoards } from "./settlementGoldenBoards";
+import { atCertifiedSettlementPin, goldenBoards } from "./settlementGoldenBoards";
 import * as GR from "./gentleRustCertificationGame";
 
 type Loose = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -258,7 +258,8 @@ const ANTE_NET = b(derived.ante.ante_net_ujuno);
 const REASON_NAME: Record<number, "BankBroken" | "Bankruptcy" | "ResolverCorrection"> = { 1: "BankBroken", 2: "Bankruptcy", 5: "ResolverCorrection" };
 
 function boardOf(v: Loose): GameStateResponse {
-  return String(v.source_case).startsWith("GR-4") ? GR.certificationStart() : boards[v.source_case];
+  // DA-8: the GR-4 start is dealt at the current engine; the SET-0C vector was certified on it at the v10 pin.
+  return String(v.source_case).startsWith("GR-4") ? atCertifiedSettlementPin(GR.certificationStart()) : boards[v.source_case];
 }
 
 /** The certified builder's arguments for a vector, and the interface builder's equivalent (payout_address for

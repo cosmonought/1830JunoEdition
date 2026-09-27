@@ -42,6 +42,8 @@
 // dealt at the certified engine, and that the development corpus stays unreinterpreted. It OWNS the current version
 // literal until the next closure narrows it, as this pass narrowed `gentleRustClosure.test.ts` (#1705's precedent for
 // `stage10Closure`).
+// *(DA-8, 2026-09-27: narrowed exactly so -- the 10 -> 11 boundary moved the current literal to
+// `da8RulesV11Closure.test.ts`; row 10 and the v9 matrix are unchanged here, version literals only.)*
 
 import { readFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
@@ -147,15 +149,19 @@ const row10 = () => RULES_ENGINE_CHANGELOG[9].note;
 /* ================================================================================================= */
 
 describe("RULES_ENGINE_VERSION 10 (Unpredictable Revenue certification closure, UR-8)", () => {
-  it("is 10, and 10 is the one supported version", () => {
-    expect(RULES_ENGINE_VERSION).toBe(10);
-    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([10]);
+  it("is at least 10, and the supported list is still the one derived version", () => {
+    /* DA-8: THIS CASE NO LONGER OWNS THE CURRENT VERSION -- UR-8's own precedent for `gentleRustClosure`. It asserted
+       `=== 10` and `[10]`, the right claim for the pass that MADE 10; the 10 -> 11 bump would fail an Unpredictable
+       Revenue case that has nothing to say about the Delayed Auction. Row 10 is still asserted in full below; the current
+       version belongs to `da8RulesV11Closure.test.ts`. Version-literal only. */
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(10);
     // Derived, as every bump since version 1 has left it -- the bump REPLACES the supported version.
     expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
   });
 
   it("the changelog has a tenth row, rows 1 - 9 are untouched in order, and row 10 certifies Unpredictable Revenue", () => {
-    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    // DA-8: a PREFIX pin, as `gentleRustClosure` / `stage10Closure` hold their own rows -- row 11 is DA-8's.
+    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version).slice(0, 10)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(RULES_ENGINE_CHANGELOG[8].note).toMatch(/^Gentle Rust certification closure \(GR-5/);
     const note = row10();
     expect(note).toMatch(/^Unpredictable Revenue certification closure \(UR-8, 2026-09-25\)/);
@@ -254,22 +260,26 @@ describe("RULES_ENGINE_VERSION 10 (Unpredictable Revenue certification closure, 
 /* 2. THE SUPPORTED-VERSION MATRIX                                                                    */
 /* ================================================================================================= */
 
-describe("the supported-version matrix under a v10-only server", () => {
-  it("1. a newly dealt game records rules_engine_version 10 -- on the log and on the board, whatever the client claimed", () => {
-    for (const claimed of [undefined, 1, 8, PRIOR, 11, 999]) {
+/* DA-8: the matrix was written for a v10-only server. Its literal 10s now read the CURRENT version -- the supported-version
+   rule is UR-8's claim, the number is not -- and a stored 9 is still the prior-version case it was; the v11 matrix, with 10
+   as the prior pinned version, is `da8RulesV11Closure.test.ts`'s. Version-literal only. */
+describe("the supported-version matrix under a single-version server", () => {
+  it("1. a newly dealt game records the current rules_engine_version -- on the log and on the board, whatever the client claimed", () => {
+    // DA-8: 11 was "another version" at 10; at 11 the one-ahead version plays that part.
+    for (const claimed of [undefined, 1, 8, PRIOR, RULES_ENGINE_VERSION + 1, 999]) {
       for (const variants of [{}, UR_WITH_GR]) {
         const room = playedRoom(claimed, variants);
-        expect(setupPayloadOf(room.entries)[RULES_ENGINE_VERSION_FIELD]).toBe(10);
-        expect(room.rulesEngineVersion()).toBe(10);
-        expect(room.state.rules_engine_version).toBe(10);
+        expect(setupPayloadOf(room.entries)[RULES_ENGINE_VERSION_FIELD]).toBe(RULES_ENGINE_VERSION);
+        expect(room.rulesEngineVersion()).toBe(RULES_ENGINE_VERSION);
+        expect(room.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
       }
     }
   });
 
-  it("2. a v10-pinned room is supported under SERVER_REPLAY_POLICY: restored, rebuilt to the live board, playable", () => {
+  it("2. a room pinned to the current engine is supported under SERVER_REPLAY_POLICY: restored, rebuilt to the live board, playable", () => {
     for (const variants of [{}, UR_WITH_GR]) {
       const live = playedRoom(undefined, variants);
-      expect(replayCompatibility(live.entries)).toEqual({ kind: "compatible", version: 10 });
+      expect(replayCompatibility(live.entries)).toEqual({ kind: "compatible", version: RULES_ENGINE_VERSION });
       expect(replayRefusal(replayCompatibility(live.entries), SERVER_REPLAY_POLICY)).toBeNull();
       const restored = session(live.entries);
       expect(restored.incompatible).toBeNull();
@@ -277,20 +287,20 @@ describe("the supported-version matrix under a v10-only server", () => {
       expect(restored.catchUp(-1).kind).toBe("catch-up");
       const headless = replayLog(entriesFromExport(live.entries), sandboxReplayProviders(), seed(), undefined, SERVER_REPLAY_POLICY);
       expect(stateDigest(headless.state)).toBe(stateDigest(live.state));
-      expect(headless.state.rules_engine_version).toBe(10);
+      expect(headless.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
     }
   });
 
   it("3. a v9-pinned room is INCOMPATIBLE: held before the reducer sees an entry, under every policy", () => {
     const nine = repinned(playedRoom().entries, PRIOR);
-    expect(replayCompatibility(nine)).toEqual({ kind: "incompatible", version: 9, supported: [10] });
+    expect(replayCompatibility(nine)).toEqual({ kind: "incompatible", version: 9, supported: [RULES_ENGINE_VERSION] });
     const apply = jest.spyOn(RoomEngine.prototype, "apply");
     try {
       for (const dev of [false, true]) {
         const counting = countingProviders();
         const held = session(nine, { providers: counting.providers, dev });
-        expect(held.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 9, supported: [10] });
-        expect(held.incompatible?.reason).toMatch(/rules engine version 9; this server supports version 10\b/);
+        expect(held.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 9, supported: [RULES_ENGINE_VERSION] });
+        expect(held.incompatible?.reason).toMatch(new RegExp(`rules engine version 9; this server supports version ${RULES_ENGINE_VERSION}\\b`));
         expect(counting.count()).toBe(0);
       }
       expect(apply).not.toHaveBeenCalled();
@@ -320,7 +330,7 @@ describe("the supported-version matrix under a v10-only server", () => {
       for (const dev of [false, true]) {
         const counting = countingProviders();
         const held = session(nine, { providers: counting.providers, dev });
-        expect(held.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 9, supported: [10] });
+        expect(held.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 9, supported: [RULES_ENGINE_VERSION] });
         expect(stateDigest(held.state)).toBe(stateDigest(session().state));
         expect(counting.count()).toBe(0);
       }
@@ -328,22 +338,23 @@ describe("the supported-version matrix under a v10-only server", () => {
     } finally {
       apply.mockRestore();
     }
-    // The same deal, pinned 10 by this server, is admitted and rebuilds to the live board.
+    // The same deal, pinned by this server to the current engine, is admitted and rebuilds to the live board.
     const restored = session(live.entries);
     expect(restored.incompatible).toBeNull();
     expect(stateDigest(restored.state)).toBe(stateDigest(live.state));
   });
 
-  it("4. any other unsupported numeric version is incompatible too -- 8 (GR-5's prior) and the one-ahead 11 included", () => {
+  it("4. any other unsupported numeric version is incompatible too -- 8 (GR-5's prior) and the one-ahead version included", () => {
     const base = playedRoom().entries;
-    for (const version of [0, 1, 6, 7, 8, 11, 999]) {
+    // DA-8: 11 is the current version now; the one-ahead version plays its part.
+    for (const version of [0, 1, 6, 7, 8, RULES_ENGINE_VERSION + 1, 999]) {
       const pinned = repinned(base, version);
-      expect(replayCompatibility(pinned)).toEqual({ kind: "incompatible", version, supported: [10] });
+      expect(replayCompatibility(pinned)).toEqual({ kind: "incompatible", version, supported: [RULES_ENGINE_VERSION] });
       for (const dev of [false, true]) expect(session(pinned, { dev }).incompatible?.compatibility.kind).toBe("incompatible");
     }
   });
 
-  it("5. a missing version is incompatible under the server / deployment policy -- never read as 10", () => {
+  it("5. a missing version is incompatible under the server / deployment policy -- never read as the current version", () => {
     const legacy = repinned(playedRoom(undefined, UR_WITH_GR).entries, undefined);
     expect(rulesEngineVersionOf(legacy)).toBeNull();
     expect(replayCompatibility(legacy)).toEqual({ kind: "legacy" });
@@ -365,7 +376,7 @@ describe("the supported-version matrix under a v10-only server", () => {
     expect(SERVER_REPLAY_POLICY.legacyLogs).toBe("refuse");
   });
 
-  it("7. no compatibility path rewrites a stored 9 (or a missing pin) to 10", () => {
+  it("7. no compatibility path rewrites a stored 9 (or a missing pin) to the current version", () => {
     const base = playedRoom(undefined, UR_WITH_GR).entries;
     for (const stored of [repinned(base, PRIOR), repinned(base, undefined)]) {
       const before = JSON.stringify(stored);
@@ -408,7 +419,7 @@ describe("the supported-version matrix under a v10-only server", () => {
       expect(Object.keys(hello).sort()).toEqual(["build", "kind", "pinnedRulesEngineVersion", "reason", "supportedRulesEngineVersions"]);
       if (hello.kind !== "incompatible") return;
       expect(hello.pinnedRulesEngineVersion).toBe(rulesEngineVersionOf(stored) ?? null);
-      expect(hello.supportedRulesEngineVersions).toEqual([10]);
+      expect(hello.supportedRulesEngineVersions).toEqual([RULES_ENGINE_VERSION]);
       // The engine is at its seed: nothing was interpreted.
       expect(stateDigest(held.state)).toBe(stateDigest(session().state));
     }
@@ -416,7 +427,7 @@ describe("the supported-version matrix under a v10-only server", () => {
 
   it("10. build compatibility stays a separate concept from rules-engine-version compatibility", () => {
     const live = playedRoom();
-    // A different BUILD with the same v10 pin: rebuilt; the deal-build pin (#1252) then answers moves -- never `incompatible`.
+    // A different BUILD with the same (current) pin: rebuilt; the deal-build pin (#1252) then answers moves -- never `incompatible`.
     const otherBuild = session(live.entries, { build: "another-deploy" });
     expect(otherBuild.incompatible).toBeNull();
     expect(stateDigest(otherBuild.state)).toBe(stateDigest(live.state));
@@ -462,12 +473,13 @@ describe("v10's semantics are carried by the one reducer, not by a version branc
     // UR-7's game (`unpredictableRevenueCertificationGame.test.ts`) owns the behaviour; this pins only the version it now runs at.
     const start = certificationStart();
     expect(start.rules_engine_version).toBe(RULES_ENGINE_VERSION);
-    expect(start.rules_engine_version).toBe(10);
+    // DA-8: was `toBe(10)`; Unpredictable Revenue is certified at 10, so the game deals at 10 or later. Version-literal only.
+    expect(start.rules_engine_version).toBeGreaterThanOrEqual(10);
     expect(start.variants?.unpredictableRevenue).toBe(true);
     expect(start.variants?.gentleRust).toBe(true);
     // G0, the standard control, is the same deal with the variant off -- and the same engine.
     const control = certificationStart({ unpredictableRevenue: false });
-    expect(control.rules_engine_version).toBe(10);
+    expect(control.rules_engine_version).toBe(RULES_ENGINE_VERSION);
     expect(control.variants?.unpredictableRevenue).toBe(false);
   });
 });
@@ -498,7 +510,7 @@ function corpus(): Array<{ name: string; entries: ExportedEntry[] }> {
   return out;
 }
 
-describe("the canonical development corpus under v10", () => {
+describe("the canonical development corpus under the current engine (v10 at UR-8)", () => {
   const files = corpus();
   if (files.length === 0) {
     it("skipped: the development corpus is not present in this checkout", () => expect(files).toEqual([]));

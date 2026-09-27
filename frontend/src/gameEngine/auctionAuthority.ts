@@ -530,6 +530,56 @@ export function auctionPriorityDealSeat(state: GameStateResponse): number {
   return auctionCursorSeat(state) ?? state.priority_deal_index;
 }
 
+/* ==================================================================
+    DA-8 (DA-F12): WHO RESUMES AFTER THE REVENUE ALL-PASS -- THE PRIORITY DEAL'S HOLDER, READ OFF THE BOARD
+   ==================================================================
+   §1.2.3 (the 48-page book's C-2.2 prints the same text): "If all players pass and the Schuylkill Valley has been
+   sold, each of the private companies already bought pays revenue. Then the buy-bid-turn sequence resumes with the
+   player with the priority deal card." The engine resumed with the seat AFTER THE LAST PASSER (`nextSeat`, the arm's
+   one-step rule). The two agree whenever the passing lap began on the holder -- a lap that follows a direct purchase,
+   whose cursor already stands on the buyer's left -- and differ when a BID preceded the lap (DA-4's probe: A buys the
+   SV, B bids, C / A / B pass, income is paid, and C acted next instead of B). The three revenue all-passes the stored
+   corpus carries (JUNO-G6J; JUNO-Z6C x 2) follow purchases, so they already resumed on the holder
+   (`da8RulesV11Closure.test.ts` asserts it at every one).
+
+   WHERE THE HOLDER IS, WITH NO NEW FIELD. DA-4 kept no second record of the card (a field on the atom would move every
+   standard board and the frozen goldens -- and, at GameEnd, the certified settlement boards' state hash). The board
+   already says who holds it:
+     * the card moves only on a DIRECT purchase -- a face-value buy of the lowest private, or the SV taken at $0
+       ("treated as a purchase") -- to the purchaser's left; an award (a lone bid in the cascade, a contest's winner)
+       never moves it (§1.2.2);
+     * the auction settles `settled_price` on every private it sells and nothing else writes it (#1340): the face on a
+       buy, $0 on the taking, the winning bid on an award -- and a bid is always at least face + $5 (§1.2.1, #1184,
+       asked at both locks), so `settled_price <= cost` IS "sold by a direct purchase";
+     * privates leave the auction only from the front of its list (the lowest offered), and the list is the deal's
+       `private_companies` order (`waterfallForRoster`, #1320) -- so the LAST direct purchase is the last such private
+       in that order.
+   The holder is the seat to that purchaser's left; with no direct purchase yet (possible only on a board whose SV is
+   not in the auction) it is the card the auction opened on, `priority_deal_index` -- seat 0 at a standard deal, the
+   holder going in under the Delayed Auction (DA-4, DA-F3). Rebuilt from the log on every replay, restore and
+   `RevertTo`, like everything else the board holds.
+
+   ONLY THE REVENUE ALL-PASS ASKS THIS. The SV's markdown lap names "the next player" for the $0 taking and resumes
+   clockwise, as it always did; a contest resumes on the preserved cursor (DA-4); and the handoff reads the cursor,
+   which at that moment IS this holder (`auctionPriorityDealSeat`). The rule is every table's (Classic legitimate play
+   and the Delayed Auction), taken at the deliberate v10 -> v11 boundary (changelog row 11). */
+export function auctionPriorityHolder(state: GameStateResponse): string | null {
+  const players = state.player_addresses ?? [];
+  if (players.length === 0) return null;
+  let lastDirect: string | null = null;
+  for (const entry of state.private_companies ?? []) {
+    const price = entry.settled_price;
+    const face = Number(entry.cost);
+    if (typeof price !== "number" || !Number.isFinite(face) || !entry.owner) continue;
+    if (price <= face) lastDirect = entry.owner;
+  }
+  if (lastDirect !== null) {
+    const at = players.indexOf(lastDirect);
+    if (at !== -1) return players[(at + 1) % players.length];
+  }
+  return players[state.priority_deal_index] ?? null;
+}
+
 /* ---- DA-5: an acquisition a player may not choose (D-57, D-58, D-59) -------------------------------- */
 
 /* ==================================================================

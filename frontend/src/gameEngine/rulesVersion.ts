@@ -62,7 +62,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 10;
+export const RULES_ENGINE_VERSION = 11;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -308,6 +308,52 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "client-sent, omitted or redirected Yellow Sign requests, a Mark that took a Final Run train or returned its train to " +
       "the depot, a gold-trimmed train removed on a run, a gift that turned the phase, a gilded trade-in, a model-level " +
       "Blood Price that moved the seller and a +10% tie paid half up, so it is refused, never reinterpreted.",
+  },
+  {
+    version: 11,
+    note:
+      "Delayed Auction certification closure (DA-8, 2026-09-27): the Delayed Auction variant is certified (DA-7, `79d6f10`, " +
+      "`14d0c64`), and the replay semantics of DA-3, DA-4, DA-5, Phase 2A's RR2A-F1 and DA-8's DA-F12 (`66847e0`, `387ade9`, " +
+      "`a6ef5e7`, `445b9a4`, this closure) take this one bump. Phase 2's rules-engine closure. REPLAY SEMANTICS, exactly ten. " +
+      "(1) DA-3 (DA-F1), every table: an auction message is refused at ingress and in the reducer unless the auction is " +
+      "live -- the round being played, its atom active -- so a dormant or finished atom is never moved, and a forged " +
+      "`WaterfallPass` after an auction no longer pays private income or counts as a Stock Round pass. (2) DA-3 (DA-F2), " +
+      "every table: `SetBoPar` names the B&O private's owner and is refused while the B&O is locked. (3) DA-3 (DA-F7), " +
+      "every table: the B&O par is owed before the auction hands off (`OpenStockRound` refused while it is owed) and the " +
+      "President's Certificate is the BO owner's. (4) DA-4 (DA-F3), Delayed Auction: the auction opens on the Priority " +
+      "Deal holder (the atom's cursor and the board's seat), not on dealt seat 0. (5) DA-4 (DA-F4, DA-F5), every table: " +
+      "the Priority Deal the auction hands to the Stock Round is the seat left of its last DIRECT purchaser, read from the " +
+      "atom's cursor (`auctionPriorityDealSeat`), and the seat re-seats on the cursor after every main-rotation auction " +
+      "message -- so a $0 Schuylkill Valley taking no longer leaves Stock Round 1 with the taker. (6) DA-5 (D-52, DA-F6), " +
+      "Delayed Auction: one 10% PRR certificate is reserved in the IPO for the C&A from the deal " +
+      "(`reserved_certificate`), no ordinary purchase takes it, and the grant moves exactly it and settles the float and " +
+      "the presidency at once; on every table a grant never mints from a pile holding less than 10%. (7) DA-5 (D-53, D-57, " +
+      "D-58, D-59): the must-sell debt is its CURABLE part only, on every table, and holds the Stock Round pass at both " +
+      "locks (#759 (iii)), not in the shell alone; at a Delayed Auction table a voluntary face-value purchase, bid or " +
+      "raise that would leave an excess the next Stock Round cannot cure is refused, and an award from a bid legal when " +
+      "accepted is honoured. (8) DA-5 (D-55, DA-F9), Delayed Auction: the first 5-train while the auction is still owed " +
+      "cancels it for good -- `private_auction_complete`, the unsold privates closed and no longer offered, the " +
+      "reservation released, the B&O unlocked. (9) RR2A-F1 (Phase 2A), every pinned table: `BeginOperatingRound` is " +
+      "refused in every round and a Stock Round / Operating Round `PassTurn` inside the auction is refused " +
+      "(`roundTransitionRefusal`) -- rounds advance only by themselves. (10) DA-8 (DA-F12), every table: after the " +
+      "revenue all-pass (the SV sold) the buy-bid-turn sequence resumes with the Priority Deal holder, the seat left of the " +
+      "last direct purchaser (`auctionPriorityHolder`), not with the seat after the last passer. (9), and (7)'s reading " +
+      "of a sale's chart price, ask whether a pin EXISTS (#1698's presence rule, as the 10.6 lay seam does); none of the " +
+      "ten asks the pin's value. NOT RULES, named so " +
+      "the row is not read as them: DA-6's UI, copy, tutorials, Rules Reference and Activity Log lines (DA-F8, DA6-N1, " +
+      "DA6-N2's sentence, DA6-O1, DA6-O2); C2-02 (`79d6f10`: a harmless duplicate consent answer is settled for its " +
+      "sender and no longer appended -- a stored one replays as the no-op it always was); LIVE-2's ingress, schema, " +
+      "revert-reach (RV-2 ... RV-7) and room authority, which judge what may be APPENDED and never what a stored entry " +
+      "means; RR2A-F2 and DA-7's certification tests, documents and certification game G-DA; and DA7-L1 (a refusal's " +
+      "wording at ingress, deferred). None of them moves a board, a message or a digest. SETTLEMENT IS A SEPARATE AXIS: " +
+      "`SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` stays [10] -- v10 boards appraise byte-for-byte as certified, and " +
+      "money settlement of a v11 board is refused until the appraisal is recertified for v11 (owner ruling, DA-8). The " +
+      "canonical development corpus is unpinned and replays unchanged (its three revenue all-passes already resume on the " +
+      "holder; it holds no $0 taking). A version-10 log can carry auction messages sent outside the auction, a B&O par " +
+      "taken by a non-owner or skipped at the handoff, a Delayed Auction opened on seat 0 or handing the Priority Deal to " +
+      "the wrong seat, a C&A grant that minted a share or left the float and presidency waiting, a Stock Round passed " +
+      "over a curable excess, an owed auction that outlived the first 5-train, an Operating Round started by message " +
+      "and an auction resumed on the wrong seat, so it is refused, never reinterpreted.",
   },
 ];
 

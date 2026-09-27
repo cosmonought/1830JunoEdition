@@ -22,6 +22,7 @@ import { StoreDefiniteError } from "../persistence/storeResult";
 import { inspectData, planGc, releaseHold, runGc, verifyGame, withLock } from "../tools/gamesDoctor";
 import { repairBytes } from "../tools/logDoctor";
 import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/roomSession";
+import { RULES_ENGINE_VERSION } from "../../../frontend/src/gameEngine/rulesVersion";
 import { mintGameId, type GameRecord } from "./gameRecord";
 import { createFileHoldStore, createMemoryHoldStore, isGameHold, makeHold } from "./holdStore";
 import {
@@ -100,7 +101,8 @@ function dealtOnDisk(dir: string, buys = 1, over: { gameId?: string; record?: (r
   const gameId = over.gameId ?? mintGameId();
   const base = seededRecord([ALICE, BOB], { dealt: true, gameId });
   const log = storedLog(buys);
-  const record: GameRecord = { ...base, rules_engine_version: 10, started_at: log[0].at ?? Date.now() };
+  // DA-8: the record caches the deal's pin, which `storedLog` deals at the current engine (was the literal 10).
+  const record: GameRecord = { ...base, rules_engine_version: RULES_ENGINE_VERSION, started_at: log[0].at ?? Date.now() };
   writeRecord(dir, over.record ? over.record(record) : record);
   writeLog(dir, gameId, over.log ? over.log(log) : log);
   return gameId;
@@ -289,7 +291,7 @@ describe("LIVE-3C discovery", () => {
 
 describe("LIVE-3C reconciliation", () => {
   test("the table, pure: repairs where the record only lags, holds where it disagrees", () => {
-    const base = { ...seededRecord([ALICE, BOB], { dealt: true }), rules_engine_version: 10 };
+    const base = { ...seededRecord([ALICE, BOB], { dealt: true }), rules_engine_version: RULES_ENGINE_VERSION }; // DA-8: was 10
     const log = storedLog(2);
     const board = { ended: false, closed: false };
     assert.deepEqual(reconcileLoaded(base, { entries: log, board }), { kind: "ok" });
@@ -346,7 +348,7 @@ describe("LIVE-3C reconciliation", () => {
           }
           return readRecord(dir, gameId);
         })();
-        assert.deepEqual([record.status, record.turn_order, record.rules_engine_version, record.expires_at], ["active", [ALICE, BOB], 10, null]);
+        assert.deepEqual([record.status, record.turn_order, record.rules_engine_version, record.expires_at], ["active", [ALICE, BOB], RULES_ENGINE_VERSION, null]);
         assert.ok(await audited(booted, (line) => line.event === "record.repaired" && line.game_id === gameId));
         const bob = await Client.open(booted.port, BOB);
         bob.hello(gameId);
@@ -683,6 +685,8 @@ describe("LIVE-3C incompatible and read-only games", () => {
     withDir("incompatible", async (dir) => {
       const newer = dealtOnDisk(dir, 1, { record: (r) => ({ ...r, rules_engine_version: 99 }), log: (entries) => withDeal(entries, (setup) => (setup.rules_engine_version = 99)) });
       const older = dealtOnDisk(dir, 1, { record: (r) => ({ ...r, rules_engine_version: 9 }), log: (entries) => withDeal(entries, (setup) => (setup.rules_engine_version = 9)) });
+      // DA-8: the version the v11 boundary replaced -- a v10 game on disk is held exactly as any older pin is.
+      const priorTen = dealtOnDisk(dir, 1, { record: (r) => ({ ...r, rules_engine_version: 10 }), log: (entries) => withDeal(entries, (setup) => (setup.rules_engine_version = 10)) });
       const otherBuild = dealtOnDisk(dir, 1, { log: (entries) => withDeal(entries, (setup) => (setup.build = "an-older-build")) });
       for (let restart = 0; restart < 2; restart += 1) {
         const booted = await boot(dir);
@@ -690,6 +694,7 @@ describe("LIVE-3C incompatible and read-only games", () => {
           for (const [gameId, code] of [
             [newer, "rules-version-newer"],
             [older, "rules-version-older"],
+            [priorTen, "rules-version-older"],
           ] as const) {
             assert.equal(booted.server.lifecycle.discovery()?.games.get(gameId)?.code, code);
             const alice = await Client.open(booted.port, ALICE);

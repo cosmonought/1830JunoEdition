@@ -81,6 +81,7 @@ import {
   auctionCursorSeat,
   auctionLifecycleRefusal,
   auctionPriorityDealSeat,
+  auctionPriorityHolder,
   isAuctionLifecycleMessage,
 } from "./auctionAuthority";
 import { roundTransitionRefusal } from "./roundTransitionAuthority"; // RR2A-F1
@@ -3028,6 +3029,14 @@ function applyAuctionStep(
 
   if (result.allPassed) {
     next = applyPrivateRevenue(next)?.state ?? next;
+    /* DA-8 (DA-F12): "Then the buy-bid-turn sequence resumes with the player with the priority deal card" (§1.2.3) --
+       not with the seat after the last passer, which is who the atom's one-step rule named. `allPassed` is the
+       REVENUE all-pass only (the SV's markdown laps report false). The board's seat is re-seated on this cursor by
+       the `WaterfallPass` arm (DA-4's mirror), so ingress, the dashboard and the reducer all name the holder. */
+    const holder = auctionPriorityHolder(next);
+    if (next.waterfall && holder !== null && holder !== next.waterfall.current_turn) {
+      next = { ...next, waterfall: { ...next.waterfall, current_turn: holder } };
+    }
   }
   return next;
 }

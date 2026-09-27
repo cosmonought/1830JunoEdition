@@ -19,6 +19,10 @@
 //                        to `holds/released/` with the verification and the note; an audit line is appended. There is
 //                        no force: a game that does not verify stays held, and the tool says why.
 //   gc [--apply]         OFFLINE, LOCK HELD with --apply (a dry run otherwise): the conservative lifecycle below.
+//   scan-v10 [--json]    DA-8, READ-ONLY (takes no lock, writes nothing, safe beside a running server): every stored log --
+//                        live and archived, server-owned and legacy JUNO-XXX -- classified by its rules-engine pin, and each
+//                        v10 game's committed entries checked for the ones rules engine 11 reads differently
+//                        (`frontend/src/utils/rulesBoundaryScan.ts`). A v11 server holds a v10 game; this says what it holds.
 //
 // WHAT GC DOES, AND WHAT IT NEVER DOES (brief §10):
 //   retained live   every waiting, active, completed, cancelled, expired, held, incompatible or read-only game; every
@@ -58,6 +62,13 @@ import { createFileRecordStore } from "../rooms/recordStore";
 import { reconcileLoaded, type Verdict } from "../rooms/reconcile";
 import { factsFromEntries, sessionBoardFacts } from "../rooms/roomHost";
 import { verifySession } from "./verifySession";
+import {
+  BOUNDARY_SCAN_VERSION,
+  scanPinnedHistory,
+  summarizeBoundaryScan,
+  type BoundaryScanSummary,
+  type GameBoundaryScan,
+} from "../../../frontend/src/utils/rulesBoundaryScan";
 
 export const TOOL_BUILD = "gamesDoctor";
 
@@ -494,6 +505,86 @@ export async function withLock<T>(dataDir: string, work: (lock: DataLock) => Pro
 }
 
 /* ==================================================================
+    DA-8: scan-v10 -- THE v10 -> v11 BOUNDARY, READ-ONLY
+   ==================================================================
+   Reads every `*.log.jsonl` in the data directory and under `archive/<id>/`, with the same line reader the server
+   loads with (`scanLog`: stamped and legacy lines, a torn tail cut at its last complete batch, a corrupt log reported and
+   skipped). Takes no lock and writes nothing -- not a hold, not an ops line, not a record -- so it may run beside a live
+   server; it then reads what was on disk at that moment, and says so. Principal ids are never printed: a game is named
+   by its file, an entry by its index and message kind. */
+
+export interface BoundaryScanReport {
+  readonly dataDir: string;
+  readonly version: number;
+  /** A server held the directory while the scan read it (its later appends are not in this report). */
+  readonly serverRunning: boolean;
+  readonly games: readonly GameBoundaryScan[];
+  readonly unreadable: ReadonlyArray<{ readonly file: string; readonly reason: string }>;
+  readonly summary: BoundaryScanSummary;
+}
+
+async function listDirectory(directory: string): Promise<string[]> {
+  try {
+    return (await fs.readdir(directory)).sort();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return [];
+    throw error;
+  }
+}
+
+export async function scanRulesBoundary(dataDir: string): Promise<BoundaryScanReport> {
+  const files: Array<{ name: string; file: string }> = [];
+  for (const name of await listDirectory(dataDir)) if (name.endsWith(".log.jsonl")) files.push({ name, file: path.join(dataDir, name) });
+  const archive = path.join(dataDir, "archive");
+  for (const game of await listDirectory(archive)) {
+    for (const name of await listDirectory(path.join(archive, game))) {
+      if (name.endsWith(".log.jsonl")) files.push({ name: `archive/${game}/${name}`, file: path.join(archive, game, name) });
+    }
+  }
+  const games: GameBoundaryScan[] = [];
+  const unreadable: Array<{ file: string; reason: string }> = [];
+  for (const { name, file } of files) {
+    const bytes = await readOptional(file);
+    if (bytes === null) continue;
+    const scan = scanLog(bytes);
+    if (scan.classification === "corrupt") {
+      unreadable.push({ file: name, reason: `corrupt: ${scan.detail}` });
+      continue;
+    }
+    games.push(scanPinnedHistory(name, scan.entries));
+  }
+  const lock = await lockStatus(dataDir);
+  return { dataDir, version: BOUNDARY_SCAN_VERSION, serverRunning: lock.held, games, unreadable, summary: summarizeBoundaryScan(games) };
+}
+
+function printBoundaryScan(report: BoundaryScanReport): void {
+  const { summary } = report;
+  const pins = Object.entries(summary.byPin).map(([pin, n]) => `${n} ${pin}`).join(", ") || "none";
+  console.log(`scan-v10 (READ-ONLY) of ${report.dataDir}: ${summary.logs} logs -- ${pins}`);
+  if (report.serverRunning) console.log("  note: a game server holds this directory; this is what was on disk when it was read");
+  console.log(`  v${report.version} games replayed for inspection: ${summary.scanned} (revenue all-passes seen: ${summary.revenueAllPasses})`);
+  console.log(`    A  BeginOperatingRound committed ................ ${summary.counts.A}`);
+  console.log(`    B  PassTurn committed inside the auction ........ ${summary.counts.B}`);
+  console.log(`    C  SV marked down to $0 and taken (DA-F5) ....... ${summary.counts.C}`);
+  console.log(`    F12 revenue all-pass resumed off the holder ..... ${summary.counts.F12}`);
+  console.log(`    X  other entries the current engine would refuse  ${summary.counts.X}`);
+  console.log(`    D  harmless duplicate answers (informational) ... ${summary.counts.D}`);
+  for (const game of report.games) {
+    if (!game.scanned) continue;
+    const head = `  ${game.name}: ${game.effective} effective entries${game.error ? ` -- REPLAY STOPPED: ${game.error}` : ""}`;
+    console.log(game.hits.length === 0 ? `${head}, nothing flagged` : head);
+    for (const hit of game.hits) console.log(`    ${hit.pattern.padEnd(3)} #${hit.index} ${hit.kind} [round before: ${hit.roundBefore ?? "?"}] -- ${hit.detail}`);
+  }
+  for (const bad of report.unreadable) console.log(`  UNREADABLE ${bad.file}: ${bad.reason}`);
+  console.log(
+    summary.clean && report.unreadable.length === 0
+      ? `VERDICT: CLEAN -- no stored v${report.version} entry reads differently under the current engine.`
+      : "VERDICT: REVIEW -- the entries above read differently under the current engine; the v11 server holds these games, nothing was changed.",
+  );
+}
+
+/* ==================================================================
     THE CLI
    ================================================================== */
 
@@ -503,6 +594,7 @@ const USAGE = [
   "  inspect [--deep] [--json]           every game classified from its files (server stopped)",
   "  release <game_id> --note \"<text>\"   lift one durable hold after verifying the game (server stopped)",
   "  gc [--apply] [--json]               the conservative lifecycle: a dry run unless --apply (server stopped)",
+  "  scan-v10 [--json]                   DA-8: the v10 -> v11 boundary scan of every stored log (read-only, any time)",
 ].join("\n");
 
 function line(game: Inspection["games"][number]): string {
@@ -525,6 +617,12 @@ async function main(argv: readonly string[]): Promise<number> {
     }
     console.log(raw.toString("utf8").trim());
     return 0;
+  }
+  if (command === "scan-v10") {
+    const report = await scanRulesBoundary(dataDir);
+    if (json) console.log(JSON.stringify(report, null, 2));
+    else printBoundaryScan(report);
+    return report.summary.clean && report.unreadable.length === 0 ? 0 : 1;
   }
   if (command !== "inspect" && command !== "release" && command !== "gc") {
     console.error(USAGE);

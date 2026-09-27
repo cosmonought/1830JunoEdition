@@ -25,9 +25,8 @@ import { appraiseSeats, baseNetWorthVector, type SettlementSeat } from "../gameE
 import { terminalSettlementWeights, SETTLEMENT_REASON_CODE, type TerminalReason } from "../gameEngine/settlementPolicy";
 import { payoutPreview } from "../gameEngine/settlementPreview";
 import { rankPlayers } from "../gameEngine/endgame";
-import { RULES_ENGINE_VERSION } from "../gameEngine/rulesVersion";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { goldenBoards } from "./settlementGoldenBoards";
+import { goldenBoards, SET0A_CERTIFIED_RULES_ENGINE_VERSION } from "./settlementGoldenBoards";
 
 interface GoldenComponent {
   player_id: string;
@@ -96,7 +95,9 @@ describe("SET-0A golden boards, rebuilt in-repo", () => {
     it(`${entry.name}: the rebuilt board is byte-identical to the golden board (terminal_state_hash_v1)`, () => {
       const board = boards[entry.name];
       expect(terminalStateHashV1(board)).toBe(entry.terminal_state_hash_v1);
-      expect(board.rules_engine_version).toBe(RULES_ENGINE_VERSION);
+      /* DA-8: the CERTIFIED pin, not the gameplay engine's -- the two axes are independent (owner ruling); the unstamped
+         rebuild's pin is `da8RulesV11Closure.test.ts`'s to pin. */
+      expect(board.rules_engine_version).toBe(SET0A_CERTIFIED_RULES_ENGINE_VERSION);
       expect(board.current_round_type).toBe("GameEnd");
       expect(board.player_addresses).toEqual(entry.turn_order);
     });

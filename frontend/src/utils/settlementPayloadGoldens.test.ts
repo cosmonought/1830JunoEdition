@@ -49,7 +49,7 @@ import { payoutPreview, U128_MAX } from "../gameEngine/settlementPreview";
 import { RULES_ENGINE_VERSION, SUPPORTED_RULES_ENGINE_VERSIONS } from "../gameEngine/rulesVersion";
 import { sha256Hex } from "../gameEngine/sha256";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { goldenBoards } from "./settlementGoldenBoards";
+import { atCertifiedSettlementPin, goldenBoards, SET0A_CERTIFIED_RULES_ENGINE_VERSION } from "./settlementGoldenBoards";
 import * as GR from "./gentleRustCertificationGame";
 
 type Loose = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -314,7 +314,8 @@ const GOLDEN_PAYLOADS: GoldenPayload[] = [
     name: "GR-4-START-OR-3.1/checkpoint",
     source_case: "GR-4 certificationStart (a mid-game v10 board: Operating Round 3.1, phase 3)",
     intent: { kind: "Checkpoint" },
-    board: GR.certificationStart(),
+    // DA-8: the GR-4 start is dealt at the current engine; this vector was certified on it at the v10 pin.
+    board: atCertifiedSettlementPin(GR.certificationStart()),
     seats: seatsOf(GR.certificationStart().player_addresses),
     log_len: 500,
     expect: null, // pinned below: SET-0B's corpus parity records [2408, 1988, 2404] for this board in turn order
@@ -659,14 +660,18 @@ describe("chain seat order, never turn order; no player or principal id in the b
 /* 7. Rules engine v10 only, and the builder's refusals               */
 /* ------------------------------------------------------------------ */
 
-describe("settlement is certified for rules engine v10 only (DA-8 will move the game to v11)", () => {
-  it("TRIPWIRE: the certified list is the literal [10] and today's engine is v10 -- a bump must recertify settlement first", () => {
+describe("settlement is certified for rules engine v10 only -- an axis independent of the gameplay engine (DA-8)", () => {
+  it("TRIPWIRE: the certified list is the literal [10] whatever engine the game plays -- a gameplay bump never widens settlement", () => {
     expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10]);
-    /* If this fails because RULES_ENGINE_VERSION moved (DA-8 -> v11): money settlement of v11 boards stays REFUSED
-       (the appraiser requires a pin that is supported AND certified). Recertify SET-0A's appraisal for v11, rebuild
-       and re-pin the golden boards, then add 11 to SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS deliberately. */
-    expect(RULES_ENGINE_VERSION).toBe(10);
-    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([10]);
+    /* SET-0C wrote this as `RULES_ENGINE_VERSION === 10` and `SUPPORTED === [10]`, to fail on DA-8's bump. DA-8 took the
+       bump (the game plays v11) and the owner ruled the two axes independent: a board is appraised when its pin is
+       CERTIFIED, not when this build still plays it. So the tripwire now pins the separation itself -- the certified
+       list is a literal that no gameplay constant moves, the golden boards carry the certified pin, and v11 is NOT in
+       it. Adding 11 is the v11 settlement recertification's change, in its own reviewed pass. */
+    expect(SET0A_CERTIFIED_RULES_ENGINE_VERSION).toBe(10);
+    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).not.toContain(RULES_ENGINE_VERSION);
+    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
+    expect(SUPPORTED_RULES_ENGINE_VERSIONS).not.toContain(10);
   });
 
   it("a board pinned to any other engine is refused by the appraisal the builder runs, before any byte is written", () => {

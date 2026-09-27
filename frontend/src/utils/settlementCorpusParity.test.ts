@@ -176,12 +176,14 @@ describe("server/data and client exports (present only on the owner's machine)",
   }
 });
 
-describe("certification boards (reducer-driven, pinned v10)", () => {
+describe("certification boards (reducer-driven, appraised at the certified v10 pin)", () => {
+  /* DA-8: these games are dealt at the CURRENT engine (v11); settlement is certified for v10 only, so each board is
+     appraised at the certified pin -- the same board, the same appraiser (the owner's two-axis ruling). */
   const turnVector = (board: GameStateResponse) =>
-    appraiseSeats(board, seatsOf(board.player_addresses)).map((seat) => seat.total.toString());
+    appraiseSeats(pinned(board), seatsOf(board.player_addresses)).map((seat) => seat.total.toString());
   const parity = (board: GameStateResponse) => {
     const ranked = rankedWorth(board);
-    for (const seat of appraiseSeats(board, seatsOf(board.player_addresses))) {
+    for (const seat of appraiseSeats(pinned(board), seatsOf(board.player_addresses))) {
       expect(ranked[seat.player_id]).toBe(Number(seat.total.toString()));
     }
   };
@@ -194,7 +196,7 @@ describe("certification boards (reducer-driven, pinned v10)", () => {
 
   it("GR-4 final: REFUSED PARRED_WITHOUT_MARK: NYC -- the known harness board (SET-0A F-6) rankPlayers scores NYC at $0", () => {
     const board = GR.runCertificationGame().room.state;
-    expect(() => appraiseSeats(board, seatsOf(board.player_addresses))).toThrow("PARRED_WITHOUT_MARK: NYC");
+    expect(() => appraiseSeats(pinned(board), seatsOf(board.player_addresses))).toThrow("PARRED_WITHOUT_MARK: NYC");
     // rankPlayers silently values NYC's 50/30/20 at $0 -- the D4 divergence SET-0C removes. Pinned, not fixed here.
     const nyc = board.public_companies.find((c) => c.ticker === "NYC")!;
     expect(nyc.par_value).not.toBeNull();

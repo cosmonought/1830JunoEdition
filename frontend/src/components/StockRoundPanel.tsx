@@ -2565,7 +2565,10 @@ function CompanyActions({
                         : "The Bank Pool is empty."
                       : (controlsBlockedReason ??
                         (option === "Ipo"
-                          ? `Buy from the IPO at par. ${company.ipo_pool_percentage}% left.`
+                          ? /* DA-6 (D-52): under the Delayed Auction a share may be held for the C&A's buyer. */
+                            reservedIpoPercent(company) > 0
+                            ? `Buy from the IPO at par. ${company.ipo_pool_percentage - reservedIpoPercent(company)}% for sale; ${reservedIpoPercent(company)}% is held for whoever buys the C&A.`
+                            : `Buy from the IPO at par. ${company.ipo_pool_percentage}% left.`
                           : `Buy from the Bank Pool at market price. ${company.bank_pool_percentage}% left.`))
                   }
                   onClick={() => setSource(option)}
@@ -3423,6 +3426,12 @@ function selfRowTint(seat: string | null): React.CSSProperties {
     borderStyle: "solid",
     borderColor: seat,
   };
+}
+
+/** DA-6 (D-52): the IPO percentage held back for the C&A's buyer under the Delayed Auction, or 0. */
+function reservedIpoPercent(company: { reserved_certificate?: { percentage: number } | null }): number {
+  const reserved = Number(company.reserved_certificate?.percentage ?? 0);
+  return Number.isFinite(reserved) && reserved > 0 ? reserved : 0;
 }
 
 const styles: Record<string, React.CSSProperties> = {

@@ -51,6 +51,7 @@ import { playerCashOf } from "./cashLedger";
 import {
   PRESIDENT_SHARE_PERCENT,
   SHARE_PERCENT,
+  reservedIpoRefusal, // DA-6 (D-52)
   sharePurchaseBlock,
   type PriceZone,
 } from "./sharePurchase";
@@ -429,6 +430,9 @@ export function stockPurchaseRefusal(input: StockPurchaseRefusalInput): string |
   if (plan.kind === "ordinary") {
     const available = ordinaryPercentAvailable(company, buy.source);
     if (available < plan.percentage) {
+      /* DA-6 (D-52): when the card left is the one held for the C&A, say so -- the Buy button's sentence. */
+      const reservedFor = reservedIpoRefusal(company, buy.source, plan.percentage);
+      if (reservedFor !== null) return reservedFor;
       const where = sourceName(buy.source);
       return available <= 0
         ? `The ${where} holds no ordinary ${company.ticker} certificate to sell.`
@@ -508,7 +512,7 @@ export interface StockSaleRefusalInput {
  *  a function rather than a comparison inline. Standard: the auction is macro round 1 and `OpenStockRound`
  *  leaves the number where it is, so SR1 is macro round 1. Delayed: the deal opens ON Stock Round 1 with the
  *  same number, the auction is inserted later as its own round and takes the next number with it, so the
- *  Stock Round that follows it (SR3) is macro round 3 and sales are allowed there. One reading, both boards. */
+ *  Stock Round that follows it is macro round 3 or later and sales are allowed there. One reading, both boards. */
 export function isFirstStockRound(state: GameStateResponse): boolean {
   return state.current_round_type === "StockRound" && (state.macro_round_number ?? 0) === 1;
 }

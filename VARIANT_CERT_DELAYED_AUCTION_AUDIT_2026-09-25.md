@@ -22,6 +22,10 @@ D-58 and D-59 implemented (§18, §19, §22 — DA-5 record): the reserved PRR c
 float, the acquisition-solvency refusal, the curable-only must-sell hold at both locks, and the Phase-5 cancellation.
 Test gap DA-T9 closed and DA-T11 closed in part (§20). DA-F12 **ROUTED TO DA-8**, untouched. `RULES_ENGINE_VERSION` still 10.
 Still NOT certified.
+**rev 9** (2026-09-27, Phase 2A): **RR2A-F1 closed and DA-6 implemented** — DA-F8 a–m corrected and n recorded (§14, §22 —
+DA-6 record); two surfaces found beside them and fixed (DA6-N1, the Phase 3 notice; DA6-N2, the reserved C&A share's Buy
+affordance); the must-sell sentence corrected (the DA-5 note); §24's stale comments corrected. `RULES_ENGINE_VERSION`
+still 10. Still NOT certified — DA-7 next.
 
 **Date:** 2026-09-25 · **Pass:** DA-1 (audit / design only — no gameplay code changed) · **Status of the variant:**
 `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` (S9-7). **NOT certified.**
@@ -426,6 +430,10 @@ auction; the only delayed-specific interaction is this hex question.)
 | DA-F8l | `PrivateTradePanel.tsx:93, 280-281, 413` | "still unsold in the auction" before the auction has run | IMPRECISE |
 | DA-F8m | Activity Log: no line announces the delayed auction opening at the set boundary; `App.tsx:8681-8720` round-change lines have no auction branch (not reached in rooms); deal line (`6608-6611`) says nothing about the delayed start; no purchase warning that the next 3-train schedules the auction | GAP |
 | DA-F8n | Variant name drift: "Delayed private auction (harder)" / "Delayed Auction" / "Delayed auction" (`gameVariants.ts:281`, `HostSetupCard.tsx:74`, `LobbyRoomList.tsx:50`, `RulesReference.tsx:113`) | INCONSISTENT |
+
+*(rev 9, DA-6 — 2026-09-27: a–m corrected; n is case only — "Delayed Auction" is the host and room-list short title, the
+long label is the lobby's, and the Rules Reference's scope tags are sentence case throughout, so no change. See §22's
+DA-6 record.)*
 
 Accurate and to keep: `BO_LOCKED_REASON`; the Rules Reference variant note (`1188-1191`), Auction-page variant
 branches, phase-table overrides, private-status cell ("Not yet in play / Delayed Auction pending"), live-phase logic
@@ -838,6 +846,25 @@ no player over the limit or a 60% cap. No stored Standard log changed. *Tests:* 
 (brief items 1–24; 19 fail on the pre-DA-5 engine). *DA-F8 note:* the must-sell sentence is #759's zone-exit wording ("Those
 shares left the Yellow/Orange/Brown zones …"), wrong for an auction overage — DA-6's copy pass.
 
+**DA-6 record (rev 9, 2026-09-27 — Phase 2A, with RR2A-F1).** *RR2A-F1 first:* `roundTransitionRefusal`
+(`roundTransitionAuthority.ts`) at ingress, the reducer's board gate and `refusalReasonFor` — on a pinned board
+`BeginOperatingRound` is refused in every round and a Stock Round / Operating Round `PassTurn` inside the auction; every
+other message kind, probed mid-auction in both games, was already refused. *DA-F8:* (a) D-56's blurb; (b) the handoff
+card names `Stock Round {macro_round_number}` and, at a delayed table, the B&O's opening; (c, d) one title and status line
+(`DELAYED_AUCTION_TITLE`, `delayedAuctionUnderway`) on the sub-panel and the dashboard, saying why the round turns are
+gone and which Stock Round follows; (e, f, g) the Overview's "This round" lead, Phase 2's current-phase note (the Tables
+page's delayed reading) and the game-flow text; the Auction page's end now says the next Stock Round follows, and its
+variant block states D-55's cancellation, D-52's reserved share and D-53 / D-57 / D-58's overage rule; (h) the auction's
+"Watch your cash" and the Stock Round's first tutorial page replaced at a delayed table, and the library blurb; (i) the
+C&A text true at every table; (j) the B&O card note (the lock lifts when the auction is over); (k) `hasBuyablePrivate`
+requires a player owner; (l) the private-trade copy timing-neutral; (m) the deal line, the auction's announcement on the
+turn that arms it (`actionLog.ts`, every client) and D-55's cancellation clause. *The must-sell sentence:* at a Delayed
+Auction table it names both causes and the curable-only rule; the excess is printed as it stands with the owed part beside
+it when smaller (common — every fully-curable standard debt reads as before). *Found beside:* DA6-N1 (the Phase 3 notice
+said the privates were for sale at the first 3-train) and DA6-N2 (the reserved share's Buy affordance) — fixed. *Tests:*
+`rr2aF1AuctionEscape.test.ts` (15), `da6DelayedAuctionCopy.test.ts` (18), `da6DelayedAuctionUi.test.tsx` (12). No
+replay semantics, golden, corpus or settlement artifact changed; `RULES_ENGINE_VERSION` still 10.
+
 ---
 
 ## 23. Version-boundary recommendation
@@ -856,10 +883,10 @@ must not be silently reinterpreted under v11 semantics**. `RULES_ENGINE_VERSION`
 ## 24. Open / deferred non-blockers
 
 - DA-F11 — no 3-train ever → no auction (documented behaviour; Rules Reference sentence + short-bank test).
-- `refusalReasonFor` has no auction arm (generic sentence on a reducer-only auction refusal) — cosmetic.
+- `refusalReasonFor` has no auction arm (generic sentence on a reducer-only auction refusal) — cosmetic. *(rev 9: already closed by DA-3's arm; RR2A-F1's round-transition sentence joined it in DA-6.)*
 - Stale comments naming "Stock Round 3" / "SR3" (`gameVariants.ts:459-461`; `sandboxSession.ts:3006, 4680-4685,
   4920, 4979`; `stockTransactionAuthority.ts:501-502`; `AuctionPromptModal.tsx:1-2`; `WaterfallAuctionDashboard.tsx:3-4`)
-  and the #1168 rationale — fix with DA-6.
+  and the #1168 rationale — fix with DA-6. *(rev 9: corrected in DA-6; the quoted request and report in #904 / #905 stay as quoted history.)*
 - S10-6(B) (remaining Rust mining) stays with the Phase-4 Rust retirement preflight.
 - The 2018 rulebook should be added to the repository or a connected folder for future passes (it is the named
   authority but only the 48-page book is in the tree).
@@ -878,6 +905,7 @@ D-52 … D-56; OD-DA-2b open; review corrections recorded in §22 and §23. Stil
 *(rev 6: DA-3 implemented — DA-F1, DA-F2, DA-F7 fixed; `RULES_ENGINE_VERSION` still 10. Still NOT certified.)*
 *(rev 7: DA-4 implemented — DA-F3, DA-F4, DA-F5 fixed; DA-F12 found (LOW, open); `RULES_ENGINE_VERSION` still 10. Still NOT certified.)*
 *(rev 8: DA-5 implemented — DA-F6, DA-F9 fixed; D-52 … D-55 and D-57 … D-59 implemented; DA-F12 routed to DA-8; `RULES_ENGINE_VERSION` still 10. Still NOT certified.)*
+*(rev 9: RR2A-F1 closed and DA-6 implemented — DA-F8 resolved; DA6-N1 / DA6-N2 found and fixed; `RULES_ENGINE_VERSION` still 10. Still NOT certified — DA-7 next.)*
 
 Delayed Auction remains `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` and is **not certified**. The owner spec
 is confirmed and consistently implemented at the trigger; the general auction is sound; eight defects (five HIGH, two

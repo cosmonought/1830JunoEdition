@@ -83,6 +83,7 @@ import {
   auctionPriorityDealSeat,
   isAuctionLifecycleMessage,
 } from "./auctionAuthority";
+import { roundTransitionRefusal } from "./roundTransitionAuthority"; // RR2A-F1
 /* Design notes #1590-#1595 (Batch 7.4): the ordinary offers' one hold and their three authorities -- the
    corporation's private purchase, the intercorporate train sale, and the player <-> player private trade --
    asked here by identity and at ingress with the sentence, the #1570/#1580 shape. */
@@ -3064,7 +3065,8 @@ function settleAuctionLifecycle(state: GameStateResponse, msg: SandboxLogMsg): G
     const delayed = (msg.SetupGame.variants as { delayedAuction?: unknown } | undefined)?.delayedAuction === true;
     waterfall = reseated && delayed ? { ...reseated, waterfall_auction_active: false } : reseated;
   }
-  /* The delayed variant's auction is dealt inactive and the round reaches it at Stock Round 3 (#905); this is
+  /* The delayed variant's auction is dealt inactive and the round reaches it at the end of the Operating Round set in
+     which the first 3-train is bought (#905; "Stock Round 3" was the first build's reading -- DA-6); this is
      the arming. WITH SOMETHING LEFT TO OFFER: an auction `settle` has already closed because its last private
      sold stays closed while `OpenStockRound` is still owed -- the engine's own reading, kept so a stored log
      replays to the same atom it always did. */
@@ -3178,7 +3180,7 @@ function applySandboxActionOnBoard(
      the discard's owner, the offers' predicates, the home placement's circle) stays in the core. */
   const gate = boardGateRefusal(state, msg, ctx);
   if (gate === "held") return retireRefusedSettlement(state, msg);
-  if (gate === "auction") return state;
+  if (gate === "auction" || gate === "round") return state;
   // #1340: the auction first, as `App.tsx` always ran it -- its charges land before the board is judged.
   const afterAuction = applyAuctionStep(state, msg, ctx);
   return settleAuctionLifecycle(applySandboxActionAfterAuction(afterAuction, msg, ctx), msg);
@@ -3272,13 +3274,13 @@ function chartStep(
 }
 
 /** The board-level gates every message passes before EITHER atom moves (#1580, #1613): `"held"`, `"auction"`,
- *  or `null`. Shared by the reducer and by `sandboxChartStepReport`, so the narration refuses what the reducer
- *  refuses at this layer, in the same order. */
+ *  `"round"` (RR2A-F1), or `null`. Shared by the reducer and by `sandboxChartStepReport`, so the narration refuses
+ *  what the reducer refuses at this layer, in the same order. */
 function boardGateRefusal(
   state: GameStateResponse,
   msg: SandboxLogMsg,
   ctx?: SandboxActionContext,
-): "held" | "auction" | null {
+): "held" | "auction" | "round" | null {
   if (authoritativeHoldRefusal(state, msg, ctx) !== null) return "held";
   /* DA-3 (DA-F1, DA-F2, DA-F7): the auction's whole lifecycle is judged here, by identity, above both atoms --
      an auction message only while an auction is open and not waiting on the B&O par, `OpenStockRound` only
@@ -3287,6 +3289,11 @@ function boardGateRefusal(
   if (isAuctionLifecycleMessage(msg) && auctionLifecycleRefusal(state, state.waterfall ?? null, msg) !== null) {
     return "auction";
   }
+  /* RR2A-F1: on a pinned table the rounds turn over by themselves. `BeginOperatingRound` (any round) and a Stock
+     Round / Operating Round `PassTurn` inside the private company auction are refused here, BY IDENTITY, above both
+     atoms -- before the arm could rebuild an operating queue on an auction board and strand the auction atom open.
+     The same predicate ingress asks (`roundTransitionAuthority.ts`); an unpinned board keeps its legacy arm (D-9). */
+  if (roundTransitionRefusal(state, msg) !== null) return "round";
   return null;
 }
 
@@ -4798,8 +4805,8 @@ function settleRoundTransitions(
      * REQUESTED: move the private auction "from the start of the game to immediately before Stock Round 3".
      *
      * SO IT SITS IN THE SAME TRANSITION THE STOCK ROUND WOULD HAVE OPENED FROM. The OR set that precedes
-     * Stock Round 3 hands off to `WaterfallAuction` instead, and when that auction closes, `OpenStockRound`
-     * -- the event that has always closed it -- opens Stock Round 3. Nothing else in the round machine learns
+     * the next Stock Round hands off to `WaterfallAuction` instead, and when that auction closes, `OpenStockRound`
+     * -- the event that has always closed it -- opens that Stock Round. Nothing else in the round machine learns
      * a new shape: the auction is a round, and this puts a round where a round already went.
      *
      * THE CALENDAR STILL ADVANCES HERE. `macro_round_number` is incremented on this transition whether the
@@ -5039,7 +5046,7 @@ function applyOneAction(
        #905's RULE, WHERE IT BELONGS. "Straight to SR1; no privates exist yet; corporations must float on share
        capital alone for two Stock Rounds." The three fields are one decision: the round opens as a Stock Round,
        the auction is MOVED rather than skipped (`private_auction_complete` stays FALSE, which keeps the B&O
-       locked per #904a and tells `settleRoundTransitions` an auction is still owed before Stock Round 3),
+       locked per #904a and tells `settleRoundTransitions` an auction is still owed before a later Stock Round),
        and the macro round is 1. Setting two of the three would produce a game no rule was written for.
 
        THE SHELL'S COPY IS LEFT STANDING FOR NOW AND IS NOW REDUNDANT. On the client the shell's `SetupGame`
@@ -5103,7 +5110,7 @@ function applyOneAction(
        events that both had to remember to set it is precisely how one of them comes not to.
        #909: `openingStockRoundReset` is the one place that names what a Stock Round opening invalidates --
        the sell-then-buy lock (#744) among them, which under the delayed variant would otherwise be carried
-       into Stock Round 3 and refuse a legal buy-back for the rest of the game. */
+       into the Stock Round after the auction and refuse a legal buy-back for the rest of the game. */
     /* ==================================================================
         DESIGN NOTE 1235: THE STOCK ROUND OPENS TO THE LEFT OF THE LAST PLAYER WHO ACTED
        ==================================================================

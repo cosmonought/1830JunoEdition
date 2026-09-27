@@ -214,9 +214,10 @@ describe("a locked corporation card is dead, not merely refusing (design note #9
   const APP = readStripped("App.tsx");
 
   it("carries the specified footer, verbatim", () => {
-    expect(BO_LOCKED_CARD_NOTE).toBe(
-      "Inactive until the BO private company is purchased in the Auction Round.",
-    );
+    /* DA-6 (DA-F8j): CORRECTED. "until the BO private company is purchased in the Auction Round" named the wrong
+       event -- the lock lifts when the auction is OVER (`boIsLocked` asks `private_auction_complete`), not when the
+       BO private sells part-way through it. Still short, still "BO" without the ampersand. */
+    expect(BO_LOCKED_CARD_NOTE).toBe("Inactive until the delayed private company auction is over.");
   });
 
   it("keeps the long refusal sentence as a separate string", () => {

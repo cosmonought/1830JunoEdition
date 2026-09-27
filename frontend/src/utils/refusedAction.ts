@@ -61,6 +61,7 @@ import {
 import { dieselExchangeRefusal } from "../gameEngine/dieselExchange";
 // UR-3 (OD-UR-1 = 1-A, D-37): the pinned table's refusal of a client-sent Yellow Sign, shared with ingress and the gate.
 import { yellowSignRequestRefusal } from "../gameEngine/yellowSign";
+import { roundTransitionRefusal } from "../gameEngine/roundTransitionAuthority"; // RR2A-F1
 import { discardTrainRefusal, pendingDiscardBlock } from "../gameEngine/trainDiscard";
 import {
   declareBankruptcyRefusal,
@@ -230,6 +231,13 @@ export function refusalReasonFor(
   if ("YellowSignEvent" in msg) {
     const sign = yellowSignRequestRefusal(before);
     if (sign !== null) return sign;
+  }
+
+  /* RR2A-F1: a pinned table's rounds turn over by themselves -- the board gate's predicate, in ingress's order (after
+     the holds and the Yellow Sign) and with its sentence. */
+  {
+    const round = roundTransitionRefusal(before, msg);
+    if (round !== null) return round;
   }
 
   if ("BuyStock" in msg && ctx?.actor && ctx.marketZoneFor) {

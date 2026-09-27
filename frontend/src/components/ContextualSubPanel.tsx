@@ -20,6 +20,7 @@ import React from "react";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { QueryCapableClient } from "../utils/gameStatePolling";
 import { corporationPrivateCompanies } from "../gameEngine/gameState";
+import { DELAYED_AUCTION_TITLE, delayedAuctionUnderway, resolveVariants } from "../gameEngine/gameVariants"; // DA-6
 // Design note #753: the round's frozen queue decides the display order, not a live re-sort.
 import { operatingOrderRanks, sortForOperatingOrder } from "../utils/operatingOrderView";
 // Design note #572: `usePlayerNetWorths` and the Ledger's `PlayerAssetsSection`
@@ -119,7 +120,10 @@ export function ContextualSubPanel({
   return (
     <div style={styles.root} className={className}>
       {gameState.current_round_type === "WaterfallAuction" ? (
-        <WaterfallAuctionNotice />
+        <WaterfallAuctionNotice
+          delayedAuction={resolveVariants(gameState.variants).delayedAuction === true}
+          nextStockRound={gameState.macro_round_number ?? 1}
+        />
       ) : gameState.current_round_type === "StockRound" ? (
         /* Design note #572: NOTHING. The player cards on this same tab now answer what the footer's table was here to
            answer, and two tables of one dataset make the reader prove they agree. Deleted rather than left returning
@@ -148,7 +152,21 @@ export default ContextualSubPanel;
  *  `WaterfallAuctionDashboard.tsx`, rendered in place of the board canvas for this phase. This is a short
  *  pointer, so the pane is not blank or, worse, silently misrendered as an Operating Round panel the way it
  *  would have been before `RoundType` gained this variant. */
-function WaterfallAuctionNotice() {
+function WaterfallAuctionNotice({ delayedAuction, nextStockRound }: { delayedAuction: boolean; nextStockRound: number }) {
+  /* DA-6 (DA-F8c): the Delayed Auction is not a pre-game auction and does not precede Stock Round 1. Its own title
+     and status line (`gameVariants.ts`); the standard game's text is unchanged. */
+  if (delayedAuction) {
+    return (
+      <>
+        <div style={styles.header}>
+          <span style={styles.headerTitle}>{DELAYED_AUCTION_TITLE}</span>
+        </div>
+        <p style={styles.placeholderText}>
+          {delayedAuctionUnderway(nextStockRound)} See the auction panel above for live bidding.
+        </p>
+      </>
+    );
+  }
   return (
     <>
       <div style={styles.header}>

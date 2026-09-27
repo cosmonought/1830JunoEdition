@@ -1133,7 +1133,24 @@ export function describeGameplayAction(
          ONE SENTENCE NOW, because the two branches were describing one event two ways. The stamp drops its
          step alongside (`App.tsx` #1069), so the tag no longer files the ending under an action the
          corporation declined to take. */
-      return `${actingActor(context)} ended its turn.`;
+      const ended = `${actingActor(context)} ended its turn.`;
+      /* ==================================================================
+          DA-6 (DA-F8m): THE TURN THAT ENDS THE FIRST 3-TRAIN'S SET OPENS THE DELAYED AUCTION -- SAY SO
+         ==================================================================
+         The reducer inserts the auction inside this entry (`settleRoundTransitions`, #905) and nothing in the log
+         said it had happened: the board was replaced by the auction dashboard under a line reading "PRR ended its
+         turn." The shell's round-change line has no auction branch and is not reached for a remote entry, so the
+         announcement rides on the one sentence every client prints for this entry. Read off the settled board: the
+         round it reached, and the opener the arming seated (DA-4 -- the Priority Deal holder). */
+      const after = context.afterState;
+      if (after?.current_round_type === "WaterfallAuction") {
+        const opener = after.waterfall?.current_turn || after.player_addresses?.[after.priority_deal_index];
+        return (
+          `${ended} The Operating Round set with the first 3-train is over — the delayed private company auction begins` +
+          (opener ? `, and ${context.labelForAddress(opener)} holds the Priority Deal and acts first.` : ".")
+        );
+      }
+      return ended;
     }
     /* Design note #745: a turn the player already acted in is ENDED, not passed, and the log must say so --
        it is the record players scroll back through to work out why a round closed when it did. The state

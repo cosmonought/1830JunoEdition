@@ -23,7 +23,11 @@ describe("the Phase 3 notice (design note #1441)", () => {
     expect(app).toContain('if (previous === "2" && tier === "3") {');
     expect(app).toContain("setPhaseThreeNotice(true)");
     expect(app).toContain("if (previous === undefined) return; // the first observation seeds; it is not an edge");
-    expect(app).toContain("<PhaseThreeNoticeModal open={phaseThreeNotice} onAcknowledge={() => setPhaseThreeNotice(false)} />");
+    /* DA-6: the mount gained the Delayed Auction's reading -- the same two props, and the third on its own line. */
+    expect(app).toContain("open={phaseThreeNotice}\n        onAcknowledge={() => setPhaseThreeNotice(false)}");
+    expect(app).toContain(
+      "delayedAuctionPending={tableVariants.delayedAuction === true && gameState?.private_auction_complete === false}",
+    );
   });
 
   it("says the two things it exists to say", () => {

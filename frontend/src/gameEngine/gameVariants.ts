@@ -276,11 +276,16 @@ export const VARIANT_COPY: Readonly<Record<VariantCopyKey, { label: string; blur
      ONE STRING, TWO SCREENS. #961a moved this table here because the Lobby and the Waiting Room had drifted
      to different wordings of the same variant -- "one variant with two names, on the two screens a table
      reads before agreeing to it" -- so this edit reaches the Lobby as well, which is the arrangement working
-     rather than a side effect to check. */
+     rather than a side effect to check.
+     CORRECTED BY THE OWNER (D-56, DA-6 / DA-F8a). The rationale above was wrong: the end of the Operating Round
+     set in which the first 3-train is bought is NOT the start of Phase 3 -- Phase 3 begins the moment that train
+     is bought, and the auction waits for the set to finish. Ruled replacement: "after the Operating Round set in
+     which the first 3-train is purchased, immediately before the next Stock Round". The closing sentence is not
+     addressed by the ruling and survives word for word (`variantCopy.test.ts`). */
   delayedAuction: {
     label: "Delayed private auction (harder)",
     blurb:
-      "Delays the private company auction and B&O open to the start of Phase 3. Watch your cash carefully or your rivals might get the advantage!",
+      "Delays the private company auction and the B&O until after the Operating Round set in which the first 3-train is purchased, immediately before the next Stock Round. Watch your cash carefully or your rivals might get the advantage!",
   },
   /* ==================================================================
    *  DESIGN NOTE 1300: THE 1830+ EXPANSION IS A VARIANT, NOT A SECOND GAME
@@ -787,8 +792,25 @@ export const BO_LOCKED_REASON =
  *  "BO" WITHOUT THE AMPERSAND, exactly as specified -- and #364's own note records the same choice for the map
  *  badges, so the two surfaces agree by accident rather than by coordination. Worth stating so a later tidy-up
  *  does not "fix" one of them. */
-export const BO_LOCKED_CARD_NOTE =
-  "Inactive until the BO private company is purchased in the Auction Round.";
+/* ==================================================================
+    DA-6 (DA-F8c, DA-F8d): THE DELAYED AUCTION SAYS WHICH AUCTION IT IS, AND WHAT COMES AFTER IT
+   ==================================================================
+   Every auction surface was written for the auction that opens the game -- "Pre-Game Waterfall Auction",
+   "before Stock Round 1 opens" -- and the Delayed Auction arrives mid-game, in place of the board, with no word on
+   why the Stock Round and Operating Round controls have gone or when they come back. One title and one sentence,
+   here beside the lock's (#848: the component writes no copy), read by the sub-panel and the dashboard alike. The
+   Stock Round it names is `macro_round_number`: the auction occupies that slot and `OpenStockRound` opens it (#905). */
+export const DELAYED_AUCTION_TITLE = "Delayed Private Company Auction";
+
+/** DA-6: the Delayed Auction's standing status line -- why it is running, and what follows it. */
+export function delayedAuctionUnderway(nextStockRound: number): string {
+  return `Held after the Operating Round set in which the first 3-train was bought. Stock Round ${nextStockRound} opens once every private company is sold — until then there are no Stock Round or Operating Round turns.`;
+}
+
+/* DA-6 (DA-F8j): the lock lifts when the AUCTION is over (`private_auction_complete`) -- not when the BO private is
+   bought, which happens part-way through it. Still short -- the timing is `BO_LOCKED_REASON`'s and the Rules
+   Reference's -- and still "BO" without the ampersand (#948). */
+export const BO_LOCKED_CARD_NOTE = "Inactive until the delayed private company auction is over.";
 
 /* ------------------------------------------------------------------ */
 /* Unpredictable revenue -- design note #903                           */

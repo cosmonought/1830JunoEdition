@@ -6,6 +6,8 @@ import { shareSaleBlock } from "./shareSale";
 import { certificateCardsHeld, doubleSaleEffect } from "./doubleCertificate";
 import { presidentAfterSale } from "./presidencyTransfer";
 import { marketZoneForPrice } from "./marketGeometry";
+// DA-6 (DA-F8, the must-sell sentence): which causes this table can have -- the Delayed Auction adds one.
+import { resolveVariants } from "./gameVariants";
 
 /* ==================================================================
  *  DESIGN NOTE 759: WHAT HAPPENS WHEN THE EXEMPTION GOES AWAY
@@ -62,6 +64,9 @@ export interface DivestmentDebt {
   overCapCompanies: readonly { companyId: number; ticker: string; percentage: number; mustSellPercent?: number }[];
   /** Anything owed at all. */
   owed: boolean;
+  /** DA-6: this table plays the Delayed Auction, whose acquisitions can put a player over a limit (D-53, D-57, D-58)
+   *  -- so the sentence cannot blame a zone exit alone. Absent reads as `false`: the standard game's causes. */
+  delayedAuction?: boolean;
 }
 
 export interface DivestmentInput {
@@ -255,6 +260,7 @@ export function divestmentDebt(input: DivestmentInput): DivestmentDebt {
     counted: assessment.counted,
     overCapCompanies,
     owed: assessment.curableCertificates > 0 || overCapCompanies.length > 0,
+    delayedAuction: resolveVariants(state.variants).delayedAuction === true,
   };
 }
 
@@ -291,23 +297,46 @@ export function divestmentPassRefusal(state: GameStateResponse): string | null {
  *
  *  A REASON RATHER THAN A BOOLEAN (#619), and it names BOTH debts when both exist -- a player told only about
  *  the certificate limit would sell the wrong shares and still be stuck. */
+/* ==================================================================
+    DA-6 (DA-F8; D-53, D-57, D-58): THE MUST-SELL SENTENCE SAYS WHAT IS TRUE AT THIS TABLE
+   ==================================================================
+   #759 NAMED THE CAUSE -- "Those shares left the Yellow/Orange/Brown zones" -- because in the standard game a
+   price leaving a zone is how a legal holding becomes an illegal one between rounds, and "you are over the limit"
+   alone reads as an accusation. UNDER THE DELAYED AUCTION IT IS NOT THE ONLY CAUSE, and after the auction it is
+   usually the wrong one: a private won at the auction counts as a certificate, and it can bring the C&A's PRR share
+   or the B&O President's Certificate with it (D-53, D-57), so the next Stock Round can open with a player over the
+   limit or a 60% cap who never saw a price move. DA-5 recorded the sentence as wrong for an auction overage; this is
+   that correction. The Delayed Auction's sentence names both causes and states the rule as ruled: only what a legal
+   sale can fix is owed, and it is owed before a purchase or a pass (D-58).
+   AND THE FIGURES ARE THE EXCESS, WITH THE OWED PART BESIDE IT. DA-5 made the debt the CURABLE part (in every game
+   -- its standard-game effect (1)), and this sentence then printed that part as the amount "over", which
+   understated the position whenever some of it was incurable. The excess is now printed as it stands, and the part
+   a sale can fix is named only when it is smaller -- so every fully-curable debt, which is every standard debt
+   before DA-5, reads exactly as it always did. */
 export function divestmentRefusal(debt: DivestmentDebt): string | null {
   if (!debt.owed) return null;
 
   const parts: string[] = [];
   if (debt.certificatesOver > 0) {
+    const over =
+      debt.certificateLimit === null
+        ? debt.certificatesOver
+        : Math.max(debt.certificatesOver, debt.counted - debt.certificateLimit);
     parts.push(
-      `${debt.certificatesOver} certificate${debt.certificatesOver === 1 ? "" : "s"} over the ` +
-        `limit of ${debt.certificateLimit}`,
+      `${over} certificate${over === 1 ? "" : "s"} over the limit of ${debt.certificateLimit}` +
+        (over > debt.certificatesOver ? ` (${debt.certificatesOver} of them can be sold now)` : ""),
     );
   }
   for (const company of debt.overCapCompanies) {
-    const excess = company.mustSellPercent ?? company.percentage - PLAYER_HOLDING_CAP_PERCENT;
+    const excess = company.percentage - PLAYER_HOLDING_CAP_PERCENT;
+    const owed = company.mustSellPercent ?? excess;
     parts.push(
       `${excess}% over the ${PLAYER_HOLDING_CAP_PERCENT}% cap in ${company.ticker} ` +
-        `(${company.percentage}% held)`,
+        `(${company.percentage}% held${owed < excess ? `; ${owed}% of it can be sold now` : ""})`,
     );
   }
+
+  if (debt.delayedAuction === true) return delayedAuctionDivestmentSentence(parts.join(" and "));
 
   /* THE CAUSE IS NAMED, because this arrives without the player doing anything -- a price moved while they
      were not looking and a holding that was legal all game became illegal between rounds. "You are over the
@@ -316,6 +345,22 @@ export function divestmentRefusal(debt: DivestmentDebt): string | null {
     `Those shares left the Yellow/Orange/Brown zones, so they now count: you are ` +
     `${parts.join(" and ")}. Sell down before buying or passing.`
   );
+}
+
+/** DA-6 (D-53, D-57, D-58): the Delayed Auction's must-sell sentence -- both causes, and the curable-only rule. */
+export function delayedAuctionDivestmentSentence(position: string): string {
+  return (
+    `You are ${position}. At this table a private company won in the delayed auction (with any share it brings) ` +
+    `counts toward your limits, as does a price leaving the Yellow/Orange/Brown zones — sell what a legal sale can ` +
+    `fix before buying or passing.`
+  );
+}
+
+/** DA-6: the auto-pass wake reason for a debt -- the same two readings, in the shorter form the wake line uses. */
+export function divestmentWakeReason(delayedAuction: boolean): string {
+  return delayedAuction
+    ? "You are over a holding limit — a private company won in the delayed auction, the share it brought, or a price leaving the Yellow/Orange/Brown zones — and you must sell down before passing."
+    : "Shares of yours left the Yellow/Orange/Brown zones and now count against your limits — you must sell down before passing.";
 }
 
 /** The fewest certificates that would clear the debt -- for the panel's caption, not for enforcement.

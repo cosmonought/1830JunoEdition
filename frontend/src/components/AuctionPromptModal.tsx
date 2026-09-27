@@ -1,5 +1,6 @@
 // The two decisions the auction can leave behind, in one card: the B&O's par
-// price and the handoff into Stock Round 1.
+// price and the handoff into the Stock Round that follows it (Stock Round 1 in
+// the standard game; a later one under the Delayed Auction -- DA-6, DA-F8b).
 //
 // Modal and undismissable -- the private is already won and the certificate
 // already owed, so there is no legal state on the other side of cancelling.
@@ -33,6 +34,12 @@ export interface AuctionPromptModalProps {
    *  cannot be carried into a Stock Round. `null` when nothing is owed. */
   awaitingParFrom: string | null;
   onProceed: () => void;
+  /* DA-6 (DA-F8b): the Stock Round the handoff opens -- `macro_round_number`, the slot the auction occupies (#905;
+     the Activity Log's handoff line reads the same number). It said "Stock Round 1" at the end of EVERY auction,
+     which under the Delayed Auction named a round the table played long ago. Absent reads as 1, the standard game. */
+  nextStockRound?: number;
+  /** DA-6: the table plays the Delayed Auction, so the auction is not "the Waterfall Auction" that opened the game. */
+  delayedAuction?: boolean;
 }
 
 export function AuctionPromptModal({
@@ -42,6 +49,8 @@ export function AuctionPromptModal({
   handoffPending,
   awaitingParFrom,
   onProceed,
+  nextStockRound = 1,
+  delayedAuction = false,
 }: AuctionPromptModalProps) {
   /* Seeded at the top of the ladder rather than left blank. Every rung is
      legal, so there is no "unset" state worth representing -- and a
@@ -54,13 +63,15 @@ export function AuctionPromptModal({
   if (!parPending && !handoffPending) return null;
 
   const blocked = awaitingParFrom !== null;
+  const stockRound = `Stock Round ${nextStockRound}`;
+  const completeHeading = delayedAuction ? "The private company auction is complete" : "The Waterfall Auction is complete";
 
   return (
     <div
       style={styles.backdrop}
       role="dialog"
       aria-modal="true"
-      aria-label={parPending ? "Set the B&O par value" : "The Waterfall Auction is complete"}
+      aria-label={parPending ? "Set the B&O par value" : completeHeading}
     >
       <div style={styles.card}>
         {parPending ? (
@@ -108,10 +119,19 @@ export function AuctionPromptModal({
           </>
         ) : (
           <>
-            <span style={styles.heading}>The Waterfall Auction is complete</span>
+            <span style={styles.heading}>{completeHeading}</span>
             <p style={styles.body}>
-              Every private company has been allocated. Stock Round 1 opens next &mdash;
-              corporations can be started and shares bought from their IPOs.
+              {delayedAuction ? (
+                <>
+                  Every private company has been allocated. {stockRound} opens next, and the B&amp;O is now
+                  open for trading like any other corporation.
+                </>
+              ) : (
+                <>
+                  Every private company has been allocated. {stockRound} opens next &mdash;
+                  corporations can be started and shares bought from their IPOs.
+                </>
+              )}
             </p>
 
             {blocked && (
@@ -130,10 +150,10 @@ export function AuctionPromptModal({
               title={
                 blocked
                   ? "The B&O has a president and no share price yet."
-                  : "Close the auction and open Stock Round 1."
+                  : `Close the auction and open ${stockRound}.`
               }
             >
-              Proceed to Stock Round 1 &#8250;
+              Proceed to {stockRound} &#8250;
             </button>
           </>
         )}

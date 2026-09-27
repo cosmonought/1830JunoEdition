@@ -39,7 +39,13 @@ import { BO_TICKER } from "./gameConstants";
 // Design note #759: the expiry of #7 and #712's zone exemptions.
 import { divestmentDebt, divestmentRefusal } from "./forcedDivestment";
 import { PLAYER_HOLDING_CAP_PERCENT } from "./privateExchange";
-import { DOUBLE_CERTIFICATE_PERCENT, doublePurchaseRefusal, ordinaryPurchaseRefusal } from "./doubleCertificate";
+import {
+  DOUBLE_CERTIFICATE_PERCENT,
+  doubleCertificateAt,
+  doublePurchaseRefusal,
+  ordinaryPurchaseRefusal,
+} from "./doubleCertificate";
+import type { PublicCompanyState } from "./gameState";
 
 /** A 10% certificate. The president's is 20%, and is handled where it is bought. */
 export const SHARE_PERCENT = 10;
@@ -123,7 +129,10 @@ export function sharePurchaseBlock(input: SharePurchaseInput): string | null {
     const refusal = doublePurchaseRefusal(company, source);
     if (refusal !== null) return refusal;
   } else {
-    const refusal = ordinaryPurchaseRefusal(company, source, Math.max(1, Math.floor(quantity)));
+    const refusal =
+      ordinaryPurchaseRefusal(company, source, Math.max(1, Math.floor(quantity))) ??
+      // DA-6 (D-52): the IPO's last share may be the one held for the C&A -- see `reservedIpoRefusal`.
+      reservedIpoRefusal(company, source, Math.max(1, Math.floor(quantity)) * SHARE_PERCENT);
     if (refusal !== null) return refusal;
   }
   const taking = wantsDouble
@@ -198,6 +207,36 @@ export function sharePurchaseBlock(input: SharePurchaseInput): string | null {
   }
 
   return null;
+}
+
+/* ==================================================================
+    DA-6 (D-52): THE SHARE HELD FOR THE C&A IS SAID AT THE BUY BUTTON
+   ==================================================================
+   Under the Delayed Auction one ordinary 10% PRR certificate stays in the Initial Offering for the C&A's first buyer
+   (DA-5, `reserved_certificate`). The authority has always refused it (`ordinaryPercentAvailable`), but this gate --
+   the one the Stock Round panel asks -- read only the double's placement, so once the PRR's other IPO shares were gone
+   the panel offered "IPO · 10% left" and an enabled Buy, and the server answered "The IPO holds no ordinary PRR
+   certificate to sell." -- a refusal that contradicted the number on the card. Named here, and asked by the
+   authority's own card-availability rule too (`stockTransactionAuthority.ts`, rule 5), so the button, ingress and the
+   reducer give one sentence. `null` whenever the reservation is not what stands in the way -- and always in the
+   standard game, which reserves nothing. */
+/** DA-6 (D-52): why an IPO purchase only the reserved certificate could fill is refused, or `null`. */
+export function reservedIpoRefusal(
+  company: Pick<
+    PublicCompanyState,
+    "ticker" | "ipo_pool_percentage" | "president" | "reserved_certificate" | "double_certificate"
+  >,
+  source: "Ipo" | "Bank",
+  percentage: number,
+): string | null {
+  if (source !== "Ipo" || company.president === null) return null; // an unstarted IPO sells its President's Certificate
+  const reserved = Number(company.reserved_certificate?.percentage ?? 0);
+  if (!Number.isFinite(reserved) || reserved <= 0) return null;
+  const ipo = Number(company.ipo_pool_percentage) || 0;
+  const double = doubleCertificateAt(company) === "Ipo" ? DOUBLE_CERTIFICATE_PERCENT : 0;
+  const ordinary = ipo - double - reserved;
+  if (ordinary >= percentage || ordinary + reserved < percentage) return null;
+  return `The ${reserved}% of ${company.ticker} left in the IPO is held for whoever buys the C&A in the delayed private company auction — no one else can buy it.`;
 }
 
 /** Orange and Brown lift the 60% ownership cap. */

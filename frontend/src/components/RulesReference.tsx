@@ -1177,6 +1177,11 @@ function companyMeta(id: number): string {
   return `$${row.faceValue} / $${row.revenue} · ${ref.hex}`;
 }
 
+/** DA-6 (DA-F8e): the auction card's lead without the base game's timing -- the delayed table's reading, shared by the
+ *  Auction page and the Overview's "This round" panel so the two cannot differ. */
+const DELAYED_AUCTION_LEAD =
+  "The Private Companies are sold through a buy-bid-turn sequence that continues until all of them are purchased.";
+
 const COMPANY_CARDS: readonly CompanyCard[] = [
   {
     id: "auction",
@@ -1187,7 +1192,20 @@ const COMPANY_CARDS: readonly CompanyCard[] = [
     notes: [
       {
         scope: "delayedAuction",
-        text: "This table plays the delayed auction: the game opens on Stock Round 1 with no Private Companies in play, and this auction runs at the end of the Operating Round set in which the first 3-train is bought. Until it concludes the B&O cannot be parred, bought or sold.",
+        /* DA-6: and the one way it never runs (D-55) -- a first 5-train bought first closes the privates unsold. */
+        text: "This table plays the delayed auction: the game opens on Stock Round 1 with no Private Companies in play, and this auction runs at the end of the Operating Round set in which the first 3-train is bought, just before the next Stock Round. Until it concludes the B&O cannot be parred, bought or sold. If the first 5-train is bought before it runs, the auction is cancelled: the Private Companies close unsold and the B&O opens.",
+      },
+      {
+        scope: "delayedAuction",
+        /* DA-6 (D-52): why the last PRR share in the Initial Offering cannot be bought -- a question the Stock Round
+           panel now answers at the Buy button too (`sharePurchase.ts`). */
+        text: "One 10% PRR share stays in the Initial Offering for whoever buys the C&A, and no one else can buy it. The C&A's buyer receives it at once, and it counts toward the PRR's float and presidency straight away.",
+      },
+      {
+        scope: "delayedAuction",
+        /* DA-6 (D-53, D-57, D-58; DA-F8's must-sell wording): the auction can put a player over a limit, and what the
+           next Stock Round asks of them. The rule, not the mechanism. */
+        text: "A Private Company won here counts toward the certificate limit, and the share it brings (the C&A's PRR share, the B&O President's Certificate) can take a player over a limit or the 60% cap. That is allowed, but in the next Stock Round the player must sell down whatever a legal sale can fix before buying or passing; an excess no sale can fix is not owed. A buy or a bid is refused if winning would leave an excess no sale in that Stock Round could fix.",
       },
     ],
     quick: [
@@ -2676,7 +2694,8 @@ function GameFlowDisclosure({
       accent: ACCENT.auction,
       label: "Auction",
       text: delayed
-        ? "The Private Companies are sold at the end of the Operating Round set with the first 3-train."
+        ? /* DA-6 (DA-F8g): and what follows it -- the chain draws Auction before Stock Round in both games. */
+          "The Private Companies are sold at the end of the Operating Round set with the first 3-train, just before the next Stock Round."
         : "The Private Companies are sold before the first Stock Round.",
     },
     { section: "stock", accent: ACCENT.stock, label: "Stock Round", text: "Players buy and sell corporation stock." },
@@ -3089,7 +3108,13 @@ function OverviewPage({
     {
       label: "Current phase",
       value: phaseRow ? `Phase ${phaseRow.phase}` : "—",
-      note: phaseRow ? (phaseRow.phase === "1" ? "The Private Company Auction" : phaseRow.begins) : "No live game",
+      /* DA-6 (DA-F8f): the Tables page's delayed reading of the cell ("Start of the game" for Phase 2, not "All
+         private companies purchased"), read here too so the two pages agree. */
+      note: phaseRow
+        ? phaseRow.phase === "1"
+          ? "The Private Company Auction"
+          : ((delayed ? phaseRow.delayed?.begins : undefined) ?? phaseRow.begins)
+        : "No live game",
       accent: ACCENT.neutral,
       /* THE PRIMARY ORIENTATION FACT, so its label is the brightest in the strip: `INK_TEXT_DIM` is 10.79:1,
          clear of the three round hues at ~7:1 and of the muted step below. It stays NEUTRAL on purpose --
@@ -3247,7 +3272,15 @@ function OverviewPage({
       /* THE MINIMUM NEEDED TO EXPLAIN HOW THE AUCTION CONTINUES, and nothing else: the bid-money commitment
          and the resolution interrupt are both reminders on the right, and repeating either here was the
          duplication this pass removes. */
-      return { title: "The buy-bid-turn", lead: auctionCard?.lead ?? "", bullets: [], page: "auction", linkLabel: "Open Auction rules" };
+      /* DA-6 (DA-F8e): the delayed table's lead -- the Auction page's own (`DELAYED_AUCTION_LEAD`), without the base
+         game's "Before the first Stock Round". */
+      return {
+        title: "The buy-bid-turn",
+        lead: delayed ? DELAYED_AUCTION_LEAD : (auctionCard?.lead ?? ""),
+        bullets: [],
+        page: "auction",
+        linkLabel: "Open Auction rules",
+      };
     }
     return null;
   };
@@ -4763,11 +4796,11 @@ function AuctionPage({ auctionLive, currentRef }: { auctionLive: boolean; curren
      variant block below states the real trigger, and a claim this page cannot verify is better absent than
      wrong. `auction.lead` itself is untouched -- the Overview renders it. */
   const delayed = applies({ scope: "delayedAuction" });
-  const auctionLead = delayed
-    ? "The Private Companies are sold through a buy-bid-turn sequence that continues until all of them are purchased."
-    : (auctionCard?.lead ?? "");
+  const auctionLead = delayed ? DELAYED_AUCTION_LEAD : (auctionCard?.lead ?? "");
+  /* DA-6: the delayed table's transition, stated now that the page can say it truthfully -- the Stock Round the
+     auction's slot belongs to follows it (#905). */
   const auctionEnds = delayed
-    ? "The auction ends when every Private Company has been bought."
+    ? "The auction ends when every Private Company has been bought, and the next Stock Round follows."
     : "The auction ends when every Private Company has been bought. The first Stock Round follows.";
 
   /* ---- The interrupt: four moves, in the card's own words. ---- */

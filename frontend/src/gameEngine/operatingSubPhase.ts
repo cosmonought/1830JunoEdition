@@ -84,6 +84,9 @@ export interface PrivateAvailability {
   /** Set when a CORPORATION holds it; such a private can never be bought
    *  again (`trading.rs` reads `private.owner` and fails without one). */
   owner_protocol_id: number | null;
+  /** DA-6 (DA-F8k): the PLAYER who holds it -- `null` for a private nobody has bought yet. Optional: a caller that
+   *  does not carry it keeps #385's reading (see `hasBuyablePrivate`). */
+  owner?: string | null;
 }
 
 /** Is there anything left for a corporation to buy? Design note #385: A STEP WITH NOTHING IN IT IS NOT A STEP.
@@ -101,7 +104,13 @@ export function hasBuyablePrivate(
   privates: readonly PrivateAvailability[] | null | undefined,
 ): boolean {
   if (privates === null || privates === undefined) return true;
-  return privates.some((entry) => !entry.closed && entry.owner_protocol_id === null);
+  /* DA-6 (DA-F8k): AND A PLAYER HOLDS IT. Corporations buy privates from players (rulebook 3.1; the reducer's
+     `privatePurchaseRefusal` refuses an unowned one), and under the Delayed Auction every private is unsold from the
+     first 3-train until its auction ends the set -- Phase 3 already, so the Action Bar offered "Buy Private Company"
+     over a list with nothing a corporation could buy. The standard game cannot tell the difference: its auction has
+     placed every private with an owner before any Operating Round. `owner` ABSENT (a caller that does not carry it)
+     is "not said", #232, and reads as before. */
+  return privates.some((entry) => !entry.closed && entry.owner_protocol_id === null && entry.owner !== null);
 }
 
 /* Design note #613: THE RULE IS A PHASE NUMBER, SO SAY THE PHASE NUMBER. Corporations may buy privates from the

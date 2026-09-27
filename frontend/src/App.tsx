@@ -653,6 +653,8 @@ import TutorialModal, {
   STOCK_MARKET_TUTORIAL,
   STOCK_ROUND_TUTORIAL,
   WATERFALL_AUCTION_TUTORIAL,
+  DELAYED_STOCK_ROUND_TUTORIAL, // DA-6
+  DELAYED_WATERFALL_AUCTION_TUTORIAL, // DA-6
   TUTORIAL_LIBRARY,
   replayTutorials,
   tutorialModeEnabled,
@@ -5593,7 +5595,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  See docs/ai_architecture/contract_economy.md - App.tsx #546 */
   const handleProceedToStockRound = useCallback(() => {
     void runGameplayActionRef.current?.(
-      "The Waterfall Auction is complete \u2014 Stock Round 1 begins.",
+      /* DA-6 (DA-F8b): the placeholder the log line replaces (`actionLog.ts` narrates the handoff with the real round
+         number); it named "Stock Round 1" for every auction, the Delayed Auction's included. */
+      "The private company auction is complete \u2014 the Stock Round begins.",
       { OpenStockRound: {} },
       /* `automatic`, which exempts it from the turn gate. Closing the auction
          belongs to nobody's turn -- the rotation it would be checked against
@@ -6547,7 +6551,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             setRoomColors(resolveSeatColors(msg.SetupGame.players));
             logInfo(
               "Room",
-              `Game dealt for ${dealt.playerAddresses.length} players — $${dealt.startingCash} each, certificate limit ${dealt.certLimit}.`,
+              `Game dealt for ${dealt.playerAddresses.length} players — $${dealt.startingCash} each, certificate limit ${dealt.certLimit}.` +
+                /* DA-6 (DA-F8m): the deal is where a Delayed Auction table first learns the game does not open on an auction. */
+                (resolveVariants(msg.SetupGame.variants).delayedAuction
+                  ? " The private company auction is delayed: the game opens on Stock Round 1, and the auction is held after the Operating Round set in which the first 3-train is bought."
+                  : ""),
             );
           }
           /* Design note #1301: the deal opens the grid this board prints -- the same line the replay engine
@@ -8106,7 +8114,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   "Phase Change",
                   /* #736's SENTENCE, UNCHANGED, and still correct for the event it was written about: at
                      Phase 5 every private closes together and every one of them stops paying. */
-                  `${named} ${closures.length === 1 ? "closes" : "close"} — private companies pay no further revenue and no longer count toward the certificate limit.`,
+                  `${named} ${closures.length === 1 ? "closes" : "close"} — private companies pay no further revenue and no longer count toward the certificate limit.` +
+                    /* DA-6 (D-55): a first 5-train bought while the Delayed Auction is still owed cancels it for good. */
+                    (before.private_auction_complete === false && after.private_auction_complete === true
+                      ? " The delayed private company auction will not be held, and the B&O is now open for trading."
+                      : ""),
                 );
               } else {
                 /* A SINGLE PRIVATE ON ITS OWN TRIGGER. Nothing about the phase moved and the others keep
@@ -13325,13 +13337,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       <TutorialModal
         topicKey="waterfall-auction"
         heading="Waterfall Auction"
-        pages={WATERFALL_AUCTION_TUTORIAL}
+        /* DA-6 (DA-F8h): the Delayed Auction arrives mid-game -- its own last page, not the opening auction's. */
+        pages={tableVariants.delayedAuction ? DELAYED_WATERFALL_AUCTION_TUTORIAL : WATERFALL_AUCTION_TUTORIAL}
         active={isWaterfallPhase}
       />
       <TutorialModal
         topicKey="stock-round"
         heading="Stock Round"
-        pages={STOCK_ROUND_TUTORIAL}
+        /* DA-6 (DA-F8h): a Delayed Auction table's Stock Round 1 follows no auction. */
+        pages={tableVariants.delayedAuction ? DELAYED_STOCK_ROUND_TUTORIAL : STOCK_ROUND_TUTORIAL}
         active={gameState?.current_round_type === "StockRound"}
       />
       <TutorialModal
@@ -13384,6 +13398,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             : null
         }
         onProceed={handleProceedToStockRound}
+        /* DA-6 (DA-F8b): the round the handoff really opens -- the slot the auction occupies (#905). */
+        nextStockRound={gameState?.macro_round_number ?? 1}
+        delayedAuction={tableVariants.delayedAuction === true}
       />
 
       {/* Design note #416: blocking, for the same reason the B&O prompt is -- a floated corporation owes its
@@ -14174,6 +14191,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       <TutorialLibrary
         open={tutorialLibraryOpen}
         onClose={() => setTutorialLibraryOpen(false)}
+        delayedAuction={tableVariants.delayedAuction === true}
       />
 
       {/* Design note #1141: the mini-camera. Rendered beside `TutorialLibrary` for the same reason it is --
@@ -14977,8 +14995,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onAcknowledge={acknowledgeFleetNotice}
       />
 
-      {/* #1441: every player hears that privates are for sale, once, when Phase 3 begins. */}
-      <PhaseThreeNoticeModal open={phaseThreeNotice} onAcknowledge={() => setPhaseThreeNotice(false)} />
+      {/* #1441: every player hears that privates are for sale, once, when Phase 3 begins.
+          DA-6: under the Delayed Auction the auction is still owed at that edge, and the notice says so instead. */}
+      <PhaseThreeNoticeModal
+        open={phaseThreeNotice}
+        onAcknowledge={() => setPhaseThreeNotice(false)}
+        delayedAuctionPending={tableVariants.delayedAuction === true && gameState?.private_auction_complete === false}
+      />
 
       <AutoPassModal
         open={autoPassOpen}

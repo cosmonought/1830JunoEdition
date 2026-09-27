@@ -61,6 +61,8 @@
 // See docs/ai_architecture/state_machine.md, autoPass.ts #717.
 
 import type { GameStateResponse } from "../gameEngine/gameState";
+import { divestmentWakeReason } from "../gameEngine/forcedDivestment"; // DA-6
+import { resolveVariants } from "../gameEngine/gameVariants"; // DA-6
 
 /** A 10% certificate -- the smallest step a rival's holding can take. */
 const SHARE_PERCENT = 10;
@@ -258,12 +260,9 @@ export function autoPassDecision(
      THE ARM IS DISARMED, not merely skipped for a turn. The debt persists until the player acts, so waking
      them once and re-arming would wake them again on the next seat and the one after. */
   if (arm.divestmentOwed === true) {
-    return {
-      pass: false,
-      wakeReason:
-        "Shares of yours left the Yellow/Orange/Brown zones and now count against your limits — " +
-        "you must sell down before passing.",
-    };
+    /* DA-6 (DA-F8): the cause as this table can have it -- the Delayed Auction's acquisitions as well as a zone exit
+       (`divestmentWakeReason`, beside the refusal sentence it shortens). */
+    return { pass: false, wakeReason: divestmentWakeReason(resolveVariants(state.variants).delayedAuction === true) };
   }
 
   // #1335: the guard runs unless the player switched it off.

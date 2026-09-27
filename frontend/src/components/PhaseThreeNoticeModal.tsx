@@ -21,6 +21,16 @@ import { NativeModal } from "./NativeModal";
 export interface PhaseThreeNoticeModalProps {
   open: boolean;
   onAcknowledge: () => void;
+  /* ==================================================================
+      DA-6: UNDER THE DELAYED AUCTION, PHASE 3 IS NOT WHEN THE PRIVATES GO ON SALE
+     ==================================================================
+     The first 3-train starts Phase 3 in every game, but under the Delayed Auction every private company is still
+     unsold at that moment: the auction is held when this Operating Round set ends (#905), and until it has placed
+     them with owners there is nothing a corporation can buy (the reducer refuses an unsold private, and the Action
+     Bar no longer offers the button -- `hasBuyablePrivate`). The notice told every player the opposite -- "Private
+     companies are for sale ... use the Buy Private Company button" -- at the one moment it was false. `true` while
+     that auction is still owed; the notice then says what actually happens next. Absent reads as `false`. */
+  delayedAuctionPending?: boolean;
 }
 
 /* ==================================================================
@@ -54,11 +64,11 @@ export interface PhaseThreeNoticeModalProps {
    component mounted all session. `NativeModal` is only RENDERED past that switch, so it mounts and unmounts
    with the dialog, which is the lifecycle the contract was written against. */
 
-export function PhaseThreeNoticeModal({ open, onAcknowledge }: PhaseThreeNoticeModalProps) {
+export function PhaseThreeNoticeModal({ open, onAcknowledge, delayedAuctionPending = false }: PhaseThreeNoticeModalProps) {
   if (!open) return null;
   return (
     <NativeModal
-      name="Phase 3: private companies are for sale"
+      name={delayedAuctionPending ? "Phase 3: the private company auction is next" : "Phase 3: private companies are for sale"}
       /* #1645, carried forward by #1651: Escape performs the same dismissal the backdrop already performs --
          which on this surface IS the acknowledgment, because the backdrop already acknowledged. It does not
          reach for a control that advances the game; there is none here but "Got it", which is this same
@@ -75,8 +85,26 @@ export function PhaseThreeNoticeModal({ open, onAcknowledge }: PhaseThreeNoticeM
       <div style={styles.card}>
         <div style={styles.header}>
           <span style={styles.chip}>PHASE 3</span>
-          <span style={styles.heading}>Private companies are for sale</span>
+          <span style={styles.heading}>
+            {delayedAuctionPending ? "The private company auction is next" : "Private companies are for sale"}
+          </span>
         </div>
+        {delayedAuctionPending ? (
+          <>
+            <p style={styles.body}>
+              The first 3-train has been bought. When this Operating Round set ends, the{" "}
+              <strong>delayed private company auction</strong> is held, before the next Stock Round. Every private
+              company is sold there, and the B&amp;O opens for trading once it is over.
+            </p>
+            <p style={styles.body}>
+              After the auction, a corporation may buy a private company from its owner at any time during its
+              turn, with the <strong>Buy Private Company</strong> button on the action bar — between half and twice
+              the face value, and only if the owner agrees. Private companies close at the start of Phase 5, when
+              the first 5-train is bought.
+            </p>
+          </>
+        ) : (
+          <>
         <p style={styles.body}>
           The first 3-train has been bought. From now on a corporation may buy a private company from any player{" "}
           <strong>at any time during its turn</strong> — use the <strong>Buy Private Company</strong> button on
@@ -87,6 +115,8 @@ export function PhaseThreeNoticeModal({ open, onAcknowledge }: PhaseThreeNoticeM
           Private companies <strong>close at the start of Phase 5</strong>, when the first 5-train is bought. Keep
           that in mind if you want to use a private company's special power — it goes with the company.
         </p>
+          </>
+        )}
         <div style={styles.footer}>
           {/* #1645: `autoFocus` STAYS, and that is a measurement rather than an oversight. Batches 1 and 2
               replaced native autofocus because it beat the opener capture; here it does not. Verified by

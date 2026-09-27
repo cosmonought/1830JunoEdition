@@ -90,7 +90,9 @@ export function privatePurchaseBlockReason(entry: PrivateCompanyState): string |
   const corporateBan = corporateSaleBlockReason(entry);
   if (corporateBan) return corporateBan;
   if (entry.owner === null) {
-    return "Still unsold in the private auction — no owner to sell it yet.";
+    /* DA-6 (DA-F8l): "still unsold in the auction" assumed an auction under way; under the Delayed Auction a private is
+       unsold BEFORE its auction has run. Timing-neutral, and true in both games. */
+    return "Not sold yet in the private company auction — there is no owner to sell it.";
   }
   return null;
 }
@@ -278,7 +280,7 @@ export function ProposePrivatePurchase({
         {eligible.length === 0 ? (
           <p style={styles.empty}>
             No private company is available. Every one is either already owned by a corporation,
-            closed, or still unsold in the auction.
+            closed, or not yet sold in the private company auction.
           </p>
         ) : (
           <div style={styles.list}>
@@ -410,7 +412,7 @@ export function ProposePrivatePurchase({
                       ) : blocked !== null ? (
                         "not for sale"
                       ) : (
-                        "unsold in the auction"
+                        "not yet sold in the auction"
                       )}
                     </span>
                     {/* Design note #804: ONE FIGURE, ON ONE LINE, AND THAT IS THE FIX FOR THE GAP.

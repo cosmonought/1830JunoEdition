@@ -1,7 +1,8 @@
 // frontend/src/components/WaterfallAuctionDashboard.tsx
 //
-// Pre-game Waterfall Auction engine (`waterfall.rs`) -- the dashboard for allocating 1830's six
-// private companies before Stock Round 1. `App.tsx` renders this in place of the action bar, board
+// Waterfall Auction engine (`waterfall.rs`) -- the dashboard for allocating 1830's private companies:
+// before Stock Round 1 in the standard game, and mid-game under the Delayed Auction, after the Operating
+// Round set in which the first 3-train is bought (DA-6, DA-F8d). `App.tsx` renders this in place of the action bar, board
 // canvas and sub-panel for the whole of `current_round_type === "WaterfallAuction"`, so this
 // component is the room's entire canvas rather than a tray bolted onto the layout.
 //
@@ -53,6 +54,8 @@ import type {
   WaterfallStateResponse,
 } from "../gameEngine/gameState";
 import { privateOrdinal } from "../gameEngine/privateOrdinal";
+// DA-6 (DA-F8d): the Delayed Auction's title and status line, shared with the sub-panel's notice.
+import { DELAYED_AUCTION_TITLE, delayedAuctionUnderway, resolveVariants } from "../gameEngine/gameVariants";
 
 /* Design note #1184: the increment and the minimum moved to `auctionEscrow`, where the reducer can also
    reach them. This file used to hold both under a comment calling itself a "hand-kept mirror" of the
@@ -251,12 +254,19 @@ export function WaterfallAuctionDashboard({
     !!miniAuction &&
     (hotseat || (!!connectedWalletAddress && miniAuction.current_turn === connectedWalletAddress));
 
+  /* DA-6 (DA-F8d): under the Delayed Auction this screen arrives mid-game, in place of the board -- so it says which
+     auction it is, why the Stock Round and Operating Round turns have gone, and which Stock Round comes next. */
+  const delayedAuction = resolveVariants(gameState?.variants).delayedAuction === true;
+  const nextStockRound = gameState?.macro_round_number ?? 1;
+
   if (!waterfallState) {
     return (
       <div style={styles.root}>
         <div style={styles.header}>
           <span style={styles.headerTitle}>Auction</span>
-        <span style={styles.headerSubtitle}>Pre-game private company waterfall</span>
+        <span style={styles.headerSubtitle}>
+          {delayedAuction ? "Delayed private company auction" : "Pre-game private company waterfall"}
+        </span>
         </div>
         <p style={styles.placeholderText}>
           {loading
@@ -281,7 +291,12 @@ export function WaterfallAuctionDashboard({
          had happened. The PASSED stamps ARE that count, drawn on the seats.
          `consecutive_waterfall_passes` is still read by `App.tsx`'s `passedSeats`; it stopped being prose. */}
       <div style={styles.header}>
-        <span style={styles.headerTitle}>Private Company Waterfall Auction</span>
+        <span style={styles.headerTitle}>{delayedAuction ? DELAYED_AUCTION_TITLE : "Private Company Waterfall Auction"}</span>
+        {delayedAuction && (
+          <span style={styles.headerSubtitle} data-testid="delayed-auction-status">
+            {delayedAuctionUnderway(nextStockRound)}
+          </span>
+        )}
         {error && (
           <span style={styles.staleNote}>Showing last known state — latest refresh failed: {error}</span>
         )}
@@ -330,7 +345,9 @@ export function WaterfallAuctionDashboard({
         {privates.length === 0 && (
           <div style={styles.auctionOverBanner}>
             <span style={styles.auctionOverText}>
-              The Waterfall Auction is complete. Up next is the Stock Round.
+              {delayedAuction
+                ? `The delayed private company auction is complete. Up next is Stock Round ${nextStockRound}.`
+                : "The Waterfall Auction is complete. Up next is the Stock Round."}
             </span>
           </div>
         )}

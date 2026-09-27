@@ -115,6 +115,8 @@ import {
 } from "./homeStationAuthority";
 // UR-3 (OD-UR-1 = 1-A, D-37): a pinned table resolves the Yellow Sign inside the run; it takes no request for one.
 import { yellowSignRequestRefusal } from "./yellowSign";
+// RR2A-F1: a pinned table's rounds turn over by themselves -- no `BeginOperatingRound`, no Stock Round pass in the auction.
+import { roundTransitionRefusal } from "./roundTransitionAuthority";
 
 export interface TurnAuthorityInput {
   state: GameStateResponse;
@@ -246,6 +248,17 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
      above (a derived action, a solo actor) never carry one -- and the reducer's own gate refuses it regardless. */
   if ("YellowSignEvent" in msg) {
     const refusal = yellowSignRequestRefusal(state);
+    if (refusal !== null) return refusal;
+  }
+
+  /* ---- RR2A-F1: THE ROUNDS TURN OVER BY THEMSELVES ON A PINNED TABLE ----
+     `BeginOperatingRound` in any round, and a Stock Round / Operating Round `PassTurn` inside the private company
+     auction. Not a question about whose turn it is, so -- like the Yellow Sign above -- it is asked after the four
+     holds and BEFORE the consent and seat questions: every seat hears what the round is waiting for, never "It is
+     not your turn." (which would say that on your turn you could). The reducer's board gate asks the same predicate
+     (`roundTransitionAuthority.ts`); an unpinned board answers `null` and keeps its legacy arm (D-9). */
+  {
+    const refusal = roundTransitionRefusal(state, msg);
     if (refusal !== null) return refusal;
   }
 

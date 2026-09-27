@@ -147,6 +147,30 @@ export const WATERFALL_AUCTION_TUTORIAL: readonly TutorialPage[] = [
   },
 ];
 
+/* ==================================================================
+    DA-6 (DA-F8h): THE DELAYED AUCTION'S TUTORIAL PAGES
+   ==================================================================
+   Two pages were written for the auction that OPENS the game, and both are shown on a Delayed Auction table:
+   the auction's "Watch your cash" ("You start this Auction with a set amount of personal cash ... in the upcoming
+   Stock Round") pops up mid-game, when nobody is starting anything; and the Stock Round's first page ("Now that
+   the Private Company auction is complete ...") opens on a Stock Round 1 that no auction has preceded. Each is
+   replaced, for that table only, by the page that is true there -- same titles, same "consequences, not controls"
+   register (#0). Every other page is the standard game's, shared. */
+const DELAYED_AUCTION_CASH_PAGE: TutorialPage = {
+  title: "Watch your cash",
+  body:
+    "This auction comes in the middle of the game, so you bid with the cash you have now — and the Stock Round " +
+    "opens straight after it. A private company won here counts toward your certificate limit, and the C&A or " +
+    "the B&O brings a share with it. If that puts you over a limit, you will have to sell down in that Stock " +
+    "Round, and a buy or bid that would leave you over with no legal sale to fix it is refused.",
+};
+
+/** DA-6: the auction tutorial for a Delayed Auction table -- the last page replaced. */
+export const DELAYED_WATERFALL_AUCTION_TUTORIAL: readonly TutorialPage[] = [
+  ...WATERFALL_AUCTION_TUTORIAL.slice(0, -1),
+  DELAYED_AUCTION_CASH_PAGE,
+];
+
 /** The Stock Round explainer. Design note #0's "consequences, not controls"
  *  rule holds: none of these pages tell you which button to press, they
  *  tell you what buying a first share, floating a company, or selling into
@@ -440,6 +464,36 @@ export const TUTORIAL_LIBRARY: readonly TutorialTopic[] = [
   },
 ];
 
+/** DA-6 (DA-F8h): the Stock Round tutorial for a Delayed Auction table -- the first page replaced. */
+export const DELAYED_STOCK_ROUND_TUTORIAL: readonly TutorialPage[] = [
+  {
+    title: "The rhythm of the game",
+    body:
+      "The game alternates between Stock Rounds, when players buy and sell shares in railroad corporations, and " +
+      "Operating Rounds, when those railroad corporations run. At this table the private companies are not sold " +
+      "yet: their auction is held after the Operating Round set in which the first 3-train is bought, and the " +
+      "B&O cannot be traded until it is over.",
+  },
+  ...STOCK_ROUND_TUTORIAL.slice(1),
+];
+
+/** DA-6 (DA-F8h): the library as a Delayed Auction table should read it -- the auction's blurb without "before the
+ *  game proper starts", and the two replaced pages. Every other topic is the standard one. */
+export function tutorialLibraryFor(delayedAuction: boolean): readonly TutorialTopic[] {
+  if (!delayedAuction) return TUTORIAL_LIBRARY;
+  return TUTORIAL_LIBRARY.map((topic) =>
+    topic.topicKey === "waterfall-auction"
+      ? {
+          ...topic,
+          blurb: "How the private companies are bid for, once the first 3-train's Operating Round set is over.",
+          pages: DELAYED_WATERFALL_AUCTION_TUTORIAL,
+        }
+      : topic.topicKey === "stock-round"
+        ? { ...topic, pages: DELAYED_STOCK_ROUND_TUTORIAL }
+        : topic,
+  );
+}
+
 export const ALL_TUTORIAL_TOPICS: readonly string[] = [
   "waterfall-auction",
   "stock-round",
@@ -454,6 +508,8 @@ export const ALL_TUTORIAL_TOPICS: readonly string[] = [
 export interface TutorialLibraryProps {
   open: boolean;
   onClose: () => void;
+  /** DA-6 (DA-F8h): the table plays the Delayed Auction -- read the library through `tutorialLibraryFor`. */
+  delayedAuction?: boolean;
 }
 
 /* ==================================================================
@@ -486,7 +542,8 @@ function DismissalLifecycle({ onDismiss }: { onDismiss: () => void }) {
  *  is not a second, subtly different presentation of the same words. No "seen"
  *  flag is written and no off-switch checkbox is offered, because neither applies
  *  to content the player went looking for. */
-export function TutorialLibrary({ open, onClose }: TutorialLibraryProps) {
+export function TutorialLibrary({ open, onClose, delayedAuction = false }: TutorialLibraryProps) {
+  const library = tutorialLibraryFor(delayedAuction);
   /* Design note (VF-7): mirrored into state so the box re-renders when it is ticked. `localStorage` is
      the truth and this is the reflection, which is the arrangement `fleetLossNotice.ts` #896a spells out
      for its own toggle -- read once when the dialog opens, because nothing else in the app writes it. */
@@ -528,7 +585,7 @@ export function TutorialLibrary({ open, onClose }: TutorialLibraryProps) {
 
   if (!open) return null;
 
-  const topic = TUTORIAL_LIBRARY.find((entry) => entry.topicKey === topicKey) ?? null;
+  const topic = library.find((entry) => entry.topicKey === topicKey) ?? null;
 
   return (
     <div
@@ -558,7 +615,7 @@ export function TutorialLibrary({ open, onClose }: TutorialLibraryProps) {
                 Read any of these at any time. Opening one from here does not change whether it
                 still appears automatically when its phase begins.
               </p>
-              {TUTORIAL_LIBRARY.map((entry) => (
+              {library.map((entry) => (
                 <button
                   key={entry.topicKey}
                   type="button"

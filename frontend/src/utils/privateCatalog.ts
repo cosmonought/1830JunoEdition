@@ -226,8 +226,12 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
       "Its initial purchaser is handed a 10% PRR share on purchase.",
       "Nothing further to trigger \u2014 the company stays open.",
     ],
+    /* DA-6 (DA-F8i): "The PRR will not be operating yet" is the printed game's situation (the auction precedes every
+       Stock Round) and false under the Delayed Auction, where the PRR may have floated and be running before the C&A is
+       sold -- and "held or sold like any other" promised a sale that is refused while the PRR is unstarted (S8-8). The
+       sentence now says what is true at every table. */
     ability:
-      "Its initial purchaser is handed a 10% PRR share at once and at no further cost. Nothing is triggered and the company stays open. The PRR will not be operating yet, but the share is held or sold like any other.",
+      "Its initial purchaser is handed a 10% PRR share at once and at no further cost. Nothing is triggered and the company stays open. The share is held like any other PRR share, whether or not the PRR has started yet.",
   },
   6: {
     acronym: "BO",

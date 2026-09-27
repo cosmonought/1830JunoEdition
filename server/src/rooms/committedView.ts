@@ -29,20 +29,31 @@
 
 import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import type { GameRecord } from "./gameRecord";
+import type { HoldCode } from "./lifecycle";
 import type { BuildId, ServerMessage } from "../../../frontend/src/utils/serverProtocol";
 import { fieldDigests, stateDigest } from "../../../frontend/src/gameEngine";
 
 /** `version`: #1520. `uncertain`: a store outcome not yet known (§17 class 4). `corrupt`: LIVE-3B -- the load found
- *  damage that is not a torn final batch, so no history is served until an operator repairs the file (§8.5). */
-export type HoldReason = "version" | "uncertain" | "corrupt";
+ *  damage that is not a torn final batch, so no history is served until an operator repairs the file (§8.5).
+ *  `held`: LIVE-3C -- a DURABLE hold (`holdStore.ts`): the game's durable sources disagree or could not be read, and
+ *  it stays held across restarts until an operator's verified release. `corrupt` and `held` are served identically
+ *  (`isMaintenanceHold`): no history, no move, one fixed sentence. */
+export type HoldReason = "version" | "uncertain" | "corrupt" | "held";
 
 export interface Hold {
   readonly reason: HoldReason;
+  /** Operator-facing. Never sent to a client for a maintenance hold (the fixed sentence is). */
   readonly detail: string;
   /** LIVE-3B: an uncertain outcome only a process restart can resolve (a failed redo, §8.2 step 7). Never read
    *  back: after a failed `fsync` a read can show bytes the disk does not hold. */
   readonly restart?: boolean;
+  /** LIVE-3C: why a maintenance hold holds (`lifecycle.ts` `HoldCode`), for the operator's inventory. */
+  readonly code?: HoldCode;
 }
+
+/** LIVE-3C: a hold that serves no history and takes no change until an operator acts -- a damaged log (`corrupt`,
+ *  LIVE-3B) or a durable hold (`held`). */
+export const isMaintenanceHold = (hold: Hold | null | undefined): boolean => hold?.reason === "corrupt" || hold?.reason === "held";
 
 export interface CommittedView {
   readonly gameId: string;

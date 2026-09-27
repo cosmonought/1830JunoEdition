@@ -26,7 +26,9 @@ import { createFileRecordStore } from "./rooms/recordStore";
 import { createFileLogStore } from "./fileLogStore";
 import { SESSION_COOKIE_NAME } from "./identity/cookies";
 import { createDevAuthenticator } from "./identity/devAuthenticator";
-import { createFileIdentityStore } from "./identity/fileStore";
+import { createJournalIdentityStore, type JournalIdentityStore } from "./identity/journalStore";
+import { createFileHoldStore } from "./rooms/holdStore";
+import { createFileOpsRecorder } from "./persistence/opsRecorder";
 import { resolveServerConfig } from "./identity/mode";
 import { IdentityService } from "./identity/sessions";
 import { DEFAULT_INGRESS_LIMITS } from "./ingress/limits";
@@ -151,17 +153,24 @@ async function main(): Promise<void> {
     }, 1_500).unref();
   };
 
+  /* LIVE-3C: the operator's audit lines and status snapshot (`ops/`), written only while this process holds the lock. */
+  const ops = createFileOpsRecorder(dataDir, { build, instanceId: held.instanceId, writerCheck: () => held.verify() });
+
   /* LIVE-2B: principals and sessions live beside the rooms, under the same lock -- written only for guests who own
-     something (activation), durably (LIVE-3B's replacement protocol), and a file that cannot be read without
-     guessing refuses the start. */
+     something (activation), durably, and a file that cannot be read without guessing refuses the start.
+     LIVE-3C (M3): as a SNAPSHOT and a JOURNAL (`identity/journalStore.ts`): each change is one synced line, checked
+     against an index in O(the change), folded into a new snapshot every thousand changes. A LIVE-2E `identity.json` is
+     migrated at this load, before any line is written, so an older server refuses the directory rather than miss the
+     journal. */
   let identity: IdentityService;
+  let identityStore: JournalIdentityStore;
   try {
-    identity = await IdentityService.open(
-      createFileIdentityStore(dataDir, {
-        writerCheck: () => held.verify(),
-        onRestartRequired: (detail) => failFast("the identity store", detail),
-      }),
-    );
+    identityStore = createJournalIdentityStore(dataDir, {
+      writerCheck: () => held.verify(),
+      onRestartRequired: (detail) => failFast("the identity store", detail),
+      onCompacted: (info) => ops.audit("identity.compacted", { seq: info.seq, records: info.records, bytes: info.bytes }),
+    });
+    identity = await IdentityService.open(identityStore);
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error(`Refusing to start: the identity store in ${dataDir} cannot be read -- ${error instanceof Error ? error.message : String(error)}`);
@@ -192,12 +201,37 @@ async function main(): Promise<void> {
     }),
     legacyLogs,
     onRestartRequired: failFast,
+    /* LIVE-3C: durable holds (`games/holds/`), found by discovery or a load and lifted only by an operator's verified
+       release (`npm run gamesDoctor -- release`); the audit lines and the status snapshot (`ops/`). */
+    holds: createFileHoldStore(dataDir, { writerCheck: () => held.verify() }),
+    ops,
+    statusExtras: () => {
+      const health = identityStore.health();
+      return {
+        identity: {
+          loaded: health.loaded,
+          poisoned: health.poisoned !== null,
+          snapshot_seq: health.snapshotSeq,
+          last_seq: health.lastSeq,
+          journal_records: health.journalRecords,
+          journal_bytes: health.journalBytes,
+          compactions: health.compactions,
+          counts: health.sizes,
+        },
+        lock: { instance_id: held.instanceId, pid: process.pid },
+      };
+    },
   });
 
   const release = (code: number) => {
     if (stopping) return;
     stopping = true;
-    void held.release().finally(() => process.exit(code));
+    /* LIVE-3C: the audit lines already queued are written (while the lock is still ours), then the lock goes. */
+    void ops
+      .flush()
+      .catch(() => undefined)
+      .then(() => held.release())
+      .finally(() => process.exit(code));
   };
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"] as const) {
     try {
@@ -256,6 +290,7 @@ function printBanner(instanceId: string): void {
       `  compiled ${builtAt} UTC -- if a fix you just made is not in this stamp, the server was not rebuilt\n` +
       `  games stored in ${dataDir} -- one .log.jsonl per game and games/<game_id>.json records, synced before any client is answered (#1250)\n` +
       `  data directory locked by instance ${instanceId} (pid ${process.pid}); a second server on it is refused (LIVE-3B)\n` +
+      "  every game is discovered and classified before any is served; a held game stays held until `npm run gamesDoctor -- release` (LIVE-3C)\n" +
       `  rules engine version ${RULES_ENGINE_VERSION} (supports [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]); ` +
       (legacyLogs === "development-corpus"
         ? "LEGACY LOGS ADMITTED (--legacy-logs development-corpus): an unpinned log replays under this engine (#1520)"

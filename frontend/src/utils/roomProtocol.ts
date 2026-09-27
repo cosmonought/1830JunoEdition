@@ -28,6 +28,12 @@ import type { PresenceState } from "./presence";
 export type RoomRole = "host" | "player" | "member" | "viewer";
 export type RoomLifecycle = "waiting" | "active" | "completed" | "cancelled" | "expired";
 export type RoomVisibility = "public" | "private";
+/** LIVE-3C: why a room will not take a change, as the server says it (`null`: it will).
+ *    maintenance   held by the server: paused until its operator restores it; the seat and the game so far are kept
+ *    incompatible  dealt under a rules-engine version this server does not carry: it cannot continue here
+ *    read-only     dealt on another server build: it can be watched, not continued
+ *    unavailable   the server could not confirm its last write: paused until it can, or it restarts */
+export type RoomHoldKind = "maintenance" | "incompatible" | "read-only" | "unavailable" | null;
 
 export interface RoomViewPlayer {
   /** The seat's server-minted `player_id`. */
@@ -49,6 +55,8 @@ export interface RoomView {
   lifecycle: RoomLifecycle;
   closed: boolean;
   held: boolean;
+  /** LIVE-3C: why the room will not take a change (`null`: it will). */
+  holdKind: RoomHoldKind;
   hostId: string;
   players: RoomViewPlayer[];
   playerCount: number | null;
@@ -198,7 +206,8 @@ export function refusalMessage(code: string, reason?: string): string {
     case "not-found":
       return "That table is not available to you. It may be private, or it may no longer exist.";
     case "gone":
-      return "That table has closed.";
+      /* LIVE-3C: the server says what ended the table (cancelled, expired, archived) -- one of its fixed sentences. */
+      return serverReason !== undefined && (GONE_REASONS as readonly string[]).includes(serverReason) ? serverReason : "That table has closed.";
     case "room-full":
       return "That table is full.";
     case "kicked":
@@ -215,9 +224,12 @@ export function refusalMessage(code: string, reason?: string): string {
       return "You cannot do that at this table.";
     case "not-seated":
       return "You do not have a seat in this game.";
+    /* LIVE-3C: a held game and an incompatible one are different things to a player: one waits for the operator,
+       the other cannot continue on this server at all. */
     case "held":
+      return HOLD_NOTICES.maintenance;
     case "incompatible":
-      return "This game is paused on the server. It cannot continue until the server is updated.";
+      return HOLD_NOTICES.incompatible;
     case "money-games-disabled":
       return "Games with stakes are not open on this server.";
     case "color-taken":
@@ -240,6 +252,35 @@ export function refusalMessage(code: string, reason?: string): string {
     default:
       return "The server could not do that. Try again.";
   }
+}
+
+/* ---------------------------------------------------------------------------
+    LIVE-3C: A ROOM THAT WILL NOT TAKE A CHANGE, AS A PLAYER READS IT
+   --------------------------------------------------------------------------- */
+
+/** One sentence per `RoomView.holdKind`: what happened, what is kept, and what (if anything) will change it. */
+export const HOLD_NOTICES = Object.freeze({
+  maintenance:
+    "This game is paused for maintenance. Nothing can change until the server's operator restores it; your seat and the game so far are kept.",
+  incompatible:
+    "This game was started under a version of the rules this server does not run. It is kept exactly as it was, but it cannot continue on this server.",
+  "read-only":
+    "This game was dealt on a different server build. You can watch it, but it cannot be continued here: run the build that dealt it, or start a new game.",
+  unavailable: "The game server could not confirm the last move was recorded. The game is paused until it can; the move will appear if it was made.",
+} as const);
+
+/** The server's fixed sentences for a table that is gone (`server/src/rooms/lifecycle.ts` `GONE_SENTENCES`). */
+export const GONE_REASONS = Object.freeze([
+  "The host closed this table before the game started.",
+  "This table expired: it waited 24 hours without starting.",
+  "This game has been archived and is no longer open.",
+] as const);
+
+/** The standing notice a room's view calls for, or `null` when it will take a change. */
+export function holdNoticeFor(view: Pick<RoomView, "holdKind"> | null | undefined): string | null {
+  const kind = view?.holdKind ?? null;
+  /* A kind this client does not know (a newer server) shows nothing rather than an empty notice. */
+  return kind === null ? null : (HOLD_NOTICES[kind] ?? null);
 }
 
 /** A refusal's support reference, when the server gave one -- for the console, never the screen. */

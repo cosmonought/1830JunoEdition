@@ -60,6 +60,21 @@ export class StoreCorruptError extends Error {
   }
 }
 
+/** LIVE-3C: a durable item written by a NEWER build than this one (a record schema it does not know). Not damage and
+ *  never rewritten: this build cannot interpret it, so the game is `incompatible` until a build that can loads it. */
+export class StoreIncompatibleError extends Error {
+  constructor(
+    message: string,
+    readonly file: string,
+  ) {
+    super(message);
+    this.name = "StoreIncompatibleError";
+  }
+}
+
+export const isStoreIncompatible = (error: unknown): error is StoreIncompatibleError =>
+  error instanceof StoreIncompatibleError || (error instanceof Error && error.name === "StoreIncompatibleError");
+
 export const isStoreCorrupt = (error: unknown): error is StoreCorruptError =>
   error instanceof StoreCorruptError || (error instanceof Error && error.name === "StoreCorruptError");
 

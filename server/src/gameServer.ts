@@ -53,8 +53,14 @@ import { isLoopbackOrigin } from "./identity/origins";
 import { IdentityService } from "./identity/sessions";
 import { createMemoryIdentityStore } from "./identity/store";
 import { createMemoryRecordStore, type RecordStore } from "./rooms/recordStore";
-import { createRoomHost, type RoomHost } from "./rooms/roomHost";
+import { createRoomHost, GameUnavailableError, sessionBoardFacts, type RoomHost } from "./rooms/roomHost";
 import { GAME_ID_PATTERN, seatOf, type GameRecord } from "./rooms/gameRecord";
+/* LIVE-3C: restore, reconciliation, durable holds, the terminal seal, the operator's view. */
+import { isMaintenanceHold } from "./rooms/committedView";
+import { createMemoryHoldStore, HoldUnreadableError, makeHold, type HoldStore } from "./rooms/holdStore";
+import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILING_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE, type SettlementLifecycle } from "./rooms/lifecycle";
+import { reconcileLoaded } from "./rooms/reconcile";
+import { NO_OPS, type OpsRecorder } from "./persistence/opsRecorder";
 import type { IpKey } from "./identity/clientIp";
 import type { UndoPolicy } from "../../frontend/src/gameEngine/logRevert";
 import { BAD_FRAME_REASONS } from "../../frontend/src/gameEngine/messageSchema";
@@ -63,6 +69,7 @@ import { cryptoShuffle, NoMoneyRosterSource, type RosterSource } from "./rooms/r
 import { RoomSession, type ServerLogEntry } from "../../frontend/src/utils/roomSession";
 import {
   DEVELOPMENT_CORPUS_POLICY,
+  RULES_ENGINE_VERSION,
   SERVER_REPLAY_POLICY,
   SUPPORTED_RULES_ENGINE_VERSIONS,
   type ReplayPolicy,
@@ -224,6 +231,15 @@ export interface GameServerOptions {
   /** LIVE-2A: the transport's limits (LIVE-2 §11.3, §12.2), each overridable -- tests shorten the clocks and shrink
    *  the caps; `start.ts` takes the defaults. See `ingress/limits.ts`. */
   limits?: IngressLimitOverrides;
+  /** LIVE-3C: the durable holds (`rooms/holdStore.ts`). In memory when absent -- a hold then lasts as long as the
+   *  process; `start.ts` passes the file store, so a hold survives every restart until an operator's release. */
+  holds?: HoldStore;
+  /** LIVE-3C: the audit lines and the status snapshot (`persistence/opsRecorder.ts`). Nothing when absent. */
+  ops?: OpsRecorder;
+  /** LIVE-3C: the terminal seam ESCROW-3 plugs into (`rooms/lifecycle.ts`). No-money when absent. */
+  settlement?: SettlementLifecycle;
+  /** LIVE-3C: more for the status snapshot -- `start.ts` adds the identity store's health. */
+  statusExtras?: () => Record<string, unknown>;
 }
 
 /** A socket's log subscription: the game it said `hello` for, and its principal. The actor of a move is NOT here --
@@ -315,6 +331,14 @@ export function createGameServer(options: GameServerOptions): {
   residentGames(): number;
   /** LIVE-2B: the live socket indexes, for tests: how many sockets a session / principal / IP key / game holds. */
   socketCounts(): { total: number; bySession(id: string): number; byPrincipal(id: string): number; byIp(key: string): number; byGame(room: string): number };
+  /** LIVE-3C: what every durable game is (discovery, refined by each load), the holds, and the operator's recorder. */
+  lifecycle: {
+    ready: Promise<void>;
+    inventory: RoomHost["inventory"];
+    discovery: RoomHost["discovery"];
+    holds: HoldStore;
+    ops: OpsRecorder;
+  };
 } {
   /* ==================================================================
       LIVE-2B: THE IDENTITY CONFIGURATION IS CHECKED HERE TOO, NOT ONLY IN `start.ts`
@@ -493,12 +517,48 @@ export function createGameServer(options: GameServerOptions): {
     /* LIVE-2C: only a server-owned game id has a record. LIVE-2D: and only a server-owned game is ever loaded. */
     loadRecord: async (code) => (GAME_ID_PATTERN.test(code) ? await recordStore.load(code) : null),
     saveRecord: (record, expected) => recordStore.put(record, expected),
+    /* LIVE-3C: the durable hold decides a game's load, whatever its files say now. An unreadable hold holds. */
+    loadHold: async (code) => {
+      try {
+        const hold = await holdStore.load(code);
+        /* LIVE-3C (review E11): a hold discovery found this run but could not write down holds all the same. */
+        return hold === null ? (roomHost?.pendingHoldOf(code) ?? null) : { code: hold.code, detail: hold.detail };
+      } catch (error) {
+        if (error instanceof HoldUnreadableError) return { code: "hold-unreadable" as const, detail: error.message };
+        throw error;
+      }
+    },
+    persistHold: async (code, found) => {
+      const created = await holdStore.create(
+        makeHold({
+          gameId: code,
+          code: found.code,
+          detail: found.detail,
+          at: Date.now(),
+          source: "load",
+          build: options.build,
+          rulesEngineVersion: RULES_ENGINE_VERSION,
+          evidence: found.evidence,
+        }),
+      );
+      if (created.outcome.kind === "committed" && created.existing === null) ops.audit("hold.created", { game_id: code, code: found.code, detail: found.detail, source: "load" });
+      if (created.outcome.kind !== "committed") throw new Error(created.outcome.detail);
+    },
   };
   const recordStore: RecordStore = options.records ?? createMemoryRecordStore();
+  const holdStore: HoldStore = options.holds ?? createMemoryHoldStore();
+  const ops: OpsRecorder = options.ops ?? NO_OPS;
+  /** LIVE-3C: the board's end and close -- the reducer's, or the test seam's (`GameFaults.boardEnded`). */
+  const boardFacts = (gameId: string, session: RoomSession): { ended: boolean; closed: boolean } => {
+    const board = sessionBoardFacts(session);
+    return options.faults?.boardEnded?.(gameId, session) ? { ...board, ended: true } : board;
+  };
   let roomHost: RoomHost | null = null;
   const games = new GameRegistry({
     evictable: store !== undefined,
     now: () => Date.now(),
+    /* LIVE-3C: stage two -- every load settles the game's reconciliation before any waiting caller acts on it. */
+    onLoaded: (_gameId, actor) => roomHost?.onActorLoaded(actor),
     create: (code) =>
       new GameActor({
         gameId: code,
@@ -518,6 +578,14 @@ export function createGameServer(options: GameServerOptions): {
         storeTimeoutMs: options.storeTimeoutMs,
         storeRestartAfterMs: options.storeRestartAfterMs,
         onRestartRequired: (gameId, detail) => options.onRestartRequired?.(gameId, detail),
+        /* LIVE-3C: the record against the whole durable log and the replayed board (`rooms/reconcile.ts`). An
+           unsupported rules-engine pin leaves the board uninterpreted (#1520): only what the log itself says is
+           checked then. */
+        onStoreAdopted: () => roomHost?.onStoreAdopted(code),
+        reconcileAtLoad: ({ record, entries, session }) => {
+          const verdict = reconcileLoaded(record, { entries, board: session.incompatible === null ? boardFacts(code, session) : null });
+          return verdict.kind === "hold" ? verdict : { kind: "ok" };
+        },
       }),
   });
 
@@ -564,9 +632,17 @@ export function createGameServer(options: GameServerOptions): {
       answer({ kind: "refused", code: "unavailable", reason: UNAVAILABLE_REASON, build: options.build });
       return;
     }
-    /* LIVE-3B (§8.5, §17 class 5): a log held `corrupt` takes no move until an operator repairs it offline. */
-    if (tx.view.hold?.reason === "corrupt") {
+    /* LIVE-3B (§8.5, §17 class 5): a log held `corrupt` takes no move until an operator repairs it offline.
+       LIVE-3C: nor does a durably held game, whatever it is held for -- until an operator's verified release. */
+    if (isMaintenanceHold(tx.view.hold)) {
       answer({ kind: "refused", code: "held", reason: HELD_REASON, build: options.build });
+      return;
+    }
+    /* LIVE-3C: nor a game whose record is not reconciled with its log yet (its load's repair has not landed): no move is
+       built on a record the log may contradict. The reconciliation is tried again; the move can be sent again. */
+    if (host.awaitingReconciliation(game)) {
+      /* Not UNAVAILABLE_REASON ("will appear if it was"): this move was never attempted, so nothing will appear. */
+      answer({ kind: "refused", code: "unavailable", reason: RECONCILING_SENTENCE, build: options.build });
       return;
     }
     /* ==================================================================
@@ -577,6 +653,19 @@ export function createGameServer(options: GameServerOptions): {
     const bound = host.seatActor(tx, attached.principalId);
     if (!bound.ok) {
       answer({ kind: "refused", code: bound.code, reason: bound.reason, build: options.build });
+      return;
+    }
+    /* ==================================================================
+        LIVE-3C: THE SEAL -- A GAME THAT HAS ENDED TAKES NO MORE GAMEPLAY
+       ==================================================================
+       Once the committed board is at GameEnd, the game's result is the log up to its seal (`rooms/lifecycle.ts`). The
+       engine already refuses every move there but the room-close marker; the transport now says so itself, before
+       anything is speculated, from the COMMITTED board -- so a terminal game's refusal does not depend on the reducer
+       arm, on a resident actor, or on the record having caught up (a restart restores the board from the log, and the
+       board says it ended). `RevertTo` passes to RV-3, which refuses it in the words the Undo button uses. */
+    if (!tx.view.incompatible && boardFacts(tx.view.gameId, tx.session).ended && !admissibleAfterSeal(frame.msg)) {
+      host.counters.terminalRefused += 1;
+      answer({ kind: "refused", code: "wrong-state", reason: GAME_OVER_SENTENCE, build: options.build });
       return;
     }
     const actor = bound.actor;
@@ -705,9 +794,9 @@ export function createGameServer(options: GameServerOptions): {
       answer(result);
       return;
     }
-    const board = session.state as { current_round_type?: string | null; room_closed?: boolean };
-    const endedAfter = board.current_round_type === "GameEnd";
-    const closedAfter = board.room_closed === true;
+    const board = boardFacts(attached.room, session);
+    const endedAfter = board.ended;
+    const closedAfter = board.closed;
     const settled = await tx.commitBatch(batch, (settled) => submitDelivery(settled, batch, result, inReplyTo));
     if (settled.kind === "committed") host.afterGameplay(game, endedAfter, closedAfter);
     if (settled.kind !== "committed" || result.kind !== "applied") return;
@@ -864,6 +953,22 @@ export function createGameServer(options: GameServerOptions): {
     errorRef,
     // eslint-disable-next-line no-console
     warn: (line) => console.warn(line),
+    /* LIVE-3C */
+    holds: holdStore,
+    logs: {
+      listGameLogs: options.store?.listGameLogs?.bind(options.store),
+      /* Without a store there are no durable logs at all: every head is known to be empty. A store that cannot peek at
+         its logs leaves every head UNKNOWN, and discovery believes no record's lifecycle then (`lifecycle.ts`). */
+      readHead: options.store ? options.store.readHead?.bind(options.store) : async () => ({ present: false, size: 0, first: null }),
+    },
+    ops,
+    settlement: options.settlement ?? NO_MONEY_SETTLEMENT,
+    boardFacts,
+    statusExtras: () => ({
+      store: { restart_required: counters.restartRequired, uncertain: counters.storeUncertain, held_corrupt: counters.heldCorrupt, held_durable: counters.heldDurable, timeouts: counters.storeTimeouts },
+      actors: { resident: games.size },
+      ...(options.statusExtras ? options.statusExtras() : {}),
+    }),
   });
   roomHost = host;
 
@@ -1249,7 +1354,18 @@ export function createGameServer(options: GameServerOptions): {
       if (frame.kind === "hello" && gameId !== null) {
         /* LIVE-2C: the log of a server-owned game -- read access per §6.3 #6, re-checked on every push. An unknown
            id is answered from the negative cache or one store read: it never allocates a session (§11.4 item 4). */
-        const game = await host.actorFor(gameId);
+        let game: GameActor | null;
+        try {
+          game = await host.actorFor(gameId);
+        } catch (error) {
+          /* LIVE-3C: the store could not be read just now -- said as such, and tried again at the next hello. */
+          if (error instanceof GameUnavailableError) {
+            /* ... to a principal the game already lets read it; anybody else is told what no game at all answers. */
+            send(socket, { kind: "error", ...host.unavailableFor(gameId, ctx.principalId) });
+            return;
+          }
+          throw error;
+        }
         if (game === null) {
           send(socket, { kind: "error", code: "not-found", reason: "There is no such game." });
           return;
@@ -1460,6 +1576,7 @@ export function createGameServer(options: GameServerOptions): {
     records: recordStore,
     rooms: host,
     residentGames: () => games.size,
+    lifecycle: { ready: host.indexReady, inventory: host.inventory, discovery: host.discovery, holds: holdStore, ops },
     socketCounts: () => ({
       total: contexts.size,
       bySession: (id: string) => socketsBySession.get(id)?.size ?? 0,
@@ -1473,9 +1590,15 @@ export function createGameServer(options: GameServerOptions): {
         clearInterval(identitySweep);
         games.close();
         for (const socket of contexts.keys()) socket.close(1001, "server stopping");
+        try {
+          host.flushStatus();
+        } catch {
+          /* best effort: the status snapshot never stops a close */
+        }
         void identity
           .flush(identityNow())
           .catch(() => undefined) // reported by the identity hook
+          .then(() => ops.flush().catch(() => undefined))
           .then(() => wss.close(() => http.close(() => resolve())));
       }),
   };

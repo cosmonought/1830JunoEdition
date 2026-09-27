@@ -52,7 +52,7 @@
 // until an operator repairs it (§8.5).
 
 import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/roomSession";
-import { isStoreCorrupt, outcomeOf, type StoreWriteOutcome } from "../persistence/storeResult";
+import { isStoreCorrupt, isStoreIncompatible, outcomeOf, type StoreWriteOutcome } from "../persistence/storeResult";
 import { AHEAD_REASON, RESYNC_REASON } from "../../../frontend/src/utils/roomSession";
 import type { GameRecord } from "./gameRecord";
 import type { BuildId } from "../../../frontend/src/utils/serverProtocol";
@@ -61,11 +61,13 @@ import {
   catchUpFrom,
   entryAt,
   extendsHistory,
+  isMaintenanceHold,
   withHold,
   withRecord,
   type CommittedView,
   type Hold,
 } from "./committedView";
+import { HELD_PLAYER_SENTENCE, type HoldCode } from "./lifecycle";
 
 /** E-7: tasks waiting behind the running one, per game. LIVE-2's per-game submit rate keeps this far away. */
 export const ACTOR_QUEUE_BOUND = 256;
@@ -76,8 +78,8 @@ export const STORE_TIMEOUT_MS = 5_000;
 /** E-11: how long past that a late WRITE may stay unsettled before the process is asked to restart -- the only way
  *  left to learn what the disk holds (LIVE-3 §4.2: "about 60 s if uncertain"). */
 export const STORE_RESTART_AFTER_MS = 60_000;
-/** §8.5 / §17 class 5: what a room held `corrupt` says to everyone who asks. */
-export const HELD_REASON = "This game is paused for maintenance.";
+/** §8.5 / §17 class 5: what a room held `corrupt` -- LIVE-3C: or durably `held` -- says to everyone who asks. */
+export const HELD_REASON = HELD_PLAYER_SENTENCE;
 /** §17 class 4: the backoff between attempts to read back a store whose outcome is not known -- LIVE-3B: used only
  *  where a read-back is safe (the history is durable and only the view could not be built). */
 export const RECONCILE_FIRST_MS = 1_000;
@@ -189,7 +191,16 @@ export interface GameStorePort {
   loadRecord?(gameId: string): Promise<GameRecord | null>;
   /** LIVE-2C: conditional put -- `expected` is the committed version (`null`: must not exist). */
   saveRecord?(record: GameRecord, expected: number | null): Promise<StoreWriteOutcome>;
+  /** LIVE-3C: the game's DURABLE hold, if it has one (`holdStore.ts`). An unreadable hold file answers
+   *  `hold-unreadable` -- a hold is never lifted by being unreadable. */
+  loadHold?(gameId: string): Promise<{ readonly code: HoldCode; readonly detail: string } | null>;
+  /** LIVE-3C: write a durable hold down (create-if-absent). Resolves either way; the game is held in memory whatever
+   *  the store answers, and a hold that did not reach the store is found again by the next load. */
+  persistHold?(gameId: string, hold: { readonly code: HoldCode; readonly detail: string; readonly evidence: { record_version: number | null; record_status: string | null; log_entries: number | null } }): Promise<void>;
 }
+
+/** LIVE-3C: the load's verdict on a game whose record and log were both read (`reconcile.ts` `reconcileLoaded`). */
+export type LoadVerdict = { readonly kind: "ok" } | { readonly kind: "hold"; readonly code: HoldCode; readonly detail: string };
 
 /** Counted per server, read by tests and the smoke run. LIVE-3C turns these into §18's metrics. */
 export interface ActorCounters {
@@ -212,6 +223,9 @@ export interface ActorCounters {
   restartRequired: number;
   /** LIVE-3B: games held `corrupt` at load. */
   heldCorrupt: number;
+  /** LIVE-3C: games that loaded under a durable hold; holds this process found at a load and wrote down. */
+  heldDurable: number;
+  holdsFound: number;
 }
 
 export function newActorCounters(): ActorCounters {
@@ -232,6 +246,8 @@ export function newActorCounters(): ActorCounters {
     storeUncertain: 0,
     restartRequired: 0,
     heldCorrupt: 0,
+    heldDurable: 0,
+    holdsFound: 0,
   };
 }
 
@@ -239,6 +255,11 @@ export function newActorCounters(): ActorCounters {
 export interface GameFaults {
   /** Called before every view build after the load; a throw here is a next view that could not be built (E-13). */
   beforeViewBuild?(gameId: string): void;
+  /** LIVE-3C, TEST ONLY: treat this game's board as ended (GameEnd). A stored game that genuinely reaches GameEnd
+   *  needs a whole game played, so the terminal lifecycle -- the seal, the record's completion, the refusal of every
+   *  later move, and their survival across a restart -- is driven through this seam; the reducer's own GameEnd
+   *  refusals are the engine suites'. Never set by `start.ts`. */
+  boardEnded?(gameId: string, session: RoomSession): boolean;
 }
 
 export interface GameActorDeps {
@@ -264,6 +285,13 @@ export interface GameActorDeps {
   readonly storeRestartAfterMs?: number;
   /** LIVE-3B: this game holds an outcome only a process restart can resolve (§8.2 step 7). */
   onRestartRequired?(gameId: string, detail: string): void;
+  /** LIVE-3C: reconcile the record against the whole durable log and the replayed session, at the load. A `hold`
+   *  verdict is written down (`persistHold`) and installed; no history is then served. Pure; must not throw. */
+  reconcileAtLoad?(input: { readonly record: Readonly<GameRecord>; readonly entries: readonly ServerLogEntry[]; readonly session: RoomSession }): LoadVerdict;
+  /** LIVE-3C (review): entries whose outcome was unknown were found in the store and ADOPTED (a late commit, a read-
+   *  back after an uncertain write). The record's log-implied fields may lag them (a deal, GameEnd, CloseRoom that
+   *  no record sync followed), so the host treats the game as unreconciled until its record has caught up. */
+  onStoreAdopted?(): void;
 }
 
 /** How a `hello` was answered (§3.5). */
@@ -386,22 +414,94 @@ export class GameActor {
       THE LOAD: the actor's first task
      --------------------------------------------------------------------------- */
 
+  /* LIVE-3C: THE LOAD IS WHERE A RESTARTED SERVER DECIDES WHAT A GAME IS, from its files alone, in this order:
+       1. the log (validated; a torn final batch repaired -- LIVE-3B), the record, and any DURABLE HOLD;
+       2. a durable hold wins: the game is served as held, nothing replayed, nothing written -- whatever the files
+          look like now (a hold is lifted only by an operator's verified release, never by a load deciding afresh);
+       3. a damaged log or an unreadable record is held, and the hold WRITTEN DOWN so the next start agrees;
+       4. otherwise the log is replayed and reconciled against the record (`reconcile.ts`): a disagreement the log
+          cannot settle is held and written down; a record that only lags its log is repaired by the room host
+          afterwards, from the log (the log wins); an unsupported rules-engine pin is `incompatible` (#1520, derived).
+     A held game keeps a session at the seed: its committed view serves no history, and no move can be built on it. */
   private async load(): Promise<void> {
+    /* LIVE-3C (review E2): THE DURABLE HOLD IS READ FIRST. A held game's files are kept EXACTLY as found -- its log is
+       not even opened here (the store's load repairs a torn tail, which is a write), and nothing is replayed. The
+       offline tool verifies the files read-only before any release. */
+    const durable = this.deps.store.loadHold ? await this.awaitRead(this.deps.store.loadHold(this.gameId), "load of the game's hold") : null;
     /* RESTORED THROUGH `apply`, NEVER `submit` (#1203): a stored log already holds its derived entries. */
     let entries: readonly ServerLogEntry[] = [];
     let corrupt: string | null = null;
-    try {
-      entries = await this.awaitRead(this.deps.store.loadLog(this.gameId), "load of the log");
-    } catch (error) {
-      if (!isStoreCorrupt(error)) throw error;
-      /* LIVE-3B (§8.5): HELD, NOT GUESSED AT. The file is untouched; no history is served and nothing is written
-         until an operator repairs it offline (`tools/logDoctor.ts`) and the server is restarted. */
-      corrupt = describe(error);
+    if (durable === null) {
+      try {
+        entries = await this.awaitRead(this.deps.store.loadLog(this.gameId), "load of the log");
+      } catch (error) {
+        if (!isStoreCorrupt(error)) throw error;
+        /* LIVE-3B (§8.5): HELD, NOT GUESSED AT. The file is untouched; no history is served and nothing is written
+           until an operator repairs it offline (`tools/logDoctor.ts`) and releases it (`tools/gamesDoctor.ts`). */
+        corrupt = describe(error);
+      }
     }
-    /* LIVE-2C: the GameRecord, read in the same single-flight load. */
-    const record = this.deps.store.loadRecord ? await this.awaitRead(this.deps.store.loadRecord(this.gameId), "load of the game record") : null;
-    const session = this.deps.newSession();
-    if (entries.length > 0) this.deps.restore(session, entries);
+    /* LIVE-2C: the GameRecord, read in the same single-flight load. LIVE-3C: a record that cannot be read is held (a
+       record written by a NEWER build is not damage: the game has no record this build can read, and is held as
+       `version`, never written); neither is ever guessed at. */
+    let record: GameRecord | null = null;
+    let recordProblem: { readonly held: boolean; readonly detail: string } | null = null;
+    if (this.deps.store.loadRecord) {
+      try {
+        record = await this.awaitRead(this.deps.store.loadRecord(this.gameId), "load of the game record");
+      } catch (error) {
+        if (isStoreCorrupt(error)) recordProblem = { held: true, detail: describe(error) };
+        else if (isStoreIncompatible(error)) recordProblem = { held: false, detail: describe(error) };
+        else throw error;
+      }
+    }
+    const evidence = { record_version: record?.record_version ?? null, record_status: record?.status ?? null, log_entries: corrupt === null ? entries.length : null };
+    let session = this.deps.newSession();
+    let hold: Hold | null = null;
+    if (durable !== null) {
+      hold = { reason: "held", code: durable.code, detail: durable.detail };
+      this.deps.counters.heldDurable += 1;
+      this.deps.warn(`  store: ${this.gameId} is HELD (${durable.code}): ${durable.detail}. Nothing is served or changed until an operator releases it.`);
+    } else if (corrupt !== null) {
+      hold = { reason: "corrupt", code: "log-corrupt", detail: corrupt };
+      this.deps.counters.heldCorrupt += 1;
+      this.deps.warn(`  store: ${this.gameId} is HELD (corrupt): ${corrupt}. No history is served until an operator repairs it.`);
+      await this.writeHold("log-corrupt", corrupt, evidence);
+    } else if (recordProblem !== null) {
+      if (recordProblem.held) {
+        hold = { reason: "held", code: "record-unreadable", detail: recordProblem.detail };
+        this.deps.warn(`  store: ${this.gameId} is HELD (record-unreadable): ${recordProblem.detail}`);
+        await this.writeHold("record-unreadable", recordProblem.detail, evidence);
+      } else {
+        /* The detail of a version hold is a player-facing sentence (`statusFrame`); the operator's is in the window. */
+        hold = { reason: "version", detail: "This game was saved by a newer game server than this one, which cannot read it. It is left untouched." };
+        this.deps.warn(`  store: ${this.gameId} is INCOMPATIBLE: ${recordProblem.detail}; it is left untouched`);
+      }
+    } else {
+      /* LIVE-3C (review E10): a log that frames correctly but does not REPLAY (a payload the engine cannot apply, a
+         divergence) is deterministic damage, not a passing fault: held and written down -- never answered
+         "unavailable" forever, never replayed again on every ask. */
+      let replayFailed: string | null = null;
+      if (entries.length > 0) {
+        try {
+          this.deps.restore(session, entries);
+        } catch (error) {
+          replayFailed = describe(error);
+        }
+      }
+      const verdict: LoadVerdict | null =
+        replayFailed !== null
+          ? { kind: "hold", code: "replay-failed", detail: `the log's ${entries.length} entries do not replay: ${replayFailed}` }
+          : record !== null && this.deps.reconcileAtLoad
+            ? this.deps.reconcileAtLoad({ record, entries, session })
+            : null;
+      if (verdict !== null && verdict.kind === "hold") {
+        hold = { reason: "held", code: verdict.code, detail: verdict.detail };
+        this.deps.warn(`  store: ${this.gameId} is HELD (${verdict.code}): ${verdict.detail}. Its files are kept exactly as found.`);
+        await this.writeHold(verdict.code, verdict.detail, evidence);
+        session = this.deps.newSession(); // nothing replayed is kept: a held game serves no history
+      }
+    }
     this.session = session;
     this.committed = buildCommittedView({
       gameId: this.gameId,
@@ -409,13 +509,22 @@ export class GameActor {
       record,
       explainDivergence: this.deps.explainDivergence,
       version: 1,
-      ...(corrupt === null ? {} : { hold: { reason: "corrupt" as const, detail: corrupt } }),
+      ...(hold === null ? {} : { hold }),
     });
-    if (corrupt !== null) {
-      this.deps.counters.heldCorrupt += 1;
-      this.deps.warn(`  store: ${this.gameId} is HELD (corrupt): ${corrupt}. No history is served until an operator repairs it.`);
-    }
     this.loaded = true;
+  }
+
+  /** LIVE-3C: a hold this load found, written down (create-if-absent). Bounded by the store timeout: the game is held
+   *  in memory either way, and a hold that did not reach the store is simply found again by the next load. */
+  private async writeHold(code: HoldCode, detail: string, evidence: { record_version: number | null; record_status: string | null; log_entries: number | null }): Promise<void> {
+    this.deps.counters.holdsFound += 1;
+    const persist = this.deps.store.persistHold;
+    if (persist === undefined) return;
+    try {
+      await this.awaitRead(persist(this.gameId, { code, detail, evidence }), "write of the game's hold");
+    } catch (error) {
+      this.deps.warn(`  store: ${this.gameId}: its hold (${code}) could not be written down now -- ${describe(error)}; it is held in memory and the next load finds it again`);
+    }
   }
 
   /** E-11 for a READ: past the timeout the caller is told it failed. The read itself is left to finish in the
@@ -449,7 +558,7 @@ export class GameActor {
    *  lost that is about to land (§4.2). */
   subscribe(key: object, subscriber: Subscriber, fromIndex: number, baseId?: string): SubscribeAnswer {
     const view = this.view;
-    if (view.hold?.reason === "corrupt") return { kind: "held", frame: heldFrame() };
+    if (isMaintenanceHold(view.hold)) return { kind: "held", frame: heldFrame() };
     if (view.incompatible !== null) return { kind: "held", frame: view.incompatible };
     if (fromIndex > view.watermark) {
       return { kind: "resync", watermark: view.watermark, reason: AHEAD_REASON };
@@ -687,6 +796,7 @@ export class GameActor {
       this.deps.warn(`  store: ${this.gameId}: the late append committed; published at index ${view.watermark}`);
       this.publish(view, null, { fanout: this.appliedFrame(entries, view) }, entries);
       this.settleUnresolvedSubmissions(true);
+      this.deps.onStoreAdopted?.();
       return settled;
     }
 
@@ -923,6 +1033,7 @@ export class GameActor {
     );
     this.publish(view, null, landed.length > 0 ? { fanout: this.appliedFrame(landed, view) } : {}, landed);
     this.settleUnresolvedSubmissions(false);
+    if (landed.length > 0) this.deps.onStoreAdopted?.();
   }
 
   /** The submissions whose outcome was unknown are settled now: a landed one by the fan-out just sent, the rest by
@@ -1089,7 +1200,9 @@ export class GameActor {
 export function statusFrame(hold: Hold | null): object {
   if (hold === null) return { kind: "status", state: "live" };
   if (hold.reason === "uncertain") return { kind: "status", state: "unavailable", reason: UNAVAILABLE_REASON };
-  if (hold.reason === "corrupt") return { kind: "status", state: "held", reason: HELD_REASON };
+  /* LIVE-3C: a maintenance hold says ONE fixed sentence to every player -- never the operator's detail, which may
+     describe a record's contents. Only a version hold's detail is itself a player-facing sentence (#1520). */
+  if (isMaintenanceHold(hold)) return { kind: "status", state: "held", reason: HELD_REASON };
   return { kind: "status", state: "held", reason: hold.detail };
 }
 

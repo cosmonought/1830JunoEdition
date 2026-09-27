@@ -119,7 +119,40 @@ export interface FullIdentitySnapshot {
   links: LinkCredential[];
 }
 
+/* ==================================================================
+    LIVE-3C (brief §12): THE CONDITIONS A CHANGE IS WRITTEN UNDER
+   ==================================================================
+   The identity service serializes every change in one process, so today each of these always holds when it is
+   written -- and a store checks them anyway, in the same step that writes the change (nothing written when one fails:
+   `StoreDefiniteError`). They are the change's CONTRACT with any store: the local journal checks them against its
+   index; LIVE-5's DynamoDB store turns each into the ConditionExpression of the item it names, in the one
+   TransactWriteItems that carries the change -- so no second process could ever issue a session to a revoked
+   principal, spend a link code twice, or rotate a recovery key someone else already rotated. */
+export type IdentityPrecondition =
+  /** CREATE-IF-ABSENT: the principal is not stored yet (its activation). */
+  | { readonly kind: "principal-absent"; readonly principal_id: string }
+  /** The principal is stored, active and unprofiled (a profile may bind it). */
+  | { readonly kind: "principal-unprofiled"; readonly principal_id: string }
+  /** CREATE-IF-ABSENT for a profile. */
+  | { readonly kind: "profile-absent"; readonly profile_id: string }
+  /** No stored profile holds this recovery selector. */
+  | { readonly kind: "selector-unused"; readonly recovery_selector: string }
+  /** COMPARE-AND-SWAP for a recovery-key rotation: the profile's selector is still this one. */
+  | { readonly kind: "profile-selector"; readonly profile_id: string; readonly recovery_selector: string }
+  /** CREATE-IF-ABSENT for a session. */
+  | { readonly kind: "session-absent"; readonly session_id: string }
+  /** The session is stored and not security-revoked (live, or rotated and so still in its grace): it may be rotated,
+   *  revoked or replaced. A session a logout already ended cannot be resurrected by a rotation racing it. */
+  | { readonly kind: "session-open"; readonly session_id: string }
+  /** CREATE-IF-ABSENT for a link code's digest. */
+  | { readonly kind: "link-absent"; readonly link_hash: string }
+  /** SINGLE USE: the code is stored, unconsumed and unexpired at `at` -- consumed in the same write as the session
+   *  it issues. */
+  | { readonly kind: "link-unconsumed"; readonly link_hash: string; readonly at: number };
+
 export interface IdentityChange {
+  /** LIVE-3C: checked by the store in the same step that writes the change; any failure writes nothing. */
+  readonly expect?: readonly IdentityPrecondition[];
   /** Upserted whole. */
   readonly principals?: readonly Principal[];
   /** Upserted whole. */
@@ -352,6 +385,203 @@ export function applyChange(base: IdentitySnapshot, change: IdentityChange): Ful
 }
 
 /* ---------------------------------------------------------------------------
+    LIVE-3C: PRECONDITIONS, AND A CHANGE CHECKED WITHOUT REVALIDATING EVERYTHING
+   --------------------------------------------------------------------------- */
+
+/** What a precondition can ask a store: the stored record, by key. */
+export interface IdentityLookups {
+  principal(id: string): Principal | undefined;
+  session(id: string): Session | undefined;
+  profile(id: string): Profile | undefined;
+  link(hash: string): LinkCredential | undefined;
+  profileOfSelector(selector: string): string | undefined;
+}
+
+/** The lookups of a whole snapshot (built per call: the memory and whole-file stores, for tests and the migration). */
+export function lookupsOf(snapshot: IdentitySnapshot): IdentityLookups {
+  const principals = new Map(snapshot.principals.map((record) => [record.principal_id, record] as const));
+  const sessions = new Map(snapshot.sessions.map((record) => [record.session_id, record] as const));
+  const profiles = new Map((snapshot.profiles ?? []).map((record) => [record.profile_id, record] as const));
+  const links = new Map((snapshot.links ?? []).map((record) => [record.link_hash, record] as const));
+  const selectors = new Map((snapshot.profiles ?? []).map((record) => [record.recovery_selector, record.profile_id] as const));
+  return {
+    principal: (id) => principals.get(id),
+    session: (id) => sessions.get(id),
+    profile: (id) => profiles.get(id),
+    link: (hash) => links.get(hash),
+    profileOfSelector: (selector) => selectors.get(selector),
+  };
+}
+
+/** The first precondition that does not hold, as an operator-facing sentence naming only its kind and position (never
+ *  a credential or an id), or `null` when every one holds. */
+export function preconditionFailure(lookups: IdentityLookups, expect: readonly IdentityPrecondition[] | undefined): string | null {
+  for (const [at, condition] of (expect ?? []).entries()) {
+    const failed = (() => {
+      switch (condition.kind) {
+        case "principal-absent":
+          return lookups.principal(condition.principal_id) !== undefined;
+        case "principal-unprofiled": {
+          const principal = lookups.principal(condition.principal_id);
+          return principal === undefined || principal.kind !== "unprofiled" || principal.status !== "active";
+        }
+        case "profile-absent":
+          return lookups.profile(condition.profile_id) !== undefined;
+        case "selector-unused":
+          return lookups.profileOfSelector(condition.recovery_selector) !== undefined;
+        case "profile-selector":
+          return lookups.profile(condition.profile_id)?.recovery_selector !== condition.recovery_selector;
+        case "session-absent":
+          return lookups.session(condition.session_id) !== undefined;
+        case "session-open": {
+          const session = lookups.session(condition.session_id);
+          return session === undefined || isSecurityRevocation(session.revoke_reason);
+        }
+        case "link-absent":
+          return lookups.link(condition.link_hash) !== undefined;
+        case "link-unconsumed": {
+          const link = lookups.link(condition.link_hash);
+          return link === undefined || link.consumed_at !== null || condition.at >= link.expires_at;
+        }
+        default:
+          return true; // an unknown condition never holds
+      }
+    })();
+    if (failed) return `precondition #${at} (${(condition as { kind: string }).kind}) does not hold`;
+  }
+  return null;
+}
+
+/** One change may name each record at most once (a store transaction cannot touch one item twice -- LIVE-5 -- and a
+ *  change that did would mean a caller bug). */
+export function changeIdProblem(change: IdentityChange): string | null {
+  const once = (label: string, keys: readonly string[]): string | null => (new Set(keys).size === keys.length ? null : `a change names one ${label} twice`);
+  const sessionKeys = [...(change.sessions ?? []).map((record) => record.session_id), ...(change.dropSessions ?? [])];
+  const linkKeys = [...(change.links ?? []).map((record) => record.link_hash), ...(change.dropLinks ?? [])];
+  return (
+    once("principal", (change.principals ?? []).map((record) => record.principal_id)) ??
+    once("session", sessionKeys) ??
+    once("profile", (change.profiles ?? []).map((record) => record.profile_id)) ??
+    once("link code", linkKeys)
+  );
+}
+
+/* ==================================================================
+    LIVE-3C (LIVE-2E review M3): THE INCREMENTAL INDEX
+   ==================================================================
+   `checkSnapshot` validates a whole identity set -- O(everything) -- and the whole-file store ran it on every change.
+   The journal store keeps this index instead and checks each change against it in O(the change): every record the
+   change writes has its exact shape, and every relation a changed record takes part in (both ways) is checked against
+   the state AFTER the change. Principals and profiles are never removed, and a profile's principal and a profiled
+   principal's profile never change, so a relation between two records the change does not touch cannot be broken by
+   it. `identityJournal.test` drives random changes through both checks and requires the same verdict every time. */
+export class IdentityIndex implements IdentityLookups {
+  readonly principals = new Map<string, Principal>();
+  readonly sessions = new Map<string, Session>();
+  readonly profiles = new Map<string, Profile>();
+  readonly links = new Map<string, LinkCredential>();
+  readonly selectors = new Map<string, string>();
+
+  static from(snapshot: FullIdentitySnapshot): IdentityIndex {
+    const index = new IdentityIndex();
+    for (const record of snapshot.principals) index.principals.set(record.principal_id, record);
+    for (const record of snapshot.sessions) index.sessions.set(record.session_id, record);
+    for (const record of snapshot.profiles) {
+      index.profiles.set(record.profile_id, record);
+      index.selectors.set(record.recovery_selector, record.profile_id);
+    }
+    for (const record of snapshot.links) index.links.set(record.link_hash, record);
+    return index;
+  }
+
+  principal(id: string) {
+    return this.principals.get(id);
+  }
+  session(id: string) {
+    return this.sessions.get(id);
+  }
+  profile(id: string) {
+    return this.profiles.get(id);
+  }
+  link(hash: string) {
+    return this.links.get(hash);
+  }
+  profileOfSelector(selector: string) {
+    return this.selectors.get(selector);
+  }
+
+  /** Why this change would make the set invalid, or `null`. Checks the change alone against this index -- the
+   *  relations of every record it writes -- never the whole set. `where` names the caller in the sentence. */
+  check(change: IdentityChange, where: string): string | null {
+    const ids = changeIdProblem(change);
+    if (ids !== null) return `${where}: ${ids}`;
+    const nextPrincipals = new Map((change.principals ?? []).map((record) => [record.principal_id, record] as const));
+    const nextProfiles = new Map((change.profiles ?? []).map((record) => [record.profile_id, record] as const));
+    const principalAfter = (id: string) => nextPrincipals.get(id) ?? this.principals.get(id);
+    const profileAfter = (id: string) => nextProfiles.get(id) ?? this.profiles.get(id);
+    for (const [at, record] of (change.principals ?? []).entries()) {
+      if (!isPrincipal(record)) return `${where}: principal #${at} is not a principal record`;
+      if (record.activated_at === null) return `${where}: principal #${at} was never activated`;
+      const before = this.principals.get(record.principal_id);
+      if (before !== undefined && before.kind === "profile" && (record.kind !== "profile" || record.account_link !== before.account_link)) {
+        return `${where}: principal #${at} would leave the profile it is bound to`;
+      }
+      if (record.kind === "profile" && profileAfter(record.account_link as string)?.principal_id !== record.principal_id) {
+        return `${where}: a profile principal is not bound to its profile both ways`;
+      }
+    }
+    const selectorsTaken = new Map<string, string>();
+    for (const [at, record] of (change.profiles ?? []).entries()) {
+      if (!isProfile(record)) return `${where}: profile #${at} is not a profile record`;
+      const before = this.profiles.get(record.profile_id);
+      if (before !== undefined && before.principal_id !== record.principal_id) return `${where}: profile #${at} would move to another principal`;
+      const owner = principalAfter(record.principal_id);
+      if (owner === undefined || owner.kind !== "profile" || owner.account_link !== record.profile_id) {
+        return `${where}: profile #${at} is not bound to its principal both ways`;
+      }
+      const holder = this.selectors.get(record.recovery_selector);
+      const heldElsewhere = holder !== undefined && holder !== record.profile_id && profileAfter(holder)?.recovery_selector === record.recovery_selector;
+      const takenInChange = selectorsTaken.has(record.recovery_selector);
+      if (heldElsewhere || takenInChange) return `${where}: profile #${at} repeats a recovery selector`;
+      selectorsTaken.set(record.recovery_selector, record.profile_id);
+    }
+    for (const [at, record] of (change.sessions ?? []).entries()) {
+      if (!isSession(record)) return `${where}: session #${at} is not a session record`;
+      if (principalAfter(record.principal_id) === undefined) return `${where}: session #${at} names no stored principal`;
+    }
+    for (const [at, record] of (change.links ?? []).entries()) {
+      if (!isLinkCredential(record)) return `${where}: link code #${at} is not a link record`;
+      if (profileAfter(record.profile_id) === undefined) return `${where}: link code #${at} names no stored profile`;
+    }
+    return null;
+  }
+
+  /** Apply a change this index already checked. */
+  apply(change: IdentityChange): void {
+    for (const record of change.principals ?? []) this.principals.set(record.principal_id, { ...record });
+    for (const record of change.sessions ?? []) this.sessions.set(record.session_id, { ...record });
+    for (const id of change.dropSessions ?? []) this.sessions.delete(id);
+    for (const record of change.profiles ?? []) {
+      const before = this.profiles.get(record.profile_id);
+      if (before !== undefined && this.selectors.get(before.recovery_selector) === record.profile_id) this.selectors.delete(before.recovery_selector);
+      this.profiles.set(record.profile_id, { ...record });
+      this.selectors.set(record.recovery_selector, record.profile_id);
+    }
+    for (const record of change.links ?? []) this.links.set(record.link_hash, { ...record });
+    for (const hash of change.dropLinks ?? []) this.links.delete(hash);
+  }
+
+  /** The whole set, in the stored order (`applyChange`'s). */
+  snapshot(): FullIdentitySnapshot {
+    return applyChange({ principals: [...this.principals.values()], sessions: [...this.sessions.values()], profiles: [...this.profiles.values()], links: [...this.links.values()] }, {});
+  }
+
+  sizes(): { principals: number; sessions: number; profiles: number; links: number } {
+    return { principals: this.principals.size, sessions: this.sessions.size, profiles: this.profiles.size, links: this.links.size };
+  }
+}
+
+/* ---------------------------------------------------------------------------
     THE IN-MEMORY STORE: for tests and the smoke run. Every commit can be failed on demand.
    --------------------------------------------------------------------------- */
 
@@ -379,6 +609,12 @@ export function createMemoryIdentityStore(initial: IdentitySnapshot = { principa
       if (fault === "definite") {
         stats.failed += 1;
         throw new StoreDefiniteError("injected identity-store failure (nothing written)");
+      }
+      /* LIVE-3C: the change's own contract -- one record once, every precondition -- before anything is applied. */
+      const problem = changeIdProblem(change) ?? preconditionFailure(lookupsOf(durable), change.expect);
+      if (problem !== null) {
+        stats.failed += 1;
+        throw new StoreDefiniteError(`memory identity store: ${problem}; nothing was written`);
       }
       const next = checkSnapshot(applyChange(durable, change), "memory identity store commit");
       durable = next;

@@ -34,6 +34,9 @@ export interface GameRegistryOptions {
   create(gameId: string): GameActor;
   /** Whether a game can be reloaded after eviction -- true only with a durable store. */
   evictable: boolean;
+  /** LIVE-3C: called once per successful load, BEFORE any caller waiting on `get` resumes -- so whatever it queues on
+   *  the actor (the load's reconciliation) runs ahead of every task those callers queue. */
+  onLoaded?(gameId: string, actor: GameActor): void;
   now(): number;
   idleMs?: number;
   maxResident?: number;
@@ -64,6 +67,17 @@ export class GameRegistry {
       const created = this.options.create(gameId);
       this.created += 1;
       this.actors.set(gameId, created);
+      /* Attached before any caller's continuation, so it runs first (promise reactions run in the order attached). */
+      created.ready.then(
+        () => {
+          try {
+            if (this.actors.get(gameId) === created) this.options.onLoaded?.(gameId, created);
+          } catch {
+            /* the hook reports its own failures; a load is never undone by one */
+          }
+        },
+        () => undefined,
+      );
       /* A load that failed leaves nothing behind: the actor is dropped here, so the next request tries again,
          and everybody who was waiting on it hears the failure. */
       created.ready.catch(() => {

@@ -32,11 +32,18 @@ import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import type { ServerMessage } from "../../../frontend/src/utils/serverProtocol";
 import type { WebSocket } from "ws";
 
+import type { RoomSession } from "../../../frontend/src/utils/roomSession";
+import { RULES_ENGINE_VERSION } from "../../../frontend/src/gameEngine/rulesVersion";
+
+import type { LogHeadRead } from "../fileLogStore";
 import type { ConnectionContext } from "../identity/authenticateUpgrade";
 import type { IpKey } from "../identity/clientIp";
 import type { IdentityService } from "../identity/sessions";
 import { IpBuckets, KeyedBuckets, type IngressLimits } from "../ingress/limits";
-import type { CommittedView } from "./committedView";
+import { NO_OPS, type OpsRecorder } from "../persistence/opsRecorder";
+import { isStoreCorrupt, isStoreIncompatible } from "../persistence/storeResult";
+import { isMaintenanceHold, type CommittedView } from "./committedView";
+import { countByClass, discoverGames, summaryLine, type DiscoveredGame, type DiscoveryReport } from "./discovery";
 import type { GameActor, Tx } from "./gameActor";
 import {
   effectiveStatus,
@@ -49,10 +56,27 @@ import {
   roomViewFor,
   seatOf,
   type GameRecord,
+  type HoldKind,
   type LogFacts,
   type RoomSummary,
 } from "./gameRecord";
+import { createMemoryHoldStore, type HoldStore } from "./holdStore";
+import {
+  ARCHIVE_SWEEP_BUDGET,
+  GAME_OVER_SENTENCE,
+  GONE_SENTENCES,
+  HELD_PLAYER_SENTENCE,
+  NO_MONEY_SETTLEMENT,
+  UNAVAILABLE_PLAYER_SENTENCE,
+  archiveDueAt,
+  classOfRecord,
+  sealOf,
+  type GameClass,
+  type HoldCode,
+  type SettlementLifecycle,
+} from "./lifecycle";
 import type { RecordStore } from "./recordStore";
+import { dealInfoOf, reconcileLoaded } from "./reconcile";
 import { authorize, roleOf, type RoomOp } from "./roomAuthz";
 import {
   assertDeal,
@@ -100,15 +124,47 @@ export interface RoomHostDeps {
   warn: (line: string) => void;
   /** LIVE-2E: a principal's profile name, to seed a new seat's nickname (presentation only; `null` when none). */
   profileNameOf?: (principalId: string) => string | null;
+  /** LIVE-3C: the durable holds (in memory when absent -- a hold then lasts only as long as the process). */
+  holds?: HoldStore;
+  /** LIVE-3C: the game logs, as startup discovery enumerates and peeks at them (read-only). */
+  logs?: { listGameLogs?(): Promise<string[]>; readHead?(gameId: string): Promise<LogHeadRead> };
+  /** LIVE-3C: the audit lines and the status snapshot (nothing when absent). */
+  ops?: OpsRecorder;
+  /** LIVE-3C: the terminal seam ESCROW-3 plugs into (no-money when absent). */
+  settlement?: SettlementLifecycle;
+  /** LIVE-3C: whether a session's board has ended or closed (the reducer's `GameEnd` / `room_closed`; a test seam
+   *  may say so of a game that has not -- a stored game that reaches GameEnd needs a whole game played). */
+  boardFacts?: (gameId: string, session: RoomSession) => { ended: boolean; closed: boolean };
+  /** LIVE-3C: more for the status snapshot (the identity store's health, the log store's counters). */
+  statusExtras?: () => Record<string, unknown>;
+}
+
+/** The board's own end and close, read off a session. */
+export function sessionBoardFacts(session: RoomSession): { ended: boolean; closed: boolean } {
+  const state = session.state as { current_round_type?: string | null; room_closed?: boolean };
+  return { ended: state.current_round_type === "GameEnd", closed: state.room_closed === true };
 }
 
 /** The facts the log gives, read inside a task (the board is the session's, equal to the committed view). */
-export function factsFromTx(tx: Tx): LogFacts {
-  const state = tx.session.state as { current_round_type?: string | null; room_closed?: boolean };
-  return factsFromEntries(tx.view.entries, state.current_round_type === "GameEnd", state.room_closed === true);
+export function factsFromTx(tx: Tx, board: { ended: boolean; closed: boolean } = sessionBoardFacts(tx.session)): LogFacts {
+  return factsFromEntries(tx.view.entries, board.ended, board.closed);
 }
 
-function factsFromEntries(entries: readonly ServerLogEntry[], ended: boolean, closed: boolean): LogFacts {
+/** LIVE-3C: the facts a HELD game's record gives -- a held game's view holds no history, so what the room shows about
+ *  it (dealt, ended, closed) comes from the record alone, never from an absent log. */
+export function factsFromRecord(record: Readonly<GameRecord>): LogFacts {
+  const dealt = record.started_at !== null || record.status === "active" || record.status === "completed";
+  return {
+    dealt,
+    dealAt: record.started_at,
+    turnOrder: record.turn_order,
+    rulesEngineVersion: record.rules_engine_version,
+    ended: record.status === "completed",
+    closed: record.closed_at !== null,
+  };
+}
+
+export function factsFromEntries(entries: readonly ServerLogEntry[], ended: boolean, closed: boolean): LogFacts {
   const deal = dealEntryOf(effectiveActions(entries));
   if (deal === null) return { dealt: false, dealAt: null, turnOrder: null, rulesEngineVersion: null, ended: false, closed: false };
   let turnOrder: string[] | null = null;
@@ -123,9 +179,34 @@ function factsFromEntries(entries: readonly ServerLogEntry[], ended: boolean, cl
   return { dealt: true, dealAt: (deal as { at?: number }).at ?? null, turnOrder, rulesEngineVersion, ended, closed };
 }
 
-/** Facts outside a task: the log's deal, and the record's cached end (synced by the server from the board). */
+/** Facts outside a task: the log's deal, and the record's cached end (synced by the server from the board).
+ *  LIVE-3C: a game under a maintenance hold serves no history, so its facts are the record's. */
 export function factsFromView(view: CommittedView, record: GameRecord): LogFacts {
+  if (isMaintenanceHold(view.hold)) return factsFromRecord(record);
   return factsFromEntries(view.entries, record.status === "completed", record.closed_at !== null);
+}
+
+/** LIVE-3C: what a room shows about why it will not take a change -- the RoomView's `holdKind`. `build` is this
+ *  server's (a game dealt on another build is read-only, #1252). */
+export function holdKindOf(view: CommittedView, build: string): HoldKind {
+  if (isMaintenanceHold(view.hold)) return "maintenance";
+  if (view.incompatible !== null || view.hold?.reason === "version") return "incompatible";
+  if (view.hold?.reason === "uncertain") return "unavailable";
+  const first = view.entries[0];
+  if (first !== undefined && first.index === 0) {
+    const deal = dealInfoOf(first);
+    if (deal && deal.build !== null && deal.build !== build) return "read-only";
+  }
+  return null;
+}
+
+/** LIVE-3C: the sentence a `gone` answer carries, by what ended the table. */
+export function goneSentence(record: Readonly<GameRecord> | null): string {
+  if (record === null) return GONE_SENTENCES.gone;
+  if (record.archived_at !== null) return GONE_SENTENCES.archived;
+  if (record.status === "cancelled") return GONE_SENTENCES.cancelled;
+  if (record.status === "expired" || (record.status === "waiting" && record.expires_at !== null)) return GONE_SENTENCES.expired;
+  return GONE_SENTENCES.gone;
 }
 
 export function createRoomHost(deps: RoomHostDeps) {
@@ -157,24 +238,78 @@ export function createRoomHost(deps: RoomHostDeps) {
   const unknownGames = new Map<string, number>();
   /** Creates in flight per principal: counted against the hosted-room cap before their record exists. */
   const pendingCreates = new Map<string, number>();
-  const counters = { created: 0, unknownGameLookups: 0, negativeCacheHits: 0, sessionsAllocated: 0, reaped: 0, viewPushesRefused: 0, logPushesRefused: 0 };
+  const counters = {
+    created: 0,
+    unknownGameLookups: 0,
+    negativeCacheHits: 0,
+    sessionsAllocated: 0,
+    reaped: 0,
+    viewPushesRefused: 0,
+    logPushesRefused: 0,
+    /* LIVE-3C */
+    repaired: 0,
+    archived: 0,
+    unavailable: 0,
+    terminalRefused: 0,
+  };
+  const holds = deps.holds ?? createMemoryHoldStore();
+  const ops = deps.ops ?? NO_OPS;
+  const settlement = deps.settlement ?? NO_MONEY_SETTLEMENT;
+  const boardOf = (gameId: string, session: RoomSession) => (deps.boardFacts ? deps.boardFacts(gameId, session) : sessionBoardFacts(session));
 
+  /* ==================================================================
+      LIVE-3C: STARTUP DISCOVERY BEFORE ANY GAME IS SERVED
+     ==================================================================
+     Every durable game is enumerated and classified (`discovery.ts`) before this host resolves a single game id:
+     `resolveGame` and every path through it wait for `indexReady`. A game discovery holds is held before anybody can
+     load it; a record that cannot be read is left out of the index (and answered as no such game); one bad game never
+     hides the others. */
+  let discovery: DiscoveryReport | null = null;
+  /* ==================================================================
+      LIVE-3C: TWO STAGES -- DISCOVERED, THEN RECONCILED (lifecycle.ts)
+     ==================================================================
+     `unreconciled` holds every game whose record this process has NOT yet reconciled against its whole log: the
+     started games discovery found (it reads only the first line), and any record found lazily after it. A game leaves
+     the set only when its load has scanned and replayed the whole log AND reconcileLoaded agrees (with any repair it
+     asked for committed) -- or when the load held it or found it incompatible, which is a conclusion too. Until then
+     its record is NOT believed: it is left out of the public list, never archived, and every op on it is refused (its
+     reads all go through the actor, whose load is the reconciliation). `concluded` keeps a fail-closed conclusion for
+     a game whose actor has since been evicted, so it is not re-read from the stale discovery line. */
+  const unreconciled = new Set<string>();
+  const concluded = new Map<string, { cls: GameClass; code: string | null; detail: string | null } | "healthy">();
+  /* LIVE-3C (review E11): a hold discovery found but could not WRITE down is still a hold for this run -- the load
+     and every op honour it through `pendingHoldOf`, exactly as if the file existed. */
+  const discoveryHolds = new Map<string, { code: HoldCode; detail: string }>();
   const indexReady: Promise<void> = (async () => {
-    let ids: string[] = [];
     try {
-      ids = await deps.records.list();
+      discovery = await discoverGames({
+        records: deps.records,
+        logs: deps.logs ?? {},
+        holds,
+        build: deps.build,
+        rulesEngineVersion: RULES_ENGINE_VERSION,
+        now,
+        warn: deps.warn,
+        ops,
+      });
     } catch (error) {
-      deps.warn(`  records: the startup index could not be listed -- ${error instanceof Error ? error.message : String(error)}`);
+      deps.warn(`  discovery: the startup scan failed -- ${error instanceof Error ? error.message : String(error)}; games are resolved one by one as they are asked for`);
+      return;
     }
-    /* One unreadable record is reported and skipped, never guessed at; it does not hide the others. */
-    for (const gameId of ids) {
-      try {
-        const record = await deps.records.load(gameId);
-        if (record !== null) recordIndex.set(gameId, record);
-      } catch (error) {
-        deps.warn(`  records: ${gameId} cannot be read and is left out of the index -- ${error instanceof Error ? error.message : String(error)}`);
+    for (const game of discovery.games.values()) {
+      if (game.record !== null) recordIndex.set(game.gameId, game.record);
+      if (game.cls === "held" && game.code !== null) discoveryHolds.set(game.gameId, { code: game.code as HoldCode, detail: game.detail ?? "" });
+      /* Whatever loaded meanwhile (nothing can: every path waits for this) has already settled itself. */
+      if (game.cls === "unreconciled" && deps.games.peek(game.gameId) === undefined) unreconciled.add(game.gameId);
+    }
+    deps.warn(summaryLine(discovery));
+    for (const error of discovery.storeErrors) deps.warn(`  discovery: STORE -- ${error}`);
+    for (const game of discovery.games.values()) {
+      if (game.cls === "held" || game.cls === "incompatible" || game.cls === "unavailable" || game.cls === "attention") {
+        deps.warn(`  discovery: ${game.gameId} ${game.cls.toUpperCase()}${game.code ? ` (${game.code})` : ""}${game.detail ? `: ${game.detail}` : ""}`);
       }
     }
+    publishStatus();
   })();
 
   /* ---- subscriptions ---- */
@@ -209,8 +344,12 @@ export function createRoomHost(deps: RoomHostDeps) {
     game.unpin();
   }
 
-  /** Whether `gameId` names a game, without loading an actor for one that does not (LIVE-2 §11.4 item 4). */
+  /** Whether `gameId` names a game, without loading an actor for one that does not (LIVE-2 §11.4 item 4).
+   *  LIVE-3C: waits for startup discovery; a record that cannot be read -- damaged, or written by a newer build -- is
+   *  answered exactly as no game at all (nobody can be authorized against a record nobody can read, and the answer must
+   *  not say that a private game exists); a read that FAILED rejects `GameUnavailableError`. */
   async function resolveGame(gameId: string): Promise<boolean> {
+    await indexReady;
     if (recordIndex.has(gameId) || peekLoaded(gameId)?.view.record) return true;
     const until = unknownGames.get(gameId);
     if (until !== undefined && until > now()) {
@@ -218,7 +357,14 @@ export function createRoomHost(deps: RoomHostDeps) {
       return false;
     }
     counters.unknownGameLookups += 1;
-    const record = await deps.records.load(gameId);
+    let record: GameRecord | null;
+    try {
+      record = await deps.records.load(gameId);
+    } catch (error) {
+      if (isStoreCorrupt(error) || isStoreIncompatible(error)) return false;
+      counters.unavailable += 1;
+      throw new GameUnavailableError(gameId, error);
+    }
     if (record === null) {
       unknownGames.set(gameId, now() + rooms.unknownGameTtlMs);
       /* Over the bound: the oldest entries go first (insertion order), and the walk stops once under it. */
@@ -229,23 +375,113 @@ export function createRoomHost(deps: RoomHostDeps) {
       return false;
     }
     unknownGames.delete(gameId);
-    recordIndex.set(gameId, record);
+    /* Found after discovery (or discovery could not run): stage one until its load reconciles it -- never believed from
+       the record meanwhile (the caller loads it at once). A slower lookup never overwrites what a load or a publish
+       has put in the index since (review: a stale read landing after the repair). */
+    if (!recordIndex.has(gameId) && deps.games.peek(gameId) === undefined) {
+      unreconciled.add(gameId);
+      recordIndex.set(gameId, record);
+    }
     return true;
   }
 
-  /** The loaded actor for a KNOWN game, or `null` (an unknown id never allocates a session). */
+  /** The loaded actor for a KNOWN game, or `null` (an unknown id never allocates a session). LIVE-3C: a load that
+   *  FAILED (the store could not be read just now -- not a verdict on the game) rejects `GameUnavailableError`; the
+   *  registry drops the failed actor, so the next ask tries again. */
   async function actorFor(gameId: string): Promise<GameActor | null> {
     if (!(await resolveGame(gameId))) return null;
     const resident = deps.games.peek(gameId) !== undefined;
-    const game = await deps.games.get(gameId);
-    if (game.view.record === null) return null;
-    if (!resident) {
-      counters.sessionsAllocated += 1;
-      /* §14.4: a record that lags its log (a crash between the deal, the end or the close and the record update) is
-         repaired as the game loads -- a task of its own that commits only when the log says something new. */
-      if (factsFromView(game.view, game.view.record).dealt) syncRecord(game);
+    let game: GameActor;
+    try {
+      game = await deps.games.get(gameId);
+    } catch (error) {
+      counters.unavailable += 1;
+      deps.warn(`  store: ${gameId} could not be loaded -- ${error instanceof Error ? error.message : String(error)}; it is answered "unavailable" and tried again at the next ask`);
+      throw new GameUnavailableError(gameId, error);
     }
+    if (game.view.record === null) return null;
+    if (!resident) counters.sessionsAllocated += 1;
     return game;
+  }
+
+  /** LIVE-3C: STAGE TWO, AT EVERY LOAD (the registry calls this before any waiting caller resumes, so the task it
+   *  queues runs ahead of every op or submit they queue). The load itself has already scanned the whole log, replayed
+   *  it and run reconcileLoaded (`gameActor.ts`): a disagreement is a maintenance hold in the view, an unsupported pin
+   *  is `incompatible`. What is left is a record that agrees -- or only LAGS its log (a crash between the deal, the
+   *  end or the close and the record's follow-up write): that repair is committed by a task of its own, and only once
+   *  it lands is the game reconciled. */
+  function onActorLoaded(game: GameActor): void {
+    let view: CommittedView;
+    try {
+      view = game.view;
+    } catch (error) {
+      deps.warn(`  records: ${game.gameId} loaded without a committed view -- ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+    const record = view.record;
+    if (record === null) return;
+    if (isMaintenanceHold(view.hold) || view.incompatible !== null || view.hold?.reason === "version") {
+      settle(game.gameId, classOfView(game.gameId, view));
+      return;
+    }
+    if (view.hold !== null) return; // a store fault: neither reconciled nor held -- the next load decides
+    if (!factsFromView(view, record).dealt) {
+      settle(game.gameId, null); // no history: the load's own reconciliation (an empty log) was the whole of it
+      return;
+    }
+    syncRecord(game, "load");
+  }
+
+  /** A game's reconciliation is concluded for this run: healthy (`null`: its record, which this process now writes, is
+   *  believed) or a fail-closed class kept for after its actor is evicted. */
+  function settle(gameId: string, failClosed: { cls: GameClass; code: string | null; detail: string | null } | null): void {
+    const was = unreconciled.delete(gameId);
+    const before = concluded.get(gameId);
+    /* A conclusion replaces discovery's line for good (review: a start-time read failure is not sticky once a load
+       has succeeded): healthy means the record -- reconciled, and written only by this process since -- is believed. */
+    if (failClosed === null || failClosed.cls === "active" || failClosed.cls === "completed" || failClosed.cls === "waiting") concluded.set(gameId, "healthy");
+    else concluded.set(gameId, failClosed);
+    if (was || before !== concluded.get(gameId)) {
+      scheduleList();
+      publishStatus();
+    }
+  }
+
+  /** LIVE-3C: an op or a move on a game whose record is not reconciled yet is refused (and the reconciliation tried
+   *  again as a task of its own). Only reachable when the load's repair could not be committed. */
+  function awaitingReconciliation(game: GameActor): boolean {
+    if (!unreconciled.has(game.gameId)) return false;
+    syncRecord(game, "load");
+    return true;
+  }
+
+  /** LIVE-3C (review): entries of unknown outcome were adopted from the store (a late commit, a read-back). No record
+   *  sync followed them, so one is queued now -- exactly as after any committed batch (RL-1: tasks already queued run
+   *  on the board, which the terminal gate and every authorization read). If it cannot land, the game is
+   *  unreconciled (`syncRecord`) and every op on it is refused until it does. */
+  function onStoreAdopted(gameId: string): void {
+    const game = peekLoaded(gameId);
+    if (game === undefined || game.view.record === null) return;
+    syncRecord(game, "adopted");
+  }
+
+  /** LIVE-3C (review E8): what a caller is told when a game could not be LOADED just now. With its record indexed,
+   *  `unavailable` only to a principal that record already lets read it -- anybody else is told exactly what a game
+   *  that does not exist answers, so a failing private game is not told apart from no game at all. With no record to
+   *  authorize against (its own read is what failed), `unavailable`: a missing file reads as nothing, so only a
+   *  store fault -- nothing a caller can cause -- says an id is there. */
+  function unavailableFor(gameId: string, principalId: string | null): { code: string; reason: string } {
+    const record = recordIndex.get(gameId) ?? null;
+    const unavailable = { code: "unavailable", reason: UNAVAILABLE_PLAYER_SENTENCE };
+    if (record === null) return unavailable;
+    const verdict = authorize("read-view", { record, facts: factsFromRecord(record), principalId: principalId ?? "", now: now(), held: false });
+    if (!verdict.ok && verdict.code === "not-found") return { code: "not-found", reason: "There is no such game." };
+    return unavailable;
+  }
+
+  /** A hold discovery found this run but could not write down (the load honours it as if its file existed). */
+  function pendingHoldOf(gameId: string): { code: HoldCode; detail: string } | null {
+    return discoveryHolds.get(gameId) ?? null;
   }
 
   /** The seat's `player_id` for `principalId` in `gameId`'s committed record, or `null` (the actor's in-flight and
@@ -255,19 +491,30 @@ export function createRoomHost(deps: RoomHostDeps) {
     return record ? (seatOf(record, principalId)?.player_id ?? null) : null;
   }
 
-  const heldOf = (view: CommittedView) => view.incompatible !== null;
+  /** The authorization overlay "held" (stage Hd for a dealt game): an incompatible pin (#1520) or, LIVE-3C, a
+   *  maintenance hold. */
+  const heldOf = (view: CommittedView) => view.incompatible !== null || isMaintenanceHold(view.hold);
+
+  /** LIVE-3C: a `gone` refusal says what ended the table (cancelled, expired, archived) -- to a principal the table has
+   *  already said it may read, never to an outsider (who is answered `not-found` first). */
+  function withGoneReason<T extends { ok: boolean; code?: string; reason?: string }>(verdict: T, record: Readonly<GameRecord> | null): T {
+    return !verdict.ok && verdict.code === "gone" ? { ...verdict, reason: goneSentence(record) } : verdict;
+  }
 
   /** Authorize `op` for `principal` against the game's committed record, outside any task (reads, pushes). */
   function authorizeNow(game: GameActor, principalId: string | null, op: RoomOp) {
     const view = game.view;
     const record = view.record;
-    return authorize(op, {
+    return withGoneReason(
+      authorize(op, {
+        record,
+        facts: record === null ? factsFromEntries([], false, false) : factsFromView(view, record),
+        principalId,
+        now: now(),
+        held: heldOf(view),
+      }),
       record,
-      facts: record === null ? factsFromEntries([], false, false) : factsFromView(view, record),
-      principalId,
-      now: now(),
-      held: heldOf(view),
-    });
+    );
   }
 
   /* ---- projections and pushes ---- */
@@ -290,8 +537,9 @@ export function createRoomHost(deps: RoomHostDeps) {
       view: roomViewFor(record, facts, principalId, {
         now: now(),
         held: heldOf(view),
+        holdKind: holdKindOf(view, deps.build),
         online: onlineIn(record.game_id, record),
-        canStart: !facts.dealt && waitingBlock(record) === null,
+        canStart: !facts.dealt && waitingBlock(record) === null && view.hold === null,
       }),
     };
   }
@@ -374,6 +622,12 @@ export function createRoomHost(deps: RoomHostDeps) {
   function summaries(): RoomSummary[] {
     const out: RoomSummary[] = [];
     for (const record of recordIndex.values()) {
+      /* LIVE-3C: ONLY WHAT IS KNOWN. A game not yet reconciled this run is left out -- its record says "playing" or
+         "waiting" and nobody has checked that against its log -- and so is one concluded held, incompatible,
+         unavailable or needing attention (nobody can join or play it). It appears once its first load (anybody's
+         reconnect, room view or code) has reconciled it. */
+      const now_ = classifyNow(record.game_id).cls;
+      if (now_ !== "waiting" && now_ !== "active" && now_ !== "read-only") continue;
       const resident = peekLoaded(record.game_id);
       const facts = resident ? factsFromView(resident.view, record) : factsFromEntries([], false, false);
       const dealtFromRecord = record.started_at !== null || record.status === "active" || record.status === "completed";
@@ -472,18 +726,36 @@ export function createRoomHost(deps: RoomHostDeps) {
     const outcome = await game.run("room-op", async (tx): Promise<Ran<OpOutcome & { ok: true }>> => {
       const record = tx.view.record;
       if (record === null) return { ok: false, code: "not-found", reason: "There is no such game." };
-      const facts = factsFromTx(tx);
+      const maintenance = isMaintenanceHold(tx.view.hold);
+      const facts = maintenance ? factsFromRecord(record) : factsFromTx(tx, boardOf(record.game_id, tx.session));
       const at = now();
-      const held = tx.view.incompatible !== null;
+      const held = heldOf(tx.view);
       const verdict = opName === null ? null : authorize(opName, { record, facts, principalId, now: at, held });
       if (verdict !== null && !verdict.ok && verdict.code === "not-found") return { ok: false, code: verdict.code, reason: verdict.reason };
+      /* LIVE-3C: NOTHING ABOUT A HELD GAME CHANGES -- not its seats, host, code or lifecycle, not by any op, not by the
+         expiry or archive sweeps (`opName` null). A `leave` only unsubscribes (the seat and admission stay exactly as
+         the record holds them), so "Back to the lobby" still works; everything else is told the one held sentence. */
+      if (maintenance) {
+        if (opName === "leave" && verdict !== null && verdict.ok) return { ok: true, value: { ok: true, record: null, effects: { unsubscribeOnly: true } } };
+        return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
+      }
       if (tx.view.hold !== null && tx.view.hold.reason !== "version") return { ok: false, code: "unavailable", reason: UNAVAILABLE };
+      /* LIVE-3C (review E1): a server task (the expiry and archive sweeps) never acts on a game this build cannot
+         interpret -- its record's lifecycle claims could not be checked against a board nobody replayed. */
+      if (opName === null && (tx.view.incompatible !== null || tx.view.hold?.reason === "version")) return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
+      /* LIVE-3C: NOTHING IS WRITTEN ON AN UNRECONCILED RECORD (its load's repair has not landed): refused, and the
+         reconciliation tried again as a task of its own -- so no op, and no sweep, builds on a record the log may
+         contradict. */
+      if (awaitingReconciliation(game)) return { ok: false, code: "unavailable", reason: UNAVAILABLE };
       /* THE WAITING-ROOM TTL (§5.3), made durable by the first op (or sweep) that finds it passed. */
       if (record.status === "waiting" && effectiveStatus(record, facts, at) === "expired") {
         const expired = { ...record, status: "expired" as const, join_code: null, expires_at: record.expires_at, record_version: record.record_version + 1, last_activity_at: at };
         const settled = await tx.commitRecord(expired, () => ({}));
-        if (settled.kind === "committed") releaseLater(record.join_code ?? undefined, record.game_id);
-        return { ok: false, code: "gone", reason: "That game has expired." };
+        if (settled.kind === "committed") {
+          releaseLater(record.join_code ?? undefined, record.game_id);
+          ops.audit("record.expired", { game_id: record.game_id });
+        }
+        return { ok: false, code: "gone", reason: GONE_SENTENCES.expired };
       }
       let fresh: string | null = null;
       if (needsCode(record)) {
@@ -497,7 +769,7 @@ export function createRoomHost(deps: RoomHostDeps) {
       const result = op(env, fresh);
       if (!result.ok || result.record === null) {
         releaseLater(fresh ?? undefined, record.game_id);
-        return result.ok ? { ok: true, value: result } : result;
+        return result.ok ? { ok: true, value: result } : withGoneReason(result, record);
       }
       const settled = await tx.commitRecord(result.record, (s) => ({
         after: () => {
@@ -543,6 +815,10 @@ export function createRoomHost(deps: RoomHostDeps) {
     let seated = hosted + (pendingSeats.get(principalId) ?? 0);
     for (const record of recordIndex.values()) {
       if (isTerminal(record.status) || record.status === "completed" || record.archived_at !== null) continue;
+      /* LIVE-3C: a held or incompatible table is frozen, not open -- it takes nobody's cap (review). An unreconciled
+         record's own claim is used here, and only here: a cap is an abuse bound, not a statement about the game. */
+      const frozen = classifyNow(record.game_id).cls;
+      if (frozen === "held" || frozen === "incompatible") continue;
       if (record.status === "waiting" && record.expires_at !== null && now() >= record.expires_at && record.started_at === null) continue;
       const seat = seatOf(record, principalId);
       if (seat === null) continue;
@@ -675,7 +951,14 @@ export function createRoomHost(deps: RoomHostDeps) {
     if (code === null) return failed();
     const gameId = await deps.records.lookupCode(code);
     if (gameId === null) return failed();
-    const game = await actorFor(gameId);
+    let game: GameActor | null;
+    try {
+      game = await actorFor(gameId);
+    } catch (error) {
+      /* LIVE-3C: the table could not be opened just now -- not a failed code, so nothing is charged to the budget. */
+      if (error instanceof GameUnavailableError) return ack(socket, requestId, { ok: false, code: "unavailable", reason: UNAVAILABLE_PLAYER_SENTENCE });
+      throw error;
+    }
     if (game === null) return failed();
     const record = game.view.record as GameRecord;
     /* The code must still be THIS record's (an orphan, rotated or released entry is never authoritative), and a
@@ -722,7 +1005,13 @@ export function createRoomHost(deps: RoomHostDeps) {
     if (type === "create") return handleCreate(socket, ctx, requestId, op);
     if (type === "join") return handleJoin(socket, ctx, requestId, op);
     if (frame.gameId === undefined) return ack(socket, requestId, { ok: false, code: "bad-frame", reason: "That operation names no game." });
-    const game = await actorFor(frame.gameId);
+    let game: GameActor | null;
+    try {
+      game = await actorFor(frame.gameId);
+    } catch (error) {
+      if (error instanceof GameUnavailableError) return ack(socket, requestId, { ok: false, ...unavailableFor(frame.gameId, ctx.principalId) });
+      throw error;
+    }
     if (game === null) return ack(socket, requestId, { ok: false, code: "not-found", reason: "There is no such game." });
     if (type === "start-game") return ack(socket, requestId, await startGame(game, ctx.principalId));
     const opName = OP_NAMES[type] ?? null;
@@ -792,13 +1081,18 @@ export function createRoomHost(deps: RoomHostDeps) {
     const outcome = await game.run("room-op", async (tx): Promise<{ ok: true; data?: Record<string, unknown> } | Refusal> => {
       const record = tx.view.record;
       if (record === null) return { ok: false, code: "not-found", reason: "There is no such game." };
-      const facts = factsFromTx(tx);
+      const maintenance = isMaintenanceHold(tx.view.hold);
+      const facts = maintenance ? factsFromRecord(record) : factsFromTx(tx, boardOf(record.game_id, tx.session));
       const seat = seatOf(record, principalId);
       /* Idempotent (§8.2 step 2): a second press, or a lost ack, is told the game already started. */
-      if (facts.dealt && seat !== null && seat.player_id === record.host_player_id) return { ok: true, data: { alreadyStarted: true } };
-      const verdict = authorize("start-game", { record, facts, principalId, now: now(), held: tx.view.incompatible !== null });
+      if (!maintenance && facts.dealt && seat !== null && seat.player_id === record.host_player_id) return { ok: true, data: { alreadyStarted: true } };
+      const verdict = withGoneReason(authorize("start-game", { record, facts, principalId, now: now(), held: heldOf(tx.view) }), record);
+      if (!verdict.ok && verdict.code === "not-found") return { ok: false, code: verdict.code, reason: verdict.reason };
+      /* LIVE-3C: a held table is not dealt, whatever the host presses. */
+      if (maintenance) return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
       if (!verdict.ok) return { ok: false, code: verdict.code, reason: verdict.reason };
       if (tx.view.hold !== null) return { ok: false, code: "unavailable", reason: UNAVAILABLE };
+      if (awaitingReconciliation(game)) return { ok: false, code: "unavailable", reason: UNAVAILABLE };
       const plan = await deps.rosterSource.plan(record, { shuffle: deps.shuffle, now: now() });
       if ("refusal" in plan) return { ok: false, code: plan.code === "wrong-state" ? "wrong-state" : "not-ready", reason: plan.reason, ...({ block: plan.code } as object) } as Refusal;
       const deal = buildSetupGame(plan, deps.build);
@@ -833,37 +1127,67 @@ export function createRoomHost(deps: RoomHostDeps) {
       return { ok: false, code: "internal", reason: `The server could not deal this game. (ref ${ref})` };
     }
     if (outcome.kind !== "ran") return { ok: false, code: outcome.kind === "busy" ? "busy" : "unavailable", reason: outcome.kind === "busy" ? BUSY : UNAVAILABLE };
-    if (outcome.value.ok) syncRecord(game);
+    if (outcome.value.ok) syncRecord(game, "deal");
     return outcome.value;
+  }
+
+  /** The settlement seam, contained: it must not throw (it runs inside a publish), and if it does, the game is not
+   *  harmed -- the next load announces the seal again (at least once). */
+  function callSettlement(input: Parameters<SettlementLifecycle["onGameplayClosed"]>[0]): void {
+    try {
+      settlement.onGameplayClosed(input);
+    } catch (error) {
+      deps.warn(`  settlement: onGameplayClosed threw for ${input.gameId} -- ${error instanceof Error ? error.message : String(error)}; the next load announces it again`);
+    }
   }
 
   /** The record's cached, log-derived fields (§5.2, §14.4): after the deal, at GameEnd and at CloseRoom -- and at
    *  load when the record lags its log. A task of its own (a task commits once, E-6); the log wins. */
-  function syncRecord(game: GameActor): void {
+  function syncRecord(game: GameActor, why: "load" | "deal" | "gameplay" | "adopted"): void {
     void game
       .run("room-op", async (tx) => {
         const record = tx.view.record;
-        if (record === null) return;
-        const facts = factsFromTx(tx);
-        if (!facts.dealt) return;
-        const status = facts.ended ? "completed" : "active";
-        const closedAt = facts.closed ? (record.closed_at ?? now()) : record.closed_at;
+        /* A held, uncertain or incompatible game is never repaired: what it holds is exactly what was found. An
+           UNCERTAIN store hold only defers it (review R1): the game is unreconciled, so once the hold clears, the
+           first op or move is refused and retries this sync instead of running on a record that may lag. */
+        if (record !== null && tx.view.hold?.reason === "uncertain") unreconciled.add(record.game_id);
+        if (record === null || tx.view.hold !== null) return;
+        const board = boardOf(record.game_id, tx.session);
+        const facts = factsFromTx(tx, board);
+        if (!facts.dealt) {
+          settle(record.game_id, null);
+          return;
+        }
+        /* LIVE-3C: THE SAME TABLE THE LOAD RECONCILED BY (`reconcile.ts`), so a repair writes exactly the log-implied
+           fields the record lags on -- and a record that no longer reconciles is left alone (it is held at its next
+           load; a running game's record cannot move away from its log, since every op after the deal is refused). */
+        const verdict = reconcileLoaded(record, { entries: tx.view.entries, board });
+        if (verdict.kind === "hold") {
+          /* Unreachable after a load (which applies the same table and would have held it): if it happens anyway the
+             game stays unreconciled, and every op on it is refused. */
+          deps.warn(`  records: ${record.game_id} does not reconcile with its log (${verdict.code}): ${verdict.detail} -- left exactly as it is`);
+          return;
+        }
+        if (verdict.kind !== "repair") {
+          settle(record.game_id, null);
+          /* The settlement seam is AT LEAST ONCE (lifecycle.ts): a load that finds a completed game tells it again. */
+          if (why === "load" && board.ended && record.status === "completed") {
+            const seal = sealOf(tx.view.entries, true);
+            if (seal !== null) callSettlement({ gameId: record.game_id, record, seal, recovered: true });
+          }
+          return;
+        }
+        const seal = sealOf(tx.view.entries, board.ended);
         const releaseCode = record.visibility === "private" && record.join_code !== null ? record.join_code : undefined;
-        const changed =
-          record.status !== status ||
-          record.started_at === null ||
-          record.closed_at !== closedAt ||
-          record.turn_order === null ||
-          releaseCode !== undefined;
-        if (!changed || record.status === "cancelled" || record.status === "expired") return;
         const seated = new Set(record.seats.map((seat) => seat.principal_id));
         const next: GameRecord = {
           ...record,
           record_version: record.record_version + 1,
-          status,
+          status: facts.ended ? "completed" : "active",
           started_at: record.started_at ?? facts.dealAt ?? now(),
-          completed_at: facts.ended ? (record.completed_at ?? now()) : record.completed_at,
-          closed_at: closedAt,
+          /* The seal's time: when gameplay ended, from the log (log-implied, LIVE-3 §14.3). */
+          completed_at: facts.ended ? (seal !== null && seal.at > 0 ? seal.at : (record.completed_at ?? now())) : record.completed_at,
+          closed_at: facts.closed ? (record.closed_at ?? now()) : record.closed_at,
           turn_order: facts.turnOrder ?? record.turn_order,
           rules_engine_version: facts.rulesEngineVersion ?? record.rules_engine_version,
           expires_at: null,
@@ -871,11 +1195,42 @@ export function createRoomHost(deps: RoomHostDeps) {
           admitted: record.visibility === "private" ? record.admitted.filter((entry) => seated.has(entry.principal_id)) : record.admitted,
           last_activity_at: now(),
         };
-        const settled = await tx.commitRecord(next, () => ({}));
-        if (settled.kind === "committed") releaseLater(releaseCode, record.game_id);
-        else deps.warn(`  records: the record of ${record.game_id} could not follow its log (${settled.reason}); the next load or move repairs it`);
+        const sealed = record.status !== "completed" && next.status === "completed" && seal !== null ? seal : null;
+        /* A load that repairs an already-completed record (its end time) re-announces the seal, as any load of one does. */
+        const reannounce = sealed === null && why === "load" && next.status === "completed" && seal !== null ? seal : null;
+        const settled = await tx.commitRecord(next, (s) => ({
+          after: () => {
+            /* THE TERMINAL SEAM (lifecycle.ts): gameplay closed, durably -- settlement eligible. Nothing for no-money. */
+            if (s.kind !== "committed") return;
+            if (sealed !== null) callSettlement({ gameId: record.game_id, record: next, seal: sealed, recovered: why === "load" });
+            else if (reannounce !== null) callSettlement({ gameId: record.game_id, record: next, seal: reannounce, recovered: true });
+          },
+        }));
+        if (settled.kind === "committed") {
+          settle(record.game_id, null);
+          releaseLater(releaseCode, record.game_id);
+          if (why === "load" || why === "adopted") {
+            counters.repaired += 1;
+            deps.warn(`  records: ${record.game_id} repaired from its log ${why === "load" ? "at load" : "after adopting stored entries"} (${verdict.fields.join(", ")}) -- record.repaired`);
+            ops.audit("record.repaired", { game_id: record.game_id, fields: verdict.fields, record_version: next.record_version, ...(why === "adopted" ? { after: "adoption" } : {}) });
+          }
+          if (sealed !== null) ops.audit("game.sealed", { game_id: record.game_id, log_len: sealed.log_len, at: sealed.at });
+        } else {
+          /* LIVE-3C (review E4): whatever asked for it -- the load, the deal, GameEnd, CloseRoom -- the record now lags
+             its log, so the game is UNRECONCILED again: every op and move on it is refused, and each refusal retries. */
+          unreconciled.add(record.game_id);
+          publishStatus();
+          scheduleList();
+          deps.warn(`  records: the record of ${record.game_id} could not follow its log (${settled.reason}); it is unreconciled -- every op on it is refused until a repair lands`);
+        }
       })
       .then((outcome) => {
+        if (outcome.kind === "ran") return;
+        /* A sync that never ran (expired, busy, threw) leaves the record lagging just the same. */
+        if (!game.isLoaded) return;
+        unreconciled.add(game.gameId);
+        publishStatus();
+        scheduleList();
         if (outcome.kind === "failed") deps.warn(`  threw: a record sync failed for ${game.gameId} -- ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`);
       })
       .catch(() => undefined);
@@ -885,15 +1240,23 @@ export function createRoomHost(deps: RoomHostDeps) {
   function afterGameplay(game: GameActor, ended: boolean, closed: boolean): void {
     const record = game.view.record;
     if (record === null) return;
-    if ((ended && record.status !== "completed") || (closed && record.closed_at === null) || record.status === "waiting") syncRecord(game);
+    if ((ended && record.status !== "completed") || (closed && record.closed_at === null) || record.status === "waiting") syncRecord(game, "gameplay");
   }
 
   /* ---- reads ---- */
 
   async function handleRoomHello(socket: WebSocket, gameId: string): Promise<void> {
     const principalId = principalOf(socket);
-    const game = await actorFor(gameId);
+    let game: GameActor | null;
+    try {
+      game = await actorFor(gameId);
+    } catch (error) {
+      if (error instanceof GameUnavailableError) return deps.send(socket, { kind: "error", ...unavailableFor(gameId, principalId) });
+      throw error;
+    }
     if (game === null) return deps.send(socket, { kind: "error", code: "not-found", reason: "There is no such game." });
+    /* LIVE-3C: a view is built only from a RECONCILED record -- the load's repair task (queued first) has run. */
+    if (unreconciled.has(gameId)) await game.run("room-op", () => undefined);
     const verdict = authorizeNow(game, principalId, "read-view");
     if (!verdict.ok) return deps.send(socket, { kind: "error", code: verdict.code, reason: verdict.reason });
     if (viewGameOf.get(socket) !== gameId && !viewerRoomFor(socket, gameId)) {
@@ -967,6 +1330,8 @@ export function createRoomHost(deps: RoomHostDeps) {
     if (game === undefined) return deps.send(socket, { kind: "error", code: "unavailable", reason: "That table is not open right now. Try again." });
     const verdict = authorizeNow(game, principalId, "chat");
     if (!verdict.ok) return deps.send(socket, { kind: "error", code: verdict.code, reason: verdict.reason });
+    /* LIVE-3C (review E3): a held game is frozen -- its transcript too. */
+    if (isMaintenanceHold(game.view.hold)) return deps.send(socket, { kind: "error", code: "held", reason: HELD_PLAYER_SENTENCE });
     const record = game.view.record as GameRecord;
     const seat = seatOf(record, principalId);
     if (seat === null) return;
@@ -1016,7 +1381,8 @@ export function createRoomHost(deps: RoomHostDeps) {
   function seatActor(tx: Tx, principalId: string): { ok: true; actor: string; host: string; policy: GameRecord["policy"]["host_undo"] } | Refusal {
     const record = tx.view.record;
     if (record === null) return { ok: false, code: "not-found", reason: "There is no such game." };
-    const verdict = authorize("submit", { record, facts: factsFromTx(tx), principalId, now: now(), held: tx.view.incompatible !== null });
+    const facts = isMaintenanceHold(tx.view.hold) ? factsFromRecord(record) : factsFromTx(tx, boardOf(record.game_id, tx.session));
+    const verdict = withGoneReason(authorize("submit", { record, facts, principalId, now: now(), held: heldOf(tx.view) }), record);
     if (!verdict.ok) {
       /* Before the deal a seated player's move is `wrong-state` in the table; the session answers it better. */
       const seat = seatOf(record, principalId);
@@ -1049,6 +1415,48 @@ export function createRoomHost(deps: RoomHostDeps) {
     listWatchers.delete(socket);
   }
 
+  /* ==================================================================
+      LIVE-3C: TERMINAL MATERIAL AGES OUT -- MARKED, NEVER DELETED, BY THE SERVER
+     ==================================================================
+     A completed game stays readable for 30 days after its seal, a cancelled or expired table for 7 (OD-L3-2, LIVE-2
+     §12.2); then it is ARCHIVED: `archived_at` is set (and a code it still holds released) in one conditional record
+     write on the game's own actor, so it can never race a move, a reconnect or a room op of that game -- a reader
+     before it is served, a reader after it is told `gone`. Nothing is deleted or moved here: the offline tool
+     (`tools/gamesDoctor.ts gc`) moves archived games to `archive/` 90 days later, with the lock held. A held game is
+     never archived (`runOp` refuses every change to it), and a money game never by this rule (`retentionOf`). */
+  const SWEEP_EXEMPT: ReadonlySet<GameClass> = new Set<GameClass>(["held", "incompatible", "unavailable", "attention"]);
+  function sweepArchive(): void {
+    const at = now();
+    let budget = ARCHIVE_SWEEP_BUDGET;
+    for (const record of recordIndex.values()) {
+      if (budget === 0) break;
+      const due = archiveDueAt(record, settlement.retentionOf(record));
+      if (due === null || at < due) continue;
+      /* Frozen or uninterpretable games are never candidates, so they cannot starve the budget (review E7). */
+      if (SWEEP_EXEMPT.has(classifyNow(record.game_id).cls)) continue;
+      budget -= 1;
+      void (async () => {
+        const game = await actorFor(record.game_id);
+        if (game === null) return;
+        const ran = await runOp(game, "", null, (env) => {
+          const current = env.record;
+          const dueNow = archiveDueAt(current, settlement.retentionOf(current));
+          if (dueNow === null || env.now < dueNow) return { ok: true, record: null };
+          return {
+            ok: true,
+            record: { ...current, record_version: current.record_version + 1, archived_at: env.now, join_code: null, last_activity_at: env.now },
+            effects: current.join_code !== null ? { releaseCode: current.join_code } : {},
+          };
+        });
+        if (ran.ok && ran.value.record !== null) {
+          counters.archived += 1;
+          ops.audit("record.archived", { game_id: record.game_id, status: record.status });
+          publishStatus();
+        }
+      })().catch((error) => deps.warn(`  records: could not archive ${record.game_id} -- ${error instanceof Error ? error.message : String(error)}`));
+    }
+  }
+
   /** §5.3: the 24 h waiting-room TTL, made durable for a bounded number of lapsed rooms per sweep (reads already
    *  answer `gone` from the effective status; this releases their codes and frees their hosts' caps for good). */
   function sweepExpired(): void {
@@ -1057,6 +1465,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     for (const record of recordIndex.values()) {
       if (budget === 0) break;
       if (record.status !== "waiting" || record.started_at !== null || record.expires_at === null || at < record.expires_at) continue;
+      if (SWEEP_EXEMPT.has(classifyNow(record.game_id).cls)) continue;
       budget -= 1;
       void (async () => {
         const game = await actorFor(record.game_id);
@@ -1065,8 +1474,108 @@ export function createRoomHost(deps: RoomHostDeps) {
     }
   }
 
+  /* ==================================================================
+      LIVE-3C: THE INVENTORY -- what every durable game is now (brief §15)
+     ==================================================================
+     Discovery's classification, refined by what a resident game's committed view says (a hold found at its load, an
+     uncertain write, a record that moved on). Counts and reasons only: never a principal, never a secret. */
+  /** A LOADED game's class, from its committed view -- the whole log, replayed and reconciled at its load. */
+  function classOfView(gameId: string, view: CommittedView): { gameId: string; cls: GameClass; code: string | null; detail: string | null } {
+    const hold = view.hold;
+    if (isMaintenanceHold(hold)) return { gameId, cls: "held", code: hold?.code ?? "log-corrupt", detail: hold?.detail ?? null };
+    if (view.incompatible !== null || hold?.reason === "version") return { gameId, cls: "incompatible", code: "rules-version", detail: hold?.detail ?? null };
+    if (hold?.reason === "uncertain") return { gameId, cls: "unavailable", code: hold.restart ? "store-restart-required" : "store-uncertain", detail: hold.detail };
+    const record = view.record;
+    if (record === null) return { gameId, cls: "attention", code: null, detail: "loaded with no record" };
+    if (unreconciled.has(gameId)) return { gameId, cls: "unreconciled", code: "repair-pending", detail: "loaded; the record's repair from its log has not landed" };
+    if (holdKindOf(view, deps.build) === "read-only") return { gameId, cls: "read-only", code: "build-pinned", detail: null };
+    /* The lifecycle the LOG implies (a record's own follow-up write may be a task behind it, RL-1). */
+    return { gameId, cls: record.archived_at !== null ? "archived" : effectiveStatus(record, factsFromView(view, record), now()), code: null, detail: null };
+  }
+
+  /** What a game is NOW. Loaded: its view. Not loaded: stage one if it has not been reconciled this run (discovery's
+   *  line, its record's claim NOT believed); a fail-closed conclusion this run reached; else its record -- which this
+   *  process reconciled (or created) and has written every change to since. */
+  function classifyNow(gameId: string): { gameId: string; cls: GameClass; code: string | null; detail: string | null } {
+    const record = recordIndex.get(gameId) ?? null;
+    const game = peekLoaded(gameId);
+    if (game !== undefined) return classOfView(gameId, game.view);
+    const found = (discovery as DiscoveryReport | null)?.games.get(gameId);
+    if (unreconciled.has(gameId)) {
+      return found?.cls === "unreconciled"
+        ? { gameId, cls: found.cls, code: found.code, detail: found.detail }
+        : { gameId, cls: "unreconciled", code: "not-loaded", detail: record ? `the record says ${record.status}; not loaded since this server started` : null };
+    }
+    const reached = concluded.get(gameId);
+    if (reached === "healthy") return record !== null ? { gameId, cls: classOfRecord(record, now()), code: null, detail: null } : { gameId, cls: "attention", code: null, detail: null };
+    if (reached !== undefined) return { gameId, ...reached };
+    const sticky = found !== undefined && (found.cls === "held" || found.cls === "incompatible" || found.cls === "attention" || found.cls === "unavailable");
+    if (found !== undefined && (sticky || record === null)) return { gameId, cls: found.cls, code: found.code, detail: found.detail };
+    if (record !== null) return { gameId, cls: classOfRecord(record, now()), code: null, detail: null };
+    return { gameId, cls: "attention", code: null, detail: null };
+  }
+
+  function inventory() {
+    const ids = new Set<string>([...recordIndex.keys(), ...(((discovery as DiscoveryReport | null)?.games.keys()) ?? [])]);
+    const games = [...ids].sort().map(classifyNow);
+    return { games, byClass: countByClass(games) };
+  }
+
+  /** The operator's status snapshot (`ops/status.json`), rewritten on every change of note -- COALESCED here too: a
+   *  thousand games reconnecting after a restart settle a thousand reconciliations, and the inventory behind the
+   *  snapshot is built once per turn of the event loop, not once per game. `flushStatus` writes a pending one now. */
+  let statusPending: ReturnType<typeof setImmediate> | null = null;
+  function publishStatus(): void {
+    if (statusPending !== null) return;
+    statusPending = setImmediate(() => {
+      statusPending = null;
+      try {
+        writeStatus();
+      } catch (error) {
+        deps.warn(`  ops: the status snapshot could not be built -- ${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+    statusPending.unref?.();
+  }
+  function flushStatus(): void {
+    if (statusPending === null) return;
+    clearImmediate(statusPending);
+    statusPending = null;
+    writeStatus();
+  }
+
+  function writeStatus(): void {
+    const report = discovery as DiscoveryReport | null;
+    const { games, byClass } = inventory();
+    const listed = (cls: GameClass) => games.filter((game) => game.cls === cls).map(({ gameId, code, detail }) => ({ game_id: gameId, code, detail }));
+    ops.status({
+      rules_engine_version: RULES_ENGINE_VERSION,
+      games: { total: games.length, by_class: byClass },
+      held: listed("held"),
+      incompatible: listed("incompatible"),
+      read_only: listed("read-only"),
+      unavailable: listed("unavailable"),
+      attention: listed("attention"),
+      unreconciled: games.filter((game) => game.cls === "unreconciled").length,
+      discovery:
+        report === null
+          ? null
+          : {
+              started_at: report.startedAt,
+              took_ms: report.finishedAt - report.startedAt,
+              holds_created: report.holdsCreated,
+              store_errors: report.storeErrors,
+              index: report.index === null ? null : { rebuilt: report.index.rebuilt, added: report.index.added, repointed: report.index.repointed, orphans: report.index.orphans },
+            },
+      rooms: { ...counters },
+      ...(deps.statusExtras ? deps.statusExtras() : {}),
+    });
+  }
+
   function prune(): void {
     sweepExpired();
+    sweepArchive();
+    publishStatus();
     for (const gameId of [...chats.keys()]) if (!viewSubs.has(gameId)) chats.delete(gameId);
     for (const gameId of [...presence.keys()]) if (!viewSubs.has(gameId)) presence.delete(gameId);
     for (const buckets of [createsPrincipal, createsGlobal, joinFailPrincipal, joinFailGlobal, membership, submitsSeat, submitsGame, chatSeat, rotations]) buckets.prune();
@@ -1102,7 +1611,35 @@ export function createRoomHost(deps: RoomHostDeps) {
     viewGameOf: (socket: WebSocket) => viewGameOf.get(socket),
     unknownGameCount: () => unknownGames.size,
     recordIndexSize: () => recordIndex.size,
+    /* LIVE-3C */
+    onActorLoaded,
+    onStoreAdopted,
+    awaitingReconciliation,
+    unavailableFor,
+    pendingHoldOf,
+    isReconciled: (gameId: string) => !unreconciled.has(gameId),
+    sweepArchive,
+    inventory,
+    publishStatus,
+    flushStatus,
+    discovery: (): DiscoveryReport | null => discovery,
+    boardOf,
   };
 }
 
 export type RoomHost = ReturnType<typeof createRoomHost>;
+
+/** LIVE-3C: the store could not be read just now -- not a verdict on the game. Answered `unavailable`, tried again at
+ *  the next ask (the registry drops a failed load). */
+export class GameUnavailableError extends Error {
+  constructor(
+    readonly gameId: string,
+    cause: unknown,
+  ) {
+    super(`${gameId} could not be loaded: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "GameUnavailableError";
+  }
+}
+
+export { GAME_OVER_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE };
+export type { DiscoveredGame };

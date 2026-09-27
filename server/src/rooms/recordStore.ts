@@ -27,17 +27,44 @@ import * as path from "path";
 
 import { nodeStoreFs, type StoreFs } from "../fileLogStore";
 import { durableReplace } from "../persistence/durableReplace";
-import { COMMITTED, StoreCorruptError, StoreDefiniteError, type StoreWriteOutcome } from "../persistence/storeResult";
+import { COMMITTED, StoreCorruptError, StoreDefiniteError, StoreIncompatibleError, type StoreWriteOutcome } from "../persistence/storeResult";
 import { GAME_ID_PATTERN, isGameRecord, JOIN_CODE_PATTERN, type GameRecord } from "./gameRecord";
+
+/** LIVE-3C: what reconciling the join-code index with the records did. */
+export interface IndexReconciliation {
+  /** The index file could not be read and was rebuilt from the records (the unreadable one kept aside). */
+  readonly rebuilt: boolean;
+  /** Live codes the index did not hold, now added. */
+  readonly added: number;
+  /** Live codes the index pointed at another game, now pointed at the record that holds them. */
+  readonly repointed: number;
+  /** Index entries no live record holds (harmless -- every lookup is checked against the record; kept). */
+  readonly orphans: number;
+  readonly outcome: StoreWriteOutcome;
+}
 
 export interface RecordStore {
   /** Every stored game id (the startup index). */
   list(): Promise<string[]>;
+  /** The record; `null` when none. Rejects `StoreCorruptError` for a file that is not exactly a record of that game,
+   *  and (LIVE-3C) `StoreIncompatibleError` for a record written under a newer `record_schema`. */
   load(gameId: string): Promise<GameRecord | null>;
   put(record: GameRecord, expected: number | null): Promise<StoreWriteOutcome>;
   lookupCode(code: string): Promise<string | null>;
   claimCode(code: string, gameId: string): Promise<"claimed" | "taken">;
   releaseCode(code: string, gameId: string): Promise<void>;
+  /** LIVE-3C (startup discovery): make the index agree with the records -- `live` maps each code a live record holds to
+   *  that record's game (the caller has already held any code two records claim). The records are the authority: a
+   *  missing code is added, a code pointing elsewhere is re-pointed, an unreadable index is rebuilt. Nothing is
+   *  removed. */
+  reconcileIndex?(live: ReadonlyMap<string, string>): Promise<IndexReconciliation>;
+}
+
+/** The first thing a record file is asked: a schema newer than this build is not damage, and is never read as one. */
+function schemaNewer(parsed: unknown): number | null {
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const schema = (parsed as { record_schema?: unknown }).record_schema;
+  return typeof schema === "number" && Number.isSafeInteger(schema) && schema > 1 ? schema : null;
 }
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -115,6 +142,19 @@ export function createMemoryRecordStore(): MemoryRecordStore {
     async releaseCode(code, gameId) {
       if (codes.get(code) === gameId) codes.delete(code);
     },
+    async reconcileIndex(live) {
+      let added = 0;
+      let repointed = 0;
+      for (const [code, gameId] of live) {
+        const holder = codes.get(code);
+        if (holder === gameId) continue;
+        if (holder === undefined) added += 1;
+        else repointed += 1;
+        codes.set(code, gameId);
+      }
+      const orphans = [...codes.entries()].filter(([code, gameId]) => live.get(code) !== gameId).length;
+      return { rebuilt: false, added, repointed, orphans, outcome: COMMITTED };
+    },
   };
 }
 
@@ -178,6 +218,10 @@ export function createFileRecordStore(
       parsed = JSON.parse(raw.toString("utf8"));
     } catch {
       throw new StoreCorruptError(`${gameId}.json is not JSON`, recordFile(gameId), 0);
+    }
+    const newer = schemaNewer(parsed);
+    if (newer !== null) {
+      throw new StoreIncompatibleError(`${gameId}.json is record_schema ${newer}; this build reads record_schema 1`, recordFile(gameId));
     }
     if (!isGameRecord(parsed) || parsed.game_id !== gameId) {
       throw new StoreCorruptError(`${gameId}.json is not a game record`, recordFile(gameId), 0);
@@ -299,6 +343,44 @@ export function createFileRecordStore(
         next.delete(code);
         indexOutcome(await saveIndex(next));
         index = next;
+      });
+    },
+    reconcileIndex(live) {
+      return serial("join-codes", async (): Promise<IndexReconciliation> => {
+        let rebuilt = false;
+        let current: Map<string, string>;
+        try {
+          current = await loadIndex();
+        } catch (error) {
+          if (!(error instanceof StoreCorruptError)) throw error;
+          /* THE INDEX IS DERIVED FROM THE RECORDS, which are the authority, and every lookup is checked against the
+             record it names -- so an unreadable index is rebuilt rather than guessed at, and the unreadable file is
+             kept beside it as evidence (renamed, never deleted). */
+          rebuilt = true;
+          if (options.writerCheck && !(await options.writerCheck().catch(() => false))) {
+            throw new StoreDefiniteError("this server no longer owns the data directory (its lock was taken over); nothing was written");
+          }
+          const aside = `${indexFile}.unreadable-${Date.now()}`;
+          await io.rename(indexFile, aside);
+          warn(`  records: join-codes.json could not be read (${error.message}); rebuilt from the records, the old file kept as ${path.basename(aside)}`);
+          index = new Map();
+          current = index;
+        }
+        const next = new Map(current);
+        let added = 0;
+        let repointed = 0;
+        for (const [code, gameId] of live) {
+          const holder = next.get(code);
+          if (holder === gameId) continue;
+          if (holder === undefined) added += 1;
+          else repointed += 1;
+          next.set(code, gameId);
+        }
+        const orphans = [...next.entries()].filter(([code, gameId]) => live.get(code) !== gameId).length;
+        if (!rebuilt && added === 0 && repointed === 0) return { rebuilt, added, repointed, orphans, outcome: COMMITTED };
+        const outcome = await saveIndex(next);
+        if (outcome.kind === "committed") index = next;
+        return { rebuilt, added, repointed, orphans, outcome };
       });
     },
   };

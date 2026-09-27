@@ -97,7 +97,9 @@ describe("refusalMessage: what a player reads", () => {
     ["rate-limited", /Too many attempts/],
     ["forbidden", /cannot do that/],
     ["not-seated", /do not have a seat/],
-    ["held", /paused on the server/],
+    /* LIVE-3C: held (waiting for the operator) and incompatible (cannot continue here at all) are told apart. */
+    ["held", /paused for maintenance/],
+    ["incompatible", /cannot continue on this server/],
     ["money-games-disabled", /stakes are not open/],
     ["session-ended", /session on this browser has ended/],
     /* LIVE-2E: profiles are mandatory; a room frame from an unprofiled browser is told how to play. */
@@ -135,8 +137,12 @@ describe("refusalMessage: what a player reads", () => {
     expect(unknown).toBe("The server could not do that. Try again.");
   });
 
-  it("`held` and `incompatible` say the same thing: the game waits for the server", () => {
-    expect(refusalMessage("incompatible", "pinned r7, supports r8")).toBe(refusalMessage("held"));
+  /* LIVE-3C: no longer the same sentence -- a held game waits for the operator, an incompatible one cannot continue on
+     this server at all -- and neither ever repeats what the server put beside the code. */
+  it("`held` and `incompatible` each say their own fixed sentence, never the server's text", () => {
+    expect(refusalMessage("incompatible", "pinned r7, supports r8")).toBe(refusalMessage("incompatible"));
+    expect(refusalMessage("held", "roster-mismatch: seats [p-a, p-b]")).toBe(refusalMessage("held"));
+    expect(refusalMessage("incompatible")).not.toBe(refusalMessage("held"));
   });
 });
 

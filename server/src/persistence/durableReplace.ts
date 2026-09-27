@@ -26,25 +26,29 @@ async function writeFully(handle: StoreFileHandle, bytes: Uint8Array): Promise<v
   }
 }
 
-async function syncDirectory(io: StoreFs, directory: string, platform: string): Promise<void> {
-  if (platform === "win32") return;
+/** Whether the directory entry was synced (`false`: this platform or filesystem cannot, so the rename is durable only
+ *  when the OS gets to it -- a caller that would DISCARD older data on the strength of it must not, LIVE-3C E14). */
+async function syncDirectory(io: StoreFs, directory: string, platform: string): Promise<boolean> {
+  if (platform === "win32") return false;
   let handle: StoreFileHandle;
   try {
     handle = await io.open(directory, "r");
   } catch (error) {
-    if (DIR_SYNC_UNSUPPORTED.has(codeOf(error) ?? "")) return;
+    if (DIR_SYNC_UNSUPPORTED.has(codeOf(error) ?? "")) return false;
     throw error;
   }
   try {
     await handle.sync();
+    return true;
   } catch (error) {
     if (!DIR_SYNC_UNSUPPORTED.has(codeOf(error) ?? "")) throw error;
+    return false;
   } finally {
     await handle.close().catch(() => undefined);
   }
 }
 
-async function replaceOnce(io: StoreFs, target: string, bytes: Uint8Array, redo: boolean, platform: string): Promise<StoreWriteOutcome> {
+async function replaceOnce(io: StoreFs, target: string, bytes: Uint8Array, redo: boolean, platform: string, onDirSync?: (synced: boolean) => void): Promise<StoreWriteOutcome> {
   const temporary = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   let handle: StoreFileHandle | null = null;
   try {
@@ -66,11 +70,13 @@ async function replaceOnce(io: StoreFs, target: string, bytes: Uint8Array, redo:
     await io.unlink(temporary).catch(() => undefined);
     return { kind: "uncertain", detail: `renaming ${path.basename(target)} into place: ${describe(error)}` };
   }
+  let dirSynced: boolean;
   try {
-    await syncDirectory(io, path.dirname(target), platform);
+    dirSynced = await syncDirectory(io, path.dirname(target), platform);
   } catch (error) {
     return { kind: "uncertain", detail: `syncing the directory after renaming ${path.basename(target)}: ${describe(error)}` };
   }
+  onDirSync?.(dirSynced);
   return { kind: "committed", redone: redo };
 }
 
@@ -79,13 +85,16 @@ export async function durableReplace(
   io: StoreFs,
   target: string,
   bytes: Uint8Array,
-  options: { platform?: string; warn?: (line: string) => void } = {},
+  /** `onDirSync`: told, on a committed replacement, whether the directory entry was synced (`false`: this platform or
+   *  filesystem cannot -- the rename is durable once the OS flushes it, so a caller must not DISCARD older data on
+   *  the strength of it, LIVE-3C review E14). */
+  options: { platform?: string; warn?: (line: string) => void; onDirSync?: (synced: boolean) => void } = {},
 ): Promise<StoreWriteOutcome> {
   const platform = options.platform ?? process.platform;
-  const first = await replaceOnce(io, target, bytes, false, platform);
+  const first = await replaceOnce(io, target, bytes, false, platform, options.onDirSync);
   if (first.kind !== "uncertain") return first;
   options.warn?.(`  store: ${first.detail}; redoing the replacement of ${path.basename(target)} (LIVE-3 §8.7)`);
-  const redo = await replaceOnce(io, target, bytes, true, platform);
+  const redo = await replaceOnce(io, target, bytes, true, platform, options.onDirSync);
   if (redo.kind === "committed") return { kind: "committed", redone: true };
   return { kind: "uncertain", detail: `${first.detail}; the redo failed too: ${(redo as { detail: string }).detail}` };
 }

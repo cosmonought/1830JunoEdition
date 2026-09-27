@@ -1,0 +1,615 @@
+// server/src/tools/gamesDoctor.ts
+//
+// ==================================================================
+//  LIVE-3C: THE OPERATOR'S TOOL FOR A DATA DIRECTORY'S GAMES -- inspect, status, release, gc
+// ==================================================================
+//
+// No dashboard, no admin transport (LIVE-6 / later): a CLI that reads the same files the server reads, with the same
+// code, and that CHANGES anything only while it holds the data directory's lock itself -- so no server can start
+// beside it, and it can never race a live writer.
+//
+//   status               print `ops/status.json`: what the RUNNING server says about its games (safe at any time)
+//   inspect [--deep]     OFFLINE (refused while a server holds the directory): every game classified from its files
+//                        -- discovery's cheap pass, or with --deep the full load: the whole log scanned, replayed and
+//                        reconciled -- plus the identity store's health (snapshot and journal, read-only)
+//   release <game_id> --note "<why it is safe now>"
+//                        OFFLINE, LOCK HELD: lift one durable hold -- only after the game VERIFIES from its files as
+//                        the full load would load it (a clean or torn-only log, a replay under this engine, the
+//                        reconciliation table passing, its join code held by no other live record). The hold is moved
+//                        to `holds/released/` with the verification and the note; an audit line is appended. There is
+//                        no force: a game that does not verify stays held, and the tool says why.
+//   gc [--apply]         OFFLINE, LOCK HELD with --apply (a dry run otherwise): the conservative lifecycle below.
+//
+// WHAT GC DOES, AND WHAT IT NEVER DOES (brief §10):
+//   retained live   every waiting, active, completed, cancelled, expired, held, incompatible or read-only game; every
+//                   game archived fewer than 90 days ago; every money game (`retentionOf`); the identity store; the
+//                   audit trail; every legacy `JUNO-XXX` file (the development corpus reads them); anything unrecognised
+//   archived        a no-money game archived at least 90 days ago (`archived_at`, set by the server's sweep) is MOVED --
+//                   record first (so the server can never find a record whose log has gone), then log, chat and
+//                   released holds -- into `archive/<game_id>/`, each file hashed before and after, with a manifest
+//                   (files, sizes, SHA-256, the log's entry count and logHash). Moved by rename; nothing is copied or
+//                   deleted. A move interrupted by a crash is resumed by the next run.
+//   deleted         ONLY transient files nothing can refer to: the temporaries of an interrupted durable replacement
+//                   (`*.<pid>.<hex>.tmp`, while the lock is held no writer exists) and data-directory lock asides older
+//                   than ten minutes (`LOCK.stale.*`). Never a log, a record, a hold, a chat, an archive or the audit.
+//   eligible for deletion under a future policy: reported, never acted on (none exists in LIVE-3C).
+
+import { createHash } from "crypto";
+import { promises as fs } from "fs";
+import * as path from "path";
+
+import { logHash } from "../../../frontend/src/gameEngine";
+import { RULES_ENGINE_VERSION } from "../../../frontend/src/gameEngine/rulesVersion";
+import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
+import { createFileLogStore, nodeStoreFs } from "../fileLogStore";
+import { IDENTITY_FILE } from "../identity/fileStore";
+import { IDENTITY_JOURNAL_FILE, parseSnapshotDocument, scanJournal } from "../identity/journalStore";
+import { checkSnapshot, IdentityIndex } from "../identity/store";
+import { scanLog } from "../persistence/logFormat";
+import { durableReplace } from "../persistence/durableReplace";
+import { createFileOpsRecorder, OPS_DIRECTORY, STATUS_FILE, type OpsRecorder } from "../persistence/opsRecorder";
+import { acquireDataLock, describeOwner, lockStatus, LOCK_DIRECTORY, type DataLock } from "../persistence/processLock";
+import { isStoreCorrupt, isStoreIncompatible } from "../persistence/storeResult";
+import { countByClass, discoverGames, type DiscoveredGame } from "../rooms/discovery";
+import { effectiveStatus, GAME_ID_PATTERN, type GameRecord } from "../rooms/gameRecord";
+import { createFileHoldStore, holdDirectory } from "../rooms/holdStore";
+import { movableAt, NO_MONEY_SETTLEMENT, type GameClass } from "../rooms/lifecycle";
+import { createFileRecordStore } from "../rooms/recordStore";
+import { reconcileLoaded, type Verdict } from "../rooms/reconcile";
+import { factsFromEntries, sessionBoardFacts } from "../rooms/roomHost";
+import { verifySession } from "./verifySession";
+
+export const TOOL_BUILD = "gamesDoctor";
+
+const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+const quiet = () => undefined;
+
+async function readOptional(file: string): Promise<Buffer | null> {
+  try {
+    return await fs.readFile(file);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+/* ==================================================================
+    THE FULL VERIFICATION (the load, offline): shared by `inspect --deep` and `release`
+   ================================================================== */
+
+export interface GameVerification {
+  readonly gameId: string;
+  /** What the full load would make of this game, the durable hold aside. */
+  readonly cls: GameClass;
+  readonly ok: boolean;
+  readonly reason: string;
+  readonly verdict: Verdict | null;
+  readonly entries: number;
+  readonly logHash: string | null;
+  readonly logClassification: "absent" | "clean" | "torn-tail" | "corrupt";
+}
+
+export async function verifyGame(dataDir: string, gameId: string, options: { build?: string } = {}): Promise<GameVerification> {
+  const fail = (cls: GameClass, reason: string, extra: Partial<GameVerification> = {}): GameVerification => ({
+    gameId,
+    cls,
+    ok: false,
+    reason,
+    verdict: null,
+    entries: 0,
+    logHash: null,
+    logClassification: "absent",
+    ...extra,
+  });
+  if (!GAME_ID_PATTERN.test(gameId)) return fail("attention", "that is not a game id");
+  let record: GameRecord | null;
+  try {
+    record = await createFileRecordStore(dataDir, { warn: quiet }).load(gameId);
+  } catch (error) {
+    if (isStoreIncompatible(error)) return fail("incompatible", `the record is from a newer build: ${describe(error)}`);
+    if (isStoreCorrupt(error)) return fail("held", `the record cannot be read: ${describe(error)}`);
+    throw error;
+  }
+  if (record === null) return fail("attention", "there is no game record");
+  const bytes = await readOptional(path.join(dataDir, `${gameId}.log.jsonl`));
+  let entries: ServerLogEntry[] = [];
+  let logClassification: GameVerification["logClassification"] = "absent";
+  if (bytes !== null) {
+    const scan = scanLog(bytes);
+    logClassification = scan.classification;
+    if (scan.classification === "corrupt") return fail("held", `the log is corrupt: ${scan.detail}`, { logClassification });
+    entries = scan.entries; // a torn tail is what the load truncates; the complete batches are the history
+  }
+  const hash = entries.length === 0 ? null : logHash(entries);
+  const replay = verifySession(entries, options.build ?? TOOL_BUILD);
+  if (!replay.ok) return fail("held", `the log does not replay: ${replay.reason}`, { entries: entries.length, logHash: hash, logClassification });
+  const board = replay.incompatible ? null : sessionBoardFacts(replay.session);
+  const verdict = reconcileLoaded(record, { entries, board });
+  if (verdict.kind === "hold") {
+    return { gameId, cls: "held", ok: false, reason: `${verdict.code}: ${verdict.detail}`, verdict, entries: entries.length, logHash: hash, logClassification };
+  }
+  /* A join code another live record also holds (§14.4 item 8). */
+  if (record.join_code !== null && record.archived_at === null) {
+    const records = createFileRecordStore(dataDir, { warn: quiet });
+    for (const other of await records.list()) {
+      if (other === gameId) continue;
+      const peer = await records.load(other).catch(() => null);
+      if (peer !== null && peer.join_code === record.join_code && peer.archived_at === null && peer.status !== "cancelled" && peer.status !== "expired") {
+        return { gameId, cls: "held", ok: false, reason: `duplicate-join-code: ${other} holds ${record.join_code} too`, verdict, entries: entries.length, logHash: hash, logClassification };
+      }
+    }
+  }
+  /* Deep verification IS the load's reconciliation, offline: the class is what the LOG implies (a record that only
+     lags is what the load will repair), never the record's own claim. */
+  const cls: GameClass = replay.incompatible
+    ? "incompatible"
+    : record.archived_at !== null
+      ? "archived"
+      : effectiveStatus(record, factsFromEntries(entries, board?.ended ?? false, board?.closed ?? false), Date.now());
+  return {
+    gameId,
+    cls,
+    ok: true,
+    reason: verdict.kind === "repair" ? `verifies; the load will repair the record from its log (${verdict.fields.join(", ")})` : "verifies",
+    verdict,
+    entries: entries.length,
+    logHash: hash,
+    logClassification,
+  };
+}
+
+/* ==================================================================
+    INSPECT
+   ================================================================== */
+
+export interface IdentityInspection {
+  readonly ok: boolean;
+  readonly detail: string;
+  readonly snapshotVersion: number | null;
+  readonly snapshotSeq: number | null;
+  readonly journal: { readonly records: number; readonly bytes: number; readonly classification: string; readonly skipped: number } | null;
+  readonly counts: { principals: number; sessions: number; profiles: number; links: number } | null;
+}
+
+/** The identity store, READ-ONLY: the snapshot, the journal scanned and applied in memory, the whole set validated. */
+export async function inspectIdentity(dataDir: string): Promise<IdentityInspection> {
+  try {
+    const raw = await readOptional(path.join(dataDir, IDENTITY_FILE));
+    const journal = await readOptional(path.join(dataDir, IDENTITY_JOURNAL_FILE));
+    if (raw === null) {
+      return {
+        ok: journal === null || journal.length === 0,
+        detail: journal === null || journal.length === 0 ? "no identity store yet" : "a journal with no snapshot (the server refuses to start)",
+        snapshotVersion: null,
+        snapshotSeq: null,
+        journal: journal === null ? null : { records: 0, bytes: journal.length, classification: "orphan", skipped: 0 },
+        counts: null,
+      };
+    }
+    const parsed = parseSnapshotDocument(JSON.parse(raw.toString("utf8")), IDENTITY_FILE);
+    const scan = scanJournal(journal ?? Buffer.alloc(0), parsed.seq);
+    const index = IdentityIndex.from(parsed.snapshot);
+    for (const { seq, change } of scan.changes) {
+      const problem = index.check(change, `journal seq ${seq}`);
+      if (problem !== null) throw new Error(problem);
+      index.apply(change);
+    }
+    checkSnapshot(index.snapshot(), "identity (inspected)");
+    const healthy = scan.classification !== "corrupt";
+    return {
+      ok: healthy,
+      detail:
+        scan.classification === "clean"
+          ? "valid"
+          : scan.classification === "torn"
+            ? `valid; the next start truncates a torn final change (${scan.detail})`
+            : `CORRUPT journal: ${scan.detail} (the server refuses to start)`,
+      snapshotVersion: parsed.version,
+      snapshotSeq: parsed.seq,
+      journal: journal === null ? null : { records: scan.changes.length + scan.skipped, bytes: journal.length, classification: scan.classification, skipped: scan.skipped },
+      counts: index.sizes(),
+    };
+  } catch (error) {
+    return { ok: false, detail: `UNREADABLE: ${describe(error)} (the server refuses to start)`, snapshotVersion: null, snapshotSeq: null, journal: null, counts: null };
+  }
+}
+
+export interface Inspection {
+  readonly games: ReadonlyArray<{ gameId: string; cls: GameClass; code: string | null; detail: string | null; logBytes: number; deep?: GameVerification }>;
+  readonly byClass: Record<GameClass, number>;
+  readonly storeErrors: readonly string[];
+  readonly identity: IdentityInspection;
+  readonly legacyFiles: number;
+}
+
+/** Every game classified from its files (read-only: no hold is written, no index repaired, nothing truncated). */
+export async function inspectData(dataDir: string, options: { deep?: boolean; now?: number } = {}): Promise<Inspection> {
+  const now = options.now ?? Date.now();
+  const records = createFileRecordStore(dataDir, { warn: quiet });
+  /* Discovery's own pass, with every write turned into a no-op: a hold is reported, never written. */
+  const report = await discoverGames({
+    records: { ...records, reconcileIndex: undefined, list: () => records.list(), load: (id) => records.load(id) },
+    logs: createFileLogStore(dataDir, { warn: quiet }),
+    holds: readOnlyHolds(dataDir),
+    build: TOOL_BUILD,
+    rulesEngineVersion: RULES_ENGINE_VERSION,
+    now: () => now,
+    warn: quiet,
+    ops: { audit: quiet, status: quiet, flush: async () => undefined },
+  });
+  const games: Array<Inspection["games"][number]> = [];
+  for (const game of [...report.games.values()].sort((a, b) => a.gameId.localeCompare(b.gameId))) {
+    const entry = { gameId: game.gameId, cls: game.cls, code: game.code, detail: game.detail, logBytes: game.logBytes };
+    games.push(options.deep && game.record !== null ? { ...entry, deep: await verifyGame(dataDir, game.gameId) } : entry);
+  }
+  let legacyFiles = 0;
+  try {
+    legacyFiles = (await fs.readdir(dataDir)).filter((name) => /^JUNO-/i.test(name) || name === "lobby.json").length;
+  } catch {
+    legacyFiles = 0;
+  }
+  return { games, byClass: countByClass(games), storeErrors: report.storeErrors, identity: await inspectIdentity(dataDir), legacyFiles };
+}
+
+/** The file hold store with its writes refused: `inspect` reports holds, never writes one. */
+function readOnlyHolds(dataDir: string) {
+  const holds = createFileHoldStore(dataDir, { warn: quiet });
+  return {
+    list: () => holds.list(),
+    load: (id: string) => holds.load(id),
+    create: async () => ({ outcome: { kind: "definite" as const, detail: "inspect writes nothing" }, existing: null }),
+    release: async () => ({ kind: "definite" as const, detail: "inspect writes nothing" }),
+  };
+}
+
+/* ==================================================================
+    RELEASE
+   ================================================================== */
+
+export type ReleaseResult =
+  | { readonly ok: true; readonly verification: GameVerification; readonly releasedCode: string }
+  | { readonly ok: false; readonly reason: string; readonly verification?: GameVerification };
+
+/** Lift one durable hold -- the lock must already be held by this process (`withLock`). */
+export async function releaseHold(dataDir: string, gameId: string, note: string, options: { lock: DataLock; ops: OpsRecorder; now?: number }): Promise<ReleaseResult> {
+  const trimmed = note.trim();
+  if (trimmed.length === 0 || trimmed.length > 500) return { ok: false, reason: "a release needs --note \"<why it is safe now>\" (1-500 characters)" };
+  const holds = createFileHoldStore(dataDir, { writerCheck: () => options.lock.verify(), warn: quiet });
+  let hold;
+  try {
+    hold = await holds.load(gameId);
+  } catch (error) {
+    return { ok: false, reason: `the hold file cannot be read (${describe(error)}); move it aside by hand only after inspecting it` };
+  }
+  if (hold === null) return { ok: false, reason: `${gameId} is not held` };
+  const verification = await verifyGame(dataDir, gameId);
+  if (!verification.ok) return { ok: false, reason: `${gameId} does not verify, so it stays held: ${verification.reason}`, verification };
+  const at = options.now ?? Date.now();
+  const outcome = await holds.release(gameId, {
+    released_at: at,
+    note: trimmed,
+    verification: { class: verification.cls, entries: verification.entries, log_hash: verification.logHash },
+    build: TOOL_BUILD,
+  });
+  if (outcome.kind !== "committed") return { ok: false, reason: `the release was not written (${outcome.detail}); ${gameId} is still held`, verification };
+  options.ops.audit("hold.released", { game_id: gameId, code: hold.code, note: trimmed, class: verification.cls, entries: verification.entries, log_hash: verification.logHash });
+  await options.ops.flush();
+  return { ok: true, verification, releasedCode: hold.code };
+}
+
+/* ==================================================================
+    GC
+   ================================================================== */
+
+export const LOCK_ASIDE_MAX_AGE_MS = 10 * 60 * 1000;
+/** The temporaries of LIVE-3B's durable replacement and LIVE-2B's identity file: `<target>.<pid>.[<n>.]<hex>.tmp`. */
+const TEMPORARY = /\.\d+\.(?:\d+\.)?[0-9a-f]{8,12}\.tmp$/;
+
+export interface GcPlan {
+  readonly move: ReadonlyArray<{ gameId: string; archivedAt: number; files: string[] }>;
+  readonly resume: readonly string[];
+  readonly temporaries: readonly string[];
+  readonly lockAsides: readonly string[];
+  readonly retained: Record<string, number>;
+  readonly legacyFiles: number;
+}
+
+export interface GcResult extends GcPlan {
+  readonly applied: boolean;
+  readonly moved: ReadonlyArray<{ gameId: string; files: number }>;
+  readonly errors: readonly string[];
+}
+
+async function listOptional(directory: string): Promise<string[]> {
+  try {
+    return await fs.readdir(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+export async function planGc(dataDir: string, options: { now?: number } = {}): Promise<GcPlan> {
+  const now = options.now ?? Date.now();
+  const inspection = await inspectData(dataDir, { now });
+  const records = createFileRecordStore(dataDir, { warn: quiet });
+  const retained: Record<string, number> = {};
+  const move: Array<{ gameId: string; archivedAt: number; files: string[] }> = [];
+  for (const game of inspection.games) {
+    let movable = false;
+    if (game.cls === "archived") {
+      const record = await records.load(game.gameId).catch(() => null);
+      const due = record === null ? null : movableAt(record, NO_MONEY_SETTLEMENT.retentionOf(record));
+      if (record !== null && due !== null && now >= due) {
+        movable = true;
+        move.push({ gameId: game.gameId, archivedAt: record.archived_at as number, files: await gameFiles(dataDir, game.gameId) });
+      }
+    }
+    if (!movable) retained[game.cls] = (retained[game.cls] ?? 0) + 1;
+  }
+  /* Archives a crash interrupted -- and ONLY those (review E12): the game's record is already inside `archive/<id>/`
+     (a move takes the record first), no manifest yet, that record is an archived no-money game past its hot period,
+     and nothing of it is live any more that could say otherwise (no live record, no hold). A stray or hand-made
+     directory never pulls a game's files out of the live directories. */
+  const resume: string[] = [];
+  for (const name of await listOptional(path.join(dataDir, "archive"))) {
+    if (!GAME_ID_PATTERN.test(name)) continue;
+    const inside = await listOptional(path.join(dataDir, "archive", name));
+    if (inside.includes("manifest.json") || !inside.includes(`${name}.json`)) continue;
+    if ((await readOptional(path.join(dataDir, "games", `${name}.json`))) !== null) continue;
+    if ((await readOptional(path.join(holdDirectory(dataDir), `${name}.json`))) !== null) continue;
+    const moved = await readOptional(path.join(dataDir, "archive", name, `${name}.json`));
+    let record: GameRecord | null = null;
+    try {
+      record = moved === null ? null : (JSON.parse(moved.toString("utf8")) as GameRecord);
+    } catch {
+      record = null;
+    }
+    if (record === null || record.game_id !== name || typeof record.archived_at !== "number") continue;
+    const due = movableAt(record, NO_MONEY_SETTLEMENT.retentionOf(record));
+    if (due !== null && now >= due) resume.push(name);
+  }
+  const temporaries: string[] = [];
+  for (const directory of [dataDir, path.join(dataDir, "games"), holdDirectory(dataDir), path.join(holdDirectory(dataDir), "released"), path.join(dataDir, OPS_DIRECTORY)]) {
+    for (const name of await listOptional(directory)) if (TEMPORARY.test(name)) temporaries.push(path.join(directory, name));
+  }
+  const lockAsides: string[] = [];
+  for (const name of await listOptional(dataDir)) {
+    if (!name.startsWith(`${LOCK_DIRECTORY}.stale.`)) continue;
+    const stat = await fs.stat(path.join(dataDir, name)).catch(() => null);
+    if (stat !== null && stat.isDirectory() && now - stat.mtimeMs >= LOCK_ASIDE_MAX_AGE_MS) lockAsides.push(path.join(dataDir, name));
+  }
+  return { move, resume, temporaries, lockAsides, retained, legacyFiles: inspection.legacyFiles };
+}
+
+/** The files of one game in the live directories, record first (the order they are moved in). */
+async function gameFiles(dataDir: string, gameId: string): Promise<string[]> {
+  const candidates = [path.join(dataDir, "games", `${gameId}.json`), path.join(dataDir, `${gameId}.log.jsonl`), path.join(dataDir, `${gameId}.chat.jsonl`)];
+  const released = path.join(holdDirectory(dataDir), "released");
+  for (const name of await listOptional(released)) if (name.startsWith(`${gameId}.`) && name.endsWith(".json")) candidates.push(path.join(released, name));
+  const present: string[] = [];
+  for (const file of candidates) if ((await readOptional(file)) !== null) present.push(file);
+  return present;
+}
+
+/** Move one archived game: every file hashed, renamed into `archive/<id>/`, hashed again; then the manifest. */
+async function moveGame(dataDir: string, gameId: string, archivedAt: number | null, now: number): Promise<{ files: number }> {
+  const destination = path.join(dataDir, "archive", gameId);
+  await fs.mkdir(destination, { recursive: true });
+  const moved: Array<{ name: string; from: string; bytes: number; sha256: string }> = [];
+  /* Anything already moved by an interrupted run is part of the manifest too. */
+  for (const name of await listOptional(destination)) {
+    if (name === "manifest.json") continue;
+    const bytes = await fs.readFile(path.join(destination, name));
+    moved.push({ name, from: "(an earlier, interrupted run)", bytes: bytes.length, sha256: sha256(bytes) });
+  }
+  for (const file of await gameFiles(dataDir, gameId)) {
+    const before = await fs.readFile(file);
+    const target = path.join(destination, path.basename(file));
+    if ((await readOptional(target)) !== null) throw new Error(`${target} already exists; nothing was overwritten`);
+    await fs.rename(file, target);
+    const after = await fs.readFile(target);
+    if (sha256(after) !== sha256(before)) throw new Error(`${path.basename(file)} changed while it was moved`);
+    moved.push({ name: path.basename(file), from: path.relative(dataDir, file), bytes: after.length, sha256: sha256(after) });
+  }
+  const log = moved.find((file) => file.name === `${gameId}.log.jsonl`);
+  let logSummary: { entries: number; log_hash: string | null } | null = null;
+  if (log !== undefined) {
+    const scan = scanLog(await fs.readFile(path.join(destination, log.name)));
+    logSummary = { entries: scan.entries.length, log_hash: scan.entries.length === 0 ? null : logHash(scan.entries) };
+  }
+  const manifest = { format: "gs-game-archive", version: 1, game_id: gameId, archived_at: archivedAt, moved_at: now, files: moved, log: logSummary };
+  const outcome = await durableReplace(nodeStoreFs, path.join(destination, "manifest.json"), Buffer.from(`${JSON.stringify(manifest, null, 1)}\n`, "utf8"));
+  if (outcome.kind !== "committed") throw new Error(`the manifest was not written (${outcome.detail})`);
+  return { files: moved.length };
+}
+
+export async function runGc(dataDir: string, options: { apply: boolean; lock?: DataLock; ops?: OpsRecorder; now?: number }): Promise<GcResult> {
+  const now = options.now ?? Date.now();
+  const plan = await planGc(dataDir, { now });
+  if (!options.apply) return { ...plan, applied: false, moved: [], errors: [] };
+  if (options.lock === undefined || !(await options.lock.verify())) throw new Error("gc --apply needs the data directory's lock");
+  const ops = options.ops;
+  const moved: Array<{ gameId: string; files: number }> = [];
+  const errors: string[] = [];
+  for (const gameId of plan.resume) {
+    if (!(await options.lock.verify())) {
+      errors.push("the lock was lost; stopped");
+      break;
+    }
+    try {
+      const result = await moveGame(dataDir, gameId, null, now);
+      moved.push({ gameId, files: result.files });
+      ops?.audit("gc.archive-resumed", { game_id: gameId, files: result.files });
+    } catch (error) {
+      errors.push(`${gameId}: ${describe(error)}`);
+    }
+  }
+  for (const game of plan.move) {
+    if (!(await options.lock.verify())) {
+      errors.push("the lock was lost; stopped");
+      break;
+    }
+    try {
+      const result = await moveGame(dataDir, game.gameId, game.archivedAt, now);
+      moved.push({ gameId: game.gameId, files: result.files });
+      ops?.audit("gc.archived", { game_id: game.gameId, files: result.files, archived_at: game.archivedAt });
+    } catch (error) {
+      errors.push(`${game.gameId}: ${describe(error)}`);
+    }
+  }
+  for (const file of plan.temporaries) {
+    try {
+      await fs.unlink(file);
+      ops?.audit("gc.temporary-removed", { file: path.relative(dataDir, file) });
+    } catch (error) {
+      errors.push(`${path.basename(file)}: ${describe(error)}`);
+    }
+  }
+  for (const directory of plan.lockAsides) {
+    try {
+      await fs.rm(directory, { recursive: true, force: true });
+      ops?.audit("gc.lock-aside-removed", { directory: path.basename(directory) });
+    } catch (error) {
+      errors.push(`${path.basename(directory)}: ${describe(error)}`);
+    }
+  }
+  await ops?.flush();
+  return { ...plan, applied: true, moved, errors };
+}
+
+/* ==================================================================
+    THE LOCK: an offline tool that changes anything holds it for the whole run
+   ================================================================== */
+
+export async function withLock<T>(dataDir: string, work: (lock: DataLock) => Promise<T>): Promise<T | { refused: string }> {
+  const acquired = await acquireDataLock(dataDir, { log: quiet, onLost: quiet });
+  if (!acquired.ok) return { refused: acquired.reason };
+  try {
+    return await work(acquired.lock);
+  } finally {
+    await acquired.lock.release();
+  }
+}
+
+/* ==================================================================
+    THE CLI
+   ================================================================== */
+
+const USAGE = [
+  "usage: gamesDoctor <command> [--data <dir>]",
+  "  status                              what the running server reports (ops/status.json)",
+  "  inspect [--deep] [--json]           every game classified from its files (server stopped)",
+  "  release <game_id> --note \"<text>\"   lift one durable hold after verifying the game (server stopped)",
+  "  gc [--apply] [--json]               the conservative lifecycle: a dry run unless --apply (server stopped)",
+].join("\n");
+
+function line(game: Inspection["games"][number]): string {
+  const deep = game.deep ? `  [deep: ${game.deep.cls}${game.deep.ok ? "" : ` -- ${game.deep.reason}`}; ${game.deep.entries} entries, log ${game.deep.logClassification}]` : "";
+  return `  ${game.gameId}  ${game.cls.padEnd(12)}${game.code ? ` ${game.code}` : ""}${game.detail ? ` -- ${game.detail}` : ""}${deep}`;
+}
+
+async function main(argv: readonly string[]): Promise<number> {
+  const dataAt = argv.indexOf("--data");
+  const dataDir = path.resolve(dataAt !== -1 && argv[dataAt + 1] ? argv[dataAt + 1] : (process.env.DATA_DIR ?? path.join(process.cwd(), "data")));
+  const noteAt = argv.indexOf("--note");
+  const positional = argv.filter((arg, at) => !arg.startsWith("--") && argv[at - 1] !== "--data" && argv[at - 1] !== "--note");
+  const [command, target] = positional;
+  const json = argv.includes("--json");
+  if (command === "status") {
+    const raw = await readOptional(path.join(dataDir, OPS_DIRECTORY, STATUS_FILE));
+    if (raw === null) {
+      console.log(`No status file in ${dataDir} yet (the server writes ${OPS_DIRECTORY}/${STATUS_FILE} once it has started).`);
+      return 1;
+    }
+    console.log(raw.toString("utf8").trim());
+    return 0;
+  }
+  if (command !== "inspect" && command !== "release" && command !== "gc") {
+    console.error(USAGE);
+    return 2;
+  }
+  const lock = await lockStatus(dataDir);
+  if (lock.held) {
+    console.error(
+      `Refusing: a game server holds ${dataDir} (${describeOwner(lock.owner)}, heartbeat ${Math.round((lock.ageMs ?? 0) / 1000)} s ago). ` +
+        "gamesDoctor reads and changes games only while no server runs -- stop it first (`gamesDoctor status` works while it runs).",
+    );
+    return 2;
+  }
+  if (command === "inspect") {
+    const inspection = await inspectData(dataDir, { deep: argv.includes("--deep") });
+    if (json) {
+      console.log(JSON.stringify(inspection, null, 2));
+    } else {
+      const counts = (Object.entries(inspection.byClass) as Array<[string, number]>).filter(([, n]) => n > 0).map(([cls, n]) => `${n} ${cls}`);
+      console.log(`${inspection.games.length} games in ${dataDir}${counts.length > 0 ? ` -- ${counts.join(", ")}` : ""}`);
+      for (const game of inspection.games) console.log(line(game));
+      for (const error of inspection.storeErrors) console.log(`  STORE: ${error}`);
+      const id = inspection.identity;
+      console.log(
+        `identity: ${id.ok ? "OK" : "NOT OK"} -- ${id.detail}` +
+          (id.counts ? ` (${id.counts.principals} principals, ${id.counts.profiles} profiles, ${id.counts.sessions} sessions, ${id.counts.links} link codes)` : "") +
+          (id.snapshotVersion !== null ? `; snapshot v${id.snapshotVersion} at seq ${id.snapshotSeq}` : "") +
+          (id.journal ? `; journal ${id.journal.records} records, ${id.journal.bytes} bytes` : ""),
+      );
+      if (inspection.legacyFiles > 0) console.log(`legacy: ${inspection.legacyFiles} JUNO-XXX / lobby files (never read by the server, never touched by gc)`);
+    }
+    const bad = inspection.games.some((game) => game.cls === "held" || game.cls === "unavailable" || (game.deep !== undefined && !game.deep.ok)) || !inspection.identity.ok;
+    return bad ? 1 : 0;
+  }
+  if (command === "release") {
+    if (!target || noteAt === -1 || !argv[noteAt + 1]) {
+      console.error(USAGE);
+      return 2;
+    }
+    const result = await withLock(dataDir, async (held) => {
+      const ops = createFileOpsRecorder(dataDir, { build: TOOL_BUILD, instanceId: held.instanceId, writerCheck: () => held.verify() });
+      return releaseHold(dataDir, target, argv[noteAt + 1], { lock: held, ops });
+    });
+    if ("refused" in result) {
+      console.error(`Refusing: ${result.refused}`);
+      return 2;
+    }
+    if (!result.ok) {
+      console.error(result.reason);
+      return 1;
+    }
+    console.log(
+      `RELEASED ${target} (was held: ${result.releasedCode}). It verifies as ${result.verification.cls}: ${result.verification.entries} entries, logHash ${result.verification.logHash ?? "(empty)"}.\n` +
+        "The hold is kept under games/holds/released/, and the audit line is in ops/audit.jsonl. Start the server: the game loads through the full validated load.",
+    );
+    return 0;
+  }
+  const apply = argv.includes("--apply");
+  const result = apply
+    ? await withLock(dataDir, async (held) => runGc(dataDir, { apply: true, lock: held, ops: createFileOpsRecorder(dataDir, { build: TOOL_BUILD, instanceId: held.instanceId, writerCheck: () => held.verify() }) }))
+    : await runGc(dataDir, { apply: false });
+  if ("refused" in result) {
+    console.error(`Refusing: ${result.refused}`);
+    return 2;
+  }
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+  } else {
+    console.log(`${result.applied ? "GC" : "GC (dry run -- nothing changed; --apply to act)"} in ${dataDir}`);
+    console.log(`  retained live: ${Object.entries(result.retained).map(([cls, n]) => `${n} ${cls}`).join(", ") || "none"}`);
+    console.log(`  archive (move to archive/): ${result.move.map((game) => `${game.gameId} (${game.files.length} files)`).join(", ") || "none"}${result.resume.length > 0 ? `; resume ${result.resume.join(", ")}` : ""}`);
+    console.log(`  delete (transient only): ${result.temporaries.length} temporaries, ${result.lockAsides.length} old lock asides`);
+    console.log("  eligible for deletion under a future policy: none (LIVE-3C deletes no game material)");
+    if (result.legacyFiles > 0) console.log(`  legacy: ${result.legacyFiles} JUNO-XXX / lobby files kept`);
+    for (const error of result.errors) console.log(`  ERROR: ${error}`);
+  }
+  return result.errors.length > 0 ? 1 : 0;
+}
+
+if (require.main === module) {
+  main(process.argv.slice(2)).then(
+    (code) => process.exit(code),
+    (error) => {
+      console.error("gamesDoctor failed:", error);
+      process.exit(2);
+    },
+  );
+}

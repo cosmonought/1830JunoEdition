@@ -29,7 +29,9 @@
 //   3. node dist/server/src/tools/logDoctor.js data/JUNO-XXX.log.jsonl --repair [--split-poisoned]
 //   4. node dist/server/src/replayCli.js data/JUNO-XXX.log.jsonl.repaired           (replay verification)
 //   5. record the printed logHash; move the original aside (keep it); rename the copy to JUNO-XXX.log.jsonl;
-//   6. start the server -- the room loads through the full validated load (a verified reload), or stays held.
+//   6. LIVE-3C: a held game stays held across restarts until `tools/gamesDoctor.ts release` verifies it (the scan, the
+//      replay and the reconciliation table) and lifts its durable hold, audited;
+//   7. start the server -- the game loads through the full validated load.
 // It is never an online mutation path.
 
 import { promises as fs } from "fs";
@@ -257,7 +259,9 @@ async function main(argv: readonly string[]): Promise<number> {
       `  1. node dist/server/src/replayCli.js "${out}"     -- the replay verification`,
       "  2. record the logHash above in the audit trail",
       `  3. move the original aside (keep it), then rename the copy to ${path.basename(target)}`,
-      "  4. start the server: the room reloads through the full validated load, or stays held",
+      "  4. LIVE-3C: the game is durably held -- `npm run gamesDoctor -- release <game_id> --note \"<why>\"` verifies",
+      "     it through the full load (scan, replay, reconciliation) and only then lifts the hold",
+      "  5. start the server: the game loads through the full validated load",
     ].join("\n"),
   );
   return 0;

@@ -141,6 +141,14 @@ export function controlledStore() {
       land(room, entries);
       return Promise.resolve();
     },
+    /* LIVE-3C: discovery's peek at a log's deal (a store that cannot peek leaves every head unknown). */
+    async listGameLogs() {
+      return [...logs.keys()].filter((room) => (logs.get(room) ?? []).length > 0 && room.startsWith("g_"));
+    },
+    async readHead(room) {
+      const stored = logs.get(room) ?? [];
+      return stored.length === 0 ? { present: false, size: 0, first: null } : { present: true, size: JSON.stringify(stored).length, first: copy([stored[0]])[0] };
+    },
   };
 
   return {

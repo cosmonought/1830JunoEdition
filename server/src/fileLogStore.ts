@@ -65,7 +65,7 @@ import * as path from "path";
 
 import type { ServerLogEntry } from "../../frontend/src/utils/roomSession";
 import type { RoomChatEntry } from "../../frontend/src/utils/roomProtocol";
-import { scanLog, serializeBatch } from "./persistence/logFormat";
+import { parseEntryLine, scanLog, serializeBatch } from "./persistence/logFormat";
 import {
   COMMITTED,
   StoreCorruptError,
@@ -94,6 +94,18 @@ export interface LogStore {
      either kind are left on disk untouched and never read. */
   loadChat?(room: string): Promise<readonly RoomChatEntry[]>;
   appendChat?(room: string, entry: RoomChatEntry): Promise<void>;
+  /** LIVE-3C (discovery): every server-owned game (`g_…`) with a log file -- names only, nothing read. */
+  listGameLogs?(): Promise<string[]>;
+  /** LIVE-3C (discovery): READ-ONLY, the log's size and its first line -- the deal of a server-owned game -- without
+   *  scanning, repairing or holding the file. `first` is `null` for an empty file and `undefined` when the first line
+   *  is not a whole entry (a torn deal batch is the load's to repair; only the full scan tells it from damage). */
+  readHead?(room: string): Promise<LogHeadRead>;
+}
+
+export interface LogHeadRead {
+  readonly present: boolean;
+  readonly size: number;
+  readonly first: ServerLogEntry | null | undefined;
 }
 
 /* ==================================================================
@@ -337,6 +349,12 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
         scan.end,
       );
     }
+    /* LIVE-3C (review E9): the repair is a WRITE, and only the lock's owner writes. A process whose lock was taken over
+       leaves the file exactly as it is -- the new owner may be appending to it right now -- and the load fails
+       ("unavailable"); the owner's own load repairs it. */
+    if (scan.classification === "torn-tail" && options.writerCheck && !(await options.writerCheck().catch(() => false))) {
+      throw new Error(`${file} has a torn final batch, and this server no longer owns the data directory (its lock was taken over); it is left exactly as found`);
+    }
     const handle = await io.open(file, "r+");
     try {
       if (scan.classification === "torn-tail") {
@@ -510,7 +528,53 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
 
     async appendChat(room, entry) {
       await ready;
+      /* LIVE-3C (review E3): chat is a write too -- refused once the lock is lost. */
+      if (options.writerCheck && !(await options.writerCheck().catch(() => false))) {
+        throw new Error("this server no longer owns the data directory (its lock was taken over); the chat line was not written");
+      }
       await io.appendFile(chatPath(room), `${JSON.stringify(entry)}\n`);
+    },
+
+    async listGameLogs() {
+      await ready;
+      const suffix = ".log.jsonl";
+      return (await io.readdir(directory))
+        .filter((name) => name.endsWith(suffix) && /^g_[0-9a-hjkmnp-tv-z]{25}[048cgmrw]$/.test(name.slice(0, -suffix.length)))
+        .map((name) => name.slice(0, -suffix.length));
+    },
+
+    /* LIVE-3C: a bounded, read-only look at the deal. Through Node's own `fs`, never the fault seam: it writes nothing,
+       and it runs before any game is loaded (discovery), so no append can be in flight on the file. */
+    async readHead(room) {
+      await ready;
+      let handle: import("fs").promises.FileHandle;
+      try {
+        handle = await fs.open(logPath(room), "r");
+      } catch (error) {
+        if (codeOf(error) === "ENOENT") return { present: false, size: 0, first: null };
+        throw error;
+      }
+      try {
+        const { size } = await handle.stat();
+        if (size === 0) return { present: true, size, first: null };
+        const limit = Math.min(size, HEAD_BYTES);
+        const buffer = Buffer.alloc(limit);
+        let read = 0;
+        while (read < limit) {
+          const { bytesRead } = await handle.read(buffer, read, limit - read, read);
+          if (bytesRead === 0) break;
+          read += bytesRead;
+        }
+        const newline = buffer.subarray(0, read).indexOf(0x0a);
+        if (newline === -1) return { present: true, size, first: undefined };
+        const parsed = parseEntryLine(buffer.subarray(0, newline).toString("utf8"));
+        return { present: true, size, first: parsed === null ? undefined : parsed.entry };
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
     },
   };
 }
+
+/** The most discovery reads of a log to find its first line (a deal is far smaller: frames are capped at 32 KiB). */
+const HEAD_BYTES = 64 * 1024;

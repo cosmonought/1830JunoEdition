@@ -303,6 +303,13 @@ export const capacityOf = (record: GameRecord): number => record.exact_players ?
     PROJECTIONS (LIVE-2 §5.5): the only room shapes on the wire. No principal id of any kind, ever.
    --------------------------------------------------------------------------- */
 
+/** LIVE-3C: why a room will not take a change, as the player is told it -- `null` when it will.
+ *    maintenance   a durable hold (or a damaged log): paused until the server's operator restores it
+ *    incompatible  dealt under a rules-engine version this server does not carry (#1520): no history, no move
+ *    read-only     dealt on another server build (#1252): the game can be watched, not continued
+ *    unavailable   the server could not confirm its last write (LIVE-3B): paused until it can, or it restarts */
+export type HoldKind = "maintenance" | "incompatible" | "read-only" | "unavailable" | null;
+
 export interface RoomView {
   gameId: string;
   code: string | null;
@@ -312,6 +319,8 @@ export interface RoomView {
   lifecycle: GameStatus;
   closed: boolean;
   held: boolean;
+  /** LIVE-3C: why the room will not take a change (`null`: it will). A projection of the server's state only. */
+  holdKind: HoldKind;
   hostId: string;
   players: Array<{ id: string; nickname: string; isReady: boolean; color?: string; online: boolean }>;
   playerCount: number | null;
@@ -347,7 +356,7 @@ export function roomViewFor(
   record: GameRecord,
   facts: LogFacts,
   principalId: string,
-  context: { now: number; held: boolean; online: (playerId: string) => boolean; canStart: boolean },
+  context: { now: number; held: boolean; holdKind?: HoldKind; online: (playerId: string) => boolean; canStart: boolean },
 ): RoomView {
   const lifecycle = effectiveStatus(record, facts, context.now);
   const seat = seatOf(record, principalId);
@@ -358,12 +367,13 @@ export function roomViewFor(
   return {
     gameId: record.game_id,
     code: record.visibility === "public" || insider ? record.join_code : null,
-    joinable: lifecycle === "waiting" && record.join_code !== null && record.seats.length < capacityOf(record),
+    joinable: lifecycle === "waiting" && record.join_code !== null && record.seats.length < capacityOf(record) && (context.holdKind ?? null) === null,
     visibility: record.visibility,
     status: lifecycle === "waiting" ? "waiting" : "playing",
     lifecycle,
     closed: facts.closed,
     held: context.held,
+    holdKind: context.holdKind ?? null,
     hostId: record.host_player_id,
     players: record.seats.map((entry) => ({
       id: entry.player_id,

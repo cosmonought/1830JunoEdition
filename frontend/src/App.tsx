@@ -134,6 +134,7 @@ import { DEV_IDENTITY_BUILD } from "./utils/devIdentity";
 import { profileNickname } from "./utils/profileApi";
 import {
   JOIN_CODE_EXAMPLE,
+  holdNoticeFor,
   parseJoinCode,
   refusalMessage,
   supportRefOf,
@@ -13216,7 +13217,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         roomCode={sandboxRoom.code ?? "Private game"}
         room={sandboxRoom}
         localPlayerId={localId}
-        error={sandboxRoomError}
+        /* LIVE-3C: a held waiting room says so standing, above anything a refused click said. */
+        error={holdNoticeFor(sandboxRoom) ?? sandboxRoomError}
         busy={sandboxRoomBusy}
         onSetNickname={handleSetSandboxNickname}
         onSetColor={handleSetSandboxColor}
@@ -13605,7 +13607,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                KIND of fact `chatError` does -- this room's connection is unhappy -- and the bar that used to
                carry it is gone. Only while IN a room: the join form still reports its own failures inline,
                where the player is looking when a code is refused. */}
-            {sandboxRoomCode && sandboxRoomError && (
+            {/* LIVE-3C: why this table will not take a move -- held, incompatible, read-only or unavailable -- said while
+               it is true, from the server's own view, not from whichever refusal came last. */}
+            {sandboxRoomCode && holdNoticeFor(sandboxRoom) !== null && (
+              <span style={styles.roomStripError} data-testid="room-hold-notice">
+                {holdNoticeFor(sandboxRoom)}
+              </span>
+            )}
+            {sandboxRoomCode && sandboxRoomError && sandboxRoomError !== holdNoticeFor(sandboxRoom) && (
               <span style={styles.roomStripError}>{sandboxRoomError}</span>
             )}
           </>

@@ -64,6 +64,7 @@ const VIEW_KEYS: Record<keyof ClientRoomView, true> = {
   lifecycle: true,
   closed: true,
   held: true,
+  holdKind: true,
   hostId: true,
   players: true,
   playerCount: true,

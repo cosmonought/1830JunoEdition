@@ -28,7 +28,17 @@ import * as path from "path";
 
 import { nodeStoreFs, type StoreFileHandle, type StoreFs } from "../fileLogStore";
 import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeResult";
-import { applyChange, checkSnapshot, IdentityStoreCorruptError, type FullIdentitySnapshot, type IdentityChange, type IdentityStore } from "./store";
+import {
+  applyChange,
+  changeIdProblem,
+  checkSnapshot,
+  IdentityStoreCorruptError,
+  lookupsOf,
+  preconditionFailure,
+  type FullIdentitySnapshot,
+  type IdentityChange,
+  type IdentityStore,
+} from "./store";
 
 export const IDENTITY_FILE = "identity.json";
 const FORMAT = "gs-identity";
@@ -197,6 +207,12 @@ export function createFileIdentityStore(directory: string, options: FileIdentity
       if (options.writerCheck && !(await options.writerCheck().catch(() => false))) {
         stats.definite += 1;
         throw new StoreDefiniteError("this server no longer owns the data directory (its lock was taken over); nothing was written");
+      }
+      /* LIVE-3C: the change's own contract -- one record once, every precondition -- checked where it is written. */
+      const problem = changeIdProblem(change) ?? preconditionFailure(lookupsOf(current), change.expect);
+      if (problem !== null) {
+        stats.definite += 1;
+        throw new StoreDefiniteError(`identity commit: ${problem}; nothing was written`);
       }
       const next = checkSnapshot(applyChange(current, change), "identity commit");
       const bytes = Buffer.from(

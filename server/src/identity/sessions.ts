@@ -461,7 +461,18 @@ export class IdentityService {
             .map((session) => ({ ...session, revoked_at: now, revoke_reason: "evicted" as const }))
         : [];
     if (this.isDurable(principalId)) {
-      await this.commit({ sessions: [retired, successor, ...evicted] }, "a session rotation");
+      await this.commit(
+        {
+          /* LIVE-3C: only an OPEN session rotates (a logout that committed first wins), into an unused id. */
+          expect: [
+            { kind: "session-open", session_id: old.session_id },
+            { kind: "session-absent", session_id: successor.session_id },
+            ...evicted.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })),
+          ],
+          sessions: [retired, successor, ...evicted],
+        },
+        "a session rotation",
+      );
     }
     this.index(retired);
     this.index(successor);
@@ -553,7 +564,12 @@ export class IdentityService {
       /* LIVE-2E (review H1): a signed-out device's profile keeps no outstanding link code. */
       const profileId = this.principals.get(session.principal_id)?.account_link ?? null;
       const dropLinks = profileId === null ? [] : this.linkHashesOf(profileId);
-      if (this.isDurable(session.principal_id)) await this.commit({ sessions: ended, dropLinks }, `a session revocation (${reason})`);
+      if (this.isDurable(session.principal_id)) {
+        await this.commit(
+          { expect: ended.map((record) => ({ kind: "session-open" as const, session_id: record.session_id })), sessions: ended, dropLinks },
+          `a session revocation (${reason})`,
+        );
+      }
       this.forgetLinks(dropLinks);
       for (const record of ended) {
         this.index(record);
@@ -582,7 +598,12 @@ export class IdentityService {
           revoked_at: now,
           revoke_reason: "principal-disabled" as const,
         }));
-      if (this.isDurable(principalId)) await this.commit({ principals: [disabled], sessions: ended }, "disabling a principal");
+      if (this.isDurable(principalId)) {
+        await this.commit(
+          { expect: ended.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })), principals: [disabled], sessions: ended },
+          "disabling a principal",
+        );
+      }
       this.principals.set(principalId, disabled);
       for (const session of ended) this.index(session);
       this.stats.revocations += ended.length;
@@ -683,7 +704,24 @@ export class IdentityService {
         ? []
         : [...(this.byPrincipal.get(principal.principal_id) ?? [])].map((id) => this.sessions.get(id) as Session);
       try {
-        await this.commit({ principals: [bound], sessions, profiles: [profile] }, "creating a profile");
+        await this.commit(
+          {
+            /* LIVE-3C: CREATE-IF-ABSENT -- the profile, its selector, and (for a provisional browser) the principal and
+               its sessions; a durable principal must still be unprofiled. */
+            expect: [
+              this.isDurable(principal.principal_id)
+                ? { kind: "principal-unprofiled" as const, principal_id: principal.principal_id }
+                : { kind: "principal-absent" as const, principal_id: principal.principal_id },
+              { kind: "profile-absent", profile_id: profileId },
+              { kind: "selector-unused", recovery_selector: key.selector },
+              ...sessions.map((session) => ({ kind: "session-absent" as const, session_id: session.session_id })),
+            ],
+            principals: [bound],
+            sessions,
+            profiles: [profile],
+          },
+          "creating a profile",
+        );
       } catch {
         return { kind: "unavailable" as const };
       }
@@ -744,7 +782,8 @@ export class IdentityService {
         return { kind: "invalid" as const };
       }
       const consumed: LinkCredential = { ...link, consumed_at: now };
-      const issued = await this.issueFor(profile, current, now, { links: [consumed] });
+      /* LIVE-3C: SINGLE USE -- consumed only if still unconsumed and unexpired, in the same write as the session. */
+      const issued = await this.issueFor(profile, current, now, { expect: [{ kind: "link-unconsumed", link_hash: link.link_hash, at: now }], links: [consumed] });
       if (issued.kind === "ok") {
         this.links.set(consumed.link_hash, consumed);
         this.stats.links += 1;
@@ -775,7 +814,15 @@ export class IdentityService {
     const oldDurable = this.isDurable(old.principal_id);
     try {
       await this.commit(
-        { ...extra, sessions: [fresh, ...evicted, ...(oldDurable ? replaced : [])] },
+        {
+          ...extra,
+          expect: [
+            ...(extra.expect ?? []),
+            { kind: "session-absent", session_id: fresh.session_id },
+            ...[...evicted, ...(oldDurable ? replaced : [])].map((session) => ({ kind: "session-open" as const, session_id: session.session_id })),
+          ],
+          sessions: [fresh, ...evicted, ...(oldDurable ? replaced : [])],
+        },
         "signing a browser in to a profile",
       );
     } catch {
@@ -857,7 +904,7 @@ export class IdentityService {
       const retired = open.slice(0, Math.max(0, open.length + 1 - this.policy.maxOutstandingLinkCodes));
       const drop = [...stale, ...retired].map((link) => link.link_hash);
       try {
-        await this.commit({ links: [record], dropLinks: drop }, "issuing a device-link code");
+        await this.commit({ expect: [{ kind: "link-absent", link_hash: record.link_hash }], links: [record], dropLinks: drop }, "issuing a device-link code");
       } catch {
         return { kind: "unavailable" as const };
       }
@@ -885,7 +932,19 @@ export class IdentityService {
       const rotated: Profile = { ...who.profile, recovery_selector: key.selector, recovery_hash: secretHash(key.secret), recovery_rotated_at: now };
       const dropLinks = this.linkHashesOf(who.profile.profile_id);
       try {
-        await this.commit({ profiles: [rotated], dropLinks }, "rotating a recovery key");
+        await this.commit(
+          {
+            /* LIVE-3C: COMPARE-AND-SWAP -- the old key dies in the same write that stores the new one, and only if it is
+               still the profile's key. */
+            expect: [
+              { kind: "profile-selector", profile_id: who.profile.profile_id, recovery_selector: who.profile.recovery_selector },
+              { kind: "selector-unused", recovery_selector: key.selector },
+            ],
+            profiles: [rotated],
+            dropLinks,
+          },
+          "rotating a recovery key",
+        );
       } catch {
         return { kind: "unavailable" as const };
       }
@@ -911,7 +970,7 @@ export class IdentityService {
       if (others.length === 0 && dropLinks.length === 0) return { kind: "ok" as const, signedOut: 0 };
       const ended = others.map((session) => ({ ...session, revoked_at: now, revoke_reason: "signed-out-remotely" as const }));
       try {
-        await this.commit({ sessions: ended, dropLinks }, "signing out other devices");
+        await this.commit({ expect: ended.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })), sessions: ended, dropLinks }, "signing out other devices");
       } catch {
         return { kind: "unavailable" as const };
       }
@@ -946,7 +1005,15 @@ export class IdentityService {
       if (principal.activated_at !== null) return;
       const activated: Principal = { ...principal, activated_at: now, last_seen_at: now };
       const sessions = [...(this.byPrincipal.get(principalId) ?? [])].map((id) => this.sessions.get(id) as Session);
-      await this.commit({ principals: [activated], sessions }, "activating a principal");
+      await this.commit(
+        {
+          /* LIVE-3C: CREATE-IF-ABSENT -- a principal and its sessions are made durable once. */
+          expect: [{ kind: "principal-absent", principal_id: principalId }, ...sessions.map((session) => ({ kind: "session-absent" as const, session_id: session.session_id }))],
+          principals: [activated],
+          sessions,
+        },
+        "activating a principal",
+      );
       this.principals.set(principalId, activated);
       this.provisional.delete(principalId);
       this.stats.activations += 1;

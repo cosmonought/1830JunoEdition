@@ -484,12 +484,19 @@ describe("LIVE-2A gameplay parse, over the wire", () => {
       return original.apply(this, args);
     } as typeof original;
     /* LIVE-2B: identity is no longer resolved inside a handler (it is the upgrade's), so the handler that throws
-       here is `room-hello`'s game lookup: a record store whose read of one game fails with a secret in its message. */
+       here is `room-hello`'s game lookup: a record store whose read of one game fails with a secret in its message.
+       LIVE-3C: a record read that FAILS is now answered `unavailable` in a fixed sentence (the store could not be read
+       just now -- not a handler fault), so the generic handler throw is driven through the join-code lookup instead. */
     const throwing = mintGameId();
     const load = records.load.bind(records);
     records.load = async (id: string) => {
       if (id === throwing) throw new Error("SECRET-STORE-7731 at /home/server/internal.ts:42");
       return load(id);
+    };
+    const lookup = records.lookupCode.bind(records);
+    records.lookupCode = async (code: string) => {
+      if (code === "JUNO-THRW-7777") throw new Error("SECRET-INDEX-7731 at /home/server/internal.ts:42");
+      return lookup(code);
     };
     const { server, port } = await startServer({ store: control.store, records });
     try {
@@ -501,13 +508,18 @@ describe("LIVE-2A gameplay parse, over the wire", () => {
       assert.match(String(answer.reason), /\(ref [0-9A-Z]{6}\)$/);
       assert.ok(!JSON.stringify(answer).includes("SECRET"));
       assert.deepEqual(control.indices(gameId), [0]);
-      // Any handler's throw: the same shape.
+      // A store read that failed: a fixed sentence, no secret, no reference (LIVE-3C).
       const thrower = await Client.open(port, "p-thrower");
       thrower.roomHello(throwing);
-      const generic = await thrower.next((f) => f.kind === "error", "the generic internal error");
+      const unavailable = await thrower.next((f) => f.kind === "error", "the unavailable answer");
+      assert.equal(unavailable.code, "unavailable");
+      // Any handler's throw: the same shape.
+      const joined = thrower.roomOp({ type: "join", code: "JUNO-THRW-7777", takeSeat: false });
+      const generic = await thrower.next((f) => f.kind === "error" && f.code === "internal", "the generic internal error");
       assert.equal(generic.code, "internal");
       assert.match(String(generic.reason), /\(ref [0-9A-Z]{6}\)$/);
       assert.ok(!JSON.stringify(thrower.frames).includes("SECRET"));
+      void joined;
     } finally {
       RoomEngine.prototype.submit = original;
       await stopServer(server);

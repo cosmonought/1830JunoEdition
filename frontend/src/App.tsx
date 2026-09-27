@@ -13206,6 +13206,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         roomCode=""
         audio={audioControls}
         onLeave={handleLeaveSandboxRoom}
+        error={sandboxRoomError}
       />
     );
   }

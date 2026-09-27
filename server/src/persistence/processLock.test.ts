@@ -10,8 +10,10 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { acquireDataLock, lockStatus, LOCK_DIRECTORY } from "./processLock";
+import { acquireDataLock, lockStatus, probeBeacon, LOCK_DIRECTORY } from "./processLock";
 import { createFileLogStore } from "../fileLogStore";
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function withDir<T>(tag: string, body: (dir: string) => Promise<T>): Promise<T> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `live3b-lock-${tag}-`));
@@ -62,7 +64,9 @@ describe("the data-directory lock (§8.8)", () => {
   test("a stale heartbeat is taken over; the old holder's self-check finds itself fenced and writes nothing more", () =>
     withDir("stale", async (dir) => {
       const lost: string[] = [];
-      const old = await acquireDataLock(dir, { instanceId: "old", heartbeatMs: 3_600_000, onLost: (why) => lost.push(why) });
+      /* LIVE-2F/3D: `beacon: false` stands for an owner this process cannot probe (another host, an older server); a
+         live owner with a beacon is never taken over (below, "the liveness beacon"). */
+      const old = await acquireDataLock(dir, { instanceId: "old", heartbeatMs: 3_600_000, onLost: (why) => lost.push(why), beacon: false });
       assert.ok(old.ok);
       if (!old.ok) return;
       const store = createFileLogStore(dir, { warn: () => undefined, writerCheck: () => old.lock.verify() });
@@ -232,5 +236,99 @@ describe("FI-28: processes", () => {
       survivor.child.kill("SIGTERM");
       await survivor.exited;
       assert.equal(fs.existsSync(path.join(dir, LOCK_DIRECTORY)), false, survivor.output());
+    }));
+});
+
+/* ==================================================================
+    LIVE-2F/3D (C7-01..05): THE LIVENESS BEACON -- a live owner is never taken over, however old its heartbeat
+   ================================================================== */
+describe("LIVE-2F/3D: the liveness beacon", () => {
+  test("a live owner with a stale heartbeat (stopped, hung) is refused, not taken over -- and offline tools see it held", () =>
+    withDir("beacon-live", async (dir) => {
+      const owner = await acquireDataLock(dir, { instanceId: "stopped", heartbeatMs: 3_600_000 });
+      assert.ok(owner.ok);
+      if (!owner.ok) return;
+      const recorded = JSON.parse(fs.readFileSync(path.join(dir, LOCK_DIRECTORY, "owner.json"), "utf8"));
+      assert.equal(typeof recorded.beacon, "string", "owner.json names the beacon");
+      age(path.join(dir, LOCK_DIRECTORY), 10 * 60_000); // ten minutes without a heartbeat
+      const contender = await acquireDataLock(dir, { instanceId: "contender" });
+      assert.equal(contender.ok, false);
+      if (!contender.ok) assert.match(contender.reason, /STILL RUNNING on this machine/);
+      assert.equal((await lockStatus(dir)).held, true, "an offline tool refuses beside it");
+      assert.equal(await owner.lock.verify(), true, "the owner was not fenced: nothing was taken from it");
+      await owner.lock.release();
+      assert.equal(fs.existsSync(path.join(dir, LOCK_DIRECTORY)), false);
+      const after = await acquireDataLock(dir, { instanceId: "after" });
+      assert.ok(after.ok && after.tookOver === null);
+      if (after.ok) await after.lock.release();
+    }));
+
+  test("independent review IR-01: an old owner closing its beacon never removes a successor's (every beacon is its own)", () =>
+    withDir("beacon-names", async (dir) => {
+      const old = await acquireDataLock(dir, { instanceId: "oldowner", heartbeatMs: 3_600_000 });
+      assert.ok(old.ok);
+      if (!old.ok) return;
+      fs.rmSync(path.join(dir, LOCK_DIRECTORY), { recursive: true, force: true }); // an operator removed the lock
+      const successor = await acquireDataLock(dir, { instanceId: "successor", heartbeatMs: 3_600_000 });
+      assert.ok(successor.ok);
+      if (!successor.ok) return;
+      old.lock.releaseSync(); // the fenced owner exits: its beacon closes (and unlinks the path it bound)
+      await sleep(50);
+      const owner = JSON.parse(fs.readFileSync(path.join(dir, LOCK_DIRECTORY, "owner.json"), "utf8"));
+      assert.equal(owner.instance_id, "successor");
+      assert.equal(await probeBeacon(path.join(dir, LOCK_DIRECTORY), owner), "alive", "the successor still answers");
+      age(path.join(dir, LOCK_DIRECTORY), 10 * 60_000);
+      const third = await acquireDataLock(dir, { instanceId: "third" });
+      assert.equal(third.ok, false, "a live successor is never taken over");
+      await successor.lock.release();
+    }));
+
+  test("a beacon on another host, or an owner.json that names none, is not evidence: the heartbeat decides", () =>
+    withDir("beacon-other", async (dir) => {
+      strandedLock(dir, { instance_id: "remote", pid: process.pid, host: `${os.hostname()}-elsewhere`, started_at: 0, beacon: "beacon.sock" }, 60_000);
+      assert.equal(await probeBeacon(path.join(dir, LOCK_DIRECTORY), { instance_id: "remote", pid: 1, host: `${os.hostname()}-elsewhere`, started_at: 0, beacon: "beacon.sock" }), "unknown");
+      const got = await acquireDataLock(dir, { instanceId: "local" });
+      assert.ok(got.ok && got.tookOver !== null);
+      if (got.ok) await got.lock.release();
+    }));
+});
+
+describe("LIVE-2F/3D: the liveness beacon, across processes", () => {
+  const holder = (dir: string) => {
+    const script = path.join(dir, "holder.js");
+    fs.writeFileSync(
+      script,
+      [
+        `const { acquireDataLock } = require(${JSON.stringify(path.join(COMPILED, "processLock.js"))});`,
+        "(async () => {",
+        "  const got = await acquireDataLock(process.argv[2], { instanceId: 'holder', heartbeatMs: 3600000 });",
+        "  process.stdout.write(JSON.stringify({ ok: got.ok }) + '\\n');",
+        "  setInterval(() => undefined, 1000);",
+        "})();",
+      ].join("\n"),
+    );
+    return run([script, dir]);
+  };
+
+  test("a SIGSTOPped owner keeps its lock however stale its heartbeat; SIGKILLed, it is taken over", { skip: process.platform === "win32" ? "POSIX signals" : false }, () =>
+    withDir("beacon-procs", async (dir) => {
+      const held = holder(dir);
+      try {
+        await waitFor(() => held.output().includes('"ok":true'), "the holder's lock");
+        held.child.kill("SIGSTOP");
+        age(path.join(dir, LOCK_DIRECTORY), 5 * 60_000);
+        const refused = await acquireDataLock(dir, { instanceId: "impatient" });
+        assert.equal(refused.ok, false, "a stopped owner is alive: never taken over");
+        if (!refused.ok) assert.match(refused.reason, /STILL RUNNING/);
+        held.child.kill("SIGCONT");
+        held.child.kill("SIGKILL");
+        await held.exited;
+        age(path.join(dir, LOCK_DIRECTORY), 5 * 60_000);
+        const got = await acquireDataLock(dir, { instanceId: "successor" });
+        assert.ok(got.ok && got.tookOver?.previous?.instance_id === "holder", "a dead owner's stale lock is taken over");
+        if (got.ok) await got.lock.release();
+      } finally {
+        held.child.kill("SIGKILL");
+      }
     }));
 });

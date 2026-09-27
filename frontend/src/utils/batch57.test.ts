@@ -238,7 +238,10 @@ describe("the room bar's in-room strip is gone, piece by piece", () => {
     /* THE ONE THING IN THAT STRIP THAT WAS NOT CLUTTER. It moved beside `chatError`, which reports the same
        kind of fact about the same room -- and it is gated on being IN a room, so the join form still shows
        its own failures where a refused code is being typed. */
-    expect(APP).toContain("{sandboxRoomCode && sandboxRoomError && (");
+    /* LIVE-2F/3D: LIVE-3C (6a367cb) put the standing hold notice first and shows a refusal beside it only when it says
+       something else -- the error is still reachable in the room; this pin had not been moved with it. */
+    expect(APP).toContain("{sandboxRoomCode && sandboxRoomError && sandboxRoomError !== holdNoticeFor(sandboxRoom) && (");
+    expect(APP).toContain("{sandboxRoomCode && holdNoticeFor(sandboxRoom) !== null && (");
     expect(ROOMBAR).toContain("{error && <span style={styles.error}>{error}</span>}");
   });
 });

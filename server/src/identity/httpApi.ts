@@ -228,9 +228,11 @@ async function serve(request: IncomingMessage, response: ServerResponse, api: Ht
       json(response, 400, { error: "bad-request" });
       return;
     }
-    const sessionId = api.identity.currentSession(read, now);
+    /* LIVE-2F/3D (C1-03b): a rotated session still in its grace is signed out too (it could still bootstrap), and a
+       401 clears the cookie -- the client reads it as "signed out", so the browser must not keep one that works. */
+    const sessionId = api.identity.revocableSession(read, now);
     if (sessionId === null) {
-      json(response, 401, { error: "not-authenticated" });
+      json(response, 401, { error: "not-authenticated" }, { "Set-Cookie": clearedSessionCookie() });
       return;
     }
     const wait = api.limiter.bootstraps.take(sessionId);

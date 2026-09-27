@@ -229,7 +229,26 @@ export function scanJournal(bytes: Buffer, snapshotSeq: number): JournalScan {
     end = newline + 1;
     position = newline + 1;
   }
-  if (damageAt !== null) return { changes, end, size: bytes.length, skipped, classification: "torn", detail: `a damaged final line at byte ${damageAt}` };
+  if (damageAt !== null) {
+    /* LIVE-2F/3D (C1-02, C7-04): ONE CHANGE IS ONE LINE, AND ONLY ONE IS EVER IN FLIGHT. What a crash can leave past the
+       last whole line is part of that one line -- an unterminated fragment, or the line with holes in it and its own
+       newline last. Two or more lines' worth of damage, or a whole verifiable line glued behind the damage (a write
+       that landed past a torn one), is not a torn write: acknowledged changes are in there, and truncating them would
+       silently undo them (a sign-out that works again). Refused, as the log store refuses its F-8 shape. */
+    const region = bytes.subarray(damageAt);
+    const firstNewline = region.indexOf(0x0a);
+    if (firstNewline !== -1 && firstNewline !== region.length - 1) {
+      return { changes, end, size: bytes.length, skipped, classification: "corrupt", detail: `damage at byte ${damageAt} spans more than one line (${region.length} bytes) -- more than the one change a crash can tear` };
+    }
+    const text = region.toString("utf8");
+    for (let at = text.indexOf("{", 1); at !== -1; at = text.indexOf("{", at + 1)) {
+      const glued = parseJournalLine(text.slice(at).replace(/\n$/, ""));
+      if (glued !== null) {
+        return { changes, end, size: bytes.length, skipped, classification: "corrupt", detail: `a whole change (seq ${glued.seq}) was written behind damage at byte ${damageAt}` };
+      }
+    }
+    return { changes, end, size: bytes.length, skipped, classification: "torn", detail: `a damaged final line at byte ${damageAt}` };
+  }
   return { changes, end, size: bytes.length, skipped, classification: "clean", detail: "" };
 }
 
@@ -375,6 +394,10 @@ export function createJournalIdentityStore(directory: string, options: JournalId
       /* The whole set, once: nothing half-bound can load, whatever the journal did. */
       const whole = checkSnapshot(built.snapshot(), `${target} + ${IDENTITY_JOURNAL_FILE}`);
       if (scan.classification === "torn") {
+        /* LIVE-2F/3D (C7-06): the repair is a WRITE, and only the lock's owner writes (as the log store's, review E9). */
+        if (options.writerCheck && !(await options.writerCheck().catch(() => false))) {
+          throw new StoreDefiniteError(`${journalFile} has a torn final change, and this server does not own the data directory; it is left exactly as found`);
+        }
         const handle = await io.open(journalFile, "r+");
         try {
           await handle.truncate(scan.end); // only ever DOWN, to the end of the last whole, verified line

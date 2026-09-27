@@ -3543,6 +3543,17 @@ the H5 escrow `Join` test, GNOLAND-1.1 and this harvest were replayed onto LIVE-
 `offerMatrix74Settlement.test.ts` §15 case (:751) that expects a deep `RevertTo(2)` the one-step undo policy (RV-6)
 now refuses — a test awaiting its deliberate repair pass, not a policy to weaken; the three `offerVerify74Final` V§4
 failures are the same class. Record: `claude/INTEGRATION1_CERTIFIED_PATCH_COLLAPSE_2026-09-26.md`.
+**LIVE-2F/3D (2026-09-27): the hosted-authority certification touched two rules-adjacent paths.** (1) Before the deal
+the server handed a seated player's gameplay submit to the session, and the undealt seed board accepted six kinds (the
+offer answers, `BeginOperatingRound`, `PassTurn`) -- an entry committed ahead of the server's deal, a dealt board that
+started in the operating round (RR2A-F1's shape, reached before the deal), and a table held `deal-misplaced` at its next
+load. Closed at the transport (`seatActor` answers the table's own `wrong-state`; nothing precedes `start-game`'s deal);
+**RR2A-F1 itself stays open** for a dealt board, as above. (2) Filed here, not fixed: an off-turn seat's "harmless
+duplicate" consent answer (#662) is COMMITTED as a no-op entry -- it becomes the last action (so the host's one-step undo
+of the move before it is refused) and a seat can grow the log to its 10,000 cap at the submit budget. The repair belongs
+to this backlog's transport/authority pass: a harmless duplicate should settle its submitter without appending, or be
+limited to the offer's counterparty. Also noted: a stored entry of an unknown message kind replays as a no-op rather than
+failing replay (only reachable by editing a log). Record: `claude/LIVE2F_LIVE3D_HOSTED_AUTHORITY_CERTIFICATION_2026-09-27.md`.
 
 **S10-7. Engine tests and packaging.** 304 engine-adjacent suites still live in `frontend/src/utils/` (Jest
 `roots` + per-suite classification, Batch 1 §6d); a repo-root `shared/` package needs CRA's `ModuleScopePlugin`,

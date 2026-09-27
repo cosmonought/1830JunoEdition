@@ -494,7 +494,8 @@ describe("LIVE-3C two stages", () => {
         assert.equal(view.lifecycle, "active", "the view is the log's lifecycle, never the lagging record's \"waiting\"");
         bob.submit(BUY, { baseIndex: 1, submissionId: "while-unreconciled" });
         const refusedMove = await bob.answerTo("while-unreconciled");
-        assert.deepEqual([refusedMove.kind, refusedMove.code, refusedMove.reason], ["refused", "unavailable", RECONCILING_SENTENCE], "said as not made -- never \"it will appear\"");
+        /* LIVE-2F/3D (C9-05): `retry`, the never-ran answer -- an `unavailable` move is kept in flight by the client. */
+        assert.deepEqual([refusedMove.kind, refusedMove.code, refusedMove.reason], ["refused", "retry", RECONCILING_SENTENCE], "said as not made -- never \"it will appear\"");
         assert.equal((await bob.op({ type: "set-ready", ready: false }, gameId)).code, "unavailable", "no op writes on an unreconciled record");
         // The refusals retried the repair (a task of its own); now it lands.
         for (let tries = 0; tries < 400 && readRecord(dir, gameId).status !== "active"; tries += 1) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -910,7 +911,9 @@ describe("LIVE-3C fencing", () => {
   test("after a takeover the old process's hold, record, identity and ops writes are all refused; the new owner's go through", () =>
     withDir("fence", async (dir) => {
       const lost: string[] = [];
-      const first = await acquireDataLock(dir, { heartbeatMs: 60_000, onLost: (reason) => lost.push(reason) });
+      /* LIVE-2F/3D: `beacon: false` stands for an owner the new process cannot probe (another host, or an older
+         server) -- a live owner on this machine is never taken over at all (processLock.test.ts, "the beacon"). */
+      const first = await acquireDataLock(dir, { heartbeatMs: 60_000, onLost: (reason) => lost.push(reason), beacon: false });
       assert.ok(first.ok);
       if (!first.ok) return;
       const aged = new Date(Date.now() - 2 * LOCK_STALE_AFTER_MS);
@@ -1033,7 +1036,7 @@ describe("LIVE-3C adversarial review regressions", () => {
         const caught = await alice.next((f) => f.kind === "catch-up");
         const tip = (caught.entries as SeenEntry[]).length - 1;
         alice.submit(BUY, { baseIndex: tip, submissionId: "lagging" });
-        assert.equal((await alice.answerTo("lagging")).code, "unavailable", "no move on a record the log contradicts");
+        assert.equal((await alice.answerTo("lagging")).code, "retry", "no move on a record the log contradicts (LIVE-2F/3D C9-05: the never-ran answer)");
         for (let tries = 0; tries < 400 && readRecord(dir, gameId).status !== "active"; tries += 1) await new Promise((resolve) => setTimeout(resolve, 5));
         assert.equal(readRecord(dir, gameId).status, "active", "the refusal's retry landed");
         alice.submit(BUY, { baseIndex: tip, submissionId: "reconciled" });

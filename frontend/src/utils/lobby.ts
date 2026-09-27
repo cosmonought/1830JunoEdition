@@ -18,8 +18,8 @@
 import { useEffect, useState } from "react";
 import { type GameVariants } from "../gameEngine/gameVariants";
 import { backendConfigError } from "../config/backend";
-import { roomLinkAvailable, watchPublicRooms } from "./roomLink";
-import type { RoomSummary } from "./roomProtocol";
+import { roomLinkAvailable, roomOp, watchPublicRooms } from "./roomLink";
+import { myTablesOf, refusalMessage, type MyTableSummary, type RoomSummary } from "./roomProtocol";
 
 /* ------------------------------------------------------------------ */
 /* Tunables                                                            */
@@ -142,4 +142,69 @@ export function usePublicRooms(): PublicRoomsResult {
   }, [available]);
 
   return { rooms, loading, error, available };
+}
+
+/* ------------------------------------------------------------------ */
+/* "Your tables" -- LIVE-2F/3D (C9-01)                                 */
+/* ------------------------------------------------------------------ */
+
+/** How often an open lobby asks again (and whenever the page becomes visible). A read, on the lobby channel. */
+export const MY_TABLES_REFRESH_MS = 60_000;
+/** The least time between two asks a page's return to view may cause. */
+export const MY_TABLES_VISIBLE_MIN_MS = 15_000;
+
+export interface MyTablesResult {
+  tables: MyTableSummary[];
+  error: string | null;
+}
+
+/** The tables this profile is seated at, from the server (`room-op {type:"my-tables"}`) -- the way back to a seat
+ *  from any tab, device or browser the profile is signed in on. */
+export function useMyTables(): MyTablesResult {
+  const [tables, setTables] = useState<MyTableSummary[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [asked, setAsked] = useState(0);
+  const available = roomLinkAvailable();
+
+  useEffect(() => {
+    if (!available) {
+      setTables([]);
+      return undefined;
+    }
+    let live = true;
+    void roomOp({ type: "my-tables" }).then((answer) => {
+      if (!live) return;
+      if (answer.ok) {
+        setTables(myTablesOf(answer.data));
+        setError(null);
+      } else if (answer.code !== "rate-limited") {
+        setError(`Could not load your tables. ${refusalMessage(answer.code, answer.reason)}`);
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, [available, asked]);
+
+  useEffect(() => {
+    if (!available) return undefined;
+    let lastAsked = Date.now();
+    const ask = () => {
+      lastAsked = Date.now();
+      setAsked((count) => count + 1);
+    };
+    const timer = setInterval(ask, MY_TABLES_REFRESH_MS);
+    /* A page coming back asks again -- at most every 15 s (independent review IR-08): the read shares the lobby socket's
+       room-op budget with Create and Join, and tab-switching must never spend it. */
+    const onVisible = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible" && Date.now() - lastAsked >= MY_TABLES_VISIBLE_MIN_MS) ask();
+    };
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(timer);
+      if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [available]);
+
+  return { tables, error };
 }

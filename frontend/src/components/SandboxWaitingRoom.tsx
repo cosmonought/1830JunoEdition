@@ -928,7 +928,12 @@ export function SandboxWaitingRoomHold({
   roomCode,
   onLeave,
   audio,
-}: Pick<SandboxWaitingRoomProps, "roomCode" | "onLeave" | "audio">) {
+  error = null,
+}: Pick<SandboxWaitingRoomProps, "roomCode" | "onLeave" | "audio"> & {
+  /** LIVE-2F/3D (C9-03): what the server said instead of a view (it could not open the table just now, or it is held)
+   *  -- said here, where the player is looking, rather than a "Fetching" that never ends. */
+  error?: string | null;
+}) {
   const uiScale = useUiScale();
   return (
     <div style={{ ...styles.root, ...chromeZoomFor(uiScale) }}>
@@ -942,7 +947,7 @@ export function SandboxWaitingRoomHold({
           <div style={styles.primary}>
             <h1 style={styles.title}>Waiting room</h1>
             <code style={styles.code}>{roomCode}</code>
-            <p style={styles.visibilityNote}>Fetching the room…</p>
+            <p style={styles.visibilityNote} role={error ? "status" : undefined}>{error ?? "Fetching the room…"}</p>
             <div style={styles.actionRow}>
               <button type="button" className="wr-touch" style={styles.button} onClick={onLeave}>
                 Cancel

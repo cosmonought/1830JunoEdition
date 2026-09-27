@@ -556,7 +556,9 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
       }
       try {
         const { size } = await handle.stat();
-        if (size === 0) return { present: true, size, first: null };
+        /* LIVE-2F/3D (C4-10): an empty file is an empty log -- a first append that created it and then failed. Not
+           "present with an unreadable head", which would keep a waiting table out of the lobby after a restart. */
+        if (size === 0) return { present: false, size, first: null };
         const limit = Math.min(size, HEAD_BYTES);
         const buffer = Buffer.alloc(limit);
         let read = 0;

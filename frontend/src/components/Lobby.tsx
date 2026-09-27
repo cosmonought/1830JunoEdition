@@ -56,7 +56,8 @@ import { LobbyRoomList } from "./LobbyRoomList";
 import { roomLinkAvailable } from "../utils/roomLink";
 import { JOIN_CODE_EXAMPLE, parseJoinCode, refusalMessage, supportRefOf } from "../utils/roomProtocol";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_FAMILY_MONO, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../styles/typography";
-import { truncateAddress, usePublicRooms } from "../utils/lobby";
+import { truncateAddress, useMyTables, usePublicRooms } from "../utils/lobby";
+import { MyTablesList } from "./MyTablesList";
 import type { GameVariants } from "../gameEngine/gameVariants";
 
 // Design note #3: THE SILENT-BUTTON BUG, AND THE RULE THAT REPLACED IT. Reported: clicking "Create Room" did
@@ -217,6 +218,8 @@ export function Lobby({ onEnterSandbox }: LobbyProps) {
   const [hostSetup, setHostSetup] = useState(false);
   const [joinOpen, setJoinOpen] = useState(false);
   const publicRooms = usePublicRooms();
+  /* LIVE-2F/3D (C9-01): the tables this profile sits at -- the way back to a seat from any tab or browser. */
+  const myTables = useMyTables();
 
   /** A refusal, said as a sentence a player can act on; an internal failure's reference goes to the console only. */
   const sayRefusal = useCallback((code: string, reason: string): string => {
@@ -550,6 +553,9 @@ export function Lobby({ onEnterSandbox }: LobbyProps) {
           itself beside the buttons at the top of the page, which is where `SandboxRoomBar` carries the
           bar's own errors; `attemptJoinSandboxRoom` returns the reason so both callers can say it where
           the player is looking. */}
+      {/* LIVE-2F/3D (C9-01): "Your tables" above the public list -- a private table is in no list but this one, and
+          after the deal its code no longer opens it. Hidden when there is nothing to show. */}
+      <MyTablesList tables={myTables.tables} error={myTables.error} onOpen={(gameId) => onEnterSandbox(gameId)} />
       <LobbyRoomList
         rooms={publicRooms.rooms}
         loading={publicRooms.loading}

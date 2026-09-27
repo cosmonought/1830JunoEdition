@@ -641,8 +641,10 @@ export function createGameServer(options: GameServerOptions): {
     /* LIVE-3C: nor a game whose record is not reconciled with its log yet (its load's repair has not landed): no move is
        built on a record the log may contradict. The reconciliation is tried again; the move can be sent again. */
     if (host.awaitingReconciliation(game)) {
-      /* Not UNAVAILABLE_REASON ("will appear if it was"): this move was never attempted, so nothing will appear. */
-      answer({ kind: "refused", code: "unavailable", reason: RECONCILING_SENTENCE, build: options.build });
+      /* Not UNAVAILABLE_REASON ("will appear if it was"): this move was never attempted, so nothing will appear.
+         LIVE-2F/3D (C9-05): and so not `unavailable` either -- a client keeps an `unavailable` move in flight (it may
+         have landed) and never settles it on this socket. `retry` is the never-ran answer (as E-8's). */
+      answer({ kind: "refused", code: "retry", reason: RECONCILING_SENTENCE, build: options.build });
       return;
     }
     /* ==================================================================

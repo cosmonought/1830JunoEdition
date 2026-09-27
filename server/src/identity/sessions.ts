@@ -546,11 +546,30 @@ export class IdentityService {
     return auth.kind === "ok" ? auth.sessionId : null;
   }
 
+  /** LIVE-2F/3D (C1-03b): the session "Sign out this device" ends -- the current one, or a rotated one still inside its
+   *  grace (a browser that lost the rotation's Set-Cookie still holds it, and it can still bootstrap a successor: a
+   *  sign-out that answered 401 would leave that browser signed in). `revoke` then ends its successors too. */
+  revocableSession(read: SessionCookieRead, now: number): string | null {
+    const current = this.currentSession(read, now);
+    if (current !== null) return current;
+    const decided = this.classify(read, false, now);
+    return decided.kind === "existing" && decided.grace ? decided.sessionId : null;
+  }
+
   /** A security revocation (logout, operator). Durable first for an activated principal; its sockets close 4401.
    *
-   *  THE PRINCIPAL'S ROTATED PREDECESSORS STILL IN THEIR GRACE END WITH IT (LIVE-2B adversarial review): otherwise
-   *  the cookie that was rotated into the revoked one could still bootstrap a fresh successor for 24 hours -- a
-   *  logout undone by an older cookie -- and a socket opened on it before the rotation would stay open. */
+   *  THE PRINCIPAL'S ROTATED PREDECESSORS END WITH IT (LIVE-2B adversarial review): otherwise the cookie that was
+   *  rotated into the revoked one could still bootstrap a fresh successor for 24 hours -- a logout undone by an older
+   *  cookie -- and a socket opened on it before the rotation would stay open.
+   *  LIVE-2F/3D (C1-01): WHATEVER THEIR AGE. A rotation is not a security revocation, so a socket opened on a session
+   *  before it rotated stays open for as long as that socket's own frozen expiry (up to 30 days) -- a long-lived tab
+   *  that kept acting as the seat after "Sign out this device" once its session's rotation was more than a day old.
+   *  Every rotated session of the principal ends now (a grace successor is not linked to its predecessor, so no
+   *  narrower family can be read off the records); another device's pre-rotation socket is closed 4401 and reopens on
+   *  its own current cookie.
+   *  LIVE-2F/3D (C1-03a): AND ITS SUCCESSORS, when the revoked session itself was rotated while the revoke waited in
+   *  the queue (another tab of the same browser bootstrapped it): the successor that rotation minted belongs to the
+   *  same cookie jar, and a logout that answered 204 must not leave it live. */
   revoke(sessionId: string, reason: Exclude<RevokeReason, "rotated" | "principal-disabled">, now: number): Promise<boolean> {
     return this.serial(async () => {
       const session = this.sessions.get(sessionId);
@@ -558,9 +577,18 @@ export class IdentityService {
       const revoked: Session = { ...session, revoked_at: now, revoke_reason: reason };
       const predecessors: Session[] = [...(this.byPrincipal.get(session.principal_id) ?? [])]
         .map((id) => this.sessions.get(id) as Session)
-        .filter((other) => other.session_id !== sessionId && other.revoke_reason === "rotated" && now - (other.revoked_at ?? 0) < this.policy.rotatedGraceMs)
+        .filter((other) => other.session_id !== sessionId && other.revoke_reason === "rotated")
         .map((other) => ({ ...other, revoked_at: now, revoke_reason: reason }));
-      const ended = [revoked, ...predecessors];
+      const successors: Session[] = [];
+      const seen = new Set<string>([sessionId, ...predecessors.map((other) => other.session_id)]);
+      for (let next = session.rotated_to; next !== null && !seen.has(next); ) {
+        seen.add(next);
+        const successor = this.sessions.get(next);
+        if (successor === undefined) break;
+        if (!isSecurityRevocation(successor.revoke_reason)) successors.push({ ...successor, revoked_at: now, revoke_reason: reason });
+        next = successor.rotated_to;
+      }
+      const ended = [revoked, ...predecessors, ...successors];
       /* LIVE-2E (review H1): a signed-out device's profile keeps no outstanding link code. */
       const profileId = this.principals.get(session.principal_id)?.account_link ?? null;
       const dropLinks = profileId === null ? [] : this.linkHashesOf(profileId);

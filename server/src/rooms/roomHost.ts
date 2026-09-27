@@ -59,10 +59,14 @@ import {
   type HoldKind,
   type LogFacts,
   type RoomSummary,
+  myTableSummaryOf,
+  type MyTableState,
+  type MyTableSummary,
 } from "./gameRecord";
 import { createMemoryHoldStore, type HoldStore } from "./holdStore";
 import {
   ARCHIVE_SWEEP_BUDGET,
+  FROZEN_GAME_SENTENCE,
   GAME_OVER_SENTENCE,
   GONE_SENTENCES,
   HELD_PLAYER_SENTENCE,
@@ -208,6 +212,23 @@ export function goneSentence(record: Readonly<GameRecord> | null): string {
   if (record.status === "expired" || (record.status === "waiting" && record.expires_at !== null)) return GONE_SENTENCES.expired;
   return GONE_SENTENCES.gone;
 }
+
+/** LIVE-2F/3D (C9-01): what "Your tables" calls each class of game; a class not named here is not listed (gone). */
+const MY_TABLE_STATE: Partial<Record<GameClass, MyTableState>> = Object.freeze({
+  waiting: "waiting",
+  active: "playing",
+  completed: "finished",
+  unreconciled: "resume",
+  held: "paused",
+  unavailable: "unavailable",
+  incompatible: "cannot-continue",
+  "read-only": "watch-only",
+});
+/** The most "Your tables" answers with (live tables first, then the most recently finished). */
+export const MY_TABLES_LIMIT = 50;
+/** How often, and how many, unread games "Your tables" asks the record store for again (review IR-02). */
+export const MY_TABLES_REINDEX_MS = 30_000;
+export const MY_TABLES_REINDEX_BUDGET = 50;
 
 export function createRoomHost(deps: RoomHostDeps) {
   const rooms = deps.limits.rooms;
@@ -437,6 +458,19 @@ export function createRoomHost(deps: RoomHostDeps) {
   function settle(gameId: string, failClosed: { cls: GameClass; code: string | null; detail: string | null } | null): void {
     const was = unreconciled.delete(gameId);
     const before = concluded.get(gameId);
+    /* LIVE-2F/3D (C4-01): A GAME DEALT ON ANOTHER BUILD IS CONCLUDED READ-ONLY, not healthy: after its actor is evicted
+       its record ("active") would otherwise be believed -- and a game nobody can continue here would hold its seats'
+       open-table caps (and the host's) for ever, the way held and incompatible games no longer do. */
+    if (failClosed === null) {
+      const resident = peekLoaded(gameId);
+      let readOnly = false;
+      try {
+        readOnly = resident !== undefined && holdKindOf(resident.view, deps.build) === "read-only";
+      } catch {
+        readOnly = false; // no committed view yet: nothing to conclude from
+      }
+      if (readOnly) failClosed = { cls: "read-only", code: "build-pinned", detail: null };
+    }
     /* A conclusion replaces discovery's line for good (review: a start-time read failure is not sticky once a load
        has succeeded): healthy means the record -- reconciled, and written only by this process since -- is believed. */
     if (failClosed === null || failClosed.cls === "active" || failClosed.cls === "completed" || failClosed.cls === "waiting") concluded.set(gameId, "healthy");
@@ -743,6 +777,12 @@ export function createRoomHost(deps: RoomHostDeps) {
       /* LIVE-3C (review E1): a server task (the expiry and archive sweeps) never acts on a game this build cannot
          interpret -- its record's lifecycle claims could not be checked against a board nobody replayed. */
       if (opName === null && (tx.view.incompatible !== null || tx.view.hold?.reason === "version")) return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
+      /* LIVE-2F/3D (C4-05): NOR IS ONE THIS BUILD CANNOT CONTINUE CHANGED BY A PLAYER -- an incompatible pin, or a deal
+         made on another build. It is kept exactly as it was (its host too): a `leave` only unsubscribes. */
+      if (opName !== null && (tx.view.incompatible !== null || tx.view.hold?.reason === "version" || holdKindOf(tx.view, deps.build) === "read-only")) {
+        if (opName === "leave" && verdict !== null && verdict.ok) return { ok: true, value: { ok: true, record: null, effects: { unsubscribeOnly: true } } };
+        return { ok: false, code: "wrong-state", reason: FROZEN_GAME_SENTENCE };
+      }
       /* LIVE-3C: NOTHING IS WRITTEN ON AN UNRECONCILED RECORD (its load's repair has not landed): refused, and the
          reconciliation tried again as a task of its own -- so no op, and no sweep, builds on a record the log may
          contradict. */
@@ -818,7 +858,8 @@ export function createRoomHost(deps: RoomHostDeps) {
       /* LIVE-3C: a held or incompatible table is frozen, not open -- it takes nobody's cap (review). An unreconciled
          record's own claim is used here, and only here: a cap is an abuse bound, not a statement about the game. */
       const frozen = classifyNow(record.game_id).cls;
-      if (frozen === "held" || frozen === "incompatible") continue;
+      /* LIVE-2F/3D (C4-01): nor a read-only one (dealt on another build: watchable, never continued here). */
+      if (frozen === "held" || frozen === "incompatible" || frozen === "read-only") continue;
       if (record.status === "waiting" && record.expires_at !== null && now() >= record.expires_at && record.started_at === null) continue;
       const seat = seatOf(record, principalId);
       if (seat === null) continue;
@@ -1004,6 +1045,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     }
     if (type === "create") return handleCreate(socket, ctx, requestId, op);
     if (type === "join") return handleJoin(socket, ctx, requestId, op);
+    if (type === "my-tables") return handleMyTables(socket, ctx, requestId);
     if (frame.gameId === undefined) return ack(socket, requestId, { ok: false, code: "bad-frame", reason: "That operation names no game." });
     let game: GameActor | null;
     try {
@@ -1377,6 +1419,57 @@ export function createRoomHost(deps: RoomHostDeps) {
     deps.send(socket, { kind: "rooms", rooms: summaries() });
   }
 
+  /** LIVE-2F/3D (C9-01): "Your tables" -- every table whose record seats this principal, by what it is NOW
+   *  (`classifyNow`: stage one's line for a table not reconciled yet, never the record's claim). Cancelled, expired and
+   *  archived tables are gone and not listed; nor is anything a kicked or unseated principal could only watch. */
+  async function handleMyTables(socket: WebSocket, ctx: ConnectionContext, requestId: string): Promise<void> {
+    await indexReady;
+    await reindexUnread();
+    const tables: MyTableSummary[] = [];
+    for (const record of recordIndex.values()) {
+      if (seatOf(record, ctx.principalId) === null) continue;
+      const cls = classifyNow(record.game_id).cls;
+      /* A read-only game (dealt on another build) is listed as what it is to its players (review IR-05): archived is
+         gone; a finished one is finished -- nothing more could be played in it on any build. */
+      if (cls === "read-only" && record.archived_at !== null) continue;
+      const state = cls === "read-only" && record.status === "completed" ? "finished" : MY_TABLE_STATE[cls];
+      if (state === undefined) continue;
+      const summary = myTableSummaryOf(record, ctx.principalId, state);
+      if (summary !== null) tables.push(summary);
+    }
+    const live = (table: MyTableSummary) => (table.state === "finished" ? 1 : 0);
+    tables.sort((a, b) => live(a) - live(b) || b.lastActivityMs - a.lastActivityMs);
+    ack(socket, requestId, { ok: true, data: { tables: tables.slice(0, MY_TABLES_LIMIT) } });
+  }
+
+  /** LIVE-2F/3D (independent review IR-02): a game whose files discovery could not READ at startup (a failed or timed
+   *  out read of its record, hold or log head) was never indexed -- so no list, and no "Your tables", could ever name
+   *  it again this run, though its seats are intact. "Your tables" asks for those records again (throttled, bounded;
+   *  through `resolveGame`, so a record found is stage one -- unreconciled -- exactly as any lazy lookup indexes it). */
+  let reindexAfter = 0;
+  async function reindexUnread(): Promise<void> {
+    const at = now();
+    if (at < reindexAfter) return;
+    reindexAfter = at + MY_TABLES_REINDEX_MS;
+    let ids: string[];
+    if (discovery === null) {
+      try {
+        ids = await deps.records.list();
+      } catch {
+        return;
+      }
+    } else {
+      ids = [...(discovery as DiscoveryReport).games.values()].filter((game) => game.record === null && game.cls === "unavailable").map((game) => game.gameId);
+    }
+    for (const gameId of ids.filter((id) => !recordIndex.has(id)).slice(0, MY_TABLES_REINDEX_BUDGET)) {
+      try {
+        await resolveGame(gameId);
+      } catch {
+        // still unreadable: asked again at the next pass
+      }
+    }
+  }
+
   /** The seat behind a gameplay submit, from the record committed NOW (inside the submit's task). */
   function seatActor(tx: Tx, principalId: string): { ok: true; actor: string; host: string; policy: GameRecord["policy"]["host_undo"] } | Refusal {
     const record = tx.view.record;
@@ -1384,9 +1477,11 @@ export function createRoomHost(deps: RoomHostDeps) {
     const facts = isMaintenanceHold(tx.view.hold) ? factsFromRecord(record) : factsFromTx(tx, boardOf(record.game_id, tx.session));
     const verdict = withGoneReason(authorize("submit", { record, facts, principalId, now: now(), held: heldOf(tx.view) }), record);
     if (!verdict.ok) {
-      /* Before the deal a seated player's move is `wrong-state` in the table; the session answers it better. */
-      const seat = seatOf(record, principalId);
-      if (verdict.code === "wrong-state" && seat !== null) return { ok: true, actor: seat.player_id, host: record.host_player_id, policy: record.policy.host_undo };
+      /* LIVE-2F/3D (C2-01): BEFORE THE DEAL NOTHING IS GAMEPLAY. A seated player's submit in a waiting game is the
+         table's own `wrong-state` and is never handed to the session: the seeded, undealt board accepts some messages
+         (offer answers, `BeginOperatingRound`, `PassTurn`), and an entry committed there would precede the server's
+         deal -- corrupting the dealt board and holding the table `deal-misplaced` at its next load. The only way a
+         server-owned game is dealt is `start-game`, which does not come through here. */
       return { ok: false, code: verdict.code, reason: verdict.reason };
     }
     const seat = seatOf(record, principalId) as NonNullable<ReturnType<typeof seatOf>>;

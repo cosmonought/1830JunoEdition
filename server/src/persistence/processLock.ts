@@ -27,10 +27,23 @@
 //             no longer names this instance, the lock was taken over -- this process is fenced and must stop
 //             writing at once (the server exits 3, LIVE-3 §16).
 //   RELEASE   on a clean shutdown: remove `LOCK`, but only while it is still ours.
+//   BEACON    (LIVE-2F/3D, C7-01..05) a stale heartbeat is NOT enough to take a lock over while its owner still
+//             lives on this machine. A stopped, suspended or hung server (Ctrl-Z, `docker pause`, a debugger) stops
+//             beating but keeps its handles; resumed after a takeover, a write it had already checked the lock for
+//             lands on top of the new owner's acknowledged history -- the self-check runs BEFORE a write, never
+//             between the write's own syscalls, so no check can close that window. So the holder listens on a
+//             LIVENESS BEACON -- a Unix-domain socket (a named pipe on Windows) named in `owner.json` -- created before
+//             `owner.json` names it and closed only after `LOCK` is gone. The kernel keeps a stopped process's
+//             listening socket, and removes it when the process dies, whatever its PID becomes afterwards: a
+//             connection that succeeds means "alive" (refuse, exit 2, however old the heartbeat), a refused or
+//             absent beacon means "dead" (the heartbeat's age decides, as before). A beacon on another host (the
+//             `host` differs) or one that cannot be reached (another container) is not evidence either way, and the
+//             heartbeat alone decides -- the residual AWS writer epochs close.
 //
 // AWS writer epochs are LIVE-5's; this is the local store's whole fence.
 
-import { promises as fs, rmSync, readFileSync } from "fs";
+import { promises as fs, rmSync, readFileSync, unlinkSync } from "fs";
+import * as net from "net";
 import * as os from "os";
 import * as path from "path";
 import { randomBytes } from "crypto";
@@ -44,7 +57,14 @@ export interface LockOwner {
   readonly pid: number;
   readonly host: string;
   readonly started_at: number;
+  /** LIVE-2F/3D: where this owner's liveness beacon listens -- a name inside `LOCK/` (relative), an absolute socket
+   *  path, or a Windows pipe name. Absent from an owner that runs no beacon (an older server, or one whose beacon
+   *  could not listen): then the heartbeat alone decides. */
+  readonly beacon?: string;
 }
+
+/** How long a contender waits for a beacon to answer before calling it alive (fail-closed). */
+export const LOCK_BEACON_PROBE_MS = 2_000;
 
 export interface DataLockOptions {
   /** This process's identity in the lock. Random (16 bytes, hex) when absent. */
@@ -55,6 +75,9 @@ export interface DataLockOptions {
   /** Called once, when a self-check finds the lock is no longer this instance's (taken over, or removed). */
   onLost?: (reason: string) => void;
   log?: (line: string) => void;
+  /** LIVE-2F/3D: run a liveness beacon while this lock is held (default true). `false` is for tests that stand in for
+   *  an owner a contender cannot probe -- one on another host, or an older server. */
+  beacon?: boolean;
 }
 
 export interface DataLock {
@@ -158,7 +181,11 @@ export async function lockStatus(
   const lockDir = path.join(dataDir, LOCK_DIRECTORY);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const seen = await inspect(lockDir, options.now ?? Date.now());
-    if (seen !== null) return { held: seen.ageMs < (options.staleAfterMs ?? LOCK_STALE_AFTER_MS), owner: seen.owner, ageMs: seen.ageMs };
+    if (seen !== null) {
+      /* LIVE-2F/3D: a stale heartbeat whose owner still lives (stopped, hung) is still held -- offline tools refuse. */
+      const held = seen.ageMs < (options.staleAfterMs ?? LOCK_STALE_AFTER_MS) || (await probeBeacon(lockDir, seen.owner)) === "alive";
+      return { held, owner: seen.owner, ageMs: seen.ageMs };
+    }
     if ((await statOf(lockDir)) === null) return { held: false, owner: null, ageMs: null };
   }
   /* A lock that keeps changing while it is read is being written by somebody alive. */
@@ -198,6 +225,20 @@ export async function acquireDataLock(dataDir: string, options: DataLockOptions 
             `${Math.round(seen.ageMs / 1000)} s ago (${lockDir})`,
         };
       }
+      /* LIVE-2F/3D: STALE BY ITS HEARTBEAT, BUT ALIVE BY ITS BEACON -- a stopped, suspended or hung owner. Never taken
+         over: resumed, it would finish the write it had already checked the lock for, on top of ours. */
+      if ((await probeBeacon(lockDir, seen.owner)) === "alive") {
+        return {
+          ok: false,
+          owner: seen.owner,
+          ageMs: seen.ageMs,
+          reason:
+            `the data directory's lock belongs to ${describeOwner(seen.owner)}, which has not beaten its heartbeat for ` +
+            `${Math.round(seen.ageMs / 1000)} s but is STILL RUNNING on this machine (stopped, suspended or hung?) -- or its ` +
+            `liveness beacon answers but not to this user. End that process first -- a lock is never taken over from a ` +
+            `live owner (${lockDir})`,
+        };
+      }
       /* STALE: move it aside under a name every racer derives the same way. */
       const aside = path.join(dataDir, `${LOCK_DIRECTORY}.stale.${seen.identity}`);
       try {
@@ -221,19 +262,31 @@ export async function acquireDataLock(dataDir: string, options: DataLockOptions 
       continue;
     }
 
-    /* WE CREATED LOCK. Record who we are, then confirm nobody moved it in the meantime. */
-    const owner: LockOwner = { instance_id: instanceId, pid: process.pid, host: os.hostname(), started_at: now() };
+    /* WE CREATED LOCK. LIVE-2F/3D: the beacon listens FIRST, so an owner.json that names a beacon names one that
+       answers for as long as this process lives. Then record who we are, and confirm nobody moved it meanwhile. */
+    const beacon = options.beacon === false ? null : await openBeacon(lockDir, instanceId, log);
+    const owner: LockOwner = {
+      instance_id: instanceId,
+      pid: process.pid,
+      host: os.hostname(),
+      started_at: now(),
+      ...(beacon !== null ? { beacon: beacon.name } : {}),
+    };
     const ownerTmp = path.join(lockDir, `owner.json.${instanceId}.tmp`);
     try {
       await fs.writeFile(ownerTmp, JSON.stringify(owner));
       await fs.rename(ownerTmp, path.join(lockDir, "owner.json"));
       await fs.writeFile(path.join(lockDir, "heartbeat"), `${now()}\n`);
     } catch (error) {
+      beacon?.close();
       if (codeOf(error) === "ENOENT") continue; // our fresh LOCK was moved aside by a racer: look again
       throw error;
     }
-    if ((await readOwner(lockDir))?.instance_id !== instanceId) continue;
-    const lock = heldLock(lockDir, instanceId, heartbeatMs, now, options.onLost, log);
+    if ((await readOwner(lockDir))?.instance_id !== instanceId) {
+      beacon?.close();
+      continue;
+    }
+    const lock = heldLock(lockDir, instanceId, heartbeatMs, now, options.onLost, log, beacon);
     /* THE ASIDE DIRECTORY IS KEPT, not removed at once: while it exists, a racer that judged the same old lock
        stale cannot rename this fresh LOCK onto its name. Aside directories older than ten minutes -- far past any
        racer's window -- are pruned here, best-effort. */
@@ -264,6 +317,7 @@ function heldLock(
   now: () => number,
   onLost: ((reason: string) => void) | undefined,
   log: (line: string) => void,
+  beacon: Beacon | null,
 ): DataLock {
   let lost = false;
   let released = false;
@@ -306,7 +360,13 @@ function heldLock(
       clearInterval(timer);
       const ours = !lost && (await readOwner(lockDir))?.instance_id === instanceId;
       released = true;
-      if (ours) await fs.rm(lockDir, { recursive: true, force: true });
+      try {
+        if (ours) await fs.rm(lockDir, { recursive: true, force: true });
+      } finally {
+        /* LIVE-2F/3D: the beacon goes LAST -- while it answers, nobody can take over a LOCK this process may still be
+           removing, so a release can never remove a successor's lock (C7-05). */
+        beacon?.close();
+      }
     },
     releaseSync() {
       if (released) return;
@@ -317,7 +377,129 @@ function heldLock(
         if (!lost && owner.instance_id === instanceId) rmSync(lockDir, { recursive: true, force: true });
       } catch {
         // not ours, or already gone
+      } finally {
+        beacon?.closeSync();
       }
     },
   };
+}
+
+/* ==================================================================
+    LIVE-2F/3D (C7-01..05): THE LIVENESS BEACON
+   ==================================================================
+   A listening Unix-domain socket (a named pipe on Windows) that exists exactly as long as the lock's owner PROCESS
+   does -- stopped or not -- and whose absence a contender can observe without trusting a PID. It answers nothing: a
+   connection is accepted by the kernel (a stopped process's backlog still takes it) and destroyed if the owner is
+   running. The name is random per instance, so a reused PID or a restarted owner can never answer for a dead one. */
+
+interface Beacon {
+  /** What `owner.json` records: a name relative to `LOCK/`, an absolute socket path, or a Windows pipe name. */
+  readonly name: string;
+  close(): void;
+  closeSync(): void;
+}
+
+const WINDOWS_PIPE_PREFIX = "\\\\.\\pipe\\";
+/** A Unix socket path must fit `sockaddr_un` (104 bytes on macOS, 108 on Linux, NUL included). */
+const MAX_SOCKET_PATH_BYTES = 100;
+
+function beaconAddress(lockDir: string, name: string): string | null {
+  if (name.startsWith(WINDOWS_PIPE_PREFIX)) return process.platform === "win32" ? name : null;
+  const full = path.isAbsolute(name) ? name : path.join(lockDir, name);
+  return process.platform !== "win32" && Buffer.byteLength(full) <= MAX_SOCKET_PATH_BYTES ? full : null;
+}
+
+async function openBeacon(lockDir: string, instanceId: string, log: (line: string) => void): Promise<Beacon | null> {
+  let name: string;
+  let unlinkPath: string | null = null;
+  if (process.platform === "win32") {
+    name = `${WINDOWS_PIPE_PREFIX}gs-data-lock-${instanceId}`;
+  } else {
+    /* PER INSTANCE, never a shared name (independent review IR-01): closing a Unix-socket server unlinks the path it
+       bound, so an old owner closing a shared `beacon.sock` after a successor bound its own would delete the
+       successor's -- and the successor would then look dead to the next contender. */
+    const inLock = `b-${instanceId.replace(/[^A-Za-z0-9]/g, "").slice(0, 12)}.sock`;
+    if (Buffer.byteLength(path.join(lockDir, inLock)) <= MAX_SOCKET_PATH_BYTES) {
+      name = inLock; // inside LOCK: it moves (and is removed) with the lock directory
+    } else {
+      name = path.join(os.tmpdir(), `gs-data-lock-${instanceId.slice(0, 32)}.sock`);
+      unlinkPath = name;
+    }
+  }
+  const address = beaconAddress(lockDir, name);
+  if (address === null) return null;
+  const server = net.createServer((socket) => socket.destroy());
+  server.on("error", () => undefined);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(address, () => {
+        server.off("error", reject);
+        resolve();
+      });
+    });
+  } catch (error) {
+    log(`  lock: no liveness beacon (${(error as Error).message}); a stale heartbeat alone will decide a takeover of this lock`);
+    return null;
+  }
+  server.unref();
+  let closed = false;
+  const unlink = () => {
+    if (unlinkPath === null) return;
+    try {
+      unlinkSync(unlinkPath);
+    } catch {
+      // already gone
+    }
+  };
+  return {
+    name,
+    close() {
+      if (closed) return;
+      closed = true;
+      server.close();
+      unlink();
+    },
+    closeSync() {
+      if (closed) return;
+      closed = true;
+      server.close();
+      unlink();
+    },
+  };
+}
+
+/** Is the lock's owner (by its beacon) alive on this machine? `unknown` when the owner names no beacon, runs on
+ *  another host, or its beacon cannot be addressed from here -- then the heartbeat alone decides, as it always did. */
+export async function probeBeacon(lockDir: string, owner: LockOwner | null, timeoutMs = LOCK_BEACON_PROBE_MS): Promise<"alive" | "dead" | "unknown"> {
+  if (owner === null || typeof owner.beacon !== "string" || owner.beacon.length === 0) return "unknown";
+  if (owner.host !== os.hostname()) return "unknown";
+  const address = beaconAddress(lockDir, owner.beacon);
+  if (address === null) return "unknown";
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (verdict: "alive" | "dead" | "unknown") => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(verdict);
+    };
+    const socket = net.connect(address);
+    /* No answer in time: something holds the name but does not complete a connection -- treated as ALIVE (fail
+       closed: a takeover is refused, and the operator is told to end the old process). */
+    const timer = setTimeout(() => finish("alive"), timeoutMs);
+    socket.once("connect", () => finish("alive"));
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      const code = error.code ?? "";
+      /* Nobody listens: the owner is gone (its socket file outlived it, or its pipe vanished with it). An absolute
+         socket outside LOCK that is simply not there may be in another mount namespace (a private /tmp) -- not
+         evidence either way (independent review IR-07): the heartbeat decides, as it did before the beacon. */
+      if (code === "ENOENT" && path.isAbsolute(owner.beacon as string) && !owner.beacon?.startsWith(WINDOWS_PIPE_PREFIX)) return finish("unknown");
+      if (code === "ECONNREFUSED" || code === "ENOENT" || code === "ENOTSOCK") return finish("dead");
+      /* Somebody holds it (a full backlog, a busy pipe, a permission wall): alive. */
+      if (code === "EAGAIN" || code === "EBUSY" || code === "EACCES" || code === "EPERM") return finish("alive");
+      finish("unknown");
+    });
+  });
 }

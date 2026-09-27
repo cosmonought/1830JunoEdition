@@ -161,6 +161,10 @@ export const RECONCILING_SENTENCE = "The game server is still bringing this game
 /** A game that has ended: every move but the room-close marker is refused. */
 export const GAME_OVER_SENTENCE = "This game is over. Nothing more can be played in it.";
 
+/** LIVE-2F/3D (C4-05): a room change on a game this server cannot continue (an unsupported rules pin, or a deal made
+ *  on another build) -- the game is kept exactly as it was. */
+export const FROZEN_GAME_SENTENCE = "This game cannot be continued on this server, so nothing about its table can be changed here.";
+
 /** Why a table is gone, by what ended it -- `gone` answers carry these. */
 export const GONE_SENTENCES = Object.freeze({
   cancelled: "The host closed this table before the game started.",

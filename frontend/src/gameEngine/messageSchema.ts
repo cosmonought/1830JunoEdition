@@ -871,6 +871,8 @@ const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
   "transfer-host": nullTable({ type: req(str(16)), toPlayerId: req(str(40, PLAYER_ID_PATTERN)) }),
   "start-game": nullTable({ type: req(str(16)) }),
   "cancel-room": nullTable({ type: req(str(16)) }),
+  /* LIVE-2F/3D (C9-01): a READ, on the lobby channel -- the caller's own tables ("Your tables"). Names no game. */
+  "my-tables": nullTable({ type: req(str(16)) }),
 });
 
 export const ROOM_OP_TYPES: readonly string[] = Object.keys(ROOM_OPS);

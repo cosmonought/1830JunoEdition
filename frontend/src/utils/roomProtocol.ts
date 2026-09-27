@@ -88,6 +88,69 @@ export interface RoomSummary {
   createdAtMs: number;
 }
 
+/** LIVE-2F/3D (C9-01): one of the caller's own tables ("Your tables"), answered to `room-op {type:"my-tables"}` on the
+ *  lobby channel. The server's `MyTableSummary` (`server/src/rooms/gameRecord.ts`), field for field: no principal id,
+ *  no code -- only what a seated player already sees, and the game id that reopens the table. */
+export type MyTableState = "waiting" | "playing" | "finished" | "resume" | "paused" | "unavailable" | "cannot-continue" | "watch-only";
+
+export interface MyTableSummary {
+  gameId: string;
+  state: MyTableState;
+  visibility: RoomVisibility;
+  hostNickname: string;
+  nicknames: string[];
+  you: "host" | "player";
+  createdAtMs: number;
+  lastActivityMs: number;
+}
+
+const MY_TABLE_STATES: ReadonlySet<string> = new Set(["waiting", "playing", "finished", "resume", "paused", "unavailable", "cannot-continue", "watch-only"]);
+
+/** The tables in a `my-tables` answer, keeping only well-formed entries (a game id the client will open, a known
+ *  state); anything else is dropped rather than guessed at. */
+export function myTablesOf(data: Record<string, unknown>): MyTableSummary[] {
+  const tables = Array.isArray(data.tables) ? data.tables : [];
+  return tables.filter((entry): entry is MyTableSummary => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const table = entry as Record<string, unknown>;
+    return (
+      typeof table.gameId === "string" &&
+      isGameId(table.gameId) &&
+      typeof table.state === "string" &&
+      MY_TABLE_STATES.has(table.state) &&
+      (table.visibility === "public" || table.visibility === "private") &&
+      typeof table.hostNickname === "string" &&
+      Array.isArray(table.nicknames) &&
+      table.nicknames.every((name) => typeof name === "string") &&
+      (table.you === "host" || table.you === "player") &&
+      typeof table.createdAtMs === "number" &&
+      typeof table.lastActivityMs === "number"
+    );
+  });
+}
+
+/** What "Your tables" says a table is, and what its button says. */
+export function myTableLabel(state: MyTableState): { status: string; action: string } {
+  switch (state) {
+    case "waiting":
+      return { status: "Waiting to start", action: "Return to table" };
+    case "playing":
+      return { status: "Under way", action: "Return to table" };
+    case "resume":
+      return { status: "Under way", action: "Return to table" };
+    case "finished":
+      return { status: "Finished", action: "View final board" };
+    case "paused":
+      return { status: "Paused for maintenance", action: "Open" };
+    case "unavailable":
+      return { status: "Temporarily unavailable", action: "Try again" };
+    case "cannot-continue":
+      return { status: "Cannot continue on this server", action: "Open" };
+    case "watch-only":
+      return { status: "Watch only (another server build)", action: "Watch" };
+  }
+}
+
 /** One line of a game's transcript. `author` is the speaking seat's `player_id`; `displayName` is that seat's
  *  nickname when it was said (a later rename does not rewrite bylines). */
 export interface RoomChatEntry {
@@ -125,7 +188,9 @@ export type RoomOpBody =
   | { type: "kick"; playerId: string }
   | { type: "transfer-host"; toPlayerId: string }
   | { type: "start-game" }
-  | { type: "cancel-room" };
+  | { type: "cancel-room" }
+  /** LIVE-2F/3D (C9-01): a read -- the caller's own tables, answered `{tables: MyTableSummary[]}`. */
+  | { type: "my-tables" };
 
 export type RoomOpType = RoomOpBody["type"];
 

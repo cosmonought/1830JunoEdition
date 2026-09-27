@@ -352,6 +352,45 @@ export interface RoomSummary {
   createdAtMs: number;
 }
 
+/* ==================================================================
+    LIVE-2F/3D (C9-01): "YOUR TABLES" -- the way back to a seat
+   ==================================================================
+   The only pointer a browser keeps to its table is the tab's own `sessionStorage`. A private table's code is released
+   at the deal and a private table is never in the public list, so a player who closed the tab, linked a device,
+   recovered onto a new browser, signed out and in, or pressed "← Lobby" had a seat nothing on screen could reach. This
+   is the LIVE-2 design's reserved "my games" read, as a room op on the lobby channel: every table whose RECORD seats
+   the caller's principal -- whatever the table's class -- with nothing beyond what a seated player already sees (no
+   principal id, no code). Opening one goes through the game's actor like any other open, so an unreconciled table is
+   reconciled first and a held one says it is held; the list itself decides and changes nothing. */
+export type MyTableState = "waiting" | "playing" | "finished" | "resume" | "paused" | "unavailable" | "cannot-continue" | "watch-only";
+
+export interface MyTableSummary {
+  gameId: string;
+  state: MyTableState;
+  visibility: "public" | "private";
+  hostNickname: string;
+  nicknames: string[];
+  you: "host" | "player";
+  createdAtMs: number;
+  lastActivityMs: number;
+}
+
+export function myTableSummaryOf(record: GameRecord, principalId: string, state: MyTableState): MyTableSummary | null {
+  const seat = seatOf(record, principalId);
+  if (seat === null) return null;
+  const host = record.seats.find((candidate) => candidate.player_id === record.host_player_id);
+  return {
+    gameId: record.game_id,
+    state,
+    visibility: record.visibility,
+    hostNickname: host?.nickname ?? "",
+    nicknames: record.seats.map((candidate) => candidate.nickname),
+    you: seat.player_id === record.host_player_id ? "host" : "player",
+    createdAtMs: record.created_at,
+    lastActivityMs: record.last_activity_at,
+  };
+}
+
 export function roomViewFor(
   record: GameRecord,
   facts: LogFacts,

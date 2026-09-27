@@ -144,7 +144,7 @@ the owner's decision was that the persistent border was never earning its keep �
 tells the player which track/revenue centres are contributing — so the badge was redesigned to react only
 transiently. The FIRST such redesign made a hit revenue badge's interior briefly flush toward a pale tint of
 the arriving route's own colour, fading back to white. A side-by-side visual-prototype comparison
-(`Claude outputs/vf2_badge_reaction_comparison.html`) run against real cramped-tile fixtures resolved this in
+(`archive/claude-history/visual-prototypes/vf2_badge_reaction_comparison.html`) run against real cramped-tile fixtures resolved this in
 favour of a SECOND, purely mechanical design instead: the badge's interior never takes a colour input at all,
 at any point — it stays plain white/black always — and instead the whole printed badge (fill, border and
 number, as one object) physically POPS at the instant of revenue arrival: a fast overshoot past its resting

@@ -1,5 +1,10 @@
 # Rules-hardening backlog — the living ledger
 
+> **Repository prune, 2026-09-27.** The historical documents this ledger cites by bare filename (the `BATCH*` write-ups,
+> `STAGE8_*` / `STAGE9_*`, the `AUDIT_*` files, `MIGRATION_PLAN.md`, `DECISIONS_2026-09-06.md`, `TECH_DEBT.md`,
+> `frontend_blueprint.md`, and the Gentle Rust / Unpredictable Revenue `VARIANT_CERT_*` files) moved to `archive/`, filenames unchanged.
+> See `archive/README.md` for where each file is now. Current project state is in `PROJECT_CANONICAL_CONTEXT.md`.
+
 **Purpose.** The single durable source of truth for everything the rules-hardening sequence found and did not
 finish: deferred findings, confirmed bugs, deliberate rule deviations and owner decisions, and later-stage work.
 It replaces re-reading the batch write-ups and the retired triage documents. Opened 2026-09-15, seeded from

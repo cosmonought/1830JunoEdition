@@ -102,21 +102,49 @@ export type AcquireResult =
 
 const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoException | undefined)?.code;
 
+/* ==================================================================
+    LIVE-2F/3D (WINDOWS): A HANDLE OPEN FOR A MOMENT IS NOT A VERDICT
+   ==================================================================
+   Windows refuses a rename, a write or a read with EPERM / EBUSY / EACCES while another handle is open on the file or
+   inside the directory for a moment -- a racer's inspection, an antivirus scan of a file just written -- where POSIX
+   never would. None of that is an answer about the lock. So: the lock's own writes are retried briefly on those codes;
+   the loop that settles a contest waits a short, random moment before looking again (eight racers inspecting one
+   directory without a pause could otherwise refuse each other's renames until every one of them gave up); and a read
+   of owner.json that fails for such a reason is read again before anything is concluded from it -- never "not ours"
+   (which fences a live server) on the strength of a sharing violation. */
+const TRANSIENT_CODES: ReadonlySet<string> = new Set(["EPERM", "EBUSY", "EACCES"]);
+const TRANSIENT_RETRIES = 6;
+const pause = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const settleDelay = (attempt: number): number => 5 + Math.floor(Math.random() * Math.min(60, 10 * (attempt + 1)));
+
+async function retryTransient<T>(work: () => Promise<T>): Promise<T> {
+  for (let tries = 0; ; tries += 1) {
+    try {
+      return await work();
+    } catch (error) {
+      if (tries >= TRANSIENT_RETRIES || !TRANSIENT_CODES.has(codeOf(error) ?? "")) throw error;
+      await pause(settleDelay(tries));
+    }
+  }
+}
+
+/** owner.json as it stands: the owner, `null` when absent or not an owner record, `undefined` when it could not be
+ *  read even after brief retries (inconclusive -- the caller decides nothing from it). */
+async function readOwnerSettled(lockDir: string): Promise<LockOwner | null | undefined> {
+  for (let tries = 0; tries <= TRANSIENT_RETRIES; tries += 1) {
+    const owner = await readOwnerForInspection(lockDir);
+    if (owner !== undefined) return owner;
+    await pause(settleDelay(tries));
+  }
+  return undefined;
+}
+
 async function mtimeOf(file: string): Promise<number | null> {
   try {
     return (await fs.stat(file)).mtimeMs;
   } catch (error) {
     if (codeOf(error) === "ENOENT") return null;
     throw error;
-  }
-}
-
-async function readOwner(lockDir: string): Promise<LockOwner | null> {
-  try {
-    const parsed = JSON.parse(await fs.readFile(path.join(lockDir, "owner.json"), "utf8")) as LockOwner;
-    return typeof parsed?.instance_id === "string" ? parsed : null;
-  } catch {
-    return null; // absent or half-written: the owner is identified by the directory's age alone
   }
 }
 
@@ -208,9 +236,10 @@ export async function acquireDataLock(dataDir: string, options: DataLockOptions 
 
   let tookOver: { previous: LockOwner | null; ageMs: number } | null = null;
   let asideDir: string | null = null;
-  for (let attempt = 0; attempt < 8; attempt += 1) {
+  for (let attempt = 0; attempt < 32; attempt += 1) {
+    if (attempt > 0) await pause(settleDelay(attempt)); // LIVE-2F/3D (Windows): never look again at once
     try {
-      await fs.mkdir(lockDir);
+      await retryTransient(() => fs.mkdir(lockDir));
     } catch (error) {
       if (codeOf(error) !== "EEXIST") throw error;
       const seen = await inspect(lockDir, now());
@@ -274,15 +303,15 @@ export async function acquireDataLock(dataDir: string, options: DataLockOptions 
     };
     const ownerTmp = path.join(lockDir, `owner.json.${instanceId}.tmp`);
     try {
-      await fs.writeFile(ownerTmp, JSON.stringify(owner));
-      await fs.rename(ownerTmp, path.join(lockDir, "owner.json"));
-      await fs.writeFile(path.join(lockDir, "heartbeat"), `${now()}\n`);
+      await retryTransient(() => fs.writeFile(ownerTmp, JSON.stringify(owner)));
+      await retryTransient(() => fs.rename(ownerTmp, path.join(lockDir, "owner.json")));
+      await retryTransient(() => fs.writeFile(path.join(lockDir, "heartbeat"), `${now()}\n`));
     } catch (error) {
       beacon?.close();
       if (codeOf(error) === "ENOENT") continue; // our fresh LOCK was moved aside by a racer: look again
       throw error;
     }
-    if ((await readOwner(lockDir))?.instance_id !== instanceId) {
+    if ((await readOwnerSettled(lockDir))?.instance_id !== instanceId) {
       beacon?.close();
       continue;
     }
@@ -331,8 +360,12 @@ function heldLock(
   const verify = async (): Promise<boolean> => {
     if (lost) return false;
     if (released) return false;
-    const owner = await readOwner(lockDir);
+    const owner = await readOwnerSettled(lockDir);
     if (owner?.instance_id === instanceId) return true;
+    /* LIVE-2F/3D (Windows): owner.json that cannot be READ just now (a sharing violation that outlasted the retries)
+       proves nothing either way: this write is refused (the caller answers "not made, try again"), and the lock is
+       not given up -- only an owner.json that names another instance, or none, fences this process. */
+    if (owner === undefined) return false;
     markLost(
       owner === null
         ? `${lockDir} no longer names this instance (${instanceId}): it was removed or moved`
@@ -358,7 +391,7 @@ function heldLock(
     async release() {
       if (released) return;
       clearInterval(timer);
-      const ours = !lost && (await readOwner(lockDir))?.instance_id === instanceId;
+      const ours = !lost && (await readOwnerSettled(lockDir))?.instance_id === instanceId;
       released = true;
       try {
         if (ours) await fs.rm(lockDir, { recursive: true, force: true });

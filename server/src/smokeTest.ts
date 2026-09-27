@@ -257,7 +257,8 @@ async function startServer(label: string, port: number, dataDir: string, setting
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const name of OWNED_SETTINGS) delete env[name];
   Object.assign(env, { PORT: String(port), DATA_DIR: dataDir, BUILD_ID: BUILD }, settings);
-  const child = spawn(process.execPath, [START_JS], { cwd: SERVER_DIR, env, stdio: ["ignore", "pipe", "pipe"] });
+  /* The IPC channel is the clean stop on Windows (`stopServer`): there, "SIGTERM" from a parent is a hard kill. */
+  const child = spawn(process.execPath, [START_JS], { cwd: SERVER_DIR, env, stdio: ["ignore", "pipe", "pipe", "ipc"] });
   const exit = new Promise<Exit>((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
   const server: ServerProcess = { label, port, child, output: [], exited: null, exit };
   void exit.then((value) => {
@@ -285,7 +286,10 @@ async function startServer(label: string, port: number, dataDir: string, setting
 
 async function stopServer(server: ServerProcess, signal: NodeJS.Signals): Promise<Exit> {
   if (server.exited !== null) return server.exited;
-  server.child.kill(signal);
+  /* LIVE-2F/3D: on Windows a parent cannot deliver SIGTERM (Node's kill() is TerminateProcess there), so the clean
+     stop is asked for over the IPC channel -- start.ts runs the same release for it as for a signal. */
+  if (signal === "SIGTERM" && process.platform === "win32") server.child.send("shutdown");
+  else server.child.kill(signal);
   const backstop = setTimeout(() => server.child.kill("SIGKILL"), 10_000);
   const exited = await server.exit;
   clearTimeout(backstop);

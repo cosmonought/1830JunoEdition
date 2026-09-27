@@ -240,6 +240,15 @@ async function main(): Promise<void> {
       // a signal this platform does not have
     }
   }
+  /* LIVE-2F/3D (WINDOWS): no signal reaches another process on Windows except as a hard kill (TerminateProcess -- the
+     lock is left behind, the audit not flushed). A parent that spawned this server with an IPC channel -- a process
+     manager (PM2's convention there) or a test harness -- asks for the same clean stop by message. Only that parent
+     holds the channel; a server started from a console has none, and Ctrl+C there is SIGINT as before. */
+  if (typeof process.send === "function") {
+    process.on("message", (message) => {
+      if (message === "shutdown") release(0);
+    });
+  }
   process.on("exit", () => held.releaseSync());
 
   printBanner(held.instanceId);

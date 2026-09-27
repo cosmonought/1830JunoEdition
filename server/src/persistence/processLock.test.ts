@@ -168,10 +168,10 @@ describe("the data-directory lock (§8.8)", () => {
    ================================================================== */
 const COMPILED = __dirname; // dist/server/src/persistence
 const run = (args: string[], env: NodeJS.ProcessEnv = {}) => {
-  const child = spawn(process.execPath, args, { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(process.execPath, args, { env: { ...process.env, ...env }, stdio: ["ignore", "pipe", "pipe", "ipc"] });
   let out = "";
-  child.stdout.on("data", (chunk) => (out += String(chunk)));
-  child.stderr.on("data", (chunk) => (out += String(chunk)));
+  child.stdout?.on("data", (chunk) => (out += String(chunk)));
+  child.stderr?.on("data", (chunk) => (out += String(chunk)));
   const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
   return { child, output: () => out, exited };
 };
@@ -233,7 +233,10 @@ describe("FI-28: processes", () => {
       const c = run(args);
       assert.equal(await c.exited, 2);
       // A clean stop releases the directory.
-      survivor.child.kill("SIGTERM");
+      /* LIVE-2F/3D: Windows has no SIGTERM for another process (kill() is TerminateProcess), so the clean stop is asked
+         for over the IPC channel there -- start.ts runs the same release for it. */
+      if (process.platform === "win32") survivor.child.send("shutdown");
+      else survivor.child.kill("SIGTERM");
       await survivor.exited;
       assert.equal(fs.existsSync(path.join(dir, LOCK_DIRECTORY)), false, survivor.output());
     }));

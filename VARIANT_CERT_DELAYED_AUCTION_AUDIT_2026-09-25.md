@@ -30,9 +30,10 @@ still 10. Still NOT certified — DA-7 next.
 through a pinned `RoomSession` (§21's main path, boundaries A–G), with tails T3 (C&A with the PRR IPO exhausted), T4 (a
 curable auction overage), T5 (D-55 through the room) and the standard control; restore / replay / one-step `RevertTo` at
 eight cut points; room / reducer / ingress parity for every refusal (§22 — DA-7 record). Test gaps DA-T1, DA-T2, DA-T3,
-DA-T4, DA-T8 and DA-T12 closed; DA-T10 closed in part; DA-T6's contest-into-contest and DA-T11's bank break remain as
-recorded (§20). RR2A-F2 and C2-02 closed; DA6-O1 / DA6-O2 corrected. No finding forces a replay change; DA-F12 stays
-DA-8's. `RULES_ENGINE_VERSION` still 10 — DA-8 owns the 10 → 11 boundary.
+DA-T4, DA-T6, DA-T8, DA-T11 and DA-T12 closed; DA-T10 closed in part (§20). DA-T6's contest cascading into a contest and
+DA-T11's bank break inside the trigger set were closed in DA-7's closure commit, before the push: both are reachable
+behaviour, now certified through the room. RR2A-F2 and C2-02 closed; DA6-O1 / DA6-O2 corrected. No finding forces a
+replay change; DA-F12 stays DA-8's. `RULES_ENGINE_VERSION` still 10 — DA-8 owns the 10 → 11 boundary.
 
 **Date:** 2026-09-25 · **Pass:** DA-1 (audit / design only — no gameplay code changed) · **Status of the variant:**
 `DEFERRED — PRE-LAUNCH VARIANT CERTIFICATION REQUIRED` (S9-7). **NOT certified.**
@@ -529,7 +530,7 @@ OD-DA-3.
 | R19 | Privates close with the first 5-train, also unsold ones | §2.5 | `1349-1356` | closed in `private_companies`, **still offered by the atom** | none | **BUG DA-F9 (LOW)** — *(rev 2)* intended behaviour decided (D-55: the delayed auction is cancelled) — *(rev 8)* **FIXED by DA-5** |
 | R20 | Certificate limit / 60% when the auction pushes a player over | §4.3 (silent for this case) | divestment debt | allowed; conform at next SR turn | none | **OWNER DECISION OD-DA-2** — *(rev 2)* decided (D-53; OD-DA-2b → D-57, rev 3; OD-DA-2c → D-58, rev 4; OD-DA-2d → D-59, rev 5) — *(rev 8)* **implemented by DA-5** |
 | R21 | Private hexes before the auction | §6.2.1(4) + S6-7 / #1694 (recorded reading: an unsold private releases — made on the premise that no tile is laid before the auction) | `privateReservations.ts:296-303` | open | `stage106LayTileClosure.test.ts:531` | **OWNER DECISION OD-DA-3** — *(rev 2)* decided (D-54): current behaviour stands; rationale amended — *(rev 8: the #1694 comment corrected by DA-5)* |
-| R22 | Bank break in the trigger set → end, no auction | §8 / rulebook end rule | `4668-4674` | GameEnd first | none (DA) | PASS; MISSING TEST |
+| R22 | Bank break in the trigger set → end, no auction | §8 / rulebook end rule | `4668-4674` | GameEnd first | none (DA) | PASS; MISSING TEST *(rev 10: TESTED — DA-T11, `da7DelayedAuctionCertification.test.ts`)* |
 | R23 | Replay / restore / undo | architecture | rebuild from log | correct by construction | standard only | PASS; MISSING TEST |
 | R24 | Server / room parity | architecture | `RoomSession` → reducer | same predicates | standard only | PASS; MISSING TEST |
 | R25 | Player-facing copy | A1–A3 | §14 | several stale | pinned strings §14 | **STALE COPY/UI DA-F8** |
@@ -767,8 +768,23 @@ refused) and the B&O's first train closes the BO private. **DA-T10 CLOSED IN PAR
 the same run arm the auction on the same entry, opener and board facts (no route is run, so the die and the fog never
 fire; §16's structural analysis stands for those). **DA-T12 CLOSED** — the whole run through `RoomSession`, restored and
 replayed to the same digest at eight cut points, `RevertTo` across the arming, a mid-auction purchase, the C&A grant, the
-last private, the par and the handoff. DA-T6 (contest cascading into a contest) and DA-T11 (bank break inside the trigger
-set) unchanged.
+last private, the par and the handoff. **DA-T6 CLOSED** — a contest that cascades into a contest is reachable (two bids on
+each of two adjacent privates, then a face-value purchase below them) and is now certified in the Delayed Auction through
+the room and in the standard control: the first contest's award opens the second with no message sent, its bidders
+lowest-first and the main rotation frozen; each winner pays his winning bid once and each loser nothing; the cascade
+stops at the first unbid private and the rotation resumes left of the DIRECT buyer; both contests rebuild exactly; a
+one-step undo of the award that opened the second contest restores the first; the Priority Deal at the handoff is left of
+the last direct purchaser. **DA-T11 CLOSED** — the bank break inside the trigger set, on G-DA's real trigger board with a
+constructed Gulf-line C&O (UR-3's network) and the bank at $20: the break is real (a $50 run, the distributed dividend
+past zero; withholding breaks it too, so no legal play avoids it), the set still finishes (the PRR takes its turn and
+buys its 3-train), and the set's end is **GameEnd, not the auction** — no macro-round opened, the atom never armed,
+`private_auction_complete` still false, the privates unsold and open, the C&A's certificate still reserved inside the IPO;
+every auction message, the handoff, a round transition, a turn and a `RevertTo` (RV-3) are refused at GameEnd; the
+settlement appraises no unsold private for anyone; live == replay == restore at three cut points; an undo inside the
+broken set keeps the ending due; the identical set with a solvent bank arms the auction on the Priority Deal holder,
+entry for entry; a bank already broken when the set opens ends it the same way (#898). Bankruptcy inside the set is the
+immediate end (`settleBankruptcy`), after which only `CloseRoom` passes, so the set end that inserts the auction is never
+reached.
 
 ---
 
@@ -889,7 +905,7 @@ said the privates were for sale at the first 3-train) and DA6-N2 (the reserved s
 replay semantics, golden, corpus or settlement artifact changed; `RULES_ENGINE_VERSION` still 10.
 
 **DA-7 record (rev 10, 2026-09-27).** *Certification game:* G-DA through a pinned `RoomSession` from the deal, no board
-patched (`da7DelayedAuctionCertification.test.ts`, 50 cases); every applied message conserves every corporation's
+patched (`da7DelayedAuctionCertification.test.ts`, 62 cases, DA-T6 and DA-T11 included); every applied message conserves every corporation's
 certificates and the money in the game; every refusal is asserted at ingress, on a replica of the room's engine and in the
 room (nothing appended, no digest move). The only refusals the reducer does not repeat are the SENDER questions — turn,
 the B&O owner naming themself, the one-step undo — which are ingress's and the transport's by design (#1174, #1207).

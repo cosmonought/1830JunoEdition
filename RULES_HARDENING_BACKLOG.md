@@ -3596,9 +3596,10 @@ receipt (`actionWasRefused`, no REFUSED line) are unchanged; stored duplicates s
 `c202HarmlessDuplicate.test.ts` (5) and `stage102RefusalTransport` D1-D4 (expectations moved from "applied, appended" to
 "settled, nothing appended"). DA6-O1: the auction tutorial's all-pass page now states §1.2.3's two exclusive outcomes
 (the SV alone is marked down; once it is sold, the owned privates pay). DA6-O2: the Stock page's limit sentence carries
-the curable-only qualifier. Certification: `da7DelayedAuctionCertification.test.ts` (50) -- G-DA from the deal through a
+the curable-only qualifier. Certification: `da7DelayedAuctionCertification.test.ts` (62) -- G-DA from the deal through a
 pinned room, T3 / T4 / T5 tails, the standard control, GR + UR composition, restore / replay / `RevertTo` at eight cut
-points. Filed, not fixed: **DA7-L1** (LOW, `OPEN`) -- outside the auction an off-turn seat's auction message is refused
+points, and (the closure commit) DA-T6 -- a contest cascading into a contest, delayed and standard -- and DA-T11 -- a real
+bank break inside the trigger set ends the game at the set's end, never the owed auction. Filed, not fixed: **DA7-L1** (LOW, `OPEN`) -- outside the auction an off-turn seat's auction message is refused
 "It is not your turn." (the seat question runs before DA-3's round gate at ingress); refused at every layer, wording only.
 Fixture-shape sweep (tests closing a Stock Round through the reducer with a seat over a cap): none exercised; three
 latent shapes noted, unchanged. Record: `claude/DA7_DELAYED_AUCTION_CERTIFICATION_2026-09-27.md`.

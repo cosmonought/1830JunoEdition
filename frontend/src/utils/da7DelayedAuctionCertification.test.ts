@@ -60,6 +60,12 @@ const { describeGameplayAction } = require("./actionLog") as typeof import("./ac
 const { RoomSession } = require("./roomSession") as typeof import("./roomSession");
 const { STATION_HOME_HEXES } = require("../components/hexContractTypes") as typeof import("../components/hexContractTypes");
 const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const YS = require("./yellowSignRunBoundSupport") as typeof import("./yellowSignRunBoundSupport");
+const { STATIC_BOARD_HEXES } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
+const { marketCellForPrice } = require("../gameEngine/marketGeometry") as typeof import("../gameEngine/marketGeometry");
+const { bankIsBroken } = require("../gameEngine/endgame") as typeof import("../gameEngine/endgame");
+const { appraiseSeats } = require("../gameEngine/settlementAppraisal") as typeof import("../gameEngine/settlementAppraisal");
+const { REVERT_GAME_ENDED } = require("../gameEngine/logRevert") as typeof import("../gameEngine/logRevert");
 
 const A = "p-da7-a01";
 const B = "p-da7-b02";
@@ -250,7 +256,9 @@ class Game {
        frame). A log replays what was committed, so that question is the transport's and ingress's -- the
        "legitimately stronger outer hold" of the DA-7 brief §9. Such a refusal must carry one of the seat sentences,
        and is recorded; a RULE the reducer does not also enforce would fail here. */
-    if (reducerMoves(this, actor, msg)) {
+    /* A `RevertTo` is an instruction about the LOG (#1026): the room resolves it by rebuilding, never through the
+       reducer, so the reducer is not asked (`UNCHANGED_IS_NOT_A_REFUSAL`); its authority is `revertRefusal` alone. */
+    if (!("RevertTo" in (msg as object)) && reducerMoves(this, actor, msg)) {
       expect([kind, actor, ingress !== null && SEAT_SENTENCES.some((pattern) => pattern.test(ingress ?? ""))]).toEqual([kind, actor, true]);
       seatOnly.push(`${kind} by ${actor.slice(-3)}: ${ingress}`);
     }
@@ -299,6 +307,8 @@ function sellTurn(game: Game, ticker: string, percentage: number): string {
 }
 /** Whether the game stands in an Operating Round (a function, so a loop's condition is re-read, not narrowed). */
 const inOperating = (game: Game): boolean => game.state.current_round_type === "OperatingRound";
+/** The Operating Round step the game stands on (a function, for the same reason). */
+const stepOf = (game: Game): string | null => game.state.operating_sub_phase ?? null;
 function finishStockRound(game: Game): State {
   const macro = game.state.macro_round_number;
   for (let guard = 0; game.state.current_round_type === "StockRound" && game.state.macro_round_number === macro; guard += 1) {
@@ -1340,5 +1350,299 @@ describe("composition (DA-T10, in part): Gentle Rust + Unpredictable Revenue do 
     expect(composed.room.entries.map(kindOf)).toEqual(plain.room.entries.map(kindOf)); // the same log, entry for entry
     const mark = composed.mark("DA-T10.armed");
     expectRebuildsAt(mark, "DA-T10.armed");
+  });
+});
+
+/* ==================================================================================================================== */
+/* DA-T6: A CONTEST THAT CASCADES INTO A CONTEST -- delayed, and the standard control                                   */
+/* ==================================================================================================================== */
+
+/** From an auction whose SV is sold and whose five other privates stand unbid: two bids on the D&H and two on the M&H,
+ *  then a face-value purchase of the C&SL. The cascade reaches the D&H (two bids: a contest), whose award cascades on to
+ *  the M&H (two bids: a SECOND contest, opened by the first one's resolution), whose award cascades on to the C&A (no
+ *  bids: the cascade stops and the main rotation resumes). Returns who did what. */
+function contestIntoContest(game: Game) {
+  const w = () => game.state.waterfall!;
+  expect(w().privates.map((entry) => entry.private_id)).toEqual([CS, DH, MH, CA, BO]);
+  expect(w().privates.every((entry) => entry.bids.length === 0)).toBe(true);
+  const first = auctionStep(game, ["bid", DH, 75]);
+  const second = auctionStep(game, ["bid", DH, 80]);
+  const third = auctionStep(game, ["bid", MH, 115]);
+  expect(auctionStep(game, ["bid", MH, 120])).toBe(first); // three seats: the first bidder bids on both
+  const cash0 = Object.fromEntries([A, B, C].map((player) => [player, cashOf(game.state, player)]));
+  const buyer = auctionStep(game, "buy"); // the C&SL at face -- the chain of a DIRECT purchase
+  expect(buyer).toBe(second);
+  expect(ownerOf(game.state, CS)).toBe(buyer);
+
+  // CONTEST 1, on the D&H: its two bidders, lowest first; the main rotation frozen; only a bidder answers.
+  expect(w().mini_auction).toMatchObject({ private_id: DH, bidders: [first, second], high_bidder: second, high_bid: "80", current_turn: first });
+  game.mark("T6.contest-1");
+  for (const player of [A, B, C]) {
+    game.refuse(player, WF_BUY);
+    game.refuse(player, WF_PASS);
+    game.refuse(player, WF_BID(CA, 165));
+  }
+  game.refuse(third, WF_RAISE(90)); // not a bidder in this contest
+  game.refuse(second, WF_RAISE(90)); // the high bidder's own turn is skipped
+  auctionStep(game, ["raise", 85], first);
+  auctionStep(game, "mini-pass", second); // FIRST wins the D&H at $85 -- and the cascade goes on
+
+  // CONTEST 2, opened by contest 1's award: the M&H's two bidders, lowest first -- nobody sent anything to open it.
+  expect(ownerOf(game.state, DH)).toBe(first);
+  expect(w().privates.map((entry) => entry.private_id)).toEqual([MH, CA, BO]);
+  expect(w().mini_auction).toMatchObject({ private_id: MH, bidders: [third, first], high_bidder: first, high_bid: "120", current_turn: third });
+  game.mark("T6.contest-2");
+  for (const player of [A, B, C]) game.refuse(player, WF_BUY);
+  game.refuse(second, WF_RAISE(125)); // not a bidder in THIS contest
+  game.refuse(first, WF_MINI_PASS); // the high bidder waits
+  auctionStep(game, ["raise", 125], third);
+  auctionStep(game, "mini-pass", first); // THIRD wins the M&H at $125; the C&A has no bid: the cascade stops
+
+  expect(ownerOf(game.state, MH)).toBe(third);
+  expect(w().mini_auction ?? null).toBeNull();
+  expect(w().privates.map((entry) => entry.private_id)).toEqual([CA, BO]);
+  // Each winner paid his winning bid once; each loser nothing; the direct buyer his face value -- and nothing else moved.
+  expect(cashOf(game.state, first)).toBe(cash0[first] - 85);
+  expect(cashOf(game.state, second)).toBe(cash0[second] - 40);
+  expect(cashOf(game.state, third)).toBe(cash0[third] - 125);
+  // The main rotation resumes where the direct purchase left it -- on the buyer's left -- as after one contest (DA-4).
+  const left = (player: string) => game.state.player_addresses[(game.state.player_addresses.indexOf(player) + 1) % 3];
+  expect(actorOf(game.state)).toBe(left(buyer));
+  game.mark("T6.resumed");
+  return { first, second, third, buyer, left };
+}
+
+describe("DA-T6: a contest that cascades into a contest -- the Delayed Auction, through the room", () => {
+  let game: Game;
+  let who: ReturnType<typeof contestIntoContest>;
+  beforeAll(() => {
+    game = new Game(restoredAt(G.at("D.after-first-buy")));
+    game.bank = G.bank;
+    who = contestIntoContest(game);
+  });
+
+  it("the first contest's award opens the second at once; each winner pays once, each loser nothing; the rotation resumes left of the direct buyer", () => {
+    expect([who.first, who.second, who.third, who.buyer]).toEqual([C, A, B, A]);
+    expect(actorOf(game.state)).toBe(B);
+  });
+
+  it("both contests, and the resumption, rebuild exactly: live == replay == restore", () => {
+    for (const label of ["T6.contest-1", "T6.contest-2", "T6.resumed"]) expectRebuildsAt(game.at(label), label);
+  });
+
+  it("one-step undo of the award that opened contest 2 puts contest 1 back, open, on its answerer; the same answer reopens contest 2 exactly", () => {
+    const again = new Game(restoredAt(game.at("T6.contest-2")));
+    const last = [...effectiveActions(again.room.entries)].reverse().find((entry) => !entry.derived)!;
+    expect(kindOf(last)).toBe("WaterfallMiniAuctionPass");
+    again.play(A, REVERT(last.index, A));
+    expect(again.state.waterfall?.mini_auction).toMatchObject({ private_id: DH, high_bidder: C, high_bid: "85", current_turn: A });
+    expect(ownerOf(again.state, DH)).toBeNull();
+    again.play(A, WF_MINI_PASS);
+    expect(stateDigest(again.state)).toBe(game.at("T6.contest-2").digest);
+  });
+
+  it("the auction then ends the ordinary way: the Priority Deal left of the last DIRECT purchaser, not of a contest's winner", () => {
+    const rest = new Game(restoredAt(game.at("T6.resumed")));
+    rest.bank = G.bank;
+    const buyers: string[] = [];
+    for (let guard = 0; rest.state.waterfall!.privates.length > 0; guard += 1) {
+      if (guard > 6) throw new Error("the auction did not finish");
+      buyers.push(auctionStep(rest, "buy"));
+    }
+    const owner = boParOwedTo(rest.state)!;
+    rest.play(owner, PAR(owner, 67));
+    rest.play(owner, OPEN);
+    const lastDirect = buyers[buyers.length - 1];
+    expect([rest.state.current_round_type, rest.state.macro_round_number]).toEqual(["StockRound", 3]);
+    expect(holderOf(rest.state)).toBe(who.left(lastDirect));
+  });
+});
+
+describe("DA-T6 standard control: the same contest-into-contest in the opening auction", () => {
+  it("behaves identically -- the delayed variant adds nothing to the cascade", () => {
+    const game = dealt(false);
+    auctionStep(game, "buy", A); // A buys the SV; the five others stand unbid
+    const who = contestIntoContest(game);
+    expect([who.first, who.second, who.third, who.buyer]).toEqual([B, C, A, C]);
+    expect(actorOf(game.state)).toBe(A);
+    expectRebuildsAt(game.at("T6.contest-2"), "standard T6.contest-2");
+  });
+});
+
+/* ==================================================================================================================== */
+/* DA-T11: THE BANK BREAKS INSIDE THE OPERATING ROUND SET THAT OWES THE DELAYED AUCTION                                 */
+/* ==================================================================================================================== */
+
+describe("DA-T11: a bank break inside the trigger set -- the set finishes, the game ends, the owed auction never runs", () => {
+  /* THE BOARD: G-DA's real "C.trigger" -- the NYC has just bought the FIRST 3-train, the set continues on the PRR, the
+     auction is owed (phase 3, `private_auction_complete` false, the atom dormant with six privates, the C&A's PRR share
+     reserved). CONSTRUCTED on it, as UR-3's harness constructs its network (`yellowSignRunBoundSupport.ts`): the C&O,
+     floated under C (60%, par $67, treasury $670, one 2-train), stationed on I5 of the Gulf line and inserted between
+     the NYC and the PRR in this set's order; the Gulf line's tiles (the room's grid); and the bank at $20. So the break
+     is REAL: the C&O runs I5-I3-J2 through the room and a distributed dividend takes the bank past zero -- the latch
+     `debitBank` sets (#1561). Everything else is the real run's. */
+  function breakEve(bank = 20): { start: Start; providers: object } {
+    const real = G.at("C.trigger").state;
+    const co = companyOf(real, "C&O");
+    const nyc = companyOf(real, "NYC").company_id;
+    const prr = companyOf(real, "PRR").company_id;
+    const hex = (label: string) => STATIC_BOARD_HEXES.find((entry) => entry.label === label)!;
+    const state = {
+      ...real,
+      virtual_bank_vgp: String(bank),
+      active_operating_order: [nyc, co.company_id, prr],
+      active_corporation_index: 1,
+      operating_sub_phase: "Track",
+      active_player_index: real.player_addresses.indexOf(C),
+      market_positions: { ...real.market_positions, [co.company_id]: { price: 67, ...marketCellForPrice(67)!, enteredAt: 3 } },
+      public_companies: real.public_companies.map((company) =>
+        company.company_id === co.company_id
+          ? {
+              ...company,
+              is_floated: true,
+              president: C,
+              par_value: "67",
+              treasury: "670",
+              owned_trains: ["2"],
+              last_route_revenue: "0",
+              player_holdings: [{ player: C, percentage: 60 }],
+              ipo_pool_percentage: 40,
+              home_hex_label: "I5",
+              station_token_hexes: [[hex("I5").q, hex("I5").r]],
+              station_tokens: [[hex("I5").q, hex("I5").r, 0]],
+            }
+          : company,
+      ),
+    } as unknown as State;
+    return { start: { state, waterfall: state.waterfall ?? null }, providers: YS.roomProviders(state, YS.GULF) };
+  }
+
+  /** The C&O's turn: to Routes, the Gulf run, the dividend (paid out or withheld), End Turn. */
+  function coTurn(game: Game, distribute: boolean) {
+    for (let guard = 0; stepOf(game) !== "Routes"; guard += 1) {
+      if (guard > 4) throw new Error("the C&O did not reach Routes");
+      game.play(C, ADVANCE(game.state, "C&O"));
+    }
+    game.refuse(C, ADVANCE(game.state, "C&O")); // a paying route may not be skipped (§6.4)
+    const bankBeforeRun = Number(game.state.virtual_bank_vgp);
+    game.play(C, YS.runMsg(companyOf(game.state, "C&O").company_id, [YS.TWO_ROUTE], [0], ["2"]));
+    const earned = Number(companyOf(game.state, "C&O").last_route_revenue);
+    const bankAfterRun = Number(game.state.virtual_bank_vgp);
+    expect(earned).toBeGreaterThan(0);
+    for (let guard = 0; stepOf(game) !== "Dividends"; guard += 1) {
+      if (guard > 2) throw new Error("the C&O did not reach Dividends");
+      game.play(C, ADVANCE(game.state, "C&O"));
+    }
+    game.play(C, { DeclareDividends: { game_id: 0, protocol_id: companyOf(game.state, "C&O").company_id, revenue_amount: String(earned), distribute } });
+    const bankAfterDividend = Number(game.state.virtual_bank_vgp);
+    expect(bankAfterRun).toBe(bankBeforeRun); // the run records the revenue; the dividend step pays it
+    return { earned, bankBeforeRun, bankAfterRun, bankAfterDividend };
+  }
+
+  let game: Game;
+  let eve: ReturnType<typeof breakEve>;
+  beforeAll(() => {
+    eve = breakEve();
+    game = new Game(newRoom(eve.start, eve.providers), eve.start, eve.providers);
+    game.bank = money(eve.start.state);
+    expect([tier(eve.start.state), eve.start.state.private_auction_complete, bankIsBroken(eve.start.state)]).toEqual(["3", false, false]);
+    const paid = coTurn(game, true); // $50 run; the distributed dividend (C's 60%: $30) takes the $20 bank past zero
+    expect([paid.earned, paid.bankBeforeRun, paid.bankAfterDividend]).toEqual([50, 20, -10]);
+    game.mark("T11.broken");
+    expect(bankIsBroken(game.state)).toBe(true);
+    expect(game.state.bank_broken).toBe(true);
+    expect([game.state.current_round_type, operating(game.state)?.ticker]).toEqual(["OperatingRound", "C&O"]); // mid-set: nothing ends yet
+    game.play(C, PASS_TURN);
+    expect(operating(game.state)?.ticker).toBe("PRR"); // THE SET FINISHES: the PRR still takes its turn (#898)
+    game.mark("T11.prr-turn");
+    orTurn(game, 1); // the PRR's 3-train fills its fleet; the room ends the turn; the set is over
+    game.mark("T11.ended");
+  });
+
+  it("the set's end is the game's end -- GameEnd, not the auction; the owed auction was never armed and never ran", () => {
+    const board = game.state;
+    expect(board.current_round_type).toBe("GameEnd");
+    expect(board.macro_round_number).toBe(eve.start.state.macro_round_number); // no macro-round was opened for an auction
+    expect(board.waterfall?.waterfall_auction_active).toBe(false);
+    expect(board.waterfall?.privates).toHaveLength(6);
+    expect(board.private_auction_complete).toBe(false);
+    expect(board.private_companies.map((entry) => [entry.private_id, entry.owner ?? null, !!entry.closed])).toEqual(
+      [SV, CS, DH, MH, CA, BO].map((id) => [id, null, false]),
+    );
+    expect(companyOf(board, "PRR").reserved_certificate).toEqual({ private_id: CA, percentage: 10 }); // still in the IPO, counted
+    expectConserved(board, "GameEnd");
+  });
+
+  it("nothing re-enters play at GameEnd: every auction message, the handoff, a round transition, a turn -- refused; undo refused too", () => {
+    for (const player of [A, B, C]) {
+      game.refuse(player, WF_BUY);
+      game.refuse(player, WF_BID(DH, 75));
+      game.refuse(player, WF_PASS);
+      game.refuse(player, OPEN);
+      game.refuse(player, BEGIN_OR);
+      game.refuse(player, PASS_TURN);
+      game.refuse(player, BUY_STOCK(game.state, "NYC"));
+    }
+    const last = [...effectiveActions(game.room.entries)].reverse().find((entry) => !entry.derived)!;
+    game.refuse(A, REVERT(last.index, A), REVERT_GAME_ENDED); // RV-3: the ending is final for the room
+  });
+
+  it("the settlement reads the ended board as it stands: no seat is credited an unsold private", () => {
+    const seats = game.state.player_addresses.map((player_id, seat_index) => ({ seat_index, player_id }));
+    const appraisal = appraiseSeats(game.state, seats);
+    for (const seat of appraisal) {
+      expect([seat.player_id, seat.privates, seat.bankrupt]).toEqual([seat.player_id, BigInt(0), false]);
+      expect(seat.total).toBe(seat.cash_counted + seat.shares);
+    }
+  });
+
+  it("live == replay == restore at the break, on the PRR's closing turn, and at GameEnd", () => {
+    for (const label of ["T11.broken", "T11.prr-turn", "T11.ended"]) expectRebuildsAt(game.at(label), label, eve.start, eve.providers);
+  });
+
+  it("undo inside the broken set keeps the break and the ending due; redone, the same board", () => {
+    const alt = new Game(restoredAt(game.at("T11.prr-turn"), eve.start, eve.providers), eve.start, eve.providers);
+    const endTurn = [...effectiveActions(alt.room.entries)].reverse().find((entry) => !entry.derived)!;
+    expect(kindOf(endTurn)).toBe("PassTurn");
+    alt.play(A, REVERT(endTurn.index, A));
+    expect([operating(alt.state)?.ticker, bankIsBroken(alt.state), alt.state.current_round_type]).toEqual(["C&O", true, "OperatingRound"]);
+    alt.play(C, PASS_TURN);
+    expect(stateDigest(alt.state)).toBe(game.at("T11.prr-turn").digest);
+    orTurn(alt, 1);
+    expect(stateDigest(alt.state)).toBe(game.at("T11.ended").digest);
+  });
+
+  it("the ending is the break's alone: the same set, the same run and the same messages with a solvent bank end in the auction, on the Priority Deal holder", () => {
+    /* The C&O's revenue is the bank's to pay whether it is distributed or withheld (1830 §6.5) and a paying route may not
+       be skipped (§6.4), so no legal play in this set avoids the break with $20 in the bank -- withholding breaks it too
+       (the whole $50 to the treasury). The control is therefore the same board with a solvent bank. */
+    const withheld = breakEve(20);
+    const w = new Game(newRoom(withheld.start, withheld.providers), withheld.start, withheld.providers);
+    expect(coTurn(w, false).bankAfterDividend).toBe(-30);
+    expect(bankIsBroken(w.state)).toBe(true);
+    const solvent = breakEve(5_000);
+    const control = new Game(newRoom(solvent.start, solvent.providers), solvent.start, solvent.providers);
+    control.bank = money(solvent.start.state);
+    coTurn(control, true);
+    expect(bankIsBroken(control.state)).toBe(false);
+    control.play(C, PASS_TURN);
+    orTurn(control, 1);
+    expect([control.state.current_round_type, control.state.macro_round_number]).toEqual(["WaterfallAuction", eve.start.state.macro_round_number + 1]);
+    expect(control.state.waterfall?.waterfall_auction_active).toBe(true);
+    expect(actorOf(control.state)).toBe(holderOf(eve.start.state));
+    // Entry for entry the same log up to the set's end -- only the board's bank differed.
+    expect(control.room.entries.map(kindOf)).toEqual(game.room.entries.map(kindOf));
+  });
+
+  it("a bank already broken when the trigger set opens ends the game at that set's end the same way (the break's timing is not recorded, #898)", () => {
+    const early = breakEve(-5); // broken before the set: the balance itself is past zero
+    expect(bankIsBroken(early.start.state)).toBe(true);
+    const g = new Game(newRoom(early.start, early.providers), early.start, early.providers);
+    coTurn(g, false);
+    g.play(C, PASS_TURN);
+    orTurn(g, 1);
+    expect(g.state.current_round_type).toBe("GameEnd");
+    expect(g.state.waterfall?.waterfall_auction_active).toBe(false);
+    expect(g.state.private_auction_complete).toBe(false);
   });
 });

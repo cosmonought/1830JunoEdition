@@ -36,36 +36,18 @@
 import { RULES_ENGINE_VERSION, SUPPORTED_RULES_ENGINE_VERSIONS } from "../../../frontend/src/gameEngine/rulesVersion";
 import { SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS } from "../../../frontend/src/gameEngine/settlementAppraisal";
 import type { EscrowCodecId } from "../../../frontend/src/gameEngine/escrow/escrowCodec";
+import { FINANCIAL_PROTOCOL_VERSION, HOSTED_PROTOCOL_VERSION } from "../../../frontend/src/gameEngine/protocolVersions";
+import { isMoneyContinuationIdentity, MONEY_CONTINUATION_FORMAT, type MoneyContinuationIdentity } from "../../../frontend/src/gameEngine/compat/continuationIdentity";
 
-export const MONEY_CONTINUATION_FORMAT = "18COSMOS/MONEY-CONTINUATION/v1";
-/** The server-owned history protocol (LIVE-2/3: log format, commit protocol, GameRecord schema 1, SetupGame, seal). */
-export const HOSTED_PROTOCOL_VERSION = 1;
-/** The money lifecycle protocol: the meaning and format of EVERY durable financial artifact of a game (the financial
- *  record, its chain intents and attempts, the wallet-ticket ledger) and every decision rule of its money lifecycle
- *  (LIVE-4 preflight §4.3). No money game was ever created under 1 or 2 (money games were disabled until ESCROW-4), so
- *  no bump strands anything and none carries migration machinery: an artifact of an older protocol is refused (the
- *  continuation verdict, the stores' exact-shape readers), never reinterpreted.
- *    1  ESCROW-3A.
- *    2  ESCROW-3B: record v2 (the money binding, the frozen roster, the post-intent chain phases) and chain intents
- *       persisted before broadcast; as of 6f05c80 it also carried ESCROW-JOIN's grant `admitted_until_secs` and its
- *       no-supersede-while-admitted rule (shipped under 2; retired by 3).
- *    3  ESCROW-4: the ticket file's v3 grants (the persisted ADR-036 wallet-control proof, registered consent keys, the
- *       relink origin and the CreateGame discovery floor) and their rules (proof-gated admission, R-J1, the exact link
- *       refusals, relink of a seat's own deposit); the relayed CONSENT / ANNUL chain intents and their key-suffixed
- *       instances; W-13's quorum-checked host binding; the close of a table that ended unbound; and the money
- *       GameRecord (`record_schema: 2`, written for money tables only -- no-money records stay exactly schema 1, so the
- *       hosted protocol does not move). */
-export const FINANCIAL_PROTOCOL_VERSION = 3;
+/* LIVE-4 (L4-1): the version constants and the money continuation identity moved, unchanged, to the shared canonical
+   modules -- `gameEngine/protocolVersions.ts` (the hosted and financial protocols, each with its changelog) and
+   `gameEngine/compat/continuationIdentity.ts` (the identity and its reader) -- so the canonical compatibility model can
+   read them on either side. They are re-exported here so every existing importer compiles unchanged. */
+export { FINANCIAL_PROTOCOL_VERSION, HOSTED_PROTOCOL_VERSION, isMoneyContinuationIdentity, MONEY_CONTINUATION_FORMAT };
+export type { MoneyContinuationIdentity };
+
 /** The settlement codecs this deployment carries (certified only). */
 export const DEPLOYMENT_SETTLEMENT_CODECS: readonly EscrowCodecId[] = Object.freeze(["18JUNO/v1"]);
-
-export interface MoneyContinuationIdentity {
-  readonly format: typeof MONEY_CONTINUATION_FORMAT;
-  readonly rules_engine_version: number;
-  readonly hosted_protocol: number;
-  readonly financial_protocol: number;
-  readonly settlement_codec: EscrowCodecId;
-}
 
 /** What one deployment can continue. */
 export interface DeploymentContinuation {
@@ -93,24 +75,6 @@ export function currentMoneyContinuation(codec: EscrowCodecId = "18JUNO/v1"): Mo
     financial_protocol: FINANCIAL_PROTOCOL_VERSION,
     settlement_codec: codec,
   };
-}
-
-const IDENTITY_KEYS = ["format", "rules_engine_version", "hosted_protocol", "financial_protocol", "settlement_codec"];
-
-export function isMoneyContinuationIdentity(value: unknown): value is MoneyContinuationIdentity {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  const keys = Object.keys(record);
-  const int = (v: unknown) => typeof v === "number" && Number.isSafeInteger(v) && v >= 1;
-  return (
-    keys.length === IDENTITY_KEYS.length &&
-    IDENTITY_KEYS.every((key) => keys.includes(key)) &&
-    record.format === MONEY_CONTINUATION_FORMAT &&
-    int(record.rules_engine_version) &&
-    int(record.hosted_protocol) &&
-    int(record.financial_protocol) &&
-    (record.settlement_codec === "18JUNO/v1" || record.settlement_codec === "18GNO/v1")
-  );
 }
 
 export type ContinuationVerdict =

@@ -13,10 +13,10 @@
 
 export {};
 
-const { readSource, readStripped, sliceBetween } =
+const { readSource, readStripped, sliceBetween, readShell } =
   require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const BAR = readStripped("components/TopBar.tsx");
 /* Design note #1102: the audio buttons and their popovers moved out of `TopBar` into `AudioControls`,
    so the waiting room and the bar render the same control rather than two lookalikes. The assertions

@@ -26,7 +26,7 @@ const { INTRO_CUTS, creditCueSecondsFor, GAME_INTRO_SRC } =
   require("./GameIntroOverlay") as typeof import("./GameIntroOverlay");
 const { gameTypeOf, GAME_TYPE_ORDER } =
   require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
-const { readStripped, sliceBetween } =
+const { readStripped, sliceBetween, readShell } =
   require("../utils/sourceScan") as typeof import("../utils/sourceScan");
 
 type GameType = import("../gameEngine/gameVariants").GameType;
@@ -74,7 +74,7 @@ describe("the ruleset names the title", () => {
   });
 
   it("is chosen by the shell from the resolved type, never from a label", () => {
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     expect(APP).toContain("gameType={gameTypeOf(resolveVariants(gameState?.variants))}");
     const INTRO = readStripped("components/GameIntroOverlay.tsx");
     // No label text, no filename sniffing, no variant booleans read here.
@@ -235,7 +235,7 @@ describe("everything the overlay already guaranteed, still guaranteed", () => {
 
   it("still gives no intro to a player who joined a room already playing", () => {
     // #1111: the overlay is mounted on the waiting -> playing EDGE, which a late joiner never sees.
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     expect(APP).toContain("{introPlaying && (");
   });
 });

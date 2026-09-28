@@ -21,11 +21,11 @@ const { DEPOT_TOAST_MS, STANDARD_TOAST_MS } =
   require("../components/ActionToast") as typeof import("../components/ActionToast");
 const { DUCK_FOR_CUE, DUCK_FOR_VIDEO, RADIO_VOLUME } =
   require("./audio") as typeof import("./audio");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const LOG = readStripped("utils/actionLog.ts");
 
 const CO = 3;
@@ -220,7 +220,8 @@ describe("a cursor mode is not a game event", () => {
     /* REPORTED: "The 'targeting mode' is not important and should not print on player-facing information,
        it's just clutter." It was a fact about one player's cursor in a record every client replays. */
     expect(APP).not.toContain("Targeting mode");
-    expect(APP).not.toContain('logInfo(\n        "Place Station Token"');
+    // APP-TEST-0A: any indentation -- an extraction re-indents code, and an exact-whitespace absence would then pass on nothing.
+    expect(APP).not.toMatch(/logInfo\(\s*"Place Station Token"/);
   });
 
   it("still toggles the mode", () => {

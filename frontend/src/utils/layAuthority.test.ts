@@ -25,6 +25,7 @@ import { applySandboxAction, applySandboxLayTile } from "../gameEngine/sandboxSe
 import { filterSandboxPlacements } from "../components/sandboxTileLegality";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { readShell } from "./sourceScan";
 
 const PRR = 1;
 /** D12 carries two of the four impassable borders, on edges 1 and 2. */
@@ -209,7 +210,7 @@ describe("the surfaces share one answer", () => {
   it("builds the predicate once in the shell", () => {
     /* THE STRUCTURAL HALF. Two predicates spelled separately for the grid and the state is the #748a failure
        exactly -- one atom accepting what the other refused, permanently out of step. */
-    const app = read("App.tsx");
+    const app = readShell();
     /* Stage 10.1 (#1683): the grid takes the AUTHORITY's verdict; the reducer takes the geometry and asks the
        same authority in its gate block. Stage 10.3 (#1690): the geometry is no longer built in the shell at
        all -- `layAuthorityContext` (the grid step) and `sandboxActionContext` (the reducer) both take it from
@@ -234,7 +235,7 @@ describe("the surfaces share one answer", () => {
        number of tile lays is unlimited" (#766).
        SO THE REQUIREMENT WAS ALWAYS "the ref, ONCE" and the assertion recorded only the first half. It now
        pins the snapshot; `oneLayPerTurn.test.ts` covers the consequence. */
-    const app = read("App.tsx");
+    const app = readShell();
     expect(app).toContain("const gridBeforeAction = mapGridRef.current;");
     // Stage 10.3 (#1690): the snapshot is handed to the shared builders, which bind the lay geometry to it.
     expect(app).toContain("layAuthorityContext(SHELL_PROVIDERS, stateBeforeAction, gridBeforeAction)");

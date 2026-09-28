@@ -21,7 +21,7 @@ import { resolveVariants } from "../../gameEngine/gameVariants";
 import { httpSessionPort } from "../../utils/sessionBootstrap";
 import type { RoomView } from "../../utils/roomProtocol";
 import type { RoomMoneyView } from "../../utils/moneyProtocol";
-import { readStripped } from "../../utils/sourceScan";
+import { readShell, readStripped } from "../../utils/sourceScan";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -177,8 +177,10 @@ describe("ESCROW-4: the waiting room, the result, the profile menu", () => {
     expect(waiting).toContain("fundingTag(money.seats.find((seat) => seat.playerId === player.id)?.funding ?? \"none\")");
     expect(waiting).toContain('label="Stake"');
     expect(waiting).not.toContain("refunds ante");
-    const app = readStripped("App.tsx");
-    expect(app).toContain("if (sandboxRoom.money == null && !canStartSandboxGame(sandboxRoom, MIN_PLAYERS)) return;");
+    /* The hosted Start is shell behaviour (the room handlers), so it is read through the shell source set:
+       it keeps being checked when the handler moves out of `App.tsx` (APP-TEST-0A). */
+    const shell = readShell();
+    expect(shell).toContain("if (sandboxRoom.money == null && !canStartSandboxGame(sandboxRoom, MIN_PLAYERS)) return;");
   });
 
   it("the result keeps no placeholder payout; a real-money table's band sits under the final standings", async () => {

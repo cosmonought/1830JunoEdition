@@ -21,9 +21,9 @@ export {};
 
 const { watcherTrainDrafts } =
   require("./watcherRouteChips") as typeof import("./watcherRouteChips");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const REDUCER = readStripped("gameEngine/sandboxSession.ts");
 
 type Roster = Parameters<typeof watcherTrainDrafts>[0]["roster"];

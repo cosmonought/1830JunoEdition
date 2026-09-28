@@ -42,7 +42,8 @@ const strip = (raw: string) =>
     .replace(/^\s*\/\/.*$/gm, "")
     .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
 
-const APP = strip(read("App.tsx"));
+const { readShell, sliceFrom } = require("./sourceScan") as typeof import("./sourceScan");
+const APP = readShell();
 const CARDS = strip(read("components/PlayerCards.tsx"));
 
 describe("the cards render in the Operating Round too", () => {
@@ -82,10 +83,7 @@ describe("the cards render in the Operating Round too", () => {
   it("does not name the Priority Deal mid-Operating-Round", () => {
     /* It decides who opens the next STOCK round. Marking it here answers a question nobody is asking, which
        is #593's own argument against the seat ordinal, applied to the other marker on the card. */
-    const orMount = APP.slice(
-      APP.indexOf('{gameState?.current_round_type === "OperatingRound" && ('),
-      APP.indexOf('{gameState?.current_round_type === "OperatingRound" && (') + 1400,
-    );
+    const orMount = sliceFrom(APP, '{gameState?.current_round_type === "OperatingRound" && (', { length: 1400 });
     expect(orMount).toContain("priorityAddress={null}");
   });
 });

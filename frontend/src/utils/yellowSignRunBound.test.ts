@@ -29,7 +29,7 @@ const { stateDigest } = require("../gameEngine/stateDigest") as typeof import(".
 const { replayLog } = require("../gameEngine/replayLog") as typeof import("../gameEngine/replayLog");
 const { SERVER_REPLAY_POLICY } = require("../gameEngine/rulesVersion") as typeof import("../gameEngine/rulesVersion");
 const { RoomSession } = require("./roomSession") as typeof import("./roomSession");
-const { anchorIndex, readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { anchorIndex, occurrences, readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 const { describeTreasuryMoves } = require("./treasuryProvenance") as typeof import("./treasuryProvenance");
 
 const { CO, BO, NYC, P1, P2, GULF, TWO_ROUTE, THREE_ROUTE, LONG_ROUTE, urBoard, runMsg, signRequest, companyOf, partsFor } = S;
@@ -122,7 +122,7 @@ describe("OD-UR-1: the run itself applies the Mark (UR-F1, UR-F2 omission)", () 
     } as GameStateResponse;
     expect(describeTreasuryMoves(msg, before, forged).find((move) => move.companyId === BO)?.unexplained).toBe(true);
     // And the shell reads the Mark's run as a sentence that states the treasury, so it prints no echo line either.
-    expect(readStripped("App.tsx")).toContain("const statedInLine = sentenceStatesTreasury(gameplay) || markInRun;");
+    expect(readShell()).toContain("const statedInLine = sentenceStatesTreasury(gameplay) || markInRun;");
   });
 
   it("a quiet draw changes nothing but the revenue -- no stage, no record", () => {
@@ -136,18 +136,16 @@ describe("OD-UR-1: the run itself applies the Mark (UR-F1, UR-F2 omission)", () 
   it("client: on a pinned board the shell dispatches no YellowSignEvent at all (the legacy request is the unpinned branch's only)", () => {
     /* UR-F1, the client half, pinned at the source: `App.tsx` cannot be mounted headless. The only producer of the
        message was the narration block the drain reaches; it may no longer send one when the board is pinned. */
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     // Anchored with `anchorIndex`, which throws on a miss -- never `slice(indexOf(..))`, whose -1 passes vacuously (#886).
     anchorIndex(APP, "const signPinned = typeof before.rules_engine_version === \"number\";", "the pin test");
-    const dispatches: number[] = [];
-    for (let at = APP.indexOf("\"YellowSignEvent\","); at >= 0; at = APP.indexOf("\"YellowSignEvent\",", at + 1)) {
-      dispatches.push(at);
-    }
+    const dispatches = occurrences(APP, "\"YellowSignEvent\",");
     expect(dispatches).toHaveLength(3); // the three legacy (unpinned) dispatches, unchanged in number
-    for (const at of dispatches) {
-      // Each is reachable only behind the pin test: `if (!signPinned)` / `&& !signPinned` opens the block it sits in.
-      expect(APP.slice(Math.max(0, at - 240), at)).toMatch(/!signPinned\)\s*\{\s*(?:\/\/[^\n]*\s*)*void runGameplayAction\(\s*$/);
-    }
+    /* Each is reachable only behind the pin test: `if (!signPinned)` / `&& !signPinned` opens the block it sits in.
+       APP-TEST-0A: counted rather than sliced per site -- each match of the gated form ENDS AT one dispatch, so
+       as many gated dispatches as dispatches means every one is gated, with no index arithmetic on the shell. */
+    const gated = APP.match(/!signPinned\)\s*\{\s*(?:\/\/[^\n]*\s*)*void runGameplayAction\(\s*"YellowSignEvent",/g) ?? [];
+    expect(gated).toHaveLength(dispatches.length);
   });
 });
 

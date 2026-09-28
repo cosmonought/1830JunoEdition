@@ -68,6 +68,7 @@
 // comment-stripped copy -- and the notes are separately asserted to survive.
 
 import { offerPriceProblem, privatePriceBounds } from "../components/PrivateTradePanel";
+import { readShell } from "./sourceScan";
 
 const read = (relative: string) => {
   const fs = require("fs") as typeof import("fs");
@@ -417,7 +418,7 @@ describe("the shell supplies the colour", () => {
   });
 
   it("resolves the seat index where the roster is", () => {
-    const app = read("App.tsx");
+    const app = readShell();
     expect(app).toContain("colorForAddress: (address: string) => {");
     expect(app).toContain("return seat === -1 ? null : seatColor(address, seat);");
   });

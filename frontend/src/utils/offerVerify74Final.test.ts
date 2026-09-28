@@ -22,6 +22,7 @@ const { stateDigest } = require("../gameEngine/stateDigest") as typeof import(".
 const { effectiveActions, REVERT_ONE_STEP } = require("../gameEngine/logRevert") as typeof import("../gameEngine/logRevert");
 const { operatingCorporationId } = require("../gameEngine/dividendGate") as typeof import("../gameEngine/dividendGate");
 const F = require("./offerFixtures74") as typeof import("./offerFixtures74");
+const { readShell, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 const S = require("./offerMatrix74Support") as typeof import("./offerMatrix74Support");
 
 type GameStateResponse = import("../gameEngine/gameState").GameStateResponse;
@@ -430,14 +431,8 @@ describe("V§8 derivedEntryKey agrees with the live loop for every derivable set
 
 describe("V§4 shell twin: an undo rebuild on the no-server path forgets the discarded history's settlement keys", () => {
   it("`rebuildSandbox` resets `acceptedOfferSentRef` beside the auto-skip and forced-withhold guards", () => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const APP = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    const start = APP.indexOf("const rebuildSandbox = useCallback(");
-    const end = APP.indexOf("rebuildRef.current = rebuildSandbox;");
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    const body = APP.slice(start, end);
+    const APP = readShell();
+    const body = sliceBetween(APP, "const rebuildSandbox = useCallback(", "rebuildRef.current = rebuildSandbox;");
     expect(body).toContain("autoSkippedRef.current = new Set();");
     expect(body).toContain("forcedWithholdRef.current = new Set();");
     expect(body).toContain("acceptedOfferSentRef.current = new Set();");

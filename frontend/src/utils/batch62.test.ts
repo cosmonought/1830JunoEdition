@@ -21,9 +21,9 @@
 
 export {};
 
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const TICKER = readStripped("components/TopTicker.tsx");
 const FLASH = readStripped("components/RevenueModifierFlash.tsx");
 

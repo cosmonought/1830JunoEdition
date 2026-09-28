@@ -31,10 +31,10 @@ import {
   projectDividendCellMove,
 } from "../components/StockMarketRenderer";
 import { UNPREDICTABLE_REVENUE_FLAVOR } from "../constants/flavorText";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 
 const DYNAMIC = { ...STANDARD_VARIANTS, dynamicStockMarket: true };
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const MODAL = readStripped("components/FleetLossModal.tsx");
 const NOTICE = readStripped("utils/fleetLossNotice.ts");
 const STYLES = readStripped("styles/appStyles.ts");

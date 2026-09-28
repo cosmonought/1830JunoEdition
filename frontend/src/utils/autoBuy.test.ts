@@ -17,7 +17,7 @@ import {
   type AutoBuySettings,
 } from "./autoBuy";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell, expectOrder } from "./sourceScan";
 
 const ME = "me";
 
@@ -121,7 +121,7 @@ describe("autoBuyDecision", () => {
     const done = autoBuyDecision(state, arm(state, [1, 2], 60), allowAll);
     expect(done.action).toBe("done");
     expect(autoBuyDecision(state, arm(state, [1], 60), () => "blocked").action).toBe("done");
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     const effect = sliceBetween(APP, "(companyId, source) => purchaseBlockFor(companyId, source, 1),", "const handleSellShares");
     expect(effect).not.toContain("handlePassTurn()");
     expect(effect).toContain('decision.action === "stop" || decision.action === "done"');
@@ -199,10 +199,12 @@ describe("#1333: per-corporation caps, source, and the off-switches", () => {
     const MODAL = readStripped("components/AutoBuyModal.tsx");
     expect(MODAL).toContain("corporations.filter((row) => row.parValue !== null)");
     expect(MODAL).toContain("not yet parred and");
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     const effect = sliceBetween(APP, "autoBuyDecision(", "const handleSellShares");
-    expect(effect.indexOf("setAutoBuyPlan(refreshAutoBuyWatch(autoBuyPlan, gameState));")).toBeGreaterThan(
-      effect.indexOf("autoBoughtAtLogIndexRef.current = lastLogIndex;"),
+    expectOrder(
+      effect,
+      "autoBoughtAtLogIndexRef.current = lastLogIndex;",
+      "setAutoBuyPlan(refreshAutoBuyWatch(autoBuyPlan, gameState));",
     );
   });
 });
@@ -214,19 +216,15 @@ describe("#1333: per-corporation caps, source, and the off-switches", () => {
    flood interleaved with the president's placement. Source scan: the guard is a hex lookup that lives in
    `components/` (#7), so it cannot be written into `autoBuyDecision`. */
 describe("#1243: the acting effect waits for the home station", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-  })();
+  const APP = readShell();
 
   it("checks the debt before deciding, and returns without disarming", () => {
-    const guard = APP.indexOf("if (homeTokenOwed(gameState, homeHexToAxial)) return;");
-    const decide = APP.indexOf("(companyId, source) => purchaseBlockFor(companyId, source, 1),");
-    const acted = APP.indexOf("autoBoughtAtLogIndexRef.current = lastLogIndex;");
-    expect(guard).toBeGreaterThan(-1);
-    expect(guard).toBeLessThan(decide);
-    expect(guard).toBeLessThan(acted);
+    const guard = "if (homeTokenOwed(gameState, homeHexToAxial)) return;";
+    const decide = "(companyId, source) => purchaseBlockFor(companyId, source, 1),";
+    const acted = "autoBoughtAtLogIndexRef.current = lastLogIndex;";
+    expect(APP).toContain(guard);
+    expectOrder(APP, guard, decide);
+    expectOrder(APP, guard, acted);
     expect(APP).toContain('import { homeTokenBlock, homeTokenOwed } from "./gameEngine/homeTokenGate";');
   });
 });

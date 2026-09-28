@@ -36,7 +36,7 @@ import { DEFAULT_SANDBOX_SCENARIO, sandboxScenario, sandboxScenarioState, sandbo
 import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
 import { stateDigest } from "../gameEngine/stateDigest";
 import { owedHomeStation } from "../gameEngine/homeStationAuthority";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 import { tileEraFor } from "../gameEngine/gameConstants";
 import type { GameplayExecuteMsg } from "./sessionKey";
 
@@ -226,7 +226,7 @@ describe("S8-13 on the grid: a lay under a hold lands on neither the grid nor th
     expect(sliceBetween(engine, 'if ("LayTile" in msg) {', "this.grid = applySandboxLayTile(")).toContain(
       "layTileRefusal(stateBefore, msg, layAuthorityContext(this.providers, stateBefore, gridBefore))",
     );
-    const app = readStripped("App.tsx");
+    const app = readShell();
     const predicate = sliceBetween(app, "const layRefusedByAuthority = (): boolean =>", 'if ("LayTile" in msg) {');
     // Stage 10.5 (S10-9): `layTileRefusal` takes the log-wide `SandboxLogMsg`, so the shell hands `msg` uncast.
     expect(predicate).toContain("layTileRefusal(\n                stateBeforeAction,\n                msg,");

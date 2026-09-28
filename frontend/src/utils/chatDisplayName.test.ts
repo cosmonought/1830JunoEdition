@@ -22,6 +22,7 @@
 // did exactly what it promises with the input it was given.
 
 import { seatLabel, truncateAddress } from "./lobby";
+import { expectOrder, readShell } from "./sourceScan";
 
 describe("seatLabel prefers the name and falls back to the id", () => {
   it("uses the display name when there is one", () => {
@@ -53,28 +54,22 @@ describe("seatLabel prefers the name and falls back to the id", () => {
 });
 
 describe("the chat is handed the roster nickname in a sandbox room", () => {
-  const read = (rel: string) => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-    // #490a: the notes quote the old expression and must keep doing so.
-    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  };
+  // #490a: the notes quote the old expression and must keep doing so -- `readShell()` is the stripped shell.
+  const APP = readShell();
 
   it("resolves the name from the room roster", () => {
-    const app = read("App.tsx");
-    expect(app).toContain("const sandboxChatName =");
-    expect(app).toContain("sandboxRoom?.players?.find((player) => player.id === localId)?.nickname");
+    expect(APP).toContain("const sandboxChatName =");
+    expect(APP).toContain("sandboxRoom?.players?.find((player) => player.id === localId)?.nickname");
   });
 
   it("still uses the lobby name outside a sandbox room", () => {
     /* A chain room has no roster nickname and the lobby name is right there -- so the fallback is not a
        degraded answer, it is the correct one for that mode. */
-    expect(read("App.tsx")).toContain("?? displayName");
+    expect(APP).toContain("?? displayName");
   });
 
   it("passes it to the chat hook rather than the lobby field", () => {
-    expect(read("App.tsx")).toContain("sandboxChatName,");
+    expect(APP).toContain("sandboxChatName,");
   });
 
   it("declares the room state above the chat hook", () => {
@@ -85,13 +80,7 @@ describe("the chat is handed the roster nickname in a sandbox room", () => {
     /* Design note #1169 re-anchored this: `sandboxRoom` is no longer the raw state but a memo over it and the
        in-flight seat, so BOTH have to sit above the hook -- and the memo is precisely the form the note above
        says `tsc` does not catch. Asserting the pair, in order, rather than the one name that used to be both. */
-    const app = read("App.tsx");
-    const stated = app.indexOf("const [sandboxRoomDoc, setSandboxRoom]");
-    const declared = app.indexOf("const sandboxRoom = useMemo(");
-    const used = app.indexOf("const sandboxChatName =");
-    expect(stated).toBeGreaterThan(-1);
-    expect(declared).toBeGreaterThan(stated);
-    expect(used).toBeGreaterThan(declared);
+    expectOrder(APP, "const [sandboxRoomDoc, setSandboxRoom]", "const sandboxRoom = useMemo(", "const sandboxChatName =");
   });
 });
 

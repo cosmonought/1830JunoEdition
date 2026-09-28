@@ -14,6 +14,7 @@
 
 import { fitStationToUpgrade, fitStationsToUpgrade } from "./stationConnectivity";
 import { tileCityEdges, tileCityCount } from "../components/hexGeometry";
+import { readShell, sliceBetween, sliceFrom } from "./sourceScan";
 
 describe("a token follows its edges, not its index", () => {
   it("moves to the city that kept its connection", () => {
@@ -157,15 +158,14 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
       .replace(/^\s*\/\/.*$/gm, "");
   };
-  const APP = read("App.tsx");
+  const APP = readShell();
 
   it("drops rotations that strand a token", () => {
     /* THE LEGALITY HALF: "the only legal upgrades are those that preserve the station marker with that
        connectivity to that specific hex." The rotate gesture must not be able to reach an arrangement the
        rules forbid. */
-    const at = APP.indexOf("const legalRotations");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, APP.indexOf("}, [radialCandidates", at));
+    expect(APP).toContain("const legalRotations");
+    const body = sliceBetween(APP, "const legalRotations", "}, [radialCandidates");
     /* Stage 10.1 (#1682, S10-25): the memo asks `stationLegalFacings` -- the station authority's own list,
        which keeps a facing exactly when `stationAnchorPlan(...).refusal === null` -- rather than the raw plan.
        The stranding rule is still inside it (a stranded token is `planTokenUpgrade === null`, which the
@@ -183,9 +183,8 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
        `derivePreviewLandings`, so those literals are gone and the property moved to the derivation. The
        assertion follows it rather than being deleted -- and both arms of the split are named, because
        "anchored takes the derived city" is the half #824 got wrong and a call-only assertion would drop. */
-    const at = APP.indexOf("const handlePreviewRotate");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, APP.indexOf("[radialSelector, handleDismissRadial", at));
+    expect(APP).toContain("const handlePreviewRotate");
+    const body = sliceBetween(APP, "const handlePreviewRotate", "[radialSelector, handleDismissRadial");
     expect(body.length).toBeGreaterThan(0);
     expect(body).toContain("derivePreviewLandings(");
     /* #889 MOVED THE BRANCH INTO `previewRotation.ts`, so `probe.ownIsFree` / `probe.ownCity` are no longer
@@ -201,9 +200,8 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
     expect(body).toContain("tokenCities: landing.tokenCities,");
     /* THE DERIVATION IS WHERE FREE IS DEFINED, and it is defined per-company: this token has no network to
        preserve. `plan.anyFree` was a fact about the HEX and is the weaker question. */
-    const dv = APP.indexOf("const derivePreviewLandings");
-    expect(dv).toBeGreaterThan(-1);
-    const derive = APP.slice(dv, APP.indexOf("[mapGrid, gameState, actingProtocolId]", dv));
+    expect(APP).toContain("const derivePreviewLandings");
+    const derive = sliceBetween(APP, "const derivePreviewLandings", "[mapGrid, gameState, actingProtocolId]");
     // Stage 10.1 (#1682): the plan arrives inside the authority's verdict, with the landings and the refusal.
     expect(derive).toContain("stationAnchorPlan(");
     expect(derive).toContain("const { plan, tokenCities } = verdict;");
@@ -224,9 +222,8 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
     /* ANCHORED ON THE JSX PROP, not on a `const` -- this handler is written inline on the ring. The strip
        above removes the comments, so #886's own note quoting `onSelectCandidate` cannot be what is found
        (#490a). */
-    const sel = APP.indexOf("onSelectCandidate={");
-    expect(sel).toBeGreaterThan(-1);
-    const select = APP.slice(sel, APP.indexOf("legalRotationCount=", sel));
+    expect(APP).toContain("onSelectCandidate={");
+    const select = sliceBetween(APP, "onSelectCandidate={", "legalRotationCount=");
     expect(select.length).toBeGreaterThan(0);
     expect(select).toContain("derivePreviewLandings(");
     expect(select).not.toContain("tokenDestinationChoices(");
@@ -238,8 +235,7 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
   it("passes the orientation to the thumbnails", () => {
     /* THE SIGNATURE IS THE TELL, and it was the tell for the old bug too: a destination that depends on the
        facing cannot be computed by a function with no facing in it. */
-    const at = APP.indexOf("const radialStationMarkersFor");
-    const body = APP.slice(at, at + 2000);
+    const body = sliceFrom(APP, "const radialStationMarkersFor", { length: 2000 });
     // Stage 10.1 (#1682): the thumbnail's facing is the lowest the authority keeps, and its plan is the authority's.
     expect(body).toContain("stationLegalFacings(");
     expect(body).toContain("stationAnchorPlan(");
@@ -260,9 +256,8 @@ describe("the shell asks the rule at all three surfaces (design note #879)", () 
        corporation's free token at the first city on offer, this surface has to seat it too or the promise is
        false. A RIVAL's free token still draws nothing: this president is not choosing for them, so there is
        no arrangement to promise -- as opposed to one they are about to be handed. */
-    const at = APP.indexOf("const radialStationMarkersFor");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, APP.indexOf("[radialSelector, mapGrid, gameState, radialCandidates", at));
+    expect(APP).toContain("const radialStationMarkersFor");
+    const body = sliceBetween(APP, "const radialStationMarkersFor", "[radialSelector, mapGrid, gameState, radialCandidates");
     expect(body.length).toBeGreaterThan(0);
     expect(body).toContain(
       "entry.toCityIndex ?? (entry.companyId === actingProtocolId ? seededCity : undefined)",
@@ -285,7 +280,7 @@ describe("the lay carries every token's destination (design note #880)", () => {
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
       .replace(/^\s*\/\/.*$/gm, "");
   };
-  const APP = read("App.tsx");
+  const APP = readShell();
   const REDUCER = read("gameEngine/sandboxSession.ts");
   const MIGRATION = read("utils/tokenMigration.ts");
   const BOARD = read("components/HexGridRenderer.tsx");

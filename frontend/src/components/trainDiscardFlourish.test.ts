@@ -54,7 +54,7 @@ const { applySandboxAction, describeFleetLosses } =
 const { pendingTrainDiscards } =
   require("../gameEngine/trainDiscard") as typeof import("../gameEngine/trainDiscard");
 const { derivePhase } = require("../gameEngine/gamePhase") as typeof import("../gameEngine/gamePhase");
-const { readStripped, sliceBetween } =
+const { readStripped, sliceBetween, sliceFrom, readShell } =
   require("../utils/sourceScan") as typeof import("../utils/sourceScan");
 
 type GameStateResponse = import("../gameEngine/gameState").GameStateResponse;
@@ -407,7 +407,7 @@ describe("the vocabulary is transfer, and it borrows nothing from destruction", 
 });
 
 describe("the shell raises it from the action, under the replay guard", () => {
-  const CODE = readStripped("App.tsx");
+  const CODE = readShell();
   const RAISE = sliceBetween(CODE, "if (!replayingHistory && before !== null && before !== after && isDiscardTrainMsg(msg)) {", "const closures = describePrivateClosures(before, after);");
 
   it("reads the message rather than the diff", () => {
@@ -449,7 +449,7 @@ describe("the shell raises it from the action, under the replay guard", () => {
 });
 
 describe("Tutorial policy", () => {
-  const CODE = readStripped("App.tsx");
+  const CODE = readShell();
 
   it("queues the limit explanation only in tutorial mode", () => {
     /* VF-7's rule for the rust notice, applied to this one: with tutorials off, the cut and the Activity
@@ -476,7 +476,7 @@ describe("Tutorial policy", () => {
     /* #896's standing rule: "silencing a notice changes WHEN a player finds out, never whether the game
        told them." The discard's own log line is the reducer's narration and is not gated here. */
     const RAISE = sliceBetween(CODE, "if (!replayingHistory && before !== null && before !== after && isDiscardTrainMsg(msg)) {", "const closures = describePrivateClosures(before, after);");
-    const gated = RAISE.slice(RAISE.indexOf("if (tutorialModeEnabled()) {"));
+    const gated = sliceFrom(RAISE, "if (tutorialModeEnabled()) {");
     expect(gated).not.toContain("logInfo(");
   });
 
@@ -494,8 +494,8 @@ describe("Tutorial policy", () => {
     expect(MODAL).not.toContain('type="checkbox"');
     expect(MODAL).not.toContain("onToggleSilence");
     // And no caller was left holding a removed argument.
-    expect(readStripped("App.tsx")).not.toContain("isNoticeSilenced");
-    expect(readStripped("App.tsx")).not.toContain("setNoticeSilenced");
+    expect(readShell()).not.toContain("isNoticeSilenced");
+    expect(readShell()).not.toContain("setNoticeSilenced");
   });
 
   it("gives tutorial mode a writable control, since it decides whether a dialog interrupts", () => {

@@ -25,20 +25,37 @@
 // about the next ref somebody adds. What is asserted is the PAIRING: any ref reset in the rebuild has its
 // setter beside it, and any mirrored state reset there has its ref beside it.
 
-import fs from "fs";
-import path from "path";
+import {
+  expectOrder,
+  readShell,
+  readStripped,
+  shellSourcePaths,
+  sliceBetween,
+  SHELL_ROOT_FILE,
+  SHELL_ROOT_WITNESS,
+} from "./sourceScan";
 
-const APP = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-/** #490a: the notes name these refs in prose and must keep doing so. */
-const CODE = APP.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+/** #490a: the notes name these refs in prose and must keep doing so -- so every read here is comment-stripped.
+ *
+ *  APP-TEST-0A: THE PAIRING IS A FACT ABOUT ONE COMPONENT, so the sweep reads each shell file (`App.tsx` and
+ *  every extracted `shell/**` module) ON ITS OWN, never the concatenation: a ref and a setter are "a pair" when
+ *  they are declared and set in the same file, and the rebuild's body is bounded inside the file that holds it. */
+const SHELL_FILES = shellSourcePaths().map((rel) => ({ rel, code: readStripped(rel) }));
 
-/** The body of `rebuildSandbox`, bounded by the next top-level callback. */
-const REBUILD = (() => {
-  const start = CODE.indexOf("const rebuildSandbox = useCallback(");
-  expect(start).toBeGreaterThan(-1);
-  const end = CODE.indexOf("\n  const ", start + 40);
-  return CODE.slice(start, end === -1 ? CODE.length : end);
+/** Whole-shell reads, for the presence assertions that do not depend on which file the code lives in. */
+const SHELL = readShell();
+
+/** The file whose component declares `rebuildSandbox` -- exactly one. */
+const REBUILD_HOME = (() => {
+  const homes = SHELL_FILES.filter((file) => file.code.includes("const rebuildSandbox = useCallback("));
+  if (homes.length !== 1) {
+    throw new Error(`rebuildSandbox must be declared in exactly one shell file, found: ${homes.map((f) => f.rel).join(", ") || "none"}`);
+  }
+  return homes[0];
 })();
+
+/** The body of `rebuildSandbox`, bounded by the next top-level callback of its own file. */
+const REBUILD = sliceBetween(REBUILD_HOME.code, "const rebuildSandbox = useCallback(", "\n  const ");
 
 /** Refs that exist purely to mirror a piece of state for synchronous reads. */
 const MIRRORED: ReadonlyArray<{ ref: string; setter: string }> = [
@@ -69,10 +86,8 @@ describe("the rebuild resets refs and state together", () => {
     /* Order matters here and nowhere else: `setMapGrid` is asynchronous, so the synchronous ref write is what
        the replay actually reads. Putting the setter first would leave a window with the old board still in
        the ref -- which is the window this bug lived in. */
-    const refAt = REBUILD.indexOf("mapGridRef.current = MOCK_MAP_GRID;");
-    const setAt = REBUILD.indexOf("setMapGrid(MOCK_MAP_GRID);");
-    expect(refAt).toBeGreaterThan(-1);
-    expect(setAt).toBeGreaterThan(refAt);
+    expect(REBUILD).toContain("mapGridRef.current = MOCK_MAP_GRID;");
+    expectOrder(REBUILD, "mapGridRef.current = MOCK_MAP_GRID;", "setMapGrid(MOCK_MAP_GRID);");
   });
 
   it("writes the pending-token ref before its setter too (#887)", () => {
@@ -80,10 +95,8 @@ describe("the rebuild resets refs and state together", () => {
        identical: the ref is what the synchronous reader sees, so a setter-first reset leaves a window in
        which the board still believes a token is staged. Asserted separately from the sweep because the
        sweep can only see THAT both halves are present, not in which order. */
-    const refAt = REBUILD.indexOf("pendingTokenRef.current = null;");
-    const setAt = REBUILD.indexOf("setPendingToken(null);");
-    expect(refAt).toBeGreaterThan(-1);
-    expect(setAt).toBeGreaterThan(refAt);
+    expect(REBUILD).toContain("pendingTokenRef.current = null;");
+    expectOrder(REBUILD, "pendingTokenRef.current = null;", "setPendingToken(null);");
   });
 });
 
@@ -92,14 +105,17 @@ describe("no mirrored ref is left out of the rebuild", () => {
     /* THE SWEEP, and the reason this file is not three hardcoded assertions. It discovers refs whose names
        pair with a `setX` in the same component, then insists the rebuild resets both halves. A ref added next
        year is covered without anybody remembering this note. */
-    const refNames = Array.from(CODE.matchAll(/const (\w+Ref) = useRef/g)).map((m) => m[1]);
+    const refs = SHELL_FILES.flatMap((file) =>
+      Array.from(file.code.matchAll(/const (\w+Ref) = useRef/g)).map((m) => ({ ref: m[1], code: file.code })),
+    );
     const missing: string[] = [];
 
-    for (const ref of refNames) {
+    for (const { ref, code } of refs) {
       const base = ref.replace(/Ref$/, "");
       const setter = `set${base.charAt(0).toUpperCase()}${base.slice(1)}`;
-      // Only refs that MIRROR a state atom are in scope; the rest are scratch and need no reset.
-      if (!CODE.includes(`${setter}(`)) continue;
+      // Only refs that MIRROR a state atom (of their own file's component) are in scope; the rest are scratch
+      // and need no reset.
+      if (!code.includes(`${setter}(`)) continue;
       // And only those the rebuild already touches -- an atom the rebuild deliberately leaves alone is a
       // decision, not an omission, and `handleLeaveSandboxRoom` records one of those about the board.
       if (!REBUILD.includes(`${setter}(`)) continue;
@@ -110,7 +126,10 @@ describe("no mirrored ref is left out of the rebuild", () => {
   });
 
   it("actually found some refs, so the sweep is not vacuous", () => {
-    const refNames = Array.from(CODE.matchAll(/const (\w+Ref) = useRef/g)).map((m) => m[1]);
+    /* And it read the real shell: the composition root is among the analysed files, and it is the root. */
+    expect(SHELL_FILES.map((file) => file.rel)).toContain(SHELL_ROOT_FILE);
+    expect(SHELL_FILES.find((file) => file.rel === SHELL_ROOT_FILE)?.code).toContain(SHELL_ROOT_WITNESS);
+    const refNames = SHELL_FILES.flatMap((file) => Array.from(file.code.matchAll(/const (\w+Ref) = useRef/g)).map((m) => m[1]));
     expect(refNames.length).toBeGreaterThan(5);
     expect(refNames).toContain("mapGridRef");
   });
@@ -120,12 +139,12 @@ describe("the grid still has exactly one synchronous writer per dispatch", () =>
   it("writes the ref and the state together on a lay", () => {
     /* #757's arrangement, unchanged and now consistent with the rebuild: the dispatch writes the ref first so
        the next action in a replay burst sees the tile, then the setter so React repaints. */
-    expect(CODE).toContain("mapGridRef.current = nextGrid;");
-    expect(CODE).toContain("setMapGrid(nextGrid);");
+    expect(SHELL).toContain("mapGridRef.current = nextGrid;");
+    expect(SHELL).toContain("setMapGrid(nextGrid);");
   });
 
   it("still guards on identity", () => {
     // A refused lay returns the same grid; repainting for it would be a canvas flash for nothing.
-    expect(CODE).toContain("if (nextGrid !== mapGridRef.current) {");
+    expect(SHELL).toContain("if (nextGrid !== mapGridRef.current) {");
   });
 });

@@ -22,19 +22,43 @@
 const fs=require("fs"),path=require("path");
 const strip=s=>s.replace(/\{\/\*[\s\S]*?\*\/\}/g,"").replace(/\/\*[\s\S]*?\*\//g,"").replace(/^\s*\/\/.*$/gm,"");
 const cache={};
+/* ==================================================================
+    APP-TEST-0A: THE SHELL READERS RESOLVE TOO
+   ==================================================================
+   `readShell()` is `App.tsx` plus every `shell/**` source file (tests, `.d.ts` and `__fixtures__` excluded),
+   sorted, each stripped -- the same set `sourceScan.ts` builds. Without this the ~170 suites migrated to it
+   would drop out of the sweep's accounting, which is #1096's invisible-file failure at scale. The per-file
+   markers are left out: the sweep only asks "is the literal there", which a marker cannot change. */
+const SHELL = "<shell>";
+function shellFiles(){
+  const out=[];
+  (function walk(d){if(!fs.existsSync(d))return;for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);
+    if(e.isDirectory())walk(p);else if(/\.(ts|tsx)$/.test(e.name)&&!/\.test\.tsx?$/.test(e.name)&&!/\.d\.ts$/.test(e.name)&&!/(^|[\\/])__(fixtures|mocks|tests)__([\\/]|$)/.test(p))out.push(p.split(path.sep).join("/"));}})("shell");
+  return ["App.tsx",...out.sort((a,b)=>(a<b?-1:a>b?1:0))];
+}
 function content(rel,stripped){
   const key=rel+"|"+stripped;
   if(!(key in cache)){
-    try{const raw=fs.readFileSync(path.join(".",rel),"utf8");cache[key]=stripped?strip(raw):raw;}catch{cache[key]=null;}
+    try{
+      const files=rel===SHELL?shellFiles():[rel];
+      cache[key]=files.map((f)=>{const raw=fs.readFileSync(path.join(".",f),"utf8").replace(/\r\n?/g,"\n");return stripped?strip(raw):raw;}).join("\n");
+    }catch{cache[key]=null;}
   }
   return cache[key];
 }
 const files=[];
 (function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){const p=path.join(d,e.name);
  if(e.isDirectory())walk(p);else if(/\.test\.tsx?$/.test(e.name))files.push(p);}})(".");
-const unesc=s=>s.replace(/\\"/g,'"').replace(/\\'/g,"'").replace(/\\n/g,"\n").replace(/\\t/g,"\t").replace(/\\\\/g,"\\");
+// APP-TEST-0A: `\uXXXX` too -- "House rules \u00b7 ..." was reported missing because it was compared escaped.
+// ONE PASS, so an escaped backslash before a `u` (`"\\u25B2"`, a literal backslash-u) stays a backslash-u.
+const UNESC={'"':'"',"'":"'",n:"\n",t:"\t","\\":"\\"};
+const unesc=s=>s.replace(/\\(u[0-9a-fA-F]{4}|[\s\S])/g,(m,e)=>e.length===5?String.fromCharCode(parseInt(e.slice(1),16)):e in UNESC?UNESC[e]:m);
 let checked=0,sliced=0,skipped=0,unresolved=0,ordering=0,unresolvedConcat=0; const bad=[];
 for(const f of files){
+  /* APP-TEST-0A: the harness's own suites hold the shapes they test as string FIXTURES -- `'const APP =
+     readShell(); ...'` -- which this script would read as live declarations. They test the helpers, not the
+     source tree, so they are not source scans. */
+  if(/(^|[\\/])utils[\\/](sourceScan|sourceGuards)\.test\.ts$/.test(f)) continue;
   /* THE TEST FILE IS STRIPPED TOO. Several suites quote a retired assertion inside a design note --
      "IT READ, on one line per #814: expect(APP).toContain(...)" -- and scanning the raw text reports
      those as live assertions that no longer hold. #490a's rule, applied to the scanner itself. */
@@ -44,6 +68,13 @@ for(const f of files){
   for(const m of src.matchAll(/const\s+(\w+)\s*=\s*(?:stripComments\(\s*)?(readStripped|readSource)\(\s*"([^"]+)"\s*\)/g)){
     decls.push({at:m.index,name:m[1],rel:m[3],stripped:m[2]==="readStripped"||m[0].includes("stripComments(")});
   }
+  /* APP-TEST-0A: `readShell()` / `readShellRaw()` are the whole shell; `readAppRoot(why)` is `App.tsx` alone. */
+  for(const m of src.matchAll(/const\s+(\w+)\s*=\s*(readShell|readShellRaw|readAppRoot|readAppRootRaw)\s*\(/g)){
+    const shell=m[2].startsWith("readShell");
+    decls.push({at:m.index,name:m[1],rel:shell?SHELL:"App.tsx",stripped:!m[2].endsWith("Raw")});
+  }
+  // "Nearest preceding" is by offset, so the two declaration passes are merged into offset order.
+  decls.sort((a,b)=>a.at-b.at);
   if(!decls.length) continue;
 
   /* ---- one level of `sliceBetween`, per design note #1078 ---------------------------------------- */
@@ -73,6 +104,34 @@ for(const f of files){
                 text:body.slice(from,to)});
     sliced++;
   }
+  /* APP-TEST-0A: `sliceFrom(NAME, "a")` / `sliceFrom(NAME, "a", { length: N })` / `sliceBefore(NAME, "a", N)`,
+     the guarded replacements for `S.slice(S.indexOf(a))` and its windows, resolve the same way -- one level,
+     literal arguments only. */
+  const fileNames2=[...new Set(decls.map(d=>d.name))].join("|");
+  const fromRe=new RegExp(
+    `const\\s+(\\w+)\\s*=\\s*(sliceFrom|sliceBefore)\\(\\s*(${fileNames2})\\s*,\\s*(['"])((?:\\\\.|(?!\\4).)*)\\4\\s*` +
+    `(?:,\\s*(?:\\{\\s*length:\\s*(\\d+)\\s*\\}|(\\d+))\\s*)?\\)`,"g");
+  for(const m of src.matchAll(fromRe)){
+    const near=decls.filter(d=>d.name===m[3]&&d.at<m.index).pop();
+    if(!near||near.opaque) continue;
+    const body=near.text!==undefined?near.text:content(near.rel,near.stripped);
+    if(body===null) continue;
+    const anchor=unesc(m[5]), len=m[6]!==undefined?+m[6]:m[7]!==undefined?+m[7]:undefined;
+    const at=body.indexOf(anchor);
+    if(at===-1){bad.push(`${f}\n     ${m[2]} anchor gone from ${near.rel}: ${JSON.stringify(anchor)}`);continue;}
+    const text=m[2]==="sliceFrom"?body.slice(at,len===undefined?body.length:at+len):body.slice(Math.max(0,at-(len??0)),at);
+    decls.push({at:m.index,name:m[1],rel:`${near.rel} [${m[2]} ${JSON.stringify(anchor)}]`,stripped:near.stripped,text});
+    sliced++;
+  }
+  /* AND A NAME RE-DECLARED FROM SOMETHING THIS SCRIPT CANNOT EVALUATE SHADOWS THE EARLIER ONE. Without this,
+     `const body = sliceFrom(APP, a, { length: f(x) })` in one case resolved `body` to the previous case's
+     slice, and reported that region's literals as missing -- the tool asserting about the wrong region, which
+     is the vacuity it exists to catch. Assertions on an opaque name are counted as not checked. */
+  const known=new Set(decls.map(d=>d.name));
+  for(const m of src.matchAll(/(?:const|let)\s+(\w+)\s*(?::[^=]+)?=/g)){
+    if(known.has(m[1])&&!decls.some(d=>d.at===m.index)) decls.push({at:m.index,name:m[1],opaque:true});
+  }
+  decls.sort((a,b)=>a.at-b.at);
 
   const names=[...new Set(decls.map(d=>d.name))].join("|");
   const re=new RegExp(`expect\\(\\s*(${names})\\s*\\)\\s*\\.(not\\.)?toContain\\(\\s*(['"])((?:\\\\.|(?!\\3).)*)\\3(\\s*[+,)])`,"g");
@@ -90,6 +149,7 @@ for(const f of files){
     if (m[5].trim().startsWith("+")) { unresolvedConcat++; continue; }
     const near=decls.filter(d=>d.name===m[1]&&d.at<m.index).pop();
     if(!near){skipped++;continue;}
+    if(near.opaque){unresolved++;continue;}
     const body=near.text!==undefined?near.text:content(near.rel,near.stripped);
     if(body===null){bad.push(`${f}: cannot read ${near.rel}`);continue;}
     checked++;
@@ -107,9 +167,23 @@ for(const f of files){
      went missing. `anchorIndex` exists to throw instead, and twenty assertions across this suite predate it.
      FOUND THE WAY THEY ALWAYS ARE: one of them failed with "Expected: < -1" and the number had to be reverse
      engineered into a cause. Checked here so the next one names itself. */
+  /* APP-TEST-0A: `expectOrder(NAME, "a", "b", ...)` names its anchors as literals; each is checked like an
+     `indexOf` anchor (the helper throws on a miss at runtime; the sweep says which one before you run it). */
+  for (const m of src.matchAll(/expectOrder\(\s*(\w+)\s*,([^;]*?)\)\s*;/g)) {
+    const near = decls.filter((d) => d.name === m[1] && d.at < m.index).pop();
+    if (!near || near.opaque) continue;
+    const body = near.text !== undefined ? near.text : content(near.rel, near.stripped);
+    if (body === null) continue;
+    for (const a of m[2].matchAll(/(['"`])((?:\\.|(?!\1).)*)\1/g)) {
+      ordering += 1;
+      if (!body.includes(unesc(a[2]))) {
+        bad.push(`${f}\n     expectOrder ANCHOR MISSING in ${near.rel}: ${JSON.stringify(unesc(a[2]))}`);
+      }
+    }
+  }
   for (const m of src.matchAll(/(\w+)\.indexOf\(\s*(['"`])((?:\\.|(?!\2).)*)\2\s*\)/g)) {
     const near = decls.filter((d) => d.name === m[1] && d.at < m.index).pop();
-    if (!near) continue;
+    if (!near || near.opaque) continue;
     const body = near.text !== undefined ? near.text : content(near.rel, near.stripped);
     if (body === null) continue;
     ordering += 1;
@@ -141,7 +215,7 @@ for(const f of files){
      counted in the "not checked" total below, but it is playing by the rules. The warning is for files that
      BYPASS the helper, because those are the ones that vanish from the accounting entirely. */
   const viaHelper = new Set(
-    [...src.matchAll(/const\s+(\w+)\s*=\s*(?:readStripped|readSource)\s*\(/g)].map((m) => m[1]),
+    [...src.matchAll(/const\s+(\w+)\s*=\s*(?:readStripped|readSource|readShell|readShellRaw|readAppRoot|readAppRootRaw)\s*\(/g)].map((m) => m[1]),
   );
   const unresolvedHere = [...src.matchAll(/expect\(\s*(\w+)\s*\)\s*\.(?:not\.)?toContain\(/g)]
     .filter((m) => !decls.some((d) => d.name === m[1] && d.at < m.index))

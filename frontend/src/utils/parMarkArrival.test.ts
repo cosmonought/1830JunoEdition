@@ -30,7 +30,7 @@
 
 export {};
 
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 const { reconcileParMarks } = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
 const { buildOperatingOrder } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { sandboxScenarioState } = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
@@ -106,7 +106,7 @@ describe("the wiring: the mark is the reducer's, and the shell no longer stands 
      THE OLD ASSERTION IS INVERTED ON PURPOSE. A `reconcileParMarks` call reappearing in this branch would be a
      second writer of the chart, one layer above the one that owns it -- #1184's shape, the very thing #1234
      removed. */
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
   // #1247/#1248: the negotiation and closure branches that used to follow are gone; the next branch standing
   // is the deal's narration.
   const branch = sliceBetween(APP, "if (isSetBoParMsg(msg)) {", "if (isSetupGameMsg(msg)) {");

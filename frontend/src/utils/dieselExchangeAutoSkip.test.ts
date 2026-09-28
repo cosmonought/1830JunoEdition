@@ -44,6 +44,7 @@ const { nextDerivedAction, buyTrainsAutoSkipReason, TRAIN_LIMIT_SKIP_REASON } =
   require("../gameEngine/derivedActions") as typeof import("../gameEngine/derivedActions");
 const { readFileSync } = require("fs") as typeof import("fs");
 const { join } = require("path") as typeof import("path");
+const { readShell, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 const S = require("./offerMatrix74Support") as typeof import("./offerMatrix74Support");
 
 /* ------------------------------------------------------------------ */
@@ -478,8 +479,8 @@ describe("DT-1 parity: the shell and the server ask the same Buy Trains verdict"
        Action Bar freeze (#1145) -- so a browser-only verdict would either end the turn itself or freeze the bar on a
        step the server has left open. `atTrainLimitNow` stays as the arm's guard: it is the same shared lock the
        engine's verdict starts from, so the conjunction is exactly the engine's answer. */
-    const app = readFileSync(join(__dirname, "..", "App.tsx"), "utf8");
-    const memo = app.slice(app.indexOf("const autoSkipReason = useMemo"), app.indexOf("const forcedWithholdRef"));
+    const app = readShell();
+    const memo = sliceBetween(app, "const autoSkipReason = useMemo", "const forcedWithholdRef");
     expect(memo).toContain('if (orSubPhase === "Hardware" && atTrainLimitNow) {');
     expect(memo).toContain("return gameState ? buyTrainsAutoSkipReason(gameState, actingProtocolId) : null;");
     expect(memo).not.toContain("already at its train limit");

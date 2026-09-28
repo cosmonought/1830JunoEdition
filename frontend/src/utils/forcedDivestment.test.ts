@@ -26,6 +26,8 @@ import { autoPassDecision } from "./autoPass";
 import { rankPlayers } from "../gameEngine/endgame";
 import type { GameStateResponse } from "../gameEngine/gameState";
 
+const { readShell } = require("./sourceScan") as typeof import("./sourceScan");
+
 const PRR = 1;
 const BO = 2;
 const ME = "me";
@@ -277,7 +279,7 @@ describe("the doors all ask one module", () => {
   });
 
   it("is asked by the Pass button", () => {
-    expect(read("App.tsx")).toContain("divestmentRefusal(");
+    expect(readShell()).toContain("divestmentRefusal(");
   });
 
   it("is asked by auto-pass", () => {

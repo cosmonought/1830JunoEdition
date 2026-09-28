@@ -34,6 +34,7 @@ import {
   visiblePresence,
   type PresenceState,
 } from "./presence";
+import { readShell } from "./sourceScan";
 
 const NOW = 1_000_000;
 
@@ -161,7 +162,7 @@ describe("the label comes from state, and only the join comes from presence", ()
     const path = require("path") as typeof import("path");
     return fs.readFileSync(path.join(__dirname, rel), "utf8");
   };
-  const app = read("../App.tsx");
+  const app = readShell();
   const CHIPS = read("watcherRouteChips.ts").replace(/\/\*[\s\S]*?\*\//g, "");
   const OVERLAY_SOURCE = read("routeOverlaySource.ts").replace(/\/\*[\s\S]*?\*\//g, "");
 
@@ -172,11 +173,10 @@ describe("the label comes from state, and only the join comes from presence", ()
        knowable: the roster is GAME STATE, replayed from the same log on every client.
        #875 MADE THAT A TYPE RATHER THAN A LOOKUP. The chip's model is copied straight off the roster entry
        that produced it, so a chip cannot be built for a train whose model is unknown. */
-    const code = app.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     /* The needle drops the leading `${`, for `appNaming.test.ts`'s reason: written in full it is a literal
        `${...}` inside a plain string and `no-template-curly-in-string` reads it as a template the author
        forgot to write. */
-    expect(code).not.toContain("`Train ");
+    expect(app).not.toContain("`Train ");
     expect(CHIPS).toContain("model: train.model,");
   });
 
@@ -269,7 +269,7 @@ describe("presence stays outside the one source of truth", () => {
   it("clears a seat when its turn ends rather than waiting for staleness", () => {
     // Staleness is the safety net for a client that vanished, not the mechanism for a turn that ended cleanly.
     expect(read("sandboxPresence.ts")).toContain("export async function clearPresence");
-    expect(read("../App.tsx")).toContain("void clearPresence(room, me)");
+    expect(readShell()).toContain("void clearPresence(room, me)");
   });
 });
 
@@ -296,7 +296,7 @@ describe("the president's figure reaches every screen (design note #1397)", () =
   });
 
   it("a publish refused by the floor is sent at the end of the window, and a heartbeat keeps the entry fresh", () => {
-    const app = read("../App.tsx");
+    const app = readShell();
     expect(app).toContain("timers.push(setTimeout(publish, wait));");
     expect(app).toContain("const heartbeat = setInterval(publish, PRESENCE_HEARTBEAT_MS);");
     expect(PRESENCE_HEARTBEAT_MS * 2).toBeLessThan(PRESENCE_STALE_MS);

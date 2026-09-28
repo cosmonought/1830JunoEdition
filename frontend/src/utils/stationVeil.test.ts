@@ -23,20 +23,16 @@
 // and that is the assertion worth having, because a future edit that re-gates it on a mode would restore the
 // report exactly.
 
-import fs from "fs";
-import path from "path";
-
-const APP = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+import { readShell, sliceBetween, sliceFrom } from "./sourceScan";
 
 /** #490a: the notes quote the old condition by name and must keep doing so. */
-const CODE = APP.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const CODE = readShell();
 
-/** The `tokenTargetFocus` memo, isolated so a match elsewhere in a 7000-line file cannot pass for one here. */
-const FOCUS_BLOCK = (() => {
-  const start = CODE.indexOf("const tokenTargetFocus = useMemo(");
-  expect(start).toBeGreaterThan(-1);
-  return CODE.slice(start, CODE.indexOf("}, [", start) + 200);
-})();
+/** The `tokenTargetFocus` memo, isolated so a match elsewhere in a 7000-line file cannot pass for one here.
+ *  APP-TEST-0A: the memo's body up to its dependency array (`}, [`), plus the 200 characters that carry the
+ *  array itself -- the same region as before, but guarded: a missing start or end anchor throws. */
+const FOCUS_START = "const tokenTargetFocus = useMemo(";
+const FOCUS_BLOCK = sliceFrom(CODE, FOCUS_START, { length: sliceBetween(CODE, FOCUS_START, "}, [").length + 200 });
 
 describe("the veil hangs on the step", () => {
   it("shows for the whole Tokens sub-phase", () => {

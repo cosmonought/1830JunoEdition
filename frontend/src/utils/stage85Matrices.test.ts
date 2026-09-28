@@ -62,7 +62,7 @@ import {
 } from "../gameEngine/mohawkExchange";
 import { STANDARD_BOARD, activateBoard } from "../components/hexBoardData";
 import { EXPANDED_BOARD } from "../components/hexBoardDataPlus";
-import { readStripped } from "./sourceScan";
+import { readStripped, shellSourcePaths } from "./sourceScan";
 import { board, operatingBoard, stockRoundBoard, P1, P2, P3, PRR, NYC, CO, DH, MH } from "./offerFixtures74";
 import { M, corridor, fundingBoard, withCorp, withState } from "./offerMatrix74Support";
 
@@ -678,6 +678,10 @@ describe("§15 the M&H matrix (rulebook p. 27; Slice 8.4, #1630-#1634)", () => {
 
 describe("§16 static source audits", () => {
   const src = (path: string) => readStripped(path);
+  /* APP-TEST-0A: the shell is App.tsx plus every shell/** module, so an audit of "the shell" follows code out of
+     the root file rather than asserting about a file that may no longer hold it. */
+  const shell = shellSourcePaths();
+  const inShell = (line: string) => shell.includes(line.split(":")[0]);
   const engine = [
     "gameEngine/sandboxSession.ts",
     "gameEngine/operatingOrder.ts",
@@ -731,12 +735,12 @@ describe("§16 static source audits", () => {
   });
 
   it("A3 there is ONE M&H arm, and the shell submits a message rather than applying an exchange", () => {
-    const direct = hits(/applyPrivateExchange\(/, [...engine, "App.tsx"]);
+    const direct = hits(/applyPrivateExchange\(/, [...engine, ...shell]);
     show("A3", direct);
     /* `privateExchange.ts` defines it; `mohawkExchange.ts` projects and applies with it; `sandboxSession.ts`
        uses it for the C&A's purchase bonus (#576), which is a grant and not an exchange. Nothing in the shell
        calls it -- #1246 took that branch off App.tsx and left the message. */
-    expect(direct.filter((line) => line.startsWith("App.tsx"))).toEqual([]);
+    expect(direct.filter(inShell)).toEqual([]);
     const arm = src("gameEngine/sandboxSession.ts");
     expect(arm).toContain("mhExchangeRequestRefusal");
     expect(arm).toContain("mhExchangeDisposition");
@@ -778,7 +782,7 @@ describe("§16 static source audits", () => {
       ...engine,
       "gameEngine/gameState.ts",
       "gameEngine/sandboxState.ts",
-      "App.tsx",
+      ...shell,
     ]);
     show("A7", writes);
     expect(writes.map((line) => line.split(":")[0])).toEqual([
@@ -789,7 +793,7 @@ describe("§16 static source audits", () => {
       "gameEngine/sandboxState.ts",
     ]);
     // Nothing in the shell writes the queue: the turn-order surfaces read it (U-34).
-    expect(writes.filter((line) => line.startsWith("App.tsx"))).toEqual([]);
+    expect(writes.filter(inShell)).toEqual([]);
   });
 
   it("A8 nothing inserts a mid-round float into the queue: the settle slices and permutes only", () => {

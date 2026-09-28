@@ -22,6 +22,7 @@
 import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { sharePurchaseBlock, soldThisRound } from "../gameEngine/sharePurchase";
 import type { GameStateResponse } from "../gameEngine/gameState";
+import { readShell } from "./sourceScan";
 
 const ME = "me";
 const RIVAL = "rival";
@@ -202,6 +203,6 @@ describe("both surfaces ask the same function", () => {
   });
 
   it("is what disables the button", () => {
-    expect(read("App.tsx")).toContain("return sharePurchaseBlock({");
+    expect(readShell()).toContain("return sharePurchaseBlock({");
   });
 });

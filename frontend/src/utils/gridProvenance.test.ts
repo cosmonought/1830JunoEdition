@@ -26,6 +26,7 @@
 
 import { describeGridChange, gridChangeLine } from "./gridProvenance";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { readShell } from "./sourceScan";
 
 const grid = (count: number): MapGridResponse =>
   ({
@@ -97,13 +98,8 @@ describe("what is allowed is stated positively", () => {
 });
 
 describe("the shell is wired to it", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    // #490a: the note explains the invariant in prose and must keep doing so.
-    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  })();
+  // #490a: the note explains the invariant in prose and must keep doing so.
+  const APP = readShell();
 
   it("measures every lay", () => {
     expect(APP).toContain("describeGridChange(msg, mapGridRef.current, nextGrid, fallbackLabel)");

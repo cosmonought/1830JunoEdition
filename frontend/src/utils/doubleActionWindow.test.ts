@@ -21,7 +21,7 @@
 
 export {};
 
-const { readStripped, readSource, sliceBetween } =
+const { readStripped, readSource, sliceBetween, readShell } =
   require("./sourceScan") as typeof import("./sourceScan");
 const { sharePurchaseBlock } = require("../gameEngine/sharePurchase") as typeof import("../gameEngine/sharePurchase");
 
@@ -30,7 +30,7 @@ const REDUCER = readStripped("gameEngine/sandboxSession.ts");
    the very text being looked for, and my first draft of the tripwire below searched the stripped copy and
    failed for that reason rather than for a real one. */
 const REDUCER_RAW = readSource("gameEngine/sandboxSession.ts");
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const PANEL = readStripped("components/StockRoundPanel.tsx");
 
 type State = import("../gameEngine/gameState").GameStateResponse;

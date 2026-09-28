@@ -14,7 +14,7 @@ import {
 import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 
 const HOST = "p-host";
 const GUEST = "p-guest";
@@ -153,7 +153,7 @@ describe("#1340: the reducer settles the auction inside one call", () => {
   });
 
   it("neither caller composes the auction any more", () => {
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     const ENGINE = readStripped("gameEngine/replayLog.ts");
     for (const source of [APP, ENGINE]) {
       expect(source).not.toContain("applySandboxWaterfallAction(");

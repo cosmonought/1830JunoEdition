@@ -25,12 +25,11 @@
 // inside a six-thousand-line component; there is no exported predicate to call and no DOM in a node
 // environment. Same instrument as `stationVeil.test.ts`, for the same reason.
 
-import fs from "fs";
-import path from "path";
+import { expectOrder, readShell, sliceBetween } from "./sourceScan";
 
-const APP = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-/** #490a: the note quotes the old gate verbatim and must keep doing so. */
-const CODE = APP.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+/** #490a: the note quotes the old gate verbatim and must keep doing so -- so every assertion here reads the
+ *  comment-stripped shell. */
+const CODE = readShell();
 
 describe("joining holds until the room answers", () => {
   it("tracks whether the first snapshot has arrived", () => {
@@ -59,20 +58,19 @@ describe("joining holds until the room answers", () => {
        check has to come first or the fall-through still reaches the board.
        LIVE-2D: the waiting-room gate reads the view's LIFECYCLE, and a table LOST to this tab (kicked, cancelled,
        expired, a private deal without it) is said before either -- a loss also resolves the wait. */
-    const lost = CODE.indexOf("if (sandbox && sandboxRoomCode && roomLost !== null) {");
-    const unresolved = CODE.indexOf("!sandboxRoomResolved");
-    const waiting = CODE.indexOf('sandboxRoom?.lifecycle === "waiting"');
-    expect(lost).toBeGreaterThan(-1);
-    expect(unresolved).toBeGreaterThan(-1);
-    expect(waiting).toBeGreaterThan(-1);
-    expect(lost).toBeLessThan(unresolved);
-    expect(unresolved).toBeLessThan(waiting);
+    const lost = "if (sandbox && sandboxRoomCode && roomLost !== null) {";
+    const unresolved = "!sandboxRoomResolved";
+    const waiting = 'sandboxRoom?.lifecycle === "waiting"';
+    expect(CODE).toContain(lost);
+    expect(CODE).toContain(unresolved);
+    expect(CODE).toContain(waiting);
+    expectOrder(CODE, lost, unresolved, waiting);
   });
 
   it("offers a way out of the wait", () => {
     /* A screen with no exit is how a wrong room code becomes a stuck tab. Cancel leaves the room, which is
        the same handler the room bar uses. */
-    const gate = CODE.slice(CODE.indexOf("!sandboxRoomResolved"), CODE.indexOf('sandboxRoom?.lifecycle === "waiting"'));
+    const gate = sliceBetween(CODE, "!sandboxRoomResolved", 'sandboxRoom?.lifecycle === "waiting"');
     expect(gate).toContain("handleLeaveSandboxRoom");
   });
 });
@@ -122,7 +120,7 @@ describe("joining a room seats you in it (design note #856; LIVE-2D: the server 
   });
 
   it("learns every change, a joiner included, from the server's pushed view", () => {
-    const watch = CODE.slice(CODE.indexOf("return watchRoom(sandboxRoomCode, {"), CODE.indexOf("const replayingRef"));
+    const watch = sliceBetween(CODE, "return watchRoom(sandboxRoomCode, {", "const replayingRef");
     expect(watch).toContain("onView: (view) => {");
     expect(watch).toContain("setSandboxRoom(view);");
   });

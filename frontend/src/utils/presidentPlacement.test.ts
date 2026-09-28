@@ -33,6 +33,8 @@ export {};
 // as tall as the herald, so its second row shares the full name's line. Two consumers, one number. Written
 // as `24` in both places it would survive about one refactor.
 
+const { readShell } = require("./sourceScan") as typeof import("./sourceScan");
+
 const read = (relative: string) => {
   const fs = require("fs") as typeof import("fs");
   const path = require("path") as typeof import("path");
@@ -194,8 +196,7 @@ describe("nothing about the fact itself was lost in the move", () => {
     /* #660a's rule: the shell resolved this figure on every render of the acting corporation, for one
        reader. An unread prop is legal, silent, and invisible to `tsc` -- so the deletion has to be asserted
        or it half-happens. */
-    const app = read("App.tsx");
-    expect(strip(app)).not.toContain("presidentCash:");
+    expect(readShell()).not.toContain("presidentCash:");
     expect(strip(read("panels/ContextualActionBar.tsx"))).not.toContain("presidentCash");
   });
 

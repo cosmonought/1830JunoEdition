@@ -50,7 +50,7 @@ import { ModalLayerHost } from "./ModalPortal";
 
 import AutoBuyModal from "./AutoBuyModal";
 import AutoPassModal from "./AutoPassModal";
-import { readStripped } from "../utils/sourceScan";
+import { readStripped, shellSourcePaths } from "../utils/sourceScan";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -479,7 +479,7 @@ describe("the migrated sources keep the ordering the hook depends on", () => {
     for (const gone of ["components/SeatPinModal.tsx", "utils/seatPin.ts"]) {
       expect([gone, fs.existsSync(path.join(__dirname, "..", gone))]).toEqual([gone, false]);
     }
-    for (const file of ["App.tsx", "components/Lobby.tsx", "components/SandboxWaitingRoom.tsx", "components/JoinGameCard.tsx"]) {
+    for (const file of [...shellSourcePaths(), "components/Lobby.tsx", "components/SandboxWaitingRoom.tsx", "components/JoinGameCard.tsx"]) {
       const source = readStripped(file);
       for (const name of ["SeatPinModal", "seatPin", "setSeatPin", "claimSeat", "readSeatPin", "readSeatToken"]) {
         expect([file, name, source.includes(name)]).toEqual([file, name, false]);

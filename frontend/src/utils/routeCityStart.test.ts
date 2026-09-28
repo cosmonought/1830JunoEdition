@@ -31,6 +31,7 @@ import { cityExitEdges, liveEdgesForHex } from "../components/hexGeometry";
 import { assignRouteSet, autoTraceRoute } from "../gameEngine/routeAutoTrace";
 import { routeIncludesOwnedToken, routeTokenBlockReason } from "./routeWaypoints";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { readShell } from "./sourceScan";
 
 const BARE: MapGridResponse = { game_id: 1, tiles: [] };
 
@@ -276,12 +277,7 @@ describe("the source keeps the model out", () => {
        COUNTED BY ABSENCE OF THE OLD FORM rather than by a count of the new one: the three call sites are
        written two different ways (two assignments and one prop), and a count keyed to today's phrasing breaks
        on a rename while proving nothing about the property. */
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const app = fs
-      .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
+    const app = readShell();
     expect(app).not.toContain("startHexes: corporation?.station_token_hexes");
     expect(app).not.toContain("const startHexes = corporation.station_token_hexes");
     expect((app.match(/startHexes/g) ?? []).length).toBeGreaterThan(2);
@@ -356,12 +352,7 @@ describe("a hand-drawn route through the wrong city (design note #853)", () => {
     /* THE HALF THAT MAKES THE OTHER HALF REAL, and it had no test until a negative control removed it and
        nothing went red. Without `mapGrid` the rule falls back to coordinates -- correct as a fallback for a
        fixture, and silently the old bug if the app takes it. */
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const app = fs
-      .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
+    const app = readShell();
     expect(app).toContain("routeTokenBlockReason(points, routeTokenHexes, mapGrid)");
     expect(app).toContain("stationTokensOf(corporation)");
   });

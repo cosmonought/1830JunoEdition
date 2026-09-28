@@ -22,7 +22,7 @@
 // render a control per flag" are questions about wiring, and wiring is what a unit test of either side cannot
 // see -- which is the whole reason the bug survived four batches of green suites.
 
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 import {
   resolveVariants,
   STANDARD_VARIANTS,
@@ -81,12 +81,12 @@ describe("the table's house rules travel with `create` and live on the server's 
     /* A table that opened on `undefined` would deal 1830 anyway -- `resolveVariants` sees to that -- but the
        waiting room would render its terms from a config nobody had chosen. */
     /* LIVE-2E: the host's seat is named after the profile (`profileNickname`), not the retired readout label. */
-    expect(readStripped("App.tsx")).toContain("createHostedGame(STANDARD_VARIANTS, undefined, profileNickname())");
+    expect(readShell()).toContain("createHostedGame(STANDARD_VARIANTS, undefined, profileNickname())");
   });
 });
 
 describe("the setup dispatch carries them (design note #910; LIVE-2D: the server deals)", () => {
-  const source = readStripped("App.tsx");
+  const source = readShell();
 
   it("puts the table's variants into the SetupGame action -- built by the server, from its record", () => {
     /* ==================================================================
@@ -291,7 +291,7 @@ describe("the dividend pays what was banked (design notes #917 -> #934)", () => 
      -- which leaves `last_route_revenue` as the single authority, read where it is SPENT.
      WHAT SURVIVES OF #917 IS ITS RULE, NOT ITS MECHANISM: the shell may read the reducer's answer and must
      never compute its own. That is what the cases below assert now, and it is the half worth keeping. */
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("commits no total of its own at Run Routes", () => {
     /* THE CACHE, ASSERTED ABSENT. `committedRouteRevenue` is removed, so the only mention left in the shell
@@ -355,7 +355,7 @@ describe("a batch of actions gets a batch of indices (design note #916)", () => 
      `appendSandboxAction` awaits only the write -- so three routes dispatched in one loop were appended at
      one index. `index` is what `orderBy` sorts on and what `effectiveActions` matches a `RevertTo` against,
      so this was an ambiguous ordering in the structure #522 calls the game itself. */
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("advances the cursor on a successful append", () => {
     expect(APP).toContain("appliedIndexRef.current = appendAt + 1;");

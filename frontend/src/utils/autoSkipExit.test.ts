@@ -17,6 +17,8 @@
 import { autoSkipExit } from "../gameEngine/autoSkipExit";
 import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
 
+const { readShell, sliceFrom, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+
 /** The full sequence, and the one with `BuyPrivate` already spent -- both real. */
 const FULL: readonly OperatingSubPhase[] = [
   "BuyPrivate",
@@ -73,15 +75,7 @@ describe("it refuses to end a turn it cannot account for", () => {
 });
 
 describe("the shell wires it, and only for the train limit", () => {
-  const read = (rel: string) => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-  };
-  const APP = read("App.tsx")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
+  const APP = readShell();
 
   it("chooses the exit from the reducer's own list", () => {
     /* `stepsFor` IS THE REDUCER'S FUNCTION. Asking a second list here is how the shell and the reducer come
@@ -97,9 +91,7 @@ describe("the shell wires it, and only for the train limit", () => {
   it("ends the turn through the automatic entry point", () => {
     /* #439: automatic dispatches carry `{ automatic, derived }` so Undo rewinds PAST a turn the game ended
        on the player's behalf, rather than stopping at it and asking them to undo it twice. */
-    const at = APP.indexOf("const endTurnAutomatically");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, at + 400);
+    const body = sliceFrom(APP, "const endTurnAutomatically", { length: 400 });
     expect(body).toContain('"PassTurn"');
     expect(body).toContain("{ automatic: true, derived: true }");
   });
@@ -110,9 +102,7 @@ describe("the shell wires it, and only for the train limit", () => {
        can still buy from another corporation, so it's fine to make these corporations manually end their
        turn." `atTrainLimitNow` counts trains against the limit and consults no treasury -- asserted so a
        future convenience cannot quietly add one. */
-    const at = APP.indexOf("const atTrainLimitNow");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, APP.indexOf("}, [gameState, actingProtocolId, depot]);", at));
+    const body = sliceBetween(APP, "const atTrainLimitNow", "}, [gameState, actingProtocolId, depot]);");
     expect(body).toContain("isTrainLocked(");
     expect(body).not.toContain("treasury");
     expect(body).not.toContain("cash");
@@ -123,8 +113,7 @@ describe("the shell wires it, and only for the train limit", () => {
   it("still refuses to act on an unreported fleet", () => {
     /* `owned_trains` UNDEFINED IS NOT AN EMPTY FLEET. Ending a turn on a guess about what a corporation owns
        is the one failure worse than making the player click. */
-    const at = APP.indexOf("const atTrainLimitNow");
-    const body = APP.slice(at, APP.indexOf("}, [gameState, actingProtocolId, depot]);", at));
+    const body = sliceBetween(APP, "const atTrainLimitNow", "}, [gameState, actingProtocolId, depot]);");
     expect(body).toContain("if (owned === undefined) return false;");
   });
 });

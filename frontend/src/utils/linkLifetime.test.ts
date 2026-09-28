@@ -9,11 +9,9 @@
 
 export {};
 
-const APP = (() => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-})();
+const { expectOrder, readShell, sliceFrom } = require("./sourceScan") as typeof import("./sourceScan");
+
+const APP = readShell();
 
 describe("#1242: the transport effect does not depend on the dispatcher's identity", () => {
   it("lists only the room facts", () => {
@@ -28,12 +26,11 @@ describe("#1242: the transport effect does not depend on the dispatcher's identi
   });
 
   it("a server-path build with no link refuses rather than writing to Firestore", () => {
-    const start = APP.indexOf("if (!link && GAME_SERVER_URL) {");
-    expect(start).toBeGreaterThan(-1);
-    const branch = APP.slice(start, start + 700);
+    expect(APP).toContain("if (!link && GAME_SERVER_URL) {");
+    const branch = sliceFrom(APP, "if (!link && GAME_SERVER_URL) {", { length: 700 });
     expect(branch).toContain("setPendingAppendIndex((current) => (current === appendAt ? null : current));");
     expect(branch).toContain("return;");
     // The refusal comes BEFORE the transport choice, so the Firestore branch is not reachable from it.
-    expect(start).toBeLessThan(APP.indexOf("const allocated = link"));
+    expectOrder(APP, "if (!link && GAME_SERVER_URL) {", "const allocated = link");
   });
 });

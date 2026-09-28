@@ -15,12 +15,12 @@
 
 export {};
 
-const { anchorIndex, readStripped, sliceBetween } = require("../utils/sourceScan") as typeof import("../utils/sourceScan");
+const { anchorIndex, readStripped, sliceBetween, readShell } = require("../utils/sourceScan") as typeof import("../utils/sourceScan");
 
 const DESCRIPTION = readStripped("components/tileTransition.ts");
 const PAINTER = readStripped("components/tileTransitionCanvas.ts");
 const RENDERER = readStripped("components/HexGridRenderer.tsx");
-const SHELL = readStripped("App.tsx");
+const SHELL = readShell();
 
 const count = (source: string, needle: string) => source.split(needle).length - 1;
 

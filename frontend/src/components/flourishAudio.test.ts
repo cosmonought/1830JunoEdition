@@ -52,10 +52,10 @@ const {
   discardCueAtMs,
   discardMilestoneMs,
 } = require("./trainDiscardFlourish") as typeof import("./trainDiscardFlourish");
-const { readStripped, sliceBetween } =
+const { readStripped, sliceBetween, readShell, expectOrder } =
   require("../utils/sourceScan") as typeof import("../utils/sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 /** The measured principal impact of each clip, as this pass found it. Restated here so a future retiming
  *  has to disagree with a number somebody wrote down rather than with a number nobody can see. */
@@ -190,21 +190,15 @@ describe("multiplicity: one cue per event, and the event is different each time"
        still in the fleet (#979) -- produces an empty list. The empty-list guard is above the cue, so the
        marking never reaches it; the expiry that finally destroys them does, and gets one crack. VF-7's
        own suite proves the selection, and this proves the cue is behind it. */
-    expect(RUST.indexOf("if (corporations.length === 0) return;")).toBeLessThan(
-      RUST.indexOf("scheduleFlourishCue("),
-    );
+    expectOrder(RUST, "if (corporations.length === 0) return;", "scheduleFlourishCue(");
   });
 
   it("refuses every cue on a rebuild, in the raiser itself", () => {
     /* #1094's edge discipline, and it is what makes refresh and Undo silent: a rebuild walks the whole
        log forward and crosses every break, rust and discard on the way. */
     for (const body of [BANK, RUST, DISCARD]) {
-      const guard = body.indexOf("if (replayingHistory) return;");
-      const cue = body.indexOf("scheduleFlourishCue(");
-      expect(guard).toBeGreaterThan(-1);
-      expect(cue).toBeGreaterThan(-1);
-      // The guard is passed BEFORE the cue is scheduled, not after it.
-      expect(guard).toBeLessThan(cue);
+      // The guard is passed BEFORE the cue is scheduled, not after it (both must exist: `expectOrder` throws).
+      expectOrder(body, "if (replayingHistory) return;", "scheduleFlourishCue(");
     }
   });
 

@@ -18,7 +18,7 @@
 
 export {};
 
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 const {
   PRICE_GRID,
   projectDividendCellMove,
@@ -27,7 +27,7 @@ const {
 
 const PREVIEW = readStripped("components/StockMarketPreview.tsx");
 const MODAL = readStripped("components/MarketPeekModal.tsx");
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const BAR = readStripped("panels/ContextualActionBar.tsx");
 const SR = readStripped("components/StockRoundPanel.tsx");
 

@@ -28,7 +28,7 @@ export {};
 
 const { companyShareTransfer, describeStockTransaction, presidencyHandoff, stagedOwnership } =
   require("./stockTransaction") as typeof import("./stockTransaction");
-const { anchorIndex, readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { expectOrder, readStripped, readShell, sliceFrom } = require("./sourceScan") as typeof import("./sourceScan");
 
 const PRR = 1;
 const BO = 4;
@@ -267,13 +267,13 @@ describe("the staged board (design note #1452)", () => {
 });
 
 describe("the shell describes and does not decide", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
   const MODULE = readStripped("utils/stockTransaction.ts");
 
   it("asks the authoritative message, and asks it after the commit", () => {
     expect(APP).toContain("describeStockTransaction(gameplay, before, after)");
-    const commit = anchorIndex(APP, "setSandboxState(after);", "the commit");
-    expect(anchorIndex(APP, "describeStockTransaction(gameplay", "the description")).toBeGreaterThan(commit);
+    // The commit, then the description.
+    expectOrder(APP, "setSandboxState(after);", "describeStockTransaction(gameplay");
   });
 
   it("re-implements no stock rule", () => {
@@ -285,8 +285,8 @@ describe("the shell describes and does not decide", () => {
   });
 
   it("is replay-silent and introduces no timing dependency", () => {
-    const raiser = APP.slice(anchorIndex(APP, "const showStockTransaction = useCallback("));
-    expect(raiser.slice(0, 260)).toContain("if (replayingHistory) return;");
+    const raiser = sliceFrom(APP, "const showStockTransaction = useCallback(", { length: 260 });
+    expect(raiser).toContain("if (replayingHistory) return;");
     expect(APP).not.toContain("await showStockTransaction");
   });
 

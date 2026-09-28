@@ -18,9 +18,9 @@
 
 export {};
 
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const gate = sliceBetween(
   APP,
   "const boardNow = sandboxStateRef.current;",

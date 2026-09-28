@@ -11,6 +11,7 @@
 // AND THE EXTRACTION FOUND A CASE WITH NO ARM: a route that is lawful in every respect and pays $0.
 
 import { runnableDrafts, runTrainsRefusal, type RunnableDraftShape } from "./runTrainsRules";
+import { readShell } from "./sourceScan";
 
 const draft = (over: Partial<RunnableDraftShape> = {}): RunnableDraftShape => ({
   value: 90,
@@ -125,14 +126,7 @@ describe("the lawful route worth nothing (design note #883)", () => {
 });
 
 describe("the shell kept only the dispatch", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs
-      .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-  })();
+  const APP = readShell();
 
   it("asks both rules instead of holding them", () => {
     expect(APP).toContain("const runnable = runnableDrafts(trainDrafts);");

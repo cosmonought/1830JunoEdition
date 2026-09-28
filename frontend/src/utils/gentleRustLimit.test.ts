@@ -32,7 +32,7 @@ import { trimToTrainLimit } from "../gameEngine/trainLimit";
 import { applyPhaseChange, describeFleetLosses } from "../gameEngine/sandboxSession";
 import { STANDARD_VARIANTS } from "../gameEngine/gameVariants";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 
 const COST: Readonly<Record<string, number>> = { "2": 80, "3": 180, "4": 300, "5": 450, "6": 630 };
 const cost = (model: string) => COST[model] ?? 0;
@@ -241,7 +241,7 @@ describe("the reprieved train reaches the surfaces that count and run it (design
      reprieved train, so every one of these is correct by construction -- and that is precisely the claim
      worth pinning, since the way #906 went wrong was by quietly removing the train from all of them at once.
      A future change that re-introduces a parallel list would have to fail here first. */
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("builds the run roster from the whole fleet", () => {
     /* `ownedTrainRoster` IS THE ROUTE PLANNER'S SOURCE. A train missing here has no roster entry, so no route
@@ -299,7 +299,7 @@ describe("the rust modal is two lines (design note #980)", () => {
 });
 
 describe("only the president is stopped (design note #981)", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
   const memo = sliceBetween(APP, "const dueFleetNotice = useMemo<FleetLossNotice | null>(", "}, [");
 
   it("compares the corporation's president to the viewer", () => {

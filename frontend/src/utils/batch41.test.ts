@@ -24,7 +24,7 @@ const { cityEnteredFrom, cityForArrival } =
   require("../gameEngine/trackReach") as typeof import("../gameEngine/trackReach");
 const { cityBlockerFor } = require("../gameEngine/cityBlocking") as typeof import("../gameEngine/cityBlocking");
 const { STATIC_BOARD_HEXES } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 /** The reported hex and its neighbours, FOUND rather than typed -- #686's rule. */
 const E11 = STATIC_BOARD_HEXES.find((hex) => hex.label === "E11")!;
@@ -175,6 +175,6 @@ describe("the resolver is the one the router already uses", () => {
   it("is what the shell passes to the validator", () => {
     /* #1006's LESSON, one batch old: a correct predicate that the deciding caller never asks is not a fix.
        The router's resolver has to actually reach the submit path. */
-    expect(readStripped("App.tsx")).toContain("(hex, from) => cityEnteredFrom(mapGrid, hex, from)");
+    expect(readShell()).toContain("(hex, from) => cityEnteredFrom(mapGrid, hex, from)");
   });
 });

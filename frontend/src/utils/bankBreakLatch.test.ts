@@ -25,7 +25,7 @@ import { sandboxReplayProviders } from "../gameEngine/replayProviders";
 import { applySandboxAction, operatingRoundSequenceLength } from "../gameEngine/sandboxSession";
 import { bankIsBroken } from "../gameEngine/endgame";
 import { moneyTotal } from "../gameEngine/cashLedger";
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 import type { GameStateResponse } from "../gameEngine/gameState";
 
 /** The same derivation `bankBreakEnding.test.ts` uses: a Phase-4 set is two Operating Rounds long, so the
@@ -336,7 +336,7 @@ describe("the badge and the ending read the same predicate (U-27)", () => {
        badge's own module calls the shared predicate, and carries neither the field nor a balance test of
        its own. A second notion of "broken" would have to appear in one of these four files, and all four
        are checked. */
-    const app = readStripped("App.tsx");
+    const app = readShell();
     expect(app).toContain('from "./gameEngine/endgame"');
     expect(app).toContain("bankIsBroken(before)");
     expect(app).toContain("bankIsBroken(after)");

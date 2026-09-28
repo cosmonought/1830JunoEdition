@@ -29,6 +29,8 @@
 import fs from "fs";
 import path from "path";
 
+import { readSource, shellSourcePaths, SHELL_ROOT_FILE, SHELL_ROOT_WITNESS } from "./sourceScan";
+
 const SRC = path.join(__dirname, "..");
 
 function sourceFiles(dir: string): string[] {
@@ -153,12 +155,28 @@ describe("no useMemo reads a binding from its own temporal dead zone", () => {
     ).toEqual([]);
   });
 
-  it("actually inspects App.tsx, which is where this keeps happening", () => {
+  it("actually inspects the shell (App.tsx and shell/**), which is where this keeps happening", () => {
     /* A sweep that silently matched nothing would pass for ever. App is the file with six thousand lines and
-       forty memos; if it is not being read, the check is decoration. */
-    const app = fs.readFileSync(path.join(SRC, "App.tsx"), "utf8");
-    expect((app.match(/useMemo\(/g) ?? []).length).toBeGreaterThan(20);
-    expect(componentBindings(app.split("\n")).size).toBeGreaterThan(100);
+       forty memos; if it is not being read, the check is decoration.
+       APP-TEST-0A: the shell is App.tsx plus every extracted `shell/**` module. The sweep scans each FILE on
+       its own (a dead zone is a fact about one component's declaration order, never about a concatenation),
+       so what is pinned here is that every shell file is among the swept files, that the root is the real
+       composition root, and that the shell's files -- counted one by one, wherever the memos now live --
+       still hold the memos (more than twenty) and the bindings (more than a hundred) the sweep exists for. */
+    const swept = new Set(sourceFiles(SRC).map((file) => path.relative(SRC, file).split(path.sep).join("/")));
+    const shell = shellSourcePaths();
+    expect(shell).toContain(SHELL_ROOT_FILE);
+    expect(shell.filter((rel) => !swept.has(rel))).toEqual([]);
+    const texts = new Map(shell.map((rel) => [rel, readSource(rel)] as const));
+    expect(texts.get(SHELL_ROOT_FILE)).toContain(SHELL_ROOT_WITNESS);
+    let memos = 0;
+    let bindings = 0;
+    texts.forEach((text) => {
+      memos += (text.match(/useMemo\(/g) ?? []).length;
+      bindings += componentBindings(text.split("\n")).size;
+    });
+    expect(memos).toBeGreaterThan(20);
+    expect(bindings).toBeGreaterThan(100);
   });
 
   it("would have caught the reported crash", () => {

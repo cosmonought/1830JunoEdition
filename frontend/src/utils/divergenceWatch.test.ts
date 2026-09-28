@@ -86,7 +86,7 @@ describe("the seeds the alarm compares, #1224", () => {
   const { RoomEngine } = require("../gameEngine/replayLog") as typeof import("../gameEngine/replayLog");
   const { sandboxReplayProviders } =
     require("../gameEngine/replayProviders") as typeof import("../gameEngine/replayProviders");
-  const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+  const { readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
   const SCENARIO = S.DEFAULT_SANDBOX_SCENARIO;
 
@@ -132,7 +132,7 @@ describe("the seeds the alarm compares, #1224", () => {
     /* THREE SITES: the state initialiser, the ref initialiser, and `rebuildSandbox` (through
        `seedSandboxState`). A fourth copy of the expression is how the last one drifted, so the count is
        what is asserted rather than the presence. */
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     expect(APP).toContain("function withSeededChart(");
     expect(APP).toContain("waterfall: room ? waterfallForRoster(auction, []) : auction,");
     const uses = APP.split("withSeededChart(").length - 1;

@@ -18,6 +18,7 @@ import type { RoutePoint } from "./routeWaypoints";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import { liveEdgesForHex } from "../components/hexGeometry";
+import { readShell } from "./sourceScan";
 
 /* ==================================================================
     DESIGN NOTE 1025: "ADJACENT" IS NOT "JOINED", AND THIS FIXTURE ASSUMED IT WAS
@@ -214,14 +215,7 @@ describe("adjacency and the bridge", () => {
 });
 
 describe("the shell kept only the plumbing", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs
-      .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-  })();
+  const APP = readShell();
 
   it("asks the rule instead of holding it", () => {
     expect(APP).toContain("editRouteDraft({");

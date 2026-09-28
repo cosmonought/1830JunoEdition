@@ -28,7 +28,7 @@ import {
   CORPORATION_LIVERY_COLORS,
 } from "../styles/corporationLivery";
 import { BO_LOCKED_CARD_NOTE, BO_LOCKED_REASON } from "../gameEngine/gameVariants";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 
 const channels = (hex: string): [number, number, number] => [
   parseInt(hex.slice(1, 3), 16),
@@ -211,7 +211,7 @@ describe("inactive corporation chips wear a damped livery (design note #945)", (
 
 describe("a locked corporation card is dead, not merely refusing (design note #948)", () => {
   const PANEL = readStripped("components/StockRoundPanel.tsx");
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("carries the specified footer, verbatim", () => {
     /* DA-6 (DA-F8j): CORRECTED. "until the BO private company is purchased in the Auction Round" named the wrong

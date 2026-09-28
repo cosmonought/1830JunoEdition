@@ -32,10 +32,10 @@ const {
 } = require("./audio") as typeof import("./audio");
 const { feedItemParts, feedItemText } =
   require("../components/TopTicker") as typeof import("../components/TopTicker");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 import type { FeedItem } from "./feed";
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const AUDIO = readStripped("utils/audio.ts");
 const TOPBAR = readStripped("components/TopBar.tsx");
 /* Design note #1102: the audio buttons and their popovers moved out of `TopBar` into `AudioControls`,

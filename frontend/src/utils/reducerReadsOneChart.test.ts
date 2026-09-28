@@ -27,9 +27,9 @@
 
 export {};
 
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 /** The context object handed to the reducer, which is the surface this file is about. */
 /* #1230: the message reaches the general path un-narrowed now that `SetupGame` falls through, and is passed

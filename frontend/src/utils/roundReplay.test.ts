@@ -3,7 +3,7 @@
 import { gameHistoryFrom, roundLabelOf } from "./gameHistory";
 import { replaySnapshotAtRound, roundEndExclusive } from "./roundReplay";
 import { activateBoard, STANDARD_BOARD } from "../components/hexBoardData";
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell, expectOrder } from "./sourceScan";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { DEVELOPMENT_CORPUS_POLICY } from "../gameEngine/rulesVersion";
@@ -64,7 +64,7 @@ describe("the board at the end of a round (design note #1425)", () => {
 });
 
 describe("the shell draws the past and keeps the verdict (design note #1425)", () => {
-  const app = readStripped("App.tsx");
+  const app = readShell();
 
   it("swaps the state, grid and waterfall the shell renders", () => {
     expect(app).toContain("const gameState = replaySnapshot?.state ?? liveState;");
@@ -81,8 +81,7 @@ describe("the shell draws the past and keeps the verdict (design note #1425)", (
 
   it("mounts the scrubber in the bottom dock above the Activity Log while the modal is down, and clears it with the ending", () => {
     expect(app).toContain("<RoundScrubber rounds={gameHistory.rounds} cursor={replayCursor} onChange={setReplayCursor} />");
-    expect(app.indexOf("style={styles.statusLineDock}")).toBeLessThan(app.indexOf("<RoundScrubber"));
-    expect(app.indexOf("<RoundScrubber")).toBeLessThan(app.indexOf("<TopTicker"));
+    expectOrder(app, "style={styles.statusLineDock}", "<RoundScrubber", "<TopTicker");
     expect(app).toContain("setReplayCursor(null); // #1425");
     const scrubber = readStripped("components/RoundScrubber.tsx");
     expect(scrubber).toContain('type="range"');

@@ -18,10 +18,10 @@
 export {};
 
 const { sumRows } = require("../components/ActionToast") as typeof import("../components/ActionToast");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 const TOAST = readStripped("components/ActionToast.tsx");
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 /* ------------------------------------------------------------------ */
 /* Waiting instead of expiring                                         */

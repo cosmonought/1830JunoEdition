@@ -13,12 +13,12 @@
 // the property that survives -- two rooms cannot see each other's messages, and the sandbox is not pointed at
 // the lobby -- is stated against the transport below.
 
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 
 describe("a game's transcript rides the game's room socket (design note #1361a; LIVE-2D: keyed by gameId)", () => {
   const CHAT = readStripped("components/ChatBox.tsx");
   const LINK = readStripped("utils/roomLink.ts");
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("subscribes and sends through roomLink, keyed by the game alone", () => {
     expect(CHAT).toContain('import { roomLinkAvailable, sendChat, subscribeChat } from "../utils/roomLink";');

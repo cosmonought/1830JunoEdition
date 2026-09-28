@@ -7,7 +7,7 @@
 // server which tables the profile sits at and offers each one; the hold screen says what the server said instead of
 // "Fetching" for ever. Asked of the pure derivations and the wiring (source scans), as the lobby's other suites are.
 
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 import { myTableLabel, myTablesOf, type MyTableState, type MyTableSummary } from "./roomProtocol";
 import { myTableTitle } from "../components/MyTablesList";
 import { parseClientFrame } from "../gameEngine/messageSchema";
@@ -81,7 +81,7 @@ describe("LIVE-2F/3D C9-01: Your tables", () => {
 describe("LIVE-2F/3D C9-03: the first-open hold says what the server said", () => {
   test("the hold screen shows the server's sentence (an unavailable or held table) instead of Fetching for ever", () => {
     const WAITING = readStripped("components/SandboxWaitingRoom.tsx");
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     expect(WAITING).toContain('{error ?? "Fetching the room…"}');
     expect(APP).toMatch(/<SandboxWaitingRoomHold\s+roomCode=""\s+audio=\{audioControls\}\s+onLeave=\{handleLeaveSandboxRoom\}\s+error=\{sandboxRoomError\}/);
   });

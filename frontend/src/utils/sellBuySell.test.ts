@@ -146,8 +146,8 @@ describe("Sell-Buy-Sell: the stages of a turn", () => {
 });
 
 describe("the shell walks the stages (design notes #1443/#1444)", () => {
-  const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
-  const app = readStripped("App.tsx");
+  const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
+  const app = readShell();
   const bar = readStripped("panels/ContextualActionBar.tsx");
 
   it("stamps the revision when it deals, and hands the bar the stage", () => {

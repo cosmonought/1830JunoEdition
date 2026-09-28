@@ -10,7 +10,7 @@
 
 export {};
 
-const { readSource, readStripped, sliceBetween } =
+const { readSource, readStripped, sliceBetween, readShell, readShellRaw } =
   require("./sourceScan") as typeof import("./sourceScan");
 const { VARIANT_COPY } = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
 const { earnableRevenueVerdict, skipReasonFor } =
@@ -26,7 +26,7 @@ const {
   beginOperatingRound,
 } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const RENDERER = readStripped("components/HexGridRenderer.tsx");
 const TICKER = readStripped("components/TopTicker.tsx");
 const TOAST = readStripped("components/ActionToast.tsx");
@@ -383,7 +383,7 @@ describe("the variant sentence reaches every seat", () => {
 
   it("records why it moved, in the note rather than only in the diff", () => {
     // #490a: the claim goes against RAW text, because a stripped copy has no notes in it.
-    const raw = readSource("App.tsx");
+    const raw = readShellRaw();
     expect(raw).toContain("DESIGN NOTE 1017");
     expect(raw).toContain("only the acting president ever invokes");
   });

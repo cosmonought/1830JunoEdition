@@ -30,7 +30,7 @@ import {
   type AutoPassConditions,
 } from "./autoPass";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { readStripped } from "./sourceScan";
+import { readShell, readStripped } from "./sourceScan";
 
 const ME = "me";
 const RIVAL = "rival";
@@ -483,7 +483,7 @@ describe("the off switch is always reachable", () => {
     return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
   };
   const bar = read("panels/ContextualActionBar.tsx");
-  const app = read("App.tsx");
+  const app = readShell();
 
   it("renders the control whenever an instruction is standing", () => {
     /* (1) THE ROUND GATE. `roundType === "StockRound"` is right for offering and wrong for withdrawing: the
@@ -600,9 +600,7 @@ describe("one standing instruction passes a turn once", () => {
   });
 
   it("is wired to the append-only log rather than to the seat", () => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const app = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+    const app = readShell();
     expect(app).toContain(
       "if (autoPassAlreadyActed(autoPassedAtLogIndexRef.current, lastLogIndex)) return;",
     );
@@ -621,9 +619,7 @@ describe("one standing instruction passes a turn once", () => {
        is this feature's worst failure, and the reported symptom was precisely a turn with no explanation
        attached to it. The guard now returns only when nothing has happened, so a real turn always reaches the
        decision -- which either passes or disarms and logs. */
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const app = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+    const app = readShell();
     expect(app).toContain("setAutoPassArm(null);");
     /* `${...}` in a plain string trips `no-template-curly-in-string`, and the rule is right to fire -- this
        is the fourth time this pass that source text being SEARCHED for has needed assembling rather than

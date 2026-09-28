@@ -30,10 +30,10 @@ const {
   rollTurnRevenue,
   turnRevenueSentence,
 } = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { expectOrder, readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 import type { FeedItem } from "./feed";
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const TICKER = readStripped("components/TopTicker.tsx");
 const FEED = readStripped("utils/feed.ts");
 
@@ -233,7 +233,7 @@ describe("the index the composer stamps is the start of the clause", () => {
     const call = sliceBetween(APP, "logInfo(\n                markRunLine ?? flavourWithAppendix,", ");");
     expect(call).toContain('bucket === "unchanged" ? undefined');
     expect(call).toContain("markRunLine ? undefined : flavourFrom,");
-    expect(call.indexOf('bucket === "unchanged"')).toBeLessThan(call.indexOf("flavourFrom,"));
+    expectOrder(call, 'bucket === "unchanged"', "flavourFrom,");
     expect(call.length).toBeLessThan(1500);
   });
 

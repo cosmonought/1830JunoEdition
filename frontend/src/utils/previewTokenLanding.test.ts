@@ -16,6 +16,7 @@
 
 import { tokenLandingsFor, type UpgradeTokenPlan } from "./tokenMigration";
 import { errandLaysBonus } from "../gameEngine/bonusLay";
+import { readShell, sliceFrom } from "./sourceScan";
 
 const plan = (
   landings: Array<{ companyId: number; toCityIndex: number | null }>,
@@ -107,12 +108,7 @@ describe("which lay is extra (design note #885)", () => {
   });
 
   it("is asked by the shell rather than restated there", () => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const APP = fs
-      .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
+    const APP = readShell();
     // Stage 10.6 (#1693): still asked, not restated -- and now only for the lay on the errand's own hex.
     expect(APP).toContain("const bonusLay = errandLaysBonus(homeStationPlacement) && errandClaimsLay(homeStationPlacement, q, r);");
     expect(APP).not.toContain('abilityKey === "csl-tile"');
@@ -129,16 +125,15 @@ describe("the preview derives once and everybody reads it (design note #886)", (
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
       .replace(/^\s*\/\/.*$/gm, "");
   };
-  const APP = read("App.tsx");
+  const APP = readShell();
   const BOARD = read("components/HexGridRenderer.tsx");
 
   it("derives on SELECTION, not only on rotation", () => {
     /* FAULT (i). Selection seeded `tokenCity` from `tokenDestinationChoices(...)[0]` -- #824's rule, which
        consults neither connectivity nor orientation -- so the opening placement was the only one still using
        the superseded rule, and rotating "fixed" it. */
-    const at = APP.indexOf("onSelectCandidate={(tileId, orientation) => {");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, at + 900);
+    expect(APP).toContain("onSelectCandidate={(tileId, orientation) => {");
+    const body = sliceFrom(APP, "onSelectCandidate={(tileId, orientation) => {", { length: 900 });
     expect(body).toContain("derivePreviewLandings(");
     expect(body).not.toContain("tokenDestinationChoices(");
   });

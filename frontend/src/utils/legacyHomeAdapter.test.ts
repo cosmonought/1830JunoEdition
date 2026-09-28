@@ -36,7 +36,7 @@ import { boardHomeHexToAxial, homeStationHold, legalHomeTargets, owedHomeStation
 import { RoomSession, type ServerLogEntry } from "./roomSession";
 import { applySandboxLayTile } from "../gameEngine/sandboxSession";
 import { stationPlacementRefusal } from "../gameEngine/stationPlacementGate";
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 import { board, P1, P2, P3, PRR, NYC } from "./offerFixtures74";
 import { applyAsRoom, corp, same, withCorp, withState } from "./offerMatrix74Support";
 
@@ -366,7 +366,7 @@ describe("§32 the loop on the frozen JUNO-CV4 log (#1614)", () => {
        The shell's epilogue and round scrubber take an optional policy for the corpus tests and are handed none; a
        room's rebuild applies entries straight to its engine; the server hands a room a policy that only admits or
        refuses a log. Only the development replay CLI names the corpus policy, and it says so on stderr (#1520). */
-    const app = readStripped("App.tsx");
+    const app = readShell();
     expect(app).toContain("gameHistoryFrom(sandboxLogRef.current);");
     expect(app).toContain("replaySnapshotAtRound(replayLogRef.current, history.rounds, replayCursor);");
     expect(app).not.toContain("DEVELOPMENT_CORPUS_POLICY");

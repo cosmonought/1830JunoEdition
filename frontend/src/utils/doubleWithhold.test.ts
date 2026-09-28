@@ -28,6 +28,8 @@ import { projectDividendCellMove } from "../components/StockMarketRenderer";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { SandboxMarketPrices } from "../gameEngine/sandboxState";
 
+const { readShell, readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+
 const BO = 6;
 const PRR = 1;
 
@@ -257,16 +259,10 @@ describe("the chart refuses what the board refuses", () => {
 });
 
 describe("only the client on turn dispatches the derived actions", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    // #490a: both notes quote the missing check while explaining it.
-    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  })();
+  // #490a: both notes quote the missing check while explaining it -- so the stripped shell.
+  const APP = readShell();
 
-  const between = (start: string, end: string) =>
-    APP.slice(APP.indexOf(start), APP.indexOf(end));
+  const between = (start: string, end: string) => sliceBetween(APP, start, end);
 
   it("gates the forced withhold on isMyTurn", () => {
     /* THE SOURCE OF THE DUPLICATE. Every other condition in that effect is shared state, replayed the same
@@ -278,7 +274,9 @@ describe("only the client on turn dispatches the derived actions", () => {
   it("gates the auto-skip on isMyTurn", () => {
     /* Its twin, fixed at the same time. It produced no reported symptom because a repeated cursor step
        usually lands where it was going anyway -- which is exactly how it would have kept shipping. */
-    const effect = between("const autoSkippedRef", "skipSubPhaseAutomatically();");
+    /* APP-TEST-0A: the end anchor was `skipSubPhaseAutomatically();`, which #1070 turned into the call below
+       (it carries the reason now). The old bare slice ran on to the end of the file rather than failing. */
+    const effect = between("const autoSkippedRef", "skipSubPhaseAutomatically(autoSkipReason);");
     expect(effect).toContain("if (!isMyTurn) return;");
   });
 
@@ -302,7 +300,6 @@ describe("only the client on turn dispatches the derived actions", () => {
        the state the reducer holds. Stronger than the old pin: there is no second predicate to keep in step. */
     expect(APP).toContain("sandboxChartStepReport(handedBoard, gameplay, reducerContext)");
     expect(APP).not.toContain("dividendRefused: (companyId) =>");
-    const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
     const REDUCER = readStripped("gameEngine/sandboxSession.ts");
     expect(sliceBetween(REDUCER, "function chartStepContext(", "function chartStep(")).toContain(
       "dividendRefused: (companyId: number) => dividendRefused(state, companyId),",

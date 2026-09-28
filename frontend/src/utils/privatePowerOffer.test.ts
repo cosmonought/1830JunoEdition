@@ -20,7 +20,7 @@
 // NINTH INSTANCE OF THE SESSION'S DOMINANT SHAPE -- a rule stated in one place and never asked in the
 // authority beside it (#807, #809, #816, #820, #824, #825, #826, #831, and now this).
 
-import { readSource, stripComments } from "./sourceScan";
+import { expectOrder, readSource, readShell, sliceBetween, stripComments } from "./sourceScan";
 
 import {
   privatePowerOfferAt,
@@ -31,7 +31,7 @@ import {
 
 // #490a: every note here quotes the rule it explains.
 
-const APP = stripComments(readSource("App.tsx"));
+const APP = readShell();
 const BAR = stripComments(readSource("panels/ContextualActionBar.tsx"));
 
 const DH: PrivatePowerCandidate = {
@@ -125,11 +125,11 @@ describe("the click is intercepted where it has to be", () => {
        everything -- so a rename or a deletion would make this ordering assertion pass while asserting
        nothing. The same trap as the backwards slice in `bonusLayStep.test.ts`, wearing a comparison instead
        of a range. Found by a negative control that renamed the thing and watched the test stay green. */
-    const ask = APP.indexOf("const powerOffer = privatePowerOfferAt({");
-    const gate = APP.indexOf("inspectorClickRefused({");
-    expect(ask).toBeGreaterThan(-1);
-    expect(gate).toBeGreaterThan(-1);
-    expect(ask).toBeLessThan(gate);
+    const ask = "const powerOffer = privatePowerOfferAt({";
+    const gate = "inspectorClickRefused({";
+    expect(APP).toContain(ask);
+    expect(APP).toContain(gate);
+    expectOrder(APP, ask, gate);
   });
 
   it("reads the offers through a ref, like the turn flag beside it", () => {
@@ -171,11 +171,8 @@ describe("both doors, one question (design note #846)", () => {
        removed from one that was added: it would pass just as happily for a third path arming an errand
        while one of the modal's two stopped. The two named below are the ones that must exist. */
     expect(APP.match(/armPrivateHexErrand\(/g) ?? []).toHaveLength(2);
-    const act = APP.indexOf("const handlePowerFlowAct");
-    expect(act).toBeGreaterThan(-1);
-    const actEnd = APP.indexOf("const handlePowerFlowDecline", act);
-    expect(actEnd).toBeGreaterThan(act);
-    const actBody = APP.slice(act, actEnd);
+    expect(APP).toContain("const handlePowerFlowAct");
+    const actBody = sliceBetween(APP, "const handlePowerFlowAct", "const handlePowerFlowDecline");
     expect(actBody).not.toBe("");
     expect(actBody).toContain("armPrivateHexErrand(");
     expect(APP).toContain('kind: abilityKey === "dh-token" ? "private-station" : "private-tile"');
@@ -188,11 +185,8 @@ describe("both doors, one question (design note #846)", () => {
     /* THE END ANCHOR IS SEARCHED FROM THE START ANCHOR, and both are proven present -- the slice this
        replaced ended at a handler #849 deleted, so it ran to -1 and produced an empty string that passed the
        `not.toContain` beside it. Third instance of that trap this session. */
-    const start = APP.indexOf("const handleChipPowerOffer");
-    expect(start).toBeGreaterThan(-1);
-    const end = APP.indexOf("const handlePowerFlowAct", start);
-    expect(end).toBeGreaterThan(start);
-    const chip = APP.slice(start, end);
+    expect(APP).toContain("const handleChipPowerOffer");
+    const chip = sliceBetween(APP, "const handleChipPowerOffer", "const handlePowerFlowAct");
     expect(chip).not.toContain("armPrivateHexErrand");
   });
 

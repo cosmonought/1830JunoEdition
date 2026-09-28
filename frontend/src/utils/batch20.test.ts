@@ -27,7 +27,7 @@ import {
   legacyTurnSeed,
 } from "../gameEngine/gameVariants";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 
 /* A corporation whose turn actually rolls something -- corporation 4's seed is a 100% face, which would make
    every assertion below compare the identity function with itself. The guard case says so out loud. */
@@ -139,7 +139,7 @@ describe("the turn's summary line reads the reducer (design note #963)", () => {
      ON, so the fallback could only ever have been populated on the acting browser. A fallback that works on one
      seat and silently yields zero on the others is worse than not having one: it would give the president a
      sentence and everybody else nothing, which is the bug this batch is fixing wearing a smaller hat. */
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
   /* ==================================================================
       DESIGN NOTE 1056: THE BLOCK MOVED TO THE RUN, SO THE ANCHOR DID
      ==================================================================
@@ -187,7 +187,7 @@ describe("the turn's summary line reads the reducer (design note #963)", () => {
 });
 
 describe("the sandbox receipt is gone (design note #965)", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("no longer stamps every successful action", () => {
     /* REPORTED as "unnecessary debug spam". Scanned on a comment-stripped copy (#490a) so #965's own note
@@ -294,7 +294,7 @@ describe("the consolidated private revenue toast (design note #967)", () => {
        THE DURATION ASSERTION IS DROPPED RATHER THAN MOVED. It was standing in for "a toast is raised here",
        which is no longer a fact about this file -- and "runs on a window of its own" below still owns the
        constant itself, where it reads `ActionToast.tsx` directly. */
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     const opening = sliceBetween(APP, "const openingPayouts =", "sandboxStateRef.current = after;");
     /* Design note #1059: the payout lines carry the whole sentence in the label with their own stamp now --
        `[OR 1.1--Private Companies]` rather than a `Private Revenue — ` prefix under whichever step the cursor
@@ -331,7 +331,7 @@ describe("the consolidated private revenue toast (design note #967)", () => {
 });
 
 describe("the era toast says one thing (design note #966)", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("uses the ruled sentence", () => {
     /* Design note #1094: THE SENTENCE IS THE SAME AND ITS TWO VARIABLES ARE NOT. It was composed in a render

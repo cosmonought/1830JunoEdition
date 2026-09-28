@@ -27,7 +27,7 @@ const { removeStopTitle } =
   require("../components/RouteChipDetail") as typeof import("../components/RouteChipDetail");
 const { axialHexDistance } = require("./routeWaypoints") as typeof import("./routeWaypoints");
 const { STATIC_BOARD_HEXES } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 /** A real corridor, FOUND rather than typed: H10 - H12 - H14 - H16 run west to east on one row. */
 const H10 = STATIC_BOARD_HEXES.find((hex) => hex.label === "H10")!;
@@ -178,7 +178,7 @@ describe("the UI offers it, and only to the player who may edit", () => {
   it("is wired from the shell through the bar", () => {
     /* #1006's LESSON: a helper the deciding caller never asks is not a feature. Both hops asserted, because a
        fix at either end alone leaves the button inert. */
-    const app = readStripped("App.tsx");
+    const app = readShell();
     expect(app).toContain("onRemoveRouteStop={handleRemoveRouteStop}");
     expect(readStripped("panels/ContextualActionBar.tsx")).toContain(
       "onRemoveStop={onRemoveRouteStop}",
@@ -189,7 +189,7 @@ describe("the UI offers it, and only to the player who may edit", () => {
     /* `routeDrafts[i] ?? []` IS THE IDIOM EVERYWHERE DOWNSTREAM, so an empty array and an absent key mean the
        same thing to every reader -- and only one of them is the shape `handleClearRoute` already writes. Two
        representations of "no route" is how a `length === 0` check and an `in` check come to disagree. */
-    const app = readStripped("App.tsx");
+    const app = readShell();
     expect(app).toContain("if (next.length === 0) delete updated[trainIndex];");
   });
 });

@@ -41,9 +41,9 @@ const {
 const { legacyTurnSeed } = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
 const { countableTrainCount } = require("../gameEngine/trainLimit") as typeof import("../gameEngine/trainLimit");
 const { derivePhase } = require("../gameEngine/gamePhase") as typeof import("../gameEngine/gamePhase");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const REDUCER = readStripped("gameEngine/sandboxSession.ts");
 const PHASE = readStripped("gameEngine/gamePhase.ts");
 

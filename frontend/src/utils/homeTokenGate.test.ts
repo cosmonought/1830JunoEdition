@@ -36,7 +36,7 @@ import { applySandboxAction, pendingHomeTokens } from "../gameEngine/sandboxSess
 import { homeTokenBlock, homeTokenOwed } from "../gameEngine/homeTokenGate";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 
 const PRR = 1;
 const BO = 2;
@@ -278,6 +278,6 @@ describe("both surfaces ask one function", () => {
 
   it("is what the Pass button says", () => {
     /* The button explains itself rather than silently doing nothing -- and it reads FIRST among the pass reasons. */
-    expect(read("App.tsx")).toContain("homeTokenBlock({");
+    expect(readShell()).toContain("homeTokenBlock({");
   });
 });

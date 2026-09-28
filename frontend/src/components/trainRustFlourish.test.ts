@@ -45,7 +45,7 @@ import {
 import { resolveVariants } from "../gameEngine/gameVariants";
 import type { GameStateResponse } from "../gameEngine/gameState";
 
-const { readStripped, sliceBetween } = require("../utils/sourceScan") as typeof import("../utils/sourceScan");
+const { readStripped, sliceBetween, sliceFrom, readShell } = require("../utils/sourceScan") as typeof import("../utils/sourceScan");
 
 const PRR = 1;
 const BO = 4;
@@ -445,7 +445,7 @@ describe("the vocabulary is destruction, and reduced motion keeps the informatio
 });
 
 describe("the shell raises it from the authoritative narrators only", () => {
-  const CODE = readStripped("App.tsx");
+  const CODE = readShell();
 
   it("collects `rusted`, from both narrators, and never `discarded`", () => {
     expect(CODE).toContain("const rustedFleets: RustedFleet[] = [];");
@@ -476,8 +476,8 @@ describe("the shell raises it from the authoritative narrators only", () => {
        the thing being forbidden. (The first draft expected 2 and was counting a declaration that does
        not have the parenthesis; found by running it.) */
     expect((CODE.match(/showRustFlourish\(/g) ?? []).length).toBe(1);
-    const afterExpiries = CODE.slice(CODE.indexOf("const expiries = describeReprieveExpiries(before, after);"));
-    expect(afterExpiries.indexOf("showRustFlourish(rustedFleets);")).toBeGreaterThan(-1);
+    const afterExpiries = sliceFrom(CODE, "const expiries = describeReprieveExpiries(before, after);");
+    expect(afterExpiries).toContain("showRustFlourish(rustedFleets);");
   });
 
   it("is guarded on `replayingHistory` inside the raiser", () => {
@@ -497,7 +497,7 @@ describe("the shell raises it from the authoritative narrators only", () => {
 });
 
 describe("Tutorial policy", () => {
-  const CODE = readStripped("App.tsx");
+  const CODE = readShell();
 
   it("queues the rust notice only in tutorial mode, and never gates the limit notice", () => {
     expect((CODE.match(/if \(notice\.cause === "rust" && !tutorialModeEnabled\(\)\) continue;/g) ?? []).length).toBe(2);

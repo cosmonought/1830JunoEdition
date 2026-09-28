@@ -33,8 +33,7 @@ import {
   type SandboxLogMsg,
 } from "../gameEngine/gameSetup";
 import { decodeAction, type SandboxAction } from "./sandboxRoom";
-import fs from "fs";
-import path from "path";
+import { readShell } from "./sourceScan";
 
 /** What `subscribeSandboxLog` hands a client: the message as JSON text in a Firestore document. The shape the
  *  SELLER's client decodes, which is the shape the whole report turns on. */
@@ -166,7 +165,7 @@ describe("the offer travels", () => {
  * line rather than to formatting in general, so a reformat does not break it and a reintroduced `sandbox ||`
  * does. */
 describe("who may answer", () => {
-  const source = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+  const source = readShell();
 
   it("compares the viewer's wallet to the seller president's", () => {
     expect(source).toContain(
@@ -195,7 +194,7 @@ describe("who may answer", () => {
 });
 
 describe("the answer is owed by a player who is not on turn", () => {
-  const source = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+  const source = readShell();
 
   it("exempts consent answers from the turn gate", () => {
     /* THE THIRD FAULT. The gate asks "is it your turn", which is right for a move and wrong for an answer:

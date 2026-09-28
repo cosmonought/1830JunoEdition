@@ -28,9 +28,9 @@ export {};
 
 const { autoPassDecision, armAutoPass, DEFAULT_AUTO_PASS_CONDITIONS } =
   require("./autoPass") as typeof import("./autoPass");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const BAR = readStripped("panels/ContextualActionBar.tsx");
 
 const state = (round: string, macro: number): any => ({
@@ -142,9 +142,10 @@ describe("a spent arm does not outlive its Stock Round", () => {
     /* `handleDisarmAutoPass` LOGS "Auto-Pass is off", which is right for a player pressing the button and
        wrong for a round boundary: nobody decided anything, and a line per armed player per boundary is noise
        in a log this project has twice been asked to quieten. */
-    const block = APP.slice(
-      APP.indexOf('if (gameState.current_round_type === "StockRound") return;'),
-      APP.indexOf("useEffect(() => {\n    if (!autoPassArm || !gameState || !viewerAddress) return;"),
+    const block = sliceBetween(
+      APP,
+      'if (gameState.current_round_type === "StockRound") return;',
+      "useEffect(() => {\n    if (!autoPassArm || !gameState || !viewerAddress) return;",
     );
     expect(block).not.toContain("handleDisarmAutoPass");
     expect(block).not.toContain("logInfo");

@@ -24,9 +24,9 @@
 
 export {};
 
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 describe("labels are composed against the board the action actually applied to", () => {
   const CONTEXT = sliceBetween(APP, "const describeContext = {", "orSubPhase,");
@@ -102,7 +102,8 @@ describe("the reducer's context reads the refs, not the render (design note #138
     expect(call).toContain("sandboxActionContext(SHELL_PROVIDERS, {");
     expect(call).toContain("state: handedBoard,");
     expect(call).toContain("grid: mapGridRef.current,");
-    expect(call).not.toContain("\n                grid: mapGrid,\n");
+    // APP-TEST-0A: any indentation -- an extraction re-indents code, and an exact-whitespace absence would then pass on nothing.
+    expect(call).not.toMatch(/\n\s*grid: mapGrid,\n/);
     expect(call).not.toContain("eraForPhase(currentPhase, tableVariants)");
     expect(APP).toContain("const before = sandboxStateRef.current;");
     expect(APP).toContain("after = applySandboxAction(after, gameplay, reducerContext);");

@@ -11,10 +11,10 @@ export {};
 
 const { privatePowerOfferAt, PRIVATE_POWER_SUB_PHASE } =
   require("./privatePowerOffer") as typeof import("./privatePowerOffer");
-const { readStripped, readSource, sliceBetween } =
+const { readStripped, readSource, sliceBetween, readShell } =
   require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 /* ------------------------------------------------------------------ */
 /* Item 1 -- design note #1027                                        */

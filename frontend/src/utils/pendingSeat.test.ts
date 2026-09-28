@@ -19,7 +19,7 @@
 
 export {};
 
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 const {
   applyPendingSeat,
   settledSeatKeys,
@@ -28,7 +28,7 @@ const {
   PENDING_SEAT_BACKSTOP_MS,
 } = require("./pendingSeat") as typeof import("./pendingSeat");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const ROOM = readStripped("utils/sandboxRoom.ts");
 const WAITING = readStripped("components/SandboxWaitingRoom.tsx");
 

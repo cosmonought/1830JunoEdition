@@ -27,6 +27,7 @@ import { settlePresidencies, presidentFor } from "../gameEngine/presidencyTransf
 import { certificateCount } from "../gameEngine/gameState";
 import { projectShareSaleMove, PRICE_GRID } from "../components/StockMarketRenderer";
 import type { GameStateResponse } from "../gameEngine/gameState";
+import { readShell } from "./sourceScan";
 
 const PRR = 1;
 
@@ -343,6 +344,6 @@ describe("the rule reaches the authority, not only the button", () => {
 
   it("is still asked by the panel", () => {
     // #712's point: the reducer is the authority, and the button still has to explain itself before the click.
-    expect(read("App.tsx")).toContain("return shareSaleBlock({");
+    expect(readShell()).toContain("return shareSaleBlock({");
   });
 });

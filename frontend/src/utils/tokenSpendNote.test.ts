@@ -21,7 +21,7 @@
 // So the arithmetic and the wording moved to `pendingSpend.ts` and both rings ask it. The tests below pin
 // that there is exactly one of it.
 
-import { readSource, stripComments } from "./sourceScan";
+import { readSource, stripComments, readShell, sliceBetween } from "./sourceScan";
 
 import { describePendingSpend, pendingSpend } from "./pendingSpend";
 
@@ -84,7 +84,7 @@ describe("one sentence, two rings", () => {
      find the prose and call it the implementation. Comment-stripped copies for the code assertions; the raw
      text is read separately where a note is what is being checked. */
   const RING = stripComments(readSource("components/RadialTileSelector.tsx"));
-  const APP = stripComments(readSource("App.tsx"));
+  const APP = readShell();
   const SPEND = stripComments(readSource("utils/pendingSpend.ts"));
 
   it("builds the wording in exactly one place", () => {
@@ -128,9 +128,7 @@ describe("one sentence, two rings", () => {
        a bare `indexOf` gives a backwards range and an empty slice -- which passes every `not.toContain` beside
        it while proving nothing. `bonusLayStep.test.ts` lost an assertion to exactly this, and #785's harness
        before it, so the length guard below is not decoration. */
-    const start = APP.indexOf("costNote={describePendingSpend(");
-    expect(start).toBeGreaterThan(-1);
-    const call = APP.slice(start, APP.indexOf("ticker={", start));
+    const call = sliceBetween(APP, "costNote={describePendingSpend(", "ticker={");
     expect(call.length).toBeGreaterThan(0);
     expect(call).toContain("pendingToken.companyId ?? actingProtocolId");
     expect(call).toContain("Number(payer.treasury)");

@@ -29,6 +29,8 @@
 import { applySandboxAction } from "../gameEngine/sandboxSession";
 import type { GameStateResponse } from "../gameEngine/gameState";
 
+const { readShell } = require("./sourceScan") as typeof import("./sourceScan");
+
 const PRR = 1;
 
 function board(over: Record<string, unknown> = {}): GameStateResponse {
@@ -164,6 +166,6 @@ describe("the shell and the reducer agree about a skipped Routes step", () => {
 
   it("still computes the zero in the shell, which was never wrong", () => {
     // #484/#486: `dividendDeclaration` exists precisely to say $0 for a corporation that skipped Routes.
-    expect(read("App.tsx")).toContain("skippedRoutes: skippedRoutesThisTurn");
+    expect(readShell()).toContain("skippedRoutes: skippedRoutesThisTurn");
   });
 });

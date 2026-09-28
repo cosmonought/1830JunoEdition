@@ -19,27 +19,21 @@
 
 export {};
 
-const { readSource, readStripped } = require("./sourceScan") as typeof import("./sourceScan");
-
-const APP = "App.tsx";
+const { readShell, readShellRaw, expectOrder, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 
 describe("the lay carries the power it spends", () => {
   it("resolves the ability BEFORE dispatching, so the answer can travel", () => {
     /* THE ORDERING IS THE RULE. `spentAbility` must be computed above the `if (sandbox)` branch that sends
        the message; resolved afterwards it could only ever reach a local `Set`. */
-    const source = readStripped(APP);
-    const resolvedAt = source.indexOf("const spentAbility = errandClaimsLay(");
-    const dispatchedAt = source.indexOf("handleSandboxLayTile(");
-    expect(resolvedAt).toBeGreaterThan(-1);
-    expect(dispatchedAt).toBeGreaterThan(-1);
-    expect(resolvedAt).toBeLessThan(dispatchedAt);
+    const source = readShell();
+    expectOrder(source, "const spentAbility = errandClaimsLay(", "handleSandboxLayTile(");
   });
 
   it("sends it on both lay paths, because a room and a chain game are one rule", () => {
     /* TWO DISPATCH SITES, and #436's note says why they exist -- "three separate writes in three places".
        A field added to one of them is a rule that holds in the sandbox and not on chain, which is the shape
        of every mirror bug in this codebase. */
-    const source = readStripped(APP);
+    const source = readShell();
     const occurrences = source.split("ability_key").length - 1;
     expect(occurrences).toBeGreaterThanOrEqual(2);
   });
@@ -48,7 +42,7 @@ describe("the lay carries the power it spends", () => {
     /* #232 AND #776 TOGETHER: absent means "this build did not say", and an ordinary lay's entry must look
        exactly like the ones written before the field existed. A `null` would be a build asserting "no power
        was used", which is a different and unearned claim. */
-    const source = readStripped(APP);
+    const source = readShell();
     expect(source).toContain("...(abilityKey ? { ability_key: abilityKey } : {})");
     expect(source).toContain("...(spentAbility ? { ability_key: spentAbility } : {})");
     expect(source).not.toContain("ability_key: null");
@@ -58,17 +52,14 @@ describe("the lay carries the power it spends", () => {
     /* THE HALF THAT CLOSES #1044's HOLE. Reading only the local `Set` is what made a reload lose a power;
        reading only the board would resurrect powers in a room whose log predates `ability_key`. The union is
        the honest reading during the changeover, and this pins that BOTH sides are consulted. */
-    const source = readStripped(APP);
-    const spent = source.slice(
-      source.indexOf("const abilitySpent ="),
-      source.indexOf("const dhPower ="),
-    );
+    const source = readShell();
+    const spent = sliceBetween(source, "const abilitySpent =", "const dhPower =");
     expect(spent).toContain("used_private_abilities");
     expect(spent).toContain("usedPrivateAbilities.has(key)");
   });
 
   it("keeps the reason in the source rather than only in a commit message", () => {
     /* This project's own convention, and the thing that made every rule in it recoverable this week. */
-    expect(readSource(APP)).toContain("DESIGN NOTE 1204");
+    expect(readShellRaw()).toContain("DESIGN NOTE 1204");
   });
 });

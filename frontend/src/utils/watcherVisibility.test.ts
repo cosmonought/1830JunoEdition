@@ -27,6 +27,7 @@
 
 import { dividendSplit } from "../gameEngine/dividendSplit";
 import type { GameStateResponse } from "../gameEngine/gameState";
+import { readShell, sliceBetween } from "./sourceScan";
 
 const CO = 3;
 
@@ -107,12 +108,7 @@ describe("a payout notice goes to the people it paid", () => {
 });
 
 describe("the payout notice reaches a watcher, from the right figure", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  })();
+  const APP = readShell();
 
   it("uses the dividend toast that has always existed", () => {
     /* #786 ADDED A SECOND ONE AND #795 WITHDREW IT. `showDividendToast` fires in the drain for every
@@ -134,10 +130,7 @@ describe("the payout notice reaches a watcher, from the right figure", () => {
   });
 
   it("no longer reads the running total", () => {
-    const receiptCall = APP.slice(
-      APP.indexOf("const settlement = dividendSplit("),
-      APP.indexOf("if (receipt) {"),
-    );
+    const receiptCall = sliceBetween(APP, "const settlement = dividendSplit(", "if (receipt) {");
     expect(receiptCall).not.toContain("last_route_revenue");
   });
 
@@ -195,9 +188,7 @@ describe("the route readout is not a control", () => {
   it("still hands a watcher the rival drafts", () => {
     /* The shell's half, which was already right and is what made this a five-line fix: the bar is given
        `rivalTrainDrafts` when it is not your turn. */
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const app = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+    const app = readShell();
     expect(app).toContain("trainDrafts={isMyTurn ? trainDrafts : rivalTrainDrafts}");
   });
 });

@@ -31,7 +31,7 @@ const {
   TRANSFER_MS,
   TRANSFER_RESOLVE_AT_MS,
 } = require("./stockTransferFocus") as typeof import("./stockTransferFocus");
-const { readStripped, sliceBetween } =
+const { readStripped, sliceBetween, readShell } =
   require("../utils/sourceScan") as typeof import("../utils/sourceScan");
 
 const ALICE = "juno1alice";
@@ -275,7 +275,7 @@ describe("the mechanisms a render test cannot observe", () => {
   });
 
   it("names the clip once, beside the beat it belongs to", () => {
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     expect(APP).toContain("playVariantCue(PRESIDENCY_SFX, sfxEnabledRef.current)");
     /* No fourth category and no second volume control -- the ruling was explicit. */
     expect(APP).not.toContain("sfxPresidency");

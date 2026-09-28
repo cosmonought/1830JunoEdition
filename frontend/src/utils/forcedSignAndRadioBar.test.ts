@@ -16,7 +16,7 @@
 
 export {};
 
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 const {
   resolveFlavourLine,
   YELLOW_SIGN_MALUS_LINE,
@@ -25,7 +25,7 @@ const {
   NO_YELLOW_SIGN,
 } = require("../gameEngine/yellowSign") as typeof import("../gameEngine/yellowSign");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const ROOM = readStripped("utils/sandboxRoom.ts");
 const CONTROLS = readStripped("components/AudioControls.tsx");
 const LEDGER = readStripped("components/FinancialLedger.tsx");

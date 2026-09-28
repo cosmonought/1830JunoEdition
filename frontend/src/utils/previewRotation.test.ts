@@ -24,6 +24,7 @@ import {
   type ActingTokenFit,
   type PreviewArrangement,
 } from "./previewRotation";
+import { readShell, readShellRaw, sliceBetween } from "./sourceScan";
 
 /** A token with a network: the board decides, and it may decide differently at every facing. */
 const anchoredAt = (city: number): ActingTokenFit => ({ ownIsFree: false, ownCity: city });
@@ -332,21 +333,14 @@ describe("which cities a free token may be put in", () => {
 });
 
 describe("the shell asks the module and keeps only the board", () => {
-  const read = (rel: string) => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-  };
-  const RAW = read("App.tsx");
-  /* #490a: the notes below quote the very names this block asserts the ABSENCE of. */
-  const APP = RAW.replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
-    .replace(/^\s*\/\/.*$/gm, "");
+  /* #490a: the notes below quote the very names this block asserts the ABSENCE of. `RAW` keeps the comments,
+     for the one assertion that is ABOUT a note. */
+  const RAW = readShellRaw();
+  const APP = readShell();
 
   it("rotates through the module", () => {
-    const at = APP.indexOf("const handlePreviewRotate");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, APP.indexOf("[radialSelector, handleDismissRadial", at));
+    expect(APP).toContain("const handlePreviewRotate");
+    const body = sliceBetween(APP, "const handlePreviewRotate", "[radialSelector, handleDismissRadial");
     expect(body.length).toBeGreaterThan(0);
     expect(body).toContain("nextPreviewArrangement({");
     expect(body).toContain("if (step === null) return current;");
@@ -356,9 +350,8 @@ describe("the shell asks the module and keeps only the board", () => {
   });
 
   it("seeds the first preview through the module too", () => {
-    const at = APP.indexOf("onSelectCandidate={");
-    expect(at).toBeGreaterThan(-1);
-    const select = APP.slice(at, APP.indexOf("legalRotationCount=", at));
+    expect(APP).toContain("onSelectCandidate={");
+    const select = sliceBetween(APP, "onSelectCandidate={", "legalRotationCount=");
     expect(select.length).toBeGreaterThan(0);
     expect(select).toContain("seedPreviewArrangement({");
     /* AND THE MAP IS RECOMPUTED FOR THE SEEDED CITY, or the marker is drawn in a city the wire map omits --

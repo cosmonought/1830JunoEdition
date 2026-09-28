@@ -167,8 +167,8 @@ describe("the float no longer holds the seat (#769 retired by #1610)", () => {
        #1244: the shell no longer calls `placeHomeStationToken` itself -- the reducer's arm does, through the
        `homeHexToAxial` the shell hands it in `ctx`. So the wiring to pin is the ctx field, and the ABSENCE of
        a second caller. */
-    const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
-    const app = readStripped("App.tsx");
+    const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
+    const app = readShell();
     /* Stage 10.3 (#1690): the lookup now reaches the reducer through the shared composition -- `App.tsx` calls
        `sandboxActionContext`, which spreads the providers' chart injections, which carry the board's label table.
        The server's engine calls the same builder, so the shell cannot omit it while the server supplies it. */

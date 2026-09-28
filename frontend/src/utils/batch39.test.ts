@@ -23,17 +23,14 @@
 
 export {};
 
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 /** The body of the tab-change effect, bounded so a stray `setRadialSelector(null)` elsewhere in a
  *  four-thousand-line file cannot satisfy these -- #886's rule, and the failure a bare `toContain` produced
  *  twice in this project already. */
-const RESET = APP.slice(
-  APP.indexOf('if (activeMainTab === "map") return;'),
-  APP.indexOf("}, [activeMainTab]);"),
-);
+const RESET = sliceBetween(APP, 'if (activeMainTab === "map") return;', "}, [activeMainTab]);");
 
 describe("leaving the map closes what was open on it", () => {
   it("keys the reset on the tab rather than on a component unmount", () => {

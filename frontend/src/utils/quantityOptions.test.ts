@@ -14,10 +14,10 @@
 
 export {};
 
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 
 const PANEL = readStripped("components/TrainPurchasePanel.tsx");
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 describe("one press, one train, #1255", () => {
   it("the panel has no quantity control and asks for one train", () => {
@@ -30,9 +30,7 @@ describe("one press, one train, #1255", () => {
   });
 
   it("the shell dispatches exactly one purchase per press, with no loop and no summary", () => {
-    const start = APP.indexOf("const handleBuyTrainsFromBank = useCallback(");
-    expect(start).toBeGreaterThan(-1);
-    const handler = APP.slice(start, APP.indexOf("[runGameplayAction, gameId, actingProtocolId", start));
+    const handler = sliceBetween(APP, "const handleBuyTrainsFromBank = useCallback(", "[runGameplayAction, gameId, actingProtocolId");
     /* #1326: the message names the shelf tier when there was a choice, so the literal is spread over lines;
        the one purchase, the two ids and the absence of a loop are what this case pins. */
     expect(handler).toContain("BuyHardwareFromPool: {");

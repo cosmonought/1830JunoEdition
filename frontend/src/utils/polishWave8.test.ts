@@ -22,13 +22,13 @@
 // rule EXISTS. It does, and it has been losing to an inline style since #953 -- which is a cascade question
 // a source scan cannot ask, so the case below asks the one thing it can: whether the rule is marked to win.
 
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell, shellSourcePaths } from "./sourceScan";
 
 const FLASH = readStripped("components/RevenueModifierFlash.tsx");
 const ANIM = readStripped("styles/animations.ts");
 const BAR = readStripped("panels/ContextualActionBar.tsx");
 const STYLES = readStripped("styles/appStyles.ts");
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 describe("the flash replays on every trigger (design note #971)", () => {
   it("remounts the overlay on the token", () => {
@@ -513,7 +513,7 @@ describe("the portal was already there (design note #970a)", () => {
     const declared = Number(FLASH.match(/REVENUE_FLASH_Z_INDEX = (\d+)/)?.[1]);
     const files = [
       "styles/appStyles.ts",
-      "App.tsx",
+      ...shellSourcePaths(),
       "panels/ContextualActionBar.tsx",
       "components/StockRoundPanel.tsx",
     ];

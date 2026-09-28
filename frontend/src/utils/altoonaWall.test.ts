@@ -32,6 +32,7 @@ import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
 import { printedArtwork, printedMarkersFor } from "../components/TileGraphics";
 import { STATION_HOME_HEXES } from "../components/hexContractTypes";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { readShell } from "./sourceScan";
 
 const H12 = { q: 2, r: 7 };
 
@@ -242,7 +243,7 @@ describe("the route is drawn on the arm it was priced on (design note #820)", ()
     return fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
   };
   const CANVAS = read("components/hexCanvasPrimitives.ts");
-  const APP = read("App.tsx");
+  const APP = readShell();
 
   it("carries the variant to the overlay", () => {
     /* THE FOURTH SURFACE IN THIS FEATURE to be handed a hex and left to guess which of H12's two tracks was

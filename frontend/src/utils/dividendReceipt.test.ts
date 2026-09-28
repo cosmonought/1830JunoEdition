@@ -23,6 +23,7 @@
 // paid case.
 
 import { dividendReceipt } from "./dividendReceipt";
+import { readShell } from "./sourceScan";
 
 /* Design note #795: `amount` is now an INPUT rather than something this module works out. It used to compute
    `perShare * (viewerPercentage / 10)` and its own comment called that "deliberately duplicated in shape
@@ -122,13 +123,13 @@ describe("the toast is raised where every client runs, and the row carries no co
     /* Design note #738. The button exists only on the president's client; a dividend's whole point is that it
        reaches players who are not acting. Raising it in `runGameplayAction` means a remote action replayed
        with `isRemoteReplay: true` announces itself exactly as a local one does. */
-    const app = read("App.tsx");
+    const app = readShell();
     expect(app).toContain('if (after && "DeclareDividends" in msg && options?.derived !== true)');
   });
 
   it("excludes a derived declaration", () => {
     // #668: an auto-declared $0 withhold is the game acting, and it pays nobody in any case.
-    expect(read("App.tsx")).toContain('options?.derived !== true');
+    expect(readShell()).toContain('options?.derived !== true');
   });
 
   it("gives spectators information, not disabled buttons", () => {

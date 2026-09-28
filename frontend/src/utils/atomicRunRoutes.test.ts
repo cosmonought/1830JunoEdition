@@ -30,7 +30,7 @@ import {
   legacyTurnSeed,
 } from "../gameEngine/gameVariants";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { sliceBetween, readShell } from "./sourceScan";
 
 const BO = 6;
 const TURN = { macroRound: 3, subRound: 1, companyId: BO, turnSeed: legacyTurnSeed(3, 1, BO) };
@@ -176,7 +176,7 @@ describe("the whole turn arrives in one transition (design note #968)", () => {
 });
 
 describe("the shell sends one action (design note #968)", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
   const block = sliceBetween(APP, "const runnable = runnableDrafts(", "setLiveOrSubPhase(");
 
   it("dispatches the bulk message", () => {
@@ -192,7 +192,8 @@ describe("the shell sends one action (design note #968)", () => {
     /* THE CAUSE, AS AN ABSENCE. Scanned on a comment-stripped copy (#490a) so #968's own note explaining the
        removal cannot satisfy the search. */
     expect(block).not.toContain("for (const draft of runnable)");
-    expect(block).not.toContain('runGameplayAction(\n        "RunManualRoute"');
+    // APP-TEST-0A: any indentation -- an extraction re-indents code, and an exact-whitespace absence would then pass on nothing.
+    expect(block).not.toMatch(/runGameplayAction\(\s*"RunManualRoute"/);
   });
 
   it("sends exactly one action for the turn", () => {
@@ -277,6 +278,6 @@ describe("the log describes the bulk message (design note #968)", () => {
 
   it("is undoable by name", () => {
     /* Every message the shell can send needs an Undo noun, or the confirm reads "undo the last undefined". */
-    expect(readStripped("App.tsx")).toContain('RunMultipleRoutes: "the last set of routes"');
+    expect(readShell()).toContain('RunMultipleRoutes: "the last set of routes"');
   });
 });

@@ -28,6 +28,8 @@ import { stationPlacementBlockReason } from "../gameEngine/stationTokens";
 import { dhPowerState } from "../gameEngine/dhPower";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
+const { readShell, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+
 const EMPTY_GRID = { game_id: 1, tiles: [] } as unknown as MapGridResponse;
 
 const company = (over: Record<string, unknown> = {}) =>
@@ -126,13 +128,8 @@ describe("the two halves belong to one turn", () => {
 });
 
 describe("the shell asks for the exemption, and only for the owner", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    // #490a: the note quotes the predicate's own refusal text while explaining it.
-    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  })();
+  // #490a: the note quotes the predicate's own refusal text while explaining it -- so the stripped shell.
+  const APP = readShell();
 
   it("passes the D&H's token availability", () => {
     expect(APP).toContain("extraTokenAvailable:");
@@ -148,10 +145,7 @@ describe("the shell asks for the exemption, and only for the owner", () => {
 
   it("keeps the memo's dependencies honest", () => {
     // A gate read from a stale closure is not a gate -- #762 and #766, twice each.
-    const memo = APP.slice(
-      APP.indexOf("const stationPlacementBlock"),
-      APP.indexOf("const turnIdentity"),
-    );
+    const memo = sliceBetween(APP, "const stationPlacementBlock", "const turnIdentity");
     expect(memo).toContain("dhPower");
     expect(memo).toContain("actingProtocolId");
   });

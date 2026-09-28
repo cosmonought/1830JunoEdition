@@ -30,6 +30,7 @@ import { filterSandboxPlacements } from "../components/sandboxTileLegality";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { LegalTilePlacement, MapGridResponse } from "../components/hexContractTypes";
 import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
+import { readShell, sliceBetween } from "./sourceScan";
 
 const PRR = 1;
 
@@ -173,13 +174,8 @@ describe("the predicate must be bound to the board BEFORE the action", () => {
 });
 
 describe("the shell captures the board once per dispatch", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    // #490a: the note quotes the old expression and must keep doing so.
-    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  })();
+  // #490a: the note quotes the old expression and must keep doing so.
+  const APP = readShell();
 
   it("snapshots the grid before building the predicate", () => {
     /* THE FIX, AND THE ONLY TEST THAT WOULD HAVE CAUGHT THIS. A snapshot rather than a reorder: reordering
@@ -191,10 +187,7 @@ describe("the shell captures the board once per dispatch", () => {
   });
 
   it("no longer reads the ref inside the predicate", () => {
-    const built = APP.slice(
-      APP.indexOf("const gridBeforeAction"),
-      APP.indexOf("if (\"LayTile\" in msg) {"),
-    );
+    const built = sliceBetween(APP, "const gridBeforeAction", "if (\"LayTile\" in msg) {");
     expect(built).not.toContain("mapGrid: mapGridRef.current,");
   });
 
@@ -208,7 +201,7 @@ describe("the shell captures the board once per dispatch", () => {
        (`layAuthorityContext`) and once for the reducer (`sandboxActionContext`), on the same `gridBeforeAction`. */
     expect(APP).toContain("lay.orientation,\n            layRefusedByAuthority,");
     expect(APP).toContain("after = applySandboxAction(after, gameplay, reducerContext);");
-    const verdict = APP.slice(APP.indexOf("const layRefusedByAuthority = (): boolean =>"), APP.indexOf('if ("LayTile" in msg) {'));
+    const verdict = sliceBetween(APP, "const layRefusedByAuthority = (): boolean =>", 'if ("LayTile" in msg) {');
     expect(verdict).toContain("layAuthorityContext(SHELL_PROVIDERS, stateBeforeAction, gridBeforeAction),");
   });
 });

@@ -25,7 +25,7 @@
 export {};
 
 const { effectiveActions } = require("../gameEngine/logRevert") as typeof import("../gameEngine/logRevert");
-const { readStripped, readSource } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readSource, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 type Entry = { index: number; id: string; actor: string; payload: string };
 
@@ -126,7 +126,7 @@ describe("the index is allocated, not supplied", () => {
 });
 
 describe("the shell reads that return correctly", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("treats null as the failure, not falsiness", () => {
     /* THE FAULT THE FIX NEARLY INTRODUCED. `if (!ok)` was correct against a boolean and is wrong against an

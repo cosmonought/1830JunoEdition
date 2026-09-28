@@ -24,7 +24,7 @@ import { bankIsBroken } from "../gameEngine/endgame";
 import { applySandboxAction, operatingRoundSequenceLength } from "../gameEngine/sandboxSession";
 import type { GameStateResponse } from "../gameEngine/gameState";
 
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 /** A board in an Operating Round, with whatever fleet and calendar a case needs. Only the fields the
  *  round machine and the latch actually read; a fuller fixture would say no more. */
@@ -407,7 +407,7 @@ describe("the DIRECT crossing: comfortably solvent, then broken in one action", 
        `if (stagedLabel)` or a `bankBreakWarning(before) &&` folded into the condition. Both would read as
        tidy and would silently drop the flourish for every direct crossing, which is the single most
        dramatic way an 1830 bank breaks: one large dividend. So the condition is asserted whole. */
-    const CODE = readStripped("App.tsx");
+    const CODE = readShell();
     const condition = "if (!replayingHistory && before !== null && !bankIsBroken(before) && bankIsBroken(after)) {";
     expect(CODE).toContain(condition);
     /* THE BODY, NOT THE BLOCK. `sliceBetween` includes its start anchor, and the condition itself is full
@@ -430,7 +430,7 @@ describe("the DIRECT crossing: comfortably solvent, then broken in one action", 
 });
 
 describe("the shell stamps the break on a live edge only", () => {
-  const CODE = readStripped("App.tsx");
+  const CODE = readShell();
 
   it("compares two settled states rather than watching a render", () => {
     expect(CODE).toContain(
@@ -477,7 +477,7 @@ describe("the shell stamps the break on a live edge only", () => {
 });
 
 describe("one persistent Bank authority, not two", () => {
-  const CODE = readStripped("App.tsx");
+  const CODE = readShell();
   const BAR = readStripped("panels/ContextualActionBar.tsx");
 
   it("the Top Bar's #901 badge is gone", () => {

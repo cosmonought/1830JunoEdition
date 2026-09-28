@@ -15,7 +15,7 @@ import {
   stationTokenPrice,
   stationTokenSlots,
 } from "../gameEngine/stationTokens";
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 import {
   isRevenueCentreHex,
   isRouteTerminusHex,
@@ -147,7 +147,7 @@ describe("the herald on the expanded board", () => {
     expect(readStripped("gameEngine/derivedActions.ts")).toContain(
       "company.station_token_hexes == null ? undefined : stationTokensOf(company).length",
     );
-    expect(readStripped("App.tsx")).toContain(
+    expect(readShell()).toContain(
       "company?.station_token_hexes == null ? undefined : stationTokensOf(company).length",
     );
   });

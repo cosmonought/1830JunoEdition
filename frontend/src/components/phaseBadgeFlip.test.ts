@@ -37,7 +37,7 @@ import {
   phaseBadgeStageAt,
 } from "./phaseBadgeFlip";
 
-const { readStripped, anchorIndex, sliceBetween } =
+const { readStripped, anchorIndex, sliceBetween, readShell, expectOrder } =
   require("../utils/sourceScan") as typeof import("../utils/sourceScan");
 
 const STANDARD = resolveVariants({});
@@ -262,7 +262,7 @@ describe("the stylesheet says a mechanical plate, not a stage effect", () => {
 });
 
 describe("the shell raises it where the replay guard can see it", () => {
-  const CODE = readStripped("App.tsx");
+  const CODE = readShell();
 
   it("compares two settled states rather than watching a render", () => {
     /* #1094'S LESSON, INHERITED RATHER THAN RE-LEARNED. A `useEffect` on the derived phase sees every
@@ -280,10 +280,11 @@ describe("the shell raises it where the replay guard can see it", () => {
     /* REPLAY/REBUILD DOES NOT ANIMATE. Both halves are asserted because both are load-bearing: the
        dispatch-site guard is the structural one, and the raiser's is #825's own door, which also covers a
        future second caller. */
-    const at = anchorIndex(CODE, "if (!replayingHistory && before !== null) {");
-    expect(
-      anchorIndex(CODE, "const phaseBadgeFrom = phaseBadgeChange(derivePhase(before), derivePhase(after));"),
-    ).toBeGreaterThan(at);
+    expectOrder(
+      CODE,
+      "if (!replayingHistory && before !== null) {",
+      "const phaseBadgeFrom = phaseBadgeChange(derivePhase(before), derivePhase(after));",
+    );
     /* ONE LINE PER SLICE, AND A NAME OF ITS OWN. `scripts/sourceScanSweep.js` resolves a slice only when
        its declaration is one `sliceBetween(FILE, "a", "b")` call with no trailing comma, and it binds an
        assertion to the NEAREST PRECEDING declaration of that name -- so a wrapped call, or a second `body`,
@@ -310,7 +311,7 @@ describe("the shell raises it where the replay guard can see it", () => {
 });
 
 describe("the follow-on surfaces wait for the plate to turn", () => {
-  const CODE = readStripped("App.tsx");
+  const CODE = readShell();
 
   it("holds the era toast to the badge's midpoint without rewriting it", () => {
     const eraBlock = sliceBetween(CODE, "if (before !== null && !replayingHistory) {", "before.current_round_type !== after.current_round_type");

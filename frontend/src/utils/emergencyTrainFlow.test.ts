@@ -31,6 +31,8 @@ import { resolveEmergencyFunding } from "../gameEngine/endgame";
 import { describeTreasuryMoves, treasuryMoveLine } from "./treasuryProvenance";
 import type { GameStateResponse } from "../gameEngine/gameState";
 
+const { readShell } = require("./sourceScan") as typeof import("./sourceScan");
+
 const obliged = {
   atHardwareStep: true,
   trainless: true,
@@ -274,31 +276,25 @@ describe("treasury provenance", () => {
 });
 
 describe("the surfaces ask the rule module", () => {
-  const read = (rel: string) => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-    // #490a: the notes quote the old arrangement and must keep doing so.
-    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  };
+  // #490a: the notes quote the old arrangement and must keep doing so -- so the stripped shell.
 
   it("gates Pass on the obligation", () => {
-    expect(read("App.tsx")).toContain("trainPurchaseRefusal({");
+    expect(readShell()).toContain("trainPurchaseRefusal({");
   });
 
   it("no longer mounts the modal on the plan alone", () => {
     /* #3's line was `const emergencyModalPlan = emergencyPurchasePlan;`. The structural half of #751: if
        that came back, the button would still work and the alternative route would silently close again. */
-    const app = read("App.tsx");
+    const app = readShell();
     expect(app).not.toMatch(/emergencyModalPlan = emergencyPurchasePlan;/);
     expect(app).toContain("emergencyModalOpen || emergencyForced");
   });
 
   it("still opens itself when nothing remains to decide", () => {
-    expect(read("App.tsx")).toContain("noDecisionRemains(emergencyPurchasePlan)");
+    expect(readShell()).toContain("noDecisionRemains(emergencyPurchasePlan)");
   });
 
   it("logs every treasury movement", () => {
-    expect(read("App.tsx")).toContain("describeTreasuryMoves(msg, before, after)");
+    expect(readShell()).toContain("describeTreasuryMoves(msg, before, after)");
   });
 });

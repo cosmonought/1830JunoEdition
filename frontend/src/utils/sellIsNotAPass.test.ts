@@ -25,6 +25,7 @@ import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { hasActedThisTurn, passButtonLabel, passButtonTitle } from "../gameEngine/turnAction";
 import { passedSeatIndices } from "./passedSeats";
 import type { GameStateResponse } from "../gameEngine/gameState";
+import { readShell } from "./sourceScan";
 
 const SEATS = ["p0", "p1", "p2", "p3"];
 const PRR = 1;
@@ -267,7 +268,7 @@ describe("the surfaces ask the rule module", () => {
 
   it("feeds the bar from replayed state", () => {
     // #400/#685: the reducer settles, the shell narrates. An Undo past the sale takes the label back with it.
-    expect(read("App.tsx")).toContain("turnActionTaken={gameState?.turn_action_taken === true}");
+    expect(readShell()).toContain("turnActionTaken={gameState?.turn_action_taken === true}");
   });
 
   it("narrates the difference in the Activity Log", () => {

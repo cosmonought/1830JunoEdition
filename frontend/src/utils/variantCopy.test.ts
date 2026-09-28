@@ -20,7 +20,7 @@
 
 import { VARIANT_COPY, STANDARD_VARIANTS, dividendStepsFor } from "../gameEngine/gameVariants";
 import { COMPASS_ARMS, compassArmsFor } from "../components/StockMarketRenderer";
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 
 describe("the variant blurbs have one home (design note #961)", () => {
   it("is the only place the sentences are written", () => {
@@ -277,7 +277,7 @@ describe("the compass rose follows the variant (design note #962)", () => {
        variant. The rose renders inside `StockMarketRenderer`, which had no such prop until this batch. */
     const renderer = readStripped("components/StockMarketRenderer.tsx");
     expect(renderer).toContain("<MarketCompassRose variants={variants} />");
-    expect(readStripped("App.tsx")).toContain("variants={gameState?.variants}");
+    expect(readShell()).toContain("variants={gameState?.variants}");
   });
 
   it("reads an absent config as the standard game", () => {

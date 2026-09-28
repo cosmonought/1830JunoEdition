@@ -38,7 +38,7 @@ const { cityEnteredFrom } = require("../gameEngine/trackReach") as typeof import
 const { STATIC_BOARD_HEXES } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
 const { STATION_HOME_HEXES } =
   require("../components/hexContractTypes") as typeof import("../components/hexContractTypes");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 /** The reported hexes, FOUND rather than typed -- #686's rule about coordinates written by hand. */
 const H12 = STATIC_BOARD_HEXES.find((hex) => hex.label === "H12")!;
@@ -293,7 +293,7 @@ describe("the shell actually asks", () => {
        This is #886's bounded-slice rule reached from the other direction: not a slice that turned out empty,
        but a search whose haystack was larger than its subject. */
     const editorCall = sliceBetween(
-      readStripped("App.tsx"),
+      readShell(),
       "const edit = editRouteDraft({",
       "});",
     );

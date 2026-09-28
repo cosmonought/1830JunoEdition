@@ -77,8 +77,8 @@ describe("the shell no longer deals, #1230", () => {
      the arm. #1221, #1227 and #1228 are the three times those two copies were caught disagreeing. The branch
      now keeps narration and registries only and FALLS THROUGH; the reducer deals; the auction is re-seated from
      the dealt board afterwards, where the engine does it. */
-  const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
-  const APP = readStripped("App.tsx");
+  const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
+  const APP = readShell();
   /* CODE ANCHORS, NOT COMMENT TEXT. `readStripped` removes every block comment before the scan, so an anchor
      that names a design note is an anchor on nothing. The first `isSetupGameMsg(msg)` in the file is the
      narration branch; the post-reducer re-seat is the second and is found separately below. */
@@ -114,7 +114,8 @@ describe("the shell no longer deals, #1230", () => {
     const REDUCER = readStripped("gameEngine/sandboxSession.ts");
     const reseat = sliceBetween(REDUCER, "const reseated = waterfallForRoster(waterfall, state.player_addresses", "waterfall_auction_active: false } : reseated;");
     expect(reseat).not.toContain("msg.SetupGame.players");
-    expect(APP).not.toContain("waterfallForRoster(\n              sandboxWaterfallRef.current");
+    // APP-TEST-0A: any indentation -- an extraction re-indents code, and an exact-whitespace absence would then pass on nothing.
+    expect(APP).not.toMatch(/waterfallForRoster\(\s*sandboxWaterfallRef\.current/);
     expect(APP).not.toContain("const reseated = waterfallForRoster(");
   });
 
@@ -344,8 +345,8 @@ describe("the Stock Round opens to the left of the last player who acted, #1235"
 });
 
 describe("OpenStockRound and SetBoPar are off the shell, #1234 / #1236", () => {
-  const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
-  const APP = readStripped("App.tsx");
+  const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
+  const APP = readShell();
 
   it("OpenStockRound has no shell branch left at all", () => {
     /* #1236 left a branch that narrated and fell through; #1246 moved the narration to

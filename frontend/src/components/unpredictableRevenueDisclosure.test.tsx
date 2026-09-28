@@ -45,7 +45,7 @@ import { offerSettlesAsBloodPrice, saleCopyKind } from "../utils/saleCopyDisclos
 import { ACCOLADE_SPEC_BY_KEY } from "../utils/accolades";
 import { variantCueFor, CARCOSA_FOG_AUDIO, CARCOSA_FOG_VIDEO } from "../utils/variantSfx";
 import { CARCOSA_FOG_LINE } from "../gameEngine/yellowSign";
-import { readStripped } from "../utils/sourceScan";
+import { readStripped, readShell, sliceBetween, sliceFrom } from "../utils/sourceScan";
 import * as S from "../utils/yellowSignRunBoundSupport";
 
 declare global {
@@ -246,8 +246,8 @@ describe("D1. the consent prompt and the pending-offer view name the Blood Price
   });
 
   it("7. the shell derives it from the canonical predicate, and the prompt reads the derivation, not the wire field (source pins)", () => {
-    const APP = readStripped("App.tsx");
-    const memo = APP.slice(APP.indexOf("const sandboxTrainProposal = useMemo"), APP.indexOf("const sandboxTrainProposal = useMemo") + 1600);
+    const APP = readShell();
+    const memo = sliceFrom(APP, "const sandboxTrainProposal = useMemo", { length: 1600 });
     expect(memo).toContain("bloodPrice: offerSettlesAsBloodPrice(gameState, offer),");
     expect(memo).toContain("}, [gameState]);"); // the seller's fleet is the dependency, not only the offer
     const PANEL = readStripped("components/TrainPurchasePanel.tsx");
@@ -287,7 +287,7 @@ describe("U-42. the Activity Log's offer, answer and trade lines name the copy, 
     expect(moved).toMatchObject({ companyId: CO, reason: "bloodPrice" });
     expect(settled.market_positions?.[BO]).toEqual(accepted.market_positions?.[BO]);
     // The shell's sentence names the token that moved (`marketResult.moved.companyId`) -- the buyer.
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     expect(APP).toContain("`The gold-trimmed train was transferred. A Blood Price was paid: ${ticker}'s stock dropped from $${from} to $${to}.`");
     expect(APP).toMatch(/const \{ companyId, from, to, reason \} = marketResult\.moved;\s*const ticker =\s*before\?\.public_companies\.find\(\(entry\) => entry\.company_id === companyId\)/);
   });
@@ -316,7 +316,7 @@ describe("U-42. the Activity Log's offer, answer and trade lines name the copy, 
   });
 
   it("the shell's same-president line names the copy with the same predicate (source pin)", () => {
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     expect(APP).toContain("const copyKind = saleCopyKind(gameState, proposal.sellerProtocolId, proposal.modelType, proposal.gilded);");
     expect(APP).toContain("bought ${trainPhrase} from ${proposal.sellerTicker}");
   });
@@ -448,21 +448,24 @@ describe("OD-UR-7. the Diesel trade-in row greys the gold-trimmed copy, with the
 /* ================================================================================================= */
 
 describe("OD-UR-2. the fog's ruled cue plays at the set boundary, once, and never on a replay (source pins -- no App harness)", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
   const START = "let fogFellAtSetEnd = false;";
-  const block = APP.slice(APP.indexOf(START));
+  const block = sliceFrom(APP, START);
 
   it("the boundary's own report drives it -- the same loop that writes the Activity Log line", () => {
-    expect(APP.indexOf(START)).toBeGreaterThan(0);
+    expect(APP).toContain(START);
     expect(block).toMatch(
       /^let fogFellAtSetEnd = false;\s*for \(const fog of describeFogAtSetEnd\(settledBefore, settledAfter\)\) \{[\s\S]{0,200}?logInfo\(`\$\{CARCOSA_FOG_LINE\}[^\n]*\n\s*fogFellAtSetEnd = true;/,
     );
   });
 
   it("guarded by the replay flag, like every ephemeral raiser (#1094), and played once however many trains went", () => {
-    const guard = block.indexOf("if (fogFellAtSetEnd && !replayingHistory) {");
-    expect(guard).toBeGreaterThan(0);
-    const body = block.slice(guard, block.indexOf("if (queuedNotices.length !== pendingFleetNoticesRef.current.length)"));
+    expect(block).toContain("if (fogFellAtSetEnd && !replayingHistory) {");
+    const body = sliceBetween(
+      block,
+      "if (fogFellAtSetEnd && !replayingHistory) {",
+      "if (queuedNotices.length !== pendingFleetNoticesRef.current.length)",
+    );
     expect(body).toContain('variantCueFor({ line: CARCOSA_FOG_LINE, bucket: "unchanged", stage: "fog" })');
     expect(body).toContain("playVariantCue(fogCue.audio, sfxEnabledRef.current && sfxRevenueRef.current);");
     expect(body).toContain("setHaunting({");

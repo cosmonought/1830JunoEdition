@@ -38,9 +38,9 @@ const { YELLOW_SIGN_MALUS_LINE, CARCOSA_CHANCE_IN_100, CARCOSA_SLICE } =
   require("../gameEngine/yellowSign") as typeof import("../gameEngine/yellowSign");
 const { UNPREDICTABLE_REVENUE_FLAVOR } =
   require("../constants/flavorText") as typeof import("../constants/flavorText");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const REDUCER = readStripped("gameEngine/sandboxSession.ts");
 const SEEDS = readStripped("utils/turnSeed.ts");
 

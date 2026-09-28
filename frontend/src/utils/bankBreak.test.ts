@@ -1,6 +1,6 @@
 // frontend/src/utils/bankBreak.test.ts -- design note #1410.
 import { BANK_BREAK_CRITICAL_AT, BANK_BREAK_WARN_AT, bankBreakWarning } from "./bankBreak";
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 
 describe("the Bank Break countdown (design note #1410)", () => {
   it("is silent above $2000 and amber from $2000 down", () => {
@@ -38,7 +38,7 @@ describe("the Bank Break countdown (design note #1410)", () => {
     const BAR = readStripped("panels/ContextualActionBar.tsx");
     expect((BAR.match(/<BankTicket reading=\{bankBreak\}/g) ?? []).length).toBe(2);
     expect(BAR).toContain("const bankBreak = bankTicketReading(bankBroken ?? null, bankRemaining);");
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     expect(APP).toContain("bankRemaining={gameState ? Number(gameState.virtual_bank_vgp) : null}");
   });
 });

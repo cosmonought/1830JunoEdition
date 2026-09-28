@@ -29,10 +29,10 @@ import { STANDARD_VARIANTS } from "../gameEngine/gameVariants";
 import { isTrainLocked } from "../gameEngine/trainLimit";
 import { fleetLossNotices, noticeBody } from "./fleetLossNotice";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 
 const GENTLE = { ...STANDARD_VARIANTS, gentleRust: true };
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const BAR = readStripped("panels/ContextualActionBar.tsx");
 const CHIPS = readStripped("components/TrainBadges.tsx");
 const ANIM = readStripped("styles/animations.ts");

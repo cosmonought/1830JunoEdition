@@ -23,9 +23,9 @@ const { summarisePrivateRevenueRound, summarisePrivateRevenueForPlayer } =
 const { SEAT_COLORS } = require("./playerLabels") as typeof import("./playerLabels");
 const { bestContrastTextColor, relativeLuminance } =
   require("../styles/corporationLivery") as typeof import("../styles/corporationLivery");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const MODAL = readStripped("components/PrivateRevenueModal.tsx");
 const SUMMARY = readStripped("gameEngine/sandboxSession.ts");
 

@@ -16,7 +16,7 @@
 // `revenueOutcome` rather than testing the percentage, or a 90% roll that rounded back to the printed figure
 // flashes "-10%" over a run that lost nothing.
 
-import { readStripped, sliceBetween } from "../utils/sourceScan";
+import { readStripped, sliceBetween, readShell } from "../utils/sourceScan";
 
 describe("the overlay is floating text, not a window (design note #940)", () => {
   const FLASH = readStripped("components/RevenueModifierFlash.tsx");
@@ -210,7 +210,7 @@ describe("the shell raises it once per TURN (design notes #940 -> #941)", () => 
      EVERY RULING IN THIS SUITE STILL HOLDS AND IS STILL ASSERTED: one roll per turn on the turn's total, no
      ordinal in the seed, `revenueOutcome` rather than a percentage comparison, the variant gate on the whole
      block, and one call site each. Only the block they are asserted against has moved -- again. */
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
   const runBlock = sliceBetween(
     APP,
     '"RunMultipleRoutes" in msg &&',

@@ -22,6 +22,7 @@
 import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { isBonusLay, layEndsTrackStep, BONUS_LAY_PRIVATE_ID } from "../gameEngine/bonusLay";
 import type { GameStateResponse } from "../gameEngine/gameState";
+import { readShell, sliceBetween } from "./sourceScan";
 
 const CSL_OWNER = 4;
 
@@ -153,13 +154,8 @@ describe("the rule reads the message, not the board", () => {
 });
 
 describe("the shell says which lay it is", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    // #490a: the notes quote the rule while explaining it.
-    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  })();
+  // #490a: the notes quote the rule while explaining it -- `readShell()` is the stripped shell.
+  const APP = readShell();
   /* #885 moved the DECIDING half of this rule into the module that already held the READING half, so the
      assertions follow it. Same #490a strip: the notes in `bonusLay.ts` quote both ability keys while
      explaining why only one of them counts. */
@@ -178,9 +174,8 @@ describe("the shell says which lay it is", () => {
     /* Stage 10.6 (#1693): the flag is a CLAIM the authority now validates -- this corporation's live C&SL, on B20 --
        so the shell raises it only for the lay that lands on the errand's own hex. Pinned as STRUCTURE (the one
        `bonusLay` expression asks both rules) and as BEHAVIOUR (the two rules composed), not as a line of text. */
-    const start = APP.indexOf("const bonusLay =");
-    expect(start).toBeGreaterThan(-1);
-    const expression = APP.slice(start, APP.indexOf(";", start));
+    expect(APP).toContain("const bonusLay =");
+    const expression = sliceBetween(APP, "const bonusLay =", ";");
     expect(expression).toContain("errandLaysBonus(homeStationPlacement)");
     expect(expression).toContain("errandClaimsLay(homeStationPlacement, q, r)");
     const { errandLaysBonus } = require("../gameEngine/bonusLay") as typeof import("../gameEngine/bonusLay");
@@ -219,9 +214,7 @@ describe("the shell says which lay it is", () => {
        a bare `indexOf` produced a backwards range and an empty slice -- which then failed the `toContain`
        and would have silently passed the `not.toContain` beside it. Half of a slice guard is worse than
        none: #785's harness lost a whole assertion the same way. */
-    const start = APP.indexOf("const bonusLay =");
-    const bonus = APP.slice(start, APP.indexOf("if (sandbox) {", start));
-    expect(start).toBeGreaterThan(-1);
+    const bonus = sliceBetween(APP, "const bonusLay =", "if (sandbox) {");
     expect(bonus.length).toBeGreaterThan(0);
     expect(bonus).toContain("errandLaysBonus(");
     expect(bonus).not.toContain("dh-tile");

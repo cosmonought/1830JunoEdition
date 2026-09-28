@@ -30,6 +30,7 @@
 import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { dividendRevenue } from "../gameEngine/dividendSplit";
 import type { GameStateResponse } from "../gameEngine/gameState";
+import { readShell } from "./sourceScan";
 
 const A = 1;
 const B = 2;
@@ -142,7 +143,7 @@ describe("the unreachable option is gone", () => {
       raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
     return {
       reducer: strip(fs.readFileSync(path.join(__dirname, "..", "gameEngine", "sandboxSession.ts"), "utf8")),
-      app: strip(fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")),
+      app: readShell(),
       room: strip(fs.readFileSync(path.join(__dirname, "sandboxRoom.ts"), "utf8")),
     };
   })();

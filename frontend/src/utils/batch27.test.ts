@@ -28,10 +28,10 @@ import {
   STANDARD_VARIANTS,
 } from "../gameEngine/gameVariants";
 import { COMPASS_ARMS, compassArmsFor } from "../components/StockMarketRenderer";
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 
 const DYNAMIC = { ...STANDARD_VARIANTS, dynamicStockMarket: true };
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const BAR = readStripped("panels/ContextualActionBar.tsx");
 const STYLES = readStripped("styles/appStyles.ts");
 const VARIANTS = readStripped("gameEngine/gameVariants.ts");

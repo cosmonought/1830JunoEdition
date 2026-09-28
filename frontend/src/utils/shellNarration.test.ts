@@ -11,7 +11,7 @@ export {};
 
 const { describeGameplayAction } = require("./actionLog") as typeof import("./actionLog");
 const { refusalReasonFor } = require("./refusedAction") as typeof import("./refusedAction");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readShell, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
@@ -111,7 +111,7 @@ describe("#1246: the sentences that left the shell", () => {
 });
 
 describe("#1246: the shell no longer narrates them, or applies ExchangePrivate", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("ExchangePrivate has no shell branch", () => {
     expect(APP).not.toContain("isExchangePrivateMsg(msg)");
@@ -119,11 +119,7 @@ describe("#1246: the shell no longer narrates them, or applies ExchangePrivate",
   });
 
   it("the SetBoPar branch writes nothing (6.5-B H-02: the prompt is derived from the board, not closed here)", () => {
-    const start = APP.indexOf("if (isSetBoParMsg(msg)) {");
-    const end = APP.indexOf("if (isSetupGameMsg(msg)) {", start);
-    expect(start).toBeGreaterThan(-1);
-    expect(end).toBeGreaterThan(start);
-    const branch = APP.slice(start, end);
+    const branch = sliceBetween(APP, "if (isSetBoParMsg(msg)) {", "if (isSetupGameMsg(msg)) {");
     expect(branch).not.toContain("setBoParPrompt");
     expect(branch).not.toContain("logInfo(");
     expect(branch).not.toContain("boPresidencyRefusal(");

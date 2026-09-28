@@ -31,9 +31,9 @@ const { countableTrainCount, trimToTrainLimit, isTrainLocked } =
   require("../gameEngine/trainLimit") as typeof import("../gameEngine/trainLimit");
 const { trainPurchaseRefusal } =
   require("../gameEngine/trainPurchaseGate") as typeof import("../gameEngine/trainPurchaseGate");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const BAR = readStripped("panels/ContextualActionBar.tsx");
 const BADGES = readStripped("components/TrainBadges.tsx");
 const SUBPANEL = readStripped("components/ContextualSubPanel.tsx");

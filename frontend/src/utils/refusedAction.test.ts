@@ -34,6 +34,7 @@ import {
 import type { GameStateResponse } from "../gameEngine/gameState";
 // Stage 10.5 (S10-9): the receipt takes the log-wide message type; the shapeless fixtures below say so by cast.
 import type { SandboxLogMsg } from "../gameEngine/gameSetup";
+import { readShell } from "./sourceScan";
 
 const CO = 3;
 
@@ -156,13 +157,8 @@ describe("the line says what happened without inventing a reason", () => {
 });
 
 describe("the drain is wired to it", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    // #490a: the note quotes the old unconditional `status: "success"` while explaining it.
-    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  })();
+  // #490a: the note quotes the old unconditional `status: "success"` while explaining it -- so, stripped.
+  const APP = readShell();
 
   it("makes the sandbox entry's status conditional", () => {
     /* Design note #784 hoisted the answer into `refusalWasRefused` so the three fields that read it call the
@@ -257,12 +253,7 @@ describe("the refusal names its rule (design note #784)", () => {
 });
 
 describe("the player is told, not just the log", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  })();
+  const APP = readShell();
 
   it("raises a toast on a refusal it can explain", () => {
     expect(APP).toContain("showActionToast(refusalReason)");

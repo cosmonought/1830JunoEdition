@@ -29,7 +29,7 @@ import { createRoot, type Root } from "react-dom/client";
 
 import HostSetupCard from "./HostSetupCard";
 import { ModalLayerHost, ModalPortal, MODAL_LAYER_ATTRIBUTE } from "./ModalPortal";
-import { readStripped } from "../utils/sourceScan";
+import { readStripped, readAppRoot, readShell } from "../utils/sourceScan";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -401,10 +401,16 @@ describe("nothing Host Game does changed by moving its DOM", () => {
 
 describe("the layer is wired where the topology requires", () => {
   it("is rendered by GameRouter beside the screen, in both branches", () => {
-    const app = readStripped("App.tsx");
+    const app = readAppRoot(
+      "the ModalLayerHost siblings are rendered by GameRouter, the composition root, beside each screen root -- they must not follow code into shell/",
+    );
     expect(app.includes("<ModalLayerHost />")).toBe(true);
     /* Both branches: the Lobby and the game shell each get one. */
     expect((app.match(/<ModalLayerHost \/>/g) || []).length).toBe(2);
+    /* APP-TEST-0A: AND NOWHERE ELSE IN THE SHELL. The count above is read from the root file alone (it is the
+       router's fact); read over the whole shell -- App.tsx plus every extracted `shell/**` module -- it must
+       be the same two, so a module that renders a third layer of its own fails here. */
+    expect((readShell().match(/<ModalLayerHost \/>/g) || []).length).toBe(2);
   });
 
   it("carries the chrome scale once, and not chromeZoomFor's screen ground", () => {

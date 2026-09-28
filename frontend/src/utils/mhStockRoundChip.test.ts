@@ -15,10 +15,10 @@
 
 /* #490a: the notes below quote the strings they removed, so code assertions read a comment-stripped copy. */
 
-import { readSource, stripComments } from "./sourceScan";
+import { readSource, stripComments, readShell, readShellRaw, sliceBetween, sliceFrom } from "./sourceScan";
 
-const APP_RAW = readSource("App.tsx");
-const APP = stripComments(APP_RAW);
+const APP_RAW = readShellRaw();
+const APP = readShell();
 const BAR = stripComments(readSource("panels/ContextualActionBar.tsx"));
 /* Design note #885: `PANEL_RAW` / `PANEL` read `components/PrivatePowerPanel.tsx`, which is deleted. The
    block that used them is rewritten below against the surface that replaced it. */
@@ -75,9 +75,7 @@ describe("the bar carries it, and dispatches nothing", () => {
   it("raises the question rather than performing the exchange", () => {
     /* #263: nothing on this bar dispatches. #846's rule, third power: "One question, asked one way, whichever
        door a player came through." */
-    const at = APP.indexOf("const handleChipPowerOffer");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, at + 700);
+    const body = sliceFrom(APP, "const handleChipPowerOffer", { length: 700 });
     expect(body).toContain('setPrivatePowerRequest("mh-exchange")');
     expect(body).not.toContain("ExchangePrivate");
   });
@@ -116,12 +114,11 @@ describe("one dispatch, two doors", () => {
     expect(APP).toContain("const runPrivateExchange = useCallback(");
     /* THE ONE SURVIVING CALLER IS THE MODAL'S. `handlePowerFlowAct` is the only thing that should ever reach
        the dispatch, because it is the only thing that runs after a player has answered the question. */
-    const act = APP.indexOf("const handlePowerFlowAct");
-    expect(act).toBeGreaterThan(-1);
-    const actBody = APP.slice(act, APP.indexOf("const handlePowerFlowDecline", act));
+    const actBody = sliceBetween(APP, "const handlePowerFlowAct", "const handlePowerFlowDecline");
     /* The slice is bounded by a LATER declaration rather than by a length, so it cannot silently run past
-       the handler and pick the assertion up from somewhere else -- and `indexOf` returning -1 here would
-       produce a BACKWARDS slice, i.e. `""`, which passes every `not.toContain` beside it. Pinned. */
+       the handler and pick the assertion up from somewhere else -- and a bare `indexOf` returning -1 here would
+       produce a BACKWARDS slice, i.e. `""`, which passes every `not.toContain` beside it. `sliceBetween`
+       throws instead (APP-TEST-0A). Pinned. */
     expect(actBody).not.toBe("");
     expect(actBody).toContain("runPrivateExchange(MH_PRIVATE_ID,");
 
@@ -144,17 +141,14 @@ describe("one dispatch, two doors", () => {
     /* The M&H's own rule: the trade "can be made on their own stock-round turn, or in the gap between any
        other player's or corporation's turn". `automatic: true` is what stops the turn gate refusing the one
        moment the power is most useful. */
-    const at = APP.indexOf("const runPrivateExchange");
-    const body = APP.slice(at, at + 1400);
+    const body = sliceFrom(APP, "const runPrivateExchange", { length: 1400 });
     expect(body).toContain("{ automatic: true }");
   });
 
   it("declining spends nothing", () => {
     /* THE DIFFERENCE FROM THE D&H, in the shell rather than in the copy. #845: "Two modals, two rules, and
        the difference is whether the question can be asked again." */
-    const at = APP.indexOf("const handlePowerFlowDecline");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, APP.indexOf("setDhStationForfeited", at));
+    const body = sliceBetween(APP, "const handlePowerFlowDecline", "setDhStationForfeited");
     expect(body).toContain('if (step === "exchange")');
     expect(body).toContain("setPrivatePowerRequest(null)");
     expect(body).not.toContain("usedPrivateAbilities");

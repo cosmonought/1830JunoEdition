@@ -31,7 +31,7 @@ const TIERS: readonly TrainTier[] = ["2", "3", "4", "5", "6", "D"];
    warning, while leaving `const CODE = read("App.tsx")` unmatched by the sweep's declaration pattern. The
    file went from visibly-unchecked to invisibly-unchecked, which is worse than where it started. THE
    DECLARATION ITSELF has to be the recognised form, not a call that eventually reaches it. */
-const { readStripped, anchorIndex, sliceBetween } =
+const { sliceBetween, readShell, expectOrder } =
   require("./sourceScan") as typeof import("./sourceScan");
 
 describe("the era changes exactly twice", () => {
@@ -55,7 +55,7 @@ describe("the era changes exactly twice", () => {
 
 describe("the shell announces it once, when it lands", () => {
   /* Design note #1096: `readStripped`, so the sweep can resolve this and check every anchor below. */
-  const CODE = readStripped("App.tsx");
+  const CODE = readShell();
 
   it("says what became possible, in the present tense", () => {
     /* ==================================================================
@@ -109,8 +109,7 @@ describe("the shell announces it once, when it lands", () => {
     /* AND THE COMPARISON HAPPENS INSIDE THE REPLAY GUARD, which is the half the effect could not reach.
        `anchorIndex` rather than `indexOf` (#1090): a rotted anchor throws instead of comparing against -1,
        which is how this file reported "Expected: > -1" rather than naming what had gone. */
-    const guard = anchorIndex(CODE, "if (before !== null && !replayingHistory) {");
-    expect(anchorIndex(CODE, "const eraBefore = derivePhase(before)?.tier;")).toBeGreaterThan(guard);
+    expectOrder(CODE, "if (before !== null && !replayingHistory) {", "const eraBefore = derivePhase(before)?.tier;");
   });
 
   it("reaches every player rather than only the buyer", () => {
@@ -174,9 +173,7 @@ describe("the shell announces it once, when it lands", () => {
        ANCHORED ON THE TOKEN BUMP, which is the first statement after the guard and the thing the guard must
        come before. That is the relationship this case is actually about: the replay check happens BEFORE any
        toast state is written, not merely somewhere in the vicinity. */
-    const at = CODE.indexOf("const showDividendToast");
-    expect(at).toBeGreaterThan(-1);
-    const body = CODE.slice(at, CODE.indexOf("actionToastTokenRef.current += 1;", at));
+    const body = sliceBetween(CODE, "const showDividendToast", "actionToastTokenRef.current += 1;");
     expect(body.length).toBeGreaterThan(0);
     expect(body).toContain("if (replayingHistory) return;");
   });

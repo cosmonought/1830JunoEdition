@@ -33,10 +33,10 @@ const { tileErasAt, tileErasUpTo, tierEra, TILE_ERA_ORDER, TIER_ORDER } =
 const { STANDARD_TOAST_MS, PHASE_CHANGE_TOAST_MS } =
   require("../components/ActionToast") as typeof import("../components/ActionToast");
 const { ERA_HEX_FILL } = require("../components/EraHex") as typeof import("../components/EraHex");
-const { readStripped, sliceBetween, anchorIndex } =
+const { readStripped, sliceBetween, expectOrder, readShell } =
   require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const LEDGER = readStripped("components/FinancialLedger.tsx");
 const TOAST = readStripped("components/ActionToast.tsx");
 const POPOVER = readStripped("components/AudioControlPopover.tsx");
@@ -221,11 +221,9 @@ describe("the variant cue does not happen twice", () => {
     expect(block).toContain("YellowSignEvent");
     expect(block).not.toContain("if (ephemeral) return");
     /* THE DISPATCHES ARE NOT GATED, asserted by position: each `runGameplayAction` in this block sits before
-       the flag is ever consulted. `anchorIndex` rather than `indexOf` (#1090) so a vanished anchor throws
+       the flag is ever consulted. `expectOrder` rather than `indexOf` (#1090) so a vanished anchor throws
        instead of comparing against -1. */
-    expect(anchorIndex(block, "runGameplayAction(\n                    \"YellowSignEvent\"")).toBeLessThan(
-      anchorIndex(block, "if (ephemeral && cue.audio !== null"),
-    );
+    expectOrder(block, "runGameplayAction(\n                    \"YellowSignEvent\"", "if (ephemeral && cue.audio !== null");
   });
 
   it("asks the flag that is true on both reported paths", () => {
@@ -329,6 +327,8 @@ describe("the action bar does not flicker through skipped steps", () => {
        value; every rule, gate and dispatch still reads `orSubPhase`. */
     expect(APP.split("displayedSubPhase").length - 1).toBeLessThanOrEqual(3);
     expect(APP).not.toContain("displayedSubPhase ===");
+    // The one reader, so the bound above counts something (APP-TEST-0A Integration Pass 2: `0 <= 3` passed too).
+    expect(APP).toContain("orSubPhase={displayedSubPhase}");
   });
 });
 

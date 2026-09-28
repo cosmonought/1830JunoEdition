@@ -28,6 +28,7 @@
 // that `App` still asks them.
 
 import { inspectorClickRefused } from "./inspectorClick";
+import { readShell } from "./sourceScan";
 
 const HEX = "2,7";
 const GLOW: ReadonlySet<string> = new Set(["1,7", "1,8"]);
@@ -95,15 +96,7 @@ describe("the gate still asks everything #716 and #725 gave it", () => {
 });
 
 describe("the shell asks the predicate rather than keeping a copy", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs
-      .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "")
-      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
-  })();
+  const APP = readShell();
 
   it("calls it from the hex-click handler", () => {
     expect(APP).toContain("inspectorClickRefused({");

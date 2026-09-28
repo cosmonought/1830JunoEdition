@@ -37,9 +37,9 @@ const {
 } = require("../components/DividendMoneyMachine") as typeof import("../components/DividendMoneyMachine");
 const { BUCKET_FALLBACK, variantCueFor, everySfxFile } =
   require("./variantSfx") as typeof import("./variantSfx");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const MACHINE = readStripped("components/DividendMoneyMachine.tsx");
 /* Design note #1291: the schedule is a leaf module now; the drawing is the shared panel. */
 const SCHEDULE = readStripped("components/moneyMachineSchedule.ts");

@@ -50,7 +50,7 @@ const { dividendRevenue } = require("../gameEngine/dividendSplit") as typeof imp
 const { earnableRevenueVerdict } = require("../gameEngine/earnableRevenue") as typeof import("../gameEngine/earnableRevenue");
 const { graceTurnReprieves, reprievesDoomedThisTurn } =
   require("../gameEngine/gentleRustGrace") as typeof import("../gameEngine/gentleRustGrace");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell, shellSourcePaths, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 
 /* ------------------------------------------------------------------ */
 /* Boards                                                             */
@@ -813,7 +813,7 @@ describe("T12. the timing is a function of the board and the messages alone", ()
   });
 
   it("is written and cleared only by the reducer: no shell file names the list", () => {
-    for (const file of ["App.tsx", "panels/ContextualActionBar.tsx", "components/TrainBadges.tsx", "utils/roomSession.ts"]) {
+    for (const file of [...shellSourcePaths(), "panels/ContextualActionBar.tsx", "components/TrainBadges.tsx", "utils/roomSession.ts"]) {
       expect([file, readStripped(file).includes("pending_rust_doomed_this_turn")]).toEqual([file, false]);
     }
   });
@@ -840,8 +840,8 @@ describe("invariant E. the train-limit count is not reused as 'owns a train'", (
   });
 
   it("the shell's ownership reads are raw fleet lengths, not the capacity count", () => {
-    const APP = readStripped("App.tsx");
-    const owns = APP.slice(APP.indexOf("const ownsAnyTrain = useMemo"), APP.indexOf("const bestOwnedTrain = useMemo"));
+    const APP = readShell();
+    const owns = sliceBetween(APP, "const ownsAnyTrain = useMemo", "const bestOwnedTrain = useMemo");
     expect(owns).toContain("owned_trains?.length ?? 0) > 0");
     expect(owns).toContain("return owned.length === 0;");
     expect(owns).not.toMatch(/countableTrainCount|pending_rust_trains/);

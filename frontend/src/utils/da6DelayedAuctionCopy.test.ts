@@ -28,7 +28,7 @@ const { sandboxReplayProviders } = require("../gameEngine/replayProviders") as t
 const { withEmptyRoster, waterfallForRoster } = require("../gameEngine/gameSetup") as typeof import("../gameEngine/gameSetup");
 const SS = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
 const { RoomSession } = require("./roomSession") as typeof import("./roomSession");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 /* ================================================================================================== */
 describe("the must-sell sentence (DA-F8 / DA-5's note; D-53, D-57, D-58)", () => {
@@ -254,7 +254,7 @@ describe("the copy tables (DA-F8a, DA-F8i, DA-F8j, DA-F8c/d)", () => {
 
 /* ================================================================================================== */
 describe("source pins: the shell hands the surfaces the table's own facts", () => {
-  const app = readStripped("App.tsx");
+  const app = readShell();
   it("the auction's handoff modal gets the real next Stock Round (DA-F8b)", () => {
     expect(app).toContain("nextStockRound={gameState?.macro_round_number ?? 1}");
     expect(app).toContain("delayedAuction={tableVariants.delayedAuction === true}");

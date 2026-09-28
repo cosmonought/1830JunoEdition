@@ -32,8 +32,7 @@ import {
   type SandboxLogMsg,
 } from "../gameEngine/gameSetup";
 import { decodeAction, type SandboxAction } from "./sandboxRoom";
-import fs from "fs";
-import path from "path";
+import { readShell } from "./sourceScan";
 
 /** What `subscribeSandboxLog` hands a client: the message as JSON text in a
  *  Firestore document. Built here rather than imported because the write
@@ -149,10 +148,7 @@ describe("the offer travels", () => {
  * line rather than to formatting in general, so a reformat does not break it
  * and a reintroduced `sandbox ||` does. */
 describe("who may answer", () => {
-  const source = fs.readFileSync(
-    path.join(__dirname, "..", "App.tsx"),
-    "utf8",
-  );
+  const source = readShell();
 
   it("compares the viewer's wallet to the owner's", () => {
     expect(source).toContain("viewerIsOwner={privateProposal?.ownerAddress === viewerAddress}");

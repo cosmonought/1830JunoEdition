@@ -573,8 +573,8 @@ describe("UI18 / UI21. the screen behind 'Pay $X and End Turn'", () => {
 /* ================================================================================================= */
 
 describe("the shell wires the surfaces to the shared answers (source scan, secondary)", () => {
-  const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
-  const APP = readStripped("App.tsx");
+  const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
+  const APP = readShell();
   const BAR = readStripped("panels/ContextualActionBar.tsx");
 
   it("the bar's Final Run badge and chips read the board's schedule; the stale 'this turn' sentence is gone", () => {

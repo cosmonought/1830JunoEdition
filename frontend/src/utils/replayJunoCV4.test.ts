@@ -28,7 +28,7 @@ import {
 } from "../gameEngine/sandboxState";
 import { sandboxReplayProviders } from "../gameEngine/replayProviders";
 import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readShell, readStripped, sliceBetween } from "./sourceScan";
 
 const GAME_ID = 0;
 const PRR = 1;
@@ -120,7 +120,7 @@ describe("JUNO-CV4 replays headless on the Level Playing Field", () => {
   it("judges a lay in the shell under the same rules the reducer uses", () => {
     /* THE CLIENT HALF. `filterSandboxPlacements` reads the board and tray in effect; the shell now puts this
        game's in effect for the instant of the check rather than trusting the last render to have done so. */
-    const app = readStripped("App.tsx");
+    const app = readShell();
     const check = sliceBetween(app, "const rulesBeforeAction =", "if (\"LayTile\" in msg)");
     expect(check).toContain("withRules(");
     /* Stage 10.1 (#1683): the geometry is `boardLayRefused` -- the engine providers' own `filterSandboxPlacements`

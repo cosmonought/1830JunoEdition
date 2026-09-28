@@ -75,7 +75,7 @@ import { shareSaleBlock } from "../gameEngine/shareSale";
 import { dividendRefused } from "../gameEngine/dividendGate";
 import { describeAuctionTransition } from "./auctionTransition";
 import { RoomSession } from "./roomSession";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 import { operatingBoard, stockRoundBoard, P1, P2, PRR, NYC } from "./offerFixtures74";
 import { withCorp, withState, M } from "./offerMatrix74Support";
 
@@ -593,7 +593,7 @@ describe("C. the shell's market sentence asks the reducer's own chart step", () 
 /* ================================================================================================= */
 
 describe("D. App.tsx builds its reducer context from the shared composition, not inline", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("uses the engine's provider set and both shared builders", () => {
     expect(APP).toContain("const SHELL_PROVIDERS = sandboxReplayProviders();");

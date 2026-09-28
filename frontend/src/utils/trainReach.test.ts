@@ -13,6 +13,7 @@
 
 import { UNLIMITED_REACH, isUnlimitedReach, overrunsReach, reachForDrafting } from "../gameEngine/trainReach";
 import { SMALLEST_TRAIN_CAPACITY } from "../gameEngine/gameConstants";
+import { readShell } from "./sourceScan";
 
 describe("the Diesel is unlimited, whoever asks", () => {
   it("never overruns", () => {
@@ -75,7 +76,7 @@ describe("nobody keeps a private copy of the rule", () => {
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
       .replace(/^\s*\/\/.*$/gm, "");
   };
-  const APP = read("App.tsx");
+  const APP = readShell();
   const TRACE = read("gameEngine/routeAutoTrace.ts");
   /* Design note #882 moved the DRAWING end of this rule out of `App.tsx` and into the route-edit module, so
      two of the assertions below follow it. The rule did not change; only its address did. */

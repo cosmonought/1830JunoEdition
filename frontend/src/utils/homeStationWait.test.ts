@@ -53,6 +53,8 @@ export {};
 // BOARD and identical on every client; "is this viewer the one who must place it" is a different question
 // with its own home. A viewer test creeping back into the first is the regression to catch.
 
+const { readShell, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+
 const PROMPT = (() => {
   const fs = require("fs") as typeof import("fs");
   const path = require("path") as typeof import("path");
@@ -60,12 +62,6 @@ const PROMPT = (() => {
     path.join(__dirname, "..", "components", "HomeStationPrompt.tsx"),
     "utf8",
   );
-})();
-
-const APP = (() => {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
 })();
 
 /** #490a: the notes quote both arms of the copy while explaining them. */
@@ -76,7 +72,7 @@ const strip = (raw: string) =>
     .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
 
 const CODE = strip(PROMPT);
-const APP_CODE = strip(APP);
+const APP_CODE = readShell();
 
 describe("a watcher is told what the table is waiting for", () => {
   it("names the person", () => {
@@ -144,10 +140,7 @@ describe("the default cannot regress an existing caller", () => {
 
 describe("the watcher's arm can actually be reached (design note #788)", () => {
   /** The memo that decides whether the modal renders at all. */
-  const MEMO = APP_CODE.slice(
-    APP_CODE.indexOf("const pendingHomeToken = useMemo"),
-    APP_CODE.indexOf("const privateTileHexKeyRef"),
-  );
+  const MEMO = sliceBetween(APP_CODE, "const pendingHomeToken = useMemo", "const privateTileHexKeyRef");
 
   it("has a memo to inspect", () => {
     // The slice guard: a boundary that moves silently would make every assertion below vacuous.

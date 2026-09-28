@@ -33,14 +33,14 @@
 
 export {};
 
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 const { UI_SCALE, CHROME_ZOOM, styles } =
   require("../styles/appStyles") as typeof import("../styles/appStyles");
 /* Design note #1273: the preference behind the constant. */
 const { UI_SCALE_DEFAULT, UI_SCALE_DESIGN, UI_SCALE_STEPS, snapUiScale } =
   require("./uiScale") as typeof import("./uiScale");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const APPSTYLES = readStripped("styles/appStyles.ts");
 const LOBBY = readStripped("components/Lobby.tsx");
 const WAITING = readStripped("components/SandboxWaitingRoom.tsx");

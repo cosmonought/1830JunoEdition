@@ -20,14 +20,14 @@
 //
 // Source scans plus one pure-function call, so this file takes the node environment.
 
-import { readSource, readStripped, sliceBetween, stripComments } from "./sourceScan";
+import { readSource, readStripped, sliceBetween, stripComments, readShell, readShellRaw } from "./sourceScan";
 
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "./privateCatalog";
 import { GAMEPLAY_MESSAGE_KEYS } from "./sessionKey";
 
 /* #490a: the notes quote the code they replaced, so every code assertion reads a comment-stripped copy. */
 
-const APP = stripComments(readSource("App.tsx"));
+const APP = readShell();
 const BAR = stripComments(readSource("panels/ContextualActionBar.tsx"));
 const MODAL = stripComments(readSource("components/PrivatePowerFlowModal.tsx"));
 const STYLES = stripComments(readSource("styles/appStyles.ts"));
@@ -37,11 +37,7 @@ describe("a refused exchange keeps the question open (design note #882)", () => 
     /* THE BUG, STATED AS A SHAPE: two statements with no relationship between them. The fix is that the
        close is INSIDE the success branch, which a reader can see and a future edit cannot undo by accident
        the way deleting a separate guard could. */
-    const at = APP.indexOf("const handlePowerFlowAct");
-    expect(at).toBeGreaterThan(-1);
-    const end = APP.indexOf("const handlePowerFlowDecline", at);
-    expect(end).toBeGreaterThan(at);
-    const body = APP.slice(at, end);
+    const body = sliceBetween(APP, "const handlePowerFlowAct", "const handlePowerFlowDecline");
     expect(body).not.toBe("");
     expect(body).toContain(
       'if (runPrivateExchange(MH_PRIVATE_ID, "Exchange for NYC share")) {',
@@ -57,11 +53,7 @@ describe("a refused exchange keeps the question open (design note #882)", () => 
     /* A RETURN VALUE RATHER THAN A SECOND PIECE OF STATE the caller inspects: `ok` is what the caller needs
        and `resolvePrivateExchange` already computed it. A caller reading the error state instead would be
        reading a value written for the modal, one render late. */
-    const at = APP.indexOf("const runPrivateExchange = useCallback(");
-    expect(at).toBeGreaterThan(-1);
-    const end = APP.indexOf("const handlePowerFlowAct", at);
-    expect(end).toBeGreaterThan(at);
-    const body = APP.slice(at, end);
+    const body = sliceBetween(APP, "const runPrivateExchange = useCallback(", "const handlePowerFlowAct");
     expect(body).not.toBe("");
     expect(body).toContain("): boolean => {");
     expect(body).toContain("return false;");
@@ -81,11 +73,7 @@ describe("a refused exchange keeps the question open (design note #882)", () => 
     /* SCOPING BY KEY CANNOT CATCH THIS ONE: a SAME-power refusal goes stale the moment the player acts on
        it ("sell a share first"), and they can come straight back. Cleared where the question is raised
        rather than where the modal closes, because closing is not the event that makes it stale. */
-    const at = APP.indexOf("const handleChipPowerOffer");
-    expect(at).toBeGreaterThan(-1);
-    const end = APP.indexOf("const runPrivateExchange", at);
-    expect(end).toBeGreaterThan(at);
-    const body = APP.slice(at, end);
+    const body = sliceBetween(APP, "const handleChipPowerOffer", "const runPrivateExchange");
     expect(body).not.toBe("");
     expect(body).toContain("setPrivatePowerRefusal(null);");
   });
@@ -138,11 +126,7 @@ describe("the exchange is offered only where it can be honoured (design note #88
        WHAT IS LEFT FOR THE SHELL TO GET WRONG is the WIRING: passing a constant, passing the wrong flag, or
        omitting it from the dependency list. That is what this asserts, and it is genuinely the shell's
        business rather than the module's. */
-    const at = APP.indexOf("const stockRoundPowerOffers");
-    expect(at).toBeGreaterThan(-1);
-    const end = APP.indexOf("const privatePowerOffersRef", at);
-    expect(end).toBeGreaterThan(at);
-    const body = APP.slice(at, end);
+    const body = sliceBetween(APP, "const stockRoundPowerOffers", "const privatePowerOffersRef");
     expect(body).not.toBe("");
     expect(body).toContain("stockRoundExchangeOffers({");
     expect(body).toContain("sandbox,");
@@ -250,7 +234,7 @@ describe("the powers panel is gone, and took nothing live with it (design note #
   it("keeps both deleted records where a reader will find them", () => {
     /* #814: quoted on ONE LINE, because a wrapped quote preserves the words and destroys the string -- and
        a harness looking for the record searches for the string. Read off the RAW file, per #490a. */
-    const appRaw = readSource("App.tsx");
+    const appRaw = readShellRaw();
     expect(appRaw).toContain(
       "Mohawk & Hudson - the owner may exchange this private for a 10% share of the New York Central (NYC). The exchange closes this private permanently.",
     );

@@ -31,6 +31,7 @@ import { describeGameplayAction } from "./actionLog";
 import { dividendSplit, dividendRevenue } from "../gameEngine/dividendSplit";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { readShell } from "./sourceScan";
 
 const CO = 3;
 
@@ -144,15 +145,11 @@ describe("the sentence no longer predicts a price", () => {
     expect(strip(fs.readFileSync(path.join(__dirname, "actionLog.ts"), "utf8"))).not.toContain(
       "projectPrice",
     );
-    expect(strip(fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8"))).not.toContain(
-      "projectPrice",
-    );
+    expect(readShell()).not.toContain("projectPrice");
   });
 
   it("leaves Market Move as the one price reporter", () => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const app = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+    const app = readShell();
     // #435's line, built from the atom's own `moved` result -- the one the report confirmed correct.
     expect(app).toContain('logInfo("Market Move"');
     expect(app).toContain("marketResult.moved");

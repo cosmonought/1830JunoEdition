@@ -21,7 +21,7 @@ import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameSt
 import { depotInventory, openDepotTiers } from "../gameEngine/gamePhase";
 import { gildedSalePositions } from "../gameEngine/trainSaleAuthority";
 import * as S from "../utils/yellowSignRunBoundSupport";
-import { readStripped } from "../utils/sourceScan";
+import { readShell } from "../utils/sourceScan";
 import { offerSettlesAsBloodPrice } from "../utils/saleCopyDisclosure";
 
 declare global {
@@ -173,7 +173,7 @@ describe("the consent prompt tells the seller which copy it is answering for", (
 });
 
 describe("the shell dispatches the copy it was handed (source pins; App.tsx has no render harness)", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
   it("the proposal, the direct buy and the pending offer all carry `gilded` -- and only when it was named", () => {
     expect(APP).toContain("...(proposal.gilded === undefined ? {} : { gilded: proposal.gilded }),");
     expect(APP).toContain("gilded: proposal.gilded,");

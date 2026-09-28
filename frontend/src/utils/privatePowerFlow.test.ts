@@ -20,7 +20,7 @@
 // the action bar -- and the player was looking at the map. An exit nobody can find is not an exit, which is
 // #279's own test applied to a control instead of a sentence.
 
-import { readSource, readStripped, stripComments } from "./sourceScan";
+import { readSource, readStripped, stripComments, readShell, sliceBetween, expectOrder } from "./sourceScan";
 
 import { powerFlowOpen, privatePowerFlow } from "./privatePowerFlow";
 
@@ -136,7 +136,7 @@ describe("the copy carries the rules difference", () => {
 });
 
 describe("the shell derives the flow instead of remembering it (design note #849)", () => {
-    const APP = stripComments(readSource("App.tsx"));
+    const APP = readShell();
 
   it("raises the modal on an unresolved D&H without being told to", () => {
     /* THE REOPENING IS A DERIVATION, not an event. The D&H's second step happens after the lay, and a D&H
@@ -154,9 +154,7 @@ describe("the shell derives the flow instead of remembering it (design note #849
        the shell asks the extracted function at all, and hands it the standing-obligation inputs rather than
        only the click. */
     expect(APP).toContain("deriveActivePowerFlow({");
-    const at = APP.indexOf("deriveActivePowerFlow({");
-    expect(at).toBeGreaterThan(-1);
-    const call = APP.slice(at, APP.indexOf("});", at));
+    const call = sliceBetween(APP, "deriveActivePowerFlow({", "});");
     expect(call).not.toBe("");
     expect(call).toContain("request: privatePowerRequest,");
     expect(call).toContain("usedAbilities: usedPrivateAbilities,");
@@ -215,16 +213,12 @@ describe("the shell derives the flow instead of remembering it (design note #849
        one entry point that exists sets a request. The absence is the half that would silently come back --
        a future "convenience" that arms directly from a chip is exactly 6a again. */
     expect(APP).toContain("if (offer) setPrivatePowerRequest(offer.abilityKey);");
-    const start = APP.indexOf("const handleChipPowerOffer");
-    expect(start).toBeGreaterThan(-1);
     /* BOUNDED AT `runPrivateExchange`'s OWN DECLARATION, which is the next thing in the file. The first
        draft bounded at `handlePowerFlowAct` and swept the declaration INTO the slice, so the
        `not.toContain` below failed on the definition rather than on a call -- an anchor placed downstream
        of the thing being looked for, which is the same trap as an anchor placed upstream and reads as a
        real failure rather than as a vacuous pass. */
-    const end = APP.indexOf("const runPrivateExchange", start);
-    expect(end).toBeGreaterThan(start);
-    const chip = APP.slice(start, end);
+    const chip = sliceBetween(APP, "const handleChipPowerOffer", "const runPrivateExchange");
     expect(chip).not.toBe("");
     expect(chip).not.toContain("armPrivateHexErrand");
     expect(chip).not.toContain("runPrivateExchange");
@@ -247,7 +241,7 @@ describe("the shell derives the flow instead of remembering it (design note #849
 });
 
 describe("one hex, one question (design note #850)", () => {
-  const APP = readSource("App.tsx").replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+  const APP = readShell();
 
   it("refuses the tile picker while a token placement is staged", () => {
     /* REPORTED: "the tileselector radial menu popped up on top of the checkmark/x for the station. I then
@@ -258,22 +252,14 @@ describe("one hex, one question (design note #850)", () => {
   });
 
   it("asks before the ring opens, not after", () => {
-    const guard = APP.indexOf("if (pendingTokenRef.current !== null) return;");
-    const open = APP.indexOf("setRadialSelector({");
-    expect(guard).toBeGreaterThan(-1);
-    expect(open).toBeGreaterThan(-1);
-    expect(guard).toBeLessThan(open);
+    expectOrder(APP, "if (pendingTokenRef.current !== null) return;", "setRadialSelector({");
   });
 
   it("sends the ring's X back to the modal rather than forfeiting", () => {
     /* #818: cancelling a PLACEMENT is not declining a POWER. Clearing the errand returns the player to the
        flow, where the forfeit is a button that says what it does -- so the red X keeps the single meaning it
        has everywhere else in this app. */
-    const start = APP.indexOf("const handleCancelTokenPlacement");
-    expect(start).toBeGreaterThan(-1);
-    const end = APP.indexOf("}, []);", start);
-    expect(end).toBeGreaterThan(start);
-    const body = APP.slice(start, end);
+    const body = sliceBetween(APP, "const handleCancelTokenPlacement", "}, []);");
     expect(body).toContain("setPendingToken(null);");
     expect(body).toContain("setHomeStationPlacement(null);");
     expect(body).not.toContain("dh-token");

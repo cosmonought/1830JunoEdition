@@ -48,6 +48,7 @@ import { withReservationNote } from "../components/HexGridRenderer";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import type { MapGridResponse } from "../components/hexContractTypes";
+import { readShell } from "./sourceScan";
 
 const PRR = 1;
 const NYC = 3;
@@ -712,7 +713,8 @@ describe("S7-17 no authority decision is taken by object identity", () => {
   it("the remaining comparisons are the classified ones", () => {
     // Two phase-TIER comparisons (`derivePhase(...)?.tier`), not boards.
     expect(count("gameEngine/sandboxSession.ts")).toBe(2);
-    // The discard flourish's `before !== after` -- cosmetic, not a refusal decision.
-    expect(count("App.tsx")).toBe(1);
+    // The discard flourish's `before !== after` -- cosmetic, not a refusal decision. Counted over the whole
+    // shell (App.tsx and shell/**, comment-stripped), wherever the flourish's raiser lives.
+    expect((readShell().match(PATTERN) ?? []).length).toBe(1);
   });
 });

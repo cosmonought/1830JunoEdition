@@ -46,11 +46,11 @@ const {
   CARCOSA_FOG_LINE,
   CARCOSA_STAMP_STEP,
 } = require("./carcosaCurse") as typeof import("./carcosaCurse");
-const { readStripped, sliceBetween, anchorIndex } =
+const { readStripped, sliceBetween, anchorIndex, readShell } =
   require("./sourceScan") as typeof import("./sourceScan");
 import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const SESSION = readStripped("gameEngine/sandboxSession.ts");
 const YELLOW = readStripped("gameEngine/yellowSign.ts");
 /* #1501: the chart's projections moved to the engine; the renderer draws with them and re-exports them.

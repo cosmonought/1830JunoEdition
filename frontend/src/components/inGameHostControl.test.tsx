@@ -5,8 +5,6 @@
 // players; it asks twice; and it sends exactly the named op's target (the server remains the authority). The App
 // wires it to the same `transfer-host` room-op the waiting room uses.
 
-import * as fs from "fs";
-import * as path from "path";
 import React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -14,6 +12,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { InGameHostControl } from "./InGameHostControl";
 import type { RoomView } from "../utils/roomProtocol";
 import { NO_MONEY_UNDO_POLICY } from "../gameEngine/logRevert";
+import { readShell } from "../utils/sourceScan";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -98,7 +97,7 @@ describe("in-game host transfer (LIVE-2E)", () => {
   });
 
   it("the shell mounts it with the same transfer-host op the waiting room uses", () => {
-    const app = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+    const app = readShell();
     expect(app).toMatch(/<InGameHostControl room=\{sandboxRoom\} busy=\{sandboxRoomBusy\} onTransferHost=\{handleTransferHost\} \/>/);
     expect(app).toMatch(/const handleTransferHost = useCallback\(\(toPlayerId: string\) => void runRoomOp\(\{ type: "transfer-host", toPlayerId \}\)/);
   });

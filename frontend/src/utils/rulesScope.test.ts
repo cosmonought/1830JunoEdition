@@ -22,23 +22,34 @@
 
 export {};
 
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell, sliceBetween, occurrences } = require("./sourceScan") as typeof import("./sourceScan");
 
 /** The readers that walk `STATIC_BOARD_HEXES` or the tray and answer a rule. */
 const READERS = ["nextDerivedAction(", "filterSandboxPlacements("] as const;
 
-/** Files whose calls run with no render to put the board in effect: the engine, and the shell's dispatch. */
-const RENDER_FREE: ReadonlyArray<{ file: string; region?: [string, string] }> = [
-  { file: "gameEngine/replayLog.ts" },
+/** Files whose calls run with no render to put the board in effect: the engine, and the shell's dispatch.
+ *  APP-TEST-0A: the shell's region is read through `readShell()` and cut with `sliceBetween`, so it follows
+ *  `runGameplayAction` into `shell/**` and throws, rather than scanning nothing, if either anchor is lost. */
+/*  `witness` (APP-TEST-0A): what proves the scanned text is the rules-scoped code the case is about. The shell's
+    region holds NO reader call today -- lay legality moved behind `withRules(rulesBeforeAction, ...)` in Stage
+    10.3 (#1690) -- so for it the case is an absence ("no unwrapped reader creeps back into the dispatch"), and
+    an absence needs its region to be the real one: the dispatch's own `withRules(` scope. */
+const RENDER_FREE: ReadonlyArray<{ file: string; read: () => string; region?: [string, string]; witness: string }> = [
+  { file: "gameEngine/replayLog.ts", read: () => readStripped("gameEngine/replayLog.ts"), witness: "withRules(" },
   /* The shell's dispatch only -- `runGameplayAction`'s body, which a rebuild runs 150 times before the first
      paint. The picker's and the veil's calls live elsewhere in the file and are render-time. */
-  { file: "App.tsx", region: ["const gridBeforeAction = mapGridRef.current;", "if (\"LayTile\" in msg)"] },
+  {
+    file: "shell: runGameplayAction",
+    read: () => readShell(),
+    region: ["const gridBeforeAction = mapGridRef.current;", "if (\"LayTile\" in msg)"],
+    witness: "withRules(",
+  },
 ];
 
 function unwrappedCalls(source: string, reader: string): string[] {
   const out: string[] = [];
-  let at = source.indexOf(reader);
-  while (at !== -1) {
+  /* `allowNone`: not every render-free file calls every reader, and "every call is wrapped" is true of none. */
+  for (const at of occurrences(source, reader, { allowNone: true })) {
     /* Back to the start of the statement: the previous line that ends a statement or opens a block. A
        wrapper on the same statement -- `withRules(v, () => reader(...))` -- is within this window. */
     const statementStart = Math.max(
@@ -50,20 +61,15 @@ function unwrappedCalls(source: string, reader: string): string[] {
     if (!statement.includes("withRules(") && !statement.includes("withBoard(")) {
       out.push(source.slice(at, at + 60).replace(/\s+/g, " "));
     }
-    at = source.indexOf(reader, at + reader.length);
   }
   return out;
 }
 
 describe("a board-table reader that runs without a render is scoped to the game's rules", () => {
-  it.each(RENDER_FREE)("$file", ({ file, region }) => {
-    let source = readStripped(file);
-    if (region) {
-      const start = source.indexOf(region[0]);
-      const end = source.indexOf(region[1], start);
-      expect([file, start, end].every((v) => v !== -1)).toBe(true);
-      source = source.slice(start, end);
-    }
+  it.each(RENDER_FREE)("$file", ({ file, read, region, witness }) => {
+    const whole = read();
+    const source = region ? sliceBetween(whole, region[0], region[1]) : whole;
+    expect([file, witness, source.includes(witness)]).toEqual([file, witness, true]);
     for (const reader of READERS) {
       expect([file, reader, unwrappedCalls(source, reader)]).toEqual([file, reader, []]);
     }

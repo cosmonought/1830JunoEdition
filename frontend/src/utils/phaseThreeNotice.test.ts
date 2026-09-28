@@ -1,9 +1,9 @@
 /** @jest-environment node */
 // frontend/src/utils/phaseThreeNotice.test.ts -- design notes #1440/#1441.
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 
 describe("the Phase 3 notice (design note #1441)", () => {
-  const app = readStripped("App.tsx");
+  const app = readShell();
   const modal = readStripped("components/PhaseThreeNoticeModal.tsx");
 
   it("is raised on the 2 -> 3 edge of the derived phase, seeded from the first observation", () => {

@@ -36,9 +36,9 @@ const {
 } =
   require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
 const { variantCueFor } = require("./variantSfx") as typeof import("./variantSfx");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const OVERLAY = readStripped("components/YellowSignOverlay.tsx");
 const SIGN = readStripped("gameEngine/yellowSign.ts");
 

@@ -19,11 +19,11 @@
 
 export {};
 
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 const MACHINE = readStripped("components/DividendMoneyMachine.tsx");
 const BAR = readStripped("panels/ContextualActionBar.tsx");
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 describe("the payout panel merges the figure rather than closing a gap (design note #1291)", () => {
   /* ==================================================================

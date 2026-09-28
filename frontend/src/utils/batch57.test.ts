@@ -25,25 +25,24 @@
 
 export {};
 
-const { readStripped, readSource, sliceBetween, anchorIndex } =
+const { readStripped, sliceBetween, sliceFrom, expectOrder, readShell } =
   require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const TOPBAR = readStripped("components/TopBar.tsx");
 const FOOTER = readStripped("components/AppFooter.tsx");
 const ROOMBAR = readStripped("components/SandboxRoomBar.tsx");
 const SHEET = readStripped("styles/appStyles.ts");
 
-/** Both sides through `anchorIndex`, so a missing anchor throws rather than passing as -1. */
+/** Through `expectOrder`, so a missing anchor throws rather than passing as -1, and two anchors in different
+ *  shell files are refused rather than ordered by concatenation. */
 const above = (haystack: string, first: string, second: string) => {
 
 /* Design note #1151 superseded the SPELLING of the radius assertions in this file, not their claims. The app held twelve
    near-identical radii doing the work of one; they are three named steps now, so a case that pinned a pixel value was
    testing the literal rather than the property it stood for. Each reads the token it now is. */
 
-  expect(anchorIndex(haystack, first, `first: ${first}`)).toBeLessThan(
-    anchorIndex(haystack, second, `second: ${second}`),
-  );
+  expectOrder(haystack, first, second);
 };
 
 /* ------------------------------------------------------------------ */
@@ -94,7 +93,7 @@ describe("the action bar is global rather than workspace-only", () => {
        first time. Asserted as "not inside the branch" rather than as its position, because a bar rendered
        above the tabs but still wrapped in `isWorkspaceTab` would satisfy every ordering case above and still
        leave the reference tabs bare. */
-    const workspace = APP.slice(anchorIndex(APP, "{isWorkspaceTab && ("));
+    const workspace = sliceFrom(APP, "{isWorkspaceTab && (");
     expect(workspace).not.toContain("<ContextualActionBar");
     expect(workspace).not.toContain("{spectator ? (");
   });

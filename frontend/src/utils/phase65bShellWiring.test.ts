@@ -9,14 +9,16 @@
 // using the same pure functions the shell calls. What only the shell's source can show is that it calls them, with
 // the right inputs, in the right place -- that is this file.
 //
-// WRITTEN CONSERVATIVELY for the APP-TEST-0A reader migration (not merged; not depended on): every scan reads the
-// comment-stripped `App.tsx` (`readStripped`, #490a) and every bounded region is taken with `sliceBetween`, which
-// throws on a missing anchor, so nothing here can pass against an empty slice. When `readShell()` lands, the reads
-// convert one-for-one.
+// READS THE SHELL, NOT THE FILE (APP-TEST-0A, Integration Pass 2). Every scan reads `readShell()` -- the
+// comment-stripped `App.tsx` plus every future `src/shell/**` module (#490a) -- so each assertion keeps testing the
+// wiring after the App decomposition moves it, and cannot pass because the code left `App.tsx`. Every bounded
+// region is a `sliceBetween`, which throws on a missing anchor or a region that would cross a file, and every
+// ordering is an `expectOrder`, which throws on a missing anchor or anchors in two files. Nothing here reads
+// `App.tsx` alone: none of these facts belongs to the composition root.
 
-import { readStripped, sliceBetween } from "./sourceScan";
+import { expectOrder, readShell, readStripped, sliceBetween } from "./sourceScan";
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 describe("K-10: the ordinary private prompt never represents a funding offer", () => {
   it("`privateProposal` is the pure view, which is null for `funding: true`", () => {
@@ -36,6 +38,11 @@ describe("K-09: the consent props that now gate Reject as well as Accept are unc
   it("the owner and the selling president, compared by wallet", () => {
     expect(APP).toContain("viewerIsOwner={privateProposal?.ownerAddress === viewerAddress}");
     expect(APP).toContain("liveTrainOffer !== null || sandboxTrainProposal?.sellerPresident === viewerAddress");
+    // K-10's funding prompt: the buying president answers. `phase65bConsentPrompts` renders a copy of this
+    // expression, so the shell's own is pinned here (Integration Pass 2 review).
+    expect(APP).toContain(
+      "viewerIsBuyerPresident={fundingPrivateOffer !== null && fundingPrivateOffer.buyerPresident === viewerAddress}",
+    );
   });
 
   it("both prompts gate Reject on that same prop, with a disabled look (#681)", () => {
@@ -54,12 +61,12 @@ describe("K-09: the consent props that now gate Reject as well as Accept are unc
 describe("K-08: the Stock Round sale verdict asks the sale authority first for an unparred corporation", () => {
   it("`saleBlockFor` = the Sell-Buy-Sell stage gate, then `unstartedCorporationSaleRefusal`, then `shareSaleBlock`", () => {
     const body = sliceBetween(APP, "const saleBlockFor = useCallback(", "const [marketPeek, setMarketPeek]");
-    const stage = body.indexOf('stockTurnStage(gameState) === "buy"');
-    const unstarted = body.indexOf("unstartedCorporationSaleRefusal({ state: gameState, seller: viewerAddress, companyId, percentage })");
-    const shared = body.indexOf("return shareSaleBlock({ state: gameState, seller: viewerAddress, companyId, percentage });");
-    expect(stage).toBeGreaterThan(-1);
-    expect(unstarted).toBeGreaterThan(stage);
-    expect(shared).toBeGreaterThan(unstarted);
+    expectOrder(
+      body,
+      'stockTurnStage(gameState) === "buy"',
+      "unstartedCorporationSaleRefusal({ state: gameState, seller: viewerAddress, companyId, percentage })",
+      "return shareSaleBlock({ state: gameState, seller: viewerAddress, companyId, percentage });",
+    );
   });
 
   it("the shared `shareSaleBlock` gained no par check of its own", () => {
@@ -147,10 +154,7 @@ describe("K-01: the Stock Round Private Companies section, its handlers, its pro
 
   it("Pass is greyed with the hold, right after the home-token block", () => {
     const pass = sliceBetween(APP, "passDisabledReason={", "turnActionTaken=");
-    const home = pass.indexOf("homeTokenBlock({");
-    const hold = pass.indexOf("privateTradeHold ??");
-    expect(home).toBeGreaterThan(-1);
-    expect(hold).toBeGreaterThan(home);
+    expectOrder(pass, "homeTokenBlock({", "privateTradeHold ??");
   });
 
   it("the M&H's Stock Round exchange chip is greyed with the hold (it is not turn-gated, so only the hold refuses it)", () => {

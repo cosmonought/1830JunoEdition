@@ -18,7 +18,7 @@ import {
   setRoomColors,
   takenSeatColors,
 } from "./playerLabels";
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 import { CORPORATION_LIVERY_COLORS } from "../styles/corporationLivery";
 
 afterEach(() => setRoomColors({}));
@@ -208,13 +208,13 @@ describe("#1337: the roster resolves to distinct colours", () => {
     expect(ROOM).toContain("const resolvedColors = resolveSeatColors(players);");
     expect(ROOM).toContain("(player) => resolvedColors[player.id] === color && player.id !== localPlayerId,");
     expect(ROOM).not.toContain("player.color ?? SEAT_COLORS[");
-    expect(readStripped("App.tsx")).toContain("setRoomColors(resolveSeatColors(msg.SetupGame.players));");
+    expect(readShell()).toContain("setRoomColors(resolveSeatColors(msg.SetupGame.players));");
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     /* LIVE-2D: the server's `set-profile` (`rooms/roomService.ts`) -- first write wins; a colour another seat holds is
        refused `color-taken`, and the client withdraws its echo on that answer. */
     const SERVER = fs.readFileSync(path.join(__dirname, "..", "..", "..", "server", "src", "rooms", "roomService.ts"), "utf8");
     expect(SERVER).toContain('return refused("color-taken", "Another player has that colour.");');
-    expect(readStripped("App.tsx")).toContain('if (!ok) setPendingSeat((current) => dropSeatKeys(current, ["color"]));');
+    expect(readShell()).toContain('if (!ok) setPendingSeat((current) => dropSeatKeys(current, ["color"]));');
   });
 });

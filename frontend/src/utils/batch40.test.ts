@@ -23,9 +23,9 @@ const { watcherTrainDrafts } =
   require("./watcherRouteChips") as typeof import("./watcherRouteChips");
 const { describeGameplayAction } =
   require("./actionLog") as typeof import("./actionLog");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 /* ------------------------------------------------------------------ */
 /* Item 1 -- design note #1020                                         */

@@ -26,9 +26,9 @@ export {};
 
 const { privateClosureAlert, privateClosureTier, purchasesUntilTier, purchaseWarnings } =
   require("./purchaseWarnings") as typeof import("./purchaseWarnings");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const PILLS = readStripped("components/PrivateCompanyPills.tsx");
 const CARDS = readStripped("components/PlayerCards.tsx");
 const LEDGER = readStripped("components/FinancialLedger.tsx");

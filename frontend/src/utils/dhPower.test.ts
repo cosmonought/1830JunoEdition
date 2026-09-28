@@ -26,6 +26,7 @@ import {
   dhPowerState,
 } from "../gameEngine/dhPower";
 import { privateHexFor } from "../gameEngine/privateReservations";
+import { readShell } from "./sourceScan";
 
 const FRESH = { hexBuilt: false, layUsed: false, tokenUsed: false };
 
@@ -131,11 +132,7 @@ describe("F16 is the hex the rest of the app already means", () => {
 });
 
 describe("both connectivity gates are overridden, not just the visible one", () => {
-  const app = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-  })();
+  const app = readShell();
 
   it("lets the ring open on the power's own hex", () => {
     /* (a)'s FIRST half: #716 refuses to open a picker outside the acting corporation's reach, which is exactly

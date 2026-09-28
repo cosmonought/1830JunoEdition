@@ -22,9 +22,9 @@
 
 export {};
 
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const TOPBAR = readStripped("components/TopBar.tsx");
 const BAR = readStripped("panels/ContextualActionBar.tsx");
 const CONTROLS = readStripped("components/AudioControls.tsx");

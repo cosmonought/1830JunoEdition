@@ -23,11 +23,11 @@
 export {};
 
 const { purchaseWarnings } = require("./purchaseWarnings") as typeof import("./purchaseWarnings");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 const BAR = readStripped("panels/ContextualActionBar.tsx");
 const LEDGER = readStripped("components/FinancialLedger.tsx");
-const APP = readStripped("App.tsx");
+const APP = readShell();
 
 /* The fixture `buyTrainsPanel.test.ts` uses, kept in step deliberately: two files describing one function
    from two different phases is how a rule comes to be asserted twice and differently.

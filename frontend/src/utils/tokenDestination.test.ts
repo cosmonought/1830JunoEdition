@@ -33,6 +33,7 @@ import { previewTokenMigration, tokenDestinationChoices } from "./tokenMigration
 import { printedArtworkEdgePairs } from "../components/TileGraphics";
 import type { MapGridResponse, StationTokenCompany } from "../components/hexContractTypes";
 import { STATION_HOME_HEXES } from "../components/hexContractTypes";
+import { readShell } from "./sourceScan";
 
 /** ERIE's home: Dunkirk & Buffalo, a preprinted double city with no tile on it. */
 const ERIE_HOME = STATION_HOME_HEXES.find((entry) => entry.companyId === 6)!;
@@ -132,7 +133,7 @@ describe("the answer travels, because a choice the log drops is not a choice", (
     const path = require("path") as typeof import("path");
     return fs.readFileSync(path.join(__dirname, "..", relative), "utf8");
   };
-  const APP = read("App.tsx");
+  const APP = readShell();
   const REDUCER = read("gameEngine/sandboxSession.ts");
   const WIRE = read("utils/sessionKey.ts");
 
@@ -177,11 +178,7 @@ describe("the answer travels, because a choice the log drops is not a choice", (
 });
 
 describe("the rotate gesture carries the second dimension", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-  })();
+  const APP = readShell();
 
   it("advances the city only after the angles wrap", () => {
     /* REQUESTED: "let players click through every possible Green tile upgrade with the station marker on one

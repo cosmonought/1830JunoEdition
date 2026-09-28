@@ -28,7 +28,8 @@ export {};
 
 const fs = require("fs") as typeof import("fs");
 const path = require("path") as typeof import("path");
-const { readSource, stripComments } = require("./sourceScan") as typeof import("./sourceScan");
+const { readSource, stripComments, shellSourcePaths, SHELL_ROOT_FILE } =
+  require("./sourceScan") as typeof import("./sourceScan");
 const { MAP_TOUCH_ACTION } = require("./mapGesture") as typeof import("./mapGesture");
 const {
   resolveUiScale,
@@ -204,7 +205,7 @@ describe("no surface refuses the pinch except the one that drags", () => {
        whole application while leaving the viewport tag innocent -- and it would look like a scroll fix. The
        case above proves the file list; this one names the files that must never join it, because those are
        the ones a scroll fix would reach for. */
-    const shell = ["App.tsx", "index.tsx", "styles/appStyles.ts", "styles/palette.ts"];
+    const shell = [...shellSourcePaths(), "index.tsx", "styles/appStyles.ts", "styles/palette.ts"];
     const declaring = SOURCES.filter((f) => /touchAction\s*:|touch-action\s*:/.test(f.code)).map((f) => f.rel);
     shell.forEach((file) => expect(declaring).not.toContain(file));
   });
@@ -269,7 +270,7 @@ const GLOBAL_TARGETS = "window|document|document\\.body|document\\.documentEleme
 
 /** The game-room shell and the application root. A wheel prop here would cover the whole room, so it is the
  *  element-level equivalent of a document listener. */
-const SHELL_FILES = ["App.tsx", "index.tsx"];
+const SHELL_FILES = [...shellSourcePaths(), "index.tsx"];
 
 type WheelSource = { rel: string; code: string };
 
@@ -408,7 +409,7 @@ describe("nothing cancels a zoom gesture out from under the reader", () => {
         code: "const handleWheel = useCallback((event) => {\n  event.preventDefault();\n}, []);\n<canvas onWheel={handleWheel} />",
       },
       { rel: "utils/somewhere.ts", code: 'document.addEventListener("touchmove", block, { passive: false });' },
-      { rel: "App.tsx", code: "<div onWheel={swallow} />" },
+      { rel: SHELL_ROOT_FILE, code: "<div onWheel={swallow} />" },
     ];
     for (const probe of probes) {
       const found = wheelOffences([probe]);

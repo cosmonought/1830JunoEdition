@@ -29,11 +29,11 @@ const {
   MONEY_MACHINE_HOLD_MS,
   MONEY_MACHINE_MERGE_AT_MS,
 } = require("../components/DividendMoneyMachine") as typeof import("../components/DividendMoneyMachine");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const MACHINE = readStripped("components/DividendMoneyMachine.tsx");
 /* Design note #1291: the panel both machines draw. Cases about what is DRAWN moved here; cases about the
    schedule and the sound stay on the machine. */

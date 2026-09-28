@@ -4,7 +4,7 @@
 
 import { auctionCashMovement } from "./auctionCashMovement";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 
 const ME = "me";
 const YOU = "you";
@@ -66,7 +66,7 @@ describe("auctionCashMovement", () => {
   });
 
   it("is wired into the drain beside the treasury diff, on the dividend machine, with the spend cue", () => {
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     const block = sliceBetween(APP, "const moved = auctionCashMovement(before, after, viewer);", "token: moneyMachineTokenRef.current,");
     expect(block).toContain("showDividendPayout({");
     expect(block).toContain("ticker: null,");

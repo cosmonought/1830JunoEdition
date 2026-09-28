@@ -33,7 +33,7 @@ const { noticeHeadline, noticeBody, fleetLossNotices } =
   require("./fleetLossNotice") as typeof import("./fleetLossNotice");
 const { spellCount, capitalise, namedTrains, countedTrains } =
   require("../gameEngine/trainPhrasing") as typeof import("../gameEngine/trainPhrasing");
-const { readStripped, sliceBetween, anchorIndex } =
+const { readStripped, sliceBetween, anchorIndex, readShell } =
   require("./sourceScan") as typeof import("./sourceScan");
 import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameState";
 import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
@@ -41,7 +41,7 @@ import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
 const SESSION = readStripped("gameEngine/sandboxSession.ts");
 const NOTICE = readStripped("utils/fleetLossNotice.ts");
 const PANEL = readStripped("components/TrainPurchasePanel.tsx");
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const SFX = readStripped("utils/variantSfx.ts");
 
 const CO = 3;

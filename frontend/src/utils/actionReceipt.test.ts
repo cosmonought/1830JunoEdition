@@ -26,7 +26,7 @@ import {
 } from "./actionReceipt";
 import { GAMEPLAY_MESSAGE_KEYS } from "./sessionKey";
 // Design note #886: a slice that THROWS on a missing anchor, so a case cannot empty itself silently.
-import { readStripped, sliceBetween } from "./sourceScan";
+import { anchorIndex, readShell, sliceBetween, sliceFrom } from "./sourceScan";
 
 /** A dispatch of one message key, shaped as `runGameplayAction` sees it. */
 function msg(key: string): Record<string, unknown> {
@@ -118,14 +118,7 @@ describe("a toast marks a move, not a catch-up (design note #825)", () => {
      `isOrdinaryPlay` ALREADY EXISTED and was already deciding whether a badge fires. Publishing it as a flag
      is the whole change; the rule was never in doubt, only its audience. */
 
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs
-      .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-  })();
+  const APP = readShell();
 
   it("gates every door rather than the call sites", () => {
     /* #748a's rule: a call site that has to remember is one that will forget, and the next toast added would
@@ -173,19 +166,18 @@ describe("a toast marks a move, not a catch-up (design note #825)", () => {
     /* A stuck flag silences every later toast, which reads as "notifications stopped working" and has no
        obvious cause -- the same reasoning the `replayClock` beside it already carries, and the reason both
        are cleared in the same `finally`. */
-    const drain = APP.slice(
-      APP.indexOf("replayingHistory = !isOrdinaryPlay;"),
-      APP.indexOf("if (cashBefore && live)"),
-    );
+    /* APP-TEST-0A: THE END ANCHOR WAS GONE. It read `if (cashBefore && live)` -- the cash badge #1339 removed --
+       and `indexOf` returned -1, so this "drain" ran from the flag to the end of the file. Re-anchored on the
+       line that closes the drain loop, so the region is the dispatch and its `finally` again. */
+    const drain = sliceBetween(APP, "replayingHistory = !isOrdinaryPlay;", "if (live) setSandboxAppliedCount(appliedCountRef.current);");
     expect(drain).toContain("} finally {");
     expect(drain).toContain("replayingHistory = false;");
   });
 
   it("resets with the log clock on a rewind", () => {
     // `resetLogClock` runs before the replay loop; a flag left true from a previous run would silence it.
-    const start = APP.indexOf("function resetLogClock");
-    expect(start).toBeGreaterThan(-1);
-    expect(APP.slice(start, start + 220)).toContain("replayingHistory = false;");
+    expect(APP).toContain("function resetLogClock");
+    expect(sliceFrom(APP, "function resetLogClock", { length: 220 })).toContain("replayingHistory = false;");
   });
 
   it("still reads the gate it borrowed", () => {
@@ -197,11 +189,7 @@ describe("a toast marks a move, not a catch-up (design note #825)", () => {
 });
 
 describe("every toast is mounted behind a rule", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
-  })();
+  const APP = readShell();
 
   it("has exactly two call sites", () => {
     /* THE STRUCTURAL HALF. The predicate could be perfect and the bug could return tomorrow by way of a
@@ -269,15 +257,16 @@ describe("every toast is mounted behind a rule", () => {
        cast the engine also takes (#1189). The anchor had pinned the argument name after all. THE LAST CALL
        IN THE FILE is the rebuild -- the earlier one at the top of the dispatch is the pre-label -- so it is
        found by position rather than by what it is handed, and no future rename of the argument can move it. */
-    const rebuilt = APP.lastIndexOf("describeGameplayAction(");
+    const rebuilt = anchorIndex(APP, "describeGameplayAction(", "the label rebuild", { last: true });
     /* Design note #1072: the call went multi-line when the depot toast gained its own duration, so the
        argument is no longer adjacent to the name. Anchored on the CALL, which is what the ordering is
        about -- and which no reformat can move. */
     /* #1390's click toast sits far above the dispatch, so the receipt is the FIRST call after the rebuild
        rather than the first in the file. */
-    const raised = APP.indexOf("showActionToast(", rebuilt);
-    expect(rebuilt).toBeGreaterThan(-1);
-    expect(raised).toBeGreaterThan(rebuilt);
+    /* APP-TEST-0A: `{ from }` finds the receipt AFTER the rebuild IN THE REBUILD'S OWN FILE and throws
+       otherwise -- so this is the ordering, and it cannot be satisfied by a receipt that moved to a shell
+       module which merely sorts later. (A comparison of the two indices could.) */
+    expect(() => anchorIndex(APP, "showActionToast(", "the receipt after the rebuild", { from: rebuilt })).not.toThrow();
   });
 
   it("no longer fires from the append branch", () => {
@@ -315,7 +304,7 @@ describe("every toast is mounted behind a rule", () => {
        THIS IS #887's LESSON, ONE TURN LATER. "Source-scan tests pin what they are shown" -- and what this one
        was shown included every word anybody had written about the code, which is not what it meant to guard. */
     const appendBranch = sliceBetween(
-      readStripped("App.tsx"),
+      readShell(),
       "const appendAt = appliedIndexRef.current;",
       "appliedIndexRef.current = appendAt + 1;",
     );

@@ -16,11 +16,11 @@
 // that wrong by skipping it entirely, and its every stated percentage was consequently about a box nobody can
 // see. That is the case worth having here.
 
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 import { summarisePrivateRevenueForPlayer } from "../gameEngine/sandboxSession";
 import { PRIVATE_REVENUE_TOAST_MS, STANDARD_TOAST_MS } from "../components/ActionToast";
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const TOAST = readStripped("components/ActionToast.tsx");
 const FLASH = readStripped("components/RevenueModifierFlash.tsx");
 const ANIM = readStripped("styles/animations.ts");

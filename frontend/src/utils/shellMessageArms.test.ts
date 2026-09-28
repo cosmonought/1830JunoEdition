@@ -27,7 +27,7 @@ export {};
 
 const { applySandboxAction } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { nextDerivedAction } = require("../gameEngine/derivedActions") as typeof import("../gameEngine/derivedActions");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readShell, sliceFrom } = require("./sourceScan") as typeof import("./sourceScan");
 const { operatingBoard, P2, PRR, NYC, DH } = require("./offerFixtures74") as typeof import("./offerFixtures74");
 import type { MapGridResponse } from "../components/hexContractTypes";
 
@@ -170,12 +170,12 @@ describe("the room closure, #899", () => {
     // Any other unchanged message keeps its line (or its REFUSED line) -- the quiet is CloseRoom's alone.
     expect(silentWhenUnchanged({ PassTurn: {} }, closed, closed)).toBe(false);
 
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     expect(APP).not.toContain("isCloseRoomMsg(msg)");
     // The payout fires on the transition the reducer made, and never from a rebuild.
-    const hook = APP.indexOf("if (before.room_closed !== true && after.room_closed === true && !replayingHistory) {");
-    expect(hook).toBeGreaterThan(-1);
-    expect(APP.slice(hook, hook + 400)).toContain("settleRoomPayout({");
+    const HOOK = "if (before.room_closed !== true && after.room_closed === true && !replayingHistory) {";
+    expect(APP).toContain(HOOK);
+    expect(sliceFrom(APP, HOOK, { length: 400 })).toContain("settleRoomPayout({");
     expect((APP.match(/settleRoomPayout\(\{/g) ?? []).length).toBe(1);
     // And the general path asks the rule before it writes the entry.
     // #1685 (Stage 10.2): asked of the board the reducer was HANDED and the grid pair, by content.
@@ -252,7 +252,7 @@ describe("the boundary itself, #1247", () => {
   });
 
   it("the shell has no negotiation branch left, and only sends the purchase where no server can", () => {
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     for (const guard of [
       "isProposePrivatePurchaseMsg(msg)",
       "isAnswerPrivatePurchaseMsg(msg)",
@@ -262,9 +262,8 @@ describe("the boundary itself, #1247", () => {
       expect(APP).not.toContain(guard);
     }
     // The Firestore-path effect: derived, so #1213 refuses to send it while a link exists.
-    const start = APP.indexOf("const acceptedOfferSentRef");
-    expect(start).toBeGreaterThan(-1);
-    const effect = APP.slice(start, start + 900);
+    expect(APP).toContain("const acceptedOfferSentRef");
+    const effect = sliceFrom(APP, "const acceptedOfferSentRef", { length: 900 });
     expect(effect).toContain('owed.kind !== "accepted-offer"');
     expect(effect).toContain("derived: true,");
     expect(effect).toContain("if (!gameState || !isMyTurn) return;");

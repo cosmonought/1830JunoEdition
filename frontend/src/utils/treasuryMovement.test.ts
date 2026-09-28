@@ -7,7 +7,7 @@ export {};
 
 const { movementToShow, treasuryMovements } =
   require("./treasuryMovement") as typeof import("./treasuryMovement");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell, sliceBetween, sliceFrom } = require("./sourceScan") as typeof import("./sourceScan");
 import type { GameStateResponse } from "../gameEngine/gameState";
 
 const PRR = 1;
@@ -53,13 +53,13 @@ describe("the treasury diff", () => {
 });
 
 describe("the machine is wired where the dividend one is", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
   const MACHINE = readStripped("components/TreasuryMoneyMachine.tsx");
 
   it("reads the diff after the state is committed, and is replay-silent", () => {
     expect(APP).toContain("treasuryMovements(before, after)");
-    const raiser = APP.slice(APP.indexOf("const showTreasuryMovement = useCallback("));
-    expect(raiser.slice(0, 200)).toContain("if (replayingHistory) return;");
+    const raiserHead = sliceFrom(APP, "const showTreasuryMovement = useCallback(", { length: 200 });
+    expect(raiserHead).toContain("if (replayingHistory) return;");
   });
 
   it("shares the player's corner, the other way up, and says which it is (design note #1291)", () => {
@@ -75,7 +75,7 @@ describe("the machine is wired where the dividend one is", () => {
     expect(PANEL).toContain("borderRadius: corporation ? RADIUS.card : 0");
     expect(PANEL).toContain("{rises ? holderRow : moverRow}"); // #1339: direction, defaulting from kind
     expect(PANEL).toContain("bottom: `${CORNER_BOTTOM_PX + stackIndex * STACK_STEP_PX}px`");
-    expect(readStripped("App.tsx")).toContain("stackIndex={dividendPayout ? 1 : 0}");
+    expect(readShell()).toContain("stackIndex={dividendPayout ? 1 : 0}");
   });
 
   it("keeps the dividend machine's schedule rather than retyping it", () => {
@@ -98,7 +98,7 @@ describe("the machine is wired where the dividend one is", () => {
     expect(MACHINE).toContain("SPEND_CUE_AT_MS = MONEY_MACHINE_MERGE_AT_MS - SPEND_WHOOSH_AT_MS");
     expect(MACHINE).toContain("if (spend) timers.push(window.setTimeout(onCue, SPEND_CUE_AT_MS));");
     expect(MACHINE).not.toContain("playVariantCue");
-    expect(readStripped("App.tsx")).toContain("playVariantCue(SPEND_SFX, sfxEnabledRef.current && sfxPayoutRef.current);");
+    expect(readShell()).toContain("playVariantCue(SPEND_SFX, sfxEnabledRef.current && sfxPayoutRef.current);");
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     expect(fs.existsSync(path.join(__dirname, "..", "..", "public", "audio", "spend.mp3"))).toBe(true);
@@ -106,16 +106,16 @@ describe("the machine is wired where the dividend one is", () => {
 });
 
 describe("the treasury panel is the president's, and back-to-back spends are one panel (#1371, #1372)", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("is raised only for the viewer who presides over the corporation that spent", () => {
-    const site = APP.slice(APP.indexOf("const shown = movementToShow("), APP.indexOf("const shown = movementToShow(") + 900);
+    const site = sliceFrom(APP, "const shown = movementToShow(", { length: 900 });
     expect(site).toContain("?.president === viewer;");
     expect(site).toContain("if (shown && presides) {");
   });
 
   it("holds a movement for a second one by the same corporation, and folds them", () => {
-    const raiser = APP.slice(APP.indexOf("const showTreasuryMovement = useCallback("), APP.indexOf("const handleTreasuryMachineDone"));
+    const raiser = sliceBetween(APP, "const showTreasuryMovement = useCallback(", "const handleTreasuryMachineDone");
     expect(raiser).toContain("if (replayingHistory) return;");
     expect(raiser).toContain("if (held.movement.companyId === movement.companyId) {");
     expect(raiser).toContain("amount: held.movement.amount + movement.amount,");

@@ -28,7 +28,7 @@ import {
 import * as activeGame from "./activeGame";
 import { socketUrlFor } from "./devIdentity";
 import { resetRoomLinks, setRoomSocketFactory, watchRoom, type SocketLike } from "./roomLink";
-import { readStripped } from "./sourceScan";
+import { readAppRoot, readStripped } from "./sourceScan";
 
 const GAME = "g_0123456789abcdefghjkmnpqr0";
 
@@ -105,8 +105,12 @@ describe("the resume pointer is the table's game id, and nothing else is believe
   });
 
   it("the root seeds the table from this reader, and keeps no watch intent beside it", () => {
-    const APP = readStripped("App.tsx");
-    expect(APP).toContain("const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(readActiveSandboxRoom);");
+    /* APP-TEST-0A: class A. The seeding is GameRouter's -- the router's room pointer is the one piece of room
+       state the decomposition keeps in App.tsx (audit §4.4, §12) -- so it is read from the root file alone. */
+    const ROOT = readAppRoot(
+      "GameRouter, in the composition root, holds the room pointer and seeds it from the session reader (#551)",
+    );
+    expect(ROOT).toContain("const [sandboxRoomCode, setSandboxRoomCode] = useState<string | null>(readActiveSandboxRoom);");
     const exported = Object.keys(activeGame);
     for (const gone of ["readSandboxWatchRoom", "writeSandboxWatchRoom", "SANDBOX_WATCH_ROOM_STORAGE_KEY", "writeSandboxResume"]) {
       expect([gone, exported.includes(gone)]).toEqual([gone, false]);

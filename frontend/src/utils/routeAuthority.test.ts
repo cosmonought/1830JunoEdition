@@ -39,7 +39,7 @@ const { editRouteDraft } = require("./routeDraftEdit") as typeof import("./route
 const { hasLegalRouteFor, maxRouteRevenueFor } = require("../gameEngine/derivedActions") as typeof import("../gameEngine/derivedActions");
 const { trainObligationFor, trainObligationRefusal } = require("../gameEngine/trainAvailability") as typeof import("../gameEngine/trainAvailability");
 const { assignRouteSet } = require("../gameEngine/routeAutoTrace") as typeof import("../gameEngine/routeAutoTrace");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 /* ------------------------------------------------------------------ */
 /* Boards                                                             */
@@ -774,7 +774,7 @@ describe.each([
     // The predicate every other reader used (the tracer, the pricing, and now the shell): H12 is PRR's terminus.
     expect(isRouteTerminusHex(grid, "H12", PRR)).toBe(true);
     // FROM_HOME survived because a route's START is judged by the tracer with the corporation. Both are drawn.
-    const app = readStripped("App.tsx");
+    const app = readShell();
     expect(app).toContain("!isRouteTerminusHex(mapGrid, last.hexLabel, actingProtocolId ?? undefined)");
     expect(app).not.toContain("!isRouteTerminusHex(mapGrid, last.hexLabel)\n");
     // And a hand-drawn route may now START on the herald for its owner (rule 1 of the draft editor).

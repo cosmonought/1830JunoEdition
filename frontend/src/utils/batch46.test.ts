@@ -33,9 +33,9 @@ const { UNPREDICTABLE_REVENUE_FLAVOR } =
   require("../constants/flavorText") as typeof import("../constants/flavorText");
 /* Design note #1121: `sliceBetween` joins `readStripped` here, so a case about one guarded construction can
    be read out of that construction rather than counted across the whole module. */
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const AUDIO = readStripped("utils/audio.ts");
 const OVERLAY = readStripped("components/YellowSignOverlay.tsx");
 const TICKER = readStripped("components/TopTicker.tsx");

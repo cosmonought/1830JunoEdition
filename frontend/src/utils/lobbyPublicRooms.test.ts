@@ -18,7 +18,7 @@
 // encode are the SERVER's (a full table is refused, a dealt game takes no new seat) and a test that clicked a
 // button would be testing React rather than the agreement.
 
-import { readStripped } from "./sourceScan";
+import { readAppRoot, readStripped, readShell } from "./sourceScan";
 import type { RoomSummary } from "./roomProtocol";
 import { filterByPace, publicRoomRow, ruleTitlesFor, sortRooms } from "../components/LobbyRoomList";
 import { maxPlayersFor } from "../gameEngine/gameSetup";
@@ -197,11 +197,14 @@ describe("a row offers what the server would allow (design note #1440)", () => {
     /* #1441/#1442 carried a watch intent so the shell's auto-seat would not seat a viewer who pressed Watch. The
        auto-seat is gone: a seat is taken at the server by Host, Join or "Take a seat", never by entering a table --
        so Watch is simply entering, by the id the server listed, with no op in front of it. */
-    const app = readStripped("App.tsx");
+    const app = readShell();
     for (const gone of ["sandboxWatchSeed", "sandboxWatchRoom", "writeSandboxWatchRoom", "readSandboxWatchRoom", "watchOnly"]) {
       expect([gone, app.includes(gone)]).toEqual([gone, false]);
     }
-    expect(app).toContain("const handleEnterSandbox = useCallback((gameIdToEnter: string) => {");
+    /* APP-TEST-0A: class A. The one door into a table is GameRouter's own handler, in the composition root. */
+    expect(
+      readAppRoot("GameRouter's handleEnterSandbox is the router's single door into a table, kept in the root file"),
+    ).toContain("const handleEnterSandbox = useCallback((gameIdToEnter: string) => {");
     expect(LOBBY).toContain("onWatch={(gameId) => onEnterSandbox(gameId)}");
     expect(LIST).toContain("onClick={() => onWatch(row.gameId)}");
     // And the room they land in says why none of its controls are theirs.

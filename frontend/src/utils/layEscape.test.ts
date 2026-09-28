@@ -15,11 +15,11 @@
 // they are" -- and moved it to the modal. Now the player is looking at the RING.
 //
 // SO THE RULE IS "THE X GOES BACK ONE STEP", at all three levels, rather than a third special case.
-import { readSource, stripComments } from "./sourceScan";
+import { readSource, stripComments, readShell, sliceBetween, sliceFrom } from "./sourceScan";
 
 export {};
 
-const APP = stripComments(readSource("App.tsx"));
+const APP = readShell();
 const RING = stripComments(readSource("components/RadialTileSelector.tsx"));
 const FLOW = stripComments(readSource("privatePowerFlow.ts".replace(/^/, "utils/")));
 
@@ -55,9 +55,7 @@ describe("the X goes back one step", () => {
 describe("leaving the picker leaves the power", () => {
   it("disarms the errand as well as closing the ring", () => {
     /* THE BUG, IN ONE LINE: the ring and the errand were two states and only one of them closed. */
-    const at = APP.indexOf("const handleDismissRadial");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, APP.indexOf("}, []);", at));
+    const body = sliceBetween(APP, "const handleDismissRadial", "}, []);");
     expect(body).toContain("setRadialSelector(null)");
     expect(body).toContain('current?.kind === "private-tile" ? null : current');
   });
@@ -66,8 +64,7 @@ describe("leaving the picker leaves the power", () => {
     /* THE GUARD THAT MAKES THE ABOVE SAFE. `setHomeStationPlacement(null)` unconditionally would cancel a
        HOME station errand -- compulsory, with the whole table waiting on it (#783) -- because a player
        dismissed a tile picker that was never part of it. */
-    const at = APP.indexOf("const handleDismissRadial");
-    const body = APP.slice(at, APP.indexOf("}, []);", at));
+    const body = sliceBetween(APP, "const handleDismissRadial", "}, []);");
     expect(body).not.toMatch(/setHomeStationPlacement\(null\)/);
   });
 
@@ -79,9 +76,12 @@ describe("leaving the picker leaves the power", () => {
        M&H's `exchange` arm, which clears the request on purpose (#871: the exchange fires and the question is
        over). A whole-function absence would have been an assertion about the wrong branch that happened to
        be red for the right reason. */
-    const at = APP.indexOf('if (step === "lay") {');
-    expect(at).toBeGreaterThan(-1);
-    const lay = APP.slice(at, APP.indexOf("armPrivateHexErrand(", at) + 400);
+    /* From the lay branch to 400 characters past its arming call. `sliceBetween` requires the arming call
+       after the branch, in the same file; the window then runs on 400 characters past it, as it always did.
+       `allowEmpty` because the call is the branch's first statement (only whitespace between them once the
+       note is stripped): `head` is a length, never asserted on -- `lay` is, and it is not empty. */
+    const head = sliceBetween(APP, 'if (step === "lay") {', "armPrivateHexErrand(", { allowEmpty: true });
+    const lay = sliceFrom(APP, 'if (step === "lay") {', { length: head.length + 400 });
     expect(lay).toContain("armPrivateHexErrand(");
     expect(lay).not.toContain("setPrivatePowerRequest(null)");
     expect(APP).toContain("homeStationPlacement === null &&");

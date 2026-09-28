@@ -26,9 +26,9 @@ const { trimToTrainLimit } = require("../gameEngine/trainLimit") as typeof impor
 const { noticeDismissKey, nextDueNotice, fleetLossNotices } =
   require("./fleetLossNotice") as typeof import("./fleetLossNotice");
 const { STANDARD_VARIANTS } = require("../gameEngine/gameVariants") as typeof import("../gameEngine/gameVariants");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
-const APP = readStripped("App.tsx");
+const APP = readShell();
 const GENTLE = { ...STANDARD_VARIANTS, gentleRust: true };
 const cost = (model: string) => ({ "2": 80, "3": 180, "4": 300, "5": 450, "6": 630 })[model] ?? 0;
 

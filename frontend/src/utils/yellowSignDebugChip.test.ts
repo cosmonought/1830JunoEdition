@@ -26,7 +26,7 @@ const YS = require("../gameEngine/yellowSign") as typeof import("../gameEngine/y
 const { applySandboxAction } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { normalizeForCommit } = require("./serverIngress") as typeof import("./serverIngress");
 const { stateDigest } = require("../gameEngine/stateDigest") as typeof import("../gameEngine/stateDigest");
-const { anchorIndex, readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { anchorIndex, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 const { CO, BO, P1, P2, GULF, TWO_ROUTE, THREE_ROUTE, urBoard, runMsg, companyOf, partsFor } = S;
 
@@ -107,7 +107,7 @@ describe("on a hosted PINNED table the force cannot change canonical state (no b
    ingress and refused by the reducer (pinned above). The engine keeps the unpinned legacy force for replays (UR-N28,
    above); the shell can no longer arm, show or send one. */
 describe("the shell: the forced-sign chip is gone with the room document (LIVE-2D)", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("renders no chip and binds no shortcut", () => {
     for (const gone of ['"SIGN: OFF"', "cycleForcedSign", "forcedSignToolInForce(", "setSandboxForcedSign", 'event.key.toLowerCase() !== "y"', "forcedSignChipArmed", "nextForcedSign("]) {

@@ -15,7 +15,7 @@ export {};
 const { describeGameplayAction, sentenceStatesTreasury } =
   require("./actionLog") as typeof import("./actionLog");
 const { describeFleetLosses } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
@@ -124,7 +124,7 @@ describe("#1245: the train trade is one sentence, and it is a purchase", () => {
     expect(describeFleetLosses(before, after, trade)).toEqual([]);
     // The control: without the message the diff still reads as a loss, which is what the shell passes it for.
     expect(describeFleetLosses(before, after)).toHaveLength(1);
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     expect(APP).toContain("describeFleetLosses(before, after, msg)");
   });
 
@@ -161,7 +161,7 @@ describe("#1245: the home station has a sentence of its own again", () => {
 });
 
 describe("#1245: the category comes off every info line, in one place", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("logInfo stores the sentence as the label and nothing as the detail", () => {
     const body = sliceBetween(APP, "const logInfo = useCallback((", "  }, []);");

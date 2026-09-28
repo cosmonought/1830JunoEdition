@@ -4,7 +4,7 @@
 
 import { clearPrivateOrder, numberedPrivate, privateOrdinal, setPrivateOrder } from "../gameEngine/privateOrdinal";
 import { withLevelPlayingFieldPrivates, JK_PRIVATE_ID } from "../gameEngine/levelPlayingField";
-import { readStripped } from "./sourceScan";
+import { readStripped, readShell } from "./sourceScan";
 
 const printed = [
   { private_id: 1, name: "Schuylkill Valley", cost: "20" },
@@ -49,15 +49,16 @@ describe("every surface that names a private goes through it", () => {
     ["components/PrivateRevenueModal.tsx", "privateOrdinal(line.privateId)"],
     ["utils/actionLog.ts", "numberedPrivate(entry.private_id, entry.name)"],
     ["gameEngine/sandboxSession.ts", "numberedPrivate(payout.privateId, payout.privateName)"],
-    ["App.tsx", "numberedPrivate(entry.privateId, entry.name)"],
+    // APP-TEST-0A: the shell is read as a set (App.tsx + shell/**), so the call is found wherever it moves.
+    ["shell", "numberedPrivate(entry.privateId, entry.name)"],
   ])("%s", (file, call) => {
-    const code = readStripped(file);
+    const code = file === "shell" ? readShell() : readStripped(file);
     expect(code).toContain(call);
     expect(code).not.toMatch(/\{(entry|priv|sold|line)\.private_?[iI]d\}\. \{/);
   });
 
   it("the shell publishes the order in play, during render", () => {
-    const APP = readStripped("App.tsx");
+    const APP = readShell();
     expect(APP).toContain("useMemo(() => setPrivateOrder(gameState?.private_companies ?? []), [privateOrderKey]);");
   });
 });

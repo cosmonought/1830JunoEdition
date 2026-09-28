@@ -11,11 +11,11 @@
 // THE SAME OBSERVATION AS #866 WITH ONE DIFFERENCE THAT MATTERS. There the click carried no information and
 // was removed outright; here the PICKER still has to open, because which tile to lay is a real choice. What
 // carries nothing is the gesture that opens it -- the veil has already reduced the board to one lit hex.
-import { readSource, stripComments } from "./sourceScan";
+import { readSource, stripComments, readShell, sliceFrom } from "./sourceScan";
 
 export {};
 
-const APP = stripComments(readSource("App.tsx"));
+const APP = readShell();
 const BOARD = stripComments(readSource("components/HexGridRenderer.tsx"));
 
 describe("selecting a hex is separable from clicking one", () => {
@@ -79,9 +79,7 @@ describe("the errand survives, and so does the prompt's gate", () => {
   it("arms the errand as well as opening the picker", () => {
     /* THE ERRAND IS NOT REPLACED. It lifts the connectivity gate (#725), feeds the cancel banner (#817) and
        tells `errandClickIntent` what a click elsewhere means. Opening the picker is an addition. */
-    const at = APP.indexOf("const armPrivateHexErrand");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, at + 2200);
+    const body = sliceFrom(APP, "const armPrivateHexErrand", { length: 2200 });
     expect(body).toContain("setHomeStationPlacement({");
     expect(body).toContain("setAutoSelectHex({");
   });
@@ -89,8 +87,7 @@ describe("the errand survives, and so does the prompt's gate", () => {
   it("leaves the station errand alone", () => {
     /* A `private-station` errand opens no picker at all -- #866 stages its token directly. Auto-selecting
        its hex would open a TILE picker over a token confirmation, which is #850's reported bug rebuilt. */
-    const at = APP.indexOf("const armPrivateHexErrand");
-    const body = APP.slice(at, at + 2200);
+    const body = sliceFrom(APP, "const armPrivateHexErrand", { length: 2200 });
     expect(body).toContain('if (abilityKey !== "dh-token")');
   });
 
@@ -100,8 +97,7 @@ describe("the errand survives, and so does the prompt's gate", () => {
        `privatePowerOfferAt` reads that ref to decide whether the marked hex raises the power prompt -- with a
        stale `null` it raises it, so pressing "Lay Track on F16" would close the modal and immediately reopen
        it instead of opening the picker. */
-    const at = APP.indexOf("const armPrivateHexErrand");
-    const body = APP.slice(at, at + 2200);
+    const body = sliceFrom(APP, "const armPrivateHexErrand", { length: 2200 });
     expect(body).toContain("privateTileHexKeyRef.current = ");
     /* AND THE EFFECT REMAINS THE AUTHORITY -- #725's argument, which the synchronous write adds to rather
        than replaces: it is still the only thing that CLEARS the ref. */

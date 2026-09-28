@@ -19,7 +19,7 @@ export {};
 
 const { buildSandboxLogExport, duplicateIndicesIn } =
   require("./logExport") as typeof import("./logExport");
-const { readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 const entry = (index: number, id: string, msg: unknown, over: Record<string, unknown> = {}) =>
   ({ index, id, actor: "p1", derived: false, payload: JSON.stringify(msg), ...over }) as never;
@@ -111,7 +111,7 @@ describe("duplicate indices, the one fault the export can see by itself", () => 
 });
 
 describe("the trigger is every seat's, and it cannot fail silently", () => {
-  const APP = readStripped("App.tsx");
+  const APP = readShell();
 
   it("is gated on the room, not the host (design note #1334)", () => {
     /* #1160 borrowed the Yellow Sign's host gate. The Sign writes to the room; the export writes nothing, and

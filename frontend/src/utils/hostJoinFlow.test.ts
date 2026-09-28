@@ -10,7 +10,7 @@
 // (`server/src/rooms/roomService.ts`, `roomAuthz.ts`, `gameRecord.ts`), every change is a named `room-op`, and the
 // client reads back the server's RoomView and RoomSummary -- it validates nothing off the wire itself any more.
 
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell } from "./sourceScan";
 import * as sandboxRoomSummary from "./sandboxRoomSummary";
 import { DEFAULT_ROOM_SETUP, roomSeatCap, roomVisibility, seatsNeeded } from "./sandboxRoomSummary";
 import { anteBreakdown, formatBps, formatJuno } from "./anteMath";
@@ -231,7 +231,7 @@ describe("the client reads them back (design note #1415)", () => {
     /* LIVE-2D: THE AUTO-SEAT IS GONE (#856, #1415, #1441, #1442). Entering a table never takes a seat by itself --
        Host and Join asked the server for one, Watch did not -- so there is no watch intent to carry and nothing to
        hold back. A watcher of a waiting table is OFFERED "Take a seat"; a kicked principal is not. */
-    const app = readStripped("App.tsx");
+    const app = readShell();
     for (const gone of ["seatedRoomRef", "sandboxWatchRoom", "sandboxWatchSeed", "upsertSandboxPlayer"]) {
       expect([gone, app.includes(gone)]).toEqual([gone, false]);
     }

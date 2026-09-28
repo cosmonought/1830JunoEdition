@@ -34,9 +34,11 @@
 import fs from "fs";
 import path from "path";
 
+import { readShell } from "../utils/sourceScan";
+
 const SOURCE = fs.readFileSync(path.join(__dirname, "ContextualActionBar.tsx"), "utf8");
 /** The shell, for the two consent prompts that must NOT be in the bar. */
-const SHELL = fs.readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8");
+const SHELL = readShell();
 /* Design notes here discuss the removed and the gated forms by name and at
    length. Absence checks read the stripped copy, the same trap the card and
    sub-phase harnesses document. */

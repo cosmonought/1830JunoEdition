@@ -20,7 +20,7 @@
 
 import { stationSlotAnchor, soleCityIndex } from "../gameEngine/stationTokens";
 // Design note #891: the shared source-scan helpers (#886) -- `sliceBetween` throws on a missing anchor.
-import { readSource, sliceBetween, stripComments } from "./sourceScan";
+import { sliceBetween, sliceFrom, readShell } from "./sourceScan";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 const read = (rel: string) => {
@@ -99,15 +99,13 @@ describe("auto-staging refuses where the choice is real", () => {
 });
 
 describe("the click is gone and the modal knows it", () => {
-  const APP = strip(read("App.tsx"));
+  const APP = readShell();
   const BOARD = strip(read("components/HexGridRenderer.tsx"));
 
   it("stages the station instead of sending the player to click it", () => {
     /* THE LINE THAT CHANGED. It read `armPrivateHexErrand(DH_PRIVATE_ID, "dh-token", ...)` inside
        `handlePowerFlowAct`, which lit F16 and waited for a pointer. */
-    const at = APP.indexOf("const handlePowerFlowAct");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, APP.indexOf("const handlePowerFlowDecline", at));
+    const body = sliceBetween(APP, "const handlePowerFlowAct", "const handlePowerFlowDecline");
     expect(body.length).toBeGreaterThan(0);
     expect(body).toContain("setAutoStageStation({ q: hex.q, r: hex.r })");
     expect(body).not.toContain('armPrivateHexErrand(DH_PRIVATE_ID, "dh-token"');
@@ -116,9 +114,7 @@ describe("the click is gone and the modal knows it", () => {
   it("keeps the click errand as the two-city fallback", () => {
     /* NOT DELETED. The previous test asserts the flow no longer arms it; this asserts the shell still can,
        so `soleCityIndex` returning null has somewhere to go. */
-    const at = APP.indexOf("const handleAutoStageStation");
-    expect(at).toBeGreaterThan(-1);
-    const body = APP.slice(at, at + 1800);
+    const body = sliceFrom(APP, "const handleAutoStageStation", { length: 1800 });
     expect(body).toContain("if (info.cityIndex === null)");
     expect(body).toContain('armPrivateHexErrand(DH_PRIVATE_ID, "dh-token"');
   });
@@ -137,13 +133,7 @@ describe("the click is gone and the modal knows it", () => {
        THE REQUEST IS ANSWERED ON EVERY VIEW CHANGE, so any path that ends a placement and leaves it set
        re-stages the token on the next frame. The X is the one that was asked about by name -- "we need to
        make sure clicking X returns players to the modal" -- and it is the one that would look broken. */
-    const inside = (start: string, end: string) => {
-      const at = APP.indexOf(start);
-      expect(at).toBeGreaterThan(-1);
-      const stop = APP.indexOf(end, at);
-      expect(stop).toBeGreaterThan(at);
-      return APP.slice(at, stop);
-    };
+    const inside = (start: string, end: string) => sliceBetween(APP, start, end);
     // The X.
     expect(inside("const handleCancelTokenPlacement", "}, [])")).toContain(
       "setAutoStageStation(null)",
@@ -191,7 +181,7 @@ describe("the click is gone and the modal knows it", () => {
 describe("the auto-staged free station is a placement in flight (design note #891)", () => {
   it("sets the placement the committer reads, not only the staged token", () => {
     const handler = sliceBetween(
-      stripComments(readSource("App.tsx")),
+      readShell(),
       "const handleAutoStageStation = useCallback(",
       "[actingProtocolId, armPrivateHexErrand]",
     );
@@ -208,7 +198,7 @@ describe("the auto-staged free station is a placement in flight (design note #89
        an ability key; the bug was never that it returned early, it was that a caller reached it with nothing
        set. Asserted so a future pass does not "fix" this by removing the guard. */
     const commit = sliceBetween(
-      stripComments(readSource("App.tsx")),
+      readShell(),
       "const commitFreeStationPlacement = useCallback(",
       "runGameplayActionRef",
     );

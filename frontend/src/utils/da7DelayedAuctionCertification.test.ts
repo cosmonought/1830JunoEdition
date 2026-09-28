@@ -60,7 +60,7 @@ const { validateGameplayMessage } = require("../gameEngine/messageSchema") as ty
 const { describeGameplayAction } = require("./actionLog") as typeof import("./actionLog");
 const { RoomSession } = require("./roomSession") as typeof import("./roomSession");
 const { STATION_HOME_HEXES } = require("../components/hexContractTypes") as typeof import("../components/hexContractTypes");
-const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 const YS = require("./yellowSignRunBoundSupport") as typeof import("./yellowSignRunBoundSupport");
 const { STATIC_BOARD_HEXES } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
 const { marketCellForPrice } = require("../gameEngine/marketGeometry") as typeof import("../gameEngine/marketGeometry");
@@ -1304,7 +1304,7 @@ describe("variant isolation: the standard game's round flow, privates and B&O ar
 describe("player-facing rules text the certification leaves correct", () => {
   const tutorial = readStripped("components/TutorialModal.tsx");
   const rules = readStripped("components/RulesReference.tsx");
-  const app = readStripped("App.tsx");
+  const app = readShell();
 
   it("DA6-O1: the auction tutorial's all-pass page states §1.2.3's two EXCLUSIVE outcomes -- the SV alone is marked down", () => {
     expect(tutorial).toContain("one of two things happens before your turn comes back");

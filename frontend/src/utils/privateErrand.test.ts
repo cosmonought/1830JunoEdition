@@ -35,6 +35,7 @@ import {
   errandSurvivesStep,
 } from "./privateErrand";
 import { homeCityRefusal } from "./privateErrand";
+import { readShell, sliceBetween } from "./sourceScan";
 
 const F16 = { q: 3, r: 6 };
 const ELSEWHERE = { q: 9, r: 9 };
@@ -134,15 +135,7 @@ describe("an errand ends with its step", () => {
 });
 
 describe("the shell asks these rather than keeping its own copies", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs
-      .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "")
-      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
-  })();
+  const APP = readShell();
 
   it("scopes the lay to the errand's hex", () => {
     expect(APP).toContain("if (errandClaimsLay(homeStationPlacement, q, r)) {");
@@ -216,22 +209,14 @@ describe("homeCityRefusal", () => {
 });
 
 describe("the shell enforces it (design note #858)", () => {
-  const APP = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    return fs
-      .readFileSync(path.join(__dirname, "..", "App.tsx"), "utf8")
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .replace(/^\s*\/\/.*$/gm, "");
-  })();
+  const APP = readShell();
 
   it("asks before staging the placement", () => {
     /* ORDER IS THE FIX, as it was for #850 and #852: the refusal has to come before `setPendingToken`, or the
        ring opens on a city the placement will then reject. */
-    const ask = APP.indexOf("const cityRefusal = homeCityRefusal({");
-    const stage = APP.indexOf("setPendingToken({", ask);
-    expect(ask).toBeGreaterThan(-1);
-    expect(stage).toBeGreaterThan(ask);
+    /* Both must exist and the staging must follow the refusal in the same file: `sliceBetween` searches the
+       end anchor AFTER the start (as `indexOf(b, ask)` did) and throws on a miss or a file boundary. */
+    expect(() => sliceBetween(APP, "const cityRefusal = homeCityRefusal({", "setPendingToken({")).not.toThrow();
   });
 
   it("reads the board's answer rather than deriving its own", () => {

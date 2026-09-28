@@ -12,11 +12,14 @@ import * as fs from "fs";
 import * as path from "path";
 import * as ts from "typescript";
 
+import { shellSourcePaths } from "../utils/sourceScan";
+
 const SRC = path.join(__dirname, "..");
 
-/** The production UI: every non-test source under these, plus the two roots. */
+/** The production UI: every non-test source under these, plus the two roots. The shell is its whole source set
+ *  (`App.tsx` plus every extracted `shell/**` module), so copy that moves out of the root is still scanned. */
 const ROOTS = ["components", "panels", "context", "utils"];
-const FILES = ["App.tsx", "index.tsx"];
+const FILES = [...shellSourcePaths(), "index.tsx"];
 
 const FORBIDDEN: ReadonlyArray<[string, RegExp]> = [
   ["guest", /\bguests?\b/i],
@@ -71,7 +74,7 @@ describe("no player-visible guest or seat-PIN vocabulary (LIVE-2E)", () => {
 
   it("scans the whole production UI", () => {
     expect(files.length).toBeGreaterThan(150);
-    for (const name of ["App.tsx", "index.tsx", "components/ProfileGate.tsx", "components/ProfileMenu.tsx", "components/SessionEndedNotice.tsx", "utils/roomProtocol.ts"]) {
+    for (const name of [...shellSourcePaths(), "index.tsx", "components/ProfileGate.tsx", "components/ProfileMenu.tsx", "components/SessionEndedNotice.tsx", "utils/roomProtocol.ts"]) {
       expect(files).toContain(path.join(SRC, name));
     }
   });

@@ -1,9 +1,9 @@
 /** @jest-environment node */
 // frontend/src/utils/gameOutro.test.ts -- design notes #1417/#1418.
-import { readStripped, sliceBetween } from "./sourceScan";
+import { readStripped, sliceBetween, readShell, expectOrder } from "./sourceScan";
 
 describe("the outro plays on the ending's edge and hands off to the modal (design note #1418)", () => {
-  const app = readStripped("App.tsx");
+  const app = readShell();
   const outro = readStripped("components/GameOutroOverlay.tsx");
   const modal = readStripped("components/GameOverModal.tsx");
 
@@ -76,7 +76,7 @@ describe("the second pass (design note #1420)", () => {
   it("cards hold longer, the clips are warmed under the outro, and the ceremony's cues are uncapped", () => {
     const ceremony = readStripped("components/AccoladesCeremony.tsx");
     expect(ceremony).toContain("present: 2600");
-    const app = readStripped("App.tsx");
+    const app = readShell();
     expect(app).toContain("void preloadCues(Object.values(CEREMONY_SOUNDS)).then(() => {");
     expect(app).toContain("ceremonySoundsReady={ceremonySoundsReady}");
     expect(app).toContain("playVariantCue(file, sfxEnabledRef.current, { uncapped: true })");
@@ -87,7 +87,7 @@ describe("the second pass (design note #1420)", () => {
   it("the modal offers Leave game beside View final board", () => {
     const modal = readStripped("components/GameOverModal.tsx");
     expect(modal).toContain('data-testid="game-over-leave"');
-    const app = readStripped("App.tsx");
+    const app = readShell();
     expect(app).toContain("onLeaveGame={handleLeaveSandboxRoom}");
   });
 });
@@ -157,14 +157,15 @@ describe("the ceremony runs once, the charts draw on first sight, the dots are t
 });
 
 describe("the Game Over strip replaces the action bar (design note #1442)", () => {
-  const app = readStripped("App.tsx");
+  const app = readShell();
   it("renders the strip in the bar's slot once an ending stands, and the bar not at all", () => {
-    const dock = app.slice(app.indexOf('data-sticky-dock="true"'), app.indexOf("<MainTabBar"));
+    const dock = sliceBetween(app, 'data-sticky-dock="true"', "<MainTabBar");
     expect(dock).toContain(") : gameEndReason ? (");
-    expect(dock.indexOf(") : gameEndReason ? (")).toBeLessThan(dock.indexOf("<ContextualActionBar"));
+    expectOrder(dock, ") : gameEndReason ? (", "<ContextualActionBar");
     expect(dock).toContain('data-testid="game-over-strip"');
     expect(dock).toContain("...styles.gameOverStripAsBar");
     // The old strip under the bar is gone.
-    expect(app).not.toContain("{gameEndReason && gameOverDismissed && (\n        <div style={styles.gameOverStrip}");
+    // APP-TEST-0A: any indentation -- an extraction re-indents code, and an exact-whitespace absence would then pass on nothing.
+    expect(app).not.toMatch(/\{gameEndReason && gameOverDismissed && \(\s*<div style=\{styles\.gameOverStrip\}/);
   });
 });

@@ -49,7 +49,7 @@
 // actor of every move is the seat the authenticated principal holds in the game's committed record -- never a
 // claim, never a frame field.
 
-import { randomBytes } from "crypto";
+import { randomBytes, randomInt } from "crypto";
 import { createServer, type Server as HttpServer } from "http";
 import { WebSocketServer, type WebSocket } from "ws";
 
@@ -316,6 +316,21 @@ const REF_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford base32
 const errorRef = (): string => Array.from(randomBytes(6), (byte) => REF_ALPHABET[byte % 32]).join("");
 
 /* ==================================================================
+    LIVE-4 L4-5 (D-43): THE HOSTED REVENUE SEED IS A CRYPTOGRAPHIC DRAW
+   ==================================================================
+   #1662 made this server the only author of a turn's `revenue_seed`: `normalizeForCommit` draws it at ingress (or finds
+   this turn's earlier draw in the RAW log after an undo, #1051), the accepted `RunMultipleRoutes` commits it, and a
+   replay reads the committed number and never draws. What was left was the DRAW ITSELF: no hosted session passed
+   `mintSeed`, so every hosted seed fell to `randomTurnSeed` -- `Math.random`. Every session this server builds now
+   draws here: Node's CSPRNG, uniform over the same unsigned 32-bit space `randomTurnSeed` covers (`randomInt` rejects
+   rather than reducing modulo), so every extraction downstream reads the range it was written for.
+   ONLY THE SOURCE OF A NEW SEED CHANGED. The committed seed, the raw-log reuse rule, the turn key and the seed ->
+   revenue mapping are untouched, so no rules, hosted, financial or capability identity moves: a build-only change
+   (LIVE-4 preflight §11, D4-16). The Firestore sandbox keeps its own draw -- it is not hosted. T-18
+   (`rooms/live4CryptoSeed.test.ts`) pins that the production session factory passes THIS function. */
+export const mintHostedRevenueSeed = (): number => randomInt(0, 2 ** 32);
+
+/* ==================================================================
     LIVE-2A (LIVE-2 §11.4, §11.5): WHAT A MALFORMED OR THROWING FRAME IS TOLD
    ==================================================================
    A fixed sentence, never the frame's own text, never an exception's message: the reference ties the sentence a
@@ -510,6 +525,8 @@ export function createGameServer(options: GameServerOptions): {
       /* #1026's transactional allocation was a fix for RACING BROWSERS. One writer needs no transaction, and
          an id only has to be unique within a room -- the index already carries the ordering. */
       mintId: () => `s${processTag}-${(minted += 1)}`,
+      /* LIVE-4 L4-5 (D-43): the turn's revenue draw -- `crypto.randomInt`, never `randomTurnSeed`'s `Math.random`. */
+      mintSeed: mintHostedRevenueSeed,
       now: () => Date.now(),
       explainDivergence: options.explainDivergence === true,
       replayPolicy: options.legacyLogs === "development-corpus" ? DEVELOPMENT_CORPUS_POLICY : SERVER_REPLAY_POLICY,

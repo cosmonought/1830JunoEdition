@@ -121,8 +121,9 @@ export interface RoomSessionOptions {
   /** Wall clock, injected for the same reason. `#643`: an entry keeps its own stamp. */
   now?: () => number;
   /** #1662 (S9-1): the server's revenue draw, injected for `mintId`'s reason -- a test needs the seed to be
-   *  known, and the normalizer must not be the thing that decides to be deterministic. `randomTurnSeed` when
-   *  absent, which is what a deployment gets. */
+   *  known, and the normalizer must not be the thing that decides to be deterministic. `randomTurnSeed`
+   *  (`Math.random`) when absent: a test's or a tool's session. LIVE-4 L4-5 (D-43): the hosted server always passes
+   *  its own, `mintHostedRevenueSeed` -- `crypto.randomInt` (`server/src/gameServer.ts`; T-18 pins it). */
   mintSeed?: () => number;
   /** #1225: put per-field digests on every answer, so a client that detects a divergence can NAME the field
    *  instead of reporting two opaque hashes. Off by default: it is a diagnostic for local play, and a

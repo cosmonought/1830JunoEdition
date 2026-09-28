@@ -16,7 +16,11 @@
 // ESCROW-3A (§10B): rotating the key and signing out other devices are SENSITIVE -- the server asks this session to
 // re-enter the recovery key first (403 `reauth-required`, always: the menu has no exception -- the one lost-create-response
 // rescue belongs to the profile gate's own page). The menu then shows "Confirm it's you": paste the recovery key, choose
-// Confirm, and the action the player already chose runs again at once. The key lives in this panel's state only while that view is up.
+// Confirm, and the action the player already chose runs again at once. ESCROW-4: that view is the shared
+// `ConfirmItsYou` (the money panel uses the same one); the key lives in its state only while it is up.
+//
+// ESCROW-4 (F-3, preflight OD-4-6): "Sign out this device" says so when this browser holds real-money signing keys, and
+// removes them by default (a box, ticked) -- deposits and payouts don't depend on them.
 //
 // A development-identity build has no credentials to manage: the chip says "Development profile (this tab)" and
 // offers nothing. The code and the key live in this component's state while their view is up; closing the menu
@@ -32,12 +36,13 @@ import {
   LINK_CODE_LIFETIME_MS,
   createLinkCode,
   profileErrorSentence,
-  reauthenticate,
   rotateRecoveryKey,
   signOutOtherDevices,
   signOutThisDevice,
 } from "../utils/profileApi";
 import { RecoveryKeyReveal } from "./RecoveryKeyReveal";
+import { ConfirmItsYou } from "./ConfirmItsYou";
+import { browserConsentKeys } from "../money/consentKeys";
 import { disabledLook, profileStyles as styles } from "./profileStyles";
 import { SANDBOX_INK, SANDBOX_RAISED, SANDBOX_RULE_STRONG } from "../styles/palette";
 import { CONTROL_PADDING, FONT_FAMILY, FONT_SIZE, RADIUS } from "../styles/typography";
@@ -126,14 +131,20 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
   const [reveal, setReveal] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  /* The recovery key typed into "Confirm it's you": this view's state only, cleared the moment it is sent. */
-  const [confirmKey, setConfirmKey] = useState("");
+  /* ESCROW-4: how many real-money signing keys this browser holds, and whether signing out removes them (default). */
+  const [signingKeys, setSigningKeys] = useState(0);
+  const [removeKeys, setRemoveKeys] = useState(true);
   useDialogDismissal({ onDismiss: onClose, dismissible: !busy && reveal === null });
 
   const go = (next: View) => {
     setError(null);
-    setConfirmKey("");
     setView(next);
+    if (next.kind === "signout-confirm") {
+      setRemoveKeys(true);
+      void browserConsentKeys()
+        .count()
+        .then(setSigningKeys, () => setSigningKeys(0));
+    }
   };
 
   const makeCode = useCallback(async () => {
@@ -182,25 +193,11 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
     setView({ kind: "others-done", signedOut: result.signedOut });
   };
 
-  /* "Confirm it's you": the key goes to the server once, is dropped here, and the chosen action runs again. */
-  const confirm = async (then: "rotate" | "others") => {
-    const key = confirmKey;
-    setConfirmKey("");
-    setBusy(true);
-    setError(null);
-    const result = await reauthenticate(key, port);
-    setBusy(false);
-    if (!result.ok) {
-      setError(profileErrorSentence(result, "reauth"));
-      return;
-    }
-    if (then === "rotate") await rotate();
-    else await signOutOthers();
-  };
-
   const signOut = async () => {
     setBusy(true);
     setError(null);
+    /* ESCROW-4: the signing keys go first (the player chose it, and it was the default); a failure keeps them. */
+    if (signingKeys > 0 && removeKeys) await browserConsentKeys().removeAll();
     const result = await signOutThisDevice(port);
     if (result.ok) {
       forgetActiveTable();
@@ -304,36 +301,15 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
         </>
       ) : null}
       {view.kind === "reauth" ? (
-        <form
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!busy) void confirm(view.then);
-          }}
-        >
-          <p style={styles.subheading}>Confirm it’s you</p>
-          <label style={styles.label} htmlFor="profile-reauth-key">
-            {view.then === "rotate" ? "To make a new recovery key" : "To sign out your other devices"}, paste your current recovery key.
-            It is checked once and not kept on this device.
-          </label>
-          <input
-            id="profile-reauth-key"
-            type="password"
-            autoComplete="off"
-            style={styles.monoInput}
-            value={confirmKey}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            onChange={(event) => setConfirmKey(event.target.value)}
-            data-testid="profile-reauth-key"
-          />
-          <div style={styles.row}>
-            <button type="submit" style={disabledLook(styles.primary, busy || confirmKey.trim() === "")} disabled={busy || confirmKey.trim() === ""} data-testid="profile-reauth-confirm">
-              {busy ? "Checking…" : "Confirm"}
-            </button>
-            {back}
-          </div>
-        </form>
+        /* ESCROW-4: the shared "Confirm it's you"; the action the player chose runs again once it is granted. */
+        <ConfirmItsYou
+          purpose={view.then === "rotate" ? "To make a new recovery key" : "To sign out your other devices"}
+          port={port}
+          busy={busy}
+          onBusyChange={setBusy}
+          onConfirmed={() => (view.then === "rotate" ? rotate() : signOutOthers())}
+          onCancel={() => go({ kind: "menu" })}
+        />
       ) : null}
       {view.kind === "signout-confirm" ? (
         <>
@@ -341,6 +317,19 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
             Sign out this device? Your profile and its seats are kept. To come back on this browser you will need your
             recovery key, or a link code from another signed-in device.
           </p>
+          {signingKeys > 0 ? (
+            <>
+              <p style={styles.notice} data-testid="profile-signout-keys">
+                This browser holds the signing key{signingKeys === 1 ? "" : "s"} for {signingKeys} real-money seat{signingKeys === 1 ? "" : "s"}. Signing out ends the wallet links made here for
+                tables that haven't started (relink them free from another device). Your deposits stay yours: payouts still arrive through each table's
+                challenge window, and another device can take over signing (“Use this device for signing”).
+              </p>
+              <label style={styles.check}>
+                <input type="checkbox" checked={removeKeys} onChange={(event) => setRemoveKeys(event.target.checked)} data-testid="profile-signout-remove-keys" />
+                Remove this device's signing keys
+              </label>
+            </>
+          ) : null}
           <div style={styles.row}>
             <button type="button" style={disabledLook(styles.primary, busy)} disabled={busy} onClick={() => void signOut()} data-testid="profile-signout-confirm">
               {busy ? "Signing out…" : "Sign out this device"}

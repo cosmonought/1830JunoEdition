@@ -128,6 +128,8 @@ import {
 /* LIVE-2D: the server-owned room protocol -- the room socket, the RoomView the waiting room renders, and the
    refusal sentences. */
 import { InGameHostControl } from "./components/InGameHostControl";
+/* ESCROW-4: a real-money table's money line in the bar, and its financial band under the result. */
+import { SettlementBand } from "./components/money/SettlementBand";
 import { roomOp, watchRoom, type RoomLoss } from "./utils/roomLink";
 import { DEV_IDENTITY_BUILD } from "./utils/devIdentity";
 /* LIVE-2E: a create names the host's seat after the profile when nobody chose a name. */
@@ -7757,21 +7759,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                transition the REDUCER made, read the way a float is read: the board was open, the board is
                closed. `replayingHistory` is what keeps a rebuild from firing it a second time; the Set inside
                `settleRoomPayout` is the per-session courtesy behind that, and the contract still owes the
-               real guard (`closeRoomPayout.ts` #899). The line is the payout's own; the closure itself is the
-               general path's sentence, one entry up. */
+               real guard (`closeRoomPayout.ts` #899).
+               ESCROW-4: closing the room pays nobody -- the #899 stub only writes to the console. The activity-log
+               line that said "the payout distribution has been dispatched for on-chain settlement" is gone: untrue
+               for a table played for fun (there is no payout) and for a real-money table (its escrow settles on
+               Juno on its own schedule; the result's financial band says where the money is). The closure itself
+               is still the general path's sentence, one entry up. */
             if (before.room_closed !== true && after.room_closed === true && !replayingHistory) {
-              const settlement = settleRoomPayout({
+              settleRoomPayout({
                 roomCode: sandboxRoomCode,
                 standings: finalStandingsRef.current,
                 totalAnte: PLACEHOLDER_TOTAL_ANTE,
                 trigger: closeRoomTriggerRef.current,
               });
-              logInfo(
-                "Room",
-                settlement.dispatched
-                  ? "The payout distribution has been dispatched for on-chain settlement."
-                  : `No payout was dispatched — ${settlement.reason}`,
-              );
             }
 
             /* Design note #704: THE TRAINS THE PHASE TOOK. `applyPhaseChange` has rusted and trimmed fleets
@@ -12679,7 +12679,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      log's `applied` fan-out and the RoomView turning `playing` -- so no browser ever shows a deal the server has not
      committed. A second press (or a lost ack) is answered `alreadyStarted`. */
   const handleStartSandboxGame = useCallback(async () => {
-    if (!sandboxRoom || !canStartSandboxGame(sandboxRoom, MIN_PLAYERS)) return;
+    if (!sandboxRoom) return;
+    /* ESCROW-4: a real-money table has no Ready -- it starts from its funding on Juno, which the server checks (the
+       money panel offers Start only when the server's view says this seat may press it). */
+    if (sandboxRoom.money == null && !canStartSandboxGame(sandboxRoom, MIN_PLAYERS)) return;
     await runRoomOp({ type: "start-game" });
   }, [sandboxRoom, runRoomOp]);
 
@@ -13509,6 +13512,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         viewerAddress={viewerAddress}
         totalAnte={PLACEHOLDER_TOTAL_ANTE}
         bankruptLabel={bankruptLabel}
+        /* ESCROW-4: a real-money table's financial band, under the (final) result. */
+        money={sandboxRoom?.money != null ? <SettlementBand room={sandboxRoom} log={sandboxLogRef.current} board={gameState} /> : null}
         onDismiss={() => {
           setGameOverDismissed(true);
           // #1418: leaving for the board takes the held frame down with the modal.
@@ -13597,6 +13602,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             )}
             {/* LIVE-2E: the host hands the role on mid-game -- the same `transfer-host` op as the waiting room's. */}
             <InGameHostControl room={sandboxRoom} busy={sandboxRoomBusy} onTransferHost={handleTransferHost} />
+            {/* ESCROW-4: a real-money table's stake and, only when something is needed, its one action. */}
+            {sandboxRoom?.money != null && <SettlementBand room={sandboxRoom} compact log={sandboxLogRef.current} board={gameState} />}
             {/* ==================================================================
                 DESIGN NOTE 1119: A LABEL THAT OUTLIVED BOTH THINGS IT NAMED
                ==================================================================

@@ -95,12 +95,17 @@ export interface ChainAttempt {
   readonly resolved_height: string | null;
 }
 
-/** What the intent submits, kept whole so it can be rebuilt and verified (never re-derived from live state). */
+/** What the intent submits, kept whole so it can be rebuilt and verified (never re-derived from live state).
+ *  ESCROW-4: `consent` relays ONE seat's CONSENT signature (made by that seat's own consent key, verified by the server
+ *  against the chain's CURRENT key before the intent exists) to the stored settlement `seq`/`settle_digest`; `annul`
+ *  relays every seat's ANNUL signature over (domain, `trusted_seq`). The server never makes either signature. */
 export type ChainIntentOp =
   | { readonly kind: "start"; readonly chain_game_id: string; readonly roster_hash: string }
   | { readonly kind: "checkpoint"; readonly chain_game_id: string; readonly seq: string; readonly log_len: number; readonly round_key: string; readonly settle_digest: string; readonly signer_key_id: number }
   | { readonly kind: "settle"; readonly chain_game_id: string; readonly seq: string; readonly log_len: number; readonly settle_digest: string; readonly signer_key_id: number }
-  | { readonly kind: "finalize"; readonly chain_game_id: string; readonly seq: string };
+  | { readonly kind: "finalize"; readonly chain_game_id: string; readonly seq: string }
+  | { readonly kind: "consent"; readonly chain_game_id: string; readonly seq: string; readonly seat_index: number; readonly settle_digest: string; readonly consent_pubkey: string }
+  | { readonly kind: "annul"; readonly chain_game_id: string; readonly trusted_seq: string; readonly seats: number; readonly keys_digest: string };
 
 export interface ChainIntentRecord {
   readonly format: typeof CHAIN_INTENT_FORMAT;
@@ -235,9 +240,34 @@ export function startEpochOf(intentInstance: string, instance: string): number |
   return epoch >= 2 && startInstanceOf(instance, epoch) === intentInstance ? epoch : null;
 }
 
-/** Whether an intent belongs to this chain game's instance (a Start of any epoch, or any other slot of the instance). */
+/** ESCROW-4: a seat's CONSENT is relayed once per (stored settlement seq, chain seat, CONSENT KEY). A key rotation
+ *  (`SetConsentKey`, the seat's wallet) clears the seat's consent on chain, so a consent signed by the NEW key is a new
+ *  piece of work -- its own slot family, never a "different subject" at the old key's slot (which would hold it). */
+export function consentInstanceOf(instance: string, consentPubkey: string): string {
+  if (!/^0[23][0-9a-f]{64}$/.test(consentPubkey)) throw new Error("consentInstanceOf: not a 33-byte compressed key (lowercase hex)");
+  return `${instance}|${framedParts(["consent-key", consentPubkey])}`;
+}
+
+/** ESCROW-4: an ANNUL is relayed once per (trusted sequence, the SET of consent keys that signed it). A key rotation
+ *  between the collection and the transaction makes the collected set unusable on chain (the contract checks each seat's
+ *  CURRENT key); the new set is new work in its own slot family. `keysDigest`: SHA-256 hex of the keys, in seat order. */
+export function annulInstanceOf(instance: string, keysDigest: string): string {
+  if (!/^[0-9a-f]{64}$/.test(keysDigest)) throw new Error("annulInstanceOf: the keys digest is not 32 bytes of lowercase hex");
+  return `${instance}|${framedParts(["annul-keys", keysDigest])}`;
+}
+
+/** Whether an intent belongs to this chain game's instance (a Start of any epoch, a consent under any key, an annul
+ *  under any key set, or any other slot of the instance). */
 export function intentBelongsTo(intent: ChainIntentRecord, instance: string): boolean {
-  return intent.op.kind === "start" ? startEpochOf(intent.instance, instance) !== null : intent.instance === instance;
+  if (intent.op.kind === "start") return startEpochOf(intent.instance, instance) !== null;
+  if (intent.op.kind === "consent" || intent.op.kind === "annul") {
+    try {
+      return intent.instance === (intent.op.kind === "consent" ? consentInstanceOf(instance, intent.op.consent_pubkey) : annulInstanceOf(instance, intent.op.keys_digest));
+    } catch {
+      return false;
+    }
+  }
+  return intent.instance === instance;
 }
 
 /** Whether an existing intent at this slot carries exactly this subject and message (else the caller HOLDS). */

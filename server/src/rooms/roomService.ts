@@ -33,6 +33,7 @@ import {
   isAdmitted,
   isKicked,
   seatOf,
+  type GameMoneyTerms,
   type GameRecord,
   type LogFacts,
   type Seat,
@@ -40,6 +41,8 @@ import {
 } from "./gameRecord";
 
 export const MAX_NICKNAME_LENGTH = 24;
+/** ESCROW-4: the sentence a Ready toggle gets at a real-money table. */
+export const MONEY_READY_SENTENCE = "At a real-money table your deposit on Juno is your Ready.";
 
 export interface OpEnv {
   record: GameRecord;
@@ -138,6 +141,9 @@ export interface CreateInput {
   nickname: unknown;
   color: string | null;
   hostPlayerId: string;
+  /** ESCROW-4: a real-money table's terms (the caller -- the room host, through the money service -- has checked them
+   *  against the enabled deployment). A money table needs an exact player count and never allows host undo. */
+  money?: GameMoneyTerms | null;
 }
 
 /** The first record of a game: the creator's host seat, admitted (private), waiting for 24 h. */
@@ -147,9 +153,11 @@ export function createRecord(input: CreateInput): OpOutcome {
     return refused("bad-frame", `A table is for ${MIN_PLAYERS} to ${seatCap} players.`);
   }
   if (input.color !== null && !(SEAT_COLORS as readonly string[]).includes(input.color)) return refused("bad-frame", "That is not a seat colour.");
+  const money = input.money ?? null;
+  if (money !== null && input.exactPlayers === null) return refused("exact-players-required", "A real-money table needs an exact number of players.");
   const nickname = cleanNickname(input.nickname) || "Host";
   const record: GameRecord = {
-    record_schema: 1,
+    record_schema: money === null ? 1 : 2,
     record_version: 1,
     game_id: input.gameId,
     join_code: input.joinCode,
@@ -187,8 +195,9 @@ export function createRecord(input: CreateInput): OpOutcome {
     cancelled_at: null,
     expires_at: input.now + WAITING_TTL_MS,
     last_activity_at: input.now,
-    money: null,
-    policy: { host_undo: "last-action", private_spectators: false, spectator_chat: false, max_viewers: DEFAULT_MAX_VIEWERS },
+    money,
+    /* LIVE-2 §9 / OD-L2-1: a money table never lets the host undo a move (a move can change who is paid). */
+    policy: { host_undo: money === null ? "last-action" : "none", private_spectators: false, spectator_chat: false, max_viewers: DEFAULT_MAX_VIEWERS },
   };
   return { ok: true, record, data: { gameId: input.gameId, code: input.joinCode, playerId: input.hostPlayerId } };
 }
@@ -295,6 +304,8 @@ export function leave(env: OpEnv): OpOutcome {
 export function setReady(env: OpEnv, ready: boolean): OpOutcome {
   const denied = gate("set-ready", env);
   if (denied) return denied;
+  /* ESCROW-4: at a real-money table a seat's deposit on Juno is its readiness; there is no Ready to toggle. */
+  if (env.record.money !== null) return refused("wrong-state", MONEY_READY_SENTENCE);
   const seat = seatOf(env.record, env.principalId) as Seat;
   if (seat.ready === ready) return { ok: true, record: null };
   return {

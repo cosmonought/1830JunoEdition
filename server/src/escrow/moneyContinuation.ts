@@ -40,10 +40,22 @@ import type { EscrowCodecId } from "../../../frontend/src/gameEngine/escrow/escr
 export const MONEY_CONTINUATION_FORMAT = "18COSMOS/MONEY-CONTINUATION/v1";
 /** The server-owned history protocol (LIVE-2/3: log format, commit protocol, GameRecord schema 1, SetupGame, seal). */
 export const HOSTED_PROTOCOL_VERSION = 1;
-/** The money lifecycle protocol (`moneyLifecycle.ts`). 1 = ESCROW-3A; 2 = ESCROW-3B (record v2: the money binding, the
- *  frozen roster, the post-intent chain phases, and chain intents persisted before broadcast). No money game was ever
- *  created under 1 (money games were disabled), so nothing is stranded by the bump. */
-export const FINANCIAL_PROTOCOL_VERSION = 2;
+/** The money lifecycle protocol: the meaning and format of EVERY durable financial artifact of a game (the financial
+ *  record, its chain intents and attempts, the wallet-ticket ledger) and every decision rule of its money lifecycle
+ *  (LIVE-4 preflight §4.3). No money game was ever created under 1 or 2 (money games were disabled until ESCROW-4), so
+ *  no bump strands anything and none carries migration machinery: an artifact of an older protocol is refused (the
+ *  continuation verdict, the stores' exact-shape readers), never reinterpreted.
+ *    1  ESCROW-3A.
+ *    2  ESCROW-3B: record v2 (the money binding, the frozen roster, the post-intent chain phases) and chain intents
+ *       persisted before broadcast; as of 6f05c80 it also carried ESCROW-JOIN's grant `admitted_until_secs` and its
+ *       no-supersede-while-admitted rule (shipped under 2; retired by 3).
+ *    3  ESCROW-4: the ticket file's v3 grants (the persisted ADR-036 wallet-control proof, registered consent keys, the
+ *       relink origin and the CreateGame discovery floor) and their rules (proof-gated admission, R-J1, the exact link
+ *       refusals, relink of a seat's own deposit); the relayed CONSENT / ANNUL chain intents and their key-suffixed
+ *       instances; W-13's quorum-checked host binding; the close of a table that ended unbound; and the money
+ *       GameRecord (`record_schema: 2`, written for money tables only -- no-money records stay exactly schema 1, so the
+ *       hosted protocol does not move). */
+export const FINANCIAL_PROTOCOL_VERSION = 3;
 /** The settlement codecs this deployment carries (certified only). */
 export const DEPLOYMENT_SETTLEMENT_CODECS: readonly EscrowCodecId[] = Object.freeze(["18JUNO/v1"]);
 

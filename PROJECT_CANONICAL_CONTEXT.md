@@ -3,7 +3,7 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-09-28, by ESCROW-JOIN (the contract-level Join admission: the junk-Join production blocker is closed; escrow 2.0.0 is the canonical wasm). It builds on ESCROW-3B (`5298d95`, owner-certified), ESCROW-3A (`900aec3`), DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
+**Last updated:** 2026-09-28, by ESCROW-4 (the player-facing Juno escrow path: Keplr wallet proof, funding, Start, consent keys and the settlement UX; financial protocol 3; money GameRecords `record_schema 2`). It builds on ESCROW-JOIN (`6f05c80`), ESCROW-3B (`5298d95`, owner-certified), ESCROW-3A (`900aec3`), DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
 
 **Where the documents live.** They are in two places:
 
@@ -14,7 +14,7 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 
 > **For future implementation sessions:**
 > 1. Read this file first, then the roadmap in `ROADMAP_3_2_REMAINING_WORK.md`.
-> 2. Then read only the canonical documents listed in §C for the current phase. For ESCROW-4, use the reading order in §C.3.
+> 2. Then read only the canonical documents listed in §C for the current phase. For the next pass (LIVE-4), use the reading order in §C.3.
 > 3. Do not read the whole of `RULES_HARDENING_BACKLOG.md`: it is 600 KB. Read the Part or item you need.
 > 4. Do not recursively read `archive/`, `docs/ai_architecture/` or the Project's historical reports unless the current task requires historical provenance, or a current document points you there.
 
@@ -62,7 +62,7 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 
 **Phase 3B — the Juno financial backend: COMPLETE** (ESCROW-3B, `5298d95`; owner-certified)
 - `server/src/escrow/escrowService.ts` + `server/src/escrow/juno/`: sealed gameplay → certified payload → a **durable chain intent** (`games/chain-intents/`, written before any side effect) → signed (KMS-ready signer; a development key only in development, off mainnet, with an explicit switch) → journalled (the external signing journal, outside the data directory in production) → broadcast → observed on chain. One live attempt per relayer account; the sequence is always the chain's; no tx hash is ever invented.
-- The financial record is **v2** (`FINANCIAL_PROTOCOL_VERSION` 2): the deployment pin and the chain-game binding (write-once), the frozen roster with its **epoch**, the chain progress and outcome.
+- The financial record carried `FINANCIAL_PROTOCOL_VERSION` 2 at 3B (now **3**, ESCROW-4): the deployment pin and the chain-game binding (write-once), the frozen roster with its **epoch**, the chain progress and outcome.
 - Checkpoints at the deal, every completed round boundary and the terminal seal (2L before the Settle, 2L+1), from committed boards only. Finalize only for a settlement this server signed.
 - **The roster freeze is reversible until the chain confirms Start**: permanent once Start is on chain; released (pre-Start funded state) only when the chain PROVES that freeze's Start can never happen; an unknown outcome never releases.
 - The wallet-ticket ledger is durable (`games/wallet-tickets/`), wired to identity's security events, frozen and released with the roster (by token).
@@ -72,21 +72,27 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 **ESCROW-JOIN — the contract's Join is admission-gated: COMPLETE** (the owner gate is pending)
 - **Escrow 2.0.0** (`contracts/escrow`): `Join { chain_game_id, consent_pubkey, join_ticket, admission: { expires_at, signature } }`. The contract verifies, BEFORE anything is written or any fund is accepted, block time < `expires_at` and the low-s secp256k1 signature of `Config.admission_pubkey` over `SHA-256("18JUNO/JOIN/v1" ‖ lp(chain_id) ‖ lp(contract) ‖ u64(chain_game_id) ‖ lp(info.sender) ‖ ticket(32) ‖ u64(expires_at))`. A copied ticket or admission seats nobody; nothing replays across game, contract or chain.
 - **The admission key** is its own key (never the relayer's or the settlement key; the contract refuses a current or former admission key as a signer key and vice versa). The admin rotates it with `SetAdmissionKey` (immediate; an in-flight Join fails and moves no funds). `migrate` refuses any state older than 2.0.0 (`MigrateUnsupported`): a 1.x deployment is replaced, never migrated.
-- **Server seam:** `EscrowService.authorizeJoin` (`server/src/escrow/escrowService.ts`) issues an admission only from the existing authority (bound FUNDING game, not frozen, the seat's standing ticket issued to THIS principal for THIS wallet, a structured wallet-control proof from `WalletControlProofs` — none exist until ESCROW-4, so every admission is refused `wallet-unproven` — no conflicting grant, chain open). It records `admitted_until_secs` on the ticket grant BEFORE signing; while an admission is outstanding the seat's ticket is not superseded. Signer: `server/src/escrow/juno/joinAdmission.ts` (KMS in production, which stays fail-closed until LIVE-5; development key only under 3B's guards). Config format **`18COSMOS/JUNO-BACKEND/v2`** requires `admission_key`; deployment verification requires the chain's `admission_pubkey` to be this server's key and refuses the 1.0.0 checksum by name.
+- **Server seam:** `EscrowService.authorizeJoin` (`server/src/escrow/escrowService.ts`) issues an admission only from the existing authority (bound FUNDING game, not frozen, the seat's standing ticket issued to THIS principal for THIS wallet, a structured wallet-control proof from `WalletControlProofs` — supplied since ESCROW-4 by the wallet-link route's ADR-036 proof on the grant (before it, every admission was refused `wallet-unproven`) — no conflicting grant, chain open). It records `admitted_until_secs` on the ticket grant BEFORE signing; while an admission is outstanding the seat's ticket is not superseded. Signer: `server/src/escrow/juno/joinAdmission.ts` (KMS in production, which stays fail-closed until LIVE-5; development key only under 3B's guards). Config format **`18COSMOS/JUNO-BACKEND/v2`** requires `admission_key`; deployment verification requires the chain's `admission_pubkey` to be this server's key and refuses the 1.0.0 checksum by name.
 - **Frozen cross-language vectors:** `contracts/escrow/testdata/join_admission_vectors_v1.json` (independent Python generator; Rust, contract-on-chain and TypeScript reproduce every byte).
 - **No settlement byte changed** (SET-0C v10/v11 vectors, codec and appraisal untouched). Record: Project `claude/ESCROW_JOIN_ADMISSION_SECURITY_REPAIR_2026-09-28.md`.
+
+**ESCROW-4 — the player-facing Juno escrow path: COMPLETE** (owner broad gate GREEN relative to the repository baseline; the strict `CI=true` production build stays blocked only by the pre-existing warning backlog, to which ESCROW-4 adds no warning)
+- **The path:** hosted identity → 3A "Confirm it's you" → Keplr ADR-036 wallet proof (`server/src/escrow/walletProof.ts`: a server-minted, single-use challenge naming site, network, contract, table, seat and wallet; the server rebuilds cosmjs's sign doc and derives the address) → a durable seat/wallet grant carrying the proof → `authorizeJoin` (now reachable) → a `CreateGame`/`Join` **the browser builds itself** from the build's pinned deployment (`REACT_APP_ESCROW_DEPLOYMENT`) → funding **from the chain only** (a tx hash is a hint) → Start (the host; any funded player 10 minutes after full funding) with 3B's reversible freeze → the browser-held consent key (IndexedDB, stored before any deposit names it) → the settlement band.
+- **Server:** `server/src/escrow/moneyTables.ts` (the seam: creation, link, admission, hints, W-13 discovery/binding of the host's CreateGame, the R-J1/W-2/W-3 seat locks, Start, the CONSENT/ANNUL relays, "Your deposits", the projections) and the `/gs/api/money/*` routes (`moneyHttpApi.ts`: POST only, allow-listed Origin, closed bodies, a per-session budget). A valid CONSENT/ANNUL signature is relayed with no re-auth (OD-4-2); creating or moving a key needs re-auth plus the wallet's `SetConsentKey`.
+- **Browser:** `frontend/src/money/` and `components/money/` (the waiting room's money panel, the settlement band under the final result, "Your deposits" in the lobby, the host's stake). Before "Approve payout now" a device re-derives the recorded settlement itself (`settlementCheck.ts`: the sealed prefix replayed as the server replays it, the certified appraisal, anchored on Juno through the pinned endpoint). A device without Keplr plays normally.
+- **Versions:** `FINANCIAL_PROTOCOL_VERSION` **3** (protocol-2 grant files are refused, never reinterpreted); money GameRecords are `record_schema: 2` (no-money records stay 1); the hosted protocol stays **1**; RoomView money fields are optional and additive; no rules bump.
+- Record: Project `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md` (§20 is the LIVE-4 compatibility handoff; §19 the LIVE-5/Junox handoff).
 
 **GNOLAND-1 / 1.1: complete; further Gno work parked**
 - The chain-neutral escrow backend interface and the Juno regression oracle landed as `b804150`.
 - Juno is the only production backend. The Gno codec is a draft whose byte methods throw `NOT_IMPLEMENTED`.
 - GNOLAND-2 and later have not started.
 
-**Money games: DISABLED**
-- `record.money` is `null` (`record_schema` 1). ESCROW-3B keeps the money binding in the financial record; widening the GameRecord is ESCROW-4's.
-- A `create` with a non-zero stake is refused with `money-games-disabled`.
-- `NoMoneyRosterSource` refuses money. `EscrowRosterSource.plan` is a stub that refuses ("Money tables are not enabled on this server."); the real money roster source (`EscrowService.rosterSource`) exists and is not wired to player creation.
-- Money rooms would get `host_undo: "none"`.
-- The backend runs only when `ESCROW_JUNO_CONFIG` names a configuration. Without it nothing changes; with it, it verifies the chain and relays only for money records, of which players can create none.
+**Money games: OFF unless the operator opens them on a non-mainnet escrow** (ESCROW-4)
+- A `create` with a non-zero stake opens a real-money table only when ALL hold: `ESCROW_MONEY_TABLES=nonmainnet`; `ESCROW_JUNO_CONFIG` names a backend that verified against the chain; the network is not mainnet; the current rules are settlement-certified (else `rules-not-certified`, nothing written). Otherwise it is refused `money-games-disabled`, as before.
+- A money table is `record_schema: 2` (its terms copy the server's pin); it uses `host_undo: "none"`; its deal is `EscrowService.rosterSource` (no-money tables keep `NoMoneyRosterSource`).
+- The browser signs only for the escrow pinned in its build (`REACT_APP_ESCROW_DEPLOYMENT`); a mainnet class or chain id `juno-1` is refused there too.
+- **Production stays fail-closed:** its keys are KMS clients (LIVE-5), so a production backend does not open in this build. No mainnet money.
 
 ---
 
@@ -96,8 +102,7 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 The owner's brief for each pass sets that pass's exact scope.
 
 ```text
-Phases 1, 2, 2.5, 3A, 3B and ESCROW-JOIN: COMPLETE
-→ 3: ESCROW-4
+Phases 1, 2, 2.5, 3A, 3B, ESCROW-JOIN and ESCROW-4: COMPLETE
 → 4: LIVE-4/5/6
 → 5: Junox E2E
 → 6: Rust retirement
@@ -111,12 +116,13 @@ Phases 1, 2, 2.5, 3A, 3B and ESCROW-JOIN: COMPLETE
 
 Gno is parked.
 
-**Next pass: ESCROW-4** (Keplr, wallet consent, multi-device authorization). Its inputs:
-- Project `claude/ESCROW_JOIN_ADMISSION_SECURITY_REPAIR_2026-09-28.md` §17 (the ESCROW-JOIN → 4 handoff: wire `authorizeJoin` behind the ADR-036 proof; the seat lock while an admission is outstanding; the Join wire shape);
-- Project `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md` §21 (the 3B → 4 handoff: the preflight's V-1…V-18 answered);
-- Project `claude/ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT_2026-09-27.md` (the design);
-- **owner ruling (OD-4-2):** relaying an already-valid CONSENT or ANNUL signature does not itself require `hasSensitiveAuth` (the consent-key signature is the authority); creating, replacing or moving the consent/signing key does require sensitive re-authentication plus the contract-required wallet authorization;
-- the junk-Join blocker is closed by the contract itself (ESCROW-JOIN); the preflight's W-1 "not preventable" and OD-4-8 are superseded.
+**Next pass: LIVE-4** (Phase 4, per the roadmap; the owner's brief sets its scope). ESCROW-4 left the tree as the LIVE-4
+compatibility preflight asked (financial protocol 3; money GameRecords schema 2; hosted protocol 1; additive RoomView money
+fields; creation refusing uncertified rules). Its inputs:
+- Project `claude/LIVE4_COMPATIBILITY_CONTINUATION_PREFLIGHT_2026-09-28.md` (the design);
+- Project `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md` §20 (the LIVE-4 compatibility handoff: what is durable financial v3, what is wire-only) and §19 (the LIVE-5 / Junox handoff: KMS clients for the relayer, settlement and admission keys; shared stores for the money layer's in-memory state).
+
+**ESCROW-4's owner ruling stands (OD-4-2):** relaying an already-valid CONSENT or ANNUL signature needs no `hasSensitiveAuth` (the consent-key signature is the authority); creating, replacing or moving the consent/signing key needs sensitive re-authentication plus the contract-required wallet authorization.
 
 ESCROW-3A's procedure is how the next rules version is certified for settlement: rebuild the goldens beside the old ones, then add the version to the literal in its own reviewed change.
 
@@ -155,9 +161,11 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 
 | Topic | Document |
 |---|---|
+| ESCROW-4: the player-facing Juno escrow path (wallet proof, admission wiring, W-13, R-J1, funding, Start, consent keys, relays, settlement UX); §20 LIVE-4 compatibility handoff; §19 LIVE-5/Junox handoff | `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md` |
+| LIVE-4 compatibility / continuation preflight (the next pass's design) | `claude/LIVE4_COMPATIBILITY_CONTINUATION_PREFLIGHT_2026-09-28.md` |
 | ESCROW-JOIN: the contract's Join admission, escrow 2.0.0, the canonical wasm `5ecc3022…`, `authorizeJoin` | `claude/ESCROW_JOIN_ADMISSION_SECURITY_REPAIR_2026-09-28.md` |
 | ESCROW-3B: Juno backend, durable intents, reversible freeze (§18 junk-Join: historical, closed by ESCROW-JOIN) | `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md` |
-| ESCROW-4 preflight (design; read with 3B §21 and ESCROW-JOIN §17; its W-1/OD-4-8 are superseded) | `claude/ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT_2026-09-27.md` |
+| ESCROW-4 preflight (the design ESCROW-4 implemented; the ESCROW-4 report is what landed; its W-1/OD-4-8 are superseded) | `claude/ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT_2026-09-27.md` |
 | ESCROW-3A: v11 settlement + money-game prerequisites | `claude/ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md` |
 | DA-8 / v11 closure | `claude/DA8_RULES_V11_CLOSURE_2026-09-27.md` |
 | Hosted-authority certification (LIVE-2F / 3D) | `claude/LIVE2F_LIVE3D_HOSTED_AUTHORITY_CERTIFICATION_2026-09-27.md` |
@@ -185,16 +193,13 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 
 Every other Project report is **historical**; see the manifest.
 
-### C.3 ESCROW-4 reading order
+### C.3 LIVE-4 reading order
 
-1. This file.
-2. `ESCROW_JOIN_ADMISSION_SECURITY_REPAIR`: §2–5 (the admission), §7 (replay and expiry) and §17 (the handoff).
-3. `ESCROW3B_JUNO_BACKEND`: §14 (the reversible freeze), §19 (player reachability) and §21 (the 3B → 4 handoff).
-4. `ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT` (the design; its §13–14 expectations are answered by 3B §21; W-1 is closed).
-5. `ESCROW3A_MONEY_GAME_PREREQUISITES`: §9–11 (tickets, sensitive authentication), §14, §19.
-6. `GNOLAND1_…INTERFACE` §§10–15, 22 (F2, F4).
-7. `INTEGRATION1_…` F-3.
-8. Reference, only when a step needs it: `ESCROW_LIVE_RECONCILIATION` (ESCROW-1.5) §4, §10, §12; `LIVE2_IDENTITY_ROOM_AUTHORITY_DESIGN` §6.
+1. This file, then `ROADMAP_3_2_REMAINING_WORK.md` (Phase 4).
+2. `LIVE4_COMPATIBILITY_CONTINUATION_PREFLIGHT` (the design).
+3. `ESCROW4_KEPLR_WALLET_CONSENT` §20 (the compatibility handoff), §19 (the LIVE-5 handoff) and §17 (residuals).
+4. `LIVE_MULTIPLAYER_AWS_ARCHITECTURE_AUDIT` §25 and the LIVE-3 design §15, §20.3, FI-1…29 (the roadmap's Phase 4 sources), only as the LIVE-4 brief needs them.
+5. Reference, only when a step needs it: `ESCROW3B_JUNO_BACKEND` §14 and §21; `ESCROW_JOIN_ADMISSION_SECURITY_REPAIR` §17; `ESCROW3A_MONEY_GAME_PREREQUISITES` §9–11.
 
 ---
 
@@ -232,6 +237,12 @@ Every other Project report is **historical**; see the manifest.
 - Guarded by the oracle `frontend/src/utils/escrowJunoRegressionOracle.test.ts`, which must stay green.
 
 **5. TypeScript is the gameplay authority.** No chain response can rewrite gameplay state. `SetupGame.escrow` is declared and ignored by the reducer, so it needs no rules bump.
+
+**5a. The money path's trust boundary (ESCROW-4).**
+- The browser signs only wallet messages it builds itself from its build's pinned deployment and neutral fields; it never signs server-supplied bytes or execute JSON. The server never signs a player's wallet message: it signs only its relayer transactions (carrying the players' own CONSENT/ANNUL signatures) and the Join admission.
+- "Funded" is only ever the chain's (read by quorum when two or more endpoints are configured). A tx hash from a browser is a hint; the browser's own pending record never says "funded".
+- A seat is never reassigned. A deposit whose link ended is relinked (the same wallet, a fresh proof) or withdrawn; `leave` is only an unsubscribe.
+- Versions: `FINANCIAL_PROTOCOL_VERSION` 3; money GameRecords `record_schema: 2`, no-money records 1; the hosted protocol 1. A protocol-2 grant file is refused, never reinterpreted.
 
 **6. The blockchain is escrow only:** a vault, a notary and a settlement calculator.
 

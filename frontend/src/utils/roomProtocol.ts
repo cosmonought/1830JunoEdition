@@ -23,6 +23,7 @@
 import type { GameVariants } from "../gameEngine/gameVariants";
 import type { UndoPolicy } from "../gameEngine/logRevert";
 import { GAME_ID_PATTERN } from "../gameEngine/messageSchema";
+import type { MyTableMoneySummary, RoomMoneyView, RoomStakeSummary } from "./moneyProtocol";
 import type { PresenceState } from "./presence";
 
 export type RoomRole = "host" | "player" | "member" | "viewer";
@@ -71,6 +72,9 @@ export interface RoomView {
     kicked: boolean;
     canStart: boolean;
   };
+  /** ESCROW-4 (additive, optional): a real-money table's projection for this viewer (`moneyProtocol.ts`). Absent for a
+   *  no-money table (and from any server that has no money layer). */
+  money?: RoomMoneyView;
 }
 
 /** A public list entry: names yes, ids no (beyond gameId and code). */
@@ -86,6 +90,8 @@ export interface RoomSummary {
   playerCount: number | null;
   variants: GameVariants;
   createdAtMs: number;
+  /** ESCROW-4 (additive, optional): a real-money table's stake badge. Absent for a no-money table. */
+  stake?: RoomStakeSummary;
 }
 
 /** LIVE-2F/3D (C9-01): one of the caller's own tables ("Your tables"), answered to `room-op {type:"my-tables"}` on the
@@ -102,6 +108,8 @@ export interface MyTableSummary {
   you: "host" | "player";
   createdAtMs: number;
   lastActivityMs: number;
+  /** ESCROW-4 (additive, optional): this seat's money line at a real-money table. Absent otherwise. */
+  money?: MyTableMoneySummary;
 }
 
 const MY_TABLE_STATES: ReadonlySet<string> = new Set(["waiting", "playing", "finished", "resume", "paused", "unavailable", "cannot-continue", "watch-only"]);
@@ -124,7 +132,9 @@ export function myTablesOf(data: Record<string, unknown>): MyTableSummary[] {
       table.nicknames.every((name) => typeof name === "string") &&
       (table.you === "host" || table.you === "player") &&
       typeof table.createdAtMs === "number" &&
-      typeof table.lastActivityMs === "number"
+      typeof table.lastActivityMs === "number" &&
+      /* ESCROW-4: a money line is an object, or absent (no money; an older server never sends one). */
+      (table.money === undefined || (typeof table.money === "object" && table.money !== null && !Array.isArray(table.money)))
     );
   });
 }
@@ -174,7 +184,8 @@ export type RoomOpBody =
       variants: GameVariants;
       nickname: string;
       color?: string | null;
-      /** Chain-neutral; any non-zero stake is refused `money-games-disabled` in LIVE-2. */
+      /** ESCROW-4: a real-money table's gross ante per seat, in the deployment's base units (a canonical decimal).
+       *  The server refuses it `money-games-disabled` unless it has real-money tables enabled. */
       stake?: string;
     }
   | { type: "join"; code: string; takeSeat: boolean }

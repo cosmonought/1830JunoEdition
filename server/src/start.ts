@@ -36,9 +36,13 @@ import { createFileChainIntentStore } from "./escrow/chainIntents";
 import { openFileSigningJournal } from "./escrow/signingJournal";
 import { createFileWalletTicketStore } from "./escrow/walletTicketFileStore";
 import { createWalletTicketLedger } from "./escrow/walletTickets";
-import { JunoConfigError, parseJunoBackendConfig } from "./escrow/juno/junoConfig";
+import { JunoConfigError, parseJunoBackendConfig, pinOf, type JunoBackendConfig } from "./escrow/juno/junoConfig";
 import { openJunoBackend, type JunoBackend } from "./escrow/juno/junoBackend";
+import { createMoneyTables, MONEY_TABLES_SWITCH, type MoneyTables } from "./escrow/moneyTables";
+import type { WalletTicketLedger } from "./escrow/walletTickets";
 import { seatOf } from "./rooms/gameRecord";
+import { NoMoneyRosterSource } from "./rooms/roomService";
+import { APP_NAME } from "../../frontend/src/config";
 import { createFileOpsRecorder } from "./persistence/opsRecorder";
 import { resolveServerConfig } from "./identity/mode";
 import { IdentityService } from "./identity/sessions";
@@ -208,6 +212,18 @@ async function main(): Promise<void> {
   const escrowConfigPath = process.env.ESCROW_JUNO_CONFIG ?? flagValue("--escrow-config");
   let escrow: JunoBackend | null = null;
   const serverRef: { current: ReturnType<typeof createGameServer> | null } = { current: null };
+  /* ESCROW-4: REAL-MONEY TABLES, behind the operator's explicit switch -- `ESCROW_MONEY_TABLES=nonmainnet` (or
+     `--money-tables nonmainnet`) -- AND a configured, verified Juno backend that is not mainnet. Anything else: no money
+     table can be created (`money-games-disabled`); tables that exist keep their money actions while the backend runs.
+     Production stays fail-closed: its keys are KMS (LIVE-5), so its backend does not open in this build. */
+  const moneySwitch = process.env.ESCROW_MONEY_TABLES ?? flagValue("--money-tables");
+  const moneyRef: { current: MoneyTables | null } = { current: null };
+  let junoConfigUsed: JunoBackendConfig | null = null;
+  let ledgerUsed: WalletTicketLedger | null = null;
+  if (moneySwitch !== undefined && moneySwitch !== MONEY_TABLES_SWITCH) {
+    // eslint-disable-next-line no-console
+    console.warn(`  money: ESCROW_MONEY_TABLES=${moneySwitch} is not "${MONEY_TABLES_SWITCH}"; real-money tables stay OFF`);
+  }
   if (escrowConfigPath !== undefined) {
     try {
       const { readFileSync } = await import("fs");
@@ -234,7 +250,9 @@ async function main(): Promise<void> {
                 if (ended > 0) ops.audit("wallet-ticket.revoked", { game_id: gameId, kind: event.kind, tickets: ended });
               }
             })
-            .catch(() => undefined);
+            .catch(() => undefined)
+            /* ESCROW-4 (W-8): every money table the principal sits at is re-projected and pushed at once. */
+            .finally(() => moneyRef.current?.onSecurityEvent(event.principalId));
         },
       });
       escrow = await openJunoBackend({
@@ -252,7 +270,11 @@ async function main(): Promise<void> {
         // eslint-disable-next-line no-console
         log: (line) => console.log(line),
         ops,
+        /* ESCROW-4: the join admission's precondition is the proof the wallet-link route recorded on the grant. */
+        walletProofs: ledger,
       });
+      junoConfigUsed = junoConfig;
+      ledgerUsed = ledger;
     } catch (error) {
       const reason = error instanceof JunoConfigError ? error.message : `the Juno backend could not be opened -- ${error instanceof Error ? error.message : String(error)}`;
       if (config.mode === "production") {
@@ -277,10 +299,22 @@ async function main(): Promise<void> {
     ...(escrow !== null ? { onIntentPrepared: (gameId: string) => escrow?.service.onIntentPrepared(gameId) } : {}),
   });
   await settlement.load();
+  /* ESCROW-4: a money table's deal is the escrow's roster source (the chain re-checked at the deal); every other table's
+     is the ordinary one. Without a backend, a money table never deals. */
+  const noMoneyRoster = new NoMoneyRosterSource();
   const server = createGameServer({
     port,
     build,
     settlement,
+    rosterSource: {
+      plan: (record, ctx) =>
+        record.money === null
+          ? noMoneyRoster.plan(record, ctx)
+          : escrow !== null
+            ? escrow.service.rosterSource.plan(record, ctx)
+            : Promise.resolve({ refusal: "wrong-state" as const, code: "wrong-state" as const, reason: "This server has no Juno escrow configured." }),
+    },
+    money: () => moneyRef.current,
     ...(escrow !== null ? { escrow: { onGameplayCommitted: (input) => escrow?.service.onGameplayCommitted(input), isRosterFrozen: (gameId) => escrow?.service.isRosterFrozen(gameId) ?? false } } : {}),
     moneyContinuation: continuationPolicyOf((gameId) => settlement.continuationOf(gameId)),
     identity: {
@@ -330,6 +364,29 @@ async function main(): Promise<void> {
      -- a completed one announces its seal even if nobody ever reopens it -- and quiet funded games are looked at every
      five minutes (liveness is a state, never a refund). */
   serverRef.current = server;
+  if (escrow !== null && junoConfigUsed !== null && ledgerUsed !== null) {
+    const backend = escrow;
+    moneyRef.current = createMoneyTables(
+      {
+        enabled: moneySwitch === MONEY_TABLES_SWITCH,
+        service: backend.service,
+        pin: pinOf(junoConfigUsed),
+        symbol: junoConfigUsed.symbol,
+        rest: backend.rest,
+        tickets: ledgerUsed,
+        financial: financialStore,
+        appName: APP_NAME,
+        now: () => Date.now(),
+        // eslint-disable-next-line no-console
+        warn: (line) => console.warn(line),
+        ops,
+      },
+      server.rooms.moneyPort,
+    );
+    moneyRef.current.start();
+    // eslint-disable-next-line no-console
+    console.log(`  money: real-money tables are ${moneySwitch === MONEY_TABLES_SWITCH ? (junoConfigUsed.networkClass === "mainnet" ? "REFUSED (mainnet)" : `ENABLED on ${junoConfigUsed.chainId} (${junoConfigUsed.networkClass}) once the backend is verified`) : "OFF (ESCROW_MONEY_TABLES is not set)"}`);
+  }
 
   void server.lifecycle.ready
     .then(async () => {
@@ -362,6 +419,7 @@ async function main(): Promise<void> {
     if (stopping) return;
     stopping = true;
     settlement.stop();
+    moneyRef.current?.stop();
     escrow?.stop();
     /* LIVE-3C: the audit lines already queued are written (while the lock is still ours), then the lock goes. */
     void ops

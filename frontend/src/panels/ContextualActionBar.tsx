@@ -2108,8 +2108,8 @@ export default function ContextualActionBar({
         onClick: onCloseRoom,
         disabled: roomClosed,
         title: roomClosed
-          ? "The payout distribution has been dispatched for on-chain settlement."
-          : "Close the room and settle the payout on-chain. Any player may do this; it closes on its own if nobody does.",
+          ? "The room is closed."
+          : "Close the room. Any player may do this; it closes on its own if nobody does.",
       },
     ];
   }

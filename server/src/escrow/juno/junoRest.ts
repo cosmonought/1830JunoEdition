@@ -186,6 +186,9 @@ export interface JunoRest {
   smart(contract: string, queryJson: string): Promise<unknown>;
   /** A smart query and the height the answering node read it at (null when the node does not say). */
   smartAt(contract: string, queryJson: string): Promise<{ readonly data: unknown; readonly height: string | null }>;
+  /** ESCROW-4: the same smart query from every configured endpoint, agreeing (two or more when two or more are
+   *  configured), or `unavailable`. Optional for test doubles (callers fall back to `smart`). */
+  smartQuorum?(contract: string, queryJson: string): Promise<unknown>;
   /** Every configured endpoint's own chain id (each asked separately; null when it did not answer). An endpoint that
    *  answers for another network is never used for anything (reads, simulation or broadcast). */
   endpointChains(): Promise<ReadonlyArray<{ readonly endpoint: string; readonly chain_id: string | null; readonly error: string | null }>>;
@@ -385,6 +388,32 @@ export function createJunoRest(policy: JunoEndpointPolicy, http: HttpTransport =
       return (await smartAt(contract, queryJson)).data;
     },
     smartAt,
+    /* ESCROW-4: a smart query asked of EVERY configured endpoint (each only after it said it is on the configured chain).
+       One endpoint configured: its answer. Two or more: at least two must answer and every answer must be the same
+       JSON -- a disagreement (a lagging node, a lying one) is `unavailable`: "unknown, look again", never a guess. The
+       money layer's write-once decisions (binding a host's CreateGame) and its funding reads go through this. */
+    async smartQuorum(contract, queryJson) {
+      if (endpoints.length === 1) return (await smartAt(contract, queryJson)).data;
+      const answers: string[] = [];
+      let data: unknown = null;
+      await Promise.all(
+        endpoints.map(async (base) => {
+          try {
+            await verifiedChain(base);
+            const { status, json } = await call(base, "GET", `/cosmwasm/wasm/v1/contract/${encodeURIComponent(contract)}/smart/${b64(Buffer.from(queryJson, "utf8"))}`);
+            if (status === 200 && isObject(json) && "data" in json) {
+              answers.push(JSON.stringify(json.data));
+              data = json.data;
+            }
+          } catch {
+            /* an endpoint that does not answer does not vote */
+          }
+        }),
+      );
+      if (answers.length < 2) throw new JunoRpcError("unavailable", `quorum read: ${answers.length} of ${endpoints.length} endpoints answered (2 needed)`);
+      if (answers.some((answer) => answer !== answers[0])) throw new JunoRpcError("unavailable", "quorum read: the endpoints disagree (a lagging or inconsistent node); read again later");
+      return data;
+    },
     async simulate(txBytes) {
       return read("simulate", async (base) => {
         const { status, json } = await call(base, "POST", "/cosmos/tx/v1beta1/simulate", { tx_bytes: b64(txBytes) });

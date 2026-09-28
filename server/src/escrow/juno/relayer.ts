@@ -251,6 +251,27 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
         if (g.state === "SETTLED") return { kind: "done", detail: `the escrow is settled (${g.outcome?.route ?? "?"})` };
         if (g.state === "SETTLEABLE") return { kind: "absent" };
         return { kind: "moot", why: `the escrow is ${g.state}; there is nothing to finalize` };
+      case "consent": {
+        /* ESCROW-4: one seat's consent to the stored settlement. The chain keeps a bit per seat, cleared when the seat's
+           key rotates: done when the bit is set (by this relay or anyone's); moot once the stored settlement is another
+           one, the escrow left SETTLEABLE, or the seat's key is no longer the one that signed. */
+        if (g.state === "SETTLED" && g.outcome?.route === "consent_completed") return { kind: "done", detail: "every seat consented; the escrow paid out" };
+        if (g.state !== "SETTLEABLE") return { kind: "moot", why: `the escrow is ${g.state}; a consent is relayed while it is settleable` };
+        const stored = g.settlement;
+        if (stored === null || stored.payload.seq !== op.seq || stored.payload.payload_digest !== op.settle_digest) return { kind: "moot", why: `the stored settlement is no longer seq ${op.seq}` };
+        const seat = g.seats[op.seat_index];
+        if (seat === undefined) return { kind: "inconsistent", detail: `the escrow has no chain seat ${op.seat_index}` };
+        if ((g.consent_bitmap & (1 << op.seat_index)) !== 0) return { kind: "done", detail: `chain seat ${op.seat_index} has consented` };
+        if (seat.consent_pubkey !== op.consent_pubkey) return { kind: "moot", why: `chain seat ${op.seat_index}'s consent key changed (the new key signs again)` };
+        return { kind: "absent" };
+      }
+      case "annul":
+        /* ESCROW-4: every seat's ANNUL over (domain, trusted_seq). A moved trusted sequence makes these signatures stale. */
+        if (g.state === "ANNULLED") return { kind: "done", detail: "the escrow is annulled" };
+        if (g.state !== "IN_PROGRESS" && g.state !== "SETTLEABLE") return { kind: "moot", why: `the escrow is ${g.state}; an annul needs it in progress or settleable` };
+        if (game.trusted_seq !== op.trusted_seq) return { kind: "moot", why: `the trusted sequence moved to ${game.trusted_seq} (the seats sign again)` };
+        if (g.seats.length !== op.seats) return { kind: "inconsistent", detail: "the escrow's roster is not the one the signatures were collected for" };
+        return { kind: "absent" };
       default:
         return { kind: "inconsistent", detail: "an intent of an unknown kind" };
     }
@@ -276,6 +297,13 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
         if (blockTime < Number(end)) return { kind: "wait", untilMs: deps.now() + Math.max(pollMs, (Number(end) - blockTime + 6) * 1000), why: `the challenge window is open until ${end}` };
         return { kind: "ready" };
       }
+      case "consent":
+        /* Consent is refused while the contract is paused (it resumes); a compromised settlement is the simulation's
+           never-retry refusal (CompromisedSettlement) -- held, never guessed at. */
+        if (game.paused) return { kind: "wait", untilMs: soon, why: "the escrow is paused (consents wait)" };
+        return { kind: "ready" };
+      case "annul":
+        return { kind: "ready" }; // AnnulByConsent works while paused (ESCROW-2.2)
       default:
         return { kind: "hold", code: "chain-intent-held", detail: "unknown intent kind" };
     }
@@ -708,8 +736,23 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
  *  terminal checkpoint 2L before the Settle 2L+1), the Finalize last -- so a tie in creation time never reorders them. */
 export function intentOrder(a: ChainIntentRecord, b: ChainIntentRecord): number {
   if (a.game_id === b.game_id) {
-    const rank = (intent: ChainIntentRecord): [number, bigint] =>
-      intent.op.kind === "start" ? [0, BigInt(0)] : intent.op.kind === "finalize" ? [2, BigInt(intent.op.seq)] : [1, BigInt(intent.op.seq)];
+    /* ESCROW-4: a consent follows the Settle it consents to (same seq) and precedes its Finalize; an annul is ordered by
+       the trusted sequence it binds. */
+    const rank = (intent: ChainIntentRecord): [number, bigint] => {
+      const op = intent.op;
+      switch (op.kind) {
+        case "start":
+          return [0, BigInt(0)];
+        case "finalize":
+          return [3, BigInt(op.seq)];
+        case "consent":
+          return [2, BigInt(op.seq)];
+        case "annul":
+          return [1, BigInt(op.trusted_seq)];
+        default:
+          return [1, BigInt(op.seq)];
+      }
+    };
     const [ra, sa] = rank(a);
     const [rb, sb] = rank(b);
     if (ra !== rb) return ra - rb;

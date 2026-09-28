@@ -632,7 +632,8 @@ export function moneyActionPolicy(phase: FinancialPhase, action: MoneyAction): {
     case "finalize":
       return phase === "settleable" ? { allowed: true, means: "after the challenge window, the relayer Finalizes: the stored settlement pays out" } : { allowed: false, means: "only a stored, unchallenged settlement is finalized" };
     case "annul-by-consent":
-      return { allowed: post, means: "every seat's wallet signs; net antes return (unanimity: no single player can force it)" };
+      /* ESCROW-4 (preflight A-8): the contract verifies each seat's CONSENT KEY over ANNUL(domain, trusted_seq), not its wallet. */
+      return { allowed: post, means: "every seat's consent key signs; net antes return (unanimity: no single player can force it)" };
     case "liveness-settle":
       return { allowed: post, means: "a seat's wallet may exit after the contract's window: the best trusted checkpoint is promoted (a refund only if none was ever posted)" };
     case "server-refund":

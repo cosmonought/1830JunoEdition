@@ -10,13 +10,39 @@
    browser) had a seat nothing on screen could open. This list is the server's answer to "which tables am I seated
    at?" (`room-op {type:"my-tables"}`), and each row opens its table exactly as Host, Join and Watch do: by game id,
    through `onEnterSandbox` -- the server authorizes the open against the record, as it does any other.
-   Hidden when there is nothing to show: a player with no tables sees the lobby exactly as before. */
+   Hidden when there is nothing to show: a player with no tables sees the lobby exactly as before.
+
+   ESCROW-4: a real-money table's row says where its money is ("Deposit needed", "Funded", …) and marks the ones
+   that need this player; "Your deposits" (`money/YourDeposits.tsx`) follows, so money whose table is awkward or
+   gone is still one click away (it hides itself when there is nothing, and in a build that signs no money). */
 
 import React from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { INK_TEXT, INK_TEXT_FAINT, INK_TEXT_MUTED } from "../styles/palette";
 import { myTableLabel, type MyTableSummary } from "../utils/roomProtocol";
+import { formatAmount, type MyTableMoneySummary } from "../utils/moneyProtocol";
+import { YourDeposits } from "./money/YourDeposits";
+
+/** ESCROW-4: a money table's one line in "Your tables". */
+export function myTableMoneyLine(money: MyTableMoneySummary): string {
+  const stake = `${formatAmount(money.anteGross, money.exponent, money.symbol)} table`;
+  const words: Record<MyTableMoneySummary["status"], string> = {
+    "link-wallet": "link a wallet to fund your seat",
+    linked: "wallet linked, waiting for the host to open the escrow",
+    deposit: "deposit needed",
+    sent: "deposit sent, waiting for Juno",
+    funded: "funded",
+    unlinked: "your deposit needs relinking",
+    starting: "starting on Juno",
+    playing: "in play",
+    settling: "settling on Juno",
+    settled: "settled",
+    held: "money on hold for review",
+    cancelled: "cancelled, deposits refunded",
+  };
+  return `${stake} · ${money.actionNeeded ? "Action needed: " : ""}${words[money.status]}`;
+}
 
 export interface MyTablesListProps {
   tables: MyTableSummary[];
@@ -33,8 +59,9 @@ export function myTableTitle(table: MyTableSummary): string {
 }
 
 export function MyTablesList({ tables, error, onOpen }: MyTablesListProps) {
-  if (tables.length === 0 && error === null) return null;
+  if (tables.length === 0 && error === null) return <YourDeposits onOpen={onOpen} />;
   return (
+    <>
     <section style={styles.section} aria-label="Your tables" data-testid="my-tables">
       <div style={styles.head}>
         <h2 style={styles.heading}>Your tables</h2>
@@ -52,6 +79,11 @@ export function MyTablesList({ tables, error, onOpen }: MyTablesListProps) {
                   <span style={styles.meta}>
                     {label.status} · {table.visibility === "private" ? "Private" : "Public"}
                   </span>
+                  {table.money ? (
+                    <span style={table.money.actionNeeded ? styles.moneyNeeded : styles.meta} data-testid="my-table-money">
+                      {myTableMoneyLine(table.money)}
+                    </span>
+                  ) : null}
                 </div>
                 <button type="button" style={styles.button} onClick={() => onOpen(table.gameId)}>
                   {label.action}
@@ -62,6 +94,8 @@ export function MyTablesList({ tables, error, onOpen }: MyTablesListProps) {
         </ul>
       )}
     </section>
+    <YourDeposits onOpen={onOpen} />
+    </>
   );
 }
 
@@ -92,6 +126,7 @@ const styles: Record<string, React.CSSProperties> = {
   main: { display: "flex", flexDirection: "column", gap: "1px", minWidth: 0 },
   name: { fontSize: FONT_SIZE.body, fontWeight: 800, color: INK_TEXT, overflowWrap: "anywhere" },
   meta: { fontSize: FONT_SIZE.micro, color: INK_TEXT_FAINT, overflowWrap: "anywhere" },
+  moneyNeeded: { fontSize: FONT_SIZE.micro, color: "#f0c674", fontWeight: 700, overflowWrap: "anywhere" },
   button: {
     padding: "6px 15px",
     borderRadius: RADIUS.control,

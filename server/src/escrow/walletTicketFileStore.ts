@@ -44,13 +44,46 @@ const isObject = (value: unknown): value is Record<string, unknown> => typeof va
 const exact = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every((key) => key in value);
 const time = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const timeOrNull = (value: unknown) => value === null || time(value);
+/** Financial protocol 2's grant shapes (ESCROW-3B's, then ESCROW-JOIN's `admitted_until_secs`). */
 const GRANT_KEYS_3B = ["format", "game_id", "player_id", "epoch", "wallet", "ticket", "issued_at", "issued_under", "revoked_at", "revoke_reason", "frozen_at"];
-/** ESCROW-JOIN: + `admitted_until_secs`. A 3B grant (without it) reads as never admitted; every write is the new shape. */
-const GRANT_KEYS = [...GRANT_KEYS_3B, "admitted_until_secs"];
+const GRANT_KEYS_JOIN = [...GRANT_KEYS_3B, "admitted_until_secs"];
+/** Financial protocol 3 (ESCROW-4): + the verified wallet proof, the registered consent keys, the relink origin and the
+ *  chain's game-id floor when the ticket was minted. THE ONLY SHAPE THIS BUILD READS: a protocol-2 grant is never
+ *  upgraded or reinterpreted as a v3 one (no money game was ever created under 2, so nothing is stranded -- the ESCROW-4
+ *  amendment's no-migration rule); its file is refused as unreadable, which fails closed like any unreadable ledger. */
+const GRANT_KEYS = [...GRANT_KEYS_JOIN, "proof", "consent_keys", "relinked_from", "create_floor"];
+const HEX = (bytes: number) => new RegExp(`^[0-9a-f]{${bytes * 2}}$`);
+const CONSENT_KEY = /^0[23][0-9a-f]{64}$/;
+
+/** ESCROW-4: a recorded proof is exactly the wallet-link route's record, for the grant's own wallet. */
+function isProof(value: unknown, wallet: unknown): boolean {
+  if (value === null) return true;
+  return (
+    isObject(value) &&
+    exact(value, ["kind", "wallet", "pubkey", "challenge_digest", "proof_hash", "verified_at"]) &&
+    value.kind === "adr036" &&
+    value.wallet === wallet &&
+    typeof value.pubkey === "string" &&
+    CONSENT_KEY.test(value.pubkey) &&
+    typeof value.challenge_digest === "string" &&
+    HEX(32).test(value.challenge_digest) &&
+    typeof value.proof_hash === "string" &&
+    HEX(32).test(value.proof_hash) &&
+    time(value.verified_at)
+  );
+}
+
+/** A grant of financial protocol 2 (for the operator's message only: it is refused like any unreadable grant). */
+const isProtocol2Grant = (value: unknown): boolean => isObject(value) && (exact(value, GRANT_KEYS_JOIN) || exact(value, GRANT_KEYS_3B));
 
 function isGrant(value: unknown, gameId: string): value is WalletTicketGrant {
-  if (!isObject(value) || !(exact(value, GRANT_KEYS) || exact(value, GRANT_KEYS_3B))) return false;
-  if ("admitted_until_secs" in value && !timeOrNull(value.admitted_until_secs)) return false;
+  if (!isObject(value) || !exact(value, GRANT_KEYS)) return false;
+  if (!timeOrNull(value.admitted_until_secs)) return false;
+  const keys = value.consent_keys;
+  if (!isProof(value.proof, value.wallet)) return false;
+  if (!Array.isArray(keys) || keys.length > 8 || !keys.every((key) => typeof key === "string" && CONSENT_KEY.test(key)) || new Set(keys).size !== keys.length) return false;
+  if (!(value.relinked_from === null || (Number.isSafeInteger(value.relinked_from) && (value.relinked_from as number) >= 1 && (value.relinked_from as number) < (value.epoch as number)))) return false;
+  if (!(value.create_floor === null || (typeof value.create_floor === "string" && /^(0|[1-9][0-9]{0,19})$/.test(value.create_floor)))) return false;
   const under = value.issued_under;
   return (
     value.format === WALLET_TICKET_FORMAT &&
@@ -146,11 +179,14 @@ export function createFileWalletTicketStore(
       (parsed.version as number) < 1 ||
       !isWalletTicketDocument(parsed.document, gameId)
     ) {
+      const document = isObject(parsed) && isObject(parsed.document) ? parsed.document : null;
+      if (document !== null && Array.isArray(document.grants) && document.grants.some(isProtocol2Grant)) {
+        throw new WalletTicketStoreUnreadableError(`wallet-tickets/${gameId}.json holds grants of financial protocol 2 (before ESCROW-4); this build reads protocol 3 only and never reinterprets them`, gameId);
+      }
       throw new WalletTicketStoreUnreadableError(`wallet-tickets/${gameId}.json is not this game's ticket ledger`, gameId);
     }
     const document = parsed.document as WalletTicketDocument;
-    /* A 3B grant has no `admitted_until_secs`: it was never admitted (the ledger never issued an admission before ESCROW-JOIN). */
-    return { version: parsed.version as number, document: { frozen_at: document.frozen_at, grants: document.grants.map((grant) => ("admitted_until_secs" in grant ? grant : { ...(grant as WalletTicketGrant), admitted_until_secs: null })) } };
+    return { version: parsed.version as number, document: { frozen_at: document.frozen_at, grants: [...document.grants] } };
   }
 
   return {

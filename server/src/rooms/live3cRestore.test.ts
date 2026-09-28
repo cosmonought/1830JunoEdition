@@ -185,7 +185,9 @@ describe("LIVE-3C discovery", () => {
       const unreadable = mintGameId();
       writeRecord(dir, JSON.stringify({ game_id: unreadable, record_schema: 1 }));
       const newerSchema = mintGameId();
-      writeRecord(dir, JSON.stringify({ ...seededRecord([ALICE, BOB], { gameId: newerSchema }), record_schema: 2, extra: true }));
+      /* A FUTURE schema this build cannot read. Since ESCROW-4 schema 2 is current (a real-money table); a schema-1
+         record merely relabelled 2 is a malformed current record, held `record-unreadable` -- not this case. */
+      writeRecord(dir, JSON.stringify({ ...seededRecord([ALICE, BOB], { gameId: newerSchema }), record_schema: 3, extra: true }));
       const lagging = dealtOnDisk(dir, 0, { record: (r) => ({ ...r, status: "waiting", started_at: null, turn_order: null, rules_engine_version: null, expires_at: now + DAY }) });
       const orphan = mintGameId();
       writeLog(dir, orphan, storedLog(0));

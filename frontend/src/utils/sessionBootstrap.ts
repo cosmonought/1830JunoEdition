@@ -54,7 +54,21 @@ export type SessionApiPath =
   /** ESCROW-3A: re-authenticate THIS session with the recovery key before a sensitive action. */
   | "profile/reauth"
   /** ESCROW-3A: the creating page received its recovery key (the lost-response rescue closes). */
-  | "profile/key-received";
+  | "profile/key-received"
+  /** ESCROW-4: the real-money routes (`utils/../money/moneyApi.ts`); the session's own authority, closed bodies. */
+  | "money/config"
+  | "money/wallet-challenge"
+  | "money/wallet-link"
+  | "money/join-admission"
+  | "money/deposit-sent"
+  | "money/consent-key"
+  | "money/consent"
+  | "money/annul"
+  | "money/escrow-details"
+  | "money/deposits";
+
+/** A `/gs/api/*` body: a closed object of strings (ESCROW-4: and the one boolean a wallet link may carry). */
+export type SessionApiBody = Record<string, string | boolean>;
 
 /** What a `/gs/api/*` call came back with. Never a rejection: "network" when nothing answered, "unavailable" when
  *  this port has no HTTP surface at all (development identity, no game server). */
@@ -81,7 +95,7 @@ export interface SessionPort {
   startFresh(): Promise<SessionState>;
   subscribe(listener: () => void): () => void;
   /** LIVE-2E: POST a closed JSON body to one of the profile routes, on the bootstrap's origin and terms. */
-  api(path: SessionApiPath, body: Record<string, string>): Promise<SessionApiAnswer>;
+  api(path: SessionApiPath, body: SessionApiBody): Promise<SessionApiAnswer>;
 }
 
 /** LIVE-2E: the always-ready port's stand-in profile. The server names a development tab's profile itself. */

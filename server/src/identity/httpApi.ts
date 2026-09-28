@@ -87,7 +87,8 @@ export interface HttpApi {
 
 const BASE_HEADERS = { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } as const;
 
-function json(response: ServerResponse, status: number, body: object | null, headers: Record<string, string | string[]> = {}): void {
+/** ESCROW-4: shared with `escrow/moneyHttpApi.ts` (the same ingress rules for every `/gs/api/*` route). */
+export function json(response: ServerResponse, status: number, body: object | null, headers: Record<string, string | string[]> = {}): void {
   if (response.headersSent) return;
   if (body === null) {
     response.writeHead(status, { ...BASE_HEADERS, ...headers });
@@ -104,10 +105,10 @@ function json(response: ServerResponse, status: number, body: object | null, hea
   response.end(text);
 }
 
-const retryAfter = (ms: number) => ({ "Retry-After": String(Math.max(1, Math.ceil(ms / 1000))) });
+export const retryAfter = (ms: number) => ({ "Retry-After": String(Math.max(1, Math.ceil(ms / 1000))) });
 
 /** A body of at most `max` bytes, or why not. Never buffers past the cap. */
-function readBody(request: IncomingMessage, max: number): Promise<{ ok: true; text: string } | { ok: false; status: 400 | 413 }> {
+export function readBody(request: IncomingMessage, max: number): Promise<{ ok: true; text: string } | { ok: false; status: 400 | 413 }> {
   return new Promise((resolve) => {
     const declared = request.headers["content-length"];
     if (declared !== undefined && (!/^\d+$/.test(declared) || Number(declared) > max)) {
@@ -145,10 +146,10 @@ function readBody(request: IncomingMessage, max: number): Promise<{ ok: true; te
 }
 
 /** A body field's type: a boolean, or a string of at most this many characters. */
-type FieldSpec = "boolean" | { string: number };
+export type FieldSpec = "boolean" | { string: number };
 
 /** The closed body: an object with only the schema's keys, each of its type. `""` is `{}`. */
-function parseBody(text: string, schema: Readonly<Record<string, FieldSpec>>): Record<string, boolean | string> | null {
+export function parseBody(text: string, schema: Readonly<Record<string, FieldSpec>>): Record<string, boolean | string> | null {
   if (text.trim() === "") return {};
   let value: unknown;
   try {
@@ -172,7 +173,7 @@ function parseBody(text: string, schema: Readonly<Record<string, FieldSpec>>): R
   return out;
 }
 
-const isJson = (header: string | undefined): boolean =>
+export const isJson = (header: string | undefined): boolean =>
   typeof header === "string" && /^application\/json\s*(;\s*charset=utf-8\s*)?$/i.test(header.trim());
 
 /** Handle the request if it is one of ours; `false` leaves it to the caller. */
@@ -193,6 +194,7 @@ export function handleIdentityHttp(request: IncomingMessage, response: ServerRes
     return true;
   }
   if (!ROUTES.has(pathname)) {
+    /* ESCROW-4: `/gs/api/money/*` is `escrow/moneyHttpApi.ts`'s (the server asks it first); anything else is 404. */
     if (pathname.startsWith(API_PREFIX) || pathname === "/gs/api") {
       json(response, 404, { error: "not-found" });
       return true;

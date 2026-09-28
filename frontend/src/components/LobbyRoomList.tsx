@@ -37,6 +37,7 @@ import {
   type GameVariants,
 } from "../gameEngine/gameVariants";
 import type { RoomSummary } from "../utils/roomProtocol";
+import { formatAmount } from "../utils/moneyProtocol";
 
 /** The rule variants a row names, in the house-rules order, by their short titles (#1415). */
 const RULE_TITLES: ReadonlyArray<{
@@ -79,6 +80,8 @@ export interface PublicRoomRow {
   full: boolean;
   rules: string[];
   createdAtMs: number;
+  /** ESCROW-4: a real-money table's stake ("10 JUNOX · testnet") and funding ("1/2 funded"), or null. */
+  stake: { label: string; funded: string } | null;
 }
 
 export function publicRoomRow(room: RoomSummary): PublicRoomRow {
@@ -102,6 +105,13 @@ export function publicRoomRow(room: RoomSummary): PublicRoomRow {
     full: seated >= capacity,
     rules: ruleTitlesFor(variants),
     createdAtMs: room.createdAtMs,
+    stake:
+      room.stake === undefined
+        ? null
+        : {
+            label: `${formatAmount(room.stake.anteGross, room.stake.exponent, room.stake.symbol)} · ${room.stake.networkClass === "mainnet" ? "Juno" : room.stake.networkClass}`,
+            funded: `${room.stake.funded}/${room.stake.seats} funded`,
+          },
   };
 }
 
@@ -325,6 +335,14 @@ function RoomRow({
         <span style={styles.name}>{row.typeLabel}</span>
         <span style={styles.meta}>
           <span style={styles.code}>{row.code}</span> · {row.hostNickname}
+          {row.stake !== null && (
+            <>
+              {" "}
+              <span style={styles.stakePill} title={`A real-money table: each seat deposits this into an escrow on Juno (${row.stake.funded}).`} data-testid={`lobby-stake-${row.code}`}>
+                {row.stake.label} · {row.stake.funded}
+              </span>
+            </>
+          )}
         </span>
       </span>
       <span className="lobby-rooms-facts">
@@ -493,6 +511,8 @@ const styles: Record<string, React.CSSProperties> = {
   name: { fontSize: FONT_SIZE.body, fontWeight: 800, color: INK_TEXT, overflowWrap: "anywhere" },
   meta: { fontSize: FONT_SIZE.micro, color: INK_TEXT_FAINT, overflowWrap: "anywhere" },
   code: { fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", letterSpacing: "0.04em" },
+  /* ESCROW-4: a real-money table's stake, in the row's own meta line. */
+  stakePill: { fontSize: FONT_SIZE.micro, fontWeight: 800, color: "#9ec5ff", border: "1px solid #2f4a68", borderRadius: RADIUS.control, padding: "0 6px", whiteSpace: "nowrap" },
   fact: { fontSize: FONT_SIZE.small, color: INK_TEXT_DIM, whiteSpace: "nowrap" },
   numberCell: { fontVariantNumeric: "tabular-nums" },
   rules: { fontSize: FONT_SIZE.small, color: INK_TEXT_MUTED, minWidth: 0, overflowWrap: "anywhere" },

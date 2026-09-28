@@ -21,6 +21,12 @@
 // table itself -- public or private, a new code, remove a player, hand the host role on, cancel, start. A control is
 // shown to the role that may use it (the same table the server enforces, LIVE-2 §6.4) and greyed while a request is
 // in flight; the server's refusal, when there is one, is shown as the sentence it is.
+//
+// ESCROW-4: AT A REAL-MONEY TABLE, THE DEPOSIT IS THE READY. `room.money` (the server's money projection) replaces
+// Ready with the seat's funding panel (`money/MoneyPanel.tsx`: Connect -> Confirm -> Link -> Review -> Approve in
+// Keplr -> Sent -> Funded -> Seats locked), the roster's Ready column with each seat's funding, and the Ante row with
+// the table's real stake. Start is the panel's (the chain's funding decides it). Leave stays an unsubscribe; "Give up
+// seat" stays, and the server refuses it while the seat has money on Juno (withdraw first).
 import React, { useState } from "react";
 import {
   bankSizeLabel,
@@ -47,6 +53,8 @@ import { MIN_PLAYERS, certLimitForPlayers, startingCashForPlayers } from "../gam
 import { ANTE_SUBSIDY_NOTE, VISIBILITY_COPY } from "./HostSetupCard";
 import { anteBreakdown, formatJuno } from "../utils/anteMath";
 import { SEAT_COLORS, SEAT_COLOR_NAMES, resolveSeatColors } from "../utils/playerLabels";
+import { MoneyPanel, StakeStrip, bpsText } from "./money/MoneyPanel";
+import { amountText, fundingTag } from "../money/moneyFlow";
 import { type AudioControlsProps } from "./AudioControls";
 /* Design note #1138: the shell's own bar, mounted here so the audio controls stop moving between the
    anteroom and the table. */
@@ -191,10 +199,13 @@ export function SandboxWaitingRoom({
   const visibility = roomVisibility(room);
   const seatCap = roomSeatCap(room);
   const exactCount = typeof room?.playerCount === "number" ? room.playerCount : null;
-  /* LIVE-2: no-money tables only -- the ante is always off (`RoomView` carries no stake). */
+  /* LIVE-2: a no-money table's ante is always off. ESCROW-4: a real-money table carries `money` (its stake and funding),
+     and its money panel takes the place of Ready. */
   const ante = anteBreakdown("0");
+  const money = room?.money ?? null;
   const canKick = isHost && room?.status === "waiting" && !busy && onKick !== undefined;
-  const canTransfer = isHost && !busy && onTransferHost !== undefined;
+  /* ESCROW-4: a real-money table's host is its escrow's creator on Juno -- hosting isn't handed over before the deal. */
+  const canTransfer = isHost && !busy && onTransferHost !== undefined && money === null;
   /* #1415: this seat was removed -- the server says so in `you.kicked`. */
   const wasKicked = room !== null && room.you.kicked;
   /* ==================================================================
@@ -470,9 +481,18 @@ export function SandboxWaitingRoom({
                           {player.id === room?.hostId && <span style={styles.hostTag}>Host</span>}
                           {player.id === localPlayerId && <span style={styles.youTag}>You</span>}
                         </span>
-                        <span style={player.isReady ? styles.ready : styles.notReady}>
-                          {player.isReady ? "Ready" : "Not ready"}
-                        </span>
+                        {money !== null ? (
+                          <span
+                            style={money.seats.find((seat) => seat.playerId === player.id)?.funding === "funded" ? styles.ready : styles.notReady}
+                            data-testid={`money-seat-${player.id}`}
+                          >
+                            {fundingTag(money.seats.find((seat) => seat.playerId === player.id)?.funding ?? "none")}
+                          </span>
+                        ) : (
+                          <span style={player.isReady ? styles.ready : styles.notReady}>
+                            {player.isReady ? "Ready" : "Not ready"}
+                          </span>
+                        )}
                         <span style={styles.seatControls}>
                           {/* LIVE-2D: the seat PINs are gone -- a seat is its principal's, bound by the server. */}
                           {!player.online && player.id !== localPlayerId && (
@@ -526,7 +546,7 @@ export function SandboxWaitingRoom({
                                   }}
                                   data-testid={`kick-confirm-${player.id}`}
                                 >
-                                  Remove{player.isReady ? " (refunds ante)" : ""}
+                                  Remove
                                 </button>
                                 <button type="button" className="wr-touch" style={styles.quietButton} onClick={() => setKicking(null)}>
                                   Keep
@@ -638,6 +658,26 @@ export function SandboxWaitingRoom({
                     had one taken away -- and a green button that merely happens to be disabled promises
                     both of them something. The condition is `me`, so neither can be forgotten separately. */}
                 {me ? (
+                  money !== null && room !== null ? (
+                  <>
+                    <MoneyPanel room={room} onStart={onStart} busy={busy} />
+                    {onReleaseSeat && (
+                      <div style={styles.actionRow}>
+                        <button
+                          type="button"
+                          className="wr-touch"
+                          style={styles.quietButton}
+                          onClick={onReleaseSeat}
+                          disabled={busy}
+                          title="Give up your seat and keep watching. With a deposit on Juno, withdraw it first (the host of a real-money table leaves by cancelling it on Juno)."
+                          data-testid="release-seat"
+                        >
+                          Give up seat
+                        </button>
+                      </div>
+                    )}
+                  </>
+                  ) : (
                   <div style={styles.actionRow}>
                     <button
                       type="button"
@@ -696,8 +736,10 @@ export function SandboxWaitingRoom({
                       </button>
                     )}
                   </div>
+                  )
                 ) : isWatching ? (
                   <div style={styles.actionRow}>
+                    {money !== null && <StakeStrip money={money} />}
                     <p style={styles.watchStatus} data-testid="waiting-room-watching">
                       <span style={styles.watchTag}>Watching</span>
                       {onTakeSeat
@@ -851,15 +893,24 @@ export function SandboxWaitingRoom({
                     tag={variants.length === "standard" ? undefined : "Non-standard"}
                     note={GAME_LENGTH_NOTE[variants.length]}
                   />
-                  <TermRow
-                    label="Ante"
-                    value={formatJuno(ante.anteUjuno)}
-                    note={
-                      ante.anteUjuno === "0"
-                        ? ANTE_SUBSIDY_NOTE
-                        : `${formatJuno(ante.subsidyUjuno)} of each ante funds the developer treasury for fee grants; ${formatJuno(ante.netUjuno)} reaches the pool.`
-                    }
-                  />
+                  {money !== null ? (
+                    <TermRow
+                      label="Stake"
+                      value={`${amountText(money, money.terms.anteGross)} per seat`}
+                      tag="Real money"
+                      note={`Deposited to an escrow on ${money.deployment.chainId}${money.terms.feeBps === null ? "" : `; the escrow keeps ${bpsText(money.terms.feeBps)} of each deposit (not refunded)`}. Winnings are paid to the wallet that deposited.`}
+                    />
+                  ) : (
+                    <TermRow
+                      label="Ante"
+                      value={formatJuno(ante.anteUjuno)}
+                      note={
+                        ante.anteUjuno === "0"
+                          ? ANTE_SUBSIDY_NOTE
+                          : `${formatJuno(ante.subsidyUjuno)} of each ante funds the developer treasury for fee grants; ${formatJuno(ante.netUjuno)} reaches the pool.`
+                      }
+                    />
+                  )}
                 </dl>
 
                 {/* #1445: with no optional rules there is no right region at all -- an empty rail and a

@@ -62,9 +62,12 @@ export interface GameOverModalProps {
   /** Who the viewer is, for the "You Won!" / "You Went Bankrupt!" line.
    *  `null` for a spectator, who gets the standings without a verdict. */
   viewerAddress: string | null;
-  /** The pool the payout column divides. Displayed so the estimate is
-   *  legible as an estimate. */
-  totalAnte: number;
+  /** ESCROW-4: retired. It was the pool a float "Payout" column divided -- an estimate against a placeholder pool that
+   *  no escrow had agreed to. A real-money table's payout is Juno's, shown in `money`; a no-money table has none. */
+  totalAnte?: number;
+  /** ESCROW-4: a real-money table's financial band (`money/SettlementBand.tsx`), under the standings. The result above
+   *  it is final whatever the band says; `null` for a no-money table. */
+  money?: React.ReactNode;
   /** Named for the bankruptcy headline. */
   bankruptLabel: string | null;
   /* ==================================================================
@@ -78,12 +81,12 @@ export interface GameOverModalProps {
      RE-OPENABLE IS THE HALF THAT MAKES IT SAFE. A dismissible modal with no way back would lose the standings
      for good, so the shell keeps a control to raise it again; `onDismiss` is only ever a hide. */
   onDismiss: () => void;
-  /** Design note #899: closes the room and dispatches the payout. Any player may. `null` once it is closed,
-   *  or in a local game with nothing to settle -- the button becomes a statement instead of a control. */
+  /** Design note #899: closes the room. Any player may. `null` once it is closed, or in a local game -- the button
+   *  becomes a statement instead of a control. (ESCROW-4: it dispatches no payout -- a real-money table's is Juno's.) */
   onCloseRoom: (() => void) | null;
   /** What the auto-close countdown reads, already formatted. `null` when nothing is counting. */
   autoCloseIn: string | null;
-  /** Whether the room has already been closed and the payout dispatched. */
+  /** Whether the room has already been closed. */
   roomClosed: boolean;
   /* ==================================================================
       DESIGN NOTE 1411: THE EPILOGUE IS PAGED -- STANDINGS, THEN THE CHARTS
@@ -141,8 +144,8 @@ export function GameOverModal({
   standings,
   carcosa,
   viewerAddress,
-  totalAnte,
   bankruptLabel,
+  money = null,
   onDismiss,
   onCloseRoom,
   autoCloseIn,
@@ -270,7 +273,6 @@ export function GameOverModal({
             <span style={styles.cellNum}>Stock</span>
             <span style={styles.cellNum}>Privates</span>
             <span style={styles.cellNumStrong}>Net worth</span>
-            <span style={styles.cellPayout}>Payout</span>
             {hasCeremony && <span style={styles.cellBadges}>Accolades</span>}
           </div>
 
@@ -318,7 +320,6 @@ export function GameOverModal({
               <span style={styles.cellNum}>${row.stockValue}</span>
               <span style={styles.cellNum}>${row.privateValue}</span>
               <span style={styles.cellNumStrong}>${row.netWorth}</span>
-              <span style={styles.cellPayout}>${row.expectedPayout.toFixed(2)}</span>
               {/* #1433: what they won, on their row. */}
               {hasCeremony && history && (
                 <span style={styles.cellBadges}>
@@ -330,14 +331,15 @@ export function GameOverModal({
           })}
         </div>
 
-        {/* Design note #4 in `endgame.ts`: the payout is an ESTIMATE and the
-            modal says so where the number is, not in a footnote nobody
-            reads. Overstating this would be promising real money on a split
-            the contract has not agreed to. */}
-        <p style={styles.payoutNote}>
-          Payout estimated by share of net worth against a ${totalAnte} pool. The payout
-          distribution is settled on-chain when the room closes.
-        </p>
+        {/* ==================================================================
+             ESCROW-4 (brief §21): THE PLACEHOLDER PAYOUT IS GONE; A REAL-MONEY TABLE'S BAND IS HERE
+            ==================================================================
+            Design note #4 in `endgame.ts` printed a float "Payout" column against a placeholder pool and said it
+            would be "settled on-chain when the room closes" -- true of no table: a no-money table pays nothing,
+            and a real-money table's payout is what Juno records from the server's signed settlement, whatever
+            this screen estimates. So the column and its sentence are retired, and a real-money table shows its
+            financial band here, under the result the band never makes wait. */}
+        {money}
 
         {/* #1430: the "X wins with $Y" line is gone -- the WINNER tag on the row says it. */}
 
@@ -366,10 +368,10 @@ export function GameOverModal({
         <div style={styles.footer}>
           <span style={styles.footerNote}>
             {roomClosed
-              ? "The room is closed and the payout has been dispatched."
+              ? "The room is closed."
               : autoCloseIn
                 ? `Closing automatically in ${autoCloseIn}. Any player may close it now.`
-                : "Any player may close the room to settle the payout."}
+                : "Any player may close the room."}
           </span>
           {/* ==================================================================
                DESIGN NOTE 1436: THE PAGER IS THE DOTS AGAIN, APART FROM THE ACTIONS
@@ -526,7 +528,6 @@ const styles: Record<string, React.CSSProperties> = {
   cellNum: { flex: "0 0 110px", textAlign: "right" }, // #1409: room for five figures at the larger size
   cellNumStrong: { flex: "0 0 124px", textAlign: "right", fontWeight: 800, color: "#f2f0eb" },
   // #1430: the payout column, green and bold -- it is the money.
-  cellPayout: { flex: "0 0 110px", textAlign: "right", fontWeight: 800, color: "#7ee0a1" },
   cellBadges: { flex: "0 1 200px", display: "inline-flex", justifyContent: "flex-end", minWidth: 0 },
   verdictPlaced: { backgroundColor: "#1c1c1c", borderColor: "#3a3a3a", color: "#e8e6e0" },
   footer: {
@@ -610,7 +611,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: RADIUS.control,
     padding: "0 5px",
   },
-  payoutNote: { margin: 0, fontSize: FONT_SIZE.micro, color: "#8a8a86", lineHeight: 1.45 },
   winnerLine: { margin: 0, fontSize: FONT_SIZE.body, color: "#f2f0eb" },
   /* Design note #1091: the Yellow Sign's amber, italic, quieter than the winner's line above it. It is the
      last thing on a scoreboard and it is not a result -- a player who never saw the sign should be able to

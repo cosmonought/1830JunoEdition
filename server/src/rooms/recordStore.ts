@@ -64,7 +64,8 @@ export interface RecordStore {
 function schemaNewer(parsed: unknown): number | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const schema = (parsed as { record_schema?: unknown }).record_schema;
-  return typeof schema === "number" && Number.isSafeInteger(schema) && schema > 1 ? schema : null;
+  /* ESCROW-4: 2 is a real-money table (this build reads it); anything newer is another build's. */
+  return typeof schema === "number" && Number.isSafeInteger(schema) && schema > 2 ? schema : null;
 }
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -221,7 +222,7 @@ export function createFileRecordStore(
     }
     const newer = schemaNewer(parsed);
     if (newer !== null) {
-      throw new StoreIncompatibleError(`${gameId}.json is record_schema ${newer}; this build reads record_schema 1`, recordFile(gameId));
+      throw new StoreIncompatibleError(`${gameId}.json is record_schema ${newer}; this build reads record_schema 1 and 2`, recordFile(gameId));
     }
     if (!isGameRecord(parsed) || parsed.game_id !== gameId) {
       throw new StoreCorruptError(`${gameId}.json is not a game record`, recordFile(gameId), 0);

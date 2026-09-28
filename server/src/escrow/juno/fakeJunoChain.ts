@@ -23,7 +23,9 @@
 import { createHash } from "crypto";
 
 import {
+  annulDigestV1,
   checkSettlementPayloadV1,
+  consentDigestV1,
   encodeSettlementPayloadV1Hex,
   rosterHashV1,
   settleDigestOfEncodedHex,
@@ -140,6 +142,9 @@ export interface FakeSeat {
   wallet: string;
   consent_pubkey: string;
   join_ticket: string;
+  /** ESCROW-4: chain seconds the seat joined (the creator's CreateGame, or its Join); the fake's clock when absent. */
+  joined_at?: number;
+  consent_key_rotated_at?: number | null;
 }
 
 interface PayloadRecordJson {
@@ -179,6 +184,12 @@ interface FakeGame {
   dispute: null;
   outcome: { route: string; at: number; amounts: string[]; dust: string } | null;
   last_activity: number | null;
+  /* ESCROW-4: the contract's per-game facts the money layer reads (fixed at CreateGame, as the contract fixes them). */
+  created_at: number;
+  funding_deadline: number;
+  subsidy_per_seat: string;
+  subsidy_bps: number;
+  consent_bitmap: number;
 }
 
 class ContractFailure extends Error {}
@@ -204,6 +215,11 @@ export interface FakeChainOptions {
   readonly startTime?: number;
   readonly minGasPriceNum?: bigint;
   readonly minGasPriceDen?: bigint;
+  /** ESCROW-4: the contract's fee on every deposit (basis points; config `params.subsidy_bps`, default 100). */
+  readonly subsidyBps?: number;
+  /** ESCROW-4: the funding period a CreateGame fixes (seconds; default 3600). */
+  readonly fundingPeriodSecs?: number;
+  readonly minAnte?: string;
 }
 
 export class FakeJunoChain implements JunoRest {
@@ -275,8 +291,91 @@ export class FakeJunoChain implements JunoRest {
       dispute: null,
       outcome: null,
       last_activity: null,
+      created_at: this.time,
+      funding_deadline: this.time + (this.options.fundingPeriodSecs ?? 3600),
+      subsidy_per_seat: (BigInt(input.anteGross) - BigInt(input.anteNet)).toString(),
+      subsidy_bps: this.options.subsidyBps ?? 100,
+      consent_bitmap: 0,
     });
     return String(id);
+  }
+
+  /** ESCROW-4: a wallet's CreateGame, as `funding.rs::create_game` decides it: not paused, 2..7 players, the ante at or
+   *  above `min_ante`, the fee cut from it (floor(gross * bps / 10000)), the creator seat 0, FUNDING until the deadline. */
+  createGame(
+    sender: string,
+    msg: { readonly max_players: number; readonly mode: "live" | "async"; readonly rules_engine_version: number; readonly variants_digest: string; readonly consent_pubkey: string; readonly join_ticket: string },
+    gross: string,
+  ): { ok: true; chainGameId: string } | { ok: false; error: string } {
+    if (this.paused) return { ok: false, error: "the contract is paused" };
+    if (!Number.isInteger(msg.max_players) || msg.max_players < 2 || msg.max_players > 7) return { ok: false, error: `max_players must be between 2 and 7, got ${msg.max_players}` };
+    if (!/^[0-9a-f]{64}$/.test(msg.variants_digest) || !/^[0-9a-f]{64}$/.test(msg.join_ticket) || !/^0[23][0-9a-f]{64}$/.test(msg.consent_pubkey)) return { ok: false, error: "bad length" };
+    if (!/^[1-9][0-9]*$/.test(gross)) return { ok: false, error: `expected exactly one non-zero coin of ${this.options.denom}` };
+    if (BigInt(gross) < BigInt(this.options.minAnte ?? "1")) return { ok: false, error: `deposit ${gross} is below the minimum ante ${this.options.minAnte ?? "1"}` };
+    const bps = this.options.subsidyBps ?? 100;
+    const subsidy = (BigInt(gross) * BigInt(bps)) / BigInt(10_000);
+    const net = BigInt(gross) - subsidy;
+    const id = this.nextGameId;
+    this.nextGameId += 1;
+    this.games.set(id, {
+      chain_game_id: id,
+      state: "funding",
+      creator: sender,
+      max_players: msg.max_players,
+      mode: msg.mode,
+      rules_engine_version: msg.rules_engine_version,
+      variants_digest: msg.variants_digest,
+      denom: this.options.denom,
+      ante_gross: gross,
+      ante_net: net.toString(),
+      seats: [{ wallet: sender, consent_pubkey: msg.consent_pubkey, join_ticket: msg.join_ticket, joined_at: this.time, consent_key_rotated_at: null }],
+      roster_hash: null,
+      domain: null,
+      bond: null,
+      resolver: null,
+      last_seq: "0",
+      settlement: null,
+      checkpoints: new Map(),
+      dispute: null,
+      outcome: null,
+      last_activity: null,
+      created_at: this.time,
+      funding_deadline: this.time + (this.options.fundingPeriodSecs ?? 3600),
+      subsidy_per_seat: subsidy.toString(),
+      subsidy_bps: bps,
+      consent_bitmap: 0,
+    });
+    return { ok: true, chainGameId: String(id) };
+  }
+
+  /** ESCROW-4: the seat's own wallet replaces its consent key (FUNDING..SETTLEABLE; never another seat's current key). A
+   *  real rotation clears the seat's consent bit. */
+  setConsentKey(chainGameId: string, wallet: string, pubkey: string): { ok: true } | { ok: false; error: string } {
+    const game = this.games.get(Number(chainGameId));
+    if (game === undefined) return { ok: false, error: `game ${chainGameId} not found` };
+    if (!["funding", "funded", "in_progress", "settleable"].includes(game.state)) return { ok: false, error: `wrong state: game is ${game.state}` };
+    const index = game.seats.findIndex((seat) => seat.wallet === wallet);
+    if (index < 0) return { ok: false, error: `sender is not seated in game ${chainGameId}` };
+    if (!/^0[23][0-9a-f]{64}$/.test(pubkey)) return { ok: false, error: "new_pubkey must be a valid 33-byte compressed secp256k1 public key" };
+    const other = game.seats.findIndex((seat, at) => at !== index && seat.consent_pubkey === pubkey);
+    if (other >= 0) return { ok: false, error: `this consent key is already used by seat ${other} of this game` };
+    if (game.seats[index].consent_pubkey !== pubkey) {
+      game.seats[index].consent_pubkey = pubkey;
+      game.seats[index].consent_key_rotated_at = this.time;
+      game.consent_bitmap &= ~(1 << index);
+    }
+    return { ok: true };
+  }
+
+  /** ESCROW-4: a seat's Challenge (SETTLEABLE, inside the window): DISPUTED. The bond is not modelled. */
+  challenge(chainGameId: string, wallet: string): { ok: true } | { ok: false; error: string } {
+    const game = this.games.get(Number(chainGameId));
+    if (game === undefined) return { ok: false, error: "not found" };
+    if (game.state !== "settleable" || game.settlement === null) return { ok: false, error: `wrong state: game is ${game.state}` };
+    if (!game.seats.some((seat) => seat.wallet === wallet)) return { ok: false, error: "not seated" };
+    if (this.time >= game.settlement.window_end) return { ok: false, error: "the challenge window closed" };
+    game.state = "disputed";
+    return { ok: true };
   }
 
   private check(): void {
@@ -308,10 +407,10 @@ export class FakeJunoChain implements JunoRest {
         variants_digest: game.variants_digest,
         denom: game.denom,
         ante_gross: game.ante_gross,
-        subsidy_per_seat: "0",
+        subsidy_per_seat: game.subsidy_per_seat,
         ante_net: game.ante_net,
         terms: {
-          subsidy_bps: 0,
+          subsidy_bps: game.subsidy_bps,
           bond_bps: 0,
           bond_floor: "0",
           challenge_window_secs: this.options.challengeWindowSecs ?? 600,
@@ -319,10 +418,19 @@ export class FakeJunoChain implements JunoRest {
           resolver_timeout_secs: this.options.resolverTimeoutSecs ?? 604_800,
           treasury: this.options.treasury,
         },
-        created_at: nanos(this.time),
-        funding_deadline: nanos(this.time + 3600),
+        created_at: nanos(game.created_at),
+        funding_deadline: nanos(game.funding_deadline),
         pool: (BigInt(game.ante_net) * BigInt(game.seats.length)).toString(),
-        seats: game.seats.map((seat) => ({ wallet: seat.wallet, consent_pubkey: seat.consent_pubkey, consent_key_rotated_at: null, join_ticket: seat.join_ticket, gross_deposit: game.ante_gross, subsidy_paid: "0", net_deposit: game.ante_net, joined_at: nanos(this.time) })),
+        seats: game.seats.map((seat) => ({
+          wallet: seat.wallet,
+          consent_pubkey: seat.consent_pubkey,
+          consent_key_rotated_at: seat.consent_key_rotated_at === undefined || seat.consent_key_rotated_at === null ? null : nanos(seat.consent_key_rotated_at),
+          join_ticket: seat.join_ticket,
+          gross_deposit: game.ante_gross,
+          subsidy_paid: game.subsidy_per_seat,
+          net_deposit: game.ante_net,
+          joined_at: nanos(seat.joined_at ?? game.created_at),
+        })),
         roster_hash: game.roster_hash,
         domain: game.domain,
         bond: game.bond,
@@ -331,15 +439,15 @@ export class FakeJunoChain implements JunoRest {
         last_activity: game.last_activity === null ? null : nanos(game.last_activity),
         last_seq: game.last_seq,
         settlement: game.settlement === null ? null : { source: game.settlement.source, payload: game.settlement.payload, accepted_at: nanos(game.settlement.accepted_at), window_end: nanos(game.settlement.window_end) },
-        consent_bitmap: 0,
-        dispute: null,
+        consent_bitmap: game.consent_bitmap,
+        dispute: game.state === "disputed" ? { challenger: game.seats[0]?.wallet ?? "", evidence_hash: "00".repeat(32), bond: game.bond ?? "0" } : null,
         outcome: game.outcome === null ? null : { route: game.outcome.route, at: nanos(game.outcome.at), amounts: game.outcome.amounts, dust: game.outcome.dust, distributed: "0", bond_returned: "0", bond_to_pool: "0" },
       },
       paused: this.paused,
       latest_checkpoint: latest === null ? null : { payload: latest.payload, accepted_at: nanos(latest.accepted_at) },
       trusted_seq: this.trustedSeq(game).toString(),
       deadlines: {
-        funding_deadline: nanos(this.time + 3600),
+        funding_deadline: nanos(game.funding_deadline),
         liveness_available_at: null,
         challenge_window_end: game.settlement === null ? null : nanos(game.settlement.window_end),
         resolver_timeout_at: null,
@@ -454,18 +562,61 @@ export class FakeJunoChain implements JunoRest {
         if (game.state !== "settleable" || game.settlement === null) throw wrongState("settleable");
         if (this.time < game.settlement.window_end) throw new ContractFailure(`the challenge window is open until ${nanos(game.settlement.window_end)}`);
         if (!apply) return;
-        const weights = game.settlement.payload.settlement_weights.map((w) => BigInt(w));
-        const pool = BigInt(game.ante_net) * BigInt(game.seats.length);
-        const sum = weights.reduce((a, b) => a + b, BigInt(0));
-        const amounts = weights.map((w) => (pool * w) / sum);
-        const dust = pool - amounts.reduce((a, b) => a + b, BigInt(0));
-        game.outcome = { route: "finalized", at: this.time, amounts: amounts.map((a) => a.toString()), dust: dust.toString() };
-        game.state = "settled";
+        this.payOut(game, "finalized");
+        return;
+      }
+      case "consent": {
+        /* ESCROW-4 (`play.rs::consent`): SETTLEABLE, not paused; one seat's signature over the CONSENT digest of the stored
+           settlement, verified against that seat's CURRENT key. Every seat consented: paid out at once. */
+        if (game.state !== "settleable" || game.settlement === null) throw wrongState("settleable");
+        if (this.paused) throw new ContractFailure("the contract is paused");
+        const seatIndex = Number(body.seat_index);
+        const seat = game.seats[seatIndex];
+        if (seat === undefined) throw new ContractFailure(`seat index ${String(body.seat_index)} is out of range`);
+        const digest = consentDigestV1(game.domain ?? "", BigInt(game.settlement.payload.seq), game.settlement.payload.payload_digest);
+        const signature = String(body.signature);
+        if (!/^[0-9a-f]{128}$/.test(signature)) throw new ContractFailure(`a signature must be 64 bytes r||s, got ${signature.length / 2}`);
+        if (!verifyDigest(Buffer.from(seat.consent_pubkey, "hex"), Buffer.from(digest, "hex"), Buffer.from(signature, "hex"))) throw new ContractFailure(`invalid signature for seat ${seatIndex}`);
+        if (!apply) return;
+        game.consent_bitmap |= 1 << seatIndex;
+        if (game.consent_bitmap === (1 << game.seats.length) - 1) this.payOut(game, "consent_completed");
+        return;
+      }
+      case "annul_by_consent": {
+        /* ESCROW-4 (`dispute.rs::annul_by_consent`): IN_PROGRESS or SETTLEABLE (works while paused); EVERY seat's signature
+           over ANNUL(domain, trusted_seq), each against that seat's current key; every net ante refunded. */
+        if (game.state !== "in_progress" && game.state !== "settleable") throw wrongState("in_progress or settleable");
+        const consents = Array.isArray(body.consents) ? (body.consents as Array<{ seat_index: number; signature: string }>) : [];
+        const digest = annulDigestV1(game.domain ?? "", this.trustedSeq(game));
+        const seen = new Set<number>();
+        for (const consent of consents) {
+          const seat = game.seats[consent.seat_index];
+          if (seat === undefined) throw new ContractFailure(`seat index ${consent.seat_index} is out of range`);
+          if (seen.has(consent.seat_index)) throw new ContractFailure(`duplicate signature for seat ${consent.seat_index}`);
+          seen.add(consent.seat_index);
+          if (!/^[0-9a-f]{128}$/.test(consent.signature) || !verifyDigest(Buffer.from(seat.consent_pubkey, "hex"), Buffer.from(digest, "hex"), Buffer.from(consent.signature, "hex"))) {
+            throw new ContractFailure(`invalid signature for seat ${consent.seat_index}`);
+          }
+        }
+        for (let at = 0; at < game.seats.length; at += 1) if (!seen.has(at)) throw new ContractFailure(`every seat must sign; seat ${at} is missing`);
+        if (!apply) return;
+        game.outcome = { route: "annul_by_consent", at: this.time, amounts: game.seats.map(() => game.ante_net), dust: "0" };
+        game.state = "annulled";
         return;
       }
       default:
         throw new ContractFailure(`Generic error: unknown variant ${variant}`);
     }
+  }
+
+  private payOut(game: FakeGame, route: string): void {
+    const weights = (game.settlement as NonNullable<FakeGame["settlement"]>).payload.settlement_weights.map((w) => BigInt(w));
+    const pool = BigInt(game.ante_net) * BigInt(game.seats.length);
+    const sum = weights.reduce((a, b) => a + b, BigInt(0));
+    const amounts = weights.map((w) => (pool * w) / sum);
+    const dust = pool - amounts.reduce((a, b) => a + b, BigInt(0));
+    game.outcome = { route, at: this.time, amounts: amounts.map((a) => a.toString()), dust: dust.toString() };
+    game.state = "settled";
   }
 
   /** A wallet's Join, exactly as `contracts/escrow/src/execute/funding.rs::join` (escrow 2.0.0) decides it: FUNDING, a
@@ -480,7 +631,10 @@ export class FakeJunoChain implements JunoRest {
     if (game.seats.some((existing) => existing.wallet === seat.wallet)) return { ok: false, error: "already joined" };
     if (this.paused) return { ok: false, error: "the contract is paused" };
     if (game.seats.length >= game.max_players) return { ok: false, error: "game full" };
+    if (this.time >= game.funding_deadline) return { ok: false, error: "the funding deadline has passed" };
     if (!/^[0-9a-f]{64}$/.test(seat.join_ticket)) return { ok: false, error: "join_ticket must be 32 bytes" };
+    const keyUser = game.seats.findIndex((existing) => existing.consent_pubkey === seat.consent_pubkey);
+    if (keyUser >= 0) return { ok: false, error: `this consent key is already used by seat ${keyUser} of this game` };
     if (!/^(0|[1-9][0-9]{0,19})$/.test(admission.expires_at)) return { ok: false, error: "Error parsing into type eighteen_cosmos_escrow::msg::ExecuteMsg: invalid Uint64" };
     if (BigInt(this.time) >= BigInt(admission.expires_at)) return { ok: false, error: `the join admission expired at ${admission.expires_at}` };
     let digest = "";
@@ -493,7 +647,7 @@ export class FakeJunoChain implements JunoRest {
     if (digest === "" || signature.length !== 64 || !verifyDigest(Buffer.from(this.admissionPubkey, "hex"), Buffer.from(digest, "hex"), signature)) {
       return { ok: false, error: "the join admission does not authorize this wallet for this game" };
     }
-    game.seats.push({ ...seat });
+    game.seats.push({ ...seat, joined_at: this.time, consent_key_rotated_at: null });
     if (game.seats.length === game.max_players) game.state = "funded";
     return { ok: true };
   }
@@ -510,13 +664,15 @@ export class FakeJunoChain implements JunoRest {
     return { ok: true };
   }
 
-  /** The creator's (or, after the deadline, anyone's) Cancel before Start. */
-  cancel(chainGameId: string): void {
+  /** The creator's (or, after the deadline, anyone's) Cancel before Start. `sender` (ESCROW-4) is checked when given. */
+  cancel(chainGameId: string, sender?: string): { ok: true } | { ok: false; error: string } {
     const game = this.games.get(Number(chainGameId));
-    if (game !== undefined && (game.state === "funding" || game.state === "funded")) {
-      game.state = "cancelled";
-      game.outcome = { route: "creator_cancel", at: this.time, amounts: game.seats.map(() => game.ante_net), dust: "0" };
-    }
+    if (game === undefined) return { ok: false, error: "not found" };
+    if (game.state !== "funding" && game.state !== "funded") return { ok: false, error: `wrong state: game is ${game.state}` };
+    if (sender !== undefined && sender !== game.creator && this.time < game.funding_deadline) return { ok: false, error: "unauthorized: only the creator may do this" };
+    game.state = "cancelled";
+    game.outcome = { route: sender === undefined || sender === game.creator ? "creator_cancel" : "deadline_cancel", at: this.time, amounts: game.seats.map(() => game.ante_net), dust: "0" };
+    return { ok: true };
   }
 
   /** A test's wallet action (a seat's LivenessSettle, an operator's pause, a consent completion...). */
@@ -621,13 +777,25 @@ export class FakeJunoChain implements JunoRest {
           resolver: this.options.resolver,
           treasury: this.options.treasury,
           denom: this.options.denom,
-          params: { subsidy_bps: 100, min_ante: "1", bond_bps: 0, bond_floor: "0", challenge_window_live_secs: 600, challenge_window_async_secs: 600, funding_period_live_secs: 3600, funding_period_async_secs: 3600, liveness_window_secs: this.options.livenessWindowSecs ?? 86_400, resolver_timeout_secs: this.options.resolverTimeoutSecs ?? 604_800 },
+          params: { subsidy_bps: this.options.subsidyBps ?? 100, min_ante: this.options.minAnte ?? "1", bond_bps: 0, bond_floor: "0", challenge_window_live_secs: 600, challenge_window_async_secs: 600, funding_period_live_secs: 3600, funding_period_async_secs: 3600, liveness_window_secs: this.options.livenessWindowSecs ?? 86_400, resolver_timeout_secs: this.options.resolverTimeoutSecs ?? 604_800 },
           paused: this.paused,
         },
         next_chain_game_id: this.nextGameId,
         next_signer_key_id: this.signerKeys.length + 1,
         contract_name: "crates.io:eighteen-cosmos-escrow",
         contract_version: "2.0.0",
+      };
+    }
+    if (variant === "games") {
+      /* ESCROW-4: the game list, ascending by id after `start_after`, at most 30. */
+      const after = body.start_after === null || body.start_after === undefined ? 0 : Number(body.start_after);
+      const limit = Math.min(30, Number(body.limit ?? 10));
+      return {
+        games: [...this.games.values()]
+          .filter((game) => game.chain_game_id > after)
+          .sort((a, b) => a.chain_game_id - b.chain_game_id)
+          .slice(0, limit)
+          .map((game) => ({ chain_game_id: game.chain_game_id, state: game.state, creator: game.creator, mode: game.mode, max_players: game.max_players, seats_filled: game.seats.length, ante_gross: game.ante_gross, pool: (BigInt(game.ante_net) * BigInt(game.seats.length)).toString() })),
       };
     }
     if (variant === "signer_keys") {
@@ -645,6 +813,13 @@ export class FakeJunoChain implements JunoRest {
       };
     }
     throw new JunoRpcError("refused", `smart query refused: ${variant}`);
+  }
+
+  /** ESCROW-4: one node, so the quorum read is its answer (a disagreeing second node is modelled by `quorumDisagrees`). */
+  quorumDisagrees = false;
+  async smartQuorum(contract: string, queryJson: string): Promise<unknown> {
+    if (this.quorumDisagrees) throw new JunoRpcError("unavailable", "quorum read: the endpoints disagree");
+    return this.smart(contract, queryJson);
   }
 
   async smartAt(contract: string, queryJson: string): Promise<{ readonly data: unknown; readonly height: string | null }> {

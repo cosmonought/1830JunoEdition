@@ -3648,6 +3648,13 @@ server never starts such a roster but cannot stop the seat being taken (3B §18 
 ruling OD-4-2 (decided 2026-09-27):** relaying an already-valid CONSENT/ANNUL signature needs no `hasSensitiveAuth`; creating,
 replacing or moving the consent/signing key needs sensitive re-authentication plus the wallet's own authorization. Record:
 `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md`.
+**ESCROW-4 (2026-09-28): the player-facing Juno escrow path.** No rules change and no replay change: no reducer file, golden,
+vector, contract source or wasm was touched; `SetupGame` is unchanged; the Juno oracle stays green. Money tables open only behind
+the operator's `ESCROW_MONEY_TABLES=nonmainnet` on a verified non-mainnet backend with certified rules (production fail-closed
+until LIVE-5's KMS). Financial protocol 3; money GameRecords `record_schema 2`; hosted protocol 1. The shell change is UI and copy
+only: the waiting room's money panel replaces Ready at a money table; the result's placeholder payout column and the activity-log
+line "The payout distribution has been dispatched for on-chain settlement" are gone (the #899 console stub stays, pinned by
+`shellMessageArms`). UI residuals filed as U-44 and U-45. Record: `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md`.
 
 **S10-7. Engine tests and packaging.** 304 engine-adjacent suites still live in `frontend/src/utils/` (Jest
 `roots` + per-suite classification, Batch 1 §6d); a repo-root `shared/` package needs CRA's `ModuleScopePlugin`,
@@ -4622,6 +4629,16 @@ effect, no golden.** Source: UR audit "UR-5 implementation (rev 9)", backlog S9-
 completed-game Bagholder / Little Engine detail-format lines in `accolades.test.ts` (vacuous on CV4) and the
 more-than-ten-OR timeline in `roundReplay.test.ts` / `gameHistory.test.ts` — test coverage for standard epilogue
 statistics, not a rule; see S10-21.)*
+
+**U-44.** (filed 2026-09-28 by ESCROW-4) **Money-surface times.** The server's money sentences say "HH:MM UTC" (seat locks,
+the Start grace); the money panel, band and review card show local "HH:MM" unlabelled. Pick one convention (local with the zone,
+say) in the copy / UX pass. Also for that pass: the money panel's styling is functional only (the waiting room's ink palette,
+`moneyStyles.ts`); the Keplr logo is still U-15. **No reducer change, no replay effect.** `DEFERRED`.
+**U-45.** (filed 2026-09-28 by ESCROW-4) **Two tabs can both reach Keplr for one CreateGame.** The single-flight check reads the
+browser's pending-transaction record, which exists only once Keplr has signed; two tabs pressing "Open the table on Juno"
+before either signs both open Keplr, and approving both makes a duplicate escrow (it is listed in "Your deposits" with Cancel;
+its fee is not refunded). A cross-tab lock (a `BroadcastChannel` or a storage lock taken before Keplr opens) would close it.
+`DEFERRED`.
 
 ## Part D — Deliberate rules deviations and owner decisions (never to be "fixed" as bugs)
 

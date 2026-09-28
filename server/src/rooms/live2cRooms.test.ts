@@ -977,6 +977,7 @@ describe("LIVE-2C reads and access loss", () => {
       const first = await frameWhere(lister, (frame) => frame.kind === "rooms", "the list");
       const rooms = first.rooms as Array<Record<string, unknown>>;
       assert.deepEqual(rooms.map((room) => room.gameId), [open.gameId]);
+      /* ESCROW-4: additive only -- an ordinary table's entry is exactly as before (no `stake` key). */
       assert.deepEqual(Object.keys(rooms[0]).sort(), ["code", "createdAtMs", "gameId", "hostNickname", "nicknames", "playerCount", "readyCount", "seatCap", "seated", "status", "variants"]);
       for (let n = 0; n < 5; n += 1) await op(open.host, { type: "set-profile", nickname: `Hana${n}` }, open.gameId);
       await sleep(450);

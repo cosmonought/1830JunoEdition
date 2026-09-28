@@ -368,14 +368,20 @@ describe("ESCROW-JOIN: authorizeJoin issues an admission only through the existi
   });
 });
 
-describe("ESCROW-JOIN: the ticket file store keeps the admission, and still reads a 3B ledger", () => {
-  test("a 3B grant (no admitted_until_secs) reads as never admitted; a recorded admission round-trips; a bad value is unreadable", async () => {
+describe("ESCROW-JOIN: the ticket file store keeps the admission (financial protocol 3: an older ledger is refused, never reinterpreted)", () => {
+  test("a protocol-2 grant (3B's or ESCROW-JOIN's shape) is unreadable; a v3 grant's recorded admission round-trips; a bad value is unreadable", async () => {
     const data = fs.mkdtempSync(path.join(os.tmpdir(), "escrow-join-tickets-"));
     const dir = path.join(data, "games", "wallet-tickets");
     fs.mkdirSync(dir, { recursive: true });
     const grant3b = { format: "gs-wallet-ticket", game_id: GAME_A, player_id: BOB, epoch: 1, wallet: WALLETS[1], ticket: "ab".repeat(32), issued_at: 5, issued_under: { principal_id: "pr_1", family_id: "sf_1", recovery_selector: "rk_1" }, revoked_at: null, revoke_reason: null, frozen_at: null };
-    fs.writeFileSync(path.join(dir, `${GAME_A}.json`), `${JSON.stringify({ format: "gs-wallet-tickets", version: 1, game_id: GAME_A, document: { frozen_at: null, grants: [grant3b] } })}\n`);
+    const write = (grant: object) => fs.writeFileSync(path.join(dir, `${GAME_A}.json`), `${JSON.stringify({ format: "gs-wallet-tickets", version: 1, game_id: GAME_A, document: { frozen_at: null, grants: [grant] } })}\n`);
     const ledger = createWalletTicketLedger({ store: createFileWalletTicketStore(data), standing: () => ({ kind: "standing" }), holdsSeat: () => true, now: () => 1_000 });
+    /* ESCROW-4 amendment: no money game was ever created under financial protocol 2, so its ledgers are not migrated. */
+    write(grant3b);
+    await assert.rejects(() => ledger.standingGrantOf(GAME_A, BOB), (error: unknown) => error instanceof WalletTicketStoreUnreadableError && /financial protocol 2/.test(error.message));
+    write({ ...grant3b, admitted_until_secs: null });
+    await assert.rejects(() => ledger.standingGrantOf(GAME_A, BOB), (error: unknown) => error instanceof WalletTicketStoreUnreadableError && /financial protocol 2/.test(error.message));
+    write({ ...grant3b, admitted_until_secs: null, proof: null, consent_keys: [], relinked_from: null, create_floor: null });
     assert.equal((await ledger.standingGrantOf(GAME_A, BOB))?.admitted_until_secs, null);
     assert.equal(await ledger.recordAdmission({ gameId: GAME_A, playerId: BOB, epoch: 1, wallet: WALLETS[1], ticket: "ab".repeat(32), expiresAt: 900 }), "committed");
     assert.equal(await ledger.recordAdmission({ gameId: GAME_A, playerId: BOB, epoch: 1, wallet: WALLETS[1], ticket: "ab".repeat(32), expiresAt: 800 }), "committed");
@@ -383,7 +389,8 @@ describe("ESCROW-JOIN: the ticket file store keeps the admission, and still read
     assert.equal(await ledger.recordAdmission({ gameId: GAME_A, playerId: BOB, epoch: 2, wallet: WALLETS[1], ticket: "ab".repeat(32), expiresAt: 900 }), "refused", "another epoch");
     assert.equal(await ledger.recordAdmission({ gameId: GAME_A, playerId: BOB, epoch: 1, wallet: WALLETS[2], ticket: "ab".repeat(32), expiresAt: 900 }), "refused", "another wallet");
     const stored = JSON.parse(fs.readFileSync(path.join(dir, `${GAME_A}.json`), "utf8"));
-    assert.equal(stored.document.grants[0].admitted_until_secs, 900, "written in the new shape");
+    assert.equal(stored.document.grants[0].admitted_until_secs, 900, "written in the v3 shape");
+    assert.deepEqual(Object.keys(stored.document.grants[0]).sort(), [...Object.keys(grant3b), "admitted_until_secs", "proof", "consent_keys", "relinked_from", "create_floor"].sort());
     stored.document.grants[0].admitted_until_secs = "soon";
     fs.writeFileSync(path.join(dir, `${GAME_A}.json`), `${JSON.stringify(stored)}\n`);
     await assert.rejects(() => ledger.standingGrantOf(GAME_A, BOB), WalletTicketStoreUnreadableError);

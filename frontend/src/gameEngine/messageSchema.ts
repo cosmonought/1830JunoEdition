@@ -852,7 +852,8 @@ const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
     nickname: req(str(MAX_NARRATION_LENGTH)),
     color: opt((value) => value === null || str(MAX_ID_LENGTH)(value)),
     /* A stake, chain-neutral (an opaque integer string in the settlement backend's smallest unit): LIVE-2 refuses
-       any non-zero one. No chain's denomination is named here (GNOLAND-1 may share the backend). */
+       any non-zero one. No chain's denomination is named here (GNOLAND-1 may share the backend). ESCROW-4: a non-zero
+       stake opens a real-money table where the server enables them (its terms are the server's pinned deployment). */
     stake: opt(str(MAX_AMOUNT_LENGTH)),
   }),
   join: nullTable({ type: req(str(16)), code: req(str(32)), takeSeat: req(isBool) }),

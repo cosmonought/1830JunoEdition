@@ -60,6 +60,8 @@ import { isMaintenanceHold } from "./rooms/committedView";
 import { createMemoryHoldStore, HoldUnreadableError, makeHold, type HoldStore } from "./rooms/holdStore";
 import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILING_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE, type SettlementLifecycle } from "./rooms/lifecycle";
 import { NO_MONEY_CONTINUATION, type MoneyContinuationPolicy } from "./escrow/moneyContinuation";
+import { createMoneyLimiter, handleMoneyHttp } from "./escrow/moneyHttpApi";
+import type { MoneyTables } from "./escrow/moneyTables";
 import type { EscrowGameplaySeam } from "./rooms/roomHost";
 import { reconcileLoaded } from "./rooms/reconcile";
 import { NO_OPS, type OpsRecorder } from "./persistence/opsRecorder";
@@ -246,6 +248,9 @@ export interface GameServerOptions {
   /** ESCROW-3B: the escrow service's gameplay seam (checkpoints) and the frozen-roster fact (`escrow/escrowService.ts`).
    *  Absent: no money game can exist here. */
   escrow?: EscrowGameplaySeam;
+  /** ESCROW-4: the real-money table layer, bound late (it is built on this server's room port). Absent or null: no
+   *  money table can be created, and `/gs/api/money/*` answers 404. */
+  money?: () => MoneyTables | null;
   /** LIVE-3C: more for the status snapshot -- `start.ts` adds the identity store's health. */
   statusExtras?: () => Record<string, unknown>;
 }
@@ -984,6 +989,7 @@ export function createGameServer(options: GameServerOptions): {
     settlement: options.settlement ?? NO_MONEY_SETTLEMENT,
     moneyContinuation,
     ...(options.escrow !== undefined ? { escrow: options.escrow } : {}),
+    ...(options.money !== undefined ? { money: options.money } : {}),
     boardFacts,
     statusExtras: () => ({
       store: { restart_required: counters.restartRequired, uncertain: counters.storeUncertain, held_corrupt: counters.heldCorrupt, held_durable: counters.heldDurable, timeouts: counters.storeTimeouts },
@@ -1015,7 +1021,32 @@ export function createGameServer(options: GameServerOptions): {
     },
   });
 
+  /* ESCROW-4: `/gs/api/money/*` (its own per-session budget; the same ingress rules as the identity routes). */
+  const moneyLimiter = createMoneyLimiter(identityNow);
   const http = createServer((req, res) => {
+    if (
+      handleMoneyHttp(
+        req,
+        res,
+        {
+          allowedOrigins,
+          trustedProxyHops: identityOptions.trustedProxyHops,
+          identity,
+          maxBodyBytes: limits.identity.maxApiBodyBytes,
+          now: identityNow,
+          money: options.money ?? (() => null),
+          onError: (what, error) => {
+            const ref = errorRef();
+            // eslint-disable-next-line no-console
+            console.error(`  money: ${what} failed (ref ${ref}) -- ${excerpt(error instanceof Error ? error.message : String(error), 300)}`);
+            return ref;
+          },
+        },
+        moneyLimiter,
+      )
+    ) {
+      return;
+    }
     if (
       handleIdentityHttp(req, res, {
         mode,
@@ -1116,6 +1147,7 @@ export function createGameServer(options: GameServerOptions): {
       if (verdict !== "ok") closeForSession(socket, verdict);
     }
     identityLimiter.prune();
+    moneyLimiter.prune();
     roomHost?.prune();
     void identity.sweep(now).catch(() => undefined); // a store failure is reported by the identity hook
   }, limits.identity.sweepIntervalMs);

@@ -39,6 +39,8 @@ import {
 import { MIN_PLAYERS, maxPlayersFor } from "../gameEngine/gameSetup";
 import { DEFAULT_ROOM_SETUP, type RoomSetup, type RoomVisibility } from "../utils/sandboxRoomSummary";
 import { NativeModal } from "./NativeModal";
+/* ESCROW-4: the stake, when the server opens real-money tables on this build's escrow. */
+import { HostStakeSection, stakeChoice, useMoneyTableOffer } from "./money/HostStakeSection";
 
 /** The type boxes' sentences, as asked. `GAME_TYPE_COPY`'s blurbs are the waiting room's and the Lobby's older
  *  form's; these are the host's first screen, which reads them side by side. */
@@ -118,6 +120,12 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
   const [visibility, setVisibility] = useState<RoomVisibility>(DEFAULT_ROOM_SETUP.visibility);
   const [variants, setVariants] = useState<GameVariants>(() => recommendedVariantsFor("standard", "live"));
   const [playerCount, setPlayerCount] = useState<number | null>(null);
+  /* ESCROW-4: a real-money table's stake -- offered only when the server and this build agree on the escrow. */
+  const moneyOffer = useMoneyTableOffer();
+  const [stakeOn, setStakeOn] = useState(false);
+  const [stakeText, setStakeText] = useState("");
+  const stake = stakeChoice(moneyOffer, stakeOn, stakeText, playerCount);
+  const stakeBlocks = stakeOn && moneyOffer !== null && stake.problem !== null;
   /* #1447: a card whose artwork cannot be fetched or decoded falls back to the text-only box this step
      used before -- an empty black well would read as a broken card. */
   const [artFailed, setArtFailed] = useState<Partial<Record<GameType, boolean>>>({});
@@ -257,7 +265,8 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
   };
 
   const create = () => {
-    onCreate({ ...variants, mode }, { visibility, playerCount, anteUjuno: DEFAULT_ROOM_SETUP.anteUjuno });
+    if (stakeBlocks) return;
+    onCreate({ ...variants, mode }, { visibility, playerCount, anteUjuno: stakeOn && moneyOffer !== null && stake.base !== null ? stake.base : DEFAULT_ROOM_SETUP.anteUjuno });
   };
 
   return (
@@ -416,10 +425,27 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
             </p>
 
             <Section title="Set Ante">
-              <div style={styles.row}>
-                <input style={{ ...styles.input, ...styles.inputDisabled }} value="0 JUNO" disabled aria-label="Ante" readOnly />
-              </div>
-              <p style={styles.note}>{ANTE_SUBSIDY_NOTE}</p>
+              {moneyOffer !== null ? (
+                <HostStakeSection
+                  offer={moneyOffer}
+                  on={stakeOn}
+                  onToggle={(on) => {
+                    setStakeOn(on);
+                    /* A real-money table needs an exact count: default to two seats rather than leave it "any". */
+                    if (on && playerCount === null) setPlayerCount(MIN_PLAYERS);
+                  }}
+                  typed={stakeText}
+                  onType={setStakeText}
+                  choice={stake}
+                />
+              ) : (
+                <>
+                  <div style={styles.row}>
+                    <input style={{ ...styles.input, ...styles.inputDisabled }} value="0 JUNO" disabled aria-label="Ante" readOnly />
+                  </div>
+                  <p style={styles.note}>{ANTE_SUBSIDY_NOTE}</p>
+                </>
+              )}
             </Section>
 
             <Section title="Player Count">
@@ -499,9 +525,9 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
               </button>
               <button
                 type="button"
-                style={{ ...styles.primaryButton, ...(busy ? styles.disabled : {}) }}
+                style={{ ...styles.primaryButton, ...(busy || stakeBlocks ? styles.disabled : {}) }}
                 onClick={create}
-                disabled={busy}
+                disabled={busy || stakeBlocks}
                 data-testid="host-create-room"
               >
                 {busy ? "Opening…" : "Create Room"}

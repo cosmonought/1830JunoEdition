@@ -87,7 +87,7 @@ import { legacyOfferMessageRefusal, pendingOfferBlock } from "./pendingOfferHold
 import { harmlessDuplicateAnswer } from "./harmlessDuplicate"; // #1687 (Stage 10.2 follow-up)
 /* Design note #1630 (Slice 8.4): the M&H exchange's request predicate -- the same function the reducer's arm
    asks, so the socket and the board cannot disagree about whether an exchange is legal. */
-import { mhExchangeRequestRefusal, type MhExchangeRequest } from "./mohawkExchange";
+import { mhExchangeRequestRefusal } from "./mohawkExchange";
 import {
   answerPrivatePurchaseRefusal,
   privatePurchaseRefusal,
@@ -111,7 +111,6 @@ import {
   boardHomeHexToAxial,
   homePlacementRefusal,
   homeStationHold,
-  type HomePlacement,
 } from "./homeStationAuthority";
 // UR-3 (OD-UR-1 = 1-A, D-37): a pinned table resolves the Yellow Sign inside the run; it takes no request for one.
 import { yellowSignRequestRefusal } from "./yellowSign";

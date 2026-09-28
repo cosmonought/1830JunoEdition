@@ -30,37 +30,15 @@
 import { junoContractError } from "../../../../frontend/src/gameEngine/escrow/junoCodecV1";
 import { codecDigest, type EscrowError, type EscrowGameView, type EscrowState } from "../../../../frontend/src/gameEngine/escrow/escrowModel";
 import type { SettlementPayloadV1Wire } from "../../../../frontend/src/gameEngine/escrow/settlementCoreV1";
+/* ESCROW-4: the wallet messages (and the ABI error they throw) live in the browser's tree, byte for byte as ESCROW-3B wrote
+   them here: the browser builds and signs them, the server never does, and one module means one spelling. */
+import { JunoAbiError, WALLET_EXECUTE, hexField, hexOfLength, junoExecuteJson as execute, u64Json } from "../../../../frontend/src/gameEngine/escrow/junoWalletMessages";
 
-export class JunoAbiError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "JunoAbiError";
-  }
-}
+export { JunoAbiError, WALLET_EXECUTE };
 
-const DECIMAL = /^(0|[1-9][0-9]{0,19})$/;
-const HEX = (bytes: number) => new RegExp(`^[0-9a-f]{${bytes * 2}}$`);
+const HEX = hexOfLength;
 const HEX32 = HEX(32);
 const HEX64 = HEX(64);
-const U64_MAX = (BigInt(1) << BigInt(64)) - BigInt(1);
-
-/** A u64 decimal, checked, for writing as a bare JSON integer. */
-function u64Json(value: string, where: string): string {
-  if (typeof value !== "string" || !DECIMAL.test(value) || BigInt(value) > U64_MAX) throw new JunoAbiError(`${where}=${String(value)} is not a u64 decimal`);
-  return value;
-}
-
-const hexField = (value: string, re: RegExp, where: string): string => {
-  if (typeof value !== "string" || !re.test(value)) throw new JunoAbiError(`${where} is not lowercase hex of the right length`);
-  return value;
-};
-
-/** `{"<variant>":{<fields>}}` with `chain_game_id` spliced as an integer (no JavaScript number in between). */
-function execute(variant: string, chainGameId: string | null, fields: Record<string, unknown>): string {
-  const rest = JSON.stringify(fields);
-  const inner = chainGameId === null ? rest : rest === "{}" ? `{"chain_game_id":${chainGameId}}` : `{"chain_game_id":${chainGameId},${rest.slice(1)}`;
-  return `{"${variant}":${inner}}`;
-}
 
 export interface SeatSignatureJson {
   readonly seat_index: number;
@@ -87,36 +65,6 @@ export const RELAYER_EXECUTE = Object.freeze({
   annulByConsent: (chainGameId: string, consents: readonly SeatSignatureJson[]) => execute("annul_by_consent", u64Json(chainGameId, "chain_game_id"), { consents: seatSignatures(consents) }),
 });
 
-/** Wallet execute messages (ESCROW-4 hands these to the player's wallet; the server never signs them). */
-export const WALLET_EXECUTE = Object.freeze({
-  createGame: (a: { maxPlayers: number; mode: 0 | 1; rulesEngineVersion: number; variantsDigest: string; consentPubkey: string; joinTicket: string }) => {
-    if (!Number.isInteger(a.maxPlayers) || a.maxPlayers < 2 || a.maxPlayers > 7) throw new JunoAbiError("max_players");
-    if (!Number.isInteger(a.rulesEngineVersion) || a.rulesEngineVersion < 0 || a.rulesEngineVersion > 0xffffffff) throw new JunoAbiError("rules_engine_version");
-    return execute("create_game", null, {
-      max_players: a.maxPlayers,
-      mode: a.mode === 0 ? "live" : "async",
-      rules_engine_version: a.rulesEngineVersion,
-      variants_digest: hexField(a.variantsDigest, HEX32, "variants_digest"),
-      consent_pubkey: hexField(a.consentPubkey, HEX(33), "consent_pubkey"),
-      join_ticket: hexField(a.joinTicket, HEX32, "join_ticket"),
-    });
-  },
-  /** ESCROW-JOIN: the admission is the server's signature for THIS wallet (the transaction's sender), this game and this
-   *  ticket until `expiresAt` (Unix seconds, a decimal string: a Uint64 on the wire). Without it the contract refuses. */
-  join: (chainGameId: string, consentPubkey: string, joinTicket: string, admission: { readonly expiresAt: string; readonly signature: string }) =>
-    execute("join", u64Json(chainGameId, "chain_game_id"), {
-      consent_pubkey: hexField(consentPubkey, HEX(33), "consent_pubkey"),
-      join_ticket: hexField(joinTicket, HEX32, "join_ticket"),
-      admission: { expires_at: u64Json(admission.expiresAt, "admission.expires_at"), signature: hexField(admission.signature, HEX64, "admission.signature") },
-    }),
-  withdraw: (chainGameId: string) => execute("withdraw", u64Json(chainGameId, "chain_game_id"), {}),
-  cancel: (chainGameId: string) => execute("cancel", u64Json(chainGameId, "chain_game_id"), {}),
-  setConsentKey: (chainGameId: string, newPubkey: string) => execute("set_consent_key", u64Json(chainGameId, "chain_game_id"), { new_pubkey: hexField(newPubkey, HEX(33), "new_pubkey") }),
-  challenge: (chainGameId: string, evidenceHash: string) => execute("challenge", u64Json(chainGameId, "chain_game_id"), { evidence_hash: hexField(evidenceHash, HEX32, "evidence_hash") }),
-  livenessSettle: (chainGameId: string, checkpoint: { payload: SettlementPayloadV1Wire; signature: string } | null) =>
-    execute("liveness_settle", u64Json(chainGameId, "chain_game_id"), { checkpoint: checkpoint === null ? null : { payload: checkpoint.payload, signature: hexField(checkpoint.signature, HEX64, "signature") } }),
-});
-
 export const QUERY = Object.freeze({
   config: () => `{"config":{}}`,
   game: (chainGameId: string) => `{"game":{"chain_game_id":${u64Json(chainGameId, "chain_game_id")}}}`,
@@ -124,6 +72,9 @@ export const QUERY = Object.freeze({
   checkpoints: (chainGameId: string) => `{"checkpoints":{"chain_game_id":${u64Json(chainGameId, "chain_game_id")}}}`,
   signerKeys: (startAfter: number | null, limit: number) => `{"signer_keys":{"start_after":${startAfter === null ? "null" : String(startAfter)},"limit":${limit}}}`,
   settlementPreview: (chainGameId: string) => `{"settlement_preview":{"chain_game_id":${u64Json(chainGameId, "chain_game_id")}}}`,
+  /** ESCROW-4: the contract's game list (ascending by id, at most 30 a page) -- how the server finds a host's CreateGame
+   *  when the browser's hint was lost (the chain is the truth; the list only says where to look). */
+  games: (startAfter: string | null, limit: number) => `{"games":{"start_after":${startAfter === null ? "null" : u64Json(startAfter, "start_after")},"limit":${Math.max(1, Math.min(30, Math.floor(limit)))}}}`,
 });
 
 /* ------------------------------------------------------------------ */
@@ -178,6 +129,8 @@ export interface JunoSeat {
   readonly join_ticket: string;
   readonly gross_deposit: string;
   readonly net_deposit: string;
+  /** ESCROW-4: when the seat joined (Unix seconds, the chain's clock); null when a node's answer does not carry it. */
+  readonly joined_at_secs: string | null;
 }
 
 export interface JunoGame {
@@ -202,7 +155,9 @@ export interface JunoGame {
   readonly consent_bitmap: number;
   readonly dispute: { readonly challenger: string; readonly evidence_hash: string; readonly bond: string } | null;
   readonly outcome: { readonly route: string; readonly amounts: readonly string[]; readonly dust: string; readonly at_secs: string } | null;
-  readonly terms: { readonly challenge_window_secs: string; readonly liveness_window_secs: string; readonly resolver_timeout_secs: string; readonly treasury: string };
+  readonly terms: { readonly challenge_window_secs: string; readonly liveness_window_secs: string; readonly resolver_timeout_secs: string; readonly treasury: string; readonly subsidy_bps: number | null };
+  /** ESCROW-4: the non-refundable fee taken from each deposit (base units), as the chain snapshotted it at CreateGame. */
+  readonly subsidy_per_seat: string | null;
 }
 
 export interface JunoGameResponse {
@@ -245,6 +200,7 @@ export function parseGameResponse(data: unknown): JunoGameResponse {
       join_ticket: hexOf(seat.join_ticket, HEX32, `game.seats[${i}].join_ticket`),
       gross_deposit: dec(seat.gross_deposit, `game.seats[${i}].gross_deposit`),
       net_deposit: dec(seat.net_deposit, `game.seats[${i}].net_deposit`),
+      joined_at_secs: orNull(seat.joined_at, (v) => secondsOf(v, `game.seats[${i}].joined_at`)),
     };
   });
   const terms = isObject(g.terms) ? g.terms : {};
@@ -290,7 +246,9 @@ export function parseGameResponse(data: unknown): JunoGameResponse {
         liveness_window_secs: String(int(terms.liveness_window_secs, "terms.liveness_window_secs", Number.MAX_SAFE_INTEGER)),
         resolver_timeout_secs: String(int(terms.resolver_timeout_secs, "terms.resolver_timeout_secs", Number.MAX_SAFE_INTEGER)),
         treasury: str(terms.treasury, "terms.treasury"),
+        subsidy_bps: orNull(terms.subsidy_bps, (v) => int(v, "terms.subsidy_bps", 10_000)),
       },
+      subsidy_per_seat: orNull(g.subsidy_per_seat, (v) => dec(v, "game.subsidy_per_seat")),
     },
     paused: need(typeof data.paused === "boolean", data.paused as boolean, "paused"),
     trusted_seq: dec(data.trusted_seq, "trusted_seq"),
@@ -342,6 +300,13 @@ export interface JunoConfig {
   readonly contract_name: string;
   readonly contract_version: string;
   readonly next_signer_key_id: number;
+  /** ESCROW-4: the id the next CreateGame will get (the game list is scanned below it). */
+  readonly next_chain_game_id: string | null;
+  /** ESCROW-4: the smallest gross ante the contract accepts (base units). */
+  readonly min_ante: string | null;
+  /** ESCROW-4: how long a new game's funding stays open, by pace (seconds; fixed into each game at its CreateGame). */
+  readonly funding_period_live_secs: string | null;
+  readonly funding_period_async_secs: string | null;
 }
 
 export function parseConfigResponse(data: unknown): JunoConfig {
@@ -365,7 +330,42 @@ export function parseConfigResponse(data: unknown): JunoConfig {
     contract_name: str(data.contract_name, "contract_name"),
     contract_version: str(data.contract_version, "contract_version"),
     next_signer_key_id: int(data.next_signer_key_id, "next_signer_key_id", 65535),
+    next_chain_game_id: orNull(data.next_chain_game_id, (v) => String(int(v, "next_chain_game_id", Number.MAX_SAFE_INTEGER))),
+    min_ante: orNull(p.min_ante, (v) => dec(v, "params.min_ante")),
+    funding_period_live_secs: orNull(p.funding_period_live_secs, (v) => secs(v, "params.funding_period_live_secs")),
+    funding_period_async_secs: orNull(p.funding_period_async_secs, (v) => secs(v, "params.funding_period_async_secs")),
   };
+}
+
+/** ESCROW-4: one entry of the contract's game list (`query.rs::games`). */
+export interface JunoGameSummary {
+  readonly chain_game_id: string;
+  readonly state: EscrowState;
+  readonly creator: string;
+  readonly mode: 0 | 1;
+  readonly max_players: number;
+  readonly seats_filled: number;
+  readonly ante_gross: string;
+}
+
+export function parseGamesResponse(data: unknown): readonly JunoGameSummary[] {
+  if (!isObject(data) || !Array.isArray(data.games) || data.games.length > 30) throw new JunoAbiError("the games answer is not a GamesResponse");
+  return data.games.map((entry, i) => {
+    if (!isObject(entry)) throw new JunoAbiError(`games[${i}]`);
+    const state = STATES[str(entry.state, `games[${i}].state`)];
+    if (state === undefined) throw new JunoAbiError(`games[${i}].state`);
+    const mode = str(entry.mode, `games[${i}].mode`);
+    if (mode !== "live" && mode !== "async") throw new JunoAbiError(`games[${i}].mode`);
+    return {
+      chain_game_id: String(int(entry.chain_game_id, `games[${i}].chain_game_id`, Number.MAX_SAFE_INTEGER)),
+      state,
+      creator: str(entry.creator, `games[${i}].creator`),
+      mode: mode === "live" ? 0 : 1,
+      max_players: int(entry.max_players, `games[${i}].max_players`, 7),
+      seats_filled: int(entry.seats_filled, `games[${i}].seats_filled`, 7),
+      ante_gross: dec(entry.ante_gross, `games[${i}].ante_gross`),
+    };
+  });
 }
 
 export interface JunoSignerKey {

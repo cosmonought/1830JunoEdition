@@ -781,7 +781,7 @@ describe("§20 configuration safety and §23 the operator view", () => {
     const game = money.games[0];
     assert.equal(game.phase, "in-progress");
     assert.equal(game.binding?.chain_game_id, "1");
-    assert.equal(game.continuation?.financial_protocol, 2);
+    assert.equal(game.continuation?.financial_protocol, 3, "ESCROW-4: financial protocol 3 (the v3 ticket grants, relayed consent/annul, W-13, the money GameRecord)");
     assert.ok(game.roster !== null && game.chain?.started_height !== null);
     const evidence = game.intents.map((intent) => `${intent.op}:${intent.evidence}`);
     assert.ok(evidence.includes("start:confirmed"));

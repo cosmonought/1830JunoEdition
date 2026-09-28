@@ -24,6 +24,7 @@ import { randomBytes, randomInt } from "crypto";
 import { base32Lower } from "../identity/ids";
 import type { GameVariants } from "../../../frontend/src/gameEngine/gameVariants";
 import type { UndoPolicy } from "../../../frontend/src/gameEngine/logRevert";
+import type { MyTableMoneySummary, RoomMoneyView, RoomStakeSummary } from "../../../frontend/src/utils/moneyProtocol";
 
 /* ---------------------------------------------------------------------------
     IDENTIFIERS (LIVE-2 §3.2)
@@ -108,8 +109,65 @@ export interface RoomPolicy {
   max_viewers: number;
 }
 
+/* ==================================================================
+    ESCROW-4: A REAL-MONEY TABLE'S TERMS (record_schema 2)
+   ==================================================================
+   A money table's GameRecord says WHAT the host agreed to at creation -- the deployment it is pinned to and the stake
+   -- and nothing about the chain: the chain game, the funded seats, the frozen roster and every chain fact live in the
+   table's financial record (`games/money/<game_id>.json`, ESCROW-3A/3B) and the wallet-ticket ledger -- the terms here
+   COPY the pinned deployment; `FIN.binding.deployment` stays the write-once source of truth. Written once, by the
+   create; never changed. A table with `money` is `record_schema: 2`, and that widening travels with financial protocol
+   3 (LIVE-4 preflight §16 item 2): an older build classifies it as a NEWER record schema (derived, never corrupt, never
+   held), and every no-money record stays exactly `record_schema: 1` (`money: null`), so the hosted protocol is 1. */
+export const MONEY_TABLE_FORMAT = "18COSMOS/MONEY-TABLE/v1";
+
+export interface GameMoneyTerms {
+  readonly format: typeof MONEY_TABLE_FORMAT;
+  readonly backend: "juno-cosmwasm";
+  readonly chain_id: string;
+  /** From the server's pinned configuration (never a caller's claim). Mainnet money is refused at creation. */
+  readonly network_class: "mainnet" | "testnet" | "local";
+  readonly contract_address: string;
+  readonly code_checksum: string;
+  readonly denom: string;
+  readonly symbol: string;
+  /** Display exponent only (6). */
+  readonly exponent: number;
+  /** Each seat's gross deposit, base units (canonical decimal). The contract takes its fee from it. */
+  readonly ante_gross: string;
+  /** The escrow's pace: its funding period and challenge window follow it. */
+  readonly mode: "live" | "async";
+}
+
+const MONEY_TERMS_KEYS = ["format", "backend", "chain_id", "network_class", "contract_address", "code_checksum", "denom", "symbol", "exponent", "ante_gross", "mode"];
+
+/** A stored money-terms object is exactly this shape (a record carrying anything else is unreadable). */
+export function isGameMoneyTerms(value: unknown): value is GameMoneyTerms {
+  if (!isObject(value) || !exact(value, MONEY_TERMS_KEYS)) return false;
+  return (
+    value.format === MONEY_TABLE_FORMAT &&
+    value.backend === "juno-cosmwasm" &&
+    typeof value.chain_id === "string" &&
+    /^[a-z0-9][a-z0-9-]{1,48}$/.test(value.chain_id) &&
+    (value.network_class === "mainnet" || value.network_class === "testnet" || value.network_class === "local") &&
+    typeof value.contract_address === "string" &&
+    /^[a-z0-9]{1,16}1[02-9ac-hj-np-z]{6,90}$/.test(value.contract_address) &&
+    typeof value.code_checksum === "string" &&
+    /^[0-9a-f]{64}$/.test(value.code_checksum) &&
+    typeof value.denom === "string" &&
+    /^[a-z][a-z0-9/:._-]{1,127}$/.test(value.denom) &&
+    typeof value.symbol === "string" &&
+    /^[A-Za-z0-9]{1,16}$/.test(value.symbol) &&
+    value.exponent === 6 &&
+    typeof value.ante_gross === "string" &&
+    /^[1-9][0-9]{0,29}$/.test(value.ante_gross) &&
+    (value.mode === "live" || value.mode === "async")
+  );
+}
+
 export interface GameRecord {
-  record_schema: 1;
+  /** 1: a no-money table (`money: null`). 2 (ESCROW-4): a real-money table (`money` is its terms). */
+  record_schema: 1 | 2;
   /** OCC counter: +1 per committed mutation. */
   record_version: number;
   game_id: string;
@@ -135,8 +193,9 @@ export interface GameRecord {
   cancelled_at: number | null;
   expires_at: number | null;
   last_activity_at: number;
-  /** LIVE-2 invariant: money games are refused. ESCROW-3 widens this to its binding. */
-  money: null;
+  /** ESCROW-4: a real-money table's terms (`record_schema: 2`), or null (`record_schema: 1`). The chain binding and every
+   *  chain fact are the financial record's, never this record's. */
+  money: GameMoneyTerms | null;
   policy: RoomPolicy;
 }
 
@@ -218,8 +277,14 @@ export function isGameRecord(value: unknown): value is GameRecord {
         (entry.via === "creator" || entry.via === "join-code" || entry.via === "transfer" || entry.via === "reclaim"),
     );
   const policy = value.policy;
+  /* ESCROW-4: schema 1 carries no money; schema 2 carries exactly a money table's terms, no host undo and an exact
+     player count (the escrow is funded seat by seat, and the contract reaches FUNDED only when every seat is). */
+  const moneyOk =
+    value.record_schema === 1
+      ? value.money === null
+      : value.record_schema === 2 && isGameMoneyTerms(value.money) && isObject(policy) && policy.host_undo === "none" && typeof value.exact_players === "number";
   return (
-    value.record_schema === 1 &&
+    moneyOk &&
     Number.isSafeInteger(value.record_version) &&
     (value.record_version as number) >= 1 &&
     typeof value.game_id === "string" &&
@@ -247,7 +312,6 @@ export function isGameRecord(value: unknown): value is GameRecord {
     timeOrNull(value.cancelled_at) &&
     timeOrNull(value.expires_at) &&
     time(value.last_activity_at) &&
-    value.money === null &&
     isObject(policy) &&
     exact(policy, POLICY_KEYS) &&
     (policy.host_undo === "last-action" || policy.host_undo === "none") &&
@@ -337,6 +401,9 @@ export interface RoomView {
     kicked: boolean;
     canStart: boolean;
   };
+  /** ESCROW-4 (additive and optional): a real-money table's projection for THIS viewer (`frontend/src/utils/
+   *  moneyProtocol.ts`). Absent for a no-money table, whose view is exactly as before. */
+  money?: RoomMoneyView;
 }
 
 export interface RoomSummary {
@@ -351,6 +418,8 @@ export interface RoomSummary {
   playerCount: number | null;
   variants: GameVariants;
   createdAtMs: number;
+  /** ESCROW-4 (additive and optional): a real-money table's stake badge. Absent for a no-money table. */
+  stake?: RoomStakeSummary;
 }
 
 /* ==================================================================
@@ -374,9 +443,11 @@ export interface MyTableSummary {
   you: "host" | "player";
   createdAtMs: number;
   lastActivityMs: number;
+  /** ESCROW-4 (additive and optional): this seat's money line at a real-money table. Absent otherwise. */
+  money?: MyTableMoneySummary;
 }
 
-export function myTableSummaryOf(record: GameRecord, principalId: string, state: MyTableState): MyTableSummary | null {
+export function myTableSummaryOf(record: GameRecord, principalId: string, state: MyTableState, money: MyTableMoneySummary | null = null): MyTableSummary | null {
   const seat = seatOf(record, principalId);
   if (seat === null) return null;
   const host = record.seats.find((candidate) => candidate.player_id === record.host_player_id);
@@ -389,6 +460,7 @@ export function myTableSummaryOf(record: GameRecord, principalId: string, state:
     you: seat.player_id === record.host_player_id ? "host" : "player",
     createdAtMs: record.created_at,
     lastActivityMs: record.last_activity_at,
+    ...(record.money !== null && money !== null ? { money } : {}),
   };
 }
 
@@ -396,7 +468,7 @@ export function roomViewFor(
   record: GameRecord,
   facts: LogFacts,
   principalId: string,
-  context: { now: number; held: boolean; holdKind?: HoldKind; online: (playerId: string) => boolean; canStart: boolean },
+  context: { now: number; held: boolean; holdKind?: HoldKind; online: (playerId: string) => boolean; canStart: boolean; money?: RoomMoneyView | null },
 ): RoomView {
   const lifecycle = effectiveStatus(record, facts, context.now);
   const seat = seatOf(record, principalId);
@@ -428,11 +500,12 @@ export function roomViewFor(
     createdAtMs: record.created_at,
     undoPolicy: { host_undo: record.policy.host_undo },
     you: { role, playerId: seat?.player_id ?? null, kicked: isKicked(record, principalId), canStart: host && context.canStart },
+    ...(record.money !== null && context.money != null ? { money: context.money } : {}),
   };
 }
 
 /** A public list entry: public rooms in W or A only; names yes, ids no (beyond gameId and code). */
-export function roomSummaryOf(record: GameRecord, facts: LogFacts, now: number): RoomSummary | null {
+export function roomSummaryOf(record: GameRecord, facts: LogFacts, now: number, stake: RoomStakeSummary | null = null): RoomSummary | null {
   const lifecycle = effectiveStatus(record, facts, now);
   if (record.visibility !== "public" || record.join_code === null || record.archived_at !== null) return null;
   if (lifecycle !== "waiting" && lifecycle !== "active") return null;
@@ -449,5 +522,6 @@ export function roomSummaryOf(record: GameRecord, facts: LogFacts, now: number):
     playerCount: record.exact_players,
     variants: record.variants,
     createdAtMs: record.created_at,
+    ...(record.money !== null && stake !== null ? { stake } : {}),
   };
 }

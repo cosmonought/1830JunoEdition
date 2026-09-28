@@ -35,9 +35,12 @@
 // rebuilt from the log's prefix), and the chain's trusted sequence must not be ahead of it: a store restored to an older
 // (or different) history is held, never signed over.
 
+import { createHash } from "crypto";
+
 import { buildSettlementCoreV1, type BuiltSettlementCoreV1 } from "../../../frontend/src/gameEngine/escrow/settlementCoreV1";
 import { JUNO_CODEC_V1, junoDomainInputsOf } from "../../../frontend/src/gameEngine/escrow/junoCodecV1";
 import {
+  codecDigest,
   deploymentId,
   escrowInstanceKey,
   JUNO_CAPABILITIES_V1,
@@ -50,20 +53,23 @@ import {
 import { freezeEscrowRoster, type EscrowTrustPolicy } from "../../../frontend/src/gameEngine/escrow/escrowRoster";
 import { variantsDigestV1 } from "../../../frontend/src/gameEngine/escrow/variantsDigest";
 import { canonicalStateText } from "../../../frontend/src/gameEngine/settlementDigest";
+import { annulDigestV1, consentDigestV1 } from "../../../frontend/src/gameEngine/settlementPayload";
 import { logHash } from "../../../frontend/src/gameEngine/logHash";
 import type { GameStateResponse } from "../../../frontend/src/gameEngine/gameState";
 import type { GameVariants } from "../../../frontend/src/gameEngine/gameVariants";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import { NO_WALLET_CONTROL_PROOFS, selectSettlementKey, walletProofProblem, type SettlementKeyConfig, type SettlementSigner, type WalletControlProofs } from "./escrowPorts";
-import { isLiveAttempt, newChainIntent, sameChainIntent, startEpochOf, startInstanceOf, supersededIntent, type ChainIntentOp, type ChainIntentRecord, type ChainIntentStore } from "./chainIntents";
+import { annulInstanceOf, consentInstanceOf, intentBelongsTo, isLiveAttempt, newChainIntent, sameChainIntent, startEpochOf, startInstanceOf, supersededIntent, type ChainIntentOp, type ChainIntentRecord, type ChainIntentStore } from "./chainIntents";
 import { roundKeyOf, isCheckpointPosition, issuedAtOf, type CheckpointSnapshot } from "./checkpointPolicy";
 import { FinancialRecordUnreadableError, type FinancialGameStore } from "./financialGameStore";
-import { currentMoneyContinuation } from "./moneyContinuation";
+import type { EscrowCodecId } from "../../../frontend/src/gameEngine/escrow/escrowCodec";
+import { currentMoneyContinuation, moneyContinuationVerdict, THIS_DEPLOYMENT, type ContinuationVerdict, type DeploymentContinuation, type MoneyContinuationIdentity } from "./moneyContinuation";
 import { DEALT_PHASES, newFinancialRecord, transitionFinancial, type FinancialDeploymentPin, type FinancialEvent, type FinancialGameRecord, type FinancialHoldCode } from "./moneyLifecycle";
 import type { InspectableSigningJournal } from "./signingJournal";
 import type { PrefixReplay, TerminalSettlementEvidence } from "./settlementEvidence";
 import type { WalletTicketLedger } from "./walletTickets";
 import { SignerError } from "./juno/signer";
+import { verifyDigest } from "./juno/secp256k1";
 import { junoGameView, parseConfigResponse, parseGameResponse, parseSignerKeysResponse, QUERY, RELAYER_EXECUTE, type JunoGameResponse } from "./juno/junoContract";
 import type { JoinAdmissionSigner } from "./juno/joinAdmission";
 import type { JunoRest } from "./juno/junoRest";
@@ -109,6 +115,10 @@ export interface EscrowServiceDeps {
   readonly admission?: { readonly signer: JoinAdmissionSigner; readonly ttlSecs: number };
   /** ESCROW-JOIN: ESCROW-4's proofs of wallet control. Absent: none exist, and every `authorizeJoin` refuses. */
   readonly walletProofs?: WalletControlProofs;
+  /** LIVE-4 preflight §9.3 / ESCROW-4 amendment §4: the identity a money game created NOW would freeze, and what this
+   *  deployment continues (defaults: `currentMoneyContinuation`, `THIS_DEPLOYMENT`). Tests inject an uncertified rules
+   *  bump here; production never sets it. */
+  readonly continuation?: { readonly current: (codec: EscrowCodecId) => MoneyContinuationIdentity; readonly deployment: DeploymentContinuation };
 }
 
 export type ServiceRefusal = { readonly ok: false; readonly code: string; readonly detail: string };
@@ -143,11 +153,68 @@ export interface JoinAdmissionGrant {
  *  stands), the chain proved it never will (released), there is no freeze to decide, or the game is held. */
 export type StartReconciliation = "started" | "pending" | "released" | "none" | "held";
 
+/** ESCROW-4 (W-13): what a host's CreateGame must show on chain before the table binds it. Every field is the SERVER's:
+ *  the host seat's currently standing, PROVEN linked wallet and its ticket, and the table's own terms. */
+export interface HostBindExpectation {
+  readonly creator: string;
+  readonly ticket: string;
+  readonly anteGross: string;
+  readonly maxPlayers: number;
+  readonly mode: 0 | 1;
+}
+
+/** ESCROW-4: a relayed CONSENT's outcome (`on-chain`: the seat's bit is already set). */
+export type ConsentRelayStatus = "queued" | "relayed" | "on-chain";
+
+/** ESCROW-4: what `escrowDetails` reads back of the server's own signed payloads (for a player's own verification and
+ *  for a liveness exit that carries a checkpoint the chain never saw). Public: a signed payload is what the chain gets. */
+export interface SignedPayloadDetail {
+  readonly seq: string;
+  readonly log_len: number;
+  readonly round_key: string | null;
+  readonly payload: unknown;
+  readonly signature: string;
+  readonly settle_digest: string;
+  readonly status: ChainIntentRecord["status"];
+}
+
 export interface EscrowService {
   /** ESCROW-4's money-room creation: the financial record, deployment pinned and continuation frozen. */
   createMoneyGame(gameId: string): Promise<{ readonly ok: true; readonly record: FinancialGameRecord } | ServiceRefusal>;
-  /** The creator's CreateGame landed: bind the chain game (write-once, from a chain read). */
+  /** The creator's CreateGame landed: bind the chain game (write-once, from a chain read). ESCROW-3B's seam, kept for its
+   *  suites; ESCROW-4's money layer binds ONLY through `bindHostChainGame` (a source scan pins it). */
   bindChainGame(gameId: string, chainGameId: string, variants: GameVariants): Promise<{ readonly ok: true; readonly binding: EscrowBindingV2 } | ServiceRefusal>;
+  /** ESCROW-4 (W-13): bind a HOST's CreateGame only when a quorum chain read proves it is exactly the table's: FUNDING,
+   *  the creator the host's standing proven wallet, one seat (the creator's) carrying the host seat's standing ticket,
+   *  and the table's ante, player count, pace, denomination, rules and variants on the pinned deployment. A copied
+   *  CreateGame (another creator) or a stale one (another ticket) is refused and never bound. */
+  bindHostChainGame(gameId: string, chainGameId: string, variants: GameVariants, expect: HostBindExpectation): Promise<{ readonly ok: true; readonly binding: EscrowBindingV2 } | ServiceRefusal>;
+  /** ESCROW-4: relay one seat's CONSENT signature to the stored settlement -- verified here against the chain's CURRENT
+   *  consent key of that chain seat (which must be one the seat registered). No re-authentication: the signature is the
+   *  authority (owner ruling). Idempotent per (seq, seat, key). */
+  relayConsent(input: { readonly gameId: string; readonly chainSeatIndex: number; readonly signature: string; readonly registeredKeys: readonly string[] }): Promise<{ readonly ok: true; readonly status: ConsentRelayStatus; readonly consent_pubkey: string } | ServiceRefusal>;
+  /** ESCROW-4: one seat's ANNUL signature over (domain, trusted_seq), verified like a consent; collected (in memory) until
+   *  every chain seat has signed under its current key, then ONE annul intent. */
+  submitAnnul(input: { readonly gameId: string; readonly chainSeatIndex: number; readonly signature: string; readonly registeredKeys: readonly string[] }): Promise<{ readonly ok: true; readonly trusted_seq: string; readonly collected: readonly number[]; readonly needed: number; readonly submitted: boolean } | ServiceRefusal>;
+  /** ESCROW-4: the ANNUL signatures collected for a game (chain seat indices) and the trusted sequence they bind. */
+  annulCollected(gameId: string): { readonly trusted_seq: string; readonly collected: readonly number[] } | null;
+  /** ESCROW-4: the newest signed checkpoint and the terminal settlement this server prepared for a game. */
+  escrowDetails(gameId: string): Promise<{ readonly checkpoint: SignedPayloadDetail | null; readonly settlement: SignedPayloadDetail | null }>;
+  /** ESCROW-4: a game's durable chain intents (the money layer's view of Start / Settle progress). */
+  intentsOf(gameId: string): Promise<readonly ChainIntentRecord[]>;
+  /** ESCROW-4: a game's financial record, bound chain game, or chain facts changed (the money layer re-projects). */
+  onChange(listener: (gameId: string) => void): void;
+  /** ESCROW-4: whether the backend is verified and serving (money actions refuse otherwise). */
+  isReady(): boolean;
+  /** LIVE-4 amendment §4: whether this deployment may create a money game now -- the identity it would freeze (the
+   *  CURRENT rules engine, hosted and financial protocols, the pinned codec) is one it continues, which includes that
+   *  the rules are settlement-certified. `createMoneyGame` refuses exactly when this does not continue. */
+  creationVerdict(): ContinuationVerdict;
+  /** ESCROW-4: read what the chain says about a bound game now (a funding escrow cancelled on chain closes its record). */
+  observe(gameId: string): Promise<void>;
+  /** ESCROW-4: a money table that ended before any chain game was bound (cancelled or expired) closes its financial
+   *  record (`cancel-before-deal`). A bound table closes only from the chain (its CANCELLED). */
+  closeUnboundTable(gameId: string): Promise<void>;
   /** ESCROW-JOIN: the server's admission for one standing seat's PROVEN wallet to Join the table's bound chain game. The
    *  seam ESCROW-4 calls; no route reaches it yet (money games are disabled). */
   authorizeJoin(input: JoinAuthorizationRequest): Promise<{ readonly ok: true; readonly admission: JoinAdmissionGrant } | ServiceRefusal>;
@@ -179,6 +246,8 @@ export interface EscrowService {
 
 export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   const backend = deps.backend;
+  const continuationNow = (): MoneyContinuationIdentity => (deps.continuation?.current ?? currentMoneyContinuation)(backend.pin.codec);
+  const continuationDeployment: DeploymentContinuation = deps.continuation?.deployment ?? THIS_DEPLOYMENT;
   const stats = { checkpoints: 0, settles: 0, finalizes: 0, holds: 0, skipped: 0, failures: 0 };
   /** Per game: the newest checkpoint round key and log_len the service has prepared (durable in the record). */
   const lastRound = new Map<string, { round_key: string; log_len: number }>();
@@ -189,6 +258,19 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   const jobs = new Map<string, Promise<void>>();
   const locks = new Map<string, Promise<unknown>>();
   const audit = (event: string, fields: Record<string, unknown>) => deps.ops?.audit(event, fields);
+  /** ESCROW-4: who is told that a game's money changed (the money layer re-projects and pushes room views). */
+  const listeners: Array<(gameId: string) => void> = [];
+  const notify = (gameId: string) => {
+    for (const listener of listeners) {
+      try {
+        listener(gameId);
+      } catch (error) {
+        deps.warn(`  escrow: a change listener threw for ${gameId} -- ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  };
+  /** ESCROW-4: ANNUL signatures being collected, per game (memory only: a restart asks the seats to sign again). */
+  const annulBook = new Map<string, { trusted_seq: string; domain: string; seats: number; sigs: Map<number, { signature: string; pubkey: string }> }>();
 
   /** Serialized per game, off the actor; a failure is logged and left for the next observation or the sweep. */
   const ready = () => deps.ready?.() !== false;
@@ -241,6 +323,7 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
           deps.warn(`  escrow: ${gameId} HELD (${decided.next.hold?.code}) -- ${decided.next.hold?.detail}`);
         }
         remember(decided.next);
+        notify(gameId);
         return decided.next;
       }
       if (put.kind !== "conflict") throw new Error(put.detail);
@@ -858,6 +941,224 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     },
   };
 
+  /** A quorum read (every configured endpoint agreeing) of one game: the money layer's write-once decisions use it. */
+  async function readGameQuorum(chainGameId: string): Promise<JunoGameResponse> {
+    const rest = backend.rest;
+    const data = rest.smartQuorum !== undefined ? await rest.smartQuorum(backend.pin.contract_address, QUERY.game(chainGameId)) : await rest.smart(backend.pin.contract_address, QUERY.game(chainGameId));
+    return parseGameResponse(data);
+  }
+
+  /** The binding, from a chain read, write-once (3B's `bindChainGame`); with `expect` (ESCROW-4 W-13), the host's
+   *  CreateGame must also be exactly the one the table expects -- read by quorum. */
+  async function bindChecked(gameId: string, chainGameId: string, variants: GameVariants, expect: HostBindExpectation | null): Promise<{ readonly ok: true; readonly binding: EscrowBindingV2 } | ServiceRefusal> {
+    if (!ready()) return { ok: false, code: "not-verified", detail: "financial mode is not verified against the chain" };
+    const record = await deps.financial.load(gameId);
+    if (record === null) return { ok: false, code: "not-found", detail: "no money record" };
+    const mismatch = pinMismatch(record);
+    if (mismatch !== null) return { ok: false, code: "binding-mismatch", detail: mismatch };
+    if (record.continuation === null) return { ok: false, code: "held", detail: "the money record has no continuation identity" };
+    const [contract, response, configRaw] = await Promise.all([
+      backend.rest.contract(backend.pin.contract_address),
+      expect === null ? readGame(chainGameId) : readGameQuorum(chainGameId),
+      backend.rest.smart(backend.pin.contract_address, QUERY.config()),
+    ]);
+    const checksum = await backend.rest.codeChecksum(contract.code_id);
+    const config = parseConfigResponse(configRaw);
+    const g = response.game;
+    if (expect !== null) {
+      const refusal = (detail: string) => ({ ok: false as const, code: "not-the-hosts-escrow", detail });
+      if (g.chain_game_id !== chainGameId) return refusal("the chain answered for another game");
+      if (g.state !== "FUNDING") return refusal(`the chain game is ${g.state}, not FUNDING`);
+      if (g.creator !== expect.creator) return refusal("the chain game's creator is not the host's linked wallet");
+      if (g.seats.length !== 1) return refusal(`the chain game has ${g.seats.length} seats; a host's own CreateGame has exactly one`);
+      if (g.seats[0].wallet !== expect.creator) return refusal("chain seat 0 is not the creator's");
+      if (g.seats[0].join_ticket !== expect.ticket) return refusal("chain seat 0 does not carry the host seat's current ticket");
+      if (g.ante_gross !== expect.anteGross) return refusal(`the chain game's ante is ${g.ante_gross}; the table's is ${expect.anteGross}`);
+      if (g.max_players !== expect.maxPlayers) return refusal(`the chain game is for ${g.max_players} players; the table is for ${expect.maxPlayers}`);
+      if (g.mode !== expect.mode) return refusal("the chain game's pace is not the table's");
+      if (g.denom !== backend.pin.denom) return refusal("the chain game's denomination is not the pinned one");
+    }
+    if (g.rules_engine_version !== record.continuation.rules_engine_version) return { ok: false, code: "terms-mismatch", detail: `the chain game pins rules ${g.rules_engine_version}; the table pins ${record.continuation.rules_engine_version}` };
+    const digest = variantsDigestV1(variants);
+    if (g.variants_digest !== digest) return { ok: false, code: "terms-mismatch", detail: "the chain game's variants digest is not this table's" };
+    const binding: EscrowBindingV2 = {
+      binding_schema: 2,
+      backend: "juno-cosmwasm",
+      codec: "18JUNO/v1",
+      network: { chain_id: backend.pin.chain_id, network_class: backend.pin.network_class },
+      deployment: { kind: "juno-cosmwasm", contract_address: backend.pin.contract_address, code_id: contract.code_id, code_checksum: checksum, contract_name: config.contract_name, contract_version: config.contract_version, admin: contract.admin },
+      chain_game_id: g.chain_game_id,
+      custody: { kind: "contract-ledger" },
+      asset: { denom: g.denom, exponent: 6, symbol: backend.symbol },
+      terms: { ante_gross: g.ante_gross, ante_net: g.ante_net, max_players: g.max_players, mode: g.mode },
+      commitments: { rules_engine_version: g.rules_engine_version, variants_digest: g.variants_digest },
+      bound_at: deps.now(),
+    };
+    try {
+      validateEscrowBindingV2(binding, backend.policy);
+    } catch (error) {
+      return { ok: false, code: "binding-invalid", detail: error instanceof Error ? error.message : String(error) };
+    }
+    if (chainGameId !== g.chain_game_id) return { ok: false, code: "terms-mismatch", detail: "the chain answered for another game" };
+    /* Review #9: a repeated bind of the SAME chain game (every chain-read fact equal; only the bind time differs) is the
+       existing binding -- never a second, "different" one that holds the game. */
+    const withoutTime = (value: EscrowBindingV2) => JSON.stringify({ ...value, bound_at: 0 });
+    if (record.binding?.escrow != null) {
+      return withoutTime(record.binding.escrow) === withoutTime(binding) ? { ok: true, binding: record.binding.escrow } : { ok: false, code: "binding-conflict", detail: "this money game is bound to another chain game" };
+    }
+    const next = await apply(gameId, () => ({ kind: "bound", at: deps.now(), escrow: binding }));
+    if (next === null || next.binding?.escrow == null || withoutTime(next.binding.escrow) !== withoutTime(binding)) {
+      return { ok: false, code: next?.phase === "held" ? "held" : "binding-conflict", detail: next?.hold?.detail ?? "the chain game was not bound" };
+    }
+    audit("money.bound", { game_id: gameId, chain_game_id: g.chain_game_id, code_checksum: checksum, deployment: deploymentId(binding.deployment), ...(expect !== null ? { w13: true } : {}) });
+    return { ok: true, binding: next.binding.escrow };
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* ESCROW-4: relaying the players' own CONSENT and ANNUL signatures    */
+  /* ------------------------------------------------------------------ */
+
+  const SIGNATURE_HEX = /^[0-9a-f]{128}$/;
+  const refuse = (code: string, detail: string): ServiceRefusal => ({ ok: false, code, detail });
+
+  /** The bound game, readable for a relay (not held; this deployment's), or a refusal. */
+  async function relayable(gameId: string): Promise<{ readonly bound: Bound } | ServiceRefusal> {
+    if (!ready()) return refuse("not-verified", "financial mode is not verified against the chain");
+    const record = await deps.financial.load(gameId);
+    const bound = boundOf(record);
+    if (record === null || bound === null) return refuse("not-bound", "the table's escrow has no frozen roster");
+    const mismatch = pinMismatch(record);
+    if (mismatch !== null) return refuse("binding-mismatch", mismatch);
+    if (record.phase === "held") return refuse("held", "this table's money is held for an operator; nothing is relayed");
+    return { bound };
+  }
+
+  /** A signature by the chain's CURRENT key of `seat`, registered by the seat's owner, over `digest`. */
+  function seatSignatureProblem(seat: { readonly consent_pubkey: string } | undefined, registeredKeys: readonly string[], digestHex: string, signature: string): ServiceRefusal | null {
+    if (seat === undefined) return refuse("no-seat", "the escrow has no such chain seat");
+    if (!registeredKeys.includes(seat.consent_pubkey)) return refuse("key-not-registered", "this seat's current consent key on Juno was not registered with \"Confirm it's you\"");
+    if (typeof signature !== "string" || !SIGNATURE_HEX.test(signature)) return refuse("request-invalid", "the signature is not 64 bytes of lowercase hex");
+    if (!verifyDigest(Buffer.from(seat.consent_pubkey, "hex"), Buffer.from(digestHex, "hex"), Buffer.from(signature, "hex"))) {
+      return refuse("wrong-key", "the signature is not by this seat's current consent key over this settlement (it may have moved; sign again)");
+    }
+    return null;
+  }
+
+  async function relayConsent(input: { readonly gameId: string; readonly chainSeatIndex: number; readonly signature: string; readonly registeredKeys: readonly string[] }) {
+    const found = await relayable(input.gameId);
+    if (!("bound" in found)) return found;
+    const { bound } = found;
+    const binding = bound.binding;
+    const response = await readGame(binding.chain_game_id);
+    const g = response.game;
+    if (g.state !== "SETTLEABLE" || g.settlement === null) return refuse("not-settleable", `the escrow is ${g.state}; a consent is for a stored settlement`);
+    const stored = g.settlement;
+    /* Only a settlement this server signed is ever consented to through it (anything else holds the game, 3B #6). */
+    if (!(await ownSettlement(bound, stored.payload.seq, stored.payload.payload_digest))) return refuse("not-ours", "the stored settlement was not signed by this server");
+    if (g.domain === null) return refuse("not-settleable", "the escrow has no domain");
+    const index = input.chainSeatIndex;
+    const seat = Number.isInteger(index) && index >= 0 ? g.seats[index] : undefined;
+    const digest = consentDigestV1(g.domain, BigInt(stored.payload.seq), stored.payload.payload_digest);
+    const problem = seatSignatureProblem(seat, input.registeredKeys, digest, input.signature);
+    if (problem !== null) return problem;
+    const key = (seat as { consent_pubkey: string }).consent_pubkey;
+    if ((g.consent_bitmap & (1 << index)) !== 0) return { ok: true as const, status: "on-chain" as const, consent_pubkey: key };
+    const intent = newChainIntent({
+      game_id: input.gameId,
+      instance: consentInstanceOf(escrowInstanceKey(binding), key),
+      key: { op: "relay-consent", seq: stored.payload.seq, seat_index: index },
+      subject: { kind: "digest", digests: [codecDigest("18JUNO/v1", "consent", digest)] },
+      op: { kind: "consent", chain_game_id: binding.chain_game_id, seq: stored.payload.seq, seat_index: index, settle_digest: stored.payload.payload_digest, consent_pubkey: key },
+      msg_json: RELAYER_EXECUTE.consent(binding.chain_game_id, index, input.signature),
+      now: deps.now(),
+    });
+    /* The same (seq, seat, key) already relayed: the same work (any valid signature by that key over that digest is
+       equally good), whatever bytes this one has. */
+    const existing = await deps.intents.load(input.gameId, intent.intent_id);
+    if (existing !== null) {
+      if (existing.status === "pending" || existing.status === "in-flight") deps.relayer()?.poke(input.gameId, existing.intent_id);
+      return { ok: true as const, status: existing.status === "confirmed" ? ("on-chain" as const) : ("relayed" as const), consent_pubkey: key };
+    }
+    const created = await deps.intents.create(intent);
+    if (created.kind === "failed") return refuse("store", created.detail);
+    deps.relayer()?.poke(input.gameId, intent.intent_id);
+    audit("money.consent-relayed", { game_id: input.gameId, chain_game_id: binding.chain_game_id, seq: stored.payload.seq, chain_seat_index: index, intent_id: intent.intent_id });
+    return { ok: true as const, status: created.kind === "created" ? ("queued" as const) : ("relayed" as const), consent_pubkey: key };
+  }
+
+  async function submitAnnul(input: { readonly gameId: string; readonly chainSeatIndex: number; readonly signature: string; readonly registeredKeys: readonly string[] }) {
+    const found = await relayable(input.gameId);
+    if (!("bound" in found)) return found;
+    const { bound } = found;
+    const binding = bound.binding;
+    const response = await readGame(binding.chain_game_id);
+    const g = response.game;
+    if (g.state !== "IN_PROGRESS" && g.state !== "SETTLEABLE") return refuse("wrong-state", `the escrow is ${g.state}; an annul is for a game in progress or settleable`);
+    if (g.domain === null) return refuse("wrong-state", "the escrow has no domain");
+    const trusted = response.trusted_seq;
+    const digest = annulDigestV1(g.domain, BigInt(trusted));
+    const index = input.chainSeatIndex;
+    const seat = Number.isInteger(index) && index >= 0 ? g.seats[index] : undefined;
+    const problem = seatSignatureProblem(seat, input.registeredKeys, digest, input.signature);
+    if (problem !== null) return problem;
+    let entry = annulBook.get(input.gameId);
+    if (entry === undefined || entry.trusted_seq !== trusted || entry.domain !== g.domain || entry.seats !== g.seats.length) {
+      entry = { trusted_seq: trusted, domain: g.domain, seats: g.seats.length, sigs: new Map() };
+      annulBook.set(input.gameId, entry);
+    }
+    entry.sigs.set(index, { signature: input.signature, pubkey: (seat as { consent_pubkey: string }).consent_pubkey });
+    /* A signature whose key is no longer the seat's current one is useless on chain: dropped (that seat signs again). */
+    for (const [at, sig] of [...entry.sigs]) if (g.seats[at]?.consent_pubkey !== sig.pubkey) entry.sigs.delete(at);
+    const collected = [...entry.sigs.keys()].sort((a, b) => a - b);
+    let submitted = false;
+    if (collected.length === g.seats.length) {
+      const keys = collected.map((at) => (entry as { sigs: Map<number, { pubkey: string }> }).sigs.get(at)!.pubkey);
+      const keysDigest = createHash("sha256").update(keys.join(",")).digest("hex");
+      const consents = collected.map((at) => ({ seat_index: at, signature: (entry as { sigs: Map<number, { signature: string }> }).sigs.get(at)!.signature }));
+      const intent = newChainIntent({
+        game_id: input.gameId,
+        instance: annulInstanceOf(escrowInstanceKey(binding), keysDigest),
+        key: { op: "annul-by-consent", trusted_seq: trusted },
+        subject: { kind: "digest", digests: [codecDigest("18JUNO/v1", "annul", digest)] },
+        op: { kind: "annul", chain_game_id: binding.chain_game_id, trusted_seq: trusted, seats: g.seats.length, keys_digest: keysDigest },
+        msg_json: RELAYER_EXECUTE.annulByConsent(binding.chain_game_id, consents),
+        now: deps.now(),
+      });
+      const created = await deps.intents.create(intent);
+      if (created.kind === "failed") return refuse("store", created.detail);
+      deps.relayer()?.poke(input.gameId, intent.intent_id);
+      submitted = true;
+      if (created.kind === "created") audit("money.annul-relayed", { game_id: input.gameId, chain_game_id: binding.chain_game_id, trusted_seq: trusted, intent_id: intent.intent_id });
+    }
+    notify(input.gameId);
+    return { ok: true as const, trusted_seq: trusted, collected, needed: g.seats.length, submitted };
+  }
+
+  /** The server's own newest signed checkpoint and its terminal settlement for a game, from its durable intents. */
+  async function escrowDetails(gameId: string): Promise<{ readonly checkpoint: SignedPayloadDetail | null; readonly settlement: SignedPayloadDetail | null }> {
+    const intents = await deps.intents.listGame(gameId);
+    const detail = (intent: ChainIntentRecord): SignedPayloadDetail | null => {
+      const op = intent.op;
+      if (op.kind !== "checkpoint" && op.kind !== "settle") return null;
+      try {
+        const parsed = JSON.parse(intent.msg_json) as Record<string, { payload?: unknown; signature?: unknown }>;
+        const body = parsed[op.kind];
+        if (body === undefined || typeof body.signature !== "string") return null;
+        return { seq: op.seq, log_len: op.log_len, round_key: op.kind === "checkpoint" ? op.round_key : null, payload: body.payload, signature: body.signature, settle_digest: op.settle_digest, status: intent.status };
+      } catch {
+        return null;
+      }
+    };
+    const usable = (intent: ChainIntentRecord) => intent.status !== "held";
+    const newest = (kind: "checkpoint" | "settle") =>
+      intents
+        .filter((intent) => intent.op.kind === kind && usable(intent))
+        .sort((a, b) => (BigInt((b.op as { seq: string }).seq) > BigInt((a.op as { seq: string }).seq) ? 1 : -1))[0];
+    const checkpoint = newest("checkpoint");
+    const settlement = newest("settle");
+    return { checkpoint: checkpoint === undefined ? null : detail(checkpoint), settlement: settlement === undefined ? null : detail(settlement) };
+  }
+
   /* ------------------------------------------------------------------ */
   /* The service                                                         */
   /* ------------------------------------------------------------------ */
@@ -880,6 +1181,28 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     rosterSource,
     isRosterFrozen: (gameId) => frozen.has(gameId),
     reconcileStart,
+    relayConsent,
+    submitAnnul,
+    annulCollected(gameId) {
+      const entry = annulBook.get(gameId);
+      return entry === undefined ? null : { trusted_seq: entry.trusted_seq, collected: [...entry.sigs.keys()].sort((a, b) => a - b) };
+    },
+    escrowDetails,
+    intentsOf: (gameId) => deps.intents.listGame(gameId),
+    onChange(listener) {
+      listeners.push(listener);
+    },
+    isReady: ready,
+    creationVerdict: () => moneyContinuationVerdict(continuationNow(), continuationDeployment),
+    observe: (gameId) => enqueue(gameId, "the chain observation", () => observeChain(gameId)),
+    async closeUnboundTable(gameId) {
+      await exclusive(gameId, async () => {
+        const record = await deps.financial.load(gameId);
+        if (record === null || record.phase !== "funding" || record.binding?.escrow != null || record.roster !== null) return;
+        const next = await apply(gameId, (current) => (current.phase === "funding" && current.binding?.escrow == null ? { kind: "cancel-before-deal", at: deps.now() } : null));
+        if (next?.phase === "cancelled") audit("money.cancelled-unbound", { game_id: gameId });
+      });
+    },
 
     async preload() {
       let count = 0;
@@ -911,13 +1234,19 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
       if (record.phase === "closed" || record.phase === "cancelled") return { kind: "wait", why: `the money game is ${record.phase}` };
       if (intent.op.kind === "start") return admitStart(intent, record);
       const binding = record.binding?.escrow;
-      if (binding == null || intent.instance !== escrowInstanceKey(binding)) return { kind: "hold", code: "binding-mismatch", why: "the intent is not this game's chain game" };
+      /* ESCROW-4: a consent or annul lives in its key-suffixed slot family of the same instance. */
+      if (binding == null || !intentBelongsTo(intent, escrowInstanceKey(binding))) return { kind: "hold", code: "binding-mismatch", why: "the intent is not this game's chain game" };
       return { kind: "ok" };
     },
 
     async createMoneyGame(gameId) {
       if (!ready()) return { ok: false, code: "not-verified", detail: "financial mode is not verified against the chain" };
-      const record = newFinancialRecord(gameId, currentMoneyContinuation(backend.pin.codec), deps.now(), backend.pin);
+      /* LIVE-4 (§9.3, D4-14) / ESCROW-4 amendment §4: never freeze an identity this deployment cannot continue -- above all
+         a rules engine not yet settlement-certified (a future bump before its certification). Nothing is written. */
+      const continuation = continuationNow();
+      const verdict = moneyContinuationVerdict(continuation, continuationDeployment);
+      if (!verdict.continues) return { ok: false, code: verdict.why, detail: verdict.detail };
+      const record = newFinancialRecord(gameId, continuation, deps.now(), backend.pin);
       const created = await deps.financial.create(record);
       if (created.outcome.kind !== "committed") return { ok: false, code: "store", detail: created.outcome.detail };
       const stored = created.existing ?? record;
@@ -928,54 +1257,15 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     },
 
     async bindChainGame(gameId, chainGameId, variants) {
-      if (!ready()) return { ok: false, code: "not-verified", detail: "financial mode is not verified against the chain" };
-      const record = await deps.financial.load(gameId);
-      if (record === null) return { ok: false, code: "not-found", detail: "no money record" };
-      const mismatch = pinMismatch(record);
-      if (mismatch !== null) return { ok: false, code: "binding-mismatch", detail: mismatch };
-      if (record.continuation === null) return { ok: false, code: "held", detail: "the money record has no continuation identity" };
-      const [contract, response, configRaw] = await Promise.all([
-        backend.rest.contract(backend.pin.contract_address),
-        readGame(chainGameId),
-        backend.rest.smart(backend.pin.contract_address, QUERY.config()),
-      ]);
-      const checksum = await backend.rest.codeChecksum(contract.code_id);
-      const config = parseConfigResponse(configRaw);
-      const g = response.game;
-      if (g.rules_engine_version !== record.continuation.rules_engine_version) return { ok: false, code: "terms-mismatch", detail: `the chain game pins rules ${g.rules_engine_version}; the table pins ${record.continuation.rules_engine_version}` };
-      const digest = variantsDigestV1(variants);
-      if (g.variants_digest !== digest) return { ok: false, code: "terms-mismatch", detail: "the chain game's variants digest is not this table's" };
-      const binding: EscrowBindingV2 = {
-        binding_schema: 2,
-        backend: "juno-cosmwasm",
-        codec: "18JUNO/v1",
-        network: { chain_id: backend.pin.chain_id, network_class: backend.pin.network_class },
-        deployment: { kind: "juno-cosmwasm", contract_address: backend.pin.contract_address, code_id: contract.code_id, code_checksum: checksum, contract_name: config.contract_name, contract_version: config.contract_version, admin: contract.admin },
-        chain_game_id: g.chain_game_id,
-        custody: { kind: "contract-ledger" },
-        asset: { denom: g.denom, exponent: 6, symbol: backend.symbol },
-        terms: { ante_gross: g.ante_gross, ante_net: g.ante_net, max_players: g.max_players, mode: g.mode },
-        commitments: { rules_engine_version: g.rules_engine_version, variants_digest: g.variants_digest },
-        bound_at: deps.now(),
-      };
-      try {
-        validateEscrowBindingV2(binding, backend.policy);
-      } catch (error) {
-        return { ok: false, code: "binding-invalid", detail: error instanceof Error ? error.message : String(error) };
-      }
-      if (chainGameId !== g.chain_game_id) return { ok: false, code: "terms-mismatch", detail: "the chain answered for another game" };
-      /* Review #9: a repeated bind of the SAME chain game (every chain-read fact equal; only the bind time differs) is the
-         existing binding -- never a second, "different" one that holds the game. */
-      const withoutTime = (value: EscrowBindingV2) => JSON.stringify({ ...value, bound_at: 0 });
-      if (record.binding?.escrow != null) {
-        return withoutTime(record.binding.escrow) === withoutTime(binding) ? { ok: true, binding: record.binding.escrow } : { ok: false, code: "binding-conflict", detail: "this money game is bound to another chain game" };
-      }
-      const next = await apply(gameId, () => ({ kind: "bound", at: deps.now(), escrow: binding }));
-      if (next === null || next.binding?.escrow == null || withoutTime(next.binding.escrow) !== withoutTime(binding)) {
-        return { ok: false, code: next?.phase === "held" ? "held" : "binding-conflict", detail: next?.hold?.detail ?? "the chain game was not bound" };
-      }
-      audit("money.bound", { game_id: gameId, chain_game_id: g.chain_game_id, code_checksum: checksum, deployment: deploymentId(binding.deployment) });
-      return { ok: true, binding: next.binding.escrow };
+      return bindChecked(gameId, chainGameId, variants, null);
+    },
+
+    async bindHostChainGame(gameId, chainGameId, variants, expect) {
+      /* W-13: every chain fact is read by QUORUM (every configured endpoint agreeing) and compared with the server's own
+         expectation before the write-once binding exists. The shared checks then pin the deployment, rules, variants and
+         policy exactly as 3B's bind does. */
+      if (typeof chainGameId !== "string" || !/^[1-9][0-9]{0,19}$/.test(chainGameId)) return { ok: false, code: "request-invalid", detail: "the chain game id is not a u64" };
+      return bindChecked(gameId, chainGameId, variants, expect);
     },
 
     /* ESCROW-JOIN. Every precondition is the existing authority's, re-read now; the admission is recorded on the seat's
@@ -1188,7 +1478,15 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
           return;
         }
         const bound = boundOf(record);
-        if (bound === null || intent.instance !== escrowInstanceKey(bound.binding)) return;
+        if (bound === null || !intentBelongsTo(intent, escrowInstanceKey(bound.binding))) return;
+        if (intent.op.kind === "consent" || intent.op.kind === "annul") {
+          /* ESCROW-4: a player's relayed signature. Held or superseded is that signature's end (the player signs again),
+             never the game's: the chain decides what happened. */
+          if (intent.op.kind === "annul" && intent.status !== "confirmed") annulBook.delete(intent.game_id);
+          await observeChain(intent.game_id);
+          notify(intent.game_id);
+          return;
+        }
         if (intent.status === "held") {
           const code = intent.hold?.code === "chain-inconsistent" ? "chain-inconsistent" : intent.hold?.code === "binding-mismatch" ? "binding-mismatch" : "chain-intent-held";
           /* A held checkpoint is not a held game (a newer one may land); a contradiction always is. */

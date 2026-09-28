@@ -45,13 +45,24 @@
 //                second wallet could be admitted for the same seat while the first still can join -- more admitted
 //                wallets than seats. `outstandingAdmissions` tells the room host (ESCROW-4) which seats must not move.
 //
-// Money games are disabled: nothing issues a ticket in production yet. ESCROW-3B/4 call `issue` from the wallet
-// declaration flow and pass `ticketOf` to `freezeEscrowRoster`.
+//   PROVEN       ESCROW-4 (2026-09-28): a ticket is issued only by the wallet-link route, and only for a wallet whose
+//                control the server has just VERIFIED (an ADR-036 signature over a challenge naming this game, this seat
+//                and this wallet; `walletProof.ts`). The proof is recorded ON THE GRANT (`proof`), so the join admission's
+//                precondition (`proofOf`) reads a verified record -- never the declared wallet. A grant without a proof
+//                (3B / ESCROW-JOIN test fixtures) proves nothing: no admission is ever issued for it.
+//   RELINKED     a deposit made under an earlier ticket of THIS seat (one a security event has since ended) is linked
+//                again, free, by a new grant that RE-ADOPTS that ticket for the same wallet -- after a fresh proof of the
+//                wallet and a fresh "Confirm it's you". The chain seat already carries that ticket, so the roster freeze
+//                adopts the deposit exactly as it would have; nothing is reassigned, and no other wallet can use it.
+//   CONSENT KEYS the consent keys this seat's owner registered: the first with the link, later ones only after "Confirm
+//                it's you" (`registerConsentKey`, allowed on a frozen grant: the key may move while the game runs). The
+//                server relays a CONSENT or ANNUL only from a key registered here AND current on chain.
 
 import { randomBytes } from "crypto";
 
 import { joinTicketV1 } from "../../../frontend/src/gameEngine/escrow/escrowRoster";
 import type { SecurityStanding } from "../identity/sessions";
+import type { WalletControlProof } from "./escrowPorts";
 
 export const WALLET_TICKET_FORMAT = "gs-wallet-ticket";
 
@@ -81,7 +92,34 @@ export interface WalletTicketGrant {
   /** ESCROW-JOIN: the latest `expires_at` (Unix SECONDS, chain time) of a Join admission issued for this grant; null
    *  if none was. While it is in the future the grant is not superseded. */
   readonly admitted_until_secs: number | null;
+  /** ESCROW-4: the verified proof that the grant's principal controls `wallet` (null on a grant made without one). */
+  readonly proof: WalletLinkProof | null;
+  /** ESCROW-4: the consent keys registered for this seat (33-byte compressed hex, oldest first, at most 8). */
+  readonly consent_keys: readonly string[];
+  /** ESCROW-4: a relink re-adopts the ticket of this earlier epoch of the same seat and wallet (null: a fresh ticket). */
+  readonly relinked_from: number | null;
+  /** ESCROW-4: the chain's `next_chain_game_id` when this ticket was minted (decimal; null: unknown). No CreateGame can
+   *  carry the ticket at a lower id, so the server looks for a host's CreateGame from here (the ticket's own floor for a
+   *  relink is the adopted grant's). */
+  readonly create_floor: string | null;
 }
+
+/** ESCROW-4: what the wallet-link route recorded after verifying the wallet's ADR-036 signature (`walletProof.ts`). */
+export interface WalletLinkProof {
+  readonly kind: "adr036";
+  /** The address the signing key controls (bech32 of RIPEMD-160(SHA-256(pubkey))): the grant's wallet. */
+  readonly wallet: string;
+  /** The signing key (33-byte compressed hex). */
+  readonly pubkey: string;
+  /** SHA-256 (lowercase hex) of the exact challenge text the wallet signed. */
+  readonly challenge_digest: string;
+  /** SHA-256 over the length-framed text, key and signature: what an audit re-verifies. */
+  readonly proof_hash: string;
+  /** Server ms when the signature was verified. */
+  readonly verified_at: number;
+}
+
+export const MAX_CONSENT_KEYS = 8;
 
 /** One game's ledger: its grants, and whether its roster froze (the game's fact, set once by `freeze`). */
 export interface WalletTicketDocument {
@@ -129,7 +167,7 @@ export interface WalletTicketDeps {
   readonly random?: (size: number) => Buffer;
 }
 
-export type IssueRefusal = "reauth-required" | "not-seated" | "security-context-ended" | "frozen" | "conflict" | "admission-outstanding";
+export type IssueRefusal = "reauth-required" | "not-seated" | "security-context-ended" | "frozen" | "conflict" | "admission-outstanding" | "proof-mismatch" | "relink-mismatch";
 
 /** ESCROW-JOIN: the chain compares an admission's expiry with BLOCK time, which may trail this server's clock by a block
  *  or so (and by more on a slow chain). The ledger treats an admission as outstanding until this long after its expiry,
@@ -186,8 +224,20 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
       readonly wallet: string;
       readonly context: WalletTicketContext;
       readonly reauthorized: boolean;
+      /** ESCROW-4: the verified proof of `wallet` (the wallet-link route always passes one). */
+      readonly proof?: WalletLinkProof | null;
+      /** ESCROW-4: the consent key the linking browser made for this seat (registered with the link). */
+      readonly consentKey?: string | null;
+      /** ESCROW-4: re-adopt this earlier epoch's ticket (same seat, same wallet) instead of minting one: a relink. */
+      readonly relinkFrom?: number | null;
+      /** ESCROW-4: the chain's next game id now (the floor below which no CreateGame can carry a fresh ticket). */
+      readonly createFloor?: string | null;
     }): Promise<{ readonly ok: true; readonly ticket: string; readonly epoch: number } | { readonly ok: false; readonly refusal: IssueRefusal }> {
       if (!input.reauthorized) return { ok: false, refusal: "reauth-required" };
+      const proof = input.proof ?? null;
+      if (proof !== null && proof.wallet !== input.wallet) return { ok: false, refusal: "proof-mismatch" };
+      const consentKey = input.consentKey ?? null;
+      if (consentKey !== null && !/^0[23][0-9a-f]{64}$/.test(consentKey)) return { ok: false, refusal: "proof-mismatch" };
       if (deps.standing(input.context).kind !== "standing") return { ok: false, refusal: "security-context-ended" };
       if (!deps.holdsSeat(input.gameId, input.context.principalId, input.playerId)) return { ok: false, refusal: "not-seated" };
       const { version, document } = await deps.store.load(input.gameId);
@@ -195,19 +245,31 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
       const grants = [...document.grants];
       const now = deps.now();
       const previous = newestOf(grants, input.playerId);
+      /* ESCROW-4: a relink re-adopts an earlier ticket of THIS seat for THIS wallet (the one its deposit carries). */
+      const relinkFrom = input.relinkFrom ?? null;
+      const adopted = relinkFrom === null ? null : grants.find((grant) => grant.player_id === input.playerId && grant.epoch === relinkFrom) ?? null;
+      if (relinkFrom !== null && (adopted === null || adopted.wallet !== input.wallet)) return { ok: false, refusal: "relink-mismatch" };
       /* ESCROW-JOIN: an outstanding admission can still seat its wallet on chain; no second wallet for this seat until
-         it expires (whatever ended the grant meanwhile -- a revoked grant's admission is just as usable on chain). */
-      if (previous !== undefined && admissionOutstanding(previous.admitted_until_secs, now)) return { ok: false, refusal: "admission-outstanding" };
+         it expires (whatever ended the grant meanwhile -- a revoked grant's admission is just as usable on chain).
+         ESCROW-4: a relink that re-adopts EXACTLY the admitted (wallet, ticket) adds no wallet: allowed. Every grant of
+         the seat is looked at, not only the newest -- a relink writes a newer grant while the older admission is still
+         usable on chain (review S-M1) -- and a relink carries that admission forward. */
+      const admitted = grants.filter((grant) => grant.player_id === input.playerId && admissionOutstanding(grant.admitted_until_secs, now));
+      if (admitted.some((grant) => adopted === null || grant.wallet !== adopted.wallet || grant.ticket !== adopted.ticket)) return { ok: false, refusal: "admission-outstanding" };
+      const carried = admitted.length === 0 ? null : Math.max(...admitted.map((grant) => grant.admitted_until_secs as number));
       const epoch = (previous?.epoch ?? 0) + 1;
-      const ticket = joinTicketV1({
-        backend: input.binding.backend,
-        chain_id: input.binding.chain_id,
-        deployment_id: input.binding.deployment_id,
-        game_id: input.gameId,
-        player_id: input.playerId,
-        wallet: input.wallet,
-        secret_hex: random(32).toString("hex"), // used once, never kept
-      });
+      const ticket =
+        adopted !== null
+          ? adopted.ticket
+          : joinTicketV1({
+              backend: input.binding.backend,
+              chain_id: input.binding.chain_id,
+              deployment_id: input.binding.deployment_id,
+              game_id: input.gameId,
+              player_id: input.playerId,
+              wallet: input.wallet,
+              secret_hex: random(32).toString("hex"), // used once, never kept
+            });
       const next = grants.map((grant) =>
         grant.player_id === input.playerId && grant.revoked_at === null ? { ...grant, revoked_at: now, revoke_reason: "superseded" as const } : grant,
       );
@@ -223,10 +285,81 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
         revoked_at: null,
         revoke_reason: null,
         frozen_at: null,
-        admitted_until_secs: null,
+        admitted_until_secs: carried,
+        proof,
+        /* A relink keeps the seat's registered keys (its deposit on chain still names the one it was made with). */
+        consent_keys: [...new Set([...(adopted?.consent_keys ?? []), ...(consentKey === null ? [] : [consentKey])])].slice(-MAX_CONSENT_KEYS),
+        relinked_from: adopted === null ? null : adopted.epoch,
+        create_floor: adopted !== null ? adopted.create_floor : input.createFloor ?? null,
       });
       if ((await deps.store.put(input.gameId, { frozen_at: null, grants: next }, version)) !== "committed") return { ok: false, refusal: "conflict" };
       return { ok: true, ticket, epoch };
+    },
+
+    /** ESCROW-4: the join admission's precondition (`WalletControlProofs.proofOf`) -- the seat's newest grant, if it
+     *  stands, was issued to this principal, and carries a VERIFIED proof. Never the declared wallet alone. */
+    async proofOf(input: { readonly gameId: string; readonly playerId: string; readonly principalId: string }): Promise<WalletControlProof | null> {
+      const { document } = await deps.store.load(input.gameId);
+      const newest = newestOf(document.grants, input.playerId);
+      if (newest === undefined || newest.proof === null || !stands(newest, true) || newest.issued_under.principal_id !== input.principalId) return null;
+      return {
+        kind: "adr036",
+        game_id: newest.game_id,
+        player_id: newest.player_id,
+        principal_id: newest.issued_under.principal_id,
+        wallet: newest.proof.wallet,
+        challenge_digest: newest.proof.challenge_digest,
+        verified_at: newest.proof.verified_at,
+      };
+    },
+
+    /** ESCROW-4 (review S-M3): the same wallet linked again ("Confirm it's you" + a fresh ADR-036 proof): the seat's
+     *  newest grant -- standing, issued to this principal, for exactly this wallet, not frozen -- carries the NEW proof
+     *  (a proof ages out for the join admission) and the linking browser's key. Same ticket, same epoch. */
+    async renewProof(input: { readonly gameId: string; readonly playerId: string; readonly principalId: string; readonly proof: WalletLinkProof; readonly consentKey: string }): Promise<"committed" | "refused" | "conflict"> {
+      if (!/^0[23][0-9a-f]{64}$/.test(input.consentKey)) return "refused";
+      const { version, document } = await deps.store.load(input.gameId);
+      if (document.frozen_at !== null) return "refused";
+      const newest = newestOf(document.grants, input.playerId);
+      if (newest === undefined || newest.issued_under.principal_id !== input.principalId || !stands(newest, true) || newest.wallet !== input.proof.wallet) return "refused";
+      const keys = [...new Set([...newest.consent_keys, input.consentKey])].slice(-MAX_CONSENT_KEYS);
+      const grants = document.grants.map((grant) => (grant === newest ? { ...grant, proof: input.proof, consent_keys: keys } : grant));
+      return deps.store.put(input.gameId, { frozen_at: document.frozen_at, grants }, version);
+    },
+
+    /** ESCROW-4: register a consent key for this seat (after "Confirm it's you"), on its newest grant issued to this
+     *  principal -- standing, or frozen with the roster (the key may move while the game runs). Idempotent. */
+    async registerConsentKey(input: { readonly gameId: string; readonly playerId: string; readonly principalId: string; readonly pubkey: string }): Promise<"committed" | "refused" | "conflict"> {
+      if (!/^0[23][0-9a-f]{64}$/.test(input.pubkey)) return "refused";
+      const { version, document } = await deps.store.load(input.gameId);
+      const newest = newestOf(document.grants, input.playerId);
+      if (newest === undefined || newest.issued_under.principal_id !== input.principalId || !stands(newest, true)) return "refused";
+      if (newest.consent_keys.includes(input.pubkey)) return "committed";
+      const keys = [...newest.consent_keys, input.pubkey].slice(-MAX_CONSENT_KEYS);
+      const grants = document.grants.map((grant) => (grant === newest ? { ...grant, consent_keys: keys } : grant));
+      return deps.store.put(input.gameId, { frozen_at: document.frozen_at, grants }, version);
+    },
+
+    /** ESCROW-4: every grant of a game with whether it stands NOW (server-private: the money service's projection and
+     *  its refusal policy read it; nothing here goes on the wire as it is). */
+    async snapshot(gameId: string): Promise<{ readonly frozen_at: number | null; readonly grants: ReadonlyArray<WalletTicketGrant & { readonly standing: boolean }> }> {
+      const { document } = await deps.store.load(gameId);
+      const newestBySeat = new Map<string, number>();
+      for (const grant of document.grants) newestBySeat.set(grant.player_id, Math.max(newestBySeat.get(grant.player_id) ?? 0, grant.epoch));
+      return { frozen_at: document.frozen_at, grants: document.grants.map((grant) => ({ ...grant, standing: stands(grant, newestBySeat.get(grant.player_id) === grant.epoch) })) };
+    },
+
+    /** ESCROW-4 ("Your deposits"): every game whose ledger holds ANY grant issued under `principalId` -- standing or
+     *  not, frozen or not -- so a deposit stays reachable however its table ended. Newest first (by the principal's
+     *  newest grant there), so a cap on how many are read keeps the recent ones. */
+    async gamesIssuedTo(principalId: string): Promise<string[]> {
+      const found: Array<{ gameId: string; newest: number }> = [];
+      for (const gameId of (await deps.store.listGames?.()) ?? []) {
+        const { grants } = (await deps.store.load(gameId)).document;
+        const mine = grants.filter((grant) => grant.issued_under.principal_id === principalId);
+        if (mine.length > 0) found.push({ gameId, newest: Math.max(...mine.map((grant) => grant.issued_at)) });
+      }
+      return found.sort((a, b) => b.newest - a.newest).map((entry) => entry.gameId);
     },
 
     /** `freezeEscrowRoster`'s `ticketOf`: the standing ticket of this seat for exactly this wallet, or a value no chain

@@ -260,7 +260,7 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
   /* The build's own pins: the codec, the certified rules and the financial protocol this backend speaks. */
   need(DEPLOYMENT_SETTLEMENT_CODECS.includes("18JUNO/v1"), "this build does not carry the certified 18JUNO/v1 codec");
   need(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS.length > 0, "this build certifies no rules version for settlement");
-  need(FINANCIAL_PROTOCOL_VERSION === 2, "this build's financial protocol is not the one this backend implements (2)");
+  need(FINANCIAL_PROTOCOL_VERSION === 3, "this build's financial protocol is not the one this backend implements (3)");
 
   if (problems.length > 0) throw new JunoConfigError(problems);
   return {

@@ -73,6 +73,7 @@ const VIEW_KEYS: Record<keyof ClientRoomView, true> = {
   createdAtMs: true,
   undoPolicy: true,
   you: true,
+  money: true,
 };
 const SUMMARY_KEYS: Record<keyof ClientRoomSummary, true> = {
   gameId: true,
@@ -86,8 +87,13 @@ const SUMMARY_KEYS: Record<keyof ClientRoomSummary, true> = {
   playerCount: true,
   variants: true,
   createdAtMs: true,
+  stake: true,
 };
 const YOU_KEYS: Record<keyof ClientRoomView["you"], true> = { role: true, playerId: true, kicked: true, canStart: true };
+/* ESCROW-4 (additive and optional, the LIVE-4 amendment): carried only by a real-money table, so a no-money table's view
+   and list entry are exactly what they were before (`escrow4Money.test.ts` pins the money table's own). */
+const OPTIONAL_VIEW_KEYS: ReadonlySet<string> = new Set(["money"]);
+const OPTIONAL_SUMMARY_KEYS: ReadonlySet<string> = new Set(["stake"]);
 
 /* ==================================================================
     FIXTURES
@@ -325,13 +331,13 @@ describe("LIVE-2D: the legacy room protocol is gone", () => {
       alice.roomHello(listed.game_id);
       const frame = await alice.next((f) => f.kind === "room");
       const view = frame.view as Record<string, unknown>;
-      assert.deepEqual(Object.keys(view).sort(), Object.keys(VIEW_KEYS).sort());
+      assert.deepEqual(Object.keys(view).sort(), Object.keys(VIEW_KEYS).filter((key) => !OPTIONAL_VIEW_KEYS.has(key)).sort());
       assert.deepEqual(Object.keys(view.you as object).sort(), Object.keys(YOU_KEYS).sort());
       assert.deepEqual(view.undoPolicy, { host_undo: "last-action" });
       alice.send({ kind: "rooms-watch", on: true });
       const rooms = (await alice.next((f: Frame) => f.kind === "rooms")).rooms as Array<Record<string, unknown>>;
       assert.equal(rooms.length, 1);
-      assert.deepEqual(Object.keys(rooms[0]).sort(), Object.keys(SUMMARY_KEYS).sort());
+      assert.deepEqual(Object.keys(rooms[0]).sort(), Object.keys(SUMMARY_KEYS).filter((key) => !OPTIONAL_SUMMARY_KEYS.has(key)).sort());
       assert.equal(/pr_dev_/.test(JSON.stringify(alice.frames)), false, "no principal id on the wire");
       await alice.close();
     } finally {

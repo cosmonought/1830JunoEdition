@@ -56,6 +56,7 @@ import {
   roomSummaryOf,
   roomViewFor,
   seatOf,
+  type GameMoneyTerms,
   type GameRecord,
   type HoldKind,
   type LogFacts,
@@ -66,6 +67,7 @@ import {
 } from "./gameRecord";
 import { createMemoryHoldStore, type HoldStore } from "./holdStore";
 import type { MoneyContinuationPolicy } from "../escrow/moneyContinuation";
+import { disabledMoneyView, disabledStake, type MoneyRoomPort, type MoneyTables } from "../escrow/moneyTables";
 import {
   ARCHIVE_SWEEP_BUDGET,
   FROZEN_GAME_SENTENCE,
@@ -120,6 +122,9 @@ export interface EscrowGameplaySeam {
 /** ESCROW-3B: the ops that would change a frozen financial roster's seats (or the table itself before the deal). */
 const FROZEN_ROSTER_OPS: ReadonlySet<string> = new Set(["join", "take-seat", "release-seat", "leave", "set-profile", "kick", "cancel-room"]);
 export const FROZEN_ROSTER_SENTENCE = "This table's players are locked in with the escrow: seats can no longer change.";
+/** ESCROW-4 (R-J1, W-2, W-3): the ops a real-money table decides again in the task, against the ledger and the chain. */
+const MONEY_SEAT_OPS: ReadonlySet<string> = new Set(["kick", "release-seat", "transfer-host", "cancel-room"]);
+export const MONEY_UNAVAILABLE_SENTENCE = "This table's money can't be checked on this server right now, so its seats can't change.";
 
 export interface RoomHostDeps {
   build: string;
@@ -155,6 +160,9 @@ export interface RoomHostDeps {
   moneyContinuation?: MoneyContinuationPolicy;
   /** ESCROW-3B: the escrow service's seam (none when absent: no money game can exist). */
   escrow?: EscrowGameplaySeam;
+  /** ESCROW-4: the real-money table layer (`escrow/moneyTables.ts`), bound late (it needs this host's port). Absent or
+   *  null: no money table can be created, and an existing one is shown by its terms only, its seats locked. */
+  money?: () => MoneyTables | null;
   /** LIVE-3C: whether a session's board has ended or closed (the reducer's `GameEnd` / `room_closed`; a test seam
    *  may say so of a game that has not -- a stored game that reaches GameEnd needs a whole game played). */
   boardFacts?: (gameId: string, session: RoomSession) => { ended: boolean; closed: boolean };
@@ -592,11 +600,18 @@ export function createRoomHost(deps: RoomHostDeps) {
     return false;
   };
 
+  /** ESCROW-4: a real-money table's projection for this viewer (terms only when the money layer is unavailable). */
+  const moneyViewOf = (record: GameRecord, principalId: string | null) => {
+    if (record.money === null) return null;
+    return deps.money?.()?.viewFor(record, principalId) ?? disabledMoneyView(record, principalId);
+  };
+
   function viewFrame(game: GameActor, principalId: string): object | null {
     const view = game.view;
     const record = view.record;
     if (record === null) return null;
     const facts = factsFromView(view, record);
+    const money = moneyViewOf(record, principalId);
     return {
       kind: "room",
       gameId: record.game_id,
@@ -605,7 +620,9 @@ export function createRoomHost(deps: RoomHostDeps) {
         held: heldOf(view),
         holdKind: kindOf(view),
         online: onlineIn(record.game_id, record),
-        canStart: !facts.dealt && waitingBlock(record) === null && view.hold === null,
+        /* ESCROW-4: a real-money table starts from the chain's funding (the money view says when; never `ready`). */
+        canStart: record.money === null ? !facts.dealt && waitingBlock(record) === null && view.hold === null : !facts.dealt && view.hold === null && money?.start.canStart === true,
+        money,
       }),
     };
   }
@@ -697,7 +714,8 @@ export function createRoomHost(deps: RoomHostDeps) {
       const resident = peekLoaded(record.game_id);
       const facts = resident ? factsFromView(resident.view, record) : factsFromEntries([], false, false);
       const dealtFromRecord = record.started_at !== null || record.status === "active" || record.status === "completed";
-      const summary = roomSummaryOf(record, resident ? facts : { ...facts, dealt: dealtFromRecord, ended: record.status === "completed" }, now());
+      const stake = record.money === null ? null : (deps.money?.()?.stakeFor(record) ?? disabledStake(record));
+      const summary = roomSummaryOf(record, resident ? facts : { ...facts, dealt: dealtFromRecord, ended: record.status === "completed" }, now(), stake);
       if (summary !== null) out.push(summary);
     }
     return out.sort((a, b) => b.createdAtMs - a.createdAtMs);
@@ -788,6 +806,8 @@ export function createRoomHost(deps: RoomHostDeps) {
     op: (env: OpEnv, freshCode: string | null) => OpOutcome,
     /** Whether the op needs a fresh join code -- judged against the record committed when the task runs. */
     needsCode: (record: GameRecord) => boolean = () => false,
+    /** ESCROW-4: the seat a `kick` names (the money table's seat lock is judged for it). */
+    moneyTarget: string | null = null,
   ): Promise<Ran<OpOutcome & { ok: true }>> {
     const outcome = await game.run("room-op", async (tx): Promise<Ran<OpOutcome & { ok: true }>> => {
       const record = tx.view.record;
@@ -826,6 +846,18 @@ export function createRoomHost(deps: RoomHostDeps) {
          reconciliation tried again as a task of its own -- so no op, and no sweep, builds on a record the log may
          contradict. */
       if (awaitingReconciliation(game)) return { ok: false, code: "unavailable", reason: UNAVAILABLE };
+      /* ESCROW-4: A REAL-MONEY TABLE'S SEATS ARE MONEY. Before the deal, Leave is an unsubscribe (a seat is given up only
+         by release-seat, and only when nothing of it can be on Juno); kick, release, host transfer and cancel are decided
+         again HERE -- in this task, against the ledger and the chain (R-J1, W-2, W-3) -- so an admission, a link or a
+         deposit and a seat change never interleave. Without a working money layer nothing of a seat moves. */
+      if (record.money !== null && opName !== null && (verdict === null || verdict.ok) && !facts.dealt) {
+        if (opName === "leave") return { ok: true, value: { ok: true, record: null, effects: { unsubscribeOnly: true } } };
+        if (MONEY_SEAT_OPS.has(opName)) {
+          const money = deps.money?.() ?? null;
+          const refused = money === null ? { code: "money-unavailable", reason: MONEY_UNAVAILABLE_SENTENCE } : await money.seatOpRefusal(record, opName, principalId, moneyTarget);
+          if (refused !== null) return { ok: false, code: refused.code, reason: refused.reason };
+        }
+      }
       /* THE WAITING-ROOM TTL (§5.3), made durable by the first op (or sweep) that finds it passed. ESCROW-3B (review
          #8): never for a table whose financial roster is frozen -- expiring it would be the server cancelling it. */
       if (record.status === "waiting" && effectiveStatus(record, facts, at) === "expired" && deps.escrow?.isRosterFrozen(record.game_id) !== true) {
@@ -943,10 +975,18 @@ export function createRoomHost(deps: RoomHostDeps) {
   async function handleCreate(socket: WebSocket, ctx: ConnectionContext, requestId: string, op: Record<string, unknown>): Promise<void> {
     await indexReady;
     const ip = deps.ipOf(socket);
-    /* LIVE-2's invariant: no money games. A stake is refused unless it is zero -- no chain concept is read here. */
+    /* ESCROW-4: a stake opens a REAL-MONEY table -- only where the money layer is configured, enabled by the operator,
+       verified against the chain and not on mainnet; its terms come from the server's pinned deployment (the host picks
+       only the ante and the exact player count; the escrow's pace is the table's own `variants.mode`). A zero stake,
+       or none, is an ordinary table. */
     const stakeRaw = op.stake;
+    let moneyTerms: GameMoneyTerms | null = null;
     if (stakeRaw !== undefined && !(typeof stakeRaw === "string" && /^0+$/.test(stakeRaw))) {
-      return ack(socket, requestId, { ok: false, code: "money-games-disabled", reason: "Games with stakes are not open on this server." });
+      const money = deps.money?.() ?? null;
+      if (money === null) return ack(socket, requestId, { ok: false, code: "money-games-disabled", reason: "Games with stakes are not open on this server." });
+      const prepared = await money.prepareCreate({ stake: stakeRaw, exactPlayers: op.exactPlayers, variants: resolveVariants(op.variants as never) });
+      if (!prepared.ok) return ack(socket, requestId, { ok: false, code: prepared.code, reason: prepared.reason });
+      moneyTerms = prepared.terms;
     }
     const waits = [createsPrincipal.peek(ctx.principalId), ip ? createsIp.peek(ip) : 0, createsGlobal.peek("global")];
     if (waits.some((wait) => wait > 0)) {
@@ -969,6 +1009,15 @@ export function createRoomHost(deps: RoomHostDeps) {
       code = await claimFreshCode(gameId);
       if (code === null) return ack(socket, requestId, { ok: false, code: "unavailable", reason: UNAVAILABLE });
       const claimed = code;
+      /* ESCROW-4: the financial record FIRST (a money GameRecord never exists without one; an orphan financial record of
+         a create that then failed is inert: unbound, funding, no table). */
+      if (moneyTerms !== null) {
+        const opened = await (deps.money?.() as MoneyTables).openFinancial(gameId);
+        if (!opened.ok) {
+          releaseLater(claimed, gameId);
+          return ack(socket, requestId, { ok: false, code: opened.code, reason: opened.reason });
+        }
+      }
       let unresolved = false;
       let game: GameActor;
       try {
@@ -992,6 +1041,7 @@ export function createRoomHost(deps: RoomHostDeps) {
           nickname: typeof op.nickname === "string" && op.nickname.trim() !== "" ? op.nickname : (deps.profileNameOf?.(ctx.principalId) ?? op.nickname),
           color: (op.color as string | null | undefined) ?? null,
           hostPlayerId: mintPlayerId(),
+          money: moneyTerms,
         });
         if (!result.ok || result.record === null) return result.ok ? { ok: false as const, code: "internal", reason: "No table." } : result;
         const settled = await tx.commitRecord(result.record, () => ({}));
@@ -1149,7 +1199,7 @@ export function createRoomHost(deps: RoomHostDeps) {
           default:
             return { ok: false, code: "bad-frame", reason: "That is not a room operation." };
         }
-      }, needsCode);
+      }, needsCode, type === "kick" ? String(op.playerId) : null);
       if (result.ok && result.value.effects?.unsubscribeOnly && viewGameOf.get(socket) === frame.gameId) dropView(socket);
       return ack(socket, requestId, result.ok ? { ok: true, ...(result.value.data ? { data: result.value.data } : {}) } : result);
     } finally {
@@ -1159,6 +1209,40 @@ export function createRoomHost(deps: RoomHostDeps) {
 
   /* ---- start (§8) ---- */
 
+  /** The deal, inside a task that holds the game (the host's Start, or ESCROW-4's deal after the chain's Start): the
+   *  roster source's plan (a money table's re-checks the chain), `assertDeal`, the append. */
+  async function dealInTask(tx: Tx, record: GameRecord): Promise<{ ok: true; data?: Record<string, unknown> } | Refusal> {
+    const plan = await deps.rosterSource.plan(record, { shuffle: deps.shuffle, now: now() });
+    if ("refusal" in plan) return { ok: false, code: plan.code === "wrong-state" ? "wrong-state" : "not-ready", reason: plan.reason, ...({ block: plan.code } as object) } as Refusal;
+    const deal = buildSetupGame(plan, deps.build);
+    assertDeal(record, deal);
+    const session = tx.session;
+    const before = session.entries.length;
+    const answer: ServerMessage = session.submit({
+      actor: record.host_player_id,
+      build: deps.build,
+      msg: deal,
+      baseIndex: session.nextIndex - 1,
+      submissionId: `start-${record.record_version}`,
+      host: record.host_player_id,
+      seated: true,
+      undoPolicy: { host_undo: record.policy.host_undo },
+    });
+    if (answer.kind !== "applied") {
+      tx.rollback();
+      return { ok: false, code: "wrong-state", reason: (answer as { reason?: string }).reason ?? "The game could not be dealt." };
+    }
+    const batch = session.entries.slice(before);
+    const dealtBoard = session.state; // the board being committed (the session is not read after the commit)
+    const settled = await tx.commitBatch(batch, (s) =>
+      s.kind === "committed" ? { fanout: { kind: "applied", entries: s.entries, digest: s.view.digest, ...(s.view.fields ? { fields: { ...s.view.fields } } : {}), build: deps.build } } : {},
+    );
+    if (settled.kind !== "committed") return { ok: false, code: "unavailable", reason: UNAVAILABLE };
+    /* ESCROW-3B: the deal is the first checkpoint position of a money game. */
+    callEscrow(record.game_id, settled.view.entries, dealtBoard);
+    return { ok: true, data: { started: true } };
+  }
+
   async function startGame(game: GameActor, principalId: string): Promise<{ ok: true; data?: Record<string, unknown> } | Refusal> {
     const outcome = await game.run("room-op", async (tx): Promise<{ ok: true; data?: Record<string, unknown> } | Refusal> => {
       const record = tx.view.record;
@@ -1167,43 +1251,28 @@ export function createRoomHost(deps: RoomHostDeps) {
       const facts = maintenance ? factsFromRecord(record) : factsFromTx(tx, boardOf(record.game_id, tx.session));
       const seat = seatOf(record, principalId);
       /* Idempotent (§8.2 step 2): a second press, or a lost ack, is told the game already started. */
-      if (!maintenance && facts.dealt && seat !== null && seat.player_id === record.host_player_id) return { ok: true, data: { alreadyStarted: true } };
+      if (!maintenance && facts.dealt && seat !== null && (seat.player_id === record.host_player_id || record.money !== null)) return { ok: true, data: { alreadyStarted: true } };
       const verdict = withGoneReason(authorize("start-game", { record, facts, principalId, now: now(), held: heldOf(tx.view) }), record);
       if (!verdict.ok && verdict.code === "not-found") return { ok: false, code: verdict.code, reason: verdict.reason };
       /* LIVE-3C: a held table is not dealt, whatever the host presses. */
       if (maintenance) return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
-      if (!verdict.ok) return { ok: false, code: verdict.code, reason: verdict.reason };
+      /* ESCROW-4: at a real-money table a funded non-host may start after the host's grace (OD-4-7): the money layer
+         decides who, from the chain. Every other refusal of the table's own rules stands. */
+      const moneyNonHost = record.money !== null && !verdict.ok && verdict.code === "forbidden" && seat !== null;
+      if (!verdict.ok && !moneyNonHost) return { ok: false, code: verdict.code, reason: verdict.reason };
       if (tx.view.hold !== null) return { ok: false, code: "unavailable", reason: UNAVAILABLE };
       if (awaitingReconciliation(game)) return { ok: false, code: "unavailable", reason: UNAVAILABLE };
-      const plan = await deps.rosterSource.plan(record, { shuffle: deps.shuffle, now: now() });
-      if ("refusal" in plan) return { ok: false, code: plan.code === "wrong-state" ? "wrong-state" : "not-ready", reason: plan.reason, ...({ block: plan.code } as object) } as Refusal;
-      const deal = buildSetupGame(plan, deps.build);
-      assertDeal(record, deal);
-      const session = tx.session;
-      const before = session.entries.length;
-      const answer: ServerMessage = session.submit({
-        actor: record.host_player_id,
-        build: deps.build,
-        msg: deal,
-        baseIndex: session.nextIndex - 1,
-        submissionId: `start-${record.record_version}`,
-        host: record.host_player_id,
-        seated: true,
-        undoPolicy: { host_undo: record.policy.host_undo },
-      });
-      if (answer.kind !== "applied") {
-        tx.rollback();
-        return { ok: false, code: "wrong-state", reason: (answer as { reason?: string }).reason ?? "The game could not be dealt." };
+      if (record.money !== null) {
+        /* ESCROW-4: THE REVERSIBLE FREEZE (3B), in this task: preconditions from a fresh chain read, the roster frozen,
+           the Start intent written; the relayer sends it; the deal follows the chain's confirmation (a server task).
+           A press after the chain's Start deals at once. Nothing here is decided by a client. */
+        const money = deps.money?.() ?? null;
+        if (money === null) return { ok: false, code: "money-unavailable", reason: MONEY_UNAVAILABLE_SENTENCE };
+        const started = await money.startInTask(record, principalId);
+        if (started.kind === "refused") return { ok: false, code: started.code, reason: started.reason };
+        if (started.kind === "starting") return { ok: true, data: { starting: true } };
       }
-      const batch = session.entries.slice(before);
-      const dealtBoard = session.state; // the board being committed (the session is not read after the commit)
-      const settled = await tx.commitBatch(batch, (s) =>
-        s.kind === "committed" ? { fanout: { kind: "applied", entries: s.entries, digest: s.view.digest, ...(s.view.fields ? { fields: { ...s.view.fields } } : {}), build: deps.build } } : {},
-      );
-      if (settled.kind !== "committed") return { ok: false, code: "unavailable", reason: UNAVAILABLE };
-      /* ESCROW-3B: the deal is the first checkpoint position of a money game. */
-      callEscrow(record.game_id, settled.view.entries, dealtBoard);
-      return { ok: true, data: { started: true } };
+      return dealInTask(tx, record);
     });
     if (outcome.kind === "failed") {
       /* A deal that broke `assertDeal`, or a roster source that threw: a server bug, never the host's -- logged. */
@@ -1212,9 +1281,101 @@ export function createRoomHost(deps: RoomHostDeps) {
       return { ok: false, code: "internal", reason: `The server could not deal this game. (ref ${ref})` };
     }
     if (outcome.kind !== "ran") return { ok: false, code: outcome.kind === "busy" ? "busy" : "unavailable", reason: outcome.kind === "busy" ? BUSY : UNAVAILABLE };
-    if (outcome.value.ok) syncRecord(game, "deal");
+    /* ESCROW-4: a money table's "starting" is not a deal (the record follows the deal, later). */
+    if (outcome.value.ok && outcome.value.data?.starting !== true) syncRecord(game, "deal");
     return outcome.value;
   }
+
+  /* ==================================================================
+      ESCROW-4: THE MONEY LAYER'S PORT -- EVERY TABLE MUTATION STAYS HERE, IN THE GAME'S ACTOR
+     ================================================================== */
+
+  /** Run a money task inside the game's actor ("room-op"): serialized with every seat op and submit of the game. */
+  async function runMoneyTask<T>(gameId: string, task: (record: GameRecord) => Promise<T>): Promise<{ ok: true; value: T } | Refusal> {
+    let game: GameActor | null;
+    try {
+      game = await actorFor(gameId);
+    } catch (error) {
+      if (error instanceof GameUnavailableError) return { ok: false, code: "unavailable", reason: UNAVAILABLE_PLAYER_SENTENCE };
+      throw error;
+    }
+    if (game === null) return { ok: false, code: "not-found", reason: "There is no such game." };
+    const actor = game;
+    const outcome = await actor.run("room-op", async (tx): Promise<{ ok: true; value: T } | Refusal> => {
+      const record = tx.view.record;
+      if (record === null) return { ok: false, code: "not-found", reason: "There is no such game." };
+      if (isMaintenanceHold(tx.view.hold)) return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
+      if (tx.view.hold !== null || awaitingReconciliation(actor)) return { ok: false, code: "unavailable", reason: UNAVAILABLE };
+      return { ok: true, value: await task(record) };
+    });
+    if (outcome.kind === "ran") return outcome.value;
+    if (outcome.kind === "busy") return { ok: false, code: "busy", reason: BUSY };
+    if (outcome.kind === "failed") {
+      const ref = deps.errorRef();
+      deps.warn(`  threw: a money task failed for ${gameId} (ref ${ref}) -- ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`);
+      return { ok: false, code: "internal", reason: `The server could not process that request. (ref ${ref})` };
+    }
+    return { ok: false, code: "unavailable", reason: UNAVAILABLE };
+  }
+
+  /** A server task on a money table (no caller): the op against the record committed when it runs. */
+  async function serverMoneyOp(gameId: string, change: (record: GameRecord, at: number) => { record: GameRecord | null; releaseCode?: string }): Promise<void> {
+    const game = await actorFor(gameId);
+    if (game === null) return;
+    await runOp(game, "", null, (env) => {
+      const next = change(env.record, env.now);
+      return { ok: true, record: next.record, effects: next.releaseCode !== undefined ? { releaseCode: next.releaseCode } : {} };
+    });
+  }
+
+  const moneyPort: MoneyRoomPort = {
+    runTask: runMoneyTask,
+    recordOf: (gameId) => {
+      const resident = peekLoaded(gameId)?.view.record ?? null;
+      return resident ?? recordIndex.get(gameId) ?? null;
+    },
+    refresh: (gameId) => {
+      broadcastView(gameId);
+      scheduleList();
+    },
+    hasViewers: (gameId) => (viewSubs.get(gameId)?.size ?? 0) > 0,
+    moneyRecords: () => [...recordIndex.values()].filter((record) => record.money !== null),
+    /* W-5: a bound table's waiting room outlives the chain's funding deadline (never shortened). */
+    extendExpiry: (gameId, until) =>
+      serverMoneyOp(gameId, (record, at) =>
+        record.money !== null && record.status === "waiting" && record.started_at === null && (record.expires_at ?? 0) < until
+          ? { record: { ...record, expires_at: until, record_version: record.record_version + 1, last_activity_at: at } }
+          : { record: null },
+      ),
+    /* The escrow was cancelled on chain: the room says so (its code released), exactly as a host's cancel would. */
+    mirrorCancelled: (gameId) =>
+      serverMoneyOp(gameId, (record, at) =>
+        record.money !== null && record.status === "waiting" && record.started_at === null
+          ? {
+              record: { ...record, status: "cancelled", cancelled_at: at, join_code: null, expires_at: null, record_version: record.record_version + 1, last_activity_at: at },
+              ...(record.join_code !== null ? { releaseCode: record.join_code } : {}),
+            }
+          : { record: null },
+      ).then(() => ops.audit("money.room-mirrored-cancel", { game_id: gameId })),
+    /* The chain confirmed the Start: deal now (idempotent -- a dealt table, or one whose plan refuses, is left). */
+    dealStarted: async (gameId) => {
+      const game = await actorFor(gameId);
+      if (game === null) return;
+      const outcome = await game.run("room-op", async (tx) => {
+        const record = tx.view.record;
+        if (record === null || record.money === null || tx.view.hold !== null || awaitingReconciliation(game)) return null;
+        const facts = factsFromTx(tx, boardOf(record.game_id, tx.session));
+        if (facts.dealt || record.status !== "waiting") return null;
+        return dealInTask(tx, record);
+      });
+      if (outcome.kind === "ran" && outcome.value !== null && outcome.value.ok && outcome.value.data?.started === true) {
+        syncRecord(game, "deal");
+        ops.audit("money.dealt-after-start", { game_id: gameId });
+      } else if (outcome.kind === "ran" && outcome.value !== null && !outcome.value.ok) {
+        deps.warn(`  money: ${gameId}'s Start is confirmed but the deal was refused (${outcome.value.code}): ${outcome.value.reason}`);
+      }
+    },
+  };
 
   /** The settlement seam, contained: it must not throw (it runs inside a publish), and if it does, the game is not
    *  harmed -- the next load announces the seal again (at least once). */
@@ -1356,6 +1517,8 @@ export function createRoomHost(deps: RoomHostDeps) {
     if (game === null) return deps.send(socket, { kind: "error", code: "not-found", reason: "There is no such game." });
     /* LIVE-3C: a view is built only from a RECONCILED record -- the load's repair task (queued first) has run. */
     if (unreconciled.has(gameId)) await game.run("room-op", () => undefined);
+    /* ESCROW-4: a real-money table's first view carries what the chain says (a bounded wait on a cold cache). */
+    if (game.view.record?.money != null) await deps.money?.()?.prepareView(gameId).catch(() => undefined);
     const verdict = authorizeNow(game, principalId, "read-view");
     if (!verdict.ok) return deps.send(socket, { kind: "error", code: verdict.code, reason: verdict.reason });
     if (viewGameOf.get(socket) !== gameId && !viewerRoomFor(socket, gameId)) {
@@ -1491,7 +1654,8 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (cls === "read-only" && record.archived_at !== null) continue;
       const state = cls === "read-only" && record.status === "completed" ? "finished" : MY_TABLE_STATE[cls];
       if (state === undefined) continue;
-      const summary = myTableSummaryOf(record, ctx.principalId, state);
+      const money = record.money === null ? null : (deps.money?.()?.myTableFor(record, ctx.principalId) ?? { anteGross: record.money.ante_gross, symbol: record.money.symbol, exponent: record.money.exponent, networkClass: record.money.network_class, status: "link-wallet" as const, actionNeeded: false });
+      const summary = myTableSummaryOf(record, ctx.principalId, state, money);
       if (summary !== null) tables.push(summary);
     }
     const live = (table: MyTableSummary) => (table.state === "finished" ? 1 : 0);
@@ -1778,6 +1942,8 @@ export function createRoomHost(deps: RoomHostDeps) {
     flushStatus,
     discovery: (): DiscoveryReport | null => discovery,
     boardOf,
+    /* ESCROW-4: the port the money layer is built on. */
+    moneyPort,
     /* ESCROW-3A (brief §6): the money games the index knows (never a replay; the coordinator loads them). */
     financialGameIds: (): string[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial").map((record) => record.game_id),
     financialRecords: (): GameRecord[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial"),

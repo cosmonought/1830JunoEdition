@@ -40,8 +40,10 @@ import type { EscrowCodecId } from "../../../frontend/src/gameEngine/escrow/escr
 export const MONEY_CONTINUATION_FORMAT = "18COSMOS/MONEY-CONTINUATION/v1";
 /** The server-owned history protocol (LIVE-2/3: log format, commit protocol, GameRecord schema 1, SetupGame, seal). */
 export const HOSTED_PROTOCOL_VERSION = 1;
-/** The money lifecycle protocol (ESCROW-3A: `moneyLifecycle.ts`). */
-export const FINANCIAL_PROTOCOL_VERSION = 1;
+/** The money lifecycle protocol (`moneyLifecycle.ts`). 1 = ESCROW-3A; 2 = ESCROW-3B (record v2: the money binding, the
+ *  frozen roster, the post-intent chain phases, and chain intents persisted before broadcast). No money game was ever
+ *  created under 1 (money games were disabled), so nothing is stranded by the bump. */
+export const FINANCIAL_PROTOCOL_VERSION = 2;
 /** The settlement codecs this deployment carries (certified only). */
 export const DEPLOYMENT_SETTLEMENT_CODECS: readonly EscrowCodecId[] = Object.freeze(["18JUNO/v1"]);
 

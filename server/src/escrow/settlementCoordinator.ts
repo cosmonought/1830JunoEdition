@@ -63,6 +63,9 @@ export interface SettlementCoordinatorDeps {
   readonly maxRetryMs?: number;
   /** Timer seam (tests drive `drain()` themselves and may pass a no-op). */
   readonly schedule?: (run: () => void, ms: number) => { cancel(): void };
+  /** ESCROW-3B: the terminal intent is prepared (or found prepared again): the escrow service signs and submits from
+   *  it. At least once; the service is idempotent by slot. Must not throw. */
+  readonly onIntentPrepared?: (gameId: string) => void;
 }
 
 interface Job {
@@ -107,7 +110,11 @@ const defaultSchedule = (run: () => void, ms: number) => {
 };
 
 export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): SettlementCoordinator {
-  const isFinancial = deps.isFinancial ?? ((record: Readonly<GameRecord>) => record.money !== null);
+  /** ESCROW-3B: every game with a financial record (loaded at startup, kept by every write): a money game is known by
+   *  its durable financial record, so lifecycle tooling never archives it even while its GameRecord's `money` seam is
+   *  null (ESCROW-4 widens the GameRecord). */
+  const known = new Set<string>();
+  const isFinancial = deps.isFinancial ?? ((record: Readonly<GameRecord>) => record.money !== null || known.has(record.game_id));
   const deployment = deps.deployment ?? THIS_DEPLOYMENT;
   const schedule = deps.schedule ?? defaultSchedule;
   const retryBase = deps.retryMs ?? 5_000;
@@ -121,6 +128,14 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
   let stopped = false;
 
   const keyOf = (gameId: string, logLen: number) => `${gameId}#${logLen}`;
+
+  const notifyPrepared = (gameId: string) => {
+    try {
+      deps.onIntentPrepared?.(gameId);
+    } catch (error) {
+      deps.warn(`  settlement: the escrow service's prepared hook threw for ${gameId} -- ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
 
   /** Schedule a pass in `ms` -- or sooner, never later: a new seal is not left waiting behind a failing job's backoff. */
   function kick(ms: number): void {
@@ -142,6 +157,7 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
 
   /** The stored continuation identity -- none for a placeholder (unknown: nothing continues on its account). */
   const remember = (record: FinancialGameRecord) => {
+    known.add(record.game_id);
     if (record.continuation === null) continuations.delete(record.game_id);
     else continuations.set(record.game_id, record.continuation);
   };
@@ -215,6 +231,7 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
       stats.repeats += 1;
     }
     const record = sealed.record;
+    if (record.phase === "intent-prepared" && record.terminal?.log_len === job.seal.log_len) notifyPrepared(job.gameId); // at least once
     if (record.phase !== "terminal-eligible" || record.terminal?.log_len !== job.seal.log_len) return "done"; // held, prepared, or another seal
     /* 2. May this deployment interpret the game? */
     const verdict = moneyContinuationVerdict(record.continuation, deployment);
@@ -232,6 +249,7 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
       stats.prepared += 1;
       deps.ops?.audit("settlement.intent-prepared", { game_id: job.gameId, log_len: prepared.evidence.log_len, log_hash: prepared.evidence.log_hash, appraisal_state_hash: prepared.evidence.appraisal_state_hash, rules_engine_version: prepared.evidence.rules_engine_version });
     }
+    if (next.record.phase === "intent-prepared") notifyPrepared(job.gameId);
     return "done";
   }
 
@@ -305,6 +323,7 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
     continuationOf: (gameId) => continuations.get(gameId),
     async load() {
       for (const gameId of await deps.store.list()) {
+        known.add(gameId);
         try {
           const record = await deps.store.load(gameId);
           if (record !== null) remember(record);

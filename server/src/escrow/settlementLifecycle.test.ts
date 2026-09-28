@@ -578,7 +578,7 @@ describe("ESCROW-3A §8: a funded game continues across builds only under a comp
     assert.equal((moneyContinuationVerdict({ ...current, rules_engine_version: 12 }) as { why: string }).why, "rules-not-supported", "a newer game on this server");
     assert.equal((moneyContinuationVerdict(current, { ...THIS_DEPLOYMENT, certifiedRules: [10] }) as { why: string }).why, "rules-not-certified");
     assert.equal((moneyContinuationVerdict({ ...current, hosted_protocol: 2 }) as { why: string }).why, "hosted-protocol");
-    assert.equal((moneyContinuationVerdict({ ...current, financial_protocol: 2 }) as { why: string }).why, "financial-protocol");
+    assert.equal((moneyContinuationVerdict({ ...current, financial_protocol: current.financial_protocol + 1 }) as { why: string }).why, "financial-protocol");
     assert.equal((moneyContinuationVerdict({ ...current, settlement_codec: "18GNO/v1" }) as { why: string }).why, "settlement-codec");
     assert.equal((moneyContinuationVerdict({ ...current, git: "abc" }) as { why: string }).why, "malformed");
     /* A NEWER server that silently reinterprets: it plays 12 and settles [10, 11, 12] but the game's protocol is 1 and

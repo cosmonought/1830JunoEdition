@@ -3641,6 +3641,13 @@ the literal [10, 11]. It is still never derived, and 9, 12 and every later pin a
 - **SET-0A F-7 (a Delayed Auction board failing PERCENT_NOT_CONSERVED) stays closed at v11** (DA-T11).
 
 No rules bump. Record: `claude/ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md`.
+**ESCROW-3B (2026-09-27): the Juno financial backend.** No rules change and no replay change: no reducer file, golden, vector,
+contract source or wasm was touched; the Juno oracle stays green. Money games stay disabled to players. **OPEN (owner, before
+mainnet): the contract-level junk-Join limitation** — `Join` accepts any 32-byte ticket from any wallet paying the ante; the
+server never starts such a roster but cannot stop the seat being taken (3B §18 names the smallest contract change). **Owner
+ruling OD-4-2 (decided 2026-09-27):** relaying an already-valid CONSENT/ANNUL signature needs no `hasSensitiveAuth`; creating,
+replacing or moving the consent/signing key needs sensitive re-authentication plus the wallet's own authorization. Record:
+`claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md`.
 
 **S10-7. Engine tests and packaging.** 304 engine-adjacent suites still live in `frontend/src/utils/` (Jest
 `roots` + per-suite classification, Batch 1 §6d); a repo-root `shared/` package needs CRA's `ModuleScopePlugin`,

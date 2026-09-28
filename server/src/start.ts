@@ -32,6 +32,13 @@ import { createFileFinancialGameStore } from "./escrow/financialGameStore";
 import { continuationPolicyOf } from "./escrow/moneyContinuation";
 import { createSettlementCoordinator } from "./escrow/settlementCoordinator";
 import { serverPrefixReplay } from "./escrow/settlementEvidence";
+import { createFileChainIntentStore } from "./escrow/chainIntents";
+import { openFileSigningJournal } from "./escrow/signingJournal";
+import { createFileWalletTicketStore } from "./escrow/walletTicketFileStore";
+import { createWalletTicketLedger } from "./escrow/walletTickets";
+import { JunoConfigError, parseJunoBackendConfig } from "./escrow/juno/junoConfig";
+import { openJunoBackend, type JunoBackend } from "./escrow/juno/junoBackend";
+import { seatOf } from "./rooms/gameRecord";
 import { createFileOpsRecorder } from "./persistence/opsRecorder";
 import { resolveServerConfig } from "./identity/mode";
 import { IdentityService } from "./identity/sessions";
@@ -185,19 +192,96 @@ async function main(): Promise<void> {
      made idempotent by (game, seal.log_len) and crash-safe by a startup walk, and the continuation policy for funded
      games across builds. Money games are DISABLED (every record's `money` is null), so all of this is inert today: no
      game is financial, `games/money/` is never created, nothing is loaded for it. */
+  const financialStore = createFileFinancialGameStore(dataDir, { writerCheck: () => held.verify() });
+  /* LIVE-3B: the log store is hoisted so the escrow service reads a sealed game's durable log through the SAME store the
+     game server writes (its reads are serialized with its appends). */
+  const logStore = createFileLogStore(dataDir, { onRestartRequired: failFast, writerCheck: () => held.verify() });
+
+  /* ==================================================================
+      ESCROW-3B: THE JUNO FINANCIAL BACKEND -- ONLY WHEN CONFIGURED, AND NEVER A PLAYER PATH
+     ==================================================================
+     `ESCROW_JUNO_CONFIG=<file>` (or `--escrow-config <file>`) names the backend's configuration (`escrow/juno/
+     junoConfig.ts`: no secrets; key references or development key-file paths). Absent: nothing below exists. Present:
+     a configuration that does not check refuses the start in production (exit 2) and is switched off in development;
+     the backend then stays UNVERIFIED -- signing and broadcasting nothing -- until the chain agrees with every pin.
+     Money games stay DISABLED to players either way (a stake is refused; ESCROW-4 builds the player flow). */
+  const escrowConfigPath = process.env.ESCROW_JUNO_CONFIG ?? flagValue("--escrow-config");
+  let escrow: JunoBackend | null = null;
+  const serverRef: { current: ReturnType<typeof createGameServer> | null } = { current: null };
+  if (escrowConfigPath !== undefined) {
+    try {
+      const { readFileSync } = await import("fs");
+      const junoConfig = parseJunoBackendConfig(JSON.parse(readFileSync(path.resolve(escrowConfigPath), "utf8")), { serverMode: config.mode, dataDir });
+      const ledger = createWalletTicketLedger({
+        store: createFileWalletTicketStore(dataDir, { writerCheck: () => held.verify() }),
+        standing: (context) => identity.securityStanding(context),
+        /* No rebind exists: this is a consistency check on the GameRecord (never a transfer). */
+        holdsSeat: (gameId, principalId, playerId) => {
+          const record = serverRef.current?.lifecycle.financialRecords().find((entry) => entry.game_id === gameId);
+          return record !== undefined && seatOf(record, principalId)?.player_id === playerId;
+        },
+        now: () => Date.now(),
+      });
+      /* ESCROW-3A F-2 / ESCROW-3B §15: a security event is recorded against the tickets it ends (standing is derived
+         from identity anyway, so a lost event loses nothing). */
+      identity.setHooks({
+        onSecurityEvent: (event) => {
+          void ledger
+            .gamesOfPrincipal(event.principalId)
+            .then(async (games) => {
+              for (const gameId of games) {
+                const ended = await ledger.revokeForSecurityEvent(gameId);
+                if (ended > 0) ops.audit("wallet-ticket.revoked", { game_id: gameId, kind: event.kind, tickets: ended });
+              }
+            })
+            .catch(() => undefined);
+        },
+      });
+      escrow = await openJunoBackend({
+        config: junoConfig,
+        serverMode: config.mode,
+        financial: financialStore,
+        intents: createFileChainIntentStore(dataDir, { writerCheck: () => held.verify() }),
+        journal: await openFileSigningJournal(junoConfig.journalDir, { writerCheck: () => held.verify() }),
+        tickets: ledger,
+        readLog: (gameId) => logStore.loadLog(gameId),
+        replay: serverPrefixReplay(build),
+        now: () => Date.now(),
+        // eslint-disable-next-line no-console
+        warn: (line) => console.warn(line),
+        // eslint-disable-next-line no-console
+        log: (line) => console.log(line),
+        ops,
+      });
+    } catch (error) {
+      const reason = error instanceof JunoConfigError ? error.message : `the Juno backend could not be opened -- ${error instanceof Error ? error.message : String(error)}`;
+      if (config.mode === "production") {
+        // eslint-disable-next-line no-console
+        console.error(`Refusing to start: ${reason}`);
+        held.releaseSync();
+        process.exit(EXIT_LOCK_REFUSED);
+      }
+      // eslint-disable-next-line no-console
+      console.warn(`  escrow: ${reason} -- the Juno backend is OFF for this development run`);
+      escrow = null;
+    }
+  }
+
   const settlement = createSettlementCoordinator({
-    store: createFileFinancialGameStore(dataDir, { writerCheck: () => held.verify() }),
+    store: financialStore,
     replay: serverPrefixReplay(build),
     now: () => Date.now(),
     // eslint-disable-next-line no-console
     warn: (line) => console.warn(line),
     ops,
+    ...(escrow !== null ? { onIntentPrepared: (gameId: string) => escrow?.service.onIntentPrepared(gameId) } : {}),
   });
   await settlement.load();
   const server = createGameServer({
     port,
     build,
     settlement,
+    ...(escrow !== null ? { escrow: { onGameplayCommitted: (input) => escrow?.service.onGameplayCommitted(input), isRosterFrozen: (gameId) => escrow?.service.isRosterFrozen(gameId) ?? false } } : {}),
     moneyContinuation: continuationPolicyOf((gameId) => settlement.continuationOf(gameId)),
     identity: {
       mode: config.mode,
@@ -211,7 +295,7 @@ async function main(): Promise<void> {
     /* #1250: the log is on disk and synced before any client is answered, so a restart restores every room
        it was serving. LIVE-3B: positional, looped, synced writes; a torn tail repaired at load; a damaged log held
        for `tools/logDoctor.ts`; and every write first checks that this process still holds the lock. */
-    store: createFileLogStore(dataDir, { onRestartRequired: failFast, writerCheck: () => held.verify() }),
+    store: logStore,
     /* LIVE-2C: the server-owned GameRecords and the join-code index, beside the rooms under the same lock:
        `games/<game_id>.json` and `games/join-codes.json`, each replaced whole and durably (LIVE-3B §8.7). */
     records: createFileRecordStore(dataDir, {
@@ -245,8 +329,19 @@ async function main(): Promise<void> {
   /* ESCROW-3A (brief §6): once every game is discovered, every money game that is not yet settled-to-intent is loaded
      -- a completed one announces its seal even if nobody ever reopens it -- and quiet funded games are looked at every
      five minutes (liveness is a state, never a refund). */
+  serverRef.current = server;
+
   void server.lifecycle.ready
     .then(async () => {
+      /* ESCROW-3B: verify the chain, then resume every money game's chain work (before the settlement walk re-announces). */
+      /* Review #2: a backend that cannot start yet (the chain unreachable, a load that failed) never stops the settlement
+         walk below; it retries on its own verification timer. */
+      if (escrow !== null) {
+        await escrow.start().catch((error) => {
+          // eslint-disable-next-line no-console
+          console.warn(`  escrow: the Juno backend did not start -- ${error instanceof Error ? error.message : String(error)}; it retries with its verification`);
+        });
+      }
       const report = await settlement.reconcileAtStartup({ financialGameIds: server.lifecycle.financialGameIds(), loadGame: server.lifecycle.loadGame });
       /* And one sweep at once: a record left at funding for a game that was dealt moves on now, not in five minutes. */
       await settlement.sweepLiveness(server.lifecycle.financialRecords());
@@ -260,11 +355,14 @@ async function main(): Promise<void> {
       console.warn(`  settlement: the startup walk failed -- ${error instanceof Error ? error.message : String(error)}; each money game is announced at its next load`);
     });
   setInterval(() => void settlement.sweepLiveness(server.lifecycle.financialRecords()).catch(() => undefined), 5 * 60_000).unref();
+  /* ESCROW-3B: what the chain did to every bound money game (a dispute, consents, a liveness exit, finality). */
+  if (escrow !== null) setInterval(() => void escrow?.service.sweepChain().catch(() => undefined), 5 * 60_000).unref();
 
   const release = (code: number) => {
     if (stopping) return;
     stopping = true;
     settlement.stop();
+    escrow?.stop();
     /* LIVE-3C: the audit lines already queued are written (while the lock is still ours), then the lock goes. */
     void ops
       .flush()

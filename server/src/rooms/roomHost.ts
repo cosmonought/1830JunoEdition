@@ -33,6 +33,7 @@ import type { ServerMessage } from "../../../frontend/src/utils/serverProtocol";
 import type { WebSocket } from "ws";
 
 import type { RoomSession } from "../../../frontend/src/utils/roomSession";
+import type { GameStateResponse } from "../../../frontend/src/gameEngine/gameState";
 import { RULES_ENGINE_VERSION } from "../../../frontend/src/gameEngine/rulesVersion";
 
 import type { LogHeadRead } from "../fileLogStore";
@@ -107,6 +108,19 @@ import {
 const CHAT_HISTORY_LIMIT = 200;
 const MAX_CHAT_LENGTH = 500;
 
+/** ESCROW-3B: what the room host tells the escrow service, and asks it. Money games are disabled, so in production the
+ *  service knows no frozen roster and both are inert. */
+export interface EscrowGameplaySeam {
+  /** A committed batch (or a load) of a game: synchronous, inside the committing task, never throws. */
+  onGameplayCommitted(input: { readonly gameId: string; readonly entries: readonly ServerLogEntry[]; readonly board: GameStateResponse }): void;
+  /** The game's financial roster is frozen (from the start-intent task on): no seat of it may change. */
+  isRosterFrozen(gameId: string): boolean;
+}
+
+/** ESCROW-3B: the ops that would change a frozen financial roster's seats (or the table itself before the deal). */
+const FROZEN_ROSTER_OPS: ReadonlySet<string> = new Set(["join", "take-seat", "release-seat", "leave", "set-profile", "kick", "cancel-room"]);
+export const FROZEN_ROSTER_SENTENCE = "This table's players are locked in with the escrow: seats can no longer change.";
+
 export interface RoomHostDeps {
   build: string;
   records: RecordStore;
@@ -139,6 +153,8 @@ export interface RoomHostDeps {
   settlement?: SettlementLifecycle;
   /** ESCROW-3A (brief §8): funded games this deployment may continue across builds (none when absent). */
   moneyContinuation?: MoneyContinuationPolicy;
+  /** ESCROW-3B: the escrow service's seam (none when absent: no money game can exist). */
+  escrow?: EscrowGameplaySeam;
   /** LIVE-3C: whether a session's board has ended or closed (the reducer's `GameEnd` / `room_closed`; a test seam
    *  may say so of a game that has not -- a stored game that reaches GameEnd needs a whole game played). */
   boardFacts?: (gameId: string, session: RoomSession) => { ended: boolean; closed: boolean };
@@ -458,6 +474,15 @@ export function createRoomHost(deps: RoomHostDeps) {
       return;
     }
     syncRecord(game, "load");
+    /* ESCROW-3B: a money game's newest committed position, at load -- a boundary crossed just before a crash (with no
+       move since) is still checkpointed, so a stall after a restart pays by the board it stalled on. */
+    if (deps.escrow?.isRosterFrozen(game.gameId)) {
+      void game
+        .run("room-op", async (tx) => {
+          if (tx.view.hold === null && tx.view.incompatible === null) callEscrow(game.gameId, tx.view.entries, tx.session.state);
+        })
+        .catch(() => undefined);
+    }
   }
 
   /** A game's reconciliation is concluded for this run: healthy (`null`: its record, which this process now writes, is
@@ -790,12 +815,20 @@ export function createRoomHost(deps: RoomHostDeps) {
         if (opName === "leave" && verdict !== null && verdict.ok) return { ok: true, value: { ok: true, record: null, effects: { unsubscribeOnly: true } } };
         return { ok: false, code: "wrong-state", reason: FROZEN_GAME_SENTENCE };
       }
+      /* ESCROW-3B (brief §16): A FROZEN FINANCIAL ROSTER IS FINAL. From the start-intent task on, no seat of a money
+         table moves -- no seat taken or released, no kick, no rename, no cancel from the server; a `leave` only
+         unsubscribes (the seat, its principal, its player_id and its money are unchanged). */
+      if (opName !== null && FROZEN_ROSTER_OPS.has(opName) && deps.escrow?.isRosterFrozen(record.game_id) === true) {
+        if (opName === "leave" && verdict !== null && verdict.ok) return { ok: true, value: { ok: true, record: null, effects: { unsubscribeOnly: true } } };
+        return { ok: false, code: "wrong-state", reason: FROZEN_ROSTER_SENTENCE };
+      }
       /* LIVE-3C: NOTHING IS WRITTEN ON AN UNRECONCILED RECORD (its load's repair has not landed): refused, and the
          reconciliation tried again as a task of its own -- so no op, and no sweep, builds on a record the log may
          contradict. */
       if (awaitingReconciliation(game)) return { ok: false, code: "unavailable", reason: UNAVAILABLE };
-      /* THE WAITING-ROOM TTL (§5.3), made durable by the first op (or sweep) that finds it passed. */
-      if (record.status === "waiting" && effectiveStatus(record, facts, at) === "expired") {
+      /* THE WAITING-ROOM TTL (§5.3), made durable by the first op (or sweep) that finds it passed. ESCROW-3B (review
+         #8): never for a table whose financial roster is frozen -- expiring it would be the server cancelling it. */
+      if (record.status === "waiting" && effectiveStatus(record, facts, at) === "expired" && deps.escrow?.isRosterFrozen(record.game_id) !== true) {
         const expired = { ...record, status: "expired" as const, join_code: null, expires_at: record.expires_at, record_version: record.record_version + 1, last_activity_at: at };
         const settled = await tx.commitRecord(expired, () => ({}));
         if (settled.kind === "committed") {
@@ -1163,10 +1196,13 @@ export function createRoomHost(deps: RoomHostDeps) {
         return { ok: false, code: "wrong-state", reason: (answer as { reason?: string }).reason ?? "The game could not be dealt." };
       }
       const batch = session.entries.slice(before);
+      const dealtBoard = session.state; // the board being committed (the session is not read after the commit)
       const settled = await tx.commitBatch(batch, (s) =>
         s.kind === "committed" ? { fanout: { kind: "applied", entries: s.entries, digest: s.view.digest, ...(s.view.fields ? { fields: { ...s.view.fields } } : {}), build: deps.build } } : {},
       );
       if (settled.kind !== "committed") return { ok: false, code: "unavailable", reason: UNAVAILABLE };
+      /* ESCROW-3B: the deal is the first checkpoint position of a money game. */
+      callEscrow(record.game_id, settled.view.entries, dealtBoard);
       return { ok: true, data: { started: true } };
     });
     if (outcome.kind === "failed") {
@@ -1285,11 +1321,25 @@ export function createRoomHost(deps: RoomHostDeps) {
       .catch(() => undefined);
   }
 
-  /** After a committed gameplay batch on a server-owned game: the board may have ended or closed. */
-  function afterGameplay(game: GameActor, ended: boolean, closed: boolean): void {
+  /** After a committed gameplay batch on a server-owned game: the board may have ended or closed. ESCROW-3B: `board`
+   *  is the committed board (the committing task still holds its session) for a money game's checkpoint seam. */
+  function afterGameplay(game: GameActor, ended: boolean, closed: boolean, board?: GameStateResponse): void {
     const record = game.view.record;
     if (record === null) return;
     if ((ended && record.status !== "completed") || (closed && record.closed_at === null) || record.status === "waiting") syncRecord(game, "gameplay");
+    if (board !== undefined) callEscrow(game.gameId, game.view.entries, board);
+  }
+
+  /** ESCROW-3B: the escrow seam, contained -- it must not throw (it runs in a committing task); a money game only. */
+  function callEscrow(gameId: string, entries: readonly ServerLogEntry[], board: GameStateResponse): void {
+    const escrow = deps.escrow;
+    if (escrow === undefined) return;
+    try {
+      if (!escrow.isRosterFrozen(gameId)) return;
+      escrow.onGameplayCommitted({ gameId, entries, board });
+    } catch (error) {
+      deps.warn(`  escrow: the gameplay seam threw for ${gameId} -- ${error instanceof Error ? error.message : String(error)}; the next committed batch tries again`);
+    }
   }
 
   /* ---- reads ---- */
@@ -1568,6 +1618,8 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (budget === 0) break;
       if (record.status !== "waiting" || record.started_at !== null || record.expires_at === null || at < record.expires_at) continue;
       if (SWEEP_EXEMPT.has(classifyNow(record.game_id).cls)) continue;
+      if (deps.escrow?.isRosterFrozen(record.game_id) === true) continue; // ESCROW-3B: a frozen financial roster never expires
+
       budget -= 1;
       void (async () => {
         const game = await actorFor(record.game_id);

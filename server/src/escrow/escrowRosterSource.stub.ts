@@ -18,6 +18,11 @@
 // SETTLEMENT order, carried separately in SetupGame.escrow). The chain never builds the gameplay roster.
 //
 // Today (record_schema 1, `money: null`) every money plan refuses: nothing here can start a money game.
+//
+// ESCROW-3B: the working money roster source is `escrowService.ts` (`EscrowService.rosterSource`): it reads the
+// financial record's frozen roster and a fresh chain view (IN_PROGRESS, the frozen roster hash and domain, every seat's
+// wallet and ticket unchanged, a trusted per-game resolver). ESCROW-4 routes a money room's deal to it; this stub stays
+// the refusing default.
 
 import type { GameRecord } from "../rooms/gameRecord";
 import type { RosterSource, StartPlan, StartRefusal } from "../rooms/roomService";

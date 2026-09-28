@@ -60,6 +60,7 @@ import { isMaintenanceHold } from "./rooms/committedView";
 import { createMemoryHoldStore, HoldUnreadableError, makeHold, type HoldStore } from "./rooms/holdStore";
 import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILING_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE, type SettlementLifecycle } from "./rooms/lifecycle";
 import { NO_MONEY_CONTINUATION, type MoneyContinuationPolicy } from "./escrow/moneyContinuation";
+import type { EscrowGameplaySeam } from "./rooms/roomHost";
 import { reconcileLoaded } from "./rooms/reconcile";
 import { NO_OPS, type OpsRecorder } from "./persistence/opsRecorder";
 import type { IpKey } from "./identity/clientIp";
@@ -242,6 +243,9 @@ export interface GameServerOptions {
   /** ESCROW-3A (brief §8): which funded games this deployment may continue across builds (`escrow/moneyContinuation.ts`).
    *  Absent: none -- every game dealt on another build stays read-only (#1252). */
   moneyContinuation?: MoneyContinuationPolicy;
+  /** ESCROW-3B: the escrow service's gameplay seam (checkpoints) and the frozen-roster fact (`escrow/escrowService.ts`).
+   *  Absent: no money game can exist here. */
+  escrow?: EscrowGameplaySeam;
   /** LIVE-3C: more for the status snapshot -- `start.ts` adds the identity store's health. */
   statusExtras?: () => Record<string, unknown>;
 }
@@ -810,8 +814,10 @@ export function createGameServer(options: GameServerOptions): {
     const board = boardFacts(attached.room, session);
     const endedAfter = board.ended;
     const closedAfter = board.closed;
+    const boardAfter = session.state; // ESCROW-3B: the board this batch commits (the session is not read after the commit)
     const settled = await tx.commitBatch(batch, (settled) => submitDelivery(settled, batch, result, inReplyTo));
-    if (settled.kind === "committed") host.afterGameplay(game, endedAfter, closedAfter);
+    /* ESCROW-3B: the committed board, for a money game's checkpoint seam. */
+    if (settled.kind === "committed") host.afterGameplay(game, endedAfter, closedAfter, boardAfter);
     if (settled.kind !== "committed" || result.kind !== "applied") return;
     /* LIVE-2A: a revert that landed spends its budget. */
     revertBudget?.record();
@@ -977,6 +983,7 @@ export function createGameServer(options: GameServerOptions): {
     ops,
     settlement: options.settlement ?? NO_MONEY_SETTLEMENT,
     moneyContinuation,
+    ...(options.escrow !== undefined ? { escrow: options.escrow } : {}),
     boardFacts,
     statusExtras: () => ({
       store: { restart_required: counters.restartRequired, uncertain: counters.storeUncertain, held_corrupt: counters.heldCorrupt, held_durable: counters.heldDurable, timeouts: counters.storeTimeouts },

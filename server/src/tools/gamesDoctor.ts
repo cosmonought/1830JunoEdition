@@ -29,7 +29,11 @@
 //                        code a dealt game no longer needs); otherwise `--keep` must say which. No log is read for writing,
 //                        no gameplay entry and no seat changes, and it refuses if anything does not verify.
 //   money [<game_id>] [--json]
-//                        ESCROW-3A, READ-ONLY: the money games' lifecycle records (`games/money/`): phase, the terminal
+//                        ESCROW-3A/3B, READ-ONLY: the money games' lifecycle records (`games/money/`) -- and, since
+//                        ESCROW-3B, each game's continuation identity, its chain binding (chain, contract, code checksum,
+//                        denom, chain game), its frozen roster, what the chain confirmed (start, checkpoints, settle,
+//                        outcome) and every chain intent (`games/chain-intents/`) with its evidence in words: not
+//                        attempted / attempted, outcome unknown / known failed / confirmed / held -- phase, the terminal
 //                        seal, the prepared evidence's hashes, a hold. No identity id is stored there or printed.
 //   money-release <game_id> --note "<why>"
 //                        ESCROW-3A, OFFLINE, LOCK HELD: lift a HELD money game back to the phase it was held from -- only
@@ -81,6 +85,7 @@ import { verifySession } from "./verifySession";
 import { createFileFinancialGameStore } from "../escrow/financialGameStore";
 import { moneyContinuationVerdict } from "../escrow/moneyContinuation";
 import { transitionFinancial } from "../escrow/moneyLifecycle";
+import { createFileChainIntentStore, type ChainIntentRecord } from "../escrow/chainIntents";
 import { prepareTerminalEvidence, serverPrefixReplay } from "../escrow/settlementEvidence";
 import {
   BOUNDARY_SCAN_VERSION,
@@ -390,6 +395,20 @@ export async function reconcileDuplicateCode(
     ESCROW-3A: MONEY GAMES (`games/money/`), READ-ONLY AND THE VERIFIED RELEASE
    ================================================================== */
 
+/** ESCROW-3B: one chain intent as the operator reads it. `evidence` says, in words, which of the four things is true:
+ *  not attempted / attempted, outcome unknown / known failed / confirmed (or held, or not needed). */
+export interface MoneyIntentView {
+  readonly intent_id: string;
+  readonly op: string;
+  readonly seq: string | null;
+  readonly status: string;
+  readonly evidence: "not attempted" | "attempted, outcome unknown" | "known failed (retrying)" | "confirmed" | "not needed (superseded)" | "held";
+  readonly attempts: number;
+  readonly newest: { readonly tx_hash: string; readonly phase: string; readonly sequence: string; readonly timeout_height: string; readonly broadcast_code: number | null; readonly inclusion_height: string | null; readonly error: string | null } | null;
+  readonly confirmation: { readonly how: string; readonly tx_hash: string | null; readonly height: string | null } | null;
+  readonly why: string | null;
+}
+
 export interface MoneyInspection {
   readonly games: ReadonlyArray<{
     readonly gameId: string;
@@ -399,17 +418,80 @@ export interface MoneyInspection {
     readonly intent: { readonly log_hash: string; readonly appraisal_state_hash: string; readonly rules_engine_version: number } | null;
     readonly hold: { readonly code: string; readonly detail: string; readonly from: string } | null;
     readonly continues: boolean | null;
+    /* ESCROW-3B */
+    readonly continuation: { readonly rules_engine_version: number; readonly hosted_protocol: number; readonly financial_protocol: number; readonly settlement_codec: string } | null;
+    readonly binding: { readonly chain_id: string; readonly network_class: string; readonly contract: string; readonly code_checksum: string; readonly denom: string; readonly chain_game_id: string | null } | null;
+    /** ESCROW-3B: the frozen roster, its epoch, and whether the freeze is PROVISIONAL (Start not yet confirmed on chain:
+     *  released only if the chain proves that Start never happened) or PERMANENT (the chain started it). */
+    readonly roster: { readonly roster_hash: string; readonly domain: string; readonly seats: number; readonly epoch: number; readonly freeze: "provisional" | "permanent" } | null;
+    readonly chain: {
+      readonly started_height: string | null;
+      readonly checkpoint_prepared: { readonly seq: string; readonly log_len: number; readonly round_key: string } | null;
+      readonly checkpoint_confirmed: { readonly seq: string; readonly log_len: number } | null;
+      readonly settle_confirmed: { readonly seq: string; readonly window_end_secs: string } | null;
+      readonly outcome: { readonly state: string; readonly route: string } | null;
+    } | null;
+    readonly intents: readonly MoneyIntentView[];
+    readonly intents_unreadable: boolean;
   }>;
+}
+
+function intentView(intent: ChainIntentRecord): MoneyIntentView {
+  const newest = intent.attempts[intent.attempts.length - 1];
+  const live = newest !== undefined && (newest.phase === "signed" || newest.phase === "broadcast");
+  const evidence: MoneyIntentView["evidence"] =
+    intent.status === "confirmed"
+      ? "confirmed"
+      : intent.status === "superseded"
+        ? "not needed (superseded)"
+        : intent.status === "held"
+          ? "held"
+          : live
+            ? "attempted, outcome unknown"
+            : newest === undefined
+              ? "not attempted"
+              : "known failed (retrying)";
+  return {
+    intent_id: intent.intent_id,
+    op: intent.op.kind,
+    seq: "seq" in intent.op ? intent.op.seq : null,
+    status: intent.status,
+    evidence,
+    attempts: intent.attempts.length,
+    newest:
+      newest === undefined
+        ? null
+        : {
+            tx_hash: newest.tx_hash,
+            phase: newest.phase,
+            sequence: newest.sequence,
+            timeout_height: newest.timeout_height,
+            broadcast_code: newest.broadcast?.code ?? null,
+            inclusion_height: newest.inclusion?.height ?? null,
+            error: newest.error === null ? null : `${newest.error.code} (${newest.error.native.name})`,
+          },
+    confirmation: intent.confirmation === null ? null : { how: intent.confirmation.how, tx_hash: intent.confirmation.tx_hash, height: intent.confirmation.height },
+    why: intent.hold !== null ? `${intent.hold.code}: ${intent.hold.detail}` : intent.superseded?.why ?? null,
+  };
 }
 
 export async function inspectMoney(dataDir: string, only?: string): Promise<MoneyInspection> {
   const store = createFileFinancialGameStore(dataDir, { warn: quiet });
+  const intentStore = createFileChainIntentStore(dataDir, { warn: quiet });
   const ids = only !== undefined ? [only] : (await store.list()).sort();
   const games: Array<MoneyInspection["games"][number]> = [];
   for (const gameId of ids) {
+    let intents: MoneyIntentView[] = [];
+    let intentsUnreadable = false;
+    try {
+      intents = (await intentStore.listGame(gameId)).map(intentView);
+    } catch {
+      intentsUnreadable = true;
+    }
     try {
       const record = await store.load(gameId);
       if (record === null) continue;
+      const escrow = record.binding?.escrow ?? null;
       games.push({
         gameId,
         phase: record.phase,
@@ -418,9 +500,27 @@ export async function inspectMoney(dataDir: string, only?: string): Promise<Mone
         intent: record.intent === null ? null : { log_hash: record.intent.log_hash, appraisal_state_hash: record.intent.appraisal_state_hash, rules_engine_version: record.intent.rules_engine_version },
         hold: record.hold === null ? null : { code: record.hold.code, detail: record.hold.detail, from: record.hold.from },
         continues: moneyContinuationVerdict(record.continuation).continues,
+        continuation: record.continuation === null ? null : { rules_engine_version: record.continuation.rules_engine_version, hosted_protocol: record.continuation.hosted_protocol, financial_protocol: record.continuation.financial_protocol, settlement_codec: record.continuation.settlement_codec },
+        binding:
+          record.binding === null
+            ? null
+            : { chain_id: record.binding.deployment.chain_id, network_class: record.binding.deployment.network_class, contract: record.binding.deployment.contract_address, code_checksum: record.binding.deployment.code_checksum, denom: record.binding.deployment.denom, chain_game_id: escrow?.chain_game_id ?? null },
+        roster:
+          record.roster === null
+            ? null
+            : { roster_hash: record.roster.roster_hash, domain: record.roster.expected_domain, seats: record.roster.roster.length, epoch: record.roster_epoch, freeze: record.chain.started === null ? "provisional" : "permanent" },
+        chain: {
+          started_height: record.chain.started?.height ?? null,
+          checkpoint_prepared: record.chain.checkpoint_prepared === null ? null : { seq: record.chain.checkpoint_prepared.seq, log_len: record.chain.checkpoint_prepared.log_len, round_key: record.chain.checkpoint_prepared.round_key },
+          checkpoint_confirmed: record.chain.checkpoint_confirmed === null ? null : { seq: record.chain.checkpoint_confirmed.seq, log_len: record.chain.checkpoint_confirmed.log_len },
+          settle_confirmed: record.chain.settle_confirmed === null ? null : { seq: record.chain.settle_confirmed.seq, window_end_secs: record.chain.settle_confirmed.window_end_secs },
+          outcome: record.chain_outcome === null ? null : { state: record.chain_outcome.state, route: record.chain_outcome.route },
+        },
+        intents,
+        intents_unreadable: intentsUnreadable,
       });
     } catch {
-      games.push({ gameId, phase: null, readable: false, terminal: null, intent: null, hold: null, continues: null });
+      games.push({ gameId, phase: null, readable: false, terminal: null, intent: null, hold: null, continues: null, continuation: null, binding: null, roster: null, chain: null, intents, intents_unreadable: intentsUnreadable });
     }
   }
   return { games };
@@ -764,7 +864,7 @@ const USAGE = [
   "  gc [--apply] [--json]               the conservative lifecycle: a dry run unless --apply (server stopped)",
   "  reconcile-duplicate-code <game_a> <game_b> [--keep <game_id>] --note \"<text>\"",
   "                                      ESCROW-3A: two games held on one join code (server stopped)",
-  "  money [<game_id>] [--json]          ESCROW-3A: the money games' lifecycle records (read-only, any time)",
+  "  money [<game_id>] [--json]          ESCROW-3A/3B: the money games' lifecycle records, chain binding and chain intents (read-only, any time)",
   "  money-release <game_id> --note \"<text>\"  ESCROW-3A: lift a held money game after verifying it (server stopped)",
   "  scan-v10 [--json]                   DA-8: the v10 -> v11 boundary scan of every stored log (read-only, any time)",
 ].join("\n");
@@ -810,9 +910,30 @@ async function main(argv: readonly string[]): Promise<number> {
             (game.hold ? ` HELD ${game.hold.code} (from ${game.hold.from}) -- ${game.hold.detail}` : "") +
             (game.continues === false ? " [this build may not continue it]" : ""),
         );
+        /* ESCROW-3B: the chain side. */
+        if (game.continuation !== null) console.log(`      continuation  rules v${game.continuation.rules_engine_version}, hosted ${game.continuation.hosted_protocol}, financial ${game.continuation.financial_protocol}, codec ${game.continuation.settlement_codec}`);
+        if (game.binding !== null) console.log(`      binding       ${game.binding.chain_id} (${game.binding.network_class}) ${game.binding.contract} code ${game.binding.code_checksum.slice(0, 16)}… ${game.binding.denom}; chain game ${game.binding.chain_game_id ?? "not bound"}`);
+        if (game.roster !== null) console.log(`      roster        ${game.roster.seats} seats, roster ${game.roster.roster_hash.slice(0, 16)}…, domain ${game.roster.domain.slice(0, 16)}…, epoch ${game.roster.epoch}, ${game.roster.freeze} freeze`);
+        if (game.chain !== null) {
+          const c = game.chain;
+          console.log(
+            `      chain         started ${c.started_height ?? "no"}; checkpoint prepared ${c.checkpoint_prepared ? `seq ${c.checkpoint_prepared.seq} (log ${c.checkpoint_prepared.log_len}, ${c.checkpoint_prepared.round_key})` : "none"}, confirmed ${c.checkpoint_confirmed ? `seq ${c.checkpoint_confirmed.seq}` : "none"}` +
+              `; settle ${c.settle_confirmed ? `seq ${c.settle_confirmed.seq}, window ends ${c.settle_confirmed.window_end_secs}` : "not on chain"}${c.outcome ? `; CLOSED ${c.outcome.state} (${c.outcome.route})` : ""}`,
+          );
+        }
+        if (game.intents_unreadable) console.log("      intents       UNREADABLE (games/chain-intents/): inspect by hand; nothing is submitted for this game");
+        for (const intent of game.intents.filter((entry) => entry.status !== "confirmed" && entry.status !== "superseded").concat(game.intents.filter((entry) => entry.status === "confirmed" || entry.status === "superseded").slice(-3))) {
+          const n = intent.newest;
+          console.log(
+            `      ${intent.op.padEnd(10)} ${intent.seq !== null ? `seq ${intent.seq}`.padEnd(10) : "".padEnd(10)} ${intent.evidence}` +
+              (n !== null ? ` -- tx ${n.tx_hash.slice(0, 16)}… ${n.phase} at sequence ${n.sequence} (expires above height ${n.timeout_height})${n.inclusion_height ? ` in block ${n.inclusion_height}` : ""}${n.error ? ` ${n.error}` : ""}` : "") +
+              (intent.confirmation ? ` [confirmed by ${intent.confirmation.how}${intent.confirmation.tx_hash ? ` ${intent.confirmation.tx_hash.slice(0, 16)}…` : ""}]` : "") +
+              (intent.why ? ` (${intent.why})` : ""),
+          );
+        }
       }
     }
-    return money.games.some((game) => !game.readable || game.phase === "held") ? 1 : 0;
+    return money.games.some((game) => !game.readable || game.phase === "held" || game.intents_unreadable || game.intents.some((intent) => intent.status === "held")) ? 1 : 0;
   }
   if (command !== "inspect" && command !== "release" && command !== "gc" && command !== "reconcile-duplicate-code" && command !== "money-release") {
     console.error(USAGE);

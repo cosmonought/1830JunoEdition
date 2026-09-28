@@ -3,7 +3,7 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-09-27, by ESCROW-3A (Phase 3A: v11 settlement recertification and the money-game hosted prerequisites). It builds on DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
+**Last updated:** 2026-09-27, by ESCROW-3B (the Juno financial backend and its durable chain lifecycle). It builds on ESCROW-3A (`900aec3`), DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
 
 **Where the documents live.** They are in two places:
 
@@ -14,7 +14,7 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 
 > **For future implementation sessions:**
 > 1. Read this file first, then the roadmap in `ROADMAP_3_2_REMAINING_WORK.md`.
-> 2. Then read only the canonical documents listed in §C for the current phase. For ESCROW-3B, use the reading order in §C.3.
+> 2. Then read only the canonical documents listed in §C for the current phase. For ESCROW-4, use the reading order in §C.3.
 > 3. Do not read the whole of `RULES_HARDENING_BACKLOG.md`: it is 600 KB. Read the Part or item you need.
 > 4. Do not recursively read `archive/`, `docs/ai_architecture/` or the Project's historical reports unless the current task requires historical provenance, or a current document points you there.
 
@@ -60,17 +60,26 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 - The recovery limiter counts failures only and never refuses the right credential.
 - `gamesDoctor` gained `money`, `money-release` and `reconcile-duplicate-code`.
 
+**Phase 3B — the Juno financial backend: COMPLETE** (ESCROW-3B; the owner gate is pending)
+- `server/src/escrow/escrowService.ts` + `server/src/escrow/juno/`: sealed gameplay → certified payload → a **durable chain intent** (`games/chain-intents/`, written before any side effect) → signed (KMS-ready signer; a development key only in development, off mainnet, with an explicit switch) → journalled (the external signing journal, outside the data directory in production) → broadcast → observed on chain. One live attempt per relayer account; the sequence is always the chain's; no tx hash is ever invented.
+- The financial record is **v2** (`FINANCIAL_PROTOCOL_VERSION` 2): the deployment pin and the chain-game binding (write-once), the frozen roster with its **epoch**, the chain progress and outcome.
+- Checkpoints at the deal, every completed round boundary and the terminal seal (2L before the Settle, 2L+1), from committed boards only. Finalize only for a settlement this server signed.
+- **The roster freeze is reversible until the chain confirms Start**: permanent once Start is on chain; released (pre-Start funded state) only when the chain PROVES that freeze's Start can never happen; an unknown outcome never releases.
+- The wallet-ticket ledger is durable (`games/wallet-tickets/`), wired to identity's security events, frozen and released with the roster (by token).
+- Startup: rosters preloaded before any chain read; the deployment verified on every configured endpoint; the durable log must reproduce the journal's signed history before anything is signed again. `gamesDoctor money` shows each intent's evidence.
+- **PRODUCTION BLOCKER (contract-level, owner decision required before mainnet):** the frozen contract's `Join` checks only the ticket's 32-byte shape, so any wallet paying the ante can occupy a chain seat (junk-Join griefing). The server never starts such a roster, but cannot prevent the seat being taken. Junox development continues with the limitation pinned. Record: Project `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md` §18.
+
 **GNOLAND-1 / 1.1: complete; further Gno work parked**
 - The chain-neutral escrow backend interface and the Juno regression oracle landed as `b804150`.
 - Juno is the only production backend. The Gno codec is a draft whose byte methods throw `NOT_IMPLEMENTED`.
 - GNOLAND-2 and later have not started.
 
 **Money games: DISABLED**
-- `record.money` is `null` (`record_schema` 1).
+- `record.money` is `null` (`record_schema` 1). ESCROW-3B keeps the money binding in the financial record; widening the GameRecord is ESCROW-4's.
 - A `create` with a non-zero stake is refused with `money-games-disabled`.
-- `NoMoneyRosterSource` refuses money. `EscrowRosterSource.plan` is a stub that refuses ("Money tables are not enabled on this server.").
+- `NoMoneyRosterSource` refuses money. `EscrowRosterSource.plan` is a stub that refuses ("Money tables are not enabled on this server."); the real money roster source (`EscrowService.rosterSource`) exists and is not wired to player creation.
 - Money rooms would get `host_undo: "none"`.
-- ESCROW-3A's lifecycle exists but acts on nothing while money is disabled: no game is financial, and `games/money/` is never created.
+- The backend runs only when `ESCROW_JUNO_CONFIG` names a configuration. Without it nothing changes; with it, it verifies the chain and relays only for money records, of which players can create none.
 
 ---
 
@@ -80,8 +89,8 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 The owner's brief for each pass sets that pass's exact scope.
 
 ```text
-Phases 1, 2, 2.5 and 3A: COMPLETE
-→ 3: ESCROW-3B → ESCROW-4
+Phases 1, 2, 2.5, 3A and 3B: COMPLETE
+→ 3: ESCROW-4 (the junk-Join contract decision gates mainnet money)
 → 4: LIVE-4/5/6
 → 5: Junox E2E
 → 6: Rust retirement
@@ -95,11 +104,11 @@ Phases 1, 2, 2.5 and 3A: COMPLETE
 
 Gno is parked.
 
-**Next pass: ESCROW-3B** (the Juno backend, signing and durable intents). Its inputs are in Project `claude/ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md` §19:
-- 3B extends the financial lifecycle after `intent-prepared`;
-- it writes the continuation identity with the money binding;
-- it emits the checkpoint policy (at the deal, and at every completed round boundary);
-- it wires the wallet-ticket ledger into `freezeEscrowRoster`.
+**Next pass: ESCROW-4** (Keplr, wallet consent, multi-device authorization). Its inputs:
+- Project `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md` §21 (the 3B → 4 handoff: the preflight's V-1…V-18 answered);
+- Project `claude/ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT_2026-09-27.md` (the design);
+- **owner ruling (OD-4-2):** relaying an already-valid CONSENT or ANNUL signature does not itself require `hasSensitiveAuth` (the consent-key signature is the authority); creating, replacing or moving the consent/signing key does require sensitive re-authentication plus the contract-required wallet authorization;
+- the junk-Join blocker (§A) stays open until the owner's contract decision; no treasury reimbursement is the security answer.
 
 ESCROW-3A's procedure is how the next rules version is certified for settlement: rebuild the goldens beside the old ones, then add the version to the literal in its own reviewed change.
 
@@ -138,6 +147,8 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 
 | Topic | Document |
 |---|---|
+| ESCROW-3B: Juno backend, durable intents, reversible freeze, junk-Join blocker | `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md` |
+| ESCROW-4 preflight (design; read with 3B §21) | `claude/ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT_2026-09-27.md` |
 | ESCROW-3A: v11 settlement + money-game prerequisites | `claude/ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md` |
 | DA-8 / v11 closure | `claude/DA8_RULES_V11_CLOSURE_2026-09-27.md` |
 | Hosted-authority certification (LIVE-2F / 3D) | `claude/LIVE2F_LIVE3D_HOSTED_AUTHORITY_CERTIFICATION_2026-09-27.md` |
@@ -165,18 +176,15 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 
 Every other Project report is **historical**; see the manifest.
 
-### C.3 ESCROW-3B reading order
+### C.3 ESCROW-4 reading order
 
 1. This file.
-2. `ESCROW3A_MONEY_GAME_PREREQUISITES`: §4–9 (lifecycle, seam, policy, continuation, tickets), §14 (store semantics) and §19 (3B inputs).
-3. `GNOLAND1_…INTERFACE` §§3, 10–15, 19–23 (O-1…O-10), 26.
-4. `SET0C_…CONFORMANCE` §17, §18, §20.
-5. `ESCROW_B2_…` + B2.1 §4–5 (the canonical artifact and its pins).
-6. `GNOLAND1.1_…` §§6–7, 10 (the oracle requirement).
-7. `live3c-…` §§7, 8, 10 (the seal and the seam).
-8. `LIVE2F_LIVE3D_…` §14 (the ESCROW-3 prerequisites, as ESCROW-3A dispositioned them).
-9. `INTEGRATION1_…` §§2, 5, 7, 13.
-10. Reference, only when a step needs it: `ESCROW2.1_…` / `ESCROW2.2_…` (trusted_seq, `CompromisedSettlement`); `LIVE3_…DESIGN` §15, §19.
+2. `ESCROW3B_JUNO_BACKEND`: §14 (the reversible freeze), §18 (the junk-Join blocker), §19 (player reachability) and §21 (the 3B → 4 handoff).
+3. `ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT` (the design; its §13–14 expectations are answered by 3B §21).
+4. `ESCROW3A_MONEY_GAME_PREREQUISITES`: §9–11 (tickets, sensitive authentication), §14, §19.
+5. `GNOLAND1_…INTERFACE` §§10–15, 22 (F2, F4).
+6. `INTEGRATION1_…` F-3.
+7. Reference, only when a step needs it: `ESCROW_LIVE_RECONCILIATION` (ESCROW-1.5) §4, §10, §12; `LIVE2_IDENTITY_ROOM_AUTHORITY_DESIGN` §6.
 
 ---
 

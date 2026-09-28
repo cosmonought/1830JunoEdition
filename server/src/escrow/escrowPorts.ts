@@ -122,8 +122,9 @@ export interface SigningJournal {
     readonly signer_key_id: number;
     readonly digest: CodecDigest<"settle">;
   }): Promise<{ readonly kind: "reserved" | "same" } | { readonly kind: "conflict"; readonly digest_hex: string }>;
-  /** Every signed transaction attempt (tx id, account, sequence), before it is broadcast. */
-  recordAttempt(entry: { readonly intent_id: string; readonly tx_id: string; readonly account: string; readonly account_sequence: string }): Promise<void>;
+  /** Every signed transaction attempt (tx id, account, sequence), before it is broadcast. ESCROW-3B: and the height after
+   *  which it can never be included (its `timeout_height`), so a restart can PROVE a forgotten attempt dead. */
+  recordAttempt(entry: { readonly intent_id: string; readonly tx_id: string; readonly account: string; readonly account_sequence: string; readonly expires_after_height?: string }): Promise<void>;
   /** The highest seq ever reserved for an instance (the restore check compares `log_len` with `seq >> 1`). */
   highestReserved(instance: string): Promise<{ readonly seq: string } | null>;
 }

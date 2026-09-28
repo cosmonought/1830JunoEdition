@@ -32,7 +32,10 @@
 //                later sign-out cannot un-bind a deposit the chain already started with (that would strand a funded,
 //                started game). Only unfrozen tickets are subject to standing. The freeze is the GAME's fact
 //                (`frozen_at` on its ledger document), not inferred from its grants: a freeze with no standing ticket
-//                still closes issuing.
+//                still closes issuing. ESCROW-3B (reversible until Start is confirmed): the freeze carries the roster
+//                freeze's time as its TOKEN; `unfreeze(token)` releases exactly that freeze -- only when the financial
+//                record releases its roster because the chain PROVED that Start can never happen -- and the table's
+//                tickets are subject to standing again (the pre-Start funded state). A confirmed Start never unfreezes.
 //
 // Money games are disabled: nothing issues a ticket in production yet. ESCROW-3B/4 call `issue` from the wallet
 // declaration flow and pass `ticketOf` to `freezeEscrowRoster`.
@@ -80,6 +83,8 @@ export interface WalletTicketStore {
   load(gameId: string): Promise<{ readonly version: number; readonly document: WalletTicketDocument }>;
   /** Replace a game's document whole, if its version is still `expected` (CAS; LIVE-5: one item per game). */
   put(gameId: string, document: WalletTicketDocument, expected: number): Promise<"committed" | "conflict">;
+  /** ESCROW-3B: every game with a ledger document (the security-event hook walks them). */
+  listGames?(): Promise<string[]>;
 }
 
 export function createMemoryWalletTicketStore(): WalletTicketStore & { readonly games: Map<string, { version: number; document: WalletTicketDocument }> } {
@@ -95,6 +100,9 @@ export function createMemoryWalletTicketStore(): WalletTicketStore & { readonly 
       if ((games.get(gameId)?.version ?? 0) !== expected) return "conflict";
       games.set(gameId, { version: expected + 1, document: copy(document) });
       return "committed";
+    },
+    async listGames() {
+      return [...games.keys()].sort();
     },
   };
 }
@@ -213,6 +221,29 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
       };
     },
 
+    /** ESCROW-3B: the standing ticket of every seat (newest per seat, standing now): what the roster freeze adopts
+     *  claims from -- a chain seat is claimed only by the grant whose ticket AND wallet it carries. */
+    async standingGrants(gameId: string): Promise<ReadonlyArray<{ readonly player_id: string; readonly wallet: string; readonly ticket: string }>> {
+      const { grants } = (await deps.store.load(gameId)).document;
+      const out: Array<{ player_id: string; wallet: string; ticket: string }> = [];
+      for (const playerId of new Set(grants.map((grant) => grant.player_id))) {
+        const newest = newestOf(grants, playerId);
+        if (newest !== undefined && stands(newest, true)) out.push({ player_id: playerId, wallet: newest.wallet, ticket: newest.ticket });
+      }
+      return out;
+    },
+
+    /** Games whose ledger holds an unfrozen, unrevoked grant issued under `principalId` (the security-event hook's
+     *  target list; `WalletTicketStore.games` enumerates the ledger). */
+    async gamesOfPrincipal(principalId: string): Promise<string[]> {
+      const out: string[] = [];
+      for (const gameId of (await deps.store.listGames?.()) ?? []) {
+        const { grants } = (await deps.store.load(gameId)).document;
+        if (grants.some((grant) => grant.issued_under.principal_id === principalId && grant.revoked_at === null && grant.frozen_at === null)) out.push(gameId);
+      }
+      return out;
+    },
+
     /** Record security events against the unfrozen grants they end (observability; standing is derived anyway). */
     async revokeForSecurityEvent(gameId: string): Promise<number> {
       const { version, document } = await deps.store.load(gameId);
@@ -230,16 +261,34 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
       return ended;
     },
 
-    /** ESCROW-3B, in the SAME actor task as the roster freeze: the standing tickets are frozen with the claims. */
-    async freeze(gameId: string): Promise<"committed" | "conflict"> {
+    /** ESCROW-3B, in the SAME actor task as the roster freeze: the standing tickets are frozen with the claims. `token`
+     *  (the roster freeze's `frozen_at`) names this freeze: a repeat of it changes nothing; ANOTHER freeze still in place
+     *  (one a crash left without its roster, or a release not yet finished) is a conflict. */
+    async freeze(gameId: string, token?: number): Promise<"committed" | "conflict"> {
       const { version, document } = await deps.store.load(gameId);
-      if (document.frozen_at !== null) return "committed"; // frozen once; a repeat changes nothing
+      if (document.frozen_at !== null) return token === undefined || document.frozen_at === token ? "committed" : "conflict";
       const grants = document.grants;
-      const now = deps.now();
+      const now = token ?? deps.now();
       const newestBySeat = new Map<string, number>();
       for (const grant of grants) newestBySeat.set(grant.player_id, Math.max(newestBySeat.get(grant.player_id) ?? 0, grant.epoch));
       const next = grants.map((grant) => (grant.frozen_at === null && stands(grant, newestBySeat.get(grant.player_id) === grant.epoch) ? { ...grant, frozen_at: now } : grant));
       return deps.store.put(gameId, { frozen_at: now, grants: next }, version);
+    },
+
+    /** The ledger's freeze token (null: not frozen). */
+    async frozenAt(gameId: string): Promise<number | null> {
+      return (await deps.store.load(gameId)).document.frozen_at;
+    },
+
+    /** ESCROW-3B: release exactly the freeze `token` names (the chain proved its Start can never happen, or a crash left
+     *  a ledger freeze with no financial roster). Its grants return to derived standing; issuing reopens. Releasing a
+     *  ledger that is not frozen is done already; another freeze is a conflict. */
+    async unfreeze(gameId: string, token: number): Promise<"committed" | "conflict"> {
+      const { version, document } = await deps.store.load(gameId);
+      if (document.frozen_at === null) return "committed";
+      if (document.frozen_at !== token) return "conflict";
+      const grants = document.grants.map((grant) => (grant.frozen_at !== null ? { ...grant, frozen_at: null } : grant));
+      return deps.store.put(gameId, { frozen_at: null, grants }, version);
     },
   };
 }

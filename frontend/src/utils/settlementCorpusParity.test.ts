@@ -177,7 +177,7 @@ describe("server/data and client exports (present only on the owner's machine)",
 });
 
 describe("certification boards (reducer-driven, appraised at the certified v10 pin)", () => {
-  /* DA-8: these games are dealt at the CURRENT engine (v11); settlement is certified for v10 only, so each board is
+  /* DA-8: these games are dealt at the CURRENT engine (v11); settlement was certified for v10 only, so each board is
      appraised at the certified pin -- the same board, the same appraiser (the owner's two-axis ruling). */
   const turnVector = (board: GameStateResponse) =>
     appraiseSeats(pinned(board), seatsOf(board.player_addresses)).map((seat) => seat.total.toString());

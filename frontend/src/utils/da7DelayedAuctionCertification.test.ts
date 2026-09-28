@@ -1590,12 +1590,13 @@ describe("DA-T11: a bank break inside the trigger set -- the set finishes, the g
 
   it("the settlement reads the ended board as it stands: no seat is credited an unsold private", () => {
     const seats = game.state.player_addresses.map((player_id, seat_index) => ({ seat_index, player_id }));
-    /* DA-8: the game plays v11, and settlement is certified for v10 only (the owner's two-axis ruling) -- so the v11 board
-       itself is refused, and the certified appraiser reads the same board at the certified pin. The rule under test (an
-       unsold private is nobody's) is the appraiser's, not the pin's. */
+    /* ESCROW-3A: the game plays v11 and settlement is now certified for v11 as well (DA-8 had refused it until the
+       recertification) -- so the v11 Delayed Auction board, dealt and played to GameEnd by the v11 reducer, is appraised
+       AS IT STANDS: its certificates conserve (DA-F6's mint, SET-0A F-7, is closed at v11), and it appraises exactly as
+       the same board at the v10 pin. The rule under test (an unsold private is nobody's) is the appraiser's. */
     expect(game.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
-    expect(() => appraiseSeats(game.state, seats)).toThrow("UNSUPPORTED_RULES_ENGINE_VERSION");
-    const appraisal = appraiseSeats({ ...game.state, rules_engine_version: 10 } as State, seats);
+    const appraisal = appraiseSeats(game.state, seats);
+    expect(appraisal).toEqual(appraiseSeats({ ...game.state, rules_engine_version: 10 } as State, seats));
     for (const seat of appraisal) {
       expect([seat.player_id, seat.privates, seat.bankrupt]).toEqual([seat.player_id, BigInt(0), false]);
       expect(seat.total).toBe(seat.cash_counted + seat.shares);

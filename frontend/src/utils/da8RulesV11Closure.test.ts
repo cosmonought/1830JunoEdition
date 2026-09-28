@@ -19,9 +19,9 @@
 //   4. the Delayed Auction on v11: the deal, the dormant auction, the reserved C&A share, the round authority, the arming
 //      on the Priority Deal holder -- and DA-T10's one composition question that touches the trigger: a synthetic
 //      (Carcosa-gifted) 3-train does not arm the delayed auction, a real one does;
-//   5. settlement is a SEPARATE AXIS (the owner's DA-8 ruling): certified for v10 only, byte-for-byte; a v11 board is
-//      refused; the v11 reducer rebuilds the certified v10 golden board exactly, the pin aside; the frozen vectors still
-//      name 10;
+//   5. settlement is a SEPARATE AXIS (the owner's DA-8 ruling): certified for v10, byte-for-byte; a v11 board was
+//      refused until ESCROW-3A recertified v11 on its own evidence (`settlementV11Certification.test.ts`); the v11
+//      reducer rebuilds the certified v10 golden board exactly, the pin aside; the frozen vectors still name 10;
 //   6. the v10 -> v11 boundary scan (`rulesBoundaryScan.ts`, `gamesDoctor scan-v10`): each routed pattern is found where
 //      it is, nothing is found where it is not, and the scan writes nothing.
 // It OWNS the current version literal until the next closure narrows it, as this pass narrowed
@@ -621,19 +621,21 @@ describe("the canonical development corpus under v11", () => {
 /* 6. SETTLEMENT: A SEPARATE AXIS (owner ruling, DA-8)                                               */
 /* ================================================================================================= */
 
-describe("settlement stays certified for v10 only, byte-for-byte, whatever engine the game plays", () => {
+describe("settlement: a separate axis -- v10 certified byte-for-byte, v11 added only by its own recertification (ESCROW-3A)", () => {
   const golden = JSON.parse(
     readFileSync(join(__dirname, "__fixtures__", "settlement", "SET0A_golden_vectors_rev2.derived.json"), "utf8"),
   ) as { cases: Array<{ name: string; terminal_state_hash_v1: string; seat_mapping: string[]; vector: string[] }> };
   const syn01 = golden.cases.find((row) => row.name === "SYN-01-CLASSIC-BANKBREAK")!;
   const seatsOf = (ids: readonly string[]) => ids.map((player_id, seat_index) => ({ seat_index, player_id }));
 
-  it("the two axes: the game plays 11, settlement is certified for [10], and neither list holds the other's version", () => {
+  it("the two axes: the game plays 11; settlement is certified for [10, 11] -- 11 by ESCROW-3A's recertification, never by the bump", () => {
     expect(RULES_ENGINE_VERSION).toBe(11);
-    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10]);
+    /* DA-8 left this [10]. ESCROW-3A added 11 in its own reviewed change, on its own evidence
+       (`settlementV11Certification.test.ts`); the list is still a literal that no gameplay constant moves. */
+    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11]);
     expect(SET0A_CERTIFIED_RULES_ENGINE_VERSION).toBe(10);
-    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).not.toContain(RULES_ENGINE_VERSION);
     expect(SUPPORTED_RULES_ENGINE_VERSIONS).not.toContain(10);
+    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).not.toContain(RULES_ENGINE_VERSION + 1);
   });
 
   it("the v11 reducer rebuilds the certified SYN-01 board byte for byte, the pin aside -- no appraisal input moved across the bump", () => {
@@ -644,13 +646,14 @@ describe("settlement stays certified for v10 only, byte-for-byte, whatever engin
     expect(goldenBoards().boards["SYN-01-CLASSIC-BANKBREAK"].rules_engine_version).toBe(10);
   });
 
-  it("a certified v10 board appraises exactly as certified; the same board at 11 (or 9) is refused, before any value is read", () => {
+  it("a certified v10 board appraises exactly as certified, and so does the same board at 11; 9 and 12 are refused before any value is read", () => {
     const certified = goldenBoards().boards["SYN-01-CLASSIC-BANKBREAK"];
     const seats = seatsOf(syn01.seat_mapping);
     expect(appraiseSeats(certified, seats).map((seat) => seat.total.toString())).toEqual(syn01.vector);
-    for (const pin of [11, 9]) {
+    expect(appraiseSeats({ ...certified, rules_engine_version: 11 } as State, seats).map((seat) => seat.total.toString())).toEqual(syn01.vector);
+    for (const pin of [9, 12]) {
       expect(() => appraiseSeats({ ...certified, rules_engine_version: pin } as State, seats)).toThrow(
-        `UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=${pin} (supported: 10)`,
+        `UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=${pin} (supported: 10, 11)`,
       );
     }
   });

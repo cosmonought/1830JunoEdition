@@ -288,3 +288,80 @@ export function goldenBoards(): GoldenBoards {
   cache = { boards, syn01Submissions: submissions };
   return cache;
 }
+
+/* ==================================================================
+    ESCROW-3A: THE v11 GOLDEN SET, BESIDE THE v10 ONE -- NEVER OVER IT
+   ==================================================================
+   The v11 settlement recertification (ESCROW-3A's entry gate) runs the SAME thirteen SET-0A recipes through the v11
+   reducer and certifies what they make at the pin v11 deals at. `goldenBoards()` above is untouched and still ends every
+   recipe at the certified v10 pin; this set is built by its own function, from the same recipe functions, and ends every
+   recipe at 11:
+
+     - the three ROOM-DEALT recipes (SYN-01's and SYN-02's GR-4 rooms, SYN-03's UR-7 game) are dealt by the room at the
+       CURRENT engine -- 11 -- so their pin is the v11 reducer's own; `dealtPins` records it, and the stamp below changes
+       nothing on them today (a future v12 engine would deal them at 12, and the stamp would then name the set it builds,
+       exactly as `atCertifiedSettlementPin` does for v10 since DA-8);
+     - the GRAFTS (SYN-04, 07-12 on SYN-01 / SYN-05; the corpus replays SYN-05, 06, 13) set their terminal fields exactly
+       as SET-0A's recipes do, and the pin 11 -- SET-0A grafted 10 onto the same unpinned corpus boards the same way.
+
+   `settlementV11Certification.test.ts` proves the set against the certified v10 set: each v11 board, re-stamped at 10,
+   hashes to its certified v10 `terminal_state_hash_v1` -- so the pin is the ONLY byte that differs -- and it pins the v11
+   hashes, vectors, payouts and payload bytes in a new fixture beside the frozen v10 ones. */
+export const SET0A_V11_RULES_ENGINE_VERSION = 11;
+
+/** A board stamped with the v11 settlement pin (the v11 golden set only; never the v10 set's). */
+export const atV11SettlementPin = (board: Board): Board =>
+  ({ ...board, rules_engine_version: SET0A_V11_RULES_ENGINE_VERSION }) as Board;
+
+/** The corpus graft at the v11 pin (SYN-05, 06, 13 of the v11 set). */
+export const corpusTerminalGraftV11 = (board: Board): Board =>
+  atV11SettlementPin({ ...board, current_round_type: "GameEnd", bank_broken: true } as Board);
+
+export interface V11GoldenBoards {
+  boards: Record<string, Board>;
+  /** The pin each room-dealt recipe's board carried BEFORE the stamp: the engine the room dealt at. */
+  dealtPins: Record<string, unknown>;
+  syn01Submissions: number;
+}
+
+let v11Cache: V11GoldenBoards | null = null;
+
+/** The v11 golden set (ESCROW-3A): the thirteen SET-0A recipes, run by the current reducer, at the v11 pin. Built once
+ *  per test file; callers must not mutate (clone before grafting). */
+export function v11GoldenBoards(): V11GoldenBoards {
+  if (v11Cache) return v11Cache;
+  const built = syn01ClassicBankBreak();
+  const syn02 = syn02GentleRustBankBreak();
+  const syn03Board = syn03();
+  const dealtPins: Record<string, unknown> = {
+    "SYN-01-CLASSIC-BANKBREAK": built.board.rules_engine_version,
+    "SYN-02-GENTLE-RUST-BANKBREAK": syn02.rules_engine_version,
+    "SYN-03-UNPREDICTABLE-REVENUE-END": syn03Board.rules_engine_version,
+  };
+  const s01 = atV11SettlementPin(built.board);
+  const s05 = corpusTerminalGraftV11(replayBoards(readExport(join(__dirname, "__fixtures__z6cLog.json"))));
+  const s08 = syn08(s01);
+  const recipes: Record<string, Board> = {
+    "SYN-01-CLASSIC-BANKBREAK": s01,
+    "SYN-02-GENTLE-RUST-BANKBREAK": syn02,
+    "SYN-03-UNPREDICTABLE-REVENUE-END": syn03Board,
+    "SYN-04-BANKRUPTCY": syn04(s01),
+    "SYN-05-Z6C-COMPOSED-END": s05,
+    "SYN-06-G6J-UNPARRED-GRANT-END": corpusTerminalGraftV11(replayBoards(readJsonl(join(FROZEN_LOG_DIR, "JUNO-G6J.log.jsonl")))),
+    "SYN-07-DOUBLE-CERT-AND-DYNAMIC-450": syn07(s05),
+    "SYN-08-DELAYED-AUCTION-UNSOLD": s08,
+    "SYN-09-DELAYED-AUCTION-PHASE5-UNSOLD-CLOSED": syn09(s08),
+    "SYN-10-ZERO-VALUE-SEAT-4P": withExtraSeats(s01, [["p4", "0"]]),
+    "SYN-11-SIX-PLAYERS": withExtraSeats(s01, [["p4", "310"], ["p5", "0"], ["p6", "1"]]),
+    "SYN-12-SEVEN-PLAYERS-LPF": withExtraSeats(
+      s01,
+      [["p4", "360"], ["p5", "360"], ["p6", "0"], ["p7", "5"]],
+      { levelPlayingField: true, expandedMap: true, plusTiles: true },
+    ),
+    "SYN-13-CV4-TWO-PLAYER-END": corpusTerminalGraftV11(replayBoards(readJsonl(join(FROZEN_LOG_DIR, "JUNO-CV4.log.jsonl")))),
+  };
+  const boards: Record<string, Board> = {};
+  for (const [name, board] of Object.entries(recipes)) boards[name] = atV11SettlementPin(board);
+  v11Cache = { boards, dealtPins, syn01Submissions: built.submissions };
+  return v11Cache;
+}

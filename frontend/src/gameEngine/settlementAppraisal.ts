@@ -335,8 +335,18 @@ interface CompanyFacts {
  * questions rerun against the v11 reducer, v11 golden boards built and pinned beside the v10 ones -- and 11 is added
  * here in its own reviewed change. What the SET-0C tripwire protected is kept: a gameplay bump alone never widens
  * settlement.
+ *
+ * ESCROW-3A (2026-09-27): 11 ADDED, BY ITS OWN CERTIFICATION -- `utils/settlementV11Certification.test.ts`. SET-0A's audit
+ * questions were rerun against the v11 reducer (none of row 11's ten semantics changes what a field the appraisal reads
+ * MEANS; DA-F6's certificate mint -- SET-0A F-7 -- is closed at v11), and the thirteen golden recipes were rebuilt by the
+ * v11 reducer at pin 11 BESIDE the frozen v10 set: each is its certified v10 board but for the pin (re-stamped at 10 it
+ * hashes to the certified `terminal_state_hash_v1`), with every vector, component, payout and dust value unchanged; its
+ * SettlementPayloadV1 bytes equal the frozen v10 vectors' everywhere except the domain (which hashes the u32 rules
+ * engine) and the appraisal state hash (which covers the pin). No codec, digest, payout arithmetic, contract or wasm
+ * byte moved, and no v10 file was rewritten. v10 stays certified byte for byte; 12 and later stay refused until each is
+ * certified the same way, here, by name.
  */
-export const SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10]);
+export const SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10, 11]);
 
 /** The engines a board may be appraised under: the certified list, and only it (DA-8 -- see above). */
 function settleableRulesEngineVersions(): readonly number[] {

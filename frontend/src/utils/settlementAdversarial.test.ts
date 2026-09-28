@@ -165,8 +165,8 @@ describe("the boundaries: zero sum, tamper, wide arithmetic, turn order", () => 
 
 describe("SET-0B additions: shapes SET-0A names no code for, still refused by name", () => {
   const additions: Array<[string, () => string, string]> = [
-    ["a pin this appraiser is not certified for", () => outcome(board((b) => { b.rules_engine_version = 9; })), "UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=9 (supported: 10)"],
-    ["a pin spelled as a string", () => outcome(board((b) => { b.rules_engine_version = "10"; })), "UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=\"10\" (supported: 10)"],
+    ["a pin this appraiser is not certified for", () => outcome(board((b) => { b.rules_engine_version = 9; })), "UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=9 (supported: 10, 11)"],
+    ["a pin spelled as a string", () => outcome(board((b) => { b.rules_engine_version = "10"; })), "UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=\"10\" (supported: 10, 11)"],
     ["a null pin", () => outcome(board((b) => { b.rules_engine_version = null; })), "UNPINNED_BOARD: rules_engine_version=null"],
     ["a duplicate roster entry", () => outcome(board((b) => { b.player_addresses = ["p1", "p1", "p3"]; })), "DUPLICATE_ROSTER_ENTRY: p1"],
     ["a cash row for an unseated player", () => outcome(board((b) => { b.player_cash.push({ player: "p-ghost", cash_vgp: "1" }); })), "CASH_FOR_UNSEATED_PLAYER: p-ghost"],

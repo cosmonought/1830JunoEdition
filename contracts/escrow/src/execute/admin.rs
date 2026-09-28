@@ -9,7 +9,8 @@ use crate::error::ContractError;
 use crate::helpers::nonpayable;
 use crate::payout::BPS_DENOMINATOR;
 use crate::state::{
-    Config, GameParams, SignerKey, CONFIG, NEXT_SIGNER_KEY_ID, SIGNER_KEYS, SIGNER_PUBKEY_INDEX,
+    Config, GameParams, SignerKey, ADMISSION_KEYS, CONFIG, NEXT_SIGNER_KEY_ID, SIGNER_KEYS,
+    SIGNER_PUBKEY_INDEX,
 };
 
 /// Upper bound for every configured duration (10 years), so deadline arithmetic
@@ -98,7 +99,8 @@ pub fn validate_denom(denom: &str) -> Result<(), ContractError> {
 
 /// Registers a compressed secp256k1 key under the next key id. The same key
 /// material can never be registered twice, even after retirement, so retiring a
-/// key (as compromised) always retires the key itself.
+/// key (as compromised) always retires the key itself. A current or former
+/// join-admission key is refused: the two roles never share key material.
 pub fn register_signer_key(
     deps: &mut DepsMut,
     now: Timestamp,
@@ -112,6 +114,12 @@ pub fn register_signer_key(
     }
     if let Some(existing) = SIGNER_PUBKEY_INDEX.may_load(deps.storage, key.as_slice())? {
         return Err(ContractError::DuplicateSignerKey { key_id: existing });
+    }
+    if ADMISSION_KEYS.has(deps.storage, key.as_slice()) {
+        return Err(ContractError::InvalidParams {
+            reason: "a settlement signer key cannot be a current or former join-admission key"
+                .to_string(),
+        });
     }
     let key_id = NEXT_SIGNER_KEY_ID.load(deps.storage)?;
     if key_id > MAX_SIGNER_KEYS {
@@ -259,4 +267,54 @@ pub fn set_params(
     config.params = params;
     CONFIG.save(deps.storage, &config)?;
     Ok(Response::new().add_attribute("action", "set_params"))
+}
+
+/// A join-admission key: 33-byte compressed, on the curve, and never a key the
+/// signer registry holds or ever held (retired and compromised keys included).
+/// Recorded in `ADMISSION_KEYS` once accepted (`record_admission_key`).
+pub fn validate_admission_key(deps: &DepsMut, pubkey: &HexBinary) -> Result<(), ContractError> {
+    let key = parse_compressed_pubkey("admission_pubkey", pubkey.as_slice())?;
+    if !pubkey_on_curve(deps.api, &key) {
+        return Err(ContractError::BadPubkey {
+            field: "admission_pubkey".to_string(),
+        });
+    }
+    if let Some(key_id) = SIGNER_PUBKEY_INDEX.may_load(deps.storage, key.as_slice())? {
+        return Err(ContractError::InvalidParams {
+            reason: format!("the join-admission key cannot be settlement signer key {key_id}"),
+        });
+    }
+    Ok(())
+}
+
+/// Remembers an accepted admission key for good (first time set is kept).
+pub fn record_admission_key(
+    deps: &mut DepsMut,
+    now: Timestamp,
+    pubkey: &HexBinary,
+) -> Result<(), ContractError> {
+    if !ADMISSION_KEYS.has(deps.storage, pubkey.as_slice()) {
+        ADMISSION_KEYS.save(deps.storage, pubkey.as_slice(), &now)?;
+    }
+    Ok(())
+}
+
+/// Replaces the join-admission key. Immediate: an admission signed under the
+/// previous key no longer verifies, so a `Join` still in flight fails (moving no
+/// funds) and its player asks the server for a new admission. Seats already
+/// taken, and every other game fact, are untouched.
+pub fn set_admission_key(
+    mut deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    pubkey: HexBinary,
+) -> Result<Response, ContractError> {
+    let mut config = admin_guard(&deps, &info)?;
+    validate_admission_key(&deps, &pubkey)?;
+    record_admission_key(&mut deps, env.block.time, &pubkey)?;
+    config.admission_pubkey = pubkey;
+    CONFIG.save(deps.storage, &config)?;
+    Ok(Response::new()
+        .add_attribute("action", "set_admission_key")
+        .add_attribute("admission_pubkey", config.admission_pubkey.to_hex()))
 }

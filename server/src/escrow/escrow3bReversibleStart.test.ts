@@ -9,9 +9,9 @@
 // permanent; when the chain PROVES this freeze's Start can never happen, the table returns to its pre-Start funded
 // state (players may withdraw on chain or freeze again). A restart reaches the same answer from the chain.
 //
-// And the contract-level junk-Join limitation (a production real-money BLOCKER, pinned here against the canonical
-// contract source): any wallet paying the ante can occupy a chain seat with an arbitrary 32-byte ticket. The server's
-// ticket binding never STARTS such a roster -- it cannot prevent the seat being taken.
+// And the junk-Join blocker, CLOSED (ESCROW-JOIN, 2026-09-28): the canonical contract (escrow 2.0.0) refuses a Join
+// without the server's admission for the SENDER, pinned here against its source and on the offline chain; the server's
+// ticket binding still never starts a roster it did not admit (defence in depth).
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -23,7 +23,7 @@ import { isLiveAttempt, startEpochOf, startInstanceOf, junoInstanceOf, type Chai
 import type { MemoryFinancialGameStore } from "./financialGameStore";
 import { transitionFinancial, type FinancialGameRecord } from "./moneyLifecycle";
 import { escrowInstanceKey } from "../../../frontend/src/gameEngine/escrow/escrowModel";
-import { CHAIN_ID, CONSENT_KEYS, CONTRACT, GAME_A, VARIANTS, WALLETS, fundedGame, makeWorld, type World } from "./escrow3bSupport";
+import { CHAIN_ID, CONSENT_KEYS, CONTRACT, GAME_A, VARIANTS, WALLETS, admissionFor, fundedGame, makeWorld, type World } from "./escrow3bSupport";
 
 quietConsole();
 
@@ -84,7 +84,8 @@ describe("the reversible roster freeze: permanent only when the chain confirms S
     /* The retry: issuing is open again; BOB's wallet rejoins with a NEW ticket; the table freezes a new epoch. */
     const reissued = await world.ledger.issue({ binding: { backend: "juno-cosmwasm", chain_id: CHAIN_ID, deployment_id: CONTRACT }, gameId: GAME_A, playerId: BOB, wallet: WALLETS[1], context: { principalId: "pr_1", familyId: "sf_1", recoverySelector: "rk_1" }, reauthorized: true });
     assert.ok(reissued.ok, "a released ledger issues again");
-    assert.ok(world.chain.join("1", { wallet: WALLETS[1], consent_pubkey: CONSENT_KEYS[1], join_ticket: (reissued as { ticket: string }).ticket }).ok);
+    const ticket2 = (reissued as { ticket: string }).ticket;
+    assert.ok(world.chain.join("1", { wallet: WALLETS[1], consent_pubkey: CONSENT_KEYS[1], join_ticket: ticket2 }, admissionFor(world, "1", WALLETS[1], ticket2)).ok);
     const again = await world.service.requestStart(GAME_A, [{ player_id: ALICE }, { player_id: BOB }]);
     assert.ok(again.ok, JSON.stringify(again));
     assert.equal((await fin(world)).roster_epoch, 2);
@@ -268,7 +269,9 @@ describe("the second review's strandings, each closed", () => {
     const world = makeWorld();
     await frozenGame(world);
     assert.ok(world.chain.withdraw("1", WALLETS[1]).ok);
-    assert.ok(world.chain.join("1", { wallet: WALLETS[1], consent_pubkey: CONSENT_KEYS[1], join_ticket: "cd".repeat(32) }).ok);
+    /* ESCROW-JOIN: such a re-join now needs an admission for that other ticket -- e.g. one still unexpired from an
+       earlier ticket of the same seat (simulated here by signing it directly). */
+    assert.ok(world.chain.join("1", { wallet: WALLETS[1], consent_pubkey: CONSENT_KEYS[1], join_ticket: "cd".repeat(32) }, admissionFor(world, "1", WALLETS[1], "cd".repeat(32))).ok);
     await world.drive(async () => (await fin(world)).chain.started !== null);
     const plan = await world.service.rosterSource.plan({ game_id: GAME_A, seats: [{ player_id: ALICE }, { player_id: BOB }], variants: VARIANTS } as never, { shuffle: <T>(items: readonly T[]) => [...items], now: 1 });
     assert.ok(!("refusal" in plan), JSON.stringify(plan));
@@ -300,8 +303,8 @@ describe("the second review's strandings, each closed", () => {
   });
 });
 
-describe("the contract-level junk-Join limitation (a production real-money blocker; pinned, not fixed here)", () => {
-  test("the canonical contract's Join checks the ticket's LENGTH only (source pin: a contract fix must update this test and the blocker)", () => {
+describe("the junk-Join blocker is CLOSED by the contract itself (ESCROW-JOIN: escrow 2.0.0's join admission)", () => {
+  test("the canonical contract's Join verifies the server's admission over its own SENDER before any seat is written (source pin)", () => {
     let repo = __dirname;
     while (!fs.existsSync(path.join(repo, "contracts", "escrow", "src", "execute", "funding.rs"))) {
       const up = path.dirname(repo);
@@ -311,34 +314,70 @@ describe("the contract-level junk-Join limitation (a production real-money block
     const source = fs.readFileSync(path.join(repo, "contracts", "escrow", "src", "execute", "funding.rs"), "utf8");
     const join = source.slice(source.indexOf("pub fn join("), source.indexOf("pub fn withdraw("));
     assert.ok(join.length > 200, "Join found");
-    assert.match(join, /fixed_bytes::<32>\("join_ticket", &join_ticket\)\?;/, "the ticket's only check is its 32-byte shape");
-    assert.doesNotMatch(join, /verify|signature|secp256k1|allowlist|admission|authoriz|operator/i, "no authorization of the joining wallet or its seat");
+    const verify = join.indexOf("verify_join_admission(");
+    assert.ok(verify > 0, "Join calls the admission check");
+    assert.match(join.slice(verify, verify + 400), /&info\.sender/, "the admission is checked for the transaction's own sender");
+    assert.ok(verify < join.indexOf("game.seats.push"), "before the seat is written");
+    assert.ok(verify < join.indexOf("save_game"), "before anything is saved");
+    assert.ok(verify < join.indexOf("one_coin"), "before the deposit is accepted");
+    const check = source.slice(source.indexOf("fn verify_join_admission("), source.indexOf("pub fn join("));
+    assert.match(check, /env\.block\.chain_id/, "bound to this chain");
+    assert.match(check, /env\.contract\.address/, "bound to this contract");
+    assert.match(check, /admission_pubkey/, "verified against the configured admission key");
+    assert.match(check, /InvalidAdmission/);
     const play = fs.readFileSync(path.join(repo, "contracts", "escrow", "src", "execute", "play.rs"), "utf8");
     const start = play.slice(play.indexOf("pub fn start("), play.indexOf("pub(crate) fn accept_signed_payload"));
-    assert.match(start, /roster_hash\(&wallets\)/, "Start commits to the seats' WALLETS (the operator decides which roster it starts)");
-    assert.doesNotMatch(start, /join_ticket/, "Start never looks at a ticket");
+    assert.match(start, /roster_hash\(&wallets\)/, "Start still commits to the seats' WALLETS (unchanged)");
   });
 
-  test("a junk seat (any wallet, any 32-byte ticket, or a COPIED ticket) is never adopted: no freeze, no Start -- but the seat IS taken", async () => {
-    for (const ticket of ["ab".repeat(32), "copied"]) {
+  test("a junk seat (any wallet, any 32-byte ticket, or a COPIED ticket and admission) is refused BY THE CONTRACT; the honest table starts", async () => {
+    for (const attempt of ["random-ticket", "copied-ticket", "copied-admission", "no-admission"] as const) {
       const world = makeWorld();
       assert.ok((await world.service.createMoneyGame(GAME_A)).ok);
       const chainGameId = await fundedGame(world, GAME_A);
       const bobTicket = world.chain.games.get(1)!.seats[1].join_ticket; // public on chain once BOB joined
       assert.ok(world.chain.withdraw(chainGameId, WALLETS[1]).ok); // BOB steps out; one seat is open
-      const junk = world.chain.join(chainGameId, { wallet: WALLETS[2], consent_pubkey: CONSENT_KEYS[2], join_ticket: ticket === "copied" ? bobTicket : ticket });
-      assert.ok(junk.ok, "the contract accepts it: THE LIMITATION");
-      assert.equal(world.chain.games.get(1)!.state, "funded", "the junk seat filled the table on chain");
+      const bobsAdmission = admissionFor(world, chainGameId, WALLETS[1], bobTicket); // what BOB's pending Join carries
+      const ticket = attempt === "random-ticket" ? "ab".repeat(32) : bobTicket;
+      const admission = attempt === "copied-admission" ? bobsAdmission : attempt === "no-admission" ? undefined : { expires_at: bobsAdmission.expires_at, signature: "cd".repeat(64) };
+      const junk = world.chain.join(chainGameId, { wallet: WALLETS[2], consent_pubkey: CONSENT_KEYS[2], join_ticket: ticket }, admission);
+      assert.equal(junk.ok, false, `${attempt}: the contract refuses it`);
+      assert.match((junk as { error: string }).error, attempt === "no-admission" ? /missing field `admission`/ : /the join admission does not authorize this wallet for this game/);
+      assert.equal(world.chain.games.get(1)!.state, "funding", `${attempt}: no junk seat fills the table`);
+      assert.equal(world.chain.games.get(1)!.seats.length, 1);
+      /* BOB's own Join, with his admission, lands; the table funds, binds, freezes and starts as normal. */
+      assert.ok(world.chain.join(chainGameId, { wallet: WALLETS[1], consent_pubkey: CONSENT_KEYS[1], join_ticket: bobTicket }, bobsAdmission).ok);
+      assert.equal(world.chain.games.get(1)!.state, "funded");
       assert.ok((await world.service.bindChainGame(GAME_A, chainGameId, VARIANTS)).ok);
-      const start = await world.service.requestStart(GAME_A, [{ player_id: ALICE }, { player_id: BOB }]);
-      assert.equal(start.ok, false);
-      assert.equal((start as { code: string }).code, "unbound-seat", `${ticket}: a seat no standing grant claims is never frozen`);
-      assert.equal((await fin(world)).roster, null);
-      assert.equal(await world.ledger.frozenAt(GAME_A), null);
-      assert.equal(world.service.isRosterFrozen(GAME_A), false, "the table is not frozen: its players can leave (and withdraw on chain)");
-      assert.equal((await startsOf(world)).length, 0, "no Start is ever prepared for it");
-      assert.ok(world.chain.withdraw(chainGameId, WALLETS[0]).ok, "the honest seat's own pre-Start withdraw still works");
+      assert.ok((await world.service.requestStart(GAME_A, [{ player_id: ALICE }, { player_id: BOB }])).ok, `${attempt}: the honest roster freezes and starts`);
     }
+  });
+
+  test("defence in depth: a wallet admitted under a ticket that has since ENDED can still join until its admission expires -- and is never adopted (unbound-seat)", async () => {
+    const world = makeWorld();
+    assert.ok((await world.service.createMoneyGame(GAME_A)).ok);
+    const chainGameId = await fundedGame(world, GAME_A);
+    const bobTicket = world.chain.games.get(1)!.seats[1].join_ticket;
+    assert.ok(world.chain.withdraw(chainGameId, WALLETS[1]).ok);
+    const stale = admissionFor(world, chainGameId, WALLETS[1], bobTicket);
+    /* The server supersedes BOB's ticket (another wallet) -- allowed here because no admission was RECORDED for it
+       (`admissionFor` signs directly; `authorizeJoin` records first and then refuses the supersession, see the
+       ESCROW-JOIN suite). The old admission is still valid on chain until it expires. */
+    const reissued = await world.ledger.issue({ binding: { backend: "juno-cosmwasm", chain_id: "uni-7", deployment_id: world.chain.options.contract }, gameId: GAME_A, playerId: BOB, wallet: WALLETS[2], context: { principalId: "pr_1", familyId: "sf_1", recoverySelector: "rk_1" }, reauthorized: true });
+    assert.ok(reissued.ok);
+    assert.ok(world.chain.join(chainGameId, { wallet: WALLETS[1], consent_pubkey: CONSENT_KEYS[1], join_ticket: bobTicket }, stale).ok, "the contract honours an unexpired admission");
+    assert.ok((await world.service.bindChainGame(GAME_A, chainGameId, VARIANTS)).ok);
+    const start = await world.service.requestStart(GAME_A, [{ player_id: ALICE }, { player_id: BOB }]);
+    assert.equal(start.ok, false);
+    assert.equal((start as { code: string }).code, "unbound-seat", "the server still refuses a seat no standing grant claims");
+    assert.equal((await startsOf(world)).length, 0);
+    assert.equal(world.service.isRosterFrozen(GAME_A), false, "the seat can withdraw on chain");
+    /* After the expiry the same admission seats nobody. */
+    assert.ok(world.chain.withdraw(chainGameId, WALLETS[1]).ok);
+    world.chain.time = Number(stale.expires_at);
+    const late = world.chain.join(chainGameId, { wallet: WALLETS[1], consent_pubkey: CONSENT_KEYS[1], join_ticket: bobTicket }, stale);
+    assert.equal(late.ok, false);
+    assert.match((late as { error: string }).error, /the join admission expired at/);
   });
 });
 

@@ -4,13 +4,16 @@
 //  ESCROW-3B: THE FROZEN ESCROW CONTRACT'S ABI, AS THE RELAYER SPEAKS IT -- MESSAGES, QUERIES, ANSWERS, REFUSALS
 // ==================================================================
 //
-// The contract is FROZEN (wasm `b263277a…9296`; `contracts/escrow/src/msg.rs` and `schema/`). This file is the one place
-// its JSON is written and read on the server, and it changes nothing about it:
+// The contract is FROZEN at escrow 2.0.0 (ESCROW-JOIN, 2026-09-28: `Join` carries the server's ADMISSION; the canonical
+// wasm is `CANONICAL_JUNO_ESCROW_CHECKSUMS` in junoConfig.ts; `contracts/escrow/src/msg.rs` and `schema/`). The 1.0.0
+// artifact `b263277a…9296` is historical: its Join seated any payer. This file is the one place its JSON is written and
+// read on the server, and it changes nothing about it:
 //
 //   execute  (relayer)   start · checkpoint · settle (consents: [] -- relayed one by one, GNOLAND-1 F5) · consent ·
 //                        finalize · annul_by_consent. Never funds (every relayer route is non-payable).
-//   execute  (wallets)   create_game · join · withdraw · cancel · set_consent_key · challenge · liveness_settle -- built
-//                        here for ESCROW-4's WalletRequest; the SERVER never signs them.
+//   execute  (wallets)   create_game · join (with the server's admission) · withdraw · cancel · set_consent_key ·
+//                        challenge · liveness_settle -- built here for ESCROW-4's WalletRequest; the SERVER never signs
+//                        them (it signs only the admission DIGEST a join carries, `escrowService.authorizeJoin`).
 //   query                config · game · seats · checkpoints · signer_keys (paged to the end) · settlement_preview.
 //
 // `chain_game_id` is a JSON INTEGER in the ABI (`u64` in msg.rs); it is written from its decimal string, never through
@@ -98,8 +101,14 @@ export const WALLET_EXECUTE = Object.freeze({
       join_ticket: hexField(a.joinTicket, HEX32, "join_ticket"),
     });
   },
-  join: (chainGameId: string, consentPubkey: string, joinTicket: string) =>
-    execute("join", u64Json(chainGameId, "chain_game_id"), { consent_pubkey: hexField(consentPubkey, HEX(33), "consent_pubkey"), join_ticket: hexField(joinTicket, HEX32, "join_ticket") }),
+  /** ESCROW-JOIN: the admission is the server's signature for THIS wallet (the transaction's sender), this game and this
+   *  ticket until `expiresAt` (Unix seconds, a decimal string: a Uint64 on the wire). Without it the contract refuses. */
+  join: (chainGameId: string, consentPubkey: string, joinTicket: string, admission: { readonly expiresAt: string; readonly signature: string }) =>
+    execute("join", u64Json(chainGameId, "chain_game_id"), {
+      consent_pubkey: hexField(consentPubkey, HEX(33), "consent_pubkey"),
+      join_ticket: hexField(joinTicket, HEX32, "join_ticket"),
+      admission: { expires_at: u64Json(admission.expiresAt, "admission.expires_at"), signature: hexField(admission.signature, HEX64, "admission.signature") },
+    }),
   withdraw: (chainGameId: string) => execute("withdraw", u64Json(chainGameId, "chain_game_id"), {}),
   cancel: (chainGameId: string) => execute("cancel", u64Json(chainGameId, "chain_game_id"), {}),
   setConsentKey: (chainGameId: string, newPubkey: string) => execute("set_consent_key", u64Json(chainGameId, "chain_game_id"), { new_pubkey: hexField(newPubkey, HEX(33), "new_pubkey") }),
@@ -130,7 +139,11 @@ const need = <T>(ok: boolean, value: T, where: string): T => {
 const str = (value: unknown, where: string): string => need(typeof value === "string", value as string, where);
 const dec = (value: unknown, where: string): string => need(typeof value === "string" && /^(0|[1-9][0-9]*)$/.test(value) && value.length <= 40, value as string, where);
 const int = (value: unknown, where: string, max: number): number => need(typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= max, value as number, where);
-const hexOf = (value: unknown, re: RegExp, where: string): string => need(typeof value === "string" && re.test(value.toLowerCase()), (value as string).toLowerCase(), where);
+const hexOf = (value: unknown, re: RegExp, where: string): string => {
+  /* ESCROW-JOIN review L2: the type is checked BEFORE the value is touched (a 1.0.0 contract has no admission_pubkey). */
+  const text = typeof value === "string" ? value.toLowerCase() : "";
+  return need(text !== "" && re.test(text), text, where);
+};
 const orNull = <T>(value: unknown, read: (v: unknown) => T): T | null => (value === null || value === undefined ? null : read(value));
 /** A cosmwasm Timestamp is a decimal string of nanoseconds; kept as whole SECONDS (decimal) for deadlines. */
 const secondsOf = (value: unknown, where: string): string => (BigInt(dec(value, where)) / BigInt(1_000_000_000)).toString();
@@ -315,6 +328,8 @@ export function parseCheckpointsResponse(data: unknown): { readonly checkpoints:
 export interface JunoConfig {
   readonly admin: string;
   readonly operator: string;
+  /** ESCROW-JOIN: the join-admission public key the contract verifies every Join against (33-byte compressed hex). */
+  readonly admission_pubkey: string;
   readonly resolver: string;
   readonly treasury: string;
   readonly denom: string;
@@ -337,6 +352,7 @@ export function parseConfigResponse(data: unknown): JunoConfig {
   return {
     admin: str(c.admin, "config.admin"),
     operator: str(c.operator, "config.operator"),
+    admission_pubkey: hexOf(c.admission_pubkey, HEX(33), "config.admission_pubkey"),
     resolver: str(c.resolver, "config.resolver"),
     treasury: str(c.treasury, "config.treasury"),
     denom: str(c.denom, "config.denom"),
@@ -432,6 +448,9 @@ export const JUNO_ERROR_TEMPLATES: Readonly<Record<string, string>> = Object.fre
   MigrateForeignContract: "cannot migrate from contract {contract}",
   MigrateDowngrade: "cannot migrate from version {from} to older version {to}",
   BadContractVersion: "unparseable contract version {version}",
+  InvalidAdmission: "the join admission does not authorize this wallet for this game",
+  AdmissionExpired: "the join admission expired at {expires_at}",
+  MigrateUnsupported: "cannot migrate from version {from}: its state predates this code; deploy a new contract",
 });
 
 const escapeRe = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

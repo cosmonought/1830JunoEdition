@@ -28,6 +28,7 @@ pub fn instantiate(
     let config = Config {
         admin: deps.api.addr_validate(&msg.admin)?,
         operator: deps.api.addr_validate(&msg.operator)?,
+        admission_pubkey: msg.admission_pubkey,
         resolver: deps.api.addr_validate(&msg.resolver)?,
         treasury: deps.api.addr_validate(&msg.treasury)?,
         denom: msg.denom,
@@ -37,6 +38,11 @@ pub fn instantiate(
     admin::validate_denom(&config.denom)?;
     admin::validate_params(&config.params)?;
     admin::validate_treasury(&env, &config.treasury)?;
+    // The registry is still empty here; the admission key is recorded first,
+    // so each signer key below is refused if it is that key: the two never
+    // share key material.
+    admin::validate_admission_key(&deps, &config.admission_pubkey)?;
+    admin::record_admission_key(&mut deps, env.block.time, &config.admission_pubkey)?;
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
     CONFIG.save(deps.storage, &config)?;
     NEXT_GAME_ID.save(deps.storage, &1)?;
@@ -51,6 +57,7 @@ pub fn instantiate(
         .add_attribute("contract_version", CONTRACT_VERSION)
         .add_attribute("admin", config.admin.as_str())
         .add_attribute("operator", config.operator.as_str())
+        .add_attribute("admission_pubkey", config.admission_pubkey.to_hex())
         .add_attribute("resolver", config.resolver.as_str())
         .add_attribute("treasury", config.treasury.as_str())
         .add_attribute("denom", config.denom)
@@ -93,7 +100,16 @@ pub fn execute(
             chain_game_id,
             consent_pubkey,
             join_ticket,
-        } => funding::join(deps, env, info, chain_game_id, consent_pubkey, join_ticket),
+            admission,
+        } => funding::join(
+            deps,
+            env,
+            info,
+            chain_game_id,
+            consent_pubkey,
+            join_ticket,
+            admission,
+        ),
         ExecuteMsg::Withdraw { chain_game_id } => funding::withdraw(deps, info, chain_game_id),
         ExecuteMsg::Cancel { chain_game_id } => funding::cancel(deps, env, info, chain_game_id),
         ExecuteMsg::SetConsentKey {
@@ -148,6 +164,7 @@ pub fn execute(
         ExecuteMsg::SetResolver { resolver } => admin::set_resolver(deps, info, resolver),
         ExecuteMsg::SetTreasury { treasury } => admin::set_treasury(deps, env, info, treasury),
         ExecuteMsg::SetParams { params } => admin::set_params(deps, info, params),
+        ExecuteMsg::SetAdmissionKey { pubkey } => admin::set_admission_key(deps, env, info, pubkey),
     }
 }
 
@@ -176,9 +193,17 @@ fn parse_version(version: &str) -> Result<(u64, u64, u64), ContractError> {
     Ok(parsed)
 }
 
+/// The first version whose state carries the join-admission key. Older state
+/// cannot be read by this code (its `Config` has no `admission_pubkey`), so a
+/// migration from it would brick every game: it is refused, and such a
+/// deployment is replaced by instantiating this code (no funded game exists on
+/// an older artifact).
+pub const FIRST_ADMISSION_VERSION: (u64, u64, u64) = (2, 0, 0);
+
 /// Future escrow versions only. Refuses a contract that is not this escrow
-/// contract (including the legacy gameplay contract) and any downgrade. There
-/// are no state migrations for 1.x; a same-version migrate is a no-op.
+/// contract (including the legacy gameplay contract), any downgrade, and any
+/// state older than `FIRST_ADMISSION_VERSION`. There are no state migrations
+/// for 2.x; a same-version migrate is a no-op.
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
     let stored = get_contract_version(deps.storage)?;
@@ -193,6 +218,11 @@ pub fn migrate(deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, C
         return Err(ContractError::MigrateDowngrade {
             from: stored.version,
             to: CONTRACT_VERSION.to_string(),
+        });
+    }
+    if from < FIRST_ADMISSION_VERSION {
+        return Err(ContractError::MigrateUnsupported {
+            from: stored.version,
         });
     }
     // Explicit per-version state migrations belong here, keyed on `from`.
@@ -237,6 +267,11 @@ mod tests {
             denom: "ujuno".to_string(),
             params,
             signer_keys: vec![],
+            // secp256k1 generator G, compressed: a valid on-curve key.
+            admission_pubkey: cosmwasm_std::HexBinary::from_hex(
+                "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            )
+            .unwrap(),
         };
         let err = instantiate(
             deps.as_mut(),
@@ -261,6 +296,10 @@ mod tests {
         assert!(parse_version("1.0.0.0").is_err());
         assert!(parse_version("1.0.0-rc1").is_err());
         assert!(parse_version("").is_err());
-        assert_eq!(parse_version(CONTRACT_VERSION).unwrap(), (1, 0, 0));
+        assert_eq!(parse_version(CONTRACT_VERSION).unwrap(), (2, 0, 0));
+        assert_eq!(
+            parse_version(CONTRACT_VERSION).unwrap(),
+            FIRST_ADMISSION_VERSION
+        );
     }
 }

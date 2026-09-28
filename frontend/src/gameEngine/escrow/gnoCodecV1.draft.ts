@@ -28,6 +28,7 @@ export const GNO_TAGS_V1_DRAFT = Object.freeze({
   DOMAIN: "18GNO/DOMAIN/v1",
   ROSTER: "18GNO/ROSTER/v1",
   KEYPOP: "18GNO/KEYPOP/v1",
+  JOIN: "18GNO/JOIN/v1",
 } as const);
 
 /**
@@ -37,6 +38,9 @@ export const GNO_TAGS_V1_DRAFT = Object.freeze({
  * Draft CONSENT: SHA-256("18GNO/CONSENT/v1" ‖ domain ‖ u64 seq ‖ settle ‖ u8 seat_index).
  * Draft ANNUL:   SHA-256("18GNO/ANNUL/v1" ‖ domain ‖ u64 trusted_seq ‖ u8 seat_index).
  * Draft KEYPOP:  Ed25519 over "18GNO/KEYPOP/v1" ‖ realm_path ‖ u64 chain_game_id ‖ wallet ‖ pubkey.
+ * Draft JOIN (ESCROW-JOIN, the join admission every backend's Join must verify; the realm path replaces the contract):
+ *                SHA-256("18GNO/JOIN/v1" ‖ u16 len ‖ chain_id ‖ u16 len ‖ realm_pkgpath ‖ u64 chain_game_id ‖
+ *                        u16 len ‖ wallet ‖ join_ticket(32) ‖ u64 expires_at), signed Ed25519 by the admission key.
  */
 export interface GnoDomainInputsDraft {
   chain_id: string;
@@ -60,6 +64,7 @@ export const GNO_CODEC_V1_DRAFT: EscrowCodec<GnoDomainInputsDraft> = Object.free
   maturity: "draft" as const,
   settlementScheme: "ed25519-pure/sig64" as const,
   consentScheme: "ed25519-pure/sig64" as const,
+  admissionScheme: "ed25519-pure/sig64" as const,
   consentBindsSeat: true,
   annulBindsSeat: true,
   canonicalAddress(): string {
@@ -79,6 +84,9 @@ export const GNO_CODEC_V1_DRAFT: EscrowCodec<GnoDomainInputsDraft> = Object.free
   },
   annulDigest(): CodecDigest<"annul"> {
     return notYet("seat-bound ANNUL digest");
+  },
+  joinAdmissionDigest(): CodecDigest<"join-admission"> {
+    return notYet("JOIN admission digest");
   },
   extensions: Object.freeze({
     keyPossession: (_input: KeyPossessionInput): CodecDigest<"keypop"> => notYet("KEYPOP"),

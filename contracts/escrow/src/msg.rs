@@ -24,6 +24,21 @@ pub struct InstantiateMsg {
     /// Settlement-signer keys to register at instantiation (33-byte compressed).
     /// They receive key ids 1, 2, … in order.
     pub signer_keys: Vec<HexBinary>,
+    /// The join-admission key (33-byte compressed secp256k1, on the curve, not
+    /// one of `signer_keys`). Every `Join` needs its signature.
+    pub admission_pubkey: HexBinary,
+}
+
+/// The hosted server's authorization for the `Join` transaction's SENDER to
+/// take a seat in this game with this join ticket (`crypto::join_admission_digest`).
+/// It names no wallet: the digest is rebuilt from `info.sender`, so an
+/// admission copied into another wallet's `Join` never verifies.
+#[cw_serde]
+pub struct JoinAdmission {
+    /// Unix seconds; `Join` needs block time (whole seconds) strictly before it.
+    pub expires_at: Uint64,
+    /// 64-byte low-s `r ‖ s` by `Config::admission_pubkey` over the JOIN digest.
+    pub signature: HexBinary,
 }
 
 /// SettlementPayloadV1, amended layout (SET-0A rev 2 §21), in field order.
@@ -100,11 +115,15 @@ pub enum ExecuteMsg {
         join_ticket: HexBinary,
     },
     /// Takes the next seat with exactly the creator's gross ante. The consent
-    /// key must not be another seat's current key.
+    /// key must not be another seat's current key. The admission must be the
+    /// admission key's signature for (this chain, this contract, this game, the
+    /// sender, this ticket, its expiry); it is checked before anything changes.
     Join {
         chain_game_id: u64,
         consent_pubkey: HexBinary,
+        /// 32 bytes, stored verbatim.
         join_ticket: HexBinary,
+        admission: JoinAdmission,
     },
     /// A seated wallet leaves before `Start` and gets its net ante back.
     Withdraw {
@@ -211,6 +230,12 @@ pub enum ExecuteMsg {
     /// Applies to games created afterwards.
     SetParams {
         params: GameParams,
+    },
+    /// Replaces the join-admission key (33-byte compressed, on the curve, never
+    /// a registered signer key). Takes effect at once: every admission signed
+    /// under the previous key stops verifying; seats already taken are kept.
+    SetAdmissionKey {
+        pubkey: HexBinary,
     },
 }
 

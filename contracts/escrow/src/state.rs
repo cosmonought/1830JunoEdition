@@ -20,6 +20,12 @@ pub struct Config {
     pub admin: Addr,
     /// The only address that may `Start` a funded game.
     pub operator: Addr,
+    /// The join-admission key (33-byte compressed secp256k1): `Join` succeeds
+    /// only with its signature over the JOIN digest naming the joining wallet
+    /// (`crypto::join_admission_digest`). Held by the hosted server, never a
+    /// settlement signer key; the admin replaces it with `SetAdmissionKey`,
+    /// which invalidates every admission signed under the previous key.
+    pub admission_pubkey: HexBinary,
     /// The resolver a game adopts at `Start`. `SetResolver` therefore only
     /// changes the adjudicator of games started afterwards.
     pub resolver: Addr,
@@ -332,6 +338,11 @@ pub const SIGNER_KEYS: Map<u16, SignerKey> = Map::new("signer_keys");
 /// Compressed pubkey → key_id, so one key can never be registered twice (a
 /// compromised key could otherwise live on under a second id).
 pub const SIGNER_PUBKEY_INDEX: Map<&[u8], u16> = Map::new("signer_pubkey_index");
+/// Every join-admission key this contract has ever held (compressed pubkey →
+/// block time it was first set). A current OR former admission key can never
+/// be registered as a settlement signer key: a key rotated out because it
+/// leaked must not come back with settlement authority.
+pub const ADMISSION_KEYS: Map<&[u8], Timestamp> = Map::new("admission_keys");
 // Games live under the `games` namespace, owned by the private `storage`
 // module (storage-only `StoredGame` shape; read and written only through
 // `helpers::{load_game, save_game}` and the `Games` query).

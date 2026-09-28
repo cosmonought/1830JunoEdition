@@ -512,6 +512,7 @@ fn consent_keys_are_unique_within_a_game() {
                 chain_game_id: id,
                 consent_pubkey: Key::seat(1).pubkey,
                 join_ticket: ticket("bob"),
+                admission: s.admission_for(id, &bob, &ticket("bob")),
             },
             &coins(ANTE, DENOM),
         )

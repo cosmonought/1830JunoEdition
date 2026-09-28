@@ -54,7 +54,7 @@ import { logHash } from "../../../frontend/src/gameEngine/logHash";
 import type { GameStateResponse } from "../../../frontend/src/gameEngine/gameState";
 import type { GameVariants } from "../../../frontend/src/gameEngine/gameVariants";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
-import { selectSettlementKey, type SettlementKeyConfig, type SettlementSigner } from "./escrowPorts";
+import { NO_WALLET_CONTROL_PROOFS, selectSettlementKey, walletProofProblem, type SettlementKeyConfig, type SettlementSigner, type WalletControlProofs } from "./escrowPorts";
 import { isLiveAttempt, newChainIntent, sameChainIntent, startEpochOf, startInstanceOf, supersededIntent, type ChainIntentOp, type ChainIntentRecord, type ChainIntentStore } from "./chainIntents";
 import { roundKeyOf, isCheckpointPosition, issuedAtOf, type CheckpointSnapshot } from "./checkpointPolicy";
 import { FinancialRecordUnreadableError, type FinancialGameStore } from "./financialGameStore";
@@ -65,6 +65,7 @@ import type { PrefixReplay, TerminalSettlementEvidence } from "./settlementEvide
 import type { WalletTicketLedger } from "./walletTickets";
 import { SignerError } from "./juno/signer";
 import { junoGameView, parseConfigResponse, parseGameResponse, parseSignerKeysResponse, QUERY, RELAYER_EXECUTE, type JunoGameResponse } from "./juno/junoContract";
+import type { JoinAdmissionSigner } from "./juno/joinAdmission";
 import type { JunoRest } from "./juno/junoRest";
 import type { Admission, Relayer } from "./juno/relayer";
 import type { OpsRecorder } from "../persistence/opsRecorder";
@@ -103,9 +104,40 @@ export interface EscrowServiceDeps {
   /** Financial mode is verified against the chain (`juno/junoBackend.ts`): until it is, nothing is signed or written
    *  for the chain (default: ready). */
   readonly ready?: () => boolean;
+  /** ESCROW-JOIN: the join-admission signer (its key IS the contract's `admission_pubkey`, checked at verification) and
+   *  how long an admission lives. Absent (e.g. a KMS key before LIVE-5 wires KMS): every `authorizeJoin` refuses. */
+  readonly admission?: { readonly signer: JoinAdmissionSigner; readonly ttlSecs: number };
+  /** ESCROW-JOIN: ESCROW-4's proofs of wallet control. Absent: none exist, and every `authorizeJoin` refuses. */
+  readonly walletProofs?: WalletControlProofs;
 }
 
 export type ServiceRefusal = { readonly ok: false; readonly code: string; readonly detail: string };
+
+/** ESCROW-JOIN: what ESCROW-4's (future) route asks for, after authenticating the principal and proving the wallet. */
+export interface JoinAuthorizationRequest {
+  readonly gameId: string;
+  readonly playerId: string;
+  /** The authenticated principal making the request (server-private; never on the wire or on chain). */
+  readonly principalId: string;
+  /** The wallet that will SEND the Join (canonical lower-case bech32). */
+  readonly wallet: string;
+  /** The seat's current join ticket (lowercase hex), which the same Join carries. */
+  readonly joinTicket: string;
+}
+
+/** The admission, exactly as the Join carries it (`WALLET_EXECUTE.join(chain_game_id, consent key, ticket, {expiresAt,
+ *  signature})`), plus what the client needs to check it names its own game and wallet. */
+export interface JoinAdmissionGrant {
+  readonly chain_id: string;
+  readonly contract: string;
+  readonly chain_game_id: string;
+  readonly wallet: string;
+  readonly join_ticket: string;
+  /** Unix seconds, decimal (chain block time must be before it). */
+  readonly expires_at: string;
+  readonly signature: string;
+  readonly admission_pubkey: string;
+}
 
 /** What `reconcileStart` found: the chain started this freeze (permanent), its Start may still happen (the freeze
  *  stands), the chain proved it never will (released), there is no freeze to decide, or the game is held. */
@@ -116,6 +148,9 @@ export interface EscrowService {
   createMoneyGame(gameId: string): Promise<{ readonly ok: true; readonly record: FinancialGameRecord } | ServiceRefusal>;
   /** The creator's CreateGame landed: bind the chain game (write-once, from a chain read). */
   bindChainGame(gameId: string, chainGameId: string, variants: GameVariants): Promise<{ readonly ok: true; readonly binding: EscrowBindingV2 } | ServiceRefusal>;
+  /** ESCROW-JOIN: the server's admission for one standing seat's PROVEN wallet to Join the table's bound chain game. The
+   *  seam ESCROW-4 calls; no route reaches it yet (money games are disabled). */
+  authorizeJoin(input: JoinAuthorizationRequest): Promise<{ readonly ok: true; readonly admission: JoinAdmissionGrant } | ServiceRefusal>;
   /** IN THE GAME'S ACTOR TASK: freeze the financial roster and prepare the Start intent. */
   requestStart(gameId: string, liveSeats: readonly Pick<Seat, "player_id">[]): Promise<{ readonly ok: true; readonly roster_hash: string; readonly intent_id: string } | ServiceRefusal>;
   /** The money deal's roster source (O-7 at the deal). */
@@ -943,6 +978,79 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
       return { ok: true, binding: next.binding.escrow };
     },
 
+    /* ESCROW-JOIN. Every precondition is the existing authority's, re-read now; the admission is recorded on the seat's
+       ticket grant BEFORE it is signed (so the ledger never forgets an admission that may be on its way to the chain),
+       and it is signed only through the configured admission key, over a digest re-derived here. */
+    async authorizeJoin(input) {
+      const no = (code: string, detail: string) => ({ ok: false as const, code, detail });
+      if (!ready()) return no("not-verified", "financial mode is not verified against the chain");
+      const admission = deps.admission;
+      if (admission === undefined) return no("admission-unavailable", "this server has no join-admission signer (production waits for the KMS client, LIVE-5)");
+      return exclusive(input.gameId, async () => {
+        const record = await deps.financial.load(input.gameId);
+        if (record === null) return no("not-found", "no money record");
+        const mismatch = pinMismatch(record);
+        if (mismatch !== null) return no("binding-mismatch", mismatch);
+        const binding = record.binding?.escrow ?? null;
+        if (binding === null) return no("not-bound", "the chain game is not bound");
+        if (record.phase !== "funding" || record.chain.started !== null) return no("wrong-state", `the money game is ${record.phase}${record.chain.started !== null ? " (started)" : ""}`);
+        /* A frozen roster (provisional or permanent) moves no seat: no new wallet is admitted to it. */
+        if (record.roster !== null || frozen.has(input.gameId) || (await deps.tickets.frozenAt(input.gameId)) !== null) return no("frozen", "the table's roster is frozen; no seat changes");
+        let wallet: string;
+        try {
+          wallet = JUNO_CODEC_V1.canonicalAddress(input.wallet, "wallet");
+        } catch {
+          return no("request-invalid", "the wallet is not a canonical (lower-case) address");
+        }
+        if (typeof input.joinTicket !== "string" || !/^[0-9a-f]{64}$/.test(input.joinTicket)) return no("request-invalid", "the join ticket is not 32 bytes of lowercase hex");
+        /* The seat's CURRENT, STANDING ticket (standing = its issuing session and recovery key still stand, the
+           principal still holds the seat), issued to THIS principal for THIS wallet, and it is this ticket. */
+        const grant = await deps.tickets.standingGrantOf(input.gameId, input.playerId);
+        if (grant === null) return no("no-standing-ticket", "the seat has no standing join ticket");
+        if (grant.principal_id !== input.principalId) return no("not-seat-owner", "the seat's ticket was not issued to this principal");
+        if (grant.wallet !== wallet || grant.ticket !== input.joinTicket) return no("ticket-mismatch", "the seat's standing ticket is for another wallet, or is another ticket");
+        /* The wallet's control PROVED for this seat (ESCROW-4's ADR-036 record, every binding and its age checked);
+           until that exists, nothing is. Never the ledger's DECLARED wallet: that is not a proof. */
+        const proof = await (deps.walletProofs ?? NO_WALLET_CONTROL_PROOFS).proofOf({ gameId: input.gameId, playerId: input.playerId, principalId: input.principalId });
+        const unproven = walletProofProblem(proof, { gameId: input.gameId, playerId: input.playerId, principalId: input.principalId, wallet, now: deps.now() });
+        if (unproven !== null) return no("wallet-unproven", unproven);
+        /* No conflicting grant: another seat's standing ticket must not name the same wallet. */
+        const conflicting = (await deps.tickets.standingGrants(input.gameId)).some((other) => other.player_id !== input.playerId && other.wallet === wallet);
+        if (conflicting) return no("wallet-conflict", "another seat's standing ticket names this wallet");
+        /* The chain, now: open for funding, not paused, before the deadline, and this wallet not already seated. */
+        const { view } = await liveView({ binding });
+        if (view.state !== "FUNDING") return no("wrong-state", `the escrow is ${view.state}`);
+        if (view.paused) return no("paused", "the escrow deployment is paused");
+        const nowSecs = Math.floor(deps.now() / 1000);
+        const deadline = view.deadlines.funding_deadline;
+        if (deadline !== null && /^[0-9]+$/.test(deadline) && BigInt(nowSecs) >= BigInt(deadline)) return no("funding-closed", "the escrow's funding deadline has passed");
+        if (view.seats.some((seat) => seat.payout_address === wallet)) return no("already-seated", "this wallet already holds a seat of this chain game");
+        const expiresAt = nowSecs + admission.ttlSecs;
+        const recorded = await deps.tickets.recordAdmission({ gameId: input.gameId, playerId: input.playerId, epoch: grant.epoch, wallet, ticket: grant.ticket, expiresAt });
+        if (recorded !== "committed") return no(recorded === "conflict" ? "conflict" : "no-standing-ticket", "the seat's ticket changed while the admission was prepared; ask again");
+        let signed: Awaited<ReturnType<JoinAdmissionSigner["sign"]>>;
+        try {
+          signed = await admission.signer.sign({ chain_id: backend.pin.chain_id, deployment: backend.pin.contract_address, chain_game_id: BigInt(binding.chain_game_id), wallet, join_ticket_hex: grant.ticket, expires_at: BigInt(expiresAt) });
+        } catch (error) {
+          return no("admission-unavailable", `the admission could not be signed (${error instanceof SignerError ? error.code : "error"})`);
+        }
+        audit("money.join-admitted", { game_id: input.gameId, chain_game_id: binding.chain_game_id, epoch: grant.epoch, expires_at: expiresAt, admission_key: admission.signer.kind });
+        return {
+          ok: true as const,
+          admission: {
+            chain_id: backend.pin.chain_id,
+            contract: backend.pin.contract_address,
+            chain_game_id: binding.chain_game_id,
+            wallet,
+            join_ticket: grant.ticket,
+            expires_at: String(expiresAt),
+            signature: signed.signature_hex,
+            admission_pubkey: admission.signer.publicKeyHex,
+          },
+        };
+      });
+    },
+
     async requestStart(gameId, liveSeats) {
       if (!ready()) return { ok: false, code: "not-verified", detail: "financial mode is not verified against the chain" };
       return exclusive(gameId, async () => {
@@ -974,9 +1082,10 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
         }
         const { view } = await liveView({ binding });
         /* Claims come from the ticket ledger: a chain seat is claimed only by the standing grant whose ticket AND wallet
-           it carries (`freezeEscrowRoster` recomputes that through `ticketOf`, read once in this task). A seat no grant
-           claims (a wallet that joined with a ticket this server never issued -- the contract cannot refuse one, see the
-           ESCROW-3B junk-Join blocker) is `unbound-seat`: this roster is never frozen and never started. */
+           it carries (`freezeEscrowRoster` recomputes that through `ticketOf`, read once in this task). Since ESCROW-JOIN
+           the contract itself refuses a Join this server did not admit; a seat no standing grant claims can still exist
+           (a wallet admitted under a ticket that has since ended, re-joining before its admission expired) and is
+           `unbound-seat`: this roster is never frozen and never started (defence in depth). */
         const standing = await deps.tickets.standingGrants(gameId);
         const claims = view.seats.flatMap((seat) => {
           const grant = standing.find((entry) => entry.wallet === seat.payout_address && entry.ticket === seat.join_ticket_hex);

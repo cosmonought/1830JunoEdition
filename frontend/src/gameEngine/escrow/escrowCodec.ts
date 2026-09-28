@@ -44,8 +44,9 @@ export type EscrowCodecId = "18JUNO/v1" | "18GNO/v1";
  */
 export type SignatureSchemeId = "secp256k1-ecdsa-prehashed/rs64-low-s" | "ed25519-pure/sig64";
 
-/** What a digest is for. SETTLE is signed by the settlement key; CONSENT and ANNUL by a seat's consent key. */
-export type DigestPurpose = "settle" | "consent" | "annul" | "keypop";
+/** What a digest is for. SETTLE is signed by the settlement key; CONSENT and ANNUL by a seat's consent key;
+ *  JOIN-ADMISSION by the server's admission key (ESCROW-JOIN: a backend's Join refuses any wallet without it). */
+export type DigestPurpose = "settle" | "consent" | "annul" | "keypop" | "join-admission";
 /** What a commitment binds (hashed into the domain / compared on chain, never signed on its own). */
 export type CommitmentPurpose = "domain" | "roster";
 
@@ -84,6 +85,27 @@ export interface KeyPossessionInput {
 }
 
 /**
+ * ESCROW-JOIN (2026-09-28): the hosted server's authorization for ONE wallet to take a seat in ONE chain game of ONE
+ * deployment on ONE network, carrying ONE join ticket, until `expires_at`. Every backend's Join must verify it on
+ * chain against a server-held admission key (never an allowlist, never first-come): without it any wallet paying the
+ * ante could occupy a seat (the ESCROW-3B junk-Join blocker). The wallet is the Join transaction's SENDER as the
+ * backend stores it, so a copied admission is worthless to any other wallet.
+ */
+export interface JoinAdmissionInput {
+  /** The network's chain id. */
+  readonly chain_id: string;
+  /** The deployment's on-chain identity (Juno: the contract address; Gno: the realm path, draft). */
+  readonly deployment: string;
+  readonly chain_game_id: bigint;
+  /** The joining wallet, canonical (`canonicalAddress`). */
+  readonly wallet: string;
+  /** 32 bytes, lowercase hex. */
+  readonly join_ticket_hex: string;
+  /** Unix seconds; the chain accepts the Join only while block time is before it. */
+  readonly expires_at: bigint;
+}
+
+/**
  * The backend codec. Juno: `JUNO_CODEC_V1` (junoCodecV1.ts), a pure delegation to the certified SET-0C functions.
  * Gno: `GNO_CODEC_V1_DRAFT` (gnoCodecV1.draft.ts), a declared shape whose byte-producing methods refuse until
  * GNOLAND-2 freezes them.
@@ -97,6 +119,8 @@ export interface EscrowCodec<I = unknown> {
   readonly settlementScheme: SignatureSchemeId;
   /** The scheme each seat's consent key signs CONSENT and ANNUL digests with. */
   readonly consentScheme: SignatureSchemeId;
+  /** The scheme the server's admission key signs JOIN-ADMISSION digests with (ESCROW-JOIN). */
+  readonly admissionScheme: SignatureSchemeId;
   /**
    * Whether the CONSENT digest itself names the seat. Juno v1: NO -- the seat is bound by the per-seat consent key,
    * which ESCROW-2.x keeps unique within a game (`ConsentKeyInUse`), so one seat's signature can never count for
@@ -130,6 +154,8 @@ export interface EscrowCodec<I = unknown> {
     readonly seat_index: number;
     readonly seat_count: number;
   }): CodecDigest<"annul">;
+  /** ESCROW-JOIN: the JOIN-ADMISSION digest the admission key signs for one wallet's Join. Not a settlement byte. */
+  joinAdmissionDigest(input: JoinAdmissionInput): CodecDigest<"join-admission">;
   /** Backend-only additions. Present only where the backend defines them; absent is a capability, not an error. */
   readonly extensions: Readonly<{ keyPossession?: (input: KeyPossessionInput) => CodecDigest<"keypop"> }>;
 }

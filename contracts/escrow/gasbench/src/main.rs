@@ -28,7 +28,7 @@ use std::sync::{Arc, Mutex};
 
 use bech32::{Bech32, Hrp};
 use cosmwasm_std::{Binary, Checksum, Order, Record};
-use cosmwasm_std_v1::{HexBinary, Uint128};
+use cosmwasm_std_v1::{HexBinary, Uint128, Uint64};
 use cosmwasm_vm::testing::{MockApi, MockQuerier, MockStorage};
 use cosmwasm_vm::{
     call_execute_raw, call_instantiate_raw, call_query_raw, capabilities_from_csv, Backend,
@@ -36,8 +36,8 @@ use cosmwasm_vm::{
 };
 use eighteen_cosmos_escrow::crypto;
 use eighteen_cosmos_escrow::msg::{
-    CheckpointsResponse, ExecuteMsg, GameResponse, InstantiateMsg, QueryMsg, ResolveOutcome,
-    SeatSignature, SettlementPayloadV1, SignedCheckpoint,
+    CheckpointsResponse, ExecuteMsg, GameResponse, InstantiateMsg, JoinAdmission, QueryMsg,
+    ResolveOutcome, SeatSignature, SettlementPayloadV1, SignedCheckpoint,
 };
 use eighteen_cosmos_escrow::payload::{
     Payload, KIND_CHECKPOINT, KIND_TERMINAL, REASON_BANK_BROKEN, REASON_RESOLVER_CORRECTION,
@@ -187,6 +187,10 @@ impl Key {
     }
     fn signer(n: usize) -> Key {
         Key::from_label(&format!("18JUNO/TEST/signer/{n}"))
+    }
+    /// The join-admission key (escrow 2.0.0), the same label the contract tests use.
+    fn admission(n: usize) -> Key {
+        Key::from_label(&format!("18JUNO/TEST/admission/{n}"))
     }
     fn sign(&self, digest: &[u8; 32]) -> HexBinary {
         let sig: Signature = self.sk.sign_prehash(digest).unwrap();
@@ -378,6 +382,7 @@ impl World {
             denom: DENOM.to_string(),
             params: params(),
             signer_keys: vec![Key::signer(1).pubkey],
+            admission_pubkey: Key::admission(1).pubkey,
         })
         .unwrap();
         let admin = w.admin.clone();
@@ -581,13 +586,28 @@ impl World {
         }
     }
 
-    fn join_msg(id: u64, seat: usize) -> ExecuteMsg {
+    /// `players[seat]` joins, with the server's admission for exactly that
+    /// wallet (escrow 2.0.0), valid for 15 minutes of block time.
+    fn join_msg(&self, id: u64, seat: usize) -> ExecuteMsg {
+        let ticket = sha256(&[b"18JUNO/TEST/ticket/", &[seat as u8]]);
+        let expires_at = self.time + 900;
+        let digest = crypto::join_admission_digest(
+            CHAIN_ID,
+            &self.contract,
+            id,
+            &self.players[seat],
+            &ticket,
+            expires_at,
+        )
+        .unwrap();
         ExecuteMsg::Join {
             chain_game_id: id,
             consent_pubkey: Key::seat(seat).pubkey,
-            join_ticket: HexBinary::from(
-                sha256(&[b"18JUNO/TEST/ticket/", &[seat as u8]]).as_slice(),
-            ),
+            join_ticket: HexBinary::from(ticket.as_slice()),
+            admission: JoinAdmission {
+                expires_at: Uint64::new(expires_at),
+                signature: Key::admission(1).sign(&digest),
+            },
         }
     }
 
@@ -599,7 +619,8 @@ impl World {
 
     fn join(&mut self, id: u64, seat: usize) -> Outcome {
         let p = self.players[seat].clone();
-        self.exec(&p, &Self::join_msg(id, seat), ANTE)
+        let msg = self.join_msg(id, seat);
+        self.exec(&p, &msg, ANTE)
     }
 
     fn funded(&mut self, n: usize) -> u64 {

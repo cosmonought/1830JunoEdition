@@ -64,7 +64,7 @@
       "additionalProperties": false
     },
     {
-      "description": "Takes the next seat with exactly the creator's gross ante. The consent key must not be another seat's current key.",
+      "description": "Takes the next seat with exactly the creator's gross ante. The consent key must not be another seat's current key. The admission must be the admission key's signature for (this chain, this contract, this game, the sender, this ticket, its expiry); it is checked before anything changes.",
       "type": "object",
       "required": [
         "join"
@@ -73,11 +73,15 @@
         "join": {
           "type": "object",
           "required": [
+            "admission",
             "chain_game_id",
             "consent_pubkey",
             "join_ticket"
           ],
           "properties": {
+            "admission": {
+              "$ref": "#/definitions/JoinAdmission"
+            },
             "chain_game_id": {
               "type": "integer",
               "format": "uint64",
@@ -87,7 +91,12 @@
               "$ref": "#/definitions/HexBinary"
             },
             "join_ticket": {
-              "$ref": "#/definitions/HexBinary"
+              "description": "32 bytes, stored verbatim.",
+              "allOf": [
+                {
+                  "$ref": "#/definitions/HexBinary"
+                }
+              ]
             }
           },
           "additionalProperties": false
@@ -622,6 +631,28 @@
         }
       },
       "additionalProperties": false
+    },
+    {
+      "description": "Replaces the join-admission key (33-byte compressed, on the curve, never a registered signer key). Takes effect at once: every admission signed under the previous key stops verifying; seats already taken are kept.",
+      "type": "object",
+      "required": [
+        "set_admission_key"
+      ],
+      "properties": {
+        "set_admission_key": {
+          "type": "object",
+          "required": [
+            "pubkey"
+          ],
+          "properties": {
+            "pubkey": {
+              "$ref": "#/definitions/HexBinary"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   ],
   "definitions": {
@@ -704,6 +735,33 @@
     "HexBinary": {
       "description": "This is a wrapper around Vec<u8> to add hex de/serialization with serde. It also adds some helper methods to help encode inline.\n\nThis is similar to `cosmwasm_std::Binary` but uses hex. See also <https://github.com/CosmWasm/cosmwasm/blob/main/docs/MESSAGE_TYPES.md>.",
       "type": "string"
+    },
+    "JoinAdmission": {
+      "description": "The hosted server's authorization for the `Join` transaction's SENDER to take a seat in this game with this join ticket (`crypto::join_admission_digest`). It names no wallet: the digest is rebuilt from `info.sender`, so an admission copied into another wallet's `Join` never verifies.",
+      "type": "object",
+      "required": [
+        "expires_at",
+        "signature"
+      ],
+      "properties": {
+        "expires_at": {
+          "description": "Unix seconds; `Join` needs block time (whole seconds) strictly before it.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/Uint64"
+            }
+          ]
+        },
+        "signature": {
+          "description": "64-byte low-s `r ‖ s` by `Config::admission_pubkey` over the JOIN digest.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/HexBinary"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "Mode": {
       "description": "Live or async; its byte (0 or 1) is part of the settlement domain.",

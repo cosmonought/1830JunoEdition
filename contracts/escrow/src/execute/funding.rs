@@ -1,17 +1,17 @@
 //! FUNDING / FUNDED: deposits, withdrawals, cancellation and consent keys.
 
 use cosmwasm_std::{
-    to_json_binary, DepsMut, Env, HexBinary, MessageInfo, Response, Uint128, Uint64,
+    to_json_binary, Addr, Api, DepsMut, Env, HexBinary, MessageInfo, Response, Uint128, Uint64,
 };
 
-use crate::crypto::parse_compressed_pubkey;
+use crate::crypto::{check_signature, join_admission_digest, parse_compressed_pubkey};
 use crate::error::ContractError;
 use crate::helpers::{
     add_secs, load_game, nonpayable, one_coin, refund_all, require_not_paused, require_seated,
     require_state, require_unique_consent_key, save_game, seat_bit, seat_index_of, send,
     MAX_PLAYERS, MIN_PLAYERS,
 };
-use crate::msg::CreateGameResponse;
+use crate::msg::{CreateGameResponse, JoinAdmission};
 use crate::payload::fixed_bytes;
 use crate::payout::{bond_amount, subsidy_cut};
 use crate::state::{Game, GameState, GameTerms, Mode, Route, Seat, CONFIG, NEXT_GAME_ID};
@@ -136,6 +136,46 @@ pub fn create_game(
     Ok(response)
 }
 
+/// The admission key's signature authorizes `sender` (the transaction's own
+/// signer) to join `chain_game_id` of this contract on this chain with
+/// `join_ticket`, and block time is before its expiry. Every signature fault
+/// (length, high-s, wrong digest, wrong key) is the same `InvalidAdmission`.
+fn verify_join_admission(
+    api: &dyn Api,
+    env: &Env,
+    admission_pubkey: &HexBinary,
+    chain_game_id: u64,
+    sender: &Addr,
+    join_ticket: &[u8; 32],
+    admission: &JoinAdmission,
+) -> Result<(), ContractError> {
+    let expires_at = admission.expires_at.u64();
+    if env.block.time.seconds() >= expires_at {
+        return Err(ContractError::AdmissionExpired { expires_at });
+    }
+    let digest = join_admission_digest(
+        &env.block.chain_id,
+        env.contract.address.as_str(),
+        chain_game_id,
+        sender.as_str(),
+        join_ticket,
+        expires_at,
+    )?;
+    check_signature(
+        api,
+        &digest,
+        admission.signature.as_slice(),
+        admission_pubkey.as_slice(),
+    )
+    .map_err(|_| ContractError::InvalidAdmission {})
+}
+
+/// Takes the next seat. Everything is checked before the seat is written: the
+/// game's state, the sender's absence from the roster, pause, deadline, room,
+/// the consent key, the ticket's shape, then the ADMISSION (which binds the
+/// sender, so neither a copied ticket nor a copied admission seats anyone
+/// else), then the exact ante.
+#[allow(clippy::too_many_arguments)]
 pub fn join(
     deps: DepsMut,
     env: Env,
@@ -143,6 +183,7 @@ pub fn join(
     chain_game_id: u64,
     consent_pubkey: HexBinary,
     join_ticket: HexBinary,
+    admission: JoinAdmission,
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
     let mut game = load_game(deps.storage, chain_game_id)?;
@@ -160,7 +201,16 @@ pub fn join(
     }
     parse_compressed_pubkey("consent_pubkey", consent_pubkey.as_slice())?;
     require_unique_consent_key(&game, &consent_pubkey, None)?;
-    fixed_bytes::<32>("join_ticket", &join_ticket)?;
+    let ticket = fixed_bytes::<32>("join_ticket", &join_ticket)?;
+    verify_join_admission(
+        deps.api,
+        &env,
+        &config.admission_pubkey,
+        chain_game_id,
+        &info.sender,
+        &ticket,
+        &admission,
+    )?;
 
     let gross = one_coin(&info, &game.denom)?;
     if gross != game.ante_gross {

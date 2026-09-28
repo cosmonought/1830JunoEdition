@@ -531,6 +531,7 @@ impl Fuzz {
                     chain_game_id: id,
                     consent_pubkey: key.pubkey.clone(),
                     join_ticket: ticket("fuzz"),
+                    admission: self.s.admission_for(id, &who, &ticket("fuzz")),
                 };
                 let res = self.exec(&who, &msg, &coins(amount, DENOM));
                 assert!(!(reuse && res.is_ok()), "a duplicate consent key joined");
@@ -2521,6 +2522,7 @@ fn inv10_nothing_signed_for_one_game_is_accepted_by_another() {
                 denom: DENOM.to_string(),
                 params: default_params(),
                 signer_keys: vec![Key::signer(1).pubkey],
+                admission_pubkey: Key::admission(1).pubkey,
             },
             &[],
             "escrow-2",
@@ -2969,6 +2971,7 @@ fn inv16_consent_keys_are_unique_within_a_game() {
         chain_game_id: id,
         consent_pubkey: Key::seat(0).pubkey,
         join_ticket: ticket(PLAYER_LABELS[1]),
+        admission: s.admission_for(id, &p1, &ticket(PLAYER_LABELS[1])),
     };
     assert_eq!(
         s.exec(&p1, &dup, &coins(ANTE, DENOM)).unwrap_err(),

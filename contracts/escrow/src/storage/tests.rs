@@ -593,6 +593,7 @@ fn queries_return_the_public_game() {
     let config = Config {
         admin: Addr::unchecked("admin"),
         operator: Addr::unchecked("operator"),
+        admission_pubkey: HexBinary::from(vec![0x02; 33]),
         resolver: Addr::unchecked("resolver"),
         treasury: Addr::unchecked("treasury"),
         denom: "ujunox".to_string(),

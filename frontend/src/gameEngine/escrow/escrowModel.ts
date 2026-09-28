@@ -74,6 +74,12 @@ export interface EscrowCapabilities {
   readonly seatIndexStableBeforeStart: false;
   /** The largest pool the asset can express (Gno coin amounts are int64). */
   readonly poolBound: "u128" | "i64";
+  /** ESCROW-JOIN: how the chain decides who may take a seat. `server-admission`: Join verifies the hosted server's
+   *  signature over (network, deployment, game, SENDER, ticket, expiry) -- never an allowlist, never first-come. Every
+   *  backend must say so before it can hold money (a backend that seats any payer is the ESCROW-3B junk-Join defect). */
+  readonly joinAuthorization: "server-admission";
+  /** The scheme the server's admission key signs with (the codec's `admissionScheme`). */
+  readonly admissionScheme: SignatureSchemeId;
 }
 
 export const JUNO_CAPABILITIES_V1: EscrowCapabilities = Object.freeze({
@@ -94,6 +100,8 @@ export const JUNO_CAPABILITIES_V1: EscrowCapabilities = Object.freeze({
   deploymentModels: Object.freeze(["wasm-admin-migratable", "wasm-immutable"] as const),
   seatIndexStableBeforeStart: false,
   poolBound: "u128",
+  joinAuthorization: "server-admission",
+  admissionScheme: "secp256k1-ecdsa-prehashed/rs64-low-s",
 } as const);
 
 /** GNOLAND-0's findings as a DRAFT capability set: GNOLAND-2/4 confirm each against a pinned toolchain. */
@@ -115,6 +123,8 @@ export const GNO_CAPABILITIES_DRAFT: EscrowCapabilities = Object.freeze({
   deploymentModels: Object.freeze(["realm-immutable", "realm-private-redeployable"] as const),
   seatIndexStableBeforeStart: false,
   poolBound: "i64",
+  joinAuthorization: "server-admission",
+  admissionScheme: "ed25519-pure/sig64",
 } as const);
 
 /* ------------------------------------------------------------------ */
@@ -584,6 +594,11 @@ export type EscrowErrorCode =
   | "BACKEND_UNAVAILABLE"
   | "UNSUPPORTED_CAPABILITY"
   | "ADMIN_REFUSED"
+  /** ESCROW-JOIN: the Join carried no valid server admission for this wallet (forged, copied, foreign, or signed under
+   *  a key rotated out since). The same bytes never succeed; the player asks the server for a fresh admission. */
+  | "ADMISSION_REFUSED"
+  /** ESCROW-JOIN: the admission's expiry passed before the Join was included; ask the server for a fresh one. */
+  | "ADMISSION_EXPIRED"
   | "BACKEND_INVARIANT";
 
 /**
@@ -637,6 +652,8 @@ export const ESCROW_ERROR_RETRY: Readonly<Record<EscrowErrorCode, EscrowRetry>> 
   BACKEND_UNAVAILABLE: "backoff",
   UNSUPPORTED_CAPABILITY: "never",
   ADMIN_REFUSED: "never",
+  ADMISSION_REFUSED: "after-refresh",
+  ADMISSION_EXPIRED: "after-refresh",
   BACKEND_INVARIANT: "reconcile-first",
 });
 

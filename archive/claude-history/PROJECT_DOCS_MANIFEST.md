@@ -15,10 +15,15 @@ Before the prune the Project held **146** docs (`claude/…`, 1,790,534 B of a 2
 
 No Project-only doc was transcribed or deleted in this pass.
 
-## CURRENT (15)
+## CURRENT (18)
+
+Added after the prune: ESCROW-3B and the ESCROW-4 preflight (2026-09-27), and ESCROW-JOIN (2026-09-28).
 
 | Doc | Role |
 |---|---|
+| `ESCROW_JOIN_ADMISSION_SECURITY_REPAIR_2026-09-28.md` | The contract's Join admission (escrow 2.0.0); the canonical wasm `5ecc3022…`; `authorizeJoin`; the ESCROW-4 handoff (§17) |
+| `ESCROW3B_JUNO_BACKEND_2026-09-27.md` | Phase 3B: the Juno backend, durable intents, reversible freeze, the 3B → 4 handoff (§21). Its §18 junk-Join blocker is closed by ESCROW-JOIN |
+| `ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT_2026-09-27.md` | The ESCROW-4 design (W-1 / OD-4-8 superseded by ESCROW-JOIN) |
 | `ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md` | Phase 3A: v11 settlement certified [10, 11]; the money-game lifecycle, seam, continuation, tickets, identity hardening, operator path; ESCROW-3B inputs (§19) |
 | `DA8_RULES_V11_CLOSURE_2026-09-27.md` | Phase 2 closure; v11; certified-only settlement ruling; the ESCROW-3A entry gate |
 | `LIVE2F_LIVE3D_HOSTED_AUTHORITY_CERTIFICATION_2026-09-27.md` | Phase 1 hosted-authority certification (`0ae252d`); the 11 ESCROW-3 prerequisites |
@@ -29,13 +34,13 @@ No Project-only doc was transcribed or deleted in this pass.
 | `SET0A_golden_vectors_2026-09-25.json` | SET-0A recipes. The canonical board texts exist only here (git holds the derived fixture) |
 | `SET0B_SETTLEMENT_PRIMITIVES_2026-09-25.md` | Settlement primitives and golden rebuild |
 | `SET0C_CROSS_LANGUAGE_CONFORMANCE_2026-09-26.md` | Builder rules, vector pins, ESCROW-3 obligations |
-| `ESCROW_B2_CANONICAL_ARTIFACT_GATE_2026-09-26.md` | The canonical wasm `b263277a…` and optimizer pins |
+| `ESCROW_B2_CANONICAL_ARTIFACT_GATE_2026-09-26.md` | The artifact-gate procedure and optimizer pins; its wasm `b263277a…` (escrow 1.0.0) is historical since ESCROW-JOIN |
 | `ESCROW_B2.1_OPTIMIZER_RUST181_COMPAT_2026-09-26.md` | The Rust 1.81 / lock pins |
 | `GNOLAND1_CHAIN_NEUTRAL_ESCROW_INTERFACE_2026-09-26.md` | The interface ESCROW-3 implements (§19–23, O-1…O-10) |
 | `GNOLAND1.1_CANONICAL_ESCROW_0006_REGRESSION_2026-09-26.md` | GNOLAND baseline; `code_checksums` pin; oracle requirement |
 | `RUST_RETIREMENT_AUDIT_2026-09-26.md` | The Rust-retirement plan (partly stale; see the canonical context §B) |
 
-## REFERENCE (11)
+## REFERENCE (13)
 
 | Doc | When to open |
 |---|---|
@@ -44,6 +49,8 @@ No Project-only doc was transcribed or deleted in this pass.
 | `ESCROW2.2_COMPROMISED_SETTLEMENT_CLOSURE_2026-09-26.md` | `CompromisedSettlement` |
 | `ESCROW_B2_canonical_gas_table_b263277a.md` | B2 gas evidence. Not in git by design (INTEGRATION-1 §12B) |
 | `ESCROW_B2_run-b2.ps1` | The B2 reproduction kit. Not in git by design |
+| `ESCROW_JOIN_canonical_gas_table_5ecc3022.md` | The escrow 2.0.0 gas table and its delta over 1.0.0. Not in git by design |
+| `ESCROW_JOIN_run-join-b2.ps1` | The ESCROW-JOIN reproduction kit (the B2 kit retargeted). Not in git by design |
 | `LIVE2_IDENTITY_ROOM_AUTHORITY_DESIGN_2026-09-25.md` | Authz matrix §6, RV rules, limits. Its §10 is superseded by LIVE-2E |
 | `LIVE3_COMMIT_PERSISTENCE_RECOVERY_DESIGN_2026-09-25.md` | §15 DynamoDB, §19 escrow seam, §20.3, FI-1…29 (LIVE-5), §24.2 vocabulary |
 | `LIVE_MULTIPLAYER_AWS_ARCHITECTURE_AUDIT_2026-09-25.md` | **§25 only**: the only definition of LIVE-4/5/6 |

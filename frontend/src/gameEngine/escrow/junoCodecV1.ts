@@ -31,7 +31,8 @@ import {
   type DomainBinding,
   type EscrowCodec,
 } from "./escrowCodec";
-import type { EscrowBackendKind } from "./escrowCodec";
+import type { EscrowBackendKind, JoinAdmissionInput } from "./escrowCodec";
+import { joinAdmissionDigestV1 } from "./junoJoinAdmissionV1";
 import type { EscrowBindingV2, EscrowError, EscrowErrorCode, JunoDeploymentV1 } from "./escrowModel";
 import { ESCROW_ERROR_RETRY } from "./escrowModel";
 
@@ -106,6 +107,7 @@ export const JUNO_CODEC_V1: EscrowCodec<SettlementDomainInputs> = Object.freeze(
   maturity: "certified" as const,
   settlementScheme: "secp256k1-ecdsa-prehashed/rs64-low-s" as const,
   consentScheme: "secp256k1-ecdsa-prehashed/rs64-low-s" as const,
+  admissionScheme: "secp256k1-ecdsa-prehashed/rs64-low-s" as const,
   consentBindsSeat: false,
   annulBindsSeat: false,
 
@@ -154,6 +156,23 @@ export const JUNO_CODEC_V1: EscrowCodec<SettlementDomainInputs> = Object.freeze(
   }): CodecDigest<"annul"> {
     requireSeatIndex(args.seat_index, args.seat_count, "annul");
     return codecDigest(ID, "annul", annulDigestV1(args.domain, args.trusted_seq));
+  },
+
+  /** ESCROW-JOIN: escrow 2.0.0's `crypto::join_admission_digest` (junoJoinAdmissionV1.ts). The deployment is the contract
+   *  address; the wallet must already be canonical (the chain's sender is lower-case bech32). */
+  joinAdmissionDigest(input: JoinAdmissionInput): CodecDigest<"join-admission"> {
+    return codecDigest(
+      ID,
+      "join-admission",
+      joinAdmissionDigestV1({
+        chain_id: input.chain_id,
+        contract_addr: junoAddress(input.deployment, "join admission deployment"),
+        chain_game_id: input.chain_game_id,
+        wallet: junoAddress(input.wallet, "join admission wallet"),
+        join_ticket: input.join_ticket_hex,
+        expires_at: input.expires_at,
+      }),
+    );
   },
 
   extensions: Object.freeze({}),
@@ -245,6 +264,10 @@ export const JUNO_CONTRACT_ERROR_MAP: Readonly<Record<string, EscrowErrorCode>> 
   MigrateForeignContract: "ADMIN_REFUSED",
   MigrateDowngrade: "ADMIN_REFUSED",
   BadContractVersion: "ADMIN_REFUSED",
+  // ESCROW-JOIN (escrow 2.0.0): a Join the server did not admit for this wallet, or admitted too long ago.
+  InvalidAdmission: "ADMISSION_REFUSED",
+  AdmissionExpired: "ADMISSION_EXPIRED",
+  MigrateUnsupported: "ADMIN_REFUSED",
 });
 
 /** A Juno `ContractError` (by variant name) as a neutral error. An unknown name is a BACKEND_INVARIANT: the

@@ -162,6 +162,17 @@ pub enum ContractError {
     #[error("every seat must sign; seat {seat_index} is missing")]
     MissingConsent { seat_index: u8 },
 
+    // ------------------------------------------------------------ admission
+    /// `Join` carried no valid signature of the admission key over (this chain,
+    /// this contract, this game, the SENDER, this ticket, this expiry): a
+    /// malformed, high-s, copied, foreign or forged admission alike.
+    #[error("the join admission does not authorize this wallet for this game")]
+    InvalidAdmission {},
+
+    /// Block time (whole seconds) has reached the admission's `expires_at`.
+    #[error("the join admission expired at {expires_at}")]
+    AdmissionExpired { expires_at: u64 },
+
     // --------------------------------------------------------------- timing
     #[error("the challenge window is open until {until}")]
     WindowOpen { until: Timestamp },
@@ -203,6 +214,13 @@ pub enum ContractError {
 
     #[error("unparseable contract version {version}")]
     BadContractVersion { version: String },
+
+    /// A stored version whose state this code cannot read (before 2.0.0 there
+    /// was no admission key): deploy a new contract instead.
+    #[error(
+        "cannot migrate from version {from}: its state predates this code; deploy a new contract"
+    )]
+    MigrateUnsupported { from: String },
 }
 
 impl From<OverflowError> for ContractError {

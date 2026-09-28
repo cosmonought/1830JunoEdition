@@ -17,6 +17,9 @@ import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/ro
 import { createMemoryOpsRecorder } from "../persistence/opsRecorder";
 import { createMemoryChainIntentStore, type ChainIntentStore } from "./chainIntents";
 import { createEscrowService, type EscrowService, type JunoBackendRuntime } from "./escrowService";
+import type { WalletControlProof, WalletControlProofs } from "./escrowPorts";
+import { junoJoinAdmissionSigner, type JoinAdmissionSigner } from "./juno/joinAdmission";
+import { joinAdmissionDigestV1 } from "../../../frontend/src/gameEngine/escrow/junoJoinAdmissionV1";
 import { createMemoryFinancialGameStore, type FinancialGameStore } from "./financialGameStore";
 import { createMemorySigningJournal, type InspectableSigningJournal } from "./signingJournal";
 import { serverPrefixReplay, type PrefixReplay } from "./settlementEvidence";
@@ -25,7 +28,7 @@ import { addressOfPublicKey } from "./juno/cosmosTx";
 import { FakeJunoChain } from "./juno/fakeJunoChain";
 import { DEFAULT_GAS_POLICY } from "./juno/gasPolicy";
 import { createJunoRelayer, type Relayer } from "./juno/relayer";
-import { publicKeyOf } from "./juno/secp256k1";
+import { publicKeyOf, signDigest } from "./juno/secp256k1";
 import { developmentDigestSigner, junoSettlementSigner, type DigestSigner } from "./juno/signer";
 import type { SettlementKeyConfig } from "./escrowPorts";
 import type { FinancialDeploymentPin } from "./moneyLifecycle";
@@ -33,13 +36,20 @@ import type { FinancialDeploymentPin } from "./moneyLifecycle";
 export const GAME_A = "g_0000000000000000000000000w";
 export const GAME_B = "g_000000000000000000000000cw";
 export const CHAIN_ID = "uni-7";
-export const CANONICAL_CHECKSUM = "b263277aa5d1d63c33e8e238f27ad2b9ee4749c9a66abe82ef3146d51d119296";
+/** The canonical escrow 2.0.0 wasm (ESCROW-JOIN), pinned here independently of `junoConfig.ts`. */
+export const CANONICAL_CHECKSUM = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8";
+/** The historical escrow 1.0.0 artifact (ESCROW-B2): its Join seated any payer; configuration refuses it by name. */
+export const HISTORICAL_1_0_0_CHECKSUM = "b263277aa5d1d63c33e8e238f27ad2b9ee4749c9a66abe82ef3146d51d119296";
 export const T0 = 1_760_000_000_000;
 
 const sha = (label: string) => createHash("sha256").update(label).digest();
 const GUARD = { serverMode: "development" as const, networkClass: "testnet" as const, chainId: CHAIN_ID, acknowledged: true };
 
 export const SETTLEMENT_SECRET = sha("18JUNO/TEST/signer/1");
+/** The join-admission key: the frozen vectors' `18JUNO/TEST/admission/1` (so the fixtures and the vectors agree). */
+export const ADMISSION_SECRET = sha("18JUNO/TEST/admission/1");
+export const ADMISSION_PUBKEY = publicKeyOf(ADMISSION_SECRET).toString("hex");
+export const ADMISSION_TTL_SECS = 600;
 export const RELAYER_SECRET = sha("18COSMOS/TEST/relayer");
 export const RELAYER_ADDRESS = addressOfPublicKey(publicKeyOf(RELAYER_SECRET), "juno");
 export const CONTRACT = addressOfPublicKey(publicKeyOf(sha("contract")), "juno");
@@ -71,6 +81,10 @@ export interface World {
   clock: { now: number };
   warnings: string[];
   replay: PrefixReplay;
+  /** ESCROW-JOIN: the wallet-control proofs per (game, player, principal) -- what ESCROW-4 will record (tests set them). */
+  readonly proofs: Map<string, WalletControlProof>;
+  /** ESCROW-JOIN: identity's verdict on every ticket's security context (tests end it). */
+  standing: "standing" | "ended";
   /** Rebuild the service and the relayer over the same durable stores (a process restart). */
   restart(): Promise<void>;
   /** Relayer passes, blocks and service jobs until `done()` or `max` rounds. */
@@ -86,6 +100,17 @@ export interface WorldOptions {
   readonly signerKeys?: readonly string[];
   readonly timeoutBlocks?: number;
   readonly challengeWindowSecs?: number;
+  /** ESCROW-JOIN: build the service without an admission signer (production before LIVE-5 wires KMS). */
+  readonly noAdmissionSigner?: boolean;
+  /** ESCROW-JOIN: wrap the admission signer (tests observe what it is asked to sign, and when). */
+  readonly wrapAdmissionSigner?: (signer: JoinAdmissionSigner) => JoinAdmissionSigner;
+}
+
+export const proofKey = (gameId: string, playerId: string, principalId: string) => `${gameId}|${playerId}|${principalId}`;
+
+/** A wallet-control proof as ESCROW-4's verifier would record it (tests only). */
+export function proofFor(gameId: string, playerId: string, principalId: string, wallet: string, verifiedAt: number = T0): WalletControlProof {
+  return { kind: "adr036", game_id: gameId, player_id: playerId, principal_id: principalId, wallet, challenge_digest: "5a".repeat(32), verified_at: verifiedAt };
 }
 
 export function settlementKeyConfig(): SettlementKeyConfig {
@@ -104,6 +129,7 @@ export function makeWorld(options: WorldOptions = {}): World {
     codeId: "4242",
     codeChecksum: CANONICAL_CHECKSUM,
     signerKeys: options.signerKeys ?? [publicKeyOf(SETTLEMENT_SECRET).toString("hex")],
+    admissionPubkey: ADMISSION_PUBKEY,
     challengeWindowSecs: options.challengeWindowSecs ?? 60,
   });
   chain.fund(RELAYER_ADDRESS, BigInt(10_000_000));
@@ -112,11 +138,14 @@ export function makeWorld(options: WorldOptions = {}): World {
   const intents = options.intents ?? createMemoryChainIntentStore();
   const journal = options.journal ?? createMemorySigningJournal(() => clock.now);
   const tickets = options.tickets ?? createMemoryWalletTicketStore();
-  const ledger = createWalletTicketLedger({ store: tickets, standing: () => ({ kind: "standing" }), holdsSeat: () => true, now: () => clock.now, random: (size) => Buffer.alloc(size, 7) });
+  const standingOf = () => (world.standing === "ended" ? ({ kind: "ended", why: "family" } as const) : ({ kind: "standing" } as const));
+  const ledger = createWalletTicketLedger({ store: tickets, standing: () => standingOf(), holdsSeat: () => true, now: () => clock.now, random: (size) => Buffer.alloc(size, 7) });
   const ops = createMemoryOpsRecorder();
   const logs = new Map<string, ServerLogEntry[]>();
   const warnings: string[] = [];
   const replay = options.replay ?? serverPrefixReplay(BUILD);
+  const proofs = new Map<string, WalletControlProof>();
+  const walletProofs: WalletControlProofs = { proofOf: async (input) => proofs.get(proofKey(input.gameId, input.playerId, input.principalId)) ?? null };
 
   const world = {
     chain,
@@ -130,6 +159,8 @@ export function makeWorld(options: WorldOptions = {}): World {
     clock,
     warnings,
     replay,
+    proofs,
+    standing: "standing",
   } as unknown as World;
 
   function build(): void {
@@ -157,6 +188,10 @@ export function makeWorld(options: WorldOptions = {}): World {
       now: () => clock.now,
       warn: (line) => warnings.push(line),
       ops,
+      admission: options.noAdmissionSigner
+        ? undefined
+        : { signer: (options.wrapAdmissionSigner ?? ((signer) => signer))(junoJoinAdmissionSigner(ADMISSION_PUBKEY, JUNO_CODEC_V1, developmentDigestSigner(ADMISSION_SECRET, "admission", GUARD))), ttlSecs: ADMISSION_TTL_SECS },
+      walletProofs,
     });
     relayer = createJunoRelayer({
       rest: chain,
@@ -288,3 +323,9 @@ export function commit(world: World, gameId: string, session: RoomSession): void
 }
 
 export const joinTicketFor = joinTicketV1;
+
+/** A correct server's admission for `wallet` (signed directly with the test key; `authorizeJoin` is tested on its own). */
+export function admissionFor(world: World, chainGameId: string, wallet: string, joinTicket: string, expiresAt: number = world.chain.time + ADMISSION_TTL_SECS): { expires_at: string; signature: string } {
+  const digest = joinAdmissionDigestV1({ chain_id: CHAIN_ID, contract_addr: CONTRACT, chain_game_id: BigInt(chainGameId), wallet, join_ticket: joinTicket, expires_at: BigInt(expiresAt) });
+  return { expires_at: String(expiresAt), signature: signDigest(ADMISSION_SECRET, Buffer.from(digest, "hex")).toString("hex") };
+}

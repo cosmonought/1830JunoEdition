@@ -23,7 +23,7 @@ import { MsgExecuteContract } from "cosmjs-types/cosmwasm/wasm/v1/tx";
 import { addressOfPublicKey, assembleTx, encodeAuthInfo, encodeMsgExecuteContract, encodeTxBody, prepareExecuteTx, txHashOf } from "../../../server/src/escrow/juno/cosmosTx";
 import { publicKeyOf, signDigest, verifyDigest } from "../../../server/src/escrow/juno/secp256k1";
 import { secretFromKeyText } from "../../../server/src/escrow/juno/signer";
-import { RELAYER_EXECUTE } from "../../../server/src/escrow/juno/junoContract";
+import { RELAYER_EXECUTE, WALLET_EXECUTE } from "../../../server/src/escrow/juno/junoContract";
 import { variantsDigestV1 } from "../gameEngine/escrow/variantsDigest";
 
 const sha = (text: string) => createHash("sha256").update(text).digest();
@@ -32,6 +32,9 @@ const CASES = [
   { chainId: "uni-7", accountNumber: "12", sequence: "0", gasLimit: "180000", fee: "13500", timeoutHeight: "1234567", memo: "", msg: RELAYER_EXECUTE.finalize("7") },
   { chainId: "juno-1", accountNumber: "0", sequence: "18446744073709551615", gasLimit: "1500000", fee: "112500", timeoutHeight: "0", memo: "", msg: RELAYER_EXECUTE.start("18446744073709551615", "ab".repeat(32)) },
   { chainId: "uni-7", accountNumber: "300", sequence: "127", gasLimit: "128", fee: "1", timeoutHeight: "128", memo: "escrow-3b", msg: RELAYER_EXECUTE.settle("3", { version: 1 } as never, "cd".repeat(64)) },
+  // ESCROW-JOIN: the wallet's Join carries the server's admission; its JSON rides MsgExecuteContract verbatim (a real Join also
+  // attaches the ante as funds -- the wallet's own, added by ESCROW-4's wallet path; the relayer's encoder never carries funds).
+  { chainId: "juno-1", accountNumber: "7", sequence: "3", gasLimit: "250000", fee: "18750", timeoutHeight: "0", memo: "", msg: WALLET_EXECUTE.join("18446744073709551615", `02${"11".repeat(32)}`, "22".repeat(32), { expiresAt: "1790000900", signature: "33".repeat(64) }) },
 ];
 
 describe("ESCROW-3B: the relayer's transaction bytes equal CosmJS's", () => {

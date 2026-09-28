@@ -15,18 +15,22 @@
 //   static (at startup; a problem refuses the start in production, and turns the backend off in development)
 //     - the chain id, network class and address prefix; a mainnet chain id is always class mainnet;
 //     - the contract address (bech32 `juno`), and its code checksum is the CANONICAL one this build carries
-//       (`b263277a…9296`, ESCROW-B2) -- configuration can narrow the accepted set, never widen it;
+//       (escrow 2.0.0, ESCROW-JOIN; the 1.0.0 artifact `b263277a…9296` admitted any payer to Join and is refused by
+//       name) -- configuration can narrow the accepted set, never widen it;
 //     - the endpoints (https; http only for a loopback development node), the gas policy (integers, bounded);
 //     - the journal directory: absolute, and OUTSIDE the data directory in production (GNOLAND-1 F1);
 //     - the signers: KMS in production; a development signer only in GS_MODE=development on testnet/local with the
 //       explicit switch; the relayer address IS the address the relayer key controls; the settlement key IS the
-//       configured public key;
+//       configured public key; the JOIN-ADMISSION key (ESCROW-JOIN) IS its configured public key, and all three keys
+//       are different keys;
 //     - the build's settlement codec, certified rules versions and financial protocol are the ones pinned here.
 //   online (`verifyJunoDeployment`, before any signature or broadcast; retried while the chain is unreachable)
 //     - every node answers the configured chain id (a node for another network is refused, never used);
 //     - the contract's code id resolves to the canonical checksum, its wasm admin is exactly the configured one, and its
 //       cw2 name/version are the escrow's;
-//     - the contract's denom is the configured denom, its operator IS the relayer address, its resolver is trusted;
+//     - the contract's denom is the configured denom, its operator IS the relayer address, its resolver is trusted,
+//       and its join-admission key IS this server's admission key (a contract that verifies another key -- or none --
+//       would refuse every admitted player, or admit players this server never admitted);
 //     - the signer registry (read to its end) holds the settlement key, active, and no active key this server does not
 //       hold.
 //   A MISMATCH turns financial mode off for the life of the process (loudly); UNAVAILABILITY retries.
@@ -46,13 +50,21 @@ import { parseConfigResponse, parseSignerKeysResponse, QUERY } from "./junoContr
 import { checkEndpoint, DEFAULT_ENDPOINT_LIMITS, JunoRpcError, type JunoRest } from "./junoRest";
 import { MAINNET_CHAIN_IDS } from "./signer";
 
-export const JUNO_BACKEND_CONFIG_FORMAT = "18COSMOS/JUNO-BACKEND/v1";
+/** v2 (ESCROW-JOIN): adds the required `admission_key`. A v1 file names no admission key and is refused. */
+export const JUNO_BACKEND_CONFIG_FORMAT = "18COSMOS/JUNO-BACKEND/v2";
 
-/** The canonical optimized escrow wasm this build is certified against (ESCROW-B2 / B2.1; PROJECT_CANONICAL_CONTEXT §D.3). */
-export const CANONICAL_JUNO_ESCROW_CHECKSUMS: readonly string[] = Object.freeze(["b263277aa5d1d63c33e8e238f27ad2b9ee4749c9a66abe82ef3146d51d119296"]);
+/** The canonical optimized escrow wasm this build is certified against: escrow 2.0.0 with the join admission
+ *  (ESCROW-JOIN, built by the ESCROW-B2 procedure; PROJECT_CANONICAL_CONTEXT §D.3). */
+export const CANONICAL_JUNO_ESCROW_CHECKSUMS: readonly string[] = Object.freeze(["5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"]);
+/** Historical artifacts that must never hold money (ESCROW-B2 1.0.0: its Join seated any wallet paying the ante). */
+export const REFUSED_JUNO_ESCROW_CHECKSUMS: readonly string[] = Object.freeze(["b263277aa5d1d63c33e8e238f27ad2b9ee4749c9a66abe82ef3146d51d119296"]);
 /** The contract's cw2 identity (`contracts/escrow/src/contract.rs`). */
 export const JUNO_ESCROW_CONTRACT_NAME = "crates.io:eighteen-cosmos-escrow";
-export const JUNO_ESCROW_CONTRACT_VERSIONS: readonly string[] = Object.freeze(["1.0.0"]);
+export const JUNO_ESCROW_CONTRACT_VERSIONS: readonly string[] = Object.freeze(["2.0.0"]);
+/** How long a join admission stays usable on chain (seconds): long enough for a wallet approval and inclusion, short
+ *  enough that a superseded or revoked ticket's admission dies quickly (the contract compares block time). */
+export const DEFAULT_ADMISSION_TTL_SECS = 600;
+export const ADMISSION_TTL_BOUNDS_SECS = Object.freeze([120, 1800] as const);
 export const DEV_SIGNER_SWITCH = "allow-unprotected-testnet-key";
 
 export type SignerRef = { readonly kind: "kms"; readonly key_ref: string } | { readonly kind: "development"; readonly key_file: string };
@@ -69,6 +81,8 @@ export interface JunoBackendConfig {
   readonly symbol: string;
   readonly relayer: { readonly address: string; readonly signer: SignerRef };
   readonly settlementKey: { readonly signerKeyId: number; readonly publicKeyHex: string; readonly signer: SignerRef };
+  /** ESCROW-JOIN: the key the contract's `Config.admission_pubkey` must be; signs Join admissions only. */
+  readonly admissionKey: { readonly publicKeyHex: string; readonly signer: SignerRef; readonly ttlSecs: number };
   readonly trust: EscrowTrustPolicy;
   readonly gas: GasPolicy;
   readonly timeoutBlocks: number;
@@ -97,7 +111,7 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
   };
   if (!isObject(raw)) throw new JunoConfigError(["the file is not a JSON object"]);
   need(raw.format === JUNO_BACKEND_CONFIG_FORMAT, `format must be ${JUNO_BACKEND_CONFIG_FORMAT}`);
-  const allowed = ["format", "chain_id", "network_class", "rest_endpoints", "allow_insecure_local_http", "contract_address", "code_checksum", "wasm_admin", "denom", "asset_symbol", "relayer", "settlement_key", "trust", "gas", "timeout_blocks", "journal_dir", "dev_signer", "request_timeout_ms"];
+  const allowed = ["format", "chain_id", "network_class", "rest_endpoints", "allow_insecure_local_http", "contract_address", "code_checksum", "wasm_admin", "denom", "asset_symbol", "relayer", "settlement_key", "admission_key", "trust", "gas", "timeout_blocks", "journal_dir", "dev_signer", "request_timeout_ms"];
   for (const key of Object.keys(raw)) need(allowed.includes(key), `unknown field ${key} (a misspelt setting is never ignored)`);
 
   const chainId = typeof raw.chain_id === "string" && /^[a-z0-9][a-z0-9-]{1,48}$/.test(raw.chain_id) ? raw.chain_id : "";
@@ -135,6 +149,7 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
   };
   const contract = address(raw.contract_address, "contract_address");
   const checksum = typeof raw.code_checksum === "string" ? raw.code_checksum : "";
+  need(!REFUSED_JUNO_ESCROW_CHECKSUMS.includes(checksum), `code_checksum ${checksum} is the historical escrow 1.0.0 artifact, whose Join seats any wallet paying the ante; deploy the canonical 2.0.0 wasm`);
   need(CANONICAL_JUNO_ESCROW_CHECKSUMS.includes(checksum), `code_checksum must be the canonical escrow wasm (${CANONICAL_JUNO_ESCROW_CHECKSUMS[0]})`);
   const wasmAdmin = raw.wasm_admin === null ? null : typeof raw.wasm_admin === "string" ? address(raw.wasm_admin, "wasm_admin") : "";
   need(raw.wasm_admin === null || typeof raw.wasm_admin === "string", "wasm_admin must be null (immutable) or the published admin address (OD-G1-1)");
@@ -164,6 +179,25 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
   need(publicKeyHex !== "", "settlement_key.public_key_hex must be a 33-byte compressed key (lowercase hex)");
   const settlementKey = { signerKeyId, publicKeyHex, signer: signerRef(keyRaw.signer, "settlement_key") };
   need(JSON.stringify(settlementKey.signer) !== JSON.stringify(relayer.signer), "the settlement key and the relayer key must be different keys");
+  /* ESCROW-JOIN: the admission key -- its own key, never the relayer's or the settlement key (a leak of one role's key
+     must not grant another role). */
+  const admissionRaw = isObject(raw.admission_key) ? raw.admission_key : null;
+  need(admissionRaw !== null, "admission_key is required: the contract refuses every Join without this server's admission");
+  const admissionAllowed = ["public_key_hex", "signer", "ttl_secs"];
+  for (const key of Object.keys(admissionRaw ?? {})) need(admissionAllowed.includes(key), `unknown field admission_key.${key}`);
+  const admissionPublicKeyHex = typeof admissionRaw?.public_key_hex === "string" && /^0[23][0-9a-f]{64}$/.test(admissionRaw.public_key_hex) ? admissionRaw.public_key_hex : "";
+  need(admissionPublicKeyHex !== "", "admission_key.public_key_hex must be a 33-byte compressed key (lowercase hex)");
+  need(admissionPublicKeyHex === "" || admissionPublicKeyHex !== publicKeyHex, "the admission key and the settlement key must be different keys");
+  const [ttlMin, ttlMax] = ADMISSION_TTL_BOUNDS_SECS;
+  const ttlSecs =
+    admissionRaw?.ttl_secs === undefined
+      ? DEFAULT_ADMISSION_TTL_SECS
+      : typeof admissionRaw.ttl_secs === "number" && Number.isInteger(admissionRaw.ttl_secs) && admissionRaw.ttl_secs >= ttlMin && admissionRaw.ttl_secs <= ttlMax
+        ? admissionRaw.ttl_secs
+        : (problems.push(`admission_key.ttl_secs must be ${ttlMin}..${ttlMax}`), DEFAULT_ADMISSION_TTL_SECS);
+  const admissionKey = { publicKeyHex: admissionPublicKeyHex, signer: admissionRaw === null ? ({ kind: "kms", key_ref: "" } as SignerRef) : signerRef(admissionRaw.signer, "admission_key"), ttlSecs };
+  need(JSON.stringify(admissionKey.signer) !== JSON.stringify(relayer.signer), "the admission key and the relayer key must be different keys");
+  need(JSON.stringify(admissionKey.signer) !== JSON.stringify(settlementKey.signer), "the admission key and the settlement key must be different keys");
 
   const trustRaw = isObject(raw.trust) ? raw.trust : {};
   const list = (value: unknown, where: string) => (Array.isArray(value) && value.length > 0 ? value.map((entry, i) => address(entry, `${where}[${i}]`)) : (problems.push(`${where} must list at least one address`), []));
@@ -241,6 +275,7 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
     symbol,
     relayer,
     settlementKey,
+    admissionKey,
     trust,
     gas,
     timeoutBlocks,
@@ -260,12 +295,14 @@ export function settlementKeyConfigOf(config: JunoBackendConfig, kmsKeyRef: stri
 }
 
 /** The keys agree with the configuration (the static half that needs the opened signers). */
-export function checkSignerIdentities(config: JunoBackendConfig, relayerPublicKey: Buffer, settlementPublicKey: Buffer, settlementKey: SettlementKeyConfig): void {
+export function checkSignerIdentities(config: JunoBackendConfig, relayerPublicKey: Buffer, settlementPublicKey: Buffer, settlementKey: SettlementKeyConfig, admissionPublicKey: Buffer): void {
   const problems: string[] = [];
   const controlled = addressOfPublicKey(relayerPublicKey, "juno");
   if (controlled !== config.relayer.address) problems.push(`the relayer key controls ${controlled}, not the configured relayer ${config.relayer.address}`);
   if (settlementPublicKey.toString("hex") !== config.settlementKey.publicKeyHex) problems.push("the settlement key is not the configured settlement public key");
   if (relayerPublicKey.equals(settlementPublicKey)) problems.push("the relayer and settlement keys are the same key");
+  if (admissionPublicKey.toString("hex") !== config.admissionKey.publicKeyHex) problems.push("the admission key is not the configured admission public key");
+  if (admissionPublicKey.equals(relayerPublicKey) || admissionPublicKey.equals(settlementPublicKey)) problems.push("the admission key is the same key as the relayer or settlement key");
   try {
     checkSettlementKeyConfig([settlementKey], [JUNO_CAPABILITIES_V1]);
   } catch (error) {
@@ -298,6 +335,7 @@ export async function verifyJunoDeployment(config: JunoBackendConfig, rest: Juno
     if (escrow.denom !== config.denom) problems.push(`the contract's denom is ${escrow.denom}, not ${config.denom}`);
     if (escrow.operator !== config.relayer.address) problems.push(`the contract's operator is ${escrow.operator}, not the relayer ${config.relayer.address}`);
     if (!config.trust.resolvers.includes(escrow.resolver)) problems.push(`the contract's resolver ${escrow.resolver} is not a trusted resolver`);
+    if (escrow.admission_pubkey !== config.admissionKey.publicKeyHex) problems.push(`the contract's join-admission key is ${escrow.admission_pubkey}, not this server's admission key ${config.admissionKey.publicKeyHex} (every admitted Join would be refused)`);
     const keys = [];
     let after: number | null = null;
     for (let page = 0; page < 8; page += 1) {

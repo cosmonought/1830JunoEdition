@@ -162,7 +162,8 @@ describe("ESCROW-3B: the relayer's transaction, bech32 and HD keys", () => {
 describe("ESCROW-3B (GNOLAND-1 F14): contract refusals are classified from their Display text, pinned to error.rs", () => {
   const source = fs.readFileSync(ERROR_RS, "utf8");
   const parsed = new Map<string, string>();
-  const re = /#\[error\("((?:[^"\\]|\\.)*)"\)\]\s*\n\s*([A-Z][A-Za-z]*)/g;
+  /* rustfmt may break a long attribute over lines (`#[error(\n "…"\n)]`, e.g. MigrateUnsupported): both spellings. */
+  const re = /#\[error\(\s*"((?:[^"\\]|\\.)*)"\s*\)\]\s*\n\s*([A-Z][A-Za-z]*)/g;
   for (let m = re.exec(source); m !== null; m = re.exec(source)) parsed.set(m[2], m[1]);
 
   test("the template table is exactly error.rs's (every variant, every word)", () => {
@@ -172,7 +173,7 @@ describe("ESCROW-3B (GNOLAND-1 F14): contract refusals are classified from their
   });
 
   test("an instance of every template classifies to its own variant inside wasmd's wrapping", () => {
-    const sample: Record<string, string> = { role: "operator", chain_game_id: "7", actual: "in_progress", expected: "funded", denom: "ujuno", got: "3", min: "100", field: "roster_hash", seat_index: "2", reason: "4", seq: "12", appraisal_log_len: "5", log_len: "6", seat_count: "3", weights: "2", trusted_seq: "14", key_id: "1", until: "1760000000.000000000", closed: "1760000000.000000000", at: "1760000000.000000000", contract: "x", from: "1.0.0", to: "0.9.0", version: "zz" };
+    const sample: Record<string, string> = { role: "operator", chain_game_id: "7", actual: "in_progress", expected: "funded", denom: "ujuno", got: "3", min: "100", field: "roster_hash", seat_index: "2", reason: "4", seq: "12", appraisal_log_len: "5", log_len: "6", seat_count: "3", weights: "2", trusted_seq: "14", key_id: "1", until: "1760000000.000000000", closed: "1760000000.000000000", at: "1760000000.000000000", contract: "x", from: "1.0.0", to: "0.9.0", version: "zz", expires_at: "1790000900" };
     for (const [variant, template] of Object.entries(JUNO_ERROR_TEMPLATES)) {
       if (variant === "Std") continue;
       let text = template.replace(/\{([a-z_0-9]+)\}/g, (_, name: string) => sample[name] ?? "x");

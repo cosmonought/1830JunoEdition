@@ -160,7 +160,7 @@ fn second_start_and_pre_start_exits_are_refused_after_start() {
     ));
     let late = s.players[5].clone();
     assert!(matches!(
-        s.exec(&late, &Suite::join_msg(id, 5), &coins(ANTE, DENOM))
+        s.exec(&late, &s.join_msg(id, 5), &coins(ANTE, DENOM))
             .unwrap_err(),
         ContractError::WrongState { .. }
     ));

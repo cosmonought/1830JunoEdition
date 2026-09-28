@@ -364,3 +364,55 @@ export interface EscrowStatusForClient {
   readonly notices: readonly ("player-pays-gas" | "no-message-signing" | "settlement-compromised-resolver-required" | "paused")[];
   readonly last_error: EscrowError["code"] | null;
 }
+
+/* ------------------------------------------------------------------ */
+/* ESCROW-JOIN: wallet control, as ESCROW-4 will prove it               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * ESCROW-4's record that a principal PROVED it controls a wallet for one seat of one game: an ADR-036 signature by that
+ * wallet over a server challenge naming the game, the player and the wallet, verified by the server. The join
+ * admission is issued only for exactly this wallet, and `authorizeJoin` checks every binding below and the proof's age.
+ *
+ * It is deliberately a structured record, not "the wallet": the ticket ledger ALSO knows a wallet (the one the player
+ * DECLARED), and substituting that for a proof would silently remove the precondition. Only ESCROW-4's verifier should
+ * build one, from a signature it has just checked; ESCROW-JOIN builds none.
+ */
+export interface WalletControlProof {
+  readonly kind: "adr036";
+  readonly game_id: string;
+  readonly player_id: string;
+  readonly principal_id: string;
+  /** Canonical (lower-case) bech32: the wallet that signed. */
+  readonly wallet: string;
+  /** SHA-256 (lowercase hex) of the exact challenge the wallet signed -- what an audit re-verifies. */
+  readonly challenge_digest: string;
+  /** Server ms when the signature was verified. */
+  readonly verified_at: number;
+}
+
+/** A proof older than this is not accepted for an admission (the player proves control again). */
+export const WALLET_PROOF_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+export interface WalletControlProofs {
+  proofOf(input: { readonly gameId: string; readonly playerId: string; readonly principalId: string }): Promise<WalletControlProof | null>;
+}
+
+/** Until ESCROW-4 records real proofs there are none: every admission is refused `wallet-unproven`. */
+export const NO_WALLET_CONTROL_PROOFS: WalletControlProofs = Object.freeze({
+  async proofOf(): Promise<WalletControlProof | null> {
+    return null;
+  },
+});
+
+/** Why a proof does not prove control of `wallet` for this seat now (null: it does). */
+export function walletProofProblem(proof: WalletControlProof | null, want: { readonly gameId: string; readonly playerId: string; readonly principalId: string; readonly wallet: string; readonly now: number }): string | null {
+  if (proof === null) return "control of this wallet has not been proved for this seat";
+  if (proof.kind !== "adr036") return "the wallet proof is not an ADR-036 proof";
+  if (proof.game_id !== want.gameId || proof.player_id !== want.playerId || proof.principal_id !== want.principalId) return "the wallet proof names another game, seat or principal";
+  if (proof.wallet !== want.wallet) return "the wallet proof is for another wallet";
+  if (typeof proof.challenge_digest !== "string" || !/^[0-9a-f]{64}$/.test(proof.challenge_digest)) return "the wallet proof carries no challenge digest";
+  if (!Number.isSafeInteger(proof.verified_at) || proof.verified_at > want.now + 60_000) return "the wallet proof's time is not believable";
+  if (want.now - proof.verified_at > WALLET_PROOF_MAX_AGE_MS) return "the wallet proof is too old; prove control again";
+  return null;
+}

@@ -169,7 +169,7 @@ fn battery(s: &Suite, id: u64) -> Vec<(ExecuteMsg, Vec<Coin>)> {
         signature: Key::seat(0).sign(&[3u8; 32]),
     };
     vec![
-        (Suite::join_msg(id, 7), coins(ANTE, DENOM)),
+        (s.join_msg(id, 7), coins(ANTE, DENOM)),
         (ExecuteMsg::Withdraw { chain_game_id: id }, vec![]),
         (ExecuteMsg::Cancel { chain_game_id: id }, vec![]),
         (

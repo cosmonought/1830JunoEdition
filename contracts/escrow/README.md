@@ -1,4 +1,4 @@
-# eighteen-cosmos-escrow (ESCROW-2, corrected by ESCROW-2.1 and ESCROW-2.2; storage reshaped by ESCROW-2.3)
+# eighteen-cosmos-escrow 2.0.0 (ESCROW-2, corrected by ESCROW-2.1 and ESCROW-2.2; storage reshaped by ESCROW-2.3; `Join` admission-gated by ESCROW-JOIN)
 
 A CosmWasm 1.5 settlement escrow for Juno money rooms. It is a vault, a deposit
 holder, a roster record, a secp256k1 signature verifier, a settlement/challenge
@@ -31,14 +31,14 @@ profile, and the library denies `clippy::arithmetic_side_effects` outside tests.
 | File | Role |
 |---|---|
 | `src/payload.rs` | the fixed-width `136 + 16·n` byte payload, strict decode, shape rules (kind/reason, `seq = 2·log_len + kind`, A1 appraisal rule) |
-| `src/crypto.rs` | `18JUNO/{DOMAIN,ROSTER,SETTLE,CONSENT,ANNUL}/v1` digests, low-s check, compressed keys |
+| `src/crypto.rs` | `18JUNO/{DOMAIN,ROSTER,SETTLE,CONSENT,ANNUL,JOIN}/v1` digests, low-s check, compressed keys |
 | `src/payout.rs` | `floor(pool·wᵢ/Σw)` in `Uint256`, checked downcast, dust; subsidy and bond arithmetic |
 | `src/helpers.rs` | guards (state → role → pause → rest), payload-vs-game checks, the trusted sequence floor, consent-key uniqueness and verification, `pay_out`, `refund_all` |
 | `src/execute/*.rs` | funding (create/join/withdraw/cancel/consent key), play (start/checkpoint/settle/consent/finalize), dispute (challenge/resolve/annul/liveness), admin |
 | `src/storage.rs` | the storage-only `StoredGame` shape under `games`: private map, lossless `Game` conversions, and the only read/write/range paths (ESCROW-2.3) |
 | `src/query.rs` | config, games (with `trusted_seq` and every open deadline), seats, checkpoints (with the liveness candidate), signer keys, settlement preview |
 | `schema/` | generated JSON schema of every message and response (the ESCROW-3 client ABI) |
-| `testdata/` | independent Python vector generator, its output (`payload_vectors_v1.json`), and the SET-0A rev 2 payout goldens |
+| `testdata/` | independent Python vector generators and their frozen output (`payload_vectors_v1.json`; `join_admission_vectors_v1.json`, ESCROW-JOIN), and the SET-0A rev 2 payout goldens |
 | `scripts/` | `wasm-gate.sh` (optimizer build, ≤ 90 locals per function, every `cosmwasm-check`) and `wasm_locals.py` (the per-function local count) |
 | `gasbench/` | stand-alone gas harness that runs the optimized wasm in cosmwasm-vm 3.0.5 (own workspace and lockfile; see its README) |
 
@@ -54,6 +54,60 @@ profile, and the library denies `clippy::arithmetic_side_effects` outside tests.
 | `invariants` | the seventeen escrow invariants: targeted tests plus a seeded random-sequence checker with an independent payout/refund model, which also runs the emergency rotation and finally drains every live game under a permanent pause |
 | `closed_decisions` | regressions for OD-ESC2-1…5 and consent-key uniqueness (see below) |
 | `compromised_settlement` | ESCROW-2.2: a stored settlement under a compromised signer key is never paid by Finalize or Consent; recovery by LivenessSettle |
+| `join_admission` | ESCROW-JOIN: a Join without the admission for its own sender is refused and moves nothing (random wallet, copied ticket, copied admission, other game, changed ticket or expiry, malformed/high-s/foreign signatures, expiry boundary, rotation, key separation); every other Join rule unchanged |
+| `join_admission_vectors` | ESCROW-JOIN: the Python generator's JOIN preimages, digests and verdicts reproduced byte for byte, then every vector replayed on chain (valid ones seat their wallet; mutated or copied ones are refused and move nothing), plus the TypeScript server's exact wire form |
+
+## Join admission (escrow 2.0.0, ESCROW-JOIN)
+
+Before 2.0.0 `Join` checked only the ticket's 32-byte shape, so any wallet that
+paid the exact ante could take a seat, including with a ticket copied from an
+honest player's visible `Join` (the ESCROW-3B junk-Join production blocker).
+`Join` now carries the hosted server's **admission**:
+
+```text
+Join { chain_game_id, consent_pubkey, join_ticket, admission: { expires_at: Uint64, signature: 64-byte r‖s } }
+
+join = SHA-256("18JUNO/JOIN/v1" ‖ u16(len) ‖ chain_id ‖ u16(len) ‖ contract_addr ‖ u64(chain_game_id)
+               ‖ u16(len) ‖ wallet ‖ join_ticket(32) ‖ u64(expires_at))
+```
+
+* `chain_id` and `contract_addr` are the environment's, and `wallet` is the
+  transaction's own sender (`info.sender`), so an admission copied into another
+  wallet's `Join`, or replayed on another game, contract or chain, never
+  verifies. A ticket copied without its admission seats nobody.
+* Checked before anything is written or any fund is accepted: block time
+  (whole seconds) must be before `expires_at` (`AdmissionExpired`), then the
+  low-s secp256k1 signature must verify under `Config.admission_pubkey`.
+  Every signature fault is `InvalidAdmission`.
+* Stateless: no nonce is stored. Within its lifetime an admission can re-seat
+  the same wallet with the same ticket after a `Withdraw`; the server keeps the
+  lifetime short (10 minutes by default) and refuses to supersede a seat's
+  ticket while one of its admissions is unexpired.
+* `CreateGame` needs no admission: an outsider's own game is simply never bound
+  by the server (which requires creator = the host's proven wallet, ESCROW-4).
+* **The key.** `InstantiateMsg.admission_pubkey` (33-byte compressed, on the
+  curve). The admin replaces it with `SetAdmissionKey`, which takes effect at
+  once: an admission signed under the previous key stops verifying, and a
+  `Join` still in flight fails without moving funds, so its player asks the
+  server again. Seats already taken are untouched. A current **or former**
+  admission key can never be registered as a settlement signer key, and a
+  current or former signer key can never be the admission key (`ADMISSION_KEYS`
+  remembers every admission key the contract has held).
+* **Canonical artifact (ESCROW-JOIN, 2026-09-28).** `cosmwasm/optimizer:0.16.1`
+  (`sha256:b9c92b29…e69e`, Rust/Cargo 1.81.0, wasm-opt 116), two clean builds
+  byte-identical: **SHA-256 `5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8`,
+  534,085 B**, max 68 locals, all four `cosmwasm-check` versions pass. The
+  1.0.0 artifact `b263277a…9296` is historical and must never hold money.
+* **Gas** (the committed `gasbench`, cosmwasm-vm 3.0.5): `Join` costs one more
+  `secp256k1_verify` (+≈108M VM gas ≈ +771 SDK) and reads a 33-byte-larger
+  `Config` (+264 KV): +1,035 contract SDK gas (≈120.7k for seat 2 of 7). Every
+  path that reads `Config` grows by ≈290 SDK; `Pause`/`Unpause` by ≈2.95k (they
+  rewrite it). The largest modelled execution is unchanged: the
+  carried-checkpoint `LivenessSettle` at 64 checkpoints, 669,719.
+* **Migration.** 2.0.0 state carries the admission key; 1.x state cannot be
+  read by this code. `migrate` therefore refuses any stored version below 2.0.0
+  (`MigrateUnsupported`): a 1.x deployment is replaced by instantiating 2.0.0,
+  never migrated. No funded game exists on a 1.x artifact.
 
 ## Owner decisions (closed in ESCROW-2.1)
 
@@ -190,6 +244,10 @@ VM gas plus modelled KV/event gas for every path.
   `Pause` and the retirement (Checkpoint works while paused), and ANNUL
   signatures given earlier at the trusted sequence the game falls back to become
   valid again until the fresh checkpoint lands (the outcome is a refund).
+* The join-admission key decides who may take a seat. Its compromise lets an
+  attacker seat wallets (griefing a table, as before 2.0.0), but it moves no
+  money, starts nothing (the operator's) and settles nothing (the settlement
+  key's). The admin can replace it (`SetAdmissionKey`).
 * `Join` and `SetConsentKey` do not prove possession of the new consent key, so
   a co-seat watching the mempool can register a victim's intended key first and
   make that call fail. A proof-of-possession signature would close this but

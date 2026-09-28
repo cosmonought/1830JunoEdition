@@ -44,10 +44,13 @@ const isObject = (value: unknown): value is Record<string, unknown> => typeof va
 const exact = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).length === keys.length && keys.every((key) => key in value);
 const time = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const timeOrNull = (value: unknown) => value === null || time(value);
-const GRANT_KEYS = ["format", "game_id", "player_id", "epoch", "wallet", "ticket", "issued_at", "issued_under", "revoked_at", "revoke_reason", "frozen_at"];
+const GRANT_KEYS_3B = ["format", "game_id", "player_id", "epoch", "wallet", "ticket", "issued_at", "issued_under", "revoked_at", "revoke_reason", "frozen_at"];
+/** ESCROW-JOIN: + `admitted_until_secs`. A 3B grant (without it) reads as never admitted; every write is the new shape. */
+const GRANT_KEYS = [...GRANT_KEYS_3B, "admitted_until_secs"];
 
 function isGrant(value: unknown, gameId: string): value is WalletTicketGrant {
-  if (!isObject(value) || !exact(value, GRANT_KEYS)) return false;
+  if (!isObject(value) || !(exact(value, GRANT_KEYS) || exact(value, GRANT_KEYS_3B))) return false;
+  if ("admitted_until_secs" in value && !timeOrNull(value.admitted_until_secs)) return false;
   const under = value.issued_under;
   return (
     value.format === WALLET_TICKET_FORMAT &&
@@ -145,7 +148,9 @@ export function createFileWalletTicketStore(
     ) {
       throw new WalletTicketStoreUnreadableError(`wallet-tickets/${gameId}.json is not this game's ticket ledger`, gameId);
     }
-    return { version: parsed.version as number, document: parsed.document };
+    const document = parsed.document as WalletTicketDocument;
+    /* A 3B grant has no `admitted_until_secs`: it was never admitted (the ledger never issued an admission before ESCROW-JOIN). */
+    return { version: parsed.version as number, document: { frozen_at: document.frozen_at, grants: document.grants.map((grant) => ("admitted_until_secs" in grant ? grant : { ...(grant as WalletTicketGrant), admitted_until_secs: null })) } };
   }
 
   return {

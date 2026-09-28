@@ -29,6 +29,8 @@ import { RELAYER_EXECUTE } from "./juno/junoContract";
 import { createJunoRest, JunoRpcError, type HttpTransport } from "./juno/junoRest";
 import { publicKeyOf } from "./juno/secp256k1";
 import {
+  ADMISSION_PUBKEY,
+  ADMISSION_SECRET,
   CANONICAL_CHECKSUM,
   CHAIN_ID,
   CONTRACT,
@@ -74,9 +76,10 @@ async function dealt(world: World) {
 function devConfig(dir: string) {
   fs.writeFileSync(path.join(dir, "relayer.key"), RELAYER_SECRET.toString("hex"));
   fs.writeFileSync(path.join(dir, "settlement.key"), SETTLEMENT_SECRET.toString("hex"));
+  fs.writeFileSync(path.join(dir, "admission.key"), ADMISSION_SECRET.toString("hex"));
   const parsed = parseJunoBackendConfig(
     {
-      format: "18COSMOS/JUNO-BACKEND/v1",
+      format: "18COSMOS/JUNO-BACKEND/v2",
       chain_id: CHAIN_ID,
       network_class: "testnet",
       rest_endpoints: ["https://rest.example"],
@@ -87,6 +90,7 @@ function devConfig(dir: string) {
       asset_symbol: "JUNOX",
       relayer: { address: RELAYER_ADDRESS, signer: { kind: "development", key_file: path.join(dir, "relayer.key") } },
       settlement_key: { signer_key_id: 1, public_key_hex: publicKeyOf(SETTLEMENT_SECRET).toString("hex"), signer: { kind: "development", key_file: path.join(dir, "settlement.key") } },
+      admission_key: { public_key_hex: ADMISSION_PUBKEY, signer: { kind: "development", key_file: path.join(dir, "admission.key") } },
       trust: { operators: [RELAYER_ADDRESS], resolvers: [RELAYER_ADDRESS], min_challenge_window_secs: "60", min_liveness_window_secs: "60", min_resolver_timeout_secs: "60" },
       journal_dir: path.join(dir, "journal"),
       dev_signer: "allow-unprotected-testnet-key",

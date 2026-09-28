@@ -12,7 +12,9 @@
 //               `timeout_height`, charges the fee, and indexes inclusion by hash and by `tx.acc_seq`.
 //   the escrow  Start / Checkpoint / Settle / Finalize with the frozen contract's rules and its Display-text refusals
 //               (operator-only Start, the roster hash, the domain, the trusted sequence, signer keys, signatures over
-//               the SETTLE digest, pause, the challenge window) -- through the certified SET-0C functions.
+//               the SETTLE digest, pause, the challenge window) -- through the certified SET-0C functions; a wallet's
+//               Join (escrow 2.0.0) verifies the server's ADMISSION over the JOIN digest of its own sender, as the
+//               contract does (`junoJoinAdmissionV1.ts`, pinned to the contract by the frozen vectors).
 //   faults      a lost broadcast answer (the tx IS in the mempool), a broadcast that never arrived, an unavailable
 //               node, a wrong chain id, a disabled tx index, an absurd simulation, a malformed answer.
 //
@@ -32,6 +34,7 @@ import {
 import { encodeSignDoc, signDocDigest, txHashOf, u64Of } from "./cosmosTx";
 import { JunoRpcError, type AccountView, type BlockView, type JunoContractFacts, type JunoRest, type SimulateResult, type TxResultView } from "./junoRest";
 import { verifyDigest } from "./secp256k1";
+import { joinAdmissionDigestV1 } from "../../../../frontend/src/gameEngine/escrow/junoJoinAdmissionV1";
 
 /* ------------------------------------------------------------------ */
 /* Protobuf decoding (the relayer's own transaction shape)              */
@@ -193,6 +196,8 @@ export interface FakeChainOptions {
   readonly codeId: string;
   readonly codeChecksum: string;
   readonly signerKeys: readonly string[];
+  /** ESCROW-JOIN: the contract's `Config.admission_pubkey` (33-byte compressed, hex). */
+  readonly admissionPubkey: string;
   readonly challengeWindowSecs?: number;
   readonly livenessWindowSecs?: number;
   readonly resolverTimeoutSecs?: number;
@@ -226,8 +231,12 @@ export class FakeJunoChain implements JunoRest {
   private nextGameId = 1;
   private nextAccountNumber = BigInt(7);
 
+  /** The admin's `SetAdmissionKey` (tests rotate it). */
+  admissionPubkey: string;
+
   constructor(readonly options: FakeChainOptions) {
     this.chainId = options.chainId;
+    this.admissionPubkey = options.admissionPubkey;
     this.time = options.startTime ?? 1_760_000_000;
     options.signerKeys.forEach((pubkey, i) => this.signerKeys.push({ key_id: i + 1, pubkey, retired: false, compromised: false }));
   }
@@ -459,16 +468,31 @@ export class FakeJunoChain implements JunoRest {
     }
   }
 
-  /** A wallet's Join, exactly as `contracts/escrow/src/execute/funding.rs::join` decides it: FUNDING, before the
-   *  deadline, not full, a fresh wallet, a well-formed consent key and a 32-byte ticket -- and NOTHING about who issued
-   *  the ticket (the ESCROW-3B junk-Join limitation: any wallet paying the ante takes a seat). */
-  join(chainGameId: string, seat: FakeSeat): { ok: true } | { ok: false; error: string } {
+  /** A wallet's Join, exactly as `contracts/escrow/src/execute/funding.rs::join` (escrow 2.0.0) decides it: FUNDING, a
+   *  fresh wallet, not full, a 32-byte ticket, then the ADMISSION -- block time before its expiry, and the admission
+   *  key's low-s signature over the JOIN digest of (this chain, this contract, this game, THE SENDER, this ticket, the
+   *  expiry). A Join without one does not even parse (the field is required). */
+  join(chainGameId: string, seat: FakeSeat, admission?: { readonly expires_at: string; readonly signature: string }): { ok: true } | { ok: false; error: string } {
     const game = this.games.get(Number(chainGameId));
+    if (admission === undefined) return { ok: false, error: "Error parsing into type eighteen_cosmos_escrow::msg::ExecuteMsg: missing field `admission`" };
     if (game === undefined) return { ok: false, error: "not found" };
     if (game.state !== "funding") return { ok: false, error: `wrong state: game is ${game.state}` };
     if (game.seats.some((existing) => existing.wallet === seat.wallet)) return { ok: false, error: "already joined" };
+    if (this.paused) return { ok: false, error: "the contract is paused" };
     if (game.seats.length >= game.max_players) return { ok: false, error: "game full" };
     if (!/^[0-9a-f]{64}$/.test(seat.join_ticket)) return { ok: false, error: "join_ticket must be 32 bytes" };
+    if (!/^(0|[1-9][0-9]{0,19})$/.test(admission.expires_at)) return { ok: false, error: "Error parsing into type eighteen_cosmos_escrow::msg::ExecuteMsg: invalid Uint64" };
+    if (BigInt(this.time) >= BigInt(admission.expires_at)) return { ok: false, error: `the join admission expired at ${admission.expires_at}` };
+    let digest = "";
+    try {
+      digest = joinAdmissionDigestV1({ chain_id: this.chainId, contract_addr: this.options.contract, chain_game_id: BigInt(chainGameId), wallet: seat.wallet, join_ticket: seat.join_ticket, expires_at: BigInt(admission.expires_at) });
+    } catch {
+      digest = ""; // a sender spelling no admission can name
+    }
+    const signature = /^[0-9a-f]*$/.test(admission.signature) && admission.signature.length % 2 === 0 ? Buffer.from(admission.signature, "hex") : Buffer.alloc(0);
+    if (digest === "" || signature.length !== 64 || !verifyDigest(Buffer.from(this.admissionPubkey, "hex"), Buffer.from(digest, "hex"), signature)) {
+      return { ok: false, error: "the join admission does not authorize this wallet for this game" };
+    }
     game.seats.push({ ...seat });
     if (game.seats.length === game.max_players) game.state = "funded";
     return { ok: true };
@@ -593,6 +617,7 @@ export class FakeJunoChain implements JunoRest {
         config: {
           admin: "juno1admin",
           operator: this.options.operator,
+          admission_pubkey: this.admissionPubkey,
           resolver: this.options.resolver,
           treasury: this.options.treasury,
           denom: this.options.denom,
@@ -602,7 +627,7 @@ export class FakeJunoChain implements JunoRest {
         next_chain_game_id: this.nextGameId,
         next_signer_key_id: this.signerKeys.length + 1,
         contract_name: "crates.io:eighteen-cosmos-escrow",
-        contract_version: "1.0.0",
+        contract_version: "2.0.0",
       };
     }
     if (variant === "signer_keys") {

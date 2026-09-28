@@ -5,7 +5,8 @@
 // ==================================================================
 //
 // `start.ts` builds this only when `ESCROW_JUNO_CONFIG` names a configuration file. The pieces are the configuration's
-// (`junoConfig.ts`): the REST client, the two keys (KMS in production; a development key file only where allowed), the
+// (`junoConfig.ts`): the REST client, the three keys -- relayer, settlement and (ESCROW-JOIN) join admission, each its own
+// key (KMS in production; a development key file only where allowed), the
 // signing journal (outside the data directory in production), the durable chain intents, the escrow service and the
 // relayer. It starts UNVERIFIED: the relayer does not pass and the service signs nothing until `verifyJunoDeployment`
 // says the chain is exactly the configured one AND the service has loaded every money game's durable state (review #2:
@@ -23,6 +24,8 @@ import type { FinancialGameStore } from "../financialGameStore";
 import type { PrefixReplay } from "../settlementEvidence";
 import type { InspectableSigningJournal } from "../signingJournal";
 import type { WalletTicketLedger } from "../walletTickets";
+import type { WalletControlProofs } from "../escrowPorts";
+import { junoJoinAdmissionSigner } from "./joinAdmission";
 import { checkSignerIdentities, pinOf, settlementKeyConfigOf, verifyJunoDeployment, type DeploymentVerdict, type JunoBackendConfig, type SignerRef } from "./junoConfig";
 import { createJunoRest, type HttpTransport, type JunoRest } from "./junoRest";
 import { createJunoRelayer, type Relayer } from "./relayer";
@@ -60,6 +63,8 @@ export interface JunoBackendDeps {
   /** Tests: the REST client itself (an offline chain). */
   readonly rest?: JunoRest;
   readonly verifyEveryMs?: number;
+  /** ESCROW-4: the proofs of wallet control the join admission requires (absent: no admission is ever issued). */
+  readonly walletProofs?: WalletControlProofs;
 }
 
 async function openSigner(ref: SignerRef, deps: JunoBackendDeps): Promise<DigestSigner> {
@@ -75,8 +80,9 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
   const rest = deps.rest ?? createJunoRest({ endpoints: config.endpoints, expectedChainId: config.chainId, allowInsecureLocalHttp: config.allowInsecureLocalHttp, timeoutMs: config.timeoutMs, maxResponseBytes: 256 * 1024, maxCodeBytes: 4 * 1024 * 1024 }, deps.http);
   const relayerSigner = await openSigner(config.relayer.signer, deps);
   const settlementDigestSigner = await openSigner(config.settlementKey.signer, deps);
+  const admissionDigestSigner = await openSigner(config.admissionKey.signer, deps);
   const keyConfig = settlementKeyConfigOf(config, settlementDigestSigner.label);
-  checkSignerIdentities(config, relayerSigner.publicKey, settlementDigestSigner.publicKey, keyConfig);
+  checkSignerIdentities(config, relayerSigner.publicKey, settlementDigestSigner.publicKey, keyConfig, admissionDigestSigner.publicKey);
 
   let state: JunoBackendState = "unverified";
   /** Verified, and the service's load is running (its jobs may run; the relayer waits for `active`). */
@@ -105,6 +111,8 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
     warn: deps.warn,
     ops: deps.ops,
     ready: () => state === "active" || loading,
+    admission: { signer: junoJoinAdmissionSigner(config.admissionKey.publicKeyHex, JUNO_CODEC_V1, admissionDigestSigner), ttlSecs: config.admissionKey.ttlSecs },
+    walletProofs: deps.walletProofs,
   });
   relayer = createJunoRelayer({
     rest,
@@ -142,7 +150,7 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
           loading = false;
         }
         state = "active";
-        deps.ops?.audit("escrow.backend-verified", { chain_id: config.chainId, contract: config.contract, height: verdict.height, relayer: config.relayer.address, signer_key_id: config.settlementKey.signerKeyId, settlement_key: settlementDigestSigner.kind, relayer_key: relayerSigner.kind });
+        deps.ops?.audit("escrow.backend-verified", { chain_id: config.chainId, contract: config.contract, height: verdict.height, relayer: config.relayer.address, signer_key_id: config.settlementKey.signerKeyId, settlement_key: settlementDigestSigner.kind, relayer_key: relayerSigner.kind, admission_key: admissionDigestSigner.kind });
         deps.log(`  escrow: Juno backend VERIFIED on ${config.chainId} at height ${verdict.height} (contract ${config.contract}; relayer ${config.relayer.address}; ${relayerSigner.kind} keys) -- money games remain disabled to players`);
         if (loaded.games > 0) deps.log(`  escrow: ${loaded.games} money games -- ${loaded.resumed} settlements resumed, ${loaded.held} held`);
         relayer?.wake();

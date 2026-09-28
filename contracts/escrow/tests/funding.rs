@@ -119,7 +119,7 @@ fn join_must_match_the_creators_gross_ante() {
     let mut s = Suite::new();
     let id = s.create(0, 3, Mode::Live, ANTE);
     let who = s.players[1].clone();
-    let msg = Suite::join_msg(id, 1);
+    let msg = s.join_msg(id, 1);
     for wrong in [ANTE - 1, ANTE + 1, 2 * ANTE] {
         assert_eq!(
             s.exec(&who, &msg, &coins(wrong, DENOM)).unwrap_err(),
@@ -157,14 +157,14 @@ fn a_wallet_can_hold_only_one_seat() {
     let id = s.create(0, 4, Mode::Live, ANTE);
     let creator = s.players[0].clone();
     assert_eq!(
-        s.exec(&creator, &Suite::join_msg(id, 0), &coins(ANTE, DENOM))
+        s.exec(&creator, &s.join_msg(id, 0), &coins(ANTE, DENOM))
             .unwrap_err(),
         ContractError::AlreadyJoined { chain_game_id: id }
     );
     s.join(id, 1, ANTE);
     let alice = s.players[1].clone();
     assert_eq!(
-        s.exec(&alice, &Suite::join_msg(id, 1), &coins(ANTE, DENOM))
+        s.exec(&alice, &s.join_msg(id, 1), &coins(ANTE, DENOM))
             .unwrap_err(),
         ContractError::AlreadyJoined { chain_game_id: id }
     );
@@ -180,7 +180,7 @@ fn last_seat_funds_the_game_and_no_seat_is_left() {
     assert_eq!(s.state(id), GameState::Funded);
     let who = s.players[3].clone();
     let err = s
-        .exec(&who, &Suite::join_msg(id, 3), &coins(ANTE, DENOM))
+        .exec(&who, &s.join_msg(id, 3), &coins(ANTE, DENOM))
         .unwrap_err();
     assert!(matches!(err, ContractError::WrongState { .. }), "{err:?}");
 }
@@ -195,7 +195,7 @@ fn joins_close_at_the_funding_deadline() {
         s.advance(1);
         let who = s.players[2].clone();
         assert_eq!(
-            s.exec(&who, &Suite::join_msg(id, 2), &coins(ANTE, DENOM))
+            s.exec(&who, &s.join_msg(id, 2), &coins(ANTE, DENOM))
                 .unwrap_err(),
             ContractError::FundingClosed {}
         );
@@ -361,7 +361,7 @@ fn pause_blocks_deposits_but_never_the_pre_start_exits() {
     );
     let dave = s.players[3].clone();
     assert_eq!(
-        s.exec(&dave, &Suite::join_msg(id, 3), &coins(ANTE, DENOM))
+        s.exec(&dave, &s.join_msg(id, 3), &coins(ANTE, DENOM))
             .unwrap_err(),
         ContractError::Paused {}
     );
@@ -461,7 +461,7 @@ fn unknown_games_are_not_found() {
     let mut s = Suite::new();
     let who = s.players[1].clone();
     assert_eq!(
-        s.exec(&who, &Suite::join_msg(99, 1), &coins(ANTE, DENOM))
+        s.exec(&who, &s.join_msg(99, 1), &coins(ANTE, DENOM))
             .unwrap_err(),
         ContractError::GameNotFound { chain_game_id: 99 }
     );

@@ -13,7 +13,17 @@
 //! settle      = SHA-256("18JUNO/SETTLE/v1" ‖ encode(payload))         signed by the settlement key
 //! consent     = SHA-256("18JUNO/CONSENT/v1" ‖ domain ‖ u64(seq) ‖ settle)   signed by a seat's consent key
 //! annul       = SHA-256("18JUNO/ANNUL/v1" ‖ domain ‖ u64(seq))             signed by every seat's consent key
+//! join        = SHA-256("18JUNO/JOIN/v1" ‖ u16(len) ‖ chain_id ‖ u16(len) ‖ contract_addr
+//!                       ‖ u64(chain_game_id) ‖ u16(len) ‖ wallet ‖ join_ticket ‖ u64(expires_at))
+//!                                                                        signed by the admission key
 //! ```
+//!
+//! JOIN (the join admission, 2026-09-28): the hosted server's authorization for
+//! ONE wallet (the `Join` transaction's own sender, never a message field) to
+//! take a seat in ONE game of THIS contract on THIS chain, carrying ONE join
+//! ticket, until `expires_at` (Unix seconds, compared with block time). The
+//! ticket is exactly 32 bytes, so it needs no length prefix. The admission key
+//! is `Config::admission_pubkey`, never a settlement signer key.
 //!
 //! The ANNUL `seq` is the game's trusted sequence (`GameResponse::trusted_seq`,
 //! ESCROW-2.1 OD-ESC2-3): equal to `last_seq` unless a signer key was marked
@@ -34,6 +44,8 @@ pub const TAG_ROSTER: &[u8] = b"18JUNO/ROSTER/v1";
 pub const TAG_SETTLE: &[u8] = b"18JUNO/SETTLE/v1";
 pub const TAG_CONSENT: &[u8] = b"18JUNO/CONSENT/v1";
 pub const TAG_ANNUL: &[u8] = b"18JUNO/ANNUL/v1";
+/// The join admission (see the module comment).
+pub const TAG_JOIN: &[u8] = b"18JUNO/JOIN/v1";
 /// `evidence_hash = SHA-256(tag ‖ exported log bytes)`. Computed off-chain; the
 /// contract stores the 32 bytes a challenger supplies and never interprets them.
 pub const TAG_EVIDENCE: &[u8] = b"18JUNO/EVIDENCE/v1";
@@ -136,6 +148,30 @@ pub fn annul_digest(domain: &[u8; 32], seq: u64) -> [u8; 32] {
     hasher.update(domain);
     hasher.update(seq.to_be_bytes());
     hasher.finalize().into()
+}
+
+/// The digest the admission key signs to let `wallet` join `chain_game_id` of
+/// `contract_addr` on `chain_id` with `join_ticket` until `expires_at`.
+pub fn join_admission_digest(
+    chain_id: &str,
+    contract_addr: &str,
+    chain_game_id: u64,
+    wallet: &str,
+    join_ticket: &[u8; 32],
+    expires_at: u64,
+) -> Result<[u8; 32], ContractError> {
+    let mut hasher = Sha256::new();
+    hasher.update(TAG_JOIN);
+    hasher.update(u16_len("chain_id", chain_id.as_bytes())?);
+    hasher.update(chain_id.as_bytes());
+    hasher.update(u16_len("contract address", contract_addr.as_bytes())?);
+    hasher.update(contract_addr.as_bytes());
+    hasher.update(chain_game_id.to_be_bytes());
+    hasher.update(u16_len("wallet", wallet.as_bytes())?);
+    hasher.update(wallet.as_bytes());
+    hasher.update(join_ticket);
+    hasher.update(expires_at.to_be_bytes());
+    Ok(hasher.finalize().into())
 }
 
 /// `true` iff the `s` half of `r ‖ s` is at most ⌊n/2⌋. Big-endian byte
@@ -255,6 +291,38 @@ mod tests {
         assert!(parse_compressed_pubkey("k", &key).is_err());
         assert!(parse_compressed_pubkey("k", &[0x04u8; 65]).is_err());
         assert!(parse_compressed_pubkey("k", &[0x02u8; 32]).is_err());
+    }
+
+    #[test]
+    fn join_admission_digest_binds_every_field() {
+        let ticket = [7u8; 32];
+        let base = join_admission_digest("juno-1", "juno1contract", 5, "juno1wallet", &ticket, 99)
+            .unwrap();
+        let mut other_ticket = ticket;
+        other_ticket[31] ^= 1;
+        for changed in [
+            join_admission_digest("uni-7", "juno1contract", 5, "juno1wallet", &ticket, 99),
+            join_admission_digest("juno-1", "juno1contracT", 5, "juno1wallet", &ticket, 99),
+            join_admission_digest("juno-1", "juno1contract", 6, "juno1wallet", &ticket, 99),
+            join_admission_digest("juno-1", "juno1contract", 5, "juno1wallez", &ticket, 99),
+            join_admission_digest(
+                "juno-1",
+                "juno1contract",
+                5,
+                "juno1wallet",
+                &other_ticket,
+                99,
+            ),
+            join_admission_digest("juno-1", "juno1contract", 5, "juno1wallet", &ticket, 100),
+        ] {
+            assert_ne!(changed.unwrap(), base);
+        }
+        // Length prefixes: moving a byte between chain id and contract changes it.
+        assert_ne!(
+            join_admission_digest("juno-1j", "uno1contract", 5, "juno1wallet", &ticket, 99)
+                .unwrap(),
+            base
+        );
     }
 
     #[test]

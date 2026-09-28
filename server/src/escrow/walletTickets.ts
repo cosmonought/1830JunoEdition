@@ -37,6 +37,14 @@
 //                record releases its roster because the chain PROVED that Start can never happen -- and the table's
 //                tickets are subject to standing again (the pre-Start funded state). A confirmed Start never unfreezes.
 //
+//   ADMITTED     ESCROW-JOIN (2026-09-28): the contract's Join now needs the server's ADMISSION (a signature over this
+//                game, the wallet, the ticket and an expiry; `escrowService.authorizeJoin`). The ledger records, on the
+//                grant, the latest expiry it was admitted until (`admitted_until_secs`, Unix seconds) BEFORE the signature
+//                leaves the server. An admission cannot be recalled from the chain, so while one is outstanding the
+//                seat's ticket is NOT superseded (`issue` refuses `admission-outstanding` until it expires): otherwise a
+//                second wallet could be admitted for the same seat while the first still can join -- more admitted
+//                wallets than seats. `outstandingAdmissions` tells the room host (ESCROW-4) which seats must not move.
+//
 // Money games are disabled: nothing issues a ticket in production yet. ESCROW-3B/4 call `issue` from the wallet
 // declaration flow and pass `ticketOf` to `freezeEscrowRoster`.
 
@@ -70,6 +78,9 @@ export interface WalletTicketGrant {
   readonly revoke_reason: "superseded" | "security-event" | "seat-lost" | null;
   /** The roster froze with this ticket's claim: no later event un-binds it. */
   readonly frozen_at: number | null;
+  /** ESCROW-JOIN: the latest `expires_at` (Unix SECONDS, chain time) of a Join admission issued for this grant; null
+   *  if none was. While it is in the future the grant is not superseded. */
+  readonly admitted_until_secs: number | null;
 }
 
 /** One game's ledger: its grants, and whether its roster froze (the game's fact, set once by `freeze`). */
@@ -118,7 +129,25 @@ export interface WalletTicketDeps {
   readonly random?: (size: number) => Buffer;
 }
 
-export type IssueRefusal = "reauth-required" | "not-seated" | "security-context-ended" | "frozen" | "conflict";
+export type IssueRefusal = "reauth-required" | "not-seated" | "security-context-ended" | "frozen" | "conflict" | "admission-outstanding";
+
+/** ESCROW-JOIN: the chain compares an admission's expiry with BLOCK time, which may trail this server's clock by a block
+ *  or so (and by more on a slow chain). The ledger treats an admission as outstanding until this long after its expiry,
+ *  so a ticket is never superseded while the chain could still honour the old admission. */
+export const ADMISSION_CLOCK_SKEW_MS = 120_000;
+
+/** Whether an admission recorded until `untilSecs` (chain seconds) may still land on chain at server time `now` (ms). */
+export const admissionOutstanding = (untilSecs: number | null, now: number): boolean => untilSecs !== null && untilSecs * 1000 + ADMISSION_CLOCK_SKEW_MS > now;
+
+/** A seat's standing grant, as `authorizeJoin` checks it (server-private: never on the wire). */
+export interface StandingGrant {
+  readonly player_id: string;
+  readonly epoch: number;
+  readonly wallet: string;
+  readonly ticket: string;
+  readonly principal_id: string;
+  readonly admitted_until_secs: number | null;
+}
 
 export interface TicketBinding {
   readonly backend: string;
@@ -166,6 +195,9 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
       const grants = [...document.grants];
       const now = deps.now();
       const previous = newestOf(grants, input.playerId);
+      /* ESCROW-JOIN: an outstanding admission can still seat its wallet on chain; no second wallet for this seat until
+         it expires (whatever ended the grant meanwhile -- a revoked grant's admission is just as usable on chain). */
+      if (previous !== undefined && admissionOutstanding(previous.admitted_until_secs, now)) return { ok: false, refusal: "admission-outstanding" };
       const epoch = (previous?.epoch ?? 0) + 1;
       const ticket = joinTicketV1({
         backend: input.binding.backend,
@@ -191,6 +223,7 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
         revoked_at: null,
         revoke_reason: null,
         frozen_at: null,
+        admitted_until_secs: null,
       });
       if ((await deps.store.put(input.gameId, { frozen_at: null, grants: next }, version)) !== "committed") return { ok: false, refusal: "conflict" };
       return { ok: true, ticket, epoch };
@@ -231,6 +264,38 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
         if (newest !== undefined && stands(newest, true)) out.push({ player_id: playerId, wallet: newest.wallet, ticket: newest.ticket });
       }
       return out;
+    },
+
+    /** ESCROW-JOIN: the seat's newest grant if it stands now, with the principal it was issued to (null otherwise). */
+    async standingGrantOf(gameId: string, playerId: string): Promise<StandingGrant | null> {
+      const { document } = await deps.store.load(gameId);
+      const newest = newestOf(document.grants, playerId);
+      if (newest === undefined || !stands(newest, true)) return null;
+      return { player_id: newest.player_id, epoch: newest.epoch, wallet: newest.wallet, ticket: newest.ticket, principal_id: newest.issued_under.principal_id, admitted_until_secs: newest.admitted_until_secs };
+    },
+
+    /** ESCROW-JOIN, BEFORE an admission's signature leaves the server: the grant it names (this epoch, wallet and
+     *  ticket; the newest, standing, unfrozen) is admitted until `expiresAt` (Unix seconds; only ever raised). Anything
+     *  else -- a superseded or ended grant, a frozen game, a concurrent write -- refuses, and no admission is signed. */
+    async recordAdmission(input: { readonly gameId: string; readonly playerId: string; readonly epoch: number; readonly wallet: string; readonly ticket: string; readonly expiresAt: number }): Promise<"committed" | "conflict" | "refused"> {
+      if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= 0) return "refused";
+      const { version, document } = await deps.store.load(input.gameId);
+      if (document.frozen_at !== null) return "refused";
+      const newest = newestOf(document.grants, input.playerId);
+      if (newest === undefined || newest.epoch !== input.epoch || newest.wallet !== input.wallet || newest.ticket !== input.ticket || !stands(newest, true)) return "refused";
+      const until = Math.max(newest.admitted_until_secs ?? 0, input.expiresAt);
+      const grants = document.grants.map((grant) => (grant === newest ? { ...grant, admitted_until_secs: until } : grant));
+      return deps.store.put(input.gameId, { frozen_at: document.frozen_at, grants }, version);
+    },
+
+    /** ESCROW-JOIN: every seat with an admission still usable on chain at `now` (ms; with the clock-skew margin).
+     *  ESCROW-4's room host must not release or reassign these seats until then (an admission cannot be recalled from
+     *  the chain): otherwise the admitted wallet can still fill a chain seat nobody can claim (`unbound-seat`). */
+    async outstandingAdmissions(gameId: string, now: number = deps.now()): Promise<ReadonlyArray<{ readonly player_id: string; readonly wallet: string; readonly admitted_until_secs: number }>> {
+      const { grants } = (await deps.store.load(gameId)).document;
+      return grants
+        .filter((grant) => admissionOutstanding(grant.admitted_until_secs, now))
+        .map((grant) => ({ player_id: grant.player_id, wallet: grant.wallet, admitted_until_secs: grant.admitted_until_secs as number }));
     },
 
     /** Games whose ledger holds an unfrozen, unrevoked grant issued under `principalId` (the security-event hook's

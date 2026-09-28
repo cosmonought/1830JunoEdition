@@ -328,10 +328,12 @@ fn onchain_game(
         .unwrap();
     let id = target_id;
     for (i, w) in wallets.iter().enumerate().skip(1) {
+        let join_ticket = ticket(&format!("vector-{i}"));
         let join = ExecuteMsg::Join {
             chain_game_id: id,
             consent_pubkey: Key::seat(i).pubkey,
-            join_ticket: ticket(&format!("vector-{i}")),
+            admission: suite.admission_for(id, w, &join_ticket),
+            join_ticket,
         };
         suite.exec(w, &join, &coins(ante, DENOM)).unwrap();
     }

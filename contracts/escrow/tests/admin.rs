@@ -188,7 +188,7 @@ fn set_params_applies_to_games_created_afterwards_only() {
     assert_eq!(g.terms.challenge_window_secs, 2 * DAY);
     assert_eq!(g.funding_deadline, s.now().plus_seconds(3 * DAY));
     let bob = s.players[3].clone();
-    s.exec(&bob, &Suite::join_msg(new, 3), &coins(5_000_000, DENOM))
+    s.exec(&bob, &s.join_msg(new, 3), &coins(5_000_000, DENOM))
         .unwrap();
     s.start(new);
     // max(3 JUNO, 100 % of 4.75 JUNO).
@@ -674,6 +674,7 @@ fn instantiate_is_validated() {
         denom: DENOM.to_string(),
         params: default_params(),
         signer_keys: vec![Key::signer(1).pubkey],
+        admission_pubkey: Key::admission(1).pubkey,
     };
     let mut try_init = |msg: &InstantiateMsg, funds: &[cosmwasm_std::Coin]| {
         s.app
@@ -760,6 +761,32 @@ fn instantiate_is_validated() {
             ContractError::Std(_)
         ));
     }
+    // The admission key: compressed, on the curve, never a signer key.
+    for (bad, field_err) in [
+        (HexBinary::from(vec![0x02; 32]), true),
+        (HexBinary::from(vec![0x04; 33]), true),
+        (off_curve_key(), true),
+        (Key::signer(1).pubkey, false),
+    ] {
+        let msg = InstantiateMsg {
+            admission_pubkey: bad,
+            ..base.clone()
+        };
+        let err = try_init(&msg, &[]).unwrap_err();
+        if field_err {
+            assert_eq!(
+                err,
+                ContractError::BadPubkey {
+                    field: "admission_pubkey".to_string()
+                }
+            );
+        } else {
+            assert_eq!(
+                err,
+                invalid("a settlement signer key cannot be a current or former join-admission key")
+            );
+        }
+    }
     // No signer keys at all is allowed (keys can be added later).
     let msg = InstantiateMsg {
         signer_keys: vec![],
@@ -774,7 +801,8 @@ fn config_query_reports_the_contract_and_counters() {
     let c = s.config();
     assert_eq!(c.contract_name, CONTRACT_NAME);
     assert_eq!(c.contract_version, CONTRACT_VERSION);
-    assert_eq!(c.contract_version, "1.0.0");
+    assert_eq!(c.contract_version, "2.0.0");
+    assert_eq!(c.config.admission_pubkey, Key::admission(1).pubkey);
     assert_eq!(c.next_chain_game_id, 1);
     assert_eq!(c.next_signer_key_id, 2);
     assert_eq!(c.config.denom, DENOM);
@@ -796,12 +824,12 @@ fn migrate_to_the_same_version_is_a_no_op_that_keeps_state() {
         .app
         .migrate_contract(admin, contract.clone(), &MigrateMsg {}, code_id)
         .unwrap();
-    assert_eq!(attr(&res, "from_version"), "1.0.0");
-    assert_eq!(attr(&res, "to_version"), "1.0.0");
+    assert_eq!(attr(&res, "from_version"), "2.0.0");
+    assert_eq!(attr(&res, "to_version"), "2.0.0");
     assert_eq!(s.game(id).game, before);
     let info = cw2::query_contract_info(&s.app.wrap(), contract.to_string()).unwrap();
     assert_eq!(info.contract, CONTRACT_NAME);
-    assert_eq!(info.version, "1.0.0");
+    assert_eq!(info.version, "2.0.0");
     // Only the chain-level contract admin may migrate at all.
     let outsider = s.outsider.clone();
     assert!(s
@@ -830,10 +858,10 @@ fn migrate_refuses_foreign_contracts_downgrades_and_bad_versions() {
         migrate(deps.as_mut(), mock_env(), MigrateMsg {}).unwrap_err(),
         ContractError::MigrateDowngrade {
             from: "9.0.0".to_string(),
-            to: "1.0.0".to_string()
+            to: "2.0.0".to_string()
         }
     );
-    cw2::set_contract_version(deps.as_mut().storage, CONTRACT_NAME, "1.0.1").unwrap();
+    cw2::set_contract_version(deps.as_mut().storage, CONTRACT_NAME, "2.0.1").unwrap();
     assert!(matches!(
         migrate(deps.as_mut(), mock_env(), MigrateMsg {}).unwrap_err(),
         ContractError::MigrateDowngrade { .. }
@@ -845,11 +873,25 @@ fn migrate_refuses_foreign_contracts_downgrades_and_bad_versions() {
             version: "1.0".to_string()
         }
     );
-    // An older escrow version is upgraded and re-stamped.
-    cw2::set_contract_version(deps.as_mut().storage, CONTRACT_NAME, "0.9.3").unwrap();
+    // State from before the join admission (every 1.x, including the
+    // historical canonical b263277a… artifact) cannot be read by this code:
+    // migrating it would brick every game, so it is refused and nothing moves.
+    for old in ["1.0.0", "0.9.3", "1.9.99"] {
+        cw2::set_contract_version(deps.as_mut().storage, CONTRACT_NAME, old).unwrap();
+        assert_eq!(
+            migrate(deps.as_mut(), mock_env(), MigrateMsg {}).unwrap_err(),
+            ContractError::MigrateUnsupported {
+                from: old.to_string()
+            }
+        );
+        let v = cw2::get_contract_version(deps.as_ref().storage).unwrap();
+        assert_eq!(v.version, old, "a refused migration re-stamps nothing");
+    }
+    // The same 2.0.0 state is accepted (a no-op).
+    cw2::set_contract_version(deps.as_mut().storage, CONTRACT_NAME, "2.0.0").unwrap();
     migrate(deps.as_mut(), mock_env(), MigrateMsg {}).unwrap();
     let v = cw2::get_contract_version(deps.as_ref().storage).unwrap();
-    assert_eq!(v.version, "1.0.0");
+    assert_eq!(v.version, "2.0.0");
     assert_eq!(v.contract, CONTRACT_NAME);
 }
 
@@ -907,6 +949,7 @@ fn the_signer_key_registry_is_bounded() {
         denom: DENOM.to_string(),
         params: default_params(),
         signer_keys: (1..=65).map(|n| Key::signer(n).pubkey).collect(),
+        admission_pubkey: Key::admission(1).pubkey,
     };
     assert_eq!(
         s.app

@@ -3,7 +3,7 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-09-27, by ESCROW-3B (the Juno financial backend and its durable chain lifecycle). It builds on ESCROW-3A (`900aec3`), DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
+**Last updated:** 2026-09-28, by ESCROW-JOIN (the contract-level Join admission: the junk-Join production blocker is closed; escrow 2.0.0 is the canonical wasm). It builds on ESCROW-3B (`5298d95`, owner-certified), ESCROW-3A (`900aec3`), DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
 
 **Where the documents live.** They are in two places:
 
@@ -60,14 +60,21 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 - The recovery limiter counts failures only and never refuses the right credential.
 - `gamesDoctor` gained `money`, `money-release` and `reconcile-duplicate-code`.
 
-**Phase 3B — the Juno financial backend: COMPLETE** (ESCROW-3B; the owner gate is pending)
+**Phase 3B — the Juno financial backend: COMPLETE** (ESCROW-3B, `5298d95`; owner-certified)
 - `server/src/escrow/escrowService.ts` + `server/src/escrow/juno/`: sealed gameplay → certified payload → a **durable chain intent** (`games/chain-intents/`, written before any side effect) → signed (KMS-ready signer; a development key only in development, off mainnet, with an explicit switch) → journalled (the external signing journal, outside the data directory in production) → broadcast → observed on chain. One live attempt per relayer account; the sequence is always the chain's; no tx hash is ever invented.
 - The financial record is **v2** (`FINANCIAL_PROTOCOL_VERSION` 2): the deployment pin and the chain-game binding (write-once), the frozen roster with its **epoch**, the chain progress and outcome.
 - Checkpoints at the deal, every completed round boundary and the terminal seal (2L before the Settle, 2L+1), from committed boards only. Finalize only for a settlement this server signed.
 - **The roster freeze is reversible until the chain confirms Start**: permanent once Start is on chain; released (pre-Start funded state) only when the chain PROVES that freeze's Start can never happen; an unknown outcome never releases.
 - The wallet-ticket ledger is durable (`games/wallet-tickets/`), wired to identity's security events, frozen and released with the roster (by token).
 - Startup: rosters preloaded before any chain read; the deployment verified on every configured endpoint; the durable log must reproduce the journal's signed history before anything is signed again. `gamesDoctor money` shows each intent's evidence.
-- **PRODUCTION BLOCKER (contract-level, owner decision required before mainnet):** the frozen contract's `Join` checks only the ticket's 32-byte shape, so any wallet paying the ante can occupy a chain seat (junk-Join griefing). The server never starts such a roster, but cannot prevent the seat being taken. Junox development continues with the limitation pinned. Record: Project `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md` §18.
+- ~~PRODUCTION BLOCKER: junk-Join~~ — **CLOSED by ESCROW-JOIN** (below). 3B §18 is historical.
+
+**ESCROW-JOIN — the contract's Join is admission-gated: COMPLETE** (the owner gate is pending)
+- **Escrow 2.0.0** (`contracts/escrow`): `Join { chain_game_id, consent_pubkey, join_ticket, admission: { expires_at, signature } }`. The contract verifies, BEFORE anything is written or any fund is accepted, block time < `expires_at` and the low-s secp256k1 signature of `Config.admission_pubkey` over `SHA-256("18JUNO/JOIN/v1" ‖ lp(chain_id) ‖ lp(contract) ‖ u64(chain_game_id) ‖ lp(info.sender) ‖ ticket(32) ‖ u64(expires_at))`. A copied ticket or admission seats nobody; nothing replays across game, contract or chain.
+- **The admission key** is its own key (never the relayer's or the settlement key; the contract refuses a current or former admission key as a signer key and vice versa). The admin rotates it with `SetAdmissionKey` (immediate; an in-flight Join fails and moves no funds). `migrate` refuses any state older than 2.0.0 (`MigrateUnsupported`): a 1.x deployment is replaced, never migrated.
+- **Server seam:** `EscrowService.authorizeJoin` (`server/src/escrow/escrowService.ts`) issues an admission only from the existing authority (bound FUNDING game, not frozen, the seat's standing ticket issued to THIS principal for THIS wallet, a structured wallet-control proof from `WalletControlProofs` — none exist until ESCROW-4, so every admission is refused `wallet-unproven` — no conflicting grant, chain open). It records `admitted_until_secs` on the ticket grant BEFORE signing; while an admission is outstanding the seat's ticket is not superseded. Signer: `server/src/escrow/juno/joinAdmission.ts` (KMS in production, which stays fail-closed until LIVE-5; development key only under 3B's guards). Config format **`18COSMOS/JUNO-BACKEND/v2`** requires `admission_key`; deployment verification requires the chain's `admission_pubkey` to be this server's key and refuses the 1.0.0 checksum by name.
+- **Frozen cross-language vectors:** `contracts/escrow/testdata/join_admission_vectors_v1.json` (independent Python generator; Rust, contract-on-chain and TypeScript reproduce every byte).
+- **No settlement byte changed** (SET-0C v10/v11 vectors, codec and appraisal untouched). Record: Project `claude/ESCROW_JOIN_ADMISSION_SECURITY_REPAIR_2026-09-28.md`.
 
 **GNOLAND-1 / 1.1: complete; further Gno work parked**
 - The chain-neutral escrow backend interface and the Juno regression oracle landed as `b804150`.
@@ -89,8 +96,8 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 The owner's brief for each pass sets that pass's exact scope.
 
 ```text
-Phases 1, 2, 2.5, 3A and 3B: COMPLETE
-→ 3: ESCROW-4 (the junk-Join contract decision gates mainnet money)
+Phases 1, 2, 2.5, 3A, 3B and ESCROW-JOIN: COMPLETE
+→ 3: ESCROW-4
 → 4: LIVE-4/5/6
 → 5: Junox E2E
 → 6: Rust retirement
@@ -105,10 +112,11 @@ Phases 1, 2, 2.5, 3A and 3B: COMPLETE
 Gno is parked.
 
 **Next pass: ESCROW-4** (Keplr, wallet consent, multi-device authorization). Its inputs:
+- Project `claude/ESCROW_JOIN_ADMISSION_SECURITY_REPAIR_2026-09-28.md` §17 (the ESCROW-JOIN → 4 handoff: wire `authorizeJoin` behind the ADR-036 proof; the seat lock while an admission is outstanding; the Join wire shape);
 - Project `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md` §21 (the 3B → 4 handoff: the preflight's V-1…V-18 answered);
 - Project `claude/ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT_2026-09-27.md` (the design);
 - **owner ruling (OD-4-2):** relaying an already-valid CONSENT or ANNUL signature does not itself require `hasSensitiveAuth` (the consent-key signature is the authority); creating, replacing or moving the consent/signing key does require sensitive re-authentication plus the contract-required wallet authorization;
-- the junk-Join blocker (§A) stays open until the owner's contract decision; no treasury reimbursement is the security answer.
+- the junk-Join blocker is closed by the contract itself (ESCROW-JOIN); the preflight's W-1 "not preventable" and OD-4-8 are superseded.
 
 ESCROW-3A's procedure is how the next rules version is certified for settlement: rebuild the goldens beside the old ones, then add the version to the literal in its own reviewed change.
 
@@ -147,8 +155,9 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 
 | Topic | Document |
 |---|---|
-| ESCROW-3B: Juno backend, durable intents, reversible freeze, junk-Join blocker | `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md` |
-| ESCROW-4 preflight (design; read with 3B §21) | `claude/ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT_2026-09-27.md` |
+| ESCROW-JOIN: the contract's Join admission, escrow 2.0.0, the canonical wasm `5ecc3022…`, `authorizeJoin` | `claude/ESCROW_JOIN_ADMISSION_SECURITY_REPAIR_2026-09-28.md` |
+| ESCROW-3B: Juno backend, durable intents, reversible freeze (§18 junk-Join: historical, closed by ESCROW-JOIN) | `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md` |
+| ESCROW-4 preflight (design; read with 3B §21 and ESCROW-JOIN §17; its W-1/OD-4-8 are superseded) | `claude/ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT_2026-09-27.md` |
 | ESCROW-3A: v11 settlement + money-game prerequisites | `claude/ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md` |
 | DA-8 / v11 closure | `claude/DA8_RULES_V11_CLOSURE_2026-09-27.md` |
 | Hosted-authority certification (LIVE-2F / 3D) | `claude/LIVE2F_LIVE3D_HOSTED_AUTHORITY_CERTIFICATION_2026-09-27.md` |
@@ -158,8 +167,8 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 | Settlement spec — valuation (SET-0A rev 2, v10; rerun for v11 in ESCROW-3A §2) | `claude/SET0A_NET_WORTH_VALUATION_AUDIT_2026-09-25.md` + `claude/SET0A_golden_vectors_2026-09-25.json` |
 | Settlement spec — primitives (SET-0B) | `claude/SET0B_SETTLEMENT_PRIMITIVES_2026-09-25.md` |
 | Settlement spec — cross-language conformance (SET-0C) | `claude/SET0C_CROSS_LANGUAGE_CONFORMANCE_2026-09-26.md` (§20 supersedes its earlier sections; §17's pin policy is amended by DA-8) |
-| Escrow canonical record (artifact gate) | `claude/ESCROW_B2_CANONICAL_ARTIFACT_GATE_2026-09-26.md` + `claude/ESCROW_B2.1_OPTIMIZER_RUST181_COMPAT_2026-09-26.md` |
-| Chain-neutral interface (GNOLAND-1) | `claude/GNOLAND1_CHAIN_NEUTRAL_ESCROW_INTERFACE_2026-09-26.md` (§§3, 10–15, 19–23, 26) |
+| Escrow canonical record (artifact gate) | the procedure: `claude/ESCROW_B2_CANONICAL_ARTIFACT_GATE_2026-09-26.md` + `claude/ESCROW_B2.1_OPTIMIZER_RUST181_COMPAT_2026-09-26.md`; the current artifact (2.0.0) and its gas table: `claude/ESCROW_JOIN_ADMISSION_SECURITY_REPAIR_2026-09-28.md` §10–11 + `claude/ESCROW_JOIN_canonical_gas_table_5ecc3022.md` |
+| Chain-neutral interface (GNOLAND-1) | `claude/GNOLAND1_CHAIN_NEUTRAL_ESCROW_INTERFACE_2026-09-26.md` (§§3, 10–15, 19–23, 26; **§11 step 3 amended by ESCROW-JOIN**: every backend's Join carries the server's admission — `EscrowCodec.joinAdmissionDigest`, capability `joinAuthorization: "server-admission"`) |
 | GNOLAND-1.1 baseline and regression | `claude/GNOLAND1.1_CANONICAL_ESCROW_0006_REGRESSION_2026-09-26.md` |
 | Rust-retirement plan and evidence | `claude/RUST_RETIREMENT_AUDIT_2026-09-26.md` (partly stale; see §B) |
 
@@ -179,12 +188,13 @@ Every other Project report is **historical**; see the manifest.
 ### C.3 ESCROW-4 reading order
 
 1. This file.
-2. `ESCROW3B_JUNO_BACKEND`: §14 (the reversible freeze), §18 (the junk-Join blocker), §19 (player reachability) and §21 (the 3B → 4 handoff).
-3. `ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT` (the design; its §13–14 expectations are answered by 3B §21).
-4. `ESCROW3A_MONEY_GAME_PREREQUISITES`: §9–11 (tickets, sensitive authentication), §14, §19.
-5. `GNOLAND1_…INTERFACE` §§10–15, 22 (F2, F4).
-6. `INTEGRATION1_…` F-3.
-7. Reference, only when a step needs it: `ESCROW_LIVE_RECONCILIATION` (ESCROW-1.5) §4, §10, §12; `LIVE2_IDENTITY_ROOM_AUTHORITY_DESIGN` §6.
+2. `ESCROW_JOIN_ADMISSION_SECURITY_REPAIR`: §2–5 (the admission), §7 (replay and expiry) and §17 (the handoff).
+3. `ESCROW3B_JUNO_BACKEND`: §14 (the reversible freeze), §19 (player reachability) and §21 (the 3B → 4 handoff).
+4. `ESCROW4_PREFLIGHT_KEPLR_WALLET_CONSENT` (the design; its §13–14 expectations are answered by 3B §21; W-1 is closed).
+5. `ESCROW3A_MONEY_GAME_PREREQUISITES`: §9–11 (tickets, sensitive authentication), §14, §19.
+6. `GNOLAND1_…INTERFACE` §§10–15, 22 (F2, F4).
+7. `INTEGRATION1_…` F-3.
+8. Reference, only when a step needs it: `ESCROW_LIVE_RECONCILIATION` (ESCROW-1.5) §4, §10, §12; `LIVE2_IDENTITY_ROOM_AUTHORITY_DESIGN` §6.
 
 ---
 
@@ -196,11 +206,12 @@ Every other Project report is **historical**; see the manifest.
 
 **2. Settlement is certified for v10 and v11** (`[10, 11]`, an explicit literal; see §A). A later version is added only by its own certification pass. v10 and v11 evidence is never regenerated.
 
-**3. The canonical Juno escrow wasm** is `eighteen_cosmos_escrow.wasm`:
-- **SHA-256 `b263277aa5d1d63c33e8e238f27ad2b9ee4749c9a66abe82ef3146d51d119296`**, 526,033 B.
-- It is not in git. The owner's copy is at `C:\escrow-b2-r2\out\canonical\`.
-- Built from `86b735674de7958830602bb785ae6cecab64b376`, which landed in this checkout as `6796123`.
-- Built with `cosmwasm/optimizer:0.16.1@sha256:b9c92b2900b7ebaab3499203615c1b8589592bc557355ed3432e48851ffde69e` and rustc/cargo 1.81.0.
+**3. The canonical Juno escrow wasm** is `eighteen_cosmos_escrow.wasm`, **escrow 2.0.0** (ESCROW-JOIN, the Join admission):
+- **SHA-256 `5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8`**, 534,085 B.
+- It is not in git. The owner's copy is at `C:\escrow-join-b2\out\canonical\` (and `target\escrow-join-kit\out\canonical\`).
+- Built from the kit commit `711e5c1` (on `5298d95`), whose contract inputs — `contracts/escrow/src` tree `96445b72…`, `contracts/escrow/Cargo.toml`, `Cargo.lock`, the workspace `Cargo.toml` — are exactly the ESCROW-JOIN commit's.
+- Built with `cosmwasm/optimizer:0.16.1@sha256:b9c92b2900b7ebaab3499203615c1b8589592bc557355ed3432e48851ffde69e` and rustc/cargo 1.81.0; two fresh-volume builds byte-identical; max 68 locals; `cosmwasm-check` 1.5.11 / 2.2.9 / 3.0.5 / 3.0.9 pass.
+- **Historical, never for money:** escrow 1.0.0, `b263277aa5d1d63c33e8e238f27ad2b9ee4749c9a66abe82ef3146d51d119296` (526,033 B, ESCROW-B2, from `86b7356` = `6796123`): its Join seated any payer. The server's configuration refuses it by name; a 1.0.0 instance is replaced, never migrated.
 - Rust pins:
   - `contracts/escrow/Cargo.toml` has `rust-version = "1.81"`;
   - `Cargo.lock` pins `base64ct 1.7.3` and `zeroize 1.8.2`. **Never `cargo update` these.**
@@ -216,7 +227,8 @@ Every other Project report is **historical**; see the manifest.
 | `frontend/src/utils/__fixtures__/settlement/SET0A_golden_vectors_rev2.derived.json` | `c16fb8170d38a6b6870d0e39091337d82d89fc2a54bb29f41b98cc98a5c7721a` |
 | `frontend/src/utils/__fixtures__/settlement/settlementCrossLanguageVectors.json` | `50bf34e1374767df4e3273198cfe6537ba7f73fefd51d9a437b0f113c3015d74` |
 
-- Also frozen: the `contracts/escrow/schema/` tree, and `.gitattributes` `eol=lf` on these paths.
+- Also frozen: the `contracts/escrow/schema/` tree (regenerated once for escrow 2.0.0 by ESCROW-JOIN: tree `8ddb532d…`), and `.gitattributes` `eol=lf` on these paths.
+- Also frozen (ESCROW-JOIN, not a settlement byte): `contracts/escrow/testdata/join_admission_vectors_v1.json`, SHA-256 `cacc9ea3d0086253e27d8a67b7c16266f7113799526e888fe810197d16763cfb`.
 - Guarded by the oracle `frontend/src/utils/escrowJunoRegressionOracle.test.ts`, which must stay green.
 
 **5. TypeScript is the gameplay authority.** No chain response can rewrite gameplay state. `SetupGame.escrow` is declared and ignored by the reducer, so it needs no rules bump.

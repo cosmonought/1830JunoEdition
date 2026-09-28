@@ -1,0 +1,361 @@
+{
+  "format": "18JUNO/JOIN/admission-vectors/v1",
+  "spec": "join = SHA-256(\"18JUNO/JOIN/v1\" || u16(len) || chain_id || u16(len) || contract_addr || u64(chain_game_id) || u16(len) || wallet || join_ticket(32) || u64(expires_at)); integers big-endian; secp256k1 ECDSA over the digest itself, 64-byte r||s, low-s; the contract checks block_time_secs < expires_at first, then the signature against Config.admission_pubkey with wallet = the Join transaction's sender",
+  "tag": "18JUNO/JOIN/v1",
+  "genesis_secs": 1790000000,
+  "keys": {
+    "admission": {
+      "label": "18JUNO/TEST/admission/1",
+      "secret_hex": "120ae46b059f513a3993e6f582702ddd8b7a33d771667cddebf64c94a952107b",
+      "pubkey": "02e22ef0e08ff4e8225c5face302470809993280c3ddca590ad206f5dc8a826e28"
+    },
+    "other_admission": {
+      "label": "18JUNO/TEST/admission/2",
+      "secret_hex": "32edeaf4eb14167163aafcebce50171cd6ca85fed0965f123513c17353b2c60a",
+      "pubkey": "02d0a1a2cee95836201879928cf8821830dfb1bfc5dae2e4aeee904e1fbd28f6f5"
+    },
+    "settlement": {
+      "label": "18JUNO/TEST/signer/1",
+      "secret_hex": "ff32ef87fb73b4a75f2256f155be80fac1f853f0b27a9452cb1101d63fa992d9",
+      "pubkey": "02c1c7c47cfadb0f2b7c8db3c40fbc2e22b228c7315bae4666bb829311a265ca1f"
+    }
+  },
+  "vectors": [
+    {
+      "name": "base",
+      "note": "juno-1, the Suite's first contract, game 1, alice (players[1]) with ticket(alice), expiring 15 min after genesis",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "abbde315b9b023cf6ebab50041bc337a1406f653f12fdfa1568186374b80595d",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c25602a",
+      "valid": true
+    },
+    {
+      "name": "testnet",
+      "note": "uni-7 (SuiteBuilder::chain_id(TESTNET)), bob (players[2]) with ticket(bob)",
+      "inputs": {
+        "chain_id": "uni-7",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno1sxmr0k8u6trd5c6eu6trzyapzux7090ykujmsng7pdx0m8k93n5srrjzje",
+        "join_ticket": "fe066fa239333d55123b60e3db95ec5fbb0b77cf2f116f5ff012d88a25a843d4",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f76310005756e692d37003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3173786d72306b38753674726435633665753674727a7961707a757837303930796b756a6d736e6737706478306d386b39336e357372726a7a6a65fe066fa239333d55123b60e3db95ec5fbb0b77cf2f116f5ff012d88a25a843d4000000006ab13f04",
+      "digest": "f97a9743d95586e05cd0912a62ab3a4b1e116be500fcd84750ff4e4201b0d26d",
+      "signature": "dee20156db9ed94db73221e65e107d1532e5febda2ce54e363f360c9a5099ae22b98042c93c7c8903b898f6eb91606286cdf752d3f907a9339bb7a49ffb0ca7a",
+      "valid": true
+    },
+    {
+      "name": "extremes",
+      "note": "u64::MAX game id and expiry (big-endian width check); digest only",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "18446744073709551615",
+        "wallet": "juno16pmh24qq48q9r84g8t5329qp6rqnwpultuxk3595yg4etuqta89snje5rv",
+        "join_ticket": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+        "expires_at": "18446744073709551615"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c777532ffffffffffffffff003f6a756e6f3136706d6832347171343871397238346738743533323971703672716e7770756c7475786b333539357967346574757174613839736e6a65357276000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fffffffffffffffff",
+      "digest": "6e3fd8ffe12aaa58111690b8d67ef66bb91d69aad2bab7a27b34249fd64bd149",
+      "signature": "de68ce635a39384ed8e93e82739968149fe472ee2462b3675b7d70d87f7f6b2900fb32c5d2d0c0ff430a05c61776028ee56700f16dae90043b05fa3e94c9dca3",
+      "valid": true
+    },
+    {
+      "name": "keplr-20-byte-wallet",
+      "note": "a 20-byte account address (the Keplr / secp256k1 account form, 43 characters); digest only",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno15ut6tm3sk6gl0lfsm8djr6vzugzluqzvgg2mx6",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001002b6a756e6f3135757436746d33736b36676c306c66736d38646a7236767a75677a6c75717a766767326d78363f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "dfacf416fc2120c396380c0b9c231413292bb4e90ad5739cf7d47114fed31f57",
+      "signature": "ce0ea6955bb3c385a17db0796be26711c6ddeb1ba3480f0f3e29712cf9b702021141195a8a52a51c32f9368939ffe836406fe6b023de84d10e247a9ac7ac5cd4",
+      "valid": true
+    },
+    {
+      "name": "mutate-another-chain",
+      "note": "the base admission replayed on another chain",
+      "inputs": {
+        "chain_id": "uni-7",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f76310005756e692d37003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "3cb2841101dead44738168bdf918f565cf619ce346d42f4aebacf63aa2f2989a",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c25602a",
+      "valid": false,
+      "mutates": "chain_id"
+    },
+    {
+      "name": "mutate-another-contract",
+      "note": "the base admission replayed on a second escrow instance (the Suite's next contract)",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno14hj2tavq8fpesdwxxcu44rty3hh90vhujrvcmstl4zr3txmfvw9skjuwg8",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f3134686a32746176713866706573647778786375343472747933686839307668756a7276636d73746c347a723374786d66767739736b6a757767380000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "0bd5f0abd6fd5d9e3cb74fbf4bc5a8f4021421c9a61c237a9b8821411a83441d",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c25602a",
+      "valid": false,
+      "mutates": "contract_addr"
+    },
+    {
+      "name": "mutate-another-game",
+      "note": "the base admission replayed on another game of the same contract",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "2",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000002003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "5bd5a2c8c80453d2b0c4a72bb45549cf26f9aa1dbfbbd66a92f063f63c1c9dc7",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c25602a",
+      "valid": false,
+      "mutates": "chain_game_id"
+    },
+    {
+      "name": "mutate-another-wallet",
+      "note": "the base admission copied into mallory's (the Suite's outsider) Join",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno1czjfwasmzafhnmtr897vnqz5v4vl42zv4897ahnhxytux9ggk6kqxhcs2k",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f31637a6a667761736d7a6166686e6d7472383937766e717a357634766c34327a763438393761686e6878797475783967676b366b7178686373326b3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "eb55153bf758927f76ce2418623181deebe077cc911b7d8aaa26576d948760a8",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c25602a",
+      "valid": false,
+      "mutates": "wallet"
+    },
+    {
+      "name": "mutate-uppercase-wallet",
+      "note": "the same account spelt in upper case: the chain's sender is lower case, so an admission signed over any other spelling never verifies",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "JUNO190VQDJTLPCQ27XSLCVEGLFMR4YNFWG7GMW86CNUN4ACAKXRDD6GQADAPEH",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f4a554e4f3139305651444a544c504351323758534c435645474c464d5234594e46574737474d573836434e554e344143414b585244443647514144415045483f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "d6b9d6f0e63debe2610faaaecd8cf06abf5a8baf13aa10e70868655e2178fa16",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c25602a",
+      "valid": false,
+      "mutates": "wallet"
+    },
+    {
+      "name": "mutate-another-ticket",
+      "note": "the base admission with one ticket bit flipped",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f445",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f445000000006ab13f04",
+      "digest": "511012adda4de01b77c94a11f6117a492eaa95e03dc23e82c2020473a2a36ba1",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c25602a",
+      "valid": false,
+      "mutates": "join_ticket"
+    },
+    {
+      "name": "mutate-another-expiry",
+      "note": "the base admission with its expiry extended by one second",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000901"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f05",
+      "digest": "ff403b02cf28d4a37167530736095dd95833567b8c69eae9966811ff71dfe4c0",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c25602a",
+      "valid": false,
+      "mutates": "expires_at"
+    },
+    {
+      "name": "sig-r-bit",
+      "note": "one bit of r flipped",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "abbde315b9b023cf6ebab50041bc337a1406f653f12fdfa1568186374b80595d",
+      "signature": "7e6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c25602a",
+      "valid": false,
+      "mutates": "signature"
+    },
+    {
+      "name": "sig-s-bit",
+      "note": "one bit of s flipped",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "abbde315b9b023cf6ebab50041bc337a1406f653f12fdfa1568186374b80595d",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c25602b",
+      "valid": false,
+      "mutates": "signature"
+    },
+    {
+      "name": "sig-high-s",
+      "note": "the same signature as (r, n - s): ECDSA-valid, refused as not low-s",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "abbde315b9b023cf6ebab50041bc337a1406f653f12fdfa1568186374b80595d",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3ee5f3d3728ec9d1b04d235bc7350ab504dc73457f791660859858ff078410e117",
+      "valid": false,
+      "mutates": "signature"
+    },
+    {
+      "name": "sig-other-admission-key",
+      "note": "the right digest signed by another (e.g. rotated-out) admission key",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "abbde315b9b023cf6ebab50041bc337a1406f653f12fdfa1568186374b80595d",
+      "signature": "b3b70587bb1a25cdc27e9954feef6493df0224db91acba24c5e640ffacc495ee4f86a4483aae20ee140ef764c797fc308295997dd84802e3a1734aa31ec28f99",
+      "valid": false,
+      "mutates": "signature"
+    },
+    {
+      "name": "sig-settlement-key",
+      "note": "the right digest signed by the settlement signer key",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "abbde315b9b023cf6ebab50041bc337a1406f653f12fdfa1568186374b80595d",
+      "signature": "92fccb18c6c565d1d213e43dcecdef07c3f5912d28d80ddc6bafc489758237005444517454bcbaa4487e16c8211fbdeef06e7c459b80e7436bb6350904abc222",
+      "valid": false,
+      "mutates": "signature"
+    },
+    {
+      "name": "sig-truncated",
+      "note": "63 bytes",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "abbde315b9b023cf6ebab50041bc337a1406f653f12fdfa1568186374b80595d",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c2560",
+      "valid": false,
+      "mutates": "signature"
+    },
+    {
+      "name": "sig-extended",
+      "note": "65 bytes",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "abbde315b9b023cf6ebab50041bc337a1406f653f12fdfa1568186374b80595d",
+      "signature": "7f6a5af1d02172534e1b31c7c03f6710dc01c691506f3f6af9c4921b258c3e3e1a0c2c8d71362e4fb2dca438caf54af9de3b976736323fb627795f854c25602a00",
+      "valid": false,
+      "mutates": "signature"
+    },
+    {
+      "name": "sig-empty",
+      "note": "no bytes",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "abbde315b9b023cf6ebab50041bc337a1406f653f12fdfa1568186374b80595d",
+      "signature": "",
+      "valid": false,
+      "mutates": "signature"
+    },
+    {
+      "name": "sig-zero",
+      "note": "r = s = 0",
+      "inputs": {
+        "chain_id": "juno-1",
+        "contract_addr": "juno1mzdhwvvh22wrt07w59wxyd58822qavwkx5lcej7aqfkpqqlhaqfsenlwu2",
+        "chain_game_id": "1",
+        "wallet": "juno190vqdjtlpcq27xslcveglfmr4ynfwg7gmw86cnun4acakxrdd6gqadapeh",
+        "join_ticket": "3f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444",
+        "expires_at": "1790000900"
+      },
+      "preimage": "31384a554e4f2f4a4f494e2f763100066a756e6f2d31003f6a756e6f316d7a64687776766832327772743037773539777879643538383232716176776b78356c63656a376171666b7071716c6861716673656e6c7775320000000000000001003f6a756e6f3139307671646a746c706371323778736c637665676c666d7234796e66776737676d773836636e756e346163616b787264643667716164617065683f1f9142c92994e97aced9dbd5dc92fede9aadebcfbc9b057c8a02f29bc4f444000000006ab13f04",
+      "digest": "abbde315b9b023cf6ebab50041bc337a1406f653f12fdfa1568186374b80595d",
+      "signature": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "valid": false,
+      "mutates": "signature"
+    }
+  ]
+}

@@ -4,6 +4,7 @@
   "type": "object",
   "required": [
     "admin",
+    "admission_pubkey",
     "denom",
     "operator",
     "params",
@@ -14,6 +15,14 @@
   "properties": {
     "admin": {
       "type": "string"
+    },
+    "admission_pubkey": {
+      "description": "The join-admission key (33-byte compressed secp256k1, on the curve, not one of `signer_keys`). Every `Join` needs its signature.",
+      "allOf": [
+        {
+          "$ref": "#/definitions/HexBinary"
+        }
+      ]
     },
     "denom": {
       "description": "The one native denom accepted for antes and bonds (fixed for the contract's life).",

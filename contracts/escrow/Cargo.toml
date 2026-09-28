@@ -1,6 +1,6 @@
 [package]
 name = "eighteen-cosmos-escrow"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
 # cosmwasm/optimizer:0.16.1 builds with Rust 1.81; clippy's incompatible_msrv
 # lint then rejects any std API stabilized later.

@@ -442,10 +442,12 @@ describe("codec guards and the core's neutrality", () => {
       () => gno.consentDigest({ domain: "00".repeat(32), seq: b(1), settle, seat_index: 0, seat_count: 2 }),
       () => gno.annulDigest({ domain: "00".repeat(32), trusted_seq: b(1), seat_index: 0, seat_count: 2 }),
       () => gno.extensions.keyPossession!({ deployment: "gno.land/r/x", chain_game_id: b(1), wallet: "g1a", public_key_hex: "00" }),
+      // ESCROW-JOIN: the Gno Join admission is declared (a capability every backend must have) and refused until GNOLAND-2.
+      () => gno.joinAdmissionDigest({ chain_id: "test5", deployment: "gno.land/r/x", chain_game_id: b(1), wallet: "g1a", join_ticket_hex: "00".repeat(32), expires_at: b(1) }),
     ]) {
       expect(code(run)).toBe("NOT_IMPLEMENTED");
     }
-    const junoTags = ["18JUNO/SETTLE/v1", "18JUNO/DOMAIN/v1", "18JUNO/ROSTER/v1", "18JUNO/CONSENT/v1", "18JUNO/ANNUL/v1", "18JUNO/STATE/v1\n"];
+    const junoTags = ["18JUNO/SETTLE/v1", "18JUNO/DOMAIN/v1", "18JUNO/ROSTER/v1", "18JUNO/CONSENT/v1", "18JUNO/ANNUL/v1", "18JUNO/STATE/v1\n", "18JUNO/JOIN/v1"];
     for (const tag of Object.values(GNO_TAGS_V1_DRAFT)) expect(junoTags).not.toContain(tag);
     // A building attempt through the draft codec fails at the domain, before any appraisal or byte is produced.
     expect(code(() => buildSettlementCoreV1(gno, argsPair(v).neutral))).toBe("NOT_IMPLEMENTED");
@@ -458,6 +460,8 @@ describe("codec guards and the core's neutrality", () => {
     expect([JUNO_CAPABILITIES_V1.payableCalls, GNO_CAPABILITIES_DRAFT.payableCalls]).toEqual(["any-sender", "eoa-direct-only"]);
     expect([JUNO_CAPABILITIES_V1.consentBindsSeat, GNO_CAPABILITIES_DRAFT.consentBindsSeat]).toEqual([false, true]);
     expect([JUNO_CODEC_V1.consentBindsSeat, GNO_CODEC_V1_DRAFT.consentBindsSeat]).toEqual([false, true]);
+    // ESCROW-JOIN: neither backend seats a wallet the hosted server did not admit.
+    expect([JUNO_CAPABILITIES_V1.joinAuthorization, GNO_CAPABILITIES_DRAFT.joinAuthorization]).toEqual(["server-admission", "server-admission"]);
   });
 });
 
@@ -471,7 +475,8 @@ describe("the Juno ContractError map is complete and stable", () => {
   const variants = Array.from(body.slice(0, body.indexOf("\n}\n")).matchAll(/^ {4}([A-Z][A-Za-z0-9]*)\s*(?:\{|\(|,)/gm)).map((m) => m[1]);
 
   it("every variant of error.rs is mapped, and nothing else", () => {
-    expect(variants.length).toBe(54);
+    // 54 through escrow 1.0.0; ESCROW-JOIN (2.0.0) adds InvalidAdmission, AdmissionExpired, MigrateUnsupported.
+    expect(variants.length).toBe(57);
     expect(Object.keys(JUNO_CONTRACT_ERROR_MAP).sort()).toEqual(variants.slice().sort());
   });
   it("classification carries the neutral code, its retry class, and the native detail", () => {

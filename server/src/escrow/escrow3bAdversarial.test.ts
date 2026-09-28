@@ -34,7 +34,10 @@ import { parseJunoBackendConfig, verifyJunoDeployment, checkSignerIdentities, Ju
 import { createJunoRest, JunoRpcError, type HttpTransport } from "./juno/junoRest";
 import { publicKeyOf } from "./juno/secp256k1";
 import {
+  ADMISSION_PUBKEY,
+  ADMISSION_SECRET,
   CANONICAL_CHECKSUM,
+  HISTORICAL_1_0_0_CHECKSUM,
   CHAIN_ID,
   CONTRACT,
   GAME_A,
@@ -681,7 +684,7 @@ describe("§14 / §15 the file-backed wallet-ticket ledger", () => {
 
 describe("§20 configuration safety and §23 the operator view", () => {
   const good = (over: Record<string, unknown> = {}) => ({
-    format: "18COSMOS/JUNO-BACKEND/v1",
+    format: "18COSMOS/JUNO-BACKEND/v2",
     chain_id: CHAIN_ID,
     network_class: "testnet",
     rest_endpoints: ["https://rest.example"],
@@ -692,6 +695,7 @@ describe("§20 configuration safety and §23 the operator view", () => {
     asset_symbol: "JUNOX",
     relayer: { address: RELAYER_ADDRESS, signer: { kind: "development", key_file: "/keys/relayer.key" } },
     settlement_key: { signer_key_id: 1, public_key_hex: publicKeyOf(SETTLEMENT_SECRET).toString("hex"), signer: { kind: "development", key_file: "/keys/settlement.key" } },
+    admission_key: { public_key_hex: ADMISSION_PUBKEY, signer: { kind: "development", key_file: "/keys/admission.key" } },
     trust: { operators: [RELAYER_ADDRESS], resolvers: [RELAYER_ADDRESS], min_challenge_window_secs: "60", min_liveness_window_secs: "3600", min_resolver_timeout_secs: "3600" },
     journal_dir: "/journal",
     dev_signer: "allow-unprotected-testnet-key",
@@ -721,9 +725,24 @@ describe("§20 configuration safety and §23 the operator view", () => {
     assert.match(String(problems(good({ dev_signer: undefined }))), /dev_signer/);
     assert.match(String(problems(good({ gas: { max_gas: "99999999999" } }))), /max gas/);
     assert.deepEqual(CANONICAL_JUNO_ESCROW_CHECKSUMS, [CANONICAL_CHECKSUM]);
+    /* ESCROW-JOIN: the escrow 1.0.0 artifact (its Join seated any payer) is refused by name; the admission key is
+       required, its own key, and configured by the v2 format only. */
+    assert.match(String(problems(good({ code_checksum: HISTORICAL_1_0_0_CHECKSUM }))), /historical escrow 1\.0\.0 artifact/);
+    assert.match(String(problems(good({ format: "18COSMOS/JUNO-BACKEND/v1" }))), /format must be 18COSMOS\/JUNO-BACKEND\/v2/);
+    assert.match(String(problems(good({ admission_key: undefined }))), /admission_key is required/);
+    assert.match(String(problems(good({ admission_key: { public_key_hex: ADMISSION_PUBKEY, signer: { kind: "development", key_file: "/keys/settlement.key" } } }))), /admission key and the settlement key must be different keys/);
+    assert.match(String(problems(good({ admission_key: { public_key_hex: ADMISSION_PUBKEY, signer: { kind: "development", key_file: "/keys/relayer.key" } } }))), /admission key and the relayer key must be different keys/);
+    assert.match(String(problems(good({ admission_key: { public_key_hex: publicKeyOf(SETTLEMENT_SECRET).toString("hex"), signer: { kind: "development", key_file: "/keys/admission.key" } } }))), /admission key and the settlement key must be different keys/);
+    assert.match(String(problems(good({ admission_key: { public_key_hex: ADMISSION_PUBKEY.toUpperCase(), signer: { kind: "development", key_file: "/keys/admission.key" } } }))), /admission_key.public_key_hex/);
+    assert.match(String(problems(good({ admission_key: { public_key_hex: ADMISSION_PUBKEY, signer: { kind: "development", key_file: "/keys/admission.key" }, ttl_secs: 7200 } }))), /ttl_secs must be 120..1800/);
+    assert.match(String(problems(good({ admission_key: { public_key_hex: ADMISSION_PUBKEY, signer: { kind: "development", key_file: "/keys/admission.key" }, expiry: 1 } }))), /unknown field admission_key.expiry/);
+    assert.match(String(problems(good({ admission_key: { public_key_hex: ADMISSION_PUBKEY, signer: { kind: "development", key_file: "/keys/admission.key" } } }), prod)), /admission_key: a development signer is refused in production/);
+    assert.equal(parseJunoBackendConfig(good(), dev).admissionKey.ttlSecs, 600);
     const parsed = parseJunoBackendConfig(good(), dev);
-    assert.throws(() => checkSignerIdentities(parsed, publicKeyOf(SETTLEMENT_SECRET), publicKeyOf(SETTLEMENT_SECRET), settlementKeyConfig()), /relayer key controls/);
-    assert.doesNotThrow(() => checkSignerIdentities(parsed, publicKeyOf(RELAYER_SECRET), publicKeyOf(SETTLEMENT_SECRET), settlementKeyConfig()));
+    const admission = publicKeyOf(ADMISSION_SECRET);
+    assert.throws(() => checkSignerIdentities(parsed, publicKeyOf(SETTLEMENT_SECRET), publicKeyOf(SETTLEMENT_SECRET), settlementKeyConfig(), admission), /relayer key controls/);
+    assert.throws(() => checkSignerIdentities(parsed, publicKeyOf(RELAYER_SECRET), publicKeyOf(SETTLEMENT_SECRET), settlementKeyConfig(), publicKeyOf(RELAYER_SECRET)), /not the configured admission public key/);
+    assert.doesNotThrow(() => checkSignerIdentities(parsed, publicKeyOf(RELAYER_SECRET), publicKeyOf(SETTLEMENT_SECRET), settlementKeyConfig(), admission));
   });
 
   test("the online checks: verified on the configured chain; another operator, a foreign active key, another code refuse", async () => {
@@ -738,6 +757,14 @@ describe("§20 configuration safety and §23 the operator view", () => {
     assert.match((foreign as unknown as { problems: string[] }).problems.join(" "), /active keys this server does not hold/);
     world.chain.signerKeys.pop();
     assert.equal((await verifyJunoDeployment({ ...trusted, codeChecksums: ["22".repeat(32)] }, world.chain)).kind, "mismatch");
+    /* ESCROW-JOIN: a contract that verifies another admission key (a rotation this server was not told about, or a
+       deployment made for another server) refuses; so does a contract version other than 2.0.0. */
+    world.chain.admissionPubkey = publicKeyOf(RELAYER_SECRET).toString("hex");
+    const otherKey = await verifyJunoDeployment(trusted, world.chain);
+    assert.equal(otherKey.kind, "mismatch");
+    assert.match((otherKey as unknown as { problems: string[] }).problems.join(" "), /join-admission key/);
+    world.chain.admissionPubkey = ADMISSION_PUBKEY;
+    assert.equal((await verifyJunoDeployment(trusted, world.chain)).kind, "verified");
     world.chain.unavailable = true;
     assert.equal((await verifyJunoDeployment(trusted, world.chain)).kind, "unavailable");
   });

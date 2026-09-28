@@ -6,7 +6,11 @@
 //!   vectors in `testdata/payload_vectors_v1.json`.
 //! * Keys are deterministic: secret = SHA-256(label). The settlement signer is
 //!   "18JUNO/TEST/signer/1" (key id 1); seat i's consent key is
-//!   "18JUNO/TEST/seat/i" for the player at index i of `PLAYER_LABELS`.
+//!   "18JUNO/TEST/seat/i" for the player at index i of `PLAYER_LABELS`; the
+//!   join-admission key is "18JUNO/TEST/admission/1".
+//! * Every `Join` built here carries a valid admission for its SENDER (expiry
+//!   `ADMISSION_TTL` after the current block time), so the older suites keep
+//!   testing what they tested; `tests/join_admission.rs` attacks the admission.
 //! * Signatures are RFC 6979 (k256), low-s.
 #![allow(dead_code)]
 
@@ -18,8 +22,8 @@ use cw_multi_test::{
 use eighteen_cosmos_escrow::contract::{execute, instantiate, migrate, query};
 use eighteen_cosmos_escrow::crypto;
 use eighteen_cosmos_escrow::msg::{
-    CheckpointsResponse, ConfigResponse, ExecuteMsg, GameResponse, InstantiateMsg, QueryMsg,
-    ResolveOutcome, SeatSignature, SettlementPayloadV1, SignedCheckpoint,
+    CheckpointsResponse, ConfigResponse, ExecuteMsg, GameResponse, InstantiateMsg, JoinAdmission,
+    QueryMsg, ResolveOutcome, SeatSignature, SettlementPayloadV1, SignedCheckpoint,
 };
 use eighteen_cosmos_escrow::payload::{Payload, KIND_CHECKPOINT, KIND_TERMINAL};
 use eighteen_cosmos_escrow::state::{GameParams, GameState, Mode};
@@ -41,6 +45,8 @@ pub const RULES_ENGINE_VERSION: u32 = 10;
 pub const DAY: u64 = 24 * 60 * 60;
 pub const HOUR: u64 = 60 * 60;
 pub const RICH: u128 = 1_000_000_000_000_000_000_000_000_000_000_000;
+/// How long a test admission stays valid after the block it was issued in.
+pub const ADMISSION_TTL: u64 = 15 * 60;
 
 /// Wallet labels, seat i uses consent key "18JUNO/TEST/seat/i".
 pub const PLAYER_LABELS: [&str; 8] = [
@@ -99,6 +105,10 @@ impl Key {
 
     pub fn signer(n: usize) -> Key {
         Key::from_label(&format!("18JUNO/TEST/signer/{n}"))
+    }
+
+    pub fn admission(n: usize) -> Key {
+        Key::from_label(&format!("18JUNO/TEST/admission/{n}"))
     }
 
     pub fn sign_bytes(&self, digest: &[u8; 32]) -> [u8; 64] {
@@ -162,6 +172,8 @@ pub struct Suite {
     /// `PLAYER_LABELS` wallets; players[i] signs consents with `Key::seat(i)`.
     pub players: Vec<Addr>,
     pub signer: Key,
+    /// Signs the admissions `join_msg` builds (the contract's current key).
+    pub admission: Key,
 }
 
 pub struct SuiteBuilder {
@@ -169,6 +181,7 @@ pub struct SuiteBuilder {
     pub params: GameParams,
     pub signer_keys: Vec<HexBinary>,
     pub balance: u128,
+    pub admission: Key,
 }
 
 impl Default for SuiteBuilder {
@@ -178,6 +191,7 @@ impl Default for SuiteBuilder {
             params: default_params(),
             signer_keys: vec![Key::signer(1).pubkey],
             balance: RICH,
+            admission: Key::admission(1),
         }
     }
 }
@@ -244,6 +258,7 @@ impl SuiteBuilder {
                     denom: DENOM.to_string(),
                     params: self.params,
                     signer_keys: self.signer_keys,
+                    admission_pubkey: self.admission.pubkey.clone(),
                 },
                 &[],
                 "18cosmos-escrow",
@@ -261,6 +276,7 @@ impl SuiteBuilder {
             outsider,
             players,
             signer: Key::signer(1),
+            admission: self.admission,
         }
     }
 }
@@ -371,11 +387,63 @@ impl Suite {
         }
     }
 
-    pub fn join_msg(id: u64, seat: usize) -> ExecuteMsg {
+    /// The JOIN digest for `wallet` on this suite's chain and contract.
+    pub fn admission_digest(
+        &self,
+        id: u64,
+        wallet: &Addr,
+        ticket: &HexBinary,
+        expires_at: u64,
+    ) -> [u8; 32] {
+        let chain_id = self.app.block_info().chain_id;
+        crypto::join_admission_digest(
+            &chain_id,
+            self.contract.as_str(),
+            id,
+            wallet.as_str(),
+            &ticket.as_slice().try_into().expect("32-byte ticket"),
+            expires_at,
+        )
+        .unwrap()
+    }
+
+    /// A valid admission for `wallet` (the future sender) until `expires_at`.
+    pub fn admission_until(
+        &self,
+        id: u64,
+        wallet: &Addr,
+        ticket: &HexBinary,
+        expires_at: u64,
+    ) -> JoinAdmission {
+        JoinAdmission {
+            expires_at: Uint64::new(expires_at),
+            signature: self
+                .admission
+                .sign(&self.admission_digest(id, wallet, ticket, expires_at)),
+        }
+    }
+
+    /// A valid admission for `wallet`, expiring `ADMISSION_TTL` from now.
+    pub fn admission_for(&self, id: u64, wallet: &Addr, ticket: &HexBinary) -> JoinAdmission {
+        let expires_at = self.now().seconds() + ADMISSION_TTL;
+        self.admission_until(id, wallet, ticket, expires_at)
+    }
+
+    /// `players[seat]` joins with seat `seat`'s consent key and ticket.
+    pub fn join_msg(&self, id: u64, seat: usize) -> ExecuteMsg {
+        let wallet = self.players[seat].clone();
+        self.join_msg_as(id, &wallet, seat)
+    }
+
+    /// `sender` joins with seat `seat`'s consent key and ticket, admitted for
+    /// `sender` itself.
+    pub fn join_msg_as(&self, id: u64, sender: &Addr, seat: usize) -> ExecuteMsg {
+        let join_ticket = ticket(PLAYER_LABELS[seat]);
         ExecuteMsg::Join {
             chain_game_id: id,
             consent_pubkey: Key::seat(seat).pubkey,
-            join_ticket: ticket(PLAYER_LABELS[seat]),
+            admission: self.admission_for(id, sender, &join_ticket),
+            join_ticket,
         }
     }
 
@@ -403,8 +471,8 @@ impl Suite {
 
     pub fn join(&mut self, id: u64, seat: usize, ante: u128) {
         let who = self.players[seat].clone();
-        self.exec(&who, &Self::join_msg(id, seat), &coins(ante, DENOM))
-            .unwrap();
+        let msg = self.join_msg(id, seat);
+        self.exec(&who, &msg, &coins(ante, DENOM)).unwrap();
     }
 
     /// FUNDED game whose seat i is players[i], for i in 0..n.

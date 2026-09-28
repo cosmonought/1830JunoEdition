@@ -320,6 +320,10 @@ fn build(
                 chain_game_id: id,
                 consent_pubkey: fresh_key.pubkey,
                 join_ticket: ticket("matrix"),
+                // Admitted for the caller the matrix sends it from: the matrix
+                // tests who may Join in which state, not the admission (see
+                // join_admission.rs).
+                admission: s.admission_for(id, &addr(s, role), &ticket("matrix")),
             },
             coins(ANTE, DENOM),
         ),
@@ -764,11 +768,13 @@ fn retarget(msg: ExecuteMsg, to: u64) -> ExecuteMsg {
         ExecuteMsg::Join {
             consent_pubkey,
             join_ticket,
+            admission,
             ..
         } => ExecuteMsg::Join {
             chain_game_id: to,
             consent_pubkey,
             join_ticket,
+            admission,
         },
         ExecuteMsg::Withdraw { .. } => ExecuteMsg::Withdraw { chain_game_id: to },
         ExecuteMsg::Cancel { .. } => ExecuteMsg::Cancel { chain_game_id: to },

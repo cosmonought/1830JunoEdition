@@ -411,6 +411,7 @@ fn join_refuses_a_consent_key_another_seat_already_holds() {
             chain_game_id: id,
             consent_pubkey: key.pubkey.clone(),
             join_ticket: ticket("bob"),
+            admission: s.admission_for(id, &bob, &ticket("bob")),
         };
         assert_eq!(
             s.exec(&bob, &msg, &coins(ANTE, DENOM)).unwrap_err(),
@@ -426,6 +427,7 @@ fn join_refuses_a_consent_key_another_seat_already_holds() {
                 chain_game_id: id,
                 consent_pubkey: upper,
                 join_ticket: ticket("bob"),
+                admission: s.admission_for(id, &bob, &ticket("bob")),
             },
             &coins(ANTE, DENOM),
         )
@@ -454,6 +456,7 @@ fn a_withdrawn_seats_key_is_free_again() {
             chain_game_id: id,
             consent_pubkey: Key::seat(1).pubkey,
             join_ticket: ticket("bob"),
+            admission: s.admission_for(id, &bob, &ticket("bob")),
         },
         &coins(ANTE, DENOM),
     )

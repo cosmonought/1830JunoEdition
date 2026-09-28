@@ -304,7 +304,9 @@ describe("the phase-change toast is 30% shorter", () => {
 
 describe("the action bar does not flicker through skipped steps", () => {
   it("draws a held step while a run of skips resolves", () => {
-    expect(APP).toContain("const displayedSubPhase = autoSkipPending");
+    // 6.5-B (SI-H01): through `displayedOperatingSubPhase`, which holds only off the hosted server path.
+    expect(APP).toContain("const displayedSubPhase = displayedOperatingSubPhase({");
+    expect(APP).toContain("freezeHolding: autoSkipPending,");
     expect(APP).toContain("orSubPhase={displayedSubPhase}");
   });
 

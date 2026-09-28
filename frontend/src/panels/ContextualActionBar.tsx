@@ -1200,7 +1200,9 @@ export default function ContextualActionBar({
      the chips into one group would have forced a choice between one wrong sentence and a `switch` in this
      file on which power it is, which is this component writing copy about a rule it does not own (#848's
      rule, and #872's correction of two strings that had escaped it). */
-  powerOffers?: readonly { abilityKey: string; chipLabel: string; chipTitle?: string }[];
+  /** 6.5-B (K-01): `blockedReason` greys a chip with the sentence the authority would refuse it with -- the M&H's
+   *  Stock Round exchange while a player <-> player trade offer holds the table (`pendingOfferBlock`). */
+  powerOffers?: readonly { abilityKey: string; chipLabel: string; chipTitle?: string; blockedReason?: string | null }[];
   /** Raises the prompt for one of them. Absent means no chips, the same way an absent `mapEl` means no jump. */
   onUsePowerOffer?: (abilityKey: string) => void;
   /** Design note #715: everything the embedded `ProposePrivatePurchase` needs, as ONE object -- the same
@@ -2184,8 +2186,9 @@ export default function ContextualActionBar({
              considered and overruled rather than missed. */
           icon: <PrivatePowerStar height={POWER_CHIP_STAR_PX} />,
           onClick: () => onUsePowerOffer(offer.abilityKey),
-          disabled: false,
-          title: offer.chipTitle ?? "Opens the question — nothing is spent until you answer it.",
+          // 6.5-B (K-01): greyed WITH the hold's sentence while a player trade offer stands, not refused later.
+          disabled: (offer.blockedReason ?? null) !== null,
+          title: offer.blockedReason ?? offer.chipTitle ?? "Opens the question — nothing is spent until you answer it.",
         }))
       : [];
 

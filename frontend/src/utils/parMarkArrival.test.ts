@@ -125,7 +125,10 @@ describe("the wiring: the mark is the reducer's, and the shell no longer stands 
   it("still closes the prompt on every client, and narrates from the general path", () => {
     // #565: the prompt closes wherever the answer lands. #1246: the sentence moved to `describeGameplayAction`
     // so the general path's entry is the one line; the branch no longer logs anything itself.
-    expect(branch).toContain("setBoParPrompt(null)");
+    // 6.5-B (H-02): and the branch no longer closes anything either -- the prompt IS `boParOwedTo` on the live
+    // board (`boParOwner`), so it closes on every client when the reducer below gives the B&O its president.
+    expect(branch).not.toContain("setBoParPrompt");
+    expect(APP).toContain("const boParOwner = liveState ? boParOwedTo(liveState) : null;");
     expect(branch).not.toContain("logInfo(");
     const LOG = readStripped("utils/actionLog.ts");
     expect(LOG).toContain("receives the B&O President's Certificate and pars it at $");

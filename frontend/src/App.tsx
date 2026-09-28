@@ -103,7 +103,21 @@ import {
   withEmptyRoster,
   type SandboxLogMsg,
 } from "./gameEngine/gameSetup";
-import { canonicalWholeVgp, wholeVgpNumber } from "./gameEngine/vgpAmount";
+import { canonicalWholeVgp } from "./gameEngine/vgpAmount";
+// 6.5-B (K-10): the ordinary private offer's prompt view, which is `null` for a funding offer.
+import { ordinaryPrivateProposalView } from "./utils/privateProposalView";
+// 6.5-B (SI-H01): the Action Bar draws the live Operating step on the hosted server path.
+import { displayedOperatingSubPhase } from "./utils/displayedOperatingStep";
+// 6.5-B (K-01): the Stock Round's Private Companies section and its pointer in the consent slot.
+import { PlayerPrivateTradePrompt } from "./components/PrivateCompaniesSection";
+import {
+  answerPrivateTradeMsg,
+  privateTradeHoldReason,
+  privateTradeProposalRefusal,
+  privateTradeSectionModel,
+  proposePrivateTradeMsg,
+  rescindPrivateTradeMsg,
+} from "./utils/stockRoundPrivateTrade";
 // Design note #522: the Sandbox multiplayer bridge.
 import SandboxRoomBar from "./components/SandboxRoomBar";
 /* Design note #1141: the mini-camera and the dialog that frames it. */
@@ -289,6 +303,10 @@ import { projectDividendPayouts } from "./utils/dividendProjection";
 import { sharePurchaseBlock } from "./gameEngine/sharePurchase";
 // Design note #713: the sale's guards.
 import { shareSaleBlock } from "./gameEngine/shareSale";
+// 6.5-B (K-08): the sale authority's own sentence for a granted share of a corporation nobody has started.
+import { unstartedCorporationSaleRefusal } from "./utils/stockRoundSaleBlock";
+// 6.5-B (H-02): the B&O par obligation, read off the board (DA-3) rather than kept in a latch.
+import { boParOwedTo } from "./gameEngine/auctionAuthority";
 // Design note #725: the D&H's two halves, and the order between them.
 import {
   privatePowerHexKeys,
@@ -678,7 +696,6 @@ import { chromeZoomFor, styles } from "./styles/appStyles";
 import { ModalLayerHost } from "./components/ModalPortal";
 import { PHASE_SHIFT_PULSE_CSS, TURN_PULSE_KEYFRAMES_CSS } from "./styles/animations";
 import {
-  BO_PRIVATE_ID,
   BO_TICKER,
   eraForPhase,
   NO_TRAIN_ROUTE_REASON,
@@ -1222,9 +1239,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   );
 
 
-  // Par is keyed per company_id, not one shared value; srSelectedProtocolId is gone (#29). B&O's par is held in a prompt (#399).
+  // Par is keyed per company_id, not one shared value; srSelectedProtocolId is gone (#29). B&O's par is asked for in a
+  // prompt (#399), which 6.5-B (H-02) derives from the board -- see `boParOwner`.
   // See docs/ai_architecture/stock_market.md - App.tsx #398
-  const [boParPrompt, setBoParPrompt] = useState<{ player: string } | null>(null);
   const [srParValues, setSrParValues] = useState<Readonly<Record<number, string>>>({});
   /* Design note #553: the corporation's own par wins over this browser's
      ladder. The ladder is only consulted while the company has no price. */
@@ -2868,10 +2885,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     gameState?.current_round_type === "WaterfallAuction" &&
     (waterfallState?.privates.length ?? -1) === 0;
 
-  /* The modal asks the board, not a flag, so a replay cannot re-raise an answered prompt. The latch stays only to say WHO may answer.
+  /* The modal asks the board, not a flag, so a replay cannot re-raise an answered prompt.
      See docs/ai_architecture/firebase_middleware.md - App.tsx #565 */
-  const boParAlreadySet =
-    (gameState?.public_companies.find((c) => c.ticker === BO_TICKER)?.par_value ?? null) !== null;
+  /* ==================================================================
+      6.5-B (H-02): WHO OWES THE B&O PAR IS THE BOARD'S ANSWER, NOT A LATCH
+     ==================================================================
+     #565 made the board decide WHETHER the prompt shows and kept a `useState` latch to say WHO answers it. The
+     latch was raised by the auction win on every client that applied it and cleared on the clicking client
+     BEFORE `SetBoPar` was sent -- so a send that never landed (the link reconnecting) or that was refused took
+     the par control away from the one player who owed it, showed that player a Proceed the server refuses
+     (`auctionHandoffRefusal`), and left every other seat waiting. Only a reload or an undo recovered it.
+     DA-3 already derives the obligation (`boParOwedTo`: the BO private is a player's, the B&O has no president,
+     and the certificate is still in its IPO). The prompt, its owner, and the Proceed block now read that one
+     fact from the LIVE board (never a scrubbed past one): the prompt stays exactly as long as the board owes the
+     par, whatever happened to a click, and leaves when the server's `SetBoPar` lands. */
+  const boParOwner = liveState ? boParOwedTo(liveState) : null;
 
   /** Whose turn it is, as a name. `null` outside a seat-driven round or
    *  when the room has not started -- the header then shows nothing rather
@@ -3438,13 +3466,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        are now three branches a test can exercise one at a time instead of three sentences a scan has to
        find. The note above still explains WHY the offer travels with the bar; what it no longer has to do is
        be the only record of what the code checks. */
-    () =>
-      stockRoundExchangeOffers({
+    () => {
+      const offers = stockRoundExchangeOffers({
         state: gameState,
         viewerAddress,
         sandbox,
         mhPrivateId: MH_PRIVATE_ID,
-      }),
+      });
+      /* 6.5-B (K-01): the M&H's exchange is not turn-gated, so while a player <-> player trade offer holds the
+         table the hold is the one thing that refuses it -- the chip is greyed with that sentence instead. */
+      const hold = privateTradeHoldReason(gameState, (address) => sandboxPlayerLabel(address) ?? truncateAddress(address));
+      return hold === null ? offers : offers.map((offer) => ({ ...offer, blockedReason: hold }));
+    },
     [gameState, viewerAddress, sandbox],
   );
 
@@ -3942,21 +3975,48 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      The PROMPT keeps its own state; #166's argument survives for the half that outlives the step. */
   /* Derived from shared sandbox state, not useState. The display label is added at the edge; the wallet is what travels.
      See docs/ai_architecture/contract_economy.md - App.tsx #662 */
-  const privateProposal = useMemo<PrivateTradeProposal | null>(() => {
-    const offer = gameState?.private_purchase_offer ?? null;
-    // #1247: an accepted offer is settled from the seller's side; the prompt has nothing left to ask.
-    if (!offer || offer.accepted) return null;
-    return {
-      privateId: offer.private_id,
-      privateName: offer.private_name,
-      ownerAddress: offer.owner,
-      ownerLabel: sandboxPlayerLabel(offer.owner) ?? truncateAddress(offer.owner),
-      buyerProtocolId: offer.buyer_protocol_id,
-      buyerTicker: offer.buyer_ticker,
-      // Stage 10.5 (S10-9): the prompt shows dollars; the offer may carry either wire spelling.
-      price: wholeVgpNumber(offer.price) ?? Number(offer.price),
-    };
-  }, [gameState?.private_purchase_offer]);
+  /* 6.5-B (K-10): A FUNDING OFFER IS NOT THIS PROMPT'S. `private_purchase_offer` carries both kinds, and the
+     emergency offer runs the other way -- the BUYING president answers it, in `FundingPrivateOfferPrompt`, with
+     `AnswerFundingPrivateOffer`. Read here as well, it put a second prompt in the same slot whose Accept and Reject
+     send `AnswerPrivatePurchase`, which the funding hold refuses. `ordinaryPrivateProposalView` is `null` for it
+     (and, #1247, for an accepted offer). */
+  const privateProposal = useMemo<PrivateTradeProposal | null>(
+    () =>
+      ordinaryPrivateProposalView(
+        gameState?.private_purchase_offer ?? null,
+        (address) => sandboxPlayerLabel(address) ?? truncateAddress(address),
+      ),
+    [gameState?.private_purchase_offer],
+  );
+
+  /* ==================================================================
+      6.5-B (K-01): THE STOCK ROUND'S PLAYER <-> PLAYER PRIVATE TRADE, READ OFF THE BOARD
+     ==================================================================
+     D-24's transaction (`ProposePrivateTrade` / `AnswerPrivateTrade` / `RescindPrivateTrade`) had an authority and
+     no surface. The section view, the standing offer and the hold are all derived from shared state here -- #662's
+     rule: an offer is something the OTHER player must see, so it is never kept in this shell. While scrubbing a
+     finished game the section is drawn read-only (no viewer), exactly as every other control is off then. */
+  const privateTradeLabel = useCallback(
+    (address: string) => sandboxPlayerLabel(address) ?? truncateAddress(address),
+    [],
+  );
+  const privateTradeSection = useMemo(
+    () => privateTradeSectionModel(gameState, scrubbing ? null : viewerAddress, privateTradeLabel),
+    [gameState, scrubbing, viewerAddress, privateTradeLabel],
+  );
+  /** The hold's own sentence while a player trade offer stands (`pendingOfferBlock`), for every share control and
+   *  for Pass -- greyed with it rather than refused after the click (K-13's class, closed for this offer). */
+  const privateTradeHold = useMemo(
+    () => (scrubbing ? null : privateTradeHoldReason(gameState, privateTradeLabel)),
+    [gameState, scrubbing, privateTradeLabel],
+  );
+  const privateTradeProposalRefusalFor = useCallback(
+    (intent: { privateId: number; seller: string; buyer: string; price: number }) =>
+      gameState
+        ? privateTradeProposalRefusal(gameState, viewerAddress, intent, privateTradeLabel)
+        : "The board is not loaded yet.",
+    [gameState, viewerAddress, privateTradeLabel],
+  );
 
   /* Design note #205 said: "Trains have a full on-chain offer flow; privates are single-party.
      sandboxTrainProposal stands in for the offer register offline only." Both halves are true and the
@@ -6441,9 +6501,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              exactly as the reducer's arm does (#904b). The state moves below, in the reducer, like everything
              else. #1221's reconcile went with the branch: the reducer's wrapper does it, and the reducer runs. */
           /* Design note #565: the prompt closes wherever the answer lands, not only on the browser that gave
-             it. `handleConfirmBoPar` cleared it locally, which was every client that had raised one minus the
-             ones that had not yet seen the answer. */
-          setBoParPrompt(null);
+             it. 6.5-B (H-02): nothing is cleared here any more -- the prompt IS `boParOwedTo` on the live board,
+             so it closes on every client exactly when the reducer below gives the B&O its president. */
           // NO RETURN. The grant and the par mark happen below, in the reducer.
         }
 
@@ -6966,8 +7025,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 `${sandboxPlayerLabel(player) ?? truncateAddress(player)} won ${name} for $${price}.`,
               );
               /* #354/#399: the B&O private grants a presidency, but the grant needs a par, and the par is a
-                 decision -- so the win raises a prompt. */
-              if (privateId === BO_PRIVATE_ID) setBoParPrompt({ player });
+                 decision -- so the win raises a prompt. 6.5-B (H-02): raised by the board itself now
+                 (`boParOwner`), so nothing is written here and nothing can be left behind. */
               if (privateId === CA_PRIVATE_ID) {
                 const prrBefore = before?.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
                 const prrAfter = settledBoard.public_companies.find((c) => c.ticker === CA_BONUS_TICKER);
@@ -8892,7 +8951,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     pendingTokenRef.current = null;
     setPendingToken(null);
     setHomeStationPlacement(null);
-    setBoParPrompt(null);
+    // 6.5-B (H-02): no B&O par latch to reset -- the prompt is `boParOwedTo` on the rebuilt board.
     setUsedPrivateAbilities(new Set());
 
     autoSkippedRef.current = new Set();
@@ -9444,13 +9503,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      over, unpriced -- never exists for a render to catch. */
   const handleConfirmBoPar = useCallback(
     (parValue: string) => {
-      const winner = boParPrompt?.player;
-      setBoParPrompt(null);
-      if (!winner) return;
+      /* 6.5-B (H-02): the owner is the board's (`boParOwner`), and NOTHING is cleared before the send. The prompt
+         leaves when the server's `SetBoPar` lands and the board stops owing the par; a send that is lost or
+         refused leaves it where it is, so the owner can simply press again. Returned, so the modal can hold its
+         button while this one is in flight. */
+      const winner = boParOwner;
+      if (!winner || winner !== viewerAddress) return undefined;
 
       /* Written OUTSIDE setSandboxState's updater: a state updater must be pure, and React may invoke it twice. #468 makes this belt-and-braces; #550 routes it through the log.
          See docs/ai_architecture/stock_market.md - App.tsx #461 */
-      void runGameplayActionRef.current?.(
+      return runGameplayActionRef.current?.(
         `${sandboxPlayerLabel(winner) ?? truncateAddress(winner)} pars the B&O at $${parValue}.`,
         { SetBoPar: { player: winner, par_value: parValue } },
         /* `automatic`, because the auction's turn cursor has moved past the
@@ -9460,7 +9522,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         { automatic: true },
       );
     },
-    [boParPrompt],
+    [boParOwner, viewerAddress],
   );
 
   /* Design note #712: ONE DISPATCH, not a loop of them. The loop was inherited from the train multi-buy
@@ -9547,6 +9609,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       ) {
         return "You have moved on to buying. Buy a share (or Pass) — you can sell again after a purchase.";
       }
+      /* 6.5-B (K-08): A GRANTED SHARE OF AN UNSTARTED CORPORATION. The C&A's PRR share (and the M&H's NYC share)
+         is held before anybody has bought the President's Certificate, so the card showed a live Sell that the
+         sale authority refuses (rulebook p.15; `stockSaleRefusal` rule 4). `shareSaleBlock` is shared with the
+         reducer, divestment and emergency funding and is NOT touched; for an unparred corporation the sale
+         authority itself answers first, so the greyed button carries the sentence the server would give. Every
+         parred corporation still gets `shareSaleBlock`'s answer, unchanged. */
+      const unstarted = unstartedCorporationSaleRefusal({ state: gameState, seller: viewerAddress, companyId, percentage });
+      if (unstarted !== null) return unstarted;
       return shareSaleBlock({ state: gameState, seller: viewerAddress, companyId, percentage });
     },
     [gameState, viewerAddress],
@@ -10415,6 +10485,53 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       { offTurn: true },
     );
   }, [privateProposal, runGameplayAction]);
+
+  /* ==================================================================
+      6.5-B (K-01): THE THREE PLAYER-TRADE MESSAGES, EXACTLY AS THE AUTHORITY TAKES THEM
+     ==================================================================
+     The proposal is the seat holder's, on their own turn, and names BOTH parties: a sell offer is
+     `{ seller: viewer, buyer: recipient }`, a buy offer `{ seller: owner, buyer: viewer }` -- the section builds the
+     intent and this sends it unchanged. The answer is the counterparty's and is OFF-TURN (`offTurn`, #701's
+     consent-answer exemption, which ingress mirrors in `consentAnswerRefusal`). The rescission is the proposer's,
+     who is the seat holder. Every Activity Log line is written by the drain from the message
+     (`describeGameplayAction`), so every client reads the same sentence. */
+  const handleProposePrivateTrade = useCallback(
+    (intent: { privateId: number; seller: string; buyer: string; price: number }) => {
+      const name =
+        gameState?.private_companies.find((entry) => entry.private_id === intent.privateId)?.name ??
+        "a private company";
+      runGameplayAction(`Offered ${name} for $${intent.price}`, proposePrivateTradeMsg(gameId, intent));
+    },
+    [gameState, runGameplayAction, gameId],
+  );
+
+  const handleAnswerPrivateTrade = useCallback(
+    (privateId: number, accept: boolean) => {
+      runGameplayAction(
+        accept ? "Accepted a private company trade" : "Rejected a private company trade",
+        answerPrivateTradeMsg(gameId, privateId, accept),
+        // #701: the counterparty answers, and the counterparty is not the seat holder.
+        { offTurn: true },
+      );
+    },
+    [runGameplayAction, gameId],
+  );
+
+  const handleRescindPrivateTrade = useCallback(
+    (privateId: number) => {
+      runGameplayAction("Withdrew a private company trade offer", rescindPrivateTradeMsg(gameId, privateId));
+    },
+    [runGameplayAction, gameId],
+  );
+
+  /** The consent slot's "Show on Stocks": the card is the primary surface, so the pointer takes the player there. */
+  const handleShowPrivateTradeCard = useCallback((privateId: number) => {
+    setActiveMainTab("corps");
+    window.setTimeout(() => {
+      const card = document.getElementById(`private-trade-card-${privateId}`);
+      card?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    }, 50);
+  }, []);
 
   // Pre-Game Waterfall Auction Action Tray (`WaterfallAuctionDashboard.tsx`)
   // -- five real `ExecuteMsg` dispatches, `waterfall.rs`'s own five turn
@@ -11528,8 +11645,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     (!autoSkippedRef.current.has(autoSkipKey) || skipDispatchedForRef.current === autoSkipKey);
   const settledSubPhaseRef = useRef(orSubPhase);
   if (!autoSkipPending) settledSubPhaseRef.current = orSubPhase;
-  /** The step the Action Bar should draw: the live one, or the last settled one while a skip run resolves. */
-  const displayedSubPhase = autoSkipPending ? settledSubPhaseRef.current : orSubPhase;
+  /** The step the Action Bar should draw: the live one, or the last settled one while a skip run resolves.
+   *  6.5-B (SI-H01): on the hosted server path it is ALWAYS the live one. The server derives every skip and the
+   *  client commits settle points only, so a held step there could only be an earlier one -- Lay Track above a
+   *  Buy Trains discard after a reload (H-01a), or the D&H phantom's freeze (DH-3). See `displayedOperatingStep.ts`;
+   *  the no-server path keeps #1094/#1145 unchanged. */
+  const displayedSubPhase = displayedOperatingSubPhase({
+    hostedServerPath: Boolean(GAME_SERVER_URL),
+    freezeHolding: autoSkipPending,
+    settled: settledSubPhaseRef.current,
+    live: orSubPhase,
+  });
 
   // End Turn dispatches the same PassTurn the Stock Round uses. #44: the first-OR market lesson interrupts, guarded three ways; #412 gates only the NAVIGATION on tutorialMode.
   // See docs/ai_architecture/state_machine.md - App.tsx #44
@@ -13385,19 +13511,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       <AuctionPromptModal
         /* Design note #543, simplified by #578: the room test is gone --
            there is no hotseat left in which every prompt is yours. */
-        parPending={
-          boParPrompt !== null && boParPrompt.player === viewerAddress && !boParAlreadySet
-        }
+        /* 6.5-B (H-02): all three read `boParOwner` -- the board's answer to "who owes the B&O par" -- so the
+           owner keeps the par control, and everybody else keeps a blocked Proceed, for exactly as long as the
+           board owes it. The owner is never shown the handoff while it is owed: `parPending` wins in the card. */
+        parPending={boParOwner !== null && boParOwner === viewerAddress}
         parWinnerLabel={
-          boParPrompt
-            ? sandboxPlayerLabel(boParPrompt.player) ?? truncateAddress(boParPrompt.player)
-            : ""
+          boParOwner !== null ? sandboxPlayerLabel(boParOwner) ?? truncateAddress(boParOwner) : ""
         }
         onConfirmPar={handleConfirmBoPar}
         handoffPending={auctionHandoffPending}
         awaitingParFrom={
-          boParPrompt && !boParAlreadySet && boParPrompt.player !== viewerAddress
-            ? sandboxPlayerLabel(boParPrompt.player) ?? truncateAddress(boParPrompt.player)
+          boParOwner !== null && boParOwner !== viewerAddress
+            ? sandboxPlayerLabel(boParOwner) ?? truncateAddress(boParOwner)
             : null
         }
         onProceed={handleProceedToStockRound}
@@ -13882,6 +14007,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             labelForAddress: (address) =>
               sandboxPlayerLabel(address) ?? truncateAddress(address),
           }) ??
+          /* 6.5-B (K-01): a standing player <-> player trade offer holds the table (`pendingOfferBlock`); Pass is
+             greyed with the hold's own sentence instead of refused after the click. */
+          privateTradeHold ??
           (isWaterfallPhase && waterfallState?.mini_auction
             ? "A mini-auction is running — use Drop out on the highlighted company card to leave it."
             : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either.
@@ -14409,6 +14537,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     purchaseBlockFor={purchaseBlockFor}
                     saleBlockFor={saleBlockFor}
                     salePriceAfter={salePriceAfter}
+                    /* 6.5-B (K-01): the Private Companies section below the listing, and the standing offer's
+                       hold on every share control. */
+                    privateTrade={privateTradeSection}
+                    privateTradeProposalRefusal={privateTradeProposalRefusalFor}
+                    onProposePrivateTrade={handleProposePrivateTrade}
+                    onAnswerPrivateTrade={handleAnswerPrivateTrade}
+                    onRescindPrivateTrade={handleRescindPrivateTrade}
+                    offerHoldReason={privateTradeHold}
                   onPeekSaleMarket={openSalePeek}
                     onSellShares={handleSellShares}
                     sessionReady={controlsEnabled}
@@ -15091,6 +15227,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         }
         onAccept={handleAcceptPrivateOffer}
         onReject={handleRejectPrivateOffer}
+      />
+      {/* 6.5-B (K-01): the player <-> player trade's pointer, in the same slot. The card on the Stocks tab is the
+          primary surface; this is what makes the offer impossible to miss from another tab, since it holds the
+          whole table. Only the counterparty is given Accept / Reject here (K-09's rule), off-turn. Mutually
+          exclusive with the prompts above: one offer of any kind stands at a time. */}
+      <PlayerPrivateTradePrompt
+        offer={privateTradeSection?.offer ?? null}
+        answerBlockedReason={
+          !controlsEnabled
+            ? "Initialize the session key to act."
+            : actionInFlight
+              ? "Sending your last action — one moment."
+              : null
+        }
+        onAnswer={handleAnswerPrivateTrade}
+        onRescind={handleRescindPrivateTrade}
+        onShowCard={handleShowPrivateTradeCard}
       />
       {/* Design note #1043: the ten-second haunting. Inert to the pointer and screen-blended, so the player
           keeps their turn and the board shows through -- both ruled, both in the component. */}

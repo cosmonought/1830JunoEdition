@@ -118,12 +118,13 @@ describe("#1246: the shell no longer narrates them, or applies ExchangePrivate",
     expect(APP).not.toContain("applyPrivateExchange(base,");
   });
 
-  it("the SetBoPar branch only closes the prompt", () => {
+  it("the SetBoPar branch writes nothing (6.5-B H-02: the prompt is derived from the board, not closed here)", () => {
     const start = APP.indexOf("if (isSetBoParMsg(msg)) {");
     const end = APP.indexOf("if (isSetupGameMsg(msg)) {", start);
     expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
     const branch = APP.slice(start, end);
-    expect(branch).toContain("setBoParPrompt(null);");
+    expect(branch).not.toContain("setBoParPrompt");
     expect(branch).not.toContain("logInfo(");
     expect(branch).not.toContain("boPresidencyRefusal(");
   });

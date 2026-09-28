@@ -372,7 +372,11 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
       "You may do one track action per Operating Turn.",
       "A new tile must normally connect to an existing station by an unblocked route.",
       "Terrain may add a cost.",
-      "Tile upgrades are free.",
+      /* 6.5-B (RR-2, owner rulings RR-2 and OD-A-3): WAS "Tile upgrades are free." -- false for a hex that starts
+         with preprinted yellow track AND an unpaid printed terrain cost (G19, D10, E5 on the standard map): its
+         first green upgrade pays that cost, once. The engine already charges it (`terrainFee.ts` #723); only the
+         copy said otherwise. */
+      "Upgrades pay no terrain cost — except a preprinted yellow hex's unpaid printed terrain cost, paid once on its first green upgrade.",
       "Tile color and phase restrictions apply.",
     ],
     detail: [
@@ -444,7 +448,11 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
         },
       },
       { p: "For labeled yellow-hex locations (OO, B, NY), the green tile must have the matching label." },
-      { p: "Terrain costs shown on the board must be paid when placing a new tile:" },
+      /* 6.5-B (RR-2): "when placing a new tile" read as the ONLY time terrain is paid. A preprinted yellow hex's
+         printed cost is paid on its first green upgrade instead (see "Upgrading a tile" below). */
+      {
+        p: "Terrain costs shown on the board must be paid when placing a new tile — or, on a hex that begins with preprinted yellow track, once on its first upgrade to green:",
+      },
       { ul: ["Water: $80", "Mountains: $120"] },
       { h: "Upgrading a tile" },
       {
@@ -458,8 +466,13 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
           "The new tile must be a legal upgrade for the old tile.",
           "Green tiles upgrade yellow tiles; brown tiles upgrade green tiles.",
           "Matching location labels are required where applicable.",
-          "No terrain cost is paid for an upgrade.",
+          /* 6.5-B (RR-2): WAS "No terrain cost is paid for an upgrade." The owner's generalized rule (RR-2 for G19,
+             OD-A-3 extending it to D10 and E5), in its own words. */
+          "Ordinary tile upgrades do not pay terrain costs. However, when a hex begins with preprinted yellow track and also carries an unpaid printed terrain cost, that printed terrain cost is paid on the first upgrade to green. It is paid only once; later upgrades pay no terrain cost.",
         ],
+      },
+      {
+        p: "On the standard map this applies to G19 (New York), D10 (Hamilton & Toronto) and E5 (Detroit & Windsor): each carries a $80 water cost, paid by the corporation that lays its first green tile.",
       },
     ],
   },
@@ -1649,7 +1662,11 @@ const OTHER_REFERENCE_GROUPS: readonly ReferenceGroup[] = [
       { label: "Water hex, new tile", value: "$80" },
       { label: "Mountain hex, new tile", value: "$120" },
       { label: "Extra terrain tier", value: "$40", scope: "plus" },
-      { label: "Upgrading a tile", value: "Free, regardless of terrain" },
+      /* 6.5-B (RR-2): WAS "Free, regardless of terrain". */
+      {
+        label: "Upgrading a tile",
+        value: "Free — except the first green upgrade of a preprinted yellow hex with an unpaid printed terrain cost (G19, D10, E5), which pays it once",
+      },
       { label: "Home station", value: "Free" },
       { label: "First additional station", value: "$40" },
       { label: "Each later station", value: "$100" },

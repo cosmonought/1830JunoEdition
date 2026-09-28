@@ -12,10 +12,30 @@
 // See docs/ai_architecture/contract_economy.md, AuctionPromptModal.tsx #399
 // and #547.
 
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { PAR_VALUE_LADDER } from "./StockRoundPanel";
+
+/* ==================================================================
+    6.5-B (H-02): THE PROMPT FOLLOWS THE BOARD, SO THE BUTTON HOLDS ITS OWN PRESS
+   ==================================================================
+   The par prompt used to vanish on click (the shell cleared a latch before sending), which is what stranded a
+   player whose `SetBoPar` never landed. It now stays for exactly as long as the board owes the par -- and so a
+   second press while the first is still travelling would send a second `SetBoPar` for the authority to refuse.
+   The confirm is therefore held while ITS OWN send is in flight. It is released:
+     - at once, when the board stops owing the par (the send landed: the par card simply goes away);
+     - `PAR_SETTLE_GRACE_MS` after the send settles without that happening -- a refusal, or a send the link dropped
+       at the door. The grace covers the moment between the server's answer and the drain applying the entry, so a
+       send that DID land is not offered a second press;
+     - and in any case after `PAR_SEND_HOLD_MS`, so a send that never answers can never leave the owner without the
+       control.
+   A release while the par is still owed says so ("not reached the table yet"), because the reason itself -- the
+   link's banner or the refusal -- is drawn under this modal's backdrop.
+   This is a debounce of one button, not an obligation: whether the prompt shows is still only the board's. */
+export const PAR_SEND_HOLD_MS = 4000;
+export const PAR_SETTLE_GRACE_MS = 1500;
+export const PAR_NOT_LANDED_NOTE = "Your par price has not reached the table yet — press again to retry.";
 
 export interface AuctionPromptModalProps {
   /* Design note #543: `parPending` means "THIS viewer sets the par", never "a
@@ -25,7 +45,9 @@ export interface AuctionPromptModalProps {
   parPending: boolean;
   /** The winner's name, for the heading. Only read when `parPending`. */
   parWinnerLabel: string;
-  onConfirmPar: (parValue: string) => void;
+  /** 6.5-B (H-02): may return the submission's promise, so the button is held while that one send is in flight
+   *  (at most `PAR_SEND_HOLD_MS`). The prompt itself stays until the board stops owing the par. */
+  onConfirmPar: (parValue: string) => void | Promise<unknown>;
 
   /** The auction is over and the round has to be handed to the Stock Round. */
   handoffPending: boolean;
@@ -59,6 +81,48 @@ export function AuctionPromptModal({
   const [selected, setSelected] = useState<string>(
     PAR_VALUE_LADDER[PAR_VALUE_LADDER.length - 1],
   );
+  /* 6.5-B (H-02): the one send in flight, by a token so a late settle of an older press cannot release a newer
+     one. `null` when nothing is travelling. `notLanded`: the last press was released with the par still owed. */
+  const [sending, setSending] = useState<number | null>(null);
+  const [notLanded, setNotLanded] = useState(false);
+  const sendSerial = useRef(0);
+  const activeToken = useRef<number | null>(null);
+  const release = useCallback((token: number) => {
+    if (activeToken.current !== token) return;
+    activeToken.current = null;
+    setSending(null);
+    setNotLanded(true);
+  }, []);
+  useEffect(() => {
+    if (sending === null) return undefined;
+    const timer = window.setTimeout(() => release(sending), PAR_SEND_HOLD_MS);
+    return () => window.clearTimeout(timer);
+  }, [sending, release]);
+  // The par is no longer this viewer's to set (it landed, or was never theirs): nothing is in flight any more.
+  useEffect(() => {
+    if (parPending) return;
+    activeToken.current = null;
+    setSending(null);
+    setNotLanded(false);
+  }, [parPending]);
+
+  const confirmPar = () => {
+    if (sending !== null) return;
+    sendSerial.current += 1;
+    const token = sendSerial.current;
+    activeToken.current = token;
+    setSending(token);
+    setNotLanded(false);
+    const result = onConfirmPar(selected);
+    const settled = () => {
+      window.setTimeout(() => release(token), PAR_SETTLE_GRACE_MS);
+    };
+    if (result && typeof (result as Promise<unknown>).then === "function") {
+      (result as Promise<unknown>).then(settled, settled);
+    } else {
+      settled();
+    }
+  };
 
   if (!parPending && !handoffPending) return null;
 
@@ -111,11 +175,20 @@ export function AuctionPromptModal({
 
             <button
               type="button"
-              style={styles.confirm}
-              onClick={() => onConfirmPar(selected)}
+              style={{ ...styles.confirm, ...(sending !== null ? styles.confirmDisabled : {}) }}
+              onClick={confirmPar}
+              disabled={sending !== null}
+              title={sending !== null ? "Sending your par price — one moment." : undefined}
             >
-              Take the President&rsquo;s Certificate at ${selected}
+              {sending !== null
+                ? "Sending…"
+                : <>Take the President&rsquo;s Certificate at ${selected}</>}
             </button>
+            {sending === null && notLanded && (
+              <span style={styles.waiting} role="status">
+                {PAR_NOT_LANDED_NOTE}
+              </span>
+            )}
           </>
         ) : (
           <>

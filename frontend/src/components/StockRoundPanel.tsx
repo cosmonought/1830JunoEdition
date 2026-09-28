@@ -88,6 +88,9 @@ import {
 import { showsCurseBesideName } from "../utils/carcosaCurse";
 import CarcosaMark from "./CarcosaMark";
 import { BO_LOCKED_CARD_NOTE } from "../gameEngine/gameVariants";
+// 6.5-B (K-01): the Stock Round's player <-> player private-company trade surface.
+import { PrivateCompaniesSection, type PrivateTradeIntent } from "./PrivateCompaniesSection";
+import type { PrivateTradeSectionModel } from "../utils/stockRoundPrivateTrade";
 import { certificateCardsHeld, certificateCardsInPool } from "../gameEngine/doubleCertificate";
 /* ==================================================================
     DESIGN NOTE 1451: THE CARD IS THE STAGE
@@ -262,6 +265,22 @@ export interface StockRoundPanelProps {
   /** Design note #948: corporations whose whole card is inert -- the delayed auction's B&O lock. Forwarded
    *  to the roster; empty in a standard game. */
   lockedCompanyIds?: readonly number[];
+  /** ==================================================================
+   *   6.5-B (K-01): THE PRIVATE COMPANIES SECTION
+   *  ==================================================================
+   *
+   * The player <-> player private-company trade (D-24), drawn below the corporation listing. `null`/absent draws
+   * no section (outside a Stock Round, or a caller without a board). The view is the shell's, computed from the
+   * board (`privateTradeSectionModel`); the proposal predicate and the three dispatches are the shell's too. */
+  privateTrade?: PrivateTradeSectionModel | null;
+  privateTradeProposalRefusal?: (intent: PrivateTradeIntent) => string | null;
+  onProposePrivateTrade?: (intent: PrivateTradeIntent) => void;
+  onAnswerPrivateTrade?: (privateId: number, accept: boolean) => void;
+  onRescindPrivateTrade?: (privateId: number) => void;
+  /** 6.5-B (K-01): the standing-offer hold's own sentence while a player trade offer stands, or `null`. Folded into
+   *  the panel's one flag (#32), so every share control is greyed WITH the hold's reason rather than refused after
+   *  the click. The trade's own answer and rescind are not share controls and are not held. */
+  offerHoldReason?: string | null;
 }
 
 // Design note #8: the corporation roster -- a card each, so "who controls what, and what would it
@@ -3208,6 +3227,12 @@ export function StockRoundPanel({
   onPresidencyCue,
   floatEvent,
   onFloatCue,
+  privateTrade = null,
+  privateTradeProposalRefusal,
+  onProposePrivateTrade,
+  onAnswerPrivateTrade,
+  onRescindPrivateTrade,
+  offerHoldReason = null,
 }: StockRoundPanelProps) {
   /* Design note #32: out of phase counts as "controls disabled" exactly the
      same way an unready session does -- one flag, so no control can be
@@ -3231,8 +3256,9 @@ export function StockRoundPanel({
      do it. Browsing is not acting. */
   /* Design note #1173: THE FOURTH CONDITION, added to the flag rather than to the controls -- which is #32's
      whole argument above and #681's when it added the third. Five controls inherit it and none can miss it. */
+  /* 6.5-B (K-01): THE FIFTH CONDITION, the standing player-trade offer's hold -- on the flag, for #32's reason. */
   const controlsDisabled =
-    !sessionReady || actionsLockedReason != null || !isMyTurn || actionInFlight;
+    !sessionReady || actionsLockedReason != null || !isMyTurn || actionInFlight || offerHoldReason != null;
 
   /* Design note #681: WHY, in one sentence, for whichever control is asked.
      A greyed button that cannot say why is the failure #619 describes from the
@@ -3242,6 +3268,9 @@ export function StockRoundPanel({
   const controlsBlockedReason: string | null = !sessionReady
     ? "Initialize the session key to act."
     : (actionsLockedReason ??
+      /* 6.5-B (K-01): ahead of the turn, because it is true for every seat -- nobody may act until it is
+         answered or withdrawn, the seat holder included. */
+      offerHoldReason ??
       (!isMyTurn
         ? `It is ${activePlayerLabel ?? "another player"}'s turn.`
         : /* Design note #1173: LAST in the precedence, because it is the only one of the four that is about
@@ -3298,6 +3327,12 @@ export function StockRoundPanel({
       {/* ---- Corporation roster + per-card actions (design notes #8/#10) */}
       {actionsLockedReason && (
         <span style={styles.readOnlyNotice}>{actionsLockedReason}</span>
+      )}
+      {/* 6.5-B (K-01): the hold, said once where every greyed share control can be seen from. */}
+      {!actionsLockedReason && offerHoldReason && (
+        <span style={styles.readOnlyNotice} data-testid="stock-round-offer-hold">
+          {offerHoldReason}
+        </span>
       )}
 
       <CorporationRoster
@@ -3367,6 +3402,29 @@ export function StockRoundPanel({
            to one condition rather than two that can disagree. */
         tradingOpen={actionsLockedReason == null}
       />
+
+      {/* ==================================================================
+           6.5-B (K-01): PRIVATE COMPANIES, BELOW THE CORPORATION LISTING
+          ==================================================================
+          The owner's placement: the primary surface for the player <-> player private trade, one card per private,
+          the standing offer on its own card. Drawn for every seat whenever the shell hands a view (a Stock Round);
+          a seatless viewer's view carries no controls. */}
+      {privateTrade &&
+        privateTradeProposalRefusal &&
+        onProposePrivateTrade &&
+        onAnswerPrivateTrade &&
+        onRescindPrivateTrade && (
+          <PrivateCompaniesSection
+            model={privateTrade}
+            viewer={connectedAddress}
+            proposalRefusal={privateTradeProposalRefusal}
+            onPropose={onProposePrivateTrade}
+            onAnswer={onAnswerPrivateTrade}
+            onRescind={onRescindPrivateTrade}
+            sessionReady={sessionReady}
+            actionInFlight={actionInFlight}
+          />
+        )}
 
       {/* Design note #13: the Pass button lives in the global action bar (`App.tsx #30`). Pass and Undo are
          turn-level actions available in every phase, and a second copy here would put two Pass buttons on

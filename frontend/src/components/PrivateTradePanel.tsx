@@ -663,10 +663,19 @@ export function PrivateTradePrompt({
       )}
 
       <div style={styles.promptActions}>
+        {/* 6.5-B (K-09): REJECT IS AN ANSWER TOO, and the answer is the owner's alone
+            (`answerPrivatePurchaseRefusal`). It was live on every seat -- the buying president, who has no
+            Rescind yet (K-05), and every third player -- and the authority refused each of those clicks. Gated on
+            the same fact Accept already was. */}
         <button
           type="button"
           onClick={onReject}
-          style={{ ...styles.promptButton, ...styles.promptReject }}
+          disabled={!viewerIsOwner}
+          style={{
+            ...styles.promptButton,
+            ...(viewerIsOwner ? styles.promptReject : styles.buttonDisabled),
+          }}
+          title={viewerIsOwner ? undefined : `Only ${proposal.ownerLabel} can answer this offer.`}
         >
           Reject
         </button>

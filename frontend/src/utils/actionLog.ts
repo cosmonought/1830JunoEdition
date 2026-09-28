@@ -564,6 +564,40 @@ export function describeGameplayAction(
   }
 
   /* ==================================================================
+      6.5-B (K-01): THE PLAYER <-> PLAYER TRADE, NARRATED LIKE THE OTHER OFFERS
+     ==================================================================
+     These three messages printed the drain's fallback label, so every other client read "Sandbox room" for a
+     trade that moved a private company and cash. The proposal's DIRECTION is the proposer's side of it: the
+     proposer is the Stock Round seat holder (ingress refuses anyone else), so a seat holder who is the seller made
+     a sell offer and one who is the buyer made a buy offer. The answer and the withdrawal read the offer off the
+     BEFORE board, the one that still holds it; an accepted answer IS the settlement (D-5), so its line says what
+     changed hands. */
+  if ("ProposePrivateTrade" in msg) {
+    const { private_id, seller, buyer, price } = msg.ProposePrivateTrade;
+    const name =
+      gameState?.private_companies.find((entry) => entry.private_id === private_id)?.name ?? "a private company";
+    const seat = gameState ? (gameState.player_addresses[gameState.active_player_index] ?? null) : null;
+    if (seat !== null && seat === buyer) {
+      return `${context.labelForAddress(buyer)} offers ${context.labelForAddress(seller)} $${price} for ${name}. ${context.labelForAddress(seller)} must answer.`;
+    }
+    return `${context.labelForAddress(seller)} offers to sell ${name} to ${context.labelForAddress(buyer)} for $${price}. ${context.labelForAddress(buyer)} must answer.`;
+  }
+  if ("AnswerPrivateTrade" in msg) {
+    const offer = gameState?.private_trade_offer ?? null;
+    if (!offer) return null;
+    const answerer = offer.proposer === offer.seller ? offer.buyer : offer.seller;
+    return msg.AnswerPrivateTrade.accept
+      ? `${context.labelForAddress(answerer)} accepted: ${context.labelForAddress(offer.buyer)} bought ${offer.private_name} from ${context.labelForAddress(offer.seller)} for $${offer.price}.`
+      : `${context.labelForAddress(answerer)} rejected ${context.labelForAddress(offer.proposer)}'s offer of $${offer.price} for ${offer.private_name}.`;
+  }
+  if ("RescindPrivateTrade" in msg) {
+    const offer = gameState?.private_trade_offer ?? null;
+    return offer
+      ? `${context.labelForAddress(offer.proposer)} withdrew the offer of $${offer.price} for ${offer.private_name}.`
+      : null;
+  }
+
+  /* ==================================================================
       UR-6 (U-42; OD-UR-5(b), (c)): THE OFFER, THE ANSWER AND THE TRADE NAME THE COPY
      ==================================================================
      These three lines named the MODEL, so under Unpredictable Revenue a line read the same whether the seller parted

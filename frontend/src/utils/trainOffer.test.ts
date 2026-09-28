@@ -209,8 +209,9 @@ describe("the answer is owed by a player who is not on turn", () => {
        Four call sites: accept and decline, trains and privates. */
     const marked = source.match(/\{ offTurn: true \}/g) ?? [];
     // #1530: a fifth off-turn dispatch, the excess-train discard; #1541: a sixth, the funding private offer's
-    // answer by the buying president -- answers the game waits for, like these.
-    expect(marked).toHaveLength(6);
+    // answer by the buying president -- answers the game waits for, like these. 6.5-B (K-01): a seventh, the
+    // player <-> player private trade's answer by its counterparty (`handleAnswerPrivateTrade`).
+    expect(marked).toHaveLength(7);
   });
 
   it("does not reach for `automatic` instead", () => {

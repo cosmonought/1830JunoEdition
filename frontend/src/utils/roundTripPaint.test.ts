@@ -140,8 +140,14 @@ describe("the action bar's freeze waits for the step to move", () => {
   });
 
   it("still draws the settled step while a run resolves", () => {
-    /* #1094's own mechanism, untouched: two states instead of five. */
-    expect(APP).toContain("const displayedSubPhase = autoSkipPending ? settledSubPhaseRef.current : orSubPhase;");
+    /* #1094's own mechanism, untouched on the path that dispatches its own skips: two states instead of five.
+       6.5-B (SI-H01) moved the choice into `displayedOperatingSubPhase` so the hosted server path -- which never
+       dispatches its own skips -- always draws the live step; the legacy freeze's two inputs are still these. */
+    expect(APP).toContain("const displayedSubPhase = displayedOperatingSubPhase({");
+    expect(APP).toContain("freezeHolding: autoSkipPending,");
+    expect(APP).toContain("settled: settledSubPhaseRef.current,");
+    expect(APP).toContain("live: orSubPhase,");
+    expect(APP).toContain("hostedServerPath: Boolean(GAME_SERVER_URL),");
     expect(APP).toContain("orSubPhase={displayedSubPhase}");
   });
 });

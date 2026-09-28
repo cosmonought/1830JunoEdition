@@ -131,8 +131,8 @@ export interface SessionFamily {
   family_id: string;
   principal_id: string;
   created_at: number;
-  /** How the family was founded: only a "bootstrap" family of the profile's own principal can be the browser that
-   *  created the profile (the lost-create-response exemption asks); recovered and linked devices never are. */
+  /** How the family was founded (bootstrap, recovery, link, or legacy for a v3 lineage). Informational and audit-facing:
+   *  no permission is derived from it (ESCROW-3A's lost-create-response rescue is bound to the creating SESSION). */
   origin: FamilyOrigin;
   /** Set once, by a security revocation of the family; a revoked family never reopens. */
   revoked_at: number | null;

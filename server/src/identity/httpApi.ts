@@ -16,19 +16,27 @@
 //
 // LIVE-2E: MANDATORY PROFILES. An unprofiled session can reach only these (and the two above); it cannot open a game
 // socket at all (the upgrade answers 403 `profile`), so no room, list, view, log, chat or presence is reachable from it.
-//   POST /gs/api/profile                    {name}         create this browser's profile: 201 {profile, recoveryKey}
-//                                                          -- the recovery key, ONCE; 409 already-profiled; 400 bad-name
+//   POST /gs/api/profile                    {name, creationReceipt?}  create this browser's profile: 201 {profile,
+//                                                          recoveryKey} -- the recovery key, ONCE; 409 already-profiled;
+//                                                          400 bad-name. ESCROW-3A: `creationReceipt` (64 hex, random,
+//                                                          held only in the creating page's memory) opens the one-time
+//                                                          lost-response rescue below
 //   POST /gs/api/profile/recover            {recoveryKey}  200 {profile} + a fresh session cookie for the profile's
 //                                                          principal (this browser's temporary one is `replaced`)
 //   POST /gs/api/profile/link               {code}         the same, by a single-use "Link another device" code
 //   POST /gs/api/profile/link-code          {}             (profiled) 201 {code, expiresAt}
-//   POST /gs/api/profile/recovery-key       {}             (profiled) 200 {recoveryKey} -- the old key stops working
+//   POST /gs/api/profile/recovery-key       {creationReceipt?}  (profiled) 200 {recoveryKey} -- the old key stops working
 //   POST /gs/api/profile/sign-out-others    {}             (profiled) 200 {signedOut}
 //   POST /gs/api/profile/reauth             {recoveryKey}  (profiled) ESCROW-3A: re-authenticate THIS session with its own
 //                                                          profile's recovery key: 200 {expiresAt}; 403 invalid-credential
-// ESCROW-3A (brief §10B): `recovery-key` and `sign-out-others` are SENSITIVE -- without a recent re-authentication of the
-// same session they answer 403 `reauth-required` (the client asks for the key, calls `reauth`, and retries). The one
-// exemption is the creating browser's first rotation within an hour (the lost-create-response path).
+//   POST /gs/api/profile/key-received       {creationReceipt}  (profiled) ESCROW-3A: the creating page has its key -- the
+//                                                          lost-response rescue closes for good. 204, whatever it closed
+// ESCROW-3A (brief §10B, owner review): `recovery-key` and `sign-out-others` are SENSITIVE -- without a recent
+// re-authentication of the same session they answer 403 `reauth-required` (the client asks for the key, calls `reauth`,
+// and retries). `sign-out-others` has no exception. `recovery-key` has ONE, and it is not a time window: the session
+// that created the profile, presenting the creating page's receipt, may replace the key ONCE while that page has not
+// acknowledged receiving it (a lost create response) -- memory only, so a restart closes it; any rotation, a
+// re-authentication, the acknowledgement or ten minutes close it too. A stolen cookie alone never has the receipt.
 // A wrong, expired, used, revoked or disabled credential is ONE answer: 403 `invalid-credential`. Redemptions are
 // budgeted per address and per session, apart from every room limit; the plaintext key or code appears only in the one
 // response that delivers it, and nothing here logs a request body.
@@ -61,8 +69,9 @@ export const LINK_CODE_PATH = "/gs/api/profile/link-code";
 export const RECOVERY_KEY_PATH = "/gs/api/profile/recovery-key";
 export const SIGN_OUT_OTHERS_PATH = "/gs/api/profile/sign-out-others";
 export const REAUTH_PATH = "/gs/api/profile/reauth";
+export const KEY_RECEIVED_PATH = "/gs/api/profile/key-received";
 const API_PREFIX = "/gs/api/";
-const ROUTES = new Set([SESSION_PATH, REVOKE_PATH, PROFILE_PATH, RECOVER_PATH, LINK_PATH, LINK_CODE_PATH, RECOVERY_KEY_PATH, SIGN_OUT_OTHERS_PATH, REAUTH_PATH]);
+const ROUTES = new Set([SESSION_PATH, REVOKE_PATH, PROFILE_PATH, RECOVER_PATH, LINK_PATH, LINK_CODE_PATH, RECOVERY_KEY_PATH, SIGN_OUT_OTHERS_PATH, REAUTH_PATH, KEY_RECEIVED_PATH]);
 
 export interface HttpApi {
   mode: GsMode;
@@ -343,12 +352,14 @@ async function serveProfile(
 ): Promise<void> {
   const schema: Record<string, FieldSpec> =
     pathname === PROFILE_PATH
-      ? { name: { string: 256 } }
+      ? { name: { string: 256 }, creationReceipt: { string: 128 } }
       : pathname === RECOVER_PATH || pathname === REAUTH_PATH
         ? { recoveryKey: { string: 256 } }
         : pathname === LINK_PATH
           ? { code: { string: 64 } }
-          : {};
+          : pathname === RECOVERY_KEY_PATH || pathname === KEY_RECEIVED_PATH
+            ? { creationReceipt: { string: 128 } }
+            : {};
   const fields = parseBody(text, schema);
   if (fields === null) {
     json(response, 400, { error: "bad-request" });
@@ -383,7 +394,7 @@ async function serveProfile(
     if (ipWait > 0 || globalWait > 0) return tooMany(response, api, ipWait > 0 ? "profile-create-ip" : "profile-create-global", Math.max(ipWait, globalWait));
     api.limiter.profileCreates.take(ip);
     api.limiter.profileCreatesGlobal.take("global");
-    const created = await api.identity.createProfile(read, name, now);
+    const created = await api.identity.createProfile(read, name, now, fields.creationReceipt);
     switch (created.kind) {
       case "ok":
         /* The recovery key's one appearance. `no-store` is on every response here. */
@@ -469,11 +480,18 @@ async function serveProfile(
         return;
     }
   }
+  if (pathname === KEY_RECEIVED_PATH) {
+    const acknowledged = await api.identity.acknowledgeKeyDelivery(read, fields.creationReceipt, now);
+    if (acknowledged.kind === "ok") json(response, 204, null);
+    else if (acknowledged.kind === "profile-required") json(response, 403, { error: "profile-required" });
+    else json(response, 401, { error: "not-authenticated" });
+    return;
+  }
   const answered =
     pathname === LINK_CODE_PATH
       ? await api.identity.createLinkCode(read, now)
       : pathname === RECOVERY_KEY_PATH
-        ? await api.identity.rotateRecoveryKey(read, now)
+        ? await api.identity.rotateRecoveryKey(read, now, fields.creationReceipt)
         : await api.identity.signOutOthers(read, now);
   switch (answered.kind) {
     case "ok": {

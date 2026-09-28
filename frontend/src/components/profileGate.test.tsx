@@ -5,13 +5,14 @@
 // reached only after the player ticks that they saved it. Nothing typed or revealed here is written to storage or the
 // console, and no player-visible word here is "guest".
 
+import { webcrypto } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
-import { ProfileGate } from "./ProfileGate";
+import { MISSED_KEY_NO_RESCUE, ProfileGate } from "./ProfileGate";
 import { RECOVERY_KEY_FILE } from "./RecoveryKeyReveal";
 import { httpSessionPort, type SessionPort } from "../utils/sessionBootstrap";
 
@@ -20,6 +21,11 @@ declare global {
   var IS_REACT_ACT_ENVIRONMENT: boolean;
 }
 global.IS_REACT_ACT_ENVIRONMENT = true;
+/* ESCROW-3A: the creating page's receipt needs `crypto.getRandomValues`, which every supported browser has and this
+   test environment's jsdom lacks: lend it Node's Web Crypto (the same API). */
+if (typeof (globalThis as { crypto?: { getRandomValues?: unknown } }).crypto?.getRandomValues !== "function") {
+  Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
+}
 
 const ENDPOINT = "https://play.example/gs/api/session";
 const KEY = "rk_0123456789abcdefghjkmnpqr0.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -166,6 +172,7 @@ describe("the profile gate (LIVE-2E)", () => {
     server.queue("/gs/api/profile", 201, { ok: true, profile: { name: "Brad", otherSessions: 0 }, recoveryKey: KEY }, () =>
       server.setProfile({ name: "Brad", otherSessions: 0 }),
     );
+    server.queue("/gs/api/profile/key-received", 204);
     await click(byTestId("profile-create"));
     /* The session is profiled by now, and still the app has not mounted under the reveal. */
     expect(server.port.state).toBe("ready");
@@ -190,6 +197,13 @@ describe("the profile gate (LIVE-2E)", () => {
     expect(leaks.lines.join("\n")).not.toContain(KEY);
     expect(leaks.lines).toEqual([]);
     expect(server.urls.join(" ")).not.toContain(KEY);
+    /* ESCROW-3A: the create carried this page's creation receipt, and the key's arrival was acknowledged with it. */
+    const receipt = (JSON.parse(server.bodies.find((body) => body.includes('"name"')) as string) as { creationReceipt?: string }).creationReceipt;
+    expect(receipt).toMatch(/^[0-9a-f]{64}$/);
+    expect(server.urls.map((url) => new URL(url).pathname).filter((path) => path !== "/gs/api/session")).toEqual(["/gs/api/profile", "/gs/api/profile/key-received"]);
+    expect(JSON.parse(server.bodies[server.urls.findIndex((url) => url.endsWith("/key-received"))])).toEqual({ creationReceipt: receipt });
+    expect(server.urls.join(" ")).not.toContain(receipt as string);
+    expect(leaks.storage).not.toHaveBeenCalled();
   });
 
   it("'Save as file' downloads the key as a text file and revokes the object URL right after the click", async () => {
@@ -251,6 +265,46 @@ describe("the profile gate (LIVE-2E)", () => {
     await click(byTestId("recovery-key-continue"));
     expect(appMounts).toBe(1);
     expect(container.innerHTML).not.toContain(NEW_KEY);
+  });
+
+  it("ESCROW-3A: a LOST create answer -- the retry and the rescue rotation carry the SAME receipt, the one this page made", async () => {
+    const leaks = watchLeaks();
+    const server = fakeServer(null);
+    await mount(server.port);
+    type(byTestId<HTMLInputElement>("profile-name"), "Brad");
+    /* The first create commits on the server, but its 201 never arrives (the fake answers with a body-less 502). */
+    server.queue("/gs/api/profile", 502, undefined, () => server.setProfile({ name: "Brad", otherSessions: 0 }));
+    await click(byTestId("profile-create"));
+    expect(byTestId("missed-key-notice")).toBeNull();
+    server.queue("/gs/api/profile", 409, { error: "already-profiled", profile: { name: "Brad" } });
+    await click(byTestId("profile-create"));
+    expect(byTestId("missed-key-notice")).not.toBeNull();
+    server.queue("/gs/api/profile/recovery-key", 200, { ok: true, recoveryKey: NEW_KEY });
+    await click(buttonNamed("Make a new recovery key"));
+    expect(byTestId("recovery-key-value")?.textContent).toBe(NEW_KEY);
+    const posted = server.urls.map((url, at) => [new URL(url).pathname, server.bodies[at]] as const).filter(([path]) => path !== "/gs/api/session");
+    expect(posted.map(([path]) => path)).toEqual(["/gs/api/profile", "/gs/api/profile", "/gs/api/profile/recovery-key"]);
+    const receipts = posted.map(([, body]) => (JSON.parse(body) as { creationReceipt?: string }).creationReceipt);
+    expect(receipts[0]).toMatch(/^[0-9a-f]{64}$/);
+    expect(new Set(receipts).size).toBe(1);
+    expect(leaks.storage).not.toHaveBeenCalled();
+    expect(leaks.lines.join("\n")).not.toContain(receipts[0] as string);
+  });
+
+  it("ESCROW-3A: when the server has no rescue for this page, the notice says what to do instead -- and the player can still go on", async () => {
+    const server = fakeServer(null);
+    await mount(server.port);
+    type(byTestId<HTMLInputElement>("profile-name"), "Brad");
+    server.queue("/gs/api/profile", 409, { error: "already-profiled", profile: { name: "Brad" } }, () =>
+      server.setProfile({ name: "Brad", otherSessions: 0 }),
+    );
+    await click(byTestId("profile-create"));
+    server.queue("/gs/api/profile/recovery-key", 403, { error: "reauth-required" });
+    await click(buttonNamed("Make a new recovery key"));
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe(MISSED_KEY_NO_RESCUE);
+    expect(MISSED_KEY_NO_RESCUE).toContain("Link another device");
+    await click(buttonNamed("Continue to the lobby"));
+    expect(appMounts).toBe(1);
   });
 
   it("recover and link: a wrong credential is one plain sentence; the right one opens the app", async () => {

@@ -28,7 +28,7 @@
 // (in memory and in the store) until no browser could still hold their cookie: 180 days after the cookie was set,
 // and never less than the 7-day audit window after a revocation.
 
-import { createHash } from "crypto";
+import { createHash, timingSafeEqual } from "crypto";
 
 import { StoreDefiniteError } from "../persistence/storeResult";
 import { sessionSetCookie, type SessionCookieRead } from "./cookies";
@@ -82,10 +82,10 @@ export interface IdentityPolicy {
   /** ESCROW-3A (brief §10B): how long a re-authentication (the recovery key, presented again) lets THIS session take a
    *  sensitive action -- rotate the recovery key, sign out other devices, and (ESCROW-4) change a wallet binding. */
   sensitiveAuthMs: number;
-  /** ESCROW-3A: the creating browser's one exemption (LIVE-2E §15): for this long after a profile is created, and until
-   *  its key is first rotated, the browser that created it may rotate the key without presenting it -- the lost-create-
-   *  response path ("Your profile is ready" -> "Make a new recovery key"), where the key was never seen. */
-  creatorKeyGraceMs: number;
+  /** ESCROW-3A (owner review): how long the ONE-TIME creation rescue stays open when a create's response may have been
+   *  lost (`createProfile` with a creation receipt). It is consumed by its one use, closed at once by the creating
+   *  page's acknowledgement of the key, and forgotten by a restart; this only bounds how long an unanswered one waits. */
+  creationRescueMs: number;
 }
 
 export const DEFAULT_IDENTITY_POLICY: IdentityPolicy = Object.freeze({
@@ -102,7 +102,7 @@ export const DEFAULT_IDENTITY_POLICY: IdentityPolicy = Object.freeze({
      code cannot stockpile more to outlive the owner's "Sign out other devices". */
   maxOutstandingLinkCodes: 1,
   sensitiveAuthMs: 5 * 60 * 1000,
-  creatorKeyGraceMs: 60 * 60 * 1000,
+  creationRescueMs: 10 * 60 * 1000,
 });
 
 /** Why a known session no longer opens anything -- the stable reasons of `401 session-ended`. */
@@ -181,6 +181,16 @@ export interface AccountView {
    wrong selector costs the same constant-time comparison as a wrong secret. */
 const NO_PROFILE_HASH = createHash("sha256").update("gs-no-such-recovery-key").digest("hex");
 
+/** ESCROW-3A: a creation receipt is 32 random bytes in lowercase hex, made by the creating page and held only in its
+ *  memory (`frontend/src/utils/profileApi.ts` `mintCreationReceipt`). Anything else is no receipt. */
+export const CREATION_RECEIPT_PATTERN = /^[0-9a-f]{64}$/;
+const isCreationReceipt = (value: unknown): value is string => typeof value === "string" && CREATION_RECEIPT_PATTERN.test(value);
+/** What the rescue keeps of a receipt: a domain-separated digest, never the receipt. */
+const receiptDigest = (receipt: string): Buffer => createHash("sha256").update(`18COSMOS/CREATION-RECEIPT/v1\n${receipt}`).digest();
+/** Constant-time comparison of an offered receipt with a kept digest (anything that is not a receipt matches nothing). */
+const receiptMatches = (offered: unknown, kept: string): boolean =>
+  timingSafeEqual(receiptDigest(isCreationReceipt(offered) ? offered : "-"), Buffer.from(kept, "hex")) && isCreationReceipt(offered);
+
 export interface IdentityHooks {
   /** Sessions that just ended for a SECURITY reason (logout, eviction, operator, principal disabled): their sockets
    *  close 4401. Called after the change is committed. */
@@ -213,6 +223,9 @@ export interface IdentityStats {
   familiesRevoked: number;
   reauths: number;
   reauthFailures: number;
+  /** ESCROW-3A: lost-create-response rescues used, and initial key deliveries acknowledged. */
+  creationRescues: number;
+  keyDeliveriesAcknowledged: number;
   reauthRequired: number;
 }
 
@@ -267,6 +280,8 @@ export class IdentityService {
     credentialFailures: 0,
     familiesRevoked: 0,
     reauths: 0,
+    creationRescues: 0,
+    keyDeliveriesAcknowledged: 0,
     reauthFailures: 0,
     reauthRequired: 0,
   };
@@ -277,6 +292,11 @@ export class IdentityService {
    *  forgets it (the player re-enters the key). LIVE-5: an item keyed by session with a TTL, checked in the same
    *  transaction as the action. */
   private readonly grants = new Map<string, { family_id: string; selector: string; expires_at: number }>();
+  /** ESCROW-3A (owner review): the ONE-TIME creation rescue, by PROFILE -- open only while the profile's first key may
+   *  not have reached the page that created it. MEMORY ONLY (a restart closes every one: fail closed), never a secret:
+   *  it names the creating SESSION (not its family's successors), the family, the selector of the key that was issued,
+   *  and the digest of the random creation receipt the creating page sent and holds in memory. See `createProfile`. */
+  private readonly creationDeliveries = new Map<string, { session_id: string; family_id: string; selector: string; receipt_hash: string; expires_at: number }>();
 
   private constructor(
     private readonly store: IdentityStore,
@@ -835,7 +855,7 @@ export class IdentityService {
 
   /** Create the profile of THIS browser's principal. Idempotent in effect: a second attempt (a retry, a race, a second
    *  tab) finds the principal already profiled and answers `already-profiled` -- never a second profile. */
-  createProfile(read: SessionCookieRead, displayName: string, now: number): Promise<CreateProfileOutcome> {
+  createProfile(read: SessionCookieRead, displayName: string, now: number, creationReceipt?: unknown): Promise<CreateProfileOutcome> {
     return this.serial(async () => {
       const session = this.currentOf(read, now);
       if (session === null) return { kind: "not-authenticated" as const };
@@ -903,6 +923,18 @@ export class IdentityService {
       this.indexProfile(profile);
       this.provisional.delete(bound.principal_id);
       this.stats.profilesCreated += 1;
+      /* ESCROW-3A: the response carrying the key may still be lost. If the creating page sent a creation receipt (random,
+         held only in that page's memory), THIS session -- presenting that receipt -- may rotate the unseen key ONCE,
+         until the page acknowledges the key or `creationRescueMs` passes. Only its digest is kept. */
+      if (isCreationReceipt(creationReceipt)) {
+        this.creationDeliveries.set(profileId, {
+          session_id: session.session_id,
+          family_id: session.family_id,
+          selector: key.selector,
+          receipt_hash: receiptDigest(creationReceipt).toString("hex"),
+          expires_at: now + this.policy.creationRescueMs,
+        });
+      }
       return { kind: "ok" as const, name: displayName, recoveryKey: key.key };
     });
   }
@@ -1101,13 +1133,16 @@ export class IdentityService {
   }
 
   /** "Rotate recovery key": the old key stops working in the same commit that stores the new one's digest. */
-  rotateRecoveryKey(read: SessionCookieRead, now: number): Promise<ProfileActionOutcome<{ recoveryKey: string }>> {
+  rotateRecoveryKey(read: SessionCookieRead, now: number, creationReceipt?: unknown): Promise<ProfileActionOutcome<{ recoveryKey: string }>> {
     return this.serial(async () => {
       const who = this.profiledCurrent(read, now);
       if (typeof who === "string") return { kind: who };
-      /* ESCROW-3A (brief §10B): a live session alone does not rotate the key -- a recent re-authentication by THIS session
-         does, or the creating browser's one exemption for a key it never saw. */
-      if (!this.sensitiveAuthOf(who.session, who.profile, now) && !this.creatorExemption(who.session, who.profile, now)) {
+      /* ESCROW-3A (brief §10B, owner review): a live session alone NEVER rotates the key. A recent re-authentication by
+         THIS session does -- or, once, the lost-create-response rescue: the creating session presenting the creating
+         page's receipt, before that page acknowledged the key. */
+      const granted = this.sensitiveAuthOf(who.session, who.profile, now);
+      const rescue = !granted && this.creationRescueOf(who.session, who.profile, creationReceipt, now);
+      if (!granted && !rescue) {
         this.stats.reauthRequired += 1;
         return { kind: "reauth-required" as const };
       }
@@ -1137,6 +1172,9 @@ export class IdentityService {
       }
       this.forgetLinks(dropLinks);
       this.indexProfile(rotated);
+      /* The rescue is one-time, and any rotation ends it (the key it would replace is gone). */
+      this.creationDeliveries.delete(who.profile.profile_id);
+      if (rescue) this.stats.creationRescues += 1;
       /* Every grant made under the old key is stale now (a grant names the selector it was made under). */
       for (const [sessionId, grant] of this.grants) if (grant.selector === who.profile.recovery_selector) this.grants.delete(sessionId);
       this.stats.recoveryRotations += 1;
@@ -1333,6 +1371,8 @@ export class IdentityService {
       }
       const expiresAt = now + this.policy.sensitiveAuthMs;
       this.grants.set(who.session.session_id, { family_id: who.session.family_id, selector: who.profile.recovery_selector, expires_at: expiresAt });
+      /* Whoever presents the key has it: the initial delivery is resolved. */
+      this.creationDeliveries.delete(who.profile.profile_id);
       this.stats.reauths += 1;
       return { kind: "ok" as const, expiresAt };
     });
@@ -1349,22 +1389,49 @@ export class IdentityService {
     return true;
   }
 
-  /** The creating browser's exemption (LIVE-2E §15): its family is the profile principal's own BOOTSTRAP lineage -- the
-   *  browser that created the profile, never a recovered or linked device (their families are founded "recovery" /
-   *  "link") -- the key has never been rotated, and the profile is younger than `creatorKeyGraceMs`. Derived from
-   *  durable facts, so a restart keeps it. */
-  private creatorExemption(session: Session, profile: Profile, now: number): boolean {
-    const family = this.families.get(session.family_id);
-    return (
-      family !== undefined &&
-      /* The creating browser's own family: founded by its bootstrap -- or, for a browser from before families (v3), a
-         legacy family that existed BEFORE the profile did, so it was the unprofiled principal's own browser (a linked or
-         recovered device's family is always younger than the profile; a new legacy family is never founded). */
-      (family.origin === "bootstrap" || (family.origin === "legacy" && family.created_at < profile.created_at)) &&
-      family.principal_id === profile.principal_id &&
-      profile.recovery_rotated_at === profile.created_at &&
-      now - profile.created_at < this.policy.creatorKeyGraceMs
-    );
+  /** ESCROW-3A (owner review): the lost-create-response rescue. Open only when ALL hold:
+   *    - the profile's creation left a delivery record (the creating page sent a receipt) that nothing has closed:
+   *      not acknowledged, not re-authenticated with the key, not rotated, not expired, not forgotten by a restart;
+   *    - the caller IS the creating session -- the same session id and family: a linked or recovered device, another
+   *      tab's later session, a rotation or grace successor never qualifies;
+   *    - the key is still the one issued at creation (never rotated since);
+   *    - the caller presents the creating page's receipt (compared by digest, in constant time).
+   *  A stolen cookie alone therefore never qualifies: the receipt lives only in the creating page's memory, and once
+   *  that page has the key it acknowledges it and the record is gone. Checking it consumes nothing; the rotation it
+   *  permits deletes it. */
+  private creationRescueOf(session: Session, profile: Profile, receipt: unknown, now: number): boolean {
+    const pending = this.creationDeliveries.get(profile.profile_id);
+    if (pending === undefined) return false;
+    if (now >= pending.expires_at || pending.selector !== profile.recovery_selector || profile.recovery_rotated_at !== profile.created_at) {
+      this.creationDeliveries.delete(profile.profile_id);
+      return false;
+    }
+    const matches = receiptMatches(receipt, pending.receipt_hash);
+    return matches && pending.session_id === session.session_id && pending.family_id === session.family_id && !this.familyRevoked(session);
+  }
+
+  /** ESCROW-3A: the creating page received its key -- the initial delivery is resolved and the rescue closes for good.
+   *  Only the creating session with its receipt closes it (anyone else's call changes nothing); the answer is the same
+   *  either way. */
+  acknowledgeKeyDelivery(read: SessionCookieRead, receipt: unknown, now: number): Promise<{ kind: "ok" } | { kind: "not-authenticated" | "profile-required" }> {
+    return this.serial(async () => {
+      const who = this.profiledCurrent(read, now);
+      if (typeof who === "string") return { kind: who };
+      const pending = this.creationDeliveries.get(who.profile.profile_id);
+      if (pending !== undefined && pending.session_id === who.session.session_id && receiptMatches(receipt, pending.receipt_hash)) {
+        this.creationDeliveries.delete(who.profile.profile_id);
+        this.stats.keyDeliveriesAcknowledged += 1;
+      }
+      return { kind: "ok" as const };
+    });
+  }
+
+  /** Whether a lost-create-response rescue is open for the profile of the session `read` names (tests; operators). */
+  hasOpenCreationRescue(read: SessionCookieRead, now: number): boolean {
+    const who = this.profiledCurrent(read, now);
+    if (typeof who === "string") return false;
+    const pending = this.creationDeliveries.get(who.profile.profile_id);
+    return pending !== undefined && now < pending.expires_at;
   }
 
   /** Whether the session a request authenticates with holds a live re-authentication (ESCROW-4's wallet binding asks). */

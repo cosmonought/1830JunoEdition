@@ -14,7 +14,11 @@
 //
 // A CREATE THAT ANSWERS 409 already-profiled is a retry after a lost response (or another tab got there first): the
 // profile exists and its key never arrived here, so the gate re-bootstraps, lets the player through, and says so once
-// -- offering "Make a new recovery key" (rotate, then the reveal).
+// -- offering "Make a new recovery key" (rotate, then the reveal). ESCROW-3A (owner review): that rotation is allowed
+// without the key only because this gate sent a CREATION RECEIPT with its create (random, in this component's memory
+// alone, the same one on every retry) and presents it again: the server's one-time rescue for the session that
+// created the profile, before its page acknowledged the key. Another tab's gate, a reload, or a restarted server has
+// no open rescue, and the notice then says what to do instead.
 //
 // WHILE AN ACTION IS IN FLIGHT THE GATE HOLDS ITS SCREEN. The action re-bootstraps before it resolves, so the port can
 // turn "ready" a moment before the recovery key is in hand; holding keeps the app (and its sockets) from mounting
@@ -24,7 +28,7 @@
 // "ended" is `SessionEndedNotice`'s. An app that was already running stays mounted behind that notice; a page that
 // loads into "ended" shows nothing else until the player chooses.
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { sessionPort, type SessionPort } from "../utils/sessionBootstrap";
 import { useSession } from "../utils/useSession";
@@ -32,6 +36,7 @@ import {
   PROFILE_NAME_MAX,
   createProfile,
   linkProfile,
+  mintCreationReceipt,
   profileErrorSentence,
   recoverProfile,
   rotateRecoveryKey,
@@ -183,6 +188,11 @@ function ProfileChoice({
   );
 }
 
+/** ESCROW-3A: the missed-key notice when the server has no rescue for this page (another tab created the profile, the
+ *  page was reloaded, the server restarted, or ten minutes passed): nothing here can replace the key without it. */
+export const MISSED_KEY_NO_RESCUE =
+  "This page can't replace the key without the current one. If another tab of this browser created the profile, its key was shown there. Otherwise keep this browser signed in and link a second device (your name → “Link another device”), so losing one browser cannot lose the profile.";
+
 /** A create that answered already-profiled: the player is through, but the key never reached this browser. */
 function MissedKeyNotice({ name, onRotate, onContinue }: { name: string | null; onRotate: () => Promise<string | null>; onContinue: () => void }): JSX.Element {
   const [busy, setBusy] = useState(false);
@@ -229,6 +239,9 @@ export function ProfileGate({ port = sessionPort(), children }: { port?: Session
   /* The recovery key, for exactly as long as its reveal is up. */
   const [reveal, setReveal] = useState<string | null>(null);
   const [missedKey, setMissedKey] = useState(false);
+  /* ESCROW-3A: this page's creation receipt -- made at the first create, the same on every retry, memory only, and
+     dropped once the key has reached this page. */
+  const receipt = useRef<string | null>(null);
 
   const bootstrap = useCallback(
     (force = false) => {
@@ -262,9 +275,11 @@ export function ProfileGate({ port = sessionPort(), children }: { port?: Session
   const onCreate = useCallback(
     async (name: string): Promise<string | null> => {
       setBusy(true);
-      const result = await createProfile(name, port);
+      if (receipt.current === null) receipt.current = mintCreationReceipt();
+      const result = await createProfile(name, port, receipt.current);
       setBusy(false);
       if (result.ok) {
+        receipt.current = null; // the key is here (and acknowledged): the receipt has nothing left to do
         setReveal(result.recoveryKey);
         return null;
       }
@@ -292,8 +307,9 @@ export function ProfileGate({ port = sessionPort(), children }: { port?: Session
   const onLink = useCallback((code: string) => signIn(linkProfile(code, port)), [signIn, port]);
 
   const onRotate = useCallback(async (): Promise<string | null> => {
-    const result = await rotateRecoveryKey(port);
-    if (!result.ok) return profileErrorSentence(result);
+    const result = await rotateRecoveryKey(port, receipt.current);
+    if (!result.ok) return result.error === "reauth-required" ? MISSED_KEY_NO_RESCUE : profileErrorSentence(result);
+    receipt.current = null;
     setMissedKey(false);
     setReveal(result.recoveryKey);
     return null;

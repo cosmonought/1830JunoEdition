@@ -14,9 +14,9 @@
 //                             the profile gate
 //
 // ESCROW-3A (§10B): rotating the key and signing out other devices are SENSITIVE -- the server asks this session to
-// re-enter the recovery key first (403 `reauth-required`, except a brand-new profile's first rotation on the device that
-// created it). The menu then shows "Confirm it's you": paste the recovery key, choose Confirm, and the action the player
-// already chose runs again at once. The key lives in this panel's state only while that view is up.
+// re-enter the recovery key first (403 `reauth-required`, always: the menu has no exception -- the one lost-create-response
+// rescue belongs to the profile gate's own page). The menu then shows "Confirm it's you": paste the recovery key, choose
+// Confirm, and the action the player already chose runs again at once. The key lives in this panel's state only while that view is up.
 //
 // A development-identity build has no credentials to manage: the chip says "Development profile (this tab)" and
 // offers nothing. The code and the key live in this component's state while their view is up; closing the menu

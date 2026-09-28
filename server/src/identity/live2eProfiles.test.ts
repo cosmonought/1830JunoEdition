@@ -112,8 +112,9 @@ const recover = (port: number, cookie: string | undefined, recoveryKey: string) 
 const redeem = (port: number, cookie: string | undefined, code: string) => post(port, "/gs/api/profile/link", cookie, { code });
 const linkCode = (port: number, cookie: string) => post(port, "/gs/api/profile/link-code", cookie);
 /* ESCROW-3A (brief §10B): rotating the key and signing out other devices are SENSITIVE -- they need a recent
-   re-authentication of the same session with the profile's recovery key (the creating browser's first rotation within
-   an hour is exempt: the lost-create-response path). `key`, when given, re-authenticates first. */
+   re-authentication of the same session with the profile's recovery key. There is no time-window exemption (the
+   lost-create-response rescue needs the creating page's receipt: escrow3aIdentity E). `key`, when given, re-authenticates
+   first. */
 const reauth = (port: number, cookie: string, recoveryKey: string) => post(port, "/gs/api/profile/reauth", cookie, { recoveryKey });
 const rotateKey = async (port: number, cookie: string, key?: string) => {
   if (key !== undefined) assert.equal((await reauth(port, cookie, key)).status, 200, "re-authenticated");
@@ -532,8 +533,9 @@ describe("LIVE-2E recovery", () => {
       }
       assert.equal(observed.size, 1, "status, headers and body are identical for every wrong key");
 
-      // Rotation: the old key stops at once and answers exactly like any wrong one; the new one works.
-      const rotated = await rotateKey(port, ann.cookie);
+      // Rotation (after re-authenticating -- ESCROW-3A): the old key stops at once and answers exactly like any wrong
+      // one; the new one works.
+      const rotated = await rotateKey(port, ann.cookie, ann.recoveryKey);
       assert.equal(rotated.status, 200);
       const fresh = (rotated.body as { recoveryKey: string }).recoveryKey;
       assert.match(fresh, RECOVERY_KEY_PATTERN);
@@ -751,7 +753,7 @@ describe("LIVE-2E persistence", () => {
       const used = ((await linkCode(port, ann.cookie)).body as { code: string }).code;
       const linked = await linkOnFreshBrowser(port, used);
       assert.equal(linked.answer.status, 200);
-      const rotated = ((await rotateKey(port, ann.cookie)).body as { recoveryKey: string }).recoveryKey;
+      const rotated = ((await rotateKey(port, ann.cookie, ann.recoveryKey)).body as { recoveryKey: string }).recoveryKey;
       assert.equal((await signOut(port, linked.cookie as string)).status, 204);
       // Issued after the rotation and the sign-out (each of which retires outstanding codes -- review H1).
       const unused = ((await linkCode(port, ann.cookie)).body as { code: string }).code;
@@ -965,7 +967,7 @@ describe("LIVE-2E persistence", () => {
       // Rotate: the old key keeps working after a refused rotation.
       before = durable();
       fail();
-      assert.equal((await rotateKey(port, ann.cookie)).status, 503);
+      assert.equal((await rotateKey(port, ann.cookie, ann.recoveryKey)).status, 503, "re-authenticated (no write), then the rotation's write fails");
       assert.equal(durable(), before);
       assert.equal((await recoverOnFreshBrowser(port, ann.recoveryKey)).answer.status, 200, "the old key still works");
 
@@ -1044,7 +1046,7 @@ describe("LIVE-2E rate limits", () => {
     const { service, store } = memoryService();
     const { server, port } = await prodServer({
       service,
-      limits: { profileCreatesPerIp: { capacity: 2, refillPerSecond: 0.0001 }, profileActionsPerSession: { capacity: 2, refillPerSecond: 0.0001 } },
+      limits: { profileCreatesPerIp: { capacity: 2, refillPerSecond: 0.0001 }, profileActionsPerSession: { capacity: 3, refillPerSecond: 0.0001 } },
     });
     try {
       const ann = await profiledBrowser(port, "Ann");
@@ -1056,9 +1058,9 @@ describe("LIVE-2E rate limits", () => {
       assert.equal(server.identityLimiter.denied["profile-create-ip"], 1);
       assert.equal(store.snapshot().profiles.length, 2);
       assert.equal(((await session(port, third)).body as { profile: unknown }).profile, null);
-      // Profile actions: two, then 429 for this SESSION (LIVE-2E review H1) ...
+      // Profile actions: three (a link code, a re-authentication, a rotation), then 429 for this SESSION (LIVE-2E review H1) ...
       const { code } = (await linkCode(port, ann.cookie)).body as { code: string };
-      assert.equal((await rotateKey(port, ann.cookie)).status, 200);
+      assert.equal((await rotateKey(port, ann.cookie, ann.recoveryKey)).status, 200);
       assert.equal((await signOutOthers(port, ann.cookie)).status, 429);
       assert.equal(server.identityLimiter.denied["profile-actions"], 1);
       // ... and another device of the same profile keeps its own: spending one device's budget cannot stop the
@@ -1081,7 +1083,7 @@ describe("LIVE-2E rate limits", () => {
       const spare = ((await linkCode(port, intruder.cookie as string)).body as { code: string }).code;
       // The owner signs out other devices: the intruder's session ends AND its spare code dies with it.
       assert.deepEqual((await signOutOthers(port, intruder.cookie as string)).body, { error: "reauth-required" }, "ESCROW-3A: the intruder cannot sign the owner out");
-      assert.equal((await rotateKey(port, intruder.cookie as string)).status, 403, "nor rotate the key (the creator's exemption is the owner's browser's only)");
+      assert.equal((await rotateKey(port, intruder.cookie as string)).status, 403, "nor rotate the key (a live session alone never does)");
       assert.equal((await signOutOthers(port, ann.cookie, ann.recoveryKey)).status, 200);
       assert.equal((await session(port, intruder.cookie as string)).status, 401);
       assert.equal((await linkOnFreshBrowser(port, spare)).answer.status, 403, "the pre-minted code is gone");
@@ -1143,8 +1145,8 @@ describe("LIVE-2E nothing secret reaches a log line", () => {
       keep(tablet.before);
       keep(tablet.cookie);
       store.failNext.push("definite");
-      await rotateKey(port, annCookie);
-      const rotated = ((await rotateKey(port, annCookie)).body as { recoveryKey: string }).recoveryKey;
+      await rotateKey(port, annCookie, key); // re-authenticated; this rotation's write fails
+      const rotated = ((await rotateKey(port, annCookie)).body as { recoveryKey: string }).recoveryKey; // the grant still stands
       secrets.push(rotated, rotated.split(".")[1]);
       await signOutOthers(port, annCookie, rotated);
       await signOut(port, annCookie);

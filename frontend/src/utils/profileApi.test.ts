@@ -6,10 +6,12 @@
 // typed result (never a rejection); and every call that changes the session re-bootstraps before it resolves, so
 // the port's `state` and `account` are the server's by then.
 
+import { webcrypto } from "crypto";
 import {
   createLinkCode,
   createProfile,
   linkProfile,
+  mintCreationReceipt,
   profileErrorSentence,
   profileNickname,
   reauthenticate,
@@ -282,6 +284,55 @@ describe("ESCROW-3A: sensitive actions ask this session to confirm the recovery 
     server.queue("/gs/api/profile/reauth", 200, { ok: true });
     expect(await reauthenticate(KEY, server.port)).toEqual({ ok: false, error: "unavailable" });
     expect(server.bootstraps()).toBe(1);
+  });
+});
+
+describe("ESCROW-3A: the creation receipt (the lost-create-response rescue)", () => {
+  const RECEIPT = "ab".repeat(32);
+
+  it("a create with a receipt sends it, and acknowledges the key with it the moment the 201 arrives", async () => {
+    const server = fakeServer(null);
+    await ready(server);
+    server.queue("/gs/api/profile", 201, { ok: true, profile: { name: "Brad", otherSessions: 0 }, recoveryKey: KEY }, () =>
+      server.setProfile({ name: "Brad", otherSessions: 0 }),
+    );
+    server.queue("/gs/api/profile/key-received", 204);
+    expect(await createProfile("Brad", server.port, RECEIPT)).toEqual({ ok: true, name: "Brad", recoveryKey: KEY });
+    const posted = server.calls.filter((call) => !call.input.endsWith("/gs/api/session")).map((call) => [new URL(call.input).pathname, JSON.parse(call.init.body)]);
+    expect(posted).toEqual([
+      ["/gs/api/profile", { name: "Brad", creationReceipt: RECEIPT }],
+      ["/gs/api/profile/key-received", { creationReceipt: RECEIPT }],
+    ]);
+    for (const call of server.calls) expect(call.input).not.toContain(RECEIPT);
+  });
+
+  it("no acknowledgement for an answer that did not deliver the key; the rescue rotation carries the receipt; a create without one sends none", async () => {
+    const server = fakeServer(null);
+    await ready(server);
+    server.queue("/gs/api/profile", 409, { error: "already-profiled", profile: { name: "Brad" } }, () => server.setProfile({ name: "Brad", otherSessions: 0 }));
+    expect(await createProfile("Brad", server.port, RECEIPT)).toEqual({ ok: false, error: "already-profiled", name: "Brad" });
+    server.queue("/gs/api/profile/recovery-key", 200, { ok: true, recoveryKey: KEY });
+    expect(await rotateRecoveryKey(server.port, RECEIPT)).toEqual({ ok: true, recoveryKey: KEY });
+    const posted = server.calls.filter((call) => !call.input.endsWith("/gs/api/session")).map((call) => [new URL(call.input).pathname, JSON.parse(call.init.body)]);
+    expect(posted).toEqual([
+      ["/gs/api/profile", { name: "Brad", creationReceipt: RECEIPT }],
+      ["/gs/api/profile/recovery-key", { creationReceipt: RECEIPT }],
+    ]);
+  });
+
+  it("mintCreationReceipt: 32 random bytes as lowercase hex, fresh each time; null without a secure random source", () => {
+    const original = (globalThis as { crypto?: unknown }).crypto;
+    try {
+      Object.defineProperty(globalThis, "crypto", { value: webcrypto, configurable: true });
+      const a = mintCreationReceipt();
+      const b = mintCreationReceipt();
+      expect(a).toMatch(/^[0-9a-f]{64}$/);
+      expect(a).not.toBe(b);
+      Object.defineProperty(globalThis, "crypto", { value: undefined, configurable: true });
+      expect(mintCreationReceipt()).toBeNull();
+    } finally {
+      Object.defineProperty(globalThis, "crypto", { value: original, configurable: true });
+    }
   });
 });
 

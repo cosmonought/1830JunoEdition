@@ -597,7 +597,8 @@ describe("LIVE-3C identity journal: the LIVE-2E account across restarts", () => 
       const deviceCBoot = await bootstrapCookie(run.port);
       const deviceC = cookieFromAnswer(await post(run.port, "/gs/api/profile/link", deviceCBoot, { code: code2.code })) as string;
       assert.equal((await post(run.port, "/gs/api/session/revoke", deviceC)).status, 204);
-      // The recovery key is rotated.
+      // The recovery key is rotated (after re-authenticating with it -- ESCROW-3A).
+      assert.equal((await post(run.port, "/gs/api/profile/reauth", deviceA, { recoveryKey: firstKey })).status, 200);
       const rotated = await post(run.port, "/gs/api/profile/recovery-key", deviceA);
       assert.equal(rotated.status, 200);
       const secondKey = (rotated.body as { recoveryKey: string }).recoveryKey;

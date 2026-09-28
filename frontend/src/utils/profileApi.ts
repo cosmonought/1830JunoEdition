@@ -24,6 +24,13 @@
 // grant lives on the server, bound to this one session: nothing here keeps the key or the grant (the key is sent once
 // in a POST body, as a recovery is, and dropped), and it is never a URL, a cookie or storage.
 //
+// A LOST CREATE RESPONSE (ESCROW-3A, owner review). The key's one appearance is the create's 201; if that answer is
+// lost, the page never saw the key. The creating page therefore sends a CREATION RECEIPT with the create -- 32 random
+// bytes it makes and keeps in memory only -- and acknowledges the key (`profile/key-received`) the moment the 201
+// arrives. Until then, and only for the session that created the profile, `rotateRecoveryKey(port, receipt)` may
+// replace the unseen key ONCE without the key. A stolen cookie has no receipt; after the acknowledgement (or a
+// rotation, a re-authentication, ten minutes, or a server restart) the receipt opens nothing.
+//
 // A CALL THAT CHANGES THE SESSION forces the next bootstrap before it resolves -- create, recover, link, sign out
 // other devices, and the answers that say our picture was stale (already-profiled, not-authenticated) -- so the
 // port's `state` and `account` are the server's by the time the caller reads them.
@@ -111,15 +118,27 @@ async function call(port: SessionPort, path: SessionApiPath, body: Record<string
   return { answer, ok };
 }
 
-/** "Create profile": 201 with the recovery key's ONLY appearance. */
-export async function createProfile(name: string, port: SessionPort = sessionPort()): Promise<CreateProfileResult> {
+/** ESCROW-3A: a creation receipt -- 32 random bytes as lowercase hex, for ONE page's create. Keep it in memory only
+ *  (never storage, a URL or the console). `null` when this browser has no secure random source: no rescue then. */
+export function mintCreationReceipt(): string | null {
+  const source = (globalThis as { crypto?: { getRandomValues?: (bytes: Uint8Array) => Uint8Array } }).crypto;
+  if (typeof source?.getRandomValues !== "function") return null;
+  const bytes = source.getRandomValues(new Uint8Array(32));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** "Create profile": 201 with the recovery key's ONLY appearance. With a creation receipt, the key's arrival is
+ *  acknowledged at once (best effort: an unanswered acknowledgement leaves the rescue to its ten-minute bound). */
+export async function createProfile(name: string, port: SessionPort = sessionPort(), creationReceipt: string | null = null): Promise<CreateProfileResult> {
   const trimmed = name.trim();
   if (trimmed === "" || trimmed.length > PROFILE_NAME_MAX) return failure("bad-name");
-  const { answer, ok } = await call(port, "profile", { name: trimmed }, [201], true);
+  const body: Record<string, string> = creationReceipt === null ? { name: trimmed } : { name: trimmed, creationReceipt };
+  const { answer, ok } = await call(port, "profile", body, [201], true);
   if (!ok || answer.kind !== "answered") return failureOf(answer);
   const profile = answer.body?.profile as { name?: unknown } | undefined;
   const recoveryKey = text(answer.body?.recoveryKey);
   if (recoveryKey === null) return failure("unavailable");
+  if (creationReceipt !== null) await port.api("profile/key-received", { creationReceipt });
   return { ok: true, name: text(profile?.name) ?? trimmed, recoveryKey };
 }
 
@@ -165,9 +184,11 @@ export async function createLinkCode(port: SessionPort = sessionPort()): Promise
   return { ok: true, code, expiresAt };
 }
 
-/** "Rotate recovery key": a new key, shown once; the old one stops working at once. */
-export async function rotateRecoveryKey(port: SessionPort = sessionPort()): Promise<RecoveryKeyResult> {
-  const { answer, ok } = await call(port, "profile/recovery-key", {}, [200], false);
+/** "Rotate recovery key": a new key, shown once; the old one stops working at once. It needs a recent
+ *  re-authentication (`reauthenticate`) -- or, from the page whose create answer was lost, that page's creation
+ *  receipt (the one-time rescue). */
+export async function rotateRecoveryKey(port: SessionPort = sessionPort(), creationReceipt: string | null = null): Promise<RecoveryKeyResult> {
+  const { answer, ok } = await call(port, "profile/recovery-key", creationReceipt === null ? {} : { creationReceipt }, [200], false);
   if (!ok || answer.kind !== "answered") return failureOf(answer);
   const recoveryKey = text(answer.body?.recoveryKey);
   return recoveryKey === null ? failure("unavailable") : { ok: true, recoveryKey };

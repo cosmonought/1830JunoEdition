@@ -11,8 +11,10 @@
 //      restart and compaction; a LIVE-3C (v3) directory is migrated explicitly, before any new journal line.
 //   B. SENSITIVE-ACTION RE-AUTHENTICATION: a live session alone cannot rotate the recovery key or sign out other devices;
 //      the recovery key presented again grants THIS session a short-lived grant that another session cannot borrow and
-//      a key rotation makes stale; the creating browser's first rotation within an hour is the one exemption, and a
-//      recovered or linked device never has it.
+//      a key rotation makes stale.
+//   E. (owner review) THE LOST-CREATE-RESPONSE RESCUE replaces the one-hour creator exemption: not a time window but a
+//      one-time capability of the creating SESSION holding the creating page's receipt, closed by the page's
+//      acknowledgement, by any rotation or re-authentication, by ten minutes, and by a restart.
 //   C. FINANCIAL-CREDENTIAL STANDING (F-2's identity side): what a wallet ticket is issued under, and every security event
 //      that must end it.
 //   D. The HTTP surface of the re-authentication.
@@ -22,6 +24,7 @@ import assert from "node:assert/strict";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { randomBytes } from "crypto";
 
 import { apiRequest, bootstrapCookie, cookieFromAnswer, profiledBrowser, quietConsole, startServer, stopServer, PROD_ORIGIN } from "../rooms/testSupport";
 import { readSessionCookie, type SessionCookieRead } from "./cookies";
@@ -54,12 +57,12 @@ async function openService<S extends IdentityStore = MemoryIdentityStore>(store:
   return { identity, store, ended, events };
 }
 
-/** A new browser that creates its profile: its cookie, its key. */
-async function creator(identity: IdentityService, now: number, name = "Ann"): Promise<{ read: SessionCookieRead; key: string }> {
+/** A new browser that creates its profile (with the creating page's receipt, when given): its cookie, its key. */
+async function creator(identity: IdentityService, now: number, name = "Ann", receipt?: string): Promise<{ read: SessionCookieRead; key: string }> {
   const boot = await identity.bootstrap({ kind: "none" }, false, now);
   assert.equal(boot.kind, "ok");
   const read = readOf((boot as { setCookie: string | null }).setCookie);
-  const created = await identity.createProfile(read, name, now);
+  const created = await identity.createProfile(read, name, now, receipt);
   assert.equal(created.kind, "ok");
   return { read, key: (created as { recoveryKey: string }).recoveryKey };
 }
@@ -309,51 +312,33 @@ describe("ESCROW-3A A: session families close IR-03", () => {
     }
   });
 
-  test("review #4: a browser from before families keeps the creator's exemption for a profile it creates AFTER the upgrade -- a pre-upgrade linked device never gains it", async () => {
+  test("review #4 (superseded by the owner review): a browser from before families that creates its profile after the upgrade uses the SAME receipt rescue -- no family origin grants anything", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "escrow3a-v3creator-"));
     try {
       const guest = mintPrincipalId();
-      const owner = mintPrincipalId();
-      const ownerProfile = mintProfileId();
-      const ownerKey = mintRecoveryKey();
-      const [guestSession, linkedSession] = [mintSessionId(), mintSessionId()];
-      const [guestSecret, linkedSecret] = [mintSecret(), mintSecret()];
-      const legacy = (sessionId: string, principalId: string, secret: string, createdAt: number) => ({
-        session_id: sessionId,
-        principal_id: principalId,
-        secret_hash: secretHash(secret),
-        created_at: createdAt,
-        last_seen_at: createdAt,
-        expires_at: createdAt + 30 * DAY,
-        revoked_at: null,
-        revoke_reason: null,
-        rotated_to: null,
-      });
+      const guestSession = mintSessionId();
+      const guestSecret = mintSecret();
       const snapshotV3 = {
         format: "gs-identity",
         version: 3,
         seq: 0,
-        principals: [
-          /* A durable UNPROFILED browser (it made a table before profiles existed). */
-          { principal_id: guest, kind: "unprofiled", status: "active", created_at: T0, activated_at: T0, last_seen_at: T0, account_link: null },
-          { principal_id: owner, kind: "profile", status: "active", created_at: T0, activated_at: T0, last_seen_at: T0, account_link: ownerProfile },
-        ],
-        profiles: [
-          { profile_id: ownerProfile, principal_id: owner, display_name: "Ann", created_at: T0 + 5, status: "active", recovery_selector: ownerKey.selector, recovery_hash: secretHash(ownerKey.secret), recovery_rotated_at: T0 + 5, schema: 1 },
-        ],
+        /* A durable UNPROFILED browser (it made a table before profiles existed): a legacy family after migration. */
+        principals: [{ principal_id: guest, kind: "unprofiled", status: "active", created_at: T0, activated_at: T0, last_seen_at: T0, account_link: null }],
+        profiles: [],
         links: [],
-        /* The guest's own browser; and a device LINKED to Ann's profile after it existed (both v3: no family). */
-        sessions: [legacy(guestSession, guest, guestSecret, T0), legacy(linkedSession, owner, linkedSecret, T0 + 10)],
+        sessions: [
+          { session_id: guestSession, principal_id: guest, secret_hash: secretHash(guestSecret), created_at: T0, last_seen_at: T0, expires_at: T0 + 30 * DAY, revoked_at: null, revoke_reason: null, rotated_to: null },
+        ],
       };
       fs.writeFileSync(path.join(dir, IDENTITY_FILE), `${JSON.stringify(snapshotV3)}\n`);
       const store = createJournalIdentityStore(dir, quiet);
       const identity = await IdentityService.fromSnapshot(store, await store.load());
       const guestRead: SessionCookieRead = { kind: "session", sessionId: guestSession, secret: guestSecret };
-      const linkedRead: SessionCookieRead = { kind: "session", sessionId: linkedSession, secret: linkedSecret };
       const t = T0 + 20 * MIN;
-      assert.equal((await identity.createProfile(guestRead, "Gus", t)).kind, "ok", "the create response is lost on the way back");
-      assert.equal((await identity.rotateRecoveryKey(guestRead, t + 1)).kind, "ok", "its first rotation within the hour: the key it never saw is replaced");
-      assert.deepEqual(await identity.rotateRecoveryKey(linkedRead, T0 + 30 * MIN), { kind: "reauth-required" }, "a linked device's legacy family is younger than the profile");
+      const receipt = randomBytes(32).toString("hex");
+      assert.equal((await identity.createProfile(guestRead, "Gus", t, receipt)).kind, "ok", "the create response is lost on the way back");
+      assert.deepEqual(await identity.rotateRecoveryKey(guestRead, t + 1), { kind: "reauth-required" }, "the legacy family alone grants nothing");
+      assert.equal((await identity.rotateRecoveryKey(guestRead, t + 2, receipt)).kind, "ok", "the creating page's receipt does, once");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -374,8 +359,8 @@ describe("ESCROW-3A B: a live session alone cannot rotate the key or sign out ot
     assert.deepEqual(await identity.signOutOthers(stolen, T0 + 2000), { kind: "reauth-required" });
     assert.equal(JSON.stringify(store.snapshot().profiles), before);
     assert.equal(identity.authenticate(ann.read, T0 + 2000).kind, "ok", "the owner is still signed in");
-    // The creator's own cookie, copied after its first hour: no exemption either.
-    assert.deepEqual(await identity.rotateRecoveryKey(ann.read, T0 + 61 * MIN), { kind: "reauth-required" });
+    // The creator's own cookie, copied a moment after the profile was made: there is no time-window exemption.
+    assert.deepEqual(await identity.rotateRecoveryKey(ann.read, T0 + 2 * 1000), { kind: "reauth-required" });
     assert.equal(identity.stats.reauthRequired, 3);
   });
 
@@ -435,15 +420,129 @@ describe("ESCROW-3A B: a live session alone cannot rotate the key or sign out ot
     assert.equal(identity.authenticate(ann.read, T0 + 6).kind, "ok", "the creator's browser is untouched");
   });
 
-  test("the creating browser's one exemption: its first rotation within the hour (a lost create response) -- never a second, never another device", async () => {
+  test("sign-out-other-devices has NO creation rescue: a receipt is not even read by it", async () => {
     const { identity } = await openService();
-    const ann = await creator(identity, T0);
+    const receipt = randomBytes(32).toString("hex");
+    const ann = await creator(identity, T0, "Ann", receipt);
+    await recovered(identity, ann.key, T0 + 1);
+    assert.deepEqual(await identity.signOutOthers(ann.read, T0 + 2), { kind: "reauth-required" });
+    assert.equal(identity.hasOpenCreationRescue(ann.read, T0 + 2), true, "the rescue (for the key alone) is untouched by the refusal");
+  });
+});
+
+/* ================================================================================================= */
+/* E. The lost-create-response rescue (owner review: no time-window exemption)                       */
+/* ================================================================================================= */
+
+describe("ESCROW-3A E: the lost-create-response rescue is one-time, bound to the creating session and its page's receipt, and fails closed", () => {
+  const receiptOf = () => randomBytes(32).toString("hex");
+
+  test("1. a freshly created session whose page RECEIVED the key (acknowledged): rotation needs re-authentication, even with the receipt", async () => {
+    const { identity } = await openService();
+    const receipt = receiptOf();
+    const ann = await creator(identity, T0, "Ann", receipt);
+    assert.equal(identity.hasOpenCreationRescue(ann.read, T0), true);
+    assert.deepEqual(await identity.acknowledgeKeyDelivery(ann.read, receipt, T0 + 1), { kind: "ok" });
+    assert.equal(identity.hasOpenCreationRescue(ann.read, T0 + 1), false, "acknowledged: closed for good");
+    assert.deepEqual(await identity.rotateRecoveryKey(ann.read, T0 + 2), { kind: "reauth-required" });
+    assert.deepEqual(await identity.rotateRecoveryKey(ann.read, T0 + 3, receipt), { kind: "reauth-required" }, "the receipt opens nothing once the key arrived");
+    /* A client that sends no receipt never opens a rescue at all. */
+    const bea = await creator(identity, T0, "Bea");
+    assert.equal(identity.hasOpenCreationRescue(bea.read, T0), false);
+    assert.deepEqual(await identity.rotateRecoveryKey(bea.read, T0 + 1), { kind: "reauth-required" });
+    /* The real path: re-authenticate with the key, then rotate. */
+    await identity.reauthenticate(ann.read, ann.key, T0 + 4);
+    assert.equal((await identity.rotateRecoveryKey(ann.read, T0 + 5)).kind, "ok");
+    assert.equal(identity.stats.creationRescues, 0);
+  });
+
+  test("2. a stolen-equivalent live session (the creator's exact cookie, seconds old, rescue still open) cannot rotate without the page's receipt -- and never after the ack", async () => {
+    const { identity, store } = await openService();
+    const receipt = receiptOf();
+    const ann = await creator(identity, T0, "Ann", receipt);
+    const stolen: SessionCookieRead = { ...(ann.read as { kind: "session"; sessionId: string; secret: string }) }; // a byte-exact copy of the cookie
+    const before = JSON.stringify(store.snapshot().profiles);
+    assert.deepEqual(await identity.rotateRecoveryKey(stolen, T0 + 1), { kind: "reauth-required" }, "the cookie alone");
+    assert.deepEqual(await identity.rotateRecoveryKey(stolen, T0 + 1, receiptOf()), { kind: "reauth-required" }, "a guessed receipt");
+    assert.deepEqual(await identity.rotateRecoveryKey(stolen, T0 + 1, "0".repeat(64)), { kind: "reauth-required" });
+    assert.deepEqual(await identity.acknowledgeKeyDelivery(stolen, receiptOf(), T0 + 1), { kind: "ok" }, "a thief's ack is answered the same ...");
+    assert.equal(identity.hasOpenCreationRescue(ann.read, T0 + 1), true, "... and closes nothing");
+    assert.equal(JSON.stringify(store.snapshot().profiles), before, "the key is unchanged");
+    await identity.acknowledgeKeyDelivery(ann.read, receipt, T0 + 2);
+    assert.deepEqual(await identity.rotateRecoveryKey(stolen, T0 + 3, receipt), { kind: "reauth-required" }, "even a thief who later learned the receipt");
+  });
+
+  test("3. a genuinely lost create response: the creating session with its page's receipt replaces the unseen key exactly once; the new key works, the unseen one never does", async () => {
+    const { identity } = await openService();
+    const receipt = receiptOf();
+    const ann = await creator(identity, T0, "Ann", receipt); // the 201 carrying ann.key is "lost": the page never saw it
+    const wrong = await identity.rotateRecoveryKey(ann.read, T0 + 1, receiptOf());
+    assert.deepEqual(wrong, { kind: "reauth-required" }, "a wrong receipt consumes nothing ...");
+    const rescued = await identity.rotateRecoveryKey(ann.read, T0 + 2, receipt);
+    assert.equal(rescued.kind, "ok", "... and the right one replaces the key");
+    const fresh = (rescued as { recoveryKey: string }).recoveryKey;
+    assert.notEqual(fresh, ann.key);
+    assert.equal(identity.stats.creationRescues, 1);
+    assert.deepEqual(await identity.reauthenticate(ann.read, ann.key, T0 + 3), { kind: "invalid" }, "the unseen key is dead");
+    assert.equal((await identity.reauthenticate(ann.read, fresh, T0 + 3)).kind, "ok", "the delivered one is the profile's key");
+    const phone = await recovered(identity, fresh, T0 + 4);
+    assert.equal(identity.securityContextOf(phone, T0 + 4)?.principalId, identity.securityContextOf(ann.read, T0 + 4)?.principalId, "the same principal");
+  });
+
+  test("4. a linked or recovered device, and the creating session's own rotation successor, never have the rescue -- even holding the receipt", async () => {
+    const { identity } = await openService(createMemoryIdentityStore() as unknown as MemoryIdentityStore, { rotateAfterMs: MIN, creationRescueMs: 60 * MIN });
+    const receipt = receiptOf();
+    const ann = await creator(identity, T0, "Ann", receipt);
     const phone = await recovered(identity, ann.key, T0 + 1);
-    assert.deepEqual(await identity.rotateRecoveryKey(phone, T0 + 2), { kind: "reauth-required" }, "a recovered device founded its own family");
-    const first = await identity.rotateRecoveryKey(ann.read, T0 + 3);
-    assert.equal(first.kind, "ok");
-    assert.deepEqual(await identity.rotateRecoveryKey(ann.read, T0 + 4), { kind: "reauth-required" }, "only the FIRST rotation");
-    assert.deepEqual(await identity.signOutOthers(ann.read, T0 + 4), { kind: "reauth-required" }, "and never sign-out-others");
+    assert.deepEqual(await identity.rotateRecoveryKey(phone, T0 + 2, receipt), { kind: "reauth-required" }, "a recovered device");
+    const code = await identity.createLinkCode(ann.read, T0 + 3);
+    const tabletTemp = readOf(((await identity.bootstrap({ kind: "none" }, false, T0 + 4)) as { setCookie: string }).setCookie);
+    const tablet = readOf(((await identity.redeemLink(tabletTemp, (code as { code: string }).code, T0 + 4)) as { setCookie: string }).setCookie);
+    assert.deepEqual(await identity.rotateRecoveryKey(tablet, T0 + 5, receipt), { kind: "reauth-required" }, "a linked device");
+    /* The creating cookie, past its rotation age, rotates into a successor in the SAME family: still not the creating session. */
+    const rotated = await identity.bootstrap(ann.read, false, T0 + 2 * MIN);
+    assert.equal((rotated as { rotated: boolean }).rotated, true);
+    const successor = readOf((rotated as { setCookie: string }).setCookie);
+    assert.equal(familyOf(identity, successor), familyOf(identity, ann.read));
+    assert.deepEqual(await identity.rotateRecoveryKey(successor, T0 + 2 * MIN + 1, receipt), { kind: "reauth-required" }, "a rotation successor");
+    assert.equal(identity.stats.creationRescues, 0);
+  });
+
+  test("5. consumed: after its one use the rescue is gone -- the same receipt, the same session, cannot replace the key again", async () => {
+    const { identity } = await openService();
+    const receipt = receiptOf();
+    const ann = await creator(identity, T0, "Ann", receipt);
+    assert.equal((await identity.rotateRecoveryKey(ann.read, T0 + 1, receipt)).kind, "ok");
+    assert.equal(identity.hasOpenCreationRescue(ann.read, T0 + 1), false);
+    assert.deepEqual(await identity.rotateRecoveryKey(ann.read, T0 + 2, receipt), { kind: "reauth-required" });
+    /* Every other resolution closes it too: a re-authentication (the key was received) and the ten-minute bound. */
+    const bea = await creator(identity, T0, "Bea", receipt);
+    await identity.reauthenticate(bea.read, bea.key, T0 + 1);
+    assert.equal(identity.hasOpenCreationRescue(bea.read, T0 + 1), false, "a re-authentication proves the key arrived");
+    const cyd = await creator(identity, T0, "Cyd", receipt);
+    assert.deepEqual(await identity.rotateRecoveryKey(cyd.read, T0 + 10 * MIN, receipt), { kind: "reauth-required" }, "ten minutes");
+    /* And a sign-out of the creating session: nothing is left to present it. */
+    const dee = await creator(identity, T0, "Dee", receipt);
+    await identity.revoke(sessionIdOf(dee.read), "logout", T0 + 1);
+    assert.deepEqual(await identity.rotateRecoveryKey(dee.read, T0 + 2, receipt), { kind: "not-authenticated" });
+  });
+
+  test("6. a restart forgets every open rescue (memory only, by design): the restarted server needs re-authentication", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "escrow3a-rescue-restart-"));
+    try {
+      const receipt = receiptOf();
+      const first = await openService(createJournalIdentityStore(dir, quiet));
+      const ann = await creator(first.identity, T0, "Ann", receipt);
+      assert.equal(first.identity.hasOpenCreationRescue(ann.read, T0 + 1), true);
+      const second = await openService(createJournalIdentityStore(dir, quiet));
+      assert.equal(second.identity.authenticate(ann.read, T0 + 2).kind, "ok", "the session itself survives the restart");
+      assert.equal(second.identity.hasOpenCreationRescue(ann.read, T0 + 2), false);
+      assert.deepEqual(await second.identity.rotateRecoveryKey(ann.read, T0 + 3, receipt), { kind: "reauth-required" });
+      /* Nothing about the receipt reached the disk either. */
+      for (const name of fs.readdirSync(dir)) assert.ok(!fs.readFileSync(path.join(dir, name), "utf8").includes(receipt), name);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -507,6 +606,36 @@ describe("ESCROW-3A D: POST /gs/api/profile/reauth", () => {
       assert.deepEqual((await apiRequest(port, "/gs/api/profile/reauth", { cookie: unprofiled, body: { recoveryKey: ann.recoveryKey } })).body, { error: "profile-required" });
       assert.equal((await apiRequest(port, "/gs/api/profile/reauth", { body: { recoveryKey: ann.recoveryKey } })).status, 401);
       assert.equal((await apiRequest(port, "/gs/api/profile/reauth", { cookie: phone, body: { recoveryKey: ann.recoveryKey, extra: 1 } })).status, 400, "a closed body");
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  test("the rescue over the wire: a lost create answer is replaced once by the creating page's receipt; an acknowledged one never; sign-out-others takes no receipt", async () => {
+    const { server, port } = await startServer({ identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, now: () => Date.now() } });
+    try {
+      /* Lost: the 201 never reached the page (the test simply ignores it); the page still holds its receipt. */
+      const receipt = randomBytes(32).toString("hex");
+      const lost = await bootstrapCookie(port);
+      const created = await apiRequest(port, "/gs/api/profile", { cookie: lost, body: { name: "Ann", creationReceipt: receipt } });
+      assert.equal(created.status, 201);
+      assert.deepEqual((await apiRequest(port, "/gs/api/profile/recovery-key", { cookie: lost, body: {} })).body, { error: "reauth-required" }, "the cookie alone");
+      assert.deepEqual((await apiRequest(port, "/gs/api/profile/sign-out-others", { cookie: lost, body: { creationReceipt: receipt } })).status, 400, "sign-out-others takes no receipt at all");
+      const rescued = await apiRequest(port, "/gs/api/profile/recovery-key", { cookie: lost, body: { creationReceipt: receipt } });
+      assert.equal(rescued.status, 200);
+      assert.notEqual((rescued.body as { recoveryKey: string }).recoveryKey, created.body?.recoveryKey);
+      assert.deepEqual((await apiRequest(port, "/gs/api/profile/recovery-key", { cookie: lost, body: { creationReceipt: receipt } })).body, { error: "reauth-required" }, "once");
+      /* Delivered: the page acknowledges its key at once; the receipt is worthless from then on. */
+      const receipt2 = randomBytes(32).toString("hex");
+      const okBrowser = await bootstrapCookie(port);
+      assert.equal((await apiRequest(port, "/gs/api/profile", { cookie: okBrowser, body: { name: "Bea", creationReceipt: receipt2 } })).status, 201);
+      const ack = await apiRequest(port, "/gs/api/profile/key-received", { cookie: okBrowser, body: { creationReceipt: receipt2 } });
+      assert.equal(ack.status, 204);
+      assert.deepEqual((await apiRequest(port, "/gs/api/profile/recovery-key", { cookie: okBrowser, body: { creationReceipt: receipt2 } })).body, { error: "reauth-required" });
+      assert.equal((await apiRequest(port, "/gs/api/profile/key-received", { cookie: okBrowser, body: { creationReceipt: receipt2, extra: 1 } })).status, 400, "a closed body");
+      assert.equal((await apiRequest(port, "/gs/api/profile/key-received", { body: { creationReceipt: receipt2 } })).status, 401);
+      /* No receipt, and nothing about one, appears in a response. */
+      assert.ok(!JSON.stringify([created.body, rescued.body, ack.text]).includes(receipt));
     } finally {
       await stopServer(server);
     }

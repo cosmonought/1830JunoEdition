@@ -15,7 +15,7 @@ import { nodeStoreFs, type StoreFileHandle, type StoreFs } from "../fileLogStore
 import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeResult";
 import { apiRequest, bootstrapCookie, cookieFromAnswer, cookieRead, PROD_ORIGIN, quietConsole, startServer, stopServer } from "../rooms/testSupport";
 import { createFileIdentityStore, IDENTITY_FILE } from "./fileStore";
-import { mintPrincipalId, mintProfileId, mintRecoveryKey, mintSecret, mintSessionId, secretHash } from "./ids";
+import { familyIdOf, mintPrincipalId, mintProfileId, mintRecoveryKey, mintSecret, mintSessionId, secretHash } from "./ids";
 import {
   COMPACT_AFTER_RECORDS,
   createJournalIdentityStore,
@@ -36,6 +36,7 @@ import {
   type Principal,
   type Profile,
   type Session,
+  type SessionFamily,
 } from "./store";
 
 quietConsole();
@@ -56,8 +57,9 @@ function principal(over: Partial<Principal> = {}): Principal {
   return { principal_id: mintPrincipalId(), kind: "unprofiled", status: "active", created_at: T0, activated_at: T0, last_seen_at: T0, account_link: null, ...over };
 }
 function session(principalId: string, over: Partial<Session> = {}): Session {
+  const sessionId = over.session_id ?? mintSessionId();
   return {
-    session_id: mintSessionId(),
+    session_id: sessionId,
     principal_id: principalId,
     secret_hash: secretHash(mintSecret()),
     created_at: T0,
@@ -66,9 +68,14 @@ function session(principalId: string, over: Partial<Session> = {}): Session {
     revoked_at: null,
     revoke_reason: null,
     rotated_to: null,
+    family_id: familyIdOf(sessionId),
     ...over,
   };
 }
+/** ESCROW-3A: the (open) family a session founds -- committed with it. */
+const fam = (s: Session): SessionFamily => ({ family_id: s.family_id, principal_id: s.principal_id, created_at: s.created_at, origin: "bootstrap", revoked_at: null, revoke_reason: null });
+/** A change carrying sessions, with the families they found. */
+const withFam = (change: IdentityChange): IdentityChange => ({ ...change, families: [...(change.families ?? []), ...(change.sessions ?? []).map(fam).filter((f, at, all) => all.findIndex((g) => g.family_id === f.family_id) === at)] });
 function profiled(): { principal: Principal; profile: Profile } {
   const profileId = mintProfileId();
   const p = principal({ kind: "profile", account_link: profileId });
@@ -97,8 +104,8 @@ function seedChanges(): IdentityChange[] {
   const a = principal();
   const { principal: b, profile } = profiled();
   return [
-    { principals: [a], sessions: [session(a.principal_id)] },
-    { principals: [b], profiles: [profile], sessions: [session(b.principal_id), session(b.principal_id)] },
+    withFam({ principals: [a], sessions: [session(a.principal_id)] }),
+    withFam({ principals: [b], profiles: [profile], sessions: [session(b.principal_id), session(b.principal_id)] }),
     { links: [link(profile.profile_id)] },
   ];
 }
@@ -180,7 +187,7 @@ describe("LIVE-3C identity journal: load and migration", () => {
   test("a fresh directory: the load writes an empty v3 snapshot before anything else; each change is one synced line; a restart reads the same set", () =>
     withDir("fresh", async (dir) => {
       const store = createJournalIdentityStore(dir, quiet);
-      assert.deepEqual(await store.load(), { principals: [], sessions: [], profiles: [], links: [] });
+      assert.deepEqual(await store.load(), { principals: [], sessions: [], profiles: [], links: [], families: [] });
       assert.deepEqual([snapshotFile(dir).version, snapshotFile(dir).seq], [IDENTITY_SNAPSHOT_VERSION, 0]);
       assert.equal(journalBytes(dir).length, 0, "no journal until the first change");
       const changes = seedChanges();
@@ -189,7 +196,7 @@ describe("LIVE-3C identity journal: load and migration", () => {
       assert.equal(lines.length, changes.length, "one line per change");
       assert.deepEqual(lines.map((l) => JSON.parse(l).seq), [1, 2, 3]);
       assert.equal(snapshotFile(dir).seq, 0, "the snapshot is not rewritten by a commit");
-      const expected = changes.reduce<FullIdentitySnapshot>((acc, change) => applyChange(acc, change), { principals: [], sessions: [], profiles: [], links: [] });
+      const expected = changes.reduce<FullIdentitySnapshot>((acc, change) => applyChange(acc, change), { principals: [], sessions: [], profiles: [], links: [], families: [] });
       const again = await createJournalIdentityStore(dir, quiet).load();
       assert.equal(sorted(again), sorted(expected));
     }));
@@ -204,10 +211,10 @@ describe("LIVE-3C identity journal: load and migration", () => {
       const store = createJournalIdentityStore(dir, quiet);
       const loaded = await store.load();
       assert.equal(sorted(loaded), sorted(before), "the same set");
-      assert.deepEqual([snapshotFile(dir).version, snapshotFile(dir).seq], [3, 0]);
+      assert.deepEqual([snapshotFile(dir).version, snapshotFile(dir).seq], [IDENTITY_SNAPSHOT_VERSION, 0]); // v4 since ESCROW-3A (families)
       assert.equal(store.health().loadedVersion, 2);
       await store.commit({ principals: [principal()] });
-      await assert.rejects(createFileIdentityStore(dir, quiet).load(), IdentityStoreCorruptError, "the older store refuses a v3 snapshot rather than ignoring its journal");
+      await assert.rejects(createFileIdentityStore(dir, quiet).load(), IdentityStoreCorruptError, "the older store refuses a v4 snapshot rather than ignoring its journal");
     }));
 
   test("a journal beside no snapshot, or beside a v2 snapshot, is a disagreement: the load refuses and changes nothing", () =>
@@ -240,7 +247,7 @@ describe("LIVE-3C identity journal: load and migration", () => {
         fs.writeFileSync(path.join(dir, IDENTITY_JOURNAL_FILE), Buffer.concat([good, Buffer.from(tail, "utf8")]));
         const again = createJournalIdentityStore(dir, quiet);
         const loaded = await again.load();
-        const expected = changes.slice(0, 2).reduce<FullIdentitySnapshot>((acc, change) => applyChange(acc, change), { principals: [], sessions: [], profiles: [], links: [] });
+        const expected = changes.slice(0, 2).reduce<FullIdentitySnapshot>((acc, change) => applyChange(acc, change), { principals: [], sessions: [], profiles: [], links: [], families: [] });
         assert.equal(sorted(loaded), sorted(expected), damage);
         assert.ok(journalBytes(dir).equals(good), `${damage}: cut back to the last whole, verified line`);
         assert.ok(again.health().tornBytesRepaired > 0);
@@ -287,7 +294,7 @@ describe("LIVE-3C identity journal: every commit outcome", () => {
       await store.commit(second);
       assert.equal(store.stats.redone, 1);
       assert.equal(journalBytes(dir).toString("utf8").trim().split("\n").length, 2);
-      assert.equal(sorted(await createJournalIdentityStore(dir, quiet).load()), sorted(applyChange(applyChange({ principals: [], sessions: [], profiles: [], links: [] }, first), second)));
+      assert.equal(sorted(await createJournalIdentityStore(dir, quiet).load()), sorted(applyChange(applyChange({ principals: [], sessions: [], profiles: [], links: [], families: [] }, first), second)));
     }));
 
   test("an fsync failure is uncertain even with the bytes readable: redone; if the redo fails too the store is poisoned, asks for a restart, and writes nothing more", () =>
@@ -307,7 +314,7 @@ describe("LIVE-3C identity journal: every commit outcome", () => {
       // The restart reads what the disk holds: here the redone line is whole and verified, so it stands (the change
       // was never acknowledged -- the caller was told it failed -- and it is exactly one line: all or nothing).
       const loaded = await createJournalIdentityStore(dir, quiet).load();
-      assert.equal(sorted(loaded), sorted(applyChange(applyChange({ principals: [], sessions: [], profiles: [], links: [] }, first), second)));
+      assert.equal(sorted(loaded), sorted(applyChange(applyChange({ principals: [], sessions: [], profiles: [], links: [], families: [] }, first), second)));
     }));
 
   test("a failure before a byte could be written is DEFINITE; a fenced process (the lock taken over) writes nothing", () =>
@@ -333,7 +340,7 @@ describe("LIVE-3C identity journal: every commit outcome", () => {
       const { principal: owner, profile } = profiled();
       const used = link(profile.profile_id, { consumed_at: T0 + 5 });
       const fresh = link(profile.profile_id);
-      await store.commit({ principals: [unprofiled, owner], sessions: [live, revoked], profiles: [profile], links: [used, fresh] });
+      await store.commit(withFam({ principals: [unprofiled, owner], sessions: [live, revoked], profiles: [profile], links: [used, fresh] }));
       const bytes = journalBytes(dir);
       const refused: IdentityChange[] = [
         { expect: [{ kind: "principal-absent", principal_id: unprofiled.principal_id }], principals: [unprofiled] },
@@ -367,7 +374,7 @@ describe("LIVE-3C identity journal: every commit outcome", () => {
 describe("LIVE-3C identity journal: compaction", () => {
   const changesOf = (n: number): IdentityChange[] => Array.from({ length: n }, () => ({ principals: [principal()] }));
   const expectedOf = (changes: IdentityChange[]) =>
-    changes.reduce<FullIdentitySnapshot>((acc, change) => applyChange(acc, change), { principals: [], sessions: [], profiles: [], links: [] });
+    changes.reduce<FullIdentitySnapshot>((acc, change) => applyChange(acc, change), { principals: [], sessions: [], profiles: [], links: [], families: [] });
 
   test("every N changes the journal is folded into a new snapshot and truncated; the set is unchanged across restarts", () =>
     withDir("compact", async (dir) => {
@@ -472,7 +479,7 @@ describe("LIVE-3C identity journal: O(change) validation", () => {
       return seed / 0x7fffffff;
     };
     const pick = <T>(items: readonly T[]): T => items[Math.floor(random() * items.length)];
-    let state: FullIdentitySnapshot = { principals: [], sessions: [], profiles: [], links: [] };
+    let state: FullIdentitySnapshot = { principals: [], sessions: [], profiles: [], links: [], families: [] };
     let index = IdentityIndex.from(state);
     let agreed = 0;
     let refused = 0;
@@ -485,8 +492,8 @@ describe("LIVE-3C identity journal: O(change) validation", () => {
       else if (choice === 1) {
         const { principal: p, profile } = profiled();
         change = random() < 0.5 ? { principals: [p], profiles: [profile] } : random() < 0.5 ? { principals: [p] } : { profiles: [profile] };
-      } else if (choice === 2) change = { sessions: [session(pick(principals).principal_id)] };
-      else if (choice === 3) change = { sessions: [session(mintPrincipalId())] }; // names no principal
+      } else if (choice === 2) change = withFam({ sessions: [session(pick(principals).principal_id)] });
+      else if (choice === 3) change = withFam({ sessions: [session(mintPrincipalId())] }); // names no principal
       else if (choice === 4 && profiles.length > 0) change = { links: [link(pick(profiles).profile_id)] };
       else if (choice === 5) change = { links: [link(mintProfileId())] }; // names no profile
       else if (choice === 6 && profiles.length > 0) {
@@ -540,7 +547,7 @@ describe("LIVE-3C identity journal: O(change) validation", () => {
       assert.ok(snapshotBefore.size > 5_000_000, `a large snapshot (${snapshotBefore.size} bytes)`);
       const journalBefore = journalBytes(dir).length;
       const started = Date.now();
-      for (let n = 0; n < 50; n += 1) await store.commit({ sessions: [session(principalsOut[n].principal_id)] });
+      for (let n = 0; n < 50; n += 1) await store.commit(withFam({ sessions: [session(principalsOut[n].principal_id)] }));
       const took = Date.now() - started;
       const snapshotAfter = fs.statSync(path.join(dir, IDENTITY_FILE));
       assert.equal(snapshotAfter.mtimeMs, snapshotBefore.mtimeMs, "the snapshot was not rewritten by any of the 50 changes");

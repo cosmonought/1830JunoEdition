@@ -759,7 +759,7 @@ describe("LIVE-2C create, join and seats", () => {
       await assert.rejects(prodSocket(port, cookie), /403/, "and it opens no game socket before it has a profile");
       identityStore.failNext.push("definite");
       assert.equal((await apiRequest(port, "/gs/api/profile", { cookie, body: { name: "Hana" }, origin: PROD_ORIGIN })).status, 503);
-      assert.deepEqual(identityStore.snapshot(), { principals: [], sessions: [], profiles: [], links: [] }, "a refused creation writes nothing");
+      assert.deepEqual(identityStore.snapshot(), { principals: [], sessions: [], profiles: [], links: [], families: [] }, "a refused creation writes nothing");
       await assert.rejects(prodSocket(port, cookie), /403/, "nor opens anything");
       assert.equal((await apiRequest(port, "/gs/api/profile", { cookie, body: { name: "Hana" }, origin: PROD_ORIGIN })).status, 201);
       const afterCreate = identityStore.snapshot();

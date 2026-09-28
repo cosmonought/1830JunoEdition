@@ -35,7 +35,7 @@ import { WebSocket } from "ws";
 
 import { createFileLogStore } from "../fileLogStore";
 import { SESSION_COOKIE_NAME } from "../identity/cookies";
-import { HEALTH_PATH, LINK_CODE_PATH, LINK_PATH, PROFILE_PATH, RECOVER_PATH, RECOVERY_KEY_PATH, REVOKE_PATH, SESSION_PATH } from "../identity/httpApi";
+import { HEALTH_PATH, LINK_CODE_PATH, LINK_PATH, PROFILE_PATH, REAUTH_PATH, RECOVER_PATH, RECOVERY_KEY_PATH, REVOKE_PATH, SESSION_PATH } from "../identity/httpApi";
 import { serializeBatch } from "../persistence/logFormat";
 import { AUDIT_FILE, OPS_DIRECTORY, STATUS_FILE } from "../persistence/opsRecorder";
 import { LOCK_DIRECTORY, LOCK_STALE_AFTER_MS } from "../persistence/processLock";
@@ -395,6 +395,8 @@ test("LIVE-3C, the real process: SIGKILL twice over a full data directory -- dis
     const linked = await redeem(LINK_PATH, { code: consumedCode });
     assert.equal(linked.answer.status, 200, linked.answer.text);
     const aliceC = linked.cookie as string;
+    /* ESCROW-3A: a linked device rotates the key only after re-authenticating with the current one. */
+    assert.equal((await post(port, REAUTH_PATH, { recoveryKey: aliceOldKey }, aliceC)).status, 200);
     const rotated = await post(port, RECOVERY_KEY_PATH, {}, aliceC);
     assert.equal(rotated.status, 200, rotated.text);
     const aliceNewKey = String(rotated.body?.recoveryKey);

@@ -204,6 +204,65 @@ export function sealOf(entries: readonly ServerLogEntry[], ended: boolean): Term
   return null;
 }
 
+/* ==================================================================
+    ESCROW-3A: THE SEALED PREFIX -- THE ONE WAY TO READ A TERMINAL GAME'S RESULT
+   ==================================================================
+   Settlement derives EVERYTHING -- the appraised board, `log_hash`, `appraisal_state_hash`, the weights, the consent
+   material and (ESCROW-3B) every signature and chain submission -- from exactly `log[0 .. seal.log_len)`. After the seal
+   the server appends only `CloseRoom` markers (post-terminal administration: `admissibleAfterSeal`), and each one changes
+   the log's length, its hash and the live board (`room_closed`); none of that may reach a payload. This is the single
+   helper every financial caller slices history through, so no caller has to remember how: it re-derives the seal from
+   the entries, refuses a seal that is not theirs, and refuses a history whose post-seal tail holds anything but
+   `CloseRoom` (which the engine never admits -- so it would mean a damaged or foreign log, never a guess). */
+
+export type SealedPrefixRefusal =
+  /** The entries are not the contiguous committed history 0..n-1. */
+  | "not-contiguous"
+  /** The seal names a length the entries do not reach, or is not a positive integer. */
+  | "seal-out-of-range"
+  /** The seal is not the one this history implies (another `log_len`: another terminal history). */
+  | "seal-mismatch"
+  /** An entry after the seal that is not the room-close marker. */
+  | "post-seal-gameplay";
+
+export class SealedPrefixError extends Error {
+  constructor(
+    readonly code: SealedPrefixRefusal,
+    detail: string,
+  ) {
+    super(`${code}: ${detail}`);
+    this.name = "SealedPrefixError";
+  }
+}
+
+export interface SealedHistory {
+  readonly seal: TerminalSeal;
+  /** Exactly `log[0 .. seal.log_len)` -- a copy, frozen: the game's result and nothing after it. */
+  readonly prefix: readonly ServerLogEntry[];
+  /** How many `CloseRoom` markers follow the seal (never read by settlement; reported only). */
+  readonly trailingCloseRooms: number;
+}
+
+/** The sealed prefix of a terminal history (`seal` from `sealOf(entries, true)`, or as stored with a settlement
+ *  intent), or a `SealedPrefixError`. Pure. */
+export function sealedPrefix(entries: readonly ServerLogEntry[], seal: TerminalSeal): SealedHistory {
+  entries.forEach((entry, at) => {
+    if (entry.index !== at) throw new SealedPrefixError("not-contiguous", `entry at position ${at} carries index ${String(entry.index)}`);
+  });
+  if (!Number.isSafeInteger(seal.log_len) || seal.log_len < 1 || seal.log_len > entries.length) {
+    throw new SealedPrefixError("seal-out-of-range", `seal.log_len ${String(seal.log_len)} against ${entries.length} entries`);
+  }
+  for (let at = seal.log_len; at < entries.length; at += 1) {
+    if (!isCloseRoom(entries[at])) throw new SealedPrefixError("post-seal-gameplay", `entry ${at} after the seal at ${seal.log_len} is not the room-close marker`);
+  }
+  const implied = sealOf(entries, true);
+  if (implied === null || implied.log_len !== seal.log_len) {
+    throw new SealedPrefixError("seal-mismatch", `the history is sealed at ${implied?.log_len ?? "nothing"}, not ${seal.log_len}`);
+  }
+  const prefix = Object.freeze(entries.slice(0, seal.log_len).map((entry) => Object.freeze({ ...entry })));
+  return { seal: { log_len: seal.log_len, at: implied.at }, prefix, trailingCloseRooms: entries.length - seal.log_len };
+}
+
 /** After the seal the server admits exactly the room-close marker (and `RevertTo`, which RV-3 then refuses in its own
  *  words, so the Undo button and the server keep saying the same sentence). Everything else is refused before it is
  *  speculated. */
@@ -230,7 +289,15 @@ export interface SettlementLifecycle {
    *  implementation is therefore IDEMPOTENT: it creates its durable settlement item if absent and does nothing
    *  otherwise. For a no-money game there is nothing to settle. Never a rewrite of the log. Must not throw; must not
    *  await (it runs inside a publish). */
-  onGameplayClosed(input: { readonly gameId: string; readonly record: Readonly<GameRecord>; readonly seal: TerminalSeal; readonly recovered: boolean }): void;
+  onGameplayClosed(input: {
+    readonly gameId: string;
+    readonly record: Readonly<GameRecord>;
+    readonly seal: TerminalSeal;
+    readonly recovered: boolean;
+    /** ESCROW-3A: the committed history as the announcing task saw it (possibly with `CloseRoom` markers after the seal).
+     *  Settlement reads it ONLY through `sealedPrefix(entries, seal)`. */
+    readonly entries: readonly ServerLogEntry[];
+  }): void;
   /** What lifecycle tooling may do with this game's material. */
   retentionOf(record: Readonly<GameRecord>): RetentionClass;
 }

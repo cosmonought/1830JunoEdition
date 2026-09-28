@@ -15,10 +15,11 @@ Before the prune the Project held **146** docs (`claude/…`, 1,790,534 B of a 2
 
 No Project-only doc was transcribed or deleted in this pass.
 
-## CURRENT (14)
+## CURRENT (15)
 
 | Doc | Role |
 |---|---|
+| `ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md` | Phase 3A: v11 settlement certified [10, 11]; the money-game lifecycle, seam, continuation, tickets, identity hardening, operator path; ESCROW-3B inputs (§19) |
 | `DA8_RULES_V11_CLOSURE_2026-09-27.md` | Phase 2 closure; v11; certified-only settlement ruling; the ESCROW-3A entry gate |
 | `LIVE2F_LIVE3D_HOSTED_AUTHORITY_CERTIFICATION_2026-09-27.md` | Phase 1 hosted-authority certification (`0ae252d`); the 11 ESCROW-3 prerequisites |
 | `live3c-restore-reconciliation-lifecycle-2026-09-27.md` | Restore/reconcile, lifecycle and seal, the settlement seam |

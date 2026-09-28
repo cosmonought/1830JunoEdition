@@ -190,7 +190,7 @@ describe("LIVE-2B sessions (the service, on a stepped clock)", () => {
     assert.equal(outcome.kind, "ok");
     assert.equal(outcome.kind === "ok" && outcome.created, true);
     assert.equal(store.stats.commits, 0);
-    assert.deepEqual(store.snapshot(), { principals: [], sessions: [], profiles: [], links: [] });
+    assert.deepEqual(store.snapshot(), { principals: [], sessions: [], profiles: [], links: [], families: [] });
     // LIVE-2E: the principal a bootstrap mints is UNPROFILED -- it may reach the profile gate and nothing else.
     const auth = identity.authenticate(readOf(outcome.kind === "ok" ? outcome.setCookie : null), T0);
     assert.ok(auth.kind === "ok");

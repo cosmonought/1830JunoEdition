@@ -50,7 +50,9 @@ export type SessionApiPath =
   | "profile/link"
   | "profile/link-code"
   | "profile/recovery-key"
-  | "profile/sign-out-others";
+  | "profile/sign-out-others"
+  /** ESCROW-3A: re-authenticate THIS session with the recovery key before a sensitive action. */
+  | "profile/reauth";
 
 /** What a `/gs/api/*` call came back with. Never a rejection: "network" when nothing answered, "unavailable" when
  *  this port has no HTTP surface at all (development identity, no game server). */

@@ -64,14 +64,24 @@ import {
   checkSnapshot,
   IdentityIndex,
   IdentityStoreCorruptError,
+  isLegacySession,
   preconditionFailure,
+  withLegacyFamilies,
   type FullIdentitySnapshot,
   type IdentityChange,
   type IdentityStore,
+  type Session,
 } from "./store";
 
 export const IDENTITY_JOURNAL_FILE = "identity.journal.jsonl";
-export const IDENTITY_SNAPSHOT_VERSION = 3;
+/* ESCROW-3A: version 4 adds `families` (the session-family records, IR-03) and a `family_id` on every session. A v3
+   directory (LIVE-3C) -- its snapshot and every journal line written beside it -- is migrated at the load exactly like
+   v2 was: its sessions are given their lineage's family (`withLegacyFamilies`), the whole set validated, and the v4
+   snapshot written BEFORE any new journal line, so a LIVE-3C server (which reads only v1-v3) refuses the directory
+   rather than silently ignoring the families -- a family revocation can never be undone by a rollback. */
+export const IDENTITY_SNAPSHOT_VERSION = 4;
+/** The LIVE-3C snapshot version: sessions without families, read only to migrate. */
+export const LEGACY_JOURNAL_SNAPSHOT_VERSION = 3;
 const FORMAT = "gs-identity";
 /** Journal records between compactions. */
 export const COMPACT_AFTER_RECORDS = 1_000;
@@ -104,7 +114,7 @@ export interface JournalHealth {
   readonly tornBytesRepaired: number;
   /** The snapshot version the load found (`null`: none). */
   readonly loadedVersion: number | null;
-  readonly sizes: { principals: number; sessions: number; profiles: number; links: number };
+  readonly sizes: { principals: number; sessions: number; profiles: number; links: number; families?: number };
 }
 
 export interface JournalIdentityStore extends IdentityStore {
@@ -149,18 +159,32 @@ export interface ParsedSnapshot {
   readonly version: number;
 }
 
-/** The snapshot document: v1 and v2 through LIVE-2E's migration (`seq` 0), v3 as written. Refuses anything else. */
+/** The snapshot document: v1 and v2 through LIVE-2E's migration (`seq` 0), v3 (LIVE-3C) through ESCROW-3A's family
+ *  migration, v4 as written. Refuses anything else. */
 export function parseSnapshotDocument(parsed: unknown, where: string): ParsedSnapshot {
   if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && (parsed as { version?: unknown }).version === IDENTITY_SNAPSHOT_VERSION) {
-    const document = parsed as { format?: unknown; seq?: unknown; principals?: unknown; sessions?: unknown; profiles?: unknown; links?: unknown };
+    const document = parsed as { format?: unknown; seq?: unknown; principals?: unknown; sessions?: unknown; profiles?: unknown; links?: unknown; families?: unknown };
     const keys = Object.keys(parsed).sort().join(",");
-    if (document.format !== FORMAT || keys !== "format,links,principals,profiles,seq,sessions,version" || !Number.isSafeInteger(document.seq) || (document.seq as number) < 0) {
+    if (document.format !== FORMAT || keys !== "families,format,links,principals,profiles,seq,sessions,version" || !Number.isSafeInteger(document.seq) || (document.seq as number) < 0) {
       throw new IdentityStoreCorruptError(`${where}: not a ${FORMAT} v${IDENTITY_SNAPSHOT_VERSION} document`);
     }
     return {
-      snapshot: checkSnapshot({ principals: document.principals, sessions: document.sessions, profiles: document.profiles, links: document.links }, where),
+      snapshot: checkSnapshot({ principals: document.principals, sessions: document.sessions, profiles: document.profiles, links: document.links, families: document.families }, where),
       seq: document.seq as number,
       version: IDENTITY_SNAPSHOT_VERSION,
+    };
+  }
+  if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) && (parsed as { version?: unknown }).version === LEGACY_JOURNAL_SNAPSHOT_VERSION) {
+    const document = parsed as { format?: unknown; seq?: unknown; principals?: unknown; sessions?: unknown; profiles?: unknown; links?: unknown };
+    const keys = Object.keys(parsed).sort().join(",");
+    if (document.format !== FORMAT || keys !== "format,links,principals,profiles,seq,sessions,version" || !Number.isSafeInteger(document.seq) || (document.seq as number) < 0 || !Array.isArray(document.sessions)) {
+      throw new IdentityStoreCorruptError(`${where}: not a ${FORMAT} v${LEGACY_JOURNAL_SNAPSHOT_VERSION} document`);
+    }
+    const migrated = withLegacyFamilies(document.sessions, `${where} (v3, migrated)`);
+    return {
+      snapshot: checkSnapshot({ principals: document.principals, sessions: migrated.sessions, profiles: document.profiles, links: document.links, families: migrated.families }, `${where} (v3, migrated)`),
+      seq: document.seq as number,
+      version: LEGACY_JOURNAL_SNAPSHOT_VERSION,
     };
   }
   const version = typeof parsed === "object" && parsed !== null ? (parsed as { version?: unknown }).version : undefined;
@@ -169,9 +193,27 @@ export function parseSnapshotDocument(parsed: unknown, where: string): ParsedSna
 
 export function snapshotBytes(snapshot: FullIdentitySnapshot, seq: number): Buffer {
   return Buffer.from(
-    `${JSON.stringify({ format: FORMAT, version: IDENTITY_SNAPSHOT_VERSION, seq, principals: snapshot.principals, sessions: snapshot.sessions, profiles: snapshot.profiles, links: snapshot.links })}\n`,
+    `${JSON.stringify({ format: FORMAT, version: IDENTITY_SNAPSHOT_VERSION, seq, principals: snapshot.principals, sessions: snapshot.sessions, profiles: snapshot.profiles, links: snapshot.links, families: snapshot.families })}\n`,
     "utf8",
   );
+}
+
+/** ESCROW-3A: a change a LIVE-3C (v3) server journaled, as v4: each legacy session record given the family of its
+ *  lineage -- its own stored record's, a predecessor's in the index or in this change, or one it founds -- and each
+ *  family it founds added. Deterministic (the same line migrates the same way at every load). Only ever applied to the
+ *  lines beside a v3 snapshot; a v4 directory's lines must already be v4 records (a legacy line there is corruption). */
+export function upgradeLegacyChange(change: IdentityChange, index: IdentityIndex): IdentityChange {
+  const sessions = change.sessions ?? [];
+  if (!sessions.some((record) => isLegacySession(record))) return change;
+  const predecessorInIndex = (sessionId: string): string | undefined => {
+    for (const other of index.sessions.values()) if (other.rotated_to === sessionId) return other.family_id;
+    return undefined;
+  };
+  const migrated = withLegacyFamilies(sessions, "a v3 journal line", (sessionId) => index.sessions.get(sessionId)?.family_id ?? predecessorInIndex(sessionId));
+  const added = migrated.families.filter((family) => index.families.get(family.family_id) === undefined && !(change.families ?? []).some((f) => f.family_id === family.family_id));
+  const order = new Map(sessions.map((record, at) => [(record as Session).session_id, at] as const));
+  const ordered = [...migrated.sessions].sort((a, b) => (order.get(a.session_id) ?? 0) - (order.get(b.session_id) ?? 0));
+  return { ...change, sessions: ordered, families: [...(change.families ?? []), ...added] };
 }
 
 /** What a journal's bytes hold, against a snapshot at `snapshotSeq`. Pure (the load and the operator tool share it). */
@@ -373,12 +415,13 @@ export function createJournalIdentityStore(directory: string, options: JournalId
         parsedSnapshot = parseSnapshotDocument(document, target);
       }
       loadedVersion = parsedSnapshot?.version ?? null;
-      const base = parsedSnapshot ?? { snapshot: { principals: [], sessions: [], profiles: [], links: [] }, seq: 0, version: 0 };
+      const base = parsedSnapshot ?? { snapshot: { principals: [], sessions: [], profiles: [], links: [], families: [] }, seq: 0, version: 0 };
       const journal = await readOptional(journalFile);
       journalExists = journal !== null;
-      if (journal !== null && journal.length > 0 && (parsedSnapshot === null || parsedSnapshot.version !== IDENTITY_SNAPSHOT_VERSION)) {
-        /* A journal only ever continues a v3 snapshot this store wrote first: beside no snapshot or an older one, the
-           two sources disagree about what identity is -- refused, never guessed at. */
+      const legacyJournal = parsedSnapshot !== null && parsedSnapshot.version === LEGACY_JOURNAL_SNAPSHOT_VERSION;
+      if (journal !== null && journal.length > 0 && (parsedSnapshot === null || (parsedSnapshot.version !== IDENTITY_SNAPSHOT_VERSION && !legacyJournal))) {
+        /* A journal only ever continues a journal snapshot (v4, or the LIVE-3C v3 being migrated): beside no snapshot or
+           a whole-file one, the two sources disagree about what identity is -- refused, never guessed at. */
         throw new IdentityStoreCorruptError(
           `${journalFile}: a journal of ${journal.length} bytes beside ${parsedSnapshot === null ? "no snapshot" : `a v${parsedSnapshot.version} snapshot`}`,
         );
@@ -386,7 +429,9 @@ export function createJournalIdentityStore(directory: string, options: JournalId
       const scan = scanJournal(journal ?? Buffer.alloc(0), base.seq);
       if (scan.classification === "corrupt") throw new IdentityStoreCorruptError(`${journalFile}: ${scan.detail}`);
       const built = IdentityIndex.from(base.snapshot);
-      for (const { seq, change } of scan.changes) {
+      for (const { seq, change: stored } of scan.changes) {
+        /* ESCROW-3A: the lines a LIVE-3C server wrote beside its v3 snapshot carry legacy sessions (no family). */
+        const change = legacyJournal ? upgradeLegacyChange(stored, built) : stored;
         const problem = built.check(change, `${IDENTITY_JOURNAL_FILE} seq ${seq}`);
         if (problem !== null) throw new IdentityStoreCorruptError(problem);
         built.apply(change);

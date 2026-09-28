@@ -59,6 +59,7 @@ import { GAME_ID_PATTERN, seatOf, type GameRecord } from "./rooms/gameRecord";
 import { isMaintenanceHold } from "./rooms/committedView";
 import { createMemoryHoldStore, HoldUnreadableError, makeHold, type HoldStore } from "./rooms/holdStore";
 import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILING_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE, type SettlementLifecycle } from "./rooms/lifecycle";
+import { NO_MONEY_CONTINUATION, type MoneyContinuationPolicy } from "./escrow/moneyContinuation";
 import { reconcileLoaded } from "./rooms/reconcile";
 import { NO_OPS, type OpsRecorder } from "./persistence/opsRecorder";
 import type { IpKey } from "./identity/clientIp";
@@ -238,6 +239,9 @@ export interface GameServerOptions {
   ops?: OpsRecorder;
   /** LIVE-3C: the terminal seam ESCROW-3 plugs into (`rooms/lifecycle.ts`). No-money when absent. */
   settlement?: SettlementLifecycle;
+  /** ESCROW-3A (brief §8): which funded games this deployment may continue across builds (`escrow/moneyContinuation.ts`).
+   *  Absent: none -- every game dealt on another build stays read-only (#1252). */
+  moneyContinuation?: MoneyContinuationPolicy;
   /** LIVE-3C: more for the status snapshot -- `start.ts` adds the identity store's health. */
   statusExtras?: () => Record<string, unknown>;
 }
@@ -338,6 +342,10 @@ export function createGameServer(options: GameServerOptions): {
     discovery: RoomHost["discovery"];
     holds: HoldStore;
     ops: OpsRecorder;
+    /** ESCROW-3A (brief §6): the money games the index knows, their records, and a game's ordinary load. */
+    financialGameIds: RoomHost["financialGameIds"];
+    financialRecords: RoomHost["financialRecords"];
+    loadGame(gameId: string): Promise<void>;
   };
 } {
   /* ==================================================================
@@ -413,9 +421,12 @@ export function createGameServer(options: GameServerOptions): {
      (a new tag says "restarted" the way `s58` said "did not"). */
   const processTag = Date.now().toString(36);
 
-  /** A room's session at the seed, nothing applied: what a game is loaded into. */
-  const newRoomSession = (): RoomSession =>
+  /** A room's session at the seed, nothing applied: what a game is loaded into. ESCROW-3A: a FUNDED game whose stored
+   *  continuation identity this deployment is compatible with may be continued across builds; nothing else. */
+  const moneyContinuation = options.moneyContinuation ?? NO_MONEY_CONTINUATION;
+  const newRoomSession = (gameId: string | null = null): RoomSession =>
     new RoomSession({
+      continuesDealtBuild: gameId === null ? undefined : (dealt) => moneyContinuation.continues(gameId, dealt),
       providers: sandboxReplayProviders(),
       seed: {
         state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
@@ -565,7 +576,7 @@ export function createGameServer(options: GameServerOptions): {
         build: options.build,
         explainDivergence: options.explainDivergence === true,
         store: storePort,
-        newSession: newRoomSession,
+        newSession: () => newRoomSession(code),
         restore: (session, stored) => restoreRoom(code, session, stored),
         onEntriesPublished: (entries) => options.onAppend?.(code, entries),
         /* LIVE-2C: a committed record, published: indexes, re-authorized room views, the public list. */
@@ -965,6 +976,7 @@ export function createGameServer(options: GameServerOptions): {
     },
     ops,
     settlement: options.settlement ?? NO_MONEY_SETTLEMENT,
+    moneyContinuation,
     boardFacts,
     statusExtras: () => ({
       store: { restart_required: counters.restartRequired, uncertain: counters.storeUncertain, held_corrupt: counters.heldCorrupt, held_durable: counters.heldDurable, timeouts: counters.storeTimeouts },
@@ -1578,7 +1590,20 @@ export function createGameServer(options: GameServerOptions): {
     records: recordStore,
     rooms: host,
     residentGames: () => games.size,
-    lifecycle: { ready: host.indexReady, inventory: host.inventory, discovery: host.discovery, holds: holdStore, ops },
+    lifecycle: {
+      ready: host.indexReady,
+      inventory: host.inventory,
+      discovery: host.discovery,
+      holds: holdStore,
+      ops,
+      /* ESCROW-3A (brief §6): the money games this server's index knows, and a game's ordinary load (LIVE-3C's
+         reconciliation) -- what the settlement coordinator's startup walk needs. */
+      financialGameIds: host.financialGameIds,
+      financialRecords: host.financialRecords,
+      loadGame: async (gameId: string) => {
+        await host.actorFor(gameId);
+      },
+    },
     socketCounts: () => ({
       total: contexts.size,
       bySession: (id: string) => socketsBySession.get(id)?.size ?? 0,

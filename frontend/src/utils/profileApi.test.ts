@@ -12,6 +12,7 @@ import {
   linkProfile,
   profileErrorSentence,
   profileNickname,
+  reauthenticate,
   recoverProfile,
   rotateRecoveryKey,
   signOutOtherDevices,
@@ -79,6 +80,7 @@ describe("request shape (LIVE-2E)", () => {
     server.queue("/gs/api/profile/recovery-key", 200, { ok: true, recoveryKey: KEY });
     server.queue("/gs/api/profile/sign-out-others", 200, { ok: true, signedOut: 1 });
     server.queue("/gs/api/session/revoke", 204);
+    server.queue("/gs/api/profile/reauth", 200, { ok: true, expiresAt: 5 });
     await createProfile("  Brad  ", server.port);
     await recoverProfile(`  ${KEY}\n`, server.port);
     await linkProfile("abcd efgh-jkmn pqrs-tvwx", server.port);
@@ -86,6 +88,7 @@ describe("request shape (LIVE-2E)", () => {
     await rotateRecoveryKey(server.port);
     await signOutOtherDevices(server.port);
     await signOutThisDevice(server.port);
+    await reauthenticate(` ${KEY} `, server.port);
 
     const bodies = new Map(
       server.calls.filter((call) => !call.input.endsWith("/gs/api/session")).map((call) => [new URL(call.input).pathname, JSON.parse(call.init.body)]),
@@ -98,6 +101,7 @@ describe("request shape (LIVE-2E)", () => {
       "/gs/api/profile/recovery-key": {},
       "/gs/api/profile/sign-out-others": {},
       "/gs/api/session/revoke": {},
+      "/gs/api/profile/reauth": { recoveryKey: KEY },
     });
     for (const call of server.calls) {
       const url = new URL(call.input);
@@ -125,6 +129,7 @@ describe("request shape (LIVE-2E)", () => {
         await rotateRecoveryKey(port),
         await signOutThisDevice(port),
         await signOutOtherDevices(port),
+        await reauthenticate(KEY, port),
       ]) {
         expect(result).toEqual({ ok: false, error: "unavailable" });
       }
@@ -142,6 +147,7 @@ describe("request shape (LIVE-2E)", () => {
     expect(await createProfile("x".repeat(25), server.port)).toEqual({ ok: false, error: "bad-name" });
     expect(await recoverProfile("  \n ", server.port)).toEqual({ ok: false, error: "invalid-credential" });
     expect(await linkProfile(" - - ", server.port)).toEqual({ ok: false, error: "invalid-credential" });
+    expect(await reauthenticate(" \n", server.port)).toEqual({ ok: false, error: "invalid-credential" });
     expect(server.calls.length).toBe(before);
   });
 });
@@ -255,6 +261,30 @@ describe("results and the re-bootstrap (LIVE-2E)", () => {
   });
 });
 
+describe("ESCROW-3A: sensitive actions ask this session to confirm the recovery key", () => {
+  it("rotate and sign-out-others answer reauth-required; reauth grants the window; a wrong key is one answer; no re-bootstrap", async () => {
+    const server = fakeServer({ name: "Brad", otherSessions: 1 });
+    await ready(server);
+    server.queue("/gs/api/profile/recovery-key", 403, { error: "reauth-required" });
+    server.queue("/gs/api/profile/sign-out-others", 403, { error: "reauth-required" });
+    const rotate = await rotateRecoveryKey(server.port);
+    expect(rotate).toEqual({ ok: false, error: "reauth-required" });
+    expect(await signOutOtherDevices(server.port)).toEqual({ ok: false, error: "reauth-required" });
+    expect(profileErrorSentence(rotate as ProfileFailure)).toBe("For your security, confirm it's you with your recovery key first.");
+    server.queue("/gs/api/profile/reauth", 403, { error: "invalid-credential" });
+    const wrong = await reauthenticate(KEY, server.port);
+    expect(wrong).toEqual({ ok: false, error: "invalid-credential" });
+    expect(profileErrorSentence(wrong as ProfileFailure, "reauth")).toBe("That recovery key doesn't work for this profile. Check it and try again.");
+    server.queue("/gs/api/profile/reauth", 429, { error: "rate-limited", retryAfterMs: 2_000 });
+    expect(await reauthenticate(KEY, server.port)).toEqual({ ok: false, error: "rate-limited", retryAfterMs: 2_000 });
+    server.queue("/gs/api/profile/reauth", 200, { ok: true, expiresAt: 300_000 });
+    expect(await reauthenticate(KEY, server.port)).toEqual({ ok: true, expiresAt: 300_000 });
+    server.queue("/gs/api/profile/reauth", 200, { ok: true });
+    expect(await reauthenticate(KEY, server.port)).toEqual({ ok: false, error: "unavailable" });
+    expect(server.bootstraps()).toBe(1);
+  });
+});
+
 describe("the nickname a create sends (LIVE-2E)", () => {
   it("is the player's choice, else the profile's name; a development build leaves it to the server", async () => {
     const server = fakeServer({ name: "Brad", otherSessions: 0 });
@@ -278,9 +308,11 @@ describe("nothing is kept or said (LIVE-2E)", () => {
       );
       server.queue("/gs/api/profile/link-code", 201, { ok: true, code: CODE, expiresAt: 1 });
       server.queue("/gs/api/profile/recovery-key", 200, { ok: true, recoveryKey: KEY });
+      server.queue("/gs/api/profile/reauth", 200, { ok: true, expiresAt: 1 });
       await createProfile("Brad", server.port);
       await createLinkCode(server.port);
       await rotateRecoveryKey(server.port);
+      await reauthenticate(KEY, server.port);
       for (const spy of writes) expect(spy).not.toHaveBeenCalled();
       for (const spy of said) expect(spy).not.toHaveBeenCalled();
       expect(JSON.stringify(server.port)).not.toContain(KEY);

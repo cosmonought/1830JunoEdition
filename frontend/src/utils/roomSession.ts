@@ -116,6 +116,11 @@ export interface RoomSessionOptions {
    *  is a local-play opt-in for the pre-pin playtest rooms, and the server says so on every room it admits.
    *  A deal pinned to a version this engine does not carry is refused under EITHER policy. */
   replayPolicy?: ReplayPolicy;
+  /** ESCROW-3A (brief §8): may this server CONTINUE a room whose deal names another build (#1252)? Absent: never -- every
+   *  such room is read-only, as before. The server answers true only for a FUNDED game whose durable continuation
+   *  identity (rules pin, hosted and financial protocols, settlement codec) this deployment is compatible with
+   *  (`server/src/escrow/moneyContinuation.ts`); a build id alone never continues anything. */
+  continuesDealtBuild?: (dealtBuild: string) => boolean;
 }
 
 export interface SubmitInput {
@@ -455,7 +460,7 @@ export class RoomSession {
        client's own build already matched, so that is a client bug rather than a deploy, and it must not get
        a room pinned to a reducer nobody is running. */
     const dealt = this.dealtBuild();
-    if (dealt !== null && !buildsAgree(dealt, this.options.build)) {
+    if (dealt !== null && !buildsAgree(dealt, this.options.build) && this.options.continuesDealtBuild?.(dealt) !== true) {
       return {
         kind: "refused",
         reason:

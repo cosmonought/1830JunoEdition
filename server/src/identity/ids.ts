@@ -60,6 +60,21 @@ export const mintSecret = (random: RandomSource = cryptoRandom): string => rando
 export const mintProfileId = (random: RandomSource = cryptoRandom): string => `pf_${base32Lower(random(ID_BYTES))}`;
 export const mintRecoverySelector = (random: RandomSource = cryptoRandom): string => `rk_${base32Lower(random(ID_BYTES))}`;
 
+/* ==================================================================
+    ESCROW-3A (IR-03): A SESSION FAMILY -- ONE BROWSER'S ROTATION LINEAGE
+   ==================================================================
+   A family is named after the session that FOUNDED it (a bootstrap, a recovery, a link): every rotation successor and
+   every grace successor minted from a member inherits it. The id is derived, not drawn -- `sf_` + the first 128 bits
+   of SHA-256 over a domain tag and the founding session id -- so minting a family consumes no randomness (seeded tests
+   keep their ids), a legacy v3 session's family is re-derived identically by every load that migrates it, and it is
+   exactly as unguessable as the random session id it is named after. PRIVATE, like every `se_`/`pr_`/`pf_` id: never on
+   the wire, in a RoomView, a log, a hold, an audit line or a chain. It is not an identity: it names one cookie jar's
+   lineage so a sign-out can end all of it. */
+export const FAMILY_ID_PATTERN = new RegExp(`^sf_${ID_BODY}$`);
+const FAMILY_TAG = "18COSMOS/SESSION-FAMILY/v1\n";
+export const familyIdOf = (foundingSessionId: string): string =>
+  `sf_${base32Lower(createHash("sha256").update(FAMILY_TAG).update(foundingSessionId).digest().subarray(0, ID_BYTES))}`;
+
 /** The secret's 32 bytes, or `null` for anything that is not the canonical 43-symbol spelling of exactly 32. */
 export function secretBytes(secret: string): Buffer | null {
   if (!SECRET_PATTERN.test(secret)) return null;

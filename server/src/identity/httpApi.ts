@@ -24,6 +24,11 @@
 //   POST /gs/api/profile/link-code          {}             (profiled) 201 {code, expiresAt}
 //   POST /gs/api/profile/recovery-key       {}             (profiled) 200 {recoveryKey} -- the old key stops working
 //   POST /gs/api/profile/sign-out-others    {}             (profiled) 200 {signedOut}
+//   POST /gs/api/profile/reauth             {recoveryKey}  (profiled) ESCROW-3A: re-authenticate THIS session with its own
+//                                                          profile's recovery key: 200 {expiresAt}; 403 invalid-credential
+// ESCROW-3A (brief §10B): `recovery-key` and `sign-out-others` are SENSITIVE -- without a recent re-authentication of the
+// same session they answer 403 `reauth-required` (the client asks for the key, calls `reauth`, and retries). The one
+// exemption is the creating browser's first rotation within an hour (the lost-create-response path).
 // A wrong, expired, used, revoked or disabled credential is ONE answer: 403 `invalid-credential`. Redemptions are
 // budgeted per address and per session, apart from every room limit; the plaintext key or code appears only in the one
 // response that delivers it, and nothing here logs a request body.
@@ -55,8 +60,9 @@ export const LINK_PATH = "/gs/api/profile/link";
 export const LINK_CODE_PATH = "/gs/api/profile/link-code";
 export const RECOVERY_KEY_PATH = "/gs/api/profile/recovery-key";
 export const SIGN_OUT_OTHERS_PATH = "/gs/api/profile/sign-out-others";
+export const REAUTH_PATH = "/gs/api/profile/reauth";
 const API_PREFIX = "/gs/api/";
-const ROUTES = new Set([SESSION_PATH, REVOKE_PATH, PROFILE_PATH, RECOVER_PATH, LINK_PATH, LINK_CODE_PATH, RECOVERY_KEY_PATH, SIGN_OUT_OTHERS_PATH]);
+const ROUTES = new Set([SESSION_PATH, REVOKE_PATH, PROFILE_PATH, RECOVER_PATH, LINK_PATH, LINK_CODE_PATH, RECOVERY_KEY_PATH, SIGN_OUT_OTHERS_PATH, REAUTH_PATH]);
 
 export interface HttpApi {
   mode: GsMode;
@@ -336,7 +342,13 @@ async function serveProfile(
   now: number,
 ): Promise<void> {
   const schema: Record<string, FieldSpec> =
-    pathname === PROFILE_PATH ? { name: { string: 256 } } : pathname === RECOVER_PATH ? { recoveryKey: { string: 256 } } : pathname === LINK_PATH ? { code: { string: 64 } } : {};
+    pathname === PROFILE_PATH
+      ? { name: { string: 256 } }
+      : pathname === RECOVER_PATH || pathname === REAUTH_PATH
+        ? { recoveryKey: { string: 256 } }
+        : pathname === LINK_PATH
+          ? { code: { string: 64 } }
+          : {};
   const fields = parseBody(text, schema);
   if (fields === null) {
     json(response, 400, { error: "bad-request" });
@@ -393,17 +405,20 @@ async function serveProfile(
   }
 
   if (pathname === RECOVER_PATH || pathname === LINK_PATH) {
-    /* Redemptions: charged for every attempt, right or wrong, to the ADDRESS (with its IPv6 /48) and to the SESSION
-       making it. There is deliberately no server-wide budget (LIVE-2E review M1): with 256-bit keys and 100-bit
+    /* Redemptions. There is deliberately no server-wide budget (LIVE-2E review M1): with 256-bit keys and 100-bit
        single-use codes a global cap adds no protection against guessing, and it would let a few addresses switch off
-       recovery -- the only way back into a profile -- for everybody. */
-    const ipWait = api.limiter.credentialRedeems.peek(ip);
-    const sessionRedeemWait = ipWait > 0 ? 0 : api.limiter.credentialRedeemsPerSession.peek(sessionId);
-    if (ipWait > 0 || sessionRedeemWait > 0) {
-      return tooMany(response, api, ipWait > 0 ? "credential-ip" : "credential-session", Math.max(ipWait, sessionRedeemWait));
-    }
-    api.limiter.credentialRedeems.take(ip);
+       recovery -- the only way back into a profile -- for everybody.
+       ESCROW-3A (brief §10C, LIVE-2F/3D C1-04): the ADDRESS budget is a FAILURE budget. It is charged only for a wrong
+       credential, and it never stands between the holder of the RIGHT one and recovery: a neighbour on the same address
+       (a NAT, a campus) sending wrong keys can exhaust it, and the right key still signs in. What it still controls is
+       everything wrong: once exhausted, a wrong credential is answered 429 -- after the SAME constant-time verification
+       and the same work as any other attempt, so neither the answer nor its timing says whether a selector exists, and
+       a 200 is learned only by someone already holding a valid credential. Every attempt, right or wrong, is still
+       charged to the SESSION making it (a caller cannot drain another browser's session budget). */
+    const sessionRedeemWait = api.limiter.credentialRedeemsPerSession.peek(sessionId);
+    if (sessionRedeemWait > 0) return tooMany(response, api, "credential-session", sessionRedeemWait);
     api.limiter.credentialRedeemsPerSession.take(sessionId);
+    const addressExhausted = api.limiter.credentialRedeems.peek(ip);
     const outcome: CredentialOutcome =
       pathname === RECOVER_PATH ? await api.identity.recover(read, fields.recoveryKey, now) : await api.identity.redeemLink(read, fields.code, now);
     switch (outcome.kind) {
@@ -411,6 +426,8 @@ async function serveProfile(
         json(response, 200, { ok: true, profile: { name: outcome.name } }, { "Set-Cookie": outcome.setCookie });
         return;
       case "invalid":
+        api.limiter.credentialRedeems.take(ip);
+        if (addressExhausted > 0) return tooMany(response, api, "credential-ip", addressExhausted);
         json(response, 403, { error: "invalid-credential" });
         return;
       case "already-profiled":
@@ -433,6 +450,25 @@ async function serveProfile(
      one signed-in device spend it and keep the owner's other device from signing it out or rotating the key. */
   const wait = api.limiter.profileActions.take(sessionId);
   if (wait > 0) return tooMany(response, api, "profile-actions", wait);
+  if (pathname === REAUTH_PATH) {
+    /* ESCROW-3A: charged to this session's action budget like every profiled action (a stolen session can spend only
+       its own), verified in constant time against THIS session's profile only. */
+    const reauth = await api.identity.reauthenticate(read, fields.recoveryKey, now);
+    switch (reauth.kind) {
+      case "ok":
+        json(response, 200, { ok: true, expiresAt: reauth.expiresAt });
+        return;
+      case "invalid":
+        json(response, 403, { error: "invalid-credential" });
+        return;
+      case "profile-required":
+        json(response, 403, { error: "profile-required" });
+        return;
+      default:
+        json(response, 401, { error: "not-authenticated" });
+        return;
+    }
+  }
   const answered =
     pathname === LINK_CODE_PATH
       ? await api.identity.createLinkCode(read, now)
@@ -447,6 +483,9 @@ async function serveProfile(
     }
     case "profile-required":
       json(response, 403, { error: "profile-required" });
+      return;
+    case "reauth-required":
+      json(response, 403, { error: "reauth-required" });
       return;
     case "not-authenticated":
       json(response, 401, { error: "not-authenticated" });

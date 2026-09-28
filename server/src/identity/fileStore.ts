@@ -35,6 +35,7 @@ import {
   IdentityStoreCorruptError,
   lookupsOf,
   preconditionFailure,
+  withLegacyFamilies,
   type FullIdentitySnapshot,
   type IdentityChange,
   type IdentityStore,
@@ -69,10 +70,18 @@ export function migrateIdentityDocument(parsed: unknown, where: string): FullIde
       }
       return { ...principal, kind: "unprofiled" };
     });
-    return checkSnapshot({ principals, sessions: document.sessions, profiles: [], links: [] }, `${where} (migrated from v1)`);
+    if (!Array.isArray(document.sessions)) throw new IdentityStoreCorruptError(`${where}: not a ${FORMAT} v1 document`);
+    const migrated = withLegacyFamilies(document.sessions, `${where} (migrated from v1)`);
+    return checkSnapshot({ principals, sessions: migrated.sessions, profiles: [], links: [], families: migrated.families }, `${where} (migrated from v1)`);
   }
   if (document.format === FORMAT && document.version === VERSION && keys === "format,links,principals,profiles,sessions,version") {
-    return checkSnapshot({ principals: document.principals, sessions: document.sessions, profiles: document.profiles, links: document.links }, where);
+    /* ESCROW-3A: a v2 document keeps no family records -- its sessions' families are DERIVED at every load (a LIVE-2E
+       session by its rotation lineage; a session this store wrote since carries its own `family_id`). Derived families
+       read as open: a revoked family's members are every one revoked in the same commit, so none can mint again. The
+       whole-file store has served tests only since LIVE-3C; production's journal store keeps family records. */
+    if (!Array.isArray(document.sessions)) throw new IdentityStoreCorruptError(`${where}: not a ${FORMAT} v${VERSION} document`);
+    const migrated = withLegacyFamilies(document.sessions, where);
+    return checkSnapshot({ principals: document.principals, sessions: migrated.sessions, profiles: document.profiles, links: document.links, families: migrated.families }, where);
   }
   throw new IdentityStoreCorruptError(`${where}: not a ${FORMAT} v1 or v${VERSION} document`);
 }
@@ -185,8 +194,8 @@ export function createFileIdentityStore(directory: string, options: FileIdentity
         raw = await io.readFile(target);
       } catch (error) {
         if (codeOf(error) !== "ENOENT") throw error;
-        current = { principals: [], sessions: [], profiles: [], links: [] };
-        return { principals: [], sessions: [], profiles: [], links: [] };
+        current = { principals: [], sessions: [], profiles: [], links: [], families: [] };
+        return { principals: [], sessions: [], profiles: [], links: [], families: [] };
       }
       let parsed: unknown;
       try {

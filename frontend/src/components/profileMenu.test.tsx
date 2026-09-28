@@ -95,6 +95,14 @@ const click = async (element: Element | null | undefined) => {
   await settle();
 };
 
+const type = (input: HTMLInputElement | null, value: string) => {
+  expect(input).toBeTruthy();
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, value);
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+};
+
 async function profiled(otherSessions = 2): Promise<ReturnType<typeof fakeServer>> {
   const server = fakeServer({ name: "Brad", otherSessions });
   await server.port.ensure();
@@ -176,6 +184,60 @@ describe("the profile menu (LIVE-2E)", () => {
     await click(byTestId("profile-signout-confirm"));
     expect(server.calls.map((call) => call.path)).toContain("/gs/api/session/revoke");
     expect(reloads).toBe(1);
+  });
+
+  it("ESCROW-3A: a rotation the server holds for re-authentication asks 'Confirm it's you', then rotates at once", async () => {
+    const server = await profiled();
+    const OLD = "rk_0123456789abcdefghjkmnpqr0.BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
+    await render(<ProfileMenu port={server.port} />);
+    await click(byTestId("profile-chip"));
+    await click(buttonNamed("Rotate recovery key"));
+    server.queue("/gs/api/profile/recovery-key", 403, { error: "reauth-required" });
+    await click(buttonNamed("Make a new recovery key"));
+    expect(container.textContent).toContain("Confirm it’s you");
+    expect(container.textContent).toContain("To make a new recovery key, paste your current recovery key.");
+    const input = byTestId<HTMLInputElement>("profile-reauth-key");
+    expect(input?.type).toBe("password");
+    expect(byTestId<HTMLButtonElement>("profile-reauth-confirm")?.disabled).toBe(true);
+    /* A wrong key: one sentence, the typed key is dropped, and nothing rotates. */
+    server.queue("/gs/api/profile/reauth", 403, { error: "invalid-credential" });
+    type(input, "rk_wrong");
+    await click(byTestId("profile-reauth-confirm"));
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("That recovery key doesn't work for this profile. Check it and try again.");
+    expect(byTestId<HTMLInputElement>("profile-reauth-key")?.value).toBe("");
+    /* The right key: re-authenticated, and the rotation the player chose runs again -- the new key is shown once. */
+    server.queue("/gs/api/profile/reauth", 200, { ok: true, expiresAt: 1 });
+    server.queue("/gs/api/profile/recovery-key", 200, { ok: true, recoveryKey: KEY });
+    type(byTestId<HTMLInputElement>("profile-reauth-key"), ` ${OLD}\n`);
+    await click(byTestId("profile-reauth-confirm"));
+    expect(byTestId("recovery-key-value")?.textContent).toBe(KEY);
+    expect(container.innerHTML).not.toContain(OLD);
+    expect(server.calls.filter((call) => call.path === "/gs/api/profile/reauth").map((call) => JSON.parse(call.body))).toEqual([
+      { recoveryKey: "rk_wrong" },
+      { recoveryKey: OLD },
+    ]);
+    expect(server.calls.map((call) => call.path).filter((path) => path !== "/gs/api/session")).toEqual([
+      "/gs/api/profile/recovery-key",
+      "/gs/api/profile/reauth",
+      "/gs/api/profile/reauth",
+      "/gs/api/profile/recovery-key",
+    ]);
+  });
+
+  it("ESCROW-3A: 'Sign out other devices' held for re-authentication confirms the key and then signs them out", async () => {
+    const server = await profiled(1);
+    await render(<ProfileMenu port={server.port} />);
+    await click(byTestId("profile-chip"));
+    await click(buttonNamed("Sign out other devices"));
+    server.queue("/gs/api/profile/sign-out-others", 403, { error: "reauth-required" });
+    await click(byTestId("profile-others-confirm"));
+    expect(container.textContent).toContain("To sign out your other devices, paste your current recovery key.");
+    server.queue("/gs/api/profile/reauth", 200, { ok: true, expiresAt: 1 });
+    server.queue("/gs/api/profile/sign-out-others", 200, { ok: true, signedOut: 1 }, () => server.setProfile({ name: "Brad", otherSessions: 0 }));
+    type(byTestId<HTMLInputElement>("profile-reauth-key"), KEY);
+    await click(byTestId("profile-reauth-confirm"));
+    expect(byTestId("profile-others-done")?.textContent).toBe("Signed out 1 other device.");
+    expect(container.innerHTML).not.toContain(KEY);
   });
 
   it("a development build names the tab's profile and offers no credential actions", async () => {

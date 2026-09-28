@@ -13,6 +13,11 @@
 //   Sign out this device      asked first -- the profile and its seats are kept -- then this browser reloads to
 //                             the profile gate
 //
+// ESCROW-3A (§10B): rotating the key and signing out other devices are SENSITIVE -- the server asks this session to
+// re-enter the recovery key first (403 `reauth-required`, except a brand-new profile's first rotation on the device that
+// created it). The menu then shows "Confirm it's you": paste the recovery key, choose Confirm, and the action the player
+// already chose runs again at once. The key lives in this panel's state only while that view is up.
+//
 // A development-identity build has no credentials to manage: the chip says "Development profile (this tab)" and
 // offers nothing. The code and the key live in this component's state while their view is up; closing the menu
 // drops them. Nothing is logged, stored or put in a URL.
@@ -27,6 +32,7 @@ import {
   LINK_CODE_LIFETIME_MS,
   createLinkCode,
   profileErrorSentence,
+  reauthenticate,
   rotateRecoveryKey,
   signOutOtherDevices,
   signOutThisDevice,
@@ -42,7 +48,9 @@ type View =
   | { kind: "rotate-confirm" }
   | { kind: "others-confirm" }
   | { kind: "others-done"; signedOut: number }
-  | { kind: "signout-confirm" };
+  | { kind: "signout-confirm" }
+  /** ESCROW-3A: the server asked this session to confirm the recovery key before `then` runs. */
+  | { kind: "reauth"; then: "rotate" | "others" };
 
 const devices = (count: number) => `${count} other device${count === 1 ? "" : "s"}`;
 
@@ -118,10 +126,13 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
   const [reveal, setReveal] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /* The recovery key typed into "Confirm it's you": this view's state only, cleared the moment it is sent. */
+  const [confirmKey, setConfirmKey] = useState("");
   useDialogDismissal({ onDismiss: onClose, dismissible: !busy && reveal === null });
 
   const go = (next: View) => {
     setError(null);
+    setConfirmKey("");
     setView(next);
   };
 
@@ -144,6 +155,7 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
     const result = await rotateRecoveryKey(port);
     setBusy(false);
     if (!result.ok) {
+      if (result.error === "reauth-required") return go({ kind: "reauth", then: "rotate" });
       setError(profileErrorSentence(result));
       return;
     }
@@ -163,10 +175,27 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
     const result = await signOutOtherDevices(port);
     setBusy(false);
     if (!result.ok) {
+      if (result.error === "reauth-required") return go({ kind: "reauth", then: "others" });
       setError(profileErrorSentence(result));
       return;
     }
     setView({ kind: "others-done", signedOut: result.signedOut });
+  };
+
+  /* "Confirm it's you": the key goes to the server once, is dropped here, and the chosen action runs again. */
+  const confirm = async (then: "rotate" | "others") => {
+    const key = confirmKey;
+    setConfirmKey("");
+    setBusy(true);
+    setError(null);
+    const result = await reauthenticate(key, port);
+    setBusy(false);
+    if (!result.ok) {
+      setError(profileErrorSentence(result, "reauth"));
+      return;
+    }
+    if (then === "rotate") await rotate();
+    else await signOutOthers();
   };
 
   const signOut = async () => {
@@ -273,6 +302,38 @@ function MenuPanel({ port, name, otherSessions, onClose }: { port: SessionPort; 
           </p>
           <div style={styles.row}>{back}</div>
         </>
+      ) : null}
+      {view.kind === "reauth" ? (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!busy) void confirm(view.then);
+          }}
+        >
+          <p style={styles.subheading}>Confirm it’s you</p>
+          <label style={styles.label} htmlFor="profile-reauth-key">
+            {view.then === "rotate" ? "To make a new recovery key" : "To sign out your other devices"}, paste your current recovery key.
+            It is checked once and not kept on this device.
+          </label>
+          <input
+            id="profile-reauth-key"
+            type="password"
+            autoComplete="off"
+            style={styles.monoInput}
+            value={confirmKey}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            onChange={(event) => setConfirmKey(event.target.value)}
+            data-testid="profile-reauth-key"
+          />
+          <div style={styles.row}>
+            <button type="submit" style={disabledLook(styles.primary, busy || confirmKey.trim() === "")} disabled={busy || confirmKey.trim() === ""} data-testid="profile-reauth-confirm">
+              {busy ? "Checking…" : "Confirm"}
+            </button>
+            {back}
+          </div>
+        </form>
       ) : null}
       {view.kind === "signout-confirm" ? (
         <>

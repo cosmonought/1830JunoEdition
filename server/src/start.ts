@@ -28,6 +28,10 @@ import { SESSION_COOKIE_NAME } from "./identity/cookies";
 import { createDevAuthenticator } from "./identity/devAuthenticator";
 import { createJournalIdentityStore, type JournalIdentityStore } from "./identity/journalStore";
 import { createFileHoldStore } from "./rooms/holdStore";
+import { createFileFinancialGameStore } from "./escrow/financialGameStore";
+import { continuationPolicyOf } from "./escrow/moneyContinuation";
+import { createSettlementCoordinator } from "./escrow/settlementCoordinator";
+import { serverPrefixReplay } from "./escrow/settlementEvidence";
 import { createFileOpsRecorder } from "./persistence/opsRecorder";
 import { resolveServerConfig } from "./identity/mode";
 import { IdentityService } from "./identity/sessions";
@@ -177,9 +181,24 @@ async function main(): Promise<void> {
     held.releaseSync();
     process.exit(EXIT_LOCK_REFUSED);
   }
-  createGameServer({
+  /* ESCROW-3A: the money lifecycle (`escrow/`): one durable record per money game (`games/money/`), the settlement seam
+     made idempotent by (game, seal.log_len) and crash-safe by a startup walk, and the continuation policy for funded
+     games across builds. Money games are DISABLED (every record's `money` is null), so all of this is inert today: no
+     game is financial, `games/money/` is never created, nothing is loaded for it. */
+  const settlement = createSettlementCoordinator({
+    store: createFileFinancialGameStore(dataDir, { writerCheck: () => held.verify() }),
+    replay: serverPrefixReplay(build),
+    now: () => Date.now(),
+    // eslint-disable-next-line no-console
+    warn: (line) => console.warn(line),
+    ops,
+  });
+  await settlement.load();
+  const server = createGameServer({
     port,
     build,
+    settlement,
+    moneyContinuation: continuationPolicyOf((gameId) => settlement.continuationOf(gameId)),
     identity: {
       mode: config.mode,
       allowedOrigins: config.allowedOrigins,
@@ -223,9 +242,29 @@ async function main(): Promise<void> {
     },
   });
 
+  /* ESCROW-3A (brief §6): once every game is discovered, every money game that is not yet settled-to-intent is loaded
+     -- a completed one announces its seal even if nobody ever reopens it -- and quiet funded games are looked at every
+     five minutes (liveness is a state, never a refund). */
+  void server.lifecycle.ready
+    .then(async () => {
+      const report = await settlement.reconcileAtStartup({ financialGameIds: server.lifecycle.financialGameIds(), loadGame: server.lifecycle.loadGame });
+      /* And one sweep at once: a record left at funding for a game that was dealt moves on now, not in five minutes. */
+      await settlement.sweepLiveness(server.lifecycle.financialRecords());
+      if (report.financialGames > 0 || report.failed.length > 0) {
+        // eslint-disable-next-line no-console
+        console.log(`  settlement: ${report.financialGames} money games -- ${report.loaded} loaded, ${report.alreadyPrepared} already prepared, ${report.failed.length} could not be read (ESCROW-3A)`);
+      }
+    })
+    .catch((error) => {
+      // eslint-disable-next-line no-console
+      console.warn(`  settlement: the startup walk failed -- ${error instanceof Error ? error.message : String(error)}; each money game is announced at its next load`);
+    });
+  setInterval(() => void settlement.sweepLiveness(server.lifecycle.financialRecords()).catch(() => undefined), 5 * 60_000).unref();
+
   const release = (code: number) => {
     if (stopping) return;
     stopping = true;
+    settlement.stop();
     /* LIVE-3C: the audit lines already queued are written (while the lock is still ours), then the lock goes. */
     void ops
       .flush()

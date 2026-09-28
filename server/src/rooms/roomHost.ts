@@ -64,6 +64,7 @@ import {
   type MyTableSummary,
 } from "./gameRecord";
 import { createMemoryHoldStore, type HoldStore } from "./holdStore";
+import type { MoneyContinuationPolicy } from "../escrow/moneyContinuation";
 import {
   ARCHIVE_SWEEP_BUDGET,
   FROZEN_GAME_SENTENCE,
@@ -136,6 +137,8 @@ export interface RoomHostDeps {
   ops?: OpsRecorder;
   /** LIVE-3C: the terminal seam ESCROW-3 plugs into (no-money when absent). */
   settlement?: SettlementLifecycle;
+  /** ESCROW-3A (brief §8): funded games this deployment may continue across builds (none when absent). */
+  moneyContinuation?: MoneyContinuationPolicy;
   /** LIVE-3C: whether a session's board has ended or closed (the reducer's `GameEnd` / `room_closed`; a test seam
    *  may say so of a game that has not -- a stored game that reaches GameEnd needs a whole game played). */
   boardFacts?: (gameId: string, session: RoomSession) => { ended: boolean; closed: boolean };
@@ -191,15 +194,16 @@ export function factsFromView(view: CommittedView, record: GameRecord): LogFacts
 }
 
 /** LIVE-3C: what a room shows about why it will not take a change -- the RoomView's `holdKind`. `build` is this
- *  server's (a game dealt on another build is read-only, #1252). */
-export function holdKindOf(view: CommittedView, build: string): HoldKind {
+ *  server's (a game dealt on another build is read-only, #1252). ESCROW-3A: `continues` -- a funded game whose stored
+ *  continuation identity this deployment is compatible with is NOT read-only on another build (`moneyContinuation.ts`). */
+export function holdKindOf(view: CommittedView, build: string, continues?: (dealtBuild: string) => boolean): HoldKind {
   if (isMaintenanceHold(view.hold)) return "maintenance";
   if (view.incompatible !== null || view.hold?.reason === "version") return "incompatible";
   if (view.hold?.reason === "uncertain") return "unavailable";
   const first = view.entries[0];
   if (first !== undefined && first.index === 0) {
     const deal = dealInfoOf(first);
-    if (deal && deal.build !== null && deal.build !== build) return "read-only";
+    if (deal && deal.build !== null && deal.build !== build && continues?.(deal.build) !== true) return "read-only";
   }
   return null;
 }
@@ -276,6 +280,9 @@ export function createRoomHost(deps: RoomHostDeps) {
   const holds = deps.holds ?? createMemoryHoldStore();
   const ops = deps.ops ?? NO_OPS;
   const settlement = deps.settlement ?? NO_MONEY_SETTLEMENT;
+  /** ESCROW-3A: `holdKindOf` with this deployment's money-continuation policy for the view's own game. */
+  const kindOf = (view: CommittedView): HoldKind =>
+    holdKindOf(view, deps.build, deps.moneyContinuation && view.record ? (dealt) => deps.moneyContinuation!.continues(view.record!.game_id, dealt) : undefined);
   const boardOf = (gameId: string, session: RoomSession) => (deps.boardFacts ? deps.boardFacts(gameId, session) : sessionBoardFacts(session));
 
   /* ==================================================================
@@ -465,7 +472,7 @@ export function createRoomHost(deps: RoomHostDeps) {
       const resident = peekLoaded(gameId);
       let readOnly = false;
       try {
-        readOnly = resident !== undefined && holdKindOf(resident.view, deps.build) === "read-only";
+        readOnly = resident !== undefined && kindOf(resident.view) === "read-only";
       } catch {
         readOnly = false; // no committed view yet: nothing to conclude from
       }
@@ -571,7 +578,7 @@ export function createRoomHost(deps: RoomHostDeps) {
       view: roomViewFor(record, facts, principalId, {
         now: now(),
         held: heldOf(view),
-        holdKind: holdKindOf(view, deps.build),
+        holdKind: kindOf(view),
         online: onlineIn(record.game_id, record),
         canStart: !facts.dealt && waitingBlock(record) === null && view.hold === null,
       }),
@@ -779,7 +786,7 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (opName === null && (tx.view.incompatible !== null || tx.view.hold?.reason === "version")) return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
       /* LIVE-2F/3D (C4-05): NOR IS ONE THIS BUILD CANNOT CONTINUE CHANGED BY A PLAYER -- an incompatible pin, or a deal
          made on another build. It is kept exactly as it was (its host too): a `leave` only unsubscribes. */
-      if (opName !== null && (tx.view.incompatible !== null || tx.view.hold?.reason === "version" || holdKindOf(tx.view, deps.build) === "read-only")) {
+      if (opName !== null && (tx.view.incompatible !== null || tx.view.hold?.reason === "version" || kindOf(tx.view) === "read-only")) {
         if (opName === "leave" && verdict !== null && verdict.ok) return { ok: true, value: { ok: true, record: null, effects: { unsubscribeOnly: true } } };
         return { ok: false, code: "wrong-state", reason: FROZEN_GAME_SENTENCE };
       }
@@ -1215,7 +1222,7 @@ export function createRoomHost(deps: RoomHostDeps) {
           /* The settlement seam is AT LEAST ONCE (lifecycle.ts): a load that finds a completed game tells it again. */
           if (why === "load" && board.ended && record.status === "completed") {
             const seal = sealOf(tx.view.entries, true);
-            if (seal !== null) callSettlement({ gameId: record.game_id, record, seal, recovered: true });
+            if (seal !== null) callSettlement({ gameId: record.game_id, record, seal, recovered: true, entries: tx.view.entries });
           }
           return;
         }
@@ -1244,8 +1251,8 @@ export function createRoomHost(deps: RoomHostDeps) {
           after: () => {
             /* THE TERMINAL SEAM (lifecycle.ts): gameplay closed, durably -- settlement eligible. Nothing for no-money. */
             if (s.kind !== "committed") return;
-            if (sealed !== null) callSettlement({ gameId: record.game_id, record: next, seal: sealed, recovered: why === "load" });
-            else if (reannounce !== null) callSettlement({ gameId: record.game_id, record: next, seal: reannounce, recovered: true });
+            if (sealed !== null) callSettlement({ gameId: record.game_id, record: next, seal: sealed, recovered: why === "load", entries: tx.view.entries });
+            else if (reannounce !== null) callSettlement({ gameId: record.game_id, record: next, seal: reannounce, recovered: true, entries: tx.view.entries });
           },
         }));
         if (settled.kind === "committed") {
@@ -1583,7 +1590,7 @@ export function createRoomHost(deps: RoomHostDeps) {
     const record = view.record;
     if (record === null) return { gameId, cls: "attention", code: null, detail: "loaded with no record" };
     if (unreconciled.has(gameId)) return { gameId, cls: "unreconciled", code: "repair-pending", detail: "loaded; the record's repair from its log has not landed" };
-    if (holdKindOf(view, deps.build) === "read-only") return { gameId, cls: "read-only", code: "build-pinned", detail: null };
+    if (kindOf(view) === "read-only") return { gameId, cls: "read-only", code: "build-pinned", detail: null };
     /* The lifecycle the LOG implies (a record's own follow-up write may be a task behind it, RL-1). */
     return { gameId, cls: record.archived_at !== null ? "archived" : effectiveStatus(record, factsFromView(view, record), now()), code: null, detail: null };
   }
@@ -1719,6 +1726,9 @@ export function createRoomHost(deps: RoomHostDeps) {
     flushStatus,
     discovery: (): DiscoveryReport | null => discovery,
     boardOf,
+    /* ESCROW-3A (brief §6): the money games the index knows (never a replay; the coordinator loads them). */
+    financialGameIds: (): string[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial").map((record) => record.game_id),
+    financialRecords: (): GameRecord[] => [...recordIndex.values()].filter((record) => settlement.retentionOf(record).kind === "financial"),
   };
 }
 

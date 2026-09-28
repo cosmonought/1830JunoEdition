@@ -35,6 +35,7 @@ import { sessionSetCookie, type SessionCookieRead } from "./cookies";
 import {
   canonicalLinkCode,
   cryptoRandom,
+  familyIdOf,
   linkCodeHash,
   mintLinkCode,
   mintPrincipalId,
@@ -59,6 +60,7 @@ import {
   type Profile,
   type RevokeReason,
   type Session,
+  type SessionFamily,
 } from "./store";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -77,6 +79,13 @@ export interface IdentityPolicy {
   linkCodeTtlMs: number;
   /** LIVE-2E: unexpired, unused link codes a profile may hold at once (a new one retires the oldest). */
   maxOutstandingLinkCodes: number;
+  /** ESCROW-3A (brief §10B): how long a re-authentication (the recovery key, presented again) lets THIS session take a
+   *  sensitive action -- rotate the recovery key, sign out other devices, and (ESCROW-4) change a wallet binding. */
+  sensitiveAuthMs: number;
+  /** ESCROW-3A: the creating browser's one exemption (LIVE-2E §15): for this long after a profile is created, and until
+   *  its key is first rotated, the browser that created it may rotate the key without presenting it -- the lost-create-
+   *  response path ("Your profile is ready" -> "Make a new recovery key"), where the key was never seen. */
+  creatorKeyGraceMs: number;
 }
 
 export const DEFAULT_IDENTITY_POLICY: IdentityPolicy = Object.freeze({
@@ -92,6 +101,8 @@ export const DEFAULT_IDENTITY_POLICY: IdentityPolicy = Object.freeze({
   /* LIVE-2E adversarial review (H1): ONE. A new code retires any earlier unused one, so a device that saw a single
      code cannot stockpile more to outlive the owner's "Sign out other devices". */
   maxOutstandingLinkCodes: 1,
+  sensitiveAuthMs: 5 * 60 * 1000,
+  creatorKeyGraceMs: 60 * 60 * 1000,
 });
 
 /** Why a known session no longer opens anything -- the stable reasons of `401 session-ended`. */
@@ -143,7 +154,21 @@ export type ProfileActionOutcome<T> =
   | ({ kind: "ok" } & T)
   | { kind: "not-authenticated" }
   | { kind: "profile-required" }
+  /** ESCROW-3A: a sensitive action on a session that has not re-authenticated recently (the client asks for the
+   *  recovery key, `POST /gs/api/profile/reauth`, and retries). Says nothing else. */
+  | { kind: "reauth-required" }
   | { kind: "unavailable" };
+
+/** ESCROW-3A: the answer to a re-authentication. `expiresAt` is when the grant lapses (the client may say so). */
+export type ReauthOutcome =
+  | { kind: "ok"; expiresAt: number }
+  | { kind: "not-authenticated" }
+  | { kind: "profile-required" }
+  /** The one answer for every wrong, malformed or other profile's key: nothing says which. */
+  | { kind: "invalid" };
+
+/** ESCROW-3A (F-2): whether a credential issued under (principal, family, recovery selector) still stands. */
+export type SecurityStanding = { kind: "standing" } | { kind: "ended"; why: "principal" | "profile" | "family" | "recovery-key" };
 
 /** What `POST /gs/api/session` may say about the account: a name and a count, never an id. */
 export interface AccountView {
@@ -160,6 +185,10 @@ export interface IdentityHooks {
   /** Sessions that just ended for a SECURITY reason (logout, eviction, operator, principal disabled): their sockets
    *  close 4401. Called after the change is committed. */
   onSessionsEnded?: (sessionIds: readonly string[], principalId: string) => void;
+  /** ESCROW-3A (F-2): a security event committed -- a family revoked (sign-out, sign-out-others, replacement, a disabled
+   *  principal) or the recovery key rotated. Financial credentials DERIVE their standing from identity
+   *  (`securityStanding`), so nothing is lost if this is not observed; it lets their ledger record the revocation. */
+  onSecurityEvent?: (event: { readonly kind: "family-revoked" | "recovery-key-rotated" | "principal-disabled"; readonly principalId: string; readonly familyIds: readonly string[] }) => void;
   /** A durable write could not be made (definite or unknown) -- surfaced to the window by the caller as well. */
   onStoreFailure?: (what: string, error: unknown) => void;
 }
@@ -181,6 +210,10 @@ export interface IdentityStats {
   linkCodesIssued: number;
   recoveryRotations: number;
   credentialFailures: number;
+  familiesRevoked: number;
+  reauths: number;
+  reauthFailures: number;
+  reauthRequired: number;
 }
 
 export interface IdentityServiceOptions {
@@ -232,7 +265,18 @@ export class IdentityService {
     linkCodesIssued: 0,
     recoveryRotations: 0,
     credentialFailures: 0,
+    familiesRevoked: 0,
+    reauths: 0,
+    reauthFailures: 0,
+    reauthRequired: 0,
   };
+  /** ESCROW-3A (IR-03): the session families (durable ones mirror the store; a provisional principal's live here). */
+  private readonly families = new Map<string, SessionFamily>();
+  /** ESCROW-3A (brief §10B): recent re-authentications, by SESSION. MEMORY ONLY, never persisted, never a secret: the
+   *  grant names the family and the recovery selector it was made under, and lapses after `sensitiveAuthMs`. A restart
+   *  forgets it (the player re-enters the key). LIVE-5: an item keyed by session with a TTL, checked in the same
+   *  transaction as the action. */
+  private readonly grants = new Map<string, { family_id: string; selector: string; expires_at: number }>();
 
   private constructor(
     private readonly store: IdentityStore,
@@ -253,6 +297,7 @@ export class IdentityService {
     for (const session of snapshot.sessions) service.index(session);
     for (const profile of snapshot.profiles ?? []) service.indexProfile(profile);
     for (const link of snapshot.links ?? []) service.links.set(link.link_hash, link);
+    for (const family of snapshot.families ?? []) service.families.set(family.family_id, family);
     return service;
   }
 
@@ -319,11 +364,20 @@ export class IdentityService {
     return Math.min(lastSeen + this.policy.idleMs, created + this.policy.absoluteMs);
   }
 
-  private mintSession(principalId: string, now: number): { session: Session; secret: string } {
+  /** A new session. `familyId` is the lineage it joins (a rotation or grace successor); `null` founds a new family,
+   *  returned as `founded` (named after this session: `familyIdOf`). */
+  private mintSession(
+    principalId: string,
+    now: number,
+    familyId: string | null = null,
+    origin: SessionFamily["origin"] = "bootstrap",
+  ): { session: Session; secret: string; founded: SessionFamily | null } {
     const sessionId = mintUnique(() => mintSessionId(this.random), (id) => this.sessions.has(id));
     const secret = mintSecret(this.random);
+    const family_id = familyId ?? familyIdOf(sessionId);
     return {
       secret,
+      founded: familyId === null ? { family_id, principal_id: principalId, created_at: now, origin, revoked_at: null, revoke_reason: null } : null,
       session: {
         session_id: sessionId,
         principal_id: principalId,
@@ -334,8 +388,50 @@ export class IdentityService {
         revoked_at: null,
         revoke_reason: null,
         rotated_to: null,
+        family_id,
       },
     };
+  }
+
+  /* ==================================================================
+      ESCROW-3A (IR-03): FAMILIES
+     ================================================================== */
+
+  /** Whether a session's family has been revoked (a sign-out, sign-out-others, a replacement, a disabled principal). */
+  private familyRevoked(session: Session): boolean {
+    return (this.families.get(session.family_id)?.revoked_at ?? null) !== null;
+  }
+
+  /** The families of these sessions that are still open, revoked for `reason` (records to write and to apply). */
+  private revokedFamilies(familyIds: Iterable<string>, reason: RevokeReason, now: number): SessionFamily[] {
+    const out: SessionFamily[] = [];
+    for (const id of new Set(familyIds)) {
+      const family = this.families.get(id);
+      if (family !== undefined && family.revoked_at === null) out.push({ ...family, revoked_at: now, revoke_reason: reason });
+    }
+    return out;
+  }
+
+  /** Every member of these families that is not yet security-revoked, revoked for `reason`. */
+  private membersOf(principalId: string, familyIds: ReadonlySet<string>, reason: RevokeReason, now: number, except: ReadonlySet<string> = new Set()): Session[] {
+    return [...(this.byPrincipal.get(principalId) ?? [])]
+      .map((id) => this.sessions.get(id) as Session)
+      .filter((session) => familyIds.has(session.family_id) && !except.has(session.session_id) && !isSecurityRevocation(session.revoke_reason))
+      .map((session) => ({ ...session, revoked_at: now, revoke_reason: reason }));
+  }
+
+  /** Apply committed family records (and forget the grants of their sessions). */
+  private applyFamilies(records: readonly SessionFamily[]): void {
+    for (const family of records) this.families.set(family.family_id, family);
+    if (records.length === 0) return;
+    const closed = new Set(records.filter((family) => family.revoked_at !== null).map((family) => family.family_id));
+    for (const [sessionId, grant] of this.grants) if (closed.has(grant.family_id)) this.grants.delete(sessionId);
+    this.stats.familiesRevoked += closed.size;
+  }
+
+  private familiesOfPrincipal(principalId: string): SessionFamily[] {
+    const ids = new Set([...(this.byPrincipal.get(principalId) ?? [])].map((id) => (this.sessions.get(id) as Session).family_id));
+    return [...ids].map((id) => this.families.get(id)).filter((family): family is SessionFamily => family !== undefined);
   }
 
   private touchProvisional(principalId: string): void {
@@ -354,6 +450,10 @@ export class IdentityService {
     const principal = this.principals.get(session.principal_id);
     if (principal === undefined) return { kind: "ended", reason: "unreadable" };
     if (principal.status === "disabled") return { kind: "ended", reason: "principal-disabled" };
+    /* ESCROW-3A (IR-03): a member of a revoked family has ended, whatever its own record says -- a grace successor minted
+       from it would be minted into a family a committed sign-out has closed. */
+    const family = this.families.get(session.family_id);
+    if (family !== undefined && family.revoked_at !== null) return { kind: "ended", reason: family.revoke_reason ?? "logout" };
     if (session.revoke_reason === "rotated") {
       return now - (session.revoked_at ?? 0) < this.policy.rotatedGraceMs
         ? { kind: "existing", sessionId: session.session_id, grace: true }
@@ -414,16 +514,21 @@ export class IdentityService {
       last_seen_at: now,
       account_link: null,
     };
-    const { session, secret } = this.mintSession(principalId, now);
+    const { session, secret, founded } = this.mintSession(principalId, now);
     this.principals.set(principalId, principal);
     this.index(session);
+    if (founded !== null) this.families.set(founded.family_id, founded); // memory only, like the provisional session
     this.provisional.set(principalId, true);
     this.stats.guestsCreated += 1;
     /* THE LRU BOUND (§3.3): the least recently used provisional guest is forgotten -- memory only, never a write. */
     while (this.provisional.size > this.policy.provisionalLimit) {
       const oldest = this.provisional.keys().next().value as string;
       this.provisional.delete(oldest);
-      for (const id of [...(this.byPrincipal.get(oldest) ?? [])]) this.forgetSession(id);
+      for (const id of [...(this.byPrincipal.get(oldest) ?? [])]) {
+        const family = (this.sessions.get(id) as Session | undefined)?.family_id;
+        this.forgetSession(id);
+        if (family !== undefined) this.families.delete(family);
+      }
       this.principals.delete(oldest);
       this.stats.provisionalEvicted += 1;
     }
@@ -448,7 +553,8 @@ export class IdentityService {
   /** §4.5 rotation, and the 24-hour grace path, which mints a further successor from an already-rotated session. */
   private async rotate(old: Session, now: number, grace: boolean): Promise<BootstrapOutcome> {
     const principalId = old.principal_id;
-    const { session: successor, secret } = this.mintSession(principalId, now);
+    /* ESCROW-3A (IR-03): a rotation or grace successor joins the lineage it was minted from. */
+    const { session: successor, secret } = this.mintSession(principalId, now, old.family_id);
     const retired: Session = grace ? old : { ...old, revoked_at: now, revoke_reason: "rotated", rotated_to: successor.session_id };
     /* §4.7: at most 10 active sessions; the oldest beyond that is evicted, and its sockets close 4401. */
     const active = this.activeSessions(principalId, now).filter((session) => session.session_id !== old.session_id);
@@ -466,6 +572,8 @@ export class IdentityService {
           /* LIVE-3C: only an OPEN session rotates (a logout that committed first wins), into an unused id. */
           expect: [
             { kind: "session-open", session_id: old.session_id },
+            /* ESCROW-3A (IR-03): and only into an OPEN family -- a sign-out committed first closes it for every sibling. */
+            { kind: "family-open", family_id: old.family_id },
             { kind: "session-absent", session_id: successor.session_id },
             ...evicted.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })),
           ],
@@ -519,6 +627,7 @@ export class IdentityService {
     const principal = this.principals.get(session.principal_id);
     if (principal === undefined || principal.status !== "active") return { kind: "refused", why: "ended" };
     if (session.revoked_at !== null || now >= session.expires_at) return { kind: "refused", why: "ended" };
+    if (this.familyRevoked(session)) return { kind: "refused", why: "ended" };
     this.touch(session, now);
     const current = this.sessions.get(session.session_id) as Session;
     return {
@@ -534,7 +643,7 @@ export class IdentityService {
   socketVerdict(ctx: { principalId: string; sessionId: string; sessionExpiresAt: number }, now: number): SocketVerdict {
     if (now >= ctx.sessionExpiresAt) return "expired";
     const session = this.sessions.get(ctx.sessionId);
-    if (session !== undefined && isSecurityRevocation(session.revoke_reason)) return "revoked";
+    if (session !== undefined && (isSecurityRevocation(session.revoke_reason) || this.familyRevoked(session))) return "revoked";
     const principal = this.principals.get(ctx.principalId);
     if (principal !== undefined && principal.status !== "active") return "revoked";
     return "ok";
@@ -588,13 +697,27 @@ export class IdentityService {
         if (!isSecurityRevocation(successor.revoke_reason)) successors.push({ ...successor, revoked_at: now, revoke_reason: reason });
         next = successor.rotated_to;
       }
-      const ended = [revoked, ...predecessors, ...successors];
+      /* ESCROW-3A (IR-03): THE WHOLE FAMILY -- the family record closed, and every member of it that the walks above did
+         not reach (a grace successor minted from an older member is linked by nothing else). One write: a mint racing
+         it either committed first (and is a member here) or finds the family closed (`family-open` fails). */
+      const walked = new Set(seen);
+      const members = this.membersOf(session.principal_id, new Set([session.family_id]), reason, now, walked);
+      const families = this.revokedFamilies([session.family_id], reason, now);
+      const ended = [revoked, ...predecessors, ...successors, ...members];
       /* LIVE-2E (review H1): a signed-out device's profile keeps no outstanding link code. */
       const profileId = this.principals.get(session.principal_id)?.account_link ?? null;
       const dropLinks = profileId === null ? [] : this.linkHashesOf(profileId);
       if (this.isDurable(session.principal_id)) {
         await this.commit(
-          { expect: ended.map((record) => ({ kind: "session-open" as const, session_id: record.session_id })), sessions: ended, dropLinks },
+          {
+            expect: [
+              ...ended.map((record) => ({ kind: "session-open" as const, session_id: record.session_id })),
+              ...families.map((family) => ({ kind: "family-open" as const, family_id: family.family_id })),
+            ],
+            sessions: ended,
+            families,
+            dropLinks,
+          },
           `a session revocation (${reason})`,
         );
       }
@@ -602,12 +725,15 @@ export class IdentityService {
       for (const record of ended) {
         this.index(record);
         this.dirty.delete(record.session_id);
+        this.grants.delete(record.session_id);
       }
+      this.applyFamilies(families);
       this.stats.revocations += ended.length;
       this.hooks.onSessionsEnded?.(
         ended.map((record) => record.session_id),
         session.principal_id,
       );
+      if (families.length > 0) this.hooks.onSecurityEvent?.({ kind: "family-revoked", principalId: session.principal_id, familyIds: families.map((family) => family.family_id) });
       return true;
     });
   }
@@ -626,14 +752,29 @@ export class IdentityService {
           revoked_at: now,
           revoke_reason: "principal-disabled" as const,
         }));
+      const families = this.revokedFamilies(
+        this.familiesOfPrincipal(principalId).map((family) => family.family_id),
+        "principal-disabled",
+        now,
+      );
       if (this.isDurable(principalId)) {
         await this.commit(
-          { expect: ended.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })), principals: [disabled], sessions: ended },
+          {
+            expect: ended.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })),
+            principals: [disabled],
+            sessions: ended,
+            families,
+          },
           "disabling a principal",
         );
       }
       this.principals.set(principalId, disabled);
-      for (const session of ended) this.index(session);
+      for (const session of ended) {
+        this.index(session);
+        this.grants.delete(session.session_id);
+      }
+      this.applyFamilies(families);
+      if (families.length > 0) this.hooks.onSecurityEvent?.({ kind: "principal-disabled", principalId, familyIds: families.map((family) => family.family_id) });
       this.stats.revocations += ended.length;
       this.hooks.onSessionsEnded?.(
         ended.map((session) => session.session_id),
@@ -688,6 +829,7 @@ export class IdentityService {
     const principal = this.principals.get(session.principal_id);
     if (principal === undefined || principal.status !== "active") return null;
     if (session.revoked_at !== null || now >= session.expires_at) return null;
+    if (this.familyRevoked(session)) return null;
     return session;
   }
 
@@ -731,6 +873,8 @@ export class IdentityService {
       const sessions = this.isDurable(principal.principal_id)
         ? []
         : [...(this.byPrincipal.get(principal.principal_id) ?? [])].map((id) => this.sessions.get(id) as Session);
+      /* ESCROW-3A: a provisional browser's families become durable with its sessions. */
+      const families = sessions.length === 0 ? [] : this.familiesOfPrincipal(principal.principal_id);
       try {
         await this.commit(
           {
@@ -743,10 +887,12 @@ export class IdentityService {
               { kind: "profile-absent", profile_id: profileId },
               { kind: "selector-unused", recovery_selector: key.selector },
               ...sessions.map((session) => ({ kind: "session-absent" as const, session_id: session.session_id })),
+              ...families.map((family) => ({ kind: "family-absent" as const, family_id: family.family_id })),
             ],
             principals: [bound],
             sessions,
             profiles: [profile],
+            families,
           },
           "creating a profile",
         );
@@ -782,7 +928,7 @@ export class IdentityService {
         this.stats.credentialFailures += 1;
         return { kind: "invalid" as const };
       }
-      const issued = await this.issueFor(profile, current, now, {});
+      const issued = await this.issueFor(profile, current, now, {}, "recovery");
       if (issued.kind === "ok") this.stats.recoveries += 1;
       return issued;
     });
@@ -811,7 +957,7 @@ export class IdentityService {
       }
       const consumed: LinkCredential = { ...link, consumed_at: now };
       /* LIVE-3C: SINGLE USE -- consumed only if still unconsumed and unexpired, in the same write as the session. */
-      const issued = await this.issueFor(profile, current, now, { expect: [{ kind: "link-unconsumed", link_hash: link.link_hash, at: now }], links: [consumed] });
+      const issued = await this.issueFor(profile, current, now, { expect: [{ kind: "link-unconsumed", link_hash: link.link_hash, at: now }], links: [consumed] }, "link");
       if (issued.kind === "ok") {
         this.links.set(consumed.link_hash, consumed);
         this.stats.links += 1;
@@ -821,9 +967,10 @@ export class IdentityService {
   }
 
   /** A fresh session for `profile`'s principal, replacing `old` (this browser's temporary session). Inside the queue. */
-  private async issueFor(profile: Profile, old: Session, now: number, extra: IdentityChange): Promise<CredentialOutcome> {
+  private async issueFor(profile: Profile, old: Session, now: number, extra: IdentityChange, origin: "recovery" | "link"): Promise<CredentialOutcome> {
     const principalId = profile.principal_id;
-    const { session: fresh, secret } = this.mintSession(principalId, now);
+    /* A recovered or linked browser FOUNDS a family: it is a new cookie jar, not a successor of any other device. */
+    const { session: fresh, secret, founded } = this.mintSession(principalId, now, null, origin);
     const active = this.activeSessions(principalId, now);
     const overflow = active.length + 1 - this.policy.maxActiveSessions;
     const evicted: Session[] =
@@ -840,6 +987,9 @@ export class IdentityService {
       revoke_reason: "replaced" as const,
     }));
     const oldDurable = this.isDurable(old.principal_id);
+    /* The replaced browser's family ends with it (only a durable one is written; a provisional one lives in memory). */
+    const replacedFamilies = this.revokedFamilies([old.family_id], "replaced", now);
+    const newFamilies = founded === null ? [] : [founded];
     try {
       await this.commit(
         {
@@ -847,15 +997,18 @@ export class IdentityService {
           expect: [
             ...(extra.expect ?? []),
             { kind: "session-absent", session_id: fresh.session_id },
+            ...newFamilies.map((family) => ({ kind: "family-absent" as const, family_id: family.family_id })),
             ...[...evicted, ...(oldDurable ? replaced : [])].map((session) => ({ kind: "session-open" as const, session_id: session.session_id })),
           ],
           sessions: [fresh, ...evicted, ...(oldDurable ? replaced : [])],
+          families: [...newFamilies, ...(oldDurable ? replacedFamilies : [])],
         },
         "signing a browser in to a profile",
       );
     } catch {
       return { kind: "unavailable" };
     }
+    this.applyFamilies([...newFamilies, ...replacedFamilies]);
     this.index(fresh);
     for (const session of [...evicted, ...replaced]) {
       this.index(session);
@@ -952,6 +1105,12 @@ export class IdentityService {
     return this.serial(async () => {
       const who = this.profiledCurrent(read, now);
       if (typeof who === "string") return { kind: who };
+      /* ESCROW-3A (brief §10B): a live session alone does not rotate the key -- a recent re-authentication by THIS session
+         does, or the creating browser's one exemption for a key it never saw. */
+      if (!this.sensitiveAuthOf(who.session, who.profile, now) && !this.creatorExemption(who.session, who.profile, now)) {
+        this.stats.reauthRequired += 1;
+        return { kind: "reauth-required" as const };
+      }
       let key = mintRecoveryKey(this.random);
       for (let attempt = 0; this.profileOfSelector.has(key.selector); attempt += 1) {
         if (attempt >= 4) throw new Error("identity: 5 consecutive recovery-selector collisions -- the random source is not random");
@@ -978,7 +1137,10 @@ export class IdentityService {
       }
       this.forgetLinks(dropLinks);
       this.indexProfile(rotated);
+      /* Every grant made under the old key is stale now (a grant names the selector it was made under). */
+      for (const [sessionId, grant] of this.grants) if (grant.selector === who.profile.recovery_selector) this.grants.delete(sessionId);
       this.stats.recoveryRotations += 1;
+      this.hooks.onSecurityEvent?.({ kind: "recovery-key-rotated", principalId: who.profile.principal_id, familyIds: [] });
       return { kind: "ok" as const, recoveryKey: key.key };
     });
   }
@@ -989,16 +1151,41 @@ export class IdentityService {
     return this.serial(async () => {
       const who = this.profiledCurrent(read, now);
       if (typeof who === "string") return { kind: who };
+      if (!this.sensitiveAuthOf(who.session, who.profile, now)) {
+        this.stats.reauthRequired += 1;
+        return { kind: "reauth-required" as const };
+      }
       const principalId = who.session.principal_id;
       const others = [...(this.byPrincipal.get(principalId) ?? [])]
         .map((id) => this.sessions.get(id) as Session)
         .filter((session) => session.session_id !== who.session.session_id && !isSecurityRevocation(session.revoke_reason));
       const wasActive = others.filter((session) => session.revoked_at === null && now < session.expires_at).length;
       const dropLinks = this.linkHashesOf(who.profile.profile_id);
-      if (others.length === 0 && dropLinks.length === 0) return { kind: "ok" as const, signedOut: 0 };
+      /* ESCROW-3A (IR-03): every OTHER family is closed too, so no grace successor can be minted into one afterwards. */
+      const families = this.revokedFamilies(
+        this.familiesOfPrincipal(principalId)
+          .map((family) => family.family_id)
+          .filter((id) => id !== who.session.family_id),
+        "signed-out-remotely",
+        now,
+      );
+      if (others.length === 0 && dropLinks.length === 0 && families.length === 0) return { kind: "ok" as const, signedOut: 0 };
       const ended = others.map((session) => ({ ...session, revoked_at: now, revoke_reason: "signed-out-remotely" as const }));
       try {
-        await this.commit({ expect: ended.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })), sessions: ended, dropLinks }, "signing out other devices");
+        await this.commit(
+          {
+            expect: [
+              ...ended.map((session) => ({ kind: "session-open" as const, session_id: session.session_id })),
+              ...families.map((family) => ({ kind: "family-open" as const, family_id: family.family_id })),
+              /* The caller's own family must still be open (its sign-out may have committed while this waited). */
+              { kind: "family-open" as const, family_id: who.session.family_id },
+            ],
+            sessions: ended,
+            families,
+            dropLinks,
+          },
+          "signing out other devices",
+        );
       } catch {
         return { kind: "unavailable" as const };
       }
@@ -1006,7 +1193,10 @@ export class IdentityService {
       for (const session of ended) {
         this.index(session);
         this.dirty.delete(session.session_id);
+        this.grants.delete(session.session_id);
       }
+      this.applyFamilies(families);
+      if (families.length > 0) this.hooks.onSecurityEvent?.({ kind: "family-revoked", principalId, familyIds: families.map((family) => family.family_id) });
       this.stats.revocations += ended.length;
       this.hooks.onSessionsEnded?.(
         ended.map((session) => session.session_id),
@@ -1033,12 +1223,18 @@ export class IdentityService {
       if (principal.activated_at !== null) return;
       const activated: Principal = { ...principal, activated_at: now, last_seen_at: now };
       const sessions = [...(this.byPrincipal.get(principalId) ?? [])].map((id) => this.sessions.get(id) as Session);
+      const families = this.familiesOfPrincipal(principalId);
       await this.commit(
         {
-          /* LIVE-3C: CREATE-IF-ABSENT -- a principal and its sessions are made durable once. */
-          expect: [{ kind: "principal-absent", principal_id: principalId }, ...sessions.map((session) => ({ kind: "session-absent" as const, session_id: session.session_id }))],
+          /* LIVE-3C: CREATE-IF-ABSENT -- a principal and its sessions (ESCROW-3A: and their families) are made durable once. */
+          expect: [
+            { kind: "principal-absent", principal_id: principalId },
+            ...sessions.map((session) => ({ kind: "session-absent" as const, session_id: session.session_id })),
+            ...families.map((family) => ({ kind: "family-absent" as const, family_id: family.family_id })),
+          ],
           principals: [activated],
           sessions,
+          families,
         },
         "activating a principal",
       );
@@ -1098,7 +1294,7 @@ export class IdentityService {
   }
 
   /** For tests and the operator report: counts only, never a record. */
-  sizes(): { principals: number; provisional: number; sessions: number; dirty: number; profiles: number; links: number } {
+  sizes(): { principals: number; provisional: number; sessions: number; dirty: number; profiles: number; links: number; families: number; grants: number } {
     return {
       principals: this.principals.size,
       provisional: this.provisional.size,
@@ -1106,7 +1302,105 @@ export class IdentityService {
       dirty: this.dirty.size,
       profiles: this.profiles.size,
       links: this.links.size,
+      families: this.families.size,
+      grants: this.grants.size,
     };
+  }
+
+  /* ==================================================================
+      ESCROW-3A (brief §10B): RE-AUTHENTICATION FOR SENSITIVE ACTIONS
+     ==================================================================
+     A stolen live session is not, by itself, enough to rotate the recovery key, sign out the owner's other devices or
+     (ESCROW-4) change a wallet binding: each asks for a RECENT re-authentication by the same session, made by presenting
+     the profile's current recovery key again (`POST /gs/api/profile/reauth`). The grant is server-side and in memory
+     only; it names the session, its family and the recovery selector it was made under, and lapses after
+     `sensitiveAuthMs`. It cannot be borrowed: another session, another family, or the same session after the key was
+     rotated (by anyone) finds no grant. No secret is kept -- the key is compared in constant time and dropped. */
+
+  /** Re-authenticate THIS session with its own profile's recovery key. Constant time whatever is wrong. */
+  reauthenticate(read: SessionCookieRead, rawKey: unknown, now: number): Promise<ReauthOutcome> {
+    return this.serial(async () => {
+      const who = this.profiledCurrent(read, now);
+      if (typeof who === "string") return { kind: who };
+      const parsed = parseRecoveryKey(rawKey);
+      const selectorMatches = parsed !== null && parsed.selector === who.profile.recovery_selector;
+      /* Compared against this profile's digest when the selector is its own, and against a digest nothing matches
+         otherwise: the same work either way, and another profile's (valid) key is `invalid` here. */
+      const secretOk = parsed !== null && secretMatches(parsed.secret, selectorMatches ? who.profile.recovery_hash : NO_PROFILE_HASH);
+      if (!selectorMatches || !secretOk) {
+        this.stats.reauthFailures += 1;
+        return { kind: "invalid" as const };
+      }
+      const expiresAt = now + this.policy.sensitiveAuthMs;
+      this.grants.set(who.session.session_id, { family_id: who.session.family_id, selector: who.profile.recovery_selector, expires_at: expiresAt });
+      this.stats.reauths += 1;
+      return { kind: "ok" as const, expiresAt };
+    });
+  }
+
+  /** Whether THIS session holds a live re-authentication under the profile's CURRENT key. */
+  private sensitiveAuthOf(session: Session, profile: Profile, now: number): boolean {
+    const grant = this.grants.get(session.session_id);
+    if (grant === undefined) return false;
+    if (now >= grant.expires_at || grant.family_id !== session.family_id || grant.selector !== profile.recovery_selector || this.familyRevoked(session)) {
+      this.grants.delete(session.session_id);
+      return false;
+    }
+    return true;
+  }
+
+  /** The creating browser's exemption (LIVE-2E §15): its family is the profile principal's own BOOTSTRAP lineage -- the
+   *  browser that created the profile, never a recovered or linked device (their families are founded "recovery" /
+   *  "link") -- the key has never been rotated, and the profile is younger than `creatorKeyGraceMs`. Derived from
+   *  durable facts, so a restart keeps it. */
+  private creatorExemption(session: Session, profile: Profile, now: number): boolean {
+    const family = this.families.get(session.family_id);
+    return (
+      family !== undefined &&
+      /* The creating browser's own family: founded by its bootstrap -- or, for a browser from before families (v3), a
+         legacy family that existed BEFORE the profile did, so it was the unprofiled principal's own browser (a linked or
+         recovered device's family is always younger than the profile; a new legacy family is never founded). */
+      (family.origin === "bootstrap" || (family.origin === "legacy" && family.created_at < profile.created_at)) &&
+      family.principal_id === profile.principal_id &&
+      profile.recovery_rotated_at === profile.created_at &&
+      now - profile.created_at < this.policy.creatorKeyGraceMs
+    );
+  }
+
+  /** Whether the session a request authenticates with holds a live re-authentication (ESCROW-4's wallet binding asks). */
+  hasSensitiveAuth(read: SessionCookieRead, now: number): boolean {
+    const who = this.profiledCurrent(read, now);
+    return typeof who !== "string" && this.sensitiveAuthOf(who.session, who.profile, now);
+  }
+
+  /* ==================================================================
+      ESCROW-3A (F-2): WHAT A FINANCIAL CREDENTIAL IS ISSUED UNDER, AND WHETHER IT STILL STANDS
+     ================================================================== */
+
+  /** The security context of the session a request authenticates with -- for issuing a credential bound to it.
+   *  Server-side only: none of these ids leaves the server. */
+  securityContextOf(read: SessionCookieRead, now: number): { principalId: string; familyId: string; recoverySelector: string } | null {
+    const who = this.profiledCurrent(read, now);
+    return typeof who === "string" ? null : { principalId: who.session.principal_id, familyId: who.session.family_id, recoverySelector: who.profile.recovery_selector };
+  }
+
+  /** Whether a credential issued under (principal, family, recovery selector) still stands: the principal and its
+   *  profile active, the family open (no sign-out of that device, no sign-out-others, no replacement, no disable), the
+   *  recovery key unrotated. Synchronous against committed state. */
+  securityStanding(context: { principalId: string; familyId: string; recoverySelector: string }): SecurityStanding {
+    const principal = this.principals.get(context.principalId);
+    if (principal === undefined || principal.status !== "active") return { kind: "ended", why: "principal" };
+    const profile = this.activeProfileOf(context.principalId);
+    if (profile === null) return { kind: "ended", why: "profile" };
+    const family = this.families.get(context.familyId);
+    if (family === undefined || family.principal_id !== context.principalId || family.revoked_at !== null) return { kind: "ended", why: "family" };
+    if (profile.recovery_selector !== context.recoverySelector) return { kind: "ended", why: "recovery-key" };
+    return { kind: "standing" };
+  }
+
+  /** Test support: a family's stored shape. */
+  peekFamily(familyId: string): Readonly<SessionFamily> | undefined {
+    return this.families.get(familyId);
   }
 
   /** Test support: a profile's stored shape (the tests assert no plaintext key is in it). */

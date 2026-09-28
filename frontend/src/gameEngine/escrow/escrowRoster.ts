@@ -36,9 +36,14 @@ const TICKET_TAG = "18COSMOS/TICKET/v1";
  *   SHA-256("18COSMOS/TICKET/v1" ‖ lp(backend) ‖ lp(chain_id) ‖ lp(deployment) ‖ lp(game_id) ‖ lp(player_id) ‖
  *           lp(wallet) ‖ lp(secret))
  * `game_id` is the LIVE id (the chain game id does not exist yet when the creator's CreateGame carries its ticket);
- * `secret` is a per-room server secret that never leaves the server, so nobody else can mint a valid ticket. The
- * player declares the wallet BEFORE the ticket is issued; a rebind (LIVE-2E) rotates the secret, which revokes every
- * unredeemed ticket of the room.
+ * `secret` is server-side randomness that never leaves the server, so nobody else can mint a valid ticket. The
+ * player declares the wallet BEFORE the ticket is issued.
+ *
+ * ESCROW-3A (INTEGRATION-1 F-2): there is NO seat rebind -- LIVE-2E built none, and recovery restores the same principal
+ * and seat. Revocation is the server's ticket ledger (`server/src/escrow/walletTickets.ts`): one outstanding ticket per
+ * (game, player_id), issued only to a recently re-authenticated session, and standing only while the security context it
+ * was issued under stands (the issuing device not signed out, no "Sign out other devices", the recovery key unrotated).
+ * Its `ticketOf` is what the freeze below receives. (Comment only: this function and its bytes are unchanged.)
  */
 export function joinTicketV1(args: {
   readonly backend: string;
@@ -106,7 +111,8 @@ export function freezeEscrowRoster<I>(args: {
   readonly liveSeats: readonly { readonly player_id: string }[];
   readonly claims: readonly EscrowSeatClaim[];
   readonly view: EscrowGameView;
-  /** Recomputes the ticket issued to `player_id` for `wallet` (the server holds the room secret). */
+  /** The standing ticket issued to `player_id` for `wallet`, or a value no chain ticket equals (the server's ticket
+   *  ledger, `server/src/escrow/walletTickets.ts` `lookupOf`; the ticket secret itself is never kept). */
   readonly ticketOf: (playerId: string, wallet: string) => string;
   readonly trust: EscrowTrustPolicy;
   /** The backend's domain inputs for this binding and a roster hash (e.g. `junoDomainInputsOf`). */

@@ -74,9 +74,10 @@ export type Visibility = "public" | "private";
 export interface Seat {
   /** Server-minted; immutable; the log actor. */
   player_id: string;
-  /** The current controller. Changes only by device transfer / reclaim (LIVE-2E). Never projected. */
+  /** The controlling principal. NEVER changes: there is no seat transfer, reclaim or rebind (LIVE-2E built none;
+   *  recovery and device linking restore the SAME principal -- ESCROW-3A F-2). Never projected. */
   principal_id: string;
-  /** +1 per rebind (LIVE-2E). */
+  /** Carried, never moved (LIVE-2 reserved it for a rebind that does not exist). */
   binding_epoch: number;
   joined_at: number;
   bound_at: number;

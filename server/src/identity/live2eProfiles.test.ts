@@ -111,8 +111,18 @@ const createProfile = (port: number, cookie: string | undefined, name: unknown) 
 const recover = (port: number, cookie: string | undefined, recoveryKey: string) => post(port, "/gs/api/profile/recover", cookie, { recoveryKey });
 const redeem = (port: number, cookie: string | undefined, code: string) => post(port, "/gs/api/profile/link", cookie, { code });
 const linkCode = (port: number, cookie: string) => post(port, "/gs/api/profile/link-code", cookie);
-const rotateKey = (port: number, cookie: string) => post(port, "/gs/api/profile/recovery-key", cookie);
-const signOutOthers = (port: number, cookie: string) => post(port, "/gs/api/profile/sign-out-others", cookie);
+/* ESCROW-3A (brief §10B): rotating the key and signing out other devices are SENSITIVE -- they need a recent
+   re-authentication of the same session with the profile's recovery key (the creating browser's first rotation within
+   an hour is exempt: the lost-create-response path). `key`, when given, re-authenticates first. */
+const reauth = (port: number, cookie: string, recoveryKey: string) => post(port, "/gs/api/profile/reauth", cookie, { recoveryKey });
+const rotateKey = async (port: number, cookie: string, key?: string) => {
+  if (key !== undefined) assert.equal((await reauth(port, cookie, key)).status, 200, "re-authenticated");
+  return post(port, "/gs/api/profile/recovery-key", cookie);
+};
+const signOutOthers = async (port: number, cookie: string, key?: string) => {
+  if (key !== undefined) assert.equal((await reauth(port, cookie, key)).status, 200, "re-authenticated");
+  return post(port, "/gs/api/profile/sign-out-others", cookie);
+};
 const signOut = (port: number, cookie: string) => post(port, "/gs/api/session/revoke", cookie);
 
 /** A fresh browser redeems a credential; its new cookie on success. */
@@ -695,7 +705,10 @@ describe("LIVE-2E sign out", () => {
         tablet: await Client.openWithCookie(port, tablet, "tablet"),
       };
       assert.deepEqual(((await session(port, tablet)).body as { profile: unknown }).profile, { name: "Ann", otherSessions: 2 });
-      const done = await signOutOthers(port, tablet);
+      /* ESCROW-3A: the tablet's live session alone is not enough -- 403 reauth-required, nobody signed out. */
+      assert.deepEqual((await signOutOthers(port, tablet)).body, { error: "reauth-required" });
+      assert.deepEqual(((await session(port, tablet)).body as { profile: unknown }).profile, { name: "Ann", otherSessions: 2 });
+      const done = await signOutOthers(port, tablet, ann.recoveryKey);
       assert.deepEqual([done.status, done.body], [200, { ok: true, signedOut: 2 }]);
       assert.equal(await sockets.laptop.closed, 4401);
       assert.equal(await sockets.phone.closed, 4401);
@@ -960,6 +973,7 @@ describe("LIVE-2E persistence", () => {
       const phoneCookie = cookieFromAnswer(linked) as string;
       before = durable();
       fail();
+      assert.equal((await reauth(port, ann.cookie, ann.recoveryKey)).status, 200); // writes nothing: the fault stays armed
       assert.equal((await signOutOthers(port, ann.cookie)).status, 503);
       assert.equal(durable(), before);
       assert.equal((await session(port, phoneCookie)).status, 200);
@@ -975,7 +989,7 @@ describe("LIVE-2E persistence", () => {
    ================================================================== */
 
 describe("LIVE-2E rate limits", () => {
-  test("credential redemptions are budgeted per address -- right or wrong -- apart from every room limit", async () => {
+  test("credential redemptions: the address budget counts FAILURES and never refuses the right credential (ESCROW-3A §10C); apart from every room limit", async () => {
     const { server, port } = await prodServer({
       limits: { credentialRedeemsPerIp: { capacity: 3, refillPerSecond: 0.0001 } },
       rooms: { createsPerIp: { capacity: 1, refillPerSecond: 0.0001 } },
@@ -989,16 +1003,22 @@ describe("LIVE-2E rate limits", () => {
       const { gameId } = table.data as { gameId: string };
       assert.equal((await socket.op(CREATE())).code, "rate-limited");
       const { code } = (await linkCode(port, ann.cookie)).body as { code: string };
+      // A neighbour on the same address spends the address's FAILURE budget (3) with wrong credentials ...
       assert.equal((await recoverOnFreshBrowser(port, `${mintRecoverySelector()}.${mintSecret()}`)).answer.status, 403);
       assert.equal((await linkOnFreshBrowser(port, "ABCD-EFGH-JKMN-PQRS-TVWX")).answer.status, 403);
-      assert.equal((await linkOnFreshBrowser(port, code)).answer.status, 200);
-      // The fourth, even the right key: 429.
-      const limited = await recoverOnFreshBrowser(port, ann.recoveryKey);
+      assert.equal((await recoverOnFreshBrowser(port, `${ann.recoveryKey.split(".")[0]}.${mintSecret()}`)).answer.status, 403);
+      // ... after which every WRONG credential is 429 -- a real selector with a wrong secret and an unknown one alike ...
+      const limited = await recoverOnFreshBrowser(port, `${mintRecoverySelector()}.${mintSecret()}`);
       assert.equal(limited.answer.status, 429);
       assert.equal((limited.answer.body as { error: string }).error, "rate-limited");
       assert.ok(Number(limited.answer.headers["retry-after"]) >= 1);
-      assert.equal(server.identityLimiter.denied["credential-ip"], 1);
+      const realSelector = await recoverOnFreshBrowser(port, `${ann.recoveryKey.split(".")[0]}.${mintSecret()}`);
+      assert.deepEqual([realSelector.answer.status, realSelector.answer.body], [limited.answer.status, limited.answer.body], "no existence oracle");
+      assert.equal(server.identityLimiter.denied["credential-ip"], 2);
       assert.equal((await session(port, limited.before)).status, 200, "a refused redemption replaces nothing");
+      // ... and the RIGHT credentials still sign in: the right key, and a valid link code.
+      assert.equal((await recoverOnFreshBrowser(port, ann.recoveryKey)).answer.status, 200, "the right key is never refused on the address budget");
+      assert.equal((await linkOnFreshBrowser(port, code)).answer.status, 200, "nor a valid code");
       // And the rooms are untouched by it: the same player's socket still acts.
       assert.equal((await socket.op({ type: "set-ready", ready: true }, gameId)).ok, true);
       await socket.close();
@@ -1060,7 +1080,9 @@ describe("LIVE-2E rate limits", () => {
       assert.equal(intruder.answer.status, 200);
       const spare = ((await linkCode(port, intruder.cookie as string)).body as { code: string }).code;
       // The owner signs out other devices: the intruder's session ends AND its spare code dies with it.
-      assert.equal((await signOutOthers(port, ann.cookie)).status, 200);
+      assert.deepEqual((await signOutOthers(port, intruder.cookie as string)).body, { error: "reauth-required" }, "ESCROW-3A: the intruder cannot sign the owner out");
+      assert.equal((await rotateKey(port, intruder.cookie as string)).status, 403, "nor rotate the key (the creator's exemption is the owner's browser's only)");
+      assert.equal((await signOutOthers(port, ann.cookie, ann.recoveryKey)).status, 200);
       assert.equal((await session(port, intruder.cookie as string)).status, 401);
       assert.equal((await linkOnFreshBrowser(port, spare)).answer.status, 403, "the pre-minted code is gone");
       // The same holds for a key rotation and for a sign-out of the issuing device.
@@ -1124,7 +1146,7 @@ describe("LIVE-2E nothing secret reaches a log line", () => {
       await rotateKey(port, annCookie);
       const rotated = ((await rotateKey(port, annCookie)).body as { recoveryKey: string }).recoveryKey;
       secrets.push(rotated, rotated.split(".")[1]);
-      await signOutOthers(port, annCookie);
+      await signOutOthers(port, annCookie, rotated);
       await signOut(port, annCookie);
       await socket.closed;
       for (const profile of store.snapshot().profiles) secrets.push(profile.recovery_hash);

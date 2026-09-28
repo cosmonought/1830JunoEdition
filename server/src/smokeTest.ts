@@ -69,6 +69,7 @@ import {
   LINK_PATH,
   PROFILE_PATH,
   RECOVER_PATH,
+  REAUTH_PATH,
   RECOVERY_KEY_PATH,
   REVOKE_PATH,
   SESSION_PATH,
@@ -1114,6 +1115,11 @@ async function productionHalf(): Promise<void> {
 
   /* ---- 14: recovery on a new browser, with a rotated key ---- */
   step("A14", `recovery: rotate A's key from device C (${RECOVERY_KEY_PATH}); a NEW browser D recovers with it (${RECOVER_PATH})`);
+  /* ESCROW-3A (brief §10B): a live session alone cannot rotate the key -- device C re-authenticates with the key first. */
+  const unauthorized = await api(RECOVERY_KEY_PATH, {}, cookieC2);
+  check("rotate without re-authentication: 403 reauth-required, the key unchanged", unauthorized.status === 403 && unauthorized.body?.error === "reauth-required", unauthorized.text);
+  const reauthC = await api(REAUTH_PATH, { recoveryKey: keyA }, cookieC2);
+  check(`re-authenticate device C with A's key (${REAUTH_PATH}): 200 {ok, expiresAt}`, reauthC.status === 200 && reauthC.body?.ok === true && typeof reauthC.body?.expiresAt === "number", reauthC.text);
   const rotated = await api(RECOVERY_KEY_PATH, {}, cookieC2);
   const keyA2 = String(rotated.body?.recoveryKey ?? "");
   keep("A's rotated recovery key", keyA2);
@@ -1152,7 +1158,9 @@ async function productionHalf(): Promise<void> {
     await refusedMove(bobSeat, BUY, "bob-after-restart", NOT_YOUR_TURN, "B, not on turn, is refused on the restarted server -- read as B's seat");
   }
 
-  step("A14+", `"sign out other devices" from browser D (${SIGN_OUT_OTHERS_PATH})`);
+  step("A14+", `"sign out other devices" from browser D (${SIGN_OUT_OTHERS_PATH}), after re-authenticating with the rotated key`);
+  const reauthD = await api(REAUTH_PATH, { recoveryKey: keyA2 }, cookieD2);
+  check("browser D re-authenticates with the rotated key: 200", reauthD.status === 200 && reauthD.body?.ok === true, reauthD.text);
   const signedOut = await api(SIGN_OUT_OTHERS_PATH, {}, cookieD2);
   check(
     `200 {ok: true, signedOut: ${String(signedOut.body?.signedOut)}} -- at least device C`,

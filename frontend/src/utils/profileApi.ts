@@ -18,6 +18,12 @@
 // NOTHING RETURNED HERE IS KEPT HERE. A recovery key or link code is handed to the one screen that shows it and is
 // never logged, stored (no localStorage, no sessionStorage) or put in a URL. None of these functions rejects.
 //
+// SENSITIVE ACTIONS (ESCROW-3A §10B): rotating the recovery key and signing out other devices -- and, later, binding a
+// payout wallet -- need THIS session to have re-entered the profile's recovery key within the last few minutes. The
+// server answers 403 `reauth-required`; the menu asks for the key, calls `reauthenticate`, and retries the action. The
+// grant lives on the server, bound to this one session: nothing here keeps the key or the grant (the key is sent once
+// in a POST body, as a recovery is, and dropped), and it is never a URL, a cookie or storage.
+//
 // A CALL THAT CHANGES THE SESSION forces the next bootstrap before it resolves -- create, recover, link, sign out
 // other devices, and the answers that say our picture was stale (already-profiled, not-authenticated) -- so the
 // port's `state` and `account` are the server's by the time the caller reads them.
@@ -34,6 +40,8 @@ export type ProfileErrorCode =
   | "rate-limited"
   | "not-authenticated"
   | "profile-required"
+  /** ESCROW-3A: a sensitive action needs this session to re-enter the recovery key first (`reauthenticate`). */
+  | "reauth-required"
   | "unavailable"
   | "network";
 
@@ -52,6 +60,7 @@ export type LinkCodeResult = { ok: true; code: string; expiresAt: number } | Pro
 export type RecoveryKeyResult = { ok: true; recoveryKey: string } | ProfileFailure;
 export type SignOutResult = { ok: true } | ProfileFailure;
 export type SignOutOthersResult = { ok: true; signedOut: number } | ProfileFailure;
+export type ReauthResult = { ok: true; expiresAt: number } | ProfileFailure;
 
 /** The longest profile name, after trimming (the server's sanitizer has the last word). */
 export const PROFILE_NAME_MAX = 24;
@@ -73,6 +82,7 @@ function failureOf(answer: SessionApiAnswer): ProfileFailure {
     case 403:
       if (code === "invalid-credential") return failure("invalid-credential");
       if (code === "profile-required") return failure("profile-required");
+      if (code === "reauth-required") return failure("reauth-required");
       return failure("unavailable"); // origin-forbidden: nothing a player can fix
     case 409: {
       if (code === "has-tables") return failure("has-tables");
@@ -163,6 +173,18 @@ export async function rotateRecoveryKey(port: SessionPort = sessionPort()): Prom
   return recoveryKey === null ? failure("unavailable") : { ok: true, recoveryKey };
 }
 
+/** ESCROW-3A "Confirm it's you": re-enter the recovery key on THIS session so a sensitive action may follow within the
+ *  server's short window. A wrong key is "invalid-credential" (and spends this session's action budget, never the
+ *  address's). Nothing is kept here. */
+export async function reauthenticate(recoveryKey: string, port: SessionPort = sessionPort()): Promise<ReauthResult> {
+  const key = cleanKey(recoveryKey);
+  if (key === "" || key.length > 200) return failure("invalid-credential");
+  const { answer, ok } = await call(port, "profile/reauth", { recoveryKey: key }, [200], false);
+  if (!ok || answer.kind !== "answered") return failureOf(answer);
+  const expiresAt = answer.body?.expiresAt;
+  return typeof expiresAt === "number" && Number.isFinite(expiresAt) ? { ok: true, expiresAt } : failure("unavailable");
+}
+
 /** "Sign out this device": this browser's session only (the caller reloads to the profile gate). A 401 -- no
  *  session to end -- is this device signed out already. */
 export async function signOutThisDevice(port: SessionPort = sessionPort()): Promise<SignOutResult> {
@@ -180,14 +202,15 @@ export async function signOutOtherDevices(port: SessionPort = sessionPort()): Pr
 
 /** What a player reads for a failed profile action. `credential` is the recover/link screens, where a malformed
  *  entry is the same answer as a wrong one. */
-export function profileErrorSentence(result: ProfileFailure, context: "create" | "credential" | "action" = "action"): string {
+export function profileErrorSentence(result: ProfileFailure, context: "create" | "credential" | "reauth" | "action" = "action"): string {
   switch (result.error) {
     case "invalid-credential":
+      if (context === "reauth") return "That recovery key doesn't work for this profile. Check it and try again.";
       return "That key or code doesn't work. Check it and try again — a device-link code works once, for 10 minutes.";
     case "bad-name":
       return `A profile name is 1 to ${PROFILE_NAME_MAX} characters.`;
     case "bad-request":
-      if (context === "credential") return profileErrorSentence(failure("invalid-credential"));
+      if (context === "credential" || context === "reauth") return profileErrorSentence(failure("invalid-credential"), context);
       if (context === "create") return profileErrorSentence(failure("bad-name"));
       return "The game server did not accept that request. Try again.";
     case "rate-limited": {
@@ -202,6 +225,8 @@ export function profileErrorSentence(result: ProfileFailure, context: "create" |
       return "This browser's connection to the game server was reset. Try again.";
     case "profile-required":
       return "Sign in to a profile first.";
+    case "reauth-required":
+      return "For your security, confirm it's you with your recovery key first.";
     case "network":
     case "unavailable":
     default:

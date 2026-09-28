@@ -17,7 +17,7 @@
 // unknown -- which the identity service treats as a restart-required fault, never as success and never silently.
 
 import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeResult";
-import { PRINCIPAL_ID_PATTERN, PROFILE_ID_PATTERN, RECOVERY_SELECTOR_PATTERN, SESSION_ID_PATTERN } from "./ids";
+import { FAMILY_ID_PATTERN, familyIdOf, PRINCIPAL_ID_PATTERN, PROFILE_ID_PATTERN, RECOVERY_SELECTOR_PATTERN, SESSION_ID_PATTERN } from "./ids";
 
 /* ==================================================================
     LIVE-2E: A PRINCIPAL IS UNPROFILED OR IT BELONGS TO EXACTLY ONE PROFILE
@@ -100,6 +100,43 @@ export interface Session {
   revoke_reason: RevokeReason | null;
   /** The successor, when `revoke_reason` is "rotated". */
   rotated_to: string | null;
+  /** ESCROW-3A (IR-03): the rotation lineage this session belongs to (`SessionFamily`). A rotation successor and a grace
+   *  successor inherit it; a bootstrap, a recovery and a link found a new one. Never changes. */
+  family_id: string;
+}
+
+/* ==================================================================
+    ESCROW-3A (IR-03): THE SESSION FAMILY RECORD
+   ==================================================================
+   One browser's cookie-jar lineage: the session a bootstrap, a recovery or a link issued, and every session rotated or
+   grace-minted from it. LIVE-2F/3D's IR-03: a grace successor minted from an old cookie by a sibling tab at the moment of
+   a sign-out was linked to nothing the sign-out walked, so it could survive. Now a sign-out revokes the FAMILY -- one
+   record -- and every member with it; a rotation or grace mint must find its family open (precondition `family-open`),
+   so no successor can be minted into a family a committed sign-out has closed, in whatever order the two arrive. In
+   LIVE-5 the revocation is ONE conditional update of the family item (`revoked_at` absent) and every mint carries a
+   ConditionCheck on it: two processes cannot interleave a sign-out and a mint into a survivor. PRIVATE: never on the
+   wire, in a RoomView, a gameplay log, a hold, an audit line or a chain; not an application or player identity. */
+export type FamilyOrigin =
+  /** A browser's own bootstrap (and so, for a profile, the browser that CREATED it). */
+  | "bootstrap"
+  /** A browser signed in by the recovery key. */
+  | "recovery"
+  /** A browser signed in by a "Link another device" code. */
+  | "link"
+  /** Derived at the migration of a pre-family session (its founding is not on record). */
+  | "legacy";
+export const FAMILY_ORIGINS: readonly FamilyOrigin[] = Object.freeze(["bootstrap", "recovery", "link", "legacy"]);
+
+export interface SessionFamily {
+  family_id: string;
+  principal_id: string;
+  created_at: number;
+  /** How the family was founded: only a "bootstrap" family of the profile's own principal can be the browser that
+   *  created the profile (the lost-create-response exemption asks); recovered and linked devices never are. */
+  origin: FamilyOrigin;
+  /** Set once, by a security revocation of the family; a revoked family never reopens. */
+  revoked_at: number | null;
+  revoke_reason: RevokeReason | null;
 }
 
 export interface IdentitySnapshot {
@@ -109,6 +146,8 @@ export interface IdentitySnapshot {
   profiles?: Profile[];
   /** LIVE-2E. Absent in a snapshot built before profiles (read as empty). */
   links?: LinkCredential[];
+  /** ESCROW-3A. Absent in a snapshot built before session families (a legacy load derives them). */
+  families?: SessionFamily[];
 }
 
 /** A snapshot with every collection present -- what `checkSnapshot` returns. */
@@ -117,6 +156,7 @@ export interface FullIdentitySnapshot {
   sessions: Session[];
   profiles: Profile[];
   links: LinkCredential[];
+  families: SessionFamily[];
 }
 
 /* ==================================================================
@@ -148,7 +188,11 @@ export type IdentityPrecondition =
   | { readonly kind: "link-absent"; readonly link_hash: string }
   /** SINGLE USE: the code is stored, unconsumed and unexpired at `at` -- consumed in the same write as the session
    *  it issues. */
-  | { readonly kind: "link-unconsumed"; readonly link_hash: string; readonly at: number };
+  | { readonly kind: "link-unconsumed"; readonly link_hash: string; readonly at: number }
+  /** ESCROW-3A: CREATE-IF-ABSENT for a session family. */
+  | { readonly kind: "family-absent"; readonly family_id: string }
+  /** ESCROW-3A (IR-03): the family is stored and not revoked -- a member may be minted into it, or it may be revoked. */
+  | { readonly kind: "family-open"; readonly family_id: string };
 
 export interface IdentityChange {
   /** LIVE-3C: checked by the store in the same step that writes the change; any failure writes nothing. */
@@ -165,6 +209,8 @@ export interface IdentityChange {
   readonly links?: readonly LinkCredential[];
   /** LIVE-2E: removed (expired codes, consumed or not). */
   readonly dropLinks?: readonly string[];
+  /** ESCROW-3A: upserted whole (a new family, or one revoked). A family is never removed while a session names it. */
+  readonly families?: readonly SessionFamily[];
 }
 
 export interface IdentityStore {
@@ -202,7 +248,9 @@ const SESSION_KEYS = [
   "revoked_at",
   "revoke_reason",
   "rotated_to",
+  "family_id",
 ];
+const FAMILY_KEYS = ["family_id", "principal_id", "created_at", "origin", "revoked_at", "revoke_reason"];
 
 const isTime = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 const exactKeys = (value: object, keys: readonly string[]): boolean => {
@@ -289,8 +337,83 @@ export function isSession(value: unknown): value is Session {
     (value.revoked_at === null || isTime(value.revoked_at)) &&
     (value.revoke_reason === null || (REVOKE_REASONS as readonly unknown[]).includes(value.revoke_reason)) &&
     (value.revoked_at === null) === (value.revoke_reason === null) &&
-    (value.rotated_to === null || (typeof value.rotated_to === "string" && SESSION_ID_PATTERN.test(value.rotated_to)))
+    (value.rotated_to === null || (typeof value.rotated_to === "string" && SESSION_ID_PATTERN.test(value.rotated_to))) &&
+    typeof value.family_id === "string" &&
+    FAMILY_ID_PATTERN.test(value.family_id)
   );
+}
+
+export function isSessionFamily(value: unknown): value is SessionFamily {
+  if (!isRecordObject(value) || !exactKeys(value, FAMILY_KEYS)) return false;
+  return (
+    typeof value.family_id === "string" &&
+    FAMILY_ID_PATTERN.test(value.family_id) &&
+    typeof value.principal_id === "string" &&
+    PRINCIPAL_ID_PATTERN.test(value.principal_id) &&
+    isTime(value.created_at) &&
+    (FAMILY_ORIGINS as readonly unknown[]).includes(value.origin) &&
+    (value.revoked_at === null || isTime(value.revoked_at)) &&
+    (value.revoke_reason === null || ((REVOKE_REASONS as readonly unknown[]).includes(value.revoke_reason) && value.revoke_reason !== "rotated")) &&
+    (value.revoked_at === null) === (value.revoke_reason === null)
+  );
+}
+
+/* ==================================================================
+    ESCROW-3A: THE LEGACY MIGRATION -- A SESSION WRITTEN BEFORE FAMILIES EXISTED
+   ==================================================================
+   Explicit and one way, like v1 -> v2 and v2 -> v3: a legacy session record (the nine LIVE-2B keys, no `family_id`) is
+   given the family of its ROTATION LINEAGE -- the `rotated_to` chain is walked back to the session that founded it, and
+   the family is named after that founder (`familyIdOf`), the same derivation a new family uses. Deterministic: every
+   load that migrates the same records derives the same families, so a crash before the migrated snapshot is written
+   loses nothing. One residual, disclosed: a GRACE successor minted before this migration was never linked by
+   `rotated_to` (that was IR-03), so it founds a family of its own; it is still ended by "Sign out other devices", by a
+   key rotation's successors, and by the principal-wide rotated sweep of LIVE-2F/3D (C1-01). */
+export function isLegacySession(value: unknown): boolean {
+  if (!isRecordObject(value) || !exactKeys(value, SESSION_KEYS.filter((key) => key !== "family_id"))) return false;
+  return isSession({ ...value, family_id: familyIdOf(String(value.session_id)) });
+}
+
+/** A legacy session set, each with its lineage's family, and the families it implies (open: a revoked member stays
+ *  revoked on its own record; nothing about a family's revocation can be read off pre-family records). */
+export function withLegacyFamilies(sessions: readonly unknown[], where: string, existing?: (sessionId: string) => string | undefined): { sessions: Session[]; families: SessionFamily[] } {
+  const bySession = new Map<string, Record<string, unknown>>();
+  const predecessor = new Map<string, string>();
+  sessions.forEach((record, at) => {
+    if (!isLegacySession(record) && !isSession(record)) throw new IdentityStoreCorruptError(`${where}: session #${at} is not a session record`);
+    const session = record as Record<string, unknown>;
+    /* A repeated session id is corruption, exactly as `checkSnapshot` and a journal line call it: never resolved by
+       keeping one of them (that could bring a revoked session back). */
+    if (bySession.has(session.session_id as string)) throw new IdentityStoreCorruptError(`${where}: session #${at} repeats a session id`);
+    bySession.set(session.session_id as string, session);
+    if (typeof session.rotated_to === "string") predecessor.set(session.rotated_to, session.session_id as string);
+  });
+  const familyOf = (sessionId: string): string => {
+    const known = existing?.(sessionId);
+    if (known !== undefined) return known;
+    const own = bySession.get(sessionId);
+    if (own !== undefined && typeof own.family_id === "string") return own.family_id;
+    const seen = new Set<string>([sessionId]);
+    let root = sessionId;
+    for (let back = predecessor.get(root); back !== undefined && !seen.has(back); back = predecessor.get(root)) {
+      const alreadyKnown = existing?.(back) ?? (bySession.get(back)?.family_id as string | undefined);
+      if (alreadyKnown !== undefined) return alreadyKnown;
+      seen.add(back);
+      root = back;
+    }
+    return familyIdOf(root);
+  };
+  const families = new Map<string, SessionFamily>();
+  const out: Session[] = [];
+  for (const session of bySession.values()) {
+    const family_id = familyOf(session.session_id as string);
+    const migrated = { ...session, family_id } as unknown as Session;
+    out.push(migrated);
+    const current = families.get(family_id);
+    if (current === undefined || migrated.created_at < current.created_at) {
+      families.set(family_id, { family_id, principal_id: migrated.principal_id, created_at: migrated.created_at, origin: "legacy", revoked_at: null, revoke_reason: null });
+    }
+  }
+  return { sessions: out, families: [...families.values()] };
 }
 
 /** A stored identity set that cannot be read without guessing. Named by position only: never a record's content. */
@@ -311,7 +434,8 @@ export function checkSnapshot(snapshot: unknown, where: string): FullIdentitySna
   }
   const rawProfiles = snapshot.profiles === undefined ? [] : snapshot.profiles;
   const rawLinks = snapshot.links === undefined ? [] : snapshot.links;
-  if (!Array.isArray(rawProfiles) || !Array.isArray(rawLinks)) throw new IdentityStoreCorruptError(`${where}: not an identity snapshot`);
+  const rawFamilies = snapshot.families === undefined ? [] : snapshot.families;
+  if (!Array.isArray(rawProfiles) || !Array.isArray(rawLinks) || !Array.isArray(rawFamilies)) throw new IdentityStoreCorruptError(`${where}: not an identity snapshot`);
   const principals = new Map<string, Principal>();
   snapshot.principals.forEach((record, at) => {
     if (!isPrincipal(record)) throw new IdentityStoreCorruptError(`${where}: principal #${at} is not a principal record`);
@@ -319,11 +443,22 @@ export function checkSnapshot(snapshot: unknown, where: string): FullIdentitySna
     if (principals.has(record.principal_id)) throw new IdentityStoreCorruptError(`${where}: principal #${at} is a duplicate`);
     principals.set(record.principal_id, record);
   });
+  const families = new Map<string, SessionFamily>();
+  rawFamilies.forEach((record, at) => {
+    if (!isSessionFamily(record)) throw new IdentityStoreCorruptError(`${where}: session family #${at} is not a family record`);
+    if (families.has(record.family_id)) throw new IdentityStoreCorruptError(`${where}: session family #${at} is a duplicate`);
+    if (!principals.has(record.principal_id)) throw new IdentityStoreCorruptError(`${where}: session family #${at} names no stored principal`);
+    families.set(record.family_id, record);
+  });
   const sessions = new Set<string>();
   snapshot.sessions.forEach((record, at) => {
     if (!isSession(record)) throw new IdentityStoreCorruptError(`${where}: session #${at} is not a session record`);
     if (sessions.has(record.session_id)) throw new IdentityStoreCorruptError(`${where}: session #${at} is a duplicate`);
     if (!principals.has(record.principal_id)) throw new IdentityStoreCorruptError(`${where}: session #${at} names no stored principal`);
+    /* ESCROW-3A: every session belongs to a stored family of ITS OWN principal. */
+    if (families.get(record.family_id)?.principal_id !== record.principal_id) {
+      throw new IdentityStoreCorruptError(`${where}: session #${at} names no session family of its principal`);
+    }
     sessions.add(record.session_id);
   });
   const profiles = new Map<string, Profile>();
@@ -360,6 +495,7 @@ export function checkSnapshot(snapshot: unknown, where: string): FullIdentitySna
     sessions: snapshot.sessions as Session[],
     profiles: [...profiles.values()],
     links: rawLinks as LinkCredential[],
+    families: [...families.values()],
   };
 }
 
@@ -369,7 +505,9 @@ export function applyChange(base: IdentitySnapshot, change: IdentityChange): Ful
   const sessions = new Map(base.sessions.map((record) => [record.session_id, record] as const));
   const profiles = new Map((base.profiles ?? []).map((record) => [record.profile_id, record] as const));
   const links = new Map((base.links ?? []).map((record) => [record.link_hash, record] as const));
+  const families = new Map((base.families ?? []).map((record) => [record.family_id, record] as const));
   for (const record of change.principals ?? []) principals.set(record.principal_id, { ...record });
+  for (const record of change.families ?? []) families.set(record.family_id, { ...record });
   for (const record of change.sessions ?? []) sessions.set(record.session_id, { ...record });
   for (const id of change.dropSessions ?? []) sessions.delete(id);
   for (const record of change.profiles ?? []) profiles.set(record.profile_id, { ...record });
@@ -381,6 +519,7 @@ export function applyChange(base: IdentitySnapshot, change: IdentityChange): Ful
     sessions: [...sessions.values()].sort(byId((s: Session) => s.session_id)),
     profiles: [...profiles.values()].sort(byId((p: Profile) => p.profile_id)),
     links: [...links.values()].sort(byId((l: LinkCredential) => l.link_hash)),
+    families: [...families.values()].sort(byId((f: SessionFamily) => f.family_id)),
   };
 }
 
@@ -395,6 +534,7 @@ export interface IdentityLookups {
   profile(id: string): Profile | undefined;
   link(hash: string): LinkCredential | undefined;
   profileOfSelector(selector: string): string | undefined;
+  family(id: string): SessionFamily | undefined;
 }
 
 /** The lookups of a whole snapshot (built per call: the memory and whole-file stores, for tests and the migration). */
@@ -404,12 +544,14 @@ export function lookupsOf(snapshot: IdentitySnapshot): IdentityLookups {
   const profiles = new Map((snapshot.profiles ?? []).map((record) => [record.profile_id, record] as const));
   const links = new Map((snapshot.links ?? []).map((record) => [record.link_hash, record] as const));
   const selectors = new Map((snapshot.profiles ?? []).map((record) => [record.recovery_selector, record.profile_id] as const));
+  const families = new Map((snapshot.families ?? []).map((record) => [record.family_id, record] as const));
   return {
     principal: (id) => principals.get(id),
     session: (id) => sessions.get(id),
     profile: (id) => profiles.get(id),
     link: (hash) => links.get(hash),
     profileOfSelector: (selector) => selectors.get(selector),
+    family: (id) => families.get(id),
   };
 }
 
@@ -443,6 +585,12 @@ export function preconditionFailure(lookups: IdentityLookups, expect: readonly I
           const link = lookups.link(condition.link_hash);
           return link === undefined || link.consumed_at !== null || condition.at >= link.expires_at;
         }
+        case "family-absent":
+          return lookups.family(condition.family_id) !== undefined;
+        case "family-open": {
+          const family = lookups.family(condition.family_id);
+          return family === undefined || family.revoked_at !== null;
+        }
         default:
           return true; // an unknown condition never holds
       }
@@ -462,7 +610,8 @@ export function changeIdProblem(change: IdentityChange): string | null {
     once("principal", (change.principals ?? []).map((record) => record.principal_id)) ??
     once("session", sessionKeys) ??
     once("profile", (change.profiles ?? []).map((record) => record.profile_id)) ??
-    once("link code", linkKeys)
+    once("link code", linkKeys) ??
+    once("session family", (change.families ?? []).map((record) => record.family_id))
   );
 }
 
@@ -481,6 +630,7 @@ export class IdentityIndex implements IdentityLookups {
   readonly profiles = new Map<string, Profile>();
   readonly links = new Map<string, LinkCredential>();
   readonly selectors = new Map<string, string>();
+  readonly families = new Map<string, SessionFamily>();
 
   static from(snapshot: FullIdentitySnapshot): IdentityIndex {
     const index = new IdentityIndex();
@@ -491,6 +641,7 @@ export class IdentityIndex implements IdentityLookups {
       index.selectors.set(record.recovery_selector, record.profile_id);
     }
     for (const record of snapshot.links) index.links.set(record.link_hash, record);
+    for (const record of snapshot.families) index.families.set(record.family_id, record);
     return index;
   }
 
@@ -509,6 +660,9 @@ export class IdentityIndex implements IdentityLookups {
   profileOfSelector(selector: string) {
     return this.selectors.get(selector);
   }
+  family(id: string) {
+    return this.families.get(id);
+  }
 
   /** Why this change would make the set invalid, or `null`. Checks the change alone against this index -- the
    *  relations of every record it writes -- never the whole set. `where` names the caller in the sentence. */
@@ -517,8 +671,18 @@ export class IdentityIndex implements IdentityLookups {
     if (ids !== null) return `${where}: ${ids}`;
     const nextPrincipals = new Map((change.principals ?? []).map((record) => [record.principal_id, record] as const));
     const nextProfiles = new Map((change.profiles ?? []).map((record) => [record.profile_id, record] as const));
+    const nextFamilies = new Map((change.families ?? []).map((record) => [record.family_id, record] as const));
     const principalAfter = (id: string) => nextPrincipals.get(id) ?? this.principals.get(id);
     const profileAfter = (id: string) => nextProfiles.get(id) ?? this.profiles.get(id);
+    const familyAfter = (id: string) => nextFamilies.get(id) ?? this.families.get(id);
+    for (const [at, record] of (change.families ?? []).entries()) {
+      if (!isSessionFamily(record)) return `${where}: session family #${at} is not a family record`;
+      if (principalAfter(record.principal_id) === undefined) return `${where}: session family #${at} names no stored principal`;
+      const before = this.families.get(record.family_id);
+      if (before !== undefined && before.principal_id !== record.principal_id) return `${where}: session family #${at} would move to another principal`;
+      if (before !== undefined && before.origin !== record.origin) return `${where}: session family #${at} would change its origin`;
+      if (before !== undefined && before.revoked_at !== null && record.revoked_at === null) return `${where}: session family #${at} would reopen a revoked family`;
+    }
     for (const [at, record] of (change.principals ?? []).entries()) {
       if (!isPrincipal(record)) return `${where}: principal #${at} is not a principal record`;
       if (record.activated_at === null) return `${where}: principal #${at} was never activated`;
@@ -548,6 +712,9 @@ export class IdentityIndex implements IdentityLookups {
     for (const [at, record] of (change.sessions ?? []).entries()) {
       if (!isSession(record)) return `${where}: session #${at} is not a session record`;
       if (principalAfter(record.principal_id) === undefined) return `${where}: session #${at} names no stored principal`;
+      if (familyAfter(record.family_id)?.principal_id !== record.principal_id) return `${where}: session #${at} names no session family of its principal`;
+      const before = this.sessions.get(record.session_id);
+      if (before !== undefined && before.family_id !== record.family_id) return `${where}: session #${at} would move to another family`;
     }
     for (const [at, record] of (change.links ?? []).entries()) {
       if (!isLinkCredential(record)) return `${where}: link code #${at} is not a link record`;
@@ -569,15 +736,19 @@ export class IdentityIndex implements IdentityLookups {
     }
     for (const record of change.links ?? []) this.links.set(record.link_hash, { ...record });
     for (const hash of change.dropLinks ?? []) this.links.delete(hash);
+    for (const record of change.families ?? []) this.families.set(record.family_id, { ...record });
   }
 
   /** The whole set, in the stored order (`applyChange`'s). */
   snapshot(): FullIdentitySnapshot {
-    return applyChange({ principals: [...this.principals.values()], sessions: [...this.sessions.values()], profiles: [...this.profiles.values()], links: [...this.links.values()] }, {});
+    return applyChange(
+      { principals: [...this.principals.values()], sessions: [...this.sessions.values()], profiles: [...this.profiles.values()], links: [...this.links.values()], families: [...this.families.values()] },
+      {},
+    );
   }
 
-  sizes(): { principals: number; sessions: number; profiles: number; links: number } {
-    return { principals: this.principals.size, sessions: this.sessions.size, profiles: this.profiles.size, links: this.links.size };
+  sizes(): { principals: number; sessions: number; profiles: number; links: number; families: number } {
+    return { principals: this.principals.size, sessions: this.sessions.size, profiles: this.profiles.size, links: this.links.size, families: this.families.size };
   }
 }
 

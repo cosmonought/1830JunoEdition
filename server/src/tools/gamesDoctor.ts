@@ -19,6 +19,22 @@
 //                        to `holds/released/` with the verification and the note; an audit line is appended. There is
 //                        no force: a game that does not verify stays held, and the tool says why.
 //   gc [--apply]         OFFLINE, LOCK HELD with --apply (a dry run otherwise): the conservative lifecycle below.
+//   reconcile-duplicate-code <game_a> <game_b> [--keep <game_id>] --note "<why>"
+//                        ESCROW-3A (LIVE-2F/3D C4-02), OFFLINE, LOCK HELD: two games held `duplicate-join-code` can never be
+//                        released by `release` (each verification finds the other). This verifies BOTH games' authoritative
+//                        history exactly as `release` does (the duplicate aside), then makes the one METADATA change the
+//                        conflict needs -- the join code is kept by one record and cleared (compare-and-swap, record_version
+//                        + 1) from the other -- and releases both holds through the ordinary verified release. It decides
+//                        alone only when the answer is unambiguous (exactly one of the two is still WAITING: it keeps the
+//                        code a dealt game no longer needs); otherwise `--keep` must say which. No log is read for writing,
+//                        no gameplay entry and no seat changes, and it refuses if anything does not verify.
+//   money [<game_id>] [--json]
+//                        ESCROW-3A, READ-ONLY: the money games' lifecycle records (`games/money/`): phase, the terminal
+//                        seal, the prepared evidence's hashes, a hold. No identity id is stored there or printed.
+//   money-release <game_id> --note "<why>"
+//                        ESCROW-3A, OFFLINE, LOCK HELD: lift a HELD money game back to the phase it was held from -- only
+//                        after the game verifies (as `release`), this deployment may continue it, and, when it is sealed,
+//                        the settlement evidence re-derives from its sealed prefix. Audited; history is never edited.
 //   scan-v10 [--json]    DA-8, READ-ONLY (takes no lock, writes nothing, safe beside a running server): every stored log --
 //                        live and archived, server-owned and legacy JUNO-XXX -- classified by its rules-engine pin, and each
 //                        v10 game's committed entries checked for the ones rules engine 11 reads differently
@@ -62,6 +78,10 @@ import { createFileRecordStore } from "../rooms/recordStore";
 import { reconcileLoaded, type Verdict } from "../rooms/reconcile";
 import { factsFromEntries, sessionBoardFacts } from "../rooms/roomHost";
 import { verifySession } from "./verifySession";
+import { createFileFinancialGameStore } from "../escrow/financialGameStore";
+import { moneyContinuationVerdict } from "../escrow/moneyContinuation";
+import { transitionFinancial } from "../escrow/moneyLifecycle";
+import { prepareTerminalEvidence, serverPrefixReplay } from "../escrow/settlementEvidence";
 import {
   BOUNDARY_SCAN_VERSION,
   scanPinnedHistory,
@@ -101,7 +121,7 @@ export interface GameVerification {
   readonly logClassification: "absent" | "clean" | "torn-tail" | "corrupt";
 }
 
-export async function verifyGame(dataDir: string, gameId: string, options: { build?: string } = {}): Promise<GameVerification> {
+export async function verifyGame(dataDir: string, gameId: string, options: { build?: string; ignoreDuplicateCodeWith?: string } = {}): Promise<GameVerification> {
   const fail = (cls: GameClass, reason: string, extra: Partial<GameVerification> = {}): GameVerification => ({
     gameId,
     cls,
@@ -144,7 +164,7 @@ export async function verifyGame(dataDir: string, gameId: string, options: { bui
   if (record.join_code !== null && record.archived_at === null) {
     const records = createFileRecordStore(dataDir, { warn: quiet });
     for (const other of await records.list()) {
-      if (other === gameId) continue;
+      if (other === gameId || other === options.ignoreDuplicateCodeWith) continue;
       const peer = await records.load(other).catch(() => null);
       if (peer !== null && peer.join_code === record.join_code && peer.archived_at === null && peer.status !== "cancelled" && peer.status !== "expired") {
         return { gameId, cls: "held", ok: false, reason: `duplicate-join-code: ${other} holds ${record.join_code} too`, verdict, entries: entries.length, logHash: hash, logClassification };
@@ -307,6 +327,154 @@ export async function releaseHold(dataDir: string, gameId: string, note: string,
   options.ops.audit("hold.released", { game_id: gameId, code: hold.code, note: trimmed, class: verification.cls, entries: verification.entries, log_hash: verification.logHash });
   await options.ops.flush();
   return { ok: true, verification, releasedCode: hold.code };
+}
+
+/* ==================================================================
+    ESCROW-3A: DUPLICATE JOIN-CODE TWINS (LIVE-2F/3D C4-02)
+   ================================================================== */
+
+export type DuplicateCodeResult =
+  | { readonly ok: true; readonly code: string; readonly kept: string; readonly cleared: string; readonly released: readonly string[] }
+  | { readonly ok: false; readonly reason: string };
+
+/** Reconcile two games that hold one join code -- the lock must already be held by this process (`withLock`). */
+export async function reconcileDuplicateCode(
+  dataDir: string,
+  gameA: string,
+  gameB: string,
+  note: string,
+  options: { lock: DataLock; ops: OpsRecorder; keep?: string; now?: number },
+): Promise<DuplicateCodeResult> {
+  const trimmed = note.trim();
+  if (trimmed.length === 0 || trimmed.length > 500) return { ok: false, reason: "a reconciliation needs --note \"<why it is safe now>\" (1-500 characters)" };
+  if (gameA === gameB || !GAME_ID_PATTERN.test(gameA) || !GAME_ID_PATTERN.test(gameB)) return { ok: false, reason: "two different game ids are needed" };
+  if (!(await options.lock.verify())) return { ok: false, reason: "this process does not hold the data directory's lock" };
+  const records = createFileRecordStore(dataDir, { warn: quiet, writerCheck: () => options.lock.verify() });
+  const [a, b] = await Promise.all([records.load(gameA).catch(() => null), records.load(gameB).catch(() => null)]);
+  if (a === null || b === null) return { ok: false, reason: "both games must have a readable record" };
+  if (a.join_code === null || a.join_code !== b.join_code) return { ok: false, reason: "the two records do not hold one join code" };
+  /* Both histories verify exactly as `release` verifies them -- their twin's claim to the code aside. */
+  for (const [id, twin] of [[gameA, gameB], [gameB, gameA]] as const) {
+    const verification = await verifyGame(dataDir, id, { ignoreDuplicateCodeWith: twin });
+    if (!verification.ok) return { ok: false, reason: `${id} does not verify, so nothing is changed: ${verification.reason}` };
+  }
+  /* Which record keeps the code: said by the operator, or unambiguous (exactly one is still waiting). */
+  let keep = options.keep ?? null;
+  if (keep === null) {
+    const waiting = [a, b].filter((record) => record.status === "waiting" && record.started_at === null);
+    if (waiting.length !== 1) return { ok: false, reason: "ambiguous: say which game keeps the code with --keep <game_id> (nothing was changed)" };
+    keep = waiting[0].game_id;
+  }
+  if (keep !== gameA && keep !== gameB) return { ok: false, reason: "--keep must name one of the two games" };
+  const cleared = keep === gameA ? b : a;
+  const code = a.join_code;
+  const next: GameRecord = { ...cleared, record_version: cleared.record_version + 1, join_code: null };
+  const written = await records.put(next, cleared.record_version);
+  if (written.kind !== "committed") return { ok: false, reason: `the record of ${cleared.game_id} was not written (${written.detail}); nothing else changed` };
+  options.ops.audit("record.duplicate-code-reconciled", { game_id: cleared.game_id, twin: keep, code, kept_by: keep, record_version: next.record_version, note: trimmed });
+  const released: string[] = [];
+  for (const id of [gameA, gameB]) {
+    const hold = await createFileHoldStore(dataDir, { warn: quiet }).load(id).catch(() => null);
+    /* Only the duplicate-code hold this reconciles is lifted; any other hold (an operator's, a damaged log's) stays for
+       its own `release`. */
+    if (hold === null || hold.code !== "duplicate-join-code") continue;
+    const result = await releaseHold(dataDir, id, `${trimmed} (duplicate join code reconciled; ${keep} keeps it)`, { lock: options.lock, ops: options.ops, now: options.now });
+    if (!result.ok) return { ok: false, reason: `the code was reconciled but ${id} stays held: ${result.reason}` };
+    released.push(id);
+  }
+  await options.ops.flush();
+  return { ok: true, code, kept: keep, cleared: cleared.game_id, released };
+}
+
+/* ==================================================================
+    ESCROW-3A: MONEY GAMES (`games/money/`), READ-ONLY AND THE VERIFIED RELEASE
+   ================================================================== */
+
+export interface MoneyInspection {
+  readonly games: ReadonlyArray<{
+    readonly gameId: string;
+    readonly phase: string | null;
+    readonly readable: boolean;
+    readonly terminal: { readonly log_len: number; readonly sealed_at: number } | null;
+    readonly intent: { readonly log_hash: string; readonly appraisal_state_hash: string; readonly rules_engine_version: number } | null;
+    readonly hold: { readonly code: string; readonly detail: string; readonly from: string } | null;
+    readonly continues: boolean | null;
+  }>;
+}
+
+export async function inspectMoney(dataDir: string, only?: string): Promise<MoneyInspection> {
+  const store = createFileFinancialGameStore(dataDir, { warn: quiet });
+  const ids = only !== undefined ? [only] : (await store.list()).sort();
+  const games: Array<MoneyInspection["games"][number]> = [];
+  for (const gameId of ids) {
+    try {
+      const record = await store.load(gameId);
+      if (record === null) continue;
+      games.push({
+        gameId,
+        phase: record.phase,
+        readable: true,
+        terminal: record.terminal === null ? null : { log_len: record.terminal.log_len, sealed_at: record.terminal.sealed_at },
+        intent: record.intent === null ? null : { log_hash: record.intent.log_hash, appraisal_state_hash: record.intent.appraisal_state_hash, rules_engine_version: record.intent.rules_engine_version },
+        hold: record.hold === null ? null : { code: record.hold.code, detail: record.hold.detail, from: record.hold.from },
+        continues: moneyContinuationVerdict(record.continuation).continues,
+      });
+    } catch {
+      games.push({ gameId, phase: null, readable: false, terminal: null, intent: null, hold: null, continues: null });
+    }
+  }
+  return { games };
+}
+
+export type MoneyReleaseResult = { readonly ok: true; readonly to: string } | { readonly ok: false; readonly reason: string };
+
+/** Lift a HELD money game -- the lock must already be held by this process (`withLock`). */
+export async function releaseMoneyHold(dataDir: string, gameId: string, note: string, options: { lock: DataLock; ops: OpsRecorder; now?: number }): Promise<MoneyReleaseResult> {
+  const trimmed = note.trim();
+  if (trimmed.length === 0 || trimmed.length > 500) return { ok: false, reason: "a release needs --note \"<why it is safe now>\" (1-500 characters)" };
+  if (!(await options.lock.verify())) return { ok: false, reason: "this process does not hold the data directory's lock" };
+  const store = createFileFinancialGameStore(dataDir, { warn: quiet, writerCheck: () => options.lock.verify() });
+  let record;
+  try {
+    record = await store.load(gameId);
+  } catch (error) {
+    return { ok: false, reason: `the money record cannot be read (${describe(error)}); it is never overwritten -- inspect it by hand` };
+  }
+  if (record === null) return { ok: false, reason: `${gameId} has no money record` };
+  if (record.phase !== "held" || record.hold === null) return { ok: false, reason: `${gameId} is not held (${record.phase})` };
+  if (record.hold.code === "financial-record-missing" || record.continuation === null) {
+    return { ok: false, reason: `${gameId}'s money record is a placeholder for a record that was missing: it is never released -- stop the server and restore the original games/money/${gameId}.json` };
+  }
+  /* 1. The game itself verifies, as `release` verifies it; a game-level durable hold is lifted by `release` first. */
+  if ((await createFileHoldStore(dataDir, { warn: quiet }).load(gameId).catch(() => "unreadable")) !== null) {
+    return { ok: false, reason: `${gameId} itself is held (games/holds/): run \`release\` for the game first` };
+  }
+  const verification = await verifyGame(dataDir, gameId);
+  if (!verification.ok) return { ok: false, reason: `${gameId} does not verify, so its money stays held: ${verification.reason}` };
+  /* 2. This deployment may continue it. */
+  const verdict = moneyContinuationVerdict(record.continuation);
+  if (!verdict.continues) return { ok: false, reason: `this deployment may not continue ${gameId} (${verdict.why}: ${verdict.detail}); it stays held -- run a compatible build` };
+  /* 3. A sealed game's evidence re-derives from its sealed prefix. */
+  if (record.terminal !== null) {
+    const bytes = await readOptional(path.join(dataDir, `${gameId}.log.jsonl`));
+    const entries = bytes === null ? [] : scanLog(bytes).entries;
+    const evidence = prepareTerminalEvidence({ gameId, entries, seal: { log_len: record.terminal.log_len, at: record.terminal.sealed_at }, replay: serverPrefixReplay(TOOL_BUILD) });
+    if (!evidence.ok) return { ok: false, reason: `the settlement evidence does not re-derive (${evidence.code}: ${evidence.detail}); it stays held` };
+    if (record.intent !== null && JSON.stringify(record.intent) !== JSON.stringify(evidence.evidence)) {
+      return { ok: false, reason: "the recorded intent differs from what the sealed prefix derives; it stays held" };
+    }
+  }
+  const at = options.now ?? Date.now();
+  /* The deal, from the GameRecord (log-implied): a game dealt while held never resumes at funding. */
+  const gameRecord = await createFileRecordStore(dataDir, { warn: quiet }).load(gameId).catch(() => null);
+  if (gameRecord === null) return { ok: false, reason: `${gameId}'s record cannot be read; its money stays held` };
+  const decided = transitionFinancial(record, { kind: "operator-release", at, note: trimmed, dealt: gameRecord.started_at !== null });
+  if (decided.kind !== "moved") return { ok: false, reason: decided.kind === "refused" ? decided.reason : "nothing to release" };
+  const written = await store.put(decided.next, record.record_version);
+  if (written.kind !== "committed") return { ok: false, reason: `the release was not written (${written.kind === "conflict" ? "the record changed" : written.detail}); it is still held` };
+  options.ops.audit("money.released", { game_id: gameId, code: record.hold.code, to: decided.next.phase, note: trimmed, log_hash: verification.logHash });
+  await options.ops.flush();
+  return { ok: true, to: decided.next.phase };
 }
 
 /* ==================================================================
@@ -594,6 +762,10 @@ const USAGE = [
   "  inspect [--deep] [--json]           every game classified from its files (server stopped)",
   "  release <game_id> --note \"<text>\"   lift one durable hold after verifying the game (server stopped)",
   "  gc [--apply] [--json]               the conservative lifecycle: a dry run unless --apply (server stopped)",
+  "  reconcile-duplicate-code <game_a> <game_b> [--keep <game_id>] --note \"<text>\"",
+  "                                      ESCROW-3A: two games held on one join code (server stopped)",
+  "  money [<game_id>] [--json]          ESCROW-3A: the money games' lifecycle records (read-only, any time)",
+  "  money-release <game_id> --note \"<text>\"  ESCROW-3A: lift a held money game after verifying it (server stopped)",
   "  scan-v10 [--json]                   DA-8: the v10 -> v11 boundary scan of every stored log (read-only, any time)",
 ].join("\n");
 
@@ -606,8 +778,9 @@ async function main(argv: readonly string[]): Promise<number> {
   const dataAt = argv.indexOf("--data");
   const dataDir = path.resolve(dataAt !== -1 && argv[dataAt + 1] ? argv[dataAt + 1] : (process.env.DATA_DIR ?? path.join(process.cwd(), "data")));
   const noteAt = argv.indexOf("--note");
-  const positional = argv.filter((arg, at) => !arg.startsWith("--") && argv[at - 1] !== "--data" && argv[at - 1] !== "--note");
-  const [command, target] = positional;
+  const keepAt = argv.indexOf("--keep");
+  const positional = argv.filter((arg, at) => !arg.startsWith("--") && argv[at - 1] !== "--data" && argv[at - 1] !== "--note" && argv[at - 1] !== "--keep");
+  const [command, target, second] = positional;
   const json = argv.includes("--json");
   if (command === "status") {
     const raw = await readOptional(path.join(dataDir, OPS_DIRECTORY, STATUS_FILE));
@@ -624,7 +797,24 @@ async function main(argv: readonly string[]): Promise<number> {
     else printBoundaryScan(report);
     return report.summary.clean && report.unreadable.length === 0 ? 0 : 1;
   }
-  if (command !== "inspect" && command !== "release" && command !== "gc") {
+  if (command === "money") {
+    const money = await inspectMoney(dataDir, target);
+    if (json) console.log(JSON.stringify(money, null, 2));
+    else {
+      console.log(`money games in ${dataDir}: ${money.games.length}`);
+      for (const game of money.games) {
+        console.log(
+          `  ${game.gameId}  ${game.readable ? (game.phase ?? "?").padEnd(17) : "UNREADABLE       "}` +
+            (game.terminal ? ` sealed@${game.terminal.log_len}` : "") +
+            (game.intent ? ` intent log_hash ${game.intent.log_hash.slice(0, 16)}… state ${game.intent.appraisal_state_hash.slice(0, 16)}… v${game.intent.rules_engine_version}` : "") +
+            (game.hold ? ` HELD ${game.hold.code} (from ${game.hold.from}) -- ${game.hold.detail}` : "") +
+            (game.continues === false ? " [this build may not continue it]" : ""),
+        );
+      }
+    }
+    return money.games.some((game) => !game.readable || game.phase === "held") ? 1 : 0;
+  }
+  if (command !== "inspect" && command !== "release" && command !== "gc" && command !== "reconcile-duplicate-code" && command !== "money-release") {
     console.error(USAGE);
     return 2;
   }
@@ -677,6 +867,32 @@ async function main(argv: readonly string[]): Promise<number> {
     console.log(
       `RELEASED ${target} (was held: ${result.releasedCode}). It verifies as ${result.verification.cls}: ${result.verification.entries} entries, logHash ${result.verification.logHash ?? "(empty)"}.\n` +
         "The hold is kept under games/holds/released/, and the audit line is in ops/audit.jsonl. Start the server: the game loads through the full validated load.",
+    );
+    return 0;
+  }
+  if (command === "reconcile-duplicate-code" || command === "money-release") {
+    if (!target || (command === "reconcile-duplicate-code" && !second) || noteAt === -1 || !argv[noteAt + 1]) {
+      console.error(USAGE);
+      return 2;
+    }
+    const outcome = await withLock(dataDir, async (held) => {
+      const ops = createFileOpsRecorder(dataDir, { build: TOOL_BUILD, instanceId: held.instanceId, writerCheck: () => held.verify() });
+      return command === "money-release"
+        ? releaseMoneyHold(dataDir, target, argv[noteAt + 1], { lock: held, ops })
+        : reconcileDuplicateCode(dataDir, target, second, argv[noteAt + 1], { lock: held, ops, keep: keepAt !== -1 ? argv[keepAt + 1] : undefined });
+    });
+    if ("refused" in outcome) {
+      console.error(`Refusing: ${outcome.refused}`);
+      return 2;
+    }
+    if (!outcome.ok) {
+      console.error(outcome.reason);
+      return 1;
+    }
+    console.log(
+      "to" in outcome
+        ? `RELEASED money game ${target} back to ${outcome.to}. The audit line is in ops/audit.jsonl; the server continues it at its next load.`
+        : `RECONCILED join code ${outcome.code}: ${outcome.kept} keeps it, ${outcome.cleared} no longer holds it; released ${outcome.released.join(", ") || "no holds"}. The audit lines are in ops/audit.jsonl.`,
     );
     return 0;
   }

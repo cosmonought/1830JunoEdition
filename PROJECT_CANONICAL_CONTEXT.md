@@ -3,7 +3,7 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-09-27, by the repository/context prune (Phase 2.5, `68f6baf`) and the follow-up that recorded the roadmap. It builds on DA-8 (`81fd037`).
+**Last updated:** 2026-09-27, by ESCROW-3A (Phase 3A: v11 settlement recertification and the money-game hosted prerequisites). It builds on DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
 
 **Where the documents live.** They are in two places:
 
@@ -14,7 +14,7 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 
 > **For future implementation sessions:**
 > 1. Read this file first, then the roadmap in `ROADMAP_3_2_REMAINING_WORK.md`.
-> 2. Then read only the canonical documents listed in §C for the current phase. For ESCROW-3A, use the reading order in §C.3.
+> 2. Then read only the canonical documents listed in §C for the current phase. For ESCROW-3B, use the reading order in §C.3.
 > 3. Do not read the whole of `RULES_HARDENING_BACKLOG.md`: it is 600 KB. Read the Part or item you need.
 > 4. Do not recursively read `archive/`, `docs/ai_architecture/` or the Project's historical reports unless the current task requires historical provenance, or a current document points you there.
 
@@ -45,9 +45,20 @@ When this file names a Project document, it writes `Project: claude/<name>`.
   - the v10 historical scan is clean.
 
 **Settlement certification**
-- Settlement is certified for **v10 only**: `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS = Object.freeze([10])` (`frontend/src/gameEngine/settlementAppraisal.ts:339`).
-- `checkPin` accepts certified pins only. A v11 board is refused with `UNSUPPORTED_RULES_ENGINE_VERSION … (supported: 10)`.
-- **v11 settlement is refused until ESCROW-3A explicitly recertifies it.** The procedure is in §B.
+- Settlement is certified for **v10 and v11**: `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS = Object.freeze([10, 11])` (`frontend/src/gameEngine/settlementAppraisal.ts`). It is a literal and never derived from `RULES_ENGINE_VERSION`.
+- `checkPin` accepts certified pins only. Every other pin (9, 12, …) is refused with `UNSUPPORTED_RULES_ENGINE_VERSION … (supported: 10, 11)`.
+- v10 is certified byte for byte, as before. v11's evidence sits beside it (`settlementV11Certification.test.ts` and `settlementV11CertificationVectors.json`). v11 payloads differ from v10 only in `domain` [1,33) and `appraisal_state_hash` [91,123). No contract, wasm or codec change was needed.
+- The next rules bump is refused for settlement until its own certification pass adds it. Record: Project `claude/ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md` §2–3.
+
+**Phase 3A — money-game hosted prerequisites: COMPLETE** (ESCROW-3A; the owner gate is pending)
+- The settlement seam is durable: one financial record per money game (`games/money/<game_id>.json`), keyed by `(gameId, seal.log_len)`, written by CAS, and discovered at startup. See `server/src/escrow/`.
+- `sealedPrefix` is the one way to slice `log[0..seal.log_len)`.
+- Post-deal cancel, refund and abandon are refused. Liveness is a state, not a refund.
+- A money game carries a continuation identity: the rules, hosted, financial and codec versions.
+- Wallet tickets: one per seat, ended by every security event, and frozen with the roster.
+- Identity snapshot **v4** adds private session families (IR-03). Rotating the recovery key and signing out other devices need a recent re-authentication with the key.
+- The recovery limiter counts failures only and never refuses the right credential.
+- `gamesDoctor` gained `money`, `money-release` and `reconcile-duplicate-code`.
 
 **GNOLAND-1 / 1.1: complete; further Gno work parked**
 - The chain-neutral escrow backend interface and the Juno regression oracle landed as `b804150`.
@@ -59,6 +70,7 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 - A `create` with a non-zero stake is refused with `money-games-disabled`.
 - `NoMoneyRosterSource` refuses money. `EscrowRosterSource.plan` is a stub that refuses ("Money tables are not enabled on this server.").
 - Money rooms would get `host_undo: "none"`.
+- ESCROW-3A's lifecycle exists but acts on nothing while money is disabled: no game is financial, and `games/money/` is never created.
 
 ---
 
@@ -68,8 +80,8 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 The owner's brief for each pass sets that pass's exact scope.
 
 ```text
-Phases 1, 2 and 2.5: COMPLETE
-→ 3: ESCROW-3A → ESCROW-3B → ESCROW-4
+Phases 1, 2, 2.5 and 3A: COMPLETE
+→ 3: ESCROW-3B → ESCROW-4
 → 4: LIVE-4/5/6
 → 5: Junox E2E
 → 6: Rust retirement
@@ -83,13 +95,13 @@ Phases 1, 2 and 2.5: COMPLETE
 
 Gno is parked.
 
-**Next pass: ESCROW-3A.** Its first gate (Project `claude/DA8_RULES_V11_CLOSURE_2026-09-27.md` §10, §17), in order:
-1. Rerun the SET-0A audit against the v11 reducer.
-2. Build v11 goldens **beside** the v10 ones.
-3. Add `11` to `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` in its own reviewed change. `da8RulesV11Closure.test.ts` owns that literal.
-4. Rerun SET-0B and SET-0C.
+**Next pass: ESCROW-3B** (the Juno backend, signing and durable intents). Its inputs are in Project `claude/ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md` §19:
+- 3B extends the financial lifecycle after `intent-prepared`;
+- it writes the continuation identity with the money binding;
+- it emits the checkpoint policy (at the deal, and at every completed round boundary);
+- it wires the wallet-ticket ledger into `freezeEscrowRoster`.
 
-DA-8 expects this to be mechanical, because the SYN boards rebuild byte-for-byte under v11 and only the pin differs.
+ESCROW-3A's procedure is how the next rules version is certified for settlement: rebuild the goldens beside the old ones, then add the version to the literal in its own reviewed change.
 
 **ESCROW-3 — overall scope.** The roadmap names the split: 3A covers the money-game hosted prerequisites; 3B covers the Juno backend, signing and durable intents. The sources are:
 - Project `claude/GNOLAND1_CHAIN_NEUTRAL_ESCROW_INTERFACE_2026-09-26.md` §23:
@@ -126,12 +138,13 @@ DA-8 expects this to be mechanical, because the SYN boards rebuild byte-for-byte
 
 | Topic | Document |
 |---|---|
+| ESCROW-3A: v11 settlement + money-game prerequisites | `claude/ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md` |
 | DA-8 / v11 closure | `claude/DA8_RULES_V11_CLOSURE_2026-09-27.md` |
 | Hosted-authority certification (LIVE-2F / 3D) | `claude/LIVE2F_LIVE3D_HOSTED_AUTHORITY_CERTIFICATION_2026-09-27.md` |
 | Restore / reconciliation / lifecycle (LIVE-3C) | `claude/live3c-restore-reconciliation-lifecycle-2026-09-27.md` |
 | Profiles and identity (LIVE-2E) | `claude/live2e-mandatory-profiles-2026-09-26.md` |
 | What landed, with the commit↔patch map (INTEGRATION-1) | `claude/INTEGRATION1_CERTIFIED_PATCH_COLLAPSE_2026-09-26.md` |
-| Settlement spec — valuation (SET-0A rev 2, v10) | `claude/SET0A_NET_WORTH_VALUATION_AUDIT_2026-09-25.md` + `claude/SET0A_golden_vectors_2026-09-25.json` |
+| Settlement spec — valuation (SET-0A rev 2, v10; rerun for v11 in ESCROW-3A §2) | `claude/SET0A_NET_WORTH_VALUATION_AUDIT_2026-09-25.md` + `claude/SET0A_golden_vectors_2026-09-25.json` |
 | Settlement spec — primitives (SET-0B) | `claude/SET0B_SETTLEMENT_PRIMITIVES_2026-09-25.md` |
 | Settlement spec — cross-language conformance (SET-0C) | `claude/SET0C_CROSS_LANGUAGE_CONFORMANCE_2026-09-26.md` (§20 supersedes its earlier sections; §17's pin policy is amended by DA-8) |
 | Escrow canonical record (artifact gate) | `claude/ESCROW_B2_CANONICAL_ARTIFACT_GATE_2026-09-26.md` + `claude/ESCROW_B2.1_OPTIMIZER_RUST181_COMPAT_2026-09-26.md` |
@@ -152,20 +165,18 @@ DA-8 expects this to be mechanical, because the SYN boards rebuild byte-for-byte
 
 Every other Project report is **historical**; see the manifest.
 
-### C.3 ESCROW-3A reading order
+### C.3 ESCROW-3B reading order
 
 1. This file.
-2. `DA8_RULES_V11_CLOSURE`: the entry gate and the certified-only ruling.
-3. `SET0A_…AUDIT` + `SET0A_golden_vectors…json`: the audit to rerun under v11.
-4. `SET0B_…PRIMITIVES`: how the 13 goldens are rebuilt (`settlementGoldenBoards.ts`).
-5. `SET0C_…CONFORMANCE` §17, §18, §20.
-6. `GNOLAND1_…INTERFACE` §§3, 10–15, 19–23, 26.
-7. `LIVE2F_LIVE3D_…` §§4, 9, 14, 16.
-8. `INTEGRATION1_…` §§2, 5, 7, 13.
-9. `GNOLAND1.1_…` §§6–7, 10.
-10. `ESCROW_B2_…` + B2.1 §4–5.
-11. `live3c-…` §§7, 8, 10.
-12. `live2e-…` §§2–3, 15.
+2. `ESCROW3A_MONEY_GAME_PREREQUISITES`: §4–9 (lifecycle, seam, policy, continuation, tickets), §14 (store semantics) and §19 (3B inputs).
+3. `GNOLAND1_…INTERFACE` §§3, 10–15, 19–23 (O-1…O-10), 26.
+4. `SET0C_…CONFORMANCE` §17, §18, §20.
+5. `ESCROW_B2_…` + B2.1 §4–5 (the canonical artifact and its pins).
+6. `GNOLAND1.1_…` §§6–7, 10 (the oracle requirement).
+7. `live3c-…` §§7, 8, 10 (the seal and the seam).
+8. `LIVE2F_LIVE3D_…` §14 (the ESCROW-3 prerequisites, as ESCROW-3A dispositioned them).
+9. `INTEGRATION1_…` §§2, 5, 7, 13.
+10. Reference, only when a step needs it: `ESCROW2.1_…` / `ESCROW2.2_…` (trusted_seq, `CompromisedSettlement`); `LIVE3_…DESIGN` §15, §19.
 
 ---
 
@@ -175,7 +186,7 @@ Every other Project report is **historical**; see the manifest.
 - Any change to what a stored log replays to must bump `RULES_ENGINE_VERSION` and add a changelog row.
 - Logs are never repinned or rewritten. A game runs only under its deal's pin.
 
-**2. Settlement is certified for v10 only** (`[10]`, see §A). Adding 11 is ESCROW-3A's own reviewed change.
+**2. Settlement is certified for v10 and v11** (`[10, 11]`, an explicit literal; see §A). A later version is added only by its own certification pass. v10 and v11 evidence is never regenerated.
 
 **3. The canonical Juno escrow wasm** is `eighteen_cosmos_escrow.wasm`:
 - **SHA-256 `b263277aa5d1d63c33e8e238f27ad2b9ee4749c9a66abe82ef3146d51d119296`**, 526,033 B.
@@ -207,7 +218,7 @@ Every other Project report is **historical**; see the manifest.
 **7. Authority chain:** authenticated profile → principal → durable GameRecord seat → `player_id` → serialized GameActor → append-only committed log → pinned TypeScript rules engine.
 - A frame never names an actor. `seatOf(record, principal)` runs inside the actor task.
 - `game_id` is the server's `g_…`. `chain_game_id` is the contract's u64. `player_id` (`p-…`) is the same in money and no-money games.
-- `pr_`/`pf_`/`se_`/`rk_` ids never go on the wire or on chain.
+- `pr_`/`pf_`/`se_`/`sf_`/`rk_` ids never go on the wire or on chain. `sf_` session families (ESCROW-3A) are not an identity: they only group one browser's rotation lineage.
 
 **8. No seat rebind.** There is no seat copy, transfer or reassignment primitive. `binding_epoch` is carried and never moved. Recovery restores the same principal.
 
@@ -216,7 +227,8 @@ Every other Project report is **historical**; see the manifest.
 **10. Settlement arithmetic and seam**
 - Payout = `floor(pool·w_i/Σw)` with a Uint256 intermediate; dust goes to the treasury.
 - Weights are whole-VGP u128 in `chain_seat_index` order. No principal or player id appears in any payload byte.
-- `SettlementLifecycle.onGameplayClosed` is at-least-once. ESCROW-3 must be idempotent by `(gameId, seal.log_len)` and settle only the prefix up to `seal.log_len`.
+- `SettlementLifecycle.onGameplayClosed` is at-least-once. ESCROW-3A's coordinator (`server/src/escrow/settlementCoordinator.ts`) makes it idempotent by `(gameId, seal.log_len)`. Settlement derives only from `sealedPrefix(entries, seal)`, which is `log[0..seal.log_len)`.
+- A dealt money game is never cancelled, refunded or abandoned by the server (`moneyLifecycle.ts`). It ends by play, by unanimous annul, or by the contract's liveness rule.
 
 **11. Owner-local broad validation.** Claude runs narrow targeted tests only. The owner runs the broad suites and builds locally (§E).
 

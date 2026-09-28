@@ -3628,6 +3628,19 @@ DA-7 suites pin for off-turn seats — for a copy / ingress pass, not the versio
 `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` stays [10]; the appraiser accepts a board whose pin is CERTIFIED (no longer
 "supported AND certified" — owner ruling), so v10 boards and every frozen vector stay byte-identical and a v11 board is
 refused until the appraisal is recertified for v11 (ESCROW-3A's entry gate). Record: `claude/DA8_RULES_V11_CLOSURE_2026-09-27.md`.
+**ESCROW-3A (2026-09-27): v11 RECERTIFIED FOR SETTLEMENT, beside v10.** `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` is now
+the literal [10, 11]. It is still never derived, and 9, 12 and every later pin are refused "(supported: 10, 11)".
+- **The v11 evidence is new and sits beside v10's:** `settlementV11Certification.test.ts` and
+  `__fixtures__/settlement/settlementV11CertificationVectors.json`.
+- **The v11 golden set is the same thirteen SET-0A recipes, run by the v11 reducer.** Each board, re-stamped at pin 10,
+  hashes to its certified v10 `terminal_state_hash_v1`.
+- **Payload bytes differ from the frozen v10 vectors only in `domain` [1,33) and `appraisal_state_hash` [91,123).**
+  An independent encoder (the escrow crate's Python) re-derived that.
+- **Weights, payouts and dust are identical.**
+- **Unchanged:** every frozen v10 file (canonical context §D.4), the Juno oracle, `contracts/` and the canonical wasm.
+- **SET-0A F-7 (a Delayed Auction board failing PERCENT_NOT_CONSERVED) stays closed at v11** (DA-T11).
+
+No rules bump. Record: `claude/ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md`.
 
 **S10-7. Engine tests and packaging.** 304 engine-adjacent suites still live in `frontend/src/utils/` (Jest
 `roots` + per-suite classification, Batch 1 §6d); a repo-root `shared/` package needs CRA's `ModuleScopePlugin`,
@@ -5131,6 +5144,11 @@ forbids. Closes OD-DA-2d; no Delayed Auction owner decision remains open. *Imple
 | 10 (owed: **11** at DA-8) | **DA-5** (2026-09-25, `a6ef5e7`) | **Private-company consequences.** D-52 the reserved C&A PRR certificate (Delayed Auction); DA-F6 the grant moves exactly it, float and presidency at once, no minting anywhere; D-53 / D-57 / D-58 / D-59 the curable-only must-sell debt holding the Stock Round pass at both locks (every table), the Delayed Auction's acquisition-solvency refusal, the honoured award; D-55 / DA-F9 the first 5-train cancels the owed auction. | 18 files, 3,763 entries identical; 1,394 Stock Round entries hold no seat over a cap. |
 | 10 (owed: **11** at DA-8) | **Phase 2A — RR2A-F1** (2026-09-27, `445b9a4`) | **Round transitions, pinned boards (refusal-added).** `roundTransitionRefusal`: `BeginOperatingRound` refused in every round; a Stock / Operating Round `PassTurn` inside the auction refused (presence of the pin, never its value). DA-6 (UI / copy) beside it is not replay-semantic. | The corpus is unpinned: untouched. |
 | **11** | **DA-8 — Delayed Auction certification closure** (2026-09-27) | **The bump.** `RULES_ENGINE_VERSION` **10 → 11**, `SUPPORTED_RULES_ENGINE_VERSIONS` derived `[11]`, changelog row 11 naming exactly ten replay semantics — (1) DA-F1, (2) DA-F2, (3) DA-F7, (4) DA-F3, (5) DA-F4 / DA-F5, (6) D-52 / DA-F6, (7) D-53 / D-57 / D-58 / D-59, (8) D-55 / DA-F9, (9) RR2A-F1, (10) **DA-F12 (new in DA-8)**: after the revenue all-pass the sequence resumes with the Priority Deal holder (`auctionPriorityHolder`, every table) — and, explicitly NOT as rules, DA-6's UI / copy, C2-02 (prospective transport), LIVE-2's ingress / schema / revert reach, RR2A-F2 and DA-7's tests, DA7-L1. None asks the pin's value ((9) and (7)'s chart-price reading ask its presence). A version-10 room is held (`incompatible`, discovery `rules-version-older`) under every policy, before the reducer sees an entry, across restarts; nothing rewrites its pin; a new deal is stamped 11 over any claim. **Settlement is a separate axis** (owner ruling): `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` stays [10], `checkPin` reads the certified list only, the SET-0A golden builder stamps the certified pin 10; a v11 board is refused for money settlement until recertified. New `da8RulesV11Closure.test.ts` (29; owns the current literal), `rulesBoundaryScan.ts` + `gamesDoctor scan-v10` (read-only) + `scanV10.test.ts`; `unpredictableRevenueClosure`, `rr2aF1AuctionEscape`, `live2cRooms`, `live3cRestore` narrowed, version literals only; the settlement suites stamp the certified pin. **Delayed Auction CERTIFIED; Phase 2 closed.** | **Corpus: all 18 files unpinned, none acquires a pin; every stored revenue all-pass already resumed on the holder, so DA-F12 moves no stored board; no $0 taking. Live `DATA_DIR` (`server/data`): 8 logs, all unpinned — no v10 game to hold; byte-identical after the scan. All 13 SET-0A golden boards rebuilt by the v11 reducer hash to their certified `terminal_state_hash_v1` at the certified pin; SET-0C / Rust / Python payload vectors, the Juno oracle's vectors, the escrow crate and the canonical wasm (`b263277a…9296`) untouched.** |
+
+**The settlement-certification axis is separate** (DA-8, owner ruling). It is not a row of this table:
+- [10] at DA-8;
+- **[10, 11] at ESCROW-3A** (2026-09-27), with no rules change and v10 byte-identical;
+- a later pin joins the list only through its own certification pass.
 
 Items above that carry "bump" must add a row here when they land. No golden or replay expectation is ever
 re-pinned silently: the re-pin, its index and its reason go in the batch write-up and in this table.

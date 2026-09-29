@@ -40,7 +40,7 @@ import type { CaseContext } from "./harness";
 import type { LogSubject } from "./logStore.conformance";
 import type { HoldSubject, Planted, RecordSubject } from "./roomStores.conformance";
 import type { FinancialSubject, IntentSubject, TicketSubject } from "./escrowStores.conformance";
-import type { IdentitySubject, JournalSubject } from "./identityJournal.conformance";
+import type { IdentitySubject, JournalPlant, JournalSubject } from "./identityJournal.conformance";
 import type { GrantSubject, SecuritySubject } from "./identitySecurity.conformance";
 import { createReferenceLogStore, newReferenceLogBacking } from "./referenceLogStore";
 
@@ -503,23 +503,58 @@ export const memoryJournalSubject: JournalSubject = {
 
 const signingJournalFile = (ctx: CaseContext) => path.join(ctx.dir, "journal", JOURNAL_FILE);
 const signingJournalHooks = ownFileHooks<void>((ctx) => signingJournalFile(ctx));
+
+/** The file journal's form of each planted state (L5-5: `plant` is semantic). Anything the file adapter cannot parse is
+ *  damage to it -- a newer build's record included -- so every non-torn plant goes BEFORE the final line: damage that is
+ *  not a torn tail, which refuses the open. */
+function plantedJournalLine(what: JournalPlant): string {
+  switch (what.kind) {
+    case "torn-tail":
+      return '{"t":"settle","instance":"x","se';
+    case "corrupt":
+      return '{"t":"settle","garbage":true}';
+    case "newer":
+      return JSON.stringify({ t: "settle@2", instance: what.instance, seq: what.seq, key: what.signer_key_id, digest: { codec: "18JUNO/v2", purpose: "settle", hex: "ee".repeat(32) }, at: 0 });
+    case "corrupt-attempt":
+      return JSON.stringify({ t: "attempt", intent_id: what.intent_id, tx_id: "not-a-transaction-id", account: what.account, sequence: what.sequence });
+    case "newer-attempt":
+      return JSON.stringify({ t: "attempt@2", intent_id: what.intent_id, tx_id: what.tx_id, account: what.account, sequence: what.sequence, at: 0 });
+    default:
+      throw new Error("unknown plant");
+  }
+}
+
 export const fileJournalSubject: JournalSubject = {
   name: "file (openFileSigningJournal)",
   backend: "file",
-  capabilities: ["durable", "fence", "plant", "fs-faults", "stall-write", "inject-transient-failure", "inject-lost-answer"],
+  capabilities: ["durable", "fence", "plant", "fs-faults", "stall-write", "torn-tail", "inject-transient-failure", "inject-lost-answer", "inject-unresolved"],
   async open(ctx, options) {
     return openFileSigningJournal(path.join(ctx.dir, "journal"), { now: () => ctx.now(), fs: faultFs(ctx), ...quiet, ...writer(options) });
   },
   async stored(ctx) {
     return read(signingJournalFile(ctx));
   },
-  async plant(ctx, bytes) {
-    fs.mkdirSync(path.dirname(signingJournalFile(ctx)), { recursive: true });
-    fs.writeFileSync(signingJournalFile(ctx), bytes);
+  async plant(ctx, what) {
+    const file = signingJournalFile(ctx);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const whole = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+    const line = plantedJournalLine(what);
+    if (what.kind === "torn-tail") {
+      fs.writeFileSync(file, `${whole}${line}`);
+      return;
+    }
+    const lines = whole.split("\n").filter((entry) => entry !== "");
+    fs.writeFileSync(file, `${[...lines.slice(0, -1), line, ...lines.slice(-1)].join("\n")}\n`);
   },
   stallNextWrite: (ctx) => signingJournalHooks.stallNextWrite(ctx),
   armLostAnswer: (ctx) => signingJournalHooks.armLostAnswer(ctx),
   armTransientFailure: (ctx) => signingJournalHooks.armTransientFailure(ctx),
+  /* The outcome stays unknown to the journal: the bytes landed (the sync's answer lost), or they tore (a partial write). */
+  armUnresolvedWrite(ctx, landed) {
+    const on = (at: string) => at === signingJournalFile(ctx);
+    if (landed) ctx.faults.add({ op: "sync", where: on, action: { kind: "lose-answer" }, label: "the append is synced, its answer lost" });
+    else ctx.faults.add({ op: "write", where: on, action: { kind: "partial", bytes: 17 }, label: "the append tears" });
+  },
   stallAtByteWrite(ctx) {
     const stall = gate();
     ctx.faults.add({ op: "write", where: (at) => at === signingJournalFile(ctx), action: { kind: "stall", gate: stall }, label: "the append stalls at its byte write" });

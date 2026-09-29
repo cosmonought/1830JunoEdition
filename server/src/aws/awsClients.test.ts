@@ -3,7 +3,7 @@
 // LIVE-5 L5-1: the AWS client convention, with no network at all (every request is stopped before it is sent). A
 // DynamoDB Local client cannot be aimed anywhere but this machine, never reads the machine's AWS environment, and has
 // SDK retries off and bounded, throwing timeouts; an AWS client ignores every configured endpoint override; and the
-// source tree creates AWS clients in exactly one place.
+// source tree creates AWS clients in exactly one place. LIVE-5 L5-5: the same for the KMS client (`createKmsClient`).
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,21 +11,26 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { ListTablesCommand, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { KMSClient, ListKeysCommand } from "@aws-sdk/client-kms";
 
-import { AWS_CALL_POLICY, createDynamoDbClient, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV, LOCAL_TEST_CREDENTIALS, LOCAL_TEST_REGION, localEndpointProblem } from "./awsClients";
+import { AWS_CALL_POLICY, createDynamoDbClient, createKmsClient, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV, KMS_CALL_POLICY, LOCAL_TEST_CREDENTIALS, LOCAL_TEST_REGION, localEndpointProblem } from "./awsClients";
 
 /** The host and port a request WOULD be sent to; the request is stopped before the network. */
-async function destination(client: DynamoDBClient): Promise<string> {
+async function destination(client: DynamoDBClient | KMSClient): Promise<string> {
   let seen = "";
-  client.middlewareStack.add(
-    () => async (args) => {
-      const request = (args as { request: { protocol: string; hostname: string; port?: number } }).request;
-      seen = `${request.protocol}//${request.hostname}${request.port !== undefined ? `:${request.port}` : ""}`;
-      throw new Error("stopped before the network");
-    },
-    { step: "finalizeRequest", name: "l5DestinationProbe" },
-  );
-  await assert.rejects(client.send(new ListTablesCommand({})), /stopped before the network/);
+  const probe = { step: "finalizeRequest" as const, name: "l5DestinationProbe" };
+  const stop = () => async (args: unknown) => {
+    const request = (args as { request: { protocol: string; hostname: string; port?: number } }).request;
+    seen = `${request.protocol}//${request.hostname}${request.port !== undefined ? `:${request.port}` : ""}`;
+    throw new Error("stopped before the network");
+  };
+  if (client instanceof KMSClient) {
+    client.middlewareStack.add(stop, probe);
+    await assert.rejects(client.send(new ListKeysCommand({})), /stopped before the network/);
+  } else {
+    client.middlewareStack.add(stop, probe);
+    await assert.rejects(client.send(new ListTablesCommand({})), /stopped before the network/);
+  }
   return seen;
 }
 
@@ -48,6 +53,7 @@ async function withHostileEnvironment(body: () => Promise<void>, options: { read
     AWS_PROFILE: "gs-l5-no-such-profile",
     AWS_ENDPOINT_URL: "http://hostile.example:4566",
     AWS_ENDPOINT_URL_DYNAMODB: "http://hostile.example:4567",
+    AWS_ENDPOINT_URL_KMS: "http://hostile.example:4569",
     AWS_CONFIG_FILE: hostileConfigFile(),
     AWS_USE_FIPS_ENDPOINT: "true",
     AWS_USE_DUALSTACK_ENDPOINT: "true",
@@ -130,6 +136,50 @@ describe("L5-1 AWS client convention", () => {
     client.destroy();
   });
 
+  test("L5-5: a local KMS client (the tests' stand-in) goes only to its loopback endpoint, with the fake region and the dummy keys -- whatever the environment says", async () => {
+    await withHostileEnvironment(async () => {
+      const client = createKmsClient({ kind: "kms-local", endpoint: "http://127.0.0.1:8123" });
+      assert.equal(await destination(client), "http://127.0.0.1:8123");
+      assert.equal(await client.config.region(), LOCAL_TEST_REGION);
+      const credentials = await client.config.credentials();
+      assert.equal(credentials.accessKeyId, LOCAL_TEST_CREDENTIALS.accessKeyId);
+      assert.equal(credentials.sessionToken, undefined);
+      assert.equal(await client.config.useFipsEndpoint(), false);
+      assert.equal(await client.config.useDualstackEndpoint(), false);
+      assert.equal(((await client.config.retryStrategy()) as { mode?: string }).mode, "standard");
+      client.destroy();
+    });
+    for (const bad of ["https://127.0.0.1:8123", "http://kms.us-east-1.amazonaws.com:80", "http://10.0.0.5:8123", "http://127.0.0.1", "http://127.0.0.1:8123/x"]) {
+      assert.throws(() => createKmsClient({ kind: "kms-local", endpoint: bad }), /refusing to create a local KMS client/, bad);
+    }
+  });
+
+  test("L5-5: an AWS KMS client ignores every configured endpoint override and goes to its region's own KMS; the region is explicit and must be one", async () => {
+    await withHostileEnvironment(async () => {
+      const client = createKmsClient({ kind: "aws", region: "us-east-1" });
+      assert.equal(await destination(client), "https://kms.us-east-1.amazonaws.com");
+      assert.equal(await client.config.region(), "us-east-1", "not the environment's eu-west-1");
+      assert.equal(((await client.config.retryStrategy()) as { mode?: string }).mode, "standard");
+      client.destroy();
+    }, { profile: false });
+    for (const region of ["gs-local", "", "US-EAST-1", "us-east-1 "]) assert.throws(() => createKmsClient({ kind: "aws", region }), /not an AWS region/, JSON.stringify(region));
+    assert.throws(() => createKmsClient({ kind: "vault" } as never), /not an AWS region/);
+  });
+
+  test("L5-5: KMS calls are never retried by the SDK, and their socket timeouts are bounded (3 s, preflight §11.2) and THROW", async () => {
+    const client = createKmsClient({ kind: "kms-local", endpoint: "http://127.0.0.1:8123" });
+    assert.equal(await client.config.maxAttempts(), 1);
+    assert.equal(KMS_CALL_POLICY.maxAttempts, 1);
+    const handler = client.config.requestHandler as unknown as { configProvider?: Promise<Record<string, unknown>>; config?: Record<string, unknown> };
+    const resolved = (await handler.configProvider) ?? handler.config ?? {};
+    assert.equal(resolved.connectionTimeout, KMS_CALL_POLICY.connectionTimeoutMs);
+    assert.equal(resolved.requestTimeout, KMS_CALL_POLICY.requestTimeoutMs);
+    assert.equal(KMS_CALL_POLICY.requestTimeoutMs, 3_000);
+    assert.equal(resolved.throwOnRequestTimeout, true);
+    assert.ok(KMS_CALL_POLICY.callDeadlineMs > KMS_CALL_POLICY.requestTimeoutMs && KMS_CALL_POLICY.callDeadlineMs <= 5_000);
+    client.destroy();
+  });
+
   test("the environment names DynamoDB Local explicitly; unset is null, and a set-but-unsafe value throws", () => {
     assert.equal(dynamoLocalTargetFromEnv({}), null);
     assert.equal(dynamoLocalTargetFromEnv({ [DYNAMODB_LOCAL_ENV]: "" }), null);
@@ -137,7 +187,7 @@ describe("L5-1 AWS client convention", () => {
     assert.throws(() => dynamoLocalTargetFromEnv({ [DYNAMODB_LOCAL_ENV]: "https://dynamodb.us-east-1.amazonaws.com" }), /GS_DYNAMODB_LOCAL_ENDPOINT/);
   });
 
-  test("one convention: AWS clients are constructed only in aws/awsClients.ts, only the DynamoDB client package is used, and no production file imports the conformance code", () => {
+  test("one convention: AWS clients are constructed only in aws/awsClients.ts, only the DynamoDB and (L5-5) KMS client packages are used, and no production file imports the conformance code", () => {
     const root = path.resolve(__dirname, "../../../../src"); // dist/server/src/aws -> server/src
     const sources: string[] = [];
     const walk = (dir: string) => {
@@ -155,10 +205,11 @@ describe("L5-1 AWS client convention", () => {
       const text = fs.readFileSync(file, "utf8");
       const relative = path.relative(root, file).split(path.sep).join("/");
       if (relative !== "aws/awsClients.ts" && /new\s+DynamoDB(Client)?\s*\(/.test(text)) offenders.push(`${relative}: constructs a DynamoDB client`);
+      if (relative !== "aws/awsClients.ts" && /new\s+KMS(Client)?\s*\(/.test(text)) offenders.push(`${relative}: constructs a KMS client`);
       if (/DynamoDBDocument(Client)?\b/.test(text) && relative !== "aws/awsClients.test.ts") offenders.push(`${relative}: uses the document client (it marshals values: stored bytes must be exact)`);
       const modules = [...text.matchAll(/(?:from\s+|require\(\s*|import\(\s*)["'`]([^"'`]+)["'`]/g)].map((match) => match[1]);
       for (const name of modules) {
-        if (name.startsWith("@aws-sdk/") && name !== "@aws-sdk/client-dynamodb") offenders.push(`${relative}: imports ${name}`);
+        if (name.startsWith("@aws-sdk/") && name !== "@aws-sdk/client-dynamodb" && name !== "@aws-sdk/client-kms") offenders.push(`${relative}: imports ${name}`);
         if (name.startsWith("@smithy/")) offenders.push(`${relative}: reaches into ${name} directly`);
         /* The proof adapter and the harness are test code: nothing outside the conformance directory may import them. */
         if (name.includes("persistence/conformance") && !conformance.test(relative)) offenders.push(`${relative}: imports the conformance harness (${name})`);

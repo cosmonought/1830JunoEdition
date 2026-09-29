@@ -5,12 +5,15 @@ L5-5 (the ledger and KMS) and L5-7 (the AWS wiring) all follow it; none of them 
 
 ## 1. Creating a client: `awsClients.ts`, and nowhere else
 
-A client is created only by `createDynamoDbClient(target)`, or by the matching factory a later slice adds to this same
-file. The test `awsClients.test.ts` scans `server/src` (ES imports, `require` and dynamic `import`) and enforces:
+A client is created only by `createDynamoDbClient(target)` or (L5-5) `createKmsClient(target)`, or by the matching factory
+a later slice adds to this same file. The test `awsClients.test.ts` scans `server/src` (ES imports, `require` and dynamic
+`import`) and enforces:
 
-- no other source file constructs a DynamoDB client (`DynamoDBClient` or the aggregated `DynamoDB`);
+- no other source file constructs a DynamoDB client (`DynamoDBClient` or the aggregated `DynamoDB`) or a KMS client
+  (`KMSClient` or the aggregated `KMS`);
 - nothing uses the document client: it marshals values, and stored bytes must be exact;
-- no other `@aws-sdk/*` package is imported until a slice needs it, and nothing reaches into `@smithy/*`;
+- only `@aws-sdk/client-dynamodb` and `@aws-sdk/client-kms` (both pinned exactly at 3.1142.0) are imported until a slice
+  needs another, and nothing reaches into `@smithy/*`;
 - no file outside `persistence/conformance/` imports the conformance harness or its proof adapter.
 
 | Concern | Rule |
@@ -23,7 +26,25 @@ file. The test `awsClients.test.ts` scans `server/src` (ES imports, `require` an
 | **Retries** | Off in the SDK (`maxAttempts: 1`). An authoritative write is resent only by its adapter, with the **same** `ClientRequestToken`. A conditional failure on a resend is settled by a strong read (preflight D-3, §4). A generic SDK retry would sign a new request and could turn one write into two. |
 | **Timeouts** | Connect 2 s. Request 5 s, the actor's E-11 store deadline. `throwOnRequestTimeout: true` is required: without it the SDK only logs a timeout. An adapter treats a timeout as an **unknown** outcome, never as a failure. |
 | **Abort** | Every call passes `{ abortSignal: deadline() }`, which bounds the whole call (default 8 s). |
-| **Services** | DynamoDB only, for now. The KMS, SSM and Secrets Manager clients are added here by the slice that first calls them, with the same rules. |
+| **Services** | DynamoDB and (L5-5) KMS. SSM and Secrets Manager are added here by L5-7, with the same rules. |
+
+**KMS (L5-5).** `createKmsClient({ kind: "aws", region })` for AWS, `{ kind: "kms-local", endpoint }` only for the tests'
+KMS stand-in (loopback http, the fake region, the dummy keys, exactly as DynamoDB Local). Same pinned settings, SDK retries
+off; tighter bounds: connect 2 s, request **3 s** (preflight §11.2), a 4 s call deadline. The client is used only through
+`kms/kmsDigestClient.ts`, the signer seam's `KmsClient`:
+
+- a key is named by its **key ARN** in the client's own region -- never an alias (it can be repointed), a bare key id or
+  another region; anything else is refused before a request is sent;
+- `Sign` is sent exactly the caller's 32 bytes with `MessageType=DIGEST` and `SigningAlgorithm=ECDSA_SHA_256`, nothing
+  else; every answer must name the requested key and algorithm (`GetPublicKey`: `ECC_SECG_P256K1`, `SIGN_VERIFY`);
+- every failure is one explicit class (`transient` / `refused` / `invalid-answer`, plus whether a signature may exist
+  in a lost answer), which `signer.ts` maps to `unavailable` / `refused` / `verify-failed`; the signature is then
+  verified against the key's public key before use. No failure tries another key, region or signer.
+
+**The signing ledger (L5-5)** is `ledger/dynamoSigningLedger.ts`: the `SigningJournal` port over one table (the preflight's
+ledger account). It is a `dynamodb` subject of `JOURNAL_CASES` (`persistence/conformance/dynamoLedger.conformance.test.ts`,
+run by `npm run test:dynamodb-local`). Its model -- the slot, the two fences, the item shapes, how an unknown outcome is
+settled -- is written at the top of that file.
 
 ## 2. DynamoDB Local for the suites
 
@@ -73,14 +94,21 @@ Add the adapter as a **subject** (`backend: "dynamodb"`) of its port's existing 
 - Put any intentional difference in `differences`, with a reason, where review can see it.
 
 Every port has a "fence inside the write" case: a takeover landing between the writer's own checks and the write must
-still refuse the write. The cases are LOG-20, REC-18, HOLD-12, FIN-11, INT-12, TKT-11, ID-14 and JNL-12, and L5-4's
-ID-20-takeover-during-step. The file stores fail them, because they check their fence before writing (F-L5-4).
+still refuse the write. The cases are LOG-20, REC-18, HOLD-12, FIN-11, INT-12, TKT-11, ID-14 and JNL-12 (and, from L5-5,
+JNL-16 for the journal's attempts), and L5-4's ID-20-takeover-during-step. The file stores fail them, because they
+check their fence before writing (F-L5-4).
 `fenceGap.test.ts` pins that per port, which also proves each case detects a check-then-write store. L5-4's two new ports
 have theirs too (GRANT-08, SEC-06); they have no file store, so only their DynamoDB subjects run them and nothing is
 pinned.
 
 The one DynamoDB adapter in L5-1, `dynamoProofFinancialStore.ts`, is a **proof only**, for the harness. It is not
 production code and not the L5-2 design.
+The production adapters are L5-2's game table (§4), L5-4's identity (§5) and L5-5's signing ledger
+(`ledger/dynamoSigningLedger.ts`, §1).
+
+**Tokens are global.** A `ClientRequestToken` is remembered by DynamoDB (and by a DynamoDB Local process) for ten minutes
+across every table of the account: a test that fixes a token must make it unique per run, or a second run meets the
+first run's request (`IdempotentParameterMismatch`). Adapters draw a random UUID per logical write.
 
 L5-2 added two capabilities every `dynamodb` subject must also declare: **`cas-in-write`** (a write's own condition --
 create-if-absent, the version CAS, the log's next index -- is evaluated inside the write; race cases LOG-28, REC-21,

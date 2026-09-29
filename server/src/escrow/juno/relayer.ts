@@ -96,7 +96,7 @@ export interface RelayerDeps {
   readonly store: ChainIntentStore;
   /** Every attempt is journalled BEFORE it is written to the store (and so before any broadcast). `allAttempts`: the
    *  startup guard against attempts a restored store forgot. */
-  readonly journal: SigningJournal & { allAttempts?(): ReadonlyArray<{ readonly intent_id: string; readonly tx_id: string; readonly account: string; readonly sequence: string; readonly expires_after_height?: string }> };
+  readonly journal: SigningJournal & { allAttempts?(account?: string): Promise<ReadonlyArray<{ readonly intent_id: string; readonly tx_id: string; readonly account: string; readonly sequence: string; readonly expires_after_height?: string }>> };
   readonly account: RelayerAccount;
   readonly chainId: string;
   readonly contract: string;
@@ -886,7 +886,10 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
           open.set(record.intent_id, gameId);
         }
       }
-      const lost = (deps.journal.allAttempts?.() ?? []).filter((entry) => entry.account === deps.account.address && !known.has(entry.tx_id));
+      /* LIVE-5 L5-5: an async read of this account's journalled attempts (the ledger is never loaded whole); a read that
+         fails, or finds a damaged or newer record, fails the load -- the backend retries it, and nothing is signed meanwhile. */
+      const journalled = deps.journal.allAttempts === undefined ? [] : await deps.journal.allAttempts(deps.account.address);
+      const lost = journalled.filter((entry) => entry.account === deps.account.address && !known.has(entry.tx_id));
       if (lost.length > 0) {
         const max = lost.reduce((best, entry) => (BigInt(entry.sequence) > best ? BigInt(entry.sequence) : best), BigInt(0));
         const expiries = lost.map((entry) => entry.expires_after_height);

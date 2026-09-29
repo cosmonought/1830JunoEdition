@@ -536,14 +536,14 @@ describe("§24 settlement: exactly the persisted intent, or the game is held", (
     assert.equal(record.phase, "intent-prepared");
     const intent = { ...record.intent!, appraisal_state_hash: "00".repeat(32) };
     assert.equal((await world.financial.put({ ...record, intent, record_version: record.record_version + 1 }, record.record_version)).kind, "committed");
-    const reservedBefore = world.journal.reservations().length;
+    const reservedBefore = (await world.journal.reservations()).length;
     world.service.onIntentPrepared(GAME_A);
     await world.service.idle();
     const held = await fin(world);
     assert.equal(held.phase, "held");
     assert.equal(held.hold?.code, "evidence-mismatch");
     assert.equal((await intentsOf(world, GAME_A)).some((i) => i.op.kind === "settle"), false);
-    assert.equal(world.journal.reservations().length, reservedBefore, "nothing was signed");
+    assert.equal((await world.journal.reservations()).length, reservedBefore, "nothing was signed");
   });
 
   test("the chain already settled it another way: the Settle is superseded, never signed; the record closes", async () => {

@@ -113,6 +113,9 @@ export interface WorldOptions {
   readonly pin?: FinancialDeploymentPin;
   /** LIVE-4 (L4-4): an injected creation identity and deployment (ESCROW-3A's seam; an uncertified or unserved bump). */
   readonly continuation?: Parameters<typeof createEscrowService>[0]["continuation"];
+  /** LIVE-5 L5-5: wrap the settlement / relayer key (tests make a KMS answer go missing after the signature was made). */
+  readonly wrapSettlementKey?: (signer: DigestSigner) => DigestSigner;
+  readonly wrapRelayerKey?: (signer: DigestSigner) => DigestSigner;
 }
 
 export const proofKey = (gameId: string, playerId: string, principalId: string) => `${gameId}|${playerId}|${principalId}`;
@@ -175,8 +178,8 @@ export function makeWorld(options: WorldOptions = {}): World {
   } as unknown as World;
 
   function build(): void {
-    const settlementSigner: DigestSigner = developmentDigestSigner(SETTLEMENT_SECRET, "settlement", GUARD);
-    const relayerSigner: DigestSigner = developmentDigestSigner(RELAYER_SECRET, "relayer", GUARD);
+    const settlementSigner: DigestSigner = (options.wrapSettlementKey ?? ((signer) => signer))(developmentDigestSigner(SETTLEMENT_SECRET, "settlement", GUARD));
+    const relayerSigner: DigestSigner = (options.wrapRelayerKey ?? ((signer) => signer))(developmentDigestSigner(RELAYER_SECRET, "relayer", GUARD));
     const pin = world.pin;
     const backend: JunoBackendRuntime = {
       pin,

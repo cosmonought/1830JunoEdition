@@ -592,7 +592,7 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     const gameId = bound.record.game_id;
     if (historyVerified.has(gameId)) return true;
     const instance = escrowInstanceKey(bound.binding);
-    const reservations = deps.journal.reservations(instance);
+    const reservations = await deps.journal.reservations(instance);
     const checkpoints = reservations.filter((entry) => BigInt(entry.seq) % BigInt(2) === BigInt(0)).sort((a, b) => (BigInt(b.seq) > BigInt(a.seq) ? 1 : BigInt(b.seq) < BigInt(a.seq) ? -1 : 0));
     const highest = reservations.reduce((best, entry) => (BigInt(entry.seq) > best ? BigInt(entry.seq) : best), BigInt(0));
     const entries = await deps.readLog(gameId);
@@ -940,7 +940,7 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   async function recordBehind(gameId: string, binding: EscrowBindingV2, epoch: number): Promise<{ readonly code: FinancialHoldCode; readonly detail: string } | null> {
     const next = startIntentOf(gameId, binding, "00".repeat(32), epoch + 1);
     const later = await deps.intents.load(gameId, next.intent_id);
-    if (later !== null || deps.journal.attemptsOf(next.intent_id).length > 0) {
+    if (later !== null || (await deps.journal.attemptsOf(next.intent_id)).length > 0) {
       return { code: "journal-ahead", detail: `a Start of roster epoch ${epoch + 1} exists, but the financial record has no frozen roster (a restored record is never re-frozen over it)` };
     }
     const g = (await readGame(binding.chain_game_id)).game;
@@ -1040,7 +1040,7 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
           if (BigInt(attempt.resolved_height) > needed) needed = BigInt(attempt.resolved_height);
         } else unproven.push({ account: attempt.account, sequence: attempt.sequence, expires: attempt.timeout_height, what: `attempt ${attempt.n} (resolved without a height)` });
       }
-      for (const entry of deps.journal.attemptsOf(existing.intent_id)) {
+      for (const entry of await deps.journal.attemptsOf(existing.intent_id)) {
         if (!known.has(entry.tx_id)) unproven.push({ account: entry.account, sequence: entry.sequence, expires: entry.expires_after_height ?? null, what: `a journalled attempt the intent does not hold (sequence ${entry.sequence})` });
       }
       for (const item of unproven) {

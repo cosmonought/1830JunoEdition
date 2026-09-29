@@ -217,7 +217,8 @@ describe("ESCROW-3B review findings", () => {
     await world.relayer.pass();
     await world.drive(async () => (await fin(world)).chain.started !== null);
     for (const intent of await intentsOf(world)) {
-      for (const attempt of intent.attempts) assert.ok(world.journal.attemptsOf(intent.intent_id).some((entry) => entry.tx_id === attempt.tx_hash), "journalled");
+      const journalled = await world.journal.attemptsOf(intent.intent_id);
+      for (const attempt of intent.attempts) assert.ok(journalled.some((entry) => entry.tx_id === attempt.tx_hash), "journalled");
     }
   });
 

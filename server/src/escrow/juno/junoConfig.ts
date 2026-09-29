@@ -18,11 +18,14 @@
 //       (escrow 2.0.0, ESCROW-JOIN; the 1.0.0 artifact `b263277a…9296` admitted any payer to Join and is refused by
 //       name) -- configuration can narrow the accepted set, never widen it;
 //     - the endpoints (https; http only for a loopback development node), the gas policy (integers, bounded);
-//     - the journal directory: absolute, and OUTSIDE the data directory in production (GNOLAND-1 F1);
+//     - the signing journal: v2 names a directory (absolute, and OUTSIDE the data directory in production, GNOLAND-1
+//       F1); v3 (LIVE-5 L5-5) names its KIND -- that file directory, or the DynamoDB ledger by its full table ARN --
+//       and nothing defaults: a v3 file without it, or with an unknown kind, is refused, never read as a file journal;
 //     - the signers: KMS in production; a development signer only in GS_MODE=development on testnet/local with the
-//       explicit switch; the relayer address IS the address the relayer key controls; the settlement key IS the
-//       configured public key; the JOIN-ADMISSION key (ESCROW-JOIN) IS its configured public key, and all three keys
-//       are different keys;
+//       explicit switch; a KMS key is named by its KEY ARN (never an alias, which can be repointed; L5-5), and every
+//       KMS key of one configuration is in ONE region, taken from the ARNs (never from the environment); the relayer
+//       address IS the address the relayer key controls; the settlement key IS the configured public key; the
+//       JOIN-ADMISSION key (ESCROW-JOIN) IS its configured public key, and all three keys are different keys;
 //     - the build's settlement codec, certified rules versions and financial protocol are the ones pinned here.
 //   online (`verifyJunoDeployment`, before any signature or broadcast; retried while the chain is unreachable)
 //     - every node answers the configured chain id (a node for another network is refused, never used);
@@ -38,6 +41,7 @@
 import * as path from "path";
 import { realpathSync } from "fs";
 
+import { isAwsRegion, parseDynamoTableArn, parseKmsKeyArn } from "../../aws/arns";
 import { DEPLOYMENT_SETTLEMENT_CODECS, FINANCIAL_PROTOCOL_VERSION } from "../moneyContinuation";
 import { SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS } from "../../../../frontend/src/gameEngine/settlementAppraisal";
 import { JUNO_CAPABILITIES_V1 } from "../../../../frontend/src/gameEngine/escrow/escrowModel";
@@ -52,6 +56,10 @@ import { MAINNET_CHAIN_IDS } from "./signer";
 
 /** v2 (ESCROW-JOIN): adds the required `admission_key`. A v1 file names no admission key and is refused. */
 export const JUNO_BACKEND_CONFIG_FORMAT = "18COSMOS/JUNO-BACKEND/v2";
+/** v3 (LIVE-5 L5-5): v2 with `journal_dir` replaced by `journal: {kind: "file", dir} | {kind: "dynamodb", table_arn}`. v2
+ *  stays accepted, exactly as it was (a file journal at `journal_dir`). */
+export const JUNO_BACKEND_CONFIG_FORMAT_V3 = "18COSMOS/JUNO-BACKEND/v3";
+export const JUNO_BACKEND_CONFIG_FORMATS: readonly string[] = Object.freeze([JUNO_BACKEND_CONFIG_FORMAT, JUNO_BACKEND_CONFIG_FORMAT_V3]);
 
 /** The canonical optimized escrow wasm this build is certified against: escrow 2.0.0 with the join admission
  *  (ESCROW-JOIN, built by the ESCROW-B2 procedure; PROJECT_CANONICAL_CONTEXT §D.3). */
@@ -68,6 +76,13 @@ export const ADMISSION_TTL_BOUNDS_SECS = Object.freeze([120, 1800] as const);
 export const DEV_SIGNER_SWITCH = "allow-unprotected-testnet-key";
 
 export type SignerRef = { readonly kind: "kms"; readonly key_ref: string } | { readonly kind: "development"; readonly key_file: string };
+
+/** LIVE-5 L5-5: where the signing journal lives. `file`: the local adapter's directory (v2's `journal_dir`, or v3's
+ *  `journal.dir`). `dynamodb`: the ledger (`aws/ledger/dynamoSigningLedger.ts`), by its full table ARN -- its region is
+ *  the ARN's. Opening the ledger is LIVE-5 L5-7's wiring; until then `start.ts` refuses it (`fileJournalDirOf`). */
+export type JournalConfig =
+  | { readonly kind: "file"; readonly dir: string }
+  | { readonly kind: "dynamodb"; readonly tableArn: string; readonly region: string; readonly account: string; readonly table: string };
 
 export interface JunoBackendConfig {
   readonly chainId: string;
@@ -86,7 +101,11 @@ export interface JunoBackendConfig {
   readonly trust: EscrowTrustPolicy;
   readonly gas: GasPolicy;
   readonly timeoutBlocks: number;
-  readonly journalDir: string;
+  /** The configuration's format (v2 or v3). */
+  readonly format: string;
+  readonly journal: JournalConfig;
+  /** The one region every KMS key of this configuration is in (from their ARNs); `null` when no key is a KMS key. */
+  readonly kmsRegion: string | null;
   readonly devSignerAcknowledged: boolean;
   readonly timeoutMs: number;
 }
@@ -110,9 +129,10 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
     if (!ok) problems.push(problem);
   };
   if (!isObject(raw)) throw new JunoConfigError(["the file is not a JSON object"]);
-  need(raw.format === JUNO_BACKEND_CONFIG_FORMAT, `format must be ${JUNO_BACKEND_CONFIG_FORMAT}`);
-  const allowed = ["format", "chain_id", "network_class", "rest_endpoints", "allow_insecure_local_http", "contract_address", "code_checksum", "wasm_admin", "denom", "asset_symbol", "relayer", "settlement_key", "admission_key", "trust", "gas", "timeout_blocks", "journal_dir", "dev_signer", "request_timeout_ms"];
-  for (const key of Object.keys(raw)) need(allowed.includes(key), `unknown field ${key} (a misspelt setting is never ignored)`);
+  need(JUNO_BACKEND_CONFIG_FORMATS.includes(raw.format as string), `format must be ${JUNO_BACKEND_CONFIG_FORMAT} or ${JUNO_BACKEND_CONFIG_FORMAT_V3}`);
+  const v3 = raw.format === JUNO_BACKEND_CONFIG_FORMAT_V3;
+  const allowed = ["format", "chain_id", "network_class", "rest_endpoints", "allow_insecure_local_http", "contract_address", "code_checksum", "wasm_admin", "denom", "asset_symbol", "relayer", "settlement_key", "admission_key", "trust", "gas", "timeout_blocks", v3 ? "journal" : "journal_dir", "dev_signer", "request_timeout_ms"];
+  for (const key of Object.keys(raw)) need(allowed.includes(key), `unknown field ${key} (a misspelt setting is never ignored${key === "journal_dir" || key === "journal" ? `; ${JUNO_BACKEND_CONFIG_FORMAT} names journal_dir, ${JUNO_BACKEND_CONFIG_FORMAT_V3} names journal` : ""})`);
 
   const chainId = typeof raw.chain_id === "string" && /^[a-z0-9][a-z0-9-]{1,48}$/.test(raw.chain_id) ? raw.chain_id : "";
   need(chainId !== "", "chain_id");
@@ -158,8 +178,16 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
   const symbol = typeof raw.asset_symbol === "string" && /^[A-Z]{2,12}$/.test(raw.asset_symbol) ? raw.asset_symbol : "";
   need(symbol !== "", "asset_symbol");
 
+  /* L5-5: every KMS key by its KEY ARN, all in one region -- the region the KMS client is made for (`createKmsClient`). */
+  const kmsRegions = new Set<string>();
   const signerRef = (value: unknown, where: string): SignerRef => {
-    if (isObject(value) && value.kind === "kms" && typeof value.key_ref === "string" && value.key_ref.length > 0) return { kind: "kms", key_ref: value.key_ref };
+    if (isObject(value) && value.kind === "kms" && typeof value.key_ref === "string" && value.key_ref.length > 0) {
+      const arn = parseKmsKeyArn(value.key_ref);
+      if ("problem" in arn) problems.push(`${where}.signer.key_ref: ${arn.problem}`);
+      else if (!isAwsRegion(arn.region)) problems.push(`${where}.signer.key_ref: ${arn.region} is not an AWS region`);
+      else kmsRegions.add(arn.region);
+      return { kind: "kms", key_ref: value.key_ref };
+    }
     if (isObject(value) && value.kind === "development" && typeof value.key_file === "string" && path.isAbsolute(value.key_file)) {
       need(context.serverMode === "development", `${where}: a development signer is refused in production (use KMS)`);
       need(networkClass !== "mainnet", `${where}: a development signer never signs for mainnet`);
@@ -242,20 +270,36 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
   const timeoutBlocks = raw.timeout_blocks === undefined ? 60 : typeof raw.timeout_blocks === "number" && Number.isInteger(raw.timeout_blocks) && raw.timeout_blocks >= 10 && raw.timeout_blocks <= 1000 ? raw.timeout_blocks : (problems.push("timeout_blocks must be 10..1000"), 60);
   const timeoutMs = raw.request_timeout_ms === undefined ? DEFAULT_ENDPOINT_LIMITS.timeoutMs : typeof raw.request_timeout_ms === "number" && Number.isInteger(raw.request_timeout_ms) && raw.request_timeout_ms >= 1000 && raw.request_timeout_ms <= 60_000 ? raw.request_timeout_ms : (problems.push("request_timeout_ms must be 1000..60000"), DEFAULT_ENDPOINT_LIMITS.timeoutMs);
 
-  const journalDir = typeof raw.journal_dir === "string" && path.isAbsolute(raw.journal_dir) ? path.resolve(raw.journal_dir) : "";
-  need(journalDir !== "", "journal_dir must be an absolute path");
-  /* Review #15: compared through symlinks where the paths exist (a link into the data directory is inside it). */
-  const real = (target: string): string => {
-    try {
-      return realpathSync(target);
-    } catch {
-      return path.resolve(target);
-    }
-  };
-  const dataReal = real(context.dataDir);
-  const journalReal = journalDir === "" ? "" : real(journalDir);
-  const insideData = journalDir !== "" && [path.resolve(context.dataDir), dataReal].some((data) => [journalDir, journalReal].some((journal) => journal === data || journal.startsWith(data + path.sep)));
-  need(!(insideData && context.serverMode === "production"), "journal_dir must be OUTSIDE the data directory in production (a store restore must not roll it back)");
+  /* The signing journal. v2: `journal_dir`, a file journal, exactly as before. v3 (L5-5): `journal`, its kind named --
+     nothing defaults, and a kind this build does not know is refused (never read as a file journal). */
+  const journalRaw: unknown = v3 ? raw.journal : { kind: "file", dir: raw.journal_dir };
+  const dirWhere = v3 ? "journal.dir" : "journal_dir";
+  let journal: JournalConfig = { kind: "file", dir: "" };
+  if (!isObject(journalRaw)) problems.push(`journal must be {"kind":"file","dir":<absolute path>} or {"kind":"dynamodb","table_arn":<the ledger table's ARN>}`);
+  else if (journalRaw.kind === "file") {
+    if (v3) for (const key of Object.keys(journalRaw)) need(["kind", "dir"].includes(key), `unknown field journal.${key}`);
+    const journalDir = typeof journalRaw.dir === "string" && path.isAbsolute(journalRaw.dir) ? path.resolve(journalRaw.dir) : "";
+    need(journalDir !== "", `${dirWhere} must be an absolute path`);
+    /* Review #15: compared through symlinks where the paths exist (a link into the data directory is inside it). */
+    const real = (target: string): string => {
+      try {
+        return realpathSync(target);
+      } catch {
+        return path.resolve(target);
+      }
+    };
+    const dataReal = real(context.dataDir);
+    const journalReal = journalDir === "" ? "" : real(journalDir);
+    const insideData = journalDir !== "" && [path.resolve(context.dataDir), dataReal].some((data) => [journalDir, journalReal].some((dir) => dir === data || dir.startsWith(data + path.sep)));
+    need(!(insideData && context.serverMode === "production"), `${dirWhere} must be OUTSIDE the data directory in production (a store restore must not roll it back)`);
+    journal = { kind: "file", dir: journalDir };
+  } else if (journalRaw.kind === "dynamodb") {
+    for (const key of Object.keys(journalRaw)) need(["kind", "table_arn"].includes(key), `unknown field journal.${key}`);
+    const arn = parseDynamoTableArn(journalRaw.table_arn);
+    if ("problem" in arn) problems.push(`journal.table_arn: ${arn.problem}`);
+    else journal = { kind: "dynamodb", tableArn: arn.arn, region: arn.region, account: arn.account, table: arn.table };
+  } else problems.push(`journal.kind must be "file" or "dynamodb" (got ${JSON.stringify(journalRaw.kind ?? null)}); nothing defaults to a file journal`);
+  need(kmsRegions.size <= 1, `every KMS key of one configuration must be in one region (these name ${[...kmsRegions].sort().join(", ")})`);
 
   /* The build's own pins: the codec, the certified rules and the financial protocol this backend speaks. */
   need(DEPLOYMENT_SETTLEMENT_CODECS.includes("18JUNO/v1"), "this build does not carry the certified 18JUNO/v1 codec");
@@ -279,10 +323,24 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
     trust,
     gas,
     timeoutBlocks,
-    journalDir,
+    format: raw.format as string,
+    journal,
+    kmsRegion: kmsRegions.size === 1 ? [...kmsRegions][0] : null,
     devSignerAcknowledged: raw.dev_signer === DEV_SIGNER_SWITCH,
     timeoutMs,
   };
+}
+
+/**
+ * LIVE-5 L5-5: the directory of a FILE signing journal -- the only journal this build's `start.ts` opens. A configuration
+ * naming the DynamoDB ledger is refused here, loudly, until LIVE-5 L5-7 wires the ledger (its generation, its relayer
+ * role, the AWS clients): a server never falls back to a local file journal for a configuration that names the ledger.
+ */
+export function fileJournalDirOf(config: JunoBackendConfig): string {
+  if (config.journal.kind === "file") return config.journal.dir;
+  throw new JunoConfigError([
+    `the configuration names the DynamoDB signing ledger (${config.journal.tableArn}); this build does not open it from start.ts yet (LIVE-5 L5-7 wires it) and never falls back to a file journal`,
+  ]);
 }
 
 /** The deployment pin every money game created here carries. */

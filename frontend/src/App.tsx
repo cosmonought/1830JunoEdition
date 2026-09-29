@@ -13637,8 +13637,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         viewerAddress={viewerAddress}
         totalAnte={PLACEHOLDER_TOTAL_ANTE}
         bankruptLabel={bankruptLabel}
-        /* ESCROW-4: a real-money table's financial band, under the (final) result. */
-        money={sandboxRoom?.money != null ? <SettlementBand room={sandboxRoom} log={sandboxLogRef.current} board={gameState} /> : null}
+        /* ESCROW-4: a real-money table's financial band, under the (final) result. It is handed the LIVE board, never
+           the one the round scrubber draws (#1425): a Dispute sends this board's hash to Juno as its evidence. */
+        money={sandboxRoom?.money != null ? <SettlementBand room={sandboxRoom} log={sandboxLogRef.current} board={liveState} /> : null}
         onDismiss={() => {
           setGameOverDismissed(true);
           // #1418: leaving for the board takes the held frame down with the modal.
@@ -13727,8 +13728,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             )}
             {/* LIVE-2E: the host hands the role on mid-game -- the same `transfer-host` op as the waiting room's. */}
             <InGameHostControl room={sandboxRoom} busy={sandboxRoomBusy} onTransferHost={handleTransferHost} />
-            {/* ESCROW-4: a real-money table's stake and, only when something is needed, its one action. */}
-            {sandboxRoom?.money != null && <SettlementBand room={sandboxRoom} compact log={sandboxLogRef.current} board={gameState} />}
+            {/* ESCROW-4: a real-money table's stake and, only when something is needed, its one action -- handed the
+                LIVE board too, so a Dispute pressed while the epilogue is scrubbed sends the live board's hash. */}
+            {sandboxRoom?.money != null && <SettlementBand room={sandboxRoom} compact log={sandboxLogRef.current} board={liveState} />}
             {/* ==================================================================
                 DESIGN NOTE 1119: A LABEL THAT OUTLIVED BOTH THINGS IT NAMED
                ==================================================================

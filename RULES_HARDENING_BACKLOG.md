@@ -382,6 +382,19 @@ Status `DEFERRED` (cleanup, no rule change). `utils/runTrainsRules.ts`, `routeWa
 `evaluateRouteSet` on the single route) and delete the halves it makes redundant; keep only what a
 half-drawn route needs (rule 2–6 of `editRouteDraft`). Replay: none.
 
+**S6-15. Hosted ingress route legality can judge a table's routes against the STANDARD board.**
+Status `OPEN` — **pre-registered BLOCKER: must be fixed before any substantive G5 / Level Playing Field route playtest**
+(a route-search / authority certification blocker). Reproduced by the route-certification preflight (2026-09-28, still
+running): that ingress path is not scoped through the table's rules, so on an 18XX+ / LPF table it can evaluate route
+legality against STANDARD rather than the table's board. **Not fixed here; pending the preflight's final report,** which
+owns the detail, the reproduction and the fix.
+
+**S6-16. Route search can demonstrate an H12 fork reversal that authoritative route legality rejects.**
+Status `OPEN` — **pre-registered BLOCKER**, in the same terms as S6-15 (must be fixed before any substantive G5 / LPF
+route playtest; a route-search / authority certification blocker). Reproduced by the same preflight: the route search
+(the machine's "demonstrated" set, S6-3) can produce a route that reverses at the H12 fork (the herald home, S6-4), and
+the route authority refuses it. **Not fixed here; pending the preflight's final report.**
+
 ### Stage 7 — Transaction + cash authority / auction
 
 **Closure (Batch 7.5, 2026-09-16).** Every Stage-7 transaction-authority item below is `RESOLVED` except **S7-17**
@@ -4223,7 +4236,15 @@ frontend has no initiation, prompt, price entry, answer, rescind or pending line
 read `privateTradeRefusal` and the `standingOrdinaryOffer` hold, and the counterparty's prompt must go to
 `tradeCounterparty(offer)` (the party who did not propose). Rules Reference: §3.1's sentence and D-26/D-27 (what
 travels with the card; the trade counts as the seat's Stock Round activity without consuming the stock purchase).
-`OPEN` (UI only).
+**Phase 6.5-B outcome (K-01; `ddf4bc8`, integrated at `467498e` and broad-gated GREEN; closed 2026-09-28):** the Stock
+Round's **Private Companies** section (`components/PrivateCompaniesSection.tsx`, below the listing in `StockRoundPanel`;
+the pure view `utils/stockRoundPrivateTrade.ts`) gives the seat holder a sell offer (seller = the viewer) and a buy offer
+(seller = the displayed owner), shows the standing offer on its card to every seat, gives the proposer Rescind and the
+counterparty (`tradeCounterparty`) Accept / Reject, points to the card from the consent-prompt slot
+(`PlayerPrivateTradePrompt`), greys Pass, the share controls and the M&H chip with the hold's sentence, and narrates the
+five events. Every control reads the authority's predicates; the three messages are sent unchanged. The Rules Reference
+sentence already existed (D-24). Evidence: `phase65bPrivateTradeRoom` (18), `phase65bPrivateCompaniesSection` (14).
+`RESOLVED` — Phase 6.5-B (K-01).
 
 **U-20.** (S7-6 / S7-7 / S7-12 / D-18) **Ordinary player → corporation private purchase — LEGALITY SYNC + NEW ACTION +
 STATE VISIBILITY.** Verified: the `ProposePrivatePurchase` panel opens for the acting president in phases 3–4 at any
@@ -4243,6 +4264,9 @@ not operating, phase, band, consent) is refused with a sentence rather than sile
 own availability. `RescindPrivatePurchase` exists with no control (NEW ACTION). The offer now records the board's
 owner, so the prompt can keep reading `private_purchase_offer.owner` — but the answer control should be shown to the
 private's CURRENT owner (`currentPrivateOwner`), because that is who the engine lets answer. The hold (U-22) applies.
+**Phase 6.5-B outcome (K-09; `ddf4bc8`):** the owner's prompt (`PrivateTradePrompt`) now offers Reject only to the
+answering seat (`viewerIsOwner`, as Accept already was), with the disabled look and "Only X can answer this offer."
+(`phase65bConsentPrompts`). The rest of this item stands (K-05: no proposer Rescind).
 `OPEN` (UI only).
 
 **U-21.** (S7-5 / S7-8 / S7-12 / D-18 / D-20 / D-23) **Intercorporate train sale — LEGALITY SYNC + NEW ACTION +
@@ -4259,7 +4283,10 @@ should read it for price (≥ $1), treasury-only affordability (D-20), the selle
 shortcut. `RescindTrainPurchase { seller_protocol_id }` exists (#1594) and the sandbox's withdraw must dispatch it;
 `RescindTrainOffer` / `AcceptTrainOffer` / `RejectTrainOffer` are now REFUSED on pinned boards (D-23), so the
 `TrainTradePanel` chain-era controls must be retired from room play. The answer prompt must go to the seller's
-CURRENT president (`sellerPresident`), not `train_purchase_offer.seller_president` (narration). `OPEN` (UI only).
+CURRENT president (`sellerPresident`), not `train_purchase_offer.seller_president` (narration).
+**Phase 6.5-B outcome (K-09; `ddf4bc8`):** `TrainTradePrompt` now offers Reject only to the answering seat
+(`viewerIsSeller`, as Accept already was), with the disabled look and "Only X can answer this offer."
+(`phase65bConsentPrompts`). The rest of this item stands (K-05: no proposer Rescind). `OPEN` (UI only).
 
 **U-22.** (S7-8 / S7-14 / D-19) **Pending-offer global hold — STATE VISIBILITY.** While an ordinary offer of any
 kind waits, End Turn / Pass / Skip / every purchase control must be disabled on every seat with the hold's sentence
@@ -4271,7 +4298,10 @@ waiting on X" surface. **Batch 7.4 outcome (STATE VISIBILITY, unchanged in scope
 awaiting settlement), and `standingOrdinaryOffer(state)` / `describeStandingOffer` give the surface its one sentence.
 Today every held control is refused at ingress with that sentence rather than disabled; the shell must disable
 progression controls on every seat from `standingOrdinaryOffer` and render the proposer's "awaiting" line, the
-accepted-awaiting-settlement state (momentary on the server path) and the rescind control. `OPEN` (UI only).
+accepted-awaiting-settlement state (momentary on the server path) and the rescind control.
+**Phase 6.5-B outcome (K-01's offer only; `ddf4bc8`):** while a player↔player private offer stands, Pass, every share
+control and the M&H chip are greyed with the hold's sentence, and the offer's own Rescind / Accept / Reject are not held.
+The Operating Round offers are still refused at ingress rather than disabled (K-13). `OPEN` (UI only).
 
 **U-23.** (S8-7) **First-Stock-Round sale ban — LEGALITY SYNC + RULES REFERENCE.** Sell is disabled in SR1 by the
 panel's own `macroRoundNumber === 1` (#356) — a local restatement that must become a read of `stockSaleRefusal`
@@ -4293,7 +4323,12 @@ granted share before the corporation is parred (no price to quote, the button st
 at ingress with "NYC has not been started yet — a share of it cannot be sold until its President's Certificate has
 been bought and its par set." A player who presses the live control now meets a refusal sentence in the room
 banner instead of a silent no-op, so the failure mode is legible; the control is still offered, which is the
-remaining work. `OPEN` (UI only).
+remaining work.
+**Phase 6.5-B outcome (K-08, row S-13; `ddf4bc8`, integrated at `467498e` and broad-gated GREEN):** for a corporation
+with no par, the shell's Sell verdict is the sale authority's own (`unstartedCorporationSaleRefusal` asks
+`stockSaleRefusal` with the viewer as seller), so the C&A's PRR share with PRR unparred is greyed with the server's
+sentence; the shared `shareSaleBlock` is unchanged. Evidence: `phase65bUnparredSale` (5).
+`RESOLVED` — Phase 6.5-B (K-08).
 
 **U-25.** (S8-9 / S7-1 / S7-13 / S7-16 / S7-18 / D-17 / D-22 / D-25) **Par ladder, president's cost, affordability,
 empty source, Brown-zone same-corporation continuation, bundle sizes — LEGALITY SYNC.** `PAR_BOX_PRICES`, the
@@ -4639,6 +4674,47 @@ browser's pending-transaction record, which exists only once Keplr has signed; t
 before either signs both open Keplr, and approving both makes a duplicate escrow (it is listed in "Your deposits" with Cancel;
 its fee is not refunded). A cross-tab lock (a `BroadcastChannel` or a storage lock taken before Keplr opens) would close it.
 `DEFERRED`.
+
+**Phase 6.5 register — the six fix-before items, the RR-2 copy and the integration findings (closed 2026-09-28).**
+The ids are the corrected register's (`claude/PHASE6_5A_CORRECTIONS_H01_2026-09-28.md` §6–7). Delivered by Phase 6.5-B
+(`claude/PHASE6_5B_FIX_BEFORE_2026-09-28.md`, `ddf4bc8`), integrated behind ESCROW-4 with APP-TEST-0A at `467498e`, whose
+owner broad gate was GREEN (`claude/INTEGRATED_GATE_ESCROW4_65B_APP0A_2026-09-28.md`), and closed by the integrated
+closure (`claude/INTEGRATED_CLOSURE_ESCROW4_65B_APP0A_2026-09-28.md`). All UI-only: no reducer, authority,
+`RULES_ENGINE_VERSION` (11) or settlement (`[10, 11]`) change.
+- **K-01** (the Stock Round player↔player private trade) → U-19. `RESOLVED`.
+- **K-08** (Sell on an unparred granted share) → U-24. `RESOLVED`.
+- **K-09** (Reject for the wrong seat) → the outcome is on U-20 / U-21, whose K-05 half (no proposer Rescind) stays open.
+  `RESOLVED`.
+- **K-10** (a funding offer also drew `PrivateTradePrompt`, with a live Accept): `privateProposal` is
+  `ordinaryPrivateProposalView(...)`, `null` for a funding offer, so only `FundingPrivateOfferPrompt` renders (its answer is
+  `AnswerFundingPrivateOffer`); `phase65bConsentPrompts`. `RESOLVED`.
+- **H-02** (the B&O par prompt was a `useState` latch): the prompt, its owner and the others' blocked Proceed read
+  `boParOwedTo(liveState)` — the live board, never a scrubbed one. A lost or refused `SetBoPar` leaves the prompt up;
+  reload, restore and `RevertTo` rebuild it; `phase65bBoParPrompt`, with the `parMarkArrival` / `shellNarration` pins.
+  `RESOLVED`.
+- **H-01a / SI-H01** (the hosted bar after a reload during a discard hold): on the server path the displayed OR step is
+  always the live `orSubPhase` (`displayedOperatingSubPhase`); the #1094 / #1145 freeze stays on the no-server path only;
+  `phase65bHostedStepDisplay`. `RESOLVED`. **SI-H01 is a standing shell invariant** ("on the server path the displayed OR
+  step is the live `operating_sub_phase`"), enforced by that suite through the App decomposition. It enters the SI ledger
+  (`SHELL_INVARIANTS.md`, App audit OD-A3) when the decomposition creates it.
+- **RR-2** (the Rules Reference terrain copy): the four "upgrades are free" statements now carry the owner's generalized
+  rule — a preprinted-yellow hex's unpaid printed terrain cost is paid once, by the laying corporation, on its first green
+  upgrade — naming G19, D10 and E5 ($80 water on each; OD-A-3 in the copy). The engine already did this (#723);
+  `phase65bTerrainCopy`. `RESOLVED` (copy). RR-2c (the `terrainFeeOnce` fixture's "yellow first" framing) stays for 6.5-E.
+- **6.5-B review R4** (a proposal dropped in the browser — the link reconnecting, or catch-up — loses the typed form; a
+  banner says why): pre-registered UX nit. `DEFERRED` (Phase 9).
+- **Integration review I-1** (the B&O par after the 4 s hard release): a par send that a reconnecting link had queued can
+  be followed by a second press, possibly at another rung; on reconnect the first lands and the reducer refuses the second
+  ("B&O already has a President…") with a room error banner. So a duplicate / resend may occur after the current retry /
+  reconnect path; no correctness or money impact has been demonstrated, nothing strands and nothing wrong is applied. A
+  real fix needs the link's queued-submission state in the modal. `DEFERRED` (minor; later cleanup).
+- **Integration review I-2 / I-3** (cosmetic): the "not reached the table yet" note can flash after a send that did land
+  when the drain is slower than the 1.5 s grace; the fixed 400 px pointer can overlap the right-hand Private Companies
+  card. `DEFERRED` (Phase 9/10).
+- **Integration review I-4** (ESCROW-4, a dispute's evidence during the epilogue's replay): both `SettlementBand` mounts
+  passed `board={gameState}`, so a Dispute pressed mid-scrub sent a past round's `terminalStateHashV1` as its evidence.
+  Both now pass `board={liveState}`; `components/money/settlementEvidenceBoard.test.tsx`. `RESOLVED` — the integrated
+  closure.
 
 ## Part D — Deliberate rules deviations and owner decisions (never to be "fixed" as bugs)
 

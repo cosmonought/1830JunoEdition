@@ -3,7 +3,7 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-09-28, by ESCROW-4 (the player-facing Juno escrow path: Keplr wallet proof, funding, Start, consent keys and the settlement UX; financial protocol 3; money GameRecords `record_schema 2`). It builds on ESCROW-JOIN (`6f05c80`), ESCROW-3B (`5298d95`, owner-certified), ESCROW-3A (`900aec3`), DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
+**Last updated:** 2026-09-28, by the integrated closure of ESCROW-4 (`031593e`), Phase 6.5-B (`ddf4bc8`) and APP-TEST-0A (`467498e`): the owner broad gate was GREEN at `467498e`, and one closure commit on top hands the settlement band the live board and closes the bookkeeping (§A). ESCROW-4 is the player-facing Juno escrow path (Keplr wallet proof, funding, Start, consent keys and the settlement UX; financial protocol 3; money GameRecords `record_schema 2`). It builds on ESCROW-JOIN (`6f05c80`), ESCROW-3B (`5298d95`, owner-certified), ESCROW-3A (`900aec3`), DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
 
 **Where the documents live.** They are in two places:
 
@@ -83,6 +83,12 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 - **Versions:** `FINANCIAL_PROTOCOL_VERSION` **3** (protocol-2 grant files are refused, never reinterpreted); money GameRecords are `record_schema: 2` (no-money records stay 1); the hosted protocol stays **1**; RoomView money fields are optional and additive; no rules bump.
 - Record: Project `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md` (§20 is the LIVE-4 compatibility handoff; §19 the LIVE-5/Junox handoff).
 
+**Integrated closure — ESCROW-4 + Phase 6.5-B + APP-TEST-0A: COMPLETE** (2026-09-28)
+- **The stack:** `031593e` (ESCROW-4) → `ddf4bc8` (Phase 6.5-B: the six fix-before UI items and the RR-2 copy) → `467498e` (APP-TEST-0A: the shell source-scan guards), then one closure commit. Not pushed.
+- **Owner broad gate at `467498e`: GREEN.** 534/534 frontend suites and 10,160/10,160 tests with the local corpus; typecheck; `sourceGuards` / `sourceScan` and the source sweep (0 MISSING/PRESENT); the ordinary production build with exactly the historical 49 ESLint warnings and the one webpack warning; server build, `npm test` (515: 514 pass plus the historical FI-22 skip) and smoke; `scan-v10` CLEAN. Record: Project `claude/INTEGRATED_GATE_ESCROW4_65B_APP0A_2026-09-28.md`.
+- **The closure:** both `SettlementBand` mounts are handed `liveState`, so a Dispute's evidence is the live board's hash, never a scrubbed round's (6.5-B review I-4; behavioural regression `components/money/settlementEvidenceBoard.test.tsx`). The 6.5-B items are closed in the backlog (Part C's Phase 6.5 register; U-19 and U-24 resolved). I-1 stays deferred (minor). Two route findings are pre-registered as blockers before any substantive G5 / LPF route playtest (Part B S6-15, S6-16). Record: Project `claude/INTEGRATED_CLOSURE_ESCROW4_65B_APP0A_2026-09-28.md`.
+- **Unchanged:** rules 11; settlement `[10, 11]`; hosted protocol 1; financial protocol 3. No server, contract or engine file changed.
+
 **GNOLAND-1 / 1.1: complete; further Gno work parked**
 - The chain-neutral escrow backend interface and the Juno regression oracle landed as `b804150`.
 - Juno is the only production backend. The Gno codec is a draft whose byte methods throw `NOT_IMPLEMENTED`.
@@ -121,6 +127,8 @@ compatibility preflight asked (financial protocol 3; money GameRecords schema 2;
 fields; creation refusing uncertified rules). Its inputs:
 - Project `claude/LIVE4_COMPATIBILITY_CONTINUATION_PREFLIGHT_2026-09-28.md` (the design);
 - Project `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md` §20 (the LIVE-4 compatibility handoff: what is durable financial v3, what is wire-only) and §19 (the LIVE-5 / Junox handoff: KMS clients for the relayer, settlement and admission keys; shared stores for the money layer's in-memory state).
+
+**Beside LIVE-4 (human evidence, Phase 6.5).** A **reduced S0** is the next lightweight human UI/evidence smoke, on the closed tree; the full **G1/G2** games stay later, as the substantive human certification. Backlog **S6-15 / S6-16** (two route findings, pre-registered) must be fixed before any substantive G5 / LPF route playtest. **v12** (6.5-E) and the **App decomposition** (Phase 7) remain later. Rules stay **11** and settlement **`[10, 11]`**.
 
 **ESCROW-4's owner ruling stands (OD-4-2):** relaying an already-valid CONSENT or ANNUL signature needs no `hasSensitiveAuth` (the consent-key signature is the authority); creating, replacing or moving the consent/signing key needs sensitive re-authentication plus the contract-required wallet authorization.
 
@@ -162,6 +170,9 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 | Topic | Document |
 |---|---|
 | ESCROW-4: the player-facing Juno escrow path (wallet proof, admission wiring, W-13, R-J1, funding, Start, consent keys, relays, settlement UX); §20 LIVE-4 compatibility handoff; §19 LIVE-5/Junox handoff | `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md` |
+| The integrated gate and closure: ESCROW-4 + 6.5-B + APP-TEST-0A (tested HEAD `467498e`, the totals, the dispute-evidence fix, the closed register) | `claude/INTEGRATED_GATE_ESCROW4_65B_APP0A_2026-09-28.md` + `claude/INTEGRATED_CLOSURE_ESCROW4_65B_APP0A_2026-09-28.md` |
+| Phase 6.5, the pre-refactor functional playtest: the preflight (S0 and G1–G5, the checklist), the corrected register, the fix-before pass | `claude/PHASE6_5_FUNCTIONAL_PLAYTEST_PREFLIGHT_2026-09-28.md`, `claude/PHASE6_5A_CORRECTIONS_H01_2026-09-28.md`, `claude/PHASE6_5B_FIX_BEFORE_2026-09-28.md` |
+| APP-TEST-0A (the shell source-scan guards) and the App.tsx decomposition audit (Phase 7's input) | `claude/APP_TEST_0A_SOURCE_GUARDS_2026-09-28.md`, `claude/APP_TSX_DECOMPOSITION_AUDIT_2026-09-28.md` |
 | LIVE-4 compatibility / continuation preflight (the next pass's design) | `claude/LIVE4_COMPATIBILITY_CONTINUATION_PREFLIGHT_2026-09-28.md` |
 | ESCROW-JOIN: the contract's Join admission, escrow 2.0.0, the canonical wasm `5ecc3022…`, `authorizeJoin` | `claude/ESCROW_JOIN_ADMISSION_SECURITY_REPAIR_2026-09-28.md` |
 | ESCROW-3B: Juno backend, durable intents, reversible freeze (§18 junk-Join: historical, closed by ESCROW-JOIN) | `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md` |

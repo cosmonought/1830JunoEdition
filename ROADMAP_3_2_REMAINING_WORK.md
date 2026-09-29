@@ -17,6 +17,7 @@ This is the canonical roadmap: the owner's ROADMAP 3.2, recorded in git on 2026-
 | 3B — ESCROW-3B: Juno financial backend, durable intents, signing/submission, checkpoints, reversible roster freeze | **COMPLETE** (owner-certified) | `claude/ESCROW3B_JUNO_BACKEND_2026-09-27.md` |
 | 3B+ — ESCROW-JOIN: `Join` cryptographically admission-gated by the contract (escrow 2.0.0, canonical wasm `5ecc3022…09e8`); the junk-Join production blocker closed | **COMPLETE** (the owner gate is pending) | `claude/ESCROW_JOIN_ADMISSION_SECURITY_REPAIR_2026-09-28.md` |
 | 3 (last pass) — ESCROW-4: Keplr ADR-036 wallet proof, the Join admission wired, W-13 CreateGame binding, R-J1, chain-only funding, Start, browser-held consent keys, the CONSENT/ANNUL relay, the settlement UX, "Your deposits"; financial protocol 3, money GameRecords `record_schema 2`; money tables behind the operator's non-mainnet switch (production fail-closed until LIVE-5's KMS) | **COMPLETE** (owner broad gate GREEN relative to the repository baseline) | `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md` |
+| Integrated closure — ESCROW-4 + Phase 6.5-B (the fix-before UI pass: K-01, K-08, K-09, K-10, H-02, SI-H01, the RR-2 copy) + APP-TEST-0A (the shell source-scan guards); a dispute's evidence now reads the live board | **COMPLETE** — the integrated broad gate was GREEN at `467498e` (534/534 frontend suites, 10,160 tests; server 515 = 514 + the historical FI-22 skip; the build at the 49-warning baseline); one closure commit on top. Rules 11; settlement `[10, 11]` | `claude/INTEGRATED_GATE_ESCROW4_65B_APP0A_2026-09-28.md`; `claude/INTEGRATED_CLOSURE_ESCROW4_65B_APP0A_2026-09-28.md` |
 
 ## Remaining, in dependency order
 
@@ -34,6 +35,15 @@ This is the canonical roadmap: the owner's ROADMAP 3.2, recorded in git on 2026-
 | **12 — Release hardening** | Scope set by the owner's brief | **~20–32 h** | e.g. backlog S10-12 (owner-authored release items) |
 
 **Remaining total, Phases 4–12: ~127–202 h** (Phase 3's share, ~22–34 h, is done). Phases 2 and 3 are complete and are not counted.
+
+**L5-1 prerequisite (recorded 2026-09-28).** Plain frontend `npm ci` fails today ("Missing: yaml@2.9.1 from lock file"; `yaml` is an optional peer of tailwind's nested `postcss-load-config`), while `npm ci --legacy-peer-deps` works. It predates the ESCROW-4 / 6.5-B / APP-TEST-0A stack. Normalize the dependency install deliberately in L5-1, beside its own dependency change; the lockfile is not touched before then.
+
+## Human evidence (Phase 6.5), beside the roadmap
+
+- **Next, after the integrated closure:** a **reduced S0**, the lightweight human UI/evidence smoke. **LIVE-4 stays the next infrastructure / compatibility program** (Phase 4).
+- **Later:** the full **G1/G2** games, the substantive human certification.
+- **Before any substantive G5 / LPF route playtest:** backlog **S6-15** and **S6-16** must be fixed (pre-registered route-search / authority certification blockers; pending the route-certification preflight's final report).
+- **Later, not now:** the v12 rules batch (6.5-E, only what the owner rules in; settlement stays `[10, 11]` until v12's own certification) and the App.tsx decomposition (Phase 7).
 
 ## Parked
 

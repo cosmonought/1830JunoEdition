@@ -1,10 +1,10 @@
 # LIVE-4 compatibility model — the canonical description
 
-**Status:** canonical for LIVE-4 — **certified and closed by L4-7** (the final independent certification, one commit on
-L4-6's `89a4b5b`, on the corpus-gate-certified integration `6da8a1f`); this description was written by L4-6 and
-amended by L4-7 (§2 A, §3, §5, §6). The code is the authority; this page says what it means and where it lives.
-Per-pass evidence is in the Project reports (`claude/LIVE4_*`), chiefly `claude/LIVE4_INTEGRATION_HARDENING_2026-09-28.md`
-and `claude/LIVE4_L4_7_FINAL_CERTIFICATION_2026-09-29.md`.
+**Status:** canonical for LIVE-4 — **certified and closed by L4-7** (the final independent certification: `f1736bf`
+plus a documentation-only evidence commit, on L4-6's `89a4b5b`, on the corpus-gate-certified integration `6da8a1f`);
+this description was written by L4-6 and amended by L4-7 (§2 A, §3, §5, §6). The code is the authority; this page
+says what it means and where it lives. Per-pass evidence is in the Project reports (`claude/LIVE4_*`), chiefly
+`claude/LIVE4_INTEGRATION_HARDENING_2026-09-28.md` and `claude/LIVE4_L4_7_FINAL_CERTIFICATION_2026-09-29.md`.
 
 > **The one rule this page exists to protect.** No compatibility question in LIVE-4 is answered by
 > `BUILD_ID == stored_build` or `client_build == server_build`. The build id is **diagnostic**. The only place a build

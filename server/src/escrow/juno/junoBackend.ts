@@ -28,6 +28,7 @@ import type { WalletControlProofs } from "../escrowPorts";
 import { junoJoinAdmissionSigner } from "./joinAdmission";
 import type { MoneyServing } from "../moneyServing";
 import type { GameIdentityFacts } from "../../../../frontend/src/gameEngine/compat/continuationIdentity";
+import type { FormatFact } from "../../../../frontend/src/gameEngine/compat/continuationVerdict";
 import { checkSignerIdentities, pinOf, settlementKeyConfigOf, verifyJunoDeployment, type DeploymentVerdict, type JunoBackendConfig, type SignerRef } from "./junoConfig";
 import { createJunoRest, type HttpTransport, type JunoRest } from "./junoRest";
 import { createJunoRelayer, type Relayer } from "./relayer";
@@ -56,6 +57,8 @@ export interface JunoBackendDeps {
   readonly readLog: (gameId: string) => Promise<readonly ServerLogEntry[]>;
   /** LIVE-4 (L4-4): the deal's identity, read-only (`dealIdentity.ts`); default: from `readLog`. */
   readonly readDeal?: (gameId: string) => Promise<GameIdentityFacts>;
+  /** LIVE-4 (integration): the log's format class, read-only (the escrow service's `readLogFormat`). */
+  readonly readLogFormat?: (gameId: string) => Promise<FormatFact>;
   readonly replay: PrefixReplay;
   readonly now: () => number;
   readonly warn: (line: string) => void;
@@ -113,6 +116,7 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
     tickets: deps.tickets,
     readLog: deps.readLog,
     ...(deps.readDeal !== undefined ? { readDeal: deps.readDeal } : {}),
+    ...(deps.readLogFormat !== undefined ? { readLogFormat: deps.readLogFormat } : {}),
     replay: deps.replay,
     now: deps.now,
     warn: deps.warn,

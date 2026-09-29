@@ -1998,9 +1998,17 @@ export function createRoomHost(deps: RoomHostDeps) {
      is not activity (it never keeps an idle actor resident). Derived: nothing is written. Resolves with how many games
      stopped being served. */
   let reviewing: Promise<number> | null = null;
-  function reviewServing(): Promise<number> {
-    if (deps.continuation !== undefined && !deps.continuation.hasServingPolicy()) return Promise.resolve(0);
-    if (reviewing !== null) return reviewing;
+  let reviewAgain = false;
+  /* LIVE-4 (integration): `continuation: true` is the pass run when the chain facts every verdict reads have changed
+     (`start.ts`: the money serving's chain-facts listener). It runs on a primary too -- the question is no longer only
+     "does this pool still serve it" but "does this pool still continue it" -- and a pass already running is followed by
+     one more, so a contradiction recorded mid-pass is never missed. */
+  function reviewServing(options: { readonly continuation?: boolean } = {}): Promise<number> {
+    if (options.continuation !== true && deps.continuation !== undefined && !deps.continuation.hasServingPolicy()) return Promise.resolve(0);
+    if (reviewing !== null) {
+      if (options.continuation === true) reviewAgain = true;
+      return reviewing;
+    }
     reviewing = (async () => {
       const resident: GameActor[] = [];
       deps.games.forEach?.((actor) => resident.push(actor));
@@ -2010,7 +2018,7 @@ export function createRoomHost(deps: RoomHostDeps) {
         const view = game.view;
         if (view.hold !== null || view.incompatible !== null) continue; // already not served (or held): nothing to review
         try {
-          if (await game.reviewServing()) stopped += 1;
+          if (await game.reviewServing({ continuation: options.continuation === true })) stopped += 1;
         } catch (error) {
           deps.warn(`  serving: the review of ${game.gameId} failed -- ${error instanceof Error ? error.message : String(error)}; it is asked again at the next pass`);
         }
@@ -2018,6 +2026,10 @@ export function createRoomHost(deps: RoomHostDeps) {
       return stopped;
     })().finally(() => {
       reviewing = null;
+      if (reviewAgain) {
+        reviewAgain = false;
+        void reviewServing({ continuation: true }).catch((error) => deps.warn(`  serving: the review failed -- ${error instanceof Error ? error.message : String(error)}`));
+      }
     });
     return reviewing;
   }

@@ -69,6 +69,7 @@ import { parseEntryLine, scanLog, serializeBatch } from "./persistence/logFormat
 import {
   COMMITTED,
   StoreCorruptError,
+  StoreIncompatibleError,
   StoreUncertainError,
   throwUnlessCommitted,
   type StoreWriteOutcome,
@@ -76,7 +77,8 @@ import {
 
 export interface LogStore {
   /** Everything durable for this room, in index order, store metadata stripped. Empty for a room never written.
-   *  LIVE-3B: rejects with `StoreCorruptError` when the file holds damage that is not a torn final batch. */
+   *  LIVE-3B: rejects with `StoreCorruptError` when the file holds damage that is not a torn final batch. LIVE-4
+   *  (N-3): rejects with `StoreIncompatibleError`, touching nothing, when a complete line is a newer build's format. */
   loadLog(room: string): Promise<readonly ServerLogEntry[]>;
   /** The legacy throwing form: resolves only once the entries are durable; rejects `StoreDefiniteError` when
    *  nothing was written and anything else when the outcome is unknown. */
@@ -337,6 +339,15 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
           `as found and the room is HELD; stop the server and run tools/logDoctor on it (LIVE-3 §8.5).`,
       );
       throw new StoreCorruptError(`${file}: ${scan.detail}`, file, scan.damageAt ?? 0);
+    }
+    /* LIVE-4 (integration, N-3): a complete line this build cannot read is a NEWER build's format, never a torn tail. The
+       file is not opened for writing, truncated, synced or "repaired": the load answers incompatible, and the game is
+       not continued here (derived) -- the same version hold a GameRecord of a newer `record_schema` gets. Every load
+       repeats the same non-destructive answer. */
+    if (scan.classification === "newer-format" && !known?.exists) {
+      states.delete(room);
+      warn(`  store: ${file} is a NEWER build's log -- ${scan.detail}; it is left exactly as found and the game is not continued here`);
+      throw new StoreIncompatibleError(`${file}: ${scan.detail}`, file);
     }
     if (known?.exists && (scan.classification !== "clean" || scan.end !== known.committedEnd)) {
       /* A file this process has been writing no longer ends where its last durable batch ended: something outside

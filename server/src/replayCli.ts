@@ -74,6 +74,11 @@ function main(): void {
   const raw: RawLog = /\.jsonl(\.repaired)?$/.test(path)
     ? (() => {
         const scan = scanLog(readFileSync(path));
+        if (scan.classification === "newer-format") {
+          /* LIVE-4 (N-3): not damage -- a newer build's log, which only a build that reads it can replay. */
+          console.error(`  REFUSED: ${path} is a NEWER build's log -- ${scan.detail}. Replay it with a build that reads it.`);
+          process.exit(3);
+        }
         if (scan.classification !== "clean") {
           console.error(`  REFUSED: ${path} is ${scan.classification.toUpperCase()} -- ${scan.detail}. Run tools/logDoctor on it.`);
           process.exit(3);

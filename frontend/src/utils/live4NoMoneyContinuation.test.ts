@@ -698,4 +698,3 @@ describe("the review's cases: a revert whose rebuild is refused, a release, a de
     expect(undealtByThrow.entries).toHaveLength(0);
   });
 });
-

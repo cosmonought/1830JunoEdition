@@ -35,6 +35,22 @@
 //     earlier batch, an unstamped line, or an entry glued behind a torn fragment (today's F-8 "poisoned" shape) --
 //     the file is CORRUPT and is held untouched until an operator repairs it (`tools/logDoctor.ts`).
 // Nothing here writes; the store decides what to do with the verdict.
+//
+// ==================================================================
+//  LIVE-4 (integration, N-3): A COMPLETE LINE THIS BUILD CANNOT READ IS A NEWER BUILD'S, NEVER A TORN TAIL
+// ==================================================================
+//
+// A torn write leaves a PREFIX of what this build serialized: whole entry lines of the in-flight batch, then at most
+// one fragment that is not a whole JSON value (or NULs, or garbage pages). It cannot leave a syntactically complete
+// JSON record that is not one of this build's entries -- a prefix of an entry line is balanced only at its own final
+// `}`, and then it IS the entry. So a complete JSON object (or array) that `parseEntryLine` does not accept (another
+// stamp shape, other required fields, a record of another schema), starting AT the end of the durable prefix, was
+// written by a build that serializes differently: the classification is `newer-format`, and the store must neither
+// truncate, rewrite nor "repair" it -- the game is not continued here (derived), exactly as a GameRecord of a newer
+// `record_schema` is. Two shapes stay what they were (the independent review's M-2): a record-shaped line INSIDE this
+// build's in-flight region (after its own in-flight lines or a torn fragment -- a stale page) is still a torn tail, and
+// a line claiming this build's next index, with this build's entries after it, is damage (`corrupt`). An operator who
+// knows a `newer-format` file is damage repairs a COPY with `logDoctor --repair --newer-is-damage`.
 
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 
@@ -43,7 +59,7 @@ export const MAX_BATCH_SPAN = 99;
 
 export type BatchRange = readonly [number, number];
 
-export type LogClassification = "clean" | "torn-tail" | "corrupt";
+export type LogClassification = "clean" | "torn-tail" | "corrupt" | "newer-format";
 
 export interface LogScan {
   /** Every entry of every COMPLETE batch, in order, with the store stamp stripped. */
@@ -52,9 +68,10 @@ export interface LogScan {
   readonly end: number;
   readonly size: number;
   readonly classification: LogClassification;
-  /** For torn-tail and corrupt: the first byte that is not part of the valid prefix (== `end`). */
+  /** For torn-tail, corrupt and newer-format: the first byte that is not part of the valid prefix (== `end`). */
   readonly damageAt: number | null;
-  /** For corrupt: the byte offset of the line that proves the damage is not confined to the in-flight batch. */
+  /** For corrupt: the byte offset of the line that proves the damage is not confined to the in-flight batch. For
+   *  newer-format (LIVE-4 N-3): the byte offset of the first complete line this build cannot read. */
   readonly evidenceAt: number | null;
   readonly detail: string;
   readonly stampedLines: number;
@@ -121,6 +138,30 @@ export function recoverSuffix(text: string): { readonly offset: number; readonly
     if (parsed !== null) return { offset: at, parsed };
   }
   return null;
+}
+
+/** LIVE-4 (N-3): whether `text` is a syntactically complete JSON object or array -- a whole record some build wrote. A
+ *  torn fragment of this build's own serialization never is one unless it is the whole entry (see the header): every
+ *  line this build writes starts with `{`, and a prefix of one balances only at its own last byte. */
+export function isCompleteRecord(text: string): boolean {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return false;
+  }
+  /* An object or an array: a structured record (a bare scalar is too easily a stray byte run to count as one). */
+  return raw !== null && typeof raw === "object";
+}
+
+/** Whether a record-shaped line claims to be entry `index` of this build's history (an object whose `index` is it). */
+function claimsIndex(text: string, index: number): boolean {
+  try {
+    const raw: unknown = JSON.parse(text);
+    return raw !== null && typeof raw === "object" && !Array.isArray(raw) && (raw as { index?: unknown }).index === index;
+  } catch {
+    return false;
+  }
 }
 
 /** LIVE-3 §8.3, exactly: which bytes are history, which are a torn in-flight batch, and whether anything else is. */
@@ -199,17 +240,62 @@ export function scanLog(bytes: Uint8Array): LogScan {
     stampedLines,
     legacyLines,
   });
+  const newer = (at: number, complete: boolean): LogScan => ({
+    entries,
+    end,
+    size,
+    classification: "newer-format",
+    damageAt: end,
+    evidenceAt: at,
+    detail:
+      `a ${complete ? "complete" : "whole (unterminated)"} record at byte ${at} is not an entry this build can read -- ` +
+      `a newer build's format; nothing after byte ${end} (index ${inflightFirst - 1}) is interpreted, and the file is not repaired`,
+    stampedLines,
+    legacyLines,
+  });
   const belongsInFlight = (line: ParsedLine): boolean => {
     if (!line.stamped || line.range[0] !== inflightFirst) return false;
     if (inflight !== null && !sameRange(inflight, line.range)) return false;
     inflight = line.range;
     return true;
   };
+  /* LIVE-4 (N-3), WHERE A NEWER BUILD'S LINES CAN BE. A newer build appends after the last complete batch it read (its
+     own load cut any torn tail of ours first), so its records start AT the end of this build's durable prefix and run on
+     from there. A record-shaped line anywhere else -- after this build's own in-flight lines, or after a torn fragment
+     -- is what a torn write left (a stale page, say), and keeps the torn-tail rule. And a line that claims to be this
+     build's NEXT entry (its `index` is the next index) but does not parse, with this build's entries continuing after
+     it, is one of this build's entries, damaged: `corrupt`, held for the operator -- not a newer format. */
+  let newerAt: number | null = null;
+  let newerComplete = true;
+  let newerClaimsNext = false;
   for (let at = end; at < size; ) {
     const newline = buffer.indexOf(0x0a, at);
-    if (newline === -1) break; // an unterminated fragment: the torn end of the in-flight write
-    const text = buffer.toString("utf8", at, newline);
+    const terminated = newline !== -1;
+    const text = buffer.toString("utf8", at, terminated ? newline : size);
     const parsed = parseEntryLine(text);
+    if (parsed === null && (at === end || newerAt !== null) && isCompleteRecord(text)) {
+      if (newerAt === null) {
+        newerAt = at;
+        newerComplete = terminated;
+        newerClaimsNext = claimsIndex(text, inflightFirst);
+      }
+      if (!terminated) break;
+      at = newline + 1;
+      continue;
+    }
+    /* An unterminated fragment: the torn end of the write in flight (this build's, or a newer build's after its lines). */
+    if (!terminated) break;
+    if (newerAt !== null) {
+      if (parsed !== null && newerClaimsNext) {
+        return corrupt(
+          at,
+          `the line at byte ${newerAt} claims to be entry ${inflightFirst} but cannot be read, and this build's entry ` +
+            `${parsed.entry.index} follows it -- one of this build's entries, damaged (not a newer build's format)`,
+        );
+      }
+      at = newline + 1; // a newer build's file: nothing after its first record is judged here
+      continue;
+    }
     if (parsed !== null) {
       if (!belongsInFlight(parsed)) {
         return corrupt(
@@ -230,6 +316,7 @@ export function scanLog(bytes: Uint8Array): LogScan {
     }
     at = newline + 1;
   }
+  if (newerAt !== null) return newer(newerAt, newerComplete);
   return {
     entries,
     end,

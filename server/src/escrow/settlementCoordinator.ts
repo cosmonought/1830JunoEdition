@@ -81,6 +81,11 @@ export interface SettlementCoordinatorDeps {
    *  announcement carried it (the liveness sweep, the startup walk). Throws only when the log cannot be read (then
    *  nothing is decided or written; retried). Absent: the deal is known only from announcements (undealt until then). */
   readonly readDeal?: (gameId: string) => Promise<GameIdentityFacts>;
+  /** LIVE-4 (integration): the log's format class, read READ-ONLY from its durable bytes (`dealIdentity.ts`
+   *  `logFormatOnDisk`: N-3's newer-format lines and T-25's unknown kinds), where no announcement carried the entries --
+   *  so step -1 judges the same log facts the game's session does. Absent: `current`. Throws only when the log cannot be
+   *  read (nothing decided then). */
+  readonly readLogFormat?: (gameId: string) => Promise<FormatFact>;
   /** LIVE-4 (L4-4): the classes of a game's ticket ledger and chain intents beside its financial record (the escrow
    *  service's `artifactFormatsOf`: only for a financial protocol this pool speaks), so step -1 decides on exactly the
    *  facts the service decides on. Absent: not classified here (no escrow backend -- and then no deployment is served,
@@ -172,6 +177,9 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
   const identities = new Map<string, GameIdentityFacts>();
   /** LIVE-4 (L4-4): each game's ledger and intents classes as last classified here (for the synchronous decision). */
   const formatIndex = new Map<string, ArtifactClasses>();
+  /** LIVE-4 (integration): each game's log format class as read from its durable bytes (a log changes only through this
+   *  process's own appends while it holds the data directory, and those are always this build's format). */
+  const logFormats = new Map<string, FormatFact>();
   const schedule = deps.schedule ?? defaultSchedule;
   const retryBase = deps.retryMs ?? 5_000;
   const retryMax = deps.maxRetryMs ?? 5 * 60_000;
@@ -236,7 +244,19 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
 
   /** Reads the financial record (keeping its class when it cannot be read) and decides. Throws only on a store fault
    *  that is not a classification (the caller retries). */
-  async function decide(gameId: string, identity: GameIdentityFacts, termsKey: string | null): Promise<{ readonly decision: MoneyServingDecision; readonly record: FinancialGameRecord | null; readonly fin: FormatFact | undefined }> {
+  /** LIVE-4 (integration): the log's format class for a decision with no announced entries (read from disk once). An
+   *  announcement's entries come from a session that interpreted them, so they are this build's (`current`), unless the
+   *  bytes were already found otherwise. */
+  async function logFormatOfGame(gameId: string): Promise<FormatFact> {
+    const known = logFormats.get(gameId);
+    if (known !== undefined) return known;
+    if (deps.readLogFormat === undefined) return "current";
+    const read = await deps.readLogFormat(gameId);
+    logFormats.set(gameId, read);
+    return read;
+  }
+
+  async function decide(gameId: string, identity: GameIdentityFacts, termsKey: string | null, log: FormatFact = "current"): Promise<{ readonly decision: MoneyServingDecision; readonly record: FinancialGameRecord | null; readonly fin: FormatFact | undefined }> {
     let record: FinancialGameRecord | null = null;
     let fin: FormatFact | undefined = "current";
     try {
@@ -248,7 +268,7 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
     }
     if (record !== null) remember(record);
     if (fin === "current" && record === null) fin = undefined;
-    const facts: MoneyGameFacts = { fin, record, identity, ...(await artifactClassesOf(gameId, record)), ownerKey: termsKey };
+    const facts: MoneyGameFacts = { fin, record, identity, log, ...(await artifactClassesOf(gameId, record)), ownerKey: termsKey };
     return { decision: serving.decide(facts), record, fin };
   }
 
@@ -329,7 +349,7 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
     /* -1. LIVE-4 (L4-4): the verdict before any write. */
     let decided: Awaited<ReturnType<typeof decide>>;
     try {
-      decided = await decide(job.gameId, await identityOf(job.gameId, job.identity), job.termsKey);
+      decided = await decide(job.gameId, await identityOf(job.gameId, job.identity), job.termsKey, logFormats.get(job.gameId) ?? "current");
     } catch (error) {
       deps.warn(`  settlement: ${job.gameId}'s continuation could not be decided -- ${error instanceof Error ? error.message : String(error)}; retrying`);
       return "retry";
@@ -486,14 +506,19 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
     moneyServingOf(gameId, identity) {
       const indexed = financialIndex.get(gameId);
       if (indexed === undefined) return undefined;
-      return serving.decide({ fin: indexed.fin, record: indexed.record, identity, ...(formatIndex.get(gameId) ?? {}) });
+      return serving.decide({ fin: indexed.fin, record: indexed.record, identity, log: logFormats.get(gameId) ?? "current", ...(formatIndex.get(gameId) ?? {}) });
     },
     async load() {
       for (const gameId of await deps.store.list()) {
         known.add(gameId);
         try {
           const record = await deps.store.load(gameId);
-          if (record !== null) remember(record);
+          if (record !== null) {
+            remember(record);
+            /* LIVE-4 (integration): the ledger's and intents' classes too, read-only, so the session's verdict judges the
+               same artifact classes step -1 does from the first rebuild on. */
+            await artifactClassesOf(gameId, record).catch(() => undefined);
+          }
         } catch (error) {
           if (error instanceof FinancialRecordUnreadableError) financialIndex.set(gameId, { fin: error.format, record: null, detail: error.message });
           /* LIVE-4 (L4-2): noted for the verdict too -- a record that could not be read at all is unreadable (never
@@ -524,6 +549,7 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
             fin: "current",
             record,
             identity: await identityOf(gameId).catch((): GameIdentityFacts => ({ kind: "undealt" })),
+            log: await logFormatOfGame(gameId).catch((): FormatFact => "current"),
             ...(await artifactClassesOf(gameId, record).catch((): ArtifactClasses => ({}))),
           });
           if (decision.verdict.kind === "not-continued") {
@@ -555,7 +581,7 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
            the owner of a conflict writes its canonical hold (a missing record: its placeholder, once). */
         let decided: Awaited<ReturnType<typeof decide>>;
         try {
-          decided = await decide(record.game_id, await identityOf(record.game_id), termsKeyOf(record));
+          decided = await decide(record.game_id, await identityOf(record.game_id), termsKeyOf(record), await logFormatOfGame(record.game_id));
         } catch {
           continue;
         }

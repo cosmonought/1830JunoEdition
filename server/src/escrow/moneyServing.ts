@@ -87,6 +87,11 @@ export interface MoneyServing {
    *  "later" is never a slow older read landing last, and no wall clock orders them). Nothing else ever writes here --
    *  never configuration, never a browser. */
   recordChainFacts(read: ChainFactsRead): void;
+  /** LIVE-4 (integration): call `listener` whenever a verification-grade read CHANGES the facts recorded for a
+   *  deployment (a first read included) -- the room host then re-asks every resident game's verdict, so a session never
+   *  keeps playing a game the money side now finds in a verified contradiction. Returns the unsubscribe. A listener that
+   *  throws is ignored (it never fails the read). */
+  onChainFacts(listener: (key: string) => void): () => void;
   /** When the facts for `key` were last read at verification grade (null: not this run). */
   chainFactsReadAt(key: string): number | null;
   /** Whether this pool serves the escrow deployment `key` (and so owns the games whose money is there). */
@@ -157,6 +162,7 @@ export function createMoneyServing(input: {
   const noticed = new Set<string>();
   const current = new Map<string, MoneyServingNotice>();
   const served = new Set(capability.escrow_deployments.map((deployment) => deployment.key));
+  const listeners = new Set<(key: string) => void>();
 
   const serves = (key: string | null): boolean => key !== null && served.has(key);
 
@@ -165,8 +171,23 @@ export function createMoneyServing(input: {
     runtime: () => runtime,
     recordChainFacts(read) {
       if (read.kind !== "read") return;
+      const before = facts.get(read.key);
       facts.set(read.key, Object.freeze({ code_checksum: read.facts.code_checksum, denom: read.facts.denom }));
       readAt.set(read.key, read.read_at);
+      if (before !== undefined && before.code_checksum === read.facts.code_checksum && before.denom === read.facts.denom) return;
+      for (const listener of [...listeners]) {
+        try {
+          listener(read.key);
+        } catch {
+          /* a listener never fails the read */
+        }
+      }
+    },
+    onChainFacts(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
     chainFactsReadAt: (key) => readAt.get(key) ?? null,
     serves,

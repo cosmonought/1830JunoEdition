@@ -79,7 +79,7 @@ import { IDENTITY_FILE } from "../identity/fileStore";
 import { IDENTITY_JOURNAL_FILE, parseSnapshotDocument, scanJournal } from "../identity/journalStore";
 import { checkSnapshot, IdentityIndex } from "../identity/store";
 import { scanLog } from "../persistence/logFormat";
-import { dealIdentityOnDisk } from "../escrow/dealIdentity";
+import { dealIdentityOnDisk, logFormatOnDisk } from "../escrow/dealIdentity";
 import { durableReplace } from "../persistence/durableReplace";
 import { createFileOpsRecorder, OPS_DIRECTORY, STATUS_FILE, type OpsRecorder } from "../persistence/opsRecorder";
 import { acquireDataLock, describeOwner, lockStatus, LOCK_DIRECTORY, type DataLock } from "../persistence/processLock";
@@ -141,7 +141,7 @@ export interface GameVerification {
   readonly verdict: Verdict | null;
   readonly entries: number;
   readonly logHash: string | null;
-  readonly logClassification: "absent" | "clean" | "torn-tail" | "corrupt";
+  readonly logClassification: "absent" | "clean" | "torn-tail" | "corrupt" | "newer-format";
 }
 
 export async function verifyGame(dataDir: string, gameId: string, options: { build?: string; ignoreDuplicateCodeWith?: string } = {}): Promise<GameVerification> {
@@ -173,6 +173,8 @@ export async function verifyGame(dataDir: string, gameId: string, options: { bui
     const scan = scanLog(bytes);
     logClassification = scan.classification;
     if (scan.classification === "corrupt") return fail("held", `the log is corrupt: ${scan.detail}`, { logClassification });
+    /* LIVE-4 (N-3): a newer build's log is not damage and not this build's to replay: incompatible, untouched. */
+    if (scan.classification === "newer-format") return fail("incompatible", `the log is a newer build's format: ${scan.detail}`, { logClassification });
     entries = scan.entries; // a torn tail is what the load truncates; the complete batches are the history
   }
   const hash = entries.length === 0 ? null : logHash(entries);
@@ -596,6 +598,8 @@ export async function moneyDecisionOnDisk(
     record,
     /* As the server: an unreadable record's class decides first, so its deal is not read. */
     identity: fin !== "current" && fin !== "missing" ? { kind: "undealt" } : await identityOnDisk(dataDir, gameId),
+    /* LIVE-4 (integration, review N-1): the log's class too, exactly as the server's money seams read it (N-3, T-25). */
+    log: fin !== "current" && fin !== "missing" ? "current" : await logFormatOnDisk(dataDir, gameId),
     ...(tickets !== null ? { tickets } : {}),
     ...(intents !== null ? { intents } : {}),
     ownerKey: moneyTermsKey(terms),
@@ -728,6 +732,9 @@ export async function releaseMoneyHold(dataDir: string, gameId: string, note: st
   }
   const verification = await verifyGame(dataDir, gameId);
   if (!verification.ok) return { ok: false, reason: `${gameId} does not verify, so its money stays held: ${verification.reason}` };
+  /* LIVE-4 (integration, review N-1): a game this build does not continue (a newer build's log, say) is never released
+     from here -- its own build's operator decides. */
+  if (verification.cls === "incompatible") return { ok: false, reason: `${gameId} is not continued by this build (${verification.reason}), so its money stays held` };
   /* 2. This deployment CONTINUES it (L4-4): the canonical verdict -- the money identity, the artifacts' formats, the deal,
      and the escrow served by the configuration given -- exactly as the server's load will decide it. A hold for a
      deployment conflict is lifted only against a verification-grade chain read (`--chain`) that no longer contradicts

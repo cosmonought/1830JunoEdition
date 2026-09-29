@@ -119,7 +119,7 @@ export function moneyContinuationVerdict(stored: unknown, deployment: Deployment
    placeholder, or unreadable -- and the canonical verdict (`continuationVerdict`) judges them against the pool's
    capability at EVERY rebuild of the game's session, whatever build dealt it (`server/src/continuationWiring.ts`).
    `moneyContinuationVerdict` stays: it is the money core of the canonical verdict (the parity is a L4-1 test) and the
-   settlement coordinator's step 2. */
+   settlement coordinator's old step 2 (L4-4 folded that step into step -1, which asks the canonical verdict itself). */
 
 /** What the settlement index holds for one financial record. */
 export type MoneyIndexEntry =

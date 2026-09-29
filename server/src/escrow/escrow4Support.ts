@@ -25,7 +25,6 @@ import { createEscrowService, type EscrowService, type JunoBackendRuntime } from
 import { createMemoryFinancialGameStore } from "./financialGameStore";
 import { createMoneyTables, type MoneyTables } from "./moneyTables";
 import { createSettlementCoordinator } from "./settlementCoordinator";
-import { thisDeploymentCapability } from "../deploymentCapability";
 import type { DeploymentCapability } from "../../../frontend/src/gameEngine/compat/deploymentCapability";
 import { createMemorySigningJournal } from "./signingJournal";
 import { createMemoryWalletTicketStore, createWalletTicketLedger } from "./walletTickets";
@@ -217,20 +216,31 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     },
   });
   /* LIVE-4 (L4-2): the money facts' index over the same financial store the escrow service writes (the production
-     server's is its settlement coordinator; here one serves as the index only -- it is not the settlement lifecycle). */
+     server's is its settlement coordinator; here one serves as the index only -- it is not the settlement lifecycle).
+     LIVE-4 (integration, D): it stays an INDEX. It is given no serving, so its step -1 runs on `noMoneyServing` -- a pool
+     that serves no escrow deployment, owns no game and continues none -- and it is never the server's `settlement`, so
+     nothing announces a seal to it: through L4-4's coordinator it still writes no financial state. */
   const moneyFacts = createSettlementCoordinator({ store: financial, replay: () => ({ ok: false, reason: "not used" }), now: () => clock.now, warn: (line) => warnings.push(line), schedule: () => ({ cancel: () => undefined }) });
   await moneyFacts.load();
   const started = await startServer({
     identity: { mode: "production", allowedOrigins: [PROD_ORIGIN], trustedProxyHops: 0, now: () => clock.now, service: identity },
     shuffle: IN_SEAT_ORDER,
-    /* LIVE-4 (L4-2): this pool serves the fixture escrow (the pin its money tables are bound to). */
-    capability: options.capability ?? thisDeploymentCapability([options.pin ?? PIN]),
+    /* LIVE-4 (L4-2): this pool serves the fixture escrow (the pin its money tables are bound to). LIVE-4 (integration):
+       as `start.ts` does, the ONE capability is the money serving's own, and the sessions read the same runtime chain
+       facts the escrow service records (a test may still inject another capability for the session side). */
+    capability: options.capability ?? service.serving.capability,
+    runtime: service.serving.runtime(),
     moneyFacts,
     rosterSource: { plan: (record, ctx) => (record.money === null ? noMoney.plan(record, ctx) : service.rosterSource.plan(record, ctx)) },
     money: () => refs.money,
     escrow: { onGameplayCommitted: (input) => service.onGameplayCommitted(input), isRosterFrozen: (gameId) => service.isRosterFrozen(gameId) },
   });
   refs.server = started.server;
+  /* As `start.ts` (LIVE-4 integration): when the chain facts every verdict reads change, every resident game's
+     verdict is asked again at once -- a verified contradiction stops its session here too. */
+  service.serving.onChainFacts(() => {
+    void started.server.lifecycle.reviewContinuation().catch(() => undefined);
+  });
   const money = createMoneyTables(
     { enabled: options.enabled ?? true, service, pin: options.pin ?? PIN, symbol: "JUNOX", rest: chain, tickets: ledger, financial, appName: "Project 18XX", now: () => clock.now, warn: (line) => warnings.push(line), ops, manualObserver: true },
     started.server.rooms.moneyPort,

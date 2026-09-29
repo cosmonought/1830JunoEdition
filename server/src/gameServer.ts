@@ -73,7 +73,7 @@ import { NO_MONEY_FACTS, type MoneyContinuationFacts } from "./escrow/moneyConti
 import { thisDeploymentCapability } from "./deploymentCapability";
 import { createContinuationWiring, type ContinuationWiring } from "./continuationWiring";
 import type { DeploymentCapability } from "../../frontend/src/gameEngine/compat/deploymentCapability";
-import type { ContinuationVerdict, PoolServingState } from "../../frontend/src/gameEngine/compat/continuationVerdict";
+import type { ContinuationRuntime, ContinuationVerdict, PoolServingState } from "../../frontend/src/gameEngine/compat/continuationVerdict";
 import { historyNotReadHere } from "../../frontend/src/gameEngine/compat/sessionContinuation";
 /* LIVE-4 (L4-3): the client verdict, and client protocol 1's answers. */
 import { clientVerdict, type ClientAnnouncement, type ClientVerdict } from "../../frontend/src/gameEngine/compat/clientCompatibility";
@@ -273,6 +273,10 @@ export interface GameServerOptions {
    *  judged against it; no build id enters it. Absent: this build's capability serving no escrow deployment -- no money
    *  game is continued then. */
   capability?: DeploymentCapability;
+  /** LIVE-4 (integration): what this run read from the chain, at verification grade -- the money serving's own runtime
+   *  (`MoneyServing.runtime()`, shared with the escrow service and the settlement coordinator), so every session judges a
+   *  money table against the same chain facts the money seams do. Absent: none (`NO_CHAIN_FACTS`). */
+  runtime?: ContinuationRuntime;
   /** LIVE-4 (L4-2): the settlement index's money facts (`escrow/settlementCoordinator.ts`), which the verdict judges
    *  for every money table at every rebuild -- replacing ESCROW-3A's build-keyed `moneyContinuation` policy (#1252's
    *  waiver). Absent: no financial record is known, so a money table reads as MISSING and is never continued (fail
@@ -413,6 +417,10 @@ export function createGameServer(options: GameServerOptions): {
     capability: DeploymentCapability;
     continuation: ContinuationWiring;
     reviewServing(): Promise<number>;
+    /** LIVE-4 (integration): the same review, on ANY pool (a primary included), re-asking every resident served game's
+     *  continuation verdict -- run when the chain facts the verdict reads change (a verified contradiction), so a game the
+     *  money side refuses stops being played at once. Derived: nothing is written. */
+    reviewContinuation(): Promise<number>;
     loadGame(gameId: string): Promise<void>;
   };
 } {
@@ -499,6 +507,7 @@ export function createGameServer(options: GameServerOptions): {
   const continuation: ContinuationWiring = createContinuationWiring({
     capability: options.capability ?? thisDeploymentCapability([]),
     policy: { legacyLogs: options.legacyLogs ?? "refuse" },
+    ...(options.runtime !== undefined ? { runtime: options.runtime } : {}),
     moneyFacts: options.moneyFacts ?? NO_MONEY_FACTS,
     /* The record as this server last committed it: whether a table is a money table is its record's (write-once). */
     recordOf: (gameId) => roomHost?.recordOf(gameId) ?? null,
@@ -1972,6 +1981,7 @@ export function createGameServer(options: GameServerOptions): {
       capability: continuation.capability,
       continuation,
       reviewServing: () => host.reviewServing(),
+      reviewContinuation: () => host.reviewServing({ continuation: true }),
     },
     socketCounts: () => ({
       total: contexts.size,

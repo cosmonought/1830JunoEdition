@@ -122,6 +122,10 @@ export interface EscrowServiceDeps {
    *  sync, no store state) -- the continuation verdict asks it far more often than a room loads its log. Throws only
    *  when the log cannot be read at all (then nothing is decided, and nothing written). Default: from `readLog`. */
   readonly readDeal?: (gameId: string) => Promise<GameIdentityFacts>;
+  /** LIVE-4 (integration): the log's format class, read-only from its durable bytes (`dealIdentity.ts`
+   *  `logFormatOnDisk`), wherever the entries are not in hand -- so every money seam judges the same log facts the game's
+   *  session does (N-3, T-25). Absent: `current`. */
+  readonly readLogFormat?: (gameId: string) => Promise<FormatFact>;
   readonly replay: PrefixReplay;
   readonly now: () => number;
   readonly warn: (line: string) => void;
@@ -436,6 +440,19 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
 
   /** The deal's identity: from `entries` when the caller holds them, else from the durable log, read-only (read until
    *  dealt). A log that cannot be read at all throws: nothing is decided now. */
+  /** LIVE-4 (integration): the log's format class. Entries in hand come from a session that interpreted them (this
+   *  build's format); otherwise the durable bytes are classified once, read-only (a log changes only through this
+   *  process's own appends while it holds the data directory). */
+  const logFormats = new Map<string, FormatFact>();
+  async function logFormatOfGame(gameId: string, entries?: readonly ServerLogEntry[]): Promise<FormatFact> {
+    const known = logFormats.get(gameId);
+    if (known !== undefined) return known;
+    if (entries !== undefined || deps.readLogFormat === undefined) return "current";
+    const read = await deps.readLogFormat(gameId);
+    logFormats.set(gameId, read);
+    return read;
+  }
+
   async function identityOf(gameId: string, entries?: readonly ServerLogEntry[]): Promise<GameIdentityFacts> {
     if (entries !== undefined) return identityFrom(gameId, entries);
     const known = identities.get(gameId);
@@ -471,8 +488,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     /* An unreadable record's class decides first (the verdict's step 1): its deal is not read at all (L4-4 review R-1:
        another build's game never costs this pool a log read, let alone a failure). */
     const identity: GameIdentityFacts = fin !== undefined && fin !== "current" ? { kind: "undealt" } : await identityOf(gameId, options.entries);
+    const log: FormatFact = fin !== undefined && fin !== "current" ? "current" : await logFormatOfGame(gameId, options.entries);
     const classes = await artifactFormatsOf(gameId, fin === "current" ? record : null);
-    const decision = serving.decide({ fin, record, identity, ...classes, ownerKey: options.ownerKey ?? null });
+    const decision = serving.decide({ fin, record, identity, log, ...classes, ownerKey: options.ownerKey ?? null });
     decisions.set(gameId, decision);
     return { decision, record };
   }

@@ -290,6 +290,23 @@ export class RoomSession {
     };
   }
 
+  /** LIVE-4 (integration, N-3): set when the store found COMPLETE lines in this game's log that this build cannot read
+   *  -- a newer build's format. None of it reached this session, so no reading of what did can continue the game. */
+  private unreadableLog: ContinuationVerdict | null = null;
+
+  /**
+   * LIVE-4 (integration, N-3): the game's stored log holds complete records this build cannot read (the store's
+   * `newer-format` class: never truncated, rewritten or repaired). The game is not continued here -- `newer-format`,
+   * DERIVED through the canonical model, exactly as T-25 answers a pinned log carrying a message this build cannot
+   * have written: every hello and submit is answered `incompatible`, nothing is interpreted, appended or written, and
+   * every rebuild keeps the answer (it is asked first).
+   */
+  markLogNewerFormat(detail: string): void {
+    this.unreadableLog = { kind: "not-continued", why: "newer-format", detail };
+    this.engine = new RoomEngine(this.options.providers, this.options.seed);
+    this.interpret();
+  }
+
   /* ==================================================================
       LIVE-4 (L4-2): THE VERDICT IS ASKED UNCONDITIONALLY
      ==================================================================
@@ -302,6 +319,7 @@ export class RoomSession {
      WHAT A "NO" DOES is exactly what #1520's hold did: the engine stays at its seed, every hello and submit is answered
      `incompatible` (now with `why`), no history is handed out -- and nothing is written, anywhere. */
   private askVerdict(): ContinuationVerdict {
+    if (this.unreadableLog !== null) return this.unreadableLog;
     const identity = gameIdentityOfEntries(this.log);
     /* T-25: this session is the log's reader, so it classifies the log's format -- a pinned log carrying a message kind
        or a rules revision this build cannot have written is a newer build's (`logFormatOf`), never misread here. */
@@ -421,6 +439,28 @@ export class RoomSession {
     this.engine = new RoomEngine(this.options.providers, this.options.seed);
     this.incompatibility = this.holdOfDecision(verdict, decision);
     return true;
+  }
+
+  /**
+   * LIVE-4 (integration): THE CONTINUATION REVIEW -- `reviewServing`, with the VERDICT asked afresh first. What a money
+   * table's verdict reads can change while its session stays resident: the chain facts the money side records at
+   * verification grade (L4-4), and the settlement index. When they change, the room host runs this over every
+   * resident game (`start.ts`: the money serving's chain-facts listener), so a game the escrow side now finds in a
+   * verified deployment conflict stops being played here at once -- the engine goes back to its seed and every later
+   * hello and submit is answered `incompatible` -- exactly as a rebuild would conclude, without reloading the actor.
+   * Derived: nothing is written. One way, like `reviewServing`. True when the game stopped being served.
+   */
+  reviewContinuation(): boolean {
+    if (this.incompatibility !== null) return false;
+    const verdict = this.askVerdict();
+    this.continuation = verdict;
+    if (verdict.kind !== "continues") {
+      this.engine = new RoomEngine(this.options.providers, this.options.seed);
+      const released = this.askServing(verdict);
+      this.incompatibility = released !== null && released.kind === "release" ? this.holdOfDecision(verdict, released) : this.holdOfVerdict(verdict);
+      return true;
+    }
+    return this.reviewServing();
   }
 
   /** Rebuild from a stored log. The constructor plus this is a server restart.

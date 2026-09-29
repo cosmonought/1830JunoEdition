@@ -30,7 +30,7 @@ import { createJournalIdentityStore, type JournalIdentityStore } from "./identit
 import { createFileHoldStore } from "./rooms/holdStore";
 import { createFileFinancialGameStore } from "./escrow/financialGameStore";
 import type { FinancialGameRecord } from "./escrow/moneyLifecycle";
-import { dealIdentityOnDisk } from "./escrow/dealIdentity";
+import { dealIdentityOnDisk, logFormatOnDisk } from "./escrow/dealIdentity";
 import { compatibilityKey, type DeploymentCapability } from "../../frontend/src/gameEngine/compat/deploymentCapability";
 import { createSettlementCoordinator } from "./escrow/settlementCoordinator";
 import { noMoneyServing } from "./escrow/moneyServing";
@@ -272,6 +272,8 @@ async function main(): Promise<void> {
         readLog: (gameId) => logStore.loadLog(gameId),
         /* LIVE-4 (L4-4): the deal's identity for the continuation verdict, read-only. */
         readDeal: (gameId) => dealIdentityOnDisk(dataDir, gameId),
+        /* LIVE-4 (integration): and the log's format class, read-only -- the same log facts the session judges. */
+        readLogFormat: (gameId) => logFormatOnDisk(dataDir, gameId),
         replay: serverPrefixReplay(build),
         now: () => Date.now(),
         // eslint-disable-next-line no-console
@@ -313,6 +315,7 @@ async function main(): Promise<void> {
     /* The deal's identity for step -1, read-only (never the log store's repairing load: a game this pool may not
        continue is never written, not even a torn tail). */
     readDeal: (gameId) => dealIdentityOnDisk(dataDir, gameId),
+    readLogFormat: (gameId) => logFormatOnDisk(dataDir, gameId),
     ...(escrow !== null ? { artifactFormats: (gameId: string, record: FinancialGameRecord) => (escrow as JunoBackend).service.artifactFormatsOf(gameId, record) } : {}),
     ...(escrow !== null ? { onIntentPrepared: (gameId: string) => escrow?.service.onIntentPrepared(gameId) } : {}),
   });
@@ -361,6 +364,7 @@ async function main(): Promise<void> {
     /* LIVE-4 (L4-2): the pool's capability, and the settlement index's money facts -- judged for every money table at
        every rebuild, whatever build dealt it (ESCROW-3A's build-keyed `continuationPolicyOf` is retired). */
     capability,
+    runtime: serving.runtime(),
     moneyFacts: settlement,
     identity: {
       mode: config.mode,
@@ -409,6 +413,11 @@ async function main(): Promise<void> {
      -- a completed one announces its seal even if nobody ever reopens it -- and quiet funded games are looked at every
      five minutes (liveness is a state, never a refund). */
   serverRef.current = server;
+  /* LIVE-4 (integration): the session side re-asks every resident game's verdict when the chain facts change -- a
+     verified contradiction the money side has just recorded stops the game here at once, on this primary pool too. */
+  serving.onChainFacts(() => {
+    void server.lifecycle.reviewContinuation().catch(() => undefined);
+  });
   if (escrow !== null && junoConfigUsed !== null && ledgerUsed !== null) {
     const backend = escrow;
     moneyRef.current = createMoneyTables(

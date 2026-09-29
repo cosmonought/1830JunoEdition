@@ -441,14 +441,22 @@ export class GameActor {
     /* RESTORED THROUGH `apply`, NEVER `submit` (#1203): a stored log already holds its derived entries. */
     let entries: readonly ServerLogEntry[] = [];
     let corrupt: string | null = null;
+    let newerLog: string | null = null;
     if (durable === null) {
       try {
         entries = await this.awaitRead(this.deps.store.loadLog(this.gameId), "load of the log");
       } catch (error) {
-        if (!isStoreCorrupt(error)) throw error;
-        /* LIVE-3B (§8.5): HELD, NOT GUESSED AT. The file is untouched; no history is served and nothing is written
-           until an operator repairs it offline (`tools/logDoctor.ts`) and releases it (`tools/gamesDoctor.ts`). */
-        corrupt = describe(error);
+        /* LIVE-4 (integration, N-3): a log whose complete lines are a NEWER build's format is not damage and was not
+           touched by the store: the game is not continued here (derived) -- the version hold a newer GameRecord gets,
+           never written, never repaired. */
+        if (isStoreIncompatible(error)) {
+          newerLog = describe(error);
+        } else {
+          if (!isStoreCorrupt(error)) throw error;
+          /* LIVE-3B (§8.5): HELD, NOT GUESSED AT. The file is untouched; no history is served and nothing is written
+             until an operator repairs it offline (`tools/logDoctor.ts`) and releases it (`tools/gamesDoctor.ts`). */
+          corrupt = describe(error);
+        }
       }
     }
     /* LIVE-2C: the GameRecord, read in the same single-flight load. LIVE-3C: a record that cannot be read is held (a
@@ -472,6 +480,12 @@ export class GameActor {
       hold = { reason: "held", code: durable.code, detail: durable.detail };
       this.deps.counters.heldDurable += 1;
       this.deps.warn(`  store: ${this.gameId} is HELD (${durable.code}): ${durable.detail}. Nothing is served or changed until an operator releases it.`);
+    } else if (newerLog !== null) {
+      /* LIVE-4 (integration, N-3): not continued here (`newer-format`), derived through the canonical model -- the
+         session answers every hello and submit `incompatible` with that `why`; no hold is written, nothing is read into
+         the engine, and the file is exactly as the store found it. */
+      session.markLogNewerFormat(`the log holds records this build cannot read (a newer build's format): ${newerLog}`);
+      this.deps.warn(`  store: ${this.gameId} is NOT CONTINUED here (newer-format): ${newerLog}; its log is left exactly as found`);
     } else if (corrupt !== null) {
       hold = { reason: "corrupt", code: "log-corrupt", detail: corrupt };
       this.deps.counters.heldCorrupt += 1;
@@ -1216,14 +1230,16 @@ export class GameActor {
    * (`publishIfNotServed`). No reload of the actor, and nothing written. A game already held for any reason is left as
    * it is. Resolves true when the game stopped being served.
    */
-  async reviewServing(): Promise<boolean> {
+  async reviewServing(options: { readonly continuation?: boolean } = {}): Promise<boolean> {
     const outcome = await this.run(
       "repair",
       async () => {
         const session = this.session;
         const before = this.committed;
         if (session === null || before === null || before.hold !== null || before.incompatible !== null) return false;
-        session.reviewServing();
+        /* LIVE-4 (integration): after a change in the chain facts, the verdict itself is asked again first. */
+        if (options.continuation === true) session.reviewContinuation();
+        else session.reviewServing();
         return this.publishIfNotServed("serving");
       },
       { quiet: true },

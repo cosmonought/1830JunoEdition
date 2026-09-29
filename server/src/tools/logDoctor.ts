@@ -137,12 +137,18 @@ function splitPoisoned(bytes: Buffer): { bytes: Buffer; splits: Array<{ at: numb
 }
 
 /** The repaired contents, verified, or why there are none. Pure: nothing is read or written here. */
-export function repairBytes(original: Buffer, options: { split?: boolean } = {}): Repair {
+export function repairBytes(original: Buffer, options: { split?: boolean; newerIsDamage?: boolean } = {}): Repair {
   const scan = scanLog(original);
   if (scan.classification === "clean") return { ok: false, reason: "the log is clean; there is nothing to repair" };
+  /* LIVE-4 (N-3): a newer build's log is not damage; nothing here may cut or rewrite it -- unless the OPERATOR says
+     that what reads as a newer build's record is in fact damage (`--newer-is-damage`, e.g. a bit flip in the last
+     acknowledged batch): then the verified COPY ends at the durable prefix, exactly as a torn tail's would. */
+  if (scan.classification === "newer-format" && !options.newerIsDamage) {
+    return { ok: false, reason: `the log is a newer build's format (${scan.detail}); it is not damage and is never repaired -- serve it from a build that reads it, or, if you know it is damage, add --newer-is-damage` };
+  }
   let candidate: Buffer;
   let splits: Array<{ at: number; droppedBytes: number; index: number }> = [];
-  if (scan.classification === "torn-tail") {
+  if (scan.classification === "torn-tail" || scan.classification === "newer-format") {
     candidate = Buffer.from(original.subarray(0, scan.end));
   } else {
     if (!options.split) {
@@ -204,7 +210,7 @@ async function main(argv: readonly string[]): Promise<number> {
   const outAt = argv.indexOf("--out");
   const file = args[0];
   if (!file || (outAt !== -1 && !argv[outAt + 1])) {
-    console.error("usage: logDoctor <room.log.jsonl> [--repair [--split-poisoned] [--out <copy>]] [--json]");
+    console.error("usage: logDoctor <room.log.jsonl> [--repair [--split-poisoned] [--newer-is-damage] [--out <copy>]] [--json]");
     return 2;
   }
   const target = path.resolve(file);
@@ -222,7 +228,7 @@ async function main(argv: readonly string[]): Promise<number> {
   else console.log(report(diagnosis));
   if (!flag("--repair")) return diagnosis.classification === "clean" ? 0 : 1;
 
-  const repair = repairBytes(original, { split: flag("--split-poisoned") });
+  const repair = repairBytes(original, { split: flag("--split-poisoned"), newerIsDamage: flag("--newer-is-damage") });
   if (!repair.ok) {
     console.error(`\nNo copy written: ${repair.reason}`);
     return diagnosis.classification === "clean" ? 0 : 1;

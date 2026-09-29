@@ -387,13 +387,17 @@ Status `OPEN` — **pre-registered BLOCKER: must be fixed before any substantive
 (a route-search / authority certification blocker). Reproduced by the route-certification preflight (2026-09-28, still
 running): that ingress path is not scoped through the table's rules, so on an 18XX+ / LPF table it can evaluate route
 legality against STANDARD rather than the table's board. **Not fixed here; pending the preflight's final report,** which
-owns the detail, the reproduction and the fix.
+owns the detail, the reproduction and the fix. *R12-1 (2026-09-29): pinned as a KNOWN-RED fixture through
+`RoomSession.submit` (`frontend/src/routeOracle/routeOracleIngress.test.ts`: the herald run refused, the skip a no-op, all
+20 board-only hexes "not a hex"; and, separately, ingress never asks the Coal River gate). Fix owed in R12-2.*
 
 **S6-16. Route search can demonstrate an H12 fork reversal that authoritative route legality rejects.**
 Status `OPEN` — **pre-registered BLOCKER**, in the same terms as S6-15 (must be fixed before any substantive G5 / LPF
 route playtest; a route-search / authority certification blocker). Reproduced by the same preflight: the route search
 (the machine's "demonstrated" set, S6-3) can produce a route that reverses at the H12 fork (the herald home, S6-4), and
-the route authority refuses it. **Not fixed here; pending the preflight's final report.**
+the route authority refuses it. **Not fixed here; pending the preflight's final report.** *R12-1 (2026-09-29): pinned as
+KNOWN-RED fixtures `HERALD-FORK-PLUS` / `HERALD-FORK-LPF` (stranding: $50 demonstrated, $30 legal), with the Coal River,
+red-area, Altoona-bow and CROSS_TWICE classes beside it (`frontend/src/routeOracle/harness/knownDefects.ts`). Fix owed in R12-2.*
 
 ### Stage 7 — Transaction + cash authority / auction
 

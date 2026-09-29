@@ -1,8 +1,10 @@
 # LIVE-4 compatibility model — the canonical description
 
-**Status:** canonical for LIVE-4 (combined integration `6da8a1f`, corpus-gate certified; this description written by
-L4-6). The code is the authority; this page says what it means and where it lives. Per-pass evidence is in the
-Project reports (`claude/LIVE4_*`), chiefly `claude/LIVE4_INTEGRATION_HARDENING_2026-09-28.md`.
+**Status:** canonical for LIVE-4 — **certified and closed by L4-7** (the final independent certification, one commit on
+L4-6's `89a4b5b`, on the corpus-gate-certified integration `6da8a1f`); this description was written by L4-6 and
+amended by L4-7 (§2 A, §3, §5, §6). The code is the authority; this page says what it means and where it lives.
+Per-pass evidence is in the Project reports (`claude/LIVE4_*`), chiefly `claude/LIVE4_INTEGRATION_HARDENING_2026-09-28.md`
+and `claude/LIVE4_L4_7_FINAL_CERTIFICATION_2026-09-29.md`.
 
 > **The one rule this page exists to protect.** No compatibility question in LIVE-4 is answered by
 > `BUILD_ID == stored_build` or `client_build == server_build`. The build id is **diagnostic**. The only place a build
@@ -68,6 +70,20 @@ verification grade**. Output, in the order it is checked:
 A configuration typo is `deployment-unverified` (derived) on both sides — never a conflict. Only a chain read at
 verification grade can conclude `deployment-conflict`.
 
+**A verified conflict outlives the process (L4-7).** The chain's facts live for one run; a financial hold is durable.
+So the owning pool writes a verified conflict's canonical hold (`binding-mismatch`) **the moment it learns the facts**
+— the chain-facts listener (`listenForChainFacts`: `start.ts` and the tests assemble the same function), not the next
+five-minute sweep — and a clean stop waits for it (bounded). That hold is the one exception to ESCROW-3A's "the first
+hold stands": it **supersedes** a weaker hold the record was already under (keeping the phase it was held from, and
+naming the first hold in its detail and its transition line), so a verified conflict is always recorded, and always
+under that code. **A run that has not read the deployment at verification grade yet (a restart, an unreachable chain)
+does not continue a game held `binding-mismatch`** — `not-continued/deployment-unverified`, derived, written nowhere,
+never a second hold. Once the chain is read, the facts decide as before: a contradiction is the conflict again;
+agreement continues a game loaded after the read (its money stays held until an operator's `money-release`, which needs
+an agreeing verification-grade read: `--chain`). Any other hold is unaffected: gameplay continues while its money waits.
+Before L4-7 a restarted pool played a conflicted game until its first chain read, and indefinitely while the chain was
+unreachable.
+
 ### B. "Can this connected client talk safely to this process, about this game?" — client ↔ server
 
 Answered by **`clientVerdict`** (`compat/clientCompatibility.ts`) at the upgrade and per game at every hello, submit
@@ -120,6 +136,19 @@ When a verification-grade chain read changes the facts for a deployment, the pro
 verdict (`reviewContinuation`: the room host, each actor, each session). A game the money side now finds in a
 verified deployment conflict stops at once on this pool; nothing is reloaded or written by the review.
 
+**The exact boundary (L4-7).** The review is queued on **every** resident game in the same synchronous step as the
+facts change (before L4-7 it ran game after game, so a game late in the pass kept admitting new moves while the
+earlier games' queues drained), and it is an *essential* actor task: never refused for a full queue, never expired
+behind a slow task (a dropped review left the game served). What was already queued on a game's actor when the
+contradiction was recorded may still commit — an admitted move completes, and the log stays canonical; anything that
+arrives after it is refused on every game. A newly loaded game asks the verdict at its load. Money: every money seam
+asks the verdict again before it writes, and the owner holds the game at once. The last check before a chain
+transaction is the relayer's admission: an intent admitted after the change is refused (so a checkpoint job that was
+already running signs at most its one intent, and that intent is never attempted on chain); an intent the relayer had
+already admitted when the facts changed completes the attempt it was on — the same boundary as an admitted move, and
+nothing is admitted after it. The review is one way: a game it stopped stays stopped until its actor is reloaded, even
+if a later read agrees (fail-closed; a held game's money waits for an operator's release anyway).
+
 ---
 
 ## 4. Deployment requirements handed to LIVE-5
@@ -169,6 +198,55 @@ suites, 10,311 tests; server 619 = 618 + the FI-22 environment skip; smoke; `sca
 - **Protocol-1 client compatibility** (L4-3), with the legacy wire untouched.
 - **Cryptographic room seeds** (L4-5: `crypto.randomInt`).
 
-Open for L4-7 (not changed by L4-6): the integration report's §13 L4-7 list (I-1 submit-time re-check for money
-tables, N-2 `reconcileAtStartup` on a failed log-class read, an explicit future log-format marker, the ticket-ledger
-format version, L4-3 F2/F7/F8 and the `read-only`/`watch-only` tolerance unions, L4-2 review F4).
+The integration report's §13 L4-7 list is dispositioned in §6.
+
+---
+
+## 6. L4-7 — the final certification (reference)
+
+Evidence: Project `claude/LIVE4_L4_7_FINAL_CERTIFICATION_2026-09-29.md`. The certification's own regression suites
+are `server/src/rooms/live4Certification.test.ts` (the race boundary, the restart rule, precedence, key agreement
+across real processes, the edge, the stored-data matrix over file stores with every byte hashed, the release path,
+the restart / reconnect matrix) and `frontend/src/utils/live4Certification.test.ts` (the socket inventory, by source
+and by behaviour).
+
+**Repaired by L4-7 (no version or key moved):**
+
+- the continuation review is queued on every resident game at once, and is never dropped (§3, "The exact boundary");
+- a verified conflict is written down when it is learned (the chain-facts listener's `holdConflicts`), superseding a
+  weaker hold, and a game held for it is not continued by a run that has not read the chain (§2 A).
+
+**Dispositions of the integration report's L4-7 list:**
+
+| Item | Disposition |
+|---|---|
+| I-1 (a submit-time verdict re-check for money tables) | Not added: the actor queue is the exact boundary (§3), now the same on every resident game, and every money write re-asks the verdict. Pinned by the certification suite |
+| N-2 (`reconcileAtStartup` reads a failed log-class read as `current`) | Accepted (Low): that answer only decides whether to load the game, and the load's session classifies its own log; no write follows from it, and step −1 reads the class again before any money write |
+| An explicit log-format marker | For the next log-format change: N-3 recognises a newer build's lines by position and shape; a new log format should carry an explicit format / version marker |
+| The ticket-ledger format version (OD-L4-4-5) | At the next financial-protocol bump (unchanged) |
+| Session vs money seam first reasons (L4-6's observation) | Accepted: always the same class, never a write, deterministic within each; `gamesDoctor continuation` notes the difference and does not call it a defect |
+| L4-3 F2 (the `legacy-refused` wording), F7 (a submit after a terminal answer), F8 (the server's unreachable `not-here` branch), the `read-only` / `watch-only` tolerance unions | Kept as they are: protocol 0 is not retired in LIVE-4; F8 stays as a guard; the unions go when no older server exists |
+| `x-gs-client` on `/gs/api/*` | Not needed for LIVE-4 (§4); registered for LIVE-5 / LIVE-6 |
+| L4-2 review F4 (a failed `refresh` at money-table creation) | Accepted (fail-closed: such a table is not continued until its actor reloads; nothing is written for it) |
+
+**Accepted residuals (Low / Info; the L4-7 report has the reasoning):** the review is one way (above) — after a
+restart, a game held `binding-mismatch` that a tab opened before the first chain read stays stopped until its actor
+reloads or an operator releases it, even if the read agrees; the relayer's in-memory `skip` of such a game's intents
+lasts for the process; a hold the escrow service writes reaches the session's copy of the money facts at the
+coordinator's next read (the money seams read the store fresh); the settlement coordinator's startup walk reads a failed
+log-class read as `current` (only a load follows, and the load classifies its own log); a log whose lines parse but
+carry a newer build's message kind has its torn (never acknowledged) tail cut by the store's load before the session
+calls it `newer-format` — its complete lines are never touched; the player sentence for `deployment-unverified` names
+the escrow "not served here" (the restart window included); `holdConflicts` decides each game on the facts current when
+it reaches it (a contradiction already superseded by an agreeing read is not recorded), and a crash before its pass has
+written every hold (milliseconds per money game) leaves the next run to learn the conflict again from the chain; the
+join admission, like the relayer, may complete a signature whose verdict was asked just before the facts changed (the
+browser's own checksum check and the chain's code still bind the deposit); a weaker hold that arrives after a conflict's
+hold is dropped by "the first hold stands" (as before L4-7; it holds itself again at its next observation), and a
+release of a superseding hold lifts the hold it superseded too (its audit line names both).
+
+**No version moved (D4-17, asked both ways).** A financial-protocol-3 build reads a superseded record exactly as L4-7
+does (the same code, the same `from`, the same release rule), and every older record means what it meant; the step-7
+rule is a derived refusal from missing runtime input, not a new reading of a durable artifact. **The caveat is
+operational, for LIVE-5:** a same-key rollback to an L4-6 build loses the two protections (the restart rule and the
+supersede) — not correctness — so a pool mixing L4-6 and L4-7 instances must be treated as lacking them.

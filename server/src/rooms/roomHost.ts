@@ -1998,17 +1998,21 @@ export function createRoomHost(deps: RoomHostDeps) {
      is not activity (it never keeps an idle actor resident). Derived: nothing is written. Resolves with how many games
      stopped being served. */
   let reviewing: Promise<number> | null = null;
-  let reviewAgain = false;
   /* LIVE-4 (integration): `continuation: true` is the pass run when the chain facts every verdict reads have changed
      (`start.ts`: the money serving's chain-facts listener). It runs on a primary too -- the question is no longer only
-     "does this pool still serve it" but "does this pool still continue it" -- and a pass already running is followed by
-     one more, so a contradiction recorded mid-pass is never missed. */
+     "does this pool still serve it" but "does this pool still continue it".
+     LIVE-4 (L4-7): AND IT IS QUEUED ON EVERY RESIDENT GAME AT ONCE -- in the same synchronous step as the chain-facts
+     change that asked for it -- never one game after another, and never behind a pass already running. Before L4-7 the
+     pass awaited each game's review before queueing the next one's, so a game late in the pass kept ADMITTING NEW moves
+     (moves that arrived after this process knew of the contradiction) for as long as the earlier games' queues took to
+     drain. Now every game's review task is queued before any later task can be, so the one exact boundary is the actor
+     queue's own: a move queued BEFORE the contradiction was recorded may still commit (already admitted: the log stays
+     canonical and every money seam re-asks the verdict before it writes); a move queued after it is refused. The review
+     task is idempotent (one way), so a second request only queues a second no-op. */
   function reviewServing(options: { readonly continuation?: boolean } = {}): Promise<number> {
-    if (options.continuation !== true && deps.continuation !== undefined && !deps.continuation.hasServingPolicy()) return Promise.resolve(0);
-    if (reviewing !== null) {
-      if (options.continuation === true) reviewAgain = true;
-      return reviewing;
-    }
+    if (options.continuation === true) return reviewContinuationNow();
+    if (deps.continuation !== undefined && !deps.continuation.hasServingPolicy()) return Promise.resolve(0);
+    if (reviewing !== null) return reviewing;
     reviewing = (async () => {
       const resident: GameActor[] = [];
       deps.games.forEach?.((actor) => resident.push(actor));
@@ -2018,7 +2022,7 @@ export function createRoomHost(deps: RoomHostDeps) {
         const view = game.view;
         if (view.hold !== null || view.incompatible !== null) continue; // already not served (or held): nothing to review
         try {
-          if (await game.reviewServing({ continuation: options.continuation === true })) stopped += 1;
+          if (await game.reviewServing()) stopped += 1;
         } catch (error) {
           deps.warn(`  serving: the review of ${game.gameId} failed -- ${error instanceof Error ? error.message : String(error)}; it is asked again at the next pass`);
         }
@@ -2026,12 +2030,27 @@ export function createRoomHost(deps: RoomHostDeps) {
       return stopped;
     })().finally(() => {
       reviewing = null;
-      if (reviewAgain) {
-        reviewAgain = false;
-        void reviewServing({ continuation: true }).catch((error) => deps.warn(`  serving: the review failed -- ${error instanceof Error ? error.message : String(error)}`));
-      }
     });
     return reviewing;
+  }
+
+  /** LIVE-4 (L4-7): the continuation review, queued on every resident served game NOW (synchronously: `GameActor.run`
+   *  queues inside the call), then awaited together. A game still loading is skipped: its load's rebuild asks the verdict
+   *  after this change, with the new facts. Resolves with how many games stopped being served. */
+  function reviewContinuationNow(): Promise<number> {
+    const queued: Array<Promise<boolean>> = [];
+    deps.games.forEach?.((game) => {
+      if (!game.isLoaded) return;
+      const view = game.view;
+      if (view.hold !== null || view.incompatible !== null) return; // already not served (or held): nothing to review
+      queued.push(
+        game.reviewServing({ continuation: true }).catch((error) => {
+          deps.warn(`  serving: the continuation review of ${game.gameId} failed -- ${error instanceof Error ? error.message : String(error)}; it is asked again at the next change`);
+          return false;
+        }),
+      );
+    });
+    return Promise.all(queued).then((stopped) => stopped.filter((value) => value).length);
   }
 
   /** LIVE-4 (L4-2): an actor stopped serving `gameId` -- its serving review concluded "no", or a rebuild it had not

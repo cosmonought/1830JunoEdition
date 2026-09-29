@@ -43,9 +43,12 @@
 //      and a deal this pool does not play or read is named before a malformed money identity;
 //   6. agreement: the money identity's rules and hosted protocol are the deal's, and its codec is its deployment's;
 //   7. the deployment: its key served here; then, where the chain was read this run, the game's code checksum and
-//      denom are the chain's (else a CONFLICT: the contract at that address is not what the game was bound to); then
-//      the configured facts are the game's (else `deployment-unverified`, DERIVED: a configuration typo, or a declared
-//      fact no chain read attests, must never mass-hold money games).
+//      denom are the chain's (else a CONFLICT: the contract at that address is not what the game was bound to) -- and,
+//      where it was NOT read this run, a game whose financial record is held for a deployment conflict is
+//      `deployment-unverified` (DERIVED, L4-7: the durable hold outlives the run's facts, and only a new verification-
+//      grade read may conclude the conflict again or clear it); then the configured facts are the game's (else
+//      `deployment-unverified`, DERIVED: a configuration typo, or a declared fact no chain read attests, must never
+//      mass-hold money games).
 
 import {
   ABSENT_HOSTED_PROTOCOL,
@@ -117,8 +120,12 @@ export type MoneyFacts =
   | { readonly kind: "missing" }
   /** ESCROW-3A's placeholder for a missing record: already held, with no continuation identity. */
   | { readonly kind: "placeholder" }
-  /** The financial record: its stored continuation identity (unparsed) and its write-once deployment pin. */
-  | { readonly kind: "record"; readonly mci: unknown; readonly deployment: DeploymentPin | null };
+  /** The financial record: its stored continuation identity (unparsed) and its write-once deployment pin. `held` (L4-7):
+   *  the code the record is HELD under, when it is held (a financial hold is durable: the owning pool wrote it); absent or
+   *  null when it is not held. The verdict reads only one code of it -- `CONFLICT_HOLD_CODES["deployment-conflict"]`, the
+   *  durable record of a verified deployment conflict (a verified conflict supersedes any weaker hold, so it is always
+   *  recorded under this code: `moneyLifecycle.ts`) -- and only while this run has no chain facts (step 7). */
+  | { readonly kind: "record"; readonly mci: unknown; readonly deployment: DeploymentPin | null; readonly held?: string | null };
 
 export interface GameContinuationFacts {
   readonly formats: ArtifactFormats;
@@ -329,6 +336,19 @@ export function continuationVerdict(
         return conflict("deployment-conflict", `the escrow at ${key} reports ${field}=${chain[field]} on chain; the game was bound with ${field}=${pin[field]}`);
       }
     }
+  } else if (money.held === CONFLICT_HOLD_CODES["deployment-conflict"]) {
+    /* L4-7: A VERIFIED CONFLICT DOES NOT DISAPPEAR WITH THE PROCESS. The chain's facts live for one run; the owning pool's
+       hold for a deployment conflict is durable -- written the moment the conflict is learned, and superseding any
+       weaker hold the record was under (`moneyLifecycle.ts`). A run that has not read this deployment at verification
+       grade yet (a restart, an unreachable chain) cannot tell whether the contradiction that hold records still stands,
+       so it does not continue the game -- DERIVED, written nowhere (never a second hold, never an intent hold: only a
+       verification-grade read concludes a conflict). Once the chain is read, the facts decide as before: a contradiction
+       is the conflict again; agreement continues the game (its money stays held until an operator's release, which
+       itself needs an agreeing read). Any other hold is unaffected: gameplay continues while its money waits. */
+    return notContinued(
+      "deployment-unverified",
+      `the game's escrow ${key} is held (${money.held}), and this run has not read that deployment at verification grade: it is not continued until the chain is read`,
+    );
   }
   const differs = deploymentFactDifference(served.pin, pin);
   if (differs !== null) {

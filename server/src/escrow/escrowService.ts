@@ -381,6 +381,10 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
           stats.holds += 1;
           audit("settlement.held", { game_id: gameId, code: decided.next.hold?.code ?? null, from: record.phase });
           deps.warn(`  escrow: ${gameId} HELD (${decided.next.hold?.code}) -- ${decided.next.hold?.detail}`);
+        } else if (decided.next.phase === "held" && decided.next.hold?.code !== record.hold?.code) {
+          /* L4-7: a verified deployment conflict superseded a weaker hold. */
+          audit("settlement.held", { game_id: gameId, code: decided.next.hold?.code ?? null, from: record.phase, supersedes: record.hold?.code ?? null });
+          deps.warn(`  escrow: ${gameId} HELD (${decided.next.hold?.code}, superseding ${record.hold?.code}) -- ${decided.next.hold?.detail}`);
         }
         remember(decided.next);
         notify(gameId);
@@ -503,7 +507,11 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     if (decision.verdict.kind === "continues") return true;
     serving.notice(gameId, decision, where);
     if (decision.verdict.kind === "conflict" && decision.holdCode !== null && record !== null && record.phase !== "closed" && record.phase !== "cancelled") {
-      await hold(gameId, decision.holdCode, `${decision.verdict.why}: ${decision.verdict.detail}`);
+      const verdict = decision.verdict;
+      const code = decision.holdCode;
+      /* L4-7: a verified DEPLOYMENT conflict supersedes a weaker hold (`moneyLifecycle.ts`), so it is always written down. */
+      const verifiedConflict = verdict.why === "deployment-conflict" ? { verifiedConflict: true as const } : {};
+      await apply(gameId, () => ({ kind: "hold", at: deps.now(), code, detail: `${verdict.why}: ${verdict.detail}`, ...verifiedConflict }));
     }
     return false;
   }

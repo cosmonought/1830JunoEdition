@@ -133,6 +133,10 @@ export type MoneyIndexEntry =
        *  step -1 / refresh) classified them -- so the session judges exactly the facts the money seams judge. */
       readonly tickets?: FormatFact;
       readonly intents?: FormatFact;
+      /** LIVE-4 (L4-7): the code the record is HELD under (the owning pool's durable financial hold), or absent / null
+       *  when it is not held -- the verdict reads the deployment-conflict code of it while this run has not read the
+       *  chain (a verified conflict survives a restart). */
+      readonly held?: string | null;
     }
   /** ESCROW-3A's held placeholder for a missing record: no continuation identity, already held. */
   | { readonly kind: "placeholder" }

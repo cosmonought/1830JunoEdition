@@ -118,7 +118,9 @@ export function createContinuationWiring(deps: ContinuationWiringDeps): Continua
     if (entry.kind === "placeholder") return { formats: { ...CURRENT, fin: "current" }, money: { kind: "placeholder" } };
     return {
       formats: { ...CURRENT, fin: "current", ...(entry.tickets !== undefined ? { tickets: entry.tickets } : {}), ...(entry.intents !== undefined ? { intents: entry.intents } : {}) },
-      money: { kind: "record", mci: entry.mci, deployment: entry.deployment },
+      /* L4-7: with the code the record is held under -- a verified deployment conflict's durable hold keeps the game
+         from being continued on a run that has not read the chain yet (the canonical verdict's step 7). */
+      money: { kind: "record", mci: entry.mci, deployment: entry.deployment, ...(entry.held !== undefined && entry.held !== null ? { held: entry.held } : {}) },
     };
   }
 
@@ -171,4 +173,36 @@ export function createContinuationWiring(deps: ContinuationWiringDeps): Continua
     isMoney,
     hasServingPolicy: () => pool().role !== "primary",
   };
+}
+
+/* ==================================================================
+    LIVE-4 (integration + L4-7): WHAT A CHANGE IN THE CHAIN FACTS DOES -- ONE PLACE, FOR `start.ts` AND THE TESTS
+   ================================================================== */
+
+/** The process parts a chain-facts change reaches. */
+export interface ChainFactsListenerDeps {
+  /** Announces each change in the verification-grade facts (`MoneyServing.onChainFacts`). */
+  readonly onChainFacts: (listener: (key: string) => void) => void;
+  /** The game server's lifecycle: every resident verdict re-asked; the money GameRecords it knows. */
+  readonly lifecycle: { reviewContinuation(): Promise<number>; financialRecords(): Iterable<Readonly<GameRecord>> };
+  /** The settlement coordinator: the owner's conflict holds (`holdConflicts`). */
+  readonly settlement: { holdConflicts(records: Iterable<Readonly<GameRecord>>): Promise<void> };
+}
+
+/**
+ * When a verification-grade read changes a deployment's facts: every resident game's verdict is asked again at once
+ * (the room host queues the review on all of them in one step), and the owner writes every verified conflict's canonical
+ * hold NOW -- not at the next five-minute sweep or money job. The chain's facts live for one run and the hold is what
+ * the next run reads (`continuationVerdict` step 7), so a restart right after the contradiction cannot forget it.
+ * `settled()` resolves once every hold started so far is written (a clean stop waits for it, bounded).
+ */
+export function listenForChainFacts(deps: ChainFactsListenerDeps): { settled(): Promise<void> } {
+  const holding = new Set<Promise<void>>();
+  deps.onChainFacts(() => {
+    void deps.lifecycle.reviewContinuation().catch(() => undefined);
+    const held = deps.settlement.holdConflicts(deps.lifecycle.financialRecords()).catch(() => undefined);
+    holding.add(held);
+    void held.finally(() => holding.delete(held));
+  });
+  return { settled: () => Promise.all([...holding]).then(() => undefined) };
 }

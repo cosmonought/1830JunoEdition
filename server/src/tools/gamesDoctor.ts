@@ -777,11 +777,18 @@ export async function releaseMoneyHold(dataDir: string, gameId: string, note: st
   }
   const { decision } = onDisk;
   const verdict = decision.verdict;
+  /* A hold for a deployment conflict is lifted only against a verification-grade read of the deployment this run. Without
+     one the canonical verdict itself says so (L4-7: the durable conflict hold keeps a game `deployment-unverified` until
+     the chain is read -- and a verified conflict supersedes a weaker hold, so it is always this code), and the operator
+     is told what to run. */
+  const needsChainRead = record.hold.code === "binding-mismatch" && (decision.key === null || serving.chainFactsReadAt(decision.key) === null);
+  const chainReadMessage = `${gameId} is held for a deployment conflict: it is released only against a verification-grade chain read that agrees with its binding (run with --escrow-config and --chain); it stays held`;
   if (verdict.kind !== "continues") {
+    if (needsChainRead && verdict.kind === "not-continued" && verdict.why === "deployment-unverified") return { ok: false, reason: chainReadMessage };
     return { ok: false, reason: `this deployment may not continue ${gameId} (${verdict.kind === "conflict" ? `conflict: ${verdict.why}` : verdict.why}: ${verdict.detail}); it stays held -- run a compatible build with the escrow it is bound to configured` };
   }
-  if (record.hold.code === "binding-mismatch" && (decision.key === null || serving.chainFactsReadAt(decision.key) === null)) {
-    return { ok: false, reason: `${gameId} is held for a deployment conflict: it is released only against a verification-grade chain read that agrees with its binding (run with --escrow-config and --chain); it stays held` };
+  if (needsChainRead) {
+    return { ok: false, reason: chainReadMessage };
   }
   /* 3. A sealed game's evidence re-derives from its sealed prefix. */
   if (record.terminal !== null) {
@@ -801,7 +808,9 @@ export async function releaseMoneyHold(dataDir: string, gameId: string, note: st
   if (decided.kind !== "moved") return { ok: false, reason: decided.kind === "refused" ? decided.reason : "nothing to release" };
   const written = await store.put(decided.next, record.record_version);
   if (written.kind !== "committed") return { ok: false, reason: `the release was not written (${written.kind === "conflict" ? "the record changed" : written.detail}); it is still held` };
-  options.ops.audit("money.released", { game_id: gameId, code: record.hold.code, to: decided.next.phase, note: trimmed, log_hash: verification.logHash });
+  /* L4-7: a verified deployment conflict may have superseded a weaker hold; releasing it lifts both, so both are named. */
+  const superseded = /\(supersedes ([a-z-]+)\)$/.exec([...record.transitions].reverse().find((line) => line.to === "held")?.why ?? "")?.[1] ?? null;
+  options.ops.audit("money.released", { game_id: gameId, code: record.hold.code, ...(superseded !== null ? { superseded } : {}), to: decided.next.phase, note: trimmed, log_hash: verification.logHash });
   await options.ops.flush();
   return { ok: true, to: decided.next.phase };
 }

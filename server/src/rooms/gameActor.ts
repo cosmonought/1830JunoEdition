@@ -643,7 +643,7 @@ export class GameActor {
   run<T>(
     kind: OpKind,
     op: (tx: Tx) => Promise<T> | T,
-    options: { deadlineMs?: number; origin?: TaskOrigin; quiet?: boolean } = {},
+    options: { deadlineMs?: number; origin?: TaskOrigin; quiet?: boolean; essential?: boolean } = {},
   ): Promise<RunResult<T>> {
     if (this.disposed) return Promise.resolve({ kind: "expired", reason: "closed" });
     /* A frame whose socket closed before its handler reached the queue is not queued at all: its socket's close
@@ -652,7 +652,10 @@ export class GameActor {
       this.deps.counters.expiredSocketClosed += 1;
       return Promise.resolve({ kind: "expired", reason: "socket-closed" });
     }
-    if (this.queued.size >= ACTOR_QUEUE_BOUND) {
+    /* LIVE-4 (L4-7): an ESSENTIAL task (the continuation review after a chain-facts change) is never refused for a full
+       queue and never expires: it answers no client, and dropping it would leave the game playable after this process
+       knows it must not be (the session's verdict is asked again only by it). */
+    if (options.essential !== true && this.queued.size >= ACTOR_QUEUE_BOUND) {
       this.deps.counters.busy += 1;
       return Promise.resolve({ kind: "busy" });
     }
@@ -661,7 +664,7 @@ export class GameActor {
         kind,
         op,
         origin: options.origin,
-        deadlineAt: this.deps.now() + (options.deadlineMs ?? TASK_DEADLINE_MS),
+        deadlineAt: options.essential === true ? Number.POSITIVE_INFINITY : this.deps.now() + (options.deadlineMs ?? TASK_DEADLINE_MS),
         state: "queued",
         resolve,
         ...(options.quiet === true ? { quiet: true } : {}),
@@ -1242,7 +1245,10 @@ export class GameActor {
         else session.reviewServing();
         return this.publishIfNotServed("serving");
       },
-      { quiet: true },
+      /* L4-7: the continuation review is essential -- never refused for a full queue, never expired behind a slow task
+         (a dropped review would leave the game served after the contradiction). The timer's review is not: every submit
+         asks the serving decision again with the clock. */
+      { quiet: true, ...(options.continuation === true ? { essential: true } : {}) },
     );
     return outcome.kind === "ran" && outcome.value;
   }

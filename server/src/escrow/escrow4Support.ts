@@ -26,6 +26,7 @@ import { createMemoryFinancialGameStore } from "./financialGameStore";
 import { createMoneyTables, type MoneyTables } from "./moneyTables";
 import { createSettlementCoordinator } from "./settlementCoordinator";
 import type { DeploymentCapability } from "../../../frontend/src/gameEngine/compat/deploymentCapability";
+import type { LogStore } from "../fileLogStore";
 import { createMemorySigningJournal } from "./signingJournal";
 import { createMemoryWalletTicketStore, createWalletTicketLedger } from "./walletTickets";
 import { addressOfPublicKey } from "./juno/cosmosTx";
@@ -114,6 +115,8 @@ export interface MoneyServerOptions {
   readonly continuation?: Parameters<typeof createEscrowService>[0]["continuation"];
   /** LIVE-4 (L4-2): this pool's deployment capability. Absent: this build's, serving the fixture pin. */
   readonly capability?: DeploymentCapability;
+  /** LIVE-4 (L4-7): the game server's log store (a controlled store, so a test can hold an append). Absent: in memory. */
+  readonly store?: LogStore;
 }
 
 export async function moneyServer(options: MoneyServerOptions = {}): Promise<MoneyServer> {
@@ -230,6 +233,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
        facts the escrow service records (a test may still inject another capability for the session side). */
     capability: options.capability ?? service.serving.capability,
     runtime: service.serving.runtime(),
+    ...(options.store !== undefined ? { store: options.store } : {}),
     moneyFacts,
     rosterSource: { plan: (record, ctx) => (record.money === null ? noMoney.plan(record, ctx) : service.rosterSource.plan(record, ctx)) },
     money: () => refs.money,

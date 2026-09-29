@@ -34,6 +34,7 @@ import { dealIdentityOnDisk, logFormatOnDisk } from "./escrow/dealIdentity";
 import { compatibilityKey, type DeploymentCapability } from "../../frontend/src/gameEngine/compat/deploymentCapability";
 import { bannerLines, compatibilityDescriptor } from "./compatibilityDescriptor";
 import { createSettlementCoordinator } from "./escrow/settlementCoordinator";
+import { listenForChainFacts } from "./continuationWiring";
 import { noMoneyServing } from "./escrow/moneyServing";
 import { serverPrefixReplay } from "./escrow/settlementEvidence";
 import { createFileChainIntentStore } from "./escrow/chainIntents";
@@ -126,6 +127,10 @@ const EXIT_STORE_UNCERTAIN = 4;
 
 let lock: DataLock | null = null;
 let stopping = false;
+/** LIVE-4 (L4-7): the chain-facts listener (its conflict holds still being written); a clean stop waits for them, at most
+ *  this long, before it gives up the lock. */
+let chainFactsListener: { settled(): Promise<void> } | null = null;
+const CONFLICT_HOLD_FLUSH_MS = 5_000;
 
 async function main(): Promise<void> {
   const acquired = await acquireDataLock(dataDir, {
@@ -421,10 +426,11 @@ async function main(): Promise<void> {
      five minutes (liveness is a state, never a refund). */
   serverRef.current = server;
   /* LIVE-4 (integration): the session side re-asks every resident game's verdict when the chain facts change -- a
-     verified contradiction the money side has just recorded stops the game here at once, on this primary pool too. */
-  serving.onChainFacts(() => {
-    void server.lifecycle.reviewContinuation().catch(() => undefined);
-  });
+     verified contradiction the money side has just recorded stops the game here at once, on this primary pool too.
+     LIVE-4 (L4-7): and the owner writes every verified conflict's canonical hold NOW (`holdConflicts`), not at the next
+     five-minute sweep: the chain's facts live for one run, the hold is what the next run reads, so a restart right
+     after the contradiction cannot forget it. A clean stop waits (bounded) for holds still being written. */
+  chainFactsListener = listenForChainFacts({ onChainFacts: (listener) => serving.onChainFacts(listener), lifecycle: server.lifecycle, settlement });
   if (escrow !== null && junoConfigUsed !== null && ledgerUsed !== null) {
     const backend = escrow;
     moneyRef.current = createMoneyTables(
@@ -482,9 +488,10 @@ async function main(): Promise<void> {
     settlement.stop();
     moneyRef.current?.stop();
     escrow?.stop();
-    /* LIVE-3C: the audit lines already queued are written (while the lock is still ours), then the lock goes. */
-    void ops
-      .flush()
+    /* LIVE-4 (L4-7): a verified conflict's hold still being written is finished first (bounded), while the lock is ours.
+       LIVE-3C: then the audit lines already queued are written, then the lock goes. */
+    void Promise.race([chainFactsListener?.settled() ?? Promise.resolve(), new Promise((resolve) => setTimeout(resolve, CONFLICT_HOLD_FLUSH_MS))])
+      .then(() => ops.flush())
       .catch(() => undefined)
       .then(() => held.release())
       .finally(() => process.exit(code));

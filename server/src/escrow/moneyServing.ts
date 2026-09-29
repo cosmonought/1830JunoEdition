@@ -138,14 +138,21 @@ function bindingKeyOf(record: FinancialGameRecord | null): string | null {
   return deploymentKey({ backend: pin.backend, chain_id: pin.chain_id, contract_address: pin.contract_address });
 }
 
-/** The money facts the canonical verdict reads, from a seam's facts. */
+/** The money facts the canonical verdict reads, from a seam's facts. L4-7: with the code a readable record is HELD
+ *  under, so every seam and the session judge a verified deployment conflict's durable hold the same way. */
 export function moneyFactsOf(facts: Pick<MoneyGameFacts, "fin" | "record">): MoneyFacts {
   if (facts.fin === undefined || (facts.fin === "current" && facts.record === null)) return { kind: "missing" };
   const record = facts.record;
   /* Unreadable here: the format class decides first (step 1), before any money fact is looked at. */
   if (record === null) return { kind: "record", mci: null, deployment: null };
   if (PLACEHOLDER(record)) return { kind: "placeholder" };
-  return { kind: "record", mci: record.continuation, deployment: record.binding?.deployment ?? null };
+  const held = heldCodeOf(record);
+  return { kind: "record", mci: record.continuation, deployment: record.binding?.deployment ?? null, ...(held !== null ? { held } : {}) };
+}
+
+/** LIVE-4 (L4-7): the code a financial record is held under, or null when it is not held. */
+export function heldCodeOf(record: FinancialGameRecord): string | null {
+  return record.phase === "held" ? (record.hold?.code ?? null) : null;
 }
 
 export function createMoneyServing(input: {

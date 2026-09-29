@@ -3,9 +3,11 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-09-29, by LIVE-4 L4-6 (the tooling / diagnostics / runbooks / canonical-documentation pass on the combined LIVE-4 integration `6da8a1f`; §A "LIVE-4"). The canonical description of LIVE-4's compatibility identities is now [`LIVE4_COMPATIBILITY_MODEL.md`](LIVE4_COMPATIBILITY_MODEL.md).
+**Last updated:** 2026-09-29, by LIVE-4 L4-7 (the final independent certification, one commit on L4-6's `89a4b5b`): **LIVE-4 is certified and closed; LIVE-5 is next** (§A "LIVE-4"). The canonical description of LIVE-4's compatibility identities is [`LIVE4_COMPATIBILITY_MODEL.md`](LIVE4_COMPATIBILITY_MODEL.md).
 
-**Previously updated:** 2026-09-28, by the integrated closure of ESCROW-4 (`031593e`), Phase 6.5-B (`ddf4bc8`) and APP-TEST-0A (`467498e`): the owner broad gate was GREEN at `467498e`, and one closure commit on top hands the settlement band the live board and closes the bookkeeping (§A). ESCROW-4 is the player-facing Juno escrow path (Keplr wallet proof, funding, Start, consent keys and the settlement UX; financial protocol 3; money GameRecords `record_schema 2`). It builds on ESCROW-JOIN (`6f05c80`), ESCROW-3B (`5298d95`, owner-certified), ESCROW-3A (`900aec3`), DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
+**Previously updated:** 2026-09-29, by LIVE-4 L4-6 (the tooling / diagnostics / runbooks / canonical-documentation pass on the combined LIVE-4 integration `6da8a1f`).
+
+**Earlier:** 2026-09-28, by the integrated closure of ESCROW-4 (`031593e`), Phase 6.5-B (`ddf4bc8`) and APP-TEST-0A (`467498e`): the owner broad gate was GREEN at `467498e`, and one closure commit on top hands the settlement band the live board and closes the bookkeeping (§A). ESCROW-4 is the player-facing Juno escrow path (Keplr wallet proof, funding, Start, consent keys and the settlement UX; financial protocol 3; money GameRecords `record_schema 2`). It builds on ESCROW-JOIN (`6f05c80`), ESCROW-3B (`5298d95`, owner-certified), ESCROW-3A (`900aec3`), DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
 
 **Where the documents live.** They are in two places:
 
@@ -91,14 +93,15 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 - **The closure:** both `SettlementBand` mounts are handed `liveState`, so a Dispute's evidence is the live board's hash, never a scrubbed round's (6.5-B review I-4; behavioural regression `components/money/settlementEvidenceBoard.test.tsx`). The 6.5-B items are closed in the backlog (Part C's Phase 6.5 register; U-19 and U-24 resolved). I-1 stays deferred (minor). Two route findings are pre-registered as blockers before any substantive G5 / LPF route playtest (Part B S6-15, S6-16). Record: Project `claude/INTEGRATED_CLOSURE_ESCROW4_65B_APP0A_2026-09-28.md`.
 - **Unchanged:** rules 11; settlement `[10, 11]`; hosted protocol 1; financial protocol 3. No server, contract or engine file changed.
 
-**LIVE-4 — compatibility and continuation: INTEGRATED and corpus-gate certified; L4-6 complete; L4-7 next**
+**LIVE-4 — compatibility and continuation: CERTIFIED AND CLOSED (L4-7); LIVE-5 next**
 - **Real closure baseline:** `9c81bbd` (the integrated closure above; the real checkout's `main`).
 - **The combined LIVE-4 integration / hardening:** `6da8a1f17b17cd44d31666f00de1b5480ce65754` (tree `2a488d52…`), on `9c81bbd`: the five slices L4-1 (the canonical compatibility model) → L4-2 (no-money continuation) → L4-3 (client compatibility, protocol 1) → L4-4 (money continuation) → L4-5 (cryptographic room seed), plus one integration commit. **Certified by the owner/corpus gate** (the integration report's addendum: 539/539 frontend suites, 10,311 tests, with the corpus; server 619 = 618 + the FI-22 environment skip; smoke; `scan-v10` CLEAN; the build at the 49 + 1 warning baseline). Not pushed; it lives in the sibling clone `1830Juno-L4-INT`. Record: Project `claude/LIVE4_INTEGRATION_HARDENING_2026-09-28.md`.
 - **What the integration closed:** a complete newer-format log record is preserved byte for byte and is derived incompatibility (`not-continued/newer-format`), never torn-tail corruption (N-3), while genuine torn-tail recovery is preserved; the session and the money seams share one verification-grade chain-facts runtime, so they give the same answer on every money fact; one deployment capability per process (`start.ts`: `serving.capability`); protocol-1 client compatibility with the legacy wire untouched; the hosted revenue seed is a `crypto.randomInt` draw. Evidence stays in the integration report.
 - **The identities** (rules / hosted / financial / client) and the two directions of compatibility (can this process continue this game; can this client talk to this process) are described once, in [`LIVE4_COMPATIBILITY_MODEL.md`](LIVE4_COMPATIBILITY_MODEL.md). **The build id is diagnostic**: no continuation or protocol-1 client decision compares builds; only the legacy protocol-0 wire keeps its exact compare (§D 5b).
-- **L4-6 (this pass): tooling, diagnostics, runbooks, docs.** The process's compatibility key is printed in the startup banner and `ops/status.json` (with `client_answers`); `gamesDoctor compat` prints the canonical descriptor; `gamesDoctor continuation` gives every stored game's canonical verdict through production's own wiring (read-only; money games keep L4-4's owner/deployment/format view); every inspection command reads through a write-refusing file system. The runbooks' build-equality language is corrected; the LIVE-5 edge requirement (preserve the `/gs*` query string: `cp`, `cr`, `cb`) and the `/gs/api/*` decision (no HTTP client announcement in LIVE-4) are recorded. No protocol or version moved. Record: Project `claude/LIVE4_L4_6_TOOLING_DOCS_2026-09-29.md`.
-- **L4-7 = the final independent LIVE-4 certification** (its open list: the integration report §13). **LIVE-5 follows LIVE-4's closure.**
-- **Versions (unchanged by LIVE-4's later slices and by L4-6):** rules 11 (reads [11]); settlement `[10, 11]`; hosted protocol 1; financial protocol 3; client protocol 1, accepted `[0, 1]`; money GameRecords `record_schema 2`. Keys: `dc1-68c4b829b3a20e63f3e55cde` (no escrow), `dc1-4308649847947d1d12ccdd41` (the fixture pin).
+- **L4-6: tooling, diagnostics, runbooks, docs.** The process's compatibility key is printed in the startup banner and `ops/status.json` (with `client_answers`); `gamesDoctor compat` prints the canonical descriptor; `gamesDoctor continuation` gives every stored game's canonical verdict through production's own wiring (read-only; money games keep L4-4's owner/deployment/format view); every inspection command reads through a write-refusing file system. The runbooks' build-equality language is corrected; the LIVE-5 edge requirement (preserve the `/gs*` query string: `cp`, `cr`, `cb`) and the `/gs/api/*` decision (no HTTP client announcement in LIVE-4) are recorded. No protocol or version moved. Record: Project `claude/LIVE4_L4_6_TOOLING_DOCS_2026-09-29.md`.
+- **L4-7: the final independent certification — GREEN; LIVE-4 closed.** One commit on `89a4b5b` (not pushed; the sibling clone `1830Juno-L4-7`). It found and repaired LIVE-4 defects in how a verified chain contradiction is carried: the continuation review it triggers is now queued on every resident game at once and is never dropped behind a slow task (a game could keep admitting moves after the contradiction was known); the owner writes the conflict's hold the moment the facts are learned, not at the next five-minute sweep, superseding any weaker hold (the one exception to "the first hold stands"); and a game held for a deployment conflict is `not-continued/deployment-unverified` on a run that has not read the chain (a restarted server used to play it until its first chain read). It adds the certification suites (`server/src/rooms/live4Certification.test.ts`, 63 tests: the race boundary, precedence, key agreement across real processes, the edge, a stored-data matrix over file stores with bytes hashed, the release paths, restarts and reconnects; `frontend/src/utils/live4Certification.test.ts`: the socket inventory). Its gate on Linux (the cloud clone, with the corpus): frontend 540/540 suites and 10,318 tests, typecheck, the source guards and sweep, the production build at the 49 + 1 warning baseline; server 695 = 694 + the FI-22 skip, smoke, `scan-v10` CLEAN. A 27-mutation campaign was caught in full; a fresh review (four rounds) closed with no High or Medium open. What ran on native Windows is in the report. No version or key moved. Record: Project `claude/LIVE4_L4_7_FINAL_CERTIFICATION_2026-09-29.md`.
+- **LIVE-5 follows.** Its LIVE-4 inputs: the hard edge requirement (§D 5b; `LIVE4_COMPATIBILITY_MODEL.md` §4) and the L4-7 report's handoff list.
+- **Versions (unchanged by LIVE-4's later slices, L4-6 and L4-7):** rules 11 (reads [11]); settlement `[10, 11]`; hosted protocol 1; financial protocol 3; client protocol 1, accepted `[0, 1]`; money GameRecords `record_schema 2`. Keys: `dc1-68c4b829b3a20e63f3e55cde` (no escrow), `dc1-4308649847947d1d12ccdd41` (the fixture pin).
 
 **Route engine / v12: a separate gameplay program, not part of LIVE-4**
 - The route / autopath hardening (the route-engine certification preflight's findings, including the pre-registered blockers **S6-15** — hosted ingress judging routes on the STANDARD board — and **S6-16** — an H12 fork reversal the search demonstrates but authority rejects) and the **v12** rules batch are their own gameplay program. They are not folded into LIVE-4 and change no LIVE-4 identity. Record: Project `claude/ROUTE_ENGINE_EXTRACTION_CERTIFICATION_PREFLIGHT_2026-09-28.md`.
@@ -137,9 +140,9 @@ Phases 1, 2, 2.5, 3A, 3B, ESCROW-JOIN and ESCROW-4: COMPLETE
 
 Gno is parked.
 
-**LIVE-4 status (2026-09-29):** integrated at `6da8a1f` (corpus-gate certified) and tooled / documented by L4-6.
-**Next pass: L4-7, the final independent LIVE-4 certification** (the owner's brief sets its scope; its inputs are the
-integration report §13 and the L4-6 report). **LIVE-5 follows LIVE-4's closure.** The route-engine / v12 program is
+**LIVE-4 status (2026-09-29): CLOSED.** Integrated at `6da8a1f` (corpus-gate certified), tooled / documented by L4-6
+(`89a4b5b`) and certified by L4-7 (one commit on it). **Next pass: LIVE-5** (the owner's brief sets its scope; its
+LIVE-4 inputs are the L4-7 report's handoffs and `LIVE4_COMPATIBILITY_MODEL.md` §4). The route-engine / v12 program is
 separate (§A).
 
 *Historical (the LIVE-4 entry conditions):* ESCROW-4 left the tree as the LIVE-4
@@ -190,7 +193,8 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 
 | Topic | Document |
 |---|---|
-| LIVE-4 L4-6: tooling, diagnostics, runbooks and canonical docs (the handoff to L4-7) | `claude/LIVE4_L4_6_TOOLING_DOCS_2026-09-29.md` |
+| LIVE-4 L4-7: the final certification (the race boundary, the durable-conflict restart rule, the matrices, the gate, the mutation campaign, the review, the LIVE-5 handoffs) | `claude/LIVE4_L4_7_FINAL_CERTIFICATION_2026-09-29.md` |
+| LIVE-4 L4-6: tooling, diagnostics, runbooks and canonical docs | `claude/LIVE4_L4_6_TOOLING_DOCS_2026-09-29.md` |
 | LIVE-4 integration and hardening: the combined tree `6da8a1f`, N-3, the one capability / one runtime merge, the review, the corpus-gate addendum, the L4-7 list (§13) | `claude/LIVE4_INTEGRATION_HARDENING_2026-09-28.md` |
 | LIVE-4 slices: L4-1 canonical model; L4-2 no-money continuation; L4-3 client compatibility; L4-4 money continuation; L4-5 crypto seed | `claude/LIVE4_L4_1_CANONICAL_MODEL_2026-09-28.md`, `claude/LIVE4_L4_2_NO_MONEY_CONTINUATION_2026-09-28.md`, `claude/LIVE4_L4_3_CLIENT_COMPATIBILITY_2026-09-28.md`, `claude/LIVE4_L4_4_MONEY_CONTINUATION_2026-09-28.md`, `claude/LIVE4_L4_5_CRYPTO_RNG_2026-09-28.md` |
 | Route engine: extraction / certification preflight (the separate gameplay program; S6-15 / S6-16) | `claude/ROUTE_ENGINE_EXTRACTION_CERTIFICATION_PREFLIGHT_2026-09-28.md` |
@@ -231,9 +235,10 @@ Every other Project report is **historical**; see the manifest.
 
 ### C.3 LIVE-4 reading order
 
-**For L4-7 (the final LIVE-4 certification):** this file; `LIVE4_COMPATIBILITY_MODEL.md`; the L4-6 report; the
-integration report (§§3–5, §12, §13 and the addendum); then the slice reports only where a finding needs them. The
-list below is the order LIVE-4 started from, kept for provenance.
+**For LIVE-5 (LIVE-4 is closed):** this file; `LIVE4_COMPATIBILITY_MODEL.md` (§4: the edge requirement and the
+`/gs/api/*` decision); the L4-7 report's LIVE-5 handoffs; then ESCROW-4 §19. The LIVE-4 slice, integration and L4-6
+reports are needed only where a LIVE-5 question reaches back into them. The list below is the order LIVE-4 started
+from, kept for provenance.
 
 1. This file, then `ROADMAP_3_2_REMAINING_WORK.md` (Phase 4).
 2. `LIVE4_COMPATIBILITY_CONTINUATION_PREFLIGHT` (the design).
@@ -286,7 +291,7 @@ list below is the order LIVE-4 started from, kept for provenance.
 
 **5b. Compatibility is semantic, never a build (LIVE-4).**
 - Whether a process continues a stored game is `continuationVerdict` over the game's semantic identity (rules pin, hosted protocol, money identity, deployment) against the process's one capability; whether a protocol-1 client may play is `clientVerdict` over its announced protocol and rules. **Neither reads a build id**, and the compatibility key contains none. Only the legacy protocol-0 wire keeps its exact build compare, until it is retired.
-- A derived "not continued" is written nowhere; only the owning pool writes a conflict's hold. Operator inspection writes nothing.
+- A derived "not continued" is written nowhere; only the owning pool writes a conflict's hold. A **deployment** conflict is concluded only from a verification-grade chain read, and its hold (`binding-mismatch`) is written at once and over any weaker hold; it outlives the process: a run that has not read the deployment's chain facts does not continue the game, and its release needs an agreeing read (L4-7). The other conflicts (identity, the missing record's placeholder) come from durable facts and keep "the first hold stands". Operator inspection writes nothing.
 - The edge in front of the game server must forward `/gs*` query strings unchanged (`cp`, `cr`, `cb`), or current clients read as legacy ones (LIVE-5).
 - The description: `LIVE4_COMPATIBILITY_MODEL.md`.
 

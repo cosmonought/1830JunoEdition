@@ -378,8 +378,10 @@ export type FinancialEvent =
   | { readonly kind: "sealed"; readonly at: number; readonly log_len: number; readonly sealed_at: number }
   /** Evidence derived from the sealed prefix. */
   | { readonly kind: "prepared"; readonly at: number; readonly evidence: TerminalSettlementEvidence }
-  /** Something only an operator may resolve. */
-  | { readonly kind: "hold"; readonly at: number; readonly code: FinancialHoldCode; readonly detail: string }
+  /** Something only an operator may resolve. `verifiedConflict` (LIVE-4 L4-7): this is the OWNER'S hold for a deployment
+   *  conflict concluded from a verification-grade chain read -- the one hold that is not dropped when the record is held
+   *  already (it supersedes any weaker hold: see `held`). */
+  | { readonly kind: "hold"; readonly at: number; readonly code: FinancialHoldCode; readonly detail: string; readonly verifiedConflict?: true }
   /** The offline operator tool, after verification (never a server path). `dealt`: the game's GameRecord says it was
    *  dealt (a game dealt while held never resumes at `funding`). */
   | { readonly kind: "operator-release"; readonly at: number; readonly note: string; readonly dealt?: boolean }
@@ -416,8 +418,21 @@ const moved = (record: FinancialGameRecord, to: FinancialPhase, at: number, why:
   return { kind: "moved", next: { ...record, ...patch, phase: to, record_version: record.record_version + 1, updated_at: at, transitions } };
 };
 
-const held = (record: FinancialGameRecord, at: number, code: FinancialHoldCode, detail: string): FinancialTransition => {
-  if (record.phase === "held") return { kind: "same" }; // the FIRST hold stands (its evidence is what the game looked like)
+const held = (record: FinancialGameRecord, at: number, code: FinancialHoldCode, detail: string, verifiedConflict = false): FinancialTransition => {
+  if (record.phase === "held") {
+    /* LIVE-4 (L4-7): THE ONE EXCEPTION TO "THE FIRST HOLD STANDS". The chain's facts live for one run, and the durable
+       record of a verified deployment conflict is its `binding-mismatch` hold, which the next run reads while it has not
+       read the chain (`continuationVerdict` step 7). A record held already, for anything but that or the missing-record
+       placeholder, would otherwise keep the conflict nowhere -- so the owner's verified-conflict hold supersedes it,
+       keeping the phase it was held from and naming the first hold in its detail (and in the transition line). */
+    const first = record.hold;
+    if (verifiedConflict && code === "binding-mismatch" && first !== null && first.code !== code && first.code !== "financial-record-missing") {
+      return moved(record, "held", at, `hold: ${code} (supersedes ${first.code})`, {
+        hold: { code, detail: `${detail} -- superseding ${first.code}: ${first.detail}`.slice(0, 500), at, from: first.from },
+      });
+    }
+    return { kind: "same" }; // the FIRST hold stands (its evidence is what the game looked like)
+  }
   if (record.phase === "cancelled") return { kind: "refused", reason: "a cancelled table has nothing to hold" };
   return moved(record, "held", at, `hold: ${code}`, { hold: { code, detail: detail.slice(0, 500), at, from: record.phase } });
 };
@@ -479,7 +494,7 @@ export function transitionFinancial(record: FinancialGameRecord, event: Financia
       return { kind: "same" };
     }
     case "hold":
-      return held(record, at, event.code, event.detail);
+      return held(record, at, event.code, event.detail, event.verifiedConflict === true);
     case "operator-release": {
       if (record.phase !== "held" || record.hold === null) return { kind: "refused", reason: "not held" };
       if (record.hold.code === "financial-record-missing" || record.continuation === null) {

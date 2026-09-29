@@ -101,6 +101,13 @@ export const HOSTED_PROTOCOL_CHANGELOG: ReadonlyArray<ProtocolChangelogRow> = Ob
  *  game on, a bump means a drain: the old pool serves its games until they close. */
 export const FINANCIAL_PROTOCOL_VERSION = 3;
 
+/* LIVE-4 L4-7 (asked both ways; NOT a bump): the owner's hold for a VERIFIED deployment conflict now supersedes a weaker
+   hold (the one exception to "the first hold stands"), and a run with no chain facts does not continue a game held
+   `binding-mismatch` (derived). A protocol-3 build reads a superseded record exactly as this one does (the same code,
+   the same `from`, the same release rule), and every older record means what it meant. The caveat is operational, for
+   LIVE-5: a same-key rollback to an L4-6 build loses those two protections (not correctness), so a pool mixing L4-6
+   and L4-7 instances must be treated as lacking them. */
+
 export const FINANCIAL_PROTOCOL_CHANGELOG: ReadonlyArray<ProtocolChangelogRow> = Object.freeze([
   Object.freeze({
     version: 1,

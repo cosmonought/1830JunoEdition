@@ -61,7 +61,7 @@ import type { FormatFact } from "../../../frontend/src/gameEngine/compat/continu
 import { FinancialRecordUnreadableError, type FinancialGameStore } from "./financialGameStore";
 import type { MoneyContinuationFacts, MoneyContinuationIdentity, MoneyIndexEntry } from "./moneyContinuation";
 import { missingRecordPlaceholder, transitionFinancial, type FinancialEvent, type FinancialGameRecord } from "./moneyLifecycle";
-import { classifiesArtifacts, moneyFactsOf, moneyTermsKey, noMoneyServing, type ArtifactClasses, type MoneyGameFacts, type MoneyServing, type MoneyServingDecision } from "./moneyServing";
+import { classifiesArtifacts, heldCodeOf, moneyFactsOf, moneyTermsKey, noMoneyServing, type ArtifactClasses, type MoneyGameFacts, type MoneyServing, type MoneyServingDecision } from "./moneyServing";
 import { prepareTerminalEvidence, type PrefixReplay } from "./settlementEvidence";
 
 export interface SettlementCoordinatorDeps {
@@ -154,6 +154,9 @@ export interface SettlementCoordinator extends SettlementLifecycle, MoneyContinu
   reconcileAtStartup(input: { readonly financialGameIds: readonly string[]; readonly loadGame: (gameId: string) => Promise<unknown> }): Promise<StartupReconciliation>;
   /** A periodic look at quiet funded games (liveness is a state, never a refund). */
   sweepLiveness(records: Iterable<Readonly<GameRecord>>): Promise<void>;
+  /** LIVE-4 (L4-7): the owner's conflict holds, at once -- step -1 for every money game, and for a CONFLICT only its
+   *  canonical hold (written by the owner). Nothing else is written. Run by the chain-facts listener (`start.ts`). */
+  holdConflicts(records: Iterable<Readonly<GameRecord>>): Promise<void>;
   stop(): void;
   readonly stats: { announced: number; sealed: number; prepared: number; held: number; repeats: number; retries: number; failures: number };
 }
@@ -310,7 +313,9 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
     if (verdict.kind !== "conflict" || code === null) return "done";
     if (verdict.why === "financial-record-missing") return decided.fin === undefined ? writeMissingPlaceholder(gameId) : "done";
     if (decided.record === null || decided.record.phase === "closed" || decided.record.phase === "cancelled") return "done";
-    const held = await apply(gameId, () => ({ kind: "hold", at, code, detail: `${verdict.why}: ${verdict.detail}` }));
+    /* L4-7: a verified DEPLOYMENT conflict supersedes a weaker hold (`moneyLifecycle.ts`), so it is always written down. */
+    const verifiedConflict = verdict.why === "deployment-conflict" ? { verifiedConflict: true as const } : {};
+    const held = await apply(gameId, () => ({ kind: "hold", at, code, detail: `${verdict.why}: ${verdict.detail}`, ...verifiedConflict }));
     return held.ok ? "done" : "retry";
   }
 
@@ -335,6 +340,10 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
         if (decided.next.phase === "held" && record.phase !== "held") {
           stats.held += 1;
           deps.ops?.audit("settlement.held", { game_id: gameId, code: decided.next.hold?.code ?? null, from: record.phase });
+        } else if (decided.next.phase === "held" && decided.next.hold?.code !== record.hold?.code) {
+          /* L4-7: a verified deployment conflict superseded a weaker hold. */
+          deps.ops?.audit("settlement.held", { game_id: gameId, code: decided.next.hold?.code ?? null, from: record.phase, supersedes: record.hold?.code ?? null });
+          deps.warn(`  settlement: ${gameId} HELD (${decided.next.hold?.code}, superseding ${record.hold?.code}) -- ${decided.next.hold?.detail}`);
         }
         return { ok: true, record: decided.next, changed: true };
       }
@@ -482,7 +491,10 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
       const facts = moneyFactsOf({ fin: "current", record: indexed.record });
       if (facts !== null && facts.kind === "placeholder") return { kind: "placeholder" };
       const classes = formatIndex.get(gameId);
-      return { kind: "record", mci: indexed.record.continuation, deployment: indexed.record.binding?.deployment ?? null, ...(classes?.tickets !== undefined ? { tickets: classes.tickets } : {}), ...(classes?.intents !== undefined ? { intents: classes.intents } : {}) };
+      /* L4-7: the code the record is held under travels too (`heldCodeOf`), so the session judges a verified deployment
+         conflict's durable hold exactly as the money seams do (`moneyFactsOf`). */
+      const held = heldCodeOf(indexed.record);
+      return { kind: "record", mci: indexed.record.continuation, deployment: indexed.record.binding?.deployment ?? null, ...(held !== null ? { held } : {}), ...(classes?.tickets !== undefined ? { tickets: classes.tickets } : {}), ...(classes?.intents !== undefined ? { intents: classes.intents } : {}) };
     },
     /* LIVE-4 (L4-2): read one financial record again into the index (a money table's record is written by the escrow
        service before its GameRecord exists, and again before its deal). READ-ONLY: never a transition, hold or
@@ -595,6 +607,27 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
         await apply(record.game_id, (stored) =>
           record.last_activity_at > (stored.last_activity_at ?? 0) ? { kind: "activity", at: record.last_activity_at } : { kind: "inactivity-check", at: deps.now() },
         );
+      }
+    },
+    /* LIVE-4 (L4-7): A VERIFIED CONFLICT IS WRITTEN DOWN WHEN IT IS LEARNED. The chain-facts listener (`start.ts`) runs
+       this the moment a verification-grade read changes a deployment's facts, so the owner's durable hold does not
+       wait for the next five-minute liveness sweep or money job -- a restart in that window would otherwise forget the
+       conflict (the chain's facts live for one run; the hold is what the next run reads, `continuationVerdict` step 7).
+       Step -1 for every money game; a conflict's canonical hold, by its owner only (`ownersConflict`); nothing else --
+       no deal, no liveness, no seal: those stay on their own clocks. A record already held for a weaker reason is
+       superseded by the deployment conflict's hold (`moneyLifecycle.ts`), so the conflict is always written down. */
+    async holdConflicts(records) {
+      for (const record of records) {
+        if (!isFinancial(record)) continue;
+        let decided: Awaited<ReturnType<typeof decide>>;
+        try {
+          decided = await decide(record.game_id, await identityOf(record.game_id), termsKeyOf(record), await logFormatOfGame(record.game_id));
+        } catch {
+          continue; // a store fault decides nothing: the next sweep or job asks again
+        }
+        if (decided.decision.verdict.kind !== "conflict") continue;
+        serving.notice(record.game_id, decided.decision, "chain facts");
+        await ownersConflict(record.game_id, decided, deps.now());
       }
     },
     stop() {

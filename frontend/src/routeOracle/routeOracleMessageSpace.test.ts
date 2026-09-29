@@ -81,17 +81,29 @@ function knownDefect(graph: OracleGraph, route: readonly OracleWaypoint[], oracl
   return null;
 }
 
-/** A message LEGAL to both but priced differently is explained only by a recorded DATA question (never by a
- *  law defect), and only when the difference is EXACTLY that data's premium (the R12-1 repair review, M4):
- *  #62's catalog $90 against the owner-ruled $80 (R12-2), and Norfolk's figure, which the oracle does not have
- *  (placeholder $0) and production prices by its gray-city bucket (the R12-1 repair's blocker). */
-const DATA_NORFOLK = "DATA: Norfolk (L16) has no established figure (unresolved; production prices it $20)";
+/** A message LEGAL to both but priced differently is explained only by a recorded production DATA defect (never
+ *  by a law defect), and only when the difference is EXACTLY that data's premium (the R12-1 repair review, M4):
+ *  #62's catalog $90 against the owner-ruled $80, and the 1830+ map's Montreal / Norfolk, which production prices
+ *  flat ($40, $20) against their owner-confirmed pairs ($40 / $60, $30 / $50). All R12-2. */
+const DATA_PRINTED = "DATA: production prices Montreal / Norfolk flat (owner-confirmed $40/$60, $30/$50; R12-2)";
 const DATA_62 = "DATA: production's catalog prices #62 at $90 per city (owner-ruled $80; R12-2)";
+/** The other Norfolk data defect: production gives L16 ONE station circle (the superseded #1401 ruling; the owner's
+ *  correction is two), so with N&W's home in it production shuts Norfolk to through-running that the law allows. */
+const DATA_NORFOLK_CIRCLES = "DATA: production gives Norfolk one station circle (owner: two; R12-2), so N&W's home blocks it";
 
 function knownPriceDifference(graph: OracleGraph, table: PremiumTable, route: readonly OracleWaypoint[], oracleValue: number, authorityTotal: number): string[] {
   const premium = dataPremium(graph, table, [route]);
   if (premium.total === 0 || oracleValue + premium.total !== authorityTotal) return [];
-  return [...(premium.unresolvedVisits > 0 ? [DATA_NORFOLK] : []), ...(premium.data62 !== 0 ? [DATA_62] : [])];
+  return [...(premium.printed !== 0 ? [DATA_PRINTED] : []), ...(premium.tile !== 0 ? [DATA_62] : [])];
+}
+
+/** The law allows a run THROUGH Norfolk that the authority refuses, and Norfolk holds exactly one token: that is
+ *  the one-circle data defect, nothing else. */
+function knownNorfolkBlock(graph: OracleGraph, route: readonly OracleWaypoint[], authorityReason: string): string | null {
+  const interior = route.slice(1, -1).some((wp) => wp.hex === "L16" && wp.bypass !== true);
+  const holders = graph.stations.get("L16/city0") ?? [];
+  if (!interior || holders.length !== 1 || holders.includes(graph.companyId)) return null;
+  return /L16 is tokened out/.test(authorityReason) ? DATA_NORFOLK_CIRCLES : null;
 }
 
 const fixtures = KNOWN_DEFECT_FIXTURES.filter((fixture) => !fixture.law.malformed && !fixture.board.synthetic);
@@ -139,7 +151,12 @@ describe("the message space of every valid fixture board: the oracle and the aut
       }
       if (oracleLegal === authorityLegal) continue;
       const reason = oracle.kind === "illegal" ? oracle.reason : "";
-      const explained = !oracleLegal && authorityLegal ? knownDefect(graph, route, reason) : null;
+      const explained =
+        !oracleLegal && authorityLegal
+          ? knownDefect(graph, route, reason)
+          : oracleLegal && !authorityLegal
+            ? knownNorfolkBlock(graph, route, (authority as { reason: string }).reason)
+            : null;
       if (explained) known.set(explained, (known.get(explained) ?? 0) + 1);
       else unexplained.push(`${text}: oracle ${oracleLegal ? "legal" : `refuses (${reason})`}; authority ${authorityLegal ? "accepts" : `refuses (${(authority as { reason: string }).reason})`}`);
     }
@@ -206,7 +223,12 @@ describe("the message space of the dense boards (walks of up to five hexes)", ()
       }
       if (oracleLegal === authorityLegal) continue;
       const reason = oracle.kind === "illegal" ? oracle.reason : "";
-      const explained = !oracleLegal && authorityLegal ? knownDefect(graph, route, reason) : null;
+      const explained =
+        !oracleLegal && authorityLegal
+          ? knownDefect(graph, route, reason)
+          : oracleLegal && !authorityLegal
+            ? knownNorfolkBlock(graph, route, (authority as { reason: string }).reason)
+            : null;
       if (explained) known.set(explained, (known.get(explained) ?? 0) + 1);
       else unexplained.push(`${text}: oracle ${oracleLegal ? "legal" : `refuses (${reason})`}; authority ${authorityLegal ? "accepts" : `refuses (${(authority as { reason: string }).reason})`}`);
     }
@@ -215,13 +237,14 @@ describe("the message space of the dense boards (walks of up to five hexes)", ()
 
   it.each([
     // PRR's bare Altoona home on the standard board: the IL-7 defect shows up in a real position. Both late
-    // boards have a brown #62 on New York, so its $90 (owner-ruled $80) shows up as a known DATA difference; the
-    // Level Playing Field boards reach Norfolk, whose figure is unresolved (the R12-1 repair's blocker).
+    // boards have a brown #62 on New York, so its $90 (owner-ruled $80) shows up as a known DATA difference; on
+    // the Level Playing Field boards so does production's flat Norfolk ($20 against $30 / $50). (Norfolk's one-
+    // circle defect needs a run THROUGH Norfolk between two ends within five hexes; none of these walks has one.)
     ["Y8V@651", 1, [DATA_62, "IL-7: the authority counts a bare token for its hex even when the route bypasses the city"]],
     ["Y8V@651", 5, [DATA_62]],
-    ["Z6C@494", 1, [DATA_NORFOLK]],
-    ["Z6C@494", 4, [DATA_NORFOLK, DATA_62]],
-    ["Z6C@608", 10, [DATA_NORFOLK, DATA_62]],
+    ["Z6C@494", 1, [DATA_PRINTED]],
+    ["Z6C@494", 4, [DATA_PRINTED, DATA_62]],
+    ["Z6C@608", 10, [DATA_PRINTED, DATA_62]],
   ] as const)("%s company %s", (boardId, companyId, expectedKnown) => {
     const result = judgeAll(boards.get(boardId)!, companyId);
     expect(Object.keys(result.known).sort()).toEqual([...expectedKnown]);

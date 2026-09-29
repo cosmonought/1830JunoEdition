@@ -27,12 +27,13 @@ export interface CorpusSummary {
   gap: { min: number; median: number; max: number } | null;
   phaseConsistent: { cases: number; optimal: number };
   oracleUndecided: number;
-  /** Of those, the cases undecided ONLY because a route could stop at a printed stop whose figure is unresolved
-   *  (Norfolk L16, the R12-1 repair's blocker) -- no budget ran out. They are counted, not hidden. */
-  oracleUndecidedUnresolvedValue: number;
   invalid: number;
   /** The authority refused the oracle's own legal optimum: an authority incompleteness or an oracle error. */
   authorityRefusesWitness: string[];
+  /** The authority refused the law's witness only because of production's one Norfolk circle (R12-2 data). */
+  witnessRefusedByNorfolkCircles: number;
+  /** The authority refused the best set under production's own data: an authority gap, whatever the data. */
+  authorityRefusesProductionDataWitness: string[];
   /** Production's set judged LEGAL by the oracle yet worth more than the oracle's optimum: an oracle error. */
   oracleBeatenByLegalSet: string[];
   maxOracleMs: number;
@@ -64,13 +65,18 @@ export function summarise(corpus: string, results: readonly CaseResult[]): Corpu
     gap: gaps.length > 0 ? { min: gaps[0], median: gaps[Math.floor(gaps.length / 2)], max: gaps[gaps.length - 1] } : null,
     phaseConsistent: { cases: consistent.length, optimal: consistent.filter((r) => r.flags.includes("sound-optimal")).length },
     oracleUndecided: results.filter((r) => r.oracle.undecided !== null).length,
-    oracleUndecidedUnresolvedValue: results.filter((r) => r.oracle.undecidedKinds.length === 1 && r.oracle.undecidedKinds[0] === "unresolved-value").length,
     invalid: results.filter((r) => r.validity.length > 0).length,
+    // Refusals explained ONLY by production's one Norfolk circle are the data defect, counted apart; the authority
+    // must still accept the best set under production's data.
     authorityRefusesWitness: results
-      .filter((r) => r.authorityOnWitness.startsWith("REFUSED"))
+      .filter((r) => r.authorityOnWitness.startsWith("REFUSED") && !r.witnessRefusedByNorfolkCircles)
       .map((r) => `${r.board} ${r.companyId} [${r.fleet}]: ${r.authorityOnWitness}`),
     // Judged at the oracle's own price of production's set (never production's figure, which a recorded data
     // defect such as #62 inflates).
+    witnessRefusedByNorfolkCircles: results.filter((r) => r.witnessRefusedByNorfolkCircles).length,
+    authorityRefusesProductionDataWitness: results
+      .filter((r) => r.authorityOnProductionDataWitness.startsWith("REFUSED"))
+      .map((r) => `${r.board} ${r.companyId} [${r.fleet}]: ${r.authorityOnProductionDataWitness}`),
     oracleBeatenByLegalSet: results
       .filter((r) => r.flags.includes("oracle-incomplete"))
       .map((r) => `${r.board} ${r.companyId} [${r.fleet}]`),

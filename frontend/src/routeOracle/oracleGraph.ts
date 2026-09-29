@@ -28,13 +28,15 @@ import type { BoardDefinition, BoardHex } from "../components/hexBoardData";
 import type { TileCatalogEntry } from "../components/hexTileCatalog";
 import {
   ORACLE_COAL_RIVER_TIERS,
+  ORACLE_EXPANSION_BOARD_IDS,
+  ORACLE_EXPANSION_PRINTED_CITY_SLOTS,
+  ORACLE_EXPANSION_PRINTED_TIERS,
   ORACLE_LANDMARK_VALUE,
   ORACLE_NEIGHBOUR,
   ORACLE_OFFBOARD_TIERS,
   ORACLE_PRINTED_STOP_VALUE,
   ORACLE_STANDARD_TILES,
   ORACLE_TILE_CITY_SLOTS,
-  ORACLE_UNRESOLVED_PRINTED_STOPS,
   oppositeEdge,
   rotateEdge,
 } from "./oracleManifest";
@@ -59,9 +61,6 @@ export interface OracleNode {
   /** Herald only: the pairs of edges the node may be passed between (the hex's printed rails); every other
    *  passable node joins any two distinct spokes. */
   transit?: ReadonlyArray<readonly [number, number]>;
-  /** A printed stop whose figure the oracle does not know (`ORACLE_UNRESOLVED_PRINTED_STOPS`): `value` is a
-   *  placeholder 0 and any case in which a route could stop here is UNDECIDED. The reason, when set. */
-  unresolvedValue?: string;
 }
 
 export interface OraclePath {
@@ -311,6 +310,7 @@ function tileClassMismatch(board: BoardDefinition, bh: BoardHex, landmarkName: s
 export function buildOracleGraph(input: OracleCaseInput): OracleGraph {
   const { board, grid, catalog, highTier, companyId } = input;
   const policy = input.policy ?? DEFAULT_ORACLE_POLICY;
+  const expansion = ORACLE_EXPANSION_BOARD_IDS.includes(board.id);
   const validity: ValidityFinding[] = [];
   const hexes = new Map<string, OracleHex>();
   const byCoord = new Map<string, string>();
@@ -398,20 +398,20 @@ export function buildOracleGraph(input: OracleCaseInput): OracleGraph {
     } else if (gray) {
       const edges = [...gray.edges];
       if (gray.marker === "city" || gray.marker === "town") {
-        const unresolved = ORACLE_UNRESOLVED_PRINTED_STOPS[label];
+        // The figure and the circles are the ORACLE'S OWN (never the board's `startValueOverride` or `slots`): on
+        // the 1830+ map Montreal and Norfolk pay by tier, and Norfolk has two circles (owner-confirmed).
+        const tiers = expansion ? ORACLE_EXPANSION_PRINTED_TIERS[label] : undefined;
+        const flat = ORACLE_PRINTED_STOP_VALUE[label];
         addNode({
           id: `${label}/${gray.marker}0`,
           hex: label,
           kind: gray.marker,
           cityIndex: gray.marker === "city" ? 0 : null,
           spokes: [...edges].sort((x, y) => x - y),
-          value: ORACLE_PRINTED_STOP_VALUE[label] ?? 0,
-          slots: gray.marker === "city" ? gray.slots ?? 1 : 0,
-          ...(unresolved !== undefined ? { unresolvedValue: unresolved } : {}),
+          value: tiers ? tierValue(tiers, highTier) : flat ?? 0,
+          slots: gray.marker === "city" ? (expansion ? ORACLE_EXPANSION_PRINTED_CITY_SLOTS[label] : undefined) ?? 1 : 0,
         });
-        // An UNRESOLVED figure is not a missing one: it is known to be unknown, and makes a case UNDECIDED only
-        // when a route could actually stop there (`solveOracleCase`), not the whole board invalid.
-        if (ORACLE_PRINTED_STOP_VALUE[label] === undefined && unresolved === undefined) {
+        if (tiers === undefined && flat === undefined) {
           validity.push({ code: "V9", detail: `printed ${gray.marker} ${label} has no figure in the oracle's table` });
         }
         if (gray.bypass) {

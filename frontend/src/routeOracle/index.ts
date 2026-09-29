@@ -37,17 +37,15 @@ export interface OracleSolution {
   validity: ValidityFinding[];
   routes: OracleRoute[];
   expansions: number;
-  /** A budget ran out, a train model is unknown, or a route could stop at a printed stop whose figure is
-   *  UNRESOLVED (Norfolk): the optimum is not an answer. Every applicable reason, joined. */
+  /** A budget ran out or a train model is unknown: the optimum is not an answer. Every applicable reason, joined. */
   undecided: string | null;
-  /** The same, as kinds. `["unresolved-value"]` alone means the enumeration and packing are COMPLETE and only a
-   *  figure is missing: the optimum is then exact with that stop priced at a placeholder $0, i.e. a LOWER BOUND. */
+  /** The same, as kinds. */
   undecidedKinds: UndecidedKind[];
   optimum: OptimumResult;
   witness: Array<{ trainIndex: number; model: string; value: number; waypoints: OracleWaypoint[] }>;
 }
 
-export type UndecidedKind = "unknown-model" | "unresolved-value" | "enumeration-budget" | "packing-budget";
+export type UndecidedKind = "unknown-model" | "enumeration-budget" | "packing-budget";
 
 export const DEFAULT_ENUMERATION_BUDGET = 5_000_000;
 export const DEFAULT_PACKING_BUDGET = 20_000_000;
@@ -69,19 +67,9 @@ export function solveOracleCase(input: OracleSolveInput): OracleSolution {
     input.fleet.map((model, trainIndex) => ({ trainIndex, model })),
     input.packingBudget ?? DEFAULT_PACKING_BUDGET,
   );
-  // A stop whose figure the oracle does not know (`ORACLE_UNRESOLVED_PRINTED_STOPS`): if any legal route could
-  // count it, the optimum depends on a number nobody has established, so the case is not decided.
-  const unresolved = Array.from(
-    new Set(
-      enumeration.routes.flatMap((route) =>
-        route.visits.flatMap((visit) => (visit.element.kind === "node" && visit.element.node.unresolvedValue ? [visit.element.node.unresolvedValue] : [])),
-      ),
-    ),
-  );
-  // Every reason is kept: an unresolved figure must never hide an exhausted budget (the R12-1 repair review, M2).
+  // Every reason is kept (the R12-1 repair review, M2).
   const reasons: Array<[UndecidedKind, string]> = [];
   if (unknown.length > 0) reasons.push(["unknown-model", `unknown train model(s): ${unknown.join(", ")}`]);
-  if (unresolved.length > 0) reasons.push(["unresolved-value", `unresolved printed value: ${unresolved.join("; ")}`]);
   if (enumeration.exhausted) reasons.push(["enumeration-budget", "enumeration budget exhausted"]);
   if (optimum.exhausted) reasons.push(["packing-budget", "packing budget exhausted"]);
   const undecided = reasons.length > 0 ? reasons.map(([, text]) => text).join("; ") : null;

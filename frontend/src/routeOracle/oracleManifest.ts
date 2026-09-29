@@ -121,23 +121,10 @@ export const ORACLE_TILE_CITY_SLOTS: Readonly<Record<number, readonly number[]>>
   513: [3],
 };
 
-/** What each PRINTED (never-tiled) gray city or town pays, by hex label. Standard 1830's printed map: Lansing
- *  $20, Cleveland $30, Altoona $10, Rochester $20, Richmond $20, Montreal $40, Kingston $10, Atlantic City $10,
- *  Mansfield $10.
- *
- *  NORFOLK (L16, the 18XX+ expansion's gray city) IS DELIBERATELY ABSENT (R12-1 repair, owner ruling "do not
- *  bless the single $20 without evidence"). The rulebook in the repository (`1830 FULL RULES with variants.pdf`,
- *  p. 36, Scenario S-1.0 "Collect Revenue (7.5)") says Norfolk is one of the gray hexes with TWO values, the
- *  lower until the first 5-train is bought -- but the figures themselves are printed only on the 1830+ map,
- *  which is not in the repository or the Project (the rulebook's board-tile tables, pp. 37 / 45, list no
- *  Norfolk figure; the code prices it at $20 by the ordinary gray-city bucket, with no provenance). The pair is
- *  UNRESOLVED: see `ORACLE_UNRESOLVED_PRINTED_STOPS`, which makes any case where a route could stop there
- *  UNDECIDED rather than priced by a guess.
- *
- *  MONTREAL (A19) keeps the standard map's $40 here. The same rulebook sentence names Montreal as two-valued on
- *  the 1830+ map, so on the expansion boards the $40 (both tiers) is the same kind of unevidenced figure. It is
- *  recorded in the R12-1 repair report beside Norfolk for an owner ruling; it is NOT changed here, because the
- *  repair brief scoped the data question to Norfolk. */
+/** What each PRINTED (never-tiled) gray city or town pays, by hex label, on the STANDARD 1830 map (one figure,
+ *  both tiers): Lansing $20, Cleveland $30, Altoona $10, Rochester $20, Richmond $20, Montreal $40, Kingston $10,
+ *  Atlantic City $10, Mansfield $10. On the 1830+ / Level Playing Field boards `ORACLE_EXPANSION_PRINTED_TIERS`
+ *  takes precedence for the hexes it names. */
 export const ORACLE_PRINTED_STOP_VALUE: Readonly<Record<string, number>> = {
   D2: 20,
   F6: 30,
@@ -150,12 +137,32 @@ export const ORACLE_PRINTED_STOP_VALUE: Readonly<Record<string, number>> = {
   F24: 10,
 };
 
-/** Printed stops whose figure the oracle does NOT know and will not guess. A route that could stop at one makes
- *  the whole case UNDECIDED (`solveOracleCase`), never a price. Keyed by hex label; the value is the reason. */
-export const ORACLE_UNRESOLVED_PRINTED_STOPS: Readonly<Record<string, string>> = {
-  L16:
-    "Norfolk (L16): a two-value gray city (rulebook p. 36, S-1.0 7.5: lower until the first 5-train); the pair is " +
-    "printed only on the 1830+ map, which no project or repository material reproduces -- UNRESOLVED (R12-1 repair blocker)",
+/** The boards printed on the 1830+ map (the expansion and the Level Playing Field, which uses that map). */
+export const ORACLE_EXPANSION_BOARD_IDS: readonly string[] = ["expanded", "lpf"];
+
+/** THE 1830+ MAP'S TWO-VALUE GRAY CITIES, lesser / greater (the lesser until the first 5-train is bought, the
+ *  greater from then on). The rulebook (`1830 FULL RULES with variants.pdf`, p. 36, S-1.0 "Collect Revenue (7.5)")
+ *  names Montreal, Norfolk and the Kanawha Coal River hex as two-valued; the FIGURES are printed only on the
+ *  physical map and are OWNER-CONFIRMED from it (R12-1 closure, 2026-09-29): Montreal A19 $40 / $60, Norfolk L16
+ *  $30 / $50. (Coal River's pair is `ORACLE_COAL_RIVER_TIERS`.) Production prices both flat ($40, $20): a
+ *  production data defect for R12-2, pinned in `routeOracleTopology.test.ts`. */
+export const ORACLE_EXPANSION_PRINTED_TIERS: Readonly<Record<string, readonly [number, number]>> = {
+  A19: [40, 60],
+  L16: [30, 50],
+};
+
+/** Station circles of each PRINTED gray city, by board. One circle unless named here.
+ *
+ *  NORFOLK L16 HAS TWO CIRCLES (owner correction, R12-1 closure, 2026-09-29): ONE city with two station slots --
+ *  N&W's home takes one, the other is open to any corporation under the ordinary station rules. This supersedes
+ *  the earlier "Norfolk is a single-station city" ruling (#1401), which the repository still encodes (production
+ *  gives it one circle: a production data defect for R12-2).
+ *
+ *  MONTREAL A19 stays at ONE circle: the correction names Norfolk only, and the repository's current ruling
+ *  (#1401, "single-station city") is kept. The repository ALSO carries the older, contrary "two-slot pill" notes
+ *  for Montreal (#1301 / #1302) -- recorded as a finding for the owner, not acted on here. */
+export const ORACLE_EXPANSION_PRINTED_CITY_SLOTS: Readonly<Record<string, number>> = {
+  L16: 2,
 };
 
 /** The three landmarks' printed yellow values, per city (1830 map: New York two $40 cities, Boston $30,

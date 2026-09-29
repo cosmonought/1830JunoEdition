@@ -425,18 +425,57 @@ describe("warehouses (ruled): a city for revenue and capacity -- counted when tr
   });
 });
 
-describe("Norfolk (L16): a printed stop whose figure is unresolved makes a case UNDECIDED, never priced by a guess", () => {
-  it("N&W from its Norfolk home: undecided, with the reason", () => {
-    // L16 runs to W (L14), NW (K15) and NE (K17). L14 #8 (edges 0 / 2: Norfolk to Richmond K13), K13 #57 turned 2.
-    const input = caseOn(LPF_BOARD, [["L14", 8, 0], ["K13", 57, 2]], [{ companyId: 10, tokens: [["L16", 0]] }], 10);
-    const solved = solveOracleCase({ ...input, fleet: ["2"] });
-    expect(solved.undecided).toMatch(/unresolved printed value: Norfolk \(L16\)/);
+describe("Norfolk (L16), owner-corrected: ONE city with TWO station circles, paying $30 / $50", () => {
+  // Level Playing Field. Richmond K13 #57 turned 2 (edges 2 / 5; 5 faces L14), L14 #8 (edges 0 / 2: Norfolk to
+  // Richmond), K15 #9 turned 2 (edges 2 / 5: Norfolk to Washington), Washington J14 #57 turned 2 (5 faces K15). A
+  // valid board. C&O's station is at Richmond; N&W's home (company 10) is Norfolk; B&O (4) may take its second circle.
+  const NORFOLK: Lay[] = [["K13", 57, 2], ["L14", 8, 0], ["K15", 9, 2], ["J14", 57, 2]];
+  const NW = 10;
+  const withTokens = (norfolk: Array<{ companyId: number }>, runner = CO) =>
+    caseOn(LPF_BOARD, NORFOLK, [{ companyId: CO, tokens: [["K13", 0]] }, ...norfolk.map((entry) => ({ companyId: entry.companyId, tokens: [["L16", 0]] as Array<[string, number | null]> }))], runner);
+
+  it("the graph binds every Norfolk token to its one city node, which has two circles", () => {
+    const graph = buildOracleGraph(withTokens([{ companyId: NW }, { companyId: BO }]));
+    expect(graph.hexes.get("L16")!.nodes.map((node) => [node.id, node.kind, node.cityIndex, node.slots])).toEqual([["L16/city0", "city", 0, 2]]);
+    expect(graph.stations.get("L16/city0")).toEqual([NW, BO]);
+    expect(graph.validity).toEqual([]);
+    // Not two cities: a token recorded in a "city 1" names a city Norfolk does not have (V2) ...
+    const second = caseOn(LPF_BOARD, NORFOLK, [{ companyId: CO, tokens: [["K13", 0]] }, { companyId: NW, tokens: [["L16", 0]] }, { companyId: BO, tokens: [["L16", 1]] }]);
+    expect(buildOracleGraph(second).validity.map((finding) => finding.code)).toEqual(["V2"]);
+    // ... and a third token does not fit its two circles (V6).
+    const third = caseOn(LPF_BOARD, NORFOLK, [
+      { companyId: CO, tokens: [["K13", 0], ["L16", 0]] },
+      { companyId: NW, tokens: [["L16", 0]] },
+      { companyId: BO, tokens: [["L16", 0]] },
+    ]);
+    expect(buildOracleGraph(third).validity.map((finding) => finding.code)).toEqual(["V6"]);
   });
 
-  it("a corporation whose routes cannot reach Norfolk is unaffected", () => {
-    const solved = solveOracleCase({ ...caseOn(LPF_BOARD, [["K13", 57, 1], ["L12", 8, 5]], [{ companyId: CO, tokens: [["K13", 0]] }]), fleet: ["2"] });
-    expect(solved.undecided).toBeNull();
-    expect(solved.optimum.total).toBe(50);
+  it("N&W's home alone does not block Norfolk: C&O runs through it, counting it once", () => {
+    const input = withTokens([{ companyId: NW }]);
+    // By hand: K13>L14>L16 ($20 + $30) and through Norfolk to Washington ($20 + $30 + $20). Nothing else has track.
+    expect(routeTable(input)).toEqual(["J14>K15>L16>L14>K13 $70", "K13>L14>L16 $50"]);
+    expect(optimum(input, ["2"])).toBe(50);
+    expect(optimum(input, ["3"])).toBe(70);
+    expect(optimum({ ...input, highTier: true }, ["3"])).toBe(90); // Norfolk $50 from the first 5-train
+    // One city, one stop: the through-route counts three stops, not four.
+    expect(judgeWaypoints(buildOracleGraph(input), [{ hex: "K13" }, { hex: "L14" }, { hex: "L16" }, { hex: "K15" }, { hex: "J14" }])).toMatchObject({ kind: "legal", stops: 3, value: 70 });
+    // Either N&W token binding (city 0 or no city recorded) is the same one node: a bare token binds on a one-city hex.
+    const bare = caseOn(LPF_BOARD, NORFOLK, [{ companyId: CO, tokens: [["K13", 0]] }, { companyId: NW, tokens: [["L16", null]] }]);
+    expect(buildOracleGraph(bare).stations.get("L16/city0")).toEqual([NW]);
+  });
+
+  it("N&W's home plus one foreign token fill Norfolk: C&O may end there but not run through", () => {
+    const input = withTokens([{ companyId: NW }, { companyId: BO }]);
+    expect(routeTable(input)).toEqual(["K13>L14>L16 $50"]);
+    expect(optimum(input, ["3"])).toBe(50);
+    const through = judgeWaypoints(buildOracleGraph(input), [{ hex: "K13" }, { hex: "L14" }, { hex: "L16" }, { hex: "K15" }, { hex: "J14" }]);
+    expect(through.kind === "illegal" && through.reason).toMatch(/L16\/city0 is filled with other railroads' stations/);
+  });
+
+  it("the second circle's holder is not blocked by the full city: its own station opens it", () => {
+    const input = withTokens([{ companyId: NW }, { companyId: BO }], BO);
+    expect(routeTable(input)).toEqual(["J14>K15>L16 $50", "J14>K15>L16>L14>K13 $70", "K13>L14>L16 $50"]);
   });
 });
 

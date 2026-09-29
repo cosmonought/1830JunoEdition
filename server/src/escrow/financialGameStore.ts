@@ -16,6 +16,16 @@
 //
 // A record file that cannot be read is never guessed at: `load` rejects `FinancialRecordUnreadableError`, and the
 // settlement coordinator holds the game rather than re-creating a record over it.
+//
+// LIVE-4 (L4-4): AN UNREADABLE RECORD HAS A CLASS (`formatFactOf`, the canonical model). The file's own `format` and
+// `version` say which build wrote it, and nothing else is read before that is known:
+//   current        a version this build reads -- it must then parse exactly, or it is `corrupt`;
+//   newer          a version above every one this build reads: a later build wrote it (never damage, never repaired
+//                  into this build's format: the pool that reads it continues the game);
+//   older-unread   a real version this build no longer reads: an earlier build wrote it (the same, the other way);
+//   corrupt        not a record of any version (torn JSON, another artifact, no integer version, a damaged current one).
+// The error carries the class, and the continuation verdict reads it (`not-continued/newer-format`, `/older-format`,
+// `/malformed`). Whatever the class, the record is never overwritten here: `create` and `put` refuse it.
 
 import * as path from "path";
 
@@ -23,17 +33,44 @@ import { nodeStoreFs, type StoreFs } from "../fileLogStore";
 import { durableReplace } from "../persistence/durableReplace";
 import { COMMITTED, type StoreWriteOutcome } from "../persistence/storeResult";
 import { GAME_ID_PATTERN } from "../rooms/gameRecord";
-import { isFinancialGameRecord, type FinancialGameRecord } from "./moneyLifecycle";
+import { FINANCIAL_FORMAT, FINANCIAL_VERSION, isFinancialGameRecord, type FinancialGameRecord } from "./moneyLifecycle";
+import { formatFactOf, type FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
+
+/** The class of a stored artifact this build cannot read (every `FormatFact` but `current`). */
+export type UnreadableFormat = Exclude<FormatFact, "current">;
 
 export class FinancialRecordUnreadableError extends Error {
   constructor(
     message: string,
     readonly gameId: string,
+    /** LIVE-4 (L4-4): which build could read it -- a later one, an earlier one, or none (damage). */
+    readonly format: UnreadableFormat = "corrupt",
   ) {
     super(message);
     this.name = "FinancialRecordUnreadableError";
   }
 }
+
+/** LIVE-4 (L4-4): the financial-record file versions this build reads and writes (`FINANCIAL_VERSION`). */
+export const READABLE_FINANCIAL_VERSIONS: readonly number[] = Object.freeze([FINANCIAL_VERSION]);
+
+/** LIVE-4 (L4-4): the class of a parsed record document, for `gameId`'s file. A newer or older document is classified
+ *  by its `format` and `version` alone -- its other fields are another build's and are never read here. */
+export function financialRecordFormat(parsed: unknown, gameId: string): FormatFact {
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return "corrupt";
+  const document = parsed as Record<string, unknown>;
+  if (document.format !== FINANCIAL_FORMAT) return "corrupt";
+  const fact = formatFactOf(document.version, READABLE_FINANCIAL_VERSIONS);
+  if (fact !== "current") return fact;
+  return isFinancialGameRecord(parsed) && parsed.game_id === gameId ? "current" : "corrupt";
+}
+
+const unreadableMessage = (gameId: string, format: UnreadableFormat): string =>
+  format === "newer"
+    ? `${gameId}.json in games/money/ is a financial record in a format NEWER than this build reads (a later build wrote it); it is not continued here and never overwritten`
+    : format === "older-unread"
+      ? `${gameId}.json in games/money/ is a financial record in an OLDER format this build no longer reads; it is not continued here and never overwritten`
+      : `${gameId}.json in games/money/ is not the financial record of that game`;
 
 export type FinancialPutOutcome = StoreWriteOutcome | { readonly kind: "conflict"; readonly current: FinancialGameRecord | null };
 
@@ -49,13 +86,14 @@ export interface FinancialGameStore {
    --------------------------------------------------------------------------- */
 
 export interface MemoryFinancialGameStore extends FinancialGameStore {
-  readonly records: Map<string, FinancialGameRecord | "unreadable">;
+  /** A string marks a record this build cannot read: `"unreadable"` (damage), `"newer"` or `"older-unread"` (L4-4). */
+  readonly records: Map<string, FinancialGameRecord | "unreadable" | UnreadableFormat>;
   readonly failNext: Array<"definite" | "uncertain">;
   readonly writes: { count: number };
 }
 
 export function createMemoryFinancialGameStore(): MemoryFinancialGameStore {
-  const records = new Map<string, FinancialGameRecord | "unreadable">();
+  const records = new Map<string, FinancialGameRecord | "unreadable" | UnreadableFormat>();
   const failNext: Array<"definite" | "uncertain"> = [];
   const writes = { count: 0 };
   const copy = (record: FinancialGameRecord) => JSON.parse(JSON.stringify(record)) as FinancialGameRecord;
@@ -76,19 +114,22 @@ export function createMemoryFinancialGameStore(): MemoryFinancialGameStore {
     },
     async load(gameId) {
       const record = records.get(gameId);
-      if (record === "unreadable") throw new FinancialRecordUnreadableError(`the financial record of ${gameId} is unreadable`, gameId);
+      if (typeof record === "string") {
+        const format: UnreadableFormat = record === "unreadable" ? "corrupt" : record;
+        throw new FinancialRecordUnreadableError(format === "corrupt" ? `the financial record of ${gameId} is unreadable` : unreadableMessage(gameId, format), gameId, format);
+      }
       return record === undefined ? null : copy(record);
     },
     async create(record) {
       const existing = records.get(record.game_id);
-      if (existing === "unreadable") return { outcome: { kind: "definite", detail: "an unreadable record is never overwritten" }, existing: null };
+      if (typeof existing === "string") return { outcome: { kind: "definite", detail: "an unreadable record is never overwritten" }, existing: null };
       if (existing !== undefined) return { outcome: COMMITTED, existing: copy(existing) };
       if (!isFinancialGameRecord(record) || record.record_version !== 1) return { outcome: { kind: "definite", detail: "not a new financial record" }, existing: null };
       return { outcome: write(record), existing: null };
     },
     async put(next, expectedVersion) {
       const current = records.get(next.game_id);
-      if (current === "unreadable") return { kind: "definite", detail: "an unreadable record is never overwritten" };
+      if (typeof current === "string") return { kind: "definite", detail: "an unreadable record is never overwritten" };
       if (current === undefined || current.record_version !== expectedVersion) return { kind: "conflict", current: current === undefined ? null : copy(current) };
       if (!isFinancialGameRecord(next) || next.record_version !== expectedVersion + 1) return { kind: "definite", detail: "not the next version of the record" };
       return write(next);
@@ -143,8 +184,9 @@ export function createFileFinancialGameStore(
     } catch {
       throw new FinancialRecordUnreadableError(`${gameId}.json in games/money/ is not JSON`, gameId);
     }
-    if (!isFinancialGameRecord(parsed) || parsed.game_id !== gameId) throw new FinancialRecordUnreadableError(`${gameId}.json in games/money/ is not the financial record of that game`, gameId);
-    return parsed;
+    const format = financialRecordFormat(parsed, gameId);
+    if (format !== "current") throw new FinancialRecordUnreadableError(unreadableMessage(gameId, format), gameId, format);
+    return parsed as FinancialGameRecord;
   }
 
   const fenced = async (): Promise<boolean> => options.writerCheck !== undefined && !(await options.writerCheck().catch(() => false));

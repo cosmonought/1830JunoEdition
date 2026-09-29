@@ -21,8 +21,11 @@
 //                   money table at all is its GameRecord's (`money !== null`) or the index's (a financial record
 //                   exists): a money table the index knows nothing about is MISSING -- a conflict, never continued --
 //                   so no money game is ever judged as a no-money one.
-//   the chain facts none yet: `runtime.chainFacts` stays empty until L4-4 fills it from verification-grade reads, so no
-//                   deployment fact difference is a conflict here (it is `deployment-unverified`, derived).
+//   the chain facts the SAME runtime the money side records (LIVE-4 integration): `start.ts` passes the money serving's
+//                   `runtime()` -- one live map, written only by L4-4's verification-grade reads -- so a game the escrow
+//                   side has concluded is in a verified deployment conflict is refused here too, and a deployment this
+//                   pool merely cannot verify (a configuration typo, an unreachable chain) stays `deployment-unverified`
+//                   (derived) on both sides. Absent (a server assembled without money serving): `NO_CHAIN_FACTS`.
 //   the pool        its role: `primary` until LIVE-6 supplies draining pools, their flip time and the primary's own
 //                   verdict. `serveDecision` is asked anyway, so the session is structured around it today.
 //
@@ -52,13 +55,15 @@ import type { GameRecord } from "./rooms/gameRecord";
 /** The primary pool: serves every game it continues, with no deadline. Every pool is this until LIVE-6. */
 export const PRIMARY_POOL: PoolServingState = Object.freeze({ role: "primary", flipped_at: null });
 
-/** Nothing read from the chain this run (L4-4 fills this from verification-grade reads only). */
+/** Nothing read from the chain this run: the default only where no money serving is wired (`start.ts` shares the money
+ *  serving's runtime, which L4-4 fills from verification-grade reads only). */
 export const NO_CHAIN_FACTS: ContinuationRuntime = Object.freeze({ chainFacts: new Map() });
 
 export interface ContinuationWiringDeps {
   /** This pool's capability, built once at startup (`thisDeploymentCapability`). Validated here, once. */
   readonly capability: DeploymentCapability;
-  /** What this run read from the chain. Empty until L4-4. */
+  /** What this run read from the chain: the money serving's own runtime (`MoneyServing.runtime()`), shared, never a
+   *  copy. Absent: `NO_CHAIN_FACTS`. */
   readonly runtime?: ContinuationRuntime;
   /** The legacy-log policy (`--legacy-logs`): `refuse` on every production server. */
   readonly policy: ContinuationPolicy;
@@ -107,9 +112,14 @@ export function createContinuationWiring(deps: ContinuationWiringDeps): Continua
     const moneyTable = (record !== null && record.money !== null) || entry !== undefined;
     if (!moneyTable) return { formats: CURRENT, money: null };
     if (entry === undefined) return { formats: CURRENT, money: { kind: "missing" } };
-    if (entry.kind === "unreadable") return { formats: { ...CURRENT, fin: "corrupt" }, money: { kind: "record", mci: null, deployment: null } };
+    /* LIVE-4 (integration): the classes are the money side's own (L4-4's store classes), so a newer build's financial
+       record reads `newer-format` here exactly as it does at every money seam -- never flattened to damage. */
+    if (entry.kind === "unreadable") return { formats: { ...CURRENT, fin: entry.format ?? "corrupt" }, money: { kind: "record", mci: null, deployment: null } };
     if (entry.kind === "placeholder") return { formats: { ...CURRENT, fin: "current" }, money: { kind: "placeholder" } };
-    return { formats: { ...CURRENT, fin: "current" }, money: { kind: "record", mci: entry.mci, deployment: entry.deployment } };
+    return {
+      formats: { ...CURRENT, fin: "current", ...(entry.tickets !== undefined ? { tickets: entry.tickets } : {}), ...(entry.intents !== undefined ? { intents: entry.intents } : {}) },
+      money: { kind: "record", mci: entry.mci, deployment: entry.deployment },
+    };
   }
 
   /* `log` is the log's format fact as its reader (the session) classified it: `newer` for a pinned log this build

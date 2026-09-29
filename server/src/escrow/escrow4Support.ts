@@ -195,17 +195,22 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     ops,
     onResolved: (intent) => service.onIntentResolved(intent),
     admit: (intent) => service.admit(intent),
+    classify: (intent) => service.classifyIntent(intent),
     pollMs: 1_000,
     rebroadcastMs: 1_000,
     schedule: () => ({ cancel: () => undefined }),
   });
+  /* As `junoBackend` does at verification (L4-4): the deployment's chain-attested facts, at verification grade (money
+     creation requires them). */
+  await service.refreshChainFacts();
   const noMoney = new NoMoneyRosterSource();
   identity.setHooks({
     onSecurityEvent: (event) => {
       void ledger
         .gamesOfPrincipal(event.principalId)
         .then(async (games) => {
-          for (const gameId of games) await ledger.revokeForSecurityEvent(gameId);
+          /* As `start.ts` (L4-4): only a game this server continues is written. */
+          for (const gameId of games) if ((await service.servingDecision(gameId, { where: "security event" })).verdict.kind === "continues") await ledger.revokeForSecurityEvent(gameId);
         })
         .catch(() => undefined)
         .finally(() => refs.money?.onSecurityEvent(event.principalId));

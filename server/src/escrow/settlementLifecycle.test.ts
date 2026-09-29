@@ -42,9 +42,10 @@ import { createSettlementCoordinator, type SettlementCoordinator } from "./settl
 import { prepareTerminalEvidence, serverPrefixReplay, type PrefixReplay } from "./settlementEvidence";
 /* LIVE-4 (L4-2): the canonical continuation wiring the room host gives every session. */
 import { createContinuationWiring } from "../continuationWiring";
+import { createMoneyServing, type MoneyServing } from "./moneyServing";
 import { thisDeploymentCapability } from "../deploymentCapability";
+import { MONEY_TABLE_FORMAT, type GameRecord } from "../rooms/gameRecord";
 import { PIN } from "./escrow3bSupport";
-import type { GameRecord } from "../rooms/gameRecord";
 
 quietConsole();
 
@@ -78,7 +79,9 @@ const graftedReplay =
 
 const sealAt = (entries: readonly ServerLogEntry[]): TerminalSeal => sealOf(entries, true) as TerminalSeal;
 
-function inProgress(gameId: string, continuation: MoneyContinuationIdentity = currentMoneyContinuation(), deployment: FinancialDeploymentPin | null = null): FinancialGameRecord {
+/** LIVE-4 (L4-4): every money game is pinned to its escrow deployment (ESCROW-3B's fixture pin), and the coordinator
+ *  serves that deployment -- step -1 continues exactly these games. (L4-2's tests name another pin, or none, explicitly.) */
+function inProgress(gameId: string, continuation: MoneyContinuationIdentity = currentMoneyContinuation(), deployment: FinancialDeploymentPin | null = PIN): FinancialGameRecord {
   const created = newFinancialRecord(gameId, continuation, T0, deployment);
   const dealt = transitionFinancial(created, { kind: "dealt", at: T0 + 1 });
   assert.equal(dealt.kind, "moved");
@@ -86,13 +89,17 @@ function inProgress(gameId: string, continuation: MoneyContinuationIdentity = cu
 }
 
 async function seedFinancial(store: FinancialGameStore, record: FinancialGameRecord): Promise<void> {
-  const created = newFinancialRecord(record.game_id, record.continuation, record.created_at);
+  const created = newFinancialRecord(record.game_id, record.continuation, record.created_at, record.binding?.deployment ?? null);
   assert.equal((await store.create(created)).outcome.kind, "committed");
   if (record.record_version > 1) assert.equal((await store.put(record, 1)).kind, "committed");
 }
 
 const GAME = "g_0000000000000000000000000w";
-const recordOf = (gameId: string, startedAt: number | null = T0 + 1) => ({ game_id: gameId, money: null, started_at: startedAt }) as never;
+/** A money GameRecord's terms name the deployment its money is in (ESCROW-4): who owns a game whose financial record
+ *  is missing (L4-4). */
+const TERMS = { format: MONEY_TABLE_FORMAT, backend: PIN.backend, chain_id: PIN.chain_id, network_class: PIN.network_class, contract_address: PIN.contract_address, code_checksum: PIN.code_checksum, denom: PIN.denom, symbol: "JUNOX", exponent: 6, ante_gross: "1010000", mode: "live" };
+const recordOf = (gameId: string, startedAt: number | null = T0 + 1) => ({ game_id: gameId, money: TERMS, started_at: startedAt }) as never;
+const serving = (): MoneyServing => createMoneyServing({ capability: thisDeploymentCapability([PIN]) });
 
 function coordinatorOver(store: FinancialGameStore, replay: PrefixReplay = graftedReplay(), financial = new Set([GAME])): SettlementCoordinator {
   return createSettlementCoordinator({
@@ -102,6 +109,7 @@ function coordinatorOver(store: FinancialGameStore, replay: PrefixReplay = graft
     now: () => T0 + 10_000,
     warn: () => undefined,
     schedule: () => ({ cancel: () => undefined }), // the test drains by hand
+    serving: serving(),
   });
 }
 
@@ -325,10 +333,12 @@ describe("ESCROW-3A §4, §6: the settlement coordinator converges on one durabl
     announce(c, history(3), false, ID);
     await c.drain();
     const placeholder = (await store.load(ID))!;
-    /* One create, ALREADY held (v1: there is no unheld version of it), then the seal recorded on it (v2) -- it stays held. */
+    /* One create, ALREADY held (v1: there is no unheld version of it) -- by the OWNER only (L4-4: the GameRecord's money
+       terms name the deployment this coordinator serves), and nothing more: the placeholder is the conflict's canonical
+       hold, and step -1 continues nothing on it (so no seal is written onto it either). */
     assert.deepEqual(
       [placeholder.record_version, placeholder.phase, placeholder.continuation, placeholder.hold?.from, placeholder.terminal?.log_len],
-      [2, "held", null, "in-progress", 4],
+      [1, "held", null, "in-progress", undefined],
     );
     assert.deepEqual(placeholder.transitions.map((line) => line.to), ["held"], "never funding, never unheld");
     assert.ok(isFinancialGameRecord(placeholder));
@@ -347,7 +357,7 @@ describe("ESCROW-3A §4, §6: the settlement coordinator converges on one durabl
 
   test("review #3: a record still at FUNDING whose game was dealt and sealed moves dealt -> sealed -> prepared (never a seal-conflict)", async () => {
     const store = createMemoryFinancialGameStore();
-    await seedFinancial(store, newFinancialRecord(GAME, currentMoneyContinuation(), T0));
+    await seedFinancial(store, newFinancialRecord(GAME, currentMoneyContinuation(), T0, PIN));
     const c = coordinatorOver(store);
     announce(c, history(3));
     await c.drain();
@@ -359,7 +369,7 @@ describe("ESCROW-3A §4, §6: the settlement coordinator converges on one durabl
 
   test("review #3: the startup walk loads a FUNDING record's game, and the sweep derives the deal from the GameRecord", async () => {
     const store = createMemoryFinancialGameStore();
-    await seedFinancial(store, newFinancialRecord(GAME, currentMoneyContinuation(), T0));
+    await seedFinancial(store, newFinancialRecord(GAME, currentMoneyContinuation(), T0, PIN));
     const c = coordinatorOver(store);
     const loads: string[] = [];
     const report = await c.reconcileAtStartup({ financialGameIds: [], loadGame: async (id) => void loads.push(id) });
@@ -402,6 +412,7 @@ describe("ESCROW-3A §4, §6: the settlement coordinator converges on one durabl
       isFinancial: () => true,
       now: () => T0 + 10_000,
       warn: () => undefined,
+      serving: serving(),
       retryMs: 60_000,
       schedule: (run, ms) => {
         scheduled.push(ms);
@@ -420,7 +431,7 @@ describe("ESCROW-3A §4, §6: the settlement coordinator converges on one durabl
     c.stop();
   });
 
-  test("an uncertified pin and an incompatible continuation both hold; v10 and v11 boards both prepare", async () => {
+  test("an uncertified board holds; an incompatible continuation is NOT CONTINUED (L4-4: nothing written); v10 and v11 boards both prepare", async () => {
     for (const [pin, expected] of [[10, "intent-prepared"], [11, "intent-prepared"], [12, "held"]] as const) {
       const store = createMemoryFinancialGameStore();
       await seedFinancial(store, inProgress(GAME));
@@ -431,12 +442,19 @@ describe("ESCROW-3A §4, §6: the settlement coordinator converges on one durabl
       assert.equal(record.phase, expected, `pin ${pin}`);
       if (pin === 12) assert.equal(record.hold?.code, "rules-not-certified");
     }
+    /* A money identity this pool does not continue (another hosted protocol): step -1 decides it BEFORE the seal is
+       written, so nothing is -- no seal, no durable continuation-incompatible hold (F-L4-3); the pool that speaks
+       hosted protocol 99 seals it. */
     const store = createMemoryFinancialGameStore();
     await seedFinancial(store, inProgress(GAME, { ...currentMoneyContinuation(), hosted_protocol: 99 }));
+    const before = JSON.stringify(await store.load(GAME));
+    const writes = store.writes.count;
     const c = coordinatorOver(store);
     announce(c, history(3));
     await c.drain();
-    assert.deepEqual([(await store.load(GAME))!.phase, (await store.load(GAME))!.hold?.code], ["held", "continuation-incompatible"]);
+    assert.equal(JSON.stringify(await store.load(GAME)), before);
+    assert.equal(store.writes.count, writes, "no write at all");
+    assert.equal(c.pending(), 0, "the job is not this pool's: dropped, not retried");
   });
 
   test("restart: crash after GameEnd before the intent, and crash after the intent -- the startup walk converges on one intent", async () => {
@@ -512,6 +530,7 @@ describe("ESCROW-3A §6: through the room host -- a crash before the intent, a r
           isFinancial: (record) => financial.has(record.game_id),
           now: () => Date.now(),
           warn: () => undefined,
+          serving: serving(),
         });
       /* Boot 1 WITHOUT the coordinator: the game completes while no settlement code runs -- the crash-before-intent. */
       let booted = await bootWith(null);

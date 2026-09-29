@@ -40,6 +40,7 @@ import type { EscrowCodecId } from "../../../frontend/src/gameEngine/escrow/escr
 import { FINANCIAL_PROTOCOL_VERSION, HOSTED_PROTOCOL_VERSION } from "../../../frontend/src/gameEngine/protocolVersions";
 import { isMoneyContinuationIdentity, MONEY_CONTINUATION_FORMAT, type MoneyContinuationIdentity } from "../../../frontend/src/gameEngine/compat/continuationIdentity";
 import type { FinancialDeploymentPin } from "./moneyLifecycle";
+import type { FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
 
 /* LIVE-4 (L4-1): the version constants and the money continuation identity moved, unchanged, to the shared canonical
    modules -- `gameEngine/protocolVersions.ts` (the hosted and financial protocols, each with its changelog) and
@@ -124,11 +125,25 @@ export function moneyContinuationVerdict(stored: unknown, deployment: Deployment
 export type MoneyIndexEntry =
   /** The record: its stored continuation identity (unparsed -- the verdict classifies it) and its write-once deployment
    *  pin (`binding.deployment`; `null` only on a record made before its deployment was pinned). */
-  | { readonly kind: "record"; readonly mci: unknown; readonly deployment: FinancialDeploymentPin | null }
+  | {
+      readonly kind: "record";
+      readonly mci: unknown;
+      readonly deployment: FinancialDeploymentPin | null;
+      /** LIVE-4 (integration): the ticket ledger's and chain intents' classes beside it, where the money side (L4-4's
+       *  step -1 / refresh) classified them -- so the session judges exactly the facts the money seams judge. */
+      readonly tickets?: FormatFact;
+      readonly intents?: FormatFact;
+    }
   /** ESCROW-3A's held placeholder for a missing record: no continuation identity, already held. */
   | { readonly kind: "placeholder" }
   /** A record this build could not read (never guessed at). */
-  | { readonly kind: "unreadable"; readonly detail: string };
+  | {
+      readonly kind: "unreadable";
+      readonly detail: string;
+      /** LIVE-4 (integration): its class (L4-4's store classes): a newer build's, an older build's, or damage. Absent:
+       *  damage (`corrupt`). */
+      readonly format?: FormatFact;
+    };
 
 /** The settlement index, as the continuation verdict reads it (`SettlementCoordinator` implements it). */
 export interface MoneyContinuationFacts {

@@ -30,6 +30,17 @@
 // (another payload at our signed slot, another roster, another domain) is HELD. The contract itself refuses a second
 // application of every relayer route (StaleSeq / WrongState), so a duplicate can only ever waste gas -- it can never
 // move money twice.
+//
+// LIVE-4 (L4-4): THE VERDICT BEFORE ANY WRITE. Every open intent is first classified (`classify`, the escrow service's
+// canonical continuation verdict for its game, and the relayer's own check that the intent is for the deployment it
+// relays): an intent this relayer does not continue -- another deployment's, a game another pool continues, another
+// build's intent format -- is SKIPPED IN MEMORY: no `defer` (a CAS write), no hold, no confirmation, no observation
+// write; it is simply not in this relayer's work, and one alarm says so. Only a verified conflict found by the pool
+// that owns the game holds it, under its canonical code. An intent whose verdict cannot be computed now (a read of
+// its game's facts failed) is UNDECIDED: nothing is written for it either, and it is asked again at every pass -- one
+// game's unreadable facts never fail a pass or the load for everyone else. A skipped or undecided intent's attempt
+// that may still be live on THIS relayer's account keeps the account's sequence: nothing new is signed until the chain
+// has spent its sequence or passed its expiry height (the same guard as the attempts a restored store forgot).
 
 import { JUNO_CODEC_V1 } from "../../../../frontend/src/gameEngine/escrow/junoCodecV1";
 import { classifyContractFailure, parseCheckpointsResponse, parseGameResponse, QUERY, type JunoGameResponse } from "./junoContract";
@@ -62,8 +73,23 @@ export interface RelayerAccount {
   readonly signer: DigestSigner;
 }
 
-/** The service's word on signing a NEW attempt for an intent (never consulted to observe a live one). */
-export type Admission = { readonly kind: "ok" } | { readonly kind: "wait"; readonly why: string } | { readonly kind: "hold"; readonly code: string; readonly why: string };
+/** The service's word on signing a NEW attempt for an intent (never consulted to observe a live one). `skip` (L4-4):
+ *  not this pool's to act on -- left untouched, in memory only. `undecided` (L4-4): the verdict could not be computed
+ *  now (a read failed) -- nothing is written, no failure is counted, and the next pass asks again. */
+export type Admission =
+  | { readonly kind: "ok" }
+  | { readonly kind: "wait"; readonly why: string }
+  | { readonly kind: "hold"; readonly code: string; readonly why: string }
+  | { readonly kind: "skip"; readonly why: string }
+  | { readonly kind: "undecided"; readonly why: string };
+
+/** LIVE-4 (L4-4): the service's FIRST word on an open intent, before the relayer writes anything for it: continue it;
+ *  skip it in memory (not continued here: another deployment's, another pool's game, another build's format); or hold
+ *  it under a canonical conflict code (the owning pool only). */
+export type IntentServing =
+  | { readonly kind: "continues" }
+  | { readonly kind: "skip"; readonly why: string; readonly detail: string }
+  | { readonly kind: "hold"; readonly code: string; readonly why: string };
 
 export interface RelayerDeps {
   readonly rest: JunoRest;
@@ -95,6 +121,9 @@ export interface RelayerDeps {
   /** Review #5/#6: the service's admission of a NEW attempt (the game's financial record: not held, pinned to this
    *  deployment, and -- for a Start -- still the current roster freeze). Default: admitted. */
   readonly admit?: (intent: ChainIntentRecord) => Promise<Admission>;
+  /** LIVE-4 (L4-4): the canonical verdict for an open intent, asked before ANY write for it (the load and every pass).
+   *  Default: only the relayer's own check (an intent for another deployment is skipped in memory). */
+  readonly classify?: (intent: ChainIntentRecord) => Promise<IntentServing>;
 }
 
 export interface RelayerStatus {
@@ -105,6 +134,13 @@ export interface RelayerStatus {
   /** Journalled attempts the intent store does not know (a restored store): nothing new is signed until the chain has
    *  spent or expired them. */
   readonly forgotten_guard: { readonly attempts: number; readonly max_sequence: string; readonly until_height: string | null } | null;
+  /** LIVE-4 (L4-4): open intents skipped in memory (not continued here), and the games whose intent files are another
+   *  build's format (never parsed here). */
+  readonly skipped: number;
+  readonly skipped_games: number;
+  /** LIVE-4 (L4-4): open intents whose verdict could not be computed yet (a read failed): untouched, asked again at
+   *  every pass. */
+  readonly undecided: number;
 }
 
 export interface Relayer {
@@ -176,6 +212,72 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
   /** `untilHeight`: the highest journalled expiry of the forgotten attempts when every one carries it (review 2 #5: the
    *  configuration's timeout may have changed across the restart); else fixed at first sight from the configuration. */
   let forgotten: { attempts: number; maxSequence: bigint; untilHeight: bigint | null } | null = null;
+
+  /** LIVE-4 (L4-4): intents skipped in memory (id -> why), games whose intents are another build's format, and the
+   *  live attempts of skipped intents on THIS relayer's account (tx hash -> its sequence and expiry): nothing new is
+   *  signed while one of them may still land. */
+  const skipped = new Map<string, { readonly game_id: string; readonly why: string }>();
+  const skippedGames = new Set<string>();
+  const unobserved = new Map<string, { readonly sequence: bigint; readonly timeout: bigint | null }>();
+  /** LIVE-4 (L4-4, review R-1/R-2): open intents whose verdict could not be computed (id -> game, and the last reason
+   *  warned about): out of this relayer's work, untouched, and classified again at every pass -- one game's unreadable
+   *  facts never stop the pass, the load, or anyone else's intents. */
+  const undecided = new Map<string, { readonly game_id: string; why: string }>();
+
+  /** A live attempt of an intent this relayer does not observe (skipped or undecided) keeps this account's sequence. */
+  function guardLiveAttempts(intent: ChainIntentRecord): void {
+    for (const attempt of intent.attempts) {
+      if (isLiveAttempt(attempt) && attempt.account === deps.account.address) {
+        unobserved.set(attempt.tx_hash, { sequence: BigInt(attempt.sequence), timeout: /^[0-9]+$/.test(attempt.timeout_height) ? BigInt(attempt.timeout_height) : null });
+      }
+    }
+  }
+
+  /** The verdict could not be computed now: nothing is written for the intent, no failure counted; it leaves this
+   *  pass's work (its live attempt guarded) and is asked again at the next pass. One warning per reason. */
+  function leaveUndecided(intent: ChainIntentRecord, why: string): void {
+    open.delete(intent.intent_id);
+    guardLiveAttempts(intent);
+    const known = undecided.get(intent.intent_id);
+    undecided.set(intent.intent_id, { game_id: intent.game_id, why });
+    if (known?.why === why) return;
+    deps.warn(`  relayer: ${intent.op.kind} for ${intent.game_id} is UNDECIDED (${why.slice(0, 240)}); nothing is written for it, and it is asked again at the next pass`);
+    audit("chain.intent-undecided", { game_id: intent.game_id, intent_id: intent.intent_id, op: intent.op.kind, why: why.slice(0, 200) });
+  }
+
+  /** Not this relayer's to act on: dropped from its work, IN MEMORY ONLY -- nothing is written for it -- with one alarm.
+   *  A live attempt of it on this account keeps the account's sequence (`unobservedBlocks`). */
+  function skip(intent: ChainIntentRecord, why: string, detail: string): void {
+    open.delete(intent.intent_id);
+    undecided.delete(intent.intent_id);
+    guardLiveAttempts(intent);
+    const known = skipped.get(intent.intent_id);
+    skipped.set(intent.intent_id, { game_id: intent.game_id, why });
+    if (known?.why === why) return;
+    deps.warn(`  relayer: SKIPPED ${intent.op.kind} for ${intent.game_id} (${why}) -- ${detail.slice(0, 240)}; nothing is written for it here`);
+    audit("chain.intent-skipped", { game_id: intent.game_id, intent_id: intent.intent_id, op: intent.op.kind, why });
+  }
+
+  /** The relayer's own first check (an intent is submitted only to the deployment it was made for), then the service's
+   *  canonical verdict. */
+  async function servingOf(intent: ChainIntentRecord): Promise<IntentServing> {
+    if (!ownInstance(intent)) return { kind: "skip", why: "deployment-unavailable", detail: `the intent belongs to ${intent.instance.slice(0, 160)}, not to this relayer's ${deps.chainId} ${deps.contract}` };
+    return deps.classify === undefined ? { kind: "continues" } : deps.classify(intent);
+  }
+
+  /** Live attempts of skipped intents that may still land at this account's sequence: the chain must first spend their
+   *  sequence or pass their expiry height. */
+  async function unobservedBlocks(): Promise<boolean> {
+    if (unobserved.size === 0) return false;
+    const account = await accountOf();
+    const block = await deps.rest.latestBlock();
+    for (const [hash, attempt] of [...unobserved]) {
+      if (BigInt(account.sequence) > attempt.sequence || (attempt.timeout !== null && BigInt(block.height) > attempt.timeout)) unobserved.delete(hash);
+    }
+    if (unobserved.size === 0) return false;
+    lastError = `${unobserved.size} live attempts of intents this relayer does not observe now (not continued here, or undecided) may still land; nothing new is signed until the chain spends their sequence or passes their expiry`;
+    return true;
+  }
 
   /** One CAS write of a pure move; a stale record re-reads and gives up this pass (the next pass re-decides). */
   async function write(current: ChainIntentRecord, next: ChainIntentRecord): Promise<ChainIntentRecord | null> {
@@ -436,9 +538,9 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
   /** Decides a pending intent: confirm / supersede / hold / wait, or sign and broadcast one attempt. */
   async function advance(intent: ChainIntentRecord): Promise<"in-flight" | "settled" | "waiting" | "stop"> {
     if (!ownInstance(intent)) {
-      /* Review #5: made for another deployment (a restart re-pointed the server): never submitted here, never
-         confirmed from this deployment's state. */
-      await hold(intent, "binding-mismatch", `the intent belongs to ${intent.instance.slice(0, 160)}, not to this relayer's ${deps.chainId} ${deps.contract}`);
+      /* Review #5 / L4-4: made for another deployment (a restart re-pointed the server): never submitted here, never
+         confirmed from this deployment's state -- and never held either: it is another pool's work, skipped in memory. */
+      skip(intent, "deployment-unavailable", `the intent belongs to ${intent.instance.slice(0, 160)}, not to this relayer's ${deps.chainId} ${deps.contract}`);
       return "settled";
     }
     const game = await readGame(intent.op.chain_game_id);
@@ -491,6 +593,14 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
     }
     /* Review #5/#6: the financial record's word (a held game submits nothing new; a released freeze's Start is dead). */
     const admission = deps.admit === undefined ? ({ kind: "ok" } as const) : await deps.admit(intent);
+    if (admission.kind === "skip") {
+      skip(intent, admission.why, admission.why);
+      return "settled";
+    }
+    if (admission.kind === "undecided") {
+      leaveUndecided(intent, admission.why);
+      return "settled";
+    }
     if (admission.kind === "wait") {
       await defer(intent, deps.now() + idleMs, admission.why, false);
       return "waiting";
@@ -579,6 +689,20 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
 
   /** Review #3: an intent that cannot be read may hold the live attempt -- the pass ends (throws) and nothing is signed
    *  until it reads again (or an operator restores it). */
+  /** The undecided intents as they are stored now (a resolved or vanished one leaves the set). */
+  async function undecidedIntents(): Promise<ChainIntentRecord[]> {
+    const out: ChainIntentRecord[] = [];
+    for (const [intentId, entry] of [...undecided]) {
+      const record = await deps.store.load(entry.game_id, intentId);
+      if (record === null || record.status === "confirmed" || record.status === "superseded") {
+        undecided.delete(intentId);
+        continue;
+      }
+      out.push(record);
+    }
+    return out.sort(intentOrder);
+  }
+
   async function openIntents(): Promise<ChainIntentRecord[]> {
     const out: ChainIntentRecord[] = [];
     for (const [intentId, gameId] of [...open]) {
@@ -621,7 +745,34 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
     writeFailed = false;
     lastError = null; // the status names the LAST pass's trouble (set below, or by the pass's failure)
     if (deps.active?.() === false) return idleMs;
-    const intents = await openIntents();
+    /* L4-4: the verdict before any write -- every open intent (the live ones included) and every undecided one, once
+       each. A skipped one leaves this relayer's work untouched on disk; an undecided one is asked again next pass; the
+       owner's conflict is held (a held intent's live attempt is still observed below: its sequence is the account's
+       until the chain resolves it). Only what THIS pass decided is acted on below: an intent poked in the meantime
+       waits for the next pass's verdict. */
+    const decided = new Set<string>();
+    const queue = new Map<string, ChainIntentRecord>();
+    for (const intent of [...(await openIntents()), ...(await undecidedIntents())]) if (!queue.has(intent.intent_id)) queue.set(intent.intent_id, intent); // once each (review N-2)
+    for (const intent of queue.values()) {
+      let verdict: IntentServing;
+      try {
+        verdict = await servingOf(intent);
+      } catch (error) {
+        leaveUndecided(intent, error instanceof Error ? error.message : String(error));
+        continue;
+      }
+      if (verdict.kind === "skip") {
+        skip(intent, verdict.why, verdict.detail);
+        continue;
+      }
+      if (undecided.delete(intent.intent_id)) open.set(intent.intent_id, intent.game_id); // decided now: back in the work
+      decided.add(intent.intent_id);
+      if (verdict.kind === "hold" && intent.status !== "held") {
+        await hold(intent, verdict.code, verdict.why);
+        if (writeFailed) return pollMs;
+      }
+    }
+    const intents = (await openIntents()).filter((intent) => decided.has(intent.intent_id));
     /* Every live attempt is observed first; while one is unresolved, nothing new is signed. A held intent's live
        attempt is still observed: its sequence is the account's until the chain resolves it. */
     const liveOnes = intents.filter((intent) => intent.attempts.some(isLiveAttempt));
@@ -631,8 +782,9 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
     }
     live = null;
     if (await forgottenBlocks()) return pollMs * 2;
+    if (await unobservedBlocks()) return pollMs * 2;
     const now = deps.now();
-    const refreshed = await openIntents();
+    const refreshed = (await openIntents()).filter((intent) => decided.has(intent.intent_id));
     const runnable = refreshed.filter((intent) => intent.status === "pending" && intent.retry.next_at <= now);
     for (const intent of runnable) {
       let outcome: Awaited<ReturnType<typeof advance>>;
@@ -696,13 +848,42 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
     },
     async load() {
       /* Review #3: a game whose intents cannot be listed may hold the live attempt: the load FAILS (the backend retries
-         it) rather than start a relayer that cannot see it. */
+         it) rather than start a relayer that cannot see it -- when they are DAMAGED. L4-4: intents in another build's
+         format (newer, or older and no longer read) are another pool's work: never parsed here; their journalled
+         attempts stay unknown to this load, so the forgotten-attempt guard below keeps the account's sequence for them
+         (which needs a journal that lists every attempt: without one this still fails closed). An intent this relayer
+         does not continue is skipped in memory, and one whose verdict cannot be computed now is left undecided (asked
+         again at every pass); either way its live attempts on this account keep the account's sequence. */
       const known = new Set<string>();
       for (const gameId of await deps.store.games()) {
+        const format = deps.store.formatOf === undefined ? "current" : await deps.store.formatOf(gameId);
+        if ((format === "newer" || format === "older-unread") && deps.journal.allAttempts !== undefined) {
+          if (!skippedGames.has(gameId)) {
+            skippedGames.add(gameId);
+            deps.warn(`  relayer: the chain intents of ${gameId} are in ${format === "newer" ? "a NEWER" : "an OLDER"} format than this build reads; never parsed or written here`);
+            audit("chain.intents-skipped", { game_id: gameId, format });
+          }
+          continue;
+        }
         const records = await deps.store.listGame(gameId);
         for (const record of records) {
+          /* Every attempt this store holds is known (review R-7): a skipped or undecided intent's live attempts are
+             guarded by `unobserved`; the forgotten guard is for attempts NO readable record holds. */
           for (const attempt of record.attempts) known.add(attempt.tx_hash);
-          if (record.status !== "confirmed" && record.status !== "superseded") open.set(record.intent_id, gameId);
+          if (record.status === "confirmed" || record.status === "superseded") continue;
+          let verdict: IntentServing;
+          try {
+            verdict = await servingOf(record);
+          } catch (error) {
+            /* One game's facts unreadable now never fails the load for everyone (review R-1): undecided, asked again. */
+            leaveUndecided(record, error instanceof Error ? error.message : String(error));
+            continue;
+          }
+          if (verdict.kind === "skip") {
+            skip(record, verdict.why, verdict.detail);
+            continue;
+          }
+          open.set(record.intent_id, gameId);
         }
       }
       const lost = (deps.journal.allAttempts?.() ?? []).filter((entry) => entry.account === deps.account.address && !known.has(entry.tx_id));
@@ -723,6 +904,9 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
       last_error: lastError,
       passes,
       forgotten_guard: forgotten === null ? null : { attempts: forgotten.attempts, max_sequence: forgotten.maxSequence.toString(), until_height: forgotten.untilHeight === null ? null : forgotten.untilHeight.toString() },
+      skipped: skipped.size,
+      skipped_games: skippedGames.size,
+      undecided: undecided.size,
     }),
     stop() {
       stopped = true;

@@ -43,6 +43,7 @@ async function seal(world: World, gameId: string): Promise<void> {
     store: world.financial,
     replay: world.replay,
     isFinancial: () => true,
+    serving: world.service.serving,
     now: () => world.clock.now,
     warn: (line) => world.warnings.push(line),
     schedule: () => ({ cancel: () => undefined }),

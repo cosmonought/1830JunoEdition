@@ -28,6 +28,9 @@ import { createFileFinancialGameStore } from "../escrow/financialGameStore";
 import { currentMoneyContinuation } from "../escrow/moneyContinuation";
 import { missingRecordPlaceholder, newFinancialRecord, transitionFinancial, type FinancialGameRecord } from "../escrow/moneyLifecycle";
 import { inspectMoney, reconcileDuplicateCode, releaseHold, releaseMoneyHold, verifyGame, withLock } from "./gamesDoctor";
+import { createMoneyServing } from "../escrow/moneyServing";
+import { thisDeploymentCapability } from "../deploymentCapability";
+import { PIN } from "../escrow/escrow3bSupport";
 
 quietConsole();
 
@@ -64,6 +67,8 @@ function waitingOnDisk(dir: string, code: string | null): string {
 const hold = (dir: string, gameId: string, code: "duplicate-join-code" | "replay-failed") =>
   createFileHoldStore(dir, quiet).create(makeHold({ gameId, code, detail: `test ${code}`, at: T0, source: "discovery", build: BUILD, rulesEngineVersion: RULES_ENGINE_VERSION }));
 const IDENTITY_SHAPED = /pr_|pf_|se_|sf_|rk_/;
+/** LIVE-4 (L4-4): the operator judges against the escrow deployment the server is configured for (`--escrow-config`). */
+const serving = () => createMoneyServing({ capability: thisDeploymentCapability([PIN]) });
 
 describe("ESCROW-3A §11: duplicate join-code twins", () => {
   test("two waiting twins are AMBIGUOUS (nothing changes) until --keep says which; then one record loses the code, both verify and both holds are released", () =>
@@ -160,7 +165,7 @@ describe("ESCROW-3A §11: replay-failed from a prior build's bug", () => {
 describe("ESCROW-3A §11: held money games", () => {
   async function heldMoney(dir: string, gameId: string, at: FinancialGameRecord["phase"], code: "continuation-incompatible" | "replay-failed", continuation = currentMoneyContinuation()): Promise<void> {
     const store = createFileFinancialGameStore(dir, quiet);
-    let record = newFinancialRecord(gameId, continuation, T0);
+    let record = newFinancialRecord(gameId, continuation, T0, PIN);
     assert.equal((await store.create(record)).outcome.kind, "committed");
     if (at !== "funding") {
       const dealt = transitionFinancial(record, { kind: "dealt", at: T0 + 1 }) as { next: FinancialGameRecord };
@@ -181,11 +186,11 @@ describe("ESCROW-3A §11: held money games", () => {
       const gameId = dealtOnDisk(dir, 1);
       await heldMoney(dir, gameId, "in-progress", "continuation-incompatible");
       const before = fs.readFileSync(path.join(dir, "games", "money", `${gameId}.json`), "utf8");
-      const seen = await inspectMoney(dir);
+      const seen = await inspectMoney(dir, undefined, { serving: serving() });
       assert.deepEqual(seen.games.map((g) => [g.gameId, g.phase, g.hold?.code, g.hold?.from, g.continues]), [[gameId, "held", "continuation-incompatible", "in-progress", true]]);
       assert.equal(fs.readFileSync(path.join(dir, "games", "money", `${gameId}.json`), "utf8"), before, "inspect writes nothing");
       const ops = createMemoryOpsRecorder();
-      const done = await withLock(dir, (lock) => releaseMoneyHold(dir, gameId, "ran on a compatible build", { lock, ops }));
+      const done = await withLock(dir, (lock) => releaseMoneyHold(dir, gameId, "ran on a compatible build", { lock, ops, serving: serving() }));
       assert.deepEqual(done, { ok: true, to: "in-progress" });
       assert.equal((await createFileFinancialGameStore(dir, quiet).load(gameId))!.phase, "in-progress");
       assert.ok(ops.lines.some((line) => line.event === "money.released" && line.game_id === gameId));
@@ -203,7 +208,7 @@ describe("ESCROW-3A §11: held money games", () => {
       const ops = createMemoryOpsRecorder();
       const reasons: string[] = [];
       for (const gameId of [incompatible, broken, sealed]) {
-        const result = await withLock(dir, (lock) => releaseMoneyHold(dir, gameId, "trying", { lock, ops }));
+        const result = await withLock(dir, (lock) => releaseMoneyHold(dir, gameId, "trying", { lock, ops, serving: serving() }));
         assert.equal((result as { ok: boolean }).ok, false, gameId);
         reasons.push((result as { reason: string }).reason);
         assert.equal((await createFileFinancialGameStore(dir, quiet).load(gameId))!.phase, "held");
@@ -219,12 +224,12 @@ describe("ESCROW-3A §11: held money games", () => {
       const missing = dealtOnDisk(dir, 1);
       const store = createFileFinancialGameStore(dir, quiet);
       assert.equal((await store.create(missingRecordPlaceholder(missing, T0, "test"))).outcome.kind, "committed");
-      const refused = await withLock(dir, (lock) => releaseMoneyHold(dir, missing, "it verifies", { lock, ops: createMemoryOpsRecorder() }));
+      const refused = await withLock(dir, (lock) => releaseMoneyHold(dir, missing, "it verifies", { lock, ops: createMemoryOpsRecorder(), serving: serving() }));
       assert.match((refused as { reason: string }).reason, /placeholder .* never released -- stop the server and restore the original/);
-      assert.equal((await inspectMoney(dir, missing)).games[0].continues, false);
+      assert.equal((await inspectMoney(dir, missing, { serving: serving() })).games[0].continues, false);
       const dealt = dealtOnDisk(dir, 1);
       await heldMoney(dir, dealt, "funding", "replay-failed");
-      const done = await withLock(dir, (lock) => releaseMoneyHold(dir, dealt, "replay verified on this build", { lock, ops: createMemoryOpsRecorder() }));
+      const done = await withLock(dir, (lock) => releaseMoneyHold(dir, dealt, "replay verified on this build", { lock, ops: createMemoryOpsRecorder(), serving: serving() }));
       assert.deepEqual(done, { ok: true, to: "in-progress" }, "the GameRecord says it was dealt: never back to funding");
     }));
 });

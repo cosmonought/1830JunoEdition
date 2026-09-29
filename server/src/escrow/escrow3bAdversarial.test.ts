@@ -91,6 +91,7 @@ async function sealIt(world: World, gameId: string, entries: readonly ServerLogE
     store: world.financial,
     replay: world.replay,
     isFinancial: () => true,
+    serving: world.service.serving,
     now: () => world.clock.now,
     warn: (line) => world.warnings.push(line),
     schedule: () => ({ cancel: () => undefined }),
@@ -487,19 +488,21 @@ describe("§24 checkpoints: committed positions, once, the newest winning", () =
 });
 
 describe("§24 settlement: exactly the persisted intent, or the game is held", () => {
-  test("v11 settles (the happy path); a v10 or v12 money game is never signed on this v11 server -- held, fail closed", async () => {
+  test("v11 settles (the happy path); a v10 or v12 money game is never signed on this v11 server -- not continued, nothing written (LIVE-4 L4-4)", async () => {
     for (const pin of [10, 12]) {
       const world = makeWorld({ replay: endedReplay({ rules_engine_version: pin }) });
       const session = await dealt(world);
       play(world, GAME_A, 1, session);
-      /* A game whose deal pinned another rules version: its continuation identity says so. */
+      /* A game whose money identity names another rules version: this v11 pool does not play it, so it is NOT CONTINUED
+         here -- derived, never a durable hold (L4-4 step -1; before LIVE-4 it was held continuation-incompatible after
+         the deal and the seal were written, F-L4-3). Its record is left exactly as it was, and nothing is signed. */
       const record = await fin(world);
       await world.financial.put({ ...record, continuation: { ...record.continuation!, rules_engine_version: pin }, record_version: record.record_version + 1 }, record.record_version);
+      const before = JSON.stringify(await fin(world));
       await sealIt(world, GAME_A);
-      const held = await fin(world);
-      assert.equal(held.phase, "held", `v${pin}`);
-      assert.equal(held.hold?.code, "continuation-incompatible", `v${pin}: ${held.hold?.detail}`);
+      assert.equal(JSON.stringify(await fin(world)), before, `v${pin}: the financial record is untouched (no seal, no hold)`);
       assert.equal((await intentsOf(world, GAME_A)).some((i) => i.op.kind === "settle"), false, `v${pin}: nothing signed`);
+      assert.ok(world.ops.lines.some((line) => line.event === "money.not-continued" && line.game_id === GAME_A && line.why === "rules-not-supported"), `v${pin}: noticed`);
     }
     /* And even past the continuation check, an uncertified board never builds: the settlement job holds it. */
     const world = makeWorld({ replay: endedReplay({ rules_engine_version: 12 }) });
@@ -525,7 +528,7 @@ describe("§24 settlement: exactly the persisted intent, or the game is held", (
     const tamperedReplay = world.replay;
     /* The coordinator derives the intent; then the durable record is tampered with before the service reads it. */
     world.replay = (prefix) => tamperedReplay(prefix);
-    const coordinator = createSettlementCoordinator({ store: world.financial, replay: world.replay, isFinancial: () => true, now: () => world.clock.now, warn: () => undefined, schedule: () => ({ cancel: () => undefined }) });
+    const coordinator = createSettlementCoordinator({ store: world.financial, replay: world.replay, isFinancial: () => true, serving: world.service.serving, now: () => world.clock.now, warn: () => undefined, schedule: () => ({ cancel: () => undefined }) });
     const entries = world.logs.get(GAME_A)!;
     coordinator.onGameplayClosed({ gameId: GAME_A, record: { game_id: GAME_A, money: null, started_at: 1 } as never, seal: sealOf(entries, true)!, recovered: false, entries });
     await coordinator.drain();
@@ -587,18 +590,23 @@ describe("§24 settlement: exactly the persisted intent, or the game is held", (
 });
 
 describe("§5 / §16 the binding and the roster are write-once and pinned", () => {
-  test("a restart configured for another contract HOLDS the pinned game (fail closed), and signs nothing for it", async () => {
+  test("LIVE-4 T-8: a restart configured for another contract does NOT hold the pinned game -- it is not continued there, nothing is written, and nothing is signed", async () => {
     const world = makeWorld();
     const session = await dealt(world);
-    const record = await fin(world);
-    const moved = { ...record, binding: { ...record.binding!, deployment: { ...record.binding!.deployment, contract_address: "juno1elsewhere" } }, record_version: record.record_version + 1 };
-    assert.equal((await world.financial.put(moved, record.record_version)).kind, "committed");
+    const before = JSON.stringify(await fin(world));
+    const intentsBefore = JSON.stringify(await intentsOf(world, GAME_A));
+    /* Before LIVE-4 this server durably held every open game on contract A (binding-mismatch, F-L4-2): availability read
+       as a contradiction. Now contract A is simply not served here -- derived, routed, paged, untouched. */
+    world.pin = { ...PIN, contract_address: WALLETS[2] };
     await world.restart();
-    assert.equal((await fin(world)).hold?.code, "binding-mismatch");
-    const before = (await intentsOf(world, GAME_A)).length;
+    assert.equal(JSON.stringify(await fin(world)), before, "the financial record is untouched: no hold");
     toStockRound(world, GAME_A, session);
     await world.service.idle();
-    assert.equal((await intentsOf(world, GAME_A)).length, before);
+    await world.relayer.pass();
+    await world.service.idle();
+    assert.equal(JSON.stringify(await intentsOf(world, GAME_A)), intentsBefore, "no intent written, deferred or held");
+    assert.equal(JSON.stringify(await fin(world)), before, "gameplay commits move nothing either");
+    assert.ok(world.ops.lines.some((line) => line.event === "money.not-continued" && line.game_id === GAME_A && line.why === "deployment-unavailable"));
   });
 
   test("a second, different chain game or roster is a hold (binding-conflict), never an overwrite", () => {

@@ -29,8 +29,11 @@ import { createDevAuthenticator } from "./identity/devAuthenticator";
 import { createJournalIdentityStore, type JournalIdentityStore } from "./identity/journalStore";
 import { createFileHoldStore } from "./rooms/holdStore";
 import { createFileFinancialGameStore } from "./escrow/financialGameStore";
-import { thisDeploymentCapability } from "./deploymentCapability";
+import type { FinancialGameRecord } from "./escrow/moneyLifecycle";
+import { dealIdentityOnDisk } from "./escrow/dealIdentity";
+import { compatibilityKey, type DeploymentCapability } from "../../frontend/src/gameEngine/compat/deploymentCapability";
 import { createSettlementCoordinator } from "./escrow/settlementCoordinator";
+import { noMoneyServing } from "./escrow/moneyServing";
 import { serverPrefixReplay } from "./escrow/settlementEvidence";
 import { createFileChainIntentStore } from "./escrow/chainIntents";
 import { openFileSigningJournal } from "./escrow/signingJournal";
@@ -246,6 +249,10 @@ async function main(): Promise<void> {
             .gamesOfPrincipal(event.principalId)
             .then(async (games) => {
               for (const gameId of games) {
+                /* LIVE-4 (L4-4): a game this server does not continue is not written (the revocation is observability:
+                   standing is derived from identity anyway, so nothing is lost where another pool continues it). */
+                const decided = await escrow?.service.servingDecision(gameId, { where: "security event" }).catch(() => null);
+                if (decided === undefined || decided === null || decided.verdict.kind !== "continues") continue;
                 const ended = await ledger.revokeForSecurityEvent(gameId);
                 if (ended > 0) ops.audit("wallet-ticket.revoked", { game_id: gameId, kind: event.kind, tickets: ended });
               }
@@ -263,6 +270,8 @@ async function main(): Promise<void> {
         journal: await openFileSigningJournal(junoConfig.journalDir, { writerCheck: () => held.verify() }),
         tickets: ledger,
         readLog: (gameId) => logStore.loadLog(gameId),
+        /* LIVE-4 (L4-4): the deal's identity for the continuation verdict, read-only. */
+        readDeal: (gameId) => dealIdentityOnDisk(dataDir, gameId),
         replay: serverPrefixReplay(build),
         now: () => Date.now(),
         // eslint-disable-next-line no-console
@@ -296,19 +305,36 @@ async function main(): Promise<void> {
     // eslint-disable-next-line no-console
     warn: (line) => console.warn(line),
     ops,
+    /* LIVE-4 (L4-4): the coordinator asks the same verdict as the escrow service, over the same serving (the escrow
+       deployment this release is configured to serve, and the chain's verification-grade facts); without a backend it
+       serves no escrow, so it writes nothing for any money game (step -1). */
+    // eslint-disable-next-line no-console
+    serving: escrow?.service.serving ?? noMoneyServing({ ops, warn: (line) => console.warn(line) }),
+    /* The deal's identity for step -1, read-only (never the log store's repairing load: a game this pool may not
+       continue is never written, not even a torn tail). */
+    readDeal: (gameId) => dealIdentityOnDisk(dataDir, gameId),
+    ...(escrow !== null ? { artifactFormats: (gameId: string, record: FinancialGameRecord) => (escrow as JunoBackend).service.artifactFormatsOf(gameId, record) } : {}),
     ...(escrow !== null ? { onIntentPrepared: (gameId: string) => escrow?.service.onIntentPrepared(gameId) } : {}),
   });
   await settlement.load();
   /* ==================================================================
-      LIVE-4 (L4-2): THIS POOL'S DEPLOYMENT CAPABILITY, BUILT ONCE
+      LIVE-4 (L4-2 + L4-4, integrated): THIS PROCESS'S ONE DEPLOYMENT CAPABILITY
      ==================================================================
      This build's constants (rules, hosted and financial protocols, codecs, the escrow contract code it speaks) and the
      escrow deployment its configuration serves -- the configured Juno backend's pin when that backend opened, none
-     otherwise. Every game's continuation verdict and dealing identity is judged against exactly this descriptor
-     (`continuationWiring.ts`); `BUILD_ID` is not in it. A descriptor this build cannot canonicalize refuses the start. */
-  let capability: ReturnType<typeof thisDeploymentCapability>;
+     otherwise. It is built ONCE, by the money serving (the escrow service's when a backend opened, else
+     `noMoneyServing`: this build serving no deployment), and that same descriptor is what every game's session verdict
+     and dealing identity (L4-2, `continuationWiring.ts`), every money seam (L4-4, `moneyServing.ts`) and every client
+     announcement (L4-3, `clientVerdict`) is judged against -- so the compatibility key names one actual process
+     capability, never two subtly different ones. The session side also reads the SAME runtime chain facts the money
+     side records (verification grade only), so a game the escrow side has found in a verified deployment conflict is
+     not left playable by a session judging it with no chain facts. `BUILD_ID` is not in it. A descriptor this build
+     cannot canonicalize refuses the start. */
+  const serving = settlement.serving;
+  let capability: DeploymentCapability;
   try {
-    capability = thisDeploymentCapability(escrow !== null && junoConfigUsed !== null ? [pinOf(junoConfigUsed)] : []);
+    capability = serving.capability;
+    compatibilityKey(capability); // validates: a descriptor that cannot be keyed refuses the start
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error(`Refusing to start: this server's deployment capability cannot be built -- ${error instanceof Error ? error.message : String(error)}`);

@@ -26,6 +26,8 @@ import type { InspectableSigningJournal } from "../signingJournal";
 import type { WalletTicketLedger } from "../walletTickets";
 import type { WalletControlProofs } from "../escrowPorts";
 import { junoJoinAdmissionSigner } from "./joinAdmission";
+import type { MoneyServing } from "../moneyServing";
+import type { GameIdentityFacts } from "../../../../frontend/src/gameEngine/compat/continuationIdentity";
 import { checkSignerIdentities, pinOf, settlementKeyConfigOf, verifyJunoDeployment, type DeploymentVerdict, type JunoBackendConfig, type SignerRef } from "./junoConfig";
 import { createJunoRest, type HttpTransport, type JunoRest } from "./junoRest";
 import { createJunoRelayer, type Relayer } from "./relayer";
@@ -52,6 +54,8 @@ export interface JunoBackendDeps {
   readonly journal: InspectableSigningJournal;
   readonly tickets: WalletTicketLedger;
   readonly readLog: (gameId: string) => Promise<readonly ServerLogEntry[]>;
+  /** LIVE-4 (L4-4): the deal's identity, read-only (`dealIdentity.ts`); default: from `readLog`. */
+  readonly readDeal?: (gameId: string) => Promise<GameIdentityFacts>;
   readonly replay: PrefixReplay;
   readonly now: () => number;
   readonly warn: (line: string) => void;
@@ -65,6 +69,8 @@ export interface JunoBackendDeps {
   readonly verifyEveryMs?: number;
   /** ESCROW-4: the proofs of wallet control the join admission requires (absent: no admission is ever issued). */
   readonly walletProofs?: WalletControlProofs;
+  /** LIVE-4 (L4-4): the pool's serving, when the caller shares one (default: the service's own over the configured pin). */
+  readonly serving?: MoneyServing;
 }
 
 async function openSigner(ref: SignerRef, deps: JunoBackendDeps): Promise<DigestSigner> {
@@ -106,6 +112,7 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
     relayer: () => (state === "active" || loading ? relayer : null),
     tickets: deps.tickets,
     readLog: deps.readLog,
+    ...(deps.readDeal !== undefined ? { readDeal: deps.readDeal } : {}),
     replay: deps.replay,
     now: deps.now,
     warn: deps.warn,
@@ -113,6 +120,7 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
     ready: () => state === "active" || loading,
     admission: { signer: junoJoinAdmissionSigner(config.admissionKey.publicKeyHex, JUNO_CODEC_V1, admissionDigestSigner), ttlSecs: config.admissionKey.ttlSecs },
     walletProofs: deps.walletProofs,
+    ...(deps.serving !== undefined ? { serving: deps.serving } : {}),
   });
   relayer = createJunoRelayer({
     rest,
@@ -129,6 +137,8 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
     onResolved: (intent) => service.onIntentResolved(intent),
     active: () => state === "active",
     admit: (intent) => service.admit(intent),
+    /* LIVE-4 (L4-4): the canonical verdict for every open intent, before the relayer writes anything for it. */
+    classify: (intent) => service.classifyIntent(intent),
   });
   /* Review #8: the frozen rosters, from the durable store, before the server takes a single op (no chain needed). */
   const preloaded = await service.preload();
@@ -136,6 +146,13 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
 
   async function verifyOnce(): Promise<JunoBackendState> {
     verdict = await verifyJunoDeployment(config, rest);
+    /* LIVE-4 (L4-4): whenever the chain answered, the deployment's chain-attested facts at VERIFICATION GRADE -- the only
+       source of the continuation verdict's `runtime.chainFacts` (a mismatch included: they make the classification of
+       every money game deterministic, and a configuration typo stays derived, never a conflict). */
+    if (verdict.kind !== "unavailable") {
+      const read = await service.refreshChainFacts();
+      if (read.kind === "unavailable") deps.warn(`  escrow: the deployment's facts could not be read at verification grade (${read.detail}); no deployment conflict is concluded until they are`);
+    }
     if (verdict.kind === "verified") {
       if (state !== "active" && !loading) {
         loading = true;
@@ -152,7 +169,7 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
         state = "active";
         deps.ops?.audit("escrow.backend-verified", { chain_id: config.chainId, contract: config.contract, height: verdict.height, relayer: config.relayer.address, signer_key_id: config.settlementKey.signerKeyId, settlement_key: settlementDigestSigner.kind, relayer_key: relayerSigner.kind, admission_key: admissionDigestSigner.kind });
         deps.log(`  escrow: Juno backend VERIFIED on ${config.chainId} at height ${verdict.height} (contract ${config.contract}; relayer ${config.relayer.address}; ${relayerSigner.kind} keys) -- money games remain disabled to players`);
-        if (loaded.games > 0) deps.log(`  escrow: ${loaded.games} money games -- ${loaded.resumed} settlements resumed, ${loaded.held} held`);
+        if (loaded.games > 0) deps.log(`  escrow: ${loaded.games} money games -- ${loaded.resumed} settlements resumed, ${loaded.held} held, ${loaded.skipped} not continued here`);
         relayer?.wake();
       }
     } else if (verdict.kind === "mismatch") {

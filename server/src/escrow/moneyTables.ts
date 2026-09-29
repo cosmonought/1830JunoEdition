@@ -71,6 +71,7 @@ import type { ChainIntentRecord } from "./chainIntents";
 import type { EscrowService } from "./escrowService";
 import type { FinancialGameStore } from "./financialGameStore";
 import { DEALT_PHASES, type FinancialDeploymentPin, type FinancialGameRecord } from "./moneyLifecycle";
+import { moneyTermsKey } from "./moneyServing";
 import { ADMISSION_CLOCK_SKEW_MS, admissionOutstanding, type WalletLinkProof, type WalletTicketLedger } from "./walletTickets";
 import { canonicalJunoWallet, createChallengeBook, verifyAdr036, type ChallengeBook } from "./walletProof";
 import { parseConfigResponse, parseGameResponse, parseGamesResponse, QUERY, type JunoGameResponse } from "./juno/junoContract";
@@ -283,11 +284,13 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (!deps.enabled) return { ok: false, code: "money-games-disabled", reason: "Real-money tables are not enabled on this server." };
     if (deps.pin.network_class === "mainnet") return { ok: false, code: "money-games-disabled", reason: "Real-money tables are not open on Juno mainnet yet." };
     if (!deps.service.isReady()) return { ok: false, code: "money-games-disabled", reason: "The Juno escrow is not verified yet. Try again in a minute." };
+    /* LIVE-4 (L4-4): the canonical creation verdict (identity, protocols, codec, and the deployment served AND verified
+       at verification grade this run); `createMoneyGame` asks it again before it writes. */
     const verdict = deps.service.creationVerdict();
-    if (!verdict.continues) {
-      return verdict.why === "rules-not-certified"
-        ? { ok: false, code: "rules-not-certified", reason: "This server's game rules aren't certified for real-money settlement yet, so real-money tables can't open here." }
-        : { ok: false, code: verdict.why, reason: "This server can't continue a real-money table it would open now (its money protocol isn't one it serves), so none can open here." };
+    if (verdict.kind !== "continues") {
+      if (verdict.why === "rules-not-certified") return { ok: false, code: "rules-not-certified", reason: "This server's game rules aren't certified for real-money settlement yet, so real-money tables can't open here." };
+      if (verdict.why === "deployment-unverified") return { ok: false, code: "deployment-unverified", reason: "The Juno escrow hasn't been confirmed from the chain yet. Try again in a minute." };
+      return { ok: false, code: verdict.why, reason: "This server can't continue a real-money table it would open now (its money protocol isn't one it serves), so none can open here." };
     }
     return { ok: true };
   }
@@ -580,10 +583,28 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     } catch {
       entry.ledger = null;
     }
+    /* LIVE-4 (L4-4, review R-3 / N-1): the canonical verdict BEFORE anything this observation can lead to. Two gates:
+       - READ: the chain is read for the players' projection -- their own exits (withdraw, refund, challenge) on their
+         own contract -- only when the table's escrow IS this server's deployment (its key served here: the chain game
+         read is then the table's own; another deployment's game of the same number never is). Reads write nothing.
+       - ACT: a bind, the deal, a cancelled or extended room, a closed record -- only for a table this server CONTINUES.
+       A table whose escrow is elsewhere (or whose facts cannot be read now) is projected from what is stored. */
+    const decision = entry.financial === null ? null : await deps.service.servingDecision(gameId, { where: "money observer", ownerKey: moneyTermsKey(record.money) }).catch(() => null);
+    const ownContract = decision !== null && decision.owner;
+    const continued = decision !== null && decision.verdict.kind === "continues";
+    if (!ownContract) {
+      entry.observedAt = deps.now();
+      const digest = digestOf(entry);
+      if (digest !== entry.digest) {
+        entry.digest = digest;
+        room.refresh(gameId);
+      }
+      return;
+    }
     await resolveHints(gameId);
     const fin = entry.financial;
     const waiting = record.status === "waiting" && !dealtRecord(record);
-    if (fin !== null && fin.binding?.escrow == null && waiting && fin.phase === "funding") {
+    if (continued && fin !== null && fin.binding?.escrow == null && waiting && fin.phase === "funding") {
       try {
         await discover(entry, record);
         entry.chainError = null;
@@ -614,7 +635,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     }
     if (entry.chainError === null) settleDepositHints(record, entry);
     entry.observedAt = deps.now();
-    await consequences(entry, record);
+    if (continued) await consequences(entry, record);
     const digest = digestOf(entry);
     if (digest !== entry.digest) {
       entry.digest = digest;
@@ -1250,12 +1271,22 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     return { kind: "issue", relinkFrom: null };
   }
 
+  /** LIVE-4 (L4-4): a route that writes a game's ticket ledger first asks whether this server continues the game at all
+   *  (its money identity, its artifacts, the escrow it is bound to served here): if not, nothing is written. */
+  async function notServedHere(record: GameRecord): Promise<MoneyAnswer | null> {
+    const decision = await deps.service.servingDecision(record.game_id, { where: "money route", ownerKey: moneyTermsKey(record.money) }).catch(() => null);
+    if (decision !== null && decision.verdict.kind === "continues") return null;
+    return refusal(409, "not-served-here", "This table's escrow isn't served by this server right now, so nothing was changed. Try again later.");
+  }
+
   async function walletLink(caller: MoneyCaller, body: Record<string, unknown>): Promise<MoneyAnswer> {
     const down = serviceReady();
     if (down !== null) return down;
     if (!caller.sensitive) return refusal(403, "reauth-required", "Confirm it's you first (your recovery key), then link the wallet.");
     const table = tableFor(caller, body.gameId);
     if (!isTable(table)) return table;
+    const elsewhere = await notServedHere(table.record);
+    if (elsewhere !== null) return elsewhere;
     const context = { sessionId: caller.sessionId, familyId: caller.familyId, recoverySelector: caller.recoverySelector, principalId: caller.principalId };
     const signature = typeof body.signature === "string" ? body.signature : "";
     const taken = challenges.take(body.nonce, context, table.record.game_id);
@@ -1410,6 +1441,8 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (!isTable(table)) return table;
     const pubkey = typeof body.pubkey === "string" ? body.pubkey : "";
     if (!CONSENT_KEY.test(pubkey)) return refusal(400, "bad-consent-key", "That isn't a valid signing key.");
+    const elsewhere = await notServedHere(table.record);
+    if (elsewhere !== null) return elsewhere;
     const registered = await deps.tickets.registerConsentKey({ gameId: table.record.game_id, playerId: table.playerId, principalId: caller.principalId, pubkey });
     if (registered === "refused") return refusal(409, "link-first", "This seat has no standing wallet link made by your account. Link (or relink) the wallet first.");
     if (registered === "conflict") return refusal(409, "conflict", "The seat's link changed meanwhile. Try again.");

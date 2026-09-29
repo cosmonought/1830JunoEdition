@@ -192,6 +192,12 @@ export interface JunoRest {
   /** Every configured endpoint's own chain id (each asked separately; null when it did not answer). An endpoint that
    *  answers for another network is never used for anything (reads, simulation or broadcast). */
   endpointChains(): Promise<ReadonlyArray<{ readonly endpoint: string; readonly chain_id: string | null; readonly error: string | null }>>;
+  /** LIVE-4 (L4-4): a VERIFICATION-GRADE read of one contract's chain-attested facts -- the code checksum behind its
+   *  code id, and its config query's answer (the caller takes the denom from it). EVERY configured endpoint must answer,
+   *  each on the configured chain and not syncing, and two or more must agree exactly; anything less is `unavailable`,
+   *  never one failover answer. The continuation verdict concludes a deployment CONFLICT (a durable hold) only from
+   *  facts read this way. Optional for test doubles (absent: no verification-grade fact is ever read). */
+  verifiedContractFacts?(contract: string, configQueryJson: string): Promise<{ readonly code_checksum: string; readonly config: unknown }>;
   simulate(txBytes: Uint8Array): Promise<SimulateResult>;
   /** SYNC broadcast: the CheckTx answer (code 0 = accepted into the mempool), never inclusion. */
   broadcast(txBytes: Uint8Array): Promise<TxResultView>;
@@ -290,6 +296,47 @@ export function createJunoRest(policy: JunoEndpointPolicy, http: HttpTransport =
 
   const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString("base64");
 
+  /** The checksum of `codeId`'s wasm as ONE endpoint serves it: wasmd's code-info first; else the code itself, hashed
+   *  HERE (never only its label). */
+  async function checksumAt(base: string, codeId: string): Promise<string> {
+    const small = await call(base, "GET", `/cosmwasm/wasm/v1/code-info/${codeId}`).catch(() => null);
+    if (small !== null && small.status === 200 && isObject(small.json) && typeof small.json.checksum === "string") {
+      const hex = small.json.checksum.startsWith("0x") ? small.json.checksum.slice(2) : /^[0-9a-fA-F]{64}$/.test(small.json.checksum) ? small.json.checksum : Buffer.from(small.json.checksum, "base64").toString("hex");
+      if (/^[0-9a-fA-F]{64}$/.test(hex)) return hex.toLowerCase();
+    }
+    const { status, json } = await call(base, "GET", `/cosmwasm/wasm/v1/code/${codeId}`, undefined, policy.maxCodeBytes);
+    if (status !== 200 || !isObject(json) || !isObject(json.code_info) || typeof json.data !== "string") return malformed("code", base);
+    const data = Buffer.from(json.data, "base64");
+    const computed = createHash("sha256").update(data).digest("hex");
+    const declared = typeof json.code_info.data_hash === "string" ? json.code_info.data_hash.toLowerCase() : "";
+    if (declared !== "" && declared !== computed) throw new JunoRpcError("malformed", "the node's code hash does not match the code it served", shown(base));
+    return computed;
+  }
+
+  /** LIVE-4 (L4-4): ONE endpoint's full verification-grade answer, or why it cannot give one. Its chain id is asked
+   *  afresh (never the cache), then whether it is syncing, then the contract's code id, its code's checksum and the
+   *  config query -- all from this endpoint alone. */
+  async function contractFactsAt(base: string, contract: string, configQueryJson: string): Promise<{ readonly ok: true; readonly text: string; readonly code_checksum: string; readonly config: unknown } | { readonly ok: false; readonly why: string }> {
+    try {
+      const chain = await nodeInfoOf(base);
+      endpointChain.set(base, chain);
+      if (chain !== policy.expectedChainId) return { ok: false, why: `${shown(base)} is on ${chain}` };
+      const syncing = (await call(base, "GET", "/cosmos/base/tendermint/v1beta1/syncing")).json;
+      if (!isObject(syncing) || typeof syncing.syncing !== "boolean") return { ok: false, why: `${shown(base)}: no syncing answer` };
+      if (syncing.syncing) return { ok: false, why: `${shown(base)} is still syncing` };
+      const info = await call(base, "GET", `/cosmwasm/wasm/v1/contract/${encodeURIComponent(contract)}`);
+      if (info.status !== 200 || !isObject(info.json) || info.json.address !== contract || !isObject(info.json.contract_info)) return { ok: false, why: `${shown(base)}: no contract info` };
+      const codeId = info.json.contract_info.code_id;
+      if (typeof codeId !== "string" || !DEC.test(codeId)) return { ok: false, why: `${shown(base)}: no code id` };
+      const codeChecksum = await checksumAt(base, codeId);
+      const smart = await call(base, "GET", `/cosmwasm/wasm/v1/contract/${encodeURIComponent(contract)}/smart/${b64(Buffer.from(configQueryJson, "utf8"))}`);
+      if (smart.status !== 200 || !isObject(smart.json) || !("data" in smart.json)) return { ok: false, why: `${shown(base)}: no config answer` };
+      return { ok: true, text: JSON.stringify({ code_id: codeId, code_checksum: codeChecksum, config: smart.json.data }), code_checksum: codeChecksum, config: smart.json.data };
+    } catch (error) {
+      return { ok: false, why: error instanceof Error ? error.message.slice(0, 200) : String(error) };
+    }
+  }
+
   async function smartAt(contract: string, queryJson: string): Promise<{ readonly data: unknown; readonly height: string | null }> {
     return read("smart query", async (base) => {
       const { status, json, height } = await call(base, "GET", `/cosmwasm/wasm/v1/contract/${encodeURIComponent(contract)}/smart/${b64(Buffer.from(queryJson, "utf8"))}`);
@@ -368,21 +415,7 @@ export function createJunoRest(policy: JunoEndpointPolicy, http: HttpTransport =
     },
     async codeChecksum(codeId) {
       if (!DEC.test(codeId)) throw new JunoRpcError("refused", "code id");
-      return read("code checksum", async (base) => {
-        /* The small answer first (wasmd's code-info); else the code itself, hashed HERE (never only its label). */
-        const small = await call(base, "GET", `/cosmwasm/wasm/v1/code-info/${codeId}`).catch(() => null);
-        if (small !== null && small.status === 200 && isObject(small.json) && typeof small.json.checksum === "string") {
-          const hex = small.json.checksum.startsWith("0x") ? small.json.checksum.slice(2) : /^[0-9a-fA-F]{64}$/.test(small.json.checksum) ? small.json.checksum : Buffer.from(small.json.checksum, "base64").toString("hex");
-          if (/^[0-9a-fA-F]{64}$/.test(hex)) return hex.toLowerCase();
-        }
-        const { status, json } = await call(base, "GET", `/cosmwasm/wasm/v1/code/${codeId}`, undefined, policy.maxCodeBytes);
-        if (status !== 200 || !isObject(json) || !isObject(json.code_info) || typeof json.data !== "string") return malformed("code", base);
-        const data = Buffer.from(json.data, "base64");
-        const computed = createHash("sha256").update(data).digest("hex");
-        const declared = typeof json.code_info.data_hash === "string" ? json.code_info.data_hash.toLowerCase() : "";
-        if (declared !== "" && declared !== computed) throw new JunoRpcError("malformed", "the node's code hash does not match the code it served", shown(base));
-        return computed;
-      });
+      return read("code checksum", (base) => checksumAt(base, codeId));
     },
     async smart(contract, queryJson) {
       return (await smartAt(contract, queryJson)).data;
@@ -413,6 +446,17 @@ export function createJunoRest(policy: JunoEndpointPolicy, http: HttpTransport =
       if (answers.length < 2) throw new JunoRpcError("unavailable", `quorum read: ${answers.length} of ${endpoints.length} endpoints answered (2 needed)`);
       if (answers.some((answer) => answer !== answers[0])) throw new JunoRpcError("unavailable", "quorum read: the endpoints disagree (a lagging or inconsistent node); read again later");
       return data;
+    },
+    /* LIVE-4 (L4-4): the verification-grade read (see the interface). Every endpoint, in parallel; all must answer. */
+    async verifiedContractFacts(contract, configQueryJson) {
+      const answers = await Promise.all(endpoints.map((base) => contractFactsAt(base, contract, configQueryJson)));
+      const failed = answers.filter((answer): answer is { readonly ok: false; readonly why: string } => !answer.ok);
+      if (failed.length > 0) {
+        throw new JunoRpcError("unavailable", `verification-grade read: ${answers.length - failed.length} of ${answers.length} endpoints answered on ${policy.expectedChainId}, not syncing (${failed.map((answer) => answer.why).join("; ").slice(0, 400)})`);
+      }
+      const agreed = answers as ReadonlyArray<{ readonly ok: true; readonly text: string; readonly code_checksum: string; readonly config: unknown }>;
+      if (agreed.some((answer) => answer.text !== agreed[0].text)) throw new JunoRpcError("unavailable", "verification-grade read: the endpoints disagree about the contract (a lagging or inconsistent node); read again later");
+      return { code_checksum: agreed[0].code_checksum, config: agreed[0].config };
     },
     async simulate(txBytes) {
       return read("simulate", async (base) => {

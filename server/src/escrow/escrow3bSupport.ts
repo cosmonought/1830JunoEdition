@@ -76,6 +76,9 @@ export interface World {
   readonly ledger: ReturnType<typeof createWalletTicketLedger>;
   readonly ops: ReturnType<typeof createMemoryOpsRecorder>;
   readonly logs: Map<string, ServerLogEntry[]>;
+  /** LIVE-4 (L4-4): the escrow deployment the (next) process is configured for; a test reconfigures it before a
+   *  `restart` (another contract, a mistyped denom). The fake chain itself is unchanged. */
+  pin: FinancialDeploymentPin;
   service: EscrowService;
   relayer: Relayer;
   clock: { now: number };
@@ -85,8 +88,10 @@ export interface World {
   readonly proofs: Map<string, WalletControlProof>;
   /** ESCROW-JOIN: identity's verdict on every ticket's security context (tests end it). */
   standing: "standing" | "ended";
-  /** Rebuild the service and the relayer over the same durable stores (a process restart). */
-  restart(): Promise<void>;
+  /** LIVE-4 (L4-4): games whose durable log cannot be read at all right now (an I/O fault, not damage): tests set them. */
+  readonly logFaults: Set<string>;
+  /** Rebuild the service and the relayer over the same durable stores (a process restart); the load's summary. */
+  restart(): Promise<{ readonly games: number; readonly held: number; readonly resumed: number; readonly skipped: number }>;
   /** Relayer passes, blocks and service jobs until `done()` or `max` rounds. */
   drive(done: () => boolean | Promise<boolean>, max?: number, blocks?: boolean): Promise<number>;
 }
@@ -104,6 +109,10 @@ export interface WorldOptions {
   readonly noAdmissionSigner?: boolean;
   /** ESCROW-JOIN: wrap the admission signer (tests observe what it is asked to sign, and when). */
   readonly wrapAdmissionSigner?: (signer: JoinAdmissionSigner) => JoinAdmissionSigner;
+  /** LIVE-4 (L4-4): the escrow deployment this process is configured for (default `PIN`). */
+  readonly pin?: FinancialDeploymentPin;
+  /** LIVE-4 (L4-4): an injected creation identity and deployment (ESCROW-3A's seam; an uncertified or unserved bump). */
+  readonly continuation?: Parameters<typeof createEscrowService>[0]["continuation"];
 }
 
 export const proofKey = (gameId: string, playerId: string, principalId: string) => `${gameId}|${playerId}|${principalId}`;
@@ -161,15 +170,18 @@ export function makeWorld(options: WorldOptions = {}): World {
     replay,
     proofs,
     standing: "standing",
+    pin: options.pin ?? PIN,
+    logFaults: new Set<string>(),
   } as unknown as World;
 
   function build(): void {
     const settlementSigner: DigestSigner = developmentDigestSigner(SETTLEMENT_SECRET, "settlement", GUARD);
     const relayerSigner: DigestSigner = developmentDigestSigner(RELAYER_SECRET, "relayer", GUARD);
+    const pin = world.pin;
     const backend: JunoBackendRuntime = {
-      pin: PIN,
+      pin,
       symbol: "JUNOX",
-      policy: [{ backend: "juno-cosmwasm", chain_id: CHAIN_ID, network_class: "testnet", deployments: [{ kind: "juno-cosmwasm", contract_address: CONTRACT, code_checksums: [CANONICAL_CHECKSUM], admin: null }] }],
+      policy: [{ backend: "juno-cosmwasm", chain_id: pin.chain_id, network_class: pin.network_class, deployments: [{ kind: "juno-cosmwasm", contract_address: pin.contract_address, code_checksums: [pin.code_checksum], admin: null }] }],
       trust: { operators: [RELAYER_ADDRESS], resolvers: ["juno1resolver"], min_challenge_window_secs: BigInt(1), min_liveness_window_secs: BigInt(1), min_resolver_timeout_secs: BigInt(1) },
       rest: chain,
       settlementKeys: [settlementKeyConfig()],
@@ -183,7 +195,10 @@ export function makeWorld(options: WorldOptions = {}): World {
       journal,
       relayer: () => relayer,
       tickets: ledger,
-      readLog: async (gameId) => logs.get(gameId) ?? [],
+      readLog: async (gameId) => {
+        if (world.logFaults.has(gameId)) throw new Error(`EMFILE: the log of ${gameId} cannot be read right now`);
+        return logs.get(gameId) ?? [];
+      },
       replay: world.replay,
       now: () => clock.now,
       warn: (line) => warnings.push(line),
@@ -192,14 +207,15 @@ export function makeWorld(options: WorldOptions = {}): World {
         ? undefined
         : { signer: (options.wrapAdmissionSigner ?? ((signer) => signer))(junoJoinAdmissionSigner(ADMISSION_PUBKEY, JUNO_CODEC_V1, developmentDigestSigner(ADMISSION_SECRET, "admission", GUARD))), ttlSecs: ADMISSION_TTL_SECS },
       walletProofs,
+      ...(options.continuation !== undefined ? { continuation: options.continuation } : {}),
     });
     relayer = createJunoRelayer({
       rest: chain,
       store: intents,
       journal,
       account: { address: RELAYER_ADDRESS, signer: relayerSigner },
-      chainId: CHAIN_ID,
-      contract: CONTRACT,
+      chainId: pin.chain_id,
+      contract: pin.contract_address,
       gas: { ...DEFAULT_GAS_POLICY, feeDenom: "ujunox" },
       timeoutBlocks: options.timeoutBlocks ?? 5,
       now: () => clock.now,
@@ -207,6 +223,7 @@ export function makeWorld(options: WorldOptions = {}): World {
       ops,
       onResolved: (intent) => service.onIntentResolved(intent),
       admit: (intent) => service.admit(intent),
+      classify: (intent) => service.classifyIntent(intent),
       pollMs: 1_000,
       rebroadcastMs: 1_000,
       schedule: () => ({ cancel: () => undefined }), // tests drive passes by hand
@@ -220,7 +237,9 @@ export function makeWorld(options: WorldOptions = {}): World {
     world.relayer.stop();
     build();
     await world.service.preload();
-    await world.service.load();
+    /* As `junoBackend` does at verification (L4-4): the deployment's chain facts, at verification grade, then the load. */
+    await world.service.refreshChainFacts();
+    return world.service.load();
   };
 
   world.drive = async (done, max = 40, blocks = true) => {

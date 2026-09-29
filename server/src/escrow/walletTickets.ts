@@ -63,6 +63,7 @@ import { randomBytes } from "crypto";
 import { joinTicketV1 } from "../../../frontend/src/gameEngine/escrow/escrowRoster";
 import type { SecurityStanding } from "../identity/sessions";
 import type { WalletControlProof } from "./escrowPorts";
+import type { FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
 
 export const WALLET_TICKET_FORMAT = "gs-wallet-ticket";
 
@@ -134,6 +135,9 @@ export interface WalletTicketStore {
   put(gameId: string, document: WalletTicketDocument, expected: number): Promise<"committed" | "conflict">;
   /** ESCROW-3B: every game with a ledger document (the security-event hook walks them). */
   listGames?(): Promise<string[]>;
+  /** LIVE-4 (L4-4): the class of a game's ledger (current / older-unread / corrupt), never throwing on its content.
+   *  Optional (absent: current -- the memory store holds only documents this build wrote). */
+  formatOf?(gameId: string): Promise<FormatFact>;
 }
 
 export function createMemoryWalletTicketStore(): WalletTicketStore & { readonly games: Map<string, { version: number; document: WalletTicketDocument }> } {
@@ -338,6 +342,12 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
       const keys = [...newest.consent_keys, input.pubkey].slice(-MAX_CONSENT_KEYS);
       const grants = document.grants.map((grant) => (grant === newest ? { ...grant, consent_keys: keys } : grant));
       return deps.store.put(input.gameId, { frozen_at: document.frozen_at, grants }, version);
+    },
+
+    /** LIVE-4 (L4-4): the class of a game's ledger file (the continuation verdict's `tickets` fact); never throws on
+     *  the ledger's content, and reads nothing else. */
+    async formatOf(gameId: string): Promise<FormatFact> {
+      return deps.store.formatOf === undefined ? "current" : deps.store.formatOf(gameId);
     },
 
     /** ESCROW-4: every grant of a game with whether it stands NOW (server-private: the money service's projection and

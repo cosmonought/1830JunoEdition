@@ -37,6 +37,11 @@
 // Stored at `games/chain-intents/<game_id>/<intent_id>.json` (LIVE-3B durable replacement, the data directory's lock),
 // create-if-absent and CAS on `record_version` -- the LIVE-5 conditional writes are `attribute_not_exists(intent_id)`
 // and `record_version = :expected` (+ the writer epoch), exactly as the financial record's.
+//
+// LIVE-4 (L4-4): an intent file this build cannot read has a CLASS, read from its `format` and `schema` alone
+// (`formatFactOf`): `newer` (a later build wrote it), `older-unread` (an earlier one), or `corrupt` (not an intent of any
+// schema, or a damaged current one). The first two are another build's financial data: the relayer never parses or
+// rewrites them (the game is not continued here); none of the three is ever overwritten.
 
 import * as path from "path";
 
@@ -53,6 +58,7 @@ import {
   type EscrowIntentSubject,
 } from "../../../frontend/src/gameEngine/escrow/escrowModel";
 import type { Coin } from "./juno/cosmosTx";
+import { formatFactOf, type FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
 
 export const CHAIN_INTENT_FORMAT = "gs-chain-intent";
 export const CHAIN_INTENT_SCHEMA = 1;
@@ -207,6 +213,25 @@ export function isChainIntentRecord(value: unknown): value is ChainIntentRecord 
   return isObject(value.retry) && Number.isSafeInteger(value.retry.failures) && Number.isSafeInteger(value.retry.next_at);
 }
 
+/** LIVE-4 (L4-4): the intent-file schemas this build reads and writes (`CHAIN_INTENT_SCHEMA`). */
+export const READABLE_INTENT_SCHEMAS: readonly number[] = Object.freeze([CHAIN_INTENT_SCHEMA]);
+
+/** LIVE-4 (L4-4): the class of a parsed intent document stored at `<gameId>/<intentId>.json`. A newer or older document
+ *  is classified by its `format` and `schema` alone -- the rest is another build's and is never read here. */
+export function chainIntentFormat(parsed: unknown, gameId: string, intentId: string): FormatFact {
+  if (!isObject(parsed) || parsed.format !== CHAIN_INTENT_FORMAT) return "corrupt";
+  const fact = formatFactOf(parsed.schema, READABLE_INTENT_SCHEMAS);
+  if (fact !== "current") return fact;
+  return isChainIntentRecord(parsed) && parsed.game_id === gameId && parsed.intent_id === intentId ? "current" : "corrupt";
+}
+
+/** LIVE-4 (L4-4): one class for a game's whole set of intent files, in the verdict's precedence: another build's
+ *  writing (newer, then older-unread) outranks damage, and damage outranks current. No file at all is current. */
+export function worstFormat(facts: readonly FormatFact[]): FormatFact {
+  for (const fact of ["newer", "older-unread", "corrupt"] as const) if (facts.includes(fact)) return fact;
+  return "current";
+}
+
 /* ------------------------------------------------------------------ */
 /* Instances (review #5) and Start epochs (the reversible roster freeze) */
 /* ------------------------------------------------------------------ */
@@ -346,6 +371,8 @@ export class ChainIntentUnreadableError extends Error {
     message: string,
     readonly gameId: string,
     readonly intentId: string,
+    /** LIVE-4 (L4-4): which build could read it -- a later one, an earlier one, or none (damage). */
+    readonly format: Exclude<FormatFact, "current"> = "corrupt",
   ) {
     super(message);
     this.name = "ChainIntentUnreadableError";
@@ -366,10 +393,17 @@ export interface ChainIntentStore {
   listGame(gameId: string): Promise<ChainIntentRecord[]>;
   /** Every game with intents. */
   games(): Promise<string[]>;
+  /** LIVE-4 (L4-4): the class of a game's intent files as a set (`worstFormat`), read without parsing another build's
+   *  format and without throwing. Optional for test doubles (absent: current). */
+  formatOf?(gameId: string): Promise<FormatFact>;
 }
 
-export function createMemoryChainIntentStore(): ChainIntentStore & { readonly records: Map<string, ChainIntentRecord | "unreadable">; readonly failNext: Array<"definite" | "uncertain">; readonly writes: { count: number } } {
-  const records = new Map<string, ChainIntentRecord | "unreadable">();
+type IntentSlot = ChainIntentRecord | "unreadable" | Exclude<FormatFact, "current" | "corrupt">;
+const slotFormat = (slot: Exclude<IntentSlot, ChainIntentRecord>): Exclude<FormatFact, "current"> => (slot === "unreadable" ? "corrupt" : slot);
+
+/** `records`: a string marks a file this build cannot read -- `"unreadable"` (damage), `"newer"` or `"older-unread"`. */
+export function createMemoryChainIntentStore(): ChainIntentStore & { readonly records: Map<string, IntentSlot>; readonly failNext: Array<"definite" | "uncertain">; readonly writes: { count: number } } {
+  const records = new Map<string, IntentSlot>();
   const failNext: Array<"definite" | "uncertain"> = [];
   const writes = { count: 0 };
   const keyOf = (gameId: string, intentId: string) => `${gameId}/${intentId}`;
@@ -388,7 +422,7 @@ export function createMemoryChainIntentStore(): ChainIntentStore & { readonly re
     writes,
     async create(record) {
       const existing = records.get(keyOf(record.game_id, record.intent_id));
-      if (existing === "unreadable") return { kind: "failed", detail: "an unreadable intent is never overwritten" };
+      if (typeof existing === "string") return { kind: "failed", detail: "an unreadable intent is never overwritten" };
       if (existing !== undefined) return { kind: "exists", record: copy(existing), same: sameChainIntent(existing, record) };
       if (!isChainIntentRecord(record) || record.record_version !== 1) return { kind: "failed", detail: "not a new chain intent" };
       const written = write(record);
@@ -396,27 +430,30 @@ export function createMemoryChainIntentStore(): ChainIntentStore & { readonly re
     },
     async put(next, expectedVersion) {
       const current = records.get(keyOf(next.game_id, next.intent_id));
-      if (current === "unreadable") return { kind: "definite", detail: "an unreadable intent is never overwritten" };
+      if (typeof current === "string") return { kind: "definite", detail: "an unreadable intent is never overwritten" };
       if (current === undefined || current.record_version !== expectedVersion) return { kind: "conflict", current: current === undefined ? null : copy(current) };
       if (!isChainIntentRecord(next) || next.record_version !== expectedVersion + 1) return { kind: "definite", detail: "not the next version of the intent" };
       return write(next);
     },
     async load(gameId, intentId) {
       const record = records.get(keyOf(gameId, intentId));
-      if (record === "unreadable") throw new ChainIntentUnreadableError(`intent ${intentId} of ${gameId} is unreadable`, gameId, intentId);
+      if (typeof record === "string") throw new ChainIntentUnreadableError(`intent ${intentId} of ${gameId} is unreadable (${slotFormat(record)})`, gameId, intentId, slotFormat(record));
       return record === undefined ? null : copy(record);
     },
     async listGame(gameId) {
       const out: ChainIntentRecord[] = [];
       for (const [key, record] of records) {
         if (!key.startsWith(`${gameId}/`)) continue;
-        if (record === "unreadable") throw new ChainIntentUnreadableError(`an intent of ${gameId} is unreadable`, gameId, key.slice(gameId.length + 1));
+        if (typeof record === "string") throw new ChainIntentUnreadableError(`an intent of ${gameId} is unreadable (${slotFormat(record)})`, gameId, key.slice(gameId.length + 1), slotFormat(record));
         out.push(copy(record));
       }
       return out.sort((a, b) => a.created_at - b.created_at || a.intent_id.localeCompare(b.intent_id));
     },
     async games() {
       return [...new Set([...records.keys()].map((key) => key.split("/")[0]))].sort();
+    },
+    async formatOf(gameId) {
+      return worstFormat([...records.entries()].filter(([key]) => key.startsWith(`${gameId}/`)).map(([, record]) => (typeof record === "string" ? slotFormat(record) : "current")));
     },
   };
 }
@@ -428,7 +465,7 @@ export function chainIntentDirectory(dataDir: string): string {
 export function createFileChainIntentStore(
   dataDir: string,
   options: { fs?: StoreFs; platform?: string; writerCheck?: () => Promise<boolean>; warn?: (line: string) => void } = {},
-): ChainIntentStore & { readonly directory: string } {
+): ChainIntentStore & { readonly directory: string; formatOf(gameId: string): Promise<FormatFact> } {
   const io = options.fs ?? nodeStoreFs;
   const directory = chainIntentDirectory(dataDir);
   // eslint-disable-next-line no-console
@@ -466,10 +503,22 @@ export function createFileChainIntentStore(
     } catch {
       throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is not JSON`, gameId, intentId);
     }
-    if (!isChainIntentRecord(parsed) || parsed.game_id !== gameId || parsed.intent_id !== intentId) {
-      throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is not a valid intent`, gameId, intentId);
+    const format = chainIntentFormat(parsed, gameId, intentId);
+    if (format === "newer") throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is in a NEWER format than this build reads (a later build wrote it); never parsed or overwritten here`, gameId, intentId, format);
+    if (format === "older-unread") throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is in an OLDER format this build no longer reads; never parsed or overwritten here`, gameId, intentId, format);
+    if (format !== "current") throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is not a valid intent`, gameId, intentId);
+    return parsed as ChainIntentRecord;
+  }
+
+  /** The class of one intent file, never throwing on its content (a read failure other than "absent" still throws). */
+  async function classify(gameId: string, intentId: string): Promise<FormatFact> {
+    try {
+      await read(gameId, intentId);
+      return "current";
+    } catch (error) {
+      if (error instanceof ChainIntentUnreadableError) return error.format;
+      throw error;
     }
-    return parsed;
   }
 
   const fenced = async (): Promise<boolean> => options.writerCheck !== undefined && !(await options.writerCheck().catch(() => false));
@@ -541,6 +590,19 @@ export function createFileChainIntentStore(
         throw error;
       }
       return names.filter((name) => GAME_ID_PATTERN.test(name)).sort();
+    },
+    async formatOf(gameId) {
+      if (!GAME_ID_PATTERN.test(gameId)) return "current";
+      let names: string[];
+      try {
+        names = await io.readdir(gameDir(gameId));
+      } catch (error) {
+        if (codeOf(error) === "ENOENT") return "current";
+        throw error;
+      }
+      const facts: FormatFact[] = [];
+      for (const name of names.filter((entry) => /^[0-9a-f]{64}\.json$/.test(entry)).sort()) facts.push(await serial(`${gameId}/${name.slice(0, -5)}`, () => classify(gameId, name.slice(0, -5))));
+      return worstFormat(facts);
     },
   };
 }

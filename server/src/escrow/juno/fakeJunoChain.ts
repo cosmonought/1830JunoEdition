@@ -244,6 +244,12 @@ export class FakeJunoChain implements JunoRest {
   malformedNextAccount = 0;
   /** A node that does not say the height it answered at (no death or rollback proof can be built on it). */
   heightsHidden = false;
+  /** LIVE-4 (L4-4): the node reports it is still syncing (no verification-grade fact is read from it). */
+  syncingNow = false;
+  /** LIVE-4 (L4-4): what the contract REPORTS now, when it is no longer what it was instantiated with (an in-place
+   *  migration to other code, another denom): the chain-attested facts a deployment conflict is judged on. */
+  reportedChecksum: string | null = null;
+  reportedDenom: string | null = null;
   private nextGameId = 1;
   private nextAccountNumber = BigInt(7);
 
@@ -736,7 +742,7 @@ export class FakeJunoChain implements JunoRest {
 
   async syncing(): Promise<boolean> {
     this.check();
-    return false;
+    return this.syncingNow;
   }
 
   async account(address: string): Promise<AccountView | null> {
@@ -759,7 +765,7 @@ export class FakeJunoChain implements JunoRest {
   async codeChecksum(codeId: string): Promise<string> {
     this.check();
     if (codeId !== this.options.codeId) throw new JunoRpcError("malformed", "no such code");
-    return this.options.codeChecksum;
+    return this.reportedChecksum ?? this.options.codeChecksum;
   }
 
   async smart(contract: string, queryJson: string): Promise<unknown> {
@@ -776,7 +782,7 @@ export class FakeJunoChain implements JunoRest {
           admission_pubkey: this.admissionPubkey,
           resolver: this.options.resolver,
           treasury: this.options.treasury,
-          denom: this.options.denom,
+          denom: this.reportedDenom ?? this.options.denom,
           params: { subsidy_bps: this.options.subsidyBps ?? 100, min_ante: this.options.minAnte ?? "1", bond_bps: 0, bond_floor: "0", challenge_window_live_secs: 600, challenge_window_async_secs: 600, funding_period_live_secs: 3600, funding_period_async_secs: 3600, liveness_window_secs: this.options.livenessWindowSecs ?? 86_400, resolver_timeout_secs: this.options.resolverTimeoutSecs ?? 604_800 },
           paused: this.paused,
         },
@@ -820,6 +826,17 @@ export class FakeJunoChain implements JunoRest {
   async smartQuorum(contract: string, queryJson: string): Promise<unknown> {
     if (this.quorumDisagrees) throw new JunoRpcError("unavailable", "quorum read: the endpoints disagree");
     return this.smart(contract, queryJson);
+  }
+
+  /** LIVE-4 (L4-4): one node, so the verification-grade read is its own answer -- refused while it is down, on another
+   *  chain or syncing, or while a second node is modelled as disagreeing (`quorumDisagrees`). */
+  async verifiedContractFacts(contract: string, configQueryJson: string): Promise<{ readonly code_checksum: string; readonly config: unknown }> {
+    if (this.unavailable) throw new JunoRpcError("unavailable", "verification-grade read: the fake node is down");
+    if (this.wrongChainId !== null && this.wrongChainId !== this.chainId) throw new JunoRpcError("unavailable", `verification-grade read: an endpoint is on ${this.wrongChainId}`);
+    if (this.syncingNow) throw new JunoRpcError("unavailable", "verification-grade read: an endpoint is still syncing");
+    if (this.quorumDisagrees) throw new JunoRpcError("unavailable", "verification-grade read: the endpoints disagree");
+    const info = await this.contract(contract);
+    return { code_checksum: await this.codeChecksum(info.code_id), config: await this.smart(contract, configQueryJson) };
   }
 
   async smartAt(contract: string, queryJson: string): Promise<{ readonly data: unknown; readonly height: string | null }> {

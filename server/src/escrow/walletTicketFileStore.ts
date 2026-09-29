@@ -20,6 +20,14 @@
 // A document that is not exactly this shape -- torn JSON, a foreign game id, an unknown field, a duplicate epoch, two
 // live grants for one seat -- is UNREADABLE: every read throws, so issuing, standing and the freeze all fail closed
 // for that game until an operator restores it. Written by LIVE-3B's durable replacement under the data directory's lock.
+//
+// LIVE-4 (L4-4): AN UNREADABLE LEDGER HAS A CLASS (`formatOf`). The file carries no format version of its own: its
+// grants' shape IS its financial protocol's. So a ledger whose every grant is a financial-protocol-2 grant (ESCROW-3B's
+// or ESCROW-JOIN's keys) is `older-unread` -- an earlier build's, never damage, never upgraded -- and anything else this
+// build cannot read is `corrupt`. A ledger of a NEWER financial protocol cannot be told apart by its bytes alone, and it
+// never has to be: its game's financial record names that protocol, and the continuation verdict stops there
+// (`financial-protocol`, or the record's own `newer-format`) before the ledger is ever classified (`escrowService.ts`).
+// Whatever the class, the document is never overwritten here.
 
 import * as path from "path";
 
@@ -27,6 +35,7 @@ import { nodeStoreFs, type StoreFs } from "../fileLogStore";
 import { durableReplace } from "../persistence/durableReplace";
 import { GAME_ID_PATTERN } from "../rooms/gameRecord";
 import { WALLET_TICKET_FORMAT, type WalletTicketDocument, type WalletTicketGrant, type WalletTicketStore } from "./walletTickets";
+import type { FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
 
 export const WALLET_TICKET_FILE_FORMAT = "gs-wallet-tickets";
 
@@ -34,6 +43,8 @@ export class WalletTicketStoreUnreadableError extends Error {
   constructor(
     message: string,
     readonly gameId: string,
+    /** LIVE-4 (L4-4): `older-unread` for a financial-protocol-2 ledger; `corrupt` for anything else unreadable. */
+    readonly format: "corrupt" | "older-unread" = "corrupt",
   ) {
     super(message);
     this.name = "WalletTicketStoreUnreadableError";
@@ -135,7 +146,7 @@ export function walletTicketDirectory(dataDir: string): string {
 export function createFileWalletTicketStore(
   dataDir: string,
   options: { fs?: StoreFs; platform?: string; writerCheck?: () => Promise<boolean>; warn?: (line: string) => void } = {},
-): WalletTicketStore & { readonly directory: string } {
+): WalletTicketStore & { readonly directory: string; formatOf(gameId: string): Promise<FormatFact> } {
   const io = options.fs ?? nodeStoreFs;
   const directory = walletTicketDirectory(dataDir);
   // eslint-disable-next-line no-console
@@ -170,18 +181,15 @@ export function createFileWalletTicketStore(
     } catch {
       throw new WalletTicketStoreUnreadableError(`wallet-tickets/${gameId}.json is not JSON`, gameId);
     }
-    if (
-      !isObject(parsed) ||
-      !exact(parsed, ["format", "version", "game_id", "document"]) ||
-      parsed.format !== WALLET_TICKET_FILE_FORMAT ||
-      parsed.game_id !== gameId ||
-      !Number.isSafeInteger(parsed.version) ||
-      (parsed.version as number) < 1 ||
-      !isWalletTicketDocument(parsed.document, gameId)
-    ) {
+    const format = walletTicketFileFormat(parsed, gameId);
+    if (format !== "current" || !isObject(parsed)) {
       const document = isObject(parsed) && isObject(parsed.document) ? parsed.document : null;
       if (document !== null && Array.isArray(document.grants) && document.grants.some(isProtocol2Grant)) {
-        throw new WalletTicketStoreUnreadableError(`wallet-tickets/${gameId}.json holds grants of financial protocol 2 (before ESCROW-4); this build reads protocol 3 only and never reinterprets them`, gameId);
+        throw new WalletTicketStoreUnreadableError(
+          `wallet-tickets/${gameId}.json holds grants of financial protocol 2 (before ESCROW-4); this build reads protocol 3 only and never reinterprets them`,
+          gameId,
+          format === "older-unread" ? "older-unread" : "corrupt",
+        );
       }
       throw new WalletTicketStoreUnreadableError(`wallet-tickets/${gameId}.json is not this game's ticket ledger`, gameId);
     }
@@ -215,5 +223,36 @@ export function createFileWalletTicketStore(
       }
       return names.filter((name) => name.endsWith(".json") && GAME_ID_PATTERN.test(name.slice(0, -5))).map((name) => name.slice(0, -5)).sort();
     },
+    /* LIVE-4 (L4-4): the ledger's class, without throwing on its content (no file: an empty ledger, current). */
+    formatOf(gameId) {
+      return serial(gameId, async (): Promise<FormatFact> => {
+        try {
+          await read(gameId);
+          return "current";
+        } catch (error) {
+          if (error instanceof WalletTicketStoreUnreadableError) return error.format;
+          throw error;
+        }
+      });
+    },
   };
+}
+
+/** LIVE-4 (L4-4): the class of a parsed ledger file for `gameId`: `current` (exactly this build's ledger), `older-unread`
+ *  (a well-formed envelope whose every grant is a financial-protocol-2 grant), or `corrupt`. Never `newer`: see above. */
+export function walletTicketFileFormat(parsed: unknown, gameId: string): FormatFact {
+  if (
+    !isObject(parsed) ||
+    !exact(parsed, ["format", "version", "game_id", "document"]) ||
+    parsed.format !== WALLET_TICKET_FILE_FORMAT ||
+    parsed.game_id !== gameId ||
+    !Number.isSafeInteger(parsed.version) ||
+    (parsed.version as number) < 1
+  ) {
+    return "corrupt";
+  }
+  if (isWalletTicketDocument(parsed.document, gameId)) return "current";
+  const document = parsed.document;
+  if (isObject(document) && exact(document, ["frozen_at", "grants"]) && Array.isArray(document.grants) && document.grants.length > 0 && document.grants.every(isProtocol2Grant)) return "older-unread";
+  return "corrupt";
 }

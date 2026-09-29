@@ -28,17 +28,26 @@
 //                        alone only when the answer is unambiguous (exactly one of the two is still WAITING: it keeps the
 //                        code a dealt game no longer needs); otherwise `--keep` must say which. No log is read for writing,
 //                        no gameplay entry and no seat changes, and it refuses if anything does not verify.
-//   money [<game_id>] [--json]
+//   money [<game_id>] [--json] [--escrow-config <file>] [--chain]
 //                        ESCROW-3A/3B, READ-ONLY: the money games' lifecycle records (`games/money/`) -- and, since
 //                        ESCROW-3B, each game's continuation identity, its chain binding (chain, contract, code checksum,
 //                        denom, chain game), its frozen roster, what the chain confirmed (start, checkpoints, settle,
 //                        outcome) and every chain intent (`games/chain-intents/`) with its evidence in words: not
 //                        attempted / attempted, outcome unknown / known failed / confirmed / held -- phase, the terminal
 //                        seal, the prepared evidence's hashes, a hold. No identity id is stored there or printed.
-//   money-release <game_id> --note "<why>"
+//                        LIVE-4 (L4-4): each game's CANONICAL continuation verdict against this build and the escrow
+//                        deployment `--escrow-config` (or ESCROW_JUNO_CONFIG) serves -- continued, deployment
+//                        unavailable / unverified, financial-protocol, newer / older format, malformed, conflict, ... --
+//                        the classes of its financial record, ticket ledger and intents, and whether this configuration
+//                        owns it. A money GameRecord whose financial record is missing is listed too. `--chain` also
+//                        reads the configured deployment's facts at verification grade (so a deployment CONFLICT can be
+//                        concluded); without it none is. Writes nothing, holds nothing.
+//   money-release <game_id> --note "<why>" [--escrow-config <file>] [--chain]
 //                        ESCROW-3A, OFFLINE, LOCK HELD: lift a HELD money game back to the phase it was held from -- only
-//                        after the game verifies (as `release`), this deployment may continue it, and, when it is sealed,
-//                        the settlement evidence re-derives from its sealed prefix. Audited; history is never edited.
+//                        after the game verifies (as `release`), this deployment CONTINUES it (L4-4: the canonical
+//                        verdict, its escrow served by the configuration given; a deployment-conflict hold only against a
+//                        `--chain` read that agrees), and, when it is sealed, the settlement evidence re-derives from its
+//                        sealed prefix. Audited; history is never edited.
 //   scan-v10 [--json]    DA-8, READ-ONLY (takes no lock, writes nothing, safe beside a running server): every stored log --
 //                        live and archived, server-owned and legacy JUNO-XXX -- classified by its rules-engine pin, and each
 //                        v10 game's committed entries checked for the ones rules engine 11 reads differently
@@ -70,6 +79,7 @@ import { IDENTITY_FILE } from "../identity/fileStore";
 import { IDENTITY_JOURNAL_FILE, parseSnapshotDocument, scanJournal } from "../identity/journalStore";
 import { checkSnapshot, IdentityIndex } from "../identity/store";
 import { scanLog } from "../persistence/logFormat";
+import { dealIdentityOnDisk } from "../escrow/dealIdentity";
 import { durableReplace } from "../persistence/durableReplace";
 import { createFileOpsRecorder, OPS_DIRECTORY, STATUS_FILE, type OpsRecorder } from "../persistence/opsRecorder";
 import { acquireDataLock, describeOwner, lockStatus, LOCK_DIRECTORY, type DataLock } from "../persistence/processLock";
@@ -82,10 +92,18 @@ import { createFileRecordStore } from "../rooms/recordStore";
 import { reconcileLoaded, type Verdict } from "../rooms/reconcile";
 import { factsFromEntries, sessionBoardFacts } from "../rooms/roomHost";
 import { verifySession } from "./verifySession";
-import { createFileFinancialGameStore } from "../escrow/financialGameStore";
-import { moneyContinuationVerdict } from "../escrow/moneyContinuation";
-import { transitionFinancial } from "../escrow/moneyLifecycle";
+import { createFileFinancialGameStore, FinancialRecordUnreadableError } from "../escrow/financialGameStore";
+import { transitionFinancial, type FinancialGameRecord } from "../escrow/moneyLifecycle";
 import { createFileChainIntentStore, type ChainIntentRecord } from "../escrow/chainIntents";
+import { createFileWalletTicketStore } from "../escrow/walletTicketFileStore";
+import { classifiesArtifacts, createMoneyServing, moneyTermsKey, noMoneyServing, type MoneyServing, type MoneyServingDecision } from "../escrow/moneyServing";
+import { readVerifiedChainFacts, type ChainFactsRead } from "../escrow/juno/chainFacts";
+import { parseJunoBackendConfig, pinOf } from "../escrow/juno/junoConfig";
+import { createJunoRest } from "../escrow/juno/junoRest";
+import { thisDeploymentCapability } from "../deploymentCapability";
+import type { GameIdentityFacts } from "../../../frontend/src/gameEngine/compat/continuationIdentity";
+import type { FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
+import { isGameMoneyTerms } from "../rooms/gameRecord";
 import { prepareTerminalEvidence, serverPrefixReplay } from "../escrow/settlementEvidence";
 import {
   BOUNDARY_SCAN_VERSION,
@@ -409,11 +427,38 @@ export interface MoneyIntentView {
   readonly why: string | null;
 }
 
+/** LIVE-4 (L4-4): the operator's word for a money game's canonical verdict on this build + configuration. */
+export type MoneyClass =
+  | "continued"
+  | "deployment-unavailable"
+  | "deployment-unverified"
+  | "financial-protocol"
+  | "newer-format"
+  | "older-format"
+  | "malformed"
+  | "conflict"
+  | "rules-not-supported"
+  | "rules-not-certified"
+  | "hosted-protocol"
+  | "settlement-codec"
+  | "legacy-unpinned"
+  /** The files could not be read at all (a store fault, not a format): nothing can be decided -- listed, never dropped. */
+  | "store-fault";
+
 export interface MoneyInspection {
+  /** LIVE-4 (L4-4): what the games were classified against (the configured escrow deployment, if any, and whether its
+   *  chain facts were read at verification grade). */
+  readonly against: { readonly deployments: readonly string[]; readonly chain: ChainFactsRead | null };
   readonly games: ReadonlyArray<{
     readonly gameId: string;
     readonly phase: string | null;
     readonly readable: boolean;
+    /** LIVE-4 (L4-4): the canonical verdict and its class; the artifacts' classes; whether this configuration serves
+     *  the game's escrow (owns it: the only server that may write its conflict hold). */
+    readonly verdict: { readonly kind: string; readonly why: string | null; readonly detail: string | null };
+    readonly class: MoneyClass;
+    readonly owner: boolean;
+    readonly formats: { readonly fin: FormatFact | "missing" | "unknown"; readonly tickets: FormatFact | null; readonly intents: FormatFact | null };
     readonly terminal: { readonly log_len: number; readonly sealed_at: number } | null;
     readonly intent: { readonly log_hash: string; readonly appraisal_state_hash: string; readonly rules_engine_version: number } | null;
     readonly hold: { readonly code: string; readonly detail: string; readonly from: string } | null;
@@ -475,10 +520,108 @@ function intentView(intent: ChainIntentRecord): MoneyIntentView {
   };
 }
 
-export async function inspectMoney(dataDir: string, only?: string): Promise<MoneyInspection> {
+/* ------------------------------------------------------------------ */
+/* LIVE-4 (L4-4): the canonical verdict, offline and read-only          */
+/* ------------------------------------------------------------------ */
+
+/** The operator's configuration: the escrow deployment `--escrow-config` names (none: this build serving no escrow, on
+ *  which every money game is not continued -- it speaks no financial protocol), and -- with `--chain` -- its
+ *  verification-grade chain facts. */
+export async function moneyToolServing(dataDir: string, options: { readonly configPath?: string; readonly chain?: boolean } = {}): Promise<{ readonly serving: MoneyServing; readonly chain: ChainFactsRead | null }> {
+  if (options.configPath === undefined) return { serving: noMoneyServing(), chain: null };
+  const raw = JSON.parse((await fs.readFile(path.resolve(options.configPath))).toString("utf8")) as unknown;
+  let config: ReturnType<typeof parseJunoBackendConfig>;
+  try {
+    config = parseJunoBackendConfig(raw, { serverMode: "production", dataDir });
+  } catch {
+    config = parseJunoBackendConfig(raw, { serverMode: "development", dataDir });
+  }
+  const pin = pinOf(config);
+  const serving = createMoneyServing({ capability: thisDeploymentCapability([pin]) });
+  if (options.chain !== true) return { serving, chain: null };
+  const rest = createJunoRest({ endpoints: config.endpoints, expectedChainId: config.chainId, allowInsecureLocalHttp: config.allowInsecureLocalHttp, timeoutMs: config.timeoutMs, maxResponseBytes: 256 * 1024, maxCodeBytes: 4 * 1024 * 1024 });
+  const read = await readVerifiedChainFacts(pin, rest);
+  serving.recordChainFacts(read);
+  return { serving, chain: read };
+}
+
+/** The class an operator reads off a decision. */
+export function moneyClassOf(decision: MoneyServingDecision): MoneyClass {
+  const verdict = decision.verdict;
+  return verdict.kind === "continues" ? "continued" : verdict.kind === "conflict" ? "conflict" : verdict.why;
+}
+
+/** A GameRecord's money terms, read straight from its file (no store: nothing is created, prepared or cached), or null. */
+async function moneyTermsOnDisk(dataDir: string, gameId: string): Promise<{ readonly backend: string; readonly chain_id: string; readonly contract_address: string } | null> {
+  const bytes = await readOptional(path.join(dataDir, "games", `${gameId}.json`)).catch(() => null);
+  if (bytes === null) return null;
+  try {
+    const record = JSON.parse(bytes.toString("utf8")) as { record_schema?: unknown; money?: unknown };
+    return record.record_schema === 2 && isGameMoneyTerms(record.money) ? record.money : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The deal's identity from a game's log file, read-only, exactly as the server reads it (`dealIdentity.ts`): no log is
+ *  undealt, a log damaged before its deal is malformed, and a log that cannot be read at all throws (a store fault). */
+const identityOnDisk = (dataDir: string, gameId: string): Promise<GameIdentityFacts> => dealIdentityOnDisk(dataDir, gameId);
+
+/** One money game's canonical decision from its files, exactly as the server's load decides it: the financial record's
+ *  class, the ledger's and intents' classes (only for a financial protocol this build speaks), the deal's identity, the
+ *  GameRecord's terms (who owns a missing record). Reads only. */
+export async function moneyDecisionOnDisk(
+  dataDir: string,
+  gameId: string,
+  serving: MoneyServing,
+): Promise<{ readonly decision: MoneyServingDecision; readonly record: FinancialGameRecord | null; readonly fin: FormatFact | "missing"; readonly tickets: FormatFact | null; readonly intents: FormatFact | null; readonly moneyTable: boolean }> {
+  let record: FinancialGameRecord | null = null;
+  let fin: FormatFact | "missing" = "current";
+  try {
+    record = await createFileFinancialGameStore(dataDir, { warn: quiet }).load(gameId);
+    if (record === null) fin = "missing";
+  } catch (error) {
+    if (!(error instanceof FinancialRecordUnreadableError)) throw error;
+    fin = error.format;
+  }
+  let tickets: FormatFact | null = null;
+  let intents: FormatFact | null = null;
+  if (classifiesArtifacts(serving.capability, record)) {
+    tickets = await createFileWalletTicketStore(dataDir, { warn: quiet }).formatOf(gameId);
+    intents = await createFileChainIntentStore(dataDir, { warn: quiet }).formatOf(gameId);
+  }
+  const terms = fin === "missing" ? await moneyTermsOnDisk(dataDir, gameId) : null;
+  const decision = serving.decide({
+    fin: fin === "missing" ? undefined : fin,
+    record,
+    /* As the server: an unreadable record's class decides first, so its deal is not read. */
+    identity: fin !== "current" && fin !== "missing" ? { kind: "undealt" } : await identityOnDisk(dataDir, gameId),
+    ...(tickets !== null ? { tickets } : {}),
+    ...(intents !== null ? { intents } : {}),
+    ownerKey: moneyTermsKey(terms),
+  });
+  /* A game with neither a financial record nor money terms is not a money game at all. */
+  return { decision, record, fin, tickets, intents, moneyTable: fin !== "missing" || terms !== null };
+}
+
+/** Money GameRecords (record_schema 2) whose financial record does not exist: listed so the operator sees them. */
+async function moneyRecordsWithoutFinancial(dataDir: string, known: ReadonlySet<string>): Promise<string[]> {
+  const out: string[] = [];
+  for (const name of await listOptional(path.join(dataDir, "games"))) {
+    if (!name.endsWith(".json") || !GAME_ID_PATTERN.test(name.slice(0, -5))) continue;
+    const gameId = name.slice(0, -5);
+    if (known.has(gameId)) continue;
+    if ((await moneyTermsOnDisk(dataDir, gameId)) !== null) out.push(gameId);
+  }
+  return out.sort();
+}
+
+export async function inspectMoney(dataDir: string, only?: string, options: { readonly serving?: MoneyServing; readonly chain?: ChainFactsRead | null } = {}): Promise<MoneyInspection> {
+  const serving = options.serving ?? noMoneyServing();
   const store = createFileFinancialGameStore(dataDir, { warn: quiet });
   const intentStore = createFileChainIntentStore(dataDir, { warn: quiet });
-  const ids = only !== undefined ? [only] : (await store.list()).sort();
+  const listed = (await store.list()).sort();
+  const ids = only !== undefined ? [only] : [...listed, ...(await moneyRecordsWithoutFinancial(dataDir, new Set(listed)))];
   const games: Array<MoneyInspection["games"][number]> = [];
   for (const gameId of ids) {
     let intents: MoneyIntentView[] = [];
@@ -488,18 +631,53 @@ export async function inspectMoney(dataDir: string, only?: string): Promise<Mone
     } catch {
       intentsUnreadable = true;
     }
+    let decided: Awaited<ReturnType<typeof moneyDecisionOnDisk>>;
     try {
-      const record = await store.load(gameId);
-      if (record === null) continue;
+      decided = await moneyDecisionOnDisk(dataDir, gameId, serving);
+    } catch (error) {
+      /* A store fault, not a format class (review R-4): nothing can be decided, and the game is LISTED -- never dropped
+         from the view or from the exit code. */
+      games.push({
+        gameId,
+        phase: null,
+        readable: false,
+        verdict: { kind: "undecided", why: "store-fault", detail: describe(error).slice(0, 300) },
+        class: "store-fault",
+        owner: false,
+        formats: { fin: "unknown", tickets: null, intents: null },
+        terminal: null,
+        intent: null,
+        hold: null,
+        continues: null,
+        continuation: null,
+        binding: null,
+        roster: null,
+        chain: null,
+        intents,
+        intents_unreadable: intentsUnreadable,
+      });
+      continue;
+    }
+    const { decision } = decided;
+    if (!decided.moneyTable) continue; // not a money game at all
+    const verdictView = { kind: decision.verdict.kind, why: decision.verdict.kind === "continues" ? null : decision.verdict.why, detail: decision.verdict.kind === "continues" ? null : decision.verdict.detail };
+    const classView = { verdict: verdictView, class: moneyClassOf(decision), owner: decision.owner, formats: { fin: decided.fin, tickets: decided.tickets, intents: decided.intents } };
+    const record = decided.record;
+    if (record === null) {
+      games.push({ gameId, phase: null, readable: false, ...classView, terminal: null, intent: null, hold: null, continues: false, continuation: null, binding: null, roster: null, chain: null, intents, intents_unreadable: intentsUnreadable });
+      continue;
+    }
+    {
       const escrow = record.binding?.escrow ?? null;
       games.push({
         gameId,
         phase: record.phase,
         readable: true,
+        ...classView,
         terminal: record.terminal === null ? null : { log_len: record.terminal.log_len, sealed_at: record.terminal.sealed_at },
         intent: record.intent === null ? null : { log_hash: record.intent.log_hash, appraisal_state_hash: record.intent.appraisal_state_hash, rules_engine_version: record.intent.rules_engine_version },
         hold: record.hold === null ? null : { code: record.hold.code, detail: record.hold.detail, from: record.hold.from },
-        continues: moneyContinuationVerdict(record.continuation).continues,
+        continues: decision.verdict.kind === "continues",
         continuation: record.continuation === null ? null : { rules_engine_version: record.continuation.rules_engine_version, hosted_protocol: record.continuation.hosted_protocol, financial_protocol: record.continuation.financial_protocol, settlement_codec: record.continuation.settlement_codec },
         binding:
           record.binding === null
@@ -519,17 +697,16 @@ export async function inspectMoney(dataDir: string, only?: string): Promise<Mone
         intents,
         intents_unreadable: intentsUnreadable,
       });
-    } catch {
-      games.push({ gameId, phase: null, readable: false, terminal: null, intent: null, hold: null, continues: null, continuation: null, binding: null, roster: null, chain: null, intents, intents_unreadable: intentsUnreadable });
     }
   }
-  return { games };
+  return { against: { deployments: serving.capability.escrow_deployments.map((deployment) => deployment.key), chain: options.chain ?? null }, games };
 }
 
 export type MoneyReleaseResult = { readonly ok: true; readonly to: string } | { readonly ok: false; readonly reason: string };
 
-/** Lift a HELD money game -- the lock must already be held by this process (`withLock`). */
-export async function releaseMoneyHold(dataDir: string, gameId: string, note: string, options: { lock: DataLock; ops: OpsRecorder; now?: number }): Promise<MoneyReleaseResult> {
+/** Lift a HELD money game -- the lock must already be held by this process (`withLock`). `serving` (L4-4): the
+ *  configuration the release is judged against (default: none served, so nothing is released). */
+export async function releaseMoneyHold(dataDir: string, gameId: string, note: string, options: { lock: DataLock; ops: OpsRecorder; now?: number; serving?: MoneyServing }): Promise<MoneyReleaseResult> {
   const trimmed = note.trim();
   if (trimmed.length === 0 || trimmed.length > 500) return { ok: false, reason: "a release needs --note \"<why it is safe now>\" (1-500 characters)" };
   if (!(await options.lock.verify())) return { ok: false, reason: "this process does not hold the data directory's lock" };
@@ -551,9 +728,25 @@ export async function releaseMoneyHold(dataDir: string, gameId: string, note: st
   }
   const verification = await verifyGame(dataDir, gameId);
   if (!verification.ok) return { ok: false, reason: `${gameId} does not verify, so its money stays held: ${verification.reason}` };
-  /* 2. This deployment may continue it. */
-  const verdict = moneyContinuationVerdict(record.continuation);
-  if (!verdict.continues) return { ok: false, reason: `this deployment may not continue ${gameId} (${verdict.why}: ${verdict.detail}); it stays held -- run a compatible build` };
+  /* 2. This deployment CONTINUES it (L4-4): the canonical verdict -- the money identity, the artifacts' formats, the deal,
+     and the escrow served by the configuration given -- exactly as the server's load will decide it. A hold for a
+     deployment conflict is lifted only against a verification-grade chain read (`--chain`) that no longer contradicts
+     the game: offline, nothing can show the contradiction is gone. */
+  const serving = options.serving ?? noMoneyServing();
+  let onDisk: Awaited<ReturnType<typeof moneyDecisionOnDisk>>;
+  try {
+    onDisk = await moneyDecisionOnDisk(dataDir, gameId, serving);
+  } catch (error) {
+    return { ok: false, reason: `${gameId}'s money files cannot be read (${describe(error)}); nothing can be decided, so it stays held` };
+  }
+  const { decision } = onDisk;
+  const verdict = decision.verdict;
+  if (verdict.kind !== "continues") {
+    return { ok: false, reason: `this deployment may not continue ${gameId} (${verdict.kind === "conflict" ? `conflict: ${verdict.why}` : verdict.why}: ${verdict.detail}); it stays held -- run a compatible build with the escrow it is bound to configured` };
+  }
+  if (record.hold.code === "binding-mismatch" && (decision.key === null || serving.chainFactsReadAt(decision.key) === null)) {
+    return { ok: false, reason: `${gameId} is held for a deployment conflict: it is released only against a verification-grade chain read that agrees with its binding (run with --escrow-config and --chain); it stays held` };
+  }
   /* 3. A sealed game's evidence re-derives from its sealed prefix. */
   if (record.terminal !== null) {
     const bytes = await readOptional(path.join(dataDir, `${gameId}.log.jsonl`));
@@ -864,8 +1057,11 @@ const USAGE = [
   "  gc [--apply] [--json]               the conservative lifecycle: a dry run unless --apply (server stopped)",
   "  reconcile-duplicate-code <game_a> <game_b> [--keep <game_id>] --note \"<text>\"",
   "                                      ESCROW-3A: two games held on one join code (server stopped)",
-  "  money [<game_id>] [--json]          ESCROW-3A/3B: the money games' lifecycle records, chain binding and chain intents (read-only, any time)",
-  "  money-release <game_id> --note \"<text>\"  ESCROW-3A: lift a held money game after verifying it (server stopped)",
+  "  money [<game_id>] [--json] [--escrow-config <file>] [--chain]",
+  "                                      ESCROW-3A/3B + LIVE-4: the money games' lifecycle records, chain binding, chain intents and",
+  "                                      canonical continuation verdict against the configured escrow (read-only, any time)",
+  "  money-release <game_id> --note \"<text>\" [--escrow-config <file>] [--chain]",
+  "                                      ESCROW-3A + LIVE-4: lift a held money game this configuration continues (server stopped)",
   "  scan-v10 [--json]                   DA-8: the v10 -> v11 boundary scan of every stored log (read-only, any time)",
 ].join("\n");
 
@@ -879,7 +1075,11 @@ async function main(argv: readonly string[]): Promise<number> {
   const dataDir = path.resolve(dataAt !== -1 && argv[dataAt + 1] ? argv[dataAt + 1] : (process.env.DATA_DIR ?? path.join(process.cwd(), "data")));
   const noteAt = argv.indexOf("--note");
   const keepAt = argv.indexOf("--keep");
-  const positional = argv.filter((arg, at) => !arg.startsWith("--") && argv[at - 1] !== "--data" && argv[at - 1] !== "--note" && argv[at - 1] !== "--keep");
+  const configAt = argv.indexOf("--escrow-config");
+  const positional = argv.filter((arg, at) => !arg.startsWith("--") && argv[at - 1] !== "--data" && argv[at - 1] !== "--note" && argv[at - 1] !== "--keep" && argv[at - 1] !== "--escrow-config");
+  /* LIVE-4 (L4-4): the escrow deployment the money commands judge against (the server's own configuration file). */
+  const escrowConfig = configAt !== -1 && argv[configAt + 1] ? argv[configAt + 1] : process.env.ESCROW_JUNO_CONFIG;
+  const toolServing = () => moneyToolServing(dataDir, { configPath: escrowConfig, chain: argv.includes("--chain") });
   const [command, target, second] = positional;
   const json = argv.includes("--json");
   if (command === "status") {
@@ -898,18 +1098,25 @@ async function main(argv: readonly string[]): Promise<number> {
     return report.summary.clean && report.unreadable.length === 0 ? 0 : 1;
   }
   if (command === "money") {
-    const money = await inspectMoney(dataDir, target);
+    const { serving, chain } = await toolServing();
+    const money = await inspectMoney(dataDir, target, { serving, chain });
     if (json) console.log(JSON.stringify(money, null, 2));
     else {
       console.log(`money games in ${dataDir}: ${money.games.length}`);
+      console.log(
+        `  judged against: ${money.against.deployments.length === 0 ? "NO escrow deployment (pass --escrow-config <file> or set ESCROW_JUNO_CONFIG)" : money.against.deployments.join(", ")}` +
+          (chain === null ? "; chain facts NOT read (no deployment conflict can be concluded: add --chain)" : chain.kind === "read" ? `; chain facts read at verification grade: code ${chain.facts.code_checksum.slice(0, 16)}…, denom ${chain.facts.denom}` : `; chain facts UNAVAILABLE (${chain.detail})`),
+      );
       for (const game of money.games) {
         console.log(
-          `  ${game.gameId}  ${game.readable ? (game.phase ?? "?").padEnd(17) : "UNREADABLE       "}` +
+          `  ${game.gameId}  ${game.readable ? (game.phase ?? "?").padEnd(17) : `${game.formats.fin === "missing" ? "MISSING" : game.formats.fin.toUpperCase()}`.padEnd(17)}` +
+            ` [${game.class}${game.verdict.kind === "conflict" ? `/${game.verdict.why}` : ""}${game.owner ? "" : game.verdict.kind === "continues" ? "" : ", not owned here"}]` +
             (game.terminal ? ` sealed@${game.terminal.log_len}` : "") +
             (game.intent ? ` intent log_hash ${game.intent.log_hash.slice(0, 16)}… state ${game.intent.appraisal_state_hash.slice(0, 16)}… v${game.intent.rules_engine_version}` : "") +
-            (game.hold ? ` HELD ${game.hold.code} (from ${game.hold.from}) -- ${game.hold.detail}` : "") +
-            (game.continues === false ? " [this build may not continue it]" : ""),
+            (game.hold ? ` HELD ${game.hold.code} (from ${game.hold.from}) -- ${game.hold.detail}` : ""),
         );
+        if (game.verdict.detail !== null) console.log(`      verdict       ${game.verdict.kind}/${game.verdict.why}: ${game.verdict.detail}`);
+        if (game.formats.tickets !== null || game.formats.intents !== null) console.log(`      formats       record ${game.formats.fin}, tickets ${game.formats.tickets ?? "-"}, intents ${game.formats.intents ?? "-"}`);
         /* ESCROW-3B: the chain side. */
         if (game.continuation !== null) console.log(`      continuation  rules v${game.continuation.rules_engine_version}, hosted ${game.continuation.hosted_protocol}, financial ${game.continuation.financial_protocol}, codec ${game.continuation.settlement_codec}`);
         if (game.binding !== null) console.log(`      binding       ${game.binding.chain_id} (${game.binding.network_class}) ${game.binding.contract} code ${game.binding.code_checksum.slice(0, 16)}… ${game.binding.denom}; chain game ${game.binding.chain_game_id ?? "not bound"}`);
@@ -933,7 +1140,7 @@ async function main(argv: readonly string[]): Promise<number> {
         }
       }
     }
-    return money.games.some((game) => !game.readable || game.phase === "held" || game.intents_unreadable || game.intents.some((intent) => intent.status === "held")) ? 1 : 0;
+    return money.games.some((game) => !game.readable || game.phase === "held" || game.class !== "continued" || game.intents_unreadable || game.intents.some((intent) => intent.status === "held")) ? 1 : 0;
   }
   if (command !== "inspect" && command !== "release" && command !== "gc" && command !== "reconcile-duplicate-code" && command !== "money-release") {
     console.error(USAGE);
@@ -999,7 +1206,7 @@ async function main(argv: readonly string[]): Promise<number> {
     const outcome = await withLock(dataDir, async (held) => {
       const ops = createFileOpsRecorder(dataDir, { build: TOOL_BUILD, instanceId: held.instanceId, writerCheck: () => held.verify() });
       return command === "money-release"
-        ? releaseMoneyHold(dataDir, target, argv[noteAt + 1], { lock: held, ops })
+        ? releaseMoneyHold(dataDir, target, argv[noteAt + 1], { lock: held, ops, serving: (await toolServing()).serving })
         : reconcileDuplicateCode(dataDir, target, second, argv[noteAt + 1], { lock: held, ops, keep: keepAt !== -1 ? argv[keepAt + 1] : undefined });
     });
     if ("refused" in outcome) {

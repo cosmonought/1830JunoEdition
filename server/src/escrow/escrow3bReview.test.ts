@@ -221,7 +221,7 @@ describe("ESCROW-3B review findings", () => {
     }
   });
 
-  test("#5 an intent made for ANOTHER deployment is held by the relayer, never submitted or confirmed here", async () => {
+  test("#5 / LIVE-4 T-9: an intent made for ANOTHER deployment is never submitted or confirmed here -- and never held: skipped in memory, its record untouched", async () => {
     const world = makeWorld();
     await startIntent(world);
     const foreign = newChainIntent({
@@ -234,12 +234,15 @@ describe("ESCROW-3B review findings", () => {
       now: world.clock.now - 10,
     });
     assert.equal((await world.intents.create(foreign)).kind, "created");
+    const stored = JSON.stringify(await world.intents.load(GAME_A, foreign.intent_id));
     world.relayer.poke(GAME_A, foreign.intent_id);
     await world.drive(async () => (await fin(world)).chain.started !== null);
-    const held = (await world.intents.load(GAME_A, foreign.intent_id)) as ChainIntentRecord;
-    assert.equal(held.status, "held");
-    assert.equal(held.hold?.code, "binding-mismatch");
-    assert.equal(held.attempts.length, 0);
+    const after = (await world.intents.load(GAME_A, foreign.intent_id)) as ChainIntentRecord;
+    assert.equal(JSON.stringify(after), stored, "left pending at its record_version: no defer, no hold, no attempt (L4-4)");
+    assert.equal(after.status, "pending");
+    assert.equal(after.attempts.length, 0);
+    assert.equal(world.ops.lines.filter((line) => line.event === "chain.intent-skipped" && line.intent_id === foreign.intent_id).length, 1, "one alarm");
+    assert.equal(world.relayer.status().skipped, 1);
   });
 
   test("#6 a settlement this server did not sign is never finalized automatically; the game is held", async () => {
@@ -348,6 +351,9 @@ describe("ESCROW-3B review findings", () => {
   test("#14 one intent's refused query backs that intent off; the others proceed on the next pass", async () => {
     const world = makeWorld();
     await startIntent(world);
+    /* The ghost's game is a money game this pool continues (L4-4: the verdict is asked first; an intent whose game has
+       no financial record at all is the owner's canonical conflict instead -- below). */
+    assert.ok((await world.service.createMoneyGame(GAME_B)).ok);
     const ghost = newChainIntent({
       game_id: GAME_B,
       instance: junoInstanceOf(CHAIN_ID, CONTRACT, "99"),
@@ -363,5 +369,22 @@ describe("ESCROW-3B review findings", () => {
     const after = (await world.intents.load(GAME_B, ghost.intent_id)) as ChainIntentRecord;
     assert.equal(after.attempts.length, 0);
     assert.ok(after.retry.failures >= 1, "counted against its own budget");
+    /* LIVE-4 (L4-4): an intent whose game has NO financial record, for the deployment this pool serves: the owner's
+       conflict (`financial-record-missing`), held under that canonical code -- never attempted, never guessed at. */
+    const GAME_C = "g_0000000000000000000000c00w";
+    const created = newChainIntent({
+      game_id: GAME_C,
+      instance: junoInstanceOf(CHAIN_ID, CONTRACT, "98"),
+      key: { op: "finalize", seq: "3" },
+      subject: { kind: "digest", digests: [{ codec: "18JUNO/v1", purpose: "settle", hex: "78".repeat(32) }] },
+      op: { kind: "finalize", chain_game_id: "98", seq: "3" },
+      msg_json: RELAYER_EXECUTE.finalize("98"),
+      now: world.clock.now - 10,
+    });
+    assert.equal((await world.intents.create(created)).kind, "created");
+    world.relayer.poke(GAME_C, created.intent_id);
+    await world.relayer.pass();
+    const orphaned = (await world.intents.load(GAME_C, created.intent_id)) as ChainIntentRecord;
+    assert.deepEqual([orphaned.status, orphaned.hold?.code, orphaned.attempts.length], ["held", "financial-record-missing", 0]);
   });
 });

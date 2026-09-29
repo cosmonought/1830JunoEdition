@@ -34,6 +34,16 @@
 // durable log must REPRODUCE the highest checkpoint the external signing journal ever reserved for it (the same digest,
 // rebuilt from the log's prefix), and the chain's trusted sequence must not be ahead of it: a store restored to an older
 // (or different) history is held, never signed over.
+//
+// LIVE-4 (L4-4): THE VERDICT BEFORE EVERY WRITE. Every path here that reads a money game and might write -- the load, the
+// checkpoint job behind `onGameplayCommitted`, the settle, observation and Start jobs, the relayer's admission and its
+// intent selection (`classifyIntent`), money creation -- first asks the canonical continuation verdict (`servingOf`,
+// `moneyServing.ts`) over the game's facts, this pool's capability and the chain's verification-grade facts this run
+// (`refreshChainFacts`). `not-continued` (another deployment's game, one not yet verifiable, another build's format or
+// protocol) writes NOTHING and is noticed once; a `conflict` is held under its canonical code by the owning pool only;
+// only `continues` proceeds. The single-deployment `pinMismatch` it replaces treated every pin difference as a
+// contradiction and held the game (F-L4-2); the request paths (bind, join admission, Start, the relays, the deal) refuse
+// with the verdict's reason and write nothing, whatever it is.
 
 import { createHash } from "crypto";
 
@@ -63,7 +73,12 @@ import { annulInstanceOf, consentInstanceOf, intentBelongsTo, isLiveAttempt, new
 import { roundKeyOf, isCheckpointPosition, issuedAtOf, type CheckpointSnapshot } from "./checkpointPolicy";
 import { FinancialRecordUnreadableError, type FinancialGameStore } from "./financialGameStore";
 import type { EscrowCodecId } from "../../../frontend/src/gameEngine/escrow/escrowCodec";
-import { currentMoneyContinuation, moneyContinuationVerdict, THIS_DEPLOYMENT, type ContinuationVerdict, type DeploymentContinuation, type MoneyContinuationIdentity } from "./moneyContinuation";
+import { currentMoneyContinuation, THIS_DEPLOYMENT, type DeploymentContinuation, type MoneyContinuationIdentity } from "./moneyContinuation";
+import type { ContinuationVerdict as CanonicalVerdict, FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
+import { gameIdentityOfEntries, type GameIdentityFacts } from "../../../frontend/src/gameEngine/compat/continuationIdentity";
+import { deploymentKey } from "../../../frontend/src/gameEngine/compat/deploymentCapability";
+import { classifiesArtifacts, createMoneyServing, servingCapability, type ArtifactClasses, type MoneyServing, type MoneyServingDecision } from "./moneyServing";
+import { readVerifiedChainFacts, type ChainFactsRead } from "./juno/chainFacts";
 import { DEALT_PHASES, newFinancialRecord, transitionFinancial, type FinancialDeploymentPin, type FinancialEvent, type FinancialGameRecord, type FinancialHoldCode } from "./moneyLifecycle";
 import type { InspectableSigningJournal } from "./signingJournal";
 import type { PrefixReplay, TerminalSettlementEvidence } from "./settlementEvidence";
@@ -73,7 +88,7 @@ import { verifyDigest } from "./juno/secp256k1";
 import { junoGameView, parseConfigResponse, parseGameResponse, parseSignerKeysResponse, QUERY, RELAYER_EXECUTE, type JunoGameResponse } from "./juno/junoContract";
 import type { JoinAdmissionSigner } from "./juno/joinAdmission";
 import type { JunoRest } from "./juno/junoRest";
-import type { Admission, Relayer } from "./juno/relayer";
+import type { Admission, IntentServing, Relayer } from "./juno/relayer";
 import type { OpsRecorder } from "../persistence/opsRecorder";
 import type { GameRecord, Seat } from "../rooms/gameRecord";
 import type { RosterSource, StartPlan, StartRefusal } from "../rooms/roomService";
@@ -103,6 +118,10 @@ export interface EscrowServiceDeps {
   readonly tickets: WalletTicketLedger;
   /** The durable committed log of a game (the settlement re-derivation reads it; never a live session). */
   readonly readLog: (gameId: string) => Promise<readonly ServerLogEntry[]>;
+  /** LIVE-4 (L4-4): the deal's identity of a game, read READ-ONLY from its durable log (`dealIdentity.ts`: no repair, no
+   *  sync, no store state) -- the continuation verdict asks it far more often than a room loads its log. Throws only
+   *  when the log cannot be read at all (then nothing is decided, and nothing written). Default: from `readLog`. */
+  readonly readDeal?: (gameId: string) => Promise<GameIdentityFacts>;
   readonly replay: PrefixReplay;
   readonly now: () => number;
   readonly warn: (line: string) => void;
@@ -119,6 +138,10 @@ export interface EscrowServiceDeps {
    *  deployment continues (defaults: `currentMoneyContinuation`, `THIS_DEPLOYMENT`). Tests inject an uncertified rules
    *  bump here; production never sets it. */
   readonly continuation?: { readonly current: (codec: EscrowCodecId) => MoneyContinuationIdentity; readonly deployment: DeploymentContinuation };
+  /** LIVE-4 (L4-4): this pool's serving -- its capability and the chain's verification-grade facts -- shared with the
+   *  settlement coordinator (`start.ts`). Default: this build's capability over `backend.pin` (or the injected
+   *  `continuation` seam's versions over it), with no chain fact read until `refreshChainFacts`. */
+  readonly serving?: MoneyServing;
 }
 
 export type ServiceRefusal = { readonly ok: false; readonly code: string; readonly detail: string };
@@ -206,10 +229,31 @@ export interface EscrowService {
   onChange(listener: (gameId: string) => void): void;
   /** ESCROW-4: whether the backend is verified and serving (money actions refuse otherwise). */
   isReady(): boolean;
-  /** LIVE-4 amendment §4: whether this deployment may create a money game now -- the identity it would freeze (the
-   *  CURRENT rules engine, hosted and financial protocols, the pinned codec) is one it continues, which includes that
-   *  the rules are settlement-certified. `createMoneyGame` refuses exactly when this does not continue. */
-  creationVerdict(): ContinuationVerdict;
+  /** LIVE-4 amendment §4 / L4-4: whether this deployment may create a money game now -- the CANONICAL verdict over the
+   *  identity it would freeze (the CURRENT rules engine, hosted and financial protocols, the pinned codec) and the pinned
+   *  deployment: the rules played and settlement-certified, the financial protocol and codec served, the deployment
+   *  served AND verified (a verification-grade chain read this run agrees with the pin). `createMoneyGame` refuses
+   *  exactly when this does not continue. */
+  creationVerdict(): CanonicalVerdict;
+  /** LIVE-4 (L4-4): this pool's serving (capability + verification-grade chain facts), for the coordinator and tools. */
+  readonly serving: MoneyServing;
+  /** LIVE-4 (L4-4): read the pinned deployment's chain-attested facts at verification grade and record them (the only
+   *  source of `runtime.chainFacts`). `junoBackend` calls it at every verification; creation calls it when none was read. */
+  refreshChainFacts(): Promise<ChainFactsRead>;
+  /** LIVE-4 (L4-4): the relayer's first question about an intent, before anything is written for it: continue, skip
+   *  it in memory (another deployment's, or a game this pool does not continue), or hold it (the owner's conflict). */
+  classifyIntent(intent: ChainIntentRecord): Promise<IntentServing>;
+  /** LIVE-4 (L4-4): the money-game serving decision -- the canonical verdict for `gameId` on this pool, deployment
+   *  included -- READ-ONLY: nothing is written (a pool that does not continue the game is noticed once, as `where`).
+   *  The money routes, the money observer and the security-event revocation ask it before they write. `ownerKey`: the
+   *  deployment the table's GameRecord terms name (`moneyTermsKey`), so a missing financial record is judged with its
+   *  owner known. Throws when the facts cannot be read now (nothing decided; the caller writes nothing). */
+  servingDecision(gameId: string, options?: { readonly where?: string; readonly ownerKey?: string | null }): Promise<MoneyServingDecision>;
+  /** LIVE-4 (L4-4): the classes of a game's ticket ledger and chain intents (current / newer / older-unread / corrupt),
+   *  beside `record` -- classified once per process, and only when `record` is of a financial protocol this pool speaks
+   *  (`{}` otherwise: another protocol's artifacts are never parsed). Read-only. The settlement coordinator's step -1
+   *  asks it, so both seams decide on the same facts. */
+  artifactFormatsOf(gameId: string, record: FinancialGameRecord | null): Promise<ArtifactClasses>;
   /** ESCROW-4: read what the chain says about a bound game now (a funding escrow cancelled on chain closes its record). */
   observe(gameId: string): Promise<void>;
   /** ESCROW-4: a money table that ended before any chain game was bound (cancelled or expired) closes its financial
@@ -230,8 +274,9 @@ export interface EscrowService {
   onIntentResolved(intent: ChainIntentRecord): Promise<void>;
   /** Startup, BEFORE any chain read (review #8): which tables have a frozen financial roster, from the durable store. */
   preload(): Promise<number>;
-  /** Startup: pin checks, the relayer's open intents, and every money game's pending chain work. */
-  load(): Promise<{ readonly games: number; readonly held: number; readonly resumed: number }>;
+  /** Startup: the continuation verdict of every money game (L4-4), the relayer's open intents, and every continued
+   *  game's pending chain work. `skipped`: games this pool does not continue (nothing written for them). */
+  load(): Promise<{ readonly games: number; readonly held: number; readonly resumed: number; readonly skipped: number }>;
   /** The relayer's admission of a new attempt (review #5/#6). */
   admit(intent: ChainIntentRecord): Promise<Admission>;
   /** The Start of the current roster freeze, decided from chain truth: permanent, pending, or released (tests, sweep). */
@@ -248,6 +293,17 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   const backend = deps.backend;
   const continuationNow = (): MoneyContinuationIdentity => (deps.continuation?.current ?? currentMoneyContinuation)(backend.pin.codec);
   const continuationDeployment: DeploymentContinuation = deps.continuation?.deployment ?? THIS_DEPLOYMENT;
+  /* LIVE-4 (L4-4): this pool's capability serves exactly the configured deployment; the chain's facts come only from
+     `refreshChainFacts`. */
+  const serving: MoneyServing =
+    deps.serving ??
+    createMoneyServing({
+      capability: servingCapability([backend.pin], deps.continuation === undefined ? undefined : { current: continuationNow(), deployment: continuationDeployment }),
+      ops: deps.ops,
+      warn: deps.warn,
+      now: deps.now,
+    });
+  const pinKey = deploymentKey(backend.pin);
   const stats = { checkpoints: 0, settles: 0, finalizes: 0, holds: 0, skipped: 0, failures: 0 };
   /** Per game: the newest checkpoint round key and log_len the service has prepared (durable in the record). */
   const lastRound = new Map<string, { round_key: string; log_len: number }>();
@@ -346,15 +402,98 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     }
   }
 
-  /** The binding is this deployment's (the pin agrees with what this server is configured for), or a refusal. */
-  function pinMismatch(record: FinancialGameRecord): string | null {
-    if (record.binding === null) return "the money game has no pinned deployment";
-    const pin = record.binding.deployment;
-    const mine = backend.pin;
-    for (const key of Object.keys(mine) as (keyof FinancialDeploymentPin)[]) {
-      if (pin[key] !== mine[key]) return `the game is pinned to ${key}=${String(pin[key])}; this server is configured for ${String(mine[key])}`;
+  /* ------------------------------------------------------------------ */
+  /* LIVE-4 (L4-4): the continuation verdict, before every write           */
+  /* ------------------------------------------------------------------ */
+
+  /** The deal's identity of each game once it is dealt (a deal is immutable: the log is append-only and nothing undoes
+   *  it), so a game's log is read for it at most until its deal is found. */
+  const identities = new Map<string, GameIdentityFacts>();
+  /** The ticket ledger's and the chain intents' classes, per game, as first classified in this process. This process is
+   *  the data directory's only writer and writes only current formats, so what it found stays exact. */
+  const artifactFormats = new Map<string, ArtifactClasses>();
+
+  /** A game's ledger and intents classes beside `record` (`classifiesArtifacts`: only for a financial protocol this pool
+   *  speaks; `{}` otherwise). Classified on first use, never parsing another build's format, never writing. */
+  async function artifactFormatsOf(gameId: string, record: FinancialGameRecord | null): Promise<ArtifactClasses> {
+    if (!classifiesArtifacts(serving.capability, record)) return {};
+    const known = artifactFormats.get(gameId);
+    if (known !== undefined) return known;
+    const classes: ArtifactClasses = Object.freeze({ tickets: await deps.tickets.formatOf(gameId), intents: (await deps.intents.formatOf?.(gameId)) ?? "current" });
+    artifactFormats.set(gameId, classes);
+    return classes;
+  }
+  /** The newest decision per game (the synchronous `onGameplayCommitted` reads it; every job decides again). */
+  const decisions = new Map<string, MoneyServingDecision>();
+
+  function identityFrom(gameId: string, entries: readonly ServerLogEntry[]): GameIdentityFacts {
+    const known = identities.get(gameId);
+    if (known !== undefined) return known;
+    const identity = gameIdentityOfEntries(entries);
+    if (identity.kind !== "undealt") identities.set(gameId, identity);
+    return identity;
+  }
+
+  /** The deal's identity: from `entries` when the caller holds them, else from the durable log, read-only (read until
+   *  dealt). A log that cannot be read at all throws: nothing is decided now. */
+  async function identityOf(gameId: string, entries?: readonly ServerLogEntry[]): Promise<GameIdentityFacts> {
+    if (entries !== undefined) return identityFrom(gameId, entries);
+    const known = identities.get(gameId);
+    if (known !== undefined) return known;
+    if (deps.readDeal === undefined) return identityFrom(gameId, await deps.readLog(gameId));
+    const identity = await deps.readDeal(gameId);
+    if (identity.kind !== "undealt") identities.set(gameId, identity);
+    return identity;
+  }
+
+  type Found = { readonly decision: MoneyServingDecision; readonly record: FinancialGameRecord | null };
+
+  /** THE question, before anything is written for `gameId`: the canonical verdict over its financial record (read here
+   *  unless the caller already holds it; an unreadable one keeps the store's class), the deal's identity, the classes
+   *  the load found for its ledger and intents, this pool's capability and the chain's verification-grade facts. */
+  async function servingOf(
+    gameId: string,
+    options: { readonly record?: FinancialGameRecord | null; readonly fin?: FormatFact; readonly entries?: readonly ServerLogEntry[]; readonly ownerKey?: string | null } = {},
+  ): Promise<Found> {
+    let record: FinancialGameRecord | null = null;
+    let fin: FormatFact | undefined = options.fin ?? "current";
+    if (options.record !== undefined) {
+      record = options.record;
+    } else {
+      try {
+        record = await deps.financial.load(gameId);
+      } catch (error) {
+        if (!(error instanceof FinancialRecordUnreadableError)) throw error;
+        fin = error.format;
+      }
     }
-    return null;
+    if (fin === "current" && record === null) fin = undefined; // no financial record at all
+    /* An unreadable record's class decides first (the verdict's step 1): its deal is not read at all (L4-4 review R-1:
+       another build's game never costs this pool a log read, let alone a failure). */
+    const identity: GameIdentityFacts = fin !== undefined && fin !== "current" ? { kind: "undealt" } : await identityOf(gameId, options.entries);
+    const classes = await artifactFormatsOf(gameId, fin === "current" ? record : null);
+    const decision = serving.decide({ fin, record, identity, ...classes, ownerKey: options.ownerKey ?? null });
+    decisions.set(gameId, decision);
+    return { decision, record };
+  }
+
+  /** What a JOB does with a decision: `true` only when this pool continues the game. Not continued: nothing is written
+   *  (noticed once). A conflict: the owning pool holds the game under its canonical code (never a closed or cancelled
+   *  one, never a record it cannot read); any other pool writes nothing. */
+  async function mayAct(gameId: string, found: Found, where: string): Promise<boolean> {
+    const { decision, record } = found;
+    if (decision.verdict.kind === "continues") return true;
+    serving.notice(gameId, decision, where);
+    if (decision.verdict.kind === "conflict" && decision.holdCode !== null && record !== null && record.phase !== "closed" && record.phase !== "cancelled") {
+      await hold(gameId, decision.holdCode, `${decision.verdict.why}: ${decision.verdict.detail}`);
+    }
+    return false;
+  }
+
+  /** What a REQUEST does with a decision: a refusal carrying the verdict's reason (nothing written), or null. */
+  function refusalOf(found: Found): { readonly code: string; readonly detail: string } | null {
+    const verdict = found.decision.verdict;
+    return verdict.kind === "continues" ? null : { code: verdict.why, detail: verdict.detail };
   }
 
   async function readGame(chainGameId: string): Promise<JunoGameResponse> {
@@ -523,7 +662,11 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   const retrySnapshot = new Map<string, CheckpointSnapshot>();
 
   async function checkpointAt(snapshot: CheckpointSnapshot): Promise<void> {
-    let record = await deps.financial.load(snapshot.game_id);
+    /* LIVE-4 (L4-4): the verdict FIRST -- from the committed entries this position was taken from -- and only a game this
+       pool continues is moved at all (F-L4-3: the deal was written before the pin was asked). */
+    const found = await servingOf(snapshot.game_id, { entries: snapshot.entries });
+    if (!(await mayAct(snapshot.game_id, found, "checkpoint"))) return;
+    let record = found.record;
     if (record !== null && record.phase === "funding" && record.chain.started !== null) {
       /* The escrow started and the game is being played: the deal, derived (the coordinator derives it too). */
       record = await apply(snapshot.game_id, (current) => (current.phase === "funding" ? { kind: "dealt", at: deps.now() } : null));
@@ -531,7 +674,6 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     const bound = boundOf(record);
     if (bound === null || record === null) return;
     if (!["in-progress", "liveness", "terminal-eligible", "intent-prepared"].includes(record.phase) || record.chain.started === null) return;
-    if (pinMismatch(record) !== null) return;
     const prepared = record.chain.checkpoint_prepared;
     if (prepared !== null && prepared.log_len >= snapshot.log_len) return; // this position (or a newer one) is prepared
     if (!(await verifyHistory(bound))) return;
@@ -576,12 +718,14 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   /* ------------------------------------------------------------------ */
 
   async function settleJob(gameId: string): Promise<void> {
-    const record = await deps.financial.load(gameId);
+    /* The verdict first (the deal read-only); the sealed prefix is read only for a game this pool continues. */
+    const found = await servingOf(gameId);
+    if (!(await mayAct(gameId, found, "settle"))) return;
+    const entries = await deps.readLog(gameId);
+    const record = found.record;
     const bound = boundOf(record);
     if (record === null || bound === null || record.phase !== "intent-prepared" || record.intent === null || record.terminal === null) return;
-    if (pinMismatch(record) !== null) return;
     const evidence = record.intent;
-    const entries = await deps.readLog(gameId);
     const L = evidence.log_len;
     if (entries.length < L) {
       await hold(gameId, "journal-ahead", `the durable log has ${entries.length} entries; the sealed settlement names ${L}`);
@@ -706,9 +850,12 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   /** What the chain says now, as lifecycle events (the chain wins). A HELD game is observed (its chain outcome is
    *  recorded) but nothing new is submitted for it (review #6); a game pinned elsewhere is not read here at all (#5). */
   async function observeChain(gameId: string): Promise<void> {
-    const record = await deps.financial.load(gameId);
+    const found = await servingOf(gameId);
+    const record = found.record;
+    /* No record (or an unreadable one): nothing to observe here. A MISSING record is the settlement coordinator's to
+       judge -- it holds the GameRecord's terms, so it knows the owner (review R-5). */
     if (record === null || record.binding?.escrow == null || record.phase === "closed" || record.phase === "cancelled") return;
-    if (pinMismatch(record) !== null) return;
+    if (!(await mayAct(gameId, found, "observe"))) return;
     const binding = record.binding.escrow;
     const response = await readGame(binding.chain_game_id);
     const g = response.game;
@@ -791,8 +938,10 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
    */
   function reconcileStart(gameId: string): Promise<StartReconciliation> {
     return exclusive(gameId, async (): Promise<StartReconciliation> => {
-      const record = await deps.financial.load(gameId);
-      if (record === null || record.binding?.escrow == null || pinMismatch(record) !== null) return "none";
+      const found = await servingOf(gameId);
+      const record = found.record;
+      if (record === null || record.binding?.escrow == null) return "none";
+      if (!(await mayAct(gameId, found, "start reconciliation"))) return found.decision.holdCode !== null ? "held" : "none";
       if (record.phase === "held") return "held";
       const binding = record.binding.escrow;
       if (record.roster === null) {
@@ -916,11 +1065,12 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   const rosterSource: RosterSource = {
     async plan(record: GameRecord, ctx: { shuffle: <T>(items: readonly T[]) => T[]; now: number }): Promise<StartPlan | StartRefusal> {
       const refuse = (reason: string): StartRefusal => ({ refusal: "wrong-state", code: "wrong-state", reason });
-      const financial = await deps.financial.load(record.game_id).catch(() => null);
+      const found = await servingOf(record.game_id).catch(() => null);
+      const financial = found?.record ?? null;
       const bound = boundOf(financial);
-      if (financial === null || bound === null) return refuse("This money table's escrow is not ready.");
+      if (found === null || financial === null || bound === null) return refuse("This money table's escrow is not ready.");
       if (financial.phase !== "funding" || financial.chain.started === null) return refuse("The escrow has not started this game yet.");
-      if (pinMismatch(financial) !== null) return refuse("This server cannot deal this money table.");
+      if (refusalOf(found) !== null) return refuse("This server cannot deal this money table.");
       const { response, view } = await liveView(bound);
       if (view.state !== "IN_PROGRESS" || view.roster_hash !== bound.roster.roster_hash || view.domain !== bound.roster.expected_domain) return refuse("The escrow does not show this table started with its frozen roster.");
       /* The chain's commitment is each chain seat's WALLET (the roster hash is over wallets, in order); the freeze proved
@@ -952,10 +1102,11 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
    *  CreateGame must also be exactly the one the table expects -- read by quorum. */
   async function bindChecked(gameId: string, chainGameId: string, variants: GameVariants, expect: HostBindExpectation | null): Promise<{ readonly ok: true; readonly binding: EscrowBindingV2 } | ServiceRefusal> {
     if (!ready()) return { ok: false, code: "not-verified", detail: "financial mode is not verified against the chain" };
-    const record = await deps.financial.load(gameId);
+    const found = await servingOf(gameId);
+    const record = found.record;
     if (record === null) return { ok: false, code: "not-found", detail: "no money record" };
-    const mismatch = pinMismatch(record);
-    if (mismatch !== null) return { ok: false, code: "binding-mismatch", detail: mismatch };
+    const refused = refusalOf(found);
+    if (refused !== null) return { ok: false, ...refused };
     if (record.continuation === null) return { ok: false, code: "held", detail: "the money record has no continuation identity" };
     const [contract, response, configRaw] = await Promise.all([
       backend.rest.contract(backend.pin.contract_address),
@@ -1024,11 +1175,12 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   /** The bound game, readable for a relay (not held; this deployment's), or a refusal. */
   async function relayable(gameId: string): Promise<{ readonly bound: Bound } | ServiceRefusal> {
     if (!ready()) return refuse("not-verified", "financial mode is not verified against the chain");
-    const record = await deps.financial.load(gameId);
+    const found = await servingOf(gameId);
+    const record = found.record;
     const bound = boundOf(record);
     if (record === null || bound === null) return refuse("not-bound", "the table's escrow has no frozen roster");
-    const mismatch = pinMismatch(record);
-    if (mismatch !== null) return refuse("binding-mismatch", mismatch);
+    const refused = refusalOf(found);
+    if (refused !== null) return refuse(refused.code, refused.detail);
     if (record.phase === "held") return refuse("held", "this table's money is held for an operator; nothing is relayed");
     return { bound };
   }
@@ -1163,6 +1315,65 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   /* The service                                                         */
   /* ------------------------------------------------------------------ */
 
+  /* ------------------------------------------------------------------ */
+  /* LIVE-4 (L4-4): creation, chain facts, the relayer's first question    */
+  /* ------------------------------------------------------------------ */
+
+  /** The canonical creation verdict: a table not yet dealt, with the identity it would freeze now and the pinned
+   *  deployment -- and that deployment VERIFIED: the chain's verification-grade facts for it were read this run (a
+   *  contradicting read is the verdict's own conflict). */
+  function creationVerdict(): CanonicalVerdict {
+    const decision = serving.decide({
+      fin: "current",
+      record: newFinancialRecord("g_creation", continuationNow(), 0, backend.pin),
+      identity: { kind: "undealt" },
+    });
+    if (decision.verdict.kind !== "continues") return decision.verdict;
+    if (serving.chainFactsReadAt(pinKey) === null) {
+      return { kind: "not-continued", why: "deployment-unverified", detail: `the escrow ${pinKey} has not been read from the chain at verification grade this run (every endpoint, on the configured chain, not syncing, agreeing)` };
+    }
+    return decision.verdict;
+  }
+
+  /** The pinned deployment's chain-attested facts, read at verification grade and recorded (`juno/chainFacts.ts`); an
+   *  audit line whenever what the chain reports changes (the first read of the run included). */
+  let lastFacts: string | null = null;
+  let factsInFlight: Promise<ChainFactsRead> | null = null;
+  function refreshChainFacts(): Promise<ChainFactsRead> {
+    /* One read at a time (review R-6): a caller while one runs shares it, so a slow read never lands over a newer one. */
+    if (factsInFlight !== null) return factsInFlight;
+    const run = (async () => {
+      const read = await readVerifiedChainFacts(backend.pin, backend.rest, deps.now);
+      serving.recordChainFacts(read);
+      if (read.kind === "read") {
+        const text = `${read.facts.code_checksum}|${read.facts.denom}`;
+        if (text !== lastFacts) audit("escrow.chain-facts", { deployment: read.key, code_checksum: read.facts.code_checksum, denom: read.facts.denom });
+        lastFacts = text;
+      }
+      return read;
+    })();
+    factsInFlight = run;
+    void run.then(
+      () => (factsInFlight = null),
+      () => (factsInFlight = null),
+    );
+    return run;
+  }
+
+  /** The relayer's first question about an intent, BEFORE it writes anything for it: an intent whose own deployment
+   *  this pool does not serve, or whose game this pool does not continue, is skipped in memory; a conflict is held
+   *  under its canonical code only when this pool owns the game (serves the deployment the intent is for). */
+  async function classifyIntent(intent: ChainIntentRecord): Promise<IntentServing> {
+    const intentKey = serving.capability.escrow_deployments.find((deployment) => intent.instance.startsWith(`${deployment.key}|`))?.key ?? null;
+    if (intentKey === null) return { kind: "skip", why: "deployment-unavailable", detail: `the intent is for ${intent.instance.slice(0, 160)}, an escrow this server does not serve` };
+    const found = await servingOf(intent.game_id, { ownerKey: intentKey });
+    const verdict = found.decision.verdict;
+    if (verdict.kind === "continues") return { kind: "continues" };
+    serving.notice(intent.game_id, found.decision, "relayer");
+    if (verdict.kind === "conflict" && found.decision.holdCode !== null) return { kind: "hold", code: found.decision.holdCode, why: `${verdict.why}: ${verdict.detail}` };
+    return { kind: "skip", why: verdict.why, detail: verdict.detail };
+  }
+
   /** A frozen roster's Start, written for the current epoch if it is not yet (the load, and a repeated requestStart). */
   async function admitStart(intent: ChainIntentRecord, record: FinancialGameRecord): Promise<Admission> {
     const binding = record.binding?.escrow;
@@ -1193,12 +1404,24 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
       listeners.push(listener);
     },
     isReady: ready,
-    creationVerdict: () => moneyContinuationVerdict(continuationNow(), continuationDeployment),
+    serving,
+    creationVerdict,
+    refreshChainFacts,
+    classifyIntent,
+    async servingDecision(gameId, options = {}) {
+      const found = await servingOf(gameId, { ownerKey: options.ownerKey ?? null });
+      serving.notice(gameId, found.decision, options.where ?? "money route");
+      return found.decision;
+    },
+    artifactFormatsOf,
     observe: (gameId) => enqueue(gameId, "the chain observation", () => observeChain(gameId)),
     async closeUnboundTable(gameId) {
       await exclusive(gameId, async () => {
-        const record = await deps.financial.load(gameId);
+        /* L4-4: only a game this pool continues is closed here (a table another pool serves is closed by that pool). */
+        const found = await servingOf(gameId);
+        const record = found.record;
         if (record === null || record.phase !== "funding" || record.binding?.escrow != null || record.roster !== null) return;
+        if (!(await mayAct(gameId, found, "close unbound"))) return;
         const next = await apply(gameId, (current) => (current.phase === "funding" && current.binding?.escrow == null ? { kind: "cancel-before-deal", at: deps.now() } : null));
         if (next?.phase === "cancelled") audit("money.cancelled-unbound", { game_id: gameId });
       });
@@ -1226,10 +1449,21 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     },
 
     async admit(intent) {
+      /* LIVE-4 (L4-4): the verdict first, as `classifyIntent` (the relayer asks that before it writes anything): a game
+         this pool does not continue is skipped IN MEMORY, never held; only the owner's conflict holds. */
+      let serving_: IntentServing;
+      try {
+        serving_ = await classifyIntent(intent);
+      } catch (error) {
+        /* The facts could not be read now (review R-2): no verdict, so nothing is written for it -- no failure counted,
+           no retry budget spent, never a hold; the relayer asks again at its next pass. */
+        return { kind: "undecided", why: `the continuation verdict could not be computed now (${error instanceof Error ? error.message.slice(0, 200) : String(error)})` };
+      }
+      if (serving_.kind === "skip") return { kind: "skip", why: serving_.why };
+      if (serving_.kind === "hold") return { kind: "hold", code: serving_.code, why: serving_.why };
       const record = await deps.financial.load(intent.game_id);
-      if (record === null) return { kind: "hold", code: "binding-mismatch", why: "the intent's game has no financial record" };
-      const mismatch = pinMismatch(record);
-      if (mismatch !== null) return { kind: "hold", code: "binding-mismatch", why: mismatch };
+      /* Gone since the verdict was asked (it continued a record that was there): decided again at the next pass. */
+      if (record === null) return { kind: "undecided", why: "the intent's financial record vanished since its verdict" };
       if (record.phase === "held") return { kind: "wait", why: `the money game is held (${record.hold?.code ?? "?"}); nothing new is submitted until an operator releases it` };
       if (record.phase === "closed" || record.phase === "cancelled") return { kind: "wait", why: `the money game is ${record.phase}` };
       if (intent.op.kind === "start") return admitStart(intent, record);
@@ -1241,17 +1475,26 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
 
     async createMoneyGame(gameId) {
       if (!ready()) return { ok: false, code: "not-verified", detail: "financial mode is not verified against the chain" };
-      /* LIVE-4 (§9.3, D4-14) / ESCROW-4 amendment §4: never freeze an identity this deployment cannot continue -- above all
-         a rules engine not yet settlement-certified (a future bump before its certification). Nothing is written. */
+      /* LIVE-4 (§9.3, D4-14; L4-4): never freeze an identity, or pin a deployment, this pool cannot continue -- a rules
+         engine not yet settlement-certified, a protocol or codec it does not serve, a deployment it does not serve or has
+         not verified at verification grade this run. The CANONICAL verdict, asked here as well as at the route, so no
+         internal caller can bypass it; on a refusal nothing is written (no financial record, no money identity). */
+      let verdict = creationVerdict();
+      if (verdict.kind !== "continues" && verdict.why === "deployment-unverified" && serving.chainFactsReadAt(pinKey) === null) {
+        await refreshChainFacts(); // nothing was read at verification grade yet this run: read once, then decide
+        verdict = creationVerdict();
+      }
+      if (verdict.kind !== "continues") return { ok: false, code: verdict.why, detail: verdict.detail };
       const continuation = continuationNow();
-      const verdict = moneyContinuationVerdict(continuation, continuationDeployment);
-      if (!verdict.continues) return { ok: false, code: verdict.why, detail: verdict.detail };
       const record = newFinancialRecord(gameId, continuation, deps.now(), backend.pin);
       const created = await deps.financial.create(record);
       if (created.outcome.kind !== "committed") return { ok: false, code: "store", detail: created.outcome.detail };
+      /* A record already there (a repeated creation) is the game's: this pool continues it, or refuses it unchanged. */
       const stored = created.existing ?? record;
-      const mismatch = pinMismatch(stored);
-      if (mismatch !== null) return { ok: false, code: "binding-mismatch", detail: mismatch };
+      if (created.existing !== null) {
+        const refused = refusalOf(await servingOf(gameId, { record: created.existing }));
+        if (refused !== null) return { ok: false, ...refused };
+      }
       audit("money.created", { game_id: gameId, chain_id: backend.pin.chain_id, contract: backend.pin.contract_address, denom: backend.pin.denom, financial_protocol: stored.continuation?.financial_protocol ?? null });
       return { ok: true, record: stored };
     },
@@ -1277,10 +1520,11 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
       const admission = deps.admission;
       if (admission === undefined) return no("admission-unavailable", "this server has no join-admission signer (production waits for the KMS client, LIVE-5)");
       return exclusive(input.gameId, async () => {
-        const record = await deps.financial.load(input.gameId);
+        const found = await servingOf(input.gameId);
+        const record = found.record;
         if (record === null) return no("not-found", "no money record");
-        const mismatch = pinMismatch(record);
-        if (mismatch !== null) return no("binding-mismatch", mismatch);
+        const refused = refusalOf(found);
+        if (refused !== null) return no(refused.code, refused.detail);
         const binding = record.binding?.escrow ?? null;
         if (binding === null) return no("not-bound", "the chain game is not bound");
         if (record.phase !== "funding" || record.chain.started !== null) return no("wrong-state", `the money game is ${record.phase}${record.chain.started !== null ? " (started)" : ""}`);
@@ -1344,10 +1588,11 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     async requestStart(gameId, liveSeats) {
       if (!ready()) return { ok: false, code: "not-verified", detail: "financial mode is not verified against the chain" };
       return exclusive(gameId, async () => {
-        const record = await deps.financial.load(gameId);
+        const found = await servingOf(gameId);
+        const record = found.record;
         if (record === null || record.binding?.escrow == null) return { ok: false as const, code: "not-bound", detail: "the chain game is not bound" };
-        const mismatch = pinMismatch(record);
-        if (mismatch !== null) return { ok: false as const, code: "binding-mismatch", detail: mismatch };
+        const refused = refusalOf(found);
+        if (refused !== null) return { ok: false as const, ...refused };
         if (record.phase !== "funding" || record.chain.started !== null) return { ok: false as const, code: "wrong-state", detail: `the money game is ${record.phase}${record.chain.started !== null ? " (started)" : ""}` };
         const binding = record.binding.escrow;
         if (record.roster !== null) {
@@ -1432,6 +1677,10 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     onGameplayCommitted(input) {
       try {
         if (!frozen.has(input.gameId) || !started.has(input.gameId)) return;
+        /* LIVE-4 (L4-4): a game this pool was last found NOT to continue queues nothing (the synchronous check, from the
+           newest decision); the checkpoint job asks the verdict again, from these very entries, before it writes. */
+        const decided = decisions.get(input.gameId);
+        if (decided !== undefined && decided.verdict.kind !== "continues") return;
         const board = input.board;
         const known = lastRound.get(input.gameId) ?? null;
         const logLen = input.entries.length;
@@ -1467,10 +1716,11 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
 
     async onIntentResolved(intent) {
       void enqueue(intent.game_id, `the ${intent.op.kind} resolution`, async () => {
-        const record = await deps.financial.load(intent.game_id);
+        const found = await servingOf(intent.game_id);
+        const record = found.record;
         if (record === null || record.binding?.escrow == null) return;
-        /* Review #5: an intent of another deployment never moves this game's record. */
-        if (pinMismatch(record) !== null) return;
+        /* Review #5 / L4-4: a game this pool does not continue is never moved by an intent's resolution. */
+        if (!(await mayAct(intent.game_id, found, "intent resolution"))) return;
         if (intent.op.kind === "start") {
           /* Confirmed, superseded or held: the chain decides whether the freeze is permanent or released. */
           await reconcileStart(intent.game_id);
@@ -1488,7 +1738,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
           return;
         }
         if (intent.status === "held") {
-          const code = intent.hold?.code === "chain-inconsistent" ? "chain-inconsistent" : intent.hold?.code === "binding-mismatch" ? "binding-mismatch" : "chain-intent-held";
+          /* A contradiction the relayer found keeps its code (the canonical conflict codes included, L4-4). */
+          const passes: readonly FinancialHoldCode[] = ["chain-inconsistent", "binding-mismatch", "continuation-incompatible"];
+          const code: FinancialHoldCode = passes.includes(intent.hold?.code as FinancialHoldCode) ? (intent.hold?.code as FinancialHoldCode) : "chain-intent-held";
           /* A held checkpoint is not a held game (a newer one may land); a contradiction always is. */
           if (intent.op.kind !== "checkpoint" || code !== "chain-intent-held") await hold(intent.game_id, code, `${intent.op.kind}: ${intent.hold?.detail ?? ""}`);
           return;
@@ -1507,28 +1759,51 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
       let games = 0;
       let held = 0;
       let resumed = 0;
+      let skipped = 0;
       for (const gameId of await deps.financial.list()) {
-        let record: FinancialGameRecord | null;
+        /* LIVE-4 (L4-4): every money game's verdict, before anything of it is written. The financial record's class
+           (an unreadable one keeps its seats frozen: nothing moves on a guess); the ledger's and the intents' classes --
+           read only for a record of a financial protocol this pool speaks, so another protocol's artifacts are never
+           parsed as this one's; the deal's identity from the log. */
+        let record: FinancialGameRecord | null = null;
+        let fin: FormatFact = "current";
         try {
           record = await deps.financial.load(gameId);
         } catch (error) {
-          if (error instanceof FinancialRecordUnreadableError) {
-            frozen.add(gameId);
-            continue;
-          }
-          throw error;
+          if (!(error instanceof FinancialRecordUnreadableError)) throw error;
+          fin = error.format;
+          frozen.add(gameId);
         }
-        if (record === null) continue;
-        games += 1;
-        remember(record);
-        const mismatch = record.binding === null ? null : pinMismatch(record);
-        if (mismatch !== null && record.phase !== "held" && record.phase !== "closed" && record.phase !== "cancelled") {
-          /* Brief §5: a restart or deployment never points a money game at another chain, contract, denom or code. */
-          await hold(gameId, "binding-mismatch", mismatch);
-          held += 1;
+        if (fin === "current" && record === null) continue;
+        if (record !== null) {
+          games += 1;
+          remember(record);
+        }
+        let found: Found;
+        try {
+          /* An unreadable record keeps its class (the formats decide first, so its deal is not read). */
+          found = await servingOf(gameId, fin === "current" ? { record } : { record: null, fin, entries: [] });
+        } catch (error) {
+          /* The deal could not be read: nothing is decided, so nothing is written; the next load decides again. */
+          deps.warn(`  escrow: ${gameId}'s continuation could not be decided (${error instanceof Error ? error.message : String(error)}); nothing is done for it now`);
+          skipped += 1;
           continue;
         }
-        if (mismatch !== null || record.binding?.escrow == null) continue;
+        if (fin !== "current") {
+          /* Unreadable here: never overwritten, never held by this pool; noticed with its class. */
+          serving.notice(gameId, found.decision, "load");
+          skipped += 1;
+          continue;
+        }
+        if (record === null) continue;
+        if (found.decision.verdict.kind !== "continues") {
+          const holds = found.decision.holdCode !== null && record.phase !== "held" && record.phase !== "closed" && record.phase !== "cancelled";
+          await mayAct(gameId, found, "load");
+          if (holds) held += 1;
+          else skipped += 1;
+          continue;
+        }
+        if (record.binding?.escrow == null) continue;
         const bound = boundOf(record);
         if (bound !== null && record.phase !== "closed" && record.phase !== "cancelled") {
           /* Review #1: before anything of this game is signed again, its durable log must reproduce the journal. */
@@ -1551,7 +1826,7 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
       }
       const relayer = deps.relayer();
       if (relayer !== null) await relayer.load();
-      return { games, held, resumed };
+      return { games, held, resumed, skipped };
     },
 
     async sweepChain() {

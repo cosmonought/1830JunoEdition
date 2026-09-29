@@ -23,6 +23,7 @@ import {
   canonicalRouteKey,
   enumerateRoutes,
   judgeRoute,
+  judgeRouteSet,
   judgeWaypoints,
   neighbourLabel,
   optimumRouteSet,
@@ -193,34 +194,249 @@ describe("hand-worked boards: every legal route, and the optimum, written out by
     expect(routeTable(bo)).toEqual(["I5>I7 $40", "I5>I7>I9 $60", "I7>I9 $40"]);
   });
 
-  it("HERALD (1830+): PRR's herald is a stop, an end and a station for PRR; the uncounted pass is IL-3", () => {
+  it("HERALD (1830+): PRR's herald is a stop, an end, and -- ONLY when counted -- a station (IL-2 YES, IL-3 NO)", () => {
     const lays: Lay[] = [["H10", 57, 0], ["H14", 57, 0]];
     const input = caseOn(EXPANDED_BOARD, lays, [{ companyId: PRR, tokens: [] }], PRR);
-    expect(routeTable(input)).toEqual(["H10>H12 $30", "H10>H12*>H14 $40", "H10>H12>H14 $50", "H12>H14 $30"]);
-    expect(optimum(input, ["2"])).toBe(40); // the pass, under the authority's current reading of IL-3
+    // H10>H12*>H14 ($40, the herald passed uncounted) is NOT a route: PRR has no station on it (IL-3 NO).
+    expect(routeTable(input)).toEqual(["H10>H12 $30", "H10>H12>H14 $50", "H12>H14 $30"]);
+    expect(optimum(input, ["2"])).toBe(30);
     expect(optimum(input, ["3"])).toBe(50);
     expect(optimum(input, ["2", "2"])).toBe(60); // both trains leave the herald on its two rails
-    const strict = caseOn(EXPANDED_BOARD, lays, [{ companyId: PRR, tokens: [] }], PRR, { heraldUncountedIsStation: false });
-    expect(routeTable(strict)).toEqual(["H10>H12 $30", "H10>H12>H14 $50", "H12>H14 $30"]);
-    expect(optimum(strict, ["2"])).toBe(30);
+    // The SEEDED pre-ruling reading (an uncounted pass is a station) is noticed: it adds the $40 pass.
+    const seeded = caseOn(EXPANDED_BOARD, lays, [{ companyId: PRR, tokens: [] }], PRR, { heraldUncountedIsStation: true });
+    expect(routeTable(seeded)).toEqual(["H10>H12 $30", "H10>H12*>H14 $40", "H10>H12>H14 $50", "H12>H14 $30"]);
+    expect(optimum(seeded, ["2"])).toBe(40);
     // Nobody else sees a herald: for NYC, H12 is plain track.
     const nyc = caseOn(EXPANDED_BOARD, lays, [{ companyId: 2, tokens: [["H10", 0]] }], 2);
     expect(routeTable(nyc)).toEqual(["H10>H12>H14 $40"]);
   });
 });
 
-describe("IL-11 (the R12-1 review, H1): the herald is one city however a route includes it", () => {
-  // H12's printed #24 (stem 3, prongs 0 and 5); H14 #57; a loop from prong 5 round to the stem: I13 #7 turned 2,
-  // I11 #8, H10 #7 turned 5. PRR runs from its herald alone.
-  const lays: Lay[] = [["H14", 57, 0], ["H10", 7, 5], ["I11", 8, 0], ["I13", 7, 2]];
-  it.each([true, false])("a route may not stop at the herald and also run past it (heraldUncountedIsStation %s)", (heraldUncountedIsStation) => {
-    const input = caseOn(EXPANDED_BOARD, lays, [{ companyId: PRR, tokens: [] }], PRR, { heraldUncountedIsStation });
+/* ------------------------------------------------------------------ */
+/* The herald rulings (R12-1 repair): IL-2, IL-3, IL-4, IL-11          */
+/* ------------------------------------------------------------------ */
+
+// REENTRY: H12 upgraded to brown #44 (turn 0: rails E-NE [0,1], E-W [0,3], NE-SW [1,4], W-SW [3,4]; E-SW and
+// NE-W are NOT joined). H10 #57 (a $20 city on its E edge), I11 #57 turned 1 (a $20 city on its NE edge, which
+// faces H12's SW), and a plain loop leaving H12 east and coming back into its NE edge: H14 #7 turned 2 (W-NW),
+// G13 #7 turned 4 (SW-SE). A route may therefore cross H12 twice, E-W and NE-SW, on distinct sections.
+const REENTRY: Lay[] = [["H12", 44, 0], ["H10", 57, 0], ["I11", 57, 1], ["H14", 7, 2], ["G13", 7, 4]];
+// CROSSING: H12 as green #19 (two sections that never meet: E-W [0,3] and NW-SW [2,4]), a $20 city at each of
+// the four ends: H10 #57, H14 #57, G11 #57 turned 2 (its SE edge faces H12), I11 #57 turned 1.
+const CROSSING: Lay[] = [["H12", 19, 0], ["H10", 57, 0], ["H14", 57, 0], ["G11", 57, 2], ["I11", 57, 1]];
+// Y_LOOP: H12's own printed #24 (stem W 3, prongs E 0 and SE 5; prong to prong is not a rail), H14 #57, and a
+// plain loop from the SE prong round to the stem: I13 #7 turned 2, I11 #8, H10 #7 turned 5.
+const Y_LOOP: Lay[] = [["H14", 57, 0], ["H10", 7, 5], ["I11", 8, 0], ["I13", 7, 2]];
+// IL4: #44 again, with a $20 city on each of its four live edges: H10 #57 (PRR's token), H14 #57, G13 #57
+// turned 1 (its SW edge faces H12's NE), I11 #57 turned 1.
+const IL4: Lay[] = [["H12", 44, 0], ["H10", 57, 0], ["H14", 57, 0], ["G13", 57, 1], ["I11", 57, 1]];
+
+describe("IL-11 (ruled): H12 may be re-entered on distinct track; the herald is counted at most once, and a pass never uses it up", () => {
+  const bare = () => caseOn(EXPANDED_BOARD, REENTRY, [{ companyId: PRR, tokens: [] }], PRR);
+  const withH10 = () => caseOn(EXPANDED_BOARD, REENTRY, [{ companyId: PRR, tokens: [["H10", 0]] }], PRR);
+
+  it("every legal route, by hand (PRR from its herald alone)", () => {
+    // Ends: H10 ($20), I11 ($20), the herald ($10). Through H12 once: counted 3->4 (a rail) is $50; passed
+    // uncounted it has no station. Through H12 twice (E-W, then NE-SW via the loop): count on the first
+    // crossing or the second ($50 each, two different routes), never on both, never on neither (no station).
+    // The loop routes that END on the herald count it once, on their second arrival. #44's E-NE rail is
+    // unusable: whatever leaves by one loop edge must come back by the other.
+    expect(routeTable(bare())).toEqual([
+      "H10>H12 $30",
+      "H10>H12*>H14>G13>H12 $30", // PASS then COUNT (ending on it)
+      "H10>H12*>H14>G13>H12>I11 $50", // PASS then COUNT (running through it)
+      "H10>H12>H14>G13>H12*>I11 $50", // COUNT then PASS
+      "H10>H12>I11 $50",
+      "H12>H14>G13>H12*>I11 $30", // COUNT (starting on it) then PASS
+      "H12>I11 $30",
+    ]);
+    expect(optimum(bare(), ["2"])).toBe(30);
+    expect(optimum(bare(), ["3"])).toBe(50);
+    expect(optimum(bare(), ["2", "2"])).toBe(60); // H10>H12 + H12>I11: two trains, two different rails
+    expect(optimum(bare(), ["3", "2"])).toBe(60); // every $50 route uses both H10|H12 and H12|I11
+  });
+
+  it("pass then count, and count then pass, are both legal messages at $50", () => {
+    const graph = buildOracleGraph(bare());
+    expect(judgeWaypoints(graph, [{ hex: "H10" }, { hex: "H12", bypass: true }, { hex: "H14" }, { hex: "G13" }, { hex: "H12" }, { hex: "I11" }])).toMatchObject({ kind: "legal", stops: 3, value: 50 });
+    expect(judgeWaypoints(graph, [{ hex: "H10" }, { hex: "H12" }, { hex: "H14" }, { hex: "G13" }, { hex: "H12", bypass: true }, { hex: "I11" }])).toMatchObject({ kind: "legal", stops: 3, value: 50 });
+  });
+
+  it("two uncounted passes: no station without a token (IL-3); legal with PRR's token on H10", () => {
+    const twoPasses = [{ hex: "H10" }, { hex: "H12", bypass: true }, { hex: "H14" }, { hex: "G13" }, { hex: "H12", bypass: true }, { hex: "I11" }];
+    const noToken = judgeWaypoints(buildOracleGraph(bare()), twoPasses);
+    expect(noToken.kind === "illegal" && noToken.reason).toMatch(/must include a city holding one of the railroad's stations/);
+    expect(judgeWaypoints(buildOracleGraph(withH10()), twoPasses)).toMatchObject({ kind: "legal", stops: 2, value: 40 });
+    // With the token, the two pass-only routes join the table; nothing else changes.
+    expect(routeTable(withH10())).toEqual([
+      "H10>H12 $30",
+      "H10>H12*>H14>G13>H12 $30",
+      "H10>H12*>H14>G13>H12*>I11 $40", // two legal uncounted passes
+      "H10>H12*>H14>G13>H12>I11 $50",
+      "H10>H12*>I11 $40",
+      "H10>H12>H14>G13>H12*>I11 $50",
+      "H10>H12>I11 $50",
+      "H12>H14>G13>H12*>I11 $30",
+      "H12>I11 $30",
+    ]);
+  });
+
+  it("an attempted double count is refused, and the enumerator never makes one", () => {
+    const graph = buildOracleGraph(bare());
+    const twice = judgeWaypoints(graph, [{ hex: "H10" }, { hex: "H12" }, { hex: "H14" }, { hex: "G13" }, { hex: "H12" }, { hex: "I11" }]);
+    expect(twice.kind === "illegal" && twice.reason).toMatch(/includes H12\/herald0 twice/);
+    // Ending a loop on the herald it started from is the same double count.
+    const loop = judgeWaypoints(graph, [{ hex: "H12" }, { hex: "H14" }, { hex: "G13" }, { hex: "H12" }]);
+    expect(loop.kind === "illegal" && loop.reason).toMatch(/includes H12\/herald0 twice/);
+    const solved = solveOracleCase({ ...bare(), fleet: ["D"] });
+    for (const route of solved.routes) {
+      const heralds = route.visits.filter((visit) => visit.element.kind === "node" && visit.element.node.kind === "herald").length;
+      expect([route.key, heralds <= 1]).toEqual([route.key, true]);
+    }
+  });
+
+  it("a second crossing may not reuse track: the Y's stem, used by a pass, cannot carry the herald's route out again", () => {
+    // Y_LOOP, by hand: the herald ends a route on the E prong; or the route STARTS on the herald (arriving along
+    // the SE prong), loops round through I13 / I11 / H10, and crosses H12 again stem -> E prong uncounted to
+    // H14 -- count then pass, on three distinct pieces of the Y. Nothing else: the herald may not also be run
+    // through SE prong -> stem, because the loop comes back in along that same stem.
+    const input = caseOn(EXPANDED_BOARD, Y_LOOP, [{ companyId: PRR, tokens: [] }], PRR);
+    expect(routeTable(input)).toEqual(["H12>H14 $30", "H12>I13>I11>H10>H12*>H14 $30"]);
     const graph = buildOracleGraph(input);
-    // Enter the herald by prong 5 and stop, loop round, run past it on the stem-to-prong-0 rail, end at H14.
-    const twice = judgeWaypoints(graph, [{ hex: "H12" }, { hex: "I13" }, { hex: "I11" }, { hex: "H10" }, { hex: "H12", bypass: true }, { hex: "H14" }]);
-    expect(twice.kind).toBe("illegal");
-    expect(twice.kind === "illegal" && twice.reason).toMatch(/herald on H12 twice|includes H12\/herald0 twice/);
-    expect(routeTable(input).some((row) => row.startsWith("H12>I13>I11>H10>H12") || row.startsWith("H14>H12*>H10>I11>I13>H12"))).toBe(false);
+    const hex = (label: string) => graph.hexes.get(label)!;
+    const herald = hex("H12").nodes.find((node) => node.kind === "herald")!;
+    const pathOn = (label: string, a: number, b: number) => hex(label).paths.find((path) => (path.a === a && path.b === b) || (path.a === b && path.b === a))!;
+    const visits: RouteVisit[] = [
+      { hex: "H14", element: { kind: "node", node: hex("H14").nodes[0] }, entry: null, exit: 3 },
+      { hex: "H12", element: { kind: "path", path: pathOn("H12", 0, 3) }, entry: 0, exit: 3 }, // pass E -> W (stem)
+      { hex: "H10", element: { kind: "path", path: pathOn("H10", 0, 5) }, entry: 0, exit: 5 },
+      { hex: "I11", element: { kind: "path", path: pathOn("I11", 2, 0) }, entry: 2, exit: 0 },
+      { hex: "I13", element: { kind: "path", path: pathOn("I13", 3, 2) }, entry: 3, exit: 2 },
+      // Back in by the SE prong: counting the herald and leaving by the stem reuses the stem's H12|H10 track
+      // (and would go round the loop again to the herald: refused at the first reuse).
+      { hex: "H12", element: { kind: "node", node: herald }, entry: 5, exit: 3 },
+      { hex: "H10", element: { kind: "path", path: pathOn("H10", 0, 5) }, entry: 0, exit: 5 },
+      { hex: "I11", element: { kind: "path", path: pathOn("I11", 2, 0) }, entry: 2, exit: 0 },
+      { hex: "I13", element: { kind: "path", path: pathOn("I13", 3, 2) }, entry: 3, exit: 2 },
+      { hex: "H12", element: { kind: "node", node: herald }, entry: 5, exit: null },
+    ];
+    const verdict = judgeRoute(graph, visits);
+    expect(verdict.legal === false && verdict.reason).toMatch(/uses the track between H12 and H10 twice/);
+    // Stopping there instead (the route's end) is the legal pass-then-count.
+    expect(judgeRoute(graph, [...visits.slice(0, 5), { hex: "H12", element: { kind: "node", node: herald }, entry: 5, exit: null }])).toMatchObject({ legal: true, stops: 2, value: 30 });
+  });
+
+  it("the virtual city joins nothing the track does not: no bridge between #19's two sections, no prong-to-prong on the Y", () => {
+    // CROSSING, by hand: the herald ends a route on any of its four rails ($30 each), or is run through along
+    // either section ($50). The four "joins" across the crossing are not routes.
+    const crossing = caseOn(EXPANDED_BOARD, CROSSING, [{ companyId: PRR, tokens: [] }], PRR);
+    expect(routeTable(crossing)).toEqual(["G11>H12 $30", "G11>H12>I11 $50", "H10>H12 $30", "H10>H12>H14 $50", "H12>H14 $30", "H12>I11 $30"]);
+    const graph = buildOracleGraph(crossing);
+    const herald = graph.hexes.get("H12")!.nodes.find((node) => node.kind === "herald")!;
+    const city = (label: string) => graph.hexes.get(label)!.nodes[0];
+    const bridge = judgeRoute(graph, [
+      { hex: "H10", element: { kind: "node", node: city("H10") }, entry: null, exit: 0 },
+      { hex: "H12", element: { kind: "node", node: herald }, entry: 3, exit: 4 },
+      { hex: "I11", element: { kind: "node", node: city("I11") }, entry: 1, exit: null },
+    ]);
+    expect(bridge.legal === false && bridge.reason).toMatch(/No rail through H12\/herald0 joins edge 3 to edge 4/);
+    expect(judgeWaypoints(graph, [{ hex: "H10" }, { hex: "H12" }, { hex: "I11" }]).kind).toBe("illegal");
+    // The Y (H12's printed #24, cities on both prongs): prong to prong through the herald is not a route.
+    const y = caseOn(EXPANDED_BOARD, [["H14", 57, 0], ["I13", 57, 2]], [{ companyId: PRR, tokens: [] }], PRR);
+    expect(routeTable(y)).toEqual(["H12>H14 $30", "H12>I13 $30"]);
+    expect(judgeWaypoints(buildOracleGraph(y), [{ hex: "I13" }, { hex: "H12" }, { hex: "H14" }]).kind).toBe("illegal");
+  });
+});
+
+describe("IL-4 (ruled): separate PRR trains meet H12 independently", () => {
+  const input = () => caseOn(EXPANDED_BOARD, IL4, [{ companyId: PRR, tokens: [["H10", 0]] }], PRR);
+  const set = (routes: Array<Array<{ hex: string; bypass?: boolean }>>) => judgeRouteSet(buildOracleGraph(input()), ["3", "3"], routes, routes.map((_, i) => i));
+
+  it("one train counts the herald while the other passes it, on separate track: legal, $50 + $40", () => {
+    expect(set([[{ hex: "G13" }, { hex: "H12" }, { hex: "H14" }], [{ hex: "H10" }, { hex: "H12", bypass: true }, { hex: "I11" }]])).toEqual({ kind: "legal", total: 90, perRoute: [50, 40] });
+  });
+
+  it("each route needs its own station: a pass is not saved by another train's count", () => {
+    const verdict = set([[{ hex: "H10" }, { hex: "H12" }, { hex: "I11" }], [{ hex: "G13" }, { hex: "H12", bypass: true }, { hex: "H14" }]]);
+    expect(verdict.kind === "illegal" && verdict.reason).toMatch(/Route 2: .*must include a city holding one of the railroad's stations/);
+  });
+
+  it("they may not share track (the H10|H12 boundary here)", () => {
+    const verdict = set([[{ hex: "H10" }, { hex: "H12" }], [{ hex: "H10" }, { hex: "H12", bypass: true }, { hex: "I11" }]]);
+    expect(verdict.kind === "illegal" && verdict.reason).toMatch(/Route 2 shares track/);
+  });
+
+  it("the optimum: two trains may each count it on separate rails -- the ordinary rule for a city, which IL-2 makes it", () => {
+    // By hand: no route has more than two $20 cities and the herald ($50); two such routes on disjoint rails of
+    // #44 (e.g. H10>H12>I11 on W-SW and G13>H12>H14 on NE-E) make $100.
+    expect(optimum(input(), ["3", "3"])).toBe(100);
+    expect(optimum(input(), ["3"])).toBe(50);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Warehouses (R12-1 repair ruling)                                   */
+/* ------------------------------------------------------------------ */
+
+describe("warehouses (ruled): a city for revenue and capacity -- counted when traversed, an end, never a block, never counted twice", () => {
+  // The WAREHOUSE-M13 fixture's layout on the Level Playing Field: C&O at Richmond K13 (#57 turned 1), L12 #8
+  // turned 5, the Deep South warehouse M13, M11's printed straight, M9 #8, Coal River L8 ($40, licensed); then
+  // (TWO_WAREHOUSES) L6 and L4 #9 on to the Chattanooga warehouse L2. Both warehouses pay $30 before the first
+  // 5-train. A real, valid board: no tile off its class.
+  const M13: Lay[] = [["K13", 57, 1], ["L12", 8, 5], ["M9", 8, 0]];
+  const TWO_WAREHOUSES: Lay[] = [...M13, ["L6", 9, 0], ["L4", 9, 0]];
+  const lpf = (lays: Lay[], licences: number) => ({ ...caseOn(LPF_BOARD, lays, [{ companyId: CO, tokens: [["K13", 0]], licences }]), licenceRule: true });
+
+  it("traversing M13 counts it: a 2-train cannot reach Coal River through it, a 3-train can", () => {
+    const input = lpf(M13, 1);
+    expect(routeTable(input)).toEqual(["K13>L12>M13 $50", "K13>L12>M13>M11>M9>L8 $90"]);
+    expect(optimum(input, ["2"])).toBe(50); // NOT $60 = K13 + L8 with the warehouse skipped
+    expect(optimum(input, ["3"])).toBe(90);
+    const graph = buildOracleGraph(input);
+    const through = [{ hex: "K13" }, { hex: "L12" }, { hex: "M13" }, { hex: "M11" }, { hex: "M9" }, { hex: "L8" }];
+    expect(judgeRouteSet(graph, ["2"], [through], [0])).toMatchObject({ kind: "illegal", reason: expect.stringMatching(/counts 3 cities; a 2-train counts 2/) });
+    // There is no plain track beside a warehouse to "bypass" it along.
+    expect(judgeWaypoints(graph, through.map((wp) => (wp.hex === "M13" ? { ...wp, bypass: true } : wp))).kind).toBe("illegal");
+  });
+
+  it("seeded: a warehouse that could be run past uncounted (a silent pass) changes the 2-train optimum -- so the law is pinned", () => {
+    const graph = buildOracleGraph(lpf(M13, 1));
+    const m13 = graph.hexes.get("M13")!;
+    m13.paths.push({ id: "M13/seeded-pass", hex: "M13", a: 2, b: 3, bypass: true });
+    const routes = enumerateRoutes(graph, { maxStops: 2, budget: 5_000_000, selfCheck: true }).routes;
+    expect(optimumRouteSet(routes, [{ trainIndex: 0, model: "2" }], 1_000_000).total).toBe(60);
+  });
+
+  it("a warehouse ends a route (unlicensed: Coal River is shut, M13 is the end)", () => {
+    expect(routeTable(lpf(M13, 0))).toEqual(["K13>L12>M13 $50"]);
+  });
+
+  it("no cap on warehouses: one route counts both M13 and L2 ($120 on a 4-train)", () => {
+    const input = lpf(TWO_WAREHOUSES, 1);
+    expect(routeTable(input)).toEqual(["K13>L12>M13 $50", "K13>L12>M13>M11>M9>L8 $90", "K13>L12>M13>M11>M9>L8>L6>L4>L2 $120"]);
+    expect(optimum(input, ["4"])).toBe(120);
+    expect(optimum(input, ["3"])).toBe(90);
+  });
+
+  it("the same warehouse is never counted twice on one route (A11 by two of its stubs)", () => {
+    const graph = buildOracleGraph(caseOn(LPF_BOARD, [["B10", 14, 1]], [{ companyId: CO, tokens: [["B10", 0]] }]));
+    const twice = judgeWaypoints(graph, [{ hex: "A11" }, { hex: "A9" }, { hex: "B10" }, { hex: "A11" }]);
+    expect(twice.kind === "illegal" && twice.reason).toMatch(/includes area:Canadian West twice/);
+  });
+});
+
+describe("Norfolk (L16): a printed stop whose figure is unresolved makes a case UNDECIDED, never priced by a guess", () => {
+  it("N&W from its Norfolk home: undecided, with the reason", () => {
+    // L16 runs to W (L14), NW (K15) and NE (K17). L14 #8 (edges 0 / 2: Norfolk to Richmond K13), K13 #57 turned 2.
+    const input = caseOn(LPF_BOARD, [["L14", 8, 0], ["K13", 57, 2]], [{ companyId: 10, tokens: [["L16", 0]] }], 10);
+    const solved = solveOracleCase({ ...input, fleet: ["2"] });
+    expect(solved.undecided).toMatch(/unresolved printed value: Norfolk \(L16\)/);
+  });
+
+  it("a corporation whose routes cannot reach Norfolk is unaffected", () => {
+    const solved = solveOracleCase({ ...caseOn(LPF_BOARD, [["K13", 57, 1], ["L12", 8, 5]], [{ companyId: CO, tokens: [["K13", 0]] }]), fleet: ["2"] });
+    expect(solved.undecided).toBeNull();
+    expect(solved.optimum.total).toBe(50);
   });
 });
 
@@ -359,6 +575,18 @@ describe("the brute-force walk agrees with the DFS enumerator", () => {
   ] as const)("on %s", (_name, lays) => {
     const tokens: Array<[string, number | null]> = lays.filter(([, tile]) => [57, 63, 59].includes(tile)).map(([label]) => [label, 0]);
     expectSameKeys(buildOracleGraph(caseOn(STANDARD_BOARD, [...lays], [{ companyId: CO, tokens }])), 12);
+  });
+
+  it.each([
+    ["REENTRY", REENTRY, [] as Array<[string, number | null]>],
+    ["REENTRY with an H10 token", REENTRY, [["H10", 0]] as Array<[string, number | null]>],
+    ["CROSSING", CROSSING, [] as Array<[string, number | null]>],
+    ["Y_LOOP", Y_LOOP, [] as Array<[string, number | null]>],
+    ["IL4", IL4, [["H10", 0]] as Array<[string, number | null]>],
+  ] as const)("on the herald board %s (both IL-3 readings)", (_name, lays, tokens) => {
+    for (const heraldUncountedIsStation of [false, true]) {
+      expectSameKeys(buildOracleGraph(caseOn(EXPANDED_BOARD, [...lays], [{ companyId: PRR, tokens: [...tokens] }], PRR, { heraldUncountedIsStation })), 12);
+    }
   });
 
   it.each(KNOWN_DEFECT_FIXTURES.filter((fixture) => !fixture.law.malformed).map((fixture) => [fixture.id, fixture] as const))(

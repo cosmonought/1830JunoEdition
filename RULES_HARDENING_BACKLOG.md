@@ -255,6 +255,12 @@ authoritative checks that a filed route actually reaches H12 through PRR's netwo
 counts it, or the "must" clause. Fold into S6-1's refusal (herald is a stop only for `forCompanyId === PRR`);
 add a `JUNO-CV4` replay case pricing the idx-145 route with H12 counted per the triage note; state the "must"
 clause as an owner decision or drop it.
+*Owner rulings, 2026-09-29 (Route v12 R12-1 repair; applied in the test-only oracle, production conformance owed in
+R12-2): the "must count it in its first turns" clause is **dropped** (no such obligation). A herald passed uncounted
+does **not** satisfy the station requirement (IL-3 NO -- today's authority reading above is the defect). PRR may count
+the herald as a virtual city on any legal traversal, joining no track the tile does not join (IL-2); separate trains are
+independent (IL-4); a route may re-enter H12 on distinct track and counts the herald at most once (IL-11). Record:
+Project `claude/ROUTE_V12_R12_1_ORACLE_2026-09-29.md`.*
 
 **S6-5. Server-side tile legality omits connectivity (`networkHexes` / `networkPorts` not supplied to `layRefused`).**
 Status `RESOLVED` — **Stage 10.6** (#1692, #1696). `gameEngine/layConnectivity.ts` (`layReachFor` / `layNetworkFor`) is the
@@ -398,6 +404,12 @@ route playtest; a route-search / authority certification blocker). Reproduced by
 the route authority refuses it. **Not fixed here; pending the preflight's final report.** *R12-1 (2026-09-29): pinned as
 KNOWN-RED fixtures `HERALD-FORK-PLUS` / `HERALD-FORK-LPF` (stranding: $50 demonstrated, $30 legal), with the Coal River,
 red-area, Altoona-bow and CROSS_TWICE classes beside it (`frontend/src/routeOracle/harness/knownDefects.ts`). Fix owed in R12-2.*
+*R12-1 repair (2026-09-29), data owed in R12-2: brown New York **#62 pays $80 per city** (owner ruling); the catalog's
+$90 is a production data defect (the oracle's `production-data-defect` class, pinned in
+`routeOracleTopology.test.ts`). **Norfolk (L16)**: the rulebook (p. 36) gives it two values, the lower until the first
+5-train, but no project material prints the pair; production's single $20 is unevidenced and the oracle leaves every
+case that can reach Norfolk UNDECIDED until the pair is supplied. Montreal (A19) is named two-valued on the 1830+ map by
+the same sentence (production and the oracle both use $40) -- also for an owner ruling.*
 
 ### Stage 7 — Transaction + cash authority / auction
 

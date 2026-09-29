@@ -33,6 +33,7 @@ import {
   ORACLE_OFFBOARD_TIERS,
   ORACLE_STANDARD_TILES,
   ORACLE_TILE_CITY_SLOTS,
+  ORACLE_UNRESOLVED_PRINTED_STOPS,
   buildOracleGraph,
   nodeJoins,
   oracleTrainStops,
@@ -86,15 +87,33 @@ describe("the oracle's own figures and city membership against the data both sid
     expect(standardWithStops.map((entry) => entry.tileId).filter((id) => ORACLE_STANDARD_TILES[id] === undefined)).toEqual([]);
     for (const entry of standardWithStops) {
       const oracle = ORACLE_STANDARD_TILES[entry.tileId];
-      expect([entry.tileId, oracle.value]).toEqual([entry.tileId, entry.revenue]);
+      // A recorded PRODUCTION DATA DEFECT (owner-ruled) is the one place the figures may differ.
+      if (oracle.productionDefect === undefined) expect([entry.tileId, oracle.value]).toEqual([entry.tileId, entry.revenue]);
       if (oracle.cities) expect([entry.tileId, oracle.cities.map((c) => [...c])]).toEqual([entry.tileId, (entry.cityGroups ?? []).map((c) => [...c])]);
       else expect([entry.tileId, (entry.cityGroups ?? []).length <= 1]).toEqual([entry.tileId, true]);
     }
   });
 
-  it("the one disputed figure is recorded, not hidden: #62 (the project's $90 against tobymao/18xx's $80)", () => {
-    const disputed = Object.entries(ORACLE_STANDARD_TILES).filter(([, entry]) => entry.disputed !== undefined).map(([id]) => Number(id));
-    expect(disputed).toEqual([62]);
+  it("#62 is $80 per city (owner ruling, R12-1 repair); the catalog's $90 is the one recorded production data defect", () => {
+    const defects = Object.entries(ORACLE_STANDARD_TILES).filter(([, entry]) => entry.productionDefect !== undefined).map(([id]) => Number(id));
+    expect(defects).toEqual([62]);
+    expect(ORACLE_STANDARD_TILES[62].value).toBe(80);
+    // KNOWN-RED for R12-2: production still says $90. When R12-2 repairs the catalog this pin fails on purpose,
+    // and the `productionDefect` note (and this test) come out with it.
+    expect(TILE_CATALOG_BY_ID.get(62)!.revenue).toBe(90);
+  });
+
+  it("Norfolk (L16) is the one printed stop with an UNRESOLVED figure: no oracle price, and production's $20 is not evidence", () => {
+    expect(Object.keys(ORACLE_UNRESOLVED_PRINTED_STOPS)).toEqual(["L16"]);
+    const graph = buildOracleGraph({ board: EXPANDED_BOARD, grid: initialGridFor(EXPANDED_BOARD).tiles, catalog: TILE_CATALOG_BY_ID, companies: [], companyId: 99, highTier: false, licenceRule: false });
+    const norfolk = graph.hexes.get("L16")!.nodes[0];
+    expect([norfolk.kind, norfolk.unresolvedValue !== undefined]).toEqual(["city", true]);
+    // Recorded, not blessed: production prices it $20 at both tiers (the gray-city bucket, no provenance).
+    withBoard(EXPANDED_BOARD, () => {
+      const hex = EXPANDED_BOARD.hexes.find((entry) => entry.label === "L16")!;
+      const grid = initialGridFor(EXPANDED_BOARD);
+      expect([hexValueForEra(grid, hex.q, hex.r, "Yellow"), hexValueForEra(grid, hex.q, hex.r, "Brown")]).toEqual([20, 20]);
+    });
   });
 
   it.each([
@@ -173,7 +192,10 @@ describe.each([
           const centres = hex.nodes.filter((node) => node.kind !== "herald" && node.spokes.length > 0);
           if (live.length > 0) expect([bh.label, centres.length > 0]).toEqual([bh.label, isRevenueCentreHex(grid, bh.label)]);
           for (const node of centres) {
-            expect([node.id, node.value]).toEqual([node.id, hexValueForEra(grid, bh.q, bh.r, highTier ? "Brown" : "Yellow")]);
+            // Norfolk's figure is UNRESOLVED (pinned above), so there is nothing of the oracle's to compare.
+            if (node.unresolvedValue === undefined) {
+              expect([node.id, node.value]).toEqual([node.id, hexValueForEra(grid, bh.q, bh.r, highTier ? "Brown" : "Yellow")]);
+            }
             if (node.kind === "city") expect([node.id, node.slots]).toEqual([node.id, citySlotCount(grid, bh.q, bh.r, node.cityIndex!)]);
           }
         }

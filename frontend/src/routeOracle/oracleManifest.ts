@@ -123,9 +123,21 @@ export const ORACLE_TILE_CITY_SLOTS: Readonly<Record<number, readonly number[]>>
 
 /** What each PRINTED (never-tiled) gray city or town pays, by hex label. Standard 1830's printed map: Lansing
  *  $20, Cleveland $30, Altoona $10, Rochester $20, Richmond $20, Montreal $40, Kingston $10, Atlantic City $10,
- *  Mansfield $10. Norfolk (L16) is the 18XX+ expansion's gray city: the expansion's spec prints no figure and
- *  the project prices it at the ordinary single-city $20 -- recorded as a DATA AMBIGUITY in the R12-1 report,
- *  not as law. */
+ *  Mansfield $10.
+ *
+ *  NORFOLK (L16, the 18XX+ expansion's gray city) IS DELIBERATELY ABSENT (R12-1 repair, owner ruling "do not
+ *  bless the single $20 without evidence"). The rulebook in the repository (`1830 FULL RULES with variants.pdf`,
+ *  p. 36, Scenario S-1.0 "Collect Revenue (7.5)") says Norfolk is one of the gray hexes with TWO values, the
+ *  lower until the first 5-train is bought -- but the figures themselves are printed only on the 1830+ map,
+ *  which is not in the repository or the Project (the rulebook's board-tile tables, pp. 37 / 45, list no
+ *  Norfolk figure; the code prices it at $20 by the ordinary gray-city bucket, with no provenance). The pair is
+ *  UNRESOLVED: see `ORACLE_UNRESOLVED_PRINTED_STOPS`, which makes any case where a route could stop there
+ *  UNDECIDED rather than priced by a guess.
+ *
+ *  MONTREAL (A19) keeps the standard map's $40 here. The same rulebook sentence names Montreal as two-valued on
+ *  the 1830+ map, so on the expansion boards the $40 (both tiers) is the same kind of unevidenced figure. It is
+ *  recorded in the R12-1 repair report beside Norfolk for an owner ruling; it is NOT changed here, because the
+ *  repair brief scoped the data question to Norfolk. */
 export const ORACLE_PRINTED_STOP_VALUE: Readonly<Record<string, number>> = {
   D2: 20,
   F6: 30,
@@ -136,7 +148,14 @@ export const ORACLE_PRINTED_STOP_VALUE: Readonly<Record<string, number>> = {
   C15: 10,
   I19: 10,
   F24: 10,
-  L16: 20,
+};
+
+/** Printed stops whose figure the oracle does NOT know and will not guess. A route that could stop at one makes
+ *  the whole case UNDECIDED (`solveOracleCase`), never a price. Keyed by hex label; the value is the reason. */
+export const ORACLE_UNRESOLVED_PRINTED_STOPS: Readonly<Record<string, string>> = {
+  L16:
+    "Norfolk (L16): a two-value gray city (rulebook p. 36, S-1.0 7.5: lower until the first 5-train); the pair is " +
+    "printed only on the 1830+ map, which no project or repository material reproduces -- UNRESOLVED (R12-1 repair blocker)",
 };
 
 /** The three landmarks' printed yellow values, per city (1830 map: New York two $40 cities, Boston $30,
@@ -154,11 +173,10 @@ export const ORACLE_LANDMARK_VALUE: Readonly<Record<string, number>> = {
  *  nothing). The oracle PRICES and GROUPS standard tiles from this table, never from the catalog; the topology
  *  test diffs the two.
  *
- *  ONE DISPUTE, RECORDED RATHER THAN RESOLVED: #62 (brown New York). tobymao prints $80 per city; the project's
- *  catalog, its Rust contract and its design notes (#135, `rust_contract_architecture.md`) all say $90, and no
- *  owner ruling was found either way. The oracle uses the project's $90 so that the corpus measures ROUTES, and
- *  flags the value as disputed; it is an owner ruling for R12-2. */
-export const ORACLE_STANDARD_TILES: Readonly<Record<number, { value: number; cities?: ReadonlyArray<readonly number[]>; disputed?: string }>> = {
+ *  #62 (brown New York) IS $80 PER CITY -- the owner's ruling for Route v12 (R12-1 repair), agreeing with
+ *  tobymao/18xx. The project's catalog, its Rust contract and design note #135 say $90: that is a PRODUCTION DATA
+ *  DEFECT, recorded here (`productionDefect`) and left for R12-2 (production tile data is not touched in R12-1). */
+export const ORACLE_STANDARD_TILES: Readonly<Record<number, { value: number; cities?: ReadonlyArray<readonly number[]>; productionDefect?: string }>> = {
   1: { value: 10 },
   2: { value: 10 },
   3: { value: 10 },
@@ -174,7 +192,11 @@ export const ORACLE_STANDARD_TILES: Readonly<Record<number, { value: number; cit
   54: { value: 60, cities: [[0, 1], [2, 3]] },
   59: { value: 40, cities: [[0], [2]] },
   61: { value: 60 },
-  62: { value: 90, cities: [[0, 1], [2, 3]], disputed: "tobymao/18xx 1830 prints $80 per city; the project says $90 (no owner ruling found)" },
+  62: {
+    value: 80,
+    cities: [[0, 1], [2, 3]],
+    productionDefect: "owner ruling (R12-1 repair): $80 per city; the project's catalog says $90 -- a production data defect for R12-2",
+  },
   63: { value: 40 },
   64: { value: 50, cities: [[0, 2], [3, 4]] },
   65: { value: 50, cities: [[0, 4], [2, 3]] },

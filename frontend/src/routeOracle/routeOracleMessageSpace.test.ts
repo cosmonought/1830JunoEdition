@@ -17,7 +17,7 @@
 import { TILE_CATALOG_BY_ID } from "../components/hexTileCatalog";
 import { KNOWN_DEFECT_FIXTURES } from "./harness/knownDefects";
 import { productionAuthority, probeState } from "./harness/productionProbe";
-import { probeCaseFor } from "./harness/compare";
+import { dataPremium, premiumTable, probeCaseFor, type PremiumTable } from "./harness/compare";
 import { denseBoards } from "./harness/corpus";
 import type { CorpusBoard } from "./harness/corpus";
 import { buildOracleGraph, judgeWaypoints, neighbourLabel, type OracleGraph, type OracleWaypoint } from ".";
@@ -67,11 +67,31 @@ function messageSpace(graph: OracleGraph, maxHexes = MAX_HEXES): OracleWaypoint[
 /** The known authority defects a disagreement may be explained by (KNOWN-RED, R12-2). */
 function knownDefect(graph: OracleGraph, route: readonly OracleWaypoint[], oracleReason: string): string | null {
   if (/The route includes area:/.test(oracleReason)) return "IL-5: the authority keys red areas by hex, so a two-hex area counts twice";
+  if (
+    /must include a city holding one of the railroad's stations/.test(oracleReason) &&
+    graph.heraldHex !== null &&
+    route.some((wp) => wp.bypass === true && wp.hex === graph.heraldHex)
+  ) {
+    return "IL-3: the authority treats an uncounted pass of PRR's herald as a station (ruled NO)";
+  }
   if (/must include a city holding one of the railroad's stations/.test(oracleReason) && route.some((wp) => wp.bypass === true)) {
     return "IL-7: the authority counts a bare token for its hex even when the route bypasses the city";
   }
   void graph;
   return null;
+}
+
+/** A message LEGAL to both but priced differently is explained only by a recorded DATA question (never by a
+ *  law defect), and only when the difference is EXACTLY that data's premium (the R12-1 repair review, M4):
+ *  #62's catalog $90 against the owner-ruled $80 (R12-2), and Norfolk's figure, which the oracle does not have
+ *  (placeholder $0) and production prices by its gray-city bucket (the R12-1 repair's blocker). */
+const DATA_NORFOLK = "DATA: Norfolk (L16) has no established figure (unresolved; production prices it $20)";
+const DATA_62 = "DATA: production's catalog prices #62 at $90 per city (owner-ruled $80; R12-2)";
+
+function knownPriceDifference(graph: OracleGraph, table: PremiumTable, route: readonly OracleWaypoint[], oracleValue: number, authorityTotal: number): string[] {
+  const premium = dataPremium(graph, table, [route]);
+  if (premium.total === 0 || oracleValue + premium.total !== authorityTotal) return [];
+  return [...(premium.unresolvedVisits > 0 ? [DATA_NORFOLK] : []), ...(premium.data62 !== 0 ? [DATA_62] : [])];
 }
 
 const fixtures = KNOWN_DEFECT_FIXTURES.filter((fixture) => !fixture.law.malformed && !fixture.board.synthetic);
@@ -93,6 +113,7 @@ describe("the message space of every valid fixture board: the oracle and the aut
     });
     const probe = probeCaseFor(fixture.board, fixture.companyId, ["D"]);
     const state = probeState(probe);
+    const table = premiumTable(fixture.board, graph);
     const unexplained: string[] = [];
     const known = new Map<string, number>();
     let legalBoth = 0;
@@ -109,7 +130,11 @@ describe("the message space of every valid fixture board: the oracle and the aut
       const authorityLegal = authority.kind === "legal";
       if (oracleLegal && authorityLegal) {
         legalBoth += 1;
-        if (oracle.value !== authority.total) unexplained.push(`${text}: priced $${oracle.value} by the oracle, $${authority.total} by the authority`);
+        if (oracle.value !== authority.total) {
+          const data = knownPriceDifference(graph, table, route, oracle.value, authority.total);
+          data.forEach((label) => known.set(label, (known.get(label) ?? 0) + 1));
+          if (data.length === 0) unexplained.push(`${text}: priced $${oracle.value} by the oracle, $${authority.total} by the authority`);
+        }
         continue;
       }
       if (oracleLegal === authorityLegal) continue;
@@ -155,6 +180,7 @@ describe("the message space of the dense boards (walks of up to five hexes)", ()
     });
     const probe = probeCaseFor(board, companyId, ["D"]);
     const state = probeState(probe);
+    const table = premiumTable(board, graph);
     const known = new Map<string, number>();
     const unexplained: string[] = [];
     let legalBoth = 0;
@@ -171,7 +197,11 @@ describe("the message space of the dense boards (walks of up to five hexes)", ()
       const authorityLegal = authority.kind === "legal";
       if (oracleLegal && authorityLegal) {
         legalBoth += 1;
-        if (oracle.value !== authority.total) unexplained.push(`${text}: $${oracle.value} vs $${authority.total}`);
+        if (oracle.value !== authority.total) {
+          const data = knownPriceDifference(graph, table, route, oracle.value, authority.total);
+          data.forEach((label) => known.set(label, (known.get(label) ?? 0) + 1));
+          if (data.length === 0) unexplained.push(`${text}: $${oracle.value} vs $${authority.total}`);
+        }
         continue;
       }
       if (oracleLegal === authorityLegal) continue;
@@ -184,12 +214,14 @@ describe("the message space of the dense boards (walks of up to five hexes)", ()
   };
 
   it.each([
-    // PRR's bare Altoona home on the standard board: the IL-7 defect shows up in a real position.
-    ["Y8V@651", 1, ["IL-7: the authority counts a bare token for its hex even when the route bypasses the city"]],
-    ["Y8V@651", 5, []],
-    ["Z6C@494", 1, []],
-    ["Z6C@494", 4, []],
-    ["Z6C@608", 10, []],
+    // PRR's bare Altoona home on the standard board: the IL-7 defect shows up in a real position. Both late
+    // boards have a brown #62 on New York, so its $90 (owner-ruled $80) shows up as a known DATA difference; the
+    // Level Playing Field boards reach Norfolk, whose figure is unresolved (the R12-1 repair's blocker).
+    ["Y8V@651", 1, [DATA_62, "IL-7: the authority counts a bare token for its hex even when the route bypasses the city"]],
+    ["Y8V@651", 5, [DATA_62]],
+    ["Z6C@494", 1, [DATA_NORFOLK]],
+    ["Z6C@494", 4, [DATA_NORFOLK, DATA_62]],
+    ["Z6C@608", 10, [DATA_NORFOLK, DATA_62]],
   ] as const)("%s company %s", (boardId, companyId, expectedKnown) => {
     const result = judgeAll(boards.get(boardId)!, companyId);
     expect(Object.keys(result.known).sort()).toEqual([...expectedKnown]);

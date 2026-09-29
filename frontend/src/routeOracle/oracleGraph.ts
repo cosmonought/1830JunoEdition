@@ -34,6 +34,7 @@ import {
   ORACLE_PRINTED_STOP_VALUE,
   ORACLE_STANDARD_TILES,
   ORACLE_TILE_CITY_SLOTS,
+  ORACLE_UNRESOLVED_PRINTED_STOPS,
   oppositeEdge,
   rotateEdge,
 } from "./oracleManifest";
@@ -58,6 +59,9 @@ export interface OracleNode {
   /** Herald only: the pairs of edges the node may be passed between (the hex's printed rails); every other
    *  passable node joins any two distinct spokes. */
   transit?: ReadonlyArray<readonly [number, number]>;
+  /** A printed stop whose figure the oracle does not know (`ORACLE_UNRESOLVED_PRINTED_STOPS`): `value` is a
+   *  placeholder 0 and any case in which a route could stop here is UNDECIDED. The reason, when set. */
+  unresolvedValue?: string;
 }
 
 export interface OraclePath {
@@ -94,13 +98,15 @@ export interface OracleCompanyInput {
 }
 
 export interface OraclePolicy {
-  /** IL-3 (UNRULED): a PRR route that passes its herald without counting it still has "a station" on it. The
-   *  authority's current reading is `true` (S6-4 "today it does"); the oracle can be asked either way. */
+  /** IL-3, RULED NO (R12-1 repair): merely traversing the herald hex WITHOUT electing to count the herald does
+   *  not satisfy the station requirement; the herald is PRR's station on a route only when that route counts
+   *  it. The default is therefore `false`. `true` is kept only as a SEEDED WRONG READING (the authority's
+   *  pre-ruling behaviour, S6-4 "today it does") so the sensitivity tests can show the fixtures notice it. */
   heraldUncountedIsStation: boolean;
 }
 
 export const DEFAULT_ORACLE_POLICY: OraclePolicy = {
-  heraldUncountedIsStation: true,
+  heraldUncountedIsStation: false,
 };
 
 export interface OracleGridTile {
@@ -153,7 +159,7 @@ export interface OracleGraph {
   companyId: number;
   /** Nodes where the running company has a station (the herald included, for its owner). */
   anchors: readonly OracleNode[];
-  /** The running company's herald hex, if any (IL-3 path anchors). */
+  /** The running company's herald hex, if any (the seeded wrong IL-3 reading's path anchors read it). */
   heraldHex: string | null;
   /** Hexes the running company may not touch at all (Coal River without a licence). */
   barred: ReadonlySet<string>;
@@ -392,6 +398,7 @@ export function buildOracleGraph(input: OracleCaseInput): OracleGraph {
     } else if (gray) {
       const edges = [...gray.edges];
       if (gray.marker === "city" || gray.marker === "town") {
+        const unresolved = ORACLE_UNRESOLVED_PRINTED_STOPS[label];
         addNode({
           id: `${label}/${gray.marker}0`,
           hex: label,
@@ -400,8 +407,11 @@ export function buildOracleGraph(input: OracleCaseInput): OracleGraph {
           spokes: [...edges].sort((x, y) => x - y),
           value: ORACLE_PRINTED_STOP_VALUE[label] ?? 0,
           slots: gray.marker === "city" ? gray.slots ?? 1 : 0,
+          ...(unresolved !== undefined ? { unresolvedValue: unresolved } : {}),
         });
-        if (ORACLE_PRINTED_STOP_VALUE[label] === undefined) {
+        // An UNRESOLVED figure is not a missing one: it is known to be unknown, and makes a case UNDECIDED only
+        // when a route could actually stop there (`solveOracleCase`), not the whole board invalid.
+        if (ORACLE_PRINTED_STOP_VALUE[label] === undefined && unresolved === undefined) {
           validity.push({ code: "V9", detail: `printed ${gray.marker} ${label} has no figure in the oracle's table` });
         }
         if (gray.bypass) {
@@ -467,12 +477,18 @@ export function buildOracleGraph(input: OracleCaseInput): OracleGraph {
     }
 
     // THE HERALD (1830+ / LPF, #1302): a stop printed on a hex that is not a city, for one corporation only.
-    // It sits on the hex's rails: its owner may stop there when running along a rail, end there, or run past it
-    // uncounted. For everyone else the hex is its plain track.
-    // IL-2 (UNRULED, the authority's current reading, hard-coded here): its owner may end a route on it arriving
-    // along ANY live edge of the hex -- so on an upgraded herald tile (a brown #43, say) the herald joins every
-    // rail. IL-11 (UNRULED, R12-1): the herald is ONE city however it is included, so a route may not both run
-    // past it uncounted and stop at it, nor run past it twice (`oracleRoutes.ts` marks its group on a pass).
+    // For everyone else the hex is its plain track. The owner's rulings (R12-1 repair):
+    //   IL-2 YES -- PRR may count its H12 home as a VIRTUAL CITY on any otherwise legal traversal of the hex:
+    //     stopping there (a route end, arriving along ANY live edge) or running through it along one of the
+    //     hex's printed rails. The node's `transit` is exactly those rails, so the virtual city joins nothing the
+    //     track does not already join: no prong-to-prong reversal on the Y, no bridge between disconnected
+    //     sections of a crossing tile.
+    //   IL-3 NO -- running past it uncounted is plain track and is NOT a station (`OraclePolicy`).
+    //   IL-4 YES -- separate trains are independent: one may count it while another passes, on separate track.
+    //   IL-11 -- a route may re-enter the hex on DISTINCT sections (boundary exclusivity polices the track). The
+    //     herald is counted AT MOST ONCE per route (its group), and an uncounted pass does NOT consume that
+    //     identity: pass-then-count and count-then-pass are both legal; count-and-count is not.
+    //   S6-4 -- no "PRR must count its herald on its first turns" obligation exists.
     if (bh.herald && bh.herald.companyId === companyId) {
       const liveEdges = Array.from(new Set(hex.paths.flatMap((path) => [path.a, path.b]))).sort((x, y) => x - y);
       if (hex.nodes.length > 0) {

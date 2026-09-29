@@ -9,7 +9,19 @@
 //   `judgeRoute` -- a STANDALONE checker of one whole route, written directly from the rulebook (2018 Lookout
 //   1830, 6.4 / 6.4.1 / 6.4.2 / 6.3.3 / 6.5) plus the recorded owner rulings (the R12-1 brief: the same red
 //   area may not be both ends; a bypassed city is not visited; a tile may be re-entered on a different section
-//   of track; Coal River is closed to an unlicensed corporation; a Y-junction may not be reversed through).
+//   of track; Coal River is closed to an unlicensed corporation; a Y-junction may not be reversed through; and
+//   the R12-1 repair's herald rulings IL-2 / IL-3 / IL-4 / IL-11 and the warehouse ruling -- see below).
+//
+//   THE HERALD (R12-1 repair). Counting PRR's H12 home is a NODE visit (the herald node, one group, so it is
+//   counted at most once per route); running past it uncounted is a PATH visit, which touches no group and so
+//   never uses up the herald's identity -- a later traversal of the hex on other track may still count it
+//   (IL-11). Only a counted herald is a station (IL-3 NO). Distinct traversals are policed by the boundaries
+//   like any other re-entered tile.
+//
+//   WAREHOUSES (R12-1 repair ruling). A warehouse is a city for revenue and train capacity: it is a NODE with
+//   no plain section beside it, so a route that traverses its hex necessarily visits -- counts -- it; it may be
+//   an end; it never closes (`nodeClosedToTransit`); it takes no station; its group stops it being counted twice
+//   on one route; nothing caps how many different warehouses a route counts.
 //
 //   `enumerateRoutes` -- an exhaustive depth-first generator. It is NOT production's strategy: production grows
 //   independent "arms" from a token, keeps the top few of each, and JOINS two arms at the token afterwards
@@ -74,8 +86,6 @@ export function judgeRoute(graph: OracleGraph, visits: readonly RouteVisit[]): R
   let stops = 0;
   let value = 0;
   let station = false;
-  // IL-11: the owner's herald is one city however the route includes it -- stopped at, or run past uncounted.
-  const heraldGroup = heraldGroupOf(graph);
 
   for (let i = 0; i < visits.length; i += 1) {
     const visit = visits[i];
@@ -118,11 +128,9 @@ export function judgeRoute(graph: OracleGraph, visits: readonly RouteVisit[]): R
       if (!interior) return refuse(`A route cannot begin or end on plain track (${visit.hex}).`);
       const joins = (path.a === visit.entry && path.b === visit.exit) || (path.b === visit.entry && path.a === visit.exit);
       if (!joins) return refuse(`${path.id} does not join edge ${visit.entry} to edge ${visit.exit}.`);
-      if (heraldGroup !== null && graph.heraldHex === visit.hex) {
-        if (groups.has(heraldGroup)) return refuse(`The route includes the herald on ${visit.hex} twice (IL-11).`);
-        groups.add(heraldGroup);
-        if (graph.policy.heraldUncountedIsStation) station = true;
-      }
+      // IL-11: an uncounted pass of the herald hex is plain track -- it consumes no identity. IL-3 NO: nor is it
+      // a station (only the SEEDED wrong reading, `heraldUncountedIsStation`, says otherwise).
+      if (graph.policy.heraldUncountedIsStation && graph.heraldHex === visit.hex) station = true;
     }
 
     if (i < visits.length - 1) {
@@ -140,12 +148,6 @@ export function judgeRoute(graph: OracleGraph, visits: readonly RouteVisit[]): R
   if (stops < 2) return refuse("A route needs at least two cities.");
   if (!station) return refuse("A route must include a city holding one of the railroad's stations.");
   return { legal: true, stops, value, boundaries: Array.from(boundaries).sort((a, b) => a - b) };
-}
-
-/** The group of the running company's herald node, or `null` when it has none on this board. */
-export function heraldGroupOf(graph: OracleGraph): string | null {
-  if (graph.heraldHex === null) return null;
-  return graph.hexes.get(graph.heraldHex)?.nodes.find((node) => node.kind === "herald")?.group ?? null;
 }
 
 export interface OracleRoute {
@@ -189,8 +191,6 @@ export function enumerateRoutes(graph: OracleGraph, options: EnumerationOptions)
     if (!groupIndex.has(node.group)) groupIndex.set(node.group, groupIndex.size);
   });
   const groupUsed = new Uint8Array(groupIndex.size);
-  const heraldGroup = heraldGroupOf(graph);
-  const heraldIndex = heraldGroup === null ? null : groupIndex.get(heraldGroup) ?? null;
 
   // Per (hex, arrival edge): the sections and centres a route arriving there can use.
   const pathsAt = new Map<string, OraclePath[]>();
@@ -250,14 +250,10 @@ export function enumerateRoutes(graph: OracleGraph, options: EnumerationOptions)
 
     for (const path of pathsAt.get(`${next}:${arrival}`) ?? []) {
       const out = path.a === arrival ? path.b : path.a;
-      // IL-11: running past the owner's herald includes it; it may not be included again.
-      const passesHerald = heraldIndex !== null && next === graph.heraldHex;
-      if (passesHerald && groupUsed[heraldIndex!]) continue;
-      if (passesHerald) groupUsed[heraldIndex!] = 1;
+      // IL-11: running past the owner's herald uncounted consumes nothing but the track (the boundaries).
       side.push({ hex: next, element: { kind: "path", path }, entry: arrival, exit: out });
       step(side, next, out, onEnd);
       side.pop();
-      if (passesHerald) groupUsed[heraldIndex!] = 0;
     }
     for (const node of nodesAt.get(`${next}:${arrival}`) ?? []) {
       const g = groupIndex.get(node.group)!;
@@ -323,20 +319,19 @@ export function enumerateRoutes(graph: OracleGraph, options: EnumerationOptions)
     value = 0;
   }
 
-  // PATH ANCHORS (IL-3, only when the policy says an uncounted herald is still a station): every rail of the
-  // herald hex, run past without stopping.
+  // PATH ANCHORS -- ONLY under the SEEDED wrong IL-3 reading (an uncounted herald is a station): every rail of
+  // the herald hex, run past without stopping. Under the ruled law (IL-3 NO) a route whose only claim to a station
+  // would be an uncounted pass is not a route, so there is nothing to anchor.
   if (graph.policy.heraldUncountedIsStation && graph.heraldHex !== null && !graph.barred.has(graph.heraldHex)) {
     const hex = graph.hexes.get(graph.heraldHex)!;
     for (const path of hex.paths) {
       stops = 0;
       value = 0;
-      if (heraldIndex !== null) groupUsed[heraldIndex] = 1;
       const right: RouteVisit[] = [{ hex: hex.label, element: { kind: "path", path }, entry: path.a, exit: path.b }];
       const left: RouteVisit[] = [];
       step(right, hex.label, path.b, () => {
         step(left, hex.label, path.a, () => emit(joinRoute(left, right)));
       });
-      if (heraldIndex !== null) groupUsed[heraldIndex] = 0;
     }
   }
 

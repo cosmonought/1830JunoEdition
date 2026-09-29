@@ -175,6 +175,11 @@ export interface RoomHostDeps {
   boardFacts?: (gameId: string, session: RoomSession) => { ended: boolean; closed: boolean };
   /** LIVE-3C: more for the status snapshot (the identity store's health, the log store's counters). */
   statusExtras?: () => Record<string, unknown>;
+  /** LIVE-4 (L4-3): whether this socket's CLIENT may be shown this game now -- its announced rules against the game's
+   *  pin (the canonical client verdict, judged by the server). When it may not, the server has already answered it
+   *  (`reload`, then close 4426) and this host shows it nothing more of the game. A legacy socket always may (it
+   *  announced no rules). Absent (a host built without a server): no client check. */
+  clientMayRead?: (socket: WebSocket, gameId: string, view: CommittedView) => boolean;
 }
 
 /** The board's own end and close, read off a session. */
@@ -243,6 +248,13 @@ export function notContinuedWhyOf(view: CommittedView): string | null {
   if (view.incompatible === null && view.hold?.reason !== "version") return null;
   const why = (view.incompatible as { why?: unknown } | null)?.why;
   return typeof why === "string" ? why : "newer-format";
+}
+
+/** LIVE-4 (L4-3): the player's sentence for why a view is not continued here -- its `incompatible` frame's `reason` (the
+ *  session's `notContinuedSentence` / `notServedSentence`), or `null`. */
+export function notContinuedReasonOf(view: CommittedView): string | null {
+  const frame = view.incompatible as { kind?: unknown; reason?: unknown } | null;
+  return frame !== null && frame.kind === "incompatible" && typeof frame.reason === "string" && frame.reason !== "" ? frame.reason : null;
 }
 
 /** LIVE-3C: the sentence a `gone` answer carries, by what ended the table. */
@@ -638,6 +650,8 @@ export function createRoomHost(deps: RoomHostDeps) {
         now: now(),
         held: heldOf(view),
         holdKind: kindOf(view),
+        /* LIVE-4 (L4-3): the reason the standing notice says -- the session's own sentence, as its frame says it. */
+        holdReason: notContinuedReasonOf(view),
         online: onlineIn(record.game_id, record),
         /* ESCROW-4: a real-money table starts from the chain's funding (the money view says when; never `ready`). */
         canStart: record.money === null ? !facts.dealt && waitingBlock(record) === null && view.hold === null : !facts.dealt && view.hold === null && money?.start.canStart === true,
@@ -677,6 +691,11 @@ export function createRoomHost(deps: RoomHostDeps) {
     if (socket.readyState === socket.OPEN) socket.close(4410, "room access lost");
   }
 
+  /** LIVE-4 (L4-3): whether this socket's client may be shown `game` now (the server answered it when not). */
+  function clientMayRead(socket: WebSocket, gameId: string, game: GameActor): boolean {
+    return deps.clientMayRead === undefined || deps.clientMayRead(socket, gameId, game.view);
+  }
+
   /** Push the room's view to every subscriber, each re-authorized against the record committed NOW. */
   function broadcastView(gameId: string): void {
     const game = peekLoaded(gameId);
@@ -687,6 +706,13 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (!verdict.ok) {
         counters.viewPushesRefused += 1;
         evict(socket, verdict.code, verdict.reason);
+        continue;
+      }
+      /* LIVE-4 (L4-3): and the tab against the game -- a deal this tab cannot play is judged in the push that shows
+         it dealt; the tab was answered (`reload`) and gets no more of this room. */
+      if (!clientMayRead(socket, gameId, game)) {
+        counters.viewPushesRefused += 1;
+        dropView(socket, { quiet: true });
         continue;
       }
       const frame = viewFrame(game, principalId as string);
@@ -710,6 +736,11 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (!verdict.ok) {
         counters.viewPushesRefused += 1;
         evict(socket, verdict.code, verdict.reason);
+        continue;
+      }
+      if (!clientMayRead(socket, gameId, game)) {
+        counters.viewPushesRefused += 1;
+        dropView(socket, { quiet: true });
         continue;
       }
       deps.send(socket, frame);
@@ -1553,6 +1584,12 @@ export function createRoomHost(deps: RoomHostDeps) {
     if (!verdict.ok) return deps.send(socket, { kind: "error", code: verdict.code, reason: verdict.reason });
     if (viewGameOf.get(socket) !== gameId && !viewerRoomFor(socket, gameId)) {
       return deps.send(socket, { kind: "error", code: "room-full", reason: "This table has as many watchers as it takes." });
+    }
+    /* LIVE-4 (L4-3): the tab against the game, after the read gate (a stranger learns nothing from it): a protocol-1 tab
+       whose rules do not include the game's pin is answered `reload` (and closed 4426) and shown nothing. */
+    if (!clientMayRead(socket, gameId, game)) {
+      if (viewGameOf.get(socket) === gameId) dropView(socket, { quiet: true });
+      return;
     }
     if (viewGameOf.get(socket) !== gameId) {
       dropView(socket);

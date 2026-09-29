@@ -51,6 +51,7 @@
 import type { ReplayEntry } from "../gameEngine/replayLog";
 import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import { canonicalJson } from "../gameEngine/stateDigest";
+import type { ReloadFrame, RouteFrame } from "./clientAnswers";
 
 /** Identifies the code both sides are running. Any string both halves agree on; a git sha in practice. */
 export type BuildId = string;
@@ -283,8 +284,9 @@ export interface ServerErrorFrame {
   inReplyTo?: string;
 }
 
-/** Everything a game-server socket may carry to a client. */
-export type ServerFrame = ServerMessage | AbandonedFrame | RoomStatusFrame | ServerErrorFrame;
+/** Everything a game-server socket may carry to a client. LIVE-4 (L4-3): `reload` and `route` -- client protocol 1's
+ *  answers (`clientAnswers.ts`), sent only to a socket that announced protocol 1 or later, never to the legacy wire. */
+export type ServerFrame = ServerMessage | AbandonedFrame | RoomStatusFrame | ServerErrorFrame | ReloadFrame | RouteFrame;
 
 // ---------------------------------------------------------------------------
 // Minting

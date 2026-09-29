@@ -136,11 +136,11 @@ export const FINANCIAL_PROTOCOL_CHANGELOG: ReadonlyArray<ProtocolChangelogRow> =
  *  LIVE-4 answer it does not know (`reload`, `route`, close 4426), because such a bundle would reconnect-loop on it. */
 export const LEGACY_CLIENT_PROTOCOL = 0;
 
-/** The client protocol a LIVE-4 bundle announces at the upgrade. Declared here by L4-1; first SPOKEN when L4-3 wires
- *  the announcement and its answers. Bump it when a client -> server frame, field or route is removed, made required
- *  or changes meaning, when a server -> client frame changes meaning, or when a correct client must understand a new
- *  server frame. An additive server -> client field, a frame a tolerant client may ignore, and a new client -> server
- *  frame or route shipped server-first are not bumps. */
+/** The client protocol a LIVE-4 bundle announces at the upgrade. Declared by L4-1; SPOKEN since L4-3, which wired the
+ *  announcement (`compat/clientCompatibility.ts`) and its answers (`utils/clientAnswers.ts`). Bump it when a client ->
+ *  server frame, field or route is removed, made required or changes meaning, when a server -> client frame changes
+ *  meaning, or when a correct client must understand a new server frame. An additive server -> client field, a frame a
+ *  tolerant client may ignore, and a new client -> server frame or route shipped server-first are not bumps. */
 export const CLIENT_PROTOCOL_VERSION = 1;
 
 export const CLIENT_PROTOCOL_CHANGELOG: ReadonlyArray<ProtocolChangelogRow> = Object.freeze([
@@ -156,24 +156,27 @@ export const CLIENT_PROTOCOL_CHANGELOG: ReadonlyArray<ProtocolChangelogRow> = Ob
   Object.freeze({
     version: 1,
     note:
-      "LIVE-4 (declared by L4-1; spoken once L4-3 wires it): everything in protocol 0, plus the announcement at " +
-      "the upgrade -- `cp` (this version), `cr` (the bundle's supported rules engines; required from protocol 1 " +
-      "on) and `cb` (the bundle's build, diagnostic only) -- and the answers a protocol-1 client treats as terminal " +
-      "for its link: `reload` (client-protocol, client-rules, client-announcement), `route` (the client half; " +
-      "LIVE-6 adds the server half) and close 4426; an explicit `error` case on the log channel, after which an " +
-      "unknown server frame is ignored rather than treated as an error (F-L4-7).",
+      "LIVE-4 (declared by L4-1; spoken from L4-3): everything in protocol 0, plus the announcement at the " +
+      "upgrade, each parameter given once on the socket URL -- `cp` (this version), `cr` (the bundle's supported " +
+      "rules engines; required from protocol 1 on) and `cb` (the bundle's build, diagnostic only) -- and the " +
+      "answers a protocol-1 client treats as terminal for its link: `reload` (client-protocol, client-rules, " +
+      "client-announcement), `route` (the client half: a bundle path on the page's own origin or a socket path " +
+      "on the game server's; LIVE-6 adds the server half) and close 4426. A protocol-1 socket's build is never " +
+      "compared: its client verdict replaces the legacy `build-skew`. An explicit `error` case on the log channel, " +
+      "after which an unknown server frame is ignored rather than treated as an error (F-L4-7).",
   }),
 ]);
 
-/** The client protocol THIS build's bundle actually announces. The legacy protocol today: the bundle sends no
- *  announcement until L4-3 wires it, and then this becomes `CLIENT_PROTOCOL_VERSION`. The preflight's invariant (§5.1:
- *  the accepted set includes the release's own bundle's protocol) is kept against THIS constant, so a bundle can never
- *  ship announcing a protocol its own server does not accept. */
-export const ANNOUNCED_CLIENT_PROTOCOL: number = LEGACY_CLIENT_PROTOCOL;
+/** The client protocol THIS build's bundle actually announces (L4-3: `CLIENT_PROTOCOL_VERSION`; before L4-3 the bundle
+ *  announced nothing, i.e. the legacy protocol). The preflight's invariant (§5.1: the accepted set includes the
+ *  release's own bundle's protocol) is kept against THIS constant, so a bundle can never ship announcing a protocol its
+ *  own server does not accept. */
+export const ANNOUNCED_CLIENT_PROTOCOL: number = CLIENT_PROTOCOL_VERSION;
 
-/** The client protocols a server of THIS build serves: the canonical capability's `client_protocols`. Only the legacy
- *  protocol today, because this build parses no announcement -- every socket is treated as protocol 0, exactly as
- *  before LIVE-4. L4-3 adds `CLIENT_PROTOCOL_VERSION` in the same change that implements the announcement and its
- *  answers: a protocol is listed only once this build completely implements it (LIVE-4 preflight §5.1, "listed ⇒
- *  implemented"), and retiring protocol 0 later is a change to this list, so it moves the capability key. */
-export const ACCEPTED_CLIENT_PROTOCOLS: readonly number[] = Object.freeze([LEGACY_CLIENT_PROTOCOL]);
+/** The client protocols a server of THIS build serves: the canonical capability's `client_protocols`. L4-3 added
+ *  `CLIENT_PROTOCOL_VERSION` in the change that implements it -- the announcement read at the upgrade, the verdict and
+ *  its answers on both channels -- because a protocol is listed only once this build completely implements it (LIVE-4
+ *  preflight §5.1, "listed ⇒ implemented"). The legacy protocol stays until the first production bundle ships: a
+ *  socket that announces nothing keeps exactly its pre-LIVE-4 treatment. Every change to this list (L4-3's included,
+ *  and retiring protocol 0 later) moves the capability key. */
+export const ACCEPTED_CLIENT_PROTOCOLS: readonly number[] = Object.freeze([LEGACY_CLIENT_PROTOCOL, CLIENT_PROTOCOL_VERSION]);

@@ -12,8 +12,10 @@
 //
 // LIVE-4 (L4-2): "replay-safety" is the canonical continuation verdict (`gameEngine/compat/`), asked at every rebuild
 // and before every deal is stamped, whatever build dealt the game -- and the pool's serving decision, asked before
-// every submit. The build skew check that comes first is the legacy (client protocol 0) wire's and stays until L4-3;
-// the deal's `build` is history, never a veto.
+// every submit. The deal's `build` is history, never a veto.
+// LIVE-4 (L4-3): the build skew check that comes first is the LEGACY wire's only (a socket that announced no client
+// protocol). A protocol-1 socket was judged by the transport from its announcement -- its client protocol, and its
+// rules against the game's pin (`clientVerdict`) -- before its submit reached the actor; its build is never compared.
 //
 // IT DOES NOT AUTHENTICATE, DELIBERATELY. A session is CONSTRUCTED with an identity the transport has already
 // established, and never told one by a request (#1207: the actor is not on the wire). Keeping the check out
@@ -89,6 +91,7 @@ import {
   type BuildId,
   type ServerMessage,
 } from "./serverProtocol";
+import { LEGACY_CLIENT_PROTOCOL } from "../gameEngine/protocolVersions";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import { isSetupGameMsg, type SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { GameStateResponse } from "../gameEngine/gameState";
@@ -158,7 +161,14 @@ export interface SessionHold {
 export interface SubmitInput {
   /** Established by the transport BEFORE this class is reached. Never taken from the request. */
   actor: string;
+  /** The build the client says it runs. Compared (step 1) ONLY for the legacy wire; diagnostic otherwise. */
   build: BuildId;
+  /** LIVE-4 (L4-3): the client protocol the submitting socket announced at its upgrade, as the TRANSPORT read it --
+   *  never a frame field. Absent or `LEGACY_CLIENT_PROTOCOL` (0): the legacy wire, whose submit keeps the exact build
+   *  check (`build-skew`). 1 or more: the transport has already judged this client against this game by its
+   *  announcement (`clientVerdict`: its protocol accepted, the game's rules pin among the rules it carries), so no
+   *  build is compared -- a protocol-1 tab on another build of the same rules is simply played. */
+  clientProtocol?: number;
   /** Stage 10.5 (S10-9): any logged room message -- the deal, the room-only events and the contract's own
    *  gameplay alike; `messageSchema.ts` admits exactly this family at the server's ingress. */
   msg: SandboxLogMsg;
@@ -577,15 +587,19 @@ export class RoomSession {
   }
 
   submit(input: SubmitInput): ServerMessage {
-    /* ---- 1. BUILD SKEW, FIRST ----
+    /* ---- 1. BUILD SKEW, FIRST -- THE LEGACY WIRE'S ONLY ----
        #1206: the digest covers the whole state, so a client on an older build disagrees about fields that
        are not divergences. Answered before anything else because every later answer -- including a refusal --
        would be measured against a board the two halves describe differently.
-       LIVE-4 (L4-2): KEPT, AND ONLY THIS. It is the legacy wire's (client protocol 0) exact client/server build check
-       at submit -- a stale tab, not a stored game -- and L4-3 replaces it for protocol-1 sockets with the client's
-       announced rules. No build decides whether a GAME continues any more (the #1252 pin and the deal-names-a-build
-       refusal that followed here are gone; the verdict below decides). */
-    if (!buildsAgree(input.build, this.options.build)) {
+       LIVE-4 (L4-2): KEPT, AND ONLY THIS. No build decides whether a GAME continues any more (the #1252 pin and the
+       deal-names-a-build refusal that followed here are gone; the verdict below decides).
+       LIVE-4 (L4-3): and only for the LEGACY wire (client protocol 0: a socket that announced nothing), whose tab says
+       nothing else about what it can interpret. A protocol-1 tab was judged by the transport from its announcement
+       before this submit reached the actor -- the rules its reducer carries against this game's pin, which is what
+       #1206's build compare stood in for -- so its build is diagnostic, and never compared here. */
+    const announced = input.clientProtocol;
+    const legacyWire = !(typeof announced === "number" && Number.isSafeInteger(announced) && announced > LEGACY_CLIENT_PROTOCOL);
+    if (legacyWire && !buildsAgree(input.build, this.options.build)) {
       return {
         kind: "build-skew",
         clientBuild: input.build,

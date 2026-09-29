@@ -389,6 +389,10 @@ export interface RoomView {
   held: boolean;
   /** LIVE-3C: why the room will not take a change (`null`: it will). A projection of the server's state only. */
   holdKind: HoldKind;
+  /** LIVE-4 (L4-3), additive and optional: with `holdKind: "incompatible"`, the player's sentence for why this pool does
+   *  not continue (or no longer serves) the game -- the `incompatible` frame's own `reason` -- so the standing notice says
+   *  the actual reason. Absent otherwise. */
+  holdReason?: string;
   hostId: string;
   players: Array<{ id: string; nickname: string; isReady: boolean; color?: string; online: boolean }>;
   playerCount: number | null;
@@ -471,7 +475,7 @@ export function roomViewFor(
   record: GameRecord,
   facts: LogFacts,
   principalId: string,
-  context: { now: number; held: boolean; holdKind?: HoldKind; online: (playerId: string) => boolean; canStart: boolean; money?: RoomMoneyView | null },
+  context: { now: number; held: boolean; holdKind?: HoldKind; holdReason?: string | null; online: (playerId: string) => boolean; canStart: boolean; money?: RoomMoneyView | null },
 ): RoomView {
   const lifecycle = effectiveStatus(record, facts, context.now);
   const seat = seatOf(record, principalId);
@@ -489,6 +493,7 @@ export function roomViewFor(
     closed: facts.closed,
     held: context.held,
     holdKind: context.holdKind ?? null,
+    ...(context.holdKind === "incompatible" && typeof context.holdReason === "string" && context.holdReason !== "" ? { holdReason: context.holdReason } : {}),
     hostId: record.host_player_id,
     players: record.seats.map((entry) => ({
       id: entry.player_id,

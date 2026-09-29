@@ -29,6 +29,7 @@ import {
 } from "./roomLink";
 import { refusalMessage, type RoomSummary, type RoomView } from "./roomProtocol";
 import { NO_MONEY_UNDO_POLICY } from "../gameEngine/logRevert";
+import { THIS_BUNDLE_ANNOUNCEMENT } from "./clientAnnouncement";
 
 const GAME = "g_0123456789abcdefghjkmnpqr0";
 const OTHER = "g_aaaaaaaaaaaaaaaaaaaaaaaaa4";
@@ -108,7 +109,9 @@ describe("an op is answered by its ack (LIVE-2D)", () => {
     expect(roomLinkAvailable()).toBe(true);
     const answer = roomOp({ type: "create", visibility: "public", exactPlayers: null, variants: {} as never, nickname: "Host" });
     expect(made).toHaveLength(1);
-    expect(made[0].url).toBe("wss://play.example/gs");
+    /* LIVE-4 (L4-3): every socket this bundle opens announces it -- client protocol 1, its rules, its build. */
+    expect(made[0].url).toBe(`wss://play.example/gs?${THIS_BUNDLE_ANNOUNCEMENT}`);
+    expect(THIS_BUNDLE_ANNOUNCEMENT).toMatch(/^cp=1&cr=11(&cb=[A-Za-z0-9._-]+)?$/);
     // Queued until the socket opens, then sent.
     expect(made[0].sent).toHaveLength(0);
     made[0].open();

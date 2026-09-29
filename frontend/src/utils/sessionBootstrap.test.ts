@@ -9,6 +9,7 @@
 // LIVE-2E: PROFILES ARE MANDATORY. "ready" is a PROFILED session; a bootstrap that answers `profile: null` is
 // "unprofiled", which opens no socket anywhere; `account` follows every bootstrap answer, by name only.
 
+import { withClientAnnouncement } from "./clientAnnouncement";
 import { connectServerLink, type SocketLike } from "./serverLink";
 import { resetRoomLinks, setRoomSocketFactory, watchRoom, type SocketLike as RoomSocketLike } from "./roomLink";
 import { httpSessionPort, installSessionPort, readySessionPort, sessionEndedSentence, sessionEndpointFor, sessionPort } from "./sessionBootstrap";
@@ -81,7 +82,10 @@ describe("the hosted session bootstrap (LIVE-2B)", () => {
     expect(http.calls[0].init.headers["Content-Type"]).toBe("application/json");
     await http.answer(200, PROFILED);
     expect(wire.made).toHaveLength(1);
-    expect(wire.made[0].url).toBe("wss://play.example/gs"); // no dev claim outside a development-identity build
+    /* No dev claim outside a development-identity build. LIVE-4 (L4-3): the one thing on the query is this bundle's
+       announcement (`cp` / `cr` / `cb`). */
+    expect(wire.made[0].url).toBe(withClientAnnouncement("wss://play.example/gs"));
+    expect(wire.made[0].url).not.toContain("dev_claim");
     link.close();
   });
 
@@ -241,7 +245,7 @@ describe("mandatory profiles (LIVE-2E)", () => {
     later.shift()?.();
     await flush();
     expect(wire.made.length).toBeGreaterThanOrEqual(1);
-    expect(wire.made.every((made) => made.url === "wss://play.example/gs")).toBe(true);
+    expect(wire.made.every((made) => made.url === withClientAnnouncement("wss://play.example/gs"))).toBe(true);
     link.close();
     stop();
   });

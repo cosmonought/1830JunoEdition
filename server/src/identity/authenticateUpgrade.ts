@@ -27,6 +27,13 @@
 //
 // THE CONTEXT IS FROZEN: { principalId, sessionId, sessionExpiresAt, ipKey, openedAt } for the life of the socket.
 // A socket never changes identity; changing identity is a new socket.
+//
+// LIVE-4 (L4-3): THE CLIENT'S ANNOUNCEMENT IS READ HERE TOO -- `cp` / `cr` / `cb` on the socket URL's query, through
+// the one canonical parser (`gameEngine/compat/clientCompatibility.ts`) -- and handed back beside the context, frozen
+// for the socket's life like it. It decides nothing about the upgrade itself (who the socket is, and whether it may
+// exist, are the steps above): the server judges it once the socket exists, so a protocol-1 client can be TOLD why it
+// may not talk here (`reload`, close 4426) instead of seeing a failed open it would retry. A socket that announces
+// nothing is the legacy wire (protocol 0).
 
 import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
@@ -39,6 +46,11 @@ import type { IdentityLimiter } from "./limiter";
 import type { GsMode } from "./mode";
 import { originAllowed } from "./origins";
 import type { IdentityService } from "./sessions";
+import {
+  parseClientAnnouncement,
+  rawClientAnnouncementOf,
+  type ClientAnnouncement,
+} from "../../../frontend/src/gameEngine/compat/clientCompatibility";
 
 export interface ConnectionContext {
   readonly principalId: string;
@@ -78,7 +90,8 @@ export interface UpgradeGate {
 export type UpgradeStep = "path" | "capacity" | "ip" | "origin" | "authenticate" | "profile" | "principal-cap";
 
 export type UpgradeDecision =
-  | { ok: true; ctx: ConnectionContext; ip: IpKey }
+  /** LIVE-4 (L4-3): `client` is the socket's announcement, parsed once (the legacy wire when it announced nothing). */
+  | { ok: true; ctx: ConnectionContext; ip: IpKey; client: ClientAnnouncement }
   | { ok: false; status: 400 | 401 | 403 | 404 | 429 | 503; step: UpgradeStep; retryAfterMs?: number; why: string };
 
 const seconds = (ms: number) => Math.max(1, Math.ceil(ms / 1000));
@@ -89,8 +102,11 @@ export function decideUpgrade(request: Pick<IncomingMessage, "headers" | "socket
 
   /* 1. PATH */
   let pathname: string;
+  let query: URLSearchParams;
   try {
-    pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+    const url = new URL(request.url ?? "/", "http://localhost");
+    pathname = url.pathname;
+    query = url.searchParams;
   } catch {
     return { ok: false, status: 404, step: "path", why: "unreadable path" };
   }
@@ -205,7 +221,10 @@ export function decideUpgrade(request: Pick<IncomingMessage, "headers" | "socket
   }
 
   const ctx: ConnectionContext = Object.freeze({ principalId, sessionId, sessionExpiresAt, ipKey: ip.key, openedAt: now });
-  return { ok: true, ctx, ip };
+  /* LIVE-4 (L4-3): the announcement, read with the canonical parser; every value of each parameter, so a repeated one
+     is malformed rather than silently its first value. */
+  const announcement = parseClientAnnouncement(rawClientAnnouncementOf(query));
+  return { ok: true, ctx, ip, client: announcement };
 }
 
 const STATUS_TEXT: Record<number, string> = {

@@ -290,8 +290,11 @@ export class Client {
     this.closed = new Promise((resolve) => socket.once("close", (code) => resolve(code)));
   }
 
-  static open(port: number, claim: string): Promise<Client> {
-    return Client.connect(new WebSocket(devSocketUrl(port, claim), { origin: DEV_ORIGIN }), claim);
+  /** LIVE-4 (L4-3): `announcement` -- a client announcement query (`cp=1&cr=11&cb=...`) appended to the socket URL, as a
+   *  LIVE-4 bundle's socket carries it. Absent: the legacy wire (a pre-LIVE-4 bundle announces nothing). */
+  static open(port: number, claim: string, announcement?: string): Promise<Client> {
+    const url = announcement === undefined || announcement === "" ? devSocketUrl(port, claim) : `${devSocketUrl(port, claim)}&${announcement}`;
+    return Client.connect(new WebSocket(url, { origin: DEV_ORIGIN }), claim);
   }
 
   /** LIVE-2E: a PRODUCTION socket -- `/gs`, the browser's session cookie and an allowed Origin, exactly as a browser

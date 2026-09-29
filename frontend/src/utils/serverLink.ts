@@ -101,11 +101,38 @@
 // removed mid-game) is answered once, through `onAccessLost`, and the link stops: a reconnect would earn the same
 // answer, so looping on it is the one wrong response.
 
+//
+// ==================================================================
+//  LIVE-4 (L4-3): CLIENT PROTOCOL 1 -- THE ANNOUNCEMENT, THE ANSWERS, AND AN UNKNOWN FRAME IS IGNORED
+// ==================================================================
+//
+// EVERY SOCKET ANNOUNCES THIS BUNDLE (`clientAnnouncement.ts`): `cp` / `cr` / `cb` on its URL, read once at the
+// upgrade. The server judges the tab by that -- its protocol, and whether its reducer carries the game's rules -- and
+// never by its build: a protocol-1 tab on another build of the same rules is simply played (no `build-skew`).
+//
+// `reload`, `route` AND CLOSE 4426 ARE TERMINAL FOR THE LINK (`clientAnswers.ts`). Nothing is applied after them and
+// nothing reconnects: what is pending settles `null`, and the page's port decides (`clientUpdate.ts`: reload once, or
+// ask; follow a checked route, or fail closed). A route to another socket path on the game server's origin is the one
+// exception: this link reconnects there itself, at most `MAX_ROUTE_HOPS` times. A route with nothing this tab will
+// follow ends the link exactly as `incompatible` does -- "cannot continue here" -- and fabricates no destination.
+//
+// THE DEAL IS CHECKED HERE TOO (defence in depth, preflight §10.2 item 6): a deal whose rules pin this bundle's reducer
+// does not carry is never handed to the shell; the link ends as for `reload/client-rules`. The server's own check
+// comes first, at the hello and at every push.
+//
+// F-L4-7: `error` HAS ITS OWN CASE (the hello refusals, `resync`, the access losses), and a frame of a kind this client
+// does not know is now IGNORED -- so a later server may add a frame a protocol-1 client can do without.
+
 import type { ReplayEntry } from "../gameEngine/replayLog";
 import type { SandboxLogMsg } from "../gameEngine/gameSetup";
+import { SUPPORTED_RULES_ENGINE_VERSIONS } from "../gameEngine/rulesVersion";
+import type { ClientVerdictCode } from "../gameEngine/compat/clientCompatibility";
 import type { BuildId, ServerFrame } from "./serverProtocol";
 import { socketUrlFor } from "./devIdentity";
 import { sessionPort as appSessionPort, type SessionPort } from "./sessionBootstrap";
+import { THIS_BUNDLE_ANNOUNCEMENT, withClientAnnouncement } from "./clientAnnouncement";
+import { CLIENT_ANSWER_CLOSE_CODE, CLIENT_ANSWER_SENTENCES, routeTargetOf, type ClientAnswerFrame } from "./clientAnswers";
+import { MAX_ROUTE_HOPS, clientUpdatePort, type ClientUpdatePort } from "./clientUpdate";
 
 /** The slice of `WebSocket` this file uses. Injected so a test needs no browser and no server. */
 export interface SocketLike {
@@ -151,8 +178,12 @@ export interface ServerLinkOptions {
   /** #1520: the room's deal is pinned to a rules-engine version the server does not carry (or to none). The
    *  server built nothing and will apply nothing; the link closes for good after this, because the answer
    *  cannot change until a different server loads the room. Distinct from `onBuildSkew`: a build is a UI
-   *  deploy, a rules version is the meaning of the log. */
-  onIncompatible?: (reason: string, pinned: number | null, supported: readonly number[]) => void;
+   *  deploy, a rules version is the meaning of the log.
+   *  LIVE-4: `why` is the server's reason code (L4-2's additive field: `rules-not-supported`, `hosted-protocol`,
+   *  `drain-expired`, ...; absent from an older server, whose only reason was the rules pin), so the shell says the
+   *  actual reason and names rules versions only when the rules are it (`roomProtocol.ts` `incompatibleNotice`). L4-3:
+   *  a route this tab cannot follow ends the link the same way, with `why` `client-rules`. */
+  onIncompatible?: (reason: string, pinned: number | null, supported: readonly number[], why?: string) => void;
   /** #1218: the move was answered with a resync rather than applied, because this client was behind. Not an
    *  error and not a refusal -- the third way a `submit` resolves `null`, and the only one that used to be
    *  silent. */
@@ -176,6 +207,14 @@ export interface ServerLinkOptions {
   mintSubmissionId?: () => string;
   /** #1253: defaults to `setTimeout`. Injected so a test can drive the backoff by hand. */
   schedule?: (callback: () => void, delayMs: number) => void;
+  /** LIVE-4 (L4-3): the page's answer to `reload` / `route` (`clientUpdate.ts`). The page's installed port when absent. */
+  clientUpdate?: ClientUpdatePort;
+  /** LIVE-4 (L4-3): the query this link announces itself with. This bundle's (`THIS_BUNDLE_ANNOUNCEMENT`) when absent;
+   *  a test announces something else. */
+  announcement?: string;
+  /** LIVE-4 (L4-3): where a route to another bundle may lead -- this page's origin and this bundle's base path. The
+   *  page's own when absent. */
+  routeEnvironment?: { pageOrigin: string; bundleBase: string };
 }
 
 export interface ServerLink {
@@ -259,6 +298,34 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
    *  just been given; the shell accumulates without deduplicating (App.tsx #1213), and an entry handed over twice
    *  would be applied twice. By id, not index, so a legacy log whose indices repeat still arrives whole. */
   let delivered = new Set<string>();
+
+  /* ==================================================================
+      LIVE-4 (L4-3): THE ANNOUNCEMENT, AND THE ANSWERS THAT END THE LINK
+     ================================================================== */
+  const clientUpdate = options.clientUpdate ?? clientUpdatePort();
+  const announcement = options.announcement ?? THIS_BUNDLE_ANNOUNCEMENT;
+  /** The socket URL this link opens -- the configured one, until a checked route moves it to another path on the same
+   *  game server. */
+  let currentUrl = options.url;
+  /** Routes to another socket path this link has followed (at most `MAX_ROUTE_HOPS`). */
+  let socketRoutes = 0;
+  /** Set while this link closes its own socket to reconnect on a routed path: that close is not an outage. */
+  let rerouting = false;
+  /** The link has been told `reload` / `route`, or ended on one: said once, never again. */
+  let clientAnswered = false;
+
+  /** The route environment: the page's origin and this bundle's base path (a route to it is no route). */
+  const routeEnvironment = (): { pageOrigin: string; bundleBase: string } => {
+    if (options.routeEnvironment !== undefined) return options.routeEnvironment;
+    const pageOrigin = typeof window !== "undefined" && typeof window.location !== "undefined" ? window.location.origin : "";
+    let bundleBase = "/";
+    try {
+      bundleBase = new URL(process.env.PUBLIC_URL || "/", pageOrigin || "http://localhost").pathname;
+    } catch {
+      bundleBase = "/";
+    }
+    return { pageOrigin, bundleBase };
+  };
 
   /** The hello, with what this client has applied and the anchor for it. */
   const helloFrame = () => {
@@ -358,6 +425,89 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     }
   };
 
+  /* ==================================================================
+      LIVE-4 (L4-3): `reload`, `route`, 4426 -- THE LINK ENDS, THE PAGE DECIDES
+     ================================================================== */
+
+  /** End the link for a client answer: everything pending settles `null` (this tab did not see it applied), nothing
+   *  reconnects, and nothing more from this socket is applied. Said once. */
+  const endForClientAnswer = (): boolean => {
+    if (clientAnswered) return false;
+    clientAnswered = true;
+    closedByUs = true;
+    awaitingHello = false;
+    resyncing = false;
+    settleAll();
+    try {
+      socket?.close();
+    } catch {
+      /* already closed */
+    }
+    return true;
+  };
+
+  /** `reload` (or a bare 4426): THIS release can serve the game, this bundle cannot. The page reloads once -- keeping
+   *  the table by its stored pointer -- or asks (`clientUpdate.ts`). A per-game answer names this link's game. */
+  const answerReload = (code: ClientVerdictCode) => {
+    if (!endForClientAnswer()) return;
+    clientUpdate.reload({ code, gameId: code === "client-rules" ? options.gameId : null });
+  };
+
+  /** A route this tab will not or cannot follow: the link ends EXACTLY as for a game this server does not continue --
+   *  "cannot continue here" -- and no destination is made up. */
+  const failClosedRoute = () => {
+    if (!endForClientAnswer()) return;
+    const reason = CLIENT_ANSWER_SENTENCES["route-unavailable"];
+    if (options.onIncompatible) options.onIncompatible(reason, null, SUPPORTED_RULES_ENGINE_VERSIONS, "client-rules");
+    else options.onError?.(reason);
+  };
+
+  /** `route`: follow a CHECKED destination (`routeTargetOf`) -- another bundle on this page's origin (the page
+   *  navigates), or another socket path on this game server's origin (this link reconnects there, at most
+   *  `MAX_ROUTE_HOPS` times) -- or fail closed. */
+  const answerRoute = (frame: Extract<ClientAnswerFrame, { kind: "route" }>) => {
+    if (clientAnswered) return;
+    const target = routeTargetOf(frame, { ...routeEnvironment(), gameServerUrl: options.url, gameId: options.gameId });
+    if (target.kind === "bundle") {
+      if (!endForClientAnswer()) return;
+      clientUpdate.routeToBundle({ url: target.url, gameId: options.gameId });
+      return;
+    }
+    if (target.kind === "socket" && socketRoutes < MAX_ROUTE_HOPS) {
+      socketRoutes += 1;
+      currentUrl = target.url;
+      /* What was on the wire is settled by the next hello's catch-up, from the pool that continues the game -- exactly
+         as after a dropped socket. */
+      rerouting = true;
+      try {
+        socket?.close();
+      } catch {
+        /* already closed: its close handler reconnects */
+      }
+      return;
+    }
+    failClosedRoute();
+  };
+
+  /** Defence in depth (preflight §10.2 item 6): whether `entries` hold a deal whose rules pin this bundle's reducer does
+   *  not carry. The server checks first (the hello and every push); a deal this tab cannot interpret must never reach
+   *  the shell even so. An unpinned deal (the development corpus) is the server's policy to admit, not this check's. */
+  const dealThisBundleCannotPlay = (entries: readonly ReplayEntry[]): boolean => {
+    for (const entry of entries) {
+      if (typeof entry.payload !== "string" || !entry.payload.includes('"SetupGame"')) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(entry.payload);
+      } catch {
+        continue;
+      }
+      const setup = typeof parsed === "object" && parsed !== null ? (parsed as { SetupGame?: unknown }).SetupGame : undefined;
+      const pin = typeof setup === "object" && setup !== null ? (setup as { rules_engine_version?: unknown }).rules_engine_version : undefined;
+      if (typeof pin === "number" && !SUPPORTED_RULES_ENGINE_VERSIONS.includes(pin)) return true;
+    }
+    return false;
+  };
+
   /** #1253: the hello's catch-up, read against the submissions that were in the air when the socket dropped.
    *  Found in it: landed, resolve with the index. Not found: did not land (or its answer was lost), resolve
    *  `null` and say the board is current. Never re-sent -- see the header. Submissions made since -- queued
@@ -389,7 +539,14 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     serverDigest: string | null,
     serverFields: Record<string, string> | null,
     source: "applied" | "catch-up",
-  ): void => {
+  ): boolean => {
+    /* LIVE-4 (L4-3): a deal this bundle cannot interpret ends the link before anything is handed over. */
+    if (dealThisBundleCannotPlay(entries)) {
+      // eslint-disable-next-line no-console
+      console.warn(`[client] game ${options.gameId}: the deal names a rules engine this page does not carry -- nothing applied`);
+      answerReload("client-rules");
+      return false;
+    }
     /* THE DIGEST IS DELIVERED EVEN WHEN THE FRAME CARRIED NO ENTRIES, which is not a special case but the
        most useful one: a catch-up with nothing in it is the server saying "you are level with me", and that
        is precisely when a silent drift is worth catching. Returning early on an empty batch -- as this did --
@@ -407,6 +564,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       }
     }
     options.onEntries(fresh.length === entries.length ? entries : fresh, serverDigest, serverFields, source);
+    return true;
   };
 
   /* ==================================================================
@@ -452,7 +610,8 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
   };
 
   const openSocket = () => {
-    const current = make(socketUrlFor(options.url));
+    /* LIVE-4 (L4-3): every socket carries this bundle's announcement (and, on a development build, its claim). */
+    const current = make(socketUrlFor(withClientAnnouncement(currentUrl, announcement)));
     socket = current;
     let opened = false;
 
@@ -492,14 +651,33 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       if (socket !== current) return;
       open = false;
       awaitingHello = false;
+      const closeCode = (event as { code?: unknown } | null)?.code;
+      /* LIVE-4 (L4-3): this link closed its own socket to follow a route to another path: reconnect there now. The
+         server's 4426 behind the route frame, if it gets here first, is the same close. */
+      if (rerouting && !closedByUs) {
+        rerouting = false;
+        for (const item of pending) if (item.sent) orphaned.add(item.id);
+        resyncing = false;
+        inFlight = new Set<string>();
+        schedule(() => {
+          if (!closedByUs && socket === current) connect();
+        }, 0);
+        return;
+      }
+      /* LIVE-4 (L4-3): 4426 -- this bundle may not talk to this server (its `reload` frame, if one came, already ended
+         the link). Terminal: never reconnected, never looped on. */
+      if (closeCode === CLIENT_ANSWER_CLOSE_CODE && !closedByUs) {
+        answerReload("client-protocol");
+        return;
+      }
       /* LIVE-2D: 4410 -- read access to this game was removed (kicked, cancelled, dropped at a private deal). */
-      if ((event as { code?: unknown } | null)?.code === 4410 && !closedByUs) {
+      if (closeCode === 4410 && !closedByUs) {
         loseAccess("not-found", "You no longer have access to this game.");
         return;
       }
       /* LIVE-2B: a close before `onopen` is a failed open (a refused upgrade looks exactly like this). */
       if (!opened) failedOpens += 1;
-      if ((event as { code?: unknown } | null)?.code === 4401 || failedOpens >= 3) {
+      if (closeCode === 4401 || failedOpens >= 3) {
         failedOpens = 0;
         rebootstrap = true;
       }
@@ -534,25 +712,30 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       options.onError?.("unparseable frame from server");
       return;
     }
+    /* LIVE-4 (L4-3): after `reload` / `route` (or a deal this bundle cannot play) nothing more from this socket counts. */
+    if (clientAnswered) return;
     const inReplyTo = (message as { inReplyTo?: unknown }).inReplyTo;
     const answers = typeof inReplyTo === "string" ? inReplyTo : undefined;
 
     /* LIVE-3A: BETWEEN A RESYNC AND ITS FRESH CATCH-UP, NOTHING ELSE IS APPLIED. Every entry in a frame that
        arrives in between is in that catch-up too -- the server computes it from everything committed before it
-       read the hello -- and applying both would hand the shell each of them twice. */
+       read the hello -- and applying both would hand the shell each of them twice. (LIVE-4: a `reload` or `route`
+       is never dropped: it ends the link.) */
     if (
       resyncing &&
       !(message.kind === "catch-up" && answers === undefined) &&
       message.kind !== "incompatible" &&
       message.kind !== "status" &&
-      message.kind !== "error"
+      message.kind !== "error" &&
+      message.kind !== "reload" &&
+      message.kind !== "route"
     ) {
       return;
     }
 
     switch (message.kind) {
       case "applied": {
-        applyEntries(message.entries, message.digest ?? null, message.fields ?? null, "applied");
+        if (!applyEntries(message.entries, message.digest ?? null, message.fields ?? null, "applied")) return;
         /* LIVE-3A: the submitter's own answer names it; a watcher's copy of somebody's move names nothing and
            settles nothing -- except a submission this client was told is still in flight, landing now. */
         if (answers !== undefined) {
@@ -569,14 +752,14 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
            go out -- after it, so their `baseIndex` and the server's idea of this client agree. */
         if (awaitingHello && answers === undefined) {
           resyncing = false;
-          applyEntries(message.entries, message.digest ?? null, message.fields ?? null, "catch-up");
+          if (!applyEntries(message.entries, message.digest ?? null, message.fields ?? null, "catch-up")) return;
           awaitingHello = false;
           attempts = 0; // #1346: the socket is up and answered; only now is the outage over.
           reconcileOrphans(message.entries, message.inFlight);
           settleLanded(message.entries);
           return;
         }
-        applyEntries(message.entries, message.digest ?? null, message.fields ?? null, "catch-up");
+        if (!applyEntries(message.entries, message.digest ?? null, message.fields ?? null, "catch-up")) return;
         if (answers !== undefined) {
           /* #1218: A CATCH-UP THAT DOES NOT CONTAIN THIS CLIENT'S OWN ENTRY answered the move by resyncing
              instead of applying it -- the client was behind. Not an error; the move is worth making again. */
@@ -592,7 +775,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         /* #1685 (Stage 10.2): a refusal that followed a repair carries the repair. Applied first, as history
            (the entries are the game's, appended before this move was judged), then the sentence. */
         if (message.catchUp !== undefined) {
-          applyEntries(message.catchUp.entries, message.catchUp.digest ?? null, message.catchUp.fields ?? null, "catch-up");
+          if (!applyEntries(message.catchUp.entries, message.catchUp.digest ?? null, message.catchUp.fields ?? null, "catch-up")) return;
         }
         /* LIVE-3A: `ahead` / `resync` -- this client holds history the room does not. Not a refusal to show: the
            room is rebuilt from the start. */
@@ -630,7 +813,8 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         awaitingHello = false;
         resyncing = false;
         if (options.onIncompatible) {
-          options.onIncompatible(message.reason, message.pinnedRulesEngineVersion, message.supportedRulesEngineVersions);
+          /* LIVE-4: the reason code rides along (L4-2's additive `why`), so the shell names the actual reason. */
+          options.onIncompatible(message.reason, message.pinnedRulesEngineVersion, message.supportedRulesEngineVersions, typeof message.why === "string" ? message.why : undefined);
         } else {
           options.onError?.(message.reason);
         }
@@ -648,9 +832,19 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         options.onRoomStatus?.(message.state, message.reason);
         return;
       }
-      default: {
-        const code = (message as { code?: string }).code;
-        const reason = (message as { reason?: string }).reason ?? "The game server refused that.";
+      /* LIVE-4 (L4-3): client protocol 1's answers. Terminal for this link; the page decides (`clientUpdate.ts`). */
+      case "reload": {
+        answerReload(message.code === "client-rules" || message.code === "client-announcement" ? message.code : "client-protocol");
+        return;
+      }
+      case "route": {
+        answerRoute(message);
+        return;
+      }
+      /* F-L4-7: `error` has its own case -- a hello refusal names no submission and must never be dropped. */
+      case "error": {
+        const code = message.code;
+        const reason = message.reason ?? "The game server refused that.";
         /* LIVE-3A: the hello's history is not the room's -- the same resync as a submit's `ahead`. */
         if (code === "resync") {
           resync(reason);
@@ -664,7 +858,13 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         }
         options.onError?.(reason);
         if (answers !== undefined) settleById(answers, null);
+        return;
       }
+      /* F-L4-7 (client protocol 1): a frame of a kind this client does not know is IGNORED, never read as an error --
+         a later server may add frames a protocol-1 client can do without. (It settles nothing: a server that must
+         answer a submission answers with a kind this client knows.) */
+      default:
+        return;
     }
   };
 

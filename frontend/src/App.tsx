@@ -151,6 +151,7 @@ import { profileNickname } from "./utils/profileApi";
 import {
   JOIN_CODE_EXAMPLE,
   holdNoticeFor,
+  incompatibleNotice,
   parseJoinCode,
   refusalMessage,
   supportRefOf,
@@ -12579,15 +12580,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 `This tab is running build ${clientBuild} and the server is on ${serverBuild}. Reload to catch up.`,
               );
             },
-            onIncompatible: (reason, pinned, supported) => {
+            onIncompatible: (reason, pinned, supported, why) => {
               linkExplainedRef.current = true;
-              /* #1520: NOT a desync and NOT a build skew. The server holds this room: its history was dealt
-                 under a rules-engine version the server does not carry (or under none), and the server built
-                 nothing and will apply nothing. The link has closed for good; reloading does not change the
-                 answer, and the sentence says what would. */
-              setSandboxRoomError(
-                `${reason} (Pinned rules version: ${pinned ?? "none"}; this server supports ${supported.join(", ")}.)`,
-              );
+              /* #1520: NOT a desync and NOT a build skew. The server does not continue this room -- and the server
+                 built nothing and will apply nothing. The link has closed for good; reloading does not change the
+                 answer, and the sentence says what would. LIVE-4 (L4-3): the server's sentence is for the ACTUAL
+                 reason (`why`), and the rules versions are named only when the rules pin is that reason. */
+              setSandboxRoomError(incompatibleNotice({ reason, why, pinned, supported }));
             },
             onError: (message) => {
               linkExplainedRef.current = true;

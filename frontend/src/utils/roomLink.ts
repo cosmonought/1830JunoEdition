@@ -27,9 +27,23 @@
 //
 // 4401 (the session ended under an open socket) and three failed opens re-bootstrap the session first, exactly as
 // the game link does (LIVE-2B); `session-ended` stops everything and `SessionEndedNotice` asks the player.
+//
+// LIVE-4 (L4-3): EVERY CHANNEL ANNOUNCES THIS BUNDLE (`clientAnnouncement.ts`) -- the lobby's too -- and `reload`,
+// `route` and close 4426 are TERMINAL for the channel that gets them, exactly as for the game link:
+//   a connection-level `reload` (this bundle's protocol is not accepted, or its announcement unreadable) ends EVERY
+//     channel -- the page itself is out of step -- and nothing opens another socket until the page reloads;
+//   a per-game `reload` (`client-rules`: this tab cannot play that table's rules) ends that game's channel;
+//   a `route` is followed only to a checked destination (`clientAnswers.ts` `routeTargetOf`): another bundle on this
+//     page's origin (the page navigates), or another socket path on the game server's (this channel re-attaches
+//     there, at most `MAX_ROUTE_HOPS` times); anything else ends the channel as "cannot continue here".
+// The page's port (`clientUpdate.ts`) decides what the page does: reload once, or ask; nothing here loops.
 
 import { GAME_SERVER_URL } from "../config";
 import { socketUrlFor } from "./devIdentity";
+import type { ClientVerdictCode } from "../gameEngine/compat/clientCompatibility";
+import { withClientAnnouncement } from "./clientAnnouncement";
+import { CLIENT_ANSWER_CLOSE_CODE, CLIENT_ANSWER_SENTENCES, routeTargetOf, type RouteFrame } from "./clientAnswers";
+import { MAX_ROUTE_HOPS, clientUpdatePort, type ClientUpdatePort } from "./clientUpdate";
 import type { PresenceState } from "./presence";
 import {
   ROOM_LOST_CODES,
@@ -104,6 +118,12 @@ interface Channel {
   failedOpens: number;
   rebootstrap: boolean;
   retired: boolean;
+  /** LIVE-4 (L4-3): the socket URL a checked route moved this channel to (another path on the game server), or null. */
+  url: string | null;
+  /** LIVE-4 (L4-3): routes to another socket path this channel has followed. */
+  socketRoutes: number;
+  /** LIVE-4 (L4-3): set while this channel closes its own socket to re-attach on a routed path. */
+  rerouting: boolean;
 }
 
 const channels = new Map<string, Channel>();
@@ -114,9 +134,29 @@ let requestSeq = 0;
 
 let socketFactory: (url: string) => SocketLike = (url) => new WebSocket(url) as unknown as SocketLike;
 
+/* ==================================================================
+    LIVE-4 (L4-3): WHAT THIS PAGE WAS TOLD TO STOP TALKING ABOUT
+   ================================================================== */
+/** A connection-level `reload` ended the page's links: nothing opens another socket until the page reloads. */
+let pageAnswer: { code: ClientVerdictCode; reason: string } | null = null;
+/** Games whose channel a per-game `reload` / `route` ended: not asked again until the page reloads. */
+const answeredGames = new Map<string, string>();
+let updatePort: ClientUpdatePort | null = null;
+let announcementOverride: string | null = null;
+let routeEnvironmentOverride: { pageOrigin: string; bundleBase: string } | null = null;
+
+const port = (): ClientUpdatePort => updatePort ?? clientUpdatePort();
+
 /** Injectable for tests; the browser has no reason to touch it. */
 export function setRoomSocketFactory(factory: (url: string) => SocketLike): void {
   socketFactory = factory;
+}
+
+/** LIVE-4 (L4-3), tests only: the page's port, this tab's announcement and its route environment. */
+export function setRoomClientUpdate(options: { port?: ClientUpdatePort | null; announcement?: string | null; routeEnvironment?: { pageOrigin: string; bundleBase: string } | null }): void {
+  if (options.port !== undefined) updatePort = options.port;
+  if (options.announcement !== undefined) announcementOverride = options.announcement;
+  if (options.routeEnvironment !== undefined) routeEnvironmentOverride = options.routeEnvironment;
 }
 
 /** Drops every channel. Tests only. */
@@ -124,11 +164,20 @@ export function resetRoomLinks(): void {
   channels.forEach((channel) => retire(channel));
   channels.clear();
   lostGames.clear();
+  answeredGames.clear();
+  pageAnswer = null;
 }
 
 /** Whether a game server is configured -- the same switch the game link uses (#1213). */
 export function roomLinkAvailable(): boolean {
   return Boolean(GAME_SERVER_URL);
+}
+
+/** LIVE-4 (L4-3): the sentence a request is answered with because this page (or this table) was told `reload` or
+ *  `route` -- `null` when it was not, and the request may go out. */
+function clientAnswerFor(gameId: string | undefined): string | null {
+  if (pageAnswer !== null) return pageAnswer.reason;
+  return gameId === undefined ? null : (answeredGames.get(gameId) ?? null);
 }
 
 const NO_SOCKET_YET: SocketLike = { send: () => undefined, close: () => undefined, onopen: null, onmessage: null, onclose: null, onerror: null };
@@ -137,13 +186,13 @@ function listening(channel: Channel): boolean {
   return channel.views.size + channel.rooms.size + channel.chats.size + channel.presences.size + channel.pending.size > 0;
 }
 
-function retire(channel: Channel): void {
+function retire(channel: Channel, pendingReason = "The connection to the game server closed."): void {
   channel.retired = true;
   if (channel.reconnect !== null) clearTimeout(channel.reconnect);
   if (channel.idle !== null) clearTimeout(channel.idle);
   channel.reconnect = null;
   channel.idle = null;
-  channel.pending.forEach((settle) => settle({ ok: false, code: "unavailable", reason: "The connection to the game server closed." }));
+  channel.pending.forEach((settle) => settle({ ok: false, code: "unavailable", reason: pendingReason }));
   channel.pending.clear();
   try {
     channel.socket.close();
@@ -211,8 +260,88 @@ function lose(channel: Channel, loss: RoomLoss): void {
   retire(channel);
 }
 
+/* ---------------------------------------------------------------------------
+    LIVE-4 (L4-3): `reload`, `route`, 4426 -- TERMINAL FOR THE CHANNEL; THE PAGE DECIDES
+   --------------------------------------------------------------------------- */
+
+const CONNECTION_LEVEL_CODES: ReadonlySet<string> = new Set(["client-protocol", "client-announcement"]);
+
+/** `reload` (or a bare 4426). A connection-level one ends every channel of this page; a per-game one ends this game's. */
+function answerReload(channel: Channel, code: ClientVerdictCode): void {
+  if (channel.retired && pageAnswer !== null) return;
+  if (CONNECTION_LEVEL_CODES.has(code) || channel.key === LOBBY_CHANNEL) {
+    const connection: ClientVerdictCode = CONNECTION_LEVEL_CODES.has(code) ? code : "client-protocol";
+    if (pageAnswer !== null) return;
+    pageAnswer = { code: connection, reason: CLIENT_ANSWER_SENTENCES[connection] };
+    for (const other of Array.from(channels.values())) {
+      other.rooms.forEach((listener) => listener.onError?.(CLIENT_ANSWER_SENTENCES[connection]));
+      retire(other, CLIENT_ANSWER_SENTENCES[connection]);
+    }
+    port().reload({ code: connection, gameId: null });
+    return;
+  }
+  if (answeredGames.has(channel.key)) return;
+  answeredGames.set(channel.key, CLIENT_ANSWER_SENTENCES["client-rules"]);
+  /* A channel nobody listens to any more (the table was just left; it closes after IDLE_CLOSE_MS) is retired, and the
+     page is not reloaded for a table it is no longer showing. */
+  const listened = listening(channel);
+  retire(channel, CLIENT_ANSWER_SENTENCES["client-rules"]);
+  if (listened) port().reload({ code: "client-rules", gameId: channel.key });
+}
+
+/** `route`: follow a checked destination, or end the channel as "cannot continue here" (never a made-up target). */
+function answerRoute(channel: Channel, frame: RouteFrame): void {
+  if (channel.retired) return;
+  const environment = routeEnvironmentOverride ?? pageRouteEnvironment();
+  const target = routeTargetOf(frame, { ...environment, gameServerUrl: GAME_SERVER_URL ?? null, gameId: channel.key === LOBBY_CHANNEL ? null : channel.key });
+  if (target.kind === "bundle") {
+    answeredGames.set(channel.key, CLIENT_ANSWER_SENTENCES.route);
+    retire(channel, CLIENT_ANSWER_SENTENCES.route);
+    port().routeToBundle({ url: target.url, gameId: channel.key });
+    return;
+  }
+  if (target.kind === "socket" && channel.socketRoutes < MAX_ROUTE_HOPS) {
+    channel.socketRoutes += 1;
+    channel.url = target.url;
+    channel.rerouting = true;
+    try {
+      channel.socket.close();
+    } catch {
+      /* already closed: its close handler re-attaches */
+    }
+    return;
+  }
+  /* Fail closed, as for a table this server does not continue: said once, nothing reconnects -- and NOT a loss. The
+     table is still this player's and is kept exactly as it was, so the tab keeps its pointer to it (a loss would forget
+     it and say "not open to you"): every listener is told the sentence, as the log link says it, and a later
+     subscriber hears it at once (`clientAnswerFor`). */
+  const sentence = CLIENT_ANSWER_SENTENCES["route-unavailable"];
+  if (channel.key === LOBBY_CHANNEL) {
+    channel.rooms.forEach((listener) => listener.onError?.(sentence));
+  } else {
+    answeredGames.set(channel.key, sentence);
+    channel.views.forEach((listener) => listener.onError?.("unavailable", sentence));
+    channel.chats.forEach((listener) => listener.onError?.("unavailable", sentence));
+  }
+  retire(channel, sentence);
+}
+
+/** This page's origin and this bundle's base path (a route to it is no route). */
+function pageRouteEnvironment(): { pageOrigin: string; bundleBase: string } {
+  const pageOrigin = typeof window !== "undefined" && typeof window.location !== "undefined" ? window.location.origin : "";
+  let bundleBase = "/";
+  try {
+    bundleBase = new URL(process.env.PUBLIC_URL || "/", pageOrigin || "http://localhost").pathname;
+  } catch {
+    bundleBase = "/";
+  }
+  return { pageOrigin, bundleBase };
+}
+
 function attachNow(channel: Channel): void {
-  const socket = socketFactory(socketUrlFor(GAME_SERVER_URL ?? ""));
+  /* LIVE-4 (L4-3): the announcement on every channel's socket; a routed channel opens on its routed path. */
+  const url = channel.url ?? GAME_SERVER_URL ?? "";
+  const socket = socketFactory(socketUrlFor(announcementOverride === null ? withClientAnnouncement(url) : withClientAnnouncement(url, announcementOverride)));
   channel.socket = socket;
   let opened = false;
 
@@ -255,6 +384,16 @@ function attachNow(channel: Channel): void {
         const rooms = Array.isArray((frame as unknown as RoomsFrame).rooms) ? (frame as unknown as RoomsFrame).rooms : [];
         channel.last.rooms = rooms;
         channel.rooms.forEach((listener) => listener.onRooms(rooms));
+        return;
+      }
+      /* LIVE-4 (L4-3): client protocol 1's answers -- terminal for this channel; the page decides. */
+      case "reload": {
+        const code = frame.code === "client-rules" || frame.code === "client-announcement" ? frame.code : "client-protocol";
+        answerReload(channel, code);
+        return;
+      }
+      case "route": {
+        answerRoute(channel, frame as unknown as RouteFrame);
         return;
       }
       case "chat": {
@@ -306,6 +445,22 @@ function attachNow(channel: Channel): void {
     if (channel.socket !== socket) return;
     channel.open = false;
     const code = (event as { code?: unknown } | null)?.code;
+    /* LIVE-4 (L4-3): this channel closed its own socket to follow a route to another path -- re-attach there now,
+       re-stating its standing subscriptions. */
+    if (channel.rerouting && !channel.retired) {
+      channel.rerouting = false;
+      channel.pending.forEach((settle) => settle({ ok: false, code: "unavailable", reason: "The connection to the game server dropped. Check the table and try again." }));
+      channel.pending.clear();
+      channel.backlog = channel.backlog.filter((queued) => queued.requestId === undefined);
+      attach(channel);
+      return;
+    }
+    /* LIVE-4 (L4-3): 4426 -- this bundle may not talk to this server (its `reload` frame, if one came, ended the
+       channel already). Terminal, never looped on. */
+    if (code === CLIENT_ANSWER_CLOSE_CODE) {
+      if (!channel.retired) answerReload(channel, "client-protocol");
+      return;
+    }
     /* 4410: read access to this game is gone (§6.2). Terminal; the error frame before it named why. */
     if (code === 4410 && channel.key !== LOBBY_CHANNEL) {
       const known = channel.lastErrorCode;
@@ -359,6 +514,9 @@ function channelFor(key: string): Channel {
     failedOpens: 0,
     rebootstrap: false,
     retired: false,
+    url: null,
+    socketRoutes: 0,
+    rerouting: false,
   };
   channels.set(key, channel);
   attach(channel);
@@ -389,6 +547,9 @@ function stand(channel: Channel, key: string, frame: object): void {
  *  other op rides its game's channel, behind that game's `room-hello`. Resolved, never rejected. */
 export function roomOp(op: RoomOpBody, gameId?: string): Promise<RoomOpResult> {
   if (!roomLinkAvailable()) return Promise.resolve({ ok: false, code: "unavailable", reason: "No game server is configured in this build." });
+  /* LIVE-4 (L4-3): nothing is sent after this page (or this table) was told it cannot talk here. */
+  const answered = clientAnswerFor(gameId);
+  if (answered !== null) return Promise.resolve({ ok: false, code: "unavailable", reason: answered });
   const known = gameId === undefined ? undefined : lostGames.get(gameId);
   if (known !== undefined) return Promise.resolve({ ok: false, code: known.code, reason: known.reason });
   const channel = channelFor(gameId ?? LOBBY_CHANNEL);
@@ -417,6 +578,10 @@ export function roomOp(op: RoomOpBody, gameId?: string): Promise<RoomOpResult> {
 
 /** The public list (`rooms-watch`). Returns the unsubscribe. */
 export function watchPublicRooms(onRooms: (rooms: RoomSummary[]) => void, onError?: (message: string) => void): () => void {
+  if (pageAnswer !== null) {
+    onError?.(pageAnswer.reason);
+    return () => undefined;
+  }
   const channel = channelFor(LOBBY_CHANNEL);
   const listener = { onRooms, onError };
   channel.rooms.add(listener);
@@ -440,6 +605,11 @@ export function watchRoom(gameId: string, listener: ViewListener): () => void {
     listener.onLost?.(known);
     return () => undefined;
   }
+  const answered = clientAnswerFor(gameId);
+  if (answered !== null) {
+    listener.onError?.("unavailable", answered);
+    return () => undefined;
+  }
   const channel = channelFor(gameId);
   channel.views.add(listener);
   stand(channel, "room-hello", { kind: "room-hello", gameId });
@@ -457,6 +627,12 @@ export function subscribeChat(
   onError?: (code: string, reason: string) => void,
 ): () => void {
   if (lostGames.has(gameId)) return () => undefined;
+  /* LIVE-4 (L4-3): a table (or page) this tab was told it cannot talk about here: said at once, nothing opened. */
+  const answered = clientAnswerFor(gameId);
+  if (answered !== null) {
+    onError?.("unavailable", answered);
+    return () => undefined;
+  }
   const channel = channelFor(gameId);
   const listener = { onChat, onError };
   channel.chats.add(listener);
@@ -471,14 +647,14 @@ export function subscribeChat(
 /** A chat line. The server signs it with this principal's seat (`author` = player id, `displayName` = its nickname);
  *  the frame carries neither. Spectators may not chat (OD-L2-4) and are told so in `onError`. */
 export function sendChat(gameId: string, text: string): void {
-  if (lostGames.has(gameId)) return;
+  if (lostGames.has(gameId) || clientAnswerFor(gameId) !== null) return;
   const channel = channelFor(gameId);
   stand(channel, "room-hello", { kind: "room-hello", gameId }); // a no-op when it already stands
   send(channel, { kind: "chat-send", gameId, text });
 }
 
 export function subscribePresence(gameId: string, onPresence: (entries: PresenceState[], serverNow?: number) => void): () => void {
-  if (lostGames.has(gameId)) return () => undefined;
+  if (lostGames.has(gameId) || clientAnswerFor(gameId) !== null) return () => undefined;
   const channel = channelFor(gameId);
   channel.presences.add(onPresence);
   stand(channel, "room-hello", { kind: "room-hello", gameId });

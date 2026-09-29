@@ -133,7 +133,8 @@ const GOLDEN_TEXT =
   '"rules":{"certified":[10,11],"current":11,"supported":[11,12]},"settlement_codecs":["18GNO/v1","18JUNO/v1"]}';
 const GOLDEN_KEY = "dc1-5414f9b2a65a2ce9ec031d09";
 
-/** A pool like this build with the Juno backend configured, before L4-3 (it accepts the legacy wire only). */
+/** A pool like this build with the Juno backend configured, as L4-1 wrote it (the legacy wire only, i.e. before L4-3);
+ *  the client-verdict cases below use `LIVE4` (`[0, 1]`) where protocol 1 matters. */
 const POOL = deploymentCapability({
   format: DEPLOYMENT_CAPABILITY_FORMAT,
   rules: { current: 11, supported: [11], certified: [10, 11] },
@@ -217,12 +218,16 @@ describe("the protocol axes (L4-1 §A)", () => {
     expect(lastRow(CLIENT_PROTOCOL_CHANGELOG).note).toMatch(/`cr` \(the bundle's supported rules engines; required/);
   });
 
-  it("this build accepts only the legacy wire until L4-3 implements protocol 1 (listed => implemented)", () => {
-    expect(ACCEPTED_CLIENT_PROTOCOLS).toEqual([LEGACY_CLIENT_PROTOCOL]);
-    expect(ACCEPTED_CLIENT_PROTOCOLS).not.toContain(CLIENT_PROTOCOL_VERSION);
-    // The bundle announces nothing yet, and its own server accepts what it announces (preflight §5.1's invariant).
-    expect(ANNOUNCED_CLIENT_PROTOCOL).toBe(LEGACY_CLIENT_PROTOCOL);
+  it("L4-3: this build speaks protocol 1 and still serves the legacy wire (listed => implemented)", () => {
+    /* L4-1 held these at [0] / 0 until the change that implements protocol 1; L4-3 is that change (the announcement,
+       the verdict at the upgrade and per game, `reload` / `route` / 4426, the explicit `error` case). */
+    expect(ACCEPTED_CLIENT_PROTOCOLS).toEqual([LEGACY_CLIENT_PROTOCOL, CLIENT_PROTOCOL_VERSION]);
+    expect(ACCEPTED_CLIENT_PROTOCOLS).toEqual([0, 1]);
+    // The bundle announces protocol 1, and its own server accepts what it announces (preflight §5.1's invariant).
+    expect(ANNOUNCED_CLIENT_PROTOCOL).toBe(CLIENT_PROTOCOL_VERSION);
+    expect(ANNOUNCED_CLIENT_PROTOCOL).toBe(1);
     expect(ACCEPTED_CLIENT_PROTOCOLS).toContain(ANNOUNCED_CLIENT_PROTOCOL);
+    expect(Object.isFrozen(ACCEPTED_CLIENT_PROTOCOLS)).toBe(true);
   });
 
   it("moves nothing on the rules axis: rules engine 11, supported [11], settlement certified [10, 11]", () => {
@@ -879,9 +884,11 @@ describe("clientVerdict: the client protocol, the client's rules and the game's 
     for (const bad of [0, -1, 11.5, Number.NaN]) expect(() => clientVerdict(announce("1", "11"), LIVE4, bad)).toThrow(TypeError);
   });
 
-  it("this build (before L4-3) accepts only protocol 0: a LIVE-4 announcement would be told to reload", () => {
+  it("L4-3: this build talks to a protocol-1 announcement, and still keeps the legacy wire's path", () => {
     const thisBuild = withPool({ client_protocols: ACCEPTED_CLIENT_PROTOCOLS });
     expect(clientVerdict(announce(null), thisBuild, 11)).toEqual({ kind: "legacy" });
-    expect(kindOf(clientVerdict(announce(String(CLIENT_PROTOCOL_VERSION), "11"), thisBuild, 11))).toBe("reload/client-protocol");
+    expect(clientVerdict(announce(String(CLIENT_PROTOCOL_VERSION), "11"), thisBuild, 11)).toEqual({ kind: "ok" });
+    // The pre-L4-3 pool (legacy only) would have told the same announcement to reload.
+    expect(kindOf(clientVerdict(announce(String(CLIENT_PROTOCOL_VERSION), "11"), withPool({ client_protocols: [0] }), 11))).toBe("reload/client-protocol");
   });
 });

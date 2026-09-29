@@ -32,6 +32,15 @@
 // it expired or was revoked). Production authenticates the `__Host-gs_session` cookie; development authenticates
 // `?dev_claim=` through the loopback-only development authenticator, and nothing else.
 //
+// LIVE-4 (L4-3): EVERY SOCKET IS ALSO A CLIENT OF SOME PROTOCOL. The upgrade reads the bundle's announcement
+// (`cp` / `cr` / `cb`, `identity/authenticateUpgrade.ts`), and this file judges it with the canonical client verdict
+// (`clientVerdict`) -- once at the connection (the client protocol), and per game at the hello, every submit, every log
+// push, the room hello and every room-view push (the tab's rules against the game's pin) -- and answers with client
+// protocol 1's frames (`reload`, close 4426; `route` once LIVE-6 supplies destinations, and until then exactly what a
+// game this pool does not continue is answered). A protocol-1 socket's build is never compared. A socket that
+// announced nothing is the legacy wire and keeps exactly its pre-LIVE-4 treatment: the exact build check on submit,
+// no per-game rules check, and never a LIVE-4 frame or close code.
+//
 // LIVE-2D: ONE ROOM PROTOCOL, IN BOTH MODES. The legacy room protocol (`room-write`, `seat-pin`, `claim-seat`,
 // `lobby-*`, and the `room`-keyed hello, room-hello, chat and presence) is DELETED -- its handlers, its room
 // documents, its PINs and tokens and its staging lobby. What a socket may say about rooms is `room-op`,
@@ -56,7 +65,7 @@ import { createMemoryRecordStore, type RecordStore } from "./rooms/recordStore";
 import { createRoomHost, GameUnavailableError, sessionBoardFacts, type RoomHost } from "./rooms/roomHost";
 import { GAME_ID_PATTERN, seatOf, type GameRecord } from "./rooms/gameRecord";
 /* LIVE-3C: restore, reconciliation, durable holds, the terminal seal, the operator's view. */
-import { isMaintenanceHold } from "./rooms/committedView";
+import { isMaintenanceHold, type CommittedView } from "./rooms/committedView";
 import { createMemoryHoldStore, HoldUnreadableError, makeHold, type HoldStore } from "./rooms/holdStore";
 import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILING_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE, type SettlementLifecycle } from "./rooms/lifecycle";
 import { NO_MONEY_FACTS, type MoneyContinuationFacts } from "./escrow/moneyContinuation";
@@ -66,6 +75,17 @@ import { createContinuationWiring, type ContinuationWiring } from "./continuatio
 import type { DeploymentCapability } from "../../frontend/src/gameEngine/compat/deploymentCapability";
 import type { ContinuationVerdict, PoolServingState } from "../../frontend/src/gameEngine/compat/continuationVerdict";
 import { historyNotReadHere } from "../../frontend/src/gameEngine/compat/sessionContinuation";
+/* LIVE-4 (L4-3): the client verdict, and client protocol 1's answers. */
+import { clientVerdict, type ClientAnnouncement, type ClientVerdict } from "../../frontend/src/gameEngine/compat/clientCompatibility";
+import { gameIdentityOfEntries } from "../../frontend/src/gameEngine/compat/continuationIdentity";
+import { LEGACY_CLIENT_PROTOCOL } from "../../frontend/src/gameEngine/protocolVersions";
+import {
+  CLIENT_ANSWER_CLOSE_CODE,
+  CLIENT_ANSWER_CLOSE_REASON,
+  CLIENT_ANSWER_SENTENCES,
+  clientAnswerFor,
+  type ReloadFrame,
+} from "../../frontend/src/utils/clientAnswers";
 import { createMoneyLimiter, handleMoneyHttp } from "./escrow/moneyHttpApi";
 import type { MoneyTables } from "./escrow/moneyTables";
 import type { EscrowGameplaySeam } from "./rooms/roomHost";
@@ -355,6 +375,8 @@ export function createGameServer(options: GameServerOptions): {
   /** LIVE-2B: the identity limiters, their refusals by name, and the upgrade/socket counters. */
   identityLimiter: IdentityLimiter;
   upgrades: Readonly<{ accepted: number; refused: Readonly<Record<string, number>>; sessionClosed: number; malformedCooldowns: number; reaped: number }>;
+  /** LIVE-4 (L4-3): what clients were told by their client verdict (tests and the operator read it). */
+  clientAnswers: Readonly<{ connectionReload: number; gameReload: number; routeFailClosed: number; legacyRefused: number }>;
   /** LIVE-2C: the GameRecord store and the server-owned room authority (tests read their counters). */
   records: RecordStore;
   rooms: RoomHost;
@@ -691,11 +713,21 @@ export function createGameServer(options: GameServerOptions): {
   const submitOnActor = async (
     tx: Tx,
     game: GameActor,
+    socket: WebSocket,
     attached: Attached,
     frame: SubmitFrame,
     inReplyTo: string | undefined,
   ): Promise<void> => {
     const answer = (message: object) => tx.reply(answering(message, inReplyTo));
+    /* LIVE-4 (L4-3): THE TAB AGAINST THE GAME, FIRST -- in place of `RoomSession.submit`'s build compare for a
+       protocol-1 socket (which is why that compare now runs for the legacy wire only): judged against the view
+       committed NOW, so a submit queued before the deal is judged against the deal. */
+    const refused = clientRefusalFor(socket, attached.room, tx.view);
+    if (refused !== null) {
+      unsubscribeLog(socket);
+      refuseClient(socket, attached.room, refused, inReplyTo);
+      return;
+    }
     if (tx.view.hold?.reason === "uncertain") {
       answer({ kind: "refused", code: "unavailable", reason: UNAVAILABLE_REASON, build: options.build });
       return;
@@ -802,6 +834,9 @@ export function createGameServer(options: GameServerOptions): {
       result = session.submit({
         actor,
         build: frame.build,
+        /* LIVE-4 (L4-3): the socket's announced client protocol, as the upgrade read it: 0 (the legacy wire) keeps the
+           exact build check; 1+ was judged above by its announcement, and its build is never compared. */
+        clientProtocol: clientProtocolOf(socket),
         msg: frame.msg,
         baseIndex: frame.baseIndex,
         baseId: frame.baseId,
@@ -938,6 +973,163 @@ export function createGameServer(options: GameServerOptions): {
   /** IPv6 /48 aggregates (not part of the frozen context, so kept beside it). */
   const socketsByAggregate = new Map<string, Set<WebSocket>>();
   const aggregateOf = new Map<WebSocket, string>();
+
+  /* ==================================================================
+      LIVE-4 (L4-3): EACH SOCKET'S CLIENT -- ITS ANNOUNCEMENT, FROZEN AT THE UPGRADE, JUDGED BY THE CANONICAL VERDICT
+     ==================================================================
+     The announcement is read once at the upgrade (`decideUpgrade`), beside the frozen identity context, and judged
+     here with `clientVerdict` against THIS pool's capability -- the one `continuation` validated at startup:
+       at the connection (no game)   `reload` (a protocol this pool does not accept, an unreadable announcement) is
+                                     answered at once and the socket closed 4426; `legacy-refused` (protocol 0 once
+                                     retired) is answered frame by frame with what a legacy bundle already treats as
+                                     terminal; `legacy` and `ok` talk.
+       per game (`ok` sockets only)  at the hello, every submit and every log push, the room hello and every room push:
+                                     the tab's rules against the game's pin. A LEGACY socket is never asked this (it
+                                     announced no rules: the known gap that retires with protocol 0, OD-L4-1).
+     Nothing here reads a build: the announcement's `cb` is carried for the window and never compared. */
+  interface SocketClient {
+    readonly announcement: ClientAnnouncement;
+    /** The connection-level verdict (no game in view). */
+    readonly connection: ClientVerdict;
+    /** Games whose check this socket passed on a deal that can no longer change (a dealt pin is immutable): not asked
+     *  again. An undealt game is asked at every push, so the deal is judged the moment it is fanned out. */
+    readonly settled: Set<string>;
+  }
+  const clientOf = new Map<WebSocket, SocketClient>();
+  /** Sockets told `reload` for a game (and closed 4426): nothing they sent after it -- a queued room op, a submit -- is
+   *  handled, exactly as for a socket told `reload` at the connection. Weak: it goes with the socket. */
+  const toldToReload = new WeakSet<WebSocket>();
+  /** A socket this server knows no announcement for is the legacy wire (never reached: every accepted upgrade has one). */
+  const LEGACY_SOCKET_CLIENT: SocketClient = Object.freeze({
+    announcement: Object.freeze({ kind: "legacy", protocol: LEGACY_CLIENT_PROTOCOL, build: null }),
+    connection: Object.freeze({ kind: "legacy" }),
+    settled: new Set<string>(),
+  }) as SocketClient;
+  const clientOfSocket = (socket: WebSocket): SocketClient => clientOf.get(socket) ?? LEGACY_SOCKET_CLIENT;
+  /** The client protocol a submit is judged under (`RoomSession.submit` step 1): the announced one for a socket this
+   *  pool talks to on protocol 1+, the legacy wire otherwise. */
+  const clientProtocolOf = (socket: WebSocket): number => {
+    const client = clientOfSocket(socket);
+    return client.connection.kind === "ok" && client.announcement.kind === "announced" ? client.announcement.protocol : LEGACY_CLIENT_PROTOCOL;
+  };
+  /** The window's words for an announcement: bounded, and never a stranger's text (`cb` is a build id or nothing). */
+  const describeClient = (announcement: ClientAnnouncement): string =>
+    announcement.kind === "announced"
+      ? `cp=${announcement.protocol} cr=${announcement.rules.join(",")} cb=${announcement.build ?? "-"}`
+      : announcement.kind === "malformed"
+        ? `cp=${announcement.protocol ?? "?"} (${announcement.problem}) cb=${announcement.build ?? "-"}`
+        : `legacy (no cp) cb=${announcement.build ?? "-"}`;
+  const clientAnswers = { connectionReload: 0, gameReload: 0, routeFailClosed: 0, legacyRefused: 0 };
+
+  /** The game's rules pin as the client verdict reads it (the committed deal, canonically), and whether it can still
+   *  change: an undealt game's can; a dealt, unpinned or damaged deal's cannot (a deal is never undone, RV-5). */
+  const gamePinOf = (view: CommittedView): { pin: number | null; settled: boolean } => {
+    try {
+      const identity = gameIdentityOfEntries(view.entries);
+      if (identity.kind === "dealt") return { pin: identity.gci.rules_engine_version, settled: true };
+      return { pin: null, settled: identity.kind !== "undealt" };
+    } catch {
+      return { pin: null, settled: false }; // asked again at the next push
+    }
+  };
+
+  /** What a per-game refusal sends, and whether the socket then closes 4426. */
+  type ClientRefusal = { readonly kind: "reload"; readonly frame: ReloadFrame } | { readonly kind: "not-here"; readonly pin: number | null };
+
+  /**
+   * LIVE-4 (L4-3): THE PER-GAME CLIENT CHECK for a socket this pool talks to on protocol 1+ -- `null` when it may be
+   * served this game now. A legacy socket is never checked (OD-L4-1). A game this pool does not continue (or holds for
+   * maintenance) is answered as such, whatever the tab: nothing of its history is served or interpreted, so the tab's
+   * rules do not matter -- and a stale tab never makes a game "incompatible". Otherwise the tab's announced rules
+   * against the game's pin: `reload` when this release's bundle carries the pin; `route` when it does not -- which
+   * before LIVE-6 has no destination, so it is answered exactly as a game this pool does not continue ("cannot continue
+   * here"), and no destination is made up.
+   */
+  const clientRefusalFor = (socket: WebSocket, gameId: string, view: CommittedView): ClientRefusal | null => {
+    const client = clientOfSocket(socket);
+    if (client.connection.kind !== "ok") return null;
+    if (client.settled.has(gameId)) return null;
+    if (view.incompatible !== null || isMaintenanceHold(view.hold)) return null;
+    const { pin, settled } = gamePinOf(view);
+    /* The one mapping (`clientAnswerFor`). No route destination exists before LIVE-6: `destination: null`. */
+    const answer = clientAnswerFor(clientVerdict(client.announcement, continuation.capability, pin), { gameId, destination: null });
+    if (answer.kind === "reload") return { kind: "reload", frame: answer.frame };
+    if (answer.kind === "route" || answer.kind === "not-continued-here") return { kind: "not-here", pin };
+    if (settled) client.settled.add(gameId);
+    return null;
+  };
+
+  /** The fail-closed answer for a route with no destination (before LIVE-6): the `incompatible` frame a game this pool
+   *  does not continue is answered with -- a legacy-shaped frame every client already treats as terminal. */
+  const notHereFrame = (pin: number | null, inReplyTo?: string): object => ({
+    kind: "incompatible",
+    reason: CLIENT_ANSWER_SENTENCES["route-unavailable"],
+    why: "client-rules",
+    pinnedRulesEngineVersion: pin,
+    supportedRulesEngineVersions: continuation.capability.rules.supported,
+    build: options.build,
+    ...(inReplyTo !== undefined ? { inReplyTo } : {}),
+  });
+
+  /** Deliver a per-game refusal: `reload` then close 4426 (terminal for a protocol-1 link); the fail-closed answer for a
+   *  route with nowhere to go (its link ends by itself, as for any game this pool does not continue). */
+  const refuseClient = (socket: WebSocket, gameId: string, refusal: ClientRefusal, inReplyTo?: string): void => {
+    if (refusal.kind === "reload") {
+      /* Said once: a nested push (a view broadcast that drops one socket and re-broadcasts presence) may reach the same
+         socket again before its close lands. */
+      if (toldToReload.has(socket)) return;
+      toldToReload.add(socket);
+      clientAnswers.gameReload += 1;
+      // eslint-disable-next-line no-console
+      console.log(`  client: ${describeClient(clientOfSocket(socket).announcement)} -- reload (${refusal.frame.code}) for ${gameId}; closed ${CLIENT_ANSWER_CLOSE_CODE}`);
+      send(socket, answering(refusal.frame, inReplyTo));
+      if (socket.readyState === socket.OPEN) socket.close(CLIENT_ANSWER_CLOSE_CODE, CLIENT_ANSWER_CLOSE_REASON);
+      return;
+    }
+    clientAnswers.routeFailClosed += 1;
+    // eslint-disable-next-line no-console
+    console.log(`  client: ${describeClient(clientOfSocket(socket).announcement)} -- route for ${gameId} has no destination before LIVE-6; answered as not continued here`);
+    send(socket, notHereFrame(refusal.pin, inReplyTo));
+  };
+
+  /** The legacy wire's sentence when protocol 0 is no longer accepted (only in a pool whose capability retired it). */
+  const LEGACY_REFUSED_SENTENCE = "This page is out of date for this game server. Reload the page to continue.";
+  /**
+   * LIVE-4 (L4-3): `legacy-refused` -- a socket that announced nothing, on a pool that no longer accepts protocol 0.
+   * Answered ONLY with frames a legacy bundle already understands, each terminal (or harmless) in it: a hello or submit
+   * gets `incompatible` (the legacy log link stops and says the sentence), a room op a refused `room-ack`, any other room
+   * frame an `error` whose sentence the legacy client shows as-is. Never `reload`, `route` or 4426, and the socket is not
+   * closed (a legacy bundle reconnects after a close) -- nor reaped for having no subscription.
+   */
+  const answerLegacyRefused = (socket: WebSocket, frame: { kind: string; requestId?: unknown; submissionId?: unknown }): void => {
+    clientAnswers.legacyRefused += 1;
+    switch (frame.kind) {
+      case "hello":
+      case "submit":
+        send(
+          socket,
+          answering(
+            {
+              kind: "incompatible",
+              reason: LEGACY_REFUSED_SENTENCE,
+              why: "client-protocol",
+              pinnedRulesEngineVersion: null,
+              supportedRulesEngineVersions: continuation.capability.rules.supported,
+              build: options.build,
+            },
+            frame.kind === "submit" ? submissionIdOf(frame) : undefined,
+          ),
+        );
+        return;
+      case "room-op":
+        send(socket, { kind: "room-ack", requestId: frame.requestId, ok: false, code: "unavailable", reason: LEGACY_REFUSED_SENTENCE });
+        return;
+      case "presence-set":
+        return;
+      default:
+        send(socket, { kind: "error", code: "unavailable", reason: LEGACY_REFUSED_SENTENCE });
+    }
+  };
   /** Which games a socket reads -- its room view and its log -- and the reverse (LIVE-2 §4.4). */
   const socketsByGame = new Map<string, Set<WebSocket>>();
   const gamesOfSocket = new Map<WebSocket, Set<string>>();
@@ -1042,6 +1234,14 @@ export function createGameServer(options: GameServerOptions): {
     ...(options.escrow !== undefined ? { escrow: options.escrow } : {}),
     ...(options.money !== undefined ? { money: options.money } : {}),
     boardFacts,
+    /* LIVE-4 (L4-3): the room channel's client check. A game this pool does not continue is shown as such by its view
+       (`holdKind: "incompatible"`, with its reason), so only a `reload` refuses a room socket. */
+    clientMayRead: (socket, gameId, view) => {
+      const refused = clientRefusalFor(socket, gameId, view);
+      if (refused === null || refused.kind !== "reload") return true;
+      refuseClient(socket, gameId, refused);
+      return false;
+    },
     statusExtras: () => ({
       store: { restart_required: counters.restartRequired, uncertain: counters.storeUncertain, held_corrupt: counters.heldCorrupt, held_durable: counters.heldDurable, timeouts: counters.storeTimeouts },
       actors: { resident: games.size },
@@ -1052,7 +1252,7 @@ export function createGameServer(options: GameServerOptions): {
 
   /** LIVE-2C (LIVE-2 §14.3 item 5): a log subscriber of a server-owned game is re-authorized on EVERY push, so a
    *  socket that lost read access (kicked, dropped at the deal) stops receiving at once, before its close lands. */
-  const ownedSubscriberFor = (socket: WebSocket, gameId: string, principalId: string): Subscriber => ({
+  const ownedSubscriberFor = (socket: WebSocket, gameId: string, principalId: string, game: GameActor): Subscriber => ({
     /* The actor keys in-flight and late answers by the log's actor: the seat's `player_id`, read from the record
        committed at the moment it asks (a watcher that has no seat is keyed by nothing any entry carries). */
     get principal() {
@@ -1066,6 +1266,20 @@ export function createGameServer(options: GameServerOptions): {
           send(socket, { kind: "error", code: gate.code, reason: gate.reason });
           socket.close(4410, "room access lost");
         }
+        return;
+      }
+      /* LIVE-4 (L4-3): AND THE TAB AGAINST THE GAME, re-checked on every push while the game is undealt -- the publish
+         replaced the committed view before this fan-out (E-5), so a deal is judged in the very push that carries it. A
+         protocol-1 subscriber whose rules do not include the new pin gets ONE answer instead of the deal and is
+         unsubscribed; nothing further reaches it. */
+      const refused = clientRefusalFor(socket, gameId, game.view);
+      if (refused !== null) {
+        unsubscribeLog(socket);
+        if (sockets.get(socket)?.room === gameId) {
+          sockets.delete(socket);
+          reindexGames(socket);
+        }
+        refuseClient(socket, gameId, refused);
         return;
       }
       send(socket, frame);
@@ -1173,10 +1387,20 @@ export function createGameServer(options: GameServerOptions): {
       refuseUpgrade(raw, decision.status, decision.retryAfterMs);
       return;
     }
-    const { ctx, ip } = decision;
+    const { ctx, ip, client } = decision;
+    /* LIVE-4 (L4-3): the connection-level client verdict, judged once against this pool's capability. A throw here
+       (a capability that no longer validates -- `continuation` validated it at startup) is the legacy wire's answer:
+       never a LIVE-4 frame for a socket nobody judged. */
+    let connection: ClientVerdict;
+    try {
+      connection = clientVerdict(client, continuation.capability, null);
+    } catch {
+      connection = { kind: "legacy" };
+    }
     wss.handleUpgrade(request, raw, head, (socket) => {
       upgrades.accepted += 1;
       contexts.set(socket, ctx);
+      clientOf.set(socket, { announcement: client, connection, settled: new Set<string>() });
       addTo(socketsBySession, ctx.sessionId, socket);
       addTo(socketsByPrincipal, ctx.principalId, socket);
       addTo(socketsByIp, ctx.ipKey, socket);
@@ -1242,8 +1466,21 @@ export function createGameServer(options: GameServerOptions): {
   wss.on("connection", (socket) => {
     /* LIVE-2B: THE FROZEN CONTEXT, set by the upgrade before this event -- never from a frame. */
     const ctx = contexts.get(socket) as ConnectionContext;
-    /** LIVE-2C (LIVE-2 §12.2): a socket that authenticated but never subscribed to anything is closed after 60 s. */
+    /* LIVE-4 (L4-3): THE CLIENT, judged at the upgrade. A protocol-1 client this pool cannot talk to is told so at once
+       -- `reload`, then close 4426 -- and nothing it sends is handled; its close below cleans up like any other. */
+    const client = clientOfSocket(socket);
+    const connectionAnswer = clientAnswerFor(client.connection);
+    if (connectionAnswer.kind === "reload") {
+      clientAnswers.connectionReload += 1;
+      // eslint-disable-next-line no-console
+      console.log(`  client: ${describeClient(client.announcement)} -- reload (${connectionAnswer.frame.code}); closed ${CLIENT_ANSWER_CLOSE_CODE}`);
+      send(socket, connectionAnswer.frame);
+      socket.close(CLIENT_ANSWER_CLOSE_CODE, CLIENT_ANSWER_CLOSE_REASON);
+    }
+    /** LIVE-2C (LIVE-2 §12.2): a socket that authenticated but never subscribed to anything is closed after 60 s.
+     *  LIVE-4 (L4-3): not a legacy socket this pool refuses -- a close would only make a legacy bundle reconnect. */
     const reapTimer = setTimeout(() => {
+      if (client.connection.kind === "legacy-refused") return;
       const subscribed = sockets.has(socket) || host.hasSubscription(socket);
       if (!subscribed && socket.readyState === socket.OPEN) {
         upgrades.reaped += 1;
@@ -1369,6 +1606,9 @@ export function createGameServer(options: GameServerOptions): {
     };
 
     const handleFrame = async (raw: unknown): Promise<void> => {
+      /* LIVE-4 (L4-3): a client told `reload` -- at the connection, or for a game -- is closing; nothing it sent is
+         handled (a room op queued behind the refused room-hello would otherwise still run). */
+      if (client.connection.kind === "reload" || toldToReload.has(socket)) return;
       /* LIVE-2B: checked again when the frame's turn comes -- a revocation while it waited behind others counts. */
       if (!sessionHolds()) return;
       /* ==================================================================
@@ -1424,6 +1664,12 @@ export function createGameServer(options: GameServerOptions): {
         } else if (frame.kind !== "presence-set") {
           send(socket, { kind: "error", code: "profile-required", reason });
         }
+        return;
+      }
+
+      /* LIVE-4 (L4-3): protocol 0 retired on this pool -- answered only with what a legacy bundle understands. */
+      if (client.connection.kind === "legacy-refused") {
+        answerLegacyRefused(socket, frame as unknown as { kind: string; requestId?: unknown; submissionId?: unknown });
         return;
       }
 
@@ -1484,13 +1730,21 @@ export function createGameServer(options: GameServerOptions): {
           send(socket, { kind: "error", code: "room-full", reason: "This table has as many watchers as it takes." });
           return;
         }
+        /* LIVE-4 (L4-3): THE TAB AGAINST THE GAME, before a single entry is sent: a protocol-1 tab whose rules do not
+           include the game's pin gets no catch-up -- `reload` (and 4426), or, with nowhere to route it before LIVE-6,
+           the answer a game this pool does not continue gets. After the read gate, so it says nothing to a stranger. */
+        const refused = clientRefusalFor(socket, gameId, game.view);
+        if (refused !== null) {
+          refuseClient(socket, gameId, refused);
+          return;
+        }
         sockets.set(socket, { room: gameId, principalId: ctx.principalId });
         reindexGames(socket);
         const helloFrame = frame as unknown as { baseIndex?: unknown; baseId?: unknown };
         const fromIndex = Number.isInteger(helloFrame.baseIndex) && (helloFrame.baseIndex as number) >= -1 ? (helloFrame.baseIndex as number) : -1;
         const baseId = typeof helloFrame.baseId === "string" ? helloFrame.baseId : undefined;
         unsubscribeLog(socket);
-        const subscribed = game.subscribe(socket, ownedSubscriberFor(socket, gameId, ctx.principalId), fromIndex, baseId);
+        const subscribed = game.subscribe(socket, ownedSubscriberFor(socket, gameId, ctx.principalId, game), fromIndex, baseId);
         if (subscribed.kind === "subscribed") {
           logSubscriptions.set(socket, game);
           return;
@@ -1576,7 +1830,7 @@ export function createGameServer(options: GameServerOptions): {
           return;
         }
         const originKey = seatNow.player_id;
-        const outcome = await game.run("submit", (tx) => submitOnActor(tx, game, attached, parsedFrame, inReplyTo), {
+        const outcome = await game.run("submit", (tx) => submitOnActor(tx, game, socket, attached, parsedFrame, inReplyTo), {
           origin: originFor(socket, originKey, inReplyTo),
         });
         if (outcome.kind === "busy") {
@@ -1655,8 +1909,9 @@ export function createGameServer(options: GameServerOptions): {
         console.error(`  rooms: dropping a closed socket's room subscriptions failed (ref ${errorRef()})`, error);
       }
       ipOfSocket.delete(socket);
-      /* LIVE-2B: out of every identity index. */
+      /* LIVE-2B: out of every identity index. LIVE-4 (L4-3): and its client. */
       contexts.delete(socket);
+      clientOf.delete(socket);
       reindexGames(socket);
       removeFrom(socketsBySession, ctx.sessionId, socket);
       removeFrom(socketsByPrincipal, ctx.principalId, socket);
@@ -1677,6 +1932,9 @@ export function createGameServer(options: GameServerOptions): {
     identity,
     identityLimiter,
     upgrades,
+    /* LIVE-4 (L4-3): what clients were told -- connection-level reloads, per-game reloads, routes answered as not
+       continued here (no destination before LIVE-6), and legacy frames answered on a pool that retired protocol 0. */
+    clientAnswers,
     records: recordStore,
     rooms: host,
     residentGames: () => games.size,

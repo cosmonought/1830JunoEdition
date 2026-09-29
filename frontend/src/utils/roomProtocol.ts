@@ -60,6 +60,11 @@ export interface RoomView {
   held: boolean;
   /** LIVE-3C: why the room will not take a change (`null`: it will). */
   holdKind: RoomHoldKind;
+  /** LIVE-4 (L4-3), additive and optional: with `holdKind: "incompatible"`, the server's own sentence for WHY it does
+   *  not continue (or no longer serves) the game -- the `incompatible` frame's `reason` -- so the standing notice says
+   *  the actual reason (a rules version, a game-server protocol, an escrow this server does not serve, a newer server
+   *  that took the game over) instead of one sentence for all of them. Absent otherwise, and from an older server. */
+  holdReason?: string;
   hostId: string;
   players: RoomViewPlayer[];
   playerCount: number | null;
@@ -356,11 +361,42 @@ export const GONE_REASONS = Object.freeze([
   "This game has been archived and is no longer open.",
 ] as const);
 
-/** The standing notice a room's view calls for, or `null` when it will take a change. */
-export function holdNoticeFor(view: Pick<RoomView, "holdKind"> | null | undefined): string | null {
+/** The longest server sentence a standing notice shows (the server's are one or two sentences). */
+const MAX_HOLD_REASON_LENGTH = 400;
+
+/** The standing notice a room's view calls for, or `null` when it will take a change. LIVE-4 (L4-3): an incompatible
+ *  game's notice is the server's own sentence for why (`holdReason`) when the view carries one -- the same words its
+ *  `incompatible` frame says -- and the general sentence otherwise. */
+export function holdNoticeFor(view: Pick<RoomView, "holdKind" | "holdReason"> | null | undefined): string | null {
   const kind = view?.holdKind ?? null;
+  if (kind === "incompatible") {
+    const reason = typeof view?.holdReason === "string" ? view.holdReason.replace(/\s*\(ref [0-9A-Z]{6}\)/g, "").trim() : "";
+    if (reason.length > 0 && reason.length <= MAX_HOLD_REASON_LENGTH) return reason;
+  }
   /* A kind this client does not know (a newer server) shows nothing rather than an empty notice. */
   return kind === null ? null : (HOLD_NOTICES[kind] ?? null);
+}
+
+/* ---------------------------------------------------------------------------
+    LIVE-4 (L4-3): THE GAME LINK'S "CANNOT CONTINUE HERE" BANNER SAYS THE ACTUAL REASON
+   --------------------------------------------------------------------------- */
+
+/** The `incompatible` reasons that ARE the game's rules pin (#1520): the only ones whose banner names rules versions.
+ *  An older server (before LIVE-4 L4-2) sent no reason code at all -- and its only `incompatible` was the rules pin. */
+export const RULES_PIN_REASONS: ReadonlySet<string> = new Set(["rules-not-supported", "legacy-unpinned"]);
+
+/**
+ * The banner for a game the server does not continue (the log link's `incompatible`, or a route this tab could not
+ * follow): the server's own sentence for the reason, and -- ONLY when the rules pin is the reason -- the pinned and
+ * supported rules versions after it, as #1520 wrote them. A game held for its hosted protocol, an escrow this server
+ * does not serve, a drain, a newer server's take-over or a stale tab never reads "Pinned rules version: 11; this server
+ * supports 11" (L4-2's finding): that line would name a version that is not the problem.
+ */
+export function incompatibleNotice(input: { reason: string; why?: string; pinned: number | null; supported: readonly number[] }): string {
+  const sentence = (typeof input.reason === "string" ? input.reason.replace(/\s*\(ref [0-9A-Z]{6}\)/g, "").trim() : "") || HOLD_NOTICES.incompatible;
+  const rulesAreTheReason = input.why === undefined || RULES_PIN_REASONS.has(input.why);
+  if (!rulesAreTheReason) return sentence;
+  return `${sentence} (Pinned rules version: ${input.pinned ?? "none"}; this server supports ${input.supported.join(", ")}.)`;
 }
 
 /** A refusal's support reference, when the server gave one -- for the console, never the screen. */

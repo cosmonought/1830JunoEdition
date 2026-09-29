@@ -11,6 +11,8 @@
 //      grid of identities and deployments (the generalization from scalars to sets changes no answer).
 //   4. This build's own capability and its key are pinned: with no escrow backend, and serving the ESCROW-3B fixture
 //      deployment. A change that moves either key must change this file, so it is visible in review.
+//      LIVE-4 (L4-3) MOVED BOTH, DELIBERATELY: client protocol 1 became implemented, so `client_protocols` went from [0]
+//      to [0, 1] -- and that is the only field that moved (proved below: the L4-2 keys come back with [0]).
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -47,14 +49,18 @@ const PIN_TYPES_AGREE: Same<FinancialDeploymentPin, DeploymentPin> = true;
 const HOLD_CODES_EXIST: Readonly<Record<keyof typeof CONFLICT_HOLD_CODES, FinancialHoldCode>> = CONFLICT_HOLD_CODES;
 
 /** This build, no escrow backend: computed independently (Python `json.dumps(sort_keys=True, separators=(",", ":"))`
- *  + `hashlib.sha256`) from the literal descriptor below. */
+ *  + `hashlib.sha256`) from the literal descriptor below. L4-3: `client_protocols` [0, 1] (was [0]). */
 const THIS_BUILD_NO_ESCROW_TEXT =
-  '{"client_protocols":[0],"escrow_abi_checksums":["5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"],' +
+  '{"client_protocols":[0,1],"escrow_abi_checksums":["5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"],' +
   '"escrow_deployments":[],"financial_protocols":[],"format":"18COSMOS/DEPLOYMENT-CAPABILITY/v1","hosted_protocols":[1],' +
   '"rules":{"certified":[10,11],"current":11,"supported":[11]},"settlement_codecs":["18JUNO/v1"]}';
-const THIS_BUILD_NO_ESCROW_KEY = "dc1-5e141a8b20871e5069520928";
+const THIS_BUILD_NO_ESCROW_KEY = "dc1-68c4b829b3a20e63f3e55cde";
 /** This build serving the ESCROW-3B fixture deployment (`escrow3bSupport.PIN`), cross-checked the same way. */
-const THIS_BUILD_FIXTURE_KEY = "dc1-0b0a7d27f1daf0017372b2a9";
+const THIS_BUILD_FIXTURE_KEY = "dc1-4308649847947d1d12ccdd41";
+/** The same two keys as L4-1 / L4-2 pinned them, when this build accepted the legacy wire only (`client_protocols`
+ *  [0]). Kept so the L4-3 move is visible, and proved to be client_protocols' alone. */
+const L4_2_NO_ESCROW_KEY = "dc1-5e141a8b20871e5069520928";
+const L4_2_FIXTURE_KEY = "dc1-0b0a7d27f1daf0017372b2a9";
 
 describe("L4-1: the moved constants are the shared ones, unchanged", () => {
   test("hosted 1 and financial 3, re-exported from escrow/moneyContinuation.ts as the very same values", () => {
@@ -181,7 +187,7 @@ describe("L4-1: the canonical money branch reproduces ESCROW-3A's verdict, reaso
 });
 
 describe("L4-1: this build's capability and its key (visible in review when either moves)", () => {
-  test("no escrow backend: this build's facts, no financial protocol, the legacy client wire only; the golden key", () => {
+  test("no escrow backend: this build's facts, no financial protocol, the legacy wire and client protocol 1; the golden key", () => {
     const capability = thisDeploymentCapability([]);
     /* `rules.supported` is [11]: a second entry would be a dual-support rules bump, allowed only with a
        replay-equivalence certificate (OD-L4-2) -- and it moves this key. */
@@ -193,10 +199,28 @@ describe("L4-1: this build's capability and its key (visible in review when eith
       settlement_codecs: ["18JUNO/v1"],
       escrow_abi_checksums: ["5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"],
       escrow_deployments: [],
-      client_protocols: [0],
+      client_protocols: [0, 1],
     });
     assert.equal(capabilityCanonicalText(capability), THIS_BUILD_NO_ESCROW_TEXT);
     assert.equal(compatibilityKey(capability), THIS_BUILD_NO_ESCROW_KEY);
+  });
+
+  test("L4-3 moved the key by client_protocols ALONE: [0] gives back L4-2's keys; nothing else of this build moved", () => {
+    for (const [pins, now, before] of [
+      [[] as DeploymentPin[], THIS_BUILD_NO_ESCROW_KEY, L4_2_NO_ESCROW_KEY],
+      [[PIN] as DeploymentPin[], THIS_BUILD_FIXTURE_KEY, L4_2_FIXTURE_KEY],
+    ] as const) {
+      const capability = thisDeploymentCapability(pins);
+      assert.equal(compatibilityKey(capability), now);
+      assert.notEqual(now, before, "the key moved");
+      const legacyOnly = deploymentCapability({ ...capability, client_protocols: [0] });
+      assert.equal(compatibilityKey(legacyOnly), before, "with the legacy wire only, the L4-2 key comes back exactly");
+      /* The canonical texts differ in `client_protocols` and nowhere else. */
+      const nowText = JSON.parse(capabilityCanonicalText(capability)) as Record<string, unknown>;
+      const beforeText = JSON.parse(capabilityCanonicalText(legacyOnly)) as Record<string, unknown>;
+      assert.deepEqual(Object.keys(nowText).filter((field) => JSON.stringify(nowText[field]) !== JSON.stringify(beforeText[field])), ["client_protocols"]);
+      assert.deepEqual([beforeText.client_protocols, nowText.client_protocols], [[0], [0, 1]]);
+    }
   });
 
   test("serving the ESCROW-3B fixture deployment: financial 3 appears with it, and the key moves", () => {

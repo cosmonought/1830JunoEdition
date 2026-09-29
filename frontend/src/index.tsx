@@ -16,13 +16,18 @@ import App from "./App";
 import { CrashScreen } from "./components/CrashScreen";
 import { ProfileGate } from "./components/ProfileGate";
 import { SessionEndedNotice } from "./components/SessionEndedNotice";
+import { ClientUpdateNotice } from "./components/ClientUpdateNotice";
 import { GAME_SERVER_URL } from "./config";
 import { createAppSessionPort, installSessionPort } from "./utils/sessionBootstrap";
+import { createBrowserClientUpdatePort, installClientUpdatePort } from "./utils/clientUpdate";
 
 /* LIVE-2B (LIVE-2 §4.3): before any link opens a socket, the session is bootstrapped (`POST /gs/api/session`) -- the
    links ask this port first. A development-identity build (and a build with no game server) needs no bootstrap.
    LIVE-2E: and the app itself waits behind `ProfileGate` until that session is a PROFILED one. */
 installSessionPort(createAppSessionPort(GAME_SERVER_URL));
+/* LIVE-4 (L4-3): the page's one answer to a server that says this bundle cannot play what it asked for -- reload once
+   (keeping the table), follow a checked route, or ask; never a loop (`utils/clientUpdate.ts`). */
+installClientUpdatePort(createBrowserClientUpdatePort());
 
 const ROOT_ELEMENT_ID = "root";
 
@@ -47,6 +52,9 @@ root.render(
       {/* LIVE-2B: the explicit "Continue" decision when the server says the session ended (LIVE-2E: it leads back to
           the gate, where the recovery key or a device-link code restores the profile). */}
       <SessionEndedNotice />
+      {/* LIVE-4 (L4-3): shown only when a reload did not help, the page cannot remember that it tried, or a route
+          could not be followed -- it says why and offers a Reload button. */}
+      <ClientUpdateNotice />
     </React.StrictMode>
   </CrashScreen>,
 );

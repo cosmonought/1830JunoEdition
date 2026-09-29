@@ -11,7 +11,7 @@ import type { RecordStore } from "../../rooms/recordStore";
 import { isStoreCorrupt, isStoreIncompatible, StoreDefiniteError, type StoreWriteOutcome } from "../storeResult";
 import type { Gate } from "./faults";
 import { gameId, gameRecord, hold, joinCode, nextRecord } from "./fixtures";
-import { hook, rejection, stalledAt, turns, type CaseContext, type ConformanceCase, type SubjectBase } from "./harness";
+import { hook, rejection, sameTokenThenFresh, stalledAt, turns, type CaseContext, type ConformanceCase, type SubjectBase } from "./harness";
 
 /** What a test can plant where a store keeps one value: damage, or another build's format. */
 export type Planted = "corrupt" | "newer" | "older";
@@ -31,6 +31,14 @@ export interface RecordSubject extends SubjectBase {
   armLostAnswer?(ctx: CaseContext, gameId: string): void;
   /** "inject-transient-failure": the game's next record put fails before it has any effect. */
   armTransientFailure?(ctx: CaseContext, gameId: string): void;
+  /** "idempotency-token": the client request tokens of every record write attempt for this game, in order. */
+  writeTokens?(ctx: CaseContext, gameId: string): string[];
+  /** The game's next record put ends UNKNOWN to the writer -- having `landed` or not -- and its resend stalls. */
+  armUnknownThenStallResend?(ctx: CaseContext, gameId: string, landed: boolean): Gate;
+  /** Hold the next claim of this join code after the writer's own checks, before it is applied. */
+  stallNextCodeClaim?(ctx: CaseContext, code: string): Gate;
+  /** "inject-unevaluated": the game's next record put (landed or not) and every resend fail unevaluated; reads work. */
+  armUnevaluated?(ctx: CaseContext, gameId: string, landed: boolean): void;
 }
 
 const G = gameId(1);
@@ -181,6 +189,8 @@ export const RECORD_CASES: readonly ConformanceCase<RecordSubject>[] = [
       refusedDefinite(await stale.put(nextRecord(v1, ctx.tick()), 1));
       const claim = await rejection(stale.claimCode(joinCode(2), gameId(2)));
       assert.ok(claim instanceof StoreDefiniteError || (claim as Error).name === "StoreDefiniteError", "a fenced claim is definite");
+      refusedDefinite(await stale.put(gameRecord(2), null));
+      assert.equal(await subject.stored(ctx, gameId(2)), null, "a stale writer creates no game");
       await recordUnchanged(subject, ctx, G, before);
       const current = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
       ok(await current.put(nextRecord(v1, ctx.tick()), 1));
@@ -229,6 +239,96 @@ export const RECORD_CASES: readonly ConformanceCase<RecordSubject>[] = [
       assert.deepEqual(await store.put(v2, 1), { kind: "committed", redone: true });
       assert.deepEqual(await (await subject.open(ctx)).load(G), v2);
       refusedDefinite(await store.put(v2, 1));
+    },
+  },
+  {
+    id: "REC-13-token",
+    title: "the resend of a record put whose answer was lost carries the SAME client request token; the next put a fresh one",
+    needs: ["inject-lost-answer", "idempotency-token"],
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      const v1 = gameRecord(1);
+      ok(await store.put(v1, null));
+      const tokens = hook(subject.writeTokens, "writeTokens");
+      const before = tokens(ctx, G).length;
+      hook(subject.armLostAnswer, "armLostAnswer")(ctx, G);
+      const v2 = nextRecord(v1, ctx.tick());
+      assert.deepEqual(await store.put(v2, 1), { kind: "committed", redone: true });
+      sameTokenThenFresh(tokens(ctx, G).slice(before), 2);
+      ok(await store.put(nextRecord(v2, ctx.tick()), 2));
+      sameTokenThenFresh(tokens(ctx, G).slice(before), 3);
+    },
+  },
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<RecordSubject> => ({
+      id: `REC-13-${landed ? "landed" : "unlanded"}-then-takeover`,
+      title: landed
+        ? "a resend never hides a stale writer: a record put that LANDED before a takeover is reported committed (it really is)"
+        : "a resend never hides a stale writer: a record put that did NOT land before a takeover is refused on resend, never applied",
+      needs: ["fence", "fence-in-write", "inject-lost-answer"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+        const v1 = gameRecord(1);
+        ok(await store.put(v1, null));
+        const resend = hook(subject.armUnknownThenStallResend, "armUnknownThenStallResend")(ctx, G, landed);
+        const v2 = nextRecord(v1, ctx.tick());
+        const pending = store.put(v2, 1);
+        await stalledAt(resend, pending, "the resend");
+        await ctx.fence.takeOver();
+        resend.release();
+        const outcome = await pending;
+        const stored = await (await subject.open(ctx, { writerCheck: ctx.fence.writer() })).load(G);
+        if (landed) {
+          assert.equal(outcome.kind, "committed");
+          assert.deepEqual(stored, v2);
+        } else {
+          assert.equal(outcome.kind, "definite", `a stale writer's unlanded put must be refused on resend, got ${JSON.stringify(outcome)}`);
+          assert.deepEqual(stored, v1);
+        }
+      },
+    }),
+  ),
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<RecordSubject> => ({
+      id: `REC-20-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "a record put whose every resend went unevaluated, and which IS stored, is reported committed"
+        : "a record put whose every resend went unevaluated, and which is NOT visible, is UNCERTAIN -- never 'nothing was written'",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx);
+        const v1 = gameRecord(1);
+        ok(await store.put(v1, null));
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, G, landed);
+        const v2 = nextRecord(v1, ctx.tick());
+        const outcome = await store.put(v2, 1);
+        const stored = await (await subject.open(ctx)).load(G);
+        if (landed) {
+          assert.deepEqual(outcome, { kind: "committed", redone: true });
+          assert.deepEqual(stored, v2);
+        } else {
+          assert.equal(outcome.kind, "uncertain", JSON.stringify(outcome));
+          assert.deepEqual(stored, v1);
+        }
+      },
+    }),
+  ),
+  {
+    id: "REC-21",
+    title: "the condition is inside the write: of two creators racing for one game, the second to apply is refused and the first record stands",
+    needs: ["cas-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const first = await subject.open(ctx);
+      const second = await subject.open(ctx);
+      const mine = gameRecord(1);
+      const theirs = { ...gameRecord(1), last_activity_at: mine.last_activity_at + 7 };
+      const stall = hook(subject.stallNextWrite, "stallNextWrite")(ctx, G);
+      const pending = first.put(mine, null);
+      await stalledAt(stall, pending, "the first creator's put");
+      ok(await second.put(theirs, null));
+      stall.release();
+      assert.equal((await pending).kind, "definite", "CAS-IN-WRITE: the first creator's in-flight record overwrote the second's");
+      assert.deepEqual(await (await subject.open(ctx)).load(G), theirs);
     },
   },
   {
@@ -304,6 +404,28 @@ export const RECORD_CASES: readonly ConformanceCase<RecordSubject>[] = [
     },
   },
   {
+    id: "REC-19",
+    title: "fence inside the write (join code): a takeover after the stale writer's own checks, before its code claim is applied, still refuses it",
+    needs: ["fence", "fence-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const stale = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+      const code = joinCode(4);
+      const stall = hook(subject.stallNextCodeClaim, "stallNextCodeClaim")(ctx, code);
+      const pending = stale.claimCode(code, G);
+      await stalledAt(stall, pending, "the stale code claim");
+      await ctx.fence.takeOver();
+      stall.release();
+      const outcome = await pending.then(
+        (claimed) => claimed,
+        (error: unknown) => error,
+      );
+      assert.ok(outcome instanceof StoreDefiniteError || (outcome as Error)?.name === "StoreDefiniteError", `FENCE-IN-WRITE: the stale writer's in-flight code claim was applied (${String(outcome)})`);
+      const current = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+      assert.equal(await current.lookupCode(code), null);
+      assert.equal(await current.claimCode(code, gameId(2)), "claimed", "the code is still free for the current writer");
+    },
+  },
+  {
     id: "REC-17",
     title: "index reconciliation: missing codes are added, codes pointing elsewhere re-pointed, orphans kept",
     async run(subject, ctx) {
@@ -340,6 +462,15 @@ export interface HoldSubject extends SubjectBase {
   armTransientFailure?(ctx: CaseContext, gameId: string): void;
   /** "fs-faults": the live hold's path (release's multi-step boundary is a file concern). */
   holdPath?(ctx: CaseContext, gameId: string): string;
+  /** "idempotency-token": the client request tokens of every hold write attempt for this game, in order. */
+  writeTokens?(ctx: CaseContext, gameId: string): string[];
+  /** The game's next hold create ends UNKNOWN to the writer -- having `landed` or not -- and its resend stalls. */
+  armUnknownThenStallResend?(ctx: CaseContext, gameId: string, landed: boolean): Gate;
+  /** Hold the game's next hold RELEASE after the writer's own checks, before it is applied. */
+  stallNextRelease?(ctx: CaseContext, gameId: string): Gate;
+  /** "inject-unevaluated": the game's next hold write -- create or release -- (landed or not) and every resend fail
+   *  unevaluated; reads work. */
+  armUnevaluated?(ctx: CaseContext, gameId: string, landed: boolean): void;
 }
 
 const release = (ctx: CaseContext) => ({ released_at: ctx.tick(), note: "verified clean by the conformance suite", verification: { class: "clean", entries: 3, log_hash: null }, build: "conformance" });
@@ -478,6 +609,112 @@ export const HOLD_CASES: readonly ConformanceCase<HoldSubject>[] = [
     },
   },
   {
+    id: "HOLD-10-token",
+    title: "the resend of a hold create whose answer was lost carries the SAME client request token; the release a fresh one",
+    needs: ["inject-lost-answer", "idempotency-token"],
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      const tokens = hook(subject.writeTokens, "writeTokens");
+      const before = tokens(ctx, G).length;
+      hook(subject.armLostAnswer, "armLostAnswer")(ctx, G);
+      assert.deepEqual((await store.create(hold(1))).outcome, { kind: "committed", redone: true });
+      sameTokenThenFresh(tokens(ctx, G).slice(before), 2);
+      assert.equal((await store.release(G, release(ctx))).kind, "committed");
+      sameTokenThenFresh(tokens(ctx, G).slice(before), 3);
+    },
+  },
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<HoldSubject> => ({
+      id: `HOLD-10-${landed ? "landed" : "unlanded"}-then-takeover`,
+      title: landed
+        ? "a resend never hides a stale writer: a hold that LANDED before a takeover is reported committed (it really is)"
+        : "a resend never hides a stale writer: a hold that did NOT land before a takeover is refused on resend, never applied",
+      needs: ["fence", "fence-in-write", "inject-lost-answer"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+        const resend = hook(subject.armUnknownThenStallResend, "armUnknownThenStallResend")(ctx, G, landed);
+        const pending = store.create(hold(1));
+        await stalledAt(resend, pending, "the resend");
+        await ctx.fence.takeOver();
+        resend.release();
+        const outcome = (await pending).outcome;
+        const stored = await (await subject.open(ctx, { writerCheck: ctx.fence.writer() })).load(G);
+        if (landed) {
+          assert.equal(outcome.kind, "committed");
+          assert.deepEqual(stored, hold(1));
+        } else {
+          assert.equal(outcome.kind, "definite", `a stale writer's unlanded hold must be refused on resend, got ${JSON.stringify(outcome)}`);
+          assert.equal(stored, null);
+        }
+      },
+    }),
+  ),
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<HoldSubject> => ({
+      id: `HOLD-14-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "a hold create whose every resend went unevaluated, and which IS stored, is reported committed"
+        : "a hold create whose every resend went unevaluated, and which is NOT visible, is UNCERTAIN -- never 'nothing was written'",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx);
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, G, landed);
+        const outcome = (await store.create(hold(1))).outcome;
+        const stored = await (await subject.open(ctx)).load(G);
+        if (landed) {
+          assert.deepEqual(outcome, { kind: "committed", redone: true });
+          assert.deepEqual(stored, hold(1));
+        } else {
+          assert.equal(outcome.kind, "uncertain", JSON.stringify(outcome));
+          assert.equal(stored, null);
+        }
+      },
+    }),
+  ),
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<HoldSubject> => ({
+      id: `HOLD-15-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "a release whose every resend went unevaluated, and which IS applied, is reported committed"
+        : "a release whose every resend went unevaluated, and which is NOT visible, is UNCERTAIN -- and the game is still held",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx);
+        assert.equal((await store.create(hold(1))).outcome.kind, "committed");
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, G, landed);
+        const outcome = await store.release(G, release(ctx));
+        const stored = await (await subject.open(ctx)).load(G);
+        if (landed) {
+          assert.deepEqual(outcome, { kind: "committed", redone: true });
+          assert.equal(stored, null);
+          assert.equal(await subject.releasedCopies(ctx, G), 1);
+        } else {
+          assert.equal(outcome.kind, "uncertain", JSON.stringify(outcome));
+          assert.deepEqual(stored, hold(1), "still held");
+        }
+      },
+    }),
+  ),
+  {
+    id: "HOLD-16",
+    title: "the condition is inside the write: of two holds racing for one game, the second to apply is refused -- the first hold stands",
+    needs: ["cas-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const first = await subject.open(ctx);
+      const second = await subject.open(ctx);
+      const mine = hold(1, "log-corrupt", ctx.now(), "the first detection");
+      const theirs = hold(1, "record-ahead-of-log", ctx.tick(), "the second detection");
+      const stall = hook(subject.stallNextWrite, "stallNextWrite")(ctx, G);
+      const pending = first.create(mine);
+      await stalledAt(stall, pending, "the first hold create");
+      assert.deepEqual(await second.create(theirs), { outcome: { kind: "committed", redone: false }, existing: null });
+      stall.release();
+      const answer = await pending;
+      assert.deepEqual(await (await subject.open(ctx)).load(G), theirs, "CAS-IN-WRITE: the first writer's in-flight hold overwrote the hold that stood");
+      assert.deepEqual(answer, { outcome: { kind: "committed", redone: false }, existing: theirs }, "the late create is answered with the hold that stands");
+    },
+  },
+  {
     id: "HOLD-11",
     title: "transient failure: a hold create that failed before any effect is DEFINITE, writes nothing, and the retry holds",
     needs: ["inject-transient-failure"],
@@ -503,6 +740,25 @@ export const HOLD_CASES: readonly ConformanceCase<HoldSubject>[] = [
       stall.release();
       assert.equal((await pending).outcome.kind, "definite", "FENCE-IN-WRITE: the stale writer's in-flight hold was applied");
       assert.equal(await subject.stored(ctx, G), null);
+    },
+  },
+  {
+    id: "HOLD-13",
+    title: "fence inside the write (release): a takeover after the stale writer's own checks, before its release is applied, still refuses it",
+    needs: ["fence", "fence-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const stale = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+      assert.equal((await stale.create(hold(1))).outcome.kind, "committed");
+      const before = await subject.stored(ctx, G);
+      const stall = hook(subject.stallNextRelease, "stallNextRelease")(ctx, G);
+      const pending = stale.release(G, release(ctx));
+      await stalledAt(stall, pending, "the stale release");
+      await ctx.fence.takeOver();
+      stall.release();
+      assert.equal((await pending).kind, "definite", "FENCE-IN-WRITE: the stale writer's in-flight hold release was applied");
+      await holdUnchanged(subject, ctx, G, before);
+      assert.equal(await subject.releasedCopies(ctx, G), 0, "no released copy was written");
+      assert.deepEqual(await (await subject.open(ctx, { writerCheck: ctx.fence.writer() })).load(G), hold(1), "the game is still held");
     },
   },
 ];

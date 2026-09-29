@@ -14,7 +14,7 @@ import { ChainIntentUnreadableError, type ChainIntentStore } from "../../escrow/
 import type { WalletTicketStore } from "../../escrow/walletTickets";
 import type { Gate } from "./faults";
 import { financial, gameId, grant, intent, nextFinancial, nextIntent, ticketDocument } from "./fixtures";
-import { hook, rejection, stalledAt, turns, type CaseContext, type ConformanceCase, type SubjectBase } from "./harness";
+import { hook, rejection, sameTokenThenFresh, stalledAt, turns, type CaseContext, type ConformanceCase, type SubjectBase } from "./harness";
 import type { Planted } from "./roomStores.conformance";
 
 const G = gameId(1);
@@ -25,6 +25,13 @@ const fmt = (what: Planted) => (what === "corrupt" ? "corrupt" : what === "newer
 interface EscrowSubjectHooks {
   /** The stored value for a key, as bytes or item text (`null`: none) -- "nothing was written" is always checked. */
   stored(ctx: CaseContext, key: string): Promise<Buffer | string | null>;
+  /** "idempotency-token": the client request tokens of every write attempt made for this key, in order. */
+  writeTokens?(ctx: CaseContext, key: string): string[];
+  /** The key's next write ends UNKNOWN to the writer -- having `landed` or not -- and its resend stalls at the returned
+   *  gate (so a takeover can be placed between the attempt and the resend). Needs "inject-lost-answer". */
+  armUnknownThenStallResend?(ctx: CaseContext, key: string, landed: boolean): Gate;
+  /** "inject-unevaluated": the key's next write (landed or not) and every resend fail unevaluated; reads work. */
+  armUnevaluated?(ctx: CaseContext, key: string, landed: boolean): void;
   /** "stall-write": hold the key's next write after the writer's own checks, before it is applied. */
   stallNextWrite?(ctx: CaseContext, key: string): Gate;
   /** "inject-lost-answer": the key's next write lands, and its answer is lost. */
@@ -44,11 +51,6 @@ async function same(subject: EscrowSubjectHooks, ctx: CaseContext, key: string, 
 export interface FinancialSubject extends SubjectBase, EscrowSubjectHooks {
   open(ctx: CaseContext, options?: { readonly writerCheck?: () => Promise<boolean> }): Promise<FinancialGameStore>;
   plant?(ctx: CaseContext, gameId: string, what: Planted): Promise<void>;
-  /** The next write's first attempt ends UNKNOWN to the writer -- having `landed` or not -- and its resend stalls at the
-   *  returned gate (so a takeover can be placed between the attempt and the resend). Needs "inject-lost-answer". */
-  armUnknownThenStallResend?(ctx: CaseContext, gameId: string, landed: boolean): Gate;
-  /** "idempotency-token": the client request tokens of every write attempt made for this game, in order. */
-  writeTokens?(ctx: CaseContext, gameId: string): string[];
 }
 
 export const FINANCIAL_CASES: readonly ConformanceCase<FinancialSubject>[] = [
@@ -315,6 +317,85 @@ export const FINANCIAL_CASES: readonly ConformanceCase<FinancialSubject>[] = [
       assert.deepEqual([...(await store.list())].sort(), [...ids].sort());
     },
   },
+  {
+    id: "FIN-16",
+    title: "fence inside the write (create): a takeover after the stale writer's own checks, before its creation is applied, still refuses it",
+    needs: ["fence", "fence-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const stale = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+      const stall = hook(subject.stallNextWrite, "stallNextWrite")(ctx, G);
+      const pending = stale.create(financial(1));
+      await stalledAt(stall, pending, "the stale financial create");
+      await ctx.fence.takeOver();
+      stall.release();
+      assert.equal((await pending).outcome.kind, "definite", "FENCE-IN-WRITE: the stale writer's in-flight financial create was applied");
+      assert.equal(await subject.stored(ctx, G), null);
+      assert.equal(await (await subject.open(ctx, { writerCheck: ctx.fence.writer() })).load(G), null);
+    },
+  },
+  ...([true, false] as const).flatMap((landed): ConformanceCase<FinancialSubject>[] => [
+    {
+      id: `FIN-17-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "a creation whose every resend went unevaluated, and which IS stored, is reported committed"
+        : "a creation whose every resend went unevaluated, and which is NOT visible, is UNCERTAIN -- never 'nothing was written'",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx);
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, G, landed);
+        const created = await store.create(financial(1));
+        const stored = await (await subject.open(ctx)).load(G);
+        if (landed) {
+          assert.deepEqual(created, { outcome: { kind: "committed", redone: true }, existing: null });
+          assert.deepEqual(stored, financial(1));
+        } else {
+          assert.equal(created.outcome.kind, "uncertain", JSON.stringify(created));
+          assert.equal(stored, null);
+        }
+      },
+    },
+    {
+      id: `FIN-18-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "a put whose every resend went unevaluated, and which IS stored, is reported committed"
+        : "a put whose every resend went unevaluated, and which is NOT visible, is UNCERTAIN -- never a conflict, never 'nothing was written'",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx);
+        committed((await store.create(financial(1))).outcome);
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, G, landed);
+        const v2 = nextFinancial(financial(1), ctx.tick());
+        const outcome = await store.put(v2, 1);
+        const stored = await (await subject.open(ctx)).load(G);
+        if (landed) {
+          assert.deepEqual(outcome, { kind: "committed", redone: true });
+          assert.deepEqual(stored, v2);
+        } else {
+          assert.equal(outcome.kind, "uncertain", JSON.stringify(outcome));
+          assert.deepEqual(stored, financial(1));
+        }
+      },
+    },
+  ]),
+  {
+    id: "FIN-19",
+    title: "the condition is inside the write: of two creators racing for one record, the second to apply converges on the first",
+    needs: ["cas-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const first = await subject.open(ctx);
+      const second = await subject.open(ctx);
+      const mine = financial(1, ctx.now());
+      const theirs = financial(1, ctx.tick(50));
+      const stall = hook(subject.stallNextWrite, "stallNextWrite")(ctx, G);
+      const pending = first.create(mine);
+      await stalledAt(stall, pending, "the first creation");
+      assert.deepEqual(await second.create(theirs), { outcome: { kind: "committed", redone: false }, existing: null });
+      stall.release();
+      const answer = await pending;
+      assert.deepEqual(await (await subject.open(ctx)).load(G), theirs, "CAS-IN-WRITE: the first creator's in-flight record overwrote the one that stood");
+      assert.deepEqual(answer, { outcome: { kind: "committed", redone: false }, existing: theirs }, "the late creation converges on the record that stands");
+    },
+  },
 ];
 
 /* ================================================================== */
@@ -365,6 +446,20 @@ export const INTENT_CASES: readonly ConformanceCase<IntentSubject>[] = [
       const other = intent(1, 1, ctx.tick(), '{"settle":{"other":true}}');
       assert.deepEqual(await store.create(other), { kind: "exists", record: first, same: false });
       assert.deepEqual(await store.load(G, first.intent_id), first);
+      await same(subject, ctx, intentKey(first), before);
+    },
+  },
+  {
+    id: "INT-03-resigned",
+    title: "equality is the SIGNED content, never the signature bytes: the same payload re-signed (KMS ECDSA is not deterministic) converges (exists, same); another payload does not",
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      const message = (signature: string, payload = "01") => JSON.stringify({ settle: { chain_game_id: "7", payload: { bytes: payload }, signature, consents: [] } });
+      const first = intent(1, 1, ctx.now(), message("aa".repeat(64)));
+      assert.equal((await store.create(first)).kind, "created");
+      const before = await subject.stored(ctx, intentKey(first));
+      assert.deepEqual(await store.create(intent(1, 1, ctx.tick(), message("bb".repeat(64)))), { kind: "exists", record: first, same: true }, "a second signature of the same payload is the same work");
+      assert.deepEqual(await store.create(intent(1, 1, ctx.tick(), message("aa".repeat(64), "02"))), { kind: "exists", record: first, same: false }, "another payload at the slot is not");
       await same(subject, ctx, intentKey(first), before);
     },
   },
@@ -483,6 +578,53 @@ export const INTENT_CASES: readonly ConformanceCase<IntentSubject>[] = [
     },
   },
   {
+    id: "INT-10-token",
+    title: "the resend of an intent put whose answer was lost carries the SAME client request token; the next put a fresh one",
+    needs: ["inject-lost-answer", "idempotency-token"],
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      const v1 = intent(1, 1);
+      assert.equal((await store.create(v1)).kind, "created");
+      const tokens = hook(subject.writeTokens, "writeTokens");
+      const before = tokens(ctx, intentKey(v1)).length;
+      hook(subject.armLostAnswer, "armLostAnswer")(ctx, intentKey(v1));
+      const v2 = nextIntent(v1, ctx.tick());
+      assert.deepEqual(await store.put(v2, 1), { kind: "committed", redone: true });
+      sameTokenThenFresh(tokens(ctx, intentKey(v1)).slice(before), 2);
+      committed(await store.put(nextIntent(v2, ctx.tick()), 2));
+      sameTokenThenFresh(tokens(ctx, intentKey(v1)).slice(before), 3);
+    },
+  },
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<IntentSubject> => ({
+      id: `INT-10-${landed ? "landed" : "unlanded"}-then-takeover`,
+      title: landed
+        ? "a resend never hides a stale writer: an intent put that LANDED before a takeover is reported committed (it really is)"
+        : "a resend never hides a stale writer: an intent put that did NOT land before a takeover is refused on resend, never applied",
+      needs: ["fence", "fence-in-write", "inject-lost-answer"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+        const v1 = intent(1, 1);
+        assert.equal((await store.create(v1)).kind, "created");
+        const resend = hook(subject.armUnknownThenStallResend, "armUnknownThenStallResend")(ctx, intentKey(v1), landed);
+        const v2 = nextIntent(v1, ctx.tick());
+        const pending = store.put(v2, 1);
+        await stalledAt(resend, pending, "the resend");
+        await ctx.fence.takeOver();
+        resend.release();
+        const outcome = await pending;
+        const stored = await (await subject.open(ctx, { writerCheck: ctx.fence.writer() })).load(G, v1.intent_id);
+        if (landed) {
+          assert.equal(outcome.kind, "committed");
+          assert.deepEqual(stored, v2);
+        } else {
+          assert.equal(outcome.kind, "definite", `a stale writer's unlanded intent put must be refused on resend, got ${JSON.stringify(outcome)}`);
+          assert.deepEqual(stored, v1);
+        }
+      },
+    }),
+  ),
+  {
     id: "INT-11",
     title: "transient failure: a create that failed before any effect fails, writes nothing, and the retry creates it",
     needs: ["inject-transient-failure"],
@@ -513,6 +655,90 @@ export const INTENT_CASES: readonly ConformanceCase<IntentSubject>[] = [
       await same(subject, ctx, intentKey(v1), before);
     },
   },
+  {
+    id: "INT-13",
+    title: "fence inside the write (create): a takeover after the stale writer's own checks, before its intent is created, still refuses it",
+    needs: ["fence", "fence-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const stale = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+      const v1 = intent(1, 1);
+      const stall = hook(subject.stallNextWrite, "stallNextWrite")(ctx, intentKey(v1));
+      const pending = stale.create(v1);
+      await stalledAt(stall, pending, "the stale intent create");
+      await ctx.fence.takeOver();
+      stall.release();
+      assert.equal((await pending).kind, "failed", "FENCE-IN-WRITE: the stale writer's in-flight intent create was applied");
+      assert.equal(await subject.stored(ctx, intentKey(v1)), null);
+      assert.deepEqual(await (await subject.open(ctx, { writerCheck: ctx.fence.writer() })).listGame(G), []);
+    },
+  },
+  ...([true, false] as const).flatMap((landed): ConformanceCase<IntentSubject>[] => [
+    {
+      id: `INT-14-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "a create whose every resend went unevaluated, and which IS stored, is reported created"
+        : "a create whose every resend went unevaluated, and which is NOT visible, is `failed` (the port's not-created: a retry converges) -- never created",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx);
+        const v1 = intent(1, 1);
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, intentKey(v1), landed);
+        const created = await store.create(v1);
+        const stored = await (await subject.open(ctx)).load(G, v1.intent_id);
+        if (landed) {
+          assert.deepEqual(created, { kind: "created", record: v1 });
+          assert.deepEqual(stored, v1);
+        } else {
+          assert.equal(created.kind, "failed", JSON.stringify(created));
+          assert.equal(stored, null);
+          assert.deepEqual(await store.create(v1), { kind: "created", record: v1 }, "the retry converges");
+        }
+      },
+    },
+    {
+      id: `INT-15-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "a put whose every resend went unevaluated, and which IS stored, is reported committed"
+        : "a put whose every resend went unevaluated, and which is NOT visible, is UNCERTAIN -- never a conflict, never 'nothing was written'",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx);
+        const v1 = intent(1, 1);
+        assert.equal((await store.create(v1)).kind, "created");
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, intentKey(v1), landed);
+        const v2 = nextIntent(v1, ctx.tick());
+        const outcome = await store.put(v2, 1);
+        const stored = await (await subject.open(ctx)).load(G, v1.intent_id);
+        if (landed) {
+          assert.deepEqual(outcome, { kind: "committed", redone: true });
+          assert.deepEqual(stored, v2);
+        } else {
+          assert.equal(outcome.kind, "uncertain", JSON.stringify(outcome));
+          assert.deepEqual(stored, v1);
+        }
+      },
+    },
+  ]),
+  {
+    id: "INT-16",
+    title: "the condition is inside the write: of two creators racing for one slot, the second to apply is answered with the first (`exists`)",
+    needs: ["cas-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const first = await subject.open(ctx);
+      const second = await subject.open(ctx);
+      /* Different creation times: the racers' relay-queue keys differ, so only the intent's OWN condition protects it. */
+      const mine = intent(1, 1, ctx.now(), '{"settle":{"mine":true}}');
+      const theirs = intent(1, 1, ctx.tick(3), '{"settle":{"theirs":true}}');
+      const stall = hook(subject.stallNextWrite, "stallNextWrite")(ctx, intentKey(mine));
+      const pending = first.create(mine);
+      await stalledAt(stall, pending, "the first intent create");
+      assert.deepEqual(await second.create(theirs), { kind: "created", record: theirs });
+      stall.release();
+      const answer = await pending;
+      assert.deepEqual(await (await subject.open(ctx)).load(G, mine.intent_id), theirs, "CAS-IN-WRITE: the first creator's in-flight intent overwrote the one that stood");
+      assert.deepEqual(answer, { kind: "exists", record: theirs, same: false }, "the late create is answered with the intent that stands");
+    },
+  },
 ];
 
 /* ================================================================== */
@@ -529,6 +755,7 @@ export interface TicketSubject extends SubjectBase, EscrowSubjectHooks {
 
 const doc1 = () => ticketDocument([grant(1, 1, 1)]);
 const doc2 = () => ticketDocument([{ ...grant(1, 1, 1), revoked_at: 5, revoke_reason: "superseded" }, grant(1, 1, 2)]);
+const doc3 = () => ticketDocument([{ ...grant(1, 1, 1), revoked_at: 5, revoke_reason: "superseded" }, { ...grant(1, 1, 2), revoked_at: 6, revoke_reason: "superseded" }, grant(1, 1, 3)]);
 const EMPTY = { version: 0, document: { frozen_at: null, grants: [] } };
 
 export const TICKET_CASES: readonly ConformanceCase<TicketSubject>[] = [
@@ -580,7 +807,7 @@ export const TICKET_CASES: readonly ConformanceCase<TicketSubject>[] = [
   },
   {
     id: "TKT-05",
-    title: "fence: after a takeover the stale writer's put is refused and writes nothing (F-L5-6 pinned: the port answers `conflict`)",
+    title: "fence: after a takeover the stale writer's put is a DEFINITE refusal (`conflict`: nothing written -- never `uncertain`, never committed)",
     needs: ["fence"],
     async run(subject, ctx) {
       const stale = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
@@ -589,6 +816,9 @@ export const TICKET_CASES: readonly ConformanceCase<TicketSubject>[] = [
       await ctx.fence.takeOver();
       assert.equal(await stale.put(G, doc2(), 1), "conflict");
       await same(subject, ctx, G, before);
+      const current = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+      assert.deepEqual(await current.load(G), { version: 1, document: doc1() });
+      assert.equal(await current.put(G, doc2(), 1), "committed", "the newer writer continues the ledger");
     },
   },
   {
@@ -623,13 +853,13 @@ export const TICKET_CASES: readonly ConformanceCase<TicketSubject>[] = [
   ),
   {
     id: "TKT-08",
-    title: "F-L5-6 pinned: an unresolved write is never answered committed (the port has no `uncertain`: it answers `conflict`), and a re-read sees exactly the old or the new document",
+    title: "F-L5-6 closed: an unresolved write answers `uncertain` -- never committed, never a definite `conflict` -- and a re-read sees exactly the old or the new document",
     needs: ["inject-unresolved"],
     async run(subject, ctx) {
       const store = await subject.open(ctx);
       assert.equal(await store.put(G, doc1(), 0), "committed");
       hook(subject.armUnresolvedWrite, "armUnresolvedWrite")(ctx, G);
-      assert.equal(await store.put(G, doc2(), 1), "conflict");
+      assert.equal(await store.put(G, doc2(), 1), "uncertain");
       const after = await (await subject.open(ctx)).load(G);
       assert.ok(
         JSON.stringify(after) === JSON.stringify({ version: 1, document: doc1() }) || JSON.stringify(after) === JSON.stringify({ version: 2, document: doc2() }),
@@ -658,11 +888,55 @@ export const TICKET_CASES: readonly ConformanceCase<TicketSubject>[] = [
       assert.equal(await store.put(G, doc1(), 0), "committed");
       const before = await subject.stored(ctx, G);
       hook(subject.armTransientFailure, "armTransientFailure")(ctx, G);
-      assert.notEqual(await store.put(G, doc2(), 1), "committed");
+      assert.equal(await store.put(G, doc2(), 1), "conflict", "a failure before any effect is a DEFINITE refusal, never uncertain");
       await same(subject, ctx, G, before);
       assert.equal(await store.put(G, doc2(), 1), "committed");
     },
   },
+  {
+    id: "TKT-09-token",
+    title: "the resend of a ticket put whose answer was lost carries the SAME client request token; the next put a fresh one",
+    needs: ["inject-lost-answer", "idempotency-token"],
+    async run(subject, ctx) {
+      const store = await subject.open(ctx);
+      assert.equal(await store.put(G, doc1(), 0), "committed");
+      const tokens = hook(subject.writeTokens, "writeTokens");
+      const before = tokens(ctx, G).length;
+      hook(subject.armLostAnswer, "armLostAnswer")(ctx, G);
+      assert.equal(await store.put(G, doc2(), 1), "committed");
+      sameTokenThenFresh(tokens(ctx, G).slice(before), 2);
+      assert.equal(await store.put(G, doc3(), 2), "committed");
+      sameTokenThenFresh(tokens(ctx, G).slice(before), 3);
+      assert.deepEqual(await store.load(G), { version: 3, document: doc3() });
+    },
+  },
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<TicketSubject> => ({
+      id: `TKT-09-${landed ? "landed" : "unlanded"}-then-takeover`,
+      title: landed
+        ? "a resend never hides a stale writer: a ticket put that LANDED before a takeover is reported committed (it really is)"
+        : "a resend never hides a stale writer: a ticket put that did NOT land before a takeover is refused on resend (`conflict`), never applied",
+      needs: ["fence", "fence-in-write", "inject-lost-answer"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+        assert.equal(await store.put(G, doc1(), 0), "committed");
+        const resend = hook(subject.armUnknownThenStallResend, "armUnknownThenStallResend")(ctx, G, landed);
+        const pending = store.put(G, doc2(), 1);
+        await stalledAt(resend, pending, "the resend");
+        await ctx.fence.takeOver();
+        resend.release();
+        const outcome = await pending;
+        const stored = await (await subject.open(ctx, { writerCheck: ctx.fence.writer() })).load(G);
+        if (landed) {
+          assert.equal(outcome, "committed");
+          assert.deepEqual(stored, { version: 2, document: doc2() });
+        } else {
+          assert.equal(outcome, "conflict", `a stale writer's unlanded ticket put must be refused on resend, got ${outcome}`);
+          assert.deepEqual(stored, { version: 1, document: doc1() });
+        }
+      },
+    }),
+  ),
   {
     id: "TKT-11",
     title: "fence inside the write: a takeover after the stale writer's own checks, before its put is applied, still refuses it",
@@ -678,6 +952,65 @@ export const TICKET_CASES: readonly ConformanceCase<TicketSubject>[] = [
       stall.release();
       assert.notEqual(await pending, "committed", "FENCE-IN-WRITE: the stale writer's in-flight ticket put was applied");
       await same(subject, ctx, G, before);
+    },
+  },
+  {
+    id: "TKT-12",
+    title: "fence inside the write (a game's first ledger): a takeover after the stale writer's own checks, before its first put is applied, still refuses it",
+    needs: ["fence", "fence-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const stale = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+      const stall = hook(subject.stallNextWrite, "stallNextWrite")(ctx, G);
+      const pending = stale.put(G, doc1(), 0);
+      await stalledAt(stall, pending, "the stale first ticket put");
+      await ctx.fence.takeOver();
+      stall.release();
+      const outcome = await pending;
+      assert.notEqual(outcome, "committed", "FENCE-IN-WRITE: the stale writer's in-flight first ticket put was applied");
+      assert.equal(outcome, "conflict", "a fenced write is a DEFINITE refusal");
+      assert.equal(await subject.stored(ctx, G), null);
+      assert.deepEqual(await (await subject.open(ctx, { writerCheck: ctx.fence.writer() })).load(G), EMPTY);
+    },
+  },
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<TicketSubject> => ({
+      id: `TKT-13-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "a ticket put whose every resend went unevaluated, and which IS stored, is reported committed"
+        : "a ticket put whose every resend went unevaluated, and which is NOT visible, is `uncertain` (F-L5-6) -- never a definite `conflict`",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx);
+        assert.equal(await store.put(G, doc1(), 0), "committed");
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, G, landed);
+        const outcome = await store.put(G, doc2(), 1);
+        const stored = await (await subject.open(ctx)).load(G);
+        if (landed) {
+          assert.equal(outcome, "committed");
+          assert.deepEqual(stored, { version: 2, document: doc2() });
+        } else {
+          assert.equal(outcome, "uncertain");
+          assert.deepEqual(stored, { version: 1, document: doc1() });
+        }
+      },
+    }),
+  ),
+  {
+    id: "TKT-14",
+    title: "the condition is inside the write: of two first ledgers racing for one game, the second to apply is a conflict and the first stands",
+    needs: ["cas-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const first = await subject.open(ctx);
+      const second = await subject.open(ctx);
+      const theirs = ticketDocument([grant(1, 2, 1)]);
+      const stall = hook(subject.stallNextWrite, "stallNextWrite")(ctx, G);
+      const pending = first.put(G, doc1(), 0);
+      await stalledAt(stall, pending, "the first ledger put");
+      assert.equal(await second.put(G, theirs, 0), "committed");
+      stall.release();
+      const answer = await pending;
+      assert.deepEqual(await (await subject.open(ctx)).load(G), { version: 1, document: theirs }, "CAS-IN-WRITE: the first writer's in-flight ledger overwrote the one that stood");
+      assert.equal(answer, "conflict");
     },
   },
 ];

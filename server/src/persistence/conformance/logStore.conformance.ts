@@ -11,7 +11,7 @@ import type { LogStore } from "../../fileLogStore";
 import { isStoreCorrupt, isStoreIncompatible, type StoreWriteOutcome } from "../storeResult";
 import type { Gate } from "./faults";
 import { entries, gameId, largeEntry } from "./fixtures";
-import { hook, rejection, stalledAt, turns, type CaseContext, type ConformanceCase, type SubjectBase } from "./harness";
+import { hook, rejection, sameTokenThenFresh, stalledAt, turns, type CaseContext, type ConformanceCase, type SubjectBase } from "./harness";
 
 export type ConformantLogStore = LogStore & { appendBatch(room: string, batch: readonly ServerLogEntry[]): Promise<StoreWriteOutcome> };
 
@@ -32,7 +32,25 @@ export interface LogSubject extends SubjectBase {
   armUnresolvedWrite?(ctx: CaseContext, room: string): void;
   /** "fs-faults": the path the file seam sees for a room's log. */
   logPath?(ctx: CaseContext, room: string): string;
+  /** The most entries one batch may carry in this store (default: the port's 100). A store whose transaction cannot hold
+   *  that many (DynamoDB: 100 actions, the policy's 80) declares its bound; LOG-26 checks it still covers every batch the
+   *  server builds. */
+  readonly maxBatchEntries?: number;
+  /** "idempotency-token": the client request tokens of every write attempt for this room, in order. */
+  writeTokens?(ctx: CaseContext, room: string): string[];
+  /** The room's next append ends UNKNOWN to the writer -- having `landed` or not -- and its resend stalls at the returned
+   *  gate (so a takeover can be placed between the attempt and the resend). */
+  armUnknownThenStallResend?(ctx: CaseContext, room: string, landed: boolean): Gate;
+  /** Hold the room's next CHAT line after the writer's own checks, before it is applied. */
+  stallNextChat?(ctx: CaseContext, room: string): Gate;
+  /** "inject-unevaluated": the room's next append (landed or not) and every resend fail unevaluated; reads work. */
+  armUnevaluated?(ctx: CaseContext, room: string, landed: boolean): void;
 }
+
+/** Every batch the server builds is at most this many entries (LIVE-3 §6.2, `logFormat.ts`). */
+export const SERVER_BATCH_BOUND = 65;
+/** The port's own bound: the reader accepts a range of at most 100 entries. */
+export const PORT_BATCH_BOUND = 100;
 
 const ROOM = gameId(1);
 const kinds = (outcome: StoreWriteOutcome) => outcome.kind;
@@ -111,15 +129,28 @@ export const LOG_CASES: readonly ConformanceCase<LogSubject>[] = [
   },
   {
     id: "LOG-06",
-    title: "a batch that is not contiguous, or larger than a batch may be, is DEFINITE and writes nothing",
+    title: "a batch that is not contiguous, or larger than the store's batch bound, is DEFINITE and writes nothing; a batch AT the bound commits",
     async run(subject, ctx) {
       const store = await subject.open(ctx);
+      const max = subject.maxBatchEntries ?? PORT_BATCH_BOUND;
       const broken = [...entries(0, 2), ...entries(3, 1)];
       assert.equal(kinds(await store.appendBatch(ROOM, broken)), "definite");
-      assert.equal(kinds(await store.appendBatch(ROOM, entries(0, 101))), "definite");
+      assert.equal(kinds(await store.appendBatch(ROOM, entries(0, max + 1))), "definite");
+      assert.equal(kinds(await store.appendBatch(ROOM, entries(0, PORT_BATCH_BOUND + 1))), "definite", "no store takes more than the port's bound");
       assert.deepEqual(await store.loadLog(ROOM), []);
       assert.equal(await subject.stored(ctx, ROOM), null);
-      assert.equal(kinds(await store.appendBatch(ROOM, entries(0, 100))), "committed", "a batch of 100 entries is the largest a batch may be");
+      assert.equal(kinds(await store.appendBatch(ROOM, entries(0, max))), "committed", `a batch of ${max} entries is the largest this store takes`);
+      assert.equal((await store.loadLog(ROOM)).length, max);
+    },
+  },
+  {
+    id: "LOG-26",
+    title: "a store's declared batch bound covers every batch the server builds (at least 65 entries) and never exceeds the port's (100)",
+    async run(subject, ctx) {
+      const max = subject.maxBatchEntries ?? PORT_BATCH_BOUND;
+      assert.ok(Number.isSafeInteger(max) && max >= SERVER_BATCH_BOUND && max <= PORT_BATCH_BOUND, `a batch bound of ${max} is outside [${SERVER_BATCH_BOUND}, ${PORT_BATCH_BOUND}]`);
+      const store = await subject.open(ctx);
+      assert.equal(kinds(await store.appendBatch(ROOM, entries(0, SERVER_BATCH_BOUND))), "committed", "the largest batch the server builds commits");
     },
   },
   {
@@ -184,6 +215,88 @@ export const LOG_CASES: readonly ConformanceCase<LogSubject>[] = [
       assert.deepEqual(await store.appendBatch(ROOM, entries(2, 3)), { kind: "committed", redone: true });
       assert.deepEqual(await (await subject.open(ctx)).loadLog(ROOM), [...written, ...entries(2, 3)]);
       assert.equal(kinds(await store.appendBatch(ROOM, entries(5, 1))), "committed", "the log continues after it");
+    },
+  },
+  {
+    id: "LOG-11-token",
+    title: "the resend of an append whose answer was lost carries the SAME client request token; the next append a fresh one",
+    needs: ["inject-lost-answer", "idempotency-token"],
+    async run(subject, ctx) {
+      const { store } = await seeded(subject, ctx, [2]);
+      const tokens = hook(subject.writeTokens, "writeTokens");
+      const before = tokens(ctx, ROOM).length;
+      hook(subject.armLostAnswer, "armLostAnswer")(ctx, ROOM);
+      assert.deepEqual(await store.appendBatch(ROOM, entries(2, 3)), { kind: "committed", redone: true });
+      sameTokenThenFresh(tokens(ctx, ROOM).slice(before), 2);
+      assert.equal(kinds(await store.appendBatch(ROOM, entries(5, 1))), "committed");
+      sameTokenThenFresh(tokens(ctx, ROOM).slice(before), 3);
+    },
+  },
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<LogSubject> => ({
+      id: `LOG-11-${landed ? "landed" : "unlanded"}-then-takeover`,
+      title: landed
+        ? "a resend never hides a stale writer: an append that LANDED before a takeover is reported committed (it really is)"
+        : "a resend never hides a stale writer: an append that did NOT land before a takeover is refused on resend, never applied",
+      needs: ["fence", "fence-in-write", "inject-lost-answer"],
+      async run(subject, ctx) {
+        const { store, written } = await seeded(subject, ctx, [2], { writerCheck: ctx.fence.writer() });
+        const resend = hook(subject.armUnknownThenStallResend, "armUnknownThenStallResend")(ctx, ROOM, landed);
+        const pending = store.appendBatch(ROOM, entries(2, 1));
+        await stalledAt(resend, pending, "the resend");
+        await ctx.fence.takeOver();
+        resend.release();
+        const outcome = await pending;
+        const log = await (await subject.open(ctx, { writerCheck: ctx.fence.writer() })).loadLog(ROOM);
+        if (landed) {
+          assert.equal(outcome.kind, "committed");
+          assert.deepEqual(log, [...written, ...entries(2, 1)]);
+        } else {
+          assert.equal(outcome.kind, "definite", `a stale writer's unlanded append must be refused on resend, got ${JSON.stringify(outcome)}`);
+          assert.deepEqual(log, written);
+        }
+      },
+    }),
+  ),
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<LogSubject> => ({
+      id: `LOG-27-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "an append whose every resend went unevaluated, and which IS stored, is reported committed"
+        : "an append whose every resend went unevaluated, and which is NOT visible, is UNCERTAIN -- never 'nothing was written'",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const { store, written } = await seeded(subject, ctx, [2]);
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, ROOM, landed);
+        const outcome = await store.appendBatch(ROOM, entries(2, 1));
+        const log = await (await subject.open(ctx)).loadLog(ROOM);
+        if (landed) {
+          assert.deepEqual(outcome, { kind: "committed", redone: true });
+          assert.deepEqual(log, [...written, ...entries(2, 1)]);
+        } else {
+          assert.equal(outcome.kind, "uncertain", JSON.stringify(outcome));
+          assert.deepEqual(log, written);
+        }
+      },
+    }),
+  ),
+  {
+    id: "LOG-28",
+    title: "the condition is inside the write: of two writers racing for the same index, the second to apply is refused and the first's batch stands",
+    needs: ["cas-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const { written } = await seeded(subject, ctx, [2]);
+      const first = await subject.open(ctx);
+      const second = await subject.open(ctx);
+      assert.deepEqual(await first.loadLog(ROOM), written);
+      assert.deepEqual(await second.loadLog(ROOM), written);
+      const stall = hook(subject.stallNextWrite, "stallNextWrite")(ctx, ROOM);
+      const pending = first.appendBatch(ROOM, entries(2, 1, "first"));
+      await stalledAt(stall, pending, "the first writer's append");
+      assert.equal(kinds(await second.appendBatch(ROOM, entries(2, 1, "second"))), "committed");
+      stall.release();
+      assert.equal(kinds(await pending), "definite", "CAS-IN-WRITE: the first writer's in-flight append overwrote the second's");
+      assert.deepEqual(await (await subject.open(ctx)).loadLog(ROOM), [...written, ...entries(2, 1, "second")]);
     },
   },
   {
@@ -319,6 +432,27 @@ export const LOG_CASES: readonly ConformanceCase<LogSubject>[] = [
       assert.equal(kinds(await pending), "definite", "FENCE-IN-WRITE: the stale writer's in-flight append was applied");
       await unchanged(subject, ctx, before);
       assert.deepEqual(await (await subject.open(ctx, { writerCheck: ctx.fence.writer() })).loadLog(ROOM), written);
+    },
+  },
+  {
+    id: "LOG-25",
+    title: "fence inside the write (chat): a takeover after the stale writer's own checks, before its chat line is applied, still refuses it",
+    needs: ["fence", "fence-in-write", "stall-write"],
+    async run(subject, ctx) {
+      const { store, written } = await seeded(subject, ctx, [1], { writerCheck: ctx.fence.writer() });
+      const stall = hook(subject.stallNextChat, "stallNextChat")(ctx, ROOM);
+      const pending = hook(store.appendChat, "appendChat").call(store, ROOM, chatLine(ctx, 1));
+      await stalledAt(stall, pending, "the stale chat line");
+      await ctx.fence.takeOver();
+      stall.release();
+      const outcome = await pending.then(
+        () => "written",
+        (error: unknown) => error,
+      );
+      assert.notEqual(outcome, "written", "FENCE-IN-WRITE: the stale writer's in-flight chat line was applied");
+      const current = await subject.open(ctx, { writerCheck: ctx.fence.writer() });
+      assert.deepEqual(await hook(current.loadChat, "loadChat").call(current, ROOM), []);
+      assert.deepEqual(await current.loadLog(ROOM), written);
     },
   },
   {

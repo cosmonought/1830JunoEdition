@@ -62,7 +62,16 @@ export type Capability =
   /** The next write fails before it has any effect: hook `armTransientFailure`. */
   | "inject-transient-failure"
   /** The next write's outcome stays unknown however it is retried: hook `armUnresolvedWrite`. */
-  | "inject-unresolved";
+  | "inject-unresolved"
+  /** LIVE-5 L5-2: the next write's attempt (landed or not) and every resend fail before the store has EVALUATED them,
+   *  while reads still work: hook `armUnevaluated`. A store must then report what it can see -- this write visible:
+   *  committed; not visible: UNCERTAIN (an attempt may still be in flight), never "nothing was written". */
+  | "inject-unevaluated"
+  /** LIVE-5 L5-2: a write's OWN condition (create-if-absent, the version CAS, the log's next index) is evaluated INSIDE the
+   *  write, so a second writer that wins the race between the first's read and its write is never overwritten. The file
+   *  stores decide from a read before writing (one instance per directory, under its lock): they lack it, and
+   *  `fenceGap.test.ts` pins that per port. */
+  | "cas-in-write";
 
 export type Backend = "memory" | "reference" | "file" | "dynamodb";
 
@@ -71,7 +80,7 @@ export const REQUIRED_CAPABILITIES: Readonly<Record<Backend, readonly Capability
   memory: [],
   reference: [],
   file: ["durable", "fence", "plant", "fs-faults", "stall-write", "inject-lost-answer", "inject-transient-failure"],
-  dynamodb: ["durable", "fence", "fence-in-write", "plant", "stall-write", "idempotency-token", "inject-lost-answer", "inject-transient-failure"],
+  dynamodb: ["durable", "fence", "fence-in-write", "cas-in-write", "plant", "stall-write", "idempotency-token", "inject-lost-answer", "inject-transient-failure", "inject-unevaluated"],
 });
 
 /** The hook a declared capability requires. */
@@ -82,6 +91,7 @@ const CAPABILITY_HOOKS: Partial<Record<Capability, string>> = {
   "inject-lost-answer": "armLostAnswer",
   "inject-transient-failure": "armTransientFailure",
   "inject-unresolved": "armUnresolvedWrite",
+  "inject-unevaluated": "armUnevaluated",
 };
 
 export interface CaseContext {
@@ -237,4 +247,12 @@ export async function turns(count = 5): Promise<void> {
 export function hook<T>(value: T | undefined, name: string): T {
   if (value === undefined) throw new Error(`the subject has no ${name} hook`);
   return value;
+}
+
+/** An attempt and its resend share one token (1-36 printable characters); every other attempt has its own. */
+export function sameTokenThenFresh(attempts: readonly string[], expected: number): void {
+  assert.equal(attempts.length, expected, `${expected} write attempts (${attempts.length}: ${JSON.stringify(attempts)})`);
+  assert.equal(attempts[1], attempts[0], "the resend is the identical request, with the identical token");
+  assert.match(attempts[0], /^[\x21-\x7e]{1,36}$/, "a ClientRequestToken is 1-36 printable characters");
+  for (const later of attempts.slice(2)) assert.notEqual(later, attempts[0], "a new logical write has a fresh token");
 }

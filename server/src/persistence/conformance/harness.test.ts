@@ -30,7 +30,8 @@ describe("L5-1 conformance runner", () => {
   test("a DynamoDB subject must declare every required capability, or name each omission as an exemption", () => {
     const all = REQUIRED_CAPABILITIES.dynamodb;
     assert.ok(all.includes("fence-in-write") && all.includes("idempotency-token") && all.includes("inject-lost-answer"));
-    const hooks = { plant: async () => undefined, stallNextWrite: () => undefined, writeTokens: () => [], armLostAnswer: () => undefined, armTransientFailure: () => undefined };
+    const hooks = { plant: async () => undefined, stallNextWrite: () => undefined, writeTokens: () => [], armLostAnswer: () => undefined, armTransientFailure: () => undefined, armUnevaluated: () => undefined };
+    assert.ok(all.includes("cas-in-write") && all.includes("inject-unevaluated"), "L5-2: the condition inside the write, and the unevaluated-outcome injection, are required too");
     assert.equal(subjectProblem(base({ backend: "dynamodb", capabilities: [...all], ...hooks }), CASES), null);
     const without = all.filter((cap) => cap !== "fence-in-write");
     assert.match(subjectProblem(base({ backend: "dynamodb", capabilities: without, ...hooks }), CASES) ?? "", /must declare fence-in-write/);

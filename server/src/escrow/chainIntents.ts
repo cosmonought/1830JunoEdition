@@ -295,9 +295,35 @@ export function intentBelongsTo(intent: ChainIntentRecord, instance: string): bo
   return intent.instance === instance;
 }
 
-/** Whether an existing intent at this slot carries exactly this subject and message (else the caller HOLDS). */
+/** LIVE-5 (L5-5 handoff, applied in L5-2): what an execute message SAYS, without the signature bytes it carries. A
+ *  signature is not the thing that was signed -- real AWS KMS secp256k1 ECDSA is not deterministic, so the same payload
+ *  signed twice (a retry after a lost answer, a restart that re-signs a reserved digest) yields different bytes -- and a
+ *  consent / annul carries each player's own signature. Every `signature` field is removed (at any depth) and the rest
+ *  is put in canonical form; everything that is NOT a signature (the payload, the chain game, the seats, the roster) is
+ *  still compared. A message that is not JSON is compared as it is. */
+export function signedContentOf(msgJson: string): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(msgJson);
+  } catch {
+    return `raw:${msgJson}`;
+  }
+  const strip = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(strip);
+    if (value === null || typeof value !== "object") return value;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) if (key !== "signature") out[key] = strip((value as Record<string, unknown>)[key]);
+    return out;
+  };
+  return `json:${JSON.stringify(strip(parsed))}`;
+}
+
+/** Whether an existing intent at this slot is the SAME work as this one (else the caller HOLDS): the same slot, the same
+ *  signed subject (the digests, or the roster hash), the same operation (which names the payload digest, the sequence,
+ *  the seat and the keys), and the same message apart from its signature bytes (`signedContentOf`). Never the signature
+ *  bytes themselves: a re-signed payload is the same work. */
 export function sameChainIntent(a: ChainIntentRecord, b: ChainIntentRecord): boolean {
-  return a.intent_id === b.intent_id && sameIntentSubject(a.subject, b.subject) && a.msg_json === b.msg_json && JSON.stringify(a.op) === JSON.stringify(b.op);
+  return a.intent_id === b.intent_id && sameIntentSubject(a.subject, b.subject) && JSON.stringify(a.op) === JSON.stringify(b.op) && signedContentOf(a.msg_json) === signedContentOf(b.msg_json);
 }
 
 /* ------------------------------------------------------------------ */

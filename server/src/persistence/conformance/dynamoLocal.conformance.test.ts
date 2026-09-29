@@ -180,7 +180,10 @@ const writesTo = (gameId: string) => (detail: string) => detail.includes(`GAME#$
 const dynamoProof: FinancialSubject = {
   name: "dynamodb-local (proof adapter)",
   backend: "dynamodb",
-  capabilities: ["durable", "fence", "fence-in-write", "plant", "stall-write", "inject-lost-answer", "inject-transient-failure", "validates-shape", "idempotency-token"],
+  capabilities: ["durable", "fence", "fence-in-write", "cas-in-write", "plant", "stall-write", "inject-lost-answer", "inject-transient-failure", "validates-shape", "idempotency-token"],
+  exemptions: {
+    "inject-unevaluated": "the L5-1 proof adapter resends once and answers `uncertain` without a settling read after an unevaluated resend; L5-2's dynamoFinancialStore (the production adapter) declares it and passes the cases",
+  },
   async open(ctx) {
     const { client, table } = await caseTable(ctx);
     return createDynamoProofFinancialStore(client, table, { epoch: ctx.fence.epoch, pageSize: 5 });

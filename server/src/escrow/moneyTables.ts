@@ -1445,7 +1445,8 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     if (elsewhere !== null) return elsewhere;
     const registered = await deps.tickets.registerConsentKey({ gameId: table.record.game_id, playerId: table.playerId, principalId: caller.principalId, pubkey });
     if (registered === "refused") return refusal(409, "link-first", "This seat has no standing wallet link made by your account. Link (or relink) the wallet first.");
-    if (registered === "conflict") return refusal(409, "conflict", "The seat's link changed meanwhile. Try again.");
+    /* LIVE-5 L5-2 (F-L5-6): an UNCERTAIN ledger write is never reported as registered -- the next attempt re-reads. */
+    if (registered !== "committed") return refusal(409, "conflict", "The seat's link changed meanwhile. Try again.");
     audit("money.consent-key-registered", { game_id: table.record.game_id });
     soon(table.record.game_id);
     return answer({ registered: true });

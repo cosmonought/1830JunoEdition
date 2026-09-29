@@ -1,4 +1,4 @@
-# AWS clients and DynamoDB Local — the LIVE-5 convention
+# AWS clients, DynamoDB Local and the game table — the LIVE-5 convention
 
 LIVE-5 L5-1 set this up so that every later LIVE-5 slice uses one convention. L5-2 (the game table), L5-4 (identity),
 L5-5 (the ledger and KMS) and L5-7 (the AWS wiring) all follow it; none of them should pick its own.
@@ -79,3 +79,29 @@ also proves each case detects a check-then-write store.
 
 The one DynamoDB adapter in L5-1, `dynamoProofFinancialStore.ts`, is a **proof only**, for the harness. It is not
 production code and not the L5-2 design.
+
+L5-2 added two capabilities every `dynamodb` subject must also declare: **`cas-in-write`** (a write's own condition --
+create-if-absent, the version CAS, the log's next index -- is evaluated inside the write; race cases LOG-28, REC-21,
+HOLD-16, FIN-19, INT-16, TKT-14) and **`inject-unevaluated`** (hook `armUnevaluated`: every resend fails unevaluated, reads
+work; a visible write is committed, an invisible one UNCERTAIN). Each game-table port also has a second fence-inside-the-
+write case (LOG-25 chat, REC-19 join code, HOLD-13 release, FIN-16 create, INT-13 create, TKT-12 first ledger). The file
+stores fail every one of these for the right reason; `fenceGap.test.ts` pins it.
+
+## 4. The game table (LIVE-5 L5-2): `aws/game/`
+
+Six adapters behind today's ports, over ONE table (`pk`/`sk` strings, no secondary index): `createDynamoLogStore`,
+`createDynamoRecordStore`, `createDynamoHoldStore`, `createDynamoFinancialStore`, `createDynamoIntentStore`,
+`createDynamoTicketStore`. **Not wired into the server** (L5-7 does that; `awsClients.test.ts` refuses any other importer).
+
+| Rule | Where |
+|---|---|
+| Keys: `GAME#<g>` / `HEAD`, `META`, `LOG#%010d`, `CHAT#…`, `HOLD`, `HOLDREL#…`, `FIN`, `TICKETS`, `INTENT#<id>`; `POOL#<p>`, `JOIN#<code>`, `DIR#<yyyymm>` + `DIRKEYS`, `FINIDX#<identity>` + `FINKEYS`, `RELAYQ#<queue>`, `LIST#<kind>` | `gameTable.ts` header |
+| **The fence is inside the write.** Every game write carries `ConditionCheck HEAD: owner_pool = :P AND pool_epoch = :E` (merged into the HEAD update for a log batch); a write that makes a game or names none (record and money-game birth, join codes, `claimGame`) carries `POOL#<p> writer_epoch = :E` | `gameFence`, `poolFence`, `headCreateOrMine` |
+| **One token per logical write.** One `TransactWriteItems` with a `ClientRequestToken`; an unknown outcome is resent with the SAME token (TransactionInProgress waits) until DynamoDB evaluates it, within 8 minutes (a longer window is refused); a first-attempt transaction conflict is retried 3 times with the same token | `transact.ts` |
+| **Settling a lost answer.** Every item carries the write's token (`att`, recent `atts`). Fence read on its own, then the target set as ONE snapshot (`TransactGetItems` for several items). Token there: committed. Absent and a resend was evaluated and refused: definite. Otherwise **uncertain -- the write may still land later** | `storeSupport.ts` |
+| **Never overwrite what was not read.** Every replace/delete names the exact item read (`att`, or its whole body when it has no token); a create is `attribute_not_exists`; unreadable, newer and older artifacts are refused before any write | `observedCondition` |
+| **Sizes.** Item ≤ 350 KiB, transaction ≤ 3.5 MiB and ≤ 80 actions, checked BEFORE sending (definite); a log batch is ≤ 78 entries (≥ the 65 the server builds) | `SIZE_POLICY`, `DYNAMO_LOG_MAX_BATCH` |
+| **Log bytes.** Each `LOG#` item holds the file store's exact line; the load runs `scanLog` over them and checks HEAD and positions (a torn tail is damage here); the export is byte-identical to a file log | `dynamoLogStore.ts` |
+| **Ownership primitives for L5-3**: `takeOverPool`, `claimGame` (pool-fenced; never creates, never lowers), `releaseGame` | `ownership.ts` |
+
+Run: `npm run test:dynamodb-local` (both files: the L5-1 proof and `dynamoGame.conformance.test.js`).

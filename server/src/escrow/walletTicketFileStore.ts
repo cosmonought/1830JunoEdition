@@ -175,26 +175,7 @@ export function createFileWalletTicketStore(
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 0, document: { frozen_at: null, grants: [] } };
       throw error;
     }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw.toString("utf8"));
-    } catch {
-      throw new WalletTicketStoreUnreadableError(`wallet-tickets/${gameId}.json is not JSON`, gameId);
-    }
-    const format = walletTicketFileFormat(parsed, gameId);
-    if (format !== "current" || !isObject(parsed)) {
-      const document = isObject(parsed) && isObject(parsed.document) ? parsed.document : null;
-      if (document !== null && Array.isArray(document.grants) && document.grants.some(isProtocol2Grant)) {
-        throw new WalletTicketStoreUnreadableError(
-          `wallet-tickets/${gameId}.json holds grants of financial protocol 2 (before ESCROW-4); this build reads protocol 3 only and never reinterprets them`,
-          gameId,
-          format === "older-unread" ? "older-unread" : "corrupt",
-        );
-      }
-      throw new WalletTicketStoreUnreadableError(`wallet-tickets/${gameId}.json is not this game's ticket ledger`, gameId);
-    }
-    const document = parsed.document as WalletTicketDocument;
-    return { version: parsed.version as number, document: { frozen_at: document.frozen_at, grants: [...document.grants] } };
+    return parseWalletTicketFile(raw.toString("utf8"), gameId);
   }
 
   return {
@@ -210,7 +191,8 @@ export function createFileWalletTicketStore(
         if (options.writerCheck !== undefined && !(await options.writerCheck().catch(() => false))) return "conflict";
         await io.mkdir(directory);
         const outcome = await durableReplace(io, fileOf(gameId), Buffer.from(`${JSON.stringify({ format: WALLET_TICKET_FILE_FORMAT, version: expected + 1, game_id: gameId, document })}\n`, "utf8"), { platform: options.platform, warn });
-        return outcome.kind === "committed" ? "committed" : "conflict";
+        /* LIVE-5 L5-2 (F-L5-6): an unresolved replacement is UNCERTAIN -- never reported as a definite "conflict". */
+        return outcome.kind === "committed" ? "committed" : outcome.kind === "uncertain" ? "uncertain" : "conflict";
       });
     },
     async listGames() {
@@ -236,6 +218,32 @@ export function createFileWalletTicketStore(
       });
     },
   };
+}
+
+/** A stored ledger's text, read exactly as this store reads its file: the version and document, or
+ *  `WalletTicketStoreUnreadableError` with its class (LIVE-5 L5-2: shared with the DynamoDB adapter, which stores the same
+ *  envelope as an item's body). */
+export function parseWalletTicketFile(text: string, gameId: string): { version: number; document: WalletTicketDocument } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new WalletTicketStoreUnreadableError(`wallet-tickets/${gameId}.json is not JSON`, gameId);
+  }
+  const format = walletTicketFileFormat(parsed, gameId);
+  if (format !== "current" || !isObject(parsed)) {
+    const document = isObject(parsed) && isObject(parsed.document) ? parsed.document : null;
+    if (document !== null && Array.isArray(document.grants) && document.grants.some(isProtocol2Grant)) {
+      throw new WalletTicketStoreUnreadableError(
+        `wallet-tickets/${gameId}.json holds grants of financial protocol 2 (before ESCROW-4); this build reads protocol 3 only and never reinterprets them`,
+        gameId,
+        format === "older-unread" ? "older-unread" : "corrupt",
+      );
+    }
+    throw new WalletTicketStoreUnreadableError(`wallet-tickets/${gameId}.json is not this game's ticket ledger`, gameId);
+  }
+  const document = parsed.document as WalletTicketDocument;
+  return { version: parsed.version as number, document: { frozen_at: document.frozen_at, grants: [...document.grants] } };
 }
 
 /** LIVE-4 (L4-4): the class of a parsed ledger file for `gameId`: `current` (exactly this build's ledger), `older-unread`

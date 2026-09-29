@@ -1016,6 +1016,7 @@ describe("L5-4 F: the identity service over the DynamoDB adapter", () => {
     w.advance(1000);
     const rotated = await identity.rotateRecoveryKey(ann, w.now());
     assert.equal(rotated.kind, "ok");
+    await identity.settled(); // the confirmation follows the answer (R3-1); a graceful restart drains it first
     ({ identity } = await w.restart());
     assert.equal(identity.hasSensitiveAuth(ann, w.now()), false, "the reloaded grant names the old key: it is dead");
     assert.equal(identity.authenticate(phone, w.now()).kind, "refused", "the signed-out device stays out across a restart");
@@ -1023,6 +1024,7 @@ describe("L5-4 F: the identity service over the DynamoDB adapter", () => {
     /* Sign this device out. */
     w.advance(1000);
     assert.equal(await identity.revoke(sessionIdOf(ann), "logout", w.now()), true);
+    await identity.settled();
     ({ identity } = await w.restart());
     assert.equal(identity.authenticate(ann, w.now()).kind, "refused");
     const events = await w.journal.eventsOf(principalId);
@@ -1108,25 +1110,54 @@ describe("L5-4 F: the identity service over the DynamoDB adapter", () => {
     assert.equal(rotated.kind, "ok");
     assert.deepEqual(w.identityFaults.unfired(), []);
     assert.deepEqual(held, []);
+    await identity.settled();
     const events = await w.journal.eventsOf(principalId);
     const rotation = events.find((event) => event.kind === "recovery-key-rotated") as SecurityEvent;
     assert.ok(events.some((event) => event.kind === "confirmed" && event.confirms === rotation.event_id), "the rotation is confirmed");
   });
 
-  test("re-review N2: a committed sign-out is enforced before its confirmation is written -- a stalled confirmation holds the answer, not the sign-out", async () => {
+  test("re-review N2 and R3-1: a committed sign-out is enforced AND answered while its confirmation is stalled; only the queue behind it waits", { timeout: 10_000 }, async () => {
     const w = await world();
     const { identity, ann, phone, principalId } = await annWithPhone(w);
     const stall = gate();
     w.ledgerFaults.add({ op: "TransactWriteItemsCommand", nth: 2, action: { kind: "stall", gate: stall }, label: "the confirmation's append stalls (the event's went through)" });
-    const pending = identity.signOutOthers(ann, w.now());
+    assert.equal((await identity.signOutOthers(ann, w.now())).kind, "ok", "answered without waiting for its confirmation");
     await stall.reached;
     assert.equal(identity.authenticate(phone, w.now()).kind, "refused", "the other device is already out");
+    let started = false;
+    const next = identity.bootstrap({ kind: "none" }, false, w.now()).then((answer) => {
+      started = true;
+      return answer;
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    assert.equal(started, false, "the next identity task waits for the pending confirmation");
     stall.release();
-    assert.equal((await pending).kind, "ok");
+    await next;
+    await identity.settled();
     assert.deepEqual(w.ledgerFaults.unfired(), []);
     const events = await w.journal.eventsOf(principalId);
     const signOut = events.find((event) => event.kind === "signed-out-others") as SecurityEvent;
     assert.ok(events.some((event) => event.kind === "confirmed" && event.confirms === signOut.event_id));
+  });
+
+  test("round-3 R3-1: a key rotation answers the new key while its confirmation is stalled -- a stalled ledger can no longer hold back the only copy of the key", { timeout: 10_000 }, async () => {
+    const w = await world();
+    const { identity, ann, principalId } = await annWithPhone(w);
+    const stall = gate();
+    w.ledgerFaults.add({ op: "TransactWriteItemsCommand", nth: 2, action: { kind: "stall", gate: stall }, label: "the rotation's confirmation stalls" });
+    const rotated = await identity.rotateRecoveryKey(ann, w.now());
+    assert.equal(rotated.kind, "ok", "the new key is answered");
+    const newKey = (rotated as { recoveryKey: string }).recoveryKey;
+    await stall.reached;
+    assert.equal(identity.peekProfileOf(principalId)?.recovery_selector, newKey.split(".")[0]);
+    stall.release();
+    await identity.settled();
+    const events = await w.journal.eventsOf(principalId);
+    const rotation = events.find((event) => event.kind === "recovery-key-rotated") as SecurityEvent;
+    assert.ok(events.some((event) => event.kind === "confirmed" && event.confirms === rotation.event_id), "and confirmed once the ledger answers");
+    /* The key that was answered is the key that works. */
+    const boot = await identity.bootstrap({ kind: "none" }, false, w.now());
+    assert.equal((await identity.recover(readOf((boot as { setCookie: string | null }).setCookie), newKey, w.now())).kind, "ok");
   });
 
   test("journal first: an event that cannot be recorded stops its change -- nothing committed, the action answers unavailable", async () => {

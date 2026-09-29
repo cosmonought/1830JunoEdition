@@ -126,6 +126,10 @@ When this file names a Project document, it writes `Project: claude/<name>`.
   - durable sensitive-auth grants (OD-5-4);
   - the `SEC#` security-event journal on the ledger table, written from inside the store's commit after the store's own checks (the port's one addition, `IdentityCommitOptions.beforeWrite`), with a `confirmed` event after each committed change.
   Nothing is wired into `start.ts`: L5-7 wires it. The file stores are unchanged, apart from the new hook and one shape check. Record: Project `claude/LIVE5_L5_4_IDENTITY_2026-09-29.md`.
+  **Owner decisions (2026-09-29):**
+  - journal-first stays **fail-closed**: while the ledger cannot record an event, the security changes that need one answer unavailable; a recovery stays available;
+  - after a restore, an **unconfirmed** recovery-key rotation retires its old selector, does **not** install the new one, and sends the profile to operator review (the L6-4 replay rule, `server/src/identity/securityEvents.ts`);
+  - `createFileIdentityStore` stays **test-only**; it is not deleted during LIVE-5.
 
 **Route engine / v12: a separate gameplay program, not part of LIVE-4**
 - The route / autopath hardening (the route-engine certification preflight's findings, including the pre-registered blockers **S6-15** — hosted ingress judging routes on the STANDARD board — and **S6-16** — an H12 fork reversal the search demonstrates but authority rejects) and the **v12** rules batch are their own gameplay program. They are not folded into LIVE-4 and change no LIVE-4 identity. Record: Project `claude/ROUTE_ENGINE_EXTRACTION_CERTIFICATION_PREFLIGHT_2026-09-28.md`.

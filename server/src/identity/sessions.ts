@@ -66,6 +66,8 @@ import {
 import { familyList, SECURITY_EVENT_FORMAT, SECURITY_EVENT_VERSION, type SecurityChangeKind, type SecurityEvent, type SecurityEventJournal } from "./securityEvents";
 
 const DAY = 24 * 60 * 60 * 1000;
+/** A reaction that settles quietly: the identity queue never rejects. */
+const settledQuietly = (): undefined => undefined;
 
 export interface IdentityPolicy {
   idleMs: number;
@@ -240,10 +242,10 @@ export interface IdentityStats {
    commit, once every check the store makes before writing has passed (`beforeWrite`, review F2), so a change the store
    refuses first leaves no event. An append that fails (definitely, or with an unknown outcome) fails the action exactly
    as a store failure does, and the identity change is NOT written: no committed security change is ever missing from
-   the journal. Once the change is committed AND applied (the task that made it ends by confirming it: a slow ledger never
-   delays the enforcement of a committed change, re-review N2), a `confirmed` event names it (best effort); an event
-   without one may be a phantom -- its change refused or unresolved after the append -- which the replay rules of
-   securityEvents.ts handle.
+   the journal. Once the change is committed, applied and answered, a `confirmed` event names it (best effort, appended
+   by the queue before the next task: a slow ledger never delays the enforcement or the answer of a committed change,
+   re-review N2 and R3-1); an event without one may be a phantom -- its change refused or unresolved after the append --
+   which the replay rules of securityEvents.ts handle.
    DURABLE GRANTS (preflight §7.4, OD-5-4): with `grants`, a re-authentication is also written as a grant item, and
    `open` reloads the live ones, so a restart of the identity writer does not drop them. Honoured exactly as before --
    the session current, its family the grant's and open, the profile's selector unchanged, before `expires_at` -- so a
@@ -412,24 +414,26 @@ export class IdentityService {
   }
 
   private serial<T>(task: () => Promise<T>): Promise<T> {
-    const confirmed = () => this.confirmingAfter(task);
-    const run = this.queue.then(confirmed, confirmed);
-    this.queue = run.catch(() => undefined);
+    const run = this.queue.then(task, task);
+    /* LIVE-5 L5-4 (re-review N2; round-3 review R3-1): the task applies its committed security changes itself -- in
+       memory, their hooks fired -- and ITS ANSWER IS NOT HELD for their confirmations: a best-effort write must never
+       delay, or past a client's timeout lose, the answer of a committed change (a key rotation's answer is the only copy
+       of the new recovery key). The QUEUE waits for them instead: every confirmation is appended before the next task
+       runs, so its id sorts before that task's own event. A slow ledger still slows the tasks queued behind, as the
+       event's own append does. */
+    this.queue = run.then(settledQuietly, settledQuietly).then(() => this.confirmCommitted()).catch(settledQuietly);
     return run;
   }
 
-  /** LIVE-5 L5-4 (re-review N2): a task's committed security changes are applied -- in memory, their hooks fired --
-   *  BEFORE their confirmations are appended: the task ends by confirming them. A slow ledger then delays the answer
-   *  (and the queue, as the event's own append does), never the enforcement of a change the store has committed. */
-  private async confirmingAfter<T>(task: () => Promise<T>): Promise<T> {
-    try {
-      return await task();
-    } finally {
-      await this.confirmCommitted();
-    }
+  /** Resolves once every task queued so far, and the confirmations it left, have finished. For tests, and for a
+   *  graceful shutdown (L5-7: drain it before the process exits, so a committed change's confirmation is not dropped).
+   *  Never await it from inside a queued task, or from anything a task awaits: the queue waits for that task (deadlock). */
+  settled(): Promise<void> {
+    return this.queue.then(settledQuietly, settledQuietly);
   }
 
-  /** Append the confirmation of every change committed by the task that just ran. Best effort; never throws. */
+  /** Append the confirmation of every change committed by the task that just ran. Best effort: it runs in the queue after
+   *  that task's answer, and a failure is counted and reported, never thrown to any action's caller. */
   private async confirmCommitted(): Promise<void> {
     const journal = this.security.journal;
     while (this.unconfirmed.length > 0) {
@@ -475,7 +479,7 @@ export class IdentityService {
    *  change's `event` is appended to the security-event journal FIRST (when one is configured) -- from inside the
    *  store's commit, once the store's own checks have passed (review F2: a change the store refuses first leaves no
    *  event) -- and an append that fails fails the change before anything is written. Once the change is committed, its
-   *  confirmation is appended when the running task ends, after the task has applied it (best effort; re-review N2). */
+   *  confirmation is appended by the queue after the running task has applied it and answered (best effort; N2, R3-1). */
   private async commit(change: IdentityChange, what: string, event?: SecurityEventDraft): Promise<void> {
     const journal = this.security.journal;
     if (event === undefined || journal === undefined) {
@@ -522,7 +526,7 @@ export class IdentityService {
         return;
       }
     }
-    /* Confirmed once the task that committed it has applied it (`confirmingAfter`, re-review N2). */
+    /* Confirmed after the task that committed it has applied it and answered (`serial`, re-review N2, R3-1). */
     this.unconfirmed.push({ event: recorded, what });
   }
 

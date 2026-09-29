@@ -14,7 +14,8 @@
 //      definitely or with an unknown outcome -- stops the change: nothing is committed, the service's own state does not
 //      move, no hook fires, and the action answers as any store failure does. A change the store refuses on its own
 //      checks leaves NO event; a write refused or unresolved after its event leaves the event UNCONFIRMED (a phantom,
-//      the safe direction); a confirmation that cannot be written is reported and the action still succeeds. No event
+//      the safe direction); a confirmation that cannot be written is reported and the action still succeeds. The action
+//      is enforced AND answered before its confirmation is written; only the queue behind it waits (N2, R3-1). No event
 //      for what is not durable, or not a security change.
 //   B. DURABLE GRANTS (OD-5-4). A re-authentication is also a grant item; a restart reloads the live ones and honours
 //      them exactly as before (this session, its family open, the key unrotated, before the expiry) -- so a reloaded
@@ -146,6 +147,7 @@ async function creator(w: World, identity = w.identity, name = "Ann"): Promise<{
   const read = readOf((boot as { setCookie: string | null }).setCookie);
   const created = await identity.createProfile(read, name, w.now());
   assert.equal(created.kind, "ok");
+  await identity.settled(); // its confirmation is appended after the answer (R3-1)
   return { read, key: (created as { recoveryKey: string }).recoveryKey, principalId: (identity.peekSession(sessionIdOf(read)) as Session).principal_id };
 }
 
@@ -175,6 +177,7 @@ describe("L5-4 A: security events are journaled FIRST", () => {
     assert.equal(rotation.kind, "ok");
     w.advance(MIN);
     assert.equal(await w.identity.revoke(sessionIdOf(ann.read), "logout", w.now()), true);
+    await w.identity.settled();
     assert.deepEqual(w.order.slice(6), [...SECURE("signed-out-others"), ...SECURE("recovery-key-rotated"), ...SECURE("family-revoked")]);
 
     const all = await w.journal.eventsOf(ann.principalId);
@@ -217,6 +220,7 @@ describe("L5-4 A: security events are journaled FIRST", () => {
     assert.equal((await w.identity.signOutOthers(ann.read, w.now())).kind, "ok");
     assert.equal((await w.identity.rotateRecoveryKey(ann.read, w.now())).kind, "ok");
     assert.equal(await w.identity.revoke(sessionIdOf(ann.read), "logout", w.now()), true);
+    await w.identity.settled();
     const all = await w.journal.eventsOf(ann.principalId);
     assertConfirmedPairs(all);
     assert.deepEqual(changeKinds(all), ["profile-created", "signed-out-others", "recovery-key-rotated", "family-revoked"]);
@@ -229,6 +233,7 @@ describe("L5-4 A: security events are journaled FIRST", () => {
     const families = [...new Set(w.store.snapshot().families.map((family) => family.family_id))].sort();
     w.advance(MIN);
     assert.equal(await w.identity.disablePrincipal(ann.principalId, w.now()), true);
+    await w.identity.settled();
     const events = await w.journal.eventsOf(ann.principalId);
     assertConfirmedPairs(events);
     const disabled = events[events.length - 2] as Extract<SecurityEvent, { kind: "principal-disabled" }>;
@@ -309,6 +314,7 @@ describe("L5-4 A: security events are journaled FIRST", () => {
     );
     /* The retry commits, and is confirmed -- under its own event. */
     assert.equal((await w.identity.signOutOthers(ann.read, w.now())).kind, "ok");
+    await w.identity.settled();
     const after = await w.journal.eventsOf(ann.principalId);
     assert.deepEqual(after.slice(3).map((event) => event.kind), ["signed-out-others", "confirmed"]);
     assert.equal((after[4] as Extract<SecurityEvent, { kind: "confirmed" }>).confirms, after[3].event_id);
@@ -334,6 +340,7 @@ describe("L5-4 A: security events are journaled FIRST", () => {
       w.confirmationFaults.push(fault);
       assert.equal((await w.identity.signOutOthers(ann.read, w.now())).kind, "ok");
       assert.equal(w.identity.authenticate(phone, w.now()).kind === "ok", false, "the other device is signed out");
+      await w.identity.settled();
       assert.deepEqual(w.failures, ["signing out other devices: its security event's confirmation"]);
       const kinds = (await w.journal.eventsOf(ann.principalId)).map((event) => event.kind);
       assert.deepEqual(kinds, ["profile-created", "confirmed", "signed-out-others"]);
@@ -341,7 +348,7 @@ describe("L5-4 A: security events are journaled FIRST", () => {
     });
   }
 
-  test("re-review N2: a committed change is ENFORCED before its confirmation is written -- a stalled confirmation delays the answer, never the sign-out", async () => {
+  test("re-review N2 and R3-1: a committed sign-out is ENFORCED and ANSWERED before its confirmation is written -- a stalled confirmation holds neither", { timeout: 10_000 }, async () => {
     const w = await world();
     const ann = await creator(w);
     const phone = await recovered(w.identity, ann.key, w.now());
@@ -350,15 +357,48 @@ describe("L5-4 A: security events are journaled FIRST", () => {
     w.stall.gate = new Promise<void>((resolve) => (release = resolve));
     const hooks = w.events.length;
     const logged = w.order.length;
-    const pending = w.identity.signOutOthers(ann.read, w.now());
-    await until(() => w.order.slice(logged).includes("event:confirmed"), "the confirmation's append");
+    assert.equal((await w.identity.signOutOthers(ann.read, w.now())).kind, "ok", "answered while its confirmation is still to come");
+    await until(() => w.order.slice(logged).includes("event:confirmed"), "the confirmation's (stalled) append");
     assert.notEqual(w.identity.authenticate(phone, w.now()).kind, "ok", "the other device is already signed out in memory");
     assert.equal(w.identity.socketVerdict({ principalId: ann.principalId, sessionId: sessionIdOf(phone), sessionExpiresAt: (w.identity.peekSession(sessionIdOf(phone)) as Session).expires_at }, w.now()), "revoked");
     assert.deepEqual(w.events.slice(hooks), ["family-revoked"], "and its hooks (the sockets' closing) have fired");
     release();
     w.stall.gate = null;
-    assert.equal((await pending).kind, "ok");
+    await w.identity.settled();
     assertConfirmedPairs(await w.journal.eventsOf(ann.principalId));
+  });
+
+  test("round-3 R3-1: a key rotation's answer -- the only copy of the new key -- is never held by its confirmation; the NEXT task (a principal disable) waits for it, and its event follows it", { timeout: 10_000 }, async () => {
+    const w = await world();
+    const ann = await creator(w);
+    assert.equal((await w.identity.reauthenticate(ann.read, ann.key, w.now())).kind, "ok");
+    let release: () => void = () => undefined;
+    w.stall.gate = new Promise<void>((resolve) => (release = resolve));
+    const logged = w.order.length;
+    const rotation = await w.identity.rotateRecoveryKey(ann.read, w.now());
+    assert.equal(rotation.kind, "ok", "the new key is answered while its confirmation is still to come");
+    const newKey = (rotation as { recoveryKey: string }).recoveryKey;
+    await until(() => w.order.slice(logged).includes("event:confirmed"), "the confirmation's (stalled) append");
+    assert.equal(w.identity.peekProfileOf(ann.principalId)?.recovery_selector, newKey.split(".")[0], "the rotation is applied");
+    assert.equal(w.identity.hasSensitiveAuth(ann.read, w.now()), false, "and the old key's grant is gone");
+    /* The queue waits: an operator's disable, queued now, starts only once the confirmation is written. */
+    let disabled = false;
+    const disable = w.identity.disablePrincipal(ann.principalId, w.now()).then((done) => {
+      disabled = true;
+      return done;
+    });
+    for (let tick = 0; tick < 50; tick += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(disabled, false, "the next task waits for the pending confirmation");
+    assert.ok(!w.order.slice(logged).includes("event:principal-disabled"), "and its event is not appended before it");
+    release();
+    w.stall.gate = null;
+    assert.equal(await disable, true);
+    await w.identity.settled();
+    const tail = w.order.slice(logged);
+    assert.ok(tail.indexOf("event:confirmed") < tail.indexOf("event:principal-disabled"), `the rotation's confirmation precedes the next event: ${tail.join(",")}`);
+    const events = await w.journal.eventsOf(ann.principalId);
+    assertConfirmedPairs(events);
+    assert.deepEqual(changeKinds(events), ["profile-created", "recovery-key-rotated", "principal-disabled"]);
   });
 
   test("a store that writes WITHOUT calling beforeWrite breaks the port: the service still journals the event (after), and reports the breach", async () => {
@@ -368,6 +408,7 @@ describe("L5-4 A: security events are journaled FIRST", () => {
     assert.equal((await w.identity.reauthenticate(ann.read, ann.key, w.now())).kind, "ok");
     w.quirks.push("skip-hook");
     assert.equal((await w.identity.signOutOthers(ann.read, w.now())).kind, "ok");
+    await w.identity.settled();
     assert.deepEqual(w.order.slice(-4), ["commit", "written", "event:signed-out-others", "event:confirmed"]);
     assert.deepEqual(w.failures, ["signing out other devices: the store committed without its security event first"]);
     assertConfirmedPairs(await w.journal.eventsOf(ann.principalId));

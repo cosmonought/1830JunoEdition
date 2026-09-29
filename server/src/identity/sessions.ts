@@ -32,6 +32,7 @@ import { createHash, timingSafeEqual } from "crypto";
 
 import { StoreDefiniteError } from "../persistence/storeResult";
 import { sessionSetCookie, type SessionCookieRead } from "./cookies";
+import type { SensitiveAuthGrantStore } from "./grants";
 import {
   canonicalLinkCode,
   cryptoRandom,
@@ -62,6 +63,7 @@ import {
   type Session,
   type SessionFamily,
 } from "./store";
+import { familyList, SECURITY_EVENT_FORMAT, SECURITY_EVENT_VERSION, type SecurityChangeKind, type SecurityEvent, type SecurityEventJournal } from "./securityEvents";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -229,10 +231,42 @@ export interface IdentityStats {
   reauthRequired: number;
 }
 
+/* ==================================================================
+    LIVE-5 L5-4: THE DURABLE SECURITY SUBSTRATE (the DynamoDB path; absent on the file path, where nothing changes)
+   ==================================================================
+   JOURNAL FIRST (preflight §7.6): with a `journal`, each durable security change -- a profile created, a recovery key
+   rotated, a family revoked by a sign-out, "Sign out other devices", a principal disabled -- is appended to the
+   security-event journal BEFORE its identity change is written, inside the same serial task: from inside the store's
+   commit, once every check the store makes before writing has passed (`beforeWrite`, review F2), so a change the store
+   refuses first leaves no event. An append that fails (definitely, or with an unknown outcome) fails the action exactly
+   as a store failure does, and the identity change is NOT written: no committed security change is ever missing from
+   the journal. Once the change is committed AND applied (the task that made it ends by confirming it: a slow ledger never
+   delays the enforcement of a committed change, re-review N2), a `confirmed` event names it (best effort); an event
+   without one may be a phantom -- its change refused or unresolved after the append -- which the replay rules of
+   securityEvents.ts handle.
+   DURABLE GRANTS (preflight §7.4, OD-5-4): with `grants`, a re-authentication is also written as a grant item, and
+   `open` reloads the live ones, so a restart of the identity writer does not drop them. Honoured exactly as before --
+   the session current, its family the grant's and open, the profile's selector unchanged, before `expires_at` -- so a
+   stored grant never adds a capability. Best effort: a grant that could not be written stays in this process's memory
+   (today's behaviour, reported through `onStoreFailure`); only its survival across a restart is lost. */
+export interface IdentitySecuritySubstrate {
+  readonly journal?: SecurityEventJournal;
+  readonly grants?: SensitiveAuthGrantStore;
+  /** The clock `open` judges stored grants by (default `Date.now`). */
+  readonly clock?: () => number;
+}
+
+type EventDraft<E> = E extends unknown ? Omit<E, "format" | "version" | "event_id"> : never;
+/** A security change's event as a flow states it; the service adds the format and a fresh event id (and appends its
+ *  confirmation itself). */
+export type SecurityEventDraft = EventDraft<Exclude<SecurityEvent, { readonly kind: "confirmed" }>>;
+
 export interface IdentityServiceOptions {
   policy?: Partial<IdentityPolicy>;
   random?: RandomSource;
   hooks?: IdentityHooks;
+  /** LIVE-5 L5-4: the durable security substrate. Absent: exactly the pre-LIVE-5 behaviour. */
+  security?: IdentitySecuritySubstrate;
 }
 
 export class IdentityUnavailableError extends Error {
@@ -297,22 +331,45 @@ export class IdentityService {
    *  it names the creating SESSION (not its family's successors), the family, the selector of the key that was issued,
    *  and the digest of the random creation receipt the creating page sent and holds in memory. See `createProfile`. */
   private readonly creationDeliveries = new Map<string, { session_id: string; family_id: string; selector: string; receipt_hash: string; expires_at: number }>();
+  /** LIVE-5 L5-4: the security events this process has journaled. An event id is this count (32 bits) then 96 random
+   *  bits, so the journal's order -- by time, then by id -- is this writer's own causal order even within one
+   *  millisecond (the serial queue appends them in order). */
+  private securityEvents = 0;
+  /** Security changes committed by the running task, awaiting their confirmation (appended when the task ends). */
+  private readonly unconfirmed: Array<{ readonly event: SecurityEvent; readonly what: string }> = [];
 
   private constructor(
     private readonly store: IdentityStore,
     readonly policy: IdentityPolicy,
     private readonly random: RandomSource,
     private readonly hooks: IdentityHooks,
+    private readonly security: IdentitySecuritySubstrate,
   ) {}
 
-  /** Load what is durable. Throws (the server refuses to start) when the store cannot be read. */
+  /** Load what is durable. Throws (the server refuses to start) when the store cannot be read. LIVE-5 L5-4: with
+   *  durable grants, the live grants of known sessions are reloaded too (OD-5-4; honoured only as `sensitiveAuthOf`
+   *  judges them at the moment of use). */
   static async open(store: IdentityStore, options: IdentityServiceOptions = {}): Promise<IdentityService> {
-    return IdentityService.fromSnapshot(store, await store.load(), options);
+    const service = IdentityService.fromSnapshot(store, await store.load(), options);
+    const grants = options.security?.grants;
+    if (grants !== undefined) {
+      const at = (options.security?.clock ?? Date.now)();
+      for (const grant of await grants.live(at)) {
+        if (service.sessions.has(grant.session_id)) service.grants.set(grant.session_id, { family_id: grant.family_id, selector: grant.selector, expires_at: grant.expires_at });
+      }
+    }
+    return service;
   }
 
   /** Over a snapshot already loaded from `store` (an empty one for a fresh in-memory store). */
   static fromSnapshot(store: IdentityStore, snapshot: IdentitySnapshot, options: IdentityServiceOptions = {}): IdentityService {
-    const service = new IdentityService(store, { ...DEFAULT_IDENTITY_POLICY, ...(options.policy ?? {}) }, options.random ?? cryptoRandom, { ...(options.hooks ?? {}) });
+    const service = new IdentityService(
+      store,
+      { ...DEFAULT_IDENTITY_POLICY, ...(options.policy ?? {}) },
+      options.random ?? cryptoRandom,
+      { ...(options.hooks ?? {}) },
+      { ...(options.security ?? {}) },
+    );
     for (const principal of snapshot.principals) service.principals.set(principal.principal_id, principal);
     for (const session of snapshot.sessions) service.index(session);
     for (const profile of snapshot.profiles ?? []) service.indexProfile(profile);
@@ -355,9 +412,47 @@ export class IdentityService {
   }
 
   private serial<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(task, task);
+    const confirmed = () => this.confirmingAfter(task);
+    const run = this.queue.then(confirmed, confirmed);
     this.queue = run.catch(() => undefined);
     return run;
+  }
+
+  /** LIVE-5 L5-4 (re-review N2): a task's committed security changes are applied -- in memory, their hooks fired --
+   *  BEFORE their confirmations are appended: the task ends by confirming them. A slow ledger then delays the answer
+   *  (and the queue, as the event's own append does), never the enforcement of a change the store has committed. */
+  private async confirmingAfter<T>(task: () => Promise<T>): Promise<T> {
+    try {
+      return await task();
+    } finally {
+      await this.confirmCommitted();
+    }
+  }
+
+  /** Append the confirmation of every change committed by the task that just ran. Best effort; never throws. */
+  private async confirmCommitted(): Promise<void> {
+    const journal = this.security.journal;
+    while (this.unconfirmed.length > 0) {
+      const { event, what } = this.unconfirmed.shift() as { event: SecurityEvent; what: string };
+      if (journal === undefined) continue;
+      try {
+        await journal.append({
+          format: SECURITY_EVENT_FORMAT,
+          version: SECURITY_EVENT_VERSION,
+          event_id: this.nextEventId(),
+          kind: "confirmed",
+          at: event.at,
+          principal_id: event.principal_id,
+          confirms: event.event_id,
+          confirmed_kind: event.kind as SecurityChangeKind,
+        });
+      } catch (error) {
+        /* The change is committed and applied, and the action succeeds: only the proof that it was is missing (a replay
+           then reads the event as possibly a phantom, securityEvents.ts). */
+        this.stats.storeFailures += 1;
+        this.hooks.onStoreFailure?.(`${what}: its security event's confirmation`, error);
+      }
+    }
   }
 
   private isDurable(principalId: string): boolean {
@@ -369,15 +464,66 @@ export class IdentityService {
     return principal !== undefined && principal.activated_at === null;
   }
 
-  /** Write a change for a durable principal; a failure is counted, reported and rethrown. */
-  private async commit(change: IdentityChange, what: string): Promise<void> {
+  /** A fresh event id: this writer's count (32 bits), then 96 random bits. */
+  private nextEventId(): string {
+    const id = `${(this.securityEvents % 0x1_0000_0000).toString(16).padStart(8, "0")}${this.random(12).toString("hex")}`;
+    this.securityEvents += 1;
+    return id;
+  }
+
+  /** Write a change for a durable principal; a failure is counted, reported and rethrown. LIVE-5 L5-4: a security
+   *  change's `event` is appended to the security-event journal FIRST (when one is configured) -- from inside the
+   *  store's commit, once the store's own checks have passed (review F2: a change the store refuses first leaves no
+   *  event) -- and an append that fails fails the change before anything is written. Once the change is committed, its
+   *  confirmation is appended when the running task ends, after the task has applied it (best effort; re-review N2). */
+  private async commit(change: IdentityChange, what: string, event?: SecurityEventDraft): Promise<void> {
+    const journal = this.security.journal;
+    if (event === undefined || journal === undefined) {
+      try {
+        await this.store.commit(change);
+      } catch (error) {
+        this.stats.storeFailures += 1;
+        this.hooks.onStoreFailure?.(what, error);
+        throw error;
+      }
+      return;
+    }
+    const recorded = { format: SECURITY_EVENT_FORMAT, version: SECURITY_EVENT_VERSION, event_id: this.nextEventId(), ...event } as SecurityEvent;
+    let appended = false;
+    let appendError: { readonly error: unknown } | null = null;
+    const beforeWrite = async (): Promise<void> => {
+      if (appended) return; // exactly once, whatever the store does
+      try {
+        await journal.append(recorded);
+      } catch (error) {
+        appendError = { error };
+        throw error;
+      }
+      appended = true;
+    };
     try {
-      await this.store.commit(change);
+      await this.store.commit(change, { beforeWrite });
     } catch (error) {
       this.stats.storeFailures += 1;
-      this.hooks.onStoreFailure?.(what, error);
+      const failed = appendError as { readonly error: unknown } | null;
+      this.hooks.onStoreFailure?.(failed !== null && failed.error === error ? `${what}: its security event` : what, error);
       throw error;
     }
+    if (!appended) {
+      /* A store that committed without calling `beforeWrite` broke the port (every store in this repository calls it;
+         conformance ID-20). The change is committed: its event is appended now rather than never, and that is reported. */
+      this.stats.storeFailures += 1;
+      this.hooks.onStoreFailure?.(`${what}: the store committed without its security event first`, new Error("the identity store did not call beforeWrite"));
+      try {
+        await journal.append(recorded);
+      } catch (error) {
+        this.stats.storeFailures += 1;
+        this.hooks.onStoreFailure?.(`${what}: its security event`, error);
+        return;
+      }
+    }
+    /* Confirmed once the task that committed it has applied it (`confirmingAfter`, re-review N2). */
+    this.unconfirmed.push({ event: recorded, what });
   }
 
   private expiresAt(created: number, lastSeen: number): number {
@@ -739,6 +885,7 @@ export class IdentityService {
             dropLinks,
           },
           `a session revocation (${reason})`,
+          families.length > 0 ? { kind: "family-revoked", at: now, principal_id: session.principal_id, family_ids: familyList(families.map((family) => family.family_id)), reason } : undefined,
         );
       }
       this.forgetLinks(dropLinks);
@@ -786,6 +933,7 @@ export class IdentityService {
             families,
           },
           "disabling a principal",
+          { kind: "principal-disabled", at: now, principal_id: principalId, family_ids: familyList(families.map((family) => family.family_id)) },
         );
       }
       this.principals.set(principalId, disabled);
@@ -915,6 +1063,7 @@ export class IdentityService {
             families,
           },
           "creating a profile",
+          { kind: "profile-created", at: now, principal_id: bound.principal_id, principal: bound, profile },
         );
       } catch {
         return { kind: "unavailable" as const };
@@ -1166,6 +1315,16 @@ export class IdentityService {
             dropLinks,
           },
           "rotating a recovery key",
+          {
+            kind: "recovery-key-rotated",
+            at: now,
+            principal_id: who.profile.principal_id,
+            profile_id: who.profile.profile_id,
+            from_selector: who.profile.recovery_selector,
+            to_selector: rotated.recovery_selector,
+            recovery_hash: rotated.recovery_hash,
+            rotated_at: rotated.recovery_rotated_at,
+          },
         );
       } catch {
         return { kind: "unavailable" as const };
@@ -1223,6 +1382,7 @@ export class IdentityService {
             dropLinks,
           },
           "signing out other devices",
+          { kind: "signed-out-others", at: now, principal_id: principalId, kept_family_id: who.session.family_id, family_ids: familyList(families.map((family) => family.family_id)) },
         );
       } catch {
         return { kind: "unavailable" as const };
@@ -1370,6 +1530,17 @@ export class IdentityService {
         return { kind: "invalid" as const };
       }
       const expiresAt = now + this.policy.sensitiveAuthMs;
+      /* LIVE-5 L5-4: durable too, when configured -- best effort (the grant is honoured here either way; see
+         `IdentitySecuritySubstrate`). */
+      const durable = this.security.grants;
+      if (durable !== undefined) {
+        try {
+          await durable.put({ session_id: who.session.session_id, family_id: who.session.family_id, selector: who.profile.recovery_selector, expires_at: expiresAt });
+        } catch (error) {
+          this.stats.storeFailures += 1;
+          this.hooks.onStoreFailure?.("recording a re-authentication", error);
+        }
+      }
       this.grants.set(who.session.session_id, { family_id: who.session.family_id, selector: who.profile.recovery_selector, expires_at: expiresAt });
       /* Whoever presents the key has it: the initial delivery is resolved. */
       this.creationDeliveries.delete(who.profile.profile_id);

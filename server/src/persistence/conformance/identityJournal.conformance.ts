@@ -28,6 +28,13 @@ export interface IdentitySubject extends SubjectBase {
   armLostAnswer?(ctx: CaseContext): void;
   /** "inject-transient-failure": the next commit fails before it has any effect. */
   armTransientFailure?(ctx: CaseContext): void;
+  /** LIVE-5 L5-4 ("inject-lost-answer"): the next commit's first attempt ends UNKNOWN to the writer -- having `landed`
+   *  or not -- and its resend stalls at the returned gate (a takeover can be placed between them). */
+  armUnknownThenStallResend?(ctx: CaseContext, landed: boolean): Gate;
+  /** LIVE-5 L5-4 ("idempotency-token"): the client request tokens of every write attempt so far, in order. */
+  writeTokens?(ctx: CaseContext): string[];
+  /** LIVE-5 L5-4 ("inject-unresolved"): the next commit's outcome stays unknown however the store retries it. */
+  armUnresolvedWrite?(ctx: CaseContext): void;
 }
 
 const isDefinite = (error: unknown) => error instanceof Error && error.name === "StoreDefiniteError";
@@ -269,6 +276,224 @@ export const IDENTITY_CASES: readonly ConformanceCase<IdentitySubject>[] = [
       stall.release();
       const error = await pending.then(() => null, (thrown: unknown) => thrown);
       assert.ok(error !== null && isDefinite(error), "FENCE-IN-WRITE: the stale writer's in-flight commit was applied");
+      assert.deepEqual(await subject.stored(ctx), before);
+    },
+  },
+  /* ---------------- LIVE-5 L5-4 ---------------- */
+  {
+    id: "ID-12-token",
+    title: "the resend of an unknown outcome carries the SAME client request token as the attempt it repeats; a new attempt a fresh one",
+    needs: ["inject-lost-answer", "idempotency-token"],
+    async run(subject, ctx) {
+      const { store, set } = await seededIdentity(subject, ctx);
+      const tokens = hook(subject.writeTokens, "writeTokens");
+      const before = tokens(ctx).length;
+      hook(subject.armLostAnswer, "armLostAnswer")(ctx);
+      const extra = anotherSession(set, "token");
+      await store.commit({ expect: [{ kind: "session-absent", session_id: extra.session_id }], sessions: [extra] });
+      const attempts = tokens(ctx).slice(before);
+      assert.equal(attempts.length, 2, `one attempt and one resend (${attempts.length})`);
+      assert.equal(attempts[1], attempts[0], "the resend is the identical request");
+      assert.match(attempts[0], /^[\x21-\x7e]{1,36}$/, "a ClientRequestToken is 1-36 printable characters");
+      const next = anotherSession(set, "token-next");
+      await store.commit({ expect: [{ kind: "session-absent", session_id: next.session_id }], sessions: [next] });
+      const later = tokens(ctx).slice(before + 2);
+      assert.equal(later.length, 1);
+      assert.notEqual(later[0], attempts[0], "every new attempt has a fresh token");
+    },
+  },
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<IdentitySubject> => ({
+      id: `ID-12-${landed ? "landed" : "unlanded"}-then-takeover`,
+      title: landed
+        ? "a resend never hides a stale writer: a commit that LANDED before a takeover is reported committed (it really is)"
+        : "a resend never hides a stale writer: a commit that did NOT land before a takeover is refused DEFINITE on resend, never applied",
+      needs: ["fence", "fence-in-write", "inject-lost-answer"],
+      async run(subject, ctx) {
+        const { store, set } = await seededIdentity(subject, ctx, { writerCheck: ctx.fence.writer() });
+        const extra = anotherSession(set, "unknown-then-takeover");
+        const resend = hook(subject.armUnknownThenStallResend, "armUnknownThenStallResend")(ctx, landed);
+        const pending = store.commit({ expect: [{ kind: "session-absent", session_id: extra.session_id }], sessions: [extra] }).then(
+          () => "committed",
+          (error: unknown) => (isDefinite(error) ? "definite" : `unknown: ${String(error)}`),
+        );
+        await stalledAt(resend, pending, "the resend");
+        await ctx.fence.takeOver();
+        resend.release();
+        const outcome = await pending;
+        const stored = (await (await subject.open(ctx)).load()).sessions.map((session) => session.session_id);
+        if (landed) {
+          assert.equal(outcome, "committed");
+          assert.ok(stored.includes(extra.session_id));
+        } else {
+          assert.equal(outcome, "definite", `a stale writer's unlanded commit must be refused on resend, got ${outcome}`);
+          assert.ok(!stored.includes(extra.session_id));
+        }
+      },
+    }),
+  ),
+  {
+    id: "ID-15",
+    title: "a change larger than one storage transaction: refused whole when a term fails; committed whole, and a whole-family sign-out of it, otherwise",
+    async run(subject, ctx) {
+      const { store, set } = await seededIdentity(subject, ctx);
+      const many = Array.from({ length: 150 }, (_, k) => anotherSession(set, `bulk-${k}`));
+      const absent = many.map((session) => ({ kind: "session-absent" as const, session_id: session.session_id }));
+      await refused(subject, ctx, store, { expect: [...absent, { kind: "session-absent", session_id: set.session.session_id }], sessions: many }, "a large change whose last term fails");
+      await store.commit({ expect: absent, sessions: many });
+      const all = [set.session, ...many];
+      assert.deepEqual((await store.load()).sessions.map((session) => session.session_id).sort(), all.map((session) => session.session_id).sort());
+      const at = ctx.tick();
+      await store.commit({
+        expect: [{ kind: "family-open", family_id: set.family.family_id }, ...all.map((session) => ({ kind: "session-open" as const, session_id: session.session_id }))],
+        families: [{ ...set.family, revoked_at: at, revoke_reason: "logout" }],
+        sessions: all.map((session) => ({ ...session, revoked_at: at, revoke_reason: "logout" as const })),
+      });
+      const loaded = await store.load();
+      assert.equal(loaded.families[0].revoked_at, at);
+      assert.equal(loaded.sessions.filter((session) => session.revoke_reason === "logout").length, all.length, "every member revoked");
+      await refused(subject, ctx, store, { expect: [{ kind: "family-open", family_id: set.family.family_id }], sessions: [anotherSession(set, "after-sign-out")] }, "a mint into the signed-out family");
+    },
+  },
+  {
+    id: "ID-18",
+    title: "an unresolved commit is UNKNOWN (never DEFINITE); the store refuses every later commit until a restart, which loads the change wholly or not at all",
+    needs: ["inject-unresolved", "durable"],
+    async run(subject, ctx) {
+      const { store, set } = await seededIdentity(subject, ctx);
+      const extra = anotherSession(set, "unresolved");
+      hook(subject.armUnresolvedWrite, "armUnresolvedWrite")(ctx);
+      const error = await rejection(store.commit({ expect: [{ kind: "session-absent", session_id: extra.session_id }], sessions: [extra] }));
+      assert.ok(!isDefinite(error), `an unresolved write is never reported as nothing written: ${String(error)}`);
+      const later = anotherSession(set, "held");
+      const held = await rejection(store.commit({ expect: [{ kind: "session-absent", session_id: later.session_id }], sessions: [later] }));
+      assert.ok(isDefinite(held), "a held store refuses DEFINITE, writing nothing");
+      const loaded = await (await subject.open(ctx)).load();
+      const ids = loaded.sessions.map((session) => session.session_id);
+      assert.ok(!ids.includes(later.session_id));
+      assert.ok(ids.includes(set.session.session_id), "what was committed before stands");
+    },
+  },
+  {
+    id: "ID-19",
+    title: "a malformed change -- a precondition of the wrong shape or kind, a non-time, a drop naming no id, a record list of non-records -- is refused DEFINITE by every store",
+    needs: ["validates-shape"],
+    async run(subject, ctx) {
+      const { store, set } = await seededIdentity(subject, ctx);
+      await store.commit({ expect: [{ kind: "link-absent", link_hash: set.link.link_hash }], links: [set.link] });
+      const extra = anotherSession(set, "malformed");
+      const malformed = (value: unknown) => value as IdentityPrecondition;
+      const cases: Array<[string, IdentityChange]> = [
+        ["link-unconsumed at NaN (it used to hold: NaN >= expires_at is false)", { expect: [malformed({ kind: "link-unconsumed", link_hash: set.link.link_hash, at: Number.NaN })], sessions: [extra] }],
+        ["link-unconsumed at a string", { expect: [malformed({ kind: "link-unconsumed", link_hash: set.link.link_hash, at: "5" })], sessions: [extra] }],
+        ["session-absent naming a number", { expect: [malformed({ kind: "session-absent", session_id: 7 })], sessions: [extra] }],
+        ["session-absent naming no session id", { expect: [malformed({ kind: "session-absent", session_id: "x".repeat(3000) })], sessions: [extra] }],
+        ["an unknown precondition kind", { expect: [malformed({ kind: "session-gone", session_id: extra.session_id })], sessions: [extra] }],
+        ["a precondition with an extra field", { expect: [malformed({ kind: "session-absent", session_id: extra.session_id, also: 1 })], sessions: [extra] }],
+        ["a drop naming no session id", { dropSessions: ["not-a-session"] }],
+        ["a drop naming no link hash", { dropLinks: ["a".repeat(3000)] }],
+        ["a record list holding a non-record", { sessions: [null as unknown as typeof extra] }],
+      ];
+      for (const [label, change] of cases) await refused(subject, ctx, store, change, label);
+    },
+  },
+  {
+    id: "ID-20",
+    title: "the caller's step before the write (review F2): run once, after the store's own checks and before its write -- never for a change the store refuses; its rejection writes nothing and comes back unchanged",
+    async run(subject, ctx) {
+      const { store, set } = await seededIdentity(subject, ctx);
+      const before = await subject.stored(ctx);
+      const extra = anotherSession(set, "before-write");
+      const change: IdentityChange = { expect: [{ kind: "session-absent", session_id: extra.session_id }], sessions: [extra] };
+      let calls = 0;
+      const counting = { beforeWrite: async () => void (calls += 1) };
+      /* A change the store refuses on its own checks -- a failed precondition, a malformed change: the step never runs. */
+      assert.ok(isDefinite(await rejection(store.commit({ ...change, expect: [{ kind: "session-absent", session_id: set.session.session_id }] }, counting))));
+      assert.ok(isDefinite(await rejection(store.commit({ dropSessions: ["not-a-session"] }, counting))));
+      assert.equal(calls, 0, "no step for a change the store refuses first");
+      /* The step rejects: its own error, unchanged; nothing written; the store still works. */
+      const mine = new Error("the caller's step failed");
+      const failed = await rejection(
+        store.commit(change, {
+          beforeWrite: async () => {
+            calls += 1;
+            assert.deepEqual(await subject.stored(ctx), before, "the step runs BEFORE the write");
+            throw mine;
+          },
+        }),
+      );
+      assert.equal(failed, mine, "the step's own rejection comes back unchanged");
+      assert.deepEqual(await subject.stored(ctx), before, "nothing was written");
+      /* The step resolves: the change is written, the step having run once, before it. */
+      await store.commit(change, {
+        beforeWrite: async () => {
+          calls += 1;
+          assert.deepEqual(await subject.stored(ctx), before, "still before the write");
+        },
+      });
+      assert.equal(calls, 2);
+      assert.ok((await store.load()).sessions.some((session) => session.session_id === extra.session_id), "written");
+    },
+  },
+  {
+    id: "ID-20-race",
+    title: "a conflicting commit sent while the caller's step runs: exactly one of the two is applied, the other refused DEFINITE (a store with no queue decides its write again after the step)",
+    async run(subject, ctx) {
+      const { store, set } = await seededIdentity(subject, ctx);
+      const extra = anotherSession(set, "race");
+      const change: IdentityChange = { expect: [{ kind: "session-absent", session_id: extra.session_id }], sessions: [extra] };
+      const rival: IdentityChange = { ...change, sessions: [{ ...extra, last_seen_at: extra.last_seen_at + 1 }] };
+      const settle = (commit: Promise<void>) =>
+        commit.then(
+          () => "applied",
+          (error: unknown) => (isDefinite(error) ? "refused" : `unknown: ${String(error)}`),
+        );
+      const race: { other?: Promise<string> } = {};
+      const first = settle(
+        store.commit(change, {
+          beforeWrite: async () => {
+            race.other = settle(store.commit(rival));
+            await new Promise<void>((resolve) => setImmediate(resolve));
+          },
+        }),
+      );
+      const outcomes = [await first, await (race.other as Promise<string>)];
+      assert.deepEqual([...outcomes].sort(), ["applied", "refused"], `exactly one applied: ${outcomes.join(", ")}`);
+      const stored = (await store.load()).sessions.filter((session) => session.session_id === extra.session_id);
+      assert.deepEqual(stored, [outcomes[0] === "applied" ? extra : rival.sessions?.[0]], "the stored record is the applied one's");
+    },
+  },
+  {
+    id: "ID-20-fenced",
+    title: "a writer that can see it was taken over refuses before the caller's step: the step (a security event) never runs",
+    needs: ["fence"],
+    async run(subject, ctx) {
+      const { store, set } = await seededIdentity(subject, ctx, { writerCheck: ctx.fence.writer() });
+      const before = await subject.stored(ctx);
+      await ctx.fence.takeOver();
+      let calls = 0;
+      const extra = anotherSession(set, "fenced-step");
+      const error = await rejection(store.commit({ expect: [{ kind: "session-absent", session_id: extra.session_id }], sessions: [extra] }, { beforeWrite: async () => void (calls += 1) }));
+      assert.ok(isDefinite(error), `expected StoreDefiniteError, got ${String(error)}`);
+      assert.equal(calls, 0, "no step for a writer that can see it is stale");
+      assert.deepEqual(await subject.stored(ctx), before);
+    },
+  },
+  {
+    id: "ID-20-takeover-during-step",
+    title: "fence inside the write: a takeover while the caller's step runs (after every check the writer can make) still refuses the write DEFINITE",
+    needs: ["fence", "fence-in-write"],
+    async run(subject, ctx) {
+      const { store, set } = await seededIdentity(subject, ctx, { writerCheck: ctx.fence.writer() });
+      const before = await subject.stored(ctx);
+      const extra = anotherSession(set, "step-then-takeover");
+      const error = await store
+        .commit({ expect: [{ kind: "session-absent", session_id: extra.session_id }], sessions: [extra] }, { beforeWrite: async () => void (await ctx.fence.takeOver()) })
+        .then(
+          () => null,
+          (thrown: unknown) => thrown,
+        );
+      assert.ok(error !== null && isDefinite(error), `FENCE-IN-WRITE: the stale writer's in-flight commit (after its step) was applied (${String(error)})`);
       assert.deepEqual(await subject.stored(ctx), before);
     },
   },

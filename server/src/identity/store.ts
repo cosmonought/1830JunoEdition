@@ -213,11 +213,27 @@ export interface IdentityChange {
   readonly families?: readonly SessionFamily[];
 }
 
+/** LIVE-5 L5-4 (review F2): what a caller may ask of one commit. */
+export interface IdentityCommitOptions {
+  /**
+   * Called exactly once, AFTER every check the store makes before it writes has passed -- it is loaded and not held,
+   * its fence as far as it can see, the change's own shape and every precondition against its view -- and immediately
+   * BEFORE the write. Never called for a change the store refuses on those checks. The change is written only once it
+   * resolves; if it rejects, nothing is written and `commit` rejects with that same error, unchanged.
+   * The identity service appends a security change's event here, so a change the store refuses first leaves no event
+   * behind. What no store can rule out: a write refused or left unresolved after the hook ran (a condition only the
+   * table can check, the fence inside the write, a lost answer) -- that event has no committed change (a phantom,
+   * securityEvents.ts).
+   */
+  readonly beforeWrite?: () => Promise<void>;
+}
+
 export interface IdentityStore {
   /** Everything durable. Throws on a file it cannot read without guessing (the server then refuses to start). */
   load(): Promise<FullIdentitySnapshot>;
-  /** Durable before it resolves; `StoreDefiniteError` when nothing changed; anything else is an unknown outcome. */
-  commit(change: IdentityChange): Promise<void>;
+  /** Durable before it resolves; `StoreDefiniteError` when nothing changed; anything else is an unknown outcome
+   *  (except `options.beforeWrite`'s own rejection, passed through: nothing was written). */
+  commit(change: IdentityChange, options?: IdentityCommitOptions): Promise<void>;
 }
 
 /* ---------------------------------------------------------------------------
@@ -600,6 +616,71 @@ export function preconditionFailure(lookups: IdentityLookups, expect: readonly I
   return null;
 }
 
+/* ==================================================================
+    LIVE-5 L5-4: A CHANGE'S OWN FIELDS ARE WELL-FORMED BEFORE ANY STORE LOOKS AT THEM
+   ==================================================================
+   The records a change writes are shape-checked by `IdentityIndex.check` / `checkSnapshot`. Its PRECONDITIONS and its
+   DROPS were not: a precondition naming an id of the wrong type, or a `link-unconsumed` whose `at` is not a time, was
+   evaluated anyway -- `NaN >= expires_at` is false, so such a term "held". A DynamoDB store cannot even express those
+   (a number attribute cannot hold NaN; a key cannot be 3 KB), so it would refuse where the memory and journal stores
+   accept. Every store now refuses a malformed change DEFINITE, before anything is looked up, with the same answer --
+   conformance ID-19. Never reached by the service (its ids are minted and its times are clock readings). Commit paths
+   only: a stored journal line is never re-judged by this at a load. */
+const PRECONDITION_SHAPES: Readonly<Record<IdentityPrecondition["kind"], readonly [string, RegExp | "time"][]>> = {
+  "principal-absent": [["principal_id", PRINCIPAL_ID_PATTERN]],
+  "principal-unprofiled": [["principal_id", PRINCIPAL_ID_PATTERN]],
+  "profile-absent": [["profile_id", PROFILE_ID_PATTERN]],
+  "selector-unused": [["recovery_selector", RECOVERY_SELECTOR_PATTERN]],
+  "profile-selector": [
+    ["profile_id", PROFILE_ID_PATTERN],
+    ["recovery_selector", RECOVERY_SELECTOR_PATTERN],
+  ],
+  "session-absent": [["session_id", SESSION_ID_PATTERN]],
+  "session-open": [["session_id", SESSION_ID_PATTERN]],
+  "link-absent": [["link_hash", HEX_64]],
+  "link-unconsumed": [
+    ["link_hash", HEX_64],
+    ["at", "time"],
+  ],
+  "family-absent": [["family_id", FAMILY_ID_PATTERN]],
+  "family-open": [["family_id", FAMILY_ID_PATTERN]],
+};
+
+/** Why a change's preconditions or drops are malformed (`null`: they are not). Names the kind and position only. */
+export function changeShapeProblem(change: IdentityChange): string | null {
+  if (!isRecordObject(change)) return "a change is not an object";
+  const expect = (change as { expect?: unknown }).expect;
+  if (expect !== undefined) {
+    if (!Array.isArray(expect)) return "a change's preconditions are not a list";
+    for (const [at, condition] of expect.entries()) {
+      if (!isRecordObject(condition) || typeof condition.kind !== "string" || !Object.prototype.hasOwnProperty.call(PRECONDITION_SHAPES, condition.kind)) {
+        return `precondition #${at} is not a known precondition`;
+      }
+      const fields = PRECONDITION_SHAPES[condition.kind as IdentityPrecondition["kind"]];
+      if (!exactKeys(condition, ["kind", ...fields.map(([name]) => name)])) return `precondition #${at} (${condition.kind}) is not well-formed`;
+      for (const [name, shape] of fields) {
+        const value = condition[name];
+        const ok = shape === "time" ? isTime(value) : typeof value === "string" && shape.test(value);
+        if (!ok) return `precondition #${at} (${condition.kind}) is not well-formed`;
+      }
+    }
+  }
+  const drops: Array<[string, RegExp]> = [
+    ["dropSessions", SESSION_ID_PATTERN],
+    ["dropLinks", HEX_64],
+  ];
+  for (const [field, pattern] of drops) {
+    const ids = (change as Record<string, unknown>)[field];
+    if (ids === undefined) continue;
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string" && pattern.test(id))) return `a change's ${field} names something that is not an id`;
+  }
+  for (const field of ["principals", "sessions", "profiles", "links", "families"]) {
+    const records = (change as Record<string, unknown>)[field];
+    if (records !== undefined && (!Array.isArray(records) || !records.every(isRecordObject))) return `a change's ${field} are not a list of records`;
+  }
+  return null;
+}
+
 /** One change may name each record at most once (a store transaction cannot touch one item twice -- LIVE-5 -- and a
  *  change that did would mean a caller bug). */
 export function changeIdProblem(change: IdentityChange): string | null {
@@ -775,27 +856,36 @@ export function createMemoryIdentityStore(initial: IdentitySnapshot = { principa
     async load() {
       return JSON.parse(JSON.stringify(durable)) as FullIdentitySnapshot;
     },
-    async commit(change) {
+    async commit(change, options) {
       const fault = failNext.shift();
       if (fault === "definite") {
         stats.failed += 1;
         throw new StoreDefiniteError("injected identity-store failure (nothing written)");
       }
-      /* LIVE-3C: the change's own contract -- one record once, every precondition -- before anything is applied. */
-      const problem = changeIdProblem(change) ?? preconditionFailure(lookupsOf(durable), change.expect);
-      if (problem !== null) {
-        stats.failed += 1;
-        throw new StoreDefiniteError(`memory identity store: ${problem}; nothing was written`);
-      }
-      /* LIVE-5 L5-1 (conformance ID-08): a change that would break a relation is refused DEFINITE -- nothing was
-         written -- exactly as the production journal store refuses it. It used to escape as `IdentityStoreCorruptError`,
-         which the port's contract reads as an UNKNOWN outcome (a restart-required fault) for a change that never landed. */
-      let next: FullIdentitySnapshot;
-      try {
-        next = checkSnapshot(applyChange(durable, change), "memory identity store commit");
-      } catch (error) {
-        stats.failed += 1;
-        throw new StoreDefiniteError(`${error instanceof Error ? error.message : String(error)}; nothing was written`);
+      /** The change against what is durable now: the next content, or DEFINITE (nothing written). */
+      const decide = (): FullIdentitySnapshot => {
+        /* LIVE-3C: the change's own contract -- one record once, every precondition -- before anything is applied. */
+        const problem = changeShapeProblem(change) ?? changeIdProblem(change) ?? preconditionFailure(lookupsOf(durable), change.expect);
+        if (problem !== null) {
+          stats.failed += 1;
+          throw new StoreDefiniteError(`memory identity store: ${problem}; nothing was written`);
+        }
+        /* LIVE-5 L5-1 (conformance ID-08): a change that would break a relation is refused DEFINITE -- nothing was
+           written -- exactly as the production journal store refuses it. It used to escape as `IdentityStoreCorruptError`,
+           which the port's contract reads as an UNKNOWN outcome (a restart-required fault) for a change that never landed. */
+        try {
+          return checkSnapshot(applyChange(durable, change), "memory identity store commit");
+        } catch (error) {
+          stats.failed += 1;
+          throw new StoreDefiniteError(`${error instanceof Error ? error.message : String(error)}; nothing was written`);
+        }
+      };
+      let next = decide();
+      if (options?.beforeWrite !== undefined) {
+        await options.beforeWrite();
+        /* The hook yielded, and this store has no queue: another commit may have landed meanwhile. The write is decided
+           against what is durable NOW (as a condition inside the write would be). */
+        next = decide();
       }
       durable = next;
       if (fault === "uncertain") {

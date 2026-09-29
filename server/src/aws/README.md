@@ -79,3 +79,57 @@ also proves each case detects a check-then-write store.
 
 The one DynamoDB adapter in L5-1, `dynamoProofFinancialStore.ts`, is a **proof only**, for the harness. It is not
 production code and not the L5-2 design.
+
+## 4. Identity on DynamoDB (L5-4): `aws/identity/`
+
+| File | What it is |
+|---|---|
+| `identityItems.ts` | The identity table's items and their strict codec |
+| `identityPlan.ts` | Pure: one `IdentityChange` → the TransactWriteItems that carry it, every precondition a condition |
+| `dynamoIdentityStore.ts` | The `IdentityStore` for the identity writer, its `grants`, `takeOverIdentityWriter`, the send-and-settle runner |
+| `dynamoSecurityJournal.ts` | The `SecurityEventJournal` as `SEC#` items of the ledger table |
+
+**The identity table** (`gs-<env>-identity`; string `pk` / `sk`; no index; PITR on; deletion-protected; **TTL attribute
+`ttl`**, which only grant items and commit markers carry):
+
+| pk | sk | Item |
+|---|---|---|
+| `PRIN#<pr>` · `PROF#<pf>` · `SESS#<se>` · `FAM#<sf>` | `META` | a principal, profile, session (secret only as SHA-256), family |
+| `LINK#<sha256>` | `LINK` | a link code (only as SHA-256) |
+| `SEL#<rk>` | `SEL` | a recovery selector's **uniqueness item**: its profile, or `retired_at` once rotated away. Never deleted |
+| `GRANT#<se>` | `GRANT` | a sensitive-auth grant; TTL `expires_at` + 1 h |
+| `ROLE#identity-writer` | `ROLE` | the identity-writer role: `epoch` (ROLE_ID), `task`, `pool`, `taken_at`, `claim` |
+| `TXN#<token>` | `TXN` | one transaction's commit marker; TTL 1 day |
+
+Every value is its record's own field, typed (S, canonical-integer N, NULL), every frozen field present, `fmt` = 1.
+Nothing else: the `PRIN#/SESS#`-style index items of preflight §3.3 have no reader while the writer loads the whole
+table, and are left to the read-through follow-up.
+
+**Every write** is one `TransactWriteItems`: `[ROLE_ID ConditionCheck, the commit marker Put, …the change]`, a fresh
+`ClientRequestToken`, SDK retries off. A precondition is a condition of the item it names (merged per item, since one
+transaction may not touch an item twice); so is every rule about a record's past and every relation to a record the
+change does not carry. Outcomes: committed; **DEFINITE** only when nothing was written (a failed condition, the fence, a
+rejection that evaluated nothing); **UNKNOWN** (timeout, network, 5xx) is resent identically and settled by a strong read
+of the marker; still unknown → `StoreUncertainError`, the store holds itself and calls `onRestartRequired`. A change over
+98 items is split into transactions in a safe order, **every security effect first**: the gate of preconditions,
+principals, profiles with their selector items, then families, link codes and the sessions a sign-out ends one by one
+(newest first), then every other session write, then dropped sessions. Applied in part it is UNKNOWN and held, and the
+prefix loads; a later chunk that is only throttled is retried for about 15 s first.
+
+**The security event's place** (`IdentityCommitOptions.beforeWrite`, the port's one addition): after the pre-check and
+the plan the store reads its role strongly, then runs the caller's step (the service appends the `SEC#` event), then
+writes. A change the store refuses first leaves no event; a write refused after the event leaves it unconfirmed (the
+service appends a `confirmed` event after each committed change). A load also checks the role (a stale epoch is fenced at
+once), a takeover writes only a task/pool/time the role codec reads back, and a grant write is one resend, 2 s a call.
+
+**What L5-7 wires** (nothing in `start.ts` uses these yet):
+- take the role (`takeOverIdentityWriter`, with L5-3's `SYSTEM/ROUTING` and `POOL#` checks), then `load` -- never the
+  other way round;
+- `onFenced` → exit 3 (a stale identity writer must not keep answering from memory, preflight §5.5);
+  `onRestartRequired` → the same fail-fast exit as every other store;
+- `IdentityService.open(store, { security: { journal, grants: store.grants } })`: the security-event journal on the
+  ledger table (`createDynamoSecurityJournal`, with the adopted app generation, or `null` until L6-4 adopts one) and the
+  durable grants (OD-5-4).
+
+**L5-8 (IaC)**: the identity table's TTL attribute is `ttl`; the ledger table needs `APPGEN` / `APPGEN`
+(`current_generation`) before any generation-fenced append.

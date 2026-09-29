@@ -129,7 +129,14 @@ once), a takeover writes only a task/pool/time the role codec reads back, and a 
   `onRestartRequired` → the same fail-fast exit as every other store;
 - `IdentityService.open(store, { security: { journal, grants: store.grants } })`: the security-event journal on the
   ledger table (`createDynamoSecurityJournal`, with the adopted app generation, or `null` until L6-4 adopts one) and the
-  durable grants (OD-5-4).
+  durable grants (OD-5-4);
+- on a graceful shutdown, `await identity.settled()` before the process exits: a change's confirmation is appended
+  after its answer (round-3 R3-1), and a shutdown should not drop it.
+
+**Owner decisions (2026-09-29):** journal-first stays fail-closed (while the ledger cannot record an event, the security
+changes that need one answer unavailable; a recovery stays available); after a restore, an UNCONFIRMED key rotation
+retires its old selector, installs nothing and sends the profile to operator review (L6-4, `identity/securityEvents.ts`);
+`createFileIdentityStore` stays test-only through LIVE-5.
 
 **L5-8 (IaC)**: the identity table's TTL attribute is `ttl`; the ledger table needs `APPGEN` / `APPGEN`
 (`current_generation`) before any generation-fenced append.

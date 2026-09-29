@@ -15,13 +15,16 @@
 // beforeWrite`, L5-4 review F2): a change the store refuses on its own checks (held, fenced as far as it can see, a
 // failed precondition) leaves no event. If the append fails -- definitely or with an unknown outcome -- the change is NOT
 // written and the action answers as any store failure does. Never the other way: no committed security change is ever
-// missing from the journal.
+// missing from the journal. OWNER DECISION (2026-09-29): this stays FAIL-CLOSED -- while the journal cannot record,
+// the security changes that need an event (a sign-out closing a family, "Sign out other devices", a key rotation, a
+// profile creation, a disable) answer unavailable; a recovery, which records no event, stays available.
 //
 // PHANTOMS, AND THE CONFIRMATION. An event can still have no committed change: its write refused by a condition only the
 // table checks (a writer whose view diverged), by the fence inside the write (a takeover in the moment between the
 // store's role read and its write), an unknown outcome that did not in fact land, or a crash between the append and the
-// write. So once its change is committed the service appends a `confirmed` event naming it -- best effort: one that
-// cannot be written is reported and the action still succeeds. An event with a confirmation was committed; one without
+// write. So once its change is committed -- and applied and answered: the identity queue appends it before its next task,
+// so the confirmation never holds back an answer (N2, round-3 R3-1) -- the service appends a `confirmed` event naming
+// it. Best effort: one that cannot be written is reported and the action still succeeds. An event with a confirmation was committed; one without
 // may or may not have been. A confirmation names its event by id (`confirms`) and carries that event's own `at`; within
 // one writer its id sorts after the event's (the writer's count). A replay pairs them by id, never by position: two
 // writers' events in one millisecond (a takeover, clock skew between tasks) have no defined order.
@@ -36,9 +39,9 @@
 //     way back.
 //   - `recovery-key-rotated`, confirmed: applied as one step of the chain (`from_selector` dead, `to_selector` live).
 //   - `recovery-key-rotated`, UNCONFIRMED: NEVER installed automatically. Its player holds `to_selector` only if the
-//     change committed and just its confirmation was lost, and `from_selector` otherwise. Recommended (an owner decision
-//     at L6-4): retire `from_selector` (its player asked for it to die: it must not come back), do not install
-//     `to_selector`, and list the profile for an operator's review.
+//     change committed and just its confirmation was lost, and `from_selector` otherwise. OWNER DECISION (2026-09-29):
+//     retire `from_selector` (its player asked for it to die: it must not come back), do NOT install `to_selector`, and
+//     send the profile to an operator's review.
 //
 // WHAT IS RECORDED (and what is not): the five kinds of change below, each carrying exactly what a replay needs to
 // re-apply it idempotently and in any order -- a rotation names the selector it replaced and the one it installed (a

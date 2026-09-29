@@ -56,7 +56,7 @@ export type ProductionClass =
   /** A recorded production DATA defect (owner-ruled; known-red for R12-2) explains part of the case, exactly:
    *  production's figure is the law's price plus the data premium (#62 at $90 against $80; Montreal / Norfolk
    *  priced flat against $40 / $60 and $30 / $50); or production's set is the best under its own data but not the
-   *  law's; or the law's witness is refused only by Norfolk's one production circle (owner: two). Optimality is
+   *  law's; or the law's witness is refused only by production's one circle at Montreal / Norfolk (owner: two). Optimality is
    *  judged at the law's price. */
   | "production-data-defect"
   /** Production's set admits several readings the oracle cannot choose between (a wire-format finding). */
@@ -94,8 +94,8 @@ export interface CaseResult {
   productionDataOptimum: number | null;
   /** The authority on that set (the oracle's witness itself when the data change nothing). */
   authorityOnProductionDataWitness: string;
-  /** The authority refused the law's witness only because production gives Norfolk one circle. */
-  witnessRefusedByNorfolkCircles: boolean;
+  /** The authority refused the law's witness only because production gives Montreal / Norfolk one circle. */
+  witnessRefusedByCircles: boolean;
   /** `appliesProductionDataWitness`: the reducer on the best set under production's data (only when it differs). */
   reducer?: { appliesProductionSet: boolean; appliesWitness: boolean; appliesProductionDataWitness: boolean | null; allowsSkip: boolean };
   flags: ProductionClass[];
@@ -196,7 +196,7 @@ function routePremium(table: PremiumTable, route: OracleRoute): number {
 
 /** THE LAW UNDER PRODUCTION'S DATA: the oracle's own route law, on a graph whose recorded production data
  *  defects are put back the way production has them -- its prices (the premium table: #62, Montreal / Norfolk
- *  flat) and its station circles (Norfolk: one, the superseded #1401 ruling). Its optimum is what production's
+ *  flat) and its station circles (Montreal, Norfolk: one each, the superseded #1401 ruling). Its optimum is what production's
  *  search and the S6-3 demonstration rule are aiming at, so it separates a data defect from a search or law
  *  defect. `null` if a budget runs out (never guessed: the repair review's residual Low). */
 function productionDataOptimum(
@@ -205,11 +205,11 @@ function productionDataOptimum(
   table: PremiumTable,
   input: OracleCaseInput,
   fleet: readonly string[],
-): { total: number; set: SubmittedSet; differs: boolean; circlesMatter: boolean; graph: OracleGraph } | null {
+): { total: number; set: SubmittedSet; differs: boolean; circlesMatter: boolean; circlesAt: string[]; graph: OracleGraph } | null {
   const graph = buildOracleGraph(input);
   // Production's circles are put back only where they change THIS position (the closure review, M1): the city
   // would be shut to the runner under production's count but is open under the law's.
-  let circlesMatter = false;
+  const circlesAt: string[] = [];
   if (ORACLE_EXPANSION_BOARD_IDS.includes(board.board.id)) {
     const grid = gridOf(board.lays);
     for (const label of Object.keys(ORACLE_EXPANSION_PRINTED_CITY_SLOTS)) {
@@ -221,10 +221,11 @@ function productionDataOptimum(
       if (holders.includes(input.companyId)) continue;
       if (holders.length >= production && holders.length < node.slots) {
         (node as { slots: number }).slots = production;
-        circlesMatter = true;
+        circlesAt.push(label);
       }
     }
   }
+  const circlesMatter = circlesAt.length > 0;
   const premiumMatters = solution.routes.some((route) => routePremium(table, route) !== 0);
   if (!circlesMatter && !premiumMatters) {
     return {
@@ -232,6 +233,7 @@ function productionDataOptimum(
       set: { routes: solution.witness.map((entry) => entry.waypoints), trainIndices: solution.witness.map((entry) => entry.trainIndex) },
       differs: false,
       circlesMatter,
+      circlesAt,
       graph: solution.graph,
     };
   }
@@ -253,6 +255,7 @@ function productionDataOptimum(
     set: { routes: packed.assignment.map((entry) => waypointsOf(entry.route.visits, graph)), trainIndices: packed.assignment.map((entry) => entry.trainIndex) },
     differs: true,
     circlesMatter,
+    circlesAt,
     graph,
   };
 }
@@ -339,20 +342,22 @@ export function compareCase(board: CorpusBoard, companyId: number, fleet: readon
   const lawProduced = oracleLegal ? oracleJudge.total : produced;
   const productionData = decided ? productionDataOptimum(board, solution, table, oracleInputFor(board, companyId, options.policy), fleet) : null;
   const witnessPremium = witnessSet.routes.length > 0 ? dataPremium(solution.graph, table, witnessSet.routes).total : 0;
-  // The law's witness refused ONLY because production shuts Norfolk with its one circle -- the data defect, not an
-  // authority gap (the closure review, M1): the circles matter in this position; the oracle's own law, run on
-  // production's circles, refuses the witness for exactly that ("L16/city0 is filled"); the authority says so
-  // ("L16 is tokened out"); and every witness route that does not run through Norfolk is accepted on its own, so a
+  // The law's witness refused ONLY because production shuts Montreal / Norfolk with its one circle -- the data
+  // defect, not an authority gap (the closure review, M1): the circles matter at that city in this position; the
+  // oracle's own law, run on production's circles, refuses the witness for exactly that ("<hex>/city0 is filled");
+  // the authority says so ("<hex> is tokened out"); and every witness route that does not run through such a city
+  // is accepted on its own, so a
   // second refusal cannot hide behind the first. The authority is then held to the production-data set instead.
   const witnessRefusedByCircles = (() => {
     if (productionData === null || !productionData.circlesMatter || witnessAuthority === null || witnessAuthority.kind !== "refused") return false;
-    if (!/L16 is tokened out/.test(witnessAuthority.reason)) return false;
+    const shut = productionData.circlesAt.filter((label) => witnessAuthority.reason.includes(`${label} is tokened out`));
+    if (shut.length === 0) return false;
     const onProductionCircles = judgeRouteSet(productionData.graph, fleet, witnessSet.routes, witnessSet.trainIndices);
-    if (onProductionCircles.kind !== "illegal" || !/L16\/city0 is filled/.test(onProductionCircles.reason)) return false;
+    if (onProductionCircles.kind !== "illegal" || !shut.some((label) => onProductionCircles.reason.includes(`${label}/city0 is filled`))) return false;
     return witnessSet.routes.every(
       (route, i) =>
-        // Only a run THROUGH Norfolk is shut by its circles; a route that merely ends there is checked too.
-        route.slice(1, -1).some((wp) => wp.hex === "L16" && wp.bypass !== true) ||
+        // Only a run THROUGH such a city is shut by its circles; a route that merely ends there is checked too.
+        route.slice(1, -1).some((wp) => productionData.circlesAt.includes(wp.hex) && wp.bypass !== true) ||
         productionAuthority(probe, { routes: [route], trainIndices: [witnessSet.trainIndices[i]] }, state).kind === "legal",
     );
   })();
@@ -369,7 +374,7 @@ export function compareCase(board: CorpusBoard, companyId: number, fleet: readon
     const allowsSkip = reducerAllowsSkip(probe, state);
     const appliesWitness = witnessSet.routes.length > 0 ? reducerApplies(probe, witnessSet, state) : false;
     // The reducer works on production's data, so the law's witness may be refused only because of a data defect
-    // (a set worth more at production's prices; Norfolk shut by its one circle): ask about the best set under
+    // (a set worth more at production's prices; Montreal / Norfolk shut by one circle): ask about the best set under
     // production's data too before calling the case stranded (the review's M3).
     const appliesProductionDataWitness =
       productionData !== null && productionData.differs && productionData.set.routes.length > 0 ? reducerApplies(probe, productionData.set, state) : null;
@@ -395,7 +400,7 @@ export function compareCase(board: CorpusBoard, companyId: number, fleet: readon
     // Without the reducer the skip is measured by the scoped predicate, and stranding is only PREDICTED.
     const allowsSkip = skipRefusal(probe, state) === null;
     if (decided && allowsSkip && optimum > 0) flags.push("permits-skip-despite-legal-route");
-    // Where only Norfolk's circles refuse the law's witness, ask about the production-data set instead (review L2).
+    // Where only the one-circle data refuse the law's witness, ask about the production-data set instead (review L2).
     const judged = witnessRefusedByCircles ? dataWitnessAuthority : witnessAuthority;
     const witnessRefused = judged === null || judged.kind === "refused";
     const shortfall = productionData !== null && produced > productionData.total;
@@ -446,7 +451,7 @@ export function compareCase(board: CorpusBoard, companyId: number, fleet: readon
     witnessDataPremium: witnessPremium,
     productionDataOptimum: productionData === null ? null : productionData.total,
     authorityOnProductionDataWitness: productionData === null ? "no set" : productionData.differs ? verdictText(dataWitnessAuthority) : verdictText(witnessAuthority),
-    witnessRefusedByNorfolkCircles: witnessRefusedByCircles,
+    witnessRefusedByCircles,
     reducer,
     flags,
     primary,

@@ -30,8 +30,8 @@ export interface CorpusSummary {
   invalid: number;
   /** The authority refused the oracle's own legal optimum: an authority incompleteness or an oracle error. */
   authorityRefusesWitness: string[];
-  /** The authority refused the law's witness only because of production's one Norfolk circle (R12-2 data). */
-  witnessRefusedByNorfolkCircles: number;
+  /** The authority refused the law's witness only because of production's one circle at Montreal / Norfolk (R12-2 data). */
+  witnessRefusedByCircles: number;
   /** The authority refused the best set under production's own data: an authority gap, whatever the data. */
   authorityRefusesProductionDataWitness: string[];
   /** Production's set judged LEGAL by the oracle yet worth more than the oracle's optimum: an oracle error. */
@@ -66,14 +66,14 @@ export function summarise(corpus: string, results: readonly CaseResult[]): Corpu
     phaseConsistent: { cases: consistent.length, optimal: consistent.filter((r) => r.flags.includes("sound-optimal")).length },
     oracleUndecided: results.filter((r) => r.oracle.undecided !== null).length,
     invalid: results.filter((r) => r.validity.length > 0).length,
-    // Refusals explained ONLY by production's one Norfolk circle are the data defect, counted apart; the authority
+    // Refusals explained ONLY by production's one circle at Montreal / Norfolk are the data defect, counted apart; the authority
     // must still accept the best set under production's data.
     authorityRefusesWitness: results
-      .filter((r) => r.authorityOnWitness.startsWith("REFUSED") && !r.witnessRefusedByNorfolkCircles)
+      .filter((r) => r.authorityOnWitness.startsWith("REFUSED") && !r.witnessRefusedByCircles)
       .map((r) => `${r.board} ${r.companyId} [${r.fleet}]: ${r.authorityOnWitness}`),
     // Judged at the oracle's own price of production's set (never production's figure, which a recorded data
     // defect such as #62 inflates).
-    witnessRefusedByNorfolkCircles: results.filter((r) => r.witnessRefusedByNorfolkCircles).length,
+    witnessRefusedByCircles: results.filter((r) => r.witnessRefusedByCircles).length,
     authorityRefusesProductionDataWitness: results
       .filter((r) => r.authorityOnProductionDataWitness.startsWith("REFUSED"))
       .map((r) => `${r.board} ${r.companyId} [${r.fleet}]: ${r.authorityOnProductionDataWitness}`),

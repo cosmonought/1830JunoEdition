@@ -407,11 +407,12 @@ red-area, Altoona-bow and CROSS_TWICE classes beside it (`frontend/src/routeOrac
 *R12-1 repair (2026-09-29), data owed in R12-2: brown New York **#62 pays $80 per city** (owner ruling); the catalog's
 $90 is a production data defect (the oracle's `production-data-defect` class, pinned in
 `routeOracleTopology.test.ts`). *R12-1 closure (2026-09-29), owner-confirmed from the physical board:* on the 1830+ /
-LPF map **Montreal A19 pays $40 / $60 and Norfolk L16 $30 / $50** (the lesser until the first 5-train), and **Norfolk L16
-is one city with TWO station slots** -- superseding the #1401 "single-station city" ruling for Norfolk (Montreal's slot
-count is not re-ruled). Production prices both flat ($40, $20) and gives Norfolk one slot, so N&W's home shuts it to
-through-running: data defects for R12-2 (`hexBoardDataPlus.ts` L16 gray entry / printed artwork / the start-value
-table, and the tests pinning #1401 -- `expandedBoard.test.ts`, `homeSlotGlow.test.ts`, `reenterOtherCity.test.ts`).*
+LPF map **Montreal A19 pays $40 / $60 and Norfolk L16 $30 / $50** (the lesser until the first 5-train), and **Montreal A19 and
+Norfolk L16 are each one city with TWO station slots** -- superseding the #1401 "single-station city" ruling for both.
+Production prices both flat ($40, $20) and gives each one slot, so one foreign token (N&W's home at Norfolk; CPR's at
+Montreal in the FCJ log) shuts the city to through-running: data defects for R12-2 (`hexBoardDataPlus.ts` A19 / L16 gray
+entries, printed artwork and the start-value table, and the tests pinning #1401 -- `expandedBoard.test.ts`,
+`homeSlotGlow.test.ts`, `reenterOtherCity.test.ts`).*
 
 ### Stage 7 — Transaction + cash authority / auction
 

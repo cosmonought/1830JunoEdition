@@ -151,17 +151,16 @@ export const ORACLE_EXPANSION_PRINTED_TIERS: Readonly<Record<string, readonly [n
   L16: [30, 50],
 };
 
-/** Station circles of each PRINTED gray city, by board. One circle unless named here.
+/** Station circles of each PRINTED gray city on the 1830+ map (the expansion and the Level Playing Field). One
+ *  circle unless named here; the standard 1830 map's printed cities all keep one.
  *
- *  NORFOLK L16 HAS TWO CIRCLES (owner correction, R12-1 closure, 2026-09-29): ONE city with two station slots --
- *  N&W's home takes one, the other is open to any corporation under the ordinary station rules. This supersedes
- *  the earlier "Norfolk is a single-station city" ruling (#1401), which the repository still encodes (production
- *  gives it one circle: a production data defect for R12-2).
- *
- *  MONTREAL A19 stays at ONE circle: the correction names Norfolk only, and the repository's current ruling
- *  (#1401, "single-station city") is kept. The repository ALSO carries the older, contrary "two-slot pill" notes
- *  for Montreal (#1301 / #1302) -- recorded as a finding for the owner, not acted on here. */
+ *  MONTREAL A19 AND NORFOLK L16 EACH HAVE TWO CIRCLES (owner corrections, R12-1 closure, 2026-09-29): each is ONE
+ *  city with two station slots, both slots bound to its one city node; ordinary blocking applies (full when two
+ *  other railroads hold them; never full to a railroad holding one). This supersedes the earlier one-circle
+ *  "single-station city" ruling (#1401) for BOTH cities -- and confirms the older "two-slot" notes (#1301 / #1302).
+ *  The repository still encodes #1401 (production gives each one circle): production data defects for R12-2. */
 export const ORACLE_EXPANSION_PRINTED_CITY_SLOTS: Readonly<Record<string, number>> = {
+  A19: 2,
   L16: 2,
 };
 

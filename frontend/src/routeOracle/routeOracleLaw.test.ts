@@ -479,6 +479,76 @@ describe("Norfolk (L16), owner-corrected: ONE city with TWO station circles, pay
   });
 });
 
+describe("Montreal (A19), owner-corrected: ONE city with TWO station circles, paying $40 / $60 (1830+ / LPF)", () => {
+  // Level Playing Field. Montreal's printed spokes: W (A17), SW (B18), SE (B20). A17 is the printed gray connector
+  // (edges E 0 -> A19, SW 4 -> B16, SE 5 -> B18, joined pair by pair). Ottawa B16 #57 turned 1 (edges 1 / 4; 1 faces A17); B20 (a
+  // double-town hex) #55 turned 1 (towns on 1 / 4 and 2 / 5; 2 faces A19, $10). A valid board. The runner is ERIE
+  // (6) with its station at Ottawa; CPR (3) and NYC (2) may hold Montreal's circles.
+  const MONTREAL: Lay[] = [["B16", 57, 1], ["B20", 55, 1]];
+  const ERIE = 6;
+  const CPR = 3;
+  const NYC = 2;
+  const tokens = (montreal: number[], runner = ERIE) =>
+    caseOn(
+      LPF_BOARD,
+      MONTREAL,
+      [
+        { companyId: ERIE, tokens: [["B16", 0]] },
+        ...montreal.map((companyId) => ({ companyId, tokens: [["A19", 0]] as Array<[string, number | null]> })),
+      ],
+      runner,
+    );
+
+  it("both tokens bind to the one node A19/city0 (two circles); a 'city 1' token is invalid; a third does not fit", () => {
+    const graph = buildOracleGraph(tokens([CPR, NYC]));
+    expect(graph.hexes.get("A19")!.nodes.map((node) => [node.id, node.kind, node.cityIndex, node.slots])).toEqual([["A19/city0", "city", 0, 2]]);
+    expect(graph.stations.get("A19/city0")).toEqual([CPR, NYC]);
+    expect(graph.validity).toEqual([]);
+    const second = caseOn(LPF_BOARD, MONTREAL, [{ companyId: ERIE, tokens: [["B16", 0]] }, { companyId: CPR, tokens: [["A19", 0]] }, { companyId: NYC, tokens: [["A19", 1]] }]);
+    expect(buildOracleGraph(second).validity.map((finding) => finding.code)).toEqual(["V2"]);
+    const third = caseOn(LPF_BOARD, MONTREAL, [{ companyId: ERIE, tokens: [["B16", 0], ["A19", 0]] }, { companyId: CPR, tokens: [["A19", 0]] }, { companyId: NYC, tokens: [["A19", 0]] }]);
+    expect(buildOracleGraph(third).validity.map((finding) => finding.code)).toEqual(["V6"]);
+  });
+
+  it("one foreign token does not block Montreal: ERIE runs through it, counting it once", () => {
+    const input = tokens([CPR]);
+    // By hand: Ottawa also reaches Kingston (C15, the printed $10 town on its SW edge). ERIE's routes: Ottawa-Kingston
+    // ($30); Montreal-Ottawa ($60) and on to Kingston ($70); THROUGH Montreal from Ottawa to the B20 town ($70); and
+    // the whole line, town to town through both cities ($10 + $40 + $20 + $10 = $80).
+    expect(routeTable(input)).toEqual([
+      "A19>A17>B16 $60",
+      "A19>A17>B16>C15 $70",
+      "B16>A17>A19>B20 $70",
+      "B16>C15 $30",
+      "B20>A19>A17>B16>C15 $80",
+    ]);
+    expect(optimum(input, ["3"])).toBe(70);
+    expect(optimum(input, ["4"])).toBe(80);
+    expect(optimum({ ...input, highTier: true }, ["3"])).toBe(90); // Montreal $60 from the first 5-train
+    expect(judgeWaypoints(buildOracleGraph(input), [{ hex: "B16" }, { hex: "A17" }, { hex: "A19" }, { hex: "B20" }])).toMatchObject({ kind: "legal", stops: 3, value: 70 });
+  });
+
+  it("two foreign tokens fill Montreal: ERIE (no token there) may end there but not run through", () => {
+    const input = tokens([CPR, NYC]);
+    // The two routes through Montreal are gone; everything ending there stays.
+    expect(routeTable(input)).toEqual(["A19>A17>B16 $60", "A19>A17>B16>C15 $70", "B16>C15 $30"]);
+    expect(optimum(input, ["4"])).toBe(70); // was $80 with one token
+    const through = judgeWaypoints(buildOracleGraph(input), [{ hex: "B16" }, { hex: "A17" }, { hex: "A19" }, { hex: "B20" }]);
+    expect(through.kind === "illegal" && through.reason).toMatch(/A19\/city0 is filled with other railroads' stations/);
+  });
+
+  it("a corporation holding one of the two circles still runs through the full city (the ordinary rule)", () => {
+    // CPR, with NYC in the other circle: from Montreal west to Ottawa ($60), east to the town ($50), and straight
+    // through ($70). Ottawa (ERIE's one circle) is an end only, so Kingston is out of reach.
+    expect(routeTable(tokens([CPR, NYC], CPR))).toEqual(["A19>A17>B16 $60", "A19>B20 $50", "B16>A17>A19>B20 $70"]);
+  });
+
+  it("the standard map's Montreal is unchanged: one circle, one token fills it", () => {
+    const graph = buildOracleGraph(caseOn(STANDARD_BOARD, [], [{ companyId: CPR, tokens: [["A19", 0]] }], ERIE));
+    expect(graph.hexes.get("A19")!.nodes.map((node) => node.slots)).toEqual([1]);
+  });
+});
+
 describe("metamorphic: the answer does not depend on the order the board is written in", () => {
   it("permuting corporations and their tokens leaves every legal route and the optimum unchanged", () => {
     const companies = [

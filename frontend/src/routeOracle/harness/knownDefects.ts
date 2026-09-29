@@ -62,7 +62,7 @@ export function parseRoute(text: string): Array<{ hex: string; bypass?: boolean;
 
 type Lay = [label: string, tileId: number, orientation: number];
 
-function fixtureBoard(
+export function fixtureBoard(
   id: string,
   board: BoardDefinition,
   variants: Record<string, unknown>,

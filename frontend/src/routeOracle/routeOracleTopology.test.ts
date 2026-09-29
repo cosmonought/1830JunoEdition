@@ -130,14 +130,17 @@ describe("the oracle's own figures and city membership against the data both sid
     expect([standard(false).hexes.get("A19")!.nodes[0].value, standard(true).hexes.get("A19")!.nodes[0].value]).toEqual([40, 40]);
   });
 
-  it("Norfolk has TWO station circles (owner correction), Montreal one (not re-ruled) -- production gives Norfolk one", () => {
-    expect(ORACLE_EXPANSION_PRINTED_CITY_SLOTS).toEqual({ L16: 2 });
+  it("Montreal and Norfolk each have TWO station circles (owner corrections) -- production gives each one", () => {
+    // The standard 1830 map is not touched by the correction: every printed city keeps one circle there.
+    const standard = buildOracleGraph({ board: STANDARD_BOARD, grid: initialGridFor(STANDARD_BOARD).tiles, catalog: TILE_CATALOG_BY_ID, companies: [], companyId: 99, highTier: false, licenceRule: false });
+    expect(standard.hexes.get("A19")!.nodes.map((node) => [node.kind, node.slots])).toEqual([["city", 1]]);
+    expect(ORACLE_EXPANSION_PRINTED_CITY_SLOTS).toEqual({ A19: 2, L16: 2 });
     for (const board of [EXPANDED_BOARD, LPF_BOARD]) {
       const grid = initialGridFor(board);
       const graph = buildOracleGraph({ board, grid: grid.tiles, catalog: TILE_CATALOG_BY_ID, companies: [], companyId: 99, highTier: false, licenceRule: false });
       expect([board.id, graph.hexes.get("L16")!.nodes.map((node) => [node.kind, node.slots])]).toEqual([board.id, [["city", 2]]]);
-      expect([board.id, graph.hexes.get("A19")!.nodes.map((node) => [node.kind, node.slots])]).toEqual([board.id, [["city", 1]]]);
-      // KNOWN-RED for R12-2: production still reads the superseded #1401 "single-station city" ruling for Norfolk.
+      expect([board.id, graph.hexes.get("A19")!.nodes.map((node) => [node.kind, node.slots])]).toEqual([board.id, [["city", 2]]]);
+      // KNOWN-RED for R12-2: production still reads the superseded #1401 "single-station city" ruling for both.
       withBoard(board, () => {
         const at = (label: string) => board.hexes.find((entry) => entry.label === label)!;
         expect([board.id, citySlotCount(grid, at("L16").q, at("L16").r, 0), citySlotCount(grid, at("A19").q, at("A19").r, 0)]).toEqual([board.id, 1, 1]);
@@ -221,7 +224,7 @@ describe.each([
           const centres = hex.nodes.filter((node) => node.kind !== "herald" && node.spokes.length > 0);
           if (live.length > 0) expect([bh.label, centres.length > 0]).toEqual([bh.label, isRevenueCentreHex(grid, bh.label)]);
           for (const node of centres) {
-            // The recorded production data defects (Montreal / Norfolk values, Norfolk's circles) are pinned above;
+            // The recorded production data defects (Montreal / Norfolk values and circles) are pinned above;
             // everything else must agree.
             const expansion = ORACLE_EXPANSION_BOARD_IDS.includes(board.id);
             if (!(expansion && ORACLE_EXPANSION_PRINTED_TIERS[bh.label] !== undefined)) {

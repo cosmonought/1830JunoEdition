@@ -399,7 +399,7 @@ export function buildOracleGraph(input: OracleCaseInput): OracleGraph {
       const edges = [...gray.edges];
       if (gray.marker === "city" || gray.marker === "town") {
         // The figure and the circles are the ORACLE'S OWN (never the board's `startValueOverride` or `slots`): on
-        // the 1830+ map Montreal and Norfolk pay by tier, and Norfolk has two circles (owner-confirmed).
+        // the 1830+ map Montreal and Norfolk pay by tier and each has two circles (owner-confirmed).
         const tiers = expansion ? ORACLE_EXPANSION_PRINTED_TIERS[label] : undefined;
         const flat = ORACLE_PRINTED_STOP_VALUE[label];
         addNode({

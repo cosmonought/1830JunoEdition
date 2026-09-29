@@ -21,6 +21,8 @@ import * as path from "path";
 import { compareCase } from "./harness/compare";
 import { denseBoards, licencesFromLog, phaseConsistent, z6cLogEntries } from "./harness/corpus";
 import { runDenseCorpus, runRealCorpus, summarise } from "./harness/fullCorpus";
+import { fixtureBoard } from "./harness/knownDefects";
+import { LPF_BOARD } from "../components/hexBoardDataLpf";
 
 const FULL = process.env.ROUTE_ORACLE_FULL === "1";
 const boards = new Map(denseBoards().map((board) => [board.id, board]));
@@ -45,8 +47,9 @@ describe("the corpus is built from the logs, not from assumptions", () => {
  *  under PRODUCTION's data].
  *
  *  R12-1 CLOSURE (owner data, 2026-09-29): #62 pays $80 per city; on the 1830+ map Montreal pays $40 / $60 and
- *  Norfolk $30 / $50, and Norfolk has TWO station circles. Production has #62 at $90, Montreal and Norfolk flat
- *  ($40, $20) and Norfolk at one circle -- recorded production data defects (R12-2). The last column is the
+ *  Norfolk $30 / $50, and each has TWO station circles. Production has #62 at $90, Montreal and Norfolk flat
+ *  ($40, $20) and each at one circle -- recorded production data defects (R12-2). (No sample board has a
+ *  Montreal token; the Montreal case is the separate fixture below.) The last column is the
  *  oracle's law run on production's data: where the two differ, the case carries `production-data-defect`, and
  *  stranding / shortfall are judged against the production-data set (which the authority must accept). On the Z6C
  *  boards N&W's home fills production's one Norfolk circle, so production shuts Norfolk to everyone else; the law
@@ -85,9 +88,28 @@ describe("a bounded sample of the dense corpus, production classified against th
     // The authority accepts the best set under production's data, at exactly its price ...
     expect(result.authorityOnProductionDataWitness).toBe(`legal $${productionData}`);
     // ... and the law's witness at the oracle's price plus exactly the recorded premium -- unless production's one
-    // Norfolk circle shuts it out, which is then the ONLY reason given.
-    if (result.witnessRefusedByNorfolkCircles) expect(result.authorityOnWitness).toMatch(/^REFUSED: Route \d+: L16 is tokened out by other corporations/);
+    // circle at Montreal / Norfolk shuts it out, which is then the ONLY reason given.
+    if (result.witnessRefusedByCircles) expect(result.authorityOnWitness).toMatch(/^REFUSED: Route \d+: (A19|L16) is tokened out by other corporations/);
     else expect(result.authorityOnWitness).toBe(`legal $${optimum + result.witnessDataPremium}`);
+  }, 120_000);
+});
+
+describe("Montreal's one production circle is recognised as the data defect, and only that (the Montreal correction)", () => {
+  it("one CPR token at Montreal: the law runs ERIE through it ($80); production shuts it; the authority accepts the production-data set", () => {
+    // The Montreal law fixture (routeOracleLaw.test.ts) as a corpus board: Ottawa B16 #57 turned 1 (ERIE), the B20
+    // town #55 turned 1, CPR in one of Montreal's two circles; a 4-train, before the first 5-train.
+    const board = fixtureBoard("MONTREAL-CIRCLES", LPF_BOARD, { expandedMap: true, plusTiles: true, levelPlayingField: true }, "Yellow", [["B16", 57, 1], ["B20", 55, 1]], [
+      { companyId: 6, tokens: [["B16", 0]] },
+      { companyId: 3, tokens: [["A19", 0]] },
+    ]);
+    const result = compareCase(board, 6, ["4"], true, { reducer: true });
+    expect(result.validity).toEqual([]);
+    expect(result.oracle.total).toBe(80); // town B20 - Montreal - Ottawa - Kingston
+    expect(result.productionDataOptimum).toBe(70); // Montreal shut by one circle: Montreal - Ottawa - Kingston
+    expect(result.witnessRefusedByCircles).toBe(true);
+    expect(result.authorityOnWitness).toMatch(/^REFUSED: Route 1: A19 is tokened out by other corporations/);
+    expect(result.authorityOnProductionDataWitness).toBe("legal $70");
+    expect(result.flags).toContain("production-data-defect");
   }, 120_000);
 });
 

@@ -128,11 +128,20 @@ export interface WalletTicketDocument {
   readonly grants: readonly WalletTicketGrant[];
 }
 
+/** What a ledger write answered (see `WalletTicketStore.put`). */
+export type TicketPutOutcome = "committed" | "conflict" | "uncertain";
+
 export interface WalletTicketStore {
   /** The document and its version, read together (a CAS `put` names the version it read). */
   load(gameId: string): Promise<{ readonly version: number; readonly document: WalletTicketDocument }>;
-  /** Replace a game's document whole, if its version is still `expected` (CAS; LIVE-5: one item per game). */
-  put(gameId: string, document: WalletTicketDocument, expected: number): Promise<"committed" | "conflict">;
+  /** Replace a game's document whole, if its version is still `expected` (CAS; LIVE-5: one item per game).
+   *   committed  written, exactly once.
+   *   conflict   DEFINITELY not written: the version moved, or this writer was fenced (a newer writer owns the game).
+   *   uncertain  LIVE-5 L5-2 (F-L5-6): the outcome is unknown and the store could not settle it -- the document may be
+   *              the old one or the new one, and the write MAY STILL LAND LATER. Never read as either: the caller treats
+   *              it as "not committed" and re-reads before deciding anything again. Every ledger write is a CAS on the
+   *              version it read, so a late landing can only make a later write a conflict, never an overwrite. */
+  put(gameId: string, document: WalletTicketDocument, expected: number): Promise<TicketPutOutcome>;
   /** ESCROW-3B: every game with a ledger document (the security-event hook walks them). */
   listGames?(): Promise<string[]>;
   /** LIVE-4 (L4-4): the class of a game's ledger (current / older-unread / corrupt), never throwing on its content.
@@ -320,7 +329,7 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
     /** ESCROW-4 (review S-M3): the same wallet linked again ("Confirm it's you" + a fresh ADR-036 proof): the seat's
      *  newest grant -- standing, issued to this principal, for exactly this wallet, not frozen -- carries the NEW proof
      *  (a proof ages out for the join admission) and the linking browser's key. Same ticket, same epoch. */
-    async renewProof(input: { readonly gameId: string; readonly playerId: string; readonly principalId: string; readonly proof: WalletLinkProof; readonly consentKey: string }): Promise<"committed" | "refused" | "conflict"> {
+    async renewProof(input: { readonly gameId: string; readonly playerId: string; readonly principalId: string; readonly proof: WalletLinkProof; readonly consentKey: string }): Promise<TicketPutOutcome | "refused"> {
       if (!/^0[23][0-9a-f]{64}$/.test(input.consentKey)) return "refused";
       const { version, document } = await deps.store.load(input.gameId);
       if (document.frozen_at !== null) return "refused";
@@ -333,7 +342,7 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
 
     /** ESCROW-4: register a consent key for this seat (after "Confirm it's you"), on its newest grant issued to this
      *  principal -- standing, or frozen with the roster (the key may move while the game runs). Idempotent. */
-    async registerConsentKey(input: { readonly gameId: string; readonly playerId: string; readonly principalId: string; readonly pubkey: string }): Promise<"committed" | "refused" | "conflict"> {
+    async registerConsentKey(input: { readonly gameId: string; readonly playerId: string; readonly principalId: string; readonly pubkey: string }): Promise<TicketPutOutcome | "refused"> {
       if (!/^0[23][0-9a-f]{64}$/.test(input.pubkey)) return "refused";
       const { version, document } = await deps.store.load(input.gameId);
       const newest = newestOf(document.grants, input.playerId);
@@ -420,7 +429,7 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
     /** ESCROW-JOIN, BEFORE an admission's signature leaves the server: the grant it names (this epoch, wallet and
      *  ticket; the newest, standing, unfrozen) is admitted until `expiresAt` (Unix seconds; only ever raised). Anything
      *  else -- a superseded or ended grant, a frozen game, a concurrent write -- refuses, and no admission is signed. */
-    async recordAdmission(input: { readonly gameId: string; readonly playerId: string; readonly epoch: number; readonly wallet: string; readonly ticket: string; readonly expiresAt: number }): Promise<"committed" | "conflict" | "refused"> {
+    async recordAdmission(input: { readonly gameId: string; readonly playerId: string; readonly epoch: number; readonly wallet: string; readonly ticket: string; readonly expiresAt: number }): Promise<TicketPutOutcome | "refused"> {
       if (!Number.isSafeInteger(input.expiresAt) || input.expiresAt <= 0) return "refused";
       const { version, document } = await deps.store.load(input.gameId);
       if (document.frozen_at !== null) return "refused";
@@ -472,7 +481,7 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
     /** ESCROW-3B, in the SAME actor task as the roster freeze: the standing tickets are frozen with the claims. `token`
      *  (the roster freeze's `frozen_at`) names this freeze: a repeat of it changes nothing; ANOTHER freeze still in place
      *  (one a crash left without its roster, or a release not yet finished) is a conflict. */
-    async freeze(gameId: string, token?: number): Promise<"committed" | "conflict"> {
+    async freeze(gameId: string, token?: number): Promise<TicketPutOutcome> {
       const { version, document } = await deps.store.load(gameId);
       if (document.frozen_at !== null) return token === undefined || document.frozen_at === token ? "committed" : "conflict";
       const grants = document.grants;
@@ -491,7 +500,7 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
     /** ESCROW-3B: release exactly the freeze `token` names (the chain proved its Start can never happen, or a crash left
      *  a ledger freeze with no financial roster). Its grants return to derived standing; issuing reopens. Releasing a
      *  ledger that is not frozen is done already; another freeze is a conflict. */
-    async unfreeze(gameId: string, token: number): Promise<"committed" | "conflict"> {
+    async unfreeze(gameId: string, token: number): Promise<TicketPutOutcome> {
       const { version, document } = await deps.store.load(gameId);
       if (document.frozen_at === null) return "committed";
       if (document.frozen_at !== token) return "conflict";

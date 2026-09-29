@@ -34,18 +34,19 @@ import {
   journalIdentitySubject,
 } from "./subjects";
 
-function pin<S extends SubjectBase>(port: string, subject: S, cases: readonly ConformanceCase<S>[], id: string): void {
-  test(`${port}: ${subject.name} fails ${id} -- a takeover between its writerCheck and its write does not stop the stale write`, async () => {
+function pin<S extends SubjectBase>(port: string, subject: S, cases: readonly ConformanceCase<S>[], id: string, gap: "fence-in-write" | "cas-in-write" = "fence-in-write"): void {
+  const what = gap === "fence-in-write" ? "a takeover between its writerCheck and its write does not stop the stale write" : "a second writer between its read and its write is overwritten";
+  test(`${port}: ${subject.name} fails ${id} -- ${what}`, async () => {
     const entry = cases.find((candidate) => candidate.id === id);
     assert.ok(entry, `${id} exists`);
-    assert.ok(entry.needs?.includes("fence-in-write"), `${id} is a fence-inside-the-write case`);
-    assert.equal(subject.capabilities.includes("fence-in-write"), false, `${subject.name} does not claim the capability`);
-    const forced = { ...subject, capabilities: [...subject.capabilities, "fence-in-write" as Capability] };
+    assert.ok(entry.needs?.includes(gap), `${id} is a ${gap} case`);
+    assert.equal(subject.capabilities.includes(gap), false, `${subject.name} does not claim the capability`);
+    const forced = { ...subject, capabilities: [...subject.capabilities, gap as Capability] };
     await assert.rejects(runCase(forced, entry), (error: Error) => {
       assert.equal(error.name, "AssertionError", `the case failed on an assertion, not a crash: ${error.message}`);
-      /* ...and on the case's own FENCE-IN-WRITE outcome assertion (the stale write went through): not on setup, the stall
-         or an unfired fault. */
-      assert.match(error.message, /^FENCE-IN-WRITE: the stale writer's in-flight .* was applied/, error.message);
+      /* ...and on the case's own outcome assertion (the write went through): not on setup, the stall or an unfired fault. */
+      if (gap === "fence-in-write") assert.match(error.message, /^FENCE-IN-WRITE: the stale writer's in-flight .* was applied/, error.message);
+      else assert.match(error.message, /^CAS-IN-WRITE: the first .* in-flight .* overwrote/, error.message);
       return true;
     });
   });
@@ -60,4 +61,28 @@ describe("L5-1: F-L5-4 pinned for every port (the file stores fence BEFORE the w
   pin("wallet ticket", fileTicketSubject, TICKET_CASES, "TKT-11");
   pin("identity", journalIdentitySubject, IDENTITY_CASES, "ID-14");
   pin("signing journal", fileJournalSubject, JOURNAL_CASES, "JNL-12");
+});
+
+/* LIVE-5 L5-2 (L5-1 handoff R2-L4): a SECOND fence-inside-the-write operation per game-table port, so no port's claim
+   rests on one operation. Each is pinned the same way: the file store fails it for the right reason. */
+describe("L5-2: the second fence-inside-the-write operation of every game-table port, pinned against the file stores", () => {
+  pin("log (chat)", fileLogSubject, LOG_CASES, "LOG-25");
+  pin("GameRecord (join code)", fileRecordSubject, RECORD_CASES, "REC-19");
+  pin("hold (release)", fileHoldSubject, HOLD_CASES, "HOLD-13");
+  pin("financial record (create)", fileFinancialSubject, FINANCIAL_CASES, "FIN-16");
+  pin("chain intent (create)", fileIntentSubject, INTENT_CASES, "INT-13");
+  pin("wallet ticket (first ledger)", fileTicketSubject, TICKET_CASES, "TKT-12");
+});
+
+/* LIVE-5 L5-2 (review M-5): the file stores decide create-if-absent and CAS from a READ before they write, so a second
+   writer between that read and the write is overwritten. Harmless for one store instance per data directory under its
+   lock (each key's operations are chained); exactly what a DynamoDB adapter must not do, and every DynamoDB subject must
+   declare `cas-in-write`. Pinned per port, which also proves each race case detects a read-then-write store. */
+describe("L5-2: the condition inside the write (create-if-absent / CAS / next index), pinned against the file stores", () => {
+  pin("log (next index)", fileLogSubject, LOG_CASES, "LOG-28", "cas-in-write");
+  pin("GameRecord (create)", fileRecordSubject, RECORD_CASES, "REC-21", "cas-in-write");
+  pin("hold (create)", fileHoldSubject, HOLD_CASES, "HOLD-16", "cas-in-write");
+  pin("financial record (create)", fileFinancialSubject, FINANCIAL_CASES, "FIN-19", "cas-in-write");
+  pin("chain intent (create)", fileIntentSubject, INTENT_CASES, "INT-16", "cas-in-write");
+  pin("wallet ticket (first ledger)", fileTicketSubject, TICKET_CASES, "TKT-14", "cas-in-write");
 });

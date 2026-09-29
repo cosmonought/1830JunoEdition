@@ -154,3 +154,41 @@ describe("ESCROW-3A F-2: one outstanding wallet ticket per seat, ended by every 
     assert.match(issued.ticket, /^[0-9a-f]{64}$/);
   });
 });
+
+describe("LIVE-5 L5-2 (F-L5-6): an UNCERTAIN ledger write is never reported committed by the ledger", () => {
+  test("issue, freeze, unfreeze, admission and key registration answer the store's `uncertain` as not-committed; the next call re-reads", async () => {
+    const memory = createMemoryWalletTicketStore();
+    let uncertainNext = 0;
+    /* The write LANDS and its answer is lost (the worst case for a caller that would take it as done). */
+    const store = {
+      ...memory,
+      async put(gameId: string, document: Parameters<typeof memory.put>[1], expected: number) {
+        const landed = await memory.put(gameId, document, expected);
+        if (uncertainNext > 0 && landed === "committed") {
+          uncertainNext -= 1;
+          return "uncertain" as const;
+        }
+        return landed;
+      },
+    };
+    const ledger = createWalletTicketLedger({ store, standing: () => ({ kind: "standing" }), holdsSeat: () => true, now: () => T0 });
+    const context: WalletTicketContext = { principalId: "pr_uncertainuncertain0001", familyId: "sf_uncertain", recoverySelector: "rk_uncertain" };
+    const issue = () => ledger.issue({ binding: BINDING, gameId: GAME, playerId: SEAT, wallet: WALLET, context, reauthorized: true });
+    uncertainNext = 1;
+    assert.deepEqual(await issue(), { ok: false, refusal: "conflict" }, "an uncertain issue hands out no ticket");
+    const reissued = (await issue()) as { ok: true; epoch: number; ticket: string };
+    assert.equal(reissued.ok, true, "the next issue re-reads and supersedes whatever landed");
+    assert.equal(reissued.epoch, 2, "the uncertain write had landed: its grant is superseded, never reused");
+    uncertainNext = 1;
+    assert.equal(await ledger.recordAdmission({ gameId: GAME, playerId: SEAT, epoch: 2, wallet: WALLET, ticket: reissued.ticket, expiresAt: 10 }), "uncertain");
+    uncertainNext = 1;
+    assert.equal(await ledger.registerConsentKey({ gameId: GAME, playerId: SEAT, principalId: context.principalId, pubkey: `02${"ab".repeat(32)}` }), "uncertain");
+    uncertainNext = 1;
+    assert.equal(await ledger.freeze(GAME, 77), "uncertain");
+    assert.equal(await ledger.freeze(GAME, 77), "committed", "a repeat of the same freeze converges on what landed");
+    uncertainNext = 1;
+    assert.equal(await ledger.unfreeze(GAME, 77), "uncertain");
+    assert.equal(await ledger.unfreeze(GAME, 77), "committed", "a repeat of the release converges on what landed");
+    assert.equal(await ledger.frozenAt(GAME), null);
+  });
+});

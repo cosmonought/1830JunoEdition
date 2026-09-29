@@ -80,7 +80,7 @@ const logBackingOf = perCase(newReferenceLogBacking);
 export const referenceLogSubject: LogSubject = {
   name: "reference model (memory)",
   backend: "reference",
-  capabilities: ["durable", "fence", "fence-in-write", "stall-write"],
+  capabilities: ["durable", "fence", "fence-in-write", "cas-in-write", "stall-write"],
   async open(ctx, options) {
     const mine = ctx.fence.epoch;
     return createReferenceLogStore(logBackingOf(ctx), options?.writerCheck ? { writerCheck: options.writerCheck, fenceHolds: () => ctx.fence.epoch === mine } : {});
@@ -92,6 +92,11 @@ export const referenceLogSubject: LogSubject = {
   stallNextWrite(ctx, room) {
     const stall = gate();
     logBackingOf(ctx).stalls.set(room, stall);
+    return stall;
+  },
+  stallNextChat(ctx, room) {
+    const stall = gate();
+    logBackingOf(ctx).chatStalls.set(room, stall);
     return stall;
   },
 };
@@ -113,6 +118,13 @@ export const fileLogSubject: LogSubject = {
   },
   ...ownFileHooks(logFile),
   logPath: (ctx, room) => logFile(ctx, room),
+  /* The chat line is appended after the store's `writerCheck`: a stall at the append sits in F-L5-4's gap. */
+  stallNextChat(ctx, room) {
+    const stall = gate();
+    const chat = path.join(ctx.dir, `${room}.chat.jsonl`);
+    ctx.faults.add({ op: "appendFile", where: (at) => at === chat, action: { kind: "stall", gate: stall }, label: "the chat line stalls at its append" });
+    return stall;
+  },
 };
 
 /* ================================================================== */
@@ -120,7 +132,7 @@ export const fileLogSubject: LogSubject = {
 /* ================================================================== */
 
 const recordFile = (ctx: CaseContext, gameId: string) => path.join(ctx.dir, "games", `${gameId}.json`);
-const recordBytes = (gameId: string, what: Planted): string => {
+export const recordBytes = (gameId: string, what: Planted): string => {
   if (what === "corrupt") return '{"record_schema":1,"game_id":';
   return `${JSON.stringify({ ...gameRecord(1), game_id: gameId, record_schema: what === "newer" ? 3 : 0 })}\n`;
 };
@@ -154,6 +166,13 @@ export const fileRecordSubject: RecordSubject = {
     return read(recordFile(ctx, gameId));
   },
   ...replaceHooks(scriptOf, recordFile),
+  /* A code claim rewrites the index after the store's `writerCheck`: a stall at its temporary sits in F-L5-4's gap. */
+  stallNextCodeClaim(ctx) {
+    const stall = gate();
+    const index = path.join(ctx.dir, "games", "join-codes.json");
+    ctx.faults.add({ op: "open", where: (at) => at.startsWith(`${index}.`) && at.endsWith(".tmp"), action: { kind: "stall", gate: stall }, label: "the code claim stalls at its temporary" });
+    return stall;
+  },
 };
 
 const holdFile = (ctx: CaseContext, gameId: string) => path.join(holdDirectory(ctx.dir), `${gameId}.json`);
@@ -198,6 +217,13 @@ export const fileHoldSubject: HoldSubject = {
   },
   holdPath: (ctx, gameId) => holdFile(ctx, gameId),
   ...replaceHooks(scriptOf, holdFile),
+  /* A release writes its released copy after the store's `writerCheck`: a stall at that temporary sits in F-L5-4's gap. */
+  stallNextRelease(ctx, gameId) {
+    const stall = gate();
+    const prefix = path.join(holdDirectory(ctx.dir), "released", `${gameId}.`);
+    ctx.faults.add({ op: "open", where: (at) => at.startsWith(prefix) && at.endsWith(".tmp"), action: { kind: "stall", gate: stall }, label: "the release stalls at its released copy" });
+    return stall;
+  },
 };
 
 /* ================================================================== */

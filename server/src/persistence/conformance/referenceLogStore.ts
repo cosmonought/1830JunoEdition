@@ -32,9 +32,11 @@ export interface ReferenceLogBacking {
   readonly chats: Map<string, string[]>;
   /** A test's stall for a room's next append: held after the writer's checks, before the fenced apply. */
   readonly stalls: Map<string, Gate>;
+  /** The same, for a room's next chat line (LIVE-5 L5-2: chat is fenced at its apply too). */
+  readonly chatStalls: Map<string, Gate>;
 }
 
-export const newReferenceLogBacking = (): ReferenceLogBacking => ({ logs: new Map(), chats: new Map(), stalls: new Map() });
+export const newReferenceLogBacking = (): ReferenceLogBacking => ({ logs: new Map(), chats: new Map(), stalls: new Map(), chatStalls: new Map() });
 
 const readable = (entry: ServerLogEntry): boolean => {
   const raw = entry as unknown as Record<string, unknown>;
@@ -84,6 +86,13 @@ export function createReferenceLogStore(
     },
     async appendChat(room, entry) {
       if (options.writerCheck && !(await options.writerCheck().catch(() => false))) throw new Error("fenced: the chat line was not written");
+      const stall = backing.chatStalls.get(room);
+      if (stall !== undefined) {
+        backing.chatStalls.delete(room);
+        arrive(stall);
+        await stall.opened;
+      }
+      if (options.fenceHolds && !options.fenceHolds()) throw new Error("fenced at the write: the chat line was not written");
       backing.chats.set(room, [...(backing.chats.get(room) ?? []), JSON.stringify(entry)]);
     },
     async listGameLogs() {

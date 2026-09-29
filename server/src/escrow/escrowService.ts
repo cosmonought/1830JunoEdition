@@ -1057,7 +1057,11 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
         if (put.kind !== "committed") return "pending";
       }
       const why = existing.status === "superseded" ? existing.superseded?.why ?? "superseded" : existing.hold?.detail ?? "held";
-      if ((await deps.tickets.unfreeze(gameId, roster.frozen_at)) !== "committed") {
+      const unfrozen = await deps.tickets.unfreeze(gameId, roster.frozen_at);
+      /* LIVE-5 L5-2 (F-L5-6): an UNCERTAIN release of the ledger freeze is not "another freeze": nothing is released on
+         an unknown outcome, and the next reconciliation repeats it (an unfreeze by this token is idempotent). */
+      if (unfrozen === "uncertain") return waitProof(gameId, "the ticket ledger's release is unresolved");
+      if (unfrozen !== "committed") {
         await hold(gameId, "binding-conflict", "the ticket ledger is frozen by another freeze than the financial roster's");
         return "held";
       }
@@ -1587,7 +1591,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
         if (view.seats.some((seat) => seat.payout_address === wallet)) return no("already-seated", "this wallet already holds a seat of this chain game");
         const expiresAt = nowSecs + admission.ttlSecs;
         const recorded = await deps.tickets.recordAdmission({ gameId: input.gameId, playerId: input.playerId, epoch: grant.epoch, wallet, ticket: grant.ticket, expiresAt });
-        if (recorded !== "committed") return no(recorded === "conflict" ? "conflict" : "no-standing-ticket", "the seat's ticket changed while the admission was prepared; ask again");
+        /* LIVE-5 L5-2 (F-L5-6): an UNCERTAIN record is not committed -- nothing is signed on it (the admission's record
+           must be durable BEFORE the signature leaves); the retry re-reads the ledger. */
+        if (recorded !== "committed") return no(recorded === "refused" ? "no-standing-ticket" : "conflict", "the seat's ticket changed while the admission was prepared; ask again");
         let signed: Awaited<ReturnType<JoinAdmissionSigner["sign"]>>;
         try {
           signed = await admission.signer.sign({ chain_id: backend.pin.chain_id, deployment: backend.pin.contract_address, chain_game_id: BigInt(binding.chain_game_id), wallet, join_ticket_hex: grant.ticket, expires_at: BigInt(expiresAt) });

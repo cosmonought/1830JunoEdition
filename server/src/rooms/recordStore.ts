@@ -67,6 +67,8 @@ function schemaNewer(parsed: unknown): number | null {
   /* ESCROW-4: 2 is a real-money table (this build reads it); anything newer is another build's. */
   return typeof schema === "number" && Number.isSafeInteger(schema) && schema > 2 ? schema : null;
 }
+/** LIVE-5 L5-2: the same first question, for every other adapter of this port (the DynamoDB one reads it here). */
+export const recordSchemaNewer = schemaNewer;
 
 const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
 

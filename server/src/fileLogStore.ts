@@ -125,7 +125,9 @@ export interface StoreFileHandle {
 }
 
 export interface StoreFs {
-  open(file: string, flags: "r" | "r+" | "wx"): Promise<StoreFileHandle>;
+  /** "a" (LIVE-5 L5-1): append mode, for the signing journal -- every write lands at the end of the file whatever its
+   *  position, so two writers never overwrite each other's line. */
+  open(file: string, flags: "r" | "r+" | "wx" | "a"): Promise<StoreFileHandle>;
   readFile(file: string): Promise<Buffer>;
   rename(from: string, to: string): Promise<void>;
   unlink(file: string): Promise<void>;
@@ -470,7 +472,17 @@ export function createFileLogStore(directory: string, options: FileLogStoreOptio
       }
       let bytes: Buffer;
       try {
-        bytes = Buffer.from(serializeBatch(entries), "utf8");
+        const text = serializeBatch(entries);
+        /* LIVE-5 L5-1 (conformance LOG-07): WHAT IS COMMITTED MUST LOAD BACK. A line the loader would not read as an entry
+           (no `id`, say) used to be written and acknowledged -- and then the load held the room corrupt, and after a
+           restart classified the whole log as ANOTHER BUILD'S (`newer-format`). Every line is read back exactly as the
+           loader will read it, before a byte is written; a batch that fails is refused DEFINITE. */
+        text.split("\n").forEach((line, at) => {
+          if (line === "") return;
+          const parsed = parseEntryLine(line);
+          if (parsed === null || parsed.entry.index !== entries[at].index) throw new Error(`entry ${at} of the batch would not load back as an entry`);
+        });
+        bytes = Buffer.from(text, "utf8");
       } catch (error) {
         return definite(`the batch could not be serialized: ${describe(error)}`);
       }

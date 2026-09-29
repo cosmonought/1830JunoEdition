@@ -787,7 +787,16 @@ export function createMemoryIdentityStore(initial: IdentitySnapshot = { principa
         stats.failed += 1;
         throw new StoreDefiniteError(`memory identity store: ${problem}; nothing was written`);
       }
-      const next = checkSnapshot(applyChange(durable, change), "memory identity store commit");
+      /* LIVE-5 L5-1 (conformance ID-08): a change that would break a relation is refused DEFINITE -- nothing was
+         written -- exactly as the production journal store refuses it. It used to escape as `IdentityStoreCorruptError`,
+         which the port's contract reads as an UNKNOWN outcome (a restart-required fault) for a change that never landed. */
+      let next: FullIdentitySnapshot;
+      try {
+        next = checkSnapshot(applyChange(durable, change), "memory identity store commit");
+      } catch (error) {
+        stats.failed += 1;
+        throw new StoreDefiniteError(`${error instanceof Error ? error.message : String(error)}; nothing was written`);
+      }
       durable = next;
       if (fault === "uncertain") {
         stats.failed += 1;

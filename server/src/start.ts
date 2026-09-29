@@ -279,7 +279,7 @@ async function main(): Promise<void> {
         serverMode: config.mode,
         financial: financialStore,
         intents: createFileChainIntentStore(dataDir, { writerCheck: () => held.verify() }),
-        journal: await openFileSigningJournal(junoConfig.journalDir, { writerCheck: () => held.verify() }),
+        journal: await openFileSigningJournal(junoConfig.journalDir, { writerCheck: () => held.verify(), onRestartRequired: (detail) => failFast("the signing journal", detail) }),
         tickets: ledger,
         readLog: (gameId) => logStore.loadLog(gameId),
         /* LIVE-4 (L4-4): the deal's identity for the continuation verdict, read-only. */

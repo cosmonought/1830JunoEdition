@@ -23,6 +23,7 @@ import * as path from "path";
 
 import type { CodecDigest } from "../../../frontend/src/gameEngine/escrow/escrowCodec";
 import type { SigningJournal } from "./escrowPorts";
+import { nodeStoreFs, type StoreFileHandle, type StoreFs } from "../fileLogStore";
 
 export const JOURNAL_FILE = "signing-journal.jsonl";
 
@@ -156,9 +157,36 @@ export function createMemorySigningJournal(now: () => number = () => Date.now())
   return Object.assign(journal, { lines, failNext });
 }
 
-/** The local file adapter. Refuses to open a damaged journal (signing stops rather than guess). */
-export async function openFileSigningJournal(directory: string, options: { now?: () => number; writerCheck?: () => Promise<boolean> } = {}): Promise<InspectableSigningJournal & { readonly file: string }> {
+/** The local file adapter. Refuses to open a damaged journal (signing stops rather than guess).
+ *
+ *  LIVE-5 L5-1 (review M-4): AN APPEND WHOSE OUTCOME IS UNKNOWN HOLDS THE JOURNAL. Before, an append whose bytes may have
+ *  reached the file (the write or the sync threw after the file was opened) left the in-memory index without the line --
+ *  so the same process could then reserve a DIFFERENT digest at the same (instance, seq, key) and sign it, while the
+ *  journal on disk (read at the next start) said the first digest was reserved. Now the append is positional at the end
+ *  of the last complete line (as the identity journal writes), through the `StoreFs` seam so a test can fault it; a
+ *  failure before the file is opened wrote nothing and is refused as before, and any failure after it POISONS the
+ *  journal: every later reservation and attempt is refused until a restart re-reads what the disk really holds
+ *  (LIVE-3 §8.2 step 7, the fsyncgate rule every other store follows). The file is written in append mode, as before,
+ *  so no writer ever overwrites another's line; and before each append the file must still end where this instance's
+ *  last line ended -- if another writer has grown it, nothing is written and the journal holds. The journal directory
+ *  itself has no lock of its own (two servers sharing one Juno configuration share it): L5-5's ledger (conditional
+ *  puts, a relayer fence) replaces this adapter. */
+export async function openFileSigningJournal(
+  directory: string,
+  options: {
+    now?: () => number;
+    writerCheck?: () => Promise<boolean>;
+    fs?: StoreFs;
+    warn?: (line: string) => void;
+    /** Called once when the journal is held (an append's outcome unknown, or the file changed under it): `start.ts`
+     *  exits, as for every other store's unresolved write, and the restart re-reads the journal. */
+    onRestartRequired?: (detail: string) => void;
+  } = {},
+): Promise<InspectableSigningJournal & { readonly file: string }> {
   const file = path.join(directory, JOURNAL_FILE);
+  const io = options.fs ?? nodeStoreFs;
+  // eslint-disable-next-line no-console
+  const warn = options.warn ?? ((line: string) => console.warn(line));
   await fsp.mkdir(directory, { recursive: true });
   const index = indexer();
   let raw = "";
@@ -185,15 +213,68 @@ export async function openFileSigningJournal(directory: string, options: { now?:
     if (line === null) throw new SigningJournalError(`the signing journal ${file} is damaged at line ${at + 1}; signing stays stopped until an operator inspects it`);
     index.apply(line);
   });
-  const append = async (line: Line) => {
-    if (options.writerCheck !== undefined && !(await options.writerCheck().catch(() => false))) throw new SigningJournalError("this server no longer owns its data directory; nothing is journalled or signed");
-    const handle = await fsp.open(file, "a");
+  /** The byte just past the last complete, acknowledged line: every append lands exactly here. */
+  let committedEnd = Buffer.byteLength(raw, "utf8");
+  let poisoned: string | null = null;
+  const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
+  const hold = (detail: string) => {
+    poisoned = detail;
+    warn(`  SIGNING JOURNAL HELD: ${file}: ${detail}; nothing more is journalled or signed until the server restarts and re-reads the journal`);
     try {
-      await handle.write(`${JSON.stringify(line)}\n`);
-      await handle.sync();
-    } finally {
-      await handle.close();
+      options.onRestartRequired?.(detail);
+    } catch (error) {
+      warn(`  signing journal: the restart hook threw -- ${describe(error)}`);
     }
+  };
+  const append = async (line: Line) => {
+    if (poisoned !== null) throw new SigningJournalError(`the signing journal is held after an append whose outcome is unknown (${poisoned}); nothing more is journalled or signed until a restart re-reads it`);
+    if (options.writerCheck !== undefined && !(await options.writerCheck().catch(() => false))) throw new SigningJournalError("this server no longer owns its data directory; nothing is journalled or signed");
+    const bytes = Buffer.from(`${JSON.stringify(line)}\n`, "utf8");
+    /* APPEND MODE (round-3 review): the kernel places every write at the end of the file, so even two writers racing
+       between the size check below and the write can never overwrite each other's acknowledged line (the old O_APPEND
+       adapter's guarantee, kept). */
+    let opened: StoreFileHandle;
+    try {
+      opened = await io.open(file, "a");
+    } catch (error) {
+      throw new SigningJournalError(`the signing journal could not be opened (${describe(error)}); nothing was journalled`);
+    }
+    /* ANOTHER WRITER IS A HOLD (round-2 review H1): the file must end exactly where this instance's last acknowledged
+       line ended. If it does not, another writer on the same journal -- a second server with the same configuration,
+       which no data-directory lock covers -- has lines this instance's index does not know: nothing is written and the
+       journal holds. (A writer that races past this check still only appends: see the open above.) */
+    let size: number;
+    try {
+      size = (await opened.stat()).size;
+    } catch (error) {
+      await opened.close().catch(() => undefined);
+      throw new SigningJournalError(`the signing journal could not be examined (${describe(error)}); nothing was journalled`);
+    }
+    if (size !== committedEnd) {
+      await opened.close().catch(() => undefined);
+      hold(`the journal is ${size} bytes where this server's last line ended at ${committedEnd}: another writer is using it`);
+      throw new SigningJournalError(`the signing journal changed under this server (${poisoned}); nothing was journalled, and the journal is held until a restart`);
+    }
+    /* FROM HERE ON, A FAILURE MAY HAVE LEFT BYTES IN THE FILE: the outcome is unknown, and the journal holds. */
+    let handle: StoreFileHandle | null = opened;
+    try {
+      let offset = 0;
+      while (offset < bytes.length) {
+        /* Position null: "the current position", which in append mode is the end of the file on every OS (Node's own
+           FileHandle accepts it; the seam passes it through). No explicit offset for an OS to honour. */
+        const { bytesWritten } = await (opened.write as (buffer: Uint8Array, offset: number, length: number, position: number | null) => Promise<{ bytesWritten: number }>).call(opened, bytes, offset, bytes.length - offset, null);
+        if (!(bytesWritten > 0)) throw new Error(`a write returned ${bytesWritten} bytes with ${bytes.length - offset} still to write`);
+        offset += bytesWritten;
+      }
+      await opened.sync();
+      handle = null;
+      await opened.close();
+    } catch (error) {
+      if (handle !== null) await handle.close().catch(() => undefined);
+      hold(`an append failed after it began (${describe(error)})`);
+      throw new SigningJournalError(`the signing journal append's outcome is unknown (${poisoned}); the journal is held until a restart`);
+    }
+    committedEnd += bytes.length;
   };
   return Object.assign(journalOf(index, append, options.now ?? (() => Date.now())), { file });
 }

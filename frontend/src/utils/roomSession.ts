@@ -10,6 +10,11 @@
 // step answers a question the next one would otherwise answer wrongly, and every one of them is cheaper than
 // the step after it.
 //
+// LIVE-4 (L4-2): "replay-safety" is the canonical continuation verdict (`gameEngine/compat/`), asked at every rebuild
+// and before every deal is stamped, whatever build dealt the game -- and the pool's serving decision, asked before
+// every submit. The build skew check that comes first is the legacy (client protocol 0) wire's and stays until L4-3;
+// the deal's `build` is history, never a veto.
+//
 // IT DOES NOT AUTHENTICATE, DELIBERATELY. A session is CONSTRUCTED with an identity the transport has already
 // established, and never told one by a request (#1207: the actor is not on the wire). Keeping the check out
 // of this class is what makes it testable without a socket -- and what stops a future refactor from adding a
@@ -64,11 +69,20 @@ import {
   SERVER_REPLAY_POLICY,
   SUPPORTED_RULES_ENGINE_VERSIONS,
   replayCompatibility,
-  replayRefusal,
   rulesEngineVersionOf,
   type ReplayCompatibility,
   type ReplayPolicy,
 } from "../gameEngine/rulesVersion";
+/* LIVE-4 (L4-2): the canonical continuation model, wired. */
+import { gameIdentityOfEntries } from "../gameEngine/compat/continuationIdentity";
+import type { ContinuationVerdict, ServeDecision } from "../gameEngine/compat/continuationVerdict";
+import {
+  localContinuationVerdict,
+  logFormatOf,
+  notContinuedSentence,
+  notServedSentence,
+  type SessionContinuation,
+} from "../gameEngine/compat/sessionContinuation";
 import {
   buildsAgree,
   mintLogEntry,
@@ -116,11 +130,29 @@ export interface RoomSessionOptions {
    *  is a local-play opt-in for the pre-pin playtest rooms, and the server says so on every room it admits.
    *  A deal pinned to a version this engine does not carry is refused under EITHER policy. */
   replayPolicy?: ReplayPolicy;
-  /** ESCROW-3A (brief §8): may this server CONTINUE a room whose deal names another build (#1252)? Absent: never -- every
-   *  such room is read-only, as before. The server answers true only for a FUNDED game whose durable continuation
-   *  identity (rules pin, hosted and financial protocols, settlement codec) this deployment is compatible with
-   *  (`server/src/escrow/moneyContinuation.ts`); a build id alone never continues anything. */
-  continuesDealtBuild?: (dealtBuild: string) => boolean;
+  /** LIVE-4 (L4-2): THE POOL'S ANSWERS FOR THIS GAME -- its continuation verdict (the pool's capability, the game's
+   *  artifact formats and money facts), its dealing identity and its serving decision (`SessionContinuation`). It
+   *  replaces ESCROW-3A's `continuesDealtBuild`, the #1252 waiver that was asked only when two build strings differed:
+   *  this hook is asked unconditionally. A hosted server always supplies it (`server/src/continuationWiring.ts`).
+   *  Absent -- a test, a replay or operator tool, a certification game, the browser's settlement re-derivation -- the
+   *  session answers the GAMEPLAY half itself (`localContinuationVerdict`: this engine's rules pin and hosted protocol,
+   *  under `replayPolicy`), stamps a deal with its rules pin alone, and serves whatever it continues. */
+  continuation?: SessionContinuation;
+}
+
+/** LIVE-4 (L4-2): why a session will not interpret, or no longer serves, its game. Derived: recomputed at every
+ *  rebuild, written nowhere. */
+export interface SessionHold {
+  /** The deal's rules pin as #1520 reads it (for the frame's `pinnedRulesEngineVersion` and the window). */
+  readonly compatibility: ReplayCompatibility;
+  /** The player's sentence: the `incompatible` frame's `reason`. */
+  readonly reason: string;
+  /** The canonical verdict's `why` (or `conflict/<why>`), or the serving decision's (`drain-expired`, `release`, ...). */
+  readonly why: string;
+  /** This pool's verdict for the game. */
+  readonly verdict: ContinuationVerdict;
+  /** The serving decision, when it -- not the verdict -- is why the game is not served here. */
+  readonly decision: Exclude<ServeDecision, { readonly kind: "serve" }> | null;
 }
 
 export interface SubmitInput {
@@ -196,12 +228,21 @@ export class RoomSession {
      incompatible. While it is set: the engine stays at its seed and never sees an entry; `submit` answers
      `incompatible` and appends nothing; `catchUp` answers `incompatible` and hands out no entries (a client
      must not be given a history the server will not interpret). The log on disk is untouched. Recovery is
-     a server carrying a supported engine, which is a deployment decision and not this class's. */
-  private incompatibility: { compatibility: ReplayCompatibility; reason: string } | null = null;
+     a server carrying a supported engine, which is a deployment decision and not this class's.
+     LIVE-4 (L4-2): "may not interpret" is now the canonical continuation verdict, and "is not served" the pool's serving
+     decision -- the same held state, the same frame (with a `why`), never a hold file. */
+  private incompatibility: SessionHold | null = null;
+  /** LIVE-4 (L4-2): this pool's verdict for the deal that stands, as last asked (every rebuild asks afresh; a deal
+   *  appended clears it, so the next ask reads the new deal). */
+  private continuation: ContinuationVerdict | null = null;
 
   constructor(options: RoomSessionOptions) {
     this.options = options;
     this.engine = new RoomEngine(options.providers, options.seed);
+    /* LIVE-4 (L4-2): AN EMPTY LOG IS ASKED TOO. A table that has never been dealt is loaded without a restore, and its
+       answer can still be "no" -- a money table whose escrow this pool does not serve. Nothing to replay: the engine is
+       at its seed either way. */
+    this.interpret();
   }
 
   /** #1520: the version the effective deal names -- a number, `null` for a legacy deal, `undefined` undealt. */
@@ -214,21 +255,161 @@ export class RoomSession {
     return replayCompatibility(this.log);
   }
 
-  /** #1520: why this room is held, or `null` when it is being played. */
-  get incompatible(): { compatibility: ReplayCompatibility; reason: string } | null {
+  /** #1520: why this room is held, or `null` when it is being played. LIVE-4 (L4-2): not continued here, or no
+   *  longer served here -- with the verdict and the reason. */
+  get incompatible(): SessionHold | null {
     return this.incompatibility;
   }
 
-  private incompatibleFrame(reason: string): ServerMessage {
-    const compatibility = this.incompatibility?.compatibility;
+  /** LIVE-4 (L4-2): this pool's continuation verdict for the deal that stands (asked now if it has not been). */
+  get continuationVerdict(): ContinuationVerdict {
+    return this.verdictNow();
+  }
+
+  private incompatibleFrame(hold: SessionHold): ServerMessage {
+    const compatibility = hold.compatibility;
     return {
       kind: "incompatible",
-      reason,
-      // A legacy deal (or an undealt log the policy refuses) has no pin to report: `null`.
-      pinnedRulesEngineVersion: compatibility?.kind === "incompatible" ? compatibility.version : null,
+      reason: hold.reason,
+      why: hold.why,
+      // A legacy deal (or an undealt log) has no pin to report: `null`.
+      pinnedRulesEngineVersion: compatibility.kind === "incompatible" || compatibility.kind === "compatible" ? compatibility.version : null,
       supportedRulesEngineVersions: SUPPORTED_RULES_ENGINE_VERSIONS,
       build: this.options.build,
     };
+  }
+
+  /* ==================================================================
+      LIVE-4 (L4-2): THE VERDICT IS ASKED UNCONDITIONALLY
+     ==================================================================
+     WHAT CHANGED. #1252 pinned a room to the BUILD that dealt it: a server on any other build refused every move, and
+     ESCROW-3A's money check (`continuesDealtBuild`) was reached only through that door -- two builds with EQUAL strings
+     (`"dev"` everywhere, in practice) skipped it altogether (LIVE-4 F-L4-1). Now the canonical verdict is asked on every
+     interpretation of the log, from the deal's semantic identity (its rules pin and hosted protocol) and whatever the
+     pool supplies (its capability, the game's money facts). No build string is read on the way: equal semantic facts
+     give equal answers on every build, and a build change alone never makes a game read-only.
+     WHAT A "NO" DOES is exactly what #1520's hold did: the engine stays at its seed, every hello and submit is answered
+     `incompatible` (now with `why`), no history is handed out -- and nothing is written, anywhere. */
+  private askVerdict(): ContinuationVerdict {
+    const identity = gameIdentityOfEntries(this.log);
+    /* T-25: this session is the log's reader, so it classifies the log's format -- a pinned log carrying a message kind
+       or a rules revision this build cannot have written is a newer build's (`logFormatOf`), never misread here. */
+    const log = logFormatOf(this.log, identity);
+    const hook = this.options.continuation;
+    if (hook === undefined) return localContinuationVerdict(identity, this.options.replayPolicy ?? SERVER_REPLAY_POLICY, log);
+    /* A pool that cannot answer does not continue the game -- DERIVED, like every other "no": a throw here would
+       surface as a replay failure, and a replay failure is a durable hold. */
+    try {
+      return hook.verdict(identity, log);
+    } catch (error) {
+      return { kind: "not-continued", why: "malformed", detail: `this pool could not answer for the game (${error instanceof Error ? error.message : String(error)}); nothing was interpreted` };
+    }
+  }
+
+  private verdictNow(): ContinuationVerdict {
+    if (this.continuation === null) this.continuation = this.askVerdict();
+    return this.continuation;
+  }
+
+  /** Whether the effective board has ended (the terminal seal's condition): a drain never cuts a finished game short. */
+  private boardEnded(): boolean {
+    return (this.state as { current_round_type?: string | null }).current_round_type === "GameEnd";
+  }
+
+  /** The pool's serving decision for the game as it stands, or `null` when the pool has no serving policy (served). A
+   *  pool that cannot answer does not serve the game (derived, as above). */
+  private askServing(verdict: ContinuationVerdict): ServeDecision | null {
+    const serving = this.options.continuation?.serving;
+    if (serving === undefined) return null;
+    try {
+      return serving({ verdict, ended: this.boardEnded() });
+    } catch (error) {
+      return { kind: "decline", why: "not-continued", verdict: null, detail: `this pool could not decide whether it serves the game (${error instanceof Error ? error.message : String(error)})`, blocks_retirement: false };
+    }
+  }
+
+  /** #1520's reading of the deal's pin, for the frame. Never throws on a deal no server could have written (a deal
+   *  whose body is not an object reads as unpinned here; the verdict has already called it malformed). */
+  private pinReading(): ReplayCompatibility {
+    try {
+      return replayCompatibility(this.log);
+    } catch {
+      return { kind: "legacy" };
+    }
+  }
+
+  private holdOfVerdict(verdict: Exclude<ContinuationVerdict, { readonly kind: "continues" }>): SessionHold {
+    const policy = this.options.replayPolicy ?? SERVER_REPLAY_POLICY;
+    const compatibility = this.pinReading();
+    return {
+      compatibility,
+      reason: notContinuedSentence(verdict, compatibility, policy),
+      why: verdict.kind === "conflict" ? `conflict/${verdict.why}` : verdict.why,
+      verdict,
+      decision: null,
+    };
+  }
+
+  private holdOfDecision(verdict: ContinuationVerdict, decision: Exclude<ServeDecision, { readonly kind: "serve" }>): SessionHold {
+    /* A decline whose reason IS the verdict says the verdict's sentence; a drain or a release says its own. */
+    if (decision.kind === "decline" && decision.verdict !== null && decision.verdict.kind !== "continues") {
+      return { ...this.holdOfVerdict(decision.verdict), decision };
+    }
+    return {
+      compatibility: this.pinReading(),
+      reason: notServedSentence(decision),
+      why: decision.kind === "release" ? "release" : decision.why,
+      verdict,
+      decision,
+    };
+  }
+
+  /** The engine is at its seed. Ask the verdict; replay the effective log only if it continues; then ask whether the
+   *  pool serves the game -- and if not, forget what was replayed (nothing is served from it). A game the verdict does
+   *  not continue is still put to the serving decision, which names a RELEASE where the primary continues it (L4-1:
+   *  a draining pool releases every game the primary continues, even one it cannot read itself); it is never replayed. */
+  private interpret(): void {
+    const verdict = this.askVerdict();
+    this.continuation = verdict;
+    if (verdict.kind !== "continues") {
+      const decision = this.askServing(verdict);
+      this.incompatibility = decision !== null && decision.kind === "release" ? this.holdOfDecision(verdict, decision) : this.holdOfVerdict(verdict);
+      return;
+    }
+    this.incompatibility = null;
+    for (const entry of effectiveActions(this.log)) this.engine.apply(entry);
+    const decision = this.askServing(verdict);
+    if (decision !== null && decision.kind !== "serve") {
+      this.engine = new RoomEngine(this.options.providers, this.options.seed);
+      this.incompatibility = this.holdOfDecision(verdict, decision);
+    }
+  }
+
+  /** LIVE-4 (L4-2): the refusal a submit gets right now because the pool no longer serves the game -- asked with the
+   *  clock, so a game that crossed its drain deadline is refused at its next submit even while its actor stays
+   *  resident. `null` when served. Changes nothing: the timer's `reviewServing` is what republishes the held state. */
+  private servingRefusal(): ServerMessage | null {
+    const verdict = this.verdictNow();
+    const decision = this.askServing(verdict);
+    if (decision === null || decision.kind === "serve") return null;
+    return this.incompatibleFrame(this.holdOfDecision(verdict, decision));
+  }
+
+  /**
+   * LIVE-4 (L4-2), THE SESSION HALF OF T-24: ask the pool again whether it still serves this game and, if it no longer
+   * does, stop serving it NOW -- without a reload of the actor: the engine goes back to its seed and every later hello
+   * and submit is answered `incompatible` (`drain-expired`, a release, a retirement). True when that changed. The
+   * caller (the actor's serving review) republishes the committed view. One way only: a game this pool stops serving
+   * is served again only by a rebuild that concludes so (a restart, a reload).
+   */
+  reviewServing(): boolean {
+    if (this.incompatibility !== null) return false;
+    const verdict = this.verdictNow();
+    const decision = this.askServing(verdict);
+    if (decision === null || decision.kind === "serve") return false;
+    this.engine = new RoomEngine(this.options.providers, this.options.seed);
+    this.incompatibility = this.holdOfDecision(verdict, decision);
+    return true;
   }
 
   /** Rebuild from a stored log. The constructor plus this is a server restart.
@@ -285,16 +466,10 @@ export class RoomSession {
   private rebuild(): void {
     /* #1520: ASKED BEFORE THE FIRST ENTRY IS APPLIED, on every rebuild -- a restore, a revert, a discard --
        because each of them is the whole history being reinterpreted, and the deal in force can change under
-       a revert. A held room keeps a seeded engine, which is the state "nothing has been interpreted". */
-    const compatibility = replayCompatibility(this.log);
-    const refusal = replayRefusal(compatibility, this.options.replayPolicy ?? SERVER_REPLAY_POLICY);
+       a revert. A held room keeps a seeded engine, which is the state "nothing has been interpreted".
+       LIVE-4 (L4-2): the question is the canonical continuation verdict, asked every time (`interpret`). */
     this.engine = new RoomEngine(this.options.providers, this.options.seed);
-    if (refusal !== null) {
-      this.incompatibility = { compatibility, reason: refusal };
-      return;
-    }
-    this.incompatibility = null;
-    for (const entry of effectiveActions(this.log)) this.engine.apply(entry);
+    this.interpret();
   }
 
   /** #1250: the store could not take what this submit appended. Drop it and rebuild, so the board is what
@@ -337,7 +512,7 @@ export class RoomSession {
   /** LIVE-3A: the `incompatible` frame this room answers every hello and submit with while it is held (#1520), or
    *  `null` while it is being played -- what the committed view carries, so a reader never asks the session. */
   heldAnswer(): ServerMessage | null {
-    return this.incompatibility === null ? null : this.incompatibleFrame(this.incompatibility.reason);
+    return this.incompatibility === null ? null : this.incompatibleFrame(this.incompatibility);
   }
 
   /** LIVE-3A: the id of the entry at `index`, or `undefined` when the log holds none there. From the END, so a
@@ -355,8 +530,8 @@ export class RoomSession {
   }
 
   /** #1252: the build named by the deal that stands in the effective log, or `null` for an undealt room or a
-   *  deal written before the field existed (#232: unpinned, not pinned to nothing). The EFFECTIVE log, so a
-   *  deal that was reverted does not pin a room it no longer governs. */
+   *  deal written before the field existed. The EFFECTIVE log, so a reverted deal names nothing.
+   *  LIVE-4 (L4-2): DIAGNOSTIC ONLY -- the restore line and a forensic replay name it; nothing compares it. */
   dealtBuild(): string | null {
     for (const entry of effectiveActions(this.log)) {
       let parsed: unknown;
@@ -366,7 +541,9 @@ export class RoomSession {
         continue;
       }
       if (typeof parsed === "object" && parsed !== null && "SetupGame" in parsed) {
-        const build = (parsed as { SetupGame: { build?: unknown } }).SetupGame.build;
+        /* A deal whose body is not an object names no build (the verdict calls it malformed; this must not throw). */
+        const setup: unknown = (parsed as { SetupGame: unknown }).SetupGame;
+        const build = typeof setup === "object" && setup !== null ? (setup as { build?: unknown }).build : undefined;
         return typeof build === "string" && build !== "" ? build : null;
       }
     }
@@ -384,7 +561,7 @@ export class RoomSession {
   /** Everything after `fromIndex`, for a client that fell behind or reconnected. */
   catchUp(fromIndex: number): ServerMessage {
     // #1520: a held room hands out no history; the client is told why instead.
-    if (this.incompatibility !== null) return this.incompatibleFrame(this.incompatibility.reason);
+    if (this.incompatibility !== null) return this.incompatibleFrame(this.incompatibility);
     return {
       kind: "catch-up",
       entries: this.log.filter((entry) => entry.index > fromIndex),
@@ -403,7 +580,11 @@ export class RoomSession {
     /* ---- 1. BUILD SKEW, FIRST ----
        #1206: the digest covers the whole state, so a client on an older build disagrees about fields that
        are not divergences. Answered before anything else because every later answer -- including a refusal --
-       would be measured against a board the two halves describe differently. */
+       would be measured against a board the two halves describe differently.
+       LIVE-4 (L4-2): KEPT, AND ONLY THIS. It is the legacy wire's (client protocol 0) exact client/server build check
+       at submit -- a stale tab, not a stored game -- and L4-3 replaces it for protocol-1 sockets with the client's
+       announced rules. No build decides whether a GAME continues any more (the #1252 pin and the deal-names-a-build
+       refusal that followed here are gone; the verdict below decides). */
     if (!buildsAgree(input.build, this.options.build)) {
       return {
         kind: "build-skew",
@@ -413,10 +594,15 @@ export class RoomSession {
     }
 
     /* ---- 1a. A HELD ROOM (#1520) ----
-       Before the deal-build pin, the nonce and the staleness answers: none of them may run, because each
-       reads or moves a board this engine has not built. Nothing is appended, whatever the message -- a
-       `RevertTo` included, since a rewind is a rebuild under the same unsupported version. */
-    if (this.incompatibility !== null) return this.incompatibleFrame(this.incompatibility.reason);
+       Before the nonce and the staleness answers: none of them may run, because each reads or moves a board this
+       engine has not built. Nothing is appended, whatever the message -- a `RevertTo` included, since a rewind is a
+       rebuild under the same answer.
+       LIVE-4 (L4-2): held = not continued by this pool (the verdict at the last rebuild), or no longer served by it --
+       and the second is asked again HERE, with the clock, so a resident game past its drain deadline is refused at
+       its next submit without waiting for the timer that republishes it. */
+    if (this.incompatibility !== null) return this.incompatibleFrame(this.incompatibility);
+    const notServed = this.servingRefusal();
+    if (notServed !== null) return notServed;
 
     /* ---- 1b. THE SEAT (LIVE-2C, RV-1) ----
        A principal with no seat in the room's GameRecord is refused here, before anything reads or moves the
@@ -445,42 +631,32 @@ export class RoomSession {
     }
 
     /* ==================================================================
-        DESIGN NOTE 1252: A ROOM IS PINNED TO THE REDUCER THAT DEALT IT
+        LIVE-4 (L4-2): #1252 RETIRED -- A GAME IS PINNED TO ITS SEMANTICS, NOT TO THE BUILD THAT DEALT IT
        ==================================================================
-       `build-skew` above keeps a client and a server on different builds from talking. It does nothing about
-       a server that RESTARTED on a new build with a stored log dealt on the old one (#1250 made that
-       possible): the client and server would agree with each other and both apply new rules to a game in
-       progress -- a deploy mid-game changing the outcome, which the audit (§6) names, and a client on the old
-       build then "challenging" a correct settlement.
-       THE DEAL RECORDS ITS BUILD (`SetupGame.build`, #1252 in `gameSetup.ts`) and this server refuses to
-       continue any room whose deal names another. Read from the LOG, not from the state: the reducer does
-       not need to know, so no field is added to the board and no digest moves. A refusal, not a skew frame:
-       the client is not the one out of step, and the sentence says what to do -- run the build that dealt
-       the game, or start a new one. A deal that names a build other than this server's is refused too; the
-       client's own build already matched, so that is a client bug rather than a deploy, and it must not get
-       a room pinned to a reducer nobody is running. */
-    const dealt = this.dealtBuild();
-    if (dealt !== null && !buildsAgree(dealt, this.options.build) && this.options.continuesDealtBuild?.(dealt) !== true) {
-      return {
-        kind: "refused",
-        reason:
-          `This game was dealt on build "${dealt}" and this server is build "${this.options.build}". ` +
-          "A game is settled by the reducer that dealt it: run that build to continue, or start a new game.",
-        build: this.options.build,
-      };
-    }
+       #1252 refused every move on a room whose deal named another build, because nothing else said "this reducer
+       means what the dealing one meant". The deal now says it: its rules pin and hosted protocol (the gameplay
+       continuation identity), checked by the canonical verdict at every rebuild (`interpret`), before a single entry
+       is applied -- a pool that does not play them never interprets the log, whatever build it runs; one that does
+       continues the game whatever build dealt it. So the build refusal here, and the refusal of a deal naming another
+       build that followed it, are gone: `SetupGame.build` is the history of which server dealt, never a veto.
+       A DEAL IS STAMPED ONLY WHERE IT IS CONTINUED, with its DEALING IDENTITY. The table as it stands is asked afresh
+       (its money facts may have appeared since the session was made: the record of a new table is written after its
+       session), and the identity comes from the pool: its current rules and highest hosted protocol for a no-money
+       table, the money identity's own for a money table. A table this pool may not deal is refused; nothing is
+       appended. */
+    let dealing: { readonly rules_engine_version: number; readonly hosted_protocol: number } | undefined;
     if (isSetupGameMsg(input.msg)) {
-      /* Stage 10.5 (S10-9): narrowed, not cast. `SubmitInput.msg` is the log-wide `SandboxLogMsg`, so the deal is
-         one of its members (#1189's IOU, paid). `build` is still read as untrusted: the frame was shape-checked
-         (`messageSchema.ts`: `build: "string?"`), and a non-string is simply not compared. */
-      const named: unknown = input.msg.SetupGame.build;
-      if (typeof named === "string" && !buildsAgree(named, this.options.build)) {
-        return {
-          kind: "refused",
-          reason: `The deal names build "${named}", but this server is build "${this.options.build}".`,
-          build: this.options.build,
-        };
+      const verdict = this.askVerdict();
+      this.continuation = verdict;
+      if (verdict.kind !== "continues") return this.incompatibleFrame(this.holdOfVerdict(verdict));
+      let answer: ReturnType<SessionContinuation["dealing"]> | undefined;
+      try {
+        answer = this.options.continuation?.dealing();
+      } catch {
+        answer = { ok: false, reason: "This table could not be dealt on this server right now. Nothing changed." };
       }
+      if (answer !== undefined && !answer.ok) return { kind: "refused", reason: answer.reason, build: this.options.build };
+      dealing = answer?.identity;
     }
 
     /* ---- 2. A RETRY IS NOT A SECOND MOVE (#1209 mechanism 1) ----
@@ -574,6 +750,8 @@ export class RoomSession {
       mintSeed: this.options.mintSeed,
       /* LIVE-2A (LIVE-2 §9.2): the connection's actor, so a `RevertTo` names who pressed Undo. */
       actor: input.actor ?? undefined,
+      /* LIVE-4 (L4-2): the deal's dealing identity -- rules pin and hosted protocol -- from the pool (see above). */
+      ...(dealing !== undefined ? { dealing } : {}),
     });
     const entry: ServerLogEntry = {
       ...mintLogEntry({
@@ -593,11 +771,24 @@ export class RoomSession {
     if (input.submissionId !== undefined) {
       this.submissions.set(this.submissionKey(input.actor, input.submissionId), entry.index);
     }
+    /* LIVE-4 (L4-2): a new deal is a new identity -- the next ask reads it (a refusal below pops the entry and a
+       rollback rebuilds, so the answer is asked afresh either way). */
+    if (isSetupGameMsg(input.msg)) this.continuation = null;
 
     /* #1233: A REVERT IS NOT A MOVE TO APPLY. The entry is in the log now; the board is whatever the log,
        with that revert honoured, says it is. Rebuild, then finish any burst the rewound board owes. */
     if ("RevertTo" in input.msg) {
       this.rebuild();
+      /* LIVE-4 (L4-2): the rebuild asked the pool afresh. If it no longer continues -- or no longer serves -- the game,
+         the revert did not happen: everything this submit appended (the repair and the revert) is taken back, with its
+         nonce, the session is rebuilt to the history as it stood, and the answer is the held one. Nothing is written. */
+      if (this.incompatibility !== null) {
+        const held = this.incompatibility;
+        this.log.length = this.log.length - 1 - repaired.length;
+        if (input.submissionId !== undefined) this.submissions.delete(this.submissionKey(input.actor, input.submissionId));
+        this.rebuild();
+        return this.incompatibleFrame(this.incompatibility ?? held);
+      }
       const owed = this.engine.settleOwed((msg) => this.appendDerived(msg, input.actor));
       return {
         kind: "applied",

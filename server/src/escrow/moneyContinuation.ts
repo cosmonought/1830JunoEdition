@@ -30,14 +30,16 @@
 // a copy change or an unrelated fix may continue each other's games; a build that changes semantics must say so by
 // bumping one of the four, and then it cannot.
 //
-// Today no funded game exists (`record.money` is null; money games are disabled), so nothing consults this for real;
-// the RoomSession and the room host carry the seam (`continuesDealtBuild`) and ESCROW-3B wires the stored identity.
+// LIVE-4 (L4-2): the build-keyed seam described above (`continuesDealtBuild`, #1252's waiver) is retired. The session
+// asks the canonical verdict (`frontend/src/gameEngine/compat/continuationVerdict.ts`) at every rebuild, whatever build
+// dealt the game, and this module now supplies the money FACTS it reads (`MoneyContinuationFacts`, below).
 
 import { RULES_ENGINE_VERSION, SUPPORTED_RULES_ENGINE_VERSIONS } from "../../../frontend/src/gameEngine/rulesVersion";
 import { SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS } from "../../../frontend/src/gameEngine/settlementAppraisal";
 import type { EscrowCodecId } from "../../../frontend/src/gameEngine/escrow/escrowCodec";
 import { FINANCIAL_PROTOCOL_VERSION, HOSTED_PROTOCOL_VERSION } from "../../../frontend/src/gameEngine/protocolVersions";
 import { isMoneyContinuationIdentity, MONEY_CONTINUATION_FORMAT, type MoneyContinuationIdentity } from "../../../frontend/src/gameEngine/compat/continuationIdentity";
+import type { FinancialDeploymentPin } from "./moneyLifecycle";
 
 /* LIVE-4 (L4-1): the version constants and the money continuation identity moved, unchanged, to the shared canonical
    modules -- `gameEngine/protocolVersions.ts` (the hosted and financial protocols, each with its changelog) and
@@ -106,21 +108,38 @@ export function moneyContinuationVerdict(stored: unknown, deployment: Deployment
   return { continues: true };
 }
 
-/** The room host's and the session's seam: may this deployment continue `gameId`, dealt on build `dealtBuild`? Only a
- *  funded game with a compatible stored identity is ever continued across builds; every other game keeps #1252. */
-export interface MoneyContinuationPolicy {
-  continues(gameId: string, dealtBuild: string): boolean;
+/* ==================================================================
+    LIVE-4 (L4-2): THE MONEY FACTS, NOT A BUILD-KEYED POLICY
+   ==================================================================
+   ESCROW-3A's seam here was `MoneyContinuationPolicy.continues(gameId, dealtBuild)`: the room host and the session
+   asked it only for a game dealt on ANOTHER build (#1252), so a money game on an equal build string was never checked
+   before its seal (LIVE-4 F-L4-1). It is gone. What the settlement index supplies now is the money game's FACTS -- its
+   stored continuation identity and its write-once deployment pin, or that its financial record is ESCROW-3A's held
+   placeholder, or unreadable -- and the canonical verdict (`continuationVerdict`) judges them against the pool's
+   capability at EVERY rebuild of the game's session, whatever build dealt it (`server/src/continuationWiring.ts`).
+   `moneyContinuationVerdict` stays: it is the money core of the canonical verdict (the parity is a L4-1 test) and the
+   settlement coordinator's step 2. */
+
+/** What the settlement index holds for one financial record. */
+export type MoneyIndexEntry =
+  /** The record: its stored continuation identity (unparsed -- the verdict classifies it) and its write-once deployment
+   *  pin (`binding.deployment`; `null` only on a record made before its deployment was pinned). */
+  | { readonly kind: "record"; readonly mci: unknown; readonly deployment: FinancialDeploymentPin | null }
+  /** ESCROW-3A's held placeholder for a missing record: no continuation identity, already held. */
+  | { readonly kind: "placeholder" }
+  /** A record this build could not read (never guessed at). */
+  | { readonly kind: "unreadable"; readonly detail: string };
+
+/** The settlement index, as the continuation verdict reads it (`SettlementCoordinator` implements it). */
+export interface MoneyContinuationFacts {
+  /** `gameId`'s financial record as the index holds it, or `undefined` when it knows none. Synchronous: asked inside a
+   *  session's rebuild. */
+  factsOf(gameId: string): MoneyIndexEntry | undefined;
+  /** Read `gameId`'s financial record again into the index: after a money table is created (its record is written
+   *  before its GameRecord) and before its deal, so the verdict never meets a money table the index has not seen. */
+  refresh(gameId: string): Promise<void>;
 }
 
-/** No funded games (today): nothing is continued across builds. */
-export const NO_MONEY_CONTINUATION: MoneyContinuationPolicy = Object.freeze({ continues: () => false });
-
-/** A policy over the stored identities (the financial store's index): continue exactly the compatible ones. */
-export function continuationPolicyOf(identityOf: (gameId: string) => unknown | undefined, deployment: DeploymentContinuation = THIS_DEPLOYMENT): MoneyContinuationPolicy {
-  return {
-    continues(gameId: string): boolean {
-      const stored = identityOf(gameId);
-      return stored !== undefined && moneyContinuationVerdict(stored, deployment).continues;
-    },
-  };
-}
+/** No settlement index: no financial record is known. A money GameRecord then reads as a money table whose financial
+ *  record is MISSING -- a conflict, never continued -- so a server assembled without the index fails closed for money. */
+export const NO_MONEY_FACTS: MoneyContinuationFacts = Object.freeze({ factsOf: () => undefined, refresh: async () => undefined });

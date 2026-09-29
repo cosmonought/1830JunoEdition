@@ -515,7 +515,10 @@ const RAW_GAMEPLAY_MESSAGE_SCHEMA: Record<string, Readonly<Record<string, FieldS
   },
 
   /* ---- the between-turn / exception family (`isSandboxOnlyMsg`) ---- */
-  SetupGame: { players: "players", variants: "variants?", build: "narration?", rules_engine_version: "int?" }, // #1520
+  /* #1520: the rules pin. LIVE-4 (L4-2): `hosted_protocol`, OPTIONAL -- every deal written before LIVE-4 lacks it and is
+     read as protocol 1. Both are server-stamped (`serverIngress.ts`), and a client's deal is refused at the server anyway;
+     declared so the one table of what a stored deal may carry is complete. The reducer reads neither. */
+  SetupGame: { players: "players", variants: "variants?", build: "narration?", rules_engine_version: "int?", hosted_protocol: "int?" },
   OpenStockRound: EMPTY,
   CloseRoom: EMPTY,
   SetBoPar: { player: "narration", par_value: "id" },

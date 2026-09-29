@@ -47,7 +47,7 @@
 // to honour a waiver on a pinned board whatever reaches it (`sandboxSession.ts` #1662).
 
 import { isSetupGameMsg } from "../gameEngine/gameSetup";
-import { stampRulesEngineVersion } from "../gameEngine/rulesVersion";
+import { stampDealingIdentity, type DealingStamp } from "../gameEngine/compat/sessionContinuation";
 import { randomTurnSeed } from "../gameEngine/gameVariants";
 import { seedAlreadyRolled, turnSeedKey, type SeededEntry } from "./turnSeed";
 import { MAX_NARRATION_LENGTH, MAX_SUMMARY_LENGTH, sanitizeText } from "../gameEngine/messageSchema";
@@ -72,6 +72,14 @@ export interface IngressContext {
   /** LIVE-2A (§9.2): who sent it -- the connection's actor, never the frame's -- so a `RevertTo` names who pressed
    *  Undo. `undefined` (a caller with no actor) leaves the field as sent. */
   actor?: string;
+  /** LIVE-4 (L4-2): the DEALING IDENTITY a deal is stamped with (`dealingIdentity`, `compat/continuationVerdict.ts`):
+   *  this pool's current rules engine and its highest hosted protocol for a no-money table; for a money table the
+   *  rules engine and hosted protocol of its money continuation identity -- the ones committed on chain -- never the
+   *  pool's current. A hosted server always supplies it. Absent (a session no pool configured: a test, a replay or
+   *  operator tool, a certification game): the deal is stamped with this engine's rules pin alone, exactly as before
+   *  LIVE-4, and carries no `hosted_protocol` -- which every reader takes as protocol 1 (OD-L4-1). The stamp itself is
+   *  `stampDealingIdentity` (`compat/sessionContinuation.ts`): a client's `hosted_protocol` never survives it. */
+  dealing?: DealingStamp;
 }
 
 /* ==================================================================
@@ -127,9 +135,9 @@ function narrate(board: IngressBoard, record: Record<string, unknown>, actor: st
 export function normalizeForCommit<T>(msg: T, ctx: IngressContext): T {
   if (typeof msg !== "object" || msg === null) return msg;
 
-  /* #1520, moved here unchanged: the deal is stamped by the server that dealt it. */
+  /* #1520: the deal is stamped by the server that dealt it. LIVE-4 (L4-2): with its dealing identity, when it has one. */
   if (isSetupGameMsg(msg as never)) {
-    return stampRulesEngineVersion(msg as unknown as { SetupGame: Record<string, unknown> }) as unknown as T;
+    return stampDealingIdentity(msg as unknown as { SetupGame: Record<string, unknown> }, ctx.dealing) as unknown as T;
   }
 
   const record = msg as Record<string, unknown>;

@@ -37,9 +37,10 @@
 //     not in the record; an end time other than the seal's (the log's last gameplay entry); a private room's join
 //     code or unseated admissions still held after the deal; a TTL still set after the deal
 //
-// WHAT IS NOT HERE: rules-engine compatibility of the pin itself (the session refuses to interpret an unsupported
-// pin, #1520, and the view carries that as `incompatible`), and the build pin (#1252, read-only). Both are derived on
-// every load from the same durable facts, so they need no hold to survive a restart.
+// WHAT IS NOT HERE: whether this pool continues the game at all -- the canonical continuation verdict (LIVE-4: the
+// deal's rules pin and hosted protocol, a money table's money facts), which the session asks at every rebuild and the
+// view carries as `incompatible`. It is derived on every load from the same durable facts, so it needs no hold to
+// survive a restart. (The build pin, #1252, is retired: the deal's `build` is diagnostic only.)
 
 import { effectiveActions } from "../../../frontend/src/gameEngine/logRevert";
 import { RULES_ENGINE_VERSION_FIELD, SUPPORTED_RULES_ENGINE_VERSIONS } from "../../../frontend/src/gameEngine/rulesVersion";
@@ -57,7 +58,7 @@ export interface DealInfo {
   readonly players: readonly string[];
   /** The rules-engine pin: an integer, or `null` when the deal carries none (or a non-integer). */
   readonly pin: number | null;
-  /** The build the deal names (#1252), or `null`. */
+  /** The build the deal names (#1252), or `null`. LIVE-4 (L4-2): diagnostic only -- no classification reads it. */
   readonly build: string | null;
 }
 

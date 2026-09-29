@@ -29,7 +29,7 @@ import { createDevAuthenticator } from "./identity/devAuthenticator";
 import { createJournalIdentityStore, type JournalIdentityStore } from "./identity/journalStore";
 import { createFileHoldStore } from "./rooms/holdStore";
 import { createFileFinancialGameStore } from "./escrow/financialGameStore";
-import { continuationPolicyOf } from "./escrow/moneyContinuation";
+import { thisDeploymentCapability } from "./deploymentCapability";
 import { createSettlementCoordinator } from "./escrow/settlementCoordinator";
 import { serverPrefixReplay } from "./escrow/settlementEvidence";
 import { createFileChainIntentStore } from "./escrow/chainIntents";
@@ -299,6 +299,22 @@ async function main(): Promise<void> {
     ...(escrow !== null ? { onIntentPrepared: (gameId: string) => escrow?.service.onIntentPrepared(gameId) } : {}),
   });
   await settlement.load();
+  /* ==================================================================
+      LIVE-4 (L4-2): THIS POOL'S DEPLOYMENT CAPABILITY, BUILT ONCE
+     ==================================================================
+     This build's constants (rules, hosted and financial protocols, codecs, the escrow contract code it speaks) and the
+     escrow deployment its configuration serves -- the configured Juno backend's pin when that backend opened, none
+     otherwise. Every game's continuation verdict and dealing identity is judged against exactly this descriptor
+     (`continuationWiring.ts`); `BUILD_ID` is not in it. A descriptor this build cannot canonicalize refuses the start. */
+  let capability: ReturnType<typeof thisDeploymentCapability>;
+  try {
+    capability = thisDeploymentCapability(escrow !== null && junoConfigUsed !== null ? [pinOf(junoConfigUsed)] : []);
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(`Refusing to start: this server's deployment capability cannot be built -- ${error instanceof Error ? error.message : String(error)}`);
+    held.releaseSync();
+    process.exit(EXIT_LOCK_REFUSED);
+  }
   /* ESCROW-4: a money table's deal is the escrow's roster source (the chain re-checked at the deal); every other table's
      is the ordinary one. Without a backend, a money table never deals. */
   const noMoneyRoster = new NoMoneyRosterSource();
@@ -316,7 +332,10 @@ async function main(): Promise<void> {
     },
     money: () => moneyRef.current,
     ...(escrow !== null ? { escrow: { onGameplayCommitted: (input) => escrow?.service.onGameplayCommitted(input), isRosterFrozen: (gameId) => escrow?.service.isRosterFrozen(gameId) ?? false } } : {}),
-    moneyContinuation: continuationPolicyOf((gameId) => settlement.continuationOf(gameId)),
+    /* LIVE-4 (L4-2): the pool's capability, and the settlement index's money facts -- judged for every money table at
+       every rebuild, whatever build dealt it (ESCROW-3A's build-keyed `continuationPolicyOf` is retired). */
+    capability,
+    moneyFacts: settlement,
     identity: {
       mode: config.mode,
       allowedOrigins: config.allowedOrigins,

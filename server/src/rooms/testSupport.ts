@@ -19,6 +19,7 @@ import type { IdentityLimits, RoomLimits } from "../ingress/limits";
 import type { LogStore } from "../fileLogStore";
 import { StoreDefiniteError } from "../persistence/storeResult";
 import { RoomSession, type ServerLogEntry } from "../../../frontend/src/utils/roomSession";
+import type { SessionContinuation } from "../../../frontend/src/gameEngine/compat/sessionContinuation";
 import {
   DEFAULT_SANDBOX_SCENARIO,
   sandboxReplayProviders,
@@ -319,7 +320,8 @@ export class Client {
     this.send({ kind: "hello", gameId, build: BUILD, baseIndex, ...(baseId ? { baseId } : {}) });
   }
 
-  submit(msg: object, over: { baseIndex: number; submissionId?: string; baseId?: string }): void {
+  /** `build`: the bundle's build this tab says it runs (LIVE-4 L4-2: a tab on the server's own build after a deploy). */
+  submit(msg: object, over: { baseIndex: number; submissionId?: string; baseId?: string; build?: string }): void {
     this.send({ kind: "submit", build: BUILD, msg, ...over });
   }
 
@@ -579,10 +581,12 @@ export const sessionIdOfCookie = (cookie: string): string => cookie.split("=")[1
 /** A session cookie as the identity service reads it. */
 export const cookieRead = (cookie: string) => ({ kind: "session" as const, sessionId: sessionIdOfCookie(cookie), secret: cookie.split(".")[2] });
 
-/** A session built exactly as the server builds one, for computing logs and boards outside it. */
-export function probeSession(tag = "probe"): RoomSession {
+/** A session built exactly as the server builds one, for computing logs and boards outside it. LIVE-4 (L4-2): with a
+ *  pool's continuation answers when given (`continuationWiring.ts` `sessionFor`), else the session's own gameplay half. */
+export function probeSession(tag = "probe", continuation?: SessionContinuation): RoomSession {
   let n = 0;
   return new RoomSession({
+    ...(continuation !== undefined ? { continuation } : {}),
     providers: sandboxReplayProviders(),
     seed: {
       state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),

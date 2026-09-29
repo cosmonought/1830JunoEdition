@@ -31,8 +31,10 @@ export type RoomLifecycle = "waiting" | "active" | "completed" | "cancelled" | "
 export type RoomVisibility = "public" | "private";
 /** LIVE-3C: why a room will not take a change, as the server says it (`null`: it will).
  *    maintenance   held by the server: paused until its operator restores it; the seat and the game so far are kept
- *    incompatible  dealt under a rules-engine version this server does not carry: it cannot continue here
- *    read-only     dealt on another server build: it can be watched, not continued
+ *    incompatible  this server does not continue the game (LIVE-4: its rules or game-server protocol, a money table's
+ *                  escrow, or a server that has handed its games over): it cannot continue here
+ *    read-only     NO LONGER SENT (LIVE-4 L4-2): it was "dealt on another server build"; a build no longer decides
+ *                  whether a game continues. Kept so a view from an older server still reads
  *    unavailable   the server could not confirm its last write: paused until it can, or it restarts */
 export type RoomHoldKind = "maintenance" | "incompatible" | "read-only" | "unavailable" | null;
 
@@ -96,7 +98,8 @@ export interface RoomSummary {
 
 /** LIVE-2F/3D (C9-01): one of the caller's own tables ("Your tables"), answered to `room-op {type:"my-tables"}` on the
  *  lobby channel. The server's `MyTableSummary` (`server/src/rooms/gameRecord.ts`), field for field: no principal id,
- *  no code -- only what a seated player already sees, and the game id that reopens the table. */
+ *  no code -- only what a seated player already sees, and the game id that reopens the table. LIVE-4 (L4-2): a server no
+ *  longer sends `watch-only` (a table dealt on another build); a table it does not continue is `cannot-continue`. */
 export type MyTableState = "waiting" | "playing" | "finished" | "resume" | "paused" | "unavailable" | "cannot-continue" | "watch-only";
 
 export interface MyTableSummary {
@@ -338,8 +341,9 @@ export function refusalMessage(code: string, reason?: string): string {
 export const HOLD_NOTICES = Object.freeze({
   maintenance:
     "This game is paused for maintenance. Nothing can change until the server's operator restores it; your seat and the game so far are kept.",
+  /* LIVE-4 (L4-2): generalized -- a rules version, a game-server protocol, a money table's escrow, a handed-over game. */
   incompatible:
-    "This game was started under a version of the rules this server does not run. It is kept exactly as it was, but it cannot continue on this server.",
+    "This game was started on a version of the game this server does not run. It is kept exactly as it was, but it cannot continue on this server.",
   "read-only":
     "This game was dealt on a different server build. You can watch it, but it cannot be continued here: run the build that dealt it, or start a new game.",
   unavailable: "The game server could not confirm the last move was recorded. The game is paused until it can; the move will appear if it was made.",

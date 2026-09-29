@@ -234,6 +234,10 @@ export interface BuildSkewResponse {
 export interface IncompatibleResponse {
   kind: "incompatible";
   reason: string;
+  /** LIVE-4 (L4-2), additive: why this server does not continue (or no longer serves) the game, in the canonical
+   *  verdict's words (`rules-not-supported`, `hosted-protocol`, `malformed`, ...) or the serving decision's
+   *  (`drain-expired`, ...). Derived, never a hold. An older client ignores it. */
+  why?: string;
   /** The version the deal names, or `null` for a legacy (unpinned) deal. */
   pinnedRulesEngineVersion: number | null;
   supportedRulesEngineVersions: readonly number[];

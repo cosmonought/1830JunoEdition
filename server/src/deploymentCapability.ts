@@ -10,10 +10,11 @@
 // and the escrow contract code this build speaks (`CANONICAL_JUNO_ESCROW_CHECKSUMS`, which is server-only) -- so
 // nothing is restated.
 //
-// NOT WIRED YET. L4-1 is the pure model: nothing at startup computes, prints or compares this. L4-2 hands it to the
-// continuation verdict at every load, L4-6 prints its key in the banner and `ops/status.json`, and LIVE-5 compares the
-// key with the pool item's. Until then its one reader is the test that pins this build's key, so that any change that
-// moves the key is visible in review.
+// WIRED IN L4-2: `start.ts` builds it ONCE at startup (over the configured Juno deployment's pin, or none) and hands it
+// to the continuation wiring (`continuationWiring.ts`), so every game's verdict, dealing identity and discovery line is
+// judged against this one descriptor. Still to come: L4-6 prints its key in the banner and `ops/status.json`, and LIVE-5
+// compares the key with the pool item's. The test that pins this build's key makes any change that moves it visible in
+// review.
 
 import { RULES_ENGINE_VERSION, SUPPORTED_RULES_ENGINE_VERSIONS } from "../../frontend/src/gameEngine/rulesVersion";
 import { SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS } from "../../frontend/src/gameEngine/settlementAppraisal";

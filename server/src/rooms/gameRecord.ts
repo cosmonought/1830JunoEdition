@@ -370,8 +370,11 @@ export const capacityOf = (record: GameRecord): number => record.exact_players ?
 
 /** LIVE-3C: why a room will not take a change, as the player is told it -- `null` when it will.
  *    maintenance   a durable hold (or a damaged log): paused until the server's operator restores it
- *    incompatible  dealt under a rules-engine version this server does not carry (#1520): no history, no move
- *    read-only     dealt on another server build (#1252): the game can be watched, not continued
+ *    incompatible  this server does not continue the game (#1520; LIVE-4: the continuation verdict or the serving
+ *                  decision -- its rules pin or hosted protocol, a money table's escrow, a drain past its deadline):
+ *                  no history, no move; derived
+ *    read-only     NEVER PRODUCED since LIVE-4 (L4-2) -- it was "dealt on another server build" (#1252); kept in the
+ *                  type so the client's union and an older view stay readable
  *    unavailable   the server could not confirm its last write (LIVE-3B): paused until it can, or it restarts */
 export type HoldKind = "maintenance" | "incompatible" | "read-only" | "unavailable" | null;
 

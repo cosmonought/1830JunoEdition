@@ -14,6 +14,7 @@ import * as path from "path";
 import { createFileLogStore, type LogStore } from "../fileLogStore";
 import type { GameServerOptions } from "../gameServer";
 import { journalLine, scanJournal } from "../identity/journalStore";
+import { serializeBatch } from "../persistence/logFormat";
 import type { IdentityChange } from "../identity/store";
 import { createFileHoldStore } from "./holdStore";
 import { createFileRecordStore } from "./recordStore";
@@ -212,20 +213,23 @@ describe("LIVE-2F/3D independent review IR-02: a table discovery could not read 
 });
 
 /* ==================================================================
-    C4-01 / C4-05 (Medium / Low): A GAME DEALT ON ANOTHER BUILD IS FROZEN, AND FROZEN GAMES HOLD NO CAPS
-   ================================================================== */
-describe("LIVE-2F/3D C4-01 / C4-05: read-only games", () => {
-  test("a game dealt on another build takes no open-table cap and no room change (its host too); a leave only unsubscribes", () =>
-    withDir("read-only", async (dir) => {
-      const caps = { limits: { rooms: { maxHostedRooms: 1 } } } as Partial<GameServerOptions>;
+    C4-01 / C4-05 (Medium / Low): FROZEN GAMES HOLD NO CAPS -- LIVE-4 (L4-2): AND A BUILD NO LONGER FREEZES ONE
+   ==================================================================
+   C4-01 froze a game dealt on another build (#1252: `read-only`) and kept it out of the caps. #1252 is retired: a game
+   whose rules pin and hosted protocol this pool continues is an ordinary live table on any build -- it holds its seats'
+   caps and takes their moves. What stays frozen, and holds no cap, is a game this pool does NOT continue: here, a deal
+   stamped with a hosted protocol this pool does not read. */
+describe("LIVE-2F/3D C4-01 / C4-05 (LIVE-4 L4-2): continued games hold caps on any build; games not continued are frozen and hold none", () => {
+  const caps = { limits: { rooms: { maxHostedRooms: 1 } } } as Partial<GameServerOptions>;
+  const createAnother = (port: number) => opAs(port, ALICE, { type: "create", visibility: "public", exactPlayers: null, variants: {}, nickname: "A" });
+
+  test("T-1: a game dealt on another build is continued -- no hold kind, its move applied, and it still holds its host's cap", () =>
+    withDir("other-build", async (dir) => {
       let booted = await boot(dir, { build: "build-one", ...caps });
       let gameId = "";
-      let bob = "";
       try {
-        const game = await openGame(booted.port, ALICE, [BOB]);
-        gameId = game.gameId;
-        bob = game.playerIds[BOB];
-        assert.equal((await opAs(booted.port, ALICE, { type: "create", visibility: "public", exactPlayers: null, variants: {}, nickname: "A" })).code, "limit-reached", "control: the cap is one hosted table");
+        gameId = (await openGame(booted.port, ALICE, [BOB])).gameId;
+        assert.equal((await createAnother(booted.port)).code, "limit-reached", "control: the cap is one hosted table");
       } finally {
         await stopServer(booted.server);
       }
@@ -234,16 +238,60 @@ describe("LIVE-2F/3D C4-01 / C4-05: read-only games", () => {
         const alice = await Client.open(booted.port, ALICE);
         alice.roomHello(gameId);
         const view = await alice.next((frame) => frame.kind === "room", "the view");
-        assert.equal((view.view as { holdKind: string }).holdKind, "read-only");
-        await until(() => booted.server.lifecycle.inventory().games.find((entry) => entry.gameId === gameId)?.cls === "read-only", "read-only");
-        const before = fs.readFileSync(path.join(dir, "games", `${gameId}.json`));
+        assert.equal((view.view as { holdKind: string | null }).holdKind, null, "no hold kind: the build decides nothing");
+        alice.hello(gameId);
+        const history = await alice.next((frame) => frame.kind === "catch-up", "the history");
+        const baseIndex = (history.entries as Array<{ index: number }>).at(-1)?.index ?? 0;
+        /* The legacy wire's own check stays (client protocol 0, until L4-3): a TAB still on the old bundle is told to
+           reload -- that is about the tab, not the game. */
+        alice.submit({ WaterfallBuyLowest: { game_id: 0 } }, { baseIndex, submissionId: "other-build-stale" });
+        assert.equal((await alice.answerTo("other-build-stale")).kind, "build-skew", "a stale tab: the legacy build-skew answer");
+        alice.submit({ WaterfallBuyLowest: { game_id: 0 } }, { baseIndex, submissionId: "other-build-1", build: "build-two" });
+        assert.equal((await alice.answerTo("other-build-1")).kind, "applied", "the host's move applies on build-two");
+        await until(() => booted.server.lifecycle.inventory().games.find((entry) => entry.gameId === gameId)?.cls === "active", "active");
+        await alice.close();
+        assert.equal((await createAnother(booted.port)).code, "limit-reached", "a continued game holds its host's cap on any build");
+      } finally {
+        await stopServer(booted.server);
+      }
+    }));
+
+  test("a game this pool does not continue (a hosted protocol it does not read) takes no cap and no room change (its host too); a leave only unsubscribes -- and nothing is written", () =>
+    withDir("not-continued", async (dir) => {
+      let booted = await boot(dir, { build: "build-one", ...caps });
+      let gameId = "";
+      let bob = "";
+      try {
+        const game = await openGame(booted.port, ALICE, [BOB]);
+        gameId = game.gameId;
+        bob = game.playerIds[BOB];
+      } finally {
+        await stopServer(booted.server);
+      }
+      /* The same deal, stamped as if by a pool of hosted protocol 2 (the build is unchanged: one build, two answers). */
+      const logFile = path.join(dir, `${gameId}.log.jsonl`);
+      const entries = await createFileLogStore(dir, quiet).loadLog(gameId);
+      const deal = JSON.parse(entries[0].payload) as { SetupGame: Record<string, unknown> };
+      assert.equal(deal.SetupGame.hosted_protocol, 1, "a deal this server makes carries its dealing identity's hosted protocol");
+      deal.SetupGame.hosted_protocol = 2;
+      fs.writeFileSync(logFile, [{ ...entries[0], payload: JSON.stringify(deal) }, ...entries.slice(1)].map((entry) => serializeBatch([entry])).join(""));
+      booted = await boot(dir, { build: "build-one", ...caps });
+      try {
+        const alice = await Client.open(booted.port, ALICE);
+        alice.roomHello(gameId);
+        const view = await alice.next((frame) => frame.kind === "room", "the view");
+        assert.equal((view.view as { holdKind: string }).holdKind, "incompatible");
+        await until(() => booted.server.lifecycle.inventory().games.find((entry) => entry.gameId === gameId)?.code === "hosted-protocol", "not continued (hosted-protocol)");
+        const recordBefore = fs.readFileSync(path.join(dir, "games", `${gameId}.json`));
+        const logBefore = fs.readFileSync(logFile);
         const transfer = await alice.op({ type: "transfer-host", toPlayerId: bob }, gameId);
         assert.deepEqual([transfer.ok, transfer.code, transfer.reason], [false, "wrong-state", FROZEN_GAME_SENTENCE]);
-        assert.ok(fs.readFileSync(path.join(dir, "games", `${gameId}.json`)).equals(before), "the record is kept exactly as it was");
         assert.equal((await alice.op({ type: "leave" }, gameId)).ok, true, "leave only unsubscribes");
         await alice.close();
-        const created = await opAs(booted.port, ALICE, { type: "create", visibility: "public", exactPlayers: null, variants: {}, nickname: "A" });
-        assert.equal(created.ok, true, `a read-only game holds no cap: ${JSON.stringify(created)}`);
+        assert.equal((await createAnother(booted.port)).ok, true, "a game not continued here holds no cap");
+        assert.ok(fs.readFileSync(path.join(dir, "games", `${gameId}.json`)).equals(recordBefore), "the record is kept exactly as it was");
+        assert.ok(fs.readFileSync(logFile).equals(logBefore), "the log is kept exactly as it was");
+        assert.ok(!fs.existsSync(path.join(dir, "games", "holds", `${gameId}.json`)), "not continued is derived: no hold file");
       } finally {
         await stopServer(booted.server);
       }

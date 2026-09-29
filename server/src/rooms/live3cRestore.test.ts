@@ -2,9 +2,10 @@
 //
 // LIVE-3C: a hosted server restarted over its real file stores -- discovery of every durable game without loading
 // one, the reconciliation table (the log wins; a disagreement holds), the durable hold and its only way out, the
-// incompatible and read-only classes, the terminal seal and the settlement seam, waiting rooms that never start,
-// archival, fencing, and the operator tool's inspect / release / gc. Restarts here are a server CLOSED and a new
-// one STARTED over the same directory (the process-kill restarts are `live3cProcess.test.ts`).
+// incompatible class (LIVE-4 L4-2: a game dealt on another build is no longer read-only -- it is continued), the
+// terminal seal and the settlement seam, waiting rooms that never start, archival, fencing, and the operator tool's
+// inspect / release / gc. Restarts here are a server CLOSED and a new one STARTED over the same directory (the
+// process-kill restarts are `live3cProcess.test.ts`).
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -232,7 +233,10 @@ describe("LIVE-3C discovery", () => {
         assert.equal(counts.held, 3);
         assert.equal(counts.unreconciled, 4);
         // STAGE TWO, lazily: each load replays the whole log and concludes.
-        for (const [gameId, cls] of [[active, "active"], [olderBuild, "read-only"], [lagging, "active"]] as const) {
+        /* LIVE-4 (L4-2): a game dealt on another build whose rules pin and hosted protocol this pool carries is an
+           ordinary ACTIVE game once reconciled -- the dealing build is noted above for the operator, and decides nothing
+           (#1252's `read-only` is retired). */
+        for (const [gameId, cls] of [[active, "active"], [olderBuild, "active"], [lagging, "active"]] as const) {
           await helloFrame(booted.port, ALICE, gameId);
           for (let tries = 0; tries < 400 && classOf(booted, gameId)?.cls !== cls; tries += 1) await new Promise((resolve) => setTimeout(resolve, 5));
           assert.equal(classOf(booted, gameId)?.cls, cls, `${gameId} after its load`);
@@ -682,8 +686,8 @@ describe("LIVE-3C held games", () => {
     4. INCOMPATIBLE AND READ-ONLY
    ================================================================== */
 
-describe("LIVE-3C incompatible and read-only games", () => {
-  test("a pin this build does not carry is incompatible across restarts -- no history, no move, no hold file, the view says so; a game dealt on another build is read-only", () =>
+describe("LIVE-3C incompatible games (LIVE-4 L4-2: and a game dealt on another build is continued)", () => {
+  test("a pin this build does not carry is incompatible across restarts -- no history, no move, no hold file, the view says so; a game dealt on another build is continued (T-1)", () =>
     withDir("incompatible", async (dir) => {
       const newer = dealtOnDisk(dir, 1, { record: (r) => ({ ...r, rules_engine_version: 99 }), log: (entries) => withDeal(entries, (setup) => (setup.rules_engine_version = 99)) });
       const older = dealtOnDisk(dir, 1, { record: (r) => ({ ...r, rules_engine_version: 9 }), log: (entries) => withDeal(entries, (setup) => (setup.rules_engine_version = 9)) });
@@ -710,16 +714,27 @@ describe("LIVE-3C incompatible and read-only games", () => {
             await alice.close();
             assert.ok(!fs.existsSync(holdPath(dir, gameId)));
           }
+          /* LIVE-4 (L4-2), T-1: THE SAME RULES PIN AND HOSTED PROTOCOL ON ANOTHER BUILD IS THE SAME GAME. Its history is
+             served, its view holds nothing, and the next move is APPLIED -- appended after the dealing build's entries.
+             (#1252 answered this game "dealt on build ...": watch only.) */
           const bob = await Client.open(booted.port, BOB);
           bob.hello(otherBuild);
           const served = await bob.next((f) => f.kind === "catch-up");
-          assert.equal((served.entries as SeenEntry[]).length, 2, "a read-only game's history is served");
+          const seen = served.entries as SeenEntry[];
+          assert.equal(seen.length, 2 + restart, "its history is served");
           bob.roomHello(otherBuild);
-          assert.equal(((await bob.next((f) => f.kind === "room")).view as { holdKind: string }).holdKind, "read-only");
-          bob.submit(BUY, { baseIndex: 1, submissionId: `ro-${restart}` });
-          assert.match(String((await bob.answerTo(`ro-${restart}`)).reason), /dealt on build "an-older-build"/);
+          assert.equal(((await bob.next((f) => f.kind === "room")).view as { holdKind: string | null }).holdKind, null);
+          const seat = restart === 0 ? BOB : ALICE; // the second seat moves first after the one stored buy; then the first
+          const mover = seat === BOB ? bob : await Client.open(booted.port, ALICE);
+          if (mover !== bob) {
+            mover.hello(otherBuild);
+            await mover.next((f) => f.kind === "catch-up");
+          }
+          mover.submit(BUY, { baseIndex: seen[seen.length - 1].index, submissionId: `ob-${restart}` });
+          assert.equal((await mover.answerTo(`ob-${restart}`)).kind, "applied", "the move is applied on this build");
+          if (mover !== bob) await mover.close();
           await bob.close();
-          assert.equal(classOf(booted, otherBuild)?.cls, "read-only");
+          assert.equal(classOf(booted, otherBuild)?.cls, "active");
         } finally {
           await stopServer(booted.server);
         }

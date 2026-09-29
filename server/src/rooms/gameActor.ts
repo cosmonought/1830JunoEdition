@@ -273,6 +273,11 @@ export interface GameActorDeps {
   restore(session: RoomSession, entries: readonly ServerLogEntry[]): void;
   /** LIVE-2C: called synchronously inside the publish that changed the committed GameRecord. */
   onRecordPublished?(record: Readonly<GameRecord>): void;
+  /** LIVE-4 (L4-2): called synchronously inside the publish that stopped serving the game -- the serving review's
+   *  (`serving`), or a rebuild the actor did not publish that concluded "not continued / not served" (`rebuild`: a
+   *  rollback after a refused deal, a failed task). The room host re-classifies it, re-broadcasts its view and frees its
+   *  caps. Derived: nothing is written. */
+  onNotServed?(gameId: string, source: "serving" | "rebuild"): void;
   /** Called inside the publish that made entries durable and visible (`GameServerOptions.onAppend`). */
   onEntriesPublished?(entries: readonly ServerLogEntry[]): void;
   now(): number;
@@ -308,6 +313,8 @@ interface Task<T> {
   readonly op: (tx: Tx) => Promise<T> | T;
   readonly origin: TaskOrigin | undefined;
   readonly deadlineAt: number;
+  /** LIVE-4 (L4-2): a server housekeeping task that is not activity -- it must not keep an idle actor resident. */
+  readonly quiet?: boolean;
   /** queued -> running | expired, exactly once (E-8: executed or answered as expired, never both). */
   state: "queued" | "running" | "expired" | "done";
   readonly resolve: (result: RunResult<T>) => void;
@@ -329,6 +336,9 @@ export class GameActor {
   readonly ready: Promise<void>;
   /** When this actor last did anything, for idle eviction. */
   lastActiveAt: number;
+  /** LIVE-4 (L4-2): what the next publish that stops serving the game is attributed to (`onNotServed`): the serving
+   *  review while it publishes, a rebuild otherwise. */
+  private notServedSource: "serving" | "rebuild" = "rebuild";
 
   private readonly deps: GameActorDeps;
   private committed: CommittedView | null = null;
@@ -619,7 +629,7 @@ export class GameActor {
   run<T>(
     kind: OpKind,
     op: (tx: Tx) => Promise<T> | T,
-    options: { deadlineMs?: number; origin?: TaskOrigin } = {},
+    options: { deadlineMs?: number; origin?: TaskOrigin; quiet?: boolean } = {},
   ): Promise<RunResult<T>> {
     if (this.disposed) return Promise.resolve({ kind: "expired", reason: "closed" });
     /* A frame whose socket closed before its handler reached the queue is not queued at all: its socket's close
@@ -640,6 +650,7 @@ export class GameActor {
         deadlineAt: this.deps.now() + (options.deadlineMs ?? TASK_DEADLINE_MS),
         state: "queued",
         resolve,
+        ...(options.quiet === true ? { quiet: true } : {}),
       };
       this.queued.add(task as Task<unknown>);
       /* The chain never rejects -- `execute` settles every task itself -- and the `catch` is the belt to that
@@ -692,8 +703,11 @@ export class GameActor {
     } finally {
       task.state = "done";
       this.running = null;
-      this.lastActiveAt = this.deps.now();
+      if (task.quiet !== true) this.lastActiveAt = this.deps.now();
       if (task.kind === "submit") this.finishSubmission(queued);
+      /* LIVE-4 (L4-2): a rebuild inside this task (a rollback after a refused deal, a failed task) may have concluded
+         that this pool no longer continues -- or serves -- the game. The committed view is brought into line now. */
+      this.publishIfNotServed("rebuild");
     }
   }
 
@@ -1087,6 +1101,17 @@ export class GameActor {
       });
     }
     this.announceHold(previous?.hold ?? null, view.hold);
+    /* LIVE-4 (L4-2): THE PUBLISH THAT STOPS SERVING THE GAME, whichever path made it -- the serving review, a rebuild
+       the actor had not published (`publishIfNotServed`), or a store read-back that rebuilt a session which is no
+       longer continued or served here. The room host re-classifies the game, re-broadcasts its view and frees its
+       caps. (A load installs its first view without a publish; its conclusion is the room host's own.) */
+    if (previous !== null && previous.incompatible === null && view.incompatible !== null) {
+      try {
+        this.deps.onNotServed?.(this.gameId, this.notServedSource);
+      } catch (error) {
+        this.deps.warn(`  actor: the not-served hook threw for ${this.gameId} — ${describe(error)}`);
+      }
+    }
     if (entries !== undefined && entries.length > 0) {
       try {
         this.deps.onEntriesPublished?.(entries);
@@ -1180,6 +1205,54 @@ export class GameActor {
       const subscriber = this.subscribers.get(key);
       if (subscriber !== undefined) this.deliverTo(subscriber, frame);
     });
+  }
+
+  /**
+   * LIVE-4 (L4-2): THE SERVING REVIEW -- the timer half of T-24, for a RESIDENT game. Queued as a task, so it never
+   * interleaves a commit (E-1), and QUIET: it is housekeeping, not activity, so it never keeps an idle actor resident.
+   * The session is asked whether its pool still serves the game (`RoomSession.reviewServing`: the pool's
+   * `serveDecision` with the clock). If the answer is now "no" -- a draining pool's no-money drain passed its deadline,
+   * the pool retired, the primary took the game -- the committed view is republished from the session
+   * (`publishIfNotServed`). No reload of the actor, and nothing written. A game already held for any reason is left as
+   * it is. Resolves true when the game stopped being served.
+   */
+  async reviewServing(): Promise<boolean> {
+    const outcome = await this.run(
+      "repair",
+      async () => {
+        const session = this.session;
+        const before = this.committed;
+        if (session === null || before === null || before.hold !== null || before.incompatible !== null) return false;
+        session.reviewServing();
+        return this.publishIfNotServed("serving");
+      },
+      { quiet: true },
+    );
+    return outcome.kind === "ran" && outcome.value;
+  }
+
+  /**
+   * LIVE-4 (L4-2): the committed view says the game is served while the private session says it is not -- the serving
+   * review concluded "no", or a rebuild the actor did not publish (a rollback after a refused deal, a failed task)
+   * asked the pool afresh and was told "no". Publish the session's held state -- the view a load of the game would
+   * build now (a version hold carrying the player's sentence): every log subscriber is told, exactly as a version hold
+   * is announced (`announceHold`: a `status` frame, `held`, with that sentence; its next hello or submit is answered
+   * `incompatible`), and the room host re-classifies the game, re-broadcasts its view and frees its caps
+   * (`onNotServed`). Nothing is written. A durable or store hold takes precedence and is left alone. True when a view
+   * was published.
+   */
+  private publishIfNotServed(source: "serving" | "rebuild"): boolean {
+    const session = this.session;
+    const before = this.committed;
+    if (this.disposed || session === null || before === null || before.hold !== null || before.incompatible !== null) return false;
+    if (session.heldAnswer() === null) return false;
+    this.notServedSource = source;
+    try {
+      this.publish(this.buildNextView(session, before), null, {}); // `publish` tells the room host (`onNotServed`)
+    } finally {
+      this.notServedSource = "rebuild";
+    }
+    return true;
   }
 
   /** The server is closing, or the registry evicted this actor. Queued tasks are answered, never run. */

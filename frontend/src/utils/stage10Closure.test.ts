@@ -323,8 +323,11 @@ describe("the supported-version matrix under a single-version server", () => {
       const held = session(stored);
       const hello = held.catchUp(-1);
       expect(hello.kind).toBe("incompatible");
-      expect(Object.keys(hello).sort()).toEqual(["build", "kind", "pinnedRulesEngineVersion", "reason", "supportedRulesEngineVersions"]);
+      /* LIVE-4 (L4-2): the frame gains `why`, additively -- the canonical verdict's reason (a pin this engine does not
+         carry, or no pin at all). Nothing else about it moved. */
+      expect(Object.keys(hello).sort()).toEqual(["build", "kind", "pinnedRulesEngineVersion", "reason", "supportedRulesEngineVersions", "why"]);
       if (hello.kind !== "incompatible") return;
+      expect(hello.why).toBe(rulesEngineVersionOf(stored) === null ? "legacy-unpinned" : "rules-not-supported");
       expect(hello.pinnedRulesEngineVersion).toBe(rulesEngineVersionOf(stored) ?? null);
       expect(hello.supportedRulesEngineVersions).toEqual([RULES_ENGINE_VERSION]);
       // The engine is at its seed: nothing was interpreted.
@@ -334,8 +337,8 @@ describe("the supported-version matrix under a single-version server", () => {
 
   it("10. build compatibility stays a separate concept from rules-engine-version compatibility", () => {
     const live = playedRoom();
-    // A different BUILD with the same v8 pin: rebuilt (the log means the same thing); the deal-build pin (#1252)
-    // then answers moves -- a refusal, never `incompatible`.
+    // A different BUILD with the same v8 pin: rebuilt (the log means the same thing), and -- LIVE-4 (L4-2), #1252
+    // retired -- played there: never `incompatible`.
     const otherBuild = session(live.entries, { build: "another-deploy" });
     expect(otherBuild.incompatible).toBeNull();
     expect(stateDigest(otherBuild.state)).toBe(stateDigest(live.state));

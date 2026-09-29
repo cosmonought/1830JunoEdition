@@ -34,7 +34,7 @@ import type { WebSocket } from "ws";
 
 import type { RoomSession } from "../../../frontend/src/utils/roomSession";
 import type { GameStateResponse } from "../../../frontend/src/gameEngine/gameState";
-import { RULES_ENGINE_VERSION } from "../../../frontend/src/gameEngine/rulesVersion";
+import { RULES_ENGINE_VERSION, SUPPORTED_RULES_ENGINE_VERSIONS } from "../../../frontend/src/gameEngine/rulesVersion";
 
 import type { LogHeadRead } from "../fileLogStore";
 import type { ConnectionContext } from "../identity/authenticateUpgrade";
@@ -66,7 +66,8 @@ import {
   type MyTableSummary,
 } from "./gameRecord";
 import { createMemoryHoldStore, type HoldStore } from "./holdStore";
-import type { MoneyContinuationPolicy } from "../escrow/moneyContinuation";
+import type { MoneyContinuationFacts } from "../escrow/moneyContinuation";
+import type { ContinuationWiring } from "../continuationWiring";
 import { disabledMoneyView, disabledStake, type MoneyRoomPort, type MoneyTables } from "../escrow/moneyTables";
 import {
   ARCHIVE_SWEEP_BUDGET,
@@ -129,7 +130,8 @@ export const MONEY_UNAVAILABLE_SENTENCE = "This table's money can't be checked o
 export interface RoomHostDeps {
   build: string;
   records: RecordStore;
-  games: { get(gameId: string): Promise<GameActor>; peek(gameId: string): GameActor | undefined };
+  /** LIVE-4 (L4-2): `forEach` visits every resident actor (the serving review walks them). */
+  games: { get(gameId: string): Promise<GameActor>; peek(gameId: string): GameActor | undefined; forEach?(visit: (actor: GameActor, gameId: string) => void): void };
   identity: IdentityService;
   limits: IngressLimits;
   now: () => number;
@@ -156,8 +158,13 @@ export interface RoomHostDeps {
   ops?: OpsRecorder;
   /** LIVE-3C: the terminal seam ESCROW-3 plugs into (no-money when absent). */
   settlement?: SettlementLifecycle;
-  /** ESCROW-3A (brief §8): funded games this deployment may continue across builds (none when absent). */
-  moneyContinuation?: MoneyContinuationPolicy;
+  /** LIVE-4 (L4-2): this pool's continuation answers (`continuationWiring.ts`). Discovery classifies a deal's first
+   *  line with its gameplay half; each game's session asks the full verdict itself (it was given `sessionFor`). Absent
+   *  (a host built without a server): discovery uses this code's own gameplay half. */
+  continuation?: ContinuationWiring;
+  /** LIVE-4 (L4-2): the settlement index, refreshed with a new money table's financial record before the table's first
+   *  session exists and again before its deal (the verdict must never meet a money table the index has not seen). */
+  moneyFacts?: MoneyContinuationFacts;
   /** ESCROW-3B: the escrow service's seam (none when absent: no money game can exist). */
   escrow?: EscrowGameplaySeam;
   /** ESCROW-4: the real-money table layer (`escrow/moneyTables.ts`), bound late (it needs this host's port). Absent or
@@ -217,19 +224,25 @@ export function factsFromView(view: CommittedView, record: GameRecord): LogFacts
   return factsFromEntries(view.entries, record.status === "completed", record.closed_at !== null);
 }
 
-/** LIVE-3C: what a room shows about why it will not take a change -- the RoomView's `holdKind`. `build` is this
- *  server's (a game dealt on another build is read-only, #1252). ESCROW-3A: `continues` -- a funded game whose stored
- *  continuation identity this deployment is compatible with is NOT read-only on another build (`moneyContinuation.ts`). */
-export function holdKindOf(view: CommittedView, build: string, continues?: (dealtBuild: string) => boolean): HoldKind {
+/** LIVE-3C: what a room shows about why it will not take a change -- the RoomView's `holdKind`.
+ *  LIVE-4 (L4-2): NO BUILD INPUT. #1252 made a game dealt on another build `read-only`; continuation now follows the
+ *  game's semantic identity, so a game this pool does not continue (or no longer serves) is `incompatible` -- DERIVED
+ *  from the session's verdict, whatever build dealt it -- and one it continues is played, on any build. `read-only`
+ *  is never produced (it stays in the client's union so an older server's view still reads). */
+export function holdKindOf(view: CommittedView): HoldKind {
   if (isMaintenanceHold(view.hold)) return "maintenance";
   if (view.incompatible !== null || view.hold?.reason === "version") return "incompatible";
   if (view.hold?.reason === "uncertain") return "unavailable";
-  const first = view.entries[0];
-  if (first !== undefined && first.index === 0) {
-    const deal = dealInfoOf(first);
-    if (deal && deal.build !== null && deal.build !== build && continues?.(deal.build) !== true) return "read-only";
-  }
   return null;
+}
+
+/** LIVE-4 (L4-2): why a view is not continued here, in the verdict's (or the serving decision's) words -- the
+ *  `incompatible` frame's `why` -- or `null`. The one version hold with no frame is the load's for a GameRecord a newer
+ *  build wrote (`gameActor.ts`): the canonical `newer-format`. */
+export function notContinuedWhyOf(view: CommittedView): string | null {
+  if (view.incompatible === null && view.hold?.reason !== "version") return null;
+  const why = (view.incompatible as { why?: unknown } | null)?.why;
+  return typeof why === "string" ? why : "newer-format";
 }
 
 /** LIVE-3C: the sentence a `gone` answer carries, by what ended the table. */
@@ -250,7 +263,8 @@ const MY_TABLE_STATE: Partial<Record<GameClass, MyTableState>> = Object.freeze({
   held: "paused",
   unavailable: "unavailable",
   incompatible: "cannot-continue",
-  "read-only": "watch-only",
+  /* LIVE-4 (L4-2): no `read-only` row -- that class (a game dealt on another build, #1252) is never produced now; a
+     game this pool does not continue is `incompatible`, shown "cannot continue". */
 });
 /** The most "Your tables" answers with (live tables first, then the most recently finished). */
 export const MY_TABLES_LIMIT = 50;
@@ -304,9 +318,16 @@ export function createRoomHost(deps: RoomHostDeps) {
   const holds = deps.holds ?? createMemoryHoldStore();
   const ops = deps.ops ?? NO_OPS;
   const settlement = deps.settlement ?? NO_MONEY_SETTLEMENT;
-  /** ESCROW-3A: `holdKindOf` with this deployment's money-continuation policy for the view's own game. */
-  const kindOf = (view: CommittedView): HoldKind =>
-    holdKindOf(view, deps.build, deps.moneyContinuation && view.record ? (dealt) => deps.moneyContinuation!.continues(view.record!.game_id, dealt) : undefined);
+  /** LIVE-4 (L4-2): what the view says about the game -- the session's verdict decided it; no build is compared. */
+  const kindOf = (view: CommittedView): HoldKind => holdKindOf(view);
+  /** LIVE-4 (L4-2): each not-continued game is audited once per run, when it is first concluded so (derived: a line,
+   *  never a hold). */
+  const auditedNotContinued = new Set<string>();
+  const auditNotContinued = (gameId: string, why: string, detail: string | null, source: "discovery" | "load" | "serving" | "rebuild"): void => {
+    if (auditedNotContinued.has(gameId)) return;
+    auditedNotContinued.add(gameId);
+    ops.audit("game.not-continued", { game_id: gameId, why, detail, source });
+  };
   const boardOf = (gameId: string, session: RoomSession) => (deps.boardFacts ? deps.boardFacts(gameId, session) : sessionBoardFacts(session));
 
   /* ==================================================================
@@ -340,6 +361,8 @@ export function createRoomHost(deps: RoomHostDeps) {
         holds,
         build: deps.build,
         rulesEngineVersion: RULES_ENGINE_VERSION,
+        /* LIVE-4 (L4-2): the pool's gameplay verdict on each deal's first line (never a build comparison). */
+        ...(deps.continuation !== undefined ? { gameplayVerdict: deps.continuation.gameplayVerdictOf, rulesSupported: deps.continuation.capability.rules.supported } : {}),
         now,
         warn: deps.warn,
         ops,
@@ -360,6 +383,8 @@ export function createRoomHost(deps: RoomHostDeps) {
       if (game.cls === "held" || game.cls === "incompatible" || game.cls === "unavailable" || game.cls === "attention") {
         deps.warn(`  discovery: ${game.gameId} ${game.cls.toUpperCase()}${game.code ? ` (${game.code})` : ""}${game.detail ? `: ${game.detail}` : ""}`);
       }
+      /* LIVE-4 (L4-2): a game this pool does not continue, audited once (derived: no hold file is ever written for it). */
+      if (game.cls === "incompatible") auditNotContinued(game.gameId, game.code ?? "not-continued", game.detail, "discovery");
     }
     publishStatus();
   })();
@@ -498,19 +523,13 @@ export function createRoomHost(deps: RoomHostDeps) {
   function settle(gameId: string, failClosed: { cls: GameClass; code: string | null; detail: string | null } | null): void {
     const was = unreconciled.delete(gameId);
     const before = concluded.get(gameId);
-    /* LIVE-2F/3D (C4-01): A GAME DEALT ON ANOTHER BUILD IS CONCLUDED READ-ONLY, not healthy: after its actor is evicted
-       its record ("active") would otherwise be believed -- and a game nobody can continue here would hold its seats'
-       open-table caps (and the host's) for ever, the way held and incompatible games no longer do. */
-    if (failClosed === null) {
-      const resident = peekLoaded(gameId);
-      let readOnly = false;
-      try {
-        readOnly = resident !== undefined && kindOf(resident.view) === "read-only";
-      } catch {
-        readOnly = false; // no committed view yet: nothing to conclude from
-      }
-      if (readOnly) failClosed = { cls: "read-only", code: "build-pinned", detail: null };
-    }
+    /* LIVE-4 (L4-2): #1252's `read-only` conclusion (C4-01: a game dealt on another build) is gone -- a game dealt on
+       another build whose semantic identity this pool continues is HEALTHY, played and counted in caps like any other.
+       A game this pool does not continue arrives here concluded `incompatible` (its view says so), keeps no cap, and is
+       audited once: derived, never a hold. */
+    if (failClosed !== null && failClosed.cls === "incompatible") auditNotContinued(gameId, failClosed.code ?? "not-continued", failClosed.detail, "load");
+    /* A game concluded anything else is continued (or held) now: a later "not continued" is news, and audited again. */
+    else auditedNotContinued.delete(gameId);
     /* A conclusion replaces discovery's line for good (review: a start-time read failure is not sticky once a load
        has succeeded): healthy means the record -- reconciled, and written only by this process since -- is believed. */
     if (failClosed === null || failClosed.cls === "active" || failClosed.cls === "completed" || failClosed.cls === "waiting") concluded.set(gameId, "healthy");
@@ -710,7 +729,7 @@ export function createRoomHost(deps: RoomHostDeps) {
          unavailable or needing attention (nobody can join or play it). It appears once its first load (anybody's
          reconnect, room view or code) has reconciled it. */
       const now_ = classifyNow(record.game_id).cls;
-      if (now_ !== "waiting" && now_ !== "active" && now_ !== "read-only") continue;
+      if (now_ !== "waiting" && now_ !== "active") continue;
       const resident = peekLoaded(record.game_id);
       const facts = resident ? factsFromView(resident.view, record) : factsFromEntries([], false, false);
       const dealtFromRecord = record.started_at !== null || record.status === "active" || record.status === "completed";
@@ -829,9 +848,10 @@ export function createRoomHost(deps: RoomHostDeps) {
       /* LIVE-3C (review E1): a server task (the expiry and archive sweeps) never acts on a game this build cannot
          interpret -- its record's lifecycle claims could not be checked against a board nobody replayed. */
       if (opName === null && (tx.view.incompatible !== null || tx.view.hold?.reason === "version")) return { ok: false, code: "held", reason: HELD_PLAYER_SENTENCE };
-      /* LIVE-2F/3D (C4-05): NOR IS ONE THIS BUILD CANNOT CONTINUE CHANGED BY A PLAYER -- an incompatible pin, or a deal
-         made on another build. It is kept exactly as it was (its host too): a `leave` only unsubscribes. */
-      if (opName !== null && (tx.view.incompatible !== null || tx.view.hold?.reason === "version" || kindOf(tx.view) === "read-only")) {
+      /* LIVE-2F/3D (C4-05): NOR IS ONE THIS POOL DOES NOT CONTINUE CHANGED BY A PLAYER. It is kept exactly as it was
+         (its host too): a `leave` only unsubscribes. LIVE-4 (L4-2): "does not continue" is the session's verdict (or
+         its serving decision) -- a deal made on another build is no longer a reason; its semantic identity is. */
+      if (opName !== null && (tx.view.incompatible !== null || tx.view.hold?.reason === "version")) {
         if (opName === "leave" && verdict !== null && verdict.ok) return { ok: true, value: { ok: true, record: null, effects: { unsubscribeOnly: true } } };
         return { ok: false, code: "wrong-state", reason: FROZEN_GAME_SENTENCE };
       }
@@ -930,8 +950,10 @@ export function createRoomHost(deps: RoomHostDeps) {
       /* LIVE-3C: a held or incompatible table is frozen, not open -- it takes nobody's cap (review). An unreconciled
          record's own claim is used here, and only here: a cap is an abuse bound, not a statement about the game. */
       const frozen = classifyNow(record.game_id).cls;
-      /* LIVE-2F/3D (C4-01): nor a read-only one (dealt on another build: watchable, never continued here). */
-      if (frozen === "held" || frozen === "incompatible" || frozen === "read-only") continue;
+      /* LIVE-2F/3D (C4-01) / LIVE-4 (L4-2): an incompatible one is a game this pool does not continue (its verdict, or
+         its serving decision) -- it takes no cap either. A game dealt on another build that this pool DOES continue is
+         an ordinary live table now, and counts. */
+      if (frozen === "held" || frozen === "incompatible") continue;
       if (record.status === "waiting" && record.expires_at !== null && now() >= record.expires_at && record.started_at === null) continue;
       const seat = seatOf(record, principalId);
       if (seat === null) continue;
@@ -1017,6 +1039,10 @@ export function createRoomHost(deps: RoomHostDeps) {
           releaseLater(claimed, gameId);
           return ack(socket, requestId, { ok: false, code: opened.code, reason: opened.reason });
         }
+        /* LIVE-4 (L4-2): into the settlement index BEFORE the table's first session is made, so the continuation verdict
+           that session asks sees the money facts (identity, pin) of the record just written -- never a money table the
+           index has not seen. */
+        await deps.moneyFacts?.refresh(gameId);
       }
       let unresolved = false;
       let game: GameActor;
@@ -1214,6 +1240,10 @@ export function createRoomHost(deps: RoomHostDeps) {
   async function dealInTask(tx: Tx, record: GameRecord): Promise<{ ok: true; data?: Record<string, unknown> } | Refusal> {
     const plan = await deps.rosterSource.plan(record, { shuffle: deps.shuffle, now: now() });
     if ("refusal" in plan) return { ok: false, code: plan.code === "wrong-state" ? "wrong-state" : "not-ready", reason: plan.reason, ...({ block: plan.code } as object) } as Refusal;
+    /* LIVE-4 (L4-2): a money table's financial record, read again into the settlement index: the session stamps the
+       deal with THAT record's money identity and refuses it unless this pool continues the table (`RoomSession`). */
+    if (record.money !== null) await deps.moneyFacts?.refresh(record.game_id);
+    /* `build` is the dealing server's, stamped for history; the rules pin and hosted protocol are the session's stamp. */
     const deal = buildSetupGame(plan, deps.build);
     assertDeal(record, deal);
     const session = tx.session;
@@ -1649,10 +1679,9 @@ export function createRoomHost(deps: RoomHostDeps) {
     for (const record of recordIndex.values()) {
       if (seatOf(record, ctx.principalId) === null) continue;
       const cls = classifyNow(record.game_id).cls;
-      /* A read-only game (dealt on another build) is listed as what it is to its players (review IR-05): archived is
-         gone; a finished one is finished -- nothing more could be played in it on any build. */
-      if (cls === "read-only" && record.archived_at !== null) continue;
-      const state = cls === "read-only" && record.status === "completed" ? "finished" : MY_TABLE_STATE[cls];
+      /* LIVE-4 (L4-2): a game this pool does not continue is listed as `cannot-continue` (derived from its verdict); the
+         build-pinned `watch-only` line (#1252, review IR-05) is never produced now. */
+      const state = MY_TABLE_STATE[cls];
       if (state === undefined) continue;
       const money = record.money === null ? null : (deps.money?.()?.myTableFor(record, ctx.principalId) ?? { anteGross: record.money.ante_gross, symbol: record.money.symbol, exponent: record.money.exponent, networkClass: record.money.network_class, status: "link-wallet" as const, actionNeeded: false });
       const summary = myTableSummaryOf(record, ctx.principalId, state, money);
@@ -1801,14 +1830,27 @@ export function createRoomHost(deps: RoomHostDeps) {
   function classOfView(gameId: string, view: CommittedView): { gameId: string; cls: GameClass; code: string | null; detail: string | null } {
     const hold = view.hold;
     if (isMaintenanceHold(hold)) return { gameId, cls: "held", code: hold?.code ?? "log-corrupt", detail: hold?.detail ?? null };
-    if (view.incompatible !== null || hold?.reason === "version") return { gameId, cls: "incompatible", code: "rules-version", detail: hold?.detail ?? null };
+    /* LIVE-4 (L4-2): not continued (or no longer served) here -- its code is the verdict's `why`, never a build; a rules
+       pin this pool does not play keeps #1520's direction code, as discovery named it. */
+    const notContinued = notContinuedWhyOf(view);
+    if (notContinued !== null) return { gameId, cls: "incompatible", code: notContinued === "rules-not-supported" ? rulesDirectionOf(view) : notContinued, detail: hold?.detail ?? null };
     if (hold?.reason === "uncertain") return { gameId, cls: "unavailable", code: hold.restart ? "store-restart-required" : "store-uncertain", detail: hold.detail };
     const record = view.record;
     if (record === null) return { gameId, cls: "attention", code: null, detail: "loaded with no record" };
     if (unreconciled.has(gameId)) return { gameId, cls: "unreconciled", code: "repair-pending", detail: "loaded; the record's repair from its log has not landed" };
-    if (kindOf(view) === "read-only") return { gameId, cls: "read-only", code: "build-pinned", detail: null };
     /* The lifecycle the LOG implies (a record's own follow-up write may be a task behind it, RL-1). */
     return { gameId, cls: record.archived_at !== null ? "archived" : effectiveStatus(record, factsFromView(view, record), now()), code: null, detail: null };
+  }
+
+  /** LIVE-4 (L4-2): #1520's direction code for a deal whose rules pin this pool does not play -- `rules-version-newer`
+   *  or `-older` against the pool's own rules (the capability's), as discovery says it -- or the verdict's word when
+   *  the deal's pin is one the pool plays (a money identity's rules, not the deal's, are the ones it does not). */
+  function rulesDirectionOf(view: CommittedView): string {
+    const first = view.entries[0];
+    const pin = first !== undefined ? (dealInfoOf(first)?.pin ?? null) : null;
+    const supported = deps.continuation?.capability.rules.supported ?? SUPPORTED_RULES_ENGINE_VERSIONS;
+    if (pin === null || supported.includes(pin)) return "rules-not-supported";
+    return pin > Math.max(...supported) ? "rules-version-newer" : "rules-version-older";
   }
 
   /** What a game is NOW. Loaded: its view. Not loaded: stage one if it has not been reconciled this run (discovery's
@@ -1871,7 +1913,9 @@ export function createRoomHost(deps: RoomHostDeps) {
       games: { total: games.length, by_class: byClass },
       held: listed("held"),
       incompatible: listed("incompatible"),
-      read_only: listed("read-only"),
+      /* LIVE-4 (L4-2): the games this pool does not continue, each with its verdict's `why` -- derived, never held. (The
+         build-pinned `read_only` list is gone with #1252.) */
+      not_continued: games.filter((game) => game.cls === "incompatible").map(({ gameId, code }) => ({ game_id: gameId, why: code })),
       unavailable: listed("unavailable"),
       attention: listed("attention"),
       unreconciled: games.filter((game) => game.cls === "unreconciled").length,
@@ -1893,6 +1937,8 @@ export function createRoomHost(deps: RoomHostDeps) {
   function prune(): void {
     sweepExpired();
     sweepArchive();
+    /* LIVE-4 (L4-2): the serving review (a no-op on a primary pool). */
+    void reviewServing().catch((error) => deps.warn(`  serving: the review failed -- ${error instanceof Error ? error.message : String(error)}`));
     publishStatus();
     for (const gameId of [...chats.keys()]) if (!viewSubs.has(gameId)) chats.delete(gameId);
     for (const gameId of [...presence.keys()]) if (!viewSubs.has(gameId)) presence.delete(gameId);
@@ -1903,12 +1949,72 @@ export function createRoomHost(deps: RoomHostDeps) {
     for (const [gameId, until] of unknownGames) if (until <= cutoff) unknownGames.delete(gameId);
   }
 
+  /* ==================================================================
+      LIVE-4 (L4-2): THE SERVING REVIEW -- THE TIMER HALF OF T-24
+     ==================================================================
+     `serveDecision` is asked by every session at every rebuild and before every submit; this is the third place: a
+     periodic pass (the 60-second sweep, `prune`) over every RESIDENT game still served, so one that crossed its pool's
+     drain deadline stops being served at once -- its view republished as not served, every reader told, its caps
+     freed (the actor's `onNotServed`, below) -- without waiting for a submit and without reloading its actor. A primary
+     pool (every pool until LIVE-6) never declines a game it continues, so the pass is skipped outright there. ONE PASS
+     AT A TIME (a slow pass is never overlapped by the next), a game already not served is not visited, and the review
+     is not activity (it never keeps an idle actor resident). Derived: nothing is written. Resolves with how many games
+     stopped being served. */
+  let reviewing: Promise<number> | null = null;
+  function reviewServing(): Promise<number> {
+    if (deps.continuation !== undefined && !deps.continuation.hasServingPolicy()) return Promise.resolve(0);
+    if (reviewing !== null) return reviewing;
+    reviewing = (async () => {
+      const resident: GameActor[] = [];
+      deps.games.forEach?.((actor) => resident.push(actor));
+      let stopped = 0;
+      for (const game of resident) {
+        if (!game.isLoaded) continue;
+        const view = game.view;
+        if (view.hold !== null || view.incompatible !== null) continue; // already not served (or held): nothing to review
+        try {
+          if (await game.reviewServing()) stopped += 1;
+        } catch (error) {
+          deps.warn(`  serving: the review of ${game.gameId} failed -- ${error instanceof Error ? error.message : String(error)}; it is asked again at the next pass`);
+        }
+      }
+      return stopped;
+    })().finally(() => {
+      reviewing = null;
+    });
+    return reviewing;
+  }
+
+  /** LIVE-4 (L4-2): an actor stopped serving `gameId` -- its serving review concluded "no", or a rebuild it had not
+   *  published (a rollback after a refused deal, a failed task) asked the pool afresh and was told "no". The game is
+   *  re-classified from its view (not continued: derived, its caps freed), audited once, and every room reader is sent
+   *  the new view. Nothing is written. */
+  function onNotServed(gameId: string, source: "serving" | "rebuild"): void {
+    const resident = peekLoaded(gameId);
+    if (resident === undefined) return;
+    const conclusion = classOfView(gameId, resident.view);
+    if (conclusion.cls === "incompatible") auditNotContinued(gameId, conclusion.code ?? "not-continued", conclusion.detail, source);
+    settle(gameId, conclusion);
+    broadcastView(gameId);
+    scheduleList();
+    publishStatus();
+  }
+
+  /** LIVE-4 (L4-2): `gameId`'s record as this server last committed it (resident first, then the index), or null. */
+  function recordOf(gameId: string): GameRecord | null {
+    const resident = peekLoaded(gameId)?.view.record ?? null;
+    return resident ?? recordIndex.get(gameId) ?? null;
+  }
+
   return {
     indexReady,
     counters,
     denied,
     resolveGame,
     actorFor,
+    recordOf,
+    reviewServing,
+    onNotServed,
     playerIdOf,
     sweepExpired,
     viewerRoomFor,

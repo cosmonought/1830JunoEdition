@@ -36,13 +36,19 @@ import type { GameRecord } from "./gameRecord";
 import { HoldUnreadableError, makeHold, type HoldStore } from "./holdStore";
 import { classOfRecord, type GameClass, type HoldCode } from "./lifecycle";
 import type { IndexReconciliation, RecordStore } from "./recordStore";
-import { dealInfoOf, pinCompatibility, reconcileHead } from "./reconcile";
+import { dealInfoOf, reconcileHead } from "./reconcile";
+import { SUPPORTED_RULES_ENGINE_VERSIONS } from "../../../frontend/src/gameEngine/rulesVersion";
+import { gameIdentityOfDeal, type GameIdentityFacts } from "../../../frontend/src/gameEngine/compat/continuationIdentity";
+import type { ContinuationVerdict, FormatFact, NotContinuedWhy } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
+import { dealFormatOf, historyNotReadHere, localContinuationVerdict } from "../../../frontend/src/gameEngine/compat/sessionContinuation";
 
 export type DiscoveryCode =
   | HoldCode
   | "rules-version-older"
   | "rules-version-newer"
   | "record-schema-newer"
+  /* LIVE-4 (L4-2): every other reason the gameplay verdict gives for not continuing a deal (derived, never a hold) */
+  | Exclude<NotContinuedWhy, "rules-not-supported">
   /* unreconciled (stage one, `lifecycle.ts`): what the record claims, or why only the load can decide */
   | "claims-active"
   | "claims-completed"
@@ -80,8 +86,18 @@ export interface DiscoveryDeps {
   readonly records: RecordStore;
   readonly logs: { listGameLogs?(): Promise<string[]>; readHead?(gameId: string): Promise<LogHeadRead> };
   readonly holds: HoldStore;
+  /** Stamped on a hold this scan writes (diagnostic: which server found it). Never a classification input. */
   readonly build: string;
   readonly rulesEngineVersion: number;
+  /** LIVE-4 (L4-2): the POOL'S gameplay verdict for a deal read from a log's first line (`ContinuationWiring.
+   *  gameplayVerdictOf`): the deal's rules pin and hosted protocol against the pool's capability, with the deal line's
+   *  own format fact (T-25: a rules revision above this build's, `dealFormatOf`). Money facts are the load's (the full
+   *  verdict), so discovery never calls a money game continued -- it leaves it unreconciled. Absent (an offline tool):
+   *  this code's own gameplay half (`localContinuationVerdict`, refusing legacy logs). */
+  readonly gameplayVerdict?: (identity: GameIdentityFacts, log?: FormatFact) => ContinuationVerdict;
+  /** LIVE-4 (L4-2): the rules engines the pool plays (its capability's `rules.supported`), for #1520's direction code
+   *  (`rules-version-newer` / `-older`) on a pin it does not play. Absent: this code's own. */
+  readonly rulesSupported?: readonly number[];
   readonly now: () => number;
   readonly warn: (line: string) => void;
   readonly ops: OpsRecorder;
@@ -94,6 +110,17 @@ export interface DiscoveryDeps {
 export const DISCOVERY_PER_GAME_TIMEOUT_MS = 10_000;
 
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/** LIVE-4 (L4-2): the `SetupGame` body of a deal entry's payload (`undefined` when it is not one; the caller has already
+ *  found a deal there, so that answer never reaches the verdict). */
+function setupOf(payload: string): unknown {
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    return typeof parsed === "object" && parsed !== null && "SetupGame" in parsed ? (parsed as { SetupGame: unknown }).SetupGame : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** The healthy / terminal classes: no code, no detail. */
 const plain = (gameId: string, cls: GameClass, record: GameRecord | null, logBytes: number): DiscoveredGame => ({ gameId, cls, code: null, detail: null, record, logBytes });
@@ -183,29 +210,54 @@ export async function discoverGames(deps: DiscoveryDeps): Promise<DiscoveryRepor
         ? { gameId, cls: "attention", code: "orphan-log", detail: `a log of ${head.size} bytes with no game record`, record: null, logBytes: head.size }
         : plain(gameId, "attention", null, 0);
     }
-    /* 4. The record against the deal (`reconcile.ts`, tier 1): a disagreement the first line already proves is held. */
+    /* 4. LIVE-4 (L4-2): THE POOL'S GAMEPLAY VERDICT ON THE DEAL LINE -- the canonical verdict on the deal's semantic
+       identity (its rules pin AND its hosted protocol, absent = 1) against the pool's capability, with the deal line's
+       own format fact (T-25: a rules revision above this build's). A deal whose server-stamped fields are not versions
+       at all is `malformed`. The deal's build is not read. DERIVED, like every "not continued": no hold file, and a
+       rules pin keeps #1520's codes (`rules-version-newer` / `-older`, against the pool's own rules). The rest of T-25
+       -- a message kind this build does not know -- needs the whole log: the load's verdict says it. */
+    const deal = head.first ? dealInfoOf(head.first) : null;
+    let gameplay: ContinuationVerdict | null = null;
+    if (deal && deal.pin !== null && head.first) {
+      const setup = setupOf(head.first.payload);
+      const identity = gameIdentityOfDeal(setup);
+      const log: FormatFact = identity.kind === "dealt" ? dealFormatOf(setup) : "current";
+      gameplay = (deps.gameplayVerdict ?? ((facts: GameIdentityFacts, format?: FormatFact) => localContinuationVerdict(facts, { legacyLogs: "refuse" }, format)))(identity, log);
+    }
+    const pin = deal?.pin ?? null;
+    const notContinued = (verdict: Exclude<ContinuationVerdict, { readonly kind: "continues" }>): DiscoveredGame => {
+      if (verdict.kind === "not-continued" && verdict.why === "rules-not-supported" && pin !== null) {
+        const newest = Math.max(...(deps.rulesSupported ?? SUPPORTED_RULES_ENGINE_VERSIONS));
+        const code: DiscoveryCode = pin > newest ? "rules-version-newer" : "rules-version-older";
+        return { gameId, cls: "incompatible", code, detail: `dealt under rules-engine version ${pin}`, record, logBytes: head.size };
+      }
+      return { gameId, cls: "incompatible", code: verdict.why as DiscoveryCode, detail: verdict.detail, record, logBytes: head.size };
+    };
+    /* A deal whose HISTORY this pool does not read at all (another hosted protocol, a newer or an older build's
+       format) is never judged by this pool's reading of it: the record-against-deal checks below would read it under
+       this pool's meaning, and a hold concluded from a misreading would freeze the game for the pool that continues it
+       (`HISTORY_NOT_READ_HERE`). Derived; nothing is written. */
+    if (gameplay !== null && gameplay.kind !== "continues" && historyNotReadHere(gameplay)) return notContinued(gameplay);
+    /* 5. The record against the deal (`reconcile.ts`, tier 1): a disagreement the first line already proves is held. */
     const verdict = reconcileHead(record, { present: head.present, first: head.first });
     if (verdict.kind === "hold") return holdIt(gameId, verdict.code, verdict.detail, record, head.size);
     const base = classOfRecord(record, deps.now());
-    const deal = head.first ? dealInfoOf(head.first) : null;
-    /* An unsupported pin is FAIL-CLOSED from the deal alone: nothing later in the log can make it playable here. (The
-       load may still find the file damaged and hold it instead -- both refuse everything.) Checked BEFORE the archive
-       mark (review E1): lifecycle tooling never acts on a game this build cannot interpret, archived or not. */
-    if (deal && deal.pin !== null) {
-      const incompatible = pinCompatibility(deal.pin);
-      if (incompatible !== null) {
-        return { gameId, cls: "incompatible", code: incompatible, detail: `dealt under rules-engine version ${deal.pin}`, record, logBytes: head.size };
-      }
-    }
+    /* A pin (or a hosted protocol, or a deal) this pool does not continue is FAIL-CLOSED from the deal alone: nothing
+       later in the log can make it playable here. (The load may still find the file damaged and hold it instead --
+       both refuse everything.) Checked BEFORE the archive mark (review E1): lifecycle tooling never acts on a game
+       this build cannot interpret, archived or not. */
+    if (gameplay !== null && gameplay.kind !== "continues") return notContinued(gameplay);
     /* `archived_at` is record-owned (set only by this lifecycle, on a reconciled record) and an archived game is served
        to nobody -- every reader is told it is gone -- so it needs nothing more from its log. */
     if (base === "archived") return plain(gameId, base, record, head.size);
-    /* 5. TWO STAGES (`lifecycle.ts`): only a table whose log is known to be EMPTY is classified from its record here --
+    /* 6. TWO STAGES (`lifecycle.ts`): only a table whose log is known to be EMPTY is classified from its record here --
        there is no history for the record to disagree with (a record that claims one was held above). Everything else
        -- a deal on the first line, a first line that does not parse, a log this store cannot peek at -- needs facts
        from the whole log, so it is `unreconciled` until its first load: the record's claim is noted, never believed. */
     if (headKnown && !head.present) return plain(gameId, base, record, head.size);
-    const pinned = deal && deal.build !== null && deal.build !== deps.build ? `; dealt on build "${deal.build}", this server is "${deps.build}" (read-only once reconciled, #1252)` : "";
+    /* LIVE-4 (L4-2): the dealing build is noted for the operator as HISTORY (a forensic replay's image); it no longer
+       makes a game read-only (#1252 is retired: continuation follows the deal's rules pin and hosted protocol). */
+    const pinned = deal && deal.build !== null && deal.build !== deps.build ? `; dealt on build "${deal.build}", this server is "${deps.build}" (diagnostic only)` : "";
     if (!headKnown) return unreconciled(gameId, "log-head-unknown", `this store cannot read a log's head; the record says ${base}`, record, head.size);
     if (head.first === undefined || deal === null) return unreconciled(gameId, "log-head-unreadable", `the log has ${head.size} bytes and its first line is not a whole deal (the load scans it); the record says ${base}`, record, head.size);
     if (verdict.kind === "repair") return unreconciled(gameId, "needs-repair", `the record lags its log's deal: ${verdict.fields.join(", ")}${pinned}`, record, head.size);

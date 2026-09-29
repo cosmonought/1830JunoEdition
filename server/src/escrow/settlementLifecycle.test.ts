@@ -33,13 +33,18 @@ import { createFileFinancialGameStore, createMemoryFinancialGameStore, type Fina
 import {
   currentMoneyContinuation,
   moneyContinuationVerdict,
-  continuationPolicyOf,
   THIS_DEPLOYMENT,
   type MoneyContinuationIdentity,
+  type MoneyIndexEntry,
 } from "./moneyContinuation";
-import { isFinancialGameRecord, missingRecordPlaceholder, moneyActionPolicy, newFinancialRecord, POST_DEAL_REFUSAL, transitionFinancial, type FinancialGameRecord } from "./moneyLifecycle";
+import { isFinancialGameRecord, missingRecordPlaceholder, moneyActionPolicy, newFinancialRecord, POST_DEAL_REFUSAL, transitionFinancial, type FinancialDeploymentPin, type FinancialGameRecord } from "./moneyLifecycle";
 import { createSettlementCoordinator, type SettlementCoordinator } from "./settlementCoordinator";
 import { prepareTerminalEvidence, serverPrefixReplay, type PrefixReplay } from "./settlementEvidence";
+/* LIVE-4 (L4-2): the canonical continuation wiring the room host gives every session. */
+import { createContinuationWiring } from "../continuationWiring";
+import { thisDeploymentCapability } from "../deploymentCapability";
+import { PIN } from "./escrow3bSupport";
+import type { GameRecord } from "../rooms/gameRecord";
 
 quietConsole();
 
@@ -73,8 +78,8 @@ const graftedReplay =
 
 const sealAt = (entries: readonly ServerLogEntry[]): TerminalSeal => sealOf(entries, true) as TerminalSeal;
 
-function inProgress(gameId: string, continuation: MoneyContinuationIdentity = currentMoneyContinuation()): FinancialGameRecord {
-  const created = newFinancialRecord(gameId, continuation, T0);
+function inProgress(gameId: string, continuation: MoneyContinuationIdentity = currentMoneyContinuation(), deployment: FinancialDeploymentPin | null = null): FinancialGameRecord {
+  const created = newFinancialRecord(gameId, continuation, T0, deployment);
   const dealt = transitionFinancial(created, { kind: "dealt", at: T0 + 1 });
   assert.equal(dealt.kind, "moved");
   return (dealt as { next: FinancialGameRecord }).next;
@@ -329,7 +334,9 @@ describe("ESCROW-3A §4, §6: the settlement coordinator converges on one durabl
     assert.ok(isFinancialGameRecord(placeholder));
     assert.equal(isFinancialGameRecord({ ...placeholder, hold: { ...placeholder.hold, code: "replay-failed" } }), false, "no continuation is readable only on the placeholder");
     assert.equal(c.continuationOf(ID), undefined);
-    assert.equal(continuationPolicyOf((id) => c.continuationOf(id)).continues(ID, "another-build"), false, "the #1252 pin stands for it");
+    /* LIVE-4 (L4-2): the index says what it is -- the held placeholder -- and the canonical verdict never continues a
+       game on its account (ESCROW-3A's build-keyed policy, which said "no" only across builds, is retired). */
+    assert.deepEqual(c.factsOf(ID), { kind: "placeholder" }, "the index knows the placeholder as such: nothing continues on its account");
     assert.equal(transitionFinancial(placeholder, { kind: "operator-release", at: T0 + 5, note: "looks fine", dealt: true }).kind, "refused");
     announce(c, history(3), true, ID);
     await c.drain();
@@ -489,7 +496,10 @@ describe("ESCROW-3A §6: through the room host -- a crash before the intent, a r
           holds: createFileHoldStore(dir, quiet),
           ops: createMemoryOpsRecorder(),
           faults,
-          ...(coordinator ? { settlement: coordinator, moneyContinuation: continuationPolicyOf((id) => coordinator.continuationOf(id)) } : {}),
+          /* LIVE-4 (L4-2): this pool serves the game's escrow (the fixture deployment), and -- with the coordinator --
+             the settlement index supplies the game's money facts, which every rebuild of its session judges. */
+          capability: thisDeploymentCapability([PIN]),
+          ...(coordinator ? { settlement: coordinator, moneyFacts: coordinator } : {}),
         };
         const booted = await startServer(over);
         await booted.server.lifecycle.ready;
@@ -507,7 +517,9 @@ describe("ESCROW-3A §6: through the room host -- a crash before the intent, a r
       let booted = await bootWith(null);
       const { gameId } = await openGame(booted.port, ALICE, [BOB]);
       financial.add(gameId);
-      await seedFinancial(createFileFinancialGameStore(dir, quiet), inProgress(gameId));
+      /* LIVE-4 (L4-2): a financial-protocol-3 record is bound to its deployment from creation (`createMoneyGame`); the
+         canonical verdict reads one without a pin as malformed, so this record carries the fixture pin. */
+      await seedFinancial(createFileFinancialGameStore(dir, quiet), inProgress(gameId, currentMoneyContinuation(), PIN));
       targets.set(gameId, 3);
       const alice = await Client.open(booted.port, ALICE);
       const bob = await Client.open(booted.port, BOB);
@@ -586,27 +598,73 @@ describe("ESCROW-3A §8: a funded game continues across builds only under a comp
     assert.equal((moneyContinuationVerdict(current, { ...THIS_DEPLOYMENT, supportedRules: [12], certifiedRules: [10, 11, 12], hostedProtocol: 2 }) as { why: string }).why, "rules-not-supported");
   });
 
-  test("the RoomSession: a game dealt on another build is refused unless the policy continues it -- and then it plays", () => {
-    const dealtElsewhere = storedLog(0).map((entry) => {
-      const payload = JSON.parse(entry.payload) as { SetupGame?: Record<string, unknown> };
-      return payload.SetupGame ? { ...entry, payload: JSON.stringify({ SetupGame: { ...payload.SetupGame, build: "an-older-build" } }) } : entry;
-    });
-    for (const continues of [false, true]) {
-      const session = probeSession("continuation");
-      (session as unknown as { options: { continuesDealtBuild?: (b: string) => boolean } }).options.continuesDealtBuild = () => continues;
-      session.restore(dealtElsewhere);
-      const answer = session.submit({ actor: ALICE, build: BUILD, msg: BUY as never, baseIndex: session.nextIndex - 1, submissionId: `cont-${continues}` });
-      assert.equal(answer.kind, continues ? "applied" : "refused", `continues=${continues}`);
-      if (!continues) assert.match(String((answer as { reason?: string }).reason), /dealt on build "an-older-build"/);
+  /* LIVE-4 (L4-2): ESCROW-3A's build-keyed seam (`continuesDealtBuild` / `continuationPolicyOf`) was asked only for a
+     game dealt on ANOTHER build. Its successor is the canonical verdict over the settlement index's money facts, asked
+     at every rebuild on EVERY build -- the two tests below replace the two that pinned the old seam. */
+  test("LIVE-4 (L4-2): the RoomSession judges a funded game's money facts on every build -- continued where its identity and escrow are served, not continued (derived, nothing appended) where they are not", () => {
+    const ID = "g_1111111111111111111111111w";
+    const current = currentMoneyContinuation();
+    const OTHER_CONTRACT = "juno1qg5ega6dykkxc307y25pecuufrjkxkaggkkxh7nad0vhyhtuhw3sqaa3c5";
+    const dealtOn = (build: string) =>
+      storedLog(0).map((entry) => {
+        const payload = JSON.parse(entry.payload) as { SetupGame?: Record<string, unknown> };
+        return payload.SetupGame ? { ...entry, payload: JSON.stringify({ SetupGame: { ...payload.SetupGame, build } }) } : entry;
+      });
+    const cases: Array<[string, MoneyIndexEntry | undefined, string | null]> = [
+      ["its identity and its escrow are this pool's", { kind: "record", mci: current, deployment: PIN }, null],
+      ["another financial protocol", { kind: "record", mci: { ...current, financial_protocol: 7 }, deployment: PIN }, "financial-protocol"],
+      ["its escrow is a contract this pool does not serve", { kind: "record", mci: current, deployment: { ...PIN, contract_address: OTHER_CONTRACT } }, "deployment-unavailable"],
+      ["its money identity names a hosted protocol this pool does not read", { kind: "record", mci: { ...current, hosted_protocol: 2 }, deployment: PIN }, "hosted-protocol"],
+      ["the held placeholder", { kind: "placeholder" }, "malformed"],
+      ["no financial record at all", undefined, "conflict/financial-record-missing"],
+    ];
+    for (const build of [BUILD, "an-older-build"]) {
+      for (const [label, facts, why] of cases) {
+        const wiring = createContinuationWiring({
+          capability: thisDeploymentCapability([PIN]),
+          policy: { legacyLogs: "refuse" },
+          moneyFacts: { factsOf: (gameId) => (gameId === ID ? facts : undefined), refresh: async () => undefined },
+          recordOf: () => ({ money: { format: "money-terms" } }) as unknown as GameRecord,
+          now: () => Date.now(),
+        });
+        const session = probeSession(`cont-${label}`, wiring.sessionFor(ID));
+        session.restore(dealtOn(build));
+        const answer = session.submit({ actor: ALICE, build: BUILD, msg: BUY as never, baseIndex: session.nextIndex - 1, submissionId: `cont-${label}` });
+        if (why === null) {
+          assert.equal(answer.kind, "applied", `${build}: ${label}`);
+          continue;
+        }
+        assert.deepEqual([answer.kind, (answer as { why?: string }).why], ["incompatible", why], `${build}: ${label}`);
+        assert.equal(session.entries.length, 1, `${build}: ${label} -- nothing appended`);
+        assert.equal(session.incompatible?.why, why, `${build}: ${label} -- the session itself is held (derived)`);
+      }
     }
   });
 
-  test("the policy continues exactly the games whose stored identity is compatible (none, today)", () => {
-    const stored = new Map<string, MoneyContinuationIdentity>([
-      ["g_a", currentMoneyContinuation()],
-      ["g_b", { ...currentMoneyContinuation(), financial_protocol: 7 }],
-    ]);
-    const policy = continuationPolicyOf((id) => stored.get(id));
-    assert.deepEqual([policy.continues("g_a", "x"), policy.continues("g_b", "x"), policy.continues("g_none", "x")], [true, false, false]);
+  test("LIVE-4 (L4-2): the settlement coordinator is the money facts' index -- identity and pin, the placeholder, an unreadable record; `refresh` reads a new record in", async () => {
+    const store = createMemoryFinancialGameStore();
+    const bound = newFinancialRecord("g_bound", currentMoneyContinuation(), T0, PIN);
+    const unbound = newFinancialRecord("g_unbound", { ...currentMoneyContinuation(), financial_protocol: 7 }, T0);
+    assert.equal((await store.create(bound)).outcome.kind, "committed");
+    assert.equal((await store.create(unbound)).outcome.kind, "committed");
+    store.records.set("g_broken", "unreadable");
+    const c = coordinatorOver(store);
+    assert.equal(c.factsOf("g_bound"), undefined, "nothing is known before the load");
+    await c.load();
+    assert.deepEqual(c.factsOf("g_bound"), { kind: "record", mci: currentMoneyContinuation(), deployment: PIN });
+    assert.deepEqual(c.factsOf("g_unbound"), { kind: "record", mci: { ...currentMoneyContinuation(), financial_protocol: 7 }, deployment: null });
+    assert.equal(c.factsOf("g_broken")?.kind, "unreadable");
+    assert.equal(c.factsOf("g_none"), undefined);
+    /* A money table created after the load (the escrow service writes its record first): unknown until refreshed. */
+    assert.equal((await store.create(newFinancialRecord("g_new", currentMoneyContinuation(), T0, PIN))).outcome.kind, "committed");
+    assert.equal(c.factsOf("g_new"), undefined);
+    await c.refresh("g_new");
+    assert.deepEqual(c.factsOf("g_new"), { kind: "record", mci: currentMoneyContinuation(), deployment: PIN });
+    /* A record already known keeps what was read of it when a later read fails (identity and pin are write-once). */
+    store.records.set("g_new", "unreadable");
+    await c.refresh("g_new");
+    assert.equal(c.factsOf("g_new")?.kind, "record");
+    /* The index only reads: no record was written by any of it. */
+    assert.equal(store.writes.count, 3);
   });
 });

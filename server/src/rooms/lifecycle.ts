@@ -39,10 +39,13 @@
 //   archived       `archived_at` is set: gone to every reader; the offline tool may move it to `archive/` later
 //   held           a DURABLE HOLD (holdStore.ts): the durable sources disagree or cannot be read; nothing is served
 //                  from the log, nothing changes, and only an operator's verified release lifts it
-//   incompatible   this build cannot interpret the game (its deal's rules-engine pin, or a record schema newer than
-//                  this build): no history, no move -- derived from durable facts on every load, so a restart of the
-//                  same build finds it again; it lifts only under a build that supports the exact pin
-//   read-only      dealt on another server build (#1252): history is readable, every move is refused
+//   incompatible   this pool does not continue the game (LIVE-4: the canonical continuation verdict -- its deal's
+//                  rules pin or hosted protocol, a deal it cannot read, a money table whose escrow it does not serve --
+//                  or a record schema newer than this build; or its serving decision, e.g. a drain past its deadline):
+//                  no history, no move -- derived from durable facts on every load (and by the serving review), so a
+//                  restart finds it again; never a hold file. It lifts on a pool that continues it
+//   read-only      NEVER PRODUCED since LIVE-4 (L4-2). It was #1252's "dealt on another server build"; a build no
+//                  longer decides continuation. Kept in the vocabulary so an older status reader stays tolerant
 //   unavailable    RUNTIME only: the store could not be read just now, or holds a write only a restart can settle
 //   attention      material with no player behind it that an operator should look at (a log with no record, a hold
 //                  file with no game) -- never served, never deleted
@@ -140,7 +143,8 @@ export const HOLD_CODES: readonly HoldCode[] = Object.freeze([
   "replay-failed",
 ]);
 
-/** Why this build cannot interpret a game (derived; never a hold file). */
+/** Why this build cannot interpret a game's rules pin or record (derived; never a hold file). LIVE-4 (L4-2): every
+ *  other reason a pool does not continue a game is the continuation verdict's own `why` (`discovery.ts`). */
 export type IncompatibleCode = "rules-version-older" | "rules-version-newer" | "record-schema-newer";
 
 /* ==================================================================
@@ -161,8 +165,9 @@ export const RECONCILING_SENTENCE = "The game server is still bringing this game
 /** A game that has ended: every move but the room-close marker is refused. */
 export const GAME_OVER_SENTENCE = "This game is over. Nothing more can be played in it.";
 
-/** LIVE-2F/3D (C4-05): a room change on a game this server cannot continue (an unsupported rules pin, or a deal made
- *  on another build) -- the game is kept exactly as it was. */
+/** LIVE-2F/3D (C4-05): a room change on a game this server cannot continue -- the game is kept exactly as it was.
+ *  LIVE-4 (L4-2): "cannot continue" is the continuation verdict (or the serving decision); a deal made on another
+ *  build is no longer a reason. */
 export const FROZEN_GAME_SENTENCE = "This game cannot be continued on this server, so nothing about its table can be changed here.";
 
 /** Why a table is gone, by what ended it -- `gone` answers carry these. */

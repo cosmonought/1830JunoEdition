@@ -8,8 +8,8 @@
 //
 //   the CLIENT BUILD      `CLIENT_BUILD_ID` / `--build`: a deploy of the UI. Answered by `build-skew` (#1206),
 //                         which stops two different builds from talking.
-//   the DEAL BUILD        `SetupGame.build`: the build a room was dealt on (#1252). Checked in `submit`, after
-//                         the room was already rebuilt -- it stops further moves, not reinterpretation.
+//   the DEAL BUILD        `SetupGame.build`: the build a room was dealt on (#1252). LIVE-4 (L4-2): history only --
+//                         a forensic replay's image; nothing refuses on it (the #1252 pin is retired).
 //   the RULES VERSION     `SetupGame.rules_engine_version`: what the log MEANS. Stamped by the server, read
 //                         before the first entry is applied, and the one that decides whether a rebuild may
 //                         happen at all.
@@ -408,21 +408,21 @@ describe("a legacy log carries no pin and is not read as current (#1520, test 8)
 });
 
 describe("the build is not the rules version (#1520, tests 9-10)", () => {
-  it("9. build skew and the deal-build pin still answer their own cases, and neither is `incompatible`", () => {
+  it("9. build skew still answers the client's case; a server restarted on another build with the same rules CONTINUES the room (LIVE-4 L4-2)", () => {
     const played = playedRoom();
-    const first = played.state.player_addresses[0];
-    // Client on a different build: build-skew, before anything -- including this boundary.
-    expect(submit(played, { actor: first, build: "some-other-ui-build", msg: BUY_LOWEST }).kind).toBe("build-skew");
-    // Server restarted on a different build, same rules version: the room IS rebuilt (the log means the
-    // same thing), and it is the deal-build pin (#1252) that then refuses further moves -- a refusal, not a hold.
+    const second = played.state.player_addresses[1];
+    // Client on a different build: build-skew, before anything -- the legacy wire's check (client protocol 0) stays.
+    expect(submit(played, { actor: second, build: "some-other-ui-build", msg: BUY_LOWEST }).kind).toBe("build-skew");
+    // Server restarted on a different build, same rules version: the room IS rebuilt (the log means the same thing)
+    // -- and, with #1252 retired, it is PLAYED there: the dealing build is history, and nothing refuses on it.
     const counting = countingProviders();
     const upgraded = session("build-two", played.entries, counting.providers);
     expect(upgraded.incompatible).toBeNull();
     expect(counting.count()).toBe(played.entries.length);
-    const refused = upgraded.submit({ actor: first, build: "build-two", msg: BUY_LOWEST, baseIndex: upgraded.nextIndex - 1 });
-    expect(refused.kind).toBe("refused");
-    expect((refused as { reason: string }).reason).toContain(`dealt on build "${BUILD}"`);
-    expect(upgraded.entries).toHaveLength(played.entries.length);
+    const answer = upgraded.submit({ actor: second, build: "build-two", msg: BUY_LOWEST, baseIndex: upgraded.nextIndex - 1 });
+    expect(answer.kind).toBe("applied");
+    expect(upgraded.entries).toHaveLength(played.entries.length + 1);
+    expect(setupPayloadOf(upgraded.entries).build).toBe(BUILD); // the dealing build, kept as history
   });
 
   it("10. a UI build difference alone changes neither the pin nor the board it rebuilds", () => {

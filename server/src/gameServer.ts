@@ -59,7 +59,13 @@ import { GAME_ID_PATTERN, seatOf, type GameRecord } from "./rooms/gameRecord";
 import { isMaintenanceHold } from "./rooms/committedView";
 import { createMemoryHoldStore, HoldUnreadableError, makeHold, type HoldStore } from "./rooms/holdStore";
 import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILING_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE, type SettlementLifecycle } from "./rooms/lifecycle";
-import { NO_MONEY_CONTINUATION, type MoneyContinuationPolicy } from "./escrow/moneyContinuation";
+import { NO_MONEY_FACTS, type MoneyContinuationFacts } from "./escrow/moneyContinuation";
+/* LIVE-4 (L4-2): this pool's capability and the continuation answers every game's session is given. */
+import { thisDeploymentCapability } from "./deploymentCapability";
+import { createContinuationWiring, type ContinuationWiring } from "./continuationWiring";
+import type { DeploymentCapability } from "../../frontend/src/gameEngine/compat/deploymentCapability";
+import type { ContinuationVerdict, PoolServingState } from "../../frontend/src/gameEngine/compat/continuationVerdict";
+import { historyNotReadHere } from "../../frontend/src/gameEngine/compat/sessionContinuation";
 import { createMoneyLimiter, handleMoneyHttp } from "./escrow/moneyHttpApi";
 import type { MoneyTables } from "./escrow/moneyTables";
 import type { EscrowGameplaySeam } from "./rooms/roomHost";
@@ -242,9 +248,21 @@ export interface GameServerOptions {
   ops?: OpsRecorder;
   /** LIVE-3C: the terminal seam ESCROW-3 plugs into (`rooms/lifecycle.ts`). No-money when absent. */
   settlement?: SettlementLifecycle;
-  /** ESCROW-3A (brief §8): which funded games this deployment may continue across builds (`escrow/moneyContinuation.ts`).
-   *  Absent: none -- every game dealt on another build stays read-only (#1252). */
-  moneyContinuation?: MoneyContinuationPolicy;
+  /** LIVE-4 (L4-2): THIS POOL'S DEPLOYMENT CAPABILITY, built once at startup (`start.ts`: `thisDeploymentCapability` over
+   *  the configured Juno deployment, or none). Every game's continuation verdict, dealing identity and discovery line is
+   *  judged against it; no build id enters it. Absent: this build's capability serving no escrow deployment -- no money
+   *  game is continued then. */
+  capability?: DeploymentCapability;
+  /** LIVE-4 (L4-2): the settlement index's money facts (`escrow/settlementCoordinator.ts`), which the verdict judges
+   *  for every money table at every rebuild -- replacing ESCROW-3A's build-keyed `moneyContinuation` policy (#1252's
+   *  waiver). Absent: no financial record is known, so a money table reads as MISSING and is never continued (fail
+   *  closed). */
+  moneyFacts?: MoneyContinuationFacts;
+  /** LIVE-4 (L4-2): this pool's serving state (`serveDecision`). Absent: primary -- every continued game is served,
+   *  with no deadline. LIVE-6 supplies draining pools; tests use it to drive the session half of T-24. */
+  pool?: () => PoolServingState;
+  /** LIVE-4 (L4-2): a DRAINING pool's view of the current primary's own verdict for a game (LIVE-6). */
+  primaryVerdict?: (gameId: string) => ContinuationVerdict | null;
   /** ESCROW-3B: the escrow service's gameplay seam (checkpoints) and the frozen-roster fact (`escrow/escrowService.ts`).
    *  Absent: no money game can exist here. */
   escrow?: EscrowGameplaySeam;
@@ -354,6 +372,10 @@ export function createGameServer(options: GameServerOptions): {
     /** ESCROW-3A (brief §6): the money games the index knows, their records, and a game's ordinary load. */
     financialGameIds: RoomHost["financialGameIds"];
     financialRecords: RoomHost["financialRecords"];
+    /** LIVE-4 (L4-2): this pool's capability (built once), its continuation answers, and the serving review (T-24). */
+    capability: DeploymentCapability;
+    continuation: ContinuationWiring;
+    reviewServing(): Promise<number>;
     loadGame(gameId: string): Promise<void>;
   };
 } {
@@ -430,12 +452,30 @@ export function createGameServer(options: GameServerOptions): {
      (a new tag says "restarted" the way `s58` said "did not"). */
   const processTag = Date.now().toString(36);
 
-  /** A room's session at the seed, nothing applied: what a game is loaded into. ESCROW-3A: a FUNDED game whose stored
-   *  continuation identity this deployment is compatible with may be continued across builds; nothing else. */
-  const moneyContinuation = options.moneyContinuation ?? NO_MONEY_CONTINUATION;
+  /* ==================================================================
+      LIVE-4 (L4-2): THIS POOL'S CAPABILITY, BUILT ONCE, AND THE ANSWERS EVERY SESSION IS GIVEN
+     ==================================================================
+     The capability is this pool's name and its whole semantic reach (`compatibilityKey` has no build id in it); it is
+     validated here, once, so a descriptor this build could not canonicalize stops the start instead of failing inside
+     a game's rebuild. Every session asks the canonical verdict through it -- at every rebuild, unconditionally -- with
+     the game's money facts from the settlement index; nothing here reads a build. */
+  const continuation: ContinuationWiring = createContinuationWiring({
+    capability: options.capability ?? thisDeploymentCapability([]),
+    policy: { legacyLogs: options.legacyLogs ?? "refuse" },
+    moneyFacts: options.moneyFacts ?? NO_MONEY_FACTS,
+    /* The record as this server last committed it: whether a table is a money table is its record's (write-once). */
+    recordOf: (gameId) => roomHost?.recordOf(gameId) ?? null,
+    ...(options.pool !== undefined ? { pool: options.pool } : {}),
+    ...(options.primaryVerdict !== undefined ? { primaryVerdict: options.primaryVerdict } : {}),
+    now: identityNow,
+  });
+
+  /** A room's session at the seed, nothing applied: what a game is loaded into. LIVE-4 (L4-2): with this pool's
+   *  continuation answers for that game -- its verdict (asked at every rebuild), its dealing identity and its serving
+   *  decision. (ESCROW-3A's `continuesDealtBuild`, asked only across builds, is gone.) */
   const newRoomSession = (gameId: string | null = null): RoomSession =>
     new RoomSession({
-      continuesDealtBuild: gameId === null ? undefined : (dealt) => moneyContinuation.continues(gameId, dealt),
+      ...(gameId === null ? {} : { continuation: continuation.sessionFor(gameId) }),
       providers: sandboxReplayProviders(),
       seed: {
         state: withEmptyRoster(sandboxScenarioState(DEFAULT_SANDBOX_SCENARIO, 0, "default")),
@@ -461,19 +501,19 @@ export function createGameServer(options: GameServerOptions): {
     console.log(
       `  restored ${code}: ${stored.length} entries from the store, log hash ${logHash(stored).slice(0, 16)}… (#1251)`,
     );
-    /* #1252: said once here, and again in every refusal -- a room this server cannot continue is a room
-       somebody will try to continue. */
+    /* LIVE-4 (L4-2): THE DEALING BUILD IS HISTORY, SAID AS SUCH. #1252 refused to continue a room dealt on another
+       build; the continuation verdict decides now (below), from the deal's semantic identity. The build is still
+       named -- it is which image a forensic replay would fetch -- and nothing compares it. */
     const dealt = session.dealtBuild();
     if (dealt !== null && dealt !== options.build) {
       // eslint-disable-next-line no-console
-      console.warn(
-        `  ${code} was dealt on build "${dealt}"; this server is "${options.build}" and will refuse to continue it (#1252)`,
-      );
+      console.log(`  ${code} was dealt on build "${dealt}"; this server is "${options.build}" (diagnostic only: continuation follows the game's rules and hosted protocol)`);
     }
-    /* #1520: A HELD ROOM, SAID ONCE HERE. `restore` did not interpret a single entry: the deal names a
-       rules-engine version this server does not carry (or names none -- a legacy log, which this server
-       refuses rather than guesses at). The log on disk is exactly as it was found; every hello and every
-       submit on this room is answered `incompatible` until a server with the pinned version loads it. */
+    /* #1520: A HELD ROOM, SAID ONCE HERE. `restore` did not interpret a single entry: this pool's continuation verdict
+       (LIVE-4) does not continue the game -- a rules pin or hosted protocol this pool does not carry, a deal it cannot
+       read, a legacy log it refuses, a money table whose escrow it does not serve. The log on disk is exactly as it was
+       found, nothing was written, and every hello and submit on this room is answered `incompatible` (with `why`)
+       until a pool that continues it loads it. */
     const held = session.incompatible;
     if (held === null && session.replayCompatibility().kind === "legacy") {
       // eslint-disable-next-line no-console
@@ -484,11 +524,12 @@ export function createGameServer(options: GameServerOptions): {
       );
     }
     if (held !== null) {
-      const pinned = held.compatibility.kind === "incompatible" ? String(held.compatibility.version) : "none (legacy)";
+      const pinned = held.compatibility.kind === "incompatible" || held.compatibility.kind === "compatible" ? String(held.compatibility.version) : "none (legacy)";
+      const why = held.decision !== null ? held.decision.detail : held.verdict.kind === "continues" ? "" : held.verdict.detail;
       // eslint-disable-next-line no-console
       console.warn(
-        `  ${code} is HELD, not rebuilt: pinned rules-engine version ${pinned}, this server supports ` +
-          `[${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}] (#1520). ${held.reason}`,
+        `  ${code} is HELD, not rebuilt -- NOT CONTINUED here (${held.why}): ${why}. Pinned rules-engine version ${pinned}; ` +
+          `this server supports [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]. Derived: nothing was written (#1520, LIVE-4).`,
       );
     }
   };
@@ -590,6 +631,8 @@ export function createGameServer(options: GameServerOptions): {
         onEntriesPublished: (entries) => options.onAppend?.(code, entries),
         /* LIVE-2C: a committed record, published: indexes, re-authorized room views, the public list. */
         onRecordPublished: (record) => roomHost?.onRecordPublished(record as GameRecord),
+        /* LIVE-4 (L4-2): the actor stopped serving the game (its serving review, or a rebuild it had not published). */
+        onNotServed: (gameId, source) => roomHost?.onNotServed(gameId, source),
         now: () => Date.now(),
         // eslint-disable-next-line no-console
         warn: (line) => console.warn(line),
@@ -603,6 +646,11 @@ export function createGameServer(options: GameServerOptions): {
            checked then. */
         onStoreAdopted: () => roomHost?.onStoreAdopted(code),
         reconcileAtLoad: ({ record, entries, session }) => {
+          /* LIVE-4 (L4-2): a game whose HISTORY this pool does not read at all (another hosted protocol, a newer or an
+             older build's format) is not judged by this pool's reading of it -- a hold concluded from a misreading
+             would freeze the game for the pool that continues it. Derived; nothing is written
+             (`HISTORY_NOT_READ_HERE`). Every other game is reconciled exactly as before. */
+          if (historyNotReadHere(session.incompatible?.verdict)) return { kind: "ok" };
           const verdict = reconcileLoaded(record, { entries, board: session.incompatible === null ? boardFacts(code, session) : null });
           return verdict.kind === "hold" ? verdict : { kind: "ok" };
         },
@@ -987,7 +1035,10 @@ export function createGameServer(options: GameServerOptions): {
     },
     ops,
     settlement: options.settlement ?? NO_MONEY_SETTLEMENT,
-    moneyContinuation,
+    /* LIVE-4 (L4-2): this pool's continuation answers (discovery reads the gameplay half from a log's first line), and
+       the settlement index the room host refreshes a new money table into before its first session exists. */
+    continuation,
+    moneyFacts: options.moneyFacts ?? NO_MONEY_FACTS,
     ...(options.escrow !== undefined ? { escrow: options.escrow } : {}),
     ...(options.money !== undefined ? { money: options.money } : {}),
     boardFacts,
@@ -1642,6 +1693,10 @@ export function createGameServer(options: GameServerOptions): {
       loadGame: async (gameId: string) => {
         await host.actorFor(gameId);
       },
+      /* LIVE-4 (L4-2): this pool's capability (built once) and the serving review the sweep runs (tests drive it). */
+      capability: continuation.capability,
+      continuation,
+      reviewServing: () => host.reviewServing(),
     },
     socketCounts: () => ({
       total: contexts.size,

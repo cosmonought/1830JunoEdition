@@ -45,8 +45,8 @@ import { sealedPrefix, SealedPrefixError, type RetentionClass, type SettlementLi
 import type { OpsRecorder } from "../persistence/opsRecorder";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import { FinancialRecordUnreadableError, type FinancialGameStore } from "./financialGameStore";
-import { moneyContinuationVerdict, THIS_DEPLOYMENT, type DeploymentContinuation, type MoneyContinuationIdentity } from "./moneyContinuation";
-import { missingRecordPlaceholder, transitionFinancial, type FinancialEvent, type FinancialGameRecord } from "./moneyLifecycle";
+import { moneyContinuationVerdict, THIS_DEPLOYMENT, type DeploymentContinuation, type MoneyContinuationFacts, type MoneyContinuationIdentity, type MoneyIndexEntry } from "./moneyContinuation";
+import { missingRecordPlaceholder, transitionFinancial, type FinancialDeploymentPin, type FinancialEvent, type FinancialGameRecord } from "./moneyLifecycle";
 import { prepareTerminalEvidence, type PrefixReplay } from "./settlementEvidence";
 
 export interface SettlementCoordinatorDeps {
@@ -85,7 +85,13 @@ export interface StartupReconciliation {
   readonly failed: ReadonlyArray<{ readonly gameId: string; readonly reason: string }>;
 }
 
-export interface SettlementCoordinator extends SettlementLifecycle {
+/* LIVE-4 (L4-2): THE COORDINATOR IS THE MONEY FACTS' INDEX (`MoneyContinuationFacts`). It already read every financial
+   record at startup and kept each game's continuation identity current through every write; it now also keeps the
+   write-once deployment pin, whether the record is ESCROW-3A's held placeholder, and which records it could not read --
+   read-only facts the canonical verdict judges at every rebuild of a game's session. `refresh` reads one record again
+   (a money table's record is written by the escrow service before its GameRecord exists). No transition, hold or write
+   is added here: what a verdict concludes is written by L4-4, not by this index. */
+export interface SettlementCoordinator extends SettlementLifecycle, MoneyContinuationFacts {
   /** Run every queued job now; resolves when the queue is empty or every remaining job is waiting on a retry. */
   drain(): Promise<void>;
   /** Jobs queued or waiting to retry. */
@@ -123,6 +129,10 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
   /** Queued jobs by `${gameId}#${log_len}`: repeated announcements of one terminal history are ONE job. */
   const jobs = new Map<string, Job>();
   const continuations = new Map<string, MoneyContinuationIdentity>();
+  /* LIVE-4 (L4-2): the rest of the money facts (see `SettlementCoordinator`). */
+  const deployments = new Map<string, FinancialDeploymentPin | null>();
+  const placeholders = new Set<string>();
+  const unreadable = new Map<string, string>();
   let timer: { cancel(): void; due: number } | null = null;
   let draining: Promise<void> | null = null;
   let stopped = false;
@@ -155,11 +165,20 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
     scheduled.cancel = () => handle.cancel();
   }
 
-  /** The stored continuation identity -- none for a placeholder (unknown: nothing continues on its account). */
+  /** The stored continuation identity -- none for a placeholder (unknown: nothing continues on its account). LIVE-4
+   *  (L4-2): and the rest of its money facts. */
   const remember = (record: FinancialGameRecord) => {
     known.add(record.game_id);
-    if (record.continuation === null) continuations.delete(record.game_id);
-    else continuations.set(record.game_id, record.continuation);
+    unreadable.delete(record.game_id);
+    if (record.continuation === null) {
+      continuations.delete(record.game_id);
+      deployments.delete(record.game_id);
+      placeholders.add(record.game_id);
+    } else {
+      continuations.set(record.game_id, record.continuation);
+      deployments.set(record.game_id, record.binding?.deployment ?? null);
+      placeholders.delete(record.game_id);
+    }
   };
 
   /** One transition, written by compare-and-swap; a stale view re-decides from the stored record (3 attempts). */
@@ -180,6 +199,10 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
         if (outcome.outcome.kind !== "committed") return { ok: false, reason: outcome.outcome.detail };
         if (outcome.existing === null) {
           continuations.delete(gameId);
+          /* LIVE-4 (L4-2): the index says so too (it is exactly what `remember` would note of the placeholder). */
+          deployments.delete(gameId);
+          unreadable.delete(gameId);
+          placeholders.add(gameId);
           stats.held += 1;
           deps.ops?.audit("settlement.held", { game_id: gameId, code: "financial-record-missing" });
           deps.warn(`  settlement: ${gameId} is a money game with no financial record; a held placeholder was written -- restore the original record`);
@@ -321,6 +344,25 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
     drain,
     pending: () => jobs.size,
     continuationOf: (gameId) => continuations.get(gameId),
+    /* LIVE-4 (L4-2): the money facts, as the canonical verdict reads them (`MoneyContinuationFacts`). */
+    factsOf(gameId): MoneyIndexEntry | undefined {
+      const broken = unreadable.get(gameId);
+      if (broken !== undefined) return { kind: "unreadable", detail: broken };
+      if (placeholders.has(gameId)) return { kind: "placeholder" };
+      const mci = continuations.get(gameId);
+      return mci === undefined ? undefined : { kind: "record", mci, deployment: deployments.get(gameId) ?? null };
+    },
+    async refresh(gameId) {
+      try {
+        const record = await deps.store.load(gameId);
+        if (record !== null) remember(record);
+      } catch (error) {
+        /* A record already known keeps what was read of it (its identity and pin are write-once; a read that failed
+           just now changes neither). One never read is kept as a fact, not guessed at: unreadable, so no pool
+           continues it (derived). */
+        if (!continuations.has(gameId) && !placeholders.has(gameId)) unreadable.set(gameId, error instanceof Error ? error.message : String(error));
+      }
+    },
     async load() {
       for (const gameId of await deps.store.list()) {
         known.add(gameId);
@@ -328,6 +370,8 @@ export function createSettlementCoordinator(deps: SettlementCoordinatorDeps): Se
           const record = await deps.store.load(gameId);
           if (record !== null) remember(record);
         } catch (error) {
+          /* LIVE-4 (L4-2): noted for the verdict too (the game's financial artifact is unreadable: never continued). */
+          unreadable.set(gameId, error instanceof Error ? error.message : String(error));
           deps.warn(`  settlement: the financial record of ${gameId} cannot be read -- ${error instanceof Error ? error.message : String(error)}; it is not continued anywhere`);
         }
       }

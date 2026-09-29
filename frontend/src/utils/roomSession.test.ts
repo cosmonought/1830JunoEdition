@@ -216,7 +216,10 @@ describe("restoring a room", () => {
   });
 });
 
-describe("a room is pinned to the reducer that dealt it (#1252)", () => {
+/* LIVE-4 (L4-2): #1252 pinned a room to the BUILD that dealt it. That pin is retired -- a room continues by its deal's
+   semantic identity (rules pin, hosted protocol), judged by the continuation verdict at every rebuild -- and the deal's
+   build is kept as history only. The cases below are #1252's, restated for what now holds. */
+describe("a room continues by its deal's semantic identity, never by the build that dealt it (#1252 retired)", () => {
   const dealNaming = (build: string | undefined) =>
     ({
       SetupGame: {
@@ -239,9 +242,9 @@ describe("a room is pinned to the reducer that dealt it (#1252)", () => {
     expect(pinned.dealtBuild()).toBe(BUILD);
   });
 
-  it("refuses every move on a server whose build is not the one that dealt", () => {
-    /* The stored log says one build; the process that restored it is another. Client and server agree with
-       each other (no skew), so without this both would apply new rules to an old game. */
+  it("continues on a server whose build is not the one that dealt: the rules pin is the same, so the move is applied", () => {
+    /* The stored log says one build; the process that restored it is another. Its rules pin and (absent) hosted protocol
+       are this engine's, so the verdict continues it and the move lands -- #1252 refused it. */
     const dealtOn = session();
     submit(dealtOn, { msg: dealNaming(BUILD) });
     const first = dealtOn.state.player_addresses[0];
@@ -259,18 +262,20 @@ describe("a room is pinned to the reducer that dealt it (#1252)", () => {
       mintId: () => "x",
     });
     upgraded.restore(dealtOn.entries);
-    const refused = upgraded.submit({ actor: first, build: "build-two", msg: BUY_LOWEST, baseIndex: upgraded.nextIndex - 1 });
-    expect(refused.kind).toBe("refused");
-    expect((refused as { reason: string }).reason).toContain(`dealt on build "${BUILD}"`);
-    expect((refused as { reason: string }).reason).toContain('this server is build "build-two"');
-    expect(upgraded.entries).toHaveLength(dealtOn.entries.length);
+    expect(upgraded.incompatible).toBeNull();
+    expect(upgraded.continuationVerdict).toEqual({ kind: "continues" });
+    const applied = upgraded.submit({ actor: first, build: "build-two", msg: BUY_LOWEST, baseIndex: upgraded.nextIndex - 1 });
+    expect(applied.kind).toBe("applied");
+    expect(upgraded.entries).toHaveLength(dealtOn.entries.length + 1);
+    expect(upgraded.dealtBuild()).toBe(BUILD); // history, kept
   });
 
-  it("refuses a deal that names a build other than the server's own", () => {
+  it("a deal naming another build is dealt, and its build kept as history -- it decides nothing", () => {
     const room = session();
-    const refused = submit(room, { msg: dealNaming("somebody-elses-build") });
-    expect(refused.kind).toBe("refused");
-    expect(room.entries).toHaveLength(0);
+    const applied = submit(room, { msg: dealNaming("somebody-elses-build") });
+    expect(applied.kind).toBe("applied");
+    expect(room.entries).toHaveLength(1);
+    expect(room.dealtBuild()).toBe("somebody-elses-build");
   });
 
   it("a reverted deal pins nothing", () => {

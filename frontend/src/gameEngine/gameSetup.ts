@@ -230,11 +230,11 @@ export interface SetupGameMsg {
      *  reason the shuffled order does -- every client deals from this message, and a table's house rules held
      *  only by the host would give the other clients a different game from the same log. */
     variants?: Partial<GameVariants>;
-    /** Design note #1252: THE REDUCER THAT DEALT THIS GAME. The build id of the client that dealt -- which the
-     *  server has already checked is its own (#1206) -- recorded in the log so the room is pinned to it: a
-     *  server on any other build refuses to continue the game rather than settle it under different rules
-     *  (`RoomSession` #1252). Optional per #232: a log written before this field is unpinned, not pinned to
-     *  nothing. */
+    /** Design note #1252: the build id of the server that dealt this game. LIVE-4 (L4-2): HISTORICAL AND DIAGNOSTIC
+     *  ONLY -- which image to fetch for a forensic replay, which build a divergence report names. It used to pin the
+     *  room to that build (a server on any other build refused to continue it); continuation now follows the deal's
+     *  semantic identity (`rules_engine_version`, `hosted_protocol`), and no decision compares this string. Optional
+     *  per #232. */
     build?: string;
     /** Design note #1520: THE RULES ENGINE THIS GAME IS A PROGRAM FOR. Written by the SERVER over whatever
      *  the client sent (`RoomSession.submit`), read before any rebuild (`replayCompatibility`), kept for the
@@ -242,6 +242,12 @@ export interface SetupGameMsg {
      *  revision the reducer branches on). Absent on every log written before this note: legacy, never
      *  "current". */
     rules_engine_version?: number;
+    /** LIVE-4 (L4-2): THE HOSTED PROTOCOL THIS GAME'S HISTORY IS WRITTEN IN (`protocolVersions.ts`) -- with the rules
+     *  pin, the game's continuation identity (`compat/continuationIdentity.ts`). Stamped by the SERVER over any client
+     *  value: the dealing pool's highest hosted protocol for a no-money table, the money identity's for a money table.
+     *  ABSENT on every deal written before LIVE-4, and absent means 1. The reducer never reads it: an extra deal field
+     *  moves no board and no digest, so it is no rules bump. */
+    hosted_protocol?: number;
   };
 }
 

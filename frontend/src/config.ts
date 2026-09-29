@@ -115,6 +115,10 @@ export const GAME_SERVER_URL = readOptional(process.env.REACT_APP_GAME_SERVER_UR
 
 /** What build this client is, for #1206's skew check.
  *
+ *  LIVE-4: DIAGNOSTIC for a current (protocol-1) bundle -- announced as `cb` and printed, never compared; the server
+ *  judges a protocol-1 tab by its announced protocol and rules (`gameEngine/compat/clientCompatibility.ts`). The skew
+ *  check below applies only to the legacy protocol-0 wire, until that wire is retired.
+ *
  *  THE DIGEST COVERS THE WHOLE STATE, so a client one field behind the server disagrees about something that
  *  is not a divergence at all. Without a build on the wire that arrives as a phantom desync -- the exact
  *  thing this migration exists to stop people chasing.

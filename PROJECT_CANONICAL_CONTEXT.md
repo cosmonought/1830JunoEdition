@@ -3,7 +3,9 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-09-28, by the integrated closure of ESCROW-4 (`031593e`), Phase 6.5-B (`ddf4bc8`) and APP-TEST-0A (`467498e`): the owner broad gate was GREEN at `467498e`, and one closure commit on top hands the settlement band the live board and closes the bookkeeping (§A). ESCROW-4 is the player-facing Juno escrow path (Keplr wallet proof, funding, Start, consent keys and the settlement UX; financial protocol 3; money GameRecords `record_schema 2`). It builds on ESCROW-JOIN (`6f05c80`), ESCROW-3B (`5298d95`, owner-certified), ESCROW-3A (`900aec3`), DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
+**Last updated:** 2026-09-29, by LIVE-4 L4-6 (the tooling / diagnostics / runbooks / canonical-documentation pass on the combined LIVE-4 integration `6da8a1f`; §A "LIVE-4"). The canonical description of LIVE-4's compatibility identities is now [`LIVE4_COMPATIBILITY_MODEL.md`](LIVE4_COMPATIBILITY_MODEL.md).
+
+**Previously updated:** 2026-09-28, by the integrated closure of ESCROW-4 (`031593e`), Phase 6.5-B (`ddf4bc8`) and APP-TEST-0A (`467498e`): the owner broad gate was GREEN at `467498e`, and one closure commit on top hands the settlement band the live board and closes the bookkeeping (§A). ESCROW-4 is the player-facing Juno escrow path (Keplr wallet proof, funding, Start, consent keys and the settlement UX; financial protocol 3; money GameRecords `record_schema 2`). It builds on ESCROW-JOIN (`6f05c80`), ESCROW-3B (`5298d95`, owner-certified), ESCROW-3A (`900aec3`), DA-8 (`81fd037`), the prune (`68f6baf`) and ROADMAP 3.2 (`4f3baa3`).
 
 **Where the documents live.** They are in two places:
 
@@ -89,6 +91,19 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 - **The closure:** both `SettlementBand` mounts are handed `liveState`, so a Dispute's evidence is the live board's hash, never a scrubbed round's (6.5-B review I-4; behavioural regression `components/money/settlementEvidenceBoard.test.tsx`). The 6.5-B items are closed in the backlog (Part C's Phase 6.5 register; U-19 and U-24 resolved). I-1 stays deferred (minor). Two route findings are pre-registered as blockers before any substantive G5 / LPF route playtest (Part B S6-15, S6-16). Record: Project `claude/INTEGRATED_CLOSURE_ESCROW4_65B_APP0A_2026-09-28.md`.
 - **Unchanged:** rules 11; settlement `[10, 11]`; hosted protocol 1; financial protocol 3. No server, contract or engine file changed.
 
+**LIVE-4 — compatibility and continuation: INTEGRATED and corpus-gate certified; L4-6 complete; L4-7 next**
+- **Real closure baseline:** `9c81bbd` (the integrated closure above; the real checkout's `main`).
+- **The combined LIVE-4 integration / hardening:** `6da8a1f17b17cd44d31666f00de1b5480ce65754` (tree `2a488d52…`), on `9c81bbd`: the five slices L4-1 (the canonical compatibility model) → L4-2 (no-money continuation) → L4-3 (client compatibility, protocol 1) → L4-4 (money continuation) → L4-5 (cryptographic room seed), plus one integration commit. **Certified by the owner/corpus gate** (the integration report's addendum: 539/539 frontend suites, 10,311 tests, with the corpus; server 619 = 618 + the FI-22 environment skip; smoke; `scan-v10` CLEAN; the build at the 49 + 1 warning baseline). Not pushed; it lives in the sibling clone `1830Juno-L4-INT`. Record: Project `claude/LIVE4_INTEGRATION_HARDENING_2026-09-28.md`.
+- **What the integration closed:** a complete newer-format log record is preserved byte for byte and is derived incompatibility (`not-continued/newer-format`), never torn-tail corruption (N-3), while genuine torn-tail recovery is preserved; the session and the money seams share one verification-grade chain-facts runtime, so they give the same answer on every money fact; one deployment capability per process (`start.ts`: `serving.capability`); protocol-1 client compatibility with the legacy wire untouched; the hosted revenue seed is a `crypto.randomInt` draw. Evidence stays in the integration report.
+- **The identities** (rules / hosted / financial / client) and the two directions of compatibility (can this process continue this game; can this client talk to this process) are described once, in [`LIVE4_COMPATIBILITY_MODEL.md`](LIVE4_COMPATIBILITY_MODEL.md). **The build id is diagnostic**: no continuation or protocol-1 client decision compares builds; only the legacy protocol-0 wire keeps its exact compare (§D 5b).
+- **L4-6 (this pass): tooling, diagnostics, runbooks, docs.** The process's compatibility key is printed in the startup banner and `ops/status.json` (with `client_answers`); `gamesDoctor compat` prints the canonical descriptor; `gamesDoctor continuation` gives every stored game's canonical verdict through production's own wiring (read-only; money games keep L4-4's owner/deployment/format view); every inspection command reads through a write-refusing file system. The runbooks' build-equality language is corrected; the LIVE-5 edge requirement (preserve the `/gs*` query string: `cp`, `cr`, `cb`) and the `/gs/api/*` decision (no HTTP client announcement in LIVE-4) are recorded. No protocol or version moved. Record: Project `claude/LIVE4_L4_6_TOOLING_DOCS_2026-09-29.md`.
+- **L4-7 = the final independent LIVE-4 certification** (its open list: the integration report §13). **LIVE-5 follows LIVE-4's closure.**
+- **Versions (unchanged by LIVE-4's later slices and by L4-6):** rules 11 (reads [11]); settlement `[10, 11]`; hosted protocol 1; financial protocol 3; client protocol 1, accepted `[0, 1]`; money GameRecords `record_schema 2`. Keys: `dc1-68c4b829b3a20e63f3e55cde` (no escrow), `dc1-4308649847947d1d12ccdd41` (the fixture pin).
+
+**Route engine / v12: a separate gameplay program, not part of LIVE-4**
+- The route / autopath hardening (the route-engine certification preflight's findings, including the pre-registered blockers **S6-15** — hosted ingress judging routes on the STANDARD board — and **S6-16** — an H12 fork reversal the search demonstrates but authority rejects) and the **v12** rules batch are their own gameplay program. They are not folded into LIVE-4 and change no LIVE-4 identity. Record: Project `claude/ROUTE_ENGINE_EXTRACTION_CERTIFICATION_PREFLIGHT_2026-09-28.md`.
+- **Substantive human gameplay (the G5 / LPF route playtests, the full G1/G2 games) waits for that route hardening.** The **reduced S0** human UI/evidence smoke remains available now.
+
 **GNOLAND-1 / 1.1: complete; further Gno work parked**
 - The chain-neutral escrow backend interface and the Juno regression oracle landed as `b804150`.
 - Juno is the only production backend. The Gno codec is a draft whose byte methods throw `NOT_IMPLEMENTED`.
@@ -122,13 +137,18 @@ Phases 1, 2, 2.5, 3A, 3B, ESCROW-JOIN and ESCROW-4: COMPLETE
 
 Gno is parked.
 
-**Next pass: LIVE-4** (Phase 4, per the roadmap; the owner's brief sets its scope). ESCROW-4 left the tree as the LIVE-4
+**LIVE-4 status (2026-09-29):** integrated at `6da8a1f` (corpus-gate certified) and tooled / documented by L4-6.
+**Next pass: L4-7, the final independent LIVE-4 certification** (the owner's brief sets its scope; its inputs are the
+integration report §13 and the L4-6 report). **LIVE-5 follows LIVE-4's closure.** The route-engine / v12 program is
+separate (§A).
+
+*Historical (the LIVE-4 entry conditions):* ESCROW-4 left the tree as the LIVE-4
 compatibility preflight asked (financial protocol 3; money GameRecords schema 2; hosted protocol 1; additive RoomView money
 fields; creation refusing uncertified rules). Its inputs:
 - Project `claude/LIVE4_COMPATIBILITY_CONTINUATION_PREFLIGHT_2026-09-28.md` (the design);
 - Project `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md` §20 (the LIVE-4 compatibility handoff: what is durable financial v3, what is wire-only) and §19 (the LIVE-5 / Junox handoff: KMS clients for the relayer, settlement and admission keys; shared stores for the money layer's in-memory state).
 
-**Beside LIVE-4 (human evidence, Phase 6.5).** A **reduced S0** is the next lightweight human UI/evidence smoke, on the closed tree; the full **G1/G2** games stay later, as the substantive human certification. Backlog **S6-15 / S6-16** (two route findings, pre-registered) must be fixed before any substantive G5 / LPF route playtest. **v12** (6.5-E) and the **App decomposition** (Phase 7) remain later. Rules stay **11** and settlement **`[10, 11]`**.
+**Beside LIVE-4 (human evidence, Phase 6.5).** A **reduced S0** is the lightweight human UI/evidence smoke, available on the closed tree; the full **G1/G2** games stay later, as the substantive human certification. Backlog **S6-15 / S6-16** (two route findings, pre-registered) must be fixed before any substantive G5 / LPF route playtest. **v12** (6.5-E) and the **App decomposition** (Phase 7) remain later. Rules stay **11** and settlement **`[10, 11]`**.
 
 **ESCROW-4's owner ruling stands (OD-4-2):** relaying an already-valid CONSENT or ANNUL signature needs no `hasSensitiveAuth` (the consent-key signature is the authority); creating, replacing or moving the consent/signing key needs sensitive re-authentication plus the contract-required wallet authorization.
 
@@ -161,7 +181,8 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 | `VARIANT_CERT_DELAYED_AUCTION_AUDIT_2026-09-25.md` | The current Delayed Auction audit, at revision 11 (the DA closure record in the repo) |
 | `VISUAL_FLOURISH_BACKLOG.md` | The visual-polish backlog. Only for the UX backlog/polish phase |
 | `contracts/escrow/README.md`, `contracts/escrow/gasbench/README.md` | The escrow contract and its gas harness |
-| `PLAYTEST_TRANSPORT.md`, `PLAYTEST_NGROK.md`, `start-playtest.ps1` | Runbooks for hosted playtests |
+| `LIVE4_COMPATIBILITY_MODEL.md` | **LIVE-4's compatibility model:** the four identities (rules, hosted, financial, client), the two directions of compatibility, the operator surfaces (banner, `ops/status.json`, `gamesDoctor compat` / `continuation`), the newer-format log runbook, the LIVE-5 edge requirement and the `/gs/api/*` decision |
+| `PLAYTEST_TRANSPORT.md`, `PLAYTEST_NGROK.md`, `start-playtest.ps1` | Runbooks for hosted playtests (build ids are diagnostic for current browsers; LIVE-4) |
 | `archive/claude-history/PROJECT_DOCS_MANIFEST.md` | Classifies every Project doc as current, reference or historical |
 | `1830 FULL RULES with variants.pdf` | The rulebook. Rulebook authority is described in the backlog header |
 
@@ -169,6 +190,10 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 
 | Topic | Document |
 |---|---|
+| LIVE-4 L4-6: tooling, diagnostics, runbooks and canonical docs (the handoff to L4-7) | `claude/LIVE4_L4_6_TOOLING_DOCS_2026-09-29.md` |
+| LIVE-4 integration and hardening: the combined tree `6da8a1f`, N-3, the one capability / one runtime merge, the review, the corpus-gate addendum, the L4-7 list (§13) | `claude/LIVE4_INTEGRATION_HARDENING_2026-09-28.md` |
+| LIVE-4 slices: L4-1 canonical model; L4-2 no-money continuation; L4-3 client compatibility; L4-4 money continuation; L4-5 crypto seed | `claude/LIVE4_L4_1_CANONICAL_MODEL_2026-09-28.md`, `claude/LIVE4_L4_2_NO_MONEY_CONTINUATION_2026-09-28.md`, `claude/LIVE4_L4_3_CLIENT_COMPATIBILITY_2026-09-28.md`, `claude/LIVE4_L4_4_MONEY_CONTINUATION_2026-09-28.md`, `claude/LIVE4_L4_5_CRYPTO_RNG_2026-09-28.md` |
+| Route engine: extraction / certification preflight (the separate gameplay program; S6-15 / S6-16) | `claude/ROUTE_ENGINE_EXTRACTION_CERTIFICATION_PREFLIGHT_2026-09-28.md` |
 | ESCROW-4: the player-facing Juno escrow path (wallet proof, admission wiring, W-13, R-J1, funding, Start, consent keys, relays, settlement UX); §20 LIVE-4 compatibility handoff; §19 LIVE-5/Junox handoff | `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md` |
 | The integrated gate and closure: ESCROW-4 + 6.5-B + APP-TEST-0A (tested HEAD `467498e`, the totals, the dispute-evidence fix, the closed register) | `claude/INTEGRATED_GATE_ESCROW4_65B_APP0A_2026-09-28.md` + `claude/INTEGRATED_CLOSURE_ESCROW4_65B_APP0A_2026-09-28.md` |
 | Phase 6.5, the pre-refactor functional playtest: the preflight (S0 and G1–G5, the checklist), the corrected register, the fix-before pass | `claude/PHASE6_5_FUNCTIONAL_PLAYTEST_PREFLIGHT_2026-09-28.md`, `claude/PHASE6_5A_CORRECTIONS_H01_2026-09-28.md`, `claude/PHASE6_5B_FIX_BEFORE_2026-09-28.md` |
@@ -205,6 +230,10 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 Every other Project report is **historical**; see the manifest.
 
 ### C.3 LIVE-4 reading order
+
+**For L4-7 (the final LIVE-4 certification):** this file; `LIVE4_COMPATIBILITY_MODEL.md`; the L4-6 report; the
+integration report (§§3–5, §12, §13 and the addendum); then the slice reports only where a finding needs them. The
+list below is the order LIVE-4 started from, kept for provenance.
 
 1. This file, then `ROADMAP_3_2_REMAINING_WORK.md` (Phase 4).
 2. `LIVE4_COMPATIBILITY_CONTINUATION_PREFLIGHT` (the design).
@@ -254,6 +283,12 @@ Every other Project report is **historical**; see the manifest.
 - "Funded" is only ever the chain's (read by quorum when two or more endpoints are configured). A tx hash from a browser is a hint; the browser's own pending record never says "funded".
 - A seat is never reassigned. A deposit whose link ended is relinked (the same wallet, a fresh proof) or withdrawn; `leave` is only an unsubscribe.
 - Versions: `FINANCIAL_PROTOCOL_VERSION` 3; money GameRecords `record_schema: 2`, no-money records 1; the hosted protocol 1. A protocol-2 grant file is refused, never reinterpreted.
+
+**5b. Compatibility is semantic, never a build (LIVE-4).**
+- Whether a process continues a stored game is `continuationVerdict` over the game's semantic identity (rules pin, hosted protocol, money identity, deployment) against the process's one capability; whether a protocol-1 client may play is `clientVerdict` over its announced protocol and rules. **Neither reads a build id**, and the compatibility key contains none. Only the legacy protocol-0 wire keeps its exact build compare, until it is retired.
+- A derived "not continued" is written nowhere; only the owning pool writes a conflict's hold. Operator inspection writes nothing.
+- The edge in front of the game server must forward `/gs*` query strings unchanged (`cp`, `cr`, `cb`), or current clients read as legacy ones (LIVE-5).
+- The description: `LIVE4_COMPATIBILITY_MODEL.md`.
 
 **6. The blockchain is escrow only:** a vault, a notary and a settlement calculator.
 

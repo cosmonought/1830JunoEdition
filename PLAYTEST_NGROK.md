@@ -172,8 +172,21 @@ Expect:
 **Check the stamp.** Older than a fix you were told about means the server did not pick it up — `npm run
 build` again. This window is now busy, which is correct.
 
-`--build dev` must match `REACT_APP_BUILD_ID=dev` above; they are compared exactly and a mismatch is reported
-as build skew rather than as a desync, which is the whole point of it.
+`--build dev` names this server's build; keep it equal to `REACT_APP_BUILD_ID=dev` above so the two windows read
+alike, but it is **not** what decides whether a browser may play (LIVE-4):
+
+- **A current browser (client protocol 1)** announces its protocol, the rules engines it reads and its build on the
+  socket URL (`cp`, `cr`, `cb`). The server judges the protocol and the rules, never the build: a different
+  `REACT_APP_BUILD_ID` is printed as a diagnostic and play goes on. A browser that cannot read this server's rules is
+  asked to reload once (the client-update notice), not told "build skew".
+- **A legacy browser (protocol 0, a bundle from before LIVE-4)** announces nothing and keeps the old exact compare:
+  a mismatch is reported as build skew rather than as a desync.
+- **Stored games** continue by their deal's rules and hosted protocol (and a money game's identity and escrow
+  deployment), never by the build that dealt them.
+
+The banner's `compatibility key dc1-…` line is what this server actually serves; `npm run gamesDoctor -- compat`
+prints the same descriptor. The proxy must pass the socket URL's query string through untouched (Window 3's proxy
+does) — without `cp`/`cr`/`cb` a current browser is read as a legacy one.
 
 ### Window 3 — the proxy
 

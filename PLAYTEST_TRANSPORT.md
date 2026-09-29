@@ -257,7 +257,9 @@ Offer a private company or a train from one tab; answer from the other.
 
 When something is refused, read the message at the top.
 
-- **Right:** the server's own sentence — *"It is not your turn."*, a build mismatch, or *"The room had moved
+- **Right:** the server's own sentence — *"It is not your turn."*, an update notice ending *"Reload the page to continue."*
+  (the tab cannot read this server's protocol or this table's rules; a different build alone never refuses a current
+  tab, LIVE-4), or *"The room had moved
   on — this tab has caught up."*
 - **Wrong:** *"Could not reach the room — that action was not sent."* That generic line should now appear
   **only** when the socket is genuinely down. If you see it while the server window is happy, tell me — it

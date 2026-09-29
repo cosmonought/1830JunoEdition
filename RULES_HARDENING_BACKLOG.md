@@ -113,7 +113,7 @@ JUNO-3XD idx 255 `returned_trains: undefined → ["3"]` (nothing pins it).
 `rules_engine_version` stamped by the server into `SetupGame`; refused before replay when unsupported; legacy
 (unpinned) logs refused by default, admitted only under `--legacy-logs development-corpus`. Flagged consequence:
 the 8 rooms in `server/data/` are all legacy and are held by a default server. Left behind → S10-2 (`BUILD_ID`
-nominal), S10-3 (no historical reducer bundle — by design).
+nominal; LIVE-4: the build is diagnostic, see S10-2's outcome), S10-3 (no historical reducer bundle — by design).
 
 ### Stage 4.6 — interactive excess-train discard (`6d55b84`, #1530 / #1531), version 1 → 2
 `DiscardTrain` by the president, §6.6.1 order via `buildOperatingOrder`, derived `pendingTrainDiscards`, the
@@ -3380,7 +3380,7 @@ there is no follow-up task attached.
 >
 > | item | remaining work | destination | trigger / must happen before |
 > |---|---|---|---|
-> | S10-2 | a real per-deploy `BUILD_ID` in place of `"dev"` | **AWS / live multiplayer** | set up with the durable production deploy / build pipeline; before the deal-build pin is relied on for production multiplayer or money-game diagnostics |
+> | S10-2 | a real per-deploy `BUILD_ID` in place of `"dev"` | **AWS / live multiplayer** | set up with the durable production deploy / build pipeline; before the deal-build pin is relied on for production multiplayer or money-game diagnostics (LIVE-4: the deal-build pin is retired; the build is diagnostic only — S10-2 outcome) |
 > | S10-6 (A) | mine `src/tests.rs` for **auction-interrupt** cases | **Variant Certification — Delayed Auction** | a required input to that certification; do not wait for Phase 4 |
 > | S10-6 (B) | mine the remaining forced-purchase / other useful Rust cases | **Phase-4 Rust retirement preflight** | **must be done before `src/` / the Rust gameplay crate is deleted** |
 > | S10-7 | engine suites out of `frontend/src/utils/`; repo-root `shared/` package (CRA / Babel / tsconfig / `sourceScan`) | **Front-end / shared-engine architecture refactor** | together with the `App.tsx` / front-end breakup, when the move no longer causes needless churn; not a rules blocker |
@@ -3472,6 +3472,12 @@ real (Batch 3 §6, Batch 4.5 §1). `DEFERRED` (deployment).
 **Routing (post-Stage-10, 2026-09-23):** → **AWS / live multiplayer.** Implement a real per-deploy `BUILD_ID` when the durable production deploy / build
 pipeline is set up; it must exist before the deal-build pin is relied on for production multiplayer or money-game
 diagnostics. Not implemented here.
+**LIVE-4 outcome (L4-2 / L4-3; recorded by L4-6, 2026-09-29):** the deal-build pin is **retired** — a room continues
+by its deal's semantic identity (rules pin, hosted protocol, money identity and deployment), and a protocol-1 client is
+judged by its announced protocol and rules, never by build (`LIVE4_COMPATIBILITY_MODEL.md`). A real per-deploy
+`BUILD_ID` is still wanted, but only as **diagnostic** provenance (stamps, audit lines, the banner beside the
+compatibility key) and for the legacy protocol-0 wire's compare until that wire is retired; nothing will be "relied on"
+from it for continuation. Routing unchanged (AWS / live multiplayer).
 
 **S10-3. No historical reducer bundle exists by design:** a room pinned to an old version is held, never
 reinterpreted (#1520). `OWNER DECISION` — recorded (also D-9).

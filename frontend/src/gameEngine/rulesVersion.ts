@@ -20,6 +20,11 @@
 //   disagree about non-divergences) and "may this server continue this room" (the deal-build pin). It
 //   changes on every deployment, CSS-only ones included, and in practice it is `"dev"` on both sides -- so
 //   the pin has never held anything.
+//   LIVE-4 AMENDMENT: both answers above are now HISTORY for current software. A protocol-1 client is judged by
+//   its announced protocol and rules (`compat/clientCompatibility.ts`), never its build; only a legacy
+//   protocol-0 tab keeps the build-skew compare. A room continues by its deal's semantic identity
+//   (`compat/continuationVerdict.ts`); the deal's build is diagnostic (#1252's pin is retired, L4-2). The build
+//   is not part of the deployment's compatibility key.
 //
 //   RULES REVISION (`variants.rules`, #1443). A per-table switch the reducer BRANCHES ON (`sellBuySellInForce`)
 //   so that one reducer plays both the old and the new Stock Round. It is a house-rules field the client

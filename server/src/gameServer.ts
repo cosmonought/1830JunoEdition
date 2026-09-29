@@ -71,6 +71,7 @@ import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILI
 import { NO_MONEY_FACTS, type MoneyContinuationFacts } from "./escrow/moneyContinuation";
 /* LIVE-4 (L4-2): this pool's capability and the continuation answers every game's session is given. */
 import { thisDeploymentCapability } from "./deploymentCapability";
+import { compatibilityDescriptor } from "./compatibilityDescriptor";
 import { createContinuationWiring, type ContinuationWiring } from "./continuationWiring";
 import type { DeploymentCapability } from "../../frontend/src/gameEngine/compat/deploymentCapability";
 import type { ContinuationRuntime, ContinuationVerdict, PoolServingState } from "../../frontend/src/gameEngine/compat/continuationVerdict";
@@ -515,6 +516,9 @@ export function createGameServer(options: GameServerOptions): {
     ...(options.primaryVerdict !== undefined ? { primaryVerdict: options.primaryVerdict } : {}),
     now: identityNow,
   });
+  /* LIVE-4 (L4-6): the operator's view of that one capability (its key, its axes, the build as a diagnostic), made once:
+     the capability is immutable for the process, so the status snapshot repeats the same object. */
+  const compatibility = compatibilityDescriptor(continuation.capability, { build_id: options.build });
 
   /** A room's session at the seed, nothing applied: what a game is loaded into. LIVE-4 (L4-2): with this pool's
    *  continuation answers for that game -- its verdict (asked at every rebuild), its dealing identity and its serving
@@ -1271,6 +1275,14 @@ export function createGameServer(options: GameServerOptions): {
     statusExtras: () => ({
       store: { restart_required: counters.restartRequired, uncertain: counters.storeUncertain, held_corrupt: counters.heldCorrupt, held_durable: counters.heldDurable, timeouts: counters.storeTimeouts },
       actors: { resident: games.size },
+      /* LIVE-4 (L4-6): what compatibility identity this process is actually serving -- the key of the ONE capability
+         every session verdict, money seam and client verdict is judged against (`continuation.capability`), its axes,
+         and the build id as a diagnostic beside it (never an input to the key). Operator-facing only: nothing reads it
+         back and no game mechanic depends on it. */
+      compatibility,
+      /* LIVE-4 (L4-3 handoff): how often the client verdict answered a reload, a route (fail-closed before LIVE-6) or a
+         retired legacy wire. */
+      client_answers: { ...clientAnswers },
       ...(options.statusExtras ? options.statusExtras() : {}),
     }),
   });

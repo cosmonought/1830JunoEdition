@@ -96,13 +96,16 @@ import { createFileFinancialGameStore, FinancialRecordUnreadableError } from "..
 import { transitionFinancial, type FinancialGameRecord } from "../escrow/moneyLifecycle";
 import { createFileChainIntentStore, type ChainIntentRecord } from "../escrow/chainIntents";
 import { createFileWalletTicketStore } from "../escrow/walletTicketFileStore";
-import { classifiesArtifacts, createMoneyServing, moneyTermsKey, noMoneyServing, type MoneyServing, type MoneyServingDecision } from "../escrow/moneyServing";
+import { classifiesArtifacts, createMoneyServing, moneyTermsKey, noMoneyServing, servingCapability, type ArtifactClasses, type MoneyServing, type MoneyServingDecision } from "../escrow/moneyServing";
 import { readVerifiedChainFacts, type ChainFactsRead } from "../escrow/juno/chainFacts";
 import { parseJunoBackendConfig, pinOf } from "../escrow/juno/junoConfig";
 import { createJunoRest } from "../escrow/juno/junoRest";
-import { thisDeploymentCapability } from "../deploymentCapability";
+import { createContinuationWiring, type ContinuationWiring } from "../continuationWiring";
+import { compatibilityDescriptorText, operatorDescriptor, type CompatibilityDescriptor } from "../compatibilityDescriptor";
+import { createSettlementCoordinator, type SettlementCoordinator } from "../escrow/settlementCoordinator";
+import { listOrEmpty, readOnlyStoreFs } from "./readOnlyFs";
 import type { GameIdentityFacts } from "../../../frontend/src/gameEngine/compat/continuationIdentity";
-import type { FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
+import type { ContinuationVerdict, FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
 import { isGameMoneyTerms } from "../rooms/gameRecord";
 import { prepareTerminalEvidence, serverPrefixReplay } from "../escrow/settlementEvidence";
 import {
@@ -118,6 +121,8 @@ export const TOOL_BUILD = "gamesDoctor";
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const quiet = () => undefined;
+/** LIVE-4 (L4-6): every store an inspection opens reads through this -- writes refused, no directory made. */
+const READ_ONLY = readOnlyStoreFs();
 
 async function readOptional(file: string): Promise<Buffer | null> {
   try {
@@ -159,7 +164,7 @@ export async function verifyGame(dataDir: string, gameId: string, options: { bui
   if (!GAME_ID_PATTERN.test(gameId)) return fail("attention", "that is not a game id");
   let record: GameRecord | null;
   try {
-    record = await createFileRecordStore(dataDir, { warn: quiet }).load(gameId);
+    record = await createFileRecordStore(dataDir, { warn: quiet, fs: READ_ONLY }).load(gameId);
   } catch (error) {
     if (isStoreIncompatible(error)) return fail("incompatible", `the record is from a newer build: ${describe(error)}`);
     if (isStoreCorrupt(error)) return fail("held", `the record cannot be read: ${describe(error)}`);
@@ -187,8 +192,8 @@ export async function verifyGame(dataDir: string, gameId: string, options: { bui
   }
   /* A join code another live record also holds (§14.4 item 8). */
   if (record.join_code !== null && record.archived_at === null) {
-    const records = createFileRecordStore(dataDir, { warn: quiet });
-    for (const other of await records.list()) {
+    const records = createFileRecordStore(dataDir, { warn: quiet, fs: READ_ONLY });
+    for (const other of await listOrEmpty(() => records.list())) {
       if (other === gameId || other === options.ignoreDuplicateCodeWith) continue;
       const peer = await records.load(other).catch(() => null);
       if (peer !== null && peer.join_code === record.join_code && peer.archived_at === null && peer.status !== "cancelled" && peer.status !== "expired") {
@@ -279,17 +284,23 @@ export interface Inspection {
   readonly legacyFiles: number;
 }
 
-/** Every game classified from its files (read-only: no hold is written, no index repaired, nothing truncated). */
-export async function inspectData(dataDir: string, options: { deep?: boolean; now?: number } = {}): Promise<Inspection> {
+/** Every game classified from its files (read-only: no hold is written, no index repaired, nothing truncated -- every
+ *  store reads through `READ_ONLY`). LIVE-4 (L4-6): discovery is given the POOL'S gameplay verdict exactly as the room
+ *  host gives it (`continuation.gameplayVerdictOf` and the capability's `rules.supported`), over the configuration the
+ *  operator names (`serving`; default: this build serving no escrow) -- never a local approximation. */
+export async function inspectData(dataDir: string, options: { deep?: boolean; now?: number; serving?: MoneyServing } = {}): Promise<Inspection> {
   const now = options.now ?? Date.now();
-  const records = createFileRecordStore(dataDir, { warn: quiet });
+  const records = createFileRecordStore(dataDir, { warn: quiet, fs: READ_ONLY });
+  const wiring = toolWiring(options.serving ?? noMoneyServing(), NO_TOOL_MONEY_FACTS, () => null, now);
   /* Discovery's own pass, with every write turned into a no-op: a hold is reported, never written. */
   const report = await discoverGames({
-    records: { ...records, reconcileIndex: undefined, list: () => records.list(), load: (id) => records.load(id) },
-    logs: createFileLogStore(dataDir, { warn: quiet }),
+    records: { ...records, reconcileIndex: undefined, list: () => listOrEmpty(() => records.list()), load: (id) => records.load(id) },
+    logs: createFileLogStore(dataDir, { warn: quiet, fs: READ_ONLY }),
     holds: readOnlyHolds(dataDir),
     build: TOOL_BUILD,
     rulesEngineVersion: RULES_ENGINE_VERSION,
+    gameplayVerdict: wiring.gameplayVerdictOf,
+    rulesSupported: wiring.capability.rules.supported,
     now: () => now,
     warn: quiet,
     ops: { audit: quiet, status: quiet, flush: async () => undefined },
@@ -310,7 +321,7 @@ export async function inspectData(dataDir: string, options: { deep?: boolean; no
 
 /** The file hold store with its writes refused: `inspect` reports holds, never writes one. */
 function readOnlyHolds(dataDir: string) {
-  const holds = createFileHoldStore(dataDir, { warn: quiet });
+  const holds = createFileHoldStore(dataDir, { warn: quiet, fs: READ_ONLY });
   return {
     list: () => holds.list(),
     load: (id: string) => holds.load(id),
@@ -531,7 +542,13 @@ function intentView(intent: ChainIntentRecord): MoneyIntentView {
  *  verification-grade chain facts. */
 export async function moneyToolServing(dataDir: string, options: { readonly configPath?: string; readonly chain?: boolean } = {}): Promise<{ readonly serving: MoneyServing; readonly chain: ChainFactsRead | null }> {
   if (options.configPath === undefined) return { serving: noMoneyServing(), chain: null };
-  const raw = JSON.parse((await fs.readFile(path.resolve(options.configPath))).toString("utf8")) as unknown;
+  let text: string;
+  try {
+    text = (await fs.readFile(path.resolve(options.configPath))).toString("utf8");
+  } catch (error) {
+    throw new Error(`the escrow configuration ${options.configPath} cannot be read (${describe(error)})`);
+  }
+  const raw = JSON.parse(text) as unknown;
   let config: ReturnType<typeof parseJunoBackendConfig>;
   try {
     config = parseJunoBackendConfig(raw, { serverMode: "production", dataDir });
@@ -539,7 +556,9 @@ export async function moneyToolServing(dataDir: string, options: { readonly conf
     config = parseJunoBackendConfig(raw, { serverMode: "development", dataDir });
   }
   const pin = pinOf(config);
-  const serving = createMoneyServing({ capability: thisDeploymentCapability([pin]) });
+  /* LIVE-4 (L4-6): the escrow service's own constructor (`servingCapability([backend.pin])`), so the tool's key is the
+     key a server started with this configuration serves. */
+  const serving = createMoneyServing({ capability: servingCapability([pin]) });
   if (options.chain !== true) return { serving, chain: null };
   const rest = createJunoRest({ endpoints: config.endpoints, expectedChainId: config.chainId, allowInsecureLocalHttp: config.allowInsecureLocalHttp, timeoutMs: config.timeoutMs, maxResponseBytes: 256 * 1024, maxCodeBytes: 4 * 1024 * 1024 });
   const read = await readVerifiedChainFacts(pin, rest);
@@ -580,19 +599,18 @@ export async function moneyDecisionOnDisk(
   let record: FinancialGameRecord | null = null;
   let fin: FormatFact | "missing" = "current";
   try {
-    record = await createFileFinancialGameStore(dataDir, { warn: quiet }).load(gameId);
+    record = await createFileFinancialGameStore(dataDir, { warn: quiet, fs: READ_ONLY }).load(gameId);
     if (record === null) fin = "missing";
   } catch (error) {
     if (!(error instanceof FinancialRecordUnreadableError)) throw error;
     fin = error.format;
   }
-  let tickets: FormatFact | null = null;
-  let intents: FormatFact | null = null;
-  if (classifiesArtifacts(serving.capability, record)) {
-    tickets = await createFileWalletTicketStore(dataDir, { warn: quiet }).formatOf(gameId);
-    intents = await createFileChainIntentStore(dataDir, { warn: quiet }).formatOf(gameId);
-  }
-  const terms = fin === "missing" ? await moneyTermsOnDisk(dataDir, gameId) : null;
+  const classes = await artifactClassesOnDisk(dataDir, serving, gameId, record);
+  const tickets: FormatFact | null = classes.tickets ?? null;
+  const intents: FormatFact | null = classes.intents ?? null;
+  /* LIVE-4 (L4-6, review F2): the GameRecord's money terms name the owner whenever the financial record does not (missing
+     or unreadable) -- exactly the `ownerKey` the settlement coordinator's step -1 and the money routes pass. */
+  const terms = await moneyTermsOnDisk(dataDir, gameId);
   const decision = serving.decide({
     fin: fin === "missing" ? undefined : fin,
     record,
@@ -606,6 +624,17 @@ export async function moneyDecisionOnDisk(
   });
   /* A game with neither a financial record nor money terms is not a money game at all. */
   return { decision, record, fin, tickets, intents, moneyTable: fin !== "missing" || terms !== null };
+}
+
+/** LIVE-4 (L4-6): the ledger's and intents' classes beside a financial record, read-only -- the escrow service's
+ *  `artifactFormatsOf` over the file stores (only for a financial protocol this pool speaks; the intents' class is
+ *  `current` when the store has none to give), which is what `start.ts` hands the settlement coordinator. */
+export async function artifactClassesOnDisk(dataDir: string, serving: MoneyServing, gameId: string, record: FinancialGameRecord | null): Promise<ArtifactClasses> {
+  if (!classifiesArtifacts(serving.capability, record)) return {};
+  return Object.freeze({
+    tickets: await createFileWalletTicketStore(dataDir, { warn: quiet, fs: READ_ONLY }).formatOf(gameId),
+    intents: (await createFileChainIntentStore(dataDir, { warn: quiet, fs: READ_ONLY }).formatOf(gameId)) ?? "current",
+  });
 }
 
 /** Money GameRecords (record_schema 2) whose financial record does not exist: listed so the operator sees them. */
@@ -622,8 +651,8 @@ async function moneyRecordsWithoutFinancial(dataDir: string, known: ReadonlySet<
 
 export async function inspectMoney(dataDir: string, only?: string, options: { readonly serving?: MoneyServing; readonly chain?: ChainFactsRead | null } = {}): Promise<MoneyInspection> {
   const serving = options.serving ?? noMoneyServing();
-  const store = createFileFinancialGameStore(dataDir, { warn: quiet });
-  const intentStore = createFileChainIntentStore(dataDir, { warn: quiet });
+  const store = createFileFinancialGameStore(dataDir, { warn: quiet, fs: READ_ONLY });
+  const intentStore = createFileChainIntentStore(dataDir, { warn: quiet, fs: READ_ONLY });
   const listed = (await store.list()).sort();
   const ids = only !== undefined ? [only] : [...listed, ...(await moneyRecordsWithoutFinancial(dataDir, new Set(listed)))];
   const games: Array<MoneyInspection["games"][number]> = [];
@@ -778,6 +807,220 @@ export async function releaseMoneyHold(dataDir: string, gameId: string, note: st
 }
 
 /* ==================================================================
+    LIVE-4 (L4-6): THE CANONICAL CONTINUATION VERDICT OF EVERY STORED GAME, OFFLINE AND READ-ONLY
+   ==================================================================
+   The same pool `start.ts` assembles, built from the same modules over READ-ONLY stores: the money serving (the
+   capability of the configuration the operator names, and -- with `--chain` -- its verification-grade chain facts),
+   the settlement coordinator over the financial store (the money facts' index; only `load()` and `factsOf` are used:
+   no job, no sweep, no seal, no placeholder, and its store refuses every write anyway), and the continuation wiring
+   (`createContinuationWiring`) over that capability, runtime and index. Each game's verdict is `wiring.verdictOf` --
+   the question every session asks at every rebuild -- with the deal's identity and the log's format class read
+   exactly as the server's money seams read them (`dealIdentityOnDisk`, `logFormatOnDisk`: N-3's newer-format lines
+   and T-25's unknown kinds). Nothing here reimplements a rule; a money game's answer is also asked of the money seam
+   (`moneyDecisionOnDisk`) and the two are printed side by side: both are the canonical verdict, so their KIND must
+   agree; their reason may differ when several artifacts are unreadable (the money seam stops at an unreadable
+   financial record before reading the log). */
+
+/** No money index: every money GameRecord then reads as one whose financial record is missing (the wiring's own
+ *  fail-closed default). Discovery needs only the gameplay half, which never reads it. */
+const NO_TOOL_MONEY_FACTS = Object.freeze({ factsOf: () => undefined, refresh: async () => undefined });
+
+/** The continuation wiring as `gameServer.ts` builds it: this serving's capability and live runtime; the legacy-log
+ *  policy every production pool runs with (`refuse`); a primary pool (every pool is one until LIVE-6). */
+function toolWiring(
+  serving: MoneyServing,
+  moneyFacts: Parameters<typeof createContinuationWiring>[0]["moneyFacts"],
+  recordOf: (gameId: string) => Readonly<GameRecord> | null,
+  now: number,
+): ContinuationWiring {
+  return createContinuationWiring({ capability: serving.capability, runtime: serving.runtime(), policy: { legacyLogs: "refuse" }, moneyFacts, recordOf, now: () => now });
+}
+
+/** The tool's pool (see the section header). The caller stops the coordinator. */
+export async function toolPool(dataDir: string, serving: MoneyServing, now: number = Date.now()): Promise<{ readonly wiring: ContinuationWiring; readonly coordinator: SettlementCoordinator; readonly records: Map<string, GameRecord> }> {
+  const records = new Map<string, GameRecord>();
+  const coordinator = createSettlementCoordinator({
+    store: createFileFinancialGameStore(dataDir, { warn: quiet, fs: READ_ONLY }),
+    replay: serverPrefixReplay(TOOL_BUILD),
+    now: () => now,
+    warn: quiet,
+    serving,
+    readDeal: (gameId) => dealIdentityOnDisk(dataDir, gameId),
+    readLogFormat: (gameId) => logFormatOnDisk(dataDir, gameId),
+    artifactFormats: (gameId, record) => artifactClassesOnDisk(dataDir, serving, gameId, record),
+    /* No timer: the tool never queues a job. */
+    schedule: () => ({ cancel: () => undefined }),
+  });
+  await coordinator.load();
+  const wiring = toolWiring(serving, coordinator, (gameId) => records.get(gameId) ?? null, now);
+  return { wiring, coordinator, records };
+}
+
+/** The operator's word for one stored game's continuation: the canonical verdict's (`continues`,
+ *  `not-continued/<why>`, `conflict/<why>`), or why no verdict could be asked (an artifact class this build cannot
+ *  read, or a store fault). */
+export type ContinuationClass = "continues" | `not-continued/${string}` | `conflict/${string}` | "record-newer-format" | "record-malformed" | "no-record" | "store-fault";
+
+export interface StoredGameContinuation {
+  readonly gameId: string;
+  readonly money: boolean;
+  readonly class: ContinuationClass;
+  /** The canonical verdict (`wiring.verdictOf`); null when none could be asked (`class` says why). */
+  readonly verdict: { readonly kind: ContinuationVerdict["kind"]; readonly why: string | null; readonly detail: string | null } | null;
+  /** The artifacts' classes as read: the record's store class, the log's (`scanLog`: absent, clean, torn-tail, corrupt,
+   *  newer-format) and its format fact (`logFormatOnDisk`), and -- for a money game -- the financial record's, the
+   *  ledger's and the intents'. */
+  readonly artifacts: {
+    readonly record: "current" | "newer" | "corrupt" | "missing";
+    readonly log: GameVerification["logClassification"] | "unreadable";
+    readonly log_format: FormatFact | null;
+    readonly fin?: FormatFact | "missing" | "unknown";
+    readonly tickets?: FormatFact | null;
+    readonly intents?: FormatFact | null;
+  };
+  /** The deal as read from the log: dealt (rules / hosted), undealt, legacy or malformed. */
+  readonly deal: string | null;
+  /** A durable game hold (`games/holds/`), if one exists -- reported, never written or lifted here. */
+  readonly hold: string | null;
+  /** A damaged log (`corrupt`) is held by the server's load for `logDoctor`, whatever the verdict. */
+  readonly damaged_log: boolean;
+  /** What the server's own startup discovery concludes from the files (read-only here: `inspect`'s pass, over this
+   *  pool's gameplay verdict) -- a record-against-deal disagreement, say, is HELD there before any continuation
+   *  question is asked (an unpinned server deal is `rules-pin-mismatch`, #1520). `unreconciled` means only the load,
+   *  which replays the whole log, decides; the verdict above is the question it asks. */
+  readonly discovery: { readonly cls: GameClass; readonly code: string | null } | null;
+  /** L4-4's money view, for a money game: the money seam's own verdict over the same files, whether this
+   *  configuration owns the game (the only pool that may write its conflict hold), and the deployment it is bound to. */
+  readonly money_seam: {
+    readonly class: MoneyClass;
+    readonly owner: boolean;
+    readonly deployment: string | null;
+    /** The same KIND of answer (continues / not continued / conflict) as the session verdict -- what decides whether
+     *  anything is played or written. A defect if false. */
+    readonly agrees: boolean;
+    /** And the same reason. Not always so, and not a defect: with several unreadable artifacts the two seams can name a
+     *  different FIRST one (the money seam reads no log once its financial record is unreadable), both "not continued". */
+    readonly same_reason: boolean;
+  } | null;
+}
+
+export interface ContinuationInspection {
+  readonly compatibility: CompatibilityDescriptor;
+  readonly chain: ChainFactsRead | null;
+  readonly games: readonly StoredGameContinuation[];
+  readonly byClass: Readonly<Record<string, number>>;
+}
+
+const verdictClass = (verdict: ContinuationVerdict): ContinuationClass => (verdict.kind === "continues" ? "continues" : `${verdict.kind}/${verdict.why}`);
+const dealWords = (identity: GameIdentityFacts): string =>
+  identity.kind === "dealt" ? `dealt (rules ${identity.gci.rules_engine_version}, hosted ${identity.gci.hosted_protocol})` : identity.kind === "malformed" ? `malformed (${identity.detail.slice(0, 120)})` : identity.kind;
+
+/** Every stored game (its GameRecord, or its financial record) judged by the canonical continuation verdict, read-only. */
+export async function inspectContinuation(
+  dataDir: string,
+  options: { readonly serving?: MoneyServing; readonly chain?: ChainFactsRead | null; readonly only?: string; readonly now?: number; readonly diagnosticFlag?: string } = {},
+): Promise<ContinuationInspection> {
+  const serving = options.serving ?? noMoneyServing();
+  const now = options.now ?? Date.now();
+  /* The server's discovery over the same files and the same pool's gameplay verdict, read-only (`inspect`'s pass). */
+  const discovered = new Map((await inspectData(dataDir, { now, serving })).games.map((game) => [game.gameId, { cls: game.cls, code: game.code }] as const));
+  const { wiring, coordinator, records } = await toolPool(dataDir, serving, now);
+  try {
+    const recordStore = createFileRecordStore(dataDir, { warn: quiet, fs: READ_ONLY });
+    const holds = createFileHoldStore(dataDir, { warn: quiet, fs: READ_ONLY });
+    const recordIds = (await listOrEmpty(() => fs.readdir(path.join(dataDir, "games")))).filter((name) => name.endsWith(".json") && GAME_ID_PATTERN.test(name.slice(0, -5))).map((name) => name.slice(0, -5));
+    const financialIds = await createFileFinancialGameStore(dataDir, { warn: quiet, fs: READ_ONLY }).list();
+    /* Every stored game (review F3): a log or a hold with no record is listed too -- the server never serves it
+       (discovery: `orphan-log`), and it is said so rather than dropped. */
+    const logIds = (await listOrEmpty(() => fs.readdir(dataDir))).filter((name) => name.endsWith(".log.jsonl") && GAME_ID_PATTERN.test(name.slice(0, -".log.jsonl".length))).map((name) => name.slice(0, -".log.jsonl".length));
+    const holdIds = await holds.list();
+    const ids = options.only !== undefined ? [options.only] : [...new Set([...recordIds, ...financialIds, ...logIds, ...holdIds])].sort();
+    /* Every record first, so the wiring knows which games are money tables (a record's money terms) before any verdict. */
+    const recordClass = new Map<string, StoredGameContinuation["artifacts"]["record"]>();
+    for (const gameId of ids) {
+      try {
+        const record = await recordStore.load(gameId);
+        if (record === null) recordClass.set(gameId, "missing");
+        else {
+          records.set(gameId, record);
+          recordClass.set(gameId, "current");
+        }
+      } catch (error) {
+        if (isStoreIncompatible(error)) recordClass.set(gameId, "newer");
+        else if (isStoreCorrupt(error)) recordClass.set(gameId, "corrupt");
+        else throw error;
+      }
+    }
+    const games: StoredGameContinuation[] = [];
+    for (const gameId of ids) {
+      const record = recordClass.get(gameId) ?? "missing";
+      const hold = await holds.load(gameId).then((held) => (held === null ? null : `${held.code}: ${held.detail}`), () => "unreadable hold file");
+      const bytes = await readOptional(path.join(dataDir, `${gameId}.log.jsonl`)).catch(() => undefined);
+      const log: StoredGameContinuation["artifacts"]["log"] = bytes === undefined ? "unreadable" : bytes === null ? "absent" : scanLog(bytes).classification;
+      const money = wiring.isMoney(gameId);
+      const base = { gameId, money, hold, damaged_log: log === "corrupt", discovery: discovered.get(gameId) ?? null };
+      if (record === "missing" && !money) {
+        /* No GameRecord and no financial record: no seat, no host -- never served (discovery's class says which). */
+        games.push({ ...base, class: "no-record", verdict: null, artifacts: { record, log, log_format: null }, deal: null, money_seam: null });
+        continue;
+      }
+      if (record === "newer" || record === "corrupt") {
+        /* The server never reaches a verdict for a record it cannot read: discovery calls a newer record incompatible
+           (`record-schema-newer`) and holds a damaged one (`record-unreadable`). Said as such, not guessed at. */
+        games.push({ ...base, class: record === "newer" ? "record-newer-format" : "record-malformed", verdict: null, artifacts: { record, log, log_format: null }, deal: null, money_seam: null });
+        continue;
+      }
+      let identity: GameIdentityFacts;
+      let logFormat: FormatFact;
+      try {
+        identity = await dealIdentityOnDisk(dataDir, gameId);
+        logFormat = await logFormatOnDisk(dataDir, gameId);
+      } catch (error) {
+        /* A read that failed (not a format): nothing can be decided now -- listed, never dropped, never a verdict. */
+        games.push({ ...base, class: "store-fault", verdict: null, artifacts: { record, log, log_format: null }, deal: `unread (${describe(error).slice(0, 200)})`, money_seam: null });
+        continue;
+      }
+      const verdict = wiring.verdictOf(gameId, identity, logFormat);
+      const cls = verdictClass(verdict);
+      let moneySeam: StoredGameContinuation["money_seam"] = null;
+      let moneyArtifacts: Pick<StoredGameContinuation["artifacts"], "fin" | "tickets" | "intents"> = {};
+      if (money) {
+        try {
+          const decided = await moneyDecisionOnDisk(dataDir, gameId, serving);
+          const seamClass = moneyClassOf(decided.decision);
+          moneySeam = {
+            class: seamClass,
+            owner: decided.decision.owner,
+            deployment: decided.decision.key,
+            /* Both are the canonical verdict. Their KIND must agree (a disagreement is a defect, printed loudly); the reason
+               may differ when several artifacts are unreadable, because the money seam stops at an unreadable financial
+               record before reading the log (review F1). */
+            agrees: decided.decision.verdict.kind === verdict.kind,
+            same_reason: verdictClass(decided.decision.verdict) === cls,
+          };
+          moneyArtifacts = { fin: decided.fin, tickets: decided.tickets, intents: decided.intents };
+        } catch {
+          moneyArtifacts = { fin: "unknown", tickets: null, intents: null };
+        }
+      }
+      games.push({
+        ...base,
+        class: cls,
+        verdict: { kind: verdict.kind, why: verdict.kind === "continues" ? null : verdict.why, detail: verdict.kind === "continues" ? null : verdict.detail },
+        artifacts: { record, log, log_format: logFormat, ...moneyArtifacts },
+        deal: dealWords(identity),
+        money_seam: moneySeam,
+      });
+    }
+    const byClass: Record<string, number> = {};
+    for (const game of games) byClass[game.class] = (byClass[game.class] ?? 0) + 1;
+    return { compatibility: operatorDescriptor(serving.capability, options.diagnosticFlag), chain: options.chain ?? null, games, byClass };
+  } finally {
+    coordinator.stop();
+  }
+}
+
+/* ==================================================================
     GC
    ================================================================== */
 
@@ -812,7 +1055,7 @@ async function listOptional(directory: string): Promise<string[]> {
 export async function planGc(dataDir: string, options: { now?: number } = {}): Promise<GcPlan> {
   const now = options.now ?? Date.now();
   const inspection = await inspectData(dataDir, { now });
-  const records = createFileRecordStore(dataDir, { warn: quiet });
+  const records = createFileRecordStore(dataDir, { warn: quiet, fs: READ_ONLY });
   const retained: Record<string, number> = {};
   const move: Array<{ gameId: string; archivedAt: number; files: string[] }> = [];
   for (const game of inspection.games) {
@@ -1070,6 +1313,16 @@ const USAGE = [
   "  money-release <game_id> --note \"<text>\" [--escrow-config <file>] [--chain]",
   "                                      ESCROW-3A + LIVE-4: lift a held money game this configuration continues (server stopped)",
   "  scan-v10 [--json]                   DA-8: the v10 -> v11 boundary scan of every stored log (read-only, any time)",
+  "  compat [--escrow-config <file>] [--build <id>]",
+  "                                      LIVE-4: this build's canonical compatibility descriptor and key, as canonical JSON",
+  "                                      (for the escrow configuration given, or none); the build id is diagnostic only",
+  "  continuation [<game_id>] [--json] [--escrow-config <file>] [--chain]",
+  "                                      LIVE-4: every stored game's CANONICAL continuation verdict on this build and",
+  "                                      configuration -- continues / not continued (why) / conflict (why) / unreadable",
+  "                                      artifact -- plus the money seam's own view of each money game (read-only, any time).",
+  "                                      Judged as a production pool runs: legacy (unpinned) logs refused, as without",
+  "                                      --legacy-logs; `compat` names the key a server with that configuration serves",
+  "                                      once its escrow backend opens (the banner and ops/status.json are the authority)",
 ].join("\n");
 
 function line(game: Inspection["games"][number]): string {
@@ -1083,9 +1336,9 @@ async function main(argv: readonly string[]): Promise<number> {
   const noteAt = argv.indexOf("--note");
   const keepAt = argv.indexOf("--keep");
   const configAt = argv.indexOf("--escrow-config");
-  const positional = argv.filter((arg, at) => !arg.startsWith("--") && argv[at - 1] !== "--data" && argv[at - 1] !== "--note" && argv[at - 1] !== "--keep" && argv[at - 1] !== "--escrow-config");
+  const positional = argv.filter((arg, at) => !arg.startsWith("--") && argv[at - 1] !== "--data" && argv[at - 1] !== "--note" && argv[at - 1] !== "--keep" && argv[at - 1] !== "--escrow-config" && argv[at - 1] !== "--build");
   /* LIVE-4 (L4-4): the escrow deployment the money commands judge against (the server's own configuration file). */
-  const escrowConfig = configAt !== -1 && argv[configAt + 1] ? argv[configAt + 1] : process.env.ESCROW_JUNO_CONFIG;
+  const escrowConfig = configAt !== -1 && argv[configAt + 1] ? argv[configAt + 1] : process.env.ESCROW_JUNO_CONFIG || undefined;
   const toolServing = () => moneyToolServing(dataDir, { configPath: escrowConfig, chain: argv.includes("--chain") });
   const [command, target, second] = positional;
   const json = argv.includes("--json");
@@ -1103,6 +1356,49 @@ async function main(argv: readonly string[]): Promise<number> {
     if (json) console.log(JSON.stringify(report, null, 2));
     else printBoundaryScan(report);
     return report.summary.clean && report.unreadable.length === 0 ? 0 : 1;
+  }
+  /* LIVE-4 (L4-6): what compatibility identity a server started with this build and this configuration serves. The
+     key is production's (`compatibilityKey` over `servingCapability`); the build id rides along as a diagnostic. */
+  if (command === "compat") {
+    /* `--build <id>`: printed as the descriptor's diagnostic only (else the environment's, else none). */
+    const flagAt = argv.indexOf("--build");
+    const { serving } = await moneyToolServing(dataDir, { configPath: escrowConfig, chain: false });
+    console.log(compatibilityDescriptorText(operatorDescriptor(serving.capability, flagAt === -1 ? undefined : argv[flagAt + 1])));
+    return 0;
+  }
+  /* LIVE-4 (L4-6): every stored game's canonical continuation verdict, read-only (safe beside a running server: it then
+     reads what was on disk at that moment). */
+  if (command === "continuation") {
+    const { serving, chain } = await toolServing();
+    const report = await inspectContinuation(dataDir, { serving, chain, ...(target !== undefined ? { only: target } : {}) });
+    if (json) console.log(JSON.stringify(report, null, 2));
+    else {
+      const lock = await lockStatus(dataDir);
+      const counts = Object.entries(report.byClass).map(([cls, n]) => `${n} ${cls}`).join(", ") || "none";
+      console.log(`continuation (READ-ONLY) of ${dataDir}: ${report.games.length} games -- ${counts}`);
+      console.log(`  judged against compatibility key ${report.compatibility.compatibility_key} (escrow: ${report.compatibility.axes.escrow_deployments.join(", ") || "none configured"})` + (chain === null ? "; chain facts NOT read (add --chain to conclude a deployment conflict)" : chain.kind === "read" ? "; chain facts read at verification grade" : `; chain facts UNAVAILABLE (${chain.detail})`));
+      if (lock.held) console.log("  note: a game server holds this directory; this is what was on disk when it was read");
+      for (const game of report.games) {
+        const a = game.artifacts;
+        console.log(
+          `  ${game.gameId}  ${game.class}${game.money ? " [money]" : ""}` +
+            (game.deal !== null ? ` -- ${game.deal}` : "") +
+            `; record ${a.record}, log ${a.log}${a.log_format !== null && a.log_format !== "current" ? ` (${a.log_format})` : ""}` +
+            (a.fin !== undefined ? `, financial ${a.fin}, tickets ${a.tickets ?? "-"}, intents ${a.intents ?? "-"}` : "") +
+            (game.hold !== null ? `; HELD ${game.hold}` : "") +
+            (game.discovery !== null && game.discovery.cls !== "unreconciled" && game.discovery.cls !== "active" && game.discovery.cls !== "waiting" && game.discovery.cls !== "completed" ? `; discovery: ${game.discovery.cls}${game.discovery.code !== null ? ` ${game.discovery.code}` : ""}` : "") +
+            (game.damaged_log ? "; the log is DAMAGED: the server holds it at load (logDoctor)" : ""),
+        );
+        if (game.verdict !== null && game.verdict.detail !== null) console.log(`      ${game.verdict.kind}/${game.verdict.why}: ${game.verdict.detail}`);
+        if (game.money_seam !== null) {
+          console.log(
+            `      money seam    ${game.money_seam.class}; ${game.money_seam.owner ? "owned here" : "not owned here"}; deployment ${game.money_seam.deployment ?? "none named"}` +
+              (!game.money_seam.agrees ? " -- DISAGREES WITH THE SESSION VERDICT (a defect: report it)" : game.money_seam.same_reason ? "" : " (the same answer; the money seam names another unreadable artifact first)"),
+          );
+        }
+      }
+    }
+    return report.games.every((game) => game.class === "continues" && game.hold === null && !game.damaged_log && game.discovery?.cls !== "held" && (game.money_seam === null || game.money_seam.agrees)) ? 0 : 1;
   }
   if (command === "money") {
     const { serving, chain } = await toolServing();
@@ -1257,7 +1553,10 @@ if (require.main === module) {
   main(process.argv.slice(2)).then(
     (code) => process.exit(code),
     (error) => {
-      console.error("gamesDoctor failed:", error);
+      /* An operator's mistake (a configuration file that cannot be read, say) is one line; anything else keeps its trace. */
+      const message = error instanceof Error ? error.message : String(error);
+      if (/^the escrow configuration .* cannot be read/.test(message)) console.error(`gamesDoctor: ${message}`);
+      else console.error("gamesDoctor failed:", error);
       process.exit(2);
     },
   );

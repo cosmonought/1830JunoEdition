@@ -126,7 +126,7 @@ if ($buildLine) { $buildId = ($buildLine -split '=', 2)[1].Trim() }
 if (-not $buildId) { $buildId = 'dev' }
 
 Ok "tunnel host  $tunnelHost"
-Ok "build id     $buildId  (the server is started with --build $buildId; they are compared exactly)"
+Ok "build id     $buildId  (the server is started with --build $buildId; diagnostic for current browsers, compared exactly only for a legacy protocol-0 tab -- LIVE-4)"
 
 # ---------------------------------------------------------------- 2. ngrok
 

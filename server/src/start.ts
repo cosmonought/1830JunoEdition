@@ -32,6 +32,7 @@ import { createFileFinancialGameStore } from "./escrow/financialGameStore";
 import type { FinancialGameRecord } from "./escrow/moneyLifecycle";
 import { dealIdentityOnDisk, logFormatOnDisk } from "./escrow/dealIdentity";
 import { compatibilityKey, type DeploymentCapability } from "../../frontend/src/gameEngine/compat/deploymentCapability";
+import { bannerLines, compatibilityDescriptor } from "./compatibilityDescriptor";
 import { createSettlementCoordinator } from "./escrow/settlementCoordinator";
 import { noMoneyServing } from "./escrow/moneyServing";
 import { serverPrefixReplay } from "./escrow/settlementEvidence";
@@ -67,8 +68,14 @@ const flagValue = (name: string): string | undefined => {
 
 const port = Number(process.env.PORT ?? flagValue("--port") ?? 8917);
 
-/** MUST MATCH THE CLIENT'S `REACT_APP_BUILD_ID` (#1206), and the two are compared exactly. A mismatch is
- *  answered with `build-skew` rather than treated as a divergence -- but only if both sides were told. */
+/** This build's id: DIAGNOSTIC for current clients and stored games, and the legacy wire's compare only.
+ *  - Protocol 1 (every current client, LIVE-4 L4-3): the tab announces `cp`/`cr`/`cb` on its socket URL and is judged by
+ *    the client verdict against this process's capability -- a `cb` that differs from this id is printed, never refused.
+ *  - Protocol 0 (a legacy tab that announces nothing): #1206's exact compare with the client's `REACT_APP_BUILD_ID` still
+ *    applies -- a mismatch is answered `build-skew` rather than treated as a divergence.
+ *  - Stored games: continuation follows the deal's rules pin and hosted protocol (and a money game's identity and
+ *    deployment), never the build that dealt it (L4-2). The id is stamped on deals, holds and audit lines as history.
+ *  It is not part of the compatibility key (`compatibilityDescriptor.ts`), which the banner prints beside it. */
 const build = process.env.BUILD_ID ?? flagValue("--build") ?? "dev";
 
 /* ==================================================================
@@ -500,7 +507,9 @@ async function main(): Promise<void> {
   }
   process.on("exit", () => held.releaseSync());
 
-  printBanner(held.instanceId);
+  /* LIVE-4 (L4-6): the key printed is the one the game server judges with (`server.lifecycle.capability` is the
+     wiring's validated copy of `capability`), so the banner cannot name a pool the process is not. */
+  printBanner(held.instanceId, server.lifecycle.capability);
 }
 
 /* ==================================================================
@@ -540,7 +549,7 @@ function identityBanner(): string {
   );
 }
 
-function printBanner(instanceId: string): void {
+function printBanner(instanceId: string, capability: DeploymentCapability): void {
   // eslint-disable-next-line no-console
   console.log(
     `1830 game server listening on ws://${GAME_SERVER_BIND_HOST}:${port} (build "${build}", GS_MODE=${config.mode})\n` +
@@ -553,7 +562,8 @@ function printBanner(instanceId: string): void {
       (legacyLogs === "development-corpus"
         ? "LEGACY LOGS ADMITTED (--legacy-logs development-corpus): an unpinned log replays under this engine (#1520)"
         : "an unpinned (legacy) log is held, not replayed (#1520)") +
-      "\n  legacy JUNO-XXX rooms are not served (LIVE-2D); read their logs with `npm run replay` / `npm run logDoctor`",
+      "\n  legacy JUNO-XXX rooms are not served (LIVE-2D); read their logs with `npm run replay` / `npm run logDoctor`\n" +
+      bannerLines(compatibilityDescriptor(capability, { build_id: build })).join("\n"),
   );
 }
 

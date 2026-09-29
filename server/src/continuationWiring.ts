@@ -5,8 +5,8 @@
 // ==================================================================
 //
 // L4-1 made the model pure (`frontend/src/gameEngine/compat/`): `continuationVerdict`, `dealingIdentity`,
-// `serveDecision`. This module is where a running server feeds it. It is built ONCE, at startup, around this build's
-// `DeploymentCapability` (`thisDeploymentCapability(pins)`, the configured Juno deployment when there is one), and every
+// `serveDecision`. This module is where a running server feeds it. It is built ONCE, at startup, around the process's one
+// `DeploymentCapability` (the money serving's: `start.ts` passes `serving.capability`), and every
 // game's session gets its `SessionContinuation` from here -- so the descriptor is never rebuilt ad hoc, and the
 // verdict every session asks is the same function over the same capability.
 //

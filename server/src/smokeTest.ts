@@ -88,7 +88,10 @@ import type { RoomChatEntry, RoomView } from "../../frontend/src/utils/roomProto
     SETTINGS
    ================================================================== */
 
-/** MUST MATCH the `BUILD_ID` the spawned servers are given (#1206): a mismatch is `build-skew`, not a move. */
+/** The `BUILD_ID` the spawned servers are given. The smoke's sockets announce nothing -- they are the LEGACY wire
+ *  (client protocol 0), which keeps #1206's exact compare on submit -- so for THEM a mismatch is `build-skew`, not a
+ *  move. A current (protocol-1) client is never compared by build (LIVE-4 L4-3); the smoke deliberately stays on
+ *  protocol 0 to keep that legacy path exercised. */
 const BUILD = "smoke-live2e";
 /** Production takes https origins only, exactly as listed (`identity/mode.ts`); `.invalid` never resolves. */
 const PRODUCTION_ORIGIN = "https://smoke.invalid";

@@ -31,20 +31,52 @@ type Line =
   | { readonly t: "settle"; readonly instance: string; readonly seq: string; readonly key: number; readonly digest: CodecDigest<"settle">; readonly at: number }
   | { readonly t: "attempt"; readonly intent_id: string; readonly tx_id: string; readonly account: string; readonly sequence: string; readonly at: number; readonly expires_after_height?: string };
 
+/** LIVE-5 L5-5: how a journal write that did not succeed ended, when the adapter can say (the DynamoDB ledger always
+ *  does; this file adapter predates the classes and leaves it unset). A caller never signs or broadcasts after ANY of
+ *  them -- the class only says what a later retry can expect:
+ *    definite    nothing was written (a refusal before any effect, or a request the service refused);
+ *    fenced      a newer writer holds the ledger's generation or relayer fence: this writer may write nothing more;
+ *    uncertain   the write may still land (its answer and every resend were lost): the slot decides later, first writer
+ *                wins, and nothing was signed on the strength of it;
+ *    unreadable  the stored state is damaged or a newer build's: never guessed at, never overwritten. */
+export type SigningJournalOutcome = "definite" | "fenced" | "uncertain" | "unreadable";
+
 export class SigningJournalError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    readonly outcome?: SigningJournalOutcome,
+  ) {
     super(message);
     this.name = "SigningJournalError";
   }
 }
 
+export interface SigningReservation {
+  readonly instance: string;
+  readonly seq: string;
+  readonly signer_key_id: number;
+  readonly digest_hex: string;
+}
+
+export interface JournalledAttempt {
+  readonly tx_id: string;
+  readonly account: string;
+  readonly sequence: string;
+  readonly expires_after_height?: string;
+}
+
+/** LIVE-5 L5-5 (preflight §10.4, F-L5-8 / F-L5-18): the inspection methods are ASYNC. A ledger in DynamoDB is never
+ *  loaded whole at open: each answer is a strongly consistent read that can fail (and then fails closed: a damaged or
+ *  newer record refuses the whole answer, never a partial one). Every caller awaits them. */
 export interface InspectableSigningJournal extends SigningJournal {
-  /** Every reservation, for the operator view (digests only; nothing secret is ever in the journal). */
-  reservations(instance?: string): ReadonlyArray<{ readonly instance: string; readonly seq: string; readonly signer_key_id: number; readonly digest_hex: string }>;
-  attemptsOf(intentId: string): ReadonlyArray<{ readonly tx_id: string; readonly account: string; readonly sequence: string; readonly expires_after_height?: string }>;
-  /** ESCROW-3B review #1: every journalled attempt (a restored intent store may have forgotten some; the relayer's
-   *  startup guard reads these). */
-  allAttempts(): ReadonlyArray<{ readonly intent_id: string; readonly tx_id: string; readonly account: string; readonly sequence: string; readonly expires_after_height?: string }>;
+  /** The reservations of one instance (the ledger lists by instance only; the local adapters also answer every
+   *  instance when none is named). Digests only; nothing secret is ever in the journal. */
+  reservations(instance?: string): Promise<ReadonlyArray<SigningReservation>>;
+  attemptsOf(intentId: string): Promise<ReadonlyArray<JournalledAttempt>>;
+  /** ESCROW-3B review #1: every journalled attempt of an account (a restored intent store may have forgotten some; the
+   *  relayer's startup guard reads these). The ledger lists by account only; the local adapters also answer every
+   *  account when none is named. */
+  allAttempts(account?: string): Promise<ReadonlyArray<JournalledAttempt & { readonly intent_id: string }>>;
 }
 
 function indexer() {
@@ -134,9 +166,9 @@ function journalOf(index: ReturnType<typeof indexer>, append: (line: Line) => Pr
       const seq = index.highest(instance);
       return seq === undefined ? null : { seq: seq.toString() };
     },
-    reservations: (instance) => index.reservations(instance),
-    attemptsOf: (intentId) => index.attemptsOf(intentId),
-    allAttempts: () => index.allAttempts(),
+    reservations: async (instance) => index.reservations(instance),
+    attemptsOf: async (intentId) => index.attemptsOf(intentId),
+    allAttempts: async (account) => index.allAttempts().filter((entry) => account === undefined || entry.account === account),
   };
 }
 

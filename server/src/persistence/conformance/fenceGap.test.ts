@@ -8,7 +8,8 @@
 // and the write does not stop it (F-L5-4, a time-of-check/time-of-use gap). That is acceptable for one process holding
 // the data directory's lock; it is exactly what a multi-task DynamoDB deployment must not do. Each port's conformance
 // module therefore has a "fence inside the write" case (LOG-20, REC-18, HOLD-12, FIN-11, INT-12, TKT-11, ID-14,
-// JNL-12) that every DynamoDB adapter must pass (`REQUIRED_CAPABILITIES.dynamodb`).
+// JNL-12; and, from L5-5, JNL-16 for the journal's attempts) that every DynamoDB adapter must pass
+// (`REQUIRED_CAPABILITIES.dynamodb`).
 //
 // This file runs each of those cases against the file store with the capability FORCED ON and asserts it FAILS, and
 // fails for the right reason (the stale write got through). Two things are proved at once: the gap is real, per port,
@@ -60,4 +61,6 @@ describe("L5-1: F-L5-4 pinned for every port (the file stores fence BEFORE the w
   pin("wallet ticket", fileTicketSubject, TICKET_CASES, "TKT-11");
   pin("identity", journalIdentitySubject, IDENTITY_CASES, "ID-14");
   pin("signing journal", fileJournalSubject, JOURNAL_CASES, "JNL-12");
+  /* L5-5: the attempt write too -- the relayer fence belongs inside the attempt's write, not before it. */
+  pin("signing journal (attempts)", fileJournalSubject, JOURNAL_CASES, "JNL-16");
 });

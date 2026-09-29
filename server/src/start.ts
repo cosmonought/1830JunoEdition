@@ -41,7 +41,7 @@ import { createFileChainIntentStore } from "./escrow/chainIntents";
 import { openFileSigningJournal } from "./escrow/signingJournal";
 import { createFileWalletTicketStore } from "./escrow/walletTicketFileStore";
 import { createWalletTicketLedger } from "./escrow/walletTickets";
-import { JunoConfigError, parseJunoBackendConfig, pinOf, type JunoBackendConfig } from "./escrow/juno/junoConfig";
+import { fileJournalDirOf, JunoConfigError, parseJunoBackendConfig, pinOf, type JunoBackendConfig } from "./escrow/juno/junoConfig";
 import { openJunoBackend, type JunoBackend } from "./escrow/juno/junoBackend";
 import { createMoneyTables, MONEY_TABLES_SWITCH, type MoneyTables } from "./escrow/moneyTables";
 import type { WalletTicketLedger } from "./escrow/walletTickets";
@@ -279,7 +279,8 @@ async function main(): Promise<void> {
         serverMode: config.mode,
         financial: financialStore,
         intents: createFileChainIntentStore(dataDir, { writerCheck: () => held.verify() }),
-        journal: await openFileSigningJournal(junoConfig.journalDir, { writerCheck: () => held.verify(), onRestartRequired: (detail) => failFast("the signing journal", detail) }),
+        /* LIVE-5 L5-5: a file journal only; a configuration naming the DynamoDB ledger is refused (L5-7 wires it). */
+        journal: await openFileSigningJournal(fileJournalDirOf(junoConfig), { writerCheck: () => held.verify(), onRestartRequired: (detail) => failFast("the signing journal", detail) }),
         tickets: ledger,
         readLog: (gameId) => logStore.loadLog(gameId),
         /* LIVE-4 (L4-4): the deal's identity for the continuation verdict, read-only. */

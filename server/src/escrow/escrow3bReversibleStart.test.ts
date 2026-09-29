@@ -230,7 +230,7 @@ describe("the second review's strandings, each closed", () => {
     const [start] = await startsOf(world);
     (world.intents as ReturnType<typeof createMemoryChainIntentStore>).failNext.push("definite");
     await world.relayer.pass(); // journalled, then the store refused it: never broadcast
-    assert.equal(world.journal.attemptsOf(start.intent_id).length, 1);
+    assert.equal((await world.journal.attemptsOf(start.intent_id)).length, 1);
     assert.equal((await startsOf(world))[0].attempts.length, 0);
     assert.equal(world.chain.broadcasts.length, 0);
     assert.ok(world.chain.withdraw("1", WALLETS[1]).ok);

@@ -34,14 +34,44 @@ import type { BuiltSettlementCoreV1 } from "../../../../frontend/src/gameEngine/
 import { settlementDigestToSign, type SchemeSignature, type SettlementKeyConfig, type SettlementSigner, type SigningJournal } from "../escrowPorts";
 import { SECP256K1_N, bigIntTo32, bytesToBigInt, derToCompact, publicKeyOf, signDigest, verifyDigest } from "./secp256k1";
 
+/**
+ * What a signer failure means to the caller (LIVE-5 L5-5 made the KMS classes explicit):
+ *   config           the key does not match the configuration (open time) -- nothing is ever signed with it;
+ *   refused          the signer refuses this key or request (KMS: not found, disabled, wrong usage...): an operator acts;
+ *   verify-failed    an answer that is not a valid low-s signature BY THIS KEY over THESE bytes: never used;
+ *   journal-conflict another digest is already reserved at this slot: the caller HOLDS;
+ *   unavailable      no usable answer now (throttled, a fault, a timeout): a retry is the SAME request -- the same key
+ *                    and the same digest (a settlement digest is reserved before it is signed; a lost relayer signature
+ *                    never became a transaction). `signatureMayExist`: the request may have been signed in a lost answer.
+ * No failure ever selects another key, signer or digest: there is no fallback anywhere.
+ */
+export type SignerErrorCode = "config" | "refused" | "verify-failed" | "journal-conflict" | "unavailable";
+
 export class SignerError extends Error {
   constructor(
-    readonly code: "config" | "refused" | "verify-failed" | "journal-conflict" | "unavailable",
+    readonly code: SignerErrorCode,
     message: string,
+    readonly detail: { readonly signatureMayExist?: boolean; readonly native?: string } = {},
   ) {
     super(message);
     this.name = "SignerError";
   }
+}
+
+/** A KMS port failure as a `SignerError` (duck-typed on `aws/kms/kmsDigestClient.ts`'s `KmsCallError`, so this module
+ *  never loads the AWS SDK). Anything unclassified is `unavailable` with a possible signature: never a guess that
+ *  nothing was signed, and never a refusal that would hold work on a guess. */
+function signerErrorOf(error: unknown, what: string): SignerError {
+  if (error instanceof SignerError) return error;
+  const kms = error as { name?: unknown; failure?: unknown; signatureMayExist?: unknown; native?: unknown; message?: unknown };
+  const message = `${what}: ${error instanceof Error ? error.message : String(error)}`;
+  if (kms?.name === "KmsCallError") {
+    const detail = { signatureMayExist: kms.signatureMayExist === true, native: typeof kms.native === "string" ? kms.native : undefined };
+    if (kms.failure === "refused") return new SignerError("refused", message, detail);
+    if (kms.failure === "invalid-answer") return new SignerError("verify-failed", message, detail);
+    if (kms.failure === "transient") return new SignerError("unavailable", message, detail);
+  }
+  return new SignerError("unavailable", message, { signatureMayExist: true });
 }
 
 export interface DigestSigner {
@@ -79,28 +109,42 @@ export function compressedKeyFromSpki(spki: Uint8Array): Buffer {
   return Buffer.concat([Buffer.from([y[31] & 1 ? 0x03 : 0x02]), x]);
 }
 
+/**
+ * A `DigestSigner` over ONE KMS key, fixed at open: its reference (a key ARN; `kmsDigestClient` refuses anything else) and
+ * the public key KMS reported for it (the caller checks that against the configuration, `checkSignerIdentities`). Every
+ * signature is over exactly the caller's 32 bytes and is verified against that public key before it is returned; an
+ * answer that is not DER, not low-s-normalisable or not this key's is `verify-failed`, never used (L5-5: a malformed DER
+ * used to escape as a raw `Secp256k1Error`, outside the signer's classes). No failure tries another key.
+ */
 export async function openKmsDigestSigner(client: KmsClient, keyRef: string): Promise<DigestSigner> {
   let publicKey: Buffer;
   try {
     publicKey = compressedKeyFromSpki(await client.getPublicKey(keyRef));
   } catch (error) {
-    if (error instanceof SignerError) throw error;
-    throw new SignerError("unavailable", `KMS GetPublicKey failed for ${keyRef}: ${error instanceof Error ? error.message : String(error)}`);
+    throw signerErrorOf(error, `KMS GetPublicKey failed for ${keyRef}`);
   }
   return {
     kind: "kms",
     label: keyRef,
     publicKey,
     async sign(digest) {
-      if (digest.length !== 32) throw new SignerError("refused", "a digest is 32 bytes");
+      if (!(digest instanceof Uint8Array) || digest.length !== 32) throw new SignerError("refused", "a digest is 32 bytes");
+      /* The bytes asked for and the bytes verified are one private copy: nothing that happens to the caller's buffer
+         while KMS answers changes either. */
+      const exact = Buffer.from(digest);
       let der: Uint8Array;
       try {
-        der = await client.signDigest(keyRef, digest);
+        der = await client.signDigest(keyRef, Uint8Array.from(exact));
       } catch (error) {
-        throw new SignerError("unavailable", `KMS Sign failed: ${error instanceof Error ? error.message : String(error)}`);
+        throw signerErrorOf(error, "KMS Sign failed");
       }
-      const signature = derToCompact(der);
-      if (!verifyDigest(publicKey, digest, signature)) throw new SignerError("verify-failed", "the KMS signature does not verify under the key's own public key");
+      let signature: Buffer;
+      try {
+        signature = derToCompact(der);
+      } catch (error) {
+        throw new SignerError("verify-failed", `the KMS answer is not a valid DER signature (${error instanceof Error ? error.message : String(error)}); it is never used`, { signatureMayExist: true });
+      }
+      if (!verifyDigest(publicKey, exact, signature)) throw new SignerError("verify-failed", "the KMS signature does not verify under the key's own public key", { signatureMayExist: true });
       return signature;
     },
   };

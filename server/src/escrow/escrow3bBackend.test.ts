@@ -113,8 +113,8 @@ describe("ESCROW-3B: a money game from deal to payout, on the offline chain", ()
     assert.ok(attempts.every((attempt) => !isLiveAttempt(attempt)));
     const included = attempts.filter((attempt) => attempt.phase === "included-success").map((attempt) => Number(attempt.sequence)).sort((a, b) => a - b);
     assert.deepEqual(included, included.map((_, i) => i), "the account's sequences 0..n-1, each used exactly once: nothing drifted");
-    assert.equal(world.journal.reservations().length >= 3, true, "every payload signature was reserved first");
-    for (const attempt of attempts) assert.ok(world.journal.attemptsOf(all.find((i) => i.attempts.includes(attempt))!.intent_id).some((a) => a.tx_id === attempt.tx_hash), "every attempt was journalled before its broadcast");
+    assert.equal((await world.journal.reservations()).length >= 3, true, "every payload signature was reserved first");
+    for (const attempt of attempts) assert.ok((await world.journal.attemptsOf(all.find((i) => i.attempts.includes(attempt))!.intent_id)).some((a) => a.tx_id === attempt.tx_hash), "every attempt was journalled before its broadcast");
     const events = world.ops.lines.map((line) => line.event);
     for (const event of ["money.created", "money.bound", "money.roster-frozen", "checkpoint.intent", "chain.signed", "chain.broadcast", "chain.intent-confirmed", "settlement.intent-submitted", "settlement.finalize-intent"]) assert.ok(events.includes(event), event);
     assert.equal(JSON.stringify(world.ops.lines).includes("pr_0"), false, "no principal id in the audit trail");

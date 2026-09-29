@@ -3,9 +3,9 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-09-29, by LIVE-5 L5-2 (the DynamoDB game-table adapters, §A "LIVE-5"; not wired into startup; no version or protocol moved).
+**Last updated:** 2026-09-29, by LIVE-5 L5-4 (identity on DynamoDB and the identity-side security substrate, §A "LIVE-5"; built and conformance-tested, not wired into production startup -- L5-7; no version or protocol moved), integrated onto `main` after L5-2 and ROUTE v12 R12-1.
 
-**Before that:** 2026-09-29, by LIVE-5 L5-1 (the persistence conformance and fault-injection foundation).
+**Before that:** 2026-09-29, by LIVE-5 L5-2 (the DynamoDB game-table adapters, §A "LIVE-5"; not wired into startup; no version or protocol moved), and before it by LIVE-5 L5-1 (the persistence conformance and fault-injection foundation).
 
 **Earlier:** 2026-09-29, by LIVE-4 L4-7 (the final independent certification: the certified commit `f1736bf` on L4-6's `89a4b5b`, then one documentation-only commit recording the final evidence and the owner's gate rule, §E): **LIVE-4 is certified and closed; LIVE-5 is next** (§A "LIVE-4"). The canonical description of LIVE-4's compatibility identities is [`LIVE4_COMPATIBILITY_MODEL.md`](LIVE4_COMPATIBILITY_MODEL.md).
 
@@ -107,7 +107,7 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 - **LIVE-5 follows.** Its LIVE-4 inputs: the hard edge requirement (§D 5b; `LIVE4_COMPATIBILITY_MODEL.md` §4) and the L4-7 report's handoff list.
 - **Versions (unchanged by LIVE-4's later slices, L4-6 and L4-7):** rules 11 (reads [11]); settlement `[10, 11]`; hosted protocol 1; financial protocol 3; client protocol 1, accepted `[0, 1]`; money GameRecords `record_schema 2`. Keys: `dc1-68c4b829b3a20e63f3e55cde` (no escrow), `dc1-4308649847947d1d12ccdd41` (the fixture pin).
 
-**LIVE-5 — AWS durability: IN PROGRESS (L5-1 and L5-2 done; L5-3 next)**
+**LIVE-5 — AWS durability: IN PROGRESS (L5-1, L5-2 and L5-4 done; L5-3 next)**
 - **L5-1: the persistence conformance foundation.** `server/src/persistence/conformance/`: one behavioural suite per store port (log, GameRecord + join codes, holds, financial record, chain intents, wallet tickets, identity, signing journal), written once and run against every implementation through `runConformance`. Each implementation declares its capabilities and any reviewed difference. The memory and file stores pass it. It also carries a deterministic fault-injection substrate (`faults.ts`: scripted fail / lose-answer / stall / duplicate / partial / short on the file seam or any port, fences with newest-writer-wins; no sleeps). Every later LIVE-5 adapter joins these suites as a subject; it does not get private tests.
 - **DynamoDB Local** (`npm run test:dynamodb-local` with `GS_DYNAMODB_LOCAL_ENDPOINT`, loopback only; not part of `npm test`): tables per case, deterministic cleanup, client-level faults, and a proof-only financial adapter that passes the financial cases, including the fence inside the write and the idempotent resend. **The AWS client convention** is `server/src/aws/awsClients.ts` + `README.md`: one factory, explicit targets, SDK retries off, bounded throwing timeouts, `ignoreConfiguredEndpointUrls` for real AWS, and only `@aws-sdk/client-dynamodb` so far.
 - **Fixed on the way** (narrow):
@@ -122,6 +122,10 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 - **L5-2: the game-table adapters** (`server/src/aws/game/`; the convention: `server/src/aws/README.md` §4). DynamoDB adapters behind the six existing ports — log (+chat), GameRecord + join codes + game directory, holds, financial record (+`FINIDX#`/`FINKEYS`), chain intents (+`RELAYQ#`), wallet tickets — over one `game` table. Every write is one `TransactWriteItems` carrying its fence INSIDE the write (the game's `HEAD` owner and pool epoch; the pool's epoch for a write that makes a game or names none), one `ClientRequestToken` per logical write resent unchanged until evaluated (8-minute window; TransactionInProgress waits); a lost answer is settled by the write's token on the items (fence read alone, the target set as one snapshot); otherwise `uncertain` = the write may still land later. Size guards refuse before sending (item 350 KiB, transaction 3.5 MiB / 80 actions; a log batch ≤ 78 entries). Log lines stored verbatim (export byte-identical to a file log). Ownership primitives for L5-3 (`takeOverPool`, pool-fenced `claimGame`, `releaseGame`). **Not wired into startup** (L5-7; a source guard enforces it).
 - **Changed for every backend (narrow):** the wallet-ticket port answers an explicit `uncertain` (F-L5-6 closed; the file store's unresolved replacement no longer reads as `conflict`; callers never treat it as committed); chain-intent equality (`sameChainIntent`) compares the signed content, never signature bytes (the L5-5 handoff: KMS ECDSA is not deterministic). The conformance suites gained `cas-in-write` and `inject-unevaluated` (required of every DynamoDB subject), per-port token / unknown-then-takeover / unevaluated / create-race cases and a second fence-inside-the-write case per port, each pinned against the file stores in `fenceGap.test.ts`.
 - Record: Project `claude/LIVE5_L5_2_DYNAMO_GAME_STORES_2026-09-29.md`.
+- **L5-4: identity on DynamoDB, and the identity-side security substrate** (`server/src/aws/identity/`; the table, keys and write design in `server/src/aws/README.md` §5). A DynamoDB `IdentityStore` for the identity writer: every precondition, every rule about a record's past and every relation is a condition of the write; every write carries the `ROLE_ID` fence and a commit marker. DEFINITE means nothing was written; an unknown outcome is resent under the same token and settled by the marker. A change too big for one transaction lands every security effect first. The adapter passes every identity case on DynamoDB Local -- ID-12 and ID-14 included -- and the new ID-15, ID-18, ID-19 and ID-20 cases. The security substrate:
+  - durable sensitive-auth grants (OD-5-4);
+  - the `SEC#` security-event journal on the ledger table, written from inside the store's commit after the store's own checks (the port's one addition, `IdentityCommitOptions.beforeWrite`), with a `confirmed` event after each committed change.
+  Nothing is wired into `start.ts`: L5-7 wires it. The file stores are unchanged, apart from the new hook and one shape check. Record: Project `claude/LIVE5_L5_4_IDENTITY_2026-09-29.md`.
 
 **Route engine / v12: a separate gameplay program, not part of LIVE-4**
 - The route / autopath hardening (the route-engine certification preflight's findings, including the pre-registered blockers **S6-15** — hosted ingress judging routes on the STANDARD board — and **S6-16** — an H12 fork reversal the search demonstrates but authority rejects) and the **v12** rules batch are their own gameplay program. They are not folded into LIVE-4 and change no LIVE-4 identity. Record: Project `claude/ROUTE_ENGINE_EXTRACTION_CERTIFICATION_PREFLIGHT_2026-09-28.md`.
@@ -163,7 +167,7 @@ Phases 1, 2, 2.5, 3A, 3B, ESCROW-JOIN and ESCROW-4: COMPLETE
 Gno is parked.
 
 **LIVE-4 status (2026-09-29): CLOSED.** Integrated at `6da8a1f` (corpus-gate certified), tooled / documented by L4-6
-(`89a4b5b`) and certified by L4-7 (`f1736bf` on it, plus a documentation-only evidence commit). **LIVE-5 is in progress: L5-1 (the conformance foundation) and L5-2 (the game-table adapters) are done; next is L5-3 (ownership), after the owner gate on L5-2.**
+(`89a4b5b`) and certified by L4-7 (`f1736bf` on it, plus a documentation-only evidence commit). **LIVE-5 is in progress: L5-1 (the conformance foundation), L5-2 (the game-table adapters) and L5-4 (identity on DynamoDB) are done, L5-2 and L5-4 not yet wired (L5-7); next is L5-3 (ownership).**
 (the owner's brief sets its scope; its LIVE-4 inputs are the L4-7 report's handoffs and `LIVE4_COMPATIBILITY_MODEL.md`
 §4). The route-engine / v12 program is separate (§A).
 
@@ -215,6 +219,7 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 
 | Topic | Document |
 |---|---|
+| LIVE-5 L5-4: identity on DynamoDB (schema, conditions, the fence and marker, chunking, the security-event journal and grants, the conformance and mutation evidence, the review, the L5-7 / L5-8 / L6-4 handoffs) | `claude/LIVE5_L5_4_IDENTITY_2026-09-29.md` (the design summary: `server/src/aws/README.md` §5) |
 | LIVE-5 L5-2: the DynamoDB game-table adapters (schema and keys, the fence inside every write, the resend engine and settlement, size guards, the ownership primitives, the conformance matrix, the review and its mutations, the L5-3/L5-6/L5-7 handoffs) | `claude/LIVE5_L5_2_DYNAMO_GAME_STORES_2026-09-29.md` (the convention: `server/src/aws/README.md` §4) |
 | LIVE-5 L5-1: the persistence conformance foundation (the store-port inventory and its L5-2/4/5 ownership, the conformance matrix, the fault substrate, DynamoDB Local, the AWS client convention, the lockfile repair) | `claude/LIVE5_L5_1_CONFORMANCE_2026-09-29.md` (the convention itself: `server/src/aws/README.md`) |
 | LIVE-4 L4-7: the final certification (the race boundary, the durable-conflict restart rule, the matrices, the gate, the mutation campaign, the review, the LIVE-5 handoffs) | `claude/LIVE4_L4_7_FINAL_CERTIFICATION_2026-09-29.md` |
@@ -262,7 +267,7 @@ Every other Project report is **historical**; see the manifest.
 
 **For LIVE-5 (LIVE-4 is closed):** this file; `LIVE4_COMPATIBILITY_MODEL.md` (§4: the edge requirement and the
 `/gs/api/*` decision); the L4-7 report's LIVE-5 handoffs; then ESCROW-4 §19. From L5-2 on, also: the L5-1 report
-(its §3 inventory and §11 handoff), `server/src/aws/README.md`, and the LIVE-5/6 architecture preflight (§3–§5, §22). From L5-3 on, also the L5-2 report's handoff section. The LIVE-4 slice, integration and L4-6
+(its §3 inventory and §11 handoff), `server/src/aws/README.md`, and the LIVE-5/6 architecture preflight (§3–§5, §22). From L5-3 on, also the L5-2 report's handoff section. For L5-7, L5-8 and L6-4, also: the L5-4 report's handoffs. The LIVE-4 slice, integration and L4-6
 reports are needed only where a LIVE-5 question reaches back into them. The list below is the order LIVE-4 started
 from, kept for provenance.
 

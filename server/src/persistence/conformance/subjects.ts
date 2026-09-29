@@ -30,6 +30,8 @@ import { createFileWalletTicketStore, walletTicketDirectory, WALLET_TICKET_FILE_
 import { createFileIdentityStore, IDENTITY_FILE } from "../../identity/fileStore";
 import { createJournalIdentityStore, IDENTITY_JOURNAL_FILE } from "../../identity/journalStore";
 import { createMemoryIdentityStore } from "../../identity/store";
+import { createMemoryGrantStore } from "../../identity/grants";
+import { createMemorySecurityJournal } from "../../identity/securityEvents";
 import { createMemorySigningJournal, JOURNAL_FILE, openFileSigningJournal } from "../../escrow/signingJournal";
 import { faultyStoreFs, gate } from "./faults";
 import { perCase, replaceHooks } from "./fileHooks";
@@ -39,6 +41,7 @@ import type { LogSubject } from "./logStore.conformance";
 import type { HoldSubject, Planted, RecordSubject } from "./roomStores.conformance";
 import type { FinancialSubject, IntentSubject, TicketSubject } from "./escrowStores.conformance";
 import type { IdentitySubject, JournalSubject } from "./identityJournal.conformance";
+import type { GrantSubject, SecuritySubject } from "./identitySecurity.conformance";
 import { createReferenceLogStore, newReferenceLogBacking } from "./referenceLogStore";
 
 const quiet = { warn: () => undefined };
@@ -374,7 +377,7 @@ const identityJournalHooks = ownFileHooks<void>((ctx) => identityJournalFile(ctx
 export const journalIdentitySubject: IdentitySubject = {
   name: "journal (createJournalIdentityStore, production)",
   backend: "file",
-  capabilities: ["durable", "fence", "plant", "fs-faults", "stall-write", "validates-shape", "inject-lost-answer", "inject-transient-failure"],
+  capabilities: ["durable", "fence", "plant", "fs-faults", "stall-write", "validates-shape", "inject-lost-answer", "inject-transient-failure", "inject-unresolved"],
   async open(ctx, options) {
     return createJournalIdentityStore(ctx.dir, { ...quiet, fs: faultFs(ctx), ...writer(options) });
   },
@@ -390,6 +393,8 @@ export const journalIdentitySubject: IdentitySubject = {
   stallNextWrite: (ctx) => identityJournalHooks.stallNextWrite(ctx),
   armLostAnswer: (ctx) => identityJournalHooks.armLostAnswer(ctx),
   armTransientFailure: (ctx) => identityJournalHooks.armTransientFailure(ctx),
+  /* LIVE-5 L5-4 (ID-18): the append tears and its redo cannot even open the file -- the store holds itself. */
+  armUnresolvedWrite: (ctx) => identityJournalHooks.armUnresolvedWrite(ctx),
 };
 
 /* The LIVE-2E whole-file writer. NOT A PRODUCTION STORE: `start.ts` opens the journal store, which only READS this
@@ -409,6 +414,7 @@ export const wholeFileIdentitySubject: IdentitySubject = {
     "ID-02": "legacy v2 format: session families are not stored; every load derives an 'origin: legacy' family",
     "ID-04": "legacy v2 format: a family's revocation is not stored, so the revoked-family term cannot be exercised after its write",
     "ID-07": "legacy v2 format: a family's revocation is not stored, so it does not survive a restart (never a production store)",
+    "ID-15": "legacy v2 format: a family's revocation is not stored, so the whole-family sign-out cannot be read back (never a production store)",
     "ID-08": "legacy writer: a relation failure escapes as IdentityStoreCorruptError (read as an unknown outcome), not StoreDefiniteError",
   },
   async open(ctx, options) {
@@ -419,6 +425,50 @@ export const wholeFileIdentitySubject: IdentitySubject = {
   },
   async plant(ctx) {
     fs.writeFileSync(path.join(ctx.dir, IDENTITY_FILE), '{"version":');
+  },
+};
+
+/* ================================================================== */
+/*  LIVE-5 L5-4: sensitive-auth grants and the security-event journal   */
+/*  (memory: the reference models; the DynamoDB subjects need a service */
+/*  and live in identityDynamoLocal.conformance.test.ts)                 */
+/* ================================================================== */
+
+const memoryGrantsOf = perCase(createMemoryGrantStore);
+export const memoryGrantSubject: GrantSubject = {
+  name: "memory (createMemoryGrantStore)",
+  backend: "memory",
+  capabilities: ["validates-shape", "inject-transient-failure"],
+  async open(ctx) {
+    return memoryGrantsOf(ctx);
+  },
+  async stored(ctx) {
+    return JSON.stringify(memoryGrantsOf(ctx).snapshot());
+  },
+  armTransientFailure(ctx) {
+    memoryGrantsOf(ctx).failNext.push("definite");
+  },
+};
+
+const memorySecurityOf = perCase(createMemorySecurityJournal);
+export const memorySecuritySubject: SecuritySubject = {
+  name: "memory (createMemorySecurityJournal)",
+  backend: "memory",
+  capabilities: ["validates-shape", "inject-transient-failure", "plant"],
+  async open(ctx) {
+    return memorySecurityOf(ctx);
+  },
+  async stored(ctx) {
+    return JSON.stringify(memorySecurityOf(ctx).snapshot());
+  },
+  armTransientFailure(ctx) {
+    memorySecurityOf(ctx).failNext.push("definite");
+  },
+  async plant(ctx, event) {
+    const journal = memorySecurityOf(ctx);
+    const key = [...journal.bodies.keys()].find((stored) => stored.startsWith(`${event.principal_id}|`) && stored.endsWith(event.event_id));
+    if (key === undefined) throw new Error("plant: no such event");
+    journal.bodies.set(key, (journal.bodies.get(key) as string).replace('"version":1', '"version":2'));
   },
 };
 

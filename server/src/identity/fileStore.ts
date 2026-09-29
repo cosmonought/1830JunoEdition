@@ -31,6 +31,7 @@ import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeRes
 import {
   applyChange,
   changeIdProblem,
+  changeShapeProblem,
   checkSnapshot,
   IdentityStoreCorruptError,
   lookupsOf,
@@ -38,6 +39,7 @@ import {
   withLegacyFamilies,
   type FullIdentitySnapshot,
   type IdentityChange,
+  type IdentityCommitOptions,
   type IdentityStore,
 } from "./store";
 
@@ -207,7 +209,7 @@ export function createFileIdentityStore(directory: string, options: FileIdentity
       return JSON.parse(JSON.stringify(current)) as FullIdentitySnapshot;
     });
 
-  const commit = (change: IdentityChange): Promise<void> =>
+  const commit = (change: IdentityChange, commitOptions?: IdentityCommitOptions): Promise<void> =>
     serial(async () => {
       if (current === null) throw new StoreDefiniteError("the identity store has not been loaded; nothing was written");
       if (poisoned !== null) {
@@ -218,12 +220,14 @@ export function createFileIdentityStore(directory: string, options: FileIdentity
         throw new StoreDefiniteError("this server no longer owns the data directory (its lock was taken over); nothing was written");
       }
       /* LIVE-3C: the change's own contract -- one record once, every precondition -- checked where it is written. */
-      const problem = changeIdProblem(change) ?? preconditionFailure(lookupsOf(current), change.expect);
+      const problem = changeShapeProblem(change) ?? changeIdProblem(change) ?? preconditionFailure(lookupsOf(current), change.expect);
       if (problem !== null) {
         stats.definite += 1;
         throw new StoreDefiniteError(`identity commit: ${problem}; nothing was written`);
       }
       const next = checkSnapshot(applyChange(current, change), "identity commit");
+      /* LIVE-5 L5-4 (review F2): the caller's step between this store's checks and its write (its rejection writes nothing). */
+      if (commitOptions?.beforeWrite !== undefined) await commitOptions.beforeWrite();
       const bytes = Buffer.from(
         `${JSON.stringify({ format: FORMAT, version: VERSION, principals: next.principals, sessions: next.sessions, profiles: next.profiles, links: next.links })}\n`,
         "utf8",

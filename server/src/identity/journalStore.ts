@@ -61,6 +61,7 @@ import { durableReplace } from "../persistence/durableReplace";
 import { StoreDefiniteError, StoreUncertainError } from "../persistence/storeResult";
 import { IDENTITY_FILE, migrateIdentityDocument } from "./fileStore";
 import {
+  changeShapeProblem,
   checkSnapshot,
   IdentityIndex,
   IdentityStoreCorruptError,
@@ -69,6 +70,7 @@ import {
   withLegacyFamilies,
   type FullIdentitySnapshot,
   type IdentityChange,
+  type IdentityCommitOptions,
   type IdentityStore,
   type Session,
 } from "./store";
@@ -542,7 +544,7 @@ export function createJournalIdentityStore(directory: string, options: JournalId
     options.onCompacted?.({ seq, records, bytes });
   }
 
-  const commit = (change: IdentityChange): Promise<void> =>
+  const commit = (change: IdentityChange, commitOptions?: IdentityCommitOptions): Promise<void> =>
     serial(async () => {
       if (index === null) throw new StoreDefiniteError("the identity store has not been loaded; nothing was written");
       if (poisoned !== null) throw new StoreDefiniteError(`the identity store is held after an unresolved write (${poisoned}); nothing was written`);
@@ -550,11 +552,13 @@ export function createJournalIdentityStore(directory: string, options: JournalId
         stats.definite += 1;
         throw new StoreDefiniteError("this server no longer owns the data directory (its lock was taken over); nothing was written");
       }
-      const problem = index.check(change, "identity commit") ?? preconditionFailure(index, change.expect);
+      const problem = changeShapeProblem(change) ?? index.check(change, "identity commit") ?? preconditionFailure(index, change.expect);
       if (problem !== null) {
         stats.definite += 1;
         throw new StoreDefiniteError(`${problem}; nothing was written`);
       }
+      /* LIVE-5 L5-4 (review F2): the caller's step between this store's checks and its write (its rejection writes nothing). */
+      if (commitOptions?.beforeWrite !== undefined) await commitOptions.beforeWrite();
       const seq = lastSeq + 1;
       const bytes = Buffer.from(journalLine(seq, change), "utf8");
       const first = await attempt(bytes, false);

@@ -48,6 +48,10 @@
 //                        verdict, its escrow served by the configuration given; a deployment-conflict hold only against a
 //                        `--chain` read that agrees), and, when it is sealed, the settlement evidence re-derives from its
 //                        sealed prefix. Audited; history is never edited.
+//   aws <command> ...    LIVE-6 L6-3: the AWS storage mode's operator surface (`aws/operator/operatorMain.ts`): read-only
+//                        inspection of the DynamoDB deployment (routing, APPGEN, pools, roles, a game's owner) and the
+//                        controlled mutations (the routing CAS; an operator run's claim / take / release of a game), each a
+//                        dry run unless --apply. Must be the FIRST word; loaded only then (file mode loads no AWS code).
 //   scan-v10 [--json]    DA-8, READ-ONLY (takes no lock, writes nothing, safe beside a running server): every stored log --
 //                        live and archived, server-owned and legacy JUNO-XXX -- classified by its rules-engine pin, and each
 //                        v10 game's committed entries checked for the ones rules engine 11 reads differently
@@ -1332,6 +1336,8 @@ const USAGE = [
   "                                      Judged as a production pool runs: legacy (unpinned) logs refused, as without",
   "                                      --legacy-logs; `compat` names the key a server with that configuration serves",
   "                                      once its escrow backend opens (the banner and ops/status.json are the authority)",
+  "  aws <command> ...                   LIVE-6 L6-3: the AWS (DynamoDB) deployment -- `gamesDoctor aws` lists its commands",
+  "                                      (status, game, games read-only; set-primary, claim, take, release -- dry runs unless --apply)",
 ].join("\n");
 
 function line(game: Inspection["games"][number]): string {
@@ -1340,6 +1346,12 @@ function line(game: Inspection["games"][number]): string {
 }
 
 async function main(argv: readonly string[]): Promise<number> {
+  /* LIVE-6 L6-3: the AWS mode (`gamesDoctor aws ...`) -- DynamoDB, through the deployment's runtime document. Loaded only
+     for `aws`: every file-mode command below runs exactly as before and loads no AWS code. */
+  if (argv[0] === "aws") {
+    const { runAwsOperator } = await import("../aws/operator/operatorMain");
+    return runAwsOperator(argv.slice(1), process.env, { out: (line) => console.log(line), err: (line) => console.error(line) });
+  }
   const dataAt = argv.indexOf("--data");
   const dataDir = path.resolve(dataAt !== -1 && argv[dataAt + 1] ? argv[dataAt + 1] : (process.env.DATA_DIR ?? path.join(process.cwd(), "data")));
   const noteAt = argv.indexOf("--note");

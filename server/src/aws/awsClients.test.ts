@@ -6,6 +6,8 @@
 // source tree creates AWS clients in exactly one place. LIVE-5 L5-5: the same for the KMS client (`createKmsClient`).
 // LIVE-5 L5-7: the same for SSM and Secrets Manager (the runtime configuration's clients), and the import guard lifted
 // for ONE place -- the AWS runtime composition, `aws/runtime/` -- and tightened for the ledger, KMS and the runtime.
+// LIVE-6 L6-3: and for the operator tooling, `aws/operator/` (the game, identity and ledger readers, the runtime's
+// configuration model), reached only by `tools/gamesDoctor.ts`'s `aws` command.
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -78,6 +80,39 @@ async function withHostileEnvironment(body: () => Promise<void>, options: { read
     }
   }
 }
+
+/** LIVE-6 L6-3: the modules the operator tooling (`aws/operator/`) may import from the AWS layers -- the readers, and the
+ *  primitives its own mutations use (`takeOverPool` / `releaseGame`, `setPrimaryPool`, the resend engine). */
+const OPERATOR_IMPORTS: ReadonlySet<string> = new Set([
+  "aws/game/gameTable",
+  "aws/game/ownership",
+  "aws/game/routing",
+  "aws/game/transact",
+  "aws/game/relayerRole",
+  "aws/game/dynamoRecordStore",
+  "aws/game/dynamoHoldStore",
+  "aws/game/dynamoFinancialStore",
+  "aws/identity/dynamoIdentityStore",
+  "aws/identity/identityItems",
+  "aws/ledger/dynamoSigningLedger",
+  "aws/runtime/runtimeConfig",
+  "aws/runtime/configSource",
+  "aws/runtime/storageMode",
+]);
+/** Writers the operator tooling must never reach (the ledger and identity writers, the log / intent / ticket stores, the
+ *  role takeovers, the APPGEN / generation writes of later slices). */
+const OPERATOR_FORBIDDEN: readonly string[] = Object.freeze([
+  "openDynamoSigningLedger",
+  "takeOverRelayer",
+  "takeOverIdentityWriter",
+  "createDynamoIdentityStore",
+  "createDynamoSecurityJournal",
+  "createDynamoLogStore",
+  "createDynamoIntentStore",
+  "createDynamoTicketStore",
+  "mirrorRelayerRole",
+  "claimGame",
+]);
 
 describe("L5-1 AWS client convention", () => {
   test("only plain http on a loopback host with an explicit port is a DynamoDB Local endpoint", () => {
@@ -253,6 +288,15 @@ describe("L5-1 AWS client convention", () => {
       if (relative !== "aws/awsClients.ts" && /new\s+KMS(Client)?\s*\(/.test(text)) offenders.push(`${relative}: constructs a KMS client`);
       if (relative !== "aws/awsClients.ts" && /new\s+(SSM|SecretsManager)(Client)?\s*\(/.test(text)) offenders.push(`${relative}: constructs an SSM or Secrets Manager client`);
       if (/DynamoDBDocument(Client)?\b/.test(text) && relative !== "aws/awsClients.test.ts") offenders.push(`${relative}: uses the document client (it marshals values: stored bytes must be exact)`);
+      /* LIVE-6 L6-3 (review L4): no writer entry point in the operator tooling, and the L5-2 stores it reads through are
+         used for `load` only, never kept in a variable (so no other method can be reached). */
+      if (relative.startsWith("aws/operator/") && !relative.endsWith(".test.ts")) {
+        const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1"); // the code, not its comments
+        for (const writer of OPERATOR_FORBIDDEN) if (new RegExp(`\\b${writer}\\b`).test(code)) offenders.push(`${relative}: the operator tooling uses ${writer} (a writer it must not reach)`);
+        for (const use of code.matchAll(/createDynamo(?:Record|Hold|Financial)Store\([^)]*\)(\.(\w+))?/g)) {
+          if (use[2] !== "load") offenders.push(`${relative}: an L5-2 store is used for something other than load (${use[0]})`);
+        }
+      }
       const modules = [...text.matchAll(/(?:from\s+|require\(\s*|import\(\s*)["'`]([^"'`]+)["'`]/g)].map((match) => match[1]);
       for (const name of modules) {
         if (name === "@aws-sdk/client-ssm" || name === "@aws-sdk/client-secrets-manager") {
@@ -273,16 +317,31 @@ describe("L5-1 AWS client convention", () => {
         if (name.startsWith(".")) {
           const target = path.relative(root, path.resolve(path.dirname(file), name)).split(path.sep).join("/");
           const composer = relative.startsWith("aws/ownership/");
+          /* LIVE-6 L6-3: the operator tooling (`aws/operator/`) reads the game, identity and ledger tables through their own
+             readers (and writes only the routing CAS and an operator run's claim / take / release, through L5-2/L5-3's
+             primitives), with the runtime's configuration model (`runtimeConfig`, `configSource`, `storageMode`) -- never
+             the ownership layer, KMS or the runtime composition itself. */
+          const operator = relative.startsWith("aws/operator/");
           const allowed = (dir: string, also: boolean) => relative.startsWith(`${dir}/`) || also || runtime || conformance.test(relative);
-          if (under(target, "aws/game") && !allowed("aws/game", composer)) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
-          if (under(target, "aws/identity") && !allowed("aws/identity", composer)) offenders.push(`${relative}: imports the identity adapters (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/game") && !allowed("aws/game", composer || operator)) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/identity") && !allowed("aws/identity", composer || operator)) offenders.push(`${relative}: imports the identity adapters (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/ownership") && !allowed("aws/ownership", false)) offenders.push(`${relative}: imports the ownership layer (${name}) outside the L5-7 runtime`);
-          if (under(target, "aws/ledger") && !allowed("aws/ledger", composer)) offenders.push(`${relative}: imports the signing ledger (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/ledger") && !allowed("aws/ledger", composer || operator)) offenders.push(`${relative}: imports the signing ledger (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/kms") && !allowed("aws/kms", false)) offenders.push(`${relative}: imports the KMS binding (${name}) outside the L5-7 runtime`);
-          if (under(target, "aws/runtime") && !runtime && !conformance.test(relative) && !(relative === "start.ts" && (target === "aws/runtime/storageMode" || target === "aws/runtime/awsMain"))) {
+          const operatorConfig = operator && ["aws/runtime/runtimeConfig", "aws/runtime/configSource", "aws/runtime/storageMode"].includes(target);
+          if (under(target, "aws/runtime") && !runtime && !conformance.test(relative) && !operatorConfig && !(relative === "start.ts" && (target === "aws/runtime/storageMode" || target === "aws/runtime/awsMain"))) {
             offenders.push(`${relative}: imports the AWS runtime (${name}); only start.ts reaches it (the storage mode, and the AWS entry)`);
           }
-        } else if (/(^|\/)aws\/(game|identity|ownership|ledger|kms|runtime)(\/|$)/.test(name)) offenders.push(`${relative}: imports an AWS module by a non-relative path (${name})`);
+          /* LIVE-6 L6-3 (review L4): what the operator tooling may import is an explicit list -- the readers and the
+             primitives its mutations use -- so a writer (a store's commit, the ledger, identity) cannot slip in. */
+          if (operator && !relative.endsWith(".test.ts") && /^aws\/(game|identity|ledger|ownership|kms|runtime)\//.test(target) && !OPERATOR_IMPORTS.has(target)) {
+            offenders.push(`${relative}: the operator tooling imports ${target}, which is not on its list (readers and the mutations' own primitives only)`);
+          }
+          /* LIVE-6 L6-3: the operator tooling is reached only by `gamesDoctor aws` (its entry, loaded for that command only). */
+          if (under(target, "aws/operator") && !operator && !conformance.test(relative) && !(relative === "tools/gamesDoctor.ts" && target === "aws/operator/operatorMain")) {
+            offenders.push(`${relative}: imports the AWS operator tooling (${name}); only tools/gamesDoctor.ts reaches it (its entry)`);
+          }
+        } else if (/(^|\/)aws\/(game|identity|ownership|ledger|kms|runtime|operator)(\/|$)/.test(name)) offenders.push(`${relative}: imports an AWS module by a non-relative path (${name})`);
       }
     }
     assert.deepEqual(offenders, []);

@@ -893,3 +893,16 @@ export async function readAdoptedGeneration(client: DynamoDBClient, table: strin
   const answer = await client.send(new GetItemCommand({ TableName: table, Key: { pk: key.pk, sk: key.sk }, ConsistentRead: true }), { abortSignal: deadline() });
   return answer.Item === undefined ? null : parseAppGen(answer.Item as Item);
 }
+
+/**
+ * LIVE-6 L6-3: the ledger's relayer fence for `account` (`FENCE#relayer#<account>`: the epoch and the minting request's
+ * token), read strongly -- `null` when none was ever minted. For the operator's inspection only (`aws/operator/`): it
+ * says which epoch the ledger holds, so the game table's mirror can be compared with it. Strict, as every ledger read: an
+ * item this build cannot read throws `LedgerUnreadableError`, and is never read as some other epoch. Reads only.
+ */
+export async function readRelayerFence(client: DynamoDBClient, table: string, account: string): Promise<{ readonly epoch: number; readonly token: string | null } | null> {
+  if (typeof account !== "string" || !ACCOUNT.test(account)) throw new Error(`readRelayerFence: ${JSON.stringify(account)} is not a relayer account`);
+  const key = LEDGER_KEYS.fence(account);
+  const answer = await client.send(new GetItemCommand({ TableName: table, Key: { pk: key.pk, sk: key.sk }, ConsistentRead: true }), { abortSignal: deadline() });
+  return answer.Item === undefined ? null : parseFence(answer.Item as Item, account);
+}

@@ -237,15 +237,32 @@ data "aws_iam_policy_document" "bootstrap" {
   }
   statement {
     sid       = "VerifierEdge"
-    actions   = ["cloudfront:GetDistributionConfig", "cloudfront:GetOriginRequestPolicy"]
+    actions   = ["cloudfront:GetDistributionConfig", "cloudfront:GetDistribution", "cloudfront:GetOriginRequestPolicy"]
     resources = ["arn:${local.partition}:cloudfront::${local.account}:distribution/*", "arn:${local.partition}:cloudfront::${local.account}:origin-request-policy/*"]
+  }
+  # LIVE-6 L6-6: the staging certification's captures -- each pool's running tasks and every task in the cluster
+  # (read-only; ListTasks is scoped by the cluster condition, DescribeTasks by the cluster's task ARNs).
+  statement {
+    sid       = "StagingCertListTasks"
+    actions   = ["ecs:ListTasks"]
+    resources = ["*"]
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values   = ["arn:${local.partition}:ecs:${local.region}:${local.account}:cluster/${local.prefix}"]
+    }
+  }
+  statement {
+    sid       = "StagingCertDescribeTasks"
+    actions   = ["ecs:DescribeTasks"]
+    resources = ["arn:${local.partition}:ecs:${local.region}:${local.account}:task/${local.prefix}/*"]
   }
   statement {
     sid = "VerifierDescribeUnscopable"
     actions = [
-      "ecs:DescribeTaskDefinition",
+      "ecs:DescribeTaskDefinition", "ecs:ListTaskDefinitions",
       "elasticloadbalancing:DescribeTargetGroups", "elasticloadbalancing:DescribeLoadBalancers", "elasticloadbalancing:DescribeLoadBalancerAttributes",
-      "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules",
+      "elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeRules", "elasticloadbalancing:DescribeTargetHealth",
       "ec2:DescribeSecurityGroups", "ec2:DescribeSecurityGroupRules",
     ]
     resources = ["*"]

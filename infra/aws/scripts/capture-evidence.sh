@@ -35,4 +35,47 @@ else
   aws cloudfront get-origin-request-policy --id "$ORP_ID" > "$OUT/origin-request-policy.json"
 fi
 aws ec2 describe-security-groups --filters "Name=group-name,Values=gs-${ENVIRONMENT}-task,gs-${ENVIRONMENT}-alb" > "$OUT/security-groups.json"
+
+# LIVE-6 L6-6 (the staging certification's prerequisite): each pool's RUNNING tasks, every task in the cluster, the
+# primary's target health, the distribution's own name, and when this capture was taken. Still describe/list/get only.
+describe_tasks() { # <out file> <task arn>...
+  local file="$1"; shift
+  if [ "$#" -eq 0 ]; then echo '{"tasks":[],"failures":[]}' > "$file"; else aws ecs describe-tasks --cluster "gs-${ENVIRONMENT}" --tasks "$@" > "$file"; fi
+}
+# Each listing is captured into a variable FIRST: a failed `aws` call then stops the script (set -e), instead of
+# looking like an empty list (the certification requires the cluster listing to hold every service task).
+RUNNING=()
+for pool in "${POOLS[@]}"; do
+  LISTED="$(command aws --region "$REGION" ecs list-tasks --cluster "gs-${ENVIRONMENT}" --service-name "gs-${ENVIRONMENT}-${pool}" --desired-status RUNNING --query 'taskArns[]' --output text)"
+  for arn in $LISTED; do
+    [ "$arn" = "None" ] || RUNNING+=("$arn")
+  done
+done
+describe_tasks "$OUT/running-tasks.json" "${RUNNING[@]}"
+CLUSTER=()
+LISTED="$(command aws --region "$REGION" ecs list-tasks --cluster "gs-${ENVIRONMENT}" --desired-status RUNNING --query 'taskArns[:100]' --output text)"
+for arn in $LISTED; do
+  [ "$arn" = "None" ] || CLUSTER+=("$arn")
+done
+describe_tasks "$OUT/cluster-tasks.json" "${CLUSTER[@]}"
+TG_ARN="$(command aws --region "$REGION" elbv2 describe-target-groups --names "gs-${ENVIRONMENT}-primary" --query 'TargetGroups[0].TargetGroupArn' --output text)"
+aws elbv2 describe-target-health --target-group-arn "$TG_ARN" > "$OUT/target-health.json"
+aws cloudfront get-distribution --id "$DISTRIBUTION" > "$OUT/distribution.json"
+# LIVE-6 L6-6 x L6-4: every ACTIVE revision of each pool's family -- what the circuit breaker may roll back to (skip_destroy
+# keeps them registered) -- for the one-way identity layout rule (no pre-L6-4 image may be a rollback target).
+for pool in "${POOLS[@]}"; do
+  LISTED="$(command aws --region "$REGION" ecs list-task-definitions --family-prefix "gs-${ENVIRONMENT}-${pool}" --status ACTIVE --query 'taskDefinitionArns[]' --output text)"
+  {
+    printf '{"taskDefinitions":['
+    SEP=""
+    for arn in $LISTED; do
+      [ "$arn" = "None" ] && continue
+      printf '%s' "$SEP"
+      command aws --region "$REGION" ecs describe-task-definition --task-definition "$arn" --query 'taskDefinition' --output json
+      SEP=","
+    done
+    printf ']}\n'
+  } > "$OUT/revisions-${pool}.json"
+done
+printf '{"format":"18COSMOS/L5-8-CAPTURE/v1","captured_at":"%s"}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OUT/capture.json"
 echo "evidence written to $OUT (read-only captures; no secret is in any of them)"

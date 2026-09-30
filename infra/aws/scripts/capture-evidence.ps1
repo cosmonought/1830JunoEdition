@@ -38,4 +38,39 @@ if ([string]::IsNullOrEmpty($orp) -or $orp -eq "None") {
   Save "origin-request-policy.json" @("cloudfront", "get-origin-request-policy", "--id", $orp)
 }
 Save "security-groups.json" @("ec2", "describe-security-groups", "--filters", "Name=group-name,Values=gs-$Environment-task,gs-$Environment-alb")
+
+# LIVE-6 L6-6 (the staging certification's prerequisite): see capture-evidence.sh. Still describe/list/get only.
+function TaskArns([string[]]$listArgs) {
+  $text = & aws --region $Region ecs list-tasks --cluster "gs-$Environment" @listArgs --output text
+  if ($LASTEXITCODE -ne 0) { throw "ecs list-tasks failed" }
+  return @(("$text" -split "\s+") | Where-Object { $_ -ne "" -and $_ -ne "None" })
+}
+function DescribeTasks($file, [string[]]$arns) {
+  if ($arns.Count -eq 0) { Set-Content -Path (Join-Path $Out $file) -Value '{"tasks":[],"failures":[]}' -Encoding utf8 }
+  else { Save $file (@("ecs", "describe-tasks", "--cluster", "gs-$Environment", "--tasks") + $arns) }
+}
+function TaskArnsOf([string[]]$awsArgs) {
+  $text = & aws --region $Region @awsArgs --output text
+  if ($LASTEXITCODE -ne 0) { throw "aws $($awsArgs -join ' ') failed" }
+  return @(("$text" -split "\s+") | Where-Object { $_ -ne "" -and $_ -ne "None" })
+}
+$running = @()
+foreach ($pool in $pools) { $running += TaskArns @("--service-name", "gs-$Environment-$pool", "--desired-status", "RUNNING", "--query", "taskArns[]") }
+DescribeTasks "running-tasks.json" $running
+DescribeTasks "cluster-tasks.json" (TaskArns @("--desired-status", "RUNNING", "--query", "taskArns[:100]"))
+$tg = & aws --region $Region elbv2 describe-target-groups --names "gs-$Environment-primary" --query "TargetGroups[0].TargetGroupArn" --output text
+Save "target-health.json" @("elbv2", "describe-target-health", "--target-group-arn", $tg)
+Save "distribution.json" @("cloudfront", "get-distribution", "--id", $Distribution)
+# LIVE-6 L6-6 x L6-4: every ACTIVE revision of each pool's family (the rollback targets; see capture-evidence.sh).
+foreach ($pool in $pools) {
+  $arns = TaskArnsOf @("ecs", "list-task-definitions", "--family-prefix", "gs-$Environment-$pool", "--status", "ACTIVE", "--query", "taskDefinitionArns[]")
+  $defs = @()
+  foreach ($arn in $arns) {
+    $json = & aws --region $Region --output json ecs describe-task-definition --task-definition $arn --query "taskDefinition"
+    if ($LASTEXITCODE -ne 0) { throw "describe-task-definition failed" }
+    $defs += ($json -join "`n")
+  }
+  Set-Content -Path (Join-Path $Out "revisions-$pool.json") -Value ('{"taskDefinitions":[' + ($defs -join ",") + ']}') -Encoding utf8
+}
+Set-Content -Path (Join-Path $Out "capture.json") -Value ('{"format":"18COSMOS/L5-8-CAPTURE/v1","captured_at":"' + (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") + '"}') -Encoding utf8
 Write-Output "evidence written to $Out (read-only captures; no secret is in any of them)"

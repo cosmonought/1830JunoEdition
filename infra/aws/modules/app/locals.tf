@@ -101,6 +101,7 @@ locals {
         { name = "GS_TRUSTED_PROXY_HOPS", value = tostring(var.trusted_proxy_hops) },
       ],
       var.money_tables_nonmainnet ? [{ name = "ESCROW_MONEY_TABLES", value = "nonmainnet" }] : [],
+      var.edge_diagnostic_staging ? [{ name = "GS_EDGE_DIAGNOSTIC", value = "staging" }] : [],
     )
   }
 

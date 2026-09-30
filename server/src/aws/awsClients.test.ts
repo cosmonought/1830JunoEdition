@@ -279,7 +279,9 @@ describe("L5-1 AWS client convention", () => {
              the ownership layer, and only its CLI (`tools/awsDeploy.ts`) imports it. */
           const deploy = relative.startsWith("aws/deploy/");
           const allowed = (dir: string, also: boolean) => relative.startsWith(`${dir}/`) || also || runtime || conformance.test(relative);
-          if (under(target, "aws/game") && !allowed("aws/game", composer || (deploy && (target === "aws/game/routing" || target === "aws/game/gameTable")))) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
+          /* LIVE-6 L6-6: the staging certification's transaction probe drives the adapters' own write engine
+             (`aws/game/transact`) against disposable staging items -- the engine, never an adapter. */
+          if (under(target, "aws/game") && !allowed("aws/game", composer || (deploy && (target === "aws/game/routing" || target === "aws/game/gameTable" || target === "aws/game/transact")))) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/identity") && !allowed("aws/identity", composer)) offenders.push(`${relative}: imports the identity adapters (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/ownership") && !allowed("aws/ownership", false)) offenders.push(`${relative}: imports the ownership layer (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/ledger") && !allowed("aws/ledger", composer || deploy)) offenders.push(`${relative}: imports the signing ledger (${name}) outside the L5-7 runtime`);

@@ -120,7 +120,9 @@ const NOT_APPLIED = new Set([
   "InvalidSignatureException",
 ]);
 
-type Sent =
+/** One send's outcome (`classifyTransactFailure` for a failed one). Exported for LIVE-6 L6-6's staging probe, which
+ *  certifies that the REAL service's answers land in the classes this engine assumes; the engine itself is unchanged. */
+export type Sent =
   | { readonly kind: "applied" }
   | { readonly kind: "refused"; readonly reasons: CancellationReason[]; readonly detail: string }
   | { readonly kind: "not-applied"; readonly detail: string; readonly conflict: boolean }
@@ -129,23 +131,28 @@ type Sent =
 
 const describe = (error: unknown): string => (error instanceof Error ? `${error.name}: ${error.message}` : String(error));
 
+/** What one failed `TransactWriteItems` means (see the header). Pure: the engine's single reading of an error. */
+export function classifyTransactFailure(error: unknown): Exclude<Sent, { readonly kind: "applied" }> {
+  const name = (error as { name?: string } | null)?.name ?? "";
+  if (name === "TransactionCanceledException") {
+    const raw = (error as { CancellationReasons?: Array<{ Code?: string; Item?: Record<string, AttributeValue> }> }).CancellationReasons ?? [];
+    const reasons = raw.map((reason) => ({ code: reason.Code ?? "None", item: reason.Item ?? null }));
+    if (reasons.some((reason) => reason.code === "ConditionalCheckFailed")) return { kind: "refused", reasons, detail: describe(error) };
+    /* Cancelled for another reason (a conflicting transaction, throttling on an item, a validation error): nothing of
+       this request was applied, and nothing was evaluated that says anything about an earlier attempt. */
+    return { kind: "not-applied", detail: `${describe(error)} [${reasons.map((reason) => reason.code).join(",")}]`, conflict: reasons.some((reason) => reason.code === "TransactionConflict") };
+  }
+  if (name === "TransactionInProgressException") return { kind: "in-progress", detail: describe(error) };
+  if (NOT_APPLIED.has(name)) return { kind: "not-applied", detail: describe(error), conflict: name === "TransactionConflictException" };
+  return { kind: "unknown", detail: describe(error) };
+}
+
 async function sendOnce(client: DynamoDBClient, items: readonly TransactWriteItem[], token: string): Promise<Sent> {
   try {
     await client.send(new TransactWriteItemsCommand({ TransactItems: items as TransactWriteItem[], ClientRequestToken: token }), { abortSignal: deadline() });
     return { kind: "applied" };
   } catch (error) {
-    const name = (error as { name?: string } | null)?.name ?? "";
-    if (name === "TransactionCanceledException") {
-      const raw = (error as { CancellationReasons?: Array<{ Code?: string; Item?: Record<string, AttributeValue> }> }).CancellationReasons ?? [];
-      const reasons = raw.map((reason) => ({ code: reason.Code ?? "None", item: reason.Item ?? null }));
-      if (reasons.some((reason) => reason.code === "ConditionalCheckFailed")) return { kind: "refused", reasons, detail: describe(error) };
-      /* Cancelled for another reason (a conflicting transaction, throttling on an item, a validation error): nothing of
-         this request was applied, and nothing was evaluated that says anything about an earlier attempt. */
-      return { kind: "not-applied", detail: `${describe(error)} [${reasons.map((reason) => reason.code).join(",")}]`, conflict: reasons.some((reason) => reason.code === "TransactionConflict") };
-    }
-    if (name === "TransactionInProgressException") return { kind: "in-progress", detail: describe(error) };
-    if (NOT_APPLIED.has(name)) return { kind: "not-applied", detail: describe(error), conflict: name === "TransactionConflictException" };
-    return { kind: "unknown", detail: describe(error) };
+    return classifyTransactFailure(error);
   }
 }
 

@@ -181,7 +181,8 @@ describe("L5-8 §2: the IaC's static evidence", () => {
     const locals = files.find((f) => f.file === "modules/app/locals.tf")?.text ?? "";
     const envBlock = locals.slice(locals.indexOf("container_environment"), locals.indexOf("healthz_command"));
     const names = [...envBlock.matchAll(/name = "([A-Z_]+)"/g)].map((m) => m[1]).sort();
-    assert.deepEqual(names, ["BUILD_ID", "ESCROW_MONEY_TABLES", "GS_ALLOWED_ORIGINS", "GS_AWS_CONFIG_PARAMETER", "GS_MODE", "GS_STORAGE", "GS_TRUSTED_PROXY_HOPS", "PORT"]);
+    /* LIVE-6 L6-6 adds exactly one optional name: GS_EDGE_DIAGNOSTIC (the staging certification's edge mirror). */
+    assert.deepEqual(names, ["BUILD_ID", "ESCROW_MONEY_TABLES", "GS_ALLOWED_ORIGINS", "GS_AWS_CONFIG_PARAMETER", "GS_EDGE_DIAGNOSTIC", "GS_MODE", "GS_STORAGE", "GS_TRUSTED_PROXY_HOPS", "PORT"]);
     const ecs = files.find((f) => f.file === "modules/app/ecs.tf")?.text ?? "";
     assert.ok(!/^\s*secrets\s*=/m.test(ecs) && !/environmentFiles\s*=/.test(ecs), "no secrets / environmentFiles injection");
     assert.ok(/stopTimeout\s*=\s*120/.test(ecs), "stopTimeout 120");

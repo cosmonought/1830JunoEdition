@@ -26,6 +26,7 @@ import { compatibilityDescriptor, bannerLines } from "../../compatibilityDescrip
 import { JunoConfigError, parseJunoBackendConfig, type JunoBackendConfig } from "../../escrow/juno/junoConfig";
 import type { ServerConfig } from "../../identity/mode";
 import { READY_PATH } from "../../ingress/readiness";
+import { EDGE_DIAGNOSTIC_ENV, edgeDiagnosticSwitch } from "../../ingress/edgeDiagnostic";
 import { HEALTH_PATH } from "../../identity/httpApi";
 import { RULES_ENGINE_VERSION, SUPPORTED_RULES_ENGINE_VERSIONS } from "../../../../frontend/src/gameEngine/rulesVersion";
 import { AwsStartupError, EXIT_REFUSED, startAwsRuntime, type AwsRuntime } from "./awsRuntime";
@@ -144,6 +145,12 @@ export async function runAwsStorageMode(input: { readonly argv: readonly string[
     return refuse(error instanceof Error ? error.message : String(error));
   }
   if (stopRequested) return refuse("a stop was asked for before the runtime started; nothing was touched", 0);
+  /* LIVE-6 L6-6: the staging edge mirror -- absent (off), `staging` (on), anything else refused; never on mainnet. */
+  const edge = edgeDiagnosticSwitch(input.env[EDGE_DIAGNOSTIC_ENV], {
+    environment: startup.config.environment,
+    escrow: startup.escrowConfig === null ? null : { networkClass: startup.escrowConfig.networkClass, chainId: startup.escrowConfig.chainId },
+  });
+  if (!edge.ok) return refuse(edge.reason);
   const { config } = startup;
   const task = newTaskId();
   console.log(
@@ -162,6 +169,7 @@ export async function runAwsStorageMode(input: { readonly argv: readonly string[
       port: input.port,
       bindHost: AWS_BIND_HOST,
       moneySwitch: input.env.ESCROW_MONEY_TABLES ?? flagValue(input.argv, "--money-tables"),
+      edgeDiagnostic: edge.enabled,
       task,
       substrate: realAwsSubstrate({ config, clients: createAwsClients(config) }),
       ops,

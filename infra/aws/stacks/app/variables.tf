@@ -37,6 +37,11 @@ variable "money_tables_nonmainnet" {
   default = false
 }
 
+variable "edge_diagnostic_staging" {
+  type    = bool
+  default = false
+}
+
 variable "network" {
   type = any
 }

@@ -117,6 +117,16 @@ variable "money_tables_nonmainnet" {
   }
 }
 
+variable "edge_diagnostic_staging" {
+  description = "LIVE-6 L6-6: sets GS_EDGE_DIAGNOSTIC=staging, mounting /gs/diag/edge (a hashed mirror of each request) for the staging certification's edge probe. Never with a mainnet escrow, never in a prod* environment."
+  type        = bool
+  default     = false
+  validation {
+    condition     = !var.edge_diagnostic_staging || ((var.escrow == null || try(var.escrow.network_class, "") != "mainnet") && !startswith(var.environment, "prod"))
+    error_message = "edge_diagnostic_staging is the staging certification's probe: refused with a mainnet escrow or in a prod* environment."
+  }
+}
+
 variable "network" {
   description = <<-EOT
     The existing VPC (this slice does not design networks).

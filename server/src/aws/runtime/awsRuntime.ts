@@ -255,6 +255,9 @@ export interface AwsRuntimeInput<W extends PoolWriterPort, L extends Inspectable
   readonly bindHost: string;
   /** `ESCROW_MONEY_TABLES` (as in PROCESS mode). */
   readonly moneySwitch: string | undefined;
+  /** LIVE-6 L6-6: mount `/gs/diag/edge` (`GS_EDGE_DIAGNOSTIC=staging`, checked by `awsMain.ts`; never beside a mainnet
+   *  escrow configuration). Absent or false: no such route. */
+  readonly edgeDiagnostic?: boolean;
   /** This process's task id (random per process; diagnostic in the pool and role items). */
   readonly task: string;
   readonly substrate: AwsSubstrate<W, L>;
@@ -712,6 +715,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       statusExtras,
       ownership,
       readiness,
+      ...(input.edgeDiagnostic === true ? { edgeDiagnostic: { trustedProxyHops: input.server.trustedProxyHops } } : {}),
     });
   } catch (error) {
     return refuse(`the game server could not be built (${describe(error)})`);
@@ -719,6 +723,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   serverRef.current = server;
   closers.push(() => void server.close().catch(() => undefined));
   step("game-server", `game server built with POOL ownership, listening on ${input.bindHost}:${input.port}; /gs/readyz answers from the pool writer's readiness`);
+  if (input.edgeDiagnostic === true) input.warn("  edge: GS_EDGE_DIAGNOSTIC=staging -- /gs/diag/edge answers the staging certification's edge probe (hashed mirror of each request; never on mainnet)");
   const chainFacts = listenForChainFacts({ onChainFacts: (listener) => serving.onChainFacts(listener), lifecycle: server.lifecycle, settlement });
   if (opened !== null && escrowConfig !== null) {
     moneyRef.current = createMoneyTables(

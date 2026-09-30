@@ -61,9 +61,10 @@ const describeError = (error: unknown): string => `${(error as { name?: string }
 /** The published id of AWS's managed CachingDisabled cache policy (the same in every account). */
 export const CACHING_DISABLED_POLICY_ID = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad";
 
-/** L5-7 §14: the task's environment, exactly (ESCROW_MONEY_TABLES only as the non-mainnet staging switch). */
+/** L5-7 §14: the task's environment, exactly (ESCROW_MONEY_TABLES only as the non-mainnet staging switch; LIVE-6 L6-6:
+ *  GS_EDGE_DIAGNOSTIC only as the staging certification's edge mirror, `staging`). */
 export const TASK_ENVIRONMENT_REQUIRED: readonly string[] = Object.freeze(["GS_MODE", "GS_STORAGE", "GS_AWS_CONFIG_PARAMETER", "BUILD_ID", "PORT", "GS_ALLOWED_ORIGINS", "GS_TRUSTED_PROXY_HOPS"]);
-export const TASK_ENVIRONMENT_OPTIONAL: readonly string[] = Object.freeze(["ESCROW_MONEY_TABLES"]);
+export const TASK_ENVIRONMENT_OPTIONAL: readonly string[] = Object.freeze(["ESCROW_MONEY_TABLES", "GS_EDGE_DIAGNOSTIC"]);
 export const TASK_ENVIRONMENT_FORBIDDEN: readonly string[] = Object.freeze(["DATA_DIR", "ESCROW_JUNO_CONFIG", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"]);
 
 /* ------------------------------------------------------------------ */
@@ -304,6 +305,7 @@ export function checkTaskDefinitionEvidence(pool: string, doc: Json, expect: { r
     env.get("GS_AWS_CONFIG_PARAMETER") === expect.runtimeParameterArn ? null : `GS_AWS_CONFIG_PARAMETER=${env.get("GS_AWS_CONFIG_PARAMETER")} (expected ${expect.runtimeParameterArn})`,
     env.get("PORT") === String(expect.port) ? null : `PORT=${env.get("PORT")} (the container port is ${expect.port})`,
     !env.has("ESCROW_MONEY_TABLES") || env.get("ESCROW_MONEY_TABLES") === "nonmainnet" ? null : `ESCROW_MONEY_TABLES=${env.get("ESCROW_MONEY_TABLES")}`,
+    !env.has("GS_EDGE_DIAGNOSTIC") || (env.get("GS_EDGE_DIAGNOSTIC") === "staging" && !/^prod/.test(expect.environment)) ? null : `GS_EDGE_DIAGNOSTIC=${env.get("GS_EDGE_DIAGNOSTIC")} (the staging edge mirror; never in ${expect.environment})`,
   ].filter((p): p is string => p !== null);
   checks.push(judge(`${label}: environment values`, values.length === 0, "production, aws, this pool's runtime document", values.join("; ")));
   const ports = arr(game.portMappings).map((p) => obj(p).containerPort);

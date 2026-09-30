@@ -750,6 +750,30 @@ describe("L5-7 readiness: /gs/readyz follows the pool writer, not HTTP", () => {
     }
   });
 
+  test("LIVE-6 L6-6: /gs/diag/edge exists only when the runtime is asked for it (GS_EDGE_DIAGNOSTIC=staging), and is a hashed mirror", async () => {
+    const on = await harness().start({ edgeDiagnostic: true });
+    try {
+      const port = await listening(on);
+      const answer = await get(port, "/gs/diag/edge?cp=1&cr=11&cb=b1&l6x=hunter2");
+      assert.equal(answer.status, 200, answer.body);
+      const body = JSON.parse(answer.body);
+      assert.equal(body.format, "18COSMOS/EDGE-DIAGNOSTIC/v1");
+      assert.equal(body.parameters.length, 4);
+      assert.ok(!answer.body.includes("hunter2"));
+      assert.equal((await get(port, "/gs/diag/edge", "POST")).status, 405);
+    } finally {
+      await closed(on);
+    }
+    const off = await harness().start();
+    try {
+      const port = await listening(off);
+      const answer = await get(port, "/gs/diag/edge?cp=1");
+      assert.ok(!answer.body.includes("EDGE-DIAGNOSTIC"), "no such route by default");
+    } finally {
+      await closed(off);
+    }
+  });
+
   test("the public body carries only fixed codes and ids -- no error text, table, ARN or account", async () => {
     const h = harness({ escrow: true, relayer: ["throws"] });
     const runtime = await h.start();

@@ -30,6 +30,7 @@ import { WebSocket } from "ws";
 import { createDynamoDbClient, deadline, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV } from "../../aws/awsClients";
 import { claimGame, releaseGame, takeOverPool } from "../../aws/game/ownership";
 import { headKey, readHead } from "../../aws/game/gameTable";
+import { bootstrapGenerationMarker, generationMarkerItem } from "../../aws/game/generationMarker";
 import { readRouting, ROUTING_KEY, setPrimaryPool } from "../../aws/game/routing";
 import { createDynamoIdentityStore, readIdentityRole, takeOverIdentityWriter } from "../../aws/identity/dynamoIdentityStore";
 import { keyAttributes, keys } from "../../aws/identity/identityItems";
@@ -313,6 +314,9 @@ describe("§3 a primary and a non-primary task on the same tables; the routing f
     const identity = await tables.create("l61-identity");
     const ledger = await tables.create("l61-ledger");
     await admin.send(new PutItemCommand({ TableName: ledger, Item: { ...LEDGER_KEYS.appgen(), schema: N(1), current_generation: N(1) } }), { abortSignal: deadline() });
+    /* LIVE-6 L6-4 (integrated by L6-2): the first deployment's bootstrap marks the first game table with its generation. */
+    const marker = bootstrapGenerationMarker({ generation: 1, gameTable: docFor("p0").gameTable, by: "l5-8-bootstrap", now: 1 });
+    await admin.send(new PutItemCommand({ TableName: game, Item: generationMarkerItem(marker), ConditionExpression: "attribute_not_exists(pk)" }), { abortSignal: deadline() });
     assert.equal((await setPrimaryPool(admin, game, { pool: "p0", expectedVersion: null, by: "pipeline", now: 1 })).kind, "set");
     const t = { game, identity, ledger };
 

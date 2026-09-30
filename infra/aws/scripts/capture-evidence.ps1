@@ -61,7 +61,7 @@ DescribeTasks "cluster-tasks.json" (TaskArns @("--desired-status", "RUNNING", "-
 $tg = & aws --region $Region elbv2 describe-target-groups --names "gs-$Environment-primary" --query "TargetGroups[0].TargetGroupArn" --output text
 Save "target-health.json" @("elbv2", "describe-target-health", "--target-group-arn", $tg)
 Save "distribution.json" @("cloudfront", "get-distribution", "--id", $Distribution)
-# LIVE-6 L6-6 x L6-4: every ACTIVE revision of each pool's family (the rollback targets; see capture-evidence.sh).
+# LIVE-6 L6-6 x L6-4: every ACTIVE revision of each pool's family (informational since L6-6R; see capture-evidence.sh).
 foreach ($pool in $pools) {
   $arns = TaskArnsOf @("ecs", "list-task-definitions", "--family-prefix", "gs-$Environment-$pool", "--status", "ACTIVE", "--query", "taskDefinitionArns[]")
   $defs = @()

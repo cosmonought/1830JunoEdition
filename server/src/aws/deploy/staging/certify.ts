@@ -60,7 +60,7 @@ import {
 } from "./evidence";
 import { IAM_PROBE_IDS, judgeIamProbe } from "./iamProbe";
 import { judgeKmsProbe } from "./kmsProbe";
-import { generationMeasurement, judgeGeneration, judgeIdentityRecovery, judgeReviews, judgeRestoreFencing, judgeRestoreQuiet, judgeRollback, NOT_INTEGRATED, type GenerationEvidence, type HeartbeatEvidence } from "./recovery";
+import { adoptionOf, certifierImage, generationMeasurement, judgeGeneration, judgeIdentityRecovery, judgeReviews, judgeRestoreFencing, judgeRestoreQuiet, judgeRollback, NOT_INTEGRATED, type GenerationEvidence, type HeartbeatEvidence } from "./recovery";
 import { buildIdOf, checkClusterTasks, checkRunningTasks, checkServicesSettled, checkTargetHealth } from "./prerequisite";
 import { STACKS, TERRAFORM_FILES, judgeTerraformStack } from "./terraformPlan";
 import { judgeTransactionProbe } from "./transactionProbe";
@@ -514,9 +514,18 @@ export const STAGING_GATES: readonly StagingGate[] = Object.freeze([
     required: () => true,
     evaluate: (ctx, records) => {
       const runner = records.taskRole.ok ? obj(obj(records.taskRole.value).runner) : {};
+      const own = certifierImage(ctx.dir, { primaryPool: ctx.primaryPool, primaryTaskDefinition: ctx.prerequisite.identity.task_definitions[ctx.primaryPool] ?? null, primaryBuild: ctx.prerequisite.identity.build_id, runner });
       return {
-        checks: judgeRollback(ctx.dir, { pools: ctx.pools, runningBuild: ctx.prerequisite.identity.build_id, runningCapabilities: runner.build_id === ctx.prerequisite.identity.build_id ? runner.build_capabilities : null, runningTaskDefinitions: ctx.prerequisite.identity.task_definitions }),
-        measurements: { build_capabilities: runner.build_capabilities ?? null },
+        checks: judgeRollback(ctx.dir, {
+          environment: ctx.environment,
+          pools: ctx.pools,
+          primaryPool: ctx.primaryPool,
+          primaryBuild: ctx.prerequisite.identity.build_id,
+          runningTaskDefinitions: ctx.prerequisite.identity.task_definitions,
+          running: ctx.prerequisite.running,
+          runner,
+        }),
+        measurements: { build_capabilities: runner.build_capabilities ?? null, image: own.image, image_digest: own.digest },
       };
     },
   },
@@ -525,20 +534,21 @@ export const STAGING_GATES: readonly StagingGate[] = Object.freeze([
     title: "Restore drill: the stop before adoption",
     required: (ctx) => ctx.scenario === "restore-drill",
     notRequired: "not required: no restore drill in this scenario",
-    evaluate: (ctx) => {
-      const appgen = ctx.generationEvidence.appgen !== null && ctx.generationEvidence.appgen.ok ? ctx.generationEvidence.appgen.value : null;
-      return { checks: [...(ctx.generationEvidence.integrated ? [] : [fail("restore: the adoption time", NOT_INTEGRATED)]), ...judgeRestoreQuiet(ctx.dir, { run: ctx.run, adoptedAt: appgen?.adoption?.adopted_at ?? null, heartbeats: ctx.heartbeats })] };
-    },
+    evaluate: (ctx) => ({
+      checks: [
+        ...(ctx.generationEvidence.integrated ? [] : [fail("restore: the adoption time", NOT_INTEGRATED)]),
+        ...judgeRestoreQuiet(ctx.dir, { run: ctx.run, environment: ctx.environment, pools: ctx.pools, adoption: adoptionOf(ctx.generationEvidence), heartbeats: ctx.heartbeats }),
+      ],
+    }),
   },
   {
     id: "restore-fence",
     title: "Restore drill: the old generation fenced, the new one started",
     required: (ctx) => ctx.scenario === "restore-drill",
     notRequired: "not required: no restore drill in this scenario",
-    evaluate: (ctx) => {
-      const appgen = ctx.generationEvidence.appgen !== null && ctx.generationEvidence.appgen.ok ? ctx.generationEvidence.appgen.value : null;
-      return { checks: judgeRestoreFencing(ctx.dir, { run: ctx.run, newGeneration: appgen?.adoption === null || appgen === null ? null : appgen.current_generation }) };
-    },
+    evaluate: (ctx) => ({
+      checks: [...(ctx.generationEvidence.integrated ? [] : [fail("restore fencing: the adoption", NOT_INTEGRATED)]), ...judgeRestoreFencing(ctx.dir, { run: ctx.run, adoption: adoptionOf(ctx.generationEvidence) })],
+    }),
   },
   {
     id: "evidence",
@@ -613,11 +623,13 @@ export function certificationRecord(ctx: CertContext, result: { readonly passed:
     pools: ctx.pools,
     commit: ctx.commit,
     build_id: ctx.prerequisite.identity.build_id,
-    /* The image's own L6-4 evidence (the certifier task's report): a later run's rollback gate attests this build by it. */
-    build_capabilities: (() => {
+    ...(() => {
+      /* The image's own L6-4 evidence (the certifier task's report) and the image ECS ran it from: a later run's rollback
+         gate attests THIS image (by its reference and digest, never the BUILD_ID text) only from a PASS of this record. */
       const r = readEvidence(ctx.dir, EVIDENCE.taskRole, { ownRecord: true });
       const runner = r.ok ? obj(obj(r.value).runner) : {};
-      return runner.build_id === ctx.prerequisite.identity.build_id ? (runner.build_capabilities ?? null) : null;
+      const own = certifierImage(ctx.dir, { primaryPool: ctx.primaryPool, primaryTaskDefinition: ctx.prerequisite.identity.task_definitions[ctx.primaryPool] ?? null, primaryBuild: ctx.prerequisite.identity.build_id, runner });
+      return { build_capabilities: runner.build_id === ctx.prerequisite.identity.build_id ? (runner.build_capabilities ?? null) : null, image: own.image, image_digest: own.digest };
     })(),
     task_definitions: ctx.prerequisite.identity.task_definitions,
     gates: result.gates,

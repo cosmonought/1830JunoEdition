@@ -195,9 +195,11 @@ empty). There is no `--force`. The code is `server/src/aws/deploy/staging/`; the
 
 **Replacement scenario:** `drain-pool.sh <env> <region> <pool> <dir> R`, then `terraform apply`, then steps 1-7 with
 `--scenario replacement --replaced-pools <pool>` (the drain precedes the prerequisite, which examines the new deployment).
-**Restore drill** (L6-4): stop every pool, `capture-restore-stop.sh <env> <region> R <dir> <pools...>`, prepare and adopt
-(`npm run recovery -- ...`), switch the runtime document, start, then steps 1-7 with `--scenario restore-drill`; the fencing
-probe's record (`probe-restore-fencing.json`) is a later real-staging slice's.
+**Restore drill** (L6-4): stop every pool, `capture-restore-stop.sh <env> <region> R <restore id> <dir> <pools...>` (every
+pool's service at zero; every task the cluster lists, desired RUNNING and desired STOPPED, STOPPED), prepare and adopt
+(`npm run recovery -- ... --restore-id <the same restore id>`, within 6 h of the capture), switch the runtime document,
+start, then steps 1-7 with `--scenario restore-drill`; the fencing probe's record (`probe-restore-fencing.json`, bound to
+the adoption, one structured result per case -- `recovery.ts`) is a later real-staging slice's.
 
 **The gates** (a gate passes only with at least one check and every check passed; missing evidence and verifier SKIPs are
 failures): prerequisite (settled, the examined revision running, nothing beside the services, target health, unchanged since
@@ -209,9 +211,13 @@ idle path (longer than every idle bound plus two server pings), KMS Sign latency
 disposable digest; no chain, no ledger), both Terraform plans (nothing destroyed, replaced or de-protected except
 skip_destroy task-definition revisions; services gated on the routing read), and the evidence package (no secret; the commit
 is the checkout's HEAD). **L6-4 contract:** `SYSTEM/GENERATION` strict and bound by APPGEN's adoption (never the number
-alone), the identity table serving-safe with its `TABLE#identity` binding, no open `REVIEW#`, L6-4 in the serving image and
-in every ACTIVE task-definition revision (the rollback targets; earlier builds attested by `prior-certifications/`), and for
-a restore drill the stop before `adopted_at` and the fencing slot. Until the integration binds L6-4's readers, those gates
+alone), the identity table serving-safe with its `TABLE#identity` binding, no open `REVIEW#`, L6-4 in the image of EVERY pool's automatic rollback target -- the circuit breaker's
+target is the service's most recent COMPLETED deployment (in a settled service, the running one), never "any ACTIVE
+revision" -- attested by image (the task definition's reference and the digest ECS ran), from this run's certifier task or an
+earlier PASSing certification of the same environment copied into `prior-certifications/` (L6-6R) -- so EVERY pool runs
+at least one task during a certification (a pool at desired 0 shows ECS no digest, and its task definition names a tag,
+which is not evidence of content: its rollback target FAILS unless pinned `@sha256:`) -- and for a restore drill the stop
+before `adopted_at` and the fencing slot. Until the integration binds L6-4's readers, those gates
 FAIL "not integrated".
 
 The first line of `CERTIFICATION.txt` (and of the command's output) is `LIVE-6 AWS STAGING CERTIFICATION: PASS` or `FAIL`,

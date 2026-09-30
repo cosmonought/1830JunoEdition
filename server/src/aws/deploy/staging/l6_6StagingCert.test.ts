@@ -47,7 +47,7 @@ import { CACHING_DISABLED_POLICY_ID, checkEdgeEvidence, checkEvidenceDirectory, 
 import { certify, CERTIFIER_STORAGE_OVERRIDE, certificationText, judgeCertifierTask, prerequisiteChecks, prerequisiteRecord, repositoryHead, VERDICT_LINE, writeCertification, type CertContext } from "./certify";
 import { stageCertCommand, stageProbeCommand, recordFromLog, recordLines, type StagingDeps } from "./commands";
 import { closedBy, judgeQueryProbe, judgeWsIdle, nodeEdgeTransport, probeQuery, requiredIdleMs, runEdgeProbe, type EdgeTransport, type SocketEvent, type SocketObservation } from "./edgeProbe";
-import { EVIDENCE, EvidenceRefusedError, readEvidence, secretFindings, stableStringify, writeRecord } from "./evidence";
+import { CERTIFICATION_FORMAT, EVIDENCE, EvidenceRefusedError, obj, readEvidence, secretFindings, stableStringify, writeRecord } from "./evidence";
 import { classifyIamAnswer, IAM_PROBE_IDS, iamProbeSpecs, iamProbeWriteProblem, judgeIamProbe, runIamProbe, type IamAnswer } from "./iamProbe";
 import { judgeKmsProbe, KMS_LATENCY_BOUND_MS, runKmsProbe } from "./kmsProbe";
 import { judgeTerraformStack, AWS_PROVIDER } from "./terraformPlan";
@@ -69,6 +69,8 @@ const TASK = "arn:aws:ecs:us-east-1:111111111111:task/gs-staging/0aaa1111bbbb222
 const TASK_IP = "10.0.1.23";
 const CERTIFIER_TASK = "arn:aws:ecs:us-east-1:111111111111:task/gs-staging/9fff0000aaaa1111bbbb2222cccc3333";
 const HEAD = repositoryHead(REPO) ?? "unreadable";
+const IMAGE = "111111111111.dkr.ecr.us-east-1.amazonaws.com/gs-staging-server:2026-09-30-test";
+const DIGEST = `sha256:${"d1".repeat(32)}`;
 
 /* ------------------------------------------------------------------ */
 /* L6-4's readers, as the integration binds them (fakes answering parsed shapes) */
@@ -83,6 +85,8 @@ const IDENTITY_TABLE = "gs-staging-identity";
 interface ReaderScript {
   readonly marker?: GenerationMarkerFacts | null | Error;
   readonly appgen?: AppGenerationFacts | null | Error;
+  /** L6-4's own startup rule's answer (default: none -- the fake binds no L6-4 code; each direction is tested). */
+  readonly startup?: string | null | Error;
   readonly restore?: IdentityRestoreFacts | null;
   readonly self?: string | null;
   readonly servingProblem?: string | null;
@@ -92,6 +96,10 @@ const answer = <T>(value: T | Error): Promise<T> => (value instanceof Error ? Pr
 const readersFor = (script: ReaderScript = {}): RecoveryReaders => ({
   generationMarker: async () => answer(script.marker === undefined ? BOOT_MARKER : script.marker),
   appGeneration: async () => answer(script.appgen === undefined ? BOOT_APPGEN : script.appgen),
+  generationServingProblem: () => {
+    if (script.startup instanceof Error) throw script.startup;
+    return script.startup ?? null;
+  },
   identityState: async () => ({ restore: script.restore ?? null, self: script.self === undefined ? IDENTITY_TABLE : script.self, servingProblem: script.servingProblem ?? null }),
   reviews: async () => answer(script.reviews ?? []),
 });
@@ -298,6 +306,7 @@ const TASK_DEFINITION = {
     containerDefinitions: [
       {
         name: "game-server",
+        image: IMAGE,
         portMappings: [{ containerPort: 8917, hostPort: 8917, protocol: "tcp" }],
         environment: [
           { name: "GS_MODE", value: "production" },
@@ -326,7 +335,7 @@ const RUNNING_TASKS = {
       taskDefinitionArn: TD,
       createdAt: "2026-09-30T09:00:00.000000+00:00",
       attachments: [{ type: "ElasticNetworkInterface", details: [{ name: "privateIPv4Address", value: TASK_IP }] }],
-      containers: [{ name: "game-server", lastStatus: "RUNNING" }],
+      containers: [{ name: "game-server", lastStatus: "RUNNING", imageDigest: DIGEST }],
     },
   ],
   failures: [],
@@ -510,7 +519,7 @@ const CERTIFIER_RUN = {
       group: "family:gs-staging-p1",
       startedBy: "l6-6-cert",
       lastStatus: "STOPPED",
-      containers: [{ name: "game-server", exitCode: 0 }],
+      containers: [{ name: "game-server", exitCode: 0, imageDigest: DIGEST }],
       overrides: {
         containerOverrides: [
           {
@@ -1677,6 +1686,8 @@ describe("L6-6 x L6-4: the integrated deployment cannot PASS without generation,
     judgeRestoreQuiet,
     judgeRestoreFencing,
     RESTORE_STOP_DIR,
+    RESTORE_STOP_FORMAT,
+    RESTORE_FENCING_FORMAT,
     PRIOR_CERTIFICATIONS,
   } = require("./recovery") as typeof import("./recovery");
   const expect1 = { generation: 1, gameTable: "gs-staging-game-g1", requireRestore: false };
@@ -1690,7 +1701,7 @@ describe("L6-6 x L6-4: the integrated deployment cannot PASS without generation,
   test("THIS branch binds no L6-4 reader: every recovery gate FAILS 'not integrated', and so does the certification", async () => {
     const built = await buildPackage({ taskRole: await taskRoleRecord({ identity: null }) });
     try {
-      const { result } = await verdictOf(built, { generationEvidence: { integrated: false, marker: null, appgen: null } });
+      const { result } = await verdictOf(built, { generationEvidence: { integrated: false, marker: null, appgen: null, startupRule: null } });
       assert.equal(result.passed, false);
       for (const gate of ["generation", "identity", "review"]) assert.match(gateFailures(result, gate).join("\n"), /not bound in this build/, gate);
     } finally {
@@ -1752,49 +1763,259 @@ describe("L6-6 x L6-4: the integrated deployment cannot PASS without generation,
     }
   });
 
-  test("rollback: the serving image must carry L6-4; every ACTIVE earlier revision must be an attested L6-4 build", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l66-rollback-"));
+  test("rollback: EVERY pool's automatic rollback target (its COMPLETED deployment) must run an attested L6-4 image", async () => {
+    const built = await buildPackage();
     try {
-      const td = (rev: number, build: string) => ({ ...clone(TASK_DEFINITION.taskDefinition), taskDefinitionArn: TD.replace(":7", `:${rev}`), containerDefinitions: [{ ...clone(TASK_DEFINITION.taskDefinition.containerDefinitions[0]), environment: [{ name: "BUILD_ID", value: build }] }] });
-      const expect = { pools: ["p1"], runningBuild: "2026-09-30-test", runningCapabilities: ALL_L64, runningTaskDefinitions: { p1: TD } };
-      write(dir, revisionsFile("p1"), { taskDefinitions: [TASK_DEFINITION.taskDefinition] });
-      assert.deepEqual(failures(judgeRollback(dir, expect)), [], "the first deployment: only the running revision");
-      write(dir, revisionsFile("p1"), { taskDefinitions: [TASK_DEFINITION.taskDefinition, td(6, "2026-09-01-pre-l64")] });
-      assert.match(failures(judgeRollback(dir, expect)).map((c) => c.detail).join(), /unattested \(pre-L6-4 or unknown\) rollback target\(s\): gs-staging-p1:6 \(BUILD_ID 2026-09-01-pre-l64\)/);
-      write(dir, path.join(PRIOR_CERTIFICATIONS, "c1.json"), { verdict: "PASS", build_id: "2026-09-01-pre-l64", build_capabilities: { generation_marker: true, app_generation: false } });
-      assert.equal(failures(judgeRollback(dir, expect)).length, 1, "a prior certification of a build WITHOUT L6-4 attests nothing");
-      write(dir, path.join(PRIOR_CERTIFICATIONS, "c1.json"), { verdict: "PASS", build_id: "2026-09-01-pre-l64", build_capabilities: ALL_L64 });
-      assert.deepEqual(failures(judgeRollback(dir, expect)), [], "an earlier PASSing certification of an L6-4 build attests it");
-      assert.match(failures(judgeRollback(dir, { ...expect, runningCapabilities: { ...ALL_L64, identity_restore: false } })).map((c) => c.detail).join(), /the first AWS-mode image must contain L6-4/);
-      assert.match(failures(judgeRollback(dir, { ...expect, runningCapabilities: null })).map((c) => c.name).join(), /serving image contains L6-4/);
-      fs.rmSync(path.join(dir, revisionsFile("p1")));
-      assert.match(failures(judgeRollback(dir, expect)).map((c) => c.detail).join(), /revisions-p1.json is missing/);
+      const ctx = await built.ctx();
+      const runner = obj(obj(JSON.parse(fs.readFileSync(path.join(built.dir, EVIDENCE.taskRole), "utf8"))).runner);
+      const expect = { environment: "staging", pools: ["p1"], primaryPool: "p1", primaryBuild: "2026-09-30-test", runningTaskDefinitions: { p1: TD }, running: ctx.prerequisite.running, runner };
+      const failed = (e: Partial<typeof expect> = {}) => failures(judgeRollback(built.dir, { ...expect, ...e })).map((c) => `${c.name}: ${c.detail}`).join("\n");
+      assert.equal(failed(), "", "the certified image serves p1 and is its rollback target");
+      /* An ACTIVE earlier revision is NOT a candidate (skip_destroy keeps every revision ACTIVE; the circuit breaker never selects it). */
+      const pre = { ...clone(TASK_DEFINITION.taskDefinition), taskDefinitionArn: TD.replace(":7", ":6"), containerDefinitions: [{ ...clone(TASK_DEFINITION.taskDefinition.containerDefinitions[0]), image: IMAGE.replace("2026-09-30-test", "2026-09-01-pre-l64") }] };
+      write(built.dir, revisionsFile("p1"), { taskDefinitions: [TASK_DEFINITION.taskDefinition, pre] });
+      assert.equal(failed(), "", "an unselectable ACTIVE revision is not treated as a rollback target");
+      fs.rmSync(path.join(built.dir, revisionsFile("p1")));
+      assert.equal(failed(), "", "the ACTIVE-revision list is informational");
+      /* The capability report must be complete and the certifier task's own. */
+      assert.match(failed({ runner: { ...runner, build_capabilities: { ...ALL_L64, identity_restore: false } } }), /the first AWS-mode image must contain L6-4/);
+      assert.match(failed({ runner: { ...runner, task_arn: TASK } }), /not the certifier task's own/);
+      assert.match(failed({ runner: { ...runner, build_id: "2026-09-30-other" } }), /BUILD_ID 2026-09-30-other is not the service's/);
+      assert.match(failed({ runner: {} }), /certified image contains L6-4/);
+      /* The capability report is the certifier task's, and that task ran the primary's RUNNING definition. */
+      const run = clone(CERTIFIER_RUN);
+      run.tasks[0].taskDefinitionArn = TD.replace(":7", ":6");
+      write(built.dir, EVIDENCE.taskRoleRun, run);
+      assert.match(failed(), /the certifier task ran .*gs-staging-p1:6, not the primary's running/);
+      run.tasks[0].taskDefinitionArn = TD;
+      run.tasks[0].containers = [{ name: "game-server", exitCode: 0 } as never];
+      write(built.dir, EVIDENCE.taskRoleRun, run);
+      assert.match(failed(), /ECS reports no image digest for the certifier task/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("rollback, end to end: the primary's serving task on another digest than the certified one FAILS the certification", async () => {
+    const built = await buildPackage({ mutate: { [EVIDENCE.runningTasks]: (v) => ((v.tasks[0].containers[0].imageDigest = `sha256:${"ee".repeat(32)}`), v) } });
+    try {
+      const { result } = await verdictOf(built);
+      assert.deepEqual(failedGates(result), ["rollback"]);
+      assert.match(gateFailures(result, "rollback").join("\n"), /p1 serves, and would roll back to, an L6-4 image: gs-staging-p1:7: .* @ sha256:eeee.* is not an attested L6-4 image/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("rollback (L6-6R High): a NON-PRIMARY pool rolled back to (or serving) a pre-L6-4 image FAILS -- it was never checked before", async () => {
+    const built = await buildPackage();
+    try {
+      const ctx = await built.ctx();
+      const runner = obj(obj(JSON.parse(fs.readFileSync(path.join(built.dir, EVIDENCE.taskRole), "utf8"))).runner);
+      const TD2 = "arn:aws:ecs:us-east-1:111111111111:task-definition/gs-staging-p2:3";
+      const PRE_IMAGE = IMAGE.replace("2026-09-30-test", "2026-09-01-pre-l64");
+      const PRE_DIGEST = `sha256:${"0e".repeat(32)}`;
+      const services = clone(SERVICES) as any;
+      services.services.push({ ...clone(SERVICES.services[0]), serviceName: "gs-staging-p2", taskDefinition: TD2, deployments: [{ status: "PRIMARY", taskDefinition: TD2, rolloutState: "COMPLETED" }] });
+      write(built.dir, EVIDENCE_FILES.services, services);
+      const td2 = { taskDefinition: { ...clone(TASK_DEFINITION.taskDefinition), taskDefinitionArn: TD2, family: "gs-staging-p2", containerDefinitions: [{ ...clone(TASK_DEFINITION.taskDefinition.containerDefinitions[0]), image: PRE_IMAGE, environment: [{ name: "BUILD_ID", value: "2026-09-30-test" }] }] } };
+      write(built.dir, EVIDENCE_FILES.taskDefinition("p2"), td2);
+      const p2task = { ...clone(RUNNING_TASKS.tasks[0]), taskArn: TASK.replace("0aaa", "0bbb"), group: "service:gs-staging-p2", taskDefinitionArn: TD2, containers: [{ name: "game-server", lastStatus: "RUNNING", imageDigest: PRE_DIGEST }] };
+      const running = new Map([...ctx.prerequisite.running, ["p2", [p2task]]]);
+      const expect: Parameters<typeof judgeRollback>[1] = { environment: "staging", pools: ["p1", "p2"], primaryPool: "p1", primaryBuild: "2026-09-30-test", runningTaskDefinitions: { p1: TD, p2: TD2 }, running, runner };
+      const failed = (e: Partial<Parameters<typeof judgeRollback>[1]> = {}) => failures(judgeRollback(built.dir, { ...expect, ...e })).map((c) => `${c.name}: ${c.detail}`).join("\n");
+      /* The BUILD_ID text is copied from the certified build: it attests nothing (the image does). */
+      assert.match(failed(), /p2 serves, and would roll back to, an L6-4 image: gs-staging-p2:3: .*2026-09-01-pre-l64 @ sha256:0e0e.* is not an attested L6-4 image/);
+      /* The same image reference but another digest (a re-pushed mutable tag): FAIL. */
+      write(built.dir, EVIDENCE_FILES.taskDefinition("p2"), { taskDefinition: { ...td2.taskDefinition, containerDefinitions: [{ ...td2.taskDefinition.containerDefinitions[0], image: IMAGE }] } });
+      assert.match(failed(), /gs-staging-p2:3: .* @ sha256:0e0e.* is not an attested/);
+      /* The certified image and digest: PASS. */
+      const same = new Map([...ctx.prerequisite.running, ["p2", [{ ...p2task, containers: [{ name: "game-server", lastStatus: "RUNNING", imageDigest: DIGEST }] }]]]);
+      assert.equal(failed({ running: same }), "");
+      /* A task that shows no digest cannot be established. */
+      assert.match(failed({ running: new Map([...ctx.prerequisite.running, ["p2", [{ ...p2task, containers: [{ name: "game-server" }] }]]]) }), /a running task shows no image digest/);
+      /* A pool at desired 0 (no running task): a TAG is not evidence of content -- even the certified tag -- only a digest pin. */
+      assert.match(failed({ running: ctx.prerequisite.running }), /gs-staging-p2:3: .*2026-09-30-test \(no running task\) is not an attested L6-4 image -- a tag is not evidence of content/);
+      const pin = (digest: string) => write(built.dir, EVIDENCE_FILES.taskDefinition("p2"), { taskDefinition: { ...td2.taskDefinition, containerDefinitions: [{ ...td2.taskDefinition.containerDefinitions[0], image: `111111111111.dkr.ecr.us-east-1.amazonaws.com/gs-staging-server@${digest}` }] } });
+      pin(DIGEST);
+      assert.equal(failed({ running: ctx.prerequisite.running }), "", "pinned to the certified digest");
+      pin(PRE_DIGEST);
+      assert.match(failed({ running: ctx.prerequisite.running }), /@sha256:0e0e.* \(no running task\) is not an attested/);
+      write(built.dir, EVIDENCE_FILES.taskDefinition("p2"), td2);
+      assert.match(failed({ running: ctx.prerequisite.running }), /2026-09-01-pre-l64 \(no running task\) is not an attested/);
+      /* The target is ECS's COMPLETED deployment: a service with none cannot name its target; an uncaptured target FAILS. */
+      const none = clone(services);
+      none.services[1].deployments = [{ status: "PRIMARY", taskDefinition: TD2, rolloutState: "IN_PROGRESS" }];
+      write(built.dir, EVIDENCE_FILES.services, none);
+      assert.match(failed({ running: same }), /shows no COMPLETED deployment/);
+      const older = clone(services);
+      older.services[1].deployments = [{ status: "PRIMARY", taskDefinition: TD2, rolloutState: "IN_PROGRESS" }, { status: "ACTIVE", taskDefinition: TD2.replace(":3", ":2"), rolloutState: "COMPLETED" }];
+      write(built.dir, EVIDENCE_FILES.services, older);
+      assert.match(failed({ running: same }), /gs-staging-p2:2: its task definition was not captured/);
+      services.services.pop();
+      write(built.dir, EVIDENCE_FILES.services, services);
+      assert.match(failed({ running: same }), /gs-staging-p2 is not in services.json/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("rollback: a prior certification attests an image only if it is this environment's PASS, with L6-4 and that image's digest", async () => {
+    const built = await buildPackage();
+    try {
+      const ctx = await built.ctx();
+      const runner = obj(obj(JSON.parse(fs.readFileSync(path.join(built.dir, EVIDENCE.taskRole), "utf8"))).runner);
+      const TD2 = "arn:aws:ecs:us-east-1:111111111111:task-definition/gs-staging-p2:3";
+      const OLD = IMAGE.replace("2026-09-30-test", "2026-09-20-l64");
+      const OLD_DIGEST = `sha256:${"a7".repeat(32)}`;
+      const services = clone(SERVICES) as any;
+      services.services.push({ ...clone(SERVICES.services[0]), serviceName: "gs-staging-p2", taskDefinition: TD2, deployments: [{ status: "PRIMARY", taskDefinition: TD2, rolloutState: "COMPLETED" }] });
+      write(built.dir, EVIDENCE_FILES.services, services);
+      write(built.dir, EVIDENCE_FILES.taskDefinition("p2"), { taskDefinition: { ...clone(TASK_DEFINITION.taskDefinition), taskDefinitionArn: TD2, containerDefinitions: [{ ...clone(TASK_DEFINITION.taskDefinition.containerDefinitions[0]), image: OLD }] } });
+      const running = new Map([...ctx.prerequisite.running, ["p2", [{ ...clone(RUNNING_TASKS.tasks[0]), taskDefinitionArn: TD2, containers: [{ name: "game-server", imageDigest: OLD_DIGEST }] }]]]);
+      const expect = { environment: "staging", pools: ["p1", "p2"], primaryPool: "p1", primaryBuild: "2026-09-30-test", runningTaskDefinitions: { p1: TD, p2: TD2 }, running, runner };
+      const failed = () => failures(judgeRollback(built.dir, expect)).map((c) => c.detail).join("\n");
+      const good = { format: CERTIFICATION_FORMAT, verdict: "PASS", failed_gates: [], environment: "staging", run_id: "l6cert-0920", build_id: "2026-09-20-l64", build_capabilities: ALL_L64, image: OLD, image_digest: OLD_DIGEST };
+      const prior = (value: unknown) => write(built.dir, path.join(PRIOR_CERTIFICATIONS, "c1.json"), value);
+      assert.match(failed(), /is not an attested L6-4 image/);
+      prior(good);
+      assert.equal(failed(), "", "an earlier PASS of this environment for exactly that image attests it");
+      /* The old attestation shape (BUILD_ID text) attests nothing. */
+      prior({ verdict: "PASS", build_id: "2026-09-20-l64", build_capabilities: ALL_L64 });
+      assert.match(failed(), /prior certifications ignored: c1.json: not a certification, environment undefined, not staging, not a PASS, no certified image and digest/);
+      for (const [mutation, why] of [
+        [{ environment: "prod" }, /environment prod, not staging/],
+        [{ verdict: "FAIL" }, /not a PASS/],
+        [{ failed_gates: ["identity"] }, /not a PASS/],
+        [{ build_capabilities: { ...ALL_L64, security_replay: false } }, /no L6-4 capability report/],
+        [{ image_digest: `sha256:${"a8".repeat(32)}` }, /is not an attested/],
+        [{ image: IMAGE.replace("2026-09-30-test", "2026-09-19") }, /is not an attested/],
+        [{ image_digest: "latest" }, /no certified image and digest/],
+        [{ format: "18COSMOS/L5-8-VERIFY/v1" }, /not a certification/],
+      ] as const) {
+        prior({ ...good, ...mutation });
+        assert.match(failed(), why, JSON.stringify(mutation));
+      }
+      prior({ ...good, principal_id: "pr_x" });
+      assert.match(failed(), /c1.json: .*player-identity field/, "a prior certification carrying identity material is refused, not read");
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("the certification records the image and digest it certified (what a later run's rollback gate attests by)", async () => {
+    const built = await buildPackage();
+    try {
+      const { ctx, result } = await verdictOf(built);
+      writeCertification(ctx, result);
+      const record = JSON.parse(fs.readFileSync(path.join(built.dir, EVIDENCE.certification), "utf8"));
+      assert.equal(record.image, IMAGE);
+      assert.equal(record.image_digest, DIGEST);
+      assert.deepEqual(record.build_capabilities, ALL_L64);
+      assert.ok(Object.values(buildCapabilities()).some((v) => v === false), "this branch does not contain L6-4, and says so");
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("the restore drill: the stop before THIS adoption, for EVERY pool, nothing running or stopping (TASK# only as operator proof)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l66-drill-"));
+    try {
+      const adoption = { ...(ADOPTED.adoption as NonNullable<AppGenerationFacts["adoption"]>), generation: 2 };
+      const quiet = (e: Partial<Parameters<typeof judgeRestoreQuiet>[1]> = {}) => judgeRestoreQuiet(dir, { run: RUN, environment: "staging", pools: ["p1", "p2"], adoption, heartbeats: null, ...e });
+      const failed = (e: Partial<Parameters<typeof judgeRestoreQuiet>[1]> = {}) => failures(quiet(e)).map((c) => `${c.name}: ${c.detail}`).join("\n");
+      const svc = (pool: string, desired = 0, runningCount = 0) => ({ serviceName: `gs-staging-${pool}`, status: "ACTIVE", desiredCount: desired, runningCount, pendingCount: 0 });
+      const listing = (tasks: unknown[], failures: unknown[] = []) => ({ batches: [{ tasks, failures }] });
+      write(dir, path.join(RESTORE_STOP_DIR, "services.json"), { services: [svc("p1"), svc("p2")], failures: [] });
+      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), listing([{ taskArn: "arn:x/task/gs-staging/old1", lastStatus: "STOPPED", desiredStatus: "STOPPED" }]));
+      const stamp = { format: RESTORE_STOP_FORMAT, run_id: RUN, restore_id: "drill-0930", captured_at: "2026-09-30T09:30:00Z" };
+      write(dir, path.join(RESTORE_STOP_DIR, "stamp.json"), stamp);
+      assert.equal(failed(), "");
+      assert.match(quiet().map((c) => c.detail).join(), /not integrated \(L6-5A\): the stop is proven from ECS alone/);
+      /* TASK#: a fresh old-generation heartbeat is operator evidence of a straggler; an absent list is not "none". */
+      assert.match(failed({ heartbeats: { integrated: true, oldGenerationAfterStop: ["t-old1"] } }), /fresh heartbeats from t-old1/);
+      assert.match(failed({ heartbeats: { integrated: true, oldGenerationAfterStop: undefined as never } }), /not a list/);
+      assert.equal(failed({ heartbeats: { integrated: true, oldGenerationAfterStop: [] } }), "", "no heartbeat: the ECS stop stands (TASK# is never the authority)");
+      /* Bound to this adoption: its restore id, before adopted_at, and not long before. */
+      assert.match(failed({ adoption: { ...adoption, adopted_at: Date.parse("2026-09-30T09:00:00Z") } }), /captured after APPGEN moved/);
+      assert.match(failed({ adoption: { ...adoption, adopted_at: Date.parse("2026-09-30T16:00:00Z") } }), /more than 6 h before the adoption/);
+      assert.match(failed({ adoption: { ...adoption, restore_id: "drill-other" } }), /restore drill-0930 \(this run .*APPGEN adopted restore drill-other\)/);
+      assert.match(failed({ adoption: null }), /APPGEN shows no adoption/);
+      write(dir, path.join(RESTORE_STOP_DIR, "stamp.json"), { ...stamp, run_id: "l6cert-other" });
+      assert.match(failed(), /run l6cert-other/);
+      write(dir, path.join(RESTORE_STOP_DIR, "stamp.json"), { format: "18COSMOS/L6-6-RESTORE-STOP/v1", run_id: RUN, captured_at: stamp.captured_at });
+      assert.match(failed(), /RESTORE-STOP\/v1 run .* restore undefined/, "a stop that names no restore");
+      write(dir, path.join(RESTORE_STOP_DIR, "stamp.json"), { ...stamp, format: "18COSMOS/L6-6-RESTORE-STOP/v1" });
+      assert.match(failed(), /RESTORE-STOP\/v1 run .* restore drill-0930/, "an old-format stop (its listing omits draining tasks) is not accepted");
+      write(dir, path.join(RESTORE_STOP_DIR, "stamp.json"), stamp);
+      /* Every pool present and at zero. */
+      write(dir, path.join(RESTORE_STOP_DIR, "services.json"), { services: [svc("p1")], failures: [] });
+      assert.match(failed(), /not in the stop evidence as exactly one ACTIVE service: p2/);
+      write(dir, path.join(RESTORE_STOP_DIR, "services.json"), { services: [svc("p1"), { ...svc("p2"), status: "INACTIVE" }], failures: [] });
+      assert.match(failed(), /exactly one ACTIVE service: p2/, "a stale INACTIVE record is not the pool's service");
+      write(dir, path.join(RESTORE_STOP_DIR, "services.json"), { services: [svc("p1"), svc("p2"), svc("p2")], failures: [] });
+      assert.match(failed(), /exactly one ACTIVE service: p2/);
+      write(dir, path.join(RESTORE_STOP_DIR, "services.json"), { services: [svc("p1"), svc("p2", 0, 1)], failures: [] });
+      assert.match(failed(), /not stopped: gs-staging-p2/);
+      write(dir, path.join(RESTORE_STOP_DIR, "services.json"), { services: [svc("p1"), svc("p2")], failures: [{ arn: "gs-staging-p3", reason: "MISSING" }] });
+      assert.match(failed(), /the service listing is incomplete/);
+      write(dir, path.join(RESTORE_STOP_DIR, "services.json"), { services: [svc("p1"), svc("p2")], failures: [] });
+      /* A task still draining (desired STOPPED, last status RUNNING) is still running. */
+      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), listing([{ taskArn: "arn:x/task/gs-staging/draining", lastStatus: "DEACTIVATING", desiredStatus: "STOPPED" }]));
+      assert.match(failed(), /still running or stopping: draining/);
+      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), listing([{ taskArn: `arn:x/task/gs-staging/${"4c".repeat(16)}`, lastStatus: "STOPPING", desiredStatus: "STOPPED" }]));
+      assert.match(failed(), new RegExp(`still running or stopping: ${"4c".repeat(16)}`), "an ECS task id is named, never redacted");
+      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), { batches: [{ tasks: [{ taskArn: "arn:x/task/gs-staging/a", lastStatus: "STOPPED" }], failures: [] }, { tasks: [{ taskArn: "arn:x/task/gs-staging/straggler", lastStatus: "RUNNING" }], failures: [] }] });
+      assert.match(failed(), /still running or stopping: straggler/, "every batch is read");
+      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), { batches: [{ tasks: [], failures: [] }, { tasks: [], failures: [{ arn: "arn:x/task/gs-staging/gone", reason: "MISSING" }] }] });
+      assert.match(failed(), /the task listing is incomplete/);
+      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), { batches: [{ failures: [] }] });
+      assert.match(failed(), /the task listing is incomplete/);
+      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), { tasks: [], failures: [] });
+      assert.match(failed(), /the task listing is incomplete/, "a single unbatched answer is the old listing (desired RUNNING only)");
+      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), { batches: [] });
+      assert.equal(failed(), "", "nothing listed at all: nothing runs");
     } finally {
       cleanup(dir);
     }
-    assert.ok(Object.values(buildCapabilities()).some((v) => v === false), "this branch does not contain L6-4, and says so");
   });
 
-  test("the restore drill: the stop before adoption (TASK# only as operator proof) and the fencing slot; a restore-drill scenario without them FAILS", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l66-drill-"));
+  test("the restore fence: bound to THIS adoption, one structured GENERATION-fencing result per case -- a probe missing or a generic exit FAILS", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l66-fence-"));
     try {
-      const adoptedAt = Date.parse("2026-09-30T09:40:00Z");
-      write(dir, path.join(RESTORE_STOP_DIR, "services.json"), { services: [{ serviceName: "gs-staging-p1", desiredCount: 0, runningCount: 0, pendingCount: 0 }] });
-      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), { tasks: [] });
-      write(dir, path.join(RESTORE_STOP_DIR, "stamp.json"), { run_id: RUN, captured_at: "2026-09-30T09:30:00Z" });
-      assert.deepEqual(failures(judgeRestoreQuiet(dir, { run: RUN, adoptedAt, heartbeats: null })), []);
-      assert.match(judgeRestoreQuiet(dir, { run: RUN, adoptedAt, heartbeats: null }).map((c) => c.detail).join(), /not integrated \(L6-5A\): the stop is proven from ECS alone/);
-      assert.match(failures(judgeRestoreQuiet(dir, { run: RUN, adoptedAt, heartbeats: { integrated: true, oldGenerationAfterStop: ["t-old1"] } })).map((c) => c.detail).join(), /fresh heartbeats from t-old1/);
-      assert.match(failures(judgeRestoreQuiet(dir, { run: RUN, adoptedAt: Date.parse("2026-09-30T09:00:00Z"), heartbeats: null })).map((c) => c.detail).join(), /captured after APPGEN moved/);
-      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), { tasks: [{ taskArn: "arn:x/task/gs-staging/straggler", lastStatus: "RUNNING" }] });
-      assert.match(failures(judgeRestoreQuiet(dir, { run: RUN, adoptedAt, heartbeats: null })).map((c) => c.detail).join(), /still running: straggler/);
-      const cases = Object.fromEntries(RESTORE_FENCING_CASES.map((c) => [c, { observed: true, detail: "observed" }]));
-      write(dir, RESTORE_FENCING_FILE, { run_id: RUN, new_generation: 2, cases });
-      assert.deepEqual(failures(judgeRestoreFencing(dir, { run: RUN, newGeneration: 2 })), []);
-      write(dir, RESTORE_FENCING_FILE, { run_id: RUN, new_generation: 2, cases: { ...cases, "kms-side-effect-withheld": { observed: false, detail: "Sign reached KMS" } } });
-      assert.match(failures(judgeRestoreFencing(dir, { run: RUN, newGeneration: 2 })).map((c) => c.detail).join(), /NOT observed: Sign reached KMS/);
+      const adoption = { ...(ADOPTED.adoption as NonNullable<AppGenerationFacts["adoption"]>), generation: 2 };
+      const after = "2026-09-30T09:45:00Z";
+      const cases = {
+        "old-generation-ledger-write-refused": { observed_at: after, generation: 1, outcome: "fenced", fence: "generation", detail: "reserveSettlement: fenced (generation)" },
+        "old-generation-task-never-ready": { observed_at: after, generation: 1, ready: false, exit_code: 2, reason: "generation", detail: "refused: adopted app generation is 2" },
+        "kms-side-effect-withheld": { observed_at: after, generation: 1, kms_sign_calls: 0, outcome: "withheld", detail: "gatedKmsClient: unavailable" },
+        "new-generation-started": { observed_at: after, generation: 2, game_table: "gs-staging-game-g2", ready: true, detail: "readyz 200" },
+      };
+      const record = { format: RESTORE_FENCING_FORMAT, run_id: RUN, adoption: { restore_id: adoption.restore_id, game_table: adoption.game_table, previous_generation: 1, generation: 2, adopted_at: adoption.adopted_at }, cases };
+      const failed = (value: unknown, a: typeof adoption | null = adoption) => {
+        write(dir, RESTORE_FENCING_FILE, value);
+        return failures(judgeRestoreFencing(dir, { run: RUN, adoption: a })).map((c) => `${c.name}: ${c.detail}`).join("\n");
+      };
+      assert.equal(failed(record), "");
+      const withCase = (name: keyof typeof cases, change: Record<string, unknown>) => ({ ...record, cases: { ...cases, [name]: { ...cases[name], ...change } } });
+      assert.match(failed(withCase("old-generation-task-never-ready", { exit_code: 1, reason: "crash" })), /a process exit is not generation fencing/);
+      assert.match(failed(withCase("old-generation-task-never-ready", { exit_code: 3, reason: "pool-lost" })), /a process exit is not generation fencing/);
+      assert.match(failed(withCase("old-generation-task-never-ready", { exit_code: 1, reason: "generation" })), /a process exit is not generation fencing/);
+      assert.match(failed(withCase("old-generation-task-never-ready", { ready: true })), /a process exit is not generation fencing/);
+      assert.equal(failed(withCase("old-generation-task-never-ready", { exit_code: 3 })), "", "lost on the self-check (exit 3) because the generation moved");
+      assert.match(failed(withCase("old-generation-ledger-write-refused", { fence: "relayer" })), /not a write of the old generation refused by the generation fence/);
+      assert.match(failed(withCase("old-generation-ledger-write-refused", { generation: 2 })), /not a write of the old generation/);
+      assert.match(failed(withCase("kms-side-effect-withheld", { kms_sign_calls: 1 })), /not withheld before KMS/);
+      assert.match(failed(withCase("new-generation-started", { game_table: "gs-staging-game-g2b" })), /not the adopted generation 2 on gs-staging-game-g2/);
+      assert.match(failed(withCase("new-generation-started", { observed_at: "2026-09-30T09:39:00Z" })), /not after this adoption/);
+      assert.match(failed({ ...record, cases: { ...cases, "kms-side-effect-withheld": undefined } }), /kms-side-effect-withheld: NOT proven: no evidence recorded \(probe missing\)/);
+      assert.match(failed({ ...record, cases: Object.fromEntries(Object.keys(cases).map((k) => [k, { observed: true, detail: "observed" }])) }), /NOT proven/, "the old bare `observed: true` proves nothing");
+      assert.match(failed({ ...record, adoption: { ...record.adoption, restore_id: "drill-other" } }), /this run, this adoption/);
+      assert.match(failed({ ...record, adoption: { ...record.adoption, adopted_at: adoption.adopted_at - 1 } }), /this run, this adoption/);
+      assert.match(failed({ ...record, run_id: "l6cert-other" }), /this run, this adoption/);
+      assert.match(failed(record, null), /APPGEN shows no adoption/);
       fs.rmSync(path.join(dir, RESTORE_FENCING_FILE));
-      assert.match(failures(judgeRestoreFencing(dir, { run: RUN, newGeneration: 2 })).map((c) => c.detail).join(), /no destructive or chain-affecting probe is part of this slice/);
+      assert.match(failures(judgeRestoreFencing(dir, { run: RUN, adoption })).map((c) => c.detail).join(), /no destructive or chain-affecting probe is part of this slice/);
     } finally {
       cleanup(dir);
     }
@@ -1804,6 +2025,243 @@ describe("L6-6 x L6-4: the integrated deployment cannot PASS without generation,
       for (const gate of ["restore-quiet", "restore-fence", "generation"]) assert.ok(failedGates(result).includes(gate), `${gate}: ${JSON.stringify(failedGates(result))}`);
       const readOnly = (await verdictOf(built)).result;
       assert.equal(readOnly.gates.find((g) => g.id === "restore-quiet")?.status, "not-required");
+      const standalone = (await verdictOf(built, { scenario: "restore-drill", generationEvidence: { integrated: false, marker: null, appgen: null, startupRule: null } })).result;
+      for (const gate of ["restore-quiet", "restore-fence"]) assert.match(gateFailures(standalone, gate).join("\n"), /not bound in this build/, gate);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("the restore drill CAN pass once integrated: generation 2 adopted, every gate PASS end to end -- and each drill binding is load-bearing", async () => {
+    const built = await buildPackage({ generation: { marker: RESTORED_MARKER, appgen: ADOPTED } });
+    try {
+      const adoption = ADOPTED.adoption as NonNullable<AppGenerationFacts["adoption"]>;
+      write(built.dir, path.join(RESTORE_STOP_DIR, "services.json"), { services: [{ serviceName: "gs-staging-p1", status: "ACTIVE", desiredCount: 0, runningCount: 0, pendingCount: 0 }], failures: [] });
+      write(built.dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), { batches: [{ tasks: [], failures: [] }] });
+      write(built.dir, path.join(RESTORE_STOP_DIR, "stamp.json"), { format: RESTORE_STOP_FORMAT, run_id: RUN, restore_id: adoption.restore_id, captured_at: "2026-09-30T09:30:00Z" });
+      const at = "2026-09-30T09:45:00Z";
+      write(built.dir, RESTORE_FENCING_FILE, {
+        format: RESTORE_FENCING_FORMAT,
+        run_id: RUN,
+        adoption: { restore_id: adoption.restore_id, game_table: adoption.game_table, previous_generation: 1, generation: 2, adopted_at: adoption.adopted_at },
+        cases: {
+          "old-generation-ledger-write-refused": { observed_at: at, generation: 1, outcome: "fenced", fence: "generation" },
+          "old-generation-task-never-ready": { observed_at: at, generation: 1, ready: false, exit_code: 2, reason: "generation" },
+          "kms-side-effect-withheld": { observed_at: at, generation: 1, kms_sign_calls: 0, outcome: "withheld" },
+          "new-generation-started": { observed_at: at, generation: 2, game_table: "gs-staging-game-g2", ready: true },
+        },
+      });
+      const base = await built.ctx();
+      const startup = { ...base.prerequisite.startup, config: { ...base.prerequisite.startup.config, generation: 2, gameTable: "gs-staging-game-g2" } };
+      const result = certify({ ...base, scenario: "restore-drill", prerequisite: { ...base.prerequisite, startup } });
+      assert.deepEqual(failedGates(result), [], JSON.stringify(result.gates.map((g) => [g.id, failures(g.checks)])));
+      assert.equal(result.gates.find((g) => g.id === "restore-quiet")?.status, "pass");
+      assert.equal(result.gates.find((g) => g.id === "restore-fence")?.status, "pass");
+      const otherRestore = { ...base, scenario: "restore-drill" as const, prerequisite: { ...base.prerequisite, startup }, generationEvidence: await generationOf({ marker: { ...RESTORED_MARKER, restore_id: "drill-other" }, appgen: { ...ADOPTED, adoption: { ...adoption, restore_id: "drill-other" } } }) };
+      assert.deepEqual(failedGates(certify(otherRestore)), ["restore-quiet", "restore-fence"], "the drill's evidence is bound to ITS adoption");
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* L6-6R: the independent recovery-gate review's adversarial cases      */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6R: the recovery gates, attacked", () => {
+  const { judgeGeneration, judgeIdentityRecovery, judgeReviews, identityRestoreState, restoreSafe } = require("./recovery") as typeof import("./recovery");
+  const expect1 = { generation: 1, gameTable: "gs-staging-game-g1", requireRestore: false };
+  const expect2 = { generation: 2, gameTable: "gs-staging-game-g2", requireRestore: false };
+  const gen = async (script: ReaderScript, expect = expect1) => failures(judgeGeneration(await generationOf(script), expect)).map((c) => `${c.name}: ${c.detail}`).join("\n");
+  const identity = async (script: ReaderScript) => {
+    const section = await readIdentityRecovery(readersFor(script), {} as never, IDENTITY_TABLE);
+    return { section, text: JSON.stringify(section), failed: failures(judgeIdentityRecovery(section, IDENTITY_TABLE)).map((c) => `${c.name}: ${c.detail}`).join("\n"), reviews: failures(judgeReviews(section)).map((c) => c.detail).join("\n") };
+  };
+  const complete: IdentityRestoreFacts = { restore_id: "idr-0930", state: "complete", identity_table: IDENTITY_TABLE, peer_table: "gs-staging-identity-old", restore_point: 5, started_at: 6, journal_digest: "ab".repeat(32), journal_events: 12, completed_at: 7, reviews: 0 };
+  const PF = "pf_0123456789abcdefghjkmnpqrs";
+  const EVENT = "0f".repeat(16);
+
+  test("generation: the full matrix -- only the exact serving-safe state passes", async () => {
+    const adoptedTo = (over: Partial<NonNullable<AppGenerationFacts["adoption"]>>, current = 2): AppGenerationFacts => ({ current_generation: current, adoption: { ...(ADOPTED.adoption as NonNullable<AppGenerationFacts["adoption"]>), ...over } });
+    const cases: Array<[string, ReaderScript, typeof expect1, RegExp | null]> = [
+      ["bootstrap marker, bootstrap APPGEN", {}, expect1, null],
+      ["correct adopted restore", { marker: RESTORED_MARKER, appgen: ADOPTED }, expect2, null],
+      ["absent marker", { marker: null }, expect1, /carries no SYSTEM\/GENERATION/],
+      ["malformed marker (L6-4's parser throws)", { marker: new Error("the game table's SYSTEM/GENERATION is damaged") }, expect1, /unreadable/],
+      ["newer marker (L6-4's parser throws)", { marker: new Error("SYSTEM/GENERATION is format 2, written by a newer build") }, expect1, /unreadable .*newer build/],
+      ["bootstrap marker after APPGEN adoption", { appgen: adoptedTo({ game_table: "gs-staging-game-g1" }, 1) }, expect1, /bootstrap table: not the adopted one/],
+      ["prepared restore, not adopted", { marker: RESTORED_MARKER, appgen: { current_generation: 1, adoption: null } }, expect2, /APPGEN is 1, the marker 2|never adopted/],
+      ["prepared restore, APPGEN at 2 but bootstrap form", { marker: RESTORED_MARKER, appgen: { current_generation: 2, adoption: null } }, expect2, /never adopted/],
+      ["wrong table", { marker: { ...RESTORED_MARKER, game_table: "gs-staging-game-g2x" }, appgen: ADOPTED }, expect2, /names gs-staging-game-g2x/],
+      ["twin prepared as the same generation", { marker: { ...RESTORED_MARKER, game_table: "gs-staging-game-g2b" }, appgen: ADOPTED }, { ...expect2, gameTable: "gs-staging-game-g2b" }, /APPGEN adopted gs-staging-game-g2 .*not this table/],
+      ["wrong restore id", { marker: RESTORED_MARKER, appgen: adoptedTo({ restore_id: "drill-other" }) }, expect2, /restore drill-other\), not this table/],
+      ["wrong previous generation", { marker: { ...RESTORED_MARKER, generation: 3, restored_from_generation: 1 }, appgen: adoptedTo({ previous_generation: 2 }, 3) }, { ...expect2, generation: 3 }, /previous generation 2 is not the marker's source generation 1/],
+      ["runtime generation mismatch", { marker: RESTORED_MARKER, appgen: ADOPTED }, { ...expect2, generation: 3 }, /runtime document says 3/],
+      ["APPGEN matches numerically, the adoption names another table", { marker: RESTORED_MARKER, appgen: adoptedTo({ game_table: "gs-staging-game-g2c" }) }, expect2, /APPGEN adopted gs-staging-game-g2c/],
+      ["APPGEN absent", { appgen: null }, expect1, /no APPGEN/],
+      ["APPGEN unreadable", { appgen: new Error("APPGEN schema 2") }, expect1, /APPGEN readable: unreadable/],
+      ["a restore marker naming itself as its source", { marker: { ...RESTORED_MARKER, restored_from_table: "gs-staging-game-g2" }, appgen: ADOPTED }, expect2, /naming itself/],
+      ["a restore marker not above its source", { marker: { ...RESTORED_MARKER, restored_from_generation: 2 }, appgen: adoptedTo({ previous_generation: 2 }) }, expect2, /source generation is not below its own/],
+    ];
+    for (const [label, script, expect, want] of cases) {
+      const got = await gen(script, expect);
+      if (want === null) assert.equal(got, "", label);
+      else assert.match(got, want, label);
+    }
+  });
+
+  test("generation: L6-4's own startup rule is required too -- it can veto a composed PASS, and its silence never replaces the composition", async () => {
+    assert.match(await gen({ startup: "the ledger's APPGEN adopted x (restore r), not this table" }), /L6-4's own startup rule accepts this table: L6-4 refuses the start: the ledger's APPGEN adopted x/);
+    assert.match(await gen({ startup: new Error("boom") }), /L6-4's own startup rule accepts this table: unreadable \(Error: boom\)/);
+    const nonString = (await generationOf({})) as import("./recovery").GenerationEvidence;
+    const weird = { ...nonString, startupRule: () => ({ ok: true as const, value: undefined as unknown as null }) };
+    assert.equal(failures(judgeGeneration(weird, expect1)).length, 1, "`undefined` is not L6-4's null");
+    const liar = readersFor({ marker: { ...RESTORED_MARKER, game_table: "gs-staging-game-g2b" }, appgen: ADOPTED });
+    const evidence = await readGenerationEvidence({ ...liar, generationServingProblem: () => 0 as unknown as null }, { app: {} as never, ledger: {} as never }, { game: "g", ledger: "l" });
+    assert.match(failures(judgeGeneration(evidence, { ...expect2, gameTable: "gs-staging-game-g2b" })).map((c) => c.detail).join("\n"), /answered number[\s\S]*not this table/, "a reader that says nothing wrong still fails the composed binding");
+    assert.match(await gen({ startup: `refused for ${PF}` }), /refused for <redacted>/, "reader text is made restore-safe");
+  });
+
+  test("identity: never-restored, copied, replaying, incomplete, complete, superseded, disagreeing, malformed, unreadable -- fail closed", async () => {
+    const cases: Array<[string, ReaderScript, RegExp | null]> = [
+      ["never-restored serving table", {}, null],
+      ["completed target", { restore: complete }, null],
+      ["copied table carrying another TABLE#identity", { self: "gs-staging-identity-old" }, /unreplayed copy[\s\S]*TABLE#identity names gs-staging-identity-old/],
+      ["copy carrying another table's complete marker", { restore: { ...complete, identity_table: "gs-staging-identity-old" } }, /unreplayed copy/],
+      ["replaying target", { restore: { ...complete, state: "replaying", completed_at: null, reviews: null } }, /target replaying \/ incomplete/],
+      ["complete marker but TABLE#identity not yet renamed", { restore: complete, self: "gs-staging-identity-old" }, /unreplayed copy/],
+      ["superseded source", { restore: { ...complete, state: "superseded", peer_table: "gs-staging-identity-new" } }, /source superseded/],
+      ["marker/table-name agree, L6-4 disagrees", { restore: complete, servingProblem: "the table is a restored copy whose replay has not completed" }, /not serving-safe: the table is a restored copy/],
+      ["malformed restore state", { restore: { ...complete, state: "bogus" as never } }, /malformed/],
+      ["no TABLE#identity", { self: null }, /no TABLE#identity/],
+    ];
+    for (const [label, script, want] of cases) {
+      const { failed, text } = await identity(script);
+      if (want === null) assert.equal(failed, "", label);
+      else {
+        assert.match(failed, want, label);
+        assert.ok(!/usable|serving-safe restore state -- (never restored|target complete)/.test(failed), `${label}: an unsafe target is never described as usable`);
+      }
+      assert.ok(!text.includes("ab".repeat(32)), `${label}: no journal digest`);
+    }
+    assert.equal(identityRestoreState({ ...complete, state: "bogus" as never }, IDENTITY_TABLE, IDENTITY_TABLE), "malformed");
+    assert.equal(identityRestoreState(complete, 7 as never, IDENTITY_TABLE), "malformed");
+    /* A reader error / unavailable: unreadable, FAIL, and its text restore-safe. */
+    const broken: RecoveryReaders = { ...readersFor(), identityState: async () => Promise.reject(new Error(`ResourceNotFound while reading ${PF}`)) };
+    const section = await readIdentityRecovery(broken, {} as never, IDENTITY_TABLE);
+    assert.match(failures(judgeIdentityRecovery(section, IDENTITY_TABLE)).map((c) => c.detail).join(), /unreadable \(Error: ResourceNotFound while reading <redacted>\)/);
+    assert.ok(!JSON.stringify(section).includes(PF));
+    /* A binding bug (a Promise, undefined) is never L6-4's "no problem". */
+    for (const servingProblem of [undefined, Promise.resolve(null), 0]) {
+      const r: RecoveryReaders = { ...readersFor(), identityState: async () => ({ restore: null, self: IDENTITY_TABLE, servingProblem: servingProblem as never }) };
+      const s = await readIdentityRecovery(r, {} as never, IDENTITY_TABLE);
+      assert.ok(failures(judgeIdentityRecovery(s, IDENTITY_TABLE)).length > 0, String(servingProblem));
+    }
+    /* Intentionally leaky reader output: ids in structured or free fields never reach the evidence. */
+    const leak = await identity({ restore: { ...complete, restore_id: EVENT }, servingProblem: `profile ${PF} event ${EVENT}` });
+    assert.ok(!leak.text.includes(PF) && !leak.text.includes(EVENT), leak.text);
+    assert.match(leak.failed, /malformed|not serving-safe/);
+    const idOnly = await identity({ restore: { ...complete, restore_id: PF } });
+    assert.match(idOnly.failed, /malformed/, "a restore id that is no restore id (a profile id) makes the state malformed, even when L6-4 says nothing");
+    assert.ok(!idOnly.text.includes(PF));
+    const badSelf = await identity({ self: `REVIEW#${PF}` });
+    assert.match(badSelf.failed, /restore state is not one this build names \(malformed\)/, "a table binding that is no table name");
+    assert.ok(!badSelf.text.includes(PF), badSelf.text);
+    /* No false FAIL: an L6-4-valid restore id that happens to carry a git sha serves (it is only redacted where printed). */
+    const sha = `drill-${"5a".repeat(20)}`;
+    const shaRun = await identity({ restore: { ...complete, restore_id: sha }, reviews: [{ restore_id: sha, reason: "unconfirmed-recovery-key-rotation", open: false }] });
+    assert.equal(shaRun.failed, "");
+    assert.equal(shaRun.reviews, "");
+    const shaOpen = await identity({ restore: { ...complete, restore_id: sha }, reviews: [{ restore_id: sha, reason: "unconfirmed-recovery-key-rotation", open: true }] });
+    assert.match(shaOpen.reviews, /1 open REVIEW# record\(s\).*restore drill-<redacted>: 1/, "counted; a hex run is never printed (it could be an event id or a hash)");
+    assert.ok(!shaOpen.text.includes("5a".repeat(20)));
+  });
+
+  test("REVIEW#: zero passes, one or many open fail, resolved does not count, malformed fails, leaky output never leaks", async () => {
+    const review = (open: boolean, restore = "idr-0930") => ({ restore_id: restore, reason: "unconfirmed-recovery-key-rotation", open });
+    assert.equal((await identity({ reviews: [] })).reviews, "");
+    assert.equal((await identity({ reviews: [review(false), review(false, "idr-0801")] })).reviews, "", "resolved reviews are not open");
+    assert.match((await identity({ reviews: [review(true)] })).reviews, /1 open REVIEW# record\(s\).*restore idr-0930: 1/);
+    assert.match((await identity({ reviews: [review(true), review(true), review(true, "idr-0801"), review(false)] })).reviews, /3 open REVIEW# record\(s\).*restore idr-0930: 2, restore idr-0801: 1/);
+    for (const [label, bad] of [
+      ["open missing", { restore_id: "idr-0930", reason: "unconfirmed-recovery-key-rotation" }],
+      ["open as a string", { ...review(false), open: "false" }],
+      ["open as a number", { ...review(false), open: 0 }],
+      ["restore id is a profile id", { ...review(false), restore_id: PF }],
+      ["restore id is a session id", { ...review(false), restore_id: "se_0123456789abcdefghjkmnpqrs" }],
+      ["reason carries a principal", { ...review(false), reason: "pr_0123456789abcdefghjkmnpqrs" }],
+      ["reason carries a hash", { ...review(false), reason: "ab".repeat(32) }],
+      ["not an object", "REVIEW#pf_x"],
+    ] as const) {
+      const { reviews, text } = await identity({ reviews: [review(false), bad as never] });
+      assert.match(reviews, /REVIEW# summaries malformed: .*never counted as resolved/, label);
+      assert.ok(!text.includes(PF) && !text.includes(EVENT) && !text.includes("ab".repeat(32)) && !text.includes("pr_0123"), `${label}: ${text}`);
+    }
+    assert.match((await identity({ reviews: { length: 0 } as never })).reviews, /not a list/);
+    assert.match((await identity({ reviews: new Error(`Scan refused on REVIEW#${PF}`) })).reviews, /unreadable \(Error: Scan refused on REVIEW#<redacted>\)/);
+    const leaky = [{ ...review(true), profile_id: PF, principal_id: "pr_0123456789abcdefghjkmnpqrs", selector: "rk_0123456789abcdefghjkmnpqrs", unconfirmed_events: `["${EVENT}"]`, hash: "cd".repeat(32) }] as unknown as ReviewSummary[];
+    const { text, reviews } = await identity({ reviews: leaky });
+    assert.ok(!/pf_|pr_|rk_|0f0f0f0f|cdcdcdcd/.test(text), text);
+    assert.match(reviews, /1 open/);
+  });
+
+  test("restoreSafe redacts every id shape and nothing else", () => {
+    assert.equal(restoreSafe(`a ${PF} b se_0123456789abcdefghjkmnpqrs sf_0123456789abcdefghjkmnpqrs rk_0123456789abcdefghjkmnpqrs ${EVENT} ${"ab".repeat(32)} c`), "a <redacted> b <redacted> <redacted> <redacted> <redacted> <redacted> c");
+    assert.equal(restoreSafe("gs-staging-identity restore drill-0930 generation 2"), "gs-staging-identity restore drill-0930 generation 2");
+    assert.equal(restoreSafe(`x_${PF} ev_${EVENT} ${EVENT}g`), "x_<redacted> ev_<redacted> <redacted>g", "glued to word characters");
+    /* Redacted before it is cut: an id straddling the cut never leaks in part. */
+    const long = `${"x".repeat(190)} ${PF} tail`;
+    const cut = readIdentityRecovery({ ...readersFor(), identityState: async () => Promise.reject(new Error(long)) }, {} as never, IDENTITY_TABLE);
+    return cut.then((section) => assert.ok(!/pf_[0-9a-z]{3,}/.test(JSON.stringify(section)), JSON.stringify(section)));
+  });
+});
+
+describe("L6-6R: the integration binding is explicit, and no default or fixture path can pass the recovery gates", () => {
+  const SRC = path.join(REPO, "server/src");
+  const sources = (dir: string): string[] =>
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? sources(path.join(dir, e.name)) : e.name.endsWith(".ts") && !e.name.endsWith(".test.ts") ? [path.join(dir, e.name)] : []));
+  const rel = (f: string) => path.relative(SRC, f).split(path.sep).join("/");
+
+  test("RecoveryReaders is bound in exactly one production place, to L6-4's own functions -- and on this branch, nowhere", () => {
+    const binders = sources(SRC).filter((f) => /\brecovery\s*:/.test(fs.readFileSync(f, "utf8")) && /StagingDeps/.test(fs.readFileSync(f, "utf8")));
+    for (const f of binders) {
+      assert.equal(rel(f) === "tools/awsDeploy.ts" || rel(f) === "aws/deploy/staging/commands.ts", true, `${rel(f)} binds the recovery readers`);
+    }
+    const tool = fs.readFileSync(path.join(SRC, "tools/awsDeploy.ts"), "utf8");
+    const binding = /\brecovery\s*:\s*[^,}]/.test(tool);
+    if (binding) {
+      /* The integration: every member names L6-4's function (never a local re-implementation). */
+      for (const fn of ["readGenerationMarker", "readAppGeneration", "generationMarkerProblem", "adoptionBindingProblem", "readIdentityRestore", "identityServingProblem", "inspectIdentityRestore"]) assert.match(tool, new RegExp(`\\b${fn}\\b`), fn);
+    } else {
+      assert.ok(Object.values(buildCapabilities()).some((v) => v === false), "standalone: no binding, and the build does not carry L6-4");
+    }
+  });
+
+  test("an integrated GenerationEvidence is constructed only by readGenerationEvidence; the gates read it only from the command's live read", () => {
+    for (const f of sources(SRC)) {
+      const text = fs.readFileSync(f, "utf8");
+      if (rel(f) !== "aws/deploy/staging/recovery.ts") {
+        assert.ok(!/integrated:\s*true/.test(text), `${rel(f)} fabricates an integrated reading`);
+        assert.ok(!/startupRule\s*:/.test(text), `${rel(f)} fabricates L6-4's rule`);
+      }
+      if (/readGenerationEvidence\(|readIdentityRecovery\(/.test(text) && rel(f) !== "aws/deploy/staging/recovery.ts") {
+        assert.equal(rel(f), "aws/deploy/staging/commands.ts", `${rel(f)} reads the recovery evidence`);
+        for (const call of text.match(/read(GenerationEvidence|IdentityRecovery)\(([^,]+),/g) ?? []) assert.match(call, /\(staging\.recovery,/, call);
+      }
+    }
+  });
+
+  test("end to end through the commands: an unbound build's certification FAILS every recovery gate, whatever the evidence says", async () => {
+    const built = await buildPackage();
+    try {
+      /* Even with a perfect task-role record (a forged 'ran' identity section), the unbound live generation read fails. */
+      const unbound = await readGenerationEvidence(undefined, { app: {} as never, ledger: {} as never }, { game: "g", ledger: "l" });
+      assert.deepEqual(unbound, { integrated: false, marker: null, appgen: null, startupRule: null });
+      const { result } = await verdictOf(built, { generationEvidence: unbound });
+      assert.ok(failedGates(result).includes("generation"));
+      assert.equal(result.passed, false);
+      assert.match(JSON.stringify(await readIdentityRecovery(undefined, {} as never, IDENTITY_TABLE)), /not-integrated/);
     } finally {
       cleanup(built.dir);
     }

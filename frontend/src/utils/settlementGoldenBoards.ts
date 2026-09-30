@@ -365,3 +365,95 @@ export function v11GoldenBoards(): V11GoldenBoards {
   v11Cache = { boards, dealtPins, syn01Submissions: built.submissions };
   return v11Cache;
 }
+
+/* ==================================================================
+    ROUTE v12 R12-3: THE v12 GOLDEN SET, BESIDE THE v10 AND v11 ONES -- NEVER OVER THEM
+   ==================================================================
+   The v12 settlement certification runs the SAME thirteen SET-0A recipes through the v12 engine and certifies what they
+   make at the pin v12 deals at, exactly as ESCROW-3A did for v11. `goldenBoards()` (v10) and `v11GoldenBoards()` are
+   untouched. What the recipes ARE under v12, stated rather than assumed (the R12-3 brief: "do not merely restamp"):
+
+     - the three ROOM-DEALT recipes (SYN-01's and SYN-02's GR-4 rooms, SYN-03's UR-7 game) are dealt by the room at the
+       CURRENT engine -- 12 -- and so are PLAYED under the v12 route law (a pinned board; R12-2's pin-presence rule).
+       `dealtPins` records it; the stamp below changes nothing on them. SYN-04 and SYN-08..12 are SET-0A's grafts on
+       SYN-01's v12 board. These are v12 histories;
+     - the CORPUS recipes (SYN-05 and SYN-07 on the Z6C replay, SYN-06 on G6J, SYN-13 on CV4) replay UNPINNED
+       development logs, which R12-2 hands the `*_BOARD_PRE_V12` twins (the v11 route law and data, byte for byte), and
+       SET-0A grafts the terminal fields and the pin onto the result. They are v12 BOARD SHAPES, not v12 histories: a
+       v12 engine could not have played those logs as recorded (Z6C's entry 215 is a shortfall under v12's
+       demonstration). What a v12 history does to such a game is certified separately, by the forks
+       (`settlementV12Forks.ts`), never by pretending these boards are one.
+
+   `settlementV12Certification.test.ts` proves the set against the certified v10 and v11 sets (each v12 board re-stamped
+   at 10 hashes to its certified v10 `terminal_state_hash_v1`, at 11 to its v11 `appraisal_state_hash`) and pins the v12
+   hashes, vectors, payouts and payload bytes in a new fixture beside the frozen ones. */
+export const SET0A_V12_RULES_ENGINE_VERSION = 12;
+
+/** A board stamped with the v12 settlement pin (the v12 golden set and the v12 forks only). */
+export const atV12SettlementPin = (board: Board): Board =>
+  ({ ...board, rules_engine_version: SET0A_V12_RULES_ENGINE_VERSION }) as Board;
+
+/** The corpus graft at the v12 pin (SYN-05, 06, 13 of the v12 set). */
+export const corpusTerminalGraftV12 = (board: Board): Board =>
+  atV12SettlementPin({ ...board, current_round_type: "GameEnd", bank_broken: true } as Board);
+
+/** How each v12 golden recipe came to be (see above). */
+export const V12_RECIPE_HISTORY: Readonly<Record<string, "v12-room-game" | "v12-room-game+graft" | "pre-v12-corpus-replay+graft">> = Object.freeze({
+  "SYN-01-CLASSIC-BANKBREAK": "v12-room-game",
+  "SYN-02-GENTLE-RUST-BANKBREAK": "v12-room-game",
+  "SYN-03-UNPREDICTABLE-REVENUE-END": "v12-room-game+graft",
+  "SYN-04-BANKRUPTCY": "v12-room-game+graft",
+  "SYN-05-Z6C-COMPOSED-END": "pre-v12-corpus-replay+graft",
+  "SYN-06-G6J-UNPARRED-GRANT-END": "pre-v12-corpus-replay+graft",
+  "SYN-07-DOUBLE-CERT-AND-DYNAMIC-450": "pre-v12-corpus-replay+graft",
+  "SYN-08-DELAYED-AUCTION-UNSOLD": "v12-room-game+graft",
+  "SYN-09-DELAYED-AUCTION-PHASE5-UNSOLD-CLOSED": "v12-room-game+graft",
+  "SYN-10-ZERO-VALUE-SEAT-4P": "v12-room-game+graft",
+  "SYN-11-SIX-PLAYERS": "v12-room-game+graft",
+  "SYN-12-SEVEN-PLAYERS-LPF": "v12-room-game+graft",
+  "SYN-13-CV4-TWO-PLAYER-END": "pre-v12-corpus-replay+graft",
+});
+
+export type V12GoldenBoards = V11GoldenBoards;
+
+let v12Cache: V12GoldenBoards | null = null;
+
+/** The v12 golden set (R12-3): the thirteen SET-0A recipes, run by the current (v12) engine, at the v12 pin. Built once
+ *  per test file; callers must not mutate (clone before grafting). */
+export function v12GoldenBoards(): V12GoldenBoards {
+  if (v12Cache) return v12Cache;
+  const built = syn01ClassicBankBreak();
+  const syn02 = syn02GentleRustBankBreak();
+  const syn03Board = syn03();
+  const dealtPins: Record<string, unknown> = {
+    "SYN-01-CLASSIC-BANKBREAK": built.board.rules_engine_version,
+    "SYN-02-GENTLE-RUST-BANKBREAK": syn02.rules_engine_version,
+    "SYN-03-UNPREDICTABLE-REVENUE-END": syn03Board.rules_engine_version,
+  };
+  const s01 = atV12SettlementPin(built.board);
+  const s05 = corpusTerminalGraftV12(replayBoards(readExport(join(__dirname, "__fixtures__z6cLog.json"))));
+  const s08 = syn08(s01);
+  const recipes: Record<string, Board> = {
+    "SYN-01-CLASSIC-BANKBREAK": s01,
+    "SYN-02-GENTLE-RUST-BANKBREAK": syn02,
+    "SYN-03-UNPREDICTABLE-REVENUE-END": syn03Board,
+    "SYN-04-BANKRUPTCY": syn04(s01),
+    "SYN-05-Z6C-COMPOSED-END": s05,
+    "SYN-06-G6J-UNPARRED-GRANT-END": corpusTerminalGraftV12(replayBoards(readJsonl(join(FROZEN_LOG_DIR, "JUNO-G6J.log.jsonl")))),
+    "SYN-07-DOUBLE-CERT-AND-DYNAMIC-450": syn07(s05),
+    "SYN-08-DELAYED-AUCTION-UNSOLD": s08,
+    "SYN-09-DELAYED-AUCTION-PHASE5-UNSOLD-CLOSED": syn09(s08),
+    "SYN-10-ZERO-VALUE-SEAT-4P": withExtraSeats(s01, [["p4", "0"]]),
+    "SYN-11-SIX-PLAYERS": withExtraSeats(s01, [["p4", "310"], ["p5", "0"], ["p6", "1"]]),
+    "SYN-12-SEVEN-PLAYERS-LPF": withExtraSeats(
+      s01,
+      [["p4", "360"], ["p5", "360"], ["p6", "0"], ["p7", "5"]],
+      { levelPlayingField: true, expandedMap: true, plusTiles: true },
+    ),
+    "SYN-13-CV4-TWO-PLAYER-END": corpusTerminalGraftV12(replayBoards(readJsonl(join(FROZEN_LOG_DIR, "JUNO-CV4.log.jsonl")))),
+  };
+  const boards: Record<string, Board> = {};
+  for (const [name, board] of Object.entries(recipes)) boards[name] = atV12SettlementPin(board);
+  v12Cache = { boards, dealtPins, syn01Submissions: built.submissions };
+  return v12Cache;
+}

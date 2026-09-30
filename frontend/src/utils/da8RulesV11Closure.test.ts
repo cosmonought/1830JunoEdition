@@ -631,11 +631,12 @@ describe("settlement: a separate axis -- v10 certified byte-for-byte, v11 added 
   const syn01 = golden.cases.find((row) => row.name === "SYN-01-CLASSIC-BANKBREAK")!;
   const seatsOf = (ids: readonly string[]) => ids.map((player_id, seat_index) => ({ seat_index, player_id }));
 
-  it("the two axes: the game plays the current engine (11 at DA-8, 12 since R12-2); settlement is certified for [10, 11] -- 11 by ESCROW-3A's recertification, never by a bump", () => {
+  it("the two axes: the game plays the current engine (11 at DA-8, 12 since R12-2); settlement is certified for [10, 11, 12] -- 11 by ESCROW-3A's recertification, 12 by R12-3's, never by a bump", () => {
     expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(11);
     /* DA-8 left this [10]. ESCROW-3A added 11 in its own reviewed change, on its own evidence
-       (`settlementV11Certification.test.ts`); the list is still a literal that no gameplay constant moves. */
-    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11]);
+       (`settlementV11Certification.test.ts`), and Route v12 R12-3 added 12 on its own (`settlementV12Certification.test.ts`);
+       the list is still a literal that no gameplay constant moves. */
+    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11, 12]);
     expect(SET0A_CERTIFIED_RULES_ENGINE_VERSION).toBe(10);
     expect(SUPPORTED_RULES_ENGINE_VERSIONS).not.toContain(10);
     expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).not.toContain(RULES_ENGINE_VERSION + 1);
@@ -649,14 +650,14 @@ describe("settlement: a separate axis -- v10 certified byte-for-byte, v11 added 
     expect(goldenBoards().boards["SYN-01-CLASSIC-BANKBREAK"].rules_engine_version).toBe(10);
   });
 
-  it("a certified v10 board appraises exactly as certified, and so does the same board at 11; 9 and 12 are refused before any value is read", () => {
+  it("a certified v10 board appraises exactly as certified, and so does the same board at 11; 9 and 13 are refused before any value is read (12 was, until R12-3)", () => {
     const certified = goldenBoards().boards["SYN-01-CLASSIC-BANKBREAK"];
     const seats = seatsOf(syn01.seat_mapping);
     expect(appraiseSeats(certified, seats).map((seat) => seat.total.toString())).toEqual(syn01.vector);
     expect(appraiseSeats({ ...certified, rules_engine_version: 11 } as State, seats).map((seat) => seat.total.toString())).toEqual(syn01.vector);
-    for (const pin of [9, 12]) {
+    for (const pin of [9, 13]) {
       expect(() => appraiseSeats({ ...certified, rules_engine_version: pin } as State, seats)).toThrow(
-        `UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=${pin} (supported: 10, 11)`,
+        `UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=${pin} (supported: 10, 11, 12)`,
       );
     }
   });

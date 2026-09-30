@@ -32,6 +32,7 @@ import {
 import { corporationLabel } from "../utils/corporationNames";
 import { TILE_CATALOG, TILE_CATALOG_BY_ID, canonicalTileName } from "./hexTileCatalog";
 import type { TerrainType, TileColorTier } from "./hexTileCatalog";
+import { printedTileRevenue } from "./tileRevenue";
 import { trayEntries } from "./tileTray";
 // Design note #724: "is there a token here" asked by name, off the required list.
 import { hasStationTokenAt } from "./hexContractTypes";
@@ -1106,8 +1107,8 @@ export function hexValueForEra(
     // plain connector, not a priced stop.
     const chainValue = laid.revenue == null ? NaN : Number(laid.revenue);
     if (Number.isFinite(chainValue) && chainValue > 0) return chainValue;
-    const entry = TILE_CATALOG_BY_ID.get(laid.tile_id);
-    if (typeof entry?.revenue === "number" && entry.revenue > 0) return entry.revenue;
+    const printed = printedTileRevenue(laid.tile_id);
+    if (typeof printed === "number" && printed > 0) return printed;
   }
 
   // The hex's own printed exception (New York $40, Boston/Baltimore $30, Altoona's real $10).

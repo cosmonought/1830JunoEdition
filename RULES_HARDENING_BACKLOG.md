@@ -430,6 +430,7 @@ stays flat $40, one circle. **#62 NOT changed (still $90): UNRESOLVED.** The own
 rulebook / map; the repository's rulebook PDF is the 2011 Mayfair image scan and its tile manifest is illegible, so no
 first-party evidence settles $80 vs $90. It stays pinned `production-data-defect` (`routeOracleTopology.test.ts`,
 `routeOracleMessageSpace.test.ts` DATA_62) until the owner rules from the 2018 source; changing it is a rules bump.*
+*Owner ruling (2026-09-29, after R12-2): **#62 is $80; the 1830+ / LPF New York tile #883 is $90** -- the old $90 on #62 conflated the two. Folded into rules v12 (not v13: v12 had not merged, shipped or been settlement-certified) on the R12-3 branch: the catalog says $80, `components/tileRevenue.ts` (the one revenue accessor) keeps $90 for #62 on pre-v12 (unpinned) boards, the oracle's #62 `production-data-defect` pins are removed, and `utils/tile62NewYorkRevenue.test.ts` keeps #62 and #883 apart. **CLOSED on the branch.***
 
 ### Stage 7 — Transaction + cash authority / auction
 

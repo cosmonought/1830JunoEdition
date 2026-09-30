@@ -4,6 +4,8 @@
 // signed bytes are KEPT before they are broadcast (and nothing is broadcast if they can't be); the server is only
 // hinted; a consent is signed by the seat's own key over this browser's own digest, and relayed without re-auth.
 
+// Route v12 R12-2 moved the rules engine to 12 (R12-3 certified it for settlement): this page's rules are the engine's.
+import { RULES_ENGINE_VERSION } from "../gameEngine/rulesVersion";
 import { walletLinkChallengeText } from "../gameEngine/escrow/walletLinkChallengeV1";
 import { joinAdmissionDigestV1 } from "../gameEngine/escrow/junoJoinAdmissionV1";
 import { variantsDigestV1 } from "../gameEngine/escrow/variantsDigest";
@@ -31,7 +33,7 @@ const chainFacts = (over: Partial<ChainGameFacts> = {}): ChainGameFacts => ({
   creator: "juno1host",
   maxPlayers: 2,
   mode: "live",
-  rulesEngineVersion: 11,
+  rulesEngineVersion: RULES_ENGINE_VERSION,
   variantsDigest: variantsDigestV1(VARIANTS),
   denom: "ujunox",
   anteGross: "1000000",

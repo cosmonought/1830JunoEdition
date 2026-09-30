@@ -386,15 +386,16 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "circles, for placement as for blocking (`stationSlotCount` believes a printed city's `slots`) -- superseding " +
       "#1401's single-station ruling -- so a second corporation may station there and one foreign token no longer shuts either to " +
       "through-running (N&W's home takes one of Norfolk's). (5) ING-1: a paid station placement on a hex with two cities " +
-      "must name its city. NOT RULES, named so the row is not read as them: hosted ingress now opens the table's own " +
+      "must name its city. (6) TILE #62 (owner ruling 2026-09-29, folded into v12 before it merged): brown New York #62 " +
+      "pays $80 per city, not the $90 the catalog carried -- a conflation with the 1830+ / LPF New York tile #883, which " +
+      "stays $90 (`tileRevenue.ts`, the one revenue accessor; pre-v12 boards keep $90). NOT RULES, named so the row is not read as them: hosted ingress now opens the table's own " +
       "board once at `turnRefusal`'s entry (S6-15, F-1) -- it decides what may be APPENDED, never what an entry means; " +
       "the renderer's era-aware Montreal / Norfolk badge and restored two-circle pill; the oracle's test pins. NOT " +
-      "CHANGED: tile #62 stays $90 (an unresolved source discrepancy with the oracle's $80, for the owner); the standard " +
-      "map's flat $40 Montreal. SETTLEMENT IS A SEPARATE AXIS: `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` stays [10, " +
-      "11], so a v12 board is refused for money settlement (and no money table can be created) until v12's own " +
-      "certification pass. A version-11 log can carry a run from one red area to the same area's other hex, a run " +
+      "CHANGED: the standard map's flat $40 Montreal; tile #883's $90. SETTLEMENT IS A SEPARATE AXIS: R12-2 left " +
+      "`SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` at [10, 11], so a v12 board was refused for money settlement until " +
+      "v12's own certification pass -- R12-3 (2026-09-29), which added 12 on its own evidence (`settlementV12Certification`). A version-11 log can carry a run from one red area to the same area's other hex, a run " +
       "counting a bare token at a bypassed city or an uncounted herald as its station, an unlicensed run ending at Coal " +
-      "River, dividends priced on Montreal / Norfolk's flat figures, a run past a one-circle Norfolk or Montreal a v12 " +
+      "River, dividends priced on Montreal / Norfolk's flat figures or on #62 at $90, a run past a one-circle Norfolk or Montreal a v12 " +
       "board no longer shuts, shortfall and skip refusals against the old demonstration, and a city-less placement on " +
       "New York, so it is refused, never reinterpreted.",
   },

@@ -401,7 +401,8 @@ describe("D. coexistence: a v10 board settles under a v10 domain, a v11 board un
   const v10Args: BuildSettlementPayloadArgs = { ...v11Args, board: { state: atPin(boards["SYN-01-CLASSIC-BANKBREAK"], 10) }, domain: v10Domain.domain, domain_inputs: inputsOf(v10Domain, 10) };
 
   it("both certified: the v10 build reproduces the frozen v10 vector byte for byte; the v11 build is accepted", () => {
-    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11]);
+    // [10, 11] at ESCROW-3A; 12 added by Route v12 R12-3's own certification (`settlementV12Certification.test.ts`).
+    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11, 12]);
     expect(buildSettlementPayloadV1(v10Args).encoded_hex).toBe(v.encoded);
     expect(code(() => buildSettlementPayloadV1(v11Args))).toBe("OK");
   });
@@ -420,19 +421,19 @@ describe("E. uncertified pins fail closed; the certified list is an explicit lit
   const board = boards["SYN-01-CLASSIC-BANKBREAK"];
   const seats = seatsOf(["p2", "p1", "p3"]);
 
-  it("the literal is [10, 11]; the gameplay axis is separate (a future bump is refused until certified)", () => {
-    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11]);
+  it("the literal is explicit ([10, 11] at ESCROW-3A, [10, 11, 12] since R12-3); the gameplay axis is separate (a future bump is refused until certified)", () => {
+    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11, 12]);
     expect(Object.isFrozen(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS)).toBe(true);
     expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
     const source = readFileSync(join(__dirname, "..", "gameEngine", "settlementAppraisal.ts"), "utf8");
-    expect(source).toContain("SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10, 11]);");
+    expect(source).toContain("SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10, 11, 12]);");
     // The appraisal module never reads the gameplay version: a bump cannot widen settlement by itself.
     expect(source).not.toMatch(/from\s+"\.\/rulesVersion"/);
   });
 
-  it("9, 12, 13, 999, 2^31 and RULES_ENGINE_VERSION + 1 are refused before a value is read", () => {
-    for (const pin of [9, 12, 13, 999, 2 ** 31, RULES_ENGINE_VERSION + 1]) {
-      expect(() => appraiseSeats(atPin(board, pin), seats)).toThrow(`UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=${pin} (supported: 10, 11)`);
+  it("9, 13, 999, 2^31 and RULES_ENGINE_VERSION + 1 are refused before a value is read (12 was, until R12-3 certified it)", () => {
+    for (const pin of [9, 13, 999, 2 ** 31, RULES_ENGINE_VERSION + 1]) {
+      expect(() => appraiseSeats(atPin(board, pin), seats)).toThrow(`UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=${pin} (supported: 10, 11, 12)`);
     }
   });
 
@@ -443,11 +444,11 @@ describe("E. uncertified pins fail closed; the certified list is an explicit lit
     expect(code(() => appraiseSeats({ ...board, rules_engine_version: null } as never, seats))).toBe("UNPINNED_BOARD");
   });
 
-  it("a v12 domain on a v12 board is refused by the builder's appraisal: no bytes are ever written for it", () => {
+  it("an uncertified domain on its own board (v13 since R12-3 certified 12) is refused by the builder's appraisal: no bytes are ever written for it", () => {
     const v = (V10_PAYLOADS.payload_vectors as Loose[])[0];
     const args = v11ArgsFor(v);
-    const d12 = { ...(args.domain_inputs as SettlementDomainInputs), rules_engine_version: 12 };
-    expect(code(() => buildSettlementPayloadV1({ ...args, board: { state: atPin(v11BoardOf(v), 12) }, domain: settlementDomainV1(d12), domain_inputs: d12 }))).toBe(
+    const d13 = { ...(args.domain_inputs as SettlementDomainInputs), rules_engine_version: 13 };
+    expect(code(() => buildSettlementPayloadV1({ ...args, board: { state: atPin(v11BoardOf(v), 13) }, domain: settlementDomainV1(d13), domain_inputs: d13 }))).toBe(
       "UNSUPPORTED_RULES_ENGINE_VERSION",
     );
   });

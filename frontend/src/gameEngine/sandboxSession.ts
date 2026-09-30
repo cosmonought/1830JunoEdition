@@ -138,6 +138,7 @@ import type { MapGridResponse, MapTileEntry } from "../components/hexContractTyp
 /* Design note #1325: a corporation's home hexes on the board in effect (two for the LPF's C&O) -- read through
    `homeStationAuthority.homeHexChoicesFor` since Slice 8.2 (#1611), so this file no longer imports the table. */
 import { TILE_CATALOG_BY_ID, type TileColorTier } from "../components/hexTileCatalog";
+import { printedTileRevenue } from "../components/tileRevenue";
 import { archetypeForHex, hexValueForEra } from "../components/hexGeometry";
 import { depotInventory, derivePhase, openDepotTiers, realDieselPurchased, TIER_ORDER, trainTier, type GamePhase } from "./gamePhase";
 // Design note #712: the market-zone purchase rules, shared with the Stock Round panel.
@@ -7774,7 +7775,8 @@ export function applySandboxLayTile(
     // the wire because the backend field is `Uint128`; matching that here
     // keeps `chainTileRevenue`'s single parse site honest rather than
     // handing it a number only the sandbox ever produces.
-    revenue: catalogEntry?.revenue === undefined ? undefined : String(catalogEntry.revenue),
+    // Route v12: asked of the rules in effect (#62 is $80 on v12, $90 pre-v12 -- `tileRevenue.ts`).
+    revenue: printedTileRevenue(tileId) === undefined ? undefined : String(printedTileRevenue(tileId)),
     // `landmark` is a property of the HEX, not of the tile sitting on it --
     // Boston is still Boston after its yellow tile is upgraded to green. So
     // an upgrade carries the existing value forward rather than clearing it,

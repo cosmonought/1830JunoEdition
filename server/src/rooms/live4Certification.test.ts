@@ -94,9 +94,10 @@ const why = (verdict: ContinuationVerdict): string => (verdict.kind === "continu
 const sha = (bytes: Buffer | string) => createHash("sha256").update(bytes).digest("hex");
 
 /** The keys L4-3 pinned and every later pass kept. */
-/* Route v12 R12-2 moved both keys on the rules axis alone (rules 12; LIVE-4 certified dc1-68c4b829… / dc1-43086498… on 11). */
-const KEY_NO_ESCROW = "dc1-ade748b9407a3db380e5ed72";
-const KEY_FIXTURE_PIN = "dc1-eb48b18e50d46d0c50807710";
+/* Route v12 R12-2 moved both keys on the rules axis alone (rules 12; LIVE-4 certified dc1-68c4b829… / dc1-43086498… on 11),
+   and R12-3 moved them again by certifying 12 for settlement (R12-2's were dc1-ade748b9… / dc1-eb48b18e…). */
+const KEY_NO_ESCROW = "dc1-41eb96a737cd33aa90a62808";
+const KEY_FIXTURE_PIN = "dc1-63af8114005a5f202d7d349c";
 
 const OTHER_CHECKSUM = "ab".repeat(32);
 const PIN_B: FinancialDeploymentPin = Object.freeze({ ...PIN, contract_address: WALLETS[2] });
@@ -220,11 +221,11 @@ const lastIndex = (answer: Frame): number => {
 /* §1. The pins                                                                                       */
 /* ================================================================================================= */
 
-describe("LIVE-4 L4-7 §1: the certified identity -- no version or key moved (but for Route v12 R12-2's rules bump)", () => {
-  test("rules 12 (reads [12]; 11 / [11] at L4-7); settlement [10, 11]; hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the two pinned keys", () => {
+describe("LIVE-4 L4-7 §1: the certified identity -- no version or key moved (but for Route v12 R12-2's rules bump and R12-3's certification)", () => {
+  test("rules 12 (reads [12]; 11 / [11] at L4-7); settlement [10, 11, 12] ([10, 11] at L4-7); hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the two pinned keys", () => {
     assert.equal(RULES_ENGINE_VERSION, 12);
     assert.deepEqual([...SUPPORTED_RULES_ENGINE_VERSIONS], [12]);
-    assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11]);
+    assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11, 12]);
     assert.equal(HOSTED_PROTOCOL_VERSION, 1);
     assert.equal(FINANCIAL_PROTOCOL_VERSION, 3);
     assert.equal(CLIENT_PROTOCOL_VERSION, 1);
@@ -1344,7 +1345,8 @@ describe("LIVE-4 L4-7 §7: the stored-data matrix -- every class over file store
     { name: "no money: current (dealt on this build)", setup: (dir) => noMoneyGameOnDisk(dir, { deal: { build: BUILD } }), doctor: "continues", hello: "continues", play: true, writes: [LOG] },
     { name: "no money: dealt on another build (a protocol-1 tab on a third build)", setup: (dir) => noMoneyGameOnDisk(dir), doctor: "continues", hello: "continues", play: true, writes: [LOG] },
     { name: "no money: an older rules pin (10) this pool does not play", setup: (dir) => noMoneyGameOnDisk(dir, { deal: { rules_engine_version: 10 } }), doctor: "not-continued/rules-not-supported", hello: "not-continued/rules-not-supported", writes: [] },
-    { name: "no money: a newer rules pin (12)", setup: (dir) => noMoneyGameOnDisk(dir, { deal: { rules_engine_version: 12 } }), doctor: "not-continued/rules-not-supported", hello: "not-continued/rules-not-supported", writes: [] },
+    /* Route v12 R12-2 made 12 this build's own engine, so "newer" is 13 (a stale constant, not a certification change). */
+    { name: "no money: a newer rules pin (13)", setup: (dir) => noMoneyGameOnDisk(dir, { deal: { rules_engine_version: 13 } }), doctor: "not-continued/rules-not-supported", hello: "not-continued/rules-not-supported", writes: [] },
     { name: "no money: an unsupported hosted protocol (2)", setup: (dir) => noMoneyGameOnDisk(dir, { deal: { hosted_protocol: 2 } }), doctor: "not-continued/hosted-protocol", hello: "not-continued/hosted-protocol", writes: [] },
     /* A GameRecord this build cannot read authorizes nobody (LIVE-3C): a hello is `not-found`, exactly as for no game.
        A newer schema is derived (discovery: incompatible record-schema-newer, nothing written); damage is held once. */

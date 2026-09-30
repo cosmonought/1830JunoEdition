@@ -91,6 +91,27 @@ export type IntentServing =
   | { readonly kind: "skip"; readonly why: string; readonly detail: string }
   | { readonly kind: "hold"; readonly code: string; readonly why: string };
 
+/** LIVE-5 L5-6: the relayer's external side effects -- what a stale task must never do merely because its worker is
+ *  still alive. `sign`: a KMS Sign of a NEW attempt; `broadcast`: handing a new attempt's bytes to a node for the first
+ *  time; `rebroadcast`: handing an already journalled and stored attempt's SAME bytes to a node again. */
+export type RelayerSideEffect = "sign" | "broadcast" | "rebroadcast";
+
+/**
+ * LIVE-5 L5-6: the relayer ROLE's word, asked by the worker (AWS: `aws/ownership/relayerRole.ts`; absent -- the file
+ * stores' single process -- every answer is yes). It is the application-side half of the relayer's fencing; the other
+ * half -- the durable one -- is inside the writes themselves: every attempt is journalled under the ledger's relayer
+ * fence and generation, and every intent write carries the role's mirror (`ROLE_RL`). Neither half replaces the other.
+ */
+export interface RelayerAuthority {
+  /** False once this task is known not to be the relayer (never taken, or lost): a pass then does nothing at all. */
+  current(): boolean;
+  /** Resolve only while this task has been shown, freshly, to hold the role (the pool writer's side-effect gate); reject
+   *  otherwise. Asked at the LAST responsible moment before each side effect. A refusal spends no failure budget and
+   *  writes nothing: the side effect simply does not happen now (a stored attempt stays live for the next pass, or for
+   *  the next relayer, which observes it before it signs anything). */
+  beforeSideEffect(what: RelayerSideEffect): Promise<void>;
+}
+
 export interface RelayerDeps {
   readonly rest: JunoRest;
   readonly store: ChainIntentStore;
@@ -124,6 +145,8 @@ export interface RelayerDeps {
   /** LIVE-4 (L4-4): the canonical verdict for an open intent, asked before ANY write for it (the load and every pass).
    *  Default: only the relayer's own check (an intent for another deployment is skipped in memory). */
   readonly classify?: (intent: ChainIntentRecord) => Promise<IntentServing>;
+  /** LIVE-5 L5-6: the relayer role (see `RelayerAuthority`). Absent: the single-process file backend -- always yes. */
+  readonly authority?: RelayerAuthority;
 }
 
 export interface RelayerStatus {
@@ -188,6 +211,34 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
   let live: RelayerStatus["live"] = null;
 
   const audit = (event: string, fields: Record<string, unknown>) => deps.ops?.audit(event, fields);
+
+  /** LIVE-5 L5-6: consecutive KMS `unavailable` answers (F-L5-2: a signer outage is not the intent's failure -- it backs
+   *  off on this streak and spends no failure budget; reset by the next signature). */
+  let signerTrouble = 0;
+  /** LIVE-5 L5-6: the last side effect withheld (one warning per distinct reason, not one per pass). */
+  let withheldWhy: string | null = null;
+
+  /** LIVE-5 L5-6: the relayer role's word, at the LAST responsible moment before an external side effect. `false`: the
+   *  side effect does not happen now -- nothing is written for it and no failure budget is spent (a stored attempt stays
+   *  live: the next pass, or the next relayer, observes it before anything new is signed). */
+  async function mayAct(what: RelayerSideEffect, intent: ChainIntentRecord): Promise<boolean> {
+    if (deps.authority === undefined) return true;
+    try {
+      if (!deps.authority.current()) throw new Error("this task does not hold the relayer role");
+      await deps.authority.beforeSideEffect(what);
+      withheldWhy = null; // a later withholding, even for the same reason, is news again
+      return true;
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      lastError = `${what} withheld for ${intent.op.kind} of ${intent.game_id}: ${why}`;
+      if (withheldWhy !== why) {
+        withheldWhy = why;
+        deps.warn(`  relayer: ${what.toUpperCase()} WITHHELD for ${intent.op.kind} of ${intent.game_id} -- ${why.slice(0, 240)}; nothing is written for it, no failure is counted`);
+      }
+      audit("chain.side-effect-withheld", { game_id: intent.game_id, intent_id: intent.intent_id, op: intent.op.kind, what, why: why.slice(0, 200) });
+      return false;
+    }
+  }
 
   function kick(ms: number): void {
     if (stopped) return;
@@ -468,6 +519,9 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
     /* Still includable: rebroadcast THE SAME BYTES (same hash) when it has not been handed to a node lately. */
     const lastSent = attempt.broadcast?.at ?? 0;
     if (attempt.phase === "signed" || at - lastSent >= rebroadcastMs) {
+      /* L5-6: the same bytes, but still a side effect -- a task that is no longer (shown to be) the relayer withholds it:
+         the attempt stays live, unchanged, for the next pass or the next relayer. */
+      if (!(await mayAct(attempt.phase === "signed" ? "broadcast" : "rebroadcast", intent))) return intent;
       return broadcast(intent, attempt);
     }
     return write(intent, withAttemptPatch(intent, { unknown_observations: attempt.unknown_observations + 1, observed_at: at }, at));
@@ -647,13 +701,26 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
       return "settled";
     }
     const fee: Coin = { denom: deps.gas.feeDenom, amount: gas.fee.toString() };
-    /* 3. Sign the final bytes. */
+    /* 3. Sign the final bytes -- L5-6: only as the relayer, shown so freshly (the admission above is not trusted for it). */
     const prepared = prepareExecuteTx({ ...base, gasLimit: gas.gasLimit.toString(), fee });
+    if (!(await mayAct("sign", intent))) return "stop";
     let signed: { txBytes: Buffer; txHash: string };
     try {
       signed = assembleTx(prepared, await deps.account.signer.sign(prepared.digest));
+      signerTrouble = 0;
     } catch (error) {
-      if (error instanceof SignerError && error.code !== "unavailable") {
+      if (error instanceof SignerError && error.code === "unavailable") {
+        /* L5-6 (F-L5-2): the key service is unavailable -- not this intent's failure. Back off on the outage's streak,
+           count nothing (a KMS brownout must never hold a Settle), and say so. A signature lost in the answer never became
+           a transaction: nothing was journalled, stored or broadcast. */
+        signerTrouble += 1;
+        lastError = `the relayer key is unavailable (${error.message})`;
+        deps.warn(`  relayer: the relayer key is UNAVAILABLE for ${intent.op.kind} of ${intent.game_id} (${signerTrouble} in a row) -- ${error.message.slice(0, 200)}; no failure is counted, it backs off`);
+        audit("chain.signer-unavailable", { game_id: intent.game_id, intent_id: intent.intent_id, op: intent.op.kind, streak: signerTrouble, signature_may_exist: error.detail.signatureMayExist === true });
+        await defer(intent, deps.now() + backoffMs(signerTrouble), lastError, false);
+        return "waiting";
+      }
+      if (error instanceof SignerError) {
         await hold(intent, "chain-intent-held", `the relayer key refused: ${error.message}`);
         return "settled";
       }
@@ -680,7 +747,11 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
     const persisted = await write(intent, withAttempt);
     if (persisted === null) return "stop"; // not known to be stored: nothing is broadcast, nothing else is signed this pass
     audit("chain.signed", { game_id: intent.game_id, intent_id: intent.intent_id, op: intent.op.kind, tx_hash: signed.txHash, sequence: account.sequence, timeout_height: timeoutHeight, gas_limit: gas.gasLimit.toString(), fee: fee.amount });
-    /* 5. Broadcast. Whatever the answer, the next passes observe the chain. */
+    /* 5. Broadcast. Whatever the answer, the next passes observe the chain. L5-6: the admission that said `ok` is NOT what
+       lets these bytes out -- the journal write (the ledger's relayer fence and generation) and the store write (the
+       role's mirror, ROLE_RL) were each evaluated after it; the role's gate is asked once more, last. Withheld, the
+       attempt stays stored and live (phase `signed`): the next pass broadcasts it, or the next relayer observes it. */
+    if (!(await mayAct("broadcast", persisted))) return "stop";
     await broadcast(persisted, persisted.attempts[persisted.attempts.length - 1]);
     return "in-flight";
   }
@@ -745,6 +816,12 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
     writeFailed = false;
     lastError = null; // the status names the LAST pass's trouble (set below, or by the pass's failure)
     if (deps.active?.() === false) return idleMs;
+    /* LIVE-5 L5-6: a task that does not hold the relayer role (never taken, or lost) runs no pass at all: no verdict, no
+       write, no side effect. The role's successor observes everything this one left live. */
+    if (deps.authority !== undefined && !deps.authority.current()) {
+      lastError = "this task does not hold the relayer role: no pass";
+      return idleMs;
+    }
     /* L4-4: the verdict before any write -- every open intent (the live ones included) and every undecided one, once
        each. A skipped one leaves this relayer's work untouched on disk; an undecided one is asked again next pass; the
        owner's conflict is held (a held intent's live attempt is still observed below: its sequence is the account's

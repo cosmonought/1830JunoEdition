@@ -1,4 +1,4 @@
-# AWS clients, DynamoDB Local, the game table and identity — the LIVE-5 convention
+# AWS clients, DynamoDB Local, the game table, identity, ownership and the relayer role — the LIVE-5 convention
 
 LIVE-5 L5-1 set this up so that every later LIVE-5 slice uses one convention. L5-2 (the game table), L5-4 (identity),
 L5-5 (the ledger and KMS) and L5-7 (the AWS wiring) all follow it; none of them should pick its own.
@@ -241,5 +241,65 @@ decides after its claim); `retakeResident` drops a QUIESCENT resident actor befo
    continues: (r) => moneyContinuationVerdict(r.continuation, THIS_DEPLOYMENT) continues, beforeRetake:
    server.retakeResident, isResident: server.isResident, onSwept: (g) => server.lifecycle.loadGame(g) })` -- BEFORE
    the escrow load, so escrow work only touches games this task owns.
-5. `writer.beforeSideEffect()` immediately before every KMS `Sign`, broadcast and join admission (L5-6 for the relayer).
+5. `writer.beforeSideEffect()` immediately before every KMS `Sign`, broadcast and join admission (L5-6 for the relayer:
+   §7 -- the relayer asks its `RelayerRole`, which asks the pool writer).
 6. `/gs/readyz` from `writer.readiness()`.
+
+## 7. The relayer role (L5-6): `aws/game/relayerRole.ts`, `aws/ownership/relayerRole.ts`, the relayer's gates
+
+The relayer is ONE task -- the primary pool's current task -- and it holds TWO fences, both of which every write it makes
+carries inside the write:
+
+| Fence | Where | Held as | Carried by |
+|---|---|---|---|
+| The ledger's relayer fence | ledger `FENCE#relayer#<account>` / `FENCE` (L5-5) | (epoch r, the minting request's token) | every attempt the relayer journals (`recordAttempt`), with `APPGEN` |
+| The mirror (ROLE_RL) | game `ROLE#relayer#<account>` / `ROLE` `{fmt 1, epoch r, task, pool, pool_epoch, taken_at, claim}` | (r, the mirror write's `claim`) | every chain-intent write the relayer makes: `createDynamoIntentStore({ ..., relayerRole: role.intentStoreRole() })` puts `ConditionCheck ROLE#relayer#<account>: fmt = 1 AND epoch = :r AND claim = :claim` where the game's HEAD fence would be; that view creates nothing |
+
+**The takeover (`takeRelayerRole(writer, { ledger, now })`), in this order:**
+1. the routing, read as a HINT -- not primary: `not-primary`, and NOTHING is minted (a mint fences whoever holds the ledger
+   fence);
+2. `writer.beforeSideEffect()` -- a stale or paused task mints nothing;
+3. the ledger mint (`ledger.takeOverRelayer()`: epoch + 1, compare-and-swap, under `APPGEN`) -- from here every earlier
+   holder's attempt writes are refused;
+4. the mirror: ONE game-table transaction `[ConditionCheck SYSTEM/ROUTING primary_pool = :P; ConditionCheck POOL#P
+   writer_epoch = :E; Put ROLE#relayer COND attribute_not_exists(pk) OR (fmt = 1 AND epoch < :r)]` (L5-3's
+   `roleTakeoverChecks`); one token, resent unchanged; a refusal or an unknown answer is explained from the table: the
+   mirror carries our claim -> taken; this task's pool moved -> lost (`PoolWriterNotCurrentError`); the routing moved ->
+   `not-primary`; a mirror at r or newer -> `RelayerRoleRefusedError`; otherwise `RelayerRoleUnknownError` (it may still
+   land; it can never pass a newer mirror) -- never guessed;
+5. `writer.holdRole("relayer", probe)`: the probe reads the ledger's `APPGEN` and fence (epoch AND token, through the
+   ledger's read-only `relayerFenceHeld()`) and the mirror (epoch AND claim); anything moved -> lost (exit 3); a read that
+   fails or an item this build cannot read -> unknown (side effects wait);
+6. one confirming read of the probe (not held -> lost; could not tell -> the role is UNCONFIRMED and its first side effect
+   reads the probe itself). A task takes the role once.
+
+**A mint without a mirror** (step 4 refused or unknown) leaves this task NOT the relayer; its ledger instance holds a fence
+nobody uses (the relayer is given `NO_RELAYER_ROLE`: it runs no pass). The previous holder is fenced in the ledger from the
+mint on and exits at its next attempt or self-check; the next takeover mints a newer epoch. That is the liveness price of
+a mint in another account (it cannot share the mirror's transaction); the hint and the freshness gate keep it rare.
+
+**The relayer's gates** (`escrow/juno/relayer.ts`, `RelayerDeps.authority` = the `RelayerRole`, or `NO_RELAYER_ROLE`):
+- no pass at all while `authority.current()` is false (no verdict, no write, no side effect);
+- `authority.beforeSideEffect(what)` at the last responsible moment before each external side effect -- `sign` (the KMS
+  Sign of a new attempt, after the admission, the simulation and the gas decision), `broadcast` (a new attempt's first
+  hand-off, after its journal write and its store write) and `rebroadcast` (a stored attempt's same bytes); a refusal
+  writes nothing, spends no failure budget, and leaves a stored attempt live for the next pass or the next relayer;
+- the admission is never the licence: between an `ok` and a new attempt's broadcast stand the ledger write (relayer fence
+  + generation) and the intent write (ROLE_RL), each evaluated by DynamoDB after the admission. What the gate cannot close
+  (a pause right after a passing check) is at most a rebroadcast of bytes already journalled and stored, which the new
+  relayer knows and would send itself: one transaction per sequence;
+- F-L5-2: a KMS `unavailable` answer backs off on the outage's streak and spends no failure budget (it used to hold an
+  intent after six); a key the service REFUSES still holds it.
+
+**What L5-7 wires** (in the §6 order, step 2, primary only, after the identity writer):
+- open the ledger with the relayer account and `onFenced: ledgerFencedHook(writer)` (the ledger's fence refusals are the
+  pool writer's loss);
+- `takeRelayerRole(writer, { ledger, now })` -> `taken`: `role`; anything else: `NO_RELAYER_ROLE` (retry later; never
+  reuse a ledger instance's held fence -- a new takeover mints anew);
+- the relayer's view: `createDynamoIntentStore({ client, table, fence: writer.fence, relayQueue: <account>, relayerRole:
+  role.intentStoreRole() })`;
+- `openJunoBackend({ ..., journal: ledger, intents: <the owner's game-fenced store>, relayerIntents: <the relayer's
+  view>, relayerAuthority: role })` -- both relayer options or neither (refused otherwise);
+- the relayer's load (the chain's sequence and the forgotten-attempt guard over the ledger's attempts, then the open
+  intents and the live attempt) runs only after the takeover, before any pass -- the backend's verification and load do
+  that already.

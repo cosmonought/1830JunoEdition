@@ -15,7 +15,13 @@
 // CREATE: [FENCE(g); Put INTENT# attribute_not_exists; Put RELAYQ# attribute_not_exists; Put LIST#intent]. An existing
 // intent at the slot answers `exists` (with `same` for the same subject and message); an unreadable one is never
 // overwritten. PUT: [FENCE(g); Put INTENT# COND record_version = v AND att = the token it read; Delete RELAYQ# when
-// terminal]. The relayer's own writes (L5-6) will carry the relayer-role fence instead of the game's.
+// terminal].
+//
+// LIVE-5 L5-6: THE RELAYER'S VIEW (`relayerRole`). The relayer writes intents of games it may not own (preflight §4 rows
+// 16-17, §9.4), so its writes carry the relayer role's mirror -- `ROLE_RL`, `aws/game/relayerRole.ts` -- INSIDE the
+// same transaction, in the game fence's place: [ROLE_RL; Put INTENT# COND record_version = v AND att = the token it read;
+// Delete RELAYQ# when terminal]. A refused ROLE_RL answers DEFINITE `RELAYER_ROLE_FENCED` (nothing written) and tells the
+// role (`onFenced`: its self-check decides). The relayer never creates an intent: that view refuses `create`.
 
 import type { TransactWriteItem } from "@aws-sdk/client-dynamodb";
 
@@ -30,7 +36,13 @@ import { transactWrite } from "./transact";
 export interface DynamoIntentStoreOptions extends GameTableStoreOptions {
   /** The relay queue an intent is made in (the relayer's account address, preflight §3.2 `RELAYQ#<relayer-address>`). */
   readonly relayQueue: string;
+  /** LIVE-5 L5-6: the RELAYER's view (see the header): every `put` carries this role fence (ROLE_RL) instead of the
+   *  game's HEAD fence; `create` is refused. `onFenced` is told when DynamoDB refused the role fence. */
+  readonly relayerRole?: { readonly fence: () => TransactWriteItem; readonly onFenced?: (detail: string) => void };
 }
+
+/** LIVE-5 L5-6: a relayer intent write refused by ROLE_RL -- the mirror no longer names this relayer; nothing was written. */
+export const RELAYER_ROLE_FENCED = "fenced: this task no longer holds the relayer role (the relayer role mirror moved); nothing was written";
 
 export interface RelayQueueEntry {
   readonly game_id: string;
@@ -55,6 +67,19 @@ export function createDynamoIntentStore(options: DynamoIntentStoreOptions): Dyna
   const { client, table, fence, timing, pageSize } = resolveOptions(options, "createDynamoIntentStore");
   if (typeof options.relayQueue !== "string" || !QUEUE.test(options.relayQueue)) throw new Error(`createDynamoIntentStore: ${JSON.stringify(options.relayQueue)} is not a relay queue name`);
   const queue = options.relayQueue;
+  const relayer = options.relayerRole;
+  if (relayer !== undefined && typeof relayer.fence !== "function") throw new Error("createDynamoIntentStore: the relayer's view needs its role fence");
+  /** The term at index 0 of every put: the game's HEAD fence, or (the relayer's view) the relayer role's ROLE_RL. */
+  const putFence = (gameId: string): TransactWriteItem => (relayer !== undefined ? relayer.fence() : gameFence(table, gameId, fence));
+  const putFenced = (): IntentPutOutcome => {
+    if (relayer === undefined) return { kind: "definite", detail: FENCED };
+    try {
+      relayer.onFenced?.(RELAYER_ROLE_FENCED);
+    } catch {
+      /* the role's hook reports its own failures; the answer stands */
+    }
+    return { kind: "definite", detail: RELAYER_ROLE_FENCED };
+  };
   const intentKey = (gameId: string, intentId: string): Item => key(gamePk(gameId), intentSk(intentId));
   const validIds = (gameId: string, intentId: string) => GAME_ID_PATTERN.test(gameId) && INTENT_ID.test(intentId);
 
@@ -94,6 +119,7 @@ export function createDynamoIntentStore(options: DynamoIntentStoreOptions): Dyna
       if (typeof record?.game_id !== "string" || typeof record.intent_id !== "string" || !validIds(record.game_id, record.intent_id) || !isChainIntentRecord(record) || record.record_version !== 1) {
         return { kind: "failed", detail: "not a new chain intent" };
       }
+      if (relayer !== undefined) return { kind: "failed", detail: "the relayer's view of the intents creates none (an intent is made by its game's owner); nothing was written" };
       const { game_id: gameId, intent_id: intentId } = record;
       const existing = async (): Promise<IntentCreateOutcome | null> => {
         const item = await getItem(client, table, intentKey(gameId, intentId));
@@ -159,7 +185,7 @@ export function createDynamoIntentStore(options: DynamoIntentStoreOptions): Dyna
       const token = timing.token();
       const held = observedCondition(observed as Item);
       const items: TransactWriteItem[] = [
-        gameFence(table, gameId, fence),
+        putFence(gameId),
         {
           Put: {
             TableName: table,
@@ -180,7 +206,7 @@ export function createDynamoIntentStore(options: DynamoIntentStoreOptions): Dyna
       if (answer.kind === "applied") return answer.redone ? { kind: "committed", redone: true } : COMMITTED;
       if (answer.kind === "not-applied") return { kind: "definite", detail: `${answer.detail}; nothing was written` };
       const settled = needsSettling(answer);
-      if (!settled && conditionFailed(answer, 0)) return { kind: "definite", detail: FENCED };
+      if (!settled && conditionFailed(answer, 0)) return putFenced();
       let item: Item | null = !settled && answer.kind === "refused" ? answer.reasons[1]?.item ?? null : null;
       try {
         if (item === null) item = await getItem(client, table, intentKey(gameId, intentId));
@@ -189,7 +215,7 @@ export function createDynamoIntentStore(options: DynamoIntentStoreOptions): Dyna
       }
       if (settled && carriesAttempt(item, token)) return { kind: "committed", redone: true };
       if (settled && answer.kind === "unknown") return { kind: "uncertain", detail: `${answer.detail}; the write is not visible and an attempt may still be in flight` };
-      if (answer.kind === "refused" && conditionFailed(answer, 0)) return { kind: "definite", detail: FENCED };
+      if (answer.kind === "refused" && conditionFailed(answer, 0)) return putFenced();
       try {
         return { kind: "conflict", current: classify(gameId, intentId, item) };
       } catch (error) {

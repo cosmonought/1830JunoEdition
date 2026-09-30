@@ -31,7 +31,7 @@ import type { GameIdentityFacts } from "../../../../frontend/src/gameEngine/comp
 import type { FormatFact } from "../../../../frontend/src/gameEngine/compat/continuationVerdict";
 import { checkSignerIdentities, pinOf, settlementKeyConfigOf, verifyJunoDeployment, type DeploymentVerdict, type JunoBackendConfig, type SignerRef } from "./junoConfig";
 import { createJunoRest, type HttpTransport, type JunoRest } from "./junoRest";
-import { createJunoRelayer, type Relayer } from "./relayer";
+import { createJunoRelayer, type Relayer, type RelayerAuthority } from "./relayer";
 import { junoSettlementSigner, openDevelopmentSignerFile, openKmsDigestSigner, SignerError, type DigestSigner, type KmsClient } from "./signer";
 
 export type JunoBackendState = "unverified" | "active" | "refused";
@@ -74,6 +74,13 @@ export interface JunoBackendDeps {
   readonly walletProofs?: WalletControlProofs;
   /** LIVE-4 (L4-4): the pool's serving, when the caller shares one (default: the service's own over the configured pin). */
   readonly serving?: MoneyServing;
+  /** LIVE-5 L5-6: the relayer ROLE (AWS: `aws/ownership/relayerRole.ts` -- the `RelayerRole` this task took, or
+   *  `NO_RELAYER_ROLE`). The relayer runs no pass while it is not current, and asks it before every KMS Sign, broadcast
+   *  and rebroadcast. Absent (the file stores' single process): always the relayer, as before. */
+  readonly relayerAuthority?: RelayerAuthority;
+  /** LIVE-5 L5-6: the RELAYER's view of the chain intents (AWS: the DynamoDB intent store built with
+   *  `relayerRole: role.intentStoreRole()`, whose writes carry the role fence instead of the game's). Absent: `intents`. */
+  readonly relayerIntents?: ChainIntentStore;
 }
 
 async function openSigner(ref: SignerRef, deps: JunoBackendDeps): Promise<DigestSigner> {
@@ -86,6 +93,9 @@ async function openSigner(ref: SignerRef, deps: JunoBackendDeps): Promise<Digest
 
 export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBackend> {
   const config = deps.config;
+  /* L5-6: the role and the role-fenced view go together -- a role without its view writes other pools' intents through
+     the game fence (refused), a view without the role has no side-effect gates. */
+  if ((deps.relayerAuthority === undefined) !== (deps.relayerIntents === undefined)) throw new Error("openJunoBackend: the relayer role and the relayer's view of the intents are given together, or neither is");
   const rest = deps.rest ?? createJunoRest({ endpoints: config.endpoints, expectedChainId: config.chainId, allowInsecureLocalHttp: config.allowInsecureLocalHttp, timeoutMs: config.timeoutMs, maxResponseBytes: 256 * 1024, maxCodeBytes: 4 * 1024 * 1024 }, deps.http);
   const relayerSigner = await openSigner(config.relayer.signer, deps);
   const settlementDigestSigner = await openSigner(config.settlementKey.signer, deps);
@@ -128,7 +138,7 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
   });
   relayer = createJunoRelayer({
     rest,
-    store: deps.intents,
+    store: deps.relayerIntents ?? deps.intents,
     journal: deps.journal,
     account: { address: config.relayer.address, signer: relayerSigner },
     chainId: config.chainId,
@@ -143,6 +153,7 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
     admit: (intent) => service.admit(intent),
     /* LIVE-4 (L4-4): the canonical verdict for every open intent, before the relayer writes anything for it. */
     classify: (intent) => service.classifyIntent(intent),
+    ...(deps.relayerAuthority !== undefined ? { authority: deps.relayerAuthority } : {}),
   });
   /* Review #8: the frozen rosters, from the durable store, before the server takes a single op (no chain needed). */
   const preloaded = await service.preload();

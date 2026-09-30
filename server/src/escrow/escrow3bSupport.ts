@@ -27,7 +27,7 @@ import { createMemoryWalletTicketStore, createWalletTicketLedger, type WalletTic
 import { addressOfPublicKey } from "./juno/cosmosTx";
 import { FakeJunoChain } from "./juno/fakeJunoChain";
 import { DEFAULT_GAS_POLICY } from "./juno/gasPolicy";
-import { createJunoRelayer, type Relayer } from "./juno/relayer";
+import { createJunoRelayer, type Relayer, type RelayerAuthority } from "./juno/relayer";
 import { publicKeyOf, signDigest } from "./juno/secp256k1";
 import { developmentDigestSigner, junoSettlementSigner, type DigestSigner } from "./juno/signer";
 import type { SettlementKeyConfig } from "./escrowPorts";
@@ -116,6 +116,9 @@ export interface WorldOptions {
   /** LIVE-5 L5-5: wrap the settlement / relayer key (tests make a KMS answer go missing after the signature was made). */
   readonly wrapSettlementKey?: (signer: DigestSigner) => DigestSigner;
   readonly wrapRelayerKey?: (signer: DigestSigner) => DigestSigner;
+  /** LIVE-5 L5-6: per process (every `build`, so a `restart` is a new task): the relayer's own journal, its view of the
+   *  intents and its role -- a takeover test gives the old and the new task different ones. */
+  readonly relayerSeam?: () => { readonly journal?: InspectableSigningJournal; readonly store?: ChainIntentStore; readonly authority?: RelayerAuthority };
 }
 
 export const proofKey = (gameId: string, playerId: string, principalId: string) => `${gameId}|${playerId}|${principalId}`;
@@ -212,10 +215,12 @@ export function makeWorld(options: WorldOptions = {}): World {
       walletProofs,
       ...(options.continuation !== undefined ? { continuation: options.continuation } : {}),
     });
+    const seam = options.relayerSeam?.() ?? {};
     relayer = createJunoRelayer({
       rest: chain,
-      store: intents,
-      journal,
+      store: seam.store ?? intents,
+      journal: seam.journal ?? journal,
+      ...(seam.authority !== undefined ? { authority: seam.authority } : {}),
       account: { address: RELAYER_ADDRESS, signer: relayerSigner },
       chainId: pin.chain_id,
       contract: pin.contract_address,

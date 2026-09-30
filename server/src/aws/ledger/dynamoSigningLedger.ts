@@ -62,8 +62,10 @@
 // included: damage is never taken for a newer writer, and every field the parsers check is in the writes' conditions.
 //
 // NOT HERE (later slices): reading `APPGEN` from the game table's generation (L5-7), the relayer takeover SEQUENCE and its
-// app-side mirror (L5-6), the self-check that exits a fenced task (L5-3 -- `onFenced` is the hook), wiring into
-// `start.ts` (L5-7: until then `start.ts` refuses a `dynamodb` journal rather than fall back to a file journal).
+// app-side mirror (L5-6: `aws/ownership/relayerRole.ts`, which reads this ledger's fence back through `relayerFenceHeld`
+// for the pool writer's self-check), the self-check that exits a fenced task (L5-3 -- `onFenced` is the hook; L5-6's
+// `ledgerFencedHook` turns it into the pool writer's loss), wiring into `start.ts` (L5-7: until then `start.ts` refuses a
+// `dynamodb` journal rather than fall back to a file journal).
 
 import { randomUUID } from "crypto";
 import {
@@ -295,8 +297,16 @@ export interface DynamoSigningLedgerOptions {
 export interface DynamoSigningLedger extends InspectableSigningJournal {
   readonly table: string;
   readonly generation: number;
+  /** The relayer account this instance was opened for (`null`: none -- it records no attempt, it mints no fence). */
+  readonly relayer: string | null;
   /** The relayer fence epoch this instance holds (`null`: none -- it records no attempt). */
   relayerEpoch(): number | null;
+  /** LIVE-5 L5-6: whether this instance could still record an attempt: the adopted generation (`APPGEN`) is still this
+   *  instance's AND the relayer fence it holds is still the ledger's -- strongly consistent reads, the fence compared by
+   *  epoch AND minting token (for the pool writer's self-check). Read only: it never writes, never adopts what it reads,
+   *  and never changes what this instance holds. Throws when a read fails or an item cannot be read
+   *  (`LedgerUnreadableError`): unknown, never "moved", never "held". */
+  relayerFenceHeld(): Promise<{ readonly held: true } | { readonly held: false; readonly detail: string }>;
   /** The ledger half of a relayer takeover (preflight §12.2 step 1): mint `FENCE#relayer#<account>` epoch + 1 under the
    *  generation check, by compare-and-swap, stamped with this call's token. From then on every earlier holder's attempt
    *  writes are refused (the fence is (epoch, token)), and this instance records attempts under the new fence. L5-6
@@ -653,7 +663,23 @@ export async function openDynamoSigningLedger(client: DynamoDBClient, options: D
   return {
     table,
     generation,
+    relayer: relayerAddress,
     relayerEpoch: () => held?.epoch ?? null,
+
+    async relayerFenceHeld() {
+      const fence = held;
+      if (relayerAddress === null || fence === null) return { held: false as const, detail: "this ledger instance holds no relayer fence" };
+      /* The generation first (every attempt write carries it too): a restore adopted since fences this instance. */
+      const appgen = await readItem(LEDGER_KEYS.appgen());
+      if (appgen === null) return { held: false as const, detail: "the ledger has no adopted generation" };
+      const adoptedNow = parseAppGen(appgen); // strict: an item this build cannot read throws (unknown)
+      if (adoptedNow !== generation) return { held: false as const, detail: `the ledger's adopted generation is ${adoptedNow}, not this instance's ${generation}` };
+      const item = await readItem(LEDGER_KEYS.fence(relayerAddress));
+      if (item === null) return { held: false as const, detail: `the relayer fence of ${relayerAddress} is gone` };
+      const stored = parseFence(item, relayerAddress); // strict: an item this build cannot read throws (unknown)
+      if (stored.epoch === fence.epoch && stored.token === fence.token) return { held: true as const };
+      return { held: false as const, detail: `the relayer fence of ${relayerAddress} is at epoch ${stored.epoch}${stored.epoch === fence.epoch ? " minted by another task" : ""}, not this task's ${fence.epoch}` };
+    },
 
     async reserveSettlement(entry) {
       const instance = instanceOf(entry.instance);

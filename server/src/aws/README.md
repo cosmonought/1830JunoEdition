@@ -1,4 +1,4 @@
-# AWS clients, DynamoDB Local, the game table, identity, ownership, the relayer role and the AWS runtime — the LIVE-5 convention
+# AWS clients, DynamoDB Local, the game table, identity, ownership, the relayer role, the AWS runtime and non-primary routing — the LIVE-5 / LIVE-6 convention
 
 LIVE-5 L5-1 set this up so that every later LIVE-5 slice uses one convention. L5-2 (the game table), L5-4 (identity),
 L5-5 (the ledger and KMS) and L5-7 (the AWS wiring, §8) all follow it; none of them should pick its own.
@@ -17,6 +17,8 @@ A client is created only by `createDynamoDbClient(target)`, (L5-5) `createKmsCli
   3.1142.0), and nothing reaches into `@smithy/*`;
 - (L5-7) the AWS adapters are reached only through the runtime composition, `aws/runtime/` (§8, "The import boundary");
 - no file outside `persistence/conformance/` imports the conformance harness or its proof adapter.
+- (L6-1) the identity verifier's reader (`identity/identityVerifier.ts`) and the directory (`ownership/gameDirectory.ts`)
+  are reached, like every adapter, only through the runtime composition (`runtime/awsSubstrate.ts`).
 
 | Concern | Rule |
 |---|---|
@@ -348,9 +350,9 @@ settlement index -> the game server (`ownership`, `readiness`, bound to `0.0.0.0
 sweep that completes (then every 60 s) -> READY -> `backend.start()` (verify, the escrow load, the relayer's load) -> the
 settlement walk. A stop asked for before the startup finishes ends it (exit 0) and is checked before every takeover.
 
-**Not primary: a standby.** It holds its pool, takes no role, opens no identity, claims nothing, serves no player (this
-build has no IdentityVerifier), and `/gs/readyz` is 503 `not-primary`; its HTTP server answers `/gs/healthz` and nothing
-else.
+**Not primary: a non-primary task** (LIVE-6 L6-1, §9; L5-7's standby, which served nobody). It holds its pool, takes no
+role, opens no identity writer, claims nothing and writes nothing; it authenticates sockets through the identity verifier
+and answers games with a route. `/gs/readyz` is 200 `non-primary` while its pool is held and freshly checked.
 
 **The relayer role.** Taken at startup (before the backend exists, so the escrow load's relayer load follows it). Not
 taken: NO relayer authority (no pass, no Sign, no broadcast), retried every 30 s once the backend is `active`; a role taken
@@ -391,3 +393,49 @@ reached only from the ALB; the ALB target health check `/gs/readyz`, the contain
 
 Run: `npm test` includes `aws/runtime/l5_7AwsRuntime.test.js`; `npm run test:dynamodb-local` includes
 `persistence/conformance/awsRuntime.dynamoLocal.test.js` (the runtime over the real substrate).
+
+## 9. Non-primary serving and routing (LIVE-6 L6-1)
+
+The pieces that let a task which is NOT the primary pool's serve anything, and let any task answer a game it does not
+serve with a destination. Nothing here writes; the primary's write path is unchanged.
+
+| File | What it is |
+|---|---|
+| `../identity/verifier.ts` | The `SessionVerifier` port and its decisions: the writer's `authenticate` / `isProfiled` / `socketVerdict`, decision for decision, over single-record reads; no cache, no write, fail closed |
+| `identity/identityVerifier.ts` | Its reader on the L5-4 identity table: strongly consistent `GetItem`s of `SESS#` / `PRIN#` / `FAM#` / `PROF#`, L5-4's strict `decodeItem`; never the role item, never a write |
+| `ownership/gameDirectory.ts` | Strong reads for a task that claims nothing: a game's HEAD (owned / released / absent; anything else is damage), `SYSTEM/ROUTING`, a record's `META` (L5-2's classification) |
+| `../rooms/gameRoutes.ts` | The trusted route table (`poolRoutes`, `routeEntryProblem`), the owner -> destination lookup (`routeOfGame`), and the frozen LIVE-4 frame (`ownershipRouteFrame` = `routeFrameFor`) |
+| `../routerServer.ts` | The non-primary task's server: `/gs/healthz`, `/gs/readyz`, and the socket -- the same upgrade gate (`decideVerifiedUpgrade`), every frame's session re-checked from the records, `hello` / `room-hello` answered with a route, everything else `unavailable` |
+
+**Which pool, and which path.** A route's POOL comes only from authoritative data read at the question: on a task whose
+load claimed the game, the claim's own refusal (`GameRoutedError`, the HEAD's owner as the table evaluated it); on a
+non-primary task, a strong read of the HEAD -- a released game is the primary's, from a strong read of `SYSTEM/ROUTING`.
+Its PATH comes only from the trusted runtime document v2's `routes` (`18COSMOS/AWS-RUNTIME/v2` = v1 + `routes: {"<pool>":
+{"ws_path": "/gs/...", "bundle_path"?: "/..."}}`): plain absolute paths the client's own `safeRoutePath` accepts, a socket
+path under `/gs/`, never a host. Nothing a client sends -- a frame field (the closed schema refuses it), the query, Host
+or X-Forwarded-* -- names a destination. No destination (an operator run, this pool, a pool with no entry, a HEAD or a
+routing this build cannot read, no routing): the answer is exactly today's `unavailable`. A v1 document has no table.
+
+**The frame.** LIVE-4's `route` frame, built by the frozen `routeFrameFor` (client protocol 1's only route code), then
+close 4426 -- only to a protocol-1 socket whose frozen connection verdict is `ok`, after its authentication and after the
+game's record authorized the principal to read the game (an outsider of a private game, or an unknown id, gets
+`not-found`). The legacy wire never sees it. The pool it names authenticates, authorizes and judges the tab again.
+
+**Each pool answers its own path.** The game server (and the router) accept `/gs` and their own pool's `ws_path`; the
+load balancer's rule for each `ws_path` must send it to that pool's tasks (L6-2 / IaC).
+
+**The routing watch.** Every 5 s the task reads `SYSTEM/ROUTING` strongly. A proven change of its serving role -- a
+well-formed routing naming this pool on a non-primary task, or another pool on the primary -- runs the graceful shutdown
+(the router closes its sockets 1012) and exits **5** (`EXIT_ROLE_CHANGED`); the restart takes the role the routing names
+through the certified startup order (a promoted task takes the identity-writer role inside the transaction conditioned on
+the routing and its pool epoch, BEFORE it loads identity). Unreadable or absent routing proves nothing. A loss during that
+drain keeps exit 3. The operator's flip procedure itself is L6-2's.
+
+**A demotion gives back what it can.** A primary that stops for a role change releases its resident, loaded, unfenced
+NO-MONEY games (the eviction rule) after its sockets close, so the new primary claims them at their next load. Still owned
+by the demoted pool, and so unservable until L6-2's flip procedure (or a retired-pool claim / draining serving): money
+games, a game whose load was still in flight at the flip, and every game of a task demoted by a fence (exit 3, no drain).
+The primary's sockets close 1001 at a demotion (the game server's close), the router's 1012; clients treat both alike.
+
+**What a non-primary task does NOT do:** take the identity-writer or relayer role, open an identity store, a ledger, a KMS
+client or any game store that writes, claim or release a game, run a money sweep, or write any identity or game item.

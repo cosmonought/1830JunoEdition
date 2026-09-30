@@ -46,9 +46,21 @@
 // store has asked for a restart. Liveness (`/gs/healthz`) is unchanged and separate. Financial activeness (the escrow
 // state) and the relayer role are reported beside it, not part of it (preflight §13: separate flags).
 //
-// A STANDBY (not the primary pool's task): it holds its pool (so a newer task of the pool fences it and it exits), takes
-// no role, opens no identity, claims no game and serves no player -- this build has no IdentityVerifier yet (L6) -- and its
-// `/gs/readyz` is always 503 `not-primary`. The flip that would promote it is LIVE-6's; a restart re-decides.
+// A NON-PRIMARY TASK (LIVE-6 L6-1; L5-7's standby): it holds its pool (so a newer task of the pool fences it and it exits),
+// takes no role, opens no identity writer and no writable identity copy, opens no ledger, builds no store that writes,
+// claims no game and does no money work. It SERVES what needs no write (`routerServer.ts`): sockets authenticated by the
+// IDENTITY VERIFIER (strongly consistent reads of the durable identity records, `identity/verifier.ts`), and, for a game,
+// LIVE-4's `route` frame to the pool that serves it (the owner from a strong read of the game's HEAD, the path from the
+// trusted route table). Its `/gs/readyz` is 200 while its pool is held and freshly checked (it may be sent sockets: its
+// load-balancer rule only ever sends it its own pool's path).
+//
+// ROUTING CHANGES (L6-1): every `routingWatchMs` (5 s) the task reads `SYSTEM/ROUTING` strongly. A PROVEN change of this
+// task's serving role -- a well-formed routing naming THIS pool on a non-primary task (promotion), or ANOTHER pool on the
+// primary (demotion) -- ends the task with the graceful shutdown and exit 5 (`EXIT_ROLE_CHANGED`): the restart re-decides
+// the role through this one certified startup order, so a promoted task takes the identity-writer role (inside a
+// transaction conditioned on the routing and its pool epoch) BEFORE it loads identity, and a demoted one comes back
+// holding nothing. A routing that cannot be read, or names no pool, proves nothing: no reaction. (Demotion is also, as
+// before, a loss: a newer primary's role takeover fences this task, exit 3.) The operator's flip procedure is L6-2's.
 //
 // LOSS IS FAIL-FAST, never a graceful shutdown: the pool writer's `onLost` (a newer task, a role taken, the generation
 // moved, a pool fence refused by the table) stops every timer and the relayer at once and exits 3; a store that cannot
@@ -104,7 +116,12 @@ import type { GsMode } from "../../identity/mode";
 import type { SecurityEventJournal } from "../../identity/securityEvents";
 import { IdentityService } from "../../identity/sessions";
 import type { IdentityStore } from "../../identity/store";
-import { createStandbyServer, type ReadinessAnswer } from "../../ingress/readiness";
+import type { ReadinessAnswer } from "../../ingress/readiness";
+import type { SessionVerifier } from "../../identity/verifier";
+import { createRouterServer, type RouterServer } from "../../routerServer";
+import { poolRoutes, type GameDirectory, type PoolRoutes } from "../../rooms/gameRoutes";
+import type { GameRecord } from "../../rooms/gameRecord";
+import { thisDeploymentCapability } from "../../deploymentCapability";
 import type { OpsRecorder } from "../../persistence/opsRecorder";
 import { seatOf } from "../../rooms/gameRecord";
 import type { HoldStore } from "../../rooms/holdStore";
@@ -121,6 +138,8 @@ import type { AwsRuntimeConfig } from "./runtimeConfig";
 export const EXIT_REFUSED = 2;
 export const EXIT_LOST = 3;
 export const EXIT_STORE_UNCERTAIN = 4;
+/** LIVE-6 L6-1: the routing proved this task's serving role changed (promotion or demotion): restart into the new one. */
+export const EXIT_ROLE_CHANGED = 5;
 
 /** A startup that cannot go on: the caller prints it and exits with `exitCode` -- 2 (refused: ECS starts the task again),
  *  or the loss's 3 / the store's 4 when one ended the startup (never masked as a refusal), or 0 when a stop was asked for
@@ -206,6 +225,17 @@ export interface AwsSubstrate<W extends PoolWriterPort = PoolWriterPort, L exten
   ownership(writer: W, options: { readonly onClaimed?: (gameId: string) => Promise<void>; readonly warn: (line: string) => void }): PoolGameOwnership;
   /** The KMS port for the configuration's one KMS region (`kmsDigestClient(createKmsClient(...))`). */
   kms(region: string): KmsClient;
+  /** LIVE-6 L6-1: `SYSTEM/ROUTING`, strongly consistent (`readRouting`); `null`: none. Throws when unreadable. */
+  readRouting(): Promise<{ readonly primary_pool: string } | null>;
+  /** LIVE-6 L6-1, NON-PRIMARY ONLY: the identity verifier over the identity table (read-only; never the writer). */
+  identityVerifier(): SessionVerifier;
+  /** LIVE-6 L6-1, NON-PRIMARY ONLY: a game's owner, the primary pool, a game's record -- strong reads, nothing else. */
+  gameDirectory(writer: W): RouterDirectory;
+}
+
+/** What a non-primary task reads to route a game (`aws/ownership/gameDirectory.ts`). */
+export interface RouterDirectory extends GameDirectory {
+  readonly records: { load(gameId: string): Promise<GameRecord | null> };
 }
 
 /* ------------------------------------------------------------------ */
@@ -227,6 +257,8 @@ export interface AwsRuntimeTiming {
   /** The in-flight periodic work (a money claim sweep, a relayer-role retry) and the escrow start still verifying. */
   readonly drainPeriodicMs: number;
   readonly drainEscrowStartMs: number;
+  /** LIVE-6 L6-1: how often `SYSTEM/ROUTING` is read for a change of this task's serving role. */
+  readonly routingWatchMs: number;
 }
 
 /** The drains are bounded so the whole graceful stop fits Fargate's `stopTimeout` (120 s, L5-8). */
@@ -243,6 +275,7 @@ export const AWS_RUNTIME_TIMING: AwsRuntimeTiming = Object.freeze({
   drainIdentityMs: 60_000,
   drainPeriodicMs: 10_000,
   drainEscrowStartMs: 10_000,
+  routingWatchMs: 5_000,
 });
 
 export interface AwsRuntimeInput<W extends PoolWriterPort, L extends InspectableSigningJournal> {
@@ -271,18 +304,23 @@ export interface AwsRuntimeInput<W extends PoolWriterPort, L extends Inspectable
   /** Tests: the backend and server constructors (the real ones by default). */
   readonly openJunoBackend?: typeof openJunoBackend;
   readonly createGameServer?: typeof createGameServer;
+  /** Tests: the ingress limits of the servers (the defaults in production). */
+  readonly limits?: import("../../ingress/limits").IngressLimitOverrides;
 }
 
 export interface AwsRuntime {
-  readonly role: "primary" | "standby";
+  /** LIVE-6 L6-1: `non-primary` is L5-7's standby, now serving routes. */
+  readonly role: "primary" | "non-primary";
   readonly task: string;
   /** The startup steps, in the order they happened (and, later, `escrow-started`). */
   readonly steps: readonly string[];
   /** The graceful shutdown's steps, in order (empty until one runs). */
   readonly shutdownSteps: readonly string[];
   readonly http: Server;
-  /** The game server (null for a standby). */
+  /** The game server (null for a non-primary task). */
   readonly server: ReturnType<typeof createGameServer> | null;
+  /** LIVE-6 L6-1: the non-primary task's server (null for the primary). */
+  readonly router: RouterServer | null;
   readonly identity: IdentityService | null;
   readonly backend: JunoBackend | null;
   readiness(): ReadinessAnswer;
@@ -294,8 +332,11 @@ export interface AwsRuntime {
    *  runs after a loss or a restart request, and it stops draining at once if one happens while it runs. */
   shutdown(): Promise<void>;
   /** The exit code this task must end with: null while nothing forced one; 3 after a loss, 4 after a store asked for a
-   *  restart. The caller's exit after a graceful shutdown uses it (a forced exit never becomes 0). */
+   *  restart, 5 (L6-1) once the routing proved its serving role changed. The caller's exit after a graceful shutdown uses
+   *  it (a forced exit never becomes 0). */
   exitCode(): number | null;
+  /** LIVE-6 L6-1: one read of the routing for a change of this task's serving role now (the watch's own). */
+  checkRouting(): Promise<void>;
   status(): Record<string, unknown>;
 }
 
@@ -344,9 +385,13 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   /** Read through a function: the closures below must see the phase as it is when they run. */
   const isStopping = (): boolean => phase === "stopping";
   let terminal: null | "lost" | "uncertain" = null;
+  /** LIVE-6 L6-1: the routing proved this task's serving role changed; the graceful shutdown runs, then exit 5. */
+  let roleChanged: string | null = null;
   let writer: W | null = null;
   let backend: JunoBackend | null = null;
   let shutdownPromise: Promise<void> | null = null;
+  /** The graceful shutdown of whichever server this task runs (set once it exists): what a role change runs. */
+  let runtimeShutdown: () => Promise<void> = () => Promise.resolve();
 
   /** What a startup that ends early must close (the pool writer's self-check, the game server): run once. */
   const closers: Array<() => void> = [];
@@ -420,6 +465,13 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     `${config.environment}: pool ${config.pool}, generation ${config.generation}, region ${config.region}; tables game ${config.gameTable}, identity ${config.identityTable}, ` +
       `ledger ${config.ledger.table} (account ${config.ledger.account}, ${config.ledger.region}); escrow ${escrowConfig === null ? "none (money games stay off)" : `${escrowConfig.chainId} (${escrowConfig.networkClass}), KMS keys in ${escrowConfig.kmsRegion ?? "?"}`}; task ${input.task}`,
   );
+  /* LIVE-6 L6-1: the trusted route table (empty for a v1 document: no destination exists). */
+  let routes: PoolRoutes;
+  try {
+    routes = poolRoutes(config.pool, config.routes);
+  } catch (error) {
+    return refuse(`the route table cannot be used (${describe(error)})`);
+  }
   assertAlive(); // a stop asked for before anything was touched ends here
   let adopted: number | null;
   try {
@@ -459,7 +511,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   assertAlive();
 
   if (identityRole.kind === "not-primary") {
-    return startStandby(identityRole.primary);
+    return startNonPrimary(identityRole.primary);
   }
   step("identity-writer", `identity-writer role TAKEN at epoch ${identityRole.epoch} (this pool is primary); a newer primary's takeover makes this task lost`);
   input.ops.audit("aws.identity-writer", { epoch: identityRole.epoch });
@@ -712,6 +764,8 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       statusExtras,
       ownership,
       readiness,
+      routes,
+      ...(input.limits !== undefined ? { limits: input.limits } : {}),
     });
   } catch (error) {
     return refuse(`the game server could not be built (${describe(error)})`);
@@ -795,6 +849,10 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   timers.push(every(timing.sweepEveryMs, () => void sweepNow("periodic")));
   phase = "serving";
   step("ready");
+  /* LIVE-6 L6-1: a proven flip of the routing to another pool demotes this task: graceful stop, exit 5 (see the header). */
+  const checkRouting = routingWatch((primary) => (primary !== w.pool ? `the routing names ${primary} primary, not this pool` : null));
+  timers.push(every(timing.routingWatchMs, () => void checkRouting()));
+  void checkRouting(); // once at once: a flip during the startup is not left for a whole interval
 
   /* ---------------- 7. escrow: verify, load (the relayer's load after its takeover), then the settlement walk ---------------- */
   const retryRelayerRole = async (): Promise<boolean> => {
@@ -871,9 +929,19 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       opened?.stop();
       if (forced()) return;
       did("relayer-stopped");
+      /* LIVE-6 L6-1: a DEMOTION gives back the no-money games it holds (the games an eviction would release) once its
+         sockets are closed, so the new primary claims them at their next load -- under this task's own fence (a release
+         names the exact writer; a commit still in flight either landed before it or is refused by it). A money game stays
+         owned: a pool that continues it takes it only through L6-2's procedures. */
+      const giveBack = roleChanged !== null ? server.releasableResidentGames() : [];
       await server.close().catch(() => undefined);
       if (forced()) return;
       did("server-closed");
+      if (roleChanged !== null) {
+        for (const gameId of giveBack) ownership.release(gameId);
+        input.log(`  aws: role change -- ${giveBack.length} resident no-money game(s) released for the new primary; money games stay owned (L6-2)`);
+        did("no-money-released");
+      }
       await bounded("the escrow jobs", opened?.service.idle(), timing.drainEscrowMs, input.warn);
       if (forced()) return;
       did("escrow-drained");
@@ -893,6 +961,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     })();
     return shutdownPromise;
   };
+  runtimeShutdown = shutdown;
 
   return {
     role: "primary",
@@ -907,36 +976,124 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     sweepNow: () => sweepNow("manual"),
     retryRelayerRole,
     shutdown,
-    exitCode: forcedExit,
+    exitCode,
     status: statusExtras,
+    router: null,
+    checkRouting,
   };
 
-  /* ---------------- the standby: not the primary pool's task ---------------- */
-  function startStandby(primary: string | null): AwsRuntime {
+  /* ---------------- LIVE-6 L6-1: the routing watch, and the change of role it proves ---------------- */
+  /** The exit this task ends with: a loss or a store's restart request first (3 / 4), then a proven role change (5). */
+  function exitCode(): number | null {
+    return forcedExit() ?? (roleChanged !== null ? EXIT_ROLE_CHANGED : null);
+  }
+
+  /** One strong read of the routing; `changed(primary)` names the change it proves, or null. A read that fails, an item
+   *  this build cannot read, or no routing at all proves nothing (no reaction; said once per streak). Single-flight. */
+  function routingWatch(changed: (primary: string) => string | null): () => Promise<void> {
+    let running: Promise<void> | null = null;
+    let quiet = false;
+    return () => {
+      running ??= (async () => {
+        if (terminal !== null || phase !== "serving" || roleChanged !== null) return;
+        let routing: { readonly primary_pool: string } | null;
+        try {
+          routing = await substrate.readRouting();
+        } catch (error) {
+          if (!quiet) input.warn(`  aws: the routing could not be read (${describe(error)}); no change of role is concluded from it`);
+          quiet = true;
+          return;
+        }
+        if (routing === null) {
+          if (!quiet) input.warn("  aws: the routing names no primary pool; no change of role is concluded from it");
+          quiet = true;
+          return;
+        }
+        quiet = false;
+        const change = changed(routing.primary_pool);
+        if (change !== null) changeRole(change, routing.primary_pool);
+      })().finally(() => {
+        running = null;
+      });
+      return running;
+    };
+  }
+
+  /** A proven change of this task's serving role: the graceful shutdown, then exit 5 -- never during a loss, a restart
+   *  request or a shutdown already under way (those keep their own exit). */
+  function changeRole(detail: string, primary: string): void {
+    if (terminal !== null || phase !== "serving" || roleChanged !== null || shutdownPromise !== null) return;
+    roleChanged = detail;
+    input.warn(`\n  aws: ROLE CHANGE -- ${detail}. This task stops gracefully and exits ${EXIT_ROLE_CHANGED}; its restart takes the role the routing now names, through the one startup order.`);
+    input.ops.audit("aws.routing-changed", { pool: config.pool, primary, detail: detail.slice(0, 200) });
+    void runtimeShutdown()
+      .catch((error) => input.warn(`  aws: the role change's graceful shutdown failed -- ${describe(error)}; exiting ${EXIT_ROLE_CHANGED} all the same`))
+      .finally(() => {
+        if (terminal === null) input.exit(EXIT_ROLE_CHANGED);
+      });
+  }
+
+  /* ---------------- the non-primary task: not the primary pool's (LIVE-6 L6-1; L5-7's standby) ---------------- */
+  function startNonPrimary(primary: string | null): AwsRuntime {
+    const verifier = substrate.identityVerifier();
+    const directory = substrate.gameDirectory(w);
+    const capability = thisDeploymentCapability(escrowConfig === null ? [] : [pinOf(escrowConfig)]);
     step(
-      "standby",
-      `this pool is NOT primary (the routing names ${primary ?? "no pool"}): STANDBY -- no identity writer, no relayer, no game claimed, no player served ` +
-        "(this build has no identity verifier yet); /gs/readyz answers 503 not-primary",
+      "non-primary",
+      `this pool is NOT primary (the routing names ${primary ?? "no pool"}): NON-PRIMARY -- no identity writer, no relayer, no ledger, no game claimed, no money work, ` +
+        `nothing written; sockets authenticated by the identity verifier (strong reads of the identity records), games answered with a route ` +
+        `(${Object.keys(config.routes).length === 0 ? "this configuration has no route table: every game is answered unavailable" : `route table: ${Object.entries(config.routes).map(([pool, entry]) => `${pool} -> ${entry.wsPath}`).join(", ")}`})`,
     );
-    input.ops.audit("aws.standby", { primary: primary ?? null });
-    const standbyReadiness = (): ReadinessAnswer => {
-      const reasons = ["not-primary"];
-      if (terminal === "lost") reasons.unshift("lost");
-      if (phase === "stopping") reasons.unshift("shutting-down");
+    input.ops.audit("aws.non-primary", { primary: primary ?? null });
+    const nonPrimaryReadiness = (): ReadinessAnswer => {
+      const reasons: string[] = [];
+      if (terminal === "lost") reasons.push("lost");
+      if (phase === "stopping") reasons.push("shutting-down");
       const pool = w.readiness();
       if (pool.lost !== null) reasons.push("pool-writer-lost");
       else if (!pool.ready) reasons.push("pool-writer-unconfirmed");
-      return { ready: false, reasons: [...new Set(reasons)], detail: { role: "standby", pool: w.pool, epoch: w.epoch, identity_writer: "not-primary", relayer: "not-primary", escrow: "not-started" } };
+      return {
+        ready: reasons.length === 0,
+        reasons: [...new Set(reasons)],
+        detail: { role: "non-primary", serving: "route", pool: w.pool, epoch: w.epoch, identity: "verifier", identity_writer: "not-primary", relayer: "not-primary", escrow: "not-started" },
+      };
     };
-    const http = createStandbyServer({ port: input.port, bindHost: input.bindHost, readiness: standbyReadiness });
+    let router: RouterServer;
+    try {
+      router = createRouterServer({
+        port: input.port,
+        bindHost: input.bindHost,
+        build: input.build,
+        identity: { allowedOrigins: input.server.allowedOrigins, trustedProxyHops: input.server.trustedProxyHops, verifier },
+        capability,
+        routes,
+        directory,
+        records: directory.records,
+        readiness: nonPrimaryReadiness,
+        ...(input.limits !== undefined ? { limits: input.limits } : {}),
+        log: input.log,
+        warn: input.warn,
+      });
+    } catch (error) {
+      return refuse(`the non-primary server could not be built (${describe(error)})`);
+    }
+    closers.push(() => void router.close().catch(() => undefined));
     phase = "serving";
-    const standbyShutdown = (): Promise<void> => {
+    /* Promotion: a proven routing naming THIS pool (see the header). */
+    const checkNonPrimaryRouting = routingWatch((named) => (named === w.pool ? `the routing names this pool (${w.pool}) primary` : null));
+    timers.push(every(timing.routingWatchMs, () => void checkNonPrimaryRouting()));
+    void checkNonPrimaryRouting(); // once at once: a flip during the startup is not left for a whole interval
+    const nonPrimaryShutdown = (): Promise<void> => {
       if (shutdownPromise !== null) return shutdownPromise;
       shutdownPromise = (async () => {
         if (terminal !== null) return;
         phase = "stopping";
         shutdownSteps.push("readiness-503");
-        await new Promise<void>((resolve) => http.close(() => resolve()));
+        for (const timer of timers.splice(0)) timer.cancel();
+        shutdownSteps.push("timers-stopped");
+        /* 1012 when the task restarts into another role: the clients reconnect, and are answered by whoever serves now. */
+        await router.close(roleChanged !== null ? 1012 : 1001);
+        if (terminal !== null) return;
         shutdownSteps.push("server-closed");
         w.stop();
         shutdownSteps.push("pool-writer-stopped");
@@ -945,21 +1102,24 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       })();
       return shutdownPromise;
     };
+    runtimeShutdown = nonPrimaryShutdown;
     return {
-      role: "standby",
+      role: "non-primary",
       task: input.task,
       steps,
       shutdownSteps,
-      http,
+      http: router.http,
       server: null,
+      router,
       identity: null,
       backend: null,
-      readiness: standbyReadiness,
+      readiness: nonPrimaryReadiness,
       sweepNow: async () => null,
       retryRelayerRole: async () => false,
-      shutdown: standbyShutdown,
-      exitCode: forcedExit,
-      status: () => ({ aws: { role: "standby", pool: w.pool, epoch: w.epoch, task: w.task, primary, readiness: standbyReadiness(), pool_writer: w.readiness() } }),
+      shutdown: nonPrimaryShutdown,
+      exitCode,
+      checkRouting: checkNonPrimaryRouting,
+      status: () => ({ aws: { role: "non-primary", pool: w.pool, epoch: w.epoch, task: w.task, primary, readiness: nonPrimaryReadiness(), pool_writer: w.readiness(), router: { ...router.counters }, routes: Object.fromEntries(Object.entries(config.routes).map(([pool, entry]) => [pool, entry.wsPath])) } }),
     };
   }
 }

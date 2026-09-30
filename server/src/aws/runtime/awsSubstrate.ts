@@ -11,6 +11,11 @@
 // (the same client when the regions agree; the ledger is reached cross-account by its full table ARN), and a KMS client
 // for the escrow configuration's one KMS region.
 //
+// LIVE-6 L6-1 adds three READ-ONLY methods, each one call into a certified reader: `readRouting` (L5-3's strict read of
+// `SYSTEM/ROUTING`, for the routing watch), `identityVerifier` (the verifier over the identity table: strong GetItems of
+// L5-4's items, never the writer) and `gameDirectory` (strong reads of a game's HEAD, the routing and a record) -- the
+// last two only for a non-primary task.
+//
 // Two small READ-ONLY helpers are this module's own (there is no DynamoDB counterpart of the file-mode readers yet):
 //   - the escrow's `readLog` is a SEPARATE instance of the L5-2 log store, which never appends: the actors' instance
 //     remembers what it validated and where each log continues, and a read from the escrow side must never move that;
@@ -33,6 +38,9 @@ import { gamePk, LOG_PREFIX, queryAll } from "../game/gameTable";
 import type { ResendTiming } from "../game/transact";
 import { createDynamoIdentityStore } from "../identity/dynamoIdentityStore";
 import { createDynamoSecurityJournal } from "../identity/dynamoSecurityJournal";
+import { createDynamoIdentityVerifier } from "../identity/identityVerifier";
+import { readRouting } from "../game/routing";
+import { poolGameDirectory } from "../ownership/gameDirectory";
 import { kmsDigestClient } from "../kms/kmsDigestClient";
 import { openDynamoSigningLedger, readAdoptedGeneration, type DynamoSigningLedger } from "../ledger/dynamoSigningLedger";
 import { createPoolGameOwnership } from "../ownership/poolGameOwnership";
@@ -125,5 +133,12 @@ export function realAwsSubstrate(options: AwsSubstrateOptions): AwsSubstrate<Poo
     ownership: (writer, { onClaimed, warn }) => createPoolGameOwnership({ client: clients.app, table: tables.game, writer, warn, ...(onClaimed !== undefined ? { onClaimed } : {}), ...(timing !== undefined ? { timing } : {}) }),
 
     kms: (region) => options.kms?.(region) ?? kmsDigestClient(createKmsClient({ kind: "aws", region }), { region }),
+
+    /* LIVE-6 L6-1: read-only, every one (the routing watch; a non-primary task's verifier and directory). */
+    readRouting: () => readRouting(clients.app, tables.game),
+
+    identityVerifier: () => createDynamoIdentityVerifier(clients.app, tables.identity),
+
+    gameDirectory: (writer) => poolGameDirectory({ client: clients.app, table: tables.game, fence: writer.fence }),
   };
 }

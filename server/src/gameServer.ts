@@ -62,7 +62,7 @@ import { isLoopbackOrigin } from "./identity/origins";
 import { IdentityService } from "./identity/sessions";
 import { createMemoryIdentityStore } from "./identity/store";
 import { createMemoryRecordStore, type RecordStore } from "./rooms/recordStore";
-import { createRoomHost, GameUnavailableError, sessionBoardFacts, type RoomHost } from "./rooms/roomHost";
+import { createRoomHost, factsFromRecord, GameUnavailableError, sessionBoardFacts, type RoomHost } from "./rooms/roomHost";
 import { GAME_ID_PATTERN, seatOf, type GameRecord } from "./rooms/gameRecord";
 /* LIVE-3C: restore, reconciliation, durable holds, the terminal seal, the operator's view. */
 import { isMaintenanceHold, type CommittedView } from "./rooms/committedView";
@@ -129,7 +129,7 @@ import {
 import type { ServerFrame, ServerMessage } from "../../frontend/src/utils/serverProtocol";
 import type { SandboxLogMsg } from "../../frontend/src/gameEngine/gameSetup";
 import type { LogStore } from "./fileLogStore";
-import { COMMITTED, outcomeOf, type FenceScope } from "./persistence/storeResult";
+import { COMMITTED, isStoreCorrupt, isStoreIncompatible, outcomeOf, type FenceScope } from "./persistence/storeResult";
 /* LIVE-3A: every mutation of a game runs on that game's actor, and every read comes from its committed view. */
 import {
   GameActor,
@@ -145,7 +145,10 @@ import {
   type Tx,
 } from "./rooms/gameActor";
 import { GameRegistry } from "./rooms/gameRegistry";
-import { PROCESS_OWNERSHIP, type GameOwnership } from "./rooms/gameOwnership";
+import { PROCESS_OWNERSHIP, type GameOwnership, type GameRoutedError } from "./rooms/gameOwnership";
+/* LIVE-6 L6-1: where a game another pool owns is served (the trusted route table), and the frozen route frame. */
+import { NO_ROUTES, ownershipRouteFrame, type PoolRoutes } from "./rooms/gameRoutes";
+import { authorize } from "./rooms/roomAuthz";
 /* LIVE-2A: the transport's limits and buckets (LIVE-2 §11.3, §12.2). */
 import {
   HourlyBudget,
@@ -311,6 +314,12 @@ export interface GameServerOptions {
    *  PROCESS-mode start. AWS storage mode binds its task's own interface (awsvpc), reached only through the load
    *  balancer. */
   bindHost?: string;
+  /** LIVE-6 L6-1: the deployment's trusted route table (`rooms/gameRoutes.ts`, from the AWS runtime document). A game
+   *  another pool owns (POOL ownership refused the claim) is answered, to a protocol-1 socket whose connection verdict is
+   *  `ok` and whose principal the game's record lets read it, with LIVE-4's `route` frame naming that pool's configured
+   *  path, then close 4426; and this server also answers upgrades on its own pool's configured socket path. Absent (PROCESS
+   *  mode; an AWS document without routes): no destination exists, and every answer is exactly as before. */
+  routes?: PoolRoutes;
 }
 
 /** LIVE-5 L5-3: what a game's log subscribers are told when another writer took the game from this task (POOL ownership
@@ -415,7 +424,7 @@ export function createGameServer(options: GameServerOptions): {
   identityLimiter: IdentityLimiter;
   upgrades: Readonly<{ accepted: number; refused: Readonly<Record<string, number>>; sessionClosed: number; malformedCooldowns: number; reaped: number }>;
   /** LIVE-4 (L4-3): what clients were told by their client verdict (tests and the operator read it). */
-  clientAnswers: Readonly<{ connectionReload: number; gameReload: number; routeFailClosed: number; legacyRefused: number }>;
+  clientAnswers: Readonly<{ connectionReload: number; gameReload: number; routeFailClosed: number; legacyRefused: number; routed: number }>;
   /** LIVE-2C: the GameRecord store and the server-owned room authority (tests read their counters). */
   records: RecordStore;
   rooms: RoomHost;
@@ -428,6 +437,9 @@ export function createGameServer(options: GameServerOptions): {
   retakeResident(gameId: string): boolean;
   /** LIVE-5 L5-3: whether an actor of `gameId` is resident (the money claim sweep's `isResident`). */
   isResident(gameId: string): boolean;
+  /** LIVE-6 L6-1: the resident games this task may give back when it stops for good in this role (a demotion): loaded,
+   *  not fenced, NO-MONEY tables -- the games an eviction would release (a money game stays owned). */
+  releasableResidentGames(): string[];
   /** LIVE-2B: the live socket indexes, for tests: how many sockets a session / principal / IP key / game holds. */
   socketCounts(): { total: number; bySession(id: string): number; byPrincipal(id: string): number; byIp(key: string): number; byGame(room: string): number };
   /** LIVE-3C: what every durable game is (discovery, refined by each load), the holds, and the operator's recorder. */
@@ -1128,7 +1140,7 @@ export function createGameServer(options: GameServerOptions): {
       : announcement.kind === "malformed"
         ? `cp=${announcement.protocol ?? "?"} (${announcement.problem}) cb=${announcement.build ?? "-"}`
         : `legacy (no cp) cb=${announcement.build ?? "-"}`;
-  const clientAnswers = { connectionReload: 0, gameReload: 0, routeFailClosed: 0, legacyRefused: 0 };
+  const clientAnswers = { connectionReload: 0, gameReload: 0, routeFailClosed: 0, legacyRefused: 0, routed: 0 };
 
   /** The game's rules pin as the client verdict reads it (the committed deal, canonically), and whether it can still
    *  change: an undealt game's can; a dealt, unpinned or damaged deal's cannot (a deal is never undone, RV-5). */
@@ -1199,6 +1211,58 @@ export function createGameServer(options: GameServerOptions): {
     // eslint-disable-next-line no-console
     console.log(`  client: ${describeClient(clientOfSocket(socket).announcement)} -- route for ${gameId} has no destination before LIVE-6; answered as not continued here`);
     send(socket, notHereFrame(refusal.pin, inReplyTo));
+  };
+
+  /* ==================================================================
+      LIVE-6 L6-1: A GAME ANOTHER POOL OWNS -- ITS ROUTE, WHEN THERE IS ONE TO GIVE
+     ==================================================================
+     The claim was refused by the ownership store (`GameRoutedError` names the owner the table evaluated), so nothing of
+     the game was read or served here. When the trusted route table (`options.routes`) gives that pool a destination, a
+     protocol-1 socket whose frozen connection verdict is `ok` is told where the game is served -- LIVE-4's route frame,
+     then close 4426 -- but only after its principal is authorized to read the game from the record read NOW (an
+     outsider of a private game, or an id with no game, gets exactly what no game answers), and only while its session
+     still holds. Anything else -- the legacy wire, an operator run, a pool with no destination, a record that could not
+     be read -- is answered exactly as before (false: the caller's `unavailable`). The destination is never this pool,
+     never an operator run, never a host, and never anything the client sent (`rooms/gameRoutes.ts`). */
+  const routes: PoolRoutes = options.routes ?? NO_ROUTES;
+  const answerRouted = async (socket: WebSocket, gameId: string, routed: GameRoutedError, op: "read-log" | "read-view"): Promise<boolean> => {
+    const client = clientOfSocket(socket);
+    if (client.connection.kind !== "ok") return false; // the legacy wire keeps its pre-LIVE-6 answer
+    const destination = routes.destinationOf(routed.ownerPool);
+    if (destination === null) return false;
+    const frame = ownershipRouteFrame(gameId, destination);
+    if (frame === null) return false;
+    const ctx = contexts.get(socket);
+    if (ctx === undefined) return false;
+    let record: GameRecord | null = null;
+    try {
+      record = GAME_ID_PATTERN.test(gameId) ? await recordStore.load(gameId) : null;
+    } catch (error) {
+      /* A record nobody can read is answered as no game at all (`resolveGame`'s rule); a read that FAILED is not a
+         verdict: the caller's answer, as before. */
+      if (!isStoreCorrupt(error) && !isStoreIncompatible(error)) return false;
+    }
+    const now = identityNow();
+    const verdict = record === null ? { ok: false as const, code: "not-found", reason: "There is no such game." } : authorize(op, { record, facts: factsFromRecord(record), principalId: ctx.principalId, now, held: false });
+    if (socket.readyState !== socket.OPEN) return true;
+    /* The session is asked again after the read: a revocation that landed while it was in flight is honoured first. */
+    const holds = identity.socketVerdict(ctx, now);
+    if (holds !== "ok") {
+      closeForSession(socket, holds);
+      return true;
+    }
+    if (!verdict.ok) {
+      send(socket, { kind: "error", code: verdict.code, reason: verdict.reason });
+      return true;
+    }
+    clientAnswers.routed += 1;
+    // eslint-disable-next-line no-console
+    console.log(`  client: ${describeClient(client.announcement)} -- ${gameId} is owned by pool ${routed.ownerPool}: routed to ${frame.wsPath ?? frame.bundlePath}; closed ${CLIENT_ANSWER_CLOSE_CODE}`);
+    /* Like a reload: the link ends here, and nothing it sent after this frame is handled. */
+    toldToReload.add(socket);
+    send(socket, frame);
+    socket.close(CLIENT_ANSWER_CLOSE_CODE, CLIENT_ANSWER_CLOSE_REASON);
+    return true;
   };
 
   /** The legacy wire's sentence when protocol 0 is no longer accepted (only in a pool whose capability retired it). */
@@ -1353,6 +1417,8 @@ export function createGameServer(options: GameServerOptions): {
       refuseClient(socket, gameId, refused);
       return false;
     },
+    /* LIVE-6 L6-1: a room hello for a game another pool owns. */
+    answerRouted: (socket, gameId, routed) => answerRouted(socket, gameId, routed, "read-view"),
     statusExtras: () => ({
       store: { restart_required: counters.restartRequired, uncertain: counters.storeUncertain, held_corrupt: counters.heldCorrupt, held_durable: counters.heldDurable, timeouts: counters.storeTimeouts },
       actors: { resident: games.size },
@@ -1478,6 +1544,8 @@ export function createGameServer(options: GameServerOptions): {
       decision = decideUpgrade(request, {
         mode,
         wsPath: identityOptions.wsPath ?? "/gs",
+        /* LIVE-6 L6-1: this pool's own route path (the trusted table's), when there is one. */
+        alsoWsPaths: routes.ownWsPaths,
         allowedOrigins,
         allowedOriginList,
         trustedProxyHops: identityOptions.trustedProxyHops,
@@ -1831,6 +1899,8 @@ export function createGameServer(options: GameServerOptions): {
         } catch (error) {
           /* LIVE-3C: the store could not be read just now -- said as such, and tried again at the next hello. */
           if (error instanceof GameUnavailableError) {
+            /* LIVE-6 L6-1: owned by another pool -- its route, when there is one to give (see `answerRouted`). */
+            if (error.routed !== null && (await answerRouted(socket, gameId, error.routed, "read-log"))) return;
             /* ... to a principal the game already lets read it; anybody else is told what no game at all answers. */
             send(socket, { kind: "error", ...host.unavailableFor(gameId, ctx.principalId) });
             return;
@@ -2064,6 +2134,13 @@ export function createGameServer(options: GameServerOptions): {
     /** LIVE-5 L5-3: the money claim sweep's `beforeRetake` and `isResident` (L5-7 wires them). */
     retakeResident,
     isResident: (gameId: string) => games.peek(gameId) !== undefined,
+    releasableResidentGames: () => {
+      const out: string[] = [];
+      games.forEach((actor, gameId) => {
+        if (releasable(actor)) out.push(gameId);
+      });
+      return out;
+    },
     lifecycle: {
       ready: host.indexReady,
       inventory: host.inventory,

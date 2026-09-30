@@ -39,6 +39,7 @@ import { createConsoleOpsRecorder } from "./consoleOps";
 import { AWS_RUNTIME_CONFIG_FORMAT, awsStartupReferences, checkEscrowConfigForAws, parseAwsRuntimeConfig, parseAwsRuntimeConfigText, AwsRuntimeConfigError } from "./runtimeConfig";
 import { storageKindOf } from "./storageMode";
 import { parseSecretArn, parseSsmParameterArn } from "../arns";
+import { bootstrapGenerationMarker, GenerationMarkerUnreadableError, type GenerationMarker } from "../game/generationMarker";
 import { PoolTakeoverLostError, PoolWriterNotCurrentError, type HeldProbe } from "../ownership/poolWriter";
 import type { OpenMoneyGames, PoolGameOwnership, SweepReport } from "../ownership/poolGameOwnership";
 import type { RoleTakeover } from "../ownership/roles";
@@ -203,6 +204,10 @@ type Ledger = InspectableSigningJournal & { readonly relayer: string };
 interface HarnessOptions {
   readonly primary?: boolean;
   readonly adopted?: number | null | "throws";
+  /** LIVE-6 L6-4: the game table's SYSTEM/GENERATION (default: generation 1 of the configured table). */
+  readonly marker?: GenerationMarker | null | "throws";
+  /** LIVE-6 L6-4: APPGEN's adoption (default: none -- the bootstrap APPGEN). */
+  readonly binding?: { readonly game_table: string; readonly restore_id: string };
   readonly poolFails?: boolean;
   readonly escrow?: boolean;
   /** The relayer takeover's answers, in order (then "taken"). */
@@ -319,6 +324,14 @@ function harness(options: HarnessOptions = {}): Harness {
       events.push("generation:read");
       if (options.adopted === "throws") throw new Error("AccessDeniedException: not allowed (injected)");
       return options.adopted === undefined ? 1 : options.adopted;
+    },
+    async tableGeneration() {
+      events.push("generation:table");
+      if (options.marker === "throws") throw new GenerationMarkerUnreadableError("the game table's SYSTEM/GENERATION is damaged (injected)");
+      return options.marker === undefined ? bootstrapGenerationMarker({ generation: 1, gameTable: CONFIG.gameTable, by: "l5-8-bootstrap", now: 1 }) : options.marker;
+    },
+    async adoptionBinding() {
+      return options.binding ?? null;
     },
     async takePool({ task, onLost }) {
       events.push("pool:take");
@@ -559,7 +572,7 @@ describe("L5-7 startup: the one order", () => {
     const h = harness();
     const runtime = await h.start();
     try {
-      assert.deepEqual(h.events.slice(0, 5), ["generation:read", "pool:take", "writer:start", "writer:watch-generation", "identity:role"]);
+      assert.deepEqual(h.events.slice(0, 6), ["generation:read", "generation:table", "pool:take", "writer:start", "writer:watch-generation", "identity:role"]);
       assert.equal(runtime.role, "primary");
       assert.ok(h.writer().generation !== null, "the generation is under the self-check");
       assert.deepEqual(runtime.steps.slice(0, 5), ["config", "generation", "pool", "identity-writer", "identity-loaded"]);
@@ -571,7 +584,7 @@ describe("L5-7 startup: the one order", () => {
   test("AWS mode cannot start if the PoolWriter takeover fails: refused (exit 2 by the caller), and nothing else runs", async () => {
     const h = harness({ poolFails: true });
     await assert.rejects(h.start(), (error: unknown) => error instanceof AwsStartupError && /pool p1 was not taken/.test(error.message) && /serves nothing/.test(error.message));
-    assert.deepEqual(h.events, ["generation:read", "pool:take"], "no role, no store, no server");
+    assert.deepEqual(h.events, ["generation:read", "generation:table", "pool:take"], "no role, no store, no server");
     assert.deepEqual(h.exits, [], "a refusal is the caller's exit 2, never a loss's exit 3");
   });
 
@@ -585,6 +598,24 @@ describe("L5-7 startup: the one order", () => {
       await assert.rejects(h.start(), (error: unknown) => error instanceof AwsStartupError && pattern.test(error.message), String(adopted));
       assert.deepEqual(h.events, ["generation:read"], `nothing after the check (${String(adopted)})`);
     }
+  });
+
+  test("LIVE-6 L6-4: the game table's SYSTEM/GENERATION must hold the SAME generation and name the configured table -- absent, another generation, another table or unreadable refuses the start BEFORE the pool", async () => {
+    const marker = (generation: number, gameTable: string) => bootstrapGenerationMarker({ generation, gameTable, by: "l5-8-bootstrap", now: 1 });
+    for (const [value, pattern] of [
+      [null, /no generation marker/],
+      [marker(2, CONFIG.gameTable), /holds app generation 2, not this task's 1/],
+      [marker(1, "gs-test-game-g0"), /names the table gs-test-game-g0, not this task's gs-test-game-g1/],
+      ["throws", /could not be read/],
+    ] as const) {
+      const h = harness({ marker: value });
+      await assert.rejects(h.start(), (error: unknown) => error instanceof AwsStartupError && error.exitCode === 2 && pattern.test(error.message), String(value));
+      assert.deepEqual(h.events, ["generation:read", "generation:table"], "the pool is never taken");
+    }
+    /* A bootstrap table while APPGEN names an adoption: not the adopted table. */
+    const h = harness({ binding: { game_table: "gs-test-game-g1", restore_id: "r-x" } });
+    await assert.rejects(h.start(), (error: unknown) => error instanceof AwsStartupError && error.exitCode === 2 && /bootstrap table: it is not the adopted one/.test(error.message));
+    assert.deepEqual(h.events, ["generation:read", "generation:table"]);
   });
 
   test("the identity-writer role is taken BEFORE the identity store is made for its epoch, and the store is loaded only after that", async () => {
@@ -608,7 +639,7 @@ describe("L5-7 startup: the one order", () => {
       assert.equal(runtime.role, "non-primary");
       assert.deepEqual(
         h.events.filter((event) => !event.startsWith("writer:")),
-        ["generation:read", "pool:take", "identity:role", "identity:verifier", "directory", "routing:read"],
+        ["generation:read", "generation:table", "pool:take", "identity:role", "identity:verifier", "directory", "routing:read"],
         "after the routing answered not-primary: only the read-only verifier and directory (and the routing watch's first read) -- no identity store, ledger, relayer, stores, ownership or KMS",
       );
       assert.equal(runtime.identity, null, "no writable identity copy");

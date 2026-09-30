@@ -25,7 +25,7 @@
 // The ledger table is L5-5's (its own account, PITR, never rolled back with the app, deletes denied by IAM). This file
 // needs of it only this item class and the `APPGEN` item's key; it adds no client of its own (awsClients.ts).
 
-import { GetItemCommand, QueryCommand, type AttributeValue, type DynamoDBClient, type TransactWriteItem, type TransactWriteItemsCommandInput } from "@aws-sdk/client-dynamodb";
+import { GetItemCommand, QueryCommand, ScanCommand, type AttributeValue, type DynamoDBClient, type TransactWriteItem, type TransactWriteItemsCommandInput } from "@aws-sdk/client-dynamodb";
 import { randomUUID } from "crypto";
 
 import { deadline } from "../awsClients";
@@ -187,4 +187,45 @@ export function createDynamoSecurityJournal(client: DynamoDBClient, table: strin
       return out;
     },
   };
+}
+
+/**
+ * LIVE-6 L6-4: EVERY security event in the ledger -- the whole `SEC#` item class, every principal -- for the identity
+ * restore's replay (a profile created after the restore point is known ONLY from here). Strongly consistent, paged,
+ * parallel segments; read only. STRICT: an item under a `SEC#` key that is not exactly a well-formed event item refuses
+ * the whole answer (`SecurityJournalCorruptError`, naming no content) -- the replay fails closed rather than skip one.
+ * Order is not meaningful (the replay sorts and de-duplicates by key).
+ */
+export async function scanSecurityJournal(client: DynamoDBClient, table: string, options: { readonly segments?: number; readonly pageSize?: number } = {}): Promise<SecurityEvent[]> {
+  const segments = Math.max(1, Math.min(options.segments ?? 4, 64));
+  const pages = await Promise.all(
+    Array.from({ length: segments }, async (_, segment) => {
+      const out: SecurityEvent[] = [];
+      let start: Record<string, AttributeValue> | undefined;
+      do {
+        const page = await client.send(
+          new ScanCommand({
+            TableName: table,
+            ConsistentRead: true,
+            Segment: segment,
+            TotalSegments: segments,
+            Limit: options.pageSize ?? 500,
+            ExclusiveStartKey: start,
+            FilterExpression: "begins_with(#pk, :sec)",
+            ExpressionAttributeNames: { "#pk": "pk" },
+            ExpressionAttributeValues: { ":sec": { S: "SEC#" } },
+          }),
+          { abortSignal: deadline() },
+        );
+        for (const item of page.Items ?? []) {
+          const event = decodeEventItem(item);
+          if (event === null) throw new SecurityJournalCorruptError(`security journal ${table}: a stored event is not a well-formed event item`);
+          out.push(event);
+        }
+        start = page.LastEvaluatedKey;
+      } while (start !== undefined);
+      return out;
+    }),
+  );
+  return pages.flat();
 }

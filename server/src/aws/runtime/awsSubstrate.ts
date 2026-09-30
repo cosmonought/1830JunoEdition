@@ -35,6 +35,8 @@ import { createDynamoLogStore } from "../game/dynamoLogStore";
 import { createDynamoRecordStore } from "../game/dynamoRecordStore";
 import { createDynamoTicketStore } from "../game/dynamoTicketStore";
 import { gamePk, LOG_PREFIX, queryAll } from "../game/gameTable";
+import { readGenerationMarker } from "../game/generationMarker";
+import { readAppGeneration } from "../ledger/appGeneration";
 import type { ResendTiming } from "../game/transact";
 import { createDynamoIdentityStore } from "../identity/dynamoIdentityStore";
 import { createDynamoSecurityJournal } from "../identity/dynamoSecurityJournal";
@@ -91,6 +93,15 @@ export function realAwsSubstrate(options: AwsSubstrateOptions): AwsSubstrate<Poo
   const timing = options.timing;
   return {
     adoptedGeneration: () => readAdoptedGeneration(clients.ledger, tables.ledger),
+
+    tableGeneration: () => readGenerationMarker(clients.app, tables.game),
+
+    adoptionBinding: async () => {
+      const appgen = await readAppGeneration(clients.ledger, tables.ledger); // strict: an item this build cannot read throws
+      if (appgen === null) throw new Error("the ledger has no APPGEN");
+      if (appgen.current_generation !== config.generation) throw new Error(`the ledger's APPGEN moved to ${appgen.current_generation} during the startup`);
+      return appgen.adoption === null ? null : { game_table: appgen.adoption.game_table, restore_id: appgen.adoption.restore_id };
+    },
 
     takePool: ({ task, now, onLost, warn }) => PoolWriter.take({ client: clients.app, table: tables.game, pool: config.pool, task, now, onLost, warn }),
 

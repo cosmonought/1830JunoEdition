@@ -1,4 +1,4 @@
-# AWS clients, DynamoDB Local, the game table, identity, ownership, the relayer role, the AWS runtime, non-primary routing and the operator tooling — the LIVE-5 / LIVE-6 convention
+# AWS clients, DynamoDB Local, the game table, identity, ownership, the relayer role, the AWS runtime, non-primary routing, the operator tooling and generation recovery — the LIVE-5 / LIVE-6 convention
 
 LIVE-5 L5-1 set this up so that every later LIVE-5 slice uses one convention. L5-2 (the game table), L5-4 (identity),
 L5-5 (the ledger and KMS) and L5-7 (the AWS wiring, §8) all follow it; none of them should pick its own.
@@ -490,3 +490,61 @@ enumeration must skip `op:` pools; they go with the table's generation).
 
 Run: `npm test` includes `aws/operator/l6_3Operator.test.js`; `npm run test:dynamodb-local` includes
 `persistence/conformance/operatorTooling.dynamoLocal.test.js`.
+
+## 12. Generation adoption and the identity restore (LIVE-6 L6-4): `aws/recovery/`, `aws/ledger/appGeneration.ts`, `aws/game/generationMarker.ts`, `aws/identity/identityRestore.ts`
+
+The RECOVERY boundary L5-4/L5-5/L5-7 deferred. The first deployment's bootstrap of APPGEN, `SYSTEM/ROUTING` and (new)
+`SYSTEM/GENERATION` is L5-8's; general operator tooling is L6-3's. The full design, the restore sequence and the review:
+Project `claude/LIVE6_L6_4_GENERATION_RESTORE_2026-09-30.md`.
+
+| Item | Where | What |
+|---|---|---|
+| `SYSTEM` / `GENERATION` | game table | `{fmt 1, generation, game_table, origin bootstrap\|restore, restored_from_generation, restored_from_table, restore_point, restore_id, prepared_at, prepared_by, claim}` -- the generation this table's data belongs to. **The startup refuses (exit 2, before the pool) unless APPGEN = the document's `generation` = this item's `generation`, the item names the document's `game_table`, AND APPGEN's adoption binds this table (a restore marker: APPGEN adopted exactly this `game_table` and `restore_id`; a bootstrap marker: APPGEN never adopted) -- several copies may be prepared as one generation, only the adopted one serves.** L5-8 writes the first one (`bootstrapGenerationMarker`, create-if-absent); a restore's preparation rewrites the copied one (CAS on exactly the copied item) |
+| `APPGEN` / `APPGEN` | ledger | bootstrap `{schema 1, current_generation}`; adopted: + `previous_generation, adopted_at, adopted_by, restore_id, game_table, claim` (read strictly by `appGeneration.ts`; the fences read only `schema` and `current_generation`) |
+| `APPGEN#HISTORY` / `GEN#<M:20>` | ledger | one per adopted generation, in the adoption's own transaction, `attribute_not_exists`: a generation is adopted at most once, ever |
+| `RESTORE#identity` / `RESTORE` | identity table | `{restore_id, state replaying\|complete\|superseded, identity_table, peer_table, restore_point, started_at, journal_digest, journal_events, completed_at, reviews}`. The table serves only while `complete` AND `identity_table` names itself: mid-replay, a restore's superseded SOURCE and a copy that carried another table's marker serve NOTHING -- a serving load refuses them (`IdentityRestoreIncompleteError`) and every serving identity-writer takeover carries `identityServingChecks` inside its transaction |
+| `REVIEW#<pf>` / `REVIEW#<restore>` | identity table | a profile sent to operator review (an unconfirmed key rotation): the restore, the event ids, what the replay did to the key; never a selector or a digest. One per restore; a replay withdraws only its OWN review (a confirmation arrived since), and re-enables the profile only if no other restore's review is open |
+| `TABLE#identity` / `TABLE` | identity table | `{identity_table}`: the table's own name, set inside every serving identity-writer takeover (create-if-absent, else it must already name this table) and rewritten only by a restore's completion. A point-in-time copy carries its source's name: it serves nothing until its own replay completes |
+
+**The adoption** (`adoptGeneration`): strong reads first -- APPGEN present and readable (newer: refused, never overwritten),
+the caller's `expected` is current, the new generation is strictly greater and has no history item, the target game table
+is PREPARED for exactly this adoption -- then ONE transaction `[Update APPGEN COND schema = 1 AND current_generation =
+:expected AND <exactly the item read: its claim, or none>; Put history COND attribute_not_exists]` with a fresh token (the
+`claim`). Outcomes `committed` / `already-adopted` (idempotent re-run: nothing written) / `conflict` (another move or a
+reused number: nothing written, nothing overwritten) / `refused` / `unknown` (no answer and APPGEN exactly as read: ask
+again with the same request; at most one attempt can ever land). From the moment it lands every ledger write of the old
+generation is refused inside the write, every old task's pool writer proves its loss at its next self-check (exit 3,
+KMS withheld by the side-effect gate), and no task configured for the old generation starts. **Nothing ever follows
+APPGEN**: the probe, the ledger and the SEC# journal compare with the task's configured number; only a restart with the
+new generation (and its prepared table) serves it.
+
+**The identity restore** (`applyIdentityRestore`): the marker read first (`complete` by this restore on this table: nothing
+written; a fresh start needs a table holding nothing stamped after the restore point) -> the journal read and the replay
+planned READ ONLY (a journal that cannot be replayed is refused before anything is written) -> the SOURCE table's
+identity-writer role fenced and the source marked `superseded` for good (or the source verified gone) -> the target's role
+(pool `op:restore`) -> the marker `replaying` -> the whole `SEC#` journal (strict scan) -> the plan
+(`identity/securityReplay.ts`: every session and family ended, link codes dropped, the journal's terminal actions
+re-applied, profiles created after the restore point made, the confirmed key chain followed, an unconfirmed rotation
+retired and never installed and its profile `disabled` under review; a confirmation lost in the MIDDLE of a chain is a gap
+between confirmed segments: reviewed, never refused) -> per principal: its review record, then its change -> grants
+removed -> verify (the same journal digest, nothing left to plan, exactly the planned reviews) -> the marker `complete` and
+`TABLE#identity` naming the restored table, in one transaction. Interrupted anywhere: unserved; a re-run resumes (a
+confirmation that arrived since withdraws the replay's OWN review). `planIdentityRestore` is the dry run: the same reads,
+no write at all.
+
+**Operator commands** (`npm run recovery -- <command>`, `aws/recovery/recoveryCli.ts`): `appgen-status`, `table-prepare`,
+`appgen-adopt` (`--apply --stopped`), `identity-status`, `identity-replay` (`--apply`). Without `--apply` every one only
+plans. One JSON answer, checked by `assertPrintable` (no selector, session or family id, no key or secret field).
+
+**The import boundary**: `aws/recovery/` may import `aws/game`, `aws/identity` and `aws/ledger` (not ownership, KMS or the
+runtime); nothing imports it but the conformance suites (`awsClients.test.ts`).
+
+**For L5-8** (added to the L5-7 contract, §8): the first game table's `SYSTEM/GENERATION` = `bootstrapGenerationMarker({
+generation, gameTable, by, now })` (a create-if-absent Put), with the same generation as APPGEN and the runtime document.
+**IAM**: the operator/restore role -- ledger `GetItem`, `Query`, `UpdateItem` on `APPGEN` and `PutItem` on
+`APPGEN#HISTORY` (leading keys `APPGEN`, `APPGEN#HISTORY`), `Scan` (the SEC# journal, read only); game tables `GetItem`,
+`PutItem` on `SYSTEM/GENERATION`; identity tables `GetItem`, `Scan`, `PutItem`, `UpdateItem`, `DeleteItem`,
+`ConditionCheckItem`. The task role needs nothing new (it reads `SYSTEM/GENERATION`: `GetItem`, already granted).
+
+Run: `npm test` includes `aws/recovery/l6_4Recovery.test.js`; `npm run test:dynamodb-local` includes
+`persistence/conformance/l6_4Recovery.dynamoLocal.test.js`.

@@ -313,10 +313,15 @@ describe("L5-1 AWS client convention", () => {
              aws/ledger              -- itself, the ownership layer (APPGEN, the relayer role), the runtime, the conformance;
              aws/kms                 -- itself, the runtime, the conformance;
              aws/runtime             -- itself; and start.ts, which reads the storage mode and loads the AWS entry only.
+           LIVE-6 L6-4 adds ONE more composer, the restore's operator surface `aws/recovery/` (APPGEN adoption, the game
+           table's generation marker, the identity replay): it may import aws/game, aws/identity and aws/ledger (never
+           ownership, KMS or the runtime), and NOTHING imports it except the conformance suites (its CLI is its own entry).
            Every relative import is RESOLVED against its file, so no spelling (`../../game/x`, `./aws/game`) slips past. */
         if (name.startsWith(".")) {
           const target = path.relative(root, path.resolve(path.dirname(file), name)).split(path.sep).join("/");
-          const composer = relative.startsWith("aws/ownership/");
+          /* LIVE-6 L6-4: the restore's operator surface (`aws/recovery/`) composes the adapters as the ownership layer does. */
+          const recovery = relative.startsWith("aws/recovery/");
+          const composer = relative.startsWith("aws/ownership/") || recovery;
           /* LIVE-5 L5-8: the deploy bootstrap and verifier (`aws/deploy/`) read what the runtime reads, with its code: the
              routing and APPGEN (L5-3's `setPrimaryPool` / `readRouting`, L5-5's `readAdoptedGeneration`), the documents
              (`loadAwsStartup`, `ssmParameterSource`) and the KMS digest client. It never imports the identity adapters or
@@ -338,6 +343,7 @@ describe("L5-1 AWS client convention", () => {
           if (under(target, "aws/runtime") && !runtime && !conformance.test(relative) && !deployReadsRuntime && !operatorConfig && !(relative === "start.ts" && (target === "aws/runtime/storageMode" || target === "aws/runtime/awsMain"))) {
             offenders.push(`${relative}: imports the AWS runtime (${name}); only start.ts reaches it (the storage mode, and the AWS entry)`);
           }
+          if (under(target, "aws/recovery") && !recovery && !conformance.test(relative)) offenders.push(`${relative}: imports the restore's operator surface (${name}); nothing but its own CLI and the conformance suites reaches it`);
           if (under(target, "aws/deploy") && !deploy && !conformance.test(relative) && relative !== "tools/awsDeploy.ts") offenders.push(`${relative}: imports the deploy tool (${name}); only tools/awsDeploy.ts does`);
           /* LIVE-6 L6-3 (review L4): what the operator tooling may import is an explicit list -- the readers and the
              primitives its mutations use -- so a writer (a store's commit, the ledger, identity) cannot slip in. */
@@ -348,7 +354,7 @@ describe("L5-1 AWS client convention", () => {
           if (under(target, "aws/operator") && !operator && !conformance.test(relative) && !(relative === "tools/gamesDoctor.ts" && target === "aws/operator/operatorMain")) {
             offenders.push(`${relative}: imports the AWS operator tooling (${name}); only tools/gamesDoctor.ts reaches it (its entry)`);
           }
-        } else if (/(^|\/)aws\/(game|identity|ownership|ledger|kms|runtime|deploy|operator)(\/|$)/.test(name)) offenders.push(`${relative}: imports an AWS module by a non-relative path (${name})`);
+        } else if (/(^|\/)aws\/(game|identity|ownership|ledger|kms|runtime|deploy|operator|recovery)(\/|$)/.test(name)) offenders.push(`${relative}: imports an AWS module by a non-relative path (${name})`);
       }
     }
     assert.deepEqual(offenders, []);

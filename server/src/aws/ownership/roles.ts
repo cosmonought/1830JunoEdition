@@ -22,11 +22,13 @@
 // does not take it.
 //
 // `generationProbe`: the ledger's adopted app generation (L5-5's APPGEN) must still be the one this task was started
-// for; a restore adopted since (L6-4) makes it lost (preflight §5.5, §17.2).
+// for; a restore adopted since (L6-4) makes it lost (preflight §5.5, §17.2). The probe compares with the FIXED number the
+// task was configured for: it never adopts the value it reads (L6-4: no task follows APPGEN; a restart with the new,
+// explicitly configured generation is the only way onto it).
 
 import type { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
-import { IdentityRoleRefusedError, readIdentityRole, takeOverIdentityWriter } from "../identity/dynamoIdentityStore";
+import { identityServingChecks, identityServingProblem, IdentityRestoreIncompleteError, IdentityRoleRefusedError, readIdentityRole, takeOverIdentityWriter } from "../identity/dynamoIdentityStore";
 import { readAdoptedGeneration } from "../ledger/dynamoSigningLedger";
 import { readRouting, roleTakeoverChecks } from "../game/routing";
 import type { HeldProbe, PoolWriter } from "./poolWriter";
@@ -85,7 +87,9 @@ export async function takeIdentityWriterRole(
       task: writer.task,
       pool: writer.pool,
       now: options.now,
-      checks: roleTakeoverChecks(writer.table, writer.fence),
+      /* LIVE-6 L6-4: and the identity table is not mid-restore -- a serving task never takes the role of a table whose
+         security-journal replay has not completed (so it never fences that replay, and never serves the table). */
+      checks: [...roleTakeoverChecks(writer.table, writer.fence), ...identityServingChecks(identity.table)],
       ...(options.maxAttempts !== undefined ? { maxAttempts: options.maxAttempts } : {}),
       ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
     }));
@@ -104,6 +108,8 @@ export async function takeIdentityWriterRole(
     if (self.kind === "lost") throw error;
     const routing = await readRouting(writer.client, writer.table);
     if (routing === null || routing.primary_pool !== writer.pool) return { kind: "not-primary", primary: routing?.primary_pool ?? null };
+    const restoring = await identityServingProblem(identity.client, identity.table);
+    if (restoring !== null) throw new IdentityRestoreIncompleteError(`the identity-writer role was not taken: ${restoring}`);
     throw error;
   }
   writer.holdRole(IDENTITY_WRITER_ROLE, identityRoleProbe(identity.client, identity.table, { epoch, task: writer.task, pool: writer.pool }));

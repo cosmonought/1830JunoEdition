@@ -204,6 +204,14 @@ interface HarnessOptions {
   readonly sink?: "record" | "throws" | "none";
   /** The TASK# writer: "record" (default), "throws", "hangs", or none. */
   readonly taskStatus?: "record" | "throws" | "hangs" | "none";
+  /** L6-5B: the game table's SYSTEM/GENERATION -- a bootstrap table (default), a RESTORED one the ledger adopted, a
+   *  restored one it did NOT adopt, or a marker for another generation. */
+  readonly marker?: "bootstrap" | "restore" | "restore-unadopted" | "other-generation";
+  /** L6-5B: the identity table's restore is incomplete -- L6-4's IdentityRestoreIncompleteError thrown by the identity
+   *  load, or (review M4: the main path) by the identity-writer role's takeover, which carries the serving checks. */
+  readonly identityRestoreIncomplete?: "load" | "takeover";
+  /** L6-5B: wrap the opened Juno backend (to script its relayer's status or its restore view). */
+  readonly wrapBackend?: (backend: JunoBackend) => JunoBackend;
 }
 
 interface Harness {
@@ -298,10 +306,12 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     /* LIVE-6 L6-4 (converged): the game table's SYSTEM/GENERATION, the bootstrap marker of the document's generation. */
     async tableGeneration() {
-      return bootstrapGenerationMarker({ generation: 1, gameTable: "gs-test-game-g1", by: "l5-8-bootstrap", now: 1 });
+      const boot = bootstrapGenerationMarker({ generation: options.marker === "other-generation" ? 2 : 1, gameTable: "gs-test-game-g1", by: "l5-8-bootstrap", now: 1 });
+      if (options.marker !== "restore" && options.marker !== "restore-unadopted") return boot;
+      return { ...boot, origin: "restore" as const, restored_from_generation: 0, restored_from_table: "gs-test-game-g0", restore_point: 1, restore_id: "l65b-restore-1" };
     },
     async adoptionBinding() {
-      return null;
+      return options.marker === "restore" ? { game_table: "gs-test-game-g1", restore_id: "l65b-restore-1" } : null;
     },
     async takePool({ task, onLost }) {
       if (options.poolFails === true) throw Object.assign(new Error("pool p1 was taken by t-other at epoch 8 while this task was taking it (injected)"), { name: "PoolTakeoverLostError" });
@@ -310,10 +320,18 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     generationProbe: () => ({ check: async () => ({ held: true }) }),
     async takeIdentityWriterRole(): Promise<RoleTakeover> {
+      if (options.identityRestoreIncomplete === "takeover") throw Object.assign(new Error("identity table gs-test-identity: its restore l65b-restore-1 is replaying, not complete (injected at the takeover)"), { name: "IdentityRestoreIncompleteError" });
       return options.primary === false ? { kind: "not-primary", primary: "p0" } : { kind: "taken", epoch: 3 };
     },
     openIdentityStore(_epoch, identityHooks): IdentityStoreHandle {
       hooks.identity = identityHooks;
+      if (options.identityRestoreIncomplete === "load") {
+        return Object.assign(Object.create(identityStore) as IdentityStoreHandle, {
+          load: async () => {
+            throw Object.assign(new Error("identity table gs-test-identity: its restore l65b-restore-1 is replaying, not complete (injected)"), { name: "IdentityRestoreIncompleteError" });
+          },
+        });
+      }
       return identityStore;
     },
     securityJournal(journalHooks) {
@@ -390,7 +408,8 @@ function harness(options: HarnessOptions = {}): Harness {
 
   const openBackend = async (deps: JunoBackendDeps): Promise<JunoBackend> => {
     hooks.backendDeps = deps;
-    return openJunoBackend({ ...deps, rest: world.chain, verifyEveryMs: 60_000 });
+    const backend = await openJunoBackend({ ...deps, rest: world.chain, verifyEveryMs: 60_000 });
+    return options.wrapBackend === undefined ? backend : options.wrapBackend(backend);
   };
 
   const sink: MetricSink | undefined =
@@ -1311,7 +1330,8 @@ describe("L6-5A causes, refused starts, pending counts and ids", () => {
         if (trip === "journal") h.hooks.journal!.onFenced("APPGEN is 2");
         const record = h.byEvent("task-lost")[0];
         assert.equal(record.cause, cause, trip);
-        assert.equal(record.TaskSuperseded, superseded === 1 ? 1 : undefined, trip);
+        /* L6-5B (review H1): written as 0 when not superseded -- the same Sum, and A1's subtraction always has both operands. */
+        assert.equal(record.TaskSuperseded, superseded === 1 ? 1 : 0, trip);
         assert.equal(h.sum("TaskLost"), 1);
       } finally {
         await closed(runtime);
@@ -1453,5 +1473,251 @@ describe("L6-5A a whole run's lines", () => {
     }
     assertClean(h.metricLines.join("\n"), "the run's metric lines");
     assert.ok(!h.metricLines.some((line) => line.startsWith("AUDIT")), "a metric line is never an audit line");
+  });
+});
+
+/* ==================================================================
+   LIVE-6 L6-5B: the converged runtime's remaining conditions -- L6-7's relayer paging state, the generation / restore
+   refusals and losses, the journal-ahead hold, post-restore safe mode. The same harness; the same rules (counted once,
+   at the decision; gauges only from the task whose answer is authoritative; nothing identifying in a line).
+   ================================================================== */
+
+/** A backend whose relayer reports `status` over its real one, and whose service's restore view is `restore`. */
+function scriptedBackend(backend: JunoBackend, script: { readonly relayer?: Partial<ReturnType<JunoBackend["relayer"]["status"]>>; readonly restore?: { readonly pending: number } }): JunoBackend {
+  const relayer = new Proxy(backend.relayer, {
+    get(target, name) {
+      if (name === "status" && script.relayer !== undefined) return () => ({ ...target.status(), ...script.relayer });
+      const value = Reflect.get(target, name, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const service = new Proxy(backend.service, {
+    get(target, name) {
+      if (name === "restoreStatus" && script.restore !== undefined) return () => ({ ...target.restoreStatus(), pending: script.restore?.pending ?? 0 });
+      const value = Reflect.get(target, name, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return new Proxy(backend, {
+    get(target, name) {
+      if (name === "relayer") return relayer;
+      if (name === "service") return service;
+      const value = Reflect.get(target, name, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+}
+
+describe("L6-5B the relayer's paging state (L6-7) as gauges", () => {
+  const paging = (now: number) => ({
+    paging: {
+      waiting: 3,
+      paged: 1,
+      oldest_since: now - 125_000,
+      conditions: [{ condition: "deployment-unavailable" as const, game_id: GAME_A, intent_id: "i-0123456789abcdef", op: "settle", why: `the deployment of ${GAME_A} is not served here`, since: now - 125_000, paged: true }],
+      truncated: false,
+    },
+    queue_mismatch: 2,
+    troubled: 1,
+  });
+
+  test("from the usable holder: RelayerPaging / Waiting / QueueMismatch / Troubled / OldestWaitingSeconds -- counts only (no condition, game or intent in any line, no new dimension)", async () => {
+    const h = harness({ escrow: true, wrapBackend: (b) => scriptedBackend(b, { relayer: paging(Date.now()) as never }) });
+    const runtime = await h.start();
+    try {
+      await until(() => runtime.backend?.state() === "active", "the backend active");
+      runtime.statusTick();
+      const status = h.byEvent("task-status").at(-1)!;
+      assert.equal(status.relayer_state, "usable");
+      assert.deepEqual([status.RelayerPaging, status.RelayerWaiting, status.RelayerQueueMismatch, status.RelayerTroubled], [1, 3, 2, 1]);
+      assert.ok(status.RelayerOldestWaitingSeconds >= 125 && status.RelayerOldestWaitingSeconds < 140, String(status.RelayerOldestWaitingSeconds));
+      const directives: Array<{ Dimensions: string[][]; Metrics: Array<{ Name: string }> }> = status._aws.CloudWatchMetrics;
+      const holding = directives.find((d) => d.Metrics.some((m) => m.Name === "RelayerPaging"))!;
+      assert.deepEqual(holding.Dimensions, [["Environment", "Pool"]], "a gauge: [Environment, Pool] only (its alarm exists on every pool)");
+      const text = h.metricLines.join("\n");
+      assert.ok(!text.includes("deployment-unavailable") && !text.includes("i-0123456789abcdef"), "the condition codes and intents stay in L6-7's audit lines");
+      assertClean(text, "the relayer paging lines");
+    } finally {
+      await runtime.shutdown();
+    }
+  });
+
+  test("a task whose relayer is NOT usable (the role not taken) emits none of them, whatever its own view says (L6-7: only the holder pages)", async () => {
+    const h = harness({ escrow: true, relayer: ["throws"], wrapBackend: (b) => scriptedBackend(b, { relayer: paging(Date.now()) as never }) });
+    const runtime = await h.start();
+    try {
+      await until(() => runtime.backend?.state() === "active", "the backend active");
+      runtime.statusTick();
+      const status = h.byEvent("task-status").at(-1)!;
+      assert.equal(status.relayer_state, "not-taken");
+      for (const name of ["RelayerPaging", "RelayerWaiting", "RelayerQueueMismatch", "RelayerTroubled", "RelayerOldestWaitingSeconds"]) assert.ok(!(name in status), `${name} from a non-holder`);
+    } finally {
+      await runtime.shutdown();
+    }
+  });
+
+  test("a healthy holder reports zeros (so a page clears), and none without escrow or on a non-primary task", async () => {
+    const h = harness({ escrow: true });
+    const runtime = await h.start();
+    try {
+      await until(() => runtime.backend?.state() === "active", "the backend active");
+      runtime.statusTick();
+      const status = h.byEvent("task-status").at(-1)!;
+      assert.deepEqual([status.RelayerPaging, status.RelayerWaiting, status.RelayerQueueMismatch, status.RelayerTroubled, status.RelayerOldestWaitingSeconds], [0, 0, 0, 0, 0]);
+    } finally {
+      await runtime.shutdown();
+    }
+    for (const options of [{}, { primary: false }] as const) {
+      const other = harness(options);
+      const r = await other.start();
+      try {
+        r.statusTick();
+        assert.ok(!("RelayerPaging" in other.byEvent("task-status").at(-1)!), JSON.stringify(options));
+      } finally {
+        await r.shutdown();
+      }
+    }
+  });
+});
+
+describe("L6-5B generation and restore signals", () => {
+  const refused = async (options: Parameters<typeof harness>[0]) => {
+    const h = harness(options);
+    await assert.rejects(h.start(), (error: unknown) => (error as { exitCode?: number }).exitCode === 2);
+    const record = h.byEvent("startup-refused");
+    assert.equal(record.length, 1, JSON.stringify(options));
+    return { h, record: record[0] };
+  };
+
+  test("a refusal by the generation rules (APPGEN, SYSTEM/GENERATION) or the adoption binding is ALSO a StartupRefusedGeneration; an incomplete identity restore a StartupRefusedIdentityRestore; any other refusal neither", async () => {
+    for (const [options, refusal] of [
+      [{ adopted: 2 }, "generation"],
+      [{ marker: "other-generation" }, "generation"],
+      [{ marker: "restore-unadopted" }, "adoption"],
+    ] as const) {
+      const { h, record } = await refused(options);
+      assert.deepEqual([record.StartupRefused, record.StartupRefusedGeneration, "StartupRefusedIdentityRestore" in record, record.refusal], [1, 1, false, refusal], JSON.stringify(options));
+      const env = (record._aws.CloudWatchMetrics as Array<{ Dimensions: string[][]; Metrics: Array<{ Name: string }> }>).find((d) => d.Metrics.some((m) => m.Name === "StartupRefusedGeneration"))!;
+      assert.deepEqual(env.Dimensions, [["Environment", "Pool"], ["Environment"]], "an environment-level copy: its alarm survives a pool change");
+      assertClean(h.metricLines.join("\n"), "a generation refusal");
+    }
+    for (const where of ["takeover", "load"] as const) {
+      const identity = await refused({ identityRestoreIncomplete: where });
+      assert.deepEqual([identity.record.StartupRefused, identity.record.StartupRefusedIdentityRestore, "StartupRefusedGeneration" in identity.record, identity.record.refusal], [1, 1, false, "identity-restore"], where);
+      assertClean(identity.h.metricLines.join("\n"), "an identity-restore refusal");
+    }
+    const pool = await refused({ poolFails: true });
+    assert.deepEqual(["StartupRefusedGeneration" in pool.record, "StartupRefusedIdentityRestore" in pool.record, pool.record.refusal], [false, false, "other"]);
+  });
+
+  test("a loss to the generation fence (APPGEN moved) is TaskLost + GenerationLost, never TaskSuperseded; any other loss is never GenerationLost", async () => {
+    const h = harness();
+    const runtime = await h.start();
+    try {
+      h.writer().markLost("the adopted app generation moved (2, not this task's 1): an old-generation task is fenced (injected)");
+      h.writer().markLost("again");
+      assert.deepEqual(h.exits, [3]);
+      const lost = h.byEvent("task-lost");
+      assert.equal(lost.length, 1);
+      assert.deepEqual([lost[0].TaskLost, lost[0].GenerationLost, lost[0].TaskSuperseded, lost[0].cause], [1, 1, 0, "generation-moved"], "TaskSuperseded 0 is written (review H1: A1's math never fills an empty series)");
+    } finally {
+      await closed(runtime);
+    }
+    const other = harness();
+    const r = await other.start();
+    try {
+      other.writer().markLost("a newer task took pool p1 at epoch 8 (injected)");
+      assert.ok(!("GenerationLost" in other.byEvent("task-lost")[0]));
+    } finally {
+      await closed(r);
+    }
+  });
+
+  test("a journal-ahead hold, as the escrow service audits it, is ONE MoneyHeldJournalAhead; the audit line passes unchanged; another hold code is not counted", async () => {
+    const h = harness({ escrow: true });
+    const runtime = await h.start();
+    try {
+      const ops = h.hooks.backendDeps!.ops!;
+      ops.audit("settlement.held", { game_id: GAME_A, code: "journal-ahead", from: "funding" });
+      ops.audit("settlement.held", { game_id: GAME_A, code: "binding-mismatch", from: "funding" });
+      ops.audit("money.restore-verified", { game_id: GAME_A, detail: "x" });
+      assert.equal(h.sum("MoneyHeldJournalAhead"), 1);
+      const held = h.ops.lines.filter((line) => line.event === "settlement.held");
+      assert.deepEqual(held.map((line) => [line.game_id, line.code]), [[GAME_A, "journal-ahead"], [GAME_A, "binding-mismatch"]], "the audit stream is exactly as the service wrote it");
+      assert.ok(!h.metricLines.join("\n").includes(GAME_A), "the game stays in the audit line");
+    } finally {
+      await runtime.shutdown();
+    }
+  });
+
+  test("post-restore safe mode: RestoreSafeMode 1 on a restored table (a state, not an alarm) and RestoreUnverifiedGames = the service's pending checks; a bootstrap table reports 0 and no count", async () => {
+    const h = harness({ escrow: true, marker: "restore", wrapBackend: (b) => scriptedBackend(b, { restore: { pending: 2 } }) });
+    const runtime = await h.start();
+    try {
+      await until(() => runtime.backend?.state() === "active", "the backend active");
+      runtime.statusTick();
+      const status = h.byEvent("task-status").at(-1)!;
+      assert.deepEqual([status.RestoreSafeMode, status.RestoreUnverifiedGames], [1, 2]);
+      assert.ok(h.ops.lines.some((line) => line.event === "aws.restore-safe-mode"), "L6-2's audit is unchanged");
+    } finally {
+      await runtime.shutdown();
+    }
+    const boot = harness({ escrow: true });
+    const r = await boot.start();
+    try {
+      r.statusTick();
+      const status = boot.byEvent("task-status").at(-1)!;
+      assert.deepEqual([status.RestoreSafeMode, "RestoreUnverifiedGames" in status], [0, false]);
+    } finally {
+      await r.shutdown();
+    }
+    const noEscrow = harness({ marker: "restore" });
+    const n = await noEscrow.start();
+    try {
+      n.statusTick();
+      const status = noEscrow.byEvent("task-status").at(-1)!;
+      assert.deepEqual([status.RestoreSafeMode, "RestoreUnverifiedGames" in status], [1, false], "no escrow service: no money game to verify");
+    } finally {
+      await n.shutdown();
+    }
+  });
+});
+
+describe("L6-5B the primary heartbeat and A1's operands", () => {
+  test("`Primary` is reported only by the identity-writer's task (the primary), from its takeover on -- never by a non-primary router, so a heartbeat left on a demoted pool finds nothing (review M1)", async () => {
+    const primary = harness();
+    const p = await primary.start();
+    try {
+      p.statusTick();
+      assert.equal(primary.byEvent("task-status").at(-1)!.Primary, 1);
+    } finally {
+      await p.shutdown();
+    }
+    const router = harness({ primary: false });
+    const r = await router.start();
+    try {
+      r.statusTick();
+      const status = router.byEvent("task-status").at(-1)!;
+      assert.ok(!("Primary" in status) && status.Ready === 1, "a healthy router: Ready, but never Primary");
+      assert.ok(router.byEvent("task-status").every((record) => !("Primary" in record)));
+    } finally {
+      await r.shutdown();
+    }
+  });
+
+  test("every task-lost record carries BOTH of A1's operands (TaskSuperseded 0 or 1), whatever the cause", async () => {
+    for (const reason of ["a newer task took pool p1 at epoch 8 (injected)", "the identity-writer role was taken over (injected)", "something else entirely (injected)"]) {
+      const h = harness();
+      const runtime = await h.start();
+      try {
+        h.writer().markLost(reason);
+        const lost = h.byEvent("task-lost")[0];
+        assert.ok(typeof lost.TaskLost === "number" && typeof lost.TaskSuperseded === "number", JSON.stringify(lost));
+        const directive = (lost._aws.CloudWatchMetrics as Array<{ Dimensions: string[][]; Metrics: Array<{ Name: string }> }>).find((d) => d.Metrics.some((m) => m.Name === "TaskSuperseded"))!;
+        assert.deepEqual(directive.Dimensions, [["Environment", "Pool"], ["Environment"]]);
+      } finally {
+        await closed(runtime);
+      }
+    }
   });
 });

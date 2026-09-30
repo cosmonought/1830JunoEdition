@@ -307,6 +307,13 @@ data "aws_iam_policy_document" "bootstrap" {
     actions   = ["cloudfront:GetDistributionConfig", "cloudfront:GetOriginRequestPolicy"]
     resources = ["arn:${local.partition}:cloudfront::${local.account}:distribution/*", "arn:${local.partition}:cloudfront::${local.account}:origin-request-policy/*"]
   }
+  # LIVE-6 L6-5B: the alarm evidence (capture-evidence: `describe-alarms --alarm-name-prefix gs-<env>-`), read only. A
+  # listing by name prefix is not reliably scopable to alarm ARNs, and the answer holds no secret.
+  statement {
+    sid       = "VerifierAlarms"
+    actions   = ["cloudwatch:DescribeAlarms"]
+    resources = ["*"]
+  }
   statement {
     sid = "VerifierDescribeUnscopable"
     actions = [
@@ -409,6 +416,18 @@ data "aws_iam_policy_document" "operator" {
     sid       = "ReadConfiguration"
     actions   = ["ssm:GetParameter"]
     resources = concat(values(local.runtime_parameter_arn), local.escrow_enabled ? [local.juno_parameter_arn] : [])
+  }
+  # LIVE-6 L6-5B: the planned-flip window's suppressor datapoints (`gamesDoctor aws flip` opens, the settled recovery
+  # closes) -- ONLY into the operator namespace: never a game-server metric (18Cosmos/GameServer is the tasks' EMF).
+  statement {
+    sid       = "FlipWindowMetricsOnly"
+    actions   = ["cloudwatch:PutMetricData"]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "cloudwatch:namespace"
+      values   = [local.suppressor.namespace]
+    }
   }
 }
 

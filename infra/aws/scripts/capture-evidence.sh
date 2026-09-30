@@ -62,6 +62,9 @@ else
   aws cloudfront get-origin-request-policy --id "$ORP_ID" > "$OUT/origin-request-policy.json"
 fi
 aws ec2 describe-security-groups --filters "Name=group-name,Values=gs-${ENVIRONMENT}-task,gs-${ENVIRONMENT}-alb" > "$OUT/security-groups.json"
+# LIVE-6 L6-5B: this environment's CloudWatch alarms (metric and composite; the CLI follows every page) -- the verifier
+# judges them against infra/aws/modules/app/alarm-contract.json.
+aws cloudwatch describe-alarms --alarm-name-prefix "gs-${ENVIRONMENT}-" --alarm-types MetricAlarm CompositeAlarm > "$OUT/alarms.json"
 POOL_JSON="$(printf '"%s",' "${POOLS[@]}")"
 printf '{"format":"18COSMOS/EVIDENCE/v1","captured_at":"%s","environment":"%s","region":"%s","pools":[%s]}\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ENVIRONMENT" "$REGION" "${POOL_JSON%,}" > "$OUT/manifest.json"
 echo "evidence written to $OUT (read-only captures; no secret is in any of them)"

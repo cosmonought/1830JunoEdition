@@ -170,6 +170,14 @@ export type RestoreCheck =
   /** It never will be here: the F1 check HELD it (`journal-ahead`, a durable hold -- the operator's). */
   | { readonly kind: "held"; readonly detail: string };
 
+/** LIVE-6 L6-5B: `restoreStatus()` -- the games whose restore check has answered, by that last answer. */
+export interface RestoreStatus {
+  readonly safe_mode: boolean;
+  readonly verified: number;
+  readonly pending: number;
+  readonly held: number;
+}
+
 export const RESTORE_READ_ONLY_SENTENCE = "This table was restored from a backup: it stays read-only until its money history is checked against the ledger and the chain.";
 
 /** ESCROW-JOIN: what ESCROW-4's (future) route asks for, after authenticating the principal and proving the wallet. */
@@ -269,6 +277,9 @@ export interface EscrowService {
   restoreGate(gameId: string): string | null;
   /** LIVE-6 L6-2: the verification itself (for the gate, the claim hook and tests). */
   restoreCheck(gameId: string): Promise<RestoreCheck>;
+  /** LIVE-6 L6-5B: what post-restore safe mode looks like NOW -- read-only counts of the games whose check has run, by
+   *  their last outcome (`pending`: still read-only). A view for metrics; it decides nothing and starts nothing. */
+  restoreStatus(): RestoreStatus;
   /** LIVE-4 (L4-4): read the pinned deployment's chain-attested facts at verification grade and record them (the only
    *  source of `runtime.chainFacts`). `junoBackend` calls it at every verification; creation calls it when none was read. */
   refreshChainFacts(): Promise<ChainFactsRead>;
@@ -1482,6 +1493,8 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
      before any signature; this adds the read-only serving in front of them. */
   const restoreVerified = new Set<string>();
   const restoreRunning = new Map<string, Promise<RestoreCheck>>();
+  /** L6-5B: each checked game's LAST answer (a view for `restoreStatus`; never read by the gate or the check). */
+  const restoreLast = new Map<string, RestoreCheck["kind"]>();
   async function restoreCheck(gameId: string): Promise<RestoreCheck> {
     if (deps.restoreSafeMode !== true) return { kind: "verified", detail: "not a restored table" };
     if (restoreVerified.has(gameId)) return { kind: "verified", detail: "verified in this process" };
@@ -1523,6 +1536,10 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     if (running === undefined) {
       running = restoreCheck(gameId)
         .catch((error): RestoreCheck => ({ kind: "pending", detail: `the check failed (${error instanceof Error ? error.name : "error"})` }))
+        .then((answer) => {
+          if (deps.restoreSafeMode === true) restoreLast.set(gameId, answer.kind);
+          return answer;
+        })
         .finally(() => restoreRunning.delete(gameId));
       restoreRunning.set(gameId, running);
     }
@@ -1540,6 +1557,11 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     rosterSource,
     restoreGate,
     restoreCheck: startRestoreCheck,
+    restoreStatus() {
+      const counts = { verified: 0, pending: 0, held: 0 };
+      for (const kind of restoreLast.values()) counts[kind] += 1;
+      return { safe_mode: deps.restoreSafeMode === true, ...counts };
+    },
     isRosterFrozen: (gameId) => frozen.has(gameId),
     reconcileStart,
     relayConsent,

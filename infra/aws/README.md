@@ -46,7 +46,7 @@ resource or key policy, and the role's own IAM policy from the app stack. The le
 | | Settings |
 |---|---|
 | **DynamoDB** (all three) | String `pk` HASH and `sk` RANGE. On-demand. PITR (35 days). Deletion protection. `prevent_destroy`. No GSI, LSI, replica or stream. |
-| `gs-<env>-game-g<N>` | No TTL. `SYSTEM/ROUTING` and the first table's `SYSTEM/GENERATION` come from the bootstrap (a restored table's marker from L6-4's preparation). `POOL#`, `ROLE#` and games come from the tasks. One resource per managed generation (`game_generations`, side by side; the L5-8 table is `moved` to key `"1"`, never replaced). |
+| `gs-<env>-game-g<N>` | TTL on the attribute **`ttl`** (LIVE-6 L6-5B) on **every** managed generation: only L6-5A's diagnostic `TASK#<task>/TASK` items carry it (last seen + 1 day); no authoritative item does. `SYSTEM/ROUTING` and the first table's `SYSTEM/GENERATION` come from the bootstrap (a restored table's marker from L6-4's preparation). `POOL#`, `ROLE#` and games come from the tasks. One resource per managed generation (`game_generations`, side by side; the L5-8 table is `moved` to key `"1"`, never replaced). |
 | `gs-<env>-identity` | TTL on the attribute **`ttl`**. |
 | `gs-<env>-ledger` | No TTL. `APPGEN` comes from the bootstrap. Resource policy for the task role: GetItem, Query, ConditionCheckItem, and PutItem on any key except `APPGEN`. It gets no Update, Delete or Scan. |
 | **Ledger backup** | AWS Backup daily into `gs-<env>-ledger` (vault lock, governance by default; compliance mode is an owner decision). The vault policy denies DeleteRecoveryPoint and UpdateRecoveryPointLifecycle. The selection is the ledger only, and the backup role cannot restore. Optional copy to another vault. |
@@ -74,6 +74,11 @@ pin those endpoints (`awsClients.ts`).
 | `gs-<env>-operator` (L6-2; only with `operator_trusted_principal_arns`) | `gamesDoctor aws`: game table GetItem/Query/Scan; PutItem on `SYSTEM/*` and `OPRUN#*` (the routing CAS, the run's evidence) and UpdateItem on `GAME#*` / `POOL#op:*` (an operator run's claim / take / release) -- never another `POOL#`; identity-writer role GetItem; ledger GetItem + Scan (read-only); GetParameter on the documents. No KMS, no identity write, no APPGEN. |
 | `gs-<env>-recovery` (L6-2 for L6-4; only with `recovery_trusted_principal_arns`) | `npm run recovery`: APPGEN adoption and its `APPGEN#HISTORY` append (ledger), the restored table's `SYSTEM/GENERATION`, the identity replay's tables. `RestoreTableToPointInTime` only with `recovery_break_glass`. Serving tasks never hold any of it. |
 | `gs-<env>-bootstrap` | Used by the pipeline or an operator. PutItem and GetItem **only** on `SYSTEM/*` of the game table and `APPGEN` of the ledger (`dynamodb:LeadingKeys`). Describe on the three tables, GetParameter on the documents, and KMS DescribeKey, GetPublicKey and ListGrants. Read-only describes for the verifier: `ecs:DescribeTaskDefinition`, `elasticloadbalancing:Describe*` and `ec2:DescribeSecurityGroups*` (all `*`, because AWS cannot scope them), `ecs:DescribeServices` on this cluster, and CloudFront GetDistributionConfig and GetOriginRequestPolicy; since L6-2 also GetItem on `SYSTEM/GENERATION` and `APPGEN#HISTORY`, ListTasks/DescribeTasks on this cluster, ListTaskDefinitions and DescribeTargetHealth. It has no Sign, no Update, no Delete and no Scan. |
+
+**L6-5B additions:** `gs-<env>-operator` may `cloudwatch:PutMetricData` **only** into `18Cosmos/Operator` (the planned-flip
+window's suppressor datapoints) -- never a game-server metric, and no role may disable, set, rewrite or delete an alarm
+from the application side; `gs-<env>-bootstrap` may `cloudwatch:DescribeAlarms` (the verifier's evidence). The task role
+gains nothing: its metrics are EMF lines on stdout through its log group.
 
 The DynamoDB transactions are authorised per underlying action (Put, Update, Delete, ConditionCheckItem, GetItem), so
 these lists are complete. The `LeadingKeys` exclusions on `SYSTEM` and `APPGEN` are **defence in depth**, not the safety
@@ -179,7 +184,12 @@ npm run gamesDoctor -- aws recover A --note "..." --flip-record flip.json --appl
   router), `/gs*` → A and each exact path → its own group with nothing shadowed, and every rollback target declaring the
   identity layout. A dry run stops here.
 - **F1** the planned-flip observability window opens (`AUDIT operator.flip-window {phase:"open", expires_at}`, 45 min
-  bound) **before** the CAS.
+  bound) **before** the CAS. **L6-5B:** right after it, the flip publishes the window's alarm-action suppression for
+  **exactly A and B** (`AUDIT operator.flip-suppression {phase:"open", outcome}`): one `FlipWindowOpen = +1` datapoint per
+  minute up to `expires_at` into `18Cosmos/Operator` (the operator role may write only that namespace). It ends **by
+  itself** at `expires_at` even if the operator's process dies; a settled `recover --flip-record` (or a refused CAS)
+  closes it early with -1 over the same minutes (additive: an overlapping re-run or flip back keeps its own suppression). A
+  failed publication never changes the flip (the alarms simply page). See "Alarms" below.
 - **F2** L6-3's `set-primary` CAS (evidence first; a lost answer settled by its claim; `unknown` stops -- re-run the same
   flip, it can never move twice).
 - **F3** observe (strong reads): both pools re-taken at a newer epoch (each task exited 5 and ECS started its replacement),
@@ -195,7 +205,8 @@ npm run gamesDoctor -- aws recover A --note "..." --flip-record flip.json --appl
 - **Rollback** (B cannot start as primary): `flip B A --expect-version N+1 --rollback ...` -- the same preflight, window,
   CAS and observation, accepting that the roles never left A and that B is unhealthy; A must be running and healthy.
   **Never** the raw `set-primary` in production (it checks none of the evidence: it could name a drained pool).
-- The Terraform `primary` flag changes **only** the `/gs*` rule's target group; the plan refuses it until the routing names
+- The Terraform `primary` flag changes **only** the `/gs*` rule's target group and (L6-5B) the Pool dimension of the three
+  primary-only alarms (A6, A7, A13, in place); the plan refuses it until the routing names
   the new primary, and refuses to make a drained pool primary. Clients never depend on it: an old `/gs` connection reaching
   A is answered by A's router with LIVE-4's route frame to `/gs/p/B`, which the ALB sends to B's group.
 
@@ -235,7 +246,9 @@ entry.** The only supported procedure:
 1. Keep the old relayer configuration active; watch it drain its queue to zero (`relayer.status()`, the AUDIT lines).
 2. `drain-pool` every pool (desired = running = pending = 0): no task can add to the old queue any more.
 3. `capture-evidence`, then `npm run awsDeploy -- relayer-rotation-gate --runtime-parameter <ARN> --environment <env>
-   --from-relayer <old> --to-relayer <new> --evidence <dir>` (read-only; bootstrap role). **GATE OPEN** only when the
+   --from-relayer <old> --to-relayer <new> --evidence <dir> --record <file>` (read-only; bootstrap role; L6-5B:
+   `--record` writes the gate's own verdict as `18COSMOS/RELAYER-ROTATION-GATE/v1`, created once -- keep it with the
+   certification evidence; certification accepts only an OPEN record with the old queue read EMPTY). **GATE OPEN** only when the
    active configuration still names the old address, every pool is drained (fresh evidence), and `RELAYQ#<old>` read
    **completely** (strongly consistent, every page) holds **no entry of any shape**. An unreadable or unknown queue
    refuses; the new address's queue is never consulted.
@@ -252,8 +265,11 @@ Strictly in this order; Terraform/SSM never race ahead of the adoption:
    `recovery_break_glass = true`), outside Terraform.
 2. `npm run recovery -- table-prepare ...` then `appgen-adopt ... --apply` → `committed` / `already-adopted` for exactly
    (N+1, that table, that restore id).
-3. `npm run awsDeploy -- generation-gate --runtime-parameter <ARN> --environment <env> --generation N+1 --restore-id <id>`
-   (read-only) → `GATE OPEN` and the `generation_adoption = {...}` line.
+3. `npm run awsDeploy -- generation-gate --runtime-parameter <ARN> --environment <env> --generation N+1 --restore-id <id>
+   --record <file>` (read-only) → `GATE OPEN` and the `generation_adoption = {...}` line. L6-5B: `--record` writes the
+   gate's own attestation (`18COSMOS/GENERATION-GATE/v1`, created once); certification binds the plan's
+   `generation_adoption` to that record field for field (owner decision: the gate's machine value, never a hand-entered
+   replacement).
 4. In `stacks/app`: add N+1 to `game_generations` (keep N), an `import` block for the new table, `generation = N+1`,
    `generation_adoption = {...}`. The plan refuses services unless the new table's marker equals that attestation; the
    module re-enables PITR and deletion protection on the import.
@@ -275,7 +291,8 @@ circuit-breaker rollback target -- lacks it. There is no pre-L6-4 rollback targe
 - **`--part app`** (the default; app-account credentials, e.g. the bootstrap role) checks:
   - both documents, through the task's own `loadAwsStartup`, and every pool's document, against the naming contract;
   - the game and identity tables in full: keys, billing, indexes, replicas, deletion protection, PITR, and TTL (`ttl` on
-    identity only);
+    identity and, L6-5B, on the game table -- every other managed generation too with `--game-generations 1,2`; never on
+    the ledger);
   - the ledger's DescribeTable (cross-account);
   - that APPGEN holds the generation, SYSTEM/ROUTING names the primary, and `SYSTEM/GENERATION` satisfies the tasks'
     startup rule (and, for a restored table, APPGEN's adoption binds it);
@@ -295,11 +312,48 @@ circuit-breaker rollback target -- lacks it. There is no pre-L6-4 rollback targe
     - with `--flip-record`, after the flip's CAS: an exit 5 of each pool, no exit 3/4, and a replacement running;
     - CloudFront's `/gs*` behaviour is the **first** to match `/gs` paths, uncached, with **all** query strings, cookies,
       Origin and WebSocket headers;
-    - the task SG admits the ALB SG only, and the ALB SG admits a prefix list only.
+    - the task SG admits the ALB SG only, and the ALB SG admits a prefix list only;
+    - (L6-5B) the CloudWatch alarms (`alarms.json`) against `modules/app/alarm-contract.json`: every alarm, its metrics,
+      math, dimensions, thresholds, evaluation and missing data; the primary-only alarms on `--primary-pool`; the page /
+      ticket wiring class (exactly `--page-actions` / `--ticket-actions` when given -- `none` is valid in staging); each
+      suppressible alarm notifying only through its composite suppressed by its OWN pool's window; nothing else wrapped;
+      no alarm's actions disabled; no suppressor in ALARM outside an open, unexpired window of its pool (`--flip-record`);
+      nothing in the game-server namespace outside the contract.
 - **`--part ledger`** (ledger-account credentials) checks the ledger's PITR and TTL (which are not readable across
   accounts) and APPGEN.
 - **`--part all`** runs both halves, for the single-account form.
 - A missing evidence file fails the run. Omitting evidence must be explicit (`--no-evidence`) and is reported as SKIP.
+
+## Alarms (LIVE-6 L6-5B): `modules/app/alarms.tf`, `alarm-contract.json`
+
+Every alarm is one entry of `alarm-contract.json` over L6-5A's EMF metrics (namespace `18Cosmos/GameServer`, dimensions
+`[Environment]` or `[Environment, Pool]` only -- never a task, build, generation, epoch, game, principal, wallet, key or
+condition code; no Logs metric filter exists). Names are stable: `gs-<env>-<id>`, `gs-<env>-<pool>-<id>`,
+`gs-<env>-primary-<id>`. Actions: `page_alarm_action_arns` / `ticket_alarm_action_arns` (created elsewhere; empty is valid
+in staging; one ARN is never in both). The full table and thresholds: the L6-5B report.
+
+- **Scope.** Environment alarms once (the forced-exit and failure counters). Pool alarms on every pool (a drained pool has
+  no data and never pages; the relayer page A15 and unverified restored games R3 are on every pool because only the role
+  holder / primary emits them). Primary alarms (A6 relayer usable, A7 escrow active, A13 heartbeat) watch the pool marked
+  `primary`: **a flip moves them in place** in the same plan as the `/gs*` rule, and the plan refuses that until
+  SYSTEM/ROUTING names the new primary.
+- **Planned-flip suppression.** Only A6, A11, A12, A12b and A13 (the flip's expected effects: the two pools' exit-5
+  restarts, the non-primary transition, readiness / target-health flap) are suppressible: each is a metric alarm without
+  actions plus a composite `<name>-notify` whose `actions_suppressor` is its pool's `gs-<env>-<pool>-flip-window`. That
+  suppressor is ALARM only while its pool's published `FlipWindowOpen` minutes sum to at least 1 (+1 per open window, -1
+  per close); with no data it is OK. **Never
+  suppressed:** exit 3 / 4 (A1, A3), refused starts and generation / adoption / identity-restore refusals (A4, A4g, A4i),
+  generation loss (R1), journal-ahead (R2), unverified restored games (R3), the money sweep (A5*), escrow (A7), KMS
+  (A8-A10), the relayer page (A15). A restore/adoption is not a flip: no restore alarm is suppressible, so an overlapping
+  flip window never masks one.
+- **A13 and a skipped flag move.** A13 counts the `Primary` gauge, which only the identity-writer's task reports: if the
+  Terraform `primary` flag is not moved after a flip, A13 still watches the demoted pool, finds no sample and PAGES once
+  the window ends -- a stale attachment is loud, never silent.
+- **A drained primary pages (by design).** A13's missing data breaches: draining the PRIMARY pool (a drain-first deploy of
+  it, a relayer rotation, a restore) is an outage of the game and pages after 3 minutes. A bounded planned-maintenance
+  window (the same additive mechanism under its own metric) is an owner decision (the L6-5B report).
+- **Never mute by hand.** Do not use `disable-alarm-actions`: `verify` fails any alarm whose actions are disabled. To
+  end a window early, `recover --flip-record` (settled) closes it; otherwise it ends at `expires_at`.
 
 ## Secrets
 
@@ -319,10 +373,10 @@ Terraform state holds only non-secret values: the documents, ARNs and names. KMS
 
 ```
 cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 6 runs
-cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 32 runs
+cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 48 runs (app 32 + alarms 16; Terraform >= 1.10)
 cd infra/aws/stacks/app     && terraform init -backend=false && terraform validate    # (and stacks/ledger)
 cd server && npm run build && node --test dist/server/src/aws/deploy/l5_8Deploy.test.js dist/server/src/aws/awsClients.test.js
-node --test dist/server/src/aws/operator/l6_2Flip.test.js
+node --test dist/server/src/aws/operator/l6_2Flip.test.js dist/server/src/persistence/conformance/l6_5bAlarms.test.js dist/server/src/aws/runtime/l6_5aObservability.test.js
 GS_DYNAMODB_LOCAL_ENDPOINT=http://127.0.0.1:8000 node --test dist/server/src/persistence/conformance/awsBootstrap.dynamoLocal.test.js dist/server/src/persistence/conformance/l6_2Flip.dynamoLocal.test.js
 ```
 

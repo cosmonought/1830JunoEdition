@@ -372,3 +372,32 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "page_alarm_action_arns" {
+  description = <<-EOT
+    LIVE-6 L6-5B: where a PAGE alarm (alarm-contract.json `class` page) sends its ALARM and OK notifications -- ARNs of
+    compatible CloudWatch alarm actions (an SNS topic, a Lambda function, an Incident Manager response plan, an OpsItem).
+    Created elsewhere (this module creates no SNS topic or paging destination). May be EMPTY in staging: the alarms still
+    evaluate, and `awsDeploy verify` still checks that every page alarm is wired to exactly this list.
+  EOT
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for arn in var.page_alarm_action_arns : can(regex("^arn:aws:(sns|lambda|ssm-incidents|ssm):[a-z0-9-]*:[0-9]{12}:.+$", arn))])
+    error_message = "page_alarm_action_arns holds CloudWatch alarm action ARNs (sns, lambda, ssm-incidents or ssm) in the aws partition."
+  }
+}
+
+variable "ticket_alarm_action_arns" {
+  description = "LIVE-6 L6-5B: where a TICKET alarm sends its notifications (as page_alarm_action_arns; may be empty in staging). Never the same ARN as a page action: the two classes stay distinguishable."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for arn in var.ticket_alarm_action_arns : can(regex("^arn:aws:(sns|lambda|ssm-incidents|ssm):[a-z0-9-]*:[0-9]{12}:.+$", arn))])
+    error_message = "ticket_alarm_action_arns holds CloudWatch alarm action ARNs (sns, lambda, ssm-incidents or ssm) in the aws partition."
+  }
+  validation {
+    condition     = length(setintersection(toset(var.ticket_alarm_action_arns), toset(var.page_alarm_action_arns))) == 0
+    error_message = "An action ARN is either a page destination or a ticket destination, never both (the classes must stay distinguishable)."
+  }
+}

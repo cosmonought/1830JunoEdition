@@ -20,5 +20,8 @@ output "app" {
     game_table_names         = module.app.game_table_names
     origin_request_policy_id = module.app.origin_request_policy_id
     distribution_id          = module.app.distribution_id
+    alarm_namespace          = module.app.alarm_namespace
+    alarms                   = module.app.alarms
+    flip_suppression         = module.app.flip_suppression
   }
 }

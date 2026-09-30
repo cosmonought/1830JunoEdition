@@ -35,8 +35,9 @@ import { CreateTableCommand, DeleteItemCommand, DeleteTableCommand, GetItemComma
 
 import { createDynamoDbClient, deadline, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV } from "../../aws/awsClients";
 import { EVIDENCE_MANIFEST_FORMAT, POOL_EVIDENCE_FILES } from "../../aws/controlPlane/evidence";
-import { readFlipRecordFile, writeFlipRecord, type FlipRecord } from "../../aws/controlPlane/flipRecord";
+import { parseFlipRecord, readFlipRecordFile, writeFlipRecord, type FlipRecord } from "../../aws/controlPlane/flipRecord";
 import { runDeployCommand, EXIT_FAILED, EXIT_OK, type DeployDeps } from "../../aws/deploy/commands";
+import { generationAttestationProblem, rotationGateRecordProblem } from "../../aws/deploy/gateRecords";
 import { createDynamoFinancialStore } from "../../aws/game/dynamoFinancialStore";
 import { createDynamoLogStore } from "../../aws/game/dynamoLogStore";
 import { createDynamoRecordStore } from "../../aws/game/dynamoRecordStore";
@@ -52,6 +53,7 @@ import { createDynamoIdentityVerifier } from "../../aws/identity/identityVerifie
 import { adoptGeneration } from "../../aws/ledger/appGeneration";
 import { LEDGER_KEYS } from "../../aws/ledger/dynamoSigningLedger";
 import { closeFlipWindow, observeFlip, runFlip, type FlipDeps } from "../../aws/operator/flip";
+import type { FlipSuppressionPort, SuppressionDatum } from "../../aws/controlPlane/flipSuppression";
 import { takeGameAsOperator, type MutationContext } from "../../aws/operator/mutations";
 import { EXIT, runAwsOperator } from "../../aws/operator/operatorMain";
 import type { OperatorTarget } from "../../aws/operator/operatorTarget";
@@ -92,6 +94,8 @@ const WRITES = ["PutItemCommand", "UpdateItemCommand", "DeleteItemCommand", "Tra
 const TIMING: Partial<ResendTiming> = { maxResends: 2, windowMs: 60_000, baseDelayMs: 1, maxDelayMs: 1, sleep: async () => undefined };
 const noSleep = async () => undefined;
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "l6-2-ddb-"));
+/** L6-5B: the record as written (the window's suppression outcome included). */
+const readFlipRecordFileRaw = (file: string): FlipRecord => parseFlipRecord(fs.readFileSync(file, "utf8")) as FlipRecord;
 
 quietConsole();
 
@@ -632,6 +636,114 @@ describe("§3b interrupted, raced and rolled-back flips (review H1, L3, M3)", ()
 });
 
 /* ==================================================================
+    §3c LIVE-6 L6-5B: THE WINDOW'S ALARM SUPPRESSION ON A REAL FLIP
+   ================================================================== */
+describe("§3c L6-5B: the planned-flip window's alarm suppression, published by the flip itself", () => {
+  async function twoPools(label: string) {
+    const d = await deployment(label);
+    const a = await writer(d, "p0", "t-a");
+    assert.equal((await takeIdentityWriterRole(a.writer, { client: a.client, table: d.identity }, { now: () => Date.now() })).kind, "taken");
+    await writer(d, "p1", "t-b");
+    return d;
+  }
+  const recorder = () => {
+    const batches: Array<{ namespace: string; datums: SuppressionDatum[] }> = [];
+    const port: FlipSuppressionPort = { publish: async (namespace, datums) => void batches.push({ namespace, datums: [...datums] }) };
+    return { port, batches, datums: () => batches.flatMap((b) => b.datums) };
+  };
+
+  test("the open is published AFTER the window opens and BEFORE the CAS, for exactly the flip's two pools, never past expires_at; a dry run or a refused preflight publishes nothing", async () => {
+    const d = await twoPools("sup");
+    const audits: Audit[] = [];
+    const sup = recorder();
+    const deps: FlipDeps = { context: contextOf(d.target(await freshClient()), audits), documents: async (pool) => docFor(pool), sleep: noSleep, suppression: sup.port };
+    const evidence = writeEvidence("sup", { primary: "p0" });
+    await runFlip(deps, { from: "p0", to: "p1", expectVersion: 1, note: "dry", apply: false, evidence });
+    await runFlip(deps, { from: "p0", to: "p1", expectVersion: 9, note: "stale", apply: true, evidence });
+    assert.equal(sup.batches.length, 0, "no window, no suppression");
+    const record = await runFlip(deps, { from: "p0", to: "p1", expectVersion: 1, note: "suppressed drill", apply: true, evidence, observeMs: 0 });
+    assert.equal(record.cas?.outcome, "applied");
+    const events = audits.map((x) => x.event);
+    assert.ok(events.indexOf("operator.flip-window") < events.indexOf("operator.flip-suppression") && events.indexOf("operator.flip-suppression") < events.indexOf("operator.set-primary"), events.join(", "));
+    const opened = audits.find((x) => x.event === "operator.flip-suppression")!;
+    assert.deepEqual([opened.fields.phase, opened.fields.outcome], ["open", "published"]);
+    assert.ok(sup.batches.every((b) => b.namespace === "18Cosmos/Operator" && b.datums.length <= 20));
+    assert.deepEqual([...new Set(sup.datums().map((x) => x.Dimensions.map((dim) => dim.Value).join("/")))].sort(), [`${ENV}/p0`, `${ENV}/p1`]);
+    assert.ok(sup.datums().every((x) => x.Value === 1 && x.Timestamp < (record.window as { expires_at: number }).expires_at));
+    assert.equal(record.window?.suppression, "published", "the record says what was published (a close is only ever for a published open)");
+  });
+
+  test("the settled recovery (the CLI) closes it ONCE: the record says `closed` first, then -1 for the two pools; a re-run publishes nothing; an unpublished open is never closed", async () => {
+    const d = await twoPools("supcli");
+    const sup = recorder();
+    const recordFile = path.join(scratch, `supcli-${Date.now()}.json`);
+    const deps: FlipDeps = { context: contextOf(d.target(await freshClient()), []), documents: async (pool) => docFor(pool), sleep: noSleep, suppression: sup.port, persist: (r) => writeFlipRecord(recordFile, r) };
+    const flipped = await runFlip(deps, { from: "p0", to: "p1", expectVersion: 1, note: "supcli", apply: true, evidence: writeEvidence("supcli", { primary: "p0" }), observeMs: 0 });
+    assert.equal(flipped.window?.suppression, "published");
+    const b2 = await writer(d, "p1", "t-b2");
+    assert.equal((await takeIdentityWriterRole(b2.writer, { client: b2.client, table: d.identity }, { now: () => Date.now() })).kind, "taken");
+    await writer(d, "p0", "t-a2");
+    const settled = await observeFlip(deps, flipped, { observeMs: 5_000, pollMs: 1 });
+    assert.equal(settled.verdict, "roles-settled");
+    const opened = sup.datums().length;
+    const doc = JSON.stringify({ format: AWS_RUNTIME_CONFIG_FORMAT_V2, environment: ENV, region: "us-east-1", pool: "p0", generation: 1, game_table: d.game, identity_table: d.identity, ledger_table_arn: `arn:aws:dynamodb:us-east-1:210987654321:table/${d.ledger}`, escrow: null, routes: ROUTES });
+    const recover = async () => {
+      const err: string[] = [];
+      const code = await runAwsOperator(["recover", "p0", "--note", "l6-5b close", "--apply", "--flip-record", recordFile, "--local-document", "doc.json"], { GS_DYNAMODB_LOCAL_ENDPOINT: TARGET.endpoint }, { out: () => undefined, err: (l) => err.push(l) }, { readFile: async () => doc, clientFor: () => createDynamoDbClient(TARGET), suppression: sup.port, sleep: noSleep, pollMs: 1 });
+      return { code, err };
+    };
+    const first = await recover();
+    assert.equal(first.code, EXIT.ok, first.err.join("\n"));
+    const onDisk = readFlipRecordFileRaw(recordFile);
+    assert.ok(onDisk.window?.closed_at !== null && onDisk.window?.suppression === "closed", JSON.stringify(onDisk.window));
+    const closing = sup.datums().slice(opened);
+    assert.ok(closing.length > 0 && closing.every((x) => x.Value === -1), "the close cancels this window's own +1s");
+    assert.deepEqual([...new Set(closing.map((x) => x.Dimensions[1].Value))].sort(), ["p0", "p1"]);
+    const second = await recover();
+    assert.equal(second.code, EXIT.ok, second.err.join("\n"));
+    assert.equal(sup.datums().length, opened + closing.length, "a re-run closes nothing again (additive: a second -1 would cancel another window)");
+    /* An open that never published (a failing publisher) is never closed. */
+    const e = await twoPools("supcli2");
+    const failed = recorder();
+    const file2 = path.join(scratch, `supcli2-${Date.now()}.json`);
+    const deps2: FlipDeps = { context: contextOf(e.target(await freshClient()), []), documents: async (pool) => docFor(pool), sleep: noSleep, suppression: { publish: async () => Promise.reject(new Error("down (injected)")) }, persist: (r) => writeFlipRecord(file2, r) };
+    const f2 = await runFlip(deps2, { from: "p0", to: "p1", expectVersion: 1, note: "supcli2", apply: true, evidence: writeEvidence("supcli2", { primary: "p0" }), observeMs: 0 });
+    assert.equal(f2.window?.suppression, "failed");
+    const b3 = await writer(e, "p1", "t-b3");
+    assert.equal((await takeIdentityWriterRole(b3.writer, { client: b3.client, table: e.identity }, { now: () => Date.now() })).kind, "taken");
+    await writer(e, "p0", "t-a3");
+    await observeFlip(deps2, f2, { observeMs: 5_000, pollMs: 1 });
+    const doc2 = doc.replace(d.game, e.game).replace(d.identity, e.identity).replace(d.ledger, e.ledger);
+    const code2 = await runAwsOperator(["recover", "p0", "--note", "l6-5b close", "--apply", "--flip-record", file2, "--local-document", "doc.json"], { GS_DYNAMODB_LOCAL_ENDPOINT: TARGET.endpoint }, { out: () => undefined, err: () => undefined }, { readFile: async () => doc2, clientFor: () => createDynamoDbClient(TARGET), suppression: failed.port, sleep: noSleep, pollMs: 1 });
+    assert.equal(code2, EXIT.ok);
+    assert.equal(failed.datums().length, 0, "no -1 for a window whose +1 never landed");
+  });
+
+  test("a publisher that FAILS changes nothing about the flip (the alarms simply page); the failure is audited", async () => {
+    const d = await twoPools("supfail");
+    const audits: Audit[] = [];
+    const deps: FlipDeps = { context: contextOf(d.target(await freshClient()), audits), documents: async (pool) => docFor(pool), sleep: noSleep, suppression: { publish: async () => Promise.reject(Object.assign(new Error("AccessDenied (injected)"), { name: "AccessDeniedException" })) } };
+    const record = await runFlip(deps, { from: "p0", to: "p1", expectVersion: 1, note: "failing suppression", apply: true, evidence: writeEvidence("supfail", { primary: "p0" }), observeMs: 0 });
+    assert.equal(record.cas?.outcome, "applied");
+    assert.deepEqual([(await readRouting(admin, d.game))?.primary_pool, (await readRouting(admin, d.game))?.routing_version], ["p1", 2]);
+    assert.deepEqual(audits.filter((x) => x.event === "operator.flip-suppression").map((x) => [x.fields.outcome, x.fields.error_class]), [["failed", "AccessDeniedException"]]);
+  });
+
+  test("a rollback suppresses through the same bounded mechanism, for its own two pools", async () => {
+    const d = await twoPools("suprb");
+    const sup = recorder();
+    const deps: FlipDeps = { context: contextOf(d.target(await freshClient()), []), documents: async (pool) => docFor(pool), sleep: noSleep, suppression: sup.port };
+    await runFlip(deps, { from: "p0", to: "p1", expectVersion: 1, note: "suprb", apply: true, evidence: writeEvidence("suprb", { primary: "p0" }), observeMs: 0 });
+    const before = sup.batches.length;
+    const back = await runFlip(deps, { from: "p1", to: "p0", expectVersion: 2, note: "rollback: p1 cannot start as primary", apply: true, evidence: writeEvidence("suprb-sick", { primary: "p0", healthy: { p1: false } }), rollback: true, observeMs: 0 });
+    assert.equal(back.cas?.outcome, "applied");
+    const rolled = sup.batches.slice(before).flatMap((b) => b.datums);
+    assert.ok(rolled.length > 0 && rolled.every((x) => x.Value === 1));
+    assert.deepEqual([...new Set(rolled.map((x) => x.Dimensions[1].Value))].sort(), ["p0", "p1"]);
+  });
+});
+
+/* ==================================================================
     §4 THE IDENTITY VERIFIER ON RESTORE STATES (L6-4 item 3)
    ================================================================== */
 const readOf = (setCookie: string | null | undefined): SessionCookieRead => readSessionCookie((setCookie as string).split(";")[0]);
@@ -758,6 +870,16 @@ describe("§5 awsDeploy generation-gate: the switch never races ahead of the ado
     assert.equal(await gate("r-l62-other"), EXIT_FAILED, "another restore's id");
     assert.match(lines.join("\n"), /GATE CLOSED/);
     assert.equal(writesOf(script), 0, "the gate only reads");
+    /* L6-5B (owner decision: the plan relies on the gate's attestation): the gate's OWN record binds certification. */
+    const recordFile = path.join(scratch, `gen-gate-${Date.now()}.json`);
+    assert.equal(await runDeployCommand(["generation-gate", "--runtime-parameter", runtimeArn, "--environment", env, "--generation", "2", "--restore-id", restoreId, "--record", recordFile], deps), EXIT_OK);
+    const record = JSON.parse(fs.readFileSync(recordFile, "utf8"));
+    assert.equal(generationAttestationProblem(record, { generation: 2, game_table: logical.g2, restore_id: restoreId }, { environment: env }), null, JSON.stringify(record.checks));
+    assert.match(generationAttestationProblem(record, { generation: 2, game_table: logical.g2, restore_id: "r-l62-other" }, { environment: env }) ?? "", /restore_id/, "a hand-entered replacement is refused");
+    const closedFile = path.join(scratch, `gen-gate-closed-${Date.now()}.json`);
+    assert.equal(await runDeployCommand(["generation-gate", "--runtime-parameter", runtimeArn, "--environment", env, "--generation", "2", "--restore-id", "r-l62-other", "--record", closedFile], deps), EXIT_FAILED);
+    assert.match(generationAttestationProblem(JSON.parse(fs.readFileSync(closedFile, "utf8")), { generation: 2, game_table: logical.g2, restore_id: "r-l62-other" }, { environment: env }) ?? "", /not OPEN/);
+    assert.equal(writesOf(script), 0, "the record is a local file: still nothing written to any table");
   });
 });
 
@@ -846,6 +968,15 @@ describe("§7 awsDeploy relayer-rotation-gate: never while the OLD address's REL
     assert.equal(await gate(), EXIT_OK, lines.join("\n"));
     assert.match(lines.join("\n"), /GATE OPEN/);
     assert.ok(script.calls.filter((c) => c.op === "QueryCommand").every((c) => c.detail.includes(`RELAYQ#${oldAddress}`) && !c.detail.includes(`RELAYQ#${newAddress}`)), "only the old queue is read");
+    /* L6-5B (review M2): the gate's REAL record (with its "never consulted" SKIP) binds certification; a closed one never. */
+    const openFile = path.join(scratch, `rot-gate-${Date.now()}.json`);
+    assert.equal(await runDeployCommand(["relayer-rotation-gate", "--runtime-parameter", runtimeArn, "--environment", "staging", "--from-relayer", oldAddress, "--to-relayer", newAddress, "--evidence", drained, "--record", openFile], deps), EXIT_OK);
+    const openRecord = JSON.parse(fs.readFileSync(openFile, "utf8"));
+    assert.ok(openRecord.checks.some((c: { status: string }) => c.status === "skipped"), "the real record carries the skipped check");
+    assert.equal(rotationGateRecordProblem(openRecord, { environment: "staging", from: oldAddress, to: newAddress }), null);
+    const closedFile = path.join(scratch, `rot-gate-closed-${Date.now()}.json`);
+    assert.equal(await runDeployCommand(["relayer-rotation-gate", "--runtime-parameter", runtimeArn, "--environment", "staging", "--from-relayer", oldAddress, "--to-relayer", newAddress, "--evidence", evidenceDir(1), "--record", closedFile], deps), EXIT_FAILED);
+    assert.match(rotationGateRecordProblem(JSON.parse(fs.readFileSync(closedFile, "utf8")), { environment: "staging", from: oldAddress, to: newAddress }) ?? "", /not OPEN/);
     /* The configuration already names another address (rotated before the proof): refused. */
     assert.equal(await gate(drained, "juno1pppppppppppppppppppppppppppppppppppppppp", newAddress), EXIT_FAILED);
     assert.match(lines.join("\n"), /neither --from-relayer nor --to-relayer/);

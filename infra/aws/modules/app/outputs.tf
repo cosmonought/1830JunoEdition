@@ -93,3 +93,35 @@ output "caching_disabled_policy_id" {
 output "distribution_id" {
   value = var.edge.create_distribution ? aws_cloudfront_distribution.site[0].id : null
 }
+
+# ---------------- LIVE-6 L6-5B: the alarms (identifiers only: no action ARN, no state) ----------------
+
+output "alarm_namespace" {
+  description = "The namespace every game-server alarm reads (L6-5A's EMF)."
+  value       = local.alarm_namespace
+}
+
+output "alarms" {
+  description = "Every alarm by contract key (`<id>`, `<pool>/<id>`, `primary/<id>`): its stable name, class, scope, the pool it watches (null: environment), whether it is flip-suppressible and, if so, the composite that carries its actions. For L6-2's flip, L6-6's staging certification and operator verification."
+  value = {
+    for key, a in local.alarm_instances : key => {
+      name         = a.name
+      class        = a.class
+      scope        = a.scope
+      pool         = a.pool
+      suppressible = a.suppressible
+      notify       = a.suppressible ? "${a.name}-notify" : null
+    }
+  }
+}
+
+output "flip_suppression" {
+  description = "The planned-flip suppression seam (L6-2 -> L6-5B): the per-pool suppressor alarms and the metric `gamesDoctor aws flip` publishes into them."
+  value = {
+    namespace          = local.suppressor.namespace
+    metric             = local.suppressor.metric
+    statistic          = local.suppressor.statistic
+    max_window_minutes = local.suppressor.max_window_minutes
+    suppressors        = local.suppressor_name
+  }
+}

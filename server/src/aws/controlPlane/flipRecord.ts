@@ -68,7 +68,16 @@ export interface FlipRecord {
   readonly cas: null | { readonly at: number; readonly run: string | null; readonly outcome: string; readonly version: number | null; readonly detail: string };
   /** The planned-flip observability window (L6-5B: alarm ACTIONS on the expected role-change signals are suppressed only
    *  inside it, and only until `expires_at`). Closed when the roles settle AND the recovery pass settles. */
-  readonly window: null | { readonly opened_at: number; readonly expires_at: number; readonly closed_at: number | null };
+  readonly window: null | {
+    readonly opened_at: number;
+    readonly expires_at: number;
+    readonly closed_at: number | null;
+    /** LIVE-6 L6-5B: what became of this window's alarm suppression -- the open's outcome (`published`, `failed`,
+     *  `refused`, `not-configured`), then `closed` once its close was decided. Only a `published` open is ever closed
+     *  (the encoding is additive: a close without its open would cancel another window's). Absent: a record from before
+     *  L6-5B -- no suppression was opened, none is closed. */
+    readonly suppression?: "published" | "failed" | "refused" | "not-configured" | "nothing-to-publish" | "closed";
+  };
   readonly observations: ReadonlyArray<{ readonly at: number; readonly checks: readonly EvidenceCheck[] }>;
   readonly after: FlipSnapshot | null;
 }
@@ -107,4 +116,16 @@ export function readFlipRecordFile(file: string): { readonly from: string; reado
   /* Review L4: from the window's opening (before the CAS), so an exit 3/4 between the window and the CAS's answer is
      judged too; the CAS's own instant only when there is no window. */
   return { from: record.from, to: record.to, version: record.cas.version, since: Math.min(record.window?.opened_at ?? record.cas.at, record.cas.at), rollback: record.rollback === true };
+}
+
+/** LIVE-6 L6-5B: the planned-flip window a record states (null: none, or the file is not a flip record) -- for the
+ *  verifier's suppression check (a suppressor may be ALARM only inside an open, unexpired window of its pool). */
+export function flipWindowOfFile(file: string): { readonly from: string; readonly to: string; readonly opened_at: number; readonly expires_at: number; readonly closed_at: number | null } | null {
+  try {
+    const record = parseFlipRecord(fs.readFileSync(file, "utf8"));
+    if ("problem" in record || record.window === null) return null;
+    return { from: record.from, to: record.to, opened_at: record.window.opened_at, expires_at: record.window.expires_at, closed_at: record.window.closed_at };
+  } catch {
+    return null;
+  }
 }

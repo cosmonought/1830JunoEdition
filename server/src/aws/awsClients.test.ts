@@ -294,6 +294,8 @@ describe("L5-1 AWS client convention", () => {
       if (relative !== "aws/awsClients.ts" && /new\s+DynamoDB(Client)?\s*\(/.test(text)) offenders.push(`${relative}: constructs a DynamoDB client`);
       if (relative !== "aws/awsClients.ts" && /new\s+KMS(Client)?\s*\(/.test(text)) offenders.push(`${relative}: constructs a KMS client`);
       if (relative !== "aws/awsClients.ts" && /new\s+(SSM|SecretsManager)(Client)?\s*\(/.test(text)) offenders.push(`${relative}: constructs an SSM or Secrets Manager client`);
+      /* LIVE-6 L6-5B: a CloudWatch client is made only by the factory, and used only by the operator's flip-window publisher. */
+      if (relative !== "aws/awsClients.ts" && /new\s+CloudWatch(Client)?\s*\(/.test(text)) offenders.push(`${relative}: constructs a CloudWatch client`);
       if (/DynamoDBDocument(Client)?\b/.test(text) && relative !== "aws/awsClients.test.ts") offenders.push(`${relative}: uses the document client (it marshals values: stored bytes must be exact)`);
       /* LIVE-6 L6-3 (review L4): no writer entry point in the operator tooling, and the L5-2 stores it reads through are
          used for `load` only, never kept in a variable (so no other method can be reached). */
@@ -306,7 +308,10 @@ describe("L5-1 AWS client convention", () => {
       }
       const modules = [...text.matchAll(/(?:from\s+|require\(\s*|import\(\s*)["'`]([^"'`]+)["'`]/g)].map((match) => match[1]);
       for (const name of modules) {
-        if (name === "@aws-sdk/client-ssm" || name === "@aws-sdk/client-secrets-manager") {
+        if (name === "@aws-sdk/client-cloudwatch") {
+          /* L6-5B: the factory and the operator's planned-flip publisher only -- never a serving task (its metrics are EMF). */
+          if (relative !== "aws/awsClients.ts" && relative !== "aws/operator/flipSuppression.ts" && relative !== "persistence/conformance/l6_5bAlarms.test.ts") offenders.push(`${relative}: imports ${name} (only the operator's flip-window publisher reaches CloudWatch)`);
+        } else if (name === "@aws-sdk/client-ssm" || name === "@aws-sdk/client-secrets-manager") {
           if (!configClientFiles.has(relative) && !(runtime && relative.endsWith(".test.ts"))) offenders.push(`${relative}: imports ${name} (only the runtime configuration's source reads SSM and Secrets Manager)`);
         } else if (name.startsWith("@aws-sdk/") && name !== "@aws-sdk/client-dynamodb" && name !== "@aws-sdk/client-kms") offenders.push(`${relative}: imports ${name}`);
         if (name.startsWith("@smithy/")) offenders.push(`${relative}: reaches into ${name} directly`);

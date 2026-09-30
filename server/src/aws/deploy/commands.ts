@@ -16,6 +16,10 @@
 //
 //   verify      --runtime-parameter <SSM ARN> --environment <env> --primary-pool <pool> --generation <N>
 //               [--pools p1,p2] (--evidence <dir> | --no-evidence) [--flip-record <file>] [--part app|all]
+//               [--game-generations 1,2] [--page-actions <arn,...>] [--ticket-actions <arn,...>]
+//       LIVE-6 L6-5B: every managed game-table generation (default: the serving one) is checked for TTL `ttl`; with
+//       evidence, the CloudWatch alarms against alarm-contract.json (`controlPlane/alarmContract.ts`). The action lists,
+//       when given (an EMPTY value is a valid staging answer), must be exactly the page / ticket alarms' destinations.
 //   verify      --part ledger --ledger-table-arn <ARN> --environment <env> --generation <N>
 //       Read-only (`deployVerify.ts`). `app` (the default) runs with the app account's credentials (the bootstrap role):
 //       the documents, the game and identity tables in full, the ledger's DescribeTable (cross-account), APPGEN, the
@@ -44,9 +48,11 @@ import { parseDynamoTableArn, parseKmsKeyArn, parseSsmParameterArn } from "../ar
 import { loadAwsStartup, type AwsStartup } from "../runtime/awsMain";
 import type { ParameterSource } from "../runtime/configSource";
 import { AWS_RUNTIME_CONFIG_FORMAT_V2 } from "../runtime/runtimeConfig";
-import { readFlipRecordFile } from "../controlPlane/flipRecord";
+import { flipWindowOfFile, readFlipRecordFile } from "../controlPlane/flipRecord";
 import { checkDrained, checkManifest, POOL_EVIDENCE_FILES, readEvidence } from "../controlPlane/evidence";
 import { RELAYER_ADDRESS, relayQueueState } from "./relayerRotation";
+import { GENERATION_GATE_FORMAT, ROTATION_GATE_FORMAT, writeGateRecord } from "./gateRecords";
+import type { FlipWindowFacts } from "../controlPlane/alarmContract";
 import { adoptionBindingProblem, generationMarkerProblem, readGenerationMarker, type GenerationMarker } from "../game/generationMarker";
 import { readAdoptionRecord, readAppGeneration } from "../ledger/appGeneration";
 import { applyBootstrap, bootstrapPlan, BootstrapUnknownError, inspectBootstrap, type BootstrapClients, type BootstrapTarget, type RecordState } from "./bootstrap";
@@ -212,8 +218,27 @@ const siblingRuntimeParameter = (primaryArn: string, environment: string, pool: 
   return `arn:aws:ssm:${parsed.region}:${parsed.account}:parameter/gs/${environment}/runtime/${pool}`;
 };
 
+/** L6-5B: `--game-generations 1,2` (every managed generation; default the serving one). */
+function gameGenerationsOf(flags: Map<string, string>, serving: number): number[] {
+  const text = flags.get("--game-generations");
+  if (text === undefined) return [serving];
+  const list = text.split(",").map((g) => g.trim()).filter((g) => g.length > 0).map((g) => generationOf(g));
+  if (!list.includes(serving)) throw new UsageError("--game-generations must include the serving --generation");
+  return [...new Set(list)].sort((a, b) => a - b);
+}
+
+/** L6-5B: an alarm action list flag -- absent: not judged (class consistency only); `none` (or empty): none configured. */
+function actionListOf(flags: Map<string, string>, name: string): string[] | null {
+  const text = flags.get(name);
+  if (text === undefined) return null;
+  if (text === "none") return []; // an empty list, spelled so PowerShell cannot drop it
+  const list = text.split(",").map((a) => a.trim()).filter((a) => a.length > 0);
+  for (const arn of list) if (!/^arn:aws:(sns|lambda|ssm-incidents|ssm):[a-z0-9-]*:[0-9]{12}:.+$/.test(arn)) throw new UsageError(`${name}: ${arn.slice(0, 100)} is not a CloudWatch alarm action ARN`);
+  return list;
+}
+
 export async function verifyCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {
-  const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--primary-pool", "--generation", "--pools", "--evidence", "--part", "--ledger-table-arn", "--port", "--flip-record"], ["--no-evidence"]);
+  const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--primary-pool", "--generation", "--pools", "--evidence", "--part", "--ledger-table-arn", "--port", "--flip-record", "--game-generations", "--page-actions", "--ticket-actions"], ["--no-evidence"]);
   const part = flags.get("--part") ?? "app";
   if (!["app", "ledger", "all"].includes(part)) throw new UsageError("--part is app, ledger or all");
   const environment = environmentOf(need(flags, "--environment"));
@@ -271,18 +296,27 @@ export async function verifyCommand(argv: readonly string[], deps: DeployDeps): 
     checks.push({ name: `runtime document ${pool}: same route table`, status: same ? "pass" : "fail", detail: same ? "as the primary's" : "another route table than the primary's (every pool must route alike)" });
   }
   let flip: { readonly since: number; readonly from: string; readonly to: string; readonly rollback: boolean } | null = null;
+  let flipWindow: FlipWindowFacts | null = null;
   const flipRecordFile = flags.get("--flip-record");
   if (flipRecordFile !== undefined) {
     const record = readFlipRecordFile(flipRecordFile);
     if ("problem" in record) checks.push({ name: "flip record", status: "fail", detail: record.problem });
     else {
       flip = { since: record.since, from: record.from, to: record.to, rollback: record.rollback };
+      flipWindow = flipWindowOfFile(flipRecordFile);
       checks.push({ name: "flip record: primary", status: record.to === primary ? "pass" : "fail", detail: record.to === primary ? `the flip made ${record.to} primary (routing v${record.version})` : `the flip record names ${record.to}, --primary-pool is ${primary}` });
     }
   }
 
   const { clients, tables } = clientsFor(deps, startup);
-  checks.push(...checkTable("game table", await readTableEvidence(clients.app, tables.game, { backupsAndTtl: true }), { name: names.gameTable, ttlAttribute: null }));
+  /* LIVE-6 L6-5B: TTL `ttl` (L6-5A's diagnostic TASK# items) on the serving table -- and on every other managed generation
+     named, where an old generation's straggler writes its heartbeat. */
+  checks.push(...checkTable("game table", await readTableEvidence(clients.app, tables.game, { backupsAndTtl: true }), { name: names.gameTable, ttlAttribute: "ttl" }));
+  for (const other of gameGenerationsOf(flags, generation).filter((g) => g !== generation)) {
+    const otherName = expectedNames(environment, other).gameTable;
+    const physical = deps.tables?.({ gameTable: otherName, identityTable: startup.config.identityTable, ledgerArn: startup.config.ledger.arn }).game ?? otherName;
+    checks.push(...checkTable(`game table g${other}`, await readTableEvidence(clients.app, physical, { backupsAndTtl: true }), { name: otherName, ttlAttribute: "ttl" }));
+  }
   checks.push(...checkTable("identity table", await readTableEvidence(clients.app, tables.identity, { backupsAndTtl: true }), { name: names.identityTable, ttlAttribute: "ttl" }));
   const ledgerChecks = checkTable("ledger table", await readTableEvidence(clients.ledger, tables.ledger, { backupsAndTtl: part === "all" }), { name: names.ledgerTable, ttlAttribute: null });
   checks.push(...(part === "all" ? ledgerChecks : ledgerChecks.filter((c) => !c.name.endsWith(": PITR") && !c.name.endsWith(": TTL"))));
@@ -300,7 +334,21 @@ export async function verifyCommand(argv: readonly string[], deps: DeployDeps): 
   }
 
   if (flags.has("--no-evidence")) checks.push(skipped("control-plane evidence", "--no-evidence: task definitions, services, target group, ALB, edge and security groups NOT checked"));
-  else checks.push(...checkEvidenceDirectory(need(flags, "--evidence"), { environment, pools, primaryPool: primary, port, runtimeParameterArns: runtimeArns, routes, flip, now: deps.now() }));
+  else {
+    checks.push(
+      ...checkEvidenceDirectory(need(flags, "--evidence"), {
+        environment,
+        pools,
+        primaryPool: primary,
+        port,
+        runtimeParameterArns: runtimeArns,
+        routes,
+        flip,
+        now: deps.now(),
+        alarms: { escrow: startup.escrowConfig !== null, pageActions: actionListOf(flags, "--page-actions"), ticketActions: actionListOf(flags, "--ticket-actions"), window: flipWindow },
+      }),
+    );
+  }
   return report(deps.out, checks);
 }
 
@@ -321,7 +369,7 @@ export async function verifyCommand(argv: readonly string[], deps: DeployDeps): 
  * and nothing about the switch may proceed. The current runtime document names the environment, region and ledger.
  */
 export async function generationGateCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {
-  const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--generation", "--restore-id", "--game-table"], []);
+  const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--generation", "--restore-id", "--game-table", "--record"], []);
   const environment = environmentOf(need(flags, "--environment"));
   const next = generationOf(need(flags, "--generation"));
   const restoreId = need(flags, "--restore-id");
@@ -362,6 +410,21 @@ export async function generationGateCommand(argv: readonly string[], deps: Deplo
     deps.out(`GATE OPEN: generation ${from} -> ${next} is adopted. In the app stack set generation = ${next}, keep ${from} in game_generations, and`);
     deps.out(`  generation_adoption = { generation = ${next}, game_table = "${table}", restore_id = "${restoreId}" }`);
   } else deps.out("GATE CLOSED: the runtime documents must NOT move to the new generation yet");
+  /* LIVE-6 L6-5B (owner decision: the plan relies on THIS attestation): the gate's own verdict, preserved as evidence. */
+  const recordFile = flags.get("--record");
+  if (recordFile !== undefined) {
+    writeGateRecord(recordFile, {
+      format: GENERATION_GATE_FORMAT,
+      environment,
+      from_generation: from,
+      verdict: exit === EXIT_OK ? "OPEN" : "CLOSED",
+      attestation: exit === EXIT_OK ? { generation: next, game_table: table, restore_id: restoreId } : null,
+      adoption_claim: adoption?.claim ?? null,
+      checks,
+      gated_at: new Date(deps.now()).toISOString(),
+    });
+    deps.out(`  the gate's record: ${recordFile} (${GENERATION_GATE_FORMAT}; keep it with the certification evidence)`);
+  }
   return exit;
 }
 
@@ -370,7 +433,7 @@ export async function generationGateCommand(argv: readonly string[], deps: Deplo
 /* ------------------------------------------------------------------ */
 
 export async function relayerRotationGateCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {
-  const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--from-relayer", "--to-relayer", "--evidence"], []);
+  const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--from-relayer", "--to-relayer", "--evidence", "--record"], []);
   const environment = environmentOf(need(flags, "--environment"));
   const from = need(flags, "--from-relayer");
   const to = need(flags, "--to-relayer");
@@ -403,6 +466,25 @@ export async function relayerRotationGateCommand(argv: readonly string[], deps: 
   checks.push({ name: `RELAYQ#${to}`, status: "skipped", detail: "the new address's queue is never consulted: the old queue's emptiness is never inferred from it" });
   const exit = report(deps.out, checks);
   deps.out(exit === EXIT_OK ? `GATE OPEN: RELAYQ#${from} is proven empty with every pool drained. Now change the relayer configuration to ${to} (Terraform escrow), then start the pools; the primary's task takes the new relayer role.` : "GATE CLOSED: the relayer address must NOT change yet");
+  /* LIVE-6 L6-5B: the gate's own verdict as evidence (L6-6: an unknown or closed gate fails certification). */
+  const recordFile = flags.get("--record");
+  if (recordFile !== undefined) {
+    const capturedAt = manifest.ok ? (manifest.value as { captured_at?: unknown }).captured_at : undefined;
+    writeGateRecord(recordFile, {
+      format: ROTATION_GATE_FORMAT,
+      environment,
+      from_relayer: from,
+      to_relayer: to,
+      configured_relayer: configured,
+      pools,
+      evidence_captured_at: typeof capturedAt === "string" ? capturedAt : null,
+      queue: queue.state,
+      verdict: exit === EXIT_OK ? "OPEN" : "CLOSED",
+      checks,
+      gated_at: new Date(deps.now()).toISOString(),
+    });
+    deps.out(`  the gate's record: ${recordFile} (${ROTATION_GATE_FORMAT}; keep it with the certification evidence)`);
+  }
   return exit;
 }
 
@@ -449,11 +531,11 @@ export async function signerKeysCommand(argv: readonly string[], deps: DeployDep
 export const USAGE = [
   "usage:",
   "  awsDeploy bootstrap --runtime-parameter <SSM ARN> --environment <env> --primary-pool <pool> --generation <N> --by <who> [--apply | --check]",
-  "  awsDeploy verify --runtime-parameter <SSM ARN> --environment <env> --primary-pool <pool> --generation <N> [--pools p1,p2] [--port 8917] (--evidence <dir> | --no-evidence) [--flip-record <file>] [--part app|all]",
+  "  awsDeploy verify --runtime-parameter <SSM ARN> --environment <env> --primary-pool <pool> --generation <N> [--pools p1,p2] [--port 8917] (--evidence <dir> | --no-evidence) [--flip-record <file>] [--part app|all] [--game-generations 1,2] [--page-actions <arn,...>] [--ticket-actions <arn,...>]",
   "  awsDeploy verify --part ledger --ledger-table-arn <ARN> --environment <env> --generation <N>",
   "  awsDeploy signer-keys --relayer <key ARN> --settlement <key ARN> --admission <key ARN>",
-  "  awsDeploy generation-gate --runtime-parameter <serving SSM ARN> --environment <env> --generation <N+1> --restore-id <id>",
-  "  awsDeploy relayer-rotation-gate --runtime-parameter <SSM ARN> --environment <env> --from-relayer <old> --to-relayer <new> --evidence <dir>",
+  "  awsDeploy generation-gate --runtime-parameter <serving SSM ARN> --environment <env> --generation <N+1> --restore-id <id> [--record <file>]",
+  "  awsDeploy relayer-rotation-gate --runtime-parameter <SSM ARN> --environment <env> --from-relayer <old> --to-relayer <new> --evidence <dir> [--record <file>]",
 ].join("\n");
 
 export async function runDeployCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {

@@ -6,11 +6,15 @@
 #   gs-<env>-game-g<N>   ONE PER MANAGED GENERATION (LIVE-6 L6-2, L6-4 §12.1 item 2): `game_generations` side by side, the
 #                        serving one being `generation`. g<N> is never replaced by a switch: a restore's g<N+1> is made
 #                        by RestoreTableToPointInTime outside Terraform, then imported (stacks/app), and this resource then
-#                        RE-ENABLES its PITR and deletion protection (a restore carries neither) -- it has no TTL. g<N>
+#                        RE-ENABLES its PITR, deletion protection and TTL (a restore carries none of them). g<N>
 #                        stays managed and protected until explicitly retired (removed from the set, prevent_destroy lifted
 #                        deliberately). SYSTEM/GENERATION is the bootstrap's (the first table) or the restore
 #                        preparation's (L6-4), never Terraform's.
-#                        no TTL (no authoritative item carries one). SYSTEM/ROUTING is written by the deploy bootstrap
+#                        TTL attribute `ttl` (LIVE-6 L6-5B): ONLY L6-5A's diagnostic TASK#<task>/TASK items carry it (last seen
+#                        + 1 day); no authoritative item ever does (a source guard). EVERY managed generation has it: a task
+#                        configured for g<N> writes its TASK# heartbeat into g<N> -- a straggler of an old generation too, which
+#                        is exactly what a restore's quietness check (L6-6R) reads there, by freshness (`updated_at`), never
+#                        by presence (TTL deletion is late and never a stop proof). SYSTEM/ROUTING is written by the deploy bootstrap
 #                        (`npm run awsDeploy -- bootstrap`), never by Terraform: a mutable control-plane record Terraform
 #                        would otherwise "correct" back after an operator's flip (L6-2). POOL#<p> is the first task's.
 #   gs-<env>-identity    TTL attribute `ttl` (grants, commit markers). ROLE#identity-writer is the first takeover's.
@@ -38,6 +42,12 @@ resource "aws_dynamodb_table" "game" {
   attribute {
     name = "sk"
     type = "S"
+  }
+
+  # LIVE-6 L6-5B: the diagnostic TASK# items expire (L6-5A: `ttl` = last seen + 1 day); nothing authoritative has a `ttl`.
+  ttl {
+    enabled        = true
+    attribute_name = "ttl"
   }
 
   point_in_time_recovery {

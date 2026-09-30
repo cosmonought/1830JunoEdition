@@ -12,7 +12,8 @@
 //     `checkEscrowConfigForAws`) -- a document the verifier accepts is one the task accepts -- and against the naming
 //     contract (gs-<env>-game-g<N>, gs-<env>-identity, gs-<env>-ledger; the environment and generation asked for);
 //   - the three tables: string pk HASH + sk RANGE and nothing else, on-demand, no GSI/LSI, no replicas, deletion
-//     protection, ACTIVE; PITR enabled; TTL `ttl` on the identity table ONLY;
+//     protection, ACTIVE; PITR enabled; TTL `ttl` on the identity table and (LIVE-6 L6-5B) on EVERY managed game-table
+//     generation (L6-5A's diagnostic TASK# items), never on the ledger;
 //   - APPGEN = the generation, SYSTEM/ROUTING = the primary pool (the bootstrap's inspection, reads only), and (L6-2, from
 //     L6-4) the game table's SYSTEM/GENERATION by the task's own startup rule (`checkGenerationMarker`);
 //   - with escrow: every KMS key by its key ARN is enabled, customer-managed, single-region, ECC_SECG_P256K1 /
@@ -32,7 +33,11 @@
 //   - the ALB idle timeout >= 120 s;
 //   - the distribution's /gs* behaviour is the first to match /gs paths, uncached (Managed-CachingDisabled), and its
 //     origin request policy forwards ALL query strings (cp, cr, cb), all cookies, Origin and the WebSocket headers;
-//   - the task security group admits the container port from the ALB's security group and nothing else.
+//   - the task security group admits the container port from the ALB's security group and nothing else;
+//   - (LIVE-6 L6-5B, `controlPlane/alarmContract.ts`) the CloudWatch alarms against alarm-contract.json: every alarm,
+//     its metrics / math / dimensions / thresholds / evaluation / missing data, the page / ticket wiring class, the
+//     primary-only scope, the flip suppression (composites, suppressors, none in ALARM outside a window), no alarm muted,
+//     nothing outside the contract.
 //
 // Every check is reported (name, ok, detail); nothing is skipped silently: a part the caller did not ask for is reported
 // "skipped" by name, and a missing evidence file is a failure.
@@ -63,6 +68,7 @@ import {
   readRevisions,
   serviceOf as poolServiceOf,
 } from "../controlPlane/evidence";
+import { checkAlarmsEvidence, type FlipWindowFacts } from "../controlPlane/alarmContract";
 
 export interface Check {
   readonly name: string;
@@ -512,6 +518,8 @@ export const EVIDENCE_FILES = Object.freeze({
   originRequestPolicy: "origin-request-policy.json",
   securityGroups: "security-groups.json",
   listenerRules: "listener-rules.json",
+  /** LIVE-6 L6-5B: `aws cloudwatch describe-alarms --alarm-name-prefix gs-<env>-` (metric and composite alarms). */
+  alarms: "alarms.json",
 });
 
 /** Every control-plane check over an evidence directory (a missing or unparseable file is a failure, never a skip). */
@@ -530,6 +538,15 @@ export function checkEvidenceDirectory(
      *  role change is then reported, not required). Only the flip's two pools are judged. */
     readonly flip?: { readonly since: number; readonly from: string; readonly to: string; readonly rollback: boolean } | null;
     readonly now?: number;
+    /** LIVE-6 L6-5B: the alarms against the contract. Absent: the alarm evidence is not judged (reported "skipped" by the
+     *  caller, never silently). */
+    readonly alarms?: {
+      readonly escrow: boolean;
+      readonly pageActions: readonly string[] | null;
+      readonly ticketActions: readonly string[] | null;
+      /** The flip's window (its record), when one may still be open. */
+      readonly window: FlipWindowFacts | null;
+    };
   },
 ): Check[] {
   const read = (file: string): { ok: true; value: Json } | { ok: false; check: Check } => {
@@ -599,5 +616,14 @@ export function checkEvidenceDirectory(
   checks.push(...(sgs.ok ? checkSecurityGroupsEvidence(sgs.value, expect) : [sgs.check]));
   const rules = read(EVIDENCE_FILES.listenerRules);
   checks.push(...(rules.ok ? checkPoolListenerRules(rules.value, { primary: expect.primaryPool, routes: expect.routes, targetGroups }) : [rules.check]));
+  /* LIVE-6 L6-5B: the alarms (the services run: the heartbeat exists). */
+  if (expect.alarms !== undefined) {
+    const alarms = read(EVIDENCE_FILES.alarms);
+    checks.push(
+      ...(alarms.ok
+        ? checkAlarmsEvidence(alarms.value, { environment: expect.environment, pools: expect.pools, primaryPool: expect.primaryPool, escrow: expect.alarms.escrow, services: true, pageActions: expect.alarms.pageActions, ticketActions: expect.alarms.ticketActions, flip: expect.alarms.window, now: expect.now ?? Date.now() })
+        : [alarms.check]),
+    );
+  }
   return checks;
 }

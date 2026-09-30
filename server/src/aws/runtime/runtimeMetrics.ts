@@ -39,7 +39,9 @@
 
 /** CloudWatch namespace of every metric this server emits (stable: L6-5B's alarms name it). */
 export const METRIC_NAMESPACE = "18Cosmos/GameServer";
-/** The record schema. A change of any name, kind, unit or scope below is a new schema number and an L6-5B change. */
+/** The record schema. A change of any name, kind, unit or scope below is a new schema number and an L6-5B change.
+ *  LIVE-6 L6-5B ADDED metrics (the relayer's paging state, the generation / restore signals) and changed none: an
+ *  addition is not a change of an existing series, so the schema stays 1. */
 export const METRIC_SCHEMA = 1;
 
 export type MetricKind = "counter" | "gauge";
@@ -84,6 +86,9 @@ export const METRICS = Object.freeze({
   Unready: gauge("None"),
   UnreadySeconds: gauge("Seconds"),
   Standby: gauge("None"),
+  /** LIVE-6 L6-5B: 1 on the task holding the identity-writer role (from its takeover on); absent on every other task.
+   *  The primary heartbeat (A13) counts its samples, so an alarm left on a demoted pool finds none and pages. */
+  Primary: gauge("None"),
   PoolWriterConfirmed: gauge("None"),
   PoolWriterCheckAgeSeconds: gauge("Seconds"),
   /* the money claim sweep's health at each status tick */
@@ -107,6 +112,42 @@ export const METRICS = Object.freeze({
   KmsOtherFailure: counter("environment"),
   /* the diagnostic TASK# item's own writes (never a correctness input) */
   TaskStatusWriteFailures: counter(),
+  /* ---------------- LIVE-6 L6-5B: the converged runtime's remaining conditions ---------------- */
+  /* L6-7's relayer paging state (`relayer.status()`), as gauges -- only from the relayer-role HOLDER whose relayer is
+     usable (L6-7: only the holder pages; a task without the role keeps its conditions silently). Never a game, an intent
+     or a condition code as a dimension: the condition codes stay in L6-7's `chain.relayer-page` audit lines. */
+  /** `paging.paged`: conditions that have PAGED (L6-7's thresholds). >= 1 is a page, never suppressed by a flip window.
+   *  Its alarm exists for EVERY pool (only the role holder emits it), so it follows the role, not the primary flag. */
+  RelayerPaging: gauge(),
+  /** `paging.waiting`: every waiting condition, paged or not yet. */
+  RelayerWaiting: gauge(),
+  /** `queue_mismatch`: RELAYQ# entries that disagree with their intent. */
+  RelayerQueueMismatch: gauge(),
+  /** `troubled`: intents backing off after an operational failure (F-L5-17). */
+  RelayerTroubled: gauge(),
+  /** Age of the oldest waiting condition (`paging.oldest_since`; 0 when none): no bookkeeping beyond L6-7's own. */
+  RelayerOldestWaitingSeconds: gauge("Seconds"),
+  /* L6-4 / L6-2: generation and restore. Counted at the one place the runtime decides each (never a REVIEW# scan). */
+  /** The subset of `StartupRefused` refused by the GENERATION rules before the pool: APPGEN absent / unreadable / another
+   *  number, the table's SYSTEM/GENERATION missing / damaged / another generation or table, or an adoption binding
+   *  another table or restore (`refusal` generation | adoption). */
+  StartupRefusedGeneration: counter("environment"),
+  /** The subset of `StartupRefused` refused because the identity table's restore is incomplete (L6-4: not `complete`,
+   *  a superseded source, an unreplayed copy -- the identity load's `IdentityRestoreIncompleteError`). */
+  StartupRefusedIdentityRestore: counter("environment"),
+  /** The subset of `TaskLost` whose cause is `generation-moved`: APPGEN moved under a serving task (its generation fence).
+   *  A planned restore stops every task BEFORE the adoption (L6-6R's restore-quiet), so this is never an expected effect. */
+  GenerationLost: counter("environment"),
+  /** A money game HELD `journal-ahead` (the durable hold: the log does not reproduce what the ledger reserved, or the chain
+   *  is ahead of it) -- after a restore, the F1 / quorum check's failure. From the escrow service's own `settlement.held`
+   *  audit, as it is written (no second decision). */
+  MoneyHeldJournalAhead: counter("environment"),
+  /** 1 on the primary of a RESTORED game table (its SYSTEM/GENERATION origin `restore`: L6-2's post-restore safe mode,
+   *  for the table's whole life -- a state, not an alarm). */
+  RestoreSafeMode: gauge("None"),
+  /** On a restored table: the money games whose restore check has run and is still PENDING (read-only, neither verified
+   *  nor held). Only a primary has an escrow service; its alarm exists for every pool, like `RelayerPaging`. */
+  RestoreUnverifiedGames: gauge(),
 } satisfies Record<string, MetricSpec>);
 
 export type MetricName = keyof typeof METRICS;
@@ -124,6 +165,8 @@ export type MetricEvent =
   | "readiness-transition"
   | "relayer-transition"
   | "relayer-takeover"
+  /** L6-5B: a money game held `journal-ahead` (the escrow service's `settlement.held`). */
+  | "money-held"
   | "task-status";
 
 /** The only property names a record may carry (anything else is dropped). None of them may hold an identity, a game, a
@@ -153,6 +196,8 @@ export const METRIC_PROPERTIES = Object.freeze([
   "kms_last_failure_at",
   "task_status",
   "uptime_seconds",
+  /** L6-5B: why a start was refused, as a fixed code (generation | adoption | identity-restore | other), never the text. */
+  "refusal",
 ] as const);
 export type MetricProperty = (typeof METRIC_PROPERTIES)[number];
 const PROPERTY_SET: ReadonlySet<string> = new Set(METRIC_PROPERTIES);

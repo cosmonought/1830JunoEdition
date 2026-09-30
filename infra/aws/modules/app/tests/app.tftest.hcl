@@ -121,8 +121,8 @@ run "tables_match_the_contract" {
     error_message = "Both tables: string pk/sk, on-demand, deletion protection, PITR, no GSI/LSI, never a Global Table."
   }
   assert {
-    condition     = length([for t in aws_dynamodb_table.game["1"].ttl : t if t.enabled]) == 0
-    error_message = "The game table has no TTL."
+    condition     = one(aws_dynamodb_table.game["1"].ttl).enabled && one(aws_dynamodb_table.game["1"].ttl).attribute_name == "ttl"
+    error_message = "LIVE-6 L6-5B: the game table's TTL is `ttl` -- carried ONLY by L6-5A's diagnostic TASK# items (was: no TTL)."
   }
   assert {
     condition     = aws_dynamodb_table.identity.ttl[0].enabled && aws_dynamodb_table.identity.ttl[0].attribute_name == "ttl"
@@ -397,7 +397,7 @@ run "a_missing_or_foreign_routing_refuses_the_services" {
     values = { item = "{\"pk\":{\"S\":\"SYSTEM\"},\"sk\":{\"S\":\"ROUTING\"},\"fmt\":{\"N\":\"1\"},\"primary_pool\":{\"S\":\"p9\"},\"routing_version\":{\"N\":\"1\"},\"updated_at\":{\"N\":\"0\"},\"updated_by\":{\"S\":\"x\"},\"claim\":{\"S\":\"c\"}}" }
   }
 
-  expect_failures = [aws_ecs_service.pool]
+  expect_failures = [aws_ecs_service.pool, aws_cloudwatch_metric_alarm.gs] # L6-5B: the primary-only alarms refuse the same move
 }
 
 run "two_pools_each_behind_its_own_target_group_on_its_exact_path" {
@@ -491,7 +491,7 @@ run "a_flip_before_the_routing_moved_is_refused" {
     }
   }
 
-  expect_failures = [aws_ecs_service.pool]
+  expect_failures = [aws_ecs_service.pool, aws_cloudwatch_metric_alarm.gs] # L6-5B: the primary-only alarms refuse the same move
 }
 
 run "refuses_a_drained_primary" {
@@ -521,8 +521,8 @@ run "generations_side_by_side_the_old_one_kept_protected" {
     error_message = "g<N> and g<N+1> side by side: moving the serving generation never removes the old table."
   }
   assert {
-    condition     = alltrue([for t in aws_dynamodb_table.game : t.deletion_protection_enabled && t.point_in_time_recovery[0].enabled && length([for x in t.ttl : x if x.enabled]) == 0])
-    error_message = "Every generation (an imported restore included) is re-protected: deletion protection and PITR on, no TTL."
+    condition     = alltrue([for t in aws_dynamodb_table.game : t.deletion_protection_enabled && t.point_in_time_recovery[0].enabled && one(t.ttl).enabled && one(t.ttl).attribute_name == "ttl"])
+    error_message = "Every generation (an imported restore included) is re-protected: deletion protection and PITR on, and (L6-5B) TTL on `ttl` for its TASK# items."
   }
   assert {
     condition     = jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value).generation == 2 && jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value).game_table == "gs-staging-game-g2"

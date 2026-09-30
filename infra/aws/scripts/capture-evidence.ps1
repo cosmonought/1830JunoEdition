@@ -62,6 +62,8 @@ if ([string]::IsNullOrEmpty($orp) -or $orp -eq "None") {
   Save "origin-request-policy.json" @("cloudfront", "get-origin-request-policy", "--id", $orp)
 }
 Save "security-groups.json" @("ec2", "describe-security-groups", "--filters", "Name=group-name,Values=gs-$Environment-task,gs-$Environment-alb")
+# LIVE-6 L6-5B: this environment's CloudWatch alarms (metric and composite) for the verifier's alarm contract.
+Save "alarms.json" @("cloudwatch", "describe-alarms", "--alarm-name-prefix", "gs-$Environment-", "--alarm-types", "MetricAlarm", "CompositeAlarm")
 $manifest = [ordered]@{ format = "18COSMOS/EVIDENCE/v1"; captured_at = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"); environment = $Environment; region = $Region; pools = @($pools) }
 Set-Content -Path (Join-Path $Out "manifest.json") -Value ($manifest | ConvertTo-Json -Compress) -Encoding utf8
 Write-Output "evidence written to $Out (read-only captures; no secret is in any of them)"

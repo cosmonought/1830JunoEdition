@@ -623,7 +623,31 @@ The design, the full metric table and the exact alarm handoff: Project `claude/L
 - **Never a correctness dependency.** A metric line or a `TASK#` write that fails (or a sink that throws) changes no
   decision, fence, exit code, audit line or security-journal write.
 
-**For L5-8 / L6-5B (IaC):** enable TTL on the game table with attribute `ttl` (only `TASK#` items carry it); the task
-role already has `dynamodb:PutItem` on the game table; no CloudWatch permission is needed for EMF (the task execution
-role's awslogs rights suffice). Run: `npm test` includes `aws/runtime/l6_5aObservability.test.js`;
+**Converged (L6-5B):** the non-primary task (L6-1's router; L5-7's standby) is observed like the primary; it answers
+ready, so it reads `Ready 1 / Unready 0 / Standby 1` and its role code is `non-primary`. TTL `ttl` is enabled on every
+managed game-table generation (§15); the task role needs nothing new (EMF goes through its log group). Run: `npm test` includes `aws/runtime/l6_5aObservability.test.js`;
 `npm run test:dynamodb-local` includes `persistence/conformance/taskStatus.dynamoLocal.test.js`.
+
+## 15. The CloudWatch alarms and the planned-flip suppression (LIVE-6 L6-5B)
+
+The IaC half of LIVE-6 observability, on the converged runtime (L6-2 spine + L6-5A + L6-7). The design, the alarm table,
+the suppression state machine and the L6-6 handoff: Project `claude/LIVE6_L6_5B_CLOUDWATCH_ALARMS_2026-09-30.md`; the
+procedures: `infra/aws/README.md` ("Alarms", "The flip", the gates).
+
+| File | What it is |
+|---|---|
+| `runtime/runtimeMetrics.ts` | L6-5A's catalog + `RelayerPaging` / `Waiting` / `QueueMismatch` / `Troubled` / `OldestWaitingSeconds` (gauges from L6-7's `relayer.status()`, only while this task's relayer is usable), `StartupRefusedGeneration` / `StartupRefusedIdentityRestore` (the refusal's class, decided at the call site), `GenerationLost` (a loss to the generation fence), `MoneyHeldJournalAhead` (the escrow service's own `settlement.held` of code `journal-ahead`), `RestoreSafeMode` / `RestoreUnverifiedGames` |
+| `../escrow/escrowService.ts` | `restoreStatus()`: a read-only view of the restore checks' last answers (verified / pending / held); it starts and decides nothing |
+| `controlPlane/alarmContract.ts` | `ALARM_CONTRACT` (= `infra/aws/modules/app/alarm-contract.json`, pinned by a test) and `checkAlarmsEvidence` (the verifier's judge of `describe-alarms`) |
+| `controlPlane/flipSuppression.ts` | The window's suppressor datapoints (pure): +1 per minute per pool, the flip's two pools, never past `expires_at` (45 min) or CloudWatch's future limit; a close writes -1 over the same minutes (additive: overlapping windows compose) |
+| `operator/flipSuppression.ts` | The production publisher: CloudWatch `PutMetricData` into `18Cosmos/Operator` only (the only CloudWatch client in the server, operator-only) |
+| `operator/flip.ts` | `suppressFlipWindow` -- called when the window opens (before the CAS) and when it closes (a refused CAS; `recover --flip-record` settled); never throws, never changes the flip |
+| `deploy/gateRecords.ts` | `--record` of `generation-gate` / `relayer-rotation-gate`: the gate's own verdict, created once; `generationAttestationProblem` / `rotationGateRecordProblem` for certification |
+| `deploy/deployVerify.ts`, `deploy/commands.ts` | `verify`: TTL `ttl` on every managed game generation (`--game-generations`), the alarms (`alarms.json`; `--page-actions` / `--ticket-actions`) |
+
+**Nothing here is a correctness input.** A metric, a suppressor datapoint or a gate record grants, withholds or delays
+nothing: no fence, readiness, exit code or audit line changes; the runtime never makes a CloudWatch client.
+
+Run: `npm test` includes `persistence/conformance/l6_5bAlarms.test.js` (and L6-5B's block in `aws/runtime/l6_5aObservability.test.js`);
+`npm run test:dynamodb-local` includes the §3c suppression drill in `persistence/conformance/l6_2Flip.dynamoLocal.test.js`;
+`terraform test` in `infra/aws/modules/app` includes `tests/alarms.tftest.hcl`.

@@ -26,7 +26,11 @@
 //                   ledger) and KMS (L5-5: the three Juno keys sign through it -- `createKmsClient`, same rules, its own
 //                   tighter call bounds, preflight §11.2). L5-7: SSM Parameter Store (the runtime's non-secret
 //                   configuration) and Secrets Manager (secrets, read into memory only), same rules, AWS targets only.
+//                   LIVE-6 L6-5B: CloudWatch, for the OPERATOR only (`gamesDoctor aws flip` publishes its planned-flip
+//                   window's suppressor datapoints into 18Cosmos/Operator): same rules, AWS targets only; a serving task
+//                   never makes one (its metrics are EMF lines on stdout).
 
+import { CloudWatchClient } from "@aws-sdk/client-cloudwatch";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { KMSClient } from "@aws-sdk/client-kms";
 import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
@@ -203,6 +207,18 @@ export function createSsmClient(target: ConfigServiceTarget): SSMClient {
 export function createSecretsManagerClient(target: ConfigServiceTarget): SecretsManagerClient {
   const region = configTargetRegion(target, "a Secrets Manager");
   return new SecretsManagerClient({
+    ...PINNED_CLIENT_SETTINGS,
+    region,
+    maxAttempts: CONFIG_CALL_POLICY.maxAttempts,
+    requestHandler: { ...REQUEST_HANDLER_OPTIONS },
+  });
+}
+
+/** LIVE-6 L6-5B: CloudWatch for the operator's planned-flip window (`aws/operator/flipSuppression.ts`), bounded like the
+ *  configuration reads; AWS targets only (no local stand-in: the tests fake the publisher port above this client). */
+export function createCloudWatchClient(target: ConfigServiceTarget): CloudWatchClient {
+  const region = configTargetRegion(target, "a CloudWatch");
+  return new CloudWatchClient({
     ...PINNED_CLIENT_SETTINGS,
     region,
     maxAttempts: CONFIG_CALL_POLICY.maxAttempts,

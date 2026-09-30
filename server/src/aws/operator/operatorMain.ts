@@ -48,7 +48,10 @@ import { redactIdentity } from "../../persistence/opsRecorder";
 import { ssmParameterSource, type ParameterSource } from "../runtime/configSource";
 import { parseAwsRuntimeConfigText, type AwsRuntimeConfig } from "../runtime/runtimeConfig";
 import { parseFlipRecord, writeFlipRecord, type FlipRecord } from "../controlPlane/flipRecord";
-import { closeFlipWindow, DEFAULT_OBSERVE_MS, observeFlip, runFlip, type FlipDeps } from "./flip";
+import { closeFlipWindow, DEFAULT_OBSERVE_MS, observeFlip, runFlip, suppressFlipWindow, type FlipDeps } from "./flip";
+import { cloudWatchSuppression } from "./flipSuppression";
+import { createCloudWatchClient } from "../awsClients";
+import type { FlipSuppressionPort } from "../controlPlane/flipSuppression";
 import { orphansReport } from "./orphans";
 import { DEFAULT_MONEY_WAIT_MS, DEFAULT_RECOVERY_LIMIT, recoverFromPool, type RecoveryReport } from "./recovery";
 import { retirementCheck, type RetirementReport } from "./retire";
@@ -99,6 +102,9 @@ export interface OperatorSeams {
   readonly sleep?: (ms: number) => Promise<void>;
   /** L6-2: the flip observation's and money wait's poll interval (ms). */
   readonly pollMs?: number;
+  /** L6-5B: the planned-flip window's alarm suppression (production: CloudWatch in the deployment's region; DynamoDB
+   *  Local: none). null: none. */
+  readonly suppression?: FlipSuppressionPort | null;
 }
 
 export interface ParsedOperatorArgs {
@@ -334,6 +340,8 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     return EXIT.usage;
   }
   let target: OperatorTarget;
+  /** L6-5B: the flip window's CloudWatch client, when one was made (destroyed with the target's clients). */
+  let releaseCloudWatch: () => void = () => undefined;
   try {
     target = await resolveOperatorTarget({ argv, env, ...(seams.parameters !== undefined ? { parameters: seams.parameters } : {}), ...(seams.clientFor !== undefined ? { clientFor: seams.clientFor } : {}), ...(seams.readFile !== undefined ? { readFile: seams.readFile } : {}) });
   } catch (error) {
@@ -393,6 +401,15 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     };
     const note = one(args, "--note") ?? "";
     const sleep = seams.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    /* L6-5B: made only when a window can open or close (flip, recover); never for a local deployment. */
+    let cloudWatch: ReturnType<typeof createCloudWatchClient> | null = null;
+    releaseCloudWatch = () => cloudWatch?.destroy();
+    const suppressionPort = (): FlipSuppressionPort | null => {
+      if (seams.suppression !== undefined) return seams.suppression;
+      if (target.kind !== "aws") return null;
+      cloudWatch ??= createCloudWatchClient({ kind: "aws", region: target.config.region });
+      return cloudWatchSuppression(cloudWatch);
+    };
     const seconds = (name: string, fallback: number): number => {
       const text = one(args, name);
       return text !== undefined && /^[0-9]{1,6}$/.test(text) ? Number(text) * 1000 : fallback;
@@ -418,6 +435,7 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
         sleep,
         progress: (line) => io.err(line),
         ...(recordFile !== undefined ? { persist: (record: FlipRecord) => writeFlipRecord(recordFile, record) } : {}),
+        ...(apply ? { suppression: suppressionPort() } : {}),
       };
       let record: FlipRecord;
       if (command === "flip") {
@@ -472,11 +490,20 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
       );
       print(report, (r) => printRecovery(io, r));
       if (report.settled && recordFile !== undefined && flipRecord !== null && flipRecord.verdict === "roles-settled") {
+        /* L6-5B: the window's alarm suppression ends with it -- ONLY if this window's open was published, and ONCE: the
+           record says `closed` BEFORE the -1 is published, and nothing is published unless that record was written (a
+           re-run then finds it closed; a lost publication ends at expires_at anyway). Additive encoding (review M5, L-A). */
+        const closeSuppression = flipRecord.window !== null && flipRecord.window.closed_at === null && flipRecord.window.suppression === "published";
+        const windowClosed = closeFlipWindow(context, flipRecord, `the recovery of ${report.from} settled`);
+        const closed = closeSuppression && windowClosed.window !== null ? { ...windowClosed, window: { ...windowClosed.window, suppression: "closed" as const } } : windowClosed;
+        let written = false;
         try {
-          writeFlipRecord(recordFile, closeFlipWindow(context, flipRecord, `the recovery of ${report.from} settled`));
+          writeFlipRecord(recordFile, closed);
+          written = true;
         } catch (error) {
           io.err(`gamesDoctor aws recover: the recovery SETTLED, but the flip record could not be written back (${error instanceof Error ? error.message.slice(0, 200) : String(error)}): close the window by hand`);
         }
+        if (closeSuppression && written) await suppressFlipWindow(suppressionPort(), context, closed, "close");
       }
       return report.problems.length > 0 ? EXIT.findings : report.unresolved.some((u) => u.class === "mutation") ? EXIT.unknown : report.unresolved.length > 0 || report.remaining > 0 ? EXIT.findings : EXIT.ok;
     }
@@ -498,5 +525,6 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     return mutation ? EXIT.unknown : EXIT.findings;
   } finally {
     target.destroy();
+    releaseCloudWatch();
   }
 }

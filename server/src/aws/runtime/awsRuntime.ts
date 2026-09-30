@@ -377,6 +377,9 @@ export interface AwsRuntime {
   statusTick(): void;
 }
 
+/** L6-5B: a refused start's class, decided where the runtime refuses (a metric property and the subset counters). */
+type StartupRefusal = "generation" | "adoption" | "identity-restore" | "other";
+
 const describe = (error: unknown): string => (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 400);
 /** An error's CLASS for a metric property (its constructor name when it is a plain identifier), never its message. */
 const errorClassOf = (error: unknown): string => {
@@ -565,6 +568,9 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       const gauges: Partial<Record<MetricName, number>> = {
         ...readinessMetrics.gauges(answer),
         Standby: role === "non-primary" ? 1 : 0, // L6-5A's name; 1 on a non-primary task (L6-1: L5-7's standby)
+        /* L6-5B (review M1): ONLY the task that took the identity-writer role reports `Primary`, so the primary heartbeat
+           (A13, missing = breaching) left on a demoted pool pages instead of being satisfied by its router. */
+        ...(role === "primary" ? { Primary: 1 } : {}),
         ...(pool === undefined ? {} : { PoolWriterConfirmed: pool.lost === null && pool.ready ? 1 : 0, PoolWriterCheckAgeSeconds: Math.max(0, Math.floor(pool.lastGoodAgeMs / 1000)) }),
         ...primaryGauges(),
       };
@@ -596,6 +602,21 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   const flushCounters = (): void => {
     measureWithPending((pending) => (Object.values(pending).some((value) => typeof value === "number" && value > 0) ? { event: "counters-flush", metrics: pending, properties: { ...baseProperties(), role, phase } } : null));
   };
+
+  /** L6-5B: an ops recorder that passes every call through unchanged, then counts a `settlement.held` of code
+   *  `journal-ahead` (the escrow service's durable hold) as `MoneyHeldJournalAhead` -- the game id stays in the audit line. */
+  const journalAheadTap = (ops: OpsRecorder): OpsRecorder => ({
+    audit(event, fields) {
+      ops.audit(event, fields);
+      try {
+        if (event === "settlement.held" && fields?.code === "journal-ahead") measure(() => ({ event: "money-held", metrics: { MoneyHeldJournalAhead: 1 }, properties: { ...baseProperties(), role, phase } }));
+      } catch {
+        /* never past here */
+      }
+    },
+    status: (snapshot) => ops.status(snapshot),
+    flush: () => ops.flush(),
+  });
 
   /** What a startup that ends early must close (the pool writer's self-check, the game server): run once. */
   const closers: Array<() => void> = [];
@@ -630,7 +651,14 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
        self-check, a fence, a store, the ledger) adds nothing. The reason stays in the audit line, never in the metric. */
     measureWithPending((pending) => {
       const cause = lossCauseOf(reason);
-      return { event: "task-lost", metrics: { TaskLost: 1, ...(cause === "pool-superseded" ? { TaskSuperseded: 1 } : {}), ...pending }, properties: { ...baseProperties(), role, phase, cause } };
+      return {
+        event: "task-lost",
+        /* L6-5B: a loss to the generation fence (APPGEN moved under this serving task) is also its own count. */
+        /* L6-5B (review H1): TaskSuperseded is ALWAYS in the record (0 or 1), so A1's `TaskLost - TaskSuperseded` never
+           depends on filling a series that has no datapoint at all. */
+        metrics: { TaskLost: 1, TaskSuperseded: cause === "pool-superseded" ? 1 : 0, ...(cause === "generation-moved" ? { GenerationLost: 1 } : {}), ...pending },
+        properties: { ...baseProperties(), role, phase, cause },
+      };
     });
     stopWork();
     input.exit(EXIT_LOST);
@@ -653,10 +681,24 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     setTimeout(() => input.exit(EXIT_STORE_UNCERTAIN), timing.failFastDelayMs);
   };
 
-  function refuse(message: string): never {
+  function refuse(message: string, refusal: StartupRefusal = "other"): never {
     /* L6-5A: a refused start is counted (with what was still pending); a loss or restart request that ended it was
-       counted as that, and keeps its code. The stage is the last step reached (a fixed code), never the message. */
-    if (forcedExit() === null) measureWithPending((pending) => ({ event: "startup-refused", metrics: { StartupRefused: 1, ...pending }, properties: { ...baseProperties(), role, stage: steps.at(-1) ?? "none" } }));
+       counted as that, and keeps its code. The stage is the last step reached (a fixed code), never the message.
+       L6-5B: the refusal's CLASS, decided at the call site (never parsed from the message): the generation rules
+       (generation / adoption) and the identity restore each also count their own subset, so their alarms never depend on
+       a property filter. */
+    if (forcedExit() === null) {
+      measureWithPending((pending) => ({
+        event: "startup-refused",
+        metrics: {
+          StartupRefused: 1,
+          ...(refusal === "generation" || refusal === "adoption" ? { StartupRefusedGeneration: 1 } : {}),
+          ...(refusal === "identity-restore" ? { StartupRefusedIdentityRestore: 1 } : {}),
+          ...pending,
+        },
+        properties: { ...baseProperties(), role, stage: steps.at(-1) ?? "none", refusal },
+      }));
+    }
     stopWork();
     closeOpened();
     /* A loss or a restart request that came first keeps its code (3 / 4): a refusal never masks it as a 2. */
@@ -693,30 +735,30 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   try {
     adopted = await substrate.adoptedGeneration();
   } catch (error) {
-    return refuse(`the ledger's adopted app generation (APPGEN) could not be read (${describe(error)})`);
+    return refuse(`the ledger's adopted app generation (APPGEN) could not be read (${describe(error)})`, "generation");
   }
-  if (adopted === null) refuse("the ledger has no adopted app generation (APPGEN): an operator initialises it before the first start (L5-8 / runbook)");
+  if (adopted === null) refuse("the ledger has no adopted app generation (APPGEN): an operator initialises it before the first start (L5-8 / runbook)", "generation");
   if (adopted !== config.generation) {
-    refuse(`the ledger's adopted app generation is ${String(adopted)}, not this task's ${config.generation}: a task pointed at a superseded or unadopted game table does not start (it would fence nothing it may use)`);
+    refuse(`the ledger's adopted app generation is ${String(adopted)}, not this task's ${config.generation}: a task pointed at a superseded or unadopted game table does not start (it would fence nothing it may use)`, "generation");
   }
   /* LIVE-6 L6-4: the game table's own generation, the same number, naming this table -- still before the pool. */
   let marker: GenerationMarker | null;
   try {
     marker = await substrate.tableGeneration();
   } catch (error) {
-    return refuse(`the game table's generation marker (SYSTEM/GENERATION) could not be read (${describe(error)})`);
+    return refuse(`the game table's generation marker (SYSTEM/GENERATION) could not be read (${describe(error)})`, "generation");
   }
   const markerProblem = generationMarkerProblem(marker, { generation: config.generation, gameTable: config.gameTable });
-  if (markerProblem !== null) refuse(`${markerProblem}: a task never serves one generation's game data under another's signing authority`);
+  if (markerProblem !== null) refuse(`${markerProblem}: a task never serves one generation's game data under another's signing authority`, "generation");
   /* ... and the ledger ADOPTED this very table (several copies may be prepared as one generation; one is adopted). */
   let binding: AdoptionBinding | null;
   try {
     binding = await substrate.adoptionBinding();
   } catch (error) {
-    return refuse(`the ledger's APPGEN adoption could not be read (${describe(error)})`);
+    return refuse(`the ledger's APPGEN adoption could not be read (${describe(error)})`, "adoption");
   }
   const bindingProblem = adoptionBindingProblem(marker as GenerationMarker, binding);
-  if (bindingProblem !== null) refuse(`${bindingProblem}; this task serves nothing`);
+  if (bindingProblem !== null) refuse(`${bindingProblem}; this task serves nothing`, "adoption");
   step("generation", `the ledger's adopted app generation is ${config.generation}, as configured, and the game table ${config.gameTable} holds that generation (${(marker as GenerationMarker).origin})`);
   /* LIVE-6 L6-2: the post-restore safe mode's signal (L6-4 §12.2: the marker's `origin: restore`). */
   const restoredTable = (marker as GenerationMarker).origin === "restore";
@@ -763,7 +805,9 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     identityRole = await substrate.takeIdentityWriterRole(w);
   } catch (error) {
     assertAlive();
-    return refuse(`the identity-writer role was neither taken nor explained (${describe(error)})`);
+    /* L6-5B (review M4): the role takeover itself carries L6-4's identity serving checks, so an incomplete identity restore
+       is refused HERE first -- classified by the error's class name, as at the load below. */
+    return refuse(`the identity-writer role was neither taken nor explained (${describe(error)})`, (error as { name?: unknown } | null)?.name === "IdentityRestoreIncompleteError" ? "identity-restore" : "other");
   }
   assertAlive();
 
@@ -788,7 +832,9 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     });
   } catch (error) {
     assertAlive();
-    return refuse(`identity could not be loaded (${describe(error)})`);
+    /* L6-5B: an identity table whose restore is not complete (L6-4) is its own class; matched by the error's class name
+       (`IdentityRestoreIncompleteError`, aws/identity), never by its message. */
+    return refuse(`identity could not be loaded (${describe(error)})`, (error as { name?: unknown } | null)?.name === "IdentityRestoreIncompleteError" ? "identity-restore" : "other");
   }
   assertAlive();
   const sizes = identity.sizes();
@@ -919,7 +965,9 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
         now: input.now,
         warn: input.warn,
         log: input.log,
-        ops: input.ops,
+        /* L6-5B: the escrow service's own audit stream, observed (never altered): a `journal-ahead` hold is counted as it
+           is written -- the audit line itself goes out first and unchanged. */
+        ops: journalAheadTap(input.ops),
         walletProofs: ticketLedger,
         kms: kms.client,
         /* POOL mode: no startup preload -- each game's roster facts come from its claim's strong read (onClaimed). */
@@ -1001,10 +1049,13 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   /* L6-5A: every consumer (the game server's /gs/readyz, the status) asks through the observer; only a change is written. */
   readinessSource = primaryReadiness;
   const readiness = observedReadiness;
+  const sweepEligibleAt = input.now();
   primaryGauges = () => {
     const values: Partial<Record<MetricName, number>> = {
       MoneySweepConsecutiveFailures: sweepConsecutiveFailures,
-      MoneySweepSecondsSinceSuccess: Math.max(0, Math.floor((input.now() - (lastSweepOkAt ?? startedAt)) / 1000)),
+      /* L6-5B (review L1): until a pass completes, the age runs from when this primary's sweep could start (the end of
+         the identity, ledger and escrow loads), not from the task's start. */
+      MoneySweepSecondsSinceSuccess: Math.max(0, Math.floor((input.now() - (lastSweepOkAt ?? sweepEligibleAt)) / 1000)),
     };
     if (opened !== null) {
       const state = relayerStateNow();
@@ -1017,8 +1068,19 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       if (state === "usable") {
         const status = opened.relayer.status();
         values.RelayerOpenIntents = status.open + status.undecided;
+        /* L6-5B: L6-7's paging state, from the same holder only (L6-7: only the relayer-role holder pages; a task without
+           the role keeps its conditions silently, so its counts are not the page's truth). Counts only: the conditions,
+           games and intents stay in L6-7's audit lines. */
+        values.RelayerPaging = status.paging.paged;
+        values.RelayerWaiting = status.paging.waiting;
+        values.RelayerQueueMismatch = status.queue_mismatch;
+        values.RelayerTroubled = status.troubled;
+        values.RelayerOldestWaitingSeconds = status.paging.oldest_since === null ? 0 : Math.max(0, Math.floor((input.now() - status.paging.oldest_since) / 1000));
       }
     }
+    /* L6-5B: post-restore safe mode (L6-2) -- a state of the table, and how many checked money games are still pending. */
+    values.RestoreSafeMode = restoredTable ? 1 : 0;
+    if (restoredTable && opened !== null) values.RestoreUnverifiedGames = opened.service.restoreStatus().pending;
     return values;
   };
 

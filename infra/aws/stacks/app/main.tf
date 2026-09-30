@@ -51,6 +51,8 @@ module "app" {
   operator_trusted_principal_arns   = var.operator_trusted_principal_arns
   recovery_trusted_principal_arns   = var.recovery_trusted_principal_arns
   recovery_break_glass              = var.recovery_break_glass
+  page_alarm_action_arns            = var.page_alarm_action_arns
+  ticket_alarm_action_arns          = var.ticket_alarm_action_arns
   tags                              = var.tags
 }
 

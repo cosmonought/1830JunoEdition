@@ -77,6 +77,7 @@ import {
   type Check,
 } from "../controlPlane/evidence";
 import { FLIP_EVIDENCE_FORMAT, type FlipRecord, type FlipSnapshot, type RoleSnapshot } from "../controlPlane/flipRecord";
+import { applySuppression, type FlipSuppressionPort, type SuppressionOutcome } from "../controlPlane/flipSuppression";
 import { readAs, readPoolView } from "./inspect";
 import { noteProblem, setPrimary, type MutationContext } from "./mutations";
 
@@ -95,6 +96,9 @@ export interface FlipDeps {
   readonly progress?: (line: string) => void;
   /** After each phase: persist the record (the CLI writes the --flip-record file). */
   readonly persist?: (record: FlipRecord) => void;
+  /** LIVE-6 L6-5B: where the window's alarm-action suppression is published (CloudWatch; absent: nothing is suppressed --
+   *  the alarms simply page during the flip). Its failure never changes the flip. */
+  readonly suppression?: FlipSuppressionPort | null;
 }
 
 export interface FlipInput {
@@ -429,6 +433,13 @@ export async function runFlip(deps: FlipDeps, input: FlipInput): Promise<FlipRec
   record = { ...record, window: { opened_at: opened, expires_at: opened + FLIP_WINDOW_MS, closed_at: null } };
   deps.persist?.(record);
   context.audit("operator.flip-window", { phase: "open", from: input.from, to: input.to, routing_version: input.expectVersion, opened_at: opened, expires_at: opened + FLIP_WINDOW_MS });
+  /* L6-5B: the window's alarm-action suppression, for exactly these two pools, up to expires_at -- published ahead, so it
+     ends by itself whatever happens to this process. Before the CAS (from the CAS on, both role changes are expected). */
+  const opening = await suppressFlipWindow(deps.suppression ?? null, context, record, "open");
+  if (opening !== null && record.window !== null) {
+    record = { ...record, window: { ...record.window, suppression: opening.outcome } };
+    deps.persist?.(record);
+  }
   /* F2: the CAS -- L6-3's set-primary (evidence first; a lost answer settled by the claim). */
   const result = await setPrimary(context, { pool: input.to, expectVersion: input.expectVersion, note: input.note, apply: true });
   const at = context.now();
@@ -458,7 +469,25 @@ export async function runFlip(deps: FlipDeps, input: FlipInput): Promise<FlipRec
   };
   if (closeWindow) context.audit("operator.flip-window", { phase: "closed", from: input.from, to: input.to, why: `the CAS was ${result.kind}` });
   deps.persist?.(record);
+  /* A close cancels only what THIS flip's open published (review M5: the encoding is additive); decided once, recorded. */
+  if (closeWindow && record.window?.suppression === "published") {
+    record = { ...record, window: { ...record.window, suppression: "closed" } };
+    deps.persist?.(record);
+    await suppressFlipWindow(deps.suppression ?? null, context, record, "close");
+  }
   return record;
+}
+
+/**
+ * LIVE-6 L6-5B: publish the window's suppression (open) or end it (close) -- `controlPlane/flipSuppression.ts`. Audited as
+ * `operator.flip-suppression {phase, from, to, outcome, ...}`; NEVER throws and never changes the flip or the recovery:
+ * a failed open means the alarms page during the flip (the safe direction); a failed close ends at `expires_at` anyway.
+ */
+export async function suppressFlipWindow(port: FlipSuppressionPort | null, context: MutationContext, record: FlipRecord, phase: "open" | "close"): Promise<SuppressionOutcome | null> {
+  if (record.window === null) return null;
+  const answer = await applySuppression(port, { environment: record.environment, pools: [record.from, record.to], opened_at: record.window.opened_at, expires_at: record.window.expires_at }, phase, context.now());
+  context.audit("operator.flip-suppression", { phase, from: record.from, to: record.to, expires_at: record.window.expires_at, ...answer });
+  return answer;
 }
 
 /** Close the window (the recovery pass settled): `AUDIT operator.flip-window {phase: "closed"}`. */

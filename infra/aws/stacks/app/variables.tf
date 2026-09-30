@@ -130,3 +130,15 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+variable "page_alarm_action_arns" {
+  description = "LIVE-6 L6-5B: CloudWatch alarm action ARNs for PAGE alarms (may be empty in staging; see the module)."
+  type        = list(string)
+  default     = []
+}
+
+variable "ticket_alarm_action_arns" {
+  description = "LIVE-6 L6-5B: CloudWatch alarm action ARNs for TICKET alarms (may be empty in staging; never a page ARN)."
+  type        = list(string)
+  default     = []
+}

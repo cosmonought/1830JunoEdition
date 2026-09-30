@@ -50,3 +50,8 @@ bootstrap_trusted_principal_arns = ["arn:aws:iam::111111111111:role/deploy-pipel
 # LIVE-6 L6-2: the operator (`gamesDoctor aws`) and recovery (`npm run recovery`) roles; empty lists create neither.
 operator_trusted_principal_arns = []
 recovery_trusted_principal_arns = []
+
+# LIVE-6 L6-5B: where PAGE and TICKET alarms notify (SNS topics, Lambda functions, Incident Manager response plans, created
+# elsewhere). Empty is valid in staging: the alarms still evaluate and `awsDeploy verify` checks their wiring class.
+page_alarm_action_arns   = []
+ticket_alarm_action_arns = []

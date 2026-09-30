@@ -175,7 +175,9 @@ export interface AwsGameStores {
   readonly readLogFormat: (gameId: string) => Promise<FormatFact>;
   readonly records: RecordStore;
   readonly holds: HoldStore;
-  readonly financial: FinancialGameStore & OpenMoneyGames;
+  /** LIVE-6 L6-7: `openMoneyGameIds` -- every OPEN money game (FINKEYS -> FINIDX#, strict): what the escrow load and its
+   *  chain sweep visit, instead of every money game ever made. */
+  readonly financial: FinancialGameStore & OpenMoneyGames & { openMoneyGameIds(): Promise<string[]> };
   readonly tickets: WalletTicketStore;
   /** The owner's intent store, game-fenced (null without escrow: there is no relay queue). */
   readonly intents: ChainIntentStore | null;
@@ -598,6 +600,9 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
         kms: kms.client,
         /* POOL mode: no startup preload -- each game's roster facts come from its claim's strong read (onClaimed). */
         preload: false,
+        /* LIVE-6 L6-7: the escrow load and its chain sweep visit the OPEN money games only (the FINKEYS / FINIDX# index the
+           claim sweep reads), never every money game ever made; the relayer's work is its relay queue (RELAYQ#). */
+        openMoneyGames: () => stores.financial.openMoneyGameIds(),
         relayerAuthority: authority,
         relayerIntents: stores.relayerIntents,
       });

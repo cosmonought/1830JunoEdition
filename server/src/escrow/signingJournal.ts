@@ -77,6 +77,13 @@ export interface InspectableSigningJournal extends SigningJournal {
    *  relayer's startup guard reads these). The ledger lists by account only; the local adapters also answer every
    *  account when none is named. */
   allAttempts(account?: string): Promise<ReadonlyArray<JournalledAttempt & { readonly intent_id: string }>>;
+  /** LIVE-6 L6-7 (preflight §10.4): the journalled attempts of `account` at an account sequence of `fromSequence` or
+   *  more -- the only ones that could still be included (a Cosmos transaction lands only at the account's CURRENT
+   *  sequence, and a sequence below the chain's is spent for good). The relayer's startup guard asks this with the
+   *  sequence the chain reports now, so its read grows with the attempts that may still be live, never with the
+   *  account's history. Complete over that range (every page) and strict (one damaged or newer item in it refuses the
+   *  whole answer); nothing is deleted to make it small. Absent: callers fall back to `allAttempts`. */
+  attemptsFrom?(account: string, fromSequence: string): Promise<ReadonlyArray<JournalledAttempt & { readonly intent_id: string }>>;
 }
 
 function indexer() {
@@ -169,6 +176,11 @@ function journalOf(index: ReturnType<typeof indexer>, append: (line: Line) => Pr
     reservations: async (instance) => index.reservations(instance),
     attemptsOf: async (intentId) => index.attemptsOf(intentId),
     allAttempts: async (account) => index.allAttempts().filter((entry) => account === undefined || entry.account === account),
+    attemptsFrom: async (account, fromSequence) => {
+      if (!DEC.test(fromSequence)) throw new SigningJournalError(`the sequence ${fromSequence} is not canonical`);
+      const from = BigInt(fromSequence);
+      return index.allAttempts().filter((entry) => entry.account === account && BigInt(entry.sequence) >= from);
+    },
   };
 }
 

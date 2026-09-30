@@ -9,8 +9,8 @@
 //   §1 the writer's condition, as DynamoDB evaluates it: a first write lands; a newer `seq` replaces; an older or equal
 //      `seq` is refused (`stale`) and changes nothing; a table that is not there is `failed`, never a throw;
 //   §2 the runtime over `realAwsSubstrate` (the L5-7 composition): the primary writes `TASK#<task>` from its pool takeover
-//      on -- its epoch, generation, role, phase and TTL -- and `stopping` at its graceful shutdown; a standby writes
-//      `standby`; the metric lines of the run are CloudWatch EMF with only the Environment and Pool dimensions; and the
+//      on -- its epoch, generation, role, phase and TTL -- and `stopping` at its graceful shutdown; a non-primary task
+//      writes `non-primary`; the metric lines of the run are CloudWatch EMF with only the Environment and Pool dimensions; and the
 //      item changes nothing the certified composition decides (the same steps, the same shutdown order);
 //   §3 a newer task of the same pool supersedes the older: its real pool writer's loss is ONE TaskLost with the cause
 //      `pool-superseded` and TaskSuperseded (the text the classification reads is the pool writer's own).
@@ -21,6 +21,7 @@ import { GetItemCommand, PutItemCommand, type AttributeValue, type DynamoDBClien
 
 import { createDynamoDbClient, deadline, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV } from "../../aws/awsClients";
 import { readRouting, setPrimaryPool } from "../../aws/game/routing";
+import { bootstrapGenerationMarker, generationMarkerItem } from "../../aws/game/generationMarker";
 import { LEDGER_KEYS } from "../../aws/ledger/dynamoSigningLedger";
 import { startAwsRuntime, type AwsRuntime } from "../../aws/runtime/awsRuntime";
 import { realAwsSubstrate } from "../../aws/runtime/awsSubstrate";
@@ -71,6 +72,10 @@ async function awsTables(label: string, primary: string): Promise<{ game: string
   await admin.send(new PutItemCommand({ TableName: ledger, Item: { ...LEDGER_KEYS.appgen(), schema: N(1), current_generation: N(1) } }), { abortSignal: deadline() });
   const routing = await readRouting(admin, game);
   assert.equal((await setPrimaryPool(admin, game, { pool: primary, expectedVersion: routing?.routing_version ?? null, by: "pipeline", now: 1 })).kind, "set");
+  /* LIVE-6 L6-4 (converged, as L6-2's 0e55722 did for L6-1's fixture): the first deployment's bootstrap marks the first
+     game table with its generation. */
+  const marker = bootstrapGenerationMarker({ generation: 1, gameTable: "gs-l65a-game-g1", by: "l5-8-bootstrap", now: 1 });
+  await admin.send(new PutItemCommand({ TableName: game, Item: generationMarkerItem(marker), ConditionExpression: "attribute_not_exists(pk)" }), { abortSignal: deadline() });
   return { game, identity, ledger };
 }
 
@@ -161,7 +166,7 @@ describe("L6-5A TASK# on DynamoDB Local", () => {
     assert.equal(await missing.write(status(), 1, 1), "failed");
   });
 
-  test("§2 the real composition writes it -- primary and standby -- and decides exactly as before; every metric line is EMF with Environment and Pool only", async () => {
+  test("§2 the real composition writes it -- primary and non-primary -- and decides exactly as before; every metric line is EMF with Environment and Pool only", async () => {
     const t = await awsTables("rt", "p1");
     const lines: string[] = [];
     const primary = await start(t, "t-l65aprimary0001", "p1", lines);
@@ -184,8 +189,8 @@ describe("L6-5A TASK# on DynamoDB Local", () => {
 
     const s = await awsTables("sb", "p0");
     const standby = await start(s, "t-l65astandby0001", "p1", lines);
-    assert.equal(standby.runtime.role, "standby");
-    await until(async () => (standby.runtime.statusTick(), taskItem(s.game, "t-l65astandby0001")), (item) => item?.role?.S === "standby", "the standby's status");
+    assert.equal(standby.runtime.role, "non-primary");
+    await until(async () => (standby.runtime.statusTick(), taskItem(s.game, "t-l65astandby0001")), (item) => item?.role?.S === "non-primary", "the non-primary task's status");
     await standby.runtime.shutdown();
 
     /* §3 a newer task of the SAME pool takes it over: the older one's own self-check (the real PoolWriter, L5-3) proves

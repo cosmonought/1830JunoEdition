@@ -636,6 +636,20 @@ export const JOURNAL_CASES: readonly ConformanceCase<JournalSubject>[] = [
     },
   },
   {
+    id: "JNL-L67",
+    title: "LIVE-6 L6-7: attemptsFrom answers exactly the account's attempts at the given sequence or above (the relayer's bounded startup guard), and refuses a non-canonical sequence",
+    async run(subject, ctx) {
+      const journal = await subject.open(ctx);
+      for (const n of [1, 2, 3, 10, 11]) await journal.recordAttempt(attempt(n));
+      const from = journal.attemptsFrom;
+      assert.ok(from !== undefined, "every journal answers the bounded read");
+      assert.deepEqual((await from.call(journal, RELAYER, "3")).map((a) => a.sequence).sort(), ["10", "11", "3"]);
+      assert.deepEqual((await from.call(journal, RELAYER, "12")).map((a) => a.tx_id), []);
+      assert.equal((await from.call(journal, RELAYER, "0")).length, 5);
+      await rejection(from.call(journal, RELAYER, "03"));
+    },
+  },
+  {
     id: "JNL-05",
     title: "restart: reservations and attempts survive, and first-writer-wins holds across the restart",
     needs: ["durable"],

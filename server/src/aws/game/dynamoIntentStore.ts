@@ -25,7 +25,7 @@
 
 import type { TransactWriteItem } from "@aws-sdk/client-dynamodb";
 
-import { chainIntentFormat, ChainIntentUnreadableError, isChainIntentRecord, sameChainIntent, TERMINAL_INTENT_STATUSES, worstFormat, type ChainIntentRecord, type ChainIntentStore, type IntentCreateOutcome, type IntentPutOutcome } from "../../escrow/chainIntents";
+import { chainIntentFormat, ChainIntentUnreadableError, isChainIntentRecord, RelayQueueDamageError, relayQueueOrder, sameChainIntent, TERMINAL_INTENT_STATUSES, worstFormat, type ChainIntentRecord, type ChainIntentStore, type IntentCreateOutcome, type IntentPutOutcome, type RelayQueueEntry } from "../../escrow/chainIntents";
 import type { FormatFact } from "../../../../frontend/src/gameEngine/compat/continuationVerdict";
 import { COMMITTED } from "../../persistence/storeResult";
 import { GAME_ID_PATTERN } from "../../rooms/gameRecord";
@@ -44,16 +44,37 @@ export interface DynamoIntentStoreOptions extends GameTableStoreOptions {
 /** LIVE-5 L5-6: a relayer intent write refused by ROLE_RL -- the mirror no longer names this relayer; nothing was written. */
 export const RELAYER_ROLE_FENCED = "fenced: this task no longer holds the relayer role (the relayer role mirror moved); nothing was written";
 
-export interface RelayQueueEntry {
-  readonly game_id: string;
-  readonly intent_id: string;
-  readonly created_at: number;
-}
+export type { RelayQueueEntry };
 
 export interface DynamoIntentStore extends ChainIntentStore {
   formatOf(gameId: string): Promise<FormatFact>;
-  /** The relay queue, oldest first (L5-6's relayer reads it; strongly consistent). */
+  /** The relay queue, oldest first, strongly consistent, every page (LIVE-6 L6-7: the relayer's authoritative work
+   *  discovery). STRICT: an entry whose key, attributes or attribute set disagree is refused with the whole answer
+   *  (`RelayQueueDamageError`) -- never skipped, never read as a default. */
   relayQueue(): Promise<RelayQueueEntry[]>;
+}
+
+/** LIVE-6 L6-7: `<created_at %013d>#<game_id>#<intent_id>` -- the queue entry's sort key (`relayQueueKey`). */
+const QUEUE_SK = /^([0-9]{13})#(g_[0-9a-z]{26})#([0-9a-f]{64})$/;
+const QUEUE_ATTRIBUTES = ["created_at", "game_id", "intent_id", "pk", "sk"];
+
+/** LIVE-6 L6-7: one stored queue item, read strictly (the exact attribute set the create writes, each equal to its key). */
+export function parseRelayQueueItem(queue: string, item: Item): RelayQueueEntry {
+  const where = `${item.pk?.S ?? "?"} / ${item.sk?.S ?? "?"}`;
+  const damaged = (why: string): never => {
+    throw new RelayQueueDamageError(`the relay-queue entry ${where} is damaged (${why}); the queue is not read rather than guessed at`);
+  };
+  if (item.pk?.S !== `RELAYQ#${queue}`) damaged("its partition is not this queue");
+  const names = Object.keys(item).sort();
+  if (names.length !== QUEUE_ATTRIBUTES.length || names.some((name, at) => name !== QUEUE_ATTRIBUTES[at])) damaged(`attributes ${names.join(",")}`);
+  const match = QUEUE_SK.exec(item.sk?.S ?? "");
+  if (match === null) damaged("its sort key");
+  const [, created, gameId, intentId] = match as RegExpExecArray;
+  if (!GAME_ID_PATTERN.test(gameId) || !INTENT_ID.test(intentId)) damaged("its sort key names no intent");
+  const createdAt = Number(created);
+  if (!Number.isSafeInteger(createdAt)) damaged("its creation time");
+  if (item.game_id?.S !== gameId || item.intent_id?.S !== intentId || item.created_at?.N !== String(createdAt)) damaged("an attribute disagrees with its key");
+  return { game_id: gameId, intent_id: intentId, created_at: createdAt };
 }
 
 const INTENT_ID = /^[0-9a-f]{64}$/;
@@ -248,7 +269,8 @@ export function createDynamoIntentStore(options: DynamoIntentStoreOptions): Dyna
     },
 
     async relayQueue() {
-      return (await queryAll(client, table, `RELAYQ#${queue}`, { pageSize })).map((item) => ({ game_id: item.game_id?.S ?? "", intent_id: item.intent_id?.S ?? "", created_at: Number(item.created_at?.N ?? "0") }));
+      /* Every page (queryAll follows LastEvaluatedKey to the end), strongly consistent, oldest first by the key. */
+      return (await queryAll(client, table, `RELAYQ#${queue}`, { pageSize })).map((item) => parseRelayQueueItem(queue, item)).sort(relayQueueOrder);
     },
   };
 }

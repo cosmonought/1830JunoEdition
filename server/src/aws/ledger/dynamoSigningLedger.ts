@@ -292,6 +292,9 @@ export interface DynamoSigningLedgerOptions {
    *  per fence value (a generation, a relayer epoch). Not called for a fence this instance itself moved past (its own
    *  takeover). The owner of the process decides (L5-3: exit). */
   readonly onFenced?: (which: "generation" | "relayer", detail: string) => void;
+  /** Tests (LIVE-6 L6-7): the Query page size (`Limit`), so a paged read is exercised with a few items. Default: none
+   *  (DynamoDB's own 1 MB pages). Every read follows the pages to the end either way. */
+  readonly pageSize?: number;
 }
 
 export interface DynamoSigningLedger extends InspectableSigningJournal {
@@ -301,6 +304,8 @@ export interface DynamoSigningLedger extends InspectableSigningJournal {
   readonly relayer: string | null;
   /** The relayer fence epoch this instance holds (`null`: none -- it records no attempt). */
   relayerEpoch(): number | null;
+  /** LIVE-6 L6-7: always present here -- one key range of `ATTEMPT#<account>` (see `InspectableSigningJournal`). */
+  attemptsFrom(account: string, fromSequence: string): Promise<ReadonlyArray<JournalledAttempt & { readonly intent_id: string }>>;
   /** LIVE-5 L5-6: whether this instance could still record an attempt: the adopted generation (`APPGEN`) is still this
    *  instance's AND the relayer fence it holds is still the ledger's -- strongly consistent reads, the fence compared by
    *  epoch AND minting token (for the pool writer's self-check). Read only: it never writes, never adopts what it reads,
@@ -389,6 +394,8 @@ export async function openDynamoSigningLedger(client: DynamoDBClient, options: D
   const conflictRetries = options.conflictRetries ?? 3;
   if (!Number.isSafeInteger(conflictRetries) || conflictRetries < 0 || conflictRetries > 10) throw definite("conflictRetries must be 0..10");
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const pageSize = options.pageSize;
+  if (pageSize !== undefined && (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1000)) throw definite("pageSize must be 1..1000");
   const reported = new Set<string>();
   const reportFenced = (which: "generation" | "relayer", value: number, detail: string) => {
     /* A relayer fence this instance itself moved past (its own takeover) is not news: nothing to report. */
@@ -619,12 +626,22 @@ export async function openDynamoSigningLedger(client: DynamoDBClient, options: D
 
   /* ---------------- reads ---------------- */
 
-  async function query(pk: string): Promise<Item[]> {
+  /** Every item of one partition -- or, with `fromSk`, of its sort keys from `fromSk` on (LIVE-6 L6-7: a bounded range) --
+   *  strongly consistent, following every page to the end. */
+  async function query(pk: string, fromSk?: string): Promise<Item[]> {
     const out: Item[] = [];
     let start: Item | undefined;
     do {
       const page = await client.send(
-        new QueryCommand({ TableName: table, KeyConditionExpression: "#pk = :pk", ExpressionAttributeNames: { "#pk": "pk" }, ExpressionAttributeValues: { ":pk": S(pk) }, ConsistentRead: true, ExclusiveStartKey: start }),
+        new QueryCommand({
+          TableName: table,
+          KeyConditionExpression: fromSk === undefined ? "#pk = :pk" : "#pk = :pk AND #sk >= :from",
+          ExpressionAttributeNames: fromSk === undefined ? { "#pk": "pk" } : { "#pk": "pk", "#sk": "sk" },
+          ExpressionAttributeValues: fromSk === undefined ? { ":pk": S(pk) } : { ":pk": S(pk), ":from": S(fromSk) },
+          ConsistentRead: true,
+          ExclusiveStartKey: start,
+          ...(pageSize !== undefined ? { Limit: pageSize } : {}),
+        }),
         { abortSignal: deadline() },
       );
       out.push(...(page.Items ?? []));
@@ -809,6 +826,23 @@ export async function openDynamoSigningLedger(client: DynamoDBClient, options: D
       return (await query(`ATTEMPT#${which}`))
         .map((item) => parseAttempt(item, "attempt"))
         .map((entry) => ({ intent_id: entry.intent_id, tx_id: entry.tx_id, account: entry.account, sequence: entry.sequence, ...(entry.expires_after_height !== null ? { expires_after_height: entry.expires_after_height } : {}) }));
+    },
+
+    async attemptsFrom(account, fromSequence) {
+      if (typeof account !== "string" || !ACCOUNT.test(account)) throw definite("the ledger lists the attempts of one account at a time");
+      const from = u64(fromSequence, "the first sequence");
+      /* LIVE-6 L6-7 (preflight §10.4): `ATTEMPT#<account>` sorts by `SEQ#<sequence %020d>#TX#<tx>`, so the attempts at
+         `from` or above are ONE key range -- read from `SEQ#<from %020d>` on, every page, strictly (one damaged or newer
+         item in the range refuses the whole answer). Attempts below it -- spent sequences -- are never read, and never
+         deleted either: the history stays in the ledger as evidence. */
+      const items = await query(`ATTEMPT#${account}`, `SEQ#${pad(from, 20)}`);
+      return items
+        .map((item) => parseAttempt(item, "attempt"))
+        .map((entry) => {
+          /* The key range and the parsed content must agree (the parser checks key <-> content, so this is belt and braces). */
+          if (entry.account !== account || BigInt(entry.sequence) < BigInt(from)) throw new LedgerUnreadableError(`the ledger answered attempt ${entry.tx_id} outside the range asked for`, "corrupt");
+          return { intent_id: entry.intent_id, tx_id: entry.tx_id, account: entry.account, sequence: entry.sequence, ...(entry.expires_after_height !== null ? { expires_after_height: entry.expires_after_height } : {}) };
+        });
     },
 
     async takeOverRelayer() {

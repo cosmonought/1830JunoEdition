@@ -57,7 +57,26 @@ export interface DynamoFinancialStore extends FinancialGameStore {
   identityKeys(): Promise<string[]>;
   /** The OPEN money games of one continuation identity (L5-3's claim sweep; a pool's retirement check). */
   openGames(identityKey: string): Promise<string[]>;
+  /** LIVE-6 L6-7: EVERY open money game (FINKEYS, then each FINIDX# partition, every page, strongly consistent), for the
+   *  escrow load and its chain sweep -- never the `LIST#fin` listing of every money game ever made. STRICT: a FINKEYS
+   *  or FINIDX# item that is not exactly what the writes make refuses the whole answer (`OpenMoneyIndexDamageError`). */
+  openMoneyGameIds(): Promise<string[]>;
 }
+
+/** LIVE-6 L6-7: the open-money-game index (FINKEYS / FINIDX#) holds an item this build cannot read: the discovery is
+ *  refused whole (a skipped item could be the open game whose settlement must resume). */
+export class OpenMoneyIndexDamageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OpenMoneyIndexDamageError";
+  }
+}
+
+const IDENTITY_KEY = /^[0-9a-f]{64}$/;
+const sameNames = (item: Item, names: readonly string[]): boolean => {
+  const have = Object.keys(item).sort();
+  return have.length === names.length && have.every((name, at) => name === names[at]);
+};
 
 const finKey = (gameId: string): Item => key(gamePk(gameId), FIN_SK);
 const CLOSED = new Set(["closed", "cancelled"]);
@@ -205,6 +224,28 @@ export function createDynamoFinancialStore(options: GameTableStoreOptions): Dyna
 
     async identityKeys() {
       return [...((await getItem(client, table, FINKEYS_KEY))?.keys?.SS ?? [])].sort();
+    },
+
+    async openMoneyGameIds() {
+      const keysItem = await getItem(client, table, FINKEYS_KEY);
+      const damaged = (why: string): never => {
+        throw new OpenMoneyIndexDamageError(`the open-money-game index is damaged (${why}); the money games are not discovered rather than guessed at`);
+      };
+      let keys: string[] = [];
+      if (keysItem !== null) {
+        if (!sameNames(keysItem, ["keys", "pk", "sk"]) || !Array.isArray(keysItem.keys?.SS)) damaged("FINKEYS is not a set of identity keys");
+        keys = [...(keysItem.keys.SS as string[])];
+        if (keys.some((identity) => !IDENTITY_KEY.test(identity))) damaged("FINKEYS names something that is not an identity key");
+      }
+      const out = new Set<string>();
+      for (const identity of keys.sort()) {
+        for (const item of await queryAll(client, table, `FINIDX#${identity}`, { pageSize })) {
+          const gameId = item.game_id?.S;
+          if (!sameNames(item, ["game_id", "pk", "sk"]) || typeof gameId !== "string" || !GAME_ID_PATTERN.test(gameId) || item.sk?.S !== gamePk(gameId)) damaged(`FINIDX#${identity} / ${item.sk?.S ?? "?"}`);
+          out.add(gameId as string);
+        }
+      }
+      return [...out].sort();
     },
 
     async openGames(identityKey) {

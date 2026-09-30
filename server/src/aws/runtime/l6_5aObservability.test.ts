@@ -240,7 +240,21 @@ function harness(options: HarnessOptions = {}): Harness {
   const taskWrites: Harness["taskWrites"] = [];
   const ops = createMemoryOpsRecorder();
   const control = controlledStore();
-  const financial = Object.assign(createMemoryFinancialGameStore(), { identityKeys: async () => [] as string[], openGames: async () => [] as string[] });
+  const memoryFinancial = createMemoryFinancialGameStore();
+  /* LIVE-6 L6-7 (converged): the open-money-game index the escrow load reads -- as L5-7's harness derives it: every
+     record not closed or cancelled (an unreadable one too). */
+  const financial = Object.assign(memoryFinancial, {
+    identityKeys: async () => [] as string[],
+    openGames: async () => [] as string[],
+    openMoneyGameIds: async () => {
+      const open: string[] = [];
+      for (const gameId of await memoryFinancial.list()) {
+        const record = await memoryFinancial.load(gameId).catch(() => "unreadable" as const);
+        if (record === "unreadable" || (record !== null && record.phase !== "closed" && record.phase !== "cancelled")) open.push(gameId);
+      }
+      return open.sort();
+    },
+  });
   const world = makeWorld();
   const kms = kmsStandIn();
   const hooks: Harness["hooks"] = {};

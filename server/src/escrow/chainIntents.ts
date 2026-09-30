@@ -412,6 +412,24 @@ export type IntentCreateOutcome =
 
 export type IntentPutOutcome = StoreWriteOutcome | { readonly kind: "conflict"; readonly current: ChainIntentRecord | null };
 
+/** LIVE-5 L5-2 / LIVE-6 L6-7: one relay-queue entry -- an intent the relayer must still see (preflight §9.3). Made with
+ *  its intent in ONE write; removed in the one write that makes the intent `confirmed` or `superseded` (never at `held`). */
+export interface RelayQueueEntry {
+  readonly game_id: string;
+  readonly intent_id: string;
+  readonly created_at: number;
+}
+
+/** LIVE-6 L6-7: a relay-queue entry this build cannot read (a malformed key, an attribute that disagrees with its key,
+ *  an attribute too many or missing). The whole queue answer is refused -- an entry that cannot be read may name the
+ *  intent holding the account's live attempt, so nothing is guessed and nothing is skipped. */
+export class RelayQueueDamageError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RelayQueueDamageError";
+  }
+}
+
 export interface ChainIntentStore {
   create(record: ChainIntentRecord): Promise<IntentCreateOutcome>;
   put(next: ChainIntentRecord, expectedVersion: number): Promise<IntentPutOutcome>;
@@ -422,16 +440,45 @@ export interface ChainIntentStore {
   /** LIVE-4 (L4-4): the class of a game's intent files as a set (`worstFormat`), read without parsing another build's
    *  format and without throwing. Optional for test doubles (absent: current). */
   formatOf?(gameId: string): Promise<FormatFact>;
+  /** LIVE-6 L6-7: the relay queue -- the relayer's AUTHORITATIVE work discovery where the store keeps one (AWS:
+   *  `RELAYQ#<relayer>`): every entry, oldest first, strongly consistent and complete (every page), and strict -- one
+   *  malformed entry refuses the whole answer (`RelayQueueDamageError`). Absent (the file stores): the relayer lists every
+   *  game's intents, as before. */
+  relayQueue?(): Promise<RelayQueueEntry[]>;
 }
+
+/** LIVE-6 L6-7: the queue's order (the `RELAYQ#` sort key: `<created_at %013d>#<game>#<intent>`). */
+export const relayQueueOrder = (a: RelayQueueEntry, b: RelayQueueEntry): number => a.created_at - b.created_at || (a.game_id < b.game_id ? -1 : a.game_id > b.game_id ? 1 : a.intent_id < b.intent_id ? -1 : a.intent_id > b.intent_id ? 1 : 0);
 
 type IntentSlot = ChainIntentRecord | "unreadable" | Exclude<FormatFact, "current" | "corrupt">;
 const slotFormat = (slot: Exclude<IntentSlot, ChainIntentRecord>): Exclude<FormatFact, "current"> => (slot === "unreadable" ? "corrupt" : slot);
 
-/** `records`: a string marks a file this build cannot read -- `"unreadable"` (damage), `"newer"` or `"older-unread"`. */
-export function createMemoryChainIntentStore(): ChainIntentStore & { readonly records: Map<string, IntentSlot>; readonly failNext: Array<"definite" | "uncertain">; readonly writes: { count: number } } {
+/** LIVE-6 L6-7: what the memory store read (tests prove the relayer's startup work is bounded by its queue). */
+export interface MemoryIntentReads {
+  load: number;
+  listGame: number;
+  games: number;
+  formatOf: number;
+  queue: number;
+}
+
+/** `records`: a string marks a file this build cannot read -- `"unreadable"` (damage), `"newer"` or `"older-unread"`.
+ *  LIVE-6 L6-7: `{ relayQueue: true }` keeps a relay queue as the DynamoDB store does (made with the intent, removed with
+ *  its terminal write, kept while held); `queue` is open to tests (a `"malformed"` entry models damage). */
+export function createMemoryChainIntentStore(options: { readonly relayQueue?: boolean } = {}): ChainIntentStore & {
+  readonly records: Map<string, IntentSlot>;
+  readonly failNext: Array<"definite" | "uncertain">;
+  readonly writes: { count: number };
+  readonly reads: MemoryIntentReads;
+  readonly queue: Map<string, RelayQueueEntry | "malformed">;
+} {
   const records = new Map<string, IntentSlot>();
   const failNext: Array<"definite" | "uncertain"> = [];
   const writes = { count: 0 };
+  const reads: MemoryIntentReads = { load: 0, listGame: 0, games: 0, formatOf: 0, queue: 0 };
+  const queue = new Map<string, RelayQueueEntry | "malformed">();
+  const queued = options.relayQueue === true;
+  const terminal = (status: ChainIntentStatus) => (TERMINAL_INTENT_STATUSES as readonly string[]).includes(status);
   const keyOf = (gameId: string, intentId: string) => `${gameId}/${intentId}`;
   const copy = (record: ChainIntentRecord) => JSON.parse(JSON.stringify(record)) as ChainIntentRecord;
   const write = (record: ChainIntentRecord): StoreWriteOutcome => {
@@ -446,12 +493,16 @@ export function createMemoryChainIntentStore(): ChainIntentStore & { readonly re
     records,
     failNext,
     writes,
+    reads,
+    queue,
     async create(record) {
       const existing = records.get(keyOf(record.game_id, record.intent_id));
       if (typeof existing === "string") return { kind: "failed", detail: "an unreadable intent is never overwritten" };
       if (existing !== undefined) return { kind: "exists", record: copy(existing), same: sameChainIntent(existing, record) };
       if (!isChainIntentRecord(record) || record.record_version !== 1) return { kind: "failed", detail: "not a new chain intent" };
       const written = write(record);
+      /* The queue entry is made with the intent (the DynamoDB store's one transaction). */
+      if (queued && written.kind !== "definite") queue.set(keyOf(record.game_id, record.intent_id), { game_id: record.game_id, intent_id: record.intent_id, created_at: record.created_at });
       return written.kind === "committed" ? { kind: "created", record: copy(record) } : { kind: "failed", detail: written.detail };
     },
     async put(next, expectedVersion) {
@@ -459,14 +510,32 @@ export function createMemoryChainIntentStore(): ChainIntentStore & { readonly re
       if (typeof current === "string") return { kind: "definite", detail: "an unreadable intent is never overwritten" };
       if (current === undefined || current.record_version !== expectedVersion) return { kind: "conflict", current: current === undefined ? null : copy(current) };
       if (!isChainIntentRecord(next) || next.record_version !== expectedVersion + 1) return { kind: "definite", detail: "not the next version of the intent" };
-      return write(next);
+      const written = write(next);
+      /* ... and removed in the write that makes it terminal (never at `held`). */
+      if (queued && written.kind !== "definite" && terminal(next.status) && !terminal(current.status)) queue.delete(keyOf(next.game_id, next.intent_id));
+      return written;
     },
+    ...(queued
+      ? {
+          async relayQueue() {
+            reads.queue += 1;
+            const out: RelayQueueEntry[] = [];
+            for (const [key, entry] of queue) {
+              if (entry === "malformed") throw new RelayQueueDamageError(`the relay-queue entry ${key} is damaged`);
+              out.push({ ...entry });
+            }
+            return out.sort(relayQueueOrder);
+          },
+        }
+      : {}),
     async load(gameId, intentId) {
+      reads.load += 1;
       const record = records.get(keyOf(gameId, intentId));
       if (typeof record === "string") throw new ChainIntentUnreadableError(`intent ${intentId} of ${gameId} is unreadable (${slotFormat(record)})`, gameId, intentId, slotFormat(record));
       return record === undefined ? null : copy(record);
     },
     async listGame(gameId) {
+      reads.listGame += 1;
       const out: ChainIntentRecord[] = [];
       for (const [key, record] of records) {
         if (!key.startsWith(`${gameId}/`)) continue;
@@ -476,9 +545,11 @@ export function createMemoryChainIntentStore(): ChainIntentStore & { readonly re
       return out.sort((a, b) => a.created_at - b.created_at || a.intent_id.localeCompare(b.intent_id));
     },
     async games() {
+      reads.games += 1;
       return [...new Set([...records.keys()].map((key) => key.split("/")[0]))].sort();
     },
     async formatOf(gameId) {
+      reads.formatOf += 1;
       return worstFormat([...records.entries()].filter(([key]) => key.startsWith(`${gameId}/`)).map(([, record]) => (typeof record === "string" ? slotFormat(record) : "current")));
     },
   };

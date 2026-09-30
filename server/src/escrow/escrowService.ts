@@ -150,6 +150,12 @@ export interface EscrowServiceDeps {
    *  from a backup (its SYSTEM/GENERATION says origin `restore`): every money game is read-only and takes no money request
    *  until `restoreCheck` verified it IN THIS PROCESS (see `restoreCheck`). Absent / false: as before. */
   readonly restoreSafeMode?: boolean;
+  /** LIVE-6 L6-7: the money games `load()` and `sweepChain()` visit. Their work is only ever for an OPEN money game (a
+   *  closed or cancelled record resumes nothing, reconciles nothing and is never held), so AWS passes the open-money-game
+   *  index (FINKEYS -> FINIDX#, strict) instead of every financial record ever made. Absent (PROCESS mode): every
+   *  financial record (`financial.list()`), as before. The roster preload (PROCESS only) and `refreshRoster` (a claim)
+   *  are not discovery and are unchanged. */
+  readonly openGames?: () => Promise<string[]>;
 }
 
 export type ServiceRefusal = { readonly ok: false; readonly code: string; readonly detail: string };
@@ -426,6 +432,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
 
   /** A table's seats are frozen while a roster is frozen (provisionally or, once started, permanently), and while its
    *  money is HELD (operator attention: nothing moves); a cancelled or closed escrow has nothing left to freeze. */
+  /** LIVE-6 L6-7: the money games the load and the chain sweep visit (the open ones where an index says which). */
+  const discover = (): Promise<string[]> => (deps.openGames !== undefined ? deps.openGames() : deps.financial.list());
+
   function remember(record: FinancialGameRecord): void {
     if ((record.roster !== null || record.chain.started !== null || record.phase === "held") && record.phase !== "cancelled" && record.phase !== "closed") frozen.add(record.game_id);
     else frozen.delete(record.game_id);
@@ -1929,7 +1938,7 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
       let held = 0;
       let resumed = 0;
       let skipped = 0;
-      for (const gameId of await deps.financial.list()) {
+      for (const gameId of await discover()) {
         /* LIVE-4 (L4-4): every money game's verdict, before anything of it is written. The financial record's class
            (an unreadable one keeps its seats frozen: nothing moves on a guess); the ledger's and the intents' classes --
            read only for a record of a financial protocol this pool speaks, so another protocol's artifacts are never
@@ -2007,7 +2016,7 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
         lastRound.set(gameId, { round_key: snapshot.round_key, log_len: snapshot.log_len });
         void enqueue(gameId, "a checkpoint (retry)", () => checkpointJob(gameId));
       }
-      for (const gameId of await deps.financial.list()) {
+      for (const gameId of await discover()) {
         const record = await deps.financial.load(gameId).catch(() => null);
         if (record === null || record.binding?.escrow == null) continue;
         if (record.phase === "closed" || record.phase === "cancelled") continue;

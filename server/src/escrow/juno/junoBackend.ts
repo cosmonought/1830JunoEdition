@@ -88,6 +88,9 @@ export interface JunoBackendDeps {
   readonly preload?: boolean;
   /** LIVE-6 L6-2: post-restore safe mode (the escrow service's `restoreSafeMode`): AWS storage on a restored game table. */
   readonly restoreSafeMode?: boolean;
+  /** LIVE-6 L6-7: the money games the escrow load and its chain sweep visit -- the OPEN ones (AWS: the FINKEYS / FINIDX#
+   *  index). Absent (PROCESS mode): every financial record, as before. */
+  readonly openMoneyGames?: () => Promise<string[]>;
 }
 
 async function openSigner(ref: SignerRef, deps: JunoBackendDeps): Promise<DigestSigner> {
@@ -145,6 +148,7 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
     walletProofs: deps.walletProofs,
     ...(deps.serving !== undefined ? { serving: deps.serving } : {}),
     ...(deps.restoreSafeMode === true ? { restoreSafeMode: true } : {}),
+    ...(deps.openMoneyGames !== undefined ? { openGames: deps.openMoneyGames } : {}),
   });
   relayer = createJunoRelayer({
     rest,

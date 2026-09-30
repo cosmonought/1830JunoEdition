@@ -313,6 +313,23 @@ a mint in another account (it cannot share the mirror's transaction); the hint a
   intents and the live attempt) runs only after the takeover, before any pass -- the backend's verification and load do
   that already.
 
+**LIVE-6 L6-7: the deferred L5-6 items** (`escrow/juno/relayer.ts` header; report: Project
+`claude/LIVE6_L6_7_RELAYER_DURABILITY_SCALE_2026-09-30.md`):
+- **discovery:** a store with a relay queue (`ChainIntentStore.relayQueue`, the DynamoDB store's `RELAYQ#<relayer>`) makes
+  the queue the relayer's work -- its load reads the queue (every page, strict: one malformed entry fails the load) and
+  each queued intent by its key, never `LIST#intent` or a game's partition; a queued intent that is gone, or terminal
+  (confirmed by a second queue read), is a reported disagreement (`chain.relay-queue-mismatch`, a page), never work; a
+  pass re-reads the queue at most once per idle interval. The file stores keep no queue: their load is unchanged;
+- **the bounded guard:** the forgotten-attempt guard reads the ledger from the chain's current account sequence on
+  (`attemptsFrom`: one key range of `ATTEMPT#<account>`), and ignores an attempt whose expiry height has passed;
+- **F-L5-17:** only chain and contract answers spend an intent's failure budget (the hold); an operational failure (the
+  game table, the financial record, the ledger, a local step) backs off in memory, writes nothing, and pages when its own
+  streak reaches the budget;
+- **F-L5-16 wait + page:** `chain.relayer-page` / `chain.relayer-page-cleared` audits and `status().paging` -- an
+  unserved deployment's intent and a queue disagreement at once; an undecided verdict and failing passes after 5 minutes;
+- **the escrow load** (and its chain sweep) visits the open money games only (`openMoneyGames` =
+  `DynamoFinancialStore.openMoneyGameIds`: FINKEYS -> FINIDX#, strict), never `LIST#fin`.
+
 ## 8. The AWS runtime (L5-7): `aws/runtime/`, `GS_STORAGE=aws`
 
 The one composition of §4-§7 into the running server. It decides ORDER and REACTION only; every durable mechanism is the

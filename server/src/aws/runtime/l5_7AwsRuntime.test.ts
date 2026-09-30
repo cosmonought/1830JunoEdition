@@ -275,6 +275,15 @@ function harness(options: HarnessOptions = {}): Harness {
     },
     identityKeys: async () => [] as string[],
     openGames: async () => [] as string[],
+    /* LIVE-6 L6-7: the open money games (the scripted store has no index: its records not closed or cancelled). */
+    openMoneyGameIds: async () => {
+      const open: string[] = [];
+      for (const gameId of await listFinancial()) {
+        const record = await memoryFinancial.load(gameId).catch(() => "unreadable" as const);
+        if (record === "unreadable" || (record !== null && record.phase !== "closed" && record.phase !== "cancelled")) open.push(gameId);
+      }
+      return open.sort();
+    },
   });
   const world = makeWorld();
   const kms = kmsStandIn(options.kmsKeys);

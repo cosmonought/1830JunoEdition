@@ -175,7 +175,12 @@ const tokensOf = (ctx: CaseContext) => ctx.faults.calls.filter((call) => call.op
 const ledgerSubject: JournalSubject = {
   name: "dynamodb-local (openDynamoSigningLedger)",
   backend: "dynamodb",
-  capabilities: ["durable", "fence", "fence-in-write", "plant", "stall-write", "idempotency-token", "inject-lost-answer", "inject-transient-failure", "inject-unresolved"],
+  capabilities: ["durable", "fence", "fence-in-write", "cas-in-write", "plant", "stall-write", "idempotency-token", "inject-lost-answer", "inject-transient-failure", "inject-unresolved"],
+  /* L5-2's two DynamoDB capabilities (integration): `cas-in-write` is declared -- every ledger write's own conditions (the
+     slot's and the three attempt items' `attribute_not_exists`) are inside its transaction (JNL-19 races two writers). */
+  exemptions: {
+    "inject-unevaluated": "JOURNAL_CASES has no unevaluated-resend case (and JournalSubject no armUnevaluated hook); the ledger's own case 'an unknown first attempt, then a resend REFUSED without evaluation (throttled)' pins it: ours landed -> reserved, nothing landed -> uncertain",
+  },
   async open(ctx) {
     return openFor(ctx);
   },

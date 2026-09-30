@@ -116,6 +116,8 @@ HOLD-16, FIN-19, INT-16, TKT-14) and **`inject-unevaluated`** (hook `armUnevalua
 work; a visible write is committed, an invisible one UNCERTAIN). Each game-table port also has a second fence-inside-the-
 write case (LOG-25 chat, REC-19 join code, HOLD-13 release, FIN-16 create, INT-13 create, TKT-12 first ledger). The file
 stores fail every one of these for the right reason; `fenceGap.test.ts` pins it.
+L5-5's signing ledger (integrated after L5-2) declares `cas-in-write`; it exempts `inject-unevaluated`, which no journal
+case uses (its own unevaluated-resend case pins the behaviour).
 
 ## 4. The game table (LIVE-5 L5-2): `aws/game/`
 

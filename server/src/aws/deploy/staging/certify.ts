@@ -46,6 +46,7 @@ import {
   CERTIFICATION_FORMAT,
   checkEnvelope,
   EVIDENCE,
+  evidenceName,
   fail,
   judge,
   manifestOf,
@@ -468,10 +469,10 @@ export const STAGING_GATES: readonly StagingGate[] = Object.freeze([
       const measurements: Record<string, unknown> = {};
       for (const stack of STACKS) {
         const base = EVIDENCE.terraformDir(stack);
-        const version = readEvidence(ctx.dir, path.join(base, TERRAFORM_FILES.version));
-        const plan = readEvidence(ctx.dir, path.join(base, TERRAFORM_FILES.plan));
-        const exit = readEvidenceText(ctx.dir, path.join(base, TERRAFORM_FILES.exitCode));
-        const lock = readEvidenceText(ctx.dir, path.join(base, TERRAFORM_FILES.lock));
+        const version = readEvidence(ctx.dir, evidenceName(base, TERRAFORM_FILES.version));
+        const plan = readEvidence(ctx.dir, evidenceName(base, TERRAFORM_FILES.plan));
+        const exit = readEvidenceText(ctx.dir, evidenceName(base, TERRAFORM_FILES.exitCode));
+        const lock = readEvidenceText(ctx.dir, evidenceName(base, TERRAFORM_FILES.lock));
         const missing = [version, plan, exit, lock].filter((r) => !r.ok).map((r) => (r.ok ? "" : r.problem));
         if (missing.length > 0) {
           checks.push(fail(`terraform ${stack}: evidence`, `${missing.join("; ")} (infra/aws/scripts/plan-evidence)`));
@@ -486,7 +487,7 @@ export const STAGING_GATES: readonly StagingGate[] = Object.freeze([
         const judged = judgeTerraformStack(stack, { version: version.ok ? version.value : null, plan: plan.ok ? plan.value : null, exitCode: exit.ok ? exit.text : "", lock: lock.ok ? lock.text : "" }, repositoryLock, { primaryPool: ctx.primaryPool });
         checks.push(...judged.checks);
         /* This run's plan: its stamp names the run, and Terraform's own timestamp is not before the prerequisite. */
-        const stamp = readEvidence(ctx.dir, path.join(base, TERRAFORM_FILES.run));
+        const stamp = readEvidence(ctx.dir, evidenceName(base, TERRAFORM_FILES.run));
         const planned = Date.parse(String(obj(plan.ok ? plan.value : null).timestamp));
         const since = Date.parse(String(priorAt(records)));
         checks.push(
@@ -785,7 +786,8 @@ export function repositoryHead(repository: string): string | null {
   }
 }
 
-/** Write certification.json, CERTIFICATION.txt and MANIFEST.json (in that order; the manifest covers the evidence). */
+/** Write certification.json, CERTIFICATION.txt and certification-manifest.json (in that order; the manifest covers the
+ *  evidence -- including capture-evidence's own manifest.json, a DIFFERENT file on every filesystem). */
 export function writeCertification(ctx: CertContext, result: { readonly passed: boolean; readonly gates: readonly GateResult[] }): string {
   const text = certificationText(ctx, result);
   const manifest = manifestOf(ctx.dir).map((f) => ({ file: f.file, bytes: f.bytes, sha256: f.sha256 }));

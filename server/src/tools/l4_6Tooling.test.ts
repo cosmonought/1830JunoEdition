@@ -233,7 +233,9 @@ describe("LIVE-4 L4-6: the compatibility descriptor", () => {
       assert.equal(last.compatibility.compatibility_key, compatibilityKey(server.lifecycle.capability), "the key of the capability the server judges with");
       assert.equal(last.compatibility.compatibility_key, KEY_NO_ESCROW);
       assert.equal(last.compatibility.diagnostics.build_id, BUILD, "the build rides along, as a diagnostic");
-      assert.deepEqual(Object.keys(last.client_answers).sort(), ["connectionReload", "gameReload", "legacyRefused", "routeFailClosed"]);
+      /* LIVE-6 L6-1 (9f3fb59) added `routed`: a game another pool owns is answered with the route frame to the owner's trusted
+         path (counted by gameServer's answerRouted; l6_1Routing pins the count). The snapshot's key set follows it. */
+      assert.deepEqual(Object.keys(last.client_answers).sort(), ["connectionReload", "gameReload", "legacyRefused", "routeFailClosed", "routed"]);
     } finally {
       await stopServer(server);
     }

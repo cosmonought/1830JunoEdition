@@ -6,7 +6,7 @@
 #
 # L6-6R: the cluster listing holds every task whose desired status is RUNNING **and** every task whose desired status is
 # STOPPED (a task still draining -- lastStatus RUNNING/DEACTIVATING/STOPPING -- has desired STOPPED and is still running),
-# described in batches of 100 with nothing truncated ({"batches":[...]}); the gate requires every one of them STOPPED.
+# described in batches of 50 (LIVE-6 W1: inside cmd.exe's line for an `aws.cmd`; see capture-evidence.sh) with nothing truncated ({"batches":[...]}); the gate requires every one of them STOPPED.
 #
 #   infra/aws/scripts/capture-restore-stop.sh <environment> <region> <run id> <restore id> <evidence dir> <pool> [<pool> ...]
 set -euo pipefail
@@ -28,14 +28,15 @@ for status in RUNNING STOPPED; do
   LISTED="$(command aws --region "$REGION" ecs list-tasks --cluster "gs-${ENVIRONMENT}" --desired-status "$status" --query 'taskArns[]' --output text)"
   for arn in $LISTED; do [ "$arn" = "None" ] || TASKS+=("$arn"); done
 done
-# One describe-tasks answer per batch of 100, each written WHOLE (its tasks and its failures from the same call) as
+# One describe-tasks answer per batch of DESCRIBE_BATCH (50), each written WHOLE (its tasks and its failures from the same call) as
 # {"batches":[<answer>,...]}; set -e stops the script on any failed call (never a partial file that looks complete).
+DESCRIBE_BATCH=50
 {
   printf '{"batches":['
   SEP=""
-  for ((i = 0; i < ${#TASKS[@]}; i += 100)); do
+  for ((i = 0; i < ${#TASKS[@]}; i += DESCRIBE_BATCH)); do
     printf '%s' "$SEP"
-    command aws --region "$REGION" --output json ecs describe-tasks --cluster "gs-${ENVIRONMENT}" --tasks "${TASKS[@]:i:100}"
+    command aws --region "$REGION" --output json ecs describe-tasks --cluster "gs-${ENVIRONMENT}" --tasks "${TASKS[@]:i:DESCRIBE_BATCH}"
     SEP=","
   done
   printf ']}\n'

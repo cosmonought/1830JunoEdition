@@ -389,7 +389,8 @@ empty). There is no `--force`. The code is `server/src/aws/deploy/staging/`; the
 
 **The cluster listing** (L6-6P, `cluster-tasks.json`, `18COSMOS/L6-6P-CLUSTER-TASKS/v1`): `capture-evidence` lists every
 task of desired status RUNNING **and** STOPPED (a task draining under SIGTERM has desired STOPPED), following every
-`list-tasks` page (100 each) to the end, and describes every distinct ARN in batches of 100, each answer kept whole:
+`list-tasks` page (100 each) to the end, and describes every distinct ARN in batches of 50 (LIVE-6 W1; the prerequisite
+judges 1-100 per batch, DescribeTasks' own bound, so a pre-W1 capture of 100s still judges), each answer kept whole:
 `{format, cluster, listed_at, listings: [{desired_status, pages: [{page, task_arns, more}]}], task_count, batches}`. The
 prerequisite re-derives completeness from the file (the page chain ends, every ARN described exactly once, no failure,
 taken with this capture and after the probes) and FAILS anything less -- and FAILS on any task not STOPPED that is not a
@@ -428,7 +429,11 @@ readers and startup rule (`readGenerationMarker`, `readAppGeneration`, `generati
 live; an unbound build would still FAIL them "not integrated".
 
 The first line of `CERTIFICATION.txt` (and of the command's output) is `LIVE-6 AWS STAGING CERTIFICATION: PASS` or `FAIL`,
-then every failed gate. `certification.json` and `MANIFEST.json` (SHA-256 of every file) sit beside it.
+then every failed gate. `certification.json` and `certification-manifest.json` (SHA-256 of every file) sit beside it.
+(LIVE-6 W1: the certification's manifest was `MANIFEST.json` before; on a case-insensitive filesystem -- Windows/NTFS --
+that is the SAME file as capture-evidence's `manifest.json`, which it overwrote. No two names in an evidence package fold
+to the same lower-case path; a `MANIFEST.json` left by an older certification is not read, and not deleted -- on Windows it
+would be the captured `manifest.json`.)
 
 ### The converged gates and drills (LIVE-6 final convergence, `aws/deploy/staging/drills.ts`)
 
@@ -464,11 +469,12 @@ after the window's end + 5 min, steps 1-7 with `--scenario flip-drill --primary-
 the printed `generation_adoption`; record `probe-restore-alarms.json`. The certifier (verifier) role may Scan only the
 NON-serving managed generations' game tables (the old generation's TASK# items; `RestoreQuietOldGenerationHeartbeats`).
 
-**Windows real-AWS staging requires AWS CLI v2 (`aws.exe`).** The capture scripts describe up to 100 task ARNs per
-`describe-tasks` call (about 8.4k characters); a pip-installed CLI v1 (`aws.cmd`) runs through `cmd.exe`, whose command-line
-limit that exceeds. Such an invocation FAILS CLOSED (the script throws, no `capture.json` is written, the certification
-refuses the package) -- batching and completeness are never weakened to accommodate it. `capture-restore-stop.ps1` has the
-same limit. Use CLI v2 (`aws --version` must print `aws-cli/2.`).
+**Windows real-AWS staging requires AWS CLI v2 (`aws.exe`).** Use CLI v2 (`aws --version` must print `aws-cli/2.`).
+LIVE-6 W1: no capture call is built to exceed `cmd.exe`'s 8191-character command line any more (the Windows test stub is an
+`aws.cmd`, and so is a pip-installed CLI v1): the cluster listing (`capture-evidence`) and `capture-restore-stop` describe
+at most 50 task ARNs per `describe-tasks` call (~4.2k characters; 100 were ~8.4k), and L6-2's per-pool view (its first 100
+tasks, one whole answer) asks by task ID (~3.3k). Completeness is unchanged: every page, every ARN described exactly once,
+any failed call fails the capture closed (no `capture.json`). The stub enforces the same line limit on every platform.
 
 ## Secrets
 

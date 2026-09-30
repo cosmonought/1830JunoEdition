@@ -47,16 +47,18 @@ import { runDeployCommand, EXIT_USAGE, type DeployDeps } from "../commands";
 import { CACHING_DISABLED_POLICY_ID, checkEdgeEvidence, checkEvidenceDirectory, EVIDENCE_FILES, type Check } from "../deployVerify";
 import { ALARM_CONTRACT, expectedAlarms, suppressorName } from "../../controlPlane/alarmContract";
 import { POOL_EVIDENCE_FILES } from "../../controlPlane/evidence";
-import { certify, CERTIFIER_STORAGE_OVERRIDE, certificationText, judgeCertifierTask, prerequisiteChecks, prerequisiteRecord, repositoryHead, VERDICT_LINE, writeCertification, type CertContext } from "./certify";
+import { certify, CERTIFIER_STORAGE_OVERRIDE, certificationText, clearCertification, judgeCertifierTask, prerequisiteChecks, prerequisiteRecord, repositoryHead, VERDICT_LINE, writeCertification, type CertContext } from "./certify";
 import { stageCertCommand, stageProbeCommand, recordFromLog, recordLines, type StagingDeps } from "./commands";
 import { closedBy, judgeQueryProbe, judgeWsIdle, nodeEdgeTransport, probeQuery, requiredIdleMs, runEdgeProbe, type EdgeTransport, type SocketEvent, type SocketObservation } from "./edgeProbe";
-import { CERTIFICATION_FORMAT, EVIDENCE, EvidenceRefusedError, obj, readEvidence, secretFindings, stableStringify, writeRecord } from "./evidence";
+import { CERTIFICATION_FORMAT, EVIDENCE, evidenceName, EvidenceRefusedError, manifestOf, obj, readEvidence, secretFindings, stableStringify, writeRecord } from "./evidence";
+import { DRAIN_FILES, drainDir } from "./drain";
+import { caseFoldCollisions, readCheckoutText, toPosixPath, withDirectories } from "../../../testSupport/portability";
 import { classifyIamAnswer, IAM_PROBE_IDS, iamProbeSpecs, iamProbeWriteProblem, judgeIamProbe, runIamProbe, type IamAnswer } from "./iamProbe";
 import { judgeKmsProbe, KMS_LATENCY_BOUND_MS, runKmsProbe } from "./kmsProbe";
-import { judgeTerraformStack, AWS_PROVIDER } from "./terraformPlan";
+import { judgeTerraformStack, AWS_PROVIDER, TERRAFORM_FILES } from "./terraformPlan";
 import { disposableOnly, DisposableGuardError, judgeTransactionProbe, runTransactionProbe } from "./transactionProbe";
-import { checkClusterTasks, CLUSTER_LISTING_WINDOW_MS, CLUSTER_TASKS_FORMAT, DESCRIBE_TASKS_BATCH, readClusterListing } from "./prerequisite";
-import { buildCapabilities, readGenerationEvidence, readIdentityRecovery, RESTORE_FENCING_CASES, RESTORE_FENCING_FILE, revisionsFile, type AdoptionRecordFacts, type AppGenerationFacts, type GenerationEvidence, type GenerationMarkerFacts, type IdentityRestoreFacts, type RecoveryReaders, type ReviewSummary } from "./recovery";
+import { checkClusterTasks, CLUSTER_LISTING_WINDOW_MS, CLUSTER_TASKS_FORMAT, DESCRIBE_TASKS_BATCH_MAX, DESCRIBE_TASKS_BATCH, readClusterListing } from "./prerequisite";
+import { buildCapabilities, PRIOR_CERTIFICATIONS, readGenerationEvidence, readIdentityRecovery, RESTORE_FENCING_CASES, RESTORE_FENCING_FILE, RESTORE_STOP_DIR, revisionsFile, type AdoptionRecordFacts, type AppGenerationFacts, type GenerationEvidence, type GenerationMarkerFacts, type IdentityRestoreFacts, type RecoveryReaders, type ReviewSummary } from "./recovery";
 
 const REPO = path.resolve(__dirname, "../../../../../../.."); // dist/server/src/aws/deploy/staging -> the repository
 const INFRA = path.join(REPO, "infra/aws");
@@ -353,7 +355,8 @@ const RUNNING_TASKS = {
   failures: [],
 };
 /** L6-6P: capture-evidence's complete cluster listing over `tasks` -- desired RUNNING and desired STOPPED, `pageSize`
- *  ARNs per list-tasks page, every distinct ARN described in batches of 100 -- exactly the shape the scripts write. */
+ *  ARNs per list-tasks page, every distinct ARN described in batches of DESCRIBE_TASKS_BATCH (50, LIVE-6 W1) -- exactly the
+ *  shape the scripts write. */
 const CLUSTER_LISTED_AT = "2026-09-30T10:29:40Z";
 function clusterListing(tasks: readonly Record<string, unknown>[], options: { readonly pageSize?: number; readonly listedAt?: string; readonly alsoListedRunning?: readonly string[] } = {}) {
   const size = options.pageSize ?? 100;
@@ -365,7 +368,7 @@ function clusterListing(tasks: readonly Record<string, unknown>[], options: { re
   const running = [...tasks.filter((t) => t.desiredStatus === "RUNNING").map((t) => String(t.taskArn)), ...(options.alsoListedRunning ?? [])];
   const stopped = tasks.filter((t) => t.desiredStatus !== "RUNNING").map((t) => String(t.taskArn));
   const batches: Array<{ tasks: Record<string, unknown>[]; failures: unknown[] }> = [];
-  for (let i = 0; i < tasks.length; i += 100) batches.push({ tasks: tasks.slice(i, i + 100).map(clone), failures: [] });
+  for (let i = 0; i < tasks.length; i += DESCRIBE_TASKS_BATCH) batches.push({ tasks: tasks.slice(i, i + DESCRIBE_TASKS_BATCH).map(clone), failures: [] });
   return {
     format: "18COSMOS/L6-6P-CLUSTER-TASKS/v1",
     cluster: "gs-staging",
@@ -545,7 +548,14 @@ const TRANSACTIONS = {
 };
 
 const TERRAFORM_VERSION = { terraform_version: "1.16.4", platform: "linux_amd64", provider_selections: { [AWS_PROVIDER]: "6.66.0" }, terraform_outdated: false };
-const lockText = (stack: string) => fs.readFileSync(path.join(INFRA, "stacks", stack, ".terraform.lock.hcl"), "utf8");
+/* The committed lock, as committed (LF): a Windows checkout's is CRLF, and a mutation written against `\n` would silently
+   not apply to it (LIVE-6 W1). `edited` refuses a mutation that changed nothing -- it would prove nothing. */
+const lockText = (stack: string) => readCheckoutText(path.join(INFRA, "stacks", stack, ".terraform.lock.hcl"));
+function edited(text: string, from: string | RegExp, to: string): string {
+  const out = text.replace(from, to);
+  assert.notEqual(out, text, `the mutation ${String(from)} applied`);
+  return out;
+}
 const ledgerPlan = () => ({
   format_version: "1.2",
   terraform_version: "1.16.4",
@@ -1063,8 +1073,14 @@ describe("L6-6 §3: a destructive plan FAILS the certification", () => {
   test("the versions, the lock, the exit status and the plan's own identity are checked", () => {
     failing(judgeApp(appPlan(), { exit: "1" }), /plan exit status/);
     failing(judgeApp(appPlan(), { exit: "" }), /plan exit status/);
-    failing(judgeApp(appPlan(), { lock: lockText("app").replace(/"h1:5t1[^"]*",\n/, "") }), /provider lock/);
-    failing(judgeApp(appPlan(), { lock: lockText("app").replace('version     = "6.66.0"', 'version     = "6.70.0"') }), /provider lock/);
+    failing(judgeApp(appPlan(), { lock: edited(lockText("app"), /"h1:5t1[^"]*",\n/, "") }), /provider lock/);
+    failing(judgeApp(appPlan(), { lock: edited(lockText("app"), 'version     = "6.66.0"', 'version     = "6.70.0"') }), /provider lock/);
+    /* LIVE-6 W1: line endings are not the lock's content -- a lock captured in a CRLF checkout judges the same against a
+       LF repository lock, and the other way round (plan-evidence copies the stack's file as the checkout has it). */
+    const crlf = (text: string) => text.replace(/\n/g, "\r\n");
+    assert.deepEqual(failures(judgeApp(appPlan(), { lock: crlf(lockText("app")) })), []);
+    assert.deepEqual(failures(judgeTerraformStack("app", { version: TERRAFORM_VERSION, plan: appPlan(), exitCode: "2\r\n", lock: lockText("app") }, crlf(lockText("app")), { primaryPool: "p1" }).checks), []);
+    failing(judgeApp(appPlan(), { lock: crlf(edited(lockText("app"), /"h1:5t1[^"]*",\n/, "")) }), /provider lock/);
     failing(judgeApp(appPlan(), { version: { terraform_version: "1.8.5", provider_selections: { [AWS_PROVIDER]: "6.66.0" } } }), /Terraform version/);
     failing(judgeApp(appPlan(), { version: { terraform_version: "1.16.4", provider_selections: {} } }), /provider selected/);
     failing(judgeApp({}), /the plan is this stack's/);
@@ -1516,7 +1532,7 @@ describe("L6-6 §10: no secret in the package; a deterministic report", () => {
     assert.ok(text.includes("<redacted>"));
   });
 
-  test("the same evidence gives the same bytes: certification.json, CERTIFICATION.txt, MANIFEST.json", async () => {
+  test("the same evidence gives the same bytes: certification.json, CERTIFICATION.txt, certification-manifest.json", async () => {
     const built = await buildPackage();
     try {
       const ctx = await built.ctx();
@@ -2533,6 +2549,12 @@ describe("L6-6P: the prerequisite's cluster listing is complete -- every page, d
       assert.equal(read.pages.STOPPED, Math.max(1, Math.ceil((total - 1) / 100)));
       assert.equal(failed(judgeDoc(doc)), "", `${total} tasks, one settled service task: PASS`);
     }
+    /* LIVE-6 W1 compatibility: a complete listing captured before W1 (batches of 100) still judges complete. */
+    const legacy = clusterListing(population(257)) as any;
+    const described = legacy.batches.flatMap((b: any) => b.tasks);
+    legacy.batches = [0, 100, 200].map((i) => ({ tasks: described.slice(i, i + DESCRIBE_TASKS_BATCH_MAX), failures: [] }));
+    assert.deepEqual(legacy.batches.map((b: any) => b.tasks.length), [100, 100, 57]);
+    assert.equal(failed(judgeDoc(legacy)), "", "a pre-W1 package of 100-task batches");
     /* The task past the old `taskArns[:100]` cut: a stray draining task (desired STOPPED, still RUNNING) as the 101st and
        the 257th task -- in the last page and the last batch. */
     for (const total of [101, 257]) {
@@ -2558,13 +2580,14 @@ describe("L6-6P: the prerequisite's cluster listing is complete -- every page, d
       ["RUNNING listed twice", (v) => (v.listings[1].desired_status = "RUNNING"), /not exactly RUNNING and STOPPED/],
       ["STOPPED listed before RUNNING", (v) => v.listings.reverse(), /not exactly RUNNING and STOPPED, in that order/],
       ["a count that is not the pages'", (v) => (v.task_count -= 1), /counts 256 task\(s\), but its pages list 257/],
-      ["a listed task never described (the last batch lost)", (v) => v.batches.pop(), /57 listed task\(s\) were never described/],
-      ["a batch over the DescribeTasks limit", (v) => (v.batches[0].tasks.push(...v.batches[1].tasks), v.batches.splice(1, 1)), /batch 0 describes 200 task\(s\), not 1-100/],
-      ["an empty batch", (v) => v.batches.push({ tasks: [], failures: [] }), /batch 3 describes 0 task\(s\)/],
+      ["a listed task never described (the last batch lost)", (v) => v.batches.pop(), /7 listed task\(s\) were never described/],
+      ["a batch over the DescribeTasks limit", (v) => (v.batches[0].tasks.push(...v.batches[1].tasks, ...v.batches[2].tasks), v.batches.splice(1, 2)), /batch 0 describes 150 task\(s\), not 1-100/],
+      ["one task over the DescribeTasks limit", (v) => (v.batches[0].tasks.push(...v.batches[1].tasks, v.batches[2].tasks.shift()), v.batches.splice(1, 1)), /batch 0 describes 101 task\(s\), not 1-100/],
+      ["an empty batch", (v) => v.batches.push({ tasks: [], failures: [] }), /batch 6 describes 0 task\(s\)/],
       ["a partial describe (MISSING)", (v) => (v.batches[2].failures = [{ arn: v.batches[2].tasks.pop().taskArn, reason: "MISSING" }]), /describe-tasks batch 2 failed for 1 task\(s\) .*MISSING.*: the listing is incomplete/],
       ["a batch without failures", (v) => delete v.batches[1].failures, /batch 1 is not a whole answer/],
       ["no batches", (v) => delete v.batches, /holds no describe-tasks batches/],
-      ["a described task no page listed", (v) => v.batches[2].tasks.push({ ...SETTLED, taskArn: liveArn(9) }), /describe-tasks answered 1 task\(s\) no page listed/],
+      ["a described task no page listed", (v) => v.batches.at(-1).tasks.push({ ...SETTLED, taskArn: liveArn(9) }), /describe-tasks answered 1 task\(s\) no page listed/],
       ["another cluster", (v) => (v.cluster = "gs-production"), /lists cluster gs-production, not gs-staging/],
       ["no listing time", (v) => delete v.listed_at, /no listing time/],
       ["a page entry that is not a task ARN", (v) => v.listings[1].pages[0].task_arns.push("arn:aws:ecs:us-east-1:111111111111:service/gs-staging/x"), /not a task ARN/],
@@ -2617,7 +2640,7 @@ describe("L6-6P: the prerequisite's cluster listing is complete -- every page, d
       ["the 257th task a stray", clusterListing(population(257, [{ ...STRAY, desiredStatus: "STOPPED", lastStatus: "STOPPING" }])), /no task beside the services: .*outside the services/],
       ["a draining service task", clusterListing([...RUNNING_TASKS.tasks, { ...SETTLED, taskArn: liveArn(6), desiredStatus: "STOPPED", lastStatus: "RUNNING" }]), /draining or stopping/],
       ["a truncated listing", ((v: any) => (v.listings[1].pages.pop(), v))(clusterListing(population(257))), /the cluster listing is complete: .*truncated/],
-      ["a partial describe", ((v: any) => ((v.batches[0].failures = [{ arn: CERTIFIER_TASK, reason: "MISSING" }]), v))(CLUSTER_TASKS), /the cluster listing is complete: describe-tasks batch 0 failed/],
+      ["a partial describe", ((v: any) => ((v.batches[0].failures = [{ arn: CERTIFIER_TASK, reason: "MISSING" }]), v))(clone(CLUSTER_TASKS)), /the cluster listing is complete: describe-tasks batch 0 failed/],
       ["a listing after capture.json", clusterListing([...RUNNING_TASKS.tasks], { listedAt: "2026-09-30T10:30:05Z" }), /the cluster listing is complete: the listing .* is not this capture's/],
       ["a listing from an older capture", clusterListing([...RUNNING_TASKS.tasks], { listedAt: new Date(Date.parse(TIMES.capture) - CLUSTER_LISTING_WINDOW_MS - 1000).toISOString() }), /is not this capture's/],
     ];
@@ -2653,11 +2676,25 @@ describe("L6-6P: the prerequisite's cluster listing is complete -- every page, d
 /* ------------------------------------------------------------------ */
 
 /** The AWS CLI as the scripts call it: list-tasks pages (max 100, --no-paginate, the page query), describe-tasks (refusing
- *  more than 100 ARNs, like the API), failure injection; every other call answers `{}` / `None`. Every call is logged. */
+ *  more than 100 ARNs, like the API; a task named by ARN or by ID), failure injection; every other call answers `{}` /
+ *  `None`. Every call is logged. LIVE-6 W1: on EVERY platform it refuses a call whose command line, as cmd.exe would run
+ *  its `aws.cmd` (the node binary, the stub, then the arguments), exceeds cmd.exe's 8191 characters -- the owner's
+ *  Windows gate failed there ("The command line is too long.") while Linux passed, so the bound is now checked where the
+ *  scripts are tested, not only where cmd.exe happens to run them. */
+const CMD_LINE_MAX = 8191;
 const AWS_STUB = String.raw`
 const fs = require("fs");
 const sc = JSON.parse(fs.readFileSync(process.env.AWS_STUB_SCENARIO, "utf8"));
 const argv = process.argv.slice(2);
+{
+  const quote = (a) => (a === "" || /[\s"]/.test(a) ? '"' + a.replace(/"/g, '\\"') + '"' : a);
+  const line = [process.execPath, process.argv[1], ...argv].map(quote).join(" ");
+  if (line.length > ${CMD_LINE_MAX}) {
+    fs.appendFileSync(process.env.AWS_STUB_LOG, JSON.stringify({ op: "cmd.exe", error: "The command line is too long.", length: line.length }) + "\n");
+    process.stderr.write("The command line is too long.\n");
+    process.exit(1);
+  }
+}
 const opt = (name) => { const i = argv.indexOf(name); return i < 0 ? undefined : argv[i + 1]; };
 const log = (entry) => fs.appendFileSync(process.env.AWS_STUB_LOG, JSON.stringify(entry) + "\n");
 const si = argv.findIndex((a) => ["ecs", "elbv2", "cloudfront", "ec2", "cloudwatch"].includes(a));
@@ -2667,6 +2704,12 @@ const json = (v) => process.stdout.write(JSON.stringify(v, null, 4) + "\n");
 const byArn = new Map(sc.tasks.map((t) => [t.taskArn, t]));
 if (svc === "ecs" && op === "list-tasks") {
   const status = opt("--desired-status"), service = opt("--service-name");
+  if (service === undefined && query === "taskArns[]") {
+    /* capture-restore-stop: the whole cluster's ARNs of one desired status (the CLI follows every page itself). */
+    log({ op, status, whole: true });
+    process.stdout.write((sc.listing[status] || []).join("\t") + "\n");
+    process.exit(0);
+  }
   if (service !== undefined) {
     log({ op, service, status });
     /* L6-2's per-service capture asks for the first 100 (--query 'taskArns[:100]'); L6-6's running list asks for all. */
@@ -2690,9 +2733,11 @@ if (svc === "ecs" && op === "list-tasks") {
   process.stdout.write("T=" + next + "\t" + page.join(" ") + "\n");
 } else if (svc === "ecs" && op === "describe-tasks") {
   const i = argv.indexOf("--tasks");
-  const arns = [];
-  for (let j = i + 1; j < argv.length && !argv[j].startsWith("--"); j += 1) arns.push(argv[j]);
-  log({ op, count: arns.length, first: arns[0] || null });
+  const named = [];
+  for (let j = i + 1; j < argv.length && !argv[j].startsWith("--"); j += 1) named.push(argv[j]);
+  /* DescribeTasks takes a full ARN or a task ID (the ARN's last segment, with --cluster); the answer names the ARN. */
+  const arns = named.map((n) => (n.startsWith("arn:") ? n : (sc.tasks.find((t) => t.taskArn.endsWith("/" + n)) || { taskArn: n }).taskArn));
+  log({ op, count: arns.length, first: arns[0] || null, by: named.length > 0 && named.every((n) => !n.startsWith("arn:")) ? "id" : "arn" });
   if (arns.length === 0 || arns.length > 100) die("InvalidParameterException: tasks must hold 1-100 ARNs, not " + arns.length);
   if (sc.describeFailOn && arns.includes(sc.describeFailOn)) die("An error occurred (ServerException) when calling the DescribeTasks operation");
   const missing = (sc.describeMissing || []);
@@ -2746,7 +2791,7 @@ function clusterBatchesOf(calls: readonly Record<string, unknown>[]): number[] {
   return calls.filter((c, i) => i > lastPage && c.op === "describe-tasks").map((c) => Number(c.count));
 }
 
-function runCapture(shell: "sh" | "ps1", scenario: StubScenario): CaptureRun {
+function runCapture(shell: "sh" | "ps1", scenario: StubScenario, script: "capture-evidence" | "capture-restore-stop" = "capture-evidence"): CaptureRun {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l66p-"));
   const bin = path.join(root, "bin");
   const out = path.join(root, "evidence");
@@ -2761,10 +2806,14 @@ function runCapture(shell: "sh" | "ps1", scenario: StubScenario): CaptureRun {
   const listing = scenario.listing ?? { RUNNING: scenario.tasks.filter((t) => t.desiredStatus === "RUNNING").map((t) => String(t.taskArn)), STOPPED: scenario.tasks.filter((t) => t.desiredStatus !== "RUNNING").map((t) => String(t.taskArn)) };
   fs.writeFileSync(path.join(root, "scenario.json"), JSON.stringify({ ...scenario, listing, pageQuery: PAGE_QUERY, services: SERVICES }));
   const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, AWS_STUB_SCENARIO: path.join(root, "scenario.json"), AWS_STUB_LOG: path.join(root, "calls.log") };
+  const args =
+    script === "capture-evidence"
+      ? { sh: ["staging", "us-east-1", "p1", "E123", out], ps1: ["-Environment", "staging", "-Region", "us-east-1", "-PrimaryPool", "p1", "-Distribution", "E123", "-Out", out] }
+      : { sh: ["staging", "us-east-1", RUN, "drill-0930", out, "p1"], ps1: ["-Environment", "staging", "-Region", "us-east-1", "-Run", RUN, "-RestoreId", "drill-0930", "-Out", out, "-Pools", "p1"] };
   const r =
     shell === "sh"
-      ? spawnSync(BASH as string, [path.join(SCRIPTS, "capture-evidence.sh"), "staging", "us-east-1", "p1", "E123", out], { env, encoding: "utf8", timeout: 300_000 })
-      : spawnSync(PWSH as string, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(SCRIPTS, "capture-evidence.ps1"), "-Environment", "staging", "-Region", "us-east-1", "-PrimaryPool", "p1", "-Distribution", "E123", "-Out", out], { env, encoding: "utf8", timeout: 300_000 });
+      ? spawnSync(BASH as string, [path.join(SCRIPTS, `${script}.sh`), ...args.sh], { env, encoding: "utf8", timeout: 300_000 })
+      : spawnSync(PWSH as string, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(SCRIPTS, `${script}.ps1`), ...args.ps1], { env, encoding: "utf8", timeout: 300_000 });
   const logText = fs.existsSync(env.AWS_STUB_LOG) ? fs.readFileSync(env.AWS_STUB_LOG, "utf8") : "";
   const calls = logText.split("\n").filter((l) => l !== "").map((l) => JSON.parse(l) as Record<string, unknown>);
   const text = (name: string) => fs.readFileSync(path.join(out, name), "utf8").replace(/^﻿/, "");
@@ -2789,7 +2838,7 @@ describe("L6-6P: capture-evidence.{sh,ps1} write the complete listing (stub AWS 
   for (const [shell, exe] of shells) {
     const skip = exe === null ? `${shell === "sh" ? "bash" : "PowerShell"} is not available here` : false;
 
-    test(`${shell}: 0, 1, 100, 101 and 257 tasks -- every page followed, every ARN described in batches of <= 100`, { skip }, () => {
+    test(`${shell}: 0, 1, 100, 101 and 257 tasks -- every page followed, every ARN described in batches of <= ${DESCRIBE_TASKS_BATCH}`, { skip }, () => {
       for (const total of [0, 1, 100, 101, 257]) {
         const tasks = total === 0 ? [] : [SETTLED, ...history(total - 1)];
         const run = runCapture(shell, { tasks });
@@ -2803,7 +2852,10 @@ describe("L6-6P: capture-evidence.{sh,ps1} write the complete listing (stub AWS 
         /* The per-service describes (L6-2's stopped / running captures, L6-6's running-tasks.json) come first; the
            cluster's batches are the describes after the cluster listing's last page (converged capture). */
         const clusterBatches = clusterBatchesOf(run.calls);
-        assert.deepEqual(clusterBatches, Array.from({ length: Math.ceil(total / 100) }, (_, i) => Math.min(100, total - i * 100)), `${total}: batches ${JSON.stringify(describes)}`);
+        assert.deepEqual(clusterBatches, Array.from({ length: Math.ceil(total / DESCRIBE_TASKS_BATCH) }, (_, i) => Math.min(DESCRIBE_TASKS_BATCH, total - i * DESCRIBE_TASKS_BATCH)), `${total}: batches ${JSON.stringify(describes)}`);
+        /* Every describe-tasks call of the capture -- the per-pool views' too -- fit the stub's cmd.exe line (it refuses one
+           that would not, on every platform) and the API's 100. */
+        assert.ok(describes.every((n) => n >= 1 && n <= DESCRIBE_TASKS_BATCH_MAX), JSON.stringify(describes));
         const pages = run.calls.filter((c) => c.op === "list-tasks" && c.service === undefined);
         assert.deepEqual(pages.map((c) => c.status), ["RUNNING", ...Array.from({ length: Math.max(1, Math.ceil((total - 1) / 100)) }, () => "STOPPED")], `${total}`);
         assert.equal(run.exists("cluster-tasks.json.partial"), false);
@@ -2849,6 +2901,10 @@ describe("L6-6P: capture-evidence.{sh,ps1} write the complete listing (stub AWS 
       for (const scenario of [{ tasks, failList: { status: "STOPPED", page: 1 } }, { tasks, failList: { status: "RUNNING", page: 0 } }, { tasks, describeFailOn: String(history(256)[230].taskArn) }] as StubScenario[]) {
         const run = runCapture(shell, scenario);
         assert.notEqual(run.status, 0, JSON.stringify(scenario.failList ?? scenario.describeFailOn));
+        /* LIVE-6 W1: it failed on the INJECTED call -- not on a command line too long for cmd.exe, which would make this
+           test pass on a capture that can never succeed (the owner's Windows run). */
+        const errors = run.calls.filter((c) => c.error !== undefined).map((c) => String(c.error));
+        assert.deepEqual(errors.map((e) => /ThrottlingException|ServerException/.test(e)), [true], errors.join("; "));
         assert.equal(run.exists("cluster-tasks.json"), false, "no listing that looks complete");
         assert.equal(run.exists("capture.json"), false, "no stamp: the certification refuses the package");
         fs.rmSync(path.dirname(run.out), { recursive: true, force: true });
@@ -2856,7 +2912,8 @@ describe("L6-6P: capture-evidence.{sh,ps1} write the complete listing (stub AWS 
       /* A describe answer carrying failures is written whole -- and the judgment refuses it. */
       const partial = runCapture(shell, { tasks, describeMissing: [String(history(256)[150].taskArn)] });
       assert.equal(partial.status, 0, partial.stderr);
-      assert.match(judged(partial), /the cluster listing is complete: describe-tasks batch 1 failed for 1 task\(s\) .*MISSING/);
+      /* history[150] is the 152nd distinct ARN (the settled task first): batch 3 of 50. */
+      assert.match(judged(partial), /the cluster listing is complete: describe-tasks batch 3 failed for 1 task\(s\) .*MISSING/);
       fs.rmSync(path.dirname(partial.out), { recursive: true, force: true });
     });
 
@@ -2891,6 +2948,85 @@ describe("L6-6P: capture-evidence.{sh,ps1} write the complete listing (stub AWS 
       }
     });
   }
+
+  test("LIVE-6 W1: the stub refuses what cmd.exe refuses (100 full task ARNs), and the capture's calls fit (50 ARNs, 100 IDs)", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "gs-w1-stub-"));
+    try {
+      const tasks = [SETTLED, ...history(120)];
+      fs.writeFileSync(path.join(root, "aws-stub.js"), AWS_STUB);
+      fs.writeFileSync(path.join(root, "scenario.json"), JSON.stringify({ tasks, listing: { RUNNING: [], STOPPED: [] }, pageQuery: PAGE_QUERY, services: SERVICES }));
+      const env = { ...process.env, AWS_STUB_SCENARIO: path.join(root, "scenario.json"), AWS_STUB_LOG: path.join(root, "calls.log") };
+      const describe = (names: readonly string[]) => spawnSync(process.execPath, [path.join(root, "aws-stub.js"), "--region", "us-east-1", "--output", "json", "ecs", "describe-tasks", "--cluster", "gs-staging", "--tasks", ...names], { env, encoding: "utf8" });
+      const arns = tasks.map((t) => String(t.taskArn));
+      const ids = arns.map((a) => a.slice(a.lastIndexOf("/") + 1));
+      const tooLong = describe(arns.slice(0, DESCRIBE_TASKS_BATCH_MAX));
+      assert.equal(tooLong.status, 1);
+      assert.match(tooLong.stderr, /The command line is too long\./, "100 full ARNs: the owner's Windows failure, reproduced on this platform");
+      for (const names of [arns.slice(0, DESCRIBE_TASKS_BATCH), ids.slice(0, DESCRIBE_TASKS_BATCH_MAX)]) {
+        const ok = describe(names);
+        assert.equal(ok.status, 0, ok.stderr);
+        const answer = JSON.parse(ok.stdout) as { tasks: Array<{ taskArn: string }>; failures: unknown[] };
+        assert.deepEqual(answer.tasks.map((t) => t.taskArn), arns.slice(0, names.length), "named by ARN either way");
+        assert.deepEqual(answer.failures, []);
+      }
+      /* The bound holds with margin for a longer environment name than the tests use (gs-production, ~4.4k characters). */
+      const production = arns.slice(0, DESCRIBE_TASKS_BATCH).map((a) => a.replace("gs-staging", "gs-production"));
+      assert.ok(production.join(" ").length + 600 < CMD_LINE_MAX, "50 production-length ARNs plus a long install path");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  /* LIVE-6 W1: the restore drill's stop capture batches the same way; L6-2's per-pool view stays one whole answer. */
+  const restoreOutputs: Partial<Record<"sh" | "ps1", unknown>> = {};
+  for (const [shell, exe] of shells) {
+    const skip = exe === null ? `${shell === "sh" ? "bash" : "PowerShell"} is not available here` : false;
+
+    test(`${shell}: capture-restore-stop describes every task (257) in whole batches of 1-${DESCRIBE_TASKS_BATCH}; a failed batch fails it`, { skip }, () => {
+      const tasks = [SETTLED, ...history(256)];
+      const run = runCapture(shell, { tasks }, "capture-restore-stop");
+      try {
+        assert.equal(run.status, 0, run.stderr);
+        const doc = run.file("restore-stop/cluster-tasks.json") as { batches: Array<{ tasks: Array<{ taskArn: string }>; failures: unknown[] }> };
+        assert.deepEqual(doc.batches.map((b) => b.tasks.length), [50, 50, 50, 50, 50, 7]);
+        assert.ok(doc.batches.every((b) => Array.isArray(b.failures) && b.failures.length === 0), "each answer whole");
+        const described = doc.batches.flatMap((b) => b.tasks.map((t) => t.taskArn));
+        assert.deepEqual(described, tasks.map((t) => String(t.taskArn)), "every listed task described, once, in order");
+        assert.ok(run.calls.filter((c) => c.op === "describe-tasks").every((c) => Number(c.count) <= DESCRIBE_TASKS_BATCH));
+        restoreOutputs[shell] = doc;
+      } finally {
+        fs.rmSync(path.dirname(run.out), { recursive: true, force: true });
+      }
+      const failed = runCapture(shell, { tasks, describeFailOn: String(history(256)[200].taskArn) }, "capture-restore-stop");
+      try {
+        assert.notEqual(failed.status, 0, "a failed describe-tasks batch fails the capture");
+        assert.deepEqual(failed.calls.filter((c) => c.error !== undefined).map((c) => /ServerException/.test(String(c.error))), [true]);
+        assert.equal(failed.exists("restore-stop/stamp.json"), false, "no stamp after a failed batch");
+      } finally {
+        fs.rmSync(path.dirname(failed.out), { recursive: true, force: true });
+      }
+    });
+
+    test(`${shell}: L6-2's per-pool view is still ONE whole describe-tasks answer for its first 100 tasks (asked by task ID)`, { skip }, () => {
+      const run = runCapture(shell, { tasks: [SETTLED, ...history(150)] });
+      try {
+        assert.equal(run.status, 0, run.stderr);
+        const stopped = run.file("stopped-tasks-p1.json") as { tasks: Array<{ taskArn: string }>; failures: unknown[] };
+        assert.deepEqual(stopped.tasks.map((t) => t.taskArn), history(100).map((t) => String(t.taskArn)), "the first 100, by their ARNs");
+        assert.deepEqual(stopped.failures, []);
+        const perPool = run.calls.filter((c) => c.op === "describe-tasks" && c.by === "id");
+        assert.deepEqual(perPool.map((c) => c.count), [100, 1], "one call per view: STOPPED (100), RUNNING (1)");
+        assert.equal(run.calls.filter((c) => c.op === "cmd.exe").length, 0, "no call past cmd.exe's line");
+      } finally {
+        fs.rmSync(path.dirname(run.out), { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("capture-restore-stop: .sh and .ps1 write the same batches", { skip: BASH === null || PWSH === null ? "needs both bash and PowerShell" : false }, () => {
+    assert.ok(restoreOutputs.sh !== undefined && restoreOutputs.ps1 !== undefined, "both 257-task runs above produced a listing");
+    assert.deepEqual(restoreOutputs.ps1, restoreOutputs.sh);
+  });
 
   test(".sh and .ps1 write the same listing (contract equivalence; listed_at aside)", { skip: BASH === null || PWSH === null ? "needs both bash and PowerShell" : false }, () => {
     assert.ok(outputs.sh !== undefined && outputs.ps1 !== undefined, "the 257-task runs above produced both");
@@ -3277,5 +3413,131 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
     const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : e.name.endsWith(".ts") && !e.name.endsWith(".test.ts") ? [path.join(dir, e.name)] : []));
     const importers = walk(SRC).filter((f) => /from\s+"[^"]*runtime\/taskHeartbeats"/.test(fs.readFileSync(f, "utf8"))).map((f) => path.relative(SRC, f).split(path.sep).join("/"));
     assert.deepEqual(importers, ["tools/awsDeploy.ts"]);
+  });
+});
+
+/* ================================================================== */
+/* LIVE-6 W1: the package on a Windows filesystem                       */
+/* ================================================================== */
+
+/**
+ * A case-INSENSITIVE, case-preserving filesystem (Windows/NTFS; macOS's default APFS) under `root`, modelled over this
+ * one: while it is on, a path under `root` opens the entry that already exists with that spelling IGNORING case -- as
+ * Windows opens `MANIFEST.json` when `manifest.json` is there -- else the spelling given (which is then created as given).
+ * The `fs` functions the evidence code calls are wrapped (every module sees them through its `fs` import); `off()`
+ * restores them.
+ */
+function caseInsensitiveFs(root: string): { readonly off: () => void } {
+  const real = require("fs") as Record<string, (...args: unknown[]) => unknown>;
+  const names = ["readFileSync", "writeFileSync", "appendFileSync", "existsSync", "statSync", "lstatSync", "rmSync", "unlinkSync", "mkdirSync", "readdirSync", "openSync", "renameSync", "copyFileSync"];
+  const originals = new Map(names.map((n) => [n, real[n]] as const));
+  const readdir = originals.get("readdirSync") as (p: string) => string[];
+  const fold = (p: unknown): unknown => {
+    if (typeof p !== "string") return p;
+    const abs = path.resolve(p);
+    if (abs !== root && !abs.startsWith(root + path.sep)) return p;
+    let at = root;
+    for (const part of path.relative(root, abs).split(path.sep).filter((x) => x !== "")) {
+      let entries: string[] = [];
+      try {
+        entries = readdir.call(real, at);
+      } catch {
+        entries = [];
+      }
+      at = path.join(at, entries.find((e) => e.toLowerCase() === part.toLowerCase()) ?? part);
+    }
+    return at;
+  };
+  for (const n of names) {
+    const original = originals.get(n) as (...args: unknown[]) => unknown;
+    real[n] = (...args: unknown[]) => original.apply(real, n === "renameSync" || n === "copyFileSync" ? [fold(args[0]), fold(args[1]), ...args.slice(2)] : [fold(args[0]), ...args.slice(1)]);
+  }
+  return { off: () => names.forEach((n) => (real[n] = originals.get(n) as (...args: unknown[]) => unknown)) };
+}
+
+/** Every evidence-relative name the harness, its scripts and the verifier read or write, for pools p1 and p2: the
+ *  registries' names, and every output name the capture / drain / plan / probe scripts spell (`$OUT/x`, `Join-Path $Out "x"`). */
+function packageNames(): string[] {
+  const pools = ["p1", "p2"];
+  const names: string[] = [];
+  const add = (...n: string[]) => names.push(...n);
+  const values = (o: object) => Object.values(o).filter((v): v is string => typeof v === "string");
+  add(...values(EVIDENCE), ...values(EVIDENCE_FILES), ...values(POOL_EVIDENCE_FILES), ...values(require("./drills").DRILL_FILES as object));
+  add(RESTORE_FENCING_FILE, PRIOR_CERTIFICATIONS, ...["services.json", "cluster-tasks.json", "stamp.json"].map((f) => evidenceName(RESTORE_STOP_DIR, f)), `${EVIDENCE.clusterTasks}.partial`);
+  for (const stack of ["app", "ledger"]) add(...values(TERRAFORM_FILES).map((f) => evidenceName(EVIDENCE.terraformDir(stack), f)));
+  for (const pool of pools) {
+    add(EVIDENCE.drain(pool), EVIDENCE_FILES.taskDefinition(pool), revisionsFile(pool), ...values(DRAIN_FILES).map((f) => evidenceName(drainDir(pool), f)));
+    for (const f of Object.values(POOL_EVIDENCE_FILES)) if (typeof f === "function") add(f(pool));
+  }
+  for (const script of fs.readdirSync(SCRIPTS)) {
+    const text = readCheckoutText(path.join(SCRIPTS, script));
+    const spelled = [
+      ...[...text.matchAll(/"\$(?:OUT|DIR|EVIDENCE)\/([^"$]+(?:\$\{?pool\}?[^"$]*|\$\{POOL\}[^"$]*)?)"/g)].map((m) => m[1]),
+      ...[...text.matchAll(/Join-Path \$(?:Out|dir|target) "([^"]+)"/g)].map((m) => m[1]),
+      ...[...text.matchAll(/(?:Save|SaveJson|DescribeTasks) "([^"]+)"/g)].map((m) => m[1]),
+    ];
+    for (const name of spelled) for (const pool of pools) add(name.replace(/\$\{?pool\}?|\$\{POOL\}|\$Pool|\$pool/g, pool).replace(/\$\(\$status\.ToLower\(\)\)|\$\{lower\}/g, "stopped"));
+  }
+  return names;
+}
+
+describe("LIVE-6 W1: the evidence package on a Windows filesystem (case-insensitive, `\\` separators)", () => {
+  test("no two names the package holds fold to one path -- the certification's manifest is not capture-evidence's", () => {
+    const names = packageNames();
+    assert.ok(names.includes(POOL_EVIDENCE_FILES.manifest) && names.includes(EVIDENCE.manifest), "both manifests are in the registry");
+    assert.ok(names.includes("cluster-tasks.json") && names.includes("target-health-p1.json") && names.includes("drain-p1/tasks-before.json"), "the scripts' names were read");
+    assert.deepEqual(caseFoldCollisions(withDirectories(names)), [], "each Windows path is claimed by one spelling");
+    assert.notEqual(EVIDENCE.manifest.toLowerCase(), POOL_EVIDENCE_FILES.manifest.toLowerCase());
+    /* The guard itself: the old pair is exactly what it reports; `\\` and `/` are one separator; a directory counts. */
+    assert.deepEqual(caseFoldCollisions([...names, "MANIFEST.json"]), [["MANIFEST.json", "manifest.json"]]);
+    assert.deepEqual(caseFoldCollisions(withDirectories(["terraform\\App\\plan.json", "terraform/app/lock.hcl"])), [["terraform/App", "terraform/app"]]);
+  });
+
+  test("evidence-relative names are `/`-separated on every platform (a Windows join's `\\` is folded)", () => {
+    assert.equal(evidenceName(drainDir("p1"), DRAIN_FILES.tasksBefore), "drain-p1/tasks-before.json");
+    assert.equal(evidenceName(EVIDENCE.terraformDir("app"), TERRAFORM_FILES.plan), "terraform/app/plan.json");
+    assert.equal(evidenceName(path.win32.join("terraform", "app"), "plan.json"), "terraform/app/plan.json");
+    assert.equal(evidenceName(path.win32.join(PRIOR_CERTIFICATIONS, "a.json")), "prior-certifications/a.json");
+    assert.equal(toPosixPath(path.win32.relative("C:\\e", "C:\\e\\drain-p1\\tasks-before.json")), "drain-p1/tasks-before.json");
+    /* Only ever the harness's own names: nothing that could leave the package, nothing empty. */
+    for (const bad of [["..", "x.json"], ["terraform", "..", "..", "x"], ["/etc/passwd"], ["C:\\x.json"], [""], []]) assert.throws(() => evidenceName(...bad), /not an evidence-relative name/, JSON.stringify(bad));
+    /* At the source: no staging module hands readEvidence a platform join (whose `\\` a Windows diagnostic would print). */
+    for (const file of fs.readdirSync(__dirname.replace(`${path.sep}dist${path.sep}server${path.sep}`, `${path.sep}`)).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))) {
+      const code = readCheckoutText(path.join(__dirname.replace(`${path.sep}dist${path.sep}server${path.sep}`, `${path.sep}`), file));
+      assert.ok(!/readEvidence(?:Text)?\([^,]+,\s*path\.join\(/.test(code), `${file}: an evidence name built with path.join`);
+    }
+  });
+
+  test("certify, certify again: on a case-insensitive filesystem the captured manifest.json survives, and the bytes repeat", async () => {
+    const built = await buildPackage();
+    const captured = fs.readFileSync(path.join(built.dir, POOL_EVIDENCE_FILES.manifest), "utf8");
+    const model = caseInsensitiveFs(fs.realpathSync(built.dir));
+    const dir = fs.realpathSync(built.dir);
+    try {
+      /* The model is real: the OLD name opens the captured manifest (this is the owner's Windows failure). */
+      assert.equal(fs.readFileSync(path.join(dir, "MANIFEST.json"), "utf8"), captured, "MANIFEST.json IS manifest.json here");
+      const ctx = await built.ctx({ dir });
+      const first = certify(ctx);
+      assert.ok(first.passed, JSON.stringify(failedGates(first).map((g) => gateFailures(first, g))));
+      writeCertification(ctx, first);
+      const outputs: string[] = [EVIDENCE.certification, EVIDENCE.certificationText, EVIDENCE.manifest];
+      const bytes = outputs.map((f) => fs.readFileSync(path.join(dir, f), "utf8"));
+      assert.equal(fs.readFileSync(path.join(dir, POOL_EVIDENCE_FILES.manifest), "utf8"), captured, "the captured evidence is untouched");
+      assert.equal(JSON.parse(captured).format, "18COSMOS/EVIDENCE/v1");
+      const listed = JSON.parse(bytes[2]).files as Array<{ file: string }>;
+      assert.ok(listed.some((f) => f.file === POOL_EVIDENCE_FILES.manifest), "the certification's manifest covers the captured one");
+      assert.ok(listed.every((f) => !outputs.includes(f.file)), "and never itself or the verdict");
+      /* A rerun: the outputs cleared (never the captured manifest), certified again from the same package. */
+      clearCertification(dir);
+      assert.equal(fs.readFileSync(path.join(dir, POOL_EVIDENCE_FILES.manifest), "utf8"), captured, "clearing the certification keeps the evidence");
+      const again = certify(await built.ctx({ dir }));
+      assert.ok(again.passed, JSON.stringify(failedGates(again)));
+      writeCertification(ctx, again);
+      assert.deepEqual(outputs.map((f) => fs.readFileSync(path.join(dir, f), "utf8")), bytes, "reproducible from the same evidence package");
+      assert.deepEqual(manifestOf(dir).map((f) => f.file).filter((f) => f.toLowerCase() === "manifest.json"), [POOL_EVIDENCE_FILES.manifest]);
+    } finally {
+      model.off();
+      cleanup(built.dir);
+    }
   });
 });

@@ -24,7 +24,7 @@ import * as path from "path";
 
 import type { Check } from "../deployVerify";
 import { expectedNames } from "../deployVerify";
-import { arr, EVIDENCE, judge, num, obj, readEvidence, str } from "./evidence";
+import { arr, EVIDENCE, evidenceName, judge, num, obj, readEvidence, str } from "./evidence";
 
 export const DRAIN_FILES = Object.freeze({ tasksBefore: "tasks-before.json", tasksAfter: "tasks-after.json", serviceAfter: "service-after.json", stamp: "drain.json" });
 export const drainDir = (pool: string): string => `drain-${pool}`;
@@ -47,10 +47,10 @@ const gameExitCode = (task: Record<string, unknown>): number | null => {
 export function judgeDrain(dir: string, pool: string, environment: string, runningNow: readonly Record<string, unknown>[], run: { readonly run: string; readonly notAfter: string | null }): Check[] {
   const label = `drain ${pool}`;
   const where = drainDir(pool);
-  const before = readEvidence(dir, path.join(where, DRAIN_FILES.tasksBefore));
-  const after = readEvidence(dir, path.join(where, DRAIN_FILES.tasksAfter));
-  const service = readEvidence(dir, path.join(where, DRAIN_FILES.serviceAfter));
-  const stamp = readEvidence(dir, path.join(where, DRAIN_FILES.stamp));
+  const before = readEvidence(dir, evidenceName(where, DRAIN_FILES.tasksBefore));
+  const after = readEvidence(dir, evidenceName(where, DRAIN_FILES.tasksAfter));
+  const service = readEvidence(dir, evidenceName(where, DRAIN_FILES.serviceAfter));
+  const stamp = readEvidence(dir, evidenceName(where, DRAIN_FILES.stamp));
   const missing = [before, after, service, stamp].filter((r) => !r.ok).map((r) => (r.ok ? "" : r.problem));
   if (missing.length > 0) return [judge(`${label}: evidence`, false, "", `${missing.join("; ")} (run infra/aws/scripts/drain-pool with the evidence directory and this run id before the apply)`)];
   const checks: Check[] = [];

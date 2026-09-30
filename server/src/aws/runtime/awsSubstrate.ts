@@ -51,6 +51,7 @@ import { takeRelayerRole } from "../ownership/relayerRole";
 import { generationProbe, takeIdentityWriterRole } from "../ownership/roles";
 import type { AwsSubstrate } from "./awsRuntime";
 import type { AwsRuntimeConfig } from "./runtimeConfig";
+import { dynamoTaskStatusWriter } from "./taskStatus";
 
 export interface AwsClients {
   /** The app account's region: the game and identity tables. */
@@ -151,5 +152,8 @@ export function realAwsSubstrate(options: AwsSubstrateOptions): AwsSubstrate<Poo
     identityVerifier: () => createDynamoIdentityVerifier(clients.app, tables.identity),
 
     gameDirectory: (writer) => poolGameDirectory({ client: clients.app, table: tables.game, fence: writer.fence }),
+
+    /* L6-5A: the diagnostic TASK# item, in the game table (`taskStatus.ts`: never read by any decision). */
+    taskStatus: () => dynamoTaskStatusWriter({ client: clients.app, table: tables.game }),
   };
 }

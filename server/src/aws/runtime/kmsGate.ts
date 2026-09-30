@@ -22,7 +22,9 @@
 // `invalid-answer`, as `aws/kms/kmsDigestClient.ts` classes them), and withheld signatures separately. The first failure of each class
 // is said once; every `refused` (a key the service will not use: disabled, deleted, wrong policy) is said each time, since
 // an operator must act. The counters go into the status snapshot for the later alarm (L6-5's "signer unavailable >= 5
-// min" page reads them).
+// min" page reads them). L6-5A: they are THE KMS counters -- `runtimeMetrics.ts` sends their deltas at each status tick
+// (`KmsSigns`, `KmsSignWithheld`, `KmsTransient`, `KmsRefused`, `KmsInvalidAnswer`, `KmsOtherFailure`) and counts nothing
+// of its own.
 
 import { SignerError, type KmsClient } from "../../escrow/juno/signer";
 

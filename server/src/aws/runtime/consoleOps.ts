@@ -11,8 +11,9 @@
 // leaves the process on this path either).
 //
 // The status snapshot is kept in memory (the latest one) and is not printed: it is large, coalesced and rewritten
-// constantly; the readiness endpoint and the startup lines carry what an operator needs now, and the `TASK#` status items
-// that would publish it are LIVE-6's (preflight §3.2).
+// constantly; the readiness endpoint and the startup lines carry what an operator needs now. LIVE-6 L6-5A publishes the
+// diagnosis-sized part of it instead: the metric lines (`runtimeMetrics.ts`, CloudWatch EMF, separate lines -- an `AUDIT `
+// line is never a metric line) and the task's `TASK#` status item (`taskStatus.ts`, preflight §3.2).
 
 import { redactIdentity, type OpsRecorder } from "../../persistence/opsRecorder";
 

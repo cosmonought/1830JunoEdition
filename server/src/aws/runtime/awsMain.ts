@@ -20,6 +20,8 @@
 //
 // WHAT IS PRINTED: component and status lines, reasons, ARNs, table names, the task id -- never a credential, a secret or
 // a configuration's content (the documents hold no secret, and are still not echoed; a parse error names the field).
+// L6-5A: also the metric lines (`runtimeMetrics.ts`: CloudWatch EMF, one JSON object per line, dimensions Environment
+// and Pool only).
 
 import { randomBytes } from "crypto";
 
@@ -33,6 +35,7 @@ import { AwsStartupError, EXIT_REFUSED, EXIT_ROLE_CHANGED, startAwsRuntime, type
 import { createAwsClients, realAwsSubstrate } from "./awsSubstrate";
 import { ssmParameterSource, type ParameterSource } from "./configSource";
 import { createConsoleOpsRecorder } from "./consoleOps";
+import { createEmfSink } from "./runtimeMetrics";
 import { awsStartupReferences, checkEscrowConfigForAws, parseAwsRuntimeConfigText, type AwsRuntimeConfig } from "./runtimeConfig";
 
 /** Where an AWS task listens: its own interface (awsvpc -- the task's ENI, which only the load balancer's security group
@@ -156,6 +159,8 @@ export async function runAwsStorageMode(input: { readonly argv: readonly string[
       "; credentials: the task role (SDK default chain), never the environment",
   );
   const ops = createConsoleOpsRecorder({ build: input.build, task, pool: config.pool, now: () => Date.now(), write: (line) => console.log(line) });
+  /* L6-5A: the metric lines (CloudWatch EMF), on the same stdout as the audit lines -- one JSON object per line. */
+  const metrics = createEmfSink({ context: { environment: config.environment, pool: config.pool }, now: () => Date.now(), write: (line) => console.log(line) });
 
   try {
     runtime = await startAwsRuntime({
@@ -169,6 +174,7 @@ export async function runAwsStorageMode(input: { readonly argv: readonly string[
       task,
       substrate: realAwsSubstrate({ config, clients: createAwsClients(config) }),
       ops,
+      metrics,
       now: () => Date.now(),
       log: (line) => console.log(line),
       warn: (line) => console.warn(line),
@@ -178,6 +184,10 @@ export async function runAwsStorageMode(input: { readonly argv: readonly string[
     });
   } catch (error) {
     if (error instanceof AwsStartupError) return refuse(error.message, error.exitCode);
+    /* L6-5A: a startup that ended by an unexpected throw (not through the runtime's own refusal, which counts itself) is a
+       refused start too -- counted once, stage `unexpected`, never the message. (A loss exits 3 at once and never gets
+       here.) */
+    metrics.emit({ event: "startup-refused", metrics: { StartupRefused: 1 }, properties: { task, build: input.build, generation: config.generation, stage: "unexpected" } });
     return refuse(`the AWS runtime could not start -- ${error instanceof Error ? error.message : String(error)}`);
   }
   printAwsBanner(runtime, config, input);

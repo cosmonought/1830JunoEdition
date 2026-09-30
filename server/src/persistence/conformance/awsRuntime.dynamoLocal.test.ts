@@ -12,7 +12,8 @@
 //      conditions) before identity loads; the game stores write under the pool writer's fence (a record's HEAD names this
 //      task's pool and epoch); a newer task of the pool fences the older one -- whose self-check proves the loss (exit 3)
 //      and whose next pool-fenced write is refused by the table; the survivor's graceful shutdown drains in order.
-//   §2 a non-primary pool's task: a standby -- it takes its pool and nothing else (no identity role is written).
+//   §2 a non-primary pool's task (LIVE-6 L6-1: it now serves routes -- its own suite is l6_1Routing.dynamoLocal): it takes
+//      its pool and nothing else (no identity role is written).
 //   §3 a generation that is not the ledger's: refused before the pool is taken (no POOL# item is written).
 //   §4 with escrow (ESCROW-3B's offline chain, a KMS stand-in at the port): the ledger opened under the generation, the
 //      relayer role taken (the ledger's fence minted, then the game-table mirror), the backend verified and loaded -- the
@@ -274,17 +275,17 @@ describe("§1 the primary on the real substrate", () => {
     §2 THE STANDBY, §3 THE GENERATION
    ================================================================== */
 describe("§2 a non-primary pool's task, §3 a generation that is not the ledger's", () => {
-  test("a standby takes its pool and NOTHING else: no identity-writer role is written, /gs/readyz is 503 not-primary", async () => {
+  test("a non-primary task (LIVE-6 L6-1; L5-7's standby) takes its pool and NOTHING else: no identity-writer role is written; /gs/readyz 200 non-primary", async () => {
     const t = await awsTables("standby", 1, "p0");
     const s = await start(t, "t-s");
     try {
-      assert.equal(s.runtime.role, "standby");
+      assert.equal(s.runtime.role, "non-primary");
       assert.deepEqual(await poolItem(t.game, "p1"), { epoch: 1, task: "t-s" });
       assert.equal(await readIdentityRole(admin, t.identity), null, "no identity writer");
       await listening(s.runtime);
       const ready = await readyz(s.runtime);
-      assert.equal(ready.status, 503);
-      assert.deepEqual(ready.body.reasons, ["not-primary"]);
+      assert.equal(ready.status, 200, JSON.stringify(ready.body));
+      assert.deepEqual([ready.body.role, ready.body.identity_writer, ready.body.identity], ["non-primary", "not-primary", "verifier"]);
     } finally {
       await s.runtime.shutdown();
     }

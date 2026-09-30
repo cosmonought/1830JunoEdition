@@ -42,6 +42,8 @@ import { parseSecretArn, parseSsmParameterArn } from "../arns";
 import { PoolTakeoverLostError, PoolWriterNotCurrentError, type HeldProbe } from "../ownership/poolWriter";
 import type { OpenMoneyGames, PoolGameOwnership, SweepReport } from "../ownership/poolGameOwnership";
 import type { RoleTakeover } from "../ownership/roles";
+import { createSessionVerifier } from "../../identity/verifier";
+import type { GameOwnerRead } from "../../rooms/gameRoutes";
 import { createMemoryChainIntentStore } from "../../escrow/chainIntents";
 import { createMemoryFinancialGameStore } from "../../escrow/financialGameStore";
 import { openJunoBackend, type JunoBackend, type JunoBackendDeps } from "../../escrow/juno/junoBackend";
@@ -57,7 +59,17 @@ import { createMemoryIdentityStore } from "../../identity/store";
 import { createMemoryOpsRecorder, type MemoryOpsRecorder } from "../../persistence/opsRecorder";
 import { createMemoryHoldStore } from "../../rooms/holdStore";
 import { createMemoryRecordStore } from "../../rooms/recordStore";
-import { ALICE, BOB, controlledStore, quietConsole, seedGame, storedLog } from "../../rooms/testSupport";
+import { ALICE, BOB, controlledStore, quietConsole, seedGame, seededRecord, storedLog } from "../../rooms/testSupport";
+/* LIVE-6 L6-1 */
+import { WebSocket } from "ws";
+import { readSessionCookie } from "../../identity/cookies";
+import { IdentityService } from "../../identity/sessions";
+import type { Session } from "../../identity/store";
+import type { GameRecord } from "../../rooms/gameRecord";
+import { clientAnnouncementQuery } from "../../../../frontend/src/gameEngine/compat/clientCompatibility";
+import { CLIENT_ANSWER_CLOSE_CODE } from "../../../../frontend/src/utils/clientAnswers";
+import { AWS_RUNTIME_CONFIG_FORMAT_V2 } from "./runtimeConfig";
+import { EXIT_ROLE_CHANGED } from "./awsRuntime";
 
 quietConsole();
 
@@ -201,6 +213,8 @@ interface HarnessOptions {
   readonly restartDuringIdentityLoad?: boolean;
   /** Every chain call waits for this gate (a verification still in flight). */
   readonly chainGate?: Promise<void>;
+  /** LIVE-6 L6-1: the runtime's input limits (the router's reap, for instance). */
+  readonly limits?: AwsRuntimeInput<FakeWriter, Ledger>["limits"];
 }
 
 interface Harness {
@@ -225,6 +239,11 @@ interface Harness {
     chainCalls: number;
   };
   writer(): FakeWriter;
+  /** LIVE-6 L6-1: what the routing read answers (mutable), the durable identity records a verifier reads (written by a
+   *  writer the test runs over the same store), the owners a non-primary task's directory reads. */
+  readonly routing: { value: { primary_pool: string } | null | "throws" };
+  readonly sharedIdentity: ReturnType<typeof createMemoryIdentityStore>;
+  readonly owners: Map<string, GameOwnerRead | "throws">;
   input(over?: Partial<AwsRuntimeInput<FakeWriter, Ledger>>): AwsRuntimeInput<FakeWriter, Ledger>;
   start(over?: Partial<AwsRuntimeInput<FakeWriter, Ledger>>): Promise<AwsRuntime>;
 }
@@ -257,6 +276,9 @@ function harness(options: HarnessOptions = {}): Harness {
   const hooks: Harness["hooks"] = { authorityAtLoad: [], chainCalls: 0 };
   let writer: FakeWriter | null = null;
   const relayerAnswers = [...(options.relayer ?? [])];
+  const routing: Harness["routing"] = { value: { primary_pool: options.primary === false ? "p0" : "p1" } };
+  const sharedIdentity = createMemoryIdentityStore();
+  const owners = new Map<string, GameOwnerRead | "throws">();
   let sweepThrows = options.sweepThrows ?? 0;
 
   const identityStore = Object.assign(createMemoryIdentityStore(), { grants: createMemoryGrantStore(), health: () => ({ loaded: true, fenced: null }) });
@@ -372,6 +394,36 @@ function harness(options: HarnessOptions = {}): Harness {
       events.push(`kms(${region})`);
       return kms.port;
     },
+    async readRouting() {
+      events.push("routing:read");
+      if (routing.value === "throws") throw new Error("RoutingUnreadableError: the routing item is not this build's (injected)");
+      return routing.value;
+    },
+    identityVerifier() {
+      events.push("identity:verifier");
+      /* The durable records, read one at a time at each question -- never a copy kept. */
+      return createSessionVerifier({
+        session: async (id) => sharedIdentity.snapshot().sessions.find((record) => record.session_id === id) ?? null,
+        principal: async (id) => sharedIdentity.snapshot().principals.find((record) => record.principal_id === id) ?? null,
+        family: async (id) => sharedIdentity.snapshot().families.find((record) => record.family_id === id) ?? null,
+        profile: async (id) => sharedIdentity.snapshot().profiles.find((record) => record.profile_id === id) ?? null,
+      });
+    },
+    gameDirectory() {
+      events.push("directory");
+      return {
+        async ownerOf(gameId) {
+          const owner = owners.get(gameId);
+          if (owner === "throws") throw new Error("the ownership HEAD is damaged (injected)");
+          return owner ?? { kind: "absent" };
+        },
+        async primaryPool() {
+          if (routing.value === "throws") throw new Error("RoutingUnreadableError (injected)");
+          return routing.value?.primary_pool ?? null;
+        },
+        records: { load: (gameId: string) => records.load(gameId) },
+      };
+    },
   };
 
   const openBackend = async (deps: JunoBackendDeps): Promise<JunoBackend> => {
@@ -426,8 +478,9 @@ function harness(options: HarnessOptions = {}): Harness {
     warn: (line) => lines.push(line),
     error: (line) => lines.push(line),
     exit: (code) => exits.push(code),
-    timing: { sweepEveryMs: 3_600_000, sweepRetryMs: 5, relayerRetryMs: 3_600_000, failFastDelayMs: 5, drainEscrowMs: 500, drainOwnershipMs: 500, drainChainFactsMs: 500, drainIdentityMs: 2_000 },
+    timing: { sweepEveryMs: 3_600_000, sweepRetryMs: 5, relayerRetryMs: 3_600_000, failFastDelayMs: 5, drainEscrowMs: 500, drainOwnershipMs: 500, drainChainFactsMs: 500, drainIdentityMs: 2_000, routingWatchMs: 3_600_000 },
     openJunoBackend: openBackend,
+    ...(options.limits !== undefined ? { limits: options.limits } : {}),
     ...over,
   });
 
@@ -446,6 +499,9 @@ function harness(options: HarnessOptions = {}): Harness {
       if (writer === null) throw new Error("no pool writer was taken");
       return writer;
     },
+    routing,
+    sharedIdentity,
+    owners,
     input,
     start: (over) => startAwsRuntime(input(over)),
   };
@@ -491,6 +547,7 @@ const before = (events: readonly string[], a: string, b: string) => {
 
 async function closed(runtime: AwsRuntime): Promise<void> {
   if (runtime.server !== null) await runtime.server.close().catch(() => undefined);
+  else if (runtime.router !== null) await runtime.router.close().catch(() => undefined);
   else await new Promise<void>((resolve) => runtime.http.close(() => resolve()));
 }
 
@@ -544,33 +601,47 @@ describe("L5-7 startup: the one order", () => {
     }
   });
 
-  test("a NON-primary task becomes a standby: no identity writer store, no ledger, no relayer, no stores, no claims; /gs/readyz 503 not-primary; no socket is accepted", async () => {
+  test("a NON-primary task (LIVE-6 L6-1; L5-7's standby) takes no role and writes nothing: no identity writer store, no ledger, no relayer, no stores, no claims; the verifier authenticates; /gs/readyz 200 non-primary", async () => {
     const h = harness({ primary: false, escrow: true });
     const runtime = await h.start();
     try {
-      assert.equal(runtime.role, "standby");
-      assert.deepEqual(h.events.filter((event) => !event.startsWith("writer:")), ["generation:read", "pool:take", "identity:role"], "nothing after the routing answered not-primary");
-      assert.equal(runtime.identity, null);
+      assert.equal(runtime.role, "non-primary");
+      assert.deepEqual(
+        h.events.filter((event) => !event.startsWith("writer:")),
+        ["generation:read", "pool:take", "identity:role", "identity:verifier", "directory", "routing:read"],
+        "after the routing answered not-primary: only the read-only verifier and directory (and the routing watch's first read) -- no identity store, ledger, relayer, stores, ownership or KMS",
+      );
+      assert.equal(runtime.identity, null, "no writable identity copy");
       assert.equal(runtime.server, null);
-      assert.equal(await runtime.sweepNow(), null, "a standby claims nothing");
+      assert.ok(runtime.router !== null);
+      assert.equal(await runtime.sweepNow(), null, "a non-primary task claims nothing");
+      assert.equal(await runtime.retryRelayerRole(), false, "and takes no relayer role");
       const port = await listening(runtime);
       const ready = await get(port, "/gs/readyz");
-      assert.equal(ready.status, 503);
+      assert.equal(ready.status, 200, "readiness by its serving role: a non-primary task that holds its pool may be sent its own path's sockets");
       const body = JSON.parse(ready.body);
-      assert.equal(body.ready, false);
-      assert.ok(body.reasons.includes("not-primary"));
+      assert.equal(body.ready, true);
+      assert.equal(body.role, "non-primary");
+      assert.equal(body.serving, "route");
+      assert.equal(body.identity, "verifier");
       assert.equal(body.identity_writer, "not-primary");
+      assert.equal(body.relayer, "not-primary");
+      /* The pool writer's readiness still gates it. */
+      h.writer().ready = false;
+      assert.equal((await get(port, "/gs/readyz")).status, 503);
+      h.writer().ready = true;
       assert.equal((await get(port, "/gs/healthz")).status, 200, "liveness is unchanged");
-      assert.equal((await get(port, "/gs")).status, 503, "no player is served");
-      /* An upgrade is refused: the socket is closed without a 101. */
+      assert.equal((await get(port, "/gs")).status, 503, "no HTTP resource is served");
+      /* An upgrade without a session is refused by the verifier-backed gate: never a 101. */
       const upgraded = await new Promise<number | "closed">((resolve) => {
-        const request = http.request({ host: "127.0.0.1", port, path: "/gs", headers: { Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==" } });
+        const request = http.request({ host: "127.0.0.1", port, path: "/gs", headers: { Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", Origin: "https://play.example", "X-Forwarded-For": "203.0.113.9" } });
         request.on("upgrade", () => resolve(101));
         request.on("response", (response) => resolve(response.statusCode ?? 0));
         request.on("error", () => resolve("closed"));
         request.end();
       });
-      assert.notEqual(upgraded, 101);
+      assert.equal(upgraded, 401);
+      assert.equal(h.ops.lines.some((line) => line.event === "aws.non-primary"), true);
     } finally {
       await runtime.shutdown();
     }
@@ -1023,7 +1094,8 @@ describe("L5-7 configuration: the references and the documents fail closed", () 
         return error.message;
       }
     };
-    assert.match(problems(runtimeDoc({ format: "18COSMOS/AWS-RUNTIME/v2" })), /format must be/);
+    /* LIVE-6 L6-1: v2 (v1 + the route table) is this build's too; the next format is not. */
+    assert.match(problems(runtimeDoc({ format: "18COSMOS/AWS-RUNTIME/v3" })), /format must be/);
     assert.match(problems(runtimeDoc({ extra: 1 })), /unknown field extra/);
     const { generation: _g, ...noGeneration } = runtimeDoc();
     assert.match(problems(noGeneration), /generation is required/);
@@ -1168,5 +1240,192 @@ describe("L5-7 the KMS gate and PROCESS mode", () => {
     assert.match(start, /await import\("\.\/aws\/runtime\/awsMain"\)/);
     const storageMode = fs.readFileSync(path.join(root, "aws/runtime/storageMode.ts"), "utf8");
     assert.equal(/^import /m.test(storageMode), false, "storageMode.ts imports nothing");
+  });
+});
+
+/* ==================================================================
+    LIVE-6 L6-1: the non-primary task serves routes, and a proven routing change restarts a task into its new role
+   ================================================================== */
+
+const V2_ROUTES = { p0: { ws_path: "/gs/p/p0" }, p1: { ws_path: "/gs/p/p1" } };
+const configV2 = (over: Record<string, unknown> = {}) => parseAwsRuntimeConfig(runtimeDoc({ format: AWS_RUNTIME_CONFIG_FORMAT_V2, routes: V2_ROUTES, ...over }));
+
+/** A profiled browser whose records a WRITER (the primary's identity service) commits to the shared durable store the
+ *  non-primary task's verifier reads. */
+async function writerBrowser(h: Harness, name: string) {
+  const writer = await IdentityService.open(h.sharedIdentity);
+  const boot = await writer.bootstrap({ kind: "none" }, false, Date.now());
+  const cookie = (boot as { setCookie: string }).setCookie.split(";")[0];
+  const read = readSessionCookie(cookie);
+  assert.equal((await writer.createProfile(read, name, Date.now())).kind, "ok");
+  const sessionId = read.kind === "session" ? read.sessionId : "";
+  return { writer, cookie, sessionId, principalId: (writer.peekSession(sessionId) as Session).principal_id };
+}
+
+/** A socket through the "load balancer" (one trusted hop), with the browser's cookie and a protocol-1 announcement. */
+function openTab(port: number, cookie: string, path = "/gs", query = clientAnnouncementQuery(1, [11], "tab")): Promise<{ socket: WebSocket; frames: Array<Record<string, unknown>>; closed: Promise<number> }> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}${path}${query === "" ? "" : `?${query}`}`, { origin: "https://play.example", headers: { Cookie: cookie, "X-Forwarded-For": "203.0.113.7" } });
+    const frames: Array<Record<string, unknown>> = [];
+    const closed = new Promise<number>((done) => socket.once("close", (code) => done(code)));
+    socket.on("message", (raw) => frames.push(JSON.parse(String(raw)) as Record<string, unknown>));
+    socket.once("unexpected-response", (_request, response) => reject(new Error(`upgrade refused ${response.statusCode}`)));
+    socket.once("error", reject);
+    socket.once("open", () => resolve({ socket, frames, closed }));
+  });
+}
+
+describe("L6-1 the AWS runtime: the non-primary task routes; a routing change restarts a task into its new role", () => {
+  test("a non-primary task authenticates through the verifier and routes a game owned elsewhere to its owner's trusted path -- writing nothing", async () => {
+    const h = harness({ primary: false });
+    const runtime = await h.start({ config: configV2() });
+    try {
+      const ann = await writerBrowser(h, "Ann");
+      const commits = h.sharedIdentity.stats.commits;
+      const base = seededRecord([ALICE, BOB], { dealt: true });
+      const record = { ...base, seats: base.seats.map((seat, at) => (at === 0 ? { ...seat, principal_id: ann.principalId } : seat)) } as GameRecord;
+      assert.equal((await h.records.put(record, null)).kind, "committed");
+      h.owners.set(record.game_id, { kind: "owned", pool: "p0" });
+      const port = await listening(runtime);
+      h.events.length = 0;
+      const tab = await openTab(port, ann.cookie, "/gs/p/p1");
+      tab.socket.send(JSON.stringify({ kind: "hello", gameId: record.game_id, build: "tab", baseIndex: -1 }));
+      assert.equal(await tab.closed, CLIENT_ANSWER_CLOSE_CODE);
+      assert.deepEqual(tab.frames.map((frame) => [frame.kind, frame.wsPath]), [["route", "/gs/p/p0"]]);
+      assert.equal(h.sharedIdentity.stats.commits, commits, "the verifier wrote no identity record");
+      assert.deepEqual(h.events.filter((event) => !event.startsWith("writer:")), [], "no claim, no store, no role, no identity writer -- nothing but reads");
+      const status = runtime.status() as { aws: { role: string; router: { routed: number } } };
+      assert.deepEqual([status.aws.role, status.aws.router.routed], ["non-primary", 1]);
+    } finally {
+      await runtime.shutdown();
+    }
+  });
+
+  test("a v1 runtime document has no route table: a non-primary task answers every game unavailable, exactly as a game with no destination", async () => {
+    const h = harness({ primary: false });
+    const runtime = await h.start();
+    try {
+      const ann = await writerBrowser(h, "Ann");
+      const base = seededRecord([ALICE, BOB], { dealt: true });
+      const record = { ...base, seats: base.seats.map((seat, at) => (at === 0 ? { ...seat, principal_id: ann.principalId } : seat)) } as GameRecord;
+      await h.records.put(record, null);
+      h.owners.set(record.game_id, { kind: "owned", pool: "p0" });
+      const tab = await openTab(await listening(runtime), ann.cookie);
+      tab.socket.send(JSON.stringify({ kind: "hello", gameId: record.game_id, build: "tab", baseIndex: -1 }));
+      await until(() => tab.frames.length > 0, "the answer");
+      assert.deepEqual([tab.frames[0].kind, tab.frames[0].code], ["error", "unavailable"]);
+      tab.socket.terminate();
+    } finally {
+      await runtime.shutdown();
+    }
+  });
+
+  test("PROMOTION: a well-formed routing naming this pool ends the non-primary task gracefully with exit 5; an unreadable, empty or other routing proves nothing", async () => {
+    const h = harness({ primary: false });
+    const runtime = await h.start({ config: configV2() });
+    const port = await listening(runtime);
+    for (const [label, value] of [["unreadable", "throws"], ["no routing", null], ["another pool", { primary_pool: "p9" }]] as const) {
+      h.routing.value = value;
+      await runtime.checkRouting();
+      assert.deepEqual(h.exits, [], `${label}: no reaction`);
+      assert.equal(runtime.exitCode(), null, label);
+    }
+    const ann = await writerBrowser(h, "Ann");
+    const tab = await openTab(port, ann.cookie);
+    h.routing.value = { primary_pool: "p1" };
+    await runtime.checkRouting();
+    await until(() => h.exits.length > 0, "the role change's exit");
+    assert.deepEqual(h.exits, [EXIT_ROLE_CHANGED]);
+    assert.equal(runtime.exitCode(), EXIT_ROLE_CHANGED, "a stop signal now never turns it into 0");
+    assert.deepEqual(runtime.shutdownSteps, ["readiness-503", "timers-stopped", "server-closed", "pool-writer-stopped", "ops-flushed"]);
+    assert.equal(await tab.closed, 1012, "its sockets are told to reconnect (service restarting)");
+    assert.ok(h.ops.lines.some((line) => line.event === "aws.routing-changed"));
+    assert.equal(h.events.includes("identity:role") && h.events.filter((event) => event === "identity:role").length, 1, "no role is taken in-process: the restart takes it through the startup order");
+  });
+
+  test("DEMOTION: a well-formed routing naming another pool ends the primary gracefully (identity drained, its resident no-money games released) with exit 5; a loss during that drain keeps exit 3", async () => {
+    const h = harness();
+    const runtime = await h.start({ config: configV2() });
+    /* A resident no-money game (loaded the way a player's hello loads it): the demotion gives it back. */
+    const gameId = await seedGame(h.records, [ALICE, BOB], { dealt: true });
+    h.control.logs.set(gameId, storedLog(0));
+    await runtime.server!.lifecycle.loadGame(gameId);
+    h.routing.value = { primary_pool: "p1" };
+    await runtime.checkRouting();
+    assert.deepEqual(h.exits, [], "the routing still names this pool");
+    h.routing.value = { primary_pool: "p0" };
+    await runtime.checkRouting();
+    await until(() => h.exits.length > 0, "the role change's exit");
+    assert.deepEqual(h.exits, [EXIT_ROLE_CHANGED]);
+    assert.ok(runtime.shutdownSteps.includes("identity-settled"), runtime.shutdownSteps.join(","));
+    assert.equal(runtime.shutdownSteps.at(-1), "ops-flushed");
+    const steps = [...runtime.shutdownSteps];
+    assert.ok(steps.indexOf("server-closed") < steps.indexOf("no-money-released") && steps.indexOf("no-money-released") < steps.indexOf("ownership-settled"), steps.join(","));
+    assert.ok(h.events.includes(`release:${gameId}`), "the resident no-money game was released for the new primary");
+
+    /* A loss while the role change drains: the loss's exit, at once; the role change never exits after it. */
+    const lost = harness();
+    const second = await lost.start({ config: configV2() });
+    lost.routing.value = { primary_pool: "p0" };
+    await second.checkRouting();
+    lost.writer().markLost("a newer primary task took the identity-writer role (injected)");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.deepEqual(lost.exits, [3]);
+    assert.equal(second.exitCode(), 3);
+    await closed(second);
+  });
+
+  test("the primary answers its own pool's configured path (v2) -- and no other pool's", async () => {
+    const h = harness();
+    const runtime = await h.start({ config: configV2() });
+    try {
+      const port = await listening(runtime);
+      const status = (path: string) =>
+        new Promise<number>((resolve) => {
+          const request = http.request({ host: "127.0.0.1", port, path, headers: { Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==", Origin: "https://play.example", "X-Forwarded-For": "203.0.113.8" } });
+          request.on("upgrade", () => resolve(101));
+          request.on("response", (response) => resolve(response.statusCode ?? 0));
+          request.on("error", () => resolve(0));
+          request.end();
+        });
+      assert.equal(await status("/gs/p/p1"), 401, "its own path: the gate ran (no cookie)");
+      assert.equal(await status("/gs/p/p0"), 404, "another pool's path is not this server's");
+    } finally {
+      await runtime.shutdown();
+    }
+  });
+
+  test("the v2 document: the route table is checked like every other field -- paths only, pools only, nothing unknown", () => {
+    const problems = (routes: unknown) => {
+      try {
+        parseAwsRuntimeConfig(runtimeDoc({ format: AWS_RUNTIME_CONFIG_FORMAT_V2, routes }));
+        return "";
+      } catch (error) {
+        assert.ok(error instanceof AwsRuntimeConfigError, String(error));
+        return error.message;
+      }
+    };
+    assert.equal(problems({}), "", "an empty table is allowed");
+    assert.deepEqual(configV2().routes, { p0: { wsPath: "/gs/p/p0" }, p1: { wsPath: "/gs/p/p1" } });
+    assert.deepEqual(parseAwsRuntimeConfig(runtimeDoc()).routes, {}, "v1: no table");
+    assert.throws(() => parseAwsRuntimeConfig(runtimeDoc({ format: AWS_RUNTIME_CONFIG_FORMAT_V2 })), /routes is required/);
+    assert.match(problems([]), /routes must be an object/);
+    assert.match(problems({ p2: { ws_path: "//evil.example/gs" } }), /routes.p2: ws_path is not a plain absolute path/);
+    assert.match(problems({ p2: { ws_path: "https://evil.example/gs/p/p2" } }), /not a plain absolute path/);
+    assert.match(problems({ p2: { ws_path: "/api/p2" } }), /must be under \/gs\//);
+    assert.match(problems({ p2: { ws_path: "/gs/p/p2", bundle_path: "//evil.example/" } }), /bundle_path is not a plain absolute path/);
+    assert.match(problems({ p2: { ws_path: "/gs/p/p2", host: "evil.example" } }), /unknown field routes.p2.host/);
+    assert.match(problems({ "op:run": { ws_path: "/gs/p/op" } }), /not a pool/);
+    assert.match(problems({ p2: { ws_path: "/gs/p/x" }, p3: { ws_path: "/gs/p/x" } }), /another pool's too/);
+    assert.match(problems({ p2: "/gs/p/p2" }), /must be \{"ws_path"/);
+    const v1WithRoutes = (() => {
+      try {
+        parseAwsRuntimeConfig(runtimeDoc({ routes: {} }));
+        return "";
+      } catch (error) {
+        return (error as Error).message;
+      }
+    })();
+    assert.match(v1WithRoutes, /unknown field routes/, "v1 stays exactly v1");
   });
 });

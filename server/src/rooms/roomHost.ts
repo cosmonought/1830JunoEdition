@@ -46,6 +46,7 @@ import { isStoreCorrupt, isStoreIncompatible } from "../persistence/storeResult"
 import { isMaintenanceHold, type CommittedView } from "./committedView";
 import { countByClass, discoverGames, summaryLine, type DiscoveredGame, type DiscoveryReport } from "./discovery";
 import type { GameActor, Tx } from "./gameActor";
+import { GameRoutedError } from "./gameOwnership";
 import {
   effectiveStatus,
   isTerminal,
@@ -182,6 +183,10 @@ export interface RoomHostDeps {
    *  (`reload`, then close 4426) and this host shows it nothing more of the game. A legacy socket always may (it
    *  announced no rules). Absent (a host built without a server): no client check. */
   clientMayRead?: (socket: WebSocket, gameId: string, view: CommittedView) => boolean;
+  /** LIVE-6 L6-1: a room hello for a game another pool owns (the claim was refused, nothing of it was read): answer the
+   *  route, when there is one to answer (true: answered -- the route frame, or the read authorization's refusal).
+   *  False, or absent: the answer is exactly as before (`unavailableFor`). */
+  answerRouted?: (socket: WebSocket, gameId: string, routed: GameRoutedError) => Promise<boolean>;
 }
 
 /** The board's own end and close, read off a session. */
@@ -1583,7 +1588,11 @@ export function createRoomHost(deps: RoomHostDeps) {
     try {
       game = await actorFor(gameId);
     } catch (error) {
-      if (error instanceof GameUnavailableError) return deps.send(socket, { kind: "error", ...unavailableFor(gameId, principalId) });
+      if (error instanceof GameUnavailableError) {
+        /* LIVE-6 L6-1: owned by another pool -- its route, when the server has one to answer. */
+        if (error.routed !== null && deps.answerRouted !== undefined && (await deps.answerRouted(socket, gameId, error.routed))) return;
+        return deps.send(socket, { kind: "error", ...unavailableFor(gameId, principalId) });
+      }
       throw error;
     }
     if (game === null) return deps.send(socket, { kind: "error", code: "not-found", reason: "There is no such game." });
@@ -2140,12 +2149,15 @@ export type RoomHost = ReturnType<typeof createRoomHost>;
 /** LIVE-3C: the store could not be read just now -- not a verdict on the game. Answered `unavailable`, tried again at
  *  the next ask (the registry drops a failed load). */
 export class GameUnavailableError extends Error {
+  /** LIVE-6 L6-1: the load failed because another pool owns the game (its claim was refused): the owner the table named. */
+  readonly routed: GameRoutedError | null;
   constructor(
     readonly gameId: string,
     cause: unknown,
   ) {
     super(`${gameId} could not be loaded: ${cause instanceof Error ? cause.message : String(cause)}`);
     this.name = "GameUnavailableError";
+    this.routed = cause instanceof GameRoutedError ? cause : null;
   }
 }
 

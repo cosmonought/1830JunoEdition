@@ -46,6 +46,7 @@ import type { IdentityLimiter } from "./limiter";
 import type { GsMode } from "./mode";
 import { originAllowed } from "./origins";
 import type { IdentityService } from "./sessions";
+import type { SessionVerifier } from "./verifier";
 import {
   parseClientAnnouncement,
   rawClientAnnouncementOf,
@@ -73,6 +74,9 @@ export interface SocketCounts {
 export interface UpgradeGate {
   mode: GsMode;
   wsPath: string;
+  /** LIVE-6 L6-1: further exact socket paths this server answers (its own pool's route path, `/gs/p/<pool>`, from the
+   *  trusted runtime configuration). Absent: `wsPath` only, exactly as before. */
+  alsoWsPaths?: readonly string[];
   allowedOrigins: ReadonlySet<string>;
   allowedOriginList: readonly string[];
   trustedProxyHops: number;
@@ -97,78 +101,10 @@ export type UpgradeDecision =
 const seconds = (ms: number) => Math.max(1, Math.ceil(ms / 1000));
 
 export function decideUpgrade(request: Pick<IncomingMessage, "headers" | "socket" | "url">, gate: UpgradeGate): UpgradeDecision {
-  const now = gate.now();
-  const { limits, limiter } = gate;
-
-  /* 1. PATH */
-  let pathname: string;
-  let query: URLSearchParams;
-  try {
-    const url = new URL(request.url ?? "/", "http://localhost");
-    pathname = url.pathname;
-    query = url.searchParams;
-  } catch {
-    return { ok: false, status: 404, step: "path", why: "unreadable path" };
-  }
-  if (!(pathname === gate.wsPath || (gate.mode === "development" && pathname === "/"))) {
-    return { ok: false, status: 404, step: "path", why: "not the game socket path" };
-  }
-
-  /* 2. GLOBAL CAPACITY */
-  if (gate.counts.global() >= limits.maxSocketsGlobal) {
-    limiter.deny("sockets-global");
-    return { ok: false, status: 503, step: "capacity", retryAfterMs: 5_000, why: "the server is at its socket capacity" };
-  }
-  /* PEEKED here, SPENT after step 3: an address refused by its own limits must not drain the server's budget
-     (LIVE-2B adversarial review, High). */
-  const globalWait = limiter.upgradesGlobal.peek("global");
-  if (globalWait > 0) {
-    limiter.deny("upgrades-global");
-    return { ok: false, status: 503, step: "capacity", retryAfterMs: globalWait, why: "the server is taking too many connections" };
-  }
-
-  /* 3. IP */
-  const client = clientIpOf(request, gate.trustedProxyHops);
-  if (!client.ok) {
-    limiter.deny("client-ip");
-    return { ok: false, status: 400, step: "ip", why: client.reason };
-  }
-  const ip = client.ip;
-  const cooling = limiter.cooldowns.remaining(ip.key);
-  if (cooling > 0) {
-    limiter.deny("malformed-cooldown");
-    return { ok: false, status: 429, step: "ip", retryAfterMs: cooling, why: "malformed-frame cooldown" };
-  }
-  const failedWait = limiter.failedUpgrades.peek(ip);
-  if (failedWait > 0) {
-    limiter.deny("upgrades-failed-ip");
-    return { ok: false, status: 429, step: "ip", retryAfterMs: failedWait, why: "too many failed upgrades" };
-  }
-  const ipWait = limiter.upgrades.take(ip);
-  if (ipWait > 0) {
-    limiter.deny("upgrades-ip");
-    return { ok: false, status: 429, step: "ip", retryAfterMs: ipWait, why: "too many upgrades" };
-  }
-  if (gate.counts.forIp(ip.key) >= limits.maxSocketsPerIp) {
-    limiter.deny("sockets-ip");
-    return { ok: false, status: 429, step: "ip", retryAfterMs: 5_000, why: "too many sockets from this address" };
-  }
-  if (ip.aggregate !== null && gate.counts.forAggregate(ip.aggregate) >= limits.maxSocketsPerIp * limits.ipv6AggregateFactor) {
-    limiter.deny("sockets-ip-aggregate");
-    return { ok: false, status: 429, step: "ip", retryAfterMs: 5_000, why: "too many sockets from this network" };
-  }
-  limiter.upgradesGlobal.take("global");
-
-  const failed = (status: 401 | 403 | 429, step: UpgradeStep, why: string, retryAfterMs?: number): UpgradeDecision => {
-    limiter.failedUpgrades.take(ip);
-    return { ok: false, status, step, why, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) };
-  };
-
-  /* 4. ORIGIN */
-  if (!originAllowed(request.headers.origin, gate.allowedOrigins)) {
-    limiter.deny("origin");
-    return failed(403, "origin", "Origin not allowed");
-  }
+  const pre = precheck(request, gate);
+  if (!pre.ok) return pre.decision;
+  const { now, failed } = pre;
+  const { limiter } = gate;
 
   /* 5. AUTHENTICATE */
   let principalId: string;
@@ -196,12 +132,172 @@ export function decideUpgrade(request: Pick<IncomingMessage, "headers" | "socket
     ({ principalId, sessionId, sessionExpiresAt, provisional } = auth);
   }
 
+  return afterAuthentication(gate, pre, { principalId, sessionId, sessionExpiresAt, provisional, profiled: gate.hasProfile(principalId) });
+}
+
+/* ==================================================================
+    LIVE-6 L6-1: THE SAME UPGRADE, AUTHENTICATED BY THE IDENTITY VERIFIER (a task that is not the identity writer)
+   ==================================================================
+   A non-primary task holds no identity in memory: step 5 (and 5b, from the same reads) is answered by the verifier's
+   strongly consistent reads of the durable records (`identity/verifier.ts`) -- which is the one await in the gate.
+   Everything else is `decideUpgrade`'s own steps, in its order, spending the same budgets: steps 1-4 run first,
+   synchronously, exactly as there; then the verifier; then -- because other upgrades may have been registered while the
+   reads were in flight -- the socket caps are checked AGAIN (global, per address, per /48) before step 6's, so the caps
+   hold exactly as they do without the await. The caller still runs `handleUpgrade` synchronously after `ok`.
+   Production only: development identity is loopback-only and never runs against AWS tables. A verifier that cannot
+   answer (a failed read, damaged records) is 503 -- a fault of the store, not the caller's, so it is not charged to the
+   address's failed-upgrade budget. */
+export interface VerifiedUpgradeGate extends Omit<UpgradeGate, "identity" | "devAuthenticator" | "hasProfile" | "mode"> {
+  readonly mode: "production";
+  readonly verifier: SessionVerifier;
+}
+
+export async function decideVerifiedUpgrade(request: Pick<IncomingMessage, "headers" | "socket" | "url">, gate: VerifiedUpgradeGate): Promise<UpgradeDecision> {
+  if (gate.mode !== "production") return { ok: false, status: 503, step: "authenticate", why: "the identity verifier runs in production mode only" };
+  const pre = precheck(request, { ...gate, mode: "production" });
+  if (!pre.ok) return pre.decision;
+  const { now, ip, failed } = pre;
+  const { limiter, limits } = gate;
+
+  /* 5 + 5b. AUTHENTICATE, from the durable records (the one await). */
+  const auth = await gate.verifier.authenticate(readSessionCookie(request.headers.cookie), now);
+  if (auth.kind === "unavailable") {
+    limiter.deny("identity-unavailable");
+    return { ok: false, status: 503, step: "authenticate", retryAfterMs: 5_000, why: "the identity records could not be read" };
+  }
+  if (auth.kind !== "ok") {
+    limiter.deny("authenticate");
+    return failed(401, "authenticate", auth.why);
+  }
+
+  /* The caps of steps 2-3 again: sockets registered while the reads were in flight count. */
+  if (gate.counts.global() >= limits.maxSocketsGlobal) {
+    limiter.deny("sockets-global");
+    return { ok: false, status: 503, step: "capacity", retryAfterMs: 5_000, why: "the server is at its socket capacity" };
+  }
+  if (gate.counts.forIp(ip.key) >= limits.maxSocketsPerIp) {
+    limiter.deny("sockets-ip");
+    return { ok: false, status: 429, step: "ip", retryAfterMs: 5_000, why: "too many sockets from this address" };
+  }
+  if (ip.aggregate !== null && gate.counts.forAggregate(ip.aggregate) >= limits.maxSocketsPerIp * limits.ipv6AggregateFactor) {
+    limiter.deny("sockets-ip-aggregate");
+    return { ok: false, status: 429, step: "ip", retryAfterMs: 5_000, why: "too many sockets from this network" };
+  }
+
+  return afterAuthentication(gate, pre, { principalId: auth.principalId, sessionId: auth.sessionId, sessionExpiresAt: auth.sessionExpiresAt, provisional: auth.provisional, profiled: auth.profiled });
+}
+
+/* ---------------------------------------------------------------------------
+    The shared steps (one implementation for both gates)
+   --------------------------------------------------------------------------- */
+
+type Prechecked =
+  | { readonly ok: false; readonly decision: UpgradeDecision }
+  | {
+      readonly ok: true;
+      readonly now: number;
+      readonly ip: IpKey;
+      readonly query: URLSearchParams;
+      readonly failed: (status: 401 | 403 | 429, step: UpgradeStep, why: string, retryAfterMs?: number) => UpgradeDecision;
+    };
+
+type GateSteps = Pick<UpgradeGate, "mode" | "wsPath" | "alsoWsPaths" | "allowedOrigins" | "trustedProxyHops" | "limiter" | "limits" | "counts" | "now">;
+
+/** Steps 1-4: path, capacity, IP, Origin -- in the frozen order, spending the same budgets. */
+function precheck(request: Pick<IncomingMessage, "headers" | "socket" | "url">, gate: GateSteps): Prechecked {
+  const now = gate.now();
+  const { limits, limiter } = gate;
+  const refused = (decision: UpgradeDecision): Prechecked => ({ ok: false, decision });
+
+  /* 1. PATH */
+  let pathname: string;
+  let query: URLSearchParams;
+  try {
+    const url = new URL(request.url ?? "/", "http://localhost");
+    pathname = url.pathname;
+    query = url.searchParams;
+  } catch {
+    return refused({ ok: false, status: 404, step: "path", why: "unreadable path" });
+  }
+  /* LIVE-6 L6-1: this pool's own route path (`/gs/p/<pool>`, the trusted configuration's) is a game socket path too. */
+  if (!(pathname === gate.wsPath || (gate.alsoWsPaths ?? []).includes(pathname) || (gate.mode === "development" && pathname === "/"))) {
+    return refused({ ok: false, status: 404, step: "path", why: "not the game socket path" });
+  }
+
+  /* 2. GLOBAL CAPACITY */
+  if (gate.counts.global() >= limits.maxSocketsGlobal) {
+    limiter.deny("sockets-global");
+    return refused({ ok: false, status: 503, step: "capacity", retryAfterMs: 5_000, why: "the server is at its socket capacity" });
+  }
+  /* PEEKED here, SPENT after step 3: an address refused by its own limits must not drain the server's budget
+     (LIVE-2B adversarial review, High). */
+  const globalWait = limiter.upgradesGlobal.peek("global");
+  if (globalWait > 0) {
+    limiter.deny("upgrades-global");
+    return refused({ ok: false, status: 503, step: "capacity", retryAfterMs: globalWait, why: "the server is taking too many connections" });
+  }
+
+  /* 3. IP */
+  const client = clientIpOf(request, gate.trustedProxyHops);
+  if (!client.ok) {
+    limiter.deny("client-ip");
+    return refused({ ok: false, status: 400, step: "ip", why: client.reason });
+  }
+  const ip = client.ip;
+  const cooling = limiter.cooldowns.remaining(ip.key);
+  if (cooling > 0) {
+    limiter.deny("malformed-cooldown");
+    return refused({ ok: false, status: 429, step: "ip", retryAfterMs: cooling, why: "malformed-frame cooldown" });
+  }
+  const failedWait = limiter.failedUpgrades.peek(ip);
+  if (failedWait > 0) {
+    limiter.deny("upgrades-failed-ip");
+    return refused({ ok: false, status: 429, step: "ip", retryAfterMs: failedWait, why: "too many failed upgrades" });
+  }
+  const ipWait = limiter.upgrades.take(ip);
+  if (ipWait > 0) {
+    limiter.deny("upgrades-ip");
+    return refused({ ok: false, status: 429, step: "ip", retryAfterMs: ipWait, why: "too many upgrades" });
+  }
+  if (gate.counts.forIp(ip.key) >= limits.maxSocketsPerIp) {
+    limiter.deny("sockets-ip");
+    return refused({ ok: false, status: 429, step: "ip", retryAfterMs: 5_000, why: "too many sockets from this address" });
+  }
+  if (ip.aggregate !== null && gate.counts.forAggregate(ip.aggregate) >= limits.maxSocketsPerIp * limits.ipv6AggregateFactor) {
+    limiter.deny("sockets-ip-aggregate");
+    return refused({ ok: false, status: 429, step: "ip", retryAfterMs: 5_000, why: "too many sockets from this network" });
+  }
+  limiter.upgradesGlobal.take("global");
+
+  const failed = (status: 401 | 403 | 429, step: UpgradeStep, why: string, retryAfterMs?: number): UpgradeDecision => {
+    limiter.failedUpgrades.take(ip);
+    return { ok: false, status, step, why, ...(retryAfterMs === undefined ? {} : { retryAfterMs }) };
+  };
+
+  /* 4. ORIGIN */
+  if (!originAllowed(request.headers.origin, gate.allowedOrigins)) {
+    limiter.deny("origin");
+    return refused(failed(403, "origin", "Origin not allowed"));
+  }
+  return { ok: true, now, ip, query, failed };
+}
+
+/** Steps 5b and 6, and the frozen context: after a successful authentication (either gate's). */
+function afterAuthentication(
+  gate: Pick<UpgradeGate, "limiter" | "limits" | "counts">,
+  pre: Extract<Prechecked, { ok: true }>,
+  auth: { readonly principalId: string; readonly sessionId: string; readonly sessionExpiresAt: number; readonly provisional: boolean; readonly profiled: boolean },
+): UpgradeDecision {
+  const { limits, limiter } = gate;
+  const { now, ip, query, failed } = pre;
+  const { principalId, sessionId, sessionExpiresAt, provisional } = auth;
+
   /* 5b. LIVE-2E: A PROFILE IS REQUIRED. An unprofiled principal (the temporary one a browser gets from the bootstrap)
      opens no game socket: no public list, no room, no log, no chat, no presence -- nothing, not even whether a
      private table exists, is reachable before a profile. 403, charged to the address's failed-upgrade budget like
      any other refused upgrade (LIVE-2E review I3): the client never opens a socket before its profile exists, so
      only a misbehaving one ever gets here. */
-  if (!gate.hasProfile(principalId)) {
+  if (!auth.profiled) {
     limiter.deny("profile-required");
     return failed(403, "profile", "no profile");
   }

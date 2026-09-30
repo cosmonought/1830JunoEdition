@@ -17,9 +17,6 @@
 // an account or a principal (those go to the task's own log lines, which only operators read).
 
 import type { IncomingMessage, ServerResponse } from "http";
-import { createServer, type Server } from "http";
-
-import { HEALTH_PATH } from "../identity/httpApi";
 
 export const READY_PATH = "/gs/readyz";
 
@@ -63,33 +60,5 @@ export function handleReadiness(request: IncomingMessage, response: ServerRespon
   return true;
 }
 
-/**
- * The HTTP server of a task that serves NO players (a STANDBY: not the primary pool's, and this build has no identity
- * verifier yet -- see `aws/runtime/awsRuntime.ts`): liveness, readiness (never ready), and 503 for everything else. No
- * WebSocket is ever accepted: an upgrade is refused and its socket destroyed.
- */
-export function createStandbyServer(options: { readonly port: number; readonly bindHost: string; readonly readiness: () => ReadinessAnswer }): Server {
-  const server = createServer((request, response) => {
-    if (handleReadiness(request, response, options.readiness)) return;
-    let pathname = "/";
-    try {
-      pathname = new URL(request.url ?? "/", "http://localhost").pathname;
-    } catch {
-      /* answered 503 below */
-    }
-    if (pathname === HEALTH_PATH && (request.method === "GET" || request.method === "HEAD")) {
-      response.writeHead(200, { ...HEADERS, "Content-Type": "text/plain; charset=utf-8" });
-      response.end(request.method === "HEAD" ? undefined : "ok\n");
-      return;
-    }
-    response.writeHead(503, { ...HEADERS, "Content-Type": "text/plain; charset=utf-8" });
-    response.end(request.method === "HEAD" ? undefined : "This game server is not serving games.\n");
-  });
-  server.on("upgrade", (_request, socket) => {
-    socket.on("error", () => socket.destroy());
-    socket.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
-    socket.destroy();
-  });
-  server.listen(options.port, options.bindHost);
-  return server;
-}
+/* LIVE-6 L6-1: L5-7's standby server (every upgrade refused) is gone -- a non-primary task now runs `routerServer.ts`,
+   which answers `/gs/readyz` through `handleReadiness` above. */

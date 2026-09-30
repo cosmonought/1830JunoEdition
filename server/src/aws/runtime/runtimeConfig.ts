@@ -42,13 +42,30 @@
 // Every field is required, nothing else is allowed, and a value that does not check refuses the start: a typo is never a
 // default. With escrow, the Juno configuration must name the SAME ledger (`journal: {kind: "dynamodb", table_arn}`) and
 // only KMS keys (`checkEscrowConfigForAws`): an AWS task never opens a file journal and never a development signer.
+//
+// LIVE-6 L6-1: FORMAT v2 (`18COSMOS/AWS-RUNTIME/v2`) is v1 plus ONE required field, the deployment's TRUSTED ROUTE TABLE:
+//
+//   "routes": { "<pool>": { "ws_path": "/gs/p/<pool>", "bundle_path": "/r/<release>/" (optional) }, ... }   ({} allowed)
+//
+// -- where each pool the deployment exposes is reached: its socket path on the game server's origin (under `/gs/`, which
+// the edge forwards to the game servers; the load balancer's rule for it must send it to that pool's tasks), and, when the
+// pool plays another release's games, that release's bundle path on the page's origin. PATHS ONLY: never a host, a scheme,
+// a query or an escape (`rooms/gameRoutes.ts` `routeEntryProblem`, the client's own `safeRoutePath`), so a route can never
+// send a browser off-site. It is the ONLY source of a route's path; which pool a game is routed to comes from the tables
+// (the game's HEAD, `SYSTEM/ROUTING`), never from here. A v1 document is still accepted, unchanged: it has no route table,
+// so no route destination exists and every "not here" is answered exactly as before L6-1.
 
 import { isAwsRegion, parseDynamoTableArn, parseSsmParameterArn, type DynamoTableArn, type SsmParameterArn } from "../arns";
 import { primaryPoolProblem } from "../game/routing";
+import { routeEntryProblem, type PoolRouteEntry } from "../../rooms/gameRoutes";
 import type { JunoBackendConfig } from "../../escrow/juno/junoConfig";
 import { flagValues, single, STORAGE_ENV, type Env } from "./storageMode";
 
 export const AWS_RUNTIME_CONFIG_FORMAT = "18COSMOS/AWS-RUNTIME/v1";
+/** LIVE-6 L6-1: v1 plus the trusted route table (`routes`). */
+export const AWS_RUNTIME_CONFIG_FORMAT_V2 = "18COSMOS/AWS-RUNTIME/v2";
+/** The most pools one route table names. */
+export const MAX_ROUTE_ENTRIES = 32;
 
 export const AWS_CONFIG_ENV = "GS_AWS_CONFIG_PARAMETER";
 export const AWS_CONFIG_FLAG = "--aws-config";
@@ -64,7 +81,7 @@ export class AwsRuntimeConfigError extends Error {
 }
 
 export interface AwsRuntimeConfig {
-  readonly format: typeof AWS_RUNTIME_CONFIG_FORMAT;
+  readonly format: typeof AWS_RUNTIME_CONFIG_FORMAT | typeof AWS_RUNTIME_CONFIG_FORMAT_V2;
   readonly environment: string;
   readonly region: string;
   readonly pool: string;
@@ -73,6 +90,8 @@ export interface AwsRuntimeConfig {
   readonly identityTable: string;
   readonly ledger: DynamoTableArn;
   readonly escrow: null | { readonly configParameter: SsmParameterArn };
+  /** LIVE-6 L6-1: the trusted route table (v2); empty for a v1 document (no route destination exists). */
+  readonly routes: Readonly<Record<string, PoolRouteEntry>>;
 }
 
 /* -------------------------------------------------------------------- */
@@ -133,9 +152,13 @@ export function parseAwsRuntimeConfigText(text: string): AwsRuntimeConfig {
 export function parseAwsRuntimeConfig(raw: unknown): AwsRuntimeConfig {
   const problems: string[] = [];
   if (!isObject(raw)) throw new AwsRuntimeConfigError(["the document must be a JSON object"]);
-  if (raw.format !== AWS_RUNTIME_CONFIG_FORMAT) throw new AwsRuntimeConfigError([`format must be ${JSON.stringify(AWS_RUNTIME_CONFIG_FORMAT)} (got ${JSON.stringify(raw.format ?? null)})`]);
-  for (const name of Object.keys(raw)) if (!(FIELDS as readonly string[]).includes(name)) problems.push(`unknown field ${name} (a misspelt setting is never ignored)`);
-  for (const name of FIELDS) if (!(name in raw)) problems.push(`${name} is required`);
+  if (raw.format !== AWS_RUNTIME_CONFIG_FORMAT && raw.format !== AWS_RUNTIME_CONFIG_FORMAT_V2) {
+    throw new AwsRuntimeConfigError([`format must be ${JSON.stringify(AWS_RUNTIME_CONFIG_FORMAT)} or ${JSON.stringify(AWS_RUNTIME_CONFIG_FORMAT_V2)} (got ${JSON.stringify(raw.format ?? null)})`]);
+  }
+  const v2 = raw.format === AWS_RUNTIME_CONFIG_FORMAT_V2;
+  const fields: readonly string[] = v2 ? [...FIELDS, "routes"] : FIELDS;
+  for (const name of Object.keys(raw)) if (!fields.includes(name)) problems.push(`unknown field ${name} (a misspelt setting is never ignored)`);
+  for (const name of fields) if (!(name in raw)) problems.push(`${name} is required`);
 
   const environment = raw.environment;
   if (typeof environment !== "string" || !ENVIRONMENT.test(environment)) problems.push("environment must be a short lower-case label ([a-z][a-z0-9-]{0,31})");
@@ -165,9 +188,47 @@ export function parseAwsRuntimeConfig(raw: unknown): AwsRuntimeConfig {
       else escrow = { configParameter: parameter };
     }
   }
+  const routes: Record<string, PoolRouteEntry> = {};
+  if (v2 && "routes" in raw) {
+    if (!isObject(raw.routes)) problems.push('routes must be an object {"<pool>": {"ws_path": "/gs/...", "bundle_path"?: "/..."}}');
+    else {
+      const entries = Object.entries(raw.routes);
+      if (entries.length > MAX_ROUTE_ENTRIES) problems.push(`routes names ${entries.length} pools; at most ${MAX_ROUTE_ENTRIES}`);
+      const paths = new Set<string>();
+      for (const [routePool, value] of entries) {
+        const idProblem = primaryPoolProblem(routePool);
+        if (idProblem !== null) {
+          problems.push(`routes: ${JSON.stringify(routePool.slice(0, 80))} is not a pool (${idProblem})`);
+          continue;
+        }
+        if (!isObject(value)) {
+          problems.push(`routes.${routePool} must be {"ws_path": ..., "bundle_path"?: ...}`);
+          continue;
+        }
+        for (const name of Object.keys(value)) if (name !== "ws_path" && name !== "bundle_path") problems.push(`unknown field routes.${routePool}.${name}`);
+        if (typeof value.ws_path !== "string") {
+          problems.push(`routes.${routePool}.ws_path is required (a path string)`);
+          continue;
+        }
+        if (value.bundle_path !== undefined && typeof value.bundle_path !== "string") {
+          problems.push(`routes.${routePool}.bundle_path must be a path string when present`);
+          continue;
+        }
+        const entry: PoolRouteEntry = { wsPath: value.ws_path, ...(value.bundle_path !== undefined ? { bundlePath: value.bundle_path as string } : {}) };
+        const entryProblem = routeEntryProblem(entry);
+        if (entryProblem !== null) {
+          problems.push(`routes.${routePool}: ${entryProblem}`);
+          continue;
+        }
+        if (paths.has(entry.wsPath)) problems.push(`routes.${routePool}.ws_path ${entry.wsPath} is another pool's too`);
+        paths.add(entry.wsPath);
+        routes[routePool] = Object.freeze(entry);
+      }
+    }
+  }
   if (problems.length > 0) throw new AwsRuntimeConfigError(problems);
   return Object.freeze({
-    format: AWS_RUNTIME_CONFIG_FORMAT,
+    format: v2 ? AWS_RUNTIME_CONFIG_FORMAT_V2 : AWS_RUNTIME_CONFIG_FORMAT,
     environment: environment as string,
     region: region as string,
     pool: pool as string,
@@ -176,6 +237,7 @@ export function parseAwsRuntimeConfig(raw: unknown): AwsRuntimeConfig {
     identityTable: identityTable as string,
     ledger: ledger as DynamoTableArn,
     escrow,
+    routes: Object.freeze(routes),
   });
 }
 

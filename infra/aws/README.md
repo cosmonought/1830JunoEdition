@@ -193,6 +193,16 @@ empty). There is no `--force`. The code is `server/src/aws/deploy/staging/`; the
 7  npm run awsDeploy -- stage-cert certify --run-id R --evidence <dir> <the step-2 flags> --scenario read-only --commit <HEAD>
 ```
 
+**The cluster listing** (L6-6P, `cluster-tasks.json`, `18COSMOS/L6-6P-CLUSTER-TASKS/v1`): `capture-evidence` lists every
+task of desired status RUNNING **and** STOPPED (a task draining under SIGTERM has desired STOPPED), following every
+`list-tasks` page (100 each) to the end, and describes every distinct ARN in batches of 100, each answer kept whole:
+`{format, cluster, listed_at, listings: [{desired_status, pages: [{page, task_arns, more}]}], task_count, batches}`. The
+prerequisite re-derives completeness from the file (the page chain ends, every ARN described exactly once, no failure,
+taken with this capture and after the probes) and FAILS anything less -- and FAILS on any task not STOPPED that is not a
+pool service's settled task (a stray, a draining or starting task, an old revision). A failed call stops the script and
+leaves no `capture.json`, so a partial capture is never certified. If certify reports a draining task (the certifier task
+still stopping, say), wait until it is STOPPED and run step 6 again.
+
 **Replacement scenario:** `drain-pool.sh <env> <region> <pool> <dir> R`, then `terraform apply`, then steps 1-7 with
 `--scenario replacement --replaced-pools <pool>` (the drain precedes the prerequisite, which examines the new deployment).
 **Restore drill** (L6-4): stop every pool, `capture-restore-stop.sh <env> <region> R <restore id> <dir> <pools...>` (every

@@ -27,6 +27,7 @@
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as http from "http";
 import * as os from "os";
@@ -52,6 +53,7 @@ import { classifyIamAnswer, IAM_PROBE_IDS, iamProbeSpecs, iamProbeWriteProblem, 
 import { judgeKmsProbe, KMS_LATENCY_BOUND_MS, runKmsProbe } from "./kmsProbe";
 import { judgeTerraformStack, AWS_PROVIDER } from "./terraformPlan";
 import { disposableOnly, DisposableGuardError, judgeTransactionProbe, runTransactionProbe } from "./transactionProbe";
+import { checkClusterTasks, CLUSTER_LISTING_WINDOW_MS, CLUSTER_TASKS_FORMAT, DESCRIBE_TASKS_BATCH, readClusterListing } from "./prerequisite";
 import { buildCapabilities, readGenerationEvidence, readIdentityRecovery, RESTORE_FENCING_CASES, RESTORE_FENCING_FILE, revisionsFile, type AppGenerationFacts, type GenerationEvidence, type GenerationMarkerFacts, type IdentityRestoreFacts, type RecoveryReaders, type ReviewSummary } from "./recovery";
 
 const REPO = path.resolve(__dirname, "../../../../../../.."); // dist/server/src/aws/deploy/staging -> the repository
@@ -340,6 +342,43 @@ const RUNNING_TASKS = {
   ],
   failures: [],
 };
+/** L6-6P: capture-evidence's complete cluster listing over `tasks` -- desired RUNNING and desired STOPPED, `pageSize`
+ *  ARNs per list-tasks page, every distinct ARN described in batches of 100 -- exactly the shape the scripts write. */
+const CLUSTER_LISTED_AT = "2026-09-30T10:29:40Z";
+function clusterListing(tasks: readonly Record<string, unknown>[], options: { readonly pageSize?: number; readonly listedAt?: string; readonly alsoListedRunning?: readonly string[] } = {}) {
+  const size = options.pageSize ?? 100;
+  const pagesOf = (arns: readonly string[]) => {
+    const pages: Array<{ page: number; task_arns: string[]; more: boolean }> = [];
+    for (let i = 0; i === 0 || i < arns.length; i += size) pages.push({ page: pages.length, task_arns: arns.slice(i, i + size), more: i + size < arns.length });
+    return pages;
+  };
+  const running = [...tasks.filter((t) => t.desiredStatus === "RUNNING").map((t) => String(t.taskArn)), ...(options.alsoListedRunning ?? [])];
+  const stopped = tasks.filter((t) => t.desiredStatus !== "RUNNING").map((t) => String(t.taskArn));
+  const batches: Array<{ tasks: Record<string, unknown>[]; failures: unknown[] }> = [];
+  for (let i = 0; i < tasks.length; i += 100) batches.push({ tasks: tasks.slice(i, i + 100).map(clone), failures: [] });
+  return {
+    format: "18COSMOS/L6-6P-CLUSTER-TASKS/v1",
+    cluster: "gs-staging",
+    listed_at: options.listedAt ?? CLUSTER_LISTED_AT,
+    listings: [
+      { desired_status: "RUNNING", pages: pagesOf(running) },
+      { desired_status: "STOPPED", pages: pagesOf(stopped) },
+    ],
+    task_count: new Set([...running, ...stopped]).size,
+    batches,
+  };
+}
+/** A terminal task ECS still reports (the certifier task ends this way; an old deployment's tasks linger ~1 h). */
+const stoppedTask = (i: number, extra: Record<string, unknown> = {}) => ({
+  taskArn: `arn:aws:ecs:us-east-1:111111111111:task/gs-staging/${i.toString(16).padStart(32, "0")}`,
+  group: "service:gs-staging-p1",
+  lastStatus: "STOPPED",
+  desiredStatus: "STOPPED",
+  taskDefinitionArn: TD.replace(":7", ":6"),
+  ...extra,
+});
+const CERTIFIER_STOPPED = { taskArn: CERTIFIER_TASK, group: "family:gs-staging-p1", lastStatus: "STOPPED", desiredStatus: "STOPPED", taskDefinitionArn: TD };
+const CLUSTER_TASKS = clusterListing([...RUNNING_TASKS.tasks, CERTIFIER_STOPPED]);
 const ORP_ID = "a1b2c3d4-0000-4000-8000-000000000001";
 const DISTRIBUTION = {
   DistributionConfig: {
@@ -551,7 +590,7 @@ async function buildPackage(options: { readonly part?: "app" | "all"; readonly s
     [EVIDENCE_FILES.securityGroups]: SECURITY_GROUPS,
     [EVIDENCE_FILES.listenerRules]: LISTENER_RULES,
     [EVIDENCE.runningTasks]: RUNNING_TASKS,
-    [EVIDENCE.clusterTasks]: RUNNING_TASKS,
+    [EVIDENCE.clusterTasks]: CLUSTER_TASKS,
     [EVIDENCE.targetHealth]: { TargetHealthDescriptions: [{ Target: { Id: TASK_IP, Port: 8917 }, TargetHealth: { State: "healthy" } }] },
     [EVIDENCE.distribution]: { Distribution: { Id: "E123", DomainName: "d111111abcdef8.cloudfront.net", DistributionConfig: DISTRIBUTION.DistributionConfig } },
     [EVIDENCE.capture]: { format: "18COSMOS/L5-8-CAPTURE/v1", captured_at: TIMES.capture },
@@ -875,7 +914,7 @@ describe("L6-6 §4: the deployment must be settled and known", () => {
     ["two deployments", { [EVIDENCE_FILES.services]: (v) => (v.services[0].deployments.push({ status: "ACTIVE", taskDefinition: TD, rolloutState: "COMPLETED" }), v) }, /settled/],
     ["a pending task", { [EVIDENCE_FILES.services]: (v) => ((v.services[0].pendingCount = 1), v) }, /settled/],
     ["no running task", { [EVIDENCE.runningTasks]: (v) => ((v.tasks = []), v) }, /the examined revision/],
-    ["a run-task beside the service", { [EVIDENCE.clusterTasks]: (v) => (v.tasks.push({ ...v.tasks[0], taskArn: `${TASK}x`, group: "family:gs-staging-p1" }), v) }, /no task beside the services/],
+    ["a run-task beside the service", { [EVIDENCE.clusterTasks]: () => clusterListing([...RUNNING_TASKS.tasks, { ...RUNNING_TASKS.tasks[0], taskArn: `${TASK.slice(0, -1)}5`, group: "family:gs-staging-p1" }]) }, /no task beside the services/],
     ["another target in the target group", { [EVIDENCE.targetHealth]: (v) => ((v.TargetHealthDescriptions[0].Target.Id = "10.0.9.9"), v) }, /target health/],
     ["no BUILD_ID", { [EVIDENCE_FILES.taskDefinition("p1")]: (v) => ((v.taskDefinition.containerDefinitions[0].environment = v.taskDefinition.containerDefinitions[0].environment.filter((e: any) => e.name !== "BUILD_ID")), v) }, /build identity/],
   ];
@@ -1588,11 +1627,14 @@ describe("L6-6 review: forged, stale and incomplete evidence is refused", () => 
   });
 
   test("an empty or partial cluster listing is not proof that nothing runs beside the services", async () => {
-    const empty = await buildPackage({ mutate: { [EVIDENCE.clusterTasks]: () => ({ tasks: [], failures: [] }) } });
+    const empty = await buildPackage({ mutate: { [EVIDENCE.clusterTasks]: () => clusterListing([]) } });
+    const legacy = await buildPackage({ mutate: { [EVIDENCE.clusterTasks]: () => ({ tasks: [], failures: [] }) } });
     try {
       assert.match(gateFailures((await verdictOf(empty)).result, "prerequisite").join("\n"), /the cluster listing is incomplete/);
+      assert.match(gateFailures((await verdictOf(legacy)).result, "prerequisite").join("\n"), /the cluster listing is complete: .*single desired-RUNNING answer/);
     } finally {
       cleanup(empty.dir);
+      cleanup(legacy.dir);
     }
   });
 
@@ -2265,5 +2307,365 @@ describe("L6-6R: the integration binding is explicit, and no default or fixture 
     } finally {
       cleanup(built.dir);
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* L6-6P: the prerequisite's COMPLETE cluster listing                   */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6P: the prerequisite's cluster listing is complete -- every page, desired RUNNING and STOPPED, every batch", () => {
+  const PREREQ = { environment: "staging", pools: ["p1"], primaryPool: "p1" };
+  const CAPTURE = { format: "18COSMOS/L5-8-CAPTURE/v1", captured_at: TIMES.capture };
+  const SETTLED = RUNNING_TASKS.tasks[0] as Record<string, unknown>;
+  const liveArn = (i: number) => `arn:aws:ecs:us-east-1:111111111111:task/gs-staging/${(0xf000 + i).toString(16).padStart(32, "a")}`;
+  const STRAY = { ...SETTLED, taskArn: liveArn(1), group: "family:gs-staging-p1", startedBy: "someone" };
+  /** `total` tasks: the settled service task, then STOPPED history (and `extra` last). */
+  const population = (total: number, extra: readonly Record<string, unknown>[] = []) => [SETTLED, ...Array.from({ length: Math.max(0, total - 1 - extra.length) }, (_, i) => stoppedTask(i + 1)), ...extra].slice(0, total);
+  const judgeDoc = (doc: unknown, running: unknown = RUNNING_TASKS) => checkClusterTasks(doc, PREREQ, running, SERVICES, CAPTURE);
+  const failed = (checks: readonly Check[]) => failures(checks).map((c) => `${c.name}: ${c.detail}`).join("\n");
+
+  test("0, 1, 100, 101 and 250+ tasks: complete, paged and batched -- a settled service passes, the 101st / 257th stray FAILS", () => {
+    const zero = clusterListing([]);
+    const read0 = readClusterListing(zero, "staging");
+    assert.ok(read0.ok && read0.arns === 0 && read0.pages.RUNNING === 1 && read0.pages.STOPPED === 1, JSON.stringify(read0));
+    /* Nothing listed is no proof that the service's task is listed: FAIL, never "nothing beside it". */
+    assert.match(failed(judgeDoc(zero)), /no task beside the services: the cluster listing is incomplete: it lacks 1/);
+    for (const total of [1, 100, 101, 257]) {
+      const doc = clusterListing(population(total));
+      const read = readClusterListing(doc, "staging");
+      assert.ok(read.ok, `${total}: ${JSON.stringify(read)}`);
+      assert.equal(read.arns, total);
+      assert.equal(doc.batches.length, Math.ceil(total / DESCRIBE_TASKS_BATCH));
+      assert.ok(doc.batches.every((b) => b.tasks.length <= DESCRIBE_TASKS_BATCH));
+      assert.equal(read.pages.STOPPED, Math.max(1, Math.ceil((total - 1) / 100)));
+      assert.equal(failed(judgeDoc(doc)), "", `${total} tasks, one settled service task: PASS`);
+    }
+    /* The task past the old `taskArns[:100]` cut: a stray draining task (desired STOPPED, still RUNNING) as the 101st and
+       the 257th task -- in the last page and the last batch. */
+    for (const total of [101, 257]) {
+      const lastOne = { ...STRAY, desiredStatus: "STOPPED", lastStatus: "RUNNING" };
+      const doc = clusterListing(population(total, [lastOne]));
+      assert.equal(doc.batches.at(-1)?.tasks.at(-1)?.taskArn, lastOne.taskArn);
+      assert.match(failed(judgeDoc(doc)), /no task beside the services: task\(s\) outside the services: .*family:gs-staging-p1/);
+    }
+  });
+
+  test("several list-tasks pages and describe batches: the page chain is judged -- a truncated, gapped or unended listing FAILS", () => {
+    const tasks = population(257);
+    const paged = clusterListing(tasks, { pageSize: 7 });
+    assert.equal(paged.listings[1].pages.length, 37);
+    assert.equal(failed(judgeDoc(paged)), "");
+    const cases: Array<[string, (v: any) => void, RegExp]> = [
+      ["the last page dropped (stopped early)", (v) => v.listings[1].pages.pop(), /ends on a page that had a next token \(the listing stopped early: truncated\)/],
+      ["the last page claims a next token", (v) => (v.listings[1].pages.at(-1).more = true), /truncated/],
+      ["a page in the middle missing", (v) => v.listings[1].pages.splice(5, 1), /page 5 is numbered 6/],
+      ["a middle page with no next token", (v) => (v.listings[1].pages[3].more = false), /page 3 had no next token, yet more pages follow/],
+      ["no page at all", (v) => (v.listings[0].pages = []), /desired-RUNNING listing has no page/],
+      ["only the RUNNING listing (the old capture)", (v) => v.listings.pop(), /not exactly RUNNING and STOPPED/],
+      ["RUNNING listed twice", (v) => (v.listings[1].desired_status = "RUNNING"), /not exactly RUNNING and STOPPED/],
+      ["STOPPED listed before RUNNING", (v) => v.listings.reverse(), /not exactly RUNNING and STOPPED, in that order/],
+      ["a count that is not the pages'", (v) => (v.task_count -= 1), /counts 256 task\(s\), but its pages list 257/],
+      ["a listed task never described (the last batch lost)", (v) => v.batches.pop(), /57 listed task\(s\) were never described/],
+      ["a batch over the DescribeTasks limit", (v) => (v.batches[0].tasks.push(...v.batches[1].tasks), v.batches.splice(1, 1)), /batch 0 describes 200 task\(s\), not 1-100/],
+      ["an empty batch", (v) => v.batches.push({ tasks: [], failures: [] }), /batch 3 describes 0 task\(s\)/],
+      ["a partial describe (MISSING)", (v) => (v.batches[2].failures = [{ arn: v.batches[2].tasks.pop().taskArn, reason: "MISSING" }]), /describe-tasks batch 2 failed for 1 task\(s\) .*MISSING.*: the listing is incomplete/],
+      ["a batch without failures", (v) => delete v.batches[1].failures, /batch 1 is not a whole answer/],
+      ["no batches", (v) => delete v.batches, /holds no describe-tasks batches/],
+      ["a described task no page listed", (v) => v.batches[2].tasks.push({ ...SETTLED, taskArn: liveArn(9) }), /describe-tasks answered 1 task\(s\) no page listed/],
+      ["another cluster", (v) => (v.cluster = "gs-production"), /lists cluster gs-production, not gs-staging/],
+      ["no listing time", (v) => delete v.listed_at, /no listing time/],
+      ["a page entry that is not a task ARN", (v) => v.listings[1].pages[0].task_arns.push("arn:aws:ecs:us-east-1:111111111111:service/gs-staging/x"), /not a task ARN/],
+      ["the old single answer", (v) => (Object.keys(v).forEach((k) => delete v[k]), (v.tasks = []), (v.failures = [])), /single desired-RUNNING answer/],
+    ];
+    for (const [label, mutate, expected] of cases) {
+      const doc = clone(paged) as any;
+      mutate(doc);
+      const text = failed(judgeDoc(doc));
+      assert.match(text, /the cluster listing is complete: /, label);
+      assert.match(text, expected, `${label}: ${text}`);
+      assert.match(text, /no task beside the services: the cluster listing is incomplete/, `${label}: never judged as "nothing beside"`);
+    }
+  });
+
+  test("a draining task is visible only through desired STOPPED -- and FAILS; starting and old-revision tasks FAIL; STOPPED history passes", () => {
+    const draining = { ...SETTLED, taskArn: liveArn(2), taskDefinitionArn: TD.replace(":7", ":6"), desiredStatus: "STOPPED", lastStatus: "DEACTIVATING" };
+    const doc = clusterListing([SETTLED, draining]);
+    assert.deepEqual(doc.listings[0].pages[0].task_arns, [TASK], "the desired-RUNNING listing alone never shows it");
+    assert.deepEqual(doc.listings[1].pages[0].task_arns, [draining.taskArn]);
+    assert.match(failed(judgeDoc(doc)), /task\(s\) draining or stopping: .*DEACTIVATING\/desired STOPPED/);
+    for (const last of ["RUNNING", "STOPPING", "DEPROVISIONING"]) assert.match(failed(judgeDoc(clusterListing([SETTLED, { ...draining, lastStatus: last }]))), /draining or stopping/, last);
+    const starting = { ...SETTLED, taskArn: liveArn(3), lastStatus: "PROVISIONING" };
+    assert.match(failed(judgeDoc(clusterListing([SETTLED, starting]))), /task\(s\) starting: .*PROVISIONING/);
+    const oldRevision = { ...SETTLED, taskArn: liveArn(4), taskDefinitionArn: TD.replace(":7", ":6") };
+    assert.match(failed(judgeDoc(clusterListing([SETTLED, oldRevision]), { tasks: [SETTLED, oldRevision], failures: [] })), /replacement incomplete: .*gs-staging-p1:6 \(RUNNING\/desired RUNNING\), not the service's .*gs-staging-p1:7/);
+    /* A settled service task running-tasks.json does not hold: the two captures disagree. */
+    const second = { ...SETTLED, taskArn: liveArn(5) };
+    assert.match(failed(judgeDoc(clusterListing([SETTLED, second]))), /service task\(s\) running-tasks.json does not hold/);
+    /* Terminal tasks of any group (the certifier task, an old deployment's) are history, not action. */
+    assert.equal(failed(judgeDoc(clusterListing([SETTLED, CERTIFIER_STOPPED, stoppedTask(1, { group: "family:gs-staging-p1" }), stoppedTask(2, { desiredStatus: "RUNNING" })]))), "");
+  });
+
+  test("an ARN listed under both desired statuses is described and judged once; deduplication never hides a second answer", () => {
+    /* The task moved to desired STOPPED between the two listings: listed twice, described once, judged by its answer. */
+    const moved = { ...STRAY, desiredStatus: "STOPPED", lastStatus: "STOPPED" };
+    const overlap = clusterListing([SETTLED, moved], { alsoListedRunning: [moved.taskArn] });
+    assert.equal(overlap.task_count, 2);
+    assert.equal(failed(judgeDoc(overlap)), "");
+    const stillLive = clusterListing([SETTLED, { ...moved, lastStatus: "RUNNING" }], { alsoListedRunning: [moved.taskArn] });
+    assert.match(failed(judgeDoc(stillLive)), /outside the services/);
+    /* Two answers for one ARN (a STOPPED one first, a live one second): refused -- never merged into the first. */
+    const twice = clone(overlap) as any;
+    twice.batches[0].tasks.push({ ...STRAY, desiredStatus: "RUNNING", lastStatus: "RUNNING" });
+    assert.match(failed(judgeDoc(twice)), /described more than once/);
+  });
+
+  test("certification: the gate FAILS by name over each class; a settled package passes; a stale listing FAILS", async () => {
+    const cases: Array<[string, unknown, RegExp]> = [
+      ["the 257th task a stray", clusterListing(population(257, [{ ...STRAY, desiredStatus: "STOPPED", lastStatus: "STOPPING" }])), /no task beside the services: .*outside the services/],
+      ["a draining service task", clusterListing([...RUNNING_TASKS.tasks, { ...SETTLED, taskArn: liveArn(6), desiredStatus: "STOPPED", lastStatus: "RUNNING" }]), /draining or stopping/],
+      ["a truncated listing", ((v: any) => (v.listings[1].pages.pop(), v))(clusterListing(population(257))), /the cluster listing is complete: .*truncated/],
+      ["a partial describe", ((v: any) => ((v.batches[0].failures = [{ arn: CERTIFIER_TASK, reason: "MISSING" }]), v))(CLUSTER_TASKS), /the cluster listing is complete: describe-tasks batch 0 failed/],
+      ["a listing after capture.json", clusterListing([...RUNNING_TASKS.tasks], { listedAt: "2026-09-30T10:30:05Z" }), /the cluster listing is complete: the listing .* is not this capture's/],
+      ["a listing from an older capture", clusterListing([...RUNNING_TASKS.tasks], { listedAt: new Date(Date.parse(TIMES.capture) - CLUSTER_LISTING_WINDOW_MS - 1000).toISOString() }), /is not this capture's/],
+    ];
+    for (const [label, listing, expected] of cases) {
+      const built = await buildPackage({ mutate: { [EVIDENCE.clusterTasks]: () => listing } });
+      try {
+        const { result } = await verdictOf(built);
+        assert.deepEqual(failedGates(result), ["prerequisite"], label);
+        assert.match(gateFailures(result, "prerequisite").join("\n"), expected, label);
+      } finally {
+        cleanup(built.dir);
+      }
+    }
+    /* A listing inside the capture window but taken before the last probe finished (capture.json stamped after them). */
+    const early = await buildPackage({ mutate: { [EVIDENCE.capture]: (v) => ({ ...v, captured_at: "2026-09-30T10:20:00Z" }), [EVIDENCE.clusterTasks]: () => clusterListing([...RUNNING_TASKS.tasks], { listedAt: "2026-09-30T10:10:00Z" }) } });
+    const settled = await buildPackage({ mutate: { [EVIDENCE.clusterTasks]: () => clusterListing(population(257)) } });
+    try {
+      const { result } = await verdictOf(early);
+      assert.deepEqual(gateFailures(result, "prerequisite").filter((f) => !/unchanged since the probes began/.test(f)), ["prerequisite: cluster listing taken after the probes: listed 2026-09-30T10:10:00.000Z, before the last probe finished (2026-09-30T10:16:10.000Z): run capture-evidence again, then certify"]);
+      const good = (await verdictOf(settled)).result;
+      assert.ok(good.passed, JSON.stringify(failedGates(good)));
+      const prereq = good.gates.find((g) => g.id === "prerequisite");
+      assert.ok(prereq?.checks.some((c) => c.name === "prerequisite: the cluster listing is complete" && c.status === "pass" && /257 task\(s\)/.test(c.detail)));
+    } finally {
+      cleanup(early.dir);
+      cleanup(settled.dir);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* L6-6P: capture-evidence.{sh,ps1} against a stub AWS CLI              */
+/* ------------------------------------------------------------------ */
+
+/** The AWS CLI as the scripts call it: list-tasks pages (max 100, --no-paginate, the page query), describe-tasks (refusing
+ *  more than 100 ARNs, like the API), failure injection; every other call answers `{}` / `None`. Every call is logged. */
+const AWS_STUB = String.raw`
+const fs = require("fs");
+const sc = JSON.parse(fs.readFileSync(process.env.AWS_STUB_SCENARIO, "utf8"));
+const argv = process.argv.slice(2);
+const opt = (name) => { const i = argv.indexOf(name); return i < 0 ? undefined : argv[i + 1]; };
+const log = (entry) => fs.appendFileSync(process.env.AWS_STUB_LOG, JSON.stringify(entry) + "\n");
+const si = argv.findIndex((a) => ["ecs", "elbv2", "cloudfront", "ec2"].includes(a));
+const svc = argv[si], op = argv[si + 1], output = opt("--output") || "json", query = opt("--query");
+const die = (message) => { log({ op, error: message }); process.stderr.write(message + "\n"); process.exit(254); };
+const json = (v) => process.stdout.write(JSON.stringify(v, null, 4) + "\n");
+const byArn = new Map(sc.tasks.map((t) => [t.taskArn, t]));
+if (svc === "ecs" && op === "list-tasks") {
+  const status = opt("--desired-status"), service = opt("--service-name");
+  if (service !== undefined) {
+    log({ op, service, status });
+    process.stdout.write(sc.tasks.filter((t) => t.group === "service:" + service && t.desiredStatus === status).map((t) => t.taskArn).join("\t") + "\n");
+    process.exit(0);
+  }
+  if (query !== sc.pageQuery) die("unexpected --query " + query);
+  if (!argv.includes("--no-paginate") || opt("--max-results") !== "100" || output !== "text") die("not one bounded page");
+  const all = sc.listing[status];
+  if (!Array.isArray(all)) die("InvalidParameterException: desiredStatus " + status);
+  const token = opt("--next-token");
+  if (token !== undefined && !token.startsWith(status + ":")) die("InvalidParameterException: nextToken");
+  const start = token === undefined ? 0 : Number(token.slice(status.length + 1));
+  const size = sc.pageSize || 100;
+  const page = all.slice(start, start + size);
+  const next = start + size < all.length ? status + ":" + (start + size) : "";
+  const index = Math.floor(start / size);
+  log({ op, status, token: token === undefined ? null : token, page: index, count: page.length });
+  if (sc.failList && sc.failList.status === status && sc.failList.page === index) die("An error occurred (ThrottlingException) when calling the ListTasks operation: Rate exceeded");
+  process.stdout.write("T=" + next + "\t" + page.join(" ") + "\n");
+} else if (svc === "ecs" && op === "describe-tasks") {
+  const i = argv.indexOf("--tasks");
+  const arns = [];
+  for (let j = i + 1; j < argv.length && !argv[j].startsWith("--"); j += 1) arns.push(argv[j]);
+  log({ op, count: arns.length, first: arns[0] || null });
+  if (arns.length === 0 || arns.length > 100) die("InvalidParameterException: tasks must hold 1-100 ARNs, not " + arns.length);
+  if (sc.describeFailOn && arns.includes(sc.describeFailOn)) die("An error occurred (ServerException) when calling the DescribeTasks operation");
+  const missing = (sc.describeMissing || []);
+  json({ tasks: arns.filter((a) => byArn.has(a) && !missing.includes(a)).map((a) => byArn.get(a)), failures: arns.filter((a) => !byArn.has(a) || missing.includes(a)).map((a) => ({ arn: a, reason: "MISSING" })) });
+} else if (svc === "ecs" && op === "describe-services") {
+  log({ op });
+  if (query !== undefined) process.stdout.write(sc.services.services[0].taskDefinition + "\n");
+  else json(sc.services);
+} else {
+  log({ op });
+  if (output === "text") process.stdout.write("None\n");
+  else json({});
+}
+`;
+
+const SCRIPTS = path.join(INFRA, "scripts");
+const PAGE_QUERY = "[join('', ['T=', nextToken || '']), join(' ', taskArns)]";
+function probeShell(candidates: readonly string[], args: readonly string[]): string | null {
+  for (const c of candidates) if (spawnSync(c, args, { encoding: "utf8", timeout: 60_000 }).status === 0) return c;
+  return null;
+}
+/* bash on Windows may be WSL's (another filesystem): the .sh contract runs where bash is the host's. */
+const BASH = process.platform === "win32" ? null : probeShell(["bash"], ["-c", "exit 0"]);
+const PWSH = probeShell(process.platform === "win32" ? ["pwsh", "powershell"] : ["pwsh"], ["-NoProfile", "-NonInteractive", "-Command", "exit 0"]);
+
+interface StubScenario {
+  readonly tasks: readonly Record<string, unknown>[];
+  readonly listing?: { readonly RUNNING: readonly string[]; readonly STOPPED: readonly string[] };
+  readonly pageSize?: number;
+  readonly failList?: { readonly status: string; readonly page: number };
+  readonly describeFailOn?: string;
+  readonly describeMissing?: readonly string[];
+}
+interface CaptureRun {
+  readonly status: number | null;
+  readonly stderr: string;
+  readonly out: string;
+  readonly calls: readonly Record<string, unknown>[];
+  readonly file: (name: string) => unknown;
+  readonly exists: (name: string) => boolean;
+}
+
+function runCapture(shell: "sh" | "ps1", scenario: StubScenario): CaptureRun {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l66p-"));
+  const bin = path.join(root, "bin");
+  const out = path.join(root, "evidence");
+  fs.mkdirSync(bin);
+  fs.mkdirSync(out);
+  /* A stale, complete-looking capture: a failed run must not leave it standing. */
+  fs.writeFileSync(path.join(out, "capture.json"), JSON.stringify({ format: "18COSMOS/L5-8-CAPTURE/v1", captured_at: "2026-09-30T09:00:00Z" }));
+  fs.writeFileSync(path.join(out, "cluster-tasks.json"), JSON.stringify(CLUSTER_TASKS));
+  fs.writeFileSync(path.join(bin, "aws-stub.js"), AWS_STUB);
+  if (process.platform === "win32") fs.writeFileSync(path.join(bin, "aws.cmd"), `@"${process.execPath}" "%~dp0aws-stub.js" %*\r\n@exit /b %ERRORLEVEL%\r\n`);
+  else fs.writeFileSync(path.join(bin, "aws"), `#!/bin/sh\nexec "${process.execPath}" "${path.join(bin, "aws-stub.js")}" "$@"\n`, { mode: 0o755 });
+  const listing = scenario.listing ?? { RUNNING: scenario.tasks.filter((t) => t.desiredStatus === "RUNNING").map((t) => String(t.taskArn)), STOPPED: scenario.tasks.filter((t) => t.desiredStatus !== "RUNNING").map((t) => String(t.taskArn)) };
+  fs.writeFileSync(path.join(root, "scenario.json"), JSON.stringify({ ...scenario, listing, pageQuery: PAGE_QUERY, services: SERVICES }));
+  const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, AWS_STUB_SCENARIO: path.join(root, "scenario.json"), AWS_STUB_LOG: path.join(root, "calls.log") };
+  const r =
+    shell === "sh"
+      ? spawnSync(BASH as string, [path.join(SCRIPTS, "capture-evidence.sh"), "staging", "us-east-1", "p1", "E123", out], { env, encoding: "utf8", timeout: 300_000 })
+      : spawnSync(PWSH as string, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(SCRIPTS, "capture-evidence.ps1"), "-Environment", "staging", "-Region", "us-east-1", "-PrimaryPool", "p1", "-Distribution", "E123", "-Out", out], { env, encoding: "utf8", timeout: 300_000 });
+  const logText = fs.existsSync(env.AWS_STUB_LOG) ? fs.readFileSync(env.AWS_STUB_LOG, "utf8") : "";
+  const calls = logText.split("\n").filter((l) => l !== "").map((l) => JSON.parse(l) as Record<string, unknown>);
+  const text = (name: string) => fs.readFileSync(path.join(out, name), "utf8").replace(/^﻿/, "");
+  return { status: r.status, stderr: `${r.stderr ?? ""}${r.error ? String(r.error) : ""}`, out, calls, file: (name) => JSON.parse(text(name)), exists: (name) => fs.existsSync(path.join(out, name)) };
+}
+
+describe("L6-6P: capture-evidence.{sh,ps1} write the complete listing (stub AWS CLI; no AWS)", () => {
+  const PREREQ = { environment: "staging", pools: ["p1"], primaryPool: "p1" };
+  const SETTLED = RUNNING_TASKS.tasks[0] as Record<string, unknown>;
+  const history = (n: number) => Array.from({ length: n }, (_, i) => stoppedTask(i + 1));
+  const straying = { ...SETTLED, taskArn: `arn:aws:ecs:us-east-1:111111111111:task/gs-staging/${"5".repeat(32)}`, group: "family:gs-staging-p1", desiredStatus: "STOPPED", lastStatus: "STOPPING" };
+  const judged = (run: CaptureRun) => {
+    const checks = checkClusterTasks(run.file("cluster-tasks.json"), PREREQ, run.file("running-tasks.json"), run.file("services.json"), run.file("capture.json"));
+    return failures(checks).map((c) => `${c.name}: ${c.detail}`).join("\n");
+  };
+  const shells: Array<["sh" | "ps1", string | null]> = [
+    ["sh", BASH],
+    ["ps1", PWSH],
+  ];
+  const outputs: Partial<Record<"sh" | "ps1", Record<string, unknown>>> = {};
+
+  for (const [shell, exe] of shells) {
+    const skip = exe === null ? `${shell === "sh" ? "bash" : "PowerShell"} is not available here` : false;
+
+    test(`${shell}: 0, 1, 100, 101 and 257 tasks -- every page followed, every ARN described in batches of <= 100`, { skip }, () => {
+      for (const total of [0, 1, 100, 101, 257]) {
+        const tasks = total === 0 ? [] : [SETTLED, ...history(total - 1)];
+        const run = runCapture(shell, { tasks });
+        assert.equal(run.status, 0, `${total}: ${run.stderr}`);
+        const doc = run.file("cluster-tasks.json") as any;
+        assert.equal(doc.format, CLUSTER_TASKS_FORMAT);
+        const read = readClusterListing(doc, "staging");
+        assert.ok(read.ok, `${total}: ${JSON.stringify(read)}`);
+        assert.equal(read.arns, total);
+        const describes = run.calls.filter((c) => c.op === "describe-tasks").map((c) => Number(c.count));
+        /* running-tasks.json's own describe (the service's task) first, then the cluster's batches. */
+        const clusterBatches = describes.slice(total === 0 ? 0 : 1);
+        assert.deepEqual(clusterBatches, Array.from({ length: Math.ceil(total / 100) }, (_, i) => Math.min(100, total - i * 100)), `${total}: batches ${JSON.stringify(describes)}`);
+        const pages = run.calls.filter((c) => c.op === "list-tasks" && c.service === undefined);
+        assert.deepEqual(pages.map((c) => c.status), ["RUNNING", ...Array.from({ length: Math.max(1, Math.ceil((total - 1) / 100)) }, () => "STOPPED")], `${total}`);
+        assert.equal(run.exists("cluster-tasks.json.partial"), false);
+        if (total === 0) assert.match(judged(run), /no task beside the services: the cluster listing is incomplete/);
+        else assert.equal(judged(run), "", `${total}: ${judged(run)}`);
+        if (total === 257) outputs[shell] = doc;
+        fs.rmSync(path.dirname(run.out), { recursive: true, force: true });
+      }
+    });
+
+    test(`${shell}: many list-tasks pages chained by next token; the draining stray on the last page FAILS the prerequisite`, { skip }, () => {
+      const tasks = [SETTLED, ...history(255), straying];
+      const run = runCapture(shell, { tasks, pageSize: 7 });
+      assert.equal(run.status, 0, run.stderr);
+      const pages = run.calls.filter((c) => c.op === "list-tasks" && c.service === undefined && c.status === "STOPPED");
+      assert.equal(pages.length, 37);
+      pages.forEach((c, i) => assert.equal(c.token, i === 0 ? null : `STOPPED:${i * 7}`, "each page asked with the previous page's token"));
+      const read = readClusterListing(run.file("cluster-tasks.json"), "staging");
+      assert.ok(read.ok && read.arns === 257 && read.pages.STOPPED === 37, JSON.stringify(read));
+      assert.match(judged(run), /outside the services: 5{32} family:gs-staging-p1 .*\(STOPPING\/desired STOPPED\)/);
+      /* A desired-RUNNING stray on the RUNNING listing's second page. */
+      const second = runCapture(shell, { tasks: [SETTLED, { ...straying, desiredStatus: "RUNNING", lastStatus: "RUNNING" }], pageSize: 1 });
+      assert.equal(second.status, 0, second.stderr);
+      assert.equal(second.calls.filter((c) => c.op === "list-tasks" && c.status === "RUNNING" && c.service === undefined).length, 2);
+      assert.match(judged(second), /outside the services/);
+      for (const r of [run, second]) fs.rmSync(path.dirname(r.out), { recursive: true, force: true });
+    });
+
+    test(`${shell}: a task listed under both desired statuses is described once`, { skip }, () => {
+      const moved = stoppedTask(77, { group: "family:gs-staging-p1" });
+      const run = runCapture(shell, { tasks: [SETTLED, moved], listing: { RUNNING: [TASK, moved.taskArn], STOPPED: [moved.taskArn] } });
+      assert.equal(run.status, 0, run.stderr);
+      const doc = run.file("cluster-tasks.json") as any;
+      assert.equal(doc.task_count, 2);
+      assert.deepEqual(doc.listings.map((l: any) => l.pages[0].task_arns.length), [2, 1]);
+      assert.deepEqual(run.calls.filter((c) => c.op === "describe-tasks").map((c) => c.count), [1, 2]);
+      assert.equal(judged(run), "");
+      fs.rmSync(path.dirname(run.out), { recursive: true, force: true });
+    });
+
+    test(`${shell}: a failed list-tasks page or describe-tasks batch fails the capture -- no listing, no stamp, nothing stale left`, { skip }, () => {
+      const tasks = [SETTLED, ...history(256)];
+      for (const scenario of [{ tasks, failList: { status: "STOPPED", page: 1 } }, { tasks, failList: { status: "RUNNING", page: 0 } }, { tasks, describeFailOn: String(history(256)[230].taskArn) }] as StubScenario[]) {
+        const run = runCapture(shell, scenario);
+        assert.notEqual(run.status, 0, JSON.stringify(scenario.failList ?? scenario.describeFailOn));
+        assert.equal(run.exists("cluster-tasks.json"), false, "no listing that looks complete");
+        assert.equal(run.exists("capture.json"), false, "no stamp: the certification refuses the package");
+        fs.rmSync(path.dirname(run.out), { recursive: true, force: true });
+      }
+      /* A describe answer carrying failures is written whole -- and the judgment refuses it. */
+      const partial = runCapture(shell, { tasks, describeMissing: [String(history(256)[150].taskArn)] });
+      assert.equal(partial.status, 0, partial.stderr);
+      assert.match(judged(partial), /the cluster listing is complete: describe-tasks batch 1 failed for 1 task\(s\) .*MISSING/);
+      fs.rmSync(path.dirname(partial.out), { recursive: true, force: true });
+    });
+
+    test(`${shell}: the capture is read-only -- list, describe and get calls only`, { skip }, () => {
+      const run = runCapture(shell, { tasks: [SETTLED, ...history(3)] });
+      assert.equal(run.status, 0, run.stderr);
+      const ops = [...new Set(run.calls.map((c) => String(c.op)))];
+      assert.deepEqual(ops.filter((op) => !/^(list|describe|get)-/.test(op)), [], ops.join(", "));
+      fs.rmSync(path.dirname(run.out), { recursive: true, force: true });
+    });
+  }
+
+  test(".sh and .ps1 write the same listing (contract equivalence; listed_at aside)", { skip: BASH === null || PWSH === null ? "needs both bash and PowerShell" : false }, () => {
+    assert.ok(outputs.sh !== undefined && outputs.ps1 !== undefined, "the 257-task runs above produced both");
+    const strip = (doc: Record<string, unknown>) => ({ ...doc, listed_at: typeof doc.listed_at === "string" && Number.isFinite(Date.parse(doc.listed_at)) });
+    assert.deepEqual(strip(outputs.ps1 as Record<string, unknown>), strip(outputs.sh as Record<string, unknown>));
   });
 });

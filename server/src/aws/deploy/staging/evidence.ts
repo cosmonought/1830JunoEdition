@@ -10,7 +10,8 @@
 //   prerequisite.json          `stage-cert prerequisite` (the L5-8 verifier + the settled-deployment checks), live
 //   verify-ledger.json         `verify --part ledger --record <file>` (two-account form: the ledger half)
 //   services.json ...          infra/aws/scripts/capture-evidence (read-only captures; L5-8's files + running tasks,
-//                              target health, the cluster's running tasks, the distribution, capture.json's time)
+//                              target health, the cluster's complete task listing (L6-6P: desired RUNNING and
+//                              STOPPED, every page, every batch), the distribution, capture.json's time)
 //   probe-task-role-log.json   the certifier task's CloudWatch log events (infra/aws/scripts/run-task-probe)
 //   probe-task-role-run.json   that task's `describe-tasks` (its definition, command override, exit code)
 //   probe-task-role.json       the task-role probe's record, collected from the log (`stage-probe collect`)

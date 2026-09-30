@@ -61,7 +61,7 @@ import {
 import { IAM_PROBE_IDS, judgeIamProbe } from "./iamProbe";
 import { judgeKmsProbe } from "./kmsProbe";
 import { adoptionOf, certifierImage, generationMeasurement, judgeGeneration, judgeIdentityRecovery, judgeReviews, judgeRestoreFencing, judgeRestoreQuiet, judgeRollback, NOT_INTEGRATED, type GenerationEvidence, type HeartbeatEvidence } from "./recovery";
-import { buildIdOf, checkClusterTasks, checkRunningTasks, checkServicesSettled, checkTargetHealth } from "./prerequisite";
+import { buildIdOf, checkClusterTasks, checkRunningTasks, checkServicesSettled, checkTargetHealth, readClusterListing } from "./prerequisite";
 import { STACKS, TERRAFORM_FILES, judgeTerraformStack } from "./terraformPlan";
 import { judgeTransactionProbe } from "./transactionProbe";
 
@@ -82,6 +82,8 @@ export interface PrerequisiteResult {
   readonly identity: DeploymentIdentity;
   readonly startup: AwsStartup;
   readonly running: ReadonlyMap<string, readonly Record<string, unknown>[]>;
+  /** L6-6P: when the complete cluster listing was taken (null: no complete listing -- the prerequisite already FAILS). */
+  readonly clusterListedAt?: number | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -141,7 +143,12 @@ export function prerequisiteChecks(
     checks.push(...r.checks);
     running = r.running;
   }
-  checks.push(...(cluster.ok ? checkClusterTasks(cluster.value, prereq, tasks.ok ? tasks.value : null) : [fail("prerequisite: no task beside the services", cluster.problem)]));
+  const capture = read(EVIDENCE.capture);
+  checks.push(
+    ...(cluster.ok
+      ? checkClusterTasks(cluster.value, prereq, tasks.ok ? tasks.value : null, services.ok ? services.value : null, capture.ok ? capture.value : null)
+      : [fail("prerequisite: the cluster listing is complete", cluster.problem), fail("prerequisite: no task beside the services", cluster.problem)]),
+  );
   checks.push(...(health.ok ? checkTargetHealth(health.value, running.get(expect.primaryPool) ?? []) : [fail("prerequisite: target health", health.problem)]));
 
   const taskDefinitions: Record<string, string | null> = {};
@@ -154,7 +161,9 @@ export function prerequisiteChecks(
   const primaryTd = read(EVIDENCE_FILES.taskDefinition(expect.primaryPool));
   const buildId = primaryTd.ok ? buildIdOf(primaryTd.value) : null;
   checks.push(judge("prerequisite: build identity", buildId !== null, `BUILD_ID ${String(buildId)} (the running task definition's)`, "the running task definition names no BUILD_ID"));
-  return { checks, identity: { task_definitions: taskDefinitions, running_tasks: runningArns, build_id: buildId }, startup: verification.startup, running };
+  const listing = cluster.ok ? readClusterListing(cluster.value, expect.environment) : null;
+  const clusterListedAt = listing !== null && listing.ok ? listing.listedAt : null;
+  return { checks, identity: { task_definitions: taskDefinitions, running_tasks: runningArns, build_id: buildId }, startup: verification.startup, running, clusterListedAt };
 }
 
 export function prerequisiteRecord(run: string, at: number, expect: { readonly environment: string; readonly generation: number; readonly primaryPool: string; readonly pools: readonly string[] }, result: PrerequisiteResult): Record<string, unknown> {
@@ -325,6 +334,9 @@ export const STAGING_GATES: readonly StagingGate[] = Object.freeze([
         const finishes = [records.taskRole, records.edge].filter((r) => r.ok).map((r) => Date.parse(String(obj(r.ok ? r.value : null).finished_at)));
         const last = Math.max(Number.NEGATIVE_INFINITY, ...finishes.filter((t) => Number.isFinite(t)));
         checks.push(judge("prerequisite: evidence captured after the probes", Number.isFinite(captured) && captured >= last - CLOCK_SKEW_MS, `captured ${String(capture.value.captured_at)}`, `captured ${String(capture.value.captured_at)}, before the last probe finished (${Number.isFinite(last) ? new Date(last).toISOString() : "?"}): run capture-evidence again, then certify`));
+        /* L6-6P: the cluster listing itself post-dates the probes (not only the stamp written after it). */
+        const listed = ctx.prerequisite.clusterListedAt ?? Number.NaN;
+        checks.push(judge("prerequisite: cluster listing taken after the probes", Number.isFinite(listed) && listed >= last - CLOCK_SKEW_MS, `listed ${Number.isFinite(listed) ? new Date(listed).toISOString() : "?"}`, Number.isFinite(listed) ? `listed ${new Date(listed).toISOString()}, before the last probe finished (${Number.isFinite(last) ? new Date(last).toISOString() : "?"}): run capture-evidence again, then certify` : "no complete cluster listing to date"));
       }
       return { checks, measurements: { task_definition: ctx.prerequisite.identity.task_definitions[ctx.primaryPool] ?? null, build_id: ctx.prerequisite.identity.build_id } };
     },

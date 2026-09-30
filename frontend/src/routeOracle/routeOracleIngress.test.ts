@@ -1,18 +1,21 @@
 /** @jest-environment node */
 //
 // ==================================================================
-//  ROUTE v12 R12-1: HOSTED ROUTE INGRESS JUDGES A TABLE'S ROUTES ON THE WRONG BOARD (S6-15, KNOWN-RED)
+//  ROUTE v12 R12-1 -> R12-2: HOSTED ROUTE INGRESS JUDGES A TABLE'S ROUTES ON THE TABLE'S OWN BOARD (S6-15)
 // ==================================================================
 //
 // Brief section 8: `RoomSession.submit` -> `turnRefusal` -> `operatingLegalityRefusal`. The reducer opens the
-// table's board scope (`applySandboxAction` -> `withRules`); this path does not, so on a 1830+ / Level Playing
-// Field table the route arm reads whatever board is in effect in the process -- STANDARD, since the server
-// never activates one. NOT FIXED HERE (brief: "prefer leaving a known-red fixture for R12-2"). Every assertion
-// below pins today's DEFECTIVE behaviour and says so; R12-2's fix (scope `turnRefusal` once at its entry, F-1)
-// must turn each one around deliberately.
+// table's board scope (`applySandboxAction` -> `withRules`); R12-1 pinned (KNOWN-RED) that ingress did not, so on a
+// 1830+ / Level Playing Field table the route arm read whatever board was in effect in the process -- STANDARD, since
+// the server never activates one -- refused PRR's legal herald run, called every board-only hex "not a hex on this
+// board", and let a skip through that the reducer then refused (PRR stranded at Run Trains).
 //
-// A second, separate ingress gap is pinned beside it: even SCOPED, ingress never asks the reducer's Coal River
-// gate, so an unlicensed run to L8 passes ingress and is then refused by the reducer.
+// R12-2 REPAIRED IT (the handoff's F-1): `turnRefusal` opens the table's rules ONCE at its entry, so every arm reads
+// the table's board. Each assertion below is the R12-1 pin turned around, deliberately.
+//
+// The second, separate ingress gap R12-1 pinned beside it -- even SCOPED, ingress never asked the reducer's Coal
+// River gate -- is closed too: the route walk itself (`routeWalk.ts`) now refuses any touch of L8 by an unlicensed
+// corporation, so ingress, the authority, the reducer's gate and the search give one answer.
 
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
@@ -77,7 +80,7 @@ function roomFor(state: GameStateResponse, grid: MapGridResponse) {
 describe.each([
   ["Level Playing Field", LPF_BOARD, LPF],
   ["1830+", EXPANDED_BOARD, PLUS],
-] as const)("S6-15 on a hosted %s table (KNOWN-RED)", (_name, board, variants) => {
+] as const)("S6-15 on a hosted %s table (R12-2 repaired)", (_name, board, variants) => {
   it("THE LAW and THE REDUCER: PRR's two herald runs are legal and worth $60 on the table's own board", () => {
     const c = heraldCase(board, variants);
     const graph = buildOracleGraph({
@@ -96,36 +99,39 @@ describe.each([
     expect(after.public_companies.find((company) => company.company_id === PRR)!.last_route_revenue).toBe("60");
   });
 
-  it("KNOWN-RED: outside any scope the process's board is STANDARD, and ingress refuses the legal run on it", () => {
+  it("outside any scope the process's board is STANDARD -- and ingress judges the legal run on the TABLE's board anyway", () => {
     expect(boardInEffect().id).toBe("standard");
     const c = heraldCase(board, variants);
     const state = probeState(c);
     const unscoped = turnRefusal({ state, waterfall: null, actor: PRESIDENT, msg: RUN(PRR, HERALD_SET, ["2", "2"]), mapGrid: c.grid });
-    expect(unscoped).toMatch(/H12 cannot end a route/);
-    // The same predicate inside the table's own scope accepts it: the defect is the missing scope, nothing else.
+    expect(unscoped).toBeNull();
+    // The scope is ingress's own and is put back: the process's board is untouched.
+    expect(boardInEffect().id).toBe("standard");
+    // The same predicate inside the table's own scope agrees.
     const scoped = withRules(resolveVariants(state.variants), () =>
       turnRefusal({ state, waterfall: null, actor: PRESIDENT, msg: RUN(PRR, HERALD_SET, ["2", "2"]), mapGrid: c.grid }),
     );
-    expect(scoped).toBeNull();
+    expect(scoped).toBe(unscoped);
   });
 
-  it("KNOWN-RED, end to end through RoomSession.submit: the legal run is refused, the skip is 'applied' and changes nothing", () => {
+  it("end to end through RoomSession.submit: the skip is refused while a route exists, and the legal run is applied", () => {
     const c = heraldCase(board, variants);
     const state = probeState(c);
     const { room, submit } = roomFor(state, c.grid);
-    const ran = submit(RUN(PRR, HERALD_SET, ["2", "2"]));
-    expect(ran.kind).toBe("refused");
-    expect((ran as { reason: string }).reason).toMatch(/H12 cannot end a route/);
-    // Unscoped, the route search sees no route for PRR on the standard board, so ingress lets the skip through;
-    // the reducer (scoped) refuses it by identity. PRR is still at Run Trains having run nothing: stranded.
+    // R12-1: unscoped, the route search saw no route for PRR on the standard board, so ingress let the skip through
+    // and the reducer refused it by identity -- PRR stranded. Now ingress refuses it with its reason.
     const skipped = submit(SKIP(PRR));
-    expect(skipped.kind).toBe("applied");
-    expect(room.state.operating_sub_phase).toBe("Routes");
-    expect(room.state.public_companies.find((company) => company.company_id === PRR)!.routes_run_this_turn ?? 0).toBe(0);
+    expect(skipped.kind).toBe("refused");
+    expect((skipped as { reason: string }).reason).toMatch(/has a route it can run/);
+    const ran = submit(RUN(PRR, HERALD_SET, ["2", "2"]));
+    expect(ran.kind).toBe("applied");
+    const prr = room.state.public_companies.find((company) => company.company_id === PRR)!;
+    expect(prr.last_route_revenue).toBe("60");
+    expect(prr.routes_run_this_turn ?? 0).toBeGreaterThan(0);
   });
 });
 
-describe("S6-15: every hex that exists only on the 1830+ / LPF boards is 'not a hex' to unscoped ingress (KNOWN-RED)", () => {
+describe("S6-15: every hex that exists only on the 1830+ / LPF boards is judged by the real rule at ingress (R12-2 repaired)", () => {
   it.each(VARIANT_ONLY_HEXES.map((label) => [label] as const))("%s", (label) => {
     expect(STANDARD_BOARD.hexes.some((hex) => hex.label === label)).toBe(false);
     const hex = LPF_BOARD.hexes.find((entry) => entry.label === label)!;
@@ -142,15 +148,16 @@ describe("S6-15: every hex that exists only on the 1830+ / LPF boards is 'not a 
     const state = probeState(c);
     const msg = RUN(CO, [[{ hex: label }, { hex: neighbour.label }]], ["2"]);
     const unscoped = turnRefusal({ state, waterfall: null, actor: PRESIDENT, msg, mapGrid: c.grid });
-    expect(unscoped).toBe(`Route 1: ${label} is not a hex on this board.`);
+    // R12-1 pinned `Route 1: ${label} is not a hex on this board.` here. Now: the table's board judges it.
+    expect(unscoped).not.toBe(`Route 1: ${label} is not a hex on this board.`);
+    expect(unscoped ?? "").not.toMatch(/is not a hex on this board/);
     const scoped = withRules(resolveVariants(state.variants), () => turnRefusal({ state, waterfall: null, actor: PRESIDENT, msg, mapGrid: c.grid }));
-    expect(scoped).not.toBe(unscoped);
-    expect(scoped).not.toMatch(/is not a hex on this board/);
+    expect(scoped).toBe(unscoped);
   });
 });
 
-describe("a second ingress gap, independent of the scope: ingress never asks the Coal River gate (KNOWN-RED)", () => {
-  it("scoped ingress accepts an unlicensed run to L8 that the law forbids and the reducer refuses", () => {
+describe("the second ingress gap is closed too: an unlicensed run to L8 is refused at ingress, as the law and the reducer refuse it", () => {
+  it("ingress (scoped or not) refuses an unlicensed run to L8, and the reducer refuses it", () => {
     const c: ProbeCase = {
       board: LPF_BOARD,
       variants: LPF,
@@ -162,7 +169,8 @@ describe("a second ingress gap, independent of the scope: ingress never asks the
     const state = probeState(c);
     const msg = RUN(CO, [[{ hex: "K7" }, { hex: "L8" }]], ["2"]);
     const scoped = withRules(resolveVariants(state.variants), () => turnRefusal({ state, waterfall: null, actor: PRESIDENT, msg, mapGrid: c.grid }));
-    expect(scoped).toBeNull();
+    expect(scoped).toMatch(/without a Kanawha Licence/);
+    expect(turnRefusal({ state, waterfall: null, actor: PRESIDENT, msg, mapGrid: c.grid })).toBe(scoped);
     const after = applySandboxAction(state, msg, { mapGrid: c.grid, era: "Yellow" });
     expect(stateDigest(after)).toBe(stateDigest(state));
   });

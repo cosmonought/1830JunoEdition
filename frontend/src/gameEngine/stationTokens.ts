@@ -165,6 +165,18 @@ export function stationSlotCount(mapGrid: MapGridResponse, q: number, r: number)
     const counts = tileCitySlotCounts(laid.tile_id);
     if (counts.length > 0) return counts.reduce((sum, n) => sum + n, 0);
   }
+  /* Route v12 R12-2: A PRINTED CITY THAT SAYS HOW MANY CIRCLES IT HAS IS BELIEVED. The v12 1830+ / LPF boards
+     print Montreal (A19) and Norfolk (L16) as ONE city with TWO circles (`slots: 2`); the archetype below reads
+     any one-city gray hex as one circle, which left the second circle drawn and routed-around (`citySlotCount`)
+     but never placeable. Only a marker carrying `slots` takes this arm -- the `*_PRE_V12` twins carry none, so
+     an unpinned board answers exactly as before. */
+  const hex = STATIC_BOARD_HEXES.find((entry) => entry.q === q && entry.r === r);
+  if (hex) {
+    const cities = printedMarkersFor(hex.label).filter((marker) => marker.kind === "city");
+    if (cities.some((marker) => marker.slots !== undefined)) {
+      return cities.reduce((sum, marker) => sum + (marker.slots ?? 1), 0);
+    }
+  }
   const archetype = archetypeForHex(mapGrid, q, r);
   if (archetype === "SingleCity") return 1;
   if (archetype === "DoubleCity") return 2;

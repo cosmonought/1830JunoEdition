@@ -6,8 +6,12 @@
 //
 // BY DEFAULT: a bounded, representative sample of the dense-board corpus (standard late game, LPF late game,
 // PRR herald cases, Diesel cases, the Coal River stranding cases), every case run through the reducer as well,
-// with each case's production class PINNED as it stands today. The classes are KNOWN-RED where they are not
-// "sound-optimal": R12-2 is expected to move them, deliberately.
+// with each case's production class PINNED as it stands today.
+//
+// ROUTE v12 R12-2 moved the pins deliberately: no sample case emits an illegal set or strands any more (the herald
+// join, the Coal River end), Montreal / Norfolk are repaired, and what remains is (a) "sound-suboptimal" -- the
+// search is still a bounded heuristic whose figure is a LOWER BOUND (S6-3), every demonstrated set legal and applied
+// -- and (b) #62's catalog $90, an unresolved source discrepancy R12-2 did not change (`production-data-defect`).
 //
 // OWNER-RUN (`ROUTE_ORACLE_FULL=1`): the whole B-2 corpus and, when `ROUTE_ORACLE_CORPUS_DIR` names a folder
 // holding the owner-local logs (`server/data/*.log.jsonl`, `frontend/sandbox-log-*.json`), the B-1 real
@@ -46,38 +50,41 @@ describe("the corpus is built from the logs, not from assumptions", () => {
 /** [board, corporation, fleet, oracle optimum, production's demonstration, production class, every flag, the best set
  *  under PRODUCTION's data].
  *
- *  R12-1 CLOSURE (owner data, 2026-09-29): #62 pays $80 per city; on the 1830+ map Montreal pays $40 / $60 and
- *  Norfolk $30 / $50, and each has TWO station circles. Production has #62 at $90, Montreal and Norfolk flat
- *  ($40, $20) and each at one circle -- recorded production data defects (R12-2). (No sample board has a
- *  Montreal token; the Montreal case is the separate fixture below.) The last column is the
- *  oracle's law run on production's data: where the two differ, the case carries `production-data-defect`, and
- *  stranding / shortfall are judged against the production-data set (which the authority must accept). On the Z6C
- *  boards N&W's home fills production's one Norfolk circle, so production shuts Norfolk to everyone else; the law
- *  keeps it open, which is most of the Z6C optima's rise. */
+ *  THE DATA (R12-1 closure; R12-2): on the 1830+ map Montreal pays $40 / $60 and Norfolk $30 / $50, each ONE city
+ *  with TWO circles -- production agrees since R12-2. #62: the oracle prices $80 per city, production's catalog $90;
+ *  R12-2 found no first-party evidence settling it and left production unchanged, so the last column (the oracle's
+ *  law on production's data) differs from the oracle only by #62's premium, and such a case carries
+ *  `production-data-defect`. Before R12-2 (the R12-1 pins, kept in the comments): Z6C@494 PRR [D] and C&O [6,D]
+ *  stranded (the herald join, Coal River), PRR [6] and NYC@608 [6,D] emitted illegal Coal River sets, and N&W's
+ *  home filled production's one Norfolk circle. */
 const SAMPLE: ReadonlyArray<readonly [string, number, readonly string[], number, number, string, readonly string[], number]> = [
   // Standard 1830, Brown: ordinary positions, a PRR bow case, two Diesels.
   ["Y8V@651", 5, ["3"], 170, 150, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 180],
   ["Y8V@651", 2, ["3"], 180, 190, "production-data-defect", ["production-data-defect", "sound-optimal"], 190], // $190 = the law's $180 + #62's extra $10
-  ["Y8V@651", 1, ["4", "6"], 470, 460, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 490], // the preflight's $500 used a bare-token bow run (IL-7)
-  ["Y8V@651", 6, ["D"], 780, 680, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 800],
-  ["Y8V@651", 8, ["6", "D"], 840, 730, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 860],
-  // Level Playing Field, Gray: the herald join and the Coal River endpoint strand PRR / C&O (the production-data
-  // optima $660 < $710 and $720 < $730 are the preflight's pairs); B&O and N&W are licensed.
-  ["Z6C@494", 1, ["D"], 820, 710, "route-phase-stranding", ["emits-illegal-optimum", "route-phase-stranding", "production-data-defect"], 660],
-  ["Z6C@494", 1, ["6"], 290, 260, "emits-illegal-optimum", ["emits-illegal-optimum"], 300],
-  ["Z6C@494", 5, ["6", "D"], 870, 730, "route-phase-stranding", ["emits-illegal-optimum", "route-phase-stranding", "production-data-defect"], 720],
-  ["Z6C@494", 4, ["D"], 870, 780, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 780], // short only through Norfolk's circles
-  ["Z6C@494", 10, ["D"], 870, 850, "production-data-defect", ["production-data-defect", "sound-optimal"], 850], // N&W's licence (393) opens Coal River to it
-  ["Z6C@608", 2, ["6", "D"], 990, 790, "emits-illegal-optimum", ["emits-illegal-optimum", "production-data-defect"], 820],
-  ["Z6C@608", 10, ["3", "4", "4"], 530, 510, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 510], // the preflight's "unsound" row: N&W is licensed
+  ["Y8V@651", 1, ["4", "6"], 470, 460, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 490], // the preflight's $500 used a bare-token bow run (IL-7, now refused)
+  ["Y8V@651", 6, ["D"], 780, 740, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 800], // R12-1: 680 (re-entry and the red-area join widen the search)
+  ["Y8V@651", 8, ["6", "D"], 840, 810, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 860], // R12-1: 730
+  // Level Playing Field, Gray. R12-1: PRR [D] 710 stranding (the H12 join; production-data optimum 660), PRR [6] 260
+  // illegal (Coal River), C&O [6,D] 730 stranding (720), B&O [D] 780 short only through Norfolk's one circle, N&W [D] 850.
+  ["Z6C@494", 1, ["D"], 820, 840, "production-data-defect", ["production-data-defect", "sound-optimal"], 840], // $840 = the law's $820 + two #62 cities
+  ["Z6C@494", 1, ["6"], 290, 250, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 300],
+  ["Z6C@494", 5, ["6", "D"], 870, 860, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 890],
+  ["Z6C@494", 4, ["D"], 870, 880, "production-data-defect", ["production-data-defect", "sound-optimal"], 880], // Norfolk's second circle is open now
+  ["Z6C@494", 10, ["D"], 870, 880, "production-data-defect", ["production-data-defect", "sound-optimal"], 880], // N&W's licence (393) opens Coal River to it
+  // R12-1: NYC [6,D] 790 illegal (Coal River), N&W [3,4,4] 510 short only through Norfolk's flat $20.
+  ["Z6C@608", 2, ["6", "D"], 990, 860, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 1000],
+  ["Z6C@608", 10, ["3", "4", "4"], 530, 540, "production-data-defect", ["production-data-defect", "sound-optimal"], 540], // the preflight's "unsound" row: N&W is licensed
   ["Z6C@608", 1, ["3"], 160, 130, "sound-suboptimal", ["sound-suboptimal"], 160],
 ];
 
-describe("a bounded sample of the dense corpus, production classified against the oracle (KNOWN-RED where not optimal)", () => {
+describe("a bounded sample of the dense corpus, production classified against the oracle (R12-2: no illegal set, no stranding)", () => {
   it.each(SAMPLE.map((row) => [`${row[0]} company ${row[1]} [${row[2].join(",")}]`, row] as const))("%s", (_name, row) => {
     const [boardId, companyId, fleet, optimum, demonstrated, primary, flags, productionData] = row;
     const board = boards.get(boardId)!;
     const result = compareCase(board, companyId, fleet, phaseConsistent(fleet, board.era), { reducer: true });
+    // R12-2: production's own set is accepted by the authority AND applied by the reducer, in every sample case.
+    expect(result.authorityOnProductionSet).toBe(`legal $${demonstrated}`);
+    expect(result.reducer?.appliesProductionSet).toBe(true);
     expect(result.oracle.undecided).toBeNull();
     expect(result.validity).toEqual([]);
     expect(result.oracle.total).toBe(optimum);
@@ -94,8 +101,8 @@ describe("a bounded sample of the dense corpus, production classified against th
   }, 120_000);
 });
 
-describe("Montreal's one production circle is recognised as the data defect, and only that (the Montreal correction)", () => {
-  it("one CPR token at Montreal: the law runs ERIE through it ($80); production shuts it; the authority accepts the production-data set", () => {
+describe("Montreal's two circles (the Montreal correction; R12-1 KNOWN-RED, repaired by R12-2)", () => {
+  it("one CPR token at Montreal: the law runs ERIE through it ($80), and so does production now", () => {
     // The Montreal law fixture (routeOracleLaw.test.ts) as a corpus board: Ottawa B16 #57 turned 1 (ERIE), the B20
     // town #55 turned 1, CPR in one of Montreal's two circles; a 4-train, before the first 5-train.
     const board = fixtureBoard("MONTREAL-CIRCLES", LPF_BOARD, { expandedMap: true, plusTiles: true, levelPlayingField: true }, "Yellow", [["B16", 57, 1], ["B20", 55, 1]], [
@@ -105,11 +112,13 @@ describe("Montreal's one production circle is recognised as the data defect, and
     const result = compareCase(board, 6, ["4"], true, { reducer: true });
     expect(result.validity).toEqual([]);
     expect(result.oracle.total).toBe(80); // town B20 - Montreal - Ottawa - Kingston
-    expect(result.productionDataOptimum).toBe(70); // Montreal shut by one circle: Montreal - Ottawa - Kingston
-    expect(result.witnessRefusedByCircles).toBe(true);
-    expect(result.authorityOnWitness).toMatch(/^REFUSED: Route 1: A19 is tokened out by other corporations/);
-    expect(result.authorityOnProductionDataWitness).toBe("legal $70");
-    expect(result.flags).toContain("production-data-defect");
+    // R12-1 pinned production at $70 (Montreal shut by its one circle) and the witness refused "A19 is tokened out".
+    expect(result.productionDataOptimum).toBe(80);
+    expect(result.witnessRefusedByCircles).toBe(false);
+    expect(result.authorityOnWitness).toBe("legal $80");
+    expect(result.production.demonstrated).toBe(80);
+    expect(result.authorityOnProductionSet).toBe("legal $80");
+    expect(result.flags).toEqual(["sound-optimal"]);
   }, 120_000);
 });
 

@@ -67,7 +67,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 11;
+export const RULES_ENGINE_VERSION = 12;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -359,6 +359,44 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "the wrong seat, a C&A grant that minted a share or left the float and presidency waiting, a Stock Round passed " +
       "over a curable excess, an owed auction that outlived the first 5-train, an Operating Round started by message " +
       "and an auction resumed on the wrong seat, so it is refused, never reinterpreted.",
+  },
+  {
+    version: 12,
+    note:
+      "Route v12 R12-2 (2026-09-29): the production route engine repaired against the independent R12-1 oracle and the " +
+      "owner's route rulings. REPLAY SEMANTICS, every one asked only on a PINNED board (#1698's presence rule, carried as " +
+      "the board in effect: `boardFor(variants, routeRulesRevisionOf(state))`); an unpinned development-corpus board " +
+      "keeps the pre-v12 law, search and board data (`*_BOARD_PRE_V12`), so it replays unchanged and the frozen SET-0A " +
+      "settlement goldens built from it (SYN-05, SYN-07) are byte-identical. (1) THE ROUTE LAW (`routeWalk.ts`, the one " +
+      "walk the authority and the search both ask): a red off-board area is ONE city across its hexes, so the same area " +
+      "may not be both ends of a route (Canadian West A9 + A11, the Gulf I1 + J2, Chattanooga K1 + L2; rulebook 6.4.2's " +
+      "DABCFED; IL-5); a station recorded without a city, and PRR's H12 herald, count only where the route VISITS the " +
+      "stop, never at a bypass (IL-7: Altoona's bow; IL-3 NO: an uncounted herald pass is not PRR's home); Coal River " +
+      "(L8) is closed to an unlicensed corporation as an END as well as a pass (at ingress too). (2) PRICING: a bypassed " +
+      "waypoint is skipped before the per-city dedupe, so a stop passed and later counted on distinct track is paid once " +
+      "(IL-11). (3) THE DEMONSTRATION (S6-3's shortfall, the skip refusal, the auto-skip, the forced-purchase probe): the " +
+      "search re-enters a plain hex on its other section of track (IL-11: CROSS_TWICE) and may pass the owner's herald " +
+      "again after counting it; it joins two arms at a station only where the rails join them through the stop (S6-16: " +
+      "the H12 fork; ING-1: New York's two cities); it keys red areas by area and never touches a barred hex; every " +
+      "candidate is judged by the authority's own walk before it can be demonstrated, and `maxRouteRevenueFor` returns " +
+      "only a set `evaluateRouteSet` accepts (else the best single legal route) -- so no demonstrated figure is one the " +
+      "authority refuses, and no corporation is stranded at Run Trains by one. (4) BOARD DATA, 1830+ and the Level " +
+      "Playing Field (owner-confirmed from the physical board, R12-1 closure): Montreal A19 pays $40 / $60 and Norfolk " +
+      "L16 $30 / $50 (the lesser until the first 5-train; `printedCityTiers`), and each is ONE city with TWO station " +
+      "circles, for placement as for blocking (`stationSlotCount` believes a printed city's `slots`) -- superseding " +
+      "#1401's single-station ruling -- so a second corporation may station there and one foreign token no longer shuts either to " +
+      "through-running (N&W's home takes one of Norfolk's). (5) ING-1: a paid station placement on a hex with two cities " +
+      "must name its city. NOT RULES, named so the row is not read as them: hosted ingress now opens the table's own " +
+      "board once at `turnRefusal`'s entry (S6-15, F-1) -- it decides what may be APPENDED, never what an entry means; " +
+      "the renderer's era-aware Montreal / Norfolk badge and restored two-circle pill; the oracle's test pins. NOT " +
+      "CHANGED: tile #62 stays $90 (an unresolved source discrepancy with the oracle's $80, for the owner); the standard " +
+      "map's flat $40 Montreal. SETTLEMENT IS A SEPARATE AXIS: `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` stays [10, " +
+      "11], so a v12 board is refused for money settlement (and no money table can be created) until v12's own " +
+      "certification pass. A version-11 log can carry a run from one red area to the same area's other hex, a run " +
+      "counting a bare token at a bypassed city or an uncounted herald as its station, an unlicensed run ending at Coal " +
+      "River, dividends priced on Montreal / Norfolk's flat figures, a run past a one-circle Norfolk or Montreal a v12 " +
+      "board no longer shuts, shortfall and skip refusals against the old demonstration, and a city-less placement on " +
+      "New York, so it is refused, never reinterpreted.",
   },
 ];
 

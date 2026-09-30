@@ -56,7 +56,7 @@ import {
   trainPurchaseToastLine,
 } from "./utils/actionLog";
 import { STATIC_BOARD_HEXES, heraldHexFor } from "./components/hexBoardData";
-import { activateRules, boardFor, withRules } from "./gameEngine/boardSelection";
+import { activateRules, boardFor, routeRulesRevisionOf, withRules } from "./gameEngine/boardSelection";
 /* Design note #1294: the chrome scale, live. */
 import { useUiScale } from "./utils/useUiScale";
 import { initialGridFor } from "./gameEngine/initialGrid";
@@ -1399,7 +1399,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      the first paint of the wrong board. Idempotent (`activateBoard` returns early on the same board), so a
      StrictMode double render is harmless. The reducer scopes its own board from the state (`withBoard`);
      this is for the renderer, the panels and the route tracer, which read the tables directly. */
-  activateRules(resolveVariants(gameState?.variants)); // and the tray, #1311
+  activateRules(resolveVariants(gameState?.variants), routeRulesRevisionOf(gameState)); // and the tray, #1311; R12-2: the pin's route rules
 
   /* Declared here because it needs gameState; the sandbox reducer's cursor wins when there is one.
      See docs/ai_architecture/state_machine.md - App.tsx #656 */

@@ -37,8 +37,10 @@ const BO_PROTOCOL_ID = 4;
 const OLD_AUTO_ROUTE = 480;
 /** What it draws now; a floor, as #892 pins its figure, since a search may legitimately improve. An
  *  exhaustive pairing of every legal arm (run offline, with the tokened-out cities walled as the shell walls
- *  them) puts the optimum at $780 -- Norfolk (L16) is a one-station city since #1401 and N&W's token makes it
- *  a terminus for B&O, which closes the Atlantic City loop that an earlier pass ran through. */
+ *  them) puts the optimum at $780 -- with Norfolk (L16) walled for B&O, as #1401's one-station Norfolk did with
+ *  N&W's token, which closes the Atlantic City loop that an earlier pass ran through. (R12-2: Norfolk has TWO
+ *  circles again, so on the real board N&W's home alone no longer shuts it; the wall below is this test's own
+ *  premise, injected, and the property pinned is the search's, not the board's.) */
 const NEW_AUTO_ROUTE_FLOOR = 780;
 
 type Action = { index: number; actor: string | null; msg: Record<string, unknown> };
@@ -96,7 +98,7 @@ describe("B&O's D-train on JUNO-Z6C (design note #1399)", () => {
       era: "Gray",
       startHexes: tokens(),
       companyId: BO_PROTOCOL_ID,
-      blocksThrough: (q, r) => labelOf(q, r) === "L16", // Norfolk: N&W's one-station home, shut to B&O
+      blocksThrough: (q, r) => labelOf(q, r) === "L16", // Norfolk walled for B&O: this test's premise (see the note above)
       trains: [{ trainIndex: 0, maxRevenueCentres: UNLIMITED_REACH }],
     });
     const run = result.assignments.find((a) => a.trainIndex === 0);
@@ -122,7 +124,9 @@ describe("B&O's D-train on JUNO-Z6C (design note #1399)", () => {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     const src = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "routeAutoTrace.ts"), "utf8");
-    expect(src).toContain("if (visits.has(nextKey) || avoidVisits?.has(nextKey)) continue;");
+    // R12-2: a counted stop is still a wall (the owner's herald alone may be PASSED again, uncounted -- IL-11).
+    expect(src).toContain("const counted = nextKey !== null && (visits.has(nextKey) || avoidVisits?.has(nextKey) === true);");
+    expect(src).toContain("if (counted && !passable) continue;");
     expect(src).toContain("const stop = arrivalEdge === null ? (startCity ?? 0) : stopForArrival(mapGrid, q, r, arrivalEdge);");
     // And the second arm searches away from the first arm's centres, the start excepted.
     expect(src).toContain("const avoid = new Set(armA.visits);");

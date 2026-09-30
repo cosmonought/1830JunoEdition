@@ -18,7 +18,7 @@ says what it means and where it lives. Per-pass evidence is in the Project repor
 
 | # | Identity | What it names | Where it lives | Current value |
 |---|---|---|---|---|
-| 1 | **Gameplay / rules** | Which authoritative reducer a game's log is a program for | `RULES_ENGINE_VERSION`, `SUPPORTED_RULES_ENGINE_VERSIONS` (`frontend/src/gameEngine/rulesVersion.ts`); stamped per deal as `SetupGame.rules_engine_version` | **11**; reads **[11]** |
+| 1 | **Gameplay / rules** | Which authoritative reducer a game's log is a program for | `RULES_ENGINE_VERSION`, `SUPPORTED_RULES_ENGINE_VERSIONS` (`frontend/src/gameEngine/rulesVersion.ts`); stamped per deal as `SetupGame.rules_engine_version` | **12** since ROUTE v12 R12-2 (11 at LIVE-4); reads **[12]** |
 | 2 | **Hosted / session protocol** | The meaning of a game's durable history *outside* the reducer (the log and its commit protocol, the server-built deal, the seal, the GameRecord's log-implied fields) | `HOSTED_PROTOCOL_VERSION` (`frontend/src/gameEngine/protocolVersions.ts`); stamped per deal as `SetupGame.hosted_protocol` (absent = 1) | **1** |
 | 3 | **Financial / settlement** | The meaning and format of every durable financial artifact and every money-lifecycle rule; which rules versions may be settled; the settlement byte codec | `FINANCIAL_PROTOCOL_VERSION` (`protocolVersions.ts`); `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` (`settlementAppraisal.ts`, an explicit literal); the codec id `18JUNO/v1`; frozen per money game in its continuation identity (`18COSMOS/MONEY-CONTINUATION/v1`); money GameRecords are `record_schema: 2` | financial **3**; settles **[10, 11]**; codec **18JUNO/v1**; money records schema **2** |
 | 4 | **Client compatibility** | The wire between a bundle and a server: frames and fields on both sockets, close codes, the `/gs/api/*` routes and bodies | `CLIENT_PROTOCOL_VERSION`, `ACCEPTED_CLIENT_PROTOCOLS` (`protocolVersions.ts`); announced per connection as `cp` / `cr` / `cb` | client **1**; server accepts **[0, 1]** |
@@ -45,8 +45,11 @@ Equal keys are one pool (a rolling replacement); a different key is a different 
 
 | Configuration | Key |
 |---|---|
-| No escrow configured | `dc1-68c4b829b3a20e63f3e55cde` |
-| The test fixture pin | `dc1-4308649847947d1d12ccdd41` |
+| No escrow configured | `dc1-ade748b9407a3db380e5ed72` (rules 12, ROUTE v12 R12-2); LIVE-4's rules-11 key was `dc1-68c4b829b3a20e63f3e55cde` |
+| The test fixture pin | `dc1-eb48b18e50d46d0c50807710` (rules 12); LIVE-4's rules-11 key was `dc1-4308649847947d1d12ccdd41` |
+
+The key moves whenever an axis moves: R12-2's rules bump (11 → 12, settlement still `[10, 11]`) is a new pool, so a
+v11 server and a v12 server never share one, and a stored v11 game is `not-continued` on a v12 process.
 
 ---
 

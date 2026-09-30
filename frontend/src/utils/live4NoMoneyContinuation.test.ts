@@ -176,13 +176,19 @@ const frameWhy = (frame: unknown): string | undefined => (frame as { why?: strin
 
 /* ---- capabilities and a pool's hook ----------------------------------------------------------------------- */
 
+/* Route v12 R12-2 moved this code's rules engine from 11 to 12. The hypothetical releases below were written as "v12"
+   against a v11 build; they are now read off the engine -- `NOW` (this build) and `NEXT` (a release after it) -- so
+   they stay the SAME scenarios: a release that keeps this build's rules, one that dropped them. */
+const NOW = RULES_ENGINE_VERSION;
+const NEXT = RULES_ENGINE_VERSION + 1;
+
 /** This code's gameplay capability, with some fields replaced (a hypothetical release). */
 const capabilityOf = (over: Partial<DeploymentCapability>): DeploymentCapability => deploymentCapability({ ...localGameplayCapability(), ...over });
 
 /** A v12 release that still carries v11 (certified dual support) and reads hosted protocols 1 and 2. */
-const DUAL = capabilityOf({ rules: { current: 12, supported: [11, 12], certified: [] }, hosted_protocols: [1, 2] });
+const DUAL = capabilityOf({ rules: { current: NEXT, supported: [NOW, NEXT], certified: [] }, hosted_protocols: [1, 2] });
 /** A v12 release that dropped v11. */
-const TWELVE_ONLY = capabilityOf({ rules: { current: 12, supported: [12], certified: [] }, hosted_protocols: [1, 2] });
+const TWELVE_ONLY = capabilityOf({ rules: { current: NEXT, supported: [NEXT], certified: [] }, hosted_protocols: [1, 2] });
 /** This build's rules, reading hosted protocols 1 and 2. */
 const HOSTED_TWO = capabilityOf({ hosted_protocols: [1, 2] });
 
@@ -199,7 +205,7 @@ const PIN: DeploymentPin = {
 };
 const money = (rules: { current: number; supported: number[] }, hosted: number[]): DeploymentCapability =>
   capabilityOf({
-    rules: { ...rules, certified: [11] },
+    rules: { ...rules, certified: [NOW] },
     hosted_protocols: hosted,
     financial_protocols: [FINANCIAL_PROTOCOL_VERSION],
     settlement_codecs: ["18JUNO/v1"],
@@ -285,7 +291,7 @@ describe("the deal is stamped with its dealing identity, by the server, never by
     /* T-5 (no money): a v12 release that keeps v11 deals NEW games as {12, 2}. */
     const dual = session({ continuation: poolHook({ capability: DUAL }) });
     expect(submit(dual).kind).toBe("applied");
-    expect([setupOf(dual.entries)[RULES_ENGINE_VERSION_FIELD], setupOf(dual.entries)[HOSTED_PROTOCOL_FIELD]]).toEqual([12, 2]);
+    expect([setupOf(dual.entries)[RULES_ENGINE_VERSION_FIELD], setupOf(dual.entries)[HOSTED_PROTOCOL_FIELD]]).toEqual([NEXT, 2]);
     /* The hosted field moves no board: the same deal with and without it deals the same state. */
     const without = session();
     expect(submit(without).kind).toBe("applied");
@@ -293,7 +299,7 @@ describe("the deal is stamped with its dealing identity, by the server, never by
   });
 
   it("T-5 (money): a money deal is stamped with its MONEY identity's rules and hosted protocol, never the pool's current -- and is then continued, not held identity-conflict", () => {
-    const pool = money({ current: 12, supported: [11, 12] }, [1, 2]);
+    const pool = money({ current: NEXT, supported: [NOW, NEXT] }, [1, 2]);
     const facts: MoneyFacts = { kind: "record", mci: MCI, deployment: PIN };
     const room = session({ continuation: poolHook({ capability: pool, money: facts }) });
     expect(submit(room).kind).toBe("applied");
@@ -355,13 +361,13 @@ describe("the verdict is asked at every interpretation, on every build (§5, F-L
   it("a money table's facts are judged on EQUAL builds (the case #1252 skipped): another financial protocol is not continued, nothing appended", () => {
     const dealt = played();
     const facts: MoneyFacts = { kind: "record", mci: { ...MCI, financial_protocol: FINANCIAL_PROTOCOL_VERSION + 4 }, deployment: PIN };
-    const room = session({ build: BUILD, entries: dealt.entries, continuation: poolHook({ capability: money({ current: 11, supported: [11] }, [1]), money: facts }) });
+    const room = session({ build: BUILD, entries: dealt.entries, continuation: poolHook({ capability: money({ current: NOW, supported: [NOW] }, [1]), money: facts }) });
     expect(room.incompatible?.why).toBe("financial-protocol");
     const answer = submit(room, { actor: dealt.state.player_addresses[1], msg: BUY });
     expect([answer.kind, frameWhy(answer)]).toEqual(["incompatible", "financial-protocol"]);
     expect(room.entries).toHaveLength(dealt.entries.length);
     /* And a money table the index knows nothing about is never judged as a no-money one: a conflict, not a game. */
-    const missing = session({ entries: dealt.entries, continuation: poolHook({ capability: money({ current: 11, supported: [11] }, [1]), money: { kind: "missing" } }) });
+    const missing = session({ entries: dealt.entries, continuation: poolHook({ capability: money({ current: NOW, supported: [NOW] }, [1]), money: { kind: "missing" } }) });
     expect(missing.incompatible?.why).toBe("conflict/financial-record-missing");
   });
 
@@ -591,7 +597,7 @@ describe("T-24 (the session half): a draining pool's no-money game stops being s
 
   it("money is never timed out: a draining pool keeps serving a money game long after the no-money deadline", () => {
     const clock = DEADLINE + 30 * NO_MONEY_DRAIN_MS;
-    const hook = poolHook({ capability: money({ current: 11, supported: [11] }, [1]), money: { kind: "record", mci: MCI, deployment: PIN }, pool: DRAINING, now: () => clock });
+    const hook = poolHook({ capability: money({ current: NOW, supported: [NOW] }, [1]), money: { kind: "record", mci: MCI, deployment: PIN }, pool: DRAINING, now: () => clock });
     const room = session({ continuation: hook });
     expect(submit(room).kind).toBe("applied");
     expect(submit(room, { actor: room.state.player_addresses[0], msg: BUY }).kind).toBe("applied");

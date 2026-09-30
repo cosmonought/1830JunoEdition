@@ -27,6 +27,7 @@ import {
   YELLOW_OO_HEXES,
   offboardValueForEra,
   terrainBuildFeeAt,
+  printedCityTiersAt,
 } from "./hexBoardData";
 import { corporationLabel } from "../utils/corporationNames";
 import { TILE_CATALOG, TILE_CATALOG_BY_ID, canonicalTileName } from "./hexTileCatalog";
@@ -1013,6 +1014,10 @@ export function hexRouteValue(q: number, r: number, mapGrid: MapGridResponse): n
   // A per-hex sourced override, checked BEFORE the flat fallback. Any hex not listed falls straight through to the untouched flat logic.
   // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #35
   const overrideLabel = landmark?.label ?? boardHex?.label;
+  /* Route v12 R12-2: a two-value printed gray city's figure before the first 5-train (this reader has no era;
+     `hexValueForEra` is the era-aware one the router and the authority price with). */
+  const cityTiers = boardHex ? printedCityTiersAt(boardHex.label) : undefined;
+  if (!landmark && cityTiers) return cityTiers.yellow;
   if (overrideLabel !== undefined && overrideLabel in HEX_START_VALUE_OVERRIDE) {
     return HEX_START_VALUE_OVERRIDE[overrideLabel];
   }
@@ -1090,6 +1095,10 @@ export function hexValueForEra(
   /* Design note #1320: a printed hex with its own era ladder (Coal River). Same value system as a red area,
      on a hex that is not one -- and never tiled, so it is asked before the laid-tile rung on principle. */
   if (boardHex?.revenueTiers) return offboardValueForEra(boardHex.revenueTiers, era);
+  /* Route v12 R12-2: a printed gray CITY with two values (1830+ Montreal $40 / $60, Norfolk $30 / $50). Gray, so
+     never tiled: asked before the laid-tile rung for the same reason. */
+  const cityTiers = label ? printedCityTiersAt(label) : undefined;
+  if (cityTiers) return offboardValueForEra(cityTiers, era);
 
   const laid = mapGrid.tiles.find((tile) => tile.q === q && tile.r === r);
   if (laid) {

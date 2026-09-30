@@ -56,6 +56,7 @@ import {
   STATIC_BOARD_HEXES,
   YELLOW_OO_HEXES,
   offboardValueForEra,
+  printedCityTiersAt,
   terrainBuildFeeAt,
 } from "./hexBoardData";
 import {
@@ -2967,7 +2968,9 @@ export function HexGridRenderer({
       }
     }
     for (const hex of STATIC_BOARD_HEXES) {
-      const override = HEX_START_VALUE_OVERRIDE[hex.label];
+      /* Route v12 R12-2: a two-value printed gray city (1830+ Montreal / Norfolk) shows the figure it pays now. */
+      const cityTiers = printedCityTiersAt(hex.label);
+      const override = cityTiers ? offboardValueForEra(cityTiers, currentEra) : HEX_START_VALUE_OVERRIDE[hex.label];
       const grayTrack = GRAY_HEXES[hex.label];
       /* ==================================================================
           DESIGN NOTE 1281: A RED AREA'S VALUE IS ITS NAMEPLATE'S, NOT A TOWN'S

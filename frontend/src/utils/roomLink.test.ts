@@ -30,6 +30,7 @@ import {
 import { refusalMessage, type RoomSummary, type RoomView } from "./roomProtocol";
 import { NO_MONEY_UNDO_POLICY } from "../gameEngine/logRevert";
 import { THIS_BUNDLE_ANNOUNCEMENT } from "./clientAnnouncement";
+import { RULES_ENGINE_VERSION } from "../gameEngine/rulesVersion";
 
 const GAME = "g_0123456789abcdefghjkmnpqr0";
 const OTHER = "g_aaaaaaaaaaaaaaaaaaaaaaaaa4";
@@ -111,7 +112,8 @@ describe("an op is answered by its ack (LIVE-2D)", () => {
     expect(made).toHaveLength(1);
     /* LIVE-4 (L4-3): every socket this bundle opens announces it -- client protocol 1, its rules, its build. */
     expect(made[0].url).toBe(`wss://play.example/gs?${THIS_BUNDLE_ANNOUNCEMENT}`);
-    expect(THIS_BUNDLE_ANNOUNCEMENT).toMatch(/^cp=1&cr=11(&cb=[A-Za-z0-9._-]+)?$/);
+    // The rules it announces are its reducer's own -- 11 at L4-3, 12 since Route v12 R12-2.
+    expect(THIS_BUNDLE_ANNOUNCEMENT).toMatch(new RegExp(`^cp=1&cr=${RULES_ENGINE_VERSION}(&cb=[A-Za-z0-9._-]+)?$`));
     // Queued until the socket opens, then sent.
     expect(made[0].sent).toHaveLength(0);
     made[0].open();

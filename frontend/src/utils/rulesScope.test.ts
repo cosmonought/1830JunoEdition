@@ -83,3 +83,34 @@ describe("a board-table reader that runs without a render is scoped to the game'
     expect(unwrappedCalls(after, "nextDerivedAction(")).toHaveLength(0);
   });
 });
+
+/* ==================================================================
+    ROUTE v12 R12-2 (S6-15, the R12-1 handoff's F-1): INGRESS AND THE REDUCER OPEN THE SAME RULES
+   ==================================================================
+   `RoomSession.submit` calls `turnRefusal` outside any scope, and a bare Node process never activates a board, so
+   hosted ingress judged a 1830+ / Level Playing Field table's routes on the STANDARD board. `turnRefusal` now opens
+   the table's rules once at its entry -- with the pin's route rules, as the reducer's entries do -- so every arm it
+   asks reads the table's board. Pinned as source because the property is the scope itself; the behaviour is
+   `routeOracle/routeOracleIngress.test.ts`. */
+describe("R12-2: hosted ingress and the reducer are scoped to the table's rules and its pin's route rules", () => {
+  it("turnRefusal opens the table's rules (and route rules) once, at its entry, around the whole body", () => {
+    const AUTH = readStripped("gameEngine/turnAuthority.ts");
+    const entry = sliceBetween(AUTH, "export function turnRefusal(input: TurnAuthorityInput): string | null {", "function turnRefusalOnTableBoard(");
+    expect(entry).toContain(
+      "return withRules(resolveVariants(input.state.variants), () => turnRefusalOnTableBoard(input), routeRulesRevisionOf(input.state));",
+    );
+  });
+
+  it("the room's ingress asks exactly that function", () => {
+    const ROOM = readStripped("utils/roomSession.ts");
+    expect(ROOM).toContain("const refusal = turnRefusal({");
+  });
+
+  it("the reducer's entries and the replay engine name the pin's route rules wherever they open the table's rules", () => {
+    const SESSION = readStripped("gameEngine/sandboxSession.ts");
+    expect(SESSION).toContain("return withRules(resolveVariants(variants), () => applySandboxActionOnBoard(state, msg, ctx), revision);");
+    const REPLAY = readStripped("gameEngine/replayLog.ts");
+    expect(REPLAY).toContain("withRules(resolveVariants(variants), () => this.applyOnBoard(entry, msg, observe), revision);");
+    expect(REPLAY).toContain("routeRulesRevisionOf(this.state),");
+  });
+});

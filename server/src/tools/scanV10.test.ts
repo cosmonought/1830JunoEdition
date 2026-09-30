@@ -45,7 +45,7 @@ describe("DA-8 gamesDoctor scan-v10", () => {
   test("sorts every stored log by its pin, flags a v10 game's BeginOperatingRound by round, passes a clean one, and writes nothing", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "scan-v10-"));
     try {
-      assert.equal(RULES_ENGINE_VERSION, 11);
+      assert.ok(RULES_ENGINE_VERSION >= 11, "the scan reads v10 history with a later engine (11 at DA-8; 12 since Route v12 R12-2)");
       const ten = withDeal(storedLog(1), (setup) => (setup.rules_engine_version = 10));
       const clean = mintGameId();
       const flagged = mintGameId();
@@ -65,7 +65,8 @@ describe("DA-8 gamesDoctor scan-v10", () => {
       assert.equal(fs.existsSync(path.join(dir, LOCK_DIRECTORY)), false, "no lock taken");
       assert.equal(report.serverRunning, false);
       assert.deepEqual(report.unreadable, []);
-      assert.deepEqual(report.summary.byPin, { v10: 2, v11: 1, unpinned: 1 });
+      // The archived game is dealt by the current engine (v11 at DA-8, v12 since Route v12 R12-2): not the boundary's.
+      assert.deepEqual(report.summary.byPin, { v10: 2, [`v${RULES_ENGINE_VERSION}`]: 1, unpinned: 1 });
       assert.equal(report.summary.scanned, 2);
       assert.deepEqual(report.summary.counts, { A: 1, B: 0, C: 0, F12: 0, X: 0, D: 0 });
       assert.equal(report.summary.clean, false);
@@ -76,7 +77,7 @@ describe("DA-8 gamesDoctor scan-v10", () => {
       );
       assert.deepEqual(report.games.find((game) => game.name === `${clean}.log.jsonl`)!.hits, []);
       const archivedScan = report.games.find((game) => game.name === `archive/${archived}/${archived}.log.jsonl`)!;
-      assert.deepEqual([archivedScan.pin, archivedScan.scanned], [11, false], "a v11 game is not the boundary's");
+      assert.deepEqual([archivedScan.pin, archivedScan.scanned], [RULES_ENGINE_VERSION, false], "a current-engine game is not the boundary's");
       // No principal id is reported: a hit is an index and a message kind.
       assert.equal(JSON.stringify(report).includes(ten[1].actor), false);
     } finally {

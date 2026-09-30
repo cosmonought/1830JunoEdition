@@ -396,6 +396,10 @@ legality against STANDARD rather than the table's board. **Not fixed here; pendi
 owns the detail, the reproduction and the fix. *R12-1 (2026-09-29): pinned as a KNOWN-RED fixture through
 `RoomSession.submit` (`frontend/src/routeOracle/routeOracleIngress.test.ts`: the herald run refused, the skip a no-op, all
 20 board-only hexes "not a hex"; and, separately, ingress never asks the Coal River gate). Fix owed in R12-2.*
+*R12-2 (2026-09-29, branch `route-v12/r12-2-production-repair`): **FIXED on the branch.** `turnRefusal` opens the table's
+own rules and board once at its entry (`withRules(variants, …, routeRulesRevisionOf(state))`), so every ingress question is
+asked of the table's map; the Coal River gate is asked by the walk itself (an unlicensed pass OR end is refused, at ingress
+and in the reducer). The fixture now passes (`routeOracleIngress.test.ts`). Closes when the branch merges.*
 
 **S6-16. Route search can demonstrate an H12 fork reversal that authoritative route legality rejects.**
 Status `OPEN` — **pre-registered BLOCKER**, in the same terms as S6-15 (must be fixed before any substantive G5 / LPF
@@ -404,6 +408,12 @@ route playtest; a route-search / authority certification blocker). Reproduced by
 the route authority refuses it. **Not fixed here; pending the preflight's final report.** *R12-1 (2026-09-29): pinned as
 KNOWN-RED fixtures `HERALD-FORK-PLUS` / `HERALD-FORK-LPF` (stranding: $50 demonstrated, $30 legal), with the Coal River,
 red-area, Altoona-bow and CROSS_TWICE classes beside it (`frontend/src/routeOracle/harness/knownDefects.ts`). Fix owed in R12-2.*
+*R12-2 (2026-09-29, branch `route-v12/r12-2-production-repair`, rules v12): **FIXED on the branch.** The search joins two
+arms at a station only where the rails run through the stop (`joinsThroughStart`), and every candidate is judged by the
+authority's own walk (`routeWalk.ts`) before it can be demonstrated; `maxRouteRevenueFor` returns only a set
+`evaluateRouteSet` accepts. `HERALD-FORK-PLUS` / `-LPF` now demonstrate the legal $30. Red areas, the Altoona bow,
+CROSS_TWICE and ING-1 are repaired in the same pass; the pins record `repairedFrom`. Pin-gated: an unpinned board keeps
+the pre-v12 behaviour. Closes when the branch merges.*
 *R12-1 repair (2026-09-29), data owed in R12-2: brown New York **#62 pays $80 per city** (owner ruling); the catalog's
 $90 is a production data defect (the oracle's `production-data-defect` class, pinned in
 `routeOracleTopology.test.ts`). *R12-1 closure (2026-09-29), owner-confirmed from the physical board:* on the 1830+ /
@@ -413,6 +423,13 @@ Production prices both flat ($40, $20) and gives each one slot, so one foreign t
 Montreal in the FCJ log) shuts the city to through-running: data defects for R12-2 (`hexBoardDataPlus.ts` A19 / L16 gray
 entries, printed artwork and the start-value table, and the tests pinning #1401 -- `expandedBoard.test.ts`,
 `homeSlotGlow.test.ts`, `reenterOtherCity.test.ts`).*
+*R12-2 (2026-09-29, branch, rules v12): **Montreal / Norfolk FIXED** on the 1830+ / LPF boards -- $40/$60 and $30/$50
+(`printedCityTiers`), one city with two circles (`slots: 2`) for routing, blocking and placement (`stationSlotCount`
+reads a printed city's `slots`); the pre-v12 twins keep the old data for unpinned boards. The standard map's Montreal
+stays flat $40, one circle. **#62 NOT changed (still $90): UNRESOLVED.** The owner's authority is the 2018 revised Lookout
+rulebook / map; the repository's rulebook PDF is the 2011 Mayfair image scan and its tile manifest is illegible, so no
+first-party evidence settles $80 vs $90. It stays pinned `production-data-defect` (`routeOracleTopology.test.ts`,
+`routeOracleMessageSpace.test.ts` DATA_62) until the owner rules from the 2018 source; changing it is a rules bump.*
 
 ### Stage 7 — Transaction + cash authority / auction
 

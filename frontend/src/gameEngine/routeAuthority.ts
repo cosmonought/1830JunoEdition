@@ -62,33 +62,22 @@ import type { SandboxLogMsg } from "./gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { tokenCityIndex, type StationTokenCompany } from "../components/hexContractTypes";
 import type { TileColorTier } from "../components/hexTileCatalog";
-import { HEX_NEIGHBOR_OFFSETS, liveEdgesForHex } from "../components/hexGeometry";
-import { boardMemo, heraldAt } from "../components/hexBoardData";
-import {
-  isOffboardTerminal,
-  neighbourAcross,
-  segmentsTouchingEdge,
-  traversalsFrom,
-  type HexTraversal,
-  type SegmentKey,
-} from "./trackSegments";
-import { cityForArrival, stationTokensOf, stopEnteredFrom, type StationToken } from "./trackReach";
+import { boardMemo } from "../components/hexBoardData";
+import type { SegmentKey } from "./trackSegments";
+import { stationTokensOf } from "./trackReach";
 import { cityBlockerFor } from "./cityBlocking";
 import { citySlotCount } from "./stationTokens";
 import { barredHexesFor } from "./kanawhaLicense";
-import { isRevenueCentreHex, isRouteTerminusHex, sandboxRouteBreakdown } from "./sandboxSession";
+import { walkRoute, type ProposedWaypoint, type RouteWalkContext, type WalkedRoute } from "./routeWalk";
 import { MOCK_TRAIN_CATALOG } from "./mockFixtures";
 import { isUnlimitedReach } from "./trainReach";
 import { tileEraFor } from "./gameConstants";
 import { operatingCorporationId } from "./dividendGate";
 import { maxRouteRevenueFor } from "./derivedActions";
 
-/** One stop of a proposed route, exactly as `RunMultipleRoutes.routes[i][j]` carries it. */
-export interface ProposedWaypoint {
-  hex: string;
-  city_node?: number;
-  bypass?: boolean;
-}
+/** One stop of a proposed route, exactly as `RunMultipleRoutes.routes[i][j]` carries it (R12-2: declared beside the
+ *  walk, `routeWalk.ts`, and re-exported here for every existing importer). */
+export type { ProposedWaypoint } from "./routeWalk";
 
 /** What the reducer needs to know about one legal run. */
 export interface AuthoritativeRun {
@@ -125,194 +114,14 @@ export interface RouteSetInput {
   trains?: ReadonlyArray<string> | null;
 }
 
-const coordsByLabel = boardMemo(
-  (board): ReadonlyMap<string, { q: number; r: number }> =>
-    new Map(board.hexes.map((hex) => [hex.label, { q: hex.q, r: hex.r }])),
-);
-
 const labelByCoord = boardMemo(
   (board): ReadonlyMap<string, string> => new Map(board.hexes.map((hex) => [`${hex.q},${hex.r}`, hex.label])),
 );
-
-/** The edge of `from` facing `to`, or `-1` when they are not neighbours. */
-function edgeToward(from: { q: number; r: number }, to: { q: number; r: number }): number {
-  return HEX_NEIGHBOR_OFFSETS.findIndex(([dq, dr]) => from.q + dq === to.q && from.r + dr === to.r);
-}
 
 /** The train's number, from the catalog; `null` for a model the catalog does not know. */
 export function trainCapacityFor(model: string): number | null {
   const entry = MOCK_TRAIN_CATALOG.find((train) => train.modelType === model);
   return entry ? entry.maxDistance : null;
-}
-
-interface WalkedWaypoint {
-  q: number;
-  r: number;
-  label: string;
-  /** The stop (city / town) this waypoint stands in, by the rail it uses; `null` on plain track. */
-  stop: number | null;
-  bypass: boolean;
-}
-
-/** One route, judged alone. Returns the run without a train attached, or the sentence that refuses it. */
-function walkRoute(
-  input: RouteSetInput & { era: TileColorTier },
-  path: ReadonlyArray<ProposedWaypoint>,
-  tokens: ReadonlyArray<StationToken>,
-  blocksThrough: (q: number, r: number, cityIndex: number) => boolean,
-): { path: ProposedWaypoint[]; revenue: number; centres: number; segments: Set<SegmentKey> } | string {
-  const { mapGrid, companyId } = input;
-  if (path.length < 2) return "A route needs at least two stops.";
-
-  /* 1. EVERY WAYPOINT IS A HEX OF THIS BOARD, with fields of the declared shape. */
-  const points: Array<{ q: number; r: number; label: string; wp: ProposedWaypoint }> = [];
-  for (const wp of path) {
-    if (typeof wp !== "object" || wp === null || typeof wp.hex !== "string") return "A waypoint must name a hex.";
-    const at = coordsByLabel().get(wp.hex);
-    if (!at) return `${wp.hex} is not a hex on this board.`;
-    if (wp.city_node !== undefined && (!Number.isInteger(wp.city_node) || wp.city_node < 0 || wp.city_node > 1)) {
-      return `${wp.hex} names a city (${String(wp.city_node)}) that no hex has.`;
-    }
-    if (wp.bypass !== undefined && wp.bypass !== true) return `${wp.hex} carries a bypass flag that is not true.`;
-    points.push({ q: at.q, r: at.r, label: wp.hex, wp });
-  }
-
-  /* 2. CONTINUOUS TRACK: each step crosses an edge both hexes carry rail to (`neighbourAcross`, the two-sided
-        join of trackReach #1), and inside every interior hex an authored rail joins the way in to the way out
-        (`traversalsFrom`). A reversal at a junction, a change of track at a crossover, a hop between two
-        unconnected curves of one tile and a run through a red area all fail the same test: no rail does that. */
-  const segments = new Set<SegmentKey>();
-  const walked: WalkedWaypoint[] = [];
-  const normalised: ProposedWaypoint[] = [];
-  const claim = (keys: readonly SegmentKey[], where: string): string | null => {
-    for (const key of keys) {
-      if (segments.has(key)) return `The route uses the same section of track twice at ${where}.`;
-      segments.add(key);
-    }
-    return null;
-  };
-
-  for (let i = 0; i < points.length; i += 1) {
-    const here = points[i];
-    const previous = points[i - 1];
-    const next = points[i + 1];
-    const entry = previous ? edgeToward(here, previous) : -1;
-    const exit = next ? edgeToward(here, next) : -1;
-    if (previous && entry < 0) return `${previous.label} and ${here.label} are not adjacent.`;
-    if (next) {
-      if (exit < 0) return `${here.label} and ${next.label} are not adjacent.`;
-      const across = neighbourAcross(mapGrid, here.q, here.r, exit);
-      if (!across || across.q !== next.q || across.r !== next.r) {
-        return `No track joins ${here.label} to ${next.label}.`;
-      }
-    }
-
-    const heraldOwner = heraldAt(here.label)?.companyId === companyId;
-    let bypass = false;
-    let stop: number | null;
-
-    if (previous && next) {
-      // An interior hex: a transit.
-      if (isOffboardTerminal(here.q, here.r)) {
-        return `${here.label} is a red off-board area, so a route may start or end there but not run through it.`;
-      }
-      const ways = traversalsFrom(mapGrid, here.q, here.r, entry).filter((way) => way.exitEdge === exit);
-      if (ways.length === 0) {
-        return `No rail through ${here.label} joins the way in (from ${previous.label}) to the way out (to ${next.label}) -- a route may not reverse at a junction or change track at a crossover.`;
-      }
-      const wantsBypass = here.wp.bypass === true;
-      let way: HexTraversal | undefined;
-      if (wantsBypass) {
-        way = ways.find((candidate) => candidate.bypass === true);
-        /* #1302: the owner may cross its herald without counting it; the transit is the ordinary one. */
-        if (!way && heraldOwner) way = ways.find((candidate) => candidate.bypass !== true) ?? ways[0];
-        if (!way) return `${here.label} has no track that goes around its revenue centre, so it cannot be bypassed.`;
-        bypass = true;
-      } else {
-        way = ways.find((candidate) => candidate.bypass !== true);
-        if (!way) {
-          /* THE ONLY WAY THROUGH MISSES THE CENTRE, and the message did not say so: normalised to the truth so
-             a route cannot be paid for a city its rails never touched. */
-          way = ways[0];
-          bypass = true;
-        }
-      }
-      /* 3. NO CITY RUN THROUGH WHEN IT IS FULL OF OTHERS (§6.3.3 / §6.4.2) -- judged on the circle the arrival
-            rail actually enters (#1022), and on a barred hex with any circle (#1323). A bypass does not enter. */
-      if (!bypass) {
-        const city = cityForArrival(mapGrid, here.q, here.r, entry);
-        const shut = city === null ? blocksThrough(here.q, here.r, 0) : blocksThrough(here.q, here.r, city);
-        if (shut) {
-          return `${here.label} is tokened out by other corporations, so a train may end its run there but not pass through.`;
-        }
-      }
-      const clash = claim(way.segments, here.label);
-      if (clash) return clash;
-      stop = bypass ? null : stopEnteredFrom(mapGrid, here, previous);
-    } else {
-      // An endpoint: the run starts or stops inside this hex and holds only the rail it uses.
-      if (here.wp.bypass === true) return `${here.label} is where the route ends, so it cannot be bypassed.`;
-      const only = previous ? entry : exit;
-      if (!liveEdgesForHex(mapGrid, here.q, here.r).includes(only)) {
-        return `No track joins ${here.label} to ${(previous ?? next)!.label}.`;
-      }
-      const clash = claim(segmentsTouchingEdge(mapGrid, here.q, here.r, only), here.label);
-      if (clash) return clash;
-      stop = stopEnteredFrom(mapGrid, here, (previous ?? next)!);
-      /* 4. A ROUTE BEGINS AND ENDS AT A CITY -- large, small (a town), or a red off-board area (§6.4 / §6.4.2;
-            #1555). Plain track cannot be an end. */
-      if (!isRouteTerminusHex(mapGrid, here.label, companyId)) {
-        return `${here.label} cannot ${previous ? "end" : "start"} a route: a route runs between cities, towns or red off-board areas.`;
-      }
-    }
-
-    /* 5. A NAMED CITY MUST BE THE ONE THE RAIL ENTERS. `city_node` is a claim about which circle of a two-city
-          hex the stop is in; the rail already says, and a claim that disagrees would re-key the pricing's
-          per-city dedupe (#1318) so one city could be paid twice. */
-    if (here.wp.city_node !== undefined && stop !== here.wp.city_node) {
-      return `${here.label}: the route's track does not enter city ${here.wp.city_node}.`;
-    }
-
-    walked.push({ q: here.q, r: here.r, label: here.label, stop, bypass });
-    const copy: ProposedWaypoint = { hex: here.label };
-    if (here.wp.city_node !== undefined) copy.city_node = here.wp.city_node;
-    if (bypass) copy.bypass = true;
-    normalised.push(copy);
-  }
-
-  /* 6. NO CITY TWICE. Keyed exactly as the pricing keys its dedupe -- the stop the rail enters (#1318/#1319) --
-        so a second visit to the same circle is refused rather than silently paid once. The other city of the
-        same hex is a different key and is allowed (§6.4.2). Plain track carries no stop and may be crossed again
-        on other rails; the track rule above is what bounds that. */
-  const visited = new Set<string>();
-  for (const point of walked) {
-    if (point.bypass) continue;
-    if (!isRevenueCentreHex(mapGrid, point.label, companyId)) continue;
-    const key = `${point.label}:${point.stop ?? 0}`;
-    if (visited.has(key)) return `The route counts ${point.label} twice; a city may be on a route only once.`;
-    visited.add(key);
-  }
-
-  /* 7. A STATION OF THIS CORPORATION ON THE ROUTE -- in the city the route actually passes through (#853),
-        anywhere along it (#474). A token recorded without a circle stands for the hex (#686's fallback); the
-        herald root (#1302) is `[q, r]` and counts for its owner. */
-  const hasStation = walked.some((point) => {
-    const match = tokens.find(([q, r]) => q === point.q && r === point.r);
-    if (!match) return false;
-    if (match.length < 3) return true;
-    if (point.bypass) return false;
-    return point.stop === null || point.stop === match[2];
-  });
-  if (!hasStation) {
-    return tokens.length === 0
-      ? "This corporation has no station token on the board, so it has no route."
-      : "A route must pass through a city this corporation has a station token in.";
-  }
-
-  /* 8. PRICE AND COUNT, through the one pricing function the tracer and the readout share. */
-  const breakdown = sandboxRouteBreakdown(mapGrid, normalised, input.era, companyId);
-  if (breakdown.centres < 2) return "A route must include at least two cities.";
-  return { path: normalised, revenue: breakdown.revenue, centres: breakdown.centres, segments };
 }
 
 /** Pairs routes to fleet slots when the message did not (logs written before #1031). Largest route to the
@@ -404,9 +213,20 @@ export function evaluateRouteSet(input: RouteSetInput): RouteSetVerdict {
     barredHexes: barredHexesFor(state, companyId),
   });
 
-  const walkedRoutes: Array<{ path: ProposedWaypoint[]; revenue: number; centres: number; segments: Set<SegmentKey> }> = [];
+  /* R12-2: the one walk (`routeWalk.ts`), which the route search now asks of every route it demonstrates. The
+     barred hexes travel beside the blocker so Coal River is closed to an unlicensed corporation even as an END --
+     at ingress too, which never asked the reducer's separate gate. */
+  const walkContext: RouteWalkContext = {
+    mapGrid,
+    era,
+    companyId,
+    tokens,
+    blocksThrough,
+    barredHexes: barredHexesFor(state, companyId),
+  };
+  const walkedRoutes: WalkedRoute[] = [];
   for (let i = 0; i < routes.length; i += 1) {
-    const verdict = walkRoute({ ...input, era }, routes[i], tokens, blocksThrough);
+    const verdict = walkRoute(walkContext, routes[i]);
     if (typeof verdict === "string") return { kind: "refused", reason: `Route ${i + 1}: ${verdict}`, route: i };
     walkedRoutes.push(verdict);
   }

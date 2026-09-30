@@ -31,6 +31,7 @@ import {
   type BoardDefinition,
   type BoardHex,
   type GrayHexTrack,
+  type OffboardRevenueTiers,
 } from "./hexBoardData";
 import type { PrintedArtwork } from "./TileGraphics";
 
@@ -111,12 +112,16 @@ const PLUS_GRAY: Readonly<Record<string, GrayHexTrack>> = (() => {
     ...kept,
     // Tile-39 connectivity: E, SE and SW, each pair joined.
     A17: { edges: [edge(1), edge(2), edge(3)], marker: "none" },
-    // Montreal: ONE station (#1401, with Norfolk: "a preprinted gray single-station city"), SE, SW and W.
-    A19: { edges: [edge(2), edge(3), edge(4)], marker: "city" },
+    /* Route v12 R12-2: Montreal and Norfolk are each ONE city with TWO station circles (owner-confirmed from the
+       physical 1830+ board, R12-1 closure). This restores #1301's two slots and supersedes #1401's "single-station
+       city" ruling for both. One city: a route counts it once, and ordinary blocking applies -- it shuts to a
+       corporation only when both circles hold other railroads' stations. */
+    // Montreal: one city, two stations, SE, SW and W.
+    A19: { edges: [edge(2), edge(3), edge(4)], marker: "city", slots: 2 },
     // Atlantic City: a town with track to NW, W and SW (SW is new: J18 now exists).
     I19: { edges: [edge(5), edge(4), edge(3)], marker: "town" },
-    // Norfolk: ONE station (#1401: "It is a single-station city"), track to W, NW and NE.
-    L16: { edges: [edge(4), edge(5), edge(0)], marker: "city" },
+    // Norfolk: one city, two stations (N&W's home takes one), track to W, NW and NE.
+    L16: { edges: [edge(4), edge(5), edge(0)], marker: "city", slots: 2 },
   };
 })();
 
@@ -173,6 +178,16 @@ const PLUS_START_VALUE_OVERRIDE: Readonly<Record<string, number>> = (() => {
   return { ...kept, K3: 0, K7: 0, K13: 0 };
 })();
 
+/* Route v12 R12-2: the two printed gray cities that pay less until the first 5-train (rulebook S-1.0, p. 36: "These
+   hexes include Montreal, Norfolk, and the Kanawha Coal River hex"), with the figures the owner confirmed from the
+   physical 1830+ board (R12-1 closure). Before this, production priced Montreal a flat $40 (the start-value table
+   above, still kept for the value readers that have no era) and Norfolk the flat $20 of the gray-city bucket. The
+   Level Playing Field board inherits both. Coal River keeps its own `revenueTiers` (hexBoardDataLpf.ts). */
+const PLUS_PRINTED_CITY_TIERS: Readonly<Record<string, OffboardRevenueTiers>> = {
+  A19: { yellow: 40, brown: 60 }, // Montreal
+  L16: { yellow: 30, brown: 50 }, // Norfolk
+};
+
 /* ---- printed artwork ----------------------------------------------------- */
 
 /* The six edge midpoints of the unit hex, indexed by the board's own edge numbers -- the same six numbers
@@ -213,8 +228,10 @@ const PLUS_PRINTED_ARTWORK: Readonly<Record<string, PrintedArtwork>> = {
   },
   A19: {
     tracks: [spoke(edge(2)), spoke(edge(3)), spoke(edge(4))],
-    // #1401: a single station, like Norfolk -- the pill and its angle are gone with the second slot.
-    marker: { kind: "city", at: { x: 0, y: 0 } },
+    /* Route v12 R12-2 (the #1301 art, restored): the pill bisects the widest gap between the three spokes (SE, SW,
+       W): it points north-east, away from all of them, so it reads as a station the track arrives at rather than
+       one the track crosses. */
+    marker: { kind: "city", at: { x: 0, y: 0 }, slots: 2, angle: 300 },
   },
   I19: {
     tracks: [spoke(edge(5)), spoke(edge(4)), spoke(edge(3))],
@@ -222,8 +239,8 @@ const PLUS_PRINTED_ARTWORK: Readonly<Record<string, PrintedArtwork>> = {
   },
   L16: {
     tracks: [spoke(edge(4)), spoke(edge(5)), spoke(edge(0))],
-    // #1401: a single station, so N&W's home token seats in the one circle rather than a pill's first cap.
-    marker: { kind: "city", at: { x: 0, y: 0 } },
+    // Route v12 R12-2 (the #1301 art, restored): two circles; N&W's home seats in the pill's first cap (#1379).
+    marker: { kind: "city", at: { x: 0, y: 0 }, slots: 2, angle: 60 },
   },
 };
 
@@ -240,5 +257,37 @@ export const EXPANDED_BOARD: BoardDefinition = {
   // Design note #1317: Toronto (D10) is printed TO and takes only the TO tiles (#810, #882).
   torontoHexes: new Set(["D10"]),
   startValueOverride: PLUS_START_VALUE_OVERRIDE,
+  printedCityTiers: PLUS_PRINTED_CITY_TIERS,
   printedArtwork: PLUS_PRINTED_ARTWORK,
 };
+
+/* ==================================================================
+    ROUTE v12 R12-2: THE 1830+ BOARD AS THE ENGINES BEFORE v12 PLAYED IT
+   ==================================================================
+   Montreal and Norfolk with ONE circle each and flat values ($40 from the start-value table, $20 from the gray-city
+   bucket) -- the superseded #1401 data -- and the pre-v12 route rules. Handed only to an UNPINNED board (the
+   development corpus, `boardFor`), so those logs replay exactly as they always did: the Z6C log is a Level Playing
+   Field game with N&W homed at Norfolk, and the frozen SET-0A settlement goldens are built by replaying it. Never
+   played by a live table: every pinned board gets `EXPANDED_BOARD`. */
+export const PRE_V12_ONE_CIRCLE_CITIES: Readonly<Record<"A19" | "L16", { gray: GrayHexTrack; marker: NonNullable<PrintedArtwork["marker"]> }>> = {
+  A19: { gray: { edges: [edge(2), edge(3), edge(4)], marker: "city" }, marker: { kind: "city", at: { x: 0, y: 0 } } },
+  L16: { gray: { edges: [edge(4), edge(5), edge(0)], marker: "city" }, marker: { kind: "city", at: { x: 0, y: 0 } } },
+};
+
+/** `board` with Montreal / Norfolk put back the way the pre-v12 engines had them, and the pre-v12 route rules. */
+export function preV12BoardOf(board: BoardDefinition): BoardDefinition {
+  const art = board.printedArtwork ?? {};
+  return {
+    ...board,
+    grayHexes: { ...board.grayHexes, A19: PRE_V12_ONE_CIRCLE_CITIES.A19.gray, L16: PRE_V12_ONE_CIRCLE_CITIES.L16.gray },
+    printedArtwork: {
+      ...art,
+      A19: { ...art.A19, tracks: art.A19?.tracks ?? [], marker: PRE_V12_ONE_CIRCLE_CITIES.A19.marker },
+      L16: { ...art.L16, tracks: art.L16?.tracks ?? [], marker: PRE_V12_ONE_CIRCLE_CITIES.L16.marker },
+    },
+    printedCityTiers: undefined,
+    preV12RouteRules: true,
+  };
+}
+
+export const EXPANDED_BOARD_PRE_V12: BoardDefinition = preV12BoardOf(EXPANDED_BOARD);

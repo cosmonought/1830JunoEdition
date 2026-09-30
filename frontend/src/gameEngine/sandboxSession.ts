@@ -209,8 +209,9 @@ import {
   heraldAt,
   heraldHexFor,
   offboardValueForEra,
+  routeRulesV12InEffect,
 } from "../components/hexBoardData";
-import { withRules } from "./boardSelection";
+import { routeRulesRevisionOf, withRules } from "./boardSelection";
 import { canonicalJson } from "./stateDigest"; // #1691 (Stage 10.3b): the chart/core transaction's declined test
 import { stopEnteredFrom } from "./trackReach";
 /* Design note #1570 (Batch 7.2): the one authority for stock transaction legality and pricing. Asked by the
@@ -734,11 +735,17 @@ export function sandboxRouteBreakdown(
      still one payment. */
   const seenHexes = new Set<string>();
   const seenCities = new Set<string>();
+  const passNeverUsesStopUp = routeRulesV12InEffect(); // R12-2 (IL-11), v12 boards only
   const stops: { hex: string; value: number }[] = [];
   let revenue = 0;
   for (let index = 0; index < path.length; index += 1) {
     const stop = path[index];
     seenHexes.add(stop.hex);
+    /* Route v12 R12-2 (IL-11): A PASS NEVER USES A STOP UP. A bypassed waypoint is not a visit (#737, below), so it
+       is skipped BEFORE the per-city dedupe rather than after it: a route that passes the PRR herald uncounted and
+       later stops at it (legal: distinct track, counted once) used to be paid nothing there, because the pass had
+       already taken the dedupe key. */
+    if (passNeverUsesStopUp && stop.bypass === true) continue;
     const visitKey = `${stop.hex}:${cityVisitedAt(mapGrid, path, index)}`;
     if (seenCities.has(visitKey)) continue;
     seenCities.add(visitKey);
@@ -765,7 +772,8 @@ export function sandboxRouteBreakdown(
     /* A FLAG, NOT A RE-DERIVATION. The first draft of this tried to recover the rail chain from the hex label
        here, and could not: a stop knows WHICH hex, never which edges the route entered and left by. The tracer
        does know -- it chose the variant -- so the answer travels with the stop. Recomputing a fact at a point
-       that has lost the inputs is how a second, disagreeing answer gets invented. */
+       that has lost the inputs is how a second, disagreeing answer gets invented. (R12-2: on a v12 board the flag
+       is read above, before the dedupe; a pre-v12 board keeps this order.) */
     if (stop.bypass === true) continue;
 
     // #1302: the running corporation's own herald pays its printed figure and counts as a centre.
@@ -2954,7 +2962,9 @@ export function applySandboxAction(
      board. `SetupGame` is the exception that proves it: the state has no variants until that arm writes
      them, so the deal is judged on the board the message names. */
   const variants = isSetupGameMsg(msg) ? msg.SetupGame.variants : state.variants;
-  return withRules(resolveVariants(variants), () => applySandboxActionOnBoard(state, msg, ctx));
+  /* R12-2: and the route rules the state's pin names (an unpinned legacy board keeps the pre-v12 ones). */
+  const revision = routeRulesRevisionOf(isSetupGameMsg(msg) ? (msg.SetupGame as { rules_engine_version?: number | null }) : state);
+  return withRules(resolveVariants(variants), () => applySandboxActionOnBoard(state, msg, ctx), revision);
 }
 
 /* ==================================================================
@@ -3327,13 +3337,14 @@ export function sandboxChartStepReport(
   ctx?: SandboxActionContext,
 ): SandboxMarketResult["moved"] {
   const variants = isSetupGameMsg(msg) ? msg.SetupGame.variants : state.variants;
+  const revision = routeRulesRevisionOf(isSetupGameMsg(msg) ? (msg.SetupGame as { rules_engine_version?: number | null }) : state);
   return withRules(resolveVariants(variants), () => {
     if (boardGateRefusal(state, msg, ctx) !== null) return null;
     const afterAuction = applyAuctionStep(state, msg);
     if (!afterAuction.market_positions) return null;
     // #1691: the same transaction the reducer commits -- a move the core then declines is reported as none.
     return marketTransaction(afterAuction, afterAuction.market_positions, msg, ctx).priced.moved;
-  });
+  }, revision);
 }
 
 function applySandboxActionAfterAuction(

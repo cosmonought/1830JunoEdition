@@ -35,13 +35,16 @@ import {
   liveEdgesForHex,
 } from "../components/hexGeometry";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import { STATIC_BOARD_HEXES, boardMemo, heraldAt } from "../components/hexBoardData";
+import { STATIC_BOARD_HEXES, boardMemo, heraldAt, routeRulesV12InEffect } from "../components/hexBoardData";
 import type { TileColorTier } from "../components/hexTileCatalog";
-import { isRouteTerminusHex, sandboxRouteBreakdown } from "./sandboxSession";
+import { isRevenueCentreHex, isRouteTerminusHex, sandboxRouteBreakdown } from "./sandboxSession";
+// Route v12 R12-2: the authority's own single-route judge, asked of every route the search demonstrates.
+import { routeCityKey, walkRoute, type RouteWalkContext } from "./routeWalk";
 // Design note #730: which city an arrival lands in -- shared with the network walk so both ask one question.
 import { cityForArrival, stopForArrival, type StationToken } from "./trackReach";
 // Design note #1023: the same shut-city predicate the network walk and the auto-tracer already ask.
 import { cityShutAt } from "./cityBypass";
+import type { CityBlocker } from "./cityBlocking";
 import {
   neighbourAcross,
   segmentsTouchingEdge,
@@ -483,9 +486,56 @@ interface SearchResult {
    first's rails. The join test below asks the same question of the two arms together, in place of "no hex
    twice". The pricing (`cityVisitedAt`, #1318/#1319) already reads the same stop, so what the walk may now
    draw is what the readout already paid. */
-function visitKeyFor(mapGrid: MapGridResponse, q: number, r: number, arrivalEdge: number | null, startCity: number | null): string {
+/* ==================================================================
+    ROUTE v12 R12-2: ONLY A REVENUE CENTRE IS A VISIT; A RED AREA IS ONE CITY
+   ==================================================================
+   TWO CORRECTIONS TO #1399's KEY, both from the owner's route rulings as the R12-1 oracle formalised them.
+   PLAIN TRACK IS NOT A VISIT (IL-11, "legal re-entry"). The key used to be `hex:stop` for EVERY hex, and a plain
+   hex answers stop 0 -- so a route that crossed a #20 on one straight could never come back across it on the other,
+   which is legal (distinct track) and which the authority always accepted: the CROSS_TWICE fixture, a $40 route
+   the search could not see, so the corporation was offered the SKIP past a legal run. A hex that is not a revenue
+   centre for this corporation now has no key (`null`); `used` (the rails) is what stops a route reusing track.
+   A RED AREA IS ONE CITY ACROSS ITS HEXES (IL-5). `routeCityKey` -- the walk's own key -- names Canadian West, the
+   Gulf and Chattanooga by AREA, so the second arm is kept off the first arm's area and a join may not put A9 and
+   A11 at the two ends of one route.
+   BOTH ON A v12 BOARD ONLY (`routeRulesV12InEffect`): a pre-v12 board -- the unpinned development corpus -- keeps
+   #1399's key exactly, so its demonstrations, and the refusals they drive, replay as they always did. */
+function visitKeyFor(
+  mapGrid: MapGridResponse,
+  q: number,
+  r: number,
+  arrivalEdge: number | null,
+  startCity: number | null,
+  forCompanyId: number | undefined,
+  v12: boolean,
+): string | null {
+  if (!v12) {
+    const stop = arrivalEdge === null ? (startCity ?? 0) : stopForArrival(mapGrid, q, r, arrivalEdge);
+    return `${q},${r}:${stop === null ? "-" : stop}`;
+  }
+  const label = labelFor(q, r);
+  if (label === null) return `${q},${r}:-`;
+  if (arrivalEdge !== null && !isRevenueCentreHex(mapGrid, label, forCompanyId)) return null;
   const stop = arrivalEdge === null ? (startCity ?? 0) : stopForArrival(mapGrid, q, r, arrivalEdge);
-  return `${q},${r}:${stop === null ? "-" : stop}`;
+  // An arrival that misses the stop (Altoona's bow) enters no city: its own key, never the city's (review LOW-3).
+  if (stop === null) return `${label}:-`;
+  return routeCityKey(label, stop);
+}
+
+/** R12-2: whether a route may run THROUGH the start hex from `inEdge` to `outEdge` visiting its stop -- the join of
+ *  two arms at their token. Asked of the rails (`traversalsFrom`), never assumed: the H12 herald's Y joins no prong
+ *  to the other (S6-16), New York's two cities join nothing to each other (ING-1), and Altoona's bow does not
+ *  visit the station. A join the rails do not make is not a route. */
+function joinsThroughStart(mapGrid: MapGridResponse, q: number, r: number, inEdge: number, outEdge: number): boolean {
+  return traversalsFrom(mapGrid, q, r, inEdge).some((way) => way.exitEdge === outEdge && way.bypass !== true);
+}
+
+/** The edge of the path's first hex that its second hex lies across, or `null`. */
+function firstStepEdge(path: readonly TracedHex[]): number | null {
+  if (path.length < 2) return null;
+  const [from, to] = path;
+  const edge = HEX_NEIGHBOR_OFFSETS.findIndex(([dq, dr]) => from.q + dq === to.q && from.r + dr === to.r);
+  return edge < 0 ? null : edge;
 }
 
 /** The K best simple paths from `start`, bounded by revenue centres and by the caps above.
@@ -514,9 +564,15 @@ function candidatePathsFrom(
   /** #1408: confine the FIRST step out of the token to this edge, so the caller can ask for the best arms
    *  down each way out of the city rather than the best arms overall. */
   firstExitEdge?: number,
+  /** R12-2: `"q,r"` keys this corporation may not touch at all -- Coal River without a Kanawha Licence (#1323) --
+   *  not even to END there. The blocker already refused passing through; an end was let through, so the search
+   *  demonstrated an unlicensed run the reducer then refused, and the corporation was stranded. */
+  barredHexes?: ReadonlySet<string>,
 ): SearchResult[] {
   const found: SearchResult[] = [];
   let expansions = 0;
+  /** R12-2: the v12 search (a pre-v12 board -- the unpinned corpus -- keeps the search it was played with). */
+  const v12 = routeRulesV12InEffect();
   /* ==================================================================
       DESIGN NOTE 892: THE BRANCH-AND-BOUND AND THE ORDERING ARE GONE, AND THE MEASUREMENT IS WHY
      ==================================================================
@@ -544,9 +600,10 @@ function candidatePathsFrom(
   const visits = new Set<string>();
 
   const record = (candidate: SearchResult) => {
-    // Same hex chain, already seen: keep the better scoring one.
-    const signature = candidate.path.map((p) => p.hexLabel).join(">");
-    const at = found.findIndex((entry) => entry.path.map((p) => p.hexLabel).join(">") === signature);
+    // Same hex chain, already seen: keep the better scoring one. (R12-2: a bypassed hex is part of the chain's
+    // identity -- passing the herald and stopping at it are two different routes.)
+    const signature = pathSignature(candidate.path, v12);
+    const at = found.findIndex((entry) => pathSignature(entry.path, v12) === signature);
     if (at >= 0) {
       if (candidate.revenue > found[at].revenue) found[at] = candidate;
       return;
@@ -556,13 +613,15 @@ function candidatePathsFrom(
     if (found.length > keep) found.length = keep;
   };
 
-  const walk = (at: TracedHex, arrivalEdge: number | null) => {
+  /** R12-2 (IL-11): `passOnly` -- this hex's stop is already on the route (counted earlier), so the route may only
+   *  cross it by a way that does not visit it (the owner's herald passed uncounted), and may not end here. */
+  const walk = (at: TracedHex, arrivalEdge: number | null, passOnly = false) => {
     if (expansions >= maxExpansions) return;
     expansions += 1;
 
     path.push(at);
-    const visitKey = visitKeyFor(mapGrid, at.q, at.r, arrivalEdge, startCity);
-    visits.add(visitKey);
+    const visitKey = passOnly ? null : visitKeyFor(mapGrid, at.q, at.r, arrivalEdge, startCity, forCompanyId, v12);
+    if (visitKey !== null) visits.add(visitKey);
 
     const breakdown = sandboxRouteBreakdown(
       mapGrid,
@@ -577,6 +636,7 @@ function candidatePathsFrom(
        ruling that is any revenue centre, towns included -- the sentence below is history). Towns pay, so without the
        terminus test the best-paying prefix was routinely one that stopped on a town. */
     if (
+      !passOnly &&
       path.length >= 2 &&
       breakdown.centres >= 2 &&
       breakdown.centres <= maxCentres &&
@@ -677,7 +737,8 @@ function candidatePathsFrom(
      * THE COUNT IS ADJUSTED RATHER THAN RE-PRICED. `stops` already names the hexes that pay, and the path is
      * simple, so "does this hex pay" is one lookup -- where a second `sandboxRouteBreakdown` per transit
      * would be the same answer at a search's cost. */
-    const hexPays = breakdown.stops.some((stop) => stop.hex === at.hexLabel);
+    // R12-2: a pass-only arrival added nothing to the count (its stop is already on the route), so nothing comes off.
+    const hexPays = !passOnly && breakdown.stops.some((stop) => stop.hex === at.hexLabel);
     const centresIfBypassed = breakdown.centres - (hexPays ? 1 : 0);
 
     if (path.length < maxPathHexes) {
@@ -716,6 +777,8 @@ function candidatePathsFrom(
         : rawExits;
 
       for (const transit of exits) {
+        // R12-2 (IL-11): a hex already counted on this route may only be crossed without visiting it.
+        if (passOnly && transit.bypass !== true) continue;
         /* Design note #808: THE REFUSAL, PER ARM. A city full of other corporations' tokens says nothing
            about track that goes around it -- the bow does not enter the city, so there is nothing for a full
            city to be full of. Every other arm through this hex reaches the centre and is barred, which is
@@ -728,9 +791,18 @@ function candidatePathsFrom(
         if ((transit.bypass === true ? centresIfBypassed : breakdown.centres) >= maxCentres) continue;
         const next = neighbourAcross(mapGrid, at.q, at.r, transit.exitEdge);
         if (!next) continue;
+        // R12-2: a hex this corporation may not touch at all (unlicensed Coal River) -- not even as an end.
+        if (barredHexes?.has(`${next.q},${next.r}`)) continue;
         // #1399: the same revenue centre twice is refused; the other city of a two-city hex is not.
-        const nextKey = visitKeyFor(mapGrid, next.q, next.r, next.arrivalEdge, startCity);
-        if (visits.has(nextKey) || avoidVisits?.has(nextKey)) continue;
+        const nextKey = visitKeyFor(mapGrid, next.q, next.r, next.arrivalEdge, startCity, forCompanyId, v12);
+        const counted = nextKey !== null && (visits.has(nextKey) || avoidVisits?.has(nextKey) === true);
+        /* R12-2 (IL-11): the owner's herald already counted may still be PASSED uncounted on other rails -- a pass
+           never uses it up. Every other counted stop stays a wall, as before. */
+        const passable =
+          v12 &&
+          counted &&
+          forCompanyId !== undefined && heraldAt(labelFor(next.q, next.r) ?? "")?.companyId === forCompanyId;
+        if (counted && !passable) continue;
         // Occupied by another train, or already used by this route.
         if (transit.segments.some((key) => occupied.has(key) || used.has(key))) continue;
 
@@ -745,9 +817,13 @@ function candidatePathsFrom(
         if (transit.variant !== undefined) at.variant = transit.variant;
         if (transit.bypass !== undefined) at.bypass = transit.bypass;
 
+        /* R12-2 (IL-11): crossing THIS hex without visiting it (a bypass) does not use its stop up, so the stop is
+           off the visit set for the branch -- the route may still come back and count it on distinct track. */
+        const released = v12 && transit.bypass === true && visitKey !== null && visits.delete(visitKey);
         for (const key of transit.segments) used.add(key);
-        walk({ q: next.q, r: next.r, hexLabel }, next.arrivalEdge);
+        walk({ q: next.q, r: next.r, hexLabel }, next.arrivalEdge, counted);
         for (const key of transit.segments) used.delete(key);
+        if (released && visitKey !== null) visits.add(visitKey);
 
         at.variant = previousVariant;
         at.bypass = previousBypass;
@@ -757,7 +833,7 @@ function candidatePathsFrom(
     }
 
     path.pop();
-    visits.delete(visitKey);
+    if (visitKey !== null) visits.delete(visitKey);
   };
 
   walk(start, null);
@@ -816,6 +892,9 @@ export interface AutoTraceInput {
   blocksThrough?: BlocksThrough;
   /** Design note #1302: the corporation running. Only a board that prints a herald reads it. */
   companyId?: number;
+  /** R12-2: `"q,r"` keys this corporation may not touch at all (Coal River without a licence). Absent: whatever the
+   *  blocker `cityBlockerFor` built carries, else none. */
+  barredHexes?: ReadonlySet<string>;
 }
 
 export interface AutoTraceResult {
@@ -833,6 +912,24 @@ export interface AutoTraceResult {
  *  handful of candidates each is a search space the combination step below
  *  crosses in microseconds; going wider buys worse routes. */
 const CANDIDATES_PER_TOKEN = 6;
+
+/** R12-2: a traced path as the wire's waypoints -- exactly what `App` / `derivedActions` would submit. */
+function waypointsOf(path: readonly TracedHex[]): Array<{ hex: string; bypass?: boolean }> {
+  return path.map((point) => (point.bypass === true ? { hex: point.hexLabel, bypass: true } : { hex: point.hexLabel }));
+}
+
+/** R12-2: a path's identity for de-duplication -- its hexes AND which of them it bypasses (a pre-v12 board: its hexes). */
+function pathSignature(path: readonly TracedHex[], v12: boolean): string {
+  return path.map((point) => (v12 && point.bypass === true ? `${point.hexLabel}*` : point.hexLabel)).join(">");
+}
+
+const NEVER_BLOCKED: BlocksThrough = () => false;
+
+/** R12-2: the hexes this corporation may not touch -- named by the caller, or carried by the blocker `cityBlockerFor`
+ *  built (every live caller builds it there, with the licence's barred hexes). */
+function barredHexesOf(input: { barredHexes?: ReadonlySet<string>; blocksThrough?: BlocksThrough }): ReadonlySet<string> | undefined {
+  return input.barredHexes ?? (input.blocksThrough as CityBlocker | undefined)?.barredHexes;
+}
 
 /** Every route worth considering for one train, best first. */
 function candidateRoutes(input: AutoTraceInput): SearchResult[] {
@@ -860,6 +957,9 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
      has hexes" mean "fourteen stops" for the one train in the game that has no reach limit. */
   const cap = unlimited ? MAX_PATH_HEXES : maxRevenueCentres;
   const occupied = excludeSegments ?? new Set<SegmentKey>();
+  /** R12-2: the v12 search; a pre-v12 board (the unpinned corpus) keeps the search it was played with. */
+  const v12 = routeRulesV12InEffect();
+  const barredHexes = v12 ? barredHexesOf(input) : undefined;
 
   const all: SearchResult[] = [];
   for (const entry of startHexes) {
@@ -905,8 +1005,9 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
         input.companyId,
         undefined,
         exit,
+        barredHexes,
       )) {
-        const signature = arm.path.map((p) => p.hexLabel).join(">");
+        const signature = pathSignature(arm.path, v12);
         if (armSeen.has(signature)) continue;
         armSeen.add(signature);
         oneArm.push(arm);
@@ -928,9 +1029,10 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
          same country as arm A and were both discarded. The route then began at the token instead of
          running through it, which on the reported board is the town and city the D-train "stops running
          before hitting". The start is the one visit both arms share, and is allowed. */
-      const startKey = visitKeyFor(mapGrid, q, r, null, startCity);
+      const startKey = visitKeyFor(mapGrid, q, r, null, startCity, input.companyId, v12);
       const avoid = new Set(armA.visits);
-      avoid.delete(startKey);
+      if (startKey !== null) avoid.delete(startKey);
+      const outEdge = firstStepEdge(armA.path);
       const armsB = candidatePathsFrom(
         mapGrid,
         era,
@@ -944,9 +1046,17 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
         expansionLimit,
         input.companyId,
         avoid,
+        undefined,
+        barredHexes,
       );
       for (const armB of armsB) {
         if (armB.path.length < 2) continue;
+        /* R12-2 (S6-16, ING-1): THE JOIN IS A TRANSIT OF THE START HEX, and only the rails can make it. Two arms
+           leaving the token by edges no rail joins through its stop -- the herald Y's two prongs, the two cities of
+           a New York recorded without a city -- are two routes, not one; joining them demonstrated a figure the
+           authority refuses, and the corporation was stranded at Run Trains. */
+        const inEdge = firstStepEdge(armB.path);
+        if (v12 && (inEdge === null || outEdge === null || !joinsThroughStart(mapGrid, q, r, inEdge, outEdge))) continue;
         const joined = [...armB.path.slice(1).reverse(), ...armA.path];
         // #1399: a joined route may stand in each revenue centre once; the two arms share only the start.
         let overlaps = false;
@@ -973,13 +1083,41 @@ function candidateRoutes(input: AutoTraceInput): SearchResult[] {
     }
   }
 
-  all.sort((a, b) => b.revenue - a.revenue);
+  /* ==================================================================
+      ROUTE v12 R12-2: EVERY CANDIDATE IS JUDGED BY THE AUTHORITY'S OWN WALK BEFORE IT CAN BE DEMONSTRATED
+     ==================================================================
+     The search is a bounded heuristic (#892 / #8) and stays one: it may MISS a legal route (S6-3's lower bound,
+     unchanged). What it may no longer do is OFFER one the authority refuses -- that figure refuses the skip and
+     every honest run below it, and a corporation with no legal way to reach it is stranded (R12-1's stranding
+     class). So each candidate is put to `walkRoute`, the authority's single-route judge, with this corporation's
+     stations, walls and barred hexes, BEFORE the list is cut to its best few (an illegal candidate must not crowd a
+     legal one out); a refused one is dropped, and an accepted one carries the walk's own price and track -- the
+     same figures `evaluateRouteSet` will give it, so the set packing below competes for the authority's sections
+     of track, not a second model of them. */
+  const walkContext: RouteWalkContext = {
+    mapGrid,
+    era,
+    companyId: input.companyId,
+    tokens: startHexes,
+    blocksThrough: input.blocksThrough ?? NEVER_BLOCKED,
+    barredHexes,
+  };
+  const judged: SearchResult[] = v12 ? [] : all;
+  for (const candidate of v12 ? all : []) {
+    const verdict = walkRoute(walkContext, waypointsOf(candidate.path));
+    if (typeof verdict === "string") continue;
+    if (verdict.centres > cap) continue;
+    if (Array.from(verdict.segments).some((key) => occupied.has(key))) continue;
+    judged.push({ ...candidate, revenue: verdict.revenue, segments: verdict.segments });
+  }
+
+  judged.sort((a, b) => b.revenue - a.revenue);
   // Distinct hex chains only -- two tokens on one network find the same
   // routes, and duplicates crowd out genuine alternatives.
   const seen = new Set<string>();
   const distinct: SearchResult[] = [];
-  for (const candidate of all) {
-    const signature = candidate.path.map((p) => p.hexLabel).join(">");
+  for (const candidate of judged) {
+    const signature = pathSignature(candidate.path, v12);
     if (seen.has(signature)) continue;
     seen.add(signature);
     distinct.push(candidate);
@@ -1033,6 +1171,8 @@ export interface RouteSetInput {
   blocksThrough?: BlocksThrough;
   /** Design note #1302: the corporation running, for its herald. */
   companyId?: number;
+  /** R12-2: see `AutoTraceInput.barredHexes`. */
+  barredHexes?: ReadonlySet<string>;
 }
 
 export interface RouteSetResult {
@@ -1053,7 +1193,8 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
     return { assignments: [], totalRevenue: 0, reason: NO_ROUTE_REASON };
   }
 
-  type Choice = { trainIndex: number; path: TracedHex[]; revenue: number };
+  /** R12-2: a choice carries its track -- the walk's own sections -- so the set is disjoint in the authority's terms. */
+  type Choice = { trainIndex: number; path: TracedHex[]; revenue: number; segments: ReadonlySet<SegmentKey> };
   type Plan = { choices: Choice[]; total: number };
 
   const optionsFor = (train: RouteSetTrain, occupied: ReadonlySet<SegmentKey>) =>
@@ -1066,6 +1207,7 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
       // Design note #730: every train in the set walks the same walls.
       blocksThrough,
       companyId: input.companyId,
+      barredHexes: input.barredHexes,
     });
 
   /* STRATEGY A: sequential, in a given train order. This is the OLD algorithm, kept deliberately -- see design
@@ -1077,7 +1219,7 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
     for (const train of order) {
       const best = optionsFor(train, used)[0];
       if (!best || best.path.length < 2) continue;
-      choices.push({ trainIndex: train.trainIndex, path: best.path, revenue: best.revenue });
+      choices.push({ trainIndex: train.trainIndex, path: best.path, revenue: best.revenue, segments: best.segments });
       total += best.revenue;
       best.segments.forEach((key) => used.add(key));
     }
@@ -1120,7 +1262,7 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
       for (const option of options) {
         if (Array.from(option.segments).some((key) => used.has(key))) continue;
         option.segments.forEach((key) => used.add(key));
-        chosen.push({ trainIndex: train.trainIndex, path: option.path, revenue: option.revenue });
+        chosen.push({ trainIndex: train.trainIndex, path: option.path, revenue: option.revenue, segments: option.segments });
         search(depth + 1, runningTotal + option.revenue);
         chosen.pop();
         option.segments.forEach((key) => used.delete(key));
@@ -1162,7 +1304,7 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
   // The fill pass.
   const used = new Set<SegmentKey>();
   for (const choice of plan.choices) {
-    routeSegments(mapGrid, choice.path).forEach((key) => used.add(key));
+    choice.segments.forEach((key) => used.add(key));
   }
   const assigned = new Set(plan.choices.map((choice) => choice.trainIndex));
   let total = plan.total;
@@ -1171,7 +1313,7 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
     if (assigned.has(train.trainIndex)) continue;
     const best = optionsFor(train, used)[0];
     if (!best || best.path.length < 2) continue;
-    choices.push({ trainIndex: train.trainIndex, path: best.path, revenue: best.revenue });
+    choices.push({ trainIndex: train.trainIndex, path: best.path, revenue: best.revenue, segments: best.segments });
     total += best.revenue;
     best.segments.forEach((key) => used.add(key));
   }
@@ -1180,7 +1322,9 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
     return { assignments: [], totalRevenue: 0, reason: NO_ROUTE_REASON };
   }
   return {
-    assignments: choices.sort((a, b) => a.trainIndex - b.trainIndex),
+    assignments: choices
+      .sort((a, b) => a.trainIndex - b.trainIndex)
+      .map(({ trainIndex, path, revenue }) => ({ trainIndex, path, revenue })),
     totalRevenue: total,
     reason: null,
   };

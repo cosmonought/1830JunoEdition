@@ -611,8 +611,8 @@ describe("LIVE-4 integration A/B: a build change alone never refuses; the legacy
 /* ================================================================================================= */
 
 describe("LIVE-4 integration: versions unchanged, the seed still cryptographic, no stale continuation model at runtime", () => {
-  test("the version table: rules 11, certified [10, 11], hosted 1, financial 3, client 1, accepted [0, 1], money GameRecord schema 2", () => {
-    assert.equal(RULES_ENGINE_VERSION, 11);
+  test("the version table: rules 12 (11 through LIVE-4; Route v12 R12-2), certified [10, 11], hosted 1, financial 3, client 1, accepted [0, 1], money GameRecord schema 2", () => {
+    assert.equal(RULES_ENGINE_VERSION, 12);
     assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11]);
     assert.equal(HOSTED_PROTOCOL_VERSION, 1);
     assert.equal(FINANCIAL_PROTOCOL_VERSION, 3);

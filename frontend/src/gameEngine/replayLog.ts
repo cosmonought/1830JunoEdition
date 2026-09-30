@@ -67,7 +67,7 @@ import type { SandboxMarketPrices } from "./sandboxState";
 import { isSetupGameMsg } from "./gameSetup";
 import { boardInEffect } from "../components/hexBoardData";
 import { initialGridFor } from "./initialGrid";
-import { withRules } from "./boardSelection";
+import { routeRulesRevisionOf, withRules } from "./boardSelection";
 import { resolveVariants } from "./gameVariants";
 import { derivedEntryKey, nextDerivedAction } from "./derivedActions";
 import { effectiveActions } from "./logRevert";
@@ -429,7 +429,9 @@ export class RoomEngine {
   /* Design note #1300: the tile-lay legality below is judged BEFORE the reducer runs, so it has to see the
      same board the reducer will -- the one this game's variants name (from the deal itself on `SetupGame`). */
   const variants = isSetupGameMsg(msg) ? msg.SetupGame.variants : this.state.variants;
-  withRules(resolveVariants(variants), () => this.applyOnBoard(entry, msg, observe));
+  // R12-2: and the route rules the pin names -- the deal's own on `SetupGame`, else the state's.
+  const revision = routeRulesRevisionOf(isSetupGameMsg(msg) ? (msg.SetupGame as { rules_engine_version?: number | null }) : this.state);
+  withRules(resolveVariants(variants), () => this.applyOnBoard(entry, msg, observe), revision);
   }
 
   private applyOnBoard(entry: ReplayEntry, msg: SandboxLogMsg, observe?: ReplayObserver): void {
@@ -635,13 +637,16 @@ export class RoomEngine {
          `stationPlacementBlockReason` said "nowhere to place", and the Tokens step was skipped. The route
          search behind the Dividends verdict read the same wrong board. #1279's fault, on the other side of
          the wire: a rule asked outside the rules it belongs to. Scoped now, per answer, like `apply`. */
-      const next = withRules(resolveVariants(this.state.variants), () =>
-        nextDerivedAction({
-          state: this.state,
-          mapGrid: options?.mapGrid ?? this.grid,
-          emitted: this.emitted,
-          extraStationAvailable: options?.extraStationAvailable,
-        }),
+      const next = withRules(
+        resolveVariants(this.state.variants),
+        () =>
+          nextDerivedAction({
+            state: this.state,
+            mapGrid: options?.mapGrid ?? this.grid,
+            emitted: this.emitted,
+            extraStationAvailable: options?.extraStationAvailable,
+          }),
+        routeRulesRevisionOf(this.state),
       );
       if (!next) break;
       this.emitted.add(next.key);
@@ -730,7 +735,7 @@ export class LegacyHomeChoices {
       if (homeStationOwed(handed, company.company_id, table)) return null; // timely: the ordinary path judges it
       if (!isHomeCandidate(company, body, table, grid)) return null;
       return { companyId: company.company_id, q: body.q, r: body.r, cityIndex: body.city_index ?? null, hexLabel: body.hex_label };
-    });
+    }, routeRulesRevisionOf(handed));
   }
 
   remember(choice: LegacyHomeChoice, recordedAt: number, after: GameStateResponse): void {
@@ -744,7 +749,7 @@ export class LegacyHomeChoices {
     after: Pick<ReplayEntry, "index" | "id">,
   ): { entry: ReplayEntry; choice: LegacyHomeChoice & { recordedAt: number } } | null {
     if (this.remembered.size === 0) return null;
-    const owed = withRules(resolveVariants(state.variants), () => owedHomeStation(state, this.table(state)));
+    const owed = withRules(resolveVariants(state.variants), () => owedHomeStation(state, this.table(state)), routeRulesRevisionOf(state));
     if (owed === null || owed.president === null) return null;
     const choice = this.remembered.get(owed.companyId);
     if (choice === undefined) return null;

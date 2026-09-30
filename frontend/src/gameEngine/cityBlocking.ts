@@ -106,9 +106,16 @@ export function cityBlocksThrough(
   return others >= slots;
 }
 
+/** The blocker, carrying the hexes it bars outright. Route v12 R12-2: a barred hex (Coal River without a licence) is
+ *  closed to a route as an END too, not only as a pass-through, and the route search reads the set from here so every
+ *  caller that builds its blocker with `cityBlockerFor` -- the reducer's search, the shell's Auto Route -- gets the
+ *  same answer without threading a second argument. */
+export type CityBlocker = ((q: number, r: number, cityIndex: number) => boolean) & {
+  readonly barredHexes?: ReadonlySet<string>;
+};
+
 /** The callback `reachableTrack` wants, bound to one corporation's board. */
-export function cityBlockerFor(
-  input: CityBlockingInput,
-): (q: number, r: number, cityIndex: number) => boolean {
-  return (q, r, cityIndex) => cityBlocksThrough(input, q, r, cityIndex);
+export function cityBlockerFor(input: CityBlockingInput): CityBlocker {
+  const blocker = (q: number, r: number, cityIndex: number) => cityBlocksThrough(input, q, r, cityIndex);
+  return Object.assign(blocker, { barredHexes: input.barredHexes });
 }

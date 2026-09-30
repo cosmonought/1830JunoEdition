@@ -6,13 +6,14 @@
 //
 // TEST-ONLY. Each fixture is a small, VALID board (except ING-1, which is malformed on purpose and says so),
 // the law's answer written by hand from the rulebook / the owner's rulings (`law`), and what production does
-// today (`knownProduction`) -- the KNOWN-RED record R12-2 must turn green. The law is encoded as TOPOLOGY
-// (which route is legal), and the dollar figures follow from it; they are asserted only because they are what
-// the topology pays on this board.
+// today (`knownProduction`). The law is encoded as TOPOLOGY (which route is legal), and the dollar figures follow
+// from it; they are asserted only because they are what the topology pays on this board.
 //
-// `knownProduction.primary` is a production DEFECT CLASS, pinned so that the day R12-2 repairs production the
-// fixture fails and must be moved to "sound-optimal" deliberately -- a repair can never be silent, and a
-// regression can never hide behind a green suite.
+// ROUTE v12 R12-2: THE KNOWN-RED RECORD IS REPAIRED. Every valid fixture's `knownProduction` now pins the law's
+// answer -- "sound-optimal" at the law's optimum, the authority accepting that set and refusing each route the law
+// forbids -- and `repairedFrom` keeps, verbatim, the defect class R12-1 pinned, so the repair is on the record and
+// any regression fails the pin it would re-open. The law (`law`) is unchanged by R12-2. ING-1's malformed state
+// keeps its own classification (see that fixture).
 
 import type { BoardDefinition } from "../../components/hexBoardData";
 import { STANDARD_BOARD } from "../../components/hexBoardData";
@@ -46,6 +47,9 @@ export interface KnownDefectFixture {
     /** The authority's verdict on production's set, as a pattern. */
     authority: RegExp;
   };
+  /** R12-2: the KNOWN-RED production record R12-1 pinned (demonstrated figure, primary class, flags), kept for the
+   *  record where R12-2 repaired it. Absent where production was already sound. */
+  repairedFrom?: { demonstrated: number; primary: ProductionClass; flags: ProductionClass[] };
   /** Single routes put straight to the authority (train slot 0): what the law says, and what the authority
    *  answers today. Where they differ the AUTHORITY is defective, whatever the search does. */
   authorityProbes?: ReadonlyArray<{ route: string; law: "legal" | "illegal"; authorityToday: RegExp }>;
@@ -118,8 +122,9 @@ export const KNOWN_DEFECT_FIXTURES: readonly KnownDefectFixture[] = [
     companyId: CO,
     fleet: ["3"],
     law: { optimum: 60, illegalRoutes: ["A9>B10>A11"], legalWitness: ["B10>A11"] },
-    knownProduction: { demonstrated: 90, primary: "emits-illegal-optimum", flags: ["emits-illegal-optimum"], authority: /^legal \$90$/ },
-    authorityProbes: [{ route: "A9>B10>A11", law: "illegal", authorityToday: /^legal \$90$/ }],
+    knownProduction: { demonstrated: 60, primary: "sound-optimal", flags: ["sound-optimal"], authority: /^legal \$60$/ },
+    repairedFrom: { demonstrated: 90, primary: "emits-illegal-optimum", flags: ["emits-illegal-optimum"] },
+    authorityProbes: [{ route: "A9>B10>A11", law: "illegal", authorityToday: /counts Canadian West twice/ }],
   },
   {
     id: "RED-GULF",
@@ -130,8 +135,9 @@ export const KNOWN_DEFECT_FIXTURES: readonly KnownDefectFixture[] = [
     companyId: CO,
     fleet: ["3"],
     law: { optimum: 60, illegalRoutes: ["I1>I3>H4>I5>J4>J2"], legalWitness: ["H4>I3>I1"] },
-    knownProduction: { demonstrated: 90, primary: "emits-illegal-optimum", flags: ["emits-illegal-optimum"], authority: /^legal \$90$/ },
-    authorityProbes: [{ route: "I1>I3>H4>I5>J4>J2", law: "illegal", authorityToday: /^legal \$90$/ }],
+    knownProduction: { demonstrated: 60, primary: "sound-optimal", flags: ["sound-optimal"], authority: /^legal \$60$/ },
+    repairedFrom: { demonstrated: 90, primary: "emits-illegal-optimum", flags: ["emits-illegal-optimum"] },
+    authorityProbes: [{ route: "I1>I3>H4>I5>J4>J2", law: "illegal", authorityToday: /counts Gulf twice/ }],
   },
   {
     id: "RED-GULF-TWO-TRAINS",
@@ -150,8 +156,9 @@ export const KNOWN_DEFECT_FIXTURES: readonly KnownDefectFixture[] = [
     companyId: CO,
     fleet: ["3"],
     law: { optimum: 60, illegalRoutes: ["K1>K3>L2"], legalWitness: ["K3>K1"] },
-    knownProduction: { demonstrated: 90, primary: "emits-illegal-optimum", flags: ["emits-illegal-optimum"], authority: /^legal \$90$/ },
-    authorityProbes: [{ route: "K1>K3>L2", law: "illegal", authorityToday: /^legal \$90$/ }],
+    knownProduction: { demonstrated: 60, primary: "sound-optimal", flags: ["sound-optimal"], authority: /^legal \$60$/ },
+    repairedFrom: { demonstrated: 90, primary: "emits-illegal-optimum", flags: ["emits-illegal-optimum"] },
+    authorityProbes: [{ route: "K1>K3>L2", law: "illegal", authorityToday: /counts Chattanooga twice/ }],
   },
 
   /* ---- 2. The Altoona bypass (brief section 1): a hex traversed is not a station visited ---- */
@@ -164,12 +171,13 @@ export const KNOWN_DEFECT_FIXTURES: readonly KnownDefectFixture[] = [
     companyId: PRR,
     fleet: ["2"],
     law: { optimum: 30, illegalRoutes: ["H10>H12*>H14>H16"], legalWitness: ["H12>H10"] },
-    // The SEARCH finds a legal $30 here; the defect is the AUTHORITY, which accepts the bow run ($20 + $20, the
-    // city not visited) because a bare token "stands for the hex" before the bypass is checked -- and since $40
-    // is above the demonstration, the reducer applies it.
+    // The SEARCH found a legal $30 here all along; the defect was the AUTHORITY, which accepted the bow run ($20 +
+    // $20, the city not visited, legal $40 -- above the demonstration, so the reducer applied it) because a bare
+    // token "stood for the hex" before the bypass was checked. R12-2 (IL-7): a bare token counts only where the
+    // route visits its stop.
     knownProduction: { demonstrated: 30, primary: "sound-optimal", flags: ["sound-optimal"], authority: /^legal \$30$/ },
     authorityProbes: [
-      { route: "H10>H12*>H14>H16", law: "illegal", authorityToday: /^legal \$40$/ },
+      { route: "H10>H12*>H14>H16", law: "illegal", authorityToday: /must pass through a city this corporation has a station token in/ },
       { route: "H12>H10", law: "legal", authorityToday: /^legal \$30$/ },
     ],
   },
@@ -177,7 +185,7 @@ export const KNOWN_DEFECT_FIXTURES: readonly KnownDefectFixture[] = [
   /* ---- 3. Re-entering a tile by a different section of track (brief section 1: CROSS_TWICE) ---- */
   {
     id: "CROSS-TWICE",
-    title: "a crossover crossed twice by one route: legal, $40, and beyond production's search",
+    title: "a crossover crossed twice by one route: legal, $40 -- beyond production's search until R12-2",
     board: fixtureBoard(
       "CROSS-TWICE",
       STANDARD_BOARD,
@@ -192,11 +200,12 @@ export const KNOWN_DEFECT_FIXTURES: readonly KnownDefectFixture[] = [
     companyId: CO,
     fleet: ["2"],
     law: { optimum: 40, illegalRoutes: [], legalWitness: ["I5>I7>I9>H8>I7>J6"] },
-    knownProduction: {
+    // R12-2 (IL-11): the search re-enters a plain hex on its other section of track.
+    knownProduction: { demonstrated: 40, primary: "sound-optimal", flags: ["sound-optimal"], authority: /^legal \$40$/ },
+    repairedFrom: {
       demonstrated: 0,
       primary: "permits-skip-despite-legal-route",
       flags: ["fails-to-find-legal-route", "permits-skip-despite-legal-route"],
-      authority: /^no set$/,
     },
   },
 
@@ -213,7 +222,9 @@ export const KNOWN_DEFECT_FIXTURES: readonly KnownDefectFixture[] = [
     companyId: PRR,
     fleet: ["3"],
     law: { optimum: 30, illegalRoutes: ["J14>I13>H12>H14>H16"], legalWitness: ["H12>H14>H16"] },
-    knownProduction: { demonstrated: 50, primary: "route-phase-stranding", flags: ["emits-illegal-optimum", "route-phase-stranding"], authority: /No rail through H12/ },
+    // R12-2 (S6-16): the search joins two arms at H12 only where the rails join them.
+    knownProduction: { demonstrated: 30, primary: "sound-optimal", flags: ["sound-optimal"], authority: /^legal \$30$/ },
+    repairedFrom: { demonstrated: 50, primary: "route-phase-stranding", flags: ["emits-illegal-optimum", "route-phase-stranding"] },
     authorityProbes: [
       { route: "J14>I13>H12>H14>H16", law: "illegal", authorityToday: /No rail through H12/ },
       { route: "H12>H14>H16", law: "legal", authorityToday: /^legal \$30$/ },
@@ -229,10 +240,12 @@ export const KNOWN_DEFECT_FIXTURES: readonly KnownDefectFixture[] = [
     companyId: CO,
     fleet: ["2"],
     law: { optimum: 0, illegalRoutes: ["K7>L8"], legalWitness: [] },
-    knownProduction: { demonstrated: 60, primary: "route-phase-stranding", flags: ["emits-illegal-optimum", "route-phase-stranding"], authority: /COAL-RIVER GATE/ },
-    // `evaluateRouteSet` alone accepts it (L8 is walled as a "blocked city", and an end is exempt); only the
-    // reducer's separate Coal River gate refuses it -- and ingress never asks that gate.
-    authorityProbes: [{ route: "K7>L8", law: "illegal", authorityToday: /COAL-RIVER GATE/ }],
+    // R12-2: nothing to demonstrate, and nothing demonstrated -- the skip is the corporation's to take.
+    knownProduction: { demonstrated: 0, primary: "sound-optimal", flags: ["sound-optimal"], authority: /^no set$/ },
+    repairedFrom: { demonstrated: 60, primary: "route-phase-stranding", flags: ["emits-illegal-optimum", "route-phase-stranding"] },
+    // Before R12-2 `evaluateRouteSet` alone accepted it (L8 walled as a "blocked city", and an end exempt) and only
+    // the reducer's separate gate refused it -- a gate ingress never asked. The walk now refuses any touch of L8.
+    authorityProbes: [{ route: "K7>L8", law: "illegal", authorityToday: /without a Kanawha Licence/ }],
   },
   {
     id: "COAL-RIVER-LICENSED",
@@ -277,7 +290,8 @@ export const KNOWN_DEFECT_FIXTURES: readonly KnownDefectFixture[] = [
     companyId: CO,
     fleet: ["3"],
     law: { optimum: 50, illegalRoutes: ["K13>L12>M13>M11>M9>L8"], legalWitness: ["K13>L12>M13"] },
-    knownProduction: { demonstrated: 90, primary: "route-phase-stranding", flags: ["emits-illegal-optimum", "route-phase-stranding"], authority: /COAL-RIVER GATE/ },
+    knownProduction: { demonstrated: 50, primary: "sound-optimal", flags: ["sound-optimal"], authority: /^legal \$50$/ },
+    repairedFrom: { demonstrated: 90, primary: "route-phase-stranding", flags: ["emits-illegal-optimum", "route-phase-stranding"] },
   },
   {
     id: "WAREHOUSE-A11-LPF",
@@ -311,7 +325,7 @@ export const KNOWN_DEFECT_FIXTURES: readonly KnownDefectFixture[] = [
     fleet: ["3", "2"],
     law: { optimum: 120, illegalRoutes: ["B10>A11>B12>B14>B16", "A9>B10>A11"], legalWitness: ["A9>B10", "B10>A11"] },
     knownProduction: { demonstrated: 120, primary: "sound-optimal", flags: ["sound-optimal"], authority: /^legal \$120$/ },
-    authorityProbes: [{ route: "A9>B10>A11", law: "illegal", authorityToday: /^legal \$90$/ }],
+    authorityProbes: [{ route: "A9>B10>A11", law: "illegal", authorityToday: /counts Canadian West twice/ }],
   },
 
   /* ---- 6. ING-1 (brief section 2): MALFORMED on purpose ---- */
@@ -329,12 +343,20 @@ export const KNOWN_DEFECT_FIXTURES: readonly KnownDefectFixture[] = [
       legalWitness: [],
       malformed: "V1: a token on a two-city hex must name its city; the oracle refuses the state as evidence",
     },
+    /* R12-2: the JOIN through New York's two unconnected cities is gone (the search joins arms only where the rails
+       do), so production no longer demonstrates the $90 the authority refused, and nothing is stranded: it runs
+       G19's other city to H18 ($80), which the authority accepts on its own terms (a token recorded without a city
+       stands for the hex -- #686), so the search and the authority agree. The oracle declines the malformed state
+       (V1), so it calls every route illegal: that flag is the oracle's refusal of the STATE, not a production route
+       defect. And the state can no longer be created: a paid placement on a two-city hex must name its city
+       (`stationPlacementGate.ts`; the home placement always had to). */
     knownProduction: {
-      demonstrated: 90,
+      demonstrated: 80,
       primary: "invalid-state",
-      flags: ["invalid-state", "route-phase-stranding", "emits-illegal-optimum"],
-      authority: /No rail through G19/,
+      flags: ["invalid-state", "emits-illegal-optimum"],
+      authority: /^legal \$80$/,
     },
+    repairedFrom: { demonstrated: 90, primary: "invalid-state", flags: ["invalid-state", "route-phase-stranding", "emits-illegal-optimum"] },
   },
   {
     id: "ING1-NYC-CITY-RECORDED",

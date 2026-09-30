@@ -14,7 +14,10 @@ output "app" {
     security_group_ids       = module.app.security_group_ids
     alb_dns_name             = module.app.alb_dns_name
     load_balancer_arn        = module.app.load_balancer_arn
-    target_group_arn         = module.app.target_group_arn
+    target_group_arns        = module.app.target_group_arns
+    routes                   = module.app.routes
+    listener_rule_priorities = module.app.listener_rule_priorities
+    game_table_names         = module.app.game_table_names
     origin_request_policy_id = module.app.origin_request_policy_id
     distribution_id          = module.app.distribution_id
   }

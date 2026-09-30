@@ -29,6 +29,9 @@ module "app" {
 
   environment                       = var.environment
   generation                        = var.generation
+  game_generations                  = var.game_generations
+  generation_adoption               = var.generation_adoption
+  identity_layout_version           = var.identity_layout_version
   ledger_table_arn                  = var.ledger_table_arn
   signing_keys                      = var.signing_keys
   escrow                            = var.escrow
@@ -45,5 +48,21 @@ module "app" {
   edge                              = var.edge
   log_retention_days                = var.log_retention_days
   bootstrap_trusted_principal_arns  = var.bootstrap_trusted_principal_arns
+  operator_trusted_principal_arns   = var.operator_trusted_principal_arns
+  recovery_trusted_principal_arns   = var.recovery_trusted_principal_arns
+  recovery_break_glass              = var.recovery_break_glass
   tags                              = var.tags
 }
+
+# LIVE-6 L6-2 (L6-4 §12.1 item 2): A RESTORED GAME TABLE IS IMPORTED, NEVER CREATED. After `RestoreTableToPointInTime`
+# made gs-<env>-game-g<N+1> (outside Terraform) and `npm run recovery -- table-prepare` marked it, add N+1 to
+# `game_generations` and uncomment (import blocks live only in a root module):
+#
+# import {
+#   to = module.app.aws_dynamodb_table.game["2"]
+#   id = "gs-staging-game-g2"
+# }
+#
+# The next plan then shows the import AND an in-place update re-enabling point-in-time recovery and deletion protection (a
+# restore carries neither). `generation` itself moves to N+1 only after `appgen-adopt` settled and `awsDeploy
+# generation-gate` passed (infra/aws/README.md "Generation switch").

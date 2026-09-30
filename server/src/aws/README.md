@@ -483,7 +483,7 @@ pool `op:r-<16 hex>` taken at epoch 1 for its one claim and RETIRED (moved past 
 no copy of it can ever land later; its hold is the HEAD's `(run, 1)`, which only `release --run` ends.
 
 **Not here:** the first `SYSTEM/ROUTING` and `APPGEN` (L5-8's bootstrap); generation adoption / restore (L6-4: APPGEN is
-read only); the flip / retirement procedure (L6-2: `set-primary` is its primitive); a take from a CURRENT owner (it needs a
+read only); the flip / retirement procedure (L6-2, §13: `set-primary` is its primitive); a take from a CURRENT owner (it needs a
 per-claim generation on the HEAD carried by every game fence -- the L6-3 report); hold / money release over DynamoDB under
 an operator hold (a later slice). Note for L6-2 / L6-4: `POOL#op:r-*` and `OPRUN#*` items live in the game table (a pool
 enumeration must skip `op:` pools; they go with the table's generation).
@@ -548,3 +548,30 @@ generation, gameTable, by, now })` (a create-if-absent Put), with the same gener
 
 Run: `npm test` includes `aws/recovery/l6_4Recovery.test.js`; `npm run test:dynamodb-local` includes
 `persistence/conformance/l6_4Recovery.dynamoLocal.test.js`.
+
+## 13. The production flip, recovery and retirement (LIVE-6 L6-2): `aws/operator/{flip,recovery,retire,orphans}.ts`, `aws/controlPlane/`
+
+The procedures are in `infra/aws/README.md` ("The flip", "Recovery", "Retirement", "Generation switch"); the design, the
+review and the owner decisions in Project `claude/LIVE6_L6_2_ROUTING_FLIP_RETIREMENT_2026-09-30.md`.
+
+| File | What it is |
+|---|---|
+| `controlPlane/evidence.ts` | Pure judgements over `capture-evidence` output (`18COSMOS/EVIDENCE/v1` manifest; per pool: target group, target health, services, stopped/running tasks, ACTIVE revisions; listener rules): a group per pool, healthy non-primary routers, `/gs*` -> primary and each exact `ws_path` -> its own group with the shadowing proof, the identity layout on every rollback target, exit 5 + replacement after a flip (3/4 abnormal), drain-first |
+| `controlPlane/flipRecord.ts` | `18COSMOS/FLIP-EVIDENCE/v1`: the flip's machine-readable record (preflight checks, snapshots before/after, the CAS, the observability window, observations) -- written atomically after every phase; L6-6's evidence and `awsDeploy verify --flip-record`'s input |
+| `operator/flip.ts` | `flip` / `flip-observe`: F0 preflight (dry run stops here, writes nothing) -> F1 window opens -> F2 L6-3's `setPrimary` CAS -> F3 observation by strong reads until BOTH pools were re-taken and B's CURRENT task holds the singleton roles (only the restarted tasks can satisfy it) or the bound passes (`timeout`: stop) |
+| `operator/recovery.ts` | `recover <A>`: superseded HEADs of A -> L6-3 `take` + `release` (marker `[l6-2-recover from=A]` in the note); resumes its own interrupted holds; never a current owner, another run's hold or damage; waits (bounded) for the primary's money sweep to claim each open money game; `settled` closes the window |
+| `operator/retire.ts` | `retire-check <pool>`: R1-R6 (read-only). No durable `POOL#.status` marker is built (its header says why) |
+| `operator/orphans.ts` | `orphans`: after a restore, ledger `SETTLE#`/`ATTI#` no game of the adopted table accounts for (read-only; chain games NOT COVERED) |
+
+**L6-4 integration** (the addendum): the bootstrap creates-if-absent `SYSTEM/GENERATION` with L6-4's own helpers (all three
+records inspected before any write); `awsDeploy verify` and the flip preflight check the marker and the adoption binding
+with L6-4's `generationMarkerProblem` / `adoptionBindingProblem`; the identity verifier refuses every table
+`identityServingProblem` refuses (`servingGatedVerifier`); `awsDeploy generation-gate` (read-only) opens the Terraform
+generation switch only after the exact adoption; a restored table's money games are read-only until the escrow service's
+`restoreCheck` (F1 history + the ledger/chain quorum) passes in THIS process -- never stored, so no restart bypasses it.
+
+Import rights (`awsClients.test.ts`): the operator may read `aws/game/generationMarker` and `aws/ledger/appGeneration`, never
+call `adoptGeneration`, `prepareRestoredTable` or `applyIdentityRestore`; deploy may read the marker module.
+
+Run: `npm test` includes `aws/operator/l6_2Flip.test.js`; `npm run test:dynamodb-local` includes
+`persistence/conformance/l6_2Flip.dynamoLocal.test.js`.

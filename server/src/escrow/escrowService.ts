@@ -146,9 +146,25 @@ export interface EscrowServiceDeps {
    *  settlement coordinator (`start.ts`). Default: this build's capability over `backend.pin` (or the injected
    *  `continuation` seam's versions over it), with no chain fact read until `refreshChainFacts`. */
   readonly serving?: MoneyServing;
+  /** LIVE-6 L6-2: POST-RESTORE SAFE MODE (preflight §13 step 8, §17.2 step 4; L6-4 §12.2). True on a game table restored
+   *  from a backup (its SYSTEM/GENERATION says origin `restore`): every money game is read-only and takes no money request
+   *  until `restoreCheck` verified it IN THIS PROCESS (see `restoreCheck`). Absent / false: as before. */
+  readonly restoreSafeMode?: boolean;
 }
 
 export type ServiceRefusal = { readonly ok: false; readonly code: string; readonly detail: string };
+
+/** LIVE-6 L6-2: a restored money game's verification (post-restore safe mode). */
+export type RestoreCheck =
+  /** Serve it: its history reproduces the ledger's reservations (F1) and the chain is not ahead of it -- or it has nothing
+   *  to verify (no financial record, closed, never bound to a chain game). */
+  | { readonly kind: "verified"; readonly detail: string }
+  /** Not yet: the chain cannot be read now, or financial mode is not verified; it is tried again at the next ask. */
+  | { readonly kind: "pending"; readonly detail: string }
+  /** It never will be here: the F1 check HELD it (`journal-ahead`, a durable hold -- the operator's). */
+  | { readonly kind: "held"; readonly detail: string };
+
+export const RESTORE_READ_ONLY_SENTENCE = "This table was restored from a backup: it stays read-only until its money history is checked against the ledger and the chain.";
 
 /** ESCROW-JOIN: what ESCROW-4's (future) route asks for, after authenticating the principal and proving the wallet. */
 export interface JoinAuthorizationRequest {
@@ -241,6 +257,12 @@ export interface EscrowService {
   creationVerdict(): CanonicalVerdict;
   /** LIVE-4 (L4-4): this pool's serving (capability + verification-grade chain facts), for the coordinator and tools. */
   readonly serving: MoneyServing;
+  /** LIVE-6 L6-2: post-restore safe mode (the deps' `restoreSafeMode`) -- null: the game may be served (not a restored
+   *  table, not a money game, or verified in this process); else the sentence a move or money request is refused with.
+   *  Synchronous; it starts the game's verification if none is running. */
+  restoreGate(gameId: string): string | null;
+  /** LIVE-6 L6-2: the verification itself (for the gate, the claim hook and tests). */
+  restoreCheck(gameId: string): Promise<RestoreCheck>;
   /** LIVE-4 (L4-4): read the pinned deployment's chain-attested facts at verification grade and record them (the only
    *  source of `runtime.chainFacts`). `junoBackend` calls it at every verification; creation calls it when none was read. */
   refreshChainFacts(): Promise<ChainFactsRead>;
@@ -968,6 +990,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
    * A restart reaches the same answer: every input is durable (the record, the intent, the journal) or the chain's.
    */
   function reconcileStart(gameId: string): Promise<StartReconciliation> {
+    /* L6-2 (review M1): a restored money game is read-only until verified -- its freeze is neither made permanent,
+       released nor its Start rewritten; the load's and the sweeps' next pass decide it once verified. */
+    if (restoreGate(gameId) !== null) return Promise.resolve("pending");
     return exclusive(gameId, async (): Promise<StartReconciliation> => {
       const found = await servingOf(gameId);
       const record = found.record;
@@ -1232,6 +1257,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   }
 
   async function relayConsent(input: { readonly gameId: string; readonly chainSeatIndex: number; readonly signature: string; readonly registeredKeys: readonly string[] }) {
+    /* LIVE-6 L6-2: post-restore safe mode -- nothing is relayed for a restored money game before its verification. */
+    const restoring = restoreRefusal(input.gameId);
+    if (restoring !== null) return restoring;
     const found = await relayable(input.gameId);
     if (!("bound" in found)) return found;
     const { bound } = found;
@@ -1274,6 +1302,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
   }
 
   async function submitAnnul(input: { readonly gameId: string; readonly chainSeatIndex: number; readonly signature: string; readonly registeredKeys: readonly string[] }) {
+    /* LIVE-6 L6-2: post-restore safe mode -- nothing is relayed for a restored money game before its verification. */
+    const restoring = restoreRefusal(input.gameId);
+    if (restoring !== null) return restoring;
     const found = await relayable(input.gameId);
     if (!("bound" in found)) return found;
     const { bound } = found;
@@ -1422,9 +1453,84 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     return record.phase === "funding" ? { kind: "ok" } : { kind: "wait", why: `the money game is ${record.phase}` };
   }
 
+  /* ==================================================================
+      LIVE-6 L6-2: POST-RESTORE SAFE MODE
+     ==================================================================
+     After a game-table restore (L6-4), a money game's durable history may be BEHIND what escaped it: the ledger (never
+     restored) may hold reservations beyond the restored log, and the chain's trusted sequence may be ahead of it. Play on
+     such a history could never be settled (preflight §13 step 8: "a money game is served read-only until its F1 check
+     has passed, which needs the chain"). So, on a restored table, every money game is READ-ONLY -- no move, no seat or
+     ticket op, no bind, admission, Start, consent or annul, and no server-driven change either: no start reconciliation,
+     no relayer admission, no unbound close, no deal after Start, no expiry / archive / chain-mirror room change (review
+     M1) -- until THIS PROCESS has verified it:
+       - no financial record, or one closed / cancelled, or one never bound to a chain game: nothing to verify;
+       - financial mode verified against the chain (the deployment), then F1 (`verifyHistory`: the durable log reproduces
+         the ledger's highest reserved checkpoint -- else the existing durable `journal-ahead` HOLD), then a QUORUM chain
+         read: the chain's trusted sequence is not ahead of the durable log (`aheadOfLog` -- else the same hold).
+     The exit is DETERMINISTICALLY REPRODUCIBLE, not a stored flag: the verified set lives in this process only, so every
+     restart re-runs the same pure checks against the same durable ledger / chain / log -- a restart can never bypass it,
+     and a failure is the existing durable hold. The signing jobs (checkpoint, settle) already run F1 and the chain check
+     before any signature; this adds the read-only serving in front of them. */
+  const restoreVerified = new Set<string>();
+  const restoreRunning = new Map<string, Promise<RestoreCheck>>();
+  async function restoreCheck(gameId: string): Promise<RestoreCheck> {
+    if (deps.restoreSafeMode !== true) return { kind: "verified", detail: "not a restored table" };
+    if (restoreVerified.has(gameId)) return { kind: "verified", detail: "verified in this process" };
+    let record: FinancialGameRecord | null;
+    try {
+      record = await deps.financial.load(gameId);
+    } catch (error) {
+      return { kind: "pending", detail: `the financial record could not be read (${error instanceof Error ? error.name : "error"})` };
+    }
+    const done = (detail: string): RestoreCheck => {
+      restoreVerified.add(gameId);
+      audit("money.restore-verified", { game_id: gameId, detail });
+      notify(gameId);
+      return { kind: "verified", detail };
+    };
+    if (record === null) return done("no financial record");
+    if (record.phase === "closed" || record.phase === "cancelled") return done(`${record.phase}: nothing to verify`);
+    if (record.phase === "held") return { kind: "held", detail: "the financial record is held" };
+    if (!ready()) return { kind: "pending", detail: "financial mode is not verified against the chain yet" };
+    const bound = boundOf(record);
+    if (bound === null) return done("never bound to a chain game: nothing signed, nothing relayed for it");
+    if (!(await verifyHistory(bound))) return { kind: "held", detail: "F1: the durable log does not reproduce the ledger's reservations (held journal-ahead)" };
+    let game: JunoGameResponse;
+    try {
+      game = await readGameQuorum(bound.binding.chain_game_id);
+    } catch (error) {
+      return { kind: "pending", detail: `the chain cannot be read now (${error instanceof Error ? error.name : "error"})` };
+    }
+    const entries = await deps.readLog(gameId);
+    const ahead = await aheadOfLog(bound, entries.length, game);
+    if (ahead !== null) {
+      await hold(gameId, "journal-ahead", ahead);
+      return { kind: "held", detail: ahead };
+    }
+    return done(`F1 passed; the chain's trusted sequence ${game.trusted_seq} is not ahead of the durable log (${entries.length} entries)`);
+  }
+  function startRestoreCheck(gameId: string): Promise<RestoreCheck> {
+    let running = restoreRunning.get(gameId);
+    if (running === undefined) {
+      running = restoreCheck(gameId)
+        .catch((error): RestoreCheck => ({ kind: "pending", detail: `the check failed (${error instanceof Error ? error.name : "error"})` }))
+        .finally(() => restoreRunning.delete(gameId));
+      restoreRunning.set(gameId, running);
+    }
+    return running;
+  }
+  function restoreGate(gameId: string): string | null {
+    if (deps.restoreSafeMode !== true || restoreVerified.has(gameId)) return null;
+    void startRestoreCheck(gameId);
+    return RESTORE_READ_ONLY_SENTENCE;
+  }
+  const restoreRefusal = (gameId: string): ServiceRefusal | null => (restoreGate(gameId) === null ? null : { ok: false, code: "restore-unverified", detail: RESTORE_READ_ONLY_SENTENCE });
+
   return {
     stats,
     rosterSource,
+    restoreGate,
+    restoreCheck: startRestoreCheck,
     isRosterFrozen: (gameId) => frozen.has(gameId),
     reconcileStart,
     relayConsent,
@@ -1451,6 +1557,8 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     artifactFormatsOf,
     observe: (gameId) => enqueue(gameId, "the chain observation", () => observeChain(gameId)),
     async closeUnboundTable(gameId) {
+      /* L6-2 (review M1): not on a restored money game before it is verified (the next observation closes it). */
+      if (restoreGate(gameId) !== null) return;
       await exclusive(gameId, async () => {
         /* L4-4: only a game this pool continues is closed here (a table another pool serves is closed by that pool). */
         const found = await servingOf(gameId);
@@ -1463,6 +1571,8 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     },
 
     async refreshRoster(gameId) {
+      /* L6-2: every claim of a game (the claim hook) starts its post-restore verification at once. */
+      if (deps.restoreSafeMode === true) void startRestoreCheck(gameId);
       let record: FinancialGameRecord | null;
       try {
         record = await deps.financial.load(gameId);
@@ -1497,6 +1607,9 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     },
 
     async admit(intent) {
+      /* L6-2 (review M1): an intent of a restored money game is not admitted before its game is verified in this process
+         (undecided: nothing written, no failure counted; the relayer asks again at its next pass). */
+      if (restoreGate(intent.game_id) !== null) return { kind: "undecided", why: RESTORE_READ_ONLY_SENTENCE };
       /* LIVE-4 (L4-4): the verdict first, as `classifyIntent` (the relayer asks that before it writes anything): a game
          this pool does not continue is skipped IN MEMORY, never held; only the owner's conflict holds. */
       let serving_: IntentServing;
@@ -1552,6 +1665,8 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     },
 
     async bindHostChainGame(gameId, chainGameId, variants, expect) {
+      const restoring = restoreRefusal(gameId);
+      if (restoring !== null) return restoring;
       /* W-13: every chain fact is read by QUORUM (every configured endpoint agreeing) and compared with the server's own
          expectation before the write-once binding exists. The shared checks then pin the deployment, rules, variants and
          policy exactly as 3B's bind does. */
@@ -1565,6 +1680,8 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     async authorizeJoin(input) {
       const no = (code: string, detail: string) => ({ ok: false as const, code, detail });
       if (!ready()) return no("not-verified", "financial mode is not verified against the chain");
+      const restoring = restoreRefusal(input.gameId);
+      if (restoring !== null) return restoring;
       const admission = deps.admission;
       if (admission === undefined) return no("admission-unavailable", "this server has no join-admission signer (production waits for the KMS client, LIVE-5)");
       return exclusive(input.gameId, async () => {
@@ -1637,6 +1754,8 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
 
     async requestStart(gameId, liveSeats) {
       if (!ready()) return { ok: false, code: "not-verified", detail: "financial mode is not verified against the chain" };
+      const restoring = restoreRefusal(gameId);
+      if (restoring !== null) return restoring;
       return exclusive(gameId, async () => {
         const found = await servingOf(gameId);
         const record = found.record;

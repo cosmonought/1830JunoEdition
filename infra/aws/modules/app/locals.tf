@@ -16,16 +16,35 @@ locals {
   region    = data.aws_region.current.region
   prefix    = "gs-${var.environment}"
 
-  game_table_name     = "${local.prefix}-game-g${var.generation}"
+  # LIVE-6 L6-2 (L6-4 §12.1): every managed game-table generation, side by side; `generation` is the serving one.
+  game_generations    = toset([for g in setunion(var.game_generations, [var.generation]) : tostring(g)])
+  game_table_names    = { for g in local.game_generations : g => "${local.prefix}-game-g${g}" }
+  game_table_arns     = { for g, name in local.game_table_names : g => "arn:${local.partition}:dynamodb:${local.region}:${local.account}:table/${name}" }
+  game_table_name     = local.game_table_names[tostring(var.generation)]
   identity_table_name = "${local.prefix}-identity"
-  game_table_arn      = "arn:${local.partition}:dynamodb:${local.region}:${local.account}:table/${local.game_table_name}"
+  game_table_arn      = local.game_table_arns[tostring(var.generation)]
   identity_table_arn  = "arn:${local.partition}:dynamodb:${local.region}:${local.account}:table/${local.identity_table_name}"
+  # L6-4's identity restore writes into a NEW identity table (a restored copy); its operator role reaches those copies too.
+  identity_tables_arns = "arn:${local.partition}:dynamodb:${local.region}:${local.account}:table/${local.identity_table_name}*"
 
   task_role_name      = "${local.prefix}-app-task"
   execution_role_name = "${local.prefix}-app-execution"
   bootstrap_role_name = "${local.prefix}-bootstrap"
+  operator_role_name  = "${local.prefix}-operator"
+  recovery_role_name  = "${local.prefix}-recovery"
 
   primary_pool = one([for id, pool in var.pools : id if pool.primary])
+
+  # LIVE-6 L6-2: the TRUSTED ROUTE TABLE (runtime document v2, L6-1's `routes`). Deterministic: pool p is reached at
+  # /gs/p/<p> -- a plain path under /gs/ that L6-1's `routeEntryProblem` / the client's `safeRoutePath` accept (pool ids are
+  # ^[a-z][a-z0-9-]{0,15}$), unique per pool, never a host. The SAME table is written into every pool's document, and each
+  # pool's exact-path ALB rule (alb.tf) forwards its path to that pool's target group.
+  pool_ids   = sort(keys(var.pools))
+  pool_route = { for id, pool in var.pools : id => merge({ ws_path = "/gs/p/${id}" }, pool.bundle_path == null ? {} : { bundle_path = pool.bundle_path }) }
+  # ALB listener-rule priorities: every exact pool path is evaluated BEFORE the /gs* default (a lower number first), in
+  # sorted pool order; the paths are exact and distinct, so no pool rule can shadow another.
+  pool_rule_priority = { for index, id in local.pool_ids : id => 100 + index }
+  gs_rule_priority   = 1000
 
   # SSM parameter names and ARNs (`parameter` + the name, whose leading slash is the ARN's separator).
   runtime_parameter_name = { for id, _ in var.pools : id => "/gs/${var.environment}/runtime/${id}" }
@@ -35,10 +54,11 @@ locals {
 
   escrow_enabled = var.escrow != null
 
-  # 18COSMOS/AWS-RUNTIME/v1 -- every field of `runtimeConfig.ts`, nothing else (the parser refuses unknown fields).
+  # 18COSMOS/AWS-RUNTIME/v2 (LIVE-6 L6-2; L6-1's format: v1 + `routes`) -- every field of `runtimeConfig.ts`, nothing else
+  # (the parser refuses unknown fields). v1 stays readable by the application; new LIVE-6 configuration is v2.
   runtime_document = {
     for id, _ in var.pools : id => jsonencode({
-      format           = "18COSMOS/AWS-RUNTIME/v1"
+      format           = "18COSMOS/AWS-RUNTIME/v2"
       environment      = var.environment
       region           = local.region
       pool             = id
@@ -47,6 +67,7 @@ locals {
       identity_table   = local.identity_table_name
       ledger_table_arn = var.ledger_table_arn
       escrow           = local.escrow_enabled ? { config_parameter_arn = local.juno_parameter_arn } : null
+      routes           = local.pool_route
     })
   }
 
@@ -113,4 +134,7 @@ locals {
   ]
 
   tags = merge(var.tags, { "gs:environment" = var.environment, "gs:slice" = "live5-l5-8" })
+
+  # L6-4 §12.3 / L6-2: the identity layout every task definition declares (a rollback target must declare it too).
+  identity_layout_tag = { "gs:identity-layout" = tostring(var.identity_layout_version) }
 }

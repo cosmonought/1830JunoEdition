@@ -1,5 +1,5 @@
 {
-  "format": "18COSMOS/AWS-RUNTIME/v1",
+  "format": "18COSMOS/AWS-RUNTIME/v2",
   "environment": "staging",
   "region": "us-east-1",
   "pool": "p2",
@@ -9,5 +9,13 @@
   "ledger_table_arn": "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger",
   "escrow": {
     "config_parameter_arn": "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend"
+  },
+  "routes": {
+    "p1": {
+      "ws_path": "/gs/p/p1"
+    },
+    "p2": {
+      "ws_path": "/gs/p/p2"
+    }
   }
 }

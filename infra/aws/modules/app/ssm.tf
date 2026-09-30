@@ -2,7 +2,8 @@
 #  LIVE-5 L5-8: THE TWO CONFIGURATION DOCUMENTS -- PLAIN `String` PARAMETERS, NEVER `SecureString`, NO SECRET IN EITHER
 # ==================================================================
 #
-# One runtime document per pool (`/gs/<env>/runtime/<pool>`, 18COSMOS/AWS-RUNTIME/v1: the pool is in the document) and,
+# One runtime document per pool (`/gs/<env>/runtime/<pool>`, 18COSMOS/AWS-RUNTIME/v2 since LIVE-6 L6-2: the pool is in the
+# document, and so is the deployment's trusted route table -- the same `routes` in every pool's document) and,
 # with escrow, one Juno configuration (`/gs/<env>/juno-backend`, 18COSMOS/JUNO-BACKEND/v3). The task reads the LATEST
 # version at startup and prints it (L5-7 owner decision 3); a changed document therefore reaches a pool only through a new
 # deployment, which the ECS service's `triggers` start (ecs.tf). `insecure_value` (not `value`) so every change is visible
@@ -12,7 +13,7 @@ resource "aws_ssm_parameter" "runtime" {
   for_each = var.pools
 
   name           = local.runtime_parameter_name[each.key]
-  description    = "18Cosmos ${var.environment} pool ${each.key}: the AWS runtime document (18COSMOS/AWS-RUNTIME/v1). No secrets."
+  description    = "18Cosmos ${var.environment} pool ${each.key}: the AWS runtime document (18COSMOS/AWS-RUNTIME/v2). No secrets."
   type           = "String"
   data_type      = "text"
   tier           = "Intelligent-Tiering"

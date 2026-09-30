@@ -58,20 +58,30 @@ run "resource_policy_is_narrower_than_the_app_tables" {
       AppTaskLedgerRead           = toset(["dynamodb:GetItem", "dynamodb:Query", "dynamodb:ConditionCheckItem"])
       AppTaskLedgerPutNeverAppgen = toset(["dynamodb:PutItem"])
       BootstrapAppgenOnly         = toset(["dynamodb:GetItem", "dynamodb:PutItem"])
+      BootstrapAppgenHistoryRead  = toset(["dynamodb:GetItem"])
+      OperatorLedgerReadOnly      = toset(["dynamodb:GetItem", "dynamodb:Scan"])
+      RecoveryLedgerRead          = toset(["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"])
+      RecoveryAppgenAdoption      = toset(["dynamodb:UpdateItem"])
+      RecoveryAppgenHistoryAppend = toset(["dynamodb:PutItem"])
       BootstrapDescribe           = toset(["dynamodb:DescribeTable"])
     }
-    error_message = "The task: GetItem, Query, ConditionCheckItem, PutItem (never APPGEN) -- no UpdateItem, DeleteItem or Scan."
+    error_message = "The task: GetItem, Query, ConditionCheckItem, PutItem (never APPGEN) -- no UpdateItem, DeleteItem or Scan. L6-2: the operator reads only; the recovery role's only update is APPGEN, its only put the adoption history."
   }
   assert {
     condition = alltrue([for s in data.aws_iam_policy_document.ledger_resource.statement :
       contains([for c in s.condition : "${c.test}|${c.variable}|${join(",", c.values)}"],
-    "ArnEquals|aws:PrincipalArn|arn:aws:iam::111111111111:role/gs-staging-${startswith(s.sid, "AppTask") ? "app-task" : "bootstrap"}")])
+    "ArnEquals|aws:PrincipalArn|arn:aws:iam::111111111111:role/gs-staging-${startswith(s.sid, "AppTask") ? "app-task" : startswith(s.sid, "Operator") ? "operator" : startswith(s.sid, "Recovery") ? "recovery" : "bootstrap"}")])
     error_message = "Every grant names the exact app-account role (account root + aws:PrincipalArn)."
   }
   assert {
-    condition = (contains([for c in one([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "AppTaskLedgerPutNeverAppgen"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"], "ForAllValues:StringNotEquals|dynamodb:LeadingKeys|APPGEN")
+    condition = (contains([for c in one([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "AppTaskLedgerPutNeverAppgen"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"], "ForAllValues:StringNotEquals|dynamodb:LeadingKeys|APPGEN,APPGEN#HISTORY")
     && contains([for c in one([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "BootstrapAppgenOnly"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"], "ForAllValues:StringEquals|dynamodb:LeadingKeys|APPGEN"))
-    error_message = "APPGEN: never the task's write; the bootstrap's only item."
+    error_message = "APPGEN and APPGEN#HISTORY: never the task's write (L6-2 review M4); APPGEN the bootstrap's only item."
+  }
+  assert {
+    condition = (contains([for c in one([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "RecoveryAppgenAdoption"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"], "ForAllValues:StringEquals|dynamodb:LeadingKeys|APPGEN")
+    && contains([for c in one([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "RecoveryAppgenHistoryAppend"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"], "ForAllValues:StringEquals|dynamodb:LeadingKeys|APPGEN#HISTORY"))
+    error_message = "L6-2 (L6-4 §12.1): the recovery role updates APPGEN only and appends APPGEN#HISTORY only."
   }
   assert {
     condition     = aws_dynamodb_resource_policy.ledger.resource_arn == aws_dynamodb_table.ledger.arn

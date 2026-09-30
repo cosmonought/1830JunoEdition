@@ -1,5 +1,6 @@
 # ==================================================================
-#  LIVE-5 L5-8: THE ALB -- /gs* TO THE PRIMARY POOL, TARGET HEALTH = /gs/readyz, IDLE TIMEOUT FOR WEBSOCKETS
+#  LIVE-5 L5-8 / LIVE-6 L6-2: THE ALB -- EACH POOL'S EXACT ws_path TO ITS OWN TARGET GROUP, /gs* TO THE PRIMARY'S,
+#  TARGET HEALTH = /gs/readyz, IDLE TIMEOUT FOR WEBSOCKETS
 # ==================================================================
 #
 # Target health is READINESS (`/gs/readyz`: 200 only while this task may serve -- pool writer current, identity loaded,
@@ -25,8 +26,15 @@ resource "aws_lb" "this" {
   }
 }
 
-resource "aws_lb_target_group" "primary" {
-  name                 = "${local.prefix}-primary" # stable: the primary pool it serves is its tag (a flip is L6-2's)
+# LIVE-6 L6-2: ONE TARGET GROUP PER POOL. Every pool's task is a target of its own group: the primary's answers readiness
+# 200 as the primary, a non-primary pool's (L6-1's router) 200 `non-primary` -- so no pool is kept off the ALB any more
+# (L5-8's "only the primary behind the ALB" assumed L5-7's standby, whose readyz was 503 forever). A drained or retired
+# pool (desired_count 0) keeps its group, empty. The name is the pool's (gs-<env>-<pool>, like its service); L5-8's single
+# gs-<env>-primary group is gone -- it was never deployed.
+resource "aws_lb_target_group" "pool" {
+  for_each = var.pools
+
+  name                 = "${local.prefix}-${each.key}"
   target_type          = "ip"
   protocol             = "HTTP"
   port                 = var.container_port
@@ -45,12 +53,12 @@ resource "aws_lb_target_group" "primary" {
     unhealthy_threshold = 3
   }
 
-  tags = merge(local.tags, { "gs:pool" = local.primary_pool })
+  tags = merge(local.tags, { "gs:pool" = each.key })
 
   lifecycle {
     precondition {
-      condition     = length("${local.prefix}-primary") <= 32
-      error_message = "The target group name gs-<environment>-primary must be at most 32 characters."
+      condition     = length("${local.prefix}-${each.key}") <= 32
+      error_message = "The target group name gs-<environment>-<pool> must be at most 32 characters."
     }
   }
 }
@@ -74,9 +82,36 @@ resource "aws_lb_listener" "https" {
   tags = local.tags
 }
 
+# THE RULES (LIVE-6 L6-2). Deterministic and verifier-checkable (`awsDeploy verify`, aws/controlPlane/evidence.ts):
+#   priority 100 + i   one per pool, in sorted pool order: the EXACT path of the pool's trusted ws_path (`/gs/p/<pool>`,
+#                      no wildcard) -> that pool's target group. Exact and distinct, so no pool rule shadows another
+#                      (`/gs/p/p1` does not match `/gs/p/p10`), and each precedes the default.
+#   priority 1000      `/gs*` -> the PRIMARY pool's target group: `/gs` (every client's entry socket), `/gs/api/*` (the
+#                      identity writer's HTTP API), and anything else under /gs. A flip moves only this rule's target.
+# ALB path patterns never see the query string, and a forward never rewrites it: /gs* keeps cp / cr / cb intact.
+resource "aws_lb_listener_rule" "pool" {
+  for_each = var.pools
+
+  listener_arn = aws_lb_listener.https.arn
+  priority     = local.pool_rule_priority[each.key]
+
+  condition {
+    path_pattern {
+      values = [local.pool_route[each.key].ws_path]
+    }
+  }
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.pool[each.key].arn
+  }
+
+  tags = merge(local.tags, { "gs:pool" = each.key })
+}
+
 resource "aws_lb_listener_rule" "gs" {
   listener_arn = aws_lb_listener.https.arn
-  priority     = 10
+  priority     = local.gs_rule_priority
 
   condition {
     path_pattern {
@@ -86,8 +121,8 @@ resource "aws_lb_listener_rule" "gs" {
 
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.primary.arn
+    target_group_arn = aws_lb_target_group.pool[local.primary_pool].arn
   }
 
-  tags = local.tags
+  tags = merge(local.tags, { "gs:primary" = local.primary_pool })
 }

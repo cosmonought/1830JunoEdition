@@ -1,5 +1,11 @@
 output "game_table_name" {
-  value = aws_dynamodb_table.game.name
+  description = "The SERVING game table (generation `generation`)."
+  value       = aws_dynamodb_table.game[tostring(var.generation)].name
+}
+
+output "game_table_names" {
+  description = "Every managed game-table generation (L6-2 / L6-4: side by side until one is explicitly retired)."
+  value       = { for g, t in aws_dynamodb_table.game : g => t.name }
 }
 
 output "identity_table_name" {
@@ -7,8 +13,18 @@ output "identity_table_name" {
 }
 
 output "primary_pool" {
-  description = "The pool the bootstrap names in SYSTEM/ROUTING (and the only one behind the ALB)."
+  description = "The pool SYSTEM/ROUTING must name (the bootstrap's, or the last flip's); the /gs* rule forwards to its target group."
   value       = local.primary_pool
+}
+
+output "routes" {
+  description = "The trusted route table written into every runtime document v2 (pool -> ws_path / bundle_path)."
+  value       = local.pool_route
+}
+
+output "listener_rule_priorities" {
+  description = "Each pool's exact-path rule priority, and the /gs* default's (verifier-checkable)."
+  value       = { pools = local.pool_rule_priority, gs = local.gs_rule_priority }
 }
 
 output "runtime_parameter_arns" {
@@ -25,6 +41,8 @@ output "role_arns" {
     task      = aws_iam_role.task.arn
     execution = aws_iam_role.execution.arn
     bootstrap = aws_iam_role.bootstrap.arn
+    operator  = length(aws_iam_role.operator) == 1 ? aws_iam_role.operator[0].arn : null
+    recovery  = length(aws_iam_role.recovery) == 1 ? aws_iam_role.recovery[0].arn : null
   }
 }
 
@@ -58,8 +76,9 @@ output "load_balancer_arn" {
   value = aws_lb.this.arn
 }
 
-output "target_group_arn" {
-  value = aws_lb_target_group.primary.arn
+output "target_group_arns" {
+  description = "One target group per pool (LIVE-6 L6-2)."
+  value       = { for id, tg in aws_lb_target_group.pool : id => tg.arn }
 }
 
 output "origin_request_policy_id" {

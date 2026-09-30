@@ -86,6 +86,8 @@ export interface JunoBackendDeps {
    *  from the strong read made when this task CLAIMS it (`EscrowService.refreshRoster`, wired as the pool ownership's
    *  `onClaimed`), and a slower startup preload could overwrite a newer claim-time refresh (the L5-3 handoff). */
   readonly preload?: boolean;
+  /** LIVE-6 L6-2: post-restore safe mode (the escrow service's `restoreSafeMode`): AWS storage on a restored game table. */
+  readonly restoreSafeMode?: boolean;
 }
 
 async function openSigner(ref: SignerRef, deps: JunoBackendDeps): Promise<DigestSigner> {
@@ -142,6 +144,7 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
     admission: { signer: junoJoinAdmissionSigner(config.admissionKey.publicKeyHex, JUNO_CODEC_V1, admissionDigestSigner), ttlSecs: config.admissionKey.ttlSecs },
     walletProofs: deps.walletProofs,
     ...(deps.serving !== undefined ? { serving: deps.serving } : {}),
+    ...(deps.restoreSafeMode === true ? { restoreSafeMode: true } : {}),
   });
   relayer = createJunoRelayer({
     rest,

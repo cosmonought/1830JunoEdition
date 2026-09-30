@@ -119,6 +119,11 @@ export interface EscrowGameplaySeam {
   onGameplayCommitted(input: { readonly gameId: string; readonly entries: readonly ServerLogEntry[]; readonly board: GameStateResponse }): void;
   /** The game's financial roster is frozen (from the start-intent task on): no seat of it may change. */
   isRosterFrozen(gameId: string): boolean;
+  /** LIVE-6 L6-2: POST-RESTORE SAFE MODE (preflight §13 step 8 / §17.2; L6-4 §12.2). On a game table restored from a
+   *  backup (its SYSTEM/GENERATION says origin `restore`), a MONEY table is read-only until its financial history is
+   *  verified against the ledger and the chain in THIS process (`EscrowService.restoreGate`): the sentence to refuse
+   *  with, or null (serve). Absent: never read-only (not a restored table). Asked synchronously; it starts the check. */
+  restoreGate?(gameId: string): string | null;
 }
 
 /** ESCROW-3B: the ops that would change a frozen financial roster's seats (or the table itself before the deal). */
@@ -902,6 +907,17 @@ export function createRoomHost(deps: RoomHostDeps) {
         if (opName === "leave" && verdict !== null && verdict.ok) return { ok: true, value: { ok: true, record: null, effects: { unsubscribeOnly: true } } };
         return { ok: false, code: "wrong-state", reason: FROZEN_GAME_SENTENCE };
       }
+      /* LIVE-6 L6-2: A RESTORED MONEY TABLE IS READ-ONLY UNTIL ITS HISTORY IS VERIFIED (post-restore safe mode): no seat,
+         ticket, freeze or table op of it runs -- a `leave` only unsubscribes -- and no server task either (`opName` null:
+         the expiry / archive sweeps, the chain mirror's `extendExpiry` / `mirrorCancelled`; review M1). No-money tables are
+         served as ever. */
+      if (record.record_schema === 2) {
+        const restoring = deps.escrow?.restoreGate?.(record.game_id) ?? null;
+        if (restoring !== null) {
+          if (opName === "leave" && verdict !== null && verdict.ok) return { ok: true, value: { ok: true, record: null, effects: { unsubscribeOnly: true } } };
+          return { ok: false, code: "held", reason: restoring };
+        }
+      }
       /* ESCROW-3B (brief §16): A FROZEN FINANCIAL ROSTER IS FINAL. From the start-intent task on, no seat of a money
          table moves -- no seat taken or released, no kick, no rename, no cancel from the server; a `leave` only
          unsubscribes (the seat, its principal, its player_id and its money are unchanged). */
@@ -1426,7 +1442,10 @@ export function createRoomHost(deps: RoomHostDeps) {
       ),
     /* The escrow was cancelled on chain: the room says so (its code released), exactly as a host's cancel would. */
     mirrorCancelled: (gameId) =>
-      serverMoneyOp(gameId, (record, at) =>
+      /* L6-2: gated before its audit line (the op itself is refused by the restore gate in `runOp` too). */
+      (deps.escrow?.restoreGate?.(gameId) ?? null) !== null
+        ? Promise.resolve()
+        : serverMoneyOp(gameId, (record, at) =>
         record.money !== null && record.status === "waiting" && record.started_at === null
           ? {
               record: { ...record, status: "cancelled", cancelled_at: at, join_code: null, expires_at: null, record_version: record.record_version + 1, last_activity_at: at },
@@ -1436,6 +1455,8 @@ export function createRoomHost(deps: RoomHostDeps) {
       ).then(() => ops.audit("money.room-mirrored-cancel", { game_id: gameId })),
     /* The chain confirmed the Start: deal now (idempotent -- a dealt table, or one whose plan refuses, is left). */
     dealStarted: async (gameId) => {
+      /* L6-2 (review M1): no deal on a restored money table before its history is verified (the next observation deals). */
+      if ((deps.escrow?.restoreGate?.(gameId) ?? null) !== null) return;
       const game = await actorFor(gameId);
       if (game === null) return;
       const outcome = await game.run("room-op", async (tx) => {
@@ -1790,6 +1811,12 @@ export function createRoomHost(deps: RoomHostDeps) {
          deal -- corrupting the dealt board and holding the table `deal-misplaced` at its next load. The only way a
          server-owned game is dealt is `start-game`, which does not come through here. */
       return { ok: false, code: verdict.code, reason: verdict.reason };
+    }
+    /* LIVE-6 L6-2: post-restore safe mode -- a restored MONEY game takes no move until its history is verified (a move
+       made on a history the chain or the ledger contradicts could never be settled: preflight §13 step 8). */
+    if (record.record_schema === 2) {
+      const restoring = deps.escrow?.restoreGate?.(record.game_id) ?? null;
+      if (restoring !== null) return { ok: false, code: "held", reason: restoring };
     }
     const seat = seatOf(record, principalId) as NonNullable<ReturnType<typeof seatOf>>;
     return { ok: true, actor: seat.player_id, host: record.host_player_id, policy: record.policy.host_undo };

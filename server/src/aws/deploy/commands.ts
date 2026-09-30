@@ -8,14 +8,14 @@
 //               [--apply | --check]
 //       The runtime document named (the PRIMARY pool's) is read and checked by the task's own code (`loadAwsStartup`),
 //       and its environment, pool and generation must equal the flags: the command is explicit about what it is for, and
-//       refuses a mis-pointed document. Then APPGEN and SYSTEM/ROUTING (`bootstrap.ts`):
+//       refuses a mis-pointed document. Then APPGEN, SYSTEM/GENERATION (L6-4's marker) and SYSTEM/ROUTING (`bootstrap.ts`):
 //         (default)  DRY RUN: both records' state and what --apply would create; exit 1 if either is incompatible
 //         --apply    create what is absent (APPGEN, then the routing); exit 0 bootstrapped, 1 refused (nothing
 //                    written), 3 unknown outcome (run it again: it can never write twice)
-//         --check    exit 0 only if both already hold the desired state
+//         --check    exit 0 only if all three already hold the desired state
 //
 //   verify      --runtime-parameter <SSM ARN> --environment <env> --primary-pool <pool> --generation <N>
-//               [--pools p1,p2] (--evidence <dir> | --no-evidence) [--part app|all]
+//               [--pools p1,p2] (--evidence <dir> | --no-evidence) [--flip-record <file>] [--part app|all]
 //   verify      --part ledger --ledger-table-arn <ARN> --environment <env> --generation <N>
 //       Read-only (`deployVerify.ts`). `app` (the default) runs with the app account's credentials (the bootstrap role):
 //       the documents, the game and identity tables in full, the ledger's DescribeTable (cross-account), APPGEN, the
@@ -26,6 +26,10 @@
 //   signer-keys --relayer <key ARN> --settlement <key ARN> --admission <key ARN>
 //       Read-only: each key's metadata and its compressed public key (and the relayer's juno address), derived exactly as
 //       the server derives them -- the values the app stack's `escrow` variable needs. Public material only.
+//
+//   generation-gate --runtime-parameter <serving SSM ARN> --environment <env> --generation <N+1> --restore-id <id>
+//       LIVE-6 L6-2 (L6-4 §12.2): read-only -- exit 0 only when APPGEN's adoption of exactly (N+1, g<N+1>, restore) has
+//       settled; only then may the runtime documents move to the new generation (infra/aws/README.md "Generation switch").
 //
 // Credentials: the SDK's default chain (the operator's profile or the pipeline's role -- the task's refusal of static
 // keys is the RUNTIME's rule, not this tool's). Regions: the runtime document's and the ARNs', never the environment's.
@@ -39,6 +43,10 @@ import { compressedKeyFromSpki, type KmsClient } from "../../escrow/juno/signer"
 import { parseDynamoTableArn, parseKmsKeyArn, parseSsmParameterArn } from "../arns";
 import { loadAwsStartup, type AwsStartup } from "../runtime/awsMain";
 import type { ParameterSource } from "../runtime/configSource";
+import { AWS_RUNTIME_CONFIG_FORMAT_V2 } from "../runtime/runtimeConfig";
+import { readFlipRecordFile } from "../controlPlane/flipRecord";
+import { adoptionBindingProblem, generationMarkerProblem, readGenerationMarker, type GenerationMarker } from "../game/generationMarker";
+import { readAdoptionRecord, readAppGeneration } from "../ledger/appGeneration";
 import { applyBootstrap, bootstrapPlan, BootstrapUnknownError, inspectBootstrap, type BootstrapClients, type BootstrapTarget, type RecordState } from "./bootstrap";
 import {
   checkControlRecords,
@@ -148,16 +156,17 @@ export async function bootstrapCommand(argv: readonly string[], deps: DeployDeps
   const by = need(flags, "--by");
   const startup = await loadAndMatch(deps, arn, { environment, pool, generation });
   const { clients, tables } = clientsFor(deps, startup);
-  const target: BootstrapTarget = { gameTable: tables.game, ledgerTable: tables.ledger, primaryPool: pool, generation, by };
+  const target: BootstrapTarget = { gameTable: tables.game, gameTableName: startup.config.gameTable, ledgerTable: tables.ledger, primaryPool: pool, generation, by };
   deps.out(`bootstrap ${environment}: runtime document ${arn} v${startup.configVersion}; game ${startup.config.gameTable}; ledger ${startup.config.ledger.arn}; primary pool ${pool}; generation ${generation}`);
 
   if (!flags.has("--apply")) {
     const inspection = await inspectBootstrap(clients, target);
     deps.out(stateLine("APPGEN", inspection.appgen));
+    deps.out(stateLine("SYSTEM/GENERATION", inspection.generation));
     deps.out(stateLine("SYSTEM/ROUTING", inspection.routing));
     const plan = bootstrapPlan(inspection);
     if (flags.has("--check")) {
-      const done = inspection.appgen.kind === "matches" && inspection.routing.kind === "matches";
+      const done = inspection.appgen.kind === "matches" && inspection.generation.kind === "matches" && inspection.routing.kind === "matches";
       deps.out(done ? "BOOTSTRAPPED: both records hold the desired state" : "NOT BOOTSTRAPPED");
       return done ? EXIT_OK : EXIT_FAILED;
     }
@@ -173,13 +182,14 @@ export async function bootstrapCommand(argv: readonly string[], deps: DeployDeps
   try {
     const outcome = await applyBootstrap(clients, target, { now: deps.now });
     deps.out(stateLine("APPGEN", outcome.inspection.appgen));
+    deps.out(stateLine("SYSTEM/GENERATION", outcome.inspection.generation));
     deps.out(stateLine("SYSTEM/ROUTING", outcome.inspection.routing));
     if (outcome.kind === "refused") {
       for (const reason of outcome.reasons) deps.out(`  REFUSED: ${reason}`);
       deps.out("NOT BOOTSTRAPPED: nothing incompatible was overwritten");
       return EXIT_FAILED;
     }
-    deps.out(`BOOTSTRAPPED: APPGEN ${outcome.appgen}, SYSTEM/ROUTING ${outcome.routing}`);
+    deps.out(`BOOTSTRAPPED: APPGEN ${outcome.appgen}, SYSTEM/GENERATION ${outcome.generation}, SYSTEM/ROUTING ${outcome.routing}`);
     return EXIT_OK;
   } catch (error) {
     if (error instanceof BootstrapUnknownError) {
@@ -201,7 +211,7 @@ const siblingRuntimeParameter = (primaryArn: string, environment: string, pool: 
 };
 
 export async function verifyCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {
-  const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--primary-pool", "--generation", "--pools", "--evidence", "--part", "--ledger-table-arn", "--port"], ["--no-evidence"]);
+  const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--primary-pool", "--generation", "--pools", "--evidence", "--part", "--ledger-table-arn", "--port", "--flip-record"], ["--no-evidence"]);
   const part = flags.get("--part") ?? "app";
   if (!["app", "ledger", "all"].includes(part)) throw new UsageError("--part is app, ledger or all");
   const environment = environmentOf(need(flags, "--environment"));
@@ -233,16 +243,39 @@ export async function verifyCommand(argv: readonly string[], deps: DeployDeps): 
   const startup = await loadAndMatch(deps, arn, { environment, pool: primary, generation });
   checks.push({ name: `runtime document ${primary}`, status: "pass", detail: `v${startup.configVersion} parsed by the task's own code (loadAwsStartup)${startup.escrowConfig === null ? "; escrow null" : `; Juno configuration v${startup.escrowConfigVersion} parsed and checked for AWS storage`}` });
   const runtimeArns = new Map<string, string>([[primary, arn]]);
+  const siblingConfigs = new Map<string, AwsStartup["config"]>();
   for (const pool of pools.filter((p) => p !== primary)) {
     const sibling = siblingRuntimeParameter(arn, environment, pool);
     runtimeArns.set(pool, sibling);
     try {
       const other = await loadAndMatch(deps, sibling, { environment, pool, generation });
+      siblingConfigs.set(pool, other.config);
       checks.push({ name: `runtime document ${pool}`, status: "pass", detail: `v${other.configVersion}` });
       const same = other.config.gameTable === startup.config.gameTable && other.config.identityTable === startup.config.identityTable && other.config.ledger.arn === startup.config.ledger.arn && JSON.stringify(other.config.escrow) === JSON.stringify(startup.config.escrow);
       checks.push({ name: `runtime document ${pool}: same tables and escrow`, status: same ? "pass" : "fail", detail: same ? "as the primary's" : "names other tables or another escrow configuration than the primary's" });
     } catch (error) {
       checks.push({ name: `runtime document ${pool}`, status: "fail", detail: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  /* LIVE-6 L6-2: the runtime document is v2 and its trusted route table is exactly the deployed pools (the same table in
+     every pool's document is checked above: "same tables and escrow" compares the whole escrow; the routes below). */
+  const routes: Record<string, string> = Object.fromEntries(Object.entries(startup.config.routes).map(([pool, entry]) => [pool, entry.wsPath]));
+  checks.push({ name: "runtime document v2", status: startup.config.format === AWS_RUNTIME_CONFIG_FORMAT_V2 ? "pass" : "fail", detail: startup.config.format === AWS_RUNTIME_CONFIG_FORMAT_V2 ? AWS_RUNTIME_CONFIG_FORMAT_V2 : `${startup.config.format}: LIVE-6 production configuration is v2 (the trusted route table)` });
+  const routePools = Object.keys(routes).sort();
+  checks.push({ name: "route table = the deployed pools", status: routePools.join(",") === [...pools].sort().join(",") ? "pass" : "fail", detail: `routes [${routePools.join(", ")}], pools [${[...pools].sort().join(", ")}]` });
+  for (const [pool, other] of siblingConfigs) {
+    const same = JSON.stringify(Object.entries(other.routes).sort()) === JSON.stringify(Object.entries(startup.config.routes).sort());
+    checks.push({ name: `runtime document ${pool}: same route table`, status: same ? "pass" : "fail", detail: same ? "as the primary's" : "another route table than the primary's (every pool must route alike)" });
+  }
+  let flip: { readonly since: number; readonly from: string; readonly to: string; readonly rollback: boolean } | null = null;
+  const flipRecordFile = flags.get("--flip-record");
+  if (flipRecordFile !== undefined) {
+    const record = readFlipRecordFile(flipRecordFile);
+    if ("problem" in record) checks.push({ name: "flip record", status: "fail", detail: record.problem });
+    else {
+      flip = { since: record.since, from: record.from, to: record.to, rollback: record.rollback };
+      checks.push({ name: "flip record: primary", status: record.to === primary ? "pass" : "fail", detail: record.to === primary ? `the flip made ${record.to} primary (routing v${record.version})` : `the flip record names ${record.to}, --primary-pool is ${primary}` });
     }
   }
 
@@ -252,7 +285,7 @@ export async function verifyCommand(argv: readonly string[], deps: DeployDeps): 
   const ledgerChecks = checkTable("ledger table", await readTableEvidence(clients.ledger, tables.ledger, { backupsAndTtl: part === "all" }), { name: names.ledgerTable, ttlAttribute: null });
   checks.push(...(part === "all" ? ledgerChecks : ledgerChecks.filter((c) => !c.name.endsWith(": PITR") && !c.name.endsWith(": TTL"))));
   if (part === "app") checks.push(skipped("ledger table: PITR and TTL", "not readable across accounts: run --part ledger with the ledger account's credentials"));
-  checks.push(...(await checkControlRecords(clients, { gameTable: tables.game, ledgerTable: tables.ledger, primaryPool: primary, generation }, { appgen: true, routing: true })));
+  checks.push(...(await checkControlRecords(clients, { gameTable: tables.game, gameTableName: startup.config.gameTable, ledgerTable: tables.ledger, primaryPool: primary, generation }, { appgen: true, routing: true, generation: true })));
 
   if (startup.escrowConfig === null) checks.push(skipped("KMS signing keys", "escrow is null in the runtime document"));
   else {
@@ -265,8 +298,69 @@ export async function verifyCommand(argv: readonly string[], deps: DeployDeps): 
   }
 
   if (flags.has("--no-evidence")) checks.push(skipped("control-plane evidence", "--no-evidence: task definitions, services, target group, ALB, edge and security groups NOT checked"));
-  else checks.push(...checkEvidenceDirectory(need(flags, "--evidence"), { environment, pools, primaryPool: primary, port, runtimeParameterArns: runtimeArns }));
+  else checks.push(...checkEvidenceDirectory(need(flags, "--evidence"), { environment, pools, primaryPool: primary, port, runtimeParameterArns: runtimeArns, routes, flip, now: deps.now() }));
   return report(deps.out, checks);
+}
+
+/* ------------------------------------------------------------------ */
+/* generation-gate (LIVE-6 L6-2; L6-4 §12.2)                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The GENERATION SWITCH's gate, read-only: the serving runtime documents may move from N / g<N> to N+1 / g<N+1> ONLY once
+ * `npm run recovery -- appgen-adopt` has settled `committed` or `already-adopted` for exactly that generation, table and
+ * restore. Checked with L6-4's own strict readers and the tasks' own startup rules -- never a second model:
+ *   - APPGEN (strict `readAppGeneration`) is at N+1, ADOPTED (not the bootstrap form), from N, for exactly this table and
+ *     restore, and its history item `APPGEN#HISTORY/GEN#<N+1>` carries the SAME claim (the adoption's one transaction
+ *     landed: a half-settled or another adoption is refused);
+ *   - the table's SYSTEM/GENERATION passes `generationMarkerProblem` and `adoptionBindingProblem` exactly as a task will
+ *     before it takes its pool.
+ * Exit 0 ("GATE OPEN") prints the Terraform `generation_adoption` value the app stack's plan requires; anything else is 1
+ * and nothing about the switch may proceed. The current runtime document names the environment, region and ledger.
+ */
+export async function generationGateCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {
+  const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--generation", "--restore-id", "--game-table"], []);
+  const environment = environmentOf(need(flags, "--environment"));
+  const next = generationOf(need(flags, "--generation"));
+  const restoreId = need(flags, "--restore-id");
+  if (!/^[a-z0-9][a-z0-9-]{2,63}$/.test(restoreId)) throw new UsageError("--restore-id is the restore's id (^[a-z0-9][a-z0-9-]{2,63}$)");
+  const table = flags.get("--game-table") ?? expectedNames(environment, next).gameTable;
+  if (table !== expectedNames(environment, next).gameTable) throw new UsageError(`--game-table ${table} is not the convention's ${expectedNames(environment, next).gameTable}`);
+  const startup = await loadAwsStartup({ argv: [], env: { GS_AWS_CONFIG_PARAMETER: need(flags, "--runtime-parameter") }, serverMode: "production", parameters: deps.parameters });
+  if (startup.config.environment !== environment) throw new UsageError(`the runtime document is for ${startup.config.environment}, not ${environment}`);
+  const from = startup.config.generation;
+  if (next <= from) throw new UsageError(`--generation ${next} is not ahead of the serving generation ${from}`);
+  const { clients, tables } = clientsFor(deps, startup);
+  const physical = deps.tables?.({ gameTable: table, identityTable: startup.config.identityTable, ledgerArn: startup.config.ledger.arn }).game ?? table;
+  const checks: Check[] = [];
+  const check = (name: string, ok: boolean, good: string, bad: string) => checks.push({ name, status: ok ? "pass" : "fail", detail: ok ? good : bad });
+  const appgen = await readAppGeneration(clients.ledger, tables.ledger);
+  const adoption = appgen?.adoption ?? null;
+  check("APPGEN at the new generation", appgen !== null && appgen.current_generation === next, `current_generation ${next}`, `APPGEN is ${appgen === null ? "absent" : `at ${appgen.current_generation}`}: run \`npm run recovery -- appgen-adopt\` first (the switch never races ahead of the adoption)`);
+  check(
+    "APPGEN adopted exactly this restore",
+    adoption !== null && adoption.game_table === table && adoption.restore_id === restoreId && adoption.previous_generation === from,
+    `from ${from}, ${table}, restore ${restoreId}`,
+    adoption === null ? "APPGEN is the bootstrap form (never adopted)" : `adopted ${adoption.game_table} (restore ${adoption.restore_id}) from ${adoption.previous_generation}`,
+  );
+  const history = await readAdoptionRecord(clients.ledger, tables.ledger, next);
+  check("the adoption's history item (one transaction settled)", history !== null && adoption !== null && history.claim === adoption.claim && history.game_table === table && history.restore_id === restoreId, `APPGEN#HISTORY/GEN#${next}, claim ${history?.claim ?? "?"}`, history === null ? `no APPGEN#HISTORY/GEN#${next}: the adoption has not settled` : `the history item names ${history.game_table} / ${history.restore_id} / claim ${history.claim}, APPGEN ${adoption?.claim ?? "?"}`);
+  let marker: GenerationMarker | null = null;
+  try {
+    marker = await readGenerationMarker(clients.app, physical);
+  } catch (error) {
+    check("SYSTEM/GENERATION of the new table", false, "", error instanceof Error ? error.message : String(error));
+  }
+  if (checks.every((c) => c.name !== "SYSTEM/GENERATION of the new table")) {
+    const problem = generationMarkerProblem(marker, { generation: next, gameTable: table }) ?? adoptionBindingProblem(marker as GenerationMarker, adoption === null ? null : { game_table: adoption.game_table, restore_id: adoption.restore_id });
+    check("SYSTEM/GENERATION of the new table (the tasks' startup rule)", problem === null, `generation ${next}, ${table}, restore ${restoreId}`, problem ?? "");
+  }
+  const exit = report(deps.out, checks);
+  if (exit === EXIT_OK) {
+    deps.out(`GATE OPEN: generation ${from} -> ${next} is adopted. In the app stack set generation = ${next}, keep ${from} in game_generations, and`);
+    deps.out(`  generation_adoption = { generation = ${next}, game_table = "${table}", restore_id = "${restoreId}" }`);
+  } else deps.out("GATE CLOSED: the runtime documents must NOT move to the new generation yet");
+  return exit;
 }
 
 /* ------------------------------------------------------------------ */
@@ -312,9 +406,10 @@ export async function signerKeysCommand(argv: readonly string[], deps: DeployDep
 export const USAGE = [
   "usage:",
   "  awsDeploy bootstrap --runtime-parameter <SSM ARN> --environment <env> --primary-pool <pool> --generation <N> --by <who> [--apply | --check]",
-  "  awsDeploy verify --runtime-parameter <SSM ARN> --environment <env> --primary-pool <pool> --generation <N> [--pools p1,p2] [--port 8917] (--evidence <dir> | --no-evidence) [--part app|all]",
+  "  awsDeploy verify --runtime-parameter <SSM ARN> --environment <env> --primary-pool <pool> --generation <N> [--pools p1,p2] [--port 8917] (--evidence <dir> | --no-evidence) [--flip-record <file>] [--part app|all]",
   "  awsDeploy verify --part ledger --ledger-table-arn <ARN> --environment <env> --generation <N>",
   "  awsDeploy signer-keys --relayer <key ARN> --settlement <key ARN> --admission <key ARN>",
+  "  awsDeploy generation-gate --runtime-parameter <serving SSM ARN> --environment <env> --generation <N+1> --restore-id <id>",
 ].join("\n");
 
 export async function runDeployCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {
@@ -323,6 +418,7 @@ export async function runDeployCommand(argv: readonly string[], deps: DeployDeps
     if (command === "bootstrap") return await bootstrapCommand(rest, deps);
     if (command === "verify") return await verifyCommand(rest, deps);
     if (command === "signer-keys") return await signerKeysCommand(rest, deps);
+    if (command === "generation-gate") return await generationGateCommand(rest, deps);
     deps.out(USAGE);
     return EXIT_USAGE;
   } catch (error) {

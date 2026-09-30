@@ -92,6 +92,9 @@ const OPERATOR_IMPORTS: ReadonlySet<string> = new Set([
   "aws/game/dynamoRecordStore",
   "aws/game/dynamoHoldStore",
   "aws/game/dynamoFinancialStore",
+  /* LIVE-6 L6-2: L6-4's strict readers (the flip preflight's startup rule; the orphans report's marker). */
+  "aws/game/generationMarker",
+  "aws/ledger/appGeneration",
   "aws/identity/dynamoIdentityStore",
   "aws/identity/identityItems",
   "aws/ledger/dynamoSigningLedger",
@@ -112,6 +115,10 @@ const OPERATOR_FORBIDDEN: readonly string[] = Object.freeze([
   "createDynamoTicketStore",
   "mirrorRelayerRole",
   "claimGame",
+  /* LIVE-6 L6-2: L6-4's writers stay the recovery CLI's, never the operator's. */
+  "adoptGeneration",
+  "prepareRestoredTable",
+  "applyIdentityRestore",
 ]);
 
 describe("L5-1 AWS client convention", () => {
@@ -333,7 +340,7 @@ describe("L5-1 AWS client convention", () => {
              the ownership layer, KMS or the runtime composition itself. */
           const operator = relative.startsWith("aws/operator/");
           const allowed = (dir: string, also: boolean) => relative.startsWith(`${dir}/`) || also || runtime || conformance.test(relative);
-          if (under(target, "aws/game") && !allowed("aws/game", composer || operator || (deploy && (target === "aws/game/routing" || target === "aws/game/gameTable")))) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/game") && !allowed("aws/game", composer || operator || (deploy && (target === "aws/game/routing" || target === "aws/game/gameTable" || target === "aws/game/generationMarker")))) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/identity") && !allowed("aws/identity", composer || operator)) offenders.push(`${relative}: imports the identity adapters (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/ownership") && !allowed("aws/ownership", false)) offenders.push(`${relative}: imports the ownership layer (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/ledger") && !allowed("aws/ledger", composer || deploy || operator)) offenders.push(`${relative}: imports the signing ledger (${name}) outside the L5-7 runtime`);

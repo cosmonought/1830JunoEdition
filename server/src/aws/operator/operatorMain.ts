@@ -20,6 +20,16 @@
 //     aws take <game_id>                an operator run takes a game whose owner epoch is SUPERSEDED (never a current owner)
 //     aws release <game_id> --run <op:r-...>
 //                                       an operator run's hold ends
+//   LIVE-6 L6-2 -- THE FLIP, THE RECOVERY, RETIREMENT AND THE RESTORE'S ORPHANS (flip.ts, recovery.ts, retire.ts, orphans.ts):
+//     aws flip <A> <B> --expect-version <n> --note "<why>" --evidence <dir> --flip-record <file> [--apply]
+//                                       the preflight (a dry run without --apply), then the routing CAS and the observation
+//                                       of both pools' role changes; every phase in the flip record (FLIP-EVIDENCE/v1)
+//     aws flip-observe --flip-record <file>
+//                                       resume the observation of a flip whose CAS landed
+//     aws recover <A> --note "<why>" [--apply] [--limit <n>] [--money-wait-seconds <s>] [--flip-record <file>]
+//                                       take + release every game still owned by A's SUPERSEDED epoch (never a current one)
+//     aws retire-check <pool> [--evidence <dir>]       the retirement prerequisites (read-only)
+//     aws orphans                       the restore's orphans: ledger SETTLE# / ATTI# the adopted table cannot account for
 //   THE DEPLOYMENT: --aws-config <SSM parameter ARN> or GS_AWS_CONFIG_PARAMETER (L5-7's runtime document); for DynamoDB
 //   Local, GS_DYNAMODB_LOCAL_ENDPOINT with --local-document <file> [--relayer <account>]. --json prints the structure.
 //
@@ -31,8 +41,17 @@
 // mode's `ops/audit.jsonl` has no AWS counterpart). Neither ever carries a credential or a configuration's content: ARNs,
 // versions, table names, pools, tasks and the operator's note (which is refused if it looks like a credential).
 
+import { promises as fsp } from "fs";
+import * as fs from "fs";
+
 import { redactIdentity } from "../../persistence/opsRecorder";
-import type { ParameterSource } from "../runtime/configSource";
+import { ssmParameterSource, type ParameterSource } from "../runtime/configSource";
+import { parseAwsRuntimeConfigText, type AwsRuntimeConfig } from "../runtime/runtimeConfig";
+import { parseFlipRecord, writeFlipRecord, type FlipRecord } from "../controlPlane/flipRecord";
+import { closeFlipWindow, DEFAULT_OBSERVE_MS, observeFlip, runFlip, type FlipDeps } from "./flip";
+import { orphansReport } from "./orphans";
+import { DEFAULT_MONEY_WAIT_MS, DEFAULT_RECOVERY_LIMIT, recoverFromPool, type RecoveryReport } from "./recovery";
+import { retirementCheck, type RetirementReport } from "./retire";
 import { inspectDeployment, inspectGame, listGames, type DeploymentInspection, type GameInspection, type GameListing, type Read } from "./inspect";
 import { claimGameAsOperator, releaseGameAsOperator, setPrimary, takeGameAsOperator, type MutationContext, type MutationResult, type OperatorRun } from "./mutations";
 import { LOCAL_DOCUMENT_FLAG, OperatorRefusal, RELAYER_FLAG, resolveOperatorTarget, type OperatorTarget } from "./operatorTarget";
@@ -48,13 +67,21 @@ export const AWS_USAGE = [
   "  take <game_id> --note \"<why>\" [--apply]       an operator run takes a game whose owner epoch is superseded",
   "  release <game_id> --run <op:r-...> --note \"<why>\" [--apply]",
   "                                      an operator run's hold ends",
-  `  DynamoDB Local: GS_DYNAMODB_LOCAL_ENDPOINT=<loopback> with ${LOCAL_DOCUMENT_FLAG} <runtime document file> [${RELAYER_FLAG} <account>]`,
+  "  flip <A> <B> --expect-version <n> --note \"<why>\" --evidence <dir> --flip-record <file> [--apply] [--observe-seconds <s>]",
+  "                                      L6-2: preflight, the routing CAS, the role-change observation (a dry run without --apply);",
+  "                                      --rollback: back to the pool the roles never left, when B's promotion failed",
+  "  flip-observe --flip-record <file> [--observe-seconds <s>]   resume a flip: settle an uncertain CAS from the routing, observe",
+  "  recover <A> --note \"<why>\" [--apply] [--limit <n>] [--money-wait-seconds <s>] [--flip-record <file>]",
+  "                                      take + release games still owned by A's superseded epoch (never a current owner)",
+  "  retire-check <pool> [--evidence <dir>]                     the retirement prerequisites (read-only)",
+  "  orphans                             ledger evidence the adopted game table cannot account for (read-only)",
+  `  DynamoDB Local: GS_DYNAMODB_LOCAL_ENDPOINT=<loopback> with ${LOCAL_DOCUMENT_FLAG} <runtime document file> [${RELAYER_FLAG} <account>] [--pool-document <pool>=<file> ...]`,
 ].join("\n");
 
 export const EXIT = Object.freeze({ ok: 0, findings: 1, usage: 2, unknown: 3 });
 
-const VALUE_FLAGS = new Set(["--aws-config", LOCAL_DOCUMENT_FLAG, RELAYER_FLAG, "--note", "--expect-version", "--run", "--month", "--data", "--escrow-config"]);
-const BOOLEAN_FLAGS = new Set(["--json", "--apply", "--money"]);
+const VALUE_FLAGS = new Set(["--aws-config", LOCAL_DOCUMENT_FLAG, RELAYER_FLAG, "--note", "--expect-version", "--run", "--month", "--data", "--escrow-config", "--evidence", "--flip-record", "--pool-document", "--limit", "--money-wait-seconds", "--observe-seconds"]);
+const BOOLEAN_FLAGS = new Set(["--json", "--apply", "--money", "--rollback"]);
 
 export interface OperatorIo {
   out(line: string): void;
@@ -68,6 +95,10 @@ export interface OperatorSeams {
   readonly now?: () => number;
   readonly newRun?: () => OperatorRun;
   readonly timing?: MutationContext["timing"];
+  /** L6-2: the waits of the flip observation and the recovery's money wait (tests: no real clock). */
+  readonly sleep?: (ms: number) => Promise<void>;
+  /** L6-2: the flip observation's and money wait's poll interval (ms). */
+  readonly pollMs?: number;
 }
 
 export interface ParsedOperatorArgs {
@@ -209,6 +240,78 @@ const SETTLED_OWNERS: readonly string[] = Object.freeze(["released", "current", 
 
 const exitOf = (result: MutationResult): number => (result.kind === "planned" || result.kind === "applied" ? EXIT.ok : result.kind === "unknown" ? EXIT.unknown : EXIT.findings);
 
+const r2exit = (clean: boolean): number => (clean ? EXIT.ok : EXIT.findings);
+
+/** L6-2: each pool's runtime document, read exactly as its task reads it. AWS: the sibling SSM parameter of the configured
+ *  one (`/gs/<env>/runtime/<pool>`, L5-8's naming); DynamoDB Local: `--pool-document <pool>=<file>` (the configured pool's
+ *  own document is the target's). */
+function documentsFor(target: OperatorTarget, args: ParsedOperatorArgs, seams: OperatorSeams): (pool: string) => Promise<AwsRuntimeConfig> {
+  const files = new Map<string, string>();
+  for (const entry of args.values.get("--pool-document") ?? []) {
+    const eq = entry.indexOf("=");
+    if (eq > 0) files.set(entry.slice(0, eq), entry.slice(eq + 1));
+  }
+  return async (pool) => {
+    if (target.kind === "dynamodb-local") {
+      const file = files.get(pool);
+      if (file === undefined) {
+        if (pool === target.config.pool) return target.config;
+        throw new Error(`no --pool-document ${pool}=<file> given`);
+      }
+      return parseAwsRuntimeConfigText(seams.readFile !== undefined ? await seams.readFile(file) : (await fsp.readFile(file)).toString("utf8"));
+    }
+    const arn = target.source.arn;
+    if (arn === null) throw new Error("the configured runtime document has no ARN");
+    const sibling = arn.replace(/\/runtime\/[^/]+$/, `/runtime/${pool}`);
+    if (!sibling.endsWith(`/runtime/${pool}`)) throw new Error(`the configured runtime document ${arn} does not follow /gs/<env>/runtime/<pool>`);
+    const parameters = seams.parameters ?? ssmParameterSource();
+    return parseAwsRuntimeConfigText((await parameters.read(sibling)).value);
+  };
+}
+
+function printChecks(io: OperatorIo, checks: ReadonlyArray<{ readonly name: string; readonly status: string; readonly detail: string }>): void {
+  for (const check of checks) io.out(`  ${check.status === "pass" ? "PASS" : check.status === "fail" ? "FAIL" : "SKIP"}  ${check.name} -- ${check.detail}`);
+}
+
+function printFlip(io: OperatorIo, record: FlipRecord): void {
+  io.out(`flip ${record.from} -> ${record.to} (routing version ${record.expected_version}) -- ${record.verdict.toUpperCase()}`);
+  io.out(" preflight:");
+  printChecks(io, record.preflight.checks);
+  if (record.cas !== null) io.out(` routing CAS: ${record.cas.outcome}${record.cas.run !== null ? ` (run ${record.cas.run})` : ""} -- ${record.cas.detail}`);
+  const last = record.observations[record.observations.length - 1];
+  if (last !== undefined) {
+    io.out(" observation:");
+    printChecks(io, last.checks);
+  }
+  if (record.window !== null) io.out(` planned-flip window: opened ${record.window.opened_at}, expires ${record.window.expires_at}${record.window.closed_at !== null ? `, closed ${record.window.closed_at}` : " (open until the recovery settles)"}`);
+  const next: Record<string, string> = {
+    planned: "DRY RUN: nothing was written. Re-run with --apply (and a fresh --evidence).",
+    refused: "REFUSED: nothing of the flip was written.",
+    flipped: "The routing moved; the role changes were not observed yet: run flip-observe.",
+    "roles-settled": `NEXT: terraform apply with pools.${record.to}.primary = true (the /gs* rule), capture-evidence, awsDeploy verify --flip-record, then gamesDoctor aws recover ${record.from} --flip-record.`,
+    timeout: "STOPPED: the role changes did not complete within the bound -- nothing is assumed; inspect (status, ECS) and run flip-observe.",
+    unknown: `UNKNOWN: the routing CAS's outcome is not known -- run flip-observe with this record (it settles it from SYSTEM/ROUTING); if it says the CAS never landed, re-run the flip with --expect-version ${record.expected_version} and a NEW --flip-record (it can never move the routing twice).`,
+  };
+  io.out(next[record.verdict]);
+}
+
+function printRecovery(io: OperatorIo, report: RecoveryReport): void {
+  io.out(`recover ${report.from} (the primary is ${report.primary ?? "?"})${report.apply ? "" : " -- DRY RUN: nothing was written"}`);
+  io.out(`  games: ${Object.entries(report.counts).map(([k, n]) => `${n} ${k}`).join(", ") || "none"}`);
+  for (const id of report.planned) io.out(`  WOULD take + release ${id}`);
+  for (const a of report.acted) io.out(`  ${a.action === "taken-and-released" ? `TAKEN (${a.take_run}) + RELEASED (${a.release_run})` : `RELEASED this recovery's hold ${a.hold_run} (${a.release_run})`} ${a.game_id}${a.money ? " [money]" : ""}`);
+  for (const id of report.money_claimed) io.out(`  CLAIMED by the primary's money sweep: ${id}`);
+  for (const u of report.unresolved) io.out(`  UNRESOLVED ${u.game_id} (${u.class}): ${u.detail}`);
+  for (const p of report.problems) io.out(`  PROBLEM: ${p}`);
+  if (report.remaining > 0) io.out(`  ${report.remaining} more beyond --limit: run the pass again`);
+  io.out(report.settled ? "RECOVERY SETTLED: nothing of the old epoch remains" : report.apply ? "NOT SETTLED (see above; the pass is resumable)" : "DRY RUN");
+}
+
+function printRetirement(io: OperatorIo, report: RetirementReport): void {
+  io.out(`retire-check ${report.pool} (READ-ONLY) -- ${report.verdict.toUpperCase()}`);
+  printChecks(io, report.checks);
+}
+
 /** `gamesDoctor aws <argv...>`. Returns the exit code. */
 export async function runAwsOperator(argv: readonly string[], env: Readonly<Record<string, string | undefined>>, io: OperatorIo, seams: OperatorSeams = {}): Promise<number> {
   const args = parseOperatorArgs(argv);
@@ -218,14 +321,15 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     io.err(`gamesDoctor aws: ${[...(unknown.length > 0 ? [`unknown option ${unknown.join(", ")}`] : []), ...args.problems].join("; ")}\n${AWS_USAGE}`);
     return EXIT.usage;
   }
-  const known = ["status", "game", "games", "set-primary", "claim", "take", "release"];
-  if (command === undefined || !known.includes(command) || (command !== "status" && command !== "games" && subject === undefined)) {
+  const known = ["status", "game", "games", "set-primary", "claim", "take", "release", "flip", "flip-observe", "recover", "retire-check", "orphans"];
+  const noSubject = ["status", "games", "flip-observe", "orphans"];
+  if (command === undefined || !known.includes(command) || (!noSubject.includes(command) && subject === undefined) || (command === "flip" && positional[2] === undefined)) {
     io.err(AWS_USAGE);
     return EXIT.usage;
   }
   const json = args.flags.has("--json");
   const apply = args.flags.has("--apply");
-  if (apply && (command === "status" || command === "game" || command === "games")) {
+  if (apply && (command === "status" || command === "game" || command === "games" || command === "retire-check" || command === "orphans" || command === "flip-observe")) {
     io.err(`gamesDoctor aws ${command} is read-only: --apply means nothing here`);
     return EXIT.usage;
   }
@@ -255,6 +359,24 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
       print(listing, (l) => printListing(io, l));
       return listing.problems.length === 0 && listing.games.every((game) => SETTLED_OWNERS.includes(game.owner)) ? EXIT.ok : EXIT.findings;
     }
+    if (command === "retire-check") {
+      const report = await retirementCheck(target, subject as string, one(args, "--evidence") ?? null);
+      print(report, (r) => printRetirement(io, r));
+      return report.verdict === "blocked" ? EXIT.findings : EXIT.ok;
+    }
+    if (command === "orphans") {
+      const report = await orphansReport(target);
+      print(report, (r) => {
+        io.out(`restore orphans (READ-ONLY) -- SYSTEM/GENERATION ${r.generation.state}${r.generation.origin !== null ? `, origin ${r.generation.origin}${r.generation.restore_id !== null ? ` (restore ${r.generation.restore_id}, point ${r.generation.restore_point})` : ""}` : ""}`);
+        io.out(`  games read ${r.games_read}; instances bound ${r.bound_instances}; intents held ${r.intents_held}`);
+        for (const instance of r.settle_orphans) io.out(`  ORPHAN SETTLE#${instance}  (reservations for an instance no game of this table binds)`);
+        for (const intent of r.attempt_orphans) io.out(`  ORPHAN ATTI#${intent}  (relayer attempts for an intent no game of this table holds)`);
+        io.out(`  chain games: NOT COVERED -- ${r.chain_games.detail}`);
+        for (const problem of r.problems) io.out(`  NOTE: ${problem}`);
+        io.out(r.settle_orphans.length + r.attempt_orphans.length === 0 ? "ORPHANS: none in the ledger" : `ORPHANS: ${r.settle_orphans.length + r.attempt_orphans.length} (review each; nothing was changed)`);
+      });
+      return r2exit(report.settle_orphans.length + report.attempt_orphans.length === 0 && report.problems.filter((p) => !p.startsWith("this game table was never restored")).length === 0);
+    }
     const context: MutationContext = {
       target,
       now: seams.now ?? (() => Date.now()),
@@ -270,6 +392,94 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
       ...(seams.timing !== undefined ? { timing: seams.timing } : {}),
     };
     const note = one(args, "--note") ?? "";
+    const sleep = seams.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    const seconds = (name: string, fallback: number): number => {
+      const text = one(args, name);
+      return text !== undefined && /^[0-9]{1,6}$/.test(text) ? Number(text) * 1000 : fallback;
+    };
+    if (command === "flip" || command === "flip-observe") {
+      const recordFile = one(args, "--flip-record");
+      if (recordFile === undefined && (apply || command === "flip-observe")) {
+        io.err("gamesDoctor aws flip: --flip-record <file> is required (the flip's evidence, written before the routing moves; flip-observe resumes from it)");
+        return EXIT.usage;
+      }
+      /* Review H1: a new flip never writes over a record whose window opened (its CAS may have landed): that one is resumed
+         with flip-observe; a new flip takes a new file. An existing file this tool cannot read is not overwritten either. */
+      if (command === "flip" && apply && recordFile !== undefined && fs.existsSync(recordFile)) {
+        const existing = parseFlipRecord(fs.readFileSync(recordFile, "utf8"));
+        if ("problem" in existing || existing.window !== null) {
+          io.err(`gamesDoctor aws flip: ${recordFile} ${"problem" in existing ? `exists and is not a flip record (${existing.problem})` : `is the record of a flip whose window opened (verdict ${existing.verdict}): resume it with flip-observe, or give a NEW --flip-record`}; nothing was written`);
+          return EXIT.usage;
+        }
+      }
+      const deps: FlipDeps = {
+        context,
+        documents: documentsFor(target, args, seams),
+        sleep,
+        progress: (line) => io.err(line),
+        ...(recordFile !== undefined ? { persist: (record: FlipRecord) => writeFlipRecord(recordFile, record) } : {}),
+      };
+      let record: FlipRecord;
+      if (command === "flip") {
+        const expected = one(args, "--expect-version");
+        record = await runFlip(deps, {
+          from: subject as string,
+          to: positional[2] as string,
+          expectVersion: expected !== undefined && /^[1-9][0-9]{0,15}$/.test(expected) ? Number(expected) : Number.NaN,
+          note,
+          apply,
+          evidence: one(args, "--evidence") ?? null,
+          observeMs: seconds("--observe-seconds", DEFAULT_OBSERVE_MS),
+          rollback: args.flags.has("--rollback"),
+          ...(seams.pollMs !== undefined ? { pollMs: seams.pollMs } : {}),
+        });
+      } else {
+        const parsed = parseFlipRecord(fs.readFileSync(recordFile as string, "utf8"));
+        if ("problem" in parsed) {
+          io.err(`gamesDoctor aws flip-observe: ${parsed.problem}`);
+          return EXIT.usage;
+        }
+        record = await observeFlip(deps, parsed, { observeMs: seconds("--observe-seconds", DEFAULT_OBSERVE_MS), ...(seams.pollMs !== undefined ? { pollMs: seams.pollMs } : {}) });
+      }
+      print(record, (r) => printFlip(io, r));
+      return record.verdict === "planned" || record.verdict === "roles-settled" ? EXIT.ok : record.verdict === "unknown" || record.verdict === "timeout" || record.verdict === "flipped" ? EXIT.unknown : EXIT.findings;
+    }
+    if (command === "recover") {
+      /* Review L7: the flip record is read and validated BEFORE the pass (never a failure after its mutations ran). */
+      const recordFile = one(args, "--flip-record");
+      let flipRecord: FlipRecord | null = null;
+      if (recordFile !== undefined) {
+        const parsed = fs.existsSync(recordFile) ? parseFlipRecord(fs.readFileSync(recordFile, "utf8")) : { problem: `${recordFile} does not exist` };
+        if ("problem" in parsed || parsed.from !== subject) {
+          io.err(`gamesDoctor aws recover: --flip-record ${recordFile}: ${"problem" in parsed ? parsed.problem : `it is the record of a flip from ${parsed.from}, not ${subject}`}; nothing was done`);
+          return EXIT.usage;
+        }
+        flipRecord = parsed;
+      }
+      const report = await recoverFromPool(
+        { context, sleep, progress: (line) => io.err(line) },
+        {
+          from: subject as string,
+          note,
+          apply,
+          limit: (() => {
+            const text = one(args, "--limit");
+            return text !== undefined && /^[1-9][0-9]{0,5}$/.test(text) ? Number(text) : DEFAULT_RECOVERY_LIMIT;
+          })(),
+          moneyWaitMs: seconds("--money-wait-seconds", DEFAULT_MONEY_WAIT_MS),
+          ...(seams.pollMs !== undefined ? { pollMs: seams.pollMs } : {}),
+        },
+      );
+      print(report, (r) => printRecovery(io, r));
+      if (report.settled && recordFile !== undefined && flipRecord !== null && flipRecord.verdict === "roles-settled") {
+        try {
+          writeFlipRecord(recordFile, closeFlipWindow(context, flipRecord, `the recovery of ${report.from} settled`));
+        } catch (error) {
+          io.err(`gamesDoctor aws recover: the recovery SETTLED, but the flip record could not be written back (${error instanceof Error ? error.message.slice(0, 200) : String(error)}): close the window by hand`);
+        }
+      }
+      return report.problems.length > 0 ? EXIT.findings : report.unresolved.some((u) => u.class === "mutation") ? EXIT.unknown : report.unresolved.length > 0 || report.remaining > 0 ? EXIT.findings : EXIT.ok;
+    }
     let result: MutationResult;
     if (command === "set-primary") {
       const expected = one(args, "--expect-version");
@@ -283,7 +493,7 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     /* Review L3: a read that failed where no per-item answer is given (a listing's index, say) -- reported as such, never
        as a usage error. A mutation catches its own failures; anything reaching here from one is not known to be harmless. */
     const detail = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 300) : String(error).slice(0, 300);
-    const mutation = command !== "status" && command !== "game" && command !== "games";
+    const mutation = !["status", "game", "games", "retire-check", "orphans"].includes(command);
     io.err(`gamesDoctor aws ${command}: ${mutation ? "FAILED (see the run's evidence item, if one was written, before trying again)" : "a read failed (nothing was changed)"} -- ${detail}`);
     return mutation ? EXIT.unknown : EXIT.findings;
   } finally {

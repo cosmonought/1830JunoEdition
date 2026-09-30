@@ -25,14 +25,17 @@ data "aws_caller_identity" "current" {}
 data "aws_region" "current" {}
 
 locals {
-  partition       = data.aws_partition.current.partition
-  ledger_account  = data.aws_caller_identity.current.account_id
-  region          = data.aws_region.current.region
-  table_name      = "gs-${var.environment}-ledger"
-  app_root        = "arn:${local.partition}:iam::${var.app_account_id}:root"
-  ledger_root     = "arn:${local.partition}:iam::${local.ledger_account}:root"
-  task_role_arn   = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-app-task"
-  bootstrap_arn   = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-bootstrap"
+  partition      = data.aws_partition.current.partition
+  ledger_account = data.aws_caller_identity.current.account_id
+  region         = data.aws_region.current.region
+  table_name     = "gs-${var.environment}-ledger"
+  app_root       = "arn:${local.partition}:iam::${var.app_account_id}:root"
+  ledger_root    = "arn:${local.partition}:iam::${local.ledger_account}:root"
+  task_role_arn  = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-app-task"
+  bootstrap_arn  = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-bootstrap"
+  # LIVE-6 L6-2: the operator (`gamesDoctor aws`, read only here) and the recovery (`npm run recovery`, L6-4) roles.
+  operator_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-operator"
+  recovery_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-recovery"
   signing_purpose = var.signing_keys_enabled ? toset(["relayer", "settlement", "admission"]) : toset([])
   tags            = merge(var.tags, { "gs:environment" = var.environment, "gs:component" = "ledger", "gs:slice" = "live5-l5-8" })
 }
@@ -111,11 +114,12 @@ data "aws_iam_policy_document" "ledger_resource" {
       variable = "aws:PrincipalArn"
       values   = [local.task_role_arn]
     }
-    # Defence in depth (the fences are the safety): the task never writes APPGEN; the bootstrap and L6-4 do.
+    # Defence in depth (the fences are the safety): the task never writes APPGEN or APPGEN#HISTORY (L6-2 review M4: a
+    # pre-created GEN#<N+1> would block that adoption for good); the bootstrap and the recovery role do.
     condition {
       test     = "ForAllValues:StringNotEquals"
       variable = "dynamodb:LeadingKeys"
-      values   = ["APPGEN"]
+      values   = ["APPGEN", "APPGEN#HISTORY"]
     }
   }
 
@@ -137,6 +141,106 @@ data "aws_iam_policy_document" "ledger_resource" {
       test     = "ForAllValues:StringEquals"
       variable = "dynamodb:LeadingKeys"
       values   = ["APPGEN"]
+    }
+  }
+
+  # LIVE-6 L6-2: the generation gate reads APPGEN's adoption history (read only).
+  statement {
+    sid       = "BootstrapAppgenHistoryRead"
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem"]
+    resources = [aws_dynamodb_table.ledger.arn]
+    principals {
+      type        = "AWS"
+      identifiers = [local.app_root]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:PrincipalArn"
+      values   = [local.bootstrap_arn]
+    }
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["APPGEN#HISTORY"]
+    }
+  }
+
+  # LIVE-6 L6-2 (L6-3 §11 item 4): the operator reads APPGEN and the relayer fences, and scans (read-only) for the
+  # restore's orphans report. No write.
+  statement {
+    sid       = "OperatorLedgerReadOnly"
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem", "dynamodb:Scan"]
+    resources = [aws_dynamodb_table.ledger.arn]
+    principals {
+      type        = "AWS"
+      identifiers = [local.app_root]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:PrincipalArn"
+      values   = [local.operator_arn]
+    }
+  }
+
+  # LIVE-6 L6-2 (L6-4 §12.1 item 3): the recovery role -- reads and scans (the SEC# journal replay), adopts APPGEN (its one
+  # update) and appends the adoption's history item. Never a delete; never another item's update.
+  statement {
+    sid       = "RecoveryLedgerRead"
+    effect    = "Allow"
+    actions   = ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"]
+    resources = [aws_dynamodb_table.ledger.arn]
+    principals {
+      type        = "AWS"
+      identifiers = [local.app_root]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:PrincipalArn"
+      values   = [local.recovery_arn]
+    }
+  }
+
+  statement {
+    sid       = "RecoveryAppgenAdoption"
+    effect    = "Allow"
+    actions   = ["dynamodb:UpdateItem"]
+    resources = [aws_dynamodb_table.ledger.arn]
+    principals {
+      type        = "AWS"
+      identifiers = [local.app_root]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:PrincipalArn"
+      values   = [local.recovery_arn]
+    }
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["APPGEN"]
+    }
+  }
+
+  statement {
+    sid       = "RecoveryAppgenHistoryAppend"
+    effect    = "Allow"
+    actions   = ["dynamodb:PutItem"]
+    resources = [aws_dynamodb_table.ledger.arn]
+    principals {
+      type        = "AWS"
+      identifiers = [local.app_root]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:PrincipalArn"
+      values   = [local.recovery_arn]
+    }
+    condition {
+      test     = "ForAllValues:StringEquals"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["APPGEN#HISTORY"]
     }
   }
 

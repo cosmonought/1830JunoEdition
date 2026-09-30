@@ -33,14 +33,12 @@ import { runDeployCommand, EXIT_USAGE, type DeployDeps } from "./commands";
 import {
   CACHING_DISABLED_POLICY_ID,
   checkEdgeEvidence,
-  checkListenerRulesEvidence,
   checkLoadBalancerEvidence,
   checkRuntimeDocument,
   checkSecurityGroupsEvidence,
   checkServicesEvidence,
   checkSigningKeys,
   checkTable,
-  checkTargetGroupEvidence,
   checkEvidenceDirectory,
   checkTaskDefinitionEvidence,
   cloudFrontPatternMatches,
@@ -49,6 +47,7 @@ import {
   type KeyDescription,
   type TableEvidence,
 } from "./deployVerify";
+import { checkPoolListenerRules, checkPoolServices, checkPoolTargetGroups, POOL_EVIDENCE_FILES } from "../controlPlane/evidence";
 
 const REPO = path.resolve(__dirname, "../../../../../.."); // dist/server/src/aws/deploy -> the repository
 const INFRA = path.join(REPO, "infra/aws");
@@ -221,7 +220,9 @@ const TASK_DEFINITION = {
   },
 };
 const TD_EXPECT = { environment: "staging", runtimeParameterArn: RUNTIME_ARN, port: 8917 };
-const TG_ARN = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/gs-staging-primary/0123456789abcdef";
+/* LIVE-6 L6-2: one target group per pool (L5-8's single gs-<env>-primary group was never deployed). */
+const TG_ARN = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/gs-staging-p1/0123456789abcdef";
+const TG_P2 = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/gs-staging-p2/fedcba9876543210";
 
 const SERVICES = {
   services: [
@@ -245,16 +246,28 @@ const SERVICES = {
       availabilityZoneRebalancing: "DISABLED",
       enableExecuteCommand: false,
       networkConfiguration: { awsvpcConfiguration: { assignPublicIp: "DISABLED" } },
-      loadBalancers: [],
+      loadBalancers: [{ targetGroupArn: TG_P2, containerName: "game-server", containerPort: 8917 }],
     },
   ],
 };
 const SVC_EXPECT = { environment: "staging", pools: ["p1", "p2"], primaryPool: "p1" };
+const ROUTES = { p1: "/gs/p/p1", p2: "/gs/p/p2" };
+const TG_MAP = new Map([
+  ["p1", TG_ARN],
+  ["p2", TG_P2],
+]);
 
-const TARGET_GROUPS = { TargetGroups: [{ TargetGroupArn: TG_ARN, TargetGroupName: "gs-staging-primary", HealthCheckPath: "/gs/readyz", Matcher: { HttpCode: "200" }, TargetType: "ip" }] };
+const TARGET_GROUPS = {
+  TargetGroups: [
+    { TargetGroupArn: TG_ARN, TargetGroupName: "gs-staging-p1", HealthCheckPath: "/gs/readyz", Matcher: { HttpCode: "200" }, TargetType: "ip" },
+    { TargetGroupArn: TG_P2, TargetGroupName: "gs-staging-p2", HealthCheckPath: "/gs/readyz", Matcher: { HttpCode: "200" }, TargetType: "ip" },
+  ],
+};
 const LISTENER_RULES = {
   Rules: [
-    { Priority: "10", Conditions: [{ Field: "path-pattern", Values: ["/gs*"], PathPatternConfig: { Values: ["/gs*"] } }], Actions: [{ Type: "forward", TargetGroupArn: TG_ARN }] },
+    { Priority: "100", Conditions: [{ Field: "path-pattern", Values: ["/gs/p/p1"], PathPatternConfig: { Values: ["/gs/p/p1"] } }], Actions: [{ Type: "forward", TargetGroupArn: TG_ARN }] },
+    { Priority: "101", Conditions: [{ Field: "path-pattern", Values: ["/gs/p/p2"], PathPatternConfig: { Values: ["/gs/p/p2"] } }], Actions: [{ Type: "forward", TargetGroupArn: TG_P2 }] },
+    { Priority: "1000", Conditions: [{ Field: "path-pattern", Values: ["/gs*"], PathPatternConfig: { Values: ["/gs*"] } }], Actions: [{ Type: "forward", TargetGroupArn: TG_ARN }] },
     { Priority: "default", IsDefault: true, Conditions: [], Actions: [{ Type: "fixed-response" }] },
   ],
 };
@@ -308,11 +321,12 @@ describe("L5-8 §3: the verifier's control-plane checks", () => {
     assertAllPass([
       ...checkTaskDefinitionEvidence("p1", TASK_DEFINITION, TD_EXPECT),
       ...checkServicesEvidence(SERVICES, SVC_EXPECT),
-      ...checkTargetGroupEvidence(TARGET_GROUPS),
+      ...checkPoolTargetGroups(TARGET_GROUPS, { environment: "staging", pools: ["p1", "p2"] }).checks,
       ...checkLoadBalancerEvidence(LB_ATTRIBUTES),
       ...checkEdgeEvidence(DISTRIBUTION, ORIGIN_REQUEST_POLICY),
       ...checkSecurityGroupsEvidence(SECURITY_GROUPS, { environment: "staging", port: 8917 }),
-      ...checkListenerRulesEvidence(LISTENER_RULES, TG_ARN),
+      ...checkPoolListenerRules(LISTENER_RULES, { primary: "p1", routes: ROUTES, targetGroups: TG_MAP }),
+      ...checkPoolServices(SERVICES, { environment: "staging", pools: ["p1", "p2"], targetGroups: TG_MAP }),
     ]);
   });
 
@@ -402,7 +416,7 @@ describe("L5-8 §3: the verifier's control-plane checks", () => {
     assertFails(
       svc((s) => (s[1].loadBalancers as unknown[]).push({ targetGroupArn: "arn:tg2", containerName: "game-server", containerPort: 8917 })),
       /p2: load balancer/,
-      "a standby behind the ALB",
+      "a pool behind two target groups",
     );
     assertFails(
       svc((s) => s.pop()),
@@ -424,10 +438,10 @@ describe("L5-8 §3: the verifier's control-plane checks", () => {
   test("target health on liveness, a non-200 matcher or a short idle timeout fails", () => {
     const tg = clone(TARGET_GROUPS);
     tg.TargetGroups[0].HealthCheckPath = "/gs/healthz";
-    assertFails(checkTargetGroupEvidence(tg), /health path/, "liveness as target health");
+    assertFails(checkPoolTargetGroups(tg, { environment: "staging", pools: ["p1"] }).checks, /target group gs-staging-p1/, "liveness as target health");
     const matcher = clone(TARGET_GROUPS);
     matcher.TargetGroups[0].Matcher.HttpCode = "200-499";
-    assertFails(checkTargetGroupEvidence(matcher), /healthy = 200/, "a 503 counted healthy");
+    assertFails(checkPoolTargetGroups(matcher, { environment: "staging", pools: ["p1"] }).checks, /target group gs-staging-p1/, "a 503 counted healthy");
     assertFails(checkLoadBalancerEvidence({ Attributes: [{ Key: "idle_timeout.timeout_seconds", Value: "60" }] }), /idle timeout/, "60 s");
   });
 
@@ -516,8 +530,13 @@ describe("L5-8 §3: the verifier's control-plane checks", () => {
       write(EVIDENCE_FILES.distributionConfig, DISTRIBUTION);
       write(EVIDENCE_FILES.originRequestPolicy, ORIGIN_REQUEST_POLICY);
       write(EVIDENCE_FILES.securityGroups, SECURITY_GROUPS);
-      write(EVIDENCE_FILES.listenerRules, LISTENER_RULES);
-      const expect = { environment: "staging", pools: ["p1"], primaryPool: "p1", port: 8917, runtimeParameterArns: new Map([["p1", RUNTIME_ARN]]) };
+      write(EVIDENCE_FILES.listenerRules, { Rules: [LISTENER_RULES.Rules[0], LISTENER_RULES.Rules[2], LISTENER_RULES.Rules[3]] });
+      /* LIVE-6 L6-2: the manifest, each pool's target health and its family's ACTIVE revisions (rollback targets). */
+      write(POOL_EVIDENCE_FILES.manifest, { format: "18COSMOS/EVIDENCE/v1", captured_at: "2026-09-30T10:00:00Z", environment: "staging", pools: ["p1"] });
+      write(POOL_EVIDENCE_FILES.targetHealth("p1"), { TargetHealthDescriptions: [{ Target: { Id: "10.0.0.5" }, TargetHealth: { State: "healthy" } }] });
+      fs.mkdirSync(path.join(dir, POOL_EVIDENCE_FILES.revisionsDir("p1")));
+      fs.writeFileSync(path.join(dir, POOL_EVIDENCE_FILES.revisionsDir("p1"), "7.json"), JSON.stringify({ ...TASK_DEFINITION, tags: [{ key: "gs:identity-layout", value: "2" }] }));
+      const expect = { environment: "staging", pools: ["p1"], primaryPool: "p1", port: 8917, runtimeParameterArns: new Map([["p1", RUNTIME_ARN]]), routes: { p1: "/gs/p/p1" } };
       assertAllPass(checkEvidenceDirectory(dir, expect));
       const stale = clone(TASK_DEFINITION);
       stale.taskDefinition.taskDefinitionArn = "arn:aws:ecs:us-east-1:111111111111:task-definition/gs-staging-p1:8";
@@ -565,10 +584,11 @@ describe("L5-8 §3: the verifier's control-plane checks", () => {
   });
 
   test("the ALB's /gs* rule must forward to the primary service's target group", () => {
+    const expectRules = { primary: "p1", routes: ROUTES, targetGroups: TG_MAP };
     const other = clone(LISTENER_RULES) as { Rules: Array<{ Actions: Array<Record<string, unknown>> }> };
-    other.Rules[0].Actions[0].TargetGroupArn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/other/1";
-    assertFails(checkListenerRulesEvidence(other, TG_ARN), /\/gs\* rule/, "another target group");
-    assertFails(checkListenerRulesEvidence({ Rules: [LISTENER_RULES.Rules[1]] }, TG_ARN), /\/gs\* rule/, "no /gs* rule");
+    other.Rules[2].Actions[0].TargetGroupArn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/other/1";
+    assertFails(checkPoolListenerRules(other, expectRules), /\/gs\* rule/, "another target group");
+    assertFails(checkPoolListenerRules({ Rules: [LISTENER_RULES.Rules[0], LISTENER_RULES.Rules[1], LISTENER_RULES.Rules[3]] }, expectRules), /\/gs\* rule/, "no /gs* rule");
   });
 });
 
@@ -669,10 +689,11 @@ describe("L5-8 §4: the verifier's table and KMS checks", () => {
 /* ------------------------------------------------------------------ */
 
 describe("L5-8 §5: the bootstrap's plan and the command's refusals", () => {
-  const I = (appgen: BootstrapInspection["appgen"], routing: BootstrapInspection["routing"]): BootstrapInspection => ({ appgen, routing });
+  const I = (appgen: BootstrapInspection["appgen"], routing: BootstrapInspection["routing"], generation: BootstrapInspection["generation"] = appgen.kind === "matches" ? appgen : { kind: "absent" }): BootstrapInspection => ({ appgen, generation, routing });
 
   test("absent -> created; matches -> nothing; conflict or unreadable -> the whole bootstrap refused", () => {
-    assert.deepEqual(bootstrapPlan(I({ kind: "absent" }, { kind: "absent" })), { refused: [], writes: ["APPGEN (create-if-absent)", "SYSTEM/ROUTING (create-if-absent, routing_version 1)"] });
+    assert.deepEqual(bootstrapPlan(I({ kind: "absent" }, { kind: "absent" })), { refused: [], writes: ["APPGEN (create-if-absent)", "SYSTEM/GENERATION (create-if-absent, origin bootstrap)", "SYSTEM/ROUTING (create-if-absent, routing_version 1)"] });
+    assert.deepEqual(bootstrapPlan(I({ kind: "absent" }, { kind: "absent" }, { kind: "conflict", detail: "generation 2" })).refused, ["SYSTEM/GENERATION: generation 2"], "L6-2 (L6-4): the marker refuses the whole bootstrap too");
     assert.deepEqual(bootstrapPlan(I({ kind: "matches", detail: "g1" }, { kind: "matches", detail: "p1" })), { refused: [], writes: [] });
     assert.deepEqual(bootstrapPlan(I({ kind: "absent" }, { kind: "conflict", detail: "names p2" })).refused, ["SYSTEM/ROUTING: names p2"]);
     assert.deepEqual(bootstrapPlan(I({ kind: "unreadable", detail: "schema 2" }, { kind: "absent" })).refused, ["APPGEN: schema 2"]);

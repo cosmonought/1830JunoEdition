@@ -13,14 +13,67 @@ variable "environment" {
 
 variable "generation" {
   description = <<-EOT
-    The adopted app generation (the runtime document's `generation`; the ledger's APPGEN must equal it; the game table is
-    gs-<env>-game-g<generation>). Changing it is NOT a deploy: the game table would be replaced, which prevent_destroy and
-    deletion protection refuse. Adopting a new generation after a restore is L6-4's.
+    The SERVING app generation: the runtime documents' `generation` and `game_table` (gs-<env>-game-g<generation>). The
+    ledger's APPGEN must equal it, the table's SYSTEM/GENERATION must name it, and (after a restore) APPGEN's adoption must
+    bind that table (L6-4 §5) -- every task refuses to start otherwise. Moving it N -> N+1 is the GENERATION SWITCH
+    (LIVE-6 L6-2, infra/aws/README.md "Generation switch"): ONLY after `npm run recovery -- appgen-adopt` answered
+    `committed` or `already-adopted` for exactly (N+1, gs-<env>-game-g<N+1>, restore) AND `npm run awsDeploy --
+    generation-gate` passed. Moving it never destroys a table: the tables are `game_generations`.
   EOT
   type        = number
   validation {
     condition     = var.generation >= 1 && floor(var.generation) == var.generation
     error_message = "generation must be a positive whole number."
+  }
+}
+
+variable "game_generations" {
+  description = <<-EOT
+    LIVE-6 L6-2 (L6-4 §12.1 item 2): EVERY game-table generation this stack manages, side by side -- gs-<env>-game-g<N> for
+    each N. It must contain `generation` (the serving one). A restored g<N+1> is created OUTSIDE Terraform by
+    RestoreTableToPointInTime, then added here and brought under management with an `import` block in the ROOT stack
+    (stacks/app, "Generation switch"); this module then re-enables PITR and deletion protection on it (a restore carries
+    neither). The old g<N> stays in this set -- protected (prevent_destroy, deletion protection) and still granted to the
+    task role -- until it is explicitly RETIRED (removed from the set, with prevent_destroy lifted deliberately in a
+    separate, reviewed change). Empty: just `generation`.
+  EOT
+  type        = set(number)
+  default     = []
+  validation {
+    condition     = alltrue([for g in var.game_generations : g >= 1 && floor(g) == g])
+    error_message = "game_generations holds positive whole numbers."
+  }
+}
+
+variable "generation_adoption" {
+  description = <<-EOT
+    LIVE-6 L6-2: when the serving table is a RESTORE (its SYSTEM/GENERATION says origin "restore"), the adoption the
+    `generation-gate` printed -- { generation, game_table, restore_id } -- and it must equal the table's marker, or the plan
+    refuses to start or re-deploy any service. The ledger (another account) is not readable from this stack, so this is
+    the gate's attestation carried into the plan; the tasks re-check the real adoption before they take their pools.
+    null for a bootstrap table.
+  EOT
+  type = object({
+    generation = number
+    game_table = string
+    restore_id = string
+  })
+  default = null
+}
+
+variable "identity_layout_version" {
+  description = <<-EOT
+    LIVE-6 L6-2 (L6-4 §12.3, the ONE-WAY identity-table layout): the identity layout the image at `build_id` reads. Once any
+    L6-4-aware task has served against the identity table, an image that cannot read its `TABLE#identity` item must never
+    run against it again -- not by a deploy and not by an ECS circuit-breaker rollback. Every task definition carries it as
+    the tag gs:identity-layout; `awsDeploy verify` fails if any ACTIVE revision of a pool's family (a rollback target) does
+    not. 2 = L6-4 and later. The FIRST AWS-mode deployment is already L6-4-aware, so no older revision ever exists.
+  EOT
+  type        = number
+  default     = 2
+  validation {
+    condition     = var.identity_layout_version >= 2 && floor(var.identity_layout_version) == var.identity_layout_version
+    error_message = "identity_layout_version must be >= 2: an image older than L6-4's identity layout never runs in AWS mode (L6-4 §12.3)."
   }
 }
 
@@ -173,16 +226,22 @@ variable "trusted_proxy_hops" {
 
 variable "pools" {
   description = <<-EOT
-    One ECS service (one task) per pool. Exactly one pool is `primary`: the ALB target group is its alone, and the
-    bootstrap names it in SYSTEM/ROUTING. A non-primary pool is a STANDBY (L5-7 §4): it holds its pool, serves nobody and
-    answers /gs/readyz 503 not-primary, so it is never behind the ALB (its health check would never pass) -- LIVE-6 adds
-    the IdentityVerifier, routing flips and promotion. `desired_count` is 0 or 1: two tasks of one pool fence each other.
+    One ECS service (one task), one target group and one exact-path ALB rule per pool. Exactly one pool is `primary`: the
+    `/gs*` default rule forwards to ITS target group, and it is the pool SYSTEM/ROUTING names (the plan refuses the
+    services otherwise). A non-primary pool's task is a ROUTER (LIVE-6 L6-1: /gs/readyz 200 `non-primary`, answers a
+    game with a route frame) and is a healthy target of its own target group, reached at its trusted ws_path
+    `/gs/p/<pool>` (the runtime document v2's `routes`). `desired_count` is 0 or 1: two tasks of one pool fence each other;
+    0 is a drained (or retired, L6-2) pool -- never the primary. `bundle_path` (optional): the page path of the release
+    whose bundle plays this pool's games (a route frame's bundle destination).
+    A FLIP (L6-2) moves `primary` only AFTER `gamesDoctor aws flip` moved SYSTEM/ROUTING: it changes the /gs* rule's
+    target and nothing of any service (no task is replaced by it).
   EOT
   type = map(object({
     primary       = bool
     desired_count = optional(number, 1)
     cpu           = optional(number, 1024)
     memory        = optional(number, 2048)
+    bundle_path   = optional(string)
   }))
   default = { p1 = { primary = true } }
   validation {
@@ -196,6 +255,18 @@ variable "pools" {
   validation {
     condition     = alltrue([for id, pool in var.pools : contains([0, 1], pool.desired_count)])
     error_message = "desired_count is 0 or 1 per pool (two tasks of one pool fence each other)."
+  }
+  validation {
+    condition     = alltrue([for id, pool in var.pools : !pool.primary || pool.desired_count == 1])
+    error_message = "The primary pool runs its one task (desired_count 1): a drained or retired pool is never the primary."
+  }
+  validation {
+    condition     = length(var.pools) <= 32
+    error_message = "At most 32 pools (the runtime's route table limit, MAX_ROUTE_ENTRIES)."
+  }
+  validation {
+    condition     = alltrue([for id, pool in var.pools : pool.bundle_path == null ? true : can(regex("^/[A-Za-z0-9._~-]+(/[A-Za-z0-9._~-]+)*/?$", pool.bundle_path)) && !startswith(pool.bundle_path, "/gs")])
+    error_message = "bundle_path is a plain absolute page path (never under /gs, never a host)."
   }
 }
 
@@ -260,6 +331,31 @@ variable "log_retention_days" {
   description = "CloudWatch Logs retention for the task logs (the AUDIT lines live there)."
   type        = number
   default     = 365
+}
+
+variable "operator_trusted_principal_arns" {
+  description = <<-EOT
+    LIVE-6 L6-2 (L6-3 §11 item 4): who may assume gs-<env>-operator -- the `gamesDoctor aws` role (inspection, the routing
+    CAS / flip, an operator run's claim / take / release, the flip's recovery pass, retirement checks, the orphans report).
+    Empty: the role is not created. Never the task role.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "recovery_trusted_principal_arns" {
+  description = <<-EOT
+    LIVE-6 L6-2 (L6-4 §12.1 item 3): who may assume gs-<env>-recovery -- `npm run recovery` (APPGEN adoption, a restored
+    table's preparation, the identity replay). Empty: the role is not created. Serving tasks never hold this authority.
+  EOT
+  type        = list(string)
+  default     = []
+}
+
+variable "recovery_break_glass" {
+  description = "LIVE-6 L6-2 (L6-4 §12.1 item 3): grant gs-<env>-recovery dynamodb:RestoreTableToPointInTime (a break-glass step: turn it on for the restore, off after)."
+  type        = bool
+  default     = false
 }
 
 variable "bootstrap_trusted_principal_arns" {

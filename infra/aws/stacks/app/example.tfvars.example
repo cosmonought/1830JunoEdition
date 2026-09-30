@@ -28,6 +28,8 @@ network = {
 build_id        = "2026-09-30-da317f0"
 allowed_origins = ["https://play.example.com"]
 
+# LIVE-6 L6-2: every pool gets its own target group and exact /gs/p/<pool> rule; `primary` follows SYSTEM/ROUTING
+# (move it only after `gamesDoctor aws flip ... --apply`). desired_count 0: a drained / retired pool (never the primary).
 pools          = { p1 = { primary = true } }
 start_services = false # true only after the bootstrap and verify
 
@@ -44,3 +46,7 @@ edge = {
 }
 
 bootstrap_trusted_principal_arns = ["arn:aws:iam::111111111111:role/deploy-pipeline"]
+
+# LIVE-6 L6-2: the operator (`gamesDoctor aws`) and recovery (`npm run recovery`) roles; empty lists create neither.
+operator_trusted_principal_arns = []
+recovery_trusted_principal_arns = []

@@ -119,7 +119,8 @@ resource "aws_ecs_task_definition" "pool" {
     }
   ])
 
-  tags = merge(local.tags, { "gs:pool" = each.key })
+  # L6-2 (L6-4 §12.3): the identity layout this image reads -- every revision declares it, so every rollback target does.
+  tags = merge(local.tags, { "gs:pool" = each.key }, local.identity_layout_tag)
 
   # Deploy order: the documents the task reads, and its role, exist before its definition.
   depends_on = [aws_ssm_parameter.runtime, aws_ssm_parameter.juno_backend, aws_iam_role_policy.task]
@@ -129,14 +130,35 @@ resource "aws_ecs_task_definition" "pool" {
 # or APPGEN (L5-8 deploy order step 5), so a service is never started before the bootstrap.
 data "aws_dynamodb_table_item" "routing" {
   count      = var.start_services ? 1 : 0
-  table_name = aws_dynamodb_table.game.name
+  table_name = aws_dynamodb_table.game[tostring(var.generation)].name
   key        = jsonencode({ pk = { S = "SYSTEM" }, sk = { S = "ROUTING" } })
+}
+
+# LIVE-6 L6-2 (L6-4): the SERVING table's own generation marker. Every task refuses to start unless it names this
+# generation and this table (L6-4 §5); the plan refuses first, so a runtime document can never be switched to a table
+# that is not prepared as this generation. After a restore it must also be the adoption the generation gate attested
+# (`generation_adoption`; the ledger's real adoption is re-checked by every task before it takes its pool).
+data "aws_dynamodb_table_item" "generation" {
+  count      = var.start_services ? 1 : 0
+  table_name = aws_dynamodb_table.game[tostring(var.generation)].name
+  key        = jsonencode({ pk = { S = "SYSTEM" }, sk = { S = "GENERATION" } })
 }
 
 locals {
   routing_item    = var.start_services ? try(jsondecode(data.aws_dynamodb_table_item.routing[0].item), null) : null
   routing_primary = try(local.routing_item.primary_pool.S, null)
   routing_format  = try(local.routing_item.fmt.N, null)
+
+  marker_item       = var.start_services ? try(jsondecode(data.aws_dynamodb_table_item.generation[0].item), null) : null
+  marker_generation = try(local.marker_item.generation.N, null)
+  marker_table      = try(local.marker_item.game_table.S, null)
+  marker_origin     = try(local.marker_item.origin.S, null)
+  marker_restore_id = try(local.marker_item.restore_id.S, null)
+  marker_names_this = local.marker_generation == tostring(var.generation) && local.marker_table == local.game_table_name
+  marker_adoption_ok = local.marker_origin == "bootstrap" ? var.generation_adoption == null : (
+    local.marker_origin == "restore" && var.generation_adoption != null
+    && try(var.generation_adoption.generation == var.generation && var.generation_adoption.game_table == local.game_table_name && var.generation_adoption.restore_id == local.marker_restore_id, false)
+  )
 }
 
 resource "aws_ecs_service" "pool" {
@@ -183,26 +205,32 @@ resource "aws_ecs_service" "pool" {
     assign_public_ip = false
   }
 
-  # Only the primary pool is behind the ALB: a standby answers /gs/readyz 503 forever (L5-7 §4), so a target group
-  # would have ECS replace it endlessly.
-  dynamic "load_balancer" {
-    for_each = each.value.primary ? [1] : []
-    content {
-      target_group_arn = aws_lb_target_group.primary.arn
-      container_name   = "game-server"
-      container_port   = var.container_port
-    }
+  # LIVE-6 L6-2: EVERY pool behind its OWN target group (L6-1's non-primary router answers readiness 200). Nothing here
+  # depends on which pool is primary: a flip (the /gs* rule's target, alb.tf) never updates a service -- an update would
+  # redeploy it (force_new_deployment) and replace its task outside the drain-first procedure.
+  load_balancer {
+    target_group_arn = aws_lb_target_group.pool[each.key].arn
+    container_name   = "game-server"
+    container_port   = var.container_port
   }
-  health_check_grace_period_seconds = each.value.primary ? var.health_check_grace_period_seconds : null
+  health_check_grace_period_seconds = var.health_check_grace_period_seconds
 
-  tags = merge(local.tags, { "gs:pool" = each.key, "gs:primary" = tostring(each.value.primary) })
+  tags = merge(local.tags, { "gs:pool" = each.key })
 
-  depends_on = [aws_lb_listener_rule.gs, aws_iam_role_policy.task, aws_iam_role_policy.execution]
+  depends_on = [aws_lb_listener_rule.gs, aws_lb_listener_rule.pool, aws_iam_role_policy.task, aws_iam_role_policy.execution]
 
   lifecycle {
     precondition {
       condition     = local.routing_format == "1" && local.routing_primary == local.primary_pool
-      error_message = "SYSTEM/ROUTING must exist and name the primary pool before any service starts: run `npm run awsDeploy -- bootstrap ... --apply` (and `verify`) first."
+      error_message = "SYSTEM/ROUTING must exist and name the primary pool before any service starts or the /gs* rule moves: run `npm run awsDeploy -- bootstrap ... --apply` first; for a FLIP, `gamesDoctor aws flip ... --apply` moves the routing BEFORE this stack's `primary` flag follows it."
+    }
+    precondition {
+      condition     = local.marker_names_this
+      error_message = "The serving game table's SYSTEM/GENERATION must name this generation and table (L6-4): the bootstrap writes it for the first table, a restore's `table-prepare` for a restored one. A runtime document is never switched to an unprepared table."
+    }
+    precondition {
+      condition     = local.marker_adoption_ok
+      error_message = "The serving table is a restore: set generation_adoption to what `npm run awsDeploy -- generation-gate` printed (the ledger adopted exactly this table and restore) -- or it is a bootstrap table and generation_adoption must be null."
     }
   }
 }

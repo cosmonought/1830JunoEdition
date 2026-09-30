@@ -18,7 +18,9 @@ mock_provider "aws" {
     defaults = { id = "pl-3b927c52" }
   }
   mock_data "aws_dynamodb_table_item" {
-    defaults = { item = "{\"pk\":{\"S\":\"SYSTEM\"},\"sk\":{\"S\":\"ROUTING\"},\"fmt\":{\"N\":\"1\"},\"primary_pool\":{\"S\":\"p1\"},\"routing_version\":{\"N\":\"1\"},\"updated_at\":{\"N\":\"0\"},\"updated_by\":{\"S\":\"test\"},\"claim\":{\"S\":\"c\"}}" }
+    # One mock item answers BOTH plan-time reads (the routing's fields and L6-4's SYSTEM/GENERATION fields): the routing
+    # names p1, the serving table g1 carries a bootstrap marker for generation 1. Runs override either where it matters.
+    defaults = { item = "{\"pk\":{\"S\":\"SYSTEM\"},\"sk\":{\"S\":\"ROUTING\"},\"fmt\":{\"N\":\"1\"},\"primary_pool\":{\"S\":\"p1\"},\"routing_version\":{\"N\":\"1\"},\"updated_at\":{\"N\":\"0\"},\"updated_by\":{\"S\":\"test\"},\"claim\":{\"S\":\"c\"},\"generation\":{\"N\":\"1\"},\"game_table\":{\"S\":\"gs-staging-game-g1\"},\"origin\":{\"S\":\"bootstrap\"},\"restore_id\":{\"NULL\":true}}" }
   }
   mock_resource "aws_iam_role" {
     defaults = { arn = "arn:aws:iam::111111111111:role/gs-staging-mock" }
@@ -106,11 +108,11 @@ run "tables_match_the_contract" {
   command = apply
 
   assert {
-    condition     = aws_dynamodb_table.game.name == "gs-staging-game-g1" && aws_dynamodb_table.identity.name == "gs-staging-identity"
+    condition     = aws_dynamodb_table.game["1"].name == "gs-staging-game-g1" && aws_dynamodb_table.identity.name == "gs-staging-identity" && length(aws_dynamodb_table.game) == 1
     error_message = "Table names must be gs-<env>-game-g<N> and gs-<env>-identity."
   }
   assert {
-    condition = alltrue([for t in [aws_dynamodb_table.game, aws_dynamodb_table.identity] :
+    condition = alltrue([for t in [aws_dynamodb_table.game["1"], aws_dynamodb_table.identity] :
       t.hash_key == "pk" && t.range_key == "sk" && t.billing_mode == "PAY_PER_REQUEST" && t.deletion_protection_enabled
       && toset([for a in t.attribute : "${a.name}:${a.type}"]) == toset(["pk:S", "sk:S"])
       && length(t.global_secondary_index) == 0 && length(t.local_secondary_index) == 0 && length(t.replica) == 0
@@ -119,7 +121,7 @@ run "tables_match_the_contract" {
     error_message = "Both tables: string pk/sk, on-demand, deletion protection, PITR, no GSI/LSI, never a Global Table."
   }
   assert {
-    condition     = length([for t in aws_dynamodb_table.game.ttl : t if t.enabled]) == 0
+    condition     = length([for t in aws_dynamodb_table.game["1"].ttl : t if t.enabled]) == 0
     error_message = "The game table has no TTL."
   }
   assert {
@@ -243,10 +245,10 @@ run "task_role_is_least_privilege" {
   }
   assert {
     condition = alltrue([
-      for sid, key in { GameTableWriteNeverSystem = "SYSTEM", LedgerAppendNeverAppgen = "APPGEN" } :
+      for sid, key in { GameTableWriteNeverSystem = "SYSTEM", LedgerAppendNeverAppgen = "APPGEN,APPGEN#HISTORY" } :
       toset([for c in one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == sid]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset(["ForAllValues:StringNotEquals|dynamodb:LeadingKeys|${key}"])
     ])
-    error_message = "The task never writes SYSTEM/* (routing) or APPGEN."
+    error_message = "The task never writes SYSTEM/* (routing), APPGEN or APPGEN#HISTORY (L6-2 review M4)."
   }
   assert {
     condition     = toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadRuntimeConfiguration"]).resources) == toset(["arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1", "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend"])
@@ -278,7 +280,7 @@ run "alb_readiness_and_websocket_idle" {
   command = apply
 
   assert {
-    condition     = aws_lb_target_group.primary.health_check[0].path == "/gs/readyz" && aws_lb_target_group.primary.health_check[0].matcher == "200" && aws_lb_target_group.primary.target_type == "ip"
+    condition     = aws_lb_target_group.pool["p1"].health_check[0].path == "/gs/readyz" && aws_lb_target_group.pool["p1"].health_check[0].matcher == "200" && aws_lb_target_group.pool["p1"].target_type == "ip" && aws_lb_target_group.pool["p1"].name == "gs-staging-p1"
     error_message = "Target health is /gs/readyz, 200 only (ip targets: awsvpc)."
   }
   assert {
@@ -286,8 +288,12 @@ run "alb_readiness_and_websocket_idle" {
     error_message = "The ALB idle timeout is at least 120 s (WebSockets)."
   }
   assert {
-    condition     = one(aws_lb_listener_rule.gs.condition).path_pattern[0].values == toset(["/gs*"])
-    error_message = "/gs* goes to the primary pool's target group."
+    condition     = one(aws_lb_listener_rule.gs.condition).path_pattern[0].values == toset(["/gs*"]) && aws_lb_listener_rule.gs.priority == 1000
+    error_message = "/gs* (the default, priority 1000) goes to the primary pool's target group."
+  }
+  assert {
+    condition     = one(aws_lb_listener_rule.pool["p1"].condition).path_pattern[0].values == toset(["/gs/p/p1"]) && aws_lb_listener_rule.pool["p1"].priority == 100
+    error_message = "L6-2: each pool's EXACT trusted ws_path (no wildcard) is a rule of its own, before the default."
   }
 }
 
@@ -371,7 +377,7 @@ run "services_are_stop_first_one_task_per_pool" {
   }
   assert {
     condition     = length(aws_ecs_service.pool["p1"].load_balancer) == 1 && one(aws_ecs_service.pool["p1"].load_balancer).container_port == 8917 && aws_ecs_service.pool["p1"].health_check_grace_period_seconds >= 120
-    error_message = "The primary is behind the target group, with a startup grace of at least 120 s."
+    error_message = "Every pool is behind its own target group, with a startup grace of at least 120 s."
   }
   assert {
     condition     = !aws_ecs_service.pool["p1"].network_configuration[0].assign_public_ip
@@ -394,7 +400,7 @@ run "a_missing_or_foreign_routing_refuses_the_services" {
   expect_failures = [aws_ecs_service.pool]
 }
 
-run "two_pools_only_the_primary_behind_the_alb" {
+run "two_pools_each_behind_its_own_target_group_on_its_exact_path" {
   command = apply
 
   variables {
@@ -405,21 +411,253 @@ run "two_pools_only_the_primary_behind_the_alb" {
     }
   }
 
+  override_resource {
+    target = aws_lb_target_group.pool["p1"]
+    values = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/gs-staging-p1/1111111111111111" }
+  }
+  override_resource {
+    target = aws_lb_target_group.pool["p2"]
+    values = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/gs-staging-p2/2222222222222222" }
+  }
+
   assert {
-    condition     = length(aws_ecs_service.pool["p2"].load_balancer) == 0 && aws_ecs_service.pool["p2"].health_check_grace_period_seconds == null
-    error_message = "A standby answers /gs/readyz 503 forever: it is never behind the ALB."
+    condition     = one(aws_ecs_service.pool["p2"].load_balancer).target_group_arn == aws_lb_target_group.pool["p2"].arn && one(aws_ecs_service.pool["p1"].load_balancer).target_group_arn == aws_lb_target_group.pool["p1"].arn && aws_ecs_service.pool["p2"].health_check_grace_period_seconds >= 120
+    error_message = "L6-2: a non-primary pool (L6-1's router answers readiness 200) is behind ITS OWN target group -- never another pool's."
   }
   assert {
     condition     = jsondecode(aws_ssm_parameter.runtime["p2"].insecure_value) == jsondecode(file("${path.module}/../../fixtures/runtime-staging-p2.json"))
-    error_message = "Each pool has its own runtime document (its pool id)."
+    error_message = "Each pool has its own runtime document v2 (its pool id), carrying the deployment's whole route table."
+  }
+  assert {
+    condition     = jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value).routes == jsondecode(aws_ssm_parameter.runtime["p2"].insecure_value).routes
+    error_message = "Every pool's document carries the SAME trusted route table."
+  }
+  assert {
+    condition     = { for id, r in aws_lb_listener_rule.pool : id => [r.priority, one(r.condition).path_pattern[0].values, one(r.action).target_group_arn] } == { p1 = [100, toset(["/gs/p/p1"]), aws_lb_target_group.pool["p1"].arn], p2 = [101, toset(["/gs/p/p2"]), aws_lb_target_group.pool["p2"].arn] }
+    error_message = "Each pool's exact ws_path -> its own target group, in deterministic priority order (100 + sorted index)."
+  }
+  assert {
+    condition     = one(aws_lb_listener_rule.gs.action).target_group_arn == aws_lb_target_group.pool["p1"].arn && alltrue([for r in aws_lb_listener_rule.pool : r.priority < aws_lb_listener_rule.gs.priority])
+    error_message = "The /gs* default forwards to the primary's target group, AFTER every exact pool rule (no pool is shadowed)."
   }
   assert {
     condition     = aws_ecs_service.pool["p2"].deployment_maximum_percent == 100 && aws_ecs_service.pool["p2"].deployment_minimum_healthy_percent == 0
     error_message = "Every pool is stop-first."
   }
   assert {
-    condition     = aws_lb_target_group.primary.name == "gs-staging-primary" && aws_lb_target_group.primary.tags["gs:pool"] == "p1"
-    error_message = "The target group is the primary pool's (a stable name; the pool is its tag)."
+    condition     = alltrue([for svc in aws_ecs_service.pool : !contains(keys(svc.tags), "gs:primary")])
+    error_message = "Nothing on a service names the primary: a flip must never update (and so redeploy) a service."
+  }
+}
+
+run "a_flip_moves_only_the_gs_rule" {
+  command = apply
+
+  variables {
+    start_services = true
+    pools = {
+      p1 = { primary = false }
+      p2 = { primary = true }
+    }
+  }
+
+  override_data {
+    target = data.aws_dynamodb_table_item.routing[0]
+    values = { item = "{\"pk\":{\"S\":\"SYSTEM\"},\"sk\":{\"S\":\"ROUTING\"},\"fmt\":{\"N\":\"1\"},\"primary_pool\":{\"S\":\"p2\"},\"routing_version\":{\"N\":\"2\"},\"updated_at\":{\"N\":\"0\"},\"updated_by\":{\"S\":\"gamesDoctor/op:r-0000000000000000\"},\"claim\":{\"S\":\"c\"}}" }
+  }
+  override_resource {
+    target = aws_lb_target_group.pool["p2"]
+    values = { arn = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/gs-staging-p2/2222222222222222" }
+  }
+
+  assert {
+    condition     = one(aws_lb_listener_rule.gs.action).target_group_arn == aws_lb_target_group.pool["p2"].arn
+    error_message = "After the routing names p2 (gamesDoctor aws flip), primary = p2 moves the /gs* default to p2's target group."
+  }
+  assert {
+    condition     = jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value) == jsondecode(replace(file("${path.module}/../../fixtures/runtime-staging-p2.json"), "\"pool\": \"p2\"", "\"pool\": \"p1\""))
+    error_message = "The documents do not depend on which pool is primary: a flip re-renders nothing a task reads (no redeploy)."
+  }
+}
+
+run "a_flip_before_the_routing_moved_is_refused" {
+  command = plan
+
+  variables {
+    start_services = true
+    pools = {
+      p1 = { primary = false }
+      p2 = { primary = true }
+    }
+  }
+
+  expect_failures = [aws_ecs_service.pool]
+}
+
+run "refuses_a_drained_primary" {
+  command = plan
+  variables {
+    pools = { p1 = { primary = true, desired_count = 0 } }
+  }
+  expect_failures = [var.pools]
+}
+
+/* ------------------------------------------------------------------ */
+/* LIVE-6 L6-2: game-table generations side by side (L6-4 §12.1)        */
+/* ------------------------------------------------------------------ */
+
+run "generations_side_by_side_the_old_one_kept_protected" {
+  state_key = "generations" # its own state: g2 is prevent_destroy (a later run without it would have to destroy it)
+
+  command = apply
+
+  variables {
+    generation       = 2
+    game_generations = [1, 2]
+  }
+
+  assert {
+    condition     = toset([for g, t in aws_dynamodb_table.game : "${g}=${t.name}"]) == toset(["1=gs-staging-game-g1", "2=gs-staging-game-g2"])
+    error_message = "g<N> and g<N+1> side by side: moving the serving generation never removes the old table."
+  }
+  assert {
+    condition     = alltrue([for t in aws_dynamodb_table.game : t.deletion_protection_enabled && t.point_in_time_recovery[0].enabled && length([for x in t.ttl : x if x.enabled]) == 0])
+    error_message = "Every generation (an imported restore included) is re-protected: deletion protection and PITR on, no TTL."
+  }
+  assert {
+    condition     = jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value).generation == 2 && jsondecode(aws_ssm_parameter.runtime["p1"].insecure_value).game_table == "gs-staging-game-g2"
+    error_message = "The serving generation is `generation`."
+  }
+  assert {
+    condition     = toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "GameTableReadAndCheck"]).resources) == toset(["arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1", "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g2"])
+    error_message = "The task role reaches every managed generation (g<N+1> before its tasks start; g<N> while an old task may run)."
+  }
+}
+
+run "an_unprepared_serving_table_refuses_the_services" {
+  state_key = "generations" # its own state: g2 is prevent_destroy (a later run without it would have to destroy it)
+
+  command = plan
+
+  variables {
+    start_services   = true
+    generation       = 2
+    game_generations = [1, 2]
+  }
+
+  expect_failures = [aws_ecs_service.pool]
+}
+
+run "a_restored_serving_table_needs_the_gates_adoption" {
+  state_key = "generations" # its own state: g2 is prevent_destroy (a later run without it would have to destroy it)
+
+  command = plan
+
+  variables {
+    start_services   = true
+    generation       = 2
+    game_generations = [1, 2]
+  }
+
+  override_data {
+    target = data.aws_dynamodb_table_item.generation[0]
+    values = { item = "{\"generation\":{\"N\":\"2\"},\"game_table\":{\"S\":\"gs-staging-game-g2\"},\"origin\":{\"S\":\"restore\"},\"restore_id\":{\"S\":\"r-2026-10-01\"}}" }
+  }
+
+  expect_failures = [aws_ecs_service.pool]
+}
+
+run "a_restored_serving_table_with_the_gates_adoption_starts" {
+  state_key = "generations" # its own state: g2 is prevent_destroy (a later run without it would have to destroy it)
+
+  command = apply
+
+  variables {
+    start_services      = true
+    generation          = 2
+    game_generations    = [1, 2]
+    generation_adoption = { generation = 2, game_table = "gs-staging-game-g2", restore_id = "r-2026-10-01" }
+  }
+
+  override_data {
+    target = data.aws_dynamodb_table_item.generation[0]
+    values = { item = "{\"generation\":{\"N\":\"2\"},\"game_table\":{\"S\":\"gs-staging-game-g2\"},\"origin\":{\"S\":\"restore\"},\"restore_id\":{\"S\":\"r-2026-10-01\"}}" }
+  }
+
+  assert {
+    condition     = length(aws_ecs_service.pool) == 1
+    error_message = "The adopted restore serves once the gate's attestation matches the table's marker."
+  }
+}
+
+run "task_definitions_declare_the_identity_layout" {
+  command = apply
+
+  assert {
+    condition     = aws_ecs_task_definition.pool["p1"].tags["gs:identity-layout"] == "2"
+    error_message = "L6-4 §12.3: every revision (so every rollback target) declares the one-way identity layout."
+  }
+}
+
+run "refuses_a_pre_l6_4_identity_layout" {
+  command = plan
+  variables {
+    identity_layout_version = 1
+  }
+  expect_failures = [var.identity_layout_version]
+}
+
+/* ------------------------------------------------------------------ */
+/* LIVE-6 L6-2: the operator and recovery roles (separate authority)   */
+/* ------------------------------------------------------------------ */
+
+run "operator_and_recovery_are_separate_roles" {
+  command = apply
+
+  variables {
+    operator_trusted_principal_arns = ["arn:aws:iam::111111111111:role/ops-humans"]
+    recovery_trusted_principal_arns = ["arn:aws:iam::111111111111:role/ops-breakglass"]
+  }
+
+  assert {
+    condition     = aws_iam_role.operator[0].name == "gs-staging-operator" && aws_iam_role.recovery[0].name == "gs-staging-recovery"
+    error_message = "The operator and recovery roles, by the names the ledger stack grants."
+  }
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.operator.statement : alltrue([for a in s.actions :
+    !startswith(a, "kms:") && !contains(["dynamodb:DeleteItem", "dynamodb:BatchWriteItem", "dynamodb:RestoreTableToPointInTime"], a)])])
+    error_message = "The operator never signs, deletes or restores."
+  }
+  assert {
+    condition     = toset([for c in one([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == "IdentityWriterRoleRead"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset(["ForAllValues:StringEquals|dynamodb:LeadingKeys|ROLE#identity-writer"]) && one([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == "IdentityWriterRoleRead"]).actions == toset(["dynamodb:GetItem"])
+    error_message = "The operator reads the identity-writer role item only -- no identity write, no session read."
+  }
+  assert {
+    condition     = toset([for c in one([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == "OperatorRunHeadsAndRunPools"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset(["ForAllValues:StringLike|dynamodb:LeadingKeys|GAME#*,POOL#op:*", "ForAllValues:StringEquals|dynamodb:Attributes|pk,sk,owner_pool,pool_epoch,owner_task,writer_epoch,writer_task,taken_at"])
+    error_message = "The operator updates HEADs and its own run pools only (never a serving pool's item), and only their ownership fields (review M5)."
+  }
+  assert {
+    condition = alltrue([for sid, forbidden in { RoutingAndEvidence = ["generation", "game_table", "origin", "restore_id"], GameTableMarkerPrepare = ["primary_pool", "routing_version"] } :
+      length(setintersection(toset(flatten([for c in one(concat([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == sid], [for s in data.aws_iam_policy_document.recovery.statement : s if s.sid == sid])).condition : c.values if c.variable == "dynamodb:Attributes"])), toset(forbidden))) == 0
+    && length([for c in one(concat([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == sid], [for s in data.aws_iam_policy_document.recovery.statement : s if s.sid == sid])).condition : c if c.variable == "dynamodb:Attributes"]) == 1])
+    error_message = "Review M5: the operator's PutItem can never carry a generation marker, the recovery role's never a routing."
+  }
+  assert {
+    condition     = alltrue([for s in data.aws_iam_policy_document.recovery.statement : alltrue([for a in s.actions : !startswith(a, "kms:")])]) && length([for s in data.aws_iam_policy_document.recovery.statement : s if s.sid == "BreakGlassRestoreToPointInTime"]) == 0
+    error_message = "The recovery role never signs; RestoreTableToPointInTime only with recovery_break_glass."
+  }
+  assert {
+    condition     = alltrue([for s in data.aws_iam_policy_document.task.statement : alltrue([for a in s.actions : !contains(["dynamodb:RestoreTableToPointInTime"], a)])]) && !contains([for s in data.aws_iam_policy_document.task.statement : s.sid], "AppgenAdoption")
+    error_message = "A serving task never holds adoption or restore authority."
+  }
+}
+
+run "no_operator_or_recovery_role_by_default" {
+  command = apply
+
+  assert {
+    condition     = length(aws_iam_role.operator) == 0 && length(aws_iam_role.recovery) == 0
+    error_message = "Neither role exists unless someone is named to assume it."
   }
 }
 

@@ -511,6 +511,9 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   const bindingProblem = adoptionBindingProblem(marker as GenerationMarker, binding);
   if (bindingProblem !== null) refuse(`${bindingProblem}; this task serves nothing`);
   step("generation", `the ledger's adopted app generation is ${config.generation}, as configured, and the game table ${config.gameTable} holds that generation (${(marker as GenerationMarker).origin})`);
+  /* LIVE-6 L6-2: the post-restore safe mode's signal (L6-4 §12.2: the marker's `origin: restore`). */
+  const restoredTable = (marker as GenerationMarker).origin === "restore";
+  if (restoredTable) input.ops.audit("aws.restore-safe-mode", { generation: config.generation, restore_id: (marker as GenerationMarker).restore_id });
 
   /* ---------------- 2. the pool writer FIRST ---------------- */
   assertAlive(); // never take the pool (fencing the serving task) for a task that is already asked to stop
@@ -679,6 +682,9 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
         preload: false,
         relayerAuthority: authority,
         relayerIntents: stores.relayerIntents,
+        /* LIVE-6 L6-2: a RESTORED game table (its marker's origin, step 1) serves its money games read-only until each is
+           verified in this process (F1 + the chain); the check re-runs at every start, so a restart never bypasses it. */
+        ...(restoredTable ? { restoreSafeMode: true } : {}),
       });
     } catch (error) {
       assertAlive();
@@ -777,7 +783,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
               : Promise.resolve({ refusal: "wrong-state" as const, code: "wrong-state" as const, reason: "This server has no Juno escrow configured." }),
       },
       money: () => moneyRef.current,
-      ...(opened !== null ? { escrow: { onGameplayCommitted: (event) => opened.service.onGameplayCommitted(event), isRosterFrozen: (gameId) => opened.service.isRosterFrozen(gameId) } } : {}),
+      ...(opened !== null ? { escrow: { onGameplayCommitted: (event) => opened.service.onGameplayCommitted(event), isRosterFrozen: (gameId) => opened.service.isRosterFrozen(gameId), restoreGate: (gameId) => opened.service.restoreGate(gameId) } } : {}),
       capability,
       runtime: serving.runtime(),
       moneyFacts: settlement,

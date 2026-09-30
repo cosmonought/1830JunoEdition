@@ -13,7 +13,8 @@
 //     contract (gs-<env>-game-g<N>, gs-<env>-identity, gs-<env>-ledger; the environment and generation asked for);
 //   - the three tables: string pk HASH + sk RANGE and nothing else, on-demand, no GSI/LSI, no replicas, deletion
 //     protection, ACTIVE; PITR enabled; TTL `ttl` on the identity table ONLY;
-//   - APPGEN = the generation, SYSTEM/ROUTING = the primary pool (the bootstrap's inspection, reads only);
+//   - APPGEN = the generation, SYSTEM/ROUTING = the primary pool (the bootstrap's inspection, reads only), and (L6-2, from
+//     L6-4) the game table's SYSTEM/GENERATION by the task's own startup rule (`checkGenerationMarker`);
 //   - with escrow: every KMS key by its key ARN is enabled, customer-managed, single-region, ECC_SECG_P256K1 /
 //     SIGN_VERIFY offering ECDSA_SHA_256, and its public key is the configuration's (the relayer key controls the relayer
 //     address; `checkSignerIdentities`, the backend's own check).
@@ -22,9 +23,13 @@
 // infra/aws/scripts/capture-evidence.{sh,ps1} -- so the server carries no ECS / ELB / CloudFront / EC2 SDK):
 //   - each task definition carries references only (exactly L5-7 §14's environment names; no DATA_DIR, escrow file,
 //     static credential, `secrets` or `environmentFiles`), stopTimeout 120, container health /gs/healthz, awslogs, awsvpc;
-//   - each service is stop-first (0 / 100), one task, AZ rebalancing off, no ECS Exec, no public IP; only the primary
-//     behind a target group;
-//   - the target group's health check is /gs/readyz -> 200; the ALB idle timeout >= 120 s;
+//   - each service is stop-first (0 / 100), one task, AZ rebalancing off, no ECS Exec, no public IP; (LIVE-6 L6-2) EVERY
+//     pool behind ITS OWN target group, settled;
+//   - (L6-2, `controlPlane/evidence.ts`) one target group per pool, /gs/readyz -> 200, each pool's target health; the
+//     `/gs*` rule -> the primary's group and each pool's exact ws_path -> its own, nothing shadowed; every ACTIVE task
+//     definition revision (a rollback target) declares L6-4's identity layout; after a flip, each pool's role-change
+//     exit (5), its replacement running, and no loss (3/4); the capture's manifest;
+//   - the ALB idle timeout >= 120 s;
 //   - the distribution's /gs* behaviour is the first to match /gs paths, uncached (Managed-CachingDisabled), and its
 //     origin request policy forwards ALL query strings (cp, cr, cb), all cookies, Origin and the WebSocket headers;
 //   - the task security group admits the container port from the ALB's security group and nothing else.
@@ -43,7 +48,21 @@ import { checkSignerIdentities, settlementKeyConfigOf, type JunoBackendConfig } 
 import { deadline } from "../awsClients";
 import { KMS_KEY_SPEC, KMS_KEY_USAGE, KMS_SIGNING_ALGORITHM } from "../kms/kmsDigestClient";
 import type { AwsRuntimeConfig } from "../runtime/runtimeConfig";
+import { adoptionBindingProblem, generationMarkerProblem, GenerationMarkerUnreadableError, readGenerationMarker, type GenerationMarker } from "../game/generationMarker";
+import { readAppGeneration } from "../ledger/appGeneration";
 import { appgenState, routingState, type BootstrapClients, type RecordState } from "./bootstrap";
+import {
+  checkIdentityLayout,
+  checkManifest,
+  checkPoolListenerRules,
+  checkPoolServices,
+  checkPoolTargetGroups,
+  checkRoleChange,
+  checkTargetHealth,
+  POOL_EVIDENCE_FILES,
+  readRevisions,
+  serviceOf as poolServiceOf,
+} from "../controlPlane/evidence";
 
 export interface Check {
   readonly name: string;
@@ -160,10 +179,38 @@ export async function readTableEvidence(client: DynamoDBClient, table: string, p
 /* APPGEN and SYSTEM/ROUTING                                            */
 /* ------------------------------------------------------------------ */
 
+/**
+ * LIVE-6 L6-2 (L6-4 §12.1 item 1): the game table's SYSTEM/GENERATION judged by EXACTLY the rule a task applies before it
+ * takes its pool (L6-4's `generationMarkerProblem` then `adoptionBindingProblem`, over its strict readers) -- a bootstrap
+ * table while APPGEN was never adopted, or the adopted restore's table after an adoption. Never a second schema.
+ */
+export async function checkGenerationMarker(clients: BootstrapClients, target: { readonly gameTable: string; readonly gameTableName?: string; readonly ledgerTable: string; readonly generation: number }): Promise<Check> {
+  const label = "SYSTEM/GENERATION";
+  const name = target.gameTableName ?? target.gameTable;
+  let marker: GenerationMarker | null;
+  try {
+    marker = await readGenerationMarker(clients.app, target.gameTable);
+  } catch (error) {
+    return fail(label, error instanceof GenerationMarkerUnreadableError ? `unreadable: ${error.message}` : `could not be read (${describeError(error)})`);
+  }
+  const problem = generationMarkerProblem(marker, { generation: target.generation, gameTable: name });
+  if (problem !== null) return fail(label, marker === null ? `${problem}: run the bootstrap` : problem);
+  let appgen;
+  try {
+    appgen = await readAppGeneration(clients.ledger, target.ledgerTable);
+  } catch (error) {
+    return fail(label, `the ledger's APPGEN (its adoption binding) could not be read (${describeError(error)})`);
+  }
+  if (appgen === null || appgen.current_generation !== target.generation) return fail(label, `APPGEN is ${appgen === null ? "absent" : `at generation ${appgen.current_generation}`}, not ${target.generation}: no task would start`);
+  const m = marker as GenerationMarker;
+  const binding = adoptionBindingProblem(m, appgen.adoption === null ? null : { game_table: appgen.adoption.game_table, restore_id: appgen.adoption.restore_id });
+  return binding === null ? pass(label, `generation ${m.generation}, ${m.game_table}, origin ${m.origin}${m.origin === "restore" ? ` (restore ${m.restore_id}, adopted)` : ""}`) : fail(label, binding);
+}
+
 export async function checkControlRecords(
   clients: BootstrapClients,
-  target: { readonly gameTable: string; readonly ledgerTable: string; readonly primaryPool: string; readonly generation: number },
-  parts: { readonly appgen: boolean; readonly routing: boolean },
+  target: { readonly gameTable: string; readonly gameTableName?: string; readonly ledgerTable: string; readonly primaryPool: string; readonly generation: number },
+  parts: { readonly appgen: boolean; readonly routing: boolean; readonly generation?: boolean },
 ): Promise<Check[]> {
   const checks: Check[] = [];
   const judgeState = (label: string, read: () => Promise<RecordState>, want: string) =>
@@ -173,6 +220,7 @@ export async function checkControlRecords(
     );
   if (parts.appgen) checks.push(await judgeState("APPGEN", () => appgenState(clients, target), `generation ${target.generation}`));
   if (parts.routing) checks.push(await judgeState("SYSTEM/ROUTING", () => routingState(clients, target), `primary pool ${target.primaryPool}`));
+  if (parts.generation === true) checks.push(await checkGenerationMarker(clients, target));
   return checks;
 }
 
@@ -342,9 +390,10 @@ export function checkServicesEvidence(doc: Json, expect: { readonly environment:
     const running = str(s.taskDefinition);
     const deploying = arr(s.deployments).map((d) => str(obj(d).taskDefinition)).filter((t) => t !== running);
     checks.push(judge(`${label}: settled`, running !== null && deploying.length === 0, `running ${running}`, deploying.length > 0 ? `a deployment is in progress (${deploying.join(", ")}): verify once it settles` : "no task definition"));
+    /* LIVE-6 L6-2: EVERY pool is behind one target group -- its own (`controlPlane/evidence.ts` checks which): L6-1's
+       non-primary router answers readiness 200, so L5-8's "only the primary behind the ALB" no longer holds. */
     const balancers = arr(s.loadBalancers);
-    const primary = pool === expect.primaryPool;
-    checks.push(judge(`${label}: load balancer`, primary ? balancers.length === 1 : balancers.length === 0, primary ? "the primary's target group" : "none (a standby is never behind the ALB)", `${balancers.length} load balancer(s)`));
+    checks.push(judge(`${label}: load balancer`, balancers.length === 1, `one target group${pool === expect.primaryPool ? " (the primary's)" : " (a non-primary router's own)"}`, `${balancers.length} load balancer(s)`));
   }
   return checks;
 }
@@ -466,7 +515,23 @@ export const EVIDENCE_FILES = Object.freeze({
 });
 
 /** Every control-plane check over an evidence directory (a missing or unparseable file is a failure, never a skip). */
-export function checkEvidenceDirectory(dir: string, expect: { readonly environment: string; readonly pools: readonly string[]; readonly primaryPool: string; readonly port: number; readonly runtimeParameterArns: ReadonlyMap<string, string> }): Check[] {
+export function checkEvidenceDirectory(
+  dir: string,
+  expect: {
+    readonly environment: string;
+    readonly pools: readonly string[];
+    readonly primaryPool: string;
+    readonly port: number;
+    readonly runtimeParameterArns: ReadonlyMap<string, string>;
+    /** LIVE-6 L6-2: the trusted route table (pool -> ws_path) every runtime document v2 carries. */
+    readonly routes: Readonly<Record<string, string>>;
+    /** LIVE-6 L6-2: when a flip was made (the flip record's CAS time): the role-change checks run from it. */
+    /** After a flip (`--flip-record`): its instant, its two pools, and whether it was a rollback (the failing pool's own
+     *  role change is then reported, not required). Only the flip's two pools are judged. */
+    readonly flip?: { readonly since: number; readonly from: string; readonly to: string; readonly rollback: boolean } | null;
+    readonly now?: number;
+  },
+): Check[] {
   const read = (file: string): { ok: true; value: Json } | { ok: false; check: Check } => {
     const where = path.join(dir, file);
     try {
@@ -493,8 +558,36 @@ export function checkEvidenceDirectory(dir: string, expect: { readonly environme
       checks.push(...checkTaskDefinitionEvidence(pool, doc.value, { environment: expect.environment, runtimeParameterArn: arn, port: expect.port }));
     }
   }
+  const manifest = read(POOL_EVIDENCE_FILES.manifest);
+  checks.push(...(manifest.ok ? checkManifest(manifest.value, { environment: expect.environment, pools: expect.pools, now: expect.now ?? Date.now(), maxAgeMs: null }) : [manifest.check]));
+  /* LIVE-6 L6-2: one target group per pool, each pool's health, its own group, the rules and the rollback targets. */
   const groups = read(EVIDENCE_FILES.targetGroups);
-  checks.push(...(groups.ok ? checkTargetGroupEvidence(groups.value) : [groups.check]));
+  let targetGroups: ReadonlyMap<string, string> = new Map();
+  if (groups.ok) {
+    const judged = checkPoolTargetGroups(groups.value, { environment: expect.environment, pools: expect.pools });
+    checks.push(...judged.checks);
+    targetGroups = judged.arns;
+  } else checks.push(groups.check);
+  if (services.ok) checks.push(...checkPoolServices(services.value, { environment: expect.environment, pools: expect.pools, targetGroups }));
+  for (const pool of expect.pools) {
+    const health = read(POOL_EVIDENCE_FILES.targetHealth(pool));
+    const desired = services.ok ? poolServiceOf(services.value, expect.environment, pool)?.desired : null;
+    if (!health.ok) checks.push(health.check);
+    else checks.push(checkTargetHealth(pool, health.value, desired === 0 ? 0 : 1));
+    const revisions = readRevisions(dir, pool);
+    checks.push(revisions.ok ? checkIdentityLayout(pool, revisions.docs) : revisions.check);
+    const flip = expect.flip ?? null;
+    if (flip !== null && (pool === flip.from || pool === flip.to)) {
+      const stopped = read(POOL_EVIDENCE_FILES.stoppedTasks(pool));
+      const running = read(POOL_EVIDENCE_FILES.runningTasks(pool));
+      if (!stopped.ok) checks.push(stopped.check);
+      if (!running.ok) checks.push(running.check);
+      if (stopped.ok && running.ok) {
+        const judged = checkRoleChange(pool, expect.environment, stopped.value, running.value, flip.since);
+        checks.push(...(flip.rollback && pool === flip.from ? judged.map((c) => (c.status === "fail" ? { ...c, status: "skipped" as const, detail: `(rollback: ${pool} is the pool that failed to promote) ${c.detail}` } : c)) : judged));
+      }
+    }
+  }
   const lb = read(EVIDENCE_FILES.loadBalancerAttributes);
   checks.push(...(lb.ok ? checkLoadBalancerEvidence(lb.value) : [lb.check]));
   const dist = read(EVIDENCE_FILES.distributionConfig);
@@ -505,9 +598,6 @@ export function checkEvidenceDirectory(dir: string, expect: { readonly environme
   const sgs = read(EVIDENCE_FILES.securityGroups);
   checks.push(...(sgs.ok ? checkSecurityGroupsEvidence(sgs.value, expect) : [sgs.check]));
   const rules = read(EVIDENCE_FILES.listenerRules);
-  const primaryTargetGroup = str(obj(arr(serviceOf(expect.primaryPool)?.loadBalancers)[0]).targetGroupArn);
-  const evidenceTargetGroup = groups.ok ? str(obj(arr(obj(groups.value).TargetGroups)[0]).TargetGroupArn) : null;
-  checks.push(judge("target group: the primary service's", primaryTargetGroup !== null && primaryTargetGroup === evidenceTargetGroup, String(evidenceTargetGroup), `the evidence is ${evidenceTargetGroup}, the primary service uses ${primaryTargetGroup}`));
-  checks.push(...(rules.ok ? checkListenerRulesEvidence(rules.value, primaryTargetGroup) : [rules.check]));
+  checks.push(...(rules.ok ? checkPoolListenerRules(rules.value, { primary: expect.primaryPool, routes: expect.routes, targetGroups }) : [rules.check]));
   return checks;
 }

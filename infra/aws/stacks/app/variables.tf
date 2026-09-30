@@ -88,6 +88,40 @@ variable "log_retention_days" {
   default = 365
 }
 
+variable "game_generations" {
+  type    = set(number)
+  default = []
+}
+
+variable "generation_adoption" {
+  type = object({
+    generation = number
+    game_table = string
+    restore_id = string
+  })
+  default = null
+}
+
+variable "identity_layout_version" {
+  type    = number
+  default = 2
+}
+
+variable "operator_trusted_principal_arns" {
+  type    = list(string)
+  default = []
+}
+
+variable "recovery_trusted_principal_arns" {
+  type    = list(string)
+  default = []
+}
+
+variable "recovery_break_glass" {
+  type    = bool
+  default = false
+}
+
 variable "bootstrap_trusted_principal_arns" {
   type = list(string)
 }

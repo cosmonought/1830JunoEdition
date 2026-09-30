@@ -90,6 +90,8 @@ export interface World {
   standing: "standing" | "ended";
   /** LIVE-4 (L4-4): games whose durable log cannot be read at all right now (an I/O fault, not damage): tests set them. */
   readonly logFaults: Set<string>;
+  /** LIVE-6 L6-2: the next (re)build's post-restore safe mode (a test sets it before a `restart`). */
+  restoreSafeMode: boolean;
   /** Rebuild the service and the relayer over the same durable stores (a process restart); the load's summary. */
   restart(): Promise<{ readonly games: number; readonly held: number; readonly resumed: number; readonly skipped: number }>;
   /** Relayer passes, blocks and service jobs until `done()` or `max` rounds. */
@@ -178,6 +180,7 @@ export function makeWorld(options: WorldOptions = {}): World {
     standing: "standing",
     pin: options.pin ?? PIN,
     logFaults: new Set<string>(),
+    restoreSafeMode: false,
   } as unknown as World;
 
   function build(): void {
@@ -213,6 +216,7 @@ export function makeWorld(options: WorldOptions = {}): World {
         ? undefined
         : { signer: (options.wrapAdmissionSigner ?? ((signer) => signer))(junoJoinAdmissionSigner(ADMISSION_PUBKEY, JUNO_CODEC_V1, developmentDigestSigner(ADMISSION_SECRET, "admission", GUARD))), ttlSecs: ADMISSION_TTL_SECS },
       walletProofs,
+      ...(world.restoreSafeMode ? { restoreSafeMode: true } : {}),
       ...(options.continuation !== undefined ? { continuation: options.continuation } : {}),
     });
     const seam = options.relayerSeam?.() ?? {};

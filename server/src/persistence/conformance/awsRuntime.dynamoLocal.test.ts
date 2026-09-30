@@ -25,6 +25,7 @@ import { GetItemCommand, PutItemCommand, type AttributeValue, type DynamoDBClien
 
 import { createDynamoDbClient, deadline, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV } from "../../aws/awsClients";
 import { poolKey, readHead } from "../../aws/game/gameTable";
+import { bootstrapGenerationMarker, generationMarkerItem } from "../../aws/game/generationMarker";
 import { readRelayerRole } from "../../aws/game/relayerRole";
 import { readRouting, setPrimaryPool } from "../../aws/game/routing";
 import { readIdentityRole } from "../../aws/identity/dynamoIdentityStore";
@@ -86,6 +87,9 @@ async function awsTables(label: string, generation = 1, primary: string | null =
   const identity = await tables.create(`${label}-identity`);
   const ledger = await tables.create(`${label}-ledger`);
   await admin.send(new PutItemCommand({ TableName: ledger, Item: { ...LEDGER_KEYS.appgen(), schema: N(1), current_generation: N(generation) } }), { abortSignal: deadline() });
+  /* LIVE-6 L6-4: the first deployment's bootstrap (L5-8) marks the first game table with its generation. */
+  const marker = bootstrapGenerationMarker({ generation, gameTable: config().gameTable, by: "l5-8-bootstrap", now: 1 });
+  await admin.send(new PutItemCommand({ TableName: game, Item: generationMarkerItem(marker), ConditionExpression: "attribute_not_exists(pk)" }), { abortSignal: deadline() });
   if (primary !== null) {
     const routing = await readRouting(admin, game);
     const set = await setPrimaryPool(admin, game, { pool: primary, expectedVersion: routing?.routing_version ?? null, by: "pipeline", now: 1 });

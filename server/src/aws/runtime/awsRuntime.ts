@@ -13,8 +13,12 @@
 //
 //   1. config      the runtime document and the escrow configuration were read and checked (SSM; `awsMain.ts`), the
 //                  clients made by `awsClients.ts` (explicit regions, the task role's credentials).
-//      generation  the ledger's adopted app generation (APPGEN) must be the document's `generation` -- READ ONLY, before
-//                  the pool is taken: a task pointed at a superseded or unadopted game table must not fence the real one.
+//      generation  the ledger's adopted app generation (APPGEN) must be the document's `generation`, AND (LIVE-6 L6-4) the
+//                  game table's own marker (`SYSTEM/GENERATION`) must hold that same generation and name the document's
+//                  table -- READ ONLY, before the pool is taken: a task pointed at a superseded, unadopted or unprepared
+//                  game table must not fence the real one, and restored data of one generation is never served under
+//                  signing authority of another. The configured generation is FIXED for the task's life: nothing here
+//                  (or in the probe, the ledger or the SEC# journal) ever adopts a generation it merely read.
 //   2. pool        `PoolWriter.take` -- from this write on every older task of the pool is fenced from every game this task
 //                  claims. `onLost` is this runtime's loss (exit 3). Then `writer.start()` (the 2 s self-check) and
 //                  `watchGeneration(generationProbe)`. Nothing Dynamo-backed does authoritative work before this.
@@ -111,6 +115,7 @@ import type { HoldStore } from "../../rooms/holdStore";
 import type { RecordStore } from "../../rooms/recordStore";
 import { NoMoneyRosterSource } from "../../rooms/roomService";
 import type { WriterFence } from "../game/gameTable";
+import { adoptionBindingProblem, generationMarkerProblem, type AdoptionBinding, type GenerationMarker } from "../game/generationMarker";
 import type { OpenMoneyGames, PoolGameOwnership, SweepReport } from "../ownership/poolGameOwnership";
 import type { HeldProbe, PoolWriter } from "../ownership/poolWriter";
 import { ledgerFencedHook, NO_RELAYER_ROLE } from "../ownership/relayerRole";
@@ -186,6 +191,10 @@ export interface AwsGameStores {
 export interface AwsSubstrate<W extends PoolWriterPort = PoolWriterPort, L extends InspectableSigningJournal = InspectableSigningJournal> {
   /** Step 1, read only: the ledger's adopted app generation (`null`: none adopted). */
   adoptedGeneration(): Promise<number | null>;
+  /** Step 1, read only (LIVE-6 L6-4): the game table's `SYSTEM/GENERATION` marker (`null`: none). */
+  tableGeneration(): Promise<GenerationMarker | null>;
+  /** Step 1, read only (LIVE-6 L6-4): which table and restore APPGEN's adoption names (`null`: the bootstrap APPGEN). */
+  adoptionBinding(): Promise<AdoptionBinding | null>;
   /** Step 2: take this task's pool (`PoolWriter.take`). Rejects when it was not taken. */
   takePool(options: { readonly task: string; readonly now: () => number; readonly onLost: (reason: string) => void; readonly warn: (line: string) => void }): Promise<W>;
   /** The adopted generation as a held probe (`generationProbe`). */
@@ -431,7 +440,25 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   if (adopted !== config.generation) {
     refuse(`the ledger's adopted app generation is ${String(adopted)}, not this task's ${config.generation}: a task pointed at a superseded or unadopted game table does not start (it would fence nothing it may use)`);
   }
-  step("generation", `the ledger's adopted app generation is ${config.generation}, as configured`);
+  /* LIVE-6 L6-4: the game table's own generation, the same number, naming this table -- still before the pool. */
+  let marker: GenerationMarker | null;
+  try {
+    marker = await substrate.tableGeneration();
+  } catch (error) {
+    return refuse(`the game table's generation marker (SYSTEM/GENERATION) could not be read (${describe(error)})`);
+  }
+  const markerProblem = generationMarkerProblem(marker, { generation: config.generation, gameTable: config.gameTable });
+  if (markerProblem !== null) refuse(`${markerProblem}: a task never serves one generation's game data under another's signing authority`);
+  /* ... and the ledger ADOPTED this very table (several copies may be prepared as one generation; one is adopted). */
+  let binding: AdoptionBinding | null;
+  try {
+    binding = await substrate.adoptionBinding();
+  } catch (error) {
+    return refuse(`the ledger's APPGEN adoption could not be read (${describe(error)})`);
+  }
+  const bindingProblem = adoptionBindingProblem(marker as GenerationMarker, binding);
+  if (bindingProblem !== null) refuse(`${bindingProblem}; this task serves nothing`);
+  step("generation", `the ledger's adopted app generation is ${config.generation}, as configured, and the game table ${config.gameTable} holds that generation (${(marker as GenerationMarker).origin})`);
 
   /* ---------------- 2. the pool writer FIRST ---------------- */
   assertAlive(); // never take the pool (fencing the serving task) for a task that is already asked to stop

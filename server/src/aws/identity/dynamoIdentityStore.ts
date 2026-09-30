@@ -78,7 +78,7 @@ import {
   type SessionFamily,
 } from "../../identity/store";
 import { StoreDefiniteError, StoreUncertainError } from "../../persistence/storeResult";
-import { decodeItem, grantItem, isRoleText, keyAttributes, keys, markerItem, ROLE_KEY, type Item, type RoleRecord, type SelectorRecord } from "./identityItems";
+import { decodeItem, grantItem, isRoleText, keyAttributes, keys, markerItem, RESTORE_KEY, ROLE_KEY, type Item, type RestoreRecord, type ReviewRecord, type RoleRecord, type SelectorRecord } from "./identityItems";
 import { CHUNK_BUDGET, planIdentityChange, type PlannedAction } from "./identityPlan";
 
 /* ------------------------------------------------------------------ */
@@ -247,6 +247,151 @@ export interface DynamoIdentityStoreOptions {
    *  view: the process must restart and load what the table really holds. */
   readonly onRestartRequired?: (detail: string) => void;
   readonly warn?: (line: string) => void;
+  /** LIVE-6 L6-4, the RESTORE REPLAY's own store only: the table is mid-restore by THIS restore (its `RESTORE#identity`
+   *  marker is `replaying` under this id), and it may be loaded to be replayed. Without it (every serving task), a table
+   *  whose restore is not `complete` refuses the load (`IdentityRestoreIncompleteError`). */
+  readonly restore?: { readonly id: string };
+}
+
+/** LIVE-6 L6-4: the identity table is a restored copy whose security-journal replay has not completed -- it serves
+ *  nothing (no load, no serving takeover) until the replay marks it complete. Names no id. */
+export class IdentityRestoreIncompleteError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "IdentityRestoreIncompleteError";
+  }
+}
+
+/** LIVE-6 L6-4: carried by every SERVING identity-writer takeover (`aws/ownership/roles.ts`), inside its transaction:
+ *    - `ConditionCheck RESTORE#identity: attribute_not_exists(pk) OR (state = complete AND identity_table = this table)` --
+ *      no serving task takes the role of a table mid-restore (so it never fences the replay preparing it), of a restore's
+ *      superseded SOURCE, or of a copy that merely carried another table's `complete` marker;
+ *    - `Update TABLE#identity SET identity_table = this table COND attribute_not_exists(pk) OR identity_table = this
+ *      table` -- the table NAMES ITSELF from its first serving takeover on, so a point-in-time copy (which carries its
+ *      source's name) serves nothing until its own restore replay completes and renames it (review round 2).
+ *  The replay's own takeovers carry neither. */
+export function identityServingChecks(table: string): TransactWriteItem[] {
+  return [
+    {
+      ConditionCheck: {
+        TableName: table,
+        Key: keyAttributes(RESTORE_KEY),
+        ConditionExpression: "attribute_not_exists(#pk) OR (#state = :complete AND #table = :table)",
+        ExpressionAttributeNames: { "#pk": "pk", "#state": "state", "#table": "identity_table" },
+        ExpressionAttributeValues: { ":complete": { S: "complete" }, ":table": { S: table } },
+      },
+    },
+    {
+      Update: {
+        TableName: table,
+        Key: keyAttributes(keys.self()),
+        UpdateExpression: "SET #fmt = :fmt, #table = :table",
+        ConditionExpression: "attribute_not_exists(#pk) OR #table = :table",
+        ExpressionAttributeNames: { "#pk": "pk", "#fmt": "fmt", "#table": "identity_table" },
+        ExpressionAttributeValues: { ":fmt": { N: "1" }, ":table": { S: table } },
+      },
+    },
+  ];
+}
+
+/** The whole identity table, decoded strictly (the load's reading, shared with the restore's read-only planning). */
+export interface IdentityTableContents {
+  readonly snapshot: FullIdentitySnapshot;
+  readonly role: RoleRecord | null;
+  readonly restore: RestoreRecord | null;
+  readonly reviews: readonly ReviewRecord[];
+  readonly grants: number;
+  /** The table's own name (`TABLE#identity`), `null` before its first serving takeover. */
+  readonly self: string | null;
+}
+
+/** Decode every item of the identity table: strict, as the load always was -- one item it cannot read refuses the whole. */
+export function decodeIdentityTable(items: readonly Item[], where: string): IdentityTableContents {
+  const principals: Principal[] = [];
+  const profiles: Profile[] = [];
+  const sessions: Session[] = [];
+  const families: SessionFamily[] = [];
+  const links: LinkCredential[] = [];
+  const selectors: SelectorRecord[] = [];
+  const reviews: ReviewRecord[] = [];
+  let roles = 0;
+  let role: RoleRecord | null = null;
+  let restores = 0;
+  let restore: RestoreRecord | null = null;
+  let grants = 0;
+  let selves = 0;
+  let self: string | null = null;
+  for (const item of items) {
+    const decoded = decodeItem(item);
+    if ("problem" in decoded) throw new IdentityStoreCorruptError(`${where}: ${decoded.problem}`);
+    switch (decoded.kind) {
+      case "principal":
+        principals.push(decoded.record);
+        break;
+      case "profile":
+        profiles.push(decoded.record);
+        break;
+      case "session":
+        sessions.push(decoded.record);
+        break;
+      case "family":
+        families.push(decoded.record);
+        break;
+      case "link":
+        links.push(decoded.record);
+        break;
+      case "selector":
+        selectors.push(decoded.record);
+        break;
+      case "role":
+        roles += 1;
+        role = decoded.record;
+        break;
+      case "restore":
+        restores += 1;
+        restore = decoded.record;
+        break;
+      case "review":
+        reviews.push(decoded.record);
+        break;
+      case "grant":
+        grants += 1;
+        break;
+      case "self":
+        selves += 1;
+        self = decoded.record.identity_table;
+        break;
+      default:
+        break; // commit markers: well-formed (decoded), not part of the identity set
+    }
+  }
+  if (roles > 1) throw new IdentityStoreCorruptError(`${where}: more than one identity-writer role item`);
+  if (restores > 1) throw new IdentityStoreCorruptError(`${where}: more than one restore marker`);
+  if (selves > 1) throw new IdentityStoreCorruptError(`${where}: more than one table-name item`);
+  /* The selector items are the uniqueness authority: they must say exactly what the profiles say. */
+  const live = new Map<string, string>();
+  for (const selector of selectors) if (selector.retired_at === null) live.set(selector.recovery_selector, selector.profile_id);
+  if (live.size !== profiles.length) throw new IdentityStoreCorruptError(`${where}: the live selector items do not match the profiles (${live.size} for ${profiles.length})`);
+  for (const profile of profiles) {
+    if (live.get(profile.recovery_selector) !== profile.profile_id) throw new IdentityStoreCorruptError(`${where}: a profile's recovery selector has no live selector item naming it`);
+  }
+  const whole = checkSnapshot(applyChange({ principals, sessions, profiles, links, families }, {}), where);
+  return { snapshot: applyChange(whole, {}), role, restore, reviews: reviews.sort((a, b) => (a.profile_id < b.profile_id ? -1 : a.profile_id > b.profile_id ? 1 : a.restore_id < b.restore_id ? -1 : 1)), grants, self };
+}
+
+/** Why `table`, in this restore state, may not be loaded by this store (`null`: it may). */
+export function restoreLoadProblem(restore: RestoreRecord | null, own: { readonly id: string } | undefined, table: string, self: string | null = null): string | null {
+  if (own !== undefined) {
+    if (restore === null || restore.restore_id !== own.id || restore.state !== "replaying" || restore.identity_table !== table) return `the table is not mid-restore by ${own.id} (the restore replay loads only its own replaying table)`;
+    return null;
+  }
+  if (restore !== null && restore.identity_table === table) {
+    if (restore.state === "superseded") return `the table was superseded by an identity restore (${restore.restore_id}): it never serves again`;
+    if (restore.state !== "complete") return `the table is a restored copy whose security-journal replay (${restore.restore_id}) has not completed: it serves nothing until the replay marks it complete`;
+  }
+  if (self !== null && self !== table) return `the table names itself ${self}: it is a copy of that table, and serves nothing until its own restore replay completes`;
+  if (restore !== null && restore.identity_table !== table) return `the table carries another table's restore marker (${restore.restore_id}): it is a copy that was never replayed itself, and serves nothing`;
+  return null;
 }
 
 export interface DynamoIdentityStoreHealth {
@@ -352,59 +497,17 @@ export function createDynamoIdentityStore(client: DynamoDBClient, table: string,
 
   const load = (): Promise<FullIdentitySnapshot> =>
     serial(async () => {
-      const principals: Principal[] = [];
-      const profiles: Profile[] = [];
-      const sessions: Session[] = [];
-      const families: SessionFamily[] = [];
-      const links: LinkCredential[] = [];
-      const selectors: SelectorRecord[] = [];
-      let roles = 0;
-      let role: RoleRecord | null = null;
-      for (const item of await scanAll()) {
-        const decoded = decodeItem(item);
-        if ("problem" in decoded) throw new IdentityStoreCorruptError(`${where}: ${decoded.problem}`);
-        switch (decoded.kind) {
-          case "principal":
-            principals.push(decoded.record);
-            break;
-          case "profile":
-            profiles.push(decoded.record);
-            break;
-          case "session":
-            sessions.push(decoded.record);
-            break;
-          case "family":
-            families.push(decoded.record);
-            break;
-          case "link":
-            links.push(decoded.record);
-            break;
-          case "selector":
-            selectors.push(decoded.record);
-            break;
-          case "role":
-            roles += 1;
-            role = decoded.record;
-            break;
-          default:
-            break; // grants and commit markers: well-formed (decoded), not part of the identity set
-        }
-      }
-      if (roles > 1) throw new IdentityStoreCorruptError(`${where}: more than one identity-writer role item`);
+      const contents = decodeIdentityTable(await scanAll(), where);
+      /* LIVE-6 L6-4: a restored table serves nothing until its security-journal replay is complete -- a load of a
+         half-replayed table could bring back a revoked family, a retired key or a disabled principal. */
+      const restoring = restoreLoadProblem(contents.restore, options.restore, table, contents.self);
+      if (restoring !== null) throw new IdentityRestoreIncompleteError(`${where}: ${restoring}`);
       /* Review F6: a writer whose epoch is not the table's learns it at the load, not at its first write -- it must not
          serve from memory what another writer may be changing (preflight §5.5). The load still answers (reading is
          harmless); every write is refused. */
-      const tableEpoch = (role as RoleRecord | null)?.epoch ?? null;
+      const tableEpoch = contents.role?.epoch ?? null;
       if (tableEpoch !== options.epoch) markFenced(`at the load the table's role epoch is ${tableEpoch ?? "absent"}; this writer holds ${options.epoch}`);
-      /* The selector items are the uniqueness authority: they must say exactly what the profiles say. */
-      const live = new Map<string, string>();
-      for (const selector of selectors) if (selector.retired_at === null) live.set(selector.recovery_selector, selector.profile_id);
-      if (live.size !== profiles.length) throw new IdentityStoreCorruptError(`${where}: the live selector items do not match the profiles (${live.size} for ${profiles.length})`);
-      for (const profile of profiles) {
-        if (live.get(profile.recovery_selector) !== profile.profile_id) throw new IdentityStoreCorruptError(`${where}: a profile's recovery selector has no live selector item naming it`);
-      }
-      const whole = checkSnapshot(applyChange({ principals, sessions, profiles, links, families }, {}), where);
-      const sorted = applyChange(whole, {});
+      const sorted = contents.snapshot;
       index = IdentityIndex.from(sorted);
       return JSON.parse(JSON.stringify(sorted)) as FullIdentitySnapshot;
     });
@@ -573,6 +676,27 @@ export interface IdentityRoleTakeover {
   readonly checks?: readonly TransactWriteItem[];
   readonly maxAttempts?: number;
   readonly sleep?: (ms: number) => Promise<void>;
+}
+
+/** LIVE-6 L6-4: why this table may not SERVE now (its restore marker and its own name, strongly; `null`: it may). */
+export async function identityServingProblem(client: DynamoDBClient, table: string): Promise<string | null> {
+  const answer = await client.send(new GetItemCommand({ TableName: table, Key: keyAttributes(keys.self()), ConsistentRead: true }), { abortSignal: deadline() });
+  let self: string | null = null;
+  if (answer.Item !== undefined) {
+    const decoded = decodeItem(answer.Item as Item);
+    if ("problem" in decoded || decoded.kind !== "self") throw new IdentityStoreCorruptError(`identity table ${table}: the table-name item is not well-formed`);
+    self = decoded.record.identity_table;
+  }
+  return restoreLoadProblem(await readIdentityRestore(client, table), undefined, table, self);
+}
+
+/** LIVE-6 L6-4: the restore marker, strongly (`null`: the table was never restored). Strict: damage throws. */
+export async function readIdentityRestore(client: DynamoDBClient, table: string): Promise<RestoreRecord | null> {
+  const answer = await client.send(new GetItemCommand({ TableName: table, Key: keyAttributes(RESTORE_KEY), ConsistentRead: true }), { abortSignal: deadline() });
+  if (answer.Item === undefined) return null;
+  const decoded = decodeItem(answer.Item as Item);
+  if ("problem" in decoded || decoded.kind !== "restore") throw new IdentityStoreCorruptError(`identity table ${table}: the restore marker is not well-formed`);
+  return decoded.record;
 }
 
 /** Read the role item strongly (`null`: the role was never taken). */

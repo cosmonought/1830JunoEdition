@@ -23,6 +23,16 @@
 //   TXN#<token>            / TXN      the commit marker of one transaction (the attempt's ClientRequestToken), TTL 1 day:
 //                                     written by the transaction it names, so a strong read of it settles an unknown
 //                                     outcome exactly (preflight §4: "never taken at face value")
+//   RESTORE#identity       / RESTORE  (LIVE-6 L6-4) the identity RESTORE marker: this table is a restored copy whose
+//                                     security-journal replay is `replaying` (the table serves NOTHING: no load, no
+//                                     serving takeover) or `complete` (it may serve). Absent: never restored.
+//   REVIEW#<pf>            / REVIEW#<restore>   (LIVE-6 L6-4) a profile sent to OPERATOR REVIEW by a restore (an
+//                                     unconfirmed recovery-key rotation, owner decision 2026-09-29): which restore, which
+//                                     events (by id only -- never a selector or a hash), and what the replay did to the key.
+//                                     One per restore: a later restore never overwrites an earlier one's.
+//   TABLE#identity         / TABLE    (LIVE-6 L6-4) the table's OWN NAME: set by its first serving takeover (inside that
+//                                     transaction), rewritten only by a restore's completion. A point-in-time copy carries
+//                                     its source's name, so it serves nothing until its own replay completes.
 //
 // THE VALUES ARE THE RECORD'S OWN FIELDS, ONE ATTRIBUTE EACH, TYPED: a string is S, a time or count is N (a canonical
 // decimal integer), a `null` is NULL -- every frozen field is present on every item, so what a condition tests is
@@ -68,6 +78,11 @@ export const keys = Object.freeze({
   link: (hash: string): ItemKey => ({ pk: `LINK#${hash}`, sk: "LINK" }),
   selector: (selector: string): ItemKey => ({ pk: `SEL#${selector}`, sk: "SEL" }),
   grant: (sessionId: string): ItemKey => ({ pk: `GRANT#${sessionId}`, sk: "GRANT" }),
+  /** One review record per (profile, restore): a later restore never overwrites an earlier one's. */
+  review: (profileId: string, restoreId: string): ItemKey => ({ pk: `REVIEW#${profileId}`, sk: `REVIEW#${restoreId}` }),
+  /** The identity table's own name (review round 2): set by the first serving takeover, rewritten only by a restore's
+   *  completion -- a point-in-time copy carries its source's name and so serves nothing until its own replay. */
+  self: (): ItemKey => ({ pk: "TABLE#identity", sk: "TABLE" }),
   marker: (token: string): ItemKey => ({ pk: `TXN#${token}`, sk: "TXN" }),
 });
 
@@ -133,6 +148,30 @@ export const SELECTOR_FIELDS: FieldSpec = [
   ["profile_id", "S"],
   ["retired_at", "N?"],
 ];
+export const RESTORE_FIELDS: FieldSpec = [
+  ["restore_id", "S"],
+  ["state", "S"],
+  ["identity_table", "S"],
+  ["peer_table", "S"],
+  ["restore_point", "N"],
+  ["started_at", "N"],
+  ["journal_digest", "S"],
+  ["journal_events", "N"],
+  ["completed_at", "N?"],
+  ["reviews", "N?"],
+];
+export const REVIEW_FIELDS: FieldSpec = [
+  ["profile_id", "S"],
+  ["principal_id", "S"],
+  ["restore_id", "S"],
+  ["reason", "S"],
+  ["opened_at", "N"],
+  ["unconfirmed_events", "S"],
+  ["confirmed_events", "S"],
+  ["selector_state", "S"],
+  ["prior_status", "S"],
+  ["resolved_at", "N?"],
+];
 export const GRANT_FIELDS: FieldSpec = [
   ["session_id", "S"],
   ["family_id", "S"],
@@ -147,6 +186,59 @@ export interface SelectorRecord {
   /** `null` while the profile holds it; the rotation's time once it was retired (a tombstone: it never resolves again). */
   readonly retired_at: number | null;
 }
+
+/** LIVE-6 L6-4: the identity restore marker. It serves only while `complete` AND naming this very table: `replaying` (the
+ *  replay has not finished), `superseded` (the SOURCE of a restore: it never serves again) and a `complete` marker carried
+ *  into a copy (it names another table) all serve nothing. */
+export interface RestoreRecord {
+  readonly restore_id: string;
+  readonly state: "replaying" | "complete" | "superseded";
+  /** The table this marker was written INTO (a point-in-time copy carries it over, naming its source: never served). */
+  readonly identity_table: string;
+  /** replaying / complete: the source the table was restored from; superseded: the restored table that replaces it. */
+  readonly peer_table: string;
+  /** The point in time the table was restored to (epoch ms; recorded -- the replay applies the WHOLE journal). */
+  readonly restore_point: number;
+  /** The replay's own fixed time: every time the replay writes is this one, so a resumed replay writes the same values. */
+  readonly started_at: number;
+  /** SHA-256 of the journal the last plan was computed from (the whole SEC# journal, canonical), and its event count. */
+  readonly journal_digest: string;
+  readonly journal_events: number;
+  readonly completed_at: number | null;
+  readonly reviews: number | null;
+}
+
+/** LIVE-6 L6-4: a profile under operator review after a restore. Ids of events only: never a selector or a hash. */
+export interface ReviewRecord {
+  readonly profile_id: string;
+  readonly principal_id: string;
+  readonly restore_id: string;
+  readonly reason: "unconfirmed-recovery-key-rotation";
+  readonly opened_at: number;
+  /** Canonical JSON arrays of 32-hex event ids, ascending. */
+  readonly unconfirmed_events: string;
+  readonly confirmed_events: string;
+  /** What the replay left as the profile's key: the confirmed chain's head kept (not implicated), or a quarantine key
+   *  nobody holds (the head was implicated). Either way the profile is `disabled` until an operator resolves it. */
+  readonly selector_state: "confirmed-head-retained" | "quarantined";
+  /** The profile's status before THIS restore sent it to review: what a withdrawal of this review restores. */
+  readonly prior_status: "active" | "disabled";
+  /** Set by the operator's resolution (L6-3); `null` while open. */
+  readonly resolved_at: number | null;
+}
+
+export const RESTORE_PK = "RESTORE#identity";
+export const RESTORE_KEY: ItemKey = Object.freeze({ pk: RESTORE_PK, sk: "RESTORE" });
+export const RESTORE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{2,63}$/;
+const TABLE_NAME_PATTERN = /^[A-Za-z0-9_.-]{3,255}$/;
+const HEX_64 = /^[0-9a-f]{64}$/;
+const EVENT_IDS = /^\[("[0-9a-f]{32}"(,"[0-9a-f]{32}")*)?\]$/;
+const isEventIdList = (value: unknown): value is string => {
+  if (typeof value !== "string" || !EVENT_IDS.test(value)) return false;
+  const ids = JSON.parse(value) as string[];
+  return ids.every((id, at) => at === 0 || ids[at - 1] < id);
+};
+export const eventIdList = (ids: Iterable<string>): string => JSON.stringify([...new Set(ids)].sort());
 
 export interface RoleRecord {
   readonly epoch: number;
@@ -246,6 +338,10 @@ export const linkItem = (record: LinkCredential): Item => encodeRecord(keys.link
 export const selectorItem = (record: SelectorRecord): Item => encodeRecord(keys.selector(record.recovery_selector), SELECTOR_FIELDS, record);
 export const grantTtl = (expiresAt: number): number => Math.floor(expiresAt / 1000) + GRANT_TTL_GRACE_SECONDS;
 export const grantItem = (record: SensitiveAuthGrant): Item => encodeRecord(keys.grant(record.session_id), GRANT_FIELDS, record, { ttl: N(grantTtl(record.expires_at)) });
+export const restoreItem = (record: RestoreRecord): Item => encodeRecord(RESTORE_KEY, RESTORE_FIELDS, record);
+export const reviewItem = (record: ReviewRecord): Item => encodeRecord(keys.review(record.profile_id, record.restore_id), REVIEW_FIELDS, record);
+export const SELF_FIELDS: FieldSpec = [["identity_table", "S"]];
+export const selfItem = (table: string): Item => encodeRecord(keys.self(), SELF_FIELDS, { identity_table: table });
 export const markerTtl = (at: number): number => Math.floor(at / 1000) + MARKER_TTL_SECONDS;
 export const markerItem = (token: string, at: number): Item => ({ ...keyAttributes(keys.marker(token)), fmt: N(IDENTITY_ITEM_FORMAT), at: N(at), ttl: N(markerTtl(at)) });
 
@@ -262,7 +358,10 @@ export type DecodedItem =
   | { readonly kind: "selector"; readonly record: SelectorRecord }
   | { readonly kind: "grant"; readonly record: SensitiveAuthGrant }
   | { readonly kind: "role"; readonly record: RoleRecord }
-  | { readonly kind: "marker"; readonly record: { readonly token: string; readonly at: number } };
+  | { readonly kind: "marker"; readonly record: { readonly token: string; readonly at: number } }
+  | { readonly kind: "restore"; readonly record: RestoreRecord }
+  | { readonly kind: "review"; readonly record: ReviewRecord }
+  | { readonly kind: "self"; readonly record: { readonly identity_table: string } };
 
 export type ItemClass = DecodedItem["kind"];
 
@@ -281,9 +380,14 @@ export function classOfKey(pk: string, sk: string): ItemClass | null {
     SEL: ["selector", "SEL"],
     GRANT: ["grant", "GRANT"],
     TXN: ["marker", "TXN"],
+    RESTORE: ["restore", "RESTORE"],
+    REVIEW: ["review", "REVIEW#"],
+    TABLE: ["self", "TABLE"],
   };
   const match = expected[prefix];
-  return match !== undefined && match[1] === sk ? match[0] : null;
+  if (match === undefined) return null;
+  if (match[0] === "review") return sk.startsWith("REVIEW#") ? "review" : null;
+  return match[1] === sk ? match[0] : null;
 }
 
 const TOKEN_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -357,6 +461,50 @@ export function decodeItem(item: Item): DecodedItem | { readonly problem: string
         ROLE_TEXT.test(pool.value as string) &&
         TOKEN_PATTERN.test(claim.value as string);
       return ok ? { kind, record: { epoch: epoch.value as number, task: task.value as string, pool: pool.value as string, taken_at: takenAt.value as number, claim: claim.value as string } } : bad;
+    }
+    case "restore": {
+      const record = decodeRecord(item, RESTORE_FIELDS);
+      const ok =
+        record !== null &&
+        suffix === "identity" &&
+        typeof record.restore_id === "string" &&
+        RESTORE_ID_PATTERN.test(record.restore_id) &&
+        (record.state === "replaying" || record.state === "complete" || record.state === "superseded") &&
+        typeof record.identity_table === "string" &&
+        TABLE_NAME_PATTERN.test(record.identity_table) &&
+        typeof record.peer_table === "string" &&
+        TABLE_NAME_PATTERN.test(record.peer_table) &&
+        record.peer_table !== record.identity_table &&
+        typeof record.journal_digest === "string" &&
+        HEX_64.test(record.journal_digest) &&
+        (record.state === "complete") === (record.completed_at !== null) &&
+        (record.state === "complete") === (record.reviews !== null);
+      return ok ? { kind, record: record as unknown as RestoreRecord } : bad;
+    }
+    case "review": {
+      const record = decodeRecord(item, REVIEW_FIELDS);
+      const ok =
+        record !== null &&
+        typeof record.profile_id === "string" &&
+        PROFILE_ID_PATTERN.test(record.profile_id) &&
+        record.profile_id === suffix &&
+        item.sk?.S === `REVIEW#${String(record.restore_id)}` &&
+        typeof record.principal_id === "string" &&
+        PRINCIPAL_ID_PATTERN.test(record.principal_id) &&
+        typeof record.restore_id === "string" &&
+        RESTORE_ID_PATTERN.test(record.restore_id) &&
+        record.reason === "unconfirmed-recovery-key-rotation" &&
+        isEventIdList(record.unconfirmed_events) &&
+        (record.unconfirmed_events as string) !== "[]" &&
+        isEventIdList(record.confirmed_events) &&
+        (record.selector_state === "confirmed-head-retained" || record.selector_state === "quarantined") &&
+        (record.prior_status === "active" || record.prior_status === "disabled");
+      return ok ? { kind, record: record as unknown as ReviewRecord } : bad;
+    }
+    case "self": {
+      const record = decodeRecord(item, SELF_FIELDS);
+      const ok = record !== null && suffix === "identity" && typeof record.identity_table === "string" && TABLE_NAME_PATTERN.test(record.identity_table);
+      return ok ? { kind, record: record as unknown as { identity_table: string } } : bad;
     }
     case "marker": {
       const names = Object.keys(item).filter((name) => item[name] !== undefined).sort();

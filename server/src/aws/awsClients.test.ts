@@ -269,20 +269,25 @@ describe("L5-1 AWS client convention", () => {
              aws/ledger              -- itself, the ownership layer (APPGEN, the relayer role), the runtime, the conformance;
              aws/kms                 -- itself, the runtime, the conformance;
              aws/runtime             -- itself; and start.ts, which reads the storage mode and loads the AWS entry only.
+           LIVE-6 L6-4 adds ONE more composer, the restore's operator surface `aws/recovery/` (APPGEN adoption, the game
+           table's generation marker, the identity replay): it may import aws/game, aws/identity and aws/ledger (never
+           ownership, KMS or the runtime), and NOTHING imports it except the conformance suites (its CLI is its own entry).
            Every relative import is RESOLVED against its file, so no spelling (`../../game/x`, `./aws/game`) slips past. */
         if (name.startsWith(".")) {
           const target = path.relative(root, path.resolve(path.dirname(file), name)).split(path.sep).join("/");
-          const composer = relative.startsWith("aws/ownership/");
+          const recovery = relative.startsWith("aws/recovery/");
+          const composer = relative.startsWith("aws/ownership/") || recovery;
           const allowed = (dir: string, also: boolean) => relative.startsWith(`${dir}/`) || also || runtime || conformance.test(relative);
           if (under(target, "aws/game") && !allowed("aws/game", composer)) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/identity") && !allowed("aws/identity", composer)) offenders.push(`${relative}: imports the identity adapters (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/ownership") && !allowed("aws/ownership", false)) offenders.push(`${relative}: imports the ownership layer (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/ledger") && !allowed("aws/ledger", composer)) offenders.push(`${relative}: imports the signing ledger (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/kms") && !allowed("aws/kms", false)) offenders.push(`${relative}: imports the KMS binding (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/recovery") && !recovery && !conformance.test(relative)) offenders.push(`${relative}: imports the restore's operator surface (${name}); nothing but its own CLI and the conformance suites reaches it`);
           if (under(target, "aws/runtime") && !runtime && !conformance.test(relative) && !(relative === "start.ts" && (target === "aws/runtime/storageMode" || target === "aws/runtime/awsMain"))) {
             offenders.push(`${relative}: imports the AWS runtime (${name}); only start.ts reaches it (the storage mode, and the AWS entry)`);
           }
-        } else if (/(^|\/)aws\/(game|identity|ownership|ledger|kms|runtime)(\/|$)/.test(name)) offenders.push(`${relative}: imports an AWS module by a non-relative path (${name})`);
+        } else if (/(^|\/)aws\/(game|identity|ownership|ledger|kms|runtime|recovery)(\/|$)/.test(name)) offenders.push(`${relative}: imports an AWS module by a non-relative path (${name})`);
       }
     }
     assert.deepEqual(offenders, []);

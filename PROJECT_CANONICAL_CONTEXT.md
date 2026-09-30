@@ -162,7 +162,7 @@ When this file names a Project document, it writes `Project: claude/<name>`.
   - **KMS is usable in production** through AWS storage (production keys no longer fail for want of a client there); every Sign waits for the pool writer's side-effect gate; the relayer role, when not taken, is retried every 30 s once the backend is active and published only after the relayer's load. PROCESS mode still refuses KMS keys (no client there).
   - **`/gs/readyz`** from the pool writer's readiness (and the startup, the roles, shutting down), fixed public reason codes; `/gs/healthz` unchanged. **Loss** (pool, identity writer, SEC# journal, ledger fence) is exit 3 at once; a store restart request exit 4; neither drains. **Graceful shutdown** in a documented, bounded order ending with `identity.settled()` and the pool writer.
   - **Changed for every backend (narrow):** `openJunoBackend` gains `preload` (default true) and, once `stop()`ped, neither loads nor re-arms its verification; `createGameServer` gains `readiness` and `bindHost` (absent: as before); the file-journal refusal's text names the AWS mode.
-  - Record: Project `claude/LIVE5_L5_7_AWS_RUNTIME_CONVERGENCE_2026-09-30.md` (§12: the exact L5-8 resource/configuration contract; §13: the LIVE-6 handoffs).
+  - Record: Project `claude/LIVE5_L5_7_AWS_RUNTIME_CONVERGENCE_2026-09-30.md` (§14: the exact L5-8 resource/configuration contract; §15: the LIVE-6 handoffs).
 
 **Route engine / v12: a separate gameplay program, not part of LIVE-4**
 - The route / autopath hardening (the route-engine certification preflight's findings, including the pre-registered blockers **S6-15** — hosted ingress judging routes on the STANDARD board — and **S6-16** — an H12 fork reversal the search demonstrates but authority rejects) and the **v12** rules batch are their own gameplay program. They are not folded into LIVE-4 and change no LIVE-4 identity. Record: Project `claude/ROUTE_ENGINE_EXTRACTION_CERTIFICATION_PREFLIGHT_2026-09-28.md`.
@@ -308,7 +308,7 @@ Every other Project report is **historical**; see the manifest.
 
 **For LIVE-5 (LIVE-4 is closed):** this file; `LIVE4_COMPATIBILITY_MODEL.md` (§4: the edge requirement and the
 `/gs/api/*` decision); the L4-7 report's LIVE-5 handoffs; then ESCROW-4 §19. From L5-2 on, also: the L5-1 report
-(its §3 inventory and §11 handoff), `server/src/aws/README.md`, and the LIVE-5/6 architecture preflight (§3–§5, §22). From L5-3 on, also the L5-2 report's handoff section; from L5-6 on, also the L5-3 report's handoffs; for L5-7, also the L5-6 report's L5-7 handoff (`server/src/aws/README.md` §6-§7). For L5-7, L5-8 and L6-4, also: the L5-4 report's handoffs. For L5-8 and LIVE-6, also: the L5-7 report (§12 the L5-8 contract, §13 the LIVE-6 handoffs) and `server/src/aws/README.md` §8. The LIVE-4 slice, integration and L4-6
+(its §3 inventory and §11 handoff), `server/src/aws/README.md`, and the LIVE-5/6 architecture preflight (§3–§5, §22). From L5-3 on, also the L5-2 report's handoff section; from L5-6 on, also the L5-3 report's handoffs; for L5-7, also the L5-6 report's L5-7 handoff (`server/src/aws/README.md` §6-§7). For L5-7, L5-8 and L6-4, also: the L5-4 report's handoffs. For L5-8 and LIVE-6, also: the L5-7 report (§14 the L5-8 contract, §15 the LIVE-6 handoffs) and `server/src/aws/README.md` §8. The LIVE-4 slice, integration and L4-6
 reports are needed only where a LIVE-5 question reaches back into them. The list below is the order LIVE-4 started
 from, kept for provenance.
 

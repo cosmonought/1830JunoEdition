@@ -382,7 +382,7 @@ loss or restart request during it stops it with its own exit code.
 conformance suites theirs); nothing else imports `aws/runtime/`, except `start.ts` (`storageMode` statically, `awsMain`
 dynamically). The SSM and Secrets Manager packages only in `awsClients.ts` and `configSource.ts`.
 
-**For L5-8 (IaC), what the runtime needs** (the L5-7 report has the complete contract): the three tables (game with the
+**For L5-8 (IaC), what the runtime needs** (the L5-7 report, §14, has the complete contract): the three tables (game with the
 generation in its name, identity with TTL `ttl`, ledger in the ledger account with APPGEN initialised to the document's
 `generation`); `SYSTEM/ROUTING` naming the primary pool before its first task starts; the two SSM `String` parameters; the
 three KMS keys; the task role (DynamoDB, KMS, SSM read) and no static credentials; the container on `0.0.0.0:$PORT`

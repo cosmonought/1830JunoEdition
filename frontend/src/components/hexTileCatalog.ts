@@ -80,10 +80,10 @@ export interface TileCatalogEntry {
    *  WHY THIS EXISTS, since the board already reads revenue off the chain: the TILE PICKER does not. A tray
    *  thumbnail renders a tile that is not on the board yet, so there is no `MapTileEntry` to read -- and offline
    *  there is no chain at all. Those paths fell through to the flat bucket, which cannot express real 1830: the
-   *  picker showed #62 as $40 when the tile prints $90, and #61 as $20 when it prints $60. A player choosing
+   *  picker showed #62 as $40 when the tile prints $80 (Route v12's owner ruling; $90 before it), and #61 as $20 when it prints $60. A player choosing
    *  between upgrades was reading numbers the contract would never pay.
    *  Twelve of the twenty-two city/town tiles deviate from their bucket (#14/#15 20->30, #53 20->50, #54 40->60,
-   *  #61 20->60, #62 40->90, #63 20->40, #64-#68 40->50). The other ten are mirrored ANYWAY: "agrees with the
+   *  #61 20->60, #62 40->80 (v12; 90 before), #63 20->40, #64-#68 40->50). The other ten are mirrored ANYWAY: "agrees with the
    *  bucket" is a coincidence of the current numbers, not a property, and leaving them implicit would mean the
    *  next backend revenue change silently reintroduces this bug on whichever tile it touches.
    *  PRECEDENCE: the chain's `MapTileEntry.revenue` wins where there is one, then this, then the bucket. Never the
@@ -500,7 +500,9 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     quantity: 1,
     cityGroups: [[0, 1], [2, 3]],
     paths: [[0, 1], [2, 3]],
-    revenue: 90,
+    // Owner ruling (Route v12, 2026-09-29): #62 prints $80 per city. The $90 once here conflated it with the 1830+ /
+    // LPF New York tile #883 ($90, below). Pre-v12 boards still price $90 (`tileRevenue.ts`, PRE_V12_TILE_REVENUE).
+    revenue: 80,
   },
   {
     tileId: 63,
@@ -796,7 +798,7 @@ export const TILE_CATALOG: readonly TileCatalogEntry[] = [
     color: "Brown",
     quantity: 1,
     paths: [[0, 1], [0, 4], [0, 5], [1, 4], [1, 5], [4, 5]],
-    revenue: 90,
+    revenue: 90, // the 1830+ / LPF New York tile: $90 -- NOT #62's $80 (owner ruling, Route v12)
     plusOnly: true,
   },
   {

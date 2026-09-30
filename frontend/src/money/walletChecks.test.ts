@@ -4,6 +4,8 @@
 // server bytes; a Join admission is used only when every field is this seat's and its signature checks out; a Join is
 // never sent into an escrow whose terms disagree with the table.
 
+// Route v12 R12-2 moved the rules engine to 12 (R12-3 certified it for settlement): this page's rules are the engine's.
+import { RULES_ENGINE_VERSION } from "../gameEngine/rulesVersion";
 import { walletLinkChallengeText } from "../gameEngine/escrow/walletLinkChallengeV1";
 import { WALLET_EXECUTE } from "../gameEngine/escrow/junoWalletMessages";
 import { joinAdmissionDigestV1 } from "../gameEngine/escrow/junoJoinAdmissionV1";
@@ -72,7 +74,7 @@ describe("ESCROW-4: the table and the messages, built here from neutral fields",
     const view = moneyView({ you: linked([CONSENT]) });
     const built = createGameMessage(TEST_PIN, view, VARIANTS, CONSENT);
     if (!built.ok) throw new Error(built.reason);
-    expect(built.value.msgJson).toBe(WALLET_EXECUTE.createGame({ maxPlayers: 2, mode: 0, rulesEngineVersion: 11, variantsDigest: variantsDigestV1(VARIANTS), consentPubkey: CONSENT, joinTicket: TICKET }));
+    expect(built.value.msgJson).toBe(WALLET_EXECUTE.createGame({ maxPlayers: 2, mode: 0, rulesEngineVersion: RULES_ENGINE_VERSION, variantsDigest: variantsDigestV1(VARIANTS), consentPubkey: CONSENT, joinTicket: TICKET }));
     expect(built.value.funds).toEqual([{ denom: "ujunox", amount: "1000000" }]);
     expect(built.value.hint).toBe("create");
     expect(createGameMessage(TEST_PIN, moneyView(), VARIANTS, CONSENT)).toEqual({ ok: false, reason: expect.stringMatching(/Link your wallet/) });
@@ -158,7 +160,7 @@ describe("ESCROW-4: the chain game, read by this browser, must be exactly the ta
     creator: "juno1host",
     maxPlayers: 2,
     mode: "live",
-    rulesEngineVersion: 11,
+    rulesEngineVersion: RULES_ENGINE_VERSION,
     variantsDigest: variantsDigestV1(VARIANTS),
     denom: "ujunox",
     anteGross: "1000000",

@@ -161,7 +161,7 @@ describe("the new tiles, in the request's own edge numbers", () => {
     expect(tile(592).revenue).toBe(50);
     expect(tile(626).revenue).toBe(40);
     for (const id of [884, 997]) expect(tile(id).revenue).toBe(60); // #1398: a brown B pays $60, as #61 does
-    expect(tile(883).revenue).toBe(90); // the same figure as #62, per the ruling
+    expect(tile(883).revenue).toBe(90); // the 1830+ / LPF New York tile: $90 (NOT #62, which is $80 -- owner ruling, Route v12)
     for (const id of [145, 146, 147]) expect(tile(id).revenue).toBe(20);
     for (const id of [36, 35, 984]) expect(tile(id).revenue).toBe(50);
     expect(tile(167).revenue).toBe(70);

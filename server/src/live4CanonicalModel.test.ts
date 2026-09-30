@@ -50,14 +50,18 @@ const HOLD_CODES_EXIST: Readonly<Record<keyof typeof CONFLICT_HOLD_CODES, Financ
 
 /** This build, no escrow backend: computed independently (Python `json.dumps(sort_keys=True, separators=(",", ":"))`
  *  + `hashlib.sha256`) from the literal descriptor below. L4-3: `client_protocols` [0, 1] (was [0]). Route v12 R12-2:
- *  rules 12 reading [12] (was 11 / [11]); settlement still [10, 11]. */
+ *  rules 12 reading [12] (was 11 / [11]); settlement still [10, 11]. Route v12 R12-3: settlement certified [10, 11, 12]. */
 const THIS_BUILD_NO_ESCROW_TEXT =
   '{"client_protocols":[0,1],"escrow_abi_checksums":["5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"],' +
   '"escrow_deployments":[],"financial_protocols":[],"format":"18COSMOS/DEPLOYMENT-CAPABILITY/v1","hosted_protocols":[1],' +
-  '"rules":{"certified":[10,11],"current":12,"supported":[12]},"settlement_codecs":["18JUNO/v1"]}';
-const THIS_BUILD_NO_ESCROW_KEY = "dc1-ade748b9407a3db380e5ed72";
+  '"rules":{"certified":[10,11,12],"current":12,"supported":[12]},"settlement_codecs":["18JUNO/v1"]}';
+const THIS_BUILD_NO_ESCROW_KEY = "dc1-41eb96a737cd33aa90a62808";
 /** This build serving the ESCROW-3B fixture deployment (`escrow3bSupport.PIN`), cross-checked the same way. */
-const THIS_BUILD_FIXTURE_KEY = "dc1-eb48b18e50d46d0c50807710";
+const THIS_BUILD_FIXTURE_KEY = "dc1-63af8114005a5f202d7d349c";
+/** The same two keys at Route v12 R12-2 (rules 12, settlement still [10, 11]): R12-3's certification moved them. */
+const R12_2_NO_ESCROW_KEY = "dc1-ade748b9407a3db380e5ed72";
+const R12_2_FIXTURE_KEY = "dc1-eb48b18e50d46d0c50807710";
+const RULES_12_UNCERTIFIED = { current: 12, supported: [12], certified: [10, 11] } as const;
 /** The same two keys through LIVE-4 (L4-3 .. R12-1), on rules 11: Route v12 R12-2 moved them on the rules axis alone. */
 const LIVE4_NO_ESCROW_KEY = "dc1-68c4b829b3a20e63f3e55cde";
 const LIVE4_FIXTURE_KEY = "dc1-4308649847947d1d12ccdd41";
@@ -86,14 +90,11 @@ describe("L4-1: the moved constants are the shared ones, unchanged", () => {
   });
 
   test("ESCROW-4's continuation identity is exactly what it was but for the rules: rules 12 (11 until Route v12 R12-2), hosted 1, financial 3, 18JUNO/v1", () => {
-    assert.deepEqual({ ...money.THIS_DEPLOYMENT }, { supportedRules: [12], certifiedRules: [10, 11], hostedProtocol: 1, financialProtocol: 3, settlementCodecs: ["18JUNO/v1"] });
+    assert.deepEqual({ ...money.THIS_DEPLOYMENT }, { supportedRules: [12], certifiedRules: [10, 11, 12], hostedProtocol: 1, financialProtocol: 3, settlementCodecs: ["18JUNO/v1"] });
     assert.deepEqual(money.currentMoneyContinuation(), { format: "18COSMOS/MONEY-CONTINUATION/v1", rules_engine_version: 12, hosted_protocol: 1, financial_protocol: 3, settlement_codec: "18JUNO/v1" });
-    /* Route v12 R12-2: this build's own money identity is not continued -- rules 12 is not settlement-certified (it stays
-       [10, 11] until v12's own certification pass), so no money table can be created. Through LIVE-4 it continued. */
-    assert.deepEqual(
-      (({ continues, why }) => ({ continues, why }))(money.moneyContinuationVerdict(money.currentMoneyContinuation()) as { continues: boolean; why?: string }),
-      { continues: false, why: "rules-not-certified" },
-    );
+    /* Route v12 R12-3 certified 12 for settlement, so this build's own money identity continues again (at R12-2 it was
+       `rules-not-certified` and no money table could be created). */
+    assert.equal(money.moneyContinuationVerdict(money.currentMoneyContinuation()).continues, true);
     assert.equal(money.isMoneyContinuationIdentity(money.currentMoneyContinuation()), true);
   });
 
@@ -203,7 +204,7 @@ describe("L4-1: this build's capability and its key (visible in review when eith
        replay-equivalence certificate (OD-L4-2) -- and it moves this key. */
     assert.deepEqual(JSON.parse(JSON.stringify(capability)), {
       format: "18COSMOS/DEPLOYMENT-CAPABILITY/v1",
-      rules: { current: 12, supported: [12], certified: [10, 11] },
+      rules: { current: 12, supported: [12], certified: [10, 11, 12] },
       hosted_protocols: [1],
       financial_protocols: [],
       settlement_codecs: ["18JUNO/v1"],
@@ -249,6 +250,20 @@ describe("L4-1: this build's capability and its key (visible in review when eith
     }
   });
 
+  test("Route v12 R12-3 moved both keys again, by certifying 12 alone: rules 12 certified [10, 11] gives back the R12-2 keys exactly", () => {
+    for (const [pins, now, before] of [
+      [[] as DeploymentPin[], THIS_BUILD_NO_ESCROW_KEY, R12_2_NO_ESCROW_KEY],
+      [[PIN] as DeploymentPin[], THIS_BUILD_FIXTURE_KEY, R12_2_FIXTURE_KEY],
+    ] as const) {
+      const capability = thisDeploymentCapability(pins);
+      assert.equal(compatibilityKey(capability), now);
+      const uncertified = deploymentCapability({ ...capability, rules: RULES_12_UNCERTIFIED });
+      assert.equal(compatibilityKey(uncertified), before, "with 12 uncertified, the R12-2 key comes back exactly");
+      const nowRules = JSON.parse(capabilityCanonicalText(capability)).rules as Record<string, unknown>;
+      assert.deepEqual(nowRules, { certified: [10, 11, 12], current: 12, supported: [12] });
+    }
+  });
+
   test("serving the ESCROW-3B fixture deployment: financial 3 appears with it, and the key moves", () => {
     const capability = thisDeploymentCapability([PIN]);
     assert.deepEqual(capability.financial_protocols, [3]);
@@ -258,14 +273,12 @@ describe("L4-1: this build's capability and its key (visible in review when eith
     assert.equal(compatibilityKey(capability), THIS_BUILD_FIXTURE_KEY, capabilityCanonicalText(capability));
   });
 
-  test("a money game at this build's rules is continued nowhere until they are settlement-certified; a no-money deal continues", () => {
-    /* Route v12 R12-2: the rules are 12 and settlement stays [10, 11] (its own certification pass adds 12), so a money
-       identity at this build's rules is `rules-not-certified` -- asked before the financial protocol -- whether or not the
-       escrow is served, and this build creates no money table at all (`moneyTables.ts` asks the same verdict first).
-       Through LIVE-4 (rules 11, certified) it continued where its escrow was served. */
+  test("a money game this build creates continues on it, and only where its escrow is served (R12-3: rules 12 certified)", () => {
+    /* Route v12 R12-2 left rules 12 uncertified, so this answered `rules-not-certified` on both; R12-3 certified 12, so it
+       is LIVE-4's answer again: continued where the escrow is served, `financial-protocol` where none is. */
     const facts = { formats: { record: "current", log: "current", fin: "current", tickets: "current", intents: "current" } as const, identity: { kind: "undealt" } as const, money: { kind: "record" as const, mci: money.currentMoneyContinuation(), deployment: PIN } };
-    assert.equal(canonicalWhy(continuationVerdict(facts, thisDeploymentCapability([PIN]))), "not-continued/rules-not-certified");
-    assert.equal(canonicalWhy(continuationVerdict(facts, thisDeploymentCapability([]))), "not-continued/rules-not-certified");
+    assert.deepEqual(continuationVerdict(facts, thisDeploymentCapability([PIN])), { kind: "continues" });
+    assert.equal(canonicalWhy(continuationVerdict(facts, thisDeploymentCapability([]))), "not-continued/financial-protocol");
     const dealtNow = { formats: { record: "current", log: "current" } as const, identity: sharedIdentity.gameIdentityOfDeal({ rules_engine_version: 12, build: "dev" }), money: null };
     assert.deepEqual(continuationVerdict(dealtNow, thisDeploymentCapability([])), { kind: "continues" });
     assert.deepEqual(continuationVerdict(dealtNow, thisDeploymentCapability([PIN])), { kind: "continues" });

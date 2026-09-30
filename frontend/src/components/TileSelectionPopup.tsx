@@ -37,6 +37,7 @@ import { TilePreviewThumbnail, TILE_CATALOG_BY_ID } from "./HexGridRenderer";
    the catalog rather than through `HexGridRenderer`'s re-export, which is one of the naming authorities
    this must not add a second hop to. Unchanged for every tile but oo1, oo13 and oo14. */
 import { canonicalTileName } from "./hexTileCatalog";
+import { printedTileRevenue } from "./tileRevenue";
 import { FONT_FAMILY, FONT_SIZE } from "../styles/typography";
 import type { LegalTilePlacement, TileColorTier } from "./HexGridRenderer";
 
@@ -254,7 +255,7 @@ function groupPlacementsByTile(
       // Design note #9. Read from the SAME catalog mirror the tier comes
       // from -- this file still keeps no tile table of its own, which is
       // the discipline design note #5 already established here.
-      revenue: typeof entry?.revenue === "number" ? entry.revenue : null,
+      revenue: entry === undefined ? null : (printedTileRevenue(entry.tileId) ?? null),
     };
   });
   groups.sort((a, b) => {

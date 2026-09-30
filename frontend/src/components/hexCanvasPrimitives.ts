@@ -51,6 +51,7 @@ import {
   type TileCatalogEntry,
   type TileColorTier,
 } from "./hexTileCatalog";
+import { printedTileRevenue } from "./tileRevenue";
 import {
   STATION_TOKEN_RING,
   STATION_TOKEN_RING_WIDTH_RATIO,
@@ -1567,7 +1568,7 @@ export function drawTileOverlays(
     const badgeTerrain = valueBadgeTerrainFor(entry.terrain);
     // The precedence chain: chain revenue, then the catalog mirror, then the flat terrain bucket. ?? throughout, deliberately NOT || -- a revenue of 0 is legitimate at every level and must beat the level below.
     // See docs/ai_architecture/hex_tile_math.md - HexGridRenderer.tsx #135
-    const value = revenueOverride ?? entry.revenue ?? terrainBaseValue(entry.terrain);
+    const value = revenueOverride ?? printedTileRevenue(entry.tileId) ?? terrainBaseValue(entry.terrain);
     if (badgeTerrain && value > 0) {
       // Same offset convention as `drawValueBadge`'s own slot placement
       // (`REVENUE_BADGE_OFFSET`), pointed south-east -- a tray thumbnail has

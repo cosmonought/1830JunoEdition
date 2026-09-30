@@ -28,6 +28,7 @@ import {
   TILE_CATALOG_BY_ID,
   type TileColorTier,
 } from "./hexTileCatalog";
+import { printedTileRevenue } from "./tileRevenue";
 import {
   BOARD_HEX_FILL,
   BOARD_HEX_STROKE,
@@ -1710,8 +1711,9 @@ export function HexGridRenderer({
             tile_id: drawnPreview.tileId,
             orientation: drawnPreview.orientation,
             paths: TILE_CATALOG_BY_ID.get(drawnPreview.tileId)?.paths ?? null,
+            // Route v12: the preview stamps what the lay will (`tileRevenue.ts`: #62 $80 on v12, $90 pre-v12).
             revenue: (() => {
-              const value = TILE_CATALOG_BY_ID.get(drawnPreview.tileId)?.revenue;
+              const value = printedTileRevenue(drawnPreview.tileId);
               return value === undefined ? undefined : String(value);
             })(),
             landmark: laidUnderPreview?.landmark ?? null,

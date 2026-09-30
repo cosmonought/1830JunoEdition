@@ -11,7 +11,8 @@
 // ROUTE v12 R12-2 moved the pins deliberately: no sample case emits an illegal set or strands any more (the herald
 // join, the Coal River end), Montreal / Norfolk are repaired, and what remains is (a) "sound-suboptimal" -- the
 // search is still a bounded heuristic whose figure is a LOWER BOUND (S6-3), every demonstrated set legal and applied
-// -- and (b) #62's catalog $90, an unresolved source discrepancy R12-2 did not change (`production-data-defect`).
+// -- and nothing else: #62's catalog $90 (R12-2's one data difference) was corrected to the owner-ruled $80 in v12
+// (R12-3), so no sample case carries `production-data-defect` and production's data optimum is the oracle's.
 //
 // OWNER-RUN (`ROUTE_ORACLE_FULL=1`): the whole B-2 corpus and, when `ROUTE_ORACLE_CORPUS_DIR` names a folder
 // holding the owner-local logs (`server/data/*.log.jsonl`, `frontend/sandbox-log-*.json`), the B-1 real
@@ -50,30 +51,31 @@ describe("the corpus is built from the logs, not from assumptions", () => {
 /** [board, corporation, fleet, oracle optimum, production's demonstration, production class, every flag, the best set
  *  under PRODUCTION's data].
  *
- *  THE DATA (R12-1 closure; R12-2): on the 1830+ map Montreal pays $40 / $60 and Norfolk $30 / $50, each ONE city
- *  with TWO circles -- production agrees since R12-2. #62: the oracle prices $80 per city, production's catalog $90;
- *  R12-2 found no first-party evidence settling it and left production unchanged, so the last column (the oracle's
- *  law on production's data) differs from the oracle only by #62's premium, and such a case carries
- *  `production-data-defect`. Before R12-2 (the R12-1 pins, kept in the comments): Z6C@494 PRR [D] and C&O [6,D]
- *  stranded (the herald join, Coal River), PRR [6] and NYC@608 [6,D] emitted illegal Coal River sets, and N&W's
- *  home filled production's one Norfolk circle. */
+ *  THE DATA (R12-1 closure; R12-2; R12-3): on the 1830+ map Montreal pays $40 / $60 and Norfolk $30 / $50, each ONE
+ *  city with TWO circles -- production agrees since R12-2. #62 pays $80 per city, and production agrees since the
+ *  owner's final ruling was folded into v12 (R12-3; it had been $90, conflated with the 1830+ NY tile #883), so the
+ *  last column equals the oracle's optimum everywhere. Before R12-2 (the R12-1 pins, kept in the comments): Z6C@494
+ *  PRR [D] and C&O [6,D] stranded (the herald join, Coal River), PRR [6] and NYC@608 [6,D] emitted illegal Coal
+ *  River sets, and N&W's home filled production's one Norfolk circle. The R12-2 figures (#62 at $90) are kept in
+ *  the comments too. */
 const SAMPLE: ReadonlyArray<readonly [string, number, readonly string[], number, number, string, readonly string[], number]> = [
-  // Standard 1830, Brown: ordinary positions, a PRR bow case, two Diesels.
-  ["Y8V@651", 5, ["3"], 170, 150, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 180],
-  ["Y8V@651", 2, ["3"], 180, 190, "production-data-defect", ["production-data-defect", "sound-optimal"], 190], // $190 = the law's $180 + #62's extra $10
-  ["Y8V@651", 1, ["4", "6"], 470, 460, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 490], // the preflight's $500 used a bare-token bow run (IL-7, now refused)
-  ["Y8V@651", 6, ["D"], 780, 740, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 800], // R12-1: 680 (re-entry and the red-area join widen the search)
-  ["Y8V@651", 8, ["6", "D"], 840, 810, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 860], // R12-1: 730
+  // Standard 1830, Brown: ordinary positions, a PRR bow case, two Diesels. (R12-2, #62 at $90: 150, 190, 460, 740, 810.)
+  ["Y8V@651", 5, ["3"], 170, 150, "sound-suboptimal", ["sound-suboptimal"], 170],
+  ["Y8V@651", 2, ["3"], 180, 160, "sound-suboptimal", ["sound-suboptimal"], 180],
+  ["Y8V@651", 1, ["4", "6"], 470, 450, "sound-suboptimal", ["sound-suboptimal"], 470], // the preflight's $500 used a bare-token bow run (IL-7, now refused)
+  ["Y8V@651", 6, ["D"], 780, 730, "sound-suboptimal", ["sound-suboptimal"], 780], // R12-1: 680 (re-entry and the red-area join widen the search)
+  ["Y8V@651", 8, ["6", "D"], 840, 790, "sound-suboptimal", ["sound-suboptimal"], 840], // R12-1: 730
   // Level Playing Field, Gray. R12-1: PRR [D] 710 stranding (the H12 join; production-data optimum 660), PRR [6] 260
   // illegal (Coal River), C&O [6,D] 730 stranding (720), B&O [D] 780 short only through Norfolk's one circle, N&W [D] 850.
-  ["Z6C@494", 1, ["D"], 820, 840, "production-data-defect", ["production-data-defect", "sound-optimal"], 840], // $840 = the law's $820 + two #62 cities
-  ["Z6C@494", 1, ["6"], 290, 250, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 300],
-  ["Z6C@494", 5, ["6", "D"], 870, 860, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 890],
-  ["Z6C@494", 4, ["D"], 870, 880, "production-data-defect", ["production-data-defect", "sound-optimal"], 880], // Norfolk's second circle is open now
-  ["Z6C@494", 10, ["D"], 870, 880, "production-data-defect", ["production-data-defect", "sound-optimal"], 880], // N&W's licence (393) opens Coal River to it
-  // R12-1: NYC [6,D] 790 illegal (Coal River), N&W [3,4,4] 510 short only through Norfolk's flat $20.
-  ["Z6C@608", 2, ["6", "D"], 990, 860, "sound-suboptimal", ["production-data-defect", "sound-suboptimal"], 1000],
-  ["Z6C@608", 10, ["3", "4", "4"], 530, 540, "production-data-defect", ["production-data-defect", "sound-optimal"], 540], // the preflight's "unsound" row: N&W is licensed
+  // R12-2 (#62 at $90): 840, 250, 860, 880, 880.
+  ["Z6C@494", 1, ["D"], 820, 820, "sound-optimal", ["sound-optimal"], 820],
+  ["Z6C@494", 1, ["6"], 290, 250, "sound-suboptimal", ["sound-suboptimal"], 290],
+  ["Z6C@494", 5, ["6", "D"], 870, 840, "sound-suboptimal", ["sound-suboptimal"], 870],
+  ["Z6C@494", 4, ["D"], 870, 870, "sound-optimal", ["sound-optimal"], 870], // Norfolk's second circle is open now
+  ["Z6C@494", 10, ["D"], 870, 870, "sound-optimal", ["sound-optimal"], 870], // N&W's licence (393) opens Coal River to it
+  // R12-1: NYC [6,D] 790 illegal (Coal River), N&W [3,4,4] 510 short only through Norfolk's flat $20. R12-2: 860, 540.
+  ["Z6C@608", 2, ["6", "D"], 990, 850, "sound-suboptimal", ["sound-suboptimal"], 990],
+  ["Z6C@608", 10, ["3", "4", "4"], 530, 530, "sound-optimal", ["sound-optimal"], 530], // the preflight's "unsound" row: N&W is licensed
   ["Z6C@608", 1, ["3"], 160, 130, "sound-suboptimal", ["sound-suboptimal"], 160],
 ];
 

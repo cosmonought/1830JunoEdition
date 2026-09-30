@@ -180,8 +180,9 @@ export const ORACLE_LANDMARK_VALUE: Readonly<Record<string, number>> = {
  *  test diffs the two.
  *
  *  #62 (brown New York) IS $80 PER CITY -- the owner's ruling for Route v12 (R12-1 repair), agreeing with
- *  tobymao/18xx. The project's catalog, its Rust contract and design note #135 say $90: that is a PRODUCTION DATA
- *  DEFECT, recorded here (`productionDefect`) and left for R12-2 (production tile data is not touched in R12-1). */
+ *  tobymao/18xx. The catalog's former $90 conflated it with the 1830+ / LPF New York tile #883 ($90); the owner's
+ *  final ruling (2026-09-29, folded into rules v12 at R12-3) corrected production to $80, so #62 is no longer a
+ *  recorded production data defect. (`productionDefect` stays in the shape for any future owner-ruled one.) */
 export const ORACLE_STANDARD_TILES: Readonly<Record<number, { value: number; cities?: ReadonlyArray<readonly number[]>; productionDefect?: string }>> = {
   1: { value: 10 },
   2: { value: 10 },
@@ -198,11 +199,7 @@ export const ORACLE_STANDARD_TILES: Readonly<Record<number, { value: number; cit
   54: { value: 60, cities: [[0, 1], [2, 3]] },
   59: { value: 40, cities: [[0], [2]] },
   61: { value: 60 },
-  62: {
-    value: 80,
-    cities: [[0, 1], [2, 3]],
-    productionDefect: "owner ruling (R12-1 repair): $80 per city; the project's catalog says $90 -- a production data defect for R12-2",
-  },
+  62: { value: 80, cities: [[0, 1], [2, 3]] },
   63: { value: 40 },
   64: { value: 50, cities: [[0, 2], [3, 4]] },
   65: { value: 50, cities: [[0, 4], [2, 3]] },

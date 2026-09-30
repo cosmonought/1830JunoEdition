@@ -96,15 +96,13 @@ describe("the oracle's own figures and city membership against the data both sid
     }
   });
 
-  it("#62 is $80 per city (owner ruling, R12-1 repair); the catalog's $90 is the one recorded production data defect", () => {
+  it("#62 is $80 per city, and production agrees (owner's final ruling, folded into v12 at R12-3): no data defect is left", () => {
     const defects = Object.entries(ORACLE_STANDARD_TILES).filter(([, entry]) => entry.productionDefect !== undefined).map(([id]) => Number(id));
-    expect(defects).toEqual([62]);
+    expect(defects).toEqual([]);
     expect(ORACLE_STANDARD_TILES[62].value).toBe(80);
-    // STILL OPEN after R12-2 (an unresolved SOURCE discrepancy, not a repaired defect): production says $90. R12-2
-    // found no first-party evidence that settles #62 (the owner's authority is the 2018 revised Lookout 1830
-    // rulebook / map; the repository's rulebook PDF prints the manifest too small to read) and so, on the owner's
-    // instruction, did NOT change production. The owner decides; until then this pin holds both figures apart.
-    expect(TILE_CATALOG_BY_ID.get(62)!.revenue).toBe(90);
+    expect(TILE_CATALOG_BY_ID.get(62)!.revenue).toBe(80);
+    // The 1830+ / LPF New York tile is a different tile at $90 -- the figure #62 had been conflated with.
+    expect(TILE_CATALOG_BY_ID.get(883)!.revenue).toBe(90);
   });
 
   it("the 1830+ map's two-value gray cities (owner-confirmed): Montreal $40 / $60, Norfolk $30 / $50 -- production agrees since R12-2", () => {

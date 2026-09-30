@@ -10,6 +10,7 @@
 
 import type { BoardDefinition } from "../components/hexBoardData";
 import { TILE_CATALOG_BY_ID } from "../components/hexTileCatalog";
+import { printedTileRevenue } from "../components/tileRevenue";
 import type { MapGridResponse, MapTileEntry } from "../components/hexContractTypes";
 import { MOCK_GRID_GAME_ID } from "./mockFixtures";
 
@@ -17,6 +18,7 @@ export function initialGridFor(board: BoardDefinition): MapGridResponse {
   const tiles: MapTileEntry[] = board.hexes.flatMap((hex) => {
     if (!hex.printedTile) return [];
     const entry = TILE_CATALOG_BY_ID.get(hex.printedTile.tileId);
+    const printed = printedTileRevenue(hex.printedTile.tileId); // Route v12: the one revenue accessor (`tileRevenue.ts`)
     return [
       {
         q: hex.q,
@@ -25,7 +27,7 @@ export function initialGridFor(board: BoardDefinition): MapGridResponse {
         orientation: hex.printedTile.orientation,
         // The same two derived fields `applySandboxLayTile` writes for a laid tile.
         paths: entry?.paths ?? null,
-        revenue: entry?.revenue === undefined ? undefined : String(entry.revenue),
+        revenue: printed === undefined ? undefined : String(printed),
         landmark: null,
         printed: true,
       },

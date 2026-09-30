@@ -4,6 +4,8 @@
 // wallet that records what it was asked to sign, in-memory keys and pending records, and a fake session port that
 // answers the money routes from a script. Nothing here touches Keplr, IndexedDB or the network.
 
+// Route v12 R12-2 moved the rules engine to 12 (R12-3 certified it for settlement): this page's rules are the engine's.
+import { RULES_ENGINE_VERSION } from "../gameEngine/rulesVersion";
 import { Secp256k1, sha256 } from "@cosmjs/crypto";
 import { toHex } from "@cosmjs/encoding";
 
@@ -52,7 +54,7 @@ export function moneyView(over: ViewOver = {}): RoomMoneyView {
   const { terms, escrow, start, ...rest } = over;
   return {
     deployment: { backend: "juno-cosmwasm", chainId: TEST_PIN.chainId, networkClass: "testnet", contract: TEST_CONTRACT, codeChecksum: TEST_PIN.codeChecksum, denom: "ujunox", symbol: "JUNOX", exponent: 6 },
-    terms: { anteGross: "1000000", feeBps: 100, anteNet: null, pot: null, mode: "live", seats: 2, minAnte: "1000", rulesEngineVersion: 11, ...terms },
+    terms: { anteGross: "1000000", feeBps: 100, anteNet: null, pot: null, mode: "live", seats: 2, minAnte: "1000", rulesEngineVersion: RULES_ENGINE_VERSION, ...terms },
     escrow: { chainGameId: null, state: "unbound", paused: false, fundingDeadline: null, observedAt: T0, fundedSeats: 0, foreignSeats: 0, fullyFundedAt: null, ...escrow },
     seats: [
       { playerId: "p-me", funding: "none" },

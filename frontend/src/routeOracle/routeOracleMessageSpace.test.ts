@@ -17,7 +17,7 @@
 // ROUTE v12 R12-2: the authority defects R12-1 pinned here (IL-5 red areas keyed by hex, IL-7 a bare token counted
 // at a bypassed city, IL-3 an uncounted herald counted as a station) and the Montreal / Norfolk data defects are
 // REPAIRED, so every per-board expectation below lost them; the matchers stay, so a regression is named, not missed.
-// The one known difference left is #62's catalog $90 (an unresolved source discrepancy R12-2 did not change).
+// No known data difference is left: #62's catalog $90 was corrected to the owner-ruled $80 in v12 (R12-3).
 
 import { TILE_CATALOG_BY_ID } from "../components/hexTileCatalog";
 import { KNOWN_DEFECT_FIXTURES } from "./harness/knownDefects";
@@ -92,7 +92,7 @@ function knownDefect(graph: OracleGraph, route: readonly OracleWaypoint[], oracl
  *  #62's catalog $90 against the owner-ruled $80, and the 1830+ map's Montreal / Norfolk, which production prices
  *  flat ($40, $20) against their owner-confirmed pairs ($40 / $60, $30 / $50). All R12-2. */
 const DATA_PRINTED = "DATA: production prices Montreal / Norfolk flat (owner-confirmed $40/$60, $30/$50; R12-2)";
-const DATA_62 = "DATA: production's catalog prices #62 at $90 per city (oracle: $80; an unresolved source discrepancy, owner to rule)";
+const DATA_62 = "DATA: production's catalog prices #62 at $90 per city (oracle: $80) -- corrected in v12 (R12-3), so never expected now";
 /** The other Montreal / Norfolk data defect: production gives each ONE station circle (the superseded #1401 ruling;
  *  the owner's correction is two), so one foreign token shuts the city to through-running that the law allows. */
 const DATA_CIRCLES = "DATA: production gives Montreal / Norfolk one station circle (owner: two; R12-2), so one token blocks it";
@@ -239,12 +239,12 @@ describe("the message space of the dense boards (walks of up to five hexes)", ()
   it.each([
     // R12-1 found IL-7 here in a real position (PRR's bare Altoona home on the standard board) and production's flat
     // Norfolk on the Level Playing Field boards; R12-2 repaired both. Both late boards have a brown #62 on New York,
-    // so its catalog $90 (owner-ruled $80; unresolved, NOT changed by R12-2) is the one known DATA difference left.
-    ["Y8V@651", 1, [DATA_62]],
-    ["Y8V@651", 5, [DATA_62]],
+    // whose catalog $90 was the last known DATA difference until the owner's ruling corrected it to $80 (R12-3).
+    ["Y8V@651", 1, []],
+    ["Y8V@651", 5, []],
     ["Z6C@494", 1, []],
-    ["Z6C@494", 4, [DATA_62]],
-    ["Z6C@608", 10, [DATA_62]],
+    ["Z6C@494", 4, []],
+    ["Z6C@608", 10, []],
   ] as const)("%s company %s", (boardId, companyId, expectedKnown) => {
     const result = judgeAll(boards.get(boardId)!, companyId);
     expect(Object.keys(result.known).sort()).toEqual([...expectedKnown]);

@@ -1184,7 +1184,7 @@ describe("player copy: the actual reason, and rules versions only when the rules
 /* ================================================================================================= */
 
 describe("identity: client protocol 1 is spoken; nothing else moved", () => {
-  it("accepted [0, 1], announced 1; rules 11 / [11] at L4-3 (12 / [12] since Route v12 R12-2) / certified [10, 11]; hosted 1; financial 3", () => {
+  it("accepted [0, 1], announced 1; rules 11 / [11] at L4-3 (12 / [12] since Route v12 R12-2) / certified [10, 11] (+12 since R12-3); hosted 1; financial 3", () => {
     expect([...ACCEPTED_CLIENT_PROTOCOLS]).toEqual([0, 1]);
     expect(ANNOUNCED_CLIENT_PROTOCOL).toBe(1);
     expect(CLIENT_PROTOCOL_VERSION).toBe(1);
@@ -1192,23 +1192,27 @@ describe("identity: client protocol 1 is spoken; nothing else moved", () => {
     expect(CLIENT_PROTOCOL_CHANGELOG[1].note).toMatch(/spoken from L4-3/);
     expect(RULES_ENGINE_VERSION).toBe(12);
     expect([...SUPPORTED_RULES_ENGINE_VERSIONS]).toEqual([12]);
-    expect([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS]).toEqual([10, 11]);
+    expect([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS]).toEqual([10, 11, 12]);
     expect(HOSTED_PROTOCOL_VERSION).toBe(1);
     expect(FINANCIAL_PROTOCOL_VERSION).toBe(3);
   });
 
   it("this build's no-escrow key moved from L4-2's dc1-5e141a8b… to dc1-68c4b829… -- and client_protocols is the only field that did", () => {
     /* The L4-3 move, reproduced on the rules it was made on (11): client_protocols is the only field that differs. */
-    const atEleven = (change: Partial<DeploymentCapability> = {}) => thisPool({ rules: { current: 11, supported: [11], certified: SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS }, ...change });
+    const atEleven = (change: Partial<DeploymentCapability> = {}) => thisPool({ rules: { current: 11, supported: [11], certified: [10, 11] }, ...change });
     expect(compatibilityKey(atEleven())).toBe("dc1-68c4b829b3a20e63f3e55cde");
     expect(compatibilityKey(atEleven({ client_protocols: [0] }))).toBe("dc1-5e141a8b20871e5069520928");
   });
 
-  it("Route v12 R12-2 moved the key once more, on the rules axis alone: dc1-68c4b829… -> dc1-ade748b9…", () => {
+  it("Route v12 R12-2 moved the key once more, on the rules axis alone: dc1-68c4b829… -> dc1-ade748b9…; R12-3's certification of 12 moved it again", () => {
+    // R12-2: rules 12, certified still [10, 11].
+    expect(compatibilityKey(thisPool({ rules: { current: 12, supported: [12], certified: [10, 11] } }))).toBe("dc1-ade748b9407a3db380e5ed72");
+    expect(compatibilityKey(thisPool({ rules: { current: 12, supported: [12], certified: [10, 11] }, client_protocols: [0] }))).toBe("dc1-38ec6470f41eb199b158126a");
+    // R12-3: the certified list is a rules-axis field, so certifying 12 is a new pool.
     const now = thisPool();
-    expect(now.rules).toEqual({ current: 12, supported: [12], certified: [10, 11] });
-    expect(compatibilityKey(now)).toBe("dc1-ade748b9407a3db380e5ed72");
-    expect(compatibilityKey(thisPool({ client_protocols: [0] }))).toBe("dc1-38ec6470f41eb199b158126a");
+    expect(now.rules).toEqual({ current: 12, supported: [12], certified: [10, 11, 12] });
+    expect(compatibilityKey(now)).toBe("dc1-41eb96a737cd33aa90a62808");
+    expect(compatibilityKey(thisPool({ client_protocols: [0] }))).toBe("dc1-5a32b3ba76970f03f558aff4");
     // Put the rules back and it is the LIVE-4 key again: nothing but the rules moved.
     expect(compatibilityKey(thisPool({ rules: { current: 11, supported: [11], certified: [10, 11] } }))).toBe("dc1-68c4b829b3a20e63f3e55cde");
   });

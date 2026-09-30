@@ -345,8 +345,21 @@ interface CompanyFacts {
  * engine) and the appraisal state hash (which covers the pin). No codec, digest, payout arithmetic, contract or wasm
  * byte moved, and no v10 file was rewritten. v10 stays certified byte for byte; 12 and later stay refused until each is
  * certified the same way, here, by name.
+ *
+ * ROUTE v12 R12-3 (2026-09-29): 12 ADDED, BY ITS OWN CERTIFICATION -- `utils/settlementV12Certification.test.ts`. SET-0A's
+ * audit questions were rerun against the v12 engine: v12 changes route law, pricing, the S6-3 demonstration, 1830+ board
+ * data, tile #62 ($80) and ING-1 -- WHICH runs are legal and WHAT they pay -- and none changes what a field the appraisal
+ * reads MEANS: route revenue reaches the board only through the dividend / withhold ledger (cash) and the chart's price
+ * step, both unchanged. The thirteen golden recipes were rebuilt by the v12 engine at pin 12 beside the v10 and v11 sets
+ * (nine are v12 room games; four are pre-v12 corpus replays carried as v12 board shapes -- `settlementGoldenBoards.ts`)
+ * (each is its certified v10 and v11 board but for the pin; every vector, payout and dust value unchanged; payload bytes
+ * differ from v10's and v11's only in `domain` and `appraisal_state_hash`), and three v12 FORKS -- turns the v11 and v12
+ * laws play differently, played both ways through a server room -- show the terminal boards differing only in cash (each
+ * seat by exactly its dividend difference), the bank and the running corporation's turn record, with VGP conserved and
+ * the appraiser matching rankPlayers on both. No codec, digest, payout arithmetic, contract or wasm byte moved, and no v10
+ * or v11 evidence was rewritten. 13 and later stay refused until each is certified the same way, here, by name.
  */
-export const SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10, 11]);
+export const SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10, 11, 12]);
 
 /** The engines a board may be appraised under: the certified list, and only it (DA-8 -- see above). */
 function settleableRulesEngineVersions(): readonly number[] {

@@ -488,12 +488,14 @@ describe("§24 checkpoints: committed positions, once, the newest winning", () =
 });
 
 describe("§24 settlement: exactly the persisted intent, or the game is held", () => {
-  test("v11 settles (the happy path); a v10 or v12 money game is never signed on this v11 server -- not continued, nothing written (LIVE-4 L4-4)", async () => {
-    for (const pin of [10, 12]) {
+  test("this build's rules settle (the happy path); a money game on an older or newer pin is never signed here -- not continued, nothing written (LIVE-4 L4-4)", async () => {
+    /* Written on a v11 server as [10, 12]; Route v12 R12-2 made this server v12 (and R12-3 certified 12 for settlement), so
+       the pins on either side of it are 11 and 13. */
+    for (const pin of [11, 13]) {
       const world = makeWorld({ replay: endedReplay({ rules_engine_version: pin }) });
       const session = await dealt(world);
       play(world, GAME_A, 1, session);
-      /* A game whose money identity names another rules version: this v11 pool does not play it, so it is NOT CONTINUED
+      /* A game whose money identity names another rules version: this pool does not play it, so it is NOT CONTINUED
          here -- derived, never a durable hold (L4-4 step -1; before LIVE-4 it was held continuation-incompatible after
          the deal and the seal were written, F-L4-3). Its record is left exactly as it was, and nothing is signed. */
       const record = await fin(world);
@@ -504,14 +506,14 @@ describe("§24 settlement: exactly the persisted intent, or the game is held", (
       assert.equal((await intentsOf(world, GAME_A)).some((i) => i.op.kind === "settle"), false, `v${pin}: nothing signed`);
       assert.ok(world.ops.lines.some((line) => line.event === "money.not-continued" && line.game_id === GAME_A && line.why === "rules-not-supported"), `v${pin}: noticed`);
     }
-    /* And even past the continuation check, an uncertified board never builds: the settlement job holds it. */
-    const world = makeWorld({ replay: endedReplay({ rules_engine_version: 12 }) });
+    /* And even past the continuation check, an uncertified board (13; 12 was, until R12-3) never builds: the settlement job holds it. */
+    const world = makeWorld({ replay: endedReplay({ rules_engine_version: 13 }) });
     const session = await dealt(world);
     play(world, GAME_A, 1, session);
     const record = await fin(world);
     const sealed = transitionFinancial(record, { kind: "sealed", at: 1, log_len: session.entries.length, sealed_at: 1 });
     const next = (sealed as { next: FinancialGameRecord }).next;
-    const evidence = { format: "18COSMOS/SETTLEMENT-EVIDENCE/v1", game_id: GAME_A, log_len: session.entries.length, sealed_at: 1, log_hash: "00".repeat(32), appraisal_log_len: session.entries.length, appraisal_state_hash: "00".repeat(32), rules_engine_version: 12, terminal_reason: "BankBroken", players: [ALICE, BOB], totals: { [ALICE]: "1", [BOB]: "1" } } as const;
+    const evidence = { format: "18COSMOS/SETTLEMENT-EVIDENCE/v1", game_id: GAME_A, log_len: session.entries.length, sealed_at: 1, log_hash: "00".repeat(32), appraisal_log_len: session.entries.length, appraisal_state_hash: "00".repeat(32), rules_engine_version: 13, terminal_reason: "BankBroken", players: [ALICE, BOB], totals: { [ALICE]: "1", [BOB]: "1" } } as const;
     const prepared = (transitionFinancial(next, { kind: "prepared", at: 2, evidence }) as { next: FinancialGameRecord }).next;
     await world.financial.put({ ...prepared, record_version: record.record_version + 1 }, record.record_version);
     world.service.onIntentPrepared(GAME_A);

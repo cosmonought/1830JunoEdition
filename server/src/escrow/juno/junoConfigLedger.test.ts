@@ -11,6 +11,7 @@
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import * as path from "path";
 
 import { publicKeyOf } from "./secp256k1";
 import { fileJournalDirOf, JunoConfigError, JUNO_BACKEND_CONFIG_FORMAT, JUNO_BACKEND_CONFIG_FORMAT_V3, parseJunoBackendConfig } from "./junoConfig";
@@ -20,6 +21,8 @@ const KEY = (n: number, region = "us-east-1") => `arn:aws:kms:${region}:12345678
 const TABLE = "arn:aws:dynamodb:us-east-1:210987654321:table/gs-prod-ledger";
 const dev = { serverMode: "development" as const, dataDir: "/data" };
 const prod = { serverMode: "production" as const, dataDir: "/data" };
+/** The parser normalises a journal directory with `path.resolve`: `/journal` on POSIX, `C:\journal` on Windows. */
+const JOURNAL_DIR = path.resolve("/journal");
 
 /** A v2 configuration as ESCROW-JOIN wrote it (development keys, a file journal). */
 const v2 = (over: Record<string, unknown> = {}) => ({
@@ -68,10 +71,10 @@ function problems(raw: unknown, context: { readonly serverMode: "development" | 
 describe("L5-5 configuration: v2 exactly as before", () => {
   test("v2 is a file journal at journal_dir; it knows no `journal` field; development keys name no KMS region", () => {
     const parsed = parseJunoBackendConfig(v2(), dev);
-    assert.deepEqual(parsed.journal, { kind: "file", dir: "/journal" });
+    assert.deepEqual(parsed.journal, { kind: "file", dir: JOURNAL_DIR });
     assert.equal(parsed.format, JUNO_BACKEND_CONFIG_FORMAT);
     assert.equal(parsed.kmsRegion, null);
-    assert.equal(fileJournalDirOf(parsed), "/journal");
+    assert.equal(fileJournalDirOf(parsed), JOURNAL_DIR);
     assert.match(problems(v2({ journal: { kind: "dynamodb", table_arn: TABLE } })), /unknown field journal/);
     assert.match(problems(v2({ journal_dir: "relative/journal" })), /journal_dir must be an absolute path/);
     assert.match(problems(v2({ journal_dir: "/data/journal" }), prod), /journal_dir must be OUTSIDE the data directory in production/);
@@ -89,8 +92,8 @@ describe("L5-5 configuration: v3 names the journal's kind -- and nothing default
 
   test("a v3 file journal: its absolute directory, outside the data directory in production", () => {
     const parsed = parseJunoBackendConfig(v3({ journal: { kind: "file", dir: "/journal" } }), prod);
-    assert.deepEqual(parsed.journal, { kind: "file", dir: "/journal" });
-    assert.equal(fileJournalDirOf(parsed), "/journal");
+    assert.deepEqual(parsed.journal, { kind: "file", dir: JOURNAL_DIR });
+    assert.equal(fileJournalDirOf(parsed), JOURNAL_DIR);
     assert.match(problems(v3({ journal: { kind: "file", dir: "/data/journal" } }), prod), /journal.dir must be OUTSIDE the data directory/);
     assert.match(problems(v3({ journal: { kind: "file", dir: "journal" } })), /journal.dir must be an absolute path/);
     assert.match(problems(v3({ journal: { kind: "file", dir: "/journal", lock: true } })), /unknown field journal.lock/);

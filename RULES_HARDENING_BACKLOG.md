@@ -239,6 +239,13 @@ crossover crossed twice — accepted above a $0 search; total not per-train; fle
 `RevertTo` / room restore deterministic). Corpus: four legacy logs held runs short of the demonstration — see
 Part E (JUNO-CV4 98, JUNO-Z6C 140 / 172, JUNO-3XD 175). Performance: S6-14. Detail: owner ruling
 whether the machine enforces the optimum; if not, record as an owner decision in Part D.
+*Route v12 R12-4 (2026-09-30, branch `route-v12/r12-4-true-optimality`, rules v12): **the lower bound is CLOSED on v12.**
+The demonstration is the TRUE maximum (`gameEngine/routeExactSearch.ts`: every route the walk accepts, then the exact best
+compatible set; each chosen route re-judged by the walk, the set by `evaluateRouteSet`; a disagreement or an explicit
+ceiling throws, never a smaller figure). The independent oracle's `sound-suboptimal` class is 0 on the whole B-2 corpus
+(288 / 288 `sound-optimal`; e.g. $150 → $170, $850 → $990), so a submitted set below the true maximum is refused on a v12
+board. An unpinned (pre-v12) board keeps the bounded heuristic and replays unchanged. Owner gate: the B-1 real-log corpus
+(`ROUTE_ORACLE_FULL=1`). Record: Project `claude/ROUTE_V12_R12_4_TRUE_OPTIMALITY_2026-09-30.md`.*
 
 **S6-4. LPF / 18XX+ PRR herald-home (Altoona, H12, $10) revenue and reach — verify the authority with S6-1.**
 Status `DEFERRED` (variant). Batch 6 preserved the herald's existing rules in the authority without auditing
@@ -378,6 +385,11 @@ auto-skip already runs it once per turn); on the corpus the whole 17-log sweep, 
 and #892 measured ~250 ms for a Diesel on a dense Phase-D board. If a board ever makes the ingress + core pair
 of searches a functional timeout, memoise the search per (state digest, corporation) or pass the ingress verdict
 into the reducer context; until then no change. Replay: none.
+*R12-4 (2026-09-30): the v12 search is now exact; measured on the B-2 corpus at ≤ 0.4 s per case (median ~4 ms), and
+≤ 0.7 s for a three-Diesel fleet on the densest real board. A synthetic stress board (the #892 ERIE fixture with ALL
+blocking removed: 456 702 legal routes) takes 0.35 s for one Diesel, ~3 s for [6, D], and meets the explicit packing
+ceiling for [D, D] (`RouteSearchLimitError`: the move is refused, never a smaller figure). The memo above stays the
+recorded next step if a real position ever approaches it.*
 
 **S6-13. The shell's route validators duplicate the authority.**
 Status `DEFERRED` (cleanup, no rule change). `utils/runTrainsRules.ts`, `routeWaypoints.ts`

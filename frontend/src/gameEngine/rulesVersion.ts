@@ -379,8 +379,16 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "again after counting it; it joins two arms at a station only where the rails join them through the stop (S6-16: " +
       "the H12 fork; ING-1: New York's two cities); it keys red areas by area and never touches a barred hex; every " +
       "candidate is judged by the authority's own walk before it can be demonstrated, and `maxRouteRevenueFor` returns " +
-      "only a set `evaluateRouteSet` accepts (else the best single legal route) -- so no demonstrated figure is one the " +
-      "authority refuses, and no corporation is stranded at Run Trains by one. (4) BOARD DATA, 1830+ and the Level " +
+      "only a set `evaluateRouteSet` accepts -- so no demonstrated figure is one the authority refuses, and no corporation " +
+      "is stranded at Run Trains by one. (3a) EXACT OPTIMALITY (Route v12 R12-4, 2026-09-30, folded into v12 before it " +
+      "merged): the demonstration is the TRUE maximum, no longer a bounded heuristic's lower bound (`routeExactSearch.ts`): " +
+      "every route the authority's walk accepts (grown out of each station point, pruned only where the walk refuses " +
+      "every extension), then the best compatible set by exact branch and bound (admissible bound, identical-train " +
+      "symmetry), each chosen route re-judged by the walk and the set by `evaluateRouteSet` -- a disagreement or an " +
+      "explicit search ceiling is raised, never answered with a smaller figure. Ties go to the first set in a fixed order " +
+      "(routes by revenue, then waypoint text; trains widest first). So S6-3's shortfall, the skip refusal, the auto-skip, " +
+      "the forced-purchase probe and Auto Route all read one exact figure, and on a v12 board a submitted set below it " +
+      "is refused where R12-2's figure let it through (the R12-1 oracle's $170 against $150). (4) BOARD DATA, 1830+ and the Level " +
       "Playing Field (owner-confirmed from the physical board, R12-1 closure): Montreal A19 pays $40 / $60 and Norfolk " +
       "L16 $30 / $50 (the lesser until the first 5-train; `printedCityTiers`), and each is ONE city with TWO station " +
       "circles, for placement as for blocking (`stationSlotCount` believes a printed city's `slots`) -- superseding " +
@@ -396,7 +404,7 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "v12's own certification pass -- R12-3 (2026-09-29), which added 12 on its own evidence (`settlementV12Certification`). A version-11 log can carry a run from one red area to the same area's other hex, a run " +
       "counting a bare token at a bypassed city or an uncounted herald as its station, an unlicensed run ending at Coal " +
       "River, dividends priced on Montreal / Norfolk's flat figures or on #62 at $90, a run past a one-circle Norfolk or Montreal a v12 " +
-      "board no longer shuts, shortfall and skip refusals against the old demonstration, and a city-less placement on " +
+      "board no longer shuts, shortfall and skip refusals against the old (heuristic) demonstration, and a city-less placement on " +
       "New York, so it is refused, never reinterpreted.",
   },
 ];

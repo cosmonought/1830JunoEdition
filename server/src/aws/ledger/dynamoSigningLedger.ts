@@ -855,3 +855,15 @@ export async function openDynamoSigningLedger(client: DynamoDBClient, options: D
     },
   };
 }
+
+/**
+ * LIVE-5 L5-3: the ledger's adopted app generation (`APPGEN.current_generation`), read strongly -- `null` when none was
+ * ever adopted. For the PoolWriter's self-check (preflight §5.5: a task whose generation is no longer the adopted one
+ * exits). Strict, as every ledger read: an APPGEN item this build cannot read throws, and is never read as some other
+ * generation. Reads only; the ledger's own writes keep carrying the generation inside every write.
+ */
+export async function readAdoptedGeneration(client: DynamoDBClient, table: string): Promise<number | null> {
+  const key = LEDGER_KEYS.appgen();
+  const answer = await client.send(new GetItemCommand({ TableName: table, Key: { pk: key.pk, sk: key.sk }, ConsistentRead: true }), { abortSignal: deadline() });
+  return answer.Item === undefined ? null : parseAppGen(answer.Item as Item);
+}

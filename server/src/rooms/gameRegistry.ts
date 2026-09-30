@@ -37,6 +37,9 @@ export interface GameRegistryOptions {
   /** LIVE-3C: called once per successful load, BEFORE any caller waiting on `get` resumes -- so whatever it queues on
    *  the actor (the load's reconciliation) runs ahead of every task those callers queue. */
   onLoaded?(gameId: string, actor: GameActor): void;
+  /** LIVE-5 L5-3: an idle actor was EVICTED (not closed, not discarded) -- called in the same synchronous step that drops
+   *  it, so whatever it asks (a release of the game's ownership) is asked before any later load of the game can start. */
+  onEvicted?(gameId: string, actor: GameActor): void;
   now(): number;
   idleMs?: number;
   maxResident?: number;
@@ -112,25 +115,43 @@ export class GameRegistry {
     this.actors.forEach((actor, gameId) => {
       if (actor.idle && now - actor.lastActiveAt >= idleMs) evicted.push(gameId);
     });
-    for (const gameId of evicted) this.drop(gameId);
+    for (const gameId of evicted) this.evict(gameId);
     if (this.actors.size > maxResident) {
       const idle = [...this.actors.entries()]
         .filter(([, actor]) => actor.idle)
         .sort(([, a], [, b]) => a.lastActiveAt - b.lastActiveAt);
       for (const [gameId] of idle) {
         if (this.actors.size <= maxResident) break;
-        this.drop(gameId);
+        this.evict(gameId);
         evicted.push(gameId);
       }
     }
     return evicted;
   }
 
-  private drop(gameId: string): void {
+  /**
+   * LIVE-5 L5-3: drop `actor` now, whatever it holds, if it is still `gameId`'s resident actor -- a write of it was
+   * refused by the ownership fence, so another writer owns the game and nothing this actor holds may be served or built
+   * on. Its queued tasks are answered, never run (`dispose`). The next ask builds a fresh actor, which claims afresh.
+   * Not an eviction: nothing is released (the game is not this task's). True when it was dropped.
+   */
+  discard(gameId: string, actor: GameActor): boolean {
+    if (this.actors.get(gameId) !== actor) return false;
+    this.actors.delete(gameId);
+    actor.dispose();
+    return true;
+  }
+
+  private evict(gameId: string): void {
     const actor = this.actors.get(gameId);
     if (actor === undefined) return;
     this.actors.delete(gameId);
     actor.dispose();
+    try {
+      this.options.onEvicted?.(gameId, actor);
+    } catch {
+      /* the hook reports its own failures; an eviction is never undone by one */
+    }
   }
 
   /** The server is closing: no sweep, and every actor answers what it still holds queued. */

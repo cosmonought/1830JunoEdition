@@ -129,6 +129,8 @@ export const MONEY_UNAVAILABLE_SENTENCE = "This table's money can't be checked o
 
 export interface RoomHostDeps {
   build: string;
+  /** LIVE-5 L5-3: POOL ownership (DynamoDB) -- the startup discovery writes nothing (`discovery.ts` `readOnly`). */
+  discoveryReadOnly?: boolean;
   records: RecordStore;
   /** LIVE-4 (L4-2): `forEach` visits every resident actor (the serving review walks them). */
   games: { get(gameId: string): Promise<GameActor>; peek(gameId: string): GameActor | undefined; forEach?(visit: (actor: GameActor, gameId: string) => void): void };
@@ -378,6 +380,7 @@ export function createRoomHost(deps: RoomHostDeps) {
         now,
         warn: deps.warn,
         ops,
+        ...(deps.discoveryReadOnly === true ? { readOnly: true } : {}),
       });
     } catch (error) {
       deps.warn(`  discovery: the startup scan failed -- ${error instanceof Error ? error.message : String(error)}; games are resolved one by one as they are asked for`);
@@ -422,7 +425,11 @@ export function createRoomHost(deps: RoomHostDeps) {
   /* ---- M4: a game with view subscribers stays resident (the actor's own idleness counts only log readers) ---- */
   const pinned = new Map<string, GameActor>();
   function pinFor(gameId: string, game: GameActor): void {
-    if (pinned.has(gameId)) return;
+    const current = pinned.get(gameId);
+    if (current === game) return;
+    /* LIVE-5 L5-3: a pin still held on a DROPPED actor (the fenced reaction) moves to its successor. Before L5-3 the pinned
+       actor was always the resident one (a pinned actor is never evicted), so this never ran. */
+    current?.unpin();
     game.pin();
     pinned.set(gameId, game);
   }
@@ -500,6 +507,10 @@ export function createRoomHost(deps: RoomHostDeps) {
    *  end or the close and the record's follow-up write): that repair is committed by a task of its own, and only once
    *  it lands is the game reconciled. */
   function onActorLoaded(game: GameActor): void {
+    /* LIVE-5 L5-3: viewers pinned a DROPPED actor of this game (the fenced reaction, or a claim-back): their pin moves to
+       this successor, so a watched game stays resident. Never runs otherwise (a pinned actor is never evicted). */
+    const stale = pinned.get(game.gameId);
+    if (stale !== undefined && stale !== game) pinFor(game.gameId, game);
     let view: CommittedView;
     try {
       view = game.view;

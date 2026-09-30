@@ -52,7 +52,8 @@
 // until an operator repairs it (§8.5).
 
 import type { RoomSession, ServerLogEntry } from "../../../frontend/src/utils/roomSession";
-import { isStoreCorrupt, isStoreIncompatible, outcomeOf, type StoreWriteOutcome } from "../persistence/storeResult";
+import { fenceScopeOf, isStoreCorrupt, isStoreIncompatible, outcomeOf, type FenceScope, type StoreWriteOutcome } from "../persistence/storeResult";
+import { GameWithoutHeadError, type ClaimAnswer } from "./gameOwnership";
 import { AHEAD_REASON, RESYNC_REASON } from "../../../frontend/src/utils/roomSession";
 import type { GameRecord } from "./gameRecord";
 import type { BuildId } from "../../../frontend/src/utils/serverProtocol";
@@ -290,6 +291,13 @@ export interface GameActorDeps {
   readonly storeRestartAfterMs?: number;
   /** LIVE-3B: this game holds an outcome only a process restart can resolve (§8.2 step 7). */
   onRestartRequired?(gameId: string, detail: string): void;
+  /** LIVE-5 L5-3 (POOL ownership, `gameOwnership.ts`): claim the game for this task -- the load's FIRST step, before
+   *  anything of the game is read. A rejection fails the load (routed elsewhere, this task stale, or the outcome
+   *  unknown). Absent (process ownership): nothing to claim. */
+  claim?(): Promise<ClaimAnswer>;
+  /** LIVE-5 L5-3: a commit was refused by an ownership FENCE (`fenceScopeOf`): another writer owns the game now. Called
+   *  once, after the task's own definite answer; from then on this actor runs nothing more, and its owner drops it. */
+  onFenced?(gameId: string, scope: FenceScope, detail: string): void;
   /** LIVE-3C: reconcile the record against the whole durable log and the replayed session, at the load. A `hold`
    *  verdict is written down (`persistHold`) and installed; no history is then served. Pure; must not throw. */
   reconcileAtLoad?(input: { readonly record: Readonly<GameRecord>; readonly entries: readonly ServerLogEntry[]; readonly session: RoomSession }): LoadVerdict;
@@ -361,6 +369,8 @@ export class GameActor {
   private restartRequested = false;
   private loaded = false;
   private disposed = false;
+  /** LIVE-5 L5-3: a commit was refused by an ownership fence: nothing more runs on this actor (`onFenced`). */
+  private fencedOut = false;
 
   constructor(deps: GameActorDeps) {
     this.deps = deps;
@@ -410,6 +420,7 @@ export class GameActor {
     return (
       this.loaded &&
       !this.disposed &&
+      !this.fencedOut &&
       this.queued.size === 0 &&
       this.running === null &&
       this.subscribers.size === 0 &&
@@ -434,6 +445,10 @@ export class GameActor {
           afterwards, from the log (the log wins); an unsupported rules-engine pin is `incompatible` (#1520, derived).
      A held game keeps a session at the seed: its committed view serves no history, and no move can be built on it. */
   private async load(): Promise<void> {
+    /* LIVE-5 L5-3 (POOL ownership): THE CLAIM COMES BEFORE ANY READ (preflight §5.3, LIVE-3 §14.2) -- so no write of an
+       older owner can land after what this load reads: from the claim on, the table refuses them. Bounded like a read;
+       a claim that fails or times out fails the load, and the next ask claims again (a claim is idempotent). */
+    const claimed = this.deps.claim ? await this.awaitRead(this.deps.claim(), "claim of the game") : null;
     /* LIVE-3C (review E2): THE DURABLE HOLD IS READ FIRST. A held game's files are kept EXACTLY as found -- its log is
        not even opened here (the store's load repairs a torn tail, which is a write), and nothing is replayed. The
        offline tool verifies the files read-only before any release. */
@@ -472,6 +487,11 @@ export class GameActor {
         else if (isStoreIncompatible(error)) recordProblem = { held: false, detail: describe(error) };
         else throw error;
       }
+    }
+    /* LIVE-5 L5-3: the claim found NO HEAD, yet the game has data: it could never be written here (every write carries
+       the HEAD fence), so it is not served as if it could -- refused, never guessed at (an importer writes the HEAD). */
+    if (claimed?.kind === "absent" && (durable !== null || entries.length > 0 || corrupt !== null || newerLog !== null || record !== null || recordProblem !== null)) {
+      throw new GameWithoutHeadError(this.gameId);
     }
     const evidence = { record_version: record?.record_version ?? null, record_status: record?.status ?? null, log_entries: corrupt === null ? entries.length : null };
     let session = this.deps.newSession();
@@ -582,6 +602,9 @@ export class GameActor {
    *  lost that is about to land (§4.2). */
   subscribe(key: object, subscriber: Subscriber, fromIndex: number, baseId?: string): SubscribeAnswer {
     const view = this.view;
+    /* LIVE-5 L5-3: a RETIRED actor (dropped by its owner: fenced, or before its game is claimed back) serves nobody new --
+       a hello that reached it in flight is sent to ask again, and meets the game's next actor. */
+    if (this.fencedOut) return { kind: "resync", watermark: view.watermark, reason: RESYNC_REASON };
     if (isMaintenanceHold(view.hold)) return { kind: "held", frame: heldFrame() };
     if (view.incompatible !== null) return { kind: "held", frame: view.incompatible };
     if (fromIndex > view.watermark) {
@@ -645,7 +668,7 @@ export class GameActor {
     op: (tx: Tx) => Promise<T> | T,
     options: { deadlineMs?: number; origin?: TaskOrigin; quiet?: boolean; essential?: boolean } = {},
   ): Promise<RunResult<T>> {
-    if (this.disposed) return Promise.resolve({ kind: "expired", reason: "closed" });
+    if (this.disposed || this.fencedOut) return Promise.resolve({ kind: "expired", reason: "closed" });
     /* A frame whose socket closed before its handler reached the queue is not queued at all: its socket's close
        has already cancelled everything that socket had queued, and this task must not outlive that (E-8). */
     if (options.origin !== undefined && !options.origin.isOpen()) {
@@ -702,7 +725,7 @@ export class GameActor {
     const queued = task as Task<unknown>;
     if (task.state !== "queued") return; // cancelled while queued: it never runs (E-8)
     this.queued.delete(queued);
-    if (this.disposed) return this.expire(queued, "closed");
+    if (this.disposed || this.fencedOut) return this.expire(queued, "closed");
     if (task.origin !== undefined && !task.origin.isOpen()) return this.expire(queued, "socket-closed");
     if (this.deps.now() > task.deadlineAt) return this.expire(queued, "deadline");
 
@@ -839,10 +862,12 @@ export class GameActor {
       const settled: BatchSettlement = { kind: "absent", reason: outcome.detail };
       if (!late) {
         this.deliverOnly(task, deliver(settled));
+        this.reportFenced(outcome);
         return settled;
       }
       this.publish(withHold(this.view, priorHold), null, {}); // the hold lifts; the in-flight move is abandoned
       this.settleUnresolvedSubmissions(true);
+      this.reportFenced(outcome);
       return settled;
     }
     /* UNCERTAIN, AND THE STORE'S OWN REDO COULD NOT SETTLE IT (§8.2 step 7): held until the process restarts. Never
@@ -937,6 +962,7 @@ export class GameActor {
       if (late) this.publish(withHold(this.view, priorHold), null, {});
       const settled: RecordSettlement = { kind: "failed", reason: outcome.detail };
       this.deliverOnly(task, deliver(settled));
+      this.reportFenced(outcome);
       return settled;
     }
     this.deps.counters.storeUncertain += 1;
@@ -1275,6 +1301,50 @@ export class GameActor {
       this.notServedSource = "rebuild";
     }
     return true;
+  }
+
+  /** LIVE-5 L5-3: whether this actor was retired -- a commit refused by an ownership fence, or dropped by its owner
+   *  (`retire`): it runs nothing more. */
+  get fenced(): boolean {
+    return this.fencedOut;
+  }
+
+  /** LIVE-5 L5-3: nothing of this game is being written or may still land from this actor -- no task running, no store
+   *  outcome unknown (an `uncertain` hold, a late write still being resent, an unresolved submission). Only then may its
+   *  owner drop it and let the game be claimed again (`gameServer.ts` `retakeResident`): a write in flight from this
+   *  actor must never find the game re-claimed under the same fence. */
+  get quiescent(): boolean {
+    return this.loaded && !this.disposed && this.running === null && this.unresolved.size === 0 && this.reconcileTimer === null && this.committed?.hold?.reason !== "uncertain";
+  }
+
+  /** LIVE-5 L5-3: run nothing more -- queued tasks are answered (never run), and every later `run` is refused. For the
+   *  fenced reaction, and for an owner dropping a quiescent actor before its game is claimed again. Idempotent. */
+  retire(): void {
+    if (this.fencedOut) return;
+    this.fencedOut = true;
+    for (const task of this.queued) this.expire(task, "closed");
+    this.queued.clear();
+  }
+
+  /**
+   * LIVE-5 L5-3: THE FENCED REACTION (preflight §5.5, §5.8). A DEFINITE answer that is a fence refusal means the table
+   * no longer names this task as the game's writer: whatever this actor holds is no longer the game's authority. The
+   * task that met it has been answered as for any definite failure (nothing was written; rolled back); from here the
+   * actor runs NOTHING more -- no retry, no queued task -- and its owner is told, once, so it drops the actor. The
+   * next ask builds a fresh actor, whose load claims afresh (and is routed, or finds this task stale).
+   */
+  private reportFenced(outcome: StoreWriteOutcome): void {
+    const scope = fenceScopeOf(outcome);
+    /* Only under POOL ownership (the owner passes `onFenced`): a process-owned store never answers a fence text, and if
+       one did, nothing here would change -- exactly as before L5-3. */
+    if (scope === null || this.fencedOut || this.deps.onFenced === undefined) return;
+    this.deps.warn(`  ownership: ${this.gameId}: a write was refused by the ${scope} fence -- another writer owns the game now; this actor runs nothing more`);
+    this.retire();
+    try {
+      this.deps.onFenced(this.gameId, scope, outcome.kind === "definite" ? outcome.detail : "");
+    } catch {
+      /* the owner's hook reports its own failures */
+    }
   }
 
   /** The server is closing, or the registry evicted this actor. Queued tasks are answered, never run. */

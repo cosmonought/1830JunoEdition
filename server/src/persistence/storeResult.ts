@@ -88,6 +88,32 @@ export function outcomeOf(error: unknown): StoreWriteOutcome {
   return { kind: "uncertain", detail: describe(error ?? "the store rejected the write") };
 }
 
+/* ==================================================================
+    LIVE-5 L5-3: A DEFINITE ANSWER THAT SAYS "FENCED" -- AND WHICH FENCE
+   ==================================================================
+   The game-table adapters (L5-2, `aws/game/`) refuse a stale writer INSIDE the write and answer it DEFINITE with one of
+   these two details, verbatim. They are defined here, not in the adapters, so the per-game actor (which may not import
+   the adapters) can tell a fenced refusal from any other definite one and react to it as a fence (drop the game, or give
+   up the whole pool), never by retrying a write the table will refuse again. No file or memory store answers with these
+   texts: its own lock is the process's whole fence (`processLock.ts`). */
+
+/** The game's HEAD no longer names this writer (another pool, a newer task of this pool, or an operator took the game). */
+export const FENCED_DETAIL = "fenced: this writer's epoch no longer owns the game (a newer writer took it over); nothing was written";
+/** This writer's pool epoch is no longer its pool's newest: a newer task took the pool over. Epochs only move forward,
+ *  so this writer can never write again. */
+export const POOL_FENCED_DETAIL = "fenced: this writer's pool epoch is no longer the pool's newest (a newer task took the pool over); nothing was written";
+
+export type FenceScope = "game" | "pool";
+
+/** Which fence refused a DEFINITE outcome (`null`: not a fence refusal, or not definite). Exact texts only: a detail
+ *  that merely mentions a fence is not one. */
+export function fenceScopeOf(outcome: StoreWriteOutcome): FenceScope | null {
+  if (outcome.kind !== "definite") return null;
+  if (outcome.detail === POOL_FENCED_DETAIL) return "pool";
+  if (outcome.detail === FENCED_DETAIL) return "game";
+  return null;
+}
+
 /** For the legacy throwing API: resolve on committed, throw the matching error otherwise. */
 export function throwUnlessCommitted(outcome: StoreWriteOutcome): void {
   if (outcome.kind === "committed") return;

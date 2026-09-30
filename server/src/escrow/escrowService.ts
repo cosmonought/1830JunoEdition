@@ -278,6 +278,11 @@ export interface EscrowService {
   onIntentResolved(intent: ChainIntentRecord): Promise<void>;
   /** Startup, BEFORE any chain read (review #8): which tables have a frozen financial roster, from the durable store. */
   preload(): Promise<number>;
+  /** LIVE-5 L5-3 (POOL ownership, preflight §13 step 6): the frozen-roster fact of ONE game, from a fresh read of its
+   *  financial record -- run when this task CLAIMS the game, before its load resolves, so `isRosterFrozen(g)` is the
+   *  claim read's answer and never a startup preload another task has since overtaken. An unreadable record counts as
+   *  frozen (a seat never moves on a guess); a read that fails rejects (the claim, and so the load, fails). */
+  refreshRoster(gameId: string): Promise<void>;
   /** Startup: the continuation verdict of every money game (L4-4), the relayer's open intents, and every continued
    *  game's pending chain work. `skipped`: games this pool does not continue (nothing written for them). */
   load(): Promise<{ readonly games: number; readonly held: number; readonly resumed: number; readonly skipped: number }>;
@@ -1455,6 +1460,19 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
         const next = await apply(gameId, (current) => (current.phase === "funding" && current.binding?.escrow == null ? { kind: "cancel-before-deal", at: deps.now() } : null));
         if (next?.phase === "cancelled") audit("money.cancelled-unbound", { game_id: gameId });
       });
+    },
+
+    async refreshRoster(gameId) {
+      let record: FinancialGameRecord | null;
+      try {
+        record = await deps.financial.load(gameId);
+      } catch (error) {
+        if (!(error instanceof FinancialRecordUnreadableError)) throw error;
+        frozen.add(gameId);
+        return;
+      }
+      if (record === null) frozen.delete(gameId);
+      else remember(record);
     },
 
     async preload() {

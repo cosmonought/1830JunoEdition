@@ -23,7 +23,9 @@
 //
 // WHAT DISCOVERY DOES WRITE: a durable hold for a game whose record and deal already disagree (create-if-absent, so a
 // restart finds the same hold again, never a second opinion), and the join-code index where it disagrees with the
-// records (the records are the authority; the index is derived). Both are audited.
+// records (the records are the authority; the index is derived). Both are audited. LIVE-5 L5-3: under POOL ownership
+// (DynamoDB) it writes NOTHING (`readOnly`): it runs before any claim, and a write to a game this task has not claimed is
+// not this task's to make.
 //
 // ONE BAD GAME NEVER STOPS THE OTHERS. Every per-game failure is caught and classified -- `held` for evidence that
 // something is wrong, `unavailable` for a read that failed and may succeed next time, `attention` for material no
@@ -105,6 +107,12 @@ export interface DiscoveryDeps {
   readonly concurrency?: number;
   /** How long one game's reads may take before it is classed `unavailable` and the scan moves on (10 s when absent). */
   readonly perGameTimeoutMs?: number;
+  /** LIVE-5 L5-3 (POOL ownership, preflight §13 step 3, F-L5-10): discovery runs before this task has claimed anything, so
+   *  it WRITES NOTHING -- a hold it finds is reported (the lobby's classification), never written; the game's load, after
+   *  its claim, decides from what it reads then (its durable hold, and its own reconciliation, which writes any hold it
+   *  finds). The join-code index is left as found (its rebuild is an operator command in AWS). Absent / false: today's
+   *  behaviour. */
+  readonly readOnly?: boolean;
 }
 
 export const DISCOVERY_PER_GAME_TIMEOUT_MS = 10_000;
@@ -158,6 +166,8 @@ export async function discoverGames(deps: DiscoveryDeps): Promise<DiscoveryRepor
       rulesEngineVersion: deps.rulesEngineVersion,
       evidence: { record_version: record?.record_version ?? null, record_status: record?.status ?? null, log_bytes: logBytes },
     });
+    /* LIVE-5 L5-3: a read-only scan writes nothing; the hold is reported, enforced in memory, and written at the load. */
+    if (deps.readOnly === true) return { gameId, cls: "held", code, detail, record, logBytes };
     try {
       const created = await deps.holds.create(hold);
       if (created.outcome.kind === "committed" && created.existing === null) {
@@ -315,7 +325,7 @@ export async function discoverGames(deps: DiscoveryDeps): Promise<DiscoveryRepor
 
   /* 6. The join-code index, made to agree with the records (the authority): every live record's code resolves to it. */
   let index: IndexReconciliation | null = null;
-  if (deps.records.reconcileIndex) {
+  if (deps.records.reconcileIndex && deps.readOnly !== true) {
     const live = new Map<string, string>();
     for (const game of games.values()) {
       const record = game.record;

@@ -128,7 +128,7 @@ import {
 import type { ServerFrame, ServerMessage } from "../../frontend/src/utils/serverProtocol";
 import type { SandboxLogMsg } from "../../frontend/src/gameEngine/gameSetup";
 import type { LogStore } from "./fileLogStore";
-import { COMMITTED, outcomeOf } from "./persistence/storeResult";
+import { COMMITTED, outcomeOf, type FenceScope } from "./persistence/storeResult";
 /* LIVE-3A: every mutation of a game runs on that game's actor, and every read comes from its committed view. */
 import {
   GameActor,
@@ -144,6 +144,7 @@ import {
   type Tx,
 } from "./rooms/gameActor";
 import { GameRegistry } from "./rooms/gameRegistry";
+import { PROCESS_OWNERSHIP, type GameOwnership } from "./rooms/gameOwnership";
 /* LIVE-2A: the transport's limits and buckets (LIVE-2 §11.3, §12.2). */
 import {
   HourlyBudget,
@@ -296,7 +297,16 @@ export interface GameServerOptions {
   money?: () => MoneyTables | null;
   /** LIVE-3C: more for the status snapshot -- `start.ts` adds the identity store's health. */
   statusExtras?: () => Record<string, unknown>;
+  /** LIVE-5 L5-3: who may write a game (`rooms/gameOwnership.ts`). Absent: PROCESS ownership -- the data directory's
+   *  lock is the whole fence, exactly as before. POOL ownership (DynamoDB; L5-7 wires `aws/ownership/`): every load
+   *  claims its game first, a write refused by an ownership fence drops the game's actor, an evicted idle no-money game
+   *  is released, and the startup discovery writes nothing. */
+  ownership?: GameOwnership;
 }
+
+/** LIVE-5 L5-3: what a game's log subscribers are told when another writer took the game from this task (POOL ownership
+ *  only) -- then their socket closes 1012 and they reconnect, to whichever writer owns the game now. */
+export const GAME_MOVED_SENTENCE = "This game moved to another game server. Reconnecting.";
 
 /** A socket's log subscription: the game it said `hello` for, and its principal. The actor of a move is NOT here --
  *  it is the seat this principal holds in the record committed when each submit runs (LIVE-2C §14). */
@@ -402,6 +412,13 @@ export function createGameServer(options: GameServerOptions): {
   rooms: RoomHost;
   /** LIVE-2C: how many game actors (each with its RoomSession) are resident -- the allocation-flood tests read it. */
   residentGames(): number;
+  /** LIVE-5 L5-3 (tests): evict the actors idle as of `at` -- the registry's own sweep, run now. */
+  evictIdleGames(at: number): string[];
+  /** LIVE-5 L5-3: drop a quiescent resident actor of `gameId` before the money claim sweep claims the game back (false:
+   *  it is not quiescent -- try again at the next pass). True when no actor is resident. */
+  retakeResident(gameId: string): boolean;
+  /** LIVE-5 L5-3: whether an actor of `gameId` is resident (the money claim sweep's `isResident`). */
+  isResident(gameId: string): boolean;
   /** LIVE-2B: the live socket indexes, for tests: how many sockets a session / principal / IP key / game holds. */
   socketCounts(): { total: number; bySession(id: string): number; byPrincipal(id: string): number; byIp(key: string): number; byGame(room: string): number };
   /** LIVE-3C: what every durable game is (discovery, refined by each load), the holds, and the operator's recorder. */
@@ -612,6 +629,9 @@ export function createGameServer(options: GameServerOptions): {
      without one (a test, the smoke run) the game lives in memory, exactly as before. */
   const counters = { ...newActorCounters(), submitAhead: 0, submitResync: 0, internal: 0 };
   const store = options.store;
+  /* LIVE-5 L5-3: PROCESS ownership unless a POOL ownership is given (then every load claims first, `gameActor.ts`). */
+  const ownership: GameOwnership = options.ownership ?? PROCESS_OWNERSHIP;
+  const pooled = ownership.mode === "pool";
   /* LIVE-3B: WRITES ANSWER WITH A CLASS -- committed, definitely not, or uncertain (persistence/storeResult.ts). A
      store with the classified methods (the file store) is asked directly; a legacy store that only resolves or
      rejects is read conservatively: a rejection is uncertain unless it threw `StoreDefiniteError`. */
@@ -634,8 +654,13 @@ export function createGameServer(options: GameServerOptions): {
     loadHold: async (code) => {
       try {
         const hold = await holdStore.load(code);
-        /* LIVE-3C (review E11): a hold discovery found this run but could not write down holds all the same. */
-        return hold === null ? (roomHost?.pendingHoldOf(code) ?? null) : { code: hold.code, detail: hold.detail };
+        /* LIVE-3C (review E11): a hold discovery found this run but could not write down holds all the same. LIVE-5 L5-3:
+           NOT under POOL ownership. There discovery ran before any claim, from a snapshot another writer may have moved
+           since (an operator's release, a deal in flight on the previous task): the load, AFTER its claim, decides from
+           what it reads then -- the durable hold, and its own reconciliation of the record against the whole log, which
+           writes any hold it finds. A startup snapshot is never enforced, and never written down, in its place. */
+        if (hold !== null) return { code: hold.code, detail: hold.detail };
+        return pooled ? null : (roomHost?.pendingHoldOf(code) ?? null);
       } catch (error) {
         if (error instanceof HoldUnreadableError) return { code: "hold-unreadable" as const, detail: error.message };
         throw error;
@@ -667,13 +692,54 @@ export function createGameServer(options: GameServerOptions): {
     return options.faults?.boardEnded?.(gameId, session) ? { ...board, ended: true } : board;
   };
   let roomHost: RoomHost | null = null;
+  /** LIVE-5 L5-3: THE FENCED REACTION's owner half. The actor has answered its task and runs nothing more; the ownership
+   *  is told (a POOL fence: this task is lost; a GAME fence: a self-check now), and, once the current step is over, the
+   *  actor is dropped: its log subscribers are told the game moved and their sockets close 1012, so they reconnect to
+   *  whichever writer owns it now. The next ask builds a fresh actor, whose claim decides. */
+  const onActorFenced = (actor: GameActor, scope: FenceScope, detail: string): void => {
+    ownership.onFenced(actor.gameId, scope, detail);
+    setImmediate(() => dropActor(actor));
+  };
+  /** Drop `actor` (retired: it runs nothing more) if it is still its game's resident one: its log subscribers are told the
+   *  game moved and their sockets close 1012. */
+  const dropActor = (actor: GameActor): void => {
+    actor.retire();
+    if (games.peek(actor.gameId) !== actor) return;
+    for (const [socket, subscribed] of [...logSubscriptions]) {
+      if (subscribed !== actor) continue;
+      logSubscriptions.delete(socket);
+      send(socket, { kind: "status", state: "unavailable", reason: GAME_MOVED_SENTENCE });
+      if (socket.readyState === socket.OPEN) socket.close(1012, "game moved");
+    }
+    games.discard(actor.gameId, actor);
+  };
+  /** LIVE-5 L5-3: before the money claim sweep claims back a game this task did not own (released, taken by an operator
+   *  run and given back), a RESIDENT actor of it -- whose memory is from before the game left this task -- must not be
+   *  re-armed by the new claim: it is dropped, so the next load reads the game afresh after the claim. Only when it is
+   *  quiescent (no task running, no store outcome unknown): a write of it still in flight must never find the game
+   *  claimed again under the same fence. False: not now (the sweep skips the game this pass). */
+  const retakeResident = (gameId: string): boolean => {
+    const actor = games.peek(gameId);
+    if (actor === undefined) return true;
+    if (!actor.quiescent) return false;
+    dropActor(actor);
+    return true;
+  };
+  /** LIVE-5 L5-3: an evicted idle game is given back only when it is a loaded NO-MONEY table (a money game stays owned:
+   *  its background work needs a fenced owner; a game whose record could not be read is kept, the safe direction). */
+  const releasable = (actor: GameActor): boolean => {
+    if (!actor.isLoaded || actor.fenced) return false;
+    const record = actor.view.record;
+    return record !== null && record.money === null;
+  };
   const games = new GameRegistry({
     evictable: store !== undefined,
     now: () => Date.now(),
     /* LIVE-3C: stage two -- every load settles the game's reconciliation before any waiting caller acts on it. */
     onLoaded: (_gameId, actor) => roomHost?.onActorLoaded(actor),
-    create: (code) =>
-      new GameActor({
+    ...(pooled ? { onEvicted: (gameId: string, actor: GameActor) => (releasable(actor) ? ownership.release(gameId) : undefined) } : {}),
+    create: (code) => {
+      const actor: GameActor = new GameActor({
         gameId: code,
         build: options.build,
         explainDivergence: options.explainDivergence === true,
@@ -706,7 +772,11 @@ export function createGameServer(options: GameServerOptions): {
           const verdict = reconcileLoaded(record, { entries, board: session.incompatible === null ? boardFacts(code, session) : null });
           return verdict.kind === "hold" ? verdict : { kind: "ok" };
         },
-      }),
+        /* LIVE-5 L5-3: POOL ownership -- the claim is the load's first step; a fenced commit drops the actor. */
+        ...(pooled ? { claim: () => ownership.claim(code), onFenced: (_gameId: string, scope: FenceScope, detail: string) => onActorFenced(actor, scope, detail) } : {}),
+      });
+      return actor;
+    },
   });
 
   /** A task's origin: the socket, who it said it was, and -- for a submit -- the nonce `inFlight` reports. */
@@ -1227,6 +1297,8 @@ export function createGameServer(options: GameServerOptions): {
      ================================================================== */
   const host: RoomHost = createRoomHost({
     build: options.build,
+    /* LIVE-5 L5-3: under POOL ownership the startup discovery writes nothing (it runs before any claim). */
+    ...(pooled ? { discoveryReadOnly: true } : {}),
     records: recordStore,
     games,
     identity,
@@ -1976,6 +2048,11 @@ export function createGameServer(options: GameServerOptions): {
     records: recordStore,
     rooms: host,
     residentGames: () => games.size,
+    /** LIVE-5 L5-3 (tests): evict the actors idle as of `at` -- the registry's own sweep, run now. */
+    evictIdleGames: (at: number) => games.evictIdle(at),
+    /** LIVE-5 L5-3: the money claim sweep's `beforeRetake` and `isResident` (L5-7 wires them). */
+    retakeResident,
+    isResident: (gameId: string) => games.peek(gameId) !== undefined,
     lifecycle: {
       ready: host.indexReady,
       inventory: host.inventory,

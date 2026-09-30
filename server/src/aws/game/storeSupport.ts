@@ -23,6 +23,7 @@
 
 import type { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
+import { FENCED_DETAIL, POOL_FENCED_DETAIL } from "../../persistence/storeResult";
 import { fenceProblem, type WriterFence } from "./gameTable";
 import { resendTiming, type ResendTiming, type WriteAnswer } from "./transact";
 
@@ -64,5 +65,7 @@ export type EvaluatedOrUnknown = Extract<WriteAnswer, { kind: "unknown" | "refus
 /** A reason code at an action index is a failed condition. */
 export const conditionFailed = (answer: WriteAnswer, at: number): boolean => answer.kind === "refused" && answer.reasons[at]?.code === "ConditionalCheckFailed";
 
-export const FENCED = "fenced: this writer's epoch no longer owns the game (a newer writer took it over); nothing was written";
-export const POOL_FENCED = "fenced: this writer's pool epoch is no longer the pool's newest (a newer task took the pool over); nothing was written";
+/* LIVE-5 L5-3: the two texts live in `persistence/storeResult.ts` (`fenceScopeOf`), so the actor can tell a fence from
+   any other definite refusal without importing the adapters. Unchanged, byte for byte. */
+export const FENCED = FENCED_DETAIL;
+export const POOL_FENCED = POOL_FENCED_DETAIL;

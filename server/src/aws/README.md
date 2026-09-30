@@ -206,3 +206,40 @@ retires its old selector, installs nothing and sends the profile to operator rev
 
 **L5-8 (IaC)**: the identity table's TTL attribute is `ttl`; the ledger table needs `APPGEN` / `APPGEN`
 (`current_generation`) before any generation-fenced append.
+
+## 6. Ownership (L5-3): `aws/ownership/`, `aws/game/routing.ts`, `rooms/gameOwnership.ts`
+
+The layer that turns L5-2's primitives (`takeOverPool`, `claimGame`, `releaseGame`) into who may write what. **Not wired**
+(L5-7): `awsClients.test.ts` refuses any importer of `aws/ownership` outside itself and the conformance suites; it is the
+one place allowed to import both `aws/game` and `aws/identity`.
+
+| Piece | What it is |
+|---|---|
+| `aws/game/routing.ts` | `SYSTEM/ROUTING` {`primary_pool`, `routing_version`, `claim`, `fmt` 1}: written only by the pipeline / an operator (`setPrimaryPool`: a strict read, then a CAS on exactly that item; never an `op:` pool). `roleTakeoverChecks(table, fence)` = `[ConditionCheck SYSTEM/ROUTING primary_pool = :P; ConditionCheck POOL#P writer_epoch = :E]` -- the conditions every role takeover carries INSIDE its own transaction |
+| `aws/ownership/poolWriter.ts` | `PoolWriter.take` (the pool takeover); the self-check (2 s: `POOL#` epoch and task, each held role's probe, the adopted generation); `onLost` called once when a loss is PROVEN (L5-7: exit 3); a failed or unreadable read is UNKNOWN (never lost, never current: side effects wait, readiness lapses); `beforeSideEffect` (a good check started within 5 s, else one now -- at most two, judged by when the good check started); `readiness` (for `/gs/readyz`) |
+| `aws/ownership/roles.ts` | `takeIdentityWriterRole` (routing hint -> L5-4's `takeOverIdentityWriter` with `roleTakeoverChecks` -> a refusal explained from the table: the role item first, then the pool, then the routing); `identityRoleProbe`; `generationProbe` (L5-5's APPGEN via `readAdoptedGeneration`) |
+| `aws/ownership/poolGameOwnership.ts` | The rooms layer's `GameOwnership` in POOL mode: claim (claimed / absent / stale-pool -> lost / owned by a newer epoch of this pool -> lost / another pool or `op:` run -> `GameRoutedError` / a malformed HEAD -> damage, never a loss), release, `onFenced` (pool fence -> lost at once; game fence -> a self-check), claims and releases asked in order per game, and `sweepMoneyClaims` |
+| `rooms/gameOwnership.ts` | The port, `PROCESS_OWNERSHIP` (today's file/memory behaviour: the lock is the whole fence) and the errors |
+
+**In the rooms layer (only with `GameServerOptions.ownership` in POOL mode; PROCESS mode is unchanged):** the claim is the
+actor load's FIRST step (before any read); `absent` loads only a game with no data (a creation makes its HEAD in its first,
+pool-fenced write) -- data without a HEAD is refused (`GameWithoutHeadError`); a commit refused by an ownership fence
+(`persistence/storeResult.ts` `fenceScopeOf`: the adapters' exact texts) is answered nothing-written, retires the actor
+(nothing queued runs), and the actor is dropped: log subscribers get `status unavailable` and a 1012 close; an evicted
+idle NO-MONEY game is released; discovery writes nothing (a startup snapshot is never enforced or written: the load
+decides after its claim); `retakeResident` drops a QUIESCENT resident actor before the sweep claims its game back.
+
+**What L5-7 wires** (none of it is in `start.ts` yet), in this order (preflight §13):
+1. `PoolWriter.take` (step 4) -- `onLost` -> exit 3; `writer.start()`; `watchGeneration(generationProbe(ledger, table, N))`.
+2. Primary only: `takeIdentityWriterRole(writer, identity, …)` -> `createDynamoIdentityStore({ epoch })` -> `load` (L5-4's
+   order); `not-primary` -> the non-writer identity path (the IdentityVerifier, later).
+3. `createPoolGameOwnership({ client, table, writer, onClaimed: (g) => escrow.service.refreshRoster(g) })` ->
+   `createGameServer({ ownership, … })`; every L5-2 adapter constructed with `writer.fence`. Do NOT run
+   `escrow.service.preload()` in POOL mode (claim-time `refreshRoster` replaces it; a slower preload could overwrite a
+   newer refresh).
+4. The money claim sweep at startup and every 60 s: `sweepMoneyClaims({ financial: <the DynamoDB financial store>,
+   continues: (r) => moneyContinuationVerdict(r.continuation, THIS_DEPLOYMENT) continues, beforeRetake:
+   server.retakeResident, isResident: server.isResident, onSwept: (g) => server.lifecycle.loadGame(g) })` -- BEFORE
+   the escrow load, so escrow work only touches games this task owns.
+5. `writer.beforeSideEffect()` immediately before every KMS `Sign`, broadcast and join admission (L5-6 for the relayer).
+6. `/gs/readyz` from `writer.readiness()`.

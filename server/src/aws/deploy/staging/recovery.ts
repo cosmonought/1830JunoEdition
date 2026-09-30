@@ -132,9 +132,10 @@ export type Read<T> = { readonly ok: true; readonly value: T } | { readonly ok: 
  *
  *   generationMarker          readGenerationMarker                                   (aws/game/generationMarker.ts)
  *   appGeneration             readAppGeneration                                      (aws/ledger/appGeneration.ts)
- *   generationServingProblem  (m, a, e) => m === null || a === null || a.current_generation !== e.generation
- *                               ? generationMarkerProblem(m, e) ?? "APPGEN ..." : generationMarkerProblem(m, e) ??
- *                               adoptionBindingProblem(m, a.adoption)             -- the runtime's step 1, verbatim
+ *   generationServingProblem  (m, a, e) => a === null ? "no APPGEN" : a.current_generation !== e.generation ? "APPGEN ..." :
+ *                               generationMarkerProblem(m, e) ?? adoptionBindingProblem(m, a.adoption)
+ *                               -- the runtime's step 1 in ITS order (awsRuntime.ts: APPGEN, then the marker, then the
+ *                               binding; LIVE-6 final convergence binds exactly this in tools/awsDeploy.ts)
  *   identityState             { restore: readIdentityRestore, self: TABLE#identity (decodeIdentityTable's `self`),
  *                               servingProblem: identityServingProblem }          (aws/identity/dynamoIdentityStore.ts)
  *   reviews                   inspectIdentityRestore(...).reviews.map(r => ({ restore_id: r.restore_id, reason: r.reason,

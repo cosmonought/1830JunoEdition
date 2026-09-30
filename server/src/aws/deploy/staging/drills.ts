@@ -134,8 +134,9 @@ export function judgeAlarmsGate(dir: string, expect: AlarmsGateExpect): { readon
       manifest.ok ? `manifest.json names ${String(m.environment)}, pools [${manifestPools.join(", ")}], captured ${String(m.captured_at)} (this run: ${expect.environment}, [${[...expect.pools].sort().join(", ")}], capture ${capture.ok ? String(obj(capture.value).captured_at) : "?"})` : manifest.problem,
     ),
   );
-  /* 2. The contract itself (L6-5B's own judge; staging may have empty action lists). */
-  const now = Number.isFinite(capturedAt) ? capturedAt : 0;
+  /* 2. The contract itself (L6-5B's own judge; staging may have empty action lists), judged at the time the alarms were
+     read: manifest.json is written right after alarms.json (its identity is checked above); capture.json only last. */
+  const now = Number.isFinite(manifestAt) ? manifestAt : Number.isFinite(capturedAt) ? capturedAt : 0;
   checks.push(
     ...checkAlarmsEvidence(alarms.value, {
       environment: expect.environment,
@@ -181,7 +182,10 @@ export function plannedGenerationAdoption(appPlan: Json): GenerationAttestation 
   return { generation: o.generation, game_table: o.game_table, restore_id: o.restore_id };
 }
 
-export function judgeGenerationGateRecord(dir: string, expect: { readonly environment: string; readonly generation: number; readonly gameTable: string; readonly evidence: GenerationEvidence; readonly prerequisiteAt: string | null }): Check[] {
+export function judgeGenerationGateRecord(
+  dir: string,
+  expect: { readonly environment: string; readonly generation: number; readonly gameTable: string; readonly evidence: GenerationEvidence; readonly prerequisiteAt: string | null; readonly running?: ReadonlyMap<string, readonly Record<string, unknown>[]> },
+): Check[] {
   const label = "generation gate";
   const rec = readEvidence(dir, DRILL_FILES.generationGate, { ownRecord: true });
   if (!rec.ok) return [fail(`${label}: the gate's own record`, `${rec.problem} (\`awsDeploy generation-gate ... --record <dir>/${DRILL_FILES.generationGate}\` before the switch)`)];
@@ -216,6 +220,13 @@ export function judgeGenerationGateRecord(dir: string, expect: { readonly enviro
   const gated = Date.parse(String(r.gated_at));
   const since = Date.parse(String(expect.prerequisiteAt));
   checks.push(judge(`${label}: gated after the adoption, before the certification`, ad !== null && Number.isFinite(gated) && gated >= ad.adopted_at && (!Number.isFinite(since) || gated <= since), `gated ${String(r.gated_at)}`, `gated ${String(r.gated_at)}; adopted ${ad === null ? "?" : isoText(ad.adopted_at)}; prerequisite ${String(expect.prerequisiteAt)}`));
+  /* The switch came AFTER the gate: every task now serving the new generation started after the gate ran (ECS's own
+     times; a task CREATED after it also started after it) -- the gate's attestation was never typed in after the fact. */
+  if (expect.running !== undefined) {
+    const tasks = [...expect.running.entries()].flatMap(([pool, list]) => list.map((t) => ({ pool, t })));
+    const early = tasks.filter(({ t }) => !((cliTime(t.startedAt ?? t.createdAt) ?? Number.NEGATIVE_INFINITY) > gated)).map(({ pool, t }) => `${pool}:${String(t.taskArn).split("/").pop()}`);
+    checks.push(judge(`${label}: the switch came after the gate (every new-generation task started after it)`, Number.isFinite(gated) && tasks.length > 0 && early.length === 0, `${tasks.length} task(s) started after ${String(r.gated_at)}`, tasks.length === 0 ? "no running task to date the switch by" : `started before the gate: ${early.join(", ")}`));
+  }
   return checks;
 }
 
@@ -253,6 +264,9 @@ export function judgeFlipDrill(dir: string, expect: { readonly environment: stri
     ),
   );
   checks.push(judge("flip: the roles settled", record.verdict === "roles-settled", "verdict roles-settled", `verdict ${record.verdict} (resume with flip-observe; certify only a settled flip)`));
+  /* The drill certifies a FORWARD flip (both pools' role changes observable). A rollback (`flip B A --rollback`: the pool
+     that failed to promote may show no exit 5) is not a certifiable drill: certify the forward flip instead. */
+  checks.push(judge("flip: a forward flip (a rollback is not a certifiable drill)", record.rollback !== true, "forward", "the record is a rollback: certify a forward flip drill"));
   checks.push(
     judge(
       "flip: the window opened BEFORE the routing CAS",
@@ -277,8 +291,7 @@ export function judgeFlipDrill(dir: string, expect: { readonly environment: stri
       checks.push(fail(`flip: role change ${pool}`, stopped.ok ? (running.ok ? "" : running.problem) : stopped.problem));
       continue;
     }
-    const judged = checkRoleChange(pool, expect.environment, stopped.value, running.value, since);
-    checks.push(...judged.map((c) => (record.rollback === true && pool === record.from && c.status === "fail" ? { ...c, status: "skipped" as const, detail: `(rollback: ${pool} failed to promote) ${c.detail}` } : c)).map((c) => ({ ...c, name: `flip: ${c.name}` })));
+    checks.push(...checkRoleChange(pool, expect.environment, stopped.value, running.value, since).map((c) => ({ ...c, name: `flip: ${c.name}` })));
   }
   /* The COMPLETE cluster listing (L6-6P): no service task of either pool stopped with a loss (3) or a store restart (4)
      since the window opened -- the per-pool capture is a bounded view; this one is every page. */
@@ -294,7 +307,7 @@ export function judgeFlipDrill(dir: string, expect: { readonly environment: stri
       .filter((x) => x.at !== null && x.at >= since);
     const abnormal = exits.filter((x) => x.exit !== null && ABNORMAL_EXITS.includes(x.exit));
     const roleChanges = exits.filter((x) => x.exit === EXIT_ROLE_CHANGED);
-    checks.push(judge("flip: no exit 3 / 4 in the window (complete cluster listing)", abnormal.length === 0 && roleChanges.length >= (record.rollback === true ? 1 : 2), `${roleChanges.length} exit ${EXIT_ROLE_CHANGED} (the expected role transition), no loss or store restart`, abnormal.length > 0 ? `${abnormal.map((x) => `${x.task}: exit ${x.exit}`).join(", ")} -- abnormal even inside a planned flip` : `${roleChanges.length} exit ${EXIT_ROLE_CHANGED} seen in the complete listing (each pool's service must show its role change)`));
+    checks.push(judge("flip: no exit 3 / 4 in the window (complete cluster listing)", abnormal.length === 0 && roleChanges.length >= 2, `${roleChanges.length} exit ${EXIT_ROLE_CHANGED} (the expected role transition), no loss or store restart`, abnormal.length > 0 ? `${abnormal.map((x) => `${x.task}: exit ${x.exit}`).join(", ")} -- abnormal even inside a planned flip` : `${roleChanges.length} exit ${EXIT_ROLE_CHANGED} seen in the complete listing (each pool's service must show its role change)`));
   }
   /* /gs* on the new primary, every pool's exact route (L6-2's judge, on this capture). */
   const tgs = readEvidence(dir, POOL_EVIDENCE_FILES.targetGroups);

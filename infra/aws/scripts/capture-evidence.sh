@@ -89,7 +89,8 @@ for pool in "${POOLS[@]}"; do
     [ "$arn" = "None" ] || RUNNING+=("$arn")
   done
 done
-describe_tasks "$OUT/running-tasks.json" "${RUNNING[@]}"
+# (an empty array expanded safely: bash < 4.4 treats "${RUNNING[@]}" as unbound under set -u -- every pool drained)
+describe_tasks "$OUT/running-tasks.json" "${RUNNING[@]+"${RUNNING[@]}"}"
 # LIVE-6 L6-6 x L6-4: every ACTIVE revision of each pool's family (skip_destroy keeps them registered). INFORMATIONAL since
 # L6-6R: the circuit breaker rolls back to the service's most recent COMPLETED deployment (services.json), never to "any
 # ACTIVE revision"; the rollback gate judges that target's image (task definition + running tasks' digest), not this list.

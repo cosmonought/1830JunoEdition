@@ -602,7 +602,7 @@ export const STAGING_GATES: readonly StagingGate[] = Object.freeze([
     evaluate: (ctx, records) => ({
       checks: [
         ...(ctx.generationEvidence.integrated ? [] : [fail("generation gate: the adoption", NOT_INTEGRATED)]),
-        ...judgeGenerationGateRecord(ctx.dir, { environment: ctx.environment, generation: ctx.prerequisite.startup.config.generation, gameTable: ctx.prerequisite.startup.config.gameTable, evidence: ctx.generationEvidence, prerequisiteAt: priorAt(records) }),
+        ...judgeGenerationGateRecord(ctx.dir, { environment: ctx.environment, generation: ctx.prerequisite.startup.config.generation, gameTable: ctx.prerequisite.startup.config.gameTable, evidence: ctx.generationEvidence, prerequisiteAt: priorAt(records), running: ctx.prerequisite.running }),
       ],
     }),
   },

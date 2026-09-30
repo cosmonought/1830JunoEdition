@@ -2282,11 +2282,16 @@ describe("L6-6 x L6-4: the integrated deployment cannot PASS without generation,
       writeDrillEvidence(built.dir, "restore");
       const base = await built.ctx();
       const startup = { ...base.prerequisite.startup, config: { ...base.prerequisite.startup.config, generation: 2, gameTable: "gs-staging-game-g2" } };
-      const result = certify({ ...base, scenario: "restore-drill", prerequisite: { ...base.prerequisite, startup } });
+      /* The switch came after the generation gate (09:50): the task serving g2 started after it. */
+      const running = new Map([["p1", (base.prerequisite.running.get("p1") ?? []).map((t) => ({ ...t, startedAt: "2026-09-30T09:55:00.000Z" }))]]);
+      const result = certify({ ...base, scenario: "restore-drill", prerequisite: { ...base.prerequisite, startup, running } });
       assert.deepEqual(failedGates(result), [], JSON.stringify(result.gates.map((g) => [g.id, failures(g.checks)])));
       assert.equal(result.gates.find((g) => g.id === "restore-quiet")?.status, "pass");
       assert.equal(result.gates.find((g) => g.id === "restore-fence")?.status, "pass");
-      const otherRestore = { ...base, scenario: "restore-drill" as const, prerequisite: { ...base.prerequisite, startup }, generationEvidence: await generationOf({ marker: { ...RESTORED_MARKER, restore_id: "drill-other" }, appgen: { ...ADOPTED, adoption: { ...adoption, restore_id: "drill-other" } } }) };
+      const early = certify({ ...base, scenario: "restore-drill", prerequisite: { ...base.prerequisite, startup } });
+      assert.deepEqual(failedGates(early), ["generation-gate"], "a task started before the gate (09:00 < 09:50): the attestation was not the switch's");
+      assert.match(JSON.stringify(early.gates.find((g) => g.id === "generation-gate")), /the switch came after the gate/);
+      const otherRestore = { ...base, scenario: "restore-drill" as const, prerequisite: { ...base.prerequisite, startup, running }, generationEvidence: await generationOf({ marker: { ...RESTORED_MARKER, restore_id: "drill-other" }, appgen: { ...ADOPTED, adoption: { ...adoption, restore_id: "drill-other" } } }) };
       assert.deepEqual(failedGates(certify(otherRestore)), ["restore-quiet", "restore-fence", "generation-gate"], "the drill's evidence is bound to ITS adoption");
     } finally {
       cleanup(built.dir);
@@ -3046,7 +3051,7 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
   const TG_P2 = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/gs-staging-p2/fedcba9876543210";
   const at = (iso: string) => Date.parse(iso);
   const serviceTask = (pool: string, id: string, extra: Record<string, unknown>) => ({ taskArn: `arn:aws:ecs:us-east-1:111111111111:task/gs-staging/${id.repeat(16)}`, group: `service:gs-staging-${pool}`, taskDefinitionArn: `arn:aws:ecs:us-east-1:111111111111:task-definition/gs-staging-${pool}:7`, ...extra });
-  function flipDir(over: { record?: Record<string, unknown>; stoppedExit?: Record<string, number>; alarms?: Record<string, unknown>; capture?: string; gsTo?: string } = {}): string {
+  function flipDir(over: { record?: Record<string, unknown>; stoppedExit?: Record<string, number>; alarms?: Record<string, unknown>; capture?: string; gsTo?: string; extraClusterTasks?: readonly Record<string, unknown>[] } = {}): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l6flip-"));
     write(dir, "flip-record.json", flipRecord(over.record ?? {}));
     const stopped = (pool: string, id: string) => serviceTask(pool, id, { lastStatus: "STOPPED", desiredStatus: "STOPPED", startedAt: "2026-09-30T08:00:00Z", stoppedAt: "2026-09-30T09:00:30Z", containers: [{ name: "game-server", exitCode: over.stoppedExit?.[pool] ?? 5 }] });
@@ -3056,7 +3061,7 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
       write(dir, POOL_EVIDENCE_FILES.stoppedTasks(pool), { tasks: [tasks[pool][0]] });
       write(dir, POOL_EVIDENCE_FILES.runningTasks(pool), { tasks: [tasks[pool][1]] });
     }
-    write(dir, EVIDENCE.clusterTasks, clusterListing([...tasks.p1, ...tasks.p2]));
+    write(dir, EVIDENCE.clusterTasks, clusterListing([...tasks.p1, ...tasks.p2, ...(over.extraClusterTasks ?? [])]));
     write(dir, POOL_EVIDENCE_FILES.targetGroups, { TargetGroups: [TARGET_GROUPS.TargetGroups[0], { ...TARGET_GROUPS.TargetGroups[0], TargetGroupArn: TG_P2, TargetGroupName: "gs-staging-p2" }] });
     const gs = over.gsTo === "p2" ? TG_P2 : TG_ARN;
     write(dir, POOL_EVIDENCE_FILES.listenerRules, {
@@ -3106,6 +3111,7 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
       ["a window longer than 45 min", { record: { window: { ...FLIP_WINDOW, expires_at: FLIP_WINDOW.opened_at + 50 * 60_000, suppression: "closed" } } }, /suppression was bounded/],
       ["captured before the window's tail ended", { capture: "2026-09-30T09:22:00Z" }, /captured before the window/],
       ["another environment's flip", { record: { environment: "prod" } }, /this environment's flip/],
+      ["a rollback record (not a certifiable drill)", { record: { rollback: true } }, /a forward flip/],
     ];
     for (const [label, over, want] of cases) {
       const dir = flipDir(over);
@@ -3114,6 +3120,18 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
       } finally {
         cleanup(dir);
       }
+    }
+    /* The complete listing (L6-6P) is the authority on exits, not the per-pool capture (a bounded view): a flip pool's
+       SERVICE task that stopped with exit 3 in the window, seen only in the complete listing, FAILS the drill -- while the
+       drill's own injected exit 3 (a STANDALONE task, group family:) does not. */
+    const hiddenLoss = flipDir({ extraClusterTasks: [serviceTask("p2", "a3", { lastStatus: "STOPPED", desiredStatus: "STOPPED", startedAt: "2026-09-30T08:59:00Z", stoppedAt: "2026-09-30T09:00:10Z", containers: [{ name: "game-server", exitCode: 3 }] })] });
+    const injected = flipDir({ extraClusterTasks: [{ taskArn: `arn:aws:ecs:us-east-1:111111111111:task/gs-staging/${"e3".repeat(16)}`, group: "family:gs-staging-p1", lastStatus: "STOPPED", desiredStatus: "STOPPED", stoppedAt: "2026-09-30T09:05:00Z", containers: [{ name: "game-server", exitCode: 3 }] }] });
+    try {
+      assert.match(flipText(hiddenLoss), /no exit 3 \/ 4 in the window \(complete cluster listing\): .*exit 3/);
+      assert.equal(flipText(injected), "", "the drill's injected standalone exit 3 is not a flip pool's loss");
+    } finally {
+      cleanup(hiddenLoss);
+      cleanup(injected);
     }
     const missing = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l6flip-"));
     try {
@@ -3162,6 +3180,12 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
       write(built.dir, EVIDENCE_FILES.alarms, doc);
       const gate = certify({ ...(await built.ctx()), scenario: "flip-drill" }).gates.find((g) => g.id === "alarms") as { checks: readonly Check[] };
       assert.match(reasons(gate.checks), /restored outside a window/);
+      /* Judged at the time alarms.json was read (manifest.json, written right after it), never at capture.json's later
+         stamp: a suppressor still in its window's 5-minute tail when the alarms were read is not "stuck". */
+      write(built.dir, POOL_EVIDENCE_FILES.manifest, { format: "18COSMOS/EVIDENCE/v1", captured_at: "2026-09-30T09:22:00Z", environment: "staging", region: "us-east-1", pools: ["p1"] });
+      write(built.dir, EVIDENCE.capture, { format: "18COSMOS/L5-8-CAPTURE/v1", captured_at: "2026-09-30T09:30:00Z" });
+      const inTail = certify({ ...(await built.ctx()), scenario: "flip-drill" }).gates.find((g) => g.id === "alarms") as { checks: readonly Check[] };
+      assert.ok(!/restored outside a window/.test(reasons(inTail.checks)), reasons(inTail.checks));
     } finally {
       cleanup(built.dir);
     }

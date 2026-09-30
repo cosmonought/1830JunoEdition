@@ -332,14 +332,15 @@ export function parseJunoBackendConfig(raw: unknown, context: { readonly serverM
 }
 
 /**
- * LIVE-5 L5-5: the directory of a FILE signing journal -- the only journal this build's `start.ts` opens. A configuration
- * naming the DynamoDB ledger is refused here, loudly, until LIVE-5 L5-7 wires the ledger (its generation, its relayer
- * role, the AWS clients): a server never falls back to a local file journal for a configuration that names the ledger.
+ * LIVE-5 L5-5: the directory of a FILE signing journal -- the only journal the FILE (PROCESS) storage mode of `start.ts`
+ * opens. A configuration naming the DynamoDB ledger is refused here, loudly: the ledger is opened only by the AWS storage
+ * mode (LIVE-5 L5-7, `aws/runtime/`, with its generation, its relayer role and the AWS clients), and a server never falls
+ * back to a local file journal for a configuration that names the ledger.
  */
 export function fileJournalDirOf(config: JunoBackendConfig): string {
   if (config.journal.kind === "file") return config.journal.dir;
   throw new JunoConfigError([
-    `the configuration names the DynamoDB signing ledger (${config.journal.tableArn}); this build does not open it from start.ts yet (LIVE-5 L5-7 wires it) and never falls back to a file journal`,
+    `the configuration names the DynamoDB signing ledger (${config.journal.tableArn}); the file storage mode does not open it (the AWS storage mode does: GS_STORAGE=aws, LIVE-5 L5-7) and never falls back to a file journal`,
   ]);
 }
 

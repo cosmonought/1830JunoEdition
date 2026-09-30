@@ -4,6 +4,8 @@
 // DynamoDB Local client cannot be aimed anywhere but this machine, never reads the machine's AWS environment, and has
 // SDK retries off and bounded, throwing timeouts; an AWS client ignores every configured endpoint override; and the
 // source tree creates AWS clients in exactly one place. LIVE-5 L5-5: the same for the KMS client (`createKmsClient`).
+// LIVE-5 L5-7: the same for SSM and Secrets Manager (the runtime configuration's clients), and the import guard lifted
+// for ONE place -- the AWS runtime composition, `aws/runtime/` -- and tightened for the ledger, KMS and the runtime.
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -12,8 +14,10 @@ import * as os from "os";
 import * as path from "path";
 import { ListTablesCommand, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { KMSClient, ListKeysCommand } from "@aws-sdk/client-kms";
+import { GetParameterCommand, type SSMClient } from "@aws-sdk/client-ssm";
+import { ListSecretsCommand, type SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
 
-import { AWS_CALL_POLICY, createDynamoDbClient, createKmsClient, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV, KMS_CALL_POLICY, LOCAL_TEST_CREDENTIALS, LOCAL_TEST_REGION, localEndpointProblem } from "./awsClients";
+import { AWS_CALL_POLICY, CONFIG_CALL_POLICY, createDynamoDbClient, createKmsClient, createSecretsManagerClient, createSsmClient, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV, KMS_CALL_POLICY, LOCAL_TEST_CREDENTIALS, LOCAL_TEST_REGION, localEndpointProblem } from "./awsClients";
 
 /** The host and port a request WOULD be sent to; the request is stopped before the network. */
 async function destination(client: DynamoDBClient | KMSClient): Promise<string> {
@@ -180,6 +184,42 @@ describe("L5-1 AWS client convention", () => {
     client.destroy();
   });
 
+  test("L5-7: the SSM and Secrets Manager clients go to their region's own endpoint whatever the environment says; the region is explicit; SDK retries off; bounded, throwing timeouts", async () => {
+    const stoppedAt = async (client: SSMClient | SecretsManagerClient, command: GetParameterCommand | ListSecretsCommand): Promise<string> => {
+      let seen = "";
+      (client.middlewareStack as unknown as { add(middleware: unknown, options: unknown): void }).add(
+        () => async (args: unknown) => {
+          const request = (args as { request: { protocol: string; hostname: string } }).request;
+          seen = `${request.protocol}//${request.hostname}`;
+          throw new Error("stopped before the network");
+        },
+        { step: "finalizeRequest", name: "l5ConfigDestinationProbe" },
+      );
+      await assert.rejects((client.send as (c: unknown) => Promise<unknown>)(command), /stopped before the network/);
+      return seen;
+    };
+    await withHostileEnvironment(async () => {
+      const ssm = createSsmClient({ kind: "aws", region: "us-east-1" });
+      assert.equal(await stoppedAt(ssm, new GetParameterCommand({ Name: "arn:aws:ssm:us-east-1:123456789012:parameter/gs/x" })), "https://ssm.us-east-1.amazonaws.com");
+      assert.equal(await ssm.config.region(), "us-east-1", "not the environment's eu-west-1");
+      assert.equal(await ssm.config.maxAttempts(), CONFIG_CALL_POLICY.maxAttempts);
+      const secrets = createSecretsManagerClient({ kind: "aws", region: "us-east-1" });
+      assert.equal(await stoppedAt(secrets, new ListSecretsCommand({})), "https://secretsmanager.us-east-1.amazonaws.com");
+      assert.equal(((await secrets.config.retryStrategy()) as { mode?: string }).mode, "standard");
+      const handler = ssm.config.requestHandler as unknown as { configProvider?: Promise<Record<string, unknown>>; config?: Record<string, unknown> };
+      const resolved = (await handler.configProvider) ?? handler.config ?? {};
+      assert.equal(resolved.throwOnRequestTimeout, true);
+      assert.equal(resolved.requestTimeout, CONFIG_CALL_POLICY.requestTimeoutMs);
+      ssm.destroy();
+      secrets.destroy();
+    }, { profile: false });
+    for (const region of ["gs-local", "", "US-EAST-1"]) {
+      assert.throws(() => createSsmClient({ kind: "aws", region }), /not an AWS region/, JSON.stringify(region));
+      assert.throws(() => createSecretsManagerClient({ kind: "aws", region }), /not an AWS region/, JSON.stringify(region));
+    }
+    assert.throws(() => createSsmClient({ kind: "dynamodb-local", endpoint: "http://127.0.0.1:8000" } as never), /not an AWS region/);
+  });
+
   test("the environment names DynamoDB Local explicitly; unset is null, and a set-but-unsafe value throws", () => {
     assert.equal(dynamoLocalTargetFromEnv({}), null);
     assert.equal(dynamoLocalTargetFromEnv({ [DYNAMODB_LOCAL_ENV]: "" }), null);
@@ -187,7 +227,7 @@ describe("L5-1 AWS client convention", () => {
     assert.throws(() => dynamoLocalTargetFromEnv({ [DYNAMODB_LOCAL_ENV]: "https://dynamodb.us-east-1.amazonaws.com" }), /GS_DYNAMODB_LOCAL_ENDPOINT/);
   });
 
-  test("one convention: AWS clients are constructed only in aws/awsClients.ts, only the DynamoDB and (L5-5) KMS client packages are used, and no production file imports the conformance code", () => {
+  test("one convention: AWS clients are constructed only in aws/awsClients.ts, only the pinned AWS client packages are used, no production file imports the conformance code, and the AWS substrate is reached only through the L5-7 runtime", () => {
     const root = path.resolve(__dirname, "../../../../src"); // dist/server/src/aws -> server/src
     const sources: string[] = [];
     const walk = (dir: string) => {
@@ -201,40 +241,48 @@ describe("L5-1 AWS client convention", () => {
     assert.ok(sources.length > 50, `the source tree was found (${root})`);
     const offenders: string[] = [];
     const conformance = /^persistence\/conformance\//;
+    const under = (target: string, dir: string) => target === dir || target.startsWith(`${dir}/`);
+    /* LIVE-5 L5-7: the SSM and Secrets Manager clients are the runtime configuration's (`aws/runtime/configSource.ts`),
+       made only by `aws/awsClients.ts`. */
+    const configClientFiles = new Set(["aws/awsClients.ts", "aws/awsClients.test.ts", "aws/runtime/configSource.ts"]);
     for (const file of sources) {
       const text = fs.readFileSync(file, "utf8");
       const relative = path.relative(root, file).split(path.sep).join("/");
+      const runtime = relative.startsWith("aws/runtime/");
       if (relative !== "aws/awsClients.ts" && /new\s+DynamoDB(Client)?\s*\(/.test(text)) offenders.push(`${relative}: constructs a DynamoDB client`);
       if (relative !== "aws/awsClients.ts" && /new\s+KMS(Client)?\s*\(/.test(text)) offenders.push(`${relative}: constructs a KMS client`);
+      if (relative !== "aws/awsClients.ts" && /new\s+(SSM|SecretsManager)(Client)?\s*\(/.test(text)) offenders.push(`${relative}: constructs an SSM or Secrets Manager client`);
       if (/DynamoDBDocument(Client)?\b/.test(text) && relative !== "aws/awsClients.test.ts") offenders.push(`${relative}: uses the document client (it marshals values: stored bytes must be exact)`);
       const modules = [...text.matchAll(/(?:from\s+|require\(\s*|import\(\s*)["'`]([^"'`]+)["'`]/g)].map((match) => match[1]);
       for (const name of modules) {
-        if (name.startsWith("@aws-sdk/") && name !== "@aws-sdk/client-dynamodb" && name !== "@aws-sdk/client-kms") offenders.push(`${relative}: imports ${name}`);
+        if (name === "@aws-sdk/client-ssm" || name === "@aws-sdk/client-secrets-manager") {
+          if (!configClientFiles.has(relative) && !(runtime && relative.endsWith(".test.ts"))) offenders.push(`${relative}: imports ${name} (only the runtime configuration's source reads SSM and Secrets Manager)`);
+        } else if (name.startsWith("@aws-sdk/") && name !== "@aws-sdk/client-dynamodb" && name !== "@aws-sdk/client-kms") offenders.push(`${relative}: imports ${name}`);
         if (name.startsWith("@smithy/")) offenders.push(`${relative}: reaches into ${name} directly`);
         /* The proof adapter and the harness are test code: nothing outside the conformance directory may import them. */
         if (name.includes("persistence/conformance") && !conformance.test(relative)) offenders.push(`${relative}: imports the conformance harness (${name})`);
         if (/(^|\/)conformance\//.test(name) && relative.startsWith("persistence/") && !conformance.test(relative)) offenders.push(`${relative}: imports ${name}`);
-        /* LIVE-5 L5-2: the game-table adapters are NOT wired into the server yet (L5-7 owns the AWS wiring): only they
-           themselves and the conformance suites may import them. L5-7 lifts this rule for `start.ts`, deliberately. Every
-           relative import is RESOLVED against its file, so no spelling (`../../game/x`, `./aws/game`) slips past.
-           LIVE-5 L5-4 (at integration): the same rule for the identity adapters (`aws/identity`).
-           LIVE-5 L5-3: the ownership layer (`aws/ownership`: the pool writer, the roles, per-game claims) composes the two, so
-           it may import both; it is itself under the same rule -- not wired until L5-7. */
+        /* LIVE-5 L5-2 ... L5-6 kept the AWS adapters out of the server; LIVE-5 L5-7 wires them, and lifts the rule for ONE
+           place only: the runtime composition, `aws/runtime/` (the AWS storage mode). Everything else stays under the rule:
+             aws/game, aws/identity  -- themselves, the ownership layer (it composes the two), the runtime, the conformance;
+             aws/ownership           -- itself, the runtime, the conformance;
+             aws/ledger              -- itself, the ownership layer (APPGEN, the relayer role), the runtime, the conformance;
+             aws/kms                 -- itself, the runtime, the conformance;
+             aws/runtime             -- itself; and start.ts, which reads the storage mode and loads the AWS entry only.
+           Every relative import is RESOLVED against its file, so no spelling (`../../game/x`, `./aws/game`) slips past. */
         if (name.startsWith(".")) {
           const target = path.relative(root, path.resolve(path.dirname(file), name)).split(path.sep).join("/");
           const composer = relative.startsWith("aws/ownership/");
-          if ((target === "aws/game" || target.startsWith("aws/game/")) && !relative.startsWith("aws/game/") && !composer && !conformance.test(relative)) {
-            offenders.push(`${relative}: imports the game-table adapters (${name}) before L5-7 wires them`);
+          const allowed = (dir: string, also: boolean) => relative.startsWith(`${dir}/`) || also || runtime || conformance.test(relative);
+          if (under(target, "aws/game") && !allowed("aws/game", composer)) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/identity") && !allowed("aws/identity", composer)) offenders.push(`${relative}: imports the identity adapters (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/ownership") && !allowed("aws/ownership", false)) offenders.push(`${relative}: imports the ownership layer (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/ledger") && !allowed("aws/ledger", composer)) offenders.push(`${relative}: imports the signing ledger (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/kms") && !allowed("aws/kms", false)) offenders.push(`${relative}: imports the KMS binding (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/runtime") && !runtime && !conformance.test(relative) && !(relative === "start.ts" && (target === "aws/runtime/storageMode" || target === "aws/runtime/awsMain"))) {
+            offenders.push(`${relative}: imports the AWS runtime (${name}); only start.ts reaches it (the storage mode, and the AWS entry)`);
           }
-          if ((target === "aws/identity" || target.startsWith("aws/identity/")) && !relative.startsWith("aws/identity/") && !composer && !conformance.test(relative)) {
-            offenders.push(`${relative}: imports the identity adapters (${name}) before L5-7 wires them`);
-          }
-          if ((target === "aws/ownership" || target.startsWith("aws/ownership/")) && !composer && !conformance.test(relative)) {
-            offenders.push(`${relative}: imports the ownership layer (${name}) before L5-7 wires it`);
-          }
-        } else if (/(^|\/)aws\/game(\/|$)/.test(name)) offenders.push(`${relative}: imports the game-table adapters by a non-relative path (${name})`);
-        else if (/(^|\/)aws\/identity(\/|$)/.test(name)) offenders.push(`${relative}: imports the identity adapters by a non-relative path (${name})`);
-        else if (/(^|\/)aws\/ownership(\/|$)/.test(name)) offenders.push(`${relative}: imports the ownership layer by a non-relative path (${name})`);
+        } else if (/(^|\/)aws\/(game|identity|ownership|ledger|kms|runtime)(\/|$)/.test(name)) offenders.push(`${relative}: imports an AWS module by a non-relative path (${name})`);
       }
     }
     assert.deepEqual(offenders, []);

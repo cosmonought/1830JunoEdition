@@ -54,6 +54,7 @@ import { IdentityService } from "./identity/sessions";
 import { DEFAULT_INGRESS_LIMITS } from "./ingress/limits";
 import { acquireDataLock, LOCK_STALE_AFTER_MS, type DataLock } from "./persistence/processLock";
 import { RULES_ENGINE_VERSION, SUPPORTED_RULES_ENGINE_VERSIONS } from "../../frontend/src/gameEngine/rulesVersion";
+import { storageKindOf } from "./aws/runtime/storageMode";
 
 /* ==================================================================
     FLAGS AS WELL AS ENVIRONMENT, AND THE REASON IS WINDOWS
@@ -101,6 +102,20 @@ const config = resolved.config;
 /* `createDevAuthenticator` reads GS_MODE at call time; a mode given as `--mode` is made the environment's too. */
 process.env.GS_MODE = config.mode;
 
+/* ==================================================================
+    LIVE-5 L5-7: THE STORAGE MODE -- `file` (THIS FILE'S PROCESS MODE, UNCHANGED) OR `aws`
+   ==================================================================
+   `GS_STORAGE` / `--storage`: absent or `file` runs everything below exactly as before (the data directory, its lock,
+   the file stores). `aws` hands the whole start to `aws/runtime/awsMain.ts`: DynamoDB, KMS and SSM, POOL ownership, the
+   startup order of LIVE-5 L5-7, `/gs/readyz`, fail-closed configuration -- and nothing of the data directory. Any other
+   value, or an environment and a flag that disagree, is exit 2. */
+const storage = storageKindOf(flags, process.env);
+if (!storage.ok) {
+  // eslint-disable-next-line no-console
+  console.error(`Refusing to start: ${storage.reason}`);
+  process.exit(2);
+}
+
 /** #1250: where the rooms live between restarts. A directory beside the server by default, so `cat` is the
  *  whole of the tooling needed to read a game back; `--data <dir>` or `DATA_DIR` to put it elsewhere. */
 const dataDir = path.resolve(process.env.DATA_DIR ?? flagValue("--data") ?? path.join(process.cwd(), "data"));
@@ -133,6 +148,12 @@ let chainFactsListener: { settled(): Promise<void> } | null = null;
 const CONFLICT_HOLD_FLUSH_MS = 5_000;
 
 async function main(): Promise<void> {
+  if (storage.ok && storage.kind === "aws") {
+    /* Loaded only here: PROCESS mode never loads any AWS code. */
+    const { runAwsStorageMode } = await import("./aws/runtime/awsMain");
+    await runAwsStorageMode({ argv: flags, env: process.env, server: config, build, port });
+    return;
+  }
   const acquired = await acquireDataLock(dataDir, {
     // eslint-disable-next-line no-console
     log: (line) => console.warn(line),
@@ -279,7 +300,8 @@ async function main(): Promise<void> {
         serverMode: config.mode,
         financial: financialStore,
         intents: createFileChainIntentStore(dataDir, { writerCheck: () => held.verify() }),
-        /* LIVE-5 L5-5: a file journal only; a configuration naming the DynamoDB ledger is refused (L5-7 wires it). */
+        /* LIVE-5 L5-5: a file journal only; a configuration naming the DynamoDB ledger is refused here -- the file storage
+           mode never opens it (the AWS storage mode does, LIVE-5 L5-7) and never falls back to a file journal. */
         journal: await openFileSigningJournal(fileJournalDirOf(junoConfig), { writerCheck: () => held.verify(), onRestartRequired: (detail) => failFast("the signing journal", detail) }),
         tickets: ledger,
         readLog: (gameId) => logStore.loadLog(gameId),

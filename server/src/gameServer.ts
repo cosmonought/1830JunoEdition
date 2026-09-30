@@ -67,6 +67,7 @@ import { GAME_ID_PATTERN, seatOf, type GameRecord } from "./rooms/gameRecord";
 /* LIVE-3C: restore, reconciliation, durable holds, the terminal seal, the operator's view. */
 import { isMaintenanceHold, type CommittedView } from "./rooms/committedView";
 import { createMemoryHoldStore, HoldUnreadableError, makeHold, type HoldStore } from "./rooms/holdStore";
+import { handleReadiness, type ReadinessAnswer } from "./ingress/readiness";
 import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILING_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE, type SettlementLifecycle } from "./rooms/lifecycle";
 import { NO_MONEY_FACTS, type MoneyContinuationFacts } from "./escrow/moneyContinuation";
 /* LIVE-4 (L4-2): this pool's capability and the continuation answers every game's session is given. */
@@ -302,6 +303,14 @@ export interface GameServerOptions {
    *  claims its game first, a write refused by an ownership fence drops the game's actor, an evicted idle no-money game
    *  is released, and the startup discovery writes nothing. */
   ownership?: GameOwnership;
+  /** LIVE-5 L5-7: `/gs/readyz` (`ingress/readiness.ts`) -- AWS storage mode's readiness (the pool writer, the roles, the
+   *  startup, shutting down). Absent: no such route; PROCESS mode is unchanged. `/gs/healthz` (liveness) is unchanged
+   *  either way. */
+  readiness?: () => ReadinessAnswer;
+  /** LIVE-5 L5-7: the address the server listens on. Absent: `GAME_SERVER_BIND_HOST` (loopback, LIVE-0) -- every
+   *  PROCESS-mode start. AWS storage mode binds its task's own interface (awsvpc), reached only through the load
+   *  balancer. */
+  bindHost?: string;
 }
 
 /** LIVE-5 L5-3: what a game's log subscribers are told when another writer took the game from this task (POOL ownership
@@ -1399,6 +1408,8 @@ export function createGameServer(options: GameServerOptions): {
   /* ESCROW-4: `/gs/api/money/*` (its own per-session budget; the same ingress rules as the identity routes). */
   const moneyLimiter = createMoneyLimiter(identityNow);
   const http = createServer((req, res) => {
+    /* LIVE-5 L5-7: readiness first (AWS storage mode only): it reads no body and no identity. */
+    if (options.readiness !== undefined && handleReadiness(req, res, options.readiness)) return;
     if (
       handleMoneyHttp(
         req,
@@ -2032,7 +2043,7 @@ export function createGameServer(options: GameServerOptions): {
     });
   });
 
-  http.listen(options.port, GAME_SERVER_BIND_HOST);
+  http.listen(options.port, options.bindHost ?? GAME_SERVER_BIND_HOST);
 
   return {
     http,

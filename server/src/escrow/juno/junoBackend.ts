@@ -81,11 +81,16 @@ export interface JunoBackendDeps {
   /** LIVE-5 L5-6: the RELAYER's view of the chain intents (AWS: the DynamoDB intent store built with
    *  `relayerRole: role.intentStoreRole()`, whose writes carry the role fence instead of the game's). Absent: `intents`. */
   readonly relayerIntents?: ChainIntentStore;
+  /** LIVE-5 L5-7: whether the frozen rosters are preloaded from every financial record before any chain read (review #8).
+   *  Default true: PROCESS mode, unchanged. AWS storage (POOL ownership) passes false: there each game's roster facts come
+   *  from the strong read made when this task CLAIMS it (`EscrowService.refreshRoster`, wired as the pool ownership's
+   *  `onClaimed`), and a slower startup preload could overwrite a newer claim-time refresh (the L5-3 handoff). */
+  readonly preload?: boolean;
 }
 
 async function openSigner(ref: SignerRef, deps: JunoBackendDeps): Promise<DigestSigner> {
   if (ref.kind === "kms") {
-    if (deps.kms === undefined) throw new SignerError("config", `no KMS client is wired in this build (LIVE-5); the key ${ref.key_ref} cannot be opened`);
+    if (deps.kms === undefined) throw new SignerError("config", `no KMS client is wired in this storage mode (KMS keys open only in the AWS storage mode, LIVE-5 L5-7); the key ${ref.key_ref} cannot be opened`);
     return openKmsDigestSigner(deps.kms, ref.key_ref);
   }
   return openDevelopmentSignerFile(ref.key_file, { serverMode: deps.serverMode, networkClass: deps.config.networkClass, chainId: deps.config.chainId, acknowledged: deps.config.devSignerAcknowledged });
@@ -108,6 +113,8 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
   let loading = false;
   let verdict: DeploymentVerdict | null = null;
   let timer: NodeJS.Timeout | null = null;
+  /** LIVE-5 L5-7 (review M2): once stopped, a verification still in flight neither loads nor installs its retry timer. */
+  let stopped = false;
   let relayer: Relayer | null = null;
   const service = createEscrowService({
     backend: {
@@ -156,11 +163,15 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
     ...(deps.relayerAuthority !== undefined ? { authority: deps.relayerAuthority } : {}),
   });
   /* Review #8: the frozen rosters, from the durable store, before the server takes a single op (no chain needed). */
-  const preloaded = await service.preload();
-  if (preloaded > 0) deps.log(`  escrow: ${preloaded} money games preloaded (frozen financial rosters protected before any chain read)`);
+  if (deps.preload !== false) {
+    const preloaded = await service.preload();
+    if (preloaded > 0) deps.log(`  escrow: ${preloaded} money games preloaded (frozen financial rosters protected before any chain read)`);
+  }
 
   async function verifyOnce(): Promise<JunoBackendState> {
+    if (stopped) return state;
     verdict = await verifyJunoDeployment(config, rest);
+    if (stopped) return state;
     /* LIVE-4 (L4-4): whenever the chain answered, the deployment's chain-attested facts at VERIFICATION GRADE -- the only
        source of the continuation verdict's `runtime.chainFacts` (a mismatch included: they make the classification of
        every money game deterministic, and a configuration typo stays derived, never a conflict). */
@@ -169,6 +180,7 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
       if (read.kind === "unavailable") deps.warn(`  escrow: the deployment's facts could not be read at verification grade (${read.detail}); no deployment conflict is concluded until they are`);
     }
     if (verdict.kind === "verified") {
+      if (stopped) return state;
       if (state !== "active" && !loading) {
         loading = true;
         let loaded: Awaited<ReturnType<typeof service.load>>;
@@ -211,7 +223,7 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
         deps.warn(`  escrow: verification failed -- ${error instanceof Error ? error.message : String(error)}; retrying`);
         result = state;
       }
-      if (result !== "refused") {
+      if (result !== "refused" && !stopped) {
         timer = setInterval(() => {
           if (state === "refused") return;
           void verifyOnce().catch((error) => deps.warn(`  escrow: verification failed -- ${error instanceof Error ? error.message : String(error)}`));
@@ -221,7 +233,9 @@ export async function openJunoBackend(deps: JunoBackendDeps): Promise<JunoBacken
       return result;
     },
     stop() {
+      stopped = true;
       if (timer !== null) clearInterval(timer);
+      timer = null;
       relayer?.stop();
     },
   };

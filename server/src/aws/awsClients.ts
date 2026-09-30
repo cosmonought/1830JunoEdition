@@ -24,17 +24,20 @@
 //   ABORT           every call can carry `deadline()`, an AbortSignal that bounds the whole call (default 8 s).
 //   CLIENTS         only the services a slice actually uses. DynamoDB (L5-1: the conformance substrate; L5-5: the signing
 //                   ledger) and KMS (L5-5: the three Juno keys sign through it -- `createKmsClient`, same rules, its own
-//                   tighter call bounds, preflight §11.2). SSM and Secrets Manager are added by L5-7, through this file.
+//                   tighter call bounds, preflight §11.2). L5-7: SSM Parameter Store (the runtime's non-secret
+//                   configuration) and Secrets Manager (secrets, read into memory only), same rules, AWS targets only.
 
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { KMSClient } from "@aws-sdk/client-kms";
+import { SecretsManagerClient } from "@aws-sdk/client-secrets-manager";
+import { SSMClient } from "@aws-sdk/client-ssm";
 
 import { isAwsRegion } from "./arns";
 
 export type AwsTarget =
   /** Tests and development: DynamoDB Local on this machine. */
   | { readonly kind: "dynamodb-local"; readonly endpoint: string }
-  /** A real AWS region (LIVE-5 L5-7 wires this; nothing in L5-1 constructs it). */
+  /** A real AWS region (LIVE-5 L5-7: the AWS runtime's clients, `aws/runtime/awsSubstrate.ts` `createAwsClients`). */
   | { readonly kind: "aws"; readonly region: string };
 
 export const AWS_CALL_POLICY = Object.freeze({
@@ -160,6 +163,50 @@ export function createKmsClient(target: KmsTarget): KMSClient {
     region: target.region,
     maxAttempts: KMS_CALL_POLICY.maxAttempts,
     requestHandler: { ...KMS_REQUEST_HANDLER_OPTIONS },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/* SSM Parameter Store and Secrets Manager (LIVE-5 L5-7)                */
+/* ------------------------------------------------------------------ */
+
+/** The runtime's configuration reads (`aws/runtime/configSource.ts`): one read of each reference at startup, bounded like
+ *  a DynamoDB call. Only real AWS targets -- there is no local stand-in: the tests fake the ports above these clients. */
+export type ConfigServiceTarget = { readonly kind: "aws"; readonly region: string };
+
+export const CONFIG_CALL_POLICY = Object.freeze({
+  maxAttempts: 1,
+  connectionTimeoutMs: 2_000,
+  requestTimeoutMs: 5_000,
+  callDeadlineMs: 8_000,
+});
+
+function configTargetRegion(target: ConfigServiceTarget, what: string): string {
+  if (target === null || typeof target !== "object" || target.kind !== "aws" || !isAwsRegion(target.region)) {
+    throw new Error(`refusing to create ${what} client: ${JSON.stringify((target as { region?: unknown } | null)?.region ?? null)} is not an AWS region`);
+  }
+  return target.region;
+}
+
+/** SSM Parameter Store: the runtime configuration's one parameter (and the escrow configuration's). */
+export function createSsmClient(target: ConfigServiceTarget): SSMClient {
+  const region = configTargetRegion(target, "an SSM");
+  return new SSMClient({
+    ...PINNED_CLIENT_SETTINGS,
+    region,
+    maxAttempts: CONFIG_CALL_POLICY.maxAttempts,
+    requestHandler: { ...REQUEST_HANDLER_OPTIONS },
+  });
+}
+
+/** Secrets Manager: a secret is read by its complete ARN, into memory only (never into the environment, preflight §11.6). */
+export function createSecretsManagerClient(target: ConfigServiceTarget): SecretsManagerClient {
+  const region = configTargetRegion(target, "a Secrets Manager");
+  return new SecretsManagerClient({
+    ...PINNED_CLIENT_SETTINGS,
+    region,
+    maxAttempts: CONFIG_CALL_POLICY.maxAttempts,
+    requestHandler: { ...REQUEST_HANDLER_OPTIONS },
   });
 }
 

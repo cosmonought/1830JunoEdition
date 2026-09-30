@@ -7,7 +7,8 @@
 // `18COSMOS/JUNO-BACKEND/v3` names the signing journal's KIND (`file` with its directory, or the DynamoDB ledger by its
 // table ARN) instead of v2's bare `journal_dir`; v2 stays accepted, exactly as it was. Every KMS key -- in either format --
 // is named by its key ARN and every one of them is in one region, read from the ARNs, never from the environment. A
-// configuration that names the ledger is refused by `start.ts` until L5-7 wires it: it never becomes a file journal.
+// configuration that names the ledger is refused by the file storage mode of `start.ts` (the AWS storage mode, L5-7, opens
+// it): it never becomes a file journal.
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -119,7 +120,7 @@ describe("L5-5 configuration: v3 names the journal's kind -- and nothing default
     assert.match(problems(v3({ journal: { kind: "dynamodb", table_arn: TABLE, endpoint: "http://127.0.0.1:8000" } })), /unknown field journal.endpoint/);
   });
 
-  test("start.ts opens only a file journal: a configuration naming the ledger is refused (L5-7 wires it), never a fallback", () => {
+  test("the file storage mode opens only a file journal: a configuration naming the ledger is refused there (the AWS storage mode opens it, L5-7), never a fallback", () => {
     const parsed = parseJunoBackendConfig(v3(), prod);
     assert.throws(() => fileJournalDirOf(parsed), (error: JunoConfigError) => error instanceof JunoConfigError && /DynamoDB signing ledger/.test(error.message) && /L5-7/.test(error.message) && /never falls back to a file journal/.test(error.message));
   });

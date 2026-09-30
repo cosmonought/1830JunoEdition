@@ -1,24 +1,26 @@
-# AWS clients, DynamoDB Local, the game table, identity, ownership and the relayer role — the LIVE-5 convention
+# AWS clients, DynamoDB Local, the game table, identity, ownership, the relayer role and the AWS runtime — the LIVE-5 convention
 
 LIVE-5 L5-1 set this up so that every later LIVE-5 slice uses one convention. L5-2 (the game table), L5-4 (identity),
-L5-5 (the ledger and KMS) and L5-7 (the AWS wiring) all follow it; none of them should pick its own.
+L5-5 (the ledger and KMS) and L5-7 (the AWS wiring, §8) all follow it; none of them should pick its own.
 
 ## 1. Creating a client: `awsClients.ts`, and nowhere else
 
-A client is created only by `createDynamoDbClient(target)` or (L5-5) `createKmsClient(target)`, or by the matching factory
-a later slice adds to this same file. The test `awsClients.test.ts` scans `server/src` (ES imports, `require` and dynamic
+A client is created only by `createDynamoDbClient(target)`, (L5-5) `createKmsClient(target)`, or (L5-7) `createSsmClient` /
+`createSecretsManagerClient`, or by the matching factory a later slice adds to this same file. The test `awsClients.test.ts` scans `server/src` (ES imports, `require` and dynamic
 `import`) and enforces:
 
 - no other source file constructs a DynamoDB client (`DynamoDBClient` or the aggregated `DynamoDB`) or a KMS client
   (`KMSClient` or the aggregated `KMS`);
 - nothing uses the document client: it marshals values, and stored bytes must be exact;
-- only `@aws-sdk/client-dynamodb` and `@aws-sdk/client-kms` (both pinned exactly at 3.1142.0) are imported until a slice
-  needs another, and nothing reaches into `@smithy/*`;
+- only `@aws-sdk/client-dynamodb` and `@aws-sdk/client-kms` are imported, plus (L5-7) `@aws-sdk/client-ssm` and
+  `@aws-sdk/client-secrets-manager` in `awsClients.ts` and `runtime/configSource.ts` only (all four pinned exactly at
+  3.1142.0), and nothing reaches into `@smithy/*`;
+- (L5-7) the AWS adapters are reached only through the runtime composition, `aws/runtime/` (§8, "The import boundary");
 - no file outside `persistence/conformance/` imports the conformance harness or its proof adapter.
 
 | Concern | Rule |
 |---|---|
-| **Target** | Always explicit. `{ kind: "dynamodb-local", endpoint }` is for tests and development. `{ kind: "aws", region }` is for real AWS (L5-7 wires it; nothing constructs it in L5-1). |
+| **Target** | Always explicit. `{ kind: "dynamodb-local", endpoint }` is for tests and development. `{ kind: "aws", region }` is for real AWS (L5-7 wires it: the regions come from the runtime document and the ARNs, §8). |
 | **Endpoint override** | Only for DynamoDB Local, and only a plain `http://` loopback endpoint (`localhost`, `127.0.0.1` or `[::1]`) with an explicit port and no path, query or credentials (`localEndpointProblem`). An `aws` client sets `ignoreConfiguredEndpointUrls`, so `AWS_ENDPOINT_URL*` and profile endpoint settings cannot redirect it. |
 | **Region** | Local: the fake region `gs-local`, which is not an AWS region. AWS: an explicit, validated region. The region is never taken from the environment or instance metadata. |
 | **Shared config file** | Both targets pin every setting a profile line or environment variable could otherwise change (`PINNED_CLIENT_SETTINGS`): no configured endpoint URL, no FIPS or dual-stack endpoint, and the standard retry mode, never the adaptive rate limiter. The test runs under a hostile `AWS_CONFIG_FILE` and environment. |
@@ -26,7 +28,7 @@ a later slice adds to this same file. The test `awsClients.test.ts` scans `serve
 | **Retries** | Off in the SDK (`maxAttempts: 1`). An authoritative write is resent only by its adapter, with the **same** `ClientRequestToken`. A conditional failure on a resend is settled by a strong read (preflight D-3, §4). A generic SDK retry would sign a new request and could turn one write into two. |
 | **Timeouts** | Connect 2 s. Request 5 s, the actor's E-11 store deadline. `throwOnRequestTimeout: true` is required: without it the SDK only logs a timeout. An adapter treats a timeout as an **unknown** outcome, never as a failure. |
 | **Abort** | Every call passes `{ abortSignal: deadline() }`, which bounds the whole call (default 8 s). |
-| **Services** | DynamoDB and (L5-5) KMS. SSM and Secrets Manager are added here by L5-7, with the same rules. |
+| **Services** | DynamoDB, (L5-5) KMS, and (L5-7) SSM Parameter Store and Secrets Manager -- AWS targets only (the tests fake the ports above them), the same pinned settings, SDK retries off, bounded throwing timeouts. |
 
 **KMS (L5-5).** `createKmsClient({ kind: "aws", region })` for AWS, `{ kind: "kms-local", endpoint }` only for the tests'
 KMS stand-in (loopback http, the fake region, the dummy keys, exactly as DynamoDB Local). Same pinned settings, SDK retries
@@ -123,7 +125,8 @@ case uses (its own unevaluated-resend case pins the behaviour).
 
 Six adapters behind today's ports, over ONE table (`pk`/`sk` strings, no secondary index): `createDynamoLogStore`,
 `createDynamoRecordStore`, `createDynamoHoldStore`, `createDynamoFinancialStore`, `createDynamoIntentStore`,
-`createDynamoTicketStore`. **Not wired into the server** (L5-7 does that; `awsClients.test.ts` refuses any other importer).
+`createDynamoTicketStore`. **Wired by L5-7** (§8): only the ownership layer and the runtime composition (`aws/runtime/`)
+may import them (`awsClients.test.ts`).
 
 | Rule | Where |
 |---|---|
@@ -185,10 +188,10 @@ grants, the security-event journal -- declare L5-2's `inject-unevaluated` (cases
 written, invisible → UNKNOWN). The identity store and the journal declare `cas-in-write` (their own conditions are inside
 the write); the grants subject exempts it with its reason (a grant write has no condition of its own). No identity-side
 race case exercises `cas-in-write` yet: the L5-4 properties (A: 700 random changes judged by the table's conditions
-alone) are that evidence. **Not wired**: like `aws/game`, nothing outside `aws/identity` and the conformance suites may
-import these adapters (`awsClients.test.ts`); L5-7 lifts the rule deliberately.
+alone) are that evidence. **Wired by L5-7** (§8): like `aws/game`, only the ownership layer, the runtime composition
+(`aws/runtime/`) and the conformance suites may import these adapters (`awsClients.test.ts`).
 
-**What L5-7 wires** (nothing in `start.ts` uses these yet):
+**What L5-7 wired** (§8 has the runtime's exact order):
 - take the role (`takeOverIdentityWriter`, with L5-3's `SYSTEM/ROUTING` and `POOL#` checks), then `load` -- never the
   other way round;
 - `onFenced` → exit 3 (a stale identity writer must not keep answering from memory, preflight §5.5);
@@ -209,9 +212,9 @@ retires its old selector, installs nothing and sends the profile to operator rev
 
 ## 6. Ownership (L5-3): `aws/ownership/`, `aws/game/routing.ts`, `rooms/gameOwnership.ts`
 
-The layer that turns L5-2's primitives (`takeOverPool`, `claimGame`, `releaseGame`) into who may write what. **Not wired**
-(L5-7): `awsClients.test.ts` refuses any importer of `aws/ownership` outside itself and the conformance suites; it is the
-one place allowed to import both `aws/game` and `aws/identity`.
+The layer that turns L5-2's primitives (`takeOverPool`, `claimGame`, `releaseGame`) into who may write what. **Wired by
+L5-7** (§8): `awsClients.test.ts` refuses any importer of `aws/ownership` outside itself, the runtime composition
+(`aws/runtime/`) and the conformance suites; it is, with the runtime, allowed to import both `aws/game` and `aws/identity`.
 
 | Piece | What it is |
 |---|---|
@@ -229,7 +232,7 @@ pool-fenced write) -- data without a HEAD is refused (`GameWithoutHeadError`); a
 idle NO-MONEY game is released; discovery writes nothing (a startup snapshot is never enforced or written: the load
 decides after its claim); `retakeResident` drops a QUIESCENT resident actor before the sweep claims its game back.
 
-**What L5-7 wires** (none of it is in `start.ts` yet), in this order (preflight §13):
+**What L5-7 wires** (done: §8 has the runtime's exact order), in this order (preflight §13):
 1. `PoolWriter.take` (step 4) -- `onLost` -> exit 3; `writer.start()`; `watchGeneration(generationProbe(ledger, table, N))`.
 2. Primary only: `takeIdentityWriterRole(writer, identity, …)` -> `createDynamoIdentityStore({ epoch })` -> `load` (L5-4's
    order); `not-primary` -> the non-writer identity path (the IdentityVerifier, later).
@@ -291,7 +294,7 @@ a mint in another account (it cannot share the mirror's transaction); the hint a
 - F-L5-2: a KMS `unavailable` answer backs off on the outage's streak and spends no failure budget (it used to hold an
   intent after six); a key the service REFUSES still holds it.
 
-**What L5-7 wires** (in the §6 order, step 2, primary only, after the identity writer):
+**What L5-7 wires** (done: §8; in the §6 order, step 2, primary only, after the identity writer):
 - open the ledger with the relayer account and `onFenced: ledgerFencedHook(writer)` (the ledger's fence refusals are the
   pool writer's loss);
 - `takeRelayerRole(writer, { ledger, now })` -> `taken`: `role`; anything else: `NO_RELAYER_ROLE` (retry later; never
@@ -303,3 +306,88 @@ a mint in another account (it cannot share the mirror's transaction); the hint a
 - the relayer's load (the chain's sequence and the forgotten-attempt guard over the ledger's attempts, then the open
   intents and the live attempt) runs only after the takeover, before any pass -- the backend's verification and load do
   that already.
+
+## 8. The AWS runtime (L5-7): `aws/runtime/`, `GS_STORAGE=aws`
+
+The one composition of §4-§7 into the running server. It decides ORDER and REACTION only; every durable mechanism is the
+certified substrate's. PROCESS mode (the data directory, the file stores) is unchanged and loads no AWS code.
+
+| File | What it is |
+|---|---|
+| `storageMode.ts` | `GS_STORAGE` / `--storage`: `file` (absent: PROCESS mode) or `aws`; anything else exit 2. Imports nothing (`start.ts` reads it on every start) |
+| `awsMain.ts` | `start.ts`'s AWS entry (loaded only for `aws`): the references, the documents from SSM, the clients, the runtime, the stop signals, the exit codes, the banner |
+| `runtimeConfig.ts` | The references (environment) and the runtime document `18COSMOS/AWS-RUNTIME/v1`, both strict; `checkEscrowConfigForAws` |
+| `configSource.ts` | SSM (a plain `String` parameter by ARN) and Secrets Manager (a secret by its complete ARN, into memory, a `SecretValue` that never prints) |
+| `awsRuntime.ts` | The startup order, readiness, the loss and fail-fast reactions, the graceful shutdown -- over the `AwsSubstrate` port |
+| `awsSubstrate.ts` | The real substrate: each method one call into §4-§7 with this task's clients, tables and generation |
+| `kmsGate.ts` | The pool writer's side-effect gate before every KMS `Sign`, and the KMS failure-class counters |
+| `consoleOps.ts` | The audit lines on stdout (`AUDIT {...}`, the file recorder's event names, redacted) for CloudWatch Logs |
+| `../../ingress/readiness.ts` | `/gs/readyz` (and the standby's HTTP server) |
+
+**The environment holds references only.** `GS_MODE=production` (required), `GS_STORAGE=aws`,
+`GS_AWS_CONFIG_PARAMETER=<SSM parameter ARN>` (or `--aws-config`), and as in PROCESS mode `BUILD_ID`, `PORT`,
+`GS_ALLOWED_ORIGINS`, `GS_TRUSTED_PROXY_HOPS`, `ESCROW_MONEY_TABLES`. Refused with the reason: `DATA_DIR` / `--data`,
+`ESCROW_JUNO_CONFIG` / `--escrow-config`, and any of `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`
+(the task role is the only credential source; a value is never read into a message). The task id is random per process
+(`t-<16 hex>`).
+
+**The runtime document** (one SSM `String` parameter; no secret in it; every field required, nothing else allowed):
+`format` `18COSMOS/AWS-RUNTIME/v1`, `environment` (a label), `region` (the app account's: game and identity tables),
+`pool`, `generation` (the ledger's adopted APPGEN this task is for), `game_table`, `identity_table` (names),
+`ledger_table_arn` (the full table ARN, cross-account; its region is the ARN's), `escrow`: `null` or
+`{config_parameter_arn}` -- the Juno configuration, `18COSMOS/JUNO-BACKEND/v3`, itself an SSM `String` parameter, which must
+name the SAME ledger (`journal: {kind: "dynamodb", table_arn}`) and KMS keys only. Any problem: exit 2. Nothing falls back.
+
+**The startup order** (`awsRuntime.ts` header): the generation (read only: APPGEN must equal `generation`, before the pool)
+-> `PoolWriter.take` (onLost = exit 3), `start()`, `watchGeneration` -> primary only: `takeIdentityWriterRole` ->
+`createDynamoIdentityStore({ epoch })` -> `IdentityService.open(store, { security: { journal (SEC#, generation), grants } })`
+-> with escrow: the ledger (`generation`, the relayer account, `onFenced: ledgerFencedHook(writer)`) -> `takeRelayerRole`
+-> every L5-2 store with `writer.fence` (owner intents game-fenced, the relayer's view ROLE_RL) -> the Juno backend
+CONSTRUCTED (KMS keys through the gate; `preload: false`) -> `createPoolGameOwnership({ onClaimed: refreshRoster })` -> the
+settlement index -> the game server (`ownership`, `readiness`, bound to `0.0.0.0`) -> discovery -> the first money claim
+sweep that completes (then every 60 s) -> READY -> `backend.start()` (verify, the escrow load, the relayer's load) -> the
+settlement walk. A stop asked for before the startup finishes ends it (exit 0) and is checked before every takeover.
+
+**Not primary: a standby.** It holds its pool, takes no role, opens no identity, claims nothing, serves no player (this
+build has no IdentityVerifier), and `/gs/readyz` is 503 `not-primary`; its HTTP server answers `/gs/healthz` and nothing
+else.
+
+**The relayer role.** Taken at startup (before the backend exists, so the escrow load's relayer load follows it). Not
+taken: NO relayer authority (no pass, no Sign, no broadcast), retried every 30 s once the backend is `active`; a role taken
+by a retry is published only after `relayer.load()` has run after that takeover. Each retry mints anew; a fence is never
+read back and adopted.
+
+**KMS.** The configuration's one KMS region; every `Sign` of the three keys waits for `writer.beforeSideEffect()` first
+(`kmsGate.ts`) -- the same gate the relayer's role asks; withheld: `SignerError("unavailable", signatureMayExist: false)`,
+nothing sent to KMS.
+
+**Readiness.** `/gs/readyz`: 200 only while serving (startup done, not stopping), the pool writer not lost and checked good
+within 25 s, the identity writer loaded, the first sweep done, no store asking for a restart; else 503 with fixed reason
+codes (`starting`, `money-sweep-pending`, `pool-writer-unconfirmed`, `pool-writer-lost`, `lost`, `store-uncertain`,
+`shutting-down`, `not-primary`). Public body: codes, pool, epoch, role and escrow states only. `/gs/healthz` is unchanged.
+
+**Loss and fail-fast.** Loss (the pool writer's `onLost`; the identity store's, the SEC# journal's and the ledger's
+`onFenced` all route to `writer.markLost`): timers and the relayer stop, exit 3 at once. A store that cannot settle a write
+(identity's or a game store's `onRestartRequired`): exit 4 after 1.5 s. Neither drains; a stop never turns either into 0.
+
+**The graceful shutdown** (SIGTERM/SIGINT/SIGHUP/SIGBREAK, IPC `shutdown`): readiness 503 -> timers stopped -> the
+in-flight sweep and relayer retry drained -> money tables and settlement stopped -> the backend stopped (a start in flight
+waited for, bounded, and stopped again; once stopped it neither loads nor re-arms its verification) -> the game server
+closed -> escrow jobs drained -> ownership settled -> chain-facts holds -> `identity.settled()` -> the pool writer's
+self-check stopped -> audit flushed -> exit 0. Each drain is bounded so the whole fits Fargate's 120 s `stopTimeout`; a
+loss or restart request during it stops it with its own exit code.
+
+**The import boundary** (`awsClients.test.ts`): `aws/runtime/` is the one place allowed to import `aws/game`,
+`aws/identity`, `aws/ownership`, `aws/ledger` and `aws/kms` together (the ownership layer keeps its own rights; the
+conformance suites theirs); nothing else imports `aws/runtime/`, except `start.ts` (`storageMode` statically, `awsMain`
+dynamically). The SSM and Secrets Manager packages only in `awsClients.ts` and `configSource.ts`.
+
+**For L5-8 (IaC), what the runtime needs** (the L5-7 report has the complete contract): the three tables (game with the
+generation in its name, identity with TTL `ttl`, ledger in the ledger account with APPGEN initialised to the document's
+`generation`); `SYSTEM/ROUTING` naming the primary pool before its first task starts; the two SSM `String` parameters; the
+three KMS keys; the task role (DynamoDB, KMS, SSM read) and no static credentials; the container on `0.0.0.0:$PORT`
+reached only from the ALB; the ALB target health check `/gs/readyz`, the container health check `/gs/healthz`;
+`stopTimeout` 120 s; and the edge forwarding `/gs*` query strings unchanged (`cp`, `cr`, `cb`).
+
+Run: `npm test` includes `aws/runtime/l5_7AwsRuntime.test.js`; `npm run test:dynamodb-local` includes
+`persistence/conformance/awsRuntime.dynamoLocal.test.js` (the runtime over the real substrate).

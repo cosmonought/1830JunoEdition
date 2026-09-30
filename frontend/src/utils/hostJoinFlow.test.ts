@@ -10,7 +10,7 @@
 // (`server/src/rooms/roomService.ts`, `roomAuthz.ts`, `gameRecord.ts`), every change is a named `room-op`, and the
 // client reads back the server's RoomView and RoomSummary -- it validates nothing off the wire itself any more.
 
-import { readStripped, sliceBetween, readShell } from "./sourceScan";
+import { readSource, readStripped, sliceBetween, readShell } from "./sourceScan";
 import * as sandboxRoomSummary from "./sandboxRoomSummary";
 import { DEFAULT_ROOM_SETUP, roomSeatCap, roomVisibility, seatsNeeded } from "./sandboxRoomSummary";
 import { anteBreakdown, formatBps, formatJuno } from "./anteMath";
@@ -92,11 +92,43 @@ describe("the table's terms (design note #1415)", () => {
   it("the public list is the server's summary -- names and readiness, no seat ids, no principals, no PINs", () => {
     /* The client used to summarise its own room document for the list (and had to leave the PINs out). The server
        builds `RoomSummary` from its GameRecord now, and only for a PUBLIC table. */
-    const server = serverSource("rooms/gameRecord.ts");
-    const summary = sliceBetween(server, "export function roomSummaryOf(", "\n}\n");
-    expect(summary).toContain('record.visibility !== "public"');
-    expect(summary).toContain("nicknames: record.seats.map((seat) => seat.nickname),");
-    for (const secret of ["principal_id", "player_id,", "pin", "token"]) expect([secret, summary.includes(secret)]).toEqual([secret, false]);
+    const summary = roomSummaryRegion(serverSource("rooms/gameRecord.ts"));
+    expect(summaryLeaks(summary)).toEqual([]);
+  });
+
+  it("reads roomSummaryOf the same way from a CRLF checkout (R12-W1)", () => {
+    /* THE WINDOWS FAILURE THIS PINS. `core.autocrlf=true` checks `gameRecord.ts` out with CRLF, and the raw read this
+       suite used to make left `\r\n}\r\n` where the anchor says `\n}\n` -- "end anchor not found". The same REAL
+       reader, over a disk that answers CRLF, must give the same region; the raw read it replaced must not. */
+    const lf = roomSummaryRegion(serverSource("rooms/gameRecord.ts"));
+    asCrlfCheckout(() => {
+      const nodeFs = require("fs") as typeof import("fs");
+      const nodePath = require("path") as typeof import("path");
+      const rawCrlf = nodeFs.readFileSync(nodePath.join(__dirname, "../../../server/src/rooms/gameRecord.ts"), "utf8");
+      expect(rawCrlf).toContain("\r\n");
+      expect(() => roomSummaryRegion(stripServerComments(rawCrlf))).toThrow(/end anchor not found after start/);
+      expect(roomSummaryRegion(serverSource("rooms/gameRecord.ts"))).toBe(lf);
+    });
+  });
+
+  it("cannot pass on an empty, wrong or leaking region (negative controls)", () => {
+    const real = roomSummaryRegion(serverSource("rooms/gameRecord.ts"));
+    /* A LEAK IS SEEN. The real function with a principal and a PIN added to the object it returns. */
+    const leaking = real.replace("    nicknames: record.seats.map((seat) => seat.nickname),", "    nicknames: record.seats.map((seat) => seat.nickname),\n    principals: record.seats.map((seat) => seat.principal_id),\n    pin: record.join_pin,");
+    expect(leaking).not.toBe(real);
+    expect(summaryLeaks(leaking)).toEqual(expect.arrayContaining(["principal_id", "pin"]));
+    /* A PRIVATE TABLE LISTED IS SEEN. */
+    expect(summaryLeaks(real.replace('record.visibility !== "public"', "false"))).toContain('witness: record.visibility !== "public"');
+    /* A WRONG OR EMPTY REGION IS NOT A PASS: the witnesses are the function's own, so another function (or nothing)
+       fails them rather than satisfying every absence. */
+    expect(summaryLeaks("export function somethingElse() {\n  return null;\n}").length).toBeGreaterThan(0);
+    expect(() => roomSummaryRegion("export function roomSummaryOf(\n}\n")).toThrow(/empty after its anchor/);
+    /* And the un-normalised CRLF text -- the owner's Windows failure, exactly -- throws rather than slicing nothing. */
+    const rawCrlf = "export function roomSummaryOf(record) {\r\n  return null;\r\n}\r\n";
+    expect(() => roomSummaryRegion(rawCrlf)).toThrow(/end anchor not found after start/);
+    /* AND THE REGION IS ONE FUNCTION: it stops at the function's own closing brace, before the next declaration. */
+    expect(real.trimEnd().endsWith("};")).toBe(true);
+    expect(real).not.toMatch(/\n(export )?(function|const|class|interface|type) /);
   });
 });
 
@@ -159,14 +191,55 @@ describe("what each type recommends (design note #1415)", () => {
   });
 });
 
-/** A server source, comment-stripped (read-only: this suite never writes the server). */
+/** R12-W1: for the duration of `fn`, every text read through `fs.readFileSync` comes back with CRLF line endings --
+ *  a Windows checkout under `core.autocrlf=true`. The readers under test reach `fs` through `require`, the same
+ *  module object as here, so this exercises the REAL reader rather than a copy normalised by hand. */
+function asCrlfCheckout<T>(fn: () => T): T {
+  const nodeFs = require("fs") as typeof import("fs");
+  const real = nodeFs.readFileSync;
+  const spy = jest.spyOn(nodeFs, "readFileSync").mockImplementation(((file: unknown, options?: unknown) => {
+    const out = (real as (f: unknown, o?: unknown) => unknown)(file, options);
+    return typeof out === "string" ? out.replace(/\r?\n/g, "\r\n") : out;
+  }) as typeof nodeFs.readFileSync);
+  try {
+    return fn();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** Where the server's sources sit, relative to `src/` -- the argument `sourceScan.readSource` takes. */
+const SERVER_SRC_FROM_SRC = "../../server/src/";
+
+/** A server source, comment-stripped (read-only: this suite never writes the server). R12-W1: read through
+ *  `sourceScan.readSource`, which normalises line endings -- a raw `fs.readFileSync` left CRLF in a Windows checkout,
+ *  and every `\n}\n` region anchor below then missed. */
 function serverSource(relative: string): string {
-  const fs = require("fs") as typeof import("fs");
-  const path = require("path") as typeof import("path");
-  return fs
-    .readFileSync(path.join(__dirname, "../../../server/src", relative), "utf8")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+  return stripServerComments(readSource(SERVER_SRC_FROM_SRC + relative));
+}
+
+/** This suite's comment stripper, kept as it was: it also drops TRAILING `//` comments, which some anchors below
+ *  rely on and `sourceScan.stripComments` (whole-line only) would not. */
+function stripServerComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+/** `roomSummaryOf`, from its signature to its own closing brace. A top-level function in this code base closes with
+ *  a `}` in column 0 and nothing nested does, so on normalised text the first `\n}\n` after the signature IS the
+ *  function's end; `sliceBetween` throws on a missing anchor or an empty body rather than handing back `""`. */
+function roomSummaryRegion(server: string): string {
+  return sliceBetween(server, "export function roomSummaryOf(", "\n}\n");
+}
+
+/** What the public list must never carry, and the witnesses that prove the region is the real summary. An empty list
+ *  is a pass; each entry names what failed. */
+function summaryLeaks(summary: string): string[] {
+  const failures: string[] = [];
+  for (const witness of ['record.visibility !== "public"', "nicknames: record.seats.map((seat) => seat.nickname),", "return {"]) {
+    if (!summary.includes(witness)) failures.push(`witness: ${witness}`);
+  }
+  for (const secret of ["principal_id", "player_id,", "pin", "token"]) if (summary.includes(secret)) failures.push(secret);
+  return failures;
 }
 
 describe("the server enforces the terms (design note #1415; LIVE-2D: the GameRecord)", () => {

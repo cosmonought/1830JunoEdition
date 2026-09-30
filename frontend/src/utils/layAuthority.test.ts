@@ -25,7 +25,7 @@ import { applySandboxAction, applySandboxLayTile } from "../gameEngine/sandboxSe
 import { filterSandboxPlacements } from "../components/sandboxTileLegality";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import { readShell } from "./sourceScan";
+import { expectOrder, readShell, readStripped, sliceBetween } from "./sourceScan";
 
 const PRR = 1;
 /** D12 carries two of the four impassable borders, on edges 1 and 2. */
@@ -198,14 +198,53 @@ describe("the gate judges against the board as it stands", () => {
   });
 });
 
+/** R12-W1: for the duration of `fn`, every text read through `fs.readFileSync` comes back with CRLF line endings --
+ *  a Windows checkout under `core.autocrlf=true`. The readers under test reach `fs` through `require`, the same
+ *  module object as here, so this exercises the REAL reader rather than a copy normalised by hand. */
+function asCrlfCheckout<T>(fn: () => T): T {
+  const nodeFs = require("fs") as typeof import("fs");
+  const real = nodeFs.readFileSync;
+  const spy = jest.spyOn(nodeFs, "readFileSync").mockImplementation(((file: unknown, options?: unknown) => {
+    const out = (real as (f: unknown, o?: unknown) => unknown)(file, options);
+    return typeof out === "string" ? out.replace(/\r?\n/g, "\r\n") : out;
+  }) as typeof nodeFs.readFileSync);
+  try {
+    return fn();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+/** The reducer's one lay gate (#1683), exactly as the certified reducer spells it (on normalised text). */
+const LAY_GATE = 'if ("LayTile" in msg) {\n    if (layTileLegalityRefusal(state, msg.LayTile, ctx) !== null) return state;';
+
+/** #1683 by structure: inside `applySandboxActionCoreJudged`, the gate occurs ONCE and is asked BEFORE the arm
+ *  (`applyOneAction`) and the cursor (`settleOperatingCursor`) -- "ahead of every stage, so a refusal returns the
+ *  board by identity with the cursor where it stood". An empty list is a pass; each entry names what failed. */
+function layGateFailures(reducer: string): string[] {
+  const failures: string[] = [];
+  let core: string;
+  try {
+    core = sliceBetween(reducer, "function applySandboxActionCoreJudged(", "\n}\n");
+  } catch (error) {
+    return [`region: ${(error as Error).message}`];
+  }
+  const count = core.split(LAY_GATE).length - 1;
+  if (count !== 1) failures.push(`gate occurs ${count} times in applySandboxActionCoreJudged`);
+  try {
+    expectOrder(core, LAY_GATE, "applyOneAction(state, msg, ctx)");
+    expectOrder(core, LAY_GATE, "settleOperatingCursor(");
+  } catch (error) {
+    failures.push(`order: ${(error as Error).message}`);
+  }
+  return failures;
+}
+
 describe("the surfaces share one answer", () => {
-  const read = (rel: string) => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", rel), "utf8");
-    // #490a: the notes quote the old arrangement and must keep doing so.
-    return raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  };
+  /* #490a: the notes quote the old arrangement and must keep doing so, so the code is read comment-stripped.
+     R12-W1: through `sourceScan.readStripped`, which normalises line endings first -- the raw `readFileSync` this
+     used to make left CRLF in a Windows checkout, and the gate's two-line anchor below never matched. */
+  const read = (rel: string) => readStripped(rel);
 
   it("builds the predicate once in the shell", () => {
     /* THE STRUCTURAL HALF. Two predicates spelled separately for the grid and the state is the #748a failure
@@ -246,8 +285,42 @@ describe("the surfaces share one answer", () => {
   it("gates before anything settles", () => {
     /* Stage 10.1 (#1683): the gate is the one `LayTile` composition, asked in the core gate block ahead of the
        arm and the cursor; the geometry is its second question, through the same `ctx.layRefused`. */
-    const reducer = read("gameEngine/sandboxSession.ts");
-    expect(reducer).toContain('if ("LayTile" in msg) {\n    if (layTileLegalityRefusal(state, msg.LayTile, ctx) !== null) return state;');
+    expect(layGateFailures(read("gameEngine/sandboxSession.ts"))).toEqual([]);
     expect(read("gameEngine/layTileAuthority.ts")).toContain("if (ctx?.layRefused && ctx.layRefused(q, r, tile_id, orientation)) {");
+  });
+
+  it("fails when the gate is bypassed, moved behind the arm, or made advisory (R12-W1 negative controls)", () => {
+    const reducer = read("gameEngine/sandboxSession.ts");
+    expect(layGateFailures(reducer)).toEqual([]);
+    const variants: Array<[string, string]> = [
+      /* Deleted outright: the legality check never asked. */
+      ["bypassed", reducer.replace(LAY_GATE, 'if ("LayTile" in msg) {\n  }')],
+      /* Asked, and its answer ignored. */
+      ["advisory", reducer.replace(LAY_GATE, 'if ("LayTile" in msg) {\n    void layTileLegalityRefusal(state, msg.LayTile, ctx);')],
+      /* Asked of the wrong board -- after the arm has already run. */
+      ["late", reducer.replace(LAY_GATE, "").replace("applyOneAction(state, msg, ctx)", `(() => { ${LAY_GATE} } return applyOneAction(state, msg, ctx); })()`)],
+    ];
+    for (const [name, mutated] of variants) {
+      expect([name, mutated === reducer]).toEqual([name, false]);
+      expect([name, layGateFailures(mutated).length > 0]).toEqual([name, true]);
+    }
+    /* And a CRLF checkout reads the same gate through the same REAL reader (the owner's Windows failure), where the
+       raw read this suite used to make does not. */
+    asCrlfCheckout(() => {
+      const nodeFs = require("fs") as typeof import("fs");
+      const nodePath = require("path") as typeof import("path");
+      const rawCrlf = nodeFs.readFileSync(nodePath.join(__dirname, "..", "gameEngine", "sandboxSession.ts"), "utf8");
+      expect(rawCrlf).not.toContain(LAY_GATE);
+      expect(read("gameEngine/sandboxSession.ts")).toBe(reducer);
+      expect(layGateFailures(read("gameEngine/sandboxSession.ts"))).toEqual([]);
+    });
+  });
+
+  it("refuses by behaviour too: the reducer's answer for an illegal lay is the board it was given", () => {
+    /* The source pin's behavioural twin, beside it so a reader sees both: the same gate, asked through the
+       reducer, refuses by identity and passes the legal control. A bypassed gate fails this as well. */
+    const before = board();
+    expect(applySandboxAction(before, lay(ILLEGAL!), { layRefused: refusal(bare) })).toBe(before);
+    expect(applySandboxAction(board(), lay(LEGAL!), { layRefused: refusal(bare) }).operating_sub_phase).toBe("Tokens");
   });
 });

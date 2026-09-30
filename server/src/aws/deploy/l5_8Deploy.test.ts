@@ -48,6 +48,7 @@ import {
   type TableEvidence,
 } from "./deployVerify";
 import { checkPoolListenerRules, checkPoolServices, checkPoolTargetGroups, POOL_EVIDENCE_FILES } from "../controlPlane/evidence";
+import { normalizeEol, readCheckoutText, relativePosix } from "../../testSupport/portability";
 
 const REPO = path.resolve(__dirname, "../../../../../.."); // dist/server/src/aws/deploy -> the repository
 const INFRA = path.join(REPO, "infra/aws");
@@ -111,6 +112,10 @@ describe("L5-8 §1: what Terraform renders is what the task parses", () => {
 /* §2 Static evidence from the IaC itself                               */
 /* ------------------------------------------------------------------ */
 
+/** An IaC file's name as every assertion spells it: relative to infra/aws, `/`-separated on every platform (LIVE-6 W1:
+ *  Windows' `path.relative` answers `modules\app\edge.tf`). The ONE place the enumerator normalizes a name. */
+const iacName = (full: string, api: Pick<typeof path, "relative"> = path, root: string = INFRA): string => relativePosix(root, full, api);
+
 function terraformFiles(dir: string): Array<{ file: string; text: string }> {
   const out: Array<{ file: string; text: string }> = [];
   const walk = (d: string) => {
@@ -118,11 +123,77 @@ function terraformFiles(dir: string): Array<{ file: string; text: string }> {
       if (name === ".terraform") continue;
       const full = path.join(d, name);
       if (fs.statSync(full).isDirectory()) walk(full);
-      else if (name.endsWith(".tf")) out.push({ file: path.relative(INFRA, full), text: fs.readFileSync(full, "utf8") });
+      /* Normalized once, here: `/` names and LF text (a Windows checkout's .tf files are CRLF). */
+      else if (name.endsWith(".tf")) out.push({ file: iacName(full), text: readCheckoutText(full) });
     }
   };
   walk(dir);
   return out;
+}
+
+/**
+ * The body of the first HCL block whose header is exactly `header` (e.g. `resource "aws_dynamodb_table" "game"`): the text
+ * between its `{` and the brace that CLOSES it, matched by depth -- a nested block (`point_in_time_recovery { }`,
+ * `lifecycle { }`), a string (with `${...}` / `%{...}` templates, whose own strings and braces nest), a comment or a heredoc
+ * never ends it early, and nothing after it (the next resource) is ever part of it. null: no such block, or unbalanced.
+ */
+function hclBlockBody(text: string, header: string): string | null {
+  const src = normalizeEol(text);
+  const at = src.indexOf(header);
+  if (at < 0) return null;
+  const open = src.indexOf("{", at + header.length);
+  if (open < 0 || src.slice(at + header.length, open).trim() !== "") return null;
+  const lineEnd = (i: number) => {
+    const n = src.indexOf("\n", i);
+    return n < 0 ? src.length : n;
+  };
+  /* `i` just past an opening quote: the index just past its closing quote (-1: unterminated). */
+  const skipString = (i: number): number => {
+    while (i < src.length) {
+      const c = src[i];
+      if (c === "\\") i += 2;
+      else if (c === '"') return i + 1;
+      else if ((c === "$" || c === "%") && src[i + 1] === c) i += 2; // `$${` / `%%{`: a literal `${` / `%{`, no template
+      else if ((c === "$" || c === "%") && src[i + 1] === "{") {
+        i = skipBraces(i + 2);
+        if (i < 0) return -1;
+      } else if (c === "\n") return -1;
+      else i += 1;
+    }
+    return -1;
+  };
+  /* `i` just past an opening brace: the index just past the brace that closes it (-1: unbalanced). */
+  const skipBraces = (i: number): number => {
+    let depth = 1;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === '"') {
+        i = skipString(i + 1);
+        if (i < 0) return -1;
+      } else if (c === "#" || (c === "/" && src[i + 1] === "/")) i = lineEnd(i);
+      else if (c === "/" && src[i + 1] === "*") {
+        const end = src.indexOf("*/", i + 2);
+        if (end < 0) return -1;
+        i = end + 2;
+      } else if (c === "<" && src[i + 1] === "<" && /^<<-?([A-Za-z_][A-Za-z0-9_]*)\n/.test(src.slice(i, lineEnd(i) + 1))) {
+        const marker = /^<<-?([A-Za-z_][A-Za-z0-9_]*)/.exec(src.slice(i))?.[1] as string;
+        let line = lineEnd(i) + 1;
+        while (line < src.length && src.slice(line, lineEnd(line)).trim() !== marker) line = lineEnd(line) + 1;
+        if (line >= src.length) return -1;
+        i = lineEnd(line);
+      } else if (c === "{") {
+        depth += 1;
+        i += 1;
+      } else if (c === "}") {
+        depth -= 1;
+        i += 1;
+        if (depth === 0) return i;
+      } else i += 1;
+    }
+    return -1;
+  };
+  const close = skipBraces(open + 1);
+  return close < 0 ? null : src.slice(open + 1, close - 1);
 }
 
 describe("L5-8 §2: the IaC's static evidence", () => {
@@ -131,6 +202,7 @@ describe("L5-8 §2: the IaC's static evidence", () => {
 
   test("the IaC was found", () => {
     assert.ok(files.some((f) => f.file === "modules/app/edge.tf") && files.some((f) => f.file === "modules/ledger/main.tf"), files.map((f) => f.file).join(", "));
+    assert.ok(files.every((f) => !f.file.includes("\\") && !f.text.includes("\r")), "every name `/`-separated, every text LF");
   });
 
   test("/gs* forwards ALL query strings: every query_string_behavior is \"all\", and no query-string list exists anywhere", () => {
@@ -162,29 +234,85 @@ describe("L5-8 §2: the IaC's static evidence", () => {
       ["modules/app/tables.tf", ["game", "identity"]],
       ["modules/ledger/main.tf", ["ledger"]],
     ] as const) {
-      const text = files.find((f) => f.file === file)?.text ?? "";
+      const text = files.find((f) => f.file === file)?.text;
+      assert.ok(text !== undefined, `${file} was found`);
       for (const name of resources) {
-        const block = text.slice(text.indexOf(`resource "aws_dynamodb_table" "${name}"`));
-        const body = block.slice(0, block.indexOf("\n}\n")).replace(/#.*$/gm, ""); // code only, not its comments
+        /* The resource's OWN block, braces matched (LIVE-6 W1: `indexOf("\n}\n")` found nothing in a CRLF checkout, and the
+           "body" then ran to the end of the file -- another resource's settings could have satisfied these checks). */
+        const block = hclBlockBody(text, `resource "aws_dynamodb_table" "${name}"`);
+        assert.ok(block !== null, `${file}: resource aws_dynamodb_table.${name}`);
+        const body = block.replace(/#.*$/gm, ""); // code only, not its comments
         assert.ok(/deletion_protection_enabled\s*=\s*true/.test(body), `${name}: deletion protection`);
         assert.ok(/point_in_time_recovery\s*\{\s*enabled\s*=\s*true/.test(body), `${name}: PITR`);
         assert.ok(/prevent_destroy\s*=\s*true/.test(body), `${name}: prevent_destroy`);
         assert.ok(!/global_secondary_index|local_secondary_index|replica\s*\{|stream_enabled/.test(body), `${name}: no index, replica or stream`);
       }
     }
-    const kms = files.find((f) => f.file === "modules/ledger/main.tf")?.text ?? "";
-    assert.ok(/resource "aws_kms_key" "signing"[\s\S]*prevent_destroy\s*=\s*true/.test(kms), "the signing keys are prevent_destroy");
+    const kms = hclBlockBody(files.find((f) => f.file === "modules/ledger/main.tf")?.text ?? "", 'resource "aws_kms_key" "signing"');
+    assert.ok(kms !== null && /prevent_destroy\s*=\s*true/.test(kms.replace(/#.*$/gm, "")), "the signing keys are prevent_destroy (in their own block)");
   });
 
   test("the task definition's environment is L5-7 §14's names only", () => {
-    const locals = files.find((f) => f.file === "modules/app/locals.tf")?.text ?? "";
+    const locals = files.find((f) => f.file === "modules/app/locals.tf")?.text;
+    assert.ok(locals !== undefined && locals.includes("container_environment") && locals.includes("healthz_command"), "modules/app/locals.tf was found");
     const envBlock = locals.slice(locals.indexOf("container_environment"), locals.indexOf("healthz_command"));
     const names = [...envBlock.matchAll(/name = "([A-Z_]+)"/g)].map((m) => m[1]).sort();
     /* LIVE-6 L6-6 adds exactly one optional name: GS_EDGE_DIAGNOSTIC (the staging certification's edge mirror). */
     assert.deepEqual(names, ["BUILD_ID", "ESCROW_MONEY_TABLES", "GS_ALLOWED_ORIGINS", "GS_AWS_CONFIG_PARAMETER", "GS_EDGE_DIAGNOSTIC", "GS_MODE", "GS_STORAGE", "GS_TRUSTED_PROXY_HOPS", "PORT"]);
-    const ecs = files.find((f) => f.file === "modules/app/ecs.tf")?.text ?? "";
+    const ecs = files.find((f) => f.file === "modules/app/ecs.tf")?.text;
+    assert.ok(ecs !== undefined, "modules/app/ecs.tf was found");
     assert.ok(!/^\s*secrets\s*=/m.test(ecs) && !/environmentFiles\s*=/.test(ecs), "no secrets / environmentFiles injection");
     assert.ok(/stopTimeout\s*=\s*120/.test(ecs), "stopTimeout 120");
+  });
+});
+
+describe("LIVE-6 W1: the IaC inspection is the same on Windows (backslash names, CRLF text), pinned on every platform", () => {
+  test("a Windows walk's names are the assertions' names: `modules\\app\\edge.tf` is `modules/app/edge.tf`", () => {
+    const root = "C:\\Users\\owner\\1830Juno\\infra\\aws";
+    assert.equal(iacName(`${root}\\modules\\app\\edge.tf`, path.win32, root), "modules/app/edge.tf");
+    assert.equal(iacName(`${root}\\modules\\ledger\\main.tf`, path.win32, root), "modules/ledger/main.tf");
+    assert.equal(iacName(path.join(INFRA, "modules", "app", "tables.tf")), "modules/app/tables.tf", "and this platform's own walk");
+  });
+
+  const TABLES = [
+    'resource "aws_dynamodb_table" "game" {',
+    '  name = "gs-${var.environment}-game"   # a template: ${...} holds no block end',
+    '  description = "an escaped $${literal and %%{ literal, never a template"',
+    "  deletion_protection_enabled = false",
+    "  point_in_time_recovery {",
+    "    enabled = true",
+    "  }",
+    '  tags = { note = "a } in a string, a ${join(",", ["x"])} template" }',
+    "  lifecycle {",
+    "    ignore_changes = [tags]",
+    "  }",
+    "}",
+    "",
+    'resource "aws_dynamodb_table" "identity" {',
+    "  deletion_protection_enabled = true",
+    "  lifecycle {",
+    "    prevent_destroy = true",
+    "  }",
+    "}",
+    "",
+  ].join("\n");
+
+  test("a resource's body ends at ITS closing brace -- never at a nested block's, a string's or a template's -- LF or CRLF", () => {
+    for (const text of [TABLES, TABLES.replace(/\n/g, "\r\n")]) {
+      const game = hclBlockBody(text, 'resource "aws_dynamodb_table" "game"');
+      assert.ok(game !== null);
+      assert.match(game, /point_in_time_recovery \{\n\s+enabled = true\n\s+\}/, "the nested block is inside");
+      assert.match(game, /ignore_changes = \[tags\]/, "the body runs past the nested blocks to its own end");
+      /* The NEXT resource's protection never counts for this one (the old `indexOf("\n}\n")` found nothing under CRLF, and
+         its "body" ran to the end of the file). */
+      assert.ok(!/deletion_protection_enabled\s*=\s*true/.test(game) && !/prevent_destroy/.test(game), game);
+      const identity = hclBlockBody(text, 'resource "aws_dynamodb_table" "identity"');
+      assert.ok(identity !== null && /prevent_destroy\s*=\s*true/.test(identity));
+    }
+    assert.equal(hclBlockBody(TABLES, 'resource "aws_dynamodb_table" "ledger"'), null, "absent: null, never another block");
+    assert.equal(hclBlockBody('resource "x" "y" {\n  a = {\n', 'resource "x" "y"'), null, "unbalanced: null");
+    const heredoc = 'resource "aws_iam_policy" "p" {\n  policy = <<EOF\n{ "Statement": [ } ]\nEOF\n  name = "p"\n}\nresource "z" "w" {}\n';
+    assert.equal(hclBlockBody(heredoc, 'resource "aws_iam_policy" "p"')?.trim().split("\n").pop()?.trim(), 'name = "p"', "a heredoc's braces are text");
   });
 });
 

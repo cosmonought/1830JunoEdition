@@ -38,6 +38,7 @@ import { checkTable, EVIDENCE_FILES } from "../../aws/deploy/deployVerify";
 import { GENERATION_GATE_FORMAT, generationAttestationProblem, ROTATION_GATE_FORMAT, rotationGateRecordProblem, writeGateRecord } from "../../aws/deploy/gateRecords";
 import { METRIC_NAMESPACE, METRICS } from "../../aws/runtime/runtimeMetrics";
 import { TASK_STATUS_TTL_SECONDS } from "../../aws/runtime/taskStatus";
+import { readCheckoutText, relativePosix } from "../../testSupport/portability";
 import { GAME_A, makeWorld, play, startedGame, toStockRound, type World } from "../../escrow/escrow3bSupport";
 import type { FinancialGameRecord } from "../../escrow/moneyLifecycle";
 
@@ -45,6 +46,10 @@ import type { FinancialGameRecord } from "../../escrow/moneyLifecycle";
 const SERVER_SRC = path.resolve(__dirname, "../../../../../src");
 const REPO = path.resolve(SERVER_SRC, "../..");
 const CONTRACT_FILE = path.join(REPO, "infra/aws/modules/app/alarm-contract.json");
+
+/** LIVE-6 W1: the only aws/ sources that may name `ttl` -- TASK#'s writer, and identity / deploy code (the identity
+ *  table's own TTL, the verifier's TTL checks) -- judged on the `/`-separated name relative to server/src. */
+const ttlGuardExempt = (rel: string): boolean => rel.endsWith(".test.ts") || /^aws\/(identity|deploy)\//.test(rel) || rel === "aws/runtime/taskStatus.ts";
 
 const sourceFiles = (dir: string): string[] =>
   fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -489,13 +494,24 @@ describe("L6-5B boundaries", () => {
   });
 
   test("only TASK# carries `ttl` in the game table: no other game-table writer names the attribute, and TASK#'s TTL outlives a restore drill's stop window", () => {
-    const offenders = sourceFiles(path.join(SERVER_SRC, "aws"))
-      .filter((file) => !file.endsWith(".test.ts"))
-      .filter((file) => !/aws\/(identity|deploy)\//.test(file) && !file.endsWith("runtime/taskStatus.ts"))
-      .filter((file) => /\bttl\b/.test(fs.readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "")));
+    /* Classified by the `/`-separated name relative to server/src (LIVE-6 W1: the `/` patterns never matched a Windows
+       absolute path, so every exempt file was reported). The exemptions are the same three, exactly. */
+    const scanned = sourceFiles(path.join(SERVER_SRC, "aws")).map((file) => ({ file, rel: relativePosix(SERVER_SRC, file) }));
+    const namesTtl = (file: string) => /\bttl\b/.test(readCheckoutText(file).replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, ""));
+    const offenders = scanned.filter(({ rel }) => !ttlGuardExempt(rel)).filter(({ file }) => namesTtl(file)).map(({ rel }) => rel);
     assert.deepEqual(offenders, []);
+    /* The scan is live: it walked aws/, and the exempt writer it spares really does name the attribute. */
+    assert.ok(scanned.length > 20 && scanned.some(({ rel }) => rel === "aws/runtime/taskStatus.ts" && namesTtl(path.join(SERVER_SRC, rel))), "TASK#'s writer names ttl");
     assert.equal(TASK_STATUS_TTL_SECONDS, 86_400);
     assert.ok(TASK_STATUS_TTL_SECONDS * 1000 > 6 * 60 * 60 * 1000, "a fresh old-generation heartbeat is still there for L6-6R's restore-quiet check (6 h window)");
+  });
+
+  test("LIVE-6 W1: the TTL guard classifies a Windows walk exactly as a POSIX one (pinned with path.win32)", () => {
+    const src = "C:\\Users\\owner\\1830Juno\\server\\src";
+    const rel = (file: string) => relativePosix(src, `${src}\\${file}`, path.win32);
+    assert.equal(rel("aws\\deploy\\commands.ts"), "aws/deploy/commands.ts");
+    for (const exempt of ["aws\\deploy\\commands.ts", "aws\\deploy\\staging\\recovery.ts", "aws\\identity\\identityItems.ts", "aws\\runtime\\taskStatus.ts", "aws\\game\\gameTable.test.ts"]) assert.ok(ttlGuardExempt(rel(exempt)), exempt);
+    for (const judged of ["aws\\game\\gameTable.ts", "aws\\runtime\\taskHeartbeats.ts", "aws\\ownership\\poolOwnership.ts", "aws\\runtime\\taskStatus.ts.bak", "aws\\gamedeploy\\x.ts"]) assert.ok(!ttlGuardExempt(rel(judged)), judged);
   });
 
   test("the serving task never reaches CloudWatch (EMF only); the rotation gate's queue reader stays its own, read-only", () => {

@@ -41,8 +41,12 @@ for pool in "${POOLS[@]}"; do
     if [ -z "$TASKS" ] || [ "$TASKS" = "None" ]; then
       echo '{"tasks":[]}' > "$OUT/${lower}-tasks-${pool}.json"
     else
-      # shellcheck disable=SC2086
-      aws ecs describe-tasks --cluster "gs-${ENVIRONMENT}" --tasks $TASKS > "$OUT/${lower}-tasks-${pool}.json"
+      # LIVE-6 W1: this bounded view (the first 100) stays ONE whole describe-tasks answer, asked by task ID (the ARN's
+      # last segment; DescribeTasks takes IDs or ARNs with --cluster): 100 IDs are ~3.3k characters, inside cmd.exe's
+      # 8191-character line (an `aws.cmd`), where 100 full ARNs (~8.4k) are not. The answer names every task by its ARN.
+      IDS=()
+      for arn in $TASKS; do IDS+=("${arn##*/}"); done
+      aws ecs describe-tasks --cluster "gs-${ENVIRONMENT}" --tasks "${IDS[@]}" > "$OUT/${lower}-tasks-${pool}.json"
     fi
   done
   mkdir -p "$OUT/task-definition-revisions-${pool}"
@@ -113,13 +117,16 @@ done
 # LIVE-6 L6-6P: the COMPLETE cluster listing (cluster-tasks.json, format 18COSMOS/L6-6P-CLUSTER-TASKS/v1). Every task
 # whose desired status is RUNNING and every task whose desired status is STOPPED (a task draining under SIGTERM has
 # desired STOPPED and is still running; ECS never sets a desired status of PENDING), EVERY `list-tasks` page (100 per
-# page, followed by its next token until there is none), then every distinct ARN described in batches of 100, each
+# page, followed by its next token until there is none), then every distinct ARN described in batches of DESCRIBE_BATCH
+# (50: DescribeTasks takes up to 100, but 100 full ARNs are ~8.4k characters -- past cmd.exe's 8191-character line when
+# the CLI is an `aws.cmd`; 50 are ~4.2k -- LIVE-6 W1; the certification judges 1-100 per batch), each
 # `describe-tasks` answer kept WHOLE (its tasks and its failures from the same call). Nothing is cut: any failed call stops
 # the script (set -e) and the file is only moved into place once complete. The certification re-derives completeness
 # from the file (page chain, task_count, every ARN described exactly once, no failure) and refuses anything less.
 TASK_ARN_RE='^arn:[a-z0-9-]+:ecs:[a-z0-9-]+:[0-9]{12}:task/[A-Za-z0-9._/-]+$'
 PAGE_QUERY="[join('', ['T=', nextToken || '']), join(' ', taskArns)]"
 MAX_PAGES=1000
+DESCRIBE_BATCH=50
 LISTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ALL_ARNS=()
 LISTINGS=""
@@ -158,9 +165,9 @@ while IFS= read -r arn; do [ -z "$arn" ] || TASKS+=("$arn"); done < <(printf '%s
 {
   printf '{"format":"18COSMOS/L6-6P-CLUSTER-TASKS/v1","cluster":"gs-%s","listed_at":"%s","listings":[%s],"task_count":%d,"batches":[' "$ENVIRONMENT" "$LISTED_AT" "$LISTINGS" "${#TASKS[@]}"
   SEP=""
-  for ((i = 0; i < ${#TASKS[@]}; i += 100)); do
+  for ((i = 0; i < ${#TASKS[@]}; i += DESCRIBE_BATCH)); do
     printf '%s' "$SEP"
-    command aws --region "$REGION" --output json ecs describe-tasks --cluster "gs-${ENVIRONMENT}" --tasks "${TASKS[@]:i:100}"
+    command aws --region "$REGION" --output json ecs describe-tasks --cluster "gs-${ENVIRONMENT}" --tasks "${TASKS[@]:i:DESCRIBE_BATCH}"
     SEP=","
   done
   printf ']}\n'

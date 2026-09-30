@@ -52,7 +52,7 @@ import { FLIP_SUPPRESSION } from "../../controlPlane/flipSuppression";
 import type { Check } from "../deployVerify";
 import { EVIDENCE_FILES, expectedNames } from "../deployVerify";
 import { generationAttestationProblem, rotationGateRecordProblem, type GenerationAttestation } from "../gateRecords";
-import { arr, EVIDENCE, fail, judge, num, obj, readEvidence, readEvidenceText } from "./evidence";
+import { arr, EVIDENCE, evidenceName, fail, judge, num, obj, readEvidence, readEvidenceText } from "./evidence";
 import { readClusterListing } from "./prerequisite";
 import { adoptionOf, restoreSafe, type GenerationEvidence } from "./recovery";
 
@@ -190,7 +190,7 @@ export function judgeGenerationGateRecord(
   const rec = readEvidence(dir, DRILL_FILES.generationGate, { ownRecord: true });
   if (!rec.ok) return [fail(`${label}: the gate's own record`, `${rec.problem} (\`awsDeploy generation-gate ... --record <dir>/${DRILL_FILES.generationGate}\` before the switch)`)];
   const r = obj(rec.value);
-  const plan = readEvidence(dir, path.join(EVIDENCE.terraformDir("app"), "plan.json"));
+  const plan = readEvidence(dir, evidenceName(EVIDENCE.terraformDir("app"), "plan.json"));
   const planned = plan.ok ? plannedGenerationAdoption(plan.value) : null;
   const checks: Check[] = [];
   const attestation = generationAttestationProblem(rec.value, planned, { environment: expect.environment });

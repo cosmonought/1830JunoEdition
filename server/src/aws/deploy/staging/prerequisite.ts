@@ -18,7 +18,7 @@
 //                  a `run-task` of a pool's definition beside its service would fence it (infra/aws/README.md "Rollout"),
 //                  and a draining, starting or old-revision task is a deployment in motion. L6-6P: the listing is the
 //                  COMPLETE one -- desired RUNNING and desired STOPPED, every `list-tasks` page, every task described in
-//                  batches of 100 with no failure -- or the prerequisite FAILS (`readClusterListing`);
+//                  batches (50 per call since W1; judged 1-100) with no failure -- or the prerequisite FAILS (`readClusterListing`);
 //   TARGET HEALTH  the primary's target group has exactly one target, healthy through /gs/readyz, and it is the primary's
 //                  running task (its ENI address).
 //
@@ -114,8 +114,14 @@ export const CLUSTER_TASKS_FORMAT = "18COSMOS/L6-6P-CLUSTER-TASKS/v1";
  *  lastStatus), so RUNNING and STOPPED together are every task the cluster still reports -- a task draining under
  *  SIGTERM (lastStatus RUNNING/DEACTIVATING/STOPPING/DEPROVISIONING) has desired STOPPED. */
 export const CLUSTER_DESIRED_STATUSES = Object.freeze(["RUNNING", "STOPPED"] as const);
-/** DescribeTasks takes at most 100 tasks per call. */
-export const DESCRIBE_TASKS_BATCH = 100;
+/** The bound a listing's batch is judged against: 1..100, DescribeTasks' own maximum per call (a batch over it cannot be one
+ *  whole answer). Unchanged by LIVE-6 W1, so a complete listing captured before W1 (batches of 100) still judges. */
+export const DESCRIBE_TASKS_BATCH_MAX = 100;
+/** What the capture scripts send per call since LIVE-6 W1: 50 ARNs. 100 full task ARNs (~8.4k characters) exceed cmd.exe's
+ *  8191-character command line -- an `aws.cmd` (the Windows test stub, a pip-installed CLI v1) cannot even be invoked with
+ *  them; 50 (~4.2k) can. Every listed ARN is still described exactly once: a smaller batch changes how many calls describe
+ *  the cluster, never what the listing must prove. The script tests pin it. */
+export const DESCRIBE_TASKS_BATCH = 50;
 /** The listing is taken inside capture-evidence, before the script writes capture.json: no more than this before it. */
 export const CLUSTER_LISTING_WINDOW_MS = 15 * 60_000;
 
@@ -134,7 +140,7 @@ export type ClusterListing =
  *    page but the last answered with a next token (`more: true`) and the last without one (`more: false`) -- a listing
  *    that stopped early, or never ended, is not complete;
  *  - `task_count` = the distinct task ARNs listed (a task listed under both statuses while it changed is counted once);
- *  - `batches`: whole `describe-tasks` answers of at most 100 tasks each, none with a failure, that together describe
+ *  - `batches`: whole `describe-tasks` answers of 1..DESCRIBE_TASKS_BATCH_MAX (100) tasks each, none with a failure, that together describe
  *    EVERY listed ARN exactly once and nothing that was not listed.
  * Nothing is inferred from an absent field: no pages, no batches or a failure is incomplete, never "no task".
  */
@@ -184,7 +190,7 @@ export function readClusterListing(doc: Json, environment: string): ClusterListi
     const b = obj(raw);
     if (!Array.isArray(b.tasks) || !Array.isArray(b.failures)) return bad(`describe-tasks batch ${i} is not a whole answer (tasks and failures)`);
     if (b.failures.length > 0) return bad(`describe-tasks batch ${i} failed for ${b.failures.length} task(s) (${b.failures.map((f) => `${taskId(obj(f).arn)}: ${String(obj(f).reason)}`).join(", ")}): the listing is incomplete`);
-    if (b.tasks.length === 0 || b.tasks.length > DESCRIBE_TASKS_BATCH) return bad(`describe-tasks batch ${i} describes ${b.tasks.length} task(s), not 1-${DESCRIBE_TASKS_BATCH}`);
+    if (b.tasks.length === 0 || b.tasks.length > DESCRIBE_TASKS_BATCH_MAX) return bad(`describe-tasks batch ${i} describes ${b.tasks.length} task(s), not 1-${DESCRIBE_TASKS_BATCH_MAX}`);
     for (const t of b.tasks.map(obj)) {
       const arn = String(t.taskArn);
       described.set(arn, (described.get(arn) ?? 0) + 1);

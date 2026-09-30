@@ -32,6 +32,7 @@ import { claimVerdict, HEAD_ATTRIBUTES, ItemUnreadableError, LIVE_OWNER_TAKE_STO
 import { newOperatorRun, noteProblem, OPERATOR_RUN } from "./mutations";
 import { AWS_USAGE, EXIT, parseOperatorArgs, runAwsOperator } from "./operatorMain";
 import { OperatorRefusal, resolveOperatorTarget } from "./operatorTarget";
+import { normalizeEol, readCheckoutText } from "../../testSupport/portability";
 
 const RUNTIME_ARN = "arn:aws:ssm:us-east-1:123456789012:parameter/gs/prod/runtime";
 const ESCROW_ARN = "arn:aws:ssm:us-east-1:123456789012:parameter/gs/prod/escrow";
@@ -335,11 +336,18 @@ describe("L6-3 no secret, no configuration content, in any output", () => {
 describe("L6-3 gamesDoctor's file mode is unchanged", () => {
   test("the aws entry is a dynamic import taken only for `aws`; gamesDoctor.ts imports no AWS module statically", () => {
     const root = path.resolve(__dirname, "../../../../../src"); // dist/server/src/aws/operator -> server/src
-    const doctor = fs.readFileSync(path.join(root, "tools/gamesDoctor.ts"), "utf8");
+    /* As committed (LF): a Windows checkout's CRLF is not the code (LIVE-6 W1). */
+    const doctor = readCheckoutText(path.join(root, "tools/gamesDoctor.ts"));
     const statics = [...doctor.matchAll(/^import[^;]*from\s+["']([^"']+)["'];?$/gm)].map((match) => match[1]);
     assert.ok(statics.length > 10, "the static imports were found");
     assert.ok(!statics.some((name) => /(^|\/)aws\//.test(name) || name.startsWith("@aws-sdk/")), statics.join(", "));
-    assert.match(doctor, /if \(argv\[0\] === "aws"\) \{\n\s+const \{ runAwsOperator \} = await import\("\.\.\/aws\/operator\/operatorMain"\);/);
+    const dynamicAws = /if \(argv\[0\] === "aws"\) \{\n\s+const \{ runAwsOperator \} = await import\("\.\.\/aws\/operator\/operatorMain"\);/;
+    assert.match(doctor, dynamicAws);
+    /* LIVE-6 W1, pinned on every platform: the file as a CRLF checkout holds it is what failed the owner's Windows gate
+       (the code was right); read as committed -- normalized -- the same assertion binds. */
+    const crlf = doctor.replace(/\n/g, "\r\n");
+    assert.doesNotMatch(crlf, dynamicAws);
+    assert.match(normalizeEol(crlf), dynamicAws);
   });
 
   test("a real file-mode run (the compiled CLI) loads no AWS SDK and no AWS adapter, runtime or operator module, and answers exactly as before", () => {

@@ -43,8 +43,11 @@ foreach ($pool in $pools) {
     if ($LASTEXITCODE -ne 0) { throw "list-tasks failed" }
     $tasks = @(("$text" -split "\s+") | Where-Object { $_ -ne "" -and $_ -ne "None" })
     $file = "$($status.ToLower())-tasks-$pool.json"
+    # LIVE-6 W1: ONE whole describe-tasks answer for this bounded view, asked by task ID (see capture-evidence.sh): 100 IDs
+    # stay inside cmd.exe's 8191-character line, 100 full ARNs do not.
+    $ids = @($tasks | ForEach-Object { $_.Substring($_.LastIndexOf("/") + 1) })
     if ($tasks.Count -eq 0) { Set-Content -Path (Join-Path $Out $file) -Value '{"tasks":[]}' -Encoding utf8 }
-    else { Save $file (@("ecs", "describe-tasks", "--cluster", "gs-$Environment", "--tasks") + $tasks) }
+    else { Save $file (@("ecs", "describe-tasks", "--cluster", "gs-$Environment", "--tasks") + $ids) }
   }
   $revDir = Join-Path $Out "task-definition-revisions-$pool"
   New-Item -ItemType Directory -Force -Path $revDir | Out-Null
@@ -103,11 +106,13 @@ foreach ($pool in $pools) {
   Set-Content -Path (Join-Path $Out "revisions-$pool.json") -Value ('{"taskDefinitions":[' + ($defs -join ",") + ']}') -Encoding utf8
 }
 # LIVE-6 L6-6P: the COMPLETE cluster listing (cluster-tasks.json, 18COSMOS/L6-6P-CLUSTER-TASKS/v1): desired RUNNING and
-# desired STOPPED, every list-tasks page, every distinct ARN described in batches of 100, each answer kept whole. Byte-for-
-# byte the same shape as capture-evidence.sh; any failed call throws before the file is moved into place.
+# desired STOPPED, every list-tasks page, every distinct ARN described in batches of $describeBatch (50; see
+# capture-evidence.sh -- LIVE-6 W1), each answer kept whole. Byte-for-byte the same shape as capture-evidence.sh; any
+# failed call throws before the file is moved into place.
 $taskArnPattern = '^arn:[a-z0-9-]+:ecs:[a-z0-9-]+:[0-9]{12}:task/[A-Za-z0-9._/-]+$'
 $pageQuery = "[join('', ['T=', nextToken || '']), join(' ', taskArns)]"
 $maxPages = 1000
+$describeBatch = 50
 $listedAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", [Globalization.CultureInfo]::InvariantCulture)
 $allArns = New-Object System.Collections.Generic.List[string]
 $listings = @()
@@ -143,10 +148,10 @@ foreach ($status in @("RUNNING", "STOPPED")) {
 $seen = New-Object System.Collections.Generic.HashSet[string]
 $tasks = @($allArns | Where-Object { $seen.Add($_) })
 $answers = @()
-for ($i = 0; $i -lt $tasks.Count; $i += 100) {
-  $batch = @($tasks[$i..([Math]::Min($i + 99, $tasks.Count - 1))])
+for ($i = 0; $i -lt $tasks.Count; $i += $describeBatch) {
+  $batch = @($tasks[$i..([Math]::Min($i + $describeBatch - 1, $tasks.Count - 1))])
   $json = & aws --region $Region --output json ecs describe-tasks --cluster "gs-$Environment" --tasks @batch
-  if ($LASTEXITCODE -ne 0) { throw "ecs describe-tasks failed (batch $($i / 100))" }
+  if ($LASTEXITCODE -ne 0) { throw "ecs describe-tasks failed (batch $($i / $describeBatch))" }
   $answers += ,($json -join "`n")
 }
 $partial = Join-Path $Out "cluster-tasks.json.partial"

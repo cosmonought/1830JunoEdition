@@ -20,7 +20,14 @@
 //   terraform/<stack>/...      infra/aws/scripts/plan-evidence (version, lock, plan exit status, `show -json`)
 //   certification.json         `stage-cert certify`: the machine-readable verdict
 //   CERTIFICATION.txt          the human-readable verdict (first line: LIVE-6 AWS STAGING CERTIFICATION: PASS|FAIL)
-//   MANIFEST.json              SHA-256 of every file above, for the audit
+//   certification-manifest.json  SHA-256 of every file above, for the audit
+//
+// EVERY NAME IS DISTINCT ON EVERY FILESYSTEM (LIVE-6 W1): the certification's manifest was `MANIFEST.json`, which on a
+// case-insensitive filesystem (Windows/NTFS, macOS APFS by default) IS capture-evidence's own `manifest.json` -- writing the
+// certification overwrote the captured evidence, and clearing it deleted that evidence. No two names this package holds
+// may fold to the same lower-case path. Evidence-relative names are `/`-separated on every platform: the harness builds
+// its own with `evidenceName` (what the diagnostics print), the manifest converts what it reads from disk, and
+// `path.join(dir, name)` accepts `/` on Windows too.
 //
 // SECRETS ARE REFUSED, NOT REDACTED AFTER THE FACT: a record this harness would write that carries secret-shaped
 // material is never written (the probe fails instead), and an evidence file that carries any is a FAILED gate -- the
@@ -57,11 +64,24 @@ export const EVIDENCE = Object.freeze({
   taskRole: "probe-task-role.json",
   edge: "probe-edge.json",
   drain: (pool: string) => `drain-${pool}.json`,
-  terraformDir: (stack: string) => path.join("terraform", stack),
+  terraformDir: (stack: string) => evidenceName("terraform", stack),
   certification: "certification.json",
   certificationText: "CERTIFICATION.txt",
-  manifest: "MANIFEST.json",
+  /** The certification's own manifest. NOT `MANIFEST.json`: that folds to capture-evidence's `manifest.json` (LIVE-6 W1). */
+  manifest: "certification-manifest.json",
 });
+
+/** An evidence-relative name from the harness's OWN constant parts (`drain-p1` + `tasks-before.json`), `/`-separated on
+ *  every platform (a `\` from a Windows join is one separator too): the one spelling the diagnostics and the tests see.
+ *  Never applied to a name read from disk (on POSIX a `\` is a legal file-name character, not a separator). A `..`, an
+ *  absolute or an empty part is refused: an evidence name never leaves the package. */
+export function evidenceName(...parts: readonly string[]): string {
+  const segments = parts.flatMap((part) => part.split(/[\\/]/));
+  if (parts.length === 0 || segments.some((segment) => segment === "" || segment === "." || segment === "..") || parts.some((part) => path.win32.isAbsolute(part))) {
+    throw new Error(`not an evidence-relative name: ${JSON.stringify(parts)}`);
+  }
+  return segments.join("/");
+}
 
 /** A run id: lower-case, 6-40 characters, used verbatim in the disposable keys (`L6CERT#<run>`). */
 export const RUN_ID = /^[a-z0-9][a-z0-9-]{5,39}$/;
@@ -237,7 +257,7 @@ export function manifestOf(dir: string, exclude: readonly string[] = [EVIDENCE.m
       const stat = fs.statSync(full);
       if (stat.isDirectory()) walk(full);
       else {
-        const file = path.relative(dir, full).split(path.sep).join("/");
+        const file = path.relative(dir, full).split(path.sep).join("/"); // read from disk: this platform's separator only
         if (exclude.includes(file)) continue;
         const bytes = fs.readFileSync(full);
         out.push({ file, bytes: bytes.length, sha256: sha256Hex(bytes), findings: secretFindings(scannableText(bytes.toString("utf8"))) });

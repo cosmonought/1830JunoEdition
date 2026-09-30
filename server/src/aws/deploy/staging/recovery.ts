@@ -62,7 +62,7 @@ import type { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 import type { Check } from "../deployVerify";
 import { EVIDENCE_FILES, expectedNames } from "../deployVerify";
-import { arr, CERTIFICATION_FORMAT, EVIDENCE, fail, judge, num, obj, readEvidence, str } from "./evidence";
+import { arr, CERTIFICATION_FORMAT, EVIDENCE, evidenceName, fail, judge, num, obj, readEvidence, str } from "./evidence";
 
 /* ------------------------------------------------------------------ */
 /* L6-4's parsed shapes (restated; the strict parsers are L6-4's)       */
@@ -456,7 +456,8 @@ export function priorAttestations(dir: string, environment: string): { readonly 
   const images: AttestedImage[] = [];
   const ignored: string[] = [];
   for (const file of files) {
-    const r = readEvidence(dir, path.join(PRIOR_CERTIFICATIONS, file), { ownRecord: true });
+    /* `file` was read from disk: joined as it is, never normalized (on POSIX a `\` in a name is a character). */
+    const r = readEvidence(dir, `${PRIOR_CERTIFICATIONS}/${file}`, { ownRecord: true });
     if (!r.ok) {
       ignored.push(`${file}: ${r.problem}`);
       continue;
@@ -594,7 +595,7 @@ export async function readRestoreHeartbeats(reader: TaskHeartbeatReader | undefi
   if (reader === undefined) return null;
   const ad = input.adoption;
   if (ad === null) return { integrated: true, oldGenerationAfterStop: [], problem: "APPGEN shows no adoption: the previous generation is not known" };
-  const stamp = readEvidence(input.dir, path.join(RESTORE_STOP_DIR, "stamp.json"));
+  const stamp = readEvidence(input.dir, evidenceName(RESTORE_STOP_DIR, "stamp.json"));
   const after = stamp.ok ? Date.parse(String(obj(stamp.value).captured_at)) : Number.NaN;
   if (!Number.isFinite(after)) return { integrated: true, oldGenerationAfterStop: [], problem: `no restore-stop time (${stamp.ok ? "restore-stop/stamp.json has no captured_at" : stamp.problem})` };
   try {
@@ -621,9 +622,9 @@ export const adoptionOf = (evidence: GenerationEvidence): AdoptionFacts | null =
  * than RESTORE_STOP_WINDOW_MS before it.
  */
 export function judgeRestoreQuiet(dir: string, expect: { readonly run: string; readonly environment: string; readonly pools: readonly string[]; readonly adoption: AdoptionFacts | null; readonly heartbeats: HeartbeatEvidence | null }): Check[] {
-  const services = readEvidence(dir, path.join(RESTORE_STOP_DIR, "services.json"));
-  const tasks = readEvidence(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"));
-  const stamp = readEvidence(dir, path.join(RESTORE_STOP_DIR, "stamp.json"));
+  const services = readEvidence(dir, evidenceName(RESTORE_STOP_DIR, "services.json"));
+  const tasks = readEvidence(dir, evidenceName(RESTORE_STOP_DIR, "cluster-tasks.json"));
+  const stamp = readEvidence(dir, evidenceName(RESTORE_STOP_DIR, "stamp.json"));
   const missing = [services, tasks, stamp].filter((r) => !r.ok).map((r) => (r.ok ? "" : r.problem));
   if (missing.length > 0) return [fail("restore: the stop before adoption", `${missing.join("; ")} (capture the stopped state before appgen-adopt)`)];
   const s = obj(stamp.ok ? stamp.value : null);
@@ -635,7 +636,7 @@ export function judgeRestoreQuiet(dir: string, expect: { readonly run: string; r
   /* Exactly one ACTIVE service per pool (a stale INACTIVE record of the same name is not the pool's service). */
   const absent = expect.pools.filter((pool) => listed.filter((x) => x.serviceName === names.service(pool) && x.status === "ACTIVE").length !== 1);
   const busy = listed.filter((x) => x.desiredCount !== 0 || x.runningCount !== 0 || x.pendingCount !== 0).map((x) => String(x.serviceName));
-  /* The listing: one describe-tasks answer per batch of 100 (desired RUNNING and desired STOPPED), each whole. */
+  /* The listing: one describe-tasks answer per batch of 50 (desired RUNNING and desired STOPPED), each whole. */
   const batches = Array.isArray(tasksDoc.batches) ? tasksDoc.batches.map(obj) : null;
   const allTasks = (batches ?? []).flatMap((b) => arr(b.tasks).map(obj));
   /* ECS task ids are ECS resource ids (32 hex), never player data: printed as they are, so the operator knows which task. */

@@ -25,7 +25,8 @@
 //                         [--page-actions <arns>|none --ticket-actions <arns>|none] --commit <sha> [--repository <checkout>]
 //      (LIVE-6 final convergence: the drills' evidence files -- flip-record.json, gate-generation.json,
 //       gate-relayer-rotation.json, probe-flip-alarms.json, probe-restore-alarms.json -- are `drills.ts`'s)
-//        -> certification.json, CERTIFICATION.txt, MANIFEST.json; stdout begins with the verdict line; exit 0 only on PASS.
+//        -> certification.json, CERTIFICATION.txt, certification-manifest.json; stdout begins with the verdict line; exit 0
+//           only on PASS.
 //
 // NOTHING HERE DEPLOYS OR MUTATES A RESOURCE. `stage-cert` reads AWS (the verifier's reads) and writes only the evidence
 // directory. `stage-probe task-role` sends only the IAM probe's impossible-condition writes (nothing can be written), KMS

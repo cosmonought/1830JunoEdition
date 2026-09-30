@@ -24,10 +24,12 @@ foreach ($status in @("RUNNING", "STOPPED")) {
   if ($LASTEXITCODE -ne 0) { throw "list-tasks ($status) failed" }
   $tasks += @(("$text" -split "\s+") | Where-Object { $_ -ne "" -and $_ -ne "None" })
 }
-# One describe-tasks answer per batch of 100, each kept WHOLE (its tasks and failures from the same call): {"batches":[...]}.
+# One describe-tasks answer per batch of 50 (LIVE-6 W1: inside cmd.exe's line for an `aws.cmd`; see capture-evidence.sh),
+# each kept WHOLE (its tasks and failures from the same call): {"batches":[...]}.
+$describeBatch = 50
 $answers = @()
-for ($i = 0; $i -lt $tasks.Count; $i += 100) {
-  $batch = $tasks[$i..([Math]::Min($i + 99, $tasks.Count - 1))]
+for ($i = 0; $i -lt $tasks.Count; $i += $describeBatch) {
+  $batch = @($tasks[$i..([Math]::Min($i + $describeBatch - 1, $tasks.Count - 1))])
   $json = & aws --region $Region --output json ecs describe-tasks --cluster "gs-$Environment" --tasks @batch
   if ($LASTEXITCODE -ne 0) { throw "describe-tasks failed" }
   $answers += ,($json -join "`n")

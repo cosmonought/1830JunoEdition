@@ -355,6 +355,55 @@ in staging; one ARN is never in both). The full table and thresholds: the L6-5B 
 - **Never mute by hand.** Do not use `disable-alarm-actions`: `verify` fails any alarm whose actions are disabled. To
   end a window early, `recover --flip-record` (settled) closes it; otherwise it ends at `expires_at`.
 
+## Staging certification (LIVE-6 L6-6): `npm run awsDeploy -- stage-cert | stage-probe`
+
+The real-AWS staging gate as ONE run (`--run-id`, lower-case) and ONE evidence directory. **Certifying deploys and
+mutates nothing**: `stage-cert` only reads (the verifier's reads, plus `SYSTEM/GENERATION` and APPGEN when L6-4's readers
+are bound) and writes the evidence directory. The only mutations are explicit opt-ins: the certifier task
+(`run-task-probe`, one standalone task whose command is the probe and whose `GS_STORAGE` is a value `start.ts` refuses) and,
+only with `--disposable-writes L6CERT#<run>`, writes to that one disposable game-table partition (deleted and read back
+empty). There is no `--force`. The code is `server/src/aws/deploy/staging/`; the report: Project
+`claude/LIVE6_L6_6_STAGING_CERT_HARNESS_2026-09-30.md`.
+
+**Read-only order** (the default scenario):
+
+```
+1  infra/aws/scripts/capture-evidence.sh <env> <region> <primary> <distribution> <dir>
+2  npm run awsDeploy -- stage-cert prerequisite --run-id R --evidence <dir> --runtime-parameter <ARN> --environment <env> \
+       --primary-pool <p> --generation <N> [--part all]      # two accounts: verify --part ledger --record <dir>/verify-ledger.json --run-id R
+3  infra/aws/scripts/run-task-probe.sh <env> <region> <p> <N> R <dir> --disposable-writes     # IAM, KMS, transactions, identity state
+4  GS_CERT_SESSION_COOKIE=<staging session> npm run awsDeploy -- stage-probe edge --run-id R --evidence <dir> \
+       --base-url https://<distribution name or alias> --origin https://<allowed origin> --environment <env> --generation <N> \
+       --pool <p> [--expected-client-ip <your public IP>]
+5  infra/aws/scripts/plan-evidence.sh ledger <dir> R ...;  infra/aws/scripts/plan-evidence.sh app <dir> R ...
+6  infra/aws/scripts/capture-evidence.sh ... <dir>      # again: the captures must post-date the probes
+7  npm run awsDeploy -- stage-cert certify --run-id R --evidence <dir> <the step-2 flags> --scenario read-only --commit <HEAD>
+```
+
+**Replacement scenario:** `drain-pool.sh <env> <region> <pool> <dir> R`, then `terraform apply`, then steps 1-7 with
+`--scenario replacement --replaced-pools <pool>` (the drain precedes the prerequisite, which examines the new deployment).
+**Restore drill** (L6-4): stop every pool, `capture-restore-stop.sh <env> <region> R <dir> <pools...>`, prepare and adopt
+(`npm run recovery -- ...`), switch the runtime document, start, then steps 1-7 with `--scenario restore-drill`; the fencing
+probe's record (`probe-restore-fencing.json`) is a later real-staging slice's.
+
+**The gates** (a gate passes only with at least one check and every check passed; missing evidence and verifier SKIPs are
+failures): prerequisite (settled, the examined revision running, nothing beside the services, target health, unchanged since
+step 2), drain (replacement), IAM / LeadingKeys inside transactions as the task role, real transaction semantics
+(conditions, TransactionConflict, same-token resend), proxy hops (exactly two appended X-Forwarded-For entries), ALL query
+strings (`cp`, `cr`, `cb` and unrelated ones, through the diagnostic `/gs/diag/edge`, mounted only by
+`edge_diagnostic_staging` / `GS_EDGE_DIAGNOSTIC=staging`, refused on mainnet and in `prod*`), the WebSocket announcement and
+idle path (longer than every idle bound plus two server pings), KMS Sign latency below 3 s with the configured keys (a
+disposable digest; no chain, no ledger), both Terraform plans (nothing destroyed, replaced or de-protected except
+skip_destroy task-definition revisions; services gated on the routing read), and the evidence package (no secret; the commit
+is the checkout's HEAD). **L6-4 contract:** `SYSTEM/GENERATION` strict and bound by APPGEN's adoption (never the number
+alone), the identity table serving-safe with its `TABLE#identity` binding, no open `REVIEW#`, L6-4 in the serving image and
+in every ACTIVE task-definition revision (the rollback targets; earlier builds attested by `prior-certifications/`), and for
+a restore drill the stop before `adopted_at` and the fencing slot. Until the integration binds L6-4's readers, those gates
+FAIL "not integrated".
+
+The first line of `CERTIFICATION.txt` (and of the command's output) is `LIVE-6 AWS STAGING CERTIFICATION: PASS` or `FAIL`,
+then every failed gate. `certification.json` and `MANIFEST.json` (SHA-256 of every file) sit beside it.
+
 ## Secrets
 
 No secret exists today. The Juno REST endpoints are public URLs; **do not** put a provider API key in a URL, because it
@@ -388,7 +437,7 @@ GS_DYNAMODB_LOCAL_ENDPOINT=http://127.0.0.1:8000 node --test dist/server/src/per
 - An **ACM certificate for the ALB** covering `edge.alb_origin_domain_name`, and one in us-east-1 for the distribution's
   aliases. There must also be a DNS name for the ALB origin.
 - The existing VPC's **NAT** on the task subnets (the Juno REST endpoints).
-- **Staging observations:**
+- **Staging observations** (LIVE-6 L6-6 turns each into a certification gate: "Staging certification" above):
   - drain, then apply, puts the new task's pool takeover after the old task's exit 0;
   - the `LeadingKeys` exclusions hold inside transactions;
   - `GS_TRUSTED_PROXY_HOPS=2` matches a header capture;

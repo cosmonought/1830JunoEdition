@@ -1,0 +1,1811 @@
+// server/src/aws/deploy/staging/l6_6StagingCert.test.ts
+//
+// ==================================================================
+//  LIVE-6 L6-6: THE STAGING CERTIFICATION HARNESS, CHECKED WITHOUT AWS (`npm test`)
+// ==================================================================
+//
+// No credential, no network beyond loopback, no deployment: the probes run against fakes that behave as the real services
+// answer (an IAM-enforcing DynamoDB, a KMS that signs with known keys, the edge diagnostic behind a proxy chain that
+// appends X-Forwarded-For), and the certification is judged over a fixture evidence directory built from L5-8's own
+// control-plane fixtures. What must hold:
+//
+//   §1 every required gate contributes to the verdict; a complete, good package is PASS; breaking any gate's evidence
+//      FAILS that gate by id; a gate not required says so and is never counted as a pass;
+//   §2 omitted or skipped evidence is FAIL, never PASS (a missing file, a not-run probe, a verifier SKIP);
+//   §3 Terraform: a destructive or replacing plan FAILS; a skip_destroy task-definition revision does not; the lock, the
+//      exit status, the gate on the bootstrap;
+//   §4 the prerequisite: a wrong running task definition, a deployment in progress, a task beside the service, an
+//      unhealthy or foreign target, a moved deployment -- each FAILS;
+//   §5 the edge: an allow-list of cp/cr/cb FAILS by name; a wrong hop count, a spoofed key, the ALB probed directly;
+//   §6 IAM: expected denial vs unexpected authority vs another principal vs malformed vs infrastructure;
+//   §7 transactions: TransactionConflict classified; no conflict observed, a broken invariant, a leftover item FAIL;
+//   §8 KMS: > 3 s FAILS, < 3 s passes, an invalid answer FAILS;
+//   §9 the WebSocket paths, parsed: the announcement answer, idle survival, pings, who closed it;
+//   §10 secrets are refused (writer and reader), the session cookie never lands in a record, the report is deterministic;
+//   §11 no probe can reach production authority: the disposable guard, the IAM guard, KMS touches no store, the edge
+//       diagnostic is a pure mirror and exists only where the switch says; the certifier task can never be the server.
+
+import { describe, test } from "node:test";
+import assert from "node:assert/strict";
+import * as fs from "fs";
+import * as http from "http";
+import * as os from "os";
+import * as path from "path";
+import type { AddressInfo } from "net";
+
+import { WebSocketServer } from "ws";
+
+import { addressOfPublicKey } from "../../../escrow/juno/cosmosTx";
+import { parseJunoBackendConfig } from "../../../escrow/juno/junoConfig";
+import { bigIntTo32, bytesToBigInt, decompressPublicKey, publicKeyOf, SECP256K1_N, signDigest } from "../../../escrow/juno/secp256k1";
+import { edgeDiagnosticAnswer, edgeDiagnosticSwitch, EDGE_DIAGNOSTIC_FORMAT, handleEdgeDiagnostic } from "../../../ingress/edgeDiagnostic";
+import { classifyTransactFailure } from "../../game/transact";
+import { loadAwsStartup } from "../../runtime/awsMain";
+import type { ParameterSource } from "../../runtime/configSource";
+import { runDeployCommand, EXIT_USAGE, type DeployDeps } from "../commands";
+import { CACHING_DISABLED_POLICY_ID, checkEdgeEvidence, checkEvidenceDirectory, EVIDENCE_FILES, type Check } from "../deployVerify";
+import { certify, CERTIFIER_STORAGE_OVERRIDE, certificationText, judgeCertifierTask, prerequisiteChecks, prerequisiteRecord, repositoryHead, VERDICT_LINE, writeCertification, type CertContext } from "./certify";
+import { stageCertCommand, stageProbeCommand, recordFromLog, recordLines, type StagingDeps } from "./commands";
+import { closedBy, judgeQueryProbe, judgeWsIdle, nodeEdgeTransport, probeQuery, requiredIdleMs, runEdgeProbe, type EdgeTransport, type SocketEvent, type SocketObservation } from "./edgeProbe";
+import { EVIDENCE, EvidenceRefusedError, readEvidence, secretFindings, stableStringify, writeRecord } from "./evidence";
+import { classifyIamAnswer, IAM_PROBE_IDS, iamProbeSpecs, iamProbeWriteProblem, judgeIamProbe, runIamProbe, type IamAnswer } from "./iamProbe";
+import { judgeKmsProbe, KMS_LATENCY_BOUND_MS, runKmsProbe } from "./kmsProbe";
+import { judgeTerraformStack, AWS_PROVIDER } from "./terraformPlan";
+import { disposableOnly, DisposableGuardError, judgeTransactionProbe, runTransactionProbe } from "./transactionProbe";
+import { buildCapabilities, readGenerationEvidence, readIdentityRecovery, RESTORE_FENCING_CASES, RESTORE_FENCING_FILE, revisionsFile, type AppGenerationFacts, type GenerationEvidence, type GenerationMarkerFacts, type IdentityRestoreFacts, type RecoveryReaders, type ReviewSummary } from "./recovery";
+
+const REPO = path.resolve(__dirname, "../../../../../../.."); // dist/server/src/aws/deploy/staging -> the repository
+const INFRA = path.join(REPO, "infra/aws");
+const fixture = (name: string) => fs.readFileSync(path.join(INFRA, "fixtures", name), "utf8");
+const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+const failures = (checks: readonly Check[]) => checks.filter((c) => c.status !== "pass");
+
+const RUN = "l6cert-test-0930";
+const RUNTIME_ARN = "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1";
+const JUNO_ARN = "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend";
+const TD = "arn:aws:ecs:us-east-1:111111111111:task-definition/gs-staging-p1:7";
+const TG_ARN = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/gs-staging-primary/0123456789abcdef";
+const TASK = "arn:aws:ecs:us-east-1:111111111111:task/gs-staging/0aaa1111bbbb2222cccc3333dddd4444";
+const TASK_IP = "10.0.1.23";
+const CERTIFIER_TASK = "arn:aws:ecs:us-east-1:111111111111:task/gs-staging/9fff0000aaaa1111bbbb2222cccc3333";
+const HEAD = repositoryHead(REPO) ?? "unreadable";
+
+/* ------------------------------------------------------------------ */
+/* L6-4's readers, as the integration binds them (fakes answering parsed shapes) */
+/* ------------------------------------------------------------------ */
+
+const BOOT_MARKER: GenerationMarkerFacts = { generation: 1, game_table: "gs-staging-game-g1", origin: "bootstrap", restored_from_generation: null, restored_from_table: null, restore_point: null, restore_id: null, prepared_at: 1, prepared_by: "boot", claim: "11111111-1111-4111-8111-111111111111" };
+const BOOT_APPGEN: AppGenerationFacts = { current_generation: 1, adoption: null };
+const RESTORED_MARKER: GenerationMarkerFacts = { ...BOOT_MARKER, generation: 2, game_table: "gs-staging-game-g2", origin: "restore", restored_from_generation: 1, restored_from_table: "gs-staging-game-g1", restore_point: 5, restore_id: "drill-0930" };
+const ADOPTED: AppGenerationFacts = { current_generation: 2, adoption: { previous_generation: 1, adopted_at: Date.parse("2026-09-30T09:40:00Z"), adopted_by: "op", restore_id: "drill-0930", game_table: "gs-staging-game-g2", claim: "22222222-2222-4222-8222-222222222222" } };
+const IDENTITY_TABLE = "gs-staging-identity";
+
+interface ReaderScript {
+  readonly marker?: GenerationMarkerFacts | null | Error;
+  readonly appgen?: AppGenerationFacts | null | Error;
+  readonly restore?: IdentityRestoreFacts | null;
+  readonly self?: string | null;
+  readonly servingProblem?: string | null;
+  readonly reviews?: readonly ReviewSummary[] | Error;
+}
+const answer = <T>(value: T | Error): Promise<T> => (value instanceof Error ? Promise.reject(value) : Promise.resolve(value));
+const readersFor = (script: ReaderScript = {}): RecoveryReaders => ({
+  generationMarker: async () => answer(script.marker === undefined ? BOOT_MARKER : script.marker),
+  appGeneration: async () => answer(script.appgen === undefined ? BOOT_APPGEN : script.appgen),
+  identityState: async () => ({ restore: script.restore ?? null, self: script.self === undefined ? IDENTITY_TABLE : script.self, servingProblem: script.servingProblem ?? null }),
+  reviews: async () => answer(script.reviews ?? []),
+});
+const generationOf = (script: ReaderScript = {}): Promise<GenerationEvidence> => readGenerationEvidence(readersFor(script), { app: {} as never, ledger: {} as never }, { game: "gs-staging-game-g1", ledger: "arn:l" });
+const ALL_L64 = { generation_marker: true, app_generation: true, identity_restore: true, security_replay: true };
+
+/* ------------------------------------------------------------------ */
+/* Keys this test controls (the KMS stand-in signs with them)           */
+/* ------------------------------------------------------------------ */
+
+const SECRETS: Record<string, Buffer> = {
+  "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111": Buffer.alloc(32, 0x11),
+  "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222": Buffer.alloc(32, 0x12),
+  "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333": Buffer.alloc(32, 0x13),
+};
+const pub = (arn: string) => publicKeyOf(SECRETS[arn]);
+const [RELAYER_KEY, SETTLEMENT_KEY, ADMISSION_KEY] = Object.keys(SECRETS);
+
+/** The staging Juno configuration, re-keyed to the keys above. */
+function junoText(): string {
+  const doc = JSON.parse(fixture("juno-backend-staging.json")) as Record<string, any>;
+  doc.relayer.address = addressOfPublicKey(pub(RELAYER_KEY), "juno");
+  doc.settlement_key.public_key_hex = pub(SETTLEMENT_KEY).toString("hex");
+  doc.admission_key.public_key_hex = pub(ADMISSION_KEY).toString("hex");
+  if (Array.isArray(doc.trust?.operators)) doc.trust.operators = [doc.relayer.address];
+  return JSON.stringify(doc);
+}
+const junoConfig = () => parseJunoBackendConfig(JSON.parse(junoText()), { serverMode: "production", dataDir: "/nonexistent" });
+
+const SPKI_PREFIX = Buffer.from("3056301006072a8648ce3d020106052b8104000a034200", "hex");
+const spkiOf = (compressed: Buffer): Uint8Array => {
+  const { x, y } = decompressPublicKey(compressed);
+  return Buffer.concat([SPKI_PREFIX, Buffer.from([4]), bigIntTo32(x), bigIntTo32(y)]);
+};
+const derInteger = (value: Buffer): Buffer => {
+  let body = value;
+  while (body.length > 1 && body[0] === 0 && !(body[1] & 0x80)) body = body.subarray(1);
+  if (body[0] & 0x80) body = Buffer.concat([Buffer.from([0]), body]);
+  return Buffer.concat([Buffer.from([0x02, body.length]), body]);
+};
+const derOf = (compact: Buffer, highS = false): Buffer => {
+  const s = highS ? bigIntTo32(SECP256K1_N - bytesToBigInt(compact.subarray(32))) : compact.subarray(32);
+  const body = Buffer.concat([derInteger(compact.subarray(0, 32)), derInteger(s)]);
+  return Buffer.concat([Buffer.from([0x30, body.length]), body]);
+};
+
+/** A KMS client (the `KmsClient` port) that signs with the keys above; `tamper` corrupts an answer; `latency` per Sign. */
+function fakeKms(options: { readonly latencyMs?: (arn: string, i: number) => number; readonly tamper?: (arn: string, der: Buffer) => Uint8Array; readonly clock?: { now: number } } = {}) {
+  const calls: string[] = [];
+  const counts = new Map<string, number>();
+  return {
+    calls,
+    client: {
+      async getPublicKey(arn: string) {
+        calls.push(`GetPublicKey ${arn}`);
+        return spkiOf(pub(arn));
+      },
+      async signDigest(arn: string, digest: Uint8Array) {
+        calls.push(`Sign ${arn}`);
+        const i = counts.get(arn) ?? 0;
+        counts.set(arn, i + 1);
+        if (options.clock !== undefined) options.clock.now += options.latencyMs?.(arn, i) ?? 100;
+        const der = derOf(signDigest(SECRETS[arn], digest), i % 2 === 1);
+        return options.tamper?.(arn, der) ?? der;
+      },
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* An IAM-enforcing DynamoDB stand-in (for the IAM probe)               */
+/* ------------------------------------------------------------------ */
+
+type Sent = { readonly name: string; readonly input: Record<string, any> };
+
+/** Answers as real DynamoDB does for the IAM probe's shapes: IAM first (the task role's policy), then the condition. */
+function iamDynamo(options: { readonly enforce: boolean; readonly role?: string; readonly allowSystemPut?: boolean }) {
+  const sent: Sent[] = [];
+  const denied = (action: string) =>
+    Object.assign(new Error(`User: arn:aws:sts::111111111111:assumed-role/${options.role ?? "gs-staging-app-task"}/t-0123 is not authorized to perform: dynamodb:${action} on resource: arn:aws:dynamodb:us-east-1:111111111111:table/x because no identity-based policy allows the dynamodb:${action} action`), { name: "AccessDeniedException" });
+  const ledger = (table: string) => table.startsWith("arn:");
+  const forbidden = (table: string, kind: string, pk: string): string | null => {
+    if (!options.enforce) return null;
+    if (ledger(table)) {
+      if (kind === "Update") return "UpdateItem";
+      if (kind === "Delete") return "DeleteItem";
+      if (kind === "Put" && pk === "APPGEN") return "PutItem";
+      return null;
+    }
+    if (pk === "SYSTEM" && kind !== "ConditionCheck" && !(options.allowSystemPut === true && kind === "Put")) return `${kind}Item`;
+    return null;
+  };
+  const client = {
+    async send(command: { constructor: { name: string }; input: Record<string, any> }) {
+      sent.push({ name: command.constructor.name, input: command.input });
+      if (command.constructor.name === "PutItemCommand") {
+        const why = forbidden(command.input.TableName, "Put", command.input.Item.pk.S);
+        if (why !== null) throw denied(why);
+        throw Object.assign(new Error("The conditional request failed"), { name: "ConditionalCheckFailedException" });
+      }
+      if (command.constructor.name === "TransactWriteItemsCommand") {
+        const items = command.input.TransactItems as Array<Record<string, any>>;
+        for (const item of items) {
+          const [kind, action] = Object.entries(item)[0] as [string, Record<string, any>];
+          const k = kind === "Put" ? action.Item : action.Key;
+          const why = forbidden(action.TableName, kind, k.pk.S);
+          if (why !== null) throw denied(why);
+        }
+        const reasons = items.map((item) => {
+          const [kind, action] = Object.entries(item)[0] as [string, Record<string, any>];
+          return { Code: kind === "ConditionCheck" && action.ConditionExpression === "attribute_exists(pk)" ? "None" : "ConditionalCheckFailed" };
+        });
+        throw Object.assign(new Error("Transaction cancelled"), { name: "TransactionCanceledException", CancellationReasons: reasons });
+      }
+      throw new Error(`unexpected ${command.constructor.name}`);
+    },
+  };
+  return { client: client as never, sent };
+}
+
+/* ------------------------------------------------------------------ */
+/* The edge stand-in: the diagnostic behind CloudFront + ALB            */
+/* ------------------------------------------------------------------ */
+
+const VIEWER_IP = "203.0.113.77";
+const CLOUDFRONT_IP = "130.176.0.10";
+
+interface FakeEdgeOptions {
+  /** Which query parameters the "edge" forwards (null: all -- the contract). */
+  readonly allowList?: readonly string[] | null;
+  /** How many entries the path appends to X-Forwarded-For (2: CloudFront and the ALB). */
+  readonly appended?: number;
+  readonly hops?: number;
+  readonly idle?: (hold: number) => SocketObservation;
+  readonly refused?: () => SocketObservation;
+  readonly diagnosticMissing?: boolean;
+}
+
+const pingsUntil = (end: number, every = 25_000): SocketEvent[] => {
+  const out: SocketEvent[] = [];
+  for (let t = every; t < end; t += every) out.push({ at_ms: t, kind: "ping" });
+  return out;
+};
+
+function fakeEdge(options: FakeEdgeOptions = {}): EdgeTransport & { readonly urls: string[]; readonly headers: Array<Record<string, string>> } {
+  const urls: string[] = [];
+  const headers: Array<Record<string, string>> = [];
+  return {
+    urls,
+    headers,
+    async get(url, h) {
+      urls.push(url);
+      headers.push({ ...h });
+      if (options.diagnosticMissing === true) return { status: 200, body: "1830 game server\n" };
+      const u = new URL(url);
+      let query = u.search.slice(1);
+      if (options.allowList !== undefined && options.allowList !== null) {
+        const params = new URLSearchParams(query);
+        query = [...params].filter(([n]) => options.allowList?.includes(n)).map(([n, v]) => `${encodeURIComponent(n)}=${encodeURIComponent(v)}`).join("&");
+      }
+      const appended = [VIEWER_IP, CLOUDFRONT_IP, "10.0.0.9"].slice(0, options.appended ?? 2);
+      const xff = [...(h["X-Forwarded-For"] ?? "").split(",").map((x) => x.trim()).filter((x) => x !== ""), ...appended].join(", ");
+      const answer = edgeDiagnosticAnswer({ url: `${u.pathname}${query === "" ? "" : `?${query}`}`, headers: { "x-forwarded-for": xff }, socket: { remoteAddress: "10.0.0.9" } } as never, options.hops ?? 2);
+      return { status: 200, body: JSON.stringify(answer) };
+    },
+    async observeSocket(url, h, hold) {
+      urls.push(url);
+      headers.push({ ...h });
+      if (new URL(url).searchParams.get("cp") === "9") {
+        return options.refused?.() ?? { upgrade_status: null, opened: true, events: [{ at_ms: 40, kind: "message", frame_kind: "reload", frame_code: "client-protocol" }, { at_ms: 41, kind: "close", code: 4426, clean: true }], ended_by: "remote", duration_ms: 41 };
+      }
+      return options.idle?.(hold) ?? { upgrade_status: null, opened: true, events: [...pingsUntil(hold), { at_ms: hold, kind: "close", code: 1000, clean: true }], ended_by: "probe", duration_ms: hold };
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* The fixture evidence directory                                       */
+/* ------------------------------------------------------------------ */
+
+const SERVICES = {
+  services: [
+    {
+      serviceName: "gs-staging-p1",
+      desiredCount: 1,
+      runningCount: 1,
+      pendingCount: 0,
+      taskDefinition: TD,
+      deployments: [{ status: "PRIMARY", taskDefinition: TD, rolloutState: "COMPLETED" }],
+      deploymentConfiguration: { minimumHealthyPercent: 0, maximumPercent: 100, deploymentCircuitBreaker: { enable: true, rollback: true } },
+      availabilityZoneRebalancing: "DISABLED",
+      enableExecuteCommand: false,
+      networkConfiguration: { awsvpcConfiguration: { assignPublicIp: "DISABLED" } },
+      loadBalancers: [{ targetGroupArn: TG_ARN, containerName: "game-server", containerPort: 8917 }],
+    },
+  ],
+};
+const TASK_DEFINITION = {
+  taskDefinition: {
+    taskDefinitionArn: TD,
+    family: "gs-staging-p1",
+    networkMode: "awsvpc",
+    taskRoleArn: "arn:aws:iam::111111111111:role/gs-staging-app-task",
+    containerDefinitions: [
+      {
+        name: "game-server",
+        portMappings: [{ containerPort: 8917, hostPort: 8917, protocol: "tcp" }],
+        environment: [
+          { name: "GS_MODE", value: "production" },
+          { name: "GS_STORAGE", value: "aws" },
+          { name: "GS_AWS_CONFIG_PARAMETER", value: RUNTIME_ARN },
+          { name: "BUILD_ID", value: "2026-09-30-test" },
+          { name: "PORT", value: "8917" },
+          { name: "GS_ALLOWED_ORIGINS", value: "https://play.example.com" },
+          { name: "GS_TRUSTED_PROXY_HOPS", value: "2" },
+          { name: "GS_EDGE_DIAGNOSTIC", value: "staging" },
+        ],
+        stopTimeout: 120,
+        healthCheck: { command: ["CMD", "node", "-e", "require('http').get('http://127.0.0.1:'+process.env.PORT+'/gs/healthz',...)"] },
+        logConfiguration: { logDriver: "awslogs", options: {} },
+      },
+    ],
+  },
+};
+const RUNNING_TASKS = {
+  tasks: [
+    {
+      taskArn: TASK,
+      group: "service:gs-staging-p1",
+      lastStatus: "RUNNING",
+      desiredStatus: "RUNNING",
+      taskDefinitionArn: TD,
+      createdAt: "2026-09-30T09:00:00.000000+00:00",
+      attachments: [{ type: "ElasticNetworkInterface", details: [{ name: "privateIPv4Address", value: TASK_IP }] }],
+      containers: [{ name: "game-server", lastStatus: "RUNNING" }],
+    },
+  ],
+  failures: [],
+};
+const ORP_ID = "a1b2c3d4-0000-4000-8000-000000000001";
+const DISTRIBUTION = {
+  DistributionConfig: {
+    Aliases: { Quantity: 1, Items: ["play.example.com"] },
+    Origins: {
+      Items: [
+        { Id: "site", DomainName: "site-origin.example.com", CustomOriginConfig: { OriginProtocolPolicy: "https-only", OriginReadTimeout: 30 } },
+        { Id: "gs-alb", DomainName: "gs-origin.example.com", CustomOriginConfig: { OriginProtocolPolicy: "https-only", OriginReadTimeout: 60 } },
+      ],
+    },
+    DefaultCacheBehavior: { TargetOriginId: "site" },
+    CacheBehaviors: {
+      Quantity: 1,
+      Items: [
+        {
+          PathPattern: "/gs*",
+          TargetOriginId: "gs-alb",
+          ViewerProtocolPolicy: "https-only",
+          AllowedMethods: { Items: ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"] },
+          CachePolicyId: CACHING_DISABLED_POLICY_ID,
+          OriginRequestPolicyId: ORP_ID,
+        },
+      ],
+    },
+  },
+};
+const ORIGIN_REQUEST_POLICY = {
+  OriginRequestPolicy: {
+    Id: ORP_ID,
+    OriginRequestPolicyConfig: {
+      QueryStringsConfig: { QueryStringBehavior: "all", QueryStrings: { Quantity: 0 } },
+      CookiesConfig: { CookieBehavior: "all" },
+      HeadersConfig: { HeaderBehavior: "whitelist", Headers: { Items: ["Origin", "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Protocol", "Sec-WebSocket-Accept", "Sec-WebSocket-Extensions"] } },
+    },
+  },
+};
+const SECURITY_GROUPS = {
+  SecurityGroups: [
+    { GroupName: "gs-staging-alb", GroupId: "sg-alb", IpPermissions: [{ IpProtocol: "tcp", FromPort: 443, ToPort: 443, PrefixListIds: [{ PrefixListId: "pl-cloudfront" }], IpRanges: [], Ipv6Ranges: [], UserIdGroupPairs: [] }] },
+    { GroupName: "gs-staging-task", GroupId: "sg-task", IpPermissions: [{ IpProtocol: "tcp", FromPort: 8917, ToPort: 8917, UserIdGroupPairs: [{ GroupId: "sg-alb" }], IpRanges: [], Ipv6Ranges: [], PrefixListIds: [] }] },
+  ],
+};
+const TARGET_GROUPS = { TargetGroups: [{ TargetGroupArn: TG_ARN, TargetGroupName: "gs-staging-primary", HealthCheckPath: "/gs/readyz", Matcher: { HttpCode: "200" }, TargetType: "ip" }] };
+const LISTENER_RULES = { Rules: [{ Priority: "10", Conditions: [{ Field: "path-pattern", Values: ["/gs*"], PathPatternConfig: { Values: ["/gs*"] } }], Actions: [{ Type: "forward", TargetGroupArn: TG_ARN }] }] };
+
+const PARAMETERS: ParameterSource = {
+  async read(arn) {
+    const docs: Record<string, string> = { [RUNTIME_ARN]: fixture("runtime-staging-p1.json"), [JUNO_ARN]: junoText() };
+    const value = docs[arn];
+    if (value === undefined) throw new Error(`no parameter ${arn}`);
+    return { value, version: 3, arn };
+  },
+};
+const startupOf = () => loadAwsStartup({ argv: [], env: { GS_AWS_CONFIG_PARAMETER: RUNTIME_ARN }, serverMode: "production", parameters: PARAMETERS });
+
+const TIMES = { prerequisite: "2026-09-30T10:00:00.000Z", taskStart: "2026-09-30T10:05:00.000Z", taskEnd: "2026-09-30T10:07:00.000Z", edgeStart: "2026-09-30T10:10:00.000Z", edgeEnd: "2026-09-30T10:16:10.000Z", capture: "2026-09-30T10:30:00Z" };
+
+const write = (dir: string, file: string, value: unknown) => {
+  fs.mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+  fs.writeFileSync(path.join(dir, file), typeof value === "string" ? value : JSON.stringify(value, null, 2), "utf8");
+};
+
+/** A passing transaction-probe result, exactly as `runTransactionProbe` records one. */
+const TRANSACTIONS = {
+  t1: { setup: { kind: "applied", redone: false }, probe: { kind: "refused", resend: false, reasons: ["ConditionalCheckFailed", "None"], old_v: [1, null] }, b_present: false },
+  t2: { setup: { kind: "applied", redone: false }, a: { kind: "applied", redone: false }, b: { kind: "refused", resend: false, reasons: ["ConditionalCheckFailed"], old_v: [null] }, final_v: 2, final_w: "a" },
+  t3: { setup: { kind: "applied", redone: false }, rounds: 20, writers: 6, applied: 71, conflicts: 49, conflicts_classified_not_applied: 49, other: {}, final_n: 71 },
+  t4: {
+    setup: { kind: "applied", redone: false },
+    original: "applied",
+    same_token_resend: { kind: "applied", redone: false },
+    new_token_control: { kind: "refused", resend: false, reasons: ["ConditionalCheckFailed"], old_v: [null] },
+    mismatch: "IdempotentParameterMismatchException",
+    mismatch_engine_class: "unknown",
+    refused_original: "TransactionCanceledException",
+    refused_resend: { kind: "refused", resend: false, reasons: ["ConditionalCheckFailed"], old_v: [null] },
+    final_v: 2,
+    final_n: 1,
+  },
+  cleanup: { deleted: 5, remaining: 0, errors: [] },
+  errors: [],
+};
+
+const TERRAFORM_VERSION = { terraform_version: "1.16.4", platform: "linux_amd64", provider_selections: { [AWS_PROVIDER]: "6.66.0" }, terraform_outdated: false };
+const lockText = (stack: string) => fs.readFileSync(path.join(INFRA, "stacks", stack, ".terraform.lock.hcl"), "utf8");
+const ledgerPlan = () => ({
+  format_version: "1.2",
+  terraform_version: "1.16.4",
+  timestamp: "2026-09-30T10:20:00Z",
+  variables: {},
+  resource_changes: [
+    { address: "module.ledger.aws_dynamodb_table.ledger", mode: "managed", type: "aws_dynamodb_table", change: { actions: ["no-op"], before: {}, after: {} } },
+    { address: "module.ledger.aws_kms_key.signing[\"relayer\"]", mode: "managed", type: "aws_kms_key", change: { actions: ["update"], before: {}, after: {} } },
+  ],
+  prior_state: { values: { root_module: { child_modules: [] } } },
+  errored: false,
+});
+const service = (actions: string[], after: Record<string, unknown> = {}) => ({
+  address: "module.app.aws_ecs_service.pool[\"p1\"]",
+  mode: "managed",
+  type: "aws_ecs_service",
+  change: { actions, before: null, after: { deployment_minimum_healthy_percent: 0, deployment_maximum_percent: 100, desired_count: 1, availability_zone_rebalancing: "DISABLED", ...after } },
+});
+const appPlan = (overrides: { start?: boolean; routing?: unknown; extra?: unknown[]; deferred?: boolean } = {}) => ({
+  format_version: "1.2",
+  terraform_version: "1.16.4",
+  timestamp: "2026-09-30T10:21:00Z",
+  variables: { start_services: { value: overrides.start ?? true } },
+  resource_changes: [
+    { address: "module.app.aws_dynamodb_table.game", mode: "managed", type: "aws_dynamodb_table", change: { actions: ["no-op"], before: {}, after: {} } },
+    { address: "module.app.aws_ecs_task_definition.pool[\"p1\"]", mode: "managed", type: "aws_ecs_task_definition", change: { actions: ["create", "delete"], before: { skip_destroy: true }, after: { skip_destroy: true } }, action_reason: "replace_because_cannot_update" },
+    service(["create"]),
+    ...(overrides.deferred === true ? [{ address: "module.app.data.aws_dynamodb_table_item.routing[0]", mode: "data", type: "aws_dynamodb_table_item", change: { actions: ["read"], before: null, after: {} } }] : []),
+    ...((overrides.extra ?? []) as unknown[]),
+  ],
+  prior_state: {
+    values: {
+      root_module: {
+        child_modules: [
+          {
+            address: "module.app",
+            resources: overrides.deferred === true ? [] : [{ address: "module.app.data.aws_dynamodb_table_item.routing[0]", mode: "data", type: "aws_dynamodb_table_item", values: { item: JSON.stringify(overrides.routing ?? { pk: { S: "SYSTEM" }, sk: { S: "ROUTING" }, fmt: { N: "1" }, primary_pool: { S: "p1" }, routing_version: { N: "1" } }) } }],
+          },
+        ],
+      },
+    },
+  },
+  errored: false,
+});
+
+const LEDGER_RECORD = { format: "18COSMOS/L5-8-VERIFY/v1", run_id: RUN, part: "ledger", environment: "staging", generation: 1, at: "2026-09-30T09:59:00.000Z", verdict: "PASS", checks: [{ name: "ledger table: PITR", status: "pass", detail: "ENABLED" }] };
+
+async function taskRoleRecord(overrides: { kms?: unknown; iam?: unknown; transactions?: unknown; runner?: Record<string, unknown>; identity?: ReaderScript | null } = {}) {
+  const iam = await runIamProbe({ game: iamDynamo({ enforce: true }).client, ledger: iamDynamo({ enforce: true }).client }, { run: RUN, gameTable: "gs-staging-game-g1", ledgerTable: "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger", nonce: "n0nce" });
+  const clock = { now: 0 };
+  const kms = await runKmsProbe(junoConfig(), { kms: fakeKms({ clock }).client, clock: () => clock.now }, { run: RUN, samples: 3 });
+  return {
+    format: "18COSMOS/L6-6-PROBE/v1",
+    probe: "task-role",
+    run_id: RUN,
+    environment: "staging",
+    generation: 1,
+    pool: "p1",
+    started_at: TIMES.taskStart,
+    finished_at: TIMES.taskEnd,
+    runner: { ecs_task: true, task_arn: CERTIFIER_TASK, build_id: "2026-09-30-test", build_capabilities: ALL_L64, runtime_parameter_matches_env: true, ...(overrides.runner ?? {}) },
+    runtime_document_version: 3,
+    sections: {
+      iam: overrides.iam ?? { status: "ran", ...iam },
+      kms: overrides.kms ?? { status: "ran", results: kms },
+      transactions: overrides.transactions ?? { status: "ran", partition: `L6CERT#${RUN}`, results: TRANSACTIONS },
+      identity_state: await readIdentityRecovery(overrides.identity === null ? undefined : readersFor(overrides.identity ?? {}), {} as never, IDENTITY_TABLE),
+    },
+  };
+}
+
+async function edgeRecord(transport: EdgeTransport = fakeEdge(), options: { expectedClientIp?: string | null; cookie?: string | null } = {}) {
+  const required = requiredIdleMs(300, 60);
+  const sections = await runEdgeProbe(transport, {
+    run: RUN,
+    baseUrl: "https://play.example.com",
+    origin: "https://play.example.com",
+    sessionCookie: options.cookie === undefined ? "v1.sessionid00.secretsecretsecretsecret" : options.cookie,
+    expectedClientIp: options.expectedClientIp === undefined ? VIEWER_IP : options.expectedClientIp,
+    albIdleSeconds: 300,
+    originReadTimeoutSeconds: 60,
+    holdMs: required + 10_000,
+  });
+  return { format: "18COSMOS/L6-6-PROBE/v1", probe: "edge", run_id: RUN, environment: "staging", generation: 1, pool: "p1", started_at: TIMES.edgeStart, finished_at: TIMES.edgeEnd, sections };
+}
+
+const CERTIFIER_RUN = {
+  tasks: [
+    {
+      taskArn: CERTIFIER_TASK,
+      taskDefinitionArn: TD,
+      group: "family:gs-staging-p1",
+      startedBy: "l6-6-cert",
+      lastStatus: "STOPPED",
+      containers: [{ name: "game-server", exitCode: 0 }],
+      overrides: {
+        containerOverrides: [
+          {
+            name: "game-server",
+            command: ["node", "dist/server/src/tools/awsDeploy.js", "stage-probe", "task-role", "--run-id", RUN, "--runtime-parameter", RUNTIME_ARN, "--environment", "staging", "--generation", "1", "--pool", "p1", "--disposable-writes", `L6CERT#${RUN}`],
+            environment: [{ name: "GS_STORAGE", value: CERTIFIER_STORAGE_OVERRIDE }],
+          },
+        ],
+      },
+    },
+  ],
+};
+
+interface Built {
+  readonly dir: string;
+  readonly ctx: (overrides?: Partial<CertContext>) => Promise<CertContext>;
+}
+
+/** A complete, passing package; `skip` leaves files out, `mutate` edits one before it is written. */
+async function buildPackage(options: { readonly part?: "app" | "all"; readonly skip?: readonly string[]; readonly mutate?: Record<string, (value: any) => any>; readonly taskRole?: unknown; readonly edge?: unknown; readonly generation?: ReaderScript } = {}): Promise<Built> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l66-"));
+  const files: Record<string, unknown> = {
+    [EVIDENCE_FILES.services]: SERVICES,
+    [EVIDENCE_FILES.taskDefinition("p1")]: TASK_DEFINITION,
+    [EVIDENCE_FILES.targetGroups]: TARGET_GROUPS,
+    [EVIDENCE_FILES.loadBalancerAttributes]: { Attributes: [{ Key: "idle_timeout.timeout_seconds", Value: "300" }] },
+    [EVIDENCE_FILES.distributionConfig]: DISTRIBUTION,
+    [EVIDENCE_FILES.originRequestPolicy]: ORIGIN_REQUEST_POLICY,
+    [EVIDENCE_FILES.securityGroups]: SECURITY_GROUPS,
+    [EVIDENCE_FILES.listenerRules]: LISTENER_RULES,
+    [EVIDENCE.runningTasks]: RUNNING_TASKS,
+    [EVIDENCE.clusterTasks]: RUNNING_TASKS,
+    [EVIDENCE.targetHealth]: { TargetHealthDescriptions: [{ Target: { Id: TASK_IP, Port: 8917 }, TargetHealth: { State: "healthy" } }] },
+    [EVIDENCE.distribution]: { Distribution: { Id: "E123", DomainName: "d111111abcdef8.cloudfront.net", DistributionConfig: DISTRIBUTION.DistributionConfig } },
+    [EVIDENCE.capture]: { format: "18COSMOS/L5-8-CAPTURE/v1", captured_at: TIMES.capture },
+    [EVIDENCE.taskRoleRun]: CERTIFIER_RUN,
+    [EVIDENCE.taskRole]: options.taskRole ?? (await taskRoleRecord()),
+    [EVIDENCE.edge]: options.edge ?? (await edgeRecord()),
+    [EVIDENCE.verifyLedger]: LEDGER_RECORD,
+    [revisionsFile("p1")]: { taskDefinitions: [TASK_DEFINITION.taskDefinition] },
+    "terraform/ledger/version.json": TERRAFORM_VERSION,
+    "terraform/ledger/plan.json": ledgerPlan(),
+    "terraform/ledger/plan-exitcode.txt": "2\n",
+    "terraform/ledger/lock.hcl": lockText("ledger"),
+    "terraform/ledger/run.json": { run_id: RUN, captured_at: "2026-09-30T10:20:00Z" },
+    "terraform/app/run.json": { run_id: RUN, captured_at: "2026-09-30T10:21:00Z" },
+    "terraform/app/version.json": TERRAFORM_VERSION,
+    "terraform/app/plan.json": appPlan(),
+    "terraform/app/plan-exitcode.txt": "2\n",
+    "terraform/app/lock.hcl": lockText("app"),
+  };
+  files[EVIDENCE.taskRoleLog] = { events: recordLines(files[EVIDENCE.taskRole]).map((message, i) => ({ timestamp: i, message })) };
+  for (const [file, value] of Object.entries(files)) {
+    if (options.skip?.includes(file)) continue;
+    const mutate = options.mutate?.[file];
+    write(dir, file, mutate === undefined ? value : mutate(clone(value)));
+  }
+  const part = options.part ?? "app";
+  const startup = await startupOf();
+  const verification = (): { checks: Check[]; startup: typeof startup } => ({
+    checks: [
+      { name: "runtime document p1", status: "pass", detail: "v3" },
+      ...checkEvidenceDirectory(dir, { environment: "staging", pools: ["p1"], primaryPool: "p1", port: 8917, runtimeParameterArns: new Map([["p1", RUNTIME_ARN]]) }),
+      ...(part === "app" ? [{ name: "ledger table: PITR and TTL", status: "skipped" as const, detail: "not readable across accounts" }] : []),
+    ],
+    startup,
+  });
+  const expect = { run: RUN, environment: "staging", generation: 1, primaryPool: "p1", pools: ["p1"], part } as const;
+  if (!options.skip?.includes(EVIDENCE.prerequisite)) {
+    const first = prerequisiteChecks(dir, verification(), expect);
+    const record = prerequisiteRecord(RUN, Date.parse(TIMES.prerequisite), expect, first);
+    const mutate = options.mutate?.[EVIDENCE.prerequisite];
+    write(dir, EVIDENCE.prerequisite, stableStringify(mutate === undefined ? record : mutate(clone(record))));
+  }
+  return {
+    dir,
+    ctx: async (overrides = {}) => ({
+      dir,
+      run: RUN,
+      scenario: "read-only",
+      replacedPools: [],
+      environment: "staging",
+      generation: 1,
+      primaryPool: "p1",
+      pools: ["p1"],
+      commit: HEAD,
+      repository: REPO,
+      prerequisite: prerequisiteChecks(dir, verification(), expect),
+      generationEvidence: await generationOf(options.generation ?? {}),
+      heartbeats: null,
+      ...overrides,
+    }),
+  };
+}
+
+const cleanup = (dir: string) => fs.rmSync(dir, { recursive: true, force: true });
+
+async function verdictOf(built: Built, overrides: Partial<CertContext> = {}) {
+  const ctx = await built.ctx(overrides);
+  return { ctx, result: certify(ctx) };
+}
+
+const failedGates = (result: ReturnType<typeof certify>) => result.gates.filter((g) => g.status === "fail").map((g) => g.id);
+const gateFailures = (result: ReturnType<typeof certify>, id: string) => failures(result.gates.find((g) => g.id === id)?.checks ?? []).map((c) => `${c.name}: ${c.detail}`);
+
+/* ------------------------------------------------------------------ */
+/* §1 Every gate counts                                                 */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 §1: every required gate contributes to the verdict", () => {
+  test("a complete, good package is PASS; every gate passed; the report's first line is the verdict", async () => {
+    const built = await buildPackage();
+    try {
+      const { ctx, result } = await verdictOf(built);
+      assert.deepEqual(failedGates(result), [], JSON.stringify(result.gates.map((g) => [g.id, failures(g.checks)]), null, 2));
+      assert.equal(result.passed, true);
+      assert.deepEqual(
+        result.gates.map((g) => [g.id, g.status]),
+        [
+          ["prerequisite", "pass"],
+          ["drain", "not-required"],
+          ["iam", "pass"],
+          ["transactions", "pass"],
+          ["proxy-hops", "pass"],
+          ["query-strings", "pass"],
+          ["websocket", "pass"],
+          ["kms", "pass"],
+          ["terraform", "pass"],
+          ["generation", "pass"],
+          ["identity", "pass"],
+          ["review", "pass"],
+          ["rollback", "pass"],
+          ["restore-quiet", "not-required"],
+          ["restore-fence", "not-required"],
+          ["evidence", "pass"],
+        ],
+      );
+      const text = certificationText(ctx, result);
+      assert.equal(text.split("\n")[0], "LIVE-6 AWS STAGING CERTIFICATION: PASS");
+      assert.match(text, /drain.*NOT REQUIRED -- not required: a read-only certification replaces no task.*stop-first 0\/100 alone never proves it/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("breaking any one gate's evidence FAILS exactly that gate, and the certification", async () => {
+    const cases: Array<[string, Parameters<typeof buildPackage>[0], string]> = [
+      ["prerequisite", { mutate: { [EVIDENCE.targetHealth]: (v) => ((v.TargetHealthDescriptions[0].TargetHealth.State = "unhealthy"), v) } }, "prerequisite"],
+      ["iam", { taskRole: await taskRoleRecord({ iam: { status: "ran", ...(await runIamProbe({ game: iamDynamo({ enforce: false }).client, ledger: iamDynamo({ enforce: true }).client }, { run: RUN, gameTable: "g", ledgerTable: "arn:l", nonce: "n" })) } }) }, "iam"],
+      ["transactions", { taskRole: await taskRoleRecord({ transactions: { status: "ran", partition: `L6CERT#${RUN}`, results: { ...TRANSACTIONS, cleanup: { deleted: 4, remaining: 1, left: ["T3"], errors: [] } } } }) }, "transactions"],
+      ["proxy-hops", { edge: await edgeRecord(fakeEdge({ appended: 1 })) }, "proxy-hops"],
+      ["query-strings", { edge: await edgeRecord(fakeEdge({ allowList: ["cp", "cr", "cb"] })) }, "query-strings"],
+      ["websocket", { edge: await edgeRecord(fakeEdge({ idle: () => ({ upgrade_status: null, opened: true, events: [...pingsUntil(300_000), { at_ms: 300_000, kind: "close", code: 1006, clean: false }], ended_by: "remote", duration_ms: 300_000 }) })) }, "websocket"],
+      ["kms", { taskRole: await taskRoleRecord({ kms: { status: "not-run", reason: "escrow is null (no KMS keys)" } }) }, "kms"],
+      ["terraform", { mutate: { "terraform/ledger/plan.json": (v) => ((v.resource_changes[0].change.actions = ["delete", "create"]), v) } }, "terraform"],
+      ["evidence", { mutate: { [EVIDENCE.clusterTasks]: (v) => ({ ...v, note: "AKIAABCDEFGHIJKLMNOP" }) } }, "evidence"],
+    ];
+    for (const [label, options, gate] of cases) {
+      const built = await buildPackage(options);
+      try {
+        const { result } = await verdictOf(built);
+        assert.equal(result.passed, false, label);
+        assert.ok(failedGates(result).includes(gate), `${label}: failed gates ${JSON.stringify(failedGates(result))}`);
+        const text = certificationText(await built.ctx(), result);
+        assert.equal(text.split("\n")[0], VERDICT_LINE(false));
+        assert.match(text.split("\n")[1], new RegExp(`failed gates: .*${gate}`));
+      } finally {
+        cleanup(built.dir);
+      }
+    }
+  });
+
+  test("a later branch adds a gate without redesign: an extra gate is evaluated and counted", async () => {
+    const built = await buildPackage();
+    try {
+      const ctx = await built.ctx();
+      const extra = { id: "l6-1-routing", title: "later", required: () => true, evaluate: () => ({ checks: [{ name: "x", status: "fail" as const, detail: "not yet" }] }) };
+      const result = certify(ctx, [extra]);
+      assert.deepEqual(failedGates(result), ["l6-1-routing"]);
+      assert.equal(result.passed, false);
+      const empty = certify(ctx, [{ ...extra, evaluate: () => ({ checks: [] }) }]);
+      assert.deepEqual(failedGates(empty), ["l6-1-routing"], "a gate with no check is not a pass");
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("the replacement scenario REQUIRES the drain gate: without drain evidence it FAILS", async () => {
+    const built = await buildPackage();
+    try {
+      const { result } = await verdictOf(built, { scenario: "replacement", replacedPools: ["p1"] });
+      assert.ok(failedGates(result).includes("drain"));
+      assert.match(gateFailures(result, "drain").join("\n"), /drain-p1\/tasks-before.json is missing/);
+      const none = await verdictOf(built, { scenario: "replacement", replacedPools: [] });
+      assert.ok(failedGates(none.result).includes("drain"), "a replacement naming no pool");
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §2 Missing or skipped evidence is FAIL                               */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 §2: omitted or skipped required evidence is FAIL, never PASS", () => {
+  test("each missing file fails its gate", async () => {
+    const cases: Array<[string, string]> = [
+      [EVIDENCE.taskRole, "iam"],
+      [EVIDENCE.taskRole, "kms"],
+      [EVIDENCE.taskRole, "transactions"],
+      [EVIDENCE.taskRoleRun, "iam"],
+      [EVIDENCE.edge, "proxy-hops"],
+      [EVIDENCE.edge, "query-strings"],
+      [EVIDENCE.edge, "websocket"],
+      [EVIDENCE.prerequisite, "prerequisite"],
+      [EVIDENCE.capture, "prerequisite"],
+      [EVIDENCE.runningTasks, "prerequisite"],
+      [EVIDENCE.clusterTasks, "prerequisite"],
+      [EVIDENCE.targetHealth, "prerequisite"],
+      [EVIDENCE.verifyLedger, "prerequisite"],
+      ["terraform/app/plan.json", "terraform"],
+      ["terraform/ledger/lock.hcl", "terraform"],
+      ["terraform/app/plan-exitcode.txt", "terraform"],
+    ];
+    for (const [file, gate] of cases) {
+      const built = await buildPackage({ skip: [file] });
+      try {
+        const { result } = await verdictOf(built);
+        assert.equal(result.passed, false, file);
+        assert.ok(failedGates(result).includes(gate), `${file} -> ${gate}: ${JSON.stringify(failedGates(result))}`);
+      } finally {
+        cleanup(built.dir);
+      }
+    }
+  });
+
+  test("a probe section not run is FAIL: transactions without --disposable-writes, KMS without escrow, the sockets without a session", async () => {
+    const tx = await buildPackage({ taskRole: await taskRoleRecord({ transactions: { status: "not-run", reason: `--disposable-writes L6CERT#${RUN} was not given` } }) });
+    const ws = await buildPackage({ edge: await edgeRecord(fakeEdge(), { cookie: null }) });
+    const iam = await buildPackage({ taskRole: await taskRoleRecord({ iam: { status: "ran", results: [] } }) });
+    try {
+      assert.match(gateFailures((await verdictOf(tx)).result, "transactions").join("\n"), /not run.*required/);
+      assert.match(gateFailures((await verdictOf(ws)).result, "websocket").join("\n"), /not run.*GS_CERT_SESSION_COOKIE/);
+      assert.match(gateFailures((await verdictOf(iam)).result, "iam").join("\n"), /missing .*a skipped probe is a failure/);
+    } finally {
+      for (const b of [tx, ws, iam]) cleanup(b.dir);
+    }
+  });
+
+  test("a SKIP from the verifier is a failure (only the ledger half is replaced, and only by a PASS record); --part all needs no record", async () => {
+    const built = await buildPackage({ mutate: { [EVIDENCE.verifyLedger]: (v) => ({ ...v, verdict: "FAIL" }) } });
+    const all = await buildPackage({ part: "all", skip: [EVIDENCE.verifyLedger] });
+    try {
+      assert.ok(failedGates((await verdictOf(built)).result).includes("prerequisite"));
+      assert.deepEqual(failedGates((await verdictOf(all)).result), []);
+      const startup = await startupOf();
+      const skipped = prerequisiteChecks(all.dir, { checks: [{ name: "control-plane evidence", status: "skipped", detail: "--no-evidence" }], startup }, { run: RUN, environment: "staging", generation: 1, primaryPool: "p1", pools: ["p1"], part: "all" });
+      assert.match(failures(skipped.checks).map((c) => c.detail).join("\n"), /a skip is not evidence/);
+      const noEscrow = prerequisiteChecks(all.dir, { checks: [{ name: "KMS signing keys", status: "skipped", detail: "escrow is null" }], startup }, { run: RUN, environment: "staging", generation: 1, primaryPool: "p1", pools: ["p1"], part: "all" });
+      assert.match(failures(noEscrow.checks).map((c) => c.detail).join("\n"), /escrow is null: the staging certification needs/);
+    } finally {
+      cleanup(built.dir);
+      cleanup(all.dir);
+    }
+  });
+
+  test("evidence from another run, another deployment or before the prerequisite is never counted", async () => {
+    const other = await taskRoleRecord();
+    const built = await buildPackage({ taskRole: { ...other, run_id: "l6cert-another" } });
+    const early = await buildPackage({ edge: { ...(await edgeRecord()), started_at: "2026-09-30T09:00:00.000Z" } });
+    const gen = await buildPackage({ taskRole: { ...other, generation: 2 } });
+    const stale = await buildPackage({ mutate: { [EVIDENCE.capture]: (v) => ({ ...v, captured_at: "2026-09-30T10:01:00Z" }) } });
+    try {
+      assert.match(gateFailures((await verdictOf(built)).result, "kms").join("\n"), /this run.*another run is never counted/);
+      assert.match(gateFailures((await verdictOf(early)).result, "websocket").join("\n"), /not after the prerequisite/);
+      assert.match(gateFailures((await verdictOf(gen)).result, "iam").join("\n"), /this deployment/);
+      assert.match(gateFailures((await verdictOf(stale)).result, "prerequisite").join("\n"), /before the last probe finished/);
+    } finally {
+      for (const b of [built, early, gen, stale]) cleanup(b.dir);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §3 Terraform                                                         */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 §3: a destructive plan FAILS the certification", () => {
+  const judgeApp = (plan: unknown, extra: { exit?: string; lock?: string; version?: unknown } = {}) =>
+    judgeTerraformStack("app", { version: extra.version ?? TERRAFORM_VERSION, plan, exitCode: extra.exit ?? "2", lock: extra.lock ?? lockText("app") }, lockText("app"), { primaryPool: "p1" }).checks;
+  const failing = (checks: readonly Check[], name: RegExp) => assert.ok(failures(checks).some((c) => name.test(c.name)), JSON.stringify(failures(checks)));
+
+  test("a good plan passes; a skip_destroy task-definition revision is the one allowed replacement", () => {
+    assert.deepEqual(failures(judgeApp(appPlan())), []);
+    assert.deepEqual(failures(judgeTerraformStack("ledger", { version: TERRAFORM_VERSION, plan: ledgerPlan(), exitCode: "0\n", lock: lockText("ledger") }, lockText("ledger"), { primaryPool: "p1" }).checks), []);
+  });
+
+  test("deleting, replacing or forgetting anything else FAILS by address, protected resources named as such", () => {
+    const destructive: Array<[unknown, RegExp]> = [
+      [{ address: "module.app.aws_dynamodb_table.game", mode: "managed", type: "aws_dynamodb_table", change: { actions: ["delete", "create"], before: {}, after: {} }, action_reason: "replace_because_cannot_update" }, /PROTECTED module\.app\.aws_dynamodb_table\.game \[delete,create\] \(replace_because_cannot_update\)/],
+      [{ address: "module.app.aws_ssm_parameter.runtime[\"p1\"]", mode: "managed", type: "aws_ssm_parameter", change: { actions: ["delete"], before: {}, after: null } }, /PROTECTED .*aws_ssm_parameter/],
+      [{ address: "module.app.aws_iam_role.task", mode: "managed", type: "aws_iam_role", change: { actions: ["create", "delete"], before: {}, after: {} } }, /PROTECTED .*aws_iam_role\.task/],
+      [{ address: "module.app.aws_vpc_endpoint.gateway[\"dynamodb\"]", mode: "managed", type: "aws_vpc_endpoint", change: { actions: ["delete"], before: {}, after: null } }, /aws_vpc_endpoint/],
+      [{ address: "module.app.aws_lb_target_group.primary", mode: "managed", type: "aws_lb_target_group", change: { actions: ["forget"], before: {}, after: null } }, /PROTECTED .*\[forget\]/],
+    ];
+    for (const [change, detail] of destructive) {
+      const checks = judgeApp(appPlan({ extra: [change] }));
+      failing(checks, /nothing destroyed or replaced/);
+      assert.match(failures(checks).map((c) => c.detail).join("\n"), detail);
+    }
+    const noSkip = appPlan();
+    (noSkip.resource_changes[1] as any).change.after.skip_destroy = false;
+    (noSkip.resource_changes[1] as any).change.before.skip_destroy = false;
+    failing(judgeApp(noSkip), /nothing destroyed or replaced/);
+  });
+
+  test("the versions, the lock, the exit status and the plan's own identity are checked", () => {
+    failing(judgeApp(appPlan(), { exit: "1" }), /plan exit status/);
+    failing(judgeApp(appPlan(), { exit: "" }), /plan exit status/);
+    failing(judgeApp(appPlan(), { lock: lockText("app").replace(/"h1:5t1[^"]*",\n/, "") }), /provider lock/);
+    failing(judgeApp(appPlan(), { lock: lockText("app").replace('version     = "6.66.0"', 'version     = "6.70.0"') }), /provider lock/);
+    failing(judgeApp(appPlan(), { version: { terraform_version: "1.8.5", provider_selections: { [AWS_PROVIDER]: "6.66.0" } } }), /Terraform version/);
+    failing(judgeApp(appPlan(), { version: { terraform_version: "1.16.4", provider_selections: {} } }), /provider selected/);
+    failing(judgeApp({}), /the plan is this stack's/);
+    failing(judgeApp({ ...appPlan(), errored: true }), /the plan is this stack's/);
+    failing(judgeTerraformStack("ledger", { version: TERRAFORM_VERSION, plan: appPlan(), exitCode: "2", lock: lockText("ledger") }, lockText("ledger"), { primaryPool: "p1" }).checks, /the plan is this stack's/);
+  });
+
+  test("services are created only when gated on a routing read at plan time that names the primary; stop-first", () => {
+    failing(judgeApp(appPlan({ start: false })), /services gated/);
+    failing(judgeApp(appPlan({ deferred: true })), /services gated/);
+    failing(judgeApp(appPlan({ routing: { fmt: { N: "1" }, primary_pool: { S: "p2" } } })), /services gated/);
+    failing(judgeApp(appPlan({ routing: { fmt: { N: "2" }, primary_pool: { S: "p1" } } })), /services gated/);
+    const rolling = appPlan();
+    rolling.resource_changes[2] = service(["create"], { deployment_minimum_healthy_percent: 100, deployment_maximum_percent: 200 }) as any;
+    failing(judgeApp(rolling), /planned services stop-first/);
+    const gatedOff = appPlan({ start: false });
+    gatedOff.resource_changes.splice(2, 1);
+    assert.deepEqual(failures(judgeApp(gatedOff)), [], "start_services = false with no service is the designed first plan");
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §4 The prerequisite                                                  */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 §4: the deployment must be settled and known", () => {
+  const cases: Array<[string, Record<string, (v: any) => any>, RegExp]> = [
+    ["a task on another revision", { [EVIDENCE.runningTasks]: (v) => ((v.tasks[0].taskDefinitionArn = TD.replace(":7", ":6")), v) }, /the examined revision is the one running/],
+    ["the evidence is the family's latest, not the running revision", { [EVIDENCE_FILES.taskDefinition("p1")]: (v) => ((v.taskDefinition.taskDefinitionArn = TD.replace(":7", ":8")), v) }, /the running revision/],
+    ["a deployment in progress on the same revision", { [EVIDENCE_FILES.services]: (v) => ((v.services[0].deployments[0].rolloutState = "IN_PROGRESS"), v) }, /settled/],
+    ["two deployments", { [EVIDENCE_FILES.services]: (v) => (v.services[0].deployments.push({ status: "ACTIVE", taskDefinition: TD, rolloutState: "COMPLETED" }), v) }, /settled/],
+    ["a pending task", { [EVIDENCE_FILES.services]: (v) => ((v.services[0].pendingCount = 1), v) }, /settled/],
+    ["no running task", { [EVIDENCE.runningTasks]: (v) => ((v.tasks = []), v) }, /the examined revision/],
+    ["a run-task beside the service", { [EVIDENCE.clusterTasks]: (v) => (v.tasks.push({ ...v.tasks[0], taskArn: `${TASK}x`, group: "family:gs-staging-p1" }), v) }, /no task beside the services/],
+    ["another target in the target group", { [EVIDENCE.targetHealth]: (v) => ((v.TargetHealthDescriptions[0].Target.Id = "10.0.9.9"), v) }, /target health/],
+    ["no BUILD_ID", { [EVIDENCE_FILES.taskDefinition("p1")]: (v) => ((v.taskDefinition.containerDefinitions[0].environment = v.taskDefinition.containerDefinitions[0].environment.filter((e: any) => e.name !== "BUILD_ID")), v) }, /build identity/],
+  ];
+  for (const [label, mutate, name] of cases) {
+    test(`${label} FAILS the prerequisite`, async () => {
+      const built = await buildPackage({ mutate });
+      try {
+        const { result } = await verdictOf(built);
+        assert.ok(failedGates(result).includes("prerequisite"));
+        assert.ok(failures(result.gates[0].checks).some((c) => name.test(c.name)), JSON.stringify(failures(result.gates[0].checks)));
+      } finally {
+        cleanup(built.dir);
+      }
+    });
+  }
+
+  test("a deployment that moved after `stage-cert prerequisite` FAILS (the probes ran against something else)", async () => {
+    const built = await buildPackage({ mutate: { [EVIDENCE.prerequisite]: (v) => ((v.identity.running_tasks.p1 = ["arn:aws:ecs:us-east-1:111111111111:task/gs-staging/old"]), v) } });
+    const failed = await buildPackage({ mutate: { [EVIDENCE.prerequisite]: (v) => ({ ...v, verdict: "FAIL" }) } });
+    try {
+      assert.match(gateFailures((await verdictOf(built)).result, "prerequisite").join("\n"), /unchanged since the probes began: the deployment moved/);
+      assert.match(gateFailures((await verdictOf(failed)).result, "prerequisite").join("\n"), /recorded before the probes/);
+    } finally {
+      cleanup(built.dir);
+      cleanup(failed.dir);
+    }
+  });
+
+  test("the certifier task must be the primary's running definition, the probe command, the server refused, exit 0", () => {
+    const expect = { run: RUN, taskDefinition: TD };
+    assert.deepEqual(failures(judgeCertifierTask(CERTIFIER_RUN, expect)), []);
+    const mutate = (f: (t: any) => void) => {
+      const doc = clone(CERTIFIER_RUN) as any;
+      f(doc.tasks[0]);
+      return failures(judgeCertifierTask(doc, expect)).map((c) => c.name).join(",");
+    };
+    assert.match(mutate((t) => (t.taskDefinitionArn = TD.replace(":7", ":6"))), /running task definition/);
+    assert.match(mutate((t) => (t.overrides.containerOverrides[0].command = ["node", "dist/server/src/start.js"])), /never the server/);
+    assert.match(mutate((t) => (t.overrides.containerOverrides[0].environment = [])), /never the server/);
+    assert.match(mutate((t) => (t.group = "service:gs-staging-p1")), /never the server/);
+    assert.match(mutate((t) => (t.containers[0].exitCode = 1)), /finished cleanly/);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §5 The edge                                                          */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 §5: the deployed edge -- ALL query strings, two proxies, the distribution's own name", () => {
+  const judged = async (transport: EdgeTransport, expectedClientIp: string | null = VIEWER_IP) => judgeQueryProbe((await edgeRecord(transport, { expectedClientIp })).sections, { run: RUN, hopsFromTaskDefinition: "2" });
+
+  test("the contract passes: every parameter unchanged, cp/cr/cb read as sent, two appended entries, the viewer's key", async () => {
+    assert.deepEqual(failures(await judged(fakeEdge())), []);
+    assert.deepEqual(failures(await judged(fakeEdge(), null)), [], "without --expected-client-ip the hop count is the proof");
+  });
+
+  test("an allow-list of exactly cp, cr, cb is REJECTED by name -- live, and in the static evidence", async () => {
+    const checks = await judged(fakeEdge({ allowList: ["cp", "cr", "cb"] }));
+    assert.match(failures(checks).map((c) => `${c.name}: ${c.detail}`).join("\n"), /ALL query strings forwarded unchanged \(not an allow-list\): only cp, cr and cb arrived: the edge forwards an allow-list/);
+    const policy = clone(ORIGIN_REQUEST_POLICY) as any;
+    policy.OriginRequestPolicy.OriginRequestPolicyConfig.QueryStringsConfig = { QueryStringBehavior: "whitelist", QueryStrings: { Quantity: 3, Items: ["cp", "cr", "cb"] } };
+    assert.ok(failures(checkEdgeEvidence(DISTRIBUTION, policy)).some((c) => /ALL query strings/.test(c.name)));
+    const dropped = await judged(fakeEdge({ allowList: ["cp", "cr", "cb", "l6x", "utm_source", "l6enc"] }));
+    assert.match(failures(dropped).map((c) => c.detail).join("\n"), /not the 8 sent/, "a single dropped parameter (the repeated one) fails too");
+  });
+
+  test("a wrong hop count, a spoofed key, the wrong viewer, the diagnostic missing -- each FAILS", async () => {
+    assert.match(failures(await judged(fakeEdge({ appended: 1 }))).map((c) => c.detail).join("\n"), /1 appended, not 2/, "the ALB probed directly (one proxy)");
+    assert.match(failures(await judged(fakeEdge({ appended: 3 }))).map((c) => c.detail).join("\n"), /3 appended, not 2/);
+    const spoofed = failures(await judged(fakeEdge({ appended: 0 }))).map((c) => c.detail).join("\n");
+    assert.match(spoofed, /counted a SPOOFED entry|appended, not 2/);
+    assert.match(failures(await judged(fakeEdge(), "198.51.100.200")).map((c) => c.detail).join("\n"), /not the operator's/);
+    assert.match(failures(await judged(fakeEdge({ hops: 1 }))).map((c) => c.detail).join("\n"), /configured for 1/);
+    assert.match(failures(await judged(fakeEdge({ diagnosticMissing: true }))).map((c) => c.detail).join("\n"), /GS_EDGE_DIAGNOSTIC=staging/);
+    const wrongTd = judgeQueryProbe((await edgeRecord()).sections, { run: RUN, hopsFromTaskDefinition: "1" });
+    assert.ok(failures(wrongTd).some((c) => /GS_TRUSTED_PROXY_HOPS in the running task definition/.test(c.name)));
+  });
+
+  test("the probe must go through the distribution's name (never the ALB's)", async () => {
+    const record = await edgeRecord();
+    (record.sections as any).target.host = "gs-origin.example.com";
+    const built = await buildPackage({ edge: record });
+    try {
+      assert.match(gateFailures((await verdictOf(built)).result, "query-strings").join("\n"), /probed through the distribution/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("through a REAL loopback chain: the diagnostic behind two appending proxies, the Node transport", async () => {
+    const app = http.createServer((req, res) => {
+      if (!handleEdgeDiagnostic(req, res, { trustedProxyHops: 2 })) res.end("1830 game server\n");
+    });
+    await new Promise<void>((resolve) => app.listen(0, "127.0.0.1", resolve));
+    const appended = (address: string, target: number) =>
+      http.createServer((req, res) => {
+        const xff = req.headers["x-forwarded-for"];
+        const headers = { ...req.headers, "x-forwarded-for": `${typeof xff === "string" && xff !== "" ? `${xff}, ` : ""}${address}` };
+        const upstream = http.request({ host: "127.0.0.1", port: target, method: req.method, path: req.url, headers }, (answer) => {
+          res.writeHead(answer.statusCode ?? 502, answer.headers);
+          answer.pipe(res);
+        });
+        req.pipe(upstream);
+      });
+    const alb = appended(CLOUDFRONT_IP, (app.address() as AddressInfo).port);
+    await new Promise<void>((resolve) => alb.listen(0, "127.0.0.1", resolve));
+    const cloudfront = appended(VIEWER_IP, (alb.address() as AddressInfo).port);
+    await new Promise<void>((resolve) => cloudfront.listen(0, "127.0.0.1", resolve));
+    try {
+      const transport = nodeEdgeTransport();
+      const noSockets: EdgeTransport = { get: transport.get, observeSocket: async () => ({ upgrade_status: null, opened: false, events: [], ended_by: "error", duration_ms: 0 }) };
+      const sections = await runEdgeProbe(noSockets, { run: RUN, baseUrl: `http://127.0.0.1:${(cloudfront.address() as AddressInfo).port}`, origin: "https://play.example.com", sessionCookie: null, expectedClientIp: VIEWER_IP, albIdleSeconds: 300, originReadTimeoutSeconds: 60, holdMs: 400_000 });
+      assert.deepEqual(failures(judgeQueryProbe(sections, { run: RUN, hopsFromTaskDefinition: "2" })), []);
+      const answer = (sections as any).query.requests[1].answer;
+      assert.equal(answer.format, EDGE_DIAGNOSTIC_FORMAT);
+      assert.equal(answer.forwarded_entries, 4, "two spoofed + CloudFront's + the ALB's");
+      assert.ok(!JSON.stringify(answer).includes(VIEWER_IP) && !JSON.stringify(answer).includes("utm_source"), "no address or parameter in the clear");
+    } finally {
+      for (const s of [cloudfront, alb, app]) await new Promise<void>((resolve) => s.close(() => resolve()));
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §6 IAM                                                               */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 §6: IAM -- expected denial, unexpected authority, another principal, malformed, infrastructure", () => {
+  const ctx = { run: RUN, gameTable: "gs-staging-game-g1", ledgerTable: "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger", nonce: "n0nce" };
+  const ROLE = "gs-staging-app-task";
+
+  test("against an IAM-enforcing service, as the task role: every probe as expected", async () => {
+    const game = iamDynamo({ enforce: true });
+    const ledger = iamDynamo({ enforce: true });
+    const { results } = await runIamProbe({ game: game.client, ledger: ledger.client }, ctx);
+    assert.deepEqual(results.map((r) => r.id), [...IAM_PROBE_IDS]);
+    assert.deepEqual(failures(judgeIamProbe({ status: "ran", results }, ROLE, IAM_PROBE_IDS)), []);
+    assert.equal(results.filter((r) => r.expect === "deny").length, 9);
+    assert.equal(results.filter((r) => r.expect === "allow").length, 4);
+  });
+
+  test("without IAM enforcement (DynamoDB Local's behaviour) every forbidden shape is UNEXPECTED WRITE AUTHORITY -- and nothing was written", async () => {
+    const game = iamDynamo({ enforce: false });
+    const { results } = await runIamProbe({ game: game.client, ledger: iamDynamo({ enforce: true }).client }, ctx);
+    const checks = judgeIamProbe({ status: "ran", results }, ROLE, IAM_PROBE_IDS);
+    const bad = failures(checks).map((c) => c.detail);
+    assert.equal(bad.length, 5, JSON.stringify(bad));
+    assert.ok(bad.every((d) => d.startsWith("unexpected-write-authority")));
+  });
+
+  test("the bootstrap role (it MAY put SYSTEM/*) is caught: another principal's denial and a SYSTEM put reaching the condition", async () => {
+    const asBootstrap = iamDynamo({ enforce: true, role: "gs-staging-bootstrap", allowSystemPut: true });
+    const { results } = await runIamProbe({ game: asBootstrap.client, ledger: iamDynamo({ enforce: true, role: "gs-staging-bootstrap" }).client }, ctx);
+    const text = failures(judgeIamProbe({ status: "ran", results }, ROLE, IAM_PROBE_IDS)).map((c) => c.detail).join("\n");
+    assert.match(text, /denied-not-the-task-role: the denial names assumed-role\/gs-staging-bootstrap/);
+    assert.match(text, /unexpected-write-authority/);
+  });
+
+  test("the classification matrix", () => {
+    const e = (name: string, extra: Partial<Extract<IamAnswer, { kind: "error" }>> = {}): IamAnswer => ({ kind: "error", name, reasons: [], principal: null, ...extra });
+    const role = { kind: "assumed-role" as const, role: ROLE };
+    const cases: Array<["deny" | "allow", IamAnswer, number, number, string]> = [
+      ["deny", e("AccessDeniedException", { principal: role }), 1, 0, "denied-as-expected"],
+      ["deny", e("AccessDeniedException", { principal: { kind: "other" } }), 1, 0, "denied-not-the-task-role"],
+      ["deny", e("AccessDeniedException"), 1, 0, "denied-not-the-task-role"],
+      ["deny", e("ConditionalCheckFailedException"), 1, 0, "unexpected-write-authority"],
+      ["deny", e("TransactionCanceledException", { reasons: ["ConditionalCheckFailed"] }), 1, 0, "unexpected-write-authority"],
+      ["deny", { kind: "success" }, 1, 0, "unexpected-write-applied"],
+      ["deny", e("ValidationException"), 1, 0, "malformed-probe"],
+      ["deny", e("ResourceNotFoundException"), 1, 0, "malformed-probe"],
+      ["deny", e("ThrottlingException"), 1, 0, "infrastructure-failure"],
+      ["deny", e("ExpiredTokenException"), 1, 0, "infrastructure-failure"],
+      ["deny", e("TimeoutError"), 1, 0, "infrastructure-failure"],
+      ["deny", e("TransactionCanceledException", { reasons: ["TransactionConflict"] }), 1, 0, "infrastructure-failure"],
+      ["allow", e("TransactionCanceledException", { reasons: ["None", "ConditionalCheckFailed"] }), 2, 1, "authorized-as-expected"],
+      ["allow", e("TransactionCanceledException", { reasons: ["ConditionalCheckFailed", "ConditionalCheckFailed"] }), 2, 1, "malformed-probe"],
+      ["allow", e("TransactionCanceledException", { reasons: ["None", "ValidationError"] }), 2, 1, "malformed-probe"],
+      ["allow", e("TransactionCanceledException", { reasons: ["None", "ThrottlingError"] }), 2, 1, "infrastructure-failure"],
+      ["allow", e("AccessDeniedException", { principal: role }), 2, 1, "authorized-shape-refused"],
+      ["allow", { kind: "success" }, 2, 1, "unexpected-write-applied"],
+    ];
+    for (const [expect, answer, items, index, outcome] of cases) {
+      assert.equal(classifyIamAnswer({ expect, answer, item_count: items, probe_index: index }, ROLE).outcome, outcome, `${expect} ${JSON.stringify(answer)}`);
+    }
+  });
+
+  test("an impossible success is cleaned up by this run's nonce only", async () => {
+    const sent: Sent[] = [];
+    const client = {
+      async send(command: { constructor: { name: string }; input: Record<string, any> }) {
+        sent.push({ name: command.constructor.name, input: command.input });
+      },
+    };
+    const { results } = await runIamProbe({ game: client as never, ledger: client as never }, ctx);
+    assert.ok(results.every((r) => r.answer.kind === "success"));
+    const deletes = sent.filter((s) => s.name === "DeleteItemCommand");
+    assert.ok(deletes.length > 0 && deletes.every((d) => d.input.ConditionExpression === "#l6n = :l6n" && d.input.ExpressionAttributeValues[":l6n"].S === "n0nce"));
+    assert.ok(deletes.every((d) => !(d.input.Key.pk.S === "SYSTEM" && d.input.Key.sk.S === "ROUTING")));
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §7 Transactions                                                      */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 §7: the transaction probe -- TransactionConflict and the engine's assumptions", () => {
+  test("the engine classifies a TransactionConflict (either form) as not-applied / conflict; a mismatch as unknown", () => {
+    const cancelled = classifyTransactFailure(Object.assign(new Error("x"), { name: "TransactionCanceledException", CancellationReasons: [{ Code: "TransactionConflict" }] }));
+    assert.equal(cancelled.kind, "not-applied");
+    assert.equal((cancelled as { conflict: boolean }).conflict, true);
+    const exception = classifyTransactFailure(Object.assign(new Error("x"), { name: "TransactionConflictException" }));
+    assert.equal(exception.kind, "not-applied");
+    assert.equal(classifyTransactFailure(Object.assign(new Error("x"), { name: "IdempotentParameterMismatchException" })).kind, "unknown");
+    assert.equal(classifyTransactFailure(Object.assign(new Error("x"), { name: "TransactionCanceledException", CancellationReasons: [{ Code: "ConditionalCheckFailed" }] })).kind, "refused");
+  });
+
+  test("the passing record passes; no conflict, a broken invariant, an unknown outcome, a leftover, a reused run -- each FAILS", () => {
+    assert.deepEqual(failures(judgeTransactionProbe({ status: "ran", results: TRANSACTIONS })), []);
+    const variant = (f: (r: any) => void) => {
+      const r = clone(TRANSACTIONS) as any;
+      f(r);
+      return failures(judgeTransactionProbe({ status: "ran", results: r })).map((c) => `${c.name}: ${c.detail}`).join("\n");
+    };
+    assert.match(variant((r) => ((r.t3.conflicts = 0), (r.t3.conflicts_classified_not_applied = 0))), /no conflict in 20x6 concurrent writes: not established/);
+    assert.match(variant((r) => (r.t3.final_n = 72)), /a conflict never applied anything/);
+    assert.match(variant((r) => (r.t3.other = { "TimeoutError->unknown": 1 })), /unknown outcomes/);
+    assert.match(variant((r) => (r.t2.b = { kind: "applied" })), /exactly one applies/);
+    assert.match(variant((r) => (r.t1.b_present = true)), /cancels the whole transaction/);
+    assert.match(variant((r) => (r.t4.final_n = 2)), /applied once/);
+    assert.match(variant((r) => (r.t4.same_token_resend = { kind: "refused" })), /applied once/);
+    assert.match(variant((r) => (r.t4.mismatch = "applied")), /IdempotentParameterMismatch/);
+    assert.match(variant((r) => (r.cleanup = { deleted: 3, remaining: 2, left: ["T1-A", "T2"], errors: [] })), /cleanup: remaining 2 \[T1-A, T2\]/);
+    assert.match(variant((r) => (r.errors = ["T3: ThrottlingException"])), /every test ran/);
+    assert.match(failures(judgeTransactionProbe({ status: "ran", results: { refused: "the partition L6CERT#x already holds 2 item(s)" } })).map((c) => c.detail).join(""), /already holds/);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §8 KMS                                                               */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 §8: KMS latency -- below 3 s passes, at or above fails, an invalid answer fails", () => {
+  const run = async (options: Parameters<typeof fakeKms>[0], samples = 3) => {
+    const clock = { now: 0 };
+    const kms = fakeKms({ ...options, clock });
+    const results = await runKmsProbe(junoConfig(), { kms: kms.client, clock: () => clock.now }, { run: RUN, samples });
+    return { results, checks: judgeKmsProbe({ status: "ran", results }), calls: kms.calls };
+  };
+
+  test("valid signatures well under the bound pass; the signatures verify against the CONFIGURED keys; the record holds no signature", async () => {
+    const { checks, results, calls } = await run({ latencyMs: () => 180 });
+    assert.deepEqual(failures(checks), []);
+    assert.equal(KMS_LATENCY_BOUND_MS, 3_000);
+    assert.equal(calls.filter((c) => c.startsWith("Sign")).length, 9);
+    const text = JSON.stringify(results);
+    assert.ok(!/arn:aws:kms/.test(text), "no key ARN in the record (a fingerprint instead)");
+    assert.ok(!/"signature_hex"|"der"/.test(text));
+  });
+
+  test("a Sign at 2 999 ms passes; at 3 000 ms or more FAILS", async () => {
+    assert.deepEqual(failures((await run({ latencyMs: () => 2_999 })).checks), []);
+    const at = (await run({ latencyMs: (arn, i) => (arn === SETTLEMENT_KEY && i === 2 ? 3_000 : 150) })).checks;
+    assert.deepEqual(failures(at).map((c) => c.name), ["KMS settlement: Sign latency below 3000 ms"]);
+    assert.match(failures((await run({ latencyMs: () => 4_200 })).checks)[0].detail, /max 4200 ms/);
+  });
+
+  test("an invalid answer FAILS: another key's signature, garbage DER, a wrong public key", async () => {
+    const other = await run({ tamper: (arn, der) => (arn === ADMISSION_KEY ? derOf(signDigest(Buffer.alloc(32, 0x42), Buffer.alloc(32, 1))) : der) });
+    assert.ok(failures(other.checks).some((c) => /admission.*Sign verified/.test(c.name)));
+    const garbage = await run({ tamper: (arn, der) => (arn === RELAYER_KEY ? Buffer.from("3002deadbeef", "hex") : der) });
+    assert.ok(failures(garbage.checks).some((c) => /relayer.*Sign verified/.test(c.name)));
+    const clock = { now: 0 };
+    const kms = fakeKms({ clock });
+    const wrongKey = { ...kms.client, getPublicKey: async (arn: string) => (arn === SETTLEMENT_KEY ? spkiOf(pub(ADMISSION_KEY)) : kms.client.getPublicKey(arn)) };
+    const results = await runKmsProbe(junoConfig(), { kms: wrongKey, clock: () => clock.now }, { run: RUN, samples: 1 });
+    assert.ok(failures(judgeKmsProbe({ status: "ran", results })).some((c) => /public keys = the configuration's/.test(c.name)));
+  });
+
+  test("a missing sample count, a doctored bound or a key that did not open FAILS", () => {
+    assert.ok(failures(judgeKmsProbe({ status: "ran", results: { bound_ms: 10_000, samples_per_key: 1, identities: { ok: true }, keys: {} } })).some((c) => /the runtime's/.test(c.name)));
+    assert.ok(failures(judgeKmsProbe({ status: "ran", results: { bound_ms: 3_000, samples_per_key: 3, identities: { ok: true }, keys: { relayer: { opened: true, key: "x", samples: [{ ms: 10, verified: true }] } } } })).length >= 3);
+    assert.match(failures(judgeKmsProbe({ status: "not-run", reason: "escrow is null" }))[0].detail, /required/);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §9 The WebSocket paths, parsed                                       */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 §9: the WebSocket results", () => {
+  const bounds = { albIdleSeconds: 300, originReadTimeoutSeconds: 60 };
+  const idleWith = async (observation: (hold: number) => SocketObservation) => judgeWsIdle((await edgeRecord(fakeEdge({ idle: observation }))).sections, bounds);
+
+  test("the required interval is pinned from the server's keepalive and the evidence's bounds", () => {
+    assert.equal(requiredIdleMs(300, 60), 350_000, "max(ALB 300 s, CloudFront 60 s, pong 60 s) + 2 x 25 s");
+    assert.equal(requiredIdleMs(120, 60), 170_000);
+  });
+
+  test("an idle socket kept open by the server's pings for the whole interval passes", async () => {
+    assert.deepEqual(failures(await idleWith((hold) => ({ upgrade_status: null, opened: true, events: [...pingsUntil(hold), { at_ms: hold, kind: "close", code: 1000, clean: true }], ended_by: "probe", duration_ms: hold }))), []);
+  });
+
+  test("a socket cut early is attributed: the ALB by timing, the server by its close frame, pings not crossing", async () => {
+    const alb = await idleWith(() => ({ upgrade_status: null, opened: true, events: [...pingsUntil(300_500), { at_ms: 300_500, kind: "close", code: 1006, clean: false }], ended_by: "remote", duration_ms: 300_500 }));
+    assert.match(failures(alb).map((c) => c.detail).join("\n"), /closed by the ALB .*inferred from timing/);
+    const server = await idleWith(() => ({ upgrade_status: null, opened: true, events: [...pingsUntil(120_000), { at_ms: 120_000, kind: "close", code: 4401, clean: true }], ended_by: "remote", duration_ms: 120_000 }));
+    assert.match(failures(server).map((c) => c.detail).join("\n"), /the server \(close frame 4401\)/);
+    const noPings = await idleWith(() => ({ upgrade_status: null, opened: true, events: [{ at_ms: 61_000, kind: "close", code: 1006, clean: false }], ended_by: "remote", duration_ms: 61_000 }));
+    assert.match(failures(noPings).map((c) => c.detail).join("\n"), /no server ping ever delivered|no ping arrived/);
+    assert.match(closedBy({ events: [{ kind: "ping", at_ms: 25_000 }, { kind: "close", at_ms: 61_000, clean: false }] }, { albIdleMs: 300_000, originReadMs: 60_000 }), /CloudFront/);
+    const refused = await idleWith(() => ({ upgrade_status: 401, opened: false, events: [], ended_by: "remote", duration_ms: 20 }));
+    assert.match(failures(refused).map((c) => c.detail).join("\n"), /HTTP 401/);
+  });
+
+  test("a probe held shorter than the evidence requires FAILS even if it 'survived'", async () => {
+    const record = await edgeRecord(fakeEdge({ idle: () => ({ upgrade_status: null, opened: true, events: pingsUntil(200_000), ended_by: "probe", duration_ms: 200_000 }) }));
+    (record.sections as any).ws_idle.required_ms = 190_000;
+    (record.sections as any).ws_idle.hold_ms = 200_000;
+    assert.ok(failures(judgeWsIdle(record.sections, bounds)).length >= 2);
+  });
+
+  test("the announcement path: cp=9 must be answered reload/client-protocol and closed 4426", async () => {
+    const built = await buildPackage({ edge: await edgeRecord(fakeEdge({ refused: () => ({ upgrade_status: null, opened: true, events: [{ at_ms: 10_000, kind: "ping" }], ended_by: "probe", duration_ms: 20_000 }) })) });
+    try {
+      assert.match(gateFailures((await verdictOf(built)).result, "websocket").join("\n"), /a stripped cp reads as the legacy wire/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("the Node transport against a real `ws` server: pings recorded, a refusal frame and 4426 parsed, an upgrade refusal's status", async () => {
+    const server = http.createServer((_req, res) => res.end());
+    const wss = new WebSocketServer({ noServer: true });
+    server.on("upgrade", (req, socket, head) => {
+      const url = new URL(req.url ?? "/", "http://x");
+      if (req.headers.cookie === undefined) {
+        socket.end("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        if (url.searchParams.get("cp") === "9") {
+          ws.send(JSON.stringify({ kind: "reload", code: "client-protocol", accepted: [0, 1] }));
+          ws.close(4426, "reload");
+          return;
+        }
+        const timer = setInterval(() => ws.ping(), 20);
+        ws.on("close", () => clearInterval(timer));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as AddressInfo).port;
+    try {
+      const t = nodeEdgeTransport();
+      const refused = await t.observeSocket(`ws://127.0.0.1:${port}/gs?cp=9&cr=11`, { Cookie: "__Host-gs_session=x" }, 2_000);
+      assert.equal(refused.opened, true);
+      assert.deepEqual(refused.events.filter((e) => e.kind !== "ping").map((e) => [e.kind, e.frame_kind ?? e.code]), [["message", "reload"], ["close", 4426]]);
+      const idle = await t.observeSocket(`ws://127.0.0.1:${port}/gs?cp=1&cr=11`, { Cookie: "__Host-gs_session=x" }, 150);
+      assert.equal(idle.ended_by, "probe");
+      assert.ok(idle.events.filter((e) => e.kind === "ping").length >= 3, JSON.stringify(idle.events));
+      const unauth = await t.observeSocket(`ws://127.0.0.1:${port}/gs?cp=1&cr=11`, {}, 150);
+      assert.equal(unauth.upgrade_status, 401);
+      assert.equal(unauth.opened, false);
+    } finally {
+      wss.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §10 Secrets and determinism                                          */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 §10: no secret in the package; a deterministic report", () => {
+  test("secret-shaped material is refused by the writer and flagged by the reader", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l66-secret-"));
+    try {
+      const secrets: unknown[] = [
+        { key: "AKIAABCDEFGHIJKLMNOP" },
+        { header: "__Host-gs_session=v1.abcdefgh.0123456789abcdef0123" },
+        { value: "v1.sessionid00.secretsecretsecretsecret" },
+        { cookie: "x" },
+        { note: "-----BEGIN EC PRIVATE KEY-----" },
+        { token: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop" },
+        { SessionToken: "IQoJb3JpZ2luX2VjE" },
+        { principal_id: "p-123" },
+        { mnemonic: "abandon abandon" },
+        { wallet_proof: {} },
+        { recovery_key: "r" },
+      ];
+      for (const s of secrets) assert.throws(() => writeRecord(dir, "x.json", s), EvidenceRefusedError, JSON.stringify(s));
+      assert.equal(fs.existsSync(path.join(dir, "x.json")), false, "nothing written");
+      fs.writeFileSync(path.join(dir, "leak.json"), JSON.stringify({ Authorization: "Bearer x", "set-cookie": "a" }));
+      const read = readEvidence(dir, "leak.json");
+      assert.equal(read.ok, false);
+      assert.deepEqual(secretFindings(JSON.stringify({ digest: "ab".repeat(32), public_key_hex: "03".padEnd(66, "a"), arn: "arn:aws:iam::1:role/x", query_sha256: "cd".repeat(32) })), [], "hashes, public keys and ARNs are not secrets");
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test("the session cookie never reaches a record, even when an error quotes it", async () => {
+    const cookie = "v1.sessionid00.secretsecretsecretsecret";
+    const quoting: EdgeTransport = {
+      async get() {
+        throw new Error(`upstream said: Cookie __Host-gs_session=${cookie}`);
+      },
+      async observeSocket() {
+        return { upgrade_status: null, opened: false, events: [{ at_ms: 1, kind: "error", error: `boom ${cookie}` }], ended_by: "error", duration_ms: 1 };
+      },
+    };
+    const record = await edgeRecord(quoting, { cookie });
+    const text = JSON.stringify(record);
+    assert.ok(!text.includes(cookie), text);
+    assert.ok(text.includes("<redacted>"));
+  });
+
+  test("the same evidence gives the same bytes: certification.json, CERTIFICATION.txt, MANIFEST.json", async () => {
+    const built = await buildPackage();
+    try {
+      const ctx = await built.ctx();
+      const first = certify(ctx);
+      writeCertification(ctx, first);
+      const bytes = [EVIDENCE.certification, EVIDENCE.certificationText, EVIDENCE.manifest].map((f) => fs.readFileSync(path.join(built.dir, f), "utf8"));
+      const again = certify(await built.ctx());
+      writeCertification(ctx, again);
+      assert.deepEqual([EVIDENCE.certification, EVIDENCE.certificationText, EVIDENCE.manifest].map((f) => fs.readFileSync(path.join(built.dir, f), "utf8")), bytes);
+      assert.equal(bytes[1].split("\n")[0], "LIVE-6 AWS STAGING CERTIFICATION: PASS");
+      const json = JSON.parse(bytes[0]);
+      assert.equal(json.verdict, "PASS");
+      assert.deepEqual(json.failed_gates, []);
+      assert.equal(json.build_id, "2026-09-30-test");
+      assert.ok(JSON.parse(bytes[2]).files.some((f: any) => f.file === "terraform/app/plan.json"));
+      assert.equal(stableStringify({ b: 1, a: { d: 1, c: 2 } }), stableStringify({ a: { c: 2, d: 1 }, b: 1 }));
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* §11 No probe reaches production authority                            */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 §11: a probe or a diagnostic can never mutate production authority", () => {
+  test("the disposable guard refuses, BEFORE sending, anything outside L6CERT#<run> of the game table", async () => {
+    const sent: string[] = [];
+    const raw = { send: async (c: { constructor: { name: string } }) => void sent.push(c.constructor.name) } as never;
+    const guarded = disposableOnly(raw, "gs-staging-game-g1", `L6CERT#${RUN}`);
+    const { TransactWriteItemsCommand, PutItemCommand, DeleteItemCommand, ScanCommand, QueryCommand, UpdateItemCommand } = await import("@aws-sdk/client-dynamodb");
+    const refused = [
+      new TransactWriteItemsCommand({ TransactItems: [{ Put: { TableName: "gs-staging-game-g1", Item: { pk: { S: "SYSTEM" }, sk: { S: "ROUTING" } } } }] }),
+      new TransactWriteItemsCommand({ TransactItems: [{ Put: { TableName: "gs-staging-game-g1", Item: { pk: { S: `L6CERT#${RUN}` }, sk: { S: "a" } } } }, { ConditionCheck: { TableName: "gs-staging-game-g1", Key: { pk: { S: "POOL#p1" }, sk: { S: "POOL" } }, ConditionExpression: "x" } }] }),
+      new PutItemCommand({ TableName: "gs-staging-game-g1", Item: { pk: { S: "GAME#g1" }, sk: { S: "HEAD" } } }),
+      new DeleteItemCommand({ TableName: "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger", Key: { pk: { S: `L6CERT#${RUN}` }, sk: { S: "a" } } }),
+      new UpdateItemCommand({ TableName: "gs-staging-game-g1", Key: { pk: { S: `L6CERT#${RUN}x` }, sk: { S: "a" } }, UpdateExpression: "SET a = :a" }),
+      new ScanCommand({ TableName: "gs-staging-game-g1" }),
+      new QueryCommand({ TableName: "gs-staging-game-g1", KeyConditionExpression: "pk = :pk", ExpressionAttributeValues: { ":pk": { S: "SYSTEM" } } }),
+    ];
+    for (const command of refused) await assert.rejects((guarded.send as (c: unknown) => Promise<unknown>)(command), DisposableGuardError, command.constructor.name);
+    assert.deepEqual(sent, [], "nothing reached the client");
+    await (guarded.send as (c: unknown) => Promise<unknown>)(new PutItemCommand({ TableName: "gs-staging-game-g1", Item: { pk: { S: `L6CERT#${RUN}` }, sk: { S: "a" } } }));
+    assert.deepEqual(sent, ["PutItemCommand"]);
+  });
+
+  test("the transaction probe, even when every call fails in every way, sends nothing outside its partition and still cleans up", async () => {
+    for (const failure of ["TimeoutError", "ThrottlingException", "InternalServerError", "TransactionCanceledException"]) {
+      const sent: Array<{ name: string; pks: string[] }> = [];
+      const client = {
+        async send(command: { constructor: { name: string }; input: Record<string, any> }) {
+          const i = command.input;
+          const pks =
+            command.constructor.name === "TransactWriteItemsCommand"
+              ? (i.TransactItems as any[]).map((t) => String((t.Put?.Item ?? (t.Update ?? t.Delete ?? t.ConditionCheck).Key).pk.S))
+              : command.constructor.name === "QueryCommand"
+                ? [String(i.ExpressionAttributeValues[":pk"].S)]
+                : [String((i.Item ?? i.Key).pk.S)];
+          sent.push({ name: command.constructor.name, pks });
+          if (command.constructor.name === "QueryCommand") return { Items: sent.length > 1 ? [{ sk: { S: "T1-A" } }] : [] };
+          if (command.constructor.name === "DeleteItemCommand") return {};
+          throw Object.assign(new Error("injected"), { name: failure, CancellationReasons: [{ Code: "ThrottlingError" }] });
+        },
+      };
+      const record = await runTransactionProbe(client as never, { run: RUN, gameTable: "gs-staging-game-g1", conflictRounds: 1, conflictWriters: 2, timing: { windowMs: 0, maxResends: 0, sleep: async () => undefined } });
+      assert.ok(sent.every((s) => s.pks.every((pk) => pk === `L6CERT#${RUN}`)), `${failure}: ${JSON.stringify(sent.filter((s) => s.pks.some((pk) => pk !== `L6CERT#${RUN}`)))}`);
+      assert.ok(sent.some((s) => s.name === "DeleteItemCommand"), `${failure}: the cleanup ran`);
+      assert.ok(failures(judgeTransactionProbe({ status: "ran", results: record })).length > 0, `${failure}: a broken service is never a PASS`);
+    }
+  });
+
+  test("the IAM probe's guard refuses a ROUTING write, a write without the impossible condition, APPGEN in an 'allowed' probe", () => {
+    const ctx = { run: RUN, gameTable: "g", ledgerTable: "arn:l", nonce: "n" };
+    for (const spec of iamProbeSpecs(ctx)) assert.equal(iamProbeWriteProblem(spec, ctx), null, spec.id);
+    const [put] = iamProbeSpecs(ctx);
+    const routing = { ...put, transact: [{ Put: { ...put.transact?.[0].Put, Item: { pk: { S: "SYSTEM" }, sk: { S: "ROUTING" } } } }] } as never;
+    assert.match(String(iamProbeWriteProblem(routing, ctx)), /SYSTEM\/ROUTING/);
+    const unguarded = { ...put, transact: [{ Put: { ...put.transact?.[0].Put, ConditionExpression: "attribute_not_exists(pk)" } }] } as never;
+    assert.match(String(iamProbeWriteProblem(unguarded, ctx)), /without the impossible condition/);
+    const ledgerAllow = iamProbeSpecs(ctx).find((s) => s.id === "ledger-deny-transact-put-appgen");
+    assert.match(String(iamProbeWriteProblem({ ...ledgerAllow, expect: "allow" } as never, ctx)), /APPGEN is only ever/);
+    const pool = { ...put, transact: [{ ConditionCheck: { TableName: "g", Key: { pk: { S: "POOL#p1" }, sk: { S: "POOL" } }, ConditionExpression: "attribute_exists(pk)" } }] } as never;
+    assert.match(String(iamProbeWriteProblem(pool, ctx)), /ConditionCheck on POOL#p1/);
+  });
+
+  test("the KMS probe touches no store, no chain and no ledger: only GetPublicKey and Sign", async () => {
+    const clock = { now: 0 };
+    const kms = fakeKms({ clock });
+    await runKmsProbe(junoConfig(), { kms: kms.client, clock: () => clock.now }, { run: RUN, samples: 2 });
+    assert.ok(kms.calls.every((c) => /^(GetPublicKey|Sign) arn:aws:kms:/.test(c)));
+  });
+
+  test("stage-cert and the edge probe send only reads: the certification's AWS calls are Describe / Get / List", async () => {
+    const built = await buildPackage({ part: "all", skip: [EVIDENCE.verifyLedger] });
+    const seen: string[] = [];
+    const recorder = (label: string) =>
+      ({
+        async send(command: { constructor: { name: string } }) {
+          seen.push(`${label} ${command.constructor.name}`);
+          throw Object.assign(new Error("offline"), { name: "ResourceNotFoundException" });
+        },
+        config: { region: async () => "us-east-1" },
+      }) as never;
+    const deps: DeployDeps = { parameters: PARAMETERS, dynamo: () => recorder("dynamo"), kms: () => ({ sdk: recorder("kms"), digest: fakeKms().client }), now: () => Date.parse("2026-09-30T11:00:00Z"), out: () => undefined };
+    const staging: StagingDeps = { env: {}, monotonic: () => 0, edge: fakeEdge(), repository: REPO };
+    try {
+      const code = await stageCertCommand(["certify", "--run-id", RUN, "--evidence", built.dir, "--runtime-parameter", RUNTIME_ARN, "--environment", "staging", "--primary-pool", "p1", "--generation", "1", "--part", "all", "--scenario", "read-only", "--commit", "aa2c64c"], deps, staging);
+      assert.equal(code, 1, "the offline tables fail the prerequisite");
+      assert.ok(seen.length > 0 && seen.every((s) => /(Describe|Get|List)[A-Za-z]*Command$/.test(s)), JSON.stringify(seen));
+      assert.equal(fs.readFileSync(path.join(built.dir, EVIDENCE.certificationText), "utf8").split("\n")[0], "LIVE-6 AWS STAGING CERTIFICATION: FAIL");
+    } finally {
+      cleanup(built.dir);
+    }
+    const edge = fakeEdge();
+    await edgeRecord(edge);
+    assert.ok(edge.urls.every((u) => /\/gs\/diag\/edge\?|\/gs\?/.test(u)));
+  });
+
+  test("the edge diagnostic: a hashed mirror, GET only, fail-closed hops; mounted only by `staging`, never on mainnet or prod", () => {
+    const answer = edgeDiagnosticAnswer({ url: "/gs/diag/edge?cp=1&cr=11&cb=b1&secret=hunter2", headers: { "x-forwarded-for": "198.51.100.1, 203.0.113.5, 130.176.0.1" }, socket: {} } as never, 2);
+    const text = JSON.stringify(answer);
+    assert.ok(!text.includes("hunter2") && !text.includes("203.0.113.5") && !text.includes("secret"), text);
+    assert.equal(answer.forwarded_entries, 3);
+    assert.deepEqual(answer.announcement, { kind: "announced", protocol: 1, rules: [11], build: "b1" });
+    const short = edgeDiagnosticAnswer({ url: "/gs/diag/edge", headers: { "x-forwarded-for": "130.176.0.1" }, socket: {} } as never, 2);
+    assert.equal(short.client_key_sha256, null);
+    assert.match(String(short.client_key_problem), /fewer X-Forwarded-For entries/);
+    const res = { status: 0, headers: {} as Record<string, string>, body: "", writeHead(s: number, h: Record<string, string>) { this.status = s; this.headers = h; }, end(b?: string) { this.body = b ?? ""; } };
+    assert.equal(handleEdgeDiagnostic({ url: "/gs/diag/edge", method: "POST", headers: {}, socket: {} } as never, res as never, { trustedProxyHops: 2 }), true);
+    assert.equal(res.status, 405);
+    assert.equal(handleEdgeDiagnostic({ url: "/gs/readyz", method: "GET", headers: {}, socket: {} } as never, res as never, { trustedProxyHops: 2 }), false);
+    const none = { environment: "staging", escrow: null };
+    assert.deepEqual(edgeDiagnosticSwitch(undefined, none), { ok: true, enabled: false });
+    assert.deepEqual(edgeDiagnosticSwitch("staging", none), { ok: true, enabled: true });
+    assert.equal(edgeDiagnosticSwitch("on", none).ok, false);
+    assert.equal(edgeDiagnosticSwitch("staging", { environment: "staging", escrow: { networkClass: "mainnet", chainId: "juno-1" } }).ok, false);
+    assert.equal(edgeDiagnosticSwitch("staging", { environment: "staging", escrow: { networkClass: "testnet", chainId: "juno-1" } }).ok, false);
+    assert.equal(edgeDiagnosticSwitch("staging", { environment: "prod", escrow: null }).ok, false);
+    assert.deepEqual(edgeDiagnosticSwitch("staging", { environment: "staging", escrow: { networkClass: "testnet", chainId: "uni-7" } }), { ok: true, enabled: true });
+  });
+
+  test("the verifier accepts GS_EDGE_DIAGNOSTIC only as `staging`", async () => {
+    const built = await buildPackage({ mutate: { [EVIDENCE_FILES.taskDefinition("p1")]: (v) => ((v.taskDefinition.containerDefinitions[0].environment.find((e: any) => e.name === "GS_EDGE_DIAGNOSTIC").value = "on"), v) } });
+    try {
+      assert.match(gateFailures((await verdictOf(built)).result, "prerequisite").join("\n"), /environment values.*GS_EDGE_DIAGNOSTIC=on/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* The commands                                                         */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6: the commands' refusals and the in-task record's round trip", () => {
+  const deps = (out: string[]): DeployDeps => ({ parameters: PARAMETERS, dynamo: () => ({}) as never, kms: () => ({ sdk: {} as never, digest: fakeKms().client }), now: () => 0, out: (l) => void out.push(l) });
+  const staging: StagingDeps = { env: {}, monotonic: () => 0, edge: fakeEdge(), repository: REPO };
+  const run = (argv: string[], out: string[] = []) =>
+    runDeployCommand(argv, deps(out), { "stage-cert": (a) => stageCertCommand(a, deps(out), staging), "stage-probe": (a) => stageProbeCommand(a, deps(out), staging) });
+
+  test("usage refusals: a bad run id, no scenario, --replaced-pools on read-only, a mistyped --disposable-writes, a plain-http edge", async () => {
+    const out: string[] = [];
+    assert.equal(await run(["stage-cert", "certify", "--run-id", "BAD", "--evidence", "/tmp/x"], out), EXIT_USAGE);
+    assert.equal(await run(["stage-cert", "certify", "--run-id", RUN, "--evidence", "/tmp/x", "--runtime-parameter", RUNTIME_ARN, "--environment", "staging", "--primary-pool", "p1", "--generation", "1", "--commit", "abc1234"], out), EXIT_USAGE);
+    assert.equal(await run(["stage-cert", "certify", "--run-id", RUN, "--evidence", "/tmp/x", "--scenario", "read-only", "--replaced-pools", "p1", "--commit", "abc1234"], out), EXIT_USAGE);
+    assert.equal(await run(["stage-probe", "task-role", "--run-id", RUN, "--runtime-parameter", RUNTIME_ARN, "--environment", "staging", "--generation", "1", "--pool", "p1", "--disposable-writes", "SYSTEM"], out), EXIT_USAGE);
+    assert.equal(await run(["stage-probe", "task-role", "--run-id", RUN, "--runtime-parameter", RUNTIME_ARN, "--environment", "prod", "--generation", "1", "--pool", "p1", "--disposable-writes", `L6CERT#${RUN}`], out), EXIT_USAGE);
+    assert.equal(await run(["stage-probe", "edge", "--run-id", RUN, "--evidence", "/tmp/x", "--base-url", "http://play.example.com", "--origin", "https://play.example.com", "--environment", "staging", "--generation", "1", "--pool", "p1"], out), EXIT_USAGE);
+    assert.equal(await run(["stage-cert", "certify", "--force"], out), EXIT_USAGE, "there is no --force");
+    assert.match(out.join("\n"), /--run-id must match/);
+    assert.match(out.join("\n"), /--disposable-writes must be exactly L6CERT#/);
+    assert.match(out.join("\n"), /never writes in a prod\* environment/);
+  });
+
+  test("the edge probe refuses to run before a PASSing prerequisite for this run", async () => {
+    const built = await buildPackage({ mutate: { [EVIDENCE.prerequisite]: (v) => ({ ...v, verdict: "FAIL" }) } });
+    const out: string[] = [];
+    try {
+      assert.equal(await run(["stage-probe", "edge", "--run-id", RUN, "--evidence", built.dir, "--base-url", "https://play.example.com", "--origin", "https://play.example.com", "--environment", "staging", "--generation", "1", "--pool", "p1"], out), EXIT_USAGE);
+      assert.match(out.join("\n"), /not PASS for l6cert-test-0930/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("the edge probe command writes a record the certification accepts (and --hold-seconds can only lengthen the hold)", async () => {
+    const built = await buildPackage({ skip: [EVIDENCE.edge] });
+    const out: string[] = [];
+    const cookieDeps: StagingDeps = { ...staging, env: { GS_CERT_SESSION_COOKIE: "v1.sessionid00.secretsecretsecretsecret" } };
+    const clock = { t: Date.parse("2026-09-30T10:10:00Z") };
+    const d: DeployDeps = { ...deps(out), now: () => (clock.t += 1000) };
+    try {
+      assert.equal(await stageProbeCommand(["edge", "--run-id", RUN, "--evidence", built.dir, "--base-url", "https://play.example.com", "--origin", "https://play.example.com", "--environment", "staging", "--generation", "1", "--pool", "p1", "--hold-seconds", "60"], d, cookieDeps).catch((e: Error) => e.message), "--hold-seconds must be at least 350 (the path's longest idle bound plus two server ping periods)");
+      assert.equal(await stageProbeCommand(["edge", "--run-id", RUN, "--evidence", built.dir, "--base-url", "https://play.example.com", "--origin", "https://play.example.com", "--environment", "staging", "--generation", "1", "--pool", "p1", "--expected-client-ip", VIEWER_IP], d, cookieDeps), 0);
+      const text = fs.readFileSync(path.join(built.dir, EVIDENCE.edge), "utf8");
+      assert.ok(!text.includes("secretsecret"));
+      const { result } = await verdictOf(built);
+      assert.deepEqual(failedGates(result).filter((g) => ["proxy-hops", "query-strings", "websocket"].includes(g)), [], JSON.stringify(["proxy-hops", "query-strings", "websocket"].map((g) => gateFailures(result, g))));
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("the in-task record survives CloudWatch: chunked lines, reassembled, checked, collected", async () => {
+    const record = await taskRoleRecord();
+    const lines = recordLines(record);
+    assert.ok(lines.length >= 2 && lines.every((l) => l.length < 16_384), "each line under Docker's 16 KiB split");
+    const got = recordFromLog(["  aws: noise", ...lines.slice().reverse(), "done"]);
+    assert.equal(got.ok, true);
+    assert.equal(stableStringify(got.ok ? got.record : null), stableStringify(record));
+    assert.equal(recordFromLog(lines.slice(1)).ok, false, "a missing chunk");
+    const bad = [...lines];
+    bad[0] = `${bad[0].slice(0, -10)}${bad[0].endsWith("AAAAAAAAAA") ? "BBBBBBBBBB" : "AAAAAAAAAA"}`;
+    assert.equal(recordFromLog(bad).ok, false, "a corrupted chunk fails its SHA-256");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l66-collect-"));
+    try {
+      write(dir, EVIDENCE.taskRoleLog, { events: lines.map((message, i) => ({ timestamp: i, message })) });
+      const out: string[] = [];
+      assert.equal(await run(["stage-probe", "collect", "--run-id", RUN, "--evidence", dir], out), 0);
+      assert.equal(await run(["stage-probe", "collect", "--run-id", "l6cert-other-run", "--evidence", dir], out), 1);
+      assert.equal(stableStringify(JSON.parse(fs.readFileSync(path.join(dir, EVIDENCE.taskRole), "utf8"))), stableStringify(record));
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  test("the probe query is non-default and carries unrelated material", () => {
+    const q = probeQuery(RUN);
+    assert.deepEqual(q.slice(0, 3).map(([n]) => n), ["cp", "cr", "cb"]);
+    assert.notEqual(q[0][1], "1", "cp is not the bundle's default");
+    assert.ok(q.filter(([n]) => !["cp", "cr", "cb"].includes(n)).length >= 4);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* The adversarial review's findings, pinned                            */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 review: forged, stale and incomplete evidence is refused", () => {
+  const DRAINED = "arn:aws:ecs:us-east-1:111111111111:task/gs-staging/0ld0000000000000000000000000000";
+  const drainFiles = (overrides: { stamp?: Record<string, unknown>; exitCode?: number; stoppedAt?: string } = {}) => ({
+    "drain-p1/tasks-before.json": { tasks: [{ taskArn: DRAINED, group: "service:gs-staging-p1", lastStatus: "RUNNING", taskDefinitionArn: TD.replace(":7", ":6"), createdAt: "2026-09-29T09:00:00Z" }] },
+    "drain-p1/tasks-after.json": { tasks: [{ taskArn: DRAINED, group: "service:gs-staging-p1", lastStatus: "STOPPED", stoppedAt: overrides.stoppedAt ?? "2026-09-30T08:55:00.000000+00:00", containers: [{ name: "game-server", exitCode: overrides.exitCode ?? 0 }] }] },
+    "drain-p1/service-after.json": { services: [{ serviceName: "gs-staging-p1", desiredCount: 0, runningCount: 0, pendingCount: 0 }] },
+    "drain-p1/drain.json": { format: "18COSMOS/L6-6-DRAIN/v1", run_id: RUN, pool: "p1", drained_at: "2026-09-30T08:56:00Z", ...(overrides.stamp ?? {}) },
+  });
+  const withDrain = async (files: Record<string, unknown>) => {
+    const built = await buildPackage();
+    for (const [file, value] of Object.entries(files)) write(built.dir, file, value);
+    return built;
+  };
+
+  test("the replacement scenario PASSES with this run's drain -> zero -> apply/start, and FAILS on another run's drain, an ungraceful exit or an overlap", async () => {
+    const good = await withDrain(drainFiles());
+    const stale = await withDrain(drainFiles({ stamp: { run_id: "l6cert-last-month" } }));
+    const fenced = await withDrain(drainFiles({ exitCode: 3 }));
+    const overlap = await withDrain(drainFiles({ stoppedAt: "2026-09-30T09:05:00Z" }));
+    try {
+      const passed = await verdictOf(good, { scenario: "replacement", replacedPools: ["p1"] });
+      assert.deepEqual(failedGates(passed.result), [], JSON.stringify(gateFailures(passed.result, "drain")));
+      assert.equal(passed.result.gates.find((g) => g.id === "drain")?.status, "pass");
+      assert.match(gateFailures((await verdictOf(stale, { scenario: "replacement", replacedPools: ["p1"] })).result, "drain").join("\n"), /another run proves nothing/);
+      assert.match(gateFailures((await verdictOf(fenced, { scenario: "replacement", replacedPools: ["p1"] })).result, "drain").join("\n"), /exit 3 is a fenced task/);
+      assert.match(gateFailures((await verdictOf(overlap, { scenario: "replacement", replacedPools: ["p1"] })).result, "drain").join("\n"), /overlap/);
+    } finally {
+      for (const b of [good, stale, fenced, overlap]) cleanup(b.dir);
+    }
+  });
+
+  test("a task-role record that is not the certifier task's own -- another task, or not what its log printed -- FAILS", async () => {
+    const elsewhere = await buildPackage({ taskRole: await taskRoleRecord({ runner: { task_arn: "arn:aws:ecs:us-east-1:111111111111:task/gs-staging/laptop" } }) });
+    const doctored = await buildPackage({ mutate: { [EVIDENCE.taskRole]: (v) => ((v.sections.kms.results.keys.relayer.samples[0].ms = 1), v) } });
+    const noLog = await buildPackage({ skip: [EVIDENCE.taskRoleLog] });
+    try {
+      assert.match(gateFailures((await verdictOf(elsewhere)).result, "iam").join("\n"), /the record is the certifier task's/);
+      assert.match(gateFailures((await verdictOf(doctored)).result, "iam").join("\n"), /differs from the one in the log/);
+      assert.match(gateFailures((await verdictOf(noLog)).result, "iam").join("\n"), /probe-task-role-log.json is missing/);
+    } finally {
+      for (const b of [elsewhere, doctored, noLog]) cleanup(b.dir);
+    }
+  });
+
+  test("an IAM record that relabels a forbidden probe as 'allow' is judged by the build's own spec, and FAILS", async () => {
+    const { results } = await runIamProbe({ game: iamDynamo({ enforce: false }).client, ledger: iamDynamo({ enforce: false }).client }, { run: RUN, gameTable: "g", ledgerTable: "arn:l", nonce: "n" });
+    const relabelled = results.map((r) => ({ ...r, expect: "allow", item_count: 1, probe_index: 0 }));
+    const checks = judgeIamProbe({ status: "ran", results: relabelled }, "gs-staging-app-task", IAM_PROBE_IDS);
+    assert.ok(failures(checks).length >= 9, JSON.stringify(failures(checks)));
+    const duplicated = judgeIamProbe({ status: "ran", results: [...results, results[0]] }, "gs-staging-app-task", IAM_PROBE_IDS);
+    assert.ok(failures(duplicated).some((c) => /recorded twice/.test(c.detail)));
+  });
+
+  test("an empty or partial cluster listing is not proof that nothing runs beside the services", async () => {
+    const empty = await buildPackage({ mutate: { [EVIDENCE.clusterTasks]: () => ({ tasks: [], failures: [] }) } });
+    try {
+      assert.match(gateFailures((await verdictOf(empty)).result, "prerequisite").join("\n"), /the cluster listing is incomplete/);
+    } finally {
+      cleanup(empty.dir);
+    }
+  });
+
+  test("another run's plan, a plan older than the prerequisite, another run's ledger verification -- each FAILS", async () => {
+    const otherPlan = await buildPackage({ mutate: { "terraform/app/run.json": (v) => ({ ...v, run_id: "l6cert-other" }) } });
+    const oldPlan = await buildPackage({ mutate: { "terraform/ledger/plan.json": (v) => ({ ...v, timestamp: "2026-08-30T10:00:00Z" }) } });
+    const oldLedger = await buildPackage({ mutate: { [EVIDENCE.verifyLedger]: (v) => ({ ...v, run_id: "l6cert-other" }) } });
+    try {
+      assert.match(gateFailures((await verdictOf(otherPlan)).result, "terraform").join("\n"), /run l6cert-other's/);
+      assert.match(gateFailures((await verdictOf(oldPlan)).result, "terraform").join("\n"), /before the prerequisite/);
+      assert.match(gateFailures((await verdictOf(oldLedger)).result, "prerequisite").join("\n"), /run l6cert-other/);
+    } finally {
+      for (const b of [otherPlan, oldPlan, oldLedger]) cleanup(b.dir);
+    }
+  });
+
+  test("an in-place update that lowers a protection FAILS; a task-definition replacement needs skip_destroy in the PRIOR state", () => {
+    const judge = (extra: unknown) => failures(judgeTerraformStack("app", { version: TERRAFORM_VERSION, plan: appPlan({ extra: [extra] }), exitCode: "2", lock: lockText("app") }, lockText("app"), { primaryPool: "p1" }).checks);
+    const update = (type: string, before: Record<string, unknown>, after: Record<string, unknown>) => ({ address: `module.app.${type}.x`, mode: "managed", type, change: { actions: ["update"], before, after } });
+    assert.match(judge(update("aws_dynamodb_table", { deletion_protection_enabled: true }, { deletion_protection_enabled: false })).map((c) => c.detail).join(), /deletion protection off/);
+    assert.match(judge(update("aws_dynamodb_table", {}, { deletion_protection_enabled: true, point_in_time_recovery: [{ enabled: false }] })).map((c) => c.detail).join(), /point-in-time recovery off/);
+    assert.match(judge(update("aws_kms_key", { is_enabled: true }, { is_enabled: false })).map((c) => c.detail).join(), /the key disabled/);
+    assert.match(judge(update("aws_ecs_service", {}, { deployment_minimum_healthy_percent: 100 })).map((c) => c.detail).join(), /no longer stop-first/);
+    assert.deepEqual(judge(update("aws_ssm_parameter", { insecure_value: "a" }, { insecure_value: "b" })), [], "a document change is a normal update");
+    const late = appPlan();
+    (late.resource_changes[1] as any).change.before.skip_destroy = false;
+    assert.ok(failures(judgeTerraformStack("app", { version: TERRAFORM_VERSION, plan: late, exitCode: "2", lock: lockText("app") }, lockText("app"), { primaryPool: "p1" }).checks).some((c) => /nothing destroyed or replaced/.test(c.name)));
+  });
+
+  test("a rerun removes the previous outputs first: a refused certify never leaves an older PASS behind", async () => {
+    const built = await buildPackage();
+    try {
+      const ctx = await built.ctx();
+      writeCertification(ctx, certify(ctx));
+      assert.ok(fs.existsSync(path.join(built.dir, EVIDENCE.certificationText)));
+      const broken: DeployDeps = { parameters: { read: async () => Promise.reject(new Error("SSM unreachable")) }, dynamo: () => ({}) as never, kms: () => ({ sdk: {} as never, digest: fakeKms().client }), now: () => 0, out: () => undefined };
+      await assert.rejects(stageCertCommand(["certify", "--run-id", RUN, "--evidence", built.dir, "--runtime-parameter", RUNTIME_ARN, "--environment", "staging", "--primary-pool", "p1", "--generation", "1", "--scenario", "read-only", "--commit", HEAD], broken, { env: {}, monotonic: () => 0, edge: fakeEdge(), repository: REPO }));
+      for (const file of [EVIDENCE.certification, EVIDENCE.certificationText, EVIDENCE.manifest]) assert.equal(fs.existsSync(path.join(built.dir, file)), false, file);
+      await assert.rejects(stageCertCommand(["prerequisite", "--run-id", RUN, "--evidence", built.dir, "--runtime-parameter", RUNTIME_ARN, "--environment", "staging", "--primary-pool", "p1", "--generation", "1"], broken, { env: {}, monotonic: () => 0, edge: fakeEdge(), repository: REPO }));
+      assert.equal(fs.existsSync(path.join(built.dir, EVIDENCE.prerequisite)), false);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("the commit must be the checkout's HEAD; the verifier refuses the edge mirror in a prod* environment; a secret hidden in the log's base64 is found", async () => {
+    const built = await buildPackage();
+    try {
+      const wrong = certify(await built.ctx({ commit: "0000000" }));
+      assert.match(gateFailures(wrong, "evidence").join("\n"), /is not the checkout's HEAD/);
+      const secret = Buffer.from(JSON.stringify({ note: "AKIAABCDEFGHIJKLMNOP" })).toString("base64");
+      write(built.dir, "stray-log.json", { events: [{ message: `L6CERT/v1 1/1 ${"0".repeat(64)} ${secret}` }] });
+      assert.match(gateFailures(certify(await built.ctx()), "evidence").join("\n"), /stray-log.json: an AWS access key id/);
+    } finally {
+      cleanup(built.dir);
+    }
+    const td = clone(TASK_DEFINITION);
+    const { checkTaskDefinitionEvidence } = await import("../deployVerify");
+    assert.ok(failures(checkTaskDefinitionEvidence("p1", td, { environment: "prod", runtimeParameterArn: RUNTIME_ARN, port: 8917 })).some((c) => /environment values/.test(c.name) && /GS_EDGE_DIAGNOSTIC/.test(c.detail)));
+  });
+
+  test("the task-role probe refuses a mainnet escrow configuration, whatever the environment is called", async () => {
+    const mainnet = JSON.parse(junoText()) as Record<string, any>;
+    mainnet.chain_id = "juno-1";
+    mainnet.network_class = "mainnet";
+    mainnet.rest_endpoints = ["https://a.example.net", "https://b.example.net"];
+    const parameters: ParameterSource = {
+      async read(arn) {
+        if (arn === JUNO_ARN) return { value: JSON.stringify(mainnet), version: 1, arn };
+        return PARAMETERS.read(arn);
+      },
+    };
+    const out: string[] = [];
+    const d: DeployDeps = { parameters, dynamo: () => ({}) as never, kms: () => ({ sdk: {} as never, digest: fakeKms().client }), now: () => 0, out: (l) => void out.push(l) };
+    const code = await runDeployCommand(["stage-probe", "task-role", "--run-id", RUN, "--runtime-parameter", RUNTIME_ARN, "--environment", "staging", "--generation", "1", "--pool", "p1"], d, { "stage-probe": (a) => stageProbeCommand(a, d, { env: {}, monotonic: () => 0, edge: fakeEdge(), repository: REPO }) });
+    assert.notEqual(code, 0);
+    assert.match(out.join("\n"), /mainnet escrow configuration: the staging probe refuses/);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* L6-4 addendum: the recovery part of the PASS contract                */
+/* ------------------------------------------------------------------ */
+
+describe("L6-6 x L6-4: the integrated deployment cannot PASS without generation, binding, identity, review and rollback", () => {
+  const {
+    judgeGeneration,
+    judgeIdentityRecovery,
+    judgeReviews,
+    judgeRollback,
+    judgeRestoreQuiet,
+    judgeRestoreFencing,
+    RESTORE_STOP_DIR,
+    PRIOR_CERTIFICATIONS,
+  } = require("./recovery") as typeof import("./recovery");
+  const expect1 = { generation: 1, gameTable: "gs-staging-game-g1", requireRestore: false };
+  const gen = async (script: ReaderScript, expect = expect1) => failures(judgeGeneration(await generationOf(script), expect)).map((c) => `${c.name}: ${c.detail}`).join("\n");
+  const identity = async (script: ReaderScript) => {
+    const section = await readIdentityRecovery(readersFor(script), {} as never, IDENTITY_TABLE);
+    return { section, failed: failures(judgeIdentityRecovery(section, IDENTITY_TABLE)).map((c) => `${c.name}: ${c.detail}`).join("\n") };
+  };
+  const complete: IdentityRestoreFacts = { restore_id: "idr-0930", state: "complete", identity_table: IDENTITY_TABLE, peer_table: "gs-staging-identity-old", restore_point: 5, started_at: 6, journal_digest: "ab".repeat(32), journal_events: 12, completed_at: 7, reviews: 0 };
+
+  test("THIS branch binds no L6-4 reader: every recovery gate FAILS 'not integrated', and so does the certification", async () => {
+    const built = await buildPackage({ taskRole: await taskRoleRecord({ identity: null }) });
+    try {
+      const { result } = await verdictOf(built, { generationEvidence: { integrated: false, marker: null, appgen: null } });
+      assert.equal(result.passed, false);
+      for (const gate of ["generation", "identity", "review"]) assert.match(gateFailures(result, gate).join("\n"), /not bound in this build/, gate);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("SYSTEM/GENERATION: missing, unreadable, another generation, another table, a malformed form -- each FAIL, never SKIP", async () => {
+    assert.equal(await gen({}), "");
+    assert.match(await gen({ marker: null }), /carries no SYSTEM\/GENERATION/);
+    assert.match(await gen({ marker: new Error("SYSTEM/GENERATION is format 2") }), /unreadable .*format 2/);
+    assert.match(await gen({ marker: { ...BOOT_MARKER, generation: 3 } }), /holds generation 3/);
+    assert.match(await gen({ marker: { ...BOOT_MARKER, game_table: "gs-staging-game-copy" } }), /names gs-staging-game-copy/);
+    assert.match(await gen({ marker: { ...BOOT_MARKER, restore_id: "x-restore" } }), /bootstrap marker names a restore/);
+    assert.match(await gen({ appgen: null }), /no APPGEN/);
+    assert.match(await gen({ appgen: new Error("APPGEN damaged") }), /APPGEN readable: unreadable/);
+    assert.match(await gen({ appgen: { current_generation: 2, adoption: null } }), /APPGEN is 2, the marker 1/);
+  });
+
+  test("the APPGEN binding, never the number alone: a twin, another restore, an unadopted restore, an adopted bootstrap table -- each FAIL", async () => {
+    const expect2 = { generation: 2, gameTable: "gs-staging-game-g2", requireRestore: false };
+    assert.equal(await gen({ marker: RESTORED_MARKER, appgen: ADOPTED }, expect2), "", "the adopted copy serves");
+    const twin = { ...RESTORED_MARKER, game_table: "gs-staging-game-g2b" };
+    assert.match(await gen({ marker: twin, appgen: ADOPTED }, { ...expect2, gameTable: "gs-staging-game-g2b" }), /APPGEN adopted gs-staging-game-g2 .*not this table/);
+    assert.match(await gen({ marker: { ...RESTORED_MARKER, restore_id: "drill-other" }, appgen: ADOPTED }, expect2), /restore drill-0930\), not this table/);
+    assert.match(await gen({ marker: RESTORED_MARKER, appgen: { current_generation: 2, adoption: null } }, expect2), /never adopted/);
+    assert.match(await gen({ marker: { ...BOOT_MARKER, generation: 2, game_table: "gs-staging-game-g2" }, appgen: ADOPTED }, expect2), /bootstrap table: not the adopted one/);
+    assert.match(await gen({ marker: RESTORED_MARKER, appgen: { ...ADOPTED, adoption: { ...(ADOPTED.adoption as NonNullable<AppGenerationFacts["adoption"]>), previous_generation: 0 } } }, expect2), /previous generation 0 is not the marker's source generation 1/);
+    assert.match(await gen({}, { ...expect1, requireRestore: true }), /a restore drill, but the serving table is a bootstrap table/);
+  });
+
+  test("identity restore state: only never-restored or target-complete, bound to its own name, is a usable identity deployment", async () => {
+    assert.equal((await identity({})).failed, "");
+    assert.equal((await identity({ restore: complete })).failed, "");
+    assert.match((await identity({ restore: { ...complete, state: "replaying", completed_at: null } })).failed, /target replaying \/ incomplete .*never a healthy identity deployment/);
+    assert.match((await identity({ restore: { ...complete, state: "superseded", peer_table: "gs-staging-identity-new" } })).failed, /source superseded by restore idr-0930 \(replaced by gs-staging-identity-new\)/);
+    assert.match((await identity({ self: "gs-staging-identity-old" })).failed, /unreplayed copy/);
+    assert.match((await identity({ restore: { ...complete, identity_table: "gs-staging-identity-old" } })).failed, /unreplayed copy/);
+    assert.match((await identity({ self: null })).failed, /no TABLE#identity/);
+    assert.match((await identity({ servingProblem: "the table names itself x" })).failed, /not serving-safe/);
+    const { section } = await identity({ restore: complete });
+    assert.ok(!JSON.stringify(section).includes("ab".repeat(32)), "the journal digest is not evidence");
+  });
+
+  test("REVIEW#: an open review is an unresolved finding, surfaced by restore and count only -- never a profile, principal or hash", async () => {
+    const leaky = [{ restore_id: "idr-0930", reason: "unconfirmed-recovery-key-rotation", open: true, profile_id: "pf_secretish", principal_id: "p-123", selector: "rk_x" }, { restore_id: "idr-0930", reason: "unconfirmed-recovery-key-rotation", open: false }] as unknown as ReviewSummary[];
+    const { section } = await identity({ reviews: leaky });
+    const text = JSON.stringify(section);
+    assert.ok(!/pf_secretish|p-123|rk_x/.test(text), text);
+    const failed = failures(judgeReviews(section)).map((c) => c.detail).join("\n");
+    assert.match(failed, /1 open REVIEW# record\(s\) -- an unresolved staging\/recovery finding: restore idr-0930: 1/);
+    assert.deepEqual(failures(judgeReviews((await identity({ reviews: [{ restore_id: "idr-0930", reason: "x", open: false }] })).section)), []);
+    assert.match(failures(judgeReviews((await identity({ reviews: new Error("SCAN refused") })).section)).map((c) => c.detail).join(), /unreadable/);
+    const built = await buildPackage({ taskRole: await taskRoleRecord({ identity: { reviews: leaky } }) });
+    try {
+      assert.ok(failedGates((await verdictOf(built)).result).includes("review"));
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("rollback: the serving image must carry L6-4; every ACTIVE earlier revision must be an attested L6-4 build", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l66-rollback-"));
+    try {
+      const td = (rev: number, build: string) => ({ ...clone(TASK_DEFINITION.taskDefinition), taskDefinitionArn: TD.replace(":7", `:${rev}`), containerDefinitions: [{ ...clone(TASK_DEFINITION.taskDefinition.containerDefinitions[0]), environment: [{ name: "BUILD_ID", value: build }] }] });
+      const expect = { pools: ["p1"], runningBuild: "2026-09-30-test", runningCapabilities: ALL_L64, runningTaskDefinitions: { p1: TD } };
+      write(dir, revisionsFile("p1"), { taskDefinitions: [TASK_DEFINITION.taskDefinition] });
+      assert.deepEqual(failures(judgeRollback(dir, expect)), [], "the first deployment: only the running revision");
+      write(dir, revisionsFile("p1"), { taskDefinitions: [TASK_DEFINITION.taskDefinition, td(6, "2026-09-01-pre-l64")] });
+      assert.match(failures(judgeRollback(dir, expect)).map((c) => c.detail).join(), /unattested \(pre-L6-4 or unknown\) rollback target\(s\): gs-staging-p1:6 \(BUILD_ID 2026-09-01-pre-l64\)/);
+      write(dir, path.join(PRIOR_CERTIFICATIONS, "c1.json"), { verdict: "PASS", build_id: "2026-09-01-pre-l64", build_capabilities: { generation_marker: true, app_generation: false } });
+      assert.equal(failures(judgeRollback(dir, expect)).length, 1, "a prior certification of a build WITHOUT L6-4 attests nothing");
+      write(dir, path.join(PRIOR_CERTIFICATIONS, "c1.json"), { verdict: "PASS", build_id: "2026-09-01-pre-l64", build_capabilities: ALL_L64 });
+      assert.deepEqual(failures(judgeRollback(dir, expect)), [], "an earlier PASSing certification of an L6-4 build attests it");
+      assert.match(failures(judgeRollback(dir, { ...expect, runningCapabilities: { ...ALL_L64, identity_restore: false } })).map((c) => c.detail).join(), /the first AWS-mode image must contain L6-4/);
+      assert.match(failures(judgeRollback(dir, { ...expect, runningCapabilities: null })).map((c) => c.name).join(), /serving image contains L6-4/);
+      fs.rmSync(path.join(dir, revisionsFile("p1")));
+      assert.match(failures(judgeRollback(dir, expect)).map((c) => c.detail).join(), /revisions-p1.json is missing/);
+    } finally {
+      cleanup(dir);
+    }
+    assert.ok(Object.values(buildCapabilities()).some((v) => v === false), "this branch does not contain L6-4, and says so");
+  });
+
+  test("the restore drill: the stop before adoption (TASK# only as operator proof) and the fencing slot; a restore-drill scenario without them FAILS", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l66-drill-"));
+    try {
+      const adoptedAt = Date.parse("2026-09-30T09:40:00Z");
+      write(dir, path.join(RESTORE_STOP_DIR, "services.json"), { services: [{ serviceName: "gs-staging-p1", desiredCount: 0, runningCount: 0, pendingCount: 0 }] });
+      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), { tasks: [] });
+      write(dir, path.join(RESTORE_STOP_DIR, "stamp.json"), { run_id: RUN, captured_at: "2026-09-30T09:30:00Z" });
+      assert.deepEqual(failures(judgeRestoreQuiet(dir, { run: RUN, adoptedAt, heartbeats: null })), []);
+      assert.match(judgeRestoreQuiet(dir, { run: RUN, adoptedAt, heartbeats: null }).map((c) => c.detail).join(), /not integrated \(L6-5A\): the stop is proven from ECS alone/);
+      assert.match(failures(judgeRestoreQuiet(dir, { run: RUN, adoptedAt, heartbeats: { integrated: true, oldGenerationAfterStop: ["t-old1"] } })).map((c) => c.detail).join(), /fresh heartbeats from t-old1/);
+      assert.match(failures(judgeRestoreQuiet(dir, { run: RUN, adoptedAt: Date.parse("2026-09-30T09:00:00Z"), heartbeats: null })).map((c) => c.detail).join(), /captured after APPGEN moved/);
+      write(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), { tasks: [{ taskArn: "arn:x/task/gs-staging/straggler", lastStatus: "RUNNING" }] });
+      assert.match(failures(judgeRestoreQuiet(dir, { run: RUN, adoptedAt, heartbeats: null })).map((c) => c.detail).join(), /still running: straggler/);
+      const cases = Object.fromEntries(RESTORE_FENCING_CASES.map((c) => [c, { observed: true, detail: "observed" }]));
+      write(dir, RESTORE_FENCING_FILE, { run_id: RUN, new_generation: 2, cases });
+      assert.deepEqual(failures(judgeRestoreFencing(dir, { run: RUN, newGeneration: 2 })), []);
+      write(dir, RESTORE_FENCING_FILE, { run_id: RUN, new_generation: 2, cases: { ...cases, "kms-side-effect-withheld": { observed: false, detail: "Sign reached KMS" } } });
+      assert.match(failures(judgeRestoreFencing(dir, { run: RUN, newGeneration: 2 })).map((c) => c.detail).join(), /NOT observed: Sign reached KMS/);
+      fs.rmSync(path.join(dir, RESTORE_FENCING_FILE));
+      assert.match(failures(judgeRestoreFencing(dir, { run: RUN, newGeneration: 2 })).map((c) => c.detail).join(), /no destructive or chain-affecting probe is part of this slice/);
+    } finally {
+      cleanup(dir);
+    }
+    const built = await buildPackage();
+    try {
+      const { result } = await verdictOf(built, { scenario: "restore-drill" });
+      for (const gate of ["restore-quiet", "restore-fence", "generation"]) assert.ok(failedGates(result).includes(gate), `${gate}: ${JSON.stringify(failedGates(result))}`);
+      const readOnly = (await verdictOf(built)).result;
+      assert.equal(readOnly.gates.find((g) => g.id === "restore-quiet")?.status, "not-required");
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+});

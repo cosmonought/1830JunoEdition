@@ -291,7 +291,8 @@ data "aws_iam_policy_document" "bootstrap" {
     resources = ["arn:${local.partition}:ecs:${local.region}:${local.account}:service/${local.prefix}/*"]
   }
   # L6-2: the flip evidence -- each pool's stopped tasks (their exit codes) and its family's ACTIVE revisions (rollback
-  # targets: the identity-layout tag) -- read only, this cluster's.
+  # targets: the identity-layout tag) -- read only, this cluster's. LIVE-6 L6-6 (converged): the staging certification's
+  # captures (each pool's running tasks, every task in the cluster, desired RUNNING and STOPPED) use this same statement.
   statement {
     sid       = "VerifierTasksOfThisCluster"
     actions   = ["ecs:ListTasks", "ecs:DescribeTasks"]
@@ -304,7 +305,7 @@ data "aws_iam_policy_document" "bootstrap" {
   }
   statement {
     sid       = "VerifierEdge"
-    actions   = ["cloudfront:GetDistributionConfig", "cloudfront:GetOriginRequestPolicy"]
+    actions   = ["cloudfront:GetDistributionConfig", "cloudfront:GetDistribution", "cloudfront:GetOriginRequestPolicy"]
     resources = ["arn:${local.partition}:cloudfront::${local.account}:distribution/*", "arn:${local.partition}:cloudfront::${local.account}:origin-request-policy/*"]
   }
   # LIVE-6 L6-5B: the alarm evidence (capture-evidence: `describe-alarms --alarm-name-prefix gs-<env>-`), read only. A

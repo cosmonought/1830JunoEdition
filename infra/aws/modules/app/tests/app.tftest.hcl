@@ -271,6 +271,10 @@ run "bootstrap_role_is_separate_and_narrow" {
     error_message = "The bootstrap role cannot sign, update, delete or scan."
   }
   assert {
+    condition     = alltrue([for s in data.aws_iam_policy_document.bootstrap.statement : alltrue([for a in s.actions : !contains(["ecs:RunTask", "ecs:StartTask", "ecs:UpdateService", "ecs:StopTask", "logs:GetLogEvents", "iam:PassRole"], a)])])
+    error_message = "LIVE-6 L6-6: the bootstrap/verify role reads the staging captures; it can start, change or stop no task."
+  }
+  assert {
     condition     = aws_iam_role.bootstrap.name == "gs-staging-bootstrap" && aws_iam_role.task.name == "gs-staging-app-task" && aws_iam_role.execution.name == "gs-staging-app-execution"
     error_message = "Role names are the ones the ledger stack grants."
   }
@@ -701,9 +705,69 @@ run "money_switch_is_explicit_and_non_mainnet" {
   }
 }
 
+run "edge_diagnostic_is_explicit_and_staging_only" {
+  command = apply
+
+  variables {
+    edge_diagnostic_staging = true
+  }
+
+  assert {
+    condition     = contains([for e in jsondecode(aws_ecs_task_definition.pool["p1"].container_definitions)[0].environment : "${e.name}=${e.value}"], "GS_EDGE_DIAGNOSTIC=staging")
+    error_message = "LIVE-6 L6-6: the staging edge mirror is an explicit, named switch."
+  }
+}
+
+run "edge_diagnostic_is_off_by_default" {
+  command = apply
+
+  assert {
+    condition     = alltrue([for id, td in aws_ecs_task_definition.pool : !contains([for e in jsondecode(td.container_definitions)[0].environment : e.name], "GS_EDGE_DIAGNOSTIC")])
+    error_message = "LIVE-6 L6-6: no task carries the edge mirror unless asked."
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /* Refusals                                                             */
 /* ------------------------------------------------------------------ */
+
+run "refuses_the_edge_diagnostic_in_prod" {
+  command = plan
+  variables {
+    environment             = "prod"
+    ledger_table_arn        = "arn:aws:dynamodb:us-east-1:222222222222:table/gs-prod-ledger"
+    edge_diagnostic_staging = true
+  }
+  expect_failures = [var.edge_diagnostic_staging]
+}
+
+run "refuses_the_edge_diagnostic_beside_mainnet_escrow" {
+  command = plan
+  variables {
+    escrow = {
+      chain_id         = "juno-1"
+      network_class    = "mainnet"
+      rest_endpoints   = ["https://a.example.net", "https://b.example.net"]
+      contract_address = "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5"
+      code_checksum    = "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"
+      wasm_admin       = null
+      denom            = "ujuno"
+      asset_symbol     = "JUNO"
+      relayer_address  = "juno1xc5etfhxjg4qfc9cx25qh3tvxdcf5skjj5epte"
+      settlement_key   = { signer_key_id = 1, public_key_hex = "03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a" }
+      admission_key    = { public_key_hex = "03f28773c2d975288bc7d1d205c3748651b075fbc6610e58cddeeddf8f19405aa8" }
+      trust = {
+        operators                 = ["juno1xc5etfhxjg4qfc9cx25qh3tvxdcf5skjj5epte"]
+        resolvers                 = ["juno1wfk5fda0sg5z2lqrpwh7wexnckpe6hqzljkt4v"]
+        min_challenge_window_secs = "3600"
+        min_liveness_window_secs  = "3600"
+        min_resolver_timeout_secs = "3600"
+      }
+    }
+    edge_diagnostic_staging = true
+  }
+  expect_failures = [var.edge_diagnostic_staging]
+}
 
 run "refuses_two_primaries" {
   command = plan

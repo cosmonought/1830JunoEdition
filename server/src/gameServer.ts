@@ -68,6 +68,7 @@ import { GAME_ID_PATTERN, seatOf, type GameRecord } from "./rooms/gameRecord";
 import { isMaintenanceHold, type CommittedView } from "./rooms/committedView";
 import { createMemoryHoldStore, HoldUnreadableError, makeHold, type HoldStore } from "./rooms/holdStore";
 import { handleReadiness, type ReadinessAnswer } from "./ingress/readiness";
+import { handleEdgeDiagnostic } from "./ingress/edgeDiagnostic";
 import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILING_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE, type SettlementLifecycle } from "./rooms/lifecycle";
 import { NO_MONEY_FACTS, type MoneyContinuationFacts } from "./escrow/moneyContinuation";
 /* LIVE-4 (L4-2): this pool's capability and the continuation answers every game's session is given. */
@@ -310,6 +311,9 @@ export interface GameServerOptions {
    *  startup, shutting down). Absent: no such route; PROCESS mode is unchanged. `/gs/healthz` (liveness) is unchanged
    *  either way. */
   readiness?: () => ReadinessAnswer;
+  /** LIVE-6 L6-6: `/gs/diag/edge` (`ingress/edgeDiagnostic.ts`) -- the staging certification's edge mirror (AWS storage
+   *  mode with `GS_EDGE_DIAGNOSTIC=staging` only). Absent: no such route; every other start is unchanged. */
+  edgeDiagnostic?: { readonly trustedProxyHops: number };
   /** LIVE-5 L5-7: the address the server listens on. Absent: `GAME_SERVER_BIND_HOST` (loopback, LIVE-0) -- every
    *  PROCESS-mode start. AWS storage mode binds its task's own interface (awsvpc), reached only through the load
    *  balancer. */
@@ -1476,6 +1480,8 @@ export function createGameServer(options: GameServerOptions): {
   const http = createServer((req, res) => {
     /* LIVE-5 L5-7: readiness first (AWS storage mode only): it reads no body and no identity. */
     if (options.readiness !== undefined && handleReadiness(req, res, options.readiness)) return;
+    /* LIVE-6 L6-6: the staging edge mirror (mounted only by the AWS runtime's staging switch): no body, no identity. */
+    if (options.edgeDiagnostic !== undefined && handleEdgeDiagnostic(req, res, options.edgeDiagnostic)) return;
     if (
       handleMoneyHttp(
         req,

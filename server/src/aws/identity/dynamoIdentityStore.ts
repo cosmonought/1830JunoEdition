@@ -680,14 +680,19 @@ export interface IdentityRoleTakeover {
 
 /** LIVE-6 L6-4: why this table may not SERVE now (its restore marker and its own name, strongly; `null`: it may). */
 export async function identityServingProblem(client: DynamoDBClient, table: string): Promise<string | null> {
-  const answer = await client.send(new GetItemCommand({ TableName: table, Key: keyAttributes(keys.self()), ConsistentRead: true }), { abortSignal: deadline() });
-  let self: string | null = null;
-  if (answer.Item !== undefined) {
-    const decoded = decodeItem(answer.Item as Item);
-    if ("problem" in decoded || decoded.kind !== "self") throw new IdentityStoreCorruptError(`identity table ${table}: the table-name item is not well-formed`);
-    self = decoded.record.identity_table;
-  }
+  const self = await readIdentityTableSelf(client, table);
   return restoreLoadProblem(await readIdentityRestore(client, table), undefined, table, self);
+}
+
+/** LIVE-6 L6-4: the table's own name as its `TABLE#identity` item states it, strongly (`null`: no serving takeover has
+ *  bound it yet). Strict: damage throws. (LIVE-6 final convergence: exported, unchanged, for the staging certification's
+ *  identity binding -- `identityServingProblem` reads it exactly so.) */
+export async function readIdentityTableSelf(client: DynamoDBClient, table: string): Promise<string | null> {
+  const answer = await client.send(new GetItemCommand({ TableName: table, Key: keyAttributes(keys.self()), ConsistentRead: true }), { abortSignal: deadline() });
+  if (answer.Item === undefined) return null;
+  const decoded = decodeItem(answer.Item as Item);
+  if ("problem" in decoded || decoded.kind !== "self") throw new IdentityStoreCorruptError(`identity table ${table}: the table-name item is not well-formed`);
+  return decoded.record.identity_table;
 }
 
 /** LIVE-6 L6-4: the restore marker, strongly (`null`: the table was never restored). Strict: damage throws. */

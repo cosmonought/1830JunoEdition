@@ -88,6 +88,18 @@ export interface AppGenerationFacts {
   readonly adoption: { readonly previous_generation: number; readonly adopted_at: number; readonly adopted_by: string; readonly restore_id: string; readonly game_table: string; readonly claim: string } | null;
 }
 
+/** `aws/ledger/appGeneration.ts` `AdoptionRecord` (L6-4): `APPGEN#HISTORY / GEN#<generation>`, the adoption's own history
+ *  item (its one transaction wrote it with APPGEN; the claim is that transaction's token). */
+export interface AdoptionRecordFacts {
+  readonly generation: number;
+  readonly previous_generation: number;
+  readonly adopted_at: number;
+  readonly adopted_by: string;
+  readonly restore_id: string;
+  readonly game_table: string;
+  readonly claim: string;
+}
+
 /** `aws/identity/identityItems.ts` `RestoreRecord` (L6-4). */
 export interface IdentityRestoreFacts {
   readonly restore_id: string;
@@ -127,6 +139,11 @@ export type Read<T> = { readonly ok: true; readonly value: T } | { readonly ok: 
  *                               servingProblem: identityServingProblem }          (aws/identity/dynamoIdentityStore.ts)
  *   reviews                   inspectIdentityRestore(...).reviews.map(r => ({ restore_id: r.restore_id, reason: r.reason,
  *                               open: r.resolved_at === null }))                  (aws/identity/identityRestore.ts)
+ *   adoptionRecord            readAdoptionRecord                                     (aws/ledger/appGeneration.ts)
+ *                               -- LIVE-6 final convergence: the generation-gate record's `adoption_claim` is certified
+ *                               against the ledger's own APPGEN#HISTORY/GEN#<new> (a plain JSON record is not integrity)
+ *
+ * BOUND (LIVE-6 final convergence, `live6/live-closure-candidate`): `tools/awsDeploy.ts` binds every member above.
  */
 export interface RecoveryReaders {
   /** `readGenerationMarker` (null: no item; throws for an item it cannot read). */
@@ -140,6 +157,8 @@ export interface RecoveryReaders {
   readonly identityState: (client: DynamoDBClient, identityTable: string) => Promise<{ readonly restore: IdentityRestoreFacts | null; readonly self: string | null; readonly servingProblem: string | null }>;
   /** Every REVIEW# record, summarised (L6-4's strict decoder; the summary drops every identifying field). */
   readonly reviews: (client: DynamoDBClient, identityTable: string) => Promise<readonly ReviewSummary[]>;
+  /** `readAdoptionRecord` (null: no adoption of that generation was ever made; throws for an item it cannot read). */
+  readonly adoptionRecord: (client: DynamoDBClient, ledgerTable: string, generation: number) => Promise<AdoptionRecordFacts | null>;
 }
 
 export const NOT_INTEGRATED = "L6-4's readers are not bound in this build (the integration of L6-4 and L6-6 binds them): the gate cannot be certified";
@@ -178,12 +197,18 @@ export interface GenerationEvidence {
   readonly appgen: Read<AppGenerationFacts | null> | null;
   /** L6-4's own startup rule over exactly what was read (null: not integrated). A throw is an unreadable answer. */
   readonly startupRule: ((expected: { readonly generation: number; readonly gameTable: string }) => Read<string | null>) | null;
+  /** LIVE-6 final convergence: APPGEN#HISTORY/GEN#<APPGEN's current generation>, read only when APPGEN was read and is
+   *  ADOPTED (absent / null: not read -- never adopted, or not integrated). */
+  readonly history?: Read<AdoptionRecordFacts | null> | null;
 }
 
 export async function readGenerationEvidence(readers: RecoveryReaders | undefined, clients: { readonly app: DynamoDBClient; readonly ledger: DynamoDBClient }, tables: { readonly game: string; readonly ledger: string }): Promise<GenerationEvidence> {
   if (readers === undefined) return { integrated: false, marker: null, appgen: null, startupRule: null };
   const marker = await settle(() => readers.generationMarker(clients.app, tables.game));
   const appgen = await settle(() => readers.appGeneration(clients.ledger, tables.ledger));
+  /* The adoption's own history item (one transaction wrote it with APPGEN): only for an adopted APPGEN. */
+  const adopted = appgen.ok && appgen.value !== null && appgen.value.adoption !== null ? appgen.value.current_generation : null;
+  const history = adopted === null ? null : await settle(() => readers.adoptionRecord(clients.ledger, tables.ledger, adopted));
   const startupRule = (expected: { readonly generation: number; readonly gameTable: string }): Read<string | null> => {
     if (!marker.ok || !appgen.ok) return { ok: false, unreadable: "the marker or APPGEN was not read" };
     try {
@@ -194,7 +219,7 @@ export async function readGenerationEvidence(readers: RecoveryReaders | undefine
       return { ok: false, unreadable: describeError(error) };
     }
   };
-  return { integrated: true, marker, appgen, startupRule };
+  return { integrated: true, marker, appgen, startupRule, history };
 }
 
 /** The marker's own form (L6-4's parser enforces it; restated so a reader bound wrongly cannot slip past the gate). */
@@ -548,6 +573,35 @@ export interface HeartbeatEvidence {
   readonly integrated: boolean;
   /** Heartbeats seen after the stop, from tasks of the OLD generation (task ids only). */
   readonly oldGenerationAfterStop: readonly string[];
+  /** LIVE-6 final convergence: why the heartbeats could not be read (an unreadable table is never "no heartbeat": FAIL). */
+  readonly problem?: string;
+}
+
+/**
+ * LIVE-6 final convergence: the TASK# reader the integration binds (`aws/runtime/taskHeartbeats.ts`
+ * `oldGenerationHeartbeatsAfter`): the task ids of generation `generation` whose heartbeat in `table` (that generation's own
+ * game table) was written after `after` (ms). Throws when the table cannot be read completely or an item decoded.
+ */
+export type TaskHeartbeatReader = (client: DynamoDBClient, table: string, expect: { readonly generation: number; readonly after: number }) => Promise<readonly string[]>;
+
+/**
+ * The restore drill's heartbeat evidence: the PREVIOUS generation's table (the adoption's `previous_generation`), fresh
+ * after the restore-stop capture (`restore-stop/stamp.json` `captured_at`). Unbound reader: null (the gate then says the
+ * stop is proven from ECS alone). No adoption, no stamp time, or a failed read: integrated, with the PROBLEM (FAIL).
+ */
+export async function readRestoreHeartbeats(reader: TaskHeartbeatReader | undefined, client: DynamoDBClient, input: { readonly dir: string; readonly adoption: AdoptionFacts | null; readonly tableOf: (generation: number) => string }): Promise<HeartbeatEvidence | null> {
+  if (reader === undefined) return null;
+  const ad = input.adoption;
+  if (ad === null) return { integrated: true, oldGenerationAfterStop: [], problem: "APPGEN shows no adoption: the previous generation is not known" };
+  const stamp = readEvidence(input.dir, path.join(RESTORE_STOP_DIR, "stamp.json"));
+  const after = stamp.ok ? Date.parse(String(obj(stamp.value).captured_at)) : Number.NaN;
+  if (!Number.isFinite(after)) return { integrated: true, oldGenerationAfterStop: [], problem: `no restore-stop time (${stamp.ok ? "restore-stop/stamp.json has no captured_at" : stamp.problem})` };
+  try {
+    const ids = await reader(client, input.tableOf(ad.previous_generation), { generation: ad.previous_generation, after });
+    return { integrated: true, oldGenerationAfterStop: Array.isArray(ids) ? ids.map((t) => String(t)) : (ids as never) };
+  } catch (error) {
+    return { integrated: true, oldGenerationAfterStop: [], problem: `the old generation's TASK# items could not be read completely (${describeError(error)})` };
+  }
 }
 
 /** APPGEN's adoption, as the drill gates bind to it (null: never adopted, or not read). */
@@ -611,7 +665,15 @@ export function judgeRestoreQuiet(dir: string, expect: { readonly run: string; r
   ];
   if (expect.heartbeats !== null && expect.heartbeats.integrated) {
     const hb = Array.isArray(expect.heartbeats.oldGenerationAfterStop) ? expect.heartbeats.oldGenerationAfterStop : null;
-    checks.push(judge("restore: no old-generation TASK# heartbeat after the stop (operator proof, not a lease)", hb !== null && hb.length === 0, "none", hb === null ? "the heartbeat answer is not a list" : `fresh heartbeats from ${hb.map((t) => String(t)).join(", ")}`));
+    const problem = expect.heartbeats.problem;
+    checks.push(
+      judge(
+        "restore: no old-generation TASK# heartbeat after the stop (operator proof, not a lease)",
+        problem === undefined && hb !== null && hb.length === 0,
+        "none (no heartbeat proves nothing: the stop is ECS's listing above)",
+        problem !== undefined ? `unreadable: ${restoreSafe(problem)}` : hb === null ? "the heartbeat answer is not a list" : `fresh heartbeats from ${hb.map((t) => String(t)).join(", ")}`,
+      ),
+    );
   } else {
     /* Said in the report, never silently absent: the stop is proven from ECS alone until L6-5A's TASK# is integrated. A
        missing or stale TASK# never proves a task stopped: ECS's listing above is what proves it. */

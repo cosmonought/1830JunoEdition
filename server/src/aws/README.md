@@ -651,3 +651,21 @@ nothing: no fence, readiness, exit code or audit line changes; the runtime never
 Run: `npm test` includes `persistence/conformance/l6_5bAlarms.test.js` (and L6-5B's block in `aws/runtime/l6_5aObservability.test.js`);
 `npm run test:dynamodb-local` includes the §3c suppression drill in `persistence/conformance/l6_2Flip.dynamoLocal.test.js`;
 `terraform test` in `infra/aws/modules/app` includes `tests/alarms.tftest.hcl`.
+
+## 16. The staging certification, converged (LIVE-6 final convergence): `aws/deploy/staging/`, `tools/awsDeploy.ts`
+
+L6-6's harness with L6-6R's recovery review and L6-6P's complete cluster listing, on the converged LIVE runtime (L5-7 ...
+L6-7): every gate judges with the owning slice's own code. The report: Project
+`claude/LIVE6_FINAL_CONVERGENCE_2026-09-30.md`; the procedures: `infra/aws/README.md` "Staging certification".
+
+| File | What it is |
+|---|---|
+| `tools/awsDeploy.ts` | The ONE binding: `STAGING_RECOVERY_READERS` = L6-4's `readGenerationMarker`, `readAppGeneration`, the runtime's step 1 (`generationMarkerProblem` then `adoptionBindingProblem`), `readIdentityRestore` + `readIdentityTableSelf` + `identityServingProblem`, `inspectIdentityRestore`'s REVIEW# as `{restore_id, reason, open}` only, `readAdoptionRecord`; `STAGING_HEARTBEATS` = `runtime/taskHeartbeats.ts`. The import guard admits exactly these names. |
+| `runtime/taskHeartbeats.ts` | The TASK# item's ONE reader (never the runtime's): the PREVIOUS generation's game table, strongly consistent, every page, decoded by `taskStatus.ts`'s `decodeTaskStatusItem` (the writer's exact inverse); a heartbeat of generation N after the restore-stop's `captured_at` fails restore-quiet; an unreadable table throws. Diagnostic only, never a lease. |
+| `deploy/staging/drills.ts` | The converged gates: `alarms` (L6-5B's `checkAlarmsEvidence` + the capture's and the alarms' identity), `generation-gate` (L6-5B's `generationAttestationProblem` + the record's `adoption_claim` against the ledger's `APPGEN#HISTORY`), `flip` / `flip-alarms` (L6-2's record, `checkRoleChange`, `checkPoolListenerRules`, the complete listing; the drill's alarm observations), `relayer-rotation` (L6-5B's `rotationGateRecordProblem` + drained / old-queue / new-queue / ordering), `restore-alarms` (R1, A4g, A4i, R2, R3 observed firing, never suppressed). |
+| `deploy/staging/recovery.ts` | L6-6R's gates, now fed live: `GenerationEvidence.history` (APPGEN#HISTORY of APPGEN's adoption) and `readRestoreHeartbeats` (the TASK# seam). |
+| `identity/dynamoIdentityStore.ts` | `readIdentityTableSelf` (exported, unchanged: what `identityServingProblem` has always read). |
+
+Run: `npm test` includes `aws/deploy/staging/l6_6StagingCert.test.js` (the convergence block at its end), `aws/awsClients.test.js`
+(the binding's exact names) and `aws/runtime/l6_5aObservability.test.js` (the decoder, the widened TASK# guard);
+`npm run test:dynamodb-local` includes `persistence/conformance/l6FinalConvergence.dynamoLocal.test.js`.

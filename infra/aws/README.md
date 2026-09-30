@@ -73,12 +73,19 @@ pin those endpoints (`awsClients.ts`).
 | `gs-<env>-app-task` | Used by the application, and the only credential source a task has. Game table: GetItem, Query, Scan, ConditionCheckItem; Put, Update and Delete on any partition except `SYSTEM`. Identity table: GetItem, Scan, ConditionCheckItem, Put, Update, Delete. Ledger: GetItem, Query, ConditionCheckItem, and PutItem except `APPGEN`. KMS GetPublicKey, plus Sign with ECDSA_SHA_256 over a DIGEST. `ssm:GetParameter` on the two documents. No `*` resource. |
 | `gs-<env>-operator` (L6-2; only with `operator_trusted_principal_arns`) | `gamesDoctor aws`: game table GetItem/Query/Scan; PutItem on `SYSTEM/*` and `OPRUN#*` (the routing CAS, the run's evidence) and UpdateItem on `GAME#*` / `POOL#op:*` (an operator run's claim / take / release) -- never another `POOL#`; identity-writer role GetItem; ledger GetItem + Scan (read-only); GetParameter on the documents. No KMS, no identity write, no APPGEN. |
 | `gs-<env>-recovery` (L6-2 for L6-4; only with `recovery_trusted_principal_arns`) | `npm run recovery`: APPGEN adoption and its `APPGEN#HISTORY` append (ledger), the restored table's `SYSTEM/GENERATION`, the identity replay's tables. `RestoreTableToPointInTime` only with `recovery_break_glass`. Serving tasks never hold any of it. |
-| `gs-<env>-bootstrap` | Used by the pipeline or an operator. PutItem and GetItem **only** on `SYSTEM/*` of the game table and `APPGEN` of the ledger (`dynamodb:LeadingKeys`). Describe on the three tables, GetParameter on the documents, and KMS DescribeKey, GetPublicKey and ListGrants. Read-only describes for the verifier: `ecs:DescribeTaskDefinition`, `elasticloadbalancing:Describe*` and `ec2:DescribeSecurityGroups*` (all `*`, because AWS cannot scope them), `ecs:DescribeServices` on this cluster, and CloudFront GetDistributionConfig and GetOriginRequestPolicy; since L6-2 also GetItem on `SYSTEM/GENERATION` and `APPGEN#HISTORY`, ListTasks/DescribeTasks on this cluster, ListTaskDefinitions and DescribeTargetHealth. It has no Sign, no Update, no Delete and no Scan. |
+| `gs-<env>-bootstrap` | Used by the pipeline or an operator. PutItem and GetItem **only** on `SYSTEM/*` of the game table and `APPGEN` of the ledger (`dynamodb:LeadingKeys`). Describe on the three tables, GetParameter on the documents, and KMS DescribeKey, GetPublicKey and ListGrants. Read-only describes for the verifier: `ecs:DescribeTaskDefinition`, `elasticloadbalancing:Describe*` and `ec2:DescribeSecurityGroups*` (all `*`, because AWS cannot scope them), `ecs:DescribeServices` on this cluster, and CloudFront GetDistributionConfig and GetOriginRequestPolicy; since L6-2 also GetItem on `SYSTEM/GENERATION` and `APPGEN#HISTORY`, ListTasks/DescribeTasks on this cluster, ListTaskDefinitions and DescribeTargetHealth; since L6-6 CloudFront GetDistribution. It has no Sign, no Update, no Delete, and no Scan except (LIVE-6 final convergence) `RestoreQuietOldGenerationHeartbeats`: Scan on the NON-serving managed generations' game tables only (a restore drill's old-generation TASK# heartbeats), never the serving table, identity or the ledger. |
 
 **L6-5B additions:** `gs-<env>-operator` may `cloudwatch:PutMetricData` **only** into `18Cosmos/Operator` (the planned-flip
 window's suppressor datapoints) -- never a game-server metric, and no role may disable, set, rewrite or delete an alarm
 from the application side; `gs-<env>-bootstrap` may `cloudwatch:DescribeAlarms` (the verifier's evidence). The task role
 gains nothing: its metrics are EMF lines on stdout through its log group.
+
+**LIVE-6 final convergence -- the certifier / verifier role is the union of READ authority only** (`gs-<env>-bootstrap`):
+ECS service / task / deployment inspection, ELB target health, the CloudFront configuration, `DescribeAlarms`, the
+`SYSTEM/GENERATION` / routing / APPGEN / `APPGEN#HISTORY` reads, `RELAYQ#<old>` by Query, the ledger's verification, and the
+old generation's TASK# Scan. It can start, stop or change no task or service, sign nothing, and make no gameplay, recovery,
+flip, alarm or deployment mutation (pinned by `app.tftest.hcl`); its only writes remain L5-8's first-start bootstrap (the
+create-if-absent `SYSTEM/*` and `APPGEN`). The identity recovery state is read by the certifier task (the task role).
 
 The DynamoDB transactions are authorised per underlying action (Put, Update, Delete, ConditionCheckItem, GetItem), so
 these lists are complete. The `LeadingKeys` exclusions on `SYSTEM` and `APPGEN` are **defence in depth**, not the safety
@@ -414,11 +421,54 @@ revision" -- attested by image (the task definition's reference and the digest E
 earlier PASSing certification of the same environment copied into `prior-certifications/` (L6-6R) -- so EVERY pool runs
 at least one task during a certification (a pool at desired 0 shows ECS no digest, and its task definition names a tag,
 which is not evidence of content: its rollback target FAILS unless pinned `@sha256:`) -- and for a restore drill the stop
-before `adopted_at` and the fencing slot. Until the integration binds L6-4's readers, those gates
-FAIL "not integrated".
+before `adopted_at` and the fencing slot. **Bound (LIVE-6 final convergence):** `tools/awsDeploy.ts` binds L6-4's own
+readers and startup rule (`readGenerationMarker`, `readAppGeneration`, `generationMarkerProblem` then
+`adoptionBindingProblem` in the runtime's order, `readIdentityRestore` + `readIdentityTableSelf` + `identityServingProblem`,
+`inspectIdentityRestore`'s REVIEW# mapped to `{restore_id, reason, open}` only, `readAdoptionRecord`), so these gates are
+live; an unbound build would still FAIL them "not integrated".
 
 The first line of `CERTIFICATION.txt` (and of the command's output) is `LIVE-6 AWS STAGING CERTIFICATION: PASS` or `FAIL`,
 then every failed gate. `certification.json` and `MANIFEST.json` (SHA-256 of every file) sit beside it.
+
+### The converged gates and drills (LIVE-6 final convergence, `aws/deploy/staging/drills.ts`)
+
+Every gate judges with the owning slice's own code; nothing restates a contract. `stage-cert` also takes the verifier's
+L6-5B flags (`--game-generations`, `--page-actions <arns>|none`, `--ticket-actions <arns>|none`; staging may use `none`).
+
+| Gate | Scenario | Evidence (in the run's directory) | What it proves |
+|---|---|---|---|
+| `alarms` | every | `alarms.json`, `manifest.json`, `capture.json` | L6-5B's `checkAlarmsEvidence` (every contract alarm, its metrics / math, namespace, `Environment` / `Pool` dimensions only, primary scope, class wiring, suppression wiring, `ActionsEnabled`, no suppressor stuck in ALARM outside an active window, nothing unknown in the game-server namespace), judged at the capture's time; the capture is this environment's and these pools'; every contract alarm's ARN is this account's, this region's, by its stable name. Never a BUILD_ID. |
+| `generation-gate` | restore-drill | `gate-generation.json` (`awsDeploy generation-gate ... --record <dir>/gate-generation.json`), `terraform/app/plan.json` | L6-5B's `generationAttestationProblem` against the plan's own `generation_adoption`, AND the record's `adoption_claim` = the ledger's `APPGEN#HISTORY / GEN#<new>` claim = APPGEN's, read live (read-only) through L6-4's `readAdoptionRecord`. Terraform itself still reads nothing cross-account. |
+| `restore-alarms` | restore-drill | `probe-restore-alarms.json` (`18COSMOS/L6-6-RESTORE-ALARM-DRILL/v1`) | R1, A4g, A4i, R2 and R3 each fired under its injected condition with no action suppression; at least one while a flip window overlapped it. No restore suppression window exists. |
+| `restore-quiet` (L6-6R) | restore-drill | `restore-stop/` + the live TASK# read | as before, plus L6-5A's `TASK#` items of the PREVIOUS generation's table (strongly consistent, paginated Scan, decoded strictly): a heartbeat of generation N written after the stop's `captured_at` FAILS; none proves nothing (ECS's listing is the stop proof); an unreadable table FAILS. TASK# is never a lease. |
+| `flip` | flip-drill | `flip-record.json` (L6-2's record: `gamesDoctor aws flip ... --flip-record <dir>/flip-record.json`, then `flip-observe` / `recover --flip-record` with the same file), the per-pool captures, `cluster-tasks.json`, `listener-rules.json` | the window opened BEFORE the routing CAS; the CAS applied (version N+1) and the roles settled; both pools restarted into their roles (L6-2's `checkRoleChange`: exit 5, a replacement) and the singleton roles are on the new primary; no service task of either pool stopped with exit 3 or 4 since the window opened (the COMPLETE cluster listing); `/gs*` on the new primary and every pool's exact route (L6-2's `checkPoolListenerRules`); the recovery of the old epoch settled (it closed the window); the suppression published, at most 45 minutes, ended before the capture (+5 min tail). |
+| `flip-alarms` | flip-drill | `probe-flip-alarms.json` (`18COSMOS/L6-6-FLIP-ALARM-DRILL/v1`) | an exit 3 inside the window still tripped A1 (actions not suppressed); a suppressible alarm still failing after the window became actionable (`ActionsSuppressedBy` `Alarm` during, `None` after); only the flip's two pools' suppressors were ALARM during it. |
+| `relayer-rotation` | relayer-rotation-drill (`--from-relayer <old> --to-relayer <new>`) | `gate-relayer-rotation.json` (`awsDeploy relayer-rotation-gate ... --record <dir>/gate-relayer-rotation.json`, BEFORE the change) | L6-5B's `rotationGateRecordProblem`; every pool of this deployment drained at the gate; `RELAYQ#<old>` read completely and empty; `RELAYQ#<new>` never consulted; the configuration changed only afterwards (the gate saw the old address, the live document names the new one, every running task started after the gate). Unknown / unreadable = FAIL; no automatic queue migration. |
+
+**A planned primary DRAIN is not a flip** (owner decision): no suppression covers it, and A13 may page. No maintenance
+window exists. **Never suppressed, and certified so** (`alarms`): A1, the store alarms, the money sweep, generation /
+adoption and identity-restore refusals, the relayer page (A15) and R1-R3.
+
+**Flip drill order:** capture, `gamesDoctor aws flip A B --expect-version N --evidence <dir> --flip-record <dir>/flip-record.json
+--apply`; `terraform apply` with `pools.B.primary = true`; during the window inject one exit 3 (a standalone task, not a flip
+pool's service task) and keep one suppressible condition of a flip pool failing past the window's end, recording both into
+`probe-flip-alarms.json`; `gamesDoctor aws recover A --apply --flip-record <dir>/flip-record.json` until RECOVERY SETTLED;
+after the window's end + 5 min, steps 1-7 with `--scenario flip-drill --primary-pool B`.
+
+**Relayer rotation drill order:** drain the old relayer's queue, drain every pool, capture, `awsDeploy relayer-rotation-gate
+... --evidence <dir> --record <dir>/gate-relayer-rotation.json` (GATE OPEN), only then change the relayer configuration
+(Terraform `escrow`) and start the pools, then steps 1-7 with `--scenario relayer-rotation-drill --from-relayer <old>
+--to-relayer <new>`.
+
+**Restore drill additions:** before the switch, `awsDeploy generation-gate ... --record <dir>/gate-generation.json`; plan with
+the printed `generation_adoption`; record `probe-restore-alarms.json`. The certifier (verifier) role may Scan only the
+NON-serving managed generations' game tables (the old generation's TASK# items; `RestoreQuietOldGenerationHeartbeats`).
+
+**Windows real-AWS staging requires AWS CLI v2 (`aws.exe`).** The capture scripts describe up to 100 task ARNs per
+`describe-tasks` call (about 8.4k characters); a pip-installed CLI v1 (`aws.cmd`) runs through `cmd.exe`, whose command-line
+limit that exceeds. Such an invocation FAILS CLOSED (the script throws, no `capture.json` is written, the certification
+refuses the package) -- batching and completeness are never weakened to accommodate it. `capture-restore-stop.ps1` has the
+same limit. Use CLI v2 (`aws --version` must print `aws-cli/2.`).
 
 ## Secrets
 

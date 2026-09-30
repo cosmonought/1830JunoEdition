@@ -12,7 +12,15 @@ import { createDynamoDbClient, createKmsClient } from "../aws/awsClients";
 import { runDeployCommand, type DeployDeps } from "../aws/deploy/commands";
 import { nodeEdgeTransport } from "../aws/deploy/staging/edgeProbe";
 import { stageCertCommand, stageProbeCommand, type StagingDeps } from "../aws/deploy/staging/commands";
+import type { RecoveryReaders, ReviewSummary as StagingReviewSummary } from "../aws/deploy/staging/recovery";
 import { kmsDigestClientFor, ssmParameterSourceFor } from "../aws/deploy/wiring";
+/* LIVE-6 final convergence: L6-4's canonical READERS and startup rule, bound for the staging certification (never a
+   second parser; the import guard admits exactly these names for this file), and L6-5A's one TASK# reader. */
+import { adoptionBindingProblem, generationMarkerProblem, readGenerationMarker } from "../aws/game/generationMarker";
+import { identityServingProblem, readIdentityRestore, readIdentityTableSelf } from "../aws/identity/dynamoIdentityStore";
+import { inspectIdentityRestore } from "../aws/identity/identityRestore";
+import { readAdoptionRecord, readAppGeneration } from "../aws/ledger/appGeneration";
+import { oldGenerationHeartbeatsAfter } from "../aws/runtime/taskHeartbeats";
 
 const deps: DeployDeps = {
   parameters: ssmParameterSourceFor(),
@@ -26,9 +34,39 @@ const deps: DeployDeps = {
   out: (line) => console.log(line),
 };
 
+/**
+ * LIVE-6 final convergence: `StagingDeps.recovery` bound to L6-4's own functions (L6-6R §7's reviewed contract):
+ *   generationMarker          readGenerationMarker
+ *   appGeneration             readAppGeneration
+ *   generationServingProblem  the runtime's step 1 (`awsRuntime.ts`), in its order: APPGEN = the document's generation,
+ *                             then generationMarkerProblem, then adoptionBindingProblem over APPGEN's adoption
+ *   identityState             readIdentityRestore + TABLE#identity's own name (readIdentityTableSelf) + identityServingProblem
+ *   reviews                   inspectIdentityRestore(...).reviews -> { restore_id, reason, open: resolved_at === null } ONLY
+ *   adoptionRecord            readAdoptionRecord (the generation-gate record's claim against APPGEN#HISTORY)
+ */
+export const STAGING_RECOVERY_READERS: RecoveryReaders = {
+  generationMarker: (client, table) => readGenerationMarker(client, table),
+  appGeneration: (client, table) => readAppGeneration(client, table),
+  generationServingProblem: (marker, appgen, expected) => {
+    if (appgen === null) return "the ledger has no adopted app generation (APPGEN): an operator initialises it before the first start (L5-8 / runbook)";
+    if (appgen.current_generation !== expected.generation) return `the ledger's adopted app generation is ${String(appgen.current_generation)}, not this task's ${expected.generation}: a task pointed at a superseded or unadopted game table does not start`;
+    const markerProblem = generationMarkerProblem(marker, expected);
+    if (markerProblem !== null) return markerProblem;
+    return adoptionBindingProblem(marker as NonNullable<typeof marker>, appgen.adoption === null ? null : { game_table: appgen.adoption.game_table, restore_id: appgen.adoption.restore_id });
+  },
+  identityState: async (client, table) => ({ restore: await readIdentityRestore(client, table), self: await readIdentityTableSelf(client, table), servingProblem: await identityServingProblem(client, table) }),
+  reviews: async (client, table): Promise<readonly StagingReviewSummary[]> => (await inspectIdentityRestore(client, table)).reviews.map((r) => ({ restore_id: r.restore_id, reason: r.reason, open: r.resolved_at === null })),
+  adoptionRecord: (client, table, generation) => readAdoptionRecord(client, table, generation),
+};
+
 /* LIVE-6 L6-6: the staging certification (`aws/deploy/staging/`). The repository is this build's own checkout
    (dist/server/src/tools -> the repository root), for the committed Terraform lock files. */
+/** L6-5A/L6-5B's TASK# items as L6-6R's restore-quiet heartbeat evidence (operator proof only, never a lease). */
+export const STAGING_HEARTBEATS: NonNullable<StagingDeps["heartbeats"]> = (client, table, expect) => oldGenerationHeartbeatsAfter(client, table, expect);
+
 const staging: StagingDeps = {
+  recovery: STAGING_RECOVERY_READERS,
+  heartbeats: STAGING_HEARTBEATS,
   env: process.env,
   monotonic: () => performance.now(),
   edge: nodeEdgeTransport(),
@@ -56,14 +94,17 @@ const staging: StagingDeps = {
   },
 };
 
-runDeployCommand(process.argv.slice(2), deps, {
-  "stage-cert": (argv) => stageCertCommand(argv, deps, staging),
-  "stage-probe": (argv) => stageProbeCommand(argv, deps, staging),
-}).then(
-  (code) => process.exit(code),
-  (error) => {
-    // eslint-disable-next-line no-console
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  },
-);
+/* The CLI runs only as the entry (LIVE-6 final convergence: the DynamoDB Local suite imports the binding above). */
+if (require.main === module) {
+  runDeployCommand(process.argv.slice(2), deps, {
+    "stage-cert": (argv) => stageCertCommand(argv, deps, staging),
+    "stage-probe": (argv) => stageProbeCommand(argv, deps, staging),
+  }).then(
+    (code) => process.exit(code),
+    (error) => {
+      // eslint-disable-next-line no-console
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
+}

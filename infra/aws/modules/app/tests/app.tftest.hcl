@@ -268,11 +268,20 @@ run "bootstrap_role_is_separate_and_narrow" {
   }
   assert {
     condition     = alltrue([for s in data.aws_iam_policy_document.bootstrap.statement : alltrue([for a in s.actions : !contains(["kms:Sign", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:Scan"], a)])])
-    error_message = "The bootstrap role cannot sign, update, delete or scan."
+    error_message = "The bootstrap role cannot sign, update, delete or scan (one serving generation: no old table to scan)."
   }
   assert {
     condition     = alltrue([for s in data.aws_iam_policy_document.bootstrap.statement : alltrue([for a in s.actions : !contains(["ecs:RunTask", "ecs:StartTask", "ecs:UpdateService", "ecs:StopTask", "logs:GetLogEvents", "iam:PassRole"], a)])])
     error_message = "LIVE-6 L6-6: the bootstrap/verify role reads the staging captures; it can start, change or stop no task."
+  }
+  assert {
+    condition = alltrue([for s in data.aws_iam_policy_document.bootstrap.statement : alltrue([for a in s.actions : !contains([
+      "dynamodb:TransactWriteItems", "dynamodb:BatchWriteItem", "kms:CreateGrant", "kms:ScheduleKeyDeletion",
+      "cloudwatch:PutMetricData", "cloudwatch:SetAlarmState", "cloudwatch:DisableAlarmActions", "cloudwatch:EnableAlarmActions", "cloudwatch:PutMetricAlarm", "cloudwatch:DeleteAlarms",
+      "ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition", "elasticloadbalancing:ModifyRule", "elasticloadbalancing:ModifyListener", "cloudfront:UpdateDistribution",
+      "dynamodb:RestoreTableToPointInTime", "ssm:PutParameter",
+    ], a)])])
+    error_message = "LIVE-6 final convergence: the verifier role has no gameplay, recovery, flip, alarm or deployment mutation."
   }
   assert {
     condition     = aws_iam_role.bootstrap.name == "gs-staging-bootstrap" && aws_iam_role.task.name == "gs-staging-app-task" && aws_iam_role.execution.name == "gs-staging-app-execution"
@@ -535,6 +544,30 @@ run "generations_side_by_side_the_old_one_kept_protected" {
   assert {
     condition     = toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "GameTableReadAndCheck"]).resources) == toset(["arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1", "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g2"])
     error_message = "The task role reaches every managed generation (g<N+1> before its tasks start; g<N> while an old task may run)."
+  }
+}
+
+run "the_verifier_scans_only_the_old_generation_for_heartbeats" {
+  state_key = "generations" # its own state: g2 is prevent_destroy (a later run without it would have to destroy it)
+
+  command = plan
+
+  variables {
+    generation       = 2
+    game_generations = [1, 2]
+  }
+
+  assert {
+    condition     = one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RestoreQuietOldGenerationHeartbeats"]).actions == toset(["dynamodb:Scan"]) && toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RestoreQuietOldGenerationHeartbeats"]).resources) == toset(["arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1"])
+    error_message = "LIVE-6 final convergence: the certifier/verifier role scans the PREVIOUS generation's game table (its TASK# heartbeats) and nothing else."
+  }
+  assert {
+    condition     = alltrue([for s in data.aws_iam_policy_document.bootstrap.statement : s.sid == "RestoreQuietOldGenerationHeartbeats" || !contains(s.actions, "dynamodb:Scan")])
+    error_message = "No other bootstrap statement scans: never the serving table, the identity table or the ledger."
+  }
+  assert {
+    condition     = alltrue([for s in data.aws_iam_policy_document.task.statement : s.sid != "RestoreQuietOldGenerationHeartbeats"]) && toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "GameTableReadAndCheck"]).resources) == toset(["arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1", "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g2"])
+    error_message = "The runtime task role gains no new authority."
   }
 }
 

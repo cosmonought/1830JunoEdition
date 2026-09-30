@@ -23,6 +23,9 @@ locals {
   game_table_name     = local.game_table_names[tostring(var.generation)]
   identity_table_name = "${local.prefix}-identity"
   game_table_arn      = local.game_table_arns[tostring(var.generation)]
+  # LIVE-6 final convergence: the managed generations that are NOT serving (a restore's previous g<N>): the certifier /
+  # verifier role's one Scan (the restore drill's old-generation TASK# heartbeats).
+  old_game_table_arns = sort([for g, arn in local.game_table_arns : arn if g != tostring(var.generation)])
   identity_table_arn  = "arn:${local.partition}:dynamodb:${local.region}:${local.account}:table/${local.identity_table_name}"
   # L6-4's identity restore writes into a NEW identity table (a restored copy); its operator role reaches those copies too.
   identity_tables_arns = "arn:${local.partition}:dynamodb:${local.region}:${local.account}:table/${local.identity_table_name}*"

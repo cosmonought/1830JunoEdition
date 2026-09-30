@@ -308,6 +308,19 @@ data "aws_iam_policy_document" "bootstrap" {
     actions   = ["cloudfront:GetDistributionConfig", "cloudfront:GetDistribution", "cloudfront:GetOriginRequestPolicy"]
     resources = ["arn:${local.partition}:cloudfront::${local.account}:distribution/*", "arn:${local.partition}:cloudfront::${local.account}:origin-request-policy/*"]
   }
+  # LIVE-6 final convergence (L6-6R x L6-5A/L6-5B): the staging certification's restore-quiet evidence -- a strongly
+  # consistent, paginated Scan of the PREVIOUS generation's game table for its diagnostic TASK# heartbeats (a fresh one
+  # after the stop fails the drill; none proves nothing; never a lease). A Scan cannot be narrowed by LeadingKeys, so it is
+  # granted on the NON-serving managed generations only -- never the serving table, the identity table or the ledger --
+  # and the runtime task role gains nothing (it is `stage-cert certify`'s read, under this role).
+  dynamic "statement" {
+    for_each = length(local.old_game_table_arns) == 0 ? [] : [1]
+    content {
+      sid       = "RestoreQuietOldGenerationHeartbeats"
+      actions   = ["dynamodb:Scan"]
+      resources = local.old_game_table_arns
+    }
+  }
   # LIVE-6 L6-5B: the alarm evidence (capture-evidence: `describe-alarms --alarm-name-prefix gs-<env>-`), read only. A
   # listing by name prefix is not reliably scopable to alarm ARNs, and the answer holds no secret.
   statement {

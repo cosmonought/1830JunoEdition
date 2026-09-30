@@ -50,7 +50,7 @@ import {
   transitionTracker,
   type MetricSink,
 } from "./runtimeMetrics";
-import { dynamoTaskStatusWriter, TASK_STATUS_TTL_SECONDS, taskStatusItem, taskStatusReporter, type TaskStatus, type TaskStatusWriter } from "./taskStatus";
+import { decodeTaskStatusItem, dynamoTaskStatusWriter, TASK_STATUS_TTL_SECONDS, taskStatusItem, taskStatusReporter, type TaskStatus, type TaskStatusWriter } from "./taskStatus";
 import { PoolWriterNotCurrentError, type HeldProbe } from "../ownership/poolWriter";
 import { bootstrapGenerationMarker } from "../game/generationMarker";
 import { createSessionVerifier } from "../../identity/verifier";
@@ -1273,10 +1273,14 @@ describe("L6-5A the TASK# item: diagnostic, ordered, never read", () => {
           if (relative.endsWith(".test.ts")) continue;
           const text = fs.readFileSync(full, "utf8");
           const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1"); // comments may name it; code may not
-          if (/["'`]TASK#|taskStatusKey|taskStatusPk/.test(code) && relative !== "aws/runtime/taskStatus.ts") offenders.push(`${relative}: names the TASK# item`);
+          /* LIVE-6 final convergence: ONE reader beside the writer -- the staging certification's restore-quiet evidence
+             (`taskHeartbeats.ts`), reached only by `tools/awsDeploy.ts`'s binding; no runtime decision reads it. */
+          if (/["'`]TASK#|taskStatusKey|taskStatusPk/.test(code) && relative !== "aws/runtime/taskStatus.ts" && relative !== "aws/runtime/taskHeartbeats.ts") offenders.push(`${relative}: names the TASK# item`);
           for (const match of text.matchAll(/from\s+"([^"]+)"/g)) {
             const target = path.relative(root, path.resolve(path.dirname(full), match[1])).split(path.sep).join("/");
             if ((target === "aws/runtime/runtimeMetrics" || target === "aws/runtime/taskStatus") && !relative.startsWith("aws/runtime/")) offenders.push(`${relative}: imports ${target}`);
+            if (target === "aws/runtime/taskHeartbeats" && relative !== "tools/awsDeploy.ts") offenders.push(`${relative}: imports the TASK# reader (only the staging certification's binding may)`);
+            if (target === "aws/runtime/taskStatus" && /decodeTaskStatusItem/.test(text) && relative !== "aws/runtime/taskHeartbeats.ts") offenders.push(`${relative}: decodes TASK# items (only the certification's reader does)`);
           }
           if ((relative === "aws/runtime/runtimeMetrics.ts" || relative === "aws/runtime/taskStatus.ts") && /from\s+"[^"]*frontend\//.test(text)) offenders.push(`${relative}: imports the frontend`);
         }
@@ -1718,6 +1722,34 @@ describe("L6-5B the primary heartbeat and A1's operands", () => {
       } finally {
         await closed(runtime);
       }
+    }
+  });
+});
+
+/* ==================================================================
+    LIVE-6 FINAL CONVERGENCE: THE TASK# ITEM'S ONE DECODER (THE STAGING CERTIFICATION'S RESTORE-QUIET READER)
+   ================================================================== */
+
+describe("LIVE-6 final convergence: the TASK# decoder", () => {
+  test("the TASK# decoder is the writer's exact inverse; anything else is a problem, never 'no heartbeat'", () => {
+    const status = { task: "t-0123456789abcdef", pool: "p1", poolEpoch: 4, generation: 1, environment: "staging", build: "b1", role: "primary" as const, phase: "serving" as const, ready: true, reasons: [], relayer: "held", escrow: "active", poolWriterCheckAgeMs: 1200, startedAt: 1_000 };
+    const item = taskStatusItem(status, 7, 5_000);
+    const decoded = decodeTaskStatusItem(item);
+    assert.ok(!("problem" in decoded), JSON.stringify(decoded));
+    assert.deepEqual([decoded.task, decoded.generation, decoded.updatedAt, decoded.seq, decoded.role, decoded.ready], ["t-0123456789abcdef", 1, 5_000, 7, "primary", true]);
+    const bad: Array<[string, (i: any) => void]> = [
+      ["another format", (i) => (i.fmt = { N: "2" })],
+      ["a key naming another task", (i) => (i.pk = { S: "TASK#other" })],
+      ["an extra attribute", (i) => (i.lease = { S: "x" })],
+      ["a missing attribute", (i) => delete i.updated_at],
+      ["a non-numeric generation", (i) => (i.generation = { S: "1" })],
+      ["an unknown role", (i) => (i.role = { S: "owner" })],
+      ["a string ready", (i) => (i.ready = { S: "true" })],
+    ];
+    for (const [label, mutate] of bad) {
+      const copy = JSON.parse(JSON.stringify(item));
+      mutate(copy);
+      assert.ok("problem" in decodeTaskStatusItem(copy), label);
     }
   });
 });

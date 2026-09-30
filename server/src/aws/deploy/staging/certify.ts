@@ -18,6 +18,9 @@
 //   8  kms             the configured keys sign a disposable digest, verified, below 3 s (§8)
 //   9  terraform       the ledger and app plans: versions, lock, exit status, nothing destroyed, services gated (§9)
 //   10 evidence        the package: identities, the certifier task's own record, no secret anywhere (§10)
+//   L6-4 (L6-6R)       generation, identity, review, rollback, restore-quiet, restore-fence (`recovery.ts`)
+//   LIVE-6 final convergence (`drills.ts`): alarms (L6-5B's contract, every scenario); generation-gate and restore-alarms
+//                      (restore drill); flip and flip-alarms (flip drill); relayer-rotation (rotation drill)
 //
 // THE VERDICT LAW. A required gate passes only when it has at least one check and every check passed. Missing evidence
 // is a FAILED check, never a skip; a SKIP from the verifier is a failure here unless it is explicitly replaced (the ledger
@@ -60,12 +63,16 @@ import {
 } from "./evidence";
 import { IAM_PROBE_IDS, judgeIamProbe } from "./iamProbe";
 import { judgeKmsProbe } from "./kmsProbe";
+import { accountOf, judgeAlarmsGate, judgeFlipAlarmDrill, judgeFlipDrill, judgeGenerationGateRecord, judgeRestoreAlarmDrill, judgeRotationDrill, flipRecordOf, flipWindowOf } from "./drills";
 import { adoptionOf, certifierImage, generationMeasurement, judgeGeneration, judgeIdentityRecovery, judgeReviews, judgeRestoreFencing, judgeRestoreQuiet, judgeRollback, NOT_INTEGRATED, type GenerationEvidence, type HeartbeatEvidence } from "./recovery";
 import { buildIdOf, checkClusterTasks, checkRunningTasks, checkServicesSettled, checkTargetHealth, readClusterListing } from "./prerequisite";
 import { STACKS, TERRAFORM_FILES, judgeTerraformStack } from "./terraformPlan";
 import { judgeTransactionProbe } from "./transactionProbe";
 
-export type Scenario = "read-only" | "replacement" | "restore-drill";
+/** LIVE-6 final convergence: `flip-drill` (L6-2's planned flip, L6-5B's suppression) and `relayer-rotation-drill` (L6-2 /
+ *  L6-7's address rotation gate) join L6-6's three scenarios. */
+export type Scenario = "read-only" | "replacement" | "restore-drill" | "flip-drill" | "relayer-rotation-drill";
+export const SCENARIOS: readonly Scenario[] = Object.freeze(["read-only", "replacement", "restore-drill", "flip-drill", "relayer-rotation-drill"]);
 
 /** Clocks differ (the operator's machine, the certifier task, Terraform's host): comparisons allow this much. */
 export const CLOCK_SKEW_MS = 120_000;
@@ -202,6 +209,11 @@ export interface CertContext {
   readonly generationEvidence: GenerationEvidence;
   /** L6-5A's TASK# heartbeats for a restore drill (null: not integrated -- ECS evidence alone, never a lease). */
   readonly heartbeats: HeartbeatEvidence | null;
+  /** LIVE-6 final convergence (L6-5B): the alarm classes' configured destinations (`--page-actions` / `--ticket-actions`;
+   *  `none` = an empty list, valid in staging; absent: null, class consistency only). */
+  readonly alarmActions?: { readonly page: readonly string[] | null; readonly ticket: readonly string[] | null };
+  /** LIVE-6 final convergence (relayer-rotation-drill): `--from-relayer` / `--to-relayer`. */
+  readonly rotation?: { readonly from: string | null; readonly to: string | null } | null;
 }
 
 export type GateStatus = "pass" | "fail" | "not-required";
@@ -560,6 +572,76 @@ export const STAGING_GATES: readonly StagingGate[] = Object.freeze([
     notRequired: "not required: no restore drill in this scenario",
     evaluate: (ctx) => ({
       checks: [...(ctx.generationEvidence.integrated ? [] : [fail("restore fencing: the adoption", NOT_INTEGRATED)]), ...judgeRestoreFencing(ctx.dir, { run: ctx.run, adoption: adoptionOf(ctx.generationEvidence) })],
+    }),
+  },
+  /* ---------------- LIVE-6 final convergence: L6-5B / L6-2 / L6-7 bound to the harness (`drills.ts`) ---------------- */
+  {
+    id: "alarms",
+    title: "CloudWatch alarms against the L6-5B contract (and their identity)",
+    required: () => true,
+    evaluate: (ctx) => {
+      const flip = ctx.scenario === "flip-drill" ? flipWindowOf(flipRecordOf(ctx.dir).record) : null;
+      return judgeAlarmsGate(ctx.dir, {
+        environment: ctx.environment,
+        region: ctx.prerequisite.startup.config.region,
+        account: accountOf(String(ctx.prerequisite.identity.task_definitions[ctx.primaryPool] ?? "")),
+        pools: ctx.pools,
+        primaryPool: ctx.primaryPool,
+        escrow: ctx.prerequisite.startup.escrowConfig !== null,
+        pageActions: ctx.alarmActions?.page ?? null,
+        ticketActions: ctx.alarmActions?.ticket ?? null,
+        flip,
+      });
+    },
+  },
+  {
+    id: "generation-gate",
+    title: "Restore drill: the generation gate's own record, bound to the ledger's APPGEN#HISTORY",
+    required: (ctx) => ctx.scenario === "restore-drill",
+    notRequired: "not required: no generation switch in this scenario",
+    evaluate: (ctx, records) => ({
+      checks: [
+        ...(ctx.generationEvidence.integrated ? [] : [fail("generation gate: the adoption", NOT_INTEGRATED)]),
+        ...judgeGenerationGateRecord(ctx.dir, { environment: ctx.environment, generation: ctx.prerequisite.startup.config.generation, gameTable: ctx.prerequisite.startup.config.gameTable, evidence: ctx.generationEvidence, prerequisiteAt: priorAt(records) }),
+      ],
+    }),
+  },
+  {
+    id: "restore-alarms",
+    title: "Restore drill: R1, A4g, A4i, R2, R3 fire and are never suppressed by a flip window",
+    required: (ctx) => ctx.scenario === "restore-drill",
+    notRequired: "not required: no restore drill in this scenario",
+    evaluate: (ctx) => ({ checks: judgeRestoreAlarmDrill(ctx.dir, { run: ctx.run, environment: ctx.environment, pools: ctx.pools }) }),
+  },
+  {
+    id: "flip",
+    title: "Flip drill: window before the CAS, roles settled, exit 5 only, /gs* moved, recovery settled, suppression bounded",
+    required: (ctx) => ctx.scenario === "flip-drill",
+    notRequired: "not required: no flip drill in this scenario",
+    evaluate: (ctx) => ({ checks: judgeFlipDrill(ctx.dir, { environment: ctx.environment, pools: ctx.pools, primaryPool: ctx.primaryPool, escrow: ctx.prerequisite.startup.escrowConfig !== null }) }),
+  },
+  {
+    id: "flip-alarms",
+    title: "Flip drill: an exit 3 still pages A1; a still-failing alarm acts after the window; only the flip's pools suppressed",
+    required: (ctx) => ctx.scenario === "flip-drill",
+    notRequired: "not required: no flip drill in this scenario",
+    evaluate: (ctx) => ({ checks: judgeFlipAlarmDrill(ctx.dir, { run: ctx.run, environment: ctx.environment, pools: ctx.pools }) }),
+  },
+  {
+    id: "relayer-rotation",
+    title: "Relayer-address rotation drill: the gate OPEN before the change, the old queue empty, every pool drained",
+    required: (ctx) => ctx.scenario === "relayer-rotation-drill",
+    notRequired: "not required: no relayer-address rotation in this scenario",
+    evaluate: (ctx, records) => ({
+      checks: judgeRotationDrill(ctx.dir, {
+        environment: ctx.environment,
+        from: ctx.rotation?.from ?? null,
+        to: ctx.rotation?.to ?? null,
+        pools: ctx.pools,
+        configuredRelayer: ctx.prerequisite.startup.escrowConfig?.relayer.address ?? null,
+        prerequisiteAt: priorAt(records),
+        running: ctx.prerequisite.running,
+      }),
     }),
   },
   {

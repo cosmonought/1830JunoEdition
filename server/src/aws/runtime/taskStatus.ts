@@ -28,6 +28,10 @@
 // epoch and generation it believes, so a reader compares them with `POOL#<pool>` and the ledger's `APPGEN` itself.
 // It is never a liveness authority: no takeover, claim, routing or readiness decision may read it (a lease by another
 // name); the preflight's §5.1 "no time lease" stands.
+// LIVE-6 final convergence: the preflight's §17.2 operator check has ONE reader, outside every serving task -- the staging
+// certification's restore drill (`taskHeartbeats.ts`, bound only by `tools/awsDeploy.ts`): a fresh heartbeat of the OLD
+// generation after the stop FAILS restore-quietness; no heartbeat proves nothing (ECS's listing is the stop proof).
+// `decodeTaskStatusItem` below is the item's one decoder (the writer's exact inverse); this file still never reads.
 //
 // READ IT BY FRESHNESS: `updated_at` (and the TTL) say whether the task is still writing; `phase` and `ready` are what it
 // last said. A task that exits at once (a loss: exit 3; a store restart: exit 4) writes nothing more, so its last item may
@@ -39,7 +43,7 @@
 // The table needs nothing new but its TTL attribute (`ttl`, L6-5B / L5-8) -- no other game-table item carries one, and
 // without it the items simply stay (one small item per task start). The task role already has `PutItem` on the table.
 
-import { ConditionalCheckFailedException, PutItemCommand, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { ConditionalCheckFailedException, PutItemCommand, type AttributeValue, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 import { deadline } from "../awsClients";
 import { key, N, S, type Item } from "../game/gameTable";
@@ -103,6 +107,70 @@ export function taskStatusItem(status: TaskStatus, seq: number, now: number): It
     updated_at: N(updated),
     seq: N(whole(seq)),
     ttl: N(Math.floor(updated / 1000) + TASK_STATUS_TTL_SECONDS),
+  };
+}
+
+/** LIVE-6 final convergence: a `TASK#` item as it was written (`taskStatusItem`'s exact inverse), for the ONE reader
+ *  there is -- the staging certification's restore-quiet evidence (`taskHeartbeats.ts`): operator proof, never a lease. */
+export interface TaskStatusRecord {
+  readonly task: string;
+  readonly pool: string;
+  readonly poolEpoch: number;
+  readonly generation: number;
+  readonly environment: string;
+  readonly build: string;
+  readonly role: "primary" | "non-primary" | "undecided";
+  readonly phase: string;
+  readonly ready: boolean;
+  readonly updatedAt: number;
+  readonly startedAt: number;
+  readonly seq: number;
+}
+
+const TASK_STATUS_ATTRIBUTES = "build,environment,escrow,fmt,generation,phase,pk,pool,pool_epoch,pool_writer_check_age_ms,ready,reasons,relayer,role,seq,sk,started_at,task,ttl,updated_at";
+
+/**
+ * The canonical decoder of a `TASK#` item (strict: exactly the writer's attributes, its format, its key naming its own
+ * task, whole non-negative numbers). An item it cannot read is a PROBLEM, never "no heartbeat": the caller decides what
+ * an unreadable diagnostic means (the certification: unreadable, FAIL).
+ */
+export function decodeTaskStatusItem(item: Readonly<Record<string, AttributeValue>>): TaskStatusRecord | { readonly problem: string } {
+  const names = Object.keys(item).sort().join(",");
+  if (names !== TASK_STATUS_ATTRIBUTES) return { problem: `a TASK# item with the attributes [${names.slice(0, 300)}], not the writer's` };
+  const text = (name: string): string | null => (typeof item[name]?.S === "string" ? (item[name].S as string) : null);
+  const whole = (name: string): number | null => {
+    const value = item[name]?.N;
+    if (value === undefined || !/^(0|[1-9][0-9]{0,15})$/.test(value)) return null;
+    const n = Number(value);
+    return Number.isSafeInteger(n) ? n : null;
+  };
+  const task = text("task");
+  if (whole("fmt") !== TASK_STATUS_FORMAT) return { problem: `a TASK# item of format ${String(item.fmt?.N)}, not ${TASK_STATUS_FORMAT}` };
+  if (task === null || !TASK_TEXT.test(task) || text("pk") !== taskStatusPk(task) || text("sk") !== TASK_STATUS_SK) return { problem: "a TASK# item whose key does not name its own task" };
+  const role = text("role");
+  if (role !== "primary" && role !== "non-primary" && role !== "undecided") return { problem: "a TASK# item with an unknown role" };
+  const ready = item.ready?.BOOL;
+  if (typeof ready !== "boolean") return { problem: "a TASK# item without a boolean `ready`" };
+  const numbers = { poolEpoch: whole("pool_epoch"), generation: whole("generation"), updatedAt: whole("updated_at"), startedAt: whole("started_at"), seq: whole("seq"), ttl: whole("ttl"), age: whole("pool_writer_check_age_ms") };
+  const missing = Object.entries(numbers).filter(([, v]) => v === null).map(([k]) => k);
+  if (missing.length > 0) return { problem: `a TASK# item whose ${missing.join(", ")} is not a whole number` };
+  const strings = ["pool", "environment", "build", "phase", "reasons", "relayer", "escrow"].map((name) => [name, text(name)] as const);
+  const absent = strings.filter(([, v]) => v === null).map(([k]) => k);
+  if (absent.length > 0) return { problem: `a TASK# item whose ${absent.join(", ")} is not a string` };
+  const value = Object.fromEntries(strings) as Record<string, string>;
+  return {
+    task,
+    pool: value.pool,
+    poolEpoch: numbers.poolEpoch as number,
+    generation: numbers.generation as number,
+    environment: value.environment,
+    build: value.build,
+    role,
+    phase: value.phase,
+    ready,
+    updatedAt: numbers.updatedAt as number,
+    startedAt: numbers.startedAt as number,
+    seq: numbers.seq as number,
   };
 }
 

@@ -20,8 +20,11 @@
 //   5. infra/aws/scripts/plan-evidence ... <dir>                            the ledger and app plans (never applied)
 //   6. (replacement scenario) drain-pool ... <dir>, terraform apply, then capture-evidence again
 //   7. capture-evidence ... <dir> again, then
-//      stage-cert certify --run-id R --evidence <dir> <verify flags> --scenario read-only|replacement [--replaced-pools p1]
-//                         --commit <sha> [--repository <checkout>]
+//      stage-cert certify --run-id R --evidence <dir> <verify flags> --scenario read-only|replacement|restore-drill|
+//                         flip-drill|relayer-rotation-drill [--replaced-pools p1] [--from-relayer <old> --to-relayer <new>]
+//                         [--page-actions <arns>|none --ticket-actions <arns>|none] --commit <sha> [--repository <checkout>]
+//      (LIVE-6 final convergence: the drills' evidence files -- flip-record.json, gate-generation.json,
+//       gate-relayer-rotation.json, probe-flip-alarms.json, probe-restore-alarms.json -- are `drills.ts`'s)
 //        -> certification.json, CERTIFICATION.txt, MANIFEST.json; stdout begins with the verdict line; exit 0 only on PASS.
 //
 // NOTHING HERE DEPLOYS OR MUTATES A RESOURCE. `stage-cert` reads AWS (the verifier's reads) and writes only the evidence
@@ -33,16 +36,18 @@ import * as fs from "fs";
 import * as path from "path";
 
 import type { DeployDeps } from "../commands";
-import { clientsFor, collectVerification, environmentOf, generationOf, loadAndMatch, need, parseFlags, UsageError, EXIT_FAILED, EXIT_OK } from "../commands";
-import { EVIDENCE_FILES } from "../deployVerify";
-import { certify, certificationText, clearCertification, idleBoundsOf, prerequisiteChecks, prerequisitePassed, prerequisiteRecord, writeCertification, type CertContext, type Scenario, type StagingGate } from "./certify";
+import { actionListOf, clientsFor, collectVerification, environmentOf, gameGenerationsOf, generationOf, loadAndMatch, need, parseFlags, UsageError, EXIT_FAILED, EXIT_OK } from "../commands";
+import { EVIDENCE_FILES, expectedNames } from "../deployVerify";
+import { RELAYER_ADDRESS } from "../relayerRotation";
+import { certify, certificationText, clearCertification, idleBoundsOf, prerequisiteChecks, prerequisitePassed, prerequisiteRecord, SCENARIOS, writeCertification, type CertContext, type Scenario, type StagingGate } from "./certify";
+import { DRILL_FILES } from "./drills";
 import { requiredIdleMs, runEdgeProbe, SESSION_COOKIE_ENV, type EdgeTransport } from "./edgeProbe";
 import { MAINNET_CHAIN_IDS } from "../../../escrow/juno/signer";
 import { arr, disposablePartition, EVIDENCE, isoOf, obj, PROBE_FORMAT, readEvidence, recordFromLog, recordLines, runIdProblem, scrub, secretFindings, stableStringify, writeRecord } from "./evidence";
 
 export { recordFromLog, recordLines } from "./evidence";
 import { newProbeNonce, runIamProbe } from "./iamProbe";
-import { buildCapabilities, readGenerationEvidence, readIdentityRecovery, type HeartbeatEvidence, type RecoveryReaders } from "./recovery";
+import { adoptionOf, buildCapabilities, readGenerationEvidence, readIdentityRecovery, readRestoreHeartbeats, type RecoveryReaders, type TaskHeartbeatReader } from "./recovery";
 import { runKmsProbe } from "./kmsProbe";
 import { runTransactionProbe } from "./transactionProbe";
 
@@ -62,8 +67,10 @@ export interface StagingDeps {
   /** L6-4's strict readers (`recovery.ts`), bound by the integration that contains L6-4; absent here, so the recovery
    *  gates FAIL "not integrated". */
   readonly recovery?: RecoveryReaders;
-  /** L6-5A's fresh TASK# heartbeats (operator proof for a restore drill, never a lease); absent until it is integrated. */
-  readonly heartbeats?: () => Promise<HeartbeatEvidence>;
+  /** L6-5A's TASK# heartbeats (operator proof for a restore drill, never a lease): the reader of the PREVIOUS generation's
+   *  table, bound by the integration (`aws/runtime/taskHeartbeats.ts` `oldGenerationHeartbeatsAfter`, in
+   *  `tools/awsDeploy.ts`); absent: the restore-quiet gate says the stop is proven from ECS alone. */
+  readonly heartbeats?: TaskHeartbeatReader;
 }
 
 const runOf = (flags: Map<string, string>): string => {
@@ -81,7 +88,9 @@ const portOf = (flags: Map<string, string>): number => {
   return port;
 };
 
-const VERIFY_FLAGS = ["--runtime-parameter", "--environment", "--primary-pool", "--generation", "--pools", "--port", "--part"];
+/* LIVE-6 final convergence: the verifier's L6-5B flags too (`verify`'s own meaning): every managed generation's TTL, and the
+   alarm classes' destinations (`none` = an empty list, valid in staging). */
+const VERIFY_FLAGS = ["--runtime-parameter", "--environment", "--primary-pool", "--generation", "--pools", "--port", "--part", "--game-generations", "--page-actions", "--ticket-actions"];
 
 async function prerequisiteFor(flags: Map<string, string>, dir: string, run: string, deps: DeployDeps, staging: StagingDeps) {
   const part = flags.get("--part") ?? "app";
@@ -90,12 +99,31 @@ async function prerequisiteFor(flags: Map<string, string>, dir: string, run: str
   const generation = generationOf(need(flags, "--generation"));
   const primaryPool = need(flags, "--primary-pool");
   const pools = poolsOf(flags, primaryPool);
-  const verification = await collectVerification({ part, runtimeParameterArn: need(flags, "--runtime-parameter"), environment, primaryPool, generation, pools, port: portOf(flags), evidenceDir: dir }, deps);
+  /* LIVE-6 final convergence: a flip drill's L6-2 flip record lives in the evidence (`flip-record.json`); when present, the
+     verifier judges the role changes and the suppressors against ITS window, exactly as `verify --flip-record`. */
+  const flipRecord = path.join(dir, DRILL_FILES.flipRecord);
+  const verification = await collectVerification(
+    {
+      part,
+      runtimeParameterArn: need(flags, "--runtime-parameter"),
+      environment,
+      primaryPool,
+      generation,
+      pools,
+      port: portOf(flags),
+      evidenceDir: dir,
+      flipRecordFile: fs.existsSync(flipRecord) ? flipRecord : null,
+      gameGenerations: gameGenerationsOf(flags, generation),
+      pageActions: actionListOf(flags, "--page-actions"),
+      ticketActions: actionListOf(flags, "--ticket-actions"),
+    },
+    deps,
+  );
   const expect = { run, environment, generation, primaryPool, pools, part } as const;
   /* L6-4: SYSTEM/GENERATION and APPGEN's binding, read live through L6-4's own readers (when bound). */
   const { clients, tables } = clientsFor(deps, verification.startup);
   const generationEvidence = await readGenerationEvidence(staging.recovery, clients, { game: tables.game, ledger: tables.ledger });
-  return { expect, result: prerequisiteChecks(dir, verification, expect), generationEvidence };
+  return { expect, result: prerequisiteChecks(dir, verification, expect), generationEvidence, clients, startup: verification.startup };
 }
 
 /* ------------------------------------------------------------------ */
@@ -118,17 +146,22 @@ export async function stageCertCommand(argv: readonly string[], deps: DeployDeps
     return record.verdict === "PASS" ? EXIT_OK : EXIT_FAILED;
   }
   if (sub === "certify") {
-    const flags = parseFlags(rest, ["--run-id", "--evidence", "--scenario", "--replaced-pools", "--commit", "--repository", ...VERIFY_FLAGS], []);
+    const flags = parseFlags(rest, ["--run-id", "--evidence", "--scenario", "--replaced-pools", "--commit", "--repository", "--from-relayer", "--to-relayer", ...VERIFY_FLAGS], []);
     const run = runOf(flags);
     const dir = need(flags, "--evidence");
     const scenario = need(flags, "--scenario");
-    if (scenario !== "read-only" && scenario !== "replacement" && scenario !== "restore-drill") throw new UsageError("--scenario is read-only, replacement or restore-drill");
+    if (!(SCENARIOS as readonly string[]).includes(scenario)) throw new UsageError(`--scenario is ${SCENARIOS.join(", ")}`);
     const replacedPools = (flags.get("--replaced-pools") ?? "").split(",").map((p) => p.trim()).filter((p) => p.length > 0);
     if (scenario !== "replacement" && replacedPools.length > 0) throw new UsageError("--replaced-pools belongs to --scenario replacement");
+    /* LIVE-6 final convergence: the relayer-address rotation this drill certifies (L6-2 / L6-7's gate). */
+    const fromRelayer = flags.get("--from-relayer") ?? null;
+    const toRelayer = flags.get("--to-relayer") ?? null;
+    if ((fromRelayer !== null || toRelayer !== null) && scenario !== "relayer-rotation-drill") throw new UsageError("--from-relayer / --to-relayer belong to --scenario relayer-rotation-drill");
+    if (scenario === "relayer-rotation-drill" && (fromRelayer === null || toRelayer === null || !RELAYER_ADDRESS.test(fromRelayer) || !RELAYER_ADDRESS.test(toRelayer) || fromRelayer === toRelayer)) throw new UsageError("--scenario relayer-rotation-drill needs --from-relayer <old> --to-relayer <new> (two different relayer addresses)");
     const commit = need(flags, "--commit");
     /* An older certification's PASS never survives a rerun that fails or is refused. */
     clearCertification(dir);
-    const { expect, result, generationEvidence } = await prerequisiteFor(flags, dir, run, deps, staging);
+    const { expect, result, generationEvidence, clients, startup } = await prerequisiteFor(flags, dir, run, deps, staging);
     if (replacedPools.some((p) => !expect.pools.includes(p))) throw new UsageError("--replaced-pools must be among --pools");
     const ctx: CertContext = {
       dir,
@@ -143,7 +176,20 @@ export async function stageCertCommand(argv: readonly string[], deps: DeployDeps
       repository: flags.get("--repository") ?? staging.repository,
       prerequisite: result,
       generationEvidence,
-      heartbeats: scenario === "restore-drill" && staging.heartbeats !== undefined ? await staging.heartbeats() : null,
+      /* L6-5A/L6-5B's TASK# evidence for L6-6R's restore quietness: the PREVIOUS generation's table, after the stop. */
+      heartbeats:
+        scenario === "restore-drill"
+          ? await readRestoreHeartbeats(staging.heartbeats, clients.app, {
+              dir,
+              adoption: adoptionOf(generationEvidence),
+              tableOf: (g) => {
+                const name = expectedNames(expect.environment, g).gameTable;
+                return deps.tables?.({ gameTable: name, identityTable: startup.config.identityTable, ledgerArn: startup.config.ledger.arn }).game ?? name;
+              },
+            })
+          : null,
+      alarmActions: { page: actionListOf(flags, "--page-actions"), ticket: actionListOf(flags, "--ticket-actions") },
+      rotation: scenario === "relayer-rotation-drill" ? { from: fromRelayer, to: toRelayer } : null,
     };
     const verdict = certify(ctx, staging.extraGates ?? []);
     writeCertification(ctx, verdict);

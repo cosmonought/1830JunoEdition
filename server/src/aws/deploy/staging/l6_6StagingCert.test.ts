@@ -45,6 +45,8 @@ import { loadAwsStartup } from "../../runtime/awsMain";
 import type { ParameterSource } from "../../runtime/configSource";
 import { runDeployCommand, EXIT_USAGE, type DeployDeps } from "../commands";
 import { CACHING_DISABLED_POLICY_ID, checkEdgeEvidence, checkEvidenceDirectory, EVIDENCE_FILES, type Check } from "../deployVerify";
+import { ALARM_CONTRACT, expectedAlarms, suppressorName } from "../../controlPlane/alarmContract";
+import { POOL_EVIDENCE_FILES } from "../../controlPlane/evidence";
 import { certify, CERTIFIER_STORAGE_OVERRIDE, certificationText, judgeCertifierTask, prerequisiteChecks, prerequisiteRecord, repositoryHead, VERDICT_LINE, writeCertification, type CertContext } from "./certify";
 import { stageCertCommand, stageProbeCommand, recordFromLog, recordLines, type StagingDeps } from "./commands";
 import { closedBy, judgeQueryProbe, judgeWsIdle, nodeEdgeTransport, probeQuery, requiredIdleMs, runEdgeProbe, type EdgeTransport, type SocketEvent, type SocketObservation } from "./edgeProbe";
@@ -54,7 +56,7 @@ import { judgeKmsProbe, KMS_LATENCY_BOUND_MS, runKmsProbe } from "./kmsProbe";
 import { judgeTerraformStack, AWS_PROVIDER } from "./terraformPlan";
 import { disposableOnly, DisposableGuardError, judgeTransactionProbe, runTransactionProbe } from "./transactionProbe";
 import { checkClusterTasks, CLUSTER_LISTING_WINDOW_MS, CLUSTER_TASKS_FORMAT, DESCRIBE_TASKS_BATCH, readClusterListing } from "./prerequisite";
-import { buildCapabilities, readGenerationEvidence, readIdentityRecovery, RESTORE_FENCING_CASES, RESTORE_FENCING_FILE, revisionsFile, type AppGenerationFacts, type GenerationEvidence, type GenerationMarkerFacts, type IdentityRestoreFacts, type RecoveryReaders, type ReviewSummary } from "./recovery";
+import { buildCapabilities, readGenerationEvidence, readIdentityRecovery, RESTORE_FENCING_CASES, RESTORE_FENCING_FILE, revisionsFile, type AdoptionRecordFacts, type AppGenerationFacts, type GenerationEvidence, type GenerationMarkerFacts, type IdentityRestoreFacts, type RecoveryReaders, type ReviewSummary } from "./recovery";
 
 const REPO = path.resolve(__dirname, "../../../../../../.."); // dist/server/src/aws/deploy/staging -> the repository
 const INFRA = path.join(REPO, "infra/aws");
@@ -66,7 +68,8 @@ const RUN = "l6cert-test-0930";
 const RUNTIME_ARN = "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1";
 const JUNO_ARN = "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend";
 const TD = "arn:aws:ecs:us-east-1:111111111111:task-definition/gs-staging-p1:7";
-const TG_ARN = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/gs-staging-primary/0123456789abcdef";
+/* LIVE-6 final convergence: L6-2's layout -- one target group per pool (gs-<env>-<pool>), /gs* to the primary's. */
+const TG_ARN = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/gs-staging-p1/0123456789abcdef";
 const TASK = "arn:aws:ecs:us-east-1:111111111111:task/gs-staging/0aaa1111bbbb2222cccc3333dddd4444";
 const TASK_IP = "10.0.1.23";
 const CERTIFIER_TASK = "arn:aws:ecs:us-east-1:111111111111:task/gs-staging/9fff0000aaaa1111bbbb2222cccc3333";
@@ -93,6 +96,8 @@ interface ReaderScript {
   readonly self?: string | null;
   readonly servingProblem?: string | null;
   readonly reviews?: readonly ReviewSummary[] | Error;
+  /** APPGEN#HISTORY/GEN#<n> (default: the adoption APPGEN names, as its one transaction wrote it). */
+  readonly history?: AdoptionRecordFacts | null | Error;
 }
 const answer = <T>(value: T | Error): Promise<T> => (value instanceof Error ? Promise.reject(value) : Promise.resolve(value));
 const readersFor = (script: ReaderScript = {}): RecoveryReaders => ({
@@ -104,6 +109,11 @@ const readersFor = (script: ReaderScript = {}): RecoveryReaders => ({
   },
   identityState: async () => ({ restore: script.restore ?? null, self: script.self === undefined ? IDENTITY_TABLE : script.self, servingProblem: script.servingProblem ?? null }),
   reviews: async () => answer(script.reviews ?? []),
+  adoptionRecord: async (_client, _table, generation) => {
+    if (script.history !== undefined) return answer(script.history);
+    const a = script.appgen === undefined ? BOOT_APPGEN : script.appgen;
+    return a instanceof Error || a === null || a.adoption === null || a.current_generation !== generation ? null : { generation, ...a.adoption };
+  },
 });
 const generationOf = (script: ReaderScript = {}): Promise<GenerationEvidence> => readGenerationEvidence(readersFor(script), { app: {} as never, ledger: {} as never }, { game: "gs-staging-game-g1", ledger: "arn:l" });
 const ALL_L64 = { generation_marker: true, app_generation: true, identity_restore: true, security_replay: true };
@@ -421,8 +431,80 @@ const SECURITY_GROUPS = {
     { GroupName: "gs-staging-task", GroupId: "sg-task", IpPermissions: [{ IpProtocol: "tcp", FromPort: 8917, ToPort: 8917, UserIdGroupPairs: [{ GroupId: "sg-alb" }], IpRanges: [], Ipv6Ranges: [], PrefixListIds: [] }] },
   ],
 };
-const TARGET_GROUPS = { TargetGroups: [{ TargetGroupArn: TG_ARN, TargetGroupName: "gs-staging-primary", HealthCheckPath: "/gs/readyz", Matcher: { HttpCode: "200" }, TargetType: "ip" }] };
-const LISTENER_RULES = { Rules: [{ Priority: "10", Conditions: [{ Field: "path-pattern", Values: ["/gs*"], PathPatternConfig: { Values: ["/gs*"] } }], Actions: [{ Type: "forward", TargetGroupArn: TG_ARN }] }] };
+const TARGET_GROUPS = { TargetGroups: [{ TargetGroupArn: TG_ARN, TargetGroupName: "gs-staging-p1", HealthCheckPath: "/gs/readyz", Matcher: { HttpCode: "200" }, TargetType: "ip" }] };
+const LISTENER_RULES = {
+  Rules: [
+    { Priority: "100", Conditions: [{ Field: "path-pattern", Values: ["/gs/p/p1"], PathPatternConfig: { Values: ["/gs/p/p1"] } }], Actions: [{ Type: "forward", TargetGroupArn: TG_ARN }] },
+    { Priority: "1000", Conditions: [{ Field: "path-pattern", Values: ["/gs*"], PathPatternConfig: { Values: ["/gs*"] } }], Actions: [{ Type: "forward", TargetGroupArn: TG_ARN }] },
+    { Priority: "default", IsDefault: true, Conditions: [], Actions: [{ Type: "fixed-response" }] },
+  ],
+};
+
+/** LIVE-6 final convergence: a describe-alarms answer exactly as alarms.tf renders the L6-5B contract (the l6_5bAlarms
+ *  suite's renderer, plus each alarm's ARN -- its stable identity). Empty action lists: a valid staging answer. */
+function renderAlarms(shape: { readonly environment: string; readonly pools: readonly string[]; readonly primaryPool: string; readonly escrow: boolean }, actions: { readonly page: readonly string[]; readonly ticket: readonly string[] } = { page: [], ticket: [] }) {
+  const arnOf = (name: string) => `arn:aws:cloudwatch:us-east-1:111111111111:alarm:${name}`;
+  const listOf = (cls: string) => [...(cls === "page" ? actions.page : actions.ticket)];
+  const expected = expectedAlarms({ ...shape, services: true });
+  return {
+    MetricAlarms: [
+      ...expected.map((e) => ({
+        AlarmName: e.name,
+        AlarmArn: arnOf(e.name),
+        ActionsEnabled: true,
+        AlarmActions: e.spec.suppressible ? [] : listOf(e.spec.class),
+        OKActions: e.spec.suppressible ? [] : listOf(e.spec.class),
+        InsufficientDataActions: [],
+        StateValue: "OK",
+        EvaluationPeriods: e.spec.evaluation_periods,
+        DatapointsToAlarm: e.spec.datapoints_to_alarm,
+        Threshold: e.spec.threshold,
+        ComparisonOperator: e.spec.comparison,
+        TreatMissingData: e.spec.missing,
+        Metrics: [
+          ...e.spec.metrics.map((m) => ({
+            Id: m.id,
+            MetricStat: { Metric: { Namespace: ALARM_CONTRACT.namespace, MetricName: m.metric, Dimensions: [{ Name: "Environment", Value: shape.environment }, ...(e.pool === null ? [] : [{ Name: "Pool", Value: e.pool }])] }, Period: e.spec.period, Stat: m.stat },
+            ReturnData: e.spec.expression === null,
+          })),
+          ...(e.spec.expression === null ? [] : [{ Id: "e1", Expression: e.spec.expression, Label: e.spec.id, ReturnData: true }]),
+        ],
+      })),
+      ...shape.pools.map((pool) => ({
+        AlarmName: suppressorName(shape.environment, pool),
+        AlarmArn: arnOf(suppressorName(shape.environment, pool)),
+        ActionsEnabled: true,
+        AlarmActions: [],
+        OKActions: [],
+        StateValue: "OK",
+        Namespace: "18Cosmos/Operator",
+        MetricName: "FlipWindowOpen",
+        Statistic: "Sum",
+        Period: 60,
+        EvaluationPeriods: 1,
+        Threshold: 1,
+        ComparisonOperator: "GreaterThanOrEqualToThreshold",
+        TreatMissingData: "notBreaching",
+        Dimensions: [{ Name: "Environment", Value: shape.environment }, { Name: "Pool", Value: pool }],
+      })),
+    ],
+    CompositeAlarms: expected
+      .filter((e) => e.spec.suppressible)
+      .map((e) => ({
+        AlarmName: `${e.name}-notify`,
+        AlarmArn: arnOf(`${e.name}-notify`),
+        AlarmRule: `ALARM("${e.name}")`,
+        ActionsEnabled: true,
+        AlarmActions: listOf(e.spec.class),
+        OKActions: listOf(e.spec.class),
+        StateValue: "OK",
+        ActionsSuppressor: suppressorName(shape.environment, e.pool as string),
+        ActionsSuppressorWaitPeriod: 120,
+        ActionsSuppressorExtensionPeriod: 120,
+      })),
+  };
+}
+const ALARMS = renderAlarms({ environment: "staging", pools: ["p1"], primaryPool: "p1", escrow: true });
 
 const PARAMETERS: ParameterSource = {
   async read(arn) {
@@ -572,6 +654,96 @@ const CERTIFIER_RUN = {
   ],
 };
 
+/* ------------------------------------------------------------------ */
+/* LIVE-6 final convergence: the drills' evidence (drills.ts)          */
+/* ------------------------------------------------------------------ */
+
+const ADOPTION_CLAIM = "22222222-2222-4222-8222-222222222222";
+const RELAYER_OLD = "juno1xc5etfhxjg4qfc9cx25qh3tvxdcf5skjj5epte";
+/** The live escrow document's relayer (the fixture's own key): after a rotation, the NEW address. */
+const relayerNew = (): string => junoConfig().relayer.address;
+/** L6-2's flip record for a p2 -> p1 flip (the drill's), settled, its window published then closed by the recovery. */
+const FLIP_WINDOW = { opened_at: Date.parse("2026-09-30T09:00:00Z"), expires_at: Date.parse("2026-09-30T09:45:00Z"), closed_at: Date.parse("2026-09-30T09:20:00Z") };
+function flipRecord(over: Record<string, unknown> = {}): Record<string, unknown> {
+  const snap = (at: number, epochs: [number, number], primary: string) => ({ at, pools: { p1: { epoch: epochs[0], task: `t-p1-${epochs[0]}` }, p2: { epoch: epochs[1], task: `t-p2-${epochs[1]}` } }, identity_writer: { epoch: epochs[0] + epochs[1], pool: primary, task: `t-${primary}` }, relayer: { epoch: 3, pool: primary, task: `t-${primary}` } });
+  return {
+    format: "18COSMOS/FLIP-EVIDENCE/v1",
+    environment: "staging",
+    from: "p2",
+    to: "p1",
+    expected_version: 4,
+    note: "l6-6 flip drill",
+    verdict: "roles-settled",
+    preflight: { at: FLIP_WINDOW.opened_at - 60_000, checks: [] },
+    before: snap(FLIP_WINDOW.opened_at - 1000, [4, 7], "p2"),
+    cas: { at: FLIP_WINDOW.opened_at + 1000, run: "op:r-0123abcd", outcome: "applied", version: 5, detail: "" },
+    window: { ...FLIP_WINDOW, suppression: "closed" },
+    observations: [],
+    after: snap(FLIP_WINDOW.opened_at + 120_000, [5, 8], "p1"),
+    ...over,
+  };
+}
+
+/** Writes a drill's machine records into the package: `restore` (the generation gate, the plan's adoption, the restore
+ *  alarms), `flip` (L6-2's record, the per-pool captures, the flip alarms), `rotation` (the rotation gate's record). */
+function writeDrillEvidence(dir: string, drill: "restore" | "flip" | "rotation", over: Record<string, unknown> = {}): void {
+  const adoption = ADOPTED.adoption as NonNullable<AppGenerationFacts["adoption"]>;
+  if (drill === "restore") {
+    write(dir, "gate-generation.json", {
+      format: "18COSMOS/GENERATION-GATE/v1",
+      environment: "staging",
+      from_generation: 1,
+      verdict: "OPEN",
+      attestation: { generation: 2, game_table: "gs-staging-game-g2", restore_id: adoption.restore_id },
+      adoption_claim: adoption.claim,
+      checks: [{ name: "APPGEN at the new generation", status: "pass", detail: "current_generation 2" }],
+      gated_at: "2026-09-30T09:50:00.000Z",
+      ...over,
+    });
+    const planFile = path.join(dir, "terraform/app/plan.json");
+    const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
+    plan.variables = { ...(plan.variables ?? {}), generation_adoption: { value: { generation: 2, game_table: "gs-staging-game-g2", restore_id: adoption.restore_id } } };
+    write(dir, "terraform/app/plan.json", plan);
+    const win = { from: "p1", to: "p2", opened_at: Date.parse("2026-09-30T09:40:00Z"), expires_at: Date.parse("2026-09-30T10:25:00Z") };
+    const obs = (alarm: string, injected: string, overlap: boolean) => ({ alarm, injected_at: Date.parse(injected), alarm_at: Date.parse(injected) + 70_000, state: "ALARM", actions_suppressed: false, overlapping_flip_window: overlap ? win : null });
+    write(dir, "probe-restore-alarms.json", {
+      format: "18COSMOS/L6-6-RESTORE-ALARM-DRILL/v1",
+      run_id: RUN,
+      cases: {
+        "r1-generation-lost": obs("gs-staging-r1-generation-lost", "2026-09-30T09:41:00Z", true),
+        "a4g-generation-refused": obs("gs-staging-a4g-generation-refused", "2026-09-30T09:46:00Z", false),
+        "a4i-identity-restore-refused": obs("gs-staging-a4i-identity-restore-refused", "2026-09-30T09:47:00Z", false),
+        "r2-money-journal-ahead": obs("gs-staging-r2-money-journal-ahead", "2026-09-30T09:48:00Z", false),
+        "r3-restore-unverified": obs("gs-staging-p1-r3-restore-unverified", "2026-09-30T08:30:00Z", false),
+      },
+      ...over,
+    });
+  } else if (drill === "flip") {
+    write(dir, "flip-record.json", flipRecord(over));
+  } else {
+    const gated = "2026-09-30T08:50:00.000Z"; // before the running task was created (09:00): the pools restarted after it
+    write(dir, "gate-relayer-rotation.json", {
+      format: "18COSMOS/RELAYER-ROTATION-GATE/v1",
+      environment: "staging",
+      from_relayer: RELAYER_OLD,
+      to_relayer: relayerNew(),
+      configured_relayer: RELAYER_OLD,
+      pools: ["p1"],
+      evidence_captured_at: "2026-09-30T08:45:00Z",
+      queue: "empty",
+      verdict: "OPEN",
+      checks: [
+        { name: "the active configuration names the OLD relayer", status: "pass", detail: `relayer ${RELAYER_OLD}` },
+        { name: "drained p1", status: "pass", detail: "desired 0, running 0, pending 0" },
+        { name: `RELAYQ#${RELAYER_OLD} empty (strongly consistent, every page)`, status: "pass", detail: "no entry" },
+        { name: `RELAYQ#${relayerNew()}`, status: "skipped", detail: "the new address's queue is never consulted" },
+      ],
+      gated_at: gated,
+      ...over,
+    });
+  }
+}
+
 interface Built {
   readonly dir: string;
   readonly ctx: (overrides?: Partial<CertContext>) => Promise<CertContext>;
@@ -589,6 +761,11 @@ async function buildPackage(options: { readonly part?: "app" | "all"; readonly s
     [EVIDENCE_FILES.originRequestPolicy]: ORIGIN_REQUEST_POLICY,
     [EVIDENCE_FILES.securityGroups]: SECURITY_GROUPS,
     [EVIDENCE_FILES.listenerRules]: LISTENER_RULES,
+    /* LIVE-6 final convergence: L6-2's per-pool captures and L6-5B's alarms, as the converged capture-evidence writes them. */
+    [POOL_EVIDENCE_FILES.manifest]: { format: "18COSMOS/EVIDENCE/v1", captured_at: "2026-09-30T10:29:00Z", environment: "staging", region: "us-east-1", pools: ["p1"] },
+    [POOL_EVIDENCE_FILES.targetHealth("p1")]: { TargetHealthDescriptions: [{ Target: { Id: TASK_IP, Port: 8917 }, TargetHealth: { State: "healthy" } }] },
+    [path.join(POOL_EVIDENCE_FILES.revisionsDir("p1"), "7.json")]: { ...TASK_DEFINITION, tags: [{ key: "gs:identity-layout", value: "2" }] },
+    [EVIDENCE_FILES.alarms]: ALARMS,
     [EVIDENCE.runningTasks]: RUNNING_TASKS,
     [EVIDENCE.clusterTasks]: CLUSTER_TASKS,
     [EVIDENCE.targetHealth]: { TargetHealthDescriptions: [{ Target: { Id: TASK_IP, Port: 8917 }, TargetHealth: { State: "healthy" } }] },
@@ -621,7 +798,7 @@ async function buildPackage(options: { readonly part?: "app" | "all"; readonly s
   const verification = (): { checks: Check[]; startup: typeof startup } => ({
     checks: [
       { name: "runtime document p1", status: "pass", detail: "v3" },
-      ...checkEvidenceDirectory(dir, { environment: "staging", pools: ["p1"], primaryPool: "p1", port: 8917, runtimeParameterArns: new Map([["p1", RUNTIME_ARN]]) }),
+      ...checkEvidenceDirectory(dir, { environment: "staging", pools: ["p1"], primaryPool: "p1", port: 8917, runtimeParameterArns: new Map([["p1", RUNTIME_ARN]]), routes: { p1: "/gs/p/p1" } }),
       ...(part === "app" ? [{ name: "ledger table: PITR and TTL", status: "skipped" as const, detail: "not readable across accounts" }] : []),
     ],
     startup,
@@ -693,6 +870,13 @@ describe("L6-6 §1: every required gate contributes to the verdict", () => {
           ["rollback", "pass"],
           ["restore-quiet", "not-required"],
           ["restore-fence", "not-required"],
+          /* LIVE-6 final convergence: L6-5B's alarms on every scenario; the drills' gates only on theirs. */
+          ["alarms", "pass"],
+          ["generation-gate", "not-required"],
+          ["restore-alarms", "not-required"],
+          ["flip", "not-required"],
+          ["flip-alarms", "not-required"],
+          ["relayer-rotation", "not-required"],
           ["evidence", "pass"],
         ],
       );
@@ -1954,7 +2138,8 @@ describe("L6-6 x L6-4: the integrated deployment cannot PASS without generation,
       assert.equal(record.image, IMAGE);
       assert.equal(record.image_digest, DIGEST);
       assert.deepEqual(record.build_capabilities, ALL_L64);
-      assert.ok(Object.values(buildCapabilities()).some((v) => v === false), "this branch does not contain L6-4, and says so");
+      /* LIVE-6 final convergence: this build CONTAINS L6-4 (its own report says so) -- and binds its readers. */
+      assert.deepEqual(buildCapabilities(), ALL_L64, "the converged build carries every L6-4 module");
     } finally {
       cleanup(built.dir);
     }
@@ -2093,6 +2278,8 @@ describe("L6-6 x L6-4: the integrated deployment cannot PASS without generation,
           "new-generation-started": { observed_at: at, generation: 2, game_table: "gs-staging-game-g2", ready: true },
         },
       });
+      /* LIVE-6 final convergence: the generation gate's own record, the plan's generation_adoption, the restore alarms. */
+      writeDrillEvidence(built.dir, "restore");
       const base = await built.ctx();
       const startup = { ...base.prerequisite.startup, config: { ...base.prerequisite.startup.config, generation: 2, gameTable: "gs-staging-game-g2" } };
       const result = certify({ ...base, scenario: "restore-drill", prerequisite: { ...base.prerequisite, startup } });
@@ -2100,7 +2287,7 @@ describe("L6-6 x L6-4: the integrated deployment cannot PASS without generation,
       assert.equal(result.gates.find((g) => g.id === "restore-quiet")?.status, "pass");
       assert.equal(result.gates.find((g) => g.id === "restore-fence")?.status, "pass");
       const otherRestore = { ...base, scenario: "restore-drill" as const, prerequisite: { ...base.prerequisite, startup }, generationEvidence: await generationOf({ marker: { ...RESTORED_MARKER, restore_id: "drill-other" }, appgen: { ...ADOPTED, adoption: { ...adoption, restore_id: "drill-other" } } }) };
-      assert.deepEqual(failedGates(certify(otherRestore)), ["restore-quiet", "restore-fence"], "the drill's evidence is bound to ITS adoption");
+      assert.deepEqual(failedGates(certify(otherRestore)), ["restore-quiet", "restore-fence", "generation-gate"], "the drill's evidence is bound to ITS adoption");
     } finally {
       cleanup(built.dir);
     }
@@ -2468,7 +2655,7 @@ const sc = JSON.parse(fs.readFileSync(process.env.AWS_STUB_SCENARIO, "utf8"));
 const argv = process.argv.slice(2);
 const opt = (name) => { const i = argv.indexOf(name); return i < 0 ? undefined : argv[i + 1]; };
 const log = (entry) => fs.appendFileSync(process.env.AWS_STUB_LOG, JSON.stringify(entry) + "\n");
-const si = argv.findIndex((a) => ["ecs", "elbv2", "cloudfront", "ec2"].includes(a));
+const si = argv.findIndex((a) => ["ecs", "elbv2", "cloudfront", "ec2", "cloudwatch"].includes(a));
 const svc = argv[si], op = argv[si + 1], output = opt("--output") || "json", query = opt("--query");
 const die = (message) => { log({ op, error: message }); process.stderr.write(message + "\n"); process.exit(254); };
 const json = (v) => process.stdout.write(JSON.stringify(v, null, 4) + "\n");
@@ -2477,7 +2664,9 @@ if (svc === "ecs" && op === "list-tasks") {
   const status = opt("--desired-status"), service = opt("--service-name");
   if (service !== undefined) {
     log({ op, service, status });
-    process.stdout.write(sc.tasks.filter((t) => t.group === "service:" + service && t.desiredStatus === status).map((t) => t.taskArn).join("\t") + "\n");
+    /* L6-2's per-service capture asks for the first 100 (--query 'taskArns[:100]'); L6-6's running list asks for all. */
+    const arns = sc.tasks.filter((t) => t.group === "service:" + service && t.desiredStatus === status).map((t) => t.taskArn);
+    process.stdout.write((query === "taskArns[:100]" ? arns.slice(0, 100) : arns).join("\t") + "\n");
     process.exit(0);
   }
   if (query !== sc.pageQuery) die("unexpected --query " + query);
@@ -2508,7 +2697,11 @@ if (svc === "ecs" && op === "list-tasks") {
   if (query !== undefined) process.stdout.write(sc.services.services[0].taskDefinition + "\n");
   else json(sc.services);
 } else {
-  log({ op });
+  /* LIVE-6 final convergence: which names a describe asked for (the converged capture's target groups). */
+  const names = [];
+  const ni = argv.indexOf("--names");
+  for (let j = ni + 1; ni >= 0 && j < argv.length && !argv[j].startsWith("--"); j += 1) names.push(argv[j]);
+  log({ op, service: svc, names });
   if (output === "text") process.stdout.write("None\n");
   else json({});
 }
@@ -2539,6 +2732,13 @@ interface CaptureRun {
   readonly calls: readonly Record<string, unknown>[];
   readonly file: (name: string) => unknown;
   readonly exists: (name: string) => boolean;
+}
+
+/** The cluster listing's describe batches: every describe-tasks after its last list-tasks page (the per-service captures
+ *  of L6-2 and L6-6's running-tasks.json come before the listing). */
+function clusterBatchesOf(calls: readonly Record<string, unknown>[]): number[] {
+  const lastPage = calls.map((c, i) => (c.op === "list-tasks" && c.service === undefined ? i : -1)).reduce((a, b) => Math.max(a, b), -1);
+  return calls.filter((c, i) => i > lastPage && c.op === "describe-tasks").map((c) => Number(c.count));
 }
 
 function runCapture(shell: "sh" | "ps1", scenario: StubScenario): CaptureRun {
@@ -2595,8 +2795,9 @@ describe("L6-6P: capture-evidence.{sh,ps1} write the complete listing (stub AWS 
         assert.ok(read.ok, `${total}: ${JSON.stringify(read)}`);
         assert.equal(read.arns, total);
         const describes = run.calls.filter((c) => c.op === "describe-tasks").map((c) => Number(c.count));
-        /* running-tasks.json's own describe (the service's task) first, then the cluster's batches. */
-        const clusterBatches = describes.slice(total === 0 ? 0 : 1);
+        /* The per-service describes (L6-2's stopped / running captures, L6-6's running-tasks.json) come first; the
+           cluster's batches are the describes after the cluster listing's last page (converged capture). */
+        const clusterBatches = clusterBatchesOf(run.calls);
         assert.deepEqual(clusterBatches, Array.from({ length: Math.ceil(total / 100) }, (_, i) => Math.min(100, total - i * 100)), `${total}: batches ${JSON.stringify(describes)}`);
         const pages = run.calls.filter((c) => c.op === "list-tasks" && c.service === undefined);
         assert.deepEqual(pages.map((c) => c.status), ["RUNNING", ...Array.from({ length: Math.max(1, Math.ceil((total - 1) / 100)) }, () => "STOPPED")], `${total}`);
@@ -2633,7 +2834,7 @@ describe("L6-6P: capture-evidence.{sh,ps1} write the complete listing (stub AWS 
       const doc = run.file("cluster-tasks.json") as any;
       assert.equal(doc.task_count, 2);
       assert.deepEqual(doc.listings.map((l: any) => l.pages[0].task_arns.length), [2, 1]);
-      assert.deepEqual(run.calls.filter((c) => c.op === "describe-tasks").map((c) => c.count), [1, 2]);
+      assert.deepEqual(clusterBatchesOf(run.calls), [2]);
       assert.equal(judged(run), "");
       fs.rmSync(path.dirname(run.out), { recursive: true, force: true });
     });
@@ -2663,9 +2864,394 @@ describe("L6-6P: capture-evidence.{sh,ps1} write the complete listing (stub AWS 
     });
   }
 
+  for (const [shell, exe] of shells) {
+    test(`${shell}: LIVE-6 final convergence -- one capture keeps L6-2's per-pool files, L6-5B's alarms and manifest, and L6-6P's listing and stamp`, { skip: exe === null ? `${shell === "sh" ? "bash" : "PowerShell"} is not available here` : false }, () => {
+      const run = runCapture(shell, { tasks: [SETTLED, ...history(3)] });
+      try {
+        assert.equal(run.status, 0, run.stderr);
+        for (const file of ["services.json", "task-definition-p1.json", "target-groups.json", "target-health-p1.json", "stopped-tasks-p1.json", "running-tasks-p1.json", "alarms.json", "manifest.json", "running-tasks.json", "cluster-tasks.json", "target-health.json", "distribution.json", "capture.json"]) assert.ok(run.exists(file), `${file} is captured`);
+        assert.ok(fs.existsSync(path.join(run.out, "task-definition-revisions-p1")), "L6-2's tagged revisions directory");
+        const manifest = run.file("manifest.json") as Record<string, unknown>;
+        assert.deepEqual([manifest.format, manifest.environment, manifest.pools], ["18COSMOS/EVIDENCE/v1", "staging", ["p1"]]);
+        assert.ok(Number.isFinite(Date.parse(String(manifest.captured_at))) && /Z$/.test(String(manifest.captured_at)), `culture-invariant UTC: ${String(manifest.captured_at)}`);
+        assert.equal((run.file("cluster-tasks.json") as { format: string }).format, CLUSTER_TASKS_FORMAT, "L6-6P's complete listing, not a truncated one");
+        const groups = run.calls.filter((c) => c.op === "describe-target-groups").flatMap((c) => (c.names as string[]) ?? []);
+        assert.ok(groups.includes("gs-staging-p1") && !groups.includes("gs-staging-primary"), `per-pool target groups only (L6-2): ${groups.join(", ")}`);
+        assert.ok(run.calls.some((c) => c.op === "describe-alarms"), "L6-5B's alarms");
+        /* The stamp is written LAST: after the listing, the alarms and the manifest. */
+        const order = run.calls.map((c) => String(c.op));
+        assert.ok(order.lastIndexOf("describe-alarms") < order.lastIndexOf("describe-tasks"), "the alarms before the cluster listing's batches (the listing stays next to the stamp)");
+      } finally {
+        fs.rmSync(path.dirname(run.out), { recursive: true, force: true });
+      }
+    });
+  }
+
   test(".sh and .ps1 write the same listing (contract equivalence; listed_at aside)", { skip: BASH === null || PWSH === null ? "needs both bash and PowerShell" : false }, () => {
     assert.ok(outputs.sh !== undefined && outputs.ps1 !== undefined, "the 257-task runs above produced both");
     const strip = (doc: Record<string, unknown>) => ({ ...doc, listed_at: typeof doc.listed_at === "string" && Number.isFinite(Date.parse(doc.listed_at)) });
     assert.deepEqual(strip(outputs.ps1 as Record<string, unknown>), strip(outputs.sh as Record<string, unknown>));
+  });
+});
+
+/* ================================================================== */
+/* LIVE-6 FINAL CONVERGENCE: the L6-4 binding, TASK# heartbeats, L6-5B  */
+/* alarms, the gate records, the flip / rotation / restore drills       */
+/* ================================================================== */
+
+describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-5B / L6-7 through their own judges", () => {
+  const drills = require("./drills") as typeof import("./drills");
+  const { readRestoreHeartbeats, RESTORE_STOP_DIR, RESTORE_STOP_FORMAT } = require("./recovery") as typeof import("./recovery");
+  const STOP_DIR = RESTORE_STOP_DIR;
+  const reasons = (checks: readonly Check[]) => failures(checks).map((c) => `${c.name}: ${c.detail}`).join("\n");
+
+  test("the registry: every scenario needs the alarms; each drill requires exactly its own gates (and FAILS without their evidence)", async () => {
+    const built = await buildPackage();
+    try {
+      const base = await built.ctx();
+      const status = (scenario: CertContext["scenario"], extra: Partial<CertContext> = {}) => Object.fromEntries(certify({ ...base, scenario, ...extra }).gates.map((g) => [g.id, g.status]));
+      for (const scenario of ["read-only", "replacement", "restore-drill", "flip-drill", "relayer-rotation-drill"] as const) assert.notEqual(status(scenario).alarms, "not-required", scenario);
+      const flip = status("flip-drill");
+      assert.deepEqual([flip.flip, flip["flip-alarms"], flip["relayer-rotation"], flip["generation-gate"]], ["fail", "fail", "not-required", "not-required"]);
+      const rotation = status("relayer-rotation-drill", { rotation: { from: RELAYER_OLD, to: relayerNew() } });
+      assert.deepEqual([rotation["relayer-rotation"], rotation.flip, rotation["generation-gate"]], ["fail", "not-required", "not-required"]);
+      const restore = status("restore-drill");
+      assert.deepEqual([restore["generation-gate"], restore["restore-alarms"], restore.flip], ["fail", "fail", "not-required"]);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("alarms: the L6-5B contract judged by its own checkAlarmsEvidence, bound to this capture, account, region and names -- empty staging action lists pass", async () => {
+    const built = await buildPackage();
+    try {
+      const run = async (mutate: (doc: any) => void, file: string = EVIDENCE_FILES.alarms, overrides: Partial<CertContext> = {}) => {
+        const doc = clone(JSON.parse(fs.readFileSync(path.join(built.dir, file), "utf8")));
+        mutate(doc);
+        write(built.dir, file, doc);
+        const gate = certify({ ...(await built.ctx()), ...overrides }).gates.find((g) => g.id === "alarms") as { status: string; checks: readonly Check[] };
+        write(built.dir, file, file === EVIDENCE_FILES.alarms ? ALARMS : JSON.parse(JSON.stringify({ format: "18COSMOS/EVIDENCE/v1", captured_at: "2026-09-30T10:29:00Z", environment: "staging", region: "us-east-1", pools: ["p1"] })));
+        return gate;
+      };
+      assert.equal((await run(() => undefined)).status, "pass");
+      assert.equal((await run(() => undefined, EVIDENCE_FILES.alarms, { alarmActions: { page: [], ticket: [] } })).status, "pass", "`none` / `none` is a valid staging answer");
+      const cases: Array<[string, (doc: any) => void, RegExp, string?]> = [
+        ["actions disabled", (d) => (d.MetricAlarms[0].ActionsEnabled = false), /actions are DISABLED/],
+        ["a metric's dimension", (d) => d.MetricAlarms[0].Metrics[0].MetricStat.Metric.Dimensions.push({ Name: "Task", Value: "t" }), /dimensions/],
+        ["the namespace", (d) => (d.MetricAlarms[0].Metrics[0].MetricStat.Metric.Namespace = "Other"), /namespace/],
+        ["the math", (d) => (d.MetricAlarms.find((a: any) => /a1-unexpected/.test(a.AlarmName)).Metrics.find((m: any) => m.Expression).Expression = "m1"), /expression/],
+        ["a suppressor stuck in ALARM with no window", (d) => (d.MetricAlarms.find((a: any) => /flip-window$/.test(a.AlarmName)).StateValue = "ALARM"), /restored outside a window/],
+        ["a composite suppressed by another pool's window", (d) => (d.CompositeAlarms[0].ActionsSuppressor = "gs-staging-p9-flip-window"), /composite/],
+        ["a never-suppressed alarm wrapped", (d) => d.CompositeAlarms.push({ AlarmName: "x-notify", AlarmArn: "arn:aws:cloudwatch:us-east-1:111111111111:alarm:x-notify", AlarmRule: 'ALARM("gs-staging-a1-unexpected-task-loss")', ActionsEnabled: true }), /never suppressed/],
+        ["the primary scope", (d) => (d.MetricAlarms.find((a: any) => /primary-a13/.test(a.AlarmName)).Metrics[0].MetricStat.Metric.Dimensions[1].Value = "p2"), /dimensions/],
+        ["an unknown same-environment game-server alarm", (d) => d.MetricAlarms.push({ ...clone(d.MetricAlarms[0]), AlarmName: "gs-staging-p1-per-task-x", AlarmArn: "arn:aws:cloudwatch:us-east-1:111111111111:alarm:gs-staging-p1-per-task-x" }), /nothing outside the contract/],
+        ["another account's alarm", (d) => (d.MetricAlarms[0].AlarmArn = d.MetricAlarms[0].AlarmArn.replace("111111111111", "999999999999")), /stable identity/],
+        ["another region", (d) => (d.CompositeAlarms[0].AlarmArn = d.CompositeAlarms[0].AlarmArn.replace("us-east-1", "eu-west-1")), /stable identity/],
+        ["no ARN", (d) => delete d.MetricAlarms[3].AlarmArn, /stable identity/],
+        ["an alarm missing", (d) => d.MetricAlarms.splice(0, 1), /exists: not in the evidence/],
+      ];
+      for (const [label, mutate, want] of cases) {
+        const gate = await run(mutate);
+        assert.equal(gate.status, "fail", label);
+        assert.match(reasons(gate.checks), want, label);
+      }
+      const other = await run((m) => (m.environment = "staging-x"), POOL_EVIDENCE_FILES.manifest);
+      assert.match(reasons(other.checks), /captured for this environment and these pools/);
+      const configured = await run(() => undefined, EVIDENCE_FILES.alarms, { alarmActions: { page: ["arn:aws:sns:us-east-1:111111111111:page"], ticket: [] } });
+      assert.match(reasons(configured.checks), /page actions/, "a configured destination must be wired exactly");
+      assert.ok(!/BUILD_ID/.test(JSON.stringify(configured)), "never bound to a BUILD_ID");
+      fs.rmSync(path.join(built.dir, EVIDENCE_FILES.alarms));
+      assert.match(reasons((certify(await built.ctx()).gates.find((g) => g.id === "alarms") as { checks: readonly Check[] }).checks), /alarms: evidence/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("generation gate: the plan's generation_adoption is the gate's OPEN attestation, AND its adoption_claim is the ledger's APPGEN#HISTORY (read live)", async () => {
+    const built = await buildPackage({ generation: { marker: RESTORED_MARKER, appgen: ADOPTED } });
+    try {
+      writeDrillEvidence(built.dir, "restore");
+      const base = await built.ctx();
+      const startup = { ...base.prerequisite.startup, config: { ...base.prerequisite.startup.config, generation: 2, gameTable: "gs-staging-game-g2" } };
+      const gate = async (script: ReaderScript, record: Record<string, unknown> = {}) => {
+        if (Object.keys(record).length > 0) {
+          fs.rmSync(path.join(built.dir, "gate-generation.json"));
+          writeDrillEvidence(built.dir, "restore", record);
+        }
+        const evidence = await generationOf(script);
+        return reasons(drills.judgeGenerationGateRecord(built.dir, { environment: "staging", generation: startup.config.generation, gameTable: startup.config.gameTable, evidence, prerequisiteAt: "2026-09-30T10:00:00.000Z" }));
+      };
+      assert.equal(await gate({ marker: RESTORED_MARKER, appgen: ADOPTED }), "");
+      const history = { generation: 2, ...(ADOPTED.adoption as NonNullable<AppGenerationFacts["adoption"]>) };
+      assert.match(await gate({ marker: RESTORED_MARKER, appgen: ADOPTED, history: { ...history, claim: "33333333-3333-4333-8333-333333333333" } }), /adoption_claim = APPGEN#HISTORY\/GEN#2/, "a record whose claim the ledger's history does not hold");
+      assert.match(await gate({ marker: RESTORED_MARKER, appgen: ADOPTED, history: null }), /the adoption's transaction did not land/);
+      assert.match(await gate({ marker: RESTORED_MARKER, appgen: ADOPTED, history: new Error("APPGEN#HISTORY damaged") }), /unreadable/);
+      assert.match(await gate({ marker: RESTORED_MARKER, appgen: ADOPTED }, { adoption_claim: "44444444-4444-4444-8444-444444444444" }), /adoption_claim/, "a hand-edited claim");
+      assert.match(await gate({ marker: RESTORED_MARKER, appgen: ADOPTED }, { verdict: "CLOSED" }), /was not OPEN/);
+      assert.match(await gate({ marker: RESTORED_MARKER, appgen: ADOPTED }, { environment: "prod" }), /not staging/);
+      assert.match(await gate({ marker: RESTORED_MARKER, appgen: ADOPTED }, { attestation: { generation: 2, game_table: "gs-staging-game-g2b", restore_id: "drill-0930" } }), /differs from the gate's attestation in game_table/);
+      assert.match(await gate({ marker: RESTORED_MARKER, appgen: ADOPTED }, { gated_at: "2026-09-30T09:00:00.000Z" }), /gated after the adoption/);
+      fs.rmSync(path.join(built.dir, "gate-generation.json"));
+      assert.match(await gate({ marker: RESTORED_MARKER, appgen: ADOPTED }), /the gate's own record/);
+      /* The claim cross-check is read-only: the fake ledger was only read (no write seam exists on RecoveryReaders). */
+      assert.deepEqual(Object.keys(readersFor()).sort(), ["adoptionRecord", "appGeneration", "generationMarker", "generationServingProblem", "identityState", "reviews"]);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("TASK# heartbeats: the PREVIOUS generation's table after the stop -- fresh = FAIL, none proves nothing, unreadable = FAIL, unbound = ECS alone", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l6hb-"));
+    try {
+      const adoption = { ...(ADOPTED.adoption as NonNullable<AppGenerationFacts["adoption"]>), generation: 2 };
+      write(dir, path.join(STOP_DIR, "stamp.json"), { format: RESTORE_STOP_FORMAT, run_id: RUN, restore_id: adoption.restore_id, captured_at: "2026-09-30T09:30:00Z" });
+      const asked: unknown[] = [];
+      const reader = (ids: readonly string[] | Error) => async (_c: unknown, table: string, expect: { generation: number; after: number }) => {
+        asked.push({ table, ...expect });
+        if (ids instanceof Error) throw ids;
+        return ids;
+      };
+      const tableOf = (g: number) => `gs-staging-game-g${g}`;
+      const fresh = await readRestoreHeartbeats(reader(["t-old1"]), {} as never, { dir, adoption, tableOf });
+      assert.deepEqual(asked, [{ table: "gs-staging-game-g1", generation: 1, after: Date.parse("2026-09-30T09:30:00Z") }], "g<N>, generation N, after the stop's captured_at");
+      const none = await readRestoreHeartbeats(reader([]), {} as never, { dir, adoption, tableOf });
+      const broken = await readRestoreHeartbeats(reader(new Error("a TASK# item with an unknown role")), {} as never, { dir, adoption, tableOf });
+      assert.equal(await readRestoreHeartbeats(undefined, {} as never, { dir, adoption, tableOf }), null);
+      const noAdoption = await readRestoreHeartbeats(reader([]), {} as never, { dir, adoption: null, tableOf });
+      fs.rmSync(path.join(dir, STOP_DIR, "stamp.json"));
+      const noStamp = await readRestoreHeartbeats(reader([]), {} as never, { dir, adoption, tableOf });
+      const built = await buildPackage({ generation: { marker: RESTORED_MARKER, appgen: ADOPTED } });
+      try {
+        write(built.dir, path.join(RESTORE_STOP_DIR, "services.json"), { services: [{ serviceName: "gs-staging-p1", status: "ACTIVE", desiredCount: 0, runningCount: 0, pendingCount: 0 }], failures: [] });
+        write(built.dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"), { batches: [{ tasks: [], failures: [] }] });
+        write(built.dir, path.join(RESTORE_STOP_DIR, "stamp.json"), { format: RESTORE_STOP_FORMAT, run_id: RUN, restore_id: "drill-0930", captured_at: "2026-09-30T09:30:00Z" });
+        const base = await built.ctx();
+        const quiet = (heartbeats: typeof fresh) => reasons((certify({ ...base, scenario: "restore-drill", heartbeats }).gates.find((g) => g.id === "restore-quiet") as { checks: readonly Check[] }).checks);
+        assert.match(quiet(fresh), /fresh heartbeats from t-old1/);
+        assert.equal(quiet(none), "", "no heartbeat: the ECS stop stands (TASK# is never the authority)");
+        assert.match(quiet(broken), /unreadable: the old generation's TASK# items could not be read completely/);
+        assert.match(quiet(noAdoption), /APPGEN shows no adoption/);
+        assert.match(quiet(noStamp), /no restore-stop time/);
+      } finally {
+        cleanup(built.dir);
+      }
+    } finally {
+      cleanup(dir);
+    }
+  });
+
+  /* ---------------- the flip drill (two pools; p2 -> p1) ---------------- */
+
+  const P2_TASK = `arn:aws:ecs:us-east-1:111111111111:task/gs-staging/${"b2".repeat(16)}`;
+  const TG_P2 = "arn:aws:elasticloadbalancing:us-east-1:111111111111:targetgroup/gs-staging-p2/fedcba9876543210";
+  const at = (iso: string) => Date.parse(iso);
+  const serviceTask = (pool: string, id: string, extra: Record<string, unknown>) => ({ taskArn: `arn:aws:ecs:us-east-1:111111111111:task/gs-staging/${id.repeat(16)}`, group: `service:gs-staging-${pool}`, taskDefinitionArn: `arn:aws:ecs:us-east-1:111111111111:task-definition/gs-staging-${pool}:7`, ...extra });
+  function flipDir(over: { record?: Record<string, unknown>; stoppedExit?: Record<string, number>; alarms?: Record<string, unknown>; capture?: string; gsTo?: string } = {}): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l6flip-"));
+    write(dir, "flip-record.json", flipRecord(over.record ?? {}));
+    const stopped = (pool: string, id: string) => serviceTask(pool, id, { lastStatus: "STOPPED", desiredStatus: "STOPPED", startedAt: "2026-09-30T08:00:00Z", stoppedAt: "2026-09-30T09:00:30Z", containers: [{ name: "game-server", exitCode: over.stoppedExit?.[pool] ?? 5 }] });
+    const running = (pool: string, id: string) => serviceTask(pool, id, { lastStatus: "RUNNING", desiredStatus: "RUNNING", startedAt: "2026-09-30T09:01:00Z", containers: [{ name: "game-server", lastStatus: "RUNNING" }] });
+    const tasks = { p1: [stopped("p1", "c1"), running("p1", "d1")], p2: [stopped("p2", "c2"), running("p2", "d2")] };
+    for (const pool of ["p1", "p2"] as const) {
+      write(dir, POOL_EVIDENCE_FILES.stoppedTasks(pool), { tasks: [tasks[pool][0]] });
+      write(dir, POOL_EVIDENCE_FILES.runningTasks(pool), { tasks: [tasks[pool][1]] });
+    }
+    write(dir, EVIDENCE.clusterTasks, clusterListing([...tasks.p1, ...tasks.p2]));
+    write(dir, POOL_EVIDENCE_FILES.targetGroups, { TargetGroups: [TARGET_GROUPS.TargetGroups[0], { ...TARGET_GROUPS.TargetGroups[0], TargetGroupArn: TG_P2, TargetGroupName: "gs-staging-p2" }] });
+    const gs = over.gsTo === "p2" ? TG_P2 : TG_ARN;
+    write(dir, POOL_EVIDENCE_FILES.listenerRules, {
+      Rules: [
+        { Priority: "100", Conditions: [{ Field: "path-pattern", Values: ["/gs/p/p1"], PathPatternConfig: { Values: ["/gs/p/p1"] } }], Actions: [{ Type: "forward", TargetGroupArn: TG_ARN }] },
+        { Priority: "101", Conditions: [{ Field: "path-pattern", Values: ["/gs/p/p2"], PathPatternConfig: { Values: ["/gs/p/p2"] } }], Actions: [{ Type: "forward", TargetGroupArn: TG_P2 }] },
+        { Priority: "1000", Conditions: [{ Field: "path-pattern", Values: ["/gs*"], PathPatternConfig: { Values: ["/gs*"] } }], Actions: [{ Type: "forward", TargetGroupArn: gs }] },
+        { Priority: "default", IsDefault: true, Conditions: [], Actions: [{ Type: "fixed-response" }] },
+      ],
+    });
+    write(dir, EVIDENCE.capture, { format: "18COSMOS/L5-8-CAPTURE/v1", captured_at: over.capture ?? "2026-09-30T09:30:00Z" });
+    write(dir, "probe-flip-alarms.json", {
+      format: "18COSMOS/L6-6-FLIP-ALARM-DRILL/v1",
+      run_id: RUN,
+      flip: { from: "p2", to: "p1", opened_at: FLIP_WINDOW.opened_at, expires_at: FLIP_WINDOW.expires_at },
+      cases: {
+        "exit3-in-window-pages-a1": { task_arn: `arn:aws:ecs:us-east-1:111111111111:task/gs-staging/${"e3".repeat(16)}`, exit_code: 3, stopped_at: at("2026-09-30T09:05:00Z"), alarm: "gs-staging-a1-unexpected-task-loss", state: "ALARM", alarm_at: at("2026-09-30T09:06:00Z"), actions_suppressed: false },
+        "suppressed-alarm-actionable-after-window": { alarm: "gs-staging-p1-a12-prolonged-unready", during: { at: at("2026-09-30T09:10:00Z"), composite_state: "ALARM", actions_suppressed_by: "Alarm" }, after: { at: at("2026-09-30T09:22:00Z"), composite_state: "ALARM", actions_suppressed_by: "None" } },
+        "suppressors-during-window": { at: at("2026-09-30T09:10:00Z"), states: { p1: "ALARM", p2: "ALARM" } },
+        ...(over.alarms ?? {}),
+      },
+    });
+    return dir;
+  }
+  const FLIP_EXPECT = { environment: "staging", pools: ["p1", "p2"], primaryPool: "p1", escrow: true };
+  const flipText = (dir: string) => reasons(drills.judgeFlipDrill(dir, FLIP_EXPECT));
+  const flipAlarmText = (dir: string, pools = ["p1", "p2"]) => reasons(drills.judgeFlipAlarmDrill(dir, { run: RUN, environment: "staging", pools }));
+
+  test("flip drill: L6-2's record and captures -- window before the CAS, roles settled, exit 5 only, /gs* moved, recovery settled, suppression bounded", () => {
+    const ok = flipDir();
+    try {
+      assert.equal(flipText(ok), "");
+      assert.equal(flipAlarmText(ok), "");
+    } finally {
+      cleanup(ok);
+    }
+    const cases: Array<[string, Parameters<typeof flipDir>[0], RegExp]> = [
+      ["the window opened after the CAS", { record: { window: { ...FLIP_WINDOW, opened_at: FLIP_WINDOW.opened_at + 5_000, suppression: "closed" } } }, /window opened BEFORE the routing CAS/],
+      ["the CAS not applied", { record: { cas: { at: FLIP_WINDOW.opened_at + 1000, run: null, outcome: "unknown", version: null, detail: "" }, verdict: "unknown" } }, /roles settled[\s\S]*CAS applied/],
+      ["the roles not settled", { record: { verdict: "timeout" } }, /the roles settled/],
+      ["the identity writer left on the old primary", { record: { after: { ...(flipRecord().after as object), identity_writer: { epoch: 12, pool: "p2", task: "t" } } } }, /restarted into their roles/],
+      ["an exit 3 from a flip pool's service task", { stoppedExit: { p2: 3 } }, /no loss|no exit 3 \/ 4/],
+      ["an exit 4 from a flip pool's service task", { stoppedExit: { p1: 4 } }, /no exit 3 \/ 4/],
+      ["/gs* still on the old primary", { gsTo: "p2" }, /ALB \/gs\* rule/],
+      ["the recovery never settled (window open)", { record: { window: { ...FLIP_WINDOW, closed_at: null, suppression: "published" } } }, /recovery of the superseded ownership settled/],
+      ["the suppression never published", { record: { window: { ...FLIP_WINDOW, suppression: "failed" } } }, /suppression was failed/],
+      ["a window longer than 45 min", { record: { window: { ...FLIP_WINDOW, expires_at: FLIP_WINDOW.opened_at + 50 * 60_000, suppression: "closed" } } }, /suppression was bounded/],
+      ["captured before the window's tail ended", { capture: "2026-09-30T09:22:00Z" }, /captured before the window/],
+      ["another environment's flip", { record: { environment: "prod" } }, /this environment's flip/],
+    ];
+    for (const [label, over, want] of cases) {
+      const dir = flipDir(over);
+      try {
+        assert.match(flipText(dir), want, label);
+      } finally {
+        cleanup(dir);
+      }
+    }
+    const missing = fs.mkdtempSync(path.join(os.tmpdir(), "gs-l6flip-"));
+    try {
+      assert.match(flipText(missing), /L6-2's flip record/);
+      assert.match(flipAlarmText(missing), /the drill's observations/);
+    } finally {
+      cleanup(missing);
+    }
+  });
+
+  test("flip drill alarms: an exit 3 in the window still trips A1; a still-failing alarm acts after the window; only the flip's two pools suppressed", () => {
+    const cases: Array<[string, Record<string, unknown>, RegExp]> = [
+      ["no A1 observation", { "exit3-in-window-pages-a1": undefined }, /exit 3 during the flip still trips A1/],
+      ["A1 never fired", { "exit3-in-window-pages-a1": { task_arn: "x", exit_code: 3, stopped_at: at("2026-09-30T09:05:00Z"), alarm: "gs-staging-a1-unexpected-task-loss", state: "OK", alarm_at: at("2026-09-30T09:06:00Z"), actions_suppressed: false } }, /trips A1/],
+      ["A1's actions suppressed", { "exit3-in-window-pages-a1": { task_arn: "x", exit_code: 3, stopped_at: at("2026-09-30T09:05:00Z"), alarm: "gs-staging-a1-unexpected-task-loss", state: "ALARM", alarm_at: at("2026-09-30T09:06:00Z"), actions_suppressed: true } }, /trips A1/],
+      ["the exit 3 outside the window", { "exit3-in-window-pages-a1": { task_arn: "x", exit_code: 3, stopped_at: at("2026-09-30T09:25:00Z"), alarm: "gs-staging-a1-unexpected-task-loss", state: "ALARM", alarm_at: at("2026-09-30T09:26:00Z"), actions_suppressed: false } }, /trips A1/],
+      ["still suppressed after the window", { "suppressed-alarm-actionable-after-window": { alarm: "gs-staging-p1-a12-prolonged-unready", during: { at: at("2026-09-30T09:10:00Z"), composite_state: "ALARM", actions_suppressed_by: "Alarm" }, after: { at: at("2026-09-30T09:22:00Z"), composite_state: "ALARM", actions_suppressed_by: "Alarm" } } }, /actionable after the window/],
+      ["an unsuppressible alarm offered as the suppressed one", { "suppressed-alarm-actionable-after-window": { alarm: "gs-staging-a1-unexpected-task-loss", during: { at: at("2026-09-30T09:10:00Z"), composite_state: "ALARM", actions_suppressed_by: "Alarm" }, after: { at: at("2026-09-30T09:22:00Z"), composite_state: "ALARM", actions_suppressed_by: "None" } } }, /actionable after the window/],
+    ];
+    for (const [label, alarms, want] of cases) {
+      const dir = flipDir({ alarms });
+      try {
+        assert.match(flipAlarmText(dir), want, label);
+      } finally {
+        cleanup(dir);
+      }
+    }
+    const third = flipDir({ alarms: { "suppressors-during-window": { at: at("2026-09-30T09:10:00Z"), states: { p1: "ALARM", p2: "ALARM", p3: "ALARM" } } } });
+    try {
+      assert.match(flipAlarmText(third, ["p1", "p2", "p3"]), /only the flip's two pools were suppressed/, "a third pool's suppressor in ALARM");
+    } finally {
+      cleanup(third);
+    }
+  });
+
+  test("flip drill: the verifier's own flip judgement runs from the record in the evidence (L6-2's `verify --flip-record`), and the alarms gate judges suppressors in ITS window", async () => {
+    const built = await buildPackage();
+    try {
+      writeDrillEvidence(built.dir, "flip", { from: "p2", to: "p1" });
+      const record = drills.flipRecordOf(built.dir).record;
+      assert.ok(record !== null);
+      assert.deepEqual(drills.flipWindowOf(record), { from: "p2", to: "p1", ...FLIP_WINDOW });
+      /* A suppressor in ALARM long after the window: stuck -- FAIL even inside a flip drill. */
+      const doc = clone(ALARMS) as any;
+      doc.MetricAlarms.find((a: any) => a.AlarmName === "gs-staging-p1-flip-window").StateValue = "ALARM";
+      write(built.dir, EVIDENCE_FILES.alarms, doc);
+      const gate = certify({ ...(await built.ctx()), scenario: "flip-drill" }).gates.find((g) => g.id === "alarms") as { checks: readonly Check[] };
+      assert.match(reasons(gate.checks), /restored outside a window/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  /* ---------------- the relayer-address rotation drill ---------------- */
+
+  test("relayer rotation: the gate OPEN with the OLD address configured, every pool drained, RELAYQ#<old> read completely and empty, the new queue never used -- and only then the change", async () => {
+    const built = await buildPackage();
+    try {
+      const gate = async (over: Record<string, unknown> = {}, rotation = { from: RELAYER_OLD, to: relayerNew() }) => {
+        fs.rmSync(path.join(built.dir, "gate-relayer-rotation.json"), { force: true });
+        writeDrillEvidence(built.dir, "rotation", over);
+        const g = certify({ ...(await built.ctx()), scenario: "relayer-rotation-drill", rotation }).gates.find((x) => x.id === "relayer-rotation") as { status: string; checks: readonly Check[] };
+        return { status: g.status, text: reasons(g.checks) };
+      };
+      assert.deepEqual(await gate(), { status: "pass", text: "" });
+      const checksWith = (name: string, status: string) => {
+        const base = [
+          { name: "the active configuration names the OLD relayer", status: "pass", detail: "" },
+          { name: "drained p1", status: "pass", detail: "" },
+          { name: `RELAYQ#${RELAYER_OLD} empty (strongly consistent, every page)`, status: "pass", detail: "" },
+          { name: `RELAYQ#${relayerNew()}`, status: "skipped", detail: "" },
+        ];
+        return base.map((c) => (c.name === name ? { ...c, status } : c));
+      };
+      const cases: Array<[string, Record<string, unknown>, RegExp, { from: string; to: string }?]> = [
+        ["a CLOSED gate", { verdict: "CLOSED" }, /was OPEN/],
+        ["the old queue unknown", { queue: "unknown" }, /was unknown at the gate/],
+        ["the old queue open", { queue: "open" }, /was open at the gate/],
+        ["the new configuration already active at the gate", { configured_relayer: relayerNew() }, /the configuration named/],
+        ["a pool not proven drained", { checks: checksWith("drained p1", "skipped") }, /every pool drained/],
+        ["another deployment's pools", { pools: ["p1", "p9"] }, /every pool drained/],
+        ["the old queue's check failed", { checks: checksWith(`RELAYQ#${RELAYER_OLD} empty (strongly consistent, every page)`, "fail") }, /was OPEN|read completely/],
+        ["the NEW queue used to infer safety", { checks: checksWith(`RELAYQ#${relayerNew()}`, "pass") }, /never used to infer safety/],
+        ["gated after the tasks restarted", { gated_at: "2026-09-30T09:30:00.000Z" }, /changed only after the gate/],
+        ["another rotation's record", {}, /gates .* not /, { from: RELAYER_OLD, to: "juno1wfk5fda0sg5z2lqrpwh7wexnckpe6hqzljkt4v" }],
+      ];
+      for (const [label, over, want, rotation] of cases) {
+        const got = await gate(over, rotation);
+        assert.equal(got.status, "fail", label);
+        assert.match(got.text, want, label);
+      }
+      /* The live configuration must name the NEW address (a gate whose change never happened certifies nothing). */
+      const stale = await gate({ from_relayer: relayerNew(), to_relayer: RELAYER_OLD, configured_relayer: relayerNew(), checks: [{ name: "drained p1", status: "pass", detail: "" }, { name: `RELAYQ#${relayerNew()} empty (strongly consistent, every page)`, status: "pass", detail: "" }, { name: `RELAYQ#${RELAYER_OLD}`, status: "skipped", detail: "" }] }, { from: relayerNew(), to: RELAYER_OLD });
+      assert.match(stale.text, /changed only after the gate: at the gate .*, now /);
+      fs.rmSync(path.join(built.dir, "gate-relayer-rotation.json"));
+      const none = certify({ ...(await built.ctx()), scenario: "relayer-rotation-drill", rotation: { from: RELAYER_OLD, to: relayerNew() } }).gates.find((x) => x.id === "relayer-rotation") as { checks: readonly Check[] };
+      assert.match(reasons(none.checks), /the gate's own record/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  /* ---------------- the restore drill's alarms ---------------- */
+
+  test("restore alarms: R1, A4g, A4i, R2, R3 each fired under its injected condition, never suppressed -- at least one inside an overlapping flip window", async () => {
+    const built = await buildPackage();
+    try {
+      const judged = (cases: Record<string, unknown>) => {
+        const doc = JSON.parse(fs.readFileSync(path.join(built.dir, "probe-restore-alarms.json"), "utf8"));
+        write(built.dir, "probe-restore-alarms.json", { ...doc, cases: { ...doc.cases, ...cases } });
+        const text = reasons(drills.judgeRestoreAlarmDrill(built.dir, { run: RUN, environment: "staging", pools: ["p1"] }));
+        write(built.dir, "probe-restore-alarms.json", doc);
+        return text;
+      };
+      writeDrillEvidence(built.dir, "restore");
+      assert.equal(judged({}), "");
+      const good = JSON.parse(fs.readFileSync(path.join(built.dir, "probe-restore-alarms.json"), "utf8")).cases;
+      assert.match(judged({ "r2-money-journal-ahead": undefined }), /r2-money-journal-ahead fires .*no observation/);
+      assert.match(judged({ "a4g-generation-refused": { ...good["a4g-generation-refused"], actions_suppressed: true } }), /a4g-generation-refused fires/);
+      assert.match(judged({ "a4i-identity-restore-refused": { ...good["a4i-identity-restore-refused"], state: "OK" } }), /a4i-identity-restore-refused fires/);
+      assert.match(judged({ "r3-restore-unverified": { ...good["r3-restore-unverified"], alarm: "gs-staging-p9-r3-restore-unverified" } }), /r3-restore-unverified fires/, "another deployment's pool");
+      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], alarm_at: good["r1-generation-lost"].injected_at - 1 } }), /r1-generation-lost fires/, "fired before the injection");
+      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], overlapping_flip_window: null } }), /not suppressed by an overlapping flip window \(observed\)/);
+      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], overlapping_flip_window: { ...good["r1-generation-lost"].overlapping_flip_window, opened_at: good["r1-generation-lost"].injected_at + 1 } } }), /does not cover the injection/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("SOURCE GUARDS: the binding names L6-4's readers and the TASK# reader; only tools/awsDeploy.ts reaches the reader; the verifier never reads TASK# into a decision", () => {
+    const SRC = path.join(REPO, "server/src");
+    const tool = fs.readFileSync(path.join(SRC, "tools/awsDeploy.ts"), "utf8");
+    for (const fn of ["readGenerationMarker", "readAppGeneration", "generationMarkerProblem", "adoptionBindingProblem", "readIdentityRestore", "readIdentityTableSelf", "identityServingProblem", "inspectIdentityRestore", "readAdoptionRecord", "oldGenerationHeartbeatsAfter"]) assert.match(tool, new RegExp(`\\b${fn}\\b`), fn);
+    assert.match(tool, /ReviewSummary as StagingReviewSummary/, "L6-6's ReviewSummary is imported under an explicit alias (L6-4 has its own)");
+    assert.match(tool, /open: r\.resolved_at === null/);
+    assert.ok(!/profile_id|principal_id|unconfirmed_events|selector_state/.test(tool), "the REVIEW# mapping carries only the safe summary");
+    const walk = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(path.join(dir, e.name)) : e.name.endsWith(".ts") && !e.name.endsWith(".test.ts") ? [path.join(dir, e.name)] : []));
+    const importers = walk(SRC).filter((f) => /from\s+"[^"]*runtime\/taskHeartbeats"/.test(fs.readFileSync(f, "utf8"))).map((f) => path.relative(SRC, f).split(path.sep).join("/"));
+    assert.deepEqual(importers, ["tools/awsDeploy.ts"]);
   });
 });

@@ -222,7 +222,7 @@ const siblingRuntimeParameter = (primaryArn: string, environment: string, pool: 
 };
 
 /** L6-5B: `--game-generations 1,2` (every managed generation; default the serving one). */
-function gameGenerationsOf(flags: Map<string, string>, serving: number): number[] {
+export function gameGenerationsOf(flags: Map<string, string>, serving: number): number[] {
   const text = flags.get("--game-generations");
   if (text === undefined) return [serving];
   const list = text.split(",").map((g) => g.trim()).filter((g) => g.length > 0).map((g) => generationOf(g));
@@ -231,7 +231,7 @@ function gameGenerationsOf(flags: Map<string, string>, serving: number): number[
 }
 
 /** L6-5B: an alarm action list flag -- absent: not judged (class consistency only); `none` (or empty): none configured. */
-function actionListOf(flags: Map<string, string>, name: string): string[] | null {
+export function actionListOf(flags: Map<string, string>, name: string): string[] | null {
   const text = flags.get(name);
   if (text === undefined) return null;
   if (text === "none") return []; // an empty list, spelled so PowerShell cannot drop it

@@ -102,6 +102,18 @@ const OPERATOR_IMPORTS: ReadonlySet<string> = new Set([
   "aws/runtime/configSource",
   "aws/runtime/storageMode",
 ]);
+/** LIVE-6 final convergence (L6-6R §7): the staging certification's ONE binding, `tools/awsDeploy.ts`, may import from the
+ *  AWS layers exactly these READ functions (and nothing else from these modules): L6-4's canonical readers and startup
+ *  rule, and L6-5A's one TASK# reader. */
+const STAGING_BINDING_NAMES: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  "aws/game/generationMarker": ["adoptionBindingProblem", "generationMarkerProblem", "readGenerationMarker"],
+  "aws/identity/dynamoIdentityStore": ["identityServingProblem", "readIdentityRestore", "readIdentityTableSelf"],
+  "aws/identity/identityRestore": ["inspectIdentityRestore"],
+  "aws/ledger/appGeneration": ["readAdoptionRecord", "readAppGeneration"],
+  "aws/runtime/taskHeartbeats": ["oldGenerationHeartbeatsAfter"],
+});
+const STAGING_BINDING_IMPORTS: ReadonlySet<string> = new Set(Object.keys(STAGING_BINDING_NAMES));
+
 /** Writers the operator tooling must never reach (the ledger and identity writers, the log / intent / ticket stores, the
  *  role takeovers, the APPGEN / generation writes of later slices). */
 const OPERATOR_FORBIDDEN: readonly string[] = Object.freeze([
@@ -345,16 +357,20 @@ describe("L5-1 AWS client convention", () => {
              the ownership layer, KMS or the runtime composition itself. */
           const operator = relative.startsWith("aws/operator/");
           const allowed = (dir: string, also: boolean) => relative.startsWith(`${dir}/`) || also || runtime || conformance.test(relative);
+          /* LIVE-6 final convergence: the staging certification's ONE binding (`tools/awsDeploy.ts`, L6-6R §7) reaches L6-4's
+             canonical READERS and startup rule and L6-5A's one TASK# reader -- exactly these modules (and, below, exactly
+             these names from them): never an adapter's writer, the ownership layer, KMS or the runtime composition. */
+          const stagingBinding = relative === "tools/awsDeploy.ts" && STAGING_BINDING_IMPORTS.has(target);
           /* LIVE-6 L6-6: the staging certification's transaction probe drives the adapters' own write engine
              (`aws/game/transact`) against disposable staging items -- the engine, never an adapter. */
-          if (under(target, "aws/game") && !allowed("aws/game", composer || operator || (deploy && (target === "aws/game/routing" || target === "aws/game/gameTable" || target === "aws/game/generationMarker" || target === "aws/game/transact")))) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
-          if (under(target, "aws/identity") && !allowed("aws/identity", composer || operator)) offenders.push(`${relative}: imports the identity adapters (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/game") && !allowed("aws/game", composer || operator || stagingBinding || (deploy && (target === "aws/game/routing" || target === "aws/game/gameTable" || target === "aws/game/generationMarker" || target === "aws/game/transact")))) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/identity") && !allowed("aws/identity", composer || operator || stagingBinding)) offenders.push(`${relative}: imports the identity adapters (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/ownership") && !allowed("aws/ownership", false)) offenders.push(`${relative}: imports the ownership layer (${name}) outside the L5-7 runtime`);
-          if (under(target, "aws/ledger") && !allowed("aws/ledger", composer || deploy || operator)) offenders.push(`${relative}: imports the signing ledger (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/ledger") && !allowed("aws/ledger", composer || deploy || operator || stagingBinding)) offenders.push(`${relative}: imports the signing ledger (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/kms") && !allowed("aws/kms", deploy)) offenders.push(`${relative}: imports the KMS binding (${name}) outside the L5-7 runtime`);
           const deployReadsRuntime = deploy && ["aws/runtime/awsMain", "aws/runtime/configSource", "aws/runtime/runtimeConfig"].includes(target);
           const operatorConfig = operator && ["aws/runtime/runtimeConfig", "aws/runtime/configSource", "aws/runtime/storageMode"].includes(target);
-          if (under(target, "aws/runtime") && !runtime && !conformance.test(relative) && !deployReadsRuntime && !operatorConfig && !(relative === "start.ts" && (target === "aws/runtime/storageMode" || target === "aws/runtime/awsMain"))) {
+          if (under(target, "aws/runtime") && !runtime && !conformance.test(relative) && !deployReadsRuntime && !operatorConfig && !(stagingBinding && target === "aws/runtime/taskHeartbeats") && !(relative === "start.ts" && (target === "aws/runtime/storageMode" || target === "aws/runtime/awsMain"))) {
             offenders.push(`${relative}: imports the AWS runtime (${name}); only start.ts reaches it (the storage mode, and the AWS entry)`);
           }
           if (under(target, "aws/recovery") && !recovery && !conformance.test(relative)) offenders.push(`${relative}: imports the restore's operator surface (${name}); nothing but its own CLI and the conformance suites reaches it`);
@@ -372,5 +388,19 @@ describe("L5-1 AWS client convention", () => {
       }
     }
     assert.deepEqual(offenders, []);
+  });
+
+  test("LIVE-6 final convergence: tools/awsDeploy.ts binds the staging certification to EXACTLY L6-4's read functions and L6-5A's TASK# reader -- no writer, no second parser", () => {
+    const root = path.resolve(__dirname, "../../../../src") /* dist/server/src/aws -> server/src */;
+    const file = path.join(root, "tools/awsDeploy.ts");
+    const text = fs.readFileSync(file, "utf8");
+    const got: Record<string, string[]> = {};
+    for (const match of text.matchAll(/import\s+(type\s+)?\{([^}]*)\}\s+from\s+"([^"]+)"/g)) {
+      const target = path.relative(root, path.resolve(path.dirname(file), match[3])).split(path.sep).join("/");
+      if (!/^aws\/(game|identity|ledger|runtime|ownership|kms|operator|recovery)\//.test(target)) continue;
+      got[target] = match[2].split(",").map((n) => n.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]).filter((n) => n.length > 0).sort();
+    }
+    assert.deepEqual(got, Object.fromEntries(Object.entries(STAGING_BINDING_NAMES).map(([k, v]) => [k, [...v].sort()])));
+    assert.ok(!/import\s+\*\s+as\s+\w+\s+from\s+"[^"]*\/aws\//.test(text), "no namespace import of an AWS module (every name is listed)");
   });
 });

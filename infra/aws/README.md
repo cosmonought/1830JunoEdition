@@ -150,6 +150,10 @@ Also note:
 - A circuit-breaker rollback runs the previous revision, but it **reads the same (latest) document**. A bad document is
   undone by reverting it in Terraform, not by the rollback.
 - Never `aws ecs run-task` a pool's task definition beside its service: the two would fence each other in turn.
+- **No arbitrary mixed-version coexistence is claimed.** L6-7's readers of `RELAYQ#`, `FINKEYS` and `FINIDX#` require
+  **exact attribute sets**: a future change that adds an attribute to any of those item classes is a persistence-format
+  change that needs its own coexistence/rollout plan (old and new tasks never serve side by side on it). No such change
+  exists today. A flip, which runs the same revision in both pools, is unaffected.
 
 ## The flip: primary A → B (LIVE-6 L6-2)
 
@@ -220,6 +224,25 @@ pending = 0, settled, no target. Procedure: `recover` → `retire-check` (ready-
 `retire-check --evidence` (retired) → Terraform `desired_count = 0` for the pool. **The durable record is Terraform's
 state**: no `POOL#.status` attribute exists (no authoritative schema; the owner decision is recorded in the L6-2 report),
 so a pool is never "retired" in the table. Its image, task definitions, target group and log group are kept.
+
+## Relayer-address rotation (deployment invariant; L6-7's `RELAYQ#`)
+
+`RELAYQ#<relayer-address>` in the game table is the relayer's **authoritative work discovery** (L6-7). A relayer under a
+new address never reads the old partition, and there is **no automatic queue migration** (owner decision, this LIVE
+cycle). So **a configuration change that changes the relayer address is refused while the old address's queue holds any
+entry.** The only supported procedure:
+
+1. Keep the old relayer configuration active; watch it drain its queue to zero (`relayer.status()`, the AUDIT lines).
+2. `drain-pool` every pool (desired = running = pending = 0): no task can add to the old queue any more.
+3. `capture-evidence`, then `npm run awsDeploy -- relayer-rotation-gate --runtime-parameter <ARN> --environment <env>
+   --from-relayer <old> --to-relayer <new> --evidence <dir>` (read-only; bootstrap role). **GATE OPEN** only when the
+   active configuration still names the old address, every pool is drained (fresh evidence), and `RELAYQ#<old>` read
+   **completely** (strongly consistent, every page) holds **no entry of any shape**. An unreadable or unknown queue
+   refuses; the new address's queue is never consulted.
+4. Only then change the relayer address/configuration (`escrow` in `stacks/app`) and start the pools (drain-first); the
+   primary's task takes the new address's relayer role at its start.
+
+If the gate is closed with entries, restart the pools on the **old** configuration and go back to step 1.
 
 ## Generation switch after a restore (L6-4 §12.1, wired by L6-2)
 
@@ -296,7 +319,7 @@ Terraform state holds only non-secret values: the documents, ARNs and names. KMS
 
 ```
 cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 6 runs
-cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 31 runs
+cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 32 runs
 cd infra/aws/stacks/app     && terraform init -backend=false && terraform validate    # (and stacks/ledger)
 cd server && npm run build && node --test dist/server/src/aws/deploy/l5_8Deploy.test.js dist/server/src/aws/awsClients.test.js
 node --test dist/server/src/aws/operator/l6_2Flip.test.js

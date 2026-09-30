@@ -45,6 +45,8 @@ import { loadAwsStartup, type AwsStartup } from "../runtime/awsMain";
 import type { ParameterSource } from "../runtime/configSource";
 import { AWS_RUNTIME_CONFIG_FORMAT_V2 } from "../runtime/runtimeConfig";
 import { readFlipRecordFile } from "../controlPlane/flipRecord";
+import { checkDrained, checkManifest, POOL_EVIDENCE_FILES, readEvidence } from "../controlPlane/evidence";
+import { RELAYER_ADDRESS, relayQueueState } from "./relayerRotation";
 import { adoptionBindingProblem, generationMarkerProblem, readGenerationMarker, type GenerationMarker } from "../game/generationMarker";
 import { readAdoptionRecord, readAppGeneration } from "../ledger/appGeneration";
 import { applyBootstrap, bootstrapPlan, BootstrapUnknownError, inspectBootstrap, type BootstrapClients, type BootstrapTarget, type RecordState } from "./bootstrap";
@@ -364,6 +366,47 @@ export async function generationGateCommand(argv: readonly string[], deps: Deplo
 }
 
 /* ------------------------------------------------------------------ */
+/* relayer-rotation-gate (LIVE-6 L6-2 for L6-7; relayerRotation.ts)     */
+/* ------------------------------------------------------------------ */
+
+export async function relayerRotationGateCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {
+  const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--from-relayer", "--to-relayer", "--evidence"], []);
+  const environment = environmentOf(need(flags, "--environment"));
+  const from = need(flags, "--from-relayer");
+  const to = need(flags, "--to-relayer");
+  if (!RELAYER_ADDRESS.test(from) || !RELAYER_ADDRESS.test(to)) throw new UsageError("--from-relayer / --to-relayer are relayer account addresses");
+  if (from === to) throw new UsageError("--from-relayer and --to-relayer are the same address: nothing rotates");
+  const evidence = need(flags, "--evidence");
+  const startup = await loadAwsStartup({ argv: [], env: { GS_AWS_CONFIG_PARAMETER: need(flags, "--runtime-parameter") }, serverMode: "production", parameters: deps.parameters });
+  if (startup.config.environment !== environment) throw new UsageError(`the runtime document is for ${startup.config.environment}, not ${environment}`);
+  const checks: Check[] = [];
+  const check = (name: string, ok: boolean, good: string, bad: string) => checks.push({ name, status: ok ? "pass" : "fail", detail: ok ? good : bad });
+  /* 1. The OLD configuration is still the active one (the change comes after this gate, never before it). */
+  const configured = startup.escrowConfig?.relayer.address ?? null;
+  check("the active configuration names the OLD relayer", configured === from, `relayer ${from}`, configured === null ? "the runtime document has no escrow: there is no relayer to rotate" : configured === to ? `the configuration ALREADY names ${to}: the rotation was applied before the old queue was proven empty -- restore the old configuration, then run this gate` : `the configuration names ${configured}, neither --from-relayer nor --to-relayer`);
+  /* 2. Every pool drained: with no task running, nothing can add to the old queue between this proof and the change. */
+  const pools = Object.keys(startup.config.routes).length > 0 ? Object.keys(startup.config.routes).sort() : [startup.config.pool];
+  const manifest = readEvidence(evidence, POOL_EVIDENCE_FILES.manifest);
+  checks.push(...(manifest.ok ? checkManifest(manifest.value, { environment, pools, now: deps.now(), maxAgeMs: 15 * 60_000 }) : [manifest.check]));
+  const services = readEvidence(evidence, POOL_EVIDENCE_FILES.services);
+  if (!services.ok) checks.push(services.check);
+  else for (const pool of pools) checks.push(checkDrained(services.value, environment, pool));
+  /* 3. RELAYQ#<old>: complete, strong, empty. Never the new address's queue. */
+  const { clients, tables } = clientsFor(deps, startup);
+  const queue = await relayQueueState(clients.app, tables.game, from);
+  check(
+    `RELAYQ#${from} empty (strongly consistent, every page)`,
+    queue.state === "empty",
+    "no entry: no open relayer work under the old address",
+    queue.state === "open" ? `${queue.entries} open entr${queue.entries === 1 ? "y" : "ies"} (oldest: ${queue.oldest.join(", ")}): keep the old configuration active until the relayer drains them` : queue.state === "unknown" ? `UNKNOWN -- ${queue.detail}: refused (an unread queue is never taken for an empty one)` : "",
+  );
+  checks.push({ name: `RELAYQ#${to}`, status: "skipped", detail: "the new address's queue is never consulted: the old queue's emptiness is never inferred from it" });
+  const exit = report(deps.out, checks);
+  deps.out(exit === EXIT_OK ? `GATE OPEN: RELAYQ#${from} is proven empty with every pool drained. Now change the relayer configuration to ${to} (Terraform escrow), then start the pools; the primary's task takes the new relayer role.` : "GATE CLOSED: the relayer address must NOT change yet");
+  return exit;
+}
+
+/* ------------------------------------------------------------------ */
 /* signer-keys                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -410,6 +453,7 @@ export const USAGE = [
   "  awsDeploy verify --part ledger --ledger-table-arn <ARN> --environment <env> --generation <N>",
   "  awsDeploy signer-keys --relayer <key ARN> --settlement <key ARN> --admission <key ARN>",
   "  awsDeploy generation-gate --runtime-parameter <serving SSM ARN> --environment <env> --generation <N+1> --restore-id <id>",
+  "  awsDeploy relayer-rotation-gate --runtime-parameter <SSM ARN> --environment <env> --from-relayer <old> --to-relayer <new> --evidence <dir>",
 ].join("\n");
 
 export async function runDeployCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {
@@ -419,6 +463,7 @@ export async function runDeployCommand(argv: readonly string[], deps: DeployDeps
     if (command === "verify") return await verifyCommand(rest, deps);
     if (command === "signer-keys") return await signerKeysCommand(rest, deps);
     if (command === "generation-gate") return await generationGateCommand(rest, deps);
+    if (command === "relayer-rotation-gate") return await relayerRotationGateCommand(rest, deps);
     deps.out(USAGE);
     return EXIT_USAGE;
   } catch (error) {

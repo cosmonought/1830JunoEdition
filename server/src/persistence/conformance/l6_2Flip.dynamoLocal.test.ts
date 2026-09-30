@@ -31,7 +31,7 @@ import assert from "node:assert/strict";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { CreateTableCommand, DeleteTableCommand, GetItemCommand, PutItemCommand, ScanCommand, type AttributeValue, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { CreateTableCommand, DeleteItemCommand, DeleteTableCommand, GetItemCommand, PutItemCommand, ScanCommand, type AttributeValue, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 import { createDynamoDbClient, deadline, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV } from "../../aws/awsClients";
 import { EVIDENCE_MANIFEST_FORMAT, POOL_EVIDENCE_FILES } from "../../aws/controlPlane/evidence";
@@ -782,5 +782,77 @@ describe("§6 the restore's orphans report: read-only", () => {
     assert.equal(report.generation.origin, "bootstrap");
     assert.ok(report.problems.some((p) => /never restored/.test(p)));
     assert.equal(writesOf(script), 0);
+  });
+});
+
+/* ==================================================================
+    §7 THE RELAYER-ADDRESS ROTATION GATE (L6-7 addendum)
+   ================================================================== */
+describe("§7 awsDeploy relayer-rotation-gate: never while the OLD address's RELAYQ# holds work", () => {
+  test("open entries, an unreadable queue, an undrained pool, a configuration already rotated: CLOSED; the old queue empty with every pool drained: OPEN; the new queue is never read; zero writes", async () => {
+    const fixtures = path.join(__dirname, "../../../../../../infra/aws/fixtures");
+    const runtimeArn = "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1";
+    const junoArn = "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend";
+    const junoText = fs.readFileSync(path.join(fixtures, "juno-backend-staging.json"), "utf8");
+    const oldAddress = (JSON.parse(junoText) as { relayer: { address: string } }).relayer.address;
+    const newAddress = "juno1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+    const docs: Record<string, string> = { [runtimeArn]: fs.readFileSync(path.join(fixtures, "runtime-staging-p1.json"), "utf8"), [junoArn]: junoText };
+    const game = await tables.create("rot-game");
+    const script = new FaultScript();
+    const client = await freshClient(script);
+    const lines: string[] = [];
+    let gameTable = game;
+    const deps: DeployDeps = {
+      parameters: {
+        async read(arn) {
+          const value = docs[arn];
+          if (value === undefined) throw new Error(`no such parameter ${arn}`);
+          return { value, version: 1, arn };
+        },
+      },
+      dynamo: () => client,
+      kms: () => {
+        throw new Error("no KMS here");
+      },
+      now: () => Date.now(),
+      out: (line) => lines.push(line),
+      tables: () => ({ game: gameTable, identity: "unused", ledger: "unused" }),
+    };
+    const evidenceDir = (desired: number) => {
+      const dir = path.join(scratch, `rot-${desired}-${Math.random().toString(36).slice(2, 8)}`);
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, POOL_EVIDENCE_FILES.manifest), JSON.stringify({ format: EVIDENCE_MANIFEST_FORMAT, captured_at: new Date().toISOString(), environment: "staging", pools: ["p1"] }));
+      const td = "arn:aws:ecs:us-east-1:1:task-definition/gs-staging-p1:3";
+      fs.writeFileSync(path.join(dir, POOL_EVIDENCE_FILES.services), JSON.stringify({ services: [{ serviceName: "gs-staging-p1", desiredCount: desired, runningCount: desired, pendingCount: 0, taskDefinition: td, deployments: [{ status: "PRIMARY", rolloutState: "COMPLETED", taskDefinition: td }] }] }));
+      return dir;
+    };
+    const drained = evidenceDir(0);
+    const gate = async (evidence = drained, from = oldAddress, to = newAddress) => {
+      lines.length = 0;
+      return runDeployCommand(["relayer-rotation-gate", "--runtime-parameter", runtimeArn, "--environment", "staging", "--from-relayer", from, "--to-relayer", to, "--evidence", evidence], deps);
+    };
+    /* Work still queued under the OLD address (an entry of any shape is open work: never parsed, never skipped). */
+    await put(game, { pk: S(`RELAYQ#${oldAddress}`), sk: S(`1780000000000#${gameId(1)}#${"a".repeat(64)}`), game_id: S(gameId(1)), intent_id: S("a".repeat(64)), created_at: N(1_780_000_000_000) });
+    await put(game, { pk: S(`RELAYQ#${oldAddress}`), sk: S("damaged") });
+    assert.equal(await gate(), EXIT_FAILED, lines.join("\n"));
+    assert.match(lines.join("\n"), /2 open entries/);
+    assert.match(lines.join("\n"), /GATE CLOSED/);
+    /* Drained -- and the NEW address's queue holding nothing (or something) changes nothing: it is never read. */
+    await admin.send(new DeleteItemCommand({ TableName: game, Key: { pk: S(`RELAYQ#${oldAddress}`), sk: S(`1780000000000#${gameId(1)}#${"a".repeat(64)}`) } }), { abortSignal: deadline() });
+    await admin.send(new DeleteItemCommand({ TableName: game, Key: { pk: S(`RELAYQ#${oldAddress}`), sk: S("damaged") } }), { abortSignal: deadline() });
+    await put(game, { pk: S(`RELAYQ#${newAddress}`), sk: S("anything") });
+    assert.equal(await gate(evidenceDir(1)), EXIT_FAILED, "a pool still running could add work after the proof");
+    assert.match(lines.join("\n"), /FAIL {2}drained p1/);
+    assert.equal(await gate(), EXIT_OK, lines.join("\n"));
+    assert.match(lines.join("\n"), /GATE OPEN/);
+    assert.ok(script.calls.filter((c) => c.op === "QueryCommand").every((c) => c.detail.includes(`RELAYQ#${oldAddress}`) && !c.detail.includes(`RELAYQ#${newAddress}`)), "only the old queue is read");
+    /* The configuration already names another address (rotated before the proof): refused. */
+    assert.equal(await gate(drained, "juno1pppppppppppppppppppppppppppppppppppppppp", newAddress), EXIT_FAILED);
+    assert.match(lines.join("\n"), /neither --from-relayer nor --to-relayer/);
+    /* An unreadable queue (here: the table cannot be read) is UNKNOWN: refused, never taken for empty. */
+    gameTable = `${game}-missing`;
+    assert.equal(await gate(), EXIT_FAILED);
+    assert.match(lines.join("\n"), /UNKNOWN -- RELAYQ#.* could not be read completely/);
+    assert.equal(writesOf(script), 0, "the gate only reads");
   });
 });

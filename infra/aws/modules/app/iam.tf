@@ -224,6 +224,18 @@ data "aws_iam_policy_document" "bootstrap" {
     }
   }
   # L6-2: the generation gate reads a restored table's SYSTEM/GENERATION before the switch (every managed generation).
+  # LIVE-6 L6-2 (for L6-7): `awsDeploy relayer-rotation-gate` reads the OLD relayer's RELAYQ#<address> completely (Query,
+  # strongly consistent, every page) -- read-only, that partition prefix only.
+  statement {
+    sid       = "RelayQueueRead"
+    actions   = ["dynamodb:Query"]
+    resources = values(local.game_table_arns)
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["RELAYQ#*"]
+    }
+  }
   statement {
     sid       = "GenerationMarkersRead"
     actions   = ["dynamodb:GetItem"]

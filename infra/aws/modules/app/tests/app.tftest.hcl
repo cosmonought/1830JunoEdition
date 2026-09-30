@@ -652,6 +652,15 @@ run "operator_and_recovery_are_separate_roles" {
   }
 }
 
+run "the_bootstrap_role_reads_relay_queues_only_by_query" {
+  command = apply
+
+  assert {
+    condition     = toset([for c in one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RelayQueueRead"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset(["ForAllValues:StringLike|dynamodb:LeadingKeys|RELAYQ#*"]) && one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RelayQueueRead"]).actions == toset(["dynamodb:Query"])
+    error_message = "L6-2 for L6-7: the relayer-rotation gate reads RELAYQ# partitions only, read-only."
+  }
+}
+
 run "no_operator_or_recovery_role_by_default" {
   command = apply
 

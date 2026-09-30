@@ -570,6 +570,11 @@ with L6-4's `generationMarkerProblem` / `adoptionBindingProblem`; the identity v
 generation switch only after the exact adoption; a restored table's money games are read-only until the escrow service's
 `restoreCheck` (F1 history + the ledger/chain quorum) passes in THIS process -- never stored, so no restart bypasses it.
 
+**Relayer-address rotation** (for L6-7): `aws/deploy/relayerRotation.ts` + `awsDeploy relayer-rotation-gate` -- read-only;
+open only when the active configuration still names the old address, every pool is drained, and `RELAYQ#<old>` read
+completely (strong, every page; entries never parsed -- any entry is open work) is empty. Unknown refuses; the new queue is
+never read. No queue migration exists (owner decision).
+
 Import rights (`awsClients.test.ts`): the operator may read `aws/game/generationMarker` and `aws/ledger/appGeneration`, never
 call `adoptGeneration`, `prepareRestoredTable` or `applyIdentityRestore`; deploy may read the marker module.
 

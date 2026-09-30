@@ -41,6 +41,7 @@ import { takeRelayerRole } from "../ownership/relayerRole";
 import { generationProbe, takeIdentityWriterRole } from "../ownership/roles";
 import type { AwsSubstrate } from "./awsRuntime";
 import type { AwsRuntimeConfig } from "./runtimeConfig";
+import { dynamoTaskStatusWriter } from "./taskStatus";
 
 export interface AwsClients {
   /** The app account's region: the game and identity tables. */
@@ -125,5 +126,8 @@ export function realAwsSubstrate(options: AwsSubstrateOptions): AwsSubstrate<Poo
     ownership: (writer, { onClaimed, warn }) => createPoolGameOwnership({ client: clients.app, table: tables.game, writer, warn, ...(onClaimed !== undefined ? { onClaimed } : {}), ...(timing !== undefined ? { timing } : {}) }),
 
     kms: (region) => options.kms?.(region) ?? kmsDigestClient(createKmsClient({ kind: "aws", region }), { region }),
+
+    /* L6-5A: the diagnostic TASK# item, in the game table (`taskStatus.ts`: never read by any decision). */
+    taskStatus: () => dynamoTaskStatusWriter({ client: clients.app, table: tables.game }),
   };
 }

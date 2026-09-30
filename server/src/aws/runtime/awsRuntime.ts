@@ -73,6 +73,21 @@
 // (`exitCode()`). No release of the pool is needed: the replacement's takeover fences this task (preflight §13). An
 // actor's write already in flight is not awaited (as in PROCESS mode): the fences make it land before the replacement's
 // claim and load, or be refused.
+//
+// OBSERVABILITY (LIVE-6 L6-5A; `runtimeMetrics.ts`, `taskStatus.ts`). The runtime MEASURES what it decides, at the one
+// place it decides it, and nothing it measures feeds back into a decision:
+//   - a forced exit is counted once, where the terminal state is set (`lose` -> `TaskLost`, `failFast` -> `StoreUncertain`;
+//     the first one wins, as the exit code does -- however many fences or stores report the same loss);
+//   - each money claim sweep pass is one record (`MoneySweepPasses` or `MoneySweepPassFailed`, with the pass's counts);
+//   - each relayer takeover attempt is one record (by outcome), and each change of the relayer's state (not-configured /
+//     not-primary / not-taken / taken-loading / held / usable / not-current) one transition;
+//   - readiness is OBSERVED wherever it is asked (`/gs/readyz`, the status tick, the phase changes) and written only when
+//     it CHANGES -- never per probe;
+//   - every `statusEveryMs` (30 s) a status record carries the gauges (readiness, the pool writer's confirmation and
+//     check age, the relayer, the escrow, the sweep's health) and the KMS deltas of `kmsGate.ts`'s counters, and the
+//     task's diagnostic `TASK#` item is written (best effort; nothing reads it).
+// A metric line or a TASK# write that fails changes nothing here: no authority is granted or withheld by it, no fence is
+// skipped, no exit code moves, and the audit lines and the security journal are exactly as before.
 
 import type { Server } from "http";
 
@@ -117,6 +132,8 @@ import { ledgerFencedHook, NO_RELAYER_ROLE } from "../ownership/relayerRole";
 import type { RoleTakeover } from "../ownership/roles";
 import { gatedKmsClient, type KmsCounters } from "./kmsGate";
 import type { AwsRuntimeConfig } from "./runtimeConfig";
+import { codeList, kmsDeltas, lossCauseOf, NO_METRICS, readinessObserver, snapshotKms, transitionTracker, type KmsCounterView, type MetricName, type MetricProperty, type MetricRecord, type MetricSink, type PropertyValue } from "./runtimeMetrics";
+import { taskStatusReporter, type TaskStatus, type TaskStatusReporter, type TaskStatusWriter } from "./taskStatus";
 
 export const EXIT_REFUSED = 2;
 export const EXIT_LOST = 3;
@@ -206,6 +223,8 @@ export interface AwsSubstrate<W extends PoolWriterPort = PoolWriterPort, L exten
   ownership(writer: W, options: { readonly onClaimed?: (gameId: string) => Promise<void>; readonly warn: (line: string) => void }): PoolGameOwnership;
   /** The KMS port for the configuration's one KMS region (`kmsDigestClient(createKmsClient(...))`). */
   kms(region: string): KmsClient;
+  /** L6-5A: where this task's diagnostic `TASK#` item is written (the game table). Absent: no item is written. */
+  taskStatus?(): TaskStatusWriter;
 }
 
 /* ------------------------------------------------------------------ */
@@ -227,6 +246,8 @@ export interface AwsRuntimeTiming {
   /** The in-flight periodic work (a money claim sweep, a relayer-role retry) and the escrow start still verifying. */
   readonly drainPeriodicMs: number;
   readonly drainEscrowStartMs: number;
+  /** L6-5A: the status tick -- the gauges and KMS deltas as one metric record, and the `TASK#` item (preflight §3.2: 30 s). */
+  readonly statusEveryMs: number;
 }
 
 /** The drains are bounded so the whole graceful stop fits Fargate's `stopTimeout` (120 s, L5-8). */
@@ -243,6 +264,7 @@ export const AWS_RUNTIME_TIMING: AwsRuntimeTiming = Object.freeze({
   drainIdentityMs: 60_000,
   drainPeriodicMs: 10_000,
   drainEscrowStartMs: 10_000,
+  statusEveryMs: 30_000,
 });
 
 export interface AwsRuntimeInput<W extends PoolWriterPort, L extends InspectableSigningJournal> {
@@ -259,6 +281,8 @@ export interface AwsRuntimeInput<W extends PoolWriterPort, L extends Inspectable
   readonly task: string;
   readonly substrate: AwsSubstrate<W, L>;
   readonly ops: OpsRecorder;
+  /** L6-5A: the metric sink (`createEmfSink` on stdout in `awsMain.ts`). Absent: nothing is measured. */
+  readonly metrics?: MetricSink;
   readonly now: () => number;
   readonly log: (line: string) => void;
   readonly warn: (line: string) => void;
@@ -297,9 +321,16 @@ export interface AwsRuntime {
    *  restart. The caller's exit after a graceful shutdown uses it (a forced exit never becomes 0). */
   exitCode(): number | null;
   status(): Record<string, unknown>;
+  /** L6-5A: one status tick now (the timer's own): the status metric record and the TASK# item. Never throws. */
+  statusTick(): void;
 }
 
 const describe = (error: unknown): string => (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 400);
+/** An error's CLASS for a metric property (its constructor name when it is a plain identifier), never its message. */
+const errorClassOf = (error: unknown): string => {
+  const name = (error as { name?: unknown } | null)?.name;
+  return typeof name === "string" && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(name) ? name : "Error";
+};
 
 interface Timer {
   cancel(): void;
@@ -348,6 +379,168 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   let backend: JunoBackend | null = null;
   let shutdownPromise: Promise<void> | null = null;
 
+  /* ---------------- L6-5A: what is measured (never read back by any decision) ---------------- */
+  const metrics: MetricSink = input.metrics ?? NO_METRICS;
+  /** Emit a record built lazily, inside the guard: nothing about building or writing a metric can throw into the decision
+   *  it measures (a loss still exits, a failure is still counted by the code that reacts to it). */
+  const measure = (record: () => MetricRecord): boolean => {
+    try {
+      return metrics.emit(record());
+    } catch {
+      return false;
+    }
+  };
+  const startedAt = input.now();
+  /** This task's own ids and the generation: properties of every record, never dimensions. */
+  const baseProperties = (): Partial<Record<MetricProperty, PropertyValue>> => ({ task: input.task, build: input.build, generation: config.generation, epoch: writer?.epoch ?? null });
+  let role: "primary" | "standby" | "undecided" = "undecided";
+  /** Until the primary's (or the standby's) readiness exists, the startup's own answer (never ready). */
+  let readinessSource: () => ReadinessAnswer = () => {
+    const reasons: string[] = [];
+    if (terminal === "lost") reasons.push("lost");
+    if (terminal === "uncertain") reasons.push("store-uncertain");
+    reasons.push(phase === "stopping" ? "shutting-down" : "starting");
+    const pool = writer?.readiness();
+    if (pool !== undefined) {
+      if (pool.lost !== null) reasons.push("pool-writer-lost");
+      else if (!pool.ready) reasons.push("pool-writer-unconfirmed");
+    }
+    return { ready: false, reasons, detail: { role, pool: config.pool, epoch: writer?.epoch ?? null } };
+  };
+  /** Not ready BY DESIGN (L5-7): a standby's `not-primary` and nothing else. A later readiness model changes this
+   *  predicate, not the observer. */
+  const benignUnready = (answer: { readonly ready: boolean; readonly reasons: readonly string[] }): boolean => !answer.ready && answer.reasons.length > 0 && answer.reasons.every((reason) => reason === "not-primary");
+  const readinessMetrics = readinessObserver({ sink: metrics, now: input.now, benign: benignUnready, properties: () => ({ ...baseProperties(), role }) });
+  /** Every readiness answer anyone asks for (`/gs/readyz`, the status tick, a phase change) is observed; only a CHANGE
+   *  is written. */
+  const observedReadiness = (): ReadinessAnswer => {
+    const answer = readinessSource();
+    try {
+      readinessMetrics.observe(answer);
+    } catch {
+      /* never past here: the answer is the answer */
+    }
+    return answer;
+  };
+  /** The relayer's state for metrics (set by the primary's escrow wiring). */
+  let relayerStateNow: () => string = () => (role === "standby" ? "not-primary" : escrowConfig === null ? "not-configured" : "not-taken");
+  const relayerTransitions = transitionTracker<string>({
+    key: (state) => state,
+    now: input.now,
+    onTransition: (from, to, represents) => measure(() => ({ event: "relayer-transition", metrics: { RelayerTransitions: represents }, properties: { ...baseProperties(), from, to } })),
+  });
+  const observeRelayer = () => {
+    if (role === "undecided") return; // no relayer state to speak of before the identity-writer takeover answered
+    try {
+      relayerTransitions.observe(relayerStateNow());
+    } catch {
+      /* never past here */
+    }
+  };
+  /** The primary's status gauges beyond readiness (set once the primary's pieces exist). */
+  let primaryGauges: () => Partial<Record<MetricName, number>> = () => ({});
+  let kmsCounters: Readonly<KmsCounters> | null = null;
+  let kmsSent: KmsCounterView | null = null;
+  let taskStatusFailures = 0;
+  let reporter: TaskStatusReporter | null = null;
+  const taskStatusNow = (): TaskStatus => {
+    const answer = observedReadiness();
+    const pool = writer?.readiness();
+    return {
+      task: input.task,
+      pool: config.pool,
+      poolEpoch: writer?.epoch ?? 0,
+      generation: config.generation,
+      environment: config.environment,
+      build: input.build,
+      role,
+      phase,
+      ready: answer.ready,
+      reasons: answer.reasons,
+      relayer: relayerStateNow(),
+      escrow: typeof answer.detail.escrow === "string" ? answer.detail.escrow : "not-started",
+      poolWriterCheckAgeMs: pool?.lastGoodAgeMs ?? 0,
+      startedAt,
+    };
+  };
+  /** The counts not yet in any written line -- the KMS deltas of the gate's counters, the transitions a cap or a failed
+   *  line left pending, the TASK# write failures -- to ride on the next record; `commit` once that record was written, so
+   *  none is lost and none is sent twice. */
+  const pendingCounters = (): { readonly values: Partial<Record<MetricName, number>>; commit(): void } => {
+    const values: Partial<Record<MetricName, number>> = {};
+    const readinessCarried = readinessMetrics.pending();
+    if (readinessCarried.ReadinessTransitions > 0) values.ReadinessTransitions = readinessCarried.ReadinessTransitions;
+    if (readinessCarried.BecameUnready > 0) values.BecameUnready = readinessCarried.BecameUnready;
+    const relayerCarried = relayerTransitions.suppressed();
+    if (relayerCarried > 0) values.RelayerTransitions = relayerCarried;
+    const failures = taskStatusFailures;
+    if (failures > 0) values.TaskStatusWriteFailures = failures;
+    const kmsNow = kmsCounters === null ? null : snapshotKms(kmsCounters);
+    if (kmsNow !== null) Object.assign(values, kmsDeltas(kmsNow, kmsSent));
+    return {
+      values,
+      commit() {
+        readinessMetrics.settle(readinessCarried);
+        relayerTransitions.settle(relayerCarried);
+        taskStatusFailures = Math.max(0, taskStatusFailures - failures);
+        if (kmsNow !== null) kmsSent = kmsNow;
+      },
+    };
+  };
+  /** `measure`, with the pending counts riding on the record (committed only when it was written). */
+  const measureWithPending = (record: (pending: Partial<Record<MetricName, number>>) => MetricRecord | null): boolean => {
+    try {
+      const pending = pendingCounters();
+      const built = record(pending.values);
+      if (built === null) return false;
+      const written = metrics.emit(built);
+      if (written) pending.commit();
+      return written;
+    } catch {
+      return false;
+    }
+  };
+  /** One status tick: the gauges and the pending counts as one record, then the TASK# item. Never throws; nothing waits. */
+  const statusTick = (): void => {
+    try {
+      const answer = observedReadiness();
+      observeRelayer();
+      const pool = writer?.readiness();
+      const gauges: Partial<Record<MetricName, number>> = {
+        ...readinessMetrics.gauges(answer),
+        Standby: role === "standby" ? 1 : 0,
+        ...(pool === undefined ? {} : { PoolWriterConfirmed: pool.lost === null && pool.ready ? 1 : 0, PoolWriterCheckAgeSeconds: Math.max(0, Math.floor(pool.lastGoodAgeMs / 1000)) }),
+        ...primaryGauges(),
+      };
+      measureWithPending((pending) => ({
+        event: "task-status",
+        metrics: { ...gauges, ...pending },
+        properties: {
+          ...baseProperties(),
+          role,
+          phase,
+          ready: answer.ready,
+          reasons: codeList(answer.reasons),
+          relayer_state: relayerStateNow(),
+          escrow_state: typeof answer.detail.escrow === "string" ? answer.detail.escrow : null,
+          kms_last_failure_at: kmsCounters?.lastFailureAt ?? null,
+          uptime_seconds: Math.max(0, Math.floor((input.now() - startedAt) / 1000)),
+        },
+      }));
+    } catch {
+      /* never past here */
+    }
+    try {
+      void reporter?.tick().catch(() => undefined);
+    } catch {
+      /* never past here */
+    }
+  };
+  /** At the end of a graceful shutdown: what is still pending, in one last record (nothing when all of it is zero). */
+  const flushCounters = (): void => {
+    measureWithPending((pending) => (Object.values(pending).some((value) => typeof value === "number" && value > 0) ? { event: "counters-flush", metrics: pending, properties: { ...baseProperties(), role, phase } } : null));
+  };
+
   /** What a startup that ends early must close (the pool writer's self-check, the game server): run once. */
   const closers: Array<() => void> = [];
   const closeOpened = () => {
@@ -377,12 +570,18 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
         `nothing more served from memory -- and exits (${EXIT_LOST}); its replacement takes over afresh.`,
     );
     input.ops.audit("aws.task-lost", { reason: reason.slice(0, 300) });
+    /* L6-5A: THE one place a loss is counted -- after the terminal guard, so every later report of the same loss (the
+       self-check, a fence, a store, the ledger) adds nothing. The reason stays in the audit line, never in the metric. */
+    measureWithPending((pending) => {
+      const cause = lossCauseOf(reason);
+      return { event: "task-lost", metrics: { TaskLost: 1, ...(cause === "pool-superseded" ? { TaskSuperseded: 1 } : {}), ...pending }, properties: { ...baseProperties(), role, phase, cause } };
+    });
     stopWork();
     input.exit(EXIT_LOST);
   };
 
   /** A store that cannot settle a write (identity, a game store): exit 4 after the queued frames go out (PROCESS mode's rule). */
-  const failFast = (where: string, detail: string) => {
+  const failFast = (where: string, detail: string, store: "identity" | "game") => {
     if (terminal !== null) return;
     terminal = "uncertain";
     input.error(
@@ -390,12 +589,18 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
         `its replacement loads what the tables really hold (exit ${EXIT_STORE_UNCERTAIN}).`,
     );
     input.ops.audit("aws.store-uncertain", { where, detail: detail.slice(0, 300) });
+    /* L6-5A: counted once per forced termination (the terminal guard above), never per repeated error path; which store
+       as a fixed code only -- the game id stays in the audit line. */
+    measureWithPending((pending) => ({ event: "store-uncertain", metrics: { StoreUncertain: 1, ...pending }, properties: { ...baseProperties(), role, phase, store } }));
     stopWork();
     /* Not unref'd: this exit must happen, and at its own time (the queued frames first), whatever else is still open. */
     setTimeout(() => input.exit(EXIT_STORE_UNCERTAIN), timing.failFastDelayMs);
   };
 
   function refuse(message: string): never {
+    /* L6-5A: a refused start is counted (with what was still pending); a loss or restart request that ended it was
+       counted as that, and keeps its code. The stage is the last step reached (a fixed code), never the message. */
+    if (forcedExit() === null) measureWithPending((pending) => ({ event: "startup-refused", metrics: { StartupRefused: 1, ...pending }, properties: { ...baseProperties(), role, stage: steps.at(-1) ?? "none" } }));
     stopWork();
     closeOpened();
     /* A loss or a restart request that came first keeps its code (3 / 4): a refusal never masks it as a 2. */
@@ -446,6 +651,26 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   w.watchGeneration(substrate.generationProbe());
   step("pool", `pool ${w.pool} TAKEN at epoch ${w.epoch} by task ${w.task}: every older task of the pool is fenced from every game this task claims; self-check every 2 s (the pool, each held role, the generation)`);
   input.ops.audit("aws.pool-taken", { pool: w.pool, epoch: w.epoch });
+  /* L6-5A: the status tick from here on (the TASK# item names the epoch this task holds; before the pool is taken there is
+     no epoch to name and nothing to diagnose). Cancelled with every other timer by a loss, a refusal or the shutdown. */
+  let statusWriter: TaskStatusWriter | null = null;
+  try {
+    statusWriter = substrate.taskStatus?.() ?? null;
+  } catch {
+    statusWriter = null; // no TASK# item: diagnostics only
+  }
+  if (statusWriter !== null) {
+    reporter = taskStatusReporter({
+      writer: statusWriter,
+      status: taskStatusNow,
+      now: input.now,
+      onFailure: () => {
+        taskStatusFailures += 1;
+      },
+    });
+  }
+  timers.push(every(timing.statusEveryMs, statusTick));
+  statusTick();
 
   /* ---------------- 3. the identity writer (primary only), THEN its store, THEN the load ---------------- */
   let identityRole: RoleTakeover;
@@ -461,11 +686,12 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   if (identityRole.kind === "not-primary") {
     return startStandby(identityRole.primary);
   }
+  role = "primary";
   step("identity-writer", `identity-writer role TAKEN at epoch ${identityRole.epoch} (this pool is primary); a newer primary's takeover makes this task lost`);
   input.ops.audit("aws.identity-writer", { epoch: identityRole.epoch });
   const identityStore = substrate.openIdentityStore(identityRole.epoch, {
     onFenced: (detail) => w.markLost(`the identity-writer role was taken over (${detail})`),
-    onRestartRequired: (detail) => failFast("the identity store", detail),
+    onRestartRequired: (detail) => failFast("the identity store", detail, "identity"),
     warn: input.warn,
   });
   let identity: IdentityService;
@@ -495,18 +721,31 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
         relayer.state = "held";
         input.log(`  aws: relayer role TAKEN at epoch ${answer.role.epoch} for ${answer.role.account} (${when}): the ledger's fence minted, then the game-table mirror; both watched by the self-check`);
         input.ops.audit("aws.relayer-role", { outcome: "taken", epoch: answer.role.epoch, when });
+        measure(() => ({ event: "relayer-takeover", metrics: { RelayerTakeoverTaken: 1 }, properties: { ...baseProperties(), outcome: "taken", when } }));
         return answer.role;
       }
       relayer.state = "not-primary";
       input.warn(`  aws: relayer role NOT taken (${when}): the routing names ${answer.primary ?? "no pool"} primary -- this task relays nothing`);
       input.ops.audit("aws.relayer-role", { outcome: "not-primary", when });
+      measure(() => ({ event: "relayer-takeover", metrics: { RelayerTakeoverNotPrimary: 1 }, properties: { ...baseProperties(), outcome: "not-primary", when } }));
     } catch (error) {
       relayer.state = "not-taken";
       input.warn(`  aws: relayer role NOT taken (${when}) -- ${describe(error)}; no relayer authority now (no pass, no signature, no broadcast); tried again every ${Math.round(timing.relayerRetryMs / 1000)} s, each time a new mint`);
       input.ops.audit("aws.relayer-role", { outcome: "not-taken", when, error: (error as { name?: string } | null)?.name ?? "error" });
+      measure(() => ({ event: "relayer-takeover", metrics: { RelayerTakeoverNotTaken: 1 }, properties: { ...baseProperties(), outcome: "not-taken", when, error_class: errorClassOf(error) } }));
     }
     return null;
   };
+  /* L6-5A: the relayer's state as metrics name it -- the role this task holds (published or still loading after a
+     retry's takeover), and whether the escrow it relays for is active. Reported, never consulted. */
+  relayerStateNow = () => {
+    if (escrowConfig === null) return "not-configured";
+    const held = relayer.role;
+    if (relayer.published && held !== null) return !held.current() ? "not-current" : backend?.state() === "active" ? "usable" : "held";
+    if (held !== null) return "taken-loading";
+    return relayer.state === "not-primary" ? "not-primary" : "not-taken";
+  };
+  observeRelayer();
   if (escrowConfig !== null) {
     try {
       ledger = await substrate.openLedger({ relayer: escrowConfig.relayer.address, onFenced: ledgerFencedHook(w) });
@@ -521,6 +760,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     assertAlive();
     /* Taken before the backend exists: its load (the relayer's, inside the escrow load) runs after the takeover. */
     relayer.published = relayer.role !== null;
+    observeRelayer();
     step("relayer-role");
   }
   /** The relayer's authority: the role this task holds and has PUBLISHED, else none (L5-6's `NO_RELAYER_ROLE`). */
@@ -562,6 +802,8 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
        papered over (the backend would otherwise fall back to the game-fenced store while holding a role). */
     if (ledger === null || stores.intents === null || stores.relayerIntents === null) return refuse("the escrow's ledger, owner intent store and relayer view must all exist (the substrate gave none for at least one)");
     kms = gatedKmsClient(substrate.kms(escrowConfig.kmsRegion), { gate: () => w.beforeSideEffect(), now: input.now, warn: input.warn });
+    /* L6-5A: the gate's counters are THE KMS counters; the status tick sends their deltas (no second count). */
+    kmsCounters = kms.counters;
     identity.setHooks({
       onSecurityEvent: (event) => {
         void ticketLedger
@@ -646,8 +888,11 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   let initialSweepDone = false;
   let lastSweep: Record<string, string | number | null> | null = null;
   let sweepFailures = 0;
+  /** L6-5A: the sweep's health -- failed passes in a row, and when a pass last completed (null: none yet). */
+  let sweepConsecutiveFailures = 0;
+  let lastSweepOkAt: number | null = null;
 
-  const readiness = (): ReadinessAnswer => {
+  const primaryReadiness = (): ReadinessAnswer => {
     const reasons: string[] = [];
     if (terminal === "lost") reasons.push("lost");
     if (terminal === "uncertain") reasons.push("store-uncertain");
@@ -663,6 +908,29 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       detail: { role: "primary", pool: w.pool, epoch: w.epoch, identity_writer: "held", relayer: relayer.published ? "held" : relayer.state, escrow: opened?.state() ?? "not-configured" },
     };
   };
+  /* L6-5A: every consumer (the game server's /gs/readyz, the status) asks through the observer; only a change is written. */
+  readinessSource = primaryReadiness;
+  const readiness = observedReadiness;
+  primaryGauges = () => {
+    const values: Partial<Record<MetricName, number>> = {
+      MoneySweepConsecutiveFailures: sweepConsecutiveFailures,
+      MoneySweepSecondsSinceSuccess: Math.max(0, Math.floor((input.now() - (lastSweepOkAt ?? startedAt)) / 1000)),
+    };
+    if (opened !== null) {
+      const state = relayerStateNow();
+      values.RelayerHeld = state === "held" || state === "usable" ? 1 : 0;
+      values.RelayerUsable = state === "usable" ? 1 : 0;
+      values.EscrowActive = opened.state() === "active" ? 1 : 0;
+      /* The relayer's own work set (loaded from the durable queue by the escrow load, plus the intents this task made
+         since; pruned only by the relayer's passes): reported only while THIS task's relayer is usable -- the holder,
+         loaded and passing. Without the role nothing prunes it, so it would not be the queue's truth. */
+      if (state === "usable") {
+        const status = opened.relayer.status();
+        values.RelayerOpenIntents = status.open + status.undecided;
+      }
+    }
+    return values;
+  };
 
   const statusExtras = () => ({
     aws: {
@@ -676,8 +944,9 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       identity: identityStore.health(),
       relayer: { state: relayer.published ? "held" : relayer.state, epoch: relayer.role?.epoch ?? null },
       escrow: opened?.state() ?? "not-configured",
-      money_sweep: { last: lastSweep, failures: sweepFailures },
+      money_sweep: { last: lastSweep, failures: sweepFailures, consecutive_failures: sweepConsecutiveFailures, last_ok_at: lastSweepOkAt },
       kms: kms === null ? null : { ...kms.counters },
+      observability: { relayer_state: relayerStateNow(), metric_line_failures: metrics.failures(), task_status: reporter?.health() ?? null },
     },
   });
 
@@ -706,7 +975,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       store: stores.log,
       records: stores.records,
       legacyLogs: "refuse",
-      onRestartRequired: (room, detail) => failFast(room, detail),
+      onRestartRequired: (room, detail) => failFast(room, detail, "game"),
       holds: stores.holds,
       ops: input.ops,
       statusExtras,
@@ -763,11 +1032,22 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
           else input.log(line);
         }
         input.ops.audit("aws.money-sweep", { why, claimed: report.claimed.length, owned: report.owned, elsewhere: report.elsewhere, skipped: report.skipped, failed: report.failed.length });
+        sweepConsecutiveFailures = 0;
+        lastSweepOkAt = input.now();
+        /* L6-5A: one record per completed pass; the per-game failures of a completed pass are a count, never the ids. */
+        measure(() => ({
+          event: "money-sweep",
+          metrics: { MoneySweepPasses: 1, MoneySweepClaimed: report.claimed.length, MoneySweepGamesFailed: report.failed.length, MoneySweepOwned: report.owned, MoneySweepElsewhere: report.elsewhere, MoneySweepSkipped: report.skipped },
+          properties: { ...baseProperties(), why },
+        }));
         return report;
       } catch (error) {
         sweepFailures += 1;
+        sweepConsecutiveFailures += 1;
         input.warn(`  aws: money claim sweep (${why}) FAILED -- ${describe(error)}; tried again`);
         input.ops.audit("aws.money-sweep-failed", { why, error: (error as { name?: string } | null)?.name ?? "error" });
+        /* L6-5A: one record per failed pass (a pass that threw: nothing of it completed). */
+        measure(() => ({ event: "money-sweep-failed", metrics: { MoneySweepPassFailed: 1 }, properties: { ...baseProperties(), why, error_class: errorClassOf(error) } }));
         return null;
       }
     })().finally(() => {
@@ -794,6 +1074,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
   step("money-sweep", "the first money claim sweep COMPLETED before any escrow money work; again every 60 s");
   timers.push(every(timing.sweepEveryMs, () => void sweepNow("periodic")));
   phase = "serving";
+  observedReadiness(); // L6-5A: the startup's end is a readiness transition when it is one (written once)
   step("ready");
 
   /* ---------------- 7. escrow: verify, load (the relayer's load after its takeover), then the settlement walk ---------------- */
@@ -805,6 +1086,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     if (opened.state() !== "active") return false;
     relayer.retrying ??= (async () => {
       if (relayer.role === null) relayer.role = await takeRelayer("retry");
+      observeRelayer();
       const role = relayer.role;
       if (role === null || terminal !== null || isStopping()) return false;
       relayer.state = "taken-loading"; // held, not yet published: no pass until the relayer has loaded after the takeover
@@ -817,6 +1099,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       if (terminal !== null || isStopping()) return false; // never published while stopping
       relayer.published = true;
       relayer.state = "held";
+      observeRelayer();
       opened.relayer.wake();
       input.log(`  aws: relayer role PUBLISHED at epoch ${role.epoch}: the relayer loaded after its takeover and may pass`);
       return true;
@@ -830,6 +1113,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     if (opened !== null) {
       await opened.start().catch((error) => input.warn(`  escrow: the Juno backend did not start -- ${describe(error)}; it retries with its verification`));
       steps.push("escrow-started");
+      observeRelayer(); // L6-5A: held -> usable is a transition the moment the escrow is active
     }
     if (terminal !== null || isStopping()) return; // no settlement walk once the task is stopping
     const report = await settlement.reconcileAtStartup({ financialGameIds: server.lifecycle.financialGameIds(), loadGame: server.lifecycle.loadGame });
@@ -855,6 +1139,9 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       const did = (name: string) => shutdownSteps.push(name);
       input.log("  aws: graceful shutdown -- readiness answers 503; periodic work, money and the relayer stop; sockets close; stores and identity drain");
       input.ops.audit("aws.shutdown", { pool: w.pool, epoch: w.epoch });
+      /* L6-5A: the last status record (the KMS deltas since the last tick, the shutting-down transition) and the TASK#
+         item's `stopping`, before the timers go -- neither is waited for. */
+      statusTick();
       did("readiness-503");
       for (const timer of timers.splice(0)) timer.cancel();
       did("timers-stopped");
@@ -888,6 +1175,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       did("identity-settled");
       w.stop();
       did("pool-writer-stopped");
+      flushCounters(); // L6-5A: what the drain signed or saw since the first tick (no TASK# write)
       await input.ops.flush().catch(() => undefined);
       did("ops-flushed");
     })();
@@ -909,6 +1197,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     shutdown,
     exitCode: forcedExit,
     status: statusExtras,
+    statusTick,
   };
 
   /* ---------------- the standby: not the primary pool's task ---------------- */
@@ -928,18 +1217,26 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       else if (!pool.ready) reasons.push("pool-writer-unconfirmed");
       return { ready: false, reasons: [...new Set(reasons)], detail: { role: "standby", pool: w.pool, epoch: w.epoch, identity_writer: "not-primary", relayer: "not-primary", escrow: "not-started" } };
     };
-    const http = createStandbyServer({ port: input.port, bindHost: input.bindHost, readiness: standbyReadiness });
+    /* L6-5A: the standby's answers are observed like the primary's (its `not-primary` alone is benign: never Unready). */
+    role = "standby";
+    readinessSource = standbyReadiness;
+    observeRelayer();
+    const http = createStandbyServer({ port: input.port, bindHost: input.bindHost, readiness: observedReadiness });
     phase = "serving";
+    observedReadiness();
     const standbyShutdown = (): Promise<void> => {
       if (shutdownPromise !== null) return shutdownPromise;
       shutdownPromise = (async () => {
         if (terminal !== null) return;
         phase = "stopping";
+        statusTick(); // L6-5A: the last status record and TASK# `stopping` (not waited for)
+        for (const timer of timers.splice(0)) timer.cancel();
         shutdownSteps.push("readiness-503");
         await new Promise<void>((resolve) => http.close(() => resolve()));
         shutdownSteps.push("server-closed");
         w.stop();
         shutdownSteps.push("pool-writer-stopped");
+        flushCounters(); // L6-5A
         await input.ops.flush().catch(() => undefined);
         shutdownSteps.push("ops-flushed");
       })();
@@ -954,12 +1251,15 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       server: null,
       identity: null,
       backend: null,
-      readiness: standbyReadiness,
+      readiness: observedReadiness,
       sweepNow: async () => null,
       retryRelayerRole: async () => false,
       shutdown: standbyShutdown,
       exitCode: forcedExit,
-      status: () => ({ aws: { role: "standby", pool: w.pool, epoch: w.epoch, task: w.task, primary, readiness: standbyReadiness(), pool_writer: w.readiness() } }),
+      statusTick,
+      status: () => ({
+        aws: { role: "standby", pool: w.pool, epoch: w.epoch, task: w.task, primary, readiness: observedReadiness(), pool_writer: w.readiness(), observability: { metric_line_failures: metrics.failures(), task_status: reporter?.health() ?? null } },
+      }),
     };
   }
 }

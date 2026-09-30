@@ -391,3 +391,33 @@ reached only from the ALB; the ALB target health check `/gs/readyz`, the contain
 
 Run: `npm test` includes `aws/runtime/l5_7AwsRuntime.test.js`; `npm run test:dynamodb-local` includes
 `persistence/conformance/awsRuntime.dynamoLocal.test.js` (the runtime over the real substrate).
+
+## 9. Runtime observability (LIVE-6 L6-5A): `runtime/runtimeMetrics.ts`, `runtime/taskStatus.ts`
+
+The application side of LIVE-6's observability; the CloudWatch alarms that consume it are L6-5B's (after L5-8's IaC).
+The design, the full metric table and the exact alarm handoff: Project `claude/LIVE6_L6_5A_RUNTIME_OBSERVABILITY_2026-09-30.md`.
+
+- **Metric lines.** CloudWatch Embedded Metric Format, one JSON object per stdout line (the awslogs driver ships it;
+  CloudWatch Logs extracts the metrics -- no agent, no header, no `PutMetricData`). Namespace `18Cosmos/GameServer`,
+  schema 1. **Dimensions: `Environment` and `Pool` only** (the forced-exit and failure counters also under
+  `[Environment]`); the task id, build, generation, epoch, reason codes and states are properties, never dimensions; no
+  game, player, principal, session, wallet, transaction, key, ARN or error text is ever in a line (a second fence redacts
+  those shapes). Counters are occurrences per record (alarm on `Sum`); gauges are states at a status tick (never `Sum`).
+- **Where each is counted: once, at the decision.** `TaskLost` in `lose` and `StoreUncertain` in `failFast` (after the
+  terminal guard: one forced exit, one count; the loss's `cause` is a fixed code, and a PROVEN newer task of the pool is
+  also `TaskSuperseded` -- the rolling-deploy loss); `StartupRefused` in `refuse` (exit 2 only; its `stage` is the last
+  step); what is still pending (KMS deltas, carried transitions) rides on these records; one record per money claim sweep pass; one per relayer takeover attempt and
+  per relayer state change; readiness only when it CHANGES (observed at `/gs/readyz`, the status tick and the phase
+  changes; at most 20 transition lines a minute, the rest carried so `Sum` stays exact); the KMS metrics are deltas of
+  `kmsGate.ts`'s counters, sent at the 30 s status tick (the only KMS counters).
+- **`TASK#<task>` / `TASK`** in the game table: the preflight's diagnostic status item (§3.2), written by the task itself
+  every 30 s from its pool takeover on (and `stopping` at a graceful shutdown), one conditional `PutItem` (only a newer
+  `seq`), TTL attribute `ttl` = last seen + 1 day. **Not an authority:** nothing reads it (a source guard), it is not
+  fenced by the pool epoch on purpose (a stale-but-alive task must still show up), and its failure is counted and ignored.
+- **Never a correctness dependency.** A metric line or a `TASK#` write that fails (or a sink that throws) changes no
+  decision, fence, exit code, audit line or security-journal write.
+
+**For L5-8 / L6-5B (IaC):** enable TTL on the game table with attribute `ttl` (only `TASK#` items carry it); the task
+role already has `dynamodb:PutItem` on the game table; no CloudWatch permission is needed for EMF (the task execution
+role's awslogs rights suffice). Run: `npm test` includes `aws/runtime/l6_5aObservability.test.js`;
+`npm run test:dynamodb-local` includes `persistence/conformance/taskStatus.dynamoLocal.test.js`.

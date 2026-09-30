@@ -94,8 +94,9 @@ describe_tasks "$OUT/cluster-tasks.json" "${CLUSTER[@]}"
 TG_ARN="$(command aws --region "$REGION" elbv2 describe-target-groups --names "gs-${ENVIRONMENT}-${PRIMARY}" --query 'TargetGroups[0].TargetGroupArn' --output text)"
 aws elbv2 describe-target-health --target-group-arn "$TG_ARN" > "$OUT/target-health.json"
 aws cloudfront get-distribution --id "$DISTRIBUTION" > "$OUT/distribution.json"
-# LIVE-6 L6-6 x L6-4: every ACTIVE revision of each pool's family -- what the circuit breaker may roll back to (skip_destroy
-# keeps them registered) -- for the one-way identity layout rule (no pre-L6-4 image may be a rollback target).
+# LIVE-6 L6-6 x L6-4: every ACTIVE revision of each pool's family (skip_destroy keeps them registered). INFORMATIONAL since
+# L6-6R: the circuit breaker rolls back to the service's most recent COMPLETED deployment (services.json), never to "any
+# ACTIVE revision"; the rollback gate judges that target's image (task definition + running tasks' digest), not this list.
 for pool in "${POOLS[@]}"; do
   LISTED="$(command aws --region "$REGION" ecs list-task-definitions --family-prefix "gs-${ENVIRONMENT}-${pool}" --status ACTIVE --query 'taskDefinitionArns[]' --output text)"
   {

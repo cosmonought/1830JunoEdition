@@ -24,24 +24,35 @@
 //                  document's game_table; its bootstrap / restore form is internally valid; APPGEN = that generation; and
 //                  the ADOPTION BINDS THIS TABLE (a bootstrap marker: APPGEN never adopted; a restore marker: APPGEN's
 //                  adopted game_table and restore_id are the marker's, and its previous generation the marker's source).
+//                  AND L6-4's OWN startup rule (`generationServingProblem`, bound to `generationMarkerProblem` +
+//                  `adoptionBindingProblem`) accepts the same reading: the gate PASSES only when both agree, so it can
+//                  never drift looser than the runtime it certifies (L6-6R).
 //                  Read live by `stage-cert` (the bootstrap/verify role may GetItem SYSTEM/* and APPGEN).
 //   identity       the identity table's restore state, classified and reported -- never-restored, target-complete,
-//                  target-replaying (incomplete), source-superseded, unreplayed-copy -- and its TABLE#identity binding;
-//                  only a serving-safe table (L6-4's `identityServingProblem` null, bound to its own name) passes. Read by
-//                  the certifier task (the task role reads the identity table).
+//                  target-replaying (incomplete), source-superseded, unreplayed-copy, malformed -- and its TABLE#identity
+//                  binding; only a serving-safe table (L6-4's `identityServingProblem` null, bound to its own name)
+//                  passes. Read by the certifier task (the task role reads the identity table).
 //   review         every OPEN `REVIEW#` record is an unresolved recovery finding: FAIL, surfaced by restore id and count
-//                  only (never a profile, principal, selector, event id or hash).
-//   rollback       the deployment invariant (L6-4 §12.3): the serving image contains L6-4, and no ACTIVE earlier task
-//                  definition revision -- an automatic rollback target -- is a build not attested to contain it. The image's
-//                  own evidence: the certifier task reports which L6-4 modules its build carries (no version number is
-//                  invented); earlier builds are attested by earlier PASSing certifications copied into
-//                  `prior-certifications/`.
-//   restore-quiet  (scenario `restore-drill`) the stop before adoption: every pool drained to zero and no task in the
-//                  cluster, captured BEFORE APPGEN's `adopted_at`; with L6-5A integrated, no fresh `TASK#` heartbeat of an
-//                  old-generation task after the stop -- operator proof, never a correctness lease.
-//   restore-fence  (scenario `restore-drill`) the evidence slot for the later real-staging fencing probe: after adoption, an
-//                  old-generation ledger write refused, an old-generation task never serving-ready, the KMS side effect
-//                  withheld, and the explicitly configured new generation started. No destructive or chain-affecting probe
+//                  only (never a profile, principal, selector, event id or hash). A summary without a boolean `open`, a
+//                  restore id and a reason name makes the whole answer unreadable (FAIL), never "not open".
+//   rollback       the deployment invariant (L6-4 §12.3) against ECS's REAL rollback rule (L6-6R): the deployment circuit
+//                  breaker rolls a failed deployment back to the service's most recent COMPLETED deployment -- not to "any
+//                  ACTIVE revision" (skip_destroy keeps every revision ACTIVE; none but that one is ever selected
+//                  automatically). So for EVERY pool (not only the primary), the task definition of each COMPLETED
+//                  deployment -- in a settled service, the running one -- must be an image attested to carry L6-4, bound
+//                  by the IMAGE ECS ran (describe-tasks `imageDigest`, and the task definition's `image`), never by the
+//                  BUILD_ID text: this run's certifier task (its own report of the L6-4 modules, from the primary's running
+//                  definition), or an earlier PASSing certification of this environment copied into `prior-certifications/`.
+//   restore-quiet  (scenario `restore-drill`) the stop before adoption: EVERY pool's service present and drained to zero,
+//                  and no task in the cluster that is not STOPPED (the capture lists desired-RUNNING AND desired-STOPPED
+//                  tasks: a task mid-shutdown is still running) -- captured for THIS run and THIS restore id, at most
+//                  RESTORE_STOP_WINDOW_MS BEFORE APPGEN's `adopted_at`; with L6-5A integrated, no fresh `TASK#` heartbeat
+//                  of an old-generation task after the stop -- operator proof, never a correctness lease.
+//   restore-fence  (scenario `restore-drill`) the evidence slot for the later real-staging fencing probe: after THIS
+//                  adoption (its restore id, table, generations and time), an old-generation ledger write refused BY THE
+//                  GENERATION FENCE, an old-generation task never serving-ready for a GENERATION reason, the KMS side effect
+//                  withheld with KMS never called, and the explicitly configured new generation serving-ready. No chain
+//                  transaction or relayer sequence is needed and none is implied. No destructive or chain-affecting probe
 //                  exists yet: the slot is judged, and missing evidence FAILS the drill.
 
 import * as fs from "fs";
@@ -50,7 +61,8 @@ import * as path from "path";
 import type { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 import type { Check } from "../deployVerify";
-import { arr, fail, judge, num, obj, readEvidence, str } from "./evidence";
+import { EVIDENCE_FILES, expectedNames } from "../deployVerify";
+import { arr, CERTIFICATION_FORMAT, EVIDENCE, fail, judge, num, obj, readEvidence, str } from "./evidence";
 
 /* ------------------------------------------------------------------ */
 /* L6-4's parsed shapes (restated; the strict parsers are L6-4's)       */
@@ -101,12 +113,29 @@ export interface ReviewSummary {
 /** A read that failed or found an item this build cannot read: its kind and a message (never item content). */
 export type Read<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly unreadable: string };
 
-/** L6-4's readers, bound by the integration (see the header). */
+/**
+ * L6-4's readers, bound by the integration (see the header) -- and ONLY there: the one production binding is
+ * `tools/awsDeploy.ts`'s `StagingDeps.recovery`, and each member is L6-4's own function (or a projection of its answer),
+ * never a re-implementation (a source guard in l6_6StagingCert.test.ts pins both). The exact binding:
+ *
+ *   generationMarker          readGenerationMarker                                   (aws/game/generationMarker.ts)
+ *   appGeneration             readAppGeneration                                      (aws/ledger/appGeneration.ts)
+ *   generationServingProblem  (m, a, e) => m === null || a === null || a.current_generation !== e.generation
+ *                               ? generationMarkerProblem(m, e) ?? "APPGEN ..." : generationMarkerProblem(m, e) ??
+ *                               adoptionBindingProblem(m, a.adoption)             -- the runtime's step 1, verbatim
+ *   identityState             { restore: readIdentityRestore, self: TABLE#identity (decodeIdentityTable's `self`),
+ *                               servingProblem: identityServingProblem }          (aws/identity/dynamoIdentityStore.ts)
+ *   reviews                   inspectIdentityRestore(...).reviews.map(r => ({ restore_id: r.restore_id, reason: r.reason,
+ *                               open: r.resolved_at === null }))                  (aws/identity/identityRestore.ts)
+ */
 export interface RecoveryReaders {
   /** `readGenerationMarker` (null: no item; throws for an item it cannot read). */
   readonly generationMarker: (client: DynamoDBClient, gameTable: string) => Promise<GenerationMarkerFacts | null>;
   /** `readAppGeneration` (null: no APPGEN; throws for an item it cannot read). */
   readonly appGeneration: (client: DynamoDBClient, ledgerTable: string) => Promise<AppGenerationFacts | null>;
+  /** L6-4's OWN startup rule over what was read (`awsRuntime.ts` step 1: APPGEN = the document, `generationMarkerProblem`,
+   *  `adoptionBindingProblem`); null: a task configured for `expected` would start on this table. */
+  readonly generationServingProblem: (marker: GenerationMarkerFacts | null, appgen: AppGenerationFacts | null, expected: { readonly generation: number; readonly gameTable: string }) => string | null;
   /** `readIdentityRestore`, the table's own name (TABLE#identity), and `identityServingProblem`. */
   readonly identityState: (client: DynamoDBClient, identityTable: string) => Promise<{ readonly restore: IdentityRestoreFacts | null; readonly self: string | null; readonly servingProblem: string | null }>;
   /** Every REVIEW# record, summarised (L6-4's strict decoder; the summary drops every identifying field). */
@@ -115,7 +144,21 @@ export interface RecoveryReaders {
 
 export const NOT_INTEGRATED = "L6-4's readers are not bound in this build (the integration of L6-4 and L6-6 binds them): the gate cannot be certified";
 
-const describeError = (error: unknown): string => `${(error as { name?: string } | null)?.name ?? "Error"}: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`;
+/** Id-shaped material a reader's free text must never carry into evidence: player/session/recovery ids (L5-4's `pf_ pr_
+ *  se_ sf_ rk_` + 26 base32), and long hex (event ids are 32 hex, key digests and journal digests 64). */
+const ID_SHAPED = /(?<![0-9a-z])(?:pf|pr|se|sf|rk)_[0-9a-z]{26}(?![0-9a-z])|(?<![0-9a-f])[0-9a-f]{32,}(?![0-9a-f])/g;
+export const idShaped = (text: string): boolean => new RegExp(ID_SHAPED.source).test(text);
+/** Reader-originated free text, made restore-safe: every id-shaped token replaced (never evidence). */
+export const restoreSafe = (text: string): string => text.replace(ID_SHAPED, "<redacted>");
+
+/* Redacted BEFORE it is cut: an id split at the cut would no longer look like one. */
+const describeError = (error: unknown): string => restoreSafe(`${(error as { name?: string } | null)?.name ?? "Error"}: ${error instanceof Error ? error.message : String(error)}`).slice(0, 240);
+
+/** The shapes L6-4 gives its identifiers (`RESTORE_ID_PATTERN`, the table-name rule): a structured value outside them is
+ *  not an identifier this contract names. (Restore ids and table names are never judged by `idShaped`: a restore id such as `drill-<git sha>`
+ *  is L6-4-valid, and is only redacted where it is printed.) */
+const RESTORE_ID = /^[a-z0-9][a-z0-9-]{2,63}$/;
+const TABLE_NAME = /^[A-Za-z0-9_.-]{3,255}$/;
 
 async function settle<T>(read: () => Promise<T>): Promise<Read<T>> {
   try {
@@ -133,11 +176,25 @@ export interface GenerationEvidence {
   readonly integrated: boolean;
   readonly marker: Read<GenerationMarkerFacts | null> | null;
   readonly appgen: Read<AppGenerationFacts | null> | null;
+  /** L6-4's own startup rule over exactly what was read (null: not integrated). A throw is an unreadable answer. */
+  readonly startupRule: ((expected: { readonly generation: number; readonly gameTable: string }) => Read<string | null>) | null;
 }
 
 export async function readGenerationEvidence(readers: RecoveryReaders | undefined, clients: { readonly app: DynamoDBClient; readonly ledger: DynamoDBClient }, tables: { readonly game: string; readonly ledger: string }): Promise<GenerationEvidence> {
-  if (readers === undefined) return { integrated: false, marker: null, appgen: null };
-  return { integrated: true, marker: await settle(() => readers.generationMarker(clients.app, tables.game)), appgen: await settle(() => readers.appGeneration(clients.ledger, tables.ledger)) };
+  if (readers === undefined) return { integrated: false, marker: null, appgen: null, startupRule: null };
+  const marker = await settle(() => readers.generationMarker(clients.app, tables.game));
+  const appgen = await settle(() => readers.appGeneration(clients.ledger, tables.ledger));
+  const startupRule = (expected: { readonly generation: number; readonly gameTable: string }): Read<string | null> => {
+    if (!marker.ok || !appgen.ok) return { ok: false, unreadable: "the marker or APPGEN was not read" };
+    try {
+      const problem: unknown = readers.generationServingProblem(marker.value, appgen.value, expected);
+      if (problem !== null && typeof problem !== "string") return { ok: false, unreadable: `L6-4's startup rule answered ${typeof problem}, not a problem or null` };
+      return { ok: true, value: problem === null ? null : restoreSafe(problem) };
+    } catch (error) {
+      return { ok: false, unreadable: describeError(error) };
+    }
+  };
+  return { integrated: true, marker, appgen, startupRule };
 }
 
 /** The marker's own form (L6-4's parser enforces it; restated so a reader bound wrongly cannot slip past the gate). */
@@ -152,8 +209,11 @@ export function markerFormProblem(m: GenerationMarkerFacts): string | null {
 }
 
 export function judgeGeneration(evidence: GenerationEvidence, expect: { readonly generation: number; readonly gameTable: string; readonly requireRestore: boolean }): Check[] {
-  if (!evidence.integrated || evidence.marker === null || evidence.appgen === null) return [fail("generation: SYSTEM/GENERATION and APPGEN", NOT_INTEGRATED)];
+  if (!evidence.integrated || evidence.marker === null || evidence.appgen === null || evidence.startupRule === null) return [fail("generation: SYSTEM/GENERATION and APPGEN", NOT_INTEGRATED)];
   const checks: Check[] = [];
+  /* L6-4's own rule, over the same reading, for the same document: the composed checks below never PASS alone. */
+  const rule = evidence.startupRule({ generation: expect.generation, gameTable: expect.gameTable });
+  checks.push(judge("generation: L6-4's own startup rule accepts this table", rule.ok && rule.value === null, "generationMarkerProblem and adoptionBindingProblem: none", rule.ok ? `L6-4 refuses the start: ${String(rule.value)}` : `unreadable (${rule.unreadable})`));
   const m = evidence.marker;
   const a = evidence.appgen;
   if (!m.ok) checks.push(fail("generation: SYSTEM/GENERATION readable", `unreadable (${m.unreadable}): never read as some generation`));
@@ -182,7 +242,7 @@ export function judgeGeneration(evidence: GenerationEvidence, expect: { readonly
 
 /** The record the certification keeps (no claim token: it is a write's token, and adds nothing to the audit). */
 export function generationMeasurement(evidence: GenerationEvidence): Record<string, unknown> | null {
-  if (!evidence.integrated || evidence.marker === null || evidence.appgen === null) return null;
+  if (!evidence.integrated || evidence.marker === null || evidence.appgen === null || evidence.startupRule === null) return null;
   const m = evidence.marker.ok ? evidence.marker.value : null;
   const a = evidence.appgen.ok ? evidence.appgen.value : null;
   return {
@@ -195,15 +255,29 @@ export function generationMeasurement(evidence: GenerationEvidence): Record<stri
 /* identity + review (the certifier task)                               */
 /* ------------------------------------------------------------------ */
 
-export type IdentityRestoreState = "never-restored" | "target-complete" | "target-replaying" | "source-superseded" | "unreplayed-copy";
+export type IdentityRestoreState = "never-restored" | "target-complete" | "target-replaying" | "source-superseded" | "unreplayed-copy" | "malformed";
 
-/** The identity table's restore state, as the report names it. */
+/** The identity table's restore state, as the report names it (a diagnostic; the gate also requires L6-4's own
+ *  `identityServingProblem` to be null). Anything this build does not name exactly is `malformed` -- never `complete`. */
 export function identityRestoreState(restore: IdentityRestoreFacts | null, self: string | null, table: string): IdentityRestoreState {
+  if (self !== null && typeof self !== "string") return "malformed";
   if (restore === null) return self !== null && self !== table ? "unreplayed-copy" : "never-restored";
+  if (typeof restore !== "object" || typeof restore.identity_table !== "string" || typeof restore.restore_id !== "string") return "malformed";
   if (restore.identity_table !== table) return "unreplayed-copy";
   if (restore.state === "superseded") return "source-superseded";
   if (restore.state === "replaying") return "target-replaying";
+  if (restore.state !== "complete") return "malformed";
   return self !== null && self !== table ? "unreplayed-copy" : "target-complete";
+}
+
+/** A REVIEW# summary as the contract names it -- a boolean `open`, a restore id, a reason name; anything else is a problem
+ *  (never "not open"). Other fields are tolerated and never read: only `restore_id` and `reason` are projected. */
+function reviewSummaryProblem(r: unknown): string | null {
+  const o = obj(r);
+  if (typeof o.open !== "boolean") return "a summary without a boolean `open`";
+  if (typeof o.restore_id !== "string" || !RESTORE_ID.test(o.restore_id)) return "a summary whose restore id is not a restore id";
+  if (typeof o.reason !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(o.reason) || idShaped(o.reason)) return "a summary whose reason is not a reason name";
+  return null;
 }
 
 /** The task-role probe's `identity_state` section (read-only; ids and states only). */
@@ -212,11 +286,34 @@ export async function readIdentityRecovery(readers: RecoveryReaders | undefined,
   const state = await settle(() => readers.identityState(client, identityTable));
   const reviews = await settle(() => readers.reviews(client, identityTable));
   const restore = state.ok ? state.value.restore : null;
+  /* Every string that came from a reader is made restore-safe; a structured id (restore, table) that looks like a player
+     id or a hash is not an id this contract names: the state is then malformed (FAIL), and the value is not printed. */
+  const safe = (v: unknown): string | null => (typeof v === "string" ? restoreSafe(v) : null);
+  const unnamed =
+    state.ok &&
+    ((restore !== null && typeof restore === "object" && (typeof restore.restore_id !== "string" || !RESTORE_ID.test(restore.restore_id) || typeof restore.peer_table !== "string" || !TABLE_NAME.test(restore.peer_table))) ||
+      (typeof state.value.self === "string" && !TABLE_NAME.test(state.value.self)));
+  const reviewProblems = reviews.ok ? (Array.isArray(reviews.value) ? reviews.value.map(reviewSummaryProblem).filter((p): p is string => p !== null) : ["the answer is not a list"]) : [];
   return {
     status: "ran",
     identity_table: identityTable,
-    state: state.ok ? { restore_state: identityRestoreState(restore, state.value.self, identityTable), restore_id: restore?.restore_id ?? null, marker_state: restore?.state ?? null, peer_table: restore?.peer_table ?? null, table_binding: state.value.self, serving_problem: state.value.servingProblem, completed_at: restore?.completed_at ?? null } : { unreadable: state.unreadable },
-    reviews: reviews.ok ? { open: reviews.value.filter((r) => r.open).map((r) => ({ restore_id: r.restore_id, reason: r.reason })), resolved: reviews.value.filter((r) => !r.open).length } : { unreadable: reviews.unreadable },
+    state: state.ok
+      ? {
+          restore_state: unnamed ? "malformed" : identityRestoreState(restore, state.value.self, identityTable),
+          restore_id: safe(restore?.restore_id),
+          marker_state: safe(restore?.state),
+          peer_table: safe(restore?.peer_table),
+          table_binding: safe(state.value.self),
+          /* L6-4's verdict: null only when it says null (an absent or non-string answer is never "no problem"). */
+          serving_problem: state.value.servingProblem === null ? null : typeof state.value.servingProblem === "string" ? restoreSafe(state.value.servingProblem) : `not an answer (${typeof state.value.servingProblem})`,
+          completed_at: typeof restore?.completed_at === "number" ? restore.completed_at : null,
+        }
+      : { unreadable: state.unreadable },
+    reviews: !reviews.ok
+      ? { unreadable: reviews.unreadable }
+      : reviewProblems.length > 0
+        ? { unreadable: `REVIEW# summaries malformed: ${[...new Set(reviewProblems)].join("; ")} (never counted as resolved)` }
+        : { open: reviews.value.filter((r) => r.open === true).map((r) => ({ restore_id: restoreSafe(r.restore_id), reason: r.reason })), resolved: reviews.value.filter((r) => r.open === false).length },
   };
 }
 
@@ -238,7 +335,9 @@ export function judgeIdentityRecovery(section: unknown, identityTable: string): 
           ? `source superseded by restore ${String(st.restore_id)} (replaced by ${String(st.peer_table)}): it never serves again`
           : state === "unreplayed-copy"
             ? "an unreplayed copy (it carries another table's name or restore marker): it serves nothing"
-            : `not serving-safe: ${String(st.serving_problem)}`,
+            : state === "malformed"
+              ? "the restore state is not one this build names (malformed): it is never treated as serving-safe"
+              : `not serving-safe: ${String(st.serving_problem)}`,
     ),
     judge("identity: TABLE#identity binding", st.table_binding === identityTable, `TABLE#identity names ${identityTable}`, st.table_binding === null ? "no TABLE#identity: no serving takeover has bound this table (a served deployment always has one)" : `TABLE#identity names ${String(st.table_binding)}, not ${identityTable}`),
   ];
@@ -280,55 +379,154 @@ export function buildCapabilities(here: string = __dirname): Record<string, bool
 export const hasL64 = (capabilities: unknown): boolean => Object.keys(L6_4_MODULES).every((name) => obj(capabilities)[name] === true);
 
 export const PRIOR_CERTIFICATIONS = "prior-certifications";
+/** capture-evidence's list of every ACTIVE revision per pool. INFORMATIONAL since L6-6R: an ACTIVE revision is not an
+ *  automatic rollback target (the circuit breaker selects the most recent COMPLETED deployment), so it is not judged. */
 export const revisionsFile = (pool: string): string => `revisions-${pool}.json`;
 
+const IMAGE_DIGEST = /^sha256:[0-9a-f]{64}$/;
+const gameServer = (containers: unknown): Record<string, unknown> | undefined => arr(containers).map(obj).find((c) => c.name === "game-server");
+
+/** An image ECS ran, as ECS names it: the task definition's `image` reference and the digest describe-tasks resolved. */
+export interface AttestedImage {
+  readonly image: string;
+  readonly digest: string;
+  readonly by: string;
+}
+
 /**
- * The deployment invariant: the running build carries L6-4 (the certifier task's own report), and every ACTIVE revision of
- * each pool's family other than the running one -- what the circuit breaker may roll back to -- is a build attested to
- * carry it: this run's, or one named by an earlier PASSing certification in `prior-certifications/`. A pre-L6-4 or
- * unattested revision must be deregistered (INACTIVE revisions are never rollback targets).
+ * The image THIS run's certifier task ran, and whether it is attested to carry L6-4: the task run-task started on the
+ * primary's running definition (task-role-run.json, ECS's record), whose own record (the same task ARN, the service's
+ * BUILD_ID) reports every L6-4 module present in its build. `image` is that definition's reference, `digest` the one ECS
+ * resolved for the task. Nothing here is operator text.
  */
-export function judgeRollback(dir: string, expect: { readonly pools: readonly string[]; readonly runningBuild: string | null; readonly runningCapabilities: unknown; readonly runningTaskDefinitions: Readonly<Record<string, string | null>> }): Check[] {
-  const checks: Check[] = [];
-  const ok = hasL64(expect.runningCapabilities);
-  checks.push(judge("rollback: the serving image contains L6-4", ok && expect.runningBuild !== null, `BUILD_ID ${String(expect.runningBuild)} carries ${Object.keys(L6_4_MODULES).join(", ")}`, `BUILD_ID ${String(expect.runningBuild)}: ${JSON.stringify(expect.runningCapabilities ?? null)} (the first AWS-mode image must contain L6-4)`));
-  const attested = new Set<string>(ok && expect.runningBuild !== null ? [expect.runningBuild] : []);
-  let priors: string[] = [];
+export function certifierImage(dir: string, expect: { readonly primaryPool: string; readonly primaryTaskDefinition: string | null; readonly primaryBuild: string | null; readonly runner: unknown }): { readonly image: string | null; readonly digest: string | null; readonly attested: boolean; readonly problem: string | null } {
+  const run = readEvidence(dir, EVIDENCE.taskRoleRun);
+  const td = readEvidence(dir, EVIDENCE_FILES.taskDefinition(expect.primaryPool));
+  const task = run.ok ? arr(obj(run.value).tasks).map(obj)[0] : undefined;
+  const image = td.ok ? str(gameServer(obj(obj(td.value).taskDefinition).containerDefinitions)?.image) : null;
+  const digest = task === undefined ? null : str(gameServer(task.containers)?.imageDigest);
+  const runner = obj(expect.runner);
+  const problems = [
+    !run.ok ? run.problem : task === undefined ? `${EVIDENCE.taskRoleRun} holds no task` : null,
+    task !== undefined && (expect.primaryTaskDefinition === null || task.taskDefinitionArn !== expect.primaryTaskDefinition) ? `the certifier task ran ${String(task.taskDefinitionArn)}, not the primary's running ${String(expect.primaryTaskDefinition)}` : null,
+    task !== undefined && (typeof runner.task_arn !== "string" || runner.task_arn !== task.taskArn) ? "the capability report is not the certifier task's own" : null,
+    expect.primaryBuild === null || runner.build_id !== expect.primaryBuild ? `the report's BUILD_ID ${String(runner.build_id)} is not the service's ${String(expect.primaryBuild)}` : null,
+    image === null ? `${EVIDENCE_FILES.taskDefinition(expect.primaryPool)} names no game-server image` : null,
+    digest === null || !IMAGE_DIGEST.test(digest) ? "ECS reports no image digest for the certifier task's game-server container" : null,
+    !hasL64(runner.build_capabilities) ? `the build reports ${JSON.stringify(runner.build_capabilities ?? null)} (the first AWS-mode image must contain L6-4)` : null,
+  ].filter((p): p is string => p !== null);
+  return { image, digest: digest !== null && IMAGE_DIGEST.test(digest) ? digest : null, attested: problems.length === 0, problem: problems.length === 0 ? null : problems.join("; ") };
+}
+
+/** Earlier certifications that attest an image: this environment's, this harness's format, PASS with no failed gate, the
+ *  full L6-4 capability report, and the image + digest they certified. Anything else attests nothing (and is named). */
+export function priorAttestations(dir: string, environment: string): { readonly images: AttestedImage[]; readonly ignored: string[] } {
+  let files: string[] = [];
   try {
-    priors = fs.readdirSync(path.join(dir, PRIOR_CERTIFICATIONS)).filter((f) => f.endsWith(".json")).sort();
+    files = fs.readdirSync(path.join(dir, PRIOR_CERTIFICATIONS)).filter((f) => f.endsWith(".json")).sort();
   } catch {
-    priors = [];
+    files = [];
   }
-  for (const file of priors) {
+  const images: AttestedImage[] = [];
+  const ignored: string[] = [];
+  for (const file of files) {
     const r = readEvidence(dir, path.join(PRIOR_CERTIFICATIONS, file), { ownRecord: true });
-    if (!r.ok) continue;
-    const c = obj(r.value);
-    if (c.verdict === "PASS" && typeof c.build_id === "string" && hasL64(c.build_capabilities)) attested.add(c.build_id);
-  }
-  for (const pool of expect.pools) {
-    const list = readEvidence(dir, revisionsFile(pool));
-    if (!list.ok) {
-      checks.push(fail(`rollback: ${pool}'s rollback targets`, `${list.problem} (capture-evidence lists every ACTIVE revision)`));
+    if (!r.ok) {
+      ignored.push(`${file}: ${r.problem}`);
       continue;
     }
-    const revisions = arr(obj(list.value).taskDefinitions).map(obj);
-    const running = expect.runningTaskDefinitions[pool];
-    const targets = revisions.filter((r) => r.taskDefinitionArn !== running);
-    const unattested = targets
-      .map((r) => {
-        const game = arr(r.containerDefinitions).map(obj).find((c) => c.name === "game-server");
-        const build = str(arr(game?.environment).map(obj).find((e) => e.name === "BUILD_ID")?.value);
-        return { arn: String(r.taskDefinitionArn), build };
-      })
-      .filter((t) => t.build === null || !attested.has(t.build));
-    checks.push(
-      judge(
-        `rollback: ${pool}'s automatic rollback targets contain L6-4`,
-        revisions.some((r) => r.taskDefinitionArn === running) && unattested.length === 0,
-        `${targets.length} ACTIVE earlier revision(s), each an attested L6-4 build`,
-        !revisions.some((r) => r.taskDefinitionArn === running) ? `the running revision is not among the captured ACTIVE revisions` : `unattested (pre-L6-4 or unknown) rollback target(s): ${unattested.map((t) => `${t.arn.split("/").pop()} (BUILD_ID ${String(t.build)})`).join(", ")} -- deregister them or attest their build`,
-      ),
-    );
+    const c = obj(r.value);
+    const why = [
+      c.format === CERTIFICATION_FORMAT ? null : "not a certification",
+      c.environment === environment ? null : `environment ${String(c.environment)}, not ${environment}`,
+      c.verdict === "PASS" && Array.isArray(c.failed_gates) && c.failed_gates.length === 0 ? null : "not a PASS",
+      hasL64(c.build_capabilities) ? null : "no L6-4 capability report",
+      typeof c.image === "string" && c.image.length > 0 && typeof c.image_digest === "string" && IMAGE_DIGEST.test(c.image_digest) ? null : "no certified image and digest",
+    ].filter((p): p is string => p !== null);
+    if (why.length > 0) ignored.push(`${file}: ${why.join(", ")}`);
+    else images.push({ image: String(c.image), digest: String(c.image_digest), by: `${file} (run ${String(c.run_id)})` });
+  }
+  return { images, ignored };
+}
+
+/**
+ * The deployment invariant (L6-4 §12.3) against ECS's real rollback rule. For EVERY pool: its automatic rollback target --
+ * the task definition of each COMPLETED deployment in services.json (in a settled service exactly one: the running one) --
+ * must run an attested L6-4 image: the running tasks' digest (describe-tasks) and the definition's image reference equal
+ * an attested image's. A pool whose service shows no COMPLETED deployment, a target whose image cannot be established, or
+ * an image nothing attests: FAIL. Earlier ACTIVE revisions are NOT candidates (the circuit breaker never selects them).
+ */
+export function judgeRollback(
+  dir: string,
+  expect: {
+    readonly environment: string;
+    readonly pools: readonly string[];
+    readonly primaryPool: string;
+    readonly primaryBuild: string | null;
+    readonly runningTaskDefinitions: Readonly<Record<string, string | null>>;
+    readonly running: ReadonlyMap<string, readonly Record<string, unknown>[]>;
+    readonly runner: unknown;
+  },
+): Check[] {
+  const checks: Check[] = [];
+  const own = certifierImage(dir, { primaryPool: expect.primaryPool, primaryTaskDefinition: expect.runningTaskDefinitions[expect.primaryPool] ?? null, primaryBuild: expect.primaryBuild, runner: expect.runner });
+  checks.push(judge("rollback: the certified image contains L6-4", own.attested, `BUILD_ID ${String(expect.primaryBuild)}, ${String(own.image)} @ ${String(own.digest)}: carries ${Object.keys(L6_4_MODULES).join(", ")}`, String(own.problem)));
+  const priors = priorAttestations(dir, expect.environment);
+  const attested: AttestedImage[] = [...(own.attested && own.image !== null && own.digest !== null ? [{ image: own.image, digest: own.digest, by: "this run's certifier task" }] : []), ...priors.images];
+  const services = readEvidence(dir, EVIDENCE_FILES.services);
+  const names = expectedNames(expect.environment, 1);
+  for (const pool of expect.pools) {
+    const label = `rollback: ${pool} serves, and would roll back to, an L6-4 image`;
+    if (!services.ok) {
+      checks.push(fail(label, services.problem));
+      continue;
+    }
+    const service = arr(obj(services.value).services).map(obj).find((s) => s.serviceName === names.service(pool));
+    const deployments = arr(service?.deployments).map(obj);
+    const targets = [...new Set(deployments.filter((d) => d.rolloutState === "COMPLETED").map((d) => String(d.taskDefinition)))];
+    const runningTd = expect.runningTaskDefinitions[pool] ?? null;
+    if (service === undefined || targets.length === 0) {
+      checks.push(fail(label, service === undefined ? `${names.service(pool)} is not in ${EVIDENCE_FILES.services}` : "the service shows no COMPLETED deployment: its automatic rollback target cannot be named"));
+      continue;
+    }
+    /* The running revision is judged too (in a settled service it IS the target; otherwise both must hold). */
+    const candidates = [...new Set([...targets, ...(runningTd === null ? [] : [runningTd])])];
+    const td = readEvidence(dir, EVIDENCE_FILES.taskDefinition(pool));
+    const tdDoc = td.ok ? obj(obj(td.value).taskDefinition) : {};
+    const problems: string[] = [];
+    const proven: string[] = [];
+    for (const arn of candidates) {
+      const short = arn.split("/").pop();
+      if (!td.ok || tdDoc.taskDefinitionArn !== arn) {
+        problems.push(`${short}: its task definition was not captured (${td.ok ? `${EVIDENCE_FILES.taskDefinition(pool)} is ${String(tdDoc.taskDefinitionArn)}` : td.problem})`);
+        continue;
+      }
+      const image = str(gameServer(tdDoc.containerDefinitions)?.image);
+      const tasks = (expect.running.get(pool) ?? []).filter((t) => t.taskDefinitionArn === arn);
+      const digests = tasks.map((t) => str(gameServer(t.containers)?.imageDigest));
+      if (image === null) {
+        problems.push(`${short}: names no game-server image`);
+        continue;
+      }
+      if (digests.some((d) => d === null || !IMAGE_DIGEST.test(d))) {
+        problems.push(`${short}: a running task shows no image digest`);
+        continue;
+      }
+      if (digests.length === 0) {
+        /* No running task (a pool at desired 0): ECS reports no digest, and a TAG is not evidence of content (an ECR
+           IMMUTABLE tag can be deleted and pushed again). Only a reference pinned by digest establishes it. */
+        const pinned = /@(sha256:[0-9a-f]{64})$/.exec(image)?.[1] ?? null;
+        const by = pinned === null ? undefined : attested.find((a) => a.digest === pinned);
+        if (by === undefined) problems.push(`${short}: ${image} (no running task) is not an attested L6-4 image${pinned === null ? " -- a tag is not evidence of content: run one task of the pool for the certification, or pin the image by digest" : ""}`);
+        else proven.push(`${short} (${by.by}, pinned by digest)`);
+        continue;
+      }
+      const by = attested.find((a) => a.image === image && digests.every((d) => d === a.digest));
+      if (by === undefined) problems.push(`${short}: ${image} @ ${[...new Set(digests)].join(",")} is not an attested L6-4 image`);
+      else proven.push(`${short} (${by.by})`);
+    }
+    const ignored = priors.ignored.length > 0 ? ` [prior certifications ignored: ${priors.ignored.join("; ")}]` : "";
+    checks.push(judge(label, problems.length === 0 && proven.length > 0, `the COMPLETED deployment's ${proven.join(", ")}`, `${problems.join("; ")} -- certify that image, or roll the pool forward to one${ignored}`));
   }
   return checks;
 }
@@ -338,7 +536,12 @@ export function judgeRollback(dir: string, expect: { readonly pools: readonly st
 /* ------------------------------------------------------------------ */
 
 export const RESTORE_STOP_DIR = "restore-stop";
+export const RESTORE_STOP_FORMAT = "18COSMOS/L6-6-RESTORE-STOP/v2";
 export const RESTORE_FENCING_FILE = "probe-restore-fencing.json";
+export const RESTORE_FENCING_FORMAT = "18COSMOS/L6-6-RESTORE-FENCING/v1";
+/** The stop is evidence of THIS adoption only when it was captured shortly before it (a stop, a restart, then an adoption
+ *  hours later is not a quiet adoption). The drill's runbook stops, restores, prepares and adopts in one sitting. */
+export const RESTORE_STOP_WINDOW_MS = 6 * 60 * 60 * 1000;
 
 /** Optional L6-5A seam: fresh TASK# heartbeats (operator proof only, never a lease). */
 export interface HeartbeatEvidence {
@@ -347,12 +550,22 @@ export interface HeartbeatEvidence {
   readonly oldGenerationAfterStop: readonly string[];
 }
 
+/** APPGEN's adoption, as the drill gates bind to it (null: never adopted, or not read). */
+export type AdoptionFacts = NonNullable<AppGenerationFacts["adoption"]> & { readonly generation: number };
+
+export const adoptionOf = (evidence: GenerationEvidence): AdoptionFacts | null => {
+  const a = evidence.appgen !== null && evidence.appgen.ok ? evidence.appgen.value : null;
+  return a === null || a.adoption === null ? null : { ...a.adoption, generation: a.current_generation };
+};
+
 /**
- * The stop before adoption: `restore-stop/services.json` (every pool desired 0, running 0, pending 0),
- * `restore-stop/cluster-tasks.json` (no RUNNING or PENDING task), `restore-stop/stamp.json` (the run, the time) -- captured
- * before APPGEN's `adopted_at`.
+ * The stop before adoption: `restore-stop/stamp.json` (format v2: the run, the restore id, the time),
+ * `restore-stop/services.json` (EVERY pool's service present exactly once and ACTIVE, desired 0, running 0, pending 0; no
+ * describe failure) and `restore-stop/cluster-tasks.json` (`{batches: [describe-tasks answer, ...]}`: every task the
+ * cluster lists -- desired RUNNING and desired STOPPED -- is STOPPED; no describe failure in any batch) -- captured for THIS run and THIS adoption's restore id, before APPGEN's `adopted_at` and no more
+ * than RESTORE_STOP_WINDOW_MS before it.
  */
-export function judgeRestoreQuiet(dir: string, expect: { readonly run: string; readonly adoptedAt: number | null; readonly heartbeats: HeartbeatEvidence | null }): Check[] {
+export function judgeRestoreQuiet(dir: string, expect: { readonly run: string; readonly environment: string; readonly pools: readonly string[]; readonly adoption: AdoptionFacts | null; readonly heartbeats: HeartbeatEvidence | null }): Check[] {
   const services = readEvidence(dir, path.join(RESTORE_STOP_DIR, "services.json"));
   const tasks = readEvidence(dir, path.join(RESTORE_STOP_DIR, "cluster-tasks.json"));
   const stamp = readEvidence(dir, path.join(RESTORE_STOP_DIR, "stamp.json"));
@@ -360,35 +573,114 @@ export function judgeRestoreQuiet(dir: string, expect: { readonly run: string; r
   if (missing.length > 0) return [fail("restore: the stop before adoption", `${missing.join("; ")} (capture the stopped state before appgen-adopt)`)];
   const s = obj(stamp.ok ? stamp.value : null);
   const at = Date.parse(String(s.captured_at));
-  const busy = arr(obj(services.ok ? services.value : null).services).map(obj).filter((x) => x.desiredCount !== 0 || x.runningCount !== 0 || x.pendingCount !== 0).map((x) => String(x.serviceName));
-  const live = arr(obj(tasks.ok ? tasks.value : null).tasks).map(obj).filter((t) => t.lastStatus !== "STOPPED").map((t) => String(t.taskArn).split("/").pop());
+  const servicesDoc = obj(services.ok ? services.value : null);
+  const tasksDoc = obj(tasks.ok ? tasks.value : null);
+  const names = expectedNames(expect.environment, 1);
+  const listed = arr(servicesDoc.services).map(obj);
+  /* Exactly one ACTIVE service per pool (a stale INACTIVE record of the same name is not the pool's service). */
+  const absent = expect.pools.filter((pool) => listed.filter((x) => x.serviceName === names.service(pool) && x.status === "ACTIVE").length !== 1);
+  const busy = listed.filter((x) => x.desiredCount !== 0 || x.runningCount !== 0 || x.pendingCount !== 0).map((x) => String(x.serviceName));
+  /* The listing: one describe-tasks answer per batch of 100 (desired RUNNING and desired STOPPED), each whole. */
+  const batches = Array.isArray(tasksDoc.batches) ? tasksDoc.batches.map(obj) : null;
+  const allTasks = (batches ?? []).flatMap((b) => arr(b.tasks).map(obj));
+  /* ECS task ids are ECS resource ids (32 hex), never player data: printed as they are, so the operator knows which task. */
+  const live = allTasks.filter((t) => t.lastStatus !== "STOPPED").map((t) => String(String(t.taskArn).split("/").pop()));
+  const complete = (doc: Record<string, unknown>) => Array.isArray(doc.failures) && doc.failures.length === 0;
+  const listingWhole = batches !== null && batches.every((b) => Array.isArray(b.tasks) && complete(b));
+  const ad = expect.adoption;
   const checks: Check[] = [
-    judge("restore: this run's stop", s.run_id === expect.run && Number.isFinite(at), `captured ${String(s.captured_at)}`, `the stop evidence is run ${String(s.run_id)}'s`),
-    judge("restore: every pool stopped", busy.length === 0 && arr(obj(services.ok ? services.value : null).services).length > 0, "desired 0, running 0, pending 0", busy.length > 0 ? `not stopped: ${busy.join(", ")}` : "no service in the stop evidence"),
-    judge("restore: no task left in the cluster", Array.isArray(obj(tasks.ok ? tasks.value : null).tasks) && live.length === 0, "no RUNNING or PENDING task", `still running: ${live.join(", ")}`),
-    judge("restore: the stop precedes the adoption", expect.adoptedAt !== null && Number.isFinite(at) && at <= expect.adoptedAt, `stopped ${String(s.captured_at)}, adopted ${expect.adoptedAt === null ? "?" : new Date(expect.adoptedAt).toISOString()}`, expect.adoptedAt === null ? "APPGEN shows no adoption" : "the stop was captured after APPGEN moved"),
+    judge(
+      "restore: this run's and this restore's stop",
+      s.format === RESTORE_STOP_FORMAT && s.run_id === expect.run && ad !== null && s.restore_id === ad.restore_id && Number.isFinite(at),
+      `run ${expect.run}, restore ${String(s.restore_id)}, captured ${String(s.captured_at)}`,
+      ad === null ? "APPGEN shows no adoption to bind the stop to" : `the stop evidence is ${String(s.format)} run ${String(s.run_id)} restore ${String(s.restore_id)} (this run ${expect.run}, APPGEN adopted restore ${ad.restore_id})`,
+    ),
+    judge(
+      "restore: every pool stopped",
+      absent.length === 0 && busy.length === 0 && expect.pools.length > 0 && complete(servicesDoc),
+      `${expect.pools.join(", ")}: desired 0, running 0, pending 0`,
+      absent.length > 0 ? `not in the stop evidence as exactly one ACTIVE service: ${absent.join(", ")}` : busy.length > 0 ? `not stopped: ${busy.join(", ")}` : "the service listing is incomplete (describe-services failures)",
+    ),
+    judge("restore: no task left in the cluster", listingWhole && live.length === 0, `every listed task STOPPED (${allTasks.length} listed, desired RUNNING and desired STOPPED)`, live.length > 0 ? `still running or stopping: ${live.join(", ")}` : "the task listing is incomplete (describe-tasks failures, or no batches)"),
+    judge(
+      "restore: the stop precedes the adoption",
+      ad !== null && Number.isFinite(at) && at <= ad.adopted_at && ad.adopted_at - at <= RESTORE_STOP_WINDOW_MS,
+      `stopped ${String(s.captured_at)}, adopted ${ad === null ? "?" : new Date(ad.adopted_at).toISOString()}`,
+      ad === null ? "APPGEN shows no adoption" : Number.isFinite(at) && at > ad.adopted_at ? "the stop was captured after APPGEN moved" : `the stop was captured more than ${RESTORE_STOP_WINDOW_MS / 3_600_000} h before the adoption: it is not this adoption's stop`,
+    ),
   ];
   if (expect.heartbeats !== null && expect.heartbeats.integrated) {
-    checks.push(judge("restore: no old-generation TASK# heartbeat after the stop (operator proof, not a lease)", expect.heartbeats.oldGenerationAfterStop.length === 0, "none", `fresh heartbeats from ${expect.heartbeats.oldGenerationAfterStop.join(", ")}`));
+    const hb = Array.isArray(expect.heartbeats.oldGenerationAfterStop) ? expect.heartbeats.oldGenerationAfterStop : null;
+    checks.push(judge("restore: no old-generation TASK# heartbeat after the stop (operator proof, not a lease)", hb !== null && hb.length === 0, "none", hb === null ? "the heartbeat answer is not a list" : `fresh heartbeats from ${hb.map((t) => String(t)).join(", ")}`));
   } else {
-    /* Said in the report, never silently absent: the stop is proven from ECS alone until L6-5A's TASK# is integrated. */
+    /* Said in the report, never silently absent: the stop is proven from ECS alone until L6-5A's TASK# is integrated. A
+       missing or stale TASK# never proves a task stopped: ECS's listing above is what proves it. */
     checks.push(judge("restore: TASK# heartbeats (operator proof, not a lease)", true, "not integrated (L6-5A): the stop is proven from ECS alone", ""));
   }
   return checks;
 }
 
-/** The fencing probe's evidence slot (the probe itself is a later real-staging slice). */
+/**
+ * The fencing probe's evidence slot (the probe itself is a later real-staging slice). The record
+ * (`probe-restore-fencing.json`, format RESTORE_FENCING_FORMAT) names the run and the adoption it observed (restore id,
+ * table, previous and new generation, adopted_at), and one case per RESTORE_FENCING_CASES, each observed AFTER adopted_at
+ * with the structured result that proves GENERATION fencing -- never a bare "observed" or a generic process exit:
+ *
+ *   old-generation-ledger-write-refused  { generation: previous, outcome: "fenced", fence: "generation" }   (a disposable
+ *                                          ledger write of the old generation, refused by APPGEN's ConditionCheck)
+ *   old-generation-task-never-ready      { generation: previous, ready: false, exit_code: 2 | 3, reason: "generation" }
+ *                                          (a task configured for the old generation: refused at startup or lost on its
+ *                                          self-check BECAUSE the generation moved -- not any crash)
+ *   kms-side-effect-withheld             { generation: previous, kms_sign_calls: 0, outcome: "withheld" }
+ *   new-generation-started               { generation: new, game_table: the adopted table, ready: true }
+ *
+ * No case needs a chain transaction or a relayer sequence, and none implies a destructive action.
+ */
 export const RESTORE_FENCING_CASES = Object.freeze(["old-generation-ledger-write-refused", "old-generation-task-never-ready", "kms-side-effect-withheld", "new-generation-started"] as const);
 
-export function judgeRestoreFencing(dir: string, expect: { readonly run: string; readonly newGeneration: number | null }): Check[] {
+function fencingCaseProblem(name: (typeof RESTORE_FENCING_CASES)[number], c: Record<string, unknown>, ad: AdoptionFacts): string | null {
+  const when = Date.parse(String(c.observed_at));
+  if (!Number.isFinite(when) || when < ad.adopted_at) return `observed ${String(c.observed_at)}, not after this adoption (${new Date(ad.adopted_at).toISOString()})`;
+  const old = c.generation === ad.previous_generation;
+  switch (name) {
+    case "old-generation-ledger-write-refused":
+      return old && c.outcome === "fenced" && c.fence === "generation" ? null : `generation ${String(c.generation)} (old: ${ad.previous_generation}), outcome ${String(c.outcome)}, fence ${String(c.fence)}: not a write of the old generation refused by the generation fence`;
+    case "old-generation-task-never-ready":
+      return old && c.ready === false && (c.exit_code === 2 || c.exit_code === 3) && c.reason === "generation" ? null : `generation ${String(c.generation)}, ready ${String(c.ready)}, exit ${String(c.exit_code)}, reason ${String(c.reason)}: a process exit is not generation fencing`;
+    case "kms-side-effect-withheld":
+      return old && c.kms_sign_calls === 0 && c.outcome === "withheld" ? null : `generation ${String(c.generation)}, KMS Sign calls ${String(c.kms_sign_calls)}, outcome ${String(c.outcome)}: not withheld before KMS`;
+    case "new-generation-started":
+      return c.generation === ad.generation && c.game_table === ad.game_table && c.ready === true ? null : `generation ${String(c.generation)} on ${String(c.game_table)}, ready ${String(c.ready)}: not the adopted generation ${ad.generation} on ${ad.game_table}`;
+  }
+  return "an unknown case";
+}
+
+export function judgeRestoreFencing(dir: string, expect: { readonly run: string; readonly adoption: AdoptionFacts | null }): Check[] {
   const r = readEvidence(dir, RESTORE_FENCING_FILE, { ownRecord: true });
   if (!r.ok) return [fail("restore fencing", `${r.problem} (the real-staging fencing probe records it; no destructive or chain-affecting probe is part of this slice)`)];
   const rec = obj(r.value);
   const cases = obj(rec.cases);
-  const checks: Check[] = [judge("restore fencing: this run, the adopted generation", rec.run_id === expect.run && expect.newGeneration !== null && rec.new_generation === expect.newGeneration, `run ${expect.run}, generation ${String(expect.newGeneration)}`, `run ${String(rec.run_id)}, generation ${String(rec.new_generation)}`)];
+  const ad = expect.adoption;
+  const observed = obj(rec.adoption);
+  const same =
+    ad !== null &&
+    observed.restore_id === ad.restore_id &&
+    observed.game_table === ad.game_table &&
+    observed.previous_generation === ad.previous_generation &&
+    observed.generation === ad.generation &&
+    observed.adopted_at === ad.adopted_at;
+  const checks: Check[] = [
+    judge(
+      "restore fencing: this run, this adoption",
+      rec.format === RESTORE_FENCING_FORMAT && rec.run_id === expect.run && same,
+      ad === null ? "" : `run ${expect.run}, restore ${ad.restore_id}: generation ${ad.previous_generation} -> ${ad.generation} (${ad.game_table})`,
+      ad === null ? "APPGEN shows no adoption" : restoreSafe(`${String(rec.format)} run ${String(rec.run_id)}, adoption ${JSON.stringify(rec.adoption ?? null)} (APPGEN: restore ${ad.restore_id}, ${ad.previous_generation} -> ${ad.generation}, ${ad.game_table}, at ${ad.adopted_at})`),
+    ),
+  ];
   for (const name of RESTORE_FENCING_CASES) {
     const c = obj(cases[name]);
-    checks.push(judge(`restore fencing: ${name}`, c.observed === true, String(c.detail ?? "observed"), c.observed === false ? `NOT observed: ${String(c.detail ?? "")}` : "no evidence recorded"));
+    const problem = cases[name] === undefined ? "no evidence recorded (probe missing)" : ad === null ? "APPGEN shows no adoption" : fencingCaseProblem(name, c, ad);
+    checks.push(judge(`restore fencing: ${name}`, problem === null, restoreSafe(String(c.detail ?? "observed")), `NOT proven: ${restoreSafe(String(problem))}`));
   }
   return checks;
 }

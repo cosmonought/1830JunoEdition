@@ -1,4 +1,4 @@
-# AWS clients, DynamoDB Local, the game table, identity, ownership, the relayer role, the AWS runtime and non-primary routing — the LIVE-5 / LIVE-6 convention
+# AWS clients, DynamoDB Local, the game table, identity, ownership, the relayer role, the AWS runtime, non-primary routing and the operator tooling — the LIVE-5 / LIVE-6 convention
 
 LIVE-5 L5-1 set this up so that every later LIVE-5 slice uses one convention. L5-2 (the game table), L5-4 (identity),
 L5-5 (the ledger and KMS) and L5-7 (the AWS wiring, §8) all follow it; none of them should pick its own.
@@ -460,3 +460,33 @@ The primary's sockets close 1001 at a demotion (the game server's close), the ro
 
 **What a non-primary task does NOT do:** take the identity-writer or relayer role, open an identity store, a ledger, a KMS
 client or any game store that writes, claim or release a game, run a money sweep, or write any identity or game item.
+
+## 11. The operator tooling (LIVE-6 L6-3): `aws/operator/`, `gamesDoctor aws ...`
+
+The operator's view of, and narrow controls over, an AWS deployment. `gamesDoctor aws <command>` (the FIRST word must be
+`aws`; only then is `aws/operator/operatorMain.ts` loaded -- every file-mode command is unchanged and loads no AWS SDK or
+AWS module). Its import rights are an explicit list (`awsClients.test.ts` `OPERATOR_IMPORTS`: the readers and its
+mutations' own primitives; no store commit, ledger, identity writer or role takeover), and only `tools/gamesDoctor.ts`
+reaches it.
+
+| File | What it is |
+|---|---|
+| `operatorTarget.ts` | The deployment, named as a task names it (L5-7): `--aws-config <SSM parameter ARN>` / `GS_AWS_CONFIG_PARAMETER`, the runtime document `18COSMOS/AWS-RUNTIME/v1` via L5-7's `ParameterSource` and parser; with escrow, the Juno v3 configuration only for the relayer ACCOUNT. Static keys in the environment refused by name; `--data` / `--escrow-config` refused. DynamoDB Local: `GS_DYNAMODB_LOCAL_ENDPOINT` + `--local-document <file>` [`--relayer <account>`] |
+| `inspect.ts` | Read-only answers, each `absent` / `ok` / `unreadable` (`corrupt` or `newer`) / `unavailable` -- never collapsed: the routing, APPGEN, the pools it can name (no scan), the identity-writer role and its holder, the relayer mirror against the ledger fence (`readRelayerFence`, L6-3's one ledger export), a game's HEAD owner class (released / current / superseded / operator / orphaned / ahead / inconsistent / unknown) and the claim / take / release verdicts, the directory and the open money games |
+| `mutations.ts` | `set-primary` (L5-3's `setPrimaryPool` CAS at `--expect-version`; never the first routing -- L5-8 -- never `op:`, never a pool with no item); an operator run's `claim` (a released game) / `take` (a SUPERSEDED owner, proven inside the transaction) / `release` (`--run`). The design, the ABA argument and the stopped live-owner take are in its header |
+| `operatorMain.ts` | The CLI: text or `--json` on stdout, `AUDIT {...}` on stderr; exit 0 / 1 (findings, refused, conflict) / 2 (usage, refused reference) / 3 (unknown outcome) |
+
+**Every mutation**: a dry run unless `--apply` (nothing written, not even evidence); `--note` required (printable, never
+credential-shaped); the item read strictly and the write bound to exactly that state; the run's evidence `OPRUN#<run>` /
+`OPRUN` written FIRST (no evidence, no change) and `RESULT` after; a lost answer settled from the table. An operator run is a
+pool `op:r-<16 hex>` taken at epoch 1 for its one claim and RETIRED (moved past 1) as soon as that claim has an answer, so
+no copy of it can ever land later; its hold is the HEAD's `(run, 1)`, which only `release --run` ends.
+
+**Not here:** the first `SYSTEM/ROUTING` and `APPGEN` (L5-8's bootstrap); generation adoption / restore (L6-4: APPGEN is
+read only); the flip / retirement procedure (L6-2: `set-primary` is its primitive); a take from a CURRENT owner (it needs a
+per-claim generation on the HEAD carried by every game fence -- the L6-3 report); hold / money release over DynamoDB under
+an operator hold (a later slice). Note for L6-2 / L6-4: `POOL#op:r-*` and `OPRUN#*` items live in the game table (a pool
+enumeration must skip `op:` pools; they go with the table's generation).
+
+Run: `npm test` includes `aws/operator/l6_3Operator.test.js`; `npm run test:dynamodb-local` includes
+`persistence/conformance/operatorTooling.dynamoLocal.test.js`.

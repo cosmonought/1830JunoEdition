@@ -19,7 +19,6 @@ import { join } from "path";
 import { LegacyLogAdapters, RoomEngine, entriesFromExport, replayLog, type ExportedEntry, type ReplayEntry } from "../gameEngine/replayLog";
 import { DEVELOPMENT_CORPUS_POLICY, replayCompatibility } from "../gameEngine/rulesVersion";
 import { effectiveActions } from "../gameEngine/logRevert";
-import { readStripped as readSource } from "./sourceScan";
 import {
   DEFAULT_SANDBOX_SCENARIO,
   sandboxScenario,
@@ -28,7 +27,7 @@ import {
 } from "../gameEngine/sandboxState";
 import { sandboxReplayProviders } from "../gameEngine/replayProviders";
 import { waterfallForRoster, withEmptyRoster } from "../gameEngine/gameSetup";
-import { readShell, readStripped, sliceBetween } from "./sourceScan";
+import { readShell, readSource, readStripped, sliceBetween, stripComments } from "./sourceScan";
 
 const GAME_ID = 0;
 const PRR = 1;
@@ -36,6 +35,21 @@ const PRR = 1;
 function loadLog(): { actions: ExportedEntry[] } {
   const path = join(__dirname, "..", "..", "sandbox-log-JUNO-CV4.json");
   return JSON.parse(readFileSync(path, "utf8")) as { actions: ExportedEntry[] };
+}
+
+/** `RoomEngine.settleOwed`, from its signature to the `get snapshot()` that follows it. */
+function settleOwedRegion(replayLogSource: string): string {
+  return sliceBetween(replayLogSource, "  settleOwed(\n", "  get snapshot()");
+}
+
+/** #1287, by meaning: inside `settleOwed`, the owed action is asked of `nextDerivedAction` INSIDE `withRules`, under
+ *  THIS game's variants and THIS board's route-rules revision -- whatever the line wrapping. Comments are stripped
+ *  first, so the design note above the call (which quotes it) cannot satisfy it. */
+function settleOwedScopedUnderGameRules(replayLogSource: string): boolean {
+  const settle = settleOwedRegion(stripComments(replayLogSource));
+  return /const next = withRules\(\s*resolveVariants\(this\.state\.variants\),\s*\(\)\s*=>\s*nextDerivedAction\(\{[\s\S]*?\}\),\s*routeRulesRevisionOf\(this\.state\),?\s*\);/.test(
+    settle,
+  );
 }
 
 describe("JUNO-CV4 replays headless on the Level Playing Field", () => {
@@ -112,9 +126,32 @@ describe("JUNO-CV4 replays headless on the Level Playing Field", () => {
     const owed = engine.settleOwed(mint);
     const first = owed[0] ? (JSON.parse(owed[0].payload) as Record<string, unknown>) : null;
     expect(first === null || !("AdvanceOperatingSubPhase" in first)).toBe(true);
-    expect(readSource("gameEngine/replayLog.ts")).toContain(
-      "const next = withRules(resolveVariants(this.state.variants), () =>",
+    /* THE WIRING BEHIND THE VERDICT ABOVE (#1287), pinned by meaning rather than by one line's formatting. R12-2 gave
+       `withRules` its third argument -- the route-rules revision of THIS board (#1698's pin-presence rule), so a pinned
+       v12 game's owed actions are decided under v12's route law and an unpinned corpus log (this one) under the
+       pre-v12 twins -- and the call is wrapped across lines since. The pre-R12 one-line spelling this assertion used
+       to match no longer exists; the semantics it stood for are all still here. */
+    expect(settleOwedScopedUnderGameRules(readSource("gameEngine/replayLog.ts"))).toBe(true);
+  });
+
+  it("pins settleOwed's rules scope by meaning, and a bypass fails it (R12-W1 negative controls)", () => {
+    const code = readSource("gameEngine/replayLog.ts");
+    const settle = settleOwedRegion(code);
+    expect(settleOwedScopedUnderGameRules(code)).toBe(true);
+    /* THE BYPASS #1287 FIXED: `nextDerivedAction` asked bare, outside any rules scope. */
+    const bare = settle.replace(
+      /const next = withRules\(\s*resolveVariants\(this\.state\.variants\),\s*\(\)\s*=>\s*(nextDerivedAction\(\{[\s\S]*?\}\)),\s*routeRulesRevisionOf\(this\.state\),?\s*\);/,
+      "const next = $1;",
     );
+    expect(bare).not.toBe(settle);
+    expect(settleOwedScopedUnderGameRules(code.replace(settle, bare))).toBe(false);
+    /* The scope without the board's revision: owed actions decided under the wrong route law on a pinned board. */
+    const unrevised = settle.replace(/,\s*routeRulesRevisionOf\(this\.state\),?(\s*\);)/, "$1");
+    expect(unrevised).not.toBe(settle);
+    expect(settleOwedScopedUnderGameRules(code.replace(settle, unrevised))).toBe(false);
+    /* The scope under a fixed board rather than the game's own variants. */
+    const fixed = settle.replace("resolveVariants(this.state.variants)", "resolveVariants({})");
+    expect(settleOwedScopedUnderGameRules(code.replace(settle, fixed))).toBe(false);
   });
 
   it("judges a lay in the shell under the same rules the reducer uses", () => {

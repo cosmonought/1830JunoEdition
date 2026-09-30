@@ -31,7 +31,7 @@ import { cityExitEdges, liveEdgesForHex } from "../components/hexGeometry";
 import { assignRouteSet, autoTraceRoute } from "../gameEngine/routeAutoTrace";
 import { routeIncludesOwnedToken, routeTokenBlockReason } from "./routeWaypoints";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import { readShell } from "./sourceScan";
+import { readShell, readSource, readStripped, sliceBetween } from "./sourceScan";
 
 const BARE: MapGridResponse = { game_id: 1, tiles: [] };
 
@@ -251,19 +251,27 @@ describe("why the playtests looked clean (design note #852b)", () => {
   });
 });
 
+/** R12-W1: for the duration of `fn`, every text read through `fs.readFileSync` comes back with CRLF line endings --
+ *  a Windows checkout under `core.autocrlf=true`. The readers under test reach `fs` through `require`, the same
+ *  module object as here, so this exercises the REAL reader rather than a copy normalised by hand. */
+function asCrlfCheckout<T>(fn: () => T): T {
+  const nodeFs = require("fs") as typeof import("fs");
+  const real = nodeFs.readFileSync;
+  const spy = jest.spyOn(nodeFs, "readFileSync").mockImplementation(((file: unknown, options?: unknown) => {
+    const out = (real as (f: unknown, o?: unknown) => unknown)(file, options);
+    return typeof out === "string" ? out.replace(/\r?\n/g, "\r\n") : out;
+  }) as typeof nodeFs.readFileSync);
+  try {
+    return fn();
+  } finally {
+    spy.mockRestore();
+  }
+}
+
 describe("the source keeps the model out", () => {
-  const SEARCH = (() => {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "routeAutoTrace.ts"), "utf8");
-    // #490a: the notes quote the removed call while explaining its removal.
-    const code = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-    const start = code.indexOf("function candidatePathsFrom");
-    expect(start).toBeGreaterThan(-1);
-    const end = code.indexOf("function candidateRoutes", start);
-    expect(end).toBeGreaterThan(start);
-    return code.slice(start, end);
-  })();
+  /* R12-W1: read through `sourceScan` -- line endings normalised, comments stripped (#490a: the notes quote the
+     removed call while explaining its removal), and a missing anchor throws rather than slicing nothing. */
+  const SEARCH = sliceBetween(readStripped("gameEngine/routeAutoTrace.ts"), "function candidatePathsFrom", "function candidateRoutes");
 
   it("asks cityExitEdges at the start of the search", () => {
     expect(SEARCH).toContain("cityExitEdges(mapGrid, at.q, at.r, startCity)");
@@ -288,12 +296,38 @@ describe("the source keeps the model out", () => {
     /* #852a FIRST CLAIMED the manual gap was `bridgeWaypoints` and needed a contract change. #853 found the
        hole was the token rule and needed no new field. The note keeps both, because a superseded claim that
        is deleted is a claim that gets made again -- and this one was made confidently. */
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-    const raw = fs.readFileSync(path.join(__dirname, "..", "gameEngine", "routeAutoTrace.ts"), "utf8");
-    expect(raw).toContain("DESIGN NOTE 852a");
-    expect(raw).toContain("BOTH\n     HALVES WERE WRONG");
-    expect(raw).toContain("NO NEW FIELD WAS NEEDED");
+    /* R12-W1: THE WINDOWS FAILURE WAS THE READER, NOT THE NOTE. R12-4 kept #852a word for word; a raw
+       `readFileSync` of a CRLF checkout has `BOTH\r\n     HALVES`, which the `\n` below never matched. `readSource`
+       normalises line endings and keeps the comments this assertion is about. */
+    const raw = readSource("gameEngine/routeAutoTrace.ts");
+    /* IN THE FUNCTION IT IS ABOUT: the note describes `bridgeWaypoints`' start, so it must still sit inside it --
+       a note moved to a file nobody reads is a note deleted. */
+    const bridge = sliceBetween(raw, "export function bridgeWaypoints(", "\n}\n");
+    expect(bridge).toContain("DESIGN NOTE 852a");
+    expect(bridge).toContain("BOTH\n     HALVES WERE WRONG");
+    expect(bridge).toContain("NO NEW FIELD WAS NEEDED");
+    /* AND THE CORRECTION IS TRUE, which is the behavioural half the prose stands on (the #853 block below has the
+       rest): coordinates alone accept a run touching New York by the other city's arm; the board refuses it. */
+    const drawn = [
+      { q: H18.q, r: H18.r },
+      { q: NEW_YORK.q, r: NEW_YORK.r },
+    ];
+    expect(routeIncludesOwnedToken(drawn, [[NEW_YORK.q, NEW_YORK.r, 0]])).toBe(true);
+    expect(routeIncludesOwnedToken(drawn, [[NEW_YORK.q, NEW_YORK.r, 0]], WITH_H18_CITY)).toBe(false);
+  });
+
+  it("finds #852a's correction in a CRLF checkout the same way (R12-W1)", () => {
+    const lf = readSource("gameEngine/routeAutoTrace.ts");
+    asCrlfCheckout(() => {
+      const nodeFs = require("fs") as typeof import("fs");
+      const nodePath = require("path") as typeof import("path");
+      /* The control: the raw read it replaced really does miss the multi-line witness -- the owner's failure. */
+      const rawCrlf = nodeFs.readFileSync(nodePath.join(__dirname, "..", "gameEngine", "routeAutoTrace.ts"), "utf8");
+      expect(rawCrlf).not.toContain("BOTH\n     HALVES WERE WRONG");
+      /* The real reader, over the same CRLF disk, reads the LF text byte for byte. */
+      expect(readSource("gameEngine/routeAutoTrace.ts")).toBe(lf);
+    });
+    expect(lf).toContain("BOTH\n     HALVES WERE WRONG");
   });
 });
 

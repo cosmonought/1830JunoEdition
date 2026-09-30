@@ -18,7 +18,20 @@
 # system code page, so a Unicode bullet in a comment or a pattern becomes garbage before the parser sees it.
 # The bullet Jest prints is matched below by its code point instead.
 
-param([int]$Lines = 12, [switch]$NoColor)
+#
+# EXIT STATUS (R12-W1). The script exits with npm's own status: 0 only when the full suite passed, nonzero
+# otherwise. It used to fall off the end and exit 0 whatever Jest said, so an owner gate that trusted the exit
+# code printed "PASS: Frontend full test summary" above "Test Suites: 6 failed". The native status is captured
+# on the line after the run, before any formatting can overwrite it, and is cross-checked against the totals
+# Jest printed: a run that reports a failure, or prints no totals at all, or never ran, is never a 0.
+#
+# Add -Jest <args> to pass extra arguments to Jest (a path pattern, say) for a quick partial run.
+
+param([int]$Lines = 12, [switch]$NoColor, [string[]]$Jest = @())
+
+# Native stderr is redirected into the capture below on purpose; a caller's 'Stop' preference would turn the
+# first stderr line into a terminating error and lose the run.
+$ErrorActionPreference = 'Continue'
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $here
@@ -48,7 +61,12 @@ function Get-FailureColor {
 # "$_" turns Jest's stderr lines back into plain strings; without it PowerShell paints them red and wraps
 # each one in "System.Management.Automation.RemoteException". --silent drops the tests' own console.log
 # output, which otherwise buries the failures under debugging prints.
-npm test -- --watchAll=false --silent 2>&1 | ForEach-Object { "$_" } | Out-File -Encoding utf8 test-output.txt
+#
+# $LASTEXITCODE is the GLOBAL automatic variable, read and cleared as $global: so that a script-scope variable can
+# never shadow it, and cleared first so that an npm that never started cannot inherit an earlier command's 0.
+$global:LASTEXITCODE = $null
+npm test -- --watchAll=false --silent @Jest 2>&1 | ForEach-Object { "$_" } | Out-File -Encoding utf8 test-output.txt
+$npmExit = $global:LASTEXITCODE
 
 $all = Get-Content test-output.txt
 
@@ -92,6 +110,14 @@ if ($summary) {
       for ($i = $start + 1; $i -le $limit; $i++) { W $tail[$i] (Get-FailureColor $tail[$i]) }
     }
   }
+} elseif (@($all | Select-String -Pattern '^(Tests|Test Suites):.*\bfailed\b').Count -gt 0) {
+  # Jest prints the grouped summary only for a run of more than one suite; a single failing suite prints its
+  # failure inline, so "No failing tests" here would contradict the totals below.
+  W ''
+  W 'Jest printed no failure summary (it does so only for a multi-suite run) -- the failures are in test-output.txt.' 'Yellow'
+} elseif (@($all | Select-String -Pattern '^(Tests|Test Suites):').Count -eq 0) {
+  W ''
+  W 'Jest printed no totals -- read test-output.txt.' 'Yellow'
 } else {
   W ''
   W 'No failing tests.' 'Green'
@@ -99,8 +125,31 @@ if ($summary) {
 
 W ''
 W '======================================================================' 'DarkGray'
-$all | Select-String -Pattern "^(Tests|Test Suites):" | ForEach-Object {
+$totals = @($all | Select-String -Pattern "^(Tests|Test Suites):")
+$totals | ForEach-Object {
   if ($_.Line -match 'failed') { W $_.Line 'Red' } else { W $_.Line 'Green' }
 }
 W ''
 W "Full run: $here\test-output.txt" 'DarkGray'
+
+# The verdict. npm's status decides; the totals can only turn a 0 into a failure, never the other way round.
+$failedTotals = @($totals | Where-Object { $_.Line -match '\bfailed\b' })
+if ($null -eq $npmExit) {
+  $code = 1
+  $why = 'npm test did not run (no exit status) -- read test-output.txt'
+} elseif ($npmExit -ne 0) {
+  $code = [int]$npmExit
+  $why = "npm test exited $npmExit"
+} elseif ($failedTotals.Count -gt 0) {
+  $code = 1
+  $why = 'npm test exited 0 but Jest reported failures'
+} elseif ($totals.Count -eq 0) {
+  $code = 1
+  $why = 'npm test exited 0 but printed no Jest totals -- read test-output.txt'
+} else {
+  $code = 0
+  $why = 'npm test exited 0'
+}
+W ''
+if ($code -eq 0) { W "RESULT: PASS ($why)" 'Green' } else { W "RESULT: FAIL ($why); exit $code" 'Red' }
+exit $code

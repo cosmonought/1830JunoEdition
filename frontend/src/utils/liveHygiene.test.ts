@@ -10,7 +10,7 @@
 //     PLAYTEST_NGROK.md was rotated; this is the tripwire so the next one never reaches a commit. It reports
 //     file and line only, never the value.
 
-import { readStripped, sliceBetween } from "./sourceScan";
+import { expectOrder, readStripped, sliceBetween } from "./sourceScan";
 
 const fs = require("fs") as typeof import("fs");
 const path = require("path") as typeof import("path");
@@ -127,16 +127,160 @@ describe("the playtest proxy routes exactly /gs to the game server (LIVE-0), and
 /*  LIVE-0B / 0C: the game server                                      */
 /* ------------------------------------------------------------------ */
 
+
+/* ------------------------------------------------------------------ */
+/*  R12-W1: the two bind paths, as checks that return what failed       */
+/* ------------------------------------------------------------------ */
+
+/** PROCESS (file) mode: loopback by construction. An empty list is a pass. */
+function processBindFailures(server: string, start: string): string[] {
+  const failures: string[] = [];
+  const need = (text: string, needle: string, what: string) => {
+    if (!text.includes(needle)) failures.push(what);
+  };
+  need(server, 'export const GAME_SERVER_BIND_HOST = "127.0.0.1";', "gameServer: the loopback constant");
+  /* The one listen, defaulting to loopback when no host is handed in. */
+  need(server, "http.listen(options.port, options.bindHost ?? GAME_SERVER_BIND_HOST);", "gameServer: listen defaults to loopback");
+  if ((server.match(/\.listen\(/g) ?? []).length !== 1) failures.push("gameServer: exactly one listen");
+  if (/\.listen\(\s*options\.port\s*\)/.test(server)) failures.push("gameServer: a hostless listen");
+  /* File mode never hands a host in, so it takes the default. */
+  if (start.includes("bindHost")) failures.push("start: file mode passes a bindHost");
+  need(start, "const server = createGameServer({", "start: the file-mode createGameServer call");
+  /* AWS code is reached only through the storage-mode switch, by a dynamic import. */
+  need(start, 'if (storage.ok && storage.kind === "aws") {', "start: the aws storage switch");
+  need(start, 'const { runAwsStorageMode } = await import("./aws/runtime/awsMain");', "start: awsMain loaded dynamically");
+  /* (`./aws/runtime/storageMode` -- the parser of `GS_STORAGE` itself -- is static by design and binds nothing.) */
+  if (/(from\s*|require\(\s*)["']\.\/(aws\/runtime\/(awsMain|awsRuntime)|routerServer)["']/.test(start)) failures.push("start: a binding AWS module loaded statically");
+  try {
+    expectOrder(start, 'if (storage.ok && storage.kind === "aws") {', 'await import("./aws/runtime/awsMain")', "const server = createGameServer({");
+  } catch (error) {
+    failures.push(`start: order -- ${(error as Error).message}`);
+  }
+  need(start, "listening on ws://${GAME_SERVER_BIND_HOST}:${port}", "start: the banner prints the constant");
+  if (start.includes("ws://127.0.0.1:${port}")) failures.push("start: the banner hard-codes the host");
+  return failures;
+}
+
+/** AWS storage mode: the task's own interface, handed down explicitly to both servers the runtime can build. */
+function awsBindFailures(awsMain: string, awsRuntime: string, router: string): string[] {
+  const failures: string[] = [];
+  const need = (text: string, needle: string, what: string) => {
+    if (!text.includes(needle)) failures.push(what);
+  };
+  need(awsMain, 'export const AWS_BIND_HOST = "0.0.0.0";', "awsMain: the task-interface constant");
+  if (awsMain.split("bindHost: AWS_BIND_HOST,").length - 1 !== 1) failures.push("awsMain: hands AWS_BIND_HOST to the runtime once");
+  need(awsMain, "listening on ws://${AWS_BIND_HOST}:${input.port}", "awsMain: the banner prints the constant");
+  /* Both servers the runtime builds (the pool's game server; the non-primary router) take the host they were given. */
+  if (awsRuntime.split("bindHost: input.bindHost,").length - 1 !== 2) failures.push("awsRuntime: passes its bindHost to both servers");
+  if (/"(0\.0\.0\.0|127\.0\.0\.1)"/.test(awsRuntime)) failures.push("awsRuntime: a literal host");
+  need(router, "readonly bindHost: string;", "router: bindHost is required");
+  need(router, "http.listen(options.port, options.bindHost);", "router: listens on the host it was given");
+  if ((router.match(/\.listen\(/g) ?? []).length !== 1) failures.push("router: exactly one listen");
+  return failures;
+}
+
+/** The server's non-test modules, comment-stripped, `server/src`-relative with forward slashes. */
+function serverSources(): Array<{ rel: string; code: string }> {
+  const root = path.join(REPO, "server", "src");
+  const out: Array<{ rel: string; code: string }> = [];
+  const walk = (dir: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name !== "node_modules") walk(full);
+      } else if (/\.ts$/.test(entry.name) && !/\.test\.ts$/.test(entry.name)) {
+        const rel = path.relative(root, full).split(path.sep).join("/");
+        out.push({ rel, code: readStripped(`../../server/src/${rel}`) });
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+/** Where an all-interfaces address appears in server code: IPv4 `0.0.0.0` anywhere, and IPv6 `"::"` where it is a
+ *  bind -- a `listen(` argument or a host assignment. (`"::"` also appears as address-parsing text, in
+ *  `identity/clientIp.ts`, which binds nothing.) */
+const IPV6_ANY_BIND = /(\.listen\([^)]*|[Hh]ost\w*\s*[:=]\s*)["'`]::["'`]/;
+
+function allInterfaceSites(sources: ReadonlyArray<{ rel: string; code: string }>): string[] {
+  return sources
+    .filter((source) => source.code.includes("0.0.0.0") || IPV6_ANY_BIND.test(source.code))
+    .map((source) => source.rel)
+    .sort();
+}
+
+/** The server modules that handle a bind host: the two servers that listen, and the AWS runtime that builds them. */
+const BIND_HOST_SITES = ["aws/runtime/awsMain.ts", "aws/runtime/awsRuntime.ts", "gameServer.ts", "routerServer.ts"];
+
+function bindHostSites(sources: ReadonlyArray<{ rel: string; code: string }>): string[] {
+  return sources.filter((source) => /\bbindHost\b/.test(source.code)).map((source) => source.rel).sort();
+}
+
 describe("the game server binds loopback and parks the staging lobby (LIVE-0)", () => {
   const SERVER = readStripped("../../server/src/gameServer.ts");
   const START = readStripped("../../server/src/start.ts");
 
-  it("listens on 127.0.0.1, and the banner prints the host it bound", () => {
-    expect(SERVER).toContain('export const GAME_SERVER_BIND_HOST = "127.0.0.1";');
-    expect(SERVER).toContain("http.listen(options.port, GAME_SERVER_BIND_HOST);");
-    expect(SERVER).not.toMatch(/\.listen\(\s*options\.port\s*\)/);
-    expect(START).toContain("listening on ws://${GAME_SERVER_BIND_HOST}:${port}");
-    expect(START).not.toContain("ws://127.0.0.1:${port}");
+  /* ==================================================================
+      R12-W1: TWO BIND PATHS, BOTH PINNED -- LOOPBACK FOR PROCESS MODE, THE TASK'S INTERFACE FOR AWS ONLY
+     ==================================================================
+     LIVE-0 bound loopback unconditionally and said "where a deployment binds is LIVE-5's question". LIVE-5 L5-7
+     answered it (`48ffaf6`): `createGameServer` takes an optional `bindHost` whose ABSENCE is loopback, PROCESS
+     (file) mode never passes one, and only the AWS storage mode -- loaded by a dynamic import behind
+     `GS_STORAGE=aws` -- passes `AWS_BIND_HOST` ("0.0.0.0", the awsvpc task's own interface, reached only through the
+     load balancer's security group). This test predated that accepted distinction and still asked for the
+     one-argument `http.listen(options.port, GAME_SERVER_BIND_HOST)`. It pins both halves now; forcing AWS back to
+     loopback would fail it as surely as opening PROCESS mode would. */
+  const AWS_MAIN = readStripped("../../server/src/aws/runtime/awsMain.ts");
+  const AWS_RUNTIME = readStripped("../../server/src/aws/runtime/awsRuntime.ts");
+  const ROUTER = readStripped("../../server/src/routerServer.ts");
+
+  it("listens on 127.0.0.1 in PROCESS (file) mode, and the banner prints the host it bound", () => {
+    expect(processBindFailures(SERVER, START)).toEqual([]);
+  });
+
+  it("binds the task's own interface in the AWS storage mode alone (LIVE-5 L5-7)", () => {
+    expect(awsBindFailures(AWS_MAIN, AWS_RUNTIME, ROUTER)).toEqual([]);
+    /* ONE SITE: no other server module names an all-interfaces address in code, and only the two servers and the AWS
+       runtime that builds them handle a bind host at all -- a new entry point handing one in is a new bind path. */
+    const sources = serverSources();
+    expect(allInterfaceSites(sources)).toEqual(["aws/runtime/awsMain.ts"]);
+    expect(bindHostSites(sources)).toEqual(BIND_HOST_SITES);
+  });
+
+  it("fails on every way to get the bind wrong (R12-W1 negative controls)", () => {
+    const processMutations: Array<[string, string, string]> = [
+      ["open default", SERVER.replace('GAME_SERVER_BIND_HOST = "127.0.0.1";', 'GAME_SERVER_BIND_HOST = "0.0.0.0";'), START],
+      ["hostless listen", SERVER.replace("http.listen(options.port, options.bindHost ?? GAME_SERVER_BIND_HOST);", "http.listen(options.port);"), START],
+      ["no default", SERVER.replace("options.bindHost ?? GAME_SERVER_BIND_HOST", "options.bindHost"), START],
+      ["file mode passes a host", SERVER, START.replace("const server = createGameServer({", 'const server = createGameServer({\n    bindHost: "0.0.0.0",')],
+      ["AWS code loaded statically", SERVER, START.replace("const { runAwsStorageMode } = await import(\"./aws/runtime/awsMain\");", 'const { runAwsStorageMode } = require("./aws/runtime/awsMain");')],
+      ["banner hard-codes the host", SERVER, START.replace("listening on ws://${GAME_SERVER_BIND_HOST}:${port}", "listening on ws://127.0.0.1:${port}")],
+    ];
+    for (const [name, server, start] of processMutations) {
+      expect([name, server === SERVER && start === START]).toEqual([name, false]);
+      expect([name, processBindFailures(server, start).length > 0]).toEqual([name, true]);
+    }
+    const awsMutations: Array<[string, string, string, string]> = [
+      ["AWS forced to loopback", AWS_MAIN.replace('AWS_BIND_HOST = "0.0.0.0";', 'AWS_BIND_HOST = "127.0.0.1";'), AWS_RUNTIME, ROUTER],
+      ["AWS host not handed to the runtime", AWS_MAIN.replace("bindHost: AWS_BIND_HOST,", ""), AWS_RUNTIME, ROUTER],
+      ["router listens everywhere", AWS_MAIN, AWS_RUNTIME, ROUTER.replace("http.listen(options.port, options.bindHost);", "http.listen(options.port);")],
+      ["runtime drops the host for its game server", AWS_MAIN, AWS_RUNTIME.replace("bindHost: input.bindHost,", ""), ROUTER],
+    ];
+    for (const [name, main, runtime, router] of awsMutations) {
+      expect([name, main === AWS_MAIN && runtime === AWS_RUNTIME && router === ROUTER]).toEqual([name, false]);
+      expect([name, awsBindFailures(main, runtime, router).length > 0]).toEqual([name, true]);
+    }
+    /* A second all-interfaces site is seen. */
+    const extra = [...serverSources(), { rel: "rooms/somewhereElse.ts", code: 'server.listen(port, "0.0.0.0");' }];
+    expect(allInterfaceSites(extra)).toEqual(["aws/runtime/awsMain.ts", "rooms/somewhereElse.ts"]);
+    /* The IPv6 spelling of every interface is seen too. */
+    expect(allInterfaceSites([{ rel: "rooms/v6.ts", code: "http.listen(port, '::');" }])).toEqual(["rooms/v6.ts"]);
+    expect(allInterfaceSites([{ rel: "rooms/v6b.ts", code: 'const bindHost = "::";' }])).toEqual(["rooms/v6b.ts"]);
+    expect(allInterfaceSites([{ rel: "identity/parse.ts", code: 'const parts = inner.split("::");' }])).toEqual([]);
+    /* A new module handing a host in -- from the environment, say -- is seen. */
+    const handed = [...serverSources(), { rel: "rooms/entry.ts", code: "createGameServer({ port, bindHost: process.env.HOST });" }];
+    expect(bindHostSites(handed)).toEqual([...BIND_HOST_SITES, "rooms/entry.ts"].sort());
   });
 
   /* LIVE-2D (RUST-RETIRE-1 2B.3): THE STAGING LOBBY IS DELETED, NOT PARKED. LIVE-0 parked it behind

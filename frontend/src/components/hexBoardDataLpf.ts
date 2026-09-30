@@ -40,7 +40,7 @@ import {
   type GrayHexTrack,
   type OffboardRevenueTiers,
 } from "./hexBoardData";
-import { EXPANDED_BOARD, axialOf, curve, hex, spoke } from "./hexBoardDataPlus";
+import { EXPANDED_BOARD, axialOf, curve, hex, preV12BoardOf, spoke } from "./hexBoardDataPlus";
 import type { PrintedArtwork } from "./TileGraphics";
 
 /* ---- the warehouses ------------------------------------------------------ */
@@ -240,3 +240,7 @@ export const LPF_BOARD: BoardDefinition = {
   stationTokenSchedule: LPF_STATION_TOKEN_SCHEDULE,
   plateLayout: LPF_PLATE_LAYOUT,
 };
+
+/** Route v12 R12-2: the Level Playing Field board as the pre-v12 engines played it (see `preV12BoardOf`), for the
+ *  unpinned development corpus only. */
+export const LPF_BOARD_PRE_V12: BoardDefinition = preV12BoardOf(LPF_BOARD);

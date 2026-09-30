@@ -37,7 +37,8 @@
 import type { GameStateResponse } from "./gameState";
 import type { OperatingSubPhase } from "./operatingSubPhase";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import { evaluateStationPlacement, nextStationTokenCost } from "./stationTokens";
+import { cityCountAt, evaluateStationPlacement, nextStationTokenCost } from "./stationTokens";
+import { routeRulesV12InEffect } from "../components/hexBoardData";
 import { barredHexesFor } from "./kanawhaLicense";
 
 /** The step at which a paid station token is placed. */
@@ -102,5 +103,18 @@ export function stationPlacementRefusal(
     cityIndex: placement.city_index ?? null,
     barredHexes: barredHexesFor(state, protocol_id), // #1323
   });
-  return verdict.allowed ? null : verdict.reason ?? "That station placement is not legal.";
+  if (!verdict.allowed) return verdict.reason ?? "That station placement is not legal.";
+  /* ROUTE v12 R12-2 (ING-1): A STATION ON A HEX WITH TWO CITIES MUST SAY WHICH. A paid placement without
+     `city_index` on New York or an OO hex recorded nothing but the hex, and every later question -- blocking, the
+     route's station, the search's roots -- had to guess which city it was in (the R12-1 oracle's V1: a state outside
+     the valid domain). The UI always names the city; only a crafted client, or a legacy one, did not. The home
+     placement already refuses the same omission (`homePlacementRefusal`). Asked AFTER the ordinary legality, so a
+     placement refused for another reason keeps that reason. A v12 board only (every pinned one): an unpinned legacy
+     record keeps the placements it was played with. */
+  const cities = cityCountAt(mapGrid, q, r);
+  if (routeRulesV12InEffect() && cities > 1 && (placement.city_index === undefined || placement.city_index === null)) {
+    return `This hex has ${cities} cities; the placement must say which one ${company.ticker}'s station goes in.`;
+  }
+
+  return null;
 }

@@ -100,12 +100,14 @@ describe("the oracle's own figures and city membership against the data both sid
     const defects = Object.entries(ORACLE_STANDARD_TILES).filter(([, entry]) => entry.productionDefect !== undefined).map(([id]) => Number(id));
     expect(defects).toEqual([62]);
     expect(ORACLE_STANDARD_TILES[62].value).toBe(80);
-    // KNOWN-RED for R12-2: production still says $90. When R12-2 repairs the catalog this pin fails on purpose,
-    // and the `productionDefect` note (and this test) come out with it.
+    // STILL OPEN after R12-2 (an unresolved SOURCE discrepancy, not a repaired defect): production says $90. R12-2
+    // found no first-party evidence that settles #62 (the owner's authority is the 2018 revised Lookout 1830
+    // rulebook / map; the repository's rulebook PDF prints the manifest too small to read) and so, on the owner's
+    // instruction, did NOT change production. The owner decides; until then this pin holds both figures apart.
     expect(TILE_CATALOG_BY_ID.get(62)!.revenue).toBe(90);
   });
 
-  it("the 1830+ map's two-value gray cities (owner-confirmed): Montreal $40 / $60, Norfolk $30 / $50 -- production prices both flat", () => {
+  it("the 1830+ map's two-value gray cities (owner-confirmed): Montreal $40 / $60, Norfolk $30 / $50 -- production agrees since R12-2", () => {
     expect(ORACLE_EXPANSION_PRINTED_TIERS).toEqual({ A19: [40, 60], L16: [30, 50] });
     for (const board of [EXPANDED_BOARD, LPF_BOARD]) {
       expect(ORACLE_EXPANSION_BOARD_IDS).toContain(board.id);
@@ -113,24 +115,29 @@ describe("the oracle's own figures and city membership against the data both sid
         const graph = buildOracleGraph({ board, grid: initialGridFor(board).tiles, catalog: TILE_CATALOG_BY_ID, companies: [], companyId: 99, highTier, licenceRule: false });
         expect([board.id, highTier, graph.hexes.get("A19")!.nodes[0].value, graph.hexes.get("L16")!.nodes[0].value]).toEqual([board.id, highTier, highTier ? 60 : 40, highTier ? 50 : 30]);
       }
-      // KNOWN-RED for R12-2 (production data defects): production prices Montreal $40 and Norfolk $20 at BOTH
-      // tiers. When R12-2 repairs the board data these pins fail on purpose.
+      // R12-2 REPAIRED (was KNOWN-RED: production priced Montreal $40 and Norfolk $20 at BOTH tiers).
       withBoard(board, () => {
         const grid = initialGridFor(board);
         const priced = (label: string) => {
           const hex = board.hexes.find((entry) => entry.label === label)!;
           return [hexValueForEra(grid, hex.q, hex.r, "Yellow"), hexValueForEra(grid, hex.q, hex.r, "Brown")];
         };
-        expect([board.id, priced("A19"), priced("L16")]).toEqual([board.id, [40, 40], [20, 20]]);
+        expect([board.id, priced("A19"), priced("L16")]).toEqual([board.id, [40, 60], [30, 50]]);
       });
     }
     // The standard map's Montreal is one flat $40, both tiers, as before.
     const standard = (highTier: boolean) =>
       buildOracleGraph({ board: STANDARD_BOARD, grid: initialGridFor(STANDARD_BOARD).tiles, catalog: TILE_CATALOG_BY_ID, companies: [], companyId: 99, highTier, licenceRule: false });
     expect([standard(false).hexes.get("A19")!.nodes[0].value, standard(true).hexes.get("A19")!.nodes[0].value]).toEqual([40, 40]);
+    // ... and production's standard Montreal stays flat too (R12-2 touches the 1830+ / LPF map only).
+    withBoard(STANDARD_BOARD, () => {
+      const grid = initialGridFor(STANDARD_BOARD);
+      const hex = STANDARD_BOARD.hexes.find((entry) => entry.label === "A19")!;
+      expect([hexValueForEra(grid, hex.q, hex.r, "Yellow"), hexValueForEra(grid, hex.q, hex.r, "Brown")]).toEqual([40, 40]);
+    });
   });
 
-  it("Montreal and Norfolk each have TWO station circles (owner corrections) -- production gives each one", () => {
+  it("Montreal and Norfolk each have TWO station circles (owner corrections) -- production agrees since R12-2", () => {
     // The standard 1830 map is not touched by the correction: every printed city keeps one circle there.
     const standard = buildOracleGraph({ board: STANDARD_BOARD, grid: initialGridFor(STANDARD_BOARD).tiles, catalog: TILE_CATALOG_BY_ID, companies: [], companyId: 99, highTier: false, licenceRule: false });
     expect(standard.hexes.get("A19")!.nodes.map((node) => [node.kind, node.slots])).toEqual([["city", 1]]);
@@ -140,10 +147,12 @@ describe("the oracle's own figures and city membership against the data both sid
       const graph = buildOracleGraph({ board, grid: grid.tiles, catalog: TILE_CATALOG_BY_ID, companies: [], companyId: 99, highTier: false, licenceRule: false });
       expect([board.id, graph.hexes.get("L16")!.nodes.map((node) => [node.kind, node.slots])]).toEqual([board.id, [["city", 2]]]);
       expect([board.id, graph.hexes.get("A19")!.nodes.map((node) => [node.kind, node.slots])]).toEqual([board.id, [["city", 2]]]);
-      // KNOWN-RED for R12-2: production still reads the superseded #1401 "single-station city" ruling for both.
+      // R12-2 REPAIRED (was KNOWN-RED: production read the superseded #1401 "single-station city" ruling for both).
       withBoard(board, () => {
         const at = (label: string) => board.hexes.find((entry) => entry.label === label)!;
-        expect([board.id, citySlotCount(grid, at("L16").q, at("L16").r, 0), citySlotCount(grid, at("A19").q, at("A19").r, 0)]).toEqual([board.id, 1, 1]);
+        expect([board.id, citySlotCount(grid, at("L16").q, at("L16").r, 0), citySlotCount(grid, at("A19").q, at("A19").r, 0)]).toEqual([board.id, 2, 2]);
+        // ONE city each: there is no second city to be in.
+        expect([board.id, citySlotCount(grid, at("L16").q, at("L16").r, 1), citySlotCount(grid, at("A19").q, at("A19").r, 1)]).toEqual([board.id, 0, 0]);
       });
     }
   });
@@ -224,13 +233,9 @@ describe.each([
           const centres = hex.nodes.filter((node) => node.kind !== "herald" && node.spokes.length > 0);
           if (live.length > 0) expect([bh.label, centres.length > 0]).toEqual([bh.label, isRevenueCentreHex(grid, bh.label)]);
           for (const node of centres) {
-            // The recorded production data defects (Montreal / Norfolk values and circles) are pinned above;
-            // everything else must agree.
-            const expansion = ORACLE_EXPANSION_BOARD_IDS.includes(board.id);
-            if (!(expansion && ORACLE_EXPANSION_PRINTED_TIERS[bh.label] !== undefined)) {
-              expect([node.id, node.value]).toEqual([node.id, hexValueForEra(grid, bh.q, bh.r, highTier ? "Brown" : "Yellow")]);
-            }
-            if (node.kind === "city" && !(expansion && ORACLE_EXPANSION_PRINTED_CITY_SLOTS[bh.label] !== undefined)) {
+            // R12-2: Montreal / Norfolk (values and circles) are repaired, so EVERY printed centre must agree.
+            expect([node.id, node.value]).toEqual([node.id, hexValueForEra(grid, bh.q, bh.r, highTier ? "Brown" : "Yellow")]);
+            if (node.kind === "city") {
               expect([node.id, node.slots]).toEqual([node.id, citySlotCount(grid, bh.q, bh.r, node.cityIndex!)]);
             }
           }

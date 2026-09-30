@@ -75,7 +75,7 @@ import {
   stockPurchaseRefusal,
   stockSaleRefusal,
 } from "./stockTransactionAuthority";
-import { withRules } from "./boardSelection";
+import { routeRulesRevisionOf, withRules } from "./boardSelection";
 import { resolveVariants } from "./gameVariants";
 /* Design note #1580 (Batch 7.3): the private auction's rules, from the one module that owns them. Not a
    second implementation -- `turnAuthority` states no auction rule of its own. */
@@ -146,6 +146,23 @@ export interface TurnAuthorityInput {
 
 /** Why this actor may not send this message now, or `null` if they may. */
 export function turnRefusal(input: TurnAuthorityInput): string | null {
+  /* ==================================================================
+      ROUTE v12 R12-2 (S6-15, the R12-1 handoff's F-1): INGRESS JUDGES ON THE TABLE'S OWN BOARD
+     ==================================================================
+     `RoomSession.submit` calls this directly, OUTSIDE any rules scope, and a bare Node process never activates a
+     board -- so every arm below that was not individually wrapped (#1300's `withTableRules`) read the STANDARD
+     board: on a 1830+ / Level Playing Field table the route arm refused PRR's legal herald run ("H12 cannot end a
+     route"), called every board-only hex "not a hex on this board", and ran the skip's route search on the wrong
+     map, so the skip was accepted at ingress and refused by the reducer -- the corporation stranded at Run Trains.
+     The table's board, tray and chart are now opened ONCE, here, for every arm (routes, the skip, the forced
+     purchase's route probe, emergency funding, every hold). The reducer is already inside the same scope
+     (`applySandboxAction`), so the two locks read one board. The per-arm wrappers below stay: nested, they are
+     the same scope. Not replay-affecting: ingress decides only what may be appended. */
+  return withRules(resolveVariants(input.state.variants), () => turnRefusalOnTableBoard(input), routeRulesRevisionOf(input.state));
+}
+
+/** `turnRefusal`'s body, asked with the table's rules in effect (R12-2). */
+function turnRefusalOnTableBoard(input: TurnAuthorityInput): string | null {
   const { state, waterfall, actor, msg, derived = false } = input;
 
   /* ---- EXEMPTION 1: the game's own actions (#1203, and the shell's `automatic`) ----
@@ -481,13 +498,13 @@ export function turnRefusal(input: TurnAuthorityInput): string | null {
  *  read outside the scope is read off whichever chart was last activated, which on a server with two rooms is
  *  the other table's. One line, so the two locks read one chart. */
 function stockChartRefusal(state: GameStateResponse, ask: () => string | null): string | null {
-  return withRules(resolveVariants(state.variants), ask);
+  return withRules(resolveVariants(state.variants), ask, routeRulesRevisionOf(state));
 }
 
 /** #1612: the same scope for the home station's questions, which read the board's home table, heralds and
  *  printed cities. */
 function withTableRules(state: GameStateResponse, ask: () => string | null): string | null {
-  return withRules(resolveVariants(state.variants), ask);
+  return withRules(resolveVariants(state.variants), ask, routeRulesRevisionOf(state));
 }
 
 /** The Batch-6 authority questions, in the order the reducer asks them. `null` when nothing objects. */

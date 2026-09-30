@@ -34,7 +34,7 @@ import type { SandboxLogMsg } from "./gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { tileEraFor } from "./gameConstants";
 import { resolveVariants } from "./gameVariants";
-import { withRules } from "./boardSelection";
+import { routeRulesRevisionOf, withRules } from "./boardSelection";
 import type { LayNetwork } from "./layConnectivity";
 
 /** What a caller supplies. See the header: exactly the facts that differ between the shell and the engine. */
@@ -65,7 +65,7 @@ export function layGeometryFor(
   const rules = resolveVariants(state?.variants);
   // #1692: the network, when the authority hands one, passes straight through to rule 6 of the same filter.
   return (q, r, tileId, orientation, network) =>
-    withRules(rules, () => providers.layRefused(gridBefore, q, r, tileId, orientation, era, network));
+    withRules(rules, () => providers.layRefused(gridBefore, q, r, tileId, orientation, era, network), routeRulesRevisionOf(state));
 }
 
 /** #1683: the injections the `LayTile` authority is asked with at the GRID step, before the reducer runs. */

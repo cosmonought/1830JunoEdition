@@ -230,11 +230,13 @@ describe("the protocol axes (L4-1 §A)", () => {
     expect(Object.isFrozen(ACCEPTED_CLIENT_PROTOCOLS)).toBe(true);
   });
 
-  it("moves nothing on the rules axis: rules engine 11, supported [11], settlement certified [10, 11]", () => {
-    expect(RULES_ENGINE_VERSION).toBe(11);
+  it("moves nothing on the rules axis: rules engine 11, supported [11], settlement certified [10, 11] (12 / [12] since Route v12 R12-2)", () => {
+    /* LIVE-4 moved no rules version; Route v12 R12-2's replacing bump did (11 -> 12), and replaced the one supported
+       version, as every bump before it -- it is not a dual-support bump. */
+    expect(RULES_ENGINE_VERSION).toBe(12);
     /* A second supported version is a dual-support rules bump: allowed only with a replay-equivalence certificate
        (OD-L4-2), after which the list is a literal that certificate's test owns. */
-    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([11]);
+    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([12]);
     expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11]);
   });
 });

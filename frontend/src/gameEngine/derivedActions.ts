@@ -71,6 +71,9 @@ import { dieselExchangeRefusal } from "./dieselExchange";
 import { citySlotCount, stationPlacementBlockReason } from "./stationTokens";
 import { stationTokensOf } from "./trackReach";
 import { reachForDrafting } from "./trainReach";
+/* Route v12 R12-2: the demonstrated set is judged by the reducer's own composite before it is returned. A cycle with
+   `routeAuthority.ts` (which asks `maxRouteRevenueFor` for its shortfall), used only inside functions. */
+import { evaluateRouteSet } from "./routeAuthority";
 import { assignRouteSet } from "./routeAutoTrace";
 import { cityBlockerFor } from "./cityBlocking";
 import { barredHexesFor } from "./kanawhaLicense";
@@ -83,7 +86,7 @@ import { boardHomeHexToAxial, owedHomeStation } from "./homeStationAuthority";
 import { privateSettlementMatches, trainSettlementMatches } from "./pendingOfferHold";
 import type { PrivatePurchaseOffer, TrainPurchaseOffer } from "./gameState";
 import { tokenCityIndex } from "../components/hexContractTypes";
-import { STATIC_BOARD_HEXES } from "../components/hexBoardData";
+import { STATIC_BOARD_HEXES, routeRulesV12InEffect } from "../components/hexBoardData";
 
 /** One action the game sends on a corporation's behalf. */
 export interface DerivedAction {
@@ -536,7 +539,52 @@ export function maxRouteRevenueFor(
     })),
     era,
   );
-  return result.totalRevenue;
+  // R12-2: on a v12 board (every pinned one) the demonstration is judged by the authority before it is returned.
+  return routeRulesV12InEffect() ? demonstrableTotal(state, companyId, mapGrid, era, result.assignments) : result.totalRevenue;
+}
+
+/* ==================================================================
+    ROUTE v12 R12-2: THE DEMONSTRATION IS ONE THE AUTHORITY ACCEPTS, OR IT IS NOT MADE
+   ==================================================================
+   `maxRouteRevenueFor` is the machine's "another player can demonstrate" (S6-3): a submitted set worth less is
+   refused, and a corporation with a positive figure may not skip. So the figure must be one a legal set REACHES.
+   The search now asks the authority's own walk of every candidate (`routeAutoTrace.ts`), and the set is put here to
+   the whole composite the reducer applies -- `evaluateRouteSet`: the walk of every route (Coal River included), the
+   train each runs, and no two routes on one section of track. If it were ever refused, the demonstration fails
+   CLOSED: it falls back to the best single route the authority accepts alone, never to the refused figure. A lower
+   demonstration is always safe (S6-3 is a lower bound); a higher one than any legal set strands the corporation. */
+function demonstrableTotal(
+  state: GameStateResponse,
+  companyId: number,
+  mapGrid: MapGridResponse,
+  era: TileColorTier | undefined,
+  assignments: ReadonlyArray<{ trainIndex: number; path: ReadonlyArray<{ hexLabel: string; bypass?: boolean }> }>,
+): number {
+  if (assignments.length === 0) return 0;
+  const asWaypoints = (path: ReadonlyArray<{ hexLabel: string; bypass?: boolean }>) =>
+    path.map((point) => (point.bypass === true ? { hex: point.hexLabel, bypass: true } : { hex: point.hexLabel }));
+  const verdict = evaluateRouteSet({
+    state,
+    mapGrid,
+    era,
+    companyId,
+    routes: assignments.map((assignment) => asWaypoints(assignment.path)),
+    trainIndices: assignments.map((assignment) => assignment.trainIndex),
+  });
+  if (verdict.kind === "legal") return verdict.total;
+  let best = 0;
+  for (const assignment of assignments) {
+    const alone = evaluateRouteSet({
+      state,
+      mapGrid,
+      era,
+      companyId,
+      routes: [asWaypoints(assignment.path)],
+      trainIndices: [assignment.trainIndex],
+    });
+    if (alone.kind === "legal" && alone.total > best) best = alone.total;
+  }
+  return best;
 }
 
 /** The one route search, with the board's own wall. Design note #1512: shared by the fleet's real search

@@ -121,6 +121,12 @@ const thisPool = (change: Partial<DeploymentCapability> = {}): DeploymentCapabil
     ...change,
   });
 
+/* Route v12 R12-2 moved the rules engine to 12. The cases below that are about THIS pool's rules read them from the
+   engine (`NOW`, and `NEXT` for a release this one does not carry) rather than naming 11 / 12, so a later bump does
+   not turn them into cases about something else; the literal protocol examples elsewhere stay literal. */
+const NOW = RULES_ENGINE_VERSION;
+const NEXT = RULES_ENGINE_VERSION + 1;
+
 const query = (text: string) => new URLSearchParams(text);
 const fromQuery = (text: string) => parseClientAnnouncement(rawClientAnnouncementOf(query(text)));
 const verdictOf = (text: string, pin: number | null, pool: DeploymentCapability = thisPool()): ClientVerdict => clientVerdict(fromQuery(text), pool, pin);
@@ -207,7 +213,7 @@ describe("the announcement: one canonical writer, one parser, a round trip", () 
     expect(ANNOUNCED_CLIENT_PROTOCOL).toBe(1);
     const parsed = fromQuery(THIS_BUNDLE_ANNOUNCEMENT);
     expect(parsed).toEqual({ kind: "announced", protocol: 1, rules: [...SUPPORTED_RULES_ENGINE_VERSIONS], build: /^[A-Za-z0-9._-]{1,64}$/.test(CLIENT_BUILD_ID) ? CLIENT_BUILD_ID : null });
-    expect(THIS_BUNDLE_ANNOUNCEMENT.startsWith("cp=1&cr=11")).toBe(true);
+    expect(THIS_BUNDLE_ANNOUNCEMENT.startsWith(`cp=1&cr=${NOW}`)).toBe(true);
     expect(CLIENT_ANNOUNCEMENT_PARAMETERS).toEqual({ protocol: "cp", rules: "cr", build: "cb" });
   });
 
@@ -330,8 +336,8 @@ describe("clientAnswerFor: every meaningful client verdict, and the frame (or th
   });
 
   it("reload/client-rules: the tab lacks the game's rules, and THIS release's bundle carries them -- a per-game frame", () => {
-    for (const text of ["cp=1&cr=10", "cp=1&cr=12", "cp=1&cr=9,10,12"]) {
-      const verdict = verdictOf(text, 11);
+    for (const text of [`cp=1&cr=${NOW - 1}`, `cp=1&cr=${NEXT}`, `cp=1&cr=9,${NOW - 1},${NEXT}`]) {
+      const verdict = verdictOf(text, NOW);
       expect(kindOf(verdict)).toBe("reload/client-rules");
       expect(clientAnswerFor(verdict, { gameId: GAME, inReplyTo: "n1" })).toEqual({
         kind: "reload",
@@ -341,7 +347,7 @@ describe("clientAnswerFor: every meaningful client verdict, and the frame (or th
   });
 
   it("route/client-rules: neither the tab nor this release carries the game's rules -- with no destination (before LIVE-6) the game's own fail-closed answer", () => {
-    const verdict = verdictOf("cp=1&cr=11", 12);
+    const verdict = verdictOf(`cp=1&cr=${NOW}`, NEXT);
     expect(kindOf(verdict)).toBe("route/client-rules");
     expect(clientAnswerFor(verdict, { gameId: GAME })).toEqual({ kind: "not-continued-here" });
     expect(clientAnswerFor(verdict, { gameId: GAME, destination: null })).toEqual({ kind: "not-continued-here" });
@@ -753,7 +759,7 @@ describe("the game link speaks client protocol 1", () => {
     expect(sockets).toHaveLength(1);
     expect(sockets[0].url).toBe(`wss://play.example/gs?${THIS_BUNDLE_ANNOUNCEMENT}`);
     const announced = parseClientAnnouncement(rawClientAnnouncementOf(new URL(sockets[0].url).searchParams));
-    expect(announced.kind === "announced" ? [announced.protocol, announced.rules] : null).toEqual([1, [11]]);
+    expect(announced.kind === "announced" ? [announced.protocol, announced.rules] : null).toEqual([1, [NOW]]);
     last().open();
     last().deliver(catchUp([entry(0)]));
     expect(calls).toEqual([]);
@@ -857,7 +863,7 @@ describe("the game link speaks client protocol 1", () => {
     const { entries, calls, scheduled, last } = gameLink();
     last().open();
     const deal = (pin: unknown) => entry(0, { SetupGame: { players: [], variants: {}, rules_engine_version: pin } });
-    last().deliver(catchUp([deal(12), entry(1)]));
+    last().deliver(catchUp([deal(NEXT), entry(1)]));
     expect(entries).toEqual([]);
     expect(calls).toEqual([["reload", { code: "client-rules", gameId: GAME }]]);
     expect(scheduled).toHaveLength(0);
@@ -869,7 +875,7 @@ describe("the game link speaks client protocol 1", () => {
     expect(live.entries).toEqual([[]]);
     expect(live.calls).toEqual([["reload", { code: "client-rules", gameId: GAME }]]);
     /* A pin this bundle carries, or an unpinned (development-corpus) deal, is applied as ever. */
-    for (const pin of [11, undefined]) {
+    for (const pin of [NOW, undefined]) {
       const fine = gameLink();
       fine.last().open();
       fine.last().deliver(catchUp([pin === undefined ? entry(0, { SetupGame: { players: [], variants: {} } }) : deal(pin)]));
@@ -1178,23 +1184,33 @@ describe("player copy: the actual reason, and rules versions only when the rules
 /* ================================================================================================= */
 
 describe("identity: client protocol 1 is spoken; nothing else moved", () => {
-  it("accepted [0, 1], announced 1; rules 11 / [11] / certified [10, 11]; hosted 1; financial 3", () => {
+  it("accepted [0, 1], announced 1; rules 11 / [11] at L4-3 (12 / [12] since Route v12 R12-2) / certified [10, 11]; hosted 1; financial 3", () => {
     expect([...ACCEPTED_CLIENT_PROTOCOLS]).toEqual([0, 1]);
     expect(ANNOUNCED_CLIENT_PROTOCOL).toBe(1);
     expect(CLIENT_PROTOCOL_VERSION).toBe(1);
     expect(CLIENT_PROTOCOL_CHANGELOG.map((row) => row.version)).toEqual([0, 1]);
     expect(CLIENT_PROTOCOL_CHANGELOG[1].note).toMatch(/spoken from L4-3/);
-    expect(RULES_ENGINE_VERSION).toBe(11);
-    expect([...SUPPORTED_RULES_ENGINE_VERSIONS]).toEqual([11]);
+    expect(RULES_ENGINE_VERSION).toBe(12);
+    expect([...SUPPORTED_RULES_ENGINE_VERSIONS]).toEqual([12]);
     expect([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS]).toEqual([10, 11]);
     expect(HOSTED_PROTOCOL_VERSION).toBe(1);
     expect(FINANCIAL_PROTOCOL_VERSION).toBe(3);
   });
 
   it("this build's no-escrow key moved from L4-2's dc1-5e141a8b… to dc1-68c4b829… -- and client_protocols is the only field that did", () => {
+    /* The L4-3 move, reproduced on the rules it was made on (11): client_protocols is the only field that differs. */
+    const atEleven = (change: Partial<DeploymentCapability> = {}) => thisPool({ rules: { current: 11, supported: [11], certified: SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS }, ...change });
+    expect(compatibilityKey(atEleven())).toBe("dc1-68c4b829b3a20e63f3e55cde");
+    expect(compatibilityKey(atEleven({ client_protocols: [0] }))).toBe("dc1-5e141a8b20871e5069520928");
+  });
+
+  it("Route v12 R12-2 moved the key once more, on the rules axis alone: dc1-68c4b829… -> dc1-ade748b9…", () => {
     const now = thisPool();
-    expect(compatibilityKey(now)).toBe("dc1-68c4b829b3a20e63f3e55cde");
-    expect(compatibilityKey(thisPool({ client_protocols: [0] }))).toBe("dc1-5e141a8b20871e5069520928");
+    expect(now.rules).toEqual({ current: 12, supported: [12], certified: [10, 11] });
+    expect(compatibilityKey(now)).toBe("dc1-ade748b9407a3db380e5ed72");
+    expect(compatibilityKey(thisPool({ client_protocols: [0] }))).toBe("dc1-38ec6470f41eb199b158126a");
+    // Put the rules back and it is the LIVE-4 key again: nothing but the rules moved.
+    expect(compatibilityKey(thisPool({ rules: { current: 11, supported: [11], certified: [10, 11] } }))).toBe("dc1-68c4b829b3a20e63f3e55cde");
   });
 });
 

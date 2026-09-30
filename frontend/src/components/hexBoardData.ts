@@ -592,6 +592,20 @@ export interface BoardDefinition {
   torontoHexes: ReadonlySet<string>;
   namedHexLabels: Readonly<Record<string, string>>;
   startValueOverride: Readonly<Record<string, number>>;
+  /** Route v12 R12-2: PRINTED GRAY CITIES WHOSE VALUE RISES AT THE FIRST 5-TRAIN (rulebook S-1.0 p. 36: "some
+   *  gray hexes have two values ... the lower value is used until the first 5 train is bought"). The 1830+ map
+   *  prints Montreal A19 $40 / $60 and Norfolk L16 $30 / $50 (owner-confirmed from the physical board, R12-1
+   *  closure). Read by `hexValueForEra` ahead of the flat `startValueOverride`. Deliberately NOT the hex's own
+   *  `revenueTiers`: that field is Coal River's, and the renderer and the click read it as "the Coalfields" (its
+   *  licence border, its modal). Absent means no such city on this board -- the standard map's Montreal is flat. */
+  printedCityTiers?: Readonly<Record<string, OffboardRevenueTiers>>;
+  /** Route v12 R12-2: THIS BOARD CARRIES THE ROUTE RULES OF THE ENGINES BEFORE v12 -- the route law, the route search
+   *  and the board data (Montreal / Norfolk flat and one circle each) as they stood at v11. Set only on the
+   *  `*_PRE_V12` boards, which `boardFor` hands an UNPINNED (legacy development-corpus) board, so that corpus -- and
+   *  the frozen settlement goldens built by replaying it (SET-0A SYN-05 / SYN-07) -- replays exactly as before.
+   *  Every pinned board (every game a server has dealt since #1520) plays the v12 rules. Presence, not a version
+   *  number (#1698): a v11 pin never reaches this engine, `replayRefusal` holds it first. Absent = v12. */
+  preV12RouteRules?: true;
   /** Printed track and markers this board draws differently from (or in addition to) 1830's authored art.
    *  Merged over the base catalog by `TileGraphics.printedCatalog`. */
   printedArtwork?: Readonly<Record<string, PrintedArtwork>>;
@@ -635,6 +649,10 @@ export const STANDARD_BOARD: BoardDefinition = {
   namedHexLabels: STANDARD_NAMED_HEX_LABELS,
   startValueOverride: STANDARD_HEX_START_VALUE_OVERRIDE,
 };
+
+/** Route v12 R12-2: the standard board with the pre-v12 route rules (see `BoardDefinition.preV12RouteRules`). The
+ *  standard map's data did not change in v12; only the route law and search did. */
+export const STANDARD_BOARD_PRE_V12: BoardDefinition = { ...STANDARD_BOARD, preV12RouteRules: true };
 
 let boardNow: BoardDefinition = STANDARD_BOARD;
 
@@ -692,6 +710,18 @@ export function withBoard<T>(board: BoardDefinition, fn: () => T): T {
   } finally {
     activateBoard(previous);
   }
+}
+
+/** Route v12 R12-2: whether the board in effect plays the v12 route rules (every pinned board), rather than the
+ *  pre-v12 ones kept for the unpinned development corpus. See `BoardDefinition.preV12RouteRules`. */
+export function routeRulesV12InEffect(): boolean {
+  return boardNow.preV12RouteRules !== true;
+}
+
+/** Route v12 R12-2: the two-value printed gray city `label` names on the board in effect (Montreal / Norfolk on
+ *  the 1830+ map), or `undefined`. See `BoardDefinition.printedCityTiers`. */
+export function printedCityTiersAt(label: string): OffboardRevenueTiers | undefined {
+  return boardNow.printedCityTiers?.[label];
 }
 
 /** Design note #1302: the herald printed on `label`, if any, on the board in effect. */

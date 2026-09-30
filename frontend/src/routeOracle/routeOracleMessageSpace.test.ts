@@ -11,8 +11,13 @@
 // hexes, every bypass / city_node flag combination where one could matter -- is judged by the oracle
 // (`judgeWaypoints`) and by the authority (`evaluateRouteSet` on a Diesel, plus the reducer's Coal River gate).
 //
-// Every disagreement must be a KNOWN authority defect (pinned below, KNOWN-RED for R12-2): anything else fails
-// the suite with the offending message. The Diesel keeps the train's capacity out of the question.
+// Every disagreement must be a KNOWN authority defect (pinned below): anything else fails the suite with the
+// offending message. The Diesel keeps the train's capacity out of the question.
+//
+// ROUTE v12 R12-2: the authority defects R12-1 pinned here (IL-5 red areas keyed by hex, IL-7 a bare token counted
+// at a bypassed city, IL-3 an uncounted herald counted as a station) and the Montreal / Norfolk data defects are
+// REPAIRED, so every per-board expectation below lost them; the matchers stay, so a regression is named, not missed.
+// The one known difference left is #62's catalog $90 (an unresolved source discrepancy R12-2 did not change).
 
 import { TILE_CATALOG_BY_ID } from "../components/hexTileCatalog";
 import { KNOWN_DEFECT_FIXTURES } from "./harness/knownDefects";
@@ -64,7 +69,8 @@ function messageSpace(graph: OracleGraph, maxHexes = MAX_HEXES): OracleWaypoint[
   return out;
 }
 
-/** The known authority defects a disagreement may be explained by (KNOWN-RED, R12-2). */
+/** The known authority defects a disagreement may be explained by (R12-1's KNOWN-RED set; all repaired by R12-2, so
+ *  any match now is a regression and fails the pinned expectation below). */
 function knownDefect(graph: OracleGraph, route: readonly OracleWaypoint[], oracleReason: string): string | null {
   if (/The route includes area:/.test(oracleReason)) return "IL-5: the authority keys red areas by hex, so a two-hex area counts twice";
   if (
@@ -86,7 +92,7 @@ function knownDefect(graph: OracleGraph, route: readonly OracleWaypoint[], oracl
  *  #62's catalog $90 against the owner-ruled $80, and the 1830+ map's Montreal / Norfolk, which production prices
  *  flat ($40, $20) against their owner-confirmed pairs ($40 / $60, $30 / $50). All R12-2. */
 const DATA_PRINTED = "DATA: production prices Montreal / Norfolk flat (owner-confirmed $40/$60, $30/$50; R12-2)";
-const DATA_62 = "DATA: production's catalog prices #62 at $90 per city (owner-ruled $80; R12-2)";
+const DATA_62 = "DATA: production's catalog prices #62 at $90 per city (oracle: $80; an unresolved source discrepancy, owner to rule)";
 /** The other Montreal / Norfolk data defect: production gives each ONE station circle (the superseded #1401 ruling;
  *  the owner's correction is two), so one foreign token shuts the city to through-running that the law allows. */
 const DATA_CIRCLES = "DATA: production gives Montreal / Norfolk one station circle (owner: two; R12-2), so one token blocks it";
@@ -166,16 +172,9 @@ describe("the message space of every valid fixture board: the oracle and the aut
     expect(space.length).toBeGreaterThan(10);
     if (fixture.law.optimum > 0) expect(legalBoth).toBeGreaterThan(0);
     expect(unexplained.slice(0, 20)).toEqual([]);
-    // The known defects that DO appear on this board are pinned, so their repair is visible.
-    const expected: Record<string, string[]> = {
-      "RED-CANADIAN-WEST": ["IL-5: the authority keys red areas by hex, so a two-hex area counts twice"],
-      "RED-GULF": ["IL-5: the authority keys red areas by hex, so a two-hex area counts twice"],
-      "RED-GULF-TWO-TRAINS": ["IL-5: the authority keys red areas by hex, so a two-hex area counts twice"],
-      "RED-CHATTANOOGA": ["IL-5: the authority keys red areas by hex, so a two-hex area counts twice"],
-      "ALTOONA-BOW": ["IL-7: the authority counts a bare token for its hex even when the route bypasses the city"],
-      "CANADIAN-WEST-STANDARD": ["IL-5: the authority keys red areas by hex, so a two-hex area counts twice"],
-    };
-    expect(Array.from(known.keys()).sort()).toEqual(expected[fixture.id] ?? []);
+    // R12-1 pinned IL-5 on the four red-area boards and IL-7 on ALTOONA-BOW here. R12-2 repaired both in the
+    // authority, so no fixture board has a known defect left.
+    expect(Array.from(known.keys()).sort()).toEqual([]);
   }, 120_000);
 });
 
@@ -238,16 +237,14 @@ describe("the message space of the dense boards (walks of up to five hexes)", ()
   };
 
   it.each([
-    // PRR's bare Altoona home on the standard board: the IL-7 defect shows up in a real position. Both late
-    // boards have a brown #62 on New York, so its $90 (owner-ruled $80) shows up as a known DATA difference; on
-    // the Level Playing Field boards so does production's flat Norfolk ($20 against $30 / $50). (The one-circle
-    // defect at Montreal / Norfolk needs a run THROUGH the city between two ends within five hexes; none of these
-    // walks has one.)
-    ["Y8V@651", 1, [DATA_62, "IL-7: the authority counts a bare token for its hex even when the route bypasses the city"]],
+    // R12-1 found IL-7 here in a real position (PRR's bare Altoona home on the standard board) and production's flat
+    // Norfolk on the Level Playing Field boards; R12-2 repaired both. Both late boards have a brown #62 on New York,
+    // so its catalog $90 (owner-ruled $80; unresolved, NOT changed by R12-2) is the one known DATA difference left.
+    ["Y8V@651", 1, [DATA_62]],
     ["Y8V@651", 5, [DATA_62]],
-    ["Z6C@494", 1, [DATA_PRINTED]],
-    ["Z6C@494", 4, [DATA_PRINTED, DATA_62]],
-    ["Z6C@608", 10, [DATA_PRINTED, DATA_62]],
+    ["Z6C@494", 1, []],
+    ["Z6C@494", 4, [DATA_62]],
+    ["Z6C@608", 10, [DATA_62]],
   ] as const)("%s company %s", (boardId, companyId, expectedKnown) => {
     const result = judgeAll(boards.get(boardId)!, companyId);
     expect(Object.keys(result.known).sort()).toEqual([...expectedKnown]);

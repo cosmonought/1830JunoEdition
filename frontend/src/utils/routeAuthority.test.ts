@@ -30,7 +30,7 @@ const { DEFAULT_SANDBOX_SCENARIO, sandboxScenario, sandboxWaterfallState, sandbo
 const { waterfallForRoster, withEmptyRoster } = require("../gameEngine/gameSetup") as typeof import("../gameEngine/gameSetup");
 const { DEVELOPMENT_CORPUS_POLICY, RULES_ENGINE_VERSION, RULES_ENGINE_CHANGELOG, RULES_ENGINE_VERSION_FIELD, SUPPORTED_RULES_ENGINE_VERSIONS } =
   require("../gameEngine/rulesVersion") as typeof import("../gameEngine/rulesVersion");
-const { STATIC_BOARD_HEXES, STANDARD_BOARD, activateBoard } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
+const { STATIC_BOARD_HEXES, STANDARD_BOARD, STANDARD_BOARD_PRE_V12, activateBoard, withBoard } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
 const { EXPANDED_BOARD } = require("../components/hexBoardDataPlus") as typeof import("../components/hexBoardDataPlus");
 const { LPF_BOARD } = require("../components/hexBoardDataLpf") as typeof import("../components/hexBoardDataLpf");
 const { initialGridFor } = require("../gameEngine/initialGrid") as typeof import("../gameEngine/initialGrid");
@@ -550,12 +550,17 @@ describe("the highest-revenue combination is a demonstrated lower bound (S6-3, r
 
   it("a legal hand-drawn run above the heuristic's result is accepted -- the search is a bound, not a ceiling", () => {
     const state = board({ corps: [co(["2"])] });
-    // The tracer never re-enters a plain hex, so it finds nothing here at all ...
-    expect(maxRouteRevenueFor(state, CO, CROSS_TWICE, "Yellow")).toBe(0);
-    // ... while the route across both straights of the crossover is legal and pays $40.
     const twice = R("I5", "I7", "I9", "H8", "I7", "J6");
-    expect(why(state, CROSS_TWICE, [twice])).toBeNull();
+    // The PRE-v12 tracer (kept for the unpinned corpus) never re-entered a plain hex, so it finds nothing here at all
+    // ... while the route across both straights of the crossover is legal and pays $40: accepted above the bound.
+    withBoard(STANDARD_BOARD_PRE_V12, () => {
+      expect(maxRouteRevenueFor(state, CO, CROSS_TWICE, "Yellow")).toBe(0);
+      expect(why(state, CROSS_TWICE, [twice])).toBeNull();
+    });
     expect(revenue(run(state, CROSS_TWICE, [twice]))).toBe(40);
+    // R12-2 (IL-11): the v12 tracer re-enters the crossover on its other straight and demonstrates the same $40.
+    expect(maxRouteRevenueFor(state, CO, CROSS_TWICE, "Yellow")).toBe(40);
+    expect(why(state, CROSS_TWICE, [twice])).toBeNull();
   });
 
   it("the comparison is on the corporation's total, not train by train", () => {
@@ -792,10 +797,19 @@ describe.each([
     expect(ends.kind === "refused" && ends.reason).toMatch(/H12 cannot end a route/);
     const bypass = evaluateRouteSet({ state: nyc, mapGrid: grid, era: "Yellow", companyId: 2, routes: [[{ hex: "H10" }, { hex: "H12", bypass: true }, { hex: "H14" }]], trainIndices: [0] });
     expect(bypass.kind === "refused" && bypass.reason).toMatch(/cannot be bypassed/);
-    // PRR may pass its herald uncounted (#1302) -- two cities on a 2-train, $40, and the flag is kept.
+    // PRR may pass its herald uncounted (#1302) -- but R12-2 (the owner's IL-3 ruling: NO) an uncounted pass is not
+    // PRR's station, so with the herald as its ONLY station the pass is refused ...
     const prr = prrBoard();
     const passed = evaluateRouteSet({ state: prr, mapGrid: grid, era: "Yellow", companyId: PRR, routes: [[{ hex: "H10" }, { hex: "H12", bypass: true }, { hex: "H14" }]], trainIndices: [0] });
-    expect(passed.kind === "legal" && passed.total).toBe(40);
+    expect(passed.kind === "refused" && passed.reason).toMatch(/must pass through a city this corporation has a station token in/);
+    // ... and with a station of its own on the route, the same pass is legal: two cities on a 2-train, $40.
+    const stationed = board({
+      corps: [{ id: PRR, ticker: "PRR", president: P1, trains: ["2", "2"], tokens: [["H10", 0]], home: "H12" }],
+      operating: PRR,
+      extra: { variants: { ...variants } } as never,
+    });
+    const withStation = evaluateRouteSet({ state: stationed, mapGrid: grid, era: "Yellow", companyId: PRR, routes: [[{ hex: "H10" }, { hex: "H12", bypass: true }, { hex: "H14" }]], trainIndices: [0] });
+    expect(withStation.kind === "legal" && withStation.total).toBe(40);
   });
 });
 

@@ -68,9 +68,10 @@ const code = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^
 const why = (verdict: ContinuationVerdict): string => (verdict.kind === "continues" ? "continues" : `${verdict.kind}/${verdict.why}`);
 const GAMES_DOCTOR = path.join(__dirname, "gamesDoctor.js");
 
-/** The keys L4-3 pinned and the integration kept (`live4Integration`, §5 of its report). */
-const KEY_NO_ESCROW = "dc1-68c4b829b3a20e63f3e55cde";
-const KEY_FIXTURE_PIN = "dc1-4308649847947d1d12ccdd41";
+/** The keys L4-3 pinned and the integration kept (`live4Integration`, §5 of its report) -- as Route v12 R12-2 moved
+ *  them, on the rules axis alone (rules 12; LIVE-4's were dc1-68c4b829… and dc1-43086498… on rules 11). */
+const KEY_NO_ESCROW = "dc1-ade748b9407a3db380e5ed72";
+const KEY_FIXTURE_PIN = "dc1-eb48b18e50d46d0c50807710";
 
 const PIN_B: FinancialDeploymentPin = Object.freeze({ ...PIN, contract_address: WALLETS[2] });
 const PIN_TYPO: FinancialDeploymentPin = Object.freeze({ ...PIN, denom: "ujunoy" });
@@ -190,13 +191,13 @@ describe("LIVE-4 L4-6: the compatibility descriptor", () => {
     });
   });
 
-  test("the axes are the capability's facts, named: rules 11 reading [11] and settling [10, 11]; hosted [1]; financial [] without escrow and [3] with it; client 1 accepting [0, 1]; codec 18JUNO/v1", () => {
+  test("the axes are the capability's facts, named: rules 12 reading [12] and settling [10, 11]; hosted [1]; financial [] without escrow and [3] with it; client 1 accepting [0, 1]; codec 18JUNO/v1", () => {
     const none = compatibilityDescriptor(thisDeploymentCapability([]));
     assert.deepEqual(
       { ...none.axes },
       {
-        rules_engine_version: 11,
-        readable_rules: [11],
+        rules_engine_version: 12,
+        readable_rules: [12],
         settlement_certified_rules: [10, 11],
         hosted_protocols: [1],
         financial_protocols: [],
@@ -551,9 +552,9 @@ describe("LIVE-4 L4-6: no inspection command writes", () => {
 /* ================================================================================================= */
 
 describe("LIVE-4 L4-6: no protocol or version moved", () => {
-  test("8. rules 11 (reads [11]); settlement [10, 11]; hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the keys unchanged", () => {
-    assert.equal(RULES_ENGINE_VERSION, 11);
-    assert.deepEqual([...SUPPORTED_RULES_ENGINE_VERSIONS], [11]);
+  test("8. rules 12 (reads [12]; 11 / [11] through LIVE-4, moved by Route v12 R12-2); settlement [10, 11]; hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the keys as R12-2 moved them", () => {
+    assert.equal(RULES_ENGINE_VERSION, 12);
+    assert.deepEqual([...SUPPORTED_RULES_ENGINE_VERSIONS], [12]);
     assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11]);
     assert.equal(HOSTED_PROTOCOL_VERSION, 1);
     assert.equal(FINANCIAL_PROTOCOL_VERSION, 3);

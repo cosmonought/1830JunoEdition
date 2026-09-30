@@ -3,7 +3,9 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-09-29, by LIVE-5 L5-5 (the DynamoDB signing ledger, the AWS KMS signer binding and configuration v3, §A "LIVE-5"; built and conformance-tested, not wired into production startup -- L5-7; no rules, settlement, protocol or escrow byte moved; money games stay off in production), integrated onto `main` after ROUTE v12 R12-1, L5-2 and L5-4.
+**Last updated:** 2026-09-29, by ROUTE v12 R12-2 on the feature branch `route-v12/r12-2-production-repair` (NOT merged): the production route engine repaired against the R12-1 oracle, Montreal / Norfolk board data, and **the rules engine moved to v12**; settlement stays `[10, 11]`, so on this branch money tables are refused `rules-not-certified` until v12's own settlement certification (§A "Route engine / v12"). Record: Project `claude/ROUTE_V12_R12_2_PRODUCTION_REPAIR_2026-09-29.md`.
+
+**Before R12-2:** 2026-09-29, by LIVE-5 L5-5 (the DynamoDB signing ledger, the AWS KMS signer binding and configuration v3, §A "LIVE-5"; built and conformance-tested, not wired into production startup -- L5-7; no rules, settlement, protocol or escrow byte moved; money games stay off in production), integrated onto `main` after ROUTE v12 R12-1, L5-2 and L5-4.
 
 **Before that:** 2026-09-29, by LIVE-5 L5-4 (identity on DynamoDB and the identity-side security substrate, §A "LIVE-5"; built and conformance-tested, not wired into production startup -- L5-7; no version or protocol moved), integrated onto `main` after L5-2 and ROUTE v12 R12-1; before it by LIVE-5 L5-2 (the DynamoDB game-table adapters, §A "LIVE-5"; not wired into startup; no version or protocol moved), and before that by LIVE-5 L5-1 (the persistence conformance and fault-injection foundation).
 
@@ -35,9 +37,11 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 - Rust/CosmWasm is **escrow, notary and settlement only** (`contracts/escrow`).
 - The legacy on-chain-gameplay crate (`src/`, `tests/e2e.rs`) is awaiting retirement. See §B.
 
-**Rules engine = v11**
-- `RULES_ENGINE_VERSION = 11` (`frontend/src/gameEngine/rulesVersion.ts:65`). The supported versions are derived, so they are `[11]`.
-- A v10 game is held `incompatible`. It is never reinterpreted.
+**Rules engine = v12** (ROUTE v12 R12-2, on its feature branch; `main` is v11 until it merges)
+- `RULES_ENGINE_VERSION = 12` (`frontend/src/gameEngine/rulesVersion.ts:70`). The supported versions are derived, so they are `[12]`.
+- A v10 or v11 game is held `incompatible`. It is never reinterpreted.
+- v12's replay-affecting route repairs are asked only on a PINNED board (#1698's presence rule): an unpinned development-corpus board plays the `*_BOARD_PRE_V12` twins, so it replays byte-identically and the frozen SET-0A goldens (SYN-05, SYN-07) are unchanged.
+- Compatibility keys moved with the rules identity: `dc1-ade748b9407a3db380e5ed72` (no escrow), `dc1-eb48b18e50d46d0c50807710` (the fixture pin). LIVE-4's keys (below) are the v11 ones.
 - `server/data` was scanned clean with `npm run gamesDoctor -- scan-v10`.
 
 **Phase 1 — hosted authority: CLOSED**
@@ -53,7 +57,7 @@ When this file names a Project document, it writes `Project: claude/<name>`.
   - the v10 historical scan is clean.
 
 **Settlement certification**
-- Settlement is certified for **v10 and v11**: `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS = Object.freeze([10, 11])` (`frontend/src/gameEngine/settlementAppraisal.ts`). It is a literal and never derived from `RULES_ENGINE_VERSION`.
+- Settlement is certified for **v10 and v11**: `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS = Object.freeze([10, 11])` (`frontend/src/gameEngine/settlementAppraisal.ts`). It is a literal and never derived from `RULES_ENGINE_VERSION`. **v12 is not certified** (R12-2 did not add it), so a v12 build refuses money-table creation (`rules-not-certified`) and money appraisal of a v12 board; the money server suites that create tables at the current rules fail by design until v12's settlement certification (ESCROW-3A's procedure) or the owner's decision (R12-2 report §6).
 - `checkPin` accepts certified pins only. Every other pin (9, 12, …) is refused with `UNSUPPORTED_RULES_ENGINE_VERSION … (supported: 10, 11)`.
 - v10 is certified byte for byte, as before. v11's evidence sits beside it (`settlementV11Certification.test.ts` and `settlementV11CertificationVectors.json`). v11 payloads differ from v10 only in `domain` [1,33) and `appraisal_state_hash` [91,123). No contract, wasm or codec change was needed.
 - The next rules bump is refused for settlement until its own certification pass adds it. Record: Project `claude/ESCROW3A_MONEY_GAME_PREREQUISITES_2026-09-27.md` §2–3.
@@ -142,7 +146,8 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 - The route / autopath hardening (the route-engine certification preflight's findings, including the pre-registered blockers **S6-15** — hosted ingress judging routes on the STANDARD board — and **S6-16** — an H12 fork reversal the search demonstrates but authority rejects) and the **v12** rules batch are their own gameplay program. They are not folded into LIVE-4 and change no LIVE-4 identity. Record: Project `claude/ROUTE_ENGINE_EXTRACTION_CERTIFICATION_PREFLIGHT_2026-09-28.md`.
 - **R12-1 (2026-09-29): the independent route oracle is established** (test-only, `frontend/src/routeOracle/`; never imported by the app). It enumerates every legal route and the exact best combination from its own reading of the board, and pins every preflight defect as a KNOWN-RED fixture (red areas twice, the Altoona bow, CROSS_TWICE, the H12 fork, Coal River, ING-1, S6-15 ingress, warehouses). Production code, `RULES_ENGINE_VERSION` and settlement are unchanged. Owner-run full corpus: `ROUTE_ORACLE_FULL=1` (and `ROUTE_ORACLE_CORPUS_DIR` for the owner-local logs) on `routeOracleCorpus.test.ts`. Record and the R12-2 handoff: Project `claude/ROUTE_V12_R12_1_ORACLE_2026-09-29.md`.
 - **R12-1 repair (2026-09-29): the owner's route rulings are in the oracle.** H12 herald: IL-2 yes (a virtual city on any legal PRR traversal, joining no track the tile does not join); IL-3 **no** (an uncounted pass is not a station); IL-4 yes (trains independent); IL-11 re-entry on distinct track, counted at most once, a pass never uses it up; S6-4 has **no** "must count" obligation. Warehouses: a city for revenue and capacity, counted whenever traversed, may end a route, never blocks, untokenable, no per-route cap. **Brown #62 pays $80 per city**; the catalog's $90 is a production data defect for R12-2 (not changed). **1830+ / LPF printed values (owner-confirmed from the physical board, R12-1 closure): Montreal A19 $40 / $60, Norfolk L16 $30 / $50** (the lesser until the first 5-train). **Montreal A19 and Norfolk L16 are each ONE city with TWO station slots** (ordinary blocking; N&W's home takes one of Norfolk's) — this **supersedes the earlier one-slot ruling (#1401) for both**. Production still prices both flat ($40, $20) and gives each one slot: production data defects deferred to R12-2 (locations: Project `claude/ROUTE_V12_R12_1_ORACLE_2026-09-29.md` §0C).
-- **Substantive human gameplay (the G5 / LPF route playtests, the full G1/G2 games) waits for that route hardening.** The **reduced S0** human UI/evidence smoke remains available now.
+- **R12-2 (2026-09-29, feature branch `route-v12/r12-2-production-repair`, not merged): the production route engine repaired against the oracle; rules → v12.** The single-route walk moved to `frontend/src/gameEngine/routeWalk.ts`, shared by `evaluateRouteSet` and the search. Repaired: a red area is one city (IL-5); a bare token or the H12 herald counts only where the route stops (IL-7, IL-3); Coal River is closed to an unlicensed END (walk and ingress); a bypassed waypoint never uses up its city (IL-11 pricing); the search re-enters on distinct track (CROSS_TWICE), joins arms only through the stop's rails (S6-16 H12 fork; ING-1 New York), and every candidate is judged by the authority's walk, so `maxRouteRevenueFor` demonstrates only a set the authority accepts (no Run-Trains stranding); hosted ingress opens the table's own board (S6-15 / F-1); ING-1 city-less paid placement on a two-city hex refused; **Montreal A19 $40/$60 and Norfolk L16 $30/$50 (1830+ / LPF), each one city with two station circles** (routing, blocking and placement). Every replay-affecting change is gated on the pin (unpinned boards keep the pre-v12 twins). **Not changed: tile #62 stays $90** (unresolved discrepancy with the oracle's $80; no first-party 2018 Lookout evidence in the repository), the standard map's flat $40 Montreal, settlement `[10, 11]`. The production search remains a heuristic lower bound (sound, not always optimal). Record: Project `claude/ROUTE_V12_R12_2_PRODUCTION_REPAIR_2026-09-29.md`.
+- **Substantive human gameplay (the G5 / LPF route playtests, the full G1/G2 games) waits for that route hardening** (R12-2 closes S6-15 / S6-16 on its branch; the playtests wait for its merge). The **reduced S0** human UI/evidence smoke remains available now.
 
 **GNOLAND-1 / 1.1: complete; further Gno work parked**
 - The chain-neutral escrow backend interface and the Juno regression oracle landed as `b804150`.
@@ -188,7 +193,7 @@ fields; creation refusing uncertified rules). Its inputs:
 - Project `claude/LIVE4_COMPATIBILITY_CONTINUATION_PREFLIGHT_2026-09-28.md` (the design);
 - Project `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md` §20 (the LIVE-4 compatibility handoff: what is durable financial v3, what is wire-only) and §19 (the LIVE-5 / Junox handoff: KMS clients for the relayer, settlement and admission keys; shared stores for the money layer's in-memory state).
 
-**Beside LIVE-4 (human evidence, Phase 6.5).** A **reduced S0** is the lightweight human UI/evidence smoke, available on the closed tree; the full **G1/G2** games stay later, as the substantive human certification. Backlog **S6-15 / S6-16** (two route findings, pre-registered) must be fixed before any substantive G5 / LPF route playtest. **v12** (6.5-E) and the **App decomposition** (Phase 7) remain later. Rules stay **11** and settlement **`[10, 11]`**.
+**Beside LIVE-4 (human evidence, Phase 6.5).** A **reduced S0** is the lightweight human UI/evidence smoke, available on the closed tree; the full **G1/G2** games stay later, as the substantive human certification. Backlog **S6-15 / S6-16** (two route findings, pre-registered) must be fixed before any substantive G5 / LPF route playtest; R12-2 fixes both on its feature branch. **v12** is R12-2's rules bump (branch, not merged); the **App decomposition** (Phase 7) remains later. Settlement stays **`[10, 11]`**.
 
 **ESCROW-4's owner ruling stands (OD-4-2):** relaying an already-valid CONSENT or ANNUL signature needs no `hasSensitiveAuth` (the consent-key signature is the authority); creating, replacing or moving the consent/signing key needs sensitive re-authentication plus the contract-required wallet authorization.
 
@@ -239,6 +244,7 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 | LIVE-4 integration and hardening: the combined tree `6da8a1f`, N-3, the one capability / one runtime merge, the review, the corpus-gate addendum, the L4-7 list (§13) | `claude/LIVE4_INTEGRATION_HARDENING_2026-09-28.md` |
 | LIVE-4 slices: L4-1 canonical model; L4-2 no-money continuation; L4-3 client compatibility; L4-4 money continuation; L4-5 crypto seed | `claude/LIVE4_L4_1_CANONICAL_MODEL_2026-09-28.md`, `claude/LIVE4_L4_2_NO_MONEY_CONTINUATION_2026-09-28.md`, `claude/LIVE4_L4_3_CLIENT_COMPATIBILITY_2026-09-28.md`, `claude/LIVE4_L4_4_MONEY_CONTINUATION_2026-09-28.md`, `claude/LIVE4_L4_5_CRYPTO_RNG_2026-09-28.md` |
 | Route engine: extraction / certification preflight (the separate gameplay program; S6-15 / S6-16) | `claude/ROUTE_ENGINE_EXTRACTION_CERTIFICATION_PREFLIGHT_2026-09-28.md` |
+| Route v12 R12-2: the production route repair (repaired defects, remaining mismatches, the #62 discrepancy, the pin gating, the v12 bump and its money-path consequence, the owner gate, the next R12 pass) | `claude/ROUTE_V12_R12_2_PRODUCTION_REPAIR_2026-09-29.md` |
 | Route v12 R12-1: the independent oracle, its law model, the known-red fixtures, the corpus comparison, the owner rulings applied by the repair (IL-2/3/4/11, warehouses, #62 at $80), the closure's board data (Montreal 40/60 and Norfolk 30/50, each one city with two slots) and the R12-2 handoff | `claude/ROUTE_V12_R12_1_ORACLE_2026-09-29.md` |
 | ESCROW-4: the player-facing Juno escrow path (wallet proof, admission wiring, W-13, R-J1, funding, Start, consent keys, relays, settlement UX); §20 LIVE-4 compatibility handoff; §19 LIVE-5/Junox handoff | `claude/ESCROW4_KEPLR_WALLET_CONSENT_2026-09-28.md` |
 | The integrated gate and closure: ESCROW-4 + 6.5-B + APP-TEST-0A (tested HEAD `467498e`, the totals, the dispute-evidence fix, the closed register) | `claude/INTEGRATED_GATE_ESCROW4_65B_APP0A_2026-09-28.md` + `claude/INTEGRATED_CLOSURE_ESCROW4_65B_APP0A_2026-09-28.md` |
@@ -293,7 +299,7 @@ from, kept for provenance.
 
 ## D. Frozen invariants (do not change without the owner's explicit, separately reviewed pass)
 
-**1. Gameplay rules are v11**
+**1. Gameplay rules are v12** (R12-2's branch; v11 on `main` until it merges)
 - Any change to what a stored log replays to must bump `RULES_ENGINE_VERSION` and add a changelog row.
 - Logs are never repinned or rewritten. A game runs only under its deal's pin.
 

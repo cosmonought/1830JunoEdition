@@ -28,6 +28,7 @@ import { thisDeploymentCapability } from "../deploymentCapability";
 import { deploymentCapability } from "../../../frontend/src/gameEngine/compat/deploymentCapability";
 import { clientAnnouncementQuery } from "../../../frontend/src/gameEngine/compat/clientCompatibility";
 import { ACCEPTED_CLIENT_PROTOCOLS } from "../../../frontend/src/gameEngine/protocolVersions";
+import { RULES_ENGINE_VERSION } from "../../../frontend/src/gameEngine/rulesVersion";
 import { CLIENT_ANSWER_CLOSE_CODE, CLIENT_ANSWER_SENTENCES } from "../../../frontend/src/utils/clientAnswers";
 import type { ServerLogEntry } from "../../../frontend/src/utils/roomSession";
 import type { GameServerOptions } from "../gameServer";
@@ -52,8 +53,15 @@ import {
 
 quietConsole();
 
+/* Route v12 R12-2 moved the rules engine from 11 to 12. The cases below were written against 11 as "this release's
+   rules" and 12 as "a release after it"; they now read the engine -- NOW, PREV (a release before it) and NEXT (one
+   after) -- so they stay the same cases. */
+const NOW = RULES_ENGINE_VERSION;
+const PREV = RULES_ENGINE_VERSION - 1;
+const NEXT = RULES_ENGINE_VERSION + 1;
+
 /** A protocol-1 tab's announcement (the canonical query a LIVE-4 bundle sends). */
-const announce = (rules: readonly number[] = [11], build: string | null = "tab-build-b") => clientAnnouncementQuery(1, rules, build);
+const announce = (rules: readonly number[] = [NOW], build: string | null = "tab-build-b") => clientAnnouncementQuery(1, rules, build);
 /** Frames only a protocol-1 client understands. The legacy wire must never see one. */
 const LIVE4_ONLY = new Set(["reload", "route"]);
 
@@ -73,9 +81,9 @@ async function world(over: Partial<GameServerOptions> = {}, extra: { v12?: boole
   let v12: string | null = null;
   if (extra.v12) {
     v12 = await seedGame(records, [ALICE, BOB], { dealt: true });
-    control.logs.set(v12, withDeal(storedLog(0), (setup) => (setup.rules_engine_version = 12)));
+    control.logs.set(v12, withDeal(storedLog(0), (setup) => (setup.rules_engine_version = NEXT)));
     const record = records.records.get(v12);
-    if (record) records.records.set(v12, { ...record, rules_engine_version: 12 });
+    if (record) records.records.set(v12, { ...record, rules_engine_version: NEXT });
   }
   let hosted2: string | null = null;
   if (extra.hosted2) {
@@ -112,8 +120,8 @@ describe("L4-3 at the server: the announcement, the verdict, the answers", () =>
   test("T-14: a protocol-1 tab on another build of the same rules says hello and SUBMITS -- no build-skew; the legacy wire still compares", async () => {
     const { server, port, dealt } = await world();
     try {
-      /* Alice's tab: protocol 1, rules [11], a build that is not the server's. */
-      const alice = await Client.open(port, ALICE, announce([11], "tab-build-b"));
+      /* Alice's tab: protocol 1, this release's rules, a build that is not the server's. */
+      const alice = await Client.open(port, ALICE, announce([NOW], "tab-build-b"));
       alice.hello(dealt);
       const caught = await firstAnswer(alice, "alice's catch-up");
       assert.equal(caught.kind, "catch-up");
@@ -200,7 +208,7 @@ describe("L4-3 at the server: the announcement, the verdict, the answers", () =>
   test("the per-game check: a tab whose rules lack a dealt game's pin gets `reload/client-rules` -- no entry at the hello, no view at the room hello -- then 4426", async () => {
     const { server, port, dealt } = await world();
     try {
-      for (const rules of [[10], [12], [9, 10]]) {
+      for (const rules of [[PREV], [NEXT], [9, PREV]]) {
         const stale = await Client.open(port, ALICE, announce(rules));
         stale.hello(dealt);
         assert.equal(await closeOf(stale, "stale"), CLIENT_ANSWER_CLOSE_CODE, `hello with rules ${rules}`);
@@ -213,7 +221,7 @@ describe("L4-3 at the server: the announcement, the verdict, the answers", () =>
         assert.deepEqual(kinds(staleRoom), ["reload"]);
       }
       /* A tab that carries the pin (alone or among others) is served. */
-      for (const rules of [[11], [10, 11], [11, 12]]) {
+      for (const rules of [[NOW], [PREV, NOW], [NOW, NEXT]]) {
         const fine = await Client.open(port, ALICE, announce(rules));
         fine.hello(dealt);
         assert.equal((await firstAnswer(fine, `rules ${rules}`)).kind, "catch-up");
@@ -239,7 +247,7 @@ describe("L4-3 at the server: the announcement, the verdict, the answers", () =>
       assert.equal(before.status, "active");
       /* The host's stale tab: its channel sends its standing room-hello and its backlog in one breath, as the room link
          does. */
-      const stale = await Client.open(port, ALICE, announce([10]));
+      const stale = await Client.open(port, ALICE, announce([PREV]));
       stale.roomHello(table.gameId);
       const requestId = stale.roomOp({ type: "transfer-host", toPlayerId: table.playerIds[BOB] }, table.gameId);
       assert.equal(await closeOf(stale, "stale"), CLIENT_ANSWER_CLOSE_CODE);
@@ -248,7 +256,7 @@ describe("L4-3 at the server: the announcement, the verdict, the answers", () =>
       await sleep(50);
       assert.equal(records.records.get(table.gameId)?.host_player_id, before.host_player_id, "the queued op did not run");
       /* The same op from a tab the pool may serve does run (so the assertion above is not vacuous). */
-      const fine = await Client.open(port, ALICE, announce([11]));
+      const fine = await Client.open(port, ALICE, announce([NOW]));
       fine.roomHello(table.gameId);
       await fine.next((frame) => frame.kind === "room", "the view");
       const done = await fine.op({ type: "transfer-host", toPlayerId: table.playerIds[BOB] }, table.gameId);
@@ -265,21 +273,21 @@ describe("L4-3 at the server: the announcement, the verdict, the answers", () =>
     try {
       const table = await openGame(port, ALICE, [BOB], { start: false });
       /* Bob's stale tab (rules [10]) subscribed to the waiting table's log and room -- undealt, so it was served. */
-      const staleLog = await Client.open(port, BOB, announce([10]));
+      const staleLog = await Client.open(port, BOB, announce([PREV]));
       staleLog.hello(table.gameId);
       assert.equal((await firstAnswer(staleLog, "the waiting table's catch-up")).kind, "catch-up");
-      const staleRoom = await Client.open(port, BOB, announce([10]));
+      const staleRoom = await Client.open(port, BOB, announce([PREV]));
       staleRoom.roomHello(table.gameId);
       await staleRoom.next((frame) => frame.kind === "room", "the waiting room");
       /* Alice's current tab and a legacy watcher tab, for contrast. */
-      const aliceLog = await Client.open(port, ALICE, announce([11]));
+      const aliceLog = await Client.open(port, ALICE, announce([NOW]));
       aliceLog.hello(table.gameId);
       await firstAnswer(aliceLog, "alice's catch-up");
       const legacyLog = await Client.open(port, ALICE);
       legacyLog.hello(table.gameId);
       await firstAnswer(legacyLog, "the legacy catch-up");
 
-      const host = await Client.open(port, ALICE, announce([11]));
+      const host = await Client.open(port, ALICE, announce([NOW]));
       const started = await host.op({ type: "start-game" }, table.gameId);
       assert.equal(started.ok, true, JSON.stringify(started));
 
@@ -305,14 +313,14 @@ describe("L4-3 at the server: the announcement, the verdict, the answers", () =>
     const { server, port, v12 } = await world({}, { v12: true });
     try {
       assert.ok(v12 !== null);
-      /* rules [11]: the game's pin 12 is neither the tab's nor this release's -- the verdict is route/client-rules. */
-      for (const query of [announce([11]), announce([12]), announce([11, 12])]) {
+      /* The game's pin (NEXT) is neither the tab's nor this release's -- the verdict is route/client-rules. */
+      for (const query of [announce([NOW]), announce([NEXT]), announce([NOW, NEXT])]) {
         const tab = await Client.open(port, ALICE, query);
         tab.hello(v12);
         const answer = await firstAnswer(tab, query);
         assert.equal(answer.kind, "incompatible", query);
         assert.equal(answer.why, "rules-not-supported", query);
-        assert.equal(answer.pinnedRulesEngineVersion, 12, query);
+        assert.equal(answer.pinnedRulesEngineVersion, NEXT, query);
         tab.roomHello(v12);
         const view = (await tab.next((frame) => frame.kind === "room", "the view")).view as { holdKind: string; holdReason?: string };
         assert.equal(view.holdKind, "incompatible");
@@ -331,7 +339,7 @@ describe("L4-3 at the server: the announcement, the verdict, the answers", () =>
     const { server, port, hosted2, dealt } = await world({}, { hosted2: true });
     try {
       assert.ok(hosted2 !== null);
-      const tab = await Client.open(port, ALICE, announce([11]));
+      const tab = await Client.open(port, ALICE, announce([NOW]));
       tab.hello(hosted2);
       const answer = await firstAnswer(tab, "the hosted-2 hello");
       assert.deepEqual([answer.kind, answer.why], ["incompatible", "hosted-protocol"]);
@@ -342,7 +350,7 @@ describe("L4-3 at the server: the announcement, the verdict, the answers", () =>
       assert.match(view.holdReason ?? "", /game-server protocol/);
       assert.doesNotMatch(view.holdReason ?? "", /rules/i);
       await tab.close();
-      const live = await Client.open(port, ALICE, announce([11]));
+      const live = await Client.open(port, ALICE, announce([NOW]));
       live.roomHello(dealt);
       const liveView = (await live.next((frame) => frame.kind === "room", "the live view")).view as Record<string, unknown>;
       assert.equal(liveView.holdKind, null);
@@ -380,7 +388,7 @@ describe("L4-3 at the server: the announcement, the verdict, the answers", () =>
       assert.ok(server.clientAnswers.legacyRefused >= 4);
 
       /* On the same pool a protocol-1 tab is served. */
-      const current = await Client.open(port, BOB, announce([11]));
+      const current = await Client.open(port, BOB, announce([NOW]));
       current.hello(dealt);
       assert.equal((await firstAnswer(current, "the protocol-1 hello")).kind, "catch-up");
       await Promise.all([legacy.close(), current.close()]);

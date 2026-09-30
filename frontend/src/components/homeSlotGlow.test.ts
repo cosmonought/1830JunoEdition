@@ -71,11 +71,11 @@ describe("homeCityIndexAt", () => {
 });
 
 describe("a home reservation on a printed two-station city sits in its first slot (design note #1379)", () => {
-  /* #1401: Norfolk (L16), the hex this was written against, and Montreal (A19) are both SINGLE-station
-     cities after all -- "a preprinted gray single-station city like Norfolk" -- so no printed hex on any
-     board carries a pill now. The #1379 rule (a badge sits in a pill's FIRST slot, not the seam) is pinned
-     below as source against `stationMarkerPoint`, and the two hexes are pinned as seating their token in the
-     one circle. */
+  /* Route v12 R12-2: Norfolk (L16), the hex this was written against, and Montreal (A19) are each ONE city with TWO
+     station circles (owner-confirmed from the physical 1830+ board, R12-1 closure) -- superseding #1401's
+     "single-station city" ruling, which had removed the pill. So #1379's rule applies again on both: the home
+     token (city 0) seats in the pill's FIRST slot, not on the seam. The pre-v12 board, kept only for the unpinned
+     development corpus, still has one circle (pinned below too). */
   it("a badge on a multi-slot printed city goes to the first slot, not the anchor (#1379, as source)", () => {
     const { readStripped } = require("../utils/sourceScan") as typeof import("../utils/sourceScan");
     const PRIMS = readStripped("components/hexCanvasPrimitives.ts");
@@ -85,23 +85,32 @@ describe("a home reservation on a printed two-station city sits in its first slo
     expect(body).toContain("cityIndex ?? 0");
   });
 
-  it.each(["L16", "A19"])("%s is one station, and the token seats in its circle (design note #1401)", (label) => {
+  it.each(["L16", "A19"])("%s is one city with two stations, and the home token seats in the pill's first slot (R12-2; #1379)", (label) => {
     const { activateBoard, STANDARD_BOARD } = require("./hexBoardData") as typeof import("./hexBoardData");
-    const { LPF_BOARD } = require("./hexBoardDataLpf") as typeof import("./hexBoardDataLpf");
+    const { LPF_BOARD, LPF_BOARD_PRE_V12 } = require("./hexBoardDataLpf") as typeof import("./hexBoardDataLpf");
     const { stationMarkerPoint } = require("./hexCanvasPrimitives") as typeof import("./hexCanvasPrimitives");
     const { printedCitySlotPoints, printedArtwork } = require("./TileGraphics") as typeof import("./TileGraphics");
     const { axialToPixel } = require("./hexGeometry") as typeof import("./hexGeometry");
+    const hex = LPF_BOARD.hexes.find((entry) => entry.label === label)!;
+    const size = 40;
+    const center = axialToPixel(hex.q, hex.r, size);
     activateBoard(LPF_BOARD);
     try {
-      const hex = LPF_BOARD.hexes.find((entry) => entry.label === label)!;
-      expect(LPF_BOARD.grayHexes[label].slots ?? 1).toBe(1);
-      expect(printedArtwork(label)!.marker!.slots ?? 1).toBe(1);
-      const size = 40;
-      const center = axialToPixel(hex.q, hex.r, size);
+      expect(LPF_BOARD.grayHexes[label].slots).toBe(2);
+      expect(printedArtwork(label)!.marker!.slots).toBe(2);
       const slots = printedCitySlotPoints(label, center, size);
-      expect(slots.length).toBe(1);
+      expect(slots.length).toBe(2);
+      expect(stationMarkerPoint(hex.q, hex.r, size)).toEqual(slots[0]);
       const anchor = printedArtwork(label)!.marker!.at;
-      expect(stationMarkerPoint(hex.q, hex.r, size)).toEqual({ x: center.x + size * anchor.x, y: center.y + size * anchor.y });
+      expect(slots[0]).not.toEqual({ x: center.x + size * anchor.x, y: center.y + size * anchor.y });
+    } finally {
+      activateBoard(STANDARD_BOARD);
+    }
+    // The pre-v12 board (unpinned development corpus only) keeps the superseded one circle.
+    activateBoard(LPF_BOARD_PRE_V12);
+    try {
+      expect(LPF_BOARD_PRE_V12.grayHexes[label].slots ?? 1).toBe(1);
+      expect(printedCitySlotPoints(label, center, size).length).toBe(1);
     } finally {
       activateBoard(STANDARD_BOARD);
     }

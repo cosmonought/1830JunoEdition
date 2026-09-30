@@ -180,16 +180,19 @@ const row11 = () => RULES_ENGINE_CHANGELOG[10].note;
 /* 1. THE BUMP                                                                                        */
 /* ================================================================================================= */
 
+/* Route v12 R12-2 moved the engine to 12. As every closure test before it (UR-8's, GR-5's), this one now pins its
+   own row and the invariants that outlive it -- "at least 11", "the one supported version is the current one" --
+   rather than a number a later bump must move. */
 describe("RULES_ENGINE_VERSION 11 (Delayed Auction certification closure, DA-8)", () => {
-  it("is 11, and 11 is the one supported version", () => {
-    expect(RULES_ENGINE_VERSION).toBe(11);
-    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([11]);
+  it("is at least 11, and the current version is the one supported version", () => {
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(11);
+    expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
     // Derived, as every bump since version 1 has left it -- the bump REPLACES the supported version.
     expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
   });
 
   it("the changelog has an eleventh row, rows 1 - 10 are untouched in order, and row 11 certifies the Delayed Auction", () => {
-    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(RULES_ENGINE_CHANGELOG.map((row) => row.version).slice(0, 11)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(RULES_ENGINE_CHANGELOG[9].note).toMatch(/^Unpredictable Revenue certification closure \(UR-8/);
     expect(row11()).toMatch(/^Delayed Auction certification closure \(DA-8, 2026-09-27\)/);
     expect(row11()).toMatch(/Phase 2's rules-engine closure/);
@@ -255,23 +258,23 @@ describe("RULES_ENGINE_VERSION 11 (Delayed Auction certification closure, DA-8)"
 /* 2. THE SUPPORTED-VERSION MATRIX                                                                    */
 /* ================================================================================================= */
 
-describe("the supported-version matrix under a v11-only server", () => {
-  it("1. a newly dealt game records rules_engine_version 11 -- on the log and on the board, whatever the client claimed", () => {
-    for (const claimed of [undefined, 1, 9, PRIOR, 12, 999]) {
+describe("the supported-version matrix under a single-version server (v11 at DA-8; the current engine since)", () => {
+  it("1. a newly dealt game records the current rules_engine_version -- on the log and on the board, whatever the client claimed", () => {
+    for (const claimed of [undefined, 1, 9, PRIOR, 11, RULES_ENGINE_VERSION + 1, 999]) {
       for (const delayed of [false, true]) {
         const room = session();
         applied(room, A, SETUP(delayed, claimed));
-        expect(setupPayloadOf(room.entries)[RULES_ENGINE_VERSION_FIELD]).toBe(11);
-        expect(room.rulesEngineVersion()).toBe(11);
-        expect(room.state.rules_engine_version).toBe(11);
+        expect(setupPayloadOf(room.entries)[RULES_ENGINE_VERSION_FIELD]).toBe(RULES_ENGINE_VERSION);
+        expect(room.rulesEngineVersion()).toBe(RULES_ENGINE_VERSION);
+        expect(room.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
       }
     }
   });
 
-  it("2. a v11 room restores and replays deterministically: twice, to the live board", () => {
+  it("2. a current-version room restores and replays deterministically: twice, to the live board", () => {
     const live = standardRoom();
     da12Script(live);
-    expect(replayCompatibility(live.entries)).toEqual({ kind: "compatible", version: 11 });
+    expect(replayCompatibility(live.entries)).toEqual({ kind: "compatible", version: RULES_ENGINE_VERSION });
     const first = session(live.entries);
     const second = session(live.entries);
     expect(stateDigest(first.state)).toBe(stateDigest(live.state));
@@ -286,15 +289,15 @@ describe("the supported-version matrix under a v11-only server", () => {
       applied(live, A, SETUP(delayed));
       if (!delayed) applied(live, actorOf(live.state), BUY);
       const ten = repinned(live.entries, PRIOR);
-      expect(replayCompatibility(ten)).toEqual({ kind: "incompatible", version: 10, supported: [11] });
+      expect(replayCompatibility(ten)).toEqual({ kind: "incompatible", version: 10, supported: [RULES_ENGINE_VERSION] });
       const apply = jest.spyOn(RoomEngine.prototype, "apply");
       try {
         for (const dev of [false, true]) {
           for (let restart = 0; restart < 2; restart += 1) {
             const counting = countingProviders();
             const held = session(ten, { providers: counting.providers, dev });
-            expect(held.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 10, supported: [11] });
-            expect(held.incompatible?.reason).toMatch(/rules engine version 10; this server supports version 11\b/);
+            expect(held.incompatible?.compatibility).toEqual({ kind: "incompatible", version: 10, supported: [RULES_ENGINE_VERSION] });
+            expect(held.incompatible?.reason).toMatch(new RegExp(`rules engine version 10; this server supports version ${RULES_ENGINE_VERSION}\\b`));
             expect(stateDigest(held.state)).toBe(stateDigest(session().state));
             expect(counting.count()).toBe(0);
           }
@@ -311,9 +314,9 @@ describe("the supported-version matrix under a v11-only server", () => {
 
   it("4. every other unsupported numeric version is incompatible too -- the future included; a missing pin is legacy and refused", () => {
     const base = standardRoom().entries;
-    for (const version of [0, 1, 9, 10, 12, 999]) {
+    for (const version of [0, 1, 9, 10, 11, RULES_ENGINE_VERSION + 1, 999].filter((v) => v !== RULES_ENGINE_VERSION)) {
       const pinned = repinned(base, version);
-      expect(replayCompatibility(pinned)).toEqual({ kind: "incompatible", version, supported: [11] });
+      expect(replayCompatibility(pinned)).toEqual({ kind: "incompatible", version, supported: [RULES_ENGINE_VERSION] });
       for (const dev of [false, true]) expect(session(pinned, { dev }).incompatible?.compatibility.kind).toBe("incompatible");
     }
     const legacy = repinned(base, undefined);
@@ -321,7 +324,7 @@ describe("the supported-version matrix under a v11-only server", () => {
     expect(replayRefusal(replayCompatibility(legacy), SERVER_REPLAY_POLICY)).toMatch(/before rules-engine versioning/);
   });
 
-  it("5. no path rewrites a stored 10 to 11 -- the held room keeps its log, its pin and its answer; a move, a new deal and a RevertTo append nothing", () => {
+  it("5. no path rewrites a stored 10 to the current version -- the held room keeps its log, its pin and its answer; a move, a new deal and a RevertTo append nothing", () => {
     const ten = repinned(standardRoom().entries, PRIOR);
     const before = JSON.stringify(ten);
     const held = session(ten);
@@ -337,7 +340,7 @@ describe("the supported-version matrix under a v11-only server", () => {
     const hello = held.catchUp(-1) as { kind: string; pinnedRulesEngineVersion?: number | null; supportedRulesEngineVersions?: number[] };
     expect(hello.kind).toBe("incompatible");
     expect(hello.pinnedRulesEngineVersion).toBe(10);
-    expect(hello.supportedRulesEngineVersions).toEqual([11]);
+    expect(hello.supportedRulesEngineVersions).toEqual([RULES_ENGINE_VERSION]);
     expect(JSON.stringify(ten)).toBe(before);
   });
 });
@@ -467,12 +470,12 @@ function delayedSetEnd(options: { ghostThree?: boolean } = {}): RoomEngine {
   return new RoomEngine(sandboxReplayProviders(), { state: orEnd, waterfall: orEnd.waterfall ?? null } as never);
 }
 
-describe("the Delayed Auction on v11: the certified semantics, carried by the bump", () => {
-  it("the deal: pinned 11, the auction dormant and owed, the C&A's PRR share reserved, the B&O locked, no round forced", () => {
+describe("the Delayed Auction on v11: the certified semantics, carried by the bump (and by every later one)", () => {
+  it("the deal: pinned to the current engine, the auction dormant and owed, the C&A's PRR share reserved, the B&O locked, no round forced", () => {
     const room = session();
     applied(room, A, SETUP(true));
     const board = room.state;
-    expect(board.rules_engine_version).toBe(11);
+    expect(board.rules_engine_version).toBe(RULES_ENGINE_VERSION);
     expect(board.current_round_type).toBe("StockRound");
     expect(board.waterfall?.waterfall_auction_active).toBe(false);
     expect(board.private_auction_complete).toBe(false);
@@ -493,7 +496,7 @@ describe("the Delayed Auction on v11: the certified semantics, carried by the bu
     const holder = before.player_addresses[before.priority_deal_index];
     send(engine, C, PASS_TURN);
     const board = boardOf(engine);
-    expect(board.rules_engine_version).toBe(11);
+    expect(board.rules_engine_version).toBe(RULES_ENGINE_VERSION);
     expect(board.current_round_type).toBe("WaterfallAuction");
     expect(board.waterfall?.waterfall_auction_active).toBe(true);
     expect(actorOf(board)).toBe(holder);
@@ -628,8 +631,8 @@ describe("settlement: a separate axis -- v10 certified byte-for-byte, v11 added 
   const syn01 = golden.cases.find((row) => row.name === "SYN-01-CLASSIC-BANKBREAK")!;
   const seatsOf = (ids: readonly string[]) => ids.map((player_id, seat_index) => ({ seat_index, player_id }));
 
-  it("the two axes: the game plays 11; settlement is certified for [10, 11] -- 11 by ESCROW-3A's recertification, never by the bump", () => {
-    expect(RULES_ENGINE_VERSION).toBe(11);
+  it("the two axes: the game plays the current engine (11 at DA-8, 12 since R12-2); settlement is certified for [10, 11] -- 11 by ESCROW-3A's recertification, never by a bump", () => {
+    expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(11);
     /* DA-8 left this [10]. ESCROW-3A added 11 in its own reviewed change, on its own evidence
        (`settlementV11Certification.test.ts`); the list is still a literal that no gameplay constant moves. */
     expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11]);

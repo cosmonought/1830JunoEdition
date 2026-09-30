@@ -9,10 +9,11 @@
 //   THE LAW (must always hold): the oracle's optimum, its legal witness, and its refusal of every route the law
 //   forbids -- written by hand beside the fixture.
 //
-//   KNOWN-RED (production today): the defect class production falls into, what it demonstrates, and what the
-//   authority answers. These are pinned AS DEFECTS. R12-2's repairs will fail them on purpose; each must then be
-//   moved to the law's answer in the same reviewed change, so a repair is never silent and a regression never
-//   hides behind a green suite. They are not rules.
+//   PRODUCTION (pinned): the class production falls into, what it demonstrates, and what the authority answers.
+//   R12-1 pinned these AS DEFECTS (KNOWN-RED). ROUTE v12 R12-2 repaired production, and moved each pin to the law's
+//   answer in the same change: every valid fixture is now "sound-optimal" at the law's optimum, and the authority
+//   refuses every route the law forbids. The R12-1 record is kept per fixture (`repairedFrom`), so a regression
+//   fails the very pin it would re-open. They are not rules.
 
 import { TILE_CATALOG_BY_ID } from "../components/hexTileCatalog";
 import { KNOWN_DEFECT_FIXTURES, parseRoute } from "./harness/knownDefects";
@@ -62,7 +63,7 @@ describe.each(KNOWN_DEFECT_FIXTURES.map((fixture) => [fixture.id, fixture] as co
     }
   });
 
-  it(`KNOWN-RED (production today): ${fixture.knownProduction.primary}`, () => {
+  it(`PRODUCTION (R12-2 repaired): ${fixture.knownProduction.primary}`, () => {
     const result = compareCase(fixture.board, fixture.companyId, fixture.fleet, true, { reducer: true });
     expect(result.production.demonstrated).toBe(fixture.knownProduction.demonstrated);
     expect(result.primary).toBe(fixture.knownProduction.primary);
@@ -86,11 +87,23 @@ describe.each(KNOWN_DEFECT_FIXTURES.map((fixture) => [fixture.id, fixture] as co
   }
 });
 
-describe("the classification is not vacuous: every production defect class of the brief is reproduced", () => {
-  it("sound-optimal, emits-illegal-optimum, fails-to-find-legal-route, permits-skip-despite-legal-route and route-phase-stranding all occur", () => {
-    const classes = new Set(KNOWN_DEFECT_FIXTURES.flatMap((fixture) => fixture.knownProduction.flags));
+describe("the classification was not vacuous, and the repair is complete (R12-2)", () => {
+  it("R12-1 reproduced every production defect class of the brief (the repaired record)", () => {
+    const classes = new Set(KNOWN_DEFECT_FIXTURES.flatMap((fixture) => fixture.repairedFrom?.flags ?? fixture.knownProduction.flags));
     for (const cls of ["sound-optimal", "emits-illegal-optimum", "fails-to-find-legal-route", "permits-skip-despite-legal-route", "route-phase-stranding"]) {
       expect([cls, classes.has(cls as never)]).toEqual([cls, true]);
+    }
+  });
+
+  it("R12-2: every VALID fixture is now sound-optimal at the law's optimum; only ING-1's malformed state keeps a class of its own", () => {
+    for (const fixture of KNOWN_DEFECT_FIXTURES) {
+      if (fixture.law.malformed) {
+        expect([fixture.id, fixture.knownProduction.primary]).toEqual([fixture.id, "invalid-state"]);
+        expect(fixture.knownProduction.flags).not.toContain("route-phase-stranding");
+        continue;
+      }
+      expect([fixture.id, fixture.knownProduction.primary, fixture.knownProduction.flags]).toEqual([fixture.id, "sound-optimal", ["sound-optimal"]]);
+      expect([fixture.id, fixture.knownProduction.demonstrated]).toEqual([fixture.id, fixture.law.optimum]);
     }
   });
 });

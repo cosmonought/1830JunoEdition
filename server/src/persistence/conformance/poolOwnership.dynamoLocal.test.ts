@@ -22,10 +22,10 @@
 
 import { after, describe, test } from "node:test";
 import assert from "node:assert/strict";
-import { DeleteItemCommand, PutItemCommand, type AttributeValue, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { DeleteItemCommand, PutItemCommand, TransactWriteItemsCommand, type AttributeValue, type DynamoDBClient, type TransactWriteItemsCommandInput } from "@aws-sdk/client-dynamodb";
 
 import { createDynamoDbClient, deadline, dynamoLocalTargetFromEnv, DYNAMODB_LOCAL_ENV } from "../../aws/awsClients";
-import { headKey, poolKey, readHead, NO_OWNER } from "../../aws/game/gameTable";
+import { gamePk, headKey, poolKey, queryAll, readHead, NO_OWNER } from "../../aws/game/gameTable";
 import { claimGame, releaseGame, takeOverPool } from "../../aws/game/ownership";
 import { parseRouting, readRouting, ROUTING_KEY, RoutingUnreadableError, setPrimaryPool } from "../../aws/game/routing";
 import { createDynamoLogStore } from "../../aws/game/dynamoLogStore";
@@ -42,7 +42,7 @@ import { fenceScopeOf } from "../storeResult";
 import { GameOwnershipLostError, GameRoutedError } from "../../rooms/gameOwnership";
 import { ConformanceTables, installFaults, newRunId, requireLocal } from "./dynamoLocal";
 import { FaultScript, gate } from "./faults";
-import { entries, financial, gameId, gameRecord } from "./fixtures";
+import { entries, financial, gameId, gameRecord, nextRecord } from "./fixtures";
 
 const target = dynamoLocalTargetFromEnv();
 if (target === null) {
@@ -576,5 +576,82 @@ describe("§4 the money claim sweep", () => {
     const fourth = await own.sweepMoneyClaims({ financial: reader, continues: () => true, beforeRetake: () => true, isResident: (id) => id !== gameId(21), onSwept: async (id) => void handed.push(id) });
     assert.deepEqual(fourth.claimed, [gameId(21)]);
     assert.equal(fourth.owned, 1);
+  });
+});
+
+/* ==================================================================
+    §5 THE SAME-TASK RELEASE -> RECLAIM RESIDUAL (L5-3 report §7, adjudicated)
+   ================================================================== */
+describe("§5 release, then the same task reclaims: a request of the earlier actor landing late changes nothing", () => {
+  test("every request an evicted actor's writes sent -- replayed after the release, the same task's reclaim and the successor's load, with its own token (a late duplicate) or a fresh one (a copy evaluated as new) -- is refused by its own condition or is a no-op; the successor's history and record stand", async () => {
+    const table = await tables.create("aba");
+    const a = await take(table, "pool-a", "task-a1");
+    /* Capture every TransactWriteItems the first actor's stores send (what could still be "in flight"). */
+    const sent: TransactWriteItemsCommandInput[] = [];
+    a.client.middlewareStack.add(
+      (next, context) => async (args) => {
+        if ((context as { commandName?: string }).commandName === "TransactWriteItemsCommand") sent.push(JSON.parse(JSON.stringify((args as { input: unknown }).input)) as TransactWriteItemsCommandInput);
+        return next(args);
+      },
+      { step: "initialize", name: "aba-capture" },
+    );
+    const g = gameId(31);
+    const own = createPoolGameOwnership({ client: a.client, table, writer: a.writer, timing: TIMING });
+    const records = createDynamoRecordStore({ client: a.client, table, fence: a.writer.fence, timing: TIMING });
+    const created = gameRecord(31);
+    assert.equal((await records.put(created, null)).kind, "committed", "the record's creation (pool-fenced; makes the HEAD)");
+    assert.deepEqual(await own.claim(g), { kind: "claimed" });
+    const log = createDynamoLogStore({ client: a.client, table, fence: a.writer.fence, timing: TIMING });
+    assert.equal((await log.appendBatch(g, entries(0, 2))).kind, "committed");
+    assert.equal((await log.appendBatch(g, entries(2, 1))).kind, "committed");
+    assert.equal((await records.put(nextRecord(created, 5), 1)).kind, "committed");
+    await log.appendChat(g, { id: "c-1", at: 7, principal: "p", text: "hello" } as never);
+    const writes = sent.length;
+    assert.ok(writes >= 5, `the first actor's writes were captured (${writes})`);
+
+    /* The actor is quiescent and evicted; the game is released; the SAME task (same pool, same epoch) claims it back. */
+    own.release(g);
+    await own.settled();
+    assert.equal((await readHead(admin, table, g))?.owner_pool, NO_OWNER);
+    assert.deepEqual(await own.claim(g), { kind: "claimed" });
+    assert.deepEqual([(await readHead(admin, table, g))?.owner_pool, (await readHead(admin, table, g))?.pool_epoch], ["pool-a", a.writer.epoch], "the fence value is the same again (the ABA the residual names)");
+    const successorLog = createDynamoLogStore({ client: admin, table, fence: a.writer.fence, timing: TIMING });
+    const successorRecords = createDynamoRecordStore({ client: admin, table, fence: a.writer.fence, timing: TIMING });
+    const loaded = (await successorLog.loadLog(g)).map((e) => e.id);
+    const record = await successorRecords.load(g);
+    const before = await queryAll(admin, table, gamePk(g));
+
+    /* Every earlier request lands "late": first as a duplicate (its own token), then as a copy evaluated afresh. */
+    /* This task's own CLAIMS are the one kind whose late copy may apply afresh: a claim is idempotent (it sets the HEAD to
+       exactly what it already says -- this task's pool and epoch). Every other write must be refused by its own condition. */
+    const isClaim = (input: TransactWriteItemsCommandInput) =>
+      (input.TransactItems ?? []).length === 2 && (input.TransactItems?.[0]?.ConditionCheck?.Key?.pk?.S ?? "").startsWith("POOL#") && input.TransactItems?.[1]?.Update?.Key?.sk?.S === "HEAD";
+    const claims = sent.filter(isClaim).length;
+    assert.equal(claims, 2, "the first claim and the reclaim");
+    let refusedFresh = 0;
+    for (const [at, input] of sent.entries()) {
+      await admin.send(new TransactWriteItemsCommand(input), { abortSignal: deadline() }).catch(() => undefined);
+      try {
+        await admin.send(new TransactWriteItemsCommand({ ...input, ClientRequestToken: `late-${at}-${tables.runId}` }), { abortSignal: deadline() });
+        assert.ok(isClaim(input), `a late copy of a non-claim write applied afresh (request ${at})`);
+      } catch (error) {
+        assert.equal((error as { name?: string }).name, "TransactionCanceledException", String(error));
+        refusedFresh += 1;
+      }
+    }
+    assert.equal(refusedFresh, sent.length - claims, "every late copy of a game write, evaluated afresh, is refused by its OWN condition (index, version + observed token, create-if-absent) -- the fence alone never decides");
+    assert.deepEqual(await queryAll(admin, table, gamePk(g)), before, "not one item of the game changed");
+    assert.deepEqual((await successorLog.loadLog(g)).map((e) => e.id), loaded);
+    assert.deepEqual(await successorRecords.load(g), record);
+    assert.equal((await successorLog.appendBatch(g, entries(3, 1, "next"))).kind, "committed", "the successor continues exactly where it loaded");
+
+    /* The release's own late copy (a plain conditional update: owner := none while the HEAD names this pool and epoch)
+       landing after the reclaim un-owns the game under the successor. Its next write is then refused by the fence --
+       evaluated, nothing written -- and the fenced reaction drops it; the next claim takes the game back. */
+    assert.equal(await releaseGame(admin, table, g, a.writer.fence), true, "the late release lands");
+    const refused = await successorLog.appendBatch(g, entries(4, 1, "after-late-release"));
+    assert.equal(fenceScopeOf(refused), "game", "refused by the fence, first attempt: nothing written");
+    assert.deepEqual((await successorLog.loadLog(g)).map((e) => e.id), [...loaded, "next-3"]);
+    assert.deepEqual(await own.claim(g), { kind: "claimed" });
   });
 });

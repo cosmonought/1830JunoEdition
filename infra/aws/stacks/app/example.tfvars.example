@@ -1,0 +1,46 @@
+# Copy to <env>.tfvars (not committed) and apply with the APP account's credentials:
+#   terraform init -backend-config="bucket=<state bucket>" -backend-config="key=gs/<env>/app.tfstate" -backend-config="region=<region>"
+#   terraform plan -var-file=<env>.tfvars -out=app.tfplan
+region         = "us-east-1"
+app_account_id = "111111111111"
+environment    = "staging"
+generation     = 1
+
+ledger_table_arn = "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger" # ledger stack output
+
+# null until the ledger stack has created the keys; then its signing_key_arns output:
+signing_keys = {
+  relayer    = "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111"
+  settlement = "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
+  admission  = "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333"
+}
+
+# null: no escrow. Public keys and the relayer address: `npm run awsDeploy -- signer-keys --relayer <arn> ...`.
+escrow = null
+
+network = {
+  vpc_id                  = "vpc-0123456789abcdef0"
+  task_subnet_ids         = ["subnet-0aaaaaaaaaaaaaaa1", "subnet-0aaaaaaaaaaaaaaa2"]
+  alb_subnet_ids          = ["subnet-0bbbbbbbbbbbbbbb1", "subnet-0bbbbbbbbbbbbbbb2"]
+  private_route_table_ids = ["rtb-0ccccccccccccccc1"]
+}
+
+build_id        = "2026-09-30-da317f0"
+allowed_origins = ["https://play.example.com"]
+
+pools          = { p1 = { primary = true } }
+start_services = false # true only after the bootstrap and verify
+
+alb = {
+  certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/44444444-4444-4444-8444-444444444444"
+}
+
+edge = {
+  create_distribution     = true
+  aliases                 = ["play.example.com"]
+  viewer_certificate_arn  = "arn:aws:acm:us-east-1:111111111111:certificate/55555555-5555-4555-8555-555555555555"
+  site_origin_domain_name = "site-origin.example.com"
+  alb_origin_domain_name  = "gs-origin.example.com"
+}
+
+bootstrap_trusted_principal_arns = ["arn:aws:iam::111111111111:role/deploy-pipeline"]

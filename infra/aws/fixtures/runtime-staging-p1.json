@@ -1,0 +1,13 @@
+{
+  "format": "18COSMOS/AWS-RUNTIME/v1",
+  "environment": "staging",
+  "region": "us-east-1",
+  "pool": "p1",
+  "generation": 1,
+  "game_table": "gs-staging-game-g1",
+  "identity_table": "gs-staging-identity",
+  "ledger_table_arn": "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger",
+  "escrow": {
+    "config_parameter_arn": "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend"
+  }
+}

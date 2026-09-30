@@ -16,6 +16,10 @@ A client is created only by `createDynamoDbClient(target)`, (L5-5) `createKmsCli
   `@aws-sdk/client-secrets-manager` in `awsClients.ts` and `runtime/configSource.ts` only (all four pinned exactly at
   3.1142.0), and nothing reaches into `@smithy/*`;
 - (L5-7) the AWS adapters are reached only through the runtime composition, `aws/runtime/` (§8, "The import boundary");
+- (L5-8) the deploy bootstrap and verifier, `aws/deploy/`, may read the routing (`aws/game/routing`, `gameTable`), the
+  ledger's APPGEN (`aws/ledger`), the KMS digest client (`aws/kms`) and the runtime's document loader (`aws/runtime/`
+  `awsMain`, `configSource`, `runtimeConfig`) -- never the identity adapters or the ownership layer -- and only
+  `tools/awsDeploy.ts` imports it (§9);
 - no file outside `persistence/conformance/` imports the conformance harness or its proof adapter.
 
 | Concern | Rule |
@@ -207,8 +211,8 @@ changes that need one answer unavailable; a recovery stays available); after a r
 retires its old selector, installs nothing and sends the profile to operator review (L6-4, `identity/securityEvents.ts`);
 `createFileIdentityStore` stays test-only through LIVE-5.
 
-**L5-8 (IaC)**: the identity table's TTL attribute is `ttl`; the ledger table needs `APPGEN` / `APPGEN`
-(`current_generation`) before any generation-fenced append.
+**L5-8 (IaC, done -- §9)**: the identity table's TTL attribute is `ttl` (`infra/aws/modules/app/tables.tf`); the ledger
+table's `APPGEN` / `APPGEN` (`current_generation`) is created before the first start by `npm run awsDeploy -- bootstrap`.
 
 ## 6. Ownership (L5-3): `aws/ownership/`, `aws/game/routing.ts`, `rooms/gameOwnership.ts`
 
@@ -382,7 +386,7 @@ loss or restart request during it stops it with its own exit code.
 conformance suites theirs); nothing else imports `aws/runtime/`, except `start.ts` (`storageMode` statically, `awsMain`
 dynamically). The SSM and Secrets Manager packages only in `awsClients.ts` and `configSource.ts`.
 
-**For L5-8 (IaC), what the runtime needs** (the L5-7 report, §14, has the complete contract): the three tables (game with the
+**For L5-8 (IaC), what the runtime needs** (the L5-7 report, §14, has the complete contract; L5-8 built it -- §9): the three tables (game with the
 generation in its name, identity with TTL `ttl`, ledger in the ledger account with APPGEN initialised to the document's
 `generation`); `SYSTEM/ROUTING` naming the primary pool before its first task starts; the two SSM `String` parameters; the
 three KMS keys; the task role (DynamoDB, KMS, SSM read) and no static credentials; the container on `0.0.0.0:$PORT`
@@ -391,3 +395,20 @@ reached only from the ALB; the ALB target health check `/gs/readyz`, the contain
 
 Run: `npm test` includes `aws/runtime/l5_7AwsRuntime.test.js`; `npm run test:dynamodb-local` includes
 `persistence/conformance/awsRuntime.dynamoLocal.test.js` (the runtime over the real substrate).
+
+## 9. The infrastructure and the deploy bootstrap (L5-8): `infra/aws/`, `aws/deploy/`
+
+**Defined and tested; nothing deployed.** The runbook -- accounts, resources, IAM, the deploy order, the rollout, the
+verifier, secrets, the owner prerequisites -- is `infra/aws/README.md`; the record is the L5-8 report
+(`claude/LIVE5_L5_8_AWS_INFRASTRUCTURE_2026-09-30.md`). What changed for this convention:
+
+| File | What it is |
+|---|---|
+| `deploy/bootstrap.ts` | APPGEN (`{schema 1, current_generation N}`, create-if-absent) and SYSTEM/ROUTING (L5-3's `setPrimaryPool`, create-if-absent): inspect both, refuse the whole bootstrap on any incompatible or unreadable record, never reset, settle a lost answer by reading back |
+| `deploy/deployVerify.ts` | The read-only checks: the documents (through `loadAwsStartup`), the tables, APPGEN / routing, the KMS keys, and the control-plane evidence (pure checks over AWS CLI JSON -- no ECS / ELB / CloudFront / EC2 SDK in the server) |
+| `deploy/commands.ts`, `deploy/wiring.ts`, `../tools/awsDeploy.ts` | `npm run awsDeploy -- bootstrap | verify | signer-keys`; the production ports are the runtime's own (`ssmParameterSource`, `kmsDigestClient`), the clients `awsClients.ts`'s |
+
+The task's environment, the task role's action list, the two documents and the edge requirement are exactly §8's; the
+Terraform module tests assert them (`infra/aws/modules/*/tests`), and `deploy/l5_8Deploy.test.ts` feeds the rendered
+documents (`infra/aws/fixtures`) to the runtime's parsers. Run: `npm test` includes `aws/deploy/l5_8Deploy.test.js`;
+`npm run test:dynamodb-local` includes `persistence/conformance/awsBootstrap.dynamoLocal.test.js`.

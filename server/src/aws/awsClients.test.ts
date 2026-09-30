@@ -273,16 +273,23 @@ describe("L5-1 AWS client convention", () => {
         if (name.startsWith(".")) {
           const target = path.relative(root, path.resolve(path.dirname(file), name)).split(path.sep).join("/");
           const composer = relative.startsWith("aws/ownership/");
+          /* LIVE-5 L5-8: the deploy bootstrap and verifier (`aws/deploy/`) read what the runtime reads, with its code: the
+             routing and APPGEN (L5-3's `setPrimaryPool` / `readRouting`, L5-5's `readAdoptedGeneration`), the documents
+             (`loadAwsStartup`, `ssmParameterSource`) and the KMS digest client. It never imports the identity adapters or
+             the ownership layer, and only its CLI (`tools/awsDeploy.ts`) imports it. */
+          const deploy = relative.startsWith("aws/deploy/");
           const allowed = (dir: string, also: boolean) => relative.startsWith(`${dir}/`) || also || runtime || conformance.test(relative);
-          if (under(target, "aws/game") && !allowed("aws/game", composer)) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/game") && !allowed("aws/game", composer || (deploy && (target === "aws/game/routing" || target === "aws/game/gameTable")))) offenders.push(`${relative}: imports the game-table adapters (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/identity") && !allowed("aws/identity", composer)) offenders.push(`${relative}: imports the identity adapters (${name}) outside the L5-7 runtime`);
           if (under(target, "aws/ownership") && !allowed("aws/ownership", false)) offenders.push(`${relative}: imports the ownership layer (${name}) outside the L5-7 runtime`);
-          if (under(target, "aws/ledger") && !allowed("aws/ledger", composer)) offenders.push(`${relative}: imports the signing ledger (${name}) outside the L5-7 runtime`);
-          if (under(target, "aws/kms") && !allowed("aws/kms", false)) offenders.push(`${relative}: imports the KMS binding (${name}) outside the L5-7 runtime`);
-          if (under(target, "aws/runtime") && !runtime && !conformance.test(relative) && !(relative === "start.ts" && (target === "aws/runtime/storageMode" || target === "aws/runtime/awsMain"))) {
+          if (under(target, "aws/ledger") && !allowed("aws/ledger", composer || deploy)) offenders.push(`${relative}: imports the signing ledger (${name}) outside the L5-7 runtime`);
+          if (under(target, "aws/kms") && !allowed("aws/kms", deploy)) offenders.push(`${relative}: imports the KMS binding (${name}) outside the L5-7 runtime`);
+          const deployReadsRuntime = deploy && ["aws/runtime/awsMain", "aws/runtime/configSource", "aws/runtime/runtimeConfig"].includes(target);
+          if (under(target, "aws/runtime") && !runtime && !conformance.test(relative) && !deployReadsRuntime && !(relative === "start.ts" && (target === "aws/runtime/storageMode" || target === "aws/runtime/awsMain"))) {
             offenders.push(`${relative}: imports the AWS runtime (${name}); only start.ts reaches it (the storage mode, and the AWS entry)`);
           }
-        } else if (/(^|\/)aws\/(game|identity|ownership|ledger|kms|runtime)(\/|$)/.test(name)) offenders.push(`${relative}: imports an AWS module by a non-relative path (${name})`);
+          if (under(target, "aws/deploy") && !deploy && !conformance.test(relative) && relative !== "tools/awsDeploy.ts") offenders.push(`${relative}: imports the deploy tool (${name}); only tools/awsDeploy.ts does`);
+        } else if (/(^|\/)aws\/(game|identity|ownership|ledger|kms|runtime|deploy)(\/|$)/.test(name)) offenders.push(`${relative}: imports an AWS module by a non-relative path (${name})`);
       }
     }
     assert.deepEqual(offenders, []);

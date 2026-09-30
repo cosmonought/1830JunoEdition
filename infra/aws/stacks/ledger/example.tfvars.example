@@ -1,0 +1,12 @@
+# Copy to <env>.tfvars (not committed) and apply with the LEDGER account's credentials:
+#   terraform init -backend-config="bucket=<state bucket>" -backend-config="key=gs/<env>/ledger.tfstate" -backend-config="region=<region>"
+#   terraform plan -var-file=<env>.tfvars -out=ledger.tfplan
+region            = "us-east-1"
+ledger_account_id = "222222222222"
+environment       = "staging"
+app_account_id    = "111111111111" # equal to ledger_account_id for the single-account form
+
+backup = {
+  retention_days  = 35
+  vault_lock_mode = "governance" # "compliance" (+ changeable_for_days >= 3) is irreversible: an owner decision
+}

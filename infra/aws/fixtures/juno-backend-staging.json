@@ -1,0 +1,52 @@
+{
+  "format": "18COSMOS/JUNO-BACKEND/v3",
+  "chain_id": "uni-7",
+  "network_class": "testnet",
+  "rest_endpoints": [
+    "https://juno-testnet-rest.example.net"
+  ],
+  "contract_address": "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5",
+  "code_checksum": "5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8",
+  "wasm_admin": null,
+  "denom": "ujunox",
+  "asset_symbol": "JUNOX",
+  "relayer": {
+    "address": "juno1xc5etfhxjg4qfc9cx25qh3tvxdcf5skjj5epte",
+    "signer": {
+      "kind": "kms",
+      "key_ref": "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111"
+    }
+  },
+  "settlement_key": {
+    "signer_key_id": 1,
+    "public_key_hex": "03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a",
+    "signer": {
+      "kind": "kms",
+      "key_ref": "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
+    }
+  },
+  "admission_key": {
+    "public_key_hex": "03f28773c2d975288bc7d1d205c3748651b075fbc6610e58cddeeddf8f19405aa8",
+    "signer": {
+      "kind": "kms",
+      "key_ref": "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333"
+    },
+    "ttl_secs": 600
+  },
+  "trust": {
+    "operators": [
+      "juno1xc5etfhxjg4qfc9cx25qh3tvxdcf5skjj5epte"
+    ],
+    "resolvers": [
+      "juno1wfk5fda0sg5z2lqrpwh7wexnckpe6hqzljkt4v"
+    ],
+    "min_challenge_window_secs": "3600",
+    "min_liveness_window_secs": "3600",
+    "min_resolver_timeout_secs": "3600"
+  },
+  "journal": {
+    "kind": "dynamodb",
+    "table_arn": "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"
+  },
+  "timeout_blocks": 60
+}

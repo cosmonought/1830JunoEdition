@@ -1,0 +1,15 @@
+# Terraform working state and operator inputs never enter git (the lock files do).
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# Evidence captures are per deployment (read-only JSON; still not source).
+evidence/

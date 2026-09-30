@@ -1,0 +1,76 @@
+output "game_table_name" {
+  value = aws_dynamodb_table.game.name
+}
+
+output "identity_table_name" {
+  value = aws_dynamodb_table.identity.name
+}
+
+output "primary_pool" {
+  description = "The pool the bootstrap names in SYSTEM/ROUTING (and the only one behind the ALB)."
+  value       = local.primary_pool
+}
+
+output "runtime_parameter_arns" {
+  description = "Per pool: GS_AWS_CONFIG_PARAMETER, and the bootstrap's / verifier's --runtime-parameter."
+  value       = local.runtime_parameter_arn
+}
+
+output "juno_parameter_arn" {
+  value = local.escrow_enabled ? local.juno_parameter_arn : null
+}
+
+output "role_arns" {
+  value = {
+    task      = aws_iam_role.task.arn
+    execution = aws_iam_role.execution.arn
+    bootstrap = aws_iam_role.bootstrap.arn
+  }
+}
+
+output "ecr_repository_url" {
+  description = "Push the image as <url>:<build_id> before starting the services (tags are immutable)."
+  value       = aws_ecr_repository.server.repository_url
+}
+
+output "cluster_name" {
+  value = aws_ecs_cluster.this.name
+}
+
+output "service_names" {
+  value = { for id, _ in var.pools : id => "${local.prefix}-${id}" }
+}
+
+output "task_definition_families" {
+  value = { for id, _ in var.pools : id => aws_ecs_task_definition.pool[id].family }
+}
+
+output "security_group_ids" {
+  value = { alb = aws_security_group.alb.id, task = aws_security_group.task.id }
+}
+
+output "alb_dns_name" {
+  description = "Point edge.alb_origin_domain_name (a name the ALB certificate covers) at this."
+  value       = aws_lb.this.dns_name
+}
+
+output "load_balancer_arn" {
+  value = aws_lb.this.arn
+}
+
+output "target_group_arn" {
+  value = aws_lb_target_group.primary.arn
+}
+
+output "origin_request_policy_id" {
+  description = "Attach to the /gs* behaviour of an existing distribution (with the managed CachingDisabled cache policy)."
+  value       = aws_cloudfront_origin_request_policy.gs.id
+}
+
+output "caching_disabled_policy_id" {
+  value = local.caching_disabled_policy_id
+}
+
+output "distribution_id" {
+  value = var.edge.create_distribution ? aws_cloudfront_distribution.site[0].id : null
+}

@@ -165,13 +165,18 @@ describe("L5-1 AWS client convention", () => {
         if (/(^|\/)conformance\//.test(name) && relative.startsWith("persistence/") && !conformance.test(relative)) offenders.push(`${relative}: imports ${name}`);
         /* LIVE-5 L5-2: the game-table adapters are NOT wired into the server yet (L5-7 owns the AWS wiring): only they
            themselves and the conformance suites may import them. L5-7 lifts this rule for `start.ts`, deliberately. Every
-           relative import is RESOLVED against its file, so no spelling (`../../game/x`, `./aws/game`) slips past. */
+           relative import is RESOLVED against its file, so no spelling (`../../game/x`, `./aws/game`) slips past.
+           LIVE-5 L5-4 (at integration): the same rule for the identity adapters (`aws/identity`). */
         if (name.startsWith(".")) {
           const target = path.relative(root, path.resolve(path.dirname(file), name)).split(path.sep).join("/");
           if ((target === "aws/game" || target.startsWith("aws/game/")) && !relative.startsWith("aws/game/") && !conformance.test(relative)) {
             offenders.push(`${relative}: imports the game-table adapters (${name}) before L5-7 wires them`);
           }
+          if ((target === "aws/identity" || target.startsWith("aws/identity/")) && !relative.startsWith("aws/identity/") && !conformance.test(relative)) {
+            offenders.push(`${relative}: imports the identity adapters (${name}) before L5-7 wires them`);
+          }
         } else if (/(^|\/)aws\/game(\/|$)/.test(name)) offenders.push(`${relative}: imports the game-table adapters by a non-relative path (${name})`);
+        else if (/(^|\/)aws\/identity(\/|$)/.test(name)) offenders.push(`${relative}: imports the identity adapters by a non-relative path (${name})`);
       }
     }
     assert.deepEqual(offenders, []);

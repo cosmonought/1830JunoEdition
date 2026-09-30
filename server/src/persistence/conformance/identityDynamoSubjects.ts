@@ -23,6 +23,25 @@ export const IMMEDIATE = async (): Promise<void> => undefined;
 export const QUIET = (): void => undefined;
 /** The adapter's resends of an unknown outcome in these suites (its default). */
 export const RESENDS = 3;
+/** A grant write's resends (review F4: one). */
+export const GRANT_RESENDS = 1;
+/** The security-event journal's resends (its default). */
+export const JOURNAL_RESENDS = 3;
+
+/** L5-2's `inject-unevaluated`, joined by the L5-4 subjects at integration: the next write's attempt -- `landed` (its
+ *  answer lost) or not (unsent) -- and each of the store's `resends` time out unsent; reads still work, so the store
+ *  settles what it can see: visible -> written, invisible -> UNKNOWN. */
+function unevaluatedHook(resends: number) {
+  return (ctx: CaseContext, landed: boolean): void => {
+    ctx.faults.add({
+      op: "TransactWriteItemsCommand",
+      nth: 1,
+      action: landed ? { kind: "lose-answer" } : { kind: "fail", code: "TimeoutError" },
+      label: landed ? "the write lands, its answer is lost" : "the write times out before it is sent",
+    });
+    for (let n = 2; n <= resends + 1; n += 1) ctx.faults.add({ op: "TransactWriteItemsCommand", nth: n, action: { kind: "fail", code: "TimeoutError" }, label: `resend ${n - 1} times out unsent` });
+  };
+}
 
 export interface DynamoSuite {
   readonly target: { readonly kind: "dynamodb-local"; readonly endpoint: string };
@@ -188,12 +207,14 @@ export function identitySubjects(suite: DynamoSuite, overrides: Partial<DynamoId
     });
   };
   const hooks = transactionHooks();
-  const capabilities = ["durable", "fence", "fence-in-write", "plant", "stall-write", "idempotency-token", "inject-lost-answer", "inject-transient-failure", "validates-shape"] as const;
+  const capabilities = ["durable", "fence", "fence-in-write", "plant", "stall-write", "idempotency-token", "inject-lost-answer", "inject-transient-failure", "inject-unevaluated", "validates-shape"] as const;
 
   const identity: IdentitySubject = {
     name: "dynamodb-local (createDynamoIdentityStore)",
     backend: "dynamodb",
-    capabilities: [...capabilities, "inject-unresolved"],
+    /* `cas-in-write` (L5-2): every precondition of a change is a condition of its own write (the L5-4 properties judge 700
+       random changes by the table's conditions alone). */
+    capabilities: [...capabilities, "cas-in-write", "inject-unresolved"],
     open,
     async stored(ctx) {
       const { table } = await tableOf(ctx);
@@ -207,12 +228,16 @@ export function identitySubjects(suite: DynamoSuite, overrides: Partial<DynamoId
       await suite.admin.send(new PutItemCommand({ TableName: table, Item: { ...session, expires_at: { S: "soon" } } }), { abortSignal: deadline() });
     },
     ...hooks,
+    armUnevaluated: unevaluatedHook(RESENDS),
   };
 
   const grants: GrantSubject = {
     name: "dynamodb-local (createDynamoIdentityStore().grants)",
     backend: "dynamodb",
     capabilities: [...capabilities],
+    exemptions: {
+      "cas-in-write": "a grant write has no condition of its own: it replaces the session's grant whole (the newer grant is the one that counts, OD-5-4), under the role fence inside the write (GRANT-07, GRANT-08)",
+    },
     async open(ctx) {
       return (await open(ctx)).grants;
     },
@@ -231,6 +256,7 @@ export function identitySubjects(suite: DynamoSuite, overrides: Partial<DynamoId
     armLostAnswer: hooks.armLostAnswer,
     armTransientFailure: hooks.armTransientFailure,
     writeTokens: hooks.writeTokens,
+    armUnevaluated: unevaluatedHook(GRANT_RESENDS),
   };
   return { identity, grants, tableOf };
 }
@@ -270,7 +296,8 @@ export function securitySubject(suite: DynamoSuite): SecuritySubject {
   return {
     name: "dynamodb-local (createDynamoSecurityJournal)",
     backend: "dynamodb",
-    capabilities: ["durable", "fence", "fence-in-write", "plant", "stall-write", "idempotency-token", "inject-lost-answer", "inject-transient-failure", "validates-shape"],
+    /* `cas-in-write` (L5-2): an event is created if absent inside its own write (first writer wins, SEC-02). */
+    capabilities: ["durable", "fence", "fence-in-write", "cas-in-write", "plant", "stall-write", "idempotency-token", "inject-lost-answer", "inject-transient-failure", "inject-unevaluated", "validates-shape"],
     async open(ctx) {
       const { table, client } = await tableOf(ctx);
       return createDynamoSecurityJournal(client, table, { generation: ctx.fence.epoch, sleep: IMMEDIATE, pageSize: 2 });
@@ -292,5 +319,6 @@ export function securitySubject(suite: DynamoSuite): SecuritySubject {
     armTransientFailure: hooks.armTransientFailure,
     writeTokens: hooks.writeTokens,
     armUnknownThenStallResend: hooks.armUnknownThenStallResend,
+    armUnevaluated: unevaluatedHook(JOURNAL_RESENDS),
   };
 }

@@ -35,6 +35,9 @@ export interface IdentitySubject extends SubjectBase {
   writeTokens?(ctx: CaseContext): string[];
   /** LIVE-5 L5-4 ("inject-unresolved"): the next commit's outcome stays unknown however the store retries it. */
   armUnresolvedWrite?(ctx: CaseContext): void;
+  /** L5-2's "inject-unevaluated" (joined by L5-4 at integration): the next commit's attempt -- having `landed` or not --
+   *  and every resend fail before the store has evaluated them, while reads still work. */
+  armUnevaluated?(ctx: CaseContext, landed: boolean): void;
 }
 
 const isDefinite = (error: unknown) => error instanceof Error && error.name === "StoreDefiniteError";
@@ -497,6 +500,32 @@ export const IDENTITY_CASES: readonly ConformanceCase<IdentitySubject>[] = [
       assert.deepEqual(await subject.stored(ctx), before);
     },
   },
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<IdentitySubject> => ({
+      id: `ID-21-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "a commit whose every resend went unevaluated, and which IS stored, is reported committed"
+        : "a commit whose every resend went unevaluated, and which is NOT visible, is UNKNOWN -- never 'nothing was written'",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const { store, set } = await seededIdentity(subject, ctx);
+        const extra = anotherSession(set, "unevaluated");
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, landed);
+        const outcome = await store.commit({ expect: [{ kind: "session-absent", session_id: extra.session_id }], sessions: [extra] }).then(
+          () => "committed",
+          (error: unknown) => (isDefinite(error) ? "definite" : "unknown"),
+        );
+        const stored = (await (await subject.open(ctx)).load()).sessions.some((session) => session.session_id === extra.session_id);
+        if (landed) {
+          assert.equal(outcome, "committed");
+          assert.equal(stored, true);
+        } else {
+          assert.equal(outcome, "unknown", "an unevaluated write that is not visible is never reported as nothing written");
+          assert.equal(stored, false);
+        }
+      },
+    }),
+  ),
 ];
 
 /* ================================================================== */

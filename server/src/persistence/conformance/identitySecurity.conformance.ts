@@ -27,6 +27,9 @@ interface SecuritySubjectHooks {
   armTransientFailure?(ctx: CaseContext): void;
   writeTokens?(ctx: CaseContext): string[];
   armUnknownThenStallResend?(ctx: CaseContext, landed: boolean): Gate;
+  /** L5-2's "inject-unevaluated" (joined by L5-4 at integration): the next write's attempt -- having `landed` or not --
+   *  and every resend fail before the store has evaluated them, while reads still work. */
+  armUnevaluated?(ctx: CaseContext, landed: boolean): void;
 }
 
 /* ================================================================== */
@@ -219,6 +222,31 @@ export const GRANT_CASES: readonly ConformanceCase<GrantSubject>[] = [
       await rejection(store.live(T0));
     },
   },
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<GrantSubject> => ({
+      id: `GRANT-13-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "a put whose every resend went unevaluated, and which IS stored, is reported written"
+        : "a put whose every resend went unevaluated, and which is NOT visible, is UNKNOWN -- never 'nothing was written'",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const store = await subject.open(ctx);
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, landed);
+        const outcome = await store.put(grantOf(1)).then(
+          () => "written",
+          (error: unknown) => (isDefinite(error) ? "definite" : "unknown"),
+        );
+        const stored = await (await subject.open(ctx)).get(grantOf(1).session_id);
+        if (landed) {
+          assert.equal(outcome, "written");
+          assert.deepEqual(stored, grantOf(1));
+        } else {
+          assert.equal(outcome, "unknown", "an unevaluated write that is not visible is never reported as nothing written");
+          assert.equal(stored, null);
+        }
+      },
+    }),
+  ),
 ];
 
 /* ================================================================== */
@@ -445,4 +473,30 @@ export const SEC_CASES: readonly ConformanceCase<SecuritySubject>[] = [
       await rejection(journal.eventsOf(events[0].principal_id));
     },
   },
+  ...([true, false] as const).map(
+    (landed): ConformanceCase<SecuritySubject> => ({
+      id: `SEC-11-${landed ? "landed" : "unlanded"}`,
+      title: landed
+        ? "an append whose every resend went unevaluated, and which IS stored, is reported recorded"
+        : "an append whose every resend went unevaluated, and which is NOT visible, is UNKNOWN -- never 'nothing was written'",
+      needs: ["inject-unevaluated", "durable"],
+      async run(subject, ctx) {
+        const journal = await subject.open(ctx);
+        const [event] = eventsOf(1);
+        hook(subject.armUnevaluated, "armUnevaluated")(ctx, landed);
+        const outcome = await journal.append(event).then(
+          () => "recorded",
+          (error: unknown) => (isDefinite(error) ? "definite" : "unknown"),
+        );
+        const stored = await (await subject.open(ctx)).eventsOf(event.principal_id);
+        if (landed) {
+          assert.equal(outcome, "recorded");
+          assert.deepEqual(stored, [event]);
+        } else {
+          assert.equal(outcome, "unknown", "an unevaluated write that is not visible is never reported as nothing written");
+          assert.deepEqual(stored, []);
+        }
+      },
+    }),
+  ),
 ];

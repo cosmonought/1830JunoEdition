@@ -1,4 +1,4 @@
-# AWS clients, DynamoDB Local and the game table — the LIVE-5 convention
+# AWS clients, DynamoDB Local, the game table and identity — the LIVE-5 convention
 
 LIVE-5 L5-1 set this up so that every later LIVE-5 slice uses one convention. L5-2 (the game table), L5-4 (identity),
 L5-5 (the ledger and KMS) and L5-7 (the AWS wiring) all follow it; none of them should pick its own.
@@ -73,9 +73,11 @@ Add the adapter as a **subject** (`backend: "dynamodb"`) of its port's existing 
 - Put any intentional difference in `differences`, with a reason, where review can see it.
 
 Every port has a "fence inside the write" case: a takeover landing between the writer's own checks and the write must
-still refuse the write. The cases are LOG-20, REC-18, HOLD-12, FIN-11, INT-12, TKT-11, ID-14 and JNL-12. The file
-stores fail them, because they check their fence before writing (F-L5-4). `fenceGap.test.ts` pins that per port, which
-also proves each case detects a check-then-write store.
+still refuse the write. The cases are LOG-20, REC-18, HOLD-12, FIN-11, INT-12, TKT-11, ID-14 and JNL-12, and L5-4's
+ID-20-takeover-during-step. The file stores fail them, because they check their fence before writing (F-L5-4).
+`fenceGap.test.ts` pins that per port, which also proves each case detects a check-then-write store. L5-4's two new ports
+have theirs too (GRANT-08, SEC-06); they have no file store, so only their DynamoDB subjects run them and nothing is
+pinned.
 
 The one DynamoDB adapter in L5-1, `dynamoProofFinancialStore.ts`, is a **proof only**, for the harness. It is not
 production code and not the L5-2 design.
@@ -147,6 +149,14 @@ the plan the store reads its role strongly, then runs the caller's step (the ser
 writes. A change the store refuses first leaves no event; a write refused after the event leaves it unconfirmed (the
 service appends a `confirmed` event after each committed change). A load also checks the role (a stale epoch is fenced at
 once), a takeover writes only a task/pool/time the role codec reads back, and a grant write is one resend, 2 s a call.
+
+**Conformance, with L5-2's rules** (added at integration): the three DynamoDB subjects -- the identity store, its
+grants, the security-event journal -- declare L5-2's `inject-unevaluated` (cases ID-21, GRANT-13, SEC-11: visible →
+written, invisible → UNKNOWN). The identity store and the journal declare `cas-in-write` (their own conditions are inside
+the write); the grants subject exempts it with its reason (a grant write has no condition of its own). No identity-side
+race case exercises `cas-in-write` yet: the L5-4 properties (A: 700 random changes judged by the table's conditions
+alone) are that evidence. **Not wired**: like `aws/game`, nothing outside `aws/identity` and the conformance suites may
+import these adapters (`awsClients.test.ts`); L5-7 lifts the rule deliberately.
 
 **What L5-7 wires** (nothing in `start.ts` uses these yet):
 - take the role (`takeOverIdentityWriter`, with L5-3's `SYSTEM/ROUTING` and `POOL#` checks), then `load` -- never the

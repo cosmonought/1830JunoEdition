@@ -45,6 +45,8 @@ import { cityForArrival, stopForArrival, type StationToken } from "./trackReach"
 // Design note #1023: the same shut-city predicate the network walk and the auto-tracer already ask.
 import { cityShutAt } from "./cityBypass";
 import type { CityBlocker } from "./cityBlocking";
+// Route v12 R12-4: the exact search every v12 board asks instead of the heuristic below.
+import { exactRouteSet, type ExactSearchStats } from "./routeExactSearch";
 import {
   neighbourAcross,
   segmentsTouchingEdge,
@@ -1135,6 +1137,22 @@ export function autoTraceRoute(input: AutoTraceInput): AutoTraceResult {
   if (input.startHexes.length === 0) {
     return { path: [], revenue: 0, segments: new Set(), reason: NO_TOKEN_REASON };
   }
+  /* Route v12 R12-4: on a v12 board, the EXACT best route for this one train, off the track `excludeSegments` holds. */
+  if (routeRulesV12InEffect()) {
+    const exact = exactRouteSet({
+      mapGrid: input.mapGrid,
+      era: input.era,
+      tokens: input.startHexes,
+      companyId: input.companyId,
+      blocksThrough: input.blocksThrough ?? NEVER_BLOCKED,
+      barredHexes: barredHexesOf(input),
+      trains: [{ trainIndex: 0, maxRevenueCentres: input.maxRevenueCentres }],
+      occupied: input.excludeSegments,
+    });
+    const chosen = exact.assignments[0];
+    if (!chosen) return { path: [], revenue: 0, segments: new Set(), reason: NO_ROUTE_REASON };
+    return { path: chosen.route.path, revenue: chosen.route.revenue, segments: new Set(chosen.segments), reason: null };
+  }
   const best = candidateRoutes(input)[0];
   if (!best || best.path.length < 2) {
     return { path: [], revenue: 0, segments: new Set(), reason: NO_ROUTE_REASON };
@@ -1182,6 +1200,8 @@ export interface RouteSetResult {
   totalRevenue: number;
   /** Set when NOTHING could be drafted for any train. */
   reason: string | null;
+  /** Route v12 R12-4: on a v12 board, the exact search's own counts (candidates, states, time). Absent pre-v12. */
+  exact?: ExactSearchStats;
 }
 
 export function assignRouteSet(input: RouteSetInput): RouteSetResult {
@@ -1191,6 +1211,37 @@ export function assignRouteSet(input: RouteSetInput): RouteSetResult {
   }
   if (trains.length === 0) {
     return { assignments: [], totalRevenue: 0, reason: NO_ROUTE_REASON };
+  }
+
+  /* ==================================================================
+      ROUTE v12 R12-4: ON A v12 BOARD THE SET IS THE EXACT MAXIMUM, NOT THE BEST OF THREE HEURISTICS
+     ==================================================================
+     Everything below this block -- per-token arms, top-N candidates, the path leash, the expansion budget, the
+     sequential / reversed / joint plans and the fill pass -- is the pre-v12 search, and it stays exactly as it was for
+     a pre-v12 board (the unpinned development corpus replays its demonstrations unchanged). A v12 board asks
+     `routeExactSearch.ts`: every route the authority's walk accepts, then the best compatible set, proved exact there.
+     Every production consumer comes through here -- the S6-3 demonstration and the skip refusal (`maxRouteRevenueFor`),
+     the auto-skip, the forced-purchase probe (`hasLegalRouteFor`), the shell's Auto Route and its figures -- so no
+     path can see the exact maximum while another still reads the heuristic. */
+  if (routeRulesV12InEffect()) {
+    const exact = exactRouteSet({
+      mapGrid,
+      era,
+      tokens: startHexes,
+      companyId: input.companyId,
+      blocksThrough: blocksThrough ?? NEVER_BLOCKED,
+      barredHexes: barredHexesOf(input),
+      trains,
+    });
+    if (exact.assignments.length === 0) {
+      return { assignments: [], totalRevenue: 0, reason: NO_ROUTE_REASON, exact: exact.stats };
+    }
+    return {
+      assignments: exact.assignments.map(({ trainIndex, route }) => ({ trainIndex, path: route.path, revenue: route.revenue })),
+      totalRevenue: exact.total,
+      reason: null,
+      exact: exact.stats,
+    };
   }
 
   /** R12-2: a choice carries its track -- the walk's own sections -- so the set is disjoint in the authority's terms. */

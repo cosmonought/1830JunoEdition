@@ -626,7 +626,8 @@ const hexCoordsByLabel = boardMemo(
    in particular", which is every pre-#1302 caller and every hex without a herald -- unchanged.
    THE OWNER MAY DECLINE IT: "on subsequent rounds PRR can opt not to include it". A waypoint carrying
    `bypass: true` is already how a route says "passed, not counted" (#737), and it means exactly that here. */
-function heraldValueFor(hexLabel: string, forCompanyId: number | undefined): number | null {
+/** Exported for the R12-4 exact route search, which prices a route point by point with this function's own answer. */
+export function heraldValueFor(hexLabel: string, forCompanyId: number | undefined): number | null {
   if (forCompanyId === undefined) return null;
   const herald = heraldAt(hexLabel);
   return herald && herald.companyId === forCompanyId ? herald.revenue : null;

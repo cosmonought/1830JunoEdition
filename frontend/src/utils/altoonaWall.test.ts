@@ -94,7 +94,9 @@ describe("the auto-tracer treats the bow as part of the wall", () => {
     /* THE CONTROL. If the tracer cannot reach H12 even unblocked, the case below proves nothing about
        blocking -- it would just be a board this fixture cannot route on. */
     const result = traceFromH14(undefined);
-    expect(result.path.map((point) => point.hexLabel)).toEqual(["H14", "H12", "H10"]);
+    /* R12-4: the same rail as H14>H12>H10, read from its other end -- the exact search returns, among equal
+       routes, the one whose waypoint text sorts first (its documented tie-break). */
+    expect(result.path.map((point) => point.hexLabel)).toEqual(["H10", "H12", "H14"]);
     expect(result.revenue).toBe(50);
   });
 
@@ -107,7 +109,7 @@ describe("the auto-tracer treats the bow as part of the wall", () => {
        On the reported board this showed up as "the auto-route did not select the highest value route". It was
        not choosing badly; it was choosing from a board with a wall across the middle of it. */
     const blocked = traceFromH14(BLOCKS_H12);
-    expect(blocked.path.map((point) => point.hexLabel)).toEqual(["H14", "H12", "H10"]);
+    expect(blocked.path.map((point) => point.hexLabel)).toEqual(["H10", "H12", "H14"]); // R12-4 tie-break (above)
   });
 
   it("prices the forced crossing as a bypass, not as a stop", () => {
@@ -162,7 +164,7 @@ describe("the bow costs no stop, so a full train may still cross it (design note
 
   it("REGRESSION: a 2-train crosses rather than stopping on the $10", () => {
     const run = traceWith(2, BLOCKS_H12);
-    expect(run.path.map((point) => point.hexLabel)).toEqual(["H14", "H12", "H10"]);
+    expect(run.path.map((point) => point.hexLabel)).toEqual(["H10", "H12", "H14"]); // R12-4 tie-break: text order among equals
     expect(run.revenue).toBe(40);
   });
 

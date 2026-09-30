@@ -73,7 +73,8 @@ import { stationTokensOf } from "./trackReach";
 import { reachForDrafting } from "./trainReach";
 /* Route v12 R12-2: the demonstrated set is judged by the reducer's own composite before it is returned. A cycle with
    `routeAuthority.ts` (which asks `maxRouteRevenueFor` for its shortfall), used only inside functions. */
-import { evaluateRouteSet } from "./routeAuthority";
+import { evaluateRouteSet, trainCapacityFor } from "./routeAuthority";
+import { RouteSearchInconsistencyError } from "./routeExactSearch";
 import { assignRouteSet } from "./routeAutoTrace";
 import { cityBlockerFor } from "./cityBlocking";
 import { barredHexesFor } from "./kanawhaLicense";
@@ -525,12 +526,17 @@ export function maxRouteRevenueFor(
       (a, b) => (rank(a.model) < 0 ? 99 : rank(a.model)) - (rank(b.model) < 0 ? 99 : rank(b.model)),
     );
   if (roster.length === 0) return 0;
+  /* ROUTE v12 R12-4: ONLY A TRAIN THE AUTHORITY WILL LET RUN IS OFFERED A ROUTE. `evaluateRouteSet` refuses a slot
+     whose model no catalog prices, so on a v12 board such a slot is left idle here rather than handed a Diesel's
+     reach (`reachForDrafting(undefined)`) and a route the set judge would then refuse. Pre-v12 keeps its roster. */
+  const runnable = routeRulesV12InEffect() ? roster.filter((train) => trainCapacityFor(train.model) !== null) : roster;
+  if (runnable.length === 0) return 0;
   const result = routeSearchFor(
     state,
     companyId,
     mapGrid,
     startHexes,
-    roster.map((train) => ({
+    runnable.map((train) => ({
       trainIndex: train.trainIndex,
       /* #881: THE SIXTH SITE, found by the harness's own "no bare 999 / no `?? 4`" assertion -- which is the
          argument for asserting an absence across a file rather than checking the call sites you happen to
@@ -540,25 +546,28 @@ export function maxRouteRevenueFor(
     era,
   );
   // R12-2: on a v12 board (every pinned one) the demonstration is judged by the authority before it is returned.
-  return routeRulesV12InEffect() ? demonstrableTotal(state, companyId, mapGrid, era, result.assignments) : result.totalRevenue;
+  return routeRulesV12InEffect() ? demonstrableTotal(state, companyId, mapGrid, era, result.assignments, result.totalRevenue) : result.totalRevenue;
 }
 
 /* ==================================================================
-    ROUTE v12 R12-2: THE DEMONSTRATION IS ONE THE AUTHORITY ACCEPTS, OR IT IS NOT MADE
+    ROUTE v12 R12-2 / R12-4: THE DEMONSTRATION IS ONE THE AUTHORITY ACCEPTS, OR IT IS NOT MADE
    ==================================================================
    `maxRouteRevenueFor` is the machine's "another player can demonstrate" (S6-3): a submitted set worth less is
    refused, and a corporation with a positive figure may not skip. So the figure must be one a legal set REACHES.
-   The search now asks the authority's own walk of every candidate (`routeAutoTrace.ts`), and the set is put here to
-   the whole composite the reducer applies -- `evaluateRouteSet`: the walk of every route (Coal River included), the
-   train each runs, and no two routes on one section of track. If it were ever refused, the demonstration fails
-   CLOSED: it falls back to the best single route the authority accepts alone, never to the refused figure. A lower
-   demonstration is always safe (S6-3 is a lower bound); a higher one than any legal set strands the corporation. */
+   R12-4: on a v12 board the search is EXACT (`routeExactSearch.ts`) -- every route the authority's walk accepts, then
+   the best compatible set, each chosen route re-judged by the walk -- so its figure is the true maximum, and the set
+   is put here to the whole composite the reducer applies -- `evaluateRouteSet`: the walk of every route (Coal River
+   included), the train each runs, and no two routes on one section of track. A refusal here would mean the exact
+   search and the authority disagree: a defect. It is RAISED (`RouteSearchInconsistencyError`), never papered over
+   with a smaller figure -- R12-2's fall-back to the best single route was a lower bound, and R12-4 removed every
+   lower bound from the v12 demonstration. */
 function demonstrableTotal(
   state: GameStateResponse,
   companyId: number,
   mapGrid: MapGridResponse,
   era: TileColorTier | undefined,
   assignments: ReadonlyArray<{ trainIndex: number; path: ReadonlyArray<{ hexLabel: string; bypass?: boolean }> }>,
+  searched: number,
 ): number {
   if (assignments.length === 0) return 0;
   const asWaypoints = (path: ReadonlyArray<{ hexLabel: string; bypass?: boolean }>) =>
@@ -571,20 +580,12 @@ function demonstrableTotal(
     routes: assignments.map((assignment) => asWaypoints(assignment.path)),
     trainIndices: assignments.map((assignment) => assignment.trainIndex),
   });
-  if (verdict.kind === "legal") return verdict.total;
-  let best = 0;
-  for (const assignment of assignments) {
-    const alone = evaluateRouteSet({
-      state,
-      mapGrid,
-      era,
-      companyId,
-      routes: [asWaypoints(assignment.path)],
-      trainIndices: [assignment.trainIndex],
-    });
-    if (alone.kind === "legal" && alone.total > best) best = alone.total;
-  }
-  return best;
+  if (verdict.kind === "legal" && verdict.total === searched) return verdict.total;
+  throw new RouteSearchInconsistencyError(
+    verdict.kind === "legal"
+      ? `The exact route search priced its set at $${searched}; the route authority prices it at $${verdict.total}.`
+      : `The route authority refuses the exact route search's set: ${verdict.reason}`,
+  );
 }
 
 /** The one route search, with the board's own wall. Design note #1512: shared by the fleet's real search

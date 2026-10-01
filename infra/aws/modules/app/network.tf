@@ -52,7 +52,7 @@ resource "aws_security_group" "task" {
 
 resource "aws_vpc_security_group_ingress_rule" "task_from_alb" {
   security_group_id            = aws_security_group.task.id
-  description                  = "The game server port, from the ALB's security group only"
+  description                  = "The game server port, from the ALB security group only"
   ip_protocol                  = "tcp"
   from_port                    = var.container_port
   to_port                      = var.container_port

@@ -49,7 +49,7 @@ import { ALARM_CONTRACT, expectedAlarms, suppressorName } from "../../controlPla
 import { POOL_EVIDENCE_FILES } from "../../controlPlane/evidence";
 import { certify, CERTIFIER_STORAGE_OVERRIDE, certificationText, clearCertification, judgeCertifierTask, prerequisiteChecks, prerequisiteRecord, repositoryHead, VERDICT_LINE, writeCertification, type CertContext } from "./certify";
 import { stageCertCommand, stageProbeCommand, recordFromLog, recordLines, type StagingDeps } from "./commands";
-import { closedBy, judgeQueryProbe, judgeWsIdle, nodeEdgeTransport, probeQuery, requiredIdleMs, runEdgeProbe, type EdgeTransport, type SocketEvent, type SocketObservation } from "./edgeProbe";
+import { closedBy, judgeQueryProbe, judgeWsAnnouncement, judgeWsIdle, LOBBY_SUBSCRIPTION, nodeEdgeTransport, probeQuery, requiredIdleMs, runEdgeProbe, type EdgeTransport, type SocketEvent, type SocketObservation } from "./edgeProbe";
 import { CERTIFICATION_FORMAT, EVIDENCE, evidenceName, EvidenceRefusedError, manifestOf, obj, readEvidence, secretFindings, stableStringify, writeRecord } from "./evidence";
 import { DRAIN_FILES, drainDir } from "./drain";
 import { caseFoldCollisions, readCheckoutText, toPosixPath, withDirectories } from "../../../testSupport/portability";
@@ -258,12 +258,17 @@ const pingsUntil = (end: number, every = 25_000): SocketEvent[] => {
   return out;
 };
 
-function fakeEdge(options: FakeEdgeOptions = {}): EdgeTransport & { readonly urls: string[]; readonly headers: Array<Record<string, string>> } {
+function fakeEdge(options: FakeEdgeOptions = {}): EdgeTransport & { readonly urls: string[]; readonly headers: Array<Record<string, string>>; readonly sends: Array<readonly [string, string | undefined]> } {
   const urls: string[] = [];
   const headers: Array<Record<string, string>> = [];
+  const sends: Array<readonly [string, string | undefined]> = [];
+  /* As the Node transport does: a frame sent on open is recorded first, as a `sent` event. */
+  const withSent = (o: SocketObservation, frame: string | undefined): SocketObservation =>
+    frame === undefined || !o.opened ? o : { ...o, events: [{ at_ms: 0, kind: "sent", frame_kind: String((JSON.parse(frame) as { kind?: unknown }).kind) }, ...o.events] };
   return {
     urls,
     headers,
+    sends,
     async get(url, h) {
       urls.push(url);
       headers.push({ ...h });
@@ -279,13 +284,14 @@ function fakeEdge(options: FakeEdgeOptions = {}): EdgeTransport & { readonly url
       const answer = edgeDiagnosticAnswer({ url: `${u.pathname}${query === "" ? "" : `?${query}`}`, headers: { "x-forwarded-for": xff }, socket: { remoteAddress: "10.0.0.9" } } as never, options.hops ?? 2);
       return { status: 200, body: JSON.stringify(answer) };
     },
-    async observeSocket(url, h, hold) {
+    async observeSocket(url, h, hold, sendOnOpen) {
       urls.push(url);
       headers.push({ ...h });
+      sends.push([url, sendOnOpen]);
       if (new URL(url).searchParams.get("cp") === "9") {
-        return options.refused?.() ?? { upgrade_status: null, opened: true, events: [{ at_ms: 40, kind: "message", frame_kind: "reload", frame_code: "client-protocol" }, { at_ms: 41, kind: "close", code: 4426, clean: true }], ended_by: "remote", duration_ms: 41 };
+        return withSent(options.refused?.() ?? { upgrade_status: null, opened: true, events: [{ at_ms: 40, kind: "message", frame_kind: "reload", frame_code: "client-protocol" }, { at_ms: 41, kind: "close", code: 4426, clean: true }], ended_by: "remote", duration_ms: 41 }, sendOnOpen);
       }
-      return options.idle?.(hold) ?? { upgrade_status: null, opened: true, events: [...pingsUntil(hold), { at_ms: hold, kind: "close", code: 1000, clean: true }], ended_by: "probe", duration_ms: hold };
+      return withSent(options.idle?.(hold) ?? { upgrade_status: null, opened: true, events: [...pingsUntil(hold), { at_ms: hold, kind: "close", code: 1000, clean: true }], ended_by: "probe", duration_ms: hold }, sendOnOpen);
     },
   };
 }
@@ -1436,6 +1442,33 @@ describe("L6-6 §9: the WebSocket results", () => {
     assert.ok(failures(judgeWsIdle(record.sections, bounds)).length >= 2);
   });
 
+  test("the idle socket stands the browser's lobby subscription on open; the announcement socket sends nothing", async () => {
+    const edge = fakeEdge();
+    const record = await edgeRecord(edge);
+    assert.equal(LOBBY_SUBSCRIPTION, JSON.stringify({ kind: "rooms-watch", on: true }), "exactly what roomLink.ts stands");
+    assert.deepEqual(edge.sends.map(([u, sent]) => [new URL(u).searchParams.get("cp"), sent]), [["9", undefined], ["1", LOBBY_SUBSCRIPTION]]);
+    const idle = (record.sections as any).ws_idle;
+    assert.equal(idle.subscription, LOBBY_SUBSCRIPTION);
+    assert.ok(idle.hold_ms >= idle.required_ms && idle.required_ms === requiredIdleMs(300, 60), "the full required interval is still held");
+    assert.deepEqual(failures(judgeWsIdle(record.sections, bounds)), []);
+    assert.deepEqual(failures(judgeWsAnnouncement(record.sections)), [], "the announcement probe is unchanged");
+  });
+
+  test("subscribed, but closed by the server before the interval (the 60 s reap seen on staging) FAILS", async () => {
+    const reaped = await idleWith(() => ({ upgrade_status: null, opened: true, events: [{ at_ms: 14_946, kind: "ping" }, { at_ms: 39_945, kind: "ping" }, { at_ms: 60_012, kind: "close", code: 1000, clean: true }], ended_by: "remote", duration_ms: 60_013 }));
+    assert.match(failures(reaped).map((c) => c.detail).join("\n"), /ended after 60013 ms: closed by the server \(close frame 1000\)/);
+    const edgeCut = await idleWith(() => ({ upgrade_status: null, opened: true, events: [...pingsUntil(200_000), { at_ms: 200_000, kind: "close", code: 1006, clean: false }], ended_by: "remote", duration_ms: 200_000 }));
+    assert.ok(failures(edgeCut).some((c) => /survived/.test(c.name)), "an edge dying inside the interval still fails");
+  });
+
+  test("an idle record without the lobby subscription (the pre-fix probe) FAILS the subscription check", async () => {
+    const record = await edgeRecord(fakeEdge());
+    const idle = (record.sections as any).ws_idle;
+    delete idle.subscription;
+    idle.observation.events = idle.observation.events.filter((e: SocketEvent) => e.kind !== "sent");
+    assert.match(failures(judgeWsIdle(record.sections, bounds)).map((c) => c.name).join("\n"), /lobby subscription stood on open/);
+  });
+
   test("the announcement path: cp=9 must be answered reload/client-protocol and closed 4426", async () => {
     const built = await buildPackage({ edge: await edgeRecord(fakeEdge({ refused: () => ({ upgrade_status: null, opened: true, events: [{ at_ms: 10_000, kind: "ping" }], ended_by: "probe", duration_ms: 20_000 }) })) });
     try {
@@ -1448,6 +1481,7 @@ describe("L6-6 §9: the WebSocket results", () => {
   test("the Node transport against a real `ws` server: pings recorded, a refusal frame and 4426 parsed, an upgrade refusal's status", async () => {
     const server = http.createServer((_req, res) => res.end());
     const wss = new WebSocketServer({ noServer: true });
+    const received: Array<[string | null, string]> = [];
     server.on("upgrade", (req, socket, head) => {
       const url = new URL(req.url ?? "/", "http://x");
       if (req.headers.cookie === undefined) {
@@ -1455,6 +1489,7 @@ describe("L6-6 §9: the WebSocket results", () => {
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.on("message", (data) => received.push([url.searchParams.get("cp"), String(data)]));
         if (url.searchParams.get("cp") === "9") {
           ws.send(JSON.stringify({ kind: "reload", code: "client-protocol", accepted: [0, 1] }));
           ws.close(4426, "reload");
@@ -1471,9 +1506,11 @@ describe("L6-6 §9: the WebSocket results", () => {
       const refused = await t.observeSocket(`ws://127.0.0.1:${port}/gs?cp=9&cr=11`, { Cookie: "__Host-gs_session=x" }, 2_000);
       assert.equal(refused.opened, true);
       assert.deepEqual(refused.events.filter((e) => e.kind !== "ping").map((e) => [e.kind, e.frame_kind ?? e.code]), [["message", "reload"], ["close", 4426]]);
-      const idle = await t.observeSocket(`ws://127.0.0.1:${port}/gs?cp=1&cr=11`, { Cookie: "__Host-gs_session=x" }, 150);
+      const idle = await t.observeSocket(`ws://127.0.0.1:${port}/gs?cp=1&cr=11`, { Cookie: "__Host-gs_session=x" }, 150, LOBBY_SUBSCRIPTION);
       assert.equal(idle.ended_by, "probe");
       assert.ok(idle.events.filter((e) => e.kind === "ping").length >= 3, JSON.stringify(idle.events));
+      assert.deepEqual(idle.events.filter((e) => e.kind === "sent").map((e) => e.frame_kind), ["rooms-watch"], "the one frame sent on open is recorded");
+      assert.deepEqual(received, [["1", LOBBY_SUBSCRIPTION]], "the server received exactly the lobby subscription, on the idle socket only");
       const unauth = await t.observeSocket(`ws://127.0.0.1:${port}/gs?cp=1&cr=11`, {}, 150);
       assert.equal(unauth.upgrade_status, 401);
       assert.equal(unauth.opened, false);

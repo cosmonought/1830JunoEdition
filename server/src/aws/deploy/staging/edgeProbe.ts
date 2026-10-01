@@ -19,8 +19,13 @@
 //    never written, scrubbed from every message):
 //      ANNOUNCEMENT  `cp=9` (a protocol no pool accepts): the server must answer `reload` / client-protocol and close 4426
 //                    -- which it can do only if `cp` reached it through the socket's own path;
-//      IDLE          the canonical announcement, then NOTHING sent: the probe only answers the server's pings (as every
-//                    browser does), for longer than every idle bound on the path plus two ping periods. The pinned
+//      IDLE          the canonical announcement and, on open, the browser lobby's standing subscription
+//                    (`LOBBY_SUBSCRIPTION`, `{"kind":"rooms-watch","on":true}` -- what `frontend/src/utils/roomLink.ts`
+//                    stands on every lobby socket; the server reaps a socket subscribed to nothing after 60 s,
+//                    `limits.rooms.unsubscribedReapMs`), then NO FURTHER application activity: the probe only answers
+//                    the server's pings (as every browser does), for longer than every idle bound on the path plus two
+//                    ping periods. Server frames that arrive (the room list it answers with) are recorded, never
+//                    answered. The pinned
 //                    behaviour (`ingress/limits.ts`): the server pings every 25 s and drops a socket silent for 60 s; the
 //                    ALB's idle timeout (300 s) and CloudFront's origin read timeout (60 s) come from the captured
 //                    evidence. No keepalive is added: if the socket dies, the record says when, whether a close frame
@@ -46,6 +51,10 @@ export const TRUSTED_PROXY_HOPS = 2;
 /** Spoofed X-Forwarded-For entries (TEST-NET-2: never a real viewer). */
 export const SPOOFED_FORWARDED = Object.freeze(["198.51.100.23", "198.51.100.24"]);
 export const SESSION_COOKIE_ENV = "GS_CERT_SESSION_COOKIE";
+/** §7 IDLE: the lobby's standing subscription, exactly as the browser sends it (`roomLink.ts`: `stand(channel,
+ *  "rooms-watch", {kind: "rooms-watch", on: true})`). Without it the server closes the socket 1000 "no subscription"
+ *  at `unsubscribedReapMs` (60 s), and the idle path through the edge is never observed. */
+export const LOBBY_SUBSCRIPTION = JSON.stringify({ kind: "rooms-watch", on: true });
 
 /** How long an idle socket must survive: longer than every idle bound on the path, plus two server ping periods. */
 export function requiredIdleMs(albIdleSeconds: number, originReadTimeoutSeconds: number): number {
@@ -74,7 +83,8 @@ export const encodeQuery = (parameters: ReadonlyArray<readonly [string, string]>
 
 export interface SocketEvent {
   readonly at_ms: number;
-  readonly kind: "ping" | "message" | "close" | "error";
+  /** `sent`: the one frame the probe sent on open (`frame_kind` its kind); `message`: a frame the server sent. */
+  readonly kind: "ping" | "message" | "sent" | "close" | "error";
   readonly code?: number;
   /** A close frame arrived (the peer's close); false: the connection ended without one (1006). */
   readonly clean?: boolean;
@@ -96,8 +106,19 @@ export interface SocketObservation {
 
 export interface EdgeTransport {
   get(url: string, headers: Readonly<Record<string, string>>): Promise<{ readonly status: number; readonly body: string }>;
-  observeSocket(url: string, headers: Readonly<Record<string, string>>, holdMs: number): Promise<SocketObservation>;
+  /** `sendOnOpen`: one frame sent as soon as the socket opens (recorded as a `sent` event); nothing else is ever sent. */
+  observeSocket(url: string, headers: Readonly<Record<string, string>>, holdMs: number, sendOnOpen?: string): Promise<SocketObservation>;
 }
+
+/** A frame's `kind` (bounded), or a marker when it has none or is not JSON. */
+const frameKindOf = (text: string): string => {
+  try {
+    const frame = JSON.parse(text) as { kind?: unknown };
+    return typeof frame.kind === "string" ? frame.kind.slice(0, 32) : "(no kind)";
+  } catch {
+    return "(not JSON)";
+  }
+};
 
 /** The real transport: Node's https (http only for a loopback test server) and the `ws` client. */
 export function nodeEdgeTransport(clock: () => number = () => Date.now()): EdgeTransport {
@@ -120,7 +141,7 @@ export function nodeEdgeTransport(clock: () => number = () => Date.now()): EdgeT
         req.on("error", reject);
       });
     },
-    observeSocket(url, headers, holdMs) {
+    observeSocket(url, headers, holdMs, sendOnOpen) {
       return new Promise((resolve) => {
         const events: SocketEvent[] = [];
         const started = clock();
@@ -144,6 +165,10 @@ export function nodeEdgeTransport(clock: () => number = () => Date.now()): EdgeT
         });
         ws.on("open", () => {
           openedAt = clock();
+          if (sendOnOpen !== undefined) {
+            ws.send(sendOnOpen);
+            events.push({ at_ms: Math.round(at()), kind: "sent", frame_kind: frameKindOf(sendOnOpen) });
+          }
           timer = setTimeout(() => {
             ws.close(1000, "l6-6 probe done");
             finish("probe");
@@ -240,9 +265,10 @@ export async function runEdgeProbe(transport: EdgeTransport, options: EdgeProbeO
   const canonical = clientAnnouncementQuery(1, SUPPORTED_RULES_ENGINE_VERSIONS, `l6cert-${options.run}`);
   const required = requiredIdleMs(options.albIdleSeconds, options.originReadTimeoutSeconds);
   const hold = Math.max(options.holdMs, required + 10_000);
-  const idle = await transport.observeSocket(wsUrlOf(options.baseUrl, canonical), socketHeaders, hold);
+  const idle = await transport.observeSocket(wsUrlOf(options.baseUrl, canonical), socketHeaders, hold, LOBBY_SUBSCRIPTION);
   result.ws_idle = {
     sent: canonical,
+    subscription: LOBBY_SUBSCRIPTION,
     alb_idle_seconds: options.albIdleSeconds,
     origin_read_timeout_seconds: options.originReadTimeoutSeconds,
     ping_interval_ms: PING_INTERVAL_MS,
@@ -374,7 +400,8 @@ export function closedBy(o: Record<string, unknown>, bounds: { readonly albIdleM
   return `unknown: the connection ended without a close frame at ${at} ms (no bound on the path matches) -- an edge or the network`;
 }
 
-/** §7 the idle socket: it survived the required interval (recomputed from the evidence), the server's pings crossed. */
+/** §7 the idle socket: it stood the browser's lobby subscription, survived the required interval (recomputed from the
+ *  evidence) with nothing further sent, and the server's pings crossed. */
 export function judgeWsIdle(section: unknown, evidence: { readonly albIdleSeconds: number | null; readonly originReadTimeoutSeconds: number | null }): Check[] {
   const s = obj(obj(section).ws_idle);
   if (s.status === "not-run") return [judge("WebSocket idle", false, "", `not run (${String(s.reason)}): required`)];
@@ -389,12 +416,20 @@ export function judgeWsIdle(section: unknown, evidence: { readonly albIdleSecond
   const marks = [0, ...pings, num(o.duration_ms) ?? 0];
   const gaps = marks.slice(1).map((m, i) => m - marks[i]);
   const widest = gaps.length === 0 ? Number.POSITIVE_INFINITY : Math.max(...gaps);
+  const sent = events.filter((e) => e.kind === "sent");
+  const subscribed = s.subscription === LOBBY_SUBSCRIPTION && sent.length === 1 && sent[0].frame_kind === "rooms-watch";
   const checks: Check[] = [
+    judge(
+      "WebSocket idle: the browser's lobby subscription stood on open",
+      subscribed,
+      `${LOBBY_SUBSCRIPTION}, as the browser's lobby sends it, and nothing else`,
+      `the probe recorded subscription ${String(s.subscription)} and sent [${sent.map((e) => String(e.frame_kind)).join(", ")}] (a socket subscribed to nothing is reaped by the server at 60 s, so the idle path is never observed)`,
+    ),
     judge("WebSocket idle: the interval is the evidence's", s.required_ms === required && (num(s.hold_ms) ?? 0) >= required, `${required} ms (max(ALB ${evidence.albIdleSeconds} s, CloudFront ${evidence.originReadTimeoutSeconds} s, pong ${PONG_TIMEOUT_MS / 1000} s) + 2 x ${PING_INTERVAL_MS / 1000} s)`, `the probe held for ${String(s.hold_ms)} ms against ${String(s.required_ms)} ms; the evidence requires ${required} ms`),
     judge(
       "WebSocket idle: survived client -> CloudFront -> ALB -> server",
       survived,
-      `open ${String(o.duration_ms)} ms with nothing sent, closed by the probe`,
+      `open ${String(o.duration_ms)} ms with nothing sent after the lobby subscription, closed by the probe`,
       o.opened !== true ? `the upgrade did not open (HTTP ${String(o.upgrade_status)})` : `ended after ${String(o.duration_ms)} ms: closed by ${closedBy(o, { albIdleMs: evidence.albIdleSeconds * 1000, originReadMs: evidence.originReadTimeoutSeconds * 1000 })}`,
     ),
     judge(

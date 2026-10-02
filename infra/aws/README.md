@@ -15,6 +15,14 @@ belongs to the LIVE-6 staging gate.
 > deploy / rollback, observability, memory plan) -- and `stacks/app` with `compute = "none"` keeping only the tables, SSM
 > documents, ECR, the operator roles and CloudFront. The ledger authorises the host's role through `app_runtime_role_arns`.
 > The migration runbook and the certification matrix: `infra/aws/SINGLE_HOST_MIGRATION.md`. Nothing is deployed.
+>
+> **COST-2B (2026-10-02): the migration's plan guards.** The runbook starts from the accepted post-abandonment staging
+> state (APPGEN 1, g2 unadopted, pools drained 0/0/0, the recovery access removed) and applies every dangerous Terraform
+> step ONLY from a saved plan that passed its guard: `infra/aws/scripts/plan-evidence ... --keep-plan`, then
+> `npm run awsDeploy -- migration-guard <gate> --plan-evidence <dir>` (offline, fail closed; `server/src/aws/deploy/migration/`),
+> then `terraform apply` of exactly that saved plan. The NAT gateway (outside Terraform) is deleted only after
+> `scripts/capture-nat-evidence` + `migration-guard nat` PASS. The legacy app stack is frozen from ordinary applies until
+> its teardown: its state expects running services while staging is drained (the desired-count drift).
 
 ## Tooling
 

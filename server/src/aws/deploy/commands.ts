@@ -54,9 +54,15 @@
 //       the rollback itself; it must hold the reserve BEFORE the rollback's pools restart and can receive new money work
 //       (a just-in-time top-up), never as a pre-funding condition of the forward rotation.
 //
+//   migration-guard <gate> --plan-evidence <dir> --environment <env> --app-account <id> [...]
+//   migration-guard nat --evidence <dir>
+//       COST-2B (`migration/migrationCommands.ts`), OFFLINE: each dangerous Terraform step of
+//       infra/aws/SINGLE_HOST_MIGRATION.md judged from its saved plan (fail closed), and the NAT deletion's evidence.
+//
 // Credentials: the SDK's default chain (the operator's profile or the pipeline's role -- the task's refusal of static
 // keys is the RUNTIME's rule, not this tool's). Regions: the runtime document's and the ARNs', never the environment's.
-// Nothing here prints a credential or a document's content; nothing but `bootstrap --apply` writes.
+// Nothing here prints a credential or a document's content; nothing but `bootstrap --apply` writes (and a migration
+// guard's own create-once `--record`).
 
 import * as path from "path";
 
@@ -72,6 +78,7 @@ import { AWS_RUNTIME_CONFIG_FORMAT_V2 } from "../runtime/runtimeConfig";
 import { flipWindowOfFile, readFlipRecordFile } from "../controlPlane/flipRecord";
 import { checkDrained, checkManifest, POOL_EVIDENCE_FILES, readEvidence } from "../controlPlane/evidence";
 import { RELAYER_ADDRESS, relayQueueState } from "./relayerRotation";
+import { migrationGuardCommand } from "./migration/migrationCommands";
 import { GENERATION_GATE_FORMAT, ROTATION_GATE_FORMAT, writeGateRecord } from "./gateRecords";
 import type { FlipWindowFacts } from "../controlPlane/alarmContract";
 import { adoptionBindingProblem, generationMarkerProblem, readGenerationMarker, type GenerationMarker } from "../game/generationMarker";
@@ -731,6 +738,7 @@ export const USAGE = [
   "  awsDeploy set-operator-plan --runtime-parameter <SSM ARN> --environment <env> --to-relayer <new> [--to-relayer-key <key ARN>]   (read-only: the admin's set_operator, never signed here)",
   "  awsDeploy stage-cert (prerequisite | certify) ...   LIVE-6 L6-6: the real-AWS staging certification (aws/deploy/staging/commands.ts)",
   "  awsDeploy stage-probe (task-role | edge | collect | flip-alarms | restore-alarms | restore-fencing) ...",
+  "  awsDeploy migration-guard (ledger-host-authorize | host-create | edge-cutover | ecs-rollback | compute-none | ledger-task-deauthorize | ecr-lifecycle | nat) ...   COST-2B: offline plan / NAT evidence guards (aws/deploy/migration/)",
 ].join("\n");
 
 /** LIVE-6 L6-6: more commands (the staging certification's), dispatched here so they share the refusals and exit codes. */
@@ -745,6 +753,7 @@ export async function runDeployCommand(argv: readonly string[], deps: DeployDeps
     if (command === "generation-gate") return await generationGateCommand(rest, deps);
     if (command === "relayer-rotation-gate") return await relayerRotationGateCommand(rest, deps);
     if (command === "set-operator-plan") return await setOperatorPlanCommand(rest, deps);
+    if (command === "migration-guard") return await migrationGuardCommand(rest, deps.out);
     if (command !== undefined && Object.prototype.hasOwnProperty.call(extra, command)) return await extra[command](rest);
     deps.out(USAGE);
     return EXIT_USAGE;

@@ -203,6 +203,34 @@ data "aws_iam_policy_document" "ledger_resource" {
     }
   }
 
+  # JX-4C: the operator's JX-4B journal correlation (`readLedgerAttemptsOfIntent`) -- Query of ATTI#<intent> partitions
+  # only (the app stack grants the other half, LedgerJournalQuery). Still no write.
+  statement {
+    sid       = "OperatorJournalQuery"
+    effect    = "Allow"
+    actions   = ["dynamodb:Query"]
+    resources = [aws_dynamodb_table.ledger.arn]
+    principals {
+      type        = "AWS"
+      identifiers = [local.app_root]
+    }
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:PrincipalArn"
+      values   = [local.operator_arn]
+    }
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["ATTI#*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["false"]
+    }
+  }
+
   # LIVE-6 L6-2 (L6-4 §12.1 item 3): the recovery role -- reads and scans (the SEC# journal replay), adopts APPGEN (its one
   # update) and appends the adoption's history item. Never a delete; never another item's update.
   statement {

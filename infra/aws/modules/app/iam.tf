@@ -12,7 +12,9 @@
 #                           and APPGEN, and READ everything the verifier and the generation gate check. It has no other
 #                           write and cannot sign.
 #   gs-<env>-operator       (LIVE-6 L6-2; L6-3 §11 item 4) `gamesDoctor aws`: read the game table, the identity-writer
-#                           role and the ledger's APPGEN / FENCE# (and scan it, read-only, for the orphans report); write
+#                           role and the ledger's APPGEN / FENCE# (and scan it, read-only, for the orphans report); JX-4C:
+#                           GetItem of identity's PRIN# / PROF# / FAM# items and Query of the ledger's ATTI# partitions
+#                           (the JX-3B / JX-4B evidence); write
 #                           only the routing CAS (SYSTEM), its evidence (OPRUN#), an operator run's HEAD claim / take /
 #                           release (GAME#) and its run pool (POOL#op:*). No identity write, no relayer, no KMS, no
 #                           delete. Created only when operator_trusted_principal_arns names someone.
@@ -467,10 +469,49 @@ data "aws_iam_policy_document" "operator" {
       values   = ["ROLE#identity-writer"]
     }
   }
+  # JX-4C: JX-3B / JX-4B evidence (`gamesDoctor aws wallet-grants`, `aws money`) -- `readIdentitySlice` reads, by strong
+  # GetItem only, exactly the principal, profile and family items a game's wallet grants name (PRIN#<pr>, PROF#<pf>,
+  # FAM#<sf>, each sk META), decoded by the production codec for identity's own `securityStanding`. Never SESS# (session
+  # secret hashes), LINK#, SEL#, GRANT#, TXN#, REVIEW#, RESTORE# or TABLE#; never Query / Scan; no write. (The records'
+  # secret-bearing fields -- recovery_hash, SHA-256 of a 256-bit secret, never the key; the selector; the display name --
+  # are already in the ledger's SEC# journal this role reads.) IAM cannot restrict the sort key: these partitions must hold
+  # only their META record (pinned by jx4cOperatorEvidenceIam.test.ts) -- an index item there needs this grant reviewed.
+  statement {
+    sid       = "IdentityEvidenceRead"
+    actions   = ["dynamodb:GetItem"]
+    resources = [local.identity_table_arn]
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["PRIN#*", "PROF#*", "FAM#*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["false"]
+    }
+  }
   statement {
     sid       = "LedgerRead"
     actions   = ["dynamodb:GetItem", "dynamodb:Scan"]
     resources = [var.ledger_table_arn]
+  }
+  # JX-4C: JX-4B's journal correlation (`readLedgerAttemptsOfIntent`): one strongly consistent Query of ATTI#<intent> --
+  # that partition only. The ledger stack grants the other half (OperatorJournalQuery) to this exact role.
+  statement {
+    sid       = "LedgerJournalQuery"
+    actions   = ["dynamodb:Query"]
+    resources = [var.ledger_table_arn]
+    condition {
+      test     = "ForAllValues:StringLike"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["ATTI#*"]
+    }
+    condition {
+      test     = "Null"
+      variable = "dynamodb:LeadingKeys"
+      values   = ["false"]
+    }
   }
   statement {
     sid       = "ReadConfiguration"

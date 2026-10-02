@@ -60,6 +60,7 @@ run "resource_policy_is_narrower_than_the_app_tables" {
       BootstrapAppgenOnly         = toset(["dynamodb:GetItem", "dynamodb:PutItem"])
       BootstrapAppgenHistoryRead  = toset(["dynamodb:GetItem"])
       OperatorLedgerReadOnly      = toset(["dynamodb:GetItem", "dynamodb:Scan"])
+      OperatorJournalQuery        = toset(["dynamodb:Query"])
       RecoveryLedgerRead          = toset(["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"])
       RecoveryAppgenAdoption      = toset(["dynamodb:UpdateItem"])
       RecoveryAppgenHistoryAppend = toset(["dynamodb:PutItem"])
@@ -247,6 +248,7 @@ run "prepared_rotation_adds_exactly_one_relayer_key" {
       BootstrapAppgenOnly         = toset(["dynamodb:GetItem", "dynamodb:PutItem"])
       BootstrapAppgenHistoryRead  = toset(["dynamodb:GetItem"])
       OperatorLedgerReadOnly      = toset(["dynamodb:GetItem", "dynamodb:Scan"])
+      OperatorJournalQuery        = toset(["dynamodb:Query"])
       RecoveryLedgerRead          = toset(["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"])
       RecoveryAppgenAdoption      = toset(["dynamodb:UpdateItem"])
       RecoveryAppgenHistoryAppend = toset(["dynamodb:PutItem"])
@@ -611,5 +613,32 @@ run "p5int_financial_keys_host_role_only_after_ecs" {
       length([for s in data.aws_iam_policy_document.signing[k].statement : s if contains(["AppTaskPublicKey", "AppTaskSignDigestOnly"], s.sid)
     && toset(flatten([for c in s.condition : c.values if c.variable == "aws:PrincipalArn"])) == toset(["arn:aws:iam::111111111111:role/gs-staging-host-app"])]) == 2])
     error_message = "After the ECS services are gone, every key -- original and financial -- grants GetPublicKey / Sign to the host role only."
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* JX-4C: the operator's journal Query -- the ledger's half              */
+/* ------------------------------------------------------------------ */
+
+run "jx4c_operator_journal_query_is_atti_only_for_the_exact_operator" {
+  command = plan
+
+  assert {
+    condition = (toset(one([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "OperatorJournalQuery"]).actions) == toset(["dynamodb:Query"])
+      && toset([for c in one([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "OperatorJournalQuery"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset([
+        "ArnEquals|aws:PrincipalArn|arn:aws:iam::111111111111:role/gs-staging-operator",
+        "ForAllValues:StringLike|dynamodb:LeadingKeys|ATTI#*",
+        "Null|dynamodb:LeadingKeys|false",
+      ])
+    && toset(flatten([for p in one([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "OperatorJournalQuery"]).principals : p.identifiers])) == toset(["arn:aws:iam::111111111111:root"]))
+    error_message = "JX-4C: the ledger lets exactly gs-<env>-operator (account root + aws:PrincipalArn) Query ATTI#<intent> partitions -- nothing else."
+  }
+  assert {
+    condition     = toset(flatten([for s in data.aws_iam_policy_document.ledger_resource.statement : s.actions if anytrue([for c in s.condition : contains(c.values, "arn:aws:iam::111111111111:role/gs-staging-operator") if c.variable == "aws:PrincipalArn"])])) == toset(["dynamodb:GetItem", "dynamodb:Scan", "dynamodb:Query"])
+    error_message = "JX-4C: everything the ledger grants the operator is a read (GetItem and Scan unchanged, Query new) -- no write, no APPGEN authority."
+  }
+  assert {
+    condition     = alltrue([for k, d in data.aws_iam_policy_document.signing : alltrue([for s in d.statement : alltrue([for c in s.condition : !contains(c.values, "arn:aws:iam::111111111111:role/gs-staging-operator")])])])
+    error_message = "JX-4C: no signing key names the operator (no Sign, no GetPublicKey)."
   }
 }

@@ -670,6 +670,26 @@ run "operator_and_recovery_are_separate_roles" {
     error_message = "The operator reads the identity-writer role item only -- no identity write, no session read."
   }
   assert {
+    condition = (toset([for c in one([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == "IdentityEvidenceRead"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset(["ForAllValues:StringLike|dynamodb:LeadingKeys|PRIN#*,PROF#*,FAM#*", "Null|dynamodb:LeadingKeys|false"])
+      && one([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == "IdentityEvidenceRead"]).actions == toset(["dynamodb:GetItem"])
+    && one([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == "IdentityEvidenceRead"]).resources == toset(["arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity"]))
+    error_message = "JX-4C: the JX-3B / JX-4B evidence reads GetItem of exactly PRIN#*, PROF#*, FAM#* (the key always present) -- no other identity class."
+  }
+  assert {
+    condition = (toset(flatten([for s in data.aws_iam_policy_document.operator.statement : [for a in s.actions : a] if contains(s.resources, "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity")])) == toset(["dynamodb:GetItem"])
+      && toset(flatten([for s in data.aws_iam_policy_document.operator.statement : flatten([for c in s.condition : c.values if c.variable == "dynamodb:LeadingKeys" && c.test != "Null"]) if contains(s.resources, "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity")])) == toset(["ROLE#identity-writer", "PRIN#*", "PROF#*", "FAM#*"])
+    && alltrue([for s in data.aws_iam_policy_document.operator.statement : length([for c in s.condition : c if c.variable == "dynamodb:LeadingKeys" && c.test != "Null"]) == 1 if contains(s.resources, "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity")]))
+    error_message = "JX-4C: on the identity table the operator only GETS items (no Query, Scan or write), every grant restricted by partition key to ROLE#identity-writer, PRIN#*, PROF#* or FAM#* -- never SESS#, LINK#, SEL#, GRANT#, TXN#, RESTORE#, REVIEW# or TABLE#."
+  }
+  assert {
+    condition = (one([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == "LedgerJournalQuery"]).actions == toset(["dynamodb:Query"])
+      && one([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == "LedgerJournalQuery"]).resources == toset(["arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"])
+      && toset([for c in one([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == "LedgerJournalQuery"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset(["ForAllValues:StringLike|dynamodb:LeadingKeys|ATTI#*", "Null|dynamodb:LeadingKeys|false"])
+      && one([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == "LedgerRead"]).actions == toset(["dynamodb:GetItem", "dynamodb:Scan"])
+    && toset(flatten([for s in data.aws_iam_policy_document.operator.statement : [for a in s.actions : a] if contains(s.resources, "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger")])) == toset(["dynamodb:GetItem", "dynamodb:Scan", "dynamodb:Query"]))
+    error_message = "JX-4C: on the ledger the operator may GetItem / Scan (unchanged) and Query ATTI#<intent> partitions only -- never a write."
+  }
+  assert {
     condition     = toset([for c in one([for s in data.aws_iam_policy_document.operator.statement : s if s.sid == "OperatorRunHeadsAndRunPools"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset(["ForAllValues:StringLike|dynamodb:LeadingKeys|GAME#*,POOL#op:*", "ForAllValues:StringEquals|dynamodb:Attributes|pk,sk,owner_pool,pool_epoch,owner_task,writer_epoch,writer_task,taken_at"])
     error_message = "The operator updates HEADs and its own run pools only (never a serving pool's item), and only their ownership fields (review M5)."
   }

@@ -198,6 +198,10 @@ export interface JunoRest {
    *  never one failover answer. The continuation verdict concludes a deployment CONFLICT (a durable hold) only from
    *  facts read this way. Optional for test doubles (absent: no verification-grade fact is ever read). */
   verifiedContractFacts?(contract: string, configQueryJson: string): Promise<{ readonly code_checksum: string; readonly config: unknown }>;
+  /** JX-4B: one address's bank balance in one denom (base units, canonical decimal) and the height the answering node
+   *  read it at -- a plain read (the bank module's `by_denom` query), for the operator's read-only money evidence only;
+   *  no serving path calls it. Optional for test doubles. */
+  bankBalance?(address: string, denom: string): Promise<{ readonly amount: string; readonly height: string | null }>;
   simulate(txBytes: Uint8Array): Promise<SimulateResult>;
   /** SYNC broadcast: the CheckTx answer (code 0 = accepted into the mempool), never inclusion. */
   broadcast(txBytes: Uint8Array): Promise<TxResultView>;
@@ -457,6 +461,18 @@ export function createJunoRest(policy: JunoEndpointPolicy, http: HttpTransport =
       const agreed = answers as ReadonlyArray<{ readonly ok: true; readonly text: string; readonly code_checksum: string; readonly config: unknown }>;
       if (agreed.some((answer) => answer.text !== agreed[0].text)) throw new JunoRpcError("unavailable", "verification-grade read: the endpoints disagree about the contract (a lagging or inconsistent node); read again later");
       return { code_checksum: agreed[0].code_checksum, config: agreed[0].config };
+    },
+    /* JX-4B: a plain bank read for the operator's money evidence (see the interface): the chain id checked like every
+       read, the answer strict (the asked denom, a canonical decimal amount), never defaulted to zero. */
+    async bankBalance(address, denom) {
+      if (!/^[a-z][a-z0-9]{2,89}$/.test(address)) throw new JunoRpcError("refused", "a bank balance is read for a lower-case bech32 address");
+      if (!/^[a-zA-Z][a-zA-Z0-9/:._-]{1,127}$/.test(denom)) throw new JunoRpcError("refused", "denom");
+      return read("bank balance", async (base) => {
+        const { status, json, height } = await call(base, "GET", `/cosmos/bank/v1beta1/balances/${encodeURIComponent(address)}/by_denom?denom=${encodeURIComponent(denom)}`);
+        const balance = status === 200 && isObject(json) ? json.balance : undefined;
+        if (!isObject(balance) || balance.denom !== denom || typeof balance.amount !== "string" || !/^(0|[1-9][0-9]{0,39})$/.test(balance.amount)) return malformed("bank balance", base);
+        return { amount: balance.amount, height };
+      });
     },
     async simulate(txBytes) {
       return read("simulate", async (base) => {

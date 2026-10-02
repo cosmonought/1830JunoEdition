@@ -92,6 +92,10 @@ const OPERATOR_IMPORTS: ReadonlySet<string> = new Set([
   "aws/game/dynamoRecordStore",
   "aws/game/dynamoHoldStore",
   "aws/game/dynamoFinancialStore",
+  /* JX-4B: the money evidence reader's ONE parser of an intent item and of a relay-queue entry (`parseChainIntentItem`,
+     `relayKeyOfIntentItem`, `parseRelayQueueItem`); the store's constructor `createDynamoIntentStore` (a writer) stays
+     forbidden by name (OPERATOR_FORBIDDEN). */
+  "aws/game/dynamoIntentStore",
   /* LIVE-6 L6-2: L6-4's strict readers (the flip preflight's startup rule; the orphans report's marker). */
   "aws/game/generationMarker",
   "aws/ledger/appGeneration",

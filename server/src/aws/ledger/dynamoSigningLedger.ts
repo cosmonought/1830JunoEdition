@@ -953,3 +953,59 @@ export async function readRelayerFence(client: DynamoDBClient, table: string, ac
   const answer = await client.send(new GetItemCommand({ TableName: table, Key: { pk: key.pk, sk: key.sk }, ConsistentRead: true }), { abortSignal: deadline() });
   return answer.Item === undefined ? null : parseFence(answer.Item as Item, account);
 }
+
+/** JX-4B: one journalled relayer attempt as the ledger stores it, for the operator's evidence (read-only). The token of
+ *  the write that created it is not carried (it names a request, not a fact the evidence compares). */
+export interface LedgerAttemptRecord {
+  readonly intent_id: string;
+  readonly tx_id: string;
+  readonly account: string;
+  readonly sequence: string;
+  readonly expires_after_height: string | null;
+  readonly relayer_epoch: number;
+  readonly generation: number;
+  readonly at: number;
+}
+
+function attemptRecordOf(item: Item, as: "txid" | "atti"): LedgerAttemptRecord {
+  const stored = parseAttempt(item, as);
+  return {
+    intent_id: stored.intent_id,
+    tx_id: stored.tx_id,
+    account: stored.account,
+    sequence: stored.sequence,
+    expires_after_height: stored.expires_after_height,
+    relayer_epoch: intAttr(item, "relayer_epoch", 1, Number.MAX_SAFE_INTEGER) as number,
+    generation: intAttr(item, "generation", 1, Number.MAX_SAFE_INTEGER) as number,
+    at: intAttr(item, "at", 0, Number.MAX_SAFE_INTEGER) as number,
+  };
+}
+
+/**
+ * JX-4B: every attempt the ledger journalled for one intent (`ATTI#<intent>`), oldest sequence first -- strongly
+ * consistent, every page, STRICT as every ledger read (one damaged or newer item refuses the whole answer:
+ * `LedgerUnreadableError`). For the operator's money evidence only (`aws/operator/`). Reads only.
+ */
+export async function readLedgerAttemptsOfIntent(client: DynamoDBClient, table: string, intentId: string): Promise<LedgerAttemptRecord[]> {
+  if (typeof intentId !== "string" || !HEX64.test(intentId)) throw new Error("readLedgerAttemptsOfIntent: an intent id is 32 bytes of lowercase hex");
+  const out: LedgerAttemptRecord[] = [];
+  let start: Record<string, AttributeValue> | undefined;
+  do {
+    const page = await client.send(
+      new QueryCommand({ TableName: table, KeyConditionExpression: "#pk = :pk", ExpressionAttributeNames: { "#pk": "pk" }, ExpressionAttributeValues: { ":pk": S(`ATTI#${intentId}`) }, ConsistentRead: true, ExclusiveStartKey: start }),
+      { abortSignal: deadline() },
+    );
+    for (const item of page.Items ?? []) out.push(attemptRecordOf(item as Item, "atti"));
+    start = page.LastEvaluatedKey;
+  } while (start !== undefined);
+  return out;
+}
+
+/** JX-4B: the ledger's record of one transaction id (`TXID#<tx>`), strongly consistent and strict -- or null when the
+ *  ledger never recorded it. For the operator's money evidence only. Reads only. */
+export async function readLedgerAttemptByTx(client: DynamoDBClient, table: string, txId: string): Promise<LedgerAttemptRecord | null> {
+  if (typeof txId !== "string" || !TX_ID.test(txId)) throw new Error("readLedgerAttemptByTx: a transaction id is 32 bytes of upper-case hex");
+  const key = LEDGER_KEYS.txid(txId);
+  const answer = await client.send(new GetItemCommand({ TableName: table, Key: { pk: key.pk, sk: key.sk }, ConsistentRead: true }), { abortSignal: deadline() });
+  return answer.Item === undefined ? null : attemptRecordOf(answer.Item as Item, "txid");
+}

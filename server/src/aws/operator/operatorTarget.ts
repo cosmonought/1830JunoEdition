@@ -34,7 +34,7 @@ import { relayerAccountProblem } from "../game/relayerRole";
 import { ssmParameterSource, type ParameterSource } from "../runtime/configSource";
 import { AWS_CONFIG_ENV, AWS_CONFIG_FLAG, checkEscrowConfigForAws, parseAwsRuntimeConfigText, REFUSED_CREDENTIAL_ENV, type AwsRuntimeConfig } from "../runtime/runtimeConfig";
 import { flagValues, single, type Env } from "../runtime/storageMode";
-import { parseJunoBackendConfig } from "../../escrow/juno/junoConfig";
+import { parseJunoBackendConfig, type JunoBackendConfig } from "../../escrow/juno/junoConfig";
 
 export const LOCAL_DOCUMENT_FLAG = "--local-document";
 export const RELAYER_FLAG = "--relayer";
@@ -73,6 +73,10 @@ export interface OperatorTarget {
   readonly config: AwsRuntimeConfig;
   readonly source: { readonly arn: string | null; readonly version: number | null; readonly file: string | null };
   readonly escrow: EscrowView;
+  /** JX-4B: the escrow configuration itself, as production parsed it (AWS only; null when none was read). Used ONLY by
+   *  `money --chain` to reach the configured REST endpoints and trust policy for read-only queries: it is never printed
+   *  and never put in a report (an endpoint URL can carry a provider key). Absent on DynamoDB Local. */
+  readonly juno?: JunoBackendConfig | null;
   destroy(): void;
 }
 
@@ -173,6 +177,7 @@ export async function resolveOperatorTarget(input: {
     throw new OperatorRefusal(`the runtime configuration ${arn.arn} is not usable -- ${describe(error)}`);
   }
   let escrow: EscrowView = { state: "none" };
+  let juno: JunoBackendConfig | null = null;
   if (config.escrow !== null) {
     const where = config.escrow.configParameter.arn;
     try {
@@ -183,10 +188,11 @@ export async function resolveOperatorTarget(input: {
       } catch {
         throw new Error("it is not JSON");
       }
-      const juno = parseJunoBackendConfig(raw, { serverMode: "production", dataDir: NO_DATA_DIRECTORY });
-      const aws = checkEscrowConfigForAws(juno, config);
+      const parsed = parseJunoBackendConfig(raw, { serverMode: "production", dataDir: NO_DATA_DIRECTORY });
+      const aws = checkEscrowConfigForAws(parsed, config);
       if (aws.length > 0) throw new Error(aws.join("; "));
-      escrow = { state: "ok", arn: where, version: read.version, relayer: juno.relayer.address };
+      escrow = { state: "ok", arn: where, version: read.version, relayer: parsed.relayer.address };
+      juno = parsed;
     } catch (error) {
       escrow = { state: "unreadable", arn: where, detail: describe(error) };
     }
@@ -201,6 +207,7 @@ export async function resolveOperatorTarget(input: {
     config,
     source: { arn: arn.arn, version, file: null },
     escrow,
+    juno,
     destroy: () => {
       app.destroy();
       if (ledger !== app) ledger.destroy();

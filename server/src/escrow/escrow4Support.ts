@@ -97,6 +97,8 @@ export interface MoneyServer {
   readonly identityStore: ReturnType<typeof createMemoryIdentityStore>;
   readonly financial: ReturnType<typeof createMemoryFinancialGameStore>;
   readonly intents: ReturnType<typeof createMemoryChainIntentStore>;
+  /** JX-4B: the signing journal (the evidence tooling projects its attempts as the ledger's ATTI# / TXID# items). */
+  readonly journal: ReturnType<typeof createMemorySigningJournal>;
   readonly ops: ReturnType<typeof createMemoryOpsRecorder>;
   readonly clock: { now: number };
   readonly warnings: string[];
@@ -120,6 +122,8 @@ export interface MoneyServerOptions {
   readonly capability?: DeploymentCapability;
   /** LIVE-4 (L4-7): the game server's log store (a controlled store, so a test can hold an append). Absent: in memory. */
   readonly store?: LogStore;
+  /** JX-4B: the contract's resolver (a bech32 address when a test parses a production configuration naming it). */
+  readonly resolver?: string;
 }
 
 export async function moneyServer(options: MoneyServerOptions = {}): Promise<MoneyServer> {
@@ -131,7 +135,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     chainId: CHAIN_ID,
     contract: CONTRACT,
     operator: RELAYER_ADDRESS,
-    resolver: "juno1resolver",
+    resolver: options.resolver ?? "juno1resolver",
     treasury: "juno1treasury",
     denom: "ujunox",
     admin: null,
@@ -165,7 +169,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     pin: options.pin ?? PIN,
     symbol: "JUNOX",
     policy: [{ backend: "juno-cosmwasm", chain_id: CHAIN_ID, network_class: "testnet", deployments: [{ kind: "juno-cosmwasm", contract_address: CONTRACT, code_checksums: [CANONICAL_CHECKSUM], admin: null }] }],
-    trust: { operators: [RELAYER_ADDRESS], resolvers: ["juno1resolver"], min_challenge_window_secs: BigInt(1), min_liveness_window_secs: BigInt(1), min_resolver_timeout_secs: BigInt(1) },
+    trust: { operators: [RELAYER_ADDRESS], resolvers: [options.resolver ?? "juno1resolver"], min_challenge_window_secs: BigInt(1), min_liveness_window_secs: BigInt(1), min_resolver_timeout_secs: BigInt(1) },
     rest: chain,
     settlementKeys: [settlementKeyConfig()],
     settlementSigner: junoSettlementSigner(settlementKeyConfig(), JUNO_CODEC_V1, developmentDigestSigner(SETTLEMENT_SECRET, "settlement", GUARD), journal),
@@ -269,6 +273,7 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     identityStore,
     financial,
     intents,
+    journal,
     ops,
     clock,
     warnings,

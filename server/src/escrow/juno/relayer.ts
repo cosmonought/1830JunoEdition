@@ -590,10 +590,22 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
         if (g.state === "IN_PROGRESS") return BigInt(game.trusted_seq) >= BigInt(op.seq) ? { kind: "inconsistent", detail: `the trusted sequence ${game.trusted_seq} is at or past the terminal seq ${op.seq}` } : { kind: "absent" };
         return { kind: "moot", why: `the escrow is ${g.state}${stored !== null ? ` (settled from ${stored.source})` : ""}: the chain ended it another way` };
       }
-      case "finalize":
-        if (g.state === "SETTLED") return { kind: "done", detail: `the escrow is settled (${g.outcome?.route ?? "?"})` };
-        if (g.state === "SETTLEABLE") return { kind: "absent" };
+      case "finalize": {
+        /* JX-6B: a Finalize is DONE only when Finalize itself ended the escrow on THIS intent's settlement (route
+           `finalized`, the stored seq and digest this intent was made for). Any other terminal route -- a completed
+           consent, a resolver's Uphold / Replace / Annul, the resolver timeout -- made it unnecessary without it having
+           run: moot (superseded), never confirmed. A stored settlement that is no longer this intent's is moot too. */
+        const stored = g.settlement;
+        const digest = intent.subject.kind === "digest" ? (intent.subject.digests.find((d) => d.purpose === "settle")?.hex ?? null) : null;
+        const ours = stored !== null && stored.payload.seq === op.seq && (digest === null || stored.payload.payload_digest === digest);
+        if (g.state === "SETTLED") {
+          const route = g.outcome?.route ?? "?";
+          if (route === "finalized" && ours) return { kind: "done", detail: `the escrow is settled by Finalize (seq ${op.seq})` };
+          return { kind: "moot", why: `the escrow was settled by ${route}${ours ? "" : ` on another settlement than seq ${op.seq}`}, not by this Finalize: it is no longer needed` };
+        }
+        if (g.state === "SETTLEABLE") return ours ? { kind: "absent" } : { kind: "moot", why: `the stored settlement is no longer seq ${op.seq}` };
         return { kind: "moot", why: `the escrow is ${g.state}; there is nothing to finalize` };
+      }
       case "consent": {
         /* ESCROW-4: one seat's consent to the stored settlement. The chain keeps a bit per seat, cleared when the seat's
            key rotates: done when the bit is set (by this relay or anyone's); moot once the stored settlement is another

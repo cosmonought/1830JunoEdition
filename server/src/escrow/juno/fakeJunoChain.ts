@@ -181,8 +181,9 @@ interface FakeGame {
   last_seq: string;
   settlement: { source: string; payload: PayloadRecordJson; accepted_at: number; window_end: number } | null;
   checkpoints: Map<number, { payload: PayloadRecordJson; accepted_at: number }>;
-  dispute: null;
-  outcome: { route: string; at: number; amounts: string[]; dust: string } | null;
+  /** JX-6B: `dispute.rs`'s DisputeRecord, as the contract stores it from `Challenge` on. */
+  dispute: FakeDispute | null;
+  outcome: { route: string; at: number; amounts: string[]; dust: string; distributed?: string; bond_returned?: string; bond_to_pool?: string } | null;
   last_activity: number | null;
   /* ESCROW-4: the contract's per-game facts the money layer reads (fixed at CreateGame, as the contract fixes them). */
   created_at: number;
@@ -191,6 +192,19 @@ interface FakeGame {
   subsidy_bps: number;
   consent_bitmap: number;
 }
+
+/** JX-6B: the contract's `DisputeRecord` (resolution names: `state.rs::DisputeResolution`, snake_case on the wire). */
+interface FakeDispute {
+  challenger: string;
+  bond: string;
+  evidence_hash: string;
+  disputed_at: number;
+  resolution: "upheld" | "replaced" | "annulled" | "resolver_timeout" | null;
+  resolved_at: number | null;
+}
+
+/** JX-6B: a resolver's decision (`msg.rs::ResolveOutcome`); a Replace names only what the test varies. */
+export type FakeResolveOutcome = { readonly uphold: Record<string, never> } | { readonly annul: Record<string, never> } | { readonly replace: { readonly settlement_weights: readonly string[] } };
 
 class ContractFailure extends Error {}
 
@@ -212,6 +226,9 @@ export interface FakeChainOptions {
   readonly challengeWindowSecs?: number;
   readonly livenessWindowSecs?: number;
   readonly resolverTimeoutSecs?: number;
+  /** JX-6B: the challenge bond's terms (`params.bond_bps` / `bond_floor`; default 0 / "0": no bond). */
+  readonly bondBps?: number;
+  readonly bondFloor?: string;
   readonly startTime?: number;
   readonly minGasPriceNum?: bigint;
   readonly minGasPriceDen?: bigint;
@@ -373,14 +390,98 @@ export class FakeJunoChain implements JunoRest {
     return { ok: true };
   }
 
-  /** ESCROW-4: a seat's Challenge (SETTLEABLE, inside the window): DISPUTED. The bond is not modelled. */
-  challenge(chainGameId: string, wallet: string): { ok: true } | { ok: false; error: string } {
+  /** ESCROW-4 / JX-6B: a seat's Challenge, as `dispute.rs::challenge` decides it: SETTLEABLE, a seated wallet, block time
+   *  before the window's end, exactly the game's frozen bond (`bond` defaults to it; none when it is zero). Works while
+   *  paused. The bond is held beside the pool until the dispute ends. */
+  challenge(chainGameId: string, wallet: string, options: { readonly bond?: string; readonly evidenceHash?: string } = {}): { ok: true } | { ok: false; error: string } {
     const game = this.games.get(Number(chainGameId));
     if (game === undefined) return { ok: false, error: "not found" };
     if (game.state !== "settleable" || game.settlement === null) return { ok: false, error: `wrong state: game is ${game.state}` };
     if (!game.seats.some((seat) => seat.wallet === wallet)) return { ok: false, error: "not seated" };
     if (this.time >= game.settlement.window_end) return { ok: false, error: "the challenge window closed" };
+    const bond = game.bond ?? "0";
+    const paid = options.bond ?? bond;
+    if (paid !== bond) return { ok: false, error: `the challenge bond must be exactly ${bond}, got ${paid}` };
+    game.dispute = { challenger: wallet, bond, evidence_hash: options.evidenceHash ?? "ee".repeat(32), disputed_at: this.time, resolution: null, resolved_at: null };
     game.state = "disputed";
+    return { ok: true };
+  }
+
+  /** JX-6B: the game's resolver decides a DISPUTED game (`dispute.rs::resolve`). Uphold: the bond joins the pool, paid by
+   *  the stored weights. Replace: a ResolverCorrection with the resolver's weights (authorised by the sender, never by a
+   *  signature), the bond back to the challenger, paid at once. Annul: every net ante back, the bond back. */
+  resolve(chainGameId: string, sender: string, outcome: FakeResolveOutcome): { ok: true } | { ok: false; error: string } {
+    const game = this.games.get(Number(chainGameId));
+    if (game === undefined) return { ok: false, error: "not found" };
+    if (game.state !== "disputed" || game.dispute === null || game.settlement === null) return { ok: false, error: `wrong state: game is ${game.state}` };
+    if (sender !== game.resolver) return { ok: false, error: "unauthorized: resolver" };
+    const dispute = game.dispute;
+    if ("uphold" in outcome) {
+      dispute.resolved_at = this.time;
+      dispute.resolution = "upheld";
+      this.payOut(game, "resolver_uphold", { toPool: dispute.bond });
+    } else if ("replace" in outcome) {
+      const weights = [...outcome.replace.settlement_weights];
+      if (weights.length !== game.seats.length) return { ok: false, error: "the roster length differs" };
+      if (weights.every((w) => BigInt(w) === BigInt(0))) return { ok: false, error: "the settlement weights sum to zero" };
+      /* The corrected payload: the stored one's log position and commitments, reason 5 (ResolverCorrection), the
+         resolver's weights -- encoded and digested by the certified codec, as `resolve` stores it. */
+      const p = game.settlement.payload;
+      let replaced: PayloadRecordJson;
+      try {
+        const payload = settlementPayloadFromWire({
+          version: 1, domain: game.domain, seq: p.seq, kind: 1, reason: 5, log_len: p.log_len, log_hash: p.log_hash,
+          appraisal_log_len: p.log_len, appraisal_state_hash: p.appraisal_state_hash, state_schema_version: p.state_schema_version,
+          seat_count: weights.length, settlement_weights: weights, signer_key_id: p.signer_key_id, issued_at: p.issued_at,
+        });
+        checkSettlementPayloadV1(payload, "ResolverReplace");
+        replaced = { ...p, reason: 5, appraisal_log_len: p.log_len, settlement_weights: weights, payload_digest: settleDigestOfEncodedHex(encodeSettlementPayloadV1Hex(payload)) };
+      } catch (error) {
+        return { ok: false, error: `the replacement payload is malformed: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      dispute.resolution = "replaced";
+      dispute.resolved_at = this.time;
+      game.settlement = { source: "resolver_replacement", payload: replaced, accepted_at: this.time, window_end: this.time };
+      game.consent_bitmap = 0;
+      this.payOut(game, "resolver_replace", { returned: dispute.bond });
+    } else {
+      dispute.resolution = "annulled";
+      dispute.resolved_at = this.time;
+      game.outcome = { route: "resolver_annul", at: this.time, amounts: game.seats.map(() => game.ante_net), dust: "0", distributed: (BigInt(game.ante_net) * BigInt(game.seats.length)).toString(), bond_returned: dispute.bond, bond_to_pool: "0" };
+      game.state = "annulled";
+    }
+    return { ok: true };
+  }
+
+  /** JX-6B: a seat's LivenessSettle on a DISPUTED game once the resolver timeout has passed (`dispute.rs::liveness_settle`,
+   *  the DISPUTED arm): the bond goes back; a trusted stored settlement is paid (`resolver_timeout_payout`); a
+   *  compromised one falls back to the best trusted checkpoint (SETTLEABLE again, a fresh window) or refunds everyone
+   *  (CANCELLED, `resolver_timeout_refund`). Only the DISPUTED arm is modelled here. */
+  resolverTimeoutExit(chainGameId: string, wallet: string): { ok: true } | { ok: false; error: string } {
+    const game = this.games.get(Number(chainGameId));
+    if (game === undefined) return { ok: false, error: "not found" };
+    if (game.state !== "disputed" || game.dispute === null || game.settlement === null) return { ok: false, error: `wrong state: only the DISPUTED arm is modelled, the game is ${game.state}` };
+    if (!game.seats.some((seat) => seat.wallet === wallet)) return { ok: false, error: "not seated" };
+    const at = game.dispute.disputed_at + (this.options.resolverTimeoutSecs ?? 604_800);
+    if (this.time < at) return { ok: false, error: `the resolver timeout has not elapsed; available at ${nanos(at)}` };
+    const dispute = game.dispute;
+    dispute.resolution = "resolver_timeout";
+    dispute.resolved_at = this.time;
+    const keyId = game.settlement.payload.signer_key_id;
+    const trusted = (id: number) => this.signerKeys.some((key) => key.key_id === id && !key.compromised);
+    if (trusted(keyId)) {
+      this.payOut(game, "resolver_timeout_payout", { returned: dispute.bond });
+      return { ok: true };
+    }
+    const best = [...game.checkpoints.entries()].filter(([id]) => trusted(id)).map(([, record]) => record).sort((a, b) => Number(BigInt(b.payload.seq) - BigInt(a.payload.seq)))[0];
+    if (best !== undefined) {
+      game.settlement = { source: "liveness_checkpoint", payload: best.payload, accepted_at: this.time, window_end: this.time + (this.options.challengeWindowSecs ?? 600) };
+      game.consent_bitmap = 0;
+      game.state = "settleable";
+      return { ok: true };
+    }
+    game.outcome = { route: "resolver_timeout_refund", at: this.time, amounts: game.seats.map(() => game.ante_net), dust: "0", distributed: (BigInt(game.ante_net) * BigInt(game.seats.length)).toString(), bond_returned: dispute.bond, bond_to_pool: "0" };
+    game.state = "cancelled";
     return { ok: true };
   }
 
@@ -417,8 +518,8 @@ export class FakeJunoChain implements JunoRest {
         ante_net: game.ante_net,
         terms: {
           subsidy_bps: game.subsidy_bps,
-          bond_bps: 0,
-          bond_floor: "0",
+          bond_bps: this.options.bondBps ?? 0,
+          bond_floor: this.options.bondFloor ?? "0",
           challenge_window_secs: this.options.challengeWindowSecs ?? 600,
           liveness_window_secs: this.options.livenessWindowSecs ?? 86_400,
           resolver_timeout_secs: this.options.resolverTimeoutSecs ?? 604_800,
@@ -446,8 +547,14 @@ export class FakeJunoChain implements JunoRest {
         last_seq: game.last_seq,
         settlement: game.settlement === null ? null : { source: game.settlement.source, payload: game.settlement.payload, accepted_at: nanos(game.settlement.accepted_at), window_end: nanos(game.settlement.window_end) },
         consent_bitmap: game.consent_bitmap,
-        dispute: game.state === "disputed" ? { challenger: game.seats[0]?.wallet ?? "", evidence_hash: "00".repeat(32), bond: game.bond ?? "0" } : null,
-        outcome: game.outcome === null ? null : { route: game.outcome.route, at: nanos(game.outcome.at), amounts: game.outcome.amounts, dust: game.outcome.dust, distributed: "0", bond_returned: "0", bond_to_pool: "0" },
+        dispute:
+          game.dispute === null
+            ? null
+            : { challenger: game.dispute.challenger, bond: game.dispute.bond, evidence_hash: game.dispute.evidence_hash, disputed_at: nanos(game.dispute.disputed_at), resolution: game.dispute.resolution, resolved_at: game.dispute.resolved_at === null ? null : nanos(game.dispute.resolved_at) },
+        outcome:
+          game.outcome === null
+            ? null
+            : { route: game.outcome.route, at: nanos(game.outcome.at), amounts: game.outcome.amounts, dust: game.outcome.dust, distributed: game.outcome.distributed ?? "0", bond_returned: game.outcome.bond_returned ?? "0", bond_to_pool: game.outcome.bond_to_pool ?? "0" },
       },
       paused: this.paused,
       latest_checkpoint: latest === null ? null : { payload: latest.payload, accepted_at: nanos(latest.accepted_at) },
@@ -455,8 +562,9 @@ export class FakeJunoChain implements JunoRest {
       deadlines: {
         funding_deadline: nanos(game.funding_deadline),
         liveness_available_at: null,
-        challenge_window_end: game.settlement === null ? null : nanos(game.settlement.window_end),
-        resolver_timeout_at: null,
+        /* `query.rs::deadlines`: the window end only while SETTLEABLE; the resolver timeout only while DISPUTED. */
+        challenge_window_end: game.state === "settleable" && game.settlement !== null ? nanos(game.settlement.window_end) : null,
+        resolver_timeout_at: game.state === "disputed" && game.dispute !== null ? nanos(game.dispute.disputed_at + (this.options.resolverTimeoutSecs ?? 604_800)) : null,
       },
     };
   }
@@ -540,7 +648,12 @@ export class FakeJunoChain implements JunoRest {
           mode: game.mode === "live" ? 0 : 1,
         });
         game.resolver = this.options.resolver;
-        game.bond = "0";
+        /* `payout.rs::bond_amount`: max(bond_floor, floor(ante_net * bond_bps / 10000)), frozen at Start. */
+        {
+          const proportional = (BigInt(game.ante_net) * BigInt(this.options.bondBps ?? 0)) / BigInt(10_000);
+          const floor = BigInt(this.options.bondFloor ?? "0");
+          game.bond = (proportional > floor ? proportional : floor).toString();
+        }
         game.last_activity = this.time;
         return;
       }
@@ -615,13 +728,15 @@ export class FakeJunoChain implements JunoRest {
     }
   }
 
-  private payOut(game: FakeGame, route: string): void {
+  /** `helpers.rs::pay_out`; JX-6B: an Uphold adds the bond to the pool first (`toPool`), a Replace or a resolver timeout
+   *  returns it (`returned`). */
+  private payOut(game: FakeGame, route: string, bond: { readonly toPool?: string; readonly returned?: string } = {}): void {
     const weights = (game.settlement as NonNullable<FakeGame["settlement"]>).payload.settlement_weights.map((w) => BigInt(w));
-    const pool = BigInt(game.ante_net) * BigInt(game.seats.length);
+    const pool = BigInt(game.ante_net) * BigInt(game.seats.length) + BigInt(bond.toPool ?? "0");
     const sum = weights.reduce((a, b) => a + b, BigInt(0));
     const amounts = weights.map((w) => (pool * w) / sum);
     const dust = pool - amounts.reduce((a, b) => a + b, BigInt(0));
-    game.outcome = { route, at: this.time, amounts: amounts.map((a) => a.toString()), dust: dust.toString() };
+    game.outcome = { route, at: this.time, amounts: amounts.map((a) => a.toString()), dust: dust.toString(), distributed: pool.toString(), bond_returned: bond.returned ?? "0", bond_to_pool: bond.toPool ?? "0" };
     game.state = "settled";
   }
 

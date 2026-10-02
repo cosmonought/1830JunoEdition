@@ -947,7 +947,8 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
     }
     if (record.phase === "held") return;
     if (g.state === "DISPUTED") {
-      await apply(gameId, (current) => (current.phase === "settleable" ? { kind: "chain-disputed", at: deps.now() } : null));
+      /* JX-6B: also from `intent-prepared` -- the Challenge may land before this server ever observed SETTLEABLE. */
+      await apply(gameId, (current) => ((current.phase === "settleable" || current.phase === "intent-prepared") && g.settlement !== null ? { kind: "chain-disputed", at: deps.now() } : null));
       return;
     }
     if (g.state === "SETTLEABLE" && g.settlement !== null) {

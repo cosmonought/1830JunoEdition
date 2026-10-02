@@ -33,6 +33,7 @@ import { deploymentIdentityOf, gasDerivedMaxFee, perTransactionFeeCap, relayerFu
 import { collectRotationProof, judgeRotationProof, HOLDER_STATUS_MAX_AGE_MS, ROTATION_PROOF_FORMAT, ROTATION_PROOF_FORMAT_V1, type RotationProofRecord } from "./rotationProof";
 import { fakeJunoChain, fakeRelayerKms, healthyRotation, rotationReadersFor, STAGING_ADMIN, type EscrowChainScript, type RotationTableScript } from "./rotationTestSupport";
 import type { EvidenceRead } from "./evidence";
+import { readCheckoutText } from "../../../testSupport/portability";
 
 const FIXTURES = path.resolve(__dirname, "../../../../../../../infra/aws/fixtures");
 const fixtureText = (name: string) => fs.readFileSync(path.join(FIXTURES, name), "utf8");
@@ -500,11 +501,13 @@ describe("LIVE-6 L6-12D: the relayer's per-transaction cap and one-game planning
   });
 
   test("no floating-point or Number arithmetic in the reserve derivation (source guard over junoChain.ts)", () => {
-    const source = fs.readFileSync(path.resolve(__dirname, "../../../../../../../server/src/aws/deploy/junoChain.ts"), "utf8");
+    // Read with normalized line endings: a CRLF checkout (core.autocrlf=true on Windows) has no "\n}\n" delimiter.
+    const source = readCheckoutText(path.resolve(__dirname, "../../../../../../../server/src/aws/deploy/junoChain.ts"));
     const bodyOf = (name: string): string => {
       const start = source.indexOf(`export function ${name}(`);
       assert.ok(start >= 0, `${name} is in junoChain.ts`);
       const end = source.indexOf("\n}\n", start);
+      assert.ok(end > start, `${name}'s closing "}" delimiter is found (the guard never scans past the function body)`);
       return source.slice(start, end);
     };
     for (const name of ["perTransactionFeeCap", "gasDerivedMaxFee", "relayerFunding", "displayUnits"]) {

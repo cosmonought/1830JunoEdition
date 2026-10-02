@@ -500,6 +500,7 @@ reaches it.
 | `inspect.ts` | Read-only answers, each `absent` / `ok` / `unreadable` (`corrupt` or `newer`) / `unavailable` -- never collapsed: the routing, APPGEN, the pools it can name (no scan), the identity-writer role and its holder, the relayer mirror against the ledger fence (`readRelayerFence`, L6-3's one ledger export), a game's HEAD owner class (released / current / superseded / operator / orphaned / ahead / inconsistent / unknown) and the claim / take / release verdicts, the directory and the open money games |
 | `mutations.ts` | `set-primary` (L5-3's `setPrimaryPool` CAS at `--expect-version`; never the first routing -- L5-8 -- never `op:`, never a pool with no item); an operator run's `claim` (a released game) / `take` (a SUPERSEDED owner, proven inside the transaction) / `release` (`--run`). The design, the ABA argument and the stopped live-owner take are in its header |
 | `operatorMain.ts` | The CLI: text or `--json` on stdout, `AUDIT {...}` on stderr; exit 0 / 1 (findings, refused, conflict) / 2 (usage, refused reference) / 3 (unknown outcome) |
+| `moneyEvidence.ts` | JX-4B, READ-ONLY: `aws money <game_id> [--chain] [--json]` -- one money game's evidence for a live JX-4 run, judged by `tools/moneyEvidence.ts`: FIN (the L5-2 store's `load`), JX-3B's wallet grants, every `INTENT#` and EVERY attempt (the intent store's own `parseChainIntentItem`), the configured relayer's `RELAYQ#` (strict `parseRelayQueueItem`, every page), the ledger's `ATTI#` / `TXID#` (`readLedgerAttemptsOfIntent` / `readLedgerAttemptByTx`, the ledger's strict parser; every Start slot of the game too), and with `--chain` read-only Juno queries through a narrowed `JunoRest` port (config, chain game, the contract's bank balance; the roster hash and domain RECOMPUTED with the codec's own helpers). Verdicts PASS / FAIL / NOT EVALUATED / N/A -- a read that failed is never a PASS; `JOURNAL MATCH|MISMATCH`, `ROSTER MATCH|MISMATCH`, `CHAIN BINDING MATCH|MISMATCH`; exit 0 only when clean. `--tx-bytes <intent_id> [--attempt <n> \| --tx-hash <HASH>]` prints one attempt's exact stored TxRaw base64 (for `frontend/scripts/jx2VerifyTx.js`), refusing ambiguity. No ARN, table name or endpoint is printed; `--apply` and every mutation option are refused |
 
 **Every mutation**: a dry run unless `--apply` (nothing written, not even evidence); `--note` required (printable, never
 credential-shaped); the item read strictly and the write bound to exactly that state; the run's evidence `OPRUN#<run>` /
@@ -513,8 +514,9 @@ per-claim generation on the HEAD carried by every game fence -- the L6-3 report)
 an operator hold (a later slice). Note for L6-2 / L6-4: `POOL#op:r-*` and `OPRUN#*` items live in the game table (a pool
 enumeration must skip `op:` pools; they go with the table's generation).
 
-Run: `npm test` includes `aws/operator/l6_3Operator.test.js`; `npm run test:dynamodb-local` includes
-`persistence/conformance/operatorTooling.dynamoLocal.test.js`.
+Run: `npm test` includes `aws/operator/l6_3Operator.test.js` and (JX-4B) `aws/operator/jx4bMoneyEvidence.test.js`;
+`npm run test:dynamodb-local` includes `persistence/conformance/operatorTooling.dynamoLocal.test.js` and (JX-4B)
+`persistence/conformance/jx4bMoneyEvidence.dynamoLocal.test.js` (the reader over items the production writers wrote).
 
 ## 12. Generation adoption and the identity restore (LIVE-6 L6-4): `aws/recovery/`, `aws/ledger/appGeneration.ts`, `aws/game/generationMarker.ts`, `aws/identity/identityRestore.ts`
 

@@ -78,6 +78,32 @@ export function parseRelayQueueItem(queue: string, item: Item): RelayQueueEntry 
 }
 
 const INTENT_ID = /^[0-9a-f]{64}$/;
+
+/** JX-4B: one stored intent item, read strictly -- THE parser of an `INTENT#` item (the store's own reads call it; the
+ *  operator's read-only evidence reader calls it too, so there is one parser): its body classified by the intent
+ *  format, and its `record_version` attribute agreeing with the body (else the item is damage). Pure: reads nothing. */
+export function parseChainIntentItem(gameId: string, intentId: string, item: Item): ChainIntentRecord {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(item.body?.S ?? "");
+  } catch {
+    throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is not JSON`, gameId, intentId);
+  }
+  const format = chainIntentFormat(parsed, gameId, intentId);
+  if (format === "newer") throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is in a NEWER format than this build reads; never parsed or overwritten here`, gameId, intentId, format);
+  if (format === "older-unread") throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is in an OLDER format this build no longer reads; never parsed or overwritten here`, gameId, intentId, format);
+  if (format !== "current") throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is not a valid intent`, gameId, intentId);
+  /* The version every condition compares is the item's attribute: it must be the intent's own, or the item is damage. */
+  if (item.record_version?.N !== String((parsed as ChainIntentRecord).record_version)) throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} disagrees with its item's version attribute`, gameId, intentId);
+  return parsed as ChainIntentRecord;
+}
+
+/** JX-4B: the relay-queue key an intent item was CREATED with (`relay_pk` / `relay_sk`), or null when the item carries
+ *  none. Pure. */
+export function relayKeyOfIntentItem(item: Item): { readonly pk: string; readonly sk: string } | null {
+  return item.relay_pk?.S !== undefined && item.relay_sk?.S !== undefined ? { pk: item.relay_pk.S, sk: item.relay_sk.S } : null;
+}
+
 /** The relay-queue item's key, as the intent's creation stored it (carried on every rewrite of the intent). */
 const queueOf = (item: Item): { relay_pk?: Item[string]; relay_sk?: Item[string] } =>
   item.relay_pk?.S !== undefined && item.relay_sk?.S !== undefined ? { relay_pk: item.relay_pk, relay_sk: item.relay_sk } : {};
@@ -106,19 +132,7 @@ export function createDynamoIntentStore(options: DynamoIntentStoreOptions): Dyna
 
   function classify(gameId: string, intentId: string, item: Item | null): ChainIntentRecord | null {
     if (item === null) return null;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(item.body?.S ?? "");
-    } catch {
-      throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is not JSON`, gameId, intentId);
-    }
-    const format = chainIntentFormat(parsed, gameId, intentId);
-    if (format === "newer") throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is in a NEWER format than this build reads; never parsed or overwritten here`, gameId, intentId, format);
-    if (format === "older-unread") throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is in an OLDER format this build no longer reads; never parsed or overwritten here`, gameId, intentId, format);
-    if (format !== "current") throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} is not a valid intent`, gameId, intentId);
-    /* The version every condition compares is the item's attribute: it must be the intent's own, or the item is damage. */
-    if (item.record_version?.N !== String((parsed as ChainIntentRecord).record_version)) throw new ChainIntentUnreadableError(`chain intent ${intentId} of ${gameId} disagrees with its item's version attribute`, gameId, intentId);
-    return parsed as ChainIntentRecord;
+    return parseChainIntentItem(gameId, intentId, item);
   }
 
   const factOf = (gameId: string, intentId: string, item: Item): FormatFact => {

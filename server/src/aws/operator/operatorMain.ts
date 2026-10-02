@@ -11,6 +11,12 @@
 //                                       ahead / inconsistent / unknown), the owner pool, its record, hold and financial
 //                                       record (read by their own stores), and whether claim / take / release are allowed
 //     aws wallet-grants <game_id>       JX-3B, read-only: one game's wallet grants, redacted (`tools/walletGrants.ts`)
+//     aws money <game_id> [--chain] [--tx-bytes <intent_id> [--attempt <n> | --tx-hash <HASH>]]
+//                                       JX-4B, read-only: one money game's evidence -- FIN and its frozen roster, the wallet
+//                                       grants, every chain intent and EVERY attempt, the relay queue and the signing
+//                                       journal (ATTI# / TXID#), judged (`moneyEvidence.ts`, `tools/moneyEvidence.ts`);
+//                                       --chain adds read-only Juno queries of the bound deployment; --tx-bytes exports one
+//                                       attempt's exact stored TxRaw (base64) for `frontend/scripts/jx2VerifyTx.js`
 //     aws games [--money] [--month <yyyymm>]
 //                                       every game of the directory (DIRKEYS -> DIR#), or every OPEN money game (FINKEYS ->
 //                                       FINIDX#), with its owner class
@@ -66,6 +72,10 @@ import { DEFAULT_MONEY_WAIT_MS, DEFAULT_RECOVERY_LIMIT, recoverFromPool, type Re
 import { retirementCheck, type RetirementReport } from "./retire";
 import { awsWalletGrants, inspectDeployment, inspectGame, listGames, type DeploymentInspection, type GameInspection, type GameListing, type Read } from "./inspect";
 import { walletGrantsText } from "../../tools/walletGrants";
+import { moneyEvidenceText } from "../../tools/moneyEvidence";
+import { createJunoRest } from "../../escrow/juno/junoRest";
+import type { JunoBackendConfig } from "../../escrow/juno/junoConfig";
+import { awsMoneyEvidence, awsTxBytes, chainReadPort, scrubOperatorText, type AwsMoneyEvidenceOptions, type ChainReadPort } from "./moneyEvidence";
 import { claimGameAsOperator, releaseGameAsOperator, setPrimary, takeGameAsOperator, type MutationContext, type MutationResult, type OperatorRun } from "./mutations";
 import { LOCAL_DOCUMENT_FLAG, OperatorRefusal, RELAYER_FLAG, resolveOperatorTarget, type OperatorTarget } from "./operatorTarget";
 
@@ -75,6 +85,10 @@ export const AWS_USAGE = [
   "  game <game_id>                      one game's owner and whether claim / take / release are allowed (read-only)",
   "  games [--money] [--month <yyyymm>]  every directory game, or every open money game, with its owner (read-only)",
   "  wallet-grants <game_id>             JX-3B: one game's wallet grants, redacted (read-only; standing needs the identity table)",
+  "  money <game_id> [--chain]           JX-4B: one money game's evidence -- FIN, roster, tickets, intents and every attempt, the",
+  "                                      relay queue, the signing journal, with verdicts; --chain adds read-only Juno queries (read-only)",
+  "  money <game_id> --tx-bytes <intent_id> [--attempt <n> | --tx-hash <HASH>]",
+  "                                      JX-4B: one attempt's exact stored TxRaw, base64, on stdout (for jx2VerifyTx.js; read-only)",
   "  set-primary <pool> --expect-version <n> --note \"<why>\" [--apply]",
   "                                      SYSTEM/ROUTING compare-and-swap (a dry run without --apply)",
   "  claim <game_id> --note \"<why>\" [--apply]      an operator run takes a released game",
@@ -98,8 +112,12 @@ export const AWS_USAGE = [
 
 export const EXIT = Object.freeze({ ok: 0, findings: 1, usage: 2, unknown: 3 });
 
-const VALUE_FLAGS = new Set(["--aws-config", LOCAL_DOCUMENT_FLAG, RELAYER_FLAG, "--note", "--expect-version", "--run", "--month", "--data", "--escrow-config", "--evidence", "--flip-record", "--pool-document", "--limit", "--money-wait-seconds", "--observe-seconds", "--minutes", "--record"]);
-const BOOLEAN_FLAGS = new Set(["--json", "--apply", "--money", "--rollback"]);
+const VALUE_FLAGS = new Set(["--aws-config", LOCAL_DOCUMENT_FLAG, RELAYER_FLAG, "--note", "--expect-version", "--run", "--month", "--data", "--escrow-config", "--evidence", "--flip-record", "--pool-document", "--limit", "--money-wait-seconds", "--observe-seconds", "--minutes", "--record", "--tx-bytes", "--attempt", "--tx-hash"]);
+const BOOLEAN_FLAGS = new Set(["--json", "--apply", "--money", "--rollback", "--chain"]);
+/** JX-4B: the only options `money` takes -- the deployment, the output form and its own read selectors. Anything else
+ *  (--apply, --note, --expect-version, --run, ...) names a mutation mode and is refused: `money` writes nothing. */
+const MONEY_OPTIONS = new Set(["--aws-config", LOCAL_DOCUMENT_FLAG, RELAYER_FLAG, "--json", "--chain", "--tx-bytes", "--attempt", "--tx-hash"]);
+const MONEY_ONLY = ["--chain", "--tx-bytes", "--attempt", "--tx-hash"];
 
 export interface OperatorIo {
   out(line: string): void;
@@ -117,6 +135,9 @@ export interface OperatorSeams {
   readonly sleep?: (ms: number) => Promise<void>;
   /** L6-2: the flip observation's and money wait's poll interval (ms). */
   readonly pollMs?: number;
+  /** JX-4B: `money --chain`'s read port from the deployment's escrow configuration (production: `createJunoRest` over its
+   *  REST endpoints, narrowed to reads). */
+  readonly chainRest?: (juno: JunoBackendConfig) => ChainReadPort;
   /** L6-5B: the planned-flip window's alarm suppression (production: CloudWatch in the deployment's region; DynamoDB
    *  Local: none). null: none. */
   readonly suppression?: FlipSuppressionPort | null;
@@ -342,7 +363,7 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     io.err(`gamesDoctor aws: ${[...(unknown.length > 0 ? [`unknown option ${unknown.join(", ")}`] : []), ...args.problems].join("; ")}\n${AWS_USAGE}`);
     return EXIT.usage;
   }
-  const known = ["status", "game", "games", "wallet-grants", "set-primary", "claim", "take", "release", "flip", "flip-observe", "recover", "retire-check", "orphans", "suppression-overlap"];
+  const known = ["status", "game", "games", "wallet-grants", "money", "set-primary", "claim", "take", "release", "flip", "flip-observe", "recover", "retire-check", "orphans", "suppression-overlap"];
   const noSubject = ["status", "games", "flip-observe", "orphans"];
   if (
     command === undefined ||
@@ -356,9 +377,51 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
   }
   const json = args.flags.has("--json");
   const apply = args.flags.has("--apply");
-  if (apply && (command === "status" || command === "game" || command === "games" || command === "wallet-grants" || command === "retire-check" || command === "orphans" || command === "flip-observe")) {
+  if (apply && (command === "status" || command === "game" || command === "games" || command === "wallet-grants" || command === "money" || command === "retire-check" || command === "orphans" || command === "flip-observe")) {
     io.err(`gamesDoctor aws ${command} is read-only: --apply means nothing here`);
     return EXIT.usage;
+  }
+  /* JX-4B: money's own options are its alone, and money takes no other (no mutation mode reaches it). */
+  const given = [...args.flags, ...args.values.keys()];
+  if (command === "money") {
+    const foreign = given.filter((name) => !MONEY_OPTIONS.has(name));
+    if (foreign.length > 0) {
+      io.err(`gamesDoctor aws money is read-only: ${foreign.join(", ")} means nothing here (it writes nothing, signs nothing, sends nothing)`);
+      return EXIT.usage;
+    }
+    if ((args.values.get("--tx-bytes")?.length ?? 0) > 1) {
+      io.err("gamesDoctor aws money: --tx-bytes names ONE intent");
+      return EXIT.usage;
+    }
+    if (!args.values.has("--tx-bytes") && (args.values.has("--attempt") || args.values.has("--tx-hash"))) {
+      io.err("gamesDoctor aws money: --attempt / --tx-hash select an attempt for --tx-bytes");
+      return EXIT.usage;
+    }
+    if (args.values.has("--tx-bytes") && args.flags.has("--chain")) {
+      io.err("gamesDoctor aws money: --tx-bytes exports stored bytes only (no --chain)");
+      return EXIT.usage;
+    }
+    /* The selectors, checked before anything is read: one of each at most, never both, well-formed. */
+    const attempts = args.values.get("--attempt") ?? [];
+    const hashes = args.values.get("--tx-hash") ?? [];
+    if (attempts.length > 1 || hashes.length > 1 || (attempts.length > 0 && hashes.length > 0)) {
+      io.err("gamesDoctor aws money: name the attempt ONCE, with --attempt <n> or --tx-hash <HASH> (not both)");
+      return EXIT.usage;
+    }
+    if (attempts.length === 1 && !/^[1-9][0-9]{0,2}$/.test(attempts[0])) {
+      io.err("gamesDoctor aws money: --attempt is an attempt number (1, 2, ...)");
+      return EXIT.usage;
+    }
+    if (hashes.length === 1 && !/^[0-9A-Fa-f]{64}$/.test(hashes[0])) {
+      io.err("gamesDoctor aws money: --tx-hash is a 64-hex transaction hash");
+      return EXIT.usage;
+    }
+  } else {
+    const misplaced = given.filter((name) => MONEY_ONLY.includes(name));
+    if (misplaced.length > 0) {
+      io.err(`gamesDoctor aws ${command}: ${misplaced.join(", ")} belongs to \`money\`\n${AWS_USAGE}`);
+      return EXIT.usage;
+    }
   }
   let target: OperatorTarget;
   /** L6-5B: the flip window's CloudWatch client, when one was made (destroyed with the target's clients). */
@@ -398,6 +461,52 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
         for (const text of walletGrantsText(v)) io.out(text);
       });
       return view.identity.read && view.record.read ? EXIT.ok : EXIT.findings;
+    }
+    if (command === "money") {
+      const intentId = one(args, "--tx-bytes");
+      if (intentId !== undefined) {
+        const attemptText = one(args, "--attempt");
+        const txHash = one(args, "--tx-hash");
+        const selection = await awsTxBytes(target, subject as string, intentId, { ...(attemptText !== undefined ? { attempt: Number(attemptText) } : {}), ...(txHash !== undefined ? { txHash } : {}) });
+        if (!selection.ok) {
+          io.err(`gamesDoctor aws money --tx-bytes: REFUSED (nothing exported) -- ${selection.reason}`);
+          return EXIT.findings;
+        }
+        const e = selection.export;
+        if (json) io.out(JSON.stringify(e, null, 2));
+        else {
+          /* stdout carries the bytes ALONE (redirect it to a file for jx2VerifyTx.js --tx-file); the description goes to stderr. */
+          io.out(e.tx_base64);
+          io.err(`tx-bytes (READ-ONLY): game ${e.game_id} intent ${e.intent_id} (${e.op}) attempt ${e.attempt} of ${e.of_attempts} (${e.chosen_by}), phase ${e.phase}`);
+          io.err(`  tx ${e.tx_hash}; SHA-256 of the stored bytes ${e.sha256_matches_tx_hash ? "= the tx hash" : "!= THE TX HASH (the stored attempt is damaged)"}`);
+          io.err(`  account ${e.account} account_number ${e.account_number} sequence ${e.sequence} gas_limit ${e.gas_limit} fee ${e.fee.amount}${e.fee.denom} timeout_height ${e.timeout_height}`);
+          io.err(`  verify offline: ${e.verify_with}`);
+        }
+        return e.sha256_matches_tx_hash ? EXIT.ok : EXIT.findings;
+      }
+      let chain: AwsMoneyEvidenceOptions["chain"] = null;
+      if (args.flags.has("--chain")) {
+        const juno = target.juno ?? null;
+        if (juno === null) {
+          chain = { unavailable: target.kind === "dynamodb-local" ? "DynamoDB Local reads no escrow configuration, so --chain has no deployment to query" : target.escrow.state === "none" ? "no escrow is configured" : "the escrow configuration was not read or is not usable" };
+        } else {
+          try {
+            const port =
+              seams.chainRest !== undefined
+                ? chainReadPort(seams.chainRest(juno))
+                : chainReadPort(createJunoRest({ endpoints: juno.endpoints, expectedChainId: juno.chainId, allowInsecureLocalHttp: juno.allowInsecureLocalHttp, timeoutMs: juno.timeoutMs, maxResponseBytes: 256 * 1024, maxCodeBytes: 4 * 1024 * 1024 }));
+            chain = { port, expect: { configured_chain_id: juno.chainId, configured_contract: juno.contract, relayer: juno.relayer.address, operators: juno.trust.operators, resolvers: juno.trust.resolvers, admission_pubkey: juno.admissionKey.publicKeyHex } };
+          } catch (error) {
+            /* The error's NAME only: a refused endpoint's message could quote a URL (a provider key can sit in one). */
+            chain = { unavailable: `no chain transport could be made from the escrow configuration's endpoints (${error instanceof Error ? error.name : "error"})` };
+          }
+        }
+      }
+      const view = await awsMoneyEvidence(target, subject as string, { now: (seams.now ?? Date.now)(), chain });
+      print(view, (v) => {
+        for (const text of moneyEvidenceText(v)) io.out(text);
+      });
+      return view.summary.clean ? EXIT.ok : EXIT.findings;
     }
     if (command === "games") {
       const month = one(args, "--month");
@@ -591,8 +700,10 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
   } catch (error) {
     /* Review L3: a read that failed where no per-item answer is given (a listing's index, say) -- reported as such, never
        as a usage error. A mutation catches its own failures; anything reaching here from one is not known to be harmless. */
-    const detail = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 300) : String(error).slice(0, 300);
-    const mutation = !["status", "game", "games", "wallet-grants", "retire-check", "orphans"].includes(command);
+    const raw = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 300) : String(error).slice(0, 300);
+    /* JX-4B: money's evidence carries no AWS identifier or endpoint, its failures included. */
+    const detail = command === "money" ? scrubOperatorText(raw, target) : raw;
+    const mutation = !["status", "game", "games", "wallet-grants", "money", "retire-check", "orphans"].includes(command);
     io.err(`gamesDoctor aws ${command}: ${mutation ? "FAILED (see the run's evidence item, if one was written, before trying again)" : "a read failed (nothing was changed)"} -- ${detail}`);
     return mutation ? EXIT.unknown : EXIT.findings;
   } finally {

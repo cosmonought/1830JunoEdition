@@ -55,6 +55,14 @@
 //                        security context as a stable fingerprint and its verdict (current / ended). No session id,
 //                        selector, cookie or raw principal/family id is printed. `gamesDoctor aws wallet-grants` is the
 //                        same view over DynamoDB.
+//   aws money <game_id> [--chain] [--json] [--tx-bytes <intent_id> [--attempt <n> | --tx-hash <HASH>]] --aws-config <arn>
+//                        JX-4B, READ-ONLY: one AWS money game's evidence for a live JX-4 run -- FIN (phase, version, hold,
+//                        binding, the complete roster hash and expected domain, every roster seat), the JX-3B wallet grants,
+//                        every chain intent with EVERY attempt, the relayer's RELAYQ# membership and the signing journal's
+//                        ATTI# / TXID# correlation, judged as explicit verdicts (JOURNAL MATCH / MISMATCH, ...); --chain adds
+//                        read-only Juno queries of the bound deployment (ROSTER MATCH, CHAIN BINDING MATCH); --tx-bytes
+//                        exports one attempt's exact stored TxRaw for `frontend/scripts/jx2VerifyTx.js`. Refuses --apply.
+//                        File mode's `money` keeps its own (lifecycle) shape -- see `aws/operator/moneyEvidence.ts`.
 //   aws <command> ...    LIVE-6 L6-3: the AWS storage mode's operator surface (`aws/operator/operatorMain.ts`): read-only
 //                        inspection of the DynamoDB deployment (routing, APPGEN, pools, roles, a game's owner) and the
 //                        controlled mutations (the routing CAS; an operator run's claim / take / release of a game), each a
@@ -1347,7 +1355,8 @@ const USAGE = [
   "                                      --legacy-logs; `compat` names the key a server with that configuration serves",
   "                                      once its escrow backend opens (the banner and ops/status.json are the authority)",
   "  aws <command> ...                   LIVE-6 L6-3: the AWS (DynamoDB) deployment -- `gamesDoctor aws` lists its commands",
-  "                                      (status, game, games read-only; set-primary, claim, take, release -- dry runs unless --apply)",
+  "                                      (status, game, games read-only; set-primary, claim, take, release -- dry runs unless --apply;",
+  "                                      JX-4B: money <game_id> [--chain] [--tx-bytes <intent_id>] -- one money game's evidence, read-only)",
 ].join("\n");
 
 function line(game: Inspection["games"][number]): string {

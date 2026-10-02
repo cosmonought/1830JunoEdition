@@ -1,0 +1,493 @@
+{
+ "format": "18COSMOS/RECON-0-LINEAGE/v1",
+ "date": "2026-10-02",
+ "verdict": "COMPLETE",
+ "heads": {
+  "line_tip": "1d8fd7aee312ad239d1d7aa1f31a4f42519d4946",
+  "cost1": "7d140b4db777faccf11e220bcf7e3bcbd8fc889a",
+  "cost2a": "ce77f47d80b42bf9bf1206c0685d0b0325441801",
+  "cost2b": "161c7376ac88f61a7adcf6251c099c92eb1b2d96",
+  "p5_int": "9e45ded0dd0cdd9e255402aa4e053b936b53c635",
+  "jx4c": "ee14050f18ba4a51b5af73a5ea9a9a6e89674073",
+  "l6_14w": "04138eaf27aff7e4b35486608720eca1d295af97",
+  "main": "e1f1280360c1d2cb4b41b88ac978e82479156c58"
+ },
+ "recon1_base": "ee14050f18ba4a51b5af73a5ea9a9a6e89674073",
+ "recon1_order": [
+  "ee14050 (verify head)",
+  "[if P5-INT-1 moved] merge its head",
+  "merge 04138ea",
+  "merge 161c737",
+  "merge ce77f47",
+  "RECON-1 commit: C-04, C-05, X-09",
+  "[owner approval] W-04, W-02, W-03",
+  "COST-2C when final",
+  "canonical header last"
+ ],
+ "tests_run_by_recon0": [],
+ "full_suite": "PENDING OWNER GATE",
+ "items": [
+  {
+   "id": "P-01",
+   "source": "LIVE-5 sides cfee004 d064f49 0b3eaf8 f7609cf 0fa34ae -> f17c661 fe00475 09d2308 c74e555 3c96382",
+   "classification": "EXACTLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "P-02",
+   "source": "L6-1/3/4/5A sides f0c9840 8e10d74 088abbd 49c7b71 -> 9f3fb59 2f41be2 78bb14a 35d2a7c",
+   "classification": "SEMANTICALLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "P-03",
+   "source": "R12 sides 7b24a60 0fcefa4 54d8898 c785247 -> 8e8d339 784fc0a e4305a5 be281eb",
+   "classification": "EXACTLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "L-01",
+   "source": "8a2dc2b L6-6 -> fc6af5c (converged)",
+   "classification": "SEMANTICALLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "L-02",
+   "source": "0c20222 L6-6R -> df6e85a",
+   "classification": "EXACTLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [
+    "L-01"
+   ],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "L-03",
+   "source": "b7caddc L6-6P -> 80c333e",
+   "classification": "SEMANTICALLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [
+    "L-02"
+   ],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "L-04",
+   "source": "c4f4c91 L6-7 -> bc6d1c1",
+   "classification": "SEMANTICALLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "L-05",
+   "source": "f90de1d LIVE-6 W1 -> f4a3dda",
+   "classification": "EXACTLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "L-06",
+   "source": "429e992 restore-drill tooling -> 130395b + c14186d",
+   "classification": "EXACTLY PRESENT (source)",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none; do not delete"
+  },
+  {
+   "id": "L-07",
+   "source": "e59e9fe relayer-rotation prep -> 130395b, then 1d8fd7a",
+   "classification": "SUPERSEDED (in part, by L6-12D)",
+   "disposition": "SUPERSEDED",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "L-08",
+   "source": "38e9f3f post-flip integration -> 130395b",
+   "classification": "EXACTLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [
+    "L-06",
+    "L-07"
+   ],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "L-09",
+   "source": "04138ea L6-14W1 CRLF test fix",
+   "classification": "UNIQUE TEST-ONLY MUST INTEGRATE",
+   "disposition": "TAKE",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "merge live6/l6-14w-crlf-test-fix (applies cleanly)"
+  },
+  {
+   "id": "T-01",
+   "source": "ECS flip/drain/ALB/L6-5B multi-pool alarm machinery",
+   "classification": "TOPOLOGY-OBSOLETE",
+   "disposition": "RETIRED",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "keep source; never operate"
+  },
+  {
+   "id": "T-02",
+   "source": "restore drill procedure, GO-C, restore-alarm/fence probes",
+   "classification": "HISTORICAL TOOLING",
+   "disposition": "RETIRED",
+   "dependencies": [],
+   "conflict_surface": [
+    "2B runbook GO-C negation test"
+   ],
+   "recon1_action": "never resurrect"
+  },
+  {
+   "id": "T-03",
+   "source": "generation fence, APPGEN, metric builders, data-plane reads",
+   "classification": "topology-independent",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "T-04",
+   "source": "relayer rotation source (keys, gate v2, proof v2, set-operator-plan)",
+   "classification": "topology-independent",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "T-05",
+   "source": "relayer rotation procedure on single host; owner-local l613-admin.cjs",
+   "classification": "needs adaptation",
+   "disposition": "OWNER DECISION REQUIRED",
+   "dependencies": [
+    "C-03"
+   ],
+   "conflict_surface": [],
+   "recon1_action": "none in RECON-1"
+  },
+  {
+   "id": "C-01",
+   "source": "COST-1 b6858cc 7d140b4",
+   "classification": "base",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "C-02",
+   "source": "COST-2B 161c737",
+   "classification": "UNIQUE MUST INTEGRATE",
+   "disposition": "TAKE",
+   "dependencies": [
+    "C-01"
+   ],
+   "conflict_surface": [
+    "PROJECT_CANONICAL_CONTEXT.md",
+    "server/package.json"
+   ],
+   "recon1_action": "merge after base + L-09"
+  },
+  {
+   "id": "C-03",
+   "source": "COST-2A ce77f47",
+   "classification": "UNIQUE MUST INTEGRATE",
+   "disposition": "TAKE",
+   "dependencies": [
+    "C-01",
+    "C-02"
+   ],
+   "conflict_surface": [
+    "infra/aws/SINGLE_HOST_MIGRATION.md",
+    "infra/aws/fixtures/README.md",
+    "infra/aws/README.md",
+    "server/package.json",
+    "server/src/aws/operator/operatorMain.ts",
+    "PROJECT_CANONICAL_CONTEXT.md"
+   ],
+   "recon1_action": "merge; unions per sections F.2/H"
+  },
+  {
+   "id": "C-04",
+   "source": "D0 ordinary app apply vs frozen app stack; JX-4C operator+ledger grants",
+   "classification": "cross-branch semantic conflict",
+   "disposition": "TAKE",
+   "dependencies": [
+    "C-02",
+    "C-03",
+    "X-10"
+   ],
+   "conflict_surface": [
+    "SINGLE_HOST_MIGRATION.md",
+    "infra/aws/README.md",
+    "planGuards.ts",
+    "migrationCommands.ts",
+    "planFixtures.ts",
+    "cost2bMigrationGuards.test.ts"
+   ],
+   "recon1_action": "targeted guarded app-read-authorize (bootstrap HostVerifier* + operator IdentityEvidenceRead/LedgerJournalQuery) and ledger-operator-journal gates, before step 8"
+  },
+  {
+   "id": "C-05",
+   "source": "Check not-evaluated vs migration-guard SKIP print",
+   "classification": "union detail",
+   "disposition": "TAKE",
+   "dependencies": [
+    "C-02",
+    "C-03"
+   ],
+   "conflict_surface": [
+    "migrationCommands.ts"
+   ],
+   "recon1_action": "print NOT EVALUATED"
+  },
+  {
+   "id": "C-06",
+   "source": "COST-2C (no branch)",
+   "classification": "unknown",
+   "disposition": "PENDING ACTIVE LANE",
+   "dependencies": [
+    "C-01"
+   ],
+   "conflict_surface": [],
+   "recon1_action": "re-run section F on its final head"
+  },
+  {
+   "id": "X-01",
+   "source": "JX-1K 04cf14f -> 99eb537",
+   "classification": "SEMANTICALLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "X-02",
+   "source": "JX-2A 7d7b7e5 -> aff17f3",
+   "classification": "SEMANTICALLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "X-03",
+   "source": "JX-2B bdaad17 -> 0d8e6a8",
+   "classification": "EXACTLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [
+    "X-02"
+   ],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "X-04",
+   "source": "JX-3B 4c786ae -> 785779c",
+   "classification": "SEMANTICALLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "X-05",
+   "source": "JX-4B d752117 -> 32204a6",
+   "classification": "SEMANTICALLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [
+    "X-04"
+   ],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "X-06",
+   "source": "JX-5B 9b10012 -> e1521fa",
+   "classification": "SEMANTICALLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "X-07",
+   "source": "JX-6B 3b8d59f -> 74eeb4b",
+   "classification": "SEMANTICALLY PRESENT",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "X-08",
+   "source": "P5-INT-1 3fa10e6 6679d61 9e45ded",
+   "classification": "integration lane (no final report)",
+   "disposition": "PENDING ACTIVE LANE",
+   "dependencies": [
+    "X-01",
+    "X-07",
+    "C-01"
+   ],
+   "conflict_surface": [],
+   "recon1_action": "contained by ancestry in X-10; merge any later head"
+  },
+  {
+   "id": "X-09",
+   "source": "2B guards x JX-1K/r2 keys/JX-4C policies; 2A verifier x JX-1K config",
+   "classification": "semantic re-check",
+   "disposition": "TAKE",
+   "dependencies": [
+    "C-02",
+    "C-03",
+    "X-01",
+    "X-10"
+   ],
+   "conflict_surface": [
+    "tests"
+   ],
+   "recon1_action": "add fixtures; run cost2a/cost2b/jx4c suites"
+  },
+  {
+   "id": "X-10",
+   "source": "JX-4C ee14050",
+   "classification": "UNIQUE MUST INTEGRATE",
+   "disposition": "TAKE",
+   "dependencies": [
+    "X-08"
+   ],
+   "conflict_surface": [
+    "infra/aws/modules/app/iam.tf",
+    "infra/aws/modules/app/tests/*",
+    "infra/aws/modules/ledger/main.tf",
+    "infra/aws/modules/ledger/tests/*",
+    "server/package.json",
+    "infra/aws/README.md"
+   ],
+   "recon1_action": "RECON-1 base; grants applied only via C-04 gates"
+  },
+  {
+   "id": "H-01",
+   "source": "server/package.json",
+   "classification": "registration union",
+   "disposition": "TAKE",
+   "dependencies": [],
+   "conflict_surface": [
+    "conflict"
+   ],
+   "recon1_action": "token union (section H)"
+  },
+  {
+   "id": "H-02",
+   "source": "operatorMain.ts",
+   "classification": "CLI union",
+   "disposition": "TAKE",
+   "dependencies": [
+    "X-04",
+    "X-05",
+    "C-03"
+   ],
+   "conflict_surface": [
+    "conflict"
+   ],
+   "recon1_action": "list union (section H)"
+  },
+  {
+   "id": "H-03",
+   "source": "Terraform test-count docs, fixtures README, infra README",
+   "classification": "doc union",
+   "disposition": "TAKE",
+   "dependencies": [],
+   "conflict_surface": [
+    "conflict"
+   ],
+   "recon1_action": "ledger 34, app 69, single-host 20"
+  },
+  {
+   "id": "H-04",
+   "source": "PROJECT_CANONICAL_CONTEXT.md",
+   "classification": "header union",
+   "disposition": "TAKE",
+   "dependencies": [],
+   "conflict_surface": [
+    "conflict"
+   ],
+   "recon1_action": "rewrite last"
+  },
+  {
+   "id": "W-02",
+   "source": "cost2aHostVerifier.test.ts l.969 indexOf(\"\\n}\\n\")",
+   "classification": "new portability gap",
+   "disposition": "OWNER DECISION REQUIRED",
+   "dependencies": [
+    "L-09"
+   ],
+   "conflict_surface": [],
+   "recon1_action": "recommend TAKE: readCheckoutText + delimiter assert"
+  },
+  {
+   "id": "W-03",
+   "source": "cost1SingleHost.test.ts $/m on raw server.env.tftpl",
+   "classification": "new portability gap",
+   "disposition": "OWNER DECISION REQUIRED",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "recommend TAKE: readCheckoutText"
+  },
+  {
+   "id": "W-04",
+   "source": "single-host host files not eol=lf; verbatim user_data; user_data_replace_on_change",
+   "classification": "new portability/safety gap",
+   "disposition": "OWNER DECISION REQUIRED",
+   "dependencies": [],
+   "conflict_surface": [
+    ".gitattributes"
+   ],
+   "recon1_action": "recommend TAKE before any host-create plan from Windows"
+  },
+  {
+   "id": "V-01",
+   "source": "version/protocol axes",
+   "classification": "none changed",
+   "disposition": "ALREADY PRESENT",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "none"
+  },
+  {
+   "id": "G-01",
+   "source": "full owner certification of RECON-1 candidate",
+   "classification": "owner-run",
+   "disposition": "PENDING OWNER GATE",
+   "dependencies": [],
+   "conflict_surface": [],
+   "recon1_action": "owner runs broad suites; RECON-0 ran none"
+  }
+ ]
+}

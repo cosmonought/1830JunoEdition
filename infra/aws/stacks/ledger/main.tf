@@ -32,5 +32,6 @@ module "ledger" {
   backup               = var.backup
   signing_keys_enabled = var.signing_keys_enabled
   relayer_key_count    = var.relayer_key_count
+  financial_key_sets   = var.financial_key_sets
   tags                 = var.tags
 }

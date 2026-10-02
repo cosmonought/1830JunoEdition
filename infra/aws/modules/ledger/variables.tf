@@ -82,6 +82,33 @@ variable "relayer_key_count" {
   }
 }
 
+variable "financial_key_sets" {
+  description = <<-EOT
+    JX-1K (Phase 5): labels of ADDITIONAL settlement + admission key PAIRS. Each label <l> creates exactly
+    `settlement-<l>` and `admission-<l>` (`aws_kms_key.signing["settlement-<l>"]` / `["admission-<l>"]`) beside the
+    original three -- same spec (ECC_SECG_P256K1 / SIGN_VERIFY, single-region), same key policy, `prevent_destroy`.
+    Default [] = the L5-8 / LIVE-6 deployment, unchanged. APPEND-ONLY: removing a label would destroy its keys and
+    `prevent_destroy` refuses that plan. These are financial signing keys, never relayer-rotation keys. WHICH pair the
+    deployment signs with is the app stack's `signing_keys.settlement` / `signing_keys.admission` (by key ARN), never this
+    module's. Output: `financial_key_arns`.
+  EOT
+  type        = list(string)
+  default     = []
+  nullable    = false
+  validation {
+    condition     = alltrue([for l in var.financial_key_sets : can(regex("^[a-z][a-z0-9]{1,15}$", l)) && !can(regex("^r[0-9]+$", l))])
+    error_message = "financial_key_sets: each label must match ^[a-z][a-z0-9]{1,15}$ (lowercase, starts with a letter, no hyphen, 2..16 chars) and must not be r<N> (the relayer rotation labels)."
+  }
+  validation {
+    condition     = length(distinct(var.financial_key_sets)) == length(var.financial_key_sets)
+    error_message = "financial_key_sets: each label at most once."
+  }
+  validation {
+    condition     = length(var.financial_key_sets) == 0 || var.signing_keys_enabled
+    error_message = "financial_key_sets needs signing_keys_enabled: a financial key is a signing key."
+  }
+}
+
 variable "tags" {
   description = "Tags on every resource."
   type        = map(string)

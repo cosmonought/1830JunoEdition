@@ -16,6 +16,8 @@ backup = {
 # relayer_key_count = 2
 
 # JX-1K financial key sets (infra/aws/README.md "Financial key sets"): each label adds a dedicated settlement-<label> +
-# admission-<label> pair. APPEND-ONLY: never remove a label (prevent_destroy refuses). The app stack then names
-# financial_key_arns.<label>.settlement / .admission in signing_keys.
+# admission-<label> pair. APPEND-ONLY: never remove a label (prevent_destroy refuses). The app stack -- or, on the COST-1
+# single host, stacks/single-host -- then names financial_key_arns.<label>.settlement / .admission in signing_keys.
+# COST (infra/aws/COST_BUDGET.json max_kms_keys = 6): the LIVE-6 -> JX-1 transition is the three keys + r2 + this pair = 6;
+# a further label or rotation key is an owner budget decision (docs/hosting-budget.md), never a tfvars edit alone.
 # financial_key_sets = ["jx1"]

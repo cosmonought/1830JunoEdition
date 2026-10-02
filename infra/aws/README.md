@@ -420,7 +420,17 @@ stacks/ledger:  financial_key_sets = ["jx1"]                                   p
   output financial_key_arns = { jx1 = { settlement = <key ARN>, admission = <key ARN> } }
 stacks/app:     signing_keys.settlement = financial_key_arns["jx1"].settlement
                 signing_keys.admission  = financial_key_arns["jx1"].admission   (only when that deployment is repointed)
+stacks/single-host (COST-1): the same signing_keys pair; the host role signs with exactly the three configured keys
 ```
+
+- **Single host (COST-1).** A financial key's policy is the original keys' policy, so it authorises exactly the ledger's
+  app runtime roles: the ECS task role while `ecs_task_role_authorized`, and `app_runtime_role_arns` (only
+  `gs-<env>-host-app`) -- both during the migration, the host role alone after it. The host role's own IAM policy names
+  the three `signing_keys` ARNs and nothing else, digest-only. Neither side is widened by a key set; adding the host role
+  rewrites the key policies in place and replaces no key (`modules/ledger` test `p5int_*`).
+- **Budget.** `COST_BUDGET.json` `max_kms_keys` = 6 is the LIVE-6 -> JX-1 transition (the three + `relayer-r2` + one
+  financial pair); steady state is 3. A further label or rotation key during it is an owner budget decision
+  (`cost1SingleHost.test.ts`, "P5-INT-1").
 
 - **Append-only.** Never remove a label from a live environment: removing it would destroy its keys, and
   `prevent_destroy` refuses that plan. Add a new label for a new pair; never reuse one.
@@ -802,7 +812,7 @@ Terraform state holds only non-secret values: the documents, ARNs and names. KMS
 ## Tests (no AWS)
 
 ```
-cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 30 runs (LIVE-6 relayer rotation: +6; COST-1 host role: +7; JX-1K financial key sets: +11)
+cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 32 runs (LIVE-6 relayer rotation: +6; COST-1 host role: +7; JX-1K financial key sets: +11; P5-INT-1: +2)
 cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 61 runs (app 45 + alarms 16; Terraform >= 1.10)
 cd infra/aws/stacks/app     && terraform init -backend=false && terraform validate    # (and stacks/ledger)
 cd server && npm run build && node --test dist/server/src/aws/deploy/l5_8Deploy.test.js dist/server/src/aws/awsClients.test.js

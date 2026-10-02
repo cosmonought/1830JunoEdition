@@ -550,3 +550,65 @@ run "a_financial_key_set_needs_the_signing_keys" {
   }
   expect_failures = [var.financial_key_sets]
 }
+
+/* ------------------------------------------------------------------ */
+/* P5-INT-1: COST-1's app runtime roles x JX-1K's financial key sets   */
+/* ------------------------------------------------------------------ */
+# The "financial" state continues (jx1 + jx2 applied above): authorising the single host's app role re-writes the key
+# policies IN PLACE -- every key keeps its ARN (none replaced) -- and every financial key carries exactly the original
+# keys' grants to exactly the configured runtime roles, the digest-only Sign conditions intact.
+
+run "p5int_financial_keys_authorise_the_host_role_beside_the_task_role" {
+  command   = apply
+  state_key = "financial"
+  variables {
+    financial_key_sets    = ["jx1", "jx2"]
+    app_runtime_role_arns = ["arn:aws:iam::111111111111:role/gs-staging-host-app"]
+  }
+
+  assert {
+    condition = (output.signing_key_arns == run.financial_baseline_is_the_three_keys.signing_key_arns
+    && output.financial_key_arns == run.a_second_financial_key_set_keeps_the_first.financial_key_arns)
+    error_message = "Authorising the host role replaces no key: the original three and both financial pairs keep their ARNs."
+  }
+  assert {
+    condition = alltrue([for k in ["settlement-jx1", "admission-jx1", "settlement-jx2", "admission-jx2"] :
+      length([for s in data.aws_iam_policy_document.signing[k].statement : s if contains(["AppTaskPublicKey", "AppTaskSignDigestOnly"], s.sid)
+        && toset(flatten([for c in s.condition : c.values if c.variable == "aws:PrincipalArn"])) == toset(["arn:aws:iam::111111111111:role/gs-staging-app-task", "arn:aws:iam::111111111111:role/gs-staging-host-app"])
+    && toset(flatten([for p in s.principals : p.identifiers])) == toset(["arn:aws:iam::111111111111:root"])]) == 2])
+    error_message = "Every financial key's GetPublicKey and Sign statements name exactly the ECS task role and the host role (the migration window), from the app account only."
+  }
+  assert {
+    condition = alltrue([for k in ["settlement-jx1", "admission-jx1", "settlement-jx2", "admission-jx2"] :
+      length([for s in data.aws_iam_policy_document.signing[k].statement : s if s.sid == "AppTaskSignDigestOnly"
+        && toset([for c in s.condition : "${c.variable}=${join(",", c.values)}" if c.variable != "aws:PrincipalArn"]) == toset(["kms:SigningAlgorithm=ECDSA_SHA_256", "kms:MessageType=DIGEST"])
+    && toset(s.actions) == toset(["kms:Sign"])]) == 1])
+    error_message = "The host role's Sign on a financial key stays ECDSA_SHA_256 over a DIGEST only (no restriction weakened)."
+  }
+  assert {
+    condition     = alltrue([for k in ["settlement-jx1", "admission-jx1", "settlement-jx2", "admission-jx2"] : data.aws_iam_policy_document.signing[k].statement == data.aws_iam_policy_document.signing[startswith(k, "settlement-") ? "settlement" : "admission"].statement])
+    error_message = "A financial key's policy stays the original key's, statement for statement, with the host role authorised."
+  }
+}
+
+run "p5int_financial_keys_host_role_only_after_ecs" {
+  command   = apply
+  state_key = "financial"
+  variables {
+    financial_key_sets       = ["jx1", "jx2"]
+    app_runtime_role_arns    = ["arn:aws:iam::111111111111:role/gs-staging-host-app"]
+    ecs_task_role_authorized = false
+  }
+
+  assert {
+    condition = (output.signing_key_arns == run.financial_baseline_is_the_three_keys.signing_key_arns
+    && output.financial_key_arns == run.a_second_financial_key_set_keeps_the_first.financial_key_arns)
+    error_message = "Retiring the ECS task role's grants replaces no key."
+  }
+  assert {
+    condition = alltrue([for k in ["relayer", "settlement", "admission", "settlement-jx1", "admission-jx1", "settlement-jx2", "admission-jx2"] :
+      length([for s in data.aws_iam_policy_document.signing[k].statement : s if contains(["AppTaskPublicKey", "AppTaskSignDigestOnly"], s.sid)
+    && toset(flatten([for c in s.condition : c.values if c.variable == "aws:PrincipalArn"])) == toset(["arn:aws:iam::111111111111:role/gs-staging-host-app"])]) == 2])
+    error_message = "After the ECS services are gone, every key -- original and financial -- grants GetPublicKey / Sign to the host role only."
+  }
+}

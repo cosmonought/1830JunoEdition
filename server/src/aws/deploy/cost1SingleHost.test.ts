@@ -14,6 +14,9 @@
 //              list, 80 (ACME), and 22 only through the emergency variable -- never the server port; IMDSv2 required
 //   secrets    no credential literal anywhere in the single-host files; no AWS credential env in the server's env
 //   gate       stacks/app's compute = "none" gates every ECS-era fixed-cost resource (COST_BUDGET.json lists them)
+//   kms        (P5-INT-1) the ledger's signing-key count -- the original three, the relayer rotation keys and JX-1K's
+//              financial key sets -- is 3 by default (the budget's steady state) and 6 for the documented LIVE-6 -> JX-1
+//              transition (r2 + one financial pair), exactly max_kms_keys; no other key family exists
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -267,5 +270,53 @@ describe("COST-1: stacks/app's ECS-era compute gate, and no new topology elsewhe
     const dirs = (rel: string) => fs.readdirSync(path.join(REPO, rel), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort();
     assert.deepEqual(dirs("infra/aws/stacks"), ["app", "ledger", "single-host"]);
     assert.deepEqual(dirs("infra/aws/modules"), ["app", "ledger", "single-host"]);
+  });
+});
+
+describe("P5-INT-1: the ledger's signing keys under max_kms_keys (COST-1 x JX-1K)", () => {
+  const ledgerMain = stripHcl(read("infra/aws/modules/ledger/main.tf"));
+  const ledgerVars = stripHcl(read("infra/aws/modules/ledger/variables.tf"));
+  const example = read("infra/aws/stacks/ledger/example.tfvars.example");
+  /** The key count stacks/ledger creates for a configuration, by the module's own composition (pinned below). */
+  const keyCount = (relayerKeyCount: number, financialKeySets: readonly string[]): number => 3 + (relayerKeyCount - 1) + 2 * financialKeySets.length;
+
+  test("the module's signing keys are exactly the original three, the rotation keys and two per financial key set", () => {
+    assert.match(
+      ledgerMain,
+      /signing_purpose\s*=\s*var\.signing_keys_enabled \? toset\(concat\(\["relayer", "settlement", "admission"\], \[for label in local\.relayer_rotation_labels : "relayer-\$\{label\}"\], local\.financial_key_purposes\)\) : toset\(\[\]\)/,
+      "a new signing-key family needs this guard (and an owner budget decision)",
+    );
+    assert.match(ledgerMain, /relayer_rotation_labels\s*=\s*\[for n in range\(2, var\.relayer_key_count \+ 1\) : "r\$\{n\}"\]/);
+    assert.match(ledgerMain, /financial_key_purposes\s*=\s*flatten\(\[for label in var\.financial_key_sets : \["settlement-\$\{label\}", "admission-\$\{label\}"\]\]\)/);
+    assert.equal([...ledgerMain.matchAll(/resource\s+"aws_kms_key"/g)].length, 1, "one aws_kms_key resource (aws_kms_key.signing) in the ledger");
+  });
+
+  test("the defaults are the budget's steady state: three keys", () => {
+    assert.match(ledgerVars, /variable "relayer_key_count" \{[\s\S]*?default\s+=\s+1\s/);
+    assert.match(ledgerVars, /variable "financial_key_sets" \{[\s\S]*?default\s+=\s+\[\]/);
+    assert.equal(keyCount(1, []), 3);
+    const kms = BUDGET.items.find((item) => /^KMS signing keys \(3\)/.test(item.service));
+    assert.ok(kms, "the expected cost counts exactly 3 KMS keys");
+  });
+
+  test("the documented LIVE-6 -> JX-1 transition (r2 + the jx1 pair) is exactly max_kms_keys, priced as listed", () => {
+    const rotation = /^#\s*relayer_key_count\s*=\s*(\d+)\s*$/m.exec(example);
+    const sets = /^#\s*financial_key_sets\s*=\s*(\[[^\]]*\])\s*$/m.exec(example);
+    assert.ok(rotation && sets, "stacks/ledger/example.tfvars.example documents the rotation and the financial key set");
+    const transition = keyCount(Number(rotation[1]), JSON.parse(sets[1]) as string[]);
+    assert.equal(transition, 6);
+    assert.equal(transition, BUDGET.max_kms_keys, "the transition fits max_kms_keys -- and uses all of it");
+    assert.equal(BUDGET.other_configurations["LIVE-6 -> JX-1 transition: up to 6 KMS keys"], `+${(BUDGET.max_kms_keys - 3).toFixed(2)}`, "$1 per key-month beyond the three");
+    assert.ok(keyCount(Number(rotation[1]), [...(JSON.parse(sets[1]) as string[]), "jx2"]) > BUDGET.max_kms_keys, "a second financial key set during the transition needs an owner budget decision");
+    assert.ok(keyCount(Number(rotation[1]) + 1, JSON.parse(sets[1]) as string[]) > BUDGET.max_kms_keys, "a further rotation during the transition needs an owner budget decision");
+  });
+
+  test("the single host signs with exactly the three configured keys, whichever set they come from", () => {
+    const hostVars = read("infra/aws/modules/single-host/variables.tf");
+    assert.match(hostVars, /variable "signing_keys" \{[\s\S]*?relayer\s+=\s+string\s+settlement\s+=\s+string\s+admission\s+=\s+string/);
+    assert.match(hostVars, /length\(distinct\(values\(var\.signing_keys\)\)\) == 3/);
+    const iam = stripHcl(read("infra/aws/modules/single-host/iam.tf"));
+    assert.equal([...iam.matchAll(/Resource\s*=\s*try\(values\(var\.signing_keys\), \[\]\)/g)].length, 2, "GetPublicKey and Sign name exactly the configured key ARNs");
+    assert.ok(!/kms:CreateGrant|kms:\*|"kms:Sign\*"/.test(iam.replace(/NEVER[^\n]*/g, "")), "no grant, no wildcard KMS action");
   });
 });

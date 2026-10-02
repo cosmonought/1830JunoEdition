@@ -460,6 +460,30 @@ pool's service task) and keep one suppressible condition of a flip pool failing 
 `probe-flip-alarms.json`; `gamesDoctor aws recover A --apply --flip-record <dir>/flip-record.json` until RECOVERY SETTLED;
 after the window's end + 5 min, steps 1-7 with `--scenario flip-drill --primary-pool B`.
 
+**The flip alarm drill (`probe-flip-alarms.json`): `infra/aws/scripts/run-flip-alarm-probe.{sh,ps1}`** with
+`server/src/aws/deploy/staging/flipAlarmDrill.ts` (the program and every phase's judge; `drills.ts`'s judge unchanged). Two
+STANDALONE tasks (the run-task-probe model: the pool's running task definition, the command overridden to the drill's
+`node -e` program over the image's own compiled `runtimeMetrics` EMF encoder, GS_STORAGE = a value start.ts refuses): they
+take no pool, role, routing, generation or game and never touch the escrow; `inject` and `hold-start` refuse unless the
+flip record's window is open. With the flip applied (window open, `<dir>/flip-record.json`):
+
+```
+run-flip-alarm-probe hold-start ... <dir> <pool A or B> [<hold seconds>]   # PoolWriterConfirmed=0 for that pool: A12b
+run-flip-alarm-probe inject     ... <dir> <pool>                          # TaskLost=1 / TaskSuperseded=0, exit 3: A1
+run-flip-alarm-probe observe    ... <dir> a1 A,B                          # polls: the exit 3 in the window, A1 ALARM, actionable
+run-flip-alarm-probe observe    ... <dir> during A,B                      # polls: A12b-notify ALARM suppressed by Alarm; only A, B suppressors ALARM
+gamesDoctor aws recover A --apply --flip-record <dir>/flip-record.json    # until RECOVERY SETTLED (closes the window)
+run-flip-alarm-probe observe    ... <dir> after A,B                       # polls: after the window's end, still ALARM, suppressed by None
+run-flip-alarm-probe hold-stop  ... <dir>
+node dist/server/src/tools/awsDeploy.js stage-probe flip-alarms record --run-id R --evidence <dir> --environment <env> --pools A,B
+```
+
+Each `observe` captures `describe-alarms` (and, for a1, `describe-alarm-history`) with machine timestamps into
+`<dir>/flip-alarms/` and stages `observe-<phase>.json` only when that phase is true (NOT YET polls; a phase that can no longer
+be true is REFUSED). `record` binds the three to the flip record's window, judges the candidate with `judgeFlipAlarmDrill` and
+only then writes `probe-flip-alarms.json`. The hold is bounded (`--hold-seconds` 600..5400, default 4500) and stopped by
+`hold-stop`; both tasks must be STOPPED before the final capture.
+
 **Relayer rotation drill order:** drain the old relayer's queue, drain every pool, capture, `awsDeploy relayer-rotation-gate
 ... --evidence <dir> --record <dir>/gate-relayer-rotation.json` (GATE OPEN), only then change the relayer configuration
 (Terraform `escrow`) and start the pools, then steps 1-7 with `--scenario relayer-rotation-drill --from-relayer <old>

@@ -43,6 +43,7 @@ import { RELAYER_ADDRESS } from "../relayerRotation";
 import { certify, certificationText, clearCertification, idleBoundsOf, prerequisiteChecks, prerequisitePassed, prerequisiteRecord, SCENARIOS, writeCertification, type CertContext, type Scenario, type StagingGate } from "./certify";
 import { DRILL_FILES } from "./drills";
 import { requiredIdleMs, runEdgeProbe, SESSION_COOKIE_ENV, type EdgeTransport } from "./edgeProbe";
+import { EXIT_NOT_YET, probeOverrides, recordFlipAlarms, stagePhase, windowOpen } from "./flipAlarmDrill";
 import { MAINNET_CHAIN_IDS } from "../../../escrow/juno/signer";
 import { arr, disposablePartition, EVIDENCE, isoOf, obj, PROBE_FORMAT, readEvidence, recordFromLog, recordLines, runIdProblem, scrub, secretFindings, stableStringify, writeRecord } from "./evidence";
 
@@ -228,7 +229,62 @@ export async function stageProbeCommand(argv: readonly string[], deps: DeployDep
     deps.out(`COLLECTED: ${path.join(dir, EVIDENCE.taskRole)}`);
     return EXIT_OK;
   }
-  throw new UsageError("stage-probe task-role | edge | collect");
+  if (sub === "flip-alarms") return flipAlarmsCommand(rest, deps);
+  throw new UsageError("stage-probe task-role | edge | collect | flip-alarms");
+}
+
+/**
+ * The flip drill's alarm observations (`flipAlarmDrill.ts`; run by infra/aws/scripts/run-flip-alarm-probe.{ps1,sh}):
+ *   overrides --mode inject|hold --environment <env> --pool <pool> --run-id R [--hold-seconds N]   the probe task's overrides (JSON)
+ *   window    --run-id R --evidence <dir>                     exit 0 only while the flip record's window is open
+ *   observe   --run-id R --evidence <dir> --environment <env> --pools p1,p2 --phase a1|during|after
+ *             0 observed and staged; 10 not yet (poll); 1 refused
+ *   record    --run-id R --evidence <dir> --environment <env> --pools p1,p2     writes probe-flip-alarms.json, judged first
+ * Reads only the evidence directory (the scripts capture AWS); writes only the evidence directory.
+ */
+function flipAlarmsCommand(argv: readonly string[], deps: DeployDeps): number {
+  const [sub, ...rest] = argv;
+  if (sub === "overrides") {
+    const flags = parseFlags(rest, ["--mode", "--environment", "--pool", "--run-id", "--hold-seconds"], []);
+    const mode = need(flags, "--mode");
+    if (mode !== "inject" && mode !== "hold") throw new UsageError("--mode is inject or hold");
+    const holdText = flags.get("--hold-seconds");
+    if (holdText !== undefined && mode !== "hold") throw new UsageError("--hold-seconds is for --mode hold");
+    try {
+      deps.out(JSON.stringify(probeOverrides({ mode, environment: environmentOf(need(flags, "--environment")), pool: need(flags, "--pool"), run: runOf(flags), ...(holdText === undefined ? {} : { holdSeconds: Number(holdText) }) })));
+    } catch (error) {
+      throw new UsageError((error as Error).message);
+    }
+    return EXIT_OK;
+  }
+  if (sub === "window") {
+    const flags = parseFlags(rest, ["--run-id", "--evidence"], []);
+    runOf(flags);
+    const answer = windowOpen(need(flags, "--evidence"), deps.now());
+    deps.out(`${answer.open ? "WINDOW OPEN" : "WINDOW NOT OPEN"}: ${answer.detail}`);
+    return answer.open ? EXIT_OK : EXIT_FAILED;
+  }
+  if (sub === "observe" || sub === "record") {
+    const flags = parseFlags(rest, ["--run-id", "--evidence", "--environment", "--pools", "--phase"], []);
+    const ctx = { dir: need(flags, "--evidence"), run: runOf(flags), environment: environmentOf(need(flags, "--environment")), pools: need(flags, "--pools").split(",").map((p) => p.trim()).filter((p) => p.length > 0) };
+    if (ctx.pools.length < 2) throw new UsageError("--pools names the deployment's pools (a flip has at least two)");
+    let verdict;
+    if (sub === "observe") {
+      const phase = need(flags, "--phase");
+      if (phase !== "a1" && phase !== "during" && phase !== "after") throw new UsageError("--phase is a1, during or after");
+      verdict = stagePhase(ctx, phase);
+    } else {
+      if (flags.has("--phase")) throw new UsageError("record takes no --phase");
+      verdict = recordFlipAlarms(ctx);
+    }
+    if (verdict.kind === "observed") {
+      deps.out(`${sub === "record" ? "RECORDED" : "OBSERVED"}: ${verdict.value}`);
+      return EXIT_OK;
+    }
+    deps.out(`${verdict.kind === "not-yet" ? "NOT YET" : "REFUSED"}: ${verdict.reasons.join("; ")}`);
+    return verdict.kind === "not-yet" ? EXIT_NOT_YET : EXIT_FAILED;
+  }
+  throw new UsageError("stage-probe flip-alarms overrides | window | observe | record");
 }
 
 /** Runs INSIDE the certifier task (the task role, the task's network, the task's own runtime document). */

@@ -54,6 +54,13 @@
 //                again, free, by a new grant that RE-ADOPTS that ticket for the same wallet -- after a fresh proof of the
 //                wallet and a fresh "Confirm it's you". The chain seat already carries that ticket, so the roster freeze
 //                adopts the deposit exactly as it would have; nothing is reassigned, and no other wallet can use it.
+//   REHOMED      JX-3B (owner ruling OD-JX3-1, 2026-10-02): before the freeze, the SAME wallet freshly proven by the SAME
+//                principal from ANOTHER standing security context (a second device, or a recovered one) re-homes the
+//                seat's standing grant: a new epoch re-adopts the same ticket, issued under the PROVING context, so
+//                standing follows the device that proved the wallet last (signing out the earlier device no longer ends
+//                it; signing out the proving device does). It is the RELINKED mechanism with stricter preconditions
+//                (`issue({ rehome: true })`): the newest grant, still standing, proven, no admission outstanding. No
+//                seat, wallet or ticket changes; the superseded grant keeps its context for audit. Same storage format.
 //   CONSENT KEYS the consent keys this seat's owner registered: the first with the link, later ones only after "Confirm
 //                it's you" (`registerConsentKey`, allowed on a frozen grant: the key may move while the game runs). The
 //                server relays a CONSENT or ANNUL only from a key registered here AND current on chain.
@@ -245,6 +252,12 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
       readonly relinkFrom?: number | null;
       /** ESCROW-4: the chain's next game id now (the floor below which no CreateGame can carry a fresh ticket). */
       readonly createFloor?: string | null;
+      /** JX-3B (OD-JX3-1): this relink RE-HOMES the seat's current grant -- the same wallet, freshly proven by the same
+       *  principal from ANOTHER standing security context. Stricter than a deposit relink: `relinkFrom` must name the
+       *  seat's NEWEST grant, which must still stand, be issued to this principal for this wallet, carry a proof, and
+       *  have no admission outstanding on any grant of the seat. The new epoch re-adopts its ticket under the proving
+       *  context. */
+      readonly rehome?: boolean;
     }): Promise<{ readonly ok: true; readonly ticket: string; readonly epoch: number } | { readonly ok: false; readonly refusal: IssueRefusal }> {
       if (!input.reauthorized) return { ok: false, refusal: "reauth-required" };
       const proof = input.proof ?? null;
@@ -268,6 +281,17 @@ export function createWalletTicketLedger(deps: WalletTicketDeps) {
          the seat is looked at, not only the newest -- a relink writes a newer grant while the older admission is still
          usable on chain (review S-M1) -- and a relink carries that admission forward. */
       const admitted = grants.filter((grant) => grant.player_id === input.playerId && admissionOutstanding(grant.admitted_until_secs, now));
+      /* JX-3B (OD-JX3-1): a re-home moves only a STANDING, proven, newest grant of this principal for this wallet, and
+         never while any admission of the seat may still land on chain (it would otherwise carry the admission forward
+         -- a re-home must not change what the admission rules allow). A grant that stopped standing meanwhile is not
+         re-homed: the caller answers "try again", and the next link is decided afresh (relink or issue). */
+      if (input.rehome === true) {
+        if (adopted === null || previous === undefined || adopted.epoch !== previous.epoch || adopted.issued_under.principal_id !== input.context.principalId || adopted.proof === null) {
+          return { ok: false, refusal: "relink-mismatch" };
+        }
+        if (admitted.length > 0) return { ok: false, refusal: "admission-outstanding" };
+        if (!stands(adopted, true)) return { ok: false, refusal: "conflict" };
+      }
       if (admitted.some((grant) => adopted === null || grant.wallet !== adopted.wallet || grant.ticket !== adopted.ticket)) return { ok: false, refusal: "admission-outstanding" };
       const carried = admitted.length === 0 ? null : Math.max(...admitted.map((grant) => grant.admitted_until_secs as number));
       const epoch = (previous?.epoch ?? 0) + 1;

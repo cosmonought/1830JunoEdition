@@ -48,6 +48,13 @@
 //                        verdict, its escrow served by the configuration given; a deployment-conflict hold only against a
 //                        `--chain` read that agrees), and, when it is sealed, the settlement evidence re-derives from its
 //                        sealed prefix. Audited; history is never edited.
+//   wallet-grants <game_id> [--json]
+//                        JX-3B, READ-ONLY (no lock, writes nothing, safe beside a running server): one game's wallet
+//                        grants (`walletGrants.ts`) -- seat, epoch, wallet, proof (kind, public key, challenge_digest,
+//                        proof_hash, verified_at), standing as the server judges it, revoke reason, freeze -- with every
+//                        security context as a stable fingerprint and its verdict (current / ended). No session id,
+//                        selector, cookie or raw principal/family id is printed. `gamesDoctor aws wallet-grants` is the
+//                        same view over DynamoDB.
 //   aws <command> ...    LIVE-6 L6-3: the AWS storage mode's operator surface (`aws/operator/operatorMain.ts`): read-only
 //                        inspection of the DynamoDB deployment (routing, APPGEN, pools, roles, a game's owner) and the
 //                        controlled mutations (the routing CAS; an operator run's claim / take / release of a game), each a
@@ -108,6 +115,7 @@ import { createContinuationWiring, type ContinuationWiring } from "../continuati
 import { compatibilityDescriptorText, operatorDescriptor, type CompatibilityDescriptor } from "../compatibilityDescriptor";
 import { createSettlementCoordinator, type SettlementCoordinator } from "../escrow/settlementCoordinator";
 import { listOrEmpty, readOnlyStoreFs } from "./readOnlyFs";
+import { collectWalletGrants, readFileIdentitySnapshot, walletGrantsText } from "./walletGrants";
 import type { GameIdentityFacts } from "../../../frontend/src/gameEngine/compat/continuationIdentity";
 import type { ContinuationVerdict, FormatFact } from "../../../frontend/src/gameEngine/compat/continuationVerdict";
 import { isGameMoneyTerms } from "../rooms/gameRecord";
@@ -1325,6 +1333,8 @@ const USAGE = [
   "                                      canonical continuation verdict against the configured escrow (read-only, any time)",
   "  money-release <game_id> --note \"<text>\" [--escrow-config <file>] [--chain]",
   "                                      ESCROW-3A + LIVE-4: lift a held money game this configuration continues (server stopped)",
+  "  wallet-grants <game_id> [--json]    JX-3B: one game's wallet grants -- epoch, seat, wallet, proof digests, standing, revoke",
+  "                                      reason, freeze; security contexts as fingerprints only (read-only, any time)",
   "  scan-v10 [--json]                   DA-8: the v10 -> v11 boundary scan of every stored log (read-only, any time)",
   "  compat [--escrow-config <file>] [--build <id>]",
   "                                      LIVE-4: this build's canonical compatibility descriptor and key, as canonical JSON",
@@ -1465,6 +1475,24 @@ async function main(argv: readonly string[]): Promise<number> {
       }
     }
     return money.games.some((game) => !game.readable || game.phase === "held" || game.class !== "continued" || game.intents_unreadable || game.intents.some((intent) => intent.status === "held")) ? 1 : 0;
+  }
+  /* JX-3B: one game's wallet grants, read-only and redacted (safe beside a running server: what was on disk then). */
+  if (command === "wallet-grants") {
+    if (!target) {
+      console.error(USAGE);
+      return 2;
+    }
+    const view = await collectWalletGrants({
+      gameId: target,
+      source: "file",
+      loadLedger: () => createFileWalletTicketStore(dataDir, { warn: quiet, fs: READ_ONLY }).load(target),
+      loadIdentity: () => readFileIdentitySnapshot(dataDir),
+      loadRecord: () => createFileRecordStore(dataDir, { warn: quiet, fs: READ_ONLY }).load(target),
+      now: Date.now(),
+    });
+    if (json) console.log(JSON.stringify(view, null, 2));
+    else for (const text of walletGrantsText(view)) console.log(text);
+    return view.identity.read && view.record.read ? 0 : 1;
   }
   if (command !== "inspect" && command !== "release" && command !== "gc" && command !== "reconcile-duplicate-code" && command !== "money-release") {
     console.error(USAGE);

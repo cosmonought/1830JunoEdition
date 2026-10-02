@@ -105,6 +105,17 @@ const DEPOSITS_MAX_GAMES = 25;
 const DEPOSITS_REUSE_MS = 5_000;
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 6;
+/** What a wallet link answers when the ledger refuses its issue (the sentences the link has always used). */
+const LINK_REFUSALS: Readonly<Record<string, readonly [number, string]>> = {
+  "reauth-required": [403, "Confirm it's you first."],
+  "not-seated": [403, "You don't have a seat at that table."],
+  "security-context-ended": [403, "This device was signed out (or your recovery key changed). Sign in again, confirm it's you, and link again."],
+  frozen: [409, "The seats are locked with the escrow; the payout wallet can't change now."],
+  conflict: [409, "The link changed meanwhile. Try again."],
+  "admission-outstanding": [409, "This seat's join approval hasn't expired yet."],
+  "proof-mismatch": [403, "The proof doesn't match the wallet."],
+  "relink-mismatch": [409, "That deposit can't be relinked to this seat."],
+};
 
 /* ==================================================================
     TYPES
@@ -1318,11 +1329,41 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       const decision = await linkDecision(record, seat.player_id, seat.player_id === record.host_player_id, entry.wallet, replace);
       if (decision.kind === "refused") return refusal(decision.status, decision.code, decision.reason);
       if (decision.kind === "unchanged") {
-        /* The same wallet again: its fresh proof replaces the old one (a proof ages out for the join admission), and
-           this browser's key is registered. The ticket and epoch stay (review S-M3). */
-        const renewed = await deps.tickets.renewProof({ gameId: record.game_id, playerId: seat.player_id, principalId: caller.principalId, proof, consentKey });
-        if (renewed !== "committed") return refusal(409, "conflict", "The link changed meanwhile. Try again.");
-        return answer({ mode: "unchanged", wallet: decision.grant.wallet, epoch: decision.grant.epoch, ticket: decision.grant.ticket });
+        const grant = decision.grant;
+        const sameContext = grant.issued_under.family_id === caller.familyId && grant.issued_under.recovery_selector === caller.recoverySelector;
+        if (sameContext || grant.issued_under.principal_id !== caller.principalId) {
+          /* The same wallet again, from the SAME security context: its fresh proof replaces the old one (a proof ages
+             out for the join admission), and this browser's key is registered. The ticket and epoch stay (review S-M3).
+             (Another principal's grant cannot stand on this principal's seat; `renewProof` refuses it as ever.) */
+          const renewed = await deps.tickets.renewProof({ gameId: record.game_id, playerId: seat.player_id, principalId: caller.principalId, proof, consentKey });
+          if (renewed !== "committed") return refusal(409, "conflict", "The link changed meanwhile. Try again.");
+          return answer({ mode: "unchanged", wallet: grant.wallet, epoch: grant.epoch, ticket: grant.ticket });
+        }
+        /* JX-3B (owner ruling OD-JX3-1): the same wallet, proven again by the same principal from ANOTHER standing
+           security context (a second device, or a recovered one). Before the freeze the grant RE-HOMES to the proving
+           context: a new epoch re-adopting the same ticket (the RELINKED mechanism, stricter: `issue({ rehome })`),
+           so signing out the earlier device no longer ends the link and signing out this one does. Every refusal
+           `linkDecision` applies (held, frozen, admission outstanding, deposit pending, already funded, the host's
+           CreateGame found) has already been passed to reach "unchanged"; the ledger re-checks freeze, admissions and
+           standing inside its own CAS. The player sees "unchanged" (same wallet, same ticket) with the new epoch. */
+        const rehomed = await deps.tickets.issue({
+          binding: { backend: deps.pin.backend, chain_id: deps.pin.chain_id, deployment_id: contract },
+          gameId: record.game_id,
+          playerId: seat.player_id,
+          wallet: entry.wallet,
+          context: { principalId: caller.principalId, familyId: caller.familyId, recoverySelector: caller.recoverySelector },
+          reauthorized: caller.sensitive,
+          proof,
+          consentKey,
+          relinkFrom: grant.epoch,
+          rehome: true,
+        });
+        if (!rehomed.ok) {
+          const [status, reason] = LINK_REFUSALS[rehomed.refusal] ?? [409, "The wallet wasn't linked."];
+          return refusal(status, rehomed.refusal === "relink-mismatch" ? "conflict" : rehomed.refusal, rehomed.refusal === "relink-mismatch" ? LINK_REFUSALS.conflict[1] : reason);
+        }
+        audit("money.wallet-linked", { game_id: record.game_id, epoch: rehomed.epoch, relink: false, rehome: true, from_epoch: grant.epoch });
+        return answer({ mode: "unchanged", wallet: entry.wallet, epoch: rehomed.epoch, ticket: rehomed.ticket, rehomed: true });
       }
       const issued = await deps.tickets.issue({
         binding: { backend: deps.pin.backend, chain_id: deps.pin.chain_id, deployment_id: contract },
@@ -1337,17 +1378,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
         createFloor: current?.nextChainGameId ?? null,
       });
       if (!issued.ok) {
-        const reasons: Record<string, [number, string]> = {
-          "reauth-required": [403, "Confirm it's you first."],
-          "not-seated": [403, "You don't have a seat at that table."],
-          "security-context-ended": [403, "This device was signed out (or your recovery key changed). Sign in again, confirm it's you, and link again."],
-          frozen: [409, "The seats are locked with the escrow; the payout wallet can't change now."],
-          conflict: [409, "The link changed meanwhile. Try again."],
-          "admission-outstanding": [409, "This seat's join approval hasn't expired yet."],
-          "proof-mismatch": [403, "The proof doesn't match the wallet."],
-          "relink-mismatch": [409, "That deposit can't be relinked to this seat."],
-        };
-        const [status, reason] = reasons[issued.refusal] ?? [409, "The wallet wasn't linked."];
+        const [status, reason] = LINK_REFUSALS[issued.refusal] ?? [409, "The wallet wasn't linked."];
         return refusal(status, issued.refusal, reason);
       }
       audit("money.wallet-linked", { game_id: record.game_id, epoch: issued.epoch, relink: decision.relinkFrom !== null });

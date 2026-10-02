@@ -10,6 +10,7 @@
 //     aws game <game_id>                one game: its HEAD owner (released / current / superseded / operator / orphaned /
 //                                       ahead / inconsistent / unknown), the owner pool, its record, hold and financial
 //                                       record (read by their own stores), and whether claim / take / release are allowed
+//     aws wallet-grants <game_id>       JX-3B, read-only: one game's wallet grants, redacted (`tools/walletGrants.ts`)
 //     aws games [--money] [--month <yyyymm>]
 //                                       every game of the directory (DIRKEYS -> DIR#), or every OPEN money game (FINKEYS ->
 //                                       FINIDX#), with its owner class
@@ -63,7 +64,8 @@ import { closeSuppressionOverlap, openSuppressionOverlap, type OverlapAnswer, ty
 import { readRouting } from "../game/routing";
 import { DEFAULT_MONEY_WAIT_MS, DEFAULT_RECOVERY_LIMIT, recoverFromPool, type RecoveryReport } from "./recovery";
 import { retirementCheck, type RetirementReport } from "./retire";
-import { inspectDeployment, inspectGame, listGames, type DeploymentInspection, type GameInspection, type GameListing, type Read } from "./inspect";
+import { awsWalletGrants, inspectDeployment, inspectGame, listGames, type DeploymentInspection, type GameInspection, type GameListing, type Read } from "./inspect";
+import { walletGrantsText } from "../../tools/walletGrants";
 import { claimGameAsOperator, releaseGameAsOperator, setPrimary, takeGameAsOperator, type MutationContext, type MutationResult, type OperatorRun } from "./mutations";
 import { LOCAL_DOCUMENT_FLAG, OperatorRefusal, RELAYER_FLAG, resolveOperatorTarget, type OperatorTarget } from "./operatorTarget";
 
@@ -72,6 +74,7 @@ export const AWS_USAGE = [
   "  status                              the deployment: routing, APPGEN, pools, the identity-writer and relayer roles (read-only)",
   "  game <game_id>                      one game's owner and whether claim / take / release are allowed (read-only)",
   "  games [--money] [--month <yyyymm>]  every directory game, or every open money game, with its owner (read-only)",
+  "  wallet-grants <game_id>             JX-3B: one game's wallet grants, redacted (read-only; standing needs the identity table)",
   "  set-primary <pool> --expect-version <n> --note \"<why>\" [--apply]",
   "                                      SYSTEM/ROUTING compare-and-swap (a dry run without --apply)",
   "  claim <game_id> --note \"<why>\" [--apply]      an operator run takes a released game",
@@ -339,7 +342,7 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     io.err(`gamesDoctor aws: ${[...(unknown.length > 0 ? [`unknown option ${unknown.join(", ")}`] : []), ...args.problems].join("; ")}\n${AWS_USAGE}`);
     return EXIT.usage;
   }
-  const known = ["status", "game", "games", "set-primary", "claim", "take", "release", "flip", "flip-observe", "recover", "retire-check", "orphans", "suppression-overlap"];
+  const known = ["status", "game", "games", "wallet-grants", "set-primary", "claim", "take", "release", "flip", "flip-observe", "recover", "retire-check", "orphans", "suppression-overlap"];
   const noSubject = ["status", "games", "flip-observe", "orphans"];
   if (
     command === undefined ||
@@ -353,7 +356,7 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
   }
   const json = args.flags.has("--json");
   const apply = args.flags.has("--apply");
-  if (apply && (command === "status" || command === "game" || command === "games" || command === "retire-check" || command === "orphans" || command === "flip-observe")) {
+  if (apply && (command === "status" || command === "game" || command === "games" || command === "wallet-grants" || command === "retire-check" || command === "orphans" || command === "flip-observe")) {
     io.err(`gamesDoctor aws ${command} is read-only: --apply means nothing here`);
     return EXIT.usage;
   }
@@ -388,6 +391,13 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
       print(game, (g) => printGame(io, g));
       const bad = [game.head, game.record, game.hold, game.financial].some((read) => read.state === "unreadable" || read.state === "unavailable") || !SETTLED_OWNERS.includes(game.owner.class);
       return bad || game.hold.state === "ok" ? EXIT.findings : EXIT.ok;
+    }
+    if (command === "wallet-grants") {
+      const view = await awsWalletGrants(target, subject as string, (seams.now ?? Date.now)());
+      print(view, (v) => {
+        for (const text of walletGrantsText(v)) io.out(text);
+      });
+      return view.identity.read && view.record.read ? EXIT.ok : EXIT.findings;
     }
     if (command === "games") {
       const month = one(args, "--month");
@@ -582,7 +592,7 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     /* Review L3: a read that failed where no per-item answer is given (a listing's index, say) -- reported as such, never
        as a usage error. A mutation catches its own failures; anything reaching here from one is not known to be harmless. */
     const detail = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 300) : String(error).slice(0, 300);
-    const mutation = !["status", "game", "games", "retire-check", "orphans"].includes(command);
+    const mutation = !["status", "game", "games", "wallet-grants", "retire-check", "orphans"].includes(command);
     io.err(`gamesDoctor aws ${command}: ${mutation ? "FAILED (see the run's evidence item, if one was written, before trying again)" : "a read failed (nothing was changed)"} -- ${detail}`);
     return mutation ? EXIT.unknown : EXIT.findings;
   } finally {

@@ -36,10 +36,15 @@
 
 import type { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
-import { DIRKEYS_KEY, FINKEYS_KEY, getItem, headKey, key, NO_OWNER, poolKey, queryAll, type Item } from "../game/gameTable";
+import { DIRKEYS_KEY, FINKEYS_KEY, gamePk, getItem, headKey, key, NO_OWNER, poolKey, queryAll, TICKETS_SK, type Item } from "../game/gameTable";
 import { createDynamoFinancialStore } from "../game/dynamoFinancialStore";
 import { createDynamoHoldStore } from "../game/dynamoHoldStore";
 import { createDynamoRecordStore } from "../game/dynamoRecordStore";
+import { decodeItem, keyAttributes, keys as identityKeys, type DecodedItem } from "../identity/identityItems";
+import { parseWalletTicketFile } from "../../escrow/walletTicketFileStore";
+import type { WalletTicketDocument } from "../../escrow/walletTickets";
+import type { IdentitySnapshot, Principal, Profile, SessionFamily } from "../../identity/store";
+import { collectWalletGrants, type WalletGrantsView } from "../../tools/walletGrants";
 import { readRelayerRole, RelayerRoleUnreadableError, type RelayerRoleRecord } from "../game/relayerRole";
 import { primaryPoolProblem, readRouting, RoutingUnreadableError, type RoutingRecord } from "../game/routing";
 import { readIdentityRole } from "../identity/dynamoIdentityStore";
@@ -332,6 +337,66 @@ export async function inspectGame(target: OperatorTarget, gameId: string): Promi
     operator_run: operatorRun,
     actions: { claim: claimVerdict(head, owner), take: takeVerdict(head, owner), release: releaseVerdict(head, owner, null) },
   };
+}
+
+/** JX-3B: one game's ticket ledger, read as its item (`GAME#<g>/TICKETS`): the document the L5-2 ticket store writes,
+ *  parsed by the ledger's own parser, its version agreeing with the item's attribute (else the item is damage). A
+ *  reader: the operator never holds the ticket store (a writer). */
+export async function readTicketLedger(target: OperatorTarget, gameId: string): Promise<{ readonly version: number; readonly document: WalletTicketDocument }> {
+  if (!GAME_ID_PATTERN.test(gameId)) throw new Error(`${JSON.stringify(gameId)} is not a game id`);
+  const item = await getItem(target.app, target.tables.game, key(gamePk(gameId), TICKETS_SK));
+  if (item === null) return { version: 0, document: { frozen_at: null, grants: [] } };
+  if (typeof item.body?.S !== "string") throw new ItemUnreadableError(`the ticket ledger of ${gameId} holds no document`, "corrupt");
+  const parsed = parseWalletTicketFile(item.body.S, gameId);
+  if (item.version?.N !== String(parsed.version)) throw new ItemUnreadableError(`the ticket ledger of ${gameId} disagrees with its item's version attribute`, "corrupt");
+  return parsed;
+}
+
+/** JX-3B: exactly the identity records `securityStanding` reads for these contexts -- each principal, its profile
+ *  (`account_link`) and each family -- by consistent GetItem, decoded strictly. A missing record is simply absent (a
+ *  missing family or principal is an ENDED context, as identity says). Nothing else of the identity table is read. */
+export async function readIdentitySlice(target: OperatorTarget, contexts: ReadonlyArray<{ readonly principalId: string; readonly familyId: string }>): Promise<IdentitySnapshot> {
+  const read = async (itemKey: { pk: string; sk: string }, kind: DecodedItem["kind"]): Promise<DecodedItem | null> => {
+    const item = await getItem(target.app, target.tables.identity, keyAttributes(itemKey));
+    if (item === null) return null;
+    const decoded = decodeItem(item);
+    if ("problem" in decoded || decoded.kind !== kind) throw new ItemUnreadableError(`identity: ${"problem" in decoded ? decoded.problem : `an item of class ${decoded.kind}, not ${kind}`}`, "corrupt");
+    return decoded;
+  };
+  const principals: Principal[] = [];
+  const profiles: Profile[] = [];
+  const families: SessionFamily[] = [];
+  for (const principalId of new Set(contexts.map((context) => context.principalId))) {
+    const found = await read(identityKeys.principal(principalId), "principal");
+    if (found?.kind !== "principal") continue;
+    const principal = found.record;
+    principals.push(principal);
+    if (principal.account_link !== null) {
+      const profile = await read(identityKeys.profile(principal.account_link), "profile");
+      if (profile?.kind === "profile") profiles.push(profile.record);
+    }
+  }
+  const known = new Set(principals.map((principal) => principal.principal_id));
+  for (const familyId of new Set(contexts.map((context) => context.familyId))) {
+    const family = await read(identityKeys.family(familyId), "family");
+    if (family?.kind === "family" && known.has(family.record.principal_id)) families.push(family.record);
+  }
+  return { principals, sessions: [], profiles, links: [], families };
+}
+
+/** JX-3B: one game's wallet grants, redacted (`tools/walletGrants.ts`) -- the ticket ledger and record items (reads
+ *  only; the record through the L5-2 store's `load`), and identity's standing from just the records its contexts
+ *  name. If identity cannot be read, the grants are still shown, standing "not evaluated". */
+export async function awsWalletGrants(target: OperatorTarget, gameId: string, now: number): Promise<WalletGrantsView> {
+  if (!GAME_ID_PATTERN.test(gameId)) throw new Error(`${JSON.stringify(gameId)} is not a game id`);
+  return collectWalletGrants({
+    gameId,
+    source: "aws",
+    loadLedger: () => readTicketLedger(target, gameId),
+    loadIdentity: (contexts) => readIdentitySlice(target, contexts),
+    loadRecord: () => createDynamoRecordStore({ client: target.app, table: target.tables.game, fence: READ_ONLY_FENCE }).load(gameId),
+    now,
+  });
 }
 
 /* ------------------------------------------------------------------ */

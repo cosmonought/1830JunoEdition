@@ -92,6 +92,9 @@ export interface MoneyServer {
   readonly relayer: Relayer;
   readonly money: MoneyTables;
   readonly ledger: ReturnType<typeof createWalletTicketLedger>;
+  /** JX-3B: the ledger's store and identity's durable store (the evidence tooling reads them as a data directory would). */
+  readonly ticketStore: ReturnType<typeof createMemoryWalletTicketStore>;
+  readonly identityStore: ReturnType<typeof createMemoryIdentityStore>;
   readonly financial: ReturnType<typeof createMemoryFinancialGameStore>;
   readonly intents: ReturnType<typeof createMemoryChainIntentStore>;
   readonly ops: ReturnType<typeof createMemoryOpsRecorder>;
@@ -122,7 +125,8 @@ export interface MoneyServerOptions {
 export async function moneyServer(options: MoneyServerOptions = {}): Promise<MoneyServer> {
   const clock = { now: T0 };
   const warnings: string[] = [];
-  const identity = IdentityService.fromSnapshot(createMemoryIdentityStore(), { principals: [], sessions: [] });
+  const identityStore = createMemoryIdentityStore();
+  const identity = IdentityService.fromSnapshot(identityStore, { principals: [], sessions: [] });
   const chain = new FakeJunoChain({
     chainId: CHAIN_ID,
     contract: CONTRACT,
@@ -261,6 +265,8 @@ export async function moneyServer(options: MoneyServerOptions = {}): Promise<Mon
     relayer,
     money,
     ledger,
+    ticketStore: tickets,
+    identityStore,
     financial,
     intents,
     ops,

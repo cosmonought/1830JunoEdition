@@ -80,7 +80,7 @@ describe("restore alarm probe: the program, the production encoder and decisions
     });
   }
 
-  test("r3: RestoreUnverifiedGames = 1 under exactly [Environment, Pool], repeatedly, then a bounded exit 0; SIGTERM stops it at once", async () => {
+  test("r3: RestoreUnverifiedGames = 1 under exactly [Environment, Pool], repeatedly, then a bounded exit 0", () => {
     const r = runProgram({ RA_CASE: "r3", RA_ENVIRONMENT: ENV, RA_POOL: "p2", RA_RUN: RUN, RA_HOLD_SECONDS: "1", RA_TICK_MS: "200" });
     assert.equal(r.status, 0, r.stderr);
     const lines = emfOf(r.stdout);
@@ -90,7 +90,13 @@ describe("restore alarm probe: the program, the production encoder and decisions
       assert.deepEqual(l._aws.CloudWatchMetrics, [{ Namespace: METRIC_NAMESPACE, Dimensions: [["Environment", "Pool"]], Metrics: [{ Name: "RestoreUnverifiedGames", Unit: "Count" }] }]);
     }
     assert.match(r.stdout, /"done":"max-duration"/);
-    /* hold-stop's SIGTERM ends it at once (an interrupted run leaves nothing behind it: the task stops). */
+  });
+
+  /* hold-stop's SIGTERM ends it at once (an interrupted run leaves nothing behind it: the task stops). The probe runs only in
+   * the Linux game-server image, where ECS delivers a real SIGTERM. On Windows a parent cannot deliver one (Node's kill() is
+   * TerminateProcess there: the handler never runs, the exit code is null), so this POSIX-signal case is skipped there, as
+   * processLock.test's is. */
+  test("r3: SIGTERM (hold-stop) runs the handler and stops it at once: exit 0, \"done\":\"stopped\"", { skip: process.platform === "win32" ? "POSIX signals" : false }, async () => {
     const child = spawn(process.execPath, ["-e", RESTORE_PROBE_PROGRAM], { env: { ...process.env, RA_METRICS_MODULE: METRICS_MODULE, RA_CASE: "r3", RA_ENVIRONMENT: ENV, RA_POOL: "p2", RA_RUN: RUN, RA_HOLD_SECONDS: "60", RA_TICK_MS: "100" } });
     let out = "";
     child.stdout.on("data", (d) => (out += String(d)));

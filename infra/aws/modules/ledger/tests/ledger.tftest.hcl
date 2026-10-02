@@ -1,5 +1,5 @@
 # LIVE-5 L5-8: the ledger module against L5-7 §14 -- over a MOCKED provider (no AWS account, no credentials).
-# Run: cd infra/aws/modules/ledger && terraform init -backend=false && terraform test
+# Run: cd infra/aws/modules/ledger && terraform init -backend=false && terraform test   (Terraform >= 1.10: test state keys)
 
 mock_provider "aws" {
   mock_data "aws_caller_identity" {
@@ -163,4 +163,142 @@ run "no_keys_when_disabled" {
     condition     = length(aws_kms_key.signing) == 0
     error_message = "signing_keys_enabled = false creates no key."
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* LIVE-6 relayer rotation: `relayer_key_count` (append-only)           */
+/* ------------------------------------------------------------------ */
+# One state ("rotation") carried through the runs below, as a real ledger stack's state is across applies. The mocked
+# provider gives every CREATED key a fresh random ARN, so an ARN equal to the earlier run's proves the key was neither
+# replaced nor recreated (`run.<name>.<output>` is that run's output).
+
+run "rotation_baseline_one_relayer_key" {
+  command   = apply
+  state_key = "rotation"
+
+  assert {
+    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission"]) && join(",", keys(output.relayer_key_arns)) == "r1" && output.relayer_key_arns.r1 == output.signing_key_arns.relayer
+    error_message = "The ordinary deployment: exactly the three L5-8 keys; the one relayer key is r1, at signing_key_arns.relayer."
+  }
+  assert {
+    condition     = aws_kms_key.signing["relayer"].tags == tomap(merge(local.tags, { Name = "gs-staging-relayer", "gs:signing-purpose" = "relayer" })) && aws_kms_key.signing["relayer"].description == "18Cosmos staging relayer signing key (secp256k1, digest only; named by key ARN, never an alias)"
+    error_message = "The original relayer key keeps its L5-8 name, description and tags exactly (no rotation tag)."
+  }
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "BootstrapRelayerFenceRead"]) == 0
+    error_message = "One relayer key: the ledger's resource policy is L5-8/L6-2's, unchanged (no rotation read)."
+  }
+  assert {
+    condition     = length(distinct([output.signing_key_arns.relayer, output.signing_key_arns.settlement, output.signing_key_arns.admission])) == 3
+    error_message = "The mocked provider gives each created key its own ARN (the replacement checks below rely on it)."
+  }
+}
+
+run "prepared_rotation_adds_exactly_one_relayer_key" {
+  command   = apply
+  state_key = "rotation"
+  variables {
+    relayer_key_count = 2
+  }
+
+  assert {
+    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission", "relayer-r2"])
+    error_message = "Preparing a rotation adds ONE key, relayer-r2, beside the three."
+  }
+  assert {
+    condition     = output.signing_key_arns == run.rotation_baseline_one_relayer_key.signing_key_arns
+    error_message = "The current relayer key and the settlement and admission keys are untouched: the same ARNs (not replaced, not recreated)."
+  }
+  assert {
+    condition     = join(",", keys(output.relayer_key_arns)) == "r1,r2" && output.relayer_key_arns.r1 == run.rotation_baseline_one_relayer_key.relayer_key_arns.r1 && !contains(values(output.signing_key_arns), output.relayer_key_arns.r2)
+    error_message = "relayer_key_arns: r1 the original key (unchanged), r2 a new, distinct key."
+  }
+  assert {
+    condition = (aws_kms_key.signing["relayer-r2"].customer_master_key_spec == "ECC_SECG_P256K1" && aws_kms_key.signing["relayer-r2"].key_usage == "SIGN_VERIFY"
+      && !aws_kms_key.signing["relayer-r2"].multi_region && !aws_kms_key.signing["relayer-r2"].enable_key_rotation && aws_kms_key.signing["relayer-r2"].is_enabled
+    && aws_kms_key.signing["relayer-r2"].deletion_window_in_days == 30)
+    error_message = "The new relayer key is the same secp256k1 SIGN_VERIFY key, single-region, 30-day deletion window."
+  }
+  assert {
+    condition     = data.aws_iam_policy_document.signing["relayer-r2"].statement == data.aws_iam_policy_document.signing["relayer"].statement
+    error_message = "The new key's policy is the relayer key's, statement for statement: the task role's GetPublicKey and digest-only Sign, the bootstrap role's Describe/GetPublicKey/ListGrants, no CreateGrant."
+  }
+  assert {
+    condition     = aws_kms_key.signing["relayer-r2"].tags == tomap(merge(local.tags, { Name = "gs-staging-relayer-r2", "gs:signing-purpose" = "relayer", "gs:relayer-key" = "r2" }))
+    error_message = "The rotation key is tagged purpose relayer, label r2."
+  }
+  assert {
+    condition = alltrue([for k in ["relayer", "settlement", "admission"] :
+    aws_kms_key.signing[k].tags == tomap(merge(local.tags, { Name = "gs-staging-${k}", "gs:signing-purpose" = k })) && aws_kms_key.signing[k].description == "18Cosmos staging ${k} signing key (secp256k1, digest only; named by key ARN, never an alias)"])
+    error_message = "The three L5-8 keys' descriptions and tags are unchanged (no in-place update either)."
+  }
+  assert {
+    condition = (toset(one([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "BootstrapRelayerFenceRead"]).actions) == toset(["dynamodb:GetItem"])
+      && toset([for c in one([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "BootstrapRelayerFenceRead"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset([
+        "ArnEquals|aws:PrincipalArn|arn:aws:iam::111111111111:role/gs-staging-bootstrap",
+        "ForAllValues:StringLike|dynamodb:LeadingKeys|FENCE#relayer#*",
+    ]))
+    error_message = "With a rotation the bootstrap / verifier role may READ the relayer fences (GetItem, FENCE#relayer#* only) for the post-rotation proof -- nothing else changes in the ledger policy."
+  }
+  assert {
+    condition = { for s in data.aws_iam_policy_document.ledger_resource.statement : s.sid => toset(s.actions) if s.sid != "BootstrapRelayerFenceRead" } == {
+      AppTaskLedgerRead           = toset(["dynamodb:GetItem", "dynamodb:Query", "dynamodb:ConditionCheckItem"])
+      AppTaskLedgerPutNeverAppgen = toset(["dynamodb:PutItem"])
+      BootstrapAppgenOnly         = toset(["dynamodb:GetItem", "dynamodb:PutItem"])
+      BootstrapAppgenHistoryRead  = toset(["dynamodb:GetItem"])
+      OperatorLedgerReadOnly      = toset(["dynamodb:GetItem", "dynamodb:Scan"])
+      RecoveryLedgerRead          = toset(["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"])
+      RecoveryAppgenAdoption      = toset(["dynamodb:UpdateItem"])
+      RecoveryAppgenHistoryAppend = toset(["dynamodb:PutItem"])
+      BootstrapDescribe           = toset(["dynamodb:DescribeTable"])
+    }
+    error_message = "Every other ledger grant is unchanged by a rotation."
+  }
+}
+
+run "a_later_rotation_adds_r3_and_keeps_r1_r2" {
+  command   = apply
+  state_key = "rotation"
+  variables {
+    relayer_key_count = 3
+  }
+
+  assert {
+    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission", "relayer-r2", "relayer-r3"]) && join(",", keys(output.relayer_key_arns)) == "r1,r2,r3"
+    error_message = "The next rotation is one more count: r3 beside r1 and r2 (no schema change per rotation)."
+  }
+  assert {
+    condition     = output.signing_key_arns == run.rotation_baseline_one_relayer_key.signing_key_arns && output.relayer_key_arns.r2 == run.prepared_rotation_adds_exactly_one_relayer_key.relayer_key_arns.r2
+    error_message = "r1, r2, settlement and admission keep their keys (same ARNs)."
+  }
+}
+
+# Removing a relayer key is refused. An OLDER key cannot be named for removal at all (the count is append-only: r1 is
+# structural, the labels are contiguous). Lowering the count would destroy the NEWEST key: `prevent_destroy` refuses that
+# plan ("Instance cannot be destroyed"), which `terraform test` cannot express as an expected failure -- the report records
+# that plan's refusal, run by hand against this same state.
+run "the_original_relayer_key_can_never_be_dropped" {
+  command = plan
+  variables {
+    relayer_key_count = 0
+  }
+  expect_failures = [var.relayer_key_count]
+}
+
+run "a_relayer_key_count_is_a_whole_number" {
+  command = plan
+  variables {
+    relayer_key_count = 1.5
+  }
+  expect_failures = [var.relayer_key_count]
+}
+
+run "a_rotation_needs_the_signing_keys" {
+  command   = plan
+  state_key = "no-keys-rotation"
+  variables {
+    signing_keys_enabled = false
+    relayer_key_count    = 2
+  }
+  expect_failures = [var.relayer_key_count]
 }

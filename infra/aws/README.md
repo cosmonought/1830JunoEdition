@@ -24,7 +24,8 @@ infra/aws/
   scripts/               capture-evidence.{sh,ps1} (read-only; per pool: target group health, stopped/running tasks, ACTIVE
                          revisions, and a manifest), drain-pool.{sh,ps1} (the no-overlap rollout)
 infra/docker/game-server.Dockerfile   the task's image (built from the repository root)
-server/src/aws/deploy/ + tools/awsDeploy.ts   `npm run awsDeploy -- bootstrap | verify | generation-gate | signer-keys`
+server/src/aws/deploy/ + tools/awsDeploy.ts   `npm run awsDeploy -- bootstrap | verify | generation-gate | signer-keys |
+                                             relayer-rotation-gate | set-operator-plan | stage-cert | stage-probe`
 server/src/aws/operator/                     `npm run gamesDoctor -- aws ...` (flip, recover, retire-check, orphans: L6-2)
 ```
 
@@ -50,7 +51,7 @@ resource or key policy, and the role's own IAM policy from the app stack. The le
 | `gs-<env>-identity` | TTL on the attribute **`ttl`**. |
 | `gs-<env>-ledger` | No TTL. `APPGEN` comes from the bootstrap. Resource policy for the task role: GetItem, Query, ConditionCheckItem, and PutItem on any key except `APPGEN`. It gets no Update, Delete or Scan. |
 | **Ledger backup** | AWS Backup daily into `gs-<env>-ledger` (vault lock, governance by default; compliance mode is an owner decision). The vault policy denies DeleteRecoveryPoint and UpdateRecoveryPointLifecycle. The selection is the ledger only, and the backup role cannot restore. Optional copy to another vault. |
-| **KMS** (relayer, settlement, admission) | `ECC_SECG_P256K1` / `SIGN_VERIFY`, single-region, no rotation (a new key is a new chain identity), `prevent_destroy`. The key policy lets the task role GetPublicKey, and Sign only with `ECDSA_SHA_256` over a `DIGEST`. The bootstrap role may DescribeKey, GetPublicKey and ListGrants. The key's own account administers it but gets neither `kms:Sign` nor `kms:CreateGrant`. |
+| **KMS** (relayer, settlement, admission) | `ECC_SECG_P256K1` / `SIGN_VERIFY`, single-region, no rotation (a new key is a new chain identity), `prevent_destroy`. The key policy lets the task role GetPublicKey, and Sign only with `ECDSA_SHA_256` over a `DIGEST`. The bootstrap role may DescribeKey, GetPublicKey and ListGrants. The key's own account administers it but gets neither `kms:Sign` nor `kms:CreateGrant`. LIVE-6: `relayer_key_count` (append-only, default 1) adds relayer keys `relayer-r2`, `relayer-r3`, ... beside the original (`r1`, unchanged), each with the same spec and policy; which one is configured is the app stack's `signing_keys.relayer` ("Relayer rotation"). |
 | **SSM** | `/gs/<env>/runtime/<pool>` (`18COSMOS/AWS-RUNTIME/v2` since L6-2: the v1 fields plus `routes`, one entry per pool, `ws_path` `/gs/p/<pool>`; v1 is still read) and `/gs/<env>/juno-backend` (`18COSMOS/JUNO-BACKEND/v3`: `journal` is the same ledger ARN, the signers are the three key ARNs). Both are `String`, never `SecureString`, hold no secret, and are written with `insecure_value` so every change shows in the plan. |
 | **Secrets Manager** | **Nothing.** No secret has a consumer yet, so no secret is created and no role has `secretsmanager:*`. See "Secrets" below. |
 | **ECS** | One Fargate service per pool (desired count 0 or 1), each behind its own target group in awsvpc private subnets with no public IP. Stop-first (0 / 100), AZ rebalancing off, circuit breaker with rollback, no ECS Exec. `stopTimeout` 120. Container health: `node -e` GET `/gs/healthz`, `startPeriod` 300. awslogs to `/gs/<env>/<pool>`. Read-only root filesystem; the image runs as the `node` user. |
@@ -73,7 +74,7 @@ pin those endpoints (`awsClients.ts`).
 | `gs-<env>-app-task` | Used by the application, and the only credential source a task has. Game table: GetItem, Query, Scan, ConditionCheckItem; Put, Update and Delete on any partition except `SYSTEM`. Identity table: GetItem, Scan, ConditionCheckItem, Put, Update, Delete. Ledger: GetItem, Query, ConditionCheckItem, and PutItem except `APPGEN`. KMS GetPublicKey, plus Sign with ECDSA_SHA_256 over a DIGEST. `ssm:GetParameter` on the two documents. No `*` resource. |
 | `gs-<env>-operator` (L6-2; only with `operator_trusted_principal_arns`) | `gamesDoctor aws`: game table GetItem/Query/Scan; PutItem on `SYSTEM/*` and `OPRUN#*` (the routing CAS, the run's evidence) and UpdateItem on `GAME#*` / `POOL#op:*` (an operator run's claim / take / release) -- never another `POOL#`; identity-writer role GetItem; ledger GetItem + Scan (read-only); GetParameter on the documents. No KMS, no identity write, no APPGEN. |
 | `gs-<env>-recovery` (L6-2 for L6-4; only with `recovery_trusted_principal_arns`) | `npm run recovery`: APPGEN adoption and its `APPGEN#HISTORY` append (ledger), the restored table's `SYSTEM/GENERATION`, the identity replay's tables. `RestoreTableToPointInTime` only with `recovery_break_glass`. Serving tasks never hold any of it. |
-| `gs-<env>-bootstrap` | Used by the pipeline or an operator. PutItem and GetItem **only** on `SYSTEM/*` of the game table and `APPGEN` of the ledger (`dynamodb:LeadingKeys`). Describe on the three tables, GetParameter on the documents, and KMS DescribeKey, GetPublicKey and ListGrants. Read-only describes for the verifier: `ecs:DescribeTaskDefinition`, `elasticloadbalancing:Describe*` and `ec2:DescribeSecurityGroups*` (all `*`, because AWS cannot scope them), `ecs:DescribeServices` on this cluster, and CloudFront GetDistributionConfig and GetOriginRequestPolicy; since L6-2 also GetItem on `SYSTEM/GENERATION` and `APPGEN#HISTORY`, ListTasks/DescribeTasks on this cluster, ListTaskDefinitions and DescribeTargetHealth; since L6-6 CloudFront GetDistribution. It has no Sign, no Update, no Delete, and no Scan except (LIVE-6 final convergence) `RestoreQuietOldGenerationHeartbeats`: Scan on the NON-serving managed generations' game tables only (a restore drill's old-generation TASK# heartbeats), never the serving table, identity or the ledger. |
+| `gs-<env>-bootstrap` | Used by the pipeline or an operator. PutItem and GetItem **only** on `SYSTEM/*` of the game table and `APPGEN` of the ledger (`dynamodb:LeadingKeys`). Describe on the three tables, GetParameter on the documents, and KMS DescribeKey, GetPublicKey and ListGrants. Read-only describes for the verifier: `ecs:DescribeTaskDefinition`, `elasticloadbalancing:Describe*` and `ec2:DescribeSecurityGroups*` (all `*`, because AWS cannot scope them), `ecs:DescribeServices` on this cluster, and CloudFront GetDistributionConfig and GetOriginRequestPolicy; since L6-2 also GetItem on `SYSTEM/GENERATION` and `APPGEN#HISTORY`, ListTasks/DescribeTasks on this cluster, ListTaskDefinitions and DescribeTargetHealth; since L6-6 CloudFront GetDistribution. It has no Sign, no Update, no Delete, and no Scan except (LIVE-6 final convergence) `RestoreQuietOldGenerationHeartbeats`: Scan on the NON-serving managed generations' game tables only (a restore drill's old-generation TASK# heartbeats), never the serving table, identity or the ledger. LIVE-6 relayer rotation, only while `relayer_rotation_key_arns` is non-empty: the same KMS reads on those keys (never the task's), and GetItem on the serving game table's `ROLE#relayer#*` / `POOL#*` / `TASK#*` and the ledger's `FENCE#relayer#*` (the post-rotation proof; the ledger stack grants its half once `relayer_key_count` > 1). |
 
 **L6-5B additions:** `gs-<env>-operator` may `cloudwatch:PutMetricData` **only** into `18Cosmos/Operator` (the planned-flip
 window's suppressor datapoints) -- never a game-server metric, and no role may disable, set, rewrite or delete an alarm
@@ -243,26 +244,126 @@ pending = 0, settled, no target. Procedure: `recover` → `retire-check` (ready-
 state**: no `POOL#.status` attribute exists (no authoritative schema; the owner decision is recorded in the L6-2 report),
 so a pool is never "retired" in the table. Its image, task definitions, target group and log group are kept.
 
-## Relayer-address rotation (deployment invariant; L6-7's `RELAYQ#`)
+## Relayer rotation: a new relayer key, address and contract operator (LIVE-6)
 
-`RELAYQ#<relayer-address>` in the game table is the relayer's **authoritative work discovery** (L6-7). A relayer under a
-new address never reads the old partition, and there is **no automatic queue migration** (owner decision, this LIVE
-cycle). So **a configuration change that changes the relayer address is refused while the old address's queue holds any
-entry.** The only supported procedure:
+**What a relayer is.** The relayer is ONE KMS key (`ECC_SECG_P256K1`), the Juno account that key controls (its address is
+derived from the public key: `awsDeploy signer-keys`), and the escrow contract's **operator** (`Config.operator`: the only
+account that may `Start` a game; Checkpoint / Settle / Finalize are open to anyone). An asymmetric KMS key cannot rotate,
+so a rotation is a NEW key, a NEW address and a NEW operator -- three things that must move together, in the drained
+window, or the money path is off: a configuration naming an address the contract does not accept as its operator is
+refused by `verifyJunoDeployment` for the life of the process (financial mode off), and an old relayer whose address is
+no longer the operator can Start nothing.
 
-1. Keep the old relayer configuration active; watch it drain its queue to zero (`relayer.status()`, the AUDIT lines).
-2. `drain-pool` every pool (desired = running = pending = 0): no task can add to the old queue any more.
-3. `capture-evidence`, then `npm run awsDeploy -- relayer-rotation-gate --runtime-parameter <ARN> --environment <env>
-   --from-relayer <old> --to-relayer <new> --evidence <dir> --record <file>` (read-only; bootstrap role; L6-5B:
-   `--record` writes the gate's own verdict as `18COSMOS/RELAYER-ROTATION-GATE/v1`, created once -- keep it with the
-   certification evidence; certification accepts only an OPEN record with the old queue read EMPTY). **GATE OPEN** only when the
-   active configuration still names the old address, every pool is drained (fresh evidence), and `RELAYQ#<old>` read
-   **completely** (strongly consistent, every page) holds **no entry of any shape**. An unreadable or unknown queue
-   refuses; the new address's queue is never consulted.
-4. Only then change the relayer address/configuration (`escrow` in `stacks/app`) and start the pools (drain-first); the
-   primary's task takes the new address's relayer role at its start.
+**Queues are per address and never migrate.** `RELAYQ#<relayer-address>` in the game table is the relayer's
+**authoritative work discovery** (L6-7). A relayer under a new address never reads the old partition, and there is **no
+automatic queue migration** (owner decision, this LIVE cycle). So **a configuration change of the relayer address is
+refused while the old address's queue holds any entry** (`relayer-rotation-gate`). A `held` intent keeps its entry and
+never drains by itself: it blocks the rotation (it is never stranded).
 
-If the gate is closed with entries, restart the pools on the **old** configuration and go back to step 1.
+### Owner prerequisites (nothing in this repository holds or invents them)
+
+- **The contract admin.** `set_operator` is admin-only: the sender must be the escrow contract's `Config.admin`
+  (`contracts/escrow/src/execute/admin.rs` `admin_guard`: the admin, and no funds) -- **not** the relayer, and not the
+  wasm admin (`wasm_admin` is the `migrate` admin; staging's is null). The repository records **no** staging contract
+  address and **no** admin address (the staging tfvars are the owner's, untracked), and **no admin key or signing tool**:
+  the admin credential exists only outside the repository. `awsDeploy set-operator-plan` READS `Config.admin` from the
+  chain and prints the exact message; the admin signs it with its own wallet (for example `junod tx wasm execute`).
+- **JUNOX for the new account** (a plain bank send from any funded wallet; this repository sends nothing). The floor is
+  `relayerFunding`: one worst-bound money game of relayer transactions (Start + 64 checkpoints + Settle + Finalize = 67)
+  at the configuration's own fee cap `gas.max_fee` (the relayer refuses any fee above it) -- with the defaults
+  **67 x 500,000 ujunox = 33.5 JUNOX**. A typical relayer transaction costs a few hundredths of the cap; fund a little
+  above the floor (40 JUNOX) so one drill cannot run the account dry. A never-funded account does not exist on chain and
+  cannot sign.
+- **`RELAYQ#<old>` drainable** (no `held` intent) and **the funding-phase money game resolved** (below).
+- Do it after the flip drill is certified (the recommended order of the forward audit).
+
+### The sequence: prepare -> gate -> set_operator -> apply -> certify
+
+Credentials: the ledger account's for the ledger stack; the app account's (Terraform identity) for the app stack; the
+bootstrap role for every `awsDeploy` read. `<old>` / `<new>` are relayer ADDRESSES; `r<N>` is the new key's label.
+
+```
+# P -- PREPARE (nothing switches; the pools keep running on the old relayer)
+P1  stacks/ledger:  relayer_key_count = N   (one more than today; APPEND-ONLY)      plan, then apply
+      -> exactly one new key, relayer-r<N> (same spec, same key policy, prevent_destroy); output relayer_key_arns.r<N>
+P2  stacks/app:     relayer_rotation_key_arns = ["<relayer_key_arns.r<N>>"]          plan, then apply
+      -> the bootstrap / verifier role may READ the new key (and the post-rotation proof's GetItems exist); the task role
+         still signs with exactly the three configured keys; no document changes, so no pool restarts
+P3  npm run awsDeploy -- signer-keys --relayer <r<N> ARN> --settlement <current> --admission <current>
+      -> relayer.address = <new>; settlement / admission public keys MUST equal today's escrow values
+P4  fund <new> (>= the floor), then:
+    npm run awsDeploy -- set-operator-plan --runtime-parameter <primary ARN> --environment <env> --to-relayer <new> \
+        --to-relayer-key <r<N> ARN>      # READY: <new> is the key's address, exists on chain, >= floor; prints Config.admin
+P5  prepare, do NOT apply, the app change:  signing_keys.relayer = <r<N> ARN>; escrow.relayer_address = <new>;
+    escrow.trust.operators = [<new>]; relayer_rotation_key_arns = [<the OLD relayer key ARN>]    (plan only)
+
+# G -- THE GATE (the change is SAFE)
+G1  let the old relayer drain RELAYQ#<old> (run the gate WITHOUT --record as a read-only precheck)
+G2  drain-pool every pool; capture-evidence <dir>
+G3  npm run awsDeploy -- relayer-rotation-gate --runtime-parameter <ARN> --environment <env> --from-relayer <old> \
+        --to-relayer <new> --evidence <dir> --record <dir>/gate-relayer-rotation.json      -> GATE OPEN
+
+# S -- THE OPERATOR (inside the drained window: after G3, before A1)
+S1  the contract admin sends   {"set_operator":{"operator":"<new>"}}   to the escrow contract, no funds
+S2  set-operator-plan ... --to-relayer <new>   -> "the contract's operator is ALREADY <new>"
+
+# A -- APPLY (drain-first is satisfied: every pool is at zero)
+A1  terraform apply the P5 change -> the task role signs with the new key; the Juno document names <new>; the pools
+    start from zero; the primary's task mints FENCE#relayer#<new>, mirrors ROLE#relayer#<new>, verifies the deployment
+
+# C -- CERTIFY (the change WORKED)
+C1  once the primary is serving (its escrow verifies within a minute of its start): the staging run, steps 1-7 of
+    "Staging certification", with --scenario relayer-rotation-drill --from-relayer <old> --to-relayer <new>
+```
+
+`relayer-rotation-gate` (v2) also reads the contract's operator (it must be `<old>` -- or already `<new>`) and records,
+from the configuration it judged, the deployment the rotation must leave untouched: the chain, the contract and its
+certified checksums, the settlement key (registry id, public key, KMS key) and the admission key (public key, KMS key),
+and the old relayer key (`18COSMOS/RELAYER-ROTATION-GATE/v2`, created once). Certification refuses a v1 record.
+
+In A1 Terraform updates the task role's policy and the documents before the services' new deployment (the task
+definitions depend on both); the task opens its KMS keys late in its start. If IAM had not yet propagated, the start is
+refused (A4 pages) and ECS starts it again.
+
+**Afterwards.** The old key stays (`prevent_destroy`; never lower `relayer_key_count`) and stays readable in
+`relayer_rotation_key_arns` while a rollback is possible; emptying that list is a later, separate change. The old account
+keeps its leftover JUNOX (there is no sweep tool). `FENCE#relayer#<old>` and `ROLE#relayer#<old>` stay behind, inert.
+Retiring a relayer key is a separate, reviewed change (a `removed` block with `destroy = false`, then a scheduled deletion).
+
+### Rollback (the new relayer cannot start, or cannot be made usable)
+
+Every rollback is the same rotation backwards, through the same gate: drain-first, the queue of the address being left
+proven empty, the operator moved by the admin inside the drained window, the old key (retained) configured again.
+
+| Where it stopped | Rollback |
+|---|---|
+| after G3, before S1 and A1 (nothing switched) | nothing to undo: start the pools again on the unchanged configuration (`terraform apply` restores the desired counts); the gate record is only evidence. |
+| after S1, before A1 (operator `<new>`, configuration `<old>`) | the admin sends `set_operator(<old>)` (`set-operator-plan --to-relayer <old> --to-relayer-key <old key ARN>` first: `<old>` funded >= floor), then start the pools on the unchanged configuration (until then the old configuration's backend refuses the deployment: financial mode off). |
+| after A1 (configuration `<new>`) | 1. `drain-pool` every pool; `capture-evidence <dir2>` (a NEW run and evidence directory). 2. `relayer-rotation-gate --from-relayer <new> --to-relayer <old> --evidence <dir2> --record <dir2>/gate-relayer-rotation.json` -> OPEN (the configuration names `<new>`, `RELAYQ#<new>` empty, every pool drained, the operator `<new>` or `<old>`). 3. If the operator is `<new>`: the admin sends `set_operator(<old>)` (`set-operator-plan --to-relayer <old> --to-relayer-key <old key ARN>`). 4. `stacks/app`: `signing_keys.relayer` = the old key, `escrow.relayer_address` = `<old>`, `escrow.trust.operators` = `[<old>]`, `relayer_rotation_key_arns` = `[<r<N> ARN>]`; apply (the pools start from zero). The ledger stack does not change (r<N> stays). 5. Certify the rollback: `--scenario relayer-rotation-drill --from-relayer <new> --to-relayer <old>` -- the same proof, now for the old relayer. |
+
+**No safe rollback is defined (stop; owner decision) when:**
+- **`RELAYQ#<new>` holds entries** (the new relayer accepted work it cannot finish -- e.g. it is unfunded or not yet the
+  operator, so a Start fails and its intent is held). The rollback gate stays CLOSED and nothing migrates the entries.
+  The only defined path is FORWARD: make the new relayer usable (fund it; `set_operator(<new>)`) so it drains its own
+  queue, then roll back if still wanted. A `held` intent never drains by itself, and there is no supported tool that
+  resolves one in the AWS mode.
+- **the admin cannot sign** once `set_operator(<new>)` landed: the operator cannot move back (forward only).
+- **the old key is disabled or scheduled for deletion**: the old address cannot sign until it is re-enabled
+  (`CancelKeyDeletion` within the 30-day window).
+- **the contract is paused, its operator is a third account, or the chain cannot be read**: the gate is closed and
+  nothing is proven -- investigate, do not force.
+
+### The funding-phase real-money game
+
+Resolve an open funding-phase money game (settle it, or let its players cancel it deliberately) BEFORE G2. This task does
+not touch it. Why:
+- the pools are drained for the whole window: no admission is issued, no `Join` is admitted, nobody can press Start;
+- the operator changes inside the window: until S1 and A1 have both happened, NO relayer can Start it (the old one is no
+  longer the operator, or the new one is not yet configured), and a `Start` intent still queued under `<old>` keeps the
+  gate CLOSED;
+- its funding deadline keeps running: if it passes, anyone may `Cancel` on chain, which refunds each NET ante -- the
+  escrow's basis-point fee on every deposit is not refunded -- and the server must reconcile what the chain shows;
+- a roster frozen for Start (reversible until Start lands) would sit across the window.
 
 ## Generation switch after a restore (L6-4 §12.1, wired by L6-2)
 
@@ -448,7 +549,8 @@ L6-5B flags (`--game-generations`, `--page-actions <arns>|none`, `--ticket-actio
 | `restore-quiet` (L6-6R) | restore-drill | `restore-stop/` + the live TASK# read | as before, plus L6-5A's `TASK#` items of the PREVIOUS generation's table (strongly consistent, paginated Scan, decoded strictly): a heartbeat of generation N written after the stop's `captured_at` FAILS; none proves nothing (ECS's listing is the stop proof); an unreadable table FAILS. TASK# is never a lease. |
 | `flip` | flip-drill | `flip-record.json` (L6-2's record: `gamesDoctor aws flip ... --flip-record <dir>/flip-record.json`, then `flip-observe` / `recover --flip-record` with the same file), the per-pool captures, `cluster-tasks.json`, `listener-rules.json` | the window opened BEFORE the routing CAS; the CAS applied (version N+1) and the roles settled; both pools restarted into their roles (L6-2's `checkRoleChange`: exit 5, a replacement) and the singleton roles are on the new primary; no service task of either pool stopped with exit 3 or 4 since the window opened (the COMPLETE cluster listing); `/gs*` on the new primary and every pool's exact route (L6-2's `checkPoolListenerRules`); the recovery of the old epoch settled (it closed the window); the suppression published, at most 45 minutes, ended before the capture (+5 min tail). |
 | `flip-alarms` | flip-drill | `probe-flip-alarms.json` (`18COSMOS/L6-6-FLIP-ALARM-DRILL/v1`) | an exit 3 inside the window still tripped A1 (actions not suppressed); a suppressible alarm still failing after the window became actionable (`ActionsSuppressedBy` `Alarm` during, `None` after); only the flip's two pools' suppressors were ALARM during it. |
-| `relayer-rotation` | relayer-rotation-drill (`--from-relayer <old> --to-relayer <new>`) | `gate-relayer-rotation.json` (`awsDeploy relayer-rotation-gate ... --record <dir>/gate-relayer-rotation.json`, BEFORE the change) | L6-5B's `rotationGateRecordProblem`; every pool of this deployment drained at the gate; `RELAYQ#<old>` read completely and empty; `RELAYQ#<new>` never consulted; the configuration changed only afterwards (the gate saw the old address, the live document names the new one, every running task started after the gate). Unknown / unreadable = FAIL; no automatic queue migration. |
+| `relayer-rotation` | relayer-rotation-drill (`--from-relayer <old> --to-relayer <new>`) | `gate-relayer-rotation.json` (`awsDeploy relayer-rotation-gate ... --record <dir>/gate-relayer-rotation.json`, BEFORE the change; v2 since LIVE-6 relayer rotation) | L6-5B's `rotationGateRecordProblem` (v2: plus the deployment to keep, and the contract's operator at the gate = the old or the new relayer); every pool of this deployment drained at the gate; `RELAYQ#<old>` read completely and empty; `RELAYQ#<new>` never consulted; the configuration changed only afterwards (the gate saw the old address, the live document names the new one, every running task started after the gate). Unknown / unreadable = FAIL; no automatic queue migration. |
+| `relayer-rotation-proof` | relayer-rotation-drill | the live reading `stage-cert certify` makes itself (read-only; kept as `rotation-proof.json`, judged in memory) + the gate's own record as the baseline | the change WORKED (`staging/rotationProof.ts`): the runtime configuration names the new relayer (a trusted operator, not the old key); the contract's operator on chain IS the new relayer (still the old one, or a third: FAIL); the configured chain, contract and checksums are the gate's and this build's certified ones; the deployment verifies (the server's own `verifyJunoDeployment`); the routing's primary pool's CURRENT task holds `ROLE#relayer#<new>` at the ledger's `FENCE#relayer#<new>` epoch; that task's own fresh `TASK#` heartbeat says relayer `usable` (primary, serving, ready); escrow active (its backend `active`, the deployment verified, the contract not paused); the settlement and admission keys exactly the gate's; `RELAYQ#<old>` still empty. Unbound readers, an unread chain or table, a v1 gate record: FAIL. |
 
 **A planned primary DRAIN is not a flip** (owner decision): no suppression covers it, and A13 may page. No maintenance
 window exists. **Never suppressed, and certified so** (`alarms`): A1, the store alarms, the money sweep, generation /
@@ -484,10 +586,11 @@ be true is REFUSED). `record` binds the three to the flip record's window, judge
 only then writes `probe-flip-alarms.json`. The hold is bounded (`--hold-seconds` 600..5400, default 4500) and stopped by
 `hold-stop`; both tasks must be STOPPED before the final capture.
 
-**Relayer rotation drill order:** drain the old relayer's queue, drain every pool, capture, `awsDeploy relayer-rotation-gate
-... --evidence <dir> --record <dir>/gate-relayer-rotation.json` (GATE OPEN), only then change the relayer configuration
-(Terraform `escrow`) and start the pools, then steps 1-7 with `--scenario relayer-rotation-drill --from-relayer <old>
---to-relayer <new>`.
+**Relayer rotation drill order:** "Relayer rotation" above -- prepare (a second relayer key, its address, funding, the
+admin's `set-operator-plan`), drain the old relayer's queue, drain every pool, capture, `awsDeploy relayer-rotation-gate
+... --evidence <dir> --record <dir>/gate-relayer-rotation.json` (GATE OPEN), the admin's `set_operator(<new>)`, only then
+the Terraform switch (`signing_keys.relayer`, `escrow`) that starts the pools, then steps 1-7 with `--scenario
+relayer-rotation-drill --from-relayer <old> --to-relayer <new>` (both `relayer-rotation` and `relayer-rotation-proof`).
 
 **Restore drill additions:** before the switch, `awsDeploy generation-gate ... --record <dir>/gate-generation.json`; plan with
 the printed `generation_adoption`; record `probe-restore-alarms.json`. The certifier (verifier) role may Scan only the
@@ -517,12 +620,15 @@ Terraform state holds only non-secret values: the documents, ARNs and names. KMS
 ## Tests (no AWS)
 
 ```
-cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 6 runs
-cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 48 runs (app 32 + alarms 16; Terraform >= 1.10)
+cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 12 runs (LIVE-6 relayer rotation: +6)
+cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 61 runs (app 45 + alarms 16; Terraform >= 1.10)
 cd infra/aws/stacks/app     && terraform init -backend=false && terraform validate    # (and stacks/ledger)
 cd server && npm run build && node --test dist/server/src/aws/deploy/l5_8Deploy.test.js dist/server/src/aws/awsClients.test.js
 node --test dist/server/src/aws/operator/l6_2Flip.test.js dist/server/src/persistence/conformance/l6_5bAlarms.test.js dist/server/src/aws/runtime/l6_5aObservability.test.js
 GS_DYNAMODB_LOCAL_ENDPOINT=http://127.0.0.1:8000 node --test dist/server/src/persistence/conformance/awsBootstrap.dynamoLocal.test.js dist/server/src/persistence/conformance/l6_2Flip.dynamoLocal.test.js
+# LIVE-6 relayer rotation: the proof, the v2 gate, set-operator-plan (offline); the bound readers over real items
+node --test dist/server/src/aws/deploy/staging/rotationProof.test.js dist/server/src/aws/deploy/staging/l6_6StagingCert.test.js
+GS_DYNAMODB_LOCAL_ENDPOINT=http://127.0.0.1:8000 node --test dist/server/src/persistence/conformance/l6FinalConvergence.dynamoLocal.test.js
 ```
 
 ## Owner prerequisites and staging-gate items (not verifiable without AWS)

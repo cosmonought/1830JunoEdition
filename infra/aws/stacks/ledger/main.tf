@@ -31,5 +31,6 @@ module "ledger" {
   app_account_id       = var.app_account_id
   backup               = var.backup
   signing_keys_enabled = var.signing_keys_enabled
+  relayer_key_count    = var.relayer_key_count
   tags                 = var.tags
 }

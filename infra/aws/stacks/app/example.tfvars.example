@@ -15,6 +15,11 @@ signing_keys = {
   admission  = "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333"
 }
 
+# LIVE-6 relayer rotation (infra/aws/README.md "Relayer rotation"): [] normally. PREPARE: the ledger stack's new
+# relayer_key_arns.r<N> here (the verifier reads it; nothing signs with it). SWITCH (inside the drained window, after the
+# gate and SetOperator): signing_keys.relayer = that key, and the previous relayer key here (kept readable for rollback).
+# relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"]
+
 # null: no escrow. Public keys and the relayer address: `npm run awsDeploy -- signer-keys --relayer <arn> ...`.
 escrow = null
 

@@ -61,6 +61,27 @@ variable "signing_keys_enabled" {
   default     = true
 }
 
+variable "relayer_key_count" {
+  description = <<-EOT
+    LIVE-6 relayer rotation: how many relayer signing keys this ledger holds (>= 1; default 1 = the L5-8 deployment,
+    unchanged). Key 1 (`r1`) is the original relayer key at its unchanged address `aws_kms_key.signing["relayer"]`; key N >= 2
+    (`rN`) is `aws_kms_key.signing["relayer-rN"]`, same spec, same key policy, `prevent_destroy`. APPEND-ONLY: raise it by
+    one to PREPARE a rotation (the new key exists beside the current one; the app stack still names the current one).
+    Lowering it would destroy the newest key: `prevent_destroy` refuses the plan. An older key cannot be removed through
+    this variable at all -- retiring a relayer key is a separate, reviewed change. Output: `relayer_key_arns`.
+  EOT
+  type        = number
+  default     = 1
+  validation {
+    condition     = var.relayer_key_count >= 1 && var.relayer_key_count <= 16 && floor(var.relayer_key_count) == var.relayer_key_count
+    error_message = "relayer_key_count must be a whole number 1..16: the original relayer key (r1) can never be dropped by this variable."
+  }
+  validation {
+    condition     = var.relayer_key_count == 1 || var.signing_keys_enabled
+    error_message = "relayer_key_count > 1 needs signing_keys_enabled: a rotation key is a signing key."
+  }
+}
+
 variable "tags" {
   description = "Tags on every resource."
   type        = map(string)

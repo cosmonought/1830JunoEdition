@@ -35,6 +35,19 @@
 //       LIVE-6 L6-2 (L6-4 §12.2): read-only -- exit 0 only when APPGEN's adoption of exactly (N+1, g<N+1>, restore) has
 //       settled; only then may the runtime documents move to the new generation (infra/aws/README.md "Generation switch").
 //
+//   relayer-rotation-gate --runtime-parameter <SSM ARN> --environment <env> --from-relayer <old> --to-relayer <new>
+//                         --evidence <dir> [--record <file>]
+//       LIVE-6 L6-2 for L6-7 (`relayerRotation.ts`), read-only. LIVE-6 relayer rotation: also reads the escrow contract's
+//       operator from the chain (it must be the old or the new relayer) and records, in the v2 gate record, the
+//       deployment the rotation must leave untouched (`gateRecords.ts`).
+//
+//   set-operator-plan --runtime-parameter <SSM ARN> --environment <env> --to-relayer <new> [--to-relayer-key <key ARN>]
+//       LIVE-6 relayer rotation (`junoChain.ts`), READ-ONLY: the contract's admin (the ONE account that may send it) and
+//       its current operator, read from the chain; the exact `set_operator` message for the admin to sign OUTSIDE this
+//       tool (nothing here holds, asks for or uses the admin's key); and whether the new relayer account exists on chain
+//       with at least the funding floor (`relayerFunding`). With `--to-relayer-key`, the address must be the one that KMS
+//       key controls (derived as the server derives it). Exit 0: ready (or already set); 1: not ready (said why).
+//
 // Credentials: the SDK's default chain (the operator's profile or the pipeline's role -- the task's refusal of static
 // keys is the RUNTIME's rule, not this tool's). Regions: the runtime document's and the ARNs', never the environment's.
 // Nothing here prints a credential or a document's content; nothing but `bootstrap --apply` writes.
@@ -71,6 +84,7 @@ import {
   type Check,
 } from "./deployVerify";
 import { VERIFY_RECORD_FORMAT, writeRecord } from "./staging/evidence";
+import { contractControl, deploymentIdentityOf, relayerFunding, setOperatorMessage, type ContractControl, type JunoChainReader } from "./junoChain";
 
 export const EXIT_OK = 0;
 export const EXIT_FAILED = 1;
@@ -86,6 +100,9 @@ export interface DeployDeps {
   readonly out: (line: string) => void;
   /** Tests only: the table names the clients address (production: the document's names and the ledger ARN). */
   readonly tables?: (config: { readonly gameTable: string; readonly identityTable: string; readonly ledgerArn: string }) => { readonly game: string; readonly identity: string; readonly ledger: string };
+  /** LIVE-6 relayer rotation: the escrow contract on chain, read only (`junoChain.ts`; production `productionJunoChain`).
+   *  Absent: every chain-dependent check FAILS "not bound" (never skipped, never assumed). */
+  readonly juno?: JunoChainReader;
 }
 
 export class UsageError extends Error {}
@@ -524,6 +541,16 @@ export async function relayerRotationGateCommand(argv: readonly string[], deps: 
     queue.state === "open" ? `${queue.entries} open entr${queue.entries === 1 ? "y" : "ies"} (oldest: ${queue.oldest.join(", ")}): keep the old configuration active until the relayer drains them` : queue.state === "unknown" ? `UNKNOWN -- ${queue.detail}: refused (an unread queue is never taken for an empty one)` : "",
   );
   checks.push({ name: `RELAYQ#${to}`, status: "skipped", detail: "the new address's queue is never consulted: the old queue's emptiness is never inferred from it" });
+  /* 4. LIVE-6 relayer rotation: the escrow contract's operator, read from the chain -- the old relayer (SetOperator still
+     to come, inside this drained window) or already the new one; anything else is a deployment this rotation does not
+     understand. Read only; recorded for the post-rotation proof and the rollback. */
+  const operator = startup.escrowConfig === null ? { ok: false as const, detail: "no escrow configured" } : await chainOperator(deps, startup.escrowConfig);
+  check(
+    "the escrow contract's operator is the old or the new relayer (read from the chain)",
+    operator.ok && (operator.control.operator === from || operator.control.operator === to),
+    operator.ok ? `operator ${operator.control.operator} (${operator.control.operator === from ? "the OLD relayer: the admin's set_operator to the new address comes inside the drained window, after this gate" : "already the NEW relayer"}); admin ${operator.control.admin}` : "",
+    operator.ok ? `the contract's operator is ${operator.control.operator}, neither --from-relayer nor --to-relayer: not a rotation this gate can prove` : `the contract's operator could not be read: ${operator.detail}`,
+  );
   const exit = report(deps.out, checks);
   deps.out(exit === EXIT_OK ? `GATE OPEN: RELAYQ#${from} is proven empty with every pool drained. Now change the relayer configuration to ${to} (Terraform escrow), then start the pools; the primary's task takes the new relayer role.` : "GATE CLOSED: the relayer address must NOT change yet");
   /* LIVE-6 L6-5B: the gate's own verdict as evidence (L6-6: an unknown or closed gate fails certification). */
@@ -542,8 +569,101 @@ export async function relayerRotationGateCommand(argv: readonly string[], deps: 
       verdict: exit === EXIT_OK ? "OPEN" : "CLOSED",
       checks,
       gated_at: new Date(deps.now()).toISOString(),
+      /* v2 (LIVE-6 relayer rotation): what the rotation must leave untouched, from the configuration judged above. */
+      deployment: startup.escrowConfig === null ? null : deploymentIdentityOf(startup.escrowConfig),
+      contract_operator: operator.ok ? operator.control.operator : null,
     });
     deps.out(`  the gate's record: ${recordFile} (${ROTATION_GATE_FORMAT}; keep it with the certification evidence)`);
+  }
+  return exit;
+}
+
+/** The contract's control fields from the chain, or why they could not be read (never thrown, never guessed). */
+async function chainOperator(deps: DeployDeps, config: NonNullable<AwsStartup["escrowConfig"]>): Promise<{ readonly ok: true; readonly control: ContractControl } | { readonly ok: false; readonly detail: string }> {
+  if (deps.juno === undefined) return { ok: false, detail: "no chain reader is bound in this build" };
+  try {
+    return { ok: true, control: await contractControl(deps.juno.rest(config), config) };
+  } catch (error) {
+    return { ok: false, detail: `${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`.slice(0, 300) };
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* set-operator-plan (LIVE-6 relayer rotation; junoChain.ts)            */
+/* ------------------------------------------------------------------ */
+
+/** Base units as a decimal of the display unit (6 decimals, integer arithmetic): 33500000 -> "33.5". */
+const display = (units: bigint): string => {
+  const whole = units / BigInt(1_000_000);
+  const frac = (units % BigInt(1_000_000)).toString().padStart(6, "0").replace(/0+$/, "");
+  return frac.length === 0 ? whole.toString() : `${whole.toString()}.${frac}`;
+};
+
+export async function setOperatorPlanCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {
+  const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--to-relayer", "--to-relayer-key"], []);
+  const environment = environmentOf(need(flags, "--environment"));
+  const to = need(flags, "--to-relayer");
+  if (!RELAYER_ADDRESS.test(to)) throw new UsageError("--to-relayer is a relayer account address");
+  const startup = await loadAwsStartup({ argv: [], env: { GS_AWS_CONFIG_PARAMETER: need(flags, "--runtime-parameter") }, serverMode: "production", parameters: deps.parameters });
+  if (startup.config.environment !== environment) throw new UsageError(`the runtime document is for ${startup.config.environment}, not ${environment}`);
+  const config = startup.escrowConfig;
+  if (config === null) throw new UsageError("the runtime document has no escrow: there is no operator to change");
+  const checks: Check[] = [];
+  const check = (name: string, ok: boolean, good: string, bad: string) => checks.push({ name, status: ok ? "pass" : "fail", detail: ok ? good : bad });
+  /* 1. Optional: the address is the one the prepared KMS key controls (no typo can become the contract's operator). */
+  const keyArn = flags.get("--to-relayer-key");
+  if (keyArn !== undefined) {
+    const parsed = parseKmsKeyArn(keyArn);
+    if ("problem" in parsed) throw new UsageError(`--to-relayer-key: ${parsed.problem}`);
+    let derived: string | null = null;
+    let problem = "";
+    try {
+      derived = addressOfPublicKey(compressedKeyFromSpki(await deps.kms(parsed.region).digest.getPublicKey(keyArn)), "juno");
+    } catch (error) {
+      problem = error instanceof Error ? error.message.slice(0, 200) : String(error);
+    }
+    check("the new relayer address is the one the prepared KMS key controls", derived === to, `${keyArn} controls ${to}`, derived === null ? `the key's public key could not be read (${problem})` : `${keyArn} controls ${derived}, not ${to}`);
+  }
+  /* 2. The contract on chain: its admin (who must sign) and its operator (what changes). */
+  const operator = await chainOperator(deps, config);
+  check("the contract's admin and operator (read from the chain)", operator.ok, operator.ok ? `admin ${operator.control.admin}; operator ${operator.control.operator}; ${operator.control.contract_name} ${operator.control.contract_version}${operator.control.paused ? "; PAUSED" : ""}` : "", operator.ok ? "" : operator.detail);
+  /* 3. The new account: it must exist on chain (a never-funded account cannot sign) and hold the funding floor. */
+  const funding = relayerFunding(config);
+  let account: "exists" | "absent" | string = "absent";
+  let balance: bigint | null = null;
+  if (deps.juno === undefined) account = "no chain reader is bound in this build";
+  else {
+    try {
+      account = (await deps.juno.rest(config).account(to)) === null ? "absent" : "exists";
+      balance = await deps.juno.balance(config, to);
+    } catch (error) {
+      account = error instanceof Error ? error.message.slice(0, 200) : String(error);
+    }
+  }
+  check(
+    `the new relayer account exists on chain and holds at least the funding floor (${display(funding.floor)} ${config.symbol})`,
+    account === "exists" && balance !== null && balance >= funding.floor,
+    `${to}: ${balance === null ? "?" : display(balance)} ${config.symbol} (${String(balance)} ${funding.denom})`,
+    account === "exists"
+      ? `${to} holds ${balance === null ? "an unread balance" : `${display(balance)} ${config.symbol} (${String(balance)} ${funding.denom})`}: send at least ${display(funding.floor - (balance ?? BigInt(0)))} ${config.symbol} more before the pools restart`
+      : account === "absent"
+        ? `${to} does not exist on chain yet: fund it (a plain bank send of at least ${display(funding.floor)} ${config.symbol}) before the pools restart -- an account that never received funds cannot sign`
+        : `the account could not be read: ${account}`,
+  );
+  const exit = report(deps.out, checks);
+  const already = operator.ok && operator.control.operator === to;
+  deps.out("");
+  deps.out(`Funding floor (relayerFunding): ${String(funding.transactions)} relayer transactions (one worst-bound money game: Start, 64 checkpoints, Settle, Finalize) x gas.max_fee ${String(funding.maxFeePerTransaction)} ${funding.denom} = ${String(funding.floor)} ${funding.denom} (${display(funding.floor)} ${config.symbol}).`);
+  if (already) deps.out(`The contract's operator is ALREADY ${to}: no set_operator is needed.`);
+  else {
+    deps.out("THE ADMIN'S TRANSACTION (signed and sent OUTSIDE this tool, by the contract admin -- never by a relayer key; nothing here signs):");
+    deps.out(`  chain     ${config.chainId}`);
+    deps.out(`  sender    ${operator.ok ? operator.control.admin : "<the contract admin: unread>"}   (Config.admin; admin_guard refuses any other sender, and any funds)`);
+    deps.out(`  contract  ${config.contract}`);
+    deps.out(`  msg       ${setOperatorMessage(to)}`);
+    deps.out("  funds     none");
+    deps.out(`  e.g.      junod tx wasm execute ${config.contract} '${setOperatorMessage(to)}' --from <the admin's key> --chain-id ${config.chainId} --node <an RPC endpoint> --gas auto --gas-adjustment 1.3 --gas-prices 0.075${funding.denom}`);
+    deps.out("  WHEN      only inside the drained window: after `relayer-rotation-gate` is OPEN and before the pools restart on the new configuration.");
   }
   return exit;
 }
@@ -596,6 +716,7 @@ export const USAGE = [
   "  awsDeploy signer-keys --relayer <key ARN> --settlement <key ARN> --admission <key ARN>",
   "  awsDeploy generation-gate --runtime-parameter <serving SSM ARN> --environment <env> --generation <N+1> --restore-id <id> [--record <file>]",
   "  awsDeploy relayer-rotation-gate --runtime-parameter <SSM ARN> --environment <env> --from-relayer <old> --to-relayer <new> --evidence <dir> [--record <file>]",
+  "  awsDeploy set-operator-plan --runtime-parameter <SSM ARN> --environment <env> --to-relayer <new> [--to-relayer-key <key ARN>]   (read-only: the admin's set_operator, never signed here)",
   "  awsDeploy stage-cert (prerequisite | certify) ...   LIVE-6 L6-6: the real-AWS staging certification (aws/deploy/staging/commands.ts)",
   "  awsDeploy stage-probe (task-role | edge | collect) ...",
 ].join("\n");
@@ -611,6 +732,7 @@ export async function runDeployCommand(argv: readonly string[], deps: DeployDeps
     if (command === "signer-keys") return await signerKeysCommand(rest, deps);
     if (command === "generation-gate") return await generationGateCommand(rest, deps);
     if (command === "relayer-rotation-gate") return await relayerRotationGateCommand(rest, deps);
+    if (command === "set-operator-plan") return await setOperatorPlanCommand(rest, deps);
     if (command !== undefined && Object.prototype.hasOwnProperty.call(extra, command)) return await extra[command](rest);
     deps.out(USAGE);
     return EXIT_USAGE;

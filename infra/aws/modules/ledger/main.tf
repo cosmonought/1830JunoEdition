@@ -36,8 +36,18 @@ locals {
   # LIVE-6 L6-2: the operator (`gamesDoctor aws`, read only here) and the recovery (`npm run recovery`, L6-4) roles.
   operator_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-operator"
   recovery_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-recovery"
-  signing_purpose = var.signing_keys_enabled ? toset(["relayer", "settlement", "admission"]) : toset([])
+  signing_purpose = var.signing_keys_enabled ? toset(concat(["relayer", "settlement", "admission"], [for label in local.relayer_rotation_labels : "relayer-${label}"])) : toset([])
   tags            = merge(var.tags, { "gs:environment" = var.environment, "gs:component" = "ledger", "gs:slice" = "live5-l5-8" })
+}
+
+locals {
+  # LIVE-6 relayer rotation: the relayer keys beyond the original one, `r2` ... `r<relayer_key_count>`, join
+  # `signing_purpose` above as `relayer-r<N>`. The original (`r1`) stays at its L5-8 address `aws_kms_key.signing["relayer"]`:
+  # never renamed, never replaced. Each extra key is ONE MORE instance of the same resource, with the same spec, the same
+  # key policy and `prevent_destroy`.
+  relayer_rotation_labels = [for n in range(2, var.relayer_key_count + 1) : "r${n}"]
+  # The certification's post-rotation proof reads the relayer fences (bootstrap role, read only): only once a rotation exists.
+  relayer_rotation_reads = var.signing_keys_enabled && var.relayer_key_count > 1
 }
 
 /* ------------------------------------------------------------------ */
@@ -244,6 +254,34 @@ data "aws_iam_policy_document" "ledger_resource" {
     }
   }
 
+  # LIVE-6 relayer rotation: the staging certification's post-rotation proof (`stage-cert certify --scenario
+  # relayer-rotation-drill`, bootstrap role) reads `FENCE#relayer#<address>` -- the relayer epoch the ledger minted -- to
+  # compare it with the game table's mirror. GetItem only, those partitions only; present only once a second relayer key
+  # exists (an ordinary one-relayer deployment's policy is unchanged).
+  dynamic "statement" {
+    for_each = local.relayer_rotation_reads ? [1] : []
+    content {
+      sid       = "BootstrapRelayerFenceRead"
+      effect    = "Allow"
+      actions   = ["dynamodb:GetItem"]
+      resources = [aws_dynamodb_table.ledger.arn]
+      principals {
+        type        = "AWS"
+        identifiers = [local.app_root]
+      }
+      condition {
+        test     = "ArnEquals"
+        variable = "aws:PrincipalArn"
+        values   = [local.bootstrap_arn]
+      }
+      condition {
+        test     = "ForAllValues:StringLike"
+        variable = "dynamodb:LeadingKeys"
+        values   = ["FENCE#relayer#*"]
+      }
+    }
+  }
+
   statement {
     sid       = "BootstrapDescribe"
     effect    = "Allow"
@@ -361,8 +399,20 @@ resource "aws_backup_selection" "ledger" {
 }
 
 /* ------------------------------------------------------------------ */
-/* The three signing keys                                               */
+/* The three signing keys (and, for a relayer rotation, more relayer keys) */
 /* ------------------------------------------------------------------ */
+#
+# LIVE-6 RELAYER ROTATION. An asymmetric KMS key cannot rotate: a new relayer key is a new Juno account (preflight §11.7).
+# `relayer_key_count` (default 1: the L5-8 deployment, byte for byte) is APPEND-ONLY. Raising it by one PREPARES a
+# rotation: the next key `relayer-r<N>` is created BESIDE the current one, with exactly the same spec and key policy (the
+# app task role may GetPublicKey and Sign ECDSA_SHA_256 over a DIGEST; the bootstrap / verifier role may DescribeKey,
+# GetPublicKey and ListGrants; nobody may CreateGrant), so `awsDeploy signer-keys` derives its address before anything
+# is switched. WHICH key the deployment uses is the app stack's choice (`signing_keys.relayer`, by key ARN), never
+# this module's: the prepared key signs nothing until the app stack names it, because the task role's own IAM policy
+# names only the configured keys (both halves are required). The old key is never destroyed here: lowering the count
+# would destroy the NEWEST key and `prevent_destroy` refuses that plan; an OLDER key cannot be named for removal at all.
+# Retiring a relayer key is a separate, reviewed change (a `removed` block with `destroy = false`, then a scheduled
+# deletion by hand), never a variable.
 
 data "aws_iam_policy_document" "signing" {
   for_each = local.signing_purpose
@@ -457,7 +507,8 @@ resource "aws_kms_key" "signing" {
   deletion_window_in_days  = 30
   policy                   = data.aws_iam_policy_document.signing[each.key].json
 
-  tags = merge(local.tags, { Name = "gs-${var.environment}-${each.key}", "gs:signing-purpose" = each.key })
+  # The original three keep their L5-8 tags exactly; a rotation key's purpose is `relayer`, its label says which one.
+  tags = merge(local.tags, { Name = "gs-${var.environment}-${each.key}", "gs:signing-purpose" = startswith(each.key, "relayer-") ? "relayer" : each.key }, startswith(each.key, "relayer-") ? { "gs:relayer-key" = trimprefix(each.key, "relayer-") } : {})
 
   lifecycle {
     # Destroying a signing key destroys the relayer account / the settlement or admission identity.

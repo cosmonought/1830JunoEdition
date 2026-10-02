@@ -52,6 +52,7 @@ import { newProbeNonce, runIamProbe } from "./iamProbe";
 import { adoptionOf, buildCapabilities, readGenerationEvidence, readIdentityRecovery, readRestoreHeartbeats, type RecoveryReaders, type TaskHeartbeatReader } from "./recovery";
 import { runKmsProbe } from "./kmsProbe";
 import { runTransactionProbe } from "./transactionProbe";
+import { collectRotationProof, ROTATION_PROOF_FILE, type RotationReaders } from "./rotationProof";
 
 export interface StagingDeps {
   /** The process environment (the certifier task's BUILD_ID, its runtime document reference, the session cookie). */
@@ -73,6 +74,9 @@ export interface StagingDeps {
    *  table, bound by the integration (`aws/runtime/taskHeartbeats.ts` `oldGenerationHeartbeatsAfter`, in
    *  `tools/awsDeploy.ts`); absent: the restore-quiet gate says the stop is proven from ECS alone. */
   readonly heartbeats?: TaskHeartbeatReader;
+  /** LIVE-6 relayer rotation: the deployment's own readers for the post-rotation proof (`rotationProof.ts`), bound by the
+   *  integration in `tools/awsDeploy.ts`; absent: the proof gate FAILS "not integrated". The chain reader is DeployDeps'. */
+  readonly rotation?: RotationReaders;
 }
 
 const runOf = (flags: Map<string, string>): string => {
@@ -125,7 +129,7 @@ async function prerequisiteFor(flags: Map<string, string>, dir: string, run: str
   /* L6-4: SYSTEM/GENERATION and APPGEN's binding, read live through L6-4's own readers (when bound). */
   const { clients, tables } = clientsFor(deps, verification.startup);
   const generationEvidence = await readGenerationEvidence(staging.recovery, clients, { game: tables.game, ledger: tables.ledger });
-  return { expect, result: prerequisiteChecks(dir, verification, expect), generationEvidence, clients, startup: verification.startup };
+  return { expect, result: prerequisiteChecks(dir, verification, expect), generationEvidence, clients, tables, startup: verification.startup };
 }
 
 /* ------------------------------------------------------------------ */
@@ -163,7 +167,7 @@ export async function stageCertCommand(argv: readonly string[], deps: DeployDeps
     const commit = need(flags, "--commit");
     /* An older certification's PASS never survives a rerun that fails or is refused. */
     clearCertification(dir);
-    const { expect, result, generationEvidence, clients, startup } = await prerequisiteFor(flags, dir, run, deps, staging);
+    const { expect, result, generationEvidence, clients, tables, startup } = await prerequisiteFor(flags, dir, run, deps, staging);
     if (replacedPools.some((p) => !expect.pools.includes(p))) throw new UsageError("--replaced-pools must be among --pools");
     const ctx: CertContext = {
       dir,
@@ -192,7 +196,24 @@ export async function stageCertCommand(argv: readonly string[], deps: DeployDeps
           : null,
       alarmActions: { page: actionListOf(flags, "--page-actions"), ticket: actionListOf(flags, "--ticket-actions") },
       rotation: scenario === "relayer-rotation-drill" ? { from: fromRelayer, to: toRelayer } : null,
+      /* LIVE-6 relayer rotation: the post-rotation proof, read LIVE now (read-only), kept in the package, judged in memory. */
+      rotationProof:
+        scenario === "relayer-rotation-drill" && fromRelayer !== null && toRelayer !== null
+          ? await collectRotationProof({
+              readers: staging.rotation,
+              juno: deps.juno,
+              clients,
+              tables,
+              config: startup.escrowConfig,
+              run,
+              environment: expect.environment,
+              from: fromRelayer,
+              to: toRelayer,
+              now: deps.now,
+            })
+          : null,
     };
+    if (ctx.rotationProof !== null && ctx.rotationProof !== undefined) writeRecord(dir, ROTATION_PROOF_FILE, ctx.rotationProof);
     const verdict = certify(ctx, staging.extraGates ?? []);
     writeCertification(ctx, verdict);
     for (const line of certificationText(ctx, verdict).trimEnd().split("\n")) deps.out(line);

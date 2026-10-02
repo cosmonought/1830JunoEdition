@@ -104,13 +104,18 @@ const OPERATOR_IMPORTS: ReadonlySet<string> = new Set([
 ]);
 /** LIVE-6 final convergence (L6-6R §7): the staging certification's ONE binding, `tools/awsDeploy.ts`, may import from the
  *  AWS layers exactly these READ functions (and nothing else from these modules): L6-4's canonical readers and startup
- *  rule, and L6-5A's one TASK# reader. */
+ *  rule, and L6-5A's one TASK# reader. LIVE-6 relayer rotation: + the post-rotation proof's readers -- the routing, the
+ *  pool item, the relayer mirror, the ledger's relayer fence and the holder's one TASK# item (reads only). */
 const STAGING_BINDING_NAMES: Readonly<Record<string, readonly string[]>> = Object.freeze({
   "aws/game/generationMarker": ["adoptionBindingProblem", "generationMarkerProblem", "readGenerationMarker"],
+  "aws/game/ownership": ["readPool"],
+  "aws/game/relayerRole": ["readRelayerRole"],
+  "aws/game/routing": ["readRouting"],
   "aws/identity/dynamoIdentityStore": ["identityServingProblem", "readIdentityRestore", "readIdentityTableSelf"],
   "aws/identity/identityRestore": ["inspectIdentityRestore"],
   "aws/ledger/appGeneration": ["readAdoptionRecord", "readAppGeneration"],
-  "aws/runtime/taskHeartbeats": ["oldGenerationHeartbeatsAfter"],
+  "aws/ledger/dynamoSigningLedger": ["readRelayerFence"],
+  "aws/runtime/taskHeartbeats": ["oldGenerationHeartbeatsAfter", "readTaskStatus"],
 });
 const STAGING_BINDING_IMPORTS: ReadonlySet<string> = new Set(Object.keys(STAGING_BINDING_NAMES));
 

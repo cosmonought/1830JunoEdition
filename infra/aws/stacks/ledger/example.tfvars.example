@@ -10,3 +10,7 @@ backup = {
   retention_days  = 35
   vault_lock_mode = "governance" # "compliance" (+ changeable_for_days >= 3) is irreversible: an owner decision
 }
+
+# LIVE-6 relayer rotation (infra/aws/README.md "Relayer rotation"): 1 = one relayer key. Raise by ONE to prepare a
+# rotation (the new key r<N> is created beside the current one); never lower it (prevent_destroy refuses).
+# relayer_key_count = 2

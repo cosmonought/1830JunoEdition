@@ -44,6 +44,9 @@ import { certify, certificationText, clearCertification, idleBoundsOf, prerequis
 import { DRILL_FILES } from "./drills";
 import { requiredIdleMs, runEdgeProbe, SESSION_COOKIE_ENV, type EdgeTransport } from "./edgeProbe";
 import { EXIT_NOT_YET, probeOverrides, recordFlipAlarms, stagePhase, windowOpen } from "./flipAlarmDrill";
+import { precheckRestoreCase, recordRestoreAlarms, stageRestoreCase } from "./restoreAlarmDrill";
+import { EXIT_NOT_YET as EXIT_RESTORE_NOT_YET, RESTORE_CASES, restoreProbeOverrides, type RestoreCase } from "./restoreAlarmProbe";
+import { restoreFencingCommand } from "./restoreFencing";
 import { MAINNET_CHAIN_IDS } from "../../../escrow/juno/signer";
 import { arr, disposablePartition, EVIDENCE, isoOf, obj, PROBE_FORMAT, readEvidence, recordFromLog, recordLines, runIdProblem, scrub, secretFindings, stableStringify, writeRecord } from "./evidence";
 
@@ -52,6 +55,7 @@ import { newProbeNonce, runIamProbe } from "./iamProbe";
 import { adoptionOf, buildCapabilities, readGenerationEvidence, readIdentityRecovery, readRestoreHeartbeats, type RecoveryReaders, type TaskHeartbeatReader } from "./recovery";
 import { runKmsProbe } from "./kmsProbe";
 import { runTransactionProbe } from "./transactionProbe";
+import { collectRotationProof, ROTATION_PROOF_FILE, type RotationReaders } from "./rotationProof";
 
 export interface StagingDeps {
   /** The process environment (the certifier task's BUILD_ID, its runtime document reference, the session cookie). */
@@ -73,6 +77,9 @@ export interface StagingDeps {
    *  table, bound by the integration (`aws/runtime/taskHeartbeats.ts` `oldGenerationHeartbeatsAfter`, in
    *  `tools/awsDeploy.ts`); absent: the restore-quiet gate says the stop is proven from ECS alone. */
   readonly heartbeats?: TaskHeartbeatReader;
+  /** LIVE-6 relayer rotation: the deployment's own readers for the post-rotation proof (`rotationProof.ts`), bound by the
+   *  integration in `tools/awsDeploy.ts`; absent: the proof gate FAILS "not integrated". The chain reader is DeployDeps'. */
+  readonly rotation?: RotationReaders;
 }
 
 const runOf = (flags: Map<string, string>): string => {
@@ -125,7 +132,7 @@ async function prerequisiteFor(flags: Map<string, string>, dir: string, run: str
   /* L6-4: SYSTEM/GENERATION and APPGEN's binding, read live through L6-4's own readers (when bound). */
   const { clients, tables } = clientsFor(deps, verification.startup);
   const generationEvidence = await readGenerationEvidence(staging.recovery, clients, { game: tables.game, ledger: tables.ledger });
-  return { expect, result: prerequisiteChecks(dir, verification, expect), generationEvidence, clients, startup: verification.startup };
+  return { expect, result: prerequisiteChecks(dir, verification, expect), generationEvidence, clients, tables, startup: verification.startup };
 }
 
 /* ------------------------------------------------------------------ */
@@ -163,7 +170,7 @@ export async function stageCertCommand(argv: readonly string[], deps: DeployDeps
     const commit = need(flags, "--commit");
     /* An older certification's PASS never survives a rerun that fails or is refused. */
     clearCertification(dir);
-    const { expect, result, generationEvidence, clients, startup } = await prerequisiteFor(flags, dir, run, deps, staging);
+    const { expect, result, generationEvidence, clients, tables, startup } = await prerequisiteFor(flags, dir, run, deps, staging);
     if (replacedPools.some((p) => !expect.pools.includes(p))) throw new UsageError("--replaced-pools must be among --pools");
     const ctx: CertContext = {
       dir,
@@ -192,7 +199,24 @@ export async function stageCertCommand(argv: readonly string[], deps: DeployDeps
           : null,
       alarmActions: { page: actionListOf(flags, "--page-actions"), ticket: actionListOf(flags, "--ticket-actions") },
       rotation: scenario === "relayer-rotation-drill" ? { from: fromRelayer, to: toRelayer } : null,
+      /* LIVE-6 relayer rotation: the post-rotation proof, read LIVE now (read-only), kept in the package, judged in memory. */
+      rotationProof:
+        scenario === "relayer-rotation-drill" && fromRelayer !== null && toRelayer !== null
+          ? await collectRotationProof({
+              readers: staging.rotation,
+              juno: deps.juno,
+              clients,
+              tables,
+              config: startup.escrowConfig,
+              run,
+              environment: expect.environment,
+              from: fromRelayer,
+              to: toRelayer,
+              now: deps.now,
+            })
+          : null,
     };
+    if (ctx.rotationProof !== null && ctx.rotationProof !== undefined) writeRecord(dir, ROTATION_PROOF_FILE, ctx.rotationProof);
     const verdict = certify(ctx, staging.extraGates ?? []);
     writeCertification(ctx, verdict);
     for (const line of certificationText(ctx, verdict).trimEnd().split("\n")) deps.out(line);
@@ -230,7 +254,9 @@ export async function stageProbeCommand(argv: readonly string[], deps: DeployDep
     return EXIT_OK;
   }
   if (sub === "flip-alarms") return flipAlarmsCommand(rest, deps);
-  throw new UsageError("stage-probe task-role | edge | collect | flip-alarms");
+  if (sub === "restore-alarms") return restoreAlarmsCommand(rest, deps);
+  if (sub === "restore-fencing") return restoreFencingCommand(rest, deps, (clients, tables) => readGenerationEvidence(staging.recovery, clients, tables));
+  throw new UsageError("stage-probe task-role | edge | collect | flip-alarms | restore-alarms | restore-fencing");
 }
 
 /**
@@ -285,6 +311,56 @@ function flipAlarmsCommand(argv: readonly string[], deps: DeployDeps): number {
     return verdict.kind === "not-yet" ? EXIT_NOT_YET : EXIT_FAILED;
   }
   throw new UsageError("stage-probe flip-alarms overrides | window | observe | record");
+}
+
+const poolsFlag = (flags: Map<string, string>): string[] => need(flags, "--pools").split(",").map((p) => p.trim()).filter((p) => p.length > 0);
+const caseOf = (flags: Map<string, string>): RestoreCase => {
+  const c = need(flags, "--case");
+  if (!(RESTORE_CASES as readonly string[]).includes(c)) throw new UsageError(`--case is ${RESTORE_CASES.join(", ")}`);
+  return c as RestoreCase;
+};
+
+/**
+ * The restore drill's alarm observations (`restoreAlarmDrill.ts`; run by infra/aws/scripts/run-restore-alarm-probe.{ps1,sh}):
+ *   overrides --case r1|a4g|a4i|r2|r3 --environment <env> --pool <pool> --run-id R [--hold-seconds N]   the probe task's overrides
+ *   precheck  --run-id R --evidence <dir> --environment <env> --pools p1,p2 --case C --pool P [--overlap]
+ *             0 the launch record written (start the task); 10 not yet (recapture, poll); 1 refused (start nothing)
+ *   observe   --run-id R --evidence <dir> --environment <env> --case C        0 observed and staged; 10 not yet; 1 refused
+ *   record    --run-id R --evidence <dir> --environment <env> --pools p1,p2   writes probe-restore-alarms.json, judged first
+ * Reads only the evidence directory (the scripts capture AWS); writes only the evidence directory.
+ */
+function restoreAlarmsCommand(argv: readonly string[], deps: DeployDeps): number {
+  const [sub, ...rest] = argv;
+  if (sub === "overrides") {
+    const flags = parseFlags(rest, ["--case", "--environment", "--pool", "--run-id", "--hold-seconds"], []);
+    const holdText = flags.get("--hold-seconds");
+    if (holdText !== undefined && !/^[0-9]{1,6}$/.test(holdText)) throw new UsageError("--hold-seconds is a whole number of seconds");
+    try {
+      deps.out(JSON.stringify(restoreProbeOverrides({ case: caseOf(flags), environment: environmentOf(need(flags, "--environment")), pool: need(flags, "--pool"), run: runOf(flags), ...(holdText === undefined ? {} : { holdSeconds: Number(holdText) }) })));
+    } catch (error) {
+      if (error instanceof UsageError) throw error;
+      throw new UsageError((error as Error).message);
+    }
+    return EXIT_OK;
+  }
+  let verdict;
+  if (sub === "precheck") {
+    const flags = parseFlags(rest, ["--run-id", "--evidence", "--environment", "--pools", "--case", "--pool"], ["--overlap"]);
+    const ctx = { dir: need(flags, "--evidence"), run: runOf(flags), environment: environmentOf(need(flags, "--environment")), pools: poolsFlag(flags) };
+    verdict = precheckRestoreCase(ctx, { case: caseOf(flags), pool: need(flags, "--pool"), overlap: flags.has("--overlap"), now: deps.now() });
+  } else if (sub === "observe") {
+    const flags = parseFlags(rest, ["--run-id", "--evidence", "--environment", "--case"], []);
+    verdict = stageRestoreCase({ dir: need(flags, "--evidence"), run: runOf(flags), environment: environmentOf(need(flags, "--environment")) }, caseOf(flags));
+  } else if (sub === "record") {
+    const flags = parseFlags(rest, ["--run-id", "--evidence", "--environment", "--pools"], []);
+    verdict = recordRestoreAlarms({ dir: need(flags, "--evidence"), run: runOf(flags), environment: environmentOf(need(flags, "--environment")), pools: poolsFlag(flags) });
+  } else throw new UsageError("stage-probe restore-alarms overrides | precheck | observe | record");
+  if (verdict.kind === "observed") {
+    deps.out(`${sub === "record" ? "RECORDED" : sub === "precheck" ? "CLEARED" : "OBSERVED"}: ${verdict.value}`);
+    return EXIT_OK;
+  }
+  deps.out(`${verdict.kind === "not-yet" ? "NOT YET" : "REFUSED"}: ${verdict.reasons.join("; ")}`);
+  return verdict.kind === "not-yet" ? EXIT_RESTORE_NOT_YET : EXIT_FAILED;
 }
 
 /** Runs INSIDE the certifier task (the task role, the task's network, the task's own runtime document). */

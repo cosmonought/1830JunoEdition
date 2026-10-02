@@ -106,6 +106,36 @@ variable "signing_keys" {
   }
 }
 
+variable "relayer_rotation_key_arns" {
+  description = <<-EOT
+    LIVE-6 relayer rotation: relayer keys (the ledger stack's `relayer_key_arns`, by KEY ARN) that are NOT the configured
+    relayer but that the bootstrap / verifier role must still READ -- the PREPARED next key before the switch (so
+    `awsDeploy signer-keys` derives its address and `verify` / `set-operator-plan` can name it), and the PREVIOUS key after
+    it (kept readable for a rollback). Granted DescribeKey, GetPublicKey and ListGrants to the bootstrap role ONLY: the task
+    role signs with exactly the three configured `signing_keys`, never with one of these. A non-empty list also grants the
+    bootstrap role the post-rotation proof's reads (GetItem on the serving game table's ROLE#relayer#* / POOL#* / TASK#*,
+    and the ledger's FENCE#relayer#*). Empty (the default): the L5-8 policies, unchanged.
+  EOT
+  type        = list(string)
+  default     = []
+  validation {
+    condition = alltrue([
+      for arn in var.relayer_rotation_key_arns : can(regex("^arn:aws:kms:[a-z]{2}(-[a-z]+)+-[0-9]{1,2}:[0-9]{12}:key/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|mrk-[0-9a-f]{32})$", arn))
+    ])
+    error_message = "Every relayer rotation key must be a KMS KEY ARN (arn:aws:kms:<region>:<account>:key/<id>); an alias is refused."
+  }
+  validation {
+    condition     = length(var.relayer_rotation_key_arns) == 0 || var.signing_keys != null
+    error_message = "relayer_rotation_key_arns needs signing_keys: a rotation is between relayer keys of a configured escrow."
+  }
+  validation {
+    condition = length(distinct(var.relayer_rotation_key_arns)) == length(var.relayer_rotation_key_arns) && (var.signing_keys == null ? true : alltrue([
+      for arn in var.relayer_rotation_key_arns : !contains(values(var.signing_keys), arn) && split(":", arn)[3] == split(":", var.signing_keys.relayer)[3]
+    ]))
+    error_message = "relayer_rotation_key_arns: distinct keys, none of them a configured signing key (the relayer, settlement or admission key), all in the signing keys' one region."
+  }
+}
+
 variable "escrow" {
   description = <<-EOT
     null: no escrow (the runtime document's `escrow` is null; money games stay off). Otherwise the NON-SECRET fields of the
@@ -363,7 +393,7 @@ variable "recovery_trusted_principal_arns" {
 }
 
 variable "recovery_break_glass" {
-  description = "LIVE-6 L6-2 (L6-4 §12.1 item 3): grant gs-<env>-recovery dynamodb:RestoreTableToPointInTime (a break-glass step: turn it on for the restore, off after)."
+  description = "LIVE-6 L6-2 (L6-4 §12.1 item 3): grant gs-<env>-recovery dynamodb:RestoreTableToPointInTime (a break-glass step: ON before the restore and kept ON through RestoreTableToPointInTime, table-prepare, appgen-adopt and the Terraform import that makes the restored table managed; OFF immediately after that import -- see infra/aws/README.md \"Generation switch after a restore\")."
   type        = bool
   default     = false
 }

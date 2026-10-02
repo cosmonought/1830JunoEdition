@@ -426,7 +426,16 @@ describe("L6-5B the gates' machine records", () => {
   test("the rotation gate's record proves an OPEN gate for exactly this from/to, the old queue EMPTY; unknown or closed fails", () => {
     const from = "juno1xc5etfhxjg4qfc9cx25qh3tvxdcf5skjj5epte";
     const to = "juno1wfk5fda0sg5z2lqrpwh7wexnckpe6hqzljkt4v";
-    const rec = (over: Record<string, unknown> = {}) => ({ format: ROTATION_GATE_FORMAT, environment: "staging", from_relayer: from, to_relayer: to, configured_relayer: from, pools: ["p1"], evidence_captured_at: "2026-09-30T11:59:00Z", queue: "empty", verdict: "OPEN", checks: passed, gated_at: "2026-09-30T12:00:00.000Z", ...over });
+    /* LIVE-6 relayer rotation: v2 -- the deployment the rotation must leave untouched, and the contract's operator. */
+    const deployment = {
+      chain_id: "uni-7",
+      contract_address: "juno1qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpc8qursaq28r5",
+      code_checksums: ["5ecc302221a2dab4bb4f0f71b632f2beeafe9523ebd7b33bd0e94d017b8d09e8"],
+      settlement_key: { signer_key_id: 1, public_key_hex: "03d01115d548e7561b15c38f004d734633687cf4419620095bc5b0f47070afe85a", key_ref: "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222" },
+      admission_key: { public_key_hex: "03f28773c2d975288bc7d1d205c3748651b075fbc6610e58cddeeddf8f19405aa8", key_ref: "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333" },
+      from_relayer_key_ref: "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111",
+    };
+    const rec = (over: Record<string, unknown> = {}) => ({ format: ROTATION_GATE_FORMAT, environment: "staging", from_relayer: from, to_relayer: to, configured_relayer: from, pools: ["p1"], evidence_captured_at: "2026-09-30T11:59:00Z", queue: "empty", verdict: "OPEN", checks: passed, gated_at: "2026-09-30T12:00:00.000Z", deployment, contract_operator: from, ...over });
     const expect = { environment: "staging", from, to };
     assert.equal(rotationGateRecordProblem(rec(), expect), null);
     assert.match(rotationGateRecordProblem(rec({ queue: "unknown", verdict: "CLOSED" }), expect) ?? "", /unknown/);
@@ -440,6 +449,17 @@ describe("L6-5B the gates' machine records", () => {
     assert.equal(rotationGateRecordProblem(rec({ checks: real }), expect), null);
     assert.match(rotationGateRecordProblem(rec({ checks: [{ name: `RELAYQ#${to}`, status: "skipped", detail: "" }] }), expect) ?? "", /not OPEN/, "skipped alone proves nothing");
     assert.match(rotationGateRecordProblem(rec({ checks: [...real, { name: "y", status: "fail", detail: "" }] }), expect) ?? "", /not OPEN/);
+    /* LIVE-6 relayer rotation: v2 only -- a v1 record (no deployment identity) no longer certifies; the operator at the
+       gate is the old or the new relayer; the deployment identity is complete and well-formed. */
+    assert.equal(ROTATION_GATE_FORMAT, "18COSMOS/RELAYER-ROTATION-GATE/v2");
+    assert.match(rotationGateRecordProblem(rec({ format: "18COSMOS/RELAYER-ROTATION-GATE/v1" }), expect) ?? "", /carries no deployment identity .*run the gate again/);
+    assert.equal(rotationGateRecordProblem(rec({ contract_operator: to }), expect), null, "SetOperator already sent before the gate: still a rotation the gate can prove");
+    assert.match(rotationGateRecordProblem(rec({ contract_operator: "juno1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" }), expect) ?? "", /neither the old nor the new relayer/);
+    assert.match(rotationGateRecordProblem(rec({ contract_operator: null }), expect) ?? "", /neither the old nor the new relayer/, "an unread operator proves nothing");
+    assert.match(rotationGateRecordProblem(rec({ deployment: null }), expect) ?? "", /no well-formed deployment identity/);
+    assert.match(rotationGateRecordProblem(rec({ deployment: { ...deployment, settlement_key: { ...deployment.settlement_key, public_key_hex: "zz" } } }), expect) ?? "", /no well-formed deployment identity/);
+    assert.match(rotationGateRecordProblem(rec({ deployment: { ...deployment, code_checksums: [] } }), expect) ?? "", /no well-formed deployment identity/);
+    assert.match(rotationGateRecordProblem(rec({ deployment: { ...deployment, admission_key: undefined } }), expect) ?? "", /no well-formed deployment identity/);
   });
 
   test("a gate record is created once: an existing file is never overwritten", () => {
@@ -520,7 +540,9 @@ describe("L6-5B boundaries", () => {
       assert.ok(!/client-cloudwatch|createCloudWatchClient|PutMetricData/.test(code), file);
     }
     const users = sourceFiles(SERVER_SRC).filter((file) => !file.endsWith(".test.ts") && /\brelayQueueState\b/.test(fs.readFileSync(file, "utf8"))).map((file) => path.relative(SERVER_SRC, file).split(path.sep).join("/"));
-    assert.deepEqual(users.sort(), ["aws/deploy/commands.ts", "aws/deploy/relayerRotation.ts"]);
+    /* LIVE-6 relayer rotation: + the staging binding (`tools/awsDeploy.ts`), which hands the SAME reader to the
+       post-rotation proof (RELAYQ#<old> still empty after the change). */
+    assert.deepEqual(users.sort(), ["aws/deploy/commands.ts", "aws/deploy/relayerRotation.ts", "tools/awsDeploy.ts"]);
     const gate = fs.readFileSync(path.join(SERVER_SRC, "aws/deploy/relayerRotation.ts"), "utf8");
     assert.ok(!/PutItem|UpdateItem|DeleteItem|TransactWrite|BatchWrite/.test(gate), "the gate writes nothing");
     const records = fs.readFileSync(path.join(SERVER_SRC, "aws/deploy/gateRecords.ts"), "utf8");

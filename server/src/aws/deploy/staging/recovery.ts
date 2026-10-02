@@ -52,8 +52,11 @@
 //                  adoption (its restore id, table, generations and time), an old-generation ledger write refused BY THE
 //                  GENERATION FENCE, an old-generation task never serving-ready for a GENERATION reason, the KMS side effect
 //                  withheld with KMS never called, and the explicitly configured new generation serving-ready. No chain
-//                  transaction or relayer sequence is needed and none is implied. No destructive or chain-affecting probe
-//                  exists yet: the slot is judged, and missing evidence FAILS the drill.
+//                  transaction or relayer sequence is needed and none is implied. The slot is judged, and missing evidence
+//                  FAILS the drill. Its supported producer (LIVE-6 restore-drill tooling) is `stage-probe restore-fencing`
+//                  over standalone, command-overridden probe tasks (aws/runtime/restoreFenceProbe.ts: the production
+//                  generation fence and startup with the OLD generation's facts, after adoption -- never a pool, never
+//                  ready); it is not destructive and never touches the chain.
 
 import * as fs from "fs";
 import * as path from "path";

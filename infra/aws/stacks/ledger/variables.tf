@@ -26,6 +26,12 @@ variable "signing_keys_enabled" {
   default = true
 }
 
+# LIVE-6 relayer rotation (modules/ledger: append-only; raise by one to PREPARE a rotation, never lower it).
+variable "relayer_key_count" {
+  type    = number
+  default = 1
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

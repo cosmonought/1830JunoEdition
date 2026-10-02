@@ -669,3 +669,24 @@ L6-7): every gate judges with the owning slice's own code. The report: Project
 Run: `npm test` includes `aws/deploy/staging/l6_6StagingCert.test.js` (the convergence block at its end), `aws/awsClients.test.js`
 (the binding's exact names) and `aws/runtime/l6_5aObservability.test.js` (the decoder, the widened TASK# guard);
 `npm run test:dynamodb-local` includes `persistence/conformance/l6FinalConvergence.dynamoLocal.test.js`.
+
+## 17. Relayer rotation: the second relayer key, the admin's operator change, the post-rotation proof (LIVE-6)
+
+The rotation gate (§13, `deploy/relayerRotation.ts`) proves a relayer-address change is SAFE (every pool drained, the old
+`RELAYQ#` empty, the new one never consulted). This slice makes the change IMPLEMENTABLE and makes its certification prove
+it WORKED. The procedure: `infra/aws/README.md` "Relayer rotation"; the report: Project
+`claude/LIVE6_RELAYER_ROTATION_PREP_2026-10-01.md`.
+
+| File | What it is |
+|---|---|
+| `infra/aws/modules/ledger` | `relayer_key_count` (append-only, default 1 = unchanged): `relayer-r2`, `relayer-r3`, ... beside the original key (`r1`, its address unchanged), same spec, same key policy, `prevent_destroy`; output `relayer_key_arns`. With a rotation, the bootstrap role may GetItem `FENCE#relayer#*`. |
+| `infra/aws/modules/app` | `relayer_rotation_key_arns`: the prepared next / retained previous relayer key -- READ by the bootstrap role only; the task role signs with exactly the configured `signing_keys`. While non-empty, the proof's GetItems (`ROLE#relayer#*`, `POOL#*`, `TASK#*`; the ledger's `FENCE#relayer#*`). |
+| `deploy/junoChain.ts` | The deploy tools' READ-ONLY view of the escrow contract: `contractControl` (admin, operator, paused -- the server's own `parseConfigResponse`), `setOperatorMessage`, `relayerFunding` (67 relayer transactions x `gas.max_fee`, integers), `deploymentIdentityOf`, the REST binding `productionJunoChain` (and a bank balance read). Signs nothing. |
+| `deploy/commands.ts` | `relayer-rotation-gate` also reads the contract's operator (old or new, else CLOSED) and writes `18COSMOS/RELAYER-ROTATION-GATE/v2` (the deployment to keep, the operator at the gate). `set-operator-plan` (read-only): `Config.admin` and the operator from the chain, the exact `set_operator` message for the admin to sign OUTSIDE the repository, the new account on chain and >= the funding floor, optionally the address derived from the prepared KMS key. |
+| `deploy/gateRecords.ts` | v2 rotation record; `rotationDeploymentOf`; a v1 record no longer certifies. |
+| `deploy/staging/rotationProof.ts` | `collectRotationProof` (live, read-only, never throws) and `judgeRotationProof` (pure): the configuration names the new relayer; the contract's operator is it; contract and checksums are the gate's; `verifyJunoDeployment` verifies; the routing's primary's CURRENT task holds `ROLE#relayer#<new>` at the ledger fence's epoch; its own fresh `TASK#` says relayer `usable`; escrow `active` and not paused; settlement and admission keys = the gate's; `RELAYQ#<old>` still empty. Gate `relayer-rotation-proof` (certify.ts); the reading is kept as `rotation-proof.json`. |
+| `runtime/taskStatus.ts`, `runtime/taskHeartbeats.ts` | The decoder also returns what the task said (`reasons`, `relayer`, `escrow`); `readTaskStatus` reads ONE task's item strongly for the proof. Still the one reader, bound only by `tools/awsDeploy.ts`; never a lease. |
+| `tools/awsDeploy.ts` | `STAGING_ROTATION_READERS` = `readRouting`, `readPool`, `readRelayerRole`, `readRelayerFence`, `readTaskStatus`, `relayQueueState`; `deps.juno = productionJunoChain()`. The import guard admits exactly these names. |
+
+Run: `npm test` includes `aws/deploy/staging/rotationProof.test.js`; `npm run test:dynamodb-local` runs §4 of
+`persistence/conformance/l6FinalConvergence.dynamoLocal.test.js` (the bound readers over a real takeover's items).

@@ -36,9 +36,11 @@
 //                       queue read completely and empty, the NEW queue never consulted, and the configuration changed
 //                       only afterwards (the gate saw the old address; the live document names the new one; every
 //                       running task started after the gate). Unknown or unreadable: FAIL. No automatic queue migration.
-//   restore-alarms      (restore drill) the drill's live observations (`probe-restore-alarms.json`): R1, A4g, A4i, R2
-//                       and R3 each FIRED under its injected condition with no action suppression, and at least one did so
-//                       while a flip window overlapped it -- a restore is not a flip, and no restore suppression exists.
+//   restore-alarms      (restore drill) the drill's live observations (`probe-restore-alarms.json`, `restoreAlarmDrill.ts`):
+//                       R1, A4g, A4i, R2 and R3 each FIRED after an alarm-pipeline injection with no action suppression,
+//                       re-derived from the AWS captures; at least one while a staging flip-suppression overlap test was
+//                       PROVEN active (both suppressors ALARM at the injection, from CloudWatch) and moved no routing --
+//                       a restore is not a flip, and no restore suppression exists.
 //
 // NOTHING HERE READS AWS: every input is a file of the run's evidence directory or a reading the command made (L6-4's
 // readers, live). Missing, unreadable or mismatched evidence is FAIL, never SKIP.
@@ -52,9 +54,11 @@ import { FLIP_SUPPRESSION } from "../../controlPlane/flipSuppression";
 import type { Check } from "../deployVerify";
 import { EVIDENCE_FILES, expectedNames } from "../deployVerify";
 import { generationAttestationProblem, rotationGateRecordProblem, type GenerationAttestation } from "../gateRecords";
-import { arr, EVIDENCE, evidenceName, fail, judge, num, obj, readEvidence, readEvidenceText } from "./evidence";
+import { arr, EVIDENCE, evidenceName, fail, judge, num, obj, readEvidence, readEvidenceText, stableStringify } from "./evidence";
 import { readClusterListing } from "./prerequisite";
 import { adoptionOf, restoreSafe, type GenerationEvidence } from "./recovery";
+import { BINDING_MS, contractMinDelayMs, deriveRestoreCase, INJECTION_KIND, overlapRoutingProblem, RESTORE_ALARM_DIR, RESTORE_CASE_ALARM, RESTORE_CASES, restoreAlarmName, restoreMetricOf, SKEW_MS } from "./restoreAlarmProbe";
+import { SUPPRESSION_OVERLAP_KIND } from "../../controlPlane/suppressionOverlap";
 
 type Json = unknown;
 
@@ -446,43 +450,124 @@ export function judgeRotationDrill(
 /* ------------------------------------------------------------------ */
 
 /**
- * `probe-restore-alarms.json` (RESTORE_ALARM_DRILL_FORMAT): per RESTORE_ALARM_CASES,
- *   { alarm: its contract name (R3: any pool's), injected_at, alarm_at >= injected_at, state: "ALARM",
- *     actions_suppressed: false, overlapping_flip_window: null | { from, to, opened_at, expires_at } covering injected_at }
- * -- and at least one case observed WITH an overlapping flip window: a restore is not a flip, and none of these is ever
- * suppressed (the contract keeps them unsuppressible; `alarms` proves no composite wraps them live).
+ * `probe-restore-alarms.json` (RESTORE_ALARM_DRILL_FORMAT), produced by `restoreAlarmDrill.ts` -- per RESTORE_ALARM_CASES:
+ *   { alarm: its contract name (R3: the injected pool's), injected_at, alarm_at, state: "ALARM", actions_suppressed: false,
+ *     pre_injection: { at, state != ALARM }, injection: { kind: "alarm-pipeline-injection", the probe task, its log stream,
+ *     the contract metric and value }, history_read_at, suppression_overlap: null | { the staging flip-suppression overlap
+ *     test's window and pools, and per pool the suppressor's proof: ALARM in describe-alarms just before the injection,
+ *     and its last StateUpdate at or before the injection (describe-alarm-history read after it) to ALARM, inside this
+ *     test's window }, overlapping_flip_window: null }
+ * -- and at least one case inside the overlap test. A restore is not a flip, and none of these is ever suppressed (the
+ * contract keeps them unsuppressible; `alarms` proves no composite wraps them live).
+ *
+ * STRENGTHENED (restore-drill tooling, owner-approved; the format is unchanged, the judge only asks for more):
+ *   - every case is RE-DERIVED from the AWS captures in `restore-alarms/` (`deriveRestoreCase`, the producer's own
+ *     derivation) and must equal the record: a typed record, or one its captures contradict, never passes;
+ *   - the injection is named an alarm-pipeline injection of the alarm's own contract metric (never a claimed real fault);
+ *   - the alarm was not ALARM before the injection, and fired no earlier than the contract's (datapoints - 1) periods after
+ *     it (R3: 59 minutes -- the real sixty-period contract) and within the binding after that;
+ *   - a self-reported `overlapping_flip_window` is never evidence (a case carrying one FAILS); an overlap counts only with
+ *     both suppressors' CloudWatch proof, and the overlap test must have left SYSTEM/ROUTING unchanged (read at its close).
  */
 export function judgeRestoreAlarmDrill(dir: string, expect: { readonly run: string; readonly environment: string; readonly pools: readonly string[] }): Check[] {
   const r = readEvidence(dir, DRILL_FILES.restoreAlarms, { ownRecord: true });
-  if (!r.ok) return [fail("restore alarms: the drill's observations", `${r.problem} (the restore drill records ${DRILL_FILES.restoreAlarms})`)];
+  if (!r.ok) return [fail("restore alarms: the drill's observations", `${r.problem} (the restore drill records ${DRILL_FILES.restoreAlarms}: run-restore-alarm-probe, then stage-probe restore-alarms record)`)];
   const rec = obj(r.value);
   const cases = obj(rec.cases);
-  const checks: Check[] = [judge("restore alarms: this run's drill", rec.format === RESTORE_ALARM_DRILL_FORMAT && rec.run_id === expect.run, `run ${expect.run}`, `${String(rec.format)} run ${String(rec.run_id)}`)];
+  const checks: Check[] = [judge("restore alarms: this run's drill", rec.format === RESTORE_ALARM_DRILL_FORMAT && rec.run_id === expect.run && rec.environment === expect.environment, `run ${expect.run}, ${expect.environment}`, `${String(rec.format)} run ${String(rec.run_id)} environment ${String(rec.environment)}`)];
+  const ctx = { dir, run: expect.run, environment: expect.environment };
   let overlapped = 0;
-  for (const id of RESTORE_ALARM_CASES) {
-    const c = obj(cases[id]);
-    const win = c.overlapping_flip_window === null || c.overlapping_flip_window === undefined ? null : obj(c.overlapping_flip_window);
-    const covers = win !== null && typeof win.opened_at === "number" && typeof win.expires_at === "number" && typeof c.injected_at === "number" && win.opened_at <= c.injected_at && c.injected_at < win.expires_at;
-    if (covers) overlapped += 1;
+  for (const c of RESTORE_CASES) {
+    const id = RESTORE_CASE_ALARM[c];
+    const x = obj(cases[id]);
+    const inj = obj(x.injection);
+    const pre = obj(x.pre_injection);
+    const injected = typeof x.injected_at === "number" ? x.injected_at : Number.NaN;
+    const earliest = injected + contractMinDelayMs(c);
+    const selfReported = x.overlapping_flip_window !== null && x.overlapping_flip_window !== undefined;
     const ok =
-      contractAlarm(expect.environment, expect.pools, id, c.alarm) &&
+      contractAlarm(expect.environment, expect.pools, id, x.alarm) &&
       specOf(id)?.suppressible === false &&
-      typeof c.injected_at === "number" &&
-      typeof c.alarm_at === "number" &&
-      c.alarm_at >= c.injected_at &&
-      c.state === "ALARM" &&
-      c.actions_suppressed === false &&
-      (win === null || covers);
+      typeof x.injected_at === "number" &&
+      typeof x.alarm_at === "number" &&
+      x.alarm_at >= x.injected_at &&
+      x.alarm_at >= earliest &&
+      x.alarm_at <= earliest + BINDING_MS &&
+      x.state === "ALARM" &&
+      x.actions_suppressed === false &&
+      inj.kind === INJECTION_KIND &&
+      inj.case === c &&
+      inj.metric === restoreMetricOf(c) &&
+      (specOf(id)?.scope !== "pool" || x.alarm === restoreAlarmName(expect.environment, c, String(inj.pool))) &&
+      typeof pre.at === "number" &&
+      pre.at <= injected + SKEW_MS &&
+      typeof pre.state === "string" &&
+      pre.state !== "ALARM" &&
+      !selfReported;
     checks.push(
       judge(
         `restore alarms: ${id} fires under its injected condition, never suppressed`,
         ok,
-        `${String(c.alarm)} ALARM ${Math.round((Number(c.alarm_at) - Number(c.injected_at)) / 1000)} s after the injection${covers ? `, inside the flip window ${String(win?.from)} -> ${String(win?.to)}` : ""}`,
-        cases[id] === undefined ? "no observation (the drill injects this condition)" : `${String(c.alarm)} ${String(c.state)} injected ${String(c.injected_at)} alarm ${String(c.alarm_at)} suppressed ${String(c.actions_suppressed)}${win !== null && !covers ? " (its recorded flip window does not cover the injection)" : ""}`,
+        `${String(x.alarm)} ALARM ${Math.round((Number(x.alarm_at) - injected) / 1000)} s after an ${INJECTION_KIND} of ${String(inj.metric)} (${String(pre.state)} before it; the contract's earliest: ${Math.round(contractMinDelayMs(c) / 1000)} s)`,
+        cases[id] === undefined
+          ? "no observation (the drill injects this condition)"
+          : selfReported
+            ? `${String(x.alarm)}: a self-reported overlapping_flip_window is never evidence (the overlap is proven from CloudWatch: suppression_overlap)`
+            : `${String(x.alarm)} ${String(x.state)} injected ${String(x.injected_at)} alarm ${String(x.alarm_at)} (contract earliest ${String(earliest)}, bound ${String(earliest + BINDING_MS)}) suppressed ${String(x.actions_suppressed)}; injection ${String(inj.kind)} of ${String(inj.metric)}; before it ${String(pre.state)} at ${String(pre.at)}`,
       ),
     );
+    /* The record is what AWS answered: the same derivation, over the same captures, gives the same case. */
+    const derived = cases[id] === undefined ? null : deriveRestoreCase(ctx, c);
+    checks.push(
+      judge(
+        `restore alarms: ${id} is what AWS answered (re-derived from ${RESTORE_ALARM_DIR}/)`,
+        derived !== null && derived.kind === "observed" && stableStringify(derived.value) === stableStringify(cases[id]),
+        "the record equals the derivation from the probe task, its log, describe-alarms and describe-alarm-history",
+        derived === null ? "no observation" : derived.kind !== "observed" ? `the captures do not show it (${derived.kind}: ${derived.reasons.join("; ")})` : "the record differs from what its captures show (a record is never typed)",
+      ),
+    );
+    const o = x.suppression_overlap === null || x.suppression_overlap === undefined ? null : obj(x.suppression_overlap);
+    if (o !== null) {
+      const pools = Array.isArray(o.pools) ? o.pools.map(String) : [];
+      const proofs = Array.isArray(o.suppressors) ? o.suppressors.map(obj) : [];
+      const floor = Math.floor(Number(o.opened_at) / 60_000) * 60_000;
+      const proven =
+        o.kind === SUPPRESSION_OVERLAP_KIND &&
+        pools.length === 2 &&
+        pools[0] !== pools[1] &&
+        typeof o.opened_at === "number" &&
+        typeof o.expires_at === "number" &&
+        o.opened_at <= injected &&
+        injected < o.expires_at &&
+        o.expires_at - o.opened_at <= FLIP_SUPPRESSION.maxWindowMs &&
+        proofs.length === 2 &&
+        pools.every((pool) => {
+          const p = proofs.find((q) => q.pool === pool);
+          return p !== undefined && p.alarm === suppressorName(expect.environment, pool) && p.pre_state === "ALARM" && p.state_at_injection === "ALARM" && typeof p.pre_at === "number" && p.pre_at <= injected + SKEW_MS && typeof p.history_alarm_at === "number" && p.history_alarm_at <= injected && p.history_alarm_at >= floor;
+        });
+      if (proven) overlapped += 1;
+      checks.push(
+        judge(
+          `restore alarms: ${id} -- both suppressors of the staging flip-suppression overlap test were ALARM at the injection (CloudWatch)`,
+          proven,
+          `[${pools.join(", ")}] window ${isoText(o.opened_at)}..${isoText(o.expires_at)}: each suppressor ALARM before the injection, its last state change at or before it to ALARM`,
+          `the suppressor observations do not prove the window was active at the injection: ${JSON.stringify(o).slice(0, 400)}`,
+        ),
+      );
+    }
   }
-  checks.push(judge("restore alarms: not suppressed by an overlapping flip window (observed)", overlapped >= 1, `${overlapped} of ${RESTORE_ALARM_CASES.length} fired inside an open flip window`, "no restore alarm was observed firing while a flip window overlapped it (the drill opens one across at least one injection)"));
+  checks.push(
+    judge(
+      "restore alarms: never suppressed while the planned-flip suppression was genuinely active (a staging flip-suppression overlap test, observed)",
+      overlapped >= 1,
+      `${overlapped} of ${RESTORE_ALARM_CASES.length} fired, actions not suppressed, with both suppressors proven ALARM at the injection`,
+      "no restore alarm was observed firing while the flip-suppression mechanism was proven active (inject one counter case inside `gamesDoctor aws suppression-overlap`; a self-reported window is never evidence)",
+    ),
+  );
+  if (overlapped >= 1) {
+    const routing = overlapRoutingProblem(dir);
+    checks.push(judge("restore alarms: the overlap test moved no routing (SYSTEM/ROUTING read at its open and its close)", routing === null, "SYSTEM/ROUTING unchanged: a suppression test, not a routing flip", String(routing)));
+  }
   return checks;
 }
 

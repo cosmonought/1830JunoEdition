@@ -15,6 +15,10 @@
 //   §3 the TASK# reader (`STAGING_HEARTBEATS`): the PREVIOUS generation's table, strongly consistent, every page, strictly
 //      decoded -- a fresh old-generation heartbeat after the stop is reported, an older one or another generation's is
 //      not, a damaged item or an unreadable table THROWS (never "no heartbeat"); it writes nothing.
+//   §4 LIVE-6 relayer rotation: `STAGING_ROTATION_READERS` read what the runtime's own writers wrote -- the pool writer's
+//      takeover, L5-6's relayer takeover (the ledger's mint, then the game-table mirror), L6-5A's TASK# writer -- and the
+//      post-rotation proof PASSES on exactly that; a newer task of the pool (the holder superseded), a damaged heartbeat
+//      or old-address work FAILS it; the readers write nothing.
 
 import { after, describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -36,7 +40,17 @@ import { preparedMarkerCheck } from "../../aws/recovery/recoveryOps";
 import { oldGenerationHeartbeatsAfter } from "../../aws/runtime/taskHeartbeats";
 import { dynamoTaskStatusWriter, type TaskStatus } from "../../aws/runtime/taskStatus";
 import type { ParameterSource } from "../../aws/runtime/configSource";
-import { STAGING_HEARTBEATS, STAGING_RECOVERY_READERS } from "../../tools/awsDeploy";
+import { STAGING_HEARTBEATS, STAGING_RECOVERY_READERS, STAGING_ROTATION_READERS } from "../../tools/awsDeploy";
+import { setPrimaryPool } from "../../aws/game/routing";
+import { openDynamoSigningLedger } from "../../aws/ledger/dynamoSigningLedger";
+import { PoolWriter } from "../../aws/ownership/poolWriter";
+import { ledgerFencedHook, takeRelayerRole } from "../../aws/ownership/relayerRole";
+import { parseJunoBackendConfig } from "../../escrow/juno/junoConfig";
+import { addressOfPublicKey } from "../../escrow/juno/cosmosTx";
+import { publicKeyOf } from "../../escrow/juno/secp256k1";
+import { deploymentIdentityOf } from "../../aws/deploy/junoChain";
+import { collectRotationProof, judgeRotationProof } from "../../aws/deploy/staging/rotationProof";
+import { fakeJunoChain } from "../../aws/deploy/staging/rotationTestSupport";
 import { ConformanceTables, newRunId, requireLocal } from "./dynamoLocal";
 
 const target = dynamoLocalTargetFromEnv();
@@ -247,5 +261,58 @@ describe("§3 the old generation's TASK# heartbeats after the stop: operator pro
     /* The item in the table is still exactly the writer's (GetItem, strong): nothing read it into a decision. */
     const item = (await admin.send(new GetItemCommand({ TableName: g1, Key: { pk: S("TASK#t-late"), sk: S("TASK") }, ConsistentRead: true }), { abortSignal: deadline() })).Item;
     assert.equal(item?.seq?.N, "1");
+  });
+});
+
+/* ==================================================================
+    §4 LIVE-6 RELAYER ROTATION: THE POST-ROTATION PROOF OVER THE RUNTIME'S OWN ITEMS
+   ================================================================== */
+describe("§4 STAGING_ROTATION_READERS: the post-rotation proof reads what the runtime's own writers wrote", () => {
+  test("a real takeover of the NEW relayer's role by the primary's current task, its own TASK# heartbeat: PASS; a newer task of the pool, a damaged heartbeat, old work: FAIL; zero writes", async () => {
+    const game = await tables.create("final-rot-game");
+    const ledger = await tables.create("final-rot-ledger");
+    await put(ledger, { ...LEDGER_KEYS.appgen(), schema: N(1), current_generation: N(1) });
+    const fixture = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../../../../../infra/aws/fixtures/juno-backend-staging.json"), "utf8")) as Record<string, any>;
+    const OLD = fixture.relayer.address as string;
+    const NEW = addressOfPublicKey(publicKeyOf(Buffer.alloc(32, 0x21)), "juno");
+    const oldDoc = JSON.parse(JSON.stringify(fixture));
+    oldDoc.relayer.signer.key_ref = "arn:aws:kms:us-east-1:222222222222:key/00000000-0000-4000-8000-000000000000";
+    const newDoc = JSON.parse(JSON.stringify(fixture));
+    newDoc.relayer.address = NEW;
+    newDoc.trust.operators = [NEW];
+    const parse = (doc: unknown) => parseJunoBackendConfig(doc, { serverMode: "production", dataDir: "/nonexistent" });
+    const gate = {
+      format: "18COSMOS/RELAYER-ROTATION-GATE/v2", environment: "staging", from_relayer: OLD, to_relayer: NEW, configured_relayer: OLD, pools: ["p1"], evidence_captured_at: "2026-10-01T09:55:00Z", queue: "empty", verdict: "OPEN",
+      checks: [{ name: "drained p1", status: "pass", detail: "" }], gated_at: "2026-10-01T10:00:00.000Z", deployment: deploymentIdentityOf(parse(oldDoc)), contract_operator: OLD,
+    };
+    /* The runtime's own writers: the routing, the primary pool's task, the relayer takeover (mint, then mirror), TASK#. */
+    const clock = { now: Date.parse("2026-10-01T10:20:00Z") };
+    assert.equal((await setPrimaryPool(admin, game, { pool: "p1", expectedVersion: null, by: "pipeline", now: 1 })).kind, "set");
+    const writer = await PoolWriter.take({ client: admin, table: game, pool: "p1", task: "t-new-relayer-01", now: () => clock.now, onLost: () => undefined });
+    const relayerLedger = await openDynamoSigningLedger(admin, { table: ledger, generation: 1, relayer: { address: NEW }, onFenced: ledgerFencedHook(writer), sleep: noSleep, resends: 2 });
+    const taken = await takeRelayerRole(writer, { ledger: relayerLedger, now: () => clock.now, timing: { maxResends: 2, windowMs: 60_000, baseDelayMs: 1, maxDelayMs: 1, sleep: noSleep } });
+    assert.equal(taken.kind, "taken");
+    const heartbeat = dynamoTaskStatusWriter({ client: admin, table: game });
+    const holder: TaskStatus = { task: "t-new-relayer-01", pool: "p1", poolEpoch: writer.epoch, generation: 1, environment: "staging", build: "b-rot", role: "primary", phase: "serving", ready: true, reasons: [], relayer: "usable", escrow: "active", poolWriterCheckAgeMs: 100, startedAt: clock.now - 300_000 };
+    assert.equal(await heartbeat.write(holder, 7, clock.now - 15_000), "written");
+    const proof = async () =>
+      collectRotationProof({ readers: STAGING_ROTATION_READERS, juno: fakeJunoChain({ operator: NEW }), clients: { app: admin, ledger: admin }, tables: { game, ledger }, config: parse(newDoc), run: "l6cert-rot", environment: "staging", from: OLD, to: NEW, now: () => clock.now });
+    const judged = async () => judgeRotationProof(await proof(), { ok: true, value: gate, sha256: "x" }, { environment: "staging", from: OLD, to: NEW, primaryPool: "p1", generation: 1 });
+    const failed = (checks: Awaited<ReturnType<typeof judged>>) => checks.filter((c) => c.status !== "pass").map((c) => `${c.name}: ${c.detail}`).join("\n");
+    const before = [await snapshot(game), await snapshot(ledger)];
+    const good = await judged();
+    assert.equal(failed(good), "", "the real items prove the rotation");
+    assert.deepEqual([await snapshot(game), await snapshot(ledger)], before, "the proof's readers wrote nothing");
+    /* A newer task of the primary pool: the mirror's holder is superseded (the role waits for the new task's takeover). */
+    const newer = await PoolWriter.take({ client: admin, table: game, pool: "p1", task: "t-newer-02", now: () => clock.now, onLost: () => undefined });
+    assert.match(failed(await judged()), new RegExp(`held by task t-new-relayer-01 at pool epoch ${writer.epoch}, but the primary's current task is t-newer-02 at epoch ${newer.epoch}`));
+    newer.stop();
+    writer.stop();
+    /* A damaged heartbeat item is unreadable -- never "usable". */
+    await put(game, { pk: S("TASK#t-new-relayer-01"), sk: S("TASK"), fmt: N(1), task: S("t-new-relayer-01") });
+    assert.match(failed(await judged()), /the holder's TASK# heartbeat unreadable/);
+    /* Work under the OLD address after the gate: never migrated, never ignored -- FAIL. */
+    await put(game, { pk: S(`RELAYQ#${OLD}`), sk: S("1780000000000#g#x"), game_id: S("g"), intent_id: S("x"), created_at: N(1) });
+    assert.match(failed(await judged()), /holds 1 entry: old-address work the new relayer never reads/);
   });
 });

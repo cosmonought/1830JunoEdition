@@ -38,6 +38,7 @@ import { EVIDENCE_MANIFEST_FORMAT, POOL_EVIDENCE_FILES } from "../../aws/control
 import { parseFlipRecord, readFlipRecordFile, writeFlipRecord, type FlipRecord } from "../../aws/controlPlane/flipRecord";
 import { runDeployCommand, EXIT_FAILED, EXIT_OK, type DeployDeps } from "../../aws/deploy/commands";
 import { generationAttestationProblem, rotationGateRecordProblem } from "../../aws/deploy/gateRecords";
+import { fakeJunoChain } from "../../aws/deploy/staging/rotationTestSupport";
 import { createDynamoFinancialStore } from "../../aws/game/dynamoFinancialStore";
 import { createDynamoLogStore } from "../../aws/game/dynamoLogStore";
 import { createDynamoRecordStore } from "../../aws/game/dynamoRecordStore";
@@ -939,6 +940,8 @@ describe("§7 awsDeploy relayer-rotation-gate: never while the OLD address's REL
       now: () => Date.now(),
       out: (line) => lines.push(line),
       tables: () => ({ game: gameTable, identity: "unused", ledger: "unused" }),
+      /* LIVE-6 relayer rotation: the gate also reads the escrow contract's operator (the old relayer here). */
+      juno: fakeJunoChain({ operator: oldAddress }),
     };
     const evidenceDir = (desired: number) => {
       const dir = path.join(scratch, `rot-${desired}-${Math.random().toString(36).slice(2, 8)}`);
@@ -974,6 +977,10 @@ describe("§7 awsDeploy relayer-rotation-gate: never while the OLD address's REL
     const openRecord = JSON.parse(fs.readFileSync(openFile, "utf8"));
     assert.ok(openRecord.checks.some((c: { status: string }) => c.status === "skipped"), "the real record carries the skipped check");
     assert.equal(rotationGateRecordProblem(openRecord, { environment: "staging", from: oldAddress, to: newAddress }), null);
+    /* LIVE-6 relayer rotation (v2): the record carries the deployment to keep and the operator the chain answered. */
+    assert.equal(openRecord.format, "18COSMOS/RELAYER-ROTATION-GATE/v2");
+    assert.equal(openRecord.contract_operator, oldAddress);
+    assert.equal(openRecord.deployment.from_relayer_key_ref, JSON.parse(junoText).relayer.signer.key_ref);
     const closedFile = path.join(scratch, `rot-gate-closed-${Date.now()}.json`);
     assert.equal(await runDeployCommand(["relayer-rotation-gate", "--runtime-parameter", runtimeArn, "--environment", "staging", "--from-relayer", oldAddress, "--to-relayer", newAddress, "--evidence", evidenceDir(1), "--record", closedFile], deps), EXIT_FAILED);
     assert.match(rotationGateRecordProblem(JSON.parse(fs.readFileSync(closedFile, "utf8")), { environment: "staging", from: oldAddress, to: newAddress }) ?? "", /not OPEN/);

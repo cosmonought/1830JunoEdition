@@ -154,7 +154,7 @@ import { ledgerFencedHook, NO_RELAYER_ROLE } from "../ownership/relayerRole";
 import type { RoleTakeover } from "../ownership/roles";
 import { gatedKmsClient, type KmsCounters } from "./kmsGate";
 import type { AwsRuntimeConfig } from "./runtimeConfig";
-import { codeList, kmsDeltas, lossCauseOf, NO_METRICS, readinessObserver, snapshotKms, transitionTracker, type KmsCounterView, type MetricName, type MetricProperty, type MetricRecord, type MetricSink, type PropertyValue } from "./runtimeMetrics";
+import { codeList, kmsDeltas, lossCauseOf, moneyHeldJournalAheadMetrics, NO_METRICS, readinessObserver, restoreUnverifiedMetrics, snapshotKms, startupRefusedMetrics, taskLostMetrics, transitionTracker, type KmsCounterView, type MetricName, type MetricProperty, type MetricRecord, type MetricSink, type PropertyValue, type StartupRefusalClass } from "./runtimeMetrics";
 import { taskStatusReporter, type TaskStatus, type TaskStatusReporter, type TaskStatusWriter } from "./taskStatus";
 
 export const EXIT_REFUSED = 2;
@@ -381,7 +381,7 @@ export interface AwsRuntime {
 }
 
 /** L6-5B: a refused start's class, decided where the runtime refuses (a metric property and the subset counters). */
-type StartupRefusal = "generation" | "adoption" | "identity-restore" | "other";
+type StartupRefusal = StartupRefusalClass;
 
 const describe = (error: unknown): string => (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).slice(0, 400);
 /** An error's CLASS for a metric property (its constructor name when it is a plain identifier), never its message. */
@@ -612,7 +612,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     audit(event, fields) {
       ops.audit(event, fields);
       try {
-        if (event === "settlement.held" && fields?.code === "journal-ahead") measure(() => ({ event: "money-held", metrics: { MoneyHeldJournalAhead: 1 }, properties: { ...baseProperties(), role, phase } }));
+        if (event === "settlement.held" && fields?.code === "journal-ahead") measure(() => ({ event: "money-held", metrics: moneyHeldJournalAheadMetrics(), properties: { ...baseProperties(), role, phase } }));
       } catch {
         /* never past here */
       }
@@ -659,7 +659,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
         /* L6-5B: a loss to the generation fence (APPGEN moved under this serving task) is also its own count. */
         /* L6-5B (review H1): TaskSuperseded is ALWAYS in the record (0 or 1), so A1's `TaskLost - TaskSuperseded` never
            depends on filling a series that has no datapoint at all. */
-        metrics: { TaskLost: 1, TaskSuperseded: cause === "pool-superseded" ? 1 : 0, ...(cause === "generation-moved" ? { GenerationLost: 1 } : {}), ...pending },
+        metrics: { ...taskLostMetrics(cause), ...pending },
         properties: { ...baseProperties(), role, phase, cause },
       };
     });
@@ -693,12 +693,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     if (forcedExit() === null) {
       measureWithPending((pending) => ({
         event: "startup-refused",
-        metrics: {
-          StartupRefused: 1,
-          ...(refusal === "generation" || refusal === "adoption" ? { StartupRefusedGeneration: 1 } : {}),
-          ...(refusal === "identity-restore" ? { StartupRefusedIdentityRestore: 1 } : {}),
-          ...pending,
-        },
+        metrics: { ...startupRefusedMetrics(refusal), ...pending },
         properties: { ...baseProperties(), role, stage: steps.at(-1) ?? "none", refusal },
       }));
     }
@@ -1083,7 +1078,7 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
     }
     /* L6-5B: post-restore safe mode (L6-2) -- a state of the table, and how many checked money games are still pending. */
     values.RestoreSafeMode = restoredTable ? 1 : 0;
-    if (restoredTable && opened !== null) values.RestoreUnverifiedGames = opened.service.restoreStatus().pending;
+    if (restoredTable && opened !== null) Object.assign(values, restoreUnverifiedMetrics(opened.service.restoreStatus().pending));
     return values;
   };
 

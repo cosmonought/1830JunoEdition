@@ -882,3 +882,140 @@ run "refuses_escrow_without_signing_keys" {
   }
   expect_failures = [aws_ssm_parameter.runtime, aws_ssm_parameter.juno_backend]
 }
+
+/* ------------------------------------------------------------------ */
+/* LIVE-6 relayer rotation: `relayer_rotation_key_arns`                 */
+/* ------------------------------------------------------------------ */
+# The ledger stack's relayer_key_arns: r1 = 1111... (the configured relayer in `variables` above), r2 = 6666... (prepared).
+
+run "ordinary_deployment_reads_and_signs_exactly_the_three_keys" {
+  command = apply
+
+  assert {
+    condition = alltrue([for sid in ["SigningKeysPublicKey", "SigningKeysSignDigestOnly"] : toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == sid]).resources) == toset([
+      "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111",
+      "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222",
+      "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333",
+    ])])
+    error_message = "The task role reaches exactly the three configured keys."
+  }
+  assert {
+    condition     = toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "SigningKeysReadOnly"]).resources) == toset(values(var.signing_keys))
+    error_message = "No rotation: the bootstrap role reads exactly the three configured keys (L5-8, unchanged)."
+  }
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.bootstrap.statement : s if startswith(s.sid, "RelayerRotation")]) == 0
+    error_message = "No rotation: no rotation-proof read exists (an ordinary one-relayer deployment's policies are unchanged)."
+  }
+}
+
+run "prepared_rotation_reads_the_new_key_and_signs_with_the_old" {
+  command = apply
+  variables {
+    relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"]
+  }
+
+  assert {
+    condition = alltrue([for sid in ["SigningKeysPublicKey", "SigningKeysSignDigestOnly"] : toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == sid]).resources) == toset([
+      "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111",
+      "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222",
+      "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333",
+    ])])
+    error_message = "Prepared, not switched: the task role still signs with exactly the configured keys -- never the prepared one."
+  }
+  assert {
+    condition = toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "SigningKeysReadOnly"]).resources) == toset([
+      "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111",
+      "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222",
+      "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333",
+      "arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666",
+    ]) && one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "SigningKeysReadOnly"]).actions == toset(["kms:DescribeKey", "kms:GetPublicKey", "kms:ListGrants"])
+    error_message = "The old and the new relayer key identities are both readable by the verifier (signer-keys derives the new address before anything switches) -- read only."
+  }
+  assert {
+    condition = (one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RelayerRotationProofGameRead"]).actions == toset(["dynamodb:GetItem"])
+      && toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RelayerRotationProofGameRead"]).resources) == toset(["arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1"])
+      && toset([for c in one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RelayerRotationProofGameRead"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset(["ForAllValues:StringLike|dynamodb:LeadingKeys|ROLE#relayer#*,POOL#*,TASK#*"])
+      && one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RelayerRotationProofFenceRead"]).actions == toset(["dynamodb:GetItem"])
+      && toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RelayerRotationProofFenceRead"]).resources) == toset(["arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"])
+    && toset([for c in one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "RelayerRotationProofFenceRead"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset(["ForAllValues:StringLike|dynamodb:LeadingKeys|FENCE#relayer#*"]))
+    error_message = "The post-rotation proof's reads: GetItem only -- the serving table's ROLE#relayer#*, POOL#*, TASK#* and the ledger's FENCE#relayer#*."
+  }
+  assert {
+    condition     = jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value) == jsondecode(file("${path.module}/../../fixtures/juno-backend-staging.json"))
+    error_message = "Preparing changes no document: the Juno configuration still names the old relayer key and address."
+  }
+}
+
+run "switched_rotation_signs_with_the_new_key_and_keeps_the_old_readable" {
+  command = apply
+  variables {
+    signing_keys = {
+      relayer    = "arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"
+      settlement = "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
+      admission  = "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333"
+    }
+    relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111"]
+  }
+
+  assert {
+    condition = alltrue([for sid in ["SigningKeysPublicKey", "SigningKeysSignDigestOnly"] : toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == sid]).resources) == toset([
+      "arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666",
+      "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222",
+      "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333",
+    ])])
+    error_message = "Switched: the task role signs with the NEW relayer key and the unchanged settlement and admission keys -- the old relayer key is gone from it."
+  }
+  assert {
+    condition     = contains(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "SigningKeysReadOnly"]).resources, "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111") && length(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "SigningKeysReadOnly"]).resources) == 4
+    error_message = "The previous relayer key stays readable by the verifier (rollback), and nothing more."
+  }
+  assert {
+    condition = (jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value).relayer.signer.key_ref == "arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"
+      && jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value).settlement_key == jsondecode(file("${path.module}/../../fixtures/juno-backend-staging.json")).settlement_key
+    && jsondecode(aws_ssm_parameter.juno_backend[0].insecure_value).admission_key == jsondecode(file("${path.module}/../../fixtures/juno-backend-staging.json")).admission_key)
+    error_message = "The Juno configuration's relayer signer moves to the new key; the settlement and admission keys (key refs and public keys) are byte-identical."
+  }
+}
+
+run "refuses_a_rotation_key_alias" {
+  command = plan
+  variables {
+    relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:alias/gs-relayer-r2"]
+  }
+  expect_failures = [var.relayer_rotation_key_arns]
+}
+
+run "refuses_a_configured_key_as_a_rotation_key" {
+  command = plan
+  variables {
+    relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"]
+  }
+  expect_failures = [var.relayer_rotation_key_arns]
+}
+
+run "refuses_the_configured_relayer_as_its_own_rotation_key" {
+  command = plan
+  variables {
+    relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111"]
+  }
+  expect_failures = [var.relayer_rotation_key_arns]
+}
+
+run "refuses_a_rotation_key_in_another_region_or_twice" {
+  command = plan
+  variables {
+    relayer_rotation_key_arns = ["arn:aws:kms:us-west-2:222222222222:key/66666666-6666-4666-8666-666666666666", "arn:aws:kms:us-west-2:222222222222:key/66666666-6666-4666-8666-666666666666"]
+  }
+  expect_failures = [var.relayer_rotation_key_arns]
+}
+
+run "refuses_a_rotation_without_signing_keys" {
+  command = plan
+  variables {
+    escrow                    = null
+    signing_keys              = null
+    relayer_rotation_key_arns = ["arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666"]
+  }
+  expect_failures = [var.relayer_rotation_key_arns]
+}

@@ -32,6 +32,10 @@
 // certification's restore drill (`taskHeartbeats.ts`, bound only by `tools/awsDeploy.ts`): a fresh heartbeat of the OLD
 // generation after the stop FAILS restore-quietness; no heartbeat proves nothing (ECS's listing is the stop proof).
 // `decodeTaskStatusItem` below is the item's one decoder (the writer's exact inverse); this file still never reads.
+// LIVE-6 relayer rotation: the same reader file (`taskHeartbeats.ts`, bound only by `tools/awsDeploy.ts`) also reads ONE
+// task's item for the certification's post-rotation proof -- the relayer-role holder's own word that its relayer is
+// `usable` and its escrow `active` -- checked there against the authoritative pool item, mirror and ledger fence. Still
+// operator evidence after the fact: no runtime decision reads it.
 //
 // READ IT BY FRESHNESS: `updated_at` (and the TTL) say whether the task is still writing; `phase` and `ready` are what it
 // last said. A task that exits at once (a loss: exit 3; a store restart: exit 4) writes nothing more, so its last item may
@@ -122,6 +126,12 @@ export interface TaskStatusRecord {
   readonly role: "primary" | "non-primary" | "undecided";
   readonly phase: string;
   readonly ready: boolean;
+  /** LIVE-6 relayer rotation: what the task SAID of its readiness codes, its relayer and its escrow (its own words, as
+   *  written: `relayerStateNow()` -- `usable` only for the published, current role over an ACTIVE backend -- and the
+   *  backend's state). Evidence for the certification's post-rotation proof, never a decision. */
+  readonly reasons: string;
+  readonly relayer: string;
+  readonly escrow: string;
   readonly updatedAt: number;
   readonly startedAt: number;
   readonly seq: number;
@@ -168,6 +178,9 @@ export function decodeTaskStatusItem(item: Readonly<Record<string, AttributeValu
     role,
     phase: value.phase,
     ready,
+    reasons: value.reasons,
+    relayer: value.relayer,
+    escrow: value.escrow,
     updatedAt: numbers.updatedAt as number,
     startedAt: numbers.startedAt as number,
     seq: numbers.seq as number,

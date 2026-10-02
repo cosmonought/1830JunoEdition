@@ -18,7 +18,7 @@ DIGEST_B="sha256:$(printf 'b%.0s' {1..64})"
 setup() {
   T="$(mktemp -d)"; S="$T/state"; mkdir -p "$S" "$T/etc" "$T/stubs" "$T/measure" "$T/lib"
   export GS_TEST=1 GS_ETC="$T/etc" GS_LOCK="$T/lock" GS_IMDS="http://imds.test" GS_POLL_SECONDS=0 GS_READY_TIMEOUT=1
-  export GS_MEASURE_DIR="$T/measure" GS_STATE_DIR="$T/lib" STUB_STATE="$S"
+  export GS_MEASURE_DIR="$T/measure" GS_STATE_DIR="$T/lib" STUB_STATE="$S" GS_ROOT_AWS_DIR="$T/root-aws"
   cat >"$T/etc/host.env" <<EOF
 GS_ENVIRONMENT=staging
 GS_REGION=us-east-1
@@ -42,8 +42,13 @@ EOF
 S="$STUB_STATE"; echo "docker $*" >>"$S/calls"
 case "$1 $2" in
   "container inspect")
-    if [ -f "$S/container" ]; then [ "$3" = "-f" ] && cat "$S/container"; exit 0; fi; exit 1 ;;
-  "image inspect") [ -f "$S/platform" ] && cat "$S/platform" && exit 0; exit 1 ;;
+    if [ -f "$S/container" ]; then
+      if [ "$3" = "-f" ]; then case "$4" in *.Image*) echo "sha256:1mage" ;; *) cat "$S/container" ;; esac; fi
+      exit 0
+    fi; exit 1 ;;
+  "image inspect")
+    case "${4:-}" in *RepoDigests*) [ -f "$S/repo_digests" ] && cat "$S/repo_digests"; exit 0 ;; esac
+    [ -f "$S/platform" ] && cat "$S/platform" && exit 0; exit 1 ;;
 esac
 case "$1" in
   pull) [ -f "$S/pull_fail" ] && exit 1; exit 0 ;;
@@ -182,6 +187,24 @@ setup; release "$DIGEST_A" b1 release.env; echo 1 >"$S/active"; echo 200 >"$S/re
 run gs-health && grep -q '"readyz":"200"' "$T/out" && grep -q '"build":"b1"' "$T/out" && ok "gs-health: one JSON line, exit 0 when ready" || bad "gs-health" "$(cat "$T/out")"
 echo 503 >"$S/ready"
 if run gs-health; then bad "gs-health exit 0 while not ready"; else ok "gs-health exits non-zero while not ready"; fi
+teardown
+
+# COST-2A: the host verifier's evidence -- the release digest, the RUNNING container's digest, the static-credential names
+setup; release "$DIGEST_A" b1 release.env; echo 1 >"$S/active"; echo 200 >"$S/ready"; echo running >"$S/container"
+printf '%s\n' "public.ecr.aws/other@$DIGEST_B" "111111111111.dkr.ecr.us-east-1.amazonaws.com/gs-staging-server@$DIGEST_A" >"$S/repo_digests"
+run gs-health && python3 -c "import json,sys; d=json.loads(open(sys.argv[1]).read().strip().splitlines()[-1]); assert d['digest']==sys.argv[2] and d['running_digest']==sys.argv[2] and d['static_credentials']=='none' and d['hold']=='none' and d['origin_hostname']=='gs-origin.example.org', d" "$T/out" "$DIGEST_A" && ok "gs-health: release digest = running digest (this repository's), no static credential" || bad "gs-health digests" "$(cat "$T/out")"
+rm -f "$S/container"
+run gs-health; grep -q '"running_digest":"none"' "$T/out" && ok "gs-health: no running container -> running_digest none" || bad "gs-health no container" "$(cat "$T/out")"
+echo running >"$S/container"; printf '%s\n' "public.ecr.aws/other@$DIGEST_B" >"$S/repo_digests"
+run gs-health; grep -q '"running_digest":"unknown"' "$T/out" && ok "gs-health: a container from another repository -> unknown (never the release's)" || bad "gs-health foreign image" "$(cat "$T/out")"
+echo 'AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIexampleSECRETvalue000000000' >>"$T/etc/server.env"; mkdir -p "$T/root-aws"; : >"$T/root-aws/credentials"
+run gs-health
+if grep -q '"static_credentials":"AWS_SECRET_ACCESS_KEY,aws-credentials-file"' "$T/out" && ! grep -q 'wJalrXUtnFEMI' "$T/out"; then ok "gs-health: names a static credential source, never its value"; else bad "gs-health credentials" "$(cat "$T/out")"; fi
+teardown
+setup; release "$DIGEST_A" b1 release.env; echo 1 >"$S/active"; echo 200 >"$S/ready"
+printf '  AWS_ACCESS_KEY_ID=AKIAEXAMPLEEXAMPLE00\n' >>"$T/etc/server.env"   # docker --env-file trims the leading blanks
+run gs-health; grep -q '"static_credentials":"AWS_ACCESS_KEY_ID"' "$T/out" && ! grep -q 'AKIAEXAMPLE' "$T/out" && ok "gs-health: a whitespace-prefixed credential is still named (never valued)" || bad "gs-health leading whitespace" "$(cat "$T/out")"
+if run gs-preflight; then bad "preflight accepted a whitespace-prefixed credential"; else grep -q "REFUSED" "$T/out" && ok "preflight refuses a whitespace-prefixed credential (docker would pass it on)" || bad "preflight leading whitespace message" "$(cat "$T/out")"; fi
 teardown
 
 # ------------------------------------------------------------------------------------------------- stop / HOLD

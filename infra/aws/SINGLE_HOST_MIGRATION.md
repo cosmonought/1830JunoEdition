@@ -211,6 +211,21 @@ floor, not the ceiling.
 
 ### F. Prove it
 
+**F0 (COST-2A): the host verifier, coexistence, before the edge moves.** Read-only; README "The single host".
+```
+infra/aws/scripts/capture-host-evidence.sh staging <region> <i-...> <distribution id> ev-F --host-status --terraform-dir stacks/single-host
+npm run gamesDoctor -- aws host-snapshot --aws-config <runtime p1 ARN> --out ev-F/runtime-snapshot.json      # OPER
+npm run awsDeploy -- verify --topology coexist --runtime-parameter <runtime p1 ARN> --environment staging \
+  --primary-pool p1 --pools p1,p2 --generation 1 --evidence ev-F --instance-id <i-...> --origin-hostname <origin_hostname> \
+  --gs-origin <the ALB's origin name: step G has not run> --site-origin <site origin> \
+  --expect-digest <the release> --expect-build <its build> --alarm-actions <the module's alarm_action_arns, or none> \
+  --record ev-F/verify.json --report ev-F      # BOOT
+```
+It must say VERIFIED (exit 0). FAIL (1) or NOT EVALUATED (3) is a STOP: NOT EVALUATED means a read failed, never that a
+property holds. It covers, besides the table below: the ECS era drained (no service task, no running task, no target --
+a second serving writer otherwise), the host's EC2 / network / IAM / KMS allow-list / alarms / budget, and the identity
+writer and relayer held by the host pool's current task.
+
 | # | Property | How (read-only unless noted) |
 |---|---|---|
 | F1 | Generation gate | Startup passed. `gamesDoctor aws status`: APPGEN 1 = the document's generation; the g1 marker `bootstrap`. No `StartupRefused` in the log group. |
@@ -243,6 +258,9 @@ Any failure: STOP. **Rollback before G** (the ONE plan that may start an ECS tas
       origin, the `/gs*` behaviour and its cache / origin-request policies, the aliases, the certificate, any ECS change).
     - Apply that `stack.tfplan` (`-target` is in it: Terraform warns that the plan is incomplete; expected).
 15. Wait for the distribution to deploy.
+15b. (COST-2A) Once the distribution shows `Deployed` (its configuration names the new origin before the edge serves it),
+     re-run F0 into a fresh directory with `--gs-origin <origin_hostname>` (the /gs* origin of THIS state is now the
+     host's): VERIFIED.
 
 **Rollback:** the same targeted capture with the ALB's origin name in the tfvars, judged with
 `migration-guard edge-cutover --origin-domain <the ALB origin name>`; then the ECS rollback of §F (the host stopped
@@ -312,7 +330,17 @@ Any failure: STOP. **Rollback before G** (the ONE plan that may start an ECS tas
 
 ### J. Verify the bill and the inventory
 
-24. **Inventory**, read-only. **Any surplus is a HARD FAIL to fix before closing the migration.** A forgotten NAT gateway alone is about $33/month. The expected answers:
+24. **Inventory**, read-only. **Any surplus is a HARD FAIL to fix before closing the migration.** A forgotten NAT gateway alone is about $33/month.
+
+    (COST-2A) The final state, judged: F0's capture and snapshot again, then
+    `npm run awsDeploy -- verify --topology single-host ... --pools p1 --evidence ev-J --instance-id <i-...> --origin-hostname <origin_hostname> ...`
+    (no `--gs-origin`: in the final state it IS the host's; `--pools` exactly p1; `--alarm-actions` as in F0;
+    `--legacy-vpc <the ECS era's VPC>` when it is not the host's). Its `absent:` checks are this list -- no ECS cluster,
+    no `gs-staging-alb` / `gs-staging-p1|p2` target group, no NAT in those VPCs (`--allow-nat` names another workload's),
+    no interface endpoint (`--allow-vpc-endpoint`), only the five host alarms, only the host log group, no Container
+    Insights log group, no ECS-era security group, exactly one host and one host EIP and no unassociated EIP
+    (`--allow-eip`) -- each a FAIL when present and NOT EVALUATED (never a pass) when its listing could not be read. The
+    CLI answers below remain the manual cross-check. The expected answers:
     - `aws elbv2 describe-load-balancers` → none;
     - `aws ecs list-clusters` → none for this environment;
     - `aws ec2 describe-nat-gateways` → none (or only other workloads', as step 23's evidence showed);
@@ -349,9 +377,9 @@ Any failure: STOP. **Rollback before G** (the ONE plan that may start an ECS tas
 | RETIRE | ECS drain-specific assertions (stop-first 0/100, AZ rebalancing, circuit breaker, `drain-pool`) | No ECS. Drain-first survives as `gs-stop`. |
 | RETIRE | Multi-pool alarm checks (the L6-5B per-pool / primary matrix, suppressors, composites) | The five host alarms replace them |
 
-**Not yet automated on the host** (follow-up): the control-plane half of `awsDeploy verify` and `capture-evidence` describe ECS and the ALB. For the host, the evidence is:
-- the Terraform plan and state (and the COST-2B guard records);
-- `aws ec2 describe-instances` / `describe-security-groups`;
-- `gs-health`.
-
-A host variant of the verifier is a small follow-up slice; the data-plane checks (`gamesDoctor aws`, `generation-gate`, probes) apply unchanged.
+**The host's control plane is verified (COST-2A):** `awsDeploy verify --topology coexist | single-host` judges the
+host's evidence (`capture-host-evidence.{sh,ps1}`, read-only; the host's `gs-health` line by the operator's opt-in Run
+Command; the operator's `gamesDoctor aws host-snapshot`) with three answers -- PASS, FAIL, NOT EVALUATED -- beside the
+unchanged data-plane checks (and the COST-2B guard records); `--topology ecs` (the default) is L5-8 / L6-2's verifier,
+untouched, for the ECS era until step I. See infra/aws/README.md "The single host". Still procedural: the DNS record of
+`origin_hostname` (the owner's provider), the edge probes (§H), the money-game smoke, and the billing review (§J 25).

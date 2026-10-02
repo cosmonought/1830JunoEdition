@@ -101,6 +101,32 @@ write_release() { # file digest build measure
   mv -f "$tmp" "$1"
 }
 
+# COST-2A: which static AWS credential SOURCES are present on the host -- their NAMES only, never a value: "none", or a
+# comma list (an env file's variable names; `aws-credentials-file` for a shared credentials file). The instance role is
+# the only credential source; gs-preflight refuses a start with one in the env files, gs-health reports it as evidence.
+GS_CREDENTIAL_NAMES_RE='^[[:space:]]*(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AWS_PROFILE|AWS_SHARED_CREDENTIALS_FILE|AWS_CONFIG_FILE|AWS_WEB_IDENTITY_TOKEN_FILE|AWS_CONTAINER_CREDENTIALS_FULL_URI)='
+static_credentials() {
+  local found="" file name
+  for file in "$GS_ETC/server.env" "$GS_ETC/host.env" "$GS_ETC/release.env"; do
+    [ -r "$file" ] || continue
+    for name in $(grep -Eo "$GS_CREDENTIAL_NAMES_RE" "$file" 2>/dev/null | tr -d '=[:space:]'); do
+      case ",$found," in *",$name,"*) ;; *) found="${found:+$found,}$name" ;; esac
+    done
+  done
+  [ -e "${GS_ROOT_AWS_DIR:-/root/.aws}/credentials" ] && found="${found:+$found,}aws-credentials-file"
+  printf '%s' "${found:-none}"
+}
+
+# COST-2A: the digest the RUNNING gs-server container was started from (its image's repository digest in this host's ECR
+# repository), "none" when no container runs, "unknown" when the image names no such digest.
+running_digest() {
+  local image digest
+  image="$(docker container inspect -f '{{.Image}}' gs-server 2>/dev/null)" || { printf 'none'; return 0; }
+  [ -n "$image" ] || { printf 'none'; return 0; }
+  digest="$(docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$image" 2>/dev/null | grep -E "^${GS_ECR_REGISTRY}/${GS_ECR_REPOSITORY}@sha256:[0-9a-f]{64}$" | head -n 1)" || true
+  if [ -n "$digest" ]; then printf '%s' "${digest##*@}"; else printf 'unknown'; fi
+}
+
 release_field() { # file key
   local value
   value="$(grep -E "^$2=" "$1" 2>/dev/null | tail -n 1 | cut -d= -f2-)" || true

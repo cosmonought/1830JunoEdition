@@ -20,6 +20,9 @@
 //     aws games [--money] [--month <yyyymm>]
 //                                       every game of the directory (DIRKEYS -> DIR#), or every OPEN money game (FINKEYS ->
 //                                       FINIDX#), with its owner class
+//     aws host-snapshot --out <file>    COST-2A: `status`, every route pool's POOL# item and the open money games, written
+//                                       as ONE file of the single host's evidence (hostSnapshot.ts) for `awsDeploy verify
+//                                       --topology coexist | single-host`
 //   MUTATIONS (a dry run unless --apply: without it NOTHING is written; each needs --note "<why>"):
 //     aws set-primary <pool> --expect-version <n>
 //                                       SYSTEM/ROUTING compare-and-swap (never the first routing: that is L5-8's bootstrap)
@@ -71,6 +74,7 @@ import { readRouting } from "../game/routing";
 import { DEFAULT_MONEY_WAIT_MS, DEFAULT_RECOVERY_LIMIT, recoverFromPool, type RecoveryReport } from "./recovery";
 import { retirementCheck, type RetirementReport } from "./retire";
 import { awsWalletGrants, inspectDeployment, inspectGame, listGames, type DeploymentInspection, type GameInspection, type GameListing, type Read } from "./inspect";
+import { hostSnapshot, writeHostSnapshot } from "./hostSnapshot";
 import { walletGrantsText } from "../../tools/walletGrants";
 import { moneyEvidenceText } from "../../tools/moneyEvidence";
 import { createJunoRest } from "../../escrow/juno/junoRest";
@@ -89,6 +93,7 @@ export const AWS_USAGE = [
   "                                      relay queue, the signing journal, with verdicts; --chain adds read-only Juno queries (read-only)",
   "  money <game_id> --tx-bytes <intent_id> [--attempt <n> | --tx-hash <HASH>]",
   "                                      JX-4B: one attempt's exact stored TxRaw, base64, on stdout (for jx2VerifyTx.js; read-only)",
+  "  host-snapshot --out <file>          COST-2A: the single host's runtime evidence -- status, every route pool, the open money games (read-only)",
   "  set-primary <pool> --expect-version <n> --note \"<why>\" [--apply]",
   "                                      SYSTEM/ROUTING compare-and-swap (a dry run without --apply)",
   "  claim <game_id> --note \"<why>\" [--apply]      an operator run takes a released game",
@@ -112,7 +117,7 @@ export const AWS_USAGE = [
 
 export const EXIT = Object.freeze({ ok: 0, findings: 1, usage: 2, unknown: 3 });
 
-const VALUE_FLAGS = new Set(["--aws-config", LOCAL_DOCUMENT_FLAG, RELAYER_FLAG, "--note", "--expect-version", "--run", "--month", "--data", "--escrow-config", "--evidence", "--flip-record", "--pool-document", "--limit", "--money-wait-seconds", "--observe-seconds", "--minutes", "--record", "--tx-bytes", "--attempt", "--tx-hash"]);
+const VALUE_FLAGS = new Set(["--aws-config", LOCAL_DOCUMENT_FLAG, RELAYER_FLAG, "--note", "--expect-version", "--run", "--month", "--data", "--escrow-config", "--evidence", "--flip-record", "--pool-document", "--limit", "--money-wait-seconds", "--observe-seconds", "--minutes", "--record", "--tx-bytes", "--attempt", "--tx-hash", "--out"]);
 const BOOLEAN_FLAGS = new Set(["--json", "--apply", "--money", "--rollback", "--chain"]);
 /** JX-4B: the only options `money` takes -- the deployment, the output form and its own read selectors. Anything else
  *  (--apply, --note, --expect-version, --run, ...) names a mutation mode and is refused: `money` writes nothing. */
@@ -363,8 +368,8 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     io.err(`gamesDoctor aws: ${[...(unknown.length > 0 ? [`unknown option ${unknown.join(", ")}`] : []), ...args.problems].join("; ")}\n${AWS_USAGE}`);
     return EXIT.usage;
   }
-  const known = ["status", "game", "games", "wallet-grants", "money", "set-primary", "claim", "take", "release", "flip", "flip-observe", "recover", "retire-check", "orphans", "suppression-overlap"];
-  const noSubject = ["status", "games", "flip-observe", "orphans"];
+  const known = ["status", "game", "games", "wallet-grants", "money", "host-snapshot", "set-primary", "claim", "take", "release", "flip", "flip-observe", "recover", "retire-check", "orphans", "suppression-overlap"];
+  const noSubject = ["status", "games", "host-snapshot", "flip-observe", "orphans"];
   if (
     command === undefined ||
     !known.includes(command) ||
@@ -377,7 +382,7 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
   }
   const json = args.flags.has("--json");
   const apply = args.flags.has("--apply");
-  if (apply && (command === "status" || command === "game" || command === "games" || command === "wallet-grants" || command === "money" || command === "retire-check" || command === "orphans" || command === "flip-observe")) {
+  if (apply && (command === "status" || command === "game" || command === "games" || command === "wallet-grants" || command === "money" || command === "host-snapshot" || command === "retire-check" || command === "orphans" || command === "flip-observe")) {
     io.err(`gamesDoctor aws ${command} is read-only: --apply means nothing here`);
     return EXIT.usage;
   }
@@ -448,6 +453,20 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
       const report = await inspectDeployment(target);
       print(report, (r) => printDeployment(io, r));
       return report.findings.length === 0 ? EXIT.ok : EXIT.findings;
+    }
+    if (command === "host-snapshot") {
+      /* COST-2A: read-only; the file is the evidence (the verifier judges it), so findings do not change the exit. */
+      const out = one(args, "--out");
+      if (out === undefined) {
+        io.err("gamesDoctor aws host-snapshot: --out <file> is required (normally <host evidence dir>/runtime-snapshot.json)");
+        return EXIT.usage;
+      }
+      const snapshot = await hostSnapshot(target, seams.now ?? Date.now);
+      writeHostSnapshot(out, snapshot);
+      const money = "games" in snapshot.money ? `${snapshot.money.games.length} open money game(s)` : `money listing FAILED (${snapshot.money.error})`;
+      io.out(`host snapshot (READ-ONLY) written to ${out}: ${snapshot.environment} generation ${snapshot.generation}, pool ${snapshot.configured_pool}; ${snapshot.route_pools.length} route pool(s); ${money}; ${snapshot.status.findings.length} finding(s)`);
+      for (const finding of snapshot.status.findings) io.out(`FINDING: ${finding}`);
+      return "games" in snapshot.money ? EXIT.ok : EXIT.findings;
     }
     if (command === "game") {
       const game = await inspectGame(target, subject as string);

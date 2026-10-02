@@ -1,0 +1,18 @@
+{
+  "Statement": [
+    {
+      "Action": "sts:AssumeRole",
+      "Condition": {
+        "StringEquals": {
+          "aws:SourceAccount": "111111111111"
+        }
+      },
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "ec2.amazonaws.com"
+      },
+      "Sid": "Ec2ThisAccountOnly"
+    }
+  ],
+  "Version": "2012-10-17"
+}

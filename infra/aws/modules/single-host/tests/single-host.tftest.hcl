@@ -52,6 +52,21 @@ variables {
   allowed_origins = ["https://play.example.org"]
 }
 
+# ---------------------------------------------------------------- COST-2A: the verifier's fixtures ARE this rendering
+
+run "host_policies_are_the_verifier_fixtures" {
+  command = plan
+
+  assert {
+    condition     = jsondecode(local.host_policy) == jsondecode(file("${path.module}/../../fixtures/host-role-policy-staging.json"))
+    error_message = "COST-2A: the host role's policy changed -- update infra/aws/fixtures/host-role-policy-staging.json AND the host verifier's judgement (server/src/aws/deploy/hostVerify.ts judgeHostPolicy) together."
+  }
+  assert {
+    condition     = jsondecode(local.assume_role_policy) == jsondecode(file("${path.module}/../../fixtures/host-assume-role-policy-staging.json"))
+    error_message = "COST-2A: the host role's trust policy changed -- update infra/aws/fixtures/host-assume-role-policy-staging.json AND hostVerify.ts checkHostIam together."
+  }
+}
+
 # ---------------------------------------------------------------- the host itself
 
 run "one_graviton_host_hardened" {

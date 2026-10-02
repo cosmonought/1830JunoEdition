@@ -72,7 +72,9 @@ import { checkAlarmsEvidence, type FlipWindowFacts } from "../controlPlane/alarm
 
 export interface Check {
   readonly name: string;
-  readonly status: "pass" | "fail" | "skipped";
+  /** COST-2A: `not-evaluated` -- the evidence for it could not be read; never a pass (the host topologies' third answer;
+   *  the ECS topology's checks never produce it). */
+  readonly status: "pass" | "fail" | "skipped" | "not-evaluated";
   readonly detail: string;
 }
 

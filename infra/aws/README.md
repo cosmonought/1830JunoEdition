@@ -109,6 +109,17 @@ old generation's TASK# Scan. It can start, stop or change no task or service, si
 flip, alarm or deployment mutation (pinned by `app.tftest.hcl`); its only writes remain L5-8's first-start bootstrap (the
 create-if-absent `SYSTEM/*` and `APPGEN`). The identity recovery state is read by the certifier task (the task role).
 
+**COST-2A additions (the single host's verifier, `gs-<env>-bootstrap`, describe / get / list only):** the EC2 describes
+the host capture needs (instances, the one attribute `disableApiTermination`, credit specifications, volumes, images,
+network interfaces, addresses, NAT gateways, VPC endpoints, managed prefix lists), `ssm:DescribeInstanceInformation`,
+`logs:DescribeLogGroups`, `ecs:DescribeClusters` / `ListServices`, IAM Get/List on the `gs-<env>-host-app` role and
+instance profile only, and `budgets:ViewBudget` (the budgets, never their subscribers). No Run Command: the host's
+`gs-health` line is the operator's opt-in (`ssm:SendCommand`, as `gs-host status`). Pinned by `app.tftest.hcl`. **Never by an ordinary app-stack apply**
+on an environment whose app stack is frozen (staging: SINGLE_HOST_MIGRATION.md §0.2 -- such an apply would also correct
+the legacy desired-count drift and restart p1): there these statements, together with JX-4C's operator reads, are
+installed only by the TARGETED, guarded step 7a (`migration-guard app-read-authorize`), before the host verification is
+first needed. A new environment receives them with its first apply.
+
 The DynamoDB transactions are authorised per underlying action (Put, Update, Delete, ConditionCheckItem, GetItem), so
 these lists are complete. The `LeadingKeys` exclusions on `SYSTEM` and `APPGEN` are **defence in depth**, not the safety
 mechanism: the routing's compare-and-swap and the conditions inside every takeover are the safety. The staging gate should
@@ -544,6 +555,64 @@ circuit-breaker rollback target -- lacks it. There is no pre-L6-4 rollback targe
 - **`--part all`** runs both halves, for the single-account form.
 - A missing evidence file fails the run. Omitting evidence must be explicit (`--no-evidence`) and is reported as SKIP.
 
+### The single host: `verify --topology coexist | single-host` (COST-2A)
+
+The data plane above runs unchanged for every topology. `--topology` (default `ecs`: everything above, byte for byte)
+selects the control plane:
+
+| `--topology` | When (SINGLE_HOST_MIGRATION.md) | The ECS era | The host |
+|---|---|---|---|
+| `ecs` | before the host (A-C) | judged as above | -- |
+| `coexist` | D-I: the host exists, the ECS era is the rollback path | MAY exist, but **drained**: no service task desired / running / pending, no task running in the cluster, no target registered (else FAIL: a second serving writer); NAT, endpoints, the L6-5B alarms and pool log groups tolerated and reported (`SKIP`) | fully verified (or `--instance-id none` before step D: no host may exist) |
+| `single-host` | after step I; `--pools` is exactly the primary | **absent**: no ECS cluster other than INACTIVE, no `gs-<env>-alb` / `gs-<env>-<pool>` (exact names, for the route table's pools, p1, p2 and `--legacy-pools`), no NAT in the host's VPC or `--legacy-vpc` (unless `--allow-nat`), no interface endpoint there and no endpoint tagged for the environment (unless `--allow-vpc-endpoint`), no L6-5B alarm / composite / suppressor (the contract's names, or an `Environment` dimension), no pool log group, no Container Insights log group, no ECS-era security group, no other environment EIP and no unassociated EIP (unless `--allow-eip`) | fully verified |
+
+The host's checks (`server/src/aws/deploy/hostVerify.ts`): **EC2** exactly one non-terminated instance that is tagged
+as this environment's single host OR holds the host role's instance profile (an untagged holder of the role is a second
+host) -- the one named -- running, an allowed type (COST_BUDGET.json) whose architecture the instance, the AMI and the `gs:arch` tag
+share, CPU credits `standard`, IMDSv2 required with hop limit 2, every volume encrypted, termination protection, no key
+pair, basic monitoring, the `gs-<env>-host-app` profile; **network** one ENI carrying only the host SG, exactly one host
+EIP on that ENI that IS the host's public address, ingress 443 from CloudFront's origin-facing list only, 80 for ACME
+only, nothing reaching 8917, SSH only with `--emergency-ssh` (at most two /32), egress tcp 443 (+ `--juno-egress-ports`);
+**IAM** the profile holds the host role, assumable by EC2 of this account only, no managed policy, one inline policy whose
+every action and resource is the runtime documents' (tables, this pool's documents, the escrow configuration's KMS keys
+-- exactly those -- the one repository and log group); **host** SSM online and the `gs-health` line: ready, origin TLS
+ready, no HOLD, gs-server and gs-caddy active, release digest = running digest = `--expect-digest`, build =
+`--expect-build`, no static credential, and it serves `--origin-hostname` (its own `origin_hostname`: the chain
+CloudFront -> this host); **edge** `/gs*` reaches `--gs-origin` (the host's `--origin-hostname` in the final
+state), L5-8's edge judgement, the `gs-<env>-gs-all-query-cookies-origin` policy, the default behaviour on `site` =
+`--site-origin`; **observability** the one host log group (<= 90 days), exactly the five host alarms on THIS instance
+(muted, mis-thresholded or stale ones fail; their destinations must be stated, `--alarm-actions <arn,...>` or `none`,
+else NOT EVALUATED), the monthly budget (<= $30; `--budget not-required` when it lives in the
+payer account); **roles** (the operator's snapshot) the routing's primary is the host's pool, APPGEN, and the identity
+writer and relayer held by that pool's CURRENT task (anything else is a second serving writer); open money games settled;
+RELAYQ read live.
+
+**Three answers.** `PASS`, `FAIL`, and `NOT EVALUATED`: a missing evidence file, one the capture wrote as
+`<name>.error.json`, an answer without its list, or a file the capture's manifest never wrote (an earlier capture's: the
+capture also empties the directory first) is NOT EVALUATED -- never a pass; an absence ("no ALB") passes only on a listing
+read completely. Terraform outputs asked for but unreadable are NOT EVALUATED (not asked for: a named SKIP). Before step D
+(`--instance-id none`) the host's log group, alarms and budget are named SKIPs (they are created with the host). Exit 0 VERIFIED, 1 FAIL, **3 NOT EVALUATED**. `--record` carries the same verdict and the
+topology; `--report <dir>` writes `host-evidence.json` (`18COSMOS/HOST-VERIFY-REPORT/v1`: the facts -- source commit,
+Terraform outputs, EC2, IAM, network, EIP, CloudFront, host release, health / HOLD, generation / APPGEN, roles, alarms,
+money / RELAYQ -- and every check) and `host-evidence.md`.
+
+```
+# 1. control plane (describe / get / list; the bootstrap role's HostVerifier* statements):
+infra/aws/scripts/capture-host-evidence.sh <env> <region> <i-...> <distribution id> <dir> [--terraform-dir stacks/single-host]
+#    the host's status line (the operator's credentials: ssm:SendCommand of the FIXED /opt/gs/bin/gs-health):
+infra/aws/scripts/capture-host-evidence.sh --host-status-only <env> <region> <i-...> <dir>    # or --host-status above
+# 2. the runtime snapshot (the operator role; read-only) -- AFTER step 1 (the capture empties the directory first):
+npm run gamesDoctor -- aws host-snapshot --aws-config <runtime SSM ARN> --out <dir>/runtime-snapshot.json
+# 3. judge (the bootstrap role):
+npm run awsDeploy -- verify --topology single-host --runtime-parameter <ARN> --environment <env> --primary-pool p1 \
+  --generation <N> --evidence <dir> --instance-id <i-...> --origin-hostname <origin> --site-origin <site origin> \
+  --expect-digest sha256:<release> --expect-build <build> --alarm-actions <arn,...|none> --record <dir>/verify.json --report <dir>
+#    coexistence: --topology coexist --pools p1,p2 --gs-origin <the /gs* origin of this step: the ALB's before G, the host's after>
+```
+
+Windows: `capture-host-evidence.ps1 -Environment ... -InstanceId ... -Distribution ... -Out ... [-HostStatus | -HostStatusOnly]`
+and `node dist/...` for the Node steps (PowerShell's `npm.ps1` swallows `--`).
+
 ## Alarms (LIVE-6 L6-5B): `modules/app/alarms.tf`, `alarm-contract.json`
 
 Every alarm is one entry of `alarm-contract.json` over L6-5A's EMF metrics (namespace `18Cosmos/GameServer`, dimensions
@@ -822,8 +891,8 @@ Terraform state holds only non-secret values: the documents, ARNs and names. KMS
 ## Tests (no AWS)
 
 ```
-cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 32 runs (LIVE-6 relayer rotation: +6; COST-1 host role: +7; JX-1K financial key sets: +11; P5-INT-1: +2)
-cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 61 runs (app 45 + alarms 16; Terraform >= 1.10)
+cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 34 runs (ledger 33 + operator_evidence_policy 1; LIVE-6 relayer rotation: +6; COST-1 host role: +7; JX-1K financial key sets: +11; P5-INT-1: +2; JX-4C operator journal: +2)
+cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 69 runs (app 45 + alarms 16 + compute_none 7 + operator_evidence_policy 1; Terraform >= 1.10)
 cd infra/aws/stacks/app     && terraform init -backend=false && terraform validate    # (and stacks/ledger)
 cd server && npm run build && node --test dist/server/src/aws/deploy/l5_8Deploy.test.js dist/server/src/aws/awsClients.test.js
 node --test dist/server/src/aws/operator/l6_2Flip.test.js dist/server/src/persistence/conformance/l6_5bAlarms.test.js dist/server/src/aws/runtime/l6_5aObservability.test.js
@@ -834,6 +903,10 @@ GS_DYNAMODB_LOCAL_ENDPOINT=http://127.0.0.1:8000 node --test dist/server/src/per
 # LIVE-6 restore-drill tooling: the restore alarms, the suppression-overlap test, the old-generation fencing probe, the flip
 # alarm drill (offline; the scripts against a stub AWS CLI where bash / PowerShell exist)
 node --test dist/server/src/aws/deploy/staging/restoreAlarmDrill.test.js dist/server/src/aws/deploy/staging/restoreFencing.test.js dist/server/src/aws/runtime/restoreFenceProbe.test.js dist/server/src/aws/operator/suppressionOverlap.test.js dist/server/src/persistence/conformance/l6RestoreDrill.test.js dist/server/src/aws/deploy/staging/flipAlarmDrill.test.js
+# COST-1 / COST-2A: the single host -- the module (20 runs), its scripts, the host verifier (and its capture scripts
+# against a stub AWS CLI where bash / PowerShell exist)
+cd infra/aws/modules/single-host && terraform init -backend=false && terraform test && bash tests/host-scripts.test.sh
+node --test dist/server/src/aws/deploy/cost1SingleHost.test.js dist/server/src/aws/deploy/cost2aHostVerifier.test.js
 ```
 
 ## Owner prerequisites and staging-gate items (not verifiable without AWS)

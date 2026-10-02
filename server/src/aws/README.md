@@ -329,6 +329,11 @@ a mint in another account (it cannot share the mirror's transaction); the hint a
   unserved deployment's intent and a queue disagreement at once; an undecided verdict and failing passes after 5 minutes;
 - **the escrow load** (and its chain sweep) visits the open money games only (`openMoneyGames` =
   `DynamoFinancialStore.openMoneyGameIds`: FINKEYS -> FINIDX#, strict), never `LIST#fin`.
+- **JX-5B (Phase 5):** the chain sweep (`chainSweepEveryMs`, 5 minutes) also re-offers the terminal Settle job of every
+  `intent-prepared` game, through the game's own job queue and after its chain observation. A transient failure before
+  the Settle intent is durably written (the settlement key unavailable, a chain read, the intent store) therefore
+  recovers on the next sweep; a primary-task restart is still a valid immediate retry, but no longer required. Existing
+  intents are found before any signature, and the journal keeps one digest per slot (no duplicate signing).
 
 ## 8. The AWS runtime (L5-7): `aws/runtime/`, `GS_STORAGE=aws`
 

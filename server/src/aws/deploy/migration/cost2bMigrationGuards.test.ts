@@ -18,10 +18,13 @@ import * as path from "path";
 import { GATE_NAMES, GATE_TARGETS, GATES, HOST_MULTI, HOST_SINGLETONS, judgeMigrationPlan, TEARDOWN_CLASSES, type GateName, type MigrationContext } from "./planGuards";
 import { judgeNatEvidence, NAT_EVIDENCE_FORMAT, NAT_FILES, type NatEvidence } from "./natEvidence";
 import { migrationGuardCommand, SAVED_PLAN, SAVED_PLAN_SHA } from "./migrationCommands";
+import { readCheckoutText } from "../../../testSupport/portability";
 import { FIXTURE, FIXTURE_DIR, fixtureText, HOST_ROLE, hostPolicy, jsonencode, ledgerResourcePolicy, policyDocument, resourceChange, runtimeDocument, signingKeyPolicy, TASK_ROLE, validPlans } from "./planFixtures";
 
 const REPO = path.resolve(__dirname, "../../../../../../.."); // dist/server/src/aws/deploy/migration -> the repository
-const read = (rel: string): string => fs.readFileSync(path.join(REPO, rel), "utf8");
+/* RECON-1A (Windows portability): sources and committed fixtures are read as the repository commits them (LF, no BOM --
+   LIVE-6 W1's seam), so the fixture-equality and runbook assertions mean the same on a core.autocrlf=true checkout. */
+const read = (rel: string): string => readCheckoutText(path.join(REPO, rel));
 
 type Obj = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 const clone = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
@@ -1040,9 +1043,11 @@ describe("COST-2B: the command and its evidence binding", () => {
 
 /* ------------------------------------------------------------------ */
 
-const hasBash = spawnSync("bash", ["-c", "true"]).status === 0 && spawnSync("bash", ["-c", "command -v sha256sum || command -v shasum"]).status === 0;
+/* POSIX only, as every other bash-script suite here (LIVE-6 / COST-2A precedent): on Windows `bash` is Git Bash or the WSL
+   launcher, and a core.autocrlf=true checkout hands it CRLF scripts -- the .ps1 twins are Windows' scripts. */
+const hasBash = process.platform !== "win32" && spawnSync("bash", ["-c", "true"]).status === 0 && spawnSync("bash", ["-c", "command -v sha256sum || command -v shasum"]).status === 0;
 
-describe("COST-2B: the capture scripts against a stub CLI", { skip: hasBash ? false : "bash / sha256sum not available" }, () => {
+describe("COST-2B: the capture scripts against a stub CLI", { skip: hasBash ? false : "POSIX bash / sha256sum not available (Windows: the .ps1 twins)" }, () => {
   test("plan-evidence: single-host accepted, --keep-plan binds the binary plan and plan.json, a stale plan never survives", () => {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), "cost2b-bin-"));
     fs.writeFileSync(

@@ -528,6 +528,44 @@ export function lossCauseOf(reason: string): LossCause {
 }
 
 /* ------------------------------------------------------------------ */
+/* The decisions' own metric sets (ONE place: the runtime and the drill) */
+/* ------------------------------------------------------------------ */
+
+/** L6-5B: a refused start's CLASS, decided where the runtime refuses (`awsRuntime.ts` `refuse`). */
+export type StartupRefusalClass = "generation" | "adoption" | "identity-restore" | "other";
+
+/**
+ * The metrics of ONE forced exit for loss (`awsRuntime.ts` `lose`): `TaskLost` always, `TaskSuperseded` ALWAYS present
+ * (0 or 1, review H1: A1's `TaskLost - TaskSuperseded` never depends on filling a series with no datapoint), and
+ * `GenerationLost` for a loss to the generation fence (R1). The runtime emits exactly this (plus the pending counts);
+ * LIVE-6's restore alarm drill injects exactly this through the same encoder -- there is no second copy of the set.
+ */
+export function taskLostMetrics(cause: LossCause): Partial<Record<MetricName, number>> {
+  return { TaskLost: 1, TaskSuperseded: cause === "pool-superseded" ? 1 : 0, ...(cause === "generation-moved" ? { GenerationLost: 1 } : {}) };
+}
+
+/** The metrics of ONE refused start (`awsRuntime.ts` `refuse`): `StartupRefused`, and its class's own subset counter --
+ *  the generation rules (A4g) or the identity restore (A4i) -- so their alarms never depend on a property filter. */
+export function startupRefusedMetrics(refusal: StartupRefusalClass): Partial<Record<MetricName, number>> {
+  return {
+    StartupRefused: 1,
+    ...(refusal === "generation" || refusal === "adoption" ? { StartupRefusedGeneration: 1 } : {}),
+    ...(refusal === "identity-restore" ? { StartupRefusedIdentityRestore: 1 } : {}),
+  };
+}
+
+/** The metrics of ONE money game held `journal-ahead` (`awsRuntime.ts` `journalAheadTap`; R2). */
+export function moneyHeldJournalAheadMetrics(): Partial<Record<MetricName, number>> {
+  return { MoneyHeldJournalAhead: 1 };
+}
+
+/** The primary's gauge of a restored table's money games still pending their restore check (`awsRuntime.ts` status
+ *  tick; R3: Minimum >= 1 for 60 periods). */
+export function restoreUnverifiedMetrics(pending: number): Partial<Record<MetricName, number>> {
+  return { RestoreUnverifiedGames: pending };
+}
+
+/* ------------------------------------------------------------------ */
 /* KMS: deltas of the ONE set of counters (`kmsGate.ts`)                */
 /* ------------------------------------------------------------------ */
 

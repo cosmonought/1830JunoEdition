@@ -370,7 +370,12 @@ describe("L5-1 AWS client convention", () => {
           if (under(target, "aws/kms") && !allowed("aws/kms", deploy)) offenders.push(`${relative}: imports the KMS binding (${name}) outside the L5-7 runtime`);
           const deployReadsRuntime = deploy && ["aws/runtime/awsMain", "aws/runtime/configSource", "aws/runtime/runtimeConfig"].includes(target);
           const operatorConfig = operator && ["aws/runtime/runtimeConfig", "aws/runtime/configSource", "aws/runtime/storageMode"].includes(target);
-          if (under(target, "aws/runtime") && !runtime && !conformance.test(relative) && !deployReadsRuntime && !operatorConfig && !(stagingBinding && target === "aws/runtime/taskHeartbeats") && !(relative === "start.ts" && (target === "aws/runtime/storageMode" || target === "aws/runtime/awsMain"))) {
+          /* TESTS ONLY (LIVE-6 L6-6 drill tooling): the staging drills' offline suites run their in-task probe programs against
+             the compiled production EMF encoder (`runtimeMetrics`) and check that start.ts refuses the probes' GS_STORAGE
+             (`storageMode`). Exactly those two modules, only from a `.test.ts` under aws/deploy/staging/: the production
+             staging code still never reaches the runtime. */
+          const drillTestReadsRuntime = deploy && relative.startsWith("aws/deploy/staging/") && relative.endsWith(".test.ts") && ["aws/runtime/runtimeMetrics", "aws/runtime/storageMode"].includes(target);
+          if (under(target, "aws/runtime") && !runtime && !conformance.test(relative) && !deployReadsRuntime && !operatorConfig && !drillTestReadsRuntime && !(stagingBinding && target === "aws/runtime/taskHeartbeats") && !(relative === "start.ts" && (target === "aws/runtime/storageMode" || target === "aws/runtime/awsMain"))) {
             offenders.push(`${relative}: imports the AWS runtime (${name}); only start.ts reaches it (the storage mode, and the AWS entry)`);
           }
           if (under(target, "aws/recovery") && !recovery && !conformance.test(relative)) offenders.push(`${relative}: imports the restore's operator surface (${name}); nothing but its own CLI and the conformance suites reaches it`);

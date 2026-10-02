@@ -30,6 +30,12 @@
 //                                       take + release every game still owned by A's SUPERSEDED epoch (never a current one)
 //     aws retire-check <pool> [--evidence <dir>]       the retirement prerequisites (read-only)
 //     aws orphans                       the restore's orphans: ledger SETTLE# / ATTI# the adopted table cannot account for
+//   LIVE-6 L6-6 (RESTORE DRILL) -- THE STAGING FLIP-SUPPRESSION OVERLAP TEST (suppressionOverlap.ts; NOT a routing flip):
+//     aws suppression-overlap open <A> <B> --minutes <n> --note "<why>" --record <file> [--apply]
+//                                       the planned flip's own FlipWindowOpen suppression for A and B (staging only, at most
+//                                       45 minutes); SYSTEM/ROUTING read before it, never written
+//     aws suppression-overlap close --record <file> [--apply]
+//                                       end it (its remaining minutes cancelled), SYSTEM/ROUTING read again and recorded
 //   THE DEPLOYMENT: --aws-config <SSM parameter ARN> or GS_AWS_CONFIG_PARAMETER (L5-7's runtime document); for DynamoDB
 //   Local, GS_DYNAMODB_LOCAL_ENDPOINT with --local-document <file> [--relayer <account>]. --json prints the structure.
 //
@@ -53,6 +59,8 @@ import { cloudWatchSuppression } from "./flipSuppression";
 import { createCloudWatchClient } from "../awsClients";
 import type { FlipSuppressionPort } from "../controlPlane/flipSuppression";
 import { orphansReport } from "./orphans";
+import { closeSuppressionOverlap, openSuppressionOverlap, type OverlapAnswer, type OverlapDeps } from "./suppressionOverlap";
+import { readRouting } from "../game/routing";
 import { DEFAULT_MONEY_WAIT_MS, DEFAULT_RECOVERY_LIMIT, recoverFromPool, type RecoveryReport } from "./recovery";
 import { retirementCheck, type RetirementReport } from "./retire";
 import { inspectDeployment, inspectGame, listGames, type DeploymentInspection, type GameInspection, type GameListing, type Read } from "./inspect";
@@ -78,12 +86,16 @@ export const AWS_USAGE = [
   "                                      take + release games still owned by A's superseded epoch (never a current owner)",
   "  retire-check <pool> [--evidence <dir>]                     the retirement prerequisites (read-only)",
   "  orphans                             ledger evidence the adopted game table cannot account for (read-only)",
+  "  suppression-overlap open <A> <B> --minutes <n> --note \"<why>\" --record <file> [--apply]",
+  "                                      L6-6 restore drill: a STAGING flip-suppression overlap test -- the planned flip's",
+  "                                      FlipWindowOpen suppression for two pools, NOT a routing flip (SYSTEM/ROUTING only read)",
+  "  suppression-overlap close --record <file> [--apply]        end that test; SYSTEM/ROUTING read again and recorded",
   `  DynamoDB Local: GS_DYNAMODB_LOCAL_ENDPOINT=<loopback> with ${LOCAL_DOCUMENT_FLAG} <runtime document file> [${RELAYER_FLAG} <account>] [--pool-document <pool>=<file> ...]`,
 ].join("\n");
 
 export const EXIT = Object.freeze({ ok: 0, findings: 1, usage: 2, unknown: 3 });
 
-const VALUE_FLAGS = new Set(["--aws-config", LOCAL_DOCUMENT_FLAG, RELAYER_FLAG, "--note", "--expect-version", "--run", "--month", "--data", "--escrow-config", "--evidence", "--flip-record", "--pool-document", "--limit", "--money-wait-seconds", "--observe-seconds"]);
+const VALUE_FLAGS = new Set(["--aws-config", LOCAL_DOCUMENT_FLAG, RELAYER_FLAG, "--note", "--expect-version", "--run", "--month", "--data", "--escrow-config", "--evidence", "--flip-record", "--pool-document", "--limit", "--money-wait-seconds", "--observe-seconds", "--minutes", "--record"]);
 const BOOLEAN_FLAGS = new Set(["--json", "--apply", "--money", "--rollback"]);
 
 export interface OperatorIo {
@@ -327,9 +339,15 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     io.err(`gamesDoctor aws: ${[...(unknown.length > 0 ? [`unknown option ${unknown.join(", ")}`] : []), ...args.problems].join("; ")}\n${AWS_USAGE}`);
     return EXIT.usage;
   }
-  const known = ["status", "game", "games", "set-primary", "claim", "take", "release", "flip", "flip-observe", "recover", "retire-check", "orphans"];
+  const known = ["status", "game", "games", "set-primary", "claim", "take", "release", "flip", "flip-observe", "recover", "retire-check", "orphans", "suppression-overlap"];
   const noSubject = ["status", "games", "flip-observe", "orphans"];
-  if (command === undefined || !known.includes(command) || (!noSubject.includes(command) && subject === undefined) || (command === "flip" && positional[2] === undefined)) {
+  if (
+    command === undefined ||
+    !known.includes(command) ||
+    (!noSubject.includes(command) && subject === undefined) ||
+    (command === "flip" && positional[2] === undefined) ||
+    (command === "suppression-overlap" && !((subject === "open" && positional.length === 4) || (subject === "close" && positional.length === 2)))
+  ) {
     io.err(AWS_USAGE);
     return EXIT.usage;
   }
@@ -349,6 +367,16 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     return EXIT.usage;
   }
   const print = <T>(value: T, text: (value: T) => void) => (json ? io.out(JSON.stringify(value, null, 2)) : text(value));
+  /* L6-5B: made only when a window can open or close (flip, recover, the L6-6 suppression-overlap test); never for a
+     local deployment. */
+  let cloudWatch: ReturnType<typeof createCloudWatchClient> | null = null;
+  releaseCloudWatch = () => cloudWatch?.destroy();
+  const suppressionPort = (): FlipSuppressionPort | null => {
+    if (seams.suppression !== undefined) return seams.suppression;
+    if (target.kind !== "aws") return null;
+    cloudWatch ??= createCloudWatchClient({ kind: "aws", region: target.config.region });
+    return cloudWatchSuppression(cloudWatch);
+  };
   try {
     if (command === "status") {
       const report = await inspectDeployment(target);
@@ -385,6 +413,49 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
       });
       return r2exit(report.settle_orphans.length + report.attempt_orphans.length === 0 && report.problems.filter((p) => !p.startsWith("this game table was never restored")).length === 0);
     }
+    if (command === "suppression-overlap") {
+      const recordFile = one(args, "--record");
+      if (recordFile === undefined) {
+        io.err("gamesDoctor aws suppression-overlap: --record <file> is required (the test's evidence: normally <evidence>/restore-alarms/suppression-window.json)");
+        return EXIT.usage;
+      }
+      const now = seams.now ?? (() => Date.now());
+      const overlapDeps: OverlapDeps = {
+        environment: target.config.environment,
+        readRouting: () => readRouting(target.app, target.tables.game),
+        poolDocument: async (pool) => {
+          const doc = await documentsFor(target, args, seams)(pool);
+          return { environment: doc.environment, pool: doc.pool };
+        },
+        suppression: apply ? suppressionPort() : null,
+        now,
+        audit: (event, fields) => {
+          try {
+            io.err(`AUDIT ${JSON.stringify(redactIdentity({ at: now(), event, tool: "gamesDoctor", ...fields }))}`);
+          } catch {
+            /* an audit line never stops the work it describes (the record is the evidence) */
+          }
+        },
+      };
+      let answer: OverlapAnswer;
+      if (subject === "open") {
+        const minutesText = one(args, "--minutes") ?? "";
+        answer = await openSuppressionOverlap(overlapDeps, { pools: [positional[2] as string, positional[3] as string], minutes: /^[0-9]{1,3}$/.test(minutesText) ? Number(minutesText) : Number.NaN, note: one(args, "--note") ?? "", recordFile, apply });
+      } else {
+        if (one(args, "--minutes") !== undefined) {
+          io.err("gamesDoctor aws suppression-overlap close takes no --minutes");
+          return EXIT.usage;
+        }
+        answer = await closeSuppressionOverlap(overlapDeps, { recordFile, apply });
+      }
+      if (json) io.out(JSON.stringify(answer, null, 2));
+      else {
+        io.out(`suppression-overlap ${subject} (a STAGING flip-suppression overlap test; NOT a routing flip)${answer.kind === "planned" ? " -- DRY RUN: nothing was written or published (add --apply)" : ""}`);
+        io.out(`${answer.kind.toUpperCase()}: ${answer.detail}`);
+        if (answer.record !== null && answer.kind !== "planned") io.out(`  record ${recordFile}`);
+      }
+      return answer.kind === "refused" ? EXIT.findings : EXIT.ok;
+    }
     const context: MutationContext = {
       target,
       now: seams.now ?? (() => Date.now()),
@@ -401,15 +472,6 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     };
     const note = one(args, "--note") ?? "";
     const sleep = seams.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-    /* L6-5B: made only when a window can open or close (flip, recover); never for a local deployment. */
-    let cloudWatch: ReturnType<typeof createCloudWatchClient> | null = null;
-    releaseCloudWatch = () => cloudWatch?.destroy();
-    const suppressionPort = (): FlipSuppressionPort | null => {
-      if (seams.suppression !== undefined) return seams.suppression;
-      if (target.kind !== "aws") return null;
-      cloudWatch ??= createCloudWatchClient({ kind: "aws", region: target.config.region });
-      return cloudWatchSuppression(cloudWatch);
-    };
     const seconds = (name: string, fallback: number): number => {
       const text = one(args, name);
       return text !== undefined && /^[0-9]{1,6}$/.test(text) ? Number(text) * 1000 : fallback;

@@ -363,7 +363,7 @@ variable "recovery_trusted_principal_arns" {
 }
 
 variable "recovery_break_glass" {
-  description = "LIVE-6 L6-2 (L6-4 §12.1 item 3): grant gs-<env>-recovery dynamodb:RestoreTableToPointInTime (a break-glass step: turn it on for the restore, off after)."
+  description = "LIVE-6 L6-2 (L6-4 §12.1 item 3): grant gs-<env>-recovery dynamodb:RestoreTableToPointInTime (a break-glass step: ON before the restore and kept ON through RestoreTableToPointInTime, table-prepare, appgen-adopt and the Terraform import that makes the restored table managed; OFF immediately after that import -- see infra/aws/README.md \"Generation switch after a restore\")."
   type        = bool
   default     = false
 }

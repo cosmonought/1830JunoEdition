@@ -58,6 +58,7 @@ import { judgeKmsProbe, KMS_LATENCY_BOUND_MS, runKmsProbe } from "./kmsProbe";
 import { judgeTerraformStack, AWS_PROVIDER, TERRAFORM_FILES } from "./terraformPlan";
 import { disposableOnly, DisposableGuardError, judgeTransactionProbe, runTransactionProbe } from "./transactionProbe";
 import { checkClusterTasks, CLUSTER_LISTING_WINDOW_MS, CLUSTER_TASKS_FORMAT, DESCRIBE_TASKS_BATCH_MAX, DESCRIBE_TASKS_BATCH, readClusterListing } from "./prerequisite";
+import { restoreAlarmDrill } from "./restoreDrillFixtures.test";
 import { buildCapabilities, PRIOR_CERTIFICATIONS, readGenerationEvidence, readIdentityRecovery, RESTORE_FENCING_CASES, RESTORE_FENCING_FILE, RESTORE_STOP_DIR, revisionsFile, type AdoptionRecordFacts, type AppGenerationFacts, type GenerationEvidence, type GenerationMarkerFacts, type IdentityRestoreFacts, type RecoveryReaders, type ReviewSummary } from "./recovery";
 
 const REPO = path.resolve(__dirname, "../../../../../../.."); // dist/server/src/aws/deploy/staging -> the repository
@@ -720,20 +721,11 @@ function writeDrillEvidence(dir: string, drill: "restore" | "flip" | "rotation",
     const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
     plan.variables = { ...(plan.variables ?? {}), generation_adoption: { value: { generation: 2, game_table: "gs-staging-game-g2", restore_id: adoption.restore_id } } };
     write(dir, "terraform/app/plan.json", plan);
-    const win = { from: "p1", to: "p2", opened_at: Date.parse("2026-09-30T09:40:00Z"), expires_at: Date.parse("2026-09-30T10:25:00Z") };
-    const obs = (alarm: string, injected: string, overlap: boolean) => ({ alarm, injected_at: Date.parse(injected), alarm_at: Date.parse(injected) + 70_000, state: "ALARM", actions_suppressed: false, overlapping_flip_window: overlap ? win : null });
-    write(dir, "probe-restore-alarms.json", {
-      format: "18COSMOS/L6-6-RESTORE-ALARM-DRILL/v1",
-      run_id: RUN,
-      cases: {
-        "r1-generation-lost": obs("gs-staging-r1-generation-lost", "2026-09-30T09:41:00Z", true),
-        "a4g-generation-refused": obs("gs-staging-a4g-generation-refused", "2026-09-30T09:46:00Z", false),
-        "a4i-identity-restore-refused": obs("gs-staging-a4i-identity-restore-refused", "2026-09-30T09:47:00Z", false),
-        "r2-money-journal-ahead": obs("gs-staging-r2-money-journal-ahead", "2026-09-30T09:48:00Z", false),
-        "r3-restore-unverified": obs("gs-staging-p1-r3-restore-unverified", "2026-09-30T08:30:00Z", false),
-      },
-      ...over,
-    });
+    /* The restore alarms: the supported producer's whole drill (restoreAlarmDrill.ts) over AWS-shaped captures -- an
+       alarm-pipeline injection per case, one inside the staging flip-suppression overlap test (p1, p2); R3 on this
+       single-pool package's p1. */
+    const drilled = restoreAlarmDrill(dir, { run: RUN, r3Pool: "p1" });
+    assert.equal(drilled.recorded?.kind, "observed", JSON.stringify(drilled.recorded));
   } else if (drill === "flip") {
     write(dir, "flip-record.json", flipRecord(over));
   } else {
@@ -3490,7 +3482,7 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
 
   /* ---------------- the restore drill's alarms ---------------- */
 
-  test("restore alarms: R1, A4g, A4i, R2, R3 each fired under its injected condition, never suppressed -- at least one inside an overlapping flip window", async () => {
+  test("restore alarms: R1, A4g, A4i, R2, R3 each fired after an alarm-pipeline injection, never suppressed -- at least one inside a PROVEN staging flip-suppression overlap", async () => {
     const built = await buildPackage();
     try {
       const judged = (cases: Record<string, unknown>) => {
@@ -3508,8 +3500,10 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
       assert.match(judged({ "a4i-identity-restore-refused": { ...good["a4i-identity-restore-refused"], state: "OK" } }), /a4i-identity-restore-refused fires/);
       assert.match(judged({ "r3-restore-unverified": { ...good["r3-restore-unverified"], alarm: "gs-staging-p9-r3-restore-unverified" } }), /r3-restore-unverified fires/, "another deployment's pool");
       assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], alarm_at: good["r1-generation-lost"].injected_at - 1 } }), /r1-generation-lost fires/, "fired before the injection");
-      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], overlapping_flip_window: null } }), /not suppressed by an overlapping flip window \(observed\)/);
-      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], overlapping_flip_window: { ...good["r1-generation-lost"].overlapping_flip_window, opened_at: good["r1-generation-lost"].injected_at + 1 } } }), /does not cover the injection/);
+      /* Strengthened: an overlap counts only with BOTH suppressors proven ALARM at the injection (CloudWatch), re-derived. */
+      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], suppression_overlap: null } }), /never suppressed while the planned-flip suppression was genuinely active/);
+      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], suppression_overlap: { ...good["r1-generation-lost"].suppression_overlap, opened_at: good["r1-generation-lost"].injected_at + 1 } } }), /both suppressors of the staging flip-suppression overlap test were ALARM at the injection/);
+      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], suppression_overlap: null, overlapping_flip_window: { from: "p1", to: "p2", opened_at: good["r1-generation-lost"].injected_at - 60_000, expires_at: good["r1-generation-lost"].injected_at + 60_000 } } }), /self-reported overlapping_flip_window is never evidence/);
     } finally {
       cleanup(built.dir);
     }

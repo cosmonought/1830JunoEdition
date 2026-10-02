@@ -44,6 +44,7 @@ import {
   allPass,
   arr,
   CERTIFICATION_FORMAT,
+  CERTIFIER_STORAGE_OVERRIDE,
   checkEnvelope,
   EVIDENCE,
   evidenceName,
@@ -315,8 +316,9 @@ export function judgeCertifierTask(doc: unknown, expect: { readonly run: string;
   ];
 }
 
-/** The certifier task's GS_STORAGE override: a value `start.ts` refuses (exit 2), so a missing command override starts nothing. */
-export const CERTIFIER_STORAGE_OVERRIDE = "l6-6-probe-not-a-server";
+/** The certifier task's GS_STORAGE override (`evidence.ts`, shared by every standalone probe task): a value `start.ts`
+ *  refuses (exit 2), so a missing command override starts nothing. */
+export { CERTIFIER_STORAGE_OVERRIDE } from "./evidence";
 
 export const STAGING_GATES: readonly StagingGate[] = Object.freeze([
   {

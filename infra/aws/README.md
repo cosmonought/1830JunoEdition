@@ -266,12 +266,27 @@ If the gate is closed with entries, restart the pools on the **old** configurati
 
 ## Generation switch after a restore (L6-4 §12.1, wired by L6-2)
 
-Strictly in this order; Terraform/SSM never race ahead of the adoption:
+Strictly in this order; Terraform/SSM never race ahead of the adoption (the staging drill's full workflow, with its
+evidence, is "The restore drill" under "Staging certification" below):
 
-1. Stop every pool (drain-first). Restore `gs-<env>-game-g<N+1>` with `RestoreTableToPointInTime` (the recovery role with
-   `recovery_break_glass = true`), outside Terraform.
-2. `npm run recovery -- table-prepare ...` then `appgen-adopt ... --apply` → `committed` / `already-adopted` for exactly
-   (N+1, that table, that restore id).
+0. **Before any mutation:** the recovery role `gs-<env>-recovery` must already EXIST (`recovery_trusted_principal_arns`
+   names the operator principals, applied), and `recovery_break_glass = true` is applied. Fix the run id, the evidence
+   directory and the restore id NOW: `capture-restore-stop`, the PITR restore's target, `table-prepare`, `appgen-adopt`, the
+   generation gate and the certification all name the same ones (the drill's gates refuse anything else).
+1. Stop every pool (drain-first) and capture the stopped state (`capture-restore-stop`: its `captured_at` is the STOP TIME).
+   **The restore point:** wait until DynamoDB's `LatestRestorableDateTime` of `gs-<env>-game-g<N>` is at or after the stop
+   time (`aws dynamodb describe-continuous-backups --table-name gs-<env>-game-g<N> --query
+   ContinuousBackupsDescription.PointInTimeRecoveryDescription.LatestRestorableDateTime`), then restore TO THE STOP TIME --
+   or the earliest point at or after it that DynamoDB accepts -- never to a point before the stopped-state capture (an
+   earlier point resurrects stale routing / game state, e.g. a routing version from before a flip, and loses the last
+   writes; after the stop nothing writes, so the stop time loses nothing):
+   `aws dynamodb restore-table-to-point-in-time --source-table-name gs-<env>-game-g<N> --target-table-name
+   gs-<env>-game-g<N+1> --restore-date-time <the stop time>` as the recovery role, outside Terraform; wait for ACTIVE.
+2. `table-prepare ... --restore-point <the same time, ms> --restore-id <id> --apply`, then `appgen-adopt ... --apply
+   --stopped` → `committed` / `already-adopted` for exactly (N+1, that table, that restore id), within 6 h of the stop
+   capture. **APPGEN = N+1 and `APPGEN#HISTORY / GEN#<N+1>` are IRREVERSIBLE**: the ledger is never restored and APPGEN never
+   moves backwards. A "rollback" is a LATER generation (another restore into `g<N+2>`, prepared and adopted N+1 → N+2),
+   never APPGEN moved back.
 3. `npm run awsDeploy -- generation-gate --runtime-parameter <ARN> --environment <env> --generation N+1 --restore-id <id>
    --record <file>` (read-only) → `GATE OPEN` and the `generation_adoption = {...}` line. L6-5B: `--record` writes the
    gate's own attestation (`18COSMOS/GENERATION-GATE/v1`, created once); certification binds the plan's
@@ -279,11 +294,24 @@ Strictly in this order; Terraform/SSM never race ahead of the adoption:
    replacement).
 4. In `stacks/app`: add N+1 to `game_generations` (keep N), an `import` block for the new table, `generation = N+1`,
    `generation_adoption = {...}`. The plan refuses services unless the new table's marker equals that attestation; the
-   module re-enables PITR and deletion protection on the import.
+   module re-enables PITR and deletion protection on the import. **`gs-<env>-game-g<N+1>` is PERMANENT from here** (it is the
+   serving generation, `prevent_destroy`); **`g<N>` is RETAINED and protected** (still in `game_generations`).
 5. Start the services; the tasks re-check APPGEN, the marker and the adoption binding themselves. Money games of a restored
    table are **read-only** until each one's history (F1) and chain facts are verified in that process (never stored:
    every restart verifies again). `gamesDoctor aws orphans` lists ledger reservations/attempts the restored table does not
    account for (read-only; chain games are reported NOT COVERED).
+6. **Break-glass OFF immediately** -- `recovery_break_glass = false`, applied -- as soon as step 4's apply has imported and
+   protected `g<N+1>` and the switch is established (the tasks serve N+1). Not earlier: until `g<N+1>` is in
+   `game_generations` it is outside `local.game_table_arns`, so `table-prepare`'s writes and `appgen-adopt`'s marker read on
+   it work ONLY through the break-glass statement (keep it on through `RestoreTableToPointInTime`, `table-prepare`,
+   `appgen-adopt` and the import). Not later: that statement also grants Put/Update/Delete/Scan on EVERY `game-g*` table,
+   the serving one included.
+
+**Windows / PowerShell:** run the mutating commands as `node dist/...` (as `recoveryCli.js` and `awsDeploy.js` are written
+in the drill below), not through `npm run ... -- ...`: in PowerShell `npm` is `npm.ps1`, which can swallow the `--`
+separator, so `--apply` / `--stopped` / `--record` reach npm instead of the command and it silently runs as a DRY RUN or
+writes no record. If `npm` is used anyway, quote the separator (`npm run recovery '--' appgen-adopt ...`) and check the
+answer (`"dry_run": false`, APPLIED, the record file exists). AWS CLI v2 (`aws.exe`) only.
 
 **Generation retirement is separate from pool retirement.** The old table is not removed by the adoption or the switch:
 it stays in `game_generations` with `prevent_destroy` and deletion protection until a separate, reviewed change removes it
@@ -400,11 +428,8 @@ still stopping, say), wait until it is STOPPED and run step 6 again.
 
 **Replacement scenario:** `drain-pool.sh <env> <region> <pool> <dir> R`, then `terraform apply`, then steps 1-7 with
 `--scenario replacement --replaced-pools <pool>` (the drain precedes the prerequisite, which examines the new deployment).
-**Restore drill** (L6-4): stop every pool, `capture-restore-stop.sh <env> <region> R <restore id> <dir> <pools...>` (every
-pool's service at zero; every task the cluster lists, desired RUNNING and desired STOPPED, STOPPED), prepare and adopt
-(`npm run recovery -- ... --restore-id <the same restore id>`, within 6 h of the capture), switch the runtime document,
-start, then steps 1-7 with `--scenario restore-drill`; the fencing probe's record (`probe-restore-fencing.json`, bound to
-the adoption, one structured result per case -- `recovery.ts`) is a later real-staging slice's.
+**Restore drill** (L6-4): the whole ordered workflow, with every producer, is "The restore drill" below; certify with
+`--scenario restore-drill --game-generations N,N+1`.
 
 **The gates** (a gate passes only with at least one check and every check passed; missing evidence and verifier SKIPs are
 failures): prerequisite (settled, the examined revision running, nothing beside the services, target health, unchanged since
@@ -444,7 +469,8 @@ L6-5B flags (`--game-generations`, `--page-actions <arns>|none`, `--ticket-actio
 |---|---|---|---|
 | `alarms` | every | `alarms.json`, `manifest.json`, `capture.json` | L6-5B's `checkAlarmsEvidence` (every contract alarm, its metrics / math, namespace, `Environment` / `Pool` dimensions only, primary scope, class wiring, suppression wiring, `ActionsEnabled`, no suppressor stuck in ALARM outside an active window, nothing unknown in the game-server namespace), judged at the capture's time; the capture is this environment's and these pools'; every contract alarm's ARN is this account's, this region's, by its stable name. Never a BUILD_ID. |
 | `generation-gate` | restore-drill | `gate-generation.json` (`awsDeploy generation-gate ... --record <dir>/gate-generation.json`), `terraform/app/plan.json` | L6-5B's `generationAttestationProblem` against the plan's own `generation_adoption`, AND the record's `adoption_claim` = the ledger's `APPGEN#HISTORY / GEN#<new>` claim = APPGEN's, read live (read-only) through L6-4's `readAdoptionRecord`. Terraform itself still reads nothing cross-account. |
-| `restore-alarms` | restore-drill | `probe-restore-alarms.json` (`18COSMOS/L6-6-RESTORE-ALARM-DRILL/v1`) | R1, A4g, A4i, R2 and R3 each fired under its injected condition with no action suppression; at least one while a flip window overlapped it. No restore suppression window exists. |
+| `restore-alarms` | restore-drill | `probe-restore-alarms.json` (`18COSMOS/L6-6-RESTORE-ALARM-DRILL/v1`) + `restore-alarms/` (the captures) | R1, A4g, A4i, R2 and R3 each fired after an ALARM-PIPELINE INJECTION, actions never suppressed -- every case RE-DERIVED from its AWS captures (the probe task, its log's EMF line, describe-alarms before and after, describe-alarm-history), not ALARM before the injection, firing no earlier than the contract's periods allow (R3: 59 min) and within the binding; at least one inside a staging flip-suppression overlap test PROVEN active (both suppressors ALARM at the injection, from CloudWatch) whose SYSTEM/ROUTING was unchanged. A self-reported window is never evidence. No restore suppression window exists. |
+| `restore-fence` (L6-6R) | restore-drill | `probe-restore-fencing.json` (`18COSMOS/L6-6-RESTORE-FENCING/v1`) + `restore-fence/` | the judge is unchanged: bound to THE adoption; the old generation's ledger write refused by the generation fence; an old-generation task never ready (reason generation, exit 2/3); KMS Sign withheld with 0 calls; the adopted generation serving ready on the adopted table. Produced by `stage-probe restore-fencing record` (below). |
 | `restore-quiet` (L6-6R) | restore-drill | `restore-stop/` + the live TASK# read | as before, plus L6-5A's `TASK#` items of the PREVIOUS generation's table (strongly consistent, paginated Scan, decoded strictly): a heartbeat of generation N written after the stop's `captured_at` FAILS; none proves nothing (ECS's listing is the stop proof); an unreadable table FAILS. TASK# is never a lease. |
 | `flip` | flip-drill | `flip-record.json` (L6-2's record: `gamesDoctor aws flip ... --flip-record <dir>/flip-record.json`, then `flip-observe` / `recover --flip-record` with the same file), the per-pool captures, `cluster-tasks.json`, `listener-rules.json` | the window opened BEFORE the routing CAS; the CAS applied (version N+1) and the roles settled; both pools restarted into their roles (L6-2's `checkRoleChange`: exit 5, a replacement) and the singleton roles are on the new primary; no service task of either pool stopped with exit 3 or 4 since the window opened (the COMPLETE cluster listing); `/gs*` on the new primary and every pool's exact route (L6-2's `checkPoolListenerRules`); the recovery of the old epoch settled (it closed the window); the suppression published, at most 45 minutes, ended before the capture (+5 min tail). |
 | `flip-alarms` | flip-drill | `probe-flip-alarms.json` (`18COSMOS/L6-6-FLIP-ALARM-DRILL/v1`) | an exit 3 inside the window still tripped A1 (actions not suppressed); a suppressible alarm still failing after the window became actionable (`ActionsSuppressedBy` `Alarm` during, `None` after); only the flip's two pools' suppressors were ALARM during it. |
@@ -489,9 +515,92 @@ only then writes `probe-flip-alarms.json`. The hold is bounded (`--hold-seconds`
 (Terraform `escrow`) and start the pools, then steps 1-7 with `--scenario relayer-rotation-drill --from-relayer <old>
 --to-relayer <new>`.
 
-**Restore drill additions:** before the switch, `awsDeploy generation-gate ... --record <dir>/gate-generation.json`; plan with
-the printed `generation_adoption`; record `probe-restore-alarms.json`. The certifier (verifier) role may Scan only the
-NON-serving managed generations' game tables (the old generation's TASK# items; `RestoreQuietOldGenerationHeartbeats`).
+### The restore drill (LIVE-6 restore-drill tooling)
+
+Every step's evidence lands in ONE evidence directory `<dir>` under ONE run id `R` and ONE restore id `X`, fixed before the
+first mutation. Generation N = 1 → N+1 = 2 below. The image the pools run must be built from a commit that carries this
+tooling (the probes run the image's own `runtimeMetrics` decision builders and `restoreFenceProbe.js`; an older image's
+probe refuses itself: `image-predates-the-decision-metric-sets` / no entry).
+
+```
+# --- 0. prerequisites (Terraform, applied BEFORE the drill) -------------------------------------------------------------
+#   recovery_trusted_principal_arns = [<operator principals>]   (gs-staging-recovery must exist)
+#   recovery_break_glass            = true
+# --- 1. stop, capture the stop (fixes R and X) -------------------------------------------------------------------------
+infra/aws/scripts/drain-pool.sh staging us-east-1 <pool> <dir> R                     # every pool
+infra/aws/scripts/capture-restore-stop.sh staging us-east-1 R X <dir> p1 p2            # its captured_at = the STOP TIME S
+# --- 2. restore at/after S, prepare, adopt (APPGEN 1 -> 2 is IRREVERSIBLE) -------------------------------------------
+aws dynamodb describe-continuous-backups --table-name gs-staging-game-g1 \
+    --query ContinuousBackupsDescription.PointInTimeRecoveryDescription.LatestRestorableDateTime   # wait until >= S
+aws dynamodb restore-table-to-point-in-time --source-table-name gs-staging-game-g1 \
+    --target-table-name gs-staging-game-g2 --restore-date-time <S>                  # never before S; as the recovery role
+node dist/server/src/aws/recovery/recoveryCli.js table-prepare --game-table gs-staging-game-g2 --generation 2 \
+    --from-generation 1 --from-table gs-staging-game-g1 --restore-point <S in ms> --restore-id X --by R --region us-east-1 --apply
+node dist/server/src/aws/recovery/recoveryCli.js appgen-adopt --ledger <ledger table ARN> --expected 1 --generation 2 \
+    --game-table gs-staging-game-g2 --restore-id X --by R --region us-east-1 --apply --stopped           # within 6 h of S
+node dist/server/src/tools/awsDeploy.js generation-gate ... --generation 2 --restore-id X --record <dir>/gate-generation.json
+# --- 3. the switch: stacks/app game_generations = [1, 2], import g2, generation = 2, generation_adoption = <printed>;
+#        terraform apply (g2 imported + protected: permanent; g1 retained); the pools start on generation 2.
+#        THEN at once: recovery_break_glass = false; terraform apply.
+# --- 4. the old generation, fenced (standalone probe tasks of a pool's running definition; nothing written or signed) ----
+infra/aws/scripts/run-restore-fence-probe.sh ledger-kms staging us-east-1 R <dir> <pool> 1 2 X
+infra/aws/scripts/run-restore-fence-probe.sh old-task   staging us-east-1 R <dir> <pool> 1 2 X
+# --- 5. the restore alarms (alarm-pipeline injections) ----------------------------------------------------------------
+infra/aws/scripts/run-restore-alarm-probe.sh hold-start staging us-east-1 R <dir> r3 <NON-primary pool> p1,p2 4500  # first: >= 1 h
+node dist/server/src/tools/gamesDoctor.js aws suppression-overlap open p1 p2 --minutes 30 --note "restore drill R" \
+    --record <dir>/restore-alarms/suppression-window.json --apply        # operator role; NOT a routing flip
+infra/aws/scripts/run-restore-alarm-probe.sh inject  staging us-east-1 R <dir> r1 p1 p1,p2 overlap   # waits for both suppressors ALARM
+infra/aws/scripts/run-restore-alarm-probe.sh observe staging us-east-1 R <dir> r1
+infra/aws/scripts/run-restore-alarm-probe.sh inject  staging us-east-1 R <dir> a4g p1 p1,p2 ; ... observe ... a4g
+infra/aws/scripts/run-restore-alarm-probe.sh inject  staging us-east-1 R <dir> a4i p1 p1,p2 ; ... observe ... a4i
+infra/aws/scripts/run-restore-alarm-probe.sh inject  staging us-east-1 R <dir> r2  p1 p1,p2 ; ... observe ... r2
+node dist/server/src/tools/gamesDoctor.js aws suppression-overlap close --record <dir>/restore-alarms/suppression-window.json --apply
+infra/aws/scripts/run-restore-alarm-probe.sh observe staging us-east-1 R <dir> r3 5400      # R3 fires after its 60 periods
+infra/aws/scripts/run-restore-alarm-probe.sh hold-stop staging us-east-1 R <dir>
+node dist/server/src/tools/awsDeploy.js stage-probe restore-alarms record --run-id R --evidence <dir> --environment staging --pools p1,p2
+# --- 6. certify (every probe task STOPPED; the overlap window + 5 min tail over) ---------------------------------------
+#   steps 1-6 of the read-only order (capture, prerequisite, run-task-probe, edge, plans, capture again), then:
+node dist/server/src/tools/awsDeploy.js stage-probe restore-fencing record --run-id R --evidence <dir> \
+    --runtime-parameter <primary's ARN> --environment staging --primary-pool <primary> --generation 2
+node dist/server/src/tools/awsDeploy.js stage-cert certify --run-id R --evidence <dir> ... --scenario restore-drill --game-generations 1,2 --commit <HEAD>
+```
+
+**The restore alarms are ALARM-PIPELINE INJECTIONS, never a reproduction of a destructive fault** (owner decision). Each is
+one standalone `run-task` of a pool's running definition whose command is the drill's `node -e` program over the image's own
+`runtimeMetrics`: it writes, through the production `createEmfSink`, exactly the metric set the runtime's own decision
+writes (`taskLostMetrics("generation-moved")`, `startupRefusedMetrics("generation" | "identity-restore")`,
+`moneyHeldJournalAheadMetrics()`, `restoreUnverifiedMetrics(1)` -- the same functions `awsRuntime.ts` emits through), with
+GS_STORAGE a value start.ts refuses; no APPGEN, identity restore state, journal, game or escrow is touched. Their companion
+alarms fire too, exactly as with the real decision: R1's record carries `TaskLost` (A1), A4g's / A4i's `StartupRefused`
+(A4). R3 is held for a real hour and more (the contract's sixty periods are never shortened; back-dating datapoints is not
+used -- CloudWatch documents no re-evaluation of past periods that could prove it) on a NON-primary pool (only a restored
+table's primary emits `RestoreUnverifiedGames`; an injection never competes with a serving task's value). Every task is
+bounded by itself (counters: one record, exit 0; R3: its hold, 3900-5400 s, or `hold-stop`): an interrupted operator
+leaves nothing running indefinitely. `precheck` starts nothing unless the alarm is not ALARM (and, for `overlap`, the
+overlap test's window is open with 5 minutes left and both suppressors are ALARM); `observe` polls (NOT YET) and refuses
+what can no longer become true; `record` re-derives every case and judges the candidate before writing.
+
+**The staging flip-suppression overlap test is NOT a routing flip** (owner decision: no second real flip). `gamesDoctor aws
+suppression-overlap open <A> <B>` publishes, through L6-5B's `applySuppression` and the operator's `cloudWatchSuppression`,
+exactly the `FlipWindowOpen` datapoints a real flip's window publishes for its two pools (at most 45 minutes, ahead, ending by
+itself); SYSTEM/ROUTING is READ strongly at the open and the close and never written; `close` cancels the remaining minutes.
+While it is open the two pools' suppressible alarms (A6/A11/A12/A12b/A13) act only through their suppressed composites --
+that is the mechanism under test. The drill's overlap is proven only from CloudWatch: both suppressors ALARM in the
+describe-alarms taken just before the injection, and each one's last state change at or before the injection (its
+describe-alarm-history, read after it) to ALARM inside this test's window.
+
+**The old-generation fencing probe** (`aws/runtime/restoreFenceProbe.ts`; no temporary serving pool, no old-generation
+document: owner decision). Two standalone tasks of a pool's running (new-generation) definition, the command overridden to
+the probe, GS_STORAGE refused; each refuses to run unless APPGEN shows exactly this adoption. `ledger-kms`: the ledger's own
+generation term for generation 1 (`generationConditionCheck`, the one builder every ledger write uses) in a transaction whose
+second item can never hold (nothing is ever written), against a control with generation 2's term; and the KMS gate
+(`gatedKmsClient`) with the pool writer's generation probe, over a port that only counts (KMS is never reached). `old-task`:
+the production `startAwsRuntime` configured for generation 1 behind a substrate that serves only the generation reads --
+refused for the generation before the pool, exit 2, never ready. `stage-probe restore-fencing record` binds both answers to
+ECS's record of each task, to APPGEN's adoption (read live through L6-4's readers) and to the restore-stop capture, takes
+the new generation from the deployment's own evidence (the document serves the adopted table, L6-4's startup rule accepts
+it, the primary's one task -- started after the adoption, on the definition that names the document -- is the target
+group's healthy target), and judges with the unchanged `judgeRestoreFencing` before writing.
 
 **Windows real-AWS staging requires AWS CLI v2 (`aws.exe`).** Use CLI v2 (`aws --version` must print `aws-cli/2.`).
 LIVE-6 W1: no capture call is built to exceed `cmd.exe`'s 8191-character command line any more (the Windows test stub is an

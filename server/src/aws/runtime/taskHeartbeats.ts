@@ -27,10 +27,10 @@
 // IAM: the certifier / verifier role (`gs-<env>-bootstrap`) gets `dynamodb:Scan` on the NON-serving managed generations
 // only (infra/aws/modules/app/iam.tf `RestoreQuietOldGenerationHeartbeats`); no runtime task gains any authority.
 
-import { ScanCommand, type AttributeValue, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { GetItemCommand, ScanCommand, type AttributeValue, type DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 import { deadline } from "../awsClients";
-import { decodeTaskStatusItem, TASK_STATUS_SK, type TaskStatusRecord } from "./taskStatus";
+import { decodeTaskStatusItem, TASK_STATUS_SK, taskStatusKey, type TaskStatusRecord } from "./taskStatus";
 
 /** The key prefix every heartbeat item's partition carries (`taskStatusPk`). */
 const TASK_PREFIX = "TASK#";
@@ -84,4 +84,22 @@ export async function oldGenerationHeartbeatsAfter(client: DynamoDBClient, table
   if (!Number.isFinite(expect.after)) throw new TaskHeartbeatsUnreadableError("no restore-stop time to compare the heartbeats with");
   const records = await scanTaskHeartbeats(client, table, options);
   return [...new Set(records.filter((r) => r.generation === expect.generation && r.updatedAt > expect.after).map((r) => r.task))].sort();
+}
+
+/**
+ * LIVE-6 relayer rotation: ONE task's `TASK#` item, read strongly (GetItem, ConsistentRead) from the SERVING game table,
+ * decoded by the canonical decoder -- for the staging certification's post-rotation proof (the relayer-role holder's own
+ * statement that its relayer is `usable` and its escrow `active`). `null`: the task never wrote one (or its TTL removed
+ * it). An item the decoder cannot read THROWS (`TaskHeartbeatsUnreadableError`): never "no heartbeat", never "usable".
+ * Operator evidence after the fact, judged beside the authoritative pool item, mirror and ledger fence; never a lease, and
+ * nothing in the runtime reads it (the L6-5A source guard).
+ */
+export async function readTaskStatus(client: DynamoDBClient, table: string, task: string): Promise<TaskStatusRecord | null> {
+  if (!/^[\x21-\x7e]{1,128}$/.test(task)) throw new TaskHeartbeatsUnreadableError(`${JSON.stringify(task.slice(0, 40))} is not a task id`);
+  const answer = await client.send(new GetItemCommand({ TableName: table, Key: taskStatusKey(task), ConsistentRead: true }), { abortSignal: deadline() });
+  if (answer.Item === undefined) return null;
+  const decoded = decodeTaskStatusItem(answer.Item);
+  if ("problem" in decoded) throw new TaskHeartbeatsUnreadableError(`${table}: ${decoded.problem}`);
+  if (decoded.task !== task) throw new TaskHeartbeatsUnreadableError(`${table}: TASK#${task} names task ${decoded.task}`);
+  return decoded;
 }

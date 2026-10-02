@@ -34,6 +34,7 @@ module "app" {
   identity_layout_version           = var.identity_layout_version
   ledger_table_arn                  = var.ledger_table_arn
   signing_keys                      = var.signing_keys
+  relayer_rotation_key_arns         = var.relayer_rotation_key_arns
   escrow                            = var.escrow
   money_tables_nonmainnet           = var.money_tables_nonmainnet
   edge_diagnostic_staging           = var.edge_diagnostic_staging

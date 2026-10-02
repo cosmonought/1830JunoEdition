@@ -280,9 +280,41 @@ data "aws_iam_policy_document" "bootstrap" {
   dynamic "statement" {
     for_each = var.signing_keys == null ? [] : [1]
     content {
+      # LIVE-6 relayer rotation: + the prepared next / retained previous relayer key -- read only, never the task's.
       sid       = "SigningKeysReadOnly"
       actions   = ["kms:DescribeKey", "kms:GetPublicKey", "kms:ListGrants"]
-      resources = values(var.signing_keys)
+      resources = concat(values(var.signing_keys), var.relayer_rotation_key_arns)
+    }
+  }
+  # LIVE-6 relayer rotation: the staging certification's POST-ROTATION proof (`stage-cert certify --scenario
+  # relayer-rotation-drill`) reads, strongly and read-only, the new relayer's game-table mirror (ROLE#relayer#<address>),
+  # the primary's pool item (POOL#<pool>) and its holder's diagnostic heartbeat (TASK#<task>: evidence, never a lease) on
+  # the SERVING table, and the ledger's relayer fence (FENCE#relayer#<address>; the ledger stack grants its half once a
+  # second relayer key exists). GetItem only, those partitions only; only while a rotation is prepared or retained.
+  dynamic "statement" {
+    for_each = length(var.relayer_rotation_key_arns) > 0 ? [1] : []
+    content {
+      sid       = "RelayerRotationProofGameRead"
+      actions   = ["dynamodb:GetItem"]
+      resources = [local.game_table_arn]
+      condition {
+        test     = "ForAllValues:StringLike"
+        variable = "dynamodb:LeadingKeys"
+        values   = ["ROLE#relayer#*", "POOL#*", "TASK#*"]
+      }
+    }
+  }
+  dynamic "statement" {
+    for_each = length(var.relayer_rotation_key_arns) > 0 ? [1] : []
+    content {
+      sid       = "RelayerRotationProofFenceRead"
+      actions   = ["dynamodb:GetItem"]
+      resources = [var.ledger_table_arn]
+      condition {
+        test     = "ForAllValues:StringLike"
+        variable = "dynamodb:LeadingKeys"
+        values   = ["FENCE#relayer#*"]
+      }
     }
   }
   statement {

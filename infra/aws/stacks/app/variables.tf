@@ -27,6 +27,12 @@ variable "signing_keys" {
   default = null
 }
 
+# LIVE-6 relayer rotation: the prepared next / retained previous relayer key (infra/aws/README.md "Relayer rotation").
+variable "relayer_rotation_key_arns" {
+  type    = list(string)
+  default = []
+}
+
 variable "escrow" {
   type    = any
   default = null

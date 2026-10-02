@@ -21,6 +21,9 @@
 //   L6-4 (L6-6R)       generation, identity, review, rollback, restore-quiet, restore-fence (`recovery.ts`)
 //   LIVE-6 final convergence (`drills.ts`): alarms (L6-5B's contract, every scenario); generation-gate and restore-alarms
 //                      (restore drill); flip and flip-alarms (flip drill); relayer-rotation (rotation drill)
+//   LIVE-6 relayer rotation (`rotationProof.ts`): relayer-rotation-proof (rotation drill) -- the change WORKED: the new
+//                      relayer configured, the contract's operator, the role on the current primary, usable, escrow
+//                      active, the settlement and admission keys unchanged, nothing left under the old address
 //
 // THE VERDICT LAW. A required gate passes only when it has at least one check and every check passed. Missing evidence
 // is a FAILED check, never a skip; a SKIP from the verifier is a failure here unless it is explicitly replaced (the ledger
@@ -44,6 +47,7 @@ import {
   allPass,
   arr,
   CERTIFICATION_FORMAT,
+  CERTIFIER_STORAGE_OVERRIDE,
   checkEnvelope,
   EVIDENCE,
   evidenceName,
@@ -68,6 +72,8 @@ import { accountOf, judgeAlarmsGate, judgeFlipAlarmDrill, judgeFlipDrill, judgeG
 import { adoptionOf, certifierImage, generationMeasurement, judgeGeneration, judgeIdentityRecovery, judgeReviews, judgeRestoreFencing, judgeRestoreQuiet, judgeRollback, NOT_INTEGRATED, type GenerationEvidence, type HeartbeatEvidence } from "./recovery";
 import { buildIdOf, checkClusterTasks, checkRunningTasks, checkServicesSettled, checkTargetHealth, readClusterListing } from "./prerequisite";
 import { STACKS, TERRAFORM_FILES, judgeTerraformStack } from "./terraformPlan";
+import { judgeRotationProof, type RotationProofRecord } from "./rotationProof";
+import { DRILL_FILES } from "./drills";
 import { judgeTransactionProbe } from "./transactionProbe";
 
 /** LIVE-6 final convergence: `flip-drill` (L6-2's planned flip, L6-5B's suppression) and `relayer-rotation-drill` (L6-2 /
@@ -215,6 +221,9 @@ export interface CertContext {
   readonly alarmActions?: { readonly page: readonly string[] | null; readonly ticket: readonly string[] | null };
   /** LIVE-6 final convergence (relayer-rotation-drill): `--from-relayer` / `--to-relayer`. */
   readonly rotation?: { readonly from: string | null; readonly to: string | null } | null;
+  /** LIVE-6 relayer rotation: the post-rotation reading `stage-cert certify` made LIVE (`rotationProof.ts`; null or
+   *  absent: none was made -- the proof gate FAILS). Judged in memory, never re-read from a file. */
+  readonly rotationProof?: RotationProofRecord | null;
 }
 
 export type GateStatus = "pass" | "fail" | "not-required";
@@ -315,8 +324,9 @@ export function judgeCertifierTask(doc: unknown, expect: { readonly run: string;
   ];
 }
 
-/** The certifier task's GS_STORAGE override: a value `start.ts` refuses (exit 2), so a missing command override starts nothing. */
-export const CERTIFIER_STORAGE_OVERRIDE = "l6-6-probe-not-a-server";
+/** The certifier task's GS_STORAGE override (`evidence.ts`, shared by every standalone probe task): a value `start.ts`
+ *  refuses (exit 2), so a missing command override starts nothing. */
+export { CERTIFIER_STORAGE_OVERRIDE } from "./evidence";
 
 export const STAGING_GATES: readonly StagingGate[] = Object.freeze([
   {
@@ -642,6 +652,21 @@ export const STAGING_GATES: readonly StagingGate[] = Object.freeze([
         configuredRelayer: ctx.prerequisite.startup.escrowConfig?.relayer.address ?? null,
         prerequisiteAt: priorAt(records),
         running: ctx.prerequisite.running,
+      }),
+    }),
+  },
+  {
+    id: "relayer-rotation-proof",
+    title: "Relayer-address rotation drill: the change WORKED -- the new relayer configured and the contract's operator, its role on the current primary, usable, escrow active, the other keys unchanged",
+    required: (ctx) => ctx.scenario === "relayer-rotation-drill",
+    notRequired: "not required: no relayer-address rotation in this scenario",
+    evaluate: (ctx) => ({
+      checks: judgeRotationProof(ctx.rotationProof ?? null, readEvidence(ctx.dir, DRILL_FILES.rotationGate, { ownRecord: true }), {
+        environment: ctx.environment,
+        from: ctx.rotation?.from ?? null,
+        to: ctx.rotation?.to ?? null,
+        primaryPool: ctx.primaryPool,
+        generation: ctx.generation,
       }),
     }),
   },

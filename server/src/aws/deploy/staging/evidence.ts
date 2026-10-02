@@ -71,6 +71,10 @@ export const EVIDENCE = Object.freeze({
   manifest: "certification-manifest.json",
 });
 
+/** The GS_STORAGE override of every standalone probe task (the certifier task, the flip and restore drills' probes): a
+ *  value `start.ts` refuses (exit 2), so a task whose command override was lost starts nothing. */
+export const CERTIFIER_STORAGE_OVERRIDE = "l6-6-probe-not-a-server";
+
 /** An evidence-relative name from the harness's OWN constant parts (`drain-p1` + `tasks-before.json`), `/`-separated on
  *  every platform (a `\` from a Windows join is one separator too): the one spelling the diagnostics and the tests see.
  *  Never applied to a name read from disk (on POSIX a `\` is a legal file-name character, not a separator). A `..`, an

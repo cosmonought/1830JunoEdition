@@ -52,12 +52,16 @@ import { stageCertCommand, stageProbeCommand, recordFromLog, recordLines, type S
 import { closedBy, judgeQueryProbe, judgeWsAnnouncement, judgeWsIdle, LOBBY_SUBSCRIPTION, nodeEdgeTransport, probeQuery, requiredIdleMs, runEdgeProbe, type EdgeTransport, type SocketEvent, type SocketObservation } from "./edgeProbe";
 import { CERTIFICATION_FORMAT, EVIDENCE, evidenceName, EvidenceRefusedError, manifestOf, obj, readEvidence, secretFindings, stableStringify, writeRecord } from "./evidence";
 import { DRAIN_FILES, drainDir } from "./drain";
+import { deploymentIdentityOf } from "../junoChain";
+import { collectRotationProof, ROTATION_PROOF_FILE, ROTATION_PROOF_FORMAT, type RotationProofRecord } from "./rotationProof";
+import { fakeJunoChain, healthyRotation, rotationReadersFor } from "./rotationTestSupport";
 import { caseFoldCollisions, readCheckoutText, toPosixPath, withDirectories } from "../../../testSupport/portability";
 import { classifyIamAnswer, IAM_PROBE_IDS, iamProbeSpecs, iamProbeWriteProblem, judgeIamProbe, runIamProbe, type IamAnswer } from "./iamProbe";
 import { judgeKmsProbe, KMS_LATENCY_BOUND_MS, runKmsProbe } from "./kmsProbe";
 import { judgeTerraformStack, AWS_PROVIDER, TERRAFORM_FILES } from "./terraformPlan";
 import { disposableOnly, DisposableGuardError, judgeTransactionProbe, runTransactionProbe } from "./transactionProbe";
 import { checkClusterTasks, CLUSTER_LISTING_WINDOW_MS, CLUSTER_TASKS_FORMAT, DESCRIBE_TASKS_BATCH_MAX, DESCRIBE_TASKS_BATCH, readClusterListing } from "./prerequisite";
+import { restoreAlarmDrill } from "./restoreDrillFixtures.test";
 import { buildCapabilities, PRIOR_CERTIFICATIONS, readGenerationEvidence, readIdentityRecovery, RESTORE_FENCING_CASES, RESTORE_FENCING_FILE, RESTORE_STOP_DIR, revisionsFile, type AdoptionRecordFacts, type AppGenerationFacts, type GenerationEvidence, type GenerationMarkerFacts, type IdentityRestoreFacts, type RecoveryReaders, type ReviewSummary } from "./recovery";
 
 const REPO = path.resolve(__dirname, "../../../../../../.."); // dist/server/src/aws/deploy/staging -> the repository
@@ -676,6 +680,8 @@ const CERTIFIER_RUN = {
 
 const ADOPTION_CLAIM = "22222222-2222-4222-8222-222222222222";
 const RELAYER_OLD = "juno1xc5etfhxjg4qfc9cx25qh3tvxdcf5skjj5epte";
+/** The relayer key the rotation moved away from (r1; the live document's relayer key is the new one). */
+const RELAYER_KEY_OLD = "arn:aws:kms:us-east-1:222222222222:key/00000000-0000-4000-8000-000000000000";
 /** The live escrow document's relayer (the fixture's own key): after a rotation, the NEW address. */
 const relayerNew = (): string => junoConfig().relayer.address;
 /** L6-2's flip record for a p2 -> p1 flip (the drill's), settled, its window published then closed by the recovery. */
@@ -720,26 +726,21 @@ function writeDrillEvidence(dir: string, drill: "restore" | "flip" | "rotation",
     const plan = JSON.parse(fs.readFileSync(planFile, "utf8"));
     plan.variables = { ...(plan.variables ?? {}), generation_adoption: { value: { generation: 2, game_table: "gs-staging-game-g2", restore_id: adoption.restore_id } } };
     write(dir, "terraform/app/plan.json", plan);
-    const win = { from: "p1", to: "p2", opened_at: Date.parse("2026-09-30T09:40:00Z"), expires_at: Date.parse("2026-09-30T10:25:00Z") };
-    const obs = (alarm: string, injected: string, overlap: boolean) => ({ alarm, injected_at: Date.parse(injected), alarm_at: Date.parse(injected) + 70_000, state: "ALARM", actions_suppressed: false, overlapping_flip_window: overlap ? win : null });
-    write(dir, "probe-restore-alarms.json", {
-      format: "18COSMOS/L6-6-RESTORE-ALARM-DRILL/v1",
-      run_id: RUN,
-      cases: {
-        "r1-generation-lost": obs("gs-staging-r1-generation-lost", "2026-09-30T09:41:00Z", true),
-        "a4g-generation-refused": obs("gs-staging-a4g-generation-refused", "2026-09-30T09:46:00Z", false),
-        "a4i-identity-restore-refused": obs("gs-staging-a4i-identity-restore-refused", "2026-09-30T09:47:00Z", false),
-        "r2-money-journal-ahead": obs("gs-staging-r2-money-journal-ahead", "2026-09-30T09:48:00Z", false),
-        "r3-restore-unverified": obs("gs-staging-p1-r3-restore-unverified", "2026-09-30T08:30:00Z", false),
-      },
-      ...over,
-    });
+    /* The restore alarms: the supported producer's whole drill (restoreAlarmDrill.ts) over AWS-shaped captures -- an
+       alarm-pipeline injection per case, one inside the staging flip-suppression overlap test (p1, p2); R3 on this
+       single-pool package's p1. */
+    const drilled = restoreAlarmDrill(dir, { run: RUN, r3Pool: "p1" });
+    assert.equal(drilled.recorded?.kind, "observed", JSON.stringify(drilled.recorded));
   } else if (drill === "flip") {
     write(dir, "flip-record.json", flipRecord(over));
   } else {
     const gated = "2026-09-30T08:50:00.000Z"; // before the running task was created (09:00): the pools restarted after it
     write(dir, "gate-relayer-rotation.json", {
-      format: "18COSMOS/RELAYER-ROTATION-GATE/v1",
+      format: "18COSMOS/RELAYER-ROTATION-GATE/v2",
+      /* LIVE-6 relayer rotation (v2): what the rotation must leave untouched, as the gate read it -- the live document's
+         settlement and admission keys and contract; the OLD relayer key the rotation moved away from. */
+      deployment: { ...deploymentIdentityOf(junoConfig()), from_relayer_key_ref: RELAYER_KEY_OLD },
+      contract_operator: RELAYER_OLD,
       environment: "staging",
       from_relayer: RELAYER_OLD,
       to_relayer: relayerNew(),
@@ -893,6 +894,7 @@ describe("L6-6 §1: every required gate contributes to the verdict", () => {
           ["flip", "not-required"],
           ["flip-alarms", "not-required"],
           ["relayer-rotation", "not-required"],
+          ["relayer-rotation-proof", "not-required"],
           ["evidence", "pass"],
         ],
       );
@@ -3167,7 +3169,8 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
       const flip = status("flip-drill");
       assert.deepEqual([flip.flip, flip["flip-alarms"], flip["relayer-rotation"], flip["generation-gate"]], ["fail", "fail", "not-required", "not-required"]);
       const rotation = status("relayer-rotation-drill", { rotation: { from: RELAYER_OLD, to: relayerNew() } });
-      assert.deepEqual([rotation["relayer-rotation"], rotation.flip, rotation["generation-gate"]], ["fail", "not-required", "not-required"]);
+      assert.deepEqual([rotation["relayer-rotation"], rotation["relayer-rotation-proof"], rotation.flip, rotation["generation-gate"]], ["fail", "fail", "not-required", "not-required"]);
+      assert.equal(status("flip-drill")["relayer-rotation-proof"], "not-required");
       const restore = status("restore-drill");
       assert.deepEqual([restore["generation-gate"], restore["restore-alarms"], restore.flip], ["fail", "fail", "not-required"]);
     } finally {
@@ -3488,9 +3491,75 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
     }
   });
 
+  /* ---------------- LIVE-6 relayer rotation: the post-rotation proof, in the registry ---------------- */
+
+  test("relayer rotation: the proof gate PASSES only with a live reading that proves the rotation worked; none, unbound or broken FAILS", async () => {
+    const built = await buildPackage();
+    try {
+      writeDrillEvidence(built.dir, "rotation");
+      const rotation = { from: RELAYER_OLD, to: relayerNew() };
+      const readAt = Date.parse("2026-09-30T10:30:00Z");
+      const proof = (table = healthyRotation({ from: RELAYER_OLD, to: relayerNew(), pool: "p1", now: readAt }), chain = fakeJunoChain({ operator: relayerNew() }), bound = true): Promise<RotationProofRecord> =>
+        collectRotationProof({ readers: bound ? rotationReadersFor(table) : undefined, juno: chain, clients: { app: {} as never, ledger: {} as never }, tables: { game: "g", ledger: "l" }, config: junoConfig(), run: RUN, environment: "staging", from: RELAYER_OLD, to: relayerNew(), now: () => readAt });
+      const gate = async (rotationProof: RotationProofRecord | null) => {
+        const result = certify({ ...(await built.ctx()), scenario: "relayer-rotation-drill", rotation, rotationProof });
+        const g = result.gates.find((x) => x.id === "relayer-rotation-proof") as { status: string; checks: readonly Check[] };
+        return { status: g.status, text: reasons(g.checks), passed: result.passed, both: result.gates.filter((x) => x.id.startsWith("relayer-rotation")).map((x) => [x.id, x.status]) };
+      };
+      const good = await gate(await proof());
+      assert.equal(good.status, "pass", good.text);
+      assert.deepEqual(good.both, [["relayer-rotation", "pass"], ["relayer-rotation-proof", "pass"]]);
+      /* The rotation gate alone (the SAFE change) no longer certifies a drill whose change did not WORK. */
+      const stillOld = await gate(await proof(undefined, fakeJunoChain({ operator: RELAYER_OLD })));
+      assert.deepEqual(stillOld.both, [["relayer-rotation", "pass"], ["relayer-rotation-proof", "fail"]]);
+      assert.equal(stillOld.passed, false);
+      assert.match(stillOld.text, /operator on chain is the new relayer: the contract's operator is STILL the old relayer/);
+      const noRole = await gate(await proof({ ...healthyRotation({ from: RELAYER_OLD, to: relayerNew(), pool: "p1", now: readAt }), mirrors: {} }));
+      assert.match(noRole.text, /is ABSENT: no task has taken the new relayer's role/);
+      const none = await gate(null);
+      assert.equal(none.status, "fail");
+      assert.match(none.text, /no post-rotation reading was made/);
+      const unbound = await gate(await proof(undefined, undefined, false));
+      assert.match(unbound.text, /not integrated/);
+      /* The baseline is the gate's OWN record: a v1 record (no deployment identity) cannot anchor the proof. */
+      fs.rmSync(path.join(built.dir, "gate-relayer-rotation.json"));
+      writeDrillEvidence(built.dir, "rotation", { format: "18COSMOS/RELAYER-ROTATION-GATE/v1", deployment: undefined, contract_operator: undefined });
+      assert.match((await gate(await proof())).text, /carries no deployment identity/);
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
+  test("relayer rotation: stage-cert certify reads the proof LIVE (read-only), keeps it in the package as rotation-proof.json, and judges that reading", async () => {
+    const built = await buildPackage({ part: "all", skip: [EVIDENCE.verifyLedger] });
+    try {
+      writeDrillEvidence(built.dir, "rotation");
+      const readAt = Date.parse("2026-09-30T10:30:00Z");
+      const seen: string[] = [];
+      const recorder = { async send(command: { constructor: { name: string } }) { seen.push(command.constructor.name); throw Object.assign(new Error("offline"), { name: "ResourceNotFoundException" }); }, config: { region: async () => "us-east-1" } } as never;
+      const readers = rotationReadersFor(healthyRotation({ from: RELAYER_OLD, to: relayerNew(), pool: "p1", now: readAt }));
+      const chain = fakeJunoChain({ operator: relayerNew() });
+      const deps: DeployDeps = { parameters: PARAMETERS, dynamo: () => recorder, kms: () => ({ sdk: recorder, digest: fakeKms().client }), now: () => readAt, out: () => undefined, juno: chain };
+      const staging: StagingDeps = { env: {}, monotonic: () => 0, edge: fakeEdge(), repository: REPO, rotation: readers };
+      await stageCertCommand(["certify", "--run-id", RUN, "--evidence", built.dir, "--runtime-parameter", RUNTIME_ARN, "--environment", "staging", "--primary-pool", "p1", "--generation", "1", "--part", "all", "--scenario", "relayer-rotation-drill", "--from-relayer", RELAYER_OLD, "--to-relayer", relayerNew(), "--commit", "aa2c64c"], deps, staging);
+      const kept = JSON.parse(fs.readFileSync(path.join(built.dir, ROTATION_PROOF_FILE), "utf8"));
+      assert.equal(kept.format, ROTATION_PROOF_FORMAT);
+      assert.equal(kept.readers_bound, true);
+      assert.equal(kept.chain.operator, relayerNew());
+      assert.deepEqual(readers.calls.map((c) => c.split(" ")[0]), ["routing", "pool", "mirror", "fence", "task", "queue"]);
+      const certification = JSON.parse(fs.readFileSync(path.join(built.dir, EVIDENCE.certification), "utf8"));
+      const g = (certification.gates as Array<{ id: string; status: string; checks: Check[] }>).find((x) => x.id === "relayer-rotation-proof");
+      assert.equal(g?.status, "pass", reasons(g?.checks ?? []));
+      assert.ok(seen.every((name) => /(Describe|Get|List|Query|Scan)[A-Za-z]*Command$/.test(name)), JSON.stringify(seen));
+      assert.ok(manifestOf(built.dir).some((f) => f.file === ROTATION_PROOF_FILE && f.findings.length === 0), "the reading is in the package, and carries no secret");
+    } finally {
+      cleanup(built.dir);
+    }
+  });
+
   /* ---------------- the restore drill's alarms ---------------- */
 
-  test("restore alarms: R1, A4g, A4i, R2, R3 each fired under its injected condition, never suppressed -- at least one inside an overlapping flip window", async () => {
+  test("restore alarms: R1, A4g, A4i, R2, R3 each fired after an alarm-pipeline injection, never suppressed -- at least one inside a PROVEN staging flip-suppression overlap", async () => {
     const built = await buildPackage();
     try {
       const judged = (cases: Record<string, unknown>) => {
@@ -3508,8 +3577,10 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
       assert.match(judged({ "a4i-identity-restore-refused": { ...good["a4i-identity-restore-refused"], state: "OK" } }), /a4i-identity-restore-refused fires/);
       assert.match(judged({ "r3-restore-unverified": { ...good["r3-restore-unverified"], alarm: "gs-staging-p9-r3-restore-unverified" } }), /r3-restore-unverified fires/, "another deployment's pool");
       assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], alarm_at: good["r1-generation-lost"].injected_at - 1 } }), /r1-generation-lost fires/, "fired before the injection");
-      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], overlapping_flip_window: null } }), /not suppressed by an overlapping flip window \(observed\)/);
-      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], overlapping_flip_window: { ...good["r1-generation-lost"].overlapping_flip_window, opened_at: good["r1-generation-lost"].injected_at + 1 } } }), /does not cover the injection/);
+      /* Strengthened: an overlap counts only with BOTH suppressors proven ALARM at the injection (CloudWatch), re-derived. */
+      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], suppression_overlap: null } }), /never suppressed while the planned-flip suppression was genuinely active/);
+      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], suppression_overlap: { ...good["r1-generation-lost"].suppression_overlap, opened_at: good["r1-generation-lost"].injected_at + 1 } } }), /both suppressors of the staging flip-suppression overlap test were ALARM at the injection/);
+      assert.match(judged({ "r1-generation-lost": { ...good["r1-generation-lost"], suppression_overlap: null, overlapping_flip_window: { from: "p1", to: "p2", opened_at: good["r1-generation-lost"].injected_at - 60_000, expires_at: good["r1-generation-lost"].injected_at + 60_000 } } }), /self-reported overlapping_flip_window is never evidence/);
     } finally {
       cleanup(built.dir);
     }

@@ -260,6 +260,27 @@ function parseFence(item: Item, account: string): { readonly epoch: number; read
 }
 
 /* ------------------------------------------------------------------ */
+/* The generation fence (one builder: every ledger write, and the restore drill's fencing probe) */
+/* ------------------------------------------------------------------ */
+
+/**
+ * THE generation fence every ledger write carries: `ConditionCheck APPGEN: schema = 1 AND current_generation = :mine`.
+ * One builder, so the LIVE-6 restore drill's fencing probe (`aws/runtime/restoreFenceProbe.ts`) sends exactly the term a
+ * writer of `generation` sends -- never a second spelling of it.
+ */
+export function generationConditionCheck(table: string, generation: number): TransactWriteItem {
+  return {
+    ConditionCheck: {
+      TableName: table,
+      Key: LEDGER_KEYS.appgen(),
+      ConditionExpression: "#schema = :schema AND #gen = :gen",
+      ExpressionAttributeNames: { "#schema": "schema", "#gen": "current_generation" },
+      ExpressionAttributeValues: { ":schema": N(LEDGER_SCHEMA), ":gen": N(generation) },
+    },
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* The ledger                                                           */
 /* ------------------------------------------------------------------ */
 
@@ -421,15 +442,7 @@ export async function openDynamoSigningLedger(client: DynamoDBClient, options: D
     const stored = parseFence(item, relayerAddress);
     return stored.epoch === fence.epoch && stored.token === fence.token;
   };
-  const generationCheck = (): TransactWriteItem => ({
-    ConditionCheck: {
-      TableName: table,
-      Key: LEDGER_KEYS.appgen(),
-      ConditionExpression: "#schema = :schema AND #gen = :gen",
-      ExpressionAttributeNames: { "#schema": "schema", "#gen": "current_generation" },
-      ExpressionAttributeValues: { ":schema": N(LEDGER_SCHEMA), ":gen": N(generation) },
-    },
-  });
+  const generationCheck = (): TransactWriteItem => generationConditionCheck(table, generation);
   /** The relayer fence is (epoch, token): only the task that minted the epoch holds it. Every field `parseFence` checks
    *  is in the condition (`kind` too), so a damaged fence item refuses the write -- it never passes one. */
   const relayerCheck = (account: string, fence: { readonly epoch: number; readonly token: string }): TransactWriteItem => ({

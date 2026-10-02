@@ -20,7 +20,17 @@ import { adoptionBindingProblem, generationMarkerProblem, readGenerationMarker }
 import { identityServingProblem, readIdentityRestore, readIdentityTableSelf } from "../aws/identity/dynamoIdentityStore";
 import { inspectIdentityRestore } from "../aws/identity/identityRestore";
 import { readAdoptionRecord, readAppGeneration } from "../aws/ledger/appGeneration";
-import { oldGenerationHeartbeatsAfter } from "../aws/runtime/taskHeartbeats";
+import { oldGenerationHeartbeatsAfter, readTaskStatus } from "../aws/runtime/taskHeartbeats";
+/* LIVE-6 relayer rotation: the post-rotation proof's readers -- the deployment's own, read-only (the import guard admits
+   exactly these names): the routing, the pool item, the relayer mirror and the ledger's relayer fence, the holder's one
+   TASK# item, the rotation gate's own queue reader; and the chain, through the server's own REST client. */
+import { readRouting } from "../aws/game/routing";
+import { readPool } from "../aws/game/ownership";
+import { readRelayerRole } from "../aws/game/relayerRole";
+import { readRelayerFence } from "../aws/ledger/dynamoSigningLedger";
+import { relayQueueState } from "../aws/deploy/relayerRotation";
+import { productionJunoChain } from "../aws/deploy/junoChain";
+import type { RotationReaders } from "../aws/deploy/staging/rotationProof";
 
 const deps: DeployDeps = {
   parameters: ssmParameterSourceFor(),
@@ -32,6 +42,9 @@ const deps: DeployDeps = {
   now: () => Date.now(),
   // eslint-disable-next-line no-console
   out: (line) => console.log(line),
+  /* LIVE-6 relayer rotation: the escrow contract on chain, read only (the rotation gate's operator read, set-operator-plan,
+     the post-rotation proof): the server's own REST client over the configuration's own endpoints. */
+  juno: productionJunoChain(),
 };
 
 /**
@@ -64,9 +77,28 @@ export const STAGING_RECOVERY_READERS: RecoveryReaders = {
 /** L6-5A/L6-5B's TASK# items as L6-6R's restore-quiet heartbeat evidence (operator proof only, never a lease). */
 export const STAGING_HEARTBEATS: NonNullable<StagingDeps["heartbeats"]> = (client, table, expect) => oldGenerationHeartbeatsAfter(client, table, expect);
 
+/**
+ * LIVE-6 relayer rotation: `StagingDeps.rotation` bound to the deployment's own READ functions (rotationProof.ts):
+ *   routing        readRouting (L5-3: SYSTEM/ROUTING, strict)
+ *   pool           readPool (L5-2: POOL#<pool>'s writer epoch and task)
+ *   relayerRole    readRelayerRole (L5-6: ROLE#relayer#<account>, strict)
+ *   relayerFence   readRelayerFence (L6-3: the ledger's FENCE#relayer#<account>, strict)
+ *   taskStatus     readTaskStatus (L6-5A's one TASK# reader: the holder's own heartbeat -- evidence, never a lease)
+ *   relayQueue     relayQueueState (the rotation gate's own: RELAYQ#<address>, strongly consistent, every page)
+ */
+export const STAGING_ROTATION_READERS: RotationReaders = {
+  routing: (client, table) => readRouting(client, table),
+  pool: (client, table, pool) => readPool(client, table, pool),
+  relayerRole: (client, table, account) => readRelayerRole(client, table, account),
+  relayerFence: (client, table, account) => readRelayerFence(client, table, account),
+  taskStatus: (client, table, task) => readTaskStatus(client, table, task),
+  relayQueue: (client, table, address) => relayQueueState(client, table, address),
+};
+
 const staging: StagingDeps = {
   recovery: STAGING_RECOVERY_READERS,
   heartbeats: STAGING_HEARTBEATS,
+  rotation: STAGING_ROTATION_READERS,
   env: process.env,
   monotonic: () => performance.now(),
   edge: nodeEdgeTransport(),

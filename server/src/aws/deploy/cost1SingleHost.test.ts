@@ -21,11 +21,17 @@
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 
+import { normalizeEol, readCheckoutText } from "../../testSupport/portability";
+
 const REPO = path.resolve(__dirname, "../../../../../.."); // dist/server/src/aws/deploy -> the repository
-const read = (rel: string): string => fs.readFileSync(path.join(REPO, rel), "utf8");
+/* RECON-1A W-03: every source assertion reads the checkout EOL-normalised (LIVE-6 W1's seam): a `$`-anchored or
+   `\n`-split assertion means the same on a CRLF (Windows, core.autocrlf) checkout as on LF. The RAW bytes are judged
+   separately, by the W-04 test below (the host's files must BE LF, not merely read as LF). */
+const read = (rel: string): string => readCheckoutText(path.join(REPO, rel));
 
 interface Budget {
   format: string;
@@ -62,7 +68,7 @@ function filesUnder(roots: readonly string[], filter: (name: string) => boolean)
       if (item.isDirectory()) {
         if (item.name === ".terraform") continue;
         walk(child);
-      } else if (filter(item.name)) out.push([child, fs.readFileSync(path.join(REPO, child), "utf8")]);
+      } else if (filter(item.name)) out.push([child, readCheckoutText(path.join(REPO, child))]);
     }
   };
   for (const root of roots) walk(root);
@@ -320,3 +326,73 @@ describe("P5-INT-1: the ledger's signing keys under max_kms_keys (COST-1 x JX-1K
     assert.ok(!/kms:CreateGrant|kms:\*|"kms:Sign\*"/.test(iam), "no grant, no wildcard KMS action (comments stripped)");
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* RECON-1A W-04: the host's files are LF in every checkout             */
+/* ------------------------------------------------------------------ */
+
+/** Every file whose bytes reach or run on the Linux host, or drive it: embedded verbatim into the user data by
+ *  modules/single-host/locals.tf (files/**, templates/**), the operator's bash twins, the module's bash harnesses. */
+const HOST_INPUT_ROOTS = ["infra/aws/modules/single-host/files", "infra/aws/modules/single-host/templates"];
+const hostInputs = (): string[] => {
+  const out: string[] = [];
+  const walk = (rel: string): void => {
+    for (const item of fs.readdirSync(path.join(REPO, rel), { withFileTypes: true })) {
+      const child = path.posix.join(rel, item.name);
+      if (item.isDirectory()) walk(child);
+      else out.push(child);
+    }
+  };
+  for (const root of HOST_INPUT_ROOTS) walk(root);
+  for (const dir of ["infra/aws/single-host", "infra/aws/modules/single-host/tests"]) for (const f of fs.readdirSync(path.join(REPO, dir))) if (f.endsWith(".sh")) out.push(path.posix.join(dir, f));
+  return out.sort();
+};
+/** The RAW checkout bytes (never normalised): what Terraform's file() / templatefile() embeds and what bash executes. */
+const rawCrOffenders = (files: readonly string[], readRaw: (rel: string) => Buffer = (rel) => fs.readFileSync(path.join(REPO, rel))): string[] => files.filter((f) => readRaw(f).includes(0x0d));
+/** .gitattributes' `eol=lf` patterns (gitattributes glob: `**` any path, `*` within one segment). */
+function lfPatterns(text: string): RegExp[] {
+  return normalizeEol(text)
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l !== "" && !l.startsWith("#"))
+    .map((l) => l.split(/\s+/))
+    .filter((parts) => parts.slice(1).includes("eol=lf"))
+    .map(([pattern]) => new RegExp(`^${pattern.split("**").map((seg) => seg.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*").replace(/\?/g, "[^/]")).join(".*")}$`));
+}
+
+describe("RECON-1A W-04: the single host's files are LF whatever core.autocrlf says", () => {
+  const files = hostInputs();
+  test("the inventory is the module's: every embedded script, unit and template, the operator's bash twins and the harnesses", () => {
+    const locals = read("infra/aws/modules/single-host/locals.tf");
+    for (const m of locals.matchAll(/(host_scripts|systemd_units)\s*=\s*(\[[^\]]*\])/g)) {
+      const dir = m[1] === "host_scripts" ? "bin" : "systemd";
+      for (const f of JSON.parse(m[2]) as string[]) assert.ok(files.includes(`infra/aws/modules/single-host/files/${dir}/${f}`), `${dir}/${f} is in the inventory`);
+    }
+    for (const t of ["Caddyfile.tftpl", "cloud-init.yaml.tftpl", "host.env.tftpl", "server.env.tftpl"]) assert.ok(files.includes(`infra/aws/modules/single-host/templates/${t}`), t);
+    for (const f of ["infra/aws/single-host/gs-host.sh", "infra/aws/single-host/build-image.sh", "infra/aws/modules/single-host/tests/host-scripts.test.sh"]) assert.ok(files.includes(f), f);
+    assert.ok(files.length >= 25, `${files.length} host inputs`);
+  });
+  test("no host input carries a carriage return (the raw checkout bytes)", () => {
+    assert.deepEqual(rawCrOffenders(files), [], "a CR here ships `#!/usr/bin/env bash\\r` / CRLF units to the host and REPLACES it (user_data_replace_on_change)");
+  });
+  test("the detector is not vacuous: a CRLF copy of a host script is caught", () => {
+    const fake = new Map<string, Buffer>([["gs-deploy", Buffer.from("#!/usr/bin/env bash\r\nset -euo pipefail\r\n")], ["gs-run", Buffer.from("#!/usr/bin/env bash\nexit 0\n")]]);
+    assert.deepEqual(rawCrOffenders(["gs-deploy", "gs-run"], (f) => fake.get(f)!), ["gs-deploy"]);
+  });
+  test(".gitattributes pins every host input eol=lf (so a Windows core.autocrlf=true checkout writes LF)", () => {
+    const patterns = lfPatterns(read(".gitattributes"));
+    const unpinned = files.filter((f) => !patterns.some((re) => re.test(f)));
+    assert.deepEqual(unpinned, [], "each host input must match an eol=lf pattern");
+    /* and nothing beyond the host surface was swept in: the module's Terraform and the Windows twins stay text=auto */
+    for (const f of ["infra/aws/modules/single-host/locals.tf", "infra/aws/single-host/gs-host.ps1", "infra/aws/modules/single-host/README.md", "server/src/aws/deploy/hostVerify.ts"]) assert.ok(!patterns.some((re) => re.test(f)), `${f} is not pinned`);
+  });
+  const git = spawnSync("git", ["-C", REPO, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
+  test("git itself resolves eol=lf for every host input", { skip: git.status === 0 && git.stdout.trim() === "true" ? false : "not a git checkout (the .gitattributes test above still holds)" }, () => {
+    const r = spawnSync("git", ["-C", REPO, "check-attr", "eol", "--", ...files], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    const answers = normalizeEol(r.stdout).trim().split("\n");
+    assert.equal(answers.length, files.length);
+    for (const a of answers) assert.match(a, /: eol: lf$/, a);
+  });
+});
+

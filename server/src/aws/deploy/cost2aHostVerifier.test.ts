@@ -25,6 +25,7 @@ import { DescribeContinuousBackupsCommand, DescribeTableCommand, DescribeTimeToL
 
 import type { ParameterSource } from "../runtime/configSource";
 import { appgenItem } from "./bootstrap";
+import { normalizeEol, readCheckoutText } from "../../testSupport/portability";
 import { EXIT_FAILED, EXIT_NOT_EVALUATED, EXIT_OK, EXIT_USAGE, report, runDeployCommand, type DeployDeps } from "./commands";
 import { CACHING_DISABLED_POLICY_ID, type Check } from "./deployVerify";
 import { bootstrapGenerationMarker, generationMarkerItem } from "../game/generationMarker";
@@ -917,7 +918,11 @@ describe("COST-2A §4: awsDeploy verify --topology, end to end", () => {
 /* ================================================================== */
 
 describe("COST-2A §5: the capture scripts, the fixtures and the module agree with the verifier", () => {
-  const read = (rel: string) => fs.readFileSync(path.join(REPO, rel), "utf8");
+  /* RECON-1A W-02: the sources are read EOL-normalised (LIVE-6 W1's seam), so a "\n"-delimited slice bounds the same
+     block on a CRLF (Windows, core.autocrlf) checkout as on LF -- and every slice below must FIND its delimiter, or the
+     test fails (a missed delimiter would otherwise widen the slice to the rest of the file and let a LATER block's
+     attributes satisfy an earlier one's assertions). */
+  const read = (rel: string) => readCheckoutText(path.join(REPO, rel));
 
   test("the capture scripts are describe / get / list only; the one Run Command is the FIXED gs-health; no value, secret or user data is read", () => {
     for (const rel of ["infra/aws/scripts/capture-host-evidence.sh", "infra/aws/scripts/capture-host-evidence.ps1"]) {
@@ -964,9 +969,13 @@ describe("COST-2A §5: the capture scripts, the fixtures and the module agree wi
     assert.equal(specs.length, (tf.match(/resource "aws_cloudwatch_metric_alarm"/g) ?? []).length);
     for (const s of specs) {
       const suffix = s.name.slice(`gs-${ENV}-host-`.length);
-      const block = tf.slice(tf.indexOf(`alarm_name          = "\${local.name}-${suffix}"`));
-      assert.ok(block.length > 0 && tf.includes(`\${local.name}-${suffix}"`), `alarm ${suffix} in observability.tf`);
-      const body = block.slice(0, block.indexOf("\n}\n"));
+      const at = tf.indexOf(`alarm_name          = "\${local.name}-${suffix}"`);
+      assert.ok(at >= 0, `alarm ${suffix} in observability.tf`);
+      const block = tf.slice(at);
+      const end = block.indexOf("\n}\n");
+      assert.ok(end > 0, `alarm ${suffix}: its resource block's end is found (fail closed: never the rest of the file)`);
+      const body = block.slice(0, end);
+      assert.ok(!/\bresource\s+"/.test(body), `alarm ${suffix}: the slice is ONE resource block`);
       assert.match(body, new RegExp(`metric_name\\s+= "${s.metric}"`), `${suffix}: metric`);
       assert.match(body, new RegExp(`threshold\\s+= ${s.threshold}\\b`), `${suffix}: threshold`);
       assert.match(body, new RegExp(`comparison_operator\\s+= "${s.comparison}"`), `${suffix}: comparison`);
@@ -974,11 +983,22 @@ describe("COST-2A §5: the capture scripts, the fixtures and the module agree wi
     }
   });
 
+  test("W-02: a CRLF checkout is read as the LF one (the alarm blocks bound identically); a raw CRLF read would not bound them", () => {
+    const lf = read("infra/aws/modules/single-host/observability.tf");
+    const crlf = lf.replace(/\n/g, "\r\n");
+    assert.equal(normalizeEol(crlf), lf);
+    assert.equal(crlf.indexOf("\n}\n"), -1, "the raw CRLF text has no LF-delimited block end: the reason the reader normalises");
+    assert.ok(lf.indexOf("\n}\n") > 0);
+  });
+
   test("gs-health reports the fields the verifier reads (and never a value)", () => {
     const health = read("infra/aws/modules/single-host/files/bin/gs-health");
     for (const field of ["server", "caddy", "build", "digest", "running_digest", "hold", "healthz", "readyz", "origin_tls_readyz", "origin_hostname", "static_credentials"]) assert.match(health, new RegExp(`"${field}":"%s"`), field);
     const lib = read("infra/aws/modules/single-host/files/bin/gs-lib.sh");
-    const fn = lib.slice(lib.indexOf("static_credentials() {"), lib.indexOf("running_digest() {"));
+    const from = lib.indexOf("static_credentials() {");
+    const to = lib.indexOf("running_digest() {");
+    assert.ok(from >= 0 && to > from, "static_credentials() is bounded by the next function (fail closed)");
+    const fn = lib.slice(from, to);
     assert.match(fn, /grep -Eo "\$GS_CREDENTIAL_NAMES_RE"/, "names are matched up to the '=' only");
     assert.ok(!/cut -d= -f2|\$\{line#\*=\}/.test(fn), "a value is never extracted");
   });

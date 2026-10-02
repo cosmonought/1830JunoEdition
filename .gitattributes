@@ -9,3 +9,16 @@ contracts/escrow/testdata/** eol=lf
 contracts/escrow/schema/** eol=lf
 contracts/escrow/scripts/*.sh eol=lf
 frontend/src/utils/__fixtures__/settlement/** eol=lf
+
+# RECON-1A W-04 (2026-10-02): the single host's files are LF in every checkout, including Git for Windows' default
+# core.autocrlf=true. modules/single-host/locals.tf embeds files/** and templates/** VERBATIM (file() / templatefile())
+# into the EC2 user data, and host.tf sets user_data_replace_on_change = true: a CRLF checkout would ship
+# `#!/usr/bin/env bash\r` shebangs and CRLF systemd units / env files / Caddyfile to the host, AND render a user data whose
+# hash differs from a Linux checkout's -- a plan that REPLACES the host. The operator's gs-host.sh / build-image.sh (their
+# remote commands are built from this file's literal text) and the module's bash test harnesses (they execute the same
+# host scripts and render the real Caddyfile) follow the same rule. Only the working-tree line ending is pinned: the
+# committed blobs are LF already and do not change. Pinned by server/src/aws/deploy/cost1SingleHost.test.ts.
+infra/aws/modules/single-host/files/** eol=lf
+infra/aws/modules/single-host/templates/** eol=lf
+infra/aws/modules/single-host/tests/*.sh eol=lf
+infra/aws/single-host/*.sh eol=lf

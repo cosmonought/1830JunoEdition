@@ -72,6 +72,25 @@
 //     re-read, and passes that keep failing (a pass whose store write was refused or unsettled is a failing one) -- after
 //     `pageAfterMs` (5 minutes); an operational failure -- when its budget is spent. Only the relayer-role holder pages
 //     (a task that does not hold the role keeps its conditions silently until it does).
+//
+// JX-2B (Phase 5): SUBMISSION REFUSALS, AND THE BUDGET AT AN EXPIRY.
+//
+//   - D-1. An attempt proven dead by its expiry (`expiry-passed`) is a counted failure, and is now compared with the
+//     failure budget exactly as an included failure is: a node that keeps refusing or dropping our bytes for reasons this
+//     build cannot name ends in the ordinary hold after `failureBudget` windows, not after the 32-attempt cap.
+//   - A DETERMINISTIC submission refusal -- a CheckTx answer in codespace `sdk` with code 5 (insufficient funds: the
+//     relayer account cannot pay the fee) or 13 (insufficient fee: the node's minimum gas price is above the configured
+//     one), and nothing else (`submissionRefusalOf`) -- is the ACCOUNT's condition, not the intent's: every transaction
+//     this relayer would sign meets it, so re-signing cures nothing and holding intent after intent would only spread it
+//     over every money game. It is F-L5-16 WAIT + PAGE: the condition `submission-refused` pages at once (A15), the
+//     refused bytes are not handed to a node again by this process, the attempt is still observed until the chain
+//     resolves it (its expiry proof, as before), and NOTHING NEW IS SIGNED on the account while it stands. Its death
+//     spends no intent budget (F-L5-17: the cause is the operator's account or configuration); the 32-attempt cap is still
+//     the backstop. The intent, its attempts, the refused CheckTx answer and the journal entry are all kept. Recovery is
+//     the operator's: fund the account or correct the gas price, then restart the relayer (the condition is this
+//     process's; a new one observes the dead attempt and signs afresh at the chain's sequence).
+//   - Rebroadcast spacing: a stored attempt is handed to a node at every pass only until a node has ANSWERED for it
+//     (never sent, or the last send failed in transport); an answered one -- accepted or refused -- waits `rebroadcastMs`.
 
 import { JUNO_CODEC_V1 } from "../../../../frontend/src/gameEngine/escrow/junoCodecV1";
 import { classifyContractFailure, parseCheckpointsResponse, parseGameResponse, QUERY, type JunoGameResponse } from "./junoContract";
@@ -197,7 +216,7 @@ export interface RelayerDeps {
 type JournalEntry = { readonly intent_id: string; readonly tx_id: string; readonly account: string; readonly sequence: string; readonly expires_after_height?: string };
 
 /** LIVE-6 L6-7 (F-L5-16): the page-worthy waiting conditions (stable codes: an alarm's filter names them). */
-export type RelayerPageCondition = "deployment-unavailable" | "relay-queue-mismatch" | "relay-queue-unreadable" | "verdict-undecided" | "operational-failure" | "pass-failing";
+export type RelayerPageCondition = "deployment-unavailable" | "relay-queue-mismatch" | "relay-queue-unreadable" | "verdict-undecided" | "operational-failure" | "pass-failing" | "submission-refused";
 
 export interface RelayerWaitingCondition {
   readonly condition: RelayerPageCondition;
@@ -268,6 +287,24 @@ const defaultSchedule = (run: () => void, ms: number) => {
 /** SDK codes the relayer recognises in a CheckTx or DeliverTx answer (codespace "sdk"). */
 const SDK = Object.freeze({ insufficientFunds: 5, unauthorized: 4, outOfGas: 11, insufficientFee: 13, txInMempool: 19, wrongSequence: 32, txTimeoutHeight: 30 });
 
+/** JX-2B: a CheckTx (broadcast) refusal that no retry of the same account and configuration can cure. */
+export type SubmissionRefusal = "insufficient-funds" | "insufficient-fee";
+
+/**
+ * JX-2B: the DETERMINISTIC submission refusals, read from the node's structured answer (`tx_response.code` and
+ * `codespace`), never from its text. Only two, both the operator's to correct:
+ *   sdk/5  insufficient funds -- at CheckTx the ante handler's fee deduction (the relayer's transactions carry no funds);
+ *   sdk/13 insufficient fee   -- the fee is below the node's minimum gas price (or a fee module's minimum).
+ * Anything else -- another code (4 unauthorized, 32 wrong sequence, 19 already in cache, 30 timeout), another codespace (a
+ * fee module of its own), a transport failure -- is NOT one: it stays on the bounded path (observed, retried, counted).
+ */
+export function submissionRefusalOf(answer: { readonly code: number; readonly codespace: string }): SubmissionRefusal | null {
+  if (answer.codespace !== "sdk") return null;
+  if (answer.code === SDK.insufficientFunds) return "insufficient-funds";
+  if (answer.code === SDK.insufficientFee) return "insufficient-fee";
+  return null;
+}
+
 type Effect = { readonly kind: "done"; readonly detail: string } | { readonly kind: "absent" } | { readonly kind: "moot"; readonly why: string } | { readonly kind: "inconsistent"; readonly detail: string };
 type Readiness = { readonly kind: "ready" } | { readonly kind: "wait"; readonly untilMs: number; readonly why: string } | { readonly kind: "moot"; readonly why: string } | { readonly kind: "hold"; readonly code: string; readonly detail: string };
 
@@ -301,6 +338,29 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
   let signerTrouble = 0;
   /** LIVE-5 L5-6: the last side effect withheld (one warning per distinct reason, not one per pass). */
   let withheldWhy: string | null = null;
+
+  /** JX-2B: a deterministic submission refusal stands for this account (this process): nothing new is signed, and the
+   *  refused attempt's bytes are not handed to a node again. Cleared only by a new process (the operator's restart). */
+  let refused: { readonly kind: SubmissionRefusal; readonly tx_hash: string; readonly why: string } | null = null;
+  const SUBMISSION_KEY = "submission";
+
+  /** JX-2B: a node refused `attempt` deterministically (`submissionRefusalOf`): stop the account's submissions and page
+   *  at once (F-L5-16 WAIT + PAGE, never a hold). The refused answer itself is already written on the attempt. */
+  function refuseSubmissions(intent: ChainIntentRecord, attempt: ChainAttempt, kind: SubmissionRefusal, answer: TxResultView): void {
+    const action =
+      kind === "insufficient-funds"
+        ? `fund the relayer account ${deps.account.address} (fee ${attempt.fee.amount}${attempt.fee.denom} unpayable)`
+        : `raise the configured gas price to the chain's minimum (fee ${attempt.fee.amount}${attempt.fee.denom} for gas ${attempt.gas_limit} refused)`;
+    /* The operator's action first: the status and the page carry the first 200 characters. */
+    const why = `submissions refused (${kind}, sdk/${answer.code}): ${action}, then restart the relayer -- nothing new is signed on this account; the node refused ${intent.op.kind} of ${intent.game_id} before inclusion: ${answer.raw_log.slice(0, 160)}`;
+    const first = refused === null || refused.tx_hash !== attempt.tx_hash;
+    refused = { kind, tx_hash: attempt.tx_hash, why };
+    lastError = why;
+    if (first) {
+      audit("chain.submission-refused", { game_id: intent.game_id, intent_id: intent.intent_id, op: intent.op.kind, tx_hash: attempt.tx_hash, sequence: attempt.sequence, kind, code: answer.code, codespace: answer.codespace, fee: attempt.fee.amount, gas_limit: attempt.gas_limit, log: answer.raw_log.slice(0, 200) });
+    }
+    watch(SUBMISSION_KEY, "submission-refused", { game_id: intent.game_id, intent_id: intent.intent_id, op: intent.op.kind, why, immediate: true });
+  }
 
   /** LIVE-5 L5-6: the relayer role's word, at the LAST responsible moment before an external side effect. `false`: the
    *  side effect does not happen now -- nothing is written for it and no failure budget is spent (a stored attempt stays
@@ -700,15 +760,31 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
           observed_at: at,
           resolved_height: proof.height,
         };
-        const next = await write(intent, withAttemptPatch(intent, patch, at, { failed: true }));
-        if (next !== null) audit("chain.attempt-resolved", { game_id: intent.game_id, intent_id: intent.intent_id, tx_hash: attempt.tx_hash, phase: "dead", proof: "expiry-passed" });
+        /* JX-2B: an attempt whose last answer was a deterministic refusal (never accepted) died of the ACCOUNT's
+           condition, not of anything the intent can retry: no intent budget (F-L5-17). Read from the durable attempt, so
+           a restart decides it the same way. Every other expiry death is counted -- and (D-1) compared with the budget. */
+        const refusedAtDeath = attempt.phase === "signed" && attempt.broadcast !== null && submissionRefusalOf(attempt.broadcast) !== null;
+        const next = await write(intent, withAttemptPatch(intent, patch, at, { failed: !refusedAtDeath }));
+        if (next !== null) audit("chain.attempt-resolved", { game_id: intent.game_id, intent_id: intent.intent_id, tx_hash: attempt.tx_hash, phase: "dead", proof: "expiry-passed", ...(refusedAtDeath ? { refused: true } : {}) });
+        if (next !== null && !refusedAtDeath && next.retry.failures >= failureBudget) {
+          const answered = attempt.broadcast === null ? "never answered by a node" : `last CheckTx ${attempt.broadcast.codespace || "-"}/${attempt.broadcast.code}`;
+          await hold(next, "chain-intent-held", `${failureBudget} consecutive attempts failed; the last expired unincluded (${answered})`);
+        }
         return next;
       }
       return intent; // the sequence moved between the reads: the next pass sees it consumed
     }
-    /* Still includable: rebroadcast THE SAME BYTES (same hash) when it has not been handed to a node lately. */
+    /* JX-2B: bytes a node refused deterministically are not handed to a node again by this process (the account's
+       condition stands until the operator corrects it and restarts the relayer); the attempt is only observed. */
+    if (refused !== null && refused.tx_hash === attempt.tx_hash) {
+      return write(intent, withAttemptPatch(intent, { unknown_observations: attempt.unknown_observations + 1, observed_at: at }, at));
+    }
+    /* Still includable: rebroadcast THE SAME BYTES (same hash) when it has not been handed to a node lately. JX-2B: at
+       every pass only while no node has answered for it (never sent, or the last send failed in transport); an answered
+       attempt -- accepted, or refused for a reason this build does not name -- waits the rebroadcast spacing. */
     const lastSent = attempt.broadcast?.at ?? 0;
-    if (attempt.phase === "signed" || at - lastSent >= rebroadcastMs) {
+    const unanswered = attempt.phase === "signed" && (attempt.broadcast === null || attempt.broadcast.codespace === "transport");
+    if (unanswered || at - lastSent >= rebroadcastMs) {
       /* L5-6: the same bytes, but still a side effect -- a task that is no longer (shown to be) the relayer withholds it:
          the attempt stays live, unchanged, for the next pass or the next relayer. */
       if (!(await mayAct(attempt.phase === "signed" ? "broadcast" : "rebroadcast", intent))) return intent;
@@ -748,6 +824,10 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
       withAttemptPatch(intent, { phase: accepted ? "broadcast" : attempt.phase, broadcast: { at, code: answer.code, codespace: answer.codespace, log: answer.raw_log.slice(0, 300) }, broadcasts: attempt.broadcasts + 1 }, at),
     );
     audit("chain.broadcast", { game_id: intent.game_id, intent_id: intent.intent_id, tx_hash: attempt.tx_hash, sequence: attempt.sequence, code: answer.code, codespace: answer.codespace, accepted });
+    /* JX-2B: a deterministic refusal (the answer is on the attempt now, or the write's failure ends the pass anyway) stops
+       the account's submissions and pages. */
+    const refusal = accepted ? null : submissionRefusalOf(answer);
+    if (refusal !== null) refuseSubmissions(intent, attempt, refusal, answer);
     return next;
   }
 
@@ -781,7 +861,7 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
   const backoffMs = (failures: number) => Math.min(10 * 60_000, pollMs * 2 ** Math.min(failures, 8));
 
   /** Decides a pending intent: confirm / supersede / hold / wait, or sign and broadcast one attempt. */
-  async function advance(intent: ChainIntentRecord): Promise<"in-flight" | "settled" | "waiting" | "backoff" | "stop"> {
+  async function advance(intent: ChainIntentRecord): Promise<"in-flight" | "settled" | "waiting" | "backoff" | "gated" | "stop"> {
     if (!ownInstance(intent)) {
       /* Review #5 / L4-4: made for another deployment (a restart re-pointed the server): never submitted here, never
          confirmed from this deployment's state -- and never held either: it is another pool's work, skipped in memory. */
@@ -858,6 +938,13 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
     if (admission.kind === "hold") {
       await hold(intent, admission.code, admission.why);
       return "settled";
+    }
+    /* JX-2B: a deterministic submission refusal stands for this account: nothing new is signed (nor simulated, nor
+       journalled) until the operator has corrected it and restarted the relayer. Nothing is written; no budget is spent.
+       The chain state above was still read, so an intent the chain has confirmed or made moot resolves meanwhile. */
+    if (refused !== null) {
+      lastError = refused.why;
+      return "gated";
     }
 
     /* 1. The authoritative account sequence, and the expiry height. */
@@ -1084,6 +1171,7 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
     const troubledUntil = (intent: ChainIntentRecord) => troubled.get(intent.intent_id)?.nextAt ?? 0;
     const runnable = refreshed.filter((intent) => intent.status === "pending" && intent.retry.next_at <= now);
     let backedOff = 0;
+    let gated = 0;
     for (const intent of runnable) {
       let outcome: Awaited<ReturnType<typeof advance>>;
       const notesBefore = troubleNotes;
@@ -1110,10 +1198,14 @@ export function createJunoRelayer(deps: RelayerDeps): Relayer {
       }
       /* This advance got past whatever failed before it (it noted no new trouble): the operational condition is over. */
       if (outcome === "backoff") backedOff += 1;
-      if (troubleNotes === notesBefore && outcome !== "stop" && outcome !== "backoff" && !writeFailed && troubled.has(intent.intent_id)) forgetTrouble(intent.intent_id);
+      if (outcome === "gated") gated += 1;
+      if (troubleNotes === notesBefore && outcome !== "stop" && outcome !== "backoff" && outcome !== "gated" && !writeFailed && troubled.has(intent.intent_id)) forgetTrouble(intent.intent_id);
       if (outcome === "in-flight" || outcome === "stop" || writeFailed) return pollMs;
     }
     const waiting = refreshed.filter((intent) => intent.status === "pending").map((intent) => Math.max(intent.retry.next_at, troubledUntil(intent)));
+    /* JX-2B: the account's submissions are refused and nothing moved this pass: look again at the idle interval (the
+       chain state of the waiting intents is still read then; nothing is signed until a restart). */
+    if (gated > 0 && writesThisPass === 0) return idleMs;
     /* L6-7 (review round 3): every runnable intent is backing off and nothing moved -- the next pass comes when the first
        backoff ends (at least `pollMs`, at most `idleMs`, so their chain state is still read every idle interval). */
     if (runnable.length > 0 && backedOff === runnable.length && writesThisPass === 0) return Math.max(pollMs, Math.min(idleMs, Math.min(...runnable.map(troubledUntil)) - now));

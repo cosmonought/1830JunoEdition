@@ -176,7 +176,7 @@ Any failure: STOP. **Rollback before G:**
     - `aws ec2 describe-vpc-endpoints` → none;
     - `aws ec2 describe-addresses` → exactly the host's EIP;
     - `aws ec2 describe-instances` (tag `gs:component=single-host`) → exactly 1;
-    - `aws cloudwatch describe-alarms --alarm-name-prefix gs-staging` → the host's 4.
+    - `aws cloudwatch describe-alarms --alarm-name-prefix gs-staging` → the host's 5.
 25. **Billing:**
     - Cost Explorer daily for 5–7 days, grouped by service, with the `gs:cost` tag activated;
     - the budget's $15 / $20 / $25 / $30 alerts active.
@@ -204,7 +204,7 @@ Any failure: STOP. **Rollback before G:**
 | **RETIRE** | p1/p2 flip (`flip`, `flip-alarms`, `flip-drill`) | One pool |
 | RETIRE | ALB target-group / listener-rule checks (`checkPoolListenerRules`, target health) | No ALB |
 | RETIRE | ECS drain-specific assertions (stop-first 0/100, AZ rebalancing, circuit breaker, `drain-pool`) | No ECS. Drain-first survives as `gs-stop`. |
-| RETIRE | Multi-pool alarm checks (the L6-5B per-pool / primary matrix, suppressors, composites) | The four host alarms replace them |
+| RETIRE | Multi-pool alarm checks (the L6-5B per-pool / primary matrix, suppressors, composites) | The five host alarms replace them |
 
 **Not yet automated on the host** (follow-up): the control-plane half of `awsDeploy verify` and `capture-evidence` describe ECS and the ALB. For the host, the evidence is:
 - the Terraform plan and state;

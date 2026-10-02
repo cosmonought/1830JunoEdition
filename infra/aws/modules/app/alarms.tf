@@ -59,7 +59,7 @@ locals {
     merge([for pool in local.pool_ids : { for a in local.alarm_specs : "${pool}/${a.id}" => merge(a, { key = "${pool}/${a.id}", name = "${local.prefix}-${pool}-${a.id}", pool = pool }) if a.scope == "pool" }]...),
     { for a in local.alarm_specs : "primary/${a.id}" => merge(a, { key = "primary/${a.id}", name = "${local.prefix}-primary-${a.id}", pool = local.primary_pool }) if a.scope == "primary" },
   )
-  alarm_keys = local.ecs ? toset(keys(local.alarm_instances)) : toset([]) # COST-1: compute "none" -> the single host's own four alarms
+  alarm_keys = local.ecs ? toset(keys(local.alarm_instances)) : toset([]) # COST-1: compute "none" -> the single host's own five alarms
   alarm_actions_of = {
     page   = var.page_alarm_action_arns
     ticket = var.ticket_alarm_action_arns

@@ -168,7 +168,7 @@ run "none_keeps_the_authorities_and_the_edge" {
   }
   assert {
     condition     = length(aws_cloudwatch_metric_alarm.gs) == 0 && length(aws_cloudwatch_metric_alarm.flip_window) == 0 && length(aws_cloudwatch_composite_alarm.notify) == 0
-    error_message = "no L6-5B alarm matrix (the single host has its own four alarms)"
+    error_message = "no L6-5B alarm matrix (the single host has its own five alarms)"
   }
   assert {
     condition     = output.load_balancer_arn == null && output.cluster_name == null && output.alarms == {}

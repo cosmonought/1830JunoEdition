@@ -32,5 +32,9 @@ module "ledger" {
   backup               = var.backup
   signing_keys_enabled = var.signing_keys_enabled
   relayer_key_count    = var.relayer_key_count
-  tags                 = var.tags
+
+  # COST-1: the single host's app role beside (then instead of) the ECS task role.
+  app_runtime_role_arns    = var.app_runtime_role_arns
+  ecs_task_role_authorized = var.ecs_task_role_authorized
+  tags                     = var.tags
 }

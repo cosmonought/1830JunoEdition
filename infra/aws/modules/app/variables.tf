@@ -210,6 +210,30 @@ variable "edge_diagnostic_staging" {
   }
 }
 
+variable "compute" {
+  description = <<-EOT
+    COST-1: where the application runs.
+      "ecs"   (default) the LIVE-5/LIVE-6 topology: one Fargate service per pool behind the ALB, the task and execution
+              roles, the task/ALB security groups, the VPC endpoints and the L6-5B alarm matrix -- unchanged.
+      "none"  NO compute here: the single host (stacks/single-host) serves. This stack then keeps only the authorities
+              and the edge -- the game and identity tables, the SSM documents, the ECR repository, the bootstrap /
+              operator / recovery roles and the CloudFront distribution (its /gs* origin = edge.alb_origin_domain_name,
+              now the single host's origin name). Every ECS-era fixed-cost resource is planned for DESTRUCTION: switch
+              only after the pools are drained and the host serves (infra/aws/SINGLE_HOST_MIGRATION.md step I).
+              With "none", `start_services = true` means "the single host serves": the plan then reads SYSTEM/ROUTING
+              and SYSTEM/GENERATION and refuses a runtime document that names an unprepared / unadopted table or a
+              routing without the primary -- the gates the ECS services carried. With "none" and `start_services =
+              false` those gates are OFF: use false only for the first bootstrap apply of a new environment, before
+              any host serves (SINGLE_HOST_MIGRATION.md step 20 requires true).
+  EOT
+  type        = string
+  default     = "ecs"
+  validation {
+    condition     = contains(["ecs", "none"], var.compute)
+    error_message = "compute must be \"ecs\" or \"none\"."
+  }
+}
+
 variable "network" {
   description = <<-EOT
     The existing VPC (this slice does not design networks).
@@ -229,8 +253,8 @@ variable "network" {
     juno_egress_ports          = optional(list(number), [443])
   })
   validation {
-    condition     = length(var.network.task_subnet_ids) >= 1 && length(var.network.alb_subnet_ids) >= 2
-    error_message = "At least one task subnet and two ALB subnets (an ALB spans two Availability Zones)."
+    condition     = var.compute == "none" || (length(var.network.task_subnet_ids) >= 1 && length(var.network.alb_subnet_ids) >= 2)
+    error_message = "At least one task subnet and two ALB subnets (an ALB spans two Availability Zones) -- unless compute is \"none\"."
   }
 }
 

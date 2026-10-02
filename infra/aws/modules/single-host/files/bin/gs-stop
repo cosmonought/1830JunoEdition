@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# /opt/gs/bin/gs-stop [--until-deploy] -- COST-1: drain and stop the game server (graceful SIGTERM, <= 120 s). With
+# --until-deploy it also stays stopped across reboots until the next gs-deploy / gs-rollback (a drained window: a
+# relayer rotation, a restore, a migration step). Caddy keeps running and answers 503 meanwhile.
+source "$(dirname "$0")/gs-lib.sh"
+require_root
+take_lock
+stop_server
+if [ "${1:-}" = "--until-deploy" ]; then
+  systemctl disable --quiet gs-server.service
+  say "the game server stays stopped across reboots until the next gs-deploy / gs-rollback"
+fi

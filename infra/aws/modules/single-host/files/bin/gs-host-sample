@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# /opt/gs/bin/gs-host-sample -- COST-1: one host sample per minute (gs-host-sample.timer) for the memory measurement plan
+# and the pressure alarm. Appends one JSON line to /var/log/gs-measure/host-YYYYMMDD.jsonl (kept 30 days):
+#   host memory available / total, swap used / total, root-disk use, load average, and the game-server container's
+#   cgroup memory (current, peak), CPU time and OOM-kill count.
+# Under PRESSURE (memory available < 10 %, swap used > 50 % of swap, disk > 85 %, or a NEW OOM kill) it publishes ONE
+# 18Cosmos/Host HostPressure datapoint (at most every 5 minutes) for the pressure alarm. It never touches the server.
+source "$(dirname "$0")/gs-lib.sh"
+load_env_file "$GS_ETC/host.env"
+out_dir="${GS_MEASURE_DIR:-/var/log/gs-measure}"; state_dir="${GS_STATE_DIR:-/var/lib/gs}"
+mkdir -p "$out_dir" "$state_dir"
+
+meminfo() { awk -v k="$1:" '$1 == k { print $2; exit }' /proc/meminfo; }
+mem_total="$(meminfo MemTotal)"; mem_avail="$(meminfo MemAvailable)"
+swap_total="$(meminfo SwapTotal)"; swap_free="$(meminfo SwapFree)"; swap_used=$((swap_total - swap_free))
+load1="$(cut -d' ' -f1 /proc/loadavg)"
+disk_pct="$(df -P / | awk 'NR == 2 { gsub("%", "", $5); print $5 }')"
+
+c_current=null; c_peak=null; c_oom=null; c_cpu_usec=null
+id="$(docker container inspect -f '{{.Id}}' gs-server 2>/dev/null || true)"
+if [ -n "$id" ]; then
+  for cg in "/sys/fs/cgroup/system.slice/docker-$id.scope" "/sys/fs/cgroup/docker/$id"; do
+    if [ -d "$cg" ]; then
+      c_current="$(cat "$cg/memory.current" 2>/dev/null || echo null)"
+      c_peak="$(cat "$cg/memory.peak" 2>/dev/null || echo null)"
+      c_oom="$(awk '$1 == "oom_kill" { print $2 }' "$cg/memory.events" 2>/dev/null || echo null)"
+      c_cpu_usec="$(awk '$1 == "usage_usec" { print $2 }' "$cg/cpu.stat" 2>/dev/null || echo null)"
+      break
+    fi
+  done
+fi
+# OOM kills survive container restarts in the kernel log; count them host-wide too.
+host_oom="$( (journalctl -k --since '-2min' --no-pager 2>/dev/null || true) | grep -c -i 'out of memory\|oom-kill' || true)"
+
+now="$(date -u +%s)"
+printf '{"t":%s,"mem_total_kb":%s,"mem_available_kb":%s,"swap_total_kb":%s,"swap_used_kb":%s,"load1":%s,"disk_used_pct":%s,"server_mem_current":%s,"server_mem_peak":%s,"server_oom_kills":%s,"server_cpu_usec":%s,"host_oom_lines_2min":%s}\n' \
+  "$now" "$mem_total" "$mem_avail" "$swap_total" "$swap_used" "$load1" "$disk_pct" "${c_current:-null}" "${c_peak:-null}" "${c_oom:-null}" "${c_cpu_usec:-null}" "${host_oom:-0}" \
+  >>"$out_dir/host-$(date -u +%Y%m%d).jsonl"
+find "$out_dir" -name 'host-*.jsonl' -mtime +30 -delete 2>/dev/null || true
+
+pressure=0; why=""
+[ "$mem_total" -gt 0 ] && [ $((mem_avail * 100 / mem_total)) -lt 10 ] && { pressure=1; why="$why memory"; }
+[ "$swap_total" -gt 0 ] && [ $((swap_used * 100 / swap_total)) -gt 50 ] && { pressure=1; why="$why swap"; }
+[ "${disk_pct:-0}" -gt 85 ] && { pressure=1; why="$why disk"; }
+[ "${host_oom:-0}" -gt 0 ] && { pressure=1; why="$why oom"; }
+if [ "$pressure" = 1 ]; then
+  last="$(cat "$state_dir/pressure.last" 2>/dev/null || echo 0)"
+  if [ $((now - last)) -ge 300 ]; then
+    echo "$now" >"$state_dir/pressure.last"
+    aws cloudwatch put-metric-data --region "$GS_REGION" --namespace "$GS_HOST_METRIC_NAMESPACE" --metric-name HostPressure \
+      --dimensions "Environment=$GS_ENVIRONMENT" --value 1 --unit Count >/dev/null 2>&1 || say "the pressure datapoint could not be published"
+    say "host pressure:$why"
+  fi
+fi

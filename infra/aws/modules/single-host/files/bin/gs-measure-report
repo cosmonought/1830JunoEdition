@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# /opt/gs/bin/gs-measure-report [DAYS] -- COST-1: summarise the host samples of the last DAYS days (default 14) for the
+# memory measurement plan. Prints JSON: sample count and span, the game-server container's PEAK memory, the host's minimum
+# available memory, maximum swap use, OOM evidence and maximum load. It DECIDES NOTHING: downsizing below 2 GB is an owner
+# decision after >= 2 weeks of representative use (infra/aws/modules/single-host/README.md "Memory measurement plan").
+source "$(dirname "$0")/gs-lib.sh"
+days="${1:-14}"
+[[ "$days" =~ ^[0-9]{1,3}$ ]] || die "DAYS must be a whole number"
+dir="${GS_MEASURE_DIR:-/var/log/gs-measure}"
+since=$(($(date -u +%s) - days * 86400))
+files=("$dir"/host-*.jsonl)
+[ -e "${files[0]}" ] || die "no samples in $dir yet"
+cat "${files[@]}" | awk -v since="$since" '
+  function num(k,   m) { if (match($0, "\"" k "\":[0-9.]+")) { m = substr($0, RSTART, RLENGTH); sub(/^[^:]*:/, "", m); return m + 0 } return -1 }
+  { t = num("t"); if (t < since) next; n++; if (first == "" || t < first) first = t; if (t > last) last = t
+    p = num("server_mem_peak"); if (p > peak) peak = p
+    c = num("server_mem_current"); if (c > cur) cur = c
+    a = num("mem_available_kb"); if (a >= 0 && (minavail == "" || a < minavail)) minavail = a
+    s = num("swap_used_kb"); if (s > maxswap) maxswap = s
+    o = num("server_oom_kills"); if (o > oom) oom = o
+    h = num("host_oom_lines_2min"); if (h > 0) hostoom += h
+    l = num("load1"); if (l > load) load = l
+    tot = num("mem_total_kb") }
+  END { printf "{\"samples\":%d,\"span_hours\":%.1f,\"server_mem_peak_mb\":%.0f,\"server_mem_max_current_mb\":%.0f,\"host_mem_total_mb\":%.0f,\"host_mem_min_available_mb\":%.0f,\"swap_max_used_mb\":%.0f,\"server_oom_kills\":%d,\"host_oom_log_lines\":%d,\"load1_max\":%.2f}\n",
+          n, (last - first) / 3600, peak / 1048576, cur / 1048576, tot / 1024, minavail / 1024, maxswap / 1024, oom, hostoom, load }'

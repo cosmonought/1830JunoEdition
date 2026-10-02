@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# /opt/gs/bin/gs-deploy <sha256:digest> <build-id> [--measure] -- COST-1: deploy one release onto this host.
+#   1. pull the image BY DIGEST and prove its architecture   (nothing is stopped if this fails)
+#   2. same release already serving and ready -> nothing to do (idempotent)
+#   3. drain: SIGTERM -> the runtime's graceful shutdown -> exit 0 (<= 120 s); no server container left
+#   4. the release file becomes the new one; the old one is kept as release.previous.env (gs-rollback)
+#   5. start: gs-preflight, then the new process TAKES THE POOL (a new epoch: any straggler is fenced), the identity
+#      writer and relayer roles, loads, and runs its first money sweep
+#   6. readiness (/gs/readyz 200) within 300 s; Caddy reopens traffic by itself (its health check)
+# A deploy has downtime (steps 3-6). If the new release never becomes ready it is LEFT RUNNING for diagnosis and the
+# command fails; rolling back is a deliberate `gs-rollback`.
+source "$(dirname "$0")/gs-lib.sh"
+require_root
+digest="${1:-}"; build="${2:-}"; measure=0
+[ "${3:-}" = "--measure" ] && measure=1
+valid_digest "$digest" || die "usage: gs-deploy <sha256:64-hex digest> <build-id> [--measure]"
+valid_build "$build" || die "the build id must match $BUILD_RE"
+load_env_file "$GS_ETC/host.env"
+take_lock
+
+current="$GS_ETC/release.env"; previous="$GS_ETC/release.previous.env"; next="$GS_ETC/release.next.env"
+
+if [ -f "$current" ] && [ "$(release_field "$current" GS_IMAGE_DIGEST)" = "$digest" ] && [ "$(release_field "$current" BUILD_ID)" = "$build" ] \
+  && [ "$(release_field "$current" GS_MEASURE)" = "$measure" ] && systemctl is-active --quiet gs-server.service && wait_ready 0; then
+  say "build $build ($digest) is already serving and ready: nothing to do"
+  exit 0
+fi
+
+pull_release "$digest"
+write_release "$next" "$digest" "$build" "$measure"
+stop_server
+if [ -f "$current" ] && ! cmp -s "$current" "$next"; then cp -p "$current" "$previous"; fi
+mv -f "$next" "$current"
+# The HOLD (exit 3/5) is cleared only now: the pull and the drain succeeded, so a refused deploy keeps it -- and an
+# exit 3/5 during the drain wrote it after any earlier point, so clearing here covers that too.
+clear_hold
+systemctl enable --quiet gs-server.service
+systemctl reset-failed gs-server.service 2>/dev/null || true
+say "starting build $build: the new process takes the pool (any older process is fenced), then the roles, then serves"
+systemctl start gs-server.service
+if wait_ready "${GS_READY_TIMEOUT:-300}"; then
+  say "deployed: build $build ($digest) is READY"
+else
+  die "build $build did not become ready within 300 s; it is left running for diagnosis (gs-health; the log group). Roll back deliberately with gs-rollback"
+fi

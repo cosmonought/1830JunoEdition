@@ -32,7 +32,11 @@ locals {
   app_root       = "arn:${local.partition}:iam::${var.app_account_id}:root"
   ledger_root    = "arn:${local.partition}:iam::${local.ledger_account}:root"
   task_role_arn  = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-app-task"
-  bootstrap_arn  = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-bootstrap"
+  # COST-1: the app RUNTIME roles -- the ECS task role (by convention, while `ecs_task_role_authorized`) and any role named
+  # in `app_runtime_role_arns` (the single host's gs-<env>-host-app). Each gets EXACTLY the task role's ledger and key
+  # grants; with the defaults this is [task_role_arn] and every policy is byte-for-byte as before.
+  app_runtime_role_arns = distinct(concat(var.ecs_task_role_authorized ? [local.task_role_arn] : [], var.app_runtime_role_arns))
+  bootstrap_arn         = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-bootstrap"
   # LIVE-6 L6-2: the operator (`gamesDoctor aws`, read only here) and the recovery (`npm run recovery`, L6-4) roles.
   operator_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-operator"
   recovery_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-recovery"
@@ -106,7 +110,7 @@ data "aws_iam_policy_document" "ledger_resource" {
     condition {
       test     = "ArnEquals"
       variable = "aws:PrincipalArn"
-      values   = [local.task_role_arn]
+      values   = local.app_runtime_role_arns
     }
   }
 
@@ -122,7 +126,7 @@ data "aws_iam_policy_document" "ledger_resource" {
     condition {
       test     = "ArnEquals"
       variable = "aws:PrincipalArn"
-      values   = [local.task_role_arn]
+      values   = local.app_runtime_role_arns
     }
     # Defence in depth (the fences are the safety): the task never writes APPGEN or APPGEN#HISTORY (L6-2 review M4: a
     # pre-created GEN#<N+1> would block that adoption for good); the bootstrap and the recovery role do.
@@ -448,7 +452,7 @@ data "aws_iam_policy_document" "signing" {
     condition {
       test     = "ArnEquals"
       variable = "aws:PrincipalArn"
-      values   = [local.task_role_arn]
+      values   = local.app_runtime_role_arns
     }
   }
 
@@ -464,7 +468,7 @@ data "aws_iam_policy_document" "signing" {
     condition {
       test     = "ArnEquals"
       variable = "aws:PrincipalArn"
-      values   = [local.task_role_arn]
+      values   = local.app_runtime_role_arns
     }
     condition {
       test     = "StringEquals"

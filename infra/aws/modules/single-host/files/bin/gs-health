@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# /opt/gs/bin/gs-health [--wait SECONDS] -- COST-1: one line of host health (no secret). Exit 0 only when /gs/readyz is
+# 200; --wait polls for up to SECONDS.
+source "$(dirname "$0")/gs-lib.sh"
+load_env_file "$GS_ETC/host.env"
+wait_for=0
+[ "${1:-}" = "--wait" ] && wait_for="${2:-0}"
+[[ "$wait_for" =~ ^[0-9]{1,4}$ ]] || die "--wait takes whole seconds"
+ready=1; wait_ready "$wait_for" || ready=0
+healthz="$(http_code "$(server_url)/gs/healthz")"
+readyz="$(http_code "$(server_url)/gs/readyz")"
+origin="$(curl -s -o /dev/null -m 5 -w '%{http_code}' --resolve "$GS_ORIGIN_HOSTNAME:443:127.0.0.1" "https://$GS_ORIGIN_HOSTNAME/gs/readyz" 2>/dev/null || printf '000')"
+build="$(release_field "$GS_ETC/release.env" BUILD_ID)"
+hold="none"; [ -e "$(hold_file)" ] && hold="$(tr -d '\n"' <"$(hold_file)")"
+printf '{"server":"%s","caddy":"%s","build":"%s","hold":"%s","healthz":"%s","readyz":"%s","origin_tls_readyz":"%s"}\n' \
+  "$(systemctl is-active gs-server.service 2>/dev/null || true)" "$(systemctl is-active gs-caddy.service 2>/dev/null || true)" \
+  "${build:-none}" "$hold" "$healthz" "$readyz" "$origin"
+[ "$ready" = 1 ]

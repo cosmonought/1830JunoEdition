@@ -59,7 +59,7 @@ locals {
     merge([for pool in local.pool_ids : { for a in local.alarm_specs : "${pool}/${a.id}" => merge(a, { key = "${pool}/${a.id}", name = "${local.prefix}-${pool}-${a.id}", pool = pool }) if a.scope == "pool" }]...),
     { for a in local.alarm_specs : "primary/${a.id}" => merge(a, { key = "primary/${a.id}", name = "${local.prefix}-primary-${a.id}", pool = local.primary_pool }) if a.scope == "primary" },
   )
-  alarm_keys = toset(keys(local.alarm_instances))
+  alarm_keys = local.ecs ? toset(keys(local.alarm_instances)) : toset([]) # COST-1: compute "none" -> the single host's own four alarms
   alarm_actions_of = {
     page   = var.page_alarm_action_arns
     ticket = var.ticket_alarm_action_arns
@@ -68,7 +68,7 @@ locals {
 }
 
 resource "aws_cloudwatch_metric_alarm" "flip_window" {
-  for_each = toset(local.pool_ids)
+  for_each = local.ecs ? toset(local.pool_ids) : toset([])
 
   alarm_name          = local.suppressor_name[each.key]
   alarm_description   = "LIVE-6 L6-5B: ALARM exactly while a planned flip window (L6-2) including pool ${each.key} is open and unexpired. It has no actions: it only suppresses the ACTIONS of this pool's suppressible composites."

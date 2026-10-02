@@ -38,6 +38,8 @@
 # and ec2:DescribeSecurityGroupRules (bootstrap role). The task role has no "*" resource.
 
 data "aws_iam_policy_document" "ecs_tasks_assume" {
+  count = local.ecs_one
+
   statement {
     actions = ["sts:AssumeRole"]
     principals {
@@ -62,12 +64,16 @@ data "aws_iam_policy_document" "ecs_tasks_assume" {
 /* ------------------------------------------------------------------ */
 
 resource "aws_iam_role" "execution" {
+  count = local.ecs_one
+
   name               = local.execution_role_name
-  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume[0].json
   tags               = local.tags
 }
 
 data "aws_iam_policy_document" "execution" {
+  count = local.ecs_one
+
   statement {
     sid       = "EcrAuthTokenUnscopable"
     actions   = ["ecr:GetAuthorizationToken"]
@@ -86,9 +92,11 @@ data "aws_iam_policy_document" "execution" {
 }
 
 resource "aws_iam_role_policy" "execution" {
+  count = local.ecs_one
+
   name   = "ecs-execution"
-  role   = aws_iam_role.execution.id
-  policy = data.aws_iam_policy_document.execution.json
+  role   = aws_iam_role.execution[0].id
+  policy = data.aws_iam_policy_document.execution[0].json
 }
 
 /* ------------------------------------------------------------------ */
@@ -96,12 +104,16 @@ resource "aws_iam_role_policy" "execution" {
 /* ------------------------------------------------------------------ */
 
 resource "aws_iam_role" "task" {
+  count = local.ecs_one
+
   name               = local.task_role_name
-  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume.json
+  assume_role_policy = data.aws_iam_policy_document.ecs_tasks_assume[0].json
   tags               = local.tags
 }
 
 data "aws_iam_policy_document" "task" {
+  count = local.ecs_one
+
   # --- game table: the L5-2 adapters, L5-3 ownership, the L5-6 relayer mirror --------------------------------------
   statement {
     sid       = "GameTableReadAndCheck"
@@ -187,9 +199,11 @@ data "aws_iam_policy_document" "task" {
 }
 
 resource "aws_iam_role_policy" "task" {
+  count = local.ecs_one
+
   name   = "gs-runtime"
-  role   = aws_iam_role.task.id
-  policy = data.aws_iam_policy_document.task.json
+  role   = aws_iam_role.task[0].id
+  policy = data.aws_iam_policy_document.task[0].json
 }
 
 /* ------------------------------------------------------------------ */

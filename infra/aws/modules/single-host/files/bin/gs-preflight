@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# /opt/gs/bin/gs-preflight -- COST-1: gs-server.service's ExecStartPre. Any failed check refuses the start (fail closed).
+source "$(dirname "$0")/gs-lib.sh"
+load_env_file "$GS_ETC/host.env"
+load_env_file "$GS_ETC/release.env"
+
+# On HOLD after a proven loss / role change (gs-exit-hold): never restart by itself, not even after a reboot.
+[ ! -e "$(hold_file)" ] || die "on HOLD since $(cat "$(hold_file)" 2>/dev/null || echo 'a proven loss'): another process or host may own the pool; investigate (gamesDoctor aws status), then gs-deploy / gs-rollback clears it"
+
+valid_digest "${GS_IMAGE_DIGEST:-}" || die "release.env: GS_IMAGE_DIGEST must be sha256:<64 hex> (an image is only ever run by digest)"
+valid_build "${BUILD_ID:-}" || die "release.env: BUILD_ID must match $BUILD_RE"
+
+# References only: the instance role is the ONLY credential source; AWS mode has no data directory and no file escrow config.
+if grep -Eq '^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AWS_PROFILE|AWS_SHARED_CREDENTIALS_FILE|AWS_CONFIG_FILE|AWS_WEB_IDENTITY_TOKEN_FILE|AWS_CONTAINER_CREDENTIALS_FULL_URI|DATA_DIR|ESCROW_JUNO_CONFIG)=' \
+  "$GS_ETC/server.env" "$GS_ETC/release.env" "$GS_ETC/host.env"; then
+  die "a credential, data-directory or file-escrow setting is present in $GS_ETC (the instance role is the only credential source)"
+fi
+grep -qx 'GS_STORAGE=aws' "$GS_ETC/server.env" || die "server.env must set GS_STORAGE=aws (the single host never runs file storage)"
+grep -qx 'GS_MODE=production' "$GS_ETC/server.env" || die "server.env must set GS_MODE=production"
+
+# This host must hold the serving Elastic IP: a stale or stray host (an old instance started again, a copy) never starts
+# the server, so it never takes the pool back from the host that serves.
+token="$(imds_token)" || die "no IMDSv2 token (IMDSv2 is required)"
+address="$(imds_get "$token" public-ipv4)" || die "IMDS has no public-ipv4 for this host"
+[ "$address" = "$GS_EXPECTED_PUBLIC_IP" ] || die "this host's public address is not the serving Elastic IP"
+
+# One server per host.
+state="$(docker container inspect -f '{{.State.Status}}' gs-server 2>/dev/null || printf 'absent')"
+case "$state" in
+  absent) ;;
+  running | restarting | paused) die "a gs-server container is already $state (one server per host)" ;;
+  *) docker rm gs-server >/dev/null ;;
+esac
+
+# The release image is present, pinned and of this host's architecture.
+ref="$(image_ref "$GS_IMAGE_DIGEST")"
+platform="$(image_platform "$ref")" || die "the release image is not present (gs-deploy pulls it before it stops anything)"
+[ "$platform" = "linux/$GS_ARCH" ] || die "the release image is $platform; this host is linux/$GS_ARCH"
+
+say "preflight passed: build $BUILD_ID ($GS_IMAGE_DIGEST, linux/$GS_ARCH)"

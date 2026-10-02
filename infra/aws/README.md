@@ -7,6 +7,15 @@ restates what the runtime already requires.
 **What exists is DEFINED and TESTED, not DEPLOYED.** No AWS resource was created by L5-8. The first real deployment
 belongs to the LIVE-6 staging gate.
 
+> **COST-1 (2026-10-02): the low-cost single-host topology.** The owner's hard ceiling is **$30/month** for the whole
+> recurring infrastructure (target <= $20): `docs/hosting-budget.md`, `infra/aws/COST_BUDGET.json` (pinned by
+> `server/src/aws/deploy/cost1SingleHost.test.ts`). The ECS/ALB topology below stays the default of `stacks/app`
+> (`compute = "ecs"`, unchanged); the replacement is ONE EC2 host running the same AWS-mode image against the same tables,
+> keys and documents -- `modules/single-host` + `stacks/single-host` (its README: runtime, Caddy origin, IAM, fencing,
+> deploy / rollback, observability, memory plan) -- and `stacks/app` with `compute = "none"` keeping only the tables, SSM
+> documents, ECR, the operator roles and CloudFront. The ledger authorises the host's role through `app_runtime_role_arns`.
+> The migration runbook and the certification matrix: `infra/aws/SINGLE_HOST_MIGRATION.md`. Nothing is deployed.
+
 ## Tooling
 
 **Terraform** (>= 1.9, provider `hashicorp/aws` 6.66.0, locked for linux/windows/darwin), because the repository had no
@@ -20,6 +29,10 @@ infra/aws/
                          ECS cluster + one service per pool, ALB, CloudFront policies (+ optional distribution), ECR
   modules/*/tests/       `terraform test` over a MOCKED provider (no account, no credentials)
   stacks/ledger, app/    thin roots: provider (allowed_account_ids), S3 backend (partial config), example tfvars
+  modules/single-host/   COST-1: ONE EC2 host (IAM instance profile, ENI + EIP, CloudFront-only security group), its
+                         cloud-init / systemd / Caddy / deploy scripts, five alarms, the account budget; stacks/single-host
+  single-host/           COST-1 operator side: gs-host.{ps1,sh} (SSM Run Command), build-image.{ps1,sh} (multi-arch)
+  COST_BUDGET.json       COST-1: the machine-readable budget decision (docs/hosting-budget.md)
   fixtures/              the exact documents the app module renders for its test inputs, which the server's parsers also check
   scripts/               capture-evidence.{sh,ps1} (read-only; per pool: target group health, stopped/running tasks, ACTIVE
                          revisions, and a manifest), drain-pool.{sh,ps1} (the no-overlap rollout)

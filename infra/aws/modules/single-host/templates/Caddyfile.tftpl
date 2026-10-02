@@ -1,0 +1,44 @@
+# COST-1: the single host's TLS origin for CloudFront's /gs* behaviour (rendered by Terraform).
+#   CloudFront --https--> :443 Caddy (a Let's Encrypt certificate for ${origin_hostname}) --http--> 127.0.0.1:${container_port}
+# Paths are never rewritten; query strings, cookies, Origin and the WebSocket upgrade pass through unchanged.
+{
+	admin off
+%{ if acme_email != null ~}
+	email ${acme_email}
+%{ endif ~}
+	# Port 443 admits ONLY CloudFront's origin-facing servers (the security group), so the X-Forwarded-For CloudFront
+	# sends is kept and Caddy APPENDS CloudFront's address: "client, cloudfront" -- the same two hops the ALB produced
+	# (GS_TRUSTED_PROXY_HOPS=2). Caddy's default would REPLACE it with CloudFront's address alone.
+	servers {
+		trusted_proxies static 0.0.0.0/0 ::/0
+	}
+	# 443 is CloudFront-only, so Let's Encrypt validates over HTTP-01 on port 80; TLS-ALPN-01 could never reach us.
+	cert_issuer acme {
+		disable_tlsalpn_challenge
+	}
+	# Port 80 serves the ACME challenge and 404 (below); it never redirects or proxies.
+	auto_https disable_redirects
+}
+
+${origin_hostname} {
+	@gs path /gs /gs/*
+	handle @gs {
+		reverse_proxy 127.0.0.1:${container_port} {
+			# The ALB target group's health check, kept: /gs/readyz is 200 only while this server may serve
+			# (pool writer current, identity loaded, first money sweep done, not stopping); otherwise Caddy answers 503.
+			health_uri /gs/readyz
+			health_interval 5s
+			health_timeout 3s
+			health_status 200
+			# WebSockets and streamed answers: never buffered.
+			flush_interval -1
+		}
+	}
+	handle {
+		respond 404
+	}
+}
+
+http://${origin_hostname} {
+	respond 404
+}

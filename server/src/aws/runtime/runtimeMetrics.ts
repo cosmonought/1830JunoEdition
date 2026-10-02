@@ -315,13 +315,115 @@ export function buildEmfRecord(context: EmfContext, at: number, record: MetricRe
   return out;
 }
 
-/** The sink an AWS task writes through: one EMF line per record (`write` is stdout in `awsMain.ts`). */
-export function createEmfSink(options: { readonly context: EmfContext; readonly now: () => number; readonly write: (line: string) => void }): MetricSink {
+/* ------------------------------------------------------------------ */
+/* COST-1: the metric PROFILE (which records CloudWatch turns into metrics) */
+/* ------------------------------------------------------------------ */
+//
+// CloudWatch bills every extracted series ($0.30 / metric-month). The full L6-5A/L6-5B catalog is ~38 continuously
+// published series per serving task -- more than a third of the single-host budget (docs/hosting-budget.md). The
+// `single-host` profile keeps EVERY record line and every value in it (Logs Insights still reads them all), but tells
+// CloudWatch to extract only two DERIVED series, under the one dimension set [Environment]:
+//   HostHealthProblems  (gauge, every `task-status` record) the number of standing problems this tick: not ready, the pool
+//                       writer unconfirmed, a non-primary (standby) task, not the identity writer (no `Primary`), the money
+//                       sweep stale (>= L6-5B A5's 180 s), the relayer not usable, escrow not active, the relayer paging,
+//                       money games of a restored table still unverified (L6-5B R3), and the signer unavailable this tick
+//                       (KMS transient failures or withheld signatures with no successful Sign -- L6-5B A10's condition).
+//                       0 when healthy. Its alarm treats missing data as breaching, so it is also the heartbeat.
+//   HostCriticalEvents  (counter, only when > 0) the sum of the incident counters on the record: a task loss (any cause),
+//                       an uncertain store, a refused start, a failed sweep pass or game, a relayer takeover not taken, a
+//                       KMS refusal / invalid answer / other failure, a money game held journal-ahead.
+// A record with neither derived value is written WITHOUT `_aws` (a plain JSON log line: nothing is extracted from it).
+// `full` (the default; the ECS deployment) is byte-for-byte the L6-5A/L6-5B output. The profile changes what is
+// MEASURED, never what is decided: no runtime decision reads a metric (see the header).
+
+/** The environment variable that selects the profile: absent or `full` (the default), or `single-host`. */
+export const METRICS_PROFILE_ENV = "GS_METRICS_PROFILE";
+export type MetricProfile = "full" | "single-host";
+/** The single-host profile's derived series (namespace `METRIC_NAMESPACE`, dimension set [Environment]). */
+export const SINGLE_HOST_METRICS = Object.freeze({
+  HostHealthProblems: Object.freeze({ kind: "gauge", unit: "Count" }),
+  HostCriticalEvents: Object.freeze({ kind: "counter", unit: "Count" }),
+} as const);
+/** L6-5B A5's threshold: the money sweep is stale at this many seconds since its last success. */
+export const SINGLE_HOST_SWEEP_STALE_SECONDS = 180;
+/** The incident counters `HostCriticalEvents` sums (subsets such as TaskSuperseded / GenerationLost are inside TaskLost). */
+export const SINGLE_HOST_CRITICAL_COUNTERS: readonly MetricName[] = Object.freeze([
+  "TaskLost",
+  "StoreUncertain",
+  "StartupRefused",
+  "MoneySweepPassFailed",
+  "MoneySweepGamesFailed",
+  "RelayerTakeoverNotTaken",
+  "KmsRefused",
+  "KmsInvalidAnswer",
+  "KmsOtherFailure",
+  "MoneyHeldJournalAhead",
+] as const satisfies readonly MetricName[]);
+
+/** The profile from its environment value: absent or `full` -> full, `single-host` -> single-host, anything else refused. */
+export function metricsProfileSwitch(value: string | undefined): { readonly ok: true; readonly profile: MetricProfile } | { readonly ok: false; readonly reason: string } {
+  if (value === undefined || value === "full") return { ok: true, profile: "full" };
+  if (value === "single-host") return { ok: true, profile: "single-host" };
+  return { ok: false, reason: `${METRICS_PROFILE_ENV} must be absent, "full" or "single-host" (a misspelt setting is never ignored)` };
+}
+
+/** The single-host profile's derived values for one record (empty when it has neither). */
+export function singleHostDerived(record: MetricRecord): { HostHealthProblems?: number; HostCriticalEvents?: number } {
+  const value = (name: MetricName): number | undefined => {
+    const v = record.metrics[name];
+    return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined;
+  };
+  const out: { HostHealthProblems?: number; HostCriticalEvents?: number } = {};
+  if (record.event === "task-status") {
+    let problems = 0;
+    if (value("Ready") !== 1) problems += 1;
+    if (value("PoolWriterConfirmed") !== 1) problems += 1;
+    if (value("Standby") === 1) problems += 1;
+    if (value("Primary") !== 1) problems += 1;
+    const sweepAge = value("MoneySweepSecondsSinceSuccess");
+    if (sweepAge !== undefined && sweepAge >= SINGLE_HOST_SWEEP_STALE_SECONDS) problems += 1;
+    if (value("RelayerUsable") === 0) problems += 1;
+    if (value("EscrowActive") === 0) problems += 1;
+    if ((value("RelayerPaging") ?? 0) >= 1) problems += 1;
+    if ((value("RestoreUnverifiedGames") ?? 0) >= 1) problems += 1;
+    if ((value("KmsTransient") ?? 0) + (value("KmsSignWithheld") ?? 0) > 0 && (value("KmsSigns") ?? 0) === 0) problems += 1;
+    out.HostHealthProblems = problems;
+  }
+  let critical = 0;
+  for (const name of SINGLE_HOST_CRITICAL_COUNTERS) critical += value(name) ?? 0;
+  if (critical > 0) out.HostCriticalEvents = critical;
+  return out;
+}
+
+/** `buildEmfRecord` under the single-host profile: every valid value and property kept in the line; only the derived
+ *  series in the `_aws` directive; no `_aws` at all when there is nothing to extract. Null when the record is empty. */
+function buildSingleHostRecord(context: EmfContext, at: number, record: MetricRecord): Record<string, unknown> | null {
+  const full = buildEmfRecord(context, at, record);
+  if (full === null) return null;
+  const derived = singleHostDerived(record);
+  const names = (Object.keys(SINGLE_HOST_METRICS) as Array<keyof typeof SINGLE_HOST_METRICS>).filter((name) => derived[name] !== undefined);
+  const { _aws: _ignored, ...body } = full;
+  if (names.length === 0) return body;
+  const out: Record<string, unknown> = {
+    _aws: {
+      Timestamp: Math.trunc(at),
+      CloudWatchMetrics: [{ Namespace: METRIC_NAMESPACE, Dimensions: [["Environment"]], Metrics: names.map((name) => ({ Name: name, Unit: SINGLE_HOST_METRICS[name].unit })) }],
+    },
+    ...body,
+  };
+  for (const name of names) out[name] = derived[name];
+  return out;
+}
+
+/** The sink an AWS task writes through: one EMF line per record (`write` is stdout in `awsMain.ts`). `profile` (COST-1)
+ *  defaults to `full`, the L6-5A/L6-5B output unchanged. */
+export function createEmfSink(options: { readonly context: EmfContext; readonly now: () => number; readonly write: (line: string) => void; readonly profile?: MetricProfile }): MetricSink {
   let failed = 0;
+  const build = options.profile === "single-host" ? buildSingleHostRecord : buildEmfRecord;
   return {
     emit(record) {
       try {
-        const built = buildEmfRecord(options.context, options.now(), record);
+        const built = build(options.context, options.now(), record);
         if (built === null) return false;
         options.write(JSON.stringify(built));
         return true;

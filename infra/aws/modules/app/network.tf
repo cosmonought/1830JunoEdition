@@ -19,6 +19,8 @@ data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
 }
 
 resource "aws_security_group" "alb" {
+  count = local.ecs_one
+
   name        = "${local.prefix}-alb"
   description = "18Cosmos ${var.environment} ALB: HTTPS from CloudFront only"
   vpc_id      = var.network.vpc_id
@@ -26,7 +28,9 @@ resource "aws_security_group" "alb" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
-  security_group_id = aws_security_group.alb.id
+  count = local.ecs_one
+
+  security_group_id = aws_security_group.alb[0].id
   description       = "HTTPS from CloudFront origin-facing servers"
   ip_protocol       = "tcp"
   from_port         = 443
@@ -35,15 +39,19 @@ resource "aws_vpc_security_group_ingress_rule" "alb_from_cloudfront" {
 }
 
 resource "aws_vpc_security_group_egress_rule" "alb_to_tasks" {
-  security_group_id            = aws_security_group.alb.id
+  count = local.ecs_one
+
+  security_group_id            = aws_security_group.alb[0].id
   description                  = "To the game server tasks only"
   ip_protocol                  = "tcp"
   from_port                    = var.container_port
   to_port                      = var.container_port
-  referenced_security_group_id = aws_security_group.task.id
+  referenced_security_group_id = aws_security_group.task[0].id
 }
 
 resource "aws_security_group" "task" {
+  count = local.ecs_one
+
   name        = "${local.prefix}-task"
   description = "18Cosmos ${var.environment} game server tasks: the container port from the ALB only"
   vpc_id      = var.network.vpc_id
@@ -51,17 +59,19 @@ resource "aws_security_group" "task" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "task_from_alb" {
-  security_group_id            = aws_security_group.task.id
+  count = local.ecs_one
+
+  security_group_id            = aws_security_group.task[0].id
   description                  = "The game server port, from the ALB security group only"
   ip_protocol                  = "tcp"
   from_port                    = var.container_port
   to_port                      = var.container_port
-  referenced_security_group_id = aws_security_group.alb.id
+  referenced_security_group_id = aws_security_group.alb[0].id
 }
 
 resource "aws_vpc_security_group_egress_rule" "task_https" {
-  for_each          = toset([for port in distinct(concat([443], var.network.juno_egress_ports)) : tostring(port)])
-  security_group_id = aws_security_group.task.id
+  for_each          = local.ecs ? toset([for port in distinct(concat([443], var.network.juno_egress_ports)) : tostring(port)]) : toset([])
+  security_group_id = aws_security_group.task[0].id
   description       = "AWS APIs (or their VPC endpoints) and the Juno REST endpoints"
   ip_protocol       = "tcp"
   from_port         = tonumber(each.key)
@@ -74,7 +84,7 @@ resource "aws_vpc_security_group_egress_rule" "task_https" {
 /* ------------------------------------------------------------------ */
 
 resource "aws_vpc_endpoint" "gateway" {
-  for_each          = length(var.network.private_route_table_ids) == 0 ? toset([]) : toset(["dynamodb", "s3"])
+  for_each          = !local.ecs || length(var.network.private_route_table_ids) == 0 ? toset([]) : toset(["dynamodb", "s3"])
   vpc_id            = var.network.vpc_id
   service_name      = "com.amazonaws.${local.region}.${each.key}"
   vpc_endpoint_type = "Gateway"
@@ -83,7 +93,7 @@ resource "aws_vpc_endpoint" "gateway" {
 }
 
 resource "aws_security_group" "endpoints" {
-  count       = var.network.create_interface_endpoints ? 1 : 0
+  count       = local.ecs && var.network.create_interface_endpoints ? 1 : 0
   name        = "${local.prefix}-endpoints"
   description = "18Cosmos ${var.environment} interface endpoints: HTTPS from the tasks"
   vpc_id      = var.network.vpc_id
@@ -91,17 +101,17 @@ resource "aws_security_group" "endpoints" {
 }
 
 resource "aws_vpc_security_group_ingress_rule" "endpoints_from_tasks" {
-  count                        = var.network.create_interface_endpoints ? 1 : 0
+  count                        = local.ecs && var.network.create_interface_endpoints ? 1 : 0
   security_group_id            = aws_security_group.endpoints[0].id
   description                  = "HTTPS from the game server tasks"
   ip_protocol                  = "tcp"
   from_port                    = 443
   to_port                      = 443
-  referenced_security_group_id = aws_security_group.task.id
+  referenced_security_group_id = aws_security_group.task[0].id
 }
 
 resource "aws_vpc_endpoint" "interface" {
-  for_each            = var.network.create_interface_endpoints ? toset(["kms", "ssm", "logs", "ecr.api", "ecr.dkr"]) : toset([])
+  for_each            = local.ecs && var.network.create_interface_endpoints ? toset(["kms", "ssm", "logs", "ecr.api", "ecr.dkr"]) : toset([])
   vpc_id              = var.network.vpc_id
   service_name        = "com.amazonaws.${local.region}.${each.key}"
   vpc_endpoint_type   = "Interface"

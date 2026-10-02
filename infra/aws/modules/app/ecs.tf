@@ -43,6 +43,8 @@ resource "aws_ecr_repository" "server" {
 }
 
 resource "aws_ecs_cluster" "this" {
+  count = local.ecs_one
+
   name = local.prefix
 
   setting {
@@ -54,22 +56,22 @@ resource "aws_ecs_cluster" "this" {
 }
 
 resource "aws_cloudwatch_log_group" "pool" {
-  for_each          = var.pools
+  for_each          = local.ecs_pools
   name              = "/gs/${var.environment}/${each.key}"
   retention_in_days = var.log_retention_days
   tags              = merge(local.tags, { "gs:pool" = each.key })
 }
 
 resource "aws_ecs_task_definition" "pool" {
-  for_each = var.pools
+  for_each = local.ecs_pools
 
   family                   = "${local.prefix}-${each.key}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
   cpu                      = tostring(each.value.cpu)
   memory                   = tostring(each.value.memory)
-  execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = aws_iam_role.task.arn
+  execution_role_arn       = aws_iam_role.execution[0].arn
+  task_role_arn            = aws_iam_role.task[0].arn
   skip_destroy             = true # keep earlier revisions ACTIVE: the circuit breaker rolls back to them
 
   runtime_platform {
@@ -123,7 +125,7 @@ resource "aws_ecs_task_definition" "pool" {
   tags = merge(local.tags, { "gs:pool" = each.key }, local.identity_layout_tag)
 
   # Deploy order: the documents the task reads, and its role, exist before its definition.
-  depends_on = [aws_ssm_parameter.runtime, aws_ssm_parameter.juno_backend, aws_iam_role_policy.task]
+  depends_on = [aws_ssm_parameter.runtime, aws_ssm_parameter.juno_backend, aws_iam_role_policy.task[0]]
 }
 
 # The plan reads SYSTEM/ROUTING (the bootstrap's) before it creates any service: a task never repairs a missing routing
@@ -162,10 +164,10 @@ locals {
 }
 
 resource "aws_ecs_service" "pool" {
-  for_each = var.start_services ? var.pools : {}
+  for_each = var.start_services ? local.ecs_pools : {}
 
   name                = "${local.prefix}-${each.key}"
-  cluster             = aws_ecs_cluster.this.id
+  cluster             = aws_ecs_cluster.this[0].id
   task_definition     = aws_ecs_task_definition.pool[each.key].arn
   desired_count       = each.value.desired_count
   launch_type         = "FARGATE"
@@ -201,7 +203,7 @@ resource "aws_ecs_service" "pool" {
 
   network_configuration {
     subnets          = var.network.task_subnet_ids
-    security_groups  = [aws_security_group.task.id]
+    security_groups  = [aws_security_group.task[0].id]
     assign_public_ip = false
   }
 

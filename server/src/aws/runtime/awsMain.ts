@@ -36,7 +36,7 @@ import { AwsStartupError, EXIT_REFUSED, EXIT_ROLE_CHANGED, startAwsRuntime, type
 import { createAwsClients, realAwsSubstrate } from "./awsSubstrate";
 import { ssmParameterSource, type ParameterSource } from "./configSource";
 import { createConsoleOpsRecorder } from "./consoleOps";
-import { createEmfSink } from "./runtimeMetrics";
+import { createEmfSink, METRICS_PROFILE_ENV, metricsProfileSwitch } from "./runtimeMetrics";
 import { awsStartupReferences, checkEscrowConfigForAws, parseAwsRuntimeConfigText, type AwsRuntimeConfig } from "./runtimeConfig";
 
 /** Where an AWS task listens: its own interface (awsvpc -- the task's ENI, which only the load balancer's security group
@@ -145,6 +145,11 @@ export async function runAwsStorageMode(input: { readonly argv: readonly string[
     });
   }
 
+  /* COST-1: which records CloudWatch extracts as metrics -- absent / `full` (the ECS deployment, unchanged) or
+     `single-host`; anything else refused, before anything is read. It changes what is measured, never what is decided. */
+  const metricsProfile = metricsProfileSwitch(input.env[METRICS_PROFILE_ENV]);
+  if (!metricsProfile.ok) return refuse(metricsProfile.reason);
+
   let startup: AwsStartup;
   try {
     startup = await loadAwsStartup({ argv: input.argv, env: input.env, serverMode: input.server.mode, parameters: ssmParameterSource() });
@@ -167,7 +172,7 @@ export async function runAwsStorageMode(input: { readonly argv: readonly string[
   );
   const ops = createConsoleOpsRecorder({ build: input.build, task, pool: config.pool, now: () => Date.now(), write: (line) => console.log(line) });
   /* L6-5A: the metric lines (CloudWatch EMF), on the same stdout as the audit lines -- one JSON object per line. */
-  const metrics = createEmfSink({ context: { environment: config.environment, pool: config.pool }, now: () => Date.now(), write: (line) => console.log(line) });
+  const metrics = createEmfSink({ context: { environment: config.environment, pool: config.pool }, now: () => Date.now(), write: (line) => console.log(line), profile: metricsProfile.profile });
 
   try {
     runtime = await startAwsRuntime({

@@ -31,6 +31,7 @@ module "app" {
   generation                        = var.generation
   game_generations                  = var.game_generations
   generation_adoption               = var.generation_adoption
+  compute                           = var.compute
   identity_layout_version           = var.identity_layout_version
   ledger_table_arn                  = var.ledger_table_arn
   signing_keys                      = var.signing_keys

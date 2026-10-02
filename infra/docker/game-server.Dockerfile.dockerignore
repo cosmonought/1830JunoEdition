@@ -8,5 +8,6 @@
 !server/package-lock.json
 !server/tsconfig.json
 !server/src/**
+!infra/docker/check-arch-neutral.cjs
 frontend/src/**/*.test.ts
 frontend/src/**/*.test.tsx

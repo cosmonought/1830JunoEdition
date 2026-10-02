@@ -82,6 +82,36 @@ variable "relayer_key_count" {
   }
 }
 
+variable "app_runtime_role_arns" {
+  description = <<-EOT
+    COST-1: further APP RUNTIME roles (beside the ECS task role gs-<env>-app-task) that get exactly the task role's ledger
+    grants (read / condition-check; append everything but APPGEN and APPGEN#HISTORY) and its key grants (GetPublicKey;
+    Sign with ECDSA_SHA_256 over a DIGEST). ALLOWLIST: only the single host's app role gs-<env>-host-app of the app
+    account (stacks/single-host output `app_role_arn`) -- never a deploy, operator, recovery, backup or any other role,
+    present or future. Default empty: every policy is unchanged.
+  EOT
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for arn in var.app_runtime_role_arns : arn == "arn:aws:iam::${var.app_account_id}:role/gs-${var.environment}-host-app"])
+    error_message = "app_runtime_role_arns: only the single host's app role, arn:aws:iam::<app account>:role/gs-<environment>-host-app (an allowlist: no other role may sign or append to the ledger)."
+  }
+  validation {
+    condition     = length(distinct(var.app_runtime_role_arns)) == length(var.app_runtime_role_arns)
+    error_message = "app_runtime_role_arns lists each role once."
+  }
+}
+
+variable "ecs_task_role_authorized" {
+  description = "COST-1: whether the ECS task role (gs-<env>-app-task) keeps its ledger and key grants. Default true (unchanged). Set false only AFTER the ECS services are gone (infra/aws/SINGLE_HOST_MIGRATION.md step I): a later role of that name would otherwise inherit them."
+  type        = bool
+  default     = true
+  validation {
+    condition     = var.ecs_task_role_authorized || length(var.app_runtime_role_arns) > 0
+    error_message = "At least one app runtime role must remain authorised (the ECS task role or an app_runtime_role_arns entry)."
+  }
+}
+
 variable "tags" {
   description = "Tags on every resource."
   type        = map(string)

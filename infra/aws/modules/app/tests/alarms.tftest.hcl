@@ -449,7 +449,7 @@ run "operator_may_publish_only_the_flip_window_and_the_verifier_may_describe_ala
     error_message = "Nobody's flip can mute, rewrite or delete an alarm: the only lever is the bounded window datapoints."
   }
   assert {
-    condition     = alltrue([for s in data.aws_iam_policy_document.task.statement : alltrue([for a in s.actions : !startswith(a, "cloudwatch:")])])
+    condition     = alltrue([for s in data.aws_iam_policy_document.task[0].statement : alltrue([for a in s.actions : !startswith(a, "cloudwatch:")])])
     error_message = "The serving task has no CloudWatch permission at all (EMF goes through its log group)."
   }
   assert {

@@ -38,8 +38,8 @@ output "juno_parameter_arn" {
 
 output "role_arns" {
   value = {
-    task      = aws_iam_role.task.arn
-    execution = aws_iam_role.execution.arn
+    task      = local.ecs ? aws_iam_role.task[0].arn : null
+    execution = local.ecs ? aws_iam_role.execution[0].arn : null
     bootstrap = aws_iam_role.bootstrap.arn
     operator  = length(aws_iam_role.operator) == 1 ? aws_iam_role.operator[0].arn : null
     recovery  = length(aws_iam_role.recovery) == 1 ? aws_iam_role.recovery[0].arn : null
@@ -52,28 +52,28 @@ output "ecr_repository_url" {
 }
 
 output "cluster_name" {
-  value = aws_ecs_cluster.this.name
+  value = local.ecs ? aws_ecs_cluster.this[0].name : null
 }
 
 output "service_names" {
-  value = { for id, _ in var.pools : id => "${local.prefix}-${id}" }
+  value = { for id, _ in local.ecs_pools : id => "${local.prefix}-${id}" }
 }
 
 output "task_definition_families" {
-  value = { for id, _ in var.pools : id => aws_ecs_task_definition.pool[id].family }
+  value = { for id, _ in local.ecs_pools : id => aws_ecs_task_definition.pool[id].family }
 }
 
 output "security_group_ids" {
-  value = { alb = aws_security_group.alb.id, task = aws_security_group.task.id }
+  value = local.ecs ? { alb = aws_security_group.alb[0].id, task = aws_security_group.task[0].id } : null
 }
 
 output "alb_dns_name" {
   description = "Point edge.alb_origin_domain_name (a name the ALB certificate covers) at this."
-  value       = aws_lb.this.dns_name
+  value       = local.ecs ? aws_lb.this[0].dns_name : null
 }
 
 output "load_balancer_arn" {
-  value = aws_lb.this.arn
+  value = local.ecs ? aws_lb.this[0].arn : null
 }
 
 output "target_group_arns" {
@@ -111,7 +111,7 @@ output "alarms" {
       pool         = a.pool
       suppressible = a.suppressible
       notify       = a.suppressible ? "${a.name}-notify" : null
-    }
+    } if local.ecs
   }
 }
 

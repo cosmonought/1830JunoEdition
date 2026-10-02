@@ -302,3 +302,68 @@ run "a_rotation_needs_the_signing_keys" {
   }
   expect_failures = [var.relayer_key_count]
 }
+
+# ---------------------------------------------------------------- COST-1: the single host's app role
+
+run "cost1_default_authorises_only_the_ecs_task_role" {
+  command = plan
+  assert {
+    condition     = jsonencode(local.app_runtime_role_arns) == jsonencode(["arn:aws:iam::111111111111:role/gs-staging-app-task"])
+    error_message = "the defaults keep every ledger / key policy exactly as before (the ECS task role only)"
+  }
+}
+
+run "cost1_host_role_beside_the_task_role" {
+  command = plan
+  variables {
+    app_runtime_role_arns = ["arn:aws:iam::111111111111:role/gs-staging-host-app"]
+  }
+  assert {
+    condition     = jsonencode(local.app_runtime_role_arns) == jsonencode(["arn:aws:iam::111111111111:role/gs-staging-app-task", "arn:aws:iam::111111111111:role/gs-staging-host-app"])
+    error_message = "the host role gets the task role's grants, beside it (the migration window)"
+  }
+}
+
+run "cost1_host_role_instead_of_the_task_role" {
+  command = plan
+  variables {
+    app_runtime_role_arns    = ["arn:aws:iam::111111111111:role/gs-staging-host-app"]
+    ecs_task_role_authorized = false
+  }
+  assert {
+    condition     = jsonencode(local.app_runtime_role_arns) == jsonencode(["arn:aws:iam::111111111111:role/gs-staging-host-app"])
+    error_message = "after the ECS services are gone, only the host role"
+  }
+}
+
+run "cost1_never_an_operator_or_foreign_role" {
+  command = plan
+  variables {
+    app_runtime_role_arns = ["arn:aws:iam::111111111111:role/gs-staging-recovery"]
+  }
+  expect_failures = [var.app_runtime_role_arns]
+}
+
+run "cost1_never_another_account" {
+  command = plan
+  variables {
+    app_runtime_role_arns = ["arn:aws:iam::333333333333:role/gs-staging-host-app"]
+  }
+  expect_failures = [var.app_runtime_role_arns]
+}
+
+run "cost1_some_app_role_always_remains" {
+  command = plan
+  variables {
+    ecs_task_role_authorized = false
+  }
+  expect_failures = [var.ecs_task_role_authorized]
+}
+
+run "cost1_never_any_other_app_role" {
+  command = plan
+  variables {
+    app_runtime_role_arns = ["arn:aws:iam::111111111111:role/gs-staging-deploy"]
+  }
+  expect_failures = [var.app_runtime_role_arns]
+}

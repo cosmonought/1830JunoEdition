@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# /opt/gs/bin/gs-run -- COST-1: gs-server.service's ExecStart. Runs the release image in the foreground (systemd sees its
+# exit status: 0 graceful, 2 refused, 3 a proven loss, 4 a store restart, 5 a role change).
+#   read-only root filesystem, the image's unprivileged `node` user, no capabilities, no new privileges, an init process
+#   (as ECS's initProcessEnabled); published on 127.0.0.1 ONLY (Caddy proxies; the security group has no rule for it);
+#   logs to the host's CloudWatch log group (non-blocking: a logging outage never stalls the server; money truth is in
+#   DynamoDB and on chain, never in the logs). GS_MEASURE=1 (the memory measurement plan) preloads a read-only sampler.
+source "$(dirname "$0")/gs-lib.sh"
+load_env_file "$GS_ETC/host.env"
+load_env_file "$GS_ETC/release.env"
+valid_digest "${GS_IMAGE_DIGEST:-}" || die "release.env: GS_IMAGE_DIGEST invalid"
+valid_build "${BUILD_ID:-}" || die "release.env: BUILD_ID invalid"
+
+args=(
+  run --name gs-server --rm --init
+  --read-only --user node --cap-drop ALL --security-opt no-new-privileges --pids-limit 512
+  --memory "$GS_SERVER_MEMORY"
+  -p "127.0.0.1:${GS_CONTAINER_PORT}:${GS_CONTAINER_PORT}"
+  --env-file "$GS_ETC/server.env" -e "BUILD_ID=$BUILD_ID"
+  --stop-timeout 120
+  --log-driver awslogs
+  --log-opt "awslogs-region=$GS_REGION" --log-opt "awslogs-group=$GS_LOG_GROUP" --log-opt "awslogs-stream=gs-server/$BUILD_ID"
+  --log-opt mode=non-blocking --log-opt max-buffer-size=4m
+)
+if [ "${GS_MEASURE:-0}" = 1 ]; then
+  args+=(-v /opt/gs/measure:/opt/gs-measure:ro -e "NODE_OPTIONS=--require=/opt/gs-measure/gs-measure.cjs")
+fi
+exec docker "${args[@]}" "$(image_ref "$GS_IMAGE_DIGEST")"

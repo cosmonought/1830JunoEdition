@@ -1,0 +1,17 @@
+# COST-1: Caddy runs on the host network as its own unprivileged uid; it never needs the instance role. This rejects that
+# uid's traffic to the instance metadata service, so a compromised proxy cannot take the role's credentials. (The game
+# server's container reaches IMDS through the Docker bridge -- hop limit 2 -- and is not affected; root services are not.)
+[Unit]
+Description=18Cosmos single host: reject Caddy's instance-metadata traffic
+After=network-online.target
+Wants=network-online.target
+Before=gs-caddy.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/gs/host.env
+ExecStart=/bin/sh -c 'iptables -w -C OUTPUT -d 169.254.169.254/32 -m owner --uid-owner "$GS_CADDY_UID" -j REJECT 2>/dev/null || iptables -w -A OUTPUT -d 169.254.169.254/32 -m owner --uid-owner "$GS_CADDY_UID" -j REJECT'
+
+[Install]
+WantedBy=multi-user.target

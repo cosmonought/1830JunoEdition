@@ -153,3 +153,10 @@ variable "ticket_alarm_action_arns" {
   type        = list(string)
   default     = []
 }
+
+# COST-1: "ecs" (default, unchanged) or "none" -- the single host serves (stacks/single-host); this stack then keeps only
+# the tables, the SSM documents, ECR, the operator roles and CloudFront. infra/aws/SINGLE_HOST_MIGRATION.md step I.
+variable "compute" {
+  type    = string
+  default = "ecs"
+}

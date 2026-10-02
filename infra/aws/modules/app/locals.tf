@@ -38,6 +38,11 @@ locals {
 
   primary_pool = one([for id, pool in var.pools : id if pool.primary])
 
+  # COST-1: the ECS-era compute gate (var.compute). "ecs" keeps every resource and address exactly as before.
+  ecs       = var.compute == "ecs"
+  ecs_one   = local.ecs ? 1 : 0
+  ecs_pools = local.ecs ? var.pools : {}
+
   # LIVE-6 L6-2: the TRUSTED ROUTE TABLE (runtime document v2, L6-1's `routes`). Deterministic: pool p is reached at
   # /gs/p/<p> -- a plain path under /gs/ that L6-1's `routeEntryProblem` / the client's `safeRoutePath` accept (pool ids are
   # ^[a-z][a-z0-9-]{0,15}$), unique per pool, never a host. The SAME table is written into every pool's document, and each

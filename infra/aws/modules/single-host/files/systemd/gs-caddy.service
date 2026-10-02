@@ -1,0 +1,20 @@
+# COST-1: Caddy, the TLS origin CloudFront's /gs* behaviour reaches (infra/aws/modules/single-host/templates/Caddyfile.tftpl).
+# Unprivileged (uid GS_CADDY_UID, only NET_BIND_SERVICE -- granted to the caddy binary by its file capability), read-only
+# root filesystem, host network (it proxies to the game server on 127.0.0.1), its certificates in /var/lib/gs-caddy. It
+# requires the IMDS guard: without it, Caddy does not start.
+[Unit]
+Description=18Cosmos single host: Caddy (CloudFront origin TLS, reverse proxy to 127.0.0.1)
+After=docker.service gs-imds-guard.service network-online.target
+Requires=docker.service gs-imds-guard.service
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/gs/host.env
+ExecStartPre=-/usr/bin/docker rm -f gs-caddy
+ExecStart=/usr/bin/docker run --name gs-caddy --rm --network host --user ${GS_CADDY_UID}:${GS_CADDY_UID} --cap-drop ALL --cap-add NET_BIND_SERVICE --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m -v /etc/gs/Caddyfile:/etc/caddy/Caddyfile:ro -v /var/lib/gs-caddy/data:/data -v /var/lib/gs-caddy/config:/config ${GS_CADDY_IMAGE} caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+ExecStop=/usr/bin/docker stop --time 30 gs-caddy
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

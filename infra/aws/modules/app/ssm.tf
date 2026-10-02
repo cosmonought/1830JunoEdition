@@ -32,6 +32,21 @@ resource "aws_ssm_parameter" "runtime" {
       condition     = !local.escrow_enabled || var.signing_keys != null
       error_message = "escrow needs signing_keys (the ledger stack's signing_key_arns)."
     }
+    # COST-1: with compute = "none" there is no ECS service to carry the plan-time gates, so the SAME gates move here
+    # (start_services = true: the single host serves): no runtime document ever names a table that is not prepared as
+    # this generation, a restore that is not the attested adoption, or a routing that does not name the primary pool.
+    precondition {
+      condition     = local.ecs || !var.start_services || (local.routing_format == "1" && local.routing_primary == local.primary_pool)
+      error_message = "compute = none: SYSTEM/ROUTING must exist and name the primary pool before a runtime document is written for it."
+    }
+    precondition {
+      condition     = local.ecs || !var.start_services || local.marker_names_this
+      error_message = "compute = none: the serving game table's SYSTEM/GENERATION must name this generation and table (L6-4) before the runtime document names it."
+    }
+    precondition {
+      condition     = local.ecs || !var.start_services || local.marker_adoption_ok
+      error_message = "compute = none: the serving table is a restore -- set generation_adoption to what `npm run awsDeploy -- generation-gate` printed (or it is a bootstrap table and generation_adoption must be null)."
+    }
   }
 }
 

@@ -1,0 +1,35 @@
+# COST-1: the game server -- the SAME AWS-mode image the ECS task ran, one container, on this one host.
+#
+# START   only once a release exists (gs-deploy writes /etc/gs/release.env); gs-preflight refuses (fail closed) unless
+#         the image is pinned and present for this architecture, no credential / data-directory setting exists, no other
+#         gs-server container exists, and THIS host holds the serving Elastic IP (a stale or stray host never starts and
+#         never takes the pool back).
+# STOP    `docker stop --time 120`: SIGTERM -> the runtime's graceful shutdown (readiness 503 first, bounded drains,
+#         ending with the identity writer and the pool writer, L5-7) -> exit 0; SIGKILL only after 120 s (ECS's stopTimeout, kept).
+# RESTART on failure, at most 5 times in 15 minutes -- but NEVER after exit 3 (a proven loss: another process or host took
+#         the pool or a role, or the generation moved) or exit 5 (a routing role change): restarting would take the
+#         pool back from the newer owner. gs-exit-hold then writes a HOLD that gs-preflight honours across REBOOTS too;
+#         only gs-deploy / gs-rollback clears it. The health alarm pages meanwhile.
+[Unit]
+Description=18Cosmos single host: game server (AWS storage mode)
+After=docker.service gs-imds-guard.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+ConditionPathExists=/etc/gs/release.env
+StartLimitIntervalSec=900
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStartPre=/opt/gs/bin/gs-preflight
+ExecStart=/opt/gs/bin/gs-run
+ExecStop=-/usr/bin/docker stop --time 120 gs-server
+ExecStopPost=/opt/gs/bin/gs-exit-hold
+TimeoutStartSec=120
+TimeoutStopSec=150
+Restart=on-failure
+RestartSec=10
+RestartPreventExitStatus=3 5
+
+[Install]
+WantedBy=multi-user.target

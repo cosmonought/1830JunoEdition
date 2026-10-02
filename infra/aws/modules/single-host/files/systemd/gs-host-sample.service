@@ -1,0 +1,9 @@
+# COST-1: one host sample (memory, swap, disk, container memory / OOM, load) into /var/log/gs-measure; a HostPressure
+# datapoint only under pressure. Never touches the game server.
+[Unit]
+Description=18Cosmos single host: host sample (measurement plan, pressure alarm)
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=/opt/gs/bin/gs-host-sample

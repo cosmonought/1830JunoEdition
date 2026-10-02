@@ -213,7 +213,7 @@ run "task_role_is_least_privilege" {
   command = apply
 
   assert {
-    condition = { for s in data.aws_iam_policy_document.task.statement : s.sid => toset(s.actions) } == {
+    condition = { for s in data.aws_iam_policy_document.task[0].statement : s.sid => toset(s.actions) } == {
       GameTableReadAndCheck     = toset(["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:ConditionCheckItem"])
       GameTableWriteNeverSystem = toset(["dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"])
       IdentityTable             = toset(["dynamodb:GetItem", "dynamodb:Scan", "dynamodb:ConditionCheckItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem"])
@@ -226,19 +226,19 @@ run "task_role_is_least_privilege" {
     error_message = "The task role's statements are exactly L5-7 §14's action list."
   }
   assert {
-    condition     = alltrue([for s in data.aws_iam_policy_document.task.statement : !contains(s.resources, "*")])
+    condition     = alltrue([for s in data.aws_iam_policy_document.task[0].statement : !contains(s.resources, "*")])
     error_message = "The task role has no '*' resource."
   }
   assert {
-    condition     = alltrue([for s in concat(data.aws_iam_policy_document.task.statement, data.aws_iam_policy_document.execution.statement) : alltrue([for a in s.actions : !startswith(a, "secretsmanager:") && !startswith(a, "ssmmessages:")])])
+    condition     = alltrue([for s in concat(data.aws_iam_policy_document.task[0].statement, data.aws_iam_policy_document.execution[0].statement) : alltrue([for a in s.actions : !startswith(a, "secretsmanager:") && !startswith(a, "ssmmessages:")])])
     error_message = "No Secrets Manager permission (no consumer yet) and no ECS Exec channel."
   }
   assert {
-    condition     = toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "LedgerReadAndCheck"]).resources) == toset(["arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"])
+    condition     = toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "LedgerReadAndCheck"]).resources) == toset(["arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"])
     error_message = "The ledger is granted by its full (cross-account) table ARN."
   }
   assert {
-    condition = toset([for c in one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "SigningKeysSignDigestOnly"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset([
+    condition = toset([for c in one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "SigningKeysSignDigestOnly"]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset([
       "StringEquals|kms:SigningAlgorithm|ECDSA_SHA_256", "StringEquals|kms:MessageType|DIGEST",
     ])
     error_message = "kms:Sign only with ECDSA_SHA_256 over a DIGEST."
@@ -246,12 +246,12 @@ run "task_role_is_least_privilege" {
   assert {
     condition = alltrue([
       for sid, key in { GameTableWriteNeverSystem = "SYSTEM", LedgerAppendNeverAppgen = "APPGEN,APPGEN#HISTORY" } :
-      toset([for c in one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == sid]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset(["ForAllValues:StringNotEquals|dynamodb:LeadingKeys|${key}"])
+      toset([for c in one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == sid]).condition : "${c.test}|${c.variable}|${join(",", c.values)}"]) == toset(["ForAllValues:StringNotEquals|dynamodb:LeadingKeys|${key}"])
     ])
     error_message = "The task never writes SYSTEM/* (routing), APPGEN or APPGEN#HISTORY (L6-2 review M4)."
   }
   assert {
-    condition     = toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "ReadRuntimeConfiguration"]).resources) == toset(["arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1", "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend"])
+    condition     = toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "ReadRuntimeConfiguration"]).resources) == toset(["arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1", "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend"])
     error_message = "ssm:GetParameter on the two documents only."
   }
 }
@@ -284,7 +284,7 @@ run "bootstrap_role_is_separate_and_narrow" {
     error_message = "LIVE-6 final convergence: the verifier role has no gameplay, recovery, flip, alarm or deployment mutation."
   }
   assert {
-    condition     = aws_iam_role.bootstrap.name == "gs-staging-bootstrap" && aws_iam_role.task.name == "gs-staging-app-task" && aws_iam_role.execution.name == "gs-staging-app-execution"
+    condition     = aws_iam_role.bootstrap.name == "gs-staging-bootstrap" && aws_iam_role.task[0].name == "gs-staging-app-task" && aws_iam_role.execution[0].name == "gs-staging-app-execution"
     error_message = "Role names are the ones the ledger stack grants."
   }
 }
@@ -297,11 +297,11 @@ run "alb_readiness_and_websocket_idle" {
     error_message = "Target health is /gs/readyz, 200 only (ip targets: awsvpc)."
   }
   assert {
-    condition     = aws_lb.this.idle_timeout >= 120
+    condition     = aws_lb.this[0].idle_timeout >= 120
     error_message = "The ALB idle timeout is at least 120 s (WebSockets)."
   }
   assert {
-    condition     = one(aws_lb_listener_rule.gs.condition).path_pattern[0].values == toset(["/gs*"]) && aws_lb_listener_rule.gs.priority == 1000
+    condition     = one(aws_lb_listener_rule.gs[0].condition).path_pattern[0].values == toset(["/gs*"]) && aws_lb_listener_rule.gs[0].priority == 1000
     error_message = "/gs* (the default, priority 1000) goes to the primary pool's target group."
   }
   assert {
@@ -341,14 +341,14 @@ run "network_admits_the_alb_only" {
   command = apply
 
   assert {
-    condition = (aws_vpc_security_group_ingress_rule.task_from_alb.referenced_security_group_id == aws_security_group.alb.id
-      && aws_vpc_security_group_ingress_rule.task_from_alb.cidr_ipv4 == null && aws_vpc_security_group_ingress_rule.task_from_alb.cidr_ipv6 == null
-      && aws_vpc_security_group_ingress_rule.task_from_alb.prefix_list_id == null
-    && aws_vpc_security_group_ingress_rule.task_from_alb.from_port == 8917 && aws_vpc_security_group_ingress_rule.task_from_alb.to_port == 8917)
+    condition = (aws_vpc_security_group_ingress_rule.task_from_alb[0].referenced_security_group_id == aws_security_group.alb[0].id
+      && aws_vpc_security_group_ingress_rule.task_from_alb[0].cidr_ipv4 == null && aws_vpc_security_group_ingress_rule.task_from_alb[0].cidr_ipv6 == null
+      && aws_vpc_security_group_ingress_rule.task_from_alb[0].prefix_list_id == null
+    && aws_vpc_security_group_ingress_rule.task_from_alb[0].from_port == 8917 && aws_vpc_security_group_ingress_rule.task_from_alb[0].to_port == 8917)
     error_message = "The task's only ingress: the container port from the ALB's security group."
   }
   assert {
-    condition     = aws_vpc_security_group_ingress_rule.alb_from_cloudfront.prefix_list_id == "pl-3b927c52" && aws_vpc_security_group_ingress_rule.alb_from_cloudfront.cidr_ipv4 == null
+    condition     = aws_vpc_security_group_ingress_rule.alb_from_cloudfront[0].prefix_list_id == "pl-3b927c52" && aws_vpc_security_group_ingress_rule.alb_from_cloudfront[0].cidr_ipv4 == null
     error_message = "The ALB admits CloudFront's origin-facing prefix list only."
   }
   assert {
@@ -450,7 +450,7 @@ run "two_pools_each_behind_its_own_target_group_on_its_exact_path" {
     error_message = "Each pool's exact ws_path -> its own target group, in deterministic priority order (100 + sorted index)."
   }
   assert {
-    condition     = one(aws_lb_listener_rule.gs.action).target_group_arn == aws_lb_target_group.pool["p1"].arn && alltrue([for r in aws_lb_listener_rule.pool : r.priority < aws_lb_listener_rule.gs.priority])
+    condition     = one(aws_lb_listener_rule.gs[0].action).target_group_arn == aws_lb_target_group.pool["p1"].arn && alltrue([for r in aws_lb_listener_rule.pool : r.priority < aws_lb_listener_rule.gs[0].priority])
     error_message = "The /gs* default forwards to the primary's target group, AFTER every exact pool rule (no pool is shadowed)."
   }
   assert {
@@ -484,7 +484,7 @@ run "a_flip_moves_only_the_gs_rule" {
   }
 
   assert {
-    condition     = one(aws_lb_listener_rule.gs.action).target_group_arn == aws_lb_target_group.pool["p2"].arn
+    condition     = one(aws_lb_listener_rule.gs[0].action).target_group_arn == aws_lb_target_group.pool["p2"].arn
     error_message = "After the routing names p2 (gamesDoctor aws flip), primary = p2 moves the /gs* default to p2's target group."
   }
   assert {
@@ -542,7 +542,7 @@ run "generations_side_by_side_the_old_one_kept_protected" {
     error_message = "The serving generation is `generation`."
   }
   assert {
-    condition     = toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "GameTableReadAndCheck"]).resources) == toset(["arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1", "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g2"])
+    condition     = toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "GameTableReadAndCheck"]).resources) == toset(["arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1", "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g2"])
     error_message = "The task role reaches every managed generation (g<N+1> before its tasks start; g<N> while an old task may run)."
   }
 }
@@ -566,7 +566,7 @@ run "the_verifier_scans_only_the_old_generation_for_heartbeats" {
     error_message = "No other bootstrap statement scans: never the serving table, the identity table or the ledger."
   }
   assert {
-    condition     = alltrue([for s in data.aws_iam_policy_document.task.statement : s.sid != "RestoreQuietOldGenerationHeartbeats"]) && toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == "GameTableReadAndCheck"]).resources) == toset(["arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1", "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g2"])
+    condition     = alltrue([for s in data.aws_iam_policy_document.task[0].statement : s.sid != "RestoreQuietOldGenerationHeartbeats"]) && toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == "GameTableReadAndCheck"]).resources) == toset(["arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1", "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g2"])
     error_message = "The runtime task role gains no new authority."
   }
 }
@@ -684,7 +684,7 @@ run "operator_and_recovery_are_separate_roles" {
     error_message = "The recovery role never signs; RestoreTableToPointInTime only with recovery_break_glass."
   }
   assert {
-    condition     = alltrue([for s in data.aws_iam_policy_document.task.statement : alltrue([for a in s.actions : !contains(["dynamodb:RestoreTableToPointInTime"], a)])]) && !contains([for s in data.aws_iam_policy_document.task.statement : s.sid], "AppgenAdoption")
+    condition     = alltrue([for s in data.aws_iam_policy_document.task[0].statement : alltrue([for a in s.actions : !contains(["dynamodb:RestoreTableToPointInTime"], a)])]) && !contains([for s in data.aws_iam_policy_document.task[0].statement : s.sid], "AppgenAdoption")
     error_message = "A serving task never holds adoption or restore authority."
   }
 }
@@ -720,7 +720,7 @@ run "no_escrow_no_keys_no_juno_document" {
     error_message = "Without escrow the runtime document's escrow is null."
   }
   assert {
-    condition     = length(aws_ssm_parameter.juno_backend) == 0 && alltrue([for s in data.aws_iam_policy_document.task.statement : alltrue([for a in s.actions : !startswith(a, "kms:")])])
+    condition     = length(aws_ssm_parameter.juno_backend) == 0 && alltrue([for s in data.aws_iam_policy_document.task[0].statement : alltrue([for a in s.actions : !startswith(a, "kms:")])])
     error_message = "No Juno document and no KMS permission without escrow."
   }
 }
@@ -892,7 +892,7 @@ run "ordinary_deployment_reads_and_signs_exactly_the_three_keys" {
   command = apply
 
   assert {
-    condition = alltrue([for sid in ["SigningKeysPublicKey", "SigningKeysSignDigestOnly"] : toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == sid]).resources) == toset([
+    condition = alltrue([for sid in ["SigningKeysPublicKey", "SigningKeysSignDigestOnly"] : toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == sid]).resources) == toset([
       "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111",
       "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222",
       "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333",
@@ -916,7 +916,7 @@ run "prepared_rotation_reads_the_new_key_and_signs_with_the_old" {
   }
 
   assert {
-    condition = alltrue([for sid in ["SigningKeysPublicKey", "SigningKeysSignDigestOnly"] : toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == sid]).resources) == toset([
+    condition = alltrue([for sid in ["SigningKeysPublicKey", "SigningKeysSignDigestOnly"] : toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == sid]).resources) == toset([
       "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111",
       "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222",
       "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333",
@@ -959,7 +959,7 @@ run "switched_rotation_signs_with_the_new_key_and_keeps_the_old_readable" {
   }
 
   assert {
-    condition = alltrue([for sid in ["SigningKeysPublicKey", "SigningKeysSignDigestOnly"] : toset(one([for s in data.aws_iam_policy_document.task.statement : s if s.sid == sid]).resources) == toset([
+    condition = alltrue([for sid in ["SigningKeysPublicKey", "SigningKeysSignDigestOnly"] : toset(one([for s in data.aws_iam_policy_document.task[0].statement : s if s.sid == sid]).resources) == toset([
       "arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666",
       "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222",
       "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333",

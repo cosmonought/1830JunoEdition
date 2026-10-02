@@ -8,11 +8,13 @@
 # rules do not rewrite query strings; the path pattern forwards /gs* with its query unchanged.
 
 resource "aws_lb" "this" {
+  count = local.ecs_one
+
   name                       = "${local.prefix}-alb"
   load_balancer_type         = "application"
   internal                   = false
   subnets                    = var.network.alb_subnet_ids
-  security_groups            = [aws_security_group.alb.id]
+  security_groups            = [aws_security_group.alb[0].id]
   idle_timeout               = var.alb.idle_timeout_seconds
   drop_invalid_header_fields = true
   enable_deletion_protection = var.alb.deletion_protection
@@ -32,7 +34,7 @@ resource "aws_lb" "this" {
 # pool (desired_count 0) keeps its group, empty. The name is the pool's (gs-<env>-<pool>, like its service); L5-8's single
 # gs-<env>-primary group is gone -- it was never deployed.
 resource "aws_lb_target_group" "pool" {
-  for_each = var.pools
+  for_each = local.ecs_pools
 
   name                 = "${local.prefix}-${each.key}"
   target_type          = "ip"
@@ -64,7 +66,9 @@ resource "aws_lb_target_group" "pool" {
 }
 
 resource "aws_lb_listener" "https" {
-  load_balancer_arn = aws_lb.this.arn
+  count = local.ecs_one
+
+  load_balancer_arn = aws_lb.this[0].arn
   port              = 443
   protocol          = "HTTPS"
   ssl_policy        = "ELBSecurityPolicy-TLS13-1-2-2021-06"
@@ -90,9 +94,9 @@ resource "aws_lb_listener" "https" {
 #                      identity writer's HTTP API), and anything else under /gs. A flip moves only this rule's target.
 # ALB path patterns never see the query string, and a forward never rewrites it: /gs* keeps cp / cr / cb intact.
 resource "aws_lb_listener_rule" "pool" {
-  for_each = var.pools
+  for_each = local.ecs_pools
 
-  listener_arn = aws_lb_listener.https.arn
+  listener_arn = aws_lb_listener.https[0].arn
   priority     = local.pool_rule_priority[each.key]
 
   condition {
@@ -110,7 +114,9 @@ resource "aws_lb_listener_rule" "pool" {
 }
 
 resource "aws_lb_listener_rule" "gs" {
-  listener_arn = aws_lb_listener.https.arn
+  count = local.ecs_one
+
+  listener_arn = aws_lb_listener.https[0].arn
   priority     = local.gs_rule_priority
 
   condition {

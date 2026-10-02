@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# /opt/gs/bin/gs-rollback -- COST-1: swap to the previous release (release.previous.env) with the same drain / start /
+# readiness steps as gs-deploy. Running it twice rolls forward again. Refuses without a previous release. NOTE (LIVE-4):
+# an older build reading records a newer build wrote holds or refuses them by its compatibility rules -- never
+# reinterprets them -- so a rollback is safe but may leave newer-format games unserved until the newer build returns.
+source "$(dirname "$0")/gs-lib.sh"
+require_root
+load_env_file "$GS_ETC/host.env"
+take_lock
+current="$GS_ETC/release.env"; previous="$GS_ETC/release.previous.env"
+[ -f "$previous" ] || die "there is no previous release to roll back to"
+digest="$(release_field "$previous" GS_IMAGE_DIGEST)"; build="$(release_field "$previous" BUILD_ID)"
+valid_digest "$digest" && valid_build "$build" || die "release.previous.env is malformed"
+pull_release "$digest"
+stop_server
+swap="$GS_ETC/release.swap.env"
+cp -p "$previous" "$swap"
+[ -f "$current" ] && cp -p "$current" "$previous"
+mv -f "$swap" "$current"
+clear_hold   # only after the pull and the drain succeeded (a refused rollback keeps the HOLD)
+systemctl enable --quiet gs-server.service
+systemctl reset-failed gs-server.service 2>/dev/null || true
+say "starting the previous build $build"
+systemctl start gs-server.service
+wait_ready "${GS_READY_TIMEOUT:-300}" && say "rolled back: build $build ($digest) is READY" || die "build $build did not become ready within 300 s (left running for diagnosis)"

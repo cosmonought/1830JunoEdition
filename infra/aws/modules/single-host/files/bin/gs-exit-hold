@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# /opt/gs/bin/gs-exit-hold -- COST-1: gs-server.service's ExecStopPost. systemd passes the main process's EXIT_CODE /
+# EXIT_STATUS. Exit 3 (a PROVEN loss: another process or host took the pool or a role, or APPGEN moved) or exit 5 (a
+# routing role change) puts the host on HOLD: gs-preflight then refuses every start -- including the one after a REBOOT --
+# until an operator runs gs-deploy / gs-rollback, so this host never takes the pool back from the newer owner by itself.
+source "$(dirname "$0")/gs-lib.sh"
+if [ "${EXIT_CODE:-}" = exited ] && { [ "${EXIT_STATUS:-}" = 3 ] || [ "${EXIT_STATUS:-}" = 5 ]; }; then
+  mkdir -p "$GS_STATE_DIR"
+  printf 'exit %s at %s\n' "$EXIT_STATUS" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$(hold_file)"
+  say "HOLD: the server exited $EXIT_STATUS (a proven loss or a role change); it stays stopped, across reboots, until gs-deploy / gs-rollback"
+fi
+exit 0

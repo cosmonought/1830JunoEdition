@@ -36,3 +36,14 @@ variable "tags" {
   type    = map(string)
   default = {}
 }
+
+# COST-1 (infra/aws/SINGLE_HOST_MIGRATION.md): the single host's app role (stacks/single-host output `app_role_arn`).
+variable "app_runtime_role_arns" {
+  type    = list(string)
+  default = []
+}
+
+variable "ecs_task_role_authorized" {
+  type    = bool
+  default = true
+}

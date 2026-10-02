@@ -1,0 +1,27 @@
+#cloud-config
+# COST-1: the single host's first boot (infra/aws/modules/single-host). It writes files, installs Docker, the ECR
+# credential helper and iptables, and starts Caddy and the IMDS guard. It starts NO game server: the operator's first
+# gs-deploy does (a release file must exist). No credential and no secret appear here -- the instance role (IMDSv2) is the
+# only credential source, and the ECR credential helper uses it (no registry token is stored).
+package_update: false
+packages:
+  - docker
+  - amazon-ecr-credential-helper
+  - iptables-nft
+write_files:
+%{ for f in write_files ~}
+  - path: ${f.path}
+    permissions: "${f.permissions}"
+    owner: root:root
+    content: |
+      ${indent(6, f.content)}
+%{ endfor ~}
+runcmd:
+  - [bash, -c, "set -euo pipefail; if [ ${swap_mb} -gt 0 ] && [ ! -f /swapfile ]; then fallocate -l ${swap_mb}M /swapfile; chmod 600 /swapfile; mkswap /swapfile; echo '/swapfile none swap sw 0 0' >> /etc/fstab; swapon /swapfile; fi"]
+  - [bash, -c, "set -euo pipefail; getent group gs-caddy >/dev/null || groupadd --system --gid ${caddy_uid} gs-caddy; id gs-caddy >/dev/null 2>&1 || useradd --system --uid ${caddy_uid} --gid ${caddy_uid} --no-create-home --shell /sbin/nologin gs-caddy"]
+  - [bash, -c, "set -euo pipefail; install -d -o ${caddy_uid} -g ${caddy_uid} -m 0700 /var/lib/gs-caddy/data /var/lib/gs-caddy/config; install -d -m 0750 /var/log/gs-measure /var/lib/gs"]
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, --now, docker.service]
+  - [systemctl, enable, --now, gs-imds-guard.service]
+  - [systemctl, enable, --now, gs-caddy.service]
+  - [systemctl, enable, --now, gs-host-sample.timer]

@@ -2738,8 +2738,30 @@ const si = argv.findIndex((a) => ["ecs", "elbv2", "cloudfront", "ec2", "cloudwat
 const svc = argv[si], op = argv[si + 1], output = opt("--output") || "json", query = opt("--query");
 const die = (message) => { log({ op, error: message }); process.stderr.write(message + "\n"); process.exit(254); };
 const json = (v) => process.stdout.write(JSON.stringify(v, null, 4) + "\n");
+/* drain-pool: once update-service scaled the service down, its desired-RUNNING tasks are desired STOPPED (and described
+   STOPPED, exit 0). Only drain-pool calls update-service, so the capture scripts never see this state. */
+const scaledMark = process.env.AWS_STUB_SCENARIO + ".scaled";
+const scaled = fs.existsSync(scaledMark);
+const drained = (t) => (scaled && t.desiredStatus === "RUNNING" ? { ...t, desiredStatus: "STOPPED", lastStatus: "STOPPED", containers: (t.containers || []).map((c) => ({ ...c, lastStatus: "STOPPED", exitCode: 0 })) } : t);
+sc.tasks = sc.tasks.map(drained);
 const byArn = new Map(sc.tasks.map((t) => [t.taskArn, t]));
-if (svc === "ecs" && op === "list-tasks") {
+if (svc === "ecs" && op === "update-service") {
+  log({ op, service: opt("--service"), desired: opt("--desired-count") });
+  fs.writeFileSync(scaledMark, "1");
+  process.stdout.write(opt("--desired-count") + "\n");
+} else if (svc === "ecs" && op === "wait") {
+  /* ecs wait tasks-stopped: like the API, every identifier must be a task ARN (or ID) -- PowerShell 5.1 splatting a
+     STRING passes its characters one by one ("a", "r", "n", ...), which the real API refuses as malformed. */
+  const i = argv.indexOf("--tasks");
+  const named = [];
+  for (let j = i + 1; j < argv.length && !argv[j].startsWith("--"); j += 1) named.push(argv[j]);
+  log({ op: "wait " + argv[si + 2], count: named.length, tasks: named });
+  const bad = named.filter((n) => !byArn.has(n));
+  if (named.length === 0 || named.length > 100 || bad.length > 0) die("An error occurred (InvalidParameterException) when calling the DescribeTasks operation: Invalid identifier: " + (bad[0] || "none"));
+} else if (svc === "ecs" && op === "describe-services" && query === "services[0].[runningCount,pendingCount]") {
+  log({ op, counts: true });
+  process.stdout.write(JSON.stringify(scaled ? [0, 0] : [sc.tasks.filter((t) => t.desiredStatus === "RUNNING").length, 0]) + "\n");
+} else if (svc === "ecs" && op === "list-tasks") {
   const status = opt("--desired-status"), service = opt("--service-name");
   if (service === undefined && query === "taskArns[]") {
     /* capture-restore-stop: the whole cluster's ARNs of one desired status (the CLI follows every page itself). */
@@ -3076,6 +3098,59 @@ describe("L6-6P: capture-evidence.{sh,ps1} write the complete listing (stub AWS 
 /* LIVE-6 FINAL CONVERGENCE: the L6-4 binding, TASK# heartbeats, L6-5B  */
 /* alarms, the gate records, the flip / rotation / restore drills       */
 /* ================================================================== */
+
+/* ------------------------------------------------------------------ */
+/* drain-pool.ps1 against the stub AWS CLI (0, 1, many tasks)           */
+/* ------------------------------------------------------------------ */
+
+describe("drain-pool.ps1 writes the drain evidence for 0, 1 and many tasks (stub AWS CLI; no AWS)", () => {
+  const skip = PWSH === null ? "PowerShell is not available here" : false;
+  const SETTLED = RUNNING_TASKS.tasks[0] as Record<string, unknown>;
+  const serving = (n: number) => Array.from({ length: n }, (_, i) => ({ ...SETTLED, taskArn: `arn:aws:ecs:us-east-1:111111111111:task/gs-staging/${String(i + 1).repeat(32).slice(0, 32)}` }));
+
+  function runDrain(tasks: readonly Record<string, unknown>[]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "gs-drain-"));
+    const bin = path.join(root, "bin");
+    const out = path.join(root, "evidence");
+    fs.mkdirSync(bin);
+    fs.mkdirSync(out);
+    fs.writeFileSync(path.join(bin, "aws-stub.js"), AWS_STUB);
+    if (process.platform === "win32") fs.writeFileSync(path.join(bin, "aws.cmd"), `@"${process.execPath}" "%~dp0aws-stub.js" %*\r\n@exit /b %ERRORLEVEL%\r\n`);
+    else fs.writeFileSync(path.join(bin, "aws"), `#!/bin/sh\nexec "${process.execPath}" "${path.join(bin, "aws-stub.js")}" "$@"\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(root, "scenario.json"), JSON.stringify({ tasks, listing: { RUNNING: [], STOPPED: [] }, pageQuery: PAGE_QUERY, services: SERVICES }));
+    const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`, AWS_STUB_SCENARIO: path.join(root, "scenario.json"), AWS_STUB_LOG: path.join(root, "calls.log") };
+    const r = spawnSync(PWSH as string, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(SCRIPTS, "drain-pool.ps1"), "-Environment", "staging", "-Region", "us-east-1", "-Pool", "p1", "-Evidence", out, "-Run", RUN], { env, encoding: "utf8", timeout: 300_000 });
+    const logText = fs.existsSync(env.AWS_STUB_LOG) ? fs.readFileSync(env.AWS_STUB_LOG, "utf8") : "";
+    const calls = logText.split("\n").filter((l) => l !== "").map((l) => JSON.parse(l) as Record<string, unknown>);
+    const file = (name: string) => JSON.parse(fs.readFileSync(path.join(out, "drain-p1", name), "utf8").replace(/^﻿/, ""));
+    const exists = (name: string) => fs.existsSync(path.join(out, "drain-p1", name));
+    return { root, status: r.status, stderr: `${r.stderr ?? ""}${r.error ? String(r.error) : ""}`, calls, file, exists };
+  }
+
+  for (const n of [1, 0, 3]) {
+    test(`${n} serving task(s): scaled to 0, waited on exactly those ARNs, all four evidence files written${n === 1 ? " (the PowerShell 5.1 one-item regression)" : ""}`, { skip }, () => {
+      const tasks = serving(n);
+      const run = runDrain(tasks);
+      try {
+        assert.equal(run.status, 0, run.stderr);
+        for (const name of ["tasks-before.json", "tasks-after.json", "service-after.json", "drain.json"]) assert.ok(run.exists(name), `${name} missing`);
+        assert.deepEqual(run.file("tasks-before.json").tasks.map((t: any) => t.taskArn), tasks.map((t) => t.taskArn));
+        assert.deepEqual(run.file("tasks-before.json").tasks.map((t: any) => t.desiredStatus), tasks.map(() => "RUNNING"), "listed before the scale-down");
+        assert.deepEqual(run.file("tasks-after.json").tasks.map((t: any) => [t.taskArn, t.lastStatus, t.containers[0].exitCode]), tasks.map((t) => [t.taskArn, "STOPPED", 0]));
+        assert.equal(run.file("drain.json").run_id, RUN);
+        const ops = run.calls.map((c) => String(c.op));
+        assert.ok(ops.indexOf("update-service") > 0 && ops.indexOf("update-service") < ops.lastIndexOf("describe-services"), ops.join(","));
+        assert.deepEqual(run.calls.filter((c) => c.op === "update-service").map((c) => c.desired), ["0"]);
+        const waits = run.calls.filter((c) => c.op === "wait tasks-stopped");
+        /* The regression: one stopped task must reach the waiter as ONE whole ARN, never splatted character by character. */
+        if (n === 0) assert.deepEqual(waits, [], "nothing stopped, nothing waited on");
+        else assert.deepEqual(waits.map((c) => c.tasks), [tasks.map((t) => t.taskArn)]);
+      } finally {
+        cleanup(run.root);
+      }
+    });
+  }
+});
 
 describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-5B / L6-7 through their own judges", () => {
   const drills = require("./drills") as typeof import("./drills");

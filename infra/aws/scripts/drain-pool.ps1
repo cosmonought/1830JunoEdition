@@ -38,7 +38,7 @@ for ($i = 0; $i -lt 60; $i++) {
   if ((TaskArns "RUNNING" "taskArns").Count -eq 0) { break }
   Start-Sleep -Seconds 5
 }
-$stopping = TaskArns "STOPPED" "taskArns[:100]"
+$stopping = @(TaskArns "STOPPED" "taskArns[:100]")
 if ($stopping.Count -gt 0) {
   & aws --region $Region ecs wait tasks-stopped --cluster $cluster --tasks @stopping
   if ($LASTEXITCODE -ne 0) { throw "the tasks did not stop in time; do not deploy" }

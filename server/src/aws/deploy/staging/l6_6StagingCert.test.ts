@@ -52,7 +52,7 @@ import { stageCertCommand, stageProbeCommand, recordFromLog, recordLines, type S
 import { closedBy, judgeQueryProbe, judgeWsAnnouncement, judgeWsIdle, LOBBY_SUBSCRIPTION, nodeEdgeTransport, probeQuery, requiredIdleMs, runEdgeProbe, type EdgeTransport, type SocketEvent, type SocketObservation } from "./edgeProbe";
 import { CERTIFICATION_FORMAT, EVIDENCE, evidenceName, EvidenceRefusedError, manifestOf, obj, readEvidence, secretFindings, stableStringify, writeRecord } from "./evidence";
 import { DRAIN_FILES, drainDir } from "./drain";
-import { deploymentIdentityOf } from "../junoChain";
+import { deploymentIdentityOf, relayerFunding } from "../junoChain";
 import { collectRotationProof, ROTATION_PROOF_FILE, ROTATION_PROOF_FORMAT, type RotationProofRecord } from "./rotationProof";
 import { fakeJunoChain, healthyRotation, rotationReadersFor } from "./rotationTestSupport";
 import { caseFoldCollisions, readCheckoutText, toPosixPath, withDirectories } from "../../../testSupport/portability";
@@ -3499,8 +3499,10 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
       writeDrillEvidence(built.dir, "rotation");
       const rotation = { from: RELAYER_OLD, to: relayerNew() };
       const readAt = Date.parse("2026-09-30T10:30:00Z");
-      const proof = (table = healthyRotation({ from: RELAYER_OLD, to: relayerNew(), pool: "p1", now: readAt }), chain = fakeJunoChain({ operator: relayerNew() }), bound = true): Promise<RotationProofRecord> =>
-        collectRotationProof({ readers: bound ? rotationReadersFor(table) : undefined, juno: chain, clients: { app: {} as never, ledger: {} as never }, tables: { game: "g", ledger: "l" }, config: junoConfig(), run: RUN, environment: "staging", from: RELAYER_OLD, to: relayerNew(), now: () => readAt });
+      /* v2 (L6-12D): the new account exists on chain holding the planning reserve; KMS answers the relayer key's public key. */
+      const funded = (operator: string) => fakeJunoChain({ operator, accounts: [relayerNew()] }, { [relayerNew()]: relayerFunding(junoConfig()).floor });
+      const proof = (table = healthyRotation({ from: RELAYER_OLD, to: relayerNew(), pool: "p1", now: readAt }), chain = funded(relayerNew()), bound = true): Promise<RotationProofRecord> =>
+        collectRotationProof({ readers: bound ? rotationReadersFor(table) : undefined, juno: chain, kms: fakeKms().client, clients: { app: {} as never, ledger: {} as never }, tables: { game: "g", ledger: "l" }, config: junoConfig(), run: RUN, environment: "staging", from: RELAYER_OLD, to: relayerNew(), now: () => readAt });
       const gate = async (rotationProof: RotationProofRecord | null) => {
         const result = certify({ ...(await built.ctx()), scenario: "relayer-rotation-drill", rotation, rotationProof });
         const g = result.gates.find((x) => x.id === "relayer-rotation-proof") as { status: string; checks: readonly Check[] };
@@ -3510,12 +3512,18 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
       assert.equal(good.status, "pass", good.text);
       assert.deepEqual(good.both, [["relayer-rotation", "pass"], ["relayer-rotation-proof", "pass"]]);
       /* The rotation gate alone (the SAFE change) no longer certifies a drill whose change did not WORK. */
-      const stillOld = await gate(await proof(undefined, fakeJunoChain({ operator: RELAYER_OLD })));
+      const stillOld = await gate(await proof(undefined, funded(RELAYER_OLD)));
       assert.deepEqual(stillOld.both, [["relayer-rotation", "pass"], ["relayer-rotation-proof", "fail"]]);
       assert.equal(stillOld.passed, false);
       assert.match(stillOld.text, /operator on chain is the new relayer: the contract's operator is STILL the old relayer/);
       const noRole = await gate(await proof({ ...healthyRotation({ from: RELAYER_OLD, to: relayerNew(), pool: "p1", now: readAt }), mirrors: {} }));
       assert.match(noRole.text, /is ABSENT: no task has taken the new relayer's role/);
+      /* v2 (L6-12D): a rotation onto an account that does not exist, or holds less than the reserve, does not certify. */
+      const unfunded = await gate(await proof(undefined, fakeJunoChain({ operator: relayerNew() })));
+      assert.equal(unfunded.status, "fail");
+      assert.match(unfunded.text, /does NOT exist on chain: it never received funds/);
+      const short = await gate(await proof(undefined, fakeJunoChain({ operator: relayerNew(), accounts: [relayerNew()] }, { [relayerNew()]: relayerFunding(junoConfig()).floor - BigInt(1) })));
+      assert.match(short.text, /send at least 0.000001 JUNOX more/);
       const none = await gate(null);
       assert.equal(none.status, "fail");
       assert.match(none.text, /no post-rotation reading was made/);
@@ -3538,14 +3546,18 @@ describe("LIVE-6 final convergence: the staging registry binds L6-2 / L6-4 / L6-
       const seen: string[] = [];
       const recorder = { async send(command: { constructor: { name: string } }) { seen.push(command.constructor.name); throw Object.assign(new Error("offline"), { name: "ResourceNotFoundException" }); }, config: { region: async () => "us-east-1" } } as never;
       const readers = rotationReadersFor(healthyRotation({ from: RELAYER_OLD, to: relayerNew(), pool: "p1", now: readAt }));
-      const chain = fakeJunoChain({ operator: relayerNew() });
-      const deps: DeployDeps = { parameters: PARAMETERS, dynamo: () => recorder, kms: () => ({ sdk: recorder, digest: fakeKms().client }), now: () => readAt, out: () => undefined, juno: chain };
+      const chain = fakeJunoChain({ operator: relayerNew(), accounts: [relayerNew()] }, { [relayerNew()]: relayerFunding(junoConfig()).floor });
+      const kms = fakeKms();
+      const deps: DeployDeps = { parameters: PARAMETERS, dynamo: () => recorder, kms: () => ({ sdk: recorder, digest: kms.client }), now: () => readAt, out: () => undefined, juno: chain };
       const staging: StagingDeps = { env: {}, monotonic: () => 0, edge: fakeEdge(), repository: REPO, rotation: readers };
       await stageCertCommand(["certify", "--run-id", RUN, "--evidence", built.dir, "--runtime-parameter", RUNTIME_ARN, "--environment", "staging", "--primary-pool", "p1", "--generation", "1", "--part", "all", "--scenario", "relayer-rotation-drill", "--from-relayer", RELAYER_OLD, "--to-relayer", relayerNew(), "--commit", "aa2c64c"], deps, staging);
       const kept = JSON.parse(fs.readFileSync(path.join(built.dir, ROTATION_PROOF_FILE), "utf8"));
       assert.equal(kept.format, ROTATION_PROOF_FORMAT);
       assert.equal(kept.readers_bound, true);
       assert.equal(kept.chain.operator, relayerNew());
+      assert.equal(kept.relayer_account.key.value.derived_address, relayerNew(), "v2: the KMS-derived address is kept with the reading");
+      assert.equal(kept.relayer_account.balance.value.amount, "8212500");
+      assert.ok(kms.calls.every((c) => c.startsWith("GetPublicKey ")), "the proof reads public keys only; it signs nothing");
       assert.deepEqual(readers.calls.map((c) => c.split(" ")[0]), ["routing", "pool", "mirror", "fence", "task", "queue"]);
       const certification = JSON.parse(fs.readFileSync(path.join(built.dir, EVIDENCE.certification), "utf8"));
       const g = (certification.gates as Array<{ id: string; status: string; checks: Check[] }>).find((x) => x.id === "relayer-rotation-proof");

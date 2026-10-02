@@ -47,7 +47,8 @@ import { EXIT_NOT_YET, probeOverrides, recordFlipAlarms, stagePhase, windowOpen 
 import { precheckRestoreCase, recordRestoreAlarms, stageRestoreCase } from "./restoreAlarmDrill";
 import { EXIT_NOT_YET as EXIT_RESTORE_NOT_YET, RESTORE_CASES, restoreProbeOverrides, type RestoreCase } from "./restoreAlarmProbe";
 import { restoreFencingCommand } from "./restoreFencing";
-import { MAINNET_CHAIN_IDS } from "../../../escrow/juno/signer";
+import { MAINNET_CHAIN_IDS, type KmsClient } from "../../../escrow/juno/signer";
+import type { JunoBackendConfig } from "../../../escrow/juno/junoConfig";
 import { arr, disposablePartition, EVIDENCE, isoOf, obj, PROBE_FORMAT, readEvidence, recordFromLog, recordLines, runIdProblem, scrub, secretFindings, stableStringify, writeRecord } from "./evidence";
 
 export { recordFromLog, recordLines } from "./evidence";
@@ -80,6 +81,17 @@ export interface StagingDeps {
   /** LIVE-6 relayer rotation: the deployment's own readers for the post-rotation proof (`rotationProof.ts`), bound by the
    *  integration in `tools/awsDeploy.ts`; absent: the proof gate FAILS "not integrated". The chain reader is DeployDeps'. */
   readonly rotation?: RotationReaders;
+}
+
+/** The KMS client for the configured keys' region (null configuration, no KMS region, or no binding: undefined -- the
+ *  proof then FAILS "no KMS public-key reader"). Only `getPublicKey` is ever called through it by the proof. */
+function relayerKmsOf(deps: DeployDeps, config: JunoBackendConfig | null): KmsClient | undefined {
+  if (config === null || config.kmsRegion === null) return undefined;
+  try {
+    return deps.kms(config.kmsRegion).digest;
+  } catch {
+    return undefined;
+  }
 }
 
 const runOf = (flags: Map<string, string>): string => {
@@ -205,6 +217,9 @@ export async function stageCertCommand(argv: readonly string[], deps: DeployDeps
           ? await collectRotationProof({
               readers: staging.rotation,
               juno: deps.juno,
+              /* v2 (LIVE-6 L6-12D): the configured relayer key's PUBLIC key, through the deployment's KMS binding (the
+                 configuration's own KMS region; GetPublicKey only -- nothing is signed). */
+              kms: relayerKmsOf(deps, startup.escrowConfig),
               clients,
               tables,
               config: startup.escrowConfig,

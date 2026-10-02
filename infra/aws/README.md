@@ -272,12 +272,29 @@ never drains by itself: it blocks the rotation (it is never stranded).
   way for the owner to sign and send the `set_operator` transaction with it (for example `junod tx wasm execute` from the
   admin's own wallet). This repository holds no admin key, mnemonic or signing tool and never asks for one; nothing here
   signs for the admin, and the runbook does not assume who holds that credential.
-- **JUNOX for the new account** (a plain bank send from any funded wallet; this repository sends nothing). The floor is
-  `relayerFunding`: one worst-bound money game of relayer transactions (Start + 64 checkpoints + Settle + Finalize = 67)
-  at the configuration's own fee cap `gas.max_fee` (the relayer refuses any fee above it) -- with the defaults
-  **67 x 500,000 ujunox = 33.5 JUNOX**. A typical relayer transaction costs a few hundredths of the cap; fund a little
-  above the floor (40 JUNOX) so one drill cannot run the account dry. A never-funded account does not exist on chain and
-  cannot sign.
+- **JUNOX for the new account** (a plain bank send from any funded wallet; this repository sends nothing). The amount
+  is the **one-game operational planning reserve** `relayerFunding` (LIVE-6 L6-12D; derived from the configuration's own
+  gas policy, integers only, and printed in full by `set-operator-plan`):
+
+  ```
+  per-tx cap       = min(max_fee 500000, ceil(max_gas 1500000 x 75/1000) = 112500) = 112500 ujunox
+  planning reserve = 73 x 112500 = 8212500 ujunox = 8.2125 JUNOX
+  73               = Start 1 + Checkpoint 64 + Settle 1 + Consent up to 6 + Finalize 1
+  ```
+
+  The per-transaction cap is the largest fee the relayer's own `decideGas` can ever accept (the gas limit is refused
+  above `max_gas`, the fee above `max_fee`; with the defaults the gas-derived 112,500 binds, not `max_fee`). **64
+  checkpoints is an operational planning allowance, not a contract cap** (the contract does not limit how many
+  Checkpoint transactions a game sends). Retries are not in the reserve: repeated failures are bounded by the relayer's
+  hold-and-page machinery and operator replenishment. So the reserve is a **readiness policy, not an absolute maximum
+  possible game cost**, and not a contract, runtime or certification requirement of the chain -- `set-operator-plan`
+  and the post-rotation proof enforce it. **Recommended staging funding: 10 JUNOX** (above the reserve, so one drill does
+  not run the account to the floor; a typical relayer transaction costs a fraction of the cap). The ACTIVE relayer must
+  hold the reserve before it can receive new money work. A never-funded account does not exist on chain and cannot sign.
+  *(Corrected 2026-10-02, L6-12D: this paragraph previously stated a 33.5 JUNOX floor -- 67 transactions x `max_fee` --
+  which over-derived the cap and omitted the Consent transactions; L6-12C.)*
+- **The OLD relayer is not pre-funded for the forward rotation.** It signs no transaction during the rotation or during
+  a rollback itself. Only if a rollback is actually required, top it up just in time (below).
 - **`RELAYQ#<old>` drainable** (no `held` intent) and **the funding-phase money game resolved** (below).
 - Do it after the flip drill is certified (the recommended order of the forward audit).
 
@@ -300,9 +317,9 @@ P2  stacks/app:     relayer_rotation_key_arns = ["<relayer_key_arns.r<N>>"]     
          still signs with exactly the three configured keys; no document changes, so no pool restarts
 P3  npm run awsDeploy -- signer-keys --relayer <r<N> ARN> --settlement <current> --admission <current>
       -> relayer.address = <new>; settlement / admission public keys MUST equal today's escrow values
-P4  fund <new> (>= the floor), then:
+P4  fund <new> (>= the planning reserve, 8.2125 JUNOX by default; 10 JUNOX recommended for staging), then:
     npm run awsDeploy -- set-operator-plan --runtime-parameter <primary ARN> --environment <env> --to-relayer <new> \
-        --to-relayer-key <r<N> ARN>      # READY: <new> is the key's address, exists on chain, >= floor; prints Config.admin
+        --to-relayer-key <r<N> ARN>      # READY: <new> is the key's address, exists on chain, >= reserve; prints Config.admin
 P5  prepare, do NOT apply, the app change:  signing_keys.relayer = <r<N> ARN>; escrow.relayer_address = <new>;
     escrow.trust.operators = [<new>]; relayer_rotation_key_arns = [<the OLD relayer key ARN>]    (plan only)
 
@@ -315,6 +332,8 @@ G3  npm run awsDeploy -- relayer-rotation-gate --runtime-parameter <ARN> --envir
 # S -- THE OPERATOR (inside the drained window: after G3, before A1)
 S1  the contract admin sends   {"set_operator":{"operator":"<new>"}}   to the escrow contract, no funds
 S2  set-operator-plan ... --to-relayer <new>   -> "the contract's operator is ALREADY <new>"
+      S2 doubles as the ACTIVE relayer's readiness check: the reserve is still evaluated. ALREADY + funded -> exit 0
+      (READY); ALREADY + under the reserve -> exit 1 with the shortfall. Do not start the pools (A1) on NOT READY.
 
 # A -- APPLY (drain-first is satisfied: every pool is at zero)
 A1  terraform apply the P5 change -> the task role signs with the new key; the Juno document names <new>; the pools
@@ -347,8 +366,8 @@ proven empty, the operator moved by the admin inside the drained window, the old
 | Where it stopped | Rollback |
 |---|---|
 | after G3, before S1 and A1 (nothing switched) | nothing to undo: start the pools again on the unchanged configuration (`terraform apply` restores the desired counts); the gate record is only evidence. |
-| after S1, before A1 (operator `<new>`, configuration `<old>`) | the admin sends `set_operator(<old>)` (`set-operator-plan --to-relayer <old> --to-relayer-key <old key ARN>` first: `<old>` funded >= floor), then start the pools on the unchanged configuration (until then the old configuration's backend refuses the deployment: financial mode off). |
-| after A1 (configuration `<new>`) | 1. `drain-pool` every pool; `capture-evidence <dir2>` (a NEW run and evidence directory). 2. `relayer-rotation-gate --from-relayer <new> --to-relayer <old> --evidence <dir2> --record <dir2>/gate-relayer-rotation.json` -> OPEN (the configuration names `<new>`, `RELAYQ#<new>` empty, every pool drained, the operator `<new>` or `<old>`). 3. If the operator is `<new>`: the admin sends `set_operator(<old>)` (`set-operator-plan --to-relayer <old> --to-relayer-key <old key ARN>`). 4. `stacks/app`: `signing_keys.relayer` = the old key, `escrow.relayer_address` = `<old>`, `escrow.trust.operators` = `[<old>]`, `relayer_rotation_key_arns` = `[<r<N> ARN>]`; apply (the pools start from zero). The ledger stack does not change (r<N> stays). 5. Certify the rollback: `--scenario relayer-rotation-drill --from-relayer <new> --to-relayer <old>` -- the same proof, now for the old relayer. |
+| after S1, before A1 (operator `<new>`, configuration `<old>`) | the admin sends `set_operator(<old>)` (`set-operator-plan --to-relayer <old> --to-relayer-key <old key ARN>` first; if `<old>` is under the planning reserve, top it up just in time -- BEFORE the pools restart and it can receive new money work), then start the pools on the unchanged configuration (until then the old configuration's backend refuses the deployment: financial mode off). |
+| after A1 (configuration `<new>`) | 1. `drain-pool` every pool; `capture-evidence <dir2>` (a NEW run and evidence directory). 2. `relayer-rotation-gate --from-relayer <new> --to-relayer <old> --evidence <dir2> --record <dir2>/gate-relayer-rotation.json` -> OPEN (the configuration names `<new>`, `RELAYQ#<new>` empty, every pool drained, the operator `<new>` or `<old>`). 3. If the operator is `<new>`: the admin sends `set_operator(<old>)` (`set-operator-plan --to-relayer <old> --to-relayer-key <old key ARN>`). Before step 4, `<old>` must hold the planning reserve (a just-in-time top-up if it does not; `set-operator-plan` reports the shortfall) -- the old relayer signs nothing during the rollback itself, but the restarted pools give it new money work. 4. `stacks/app`: `signing_keys.relayer` = the old key, `escrow.relayer_address` = `<old>`, `escrow.trust.operators` = `[<old>]`, `relayer_rotation_key_arns` = `[<r<N> ARN>]`; apply (the pools start from zero). The ledger stack does not change (r<N> stays). 5. Certify the rollback: `--scenario relayer-rotation-drill --from-relayer <new> --to-relayer <old>` -- the same proof, now for the old relayer. |
 
 **No safe rollback is defined (stop; owner decision) when:**
 - **`RELAYQ#<new>` holds entries** (the new relayer accepted work it cannot finish -- e.g. it is unfunded or not yet the
@@ -585,7 +604,7 @@ L6-5B flags (`--game-generations`, `--page-actions <arns>|none`, `--ticket-actio
 | `flip` | flip-drill | `flip-record.json` (L6-2's record: `gamesDoctor aws flip ... --flip-record <dir>/flip-record.json`, then `flip-observe` / `recover --flip-record` with the same file), the per-pool captures, `cluster-tasks.json`, `listener-rules.json` | the window opened BEFORE the routing CAS; the CAS applied (version N+1) and the roles settled; both pools restarted into their roles (L6-2's `checkRoleChange`: exit 5, a replacement) and the singleton roles are on the new primary; no service task of either pool stopped with exit 3 or 4 since the window opened (the COMPLETE cluster listing); `/gs*` on the new primary and every pool's exact route (L6-2's `checkPoolListenerRules`); the recovery of the old epoch settled (it closed the window); the suppression published, at most 45 minutes, ended before the capture (+5 min tail). |
 | `flip-alarms` | flip-drill | `probe-flip-alarms.json` (`18COSMOS/L6-6-FLIP-ALARM-DRILL/v1`) | an exit 3 inside the window still tripped A1 (actions not suppressed); a suppressible alarm still failing after the window became actionable (`ActionsSuppressedBy` `Alarm` during, `None` after); only the flip's two pools' suppressors were ALARM during it. |
 | `relayer-rotation` | relayer-rotation-drill (`--from-relayer <old> --to-relayer <new>`) | `gate-relayer-rotation.json` (`awsDeploy relayer-rotation-gate ... --record <dir>/gate-relayer-rotation.json`, BEFORE the change; v2 since LIVE-6 relayer rotation) | L6-5B's `rotationGateRecordProblem` (v2: plus the deployment to keep, and the contract's operator at the gate = the old or the new relayer); every pool of this deployment drained at the gate; `RELAYQ#<old>` read completely and empty; `RELAYQ#<new>` never consulted; the configuration changed only afterwards (the gate saw the old address, the live document names the new one, every running task started after the gate). Unknown / unreadable = FAIL; no automatic queue migration. |
-| `relayer-rotation-proof` | relayer-rotation-drill | the live reading `stage-cert certify` makes itself (read-only; kept as `rotation-proof.json`, judged in memory) + the gate's own record as the baseline | the change WORKED (`staging/rotationProof.ts`): the runtime configuration names the new relayer (a trusted operator, not the old key); the contract's operator on chain IS the new relayer (still the old one, or a third: FAIL); the configured chain, contract and checksums are the gate's and this build's certified ones; the deployment verifies (the server's own `verifyJunoDeployment`); the routing's primary pool's CURRENT task holds `ROLE#relayer#<new>` at the ledger's `FENCE#relayer#<new>` epoch; that task's own fresh `TASK#` heartbeat says relayer `usable` (primary, serving, ready); escrow active (its backend `active`, the deployment verified, the contract not paused); the settlement and admission keys exactly the gate's; `RELAYQ#<old>` still empty. Unbound readers, an unread chain or table, a v1 gate record: FAIL. |
+| `relayer-rotation-proof` | relayer-rotation-drill | the live reading `stage-cert certify` makes itself (read-only; kept as `rotation-proof.json`, judged in memory) + the gate's own record as the baseline | the change WORKED (`staging/rotationProof.ts`): the runtime configuration names the new relayer (a trusted operator, not the old key); the contract's operator on chain IS the new relayer (still the old one, or a third: FAIL); the configured chain, contract and checksums are the gate's and this build's certified ones; the deployment verifies (the server's own `verifyJunoDeployment`); the routing's primary pool's CURRENT task holds `ROLE#relayer#<new>` at the ledger's `FENCE#relayer#<new>` epoch; that task's own fresh `TASK#` heartbeat says relayer `usable` (primary, serving, ready); escrow active (its backend `active`, the deployment verified, the contract not paused); the settlement and admission keys exactly the gate's; `RELAYQ#<old>` still empty; **(proof v2, L6-12D)** the configured relayer KMS key's public key (GetPublicKey only) derives exactly the configured new relayer address, that account exists on chain and holds at least the one-game planning reserve, and its on-chain pub_key -- if the chain shows one -- is the same key (absent is accepted: a funded account that has never signed has none; control is proven by the KMS derivation). Unbound readers, an unread chain, table, key or balance, a v1 gate record, a v1 proof reading: FAIL. |
 
 **A planned primary DRAIN is not a flip** (owner decision): no suppression covers it, and A13 may page. No maintenance
 window exists. **Never suppressed, and certified so** (`alarms`): A1, the store alarms, the money sweep, generation /

@@ -48,9 +48,9 @@ import { ledgerFencedHook, takeRelayerRole } from "../../aws/ownership/relayerRo
 import { parseJunoBackendConfig } from "../../escrow/juno/junoConfig";
 import { addressOfPublicKey } from "../../escrow/juno/cosmosTx";
 import { publicKeyOf } from "../../escrow/juno/secp256k1";
-import { deploymentIdentityOf } from "../../aws/deploy/junoChain";
+import { deploymentIdentityOf, relayerFunding } from "../../aws/deploy/junoChain";
 import { collectRotationProof, judgeRotationProof } from "../../aws/deploy/staging/rotationProof";
-import { fakeJunoChain } from "../../aws/deploy/staging/rotationTestSupport";
+import { fakeJunoChain, fakeRelayerKms } from "../../aws/deploy/staging/rotationTestSupport";
 import { ConformanceTables, newRunId, requireLocal } from "./dynamoLocal";
 
 const target = dynamoLocalTargetFromEnv();
@@ -296,7 +296,7 @@ describe("§4 STAGING_ROTATION_READERS: the post-rotation proof reads what the r
     const holder: TaskStatus = { task: "t-new-relayer-01", pool: "p1", poolEpoch: writer.epoch, generation: 1, environment: "staging", build: "b-rot", role: "primary", phase: "serving", ready: true, reasons: [], relayer: "usable", escrow: "active", poolWriterCheckAgeMs: 100, startedAt: clock.now - 300_000 };
     assert.equal(await heartbeat.write(holder, 7, clock.now - 15_000), "written");
     const proof = async () =>
-      collectRotationProof({ readers: STAGING_ROTATION_READERS, juno: fakeJunoChain({ operator: NEW }), clients: { app: admin, ledger: admin }, tables: { game, ledger }, config: parse(newDoc), run: "l6cert-rot", environment: "staging", from: OLD, to: NEW, now: () => clock.now });
+      collectRotationProof({ readers: STAGING_ROTATION_READERS, juno: fakeJunoChain({ operator: NEW, accounts: [NEW] }, { [NEW]: relayerFunding(parse(newDoc)).floor }), kms: fakeRelayerKms({ [newDoc.relayer.signer.key_ref as string]: Buffer.alloc(32, 0x21) }), clients: { app: admin, ledger: admin }, tables: { game, ledger }, config: parse(newDoc), run: "l6cert-rot", environment: "staging", from: OLD, to: NEW, now: () => clock.now });
     const judged = async () => judgeRotationProof(await proof(), { ok: true, value: gate, sha256: "x" }, { environment: "staging", from: OLD, to: NEW, primaryPool: "p1", generation: 1 });
     const failed = (checks: Awaited<ReturnType<typeof judged>>) => checks.filter((c) => c.status !== "pass").map((c) => `${c.name}: ${c.detail}`).join("\n");
     const before = [await snapshot(game), await snapshot(ledger)];

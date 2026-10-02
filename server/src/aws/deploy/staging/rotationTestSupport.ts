@@ -12,7 +12,8 @@ import type { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
 import { addressOfPublicKey } from "../../../escrow/juno/cosmosTx";
 import { JUNO_ESCROW_CONTRACT_NAME, type JunoBackendConfig } from "../../../escrow/juno/junoConfig";
-import { publicKeyOf } from "../../../escrow/juno/secp256k1";
+import { bigIntTo32, decompressPublicKey, publicKeyOf } from "../../../escrow/juno/secp256k1";
+import type { KmsClient } from "../../../escrow/juno/signer";
 import { JunoRpcError, type JunoRest } from "../../../escrow/juno/junoRest";
 import type { JunoChainReader } from "../junoChain";
 import type { RelayQueueState } from "../relayerRotation";
@@ -31,6 +32,10 @@ export interface EscrowChainScript {
   readonly unreachable?: boolean;
   /** Accounts that exist on chain. */
   readonly accounts?: readonly string[];
+  /** An existing account's on-chain pub_key (compressed hex; default null: it has never signed). LIVE-6 L6-12D. */
+  readonly pubKeys?: Readonly<Record<string, string | null>>;
+  /** The account read fails as a malformed answer (the node answered, nothing usable). LIVE-6 L6-12D. */
+  readonly accountMalformed?: boolean;
 }
 
 /** The contract admin the doubles answer (an account no relayer key controls). */
@@ -73,7 +78,11 @@ export function escrowRestFor(config: JunoBackendConfig, script: EscrowChainScri
     nodeChainId: async () => (down(), config.chainId),
     latestBlock: async () => (down(), { chain_id: config.chainId, height: "1234", time: "2026-09-30T10:00:00Z" }),
     syncing: async () => (down(), false),
-    account: async (address: string) => (down(), (script.accounts ?? []).includes(address) ? { height: "1234", address, account_number: "7", sequence: "0", pub_key: null } : null),
+    account: async (address: string) => {
+      down();
+      if (script.accountMalformed === true) throw new JunoRpcError("malformed", "the account answer is not the expected shape (test)");
+      return (script.accounts ?? []).includes(address) ? { height: "1234", address, account_number: "7", sequence: "0", pub_key: script.pubKeys?.[address] ?? null } : null;
+    },
     contract: async (address: string) => (down(), { address, code_id: "42", admin: config.wasmAdmin, creator: STAGING_ADMIN, label: "18cosmos-escrow" }),
     codeChecksum: async () => (down(), script.checksum ?? config.codeChecksums[0]),
     smart,
@@ -98,6 +107,26 @@ export function fakeJunoChain(script: EscrowChainScript = {}, balances: Readonly
       calls.push(`balance ${address}`);
       if (script.unreachable === true) throw new JunoRpcError("unavailable", "the node is unreachable (test)");
       return balances[address] ?? BigInt(0);
+    },
+  };
+}
+
+/** LIVE-6 L6-12D: a KMS client (`getPublicKey` only) answering each key ARN's public key as KMS does (DER SPKI, the
+ *  uncompressed point) from a test secret; an unknown ARN, or `fails`, throws as KMS would. Never signs. */
+export function fakeRelayerKms(secrets: Readonly<Record<string, Buffer>>, options: { readonly fails?: Error } = {}): KmsClient & { readonly calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    async getPublicKey(keyRef: string) {
+      calls.push(`GetPublicKey ${keyRef}`);
+      if (options.fails !== undefined) throw options.fails;
+      const secret = secrets[keyRef];
+      if (secret === undefined) throw Object.assign(new Error(`no key ${keyRef} (test)`), { name: "NotFoundException" });
+      const { x, y } = decompressPublicKey(publicKeyOf(secret));
+      return Buffer.concat([Buffer.from("3056301006072a8648ce3d020106052b8104000a034200", "hex"), Buffer.from([4]), bigIntTo32(x), bigIntTo32(y)]);
+    },
+    async signDigest() {
+      throw new Error("the rotation proof never signs");
     },
   };
 }

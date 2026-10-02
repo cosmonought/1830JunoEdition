@@ -44,9 +44,15 @@
 //   set-operator-plan --runtime-parameter <SSM ARN> --environment <env> --to-relayer <new> [--to-relayer-key <key ARN>]
 //       LIVE-6 relayer rotation (`junoChain.ts`), READ-ONLY: the contract's admin (the ONE account that may send it) and
 //       its current operator, read from the chain; the exact `set_operator` message for the admin to sign OUTSIDE this
-//       tool (nothing here holds, asks for or uses the admin's key); and whether the new relayer account exists on chain
-//       with at least the funding floor (`relayerFunding`). With `--to-relayer-key`, the address must be the one that KMS
-//       key controls (derived as the server derives it). Exit 0: ready (or already set); 1: not ready (said why).
+//       tool (nothing here holds, asks for or uses the admin's key); and whether the `--to-relayer` account exists on chain
+//       with at least the one-game operational planning reserve (`relayerFunding`, LIVE-6 L6-12D: 73 transactions x the
+//       gas policy's effective per-transaction cap -- 8.2125 JUNOX by default; the derivation is printed). With
+//       `--to-relayer-key`, the address must be the one that KMS key controls (derived as the server derives it). The
+//       reserve is ALWAYS evaluated, also when the contract's operator is already `--to-relayer` (S2: the command doubles as
+//       the ACTIVE relayer's readiness check). Exit 0: ready, or already set AND funded; 1: not ready (said why), including
+//       already set but under the reserve. A rollback (`--to-relayer <old>`): the old relayer signs no transaction during
+//       the rollback itself; it must hold the reserve BEFORE the rollback's pools restart and can receive new money work
+//       (a just-in-time top-up), never as a pre-funding condition of the forward rotation.
 //
 // Credentials: the SDK's default chain (the operator's profile or the pipeline's role -- the task's refusal of static
 // keys is the RUNTIME's rule, not this tool's). Regions: the runtime document's and the ARNs', never the environment's.
@@ -84,7 +90,7 @@ import {
   type Check,
 } from "./deployVerify";
 import { VERIFY_RECORD_FORMAT, writeRecord } from "./staging/evidence";
-import { contractControl, deploymentIdentityOf, relayerFunding, setOperatorMessage, type ContractControl, type JunoChainReader } from "./junoChain";
+import { contractControl, deploymentIdentityOf, displayUnits, relayerFunding, relayerFundingDerivation, setOperatorMessage, type ContractControl, type JunoChainReader } from "./junoChain";
 
 export const EXIT_OK = 0;
 export const EXIT_FAILED = 1;
@@ -592,12 +598,8 @@ async function chainOperator(deps: DeployDeps, config: NonNullable<AwsStartup["e
 /* set-operator-plan (LIVE-6 relayer rotation; junoChain.ts)            */
 /* ------------------------------------------------------------------ */
 
-/** Base units as a decimal of the display unit (6 decimals, integer arithmetic): 33500000 -> "33.5". */
-const display = (units: bigint): string => {
-  const whole = units / BigInt(1_000_000);
-  const frac = (units % BigInt(1_000_000)).toString().padStart(6, "0").replace(/0+$/, "");
-  return frac.length === 0 ? whole.toString() : `${whole.toString()}.${frac}`;
-};
+/** Base units as a decimal of the display unit (6 decimals, integer arithmetic): 8212500 -> "8.2125". */
+const display = displayUnits;
 
 export async function setOperatorPlanCommand(argv: readonly string[], deps: DeployDeps): Promise<number> {
   const flags = parseFlags(argv, ["--runtime-parameter", "--environment", "--to-relayer", "--to-relayer-key"], []);
@@ -627,7 +629,9 @@ export async function setOperatorPlanCommand(argv: readonly string[], deps: Depl
   /* 2. The contract on chain: its admin (who must sign) and its operator (what changes). */
   const operator = await chainOperator(deps, config);
   check("the contract's admin and operator (read from the chain)", operator.ok, operator.ok ? `admin ${operator.control.admin}; operator ${operator.control.operator}; ${operator.control.contract_name} ${operator.control.contract_version}${operator.control.paused ? "; PAUSED" : ""}` : "", operator.ok ? "" : operator.detail);
-  /* 3. The new account: it must exist on chain (a never-funded account cannot sign) and hold the funding floor. */
+  /* 3. The account: it must exist on chain (a never-funded account cannot sign) and hold the one-game operational planning
+     reserve (LIVE-6 L6-12D). Evaluated in EVERY case -- also when the contract's operator is already `to` (S2), where it
+     is the active relayer's readiness check and still decides the exit. Fail-closed: unread is never ready. */
   const funding = relayerFunding(config);
   let account: "exists" | "absent" | string = "absent";
   let balance: bigint | null = null;
@@ -641,11 +645,13 @@ export async function setOperatorPlanCommand(argv: readonly string[], deps: Depl
     }
   }
   check(
-    `the new relayer account exists on chain and holds at least the funding floor (${display(funding.floor)} ${config.symbol})`,
+    `the relayer account exists on chain and holds at least the one-game planning reserve (${display(funding.floor)} ${config.symbol})`,
     account === "exists" && balance !== null && balance >= funding.floor,
-    `${to}: ${balance === null ? "?" : display(balance)} ${config.symbol} (${String(balance)} ${funding.denom})`,
+    `${to}: ${balance === null ? "?" : display(balance)} ${config.symbol} (${String(balance)} ${funding.denom}) >= ${display(funding.floor)} ${config.symbol} (${String(funding.floor)} ${funding.denom})`,
     account === "exists"
-      ? `${to} holds ${balance === null ? "an unread balance" : `${display(balance)} ${config.symbol} (${String(balance)} ${funding.denom})`}: send at least ${display(funding.floor - (balance ?? BigInt(0)))} ${config.symbol} more before the pools restart`
+      ? balance === null
+        ? `${to} holds an unread balance: not ready (an unread balance is never enough)`
+        : `${to} holds ${display(balance)} ${config.symbol} (${String(balance)} ${funding.denom}): send at least ${display(funding.floor - balance)} ${config.symbol} more before the pools restart and it can receive new money work`
       : account === "absent"
         ? `${to} does not exist on chain yet: fund it (a plain bank send of at least ${display(funding.floor)} ${config.symbol}) before the pools restart -- an account that never received funds cannot sign`
         : `the account could not be read: ${account}`,
@@ -653,9 +659,14 @@ export async function setOperatorPlanCommand(argv: readonly string[], deps: Depl
   const exit = report(deps.out, checks);
   const already = operator.ok && operator.control.operator === to;
   deps.out("");
-  deps.out(`Funding floor (relayerFunding): ${String(funding.transactions)} relayer transactions (one worst-bound money game: Start, 64 checkpoints, Settle, Finalize) x gas.max_fee ${String(funding.maxFeePerTransaction)} ${funding.denom} = ${String(funding.floor)} ${funding.denom} (${display(funding.floor)} ${config.symbol}).`);
-  if (already) deps.out(`The contract's operator is ALREADY ${to}: no set_operator is needed.`);
-  else {
+  deps.out("One-game operational planning reserve (relayerFunding; a readiness policy, not a contract cap or an absolute maximum game cost):");
+  for (const line of relayerFundingDerivation(funding, config.symbol)) deps.out(`  ${line}`);
+  deps.out("  The ACTIVE relayer must hold it before it can receive new money work; the relayer's hold-and-page behaviour and operator replenishment cover the rest.");
+  deps.out("  Rollback: the old relayer signs no transaction during the rollback itself; if a rollback is needed, fund the old relayer to this reserve BEFORE the rollback's pools restart and can receive new money work (not before the forward rotation).");
+  if (already) {
+    deps.out(`The contract's operator is ALREADY ${to}: no set_operator is needed.`);
+    deps.out(`  This run doubles as the ACTIVE relayer's readiness check (S2): ${exit === EXIT_OK ? "READY -- the active relayer holds the planning reserve" : "NOT READY -- see the FAIL above (the active relayer must hold the planning reserve before it can receive new money work)"}.`);
+  } else {
     deps.out("THE ADMIN'S TRANSACTION (signed and sent OUTSIDE this tool, by the contract admin -- never by a relayer key; nothing here signs):");
     deps.out(`  chain     ${config.chainId}`);
     deps.out(`  sender    ${operator.ok ? operator.control.admin : "<the contract admin: unread>"}   (Config.admin; admin_guard refuses any other sender, and any funds)`);
@@ -665,6 +676,7 @@ export async function setOperatorPlanCommand(argv: readonly string[], deps: Depl
     deps.out(`  e.g.      junod tx wasm execute ${config.contract} '${setOperatorMessage(to)}' --from <the admin's key> --chain-id ${config.chainId} --node <an RPC endpoint> --gas auto --gas-adjustment 1.3 --gas-prices 0.075${funding.denom}`);
     deps.out("  WHEN      only inside the drained window: after `relayer-rotation-gate` is OPEN and before the pools restart on the new configuration.");
   }
+  deps.out(`${exit === EXIT_OK ? "READY" : "NOT READY"}: set-operator-plan --to-relayer ${to}${already ? " (operator already set; active-relayer readiness)" : ""}`);
   return exit;
 }
 

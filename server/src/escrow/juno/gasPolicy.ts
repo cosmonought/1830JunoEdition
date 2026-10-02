@@ -41,7 +41,9 @@ export const DEFAULT_GAS_POLICY = Object.freeze({
   maxFee: BigInt(500_000),
 });
 
-const ceilDiv = (a: bigint, b: bigint): bigint => (a + b - BigInt(1)) / b;
+/** ceil(a / b) for non-negative bigints and a positive divisor (integers only). Exported for the deploy tools' relayer
+ *  reserve (`aws/deploy/junoChain.ts` `perTransactionFeeCap`), which must round exactly as `decideGas` does. */
+export const ceilDiv = (a: bigint, b: bigint): bigint => (a + b - BigInt(1)) / b;
 
 export type GasDecision = { readonly ok: true; readonly gasLimit: bigint; readonly fee: bigint } | { readonly ok: false; readonly reason: string };
 

@@ -37,19 +37,36 @@
 //   6. that task says, freshly, that its relayer is `usable` (primary, serving, ready, this generation and environment);
 //   7. escrow is active: the holder's escrow `active`, the chain verified, the contract not paused;
 //   8. the settlement key (registry id, public key, KMS key) and 9. the admission key (public key, KMS key) are the gate's;
-//   10. `RELAYQ#<old>` is still empty (no old work appeared after the gate -- none migrated, none silently ignored).
-// "Every running task started after the gate" stays the rotation gate's own check (`judgeRotationDrill`).
+//   10. `RELAYQ#<old>` is still empty (no old work appeared after the gate -- none migrated, none silently ignored);
+//   11. (v2, LIVE-6 L6-12D) the new relayer ACCOUNT is bound and funded:
+//       - the configured relayer KMS key's public key (read through the safe public-key path: `GetPublicKey`, then the
+//         signer's own `compressedKeyFromSpki`) derives -- by the canonical `addressOfPublicKey(…, "juno")`, as
+//         `checkSignerIdentities` does -- EXACTLY the configured new relayer address: the primary cryptographic binding
+//         between the configured key and the configured address;
+//       - that account exists on chain (`/cosmos/auth/v1beta1/accounts`) and holds at least the one-game operational
+//         planning reserve (`junoChain.ts` `relayerFunding`, from the configuration's own gas policy);
+//       - its on-chain pub_key: ABSENT is acceptable (a funded account that has never signed has none) and is NOT proof
+//         of control -- control is the KMS derivation above; PRESENT, it must be the same secp256k1 key (a conflicting
+//         key FAILS). The proof never requires the new relayer to have sent a transaction.
+// "Every running task started after the gate" stays the rotation gate's own check (`judgeRotationDrill`). A v1 reading
+// (no account binding) is refused by name.
 
 import type { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 
+import { addressOfPublicKey } from "../../../escrow/juno/cosmosTx";
 import { CANONICAL_JUNO_ESCROW_CHECKSUMS, verifyJunoDeployment, type JunoBackendConfig } from "../../../escrow/juno/junoConfig";
+import type { JunoRest } from "../../../escrow/juno/junoRest";
+import { compressedKeyFromSpki, type KmsClient } from "../../../escrow/juno/signer";
 import type { Check } from "../deployVerify";
 import { rotationDeploymentOf } from "../gateRecords";
-import { contractControl, signerRefText, type JunoChainReader } from "../junoChain";
+import { contractControl, displayUnits, relayerFunding, signerRefText, type JunoChainReader } from "../junoChain";
 import type { RelayQueueState } from "../relayerRotation";
 import { fail, judge, obj, type EvidenceRead } from "./evidence";
 
-export const ROTATION_PROOF_FORMAT = "18COSMOS/L6-RELAYER-ROTATION-PROOF/v1";
+/** v2 (LIVE-6 L6-12D): adds `relayer_account` (the KMS-derived address, the on-chain account and balance, the planning
+ *  reserve). A v1 reading carries no such binding and is refused. */
+export const ROTATION_PROOF_FORMAT = "18COSMOS/L6-RELAYER-ROTATION-PROOF/v2";
+export const ROTATION_PROOF_FORMAT_V1 = "18COSMOS/L6-RELAYER-ROTATION-PROOF/v1";
 export const ROTATION_PROOF_FILE = "rotation-proof.json";
 /** The holder writes its TASK# item every 30 s: older than this (8 missed writes, with clock skew) is not "now". */
 export const HOLDER_STATUS_MAX_AGE_MS = 4 * 60_000;
@@ -107,6 +124,29 @@ export type ChainReading =
     }
   | { readonly state: "unavailable"; readonly detail: string };
 
+/** The one-game operational planning reserve the proof held the new account to (`relayerFunding`; decimal strings). */
+export interface ProofReserve {
+  readonly denom: string;
+  readonly symbol: string;
+  readonly max_fee: string;
+  readonly max_gas_fee: string;
+  readonly per_transaction_cap: string;
+  readonly transactions: string;
+  readonly floor: string;
+}
+
+/** v2: the new relayer account -- what binds it to the configured key, whether it exists, what it holds. */
+export interface RelayerAccountReading {
+  /** The configured relayer KMS key's compressed public key, and the address it derives (canonically). */
+  readonly key: ProofRead<{ readonly key_ref: string; readonly public_key_hex: string; readonly derived_address: string }>;
+  /** `--to-relayer`'s account on chain (absent: it never received funds). `pub_key_hex` null: it has never signed. */
+  readonly account: ProofRead<{ readonly address: string; readonly account_number: string; readonly sequence: string; readonly pub_key_hex: string | null }>;
+  /** `--to-relayer`'s balance in the fee denomination (base units, a decimal string). */
+  readonly balance: ProofRead<{ readonly amount: string; readonly denom: string }>;
+  /** null: no configuration to derive it from. */
+  readonly reserve: ProofReserve | null;
+}
+
 export interface RotationProofRecord {
   readonly format: typeof ROTATION_PROOF_FORMAT;
   readonly run_id: string;
@@ -124,6 +164,8 @@ export interface RotationProofRecord {
   readonly fence: ProofRead<{ readonly epoch: number }>;
   readonly holder: ProofRead<HolderStatus>;
   readonly old_queue: { readonly state: "empty" } | { readonly state: "open"; readonly entries: number } | { readonly state: "unknown"; readonly detail: string };
+  /** v2 (LIVE-6 L6-12D). */
+  readonly relayer_account: RelayerAccountReading;
 }
 
 const describe = (error: unknown): string => `${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`.slice(0, 300);
@@ -139,6 +181,60 @@ async function readAs<T>(run: () => Promise<T | null>): Promise<ProofRead<T>> {
 }
 
 const notRead = (why: string): { readonly state: "unavailable"; readonly detail: string } => ({ state: "unavailable", detail: why });
+
+/** The reserve as the record carries it (from the configuration's own gas policy; integers as decimal strings). */
+export function proofReserveOf(config: JunoBackendConfig): ProofReserve {
+  const f = relayerFunding(config);
+  return { denom: f.denom, symbol: config.symbol, max_fee: String(f.maxFee), max_gas_fee: String(f.maxGasFee), per_transaction_cap: String(f.perTransactionCap), transactions: String(f.transactions), floor: String(f.floor) };
+}
+
+const unreadKind = (error: unknown): "unreadable" | "unavailable" => (UNREADABLE.test((error as { name?: string } | null)?.name ?? "") || (error as { kind?: string } | null)?.kind === "malformed" ? "unreadable" : "unavailable");
+
+/**
+ * v2 (LIVE-6 L6-12D): the new relayer account's binding and funding, read-only. The KMS public key comes from the
+ * configured relayer signer's key ARN through `kms.getPublicKey` (public material; nothing is signed), decoded by the
+ * signer's own `compressedKeyFromSpki`; the address is the canonical `addressOfPublicKey(…, "juno")`. The account and the
+ * balance are `to`'s, over the configuration's own endpoints. Every failure is recorded as what it was (never thrown).
+ */
+async function readRelayerAccount(input: { readonly config: JunoBackendConfig | null; readonly kms: KmsClient | undefined; readonly juno: JunoChainReader | undefined; readonly rest: JunoRest | null; readonly to: string }): Promise<RelayerAccountReading> {
+  const { config, kms, juno, rest, to } = input;
+  if (config === null) {
+    const why = notRead("the runtime document has no escrow");
+    return { key: why, account: why, balance: why, reserve: null };
+  }
+  let key: RelayerAccountReading["key"];
+  const signer = config.relayer.signer;
+  if (signer.kind !== "kms") key = notRead("the configured relayer signer is not a KMS key (AWS storage signs only with KMS keys)");
+  else if (kms === undefined) key = notRead("no KMS public-key reader is bound in this build");
+  else {
+    try {
+      const compressed = compressedKeyFromSpki(await kms.getPublicKey(signer.key_ref));
+      key = { state: "ok", value: { key_ref: signer.key_ref, public_key_hex: compressed.toString("hex"), derived_address: addressOfPublicKey(compressed, "juno") } };
+    } catch (error) {
+      key = { state: unreadKind(error), detail: describe(error) };
+    }
+  }
+  let account: RelayerAccountReading["account"];
+  let balance: RelayerAccountReading["balance"];
+  if (juno === undefined || rest === null) {
+    account = notRead("no chain reader is bound in this build");
+    balance = notRead("no chain reader is bound in this build");
+  } else {
+    try {
+      const a = await rest.account(to);
+      account = a === null ? { state: "absent" } : { state: "ok", value: { address: a.address, account_number: a.account_number, sequence: a.sequence, pub_key_hex: a.pub_key } };
+    } catch (error) {
+      account = { state: unreadKind(error), detail: describe(error) };
+    }
+    try {
+      const amount = await juno.balance(config, to);
+      balance = typeof amount === "bigint" && amount >= BigInt(0) ? { state: "ok", value: { amount: amount.toString(), denom: config.gas.feeDenom } } : { state: "unreadable", detail: "the balance read answered no amount" };
+    } catch (error) {
+      balance = { state: unreadKind(error), detail: describe(error) };
+    }
+  }
+  return { key, account, balance, reserve: proofReserveOf(config) };
+}
 
 export function configuredRelayerOf(config: JunoBackendConfig): ConfiguredRelayer {
   return {
@@ -157,6 +253,8 @@ export function configuredRelayerOf(config: JunoBackendConfig): ConfiguredRelaye
 export async function collectRotationProof(input: {
   readonly readers: RotationReaders | undefined;
   readonly juno: JunoChainReader | undefined;
+  /** v2: the KMS client the configured relayer key's PUBLIC key is read through (`getPublicKey` only; absent: FAILS). */
+  readonly kms: KmsClient | undefined;
   readonly clients: { readonly app: DynamoDBClient; readonly ledger: DynamoDBClient };
   readonly tables: { readonly game: string; readonly ledger: string };
   readonly config: JunoBackendConfig | null;
@@ -170,15 +268,16 @@ export async function collectRotationProof(input: {
   const base = { format: ROTATION_PROOF_FORMAT, run_id: input.run, environment: input.environment, from_relayer: from, to_relayer: to } as const;
   const unbound = "the deployment's readers are not bound in this build (tools/awsDeploy.ts)";
   if (readers === undefined) {
-    return { ...base, readers_bound: false, read_at: new Date(input.now()).toISOString(), configured: config === null ? null : configuredRelayerOf(config), chain: notRead(unbound), routing: notRead(unbound), primary_pool: notRead(unbound), mirror: notRead(unbound), fence: notRead(unbound), holder: notRead(unbound), old_queue: { state: "unknown", detail: unbound } };
+    return { ...base, readers_bound: false, read_at: new Date(input.now()).toISOString(), configured: config === null ? null : configuredRelayerOf(config), chain: notRead(unbound), routing: notRead(unbound), primary_pool: notRead(unbound), mirror: notRead(unbound), fence: notRead(unbound), holder: notRead(unbound), old_queue: { state: "unknown", detail: unbound }, relayer_account: { key: notRead(unbound), account: notRead(unbound), balance: notRead(unbound), reserve: config === null ? null : proofReserveOf(config) } };
   }
   /* The chain: the contract's control fields and the server's own verification of every pin. */
   let chain: ChainReading;
+  let rest: JunoRest | null = null;
   if (config === null) chain = notRead("the runtime document has no escrow");
   else if (input.juno === undefined) chain = notRead("no chain reader is bound in this build");
   else {
     try {
-      const rest = input.juno.rest(config);
+      rest = input.juno.rest(config);
       const control = await contractControl(rest, config);
       const verdict = await verifyJunoDeployment(config, rest);
       chain = { state: "ok", operator: control.operator, admin: control.admin, paused: control.paused, verification: verdict.kind === "verified" ? { kind: "verified", height: verdict.height } : verdict.kind === "mismatch" ? { kind: "mismatch", problems: verdict.problems.slice(0, 8).map((p) => p.slice(0, 300)) } : { kind: "unavailable", detail: verdict.detail.slice(0, 300) } };
@@ -199,7 +298,9 @@ export async function collectRotationProof(input: {
   } catch (error) {
     oldQueue = { state: "unknown", detail: describe(error) };
   }
-  return { ...base, readers_bound: true, read_at: new Date(input.now()).toISOString(), configured: config === null ? null : configuredRelayerOf(config), chain, routing, primary_pool: primaryPool, mirror, fence, holder: holder as ProofRead<HolderStatus>, old_queue: oldQueue };
+  /* v2: the new relayer account -- bound to the configured KMS key, on chain, holding the planning reserve. */
+  const relayerAccount = await readRelayerAccount({ config, kms: input.kms, juno: input.juno, rest, to });
+  return { ...base, readers_bound: true, read_at: new Date(input.now()).toISOString(), configured: config === null ? null : configuredRelayerOf(config), chain, routing, primary_pool: primaryPool, mirror, fence, holder: holder as ProofRead<HolderStatus>, old_queue: oldQueue, relayer_account: relayerAccount };
 }
 
 const readText = (r: ProofRead<unknown>): string => (r.state === "ok" ? "read" : r.state === "absent" ? "absent" : `${r.state} (${r.detail})`);
@@ -217,6 +318,18 @@ export function judgeRotationProof(
   if (expect.from === null || expect.to === null) return [fail("rotation proof: the addresses", "--from-relayer and --to-relayer name the rotation this proof certifies")];
   const { from, to } = expect;
   if (proof === null) return [fail("rotation proof: the live reading", "no post-rotation reading was made (stage-cert certify makes it for --scenario relayer-rotation-drill)")];
+  /* v2 only (LIVE-6 L6-12D): an earlier reading proves nothing about the new relayer account and is refused by name. */
+  const format = (proof as { readonly format?: unknown }).format;
+  if (format !== ROTATION_PROOF_FORMAT) {
+    return [
+      fail(
+        "rotation proof: the reading's format",
+        format === ROTATION_PROOF_FORMAT_V1
+          ? `a ${ROTATION_PROOF_FORMAT_V1} reading is refused: it does not bind the new relayer account (KMS-derived address, existence, the planning reserve); run stage-cert certify again with this build (${ROTATION_PROOF_FORMAT})`
+          : `the reading is ${JSON.stringify(String(format)).slice(0, 80)}, not ${ROTATION_PROOF_FORMAT}`,
+      ),
+    ];
+  }
   if (!proof.readers_bound) return [fail("rotation proof: the live reading", "not integrated: the deployment's readers are not bound in this build, so nothing after the rotation was proven")];
   const checks: Check[] = [];
   const baseline = gate.ok ? rotationDeploymentOf(gate.value) : null;
@@ -337,5 +450,58 @@ export function judgeRotationProof(
   /* 9. Nothing under the old address after the gate (no migration, nothing silently ignored). */
   const q = proof.old_queue;
   checks.push(judge(`rotation proof: RELAYQ#<old> is still empty (nothing appeared under ${from} after the gate)`, q.state === "empty", `RELAYQ#${from}: empty, every page read`, q.state === "open" ? `RELAYQ#${from} holds ${q.entries} entr${q.entries === 1 ? "y" : "ies"}: old-address work the new relayer never reads (no automatic migration)` : `RELAYQ#${from} UNKNOWN -- ${q.state === "unknown" ? q.detail : "?"} (an unread queue is never empty)`));
+  /* 11. (v2) The new relayer account: bound to the configured KMS key, on chain, holding the planning reserve. */
+  const account = judgeRelayerAccount(proof.relayer_account, c, to);
+  checks.push(judge("rotation proof: the new relayer account is the configured KMS key's, exists on chain, and holds the planning reserve", account.problems.length === 0, account.good, account.problems.join("; ")));
   return checks;
+}
+
+const DECIMAL = /^(0|[1-9][0-9]{0,38})$/;
+
+/** Check 11's verdict (pure): every condition, every unread or unbound reading a problem (fail-closed). */
+function judgeRelayerAccount(reading: RelayerAccountReading | undefined, c: ConfiguredRelayer | null, to: string): { readonly problems: readonly string[]; readonly good: string } {
+  if (reading === undefined || reading === null) return { problems: ["the reading carries no relayer account (not a v2 reading)"], good: "" };
+  const problems: string[] = [];
+  const { key, account, balance, reserve } = reading;
+  /* The binding: the configured KMS key derives exactly the configured new relayer address. */
+  if (key.state !== "ok") problems.push(`the configured relayer KMS key's public key ${readText(key)}: the address is not bound to the key`);
+  else {
+    if (key.value.derived_address !== to) problems.push(`the configured relayer KMS key ${key.value.key_ref} derives ${key.value.derived_address}, not the configured relayer ${to}`);
+    if (c !== null && c.relayer !== key.value.derived_address) problems.push(`the configuration names ${c.relayer}, but its relayer key derives ${key.value.derived_address}`);
+    if (c !== null && c.relayer_key_ref !== key.value.key_ref) problems.push(`the key read (${key.value.key_ref}) is not the configured relayer key (${c.relayer_key_ref})`);
+  }
+  /* The account exists; its on-chain pub_key, if any, is the same key. */
+  let pubKeyNote = "";
+  if (account.state === "absent") problems.push(`${to} does NOT exist on chain: it never received funds (fund it with at least the planning reserve${reserve === null ? "" : ` ${displayUnits(BigInt(reserve.floor))} ${reserve.symbol}`})`);
+  else if (account.state !== "ok") problems.push(`${to}'s account ${readText(account)}`);
+  else {
+    if (account.value.address !== to) problems.push(`the account read is ${account.value.address}, not ${to}`);
+    const onChain = account.value.pub_key_hex;
+    if (onChain === null) pubKeyNote = "on-chain pub_key absent (it has not signed yet; control is proven by the KMS derivation)";
+    else {
+      let derived: string | null = null;
+      try {
+        derived = addressOfPublicKey(Buffer.from(onChain, "hex"), "juno");
+      } catch {
+        derived = null;
+      }
+      if (derived !== to || (key.state === "ok" && onChain.toLowerCase() !== key.value.public_key_hex.toLowerCase())) {
+        problems.push(`the on-chain pub_key of ${to} (${onChain.slice(0, 80)}) CONFLICTS with the configured relayer KMS key${key.state === "ok" ? ` (${key.value.public_key_hex})` : ""}${derived === null ? ": not a secp256k1 account key" : derived !== to ? `: it controls ${derived}` : ""}`);
+      } else pubKeyNote = "on-chain pub_key present and equal to the KMS key";
+    }
+  }
+  /* The balance holds the one-game operational planning reserve. */
+  let held = "";
+  if (reserve === null || !DECIMAL.test(reserve.floor)) problems.push("no planning reserve was derived (no configuration)");
+  if (balance.state !== "ok") problems.push(`${to}'s balance ${readText(balance)}: an unread balance is never enough`);
+  else if (!DECIMAL.test(balance.value.amount)) problems.push(`${to}'s balance ${JSON.stringify(balance.value.amount).slice(0, 60)} is not an amount`);
+  else if (reserve !== null && DECIMAL.test(reserve.floor)) {
+    const amount = BigInt(balance.value.amount);
+    const floor = BigInt(reserve.floor);
+    if (balance.value.denom !== reserve.denom) problems.push(`the balance is in ${balance.value.denom}, not the fee denomination ${reserve.denom}`);
+    else if (amount < floor) problems.push(`${to} holds ${displayUnits(amount)} ${reserve.symbol} (${balance.value.amount} ${reserve.denom}), under the one-game planning reserve ${displayUnits(floor)} ${reserve.symbol} (${reserve.transactions} x ${reserve.per_transaction_cap} ${reserve.denom}): send at least ${displayUnits(floor - amount)} ${reserve.symbol} more`);
+    else held = `${displayUnits(amount)} ${reserve.symbol} >= the planning reserve ${displayUnits(floor)} ${reserve.symbol} (${reserve.transactions} x ${reserve.per_transaction_cap} ${reserve.denom})`;
+  }
+  const good = key.state === "ok" && account.state === "ok" ? `${key.value.key_ref} derives ${to}; account #${account.value.account_number} exists (${pubKeyNote}); ${held}` : "";
+  return { problems, good };
 }

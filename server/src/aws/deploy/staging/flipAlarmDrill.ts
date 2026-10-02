@@ -231,6 +231,8 @@ export function suppressorStates(alarms: unknown, environment: string): Record<s
 }
 
 const heldAlarmName = (environment: string, pool: string): string => `gs-${environment}-${pool}-${HELD_ALARM_ID}`;
+/** The values CloudWatch reports while a composite's actions ARE suppressed (absent when they are not). */
+const SUPPRESSED_BY: readonly string[] = Object.freeze(["Alarm", "WaitPeriod", "ExtensionPeriod"]);
 
 /* ------------------------------------------------------------------ */
 /* The three phases                                                     */
@@ -387,7 +389,12 @@ export function observeAfter(ctx: ObserveContext): Verdict<Record<string, unknow
   const composite = compositeAlarms(alarms.value).get(`${name}-notify`);
   if (raw === undefined || composite === undefined) return refused(`${name} or ${name}-notify is not in describe-alarms (never invented)`);
   if (raw.StateValue !== "ALARM") return refused(`${name} is ${String(raw.StateValue)} after the window: the condition must still fail (is the hold task still running?)`);
-  if (composite.StateValue !== "ALARM" || composite.ActionsSuppressedBy !== "None") return notYet(`${name}-notify is ${String(composite.StateValue)}, ActionsSuppressedBy ${String(composite.ActionsSuppressedBy)} (waiting for None)`);
+  /* DescribeAlarms OMITS ActionsSuppressedBy while a composite's actions are not suppressed (the CLI's text output shows
+     that absence as "None"): absent or null is the judge's canonical "None"; the three suppression states still wait;
+     any other value is refused, never read as unsuppressed. */
+  const by = composite.ActionsSuppressedBy;
+  if (by !== undefined && by !== null && !SUPPRESSED_BY.includes(String(by))) return refused(`${name}-notify ActionsSuppressedBy ${JSON.stringify(by)} is not a CloudWatch suppression state`);
+  if (composite.StateValue !== "ALARM" || by !== undefined && by !== null) return notYet(`${name}-notify is ${String(composite.StateValue)}, ActionsSuppressedBy ${by === undefined || by === null ? "(absent)" : String(by)} (waiting for no suppression)`);
   return { kind: "observed", value: { alarm: name, after: { at: stamp.from, composite_state: "ALARM", actions_suppressed_by: "None", alarm_state: "ALARM" } } };
 }
 

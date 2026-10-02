@@ -85,9 +85,10 @@ function probeTask(mode: "inject" | "hold", pool: string, extra: Record<string, 
 
 const emfLine = (pool: string, metrics: Record<string, number>, event: "task-lost" | "task-status") => JSON.stringify(buildEmfRecord({ environment: ENV, pool }, at("2026-10-02T02:03:58Z"), { event, metrics }));
 const metricAlarm = (name: string, state: string, extra: Record<string, unknown> = {}) => ({ AlarmName: name, StateValue: state, ActionsEnabled: true, ...extra });
-const composite = (name: string, state: string, suppressedBy: string, pool: string) => ({ AlarmName: name, StateValue: state, ActionsEnabled: true, ActionsSuppressor: `gs-staging-${pool}-flip-window`, ActionsSuppressedBy: suppressedBy, AlarmRule: `ALARM("${name.replace(/-notify$/, "")}")` });
+/** A composite as DescribeAlarms returns it: `"absent"` OMITS ActionsSuppressedBy (AWS's real shape when not suppressed). */
+const composite = (name: string, state: string, suppressedBy: string | null, pool: string) => ({ AlarmName: name, StateValue: state, ActionsEnabled: true, ActionsSuppressor: `gs-staging-${pool}-flip-window`, ...(suppressedBy === "absent" ? {} : { ActionsSuppressedBy: suppressedBy }), AlarmRule: `ALARM("${name.replace(/-notify$/, "")}")` });
 const HELD = "gs-staging-p2-a12b-pool-writer-unconfirmed";
-function alarms(over: { suppressors?: Record<string, string>; held?: string; notify?: string; suppressedBy?: string; a1?: Record<string, unknown>; extraComposites?: unknown[] } = {}) {
+function alarms(over: { suppressors?: Record<string, string>; held?: string; notify?: string; suppressedBy?: string | null; a1?: Record<string, unknown>; extraComposites?: unknown[] } = {}) {
   const sup = over.suppressors ?? { p1: "ALARM", p2: "ALARM" };
   return {
     MetricAlarms: [
@@ -95,7 +96,7 @@ function alarms(over: { suppressors?: Record<string, string>; held?: string; not
       ...Object.entries(sup).map(([p, s]) => metricAlarm(`gs-staging-${p}-flip-window`, s)),
       metricAlarm(HELD, over.held ?? "ALARM"),
     ],
-    CompositeAlarms: [composite(`${HELD}-notify`, over.notify ?? "ALARM", over.suppressedBy ?? "Alarm", "p2"), ...(over.extraComposites ?? [])],
+    CompositeAlarms: [composite(`${HELD}-notify`, over.notify ?? "ALARM", over.suppressedBy === undefined ? "Alarm" : over.suppressedBy, "p2"), ...(over.extraComposites ?? [])],
   };
 }
 const history = (items: Array<{ at: string; to: string }>) => ({ AlarmHistoryItems: items.map((i) => ({ AlarmName: "gs-staging-a1-unexpected-task-loss", HistoryItemType: "StateUpdate", Timestamp: i.at, HistoryData: JSON.stringify({ oldState: { stateValue: "OK" }, newState: { stateValue: i.to } }) })) });
@@ -115,7 +116,7 @@ function drillDir(over: { closedAt?: number | null; inject?: Record<string, unkn
   write(dir, FLIP_ALARM_FILES.raw("during", "alarms"), over.during ?? alarms());
   write(dir, FLIP_ALARM_FILES.raw("during", "stamp"), { captured_from: df, captured_to: dt });
   const [af, atTo] = over.afterStamp ?? [at("2026-10-02T02:30:00Z"), at("2026-10-02T02:30:02Z")];
-  write(dir, FLIP_ALARM_FILES.raw("after", "alarms"), over.after ?? alarms({ suppressors: { p1: "OK", p2: "OK" }, suppressedBy: "None" }));
+  write(dir, FLIP_ALARM_FILES.raw("after", "alarms"), over.after ?? alarms({ suppressors: { p1: "OK", p2: "OK" }, suppressedBy: "absent" }));
   write(dir, FLIP_ALARM_FILES.raw("after", "stamp"), { captured_from: af, captured_to: atTo });
   return dir;
 }
@@ -302,10 +303,14 @@ describe("flip alarm recorder: each phase from AWS captures, never invented", ()
       assert.equal(v.kind, "observed", reasons(v as any));
       assert.deepEqual((v as any).value.after, { at: at("2026-10-02T02:30:00Z"), composite_state: "ALARM", actions_suppressed_by: "None", alarm_state: "ALARM" });
       for (const [after, stamp, kind, why] of [
-        [alarms({ suppressedBy: "Alarm" }), undefined, "not-yet", /waiting for None/],
-        [alarms({ suppressedBy: "ExtensionPeriod" }), undefined, "not-yet", /waiting for None/],
-        [alarms({ suppressedBy: "None" }), [at("2026-10-02T02:19:00Z"), at("2026-10-02T02:19:02Z")], "not-yet", /has not ended/],
-        [alarms({ held: "OK", suppressedBy: "None" }), undefined, "refused", /must still fail/],
+        [alarms({ suppressedBy: "Alarm" }), undefined, "not-yet", /waiting for no suppression/],
+        [alarms({ suppressedBy: "WaitPeriod" }), undefined, "not-yet", /waiting for no suppression/],
+        [alarms({ suppressedBy: "ExtensionPeriod" }), undefined, "not-yet", /waiting for no suppression/],
+        [alarms({ suppressedBy: "None" }), undefined, "refused", /not a CloudWatch suppression state/],
+        [alarms({ suppressedBy: "Bogus" }), undefined, "refused", /not a CloudWatch suppression state/],
+        [alarms({ suppressedBy: "absent", notify: "OK" }), undefined, "not-yet", /is OK/],
+        [alarms({ suppressedBy: "absent" }), [at("2026-10-02T02:19:00Z"), at("2026-10-02T02:19:02Z")], "not-yet", /has not ended/],
+        [alarms({ held: "OK", suppressedBy: "absent" }), undefined, "refused", /must still fail/],
       ] as Array<[unknown, [number, number] | undefined, string, RegExp]>) {
         write(dir, FLIP_ALARM_FILES.raw("after", "alarms"), after);
         write(dir, FLIP_ALARM_FILES.raw("after", "stamp"), { captured_from: (stamp ?? [at("2026-10-02T02:30:00Z")])[0], captured_to: (stamp ?? [0, at("2026-10-02T02:30:02Z")])[1] });
@@ -313,8 +318,17 @@ describe("flip alarm recorder: each phase from AWS captures, never invented", ()
         assert.equal(r.kind, kind, reasons(r as any));
         assert.match(reasons(r as any), why);
       }
+      /* AWS's REAL shape: ActionsSuppressedBy absent (and null, should a parser produce it) -> the canonical "None". */
+      for (const suppressedBy of ["absent", null] as const) {
+        write(dir, FLIP_ALARM_FILES.raw("after", "alarms"), alarms({ suppressedBy, suppressors: { p1: "OK", p2: "OK" } }));
+        write(dir, FLIP_ALARM_FILES.raw("after", "stamp"), { captured_from: at("2026-10-02T02:30:00Z"), captured_to: at("2026-10-02T02:30:02Z") });
+        const real = observeAfter(ctxOf(dir));
+        assert.equal(real.kind, "observed", `${String(suppressedBy)}: ${reasons(real as any)}`);
+        assert.equal((real as any).value.after.actions_suppressed_by, "None");
+        if (suppressedBy === "absent") assert.equal("ActionsSuppressedBy" in (alarms({ suppressedBy }).CompositeAlarms[0] as object), false, "the fixture omits the field, as AWS does");
+      }
       write(dir, "flip-record.json", flipRecord(null));
-      write(dir, FLIP_ALARM_FILES.raw("after", "alarms"), alarms({ suppressedBy: "None" }));
+      write(dir, FLIP_ALARM_FILES.raw("after", "alarms"), alarms({ suppressedBy: "absent" }));
       write(dir, FLIP_ALARM_FILES.raw("after", "stamp"), { captured_from: at("2026-10-02T02:30:00Z"), captured_to: at("2026-10-02T02:30:02Z") });
       assert.equal(observeAfter(ctxOf(dir)).kind, "not-yet", "a window still open (not closed, not expired) has no 'after'");
     } finally {

@@ -12,6 +12,11 @@
 //       Exit 0: PASS -- with the owner's GO, apply EXACTLY that stack.tfplan (what was judged is what is applied;
 //       Terraform refuses it if the state moved since); 1: FAIL (do NOT apply); 2: usage.
 //
+//   RECON-1A: app-read-authorize (step 7a) judges a TARGETED stacks/app plan -- run.json must record exactly its two
+//   -target addresses (GATE_TARGETS; plan-evidence writes them) -- and needs --region and --ledger-table-arn;
+//   ledger-operator-journal (step 7b) needs --ledger-table-arn. Every check prints PASS, FAIL or NOT EVALUATED (never a
+//   bare SKIP for a check that could not be judged); the verdict is PASS only when EVERY check passed.
+//
 //   migration-guard nat --evidence <dir> [--min-quiet-hours 24] [--record <file>]
 //       <dir> is `infra/aws/scripts/capture-nat-evidence`'s output (`natEvidence.ts`). PASS is evidence for the owner's
 //       manual NAT deletion decision (step 23), never a deletion.
@@ -21,13 +26,14 @@ import * as fs from "fs";
 import * as path from "path";
 
 import type { Check } from "../deployVerify";
-import { GATE_NAMES, GATES, isGateName, judgeMigrationPlan, MIGRATION_GUARD_FORMAT, STAGING_DEFAULTS, type GateName, type MigrationContext } from "./planGuards";
+import { GATE_NAMES, GATE_TARGETS, GATES, isGateName, judgeMigrationPlan, MIGRATION_GUARD_FORMAT, STAGING_DEFAULTS, type GateName, type MigrationContext } from "./planGuards";
 import { judgeNatEvidence, NAT_EVIDENCE_FORMAT, NAT_FILES, type NatEvidence, type NatFileKey } from "./natEvidence";
 
 export const MIGRATION_USAGE = [
   "usage:",
   `  awsDeploy migration-guard (${GATE_NAMES.join(" | ")}) --plan-evidence <evidence>/terraform/<stack> --environment <env> --app-account <id> [--origin-domain <name>] [--region <r> --ledger-table-arn <ARN> --signing-keys <a,b,c>] [--commit <reviewed sha>] [--generation 1] [--pool p1] [--retired-pools p2] [--record <file>]`,
   "      edge-cutover needs --origin-domain; host-create needs --region, --ledger-table-arn and --signing-keys (the ledger stack's outputs).",
+  "      app-read-authorize (step 7a, a TARGETED app plan) needs --region and --ledger-table-arn; ledger-operator-journal (step 7b) needs --ledger-table-arn.",
   "  awsDeploy migration-guard nat --evidence <dir> [--min-quiet-hours 24] [--record <file>]",
 ].join("\n");
 
@@ -80,7 +86,10 @@ const versionAtLeast = (v: string): boolean => {
   return true;
 };
 
-const line = (c: Check): string => `${c.status === "pass" ? "PASS" : c.status === "fail" ? "FAIL" : "SKIP"}  ${c.name}: ${c.detail}`;
+/** COST-2A's three-valued Check: a check that could not be judged prints NOT EVALUATED, never SKIP (it is not a pass:
+ *  every verdict below is PASS only when every check passed). */
+export const STATUS_WORD: Readonly<Record<Check["status"], string>> = Object.freeze({ pass: "PASS", fail: "FAIL", "not-evaluated": "NOT EVALUATED", skipped: "SKIP" });
+export const line = (c: Check): string => `${STATUS_WORD[c.status] ?? "NOT EVALUATED"}  ${c.name}: ${c.detail}`;
 
 function writeRecord(file: string | undefined, record: unknown, out: (line: string) => void): void {
   if (file === undefined) return;
@@ -115,6 +124,26 @@ export function planEvidenceChecks(dir: string, gate: GateName, expectCommit?: s
         },
   );
   checks.push(run?.stack === GATES[gate].stack ? { name: "evidence: the gate's stack", status: "pass", detail: `run.json names stacks/${GATES[gate].stack}` } : { name: "evidence: the gate's stack", status: "fail", detail: `run.json names ${String(run?.stack ?? "(missing)")}; ${gate} judges stacks/${GATES[gate].stack}` });
+  /* RECON-1A: a gate that judges a TARGETED plan requires exactly its targets (an untargeted plan of the frozen app stack
+     carries the desired-count drift and must never be the one applied here). */
+  const wantTargets = GATE_TARGETS[gate];
+  if (wantTargets !== undefined) {
+    const got = (run as { targets?: unknown } | undefined)?.targets;
+    const targets = Array.isArray(got) && got.every((t) => typeof t === "string") ? [...(got as string[])].sort() : null;
+    const ok = targets !== null && targets.length === wantTargets.length && [...wantTargets].sort().every((t, i) => t === targets[i]);
+    checks.push(
+      ok
+        ? { name: "evidence: the plan is targeted at exactly the step's resources", status: "pass", detail: `run.json targets ${wantTargets.join(", ")}` }
+        : {
+            name: "evidence: the plan is targeted at exactly the step's resources",
+            status: "fail",
+            detail:
+              targets === null
+                ? `run.json records no -target list (capture with this branch's plan-evidence, targeted: ${wantTargets.map((t) => `-target=${t}`).join(" ")})`
+                : `run.json targets ${targets.length === 0 ? "nothing (an UNTARGETED plan)" : targets.join(", ")}; exactly ${wantTargets.join(", ")} required`,
+          },
+    );
+  }
   const text = readText(path.join(dir, "plan.json"));
   let plan: unknown;
   try {
@@ -233,6 +262,18 @@ export async function migrationGuardCommand(argv: readonly string[], out: (line:
     }
     if (!/^[a-z]{2}(-[a-z]+)+-[0-9]$/.test(region) || !/^arn:aws:dynamodb:[a-z0-9-]+:[0-9]{12}:table\/[A-Za-z0-9_.-]+$/.test(ledger) || signingKeyArns.length !== 3 || new Set(signingKeyArns).size !== 3 || !signingKeyArns.every((k) => /^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key\/[0-9a-f-]{36}$/.test(k))) {
       out("REFUSED: --region, --ledger-table-arn (a DynamoDB table ARN) or --signing-keys (three distinct KMS key ARNs) malformed");
+      return EXIT_USAGE;
+    }
+  }
+  if (gate === "app-read-authorize" || gate === "ledger-operator-journal") {
+    const region = flags.get("--region");
+    const ledger = flags.get("--ledger-table-arn");
+    if (ledger === undefined || (gate === "app-read-authorize" && region === undefined)) {
+      out(`REFUSED: ${gate} needs ${gate === "app-read-authorize" ? "--region <app region> and " : ""}--ledger-table-arn <the ledger stack's ledger_table_arn> (the facts the grants name, never taken from the plan)`);
+      return EXIT_USAGE;
+    }
+    if ((region !== undefined && !/^[a-z]{2}(-[a-z]+)+-[0-9]$/.test(region)) || !/^arn:aws:dynamodb:[a-z0-9-]+:[0-9]{12}:table\/[A-Za-z0-9_.-]+$/.test(ledger)) {
+      out("REFUSED: --region or --ledger-table-arn (a DynamoDB table ARN) malformed");
       return EXIT_USAGE;
     }
   }

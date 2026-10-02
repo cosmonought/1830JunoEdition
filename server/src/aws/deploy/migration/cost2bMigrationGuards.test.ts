@@ -15,7 +15,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { GATE_NAMES, GATES, HOST_MULTI, HOST_SINGLETONS, judgeMigrationPlan, TEARDOWN_CLASSES, type GateName, type MigrationContext } from "./planGuards";
+import { GATE_NAMES, GATE_TARGETS, GATES, HOST_MULTI, HOST_SINGLETONS, judgeMigrationPlan, TEARDOWN_CLASSES, type GateName, type MigrationContext } from "./planGuards";
 import { judgeNatEvidence, NAT_EVIDENCE_FORMAT, NAT_FILES, type NatEvidence } from "./natEvidence";
 import { migrationGuardCommand, SAVED_PLAN, SAVED_PLAN_SHA } from "./migrationCommands";
 import { FIXTURE, FIXTURE_DIR, fixtureText, HOST_ROLE, hostPolicy, jsonencode, ledgerResourcePolicy, policyDocument, resourceChange, runtimeDocument, signingKeyPolicy, TASK_ROLE, validPlans } from "./planFixtures";
@@ -932,7 +932,7 @@ describe("COST-2B: the command and its evidence binding", () => {
     fs.writeFileSync(path.join(dir, "plan.json"), planText);
     fs.writeFileSync(path.join(dir, "plan-exitcode.txt"), `${opts.exit ?? "2"}\n`);
     fs.writeFileSync(path.join(dir, "version.json"), JSON.stringify({ terraform_version: "1.9.8", provider_selections: { "registry.terraform.io/hashicorp/aws": opts.provider ?? "6.66.0", ...(opts.extraProvider === true ? { "registry.terraform.io/hashicorp/external": "2.3.4" } : {}) } }));
-    fs.writeFileSync(path.join(dir, "run.json"), JSON.stringify({ format: "18COSMOS/L6-6-PLAN/v1", run_id: "cost2-test", stack: opts.stack ?? GATES[gate].stack, captured_at: "2026-10-02T20:00:00Z", ...(opts.noCommit === true ? {} : { commit: COMMIT, infra_aws_clean: opts.dirty !== true }) }));
+    fs.writeFileSync(path.join(dir, "run.json"), JSON.stringify({ format: "18COSMOS/L6-6-PLAN/v1", run_id: "cost2-test", stack: opts.stack ?? GATES[gate].stack, captured_at: "2026-10-02T20:00:00Z", ...(opts.noCommit === true ? {} : { commit: COMMIT, infra_aws_clean: opts.dirty !== true }), targets: [...(GATE_TARGETS[gate] ?? [])] }));
     if (opts.keep !== false) {
       const binary = Buffer.from(`binary plan for ${gate}`);
       fs.writeFileSync(path.join(dir, SAVED_PLAN), binary);
@@ -956,6 +956,8 @@ describe("COST-2B: the command and its evidence binding", () => {
     FIXTURE.appAccountId,
     ...(gate === "edge-cutover" ? ["--origin-domain", FIXTURE.hostOrigin] : []),
     ...(gate === "host-create" ? ["--region", FIXTURE.region, "--ledger-table-arn", FIXTURE.ledgerTableArn, "--signing-keys", FIXTURE.signingKeyArns.join(",")] : []),
+    ...(gate === "app-read-authorize" ? ["--region", FIXTURE.region, "--ledger-table-arn", FIXTURE.ledgerTableArn] : []),
+    ...(gate === "ledger-operator-journal" ? ["--ledger-table-arn", FIXTURE.ledgerTableArn] : []),
   ];
 
   test("every valid capture PASSES (exit 0), a PowerShell BOM tolerated, and the record is create-once", async () => {
@@ -1055,6 +1057,11 @@ case " $* " in *" version "*) echo '{"terraform_version":"1.9.8","provider_selec
     const script = path.join(REPO, "infra/aws/scripts/plan-evidence.sh");
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` };
     execFileSync("bash", [script, "single-host", out, "cost2-test1", "--keep-plan", "-var-file=x.tfvars"], { env, stdio: "pipe" });
+    /* RECON-1A: the -target options are recorded (both spellings; JSON-escaped), [] when untargeted */
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(out, "terraform", "single-host", "run.json"), "utf8")).targets, []);
+    const tOut = fs.mkdtempSync(path.join(os.tmpdir(), "cost2b-ev-"));
+    execFileSync("bash", [script, "app", tOut, "recon1-7a-test", "--keep-plan", "-var-file=x.tfvars", "-target=module.app.aws_iam_role_policy.bootstrap", "-target", "module.app.aws_iam_role_policy.operator[0]", '-target=module.app.aws_ssm_parameter.runtime["p1"]'], { env, stdio: "pipe" });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(tOut, "terraform", "app", "run.json"), "utf8")).targets, ["module.app.aws_iam_role_policy.bootstrap", "module.app.aws_iam_role_policy.operator[0]", 'module.app.aws_ssm_parameter.runtime["p1"]']);
     const dir = path.join(out, "terraform", "single-host");
     assert.equal(fs.readFileSync(path.join(dir, "stack.tfplan"), "utf8"), "BINARY-PLAN");
     const shaText = fs.readFileSync(path.join(dir, "stack.tfplan.sha256"), "utf8");

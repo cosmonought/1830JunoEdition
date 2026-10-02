@@ -18,4 +18,9 @@ Saved-plan fixtures (`terraform show -json` shape) for `server/src/aws/deploy/mi
   output; regenerate with `node dist/server/src/aws/deploy/migration/planFixtures.js --write` after `npm run build`);
 - `terraform-real/`: plans Terraform itself produced from the repository's own roots against a local AWS mock (its README
   says exactly how).
+- RECON-1A: `app-read-authorize.json` (step 7a, a targeted plan) and `ledger-operator-journal.json` (7b) beside the
+  others; every later step's fixture starts from the state AFTER them (the read grants present). `x09/`: RECON-0 X-09's
+  cross-product -- the ledger steps over the relayer rotation key, a JX-1K financial key set, JX-4C's statement and the
+  host's coexistence together (same builder, same `--write`); `terraform-real/` gained the Terraform-made 7a / 7b / X-09
+  plans.
 

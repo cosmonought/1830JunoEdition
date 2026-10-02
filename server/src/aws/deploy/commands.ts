@@ -60,6 +60,7 @@
 //       (a just-in-time top-up), never as a pre-funding condition of the forward rotation.
 //
 //   migration-guard <gate> --plan-evidence <dir> --environment <env> --app-account <id> [...]
+//                                  (RECON-1A: app-read-authorize, step 7a, a TARGETED app plan; ledger-operator-journal, 7b)
 //   migration-guard nat --evidence <dir>
 //       COST-2B (`migration/migrationCommands.ts`), OFFLINE: each dangerous Terraform step of
 //       infra/aws/SINGLE_HOST_MIGRATION.md judged from its saved plan (fail closed), and the NAT deletion's evidence.
@@ -966,7 +967,7 @@ export const USAGE = [
   "  awsDeploy set-operator-plan --runtime-parameter <SSM ARN> --environment <env> --to-relayer <new> [--to-relayer-key <key ARN>]   (read-only: the admin's set_operator, never signed here)",
   "  awsDeploy stage-cert (prerequisite | certify) ...   LIVE-6 L6-6: the real-AWS staging certification (aws/deploy/staging/commands.ts)",
   "  awsDeploy stage-probe (task-role | edge | collect | flip-alarms | restore-alarms | restore-fencing) ...",
-  "  awsDeploy migration-guard (ledger-host-authorize | host-create | edge-cutover | ecs-rollback | compute-none | ledger-task-deauthorize | ecr-lifecycle | nat) ...   COST-2B: offline plan / NAT evidence guards (aws/deploy/migration/)",
+  "  awsDeploy migration-guard (app-read-authorize | ledger-operator-journal | ledger-host-authorize | host-create | edge-cutover | ecs-rollback | compute-none | ledger-task-deauthorize | ecr-lifecycle | nat) ...   COST-2B / RECON-1A: offline plan / NAT evidence guards (aws/deploy/migration/)",
 ].join("\n");
 
 /** LIVE-6 L6-6: more commands (the staging certification's), dispatched here so they share the refusals and exit codes. */

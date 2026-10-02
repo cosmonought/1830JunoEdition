@@ -6,6 +6,12 @@
 // (the state remembers desired 1), the recovery role removed, break-glass off. Addresses, names and policy statements
 // follow modules/{ledger,app,single-host} exactly; account ids, ARNs and names are test values (no real account).
 //
+// RECON-1A: the accepted state BEFORE step 7a / 7b lacks the pending read grants (COST-2A's four HostVerifier* bootstrap
+// statements, JX-4C's two operator statements and its ledger OperatorJournalQuery); every later step's fixture starts
+// from the state AFTER them (the grants present, unchanged), so each later gate is proven to accept the correct final
+// prior state. `x09Plans()` (infra/aws/fixtures/migration-plans/x09/) is RECON-0's X-09 cross-product: the ledger steps
+// with the relayer rotation key, a JX-1K financial key set, JX-4C's statement and the host role's coexistence together.
+//
 // TEST SUPPORT ONLY -- never imported by the application or the tools. The committed copies are
 // infra/aws/fixtures/migration-plans/<gate>.json; `cost2bMigrationGuards.test.ts` proves they equal this builder's output
 // (regenerate: `node dist/server/src/aws/deploy/migration/planFixtures.js --write` after `npm run build`).
@@ -44,6 +50,13 @@ const KEYS: Readonly<Record<string, string>> = {
   admission: `arn:aws:kms:${R}:${LEDGER}:key/33333333-3333-4333-8333-333333333333`,
   relayer: `arn:aws:kms:${R}:${LEDGER}:key/11111111-1111-4111-8111-111111111111`,
   settlement: `arn:aws:kms:${R}:${LEDGER}:key/22222222-2222-4222-8222-222222222222`,
+};
+/** X-09: the LIVE-6 relayer rotation key (relayer_key_count = 2) and a JX-1K financial key set labelled `v2`. */
+const X09_KEYS: Readonly<Record<string, string>> = {
+  ...KEYS,
+  "relayer-r2": `arn:aws:kms:${R}:${LEDGER}:key/55555555-5555-4555-8555-555555555555`,
+  "settlement-v2": `arn:aws:kms:${R}:${LEDGER}:key/66666666-6666-4666-8666-666666666666`,
+  "admission-v2": `arn:aws:kms:${R}:${LEDGER}:key/77777777-7777-4777-8777-777777777777`,
 };
 const table = (name: string) => `arn:aws:dynamodb:${R}:${APP}:table/${name}`;
 const G1 = `gs-${E}-game-g1`;
@@ -170,16 +183,21 @@ function planEnvelope(variables: Obj, rcs: readonly Rc[], prior: Obj | null, dri
 const condArn = (values: readonly string[]) => ({ ArnEquals: { "aws:PrincipalArn": [...values] } });
 const app = { AWS: [APP_ROOT] };
 
-export function ledgerResourcePolicy(runtime: readonly string[]): string {
+/** The ledger's resource policy. `journal`: JX-4C's OperatorJournalQuery (present from step 7b on); `rotation`: the LIVE-6
+ *  relayer rotation's BootstrapRelayerFenceRead (present once a second relayer key exists). */
+export function ledgerResourcePolicy(runtime: readonly string[], opts: { readonly journal?: boolean; readonly rotation?: boolean } = {}): string {
+  const journal = opts.journal !== false;
   return policyDocument([
     { Sid: "AppTaskLedgerRead", Action: ["dynamodb:ConditionCheckItem", "dynamodb:GetItem", "dynamodb:Query"], Resource: [LEDGER_ARN], Principal: app, Condition: condArn(runtime) },
     { Sid: "AppTaskLedgerPutNeverAppgen", Action: ["dynamodb:PutItem"], Resource: [LEDGER_ARN], Principal: app, Condition: { ...condArn(runtime), "ForAllValues:StringNotEquals": { "dynamodb:LeadingKeys": ["APPGEN", "APPGEN#HISTORY"] } } },
     { Sid: "BootstrapAppgenOnly", Action: ["dynamodb:GetItem", "dynamodb:PutItem"], Resource: [LEDGER_ARN], Principal: app, Condition: { ...condArn([BOOT_ROLE]), "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["APPGEN"] } } },
     { Sid: "BootstrapAppgenHistoryRead", Action: ["dynamodb:GetItem"], Resource: [LEDGER_ARN], Principal: app, Condition: { ...condArn([BOOT_ROLE]), "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["APPGEN#HISTORY"] } } },
     { Sid: "OperatorLedgerReadOnly", Action: ["dynamodb:GetItem", "dynamodb:Scan"], Resource: [LEDGER_ARN], Principal: app, Condition: condArn([OPER_ROLE]) },
+    ...(journal ? [{ Sid: "OperatorJournalQuery", Action: ["dynamodb:Query"], Resource: [LEDGER_ARN], Principal: app, Condition: { ...condArn([OPER_ROLE]), "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["ATTI#*"] }, Null: { "dynamodb:LeadingKeys": ["false"] } } }] : []),
     { Sid: "RecoveryLedgerRead", Action: ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"], Resource: [LEDGER_ARN], Principal: app, Condition: condArn([RECOVERY_ROLE]) },
     { Sid: "RecoveryAppgenAdoption", Action: ["dynamodb:UpdateItem"], Resource: [LEDGER_ARN], Principal: app, Condition: { ...condArn([RECOVERY_ROLE]), "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["APPGEN"] } } },
     { Sid: "RecoveryAppgenHistoryAppend", Action: ["dynamodb:PutItem"], Resource: [LEDGER_ARN], Principal: app, Condition: { ...condArn([RECOVERY_ROLE]), "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["APPGEN#HISTORY"] } } },
+    ...(opts.rotation === true ? [{ Sid: "BootstrapRelayerFenceRead", Action: ["dynamodb:GetItem"], Resource: [LEDGER_ARN], Principal: app, Condition: { ...condArn([BOOT_ROLE]), "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["FENCE#relayer#*"] } } }] : []),
     { Sid: "BootstrapDescribe", Action: ["dynamodb:DescribeTable"], Resource: [LEDGER_ARN], Principal: app, Condition: condArn([BOOT_ROLE]) },
   ]);
 }
@@ -215,12 +233,12 @@ function ledgerStatic(): Rc[] {
   ];
 }
 
-const kmsValues = (purpose: string, policy: string): Obj => {
+const kmsValues = (purpose: string, policy: string, keys: Readonly<Record<string, string>> = KEYS): Obj => {
   const tags = { ...ledgerTags, Name: `gs-${E}-${purpose}`, "gs:signing-purpose": purpose };
   return {
-    arn: KEYS[purpose],
-    key_id: KEYS[purpose].split("/")[1],
-    id: KEYS[purpose].split("/")[1],
+    arn: keys[purpose],
+    key_id: keys[purpose].split("/")[1],
+    id: keys[purpose].split("/")[1],
     description: `18Cosmos ${E} ${purpose} signing key (secp256k1, digest only; named by key ARN, never an alias)`,
     customer_master_key_spec: "ECC_SECG_P256K1",
     key_usage: "SIGN_VERIFY",
@@ -239,19 +257,50 @@ const kmsValues = (purpose: string, policy: string): Obj => {
   };
 };
 
-function ledgerPlan(before: readonly string[], after: readonly string[], taskAuthorized: boolean): Obj {
-  const rp = (runtime: readonly string[], revision: string | null): Obj => ({ id: LEDGER_ARN, resource_arn: LEDGER_ARN, policy: ledgerResourcePolicy(runtime), revision_id: revision, confirm_remove_self_resource_access: false, region: R });
+interface LedgerShape {
+  /** The signing keys of the state (KEYS: the original three; X09_KEYS: + the rotation key and a financial set). */
+  readonly keys?: Readonly<Record<string, string>>;
+  /** OperatorJournalQuery before / after (JX-4C's ledger half; step 7b adds it). */
+  readonly journal?: readonly [boolean, boolean];
+  /** app_runtime_role_arns of the plan's variables. */
+  readonly runtimeVar?: readonly string[];
+}
+
+function ledgerPlan(before: readonly string[], after: readonly string[], taskAuthorized: boolean, shape: LedgerShape = {}): Obj {
+  const keys = shape.keys ?? KEYS;
+  const rotation = Object.keys(keys).some((k) => /^relayer-r\d+$/.test(k));
+  const [journalBefore, journalAfter] = shape.journal ?? [true, true];
+  const rp = (runtime: readonly string[], journal: boolean, revision: string | null): Obj => ({ id: LEDGER_ARN, resource_arn: LEDGER_ARN, policy: ledgerResourcePolicy(runtime, { journal, rotation }), revision_id: revision, confirm_remove_self_resource_access: false, region: R });
+  const keysChange = !same(before, after);
   const rcs: Rc[] = [
     ...ledgerStatic(),
-    { module: LM, type: "aws_dynamodb_resource_policy", name: "ledger", actions: ["update"], before: rp(before, "1727900000000"), after: rp(after, null), afterUnknown: { revision_id: true } },
-    ...Object.keys(KEYS).map((purpose): Rc => ({ module: LM, type: "aws_kms_key", name: "signing", index: purpose, actions: ["update"], before: kmsValues(purpose, signingKeyPolicy(before)), after: kmsValues(purpose, signingKeyPolicy(after)) })),
+    { module: LM, type: "aws_dynamodb_resource_policy", name: "ledger", actions: ["update"], before: rp(before, journalBefore, "1727900000000"), after: rp(after, journalAfter, null), afterUnknown: { revision_id: true } },
+    ...Object.keys(keys).map((purpose): Rc =>
+      keysChange
+        ? { module: LM, type: "aws_kms_key", name: "signing", index: purpose, actions: ["update"], before: kmsValues(purpose, signingKeyPolicy(before), keys), after: kmsValues(purpose, signingKeyPolicy(after), keys) }
+        : noop(LM, "aws_kms_key", "signing", kmsValues(purpose, signingKeyPolicy(before), keys), purpose),
+    ),
   ];
+  const financial = [...new Set(Object.keys(keys).filter((k) => /^(settlement|admission)-/.test(k)).map((k) => k.replace(/^(settlement|admission)-/, "")))];
   return planEnvelope(
-    { region: R, ledger_account_id: LEDGER, environment: E, app_account_id: APP, backup: {}, signing_keys_enabled: true, relayer_key_count: 1, tags: {}, app_runtime_role_arns: [HOST_ROLE], ecs_task_role_authorized: taskAuthorized },
+    {
+      region: R,
+      ledger_account_id: LEDGER,
+      environment: E,
+      app_account_id: APP,
+      backup: {},
+      signing_keys_enabled: true,
+      relayer_key_count: 1 + Object.keys(keys).filter((k) => /^relayer-r\d+$/.test(k)).length,
+      ...(financial.length > 0 ? { financial_key_sets: financial } : {}),
+      tags: {},
+      app_runtime_role_arns: [...(shape.runtimeVar ?? [HOST_ROLE])],
+      ecs_task_role_authorized: taskAuthorized,
+    },
     rcs,
     priorState(LM, rcs),
   );
 }
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 /* ------------------------------------------------------------------ */
 /* The single-host stack                                                */
@@ -398,18 +447,42 @@ export function runtimeDocument(pools: readonly string[], pool = "p1"): string {
   });
 }
 
-const bootstrapPolicy = (pools: readonly string[]): string =>
+/** COST-2A's four bootstrap (verifier) statements and JX-4C's two operator statements, as modules/app/iam.tf renders them. */
+const BOOTSTRAP_READS: readonly Obj[] = [
+  {
+    Sid: "HostVerifierDescribeUnscopable",
+    Action: [
+      "ec2:DescribeInstances", "ec2:DescribeInstanceAttribute", "ec2:DescribeInstanceCreditSpecifications", "ec2:DescribeVolumes", "ec2:DescribeImages",
+      "ec2:DescribeNetworkInterfaces", "ec2:DescribeAddresses", "ec2:DescribeNatGateways", "ec2:DescribeVpcEndpoints", "ec2:DescribeManagedPrefixLists",
+      "ssm:DescribeInstanceInformation", "logs:DescribeLogGroups",
+    ],
+    Resource: ["*"],
+  },
+  { Sid: "HostVerifierEcsEra", Action: ["ecs:DescribeClusters", "ecs:ListServices"], Resource: ["*"] },
+  { Sid: "HostVerifierHostRole", Action: ["iam:GetInstanceProfile", "iam:GetRole", "iam:GetRolePolicy", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies"], Resource: [`arn:aws:iam::${APP}:instance-profile/gs-${E}-host-app`, `arn:aws:iam::${APP}:role/gs-${E}-host-app`] },
+  { Sid: "HostVerifierBudgets", Action: ["budgets:ViewBudget"], Resource: [`arn:aws:budgets::${APP}:budget/*`] },
+];
+const keyed = (values: readonly string[]): Obj => ({ "ForAllValues:StringLike": { "dynamodb:LeadingKeys": [...values] }, Null: { "dynamodb:LeadingKeys": ["false"] } });
+const OPERATOR_READS: readonly Obj[] = [
+  { Sid: "IdentityEvidenceRead", Action: ["dynamodb:GetItem"], Resource: [table(IDENTITY)], Condition: keyed(["FAM#*", "PRIN#*", "PROF#*"]) },
+  { Sid: "LedgerJournalQuery", Action: ["dynamodb:Query"], Resource: [LEDGER_ARN], Condition: keyed(["ATTI#*"]) },
+];
+
+export const bootstrapPolicy = (pools: readonly string[], reads = true): string =>
   policyDocument([
     { Sid: "RoutingItemOnly", Action: ["dynamodb:GetItem", "dynamodb:PutItem"], Resource: [table(G1)], Condition: { "ForAllValues:StringEquals": { "dynamodb:LeadingKeys": ["SYSTEM"] } } },
     { Sid: "DescribeTables", Action: ["dynamodb:DescribeContinuousBackups", "dynamodb:DescribeTable", "dynamodb:DescribeTimeToLive"], Resource: [table(G1), table(IDENTITY), LEDGER_ARN] },
     { Sid: "ReadConfiguration", Action: ["ssm:GetParameter"], Resource: [...pools.map(RUNTIME), JUNO] },
     { Sid: "SigningKeysReadOnly", Action: ["kms:DescribeKey", "kms:GetPublicKey", "kms:ListGrants"], Resource: [KEYS.admission, KEYS.relayer, KEYS.settlement] },
     { Sid: "VerifierDescribeServices", Action: ["ecs:DescribeServices"], Resource: [`arn:aws:ecs:${R}:${APP}:service/gs-${E}/*`] },
+    ...(reads ? BOOTSTRAP_READS : []),
   ]);
-const operatorPolicy = (pools: readonly string[]): string =>
+export const operatorPolicy = (pools: readonly string[], reads = true): string =>
   policyDocument([
     { Sid: "GameTableRead", Action: ["dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan"], Resource: [table(G1)] },
+    ...(reads ? [OPERATOR_READS[0]] : []),
     { Sid: "LedgerRead", Action: ["dynamodb:GetItem", "dynamodb:Scan"], Resource: [LEDGER_ARN] },
+    ...(reads ? [OPERATOR_READS[1]] : []),
     { Sid: "ReadConfiguration", Action: ["ssm:GetParameter"], Resource: [...pools.map(RUNTIME), JUNO] },
     { Sid: "FlipWindowMetricsOnly", Action: ["cloudwatch:PutMetricData"], Resource: ["*"], Condition: { StringEquals: { "cloudwatch:namespace": ["18Cosmos/Operator"] } } },
   ]);
@@ -479,7 +552,7 @@ const serviceValues = (pool: string, desired: number): Obj => ({
 });
 
 /** The app stack's state today (ECS era, drained), resource by resource: [rc template, ECS-era?]. */
-function appState(): Array<{ rc: Rc; ecs: boolean; p2doc?: boolean }> {
+function appState(reads = true): Array<{ rc: Rc; ecs: boolean; p2doc?: boolean }> {
   const v = (values: Obj): Obj => ({ ...values });
   const s = (type: string, name: string, values: Obj, index?: string | number, ecs = false) => ({ rc: noop(AM, type, name, v(values), index), ecs });
   const pools = ["p1", "p2"];
@@ -493,9 +566,9 @@ function appState(): Array<{ rc: Rc; ecs: boolean; p2doc?: boolean }> {
     s("aws_cloudfront_origin_request_policy", "gs", { name: `gs-${E}-gs-all-query-cookies-origin`, id: "orp-gs-all-query-cookies", query_strings_config: [{ query_string_behavior: "all", query_strings: [] }] }),
     s("aws_cloudfront_distribution", "site", distributionValues(FIXTURE.albOrigin), 0),
     s("aws_iam_role", "bootstrap", { name: `gs-${E}-bootstrap`, arn: BOOT_ROLE }),
-    s("aws_iam_role_policy", "bootstrap", { name: "gs-bootstrap", role: `gs-${E}-bootstrap`, policy: bootstrapPolicy(pools) }),
+    s("aws_iam_role_policy", "bootstrap", { name: "gs-bootstrap", role: `gs-${E}-bootstrap`, policy: bootstrapPolicy(pools, reads) }),
     s("aws_iam_role", "operator", { name: `gs-${E}-operator`, arn: OPER_ROLE }, 0),
-    s("aws_iam_role_policy", "operator", { name: "gs-operator", role: `gs-${E}-operator`, policy: operatorPolicy(pools) }, 0),
+    s("aws_iam_role_policy", "operator", { name: "gs-operator", role: `gs-${E}-operator`, policy: operatorPolicy(pools, reads) }, 0),
     s("aws_iam_role", "task", { name: `gs-${E}-app-task`, arn: TASK_ROLE }, 0, true),
     s("aws_iam_role_policy", "task", { name: "gs-runtime", role: `gs-${E}-app-task`, policy: policyDocument([{ Sid: "ReadConfiguration", Action: ["ssm:GetParameter"], Resource: [RUNTIME("p1"), RUNTIME("p2"), JUNO] }]) }, 0, true),
     s("aws_iam_role", "execution", { name: `gs-${E}-app-execution`, arn: role("app-execution") }, 0, true),
@@ -564,10 +637,10 @@ const drift = (pool: string): Obj => ({
   change: { actions: ["update"], before: serviceValues(pool, 1), after: serviceValues(pool, 0), after_unknown: {}, before_sensitive: {}, after_sensitive: {} },
 });
 
-function appPrior(): Obj {
+function appPrior(reads = true): Obj {
   return priorState(
     AM,
-    appState().map((x) => x.rc),
+    appState(reads).map((x) => x.rc),
     [ROUTING_ITEM, GENERATION_ITEM].map((d) => ({ ...d, before: d.before })),
   );
 }
@@ -605,12 +678,46 @@ function computeNonePlan(): Obj {
   return planEnvelope(appVariables({ compute: "none", pools: { p1: { primary: true, desired_count: 1 } }, edge: { create_distribution: true, aliases: ["play.example.org"], alb_origin_domain_name: FIXTURE.hostOrigin, site_origin_domain_name: "site.example.org" } }), rcs, appPrior(), [drift("p1"), drift("p2")]);
 }
 
+/** RECON-1A step 7a: a TARGETED plan (-target=module.app.aws_iam_role_policy.bootstrap
+ *  -target=module.app.aws_iam_role_policy.operator[0]): the two policies gain their read statements; their roles are the
+ *  plan's only other entries (no-ops). Nothing of ECS is in a targeted plan: the drift stays drift. */
+function appReadAuthorizePlan(): Obj {
+  const state = appState(false);
+  const pick = (type: string, name: string) => state.find((x) => x.rc.type === type && x.rc.name === name)!.rc;
+  const policyChange = (name: "bootstrap" | "operator", build: (pools: readonly string[], reads: boolean) => string): Rc => {
+    const rc = pick("aws_iam_role_policy", name);
+    return { ...rc, actions: ["update"], before: { ...rc.before, policy: build(["p1", "p2"], false) }, after: { ...rc.before, policy: build(["p1", "p2"], true) } };
+  };
+  const rcs: Rc[] = [pick("aws_iam_role", "bootstrap"), policyChange("bootstrap", bootstrapPolicy), pick("aws_iam_role", "operator"), policyChange("operator", operatorPolicy)];
+  return planEnvelope(appVariables({}), rcs, appPrior(false));
+}
+
+/** RECON-1A step 7b: the ledger's resource policy gains OperatorJournalQuery; the task role still the only runtime
+ *  principal (step 8 comes after); every key unchanged. */
+function ledgerOperatorJournalPlan(): Obj {
+  return ledgerPlan([TASK_ROLE], [TASK_ROLE], true, { journal: [false, true], runtimeVar: [] });
+}
+
+/** RECON-0 X-09: the ledger steps over the full key set (the original three, relayer-r2, the JX-1K pair `v2`), JX-4C's
+ *  statement already in place, the host beside the task role (step 8) and then alone (step 22). */
+export function x09Plans(): Readonly<Record<string, Obj>> {
+  return {
+    "ledger-operator-journal": ledgerPlan([TASK_ROLE], [TASK_ROLE], true, { keys: X09_KEYS, journal: [false, true], runtimeVar: [] }),
+    "ledger-host-authorize": ledgerPlan([TASK_ROLE], [TASK_ROLE, HOST_ROLE], true, { keys: X09_KEYS }),
+    "ledger-task-deauthorize": ledgerPlan([TASK_ROLE, HOST_ROLE], [HOST_ROLE], false, { keys: X09_KEYS }),
+  };
+}
+export const X09_GATES: Readonly<Record<string, GateName>> = { "ledger-operator-journal": "ledger-operator-journal", "ledger-host-authorize": "ledger-host-authorize", "ledger-task-deauthorize": "ledger-task-deauthorize" };
+export const X09_DIR = "infra/aws/fixtures/migration-plans/x09";
+
 /* ------------------------------------------------------------------ */
 /* All of them                                                          */
 /* ------------------------------------------------------------------ */
 
 export function validPlans(): Readonly<Record<GateName, Obj>> {
   return {
+    "app-read-authorize": appReadAuthorizePlan(),
+    "ledger-operator-journal": ledgerOperatorJournalPlan(),
     "ledger-host-authorize": ledgerPlan([TASK_ROLE], [TASK_ROLE, HOST_ROLE], true),
     "host-create": hostCreatePlan(),
     "edge-cutover": edgeCutoverPlan(),
@@ -628,6 +735,8 @@ export const fixtureText = (plan: Obj): string => `${JSON.stringify(plan, null, 
 if (require.main === module && process.argv.includes("--write")) {
   const repo = path.resolve(__dirname, "../../../../../../..");
   for (const [gate, plan] of Object.entries(validPlans())) fs.writeFileSync(path.join(repo, FIXTURE_DIR, `${gate}.json`), fixtureText(plan));
+  fs.mkdirSync(path.join(repo, X09_DIR), { recursive: true });
+  for (const [name, plan] of Object.entries(x09Plans())) fs.writeFileSync(path.join(repo, X09_DIR, `${name}.json`), fixtureText(plan));
   // eslint-disable-next-line no-console
-  console.log(`wrote ${Object.keys(validPlans()).length} fixtures to ${FIXTURE_DIR}`);
+  console.log(`wrote ${Object.keys(validPlans()).length} fixtures to ${FIXTURE_DIR} and ${Object.keys(x09Plans()).length} to ${X09_DIR}`);
 }

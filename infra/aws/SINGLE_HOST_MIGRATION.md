@@ -1,4 +1,4 @@
-# Migrating staging from the drained ECS topology to the single host (COST-1, reconciled by COST-2B)
+# Migrating staging from the drained ECS topology to the single host (COST-1, reconciled by COST-2B, COST-2A and RECON-1A)
 
 **Status:** a PLAN. Nothing here has been executed.
 
@@ -66,8 +66,13 @@ variable validation). Live staging is deliberately **0/0/0** (S4). So an ordinar
 Both are wrong before step 20. Therefore, until step 20:
 - **no ordinary `terraform apply` of `stacks/app`;** a `terraform plan` is harmless (read-only) and is EXPECTED to show the
   drift -- the drift is not a change to make;
-- the only app-stack applies are (a) the **targeted** cutover (step 14, `-target=module.app.aws_cloudfront_distribution.site[0]`)
-  and (b) the explicit **ECS rollback** (§F), each through its guard;
+- the only app-stack applies are (a) the **targeted** read-grant step (step 7a, `-target=module.app.aws_iam_role_policy.bootstrap
+  -target=module.app.aws_iam_role_policy.operator[0]`), (b) the **targeted** cutover (step 14,
+  `-target=module.app.aws_cloudfront_distribution.site[0]`) and (c) the explicit **ECS rollback** (§F), each through its
+  guard -- then step 20's compute-none teardown;
+- **there is no ordinary app-stack apply before compute-none, for any reason** -- not even to give the host verifier
+  (COST-2A) or the operator's evidence reads (JX-4C) their permissions: those grants are installed ONLY by step 7a's
+  targeted, guarded plan (RECON-1A; it replaces COST-2A's former "D0", an ordinary apply that would have restarted p1);
 - every guard refuses an ECS change other than its own: the cutover guard names the drift ("this plan would RESTART
   ..."), and only the `ecs-rollback` guard accepts a service going from 0 to 1 (p1 only; p2 stays 0).
 
@@ -91,8 +96,8 @@ Every Terraform step below is applied **only** from a saved plan that passed its
    infra\aws\scripts\plan-evidence.ps1 -Stack <ledger|app|single-host> -Out <D> -Run <run id> -KeepPlan -PlanArgs @("-var-file=<env>.tfvars", ...)
    infra/aws/scripts/plan-evidence.sh <ledger|app|single-host> <D> <run id> --keep-plan -var-file=<env>.tfvars ...
    ```
-   It writes `<D>\terraform\<stack>\`: `plan.json`, `plan-exitcode.txt`, `version.json`, `run.json` (with the commit and
-   whether `infra/aws` was clean), and the binary `stack.tfplan` with `stack.tfplan.sha256` (binding it to that
+   It writes `<D>\terraform\<stack>\`: `plan.json`, `plan-exitcode.txt`, `version.json`, `run.json` (with the commit,
+   whether `infra/aws` was clean, and the plan's `-target` options), and the binary `stack.tfplan` with `stack.tfplan.sha256` (binding it to that
    `plan.json`). Nothing is applied.
 2. **Judge it** (offline; no AWS, no Terraform):
    ```
@@ -115,6 +120,8 @@ floor, not the ceiling.
 
 | Step | Stack | Gate | Passes only if |
 |---|---|---|---|
+| 7a | app (targeted) | `migration-guard app-read-authorize --region <r> --ledger-table-arn <ARN>` | a plan targeted at exactly `aws_iam_role_policy.bootstrap` and `aws_iam_role_policy.operator[0]` (run.json's recorded `-target`s); the bootstrap policy = before + exactly COST-2A's `HostVerifierDescribeUnscopable`, `HostVerifierEcsEra`, `HostVerifierHostRole`, `HostVerifierBudgets`; the operator policy = before + exactly JX-4C's `IdentityEvidenceRead` (GetItem, identity table, `PRIN#*` / `PROF#*` / `FAM#*` + key presence) and `LedgerJournalQuery` (Query, the ledger, `ATTI#*` + key presence) -- each pinned to `modules/app/iam.tf`; every other statement byte-equal; no ECS (the drift), table, document, key, edge or other IAM change; still `compute = "ecs"` |
+| 7b | ledger | `migration-guard ledger-operator-journal --ledger-table-arn <ARN>` | the ledger's resource policy updated in place, gaining exactly JX-4C's `OperatorJournalQuery` (Query, the ledger, the app root with `aws:PrincipalArn` = the operator role, `ATTI#*` + key presence); every other statement -- the runtime principals included -- byte-equal; no key policy, table, APPGEN item or AWS Backup change |
 | 8 | ledger | `migration-guard ledger-host-authorize` | the ledger's resource policy and EVERY signing key's policy update in place, each runtime statement gaining exactly `gs-staging-host-app` beside the task role (kept: coexistence); every other statement byte-equal; no table, KMS create / delete / replace, APPGEN item or AWS Backup change |
 | 9 | single-host | `migration-guard host-create` | only creates, exactly the single-host surface (one instance, ENI, EIP + association, SG + rules, role `gs-staging-host-app`, profile, inline policy, log group, the five alarms, the budget); IMDSv2; the host policy reaches only g1, identity and the ledger, never APPGEN / SYSTEM writes, digest-only Sign, no administrative action; no table, key, ALB, ECS, NAT, endpoint, distribution, ECR repository or lifecycle |
 | 14 | app (targeted) | `migration-guard edge-cutover --origin-domain <origin_hostname>` | only the existing distribution, updated in place, only the `gs-alb` origin's `domain_name` -> the named host origin; default origin, behaviours (cache / origin-request policies), aliases, certificate, WAF unchanged; no ECS change (the drift), no table / key / IAM / document change; `compute = "ecs"` |
@@ -137,8 +144,10 @@ floor, not the ceiling.
    - `aws ecs describe-services`: both pools desired 0, running 0, pending 0;
    - `aws iam get-role --role-name gs-staging-recovery`: `NoSuchEntity`.
 2. `APP-ADMIN`: `terraform plan` of `stacks/app` with the current tfvars (`recovery_break_glass = false`,
-   `recovery_trusted_principal_arns = []`), **read-only, never applied**: it is expected to show only the
-   desired-count drift (§0.2). Anything else in it (a recovery role, a document, a table) is a STOP.
+   `recovery_trusted_principal_arns = []`), **read-only, never applied**: it is expected to show the desired-count drift
+   (§0.2) plus -- until step 7a -- the bootstrap and operator policies gaining their read statements (COST-2A, JX-4C).
+   Anything else in it (a recovery role, a document, a table) is a STOP. This plan is never applied: the read grants are
+   step 7a's, targeted.
 3. Leave `gs-staging-game-g2` exactly as it is (S3).
 
 ### B. Traffic is off; ECS-era resources stay for now
@@ -165,6 +174,37 @@ floor, not the ceiling.
    - every gate and evidence directory (the drill's included);
    - `terraform state pull` of both stacks;
    - the running image digests.
+
+### C2. Install the pending read grants (RECON-1A) -- before step 8
+
+The reviewed code carries read grants the accepted staging state does not have yet: COST-2A's host-verifier statements on
+the bootstrap role, JX-4C's evidence reads on the operator role (app stack) and JX-4C's `OperatorJournalQuery` on the
+ledger's resource policy (ledger stack). Left pending, every later untargeted plan would carry them, and the later guards
+refuse a foreign IAM delta: step 8's `ledger-host-authorize` and step 22's `ledger-task-deauthorize` ("statements added"),
+the `ecs-rollback` (so the ROLLBACK PATH would be blocked) and step 20's `compute-none`. So both go in here, each from
+its own judged saved plan, before any host exists. **Never by an ordinary app-stack apply** (§0.2).
+
+7a. `APP-ADMIN`: `stacks/app` with the current tfvars (still `compute = "ecs"`, break-glass off), planned **TARGETED** at
+    exactly the two policies:
+    ```
+    infra\aws\scripts\plan-evidence.ps1 -Stack app -Out <D> -Run <run id> -KeepPlan -PlanArgs @("-var-file=staging.tfvars", "-target=module.app.aws_iam_role_policy.bootstrap", "-target=module.app.aws_iam_role_policy.operator[0]")
+    node dist/server/src/tools/awsDeploy.js migration-guard app-read-authorize --plan-evidence <D>\terraform\app --environment staging --app-account <app> --region <r> --ledger-table-arn <the ledger stack's ledger_table_arn> --commit <reviewed sha> --record <D>\guards\7a.json
+    ```
+    - The guard requires run.json to record exactly those two `-target`s (an untargeted plan carries the drift); the
+      bootstrap policy gains exactly COST-2A's four `HostVerifier*` statements and the operator policy exactly JX-4C's
+      `IdentityEvidenceRead` and `LedgerJournalQuery`, statement for statement as `modules/app/iam.tf` renders them; nothing
+      else moves -- no ECS service, task definition or cluster, no table, document, key or other IAM statement.
+    - Apply that `stack.tfplan` (Terraform warns the plan is incomplete: `-target`, expected). A plan with no changes
+      (exit 0) means 7a is already applied: keep the evidence and go on.
+    - Optional now (COST-2A): `verify --topology coexist --instance-id none` (§F's F0 command, no host yet) proves the ECS
+      era drained before any host exists.
+7b. `LEDGER-ADMIN`: `stacks/ledger` with the current tfvars (no `app_runtime_role_arns` change yet: that is step 8).
+    Capture with `--keep-plan`; **`migration-guard ledger-operator-journal --ledger-table-arn <ARN>`** must PASS (only the
+    resource policy, gaining exactly `OperatorJournalQuery`; no key policy moves); apply that `stack.tfplan`. Exit 0 means
+    7b is already applied.
+
+After 7a and 7b, a plain `terraform plan` of `stacks/app` shows the desired-count drift ONLY, and one of `stacks/ledger`
+shows nothing: every later guard then judges its own change alone.
 
 ### D. Authorise the host's role and create the host
 

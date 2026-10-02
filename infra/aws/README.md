@@ -23,6 +23,12 @@ belongs to the LIVE-6 staging gate.
 > then `terraform apply` of exactly that saved plan. The NAT gateway (outside Terraform) is deleted only after
 > `scripts/capture-nat-evidence` + `migration-guard nat` PASS. The legacy app stack is frozen from ordinary applies until
 > its teardown: its state expects running services while staging is drained (the desired-count drift).
+>
+> **RECON-1A (2026-10-02): the pending read grants, before step 8.** COST-2A's host-verifier statements (bootstrap role) and
+> JX-4C's evidence reads (operator role; the ledger's `OperatorJournalQuery`) are installed by two more guarded steps --
+> `migration-guard app-read-authorize` (7a, a TARGETED app plan: exactly the two policies, exactly those statements) and
+> `migration-guard ledger-operator-journal` (7b) -- never by an ordinary app-stack apply; afterwards every later guard
+> sees no foreign IAM delta (`server/src/aws/deploy/migration/recon1AuthorizationGates.test.ts`).
 
 ## Tooling
 

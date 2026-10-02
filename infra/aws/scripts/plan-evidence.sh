@@ -34,6 +34,19 @@ if [ "${1:-}" = "--keep-plan" ]; then KEEP=1; shift; fi
 for option in "$@"; do
   case "$option" in -auto-approve|-destroy|apply|destroy|--keep-plan) echo "refused: $option (this script only plans; --keep-plan comes first)" >&2; exit 2 ;; esac
 done
+# RECON-1A: the -target options this plan was made with, recorded in run.json ("targets"; [] = untargeted) -- a gate
+# that judges a TARGETED plan (migration-guard app-read-authorize) requires exactly its own.
+json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+TARGETS=""
+NEXT_IS_TARGET=0
+for option in "$@"; do
+  value=""
+  if [ "$NEXT_IS_TARGET" -eq 1 ]; then value="$option"; NEXT_IS_TARGET=0
+  else
+    case "$option" in -target=*|--target=*) value="${option#*=}" ;; -target|--target) NEXT_IS_TARGET=1 ;; esac
+  fi
+  if [ -n "$value" ]; then TARGETS="${TARGETS:+$TARGETS,}\"$(json_escape "$value")\""; fi
+done
 DIR="$(cd "$(dirname "$0")/../stacks/$STACK" && pwd)"
 mkdir -p "$OUT/terraform/$STACK"
 OUT="$(cd "$OUT/terraform/$STACK" && pwd)"
@@ -70,6 +83,6 @@ if [ -n "$COMMIT" ] && git -C "$REPO" diff --quiet HEAD -- infra/aws 2>/dev/null
   && [ -z "$(find "$REPO/infra/aws" -path '*/.terraform' -prune -o \( -name 'override.tf' -o -name 'override.tf.json' -o -name '*_override.tf' -o -name '*_override.tf.json' \) -print)" ]; then
   CLEAN=true
 fi
-printf '{"format":"18COSMOS/L6-6-PLAN/v1","run_id":"%s","stack":"%s","captured_at":"%s","commit":"%s","infra_aws_clean":%s}\n' "$RUN" "$STACK" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$COMMIT" "$CLEAN" > "$OUT/run.json"
+printf '{"format":"18COSMOS/L6-6-PLAN/v1","run_id":"%s","stack":"%s","captured_at":"%s","commit":"%s","infra_aws_clean":%s,"targets":[%s]}\n' "$RUN" "$STACK" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$COMMIT" "$CLEAN" "$TARGETS" > "$OUT/run.json"
 if [ "$KEEP" -eq 1 ]; then KEPT="; the saved plan kept as stack.tfplan"; else KEPT=""; fi
 echo "plan evidence for $STACK written to $OUT (exit $CODE; nothing applied$KEPT)"

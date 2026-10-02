@@ -16,6 +16,16 @@
 // The named checks below exist so a failure says WHY in the operator's terms (the ledger table, a KMS key, APPGEN, the
 // ECS desired-count drift, g2, ...); the allowlist is what makes the guard complete.
 //
+//   app-read-authorize       (step 7a, stacks/app, a TARGETED plan; RECON-1A) the two operator-side read policies gain
+//                            EXACTLY their pending read statements -- the bootstrap role COST-2A's four HostVerifier*,
+//                            the operator role JX-4C's IdentityEvidenceRead and LedgerJournalQuery, each pinned to
+//                            modules/app/iam.tf -- and nothing else moves: never an ECS change (the drift), a table, a
+//                            document, a key or any other IAM statement. It replaces COST-2A's former D0, an ORDINARY app
+//                            apply that would also have restarted p1 on the frozen app stack.
+//   ledger-operator-journal  (step 7b, stacks/ledger; RECON-1A) the ledger's resource policy gains EXACTLY JX-4C's
+//                            OperatorJournalQuery (Query, ATTI#* only, the operator role through the app root +
+//                            aws:PrincipalArn); no key policy, table, backup or other statement moves.
+//   Both run after §A's accepted-state checks and BEFORE step 8, so every later gate sees no foreign IAM delta.
 //   ledger-host-authorize    (step 8, stacks/ledger)  the ledger's resource policy and the signing keys' policies gain
 //                            EXACTLY the host role gs-<env>-host-app beside the ECS task role, in exactly the runtime
 //                            statements; nothing else in any policy moves; no table, key, backup or item changes.
@@ -61,6 +71,8 @@ const judge = (name: string, ok: boolean, good: string, bad: string): Check => (
 export const MIGRATION_GUARD_FORMAT = "18COSMOS/COST-2B-MIGRATION-GUARD/v1";
 
 export const GATES = Object.freeze({
+  "app-read-authorize": { stack: "app", step: "C2 7a (targeted)" },
+  "ledger-operator-journal": { stack: "ledger", step: "C2 7b" },
   "ledger-host-authorize": { stack: "ledger", step: "D 8" },
   "host-create": { stack: "single-host", step: "D 9" },
   "edge-cutover": { stack: "app", step: "G 14 (and its rollback)" },
@@ -70,6 +82,12 @@ export const GATES = Object.freeze({
   "ecr-lifecycle": { stack: "single-host", step: "I 22b" },
 } as const);
 export type GateName = keyof typeof GATES;
+
+/** RECON-1A: the gates whose plan MUST be targeted, and at exactly these addresses (`plan-evidence` records the -target
+ *  options in run.json; the command refuses another set, or none). */
+export const GATE_TARGETS: Readonly<Partial<Record<GateName, readonly string[]>>> = Object.freeze({
+  "app-read-authorize": Object.freeze(["module.app.aws_iam_role_policy.bootstrap", "module.app.aws_iam_role_policy.operator[0]"]),
+});
 export type StackName = (typeof GATES)[GateName]["stack"];
 export const GATE_NAMES = Object.freeze(Object.keys(GATES) as GateName[]);
 export const isGateName = (value: string): value is GateName => Object.prototype.hasOwnProperty.call(GATES, value);
@@ -426,7 +444,7 @@ export function runtimePrincipalDelta(beforeText: Json, afterText: Json, mode: "
   if (before.version !== after.version) return `the policy Version changes (${String(before.version)} -> ${String(after.version)})`;
   const sidsB = [...before.statements.keys()].sort();
   const sidsA = [...after.statements.keys()].sort();
-  if (!same(sidsB, sidsA)) return `statements added or removed (before: ${sidsB.join(",")}; after: ${sidsA.join(",")})`;
+  if (!same(sidsB, sidsA)) return `statements added or removed (before: ${sidsB.join(",")}; after: ${sidsA.join(",")})${pendingGrantHint(sidsB, sidsA)}`;
   let changedCount = 0;
   for (const sid of sidsB) {
     const b = before.statements.get(sid)!.body;
@@ -685,7 +703,7 @@ function allowlistCheck(changes: readonly PlannedChange[], rules: readonly Allow
       else allowed += 1;
       break;
     }
-    if (!matched) problems.push(`${label(c)}: NOT PART OF THIS STEP${critical(c) ? " (critical: " + critical(c) + ")" : ""}`);
+    if (!matched) problems.push(`${label(c)}: NOT PART OF THIS STEP${critical(c) ? " (critical: " + critical(c) + ")" : ""}${c.kind === "update" && c.type === "aws_iam_role_policy" ? pendingGrantHint([...(parsePolicy(c.before.policy)?.statements.keys() ?? [])], [...(parsePolicy(c.after.policy)?.statements.keys() ?? [])]) : ""}`);
   }
   return judge(`every change is one this step makes (${what})`, problems.length === 0, `${allowed} change(s), each allowed and checked`, problems.slice(0, 10).join(" | ") + (problems.length > 10 ? ` | ... (${problems.length})` : ""));
 }
@@ -1214,7 +1232,7 @@ export function retiredPoolNarrowingProblem(beforeText: Json, afterText: Json, c
   const before = parsePolicy(beforeText);
   const after = parsePolicy(afterText);
   if (before === null || after === null) return "the policy is unknown at plan time or unreadable";
-  if (before.version !== after.version || !same([...before.statements.keys()].sort(), [...after.statements.keys()].sort())) return "statements added, removed or re-versioned (only the retired pools' documents may leave)";
+  if (before.version !== after.version || !same([...before.statements.keys()].sort(), [...after.statements.keys()].sort())) return `statements added, removed or re-versioned (only the retired pools' documents may leave)${pendingGrantHint([...before.statements.keys()], [...after.statements.keys()])}`;
   const retired = new Set(ctx.retiredPools.map((p) => `/gs/${ctx.environment}/runtime/${p}`));
   let narrowed = 0;
   for (const [sid, s] of before.statements) {
@@ -1429,6 +1447,215 @@ function ecrLifecycleGate(plan: Json, changes: readonly PlannedChange[], ctx: Mi
 }
 
 /* ------------------------------------------------------------------ */
+/* RECON-1A gates 7a / 7b: the pending read grants, before step 8       */
+/* ------------------------------------------------------------------ */
+
+/** COST-2A's four bootstrap (verifier) statements -- modules/app/iam.tf `data "aws_iam_policy_document" "bootstrap"`. */
+export const BOOTSTRAP_READ_SIDS = Object.freeze(["HostVerifierDescribeUnscopable", "HostVerifierEcsEra", "HostVerifierHostRole", "HostVerifierBudgets"] as const);
+/** JX-4C's two operator statements -- modules/app/iam.tf `data "aws_iam_policy_document" "operator"`. */
+export const OPERATOR_READ_SIDS = Object.freeze(["IdentityEvidenceRead", "LedgerJournalQuery"] as const);
+/** JX-4C's ledger half -- modules/ledger/main.tf `data "aws_iam_policy_document" "ledger_resource"`. */
+export const LEDGER_JOURNAL_SID = "OperatorJournalQuery";
+
+/** A later gate seeing one of the RECON-1A grants still pending names the step that installs it. */
+function pendingGrantHint(beforeSids: readonly string[], afterSids: readonly string[]): string {
+  const added = afterSids.filter((sid) => !beforeSids.includes(sid));
+  const app = added.filter((sid) => (BOOTSTRAP_READ_SIDS as readonly string[]).includes(sid) || (OPERATOR_READ_SIDS as readonly string[]).includes(sid));
+  if (app.length > 0) return ` -- ${app.join(", ")} still pending: run step 7a (migration-guard app-read-authorize, a TARGETED plan) first; never an ordinary app-stack apply`;
+  if (added.includes(LEDGER_JOURNAL_SID)) return ` -- ${LEDGER_JOURNAL_SID} still pending: run step 7b (migration-guard ledger-operator-journal) first`;
+  return "";
+}
+
+/**
+ * The read statements the two app-account policies gain at step 7a, EXACTLY as modules/app/iam.tf renders them for this
+ * environment (pinned to the module by recon1AuthorizationGates.test.ts): Sid -> the normalised statement. null when the
+ * facts the statements name (the region, the ledger table) were not given by the operator.
+ */
+export function appReadGrantStatements(ctx: MigrationContext): { readonly bootstrap: Map<string, Obj>; readonly operator: Map<string, Obj> } | null {
+  if (ctx.region === undefined || ctx.ledgerTableArn === undefined) return null;
+  const a = ctx.appAccountId;
+  const prefix = `gs-${ctx.environment}`;
+  const bootstrap: Obj[] = [
+    {
+      Sid: "HostVerifierDescribeUnscopable",
+      Effect: "Allow",
+      Action: [
+        "ec2:DescribeInstances", "ec2:DescribeInstanceAttribute", "ec2:DescribeInstanceCreditSpecifications", "ec2:DescribeVolumes", "ec2:DescribeImages",
+        "ec2:DescribeNetworkInterfaces", "ec2:DescribeAddresses", "ec2:DescribeNatGateways", "ec2:DescribeVpcEndpoints", "ec2:DescribeManagedPrefixLists",
+        "ssm:DescribeInstanceInformation", "logs:DescribeLogGroups",
+      ],
+      Resource: ["*"],
+    },
+    { Sid: "HostVerifierEcsEra", Effect: "Allow", Action: ["ecs:DescribeClusters", "ecs:ListServices"], Resource: ["*"] },
+    {
+      Sid: "HostVerifierHostRole",
+      Effect: "Allow",
+      Action: ["iam:GetInstanceProfile", "iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies"],
+      Resource: [`arn:aws:iam::${a}:role/${prefix}-host-app`, `arn:aws:iam::${a}:instance-profile/${prefix}-host-app`],
+    },
+    { Sid: "HostVerifierBudgets", Effect: "Allow", Action: ["budgets:ViewBudget"], Resource: [`arn:aws:budgets::${a}:budget/*`] },
+  ];
+  const keyed = (values: readonly string[]): Obj => ({ "ForAllValues:StringLike": { "dynamodb:LeadingKeys": [...values] }, Null: { "dynamodb:LeadingKeys": ["false"] } });
+  const operator: Obj[] = [
+    { Sid: "IdentityEvidenceRead", Effect: "Allow", Action: ["dynamodb:GetItem"], Resource: [`arn:aws:dynamodb:${ctx.region}:${a}:table/${prefix}-identity`], Condition: keyed(["PRIN#*", "PROF#*", "FAM#*"]) },
+    { Sid: "LedgerJournalQuery", Effect: "Allow", Action: ["dynamodb:Query"], Resource: [ctx.ledgerTableArn], Condition: keyed(["ATTI#*"]) },
+  ];
+  const map = (list: readonly Obj[]) => new Map(list.map((st) => [String(st.Sid), normaliseStatement(st)] as const));
+  return { bootstrap: map(bootstrap), operator: map(operator) };
+}
+
+/** JX-4C's ledger statement, exactly as modules/ledger/main.tf renders it for this environment (normalised). */
+export function ledgerJournalStatement(ctx: MigrationContext): Obj | null {
+  if (ctx.ledgerTableArn === undefined) return null;
+  return normaliseStatement({
+    Sid: LEDGER_JOURNAL_SID,
+    Effect: "Allow",
+    Action: ["dynamodb:Query"],
+    Resource: [ctx.ledgerTableArn],
+    Principal: { AWS: [`arn:aws:iam::${ctx.appAccountId}:root`] },
+    Condition: { ArnEquals: { [PRINCIPAL_ARN]: [`arn:aws:iam::${ctx.appAccountId}:role/gs-${ctx.environment}-operator`] }, "ForAllValues:StringLike": { "dynamodb:LeadingKeys": ["ATTI#*"] }, Null: { "dynamodb:LeadingKeys": ["false"] } },
+  });
+}
+
+/**
+ * A policy, before -> after, that may ONLY gain `expected` -- every one of them, each exactly as rendered -- with every
+ * statement it already had byte-equal (normalised) and the Version unchanged. `already`: the after policy is the final one
+ * and nothing moved (a re-run after a partial apply). null = acceptable.
+ */
+export function additionOnlyProblem(beforeText: Json, afterText: Json, expected: ReadonlyMap<string, Obj>): string | null {
+  const before = parsePolicy(beforeText);
+  const after = parsePolicy(afterText);
+  if (before === null || after === null) return "the policy is unknown at plan time, unreadable or ambiguous (a duplicate key, a statement without a unique Sid)";
+  if (before.version !== after.version) return `the policy Version changes (${String(before.version)} -> ${String(after.version)})`;
+  const want = [...expected.keys()];
+  const had = want.filter((sid) => before.statements.has(sid));
+  if (had.length > 0 && had.length < want.length) return `the policy already holds ${had.join(", ")} but not ${want.filter((sid) => !had.includes(sid)).join(", ")} (a partial earlier change: not the state this step starts from)`;
+  const removed = [...before.statements.keys()].filter((sid) => !after.statements.has(sid));
+  if (removed.length > 0) return `statements removed: ${removed.join(", ")}`;
+  const extra = [...after.statements.keys()].filter((sid) => !before.statements.has(sid) && !expected.has(sid));
+  if (extra.length > 0) return `statements this step does not add: ${extra.join(", ")}`;
+  const moved = [...before.statements.keys()].filter((sid) => !expected.has(sid) && !same(before.statements.get(sid)!.body, after.statements.get(sid)!.body));
+  if (moved.length > 0) return `existing statements change: ${moved.join(", ")} (only ${want.join(", ")} may be added; nothing else of the policy moves)`;
+  const missing = want.filter((sid) => !after.statements.has(sid));
+  if (missing.length > 0) return `statements missing after the change: ${missing.join(", ")}`;
+  const differ: string[] = [];
+  for (const sid of want) {
+    const got = after.statements.get(sid)!.body;
+    const exp = expected.get(sid)!;
+    if (same(got, exp)) continue;
+    const wild = [...asList(got.Action), ...asList(got.Resource)].filter((x) => /[*?]/.test(x) && !asList(exp.Action).includes(x) && !asList(exp.Resource).includes(x));
+    differ.push(`${sid}${wild.length > 0 ? ` (WIDENED by a wildcard: ${wild.join(", ")})` : got.NotAction !== undefined || got.NotResource !== undefined ? " (NotAction / NotResource)" : ""}`);
+  }
+  if (differ.length > 0) return `statements that differ from the module's rendering: ${differ.join(", ")} (action, resource, condition and effect are pinned)`;
+  if (had.length === want.length && canonical(strictParse(beforeText)) !== canonical(strictParse(afterText))) return "the policy already held these statements and changes anyway";
+  return null;
+}
+
+/** One of the two app policies: what step 7a must leave behind (null = acceptable), judged on its plan entry. */
+function appReadPolicyProblem(c: PlannedChange | undefined, expected: ReadonlyMap<string, Obj>, what: string): { readonly problem: string | null; readonly added: boolean } {
+  if (c === undefined) return { problem: `${what} is not in the plan (target it: the step is planned with exactly the two -target options)`, added: false };
+  if (c.kind === "no-op") {
+    const p = additionOnlyProblem(c.before.policy, c.before.policy, expected);
+    const policy = parsePolicy(c.before.policy);
+    const holds = policy !== null && [...expected.keys()].every((sid) => policy.statements.has(sid));
+    return { problem: p === null && holds ? null : `${what} is unchanged by this plan but does not hold exactly ${[...expected.keys()].join(", ")}${p === null ? "" : ` (${p})`}`, added: false };
+  }
+  if (c.kind !== "update") return { problem: `${what}: a ${c.kind}, not an in-place policy update${c.kind === "delete" || c.kind === "replace" ? " -- operator / bootstrap authority DESTROYED / REPLACED is absolutely forbidden" : ""}`, added: false };
+  const attrs = onlyAttributes(c, ["policy"]);
+  if (attrs !== null) return { problem: `${what}: ${attrs}`, added: false };
+  const before = parsePolicy(c.before.policy);
+  if (before !== null && [...expected.keys()].some((sid) => before.statements.has(sid))) return { problem: `${what}: ${additionOnlyProblem(c.before.policy, c.after.policy, expected) ?? "already holds the statements, yet the plan updates it"}`, added: false };
+  const p = additionOnlyProblem(c.before.policy, c.after.policy, expected);
+  return { problem: p === null ? null : `${what}: ${p}`, added: p === null };
+}
+
+function appReadAuthorizeGate(plan: Json, changes: readonly PlannedChange[], ctx: MigrationContext): Check[] {
+  const m = STACK_MODULE.app;
+  const checks: Check[] = [];
+  const grants = appReadGrantStatements(ctx);
+  checks.push(judge("the facts the grants name are given", grants !== null, `--region ${String(ctx.region)}, --ledger-table-arn ${String(ctx.ledgerTableArn)}`, "--region <app region> and --ledger-table-arn <the ledger stack's ledger_table_arn> are required (the identity table and the ledger the operator's reads name)"));
+  const BOOT = `${m}.aws_iam_role_policy.bootstrap`;
+  const OPER = `${m}.aws_iam_role_policy.operator[0]`;
+  const empty = new Map<string, Obj>();
+  const rule = (address: string, expected: ReadonlyMap<string, Obj>, what: string): AllowRule => (c) => {
+    if (c.address !== address) return { matched: false };
+    const r = appReadPolicyProblem(c, expected, what);
+    return r.problem === null ? { matched: true } : { matched: true, problem: r.problem };
+  };
+  checks.push(
+    allowlistCheck(
+      changes,
+      [rule(BOOT, grants?.bootstrap ?? empty, "the bootstrap (verifier) policy"), rule(OPER, grants?.operator ?? empty, "the operator policy")],
+      "only the bootstrap and operator policies, each gaining exactly its pending read statements",
+    ),
+  );
+  const boot = appReadPolicyProblem(changes.find((c) => c.address === BOOT), grants?.bootstrap ?? empty, "the bootstrap (verifier) policy");
+  const oper = appReadPolicyProblem(changes.find((c) => c.address === OPER), grants?.operator ?? empty, "the operator policy");
+  checks.push(judge("the bootstrap policy: before + exactly COST-2A's four HostVerifier* statements", grants !== null && boot.problem === null, boot.added ? `${BOOTSTRAP_READ_SIDS.join(", ")} added, pinned to modules/app/iam.tf; every other statement byte-equal` : "already holds them exactly (unchanged)", boot.problem ?? "the facts are missing"));
+  checks.push(judge("the operator policy: before + exactly JX-4C's IdentityEvidenceRead and LedgerJournalQuery", grants !== null && oper.problem === null, oper.added ? `${OPERATOR_READ_SIDS.join(", ")} added, pinned to modules/app/iam.tf; every other statement byte-equal` : "already holds them exactly (unchanged)", oper.problem ?? "the facts are missing"));
+  checks.push(judge("the step adds something", boot.added || oper.added, "at least one policy gains its statements", "neither policy changes: nothing for this step to apply (7a already done?)"));
+  checks.push(ecsUntouchedCheck(plan, changes));
+  checks.push(
+    namedForbidden(
+      "no table, document, key, edge or other IAM change",
+      changes,
+      (c) => AUTHORITY_TYPES.includes(c.type) || isKms(c) || c.type === "aws_ssm_parameter" || c.type.startsWith("aws_cloudfront_") || c.type.startsWith("aws_ecr_") || (c.type.startsWith(IAM_PREFIX) && c.address !== BOOT && c.address !== OPER),
+      "tables, documents, keys, the distribution, ECR, every role and every other policy unchanged",
+      "step 7a moves read grants only",
+    ),
+  );
+  const vars: string[] = [];
+  if (variable(plan, "compute") !== "ecs") vars.push(`compute = ${JSON.stringify(variable(plan, "compute"))} (still ecs: the ECS-era resources go at step 20)`);
+  if (variable(plan, "recovery_break_glass") !== false) vars.push(`recovery_break_glass = ${JSON.stringify(variable(plan, "recovery_break_glass"))}`);
+  if (grants !== null && variable(plan, "ledger_table_arn") !== ctx.ledgerTableArn) vars.push(`ledger_table_arn = ${JSON.stringify(variable(plan, "ledger_table_arn"))} (not --ledger-table-arn ${String(ctx.ledgerTableArn)})`);
+  if (grants !== null && variable(plan, "region") !== ctx.region) vars.push(`region = ${JSON.stringify(variable(plan, "region"))} (not --region ${String(ctx.region)})`);
+  checks.push(judge("variables: still compute = ecs, break-glass off, the operator's facts", vars.length === 0, "compute = ecs, recovery_break_glass = false, region and ledger_table_arn as given", vars.join("; ")));
+  return checks;
+}
+
+function ledgerOperatorJournalGate(plan: Json, changes: readonly PlannedChange[], ctx: MigrationContext): Check[] {
+  const m = STACK_MODULE.ledger;
+  const checks: Check[] = [];
+  const expected = ledgerJournalStatement(ctx);
+  checks.push(judge("the ledger table is named", expected !== null, `--ledger-table-arn ${String(ctx.ledgerTableArn)}`, "--ledger-table-arn <the ledger stack's ledger_table_arn> is required"));
+  const RP = `${m}.aws_dynamodb_resource_policy.ledger`;
+  const want = new Map<string, Obj>(expected === null ? [] : [[LEDGER_JOURNAL_SID, expected]]);
+  const problemOf = (c: PlannedChange): string | null => {
+    if (c.kind === "no-op") return parsePolicy(c.before.policy)?.statements.has(LEDGER_JOURNAL_SID) === true ? `${LEDGER_JOURNAL_SID} is already in the policy: nothing for this step to apply (7b done)` : `the policy is unchanged and lacks ${LEDGER_JOURNAL_SID} (not the JX-4C module code?)`;
+    if (c.kind !== "update") return `a ${c.kind}, not an in-place policy update`;
+    const attrs = onlyAttributes(c, ["policy"], ["revision_id"]);
+    if (attrs !== null) return attrs;
+    for (const [when, v] of [["before", c.before.resource_arn], ["after", c.after.resource_arn]] as const) if (v !== ctx.ledgerTableArn) return `the policy is on ${String(v)} (${when}), not --ledger-table-arn ${String(ctx.ledgerTableArn)}`;
+    const before = parsePolicy(c.before.policy);
+    if (before !== null && before.statements.has(LEDGER_JOURNAL_SID)) return `${LEDGER_JOURNAL_SID} is already in the policy (7b done?) and the policy changes anyway`;
+    return additionOnlyProblem(c.before.policy, c.after.policy, want);
+  };
+  checks.push(
+    allowlistCheck(
+      changes,
+      [
+        (c) => {
+          if (c.address !== RP) return { matched: false };
+          const p = expected === null ? "the ledger table is not named" : problemOf(c);
+          return p === null ? { matched: true } : { matched: true, problem: p };
+        },
+      ],
+      `only the ledger's resource policy gaining exactly ${LEDGER_JOURNAL_SID}`,
+    ),
+  );
+  const rp = changes.find((c) => c.address === RP);
+  const rpProblem = rp === undefined ? "the plan does not contain the ledger's resource policy" : expected === null ? "the ledger table is not named" : problemOf(rp);
+  checks.push(judge(`the ledger's resource policy: before + exactly ${LEDGER_JOURNAL_SID}`, rpProblem === null, `${LEDGER_JOURNAL_SID} added (Query; ATTI#* + key presence; the operator role through the app root + aws:PrincipalArn), pinned to modules/ledger/main.tf; every other statement -- the runtime / host principals included -- byte-equal`, String(rpProblem)));
+  checks.push(namedForbidden("KMS: no key or key-policy change", changes, (c) => isKms(c), "every signing key (relayer, settlement, admission, rotation and financial sets) unchanged", "the key policies move only at steps 8 / 22, from their own guards"));
+  checks.push(namedForbidden("the ledger table: never replaced, destroyed or changed", changes, (c) => c.type === "aws_dynamodb_table", "aws_dynamodb_table.ledger unchanged", "the ledger is the money authority"));
+  checks.push(namedForbidden("APPGEN: never a Terraform item", changes, (c) => c.type === "aws_dynamodb_table_item", "no aws_dynamodb_table_item", "APPGEN / APPGEN#HISTORY are the bootstrap's and the recovery's, never Terraform's (APPGEN stays 1)"));
+  checks.push(namedForbidden("AWS Backup: untouched", changes, (c) => c.type.startsWith(BACKUP_PREFIX) || addressIs(m, "aws_iam_role.backup")(c) || addressIs(m, "aws_iam_role_policy_attachment.backup")(c), "the vault, its lock and policy, the plan and the selection unchanged", "the ledger's separate durability boundary"));
+  const prior = priorResources(plan).get(`${m}.aws_dynamodb_table.ledger`);
+  checks.push(judge("the prior state's ledger is the named one", prior !== undefined && prior.values.arn === ctx.ledgerTableArn, `aws_dynamodb_table.ledger = ${String(ctx.ledgerTableArn)}`, prior === undefined ? "the plan carries no prior state of aws_dynamodb_table.ledger" : `the state's ledger is ${String(prior.values.arn)}, not --ledger-table-arn ${String(ctx.ledgerTableArn)}`));
+  return checks;
+}
+
+/* ------------------------------------------------------------------ */
 /* Entry point                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -1443,6 +1670,12 @@ export function judgeMigrationPlan(gate: GateName, plan: Json, ctx: MigrationCon
   const changes = changesOf(plan);
   const checks: Check[] = [...commonChecks(gate, plan, changes, ctx)];
   switch (gate) {
+    case "app-read-authorize":
+      checks.push(...appReadAuthorizeGate(plan, changes, ctx));
+      break;
+    case "ledger-operator-journal":
+      checks.push(...ledgerOperatorJournalGate(plan, changes, ctx));
+      break;
     case "ledger-host-authorize":
     case "ledger-task-deauthorize":
       checks.push(...ledgerPrincipalGate(gate, plan, changes, ctx));

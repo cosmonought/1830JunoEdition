@@ -21,7 +21,12 @@
       "value": true
     },
     "relayer_key_count": {
-      "value": 1
+      "value": 2
+    },
+    "financial_key_sets": {
+      "value": [
+        "v2"
+      ]
     },
     "tags": {
       "value": {}
@@ -365,7 +370,7 @@
         "before": {
           "id": "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger",
           "resource_arn": "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger",
-          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"AppTaskLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:ConditionCheckItem\",\"dynamodb:GetItem\",\"dynamodb:Query\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]}}},{\"Sid\":\"AppTaskLedgerPutNeverAppgen\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},\"ForAllValues:StringNotEquals\":{\"dynamodb:LeadingKeys\":[\"APPGEN\",\"APPGEN#HISTORY\"]}}},{\"Sid\":\"BootstrapAppgenOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:PutItem\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"BootstrapAppgenHistoryRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"OperatorLedgerReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"}}},{\"Sid\":\"OperatorJournalQuery\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:Query\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"},\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"ATTI#*\"},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"RecoveryLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Query\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"}}},{\"Sid\":\"RecoveryAppgenAdoption\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:UpdateItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"RecoveryAppgenHistoryAppend\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"BootstrapDescribe\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:DescribeTable\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"AppTaskLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:ConditionCheckItem\",\"dynamodb:GetItem\",\"dynamodb:Query\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]}}},{\"Sid\":\"AppTaskLedgerPutNeverAppgen\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},\"ForAllValues:StringNotEquals\":{\"dynamodb:LeadingKeys\":[\"APPGEN\",\"APPGEN#HISTORY\"]}}},{\"Sid\":\"BootstrapAppgenOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:PutItem\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"BootstrapAppgenHistoryRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"OperatorLedgerReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"}}},{\"Sid\":\"OperatorJournalQuery\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:Query\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"},\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"ATTI#*\"},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"RecoveryLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Query\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"}}},{\"Sid\":\"RecoveryAppgenAdoption\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:UpdateItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"RecoveryAppgenHistoryAppend\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"BootstrapRelayerFenceRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"FENCE#relayer#*\"}}},{\"Sid\":\"BootstrapDescribe\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:DescribeTable\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
           "revision_id": "1727900000000",
           "confirm_remove_self_resource_access": false,
           "region": "us-east-1"
@@ -373,7 +378,7 @@
         "after": {
           "id": "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger",
           "resource_arn": "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger",
-          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"AppTaskLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:ConditionCheckItem\",\"dynamodb:GetItem\",\"dynamodb:Query\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-host-app\"}}},{\"Sid\":\"AppTaskLedgerPutNeverAppgen\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-host-app\"},\"ForAllValues:StringNotEquals\":{\"dynamodb:LeadingKeys\":[\"APPGEN\",\"APPGEN#HISTORY\"]}}},{\"Sid\":\"BootstrapAppgenOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:PutItem\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"BootstrapAppgenHistoryRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"OperatorLedgerReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"}}},{\"Sid\":\"OperatorJournalQuery\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:Query\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"},\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"ATTI#*\"},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"RecoveryLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Query\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"}}},{\"Sid\":\"RecoveryAppgenAdoption\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:UpdateItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"RecoveryAppgenHistoryAppend\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"BootstrapDescribe\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:DescribeTable\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"AppTaskLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:ConditionCheckItem\",\"dynamodb:GetItem\",\"dynamodb:Query\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-host-app\"}}},{\"Sid\":\"AppTaskLedgerPutNeverAppgen\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-host-app\"},\"ForAllValues:StringNotEquals\":{\"dynamodb:LeadingKeys\":[\"APPGEN\",\"APPGEN#HISTORY\"]}}},{\"Sid\":\"BootstrapAppgenOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:PutItem\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"BootstrapAppgenHistoryRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"OperatorLedgerReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"}}},{\"Sid\":\"OperatorJournalQuery\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:Query\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"},\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"ATTI#*\"},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"RecoveryLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Query\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"}}},{\"Sid\":\"RecoveryAppgenAdoption\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:UpdateItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"RecoveryAppgenHistoryAppend\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"BootstrapRelayerFenceRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"FENCE#relayer#*\"}}},{\"Sid\":\"BootstrapDescribe\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:DescribeTable\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
           "revision_id": null,
           "confirm_remove_self_resource_access": false,
           "region": "us-east-1"
@@ -639,6 +644,261 @@
         "before_sensitive": {},
         "after_sensitive": {}
       }
+    },
+    {
+      "address": "module.ledger.aws_kms_key.signing[\"relayer-r2\"]",
+      "module_address": "module.ledger",
+      "mode": "managed",
+      "type": "aws_kms_key",
+      "name": "signing",
+      "index": "relayer-r2",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "arn": "arn:aws:kms:us-east-1:222222222222:key/55555555-5555-4555-8555-555555555555",
+          "key_id": "55555555-5555-4555-8555-555555555555",
+          "id": "55555555-5555-4555-8555-555555555555",
+          "description": "18Cosmos staging relayer-r2 signing key (secp256k1, digest only; named by key ARN, never an alias)",
+          "customer_master_key_spec": "ECC_SECG_P256K1",
+          "key_usage": "SIGN_VERIFY",
+          "multi_region": false,
+          "is_enabled": true,
+          "enable_key_rotation": false,
+          "deletion_window_in_days": 30,
+          "bypass_policy_lockout_safety_check": false,
+          "custom_key_store_id": "",
+          "rotation_period_in_days": 0,
+          "xks_key_id": "",
+          "region": "us-east-1",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"KeyAdministrationWithoutSigning\",\"Effect\":\"Allow\",\"Action\":[\"kms:CancelKeyDeletion\",\"kms:Describe*\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:Get*\",\"kms:List*\",\"kms:PutKeyPolicy\",\"kms:RetireGrant\",\"kms:RevokeGrant\",\"kms:ScheduleKeyDeletion\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateKeyDescription\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::222222222222:root\"}},{\"Sid\":\"AppTaskPublicKey\",\"Effect\":\"Allow\",\"Action\":\"kms:GetPublicKey\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]}}},{\"Sid\":\"AppTaskSignDigestOnly\",\"Effect\":\"Allow\",\"Action\":\"kms:Sign\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},\"StringEquals\":{\"kms:MessageType\":\"DIGEST\",\"kms:SigningAlgorithm\":\"ECDSA_SHA_256\"}}},{\"Sid\":\"BootstrapVerifyReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+          "tags": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-relayer-r2",
+            "gs:signing-purpose": "relayer-r2"
+          },
+          "tags_all": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-relayer-r2",
+            "gs:signing-purpose": "relayer-r2",
+            "gs:managed-by": "terraform",
+            "gs:stack": "ledger"
+          }
+        },
+        "after": {
+          "arn": "arn:aws:kms:us-east-1:222222222222:key/55555555-5555-4555-8555-555555555555",
+          "key_id": "55555555-5555-4555-8555-555555555555",
+          "id": "55555555-5555-4555-8555-555555555555",
+          "description": "18Cosmos staging relayer-r2 signing key (secp256k1, digest only; named by key ARN, never an alias)",
+          "customer_master_key_spec": "ECC_SECG_P256K1",
+          "key_usage": "SIGN_VERIFY",
+          "multi_region": false,
+          "is_enabled": true,
+          "enable_key_rotation": false,
+          "deletion_window_in_days": 30,
+          "bypass_policy_lockout_safety_check": false,
+          "custom_key_store_id": "",
+          "rotation_period_in_days": 0,
+          "xks_key_id": "",
+          "region": "us-east-1",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"KeyAdministrationWithoutSigning\",\"Effect\":\"Allow\",\"Action\":[\"kms:CancelKeyDeletion\",\"kms:Describe*\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:Get*\",\"kms:List*\",\"kms:PutKeyPolicy\",\"kms:RetireGrant\",\"kms:RevokeGrant\",\"kms:ScheduleKeyDeletion\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateKeyDescription\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::222222222222:root\"}},{\"Sid\":\"AppTaskPublicKey\",\"Effect\":\"Allow\",\"Action\":\"kms:GetPublicKey\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-host-app\"}}},{\"Sid\":\"AppTaskSignDigestOnly\",\"Effect\":\"Allow\",\"Action\":\"kms:Sign\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-host-app\"},\"StringEquals\":{\"kms:MessageType\":\"DIGEST\",\"kms:SigningAlgorithm\":\"ECDSA_SHA_256\"}}},{\"Sid\":\"BootstrapVerifyReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+          "tags": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-relayer-r2",
+            "gs:signing-purpose": "relayer-r2"
+          },
+          "tags_all": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-relayer-r2",
+            "gs:signing-purpose": "relayer-r2",
+            "gs:managed-by": "terraform",
+            "gs:stack": "ledger"
+          }
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.ledger.aws_kms_key.signing[\"settlement-v2\"]",
+      "module_address": "module.ledger",
+      "mode": "managed",
+      "type": "aws_kms_key",
+      "name": "signing",
+      "index": "settlement-v2",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "arn": "arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666",
+          "key_id": "66666666-6666-4666-8666-666666666666",
+          "id": "66666666-6666-4666-8666-666666666666",
+          "description": "18Cosmos staging settlement-v2 signing key (secp256k1, digest only; named by key ARN, never an alias)",
+          "customer_master_key_spec": "ECC_SECG_P256K1",
+          "key_usage": "SIGN_VERIFY",
+          "multi_region": false,
+          "is_enabled": true,
+          "enable_key_rotation": false,
+          "deletion_window_in_days": 30,
+          "bypass_policy_lockout_safety_check": false,
+          "custom_key_store_id": "",
+          "rotation_period_in_days": 0,
+          "xks_key_id": "",
+          "region": "us-east-1",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"KeyAdministrationWithoutSigning\",\"Effect\":\"Allow\",\"Action\":[\"kms:CancelKeyDeletion\",\"kms:Describe*\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:Get*\",\"kms:List*\",\"kms:PutKeyPolicy\",\"kms:RetireGrant\",\"kms:RevokeGrant\",\"kms:ScheduleKeyDeletion\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateKeyDescription\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::222222222222:root\"}},{\"Sid\":\"AppTaskPublicKey\",\"Effect\":\"Allow\",\"Action\":\"kms:GetPublicKey\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]}}},{\"Sid\":\"AppTaskSignDigestOnly\",\"Effect\":\"Allow\",\"Action\":\"kms:Sign\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},\"StringEquals\":{\"kms:MessageType\":\"DIGEST\",\"kms:SigningAlgorithm\":\"ECDSA_SHA_256\"}}},{\"Sid\":\"BootstrapVerifyReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+          "tags": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-settlement-v2",
+            "gs:signing-purpose": "settlement-v2"
+          },
+          "tags_all": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-settlement-v2",
+            "gs:signing-purpose": "settlement-v2",
+            "gs:managed-by": "terraform",
+            "gs:stack": "ledger"
+          }
+        },
+        "after": {
+          "arn": "arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666",
+          "key_id": "66666666-6666-4666-8666-666666666666",
+          "id": "66666666-6666-4666-8666-666666666666",
+          "description": "18Cosmos staging settlement-v2 signing key (secp256k1, digest only; named by key ARN, never an alias)",
+          "customer_master_key_spec": "ECC_SECG_P256K1",
+          "key_usage": "SIGN_VERIFY",
+          "multi_region": false,
+          "is_enabled": true,
+          "enable_key_rotation": false,
+          "deletion_window_in_days": 30,
+          "bypass_policy_lockout_safety_check": false,
+          "custom_key_store_id": "",
+          "rotation_period_in_days": 0,
+          "xks_key_id": "",
+          "region": "us-east-1",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"KeyAdministrationWithoutSigning\",\"Effect\":\"Allow\",\"Action\":[\"kms:CancelKeyDeletion\",\"kms:Describe*\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:Get*\",\"kms:List*\",\"kms:PutKeyPolicy\",\"kms:RetireGrant\",\"kms:RevokeGrant\",\"kms:ScheduleKeyDeletion\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateKeyDescription\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::222222222222:root\"}},{\"Sid\":\"AppTaskPublicKey\",\"Effect\":\"Allow\",\"Action\":\"kms:GetPublicKey\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-host-app\"}}},{\"Sid\":\"AppTaskSignDigestOnly\",\"Effect\":\"Allow\",\"Action\":\"kms:Sign\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-host-app\"},\"StringEquals\":{\"kms:MessageType\":\"DIGEST\",\"kms:SigningAlgorithm\":\"ECDSA_SHA_256\"}}},{\"Sid\":\"BootstrapVerifyReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+          "tags": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-settlement-v2",
+            "gs:signing-purpose": "settlement-v2"
+          },
+          "tags_all": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-settlement-v2",
+            "gs:signing-purpose": "settlement-v2",
+            "gs:managed-by": "terraform",
+            "gs:stack": "ledger"
+          }
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.ledger.aws_kms_key.signing[\"admission-v2\"]",
+      "module_address": "module.ledger",
+      "mode": "managed",
+      "type": "aws_kms_key",
+      "name": "signing",
+      "index": "admission-v2",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "update"
+        ],
+        "before": {
+          "arn": "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777",
+          "key_id": "77777777-7777-4777-8777-777777777777",
+          "id": "77777777-7777-4777-8777-777777777777",
+          "description": "18Cosmos staging admission-v2 signing key (secp256k1, digest only; named by key ARN, never an alias)",
+          "customer_master_key_spec": "ECC_SECG_P256K1",
+          "key_usage": "SIGN_VERIFY",
+          "multi_region": false,
+          "is_enabled": true,
+          "enable_key_rotation": false,
+          "deletion_window_in_days": 30,
+          "bypass_policy_lockout_safety_check": false,
+          "custom_key_store_id": "",
+          "rotation_period_in_days": 0,
+          "xks_key_id": "",
+          "region": "us-east-1",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"KeyAdministrationWithoutSigning\",\"Effect\":\"Allow\",\"Action\":[\"kms:CancelKeyDeletion\",\"kms:Describe*\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:Get*\",\"kms:List*\",\"kms:PutKeyPolicy\",\"kms:RetireGrant\",\"kms:RevokeGrant\",\"kms:ScheduleKeyDeletion\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateKeyDescription\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::222222222222:root\"}},{\"Sid\":\"AppTaskPublicKey\",\"Effect\":\"Allow\",\"Action\":\"kms:GetPublicKey\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]}}},{\"Sid\":\"AppTaskSignDigestOnly\",\"Effect\":\"Allow\",\"Action\":\"kms:Sign\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},\"StringEquals\":{\"kms:MessageType\":\"DIGEST\",\"kms:SigningAlgorithm\":\"ECDSA_SHA_256\"}}},{\"Sid\":\"BootstrapVerifyReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+          "tags": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-admission-v2",
+            "gs:signing-purpose": "admission-v2"
+          },
+          "tags_all": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-admission-v2",
+            "gs:signing-purpose": "admission-v2",
+            "gs:managed-by": "terraform",
+            "gs:stack": "ledger"
+          }
+        },
+        "after": {
+          "arn": "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777",
+          "key_id": "77777777-7777-4777-8777-777777777777",
+          "id": "77777777-7777-4777-8777-777777777777",
+          "description": "18Cosmos staging admission-v2 signing key (secp256k1, digest only; named by key ARN, never an alias)",
+          "customer_master_key_spec": "ECC_SECG_P256K1",
+          "key_usage": "SIGN_VERIFY",
+          "multi_region": false,
+          "is_enabled": true,
+          "enable_key_rotation": false,
+          "deletion_window_in_days": 30,
+          "bypass_policy_lockout_safety_check": false,
+          "custom_key_store_id": "",
+          "rotation_period_in_days": 0,
+          "xks_key_id": "",
+          "region": "us-east-1",
+          "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"KeyAdministrationWithoutSigning\",\"Effect\":\"Allow\",\"Action\":[\"kms:CancelKeyDeletion\",\"kms:Describe*\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:Get*\",\"kms:List*\",\"kms:PutKeyPolicy\",\"kms:RetireGrant\",\"kms:RevokeGrant\",\"kms:ScheduleKeyDeletion\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateKeyDescription\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::222222222222:root\"}},{\"Sid\":\"AppTaskPublicKey\",\"Effect\":\"Allow\",\"Action\":\"kms:GetPublicKey\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-host-app\"}}},{\"Sid\":\"AppTaskSignDigestOnly\",\"Effect\":\"Allow\",\"Action\":\"kms:Sign\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-host-app\"},\"StringEquals\":{\"kms:MessageType\":\"DIGEST\",\"kms:SigningAlgorithm\":\"ECDSA_SHA_256\"}}},{\"Sid\":\"BootstrapVerifyReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+          "tags": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-admission-v2",
+            "gs:signing-purpose": "admission-v2"
+          },
+          "tags_all": {
+            "gs:component": "ledger",
+            "gs:environment": "staging",
+            "gs:slice": "live5-l5-8",
+            "Name": "gs-staging-admission-v2",
+            "gs:signing-purpose": "admission-v2",
+            "gs:managed-by": "terraform",
+            "gs:stack": "ledger"
+          }
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
     }
   ],
   "prior_state": {
@@ -816,7 +1076,7 @@
                 "values": {
                   "id": "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger",
                   "resource_arn": "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger",
-                  "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"AppTaskLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:ConditionCheckItem\",\"dynamodb:GetItem\",\"dynamodb:Query\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]}}},{\"Sid\":\"AppTaskLedgerPutNeverAppgen\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},\"ForAllValues:StringNotEquals\":{\"dynamodb:LeadingKeys\":[\"APPGEN\",\"APPGEN#HISTORY\"]}}},{\"Sid\":\"BootstrapAppgenOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:PutItem\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"BootstrapAppgenHistoryRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"OperatorLedgerReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"}}},{\"Sid\":\"OperatorJournalQuery\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:Query\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"},\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"ATTI#*\"},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"RecoveryLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Query\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"}}},{\"Sid\":\"RecoveryAppgenAdoption\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:UpdateItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"RecoveryAppgenHistoryAppend\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"BootstrapDescribe\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:DescribeTable\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+                  "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"AppTaskLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:ConditionCheckItem\",\"dynamodb:GetItem\",\"dynamodb:Query\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]}}},{\"Sid\":\"AppTaskLedgerPutNeverAppgen\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},\"ForAllValues:StringNotEquals\":{\"dynamodb:LeadingKeys\":[\"APPGEN\",\"APPGEN#HISTORY\"]}}},{\"Sid\":\"BootstrapAppgenOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:PutItem\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"BootstrapAppgenHistoryRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"OperatorLedgerReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"}}},{\"Sid\":\"OperatorJournalQuery\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:Query\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-operator\"},\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"ATTI#*\"},\"Null\":{\"dynamodb:LeadingKeys\":\"false\"}}},{\"Sid\":\"RecoveryLedgerRead\",\"Effect\":\"Allow\",\"Action\":[\"dynamodb:GetItem\",\"dynamodb:Query\",\"dynamodb:Scan\"],\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"}}},{\"Sid\":\"RecoveryAppgenAdoption\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:UpdateItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN\"}}},{\"Sid\":\"RecoveryAppgenHistoryAppend\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:PutItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-recovery\"},\"ForAllValues:StringEquals\":{\"dynamodb:LeadingKeys\":\"APPGEN#HISTORY\"}}},{\"Sid\":\"BootstrapRelayerFenceRead\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:GetItem\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"},\"ForAllValues:StringLike\":{\"dynamodb:LeadingKeys\":\"FENCE#relayer#*\"}}},{\"Sid\":\"BootstrapDescribe\",\"Effect\":\"Allow\",\"Action\":\"dynamodb:DescribeTable\",\"Resource\":\"arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
                   "revision_id": "1727900000000",
                   "confirm_remove_self_resource_access": false,
                   "region": "us-east-1"
@@ -946,6 +1206,135 @@
                     "gs:slice": "live5-l5-8",
                     "Name": "gs-staging-settlement",
                     "gs:signing-purpose": "settlement",
+                    "gs:managed-by": "terraform",
+                    "gs:stack": "ledger"
+                  }
+                }
+              },
+              {
+                "address": "module.ledger.aws_kms_key.signing[\"relayer-r2\"]",
+                "mode": "managed",
+                "type": "aws_kms_key",
+                "name": "signing",
+                "index": "relayer-r2",
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "arn": "arn:aws:kms:us-east-1:222222222222:key/55555555-5555-4555-8555-555555555555",
+                  "key_id": "55555555-5555-4555-8555-555555555555",
+                  "id": "55555555-5555-4555-8555-555555555555",
+                  "description": "18Cosmos staging relayer-r2 signing key (secp256k1, digest only; named by key ARN, never an alias)",
+                  "customer_master_key_spec": "ECC_SECG_P256K1",
+                  "key_usage": "SIGN_VERIFY",
+                  "multi_region": false,
+                  "is_enabled": true,
+                  "enable_key_rotation": false,
+                  "deletion_window_in_days": 30,
+                  "bypass_policy_lockout_safety_check": false,
+                  "custom_key_store_id": "",
+                  "rotation_period_in_days": 0,
+                  "xks_key_id": "",
+                  "region": "us-east-1",
+                  "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"KeyAdministrationWithoutSigning\",\"Effect\":\"Allow\",\"Action\":[\"kms:CancelKeyDeletion\",\"kms:Describe*\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:Get*\",\"kms:List*\",\"kms:PutKeyPolicy\",\"kms:RetireGrant\",\"kms:RevokeGrant\",\"kms:ScheduleKeyDeletion\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateKeyDescription\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::222222222222:root\"}},{\"Sid\":\"AppTaskPublicKey\",\"Effect\":\"Allow\",\"Action\":\"kms:GetPublicKey\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]}}},{\"Sid\":\"AppTaskSignDigestOnly\",\"Effect\":\"Allow\",\"Action\":\"kms:Sign\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},\"StringEquals\":{\"kms:MessageType\":\"DIGEST\",\"kms:SigningAlgorithm\":\"ECDSA_SHA_256\"}}},{\"Sid\":\"BootstrapVerifyReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+                  "tags": {
+                    "gs:component": "ledger",
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8",
+                    "Name": "gs-staging-relayer-r2",
+                    "gs:signing-purpose": "relayer-r2"
+                  },
+                  "tags_all": {
+                    "gs:component": "ledger",
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8",
+                    "Name": "gs-staging-relayer-r2",
+                    "gs:signing-purpose": "relayer-r2",
+                    "gs:managed-by": "terraform",
+                    "gs:stack": "ledger"
+                  }
+                }
+              },
+              {
+                "address": "module.ledger.aws_kms_key.signing[\"settlement-v2\"]",
+                "mode": "managed",
+                "type": "aws_kms_key",
+                "name": "signing",
+                "index": "settlement-v2",
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "arn": "arn:aws:kms:us-east-1:222222222222:key/66666666-6666-4666-8666-666666666666",
+                  "key_id": "66666666-6666-4666-8666-666666666666",
+                  "id": "66666666-6666-4666-8666-666666666666",
+                  "description": "18Cosmos staging settlement-v2 signing key (secp256k1, digest only; named by key ARN, never an alias)",
+                  "customer_master_key_spec": "ECC_SECG_P256K1",
+                  "key_usage": "SIGN_VERIFY",
+                  "multi_region": false,
+                  "is_enabled": true,
+                  "enable_key_rotation": false,
+                  "deletion_window_in_days": 30,
+                  "bypass_policy_lockout_safety_check": false,
+                  "custom_key_store_id": "",
+                  "rotation_period_in_days": 0,
+                  "xks_key_id": "",
+                  "region": "us-east-1",
+                  "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"KeyAdministrationWithoutSigning\",\"Effect\":\"Allow\",\"Action\":[\"kms:CancelKeyDeletion\",\"kms:Describe*\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:Get*\",\"kms:List*\",\"kms:PutKeyPolicy\",\"kms:RetireGrant\",\"kms:RevokeGrant\",\"kms:ScheduleKeyDeletion\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateKeyDescription\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::222222222222:root\"}},{\"Sid\":\"AppTaskPublicKey\",\"Effect\":\"Allow\",\"Action\":\"kms:GetPublicKey\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]}}},{\"Sid\":\"AppTaskSignDigestOnly\",\"Effect\":\"Allow\",\"Action\":\"kms:Sign\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},\"StringEquals\":{\"kms:MessageType\":\"DIGEST\",\"kms:SigningAlgorithm\":\"ECDSA_SHA_256\"}}},{\"Sid\":\"BootstrapVerifyReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+                  "tags": {
+                    "gs:component": "ledger",
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8",
+                    "Name": "gs-staging-settlement-v2",
+                    "gs:signing-purpose": "settlement-v2"
+                  },
+                  "tags_all": {
+                    "gs:component": "ledger",
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8",
+                    "Name": "gs-staging-settlement-v2",
+                    "gs:signing-purpose": "settlement-v2",
+                    "gs:managed-by": "terraform",
+                    "gs:stack": "ledger"
+                  }
+                }
+              },
+              {
+                "address": "module.ledger.aws_kms_key.signing[\"admission-v2\"]",
+                "mode": "managed",
+                "type": "aws_kms_key",
+                "name": "signing",
+                "index": "admission-v2",
+                "provider_name": "registry.terraform.io/hashicorp/aws",
+                "schema_version": 0,
+                "values": {
+                  "arn": "arn:aws:kms:us-east-1:222222222222:key/77777777-7777-4777-8777-777777777777",
+                  "key_id": "77777777-7777-4777-8777-777777777777",
+                  "id": "77777777-7777-4777-8777-777777777777",
+                  "description": "18Cosmos staging admission-v2 signing key (secp256k1, digest only; named by key ARN, never an alias)",
+                  "customer_master_key_spec": "ECC_SECG_P256K1",
+                  "key_usage": "SIGN_VERIFY",
+                  "multi_region": false,
+                  "is_enabled": true,
+                  "enable_key_rotation": false,
+                  "deletion_window_in_days": 30,
+                  "bypass_policy_lockout_safety_check": false,
+                  "custom_key_store_id": "",
+                  "rotation_period_in_days": 0,
+                  "xks_key_id": "",
+                  "region": "us-east-1",
+                  "policy": "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Sid\":\"KeyAdministrationWithoutSigning\",\"Effect\":\"Allow\",\"Action\":[\"kms:CancelKeyDeletion\",\"kms:Describe*\",\"kms:DisableKey\",\"kms:EnableKey\",\"kms:Get*\",\"kms:List*\",\"kms:PutKeyPolicy\",\"kms:RetireGrant\",\"kms:RevokeGrant\",\"kms:ScheduleKeyDeletion\",\"kms:TagResource\",\"kms:UntagResource\",\"kms:UpdateKeyDescription\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::222222222222:root\"}},{\"Sid\":\"AppTaskPublicKey\",\"Effect\":\"Allow\",\"Action\":\"kms:GetPublicKey\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]}}},{\"Sid\":\"AppTaskSignDigestOnly\",\"Effect\":\"Allow\",\"Action\":\"kms:Sign\",\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":[\"arn:aws:iam::111111111111:role/gs-staging-app-task\",\"arn:aws:iam::111111111111:role/gs-staging-host-app\"]},\"StringEquals\":{\"kms:MessageType\":\"DIGEST\",\"kms:SigningAlgorithm\":\"ECDSA_SHA_256\"}}},{\"Sid\":\"BootstrapVerifyReadOnly\",\"Effect\":\"Allow\",\"Action\":[\"kms:DescribeKey\",\"kms:GetPublicKey\",\"kms:ListGrants\"],\"Resource\":\"*\",\"Principal\":{\"AWS\":\"arn:aws:iam::111111111111:root\"},\"Condition\":{\"ArnEquals\":{\"aws:PrincipalArn\":\"arn:aws:iam::111111111111:role/gs-staging-bootstrap\"}}}]}",
+                  "tags": {
+                    "gs:component": "ledger",
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8",
+                    "Name": "gs-staging-admission-v2",
+                    "gs:signing-purpose": "admission-v2"
+                  },
+                  "tags_all": {
+                    "gs:component": "ledger",
+                    "gs:environment": "staging",
+                    "gs:slice": "live5-l5-8",
+                    "Name": "gs-staging-admission-v2",
+                    "gs:signing-purpose": "admission-v2",
                     "gs:managed-by": "terraform",
                     "gs:stack": "ledger"
                   }

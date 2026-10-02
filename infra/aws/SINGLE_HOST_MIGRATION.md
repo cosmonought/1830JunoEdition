@@ -219,10 +219,10 @@ floor, not the ceiling.
 | F4 | Money sweep | `money-sweep` records every 60 s; `MoneySweepSecondsSinceSuccess` < 180; `HostHealthProblems` = 0. |
 | F5 | KMS | The startup's signer identities verified. Then the L6-6 `kms` probe, run as a one-off `docker run --rm` of the same image on the host (the instance role), < 3 s per Sign. |
 | F6 | DynamoDB | The L6-6 `transactions` probe, the same way (disposable `L6CERT#R` partition, read back empty). |
-| F7 | SIGTERM | `gs-host -Command stop` reports "the last run exited with status 0". Then deploy the same release again: nothing else changes. |
-| F8 | Restart safety (MUTATING, staging) | `docker kill gs-server` on the host: systemd restarts it, and the new process takes **a newer POOL#p1 epoch** and the roles. Then reboot the host: it comes back by itself. |
-| F9 | No duplicate writer | **(a)** non-disruptive: `/opt/gs/bin/gs-preflight` while the server runs refuses "already running". **(b)** disruptive, optional, staging only: start a second container of the same image and env under another name. The **older** process exits 3 within seconds and stays down (`RestartPreventExitStatus`). Remove the extra container, then `gs-deploy` the same release: the host process takes the pool back. |
-| F10 | Stale host | Covered by Terraform (destroy-before-create on the ENI) and the preflight's EIP check (`tests/host-scripts.test.sh`). Nothing to do live. |
+| F7 | SIGTERM (MUTATING, staging) | **`awsDeploy host-cert graceful-stop`** (COST-2C, below): gs-stop -> readiness 503 first -> exit 0 -> no HOLD, no restart; the same digest redeployed serves; generation / pool unchanged. |
+| F8 | Restart safety (MUTATING, staging) | **`awsDeploy host-cert crash-restart`**: `docker kill --signal KILL gs-server` -> a non-fence exit, no HOLD, exactly one automatic restart, a **strictly newer POOL#p1 epoch**, identity writer and relayer moved consistently. **`awsDeploy host-cert reboot-restart`**: the host reboots and the service returns by itself, newer epochs, no HOLD. |
+| F9 | No duplicate writer | **(a)** non-disruptive: **`awsDeploy host-cert duplicate-preflight`** (`/opt/gs/bin/gs-preflight` while the server runs refuses "already running"; nothing moves). **(b)** disruptive, staging only: **`awsDeploy host-cert duplicate-fence`** -- a second container of the same image and env under another name (no port, not under systemd); the **older** process exits 3 and stays down (`RestartPreventExitStatus`), ExecStopPost got `EXIT_CODE=exited EXIT_STATUS=3`, the HOLD is written, survives a reboot, refuses preflight and start, survives a refused deploy; the rival is removed and `gs-deploy` of the same release clears it: one writer at a newer fence. |
+| F10 | Stale host / replacement | Offline: Terraform (destroy-before-create on the ENI) and the preflight's EIP check (`tests/host-scripts.test.sh`). Live (when a replacement is certified): **`awsDeploy host-cert replacement-before`**, the guarded replacement, then **`replacement-after --before <record> [--stale-instance-id <old>]`** (COST-2C, below). |
 
 Any failure: STOP. **Rollback before G** (the ONE plan that may start an ECS task again):
 1. `gs-host -Command stop -UntilDeploy` (the host must be down before ECS takes the pool).
@@ -326,6 +326,68 @@ Any failure: STOP. **Rollback before G** (the ONE plan that may start an ECS tas
 
     Expect about **$0.75/day** while the host is on-demand. That is about $23 a month; about $18.61 with the 1-year Savings Plan, which is bought only after the memory plan (`docs/hosting-budget.md`).
 
+## COST-2C: the single-host certification drills (`awsDeploy host-cert`)
+
+**Status: tooling implemented and offline-tested (COST-2C). NOTHING HERE HAS RUN ON A REAL HOST.** The AL2023 / systemd
+contract (COST-1's open item) stays **OPEN -- NOT EVALUATED -- until the live drill's evidence exists.** An offline run can
+never PASS: every scenario's `real AL2023 host` check is PASS only through the production SSM transport from an Amazon
+Linux 2023 host (`aws/deploy/hostcert/`).
+
+Run by the ONE authorized Claude Code session (or the owner), from the reviewed commit, with operator credentials allowed
+`ssm:SendCommand` (AWS-RunShellScript on the host) / `ssm:GetCommandInvocation`, `ec2:DescribeInstances` /
+`DescribeAddresses`, `ecs:ListTasks`, the operator role's DynamoDB reads, and its `PutItem` on `OPRUN#*` (the drill lock).
+AWS CLI v2 on PATH. On Windows run `node dist/...` directly.
+
+```
+node dist/server/src/tools/awsDeploy.js host-cert <scenario> --run-id <run> --acknowledge-mutating-drill <scenario>
+  --environment staging --runtime-parameter <p1 SSM ARN> --generation 1 --pool p1 --game-table gs-staging-game-g1
+  --instance-id <i-...> --digest <sha256:... the serving release> --build <its build id> --source-commit <40 hex>
+  --operator <who> --evidence <D>\host-cert [--reclaim-stale-lock <run>] [--before <file> --stale-instance-id <i-...>]
+```
+
+| Property | Scenario | Disruptive? | Needs 0 money games + RELAYQ empty | Owner GO required |
+|---|---|---|---|---|
+| F7 graceful SIGTERM | `graceful-stop` | yes (downtime: stop, redeploy) | no (recorded) | "GO COST-2C F7 graceful-stop on <instance>, run <run>" |
+| F8 crash restart | `crash-restart` | yes (an ungraceful kill) | **yes** | "GO COST-2C F8 crash-restart ..." |
+| F8 host reboot | `reboot-restart` | yes (reboot) | **yes** | "GO COST-2C F8 reboot-restart ..." |
+| F9a local duplicate | `duplicate-preflight` | **no** (runs gs-preflight beside the server) | no | "GO COST-2C F9a duplicate-preflight ..." |
+| F9b fencing / HOLD | `duplicate-fence` | **yes** (a rival takes the pool; the host is fenced, rebooted on HOLD, redeployed) | **yes** | "GO COST-2C F9b duplicate-fence ..." -- staging only |
+| Replacement | `replacement-before`, then the guarded replacement, then `replacement-after` | yes | **yes** | one GO for the whole replacement, naming the old and new instance |
+
+Every scenario runs **PRECHECK -> MUTATION -> OBSERVATION -> CLEANUP / RECOVERY -> POSTCHECK**, writes
+`<D>\host-cert\host-cert-<scenario>-<run>.json` (create-once; `18COSMOS/COST-2C-HOST-CERT/v1`: run, scenario, source
+commit, instance, release, before / after task, POOL / identity-writer / relayer epochs, APPGEN, HOLD before / after, the
+systemd properties and unit, every SSM CommandId, mutation timestamps, cleanup, final health; no credential, no SSM value,
+no server.env) and prints **PASS / FAIL / NOT EVALUATED** (exit 0 / 1 / 3; 4 = REFUSED, nothing mutated). A read that
+failed is never PASS; a failed cleanup is always FAIL.
+
+**The precheck refuses** unless: the runtime document is `staging[-*]`, its escrow not mainnet, generation / table / pool
+as named; APPGEN and SYSTEM/GENERATION agree (LIVE-6's `judgeGeneration`); exactly one single-host instance, it holds the
+serving Elastic IP, no ECS task; the host serves the named release, no HOLD, one gs-server, no other drill's recorder or
+rival, the unit and scripts the reviewed bytes; ONE consistent writer -- the host's own process (its banner's task); for
+the disruptive F8 / F9b / replacement drills 0 open money games and RELAYQ empty; the drill lock; the run id; the
+scenario-named acknowledgement. There is no `--force`.
+
+**The drill lock** (`OPRUN#host-cert` / `LOCK` in g1, the operator's own evidence partition): one drill at a time, a
+bounded lease, renewed at every mutation; released at the end (`replacement-before` keeps it for `replacement-after`). An
+expired lock is never taken silently: `--reclaim-stale-lock <its run id>` only after the lease ended (plus 2 minutes of
+clock skew), and only after checking the host carries no `90-gs-cert-*` drop-in and no `gs-cert-rival-*` container. No
+server code reads it; it is never money or serving authority.
+
+**What the systemd proof captures** (F9b; F7 / F8 likewise): the systemd version and the unit (verbatim), a drill-only
+drop-in that appends ONE ExecStopPost recorder AFTER gs-exit-hold (removed at cleanup; it never writes the HOLD and changes
+no Restart= setting), the recorder's `EXIT_CODE` / `EXIT_STATUS` / `SERVICE_RESULT`, systemd's own journal line, the
+`ExecMainCode` / `ExecMainStatus` / `NRestarts` / `Result`, the HOLD file's contents, and the service state after a
+40-second settle. All of them must agree.
+
+**Replacement:** `replacement-after` proves one serving host owning the EIP, newer epochs and roles on the new host, and
+-- only when the owner kept the old instance reachable and names it `--stale-instance-id` -- that its preflight refuses
+("not the serving Elastic IP"), it serves nothing and POOL#p1 does not move. Without a reachable stale host that check is
+NOT EVALUATED (offline proof only).
+
+**Owner validation:** `powershell -ExecutionPolicy Bypass -File .\infra\aws\single-host\run-cost2c-owner-gate.ps1`
+(the complete COST-2C sweep; one log under `evidence\owner-gates\`).
+
 ## Certification: what remains valid, what reruns, what retires
 
 | Status | Item | Why |
@@ -337,8 +399,9 @@ Any failure: STOP. **Rollback before G** (the ONE plan that may start an ECS tas
 | **RERUN** | Deployment health | §F1–F4, `gs-health` |
 | RERUN | Origin routing | §H 16, plus `tests/edge-smoke.sh` offline |
 | RERUN | WebSocket | the `stage-probe edge` websocket gate through CloudFront → Caddy |
-| RERUN | Restart | §F7–F8 |
-| RERUN | Fencing / duplicate process | §F9, plus a replacement certification (`stage-cert` replacement scenario adapted to the host evidence) |
+| RERUN | Restart | §F7–F8 (`host-cert graceful-stop`, `crash-restart`, `reboot-restart`) |
+| RERUN | Fencing / duplicate process | §F9 (`host-cert duplicate-preflight`, `duplicate-fence`), plus the replacement certification (`host-cert replacement-before` / `replacement-after`; LIVE-6's `stage-cert` replacement scenario is ECS-only and unchanged) |
+| **OPEN** | **The AL2023 / systemd exit-status contract** (gs-exit-hold receives `EXIT_CODE=exited` / `EXIT_STATUS=3` or `5` from ExecStopPost; `RestartPreventExitStatus=3 5` holds) | Proven offline only as far as offline can go (COST-2C). **NOT EVALUATED until `host-cert duplicate-fence` (and the F7 / F8 drills) PASS on the real host.** Not certified. |
 | RERUN | KMS access | §F5 (the instance role is a new principal type) |
 | RERUN | DynamoDB access | §F6, plus the `iam` gate's classification for the host role |
 | RERUN | CloudFront edge | §H 16 (proxy hops, query strings) |

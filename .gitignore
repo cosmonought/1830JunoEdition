@@ -10,3 +10,5 @@ node_modules/
 # Environment and System Files
 .env
 .DS_Store
+# Owner-gate logs and summaries (infra/aws/single-host/run-cost2c-owner-gate.ps1): never committed
+/evidence/

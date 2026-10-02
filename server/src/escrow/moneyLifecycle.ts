@@ -586,8 +586,19 @@ export function transitionFinancial(record: FinancialGameRecord, event: Financia
     }
     case "chain-disputed":
       if (record.phase === "disputed" || record.phase === "closed") return { kind: "same" };
-      if (record.phase !== "settleable") return { kind: "refused", reason: `a ${record.phase} game has no stored settlement to dispute` };
-      return moved(record, "disputed", at, "a seat challenged the stored settlement (the resolver decides)");
+      /* JX-6B: DISPUTED is only reachable from SETTLEABLE, so it proves a settlement was stored on chain. The server may
+         see it first from `intent-prepared` (Settle, then a seat's Challenge, both between two observations). That is the
+         one earlier phase whose own Settle can be the stored one; nothing about the settlement is invented here
+         (`settle_confirmed` stays unobserved). Earlier dealt phases wait for the chain's close, as before. */
+      if (record.phase !== "settleable" && record.phase !== "intent-prepared") return { kind: "refused", reason: `a ${record.phase} game has no stored settlement to dispute` };
+      return moved(
+        record,
+        "disputed",
+        at,
+        record.phase === "settleable"
+          ? "a seat challenged the stored settlement (the resolver decides)"
+          : "a seat challenged the stored settlement before this server observed it settleable (the resolver decides)",
+      );
     case "chain-closed": {
       if (record.phase === "closed") return { kind: "same" };
       if (record.phase === "cancelled") return { kind: "same" };

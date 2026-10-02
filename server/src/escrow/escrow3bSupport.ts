@@ -107,6 +107,10 @@ export interface WorldOptions {
   readonly signerKeys?: readonly string[];
   readonly timeoutBlocks?: number;
   readonly challengeWindowSecs?: number;
+  /** JX-6B: the escrow's resolver timeout and challenge-bond terms on the offline chain (defaults: the fake's). */
+  readonly resolverTimeoutSecs?: number;
+  readonly bondBps?: number;
+  readonly bondFloor?: string;
   /** ESCROW-JOIN: build the service without an admission signer (production before LIVE-5 wires KMS). */
   readonly noAdmissionSigner?: boolean;
   /** ESCROW-JOIN: wrap the admission signer (tests observe what it is asked to sign, and when). */
@@ -153,6 +157,9 @@ export function makeWorld(options: WorldOptions = {}): World {
     signerKeys: options.signerKeys ?? [publicKeyOf(SETTLEMENT_SECRET).toString("hex")],
     admissionPubkey: ADMISSION_PUBKEY,
     challengeWindowSecs: options.challengeWindowSecs ?? 60,
+    ...(options.resolverTimeoutSecs !== undefined ? { resolverTimeoutSecs: options.resolverTimeoutSecs } : {}),
+    ...(options.bondBps !== undefined ? { bondBps: options.bondBps } : {}),
+    ...(options.bondFloor !== undefined ? { bondFloor: options.bondFloor } : {}),
   });
   chain.fund(RELAYER_ADDRESS, BigInt(10_000_000));
   const clock = { now: T0 };

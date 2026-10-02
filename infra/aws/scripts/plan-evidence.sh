@@ -83,6 +83,16 @@ if [ -n "$COMMIT" ] && git -C "$REPO" diff --quiet HEAD -- infra/aws 2>/dev/null
   && [ -z "$(find "$REPO/infra/aws" -path '*/.terraform' -prune -o \( -name 'override.tf' -o -name 'override.tf.json' -o -name '*_override.tf' -o -name '*_override.tf.json' \) -print)" ]; then
   CLEAN=true
 fi
-printf '{"format":"18COSMOS/L6-6-PLAN/v1","run_id":"%s","stack":"%s","captured_at":"%s","commit":"%s","infra_aws_clean":%s,"targets":[%s]}\n' "$RUN" "$STACK" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$COMMIT" "$CLEAN" "$TARGETS" > "$OUT/run.json"
+# RECON-1A (W-04): the single host's embedded files must BE LF on disk. A clone made before .gitattributes pinned them
+# eol=lf keeps CRLF copies that git still calls clean (it normalises before comparing), and Terraform's file() /
+# templatefile() embeds those bytes into the user data: CRLF scripts and units on the host. Any CR there = not clean.
+HOST_CR=""
+for f in $(cd "$REPO" && find infra/aws/modules/single-host/files infra/aws/modules/single-host/templates -type f 2>/dev/null | LC_ALL=C sort); do
+  if LC_ALL=C grep -q $'\r' "$REPO/$f"; then HOST_CR="${HOST_CR:+$HOST_CR,}\"$(json_escape "$f")\""; CLEAN=false; fi
+done
+if [ -n "$HOST_CR" ]; then
+  echo "WARNING: single-host files carry CR (re-clone, or: git rm -r -q --cached infra/aws/modules/single-host && git reset -q --hard): infra/aws is NOT clean" >&2
+fi
+printf '{"format":"18COSMOS/L6-6-PLAN/v1","run_id":"%s","stack":"%s","captured_at":"%s","commit":"%s","infra_aws_clean":%s,"targets":[%s],"host_inputs_with_cr":[%s]}\n' "$RUN" "$STACK" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$COMMIT" "$CLEAN" "$TARGETS" "$HOST_CR" > "$OUT/run.json"
 if [ "$KEEP" -eq 1 ]; then KEPT="; the saved plan kept as stack.tfplan"; else KEPT=""; fi
 echo "plan evidence for $STACK written to $OUT (exit $CODE; nothing applied$KEPT)"

@@ -26,6 +26,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { createHash } from "crypto";
+import { execFileSync, spawnSync } from "child_process";
 
 import type { Check } from "../deployVerify";
 import { normalizeEol, readCheckoutText } from "../../../testSupport/portability";
@@ -580,6 +581,93 @@ describe("RECON-1A: the command -- the targets, the facts", () => {
     assert.equal((await run(["ledger-operator-journal", "--plan-evidence", ldir, "--environment", "staging", "--app-account", FIXTURE.appAccountId, "--ledger-table-arn", "table/x"])).code, 2);
     const ok = await run(["ledger-operator-journal", "--plan-evidence", ldir, "--environment", "staging", "--app-account", FIXTURE.appAccountId, "--ledger-table-arn", FIXTURE.ledgerTableArn]);
     assert.equal(ok.code, 0, ok.text);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* plan-evidence.{sh,ps1}: the -target record; a CRLF host file is not clean */
+/* ------------------------------------------------------------------ */
+
+/** A throwaway git checkout holding plan-evidence and one single-host file (LF or CRLF), committed: git calls it clean
+ *  either way (it normalises before comparing) -- exactly an older Windows clone's state the scripts must catch. */
+function miniRepo(cr: boolean): { readonly repo: string; readonly bin: string } {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "recon1-repo-"));
+  for (const f of ["plan-evidence.sh", "plan-evidence.ps1"]) {
+    fs.mkdirSync(path.join(repo, "infra/aws/scripts"), { recursive: true });
+    fs.copyFileSync(path.join(REPO, "infra/aws/scripts", f), path.join(repo, "infra/aws/scripts", f));
+  }
+  fs.mkdirSync(path.join(repo, "infra/aws/stacks/app"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "infra/aws/stacks/app/.terraform.lock.hcl"), "# lock\n");
+  fs.mkdirSync(path.join(repo, "infra/aws/modules/single-host/files/bin"), { recursive: true });
+  fs.writeFileSync(path.join(repo, "infra/aws/modules/single-host/files/bin/gs-x"), cr ? "#!/usr/bin/env bash\r\nexit 0\r\n" : "#!/usr/bin/env bash\nexit 0\n");
+  const git = (...a: string[]) => execFileSync("git", ["-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.autocrlf=false", ...a], { stdio: "pipe" });
+  git("init", "-q");
+  git("add", "-A");
+  git("commit", "-qm", "mini");
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), "recon1-bin-"));
+  fs.writeFileSync(
+    path.join(bin, "terraform"),
+    `#!/usr/bin/env bash
+for a in "$@"; do case "$a" in -out=*) printf 'BINARY-PLAN' > "\${a#-out=}";; esac; done
+case " $* " in *" version "*) echo '{"terraform_version":"1.9.8","provider_selections":{"registry.terraform.io/hashicorp/aws":"6.66.0"}}';; *" plan "*) exit 2;; *" show "*) echo '{"format_version":"1.2"}';; esac
+`,
+    { mode: 0o755 },
+  );
+  return { repo, bin };
+}
+const TARGETS_7A = ["module.app.aws_iam_role_policy.bootstrap", "module.app.aws_iam_role_policy.operator[0]"];
+const POSIX_BASH = process.platform !== "win32" && spawnSync("bash", ["-c", "command -v sha256sum || command -v shasum"]).status === 0 && spawnSync("git", ["--version"]).status === 0;
+const PWSH = process.platform === "win32" ? null : ["pwsh"].find((c) => spawnSync(c, ["-NoProfile", "-NonInteractive", "-Command", "exit 0"]).status === 0) ?? null;
+
+describe("RECON-1A plan-evidence.sh: targets recorded; CR in a host file is NOT clean", { skip: POSIX_BASH ? false : "POSIX bash / git not available (Windows: the .ps1 test)" }, () => {
+  for (const cr of [false, true]) {
+    test(`a ${cr ? "CRLF" : "LF"} single-host file -> infra_aws_clean ${!cr}`, () => {
+      const { repo, bin } = miniRepo(cr);
+      const env = { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` };
+      const r = spawnSync("bash", [path.join(repo, "infra/aws/scripts/plan-evidence.sh"), "app", path.join(repo, "ev"), "recon1-7a-sh", "--keep-plan", "-var-file=x.tfvars", `-target=${TARGETS_7A[0]}`, "-target", TARGETS_7A[1]], { env, encoding: "utf8" });
+      assert.equal(r.status, 0, r.stderr);
+      const run = JSON.parse(fs.readFileSync(path.join(repo, "ev/terraform/app/run.json"), "utf8"));
+      assert.deepEqual(run.targets, TARGETS_7A);
+      assert.equal(run.infra_aws_clean, !cr);
+      assert.deepEqual(run.host_inputs_with_cr, cr ? ["infra/aws/modules/single-host/files/bin/gs-x"] : []);
+      if (cr) assert.match(r.stderr, /single-host files carry CR/);
+    });
+  }
+});
+
+describe("RECON-1A plan-evidence.ps1 (PowerShell 7 where present): the same record", { skip: PWSH === null ? "pwsh not available (the owner's Windows gate runs it)" : false }, () => {
+  for (const cr of [false, true]) {
+    test(`a ${cr ? "CRLF" : "LF"} single-host file -> infra_aws_clean ${!cr}; -target in both spellings recorded`, () => {
+      const { repo, bin } = miniRepo(cr);
+      const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` };
+      /* exactly the runbook's form: -PlanArgs @(...) */
+      const q = (x: string) => `'${x.replace(/'/g, "''")}'`;
+      const command = `& ${q(path.join(repo, "infra/aws/scripts/plan-evidence.ps1"))} -Stack app -Out ${q(path.join(repo, "ev"))} -Run recon1-7a-ps -KeepPlan -PlanArgs @("-var-file=x.tfvars", "-target=${TARGETS_7A[0]}", "-target", "${TARGETS_7A[1]}")`;
+      const r = spawnSync(PWSH!, ["-NoProfile", "-NonInteractive", "-Command", command], { env, encoding: "utf8" });
+      assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
+      const run = JSON.parse(fs.readFileSync(path.join(repo, "ev/terraform/app/run.json"), "utf8").replace(/^\uFEFF/, ""));
+      assert.deepEqual(run.targets, TARGETS_7A);
+      assert.equal(run.infra_aws_clean, !cr);
+      assert.deepEqual(run.host_inputs_with_cr, cr ? ["infra/aws/modules/single-host/files/bin/gs-x"] : []);
+    });
+  }
+});
+
+describe("RECON-1A: the guard names a CR-carrying checkout", () => {
+  test("host_inputs_with_cr in run.json FAILS the clean-checkout check with the remedy", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "recon1-cr-"));
+    const planText = JSON.stringify(PLANS["ecr-lifecycle"]);
+    const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
+    fs.writeFileSync(path.join(dir, "plan.json"), planText);
+    fs.writeFileSync(path.join(dir, "plan-exitcode.txt"), "2\n");
+    fs.writeFileSync(path.join(dir, "version.json"), JSON.stringify({ terraform_version: "1.9.8", provider_selections: { "registry.terraform.io/hashicorp/aws": "6.66.0" } }));
+    fs.writeFileSync(path.join(dir, "run.json"), JSON.stringify({ stack: "single-host", commit: "ee14050f18ba4a51b5af73a5ea9a9a6e89674073", infra_aws_clean: false, targets: [], host_inputs_with_cr: ["infra/aws/modules/single-host/files/bin/gs-deploy"] }));
+    fs.writeFileSync(path.join(dir, SAVED_PLAN), "bin");
+    fs.writeFileSync(path.join(dir, SAVED_PLAN_SHA), `${sha("bin")}  ${SAVED_PLAN}\n${sha(planText)}  plan.json\n`);
+    const lines: string[] = [];
+    const code = await migrationGuardCommand(["ecr-lifecycle", "--plan-evidence", dir, "--environment", "staging", "--app-account", FIXTURE.appAccountId], (l) => lines.push(l));
+    assert.equal(code, 1);
+    assert.match(lines.join("\n"), /FAIL  evidence: planned from a clean, committed checkout: the single host's embedded files carry CR on disk \(infra\/aws\/modules\/single-host\/files\/bin\/gs-deploy\).*re-clone/);
   });
 });
 

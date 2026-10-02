@@ -673,7 +673,7 @@ function commonChecks(gate: GateName, plan: Json, changes: readonly PlannedChang
 }
 
 /** THE LEGACY DESIRED-COUNT DRIFT, named: an ECS change in a gate that must not touch ECS. */
-function ecsUntouchedCheck(plan: Json, changes: readonly PlannedChange[]): Check {
+function ecsUntouchedCheck(plan: Json, changes: readonly PlannedChange[], targeted = "the cutover TARGETED (-target=module.app.aws_cloudfront_distribution.site[0])"): Check {
   const ecs = changes.filter((c) => mutating(c) && ECS_TYPES.includes(c.type));
   const drifted = arr(obj(plan).resource_drift)
     .map(obj)
@@ -684,7 +684,7 @@ function ecsUntouchedCheck(plan: Json, changes: readonly PlannedChange[]): Check
     "ECS untouched (the legacy desired-count drift)",
     ecs.length === 0,
     drifted.length > 0 ? `no ECS change; the drift Terraform saw stays drift (${drifted.join("; ")})` : "no ECS change",
-    `${restarts.length > 0 ? `this plan would RESTART ${restarts.map((c) => c.address).join(", ")} (live desired 0, the stack's configuration 1) and that task would take POOL#p1 back -- ` : ""}ECS changes: ${list(ecs)}${drifted.length > 0 ? ` (drift Terraform saw: ${drifted.join("; ")})` : ""}. Before the host cutover no ordinary app-stack apply is allowed: plan the cutover TARGETED (-target=module.app.aws_cloudfront_distribution.site[0]); only the ecs-rollback gate may start a task`,
+    `${restarts.length > 0 ? `this plan would RESTART ${restarts.map((c) => c.address).join(", ")} (live desired 0, the stack's configuration 1) and that task would take POOL#p1 back -- ` : ""}ECS changes: ${list(ecs)}${drifted.length > 0 ? ` (drift Terraform saw: ${drifted.join("; ")})` : ""}. Before the host cutover no ordinary app-stack apply is allowed: plan ${targeted}; only the ecs-rollback gate may start a task`,
   );
 }
 
@@ -1594,7 +1594,7 @@ function appReadAuthorizeGate(plan: Json, changes: readonly PlannedChange[], ctx
   checks.push(judge("the bootstrap policy: before + exactly COST-2A's four HostVerifier* statements", grants !== null && boot.problem === null, boot.added ? `${BOOTSTRAP_READ_SIDS.join(", ")} added, pinned to modules/app/iam.tf; every other statement byte-equal` : "already holds them exactly (unchanged)", boot.problem ?? "the facts are missing"));
   checks.push(judge("the operator policy: before + exactly JX-4C's IdentityEvidenceRead and LedgerJournalQuery", grants !== null && oper.problem === null, oper.added ? `${OPERATOR_READ_SIDS.join(", ")} added, pinned to modules/app/iam.tf; every other statement byte-equal` : "already holds them exactly (unchanged)", oper.problem ?? "the facts are missing"));
   checks.push(judge("the step adds something", boot.added || oper.added, "at least one policy gains its statements", "neither policy changes: nothing for this step to apply (7a already done?)"));
-  checks.push(ecsUntouchedCheck(plan, changes));
+  checks.push(ecsUntouchedCheck(plan, changes, "step 7a TARGETED (-target=module.app.aws_iam_role_policy.bootstrap -target=module.app.aws_iam_role_policy.operator[0])"));
   checks.push(
     namedForbidden(
       "no table, document, key, edge or other IAM change",

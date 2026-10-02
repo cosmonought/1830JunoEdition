@@ -109,7 +109,9 @@ export function planEvidenceChecks(dir: string, gate: GateName, expectCommit?: s
   const others = Object.keys(version?.provider_selections ?? {}).filter((k) => k !== AWS_PROVIDER);
   checks.push(others.length === 0 ? { name: "evidence: no other provider", status: "pass", detail: "hashicorp/aws is the only provider selected" } : { name: "evidence: no other provider", status: "fail", detail: `other providers selected: ${others.join(", ")} (external / null / local / http run code; the stacks use hashicorp/aws only)` });
   checks.push(versionAtLeast(tf) && provider === AWS_PROVIDER_VERSION ? { name: "evidence: Terraform and provider", status: "pass", detail: `Terraform ${tf}, hashicorp/aws ${AWS_PROVIDER_VERSION}` } : { name: "evidence: Terraform and provider", status: "fail", detail: `Terraform ${tf || "(unknown)"} (>= 1.9.0), hashicorp/aws ${String(provider ?? "(not selected)")} (${AWS_PROVIDER_VERSION} required)` });
-  const run = readJson(path.join(dir, "run.json")) as { stack?: unknown; commit?: unknown; infra_aws_clean?: unknown } | undefined;
+  const run = readJson(path.join(dir, "run.json")) as { stack?: unknown; commit?: unknown; infra_aws_clean?: unknown; host_inputs_with_cr?: unknown } | undefined;
+  /* RECON-1A (W-04): a checkout made before .gitattributes pinned the host's files LF keeps CRLF copies git calls clean. */
+  const hostCr = Array.isArray(run?.host_inputs_with_cr) ? (run!.host_inputs_with_cr as unknown[]).map(String) : [];
   /* The module code a plan cannot show (cloud-init templates, host scripts) is the reviewed code only if the plan was made
      from a clean, committed checkout: plan-evidence records both. */
   const commit = typeof run?.commit === "string" ? run.commit : "";
@@ -120,7 +122,11 @@ export function planEvidenceChecks(dir: string, gate: GateName, expectCommit?: s
       : {
           name: "evidence: planned from a clean, committed checkout",
           status: "fail",
-          detail: !/^[0-9a-f]{40}$/.test(commit) ? "run.json names no commit (capture with this branch's plan-evidence, from a git checkout)" : run?.infra_aws_clean !== true ? `infra/aws was not clean at ${commit} (a modified, untracked or override file): the plan may not be the reviewed code's` : `planned from ${commit}, not --commit ${String(expectCommit)}`,
+          detail: !/^[0-9a-f]{40}$/.test(commit)
+            ? "run.json names no commit (capture with this branch's plan-evidence, from a git checkout)"
+            : hostCr.length > 0
+              ? `the single host's embedded files carry CR on disk (${hostCr.slice(0, 4).join(", ")}${hostCr.length > 4 ? ", ..." : ""}): the user data would ship CRLF scripts / units -- re-clone, or \`git rm -r -q --cached infra/aws/modules/single-host\` then \`git reset -q --hard\`, and capture again`
+              : run?.infra_aws_clean !== true ? `infra/aws was not clean at ${commit} (a modified, untracked or override file): the plan may not be the reviewed code's` : `planned from ${commit}, not --commit ${String(expectCommit)}`,
         },
   );
   checks.push(run?.stack === GATES[gate].stack ? { name: "evidence: the gate's stack", status: "pass", detail: `run.json names stacks/${GATES[gate].stack}` } : { name: "evidence: the gate's stack", status: "fail", detail: `run.json names ${String(run?.stack ?? "(missing)")}; ${gate} judges stacks/${GATES[gate].stack}` });

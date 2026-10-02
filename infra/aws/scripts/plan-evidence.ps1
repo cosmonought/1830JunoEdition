@@ -64,7 +64,24 @@ try {
     $overrides = Get-ChildItem -Path (Join-Path $repo "infra\aws") -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '\\\.terraform\\' -and ($_.Name -in @("override.tf", "override.tf.json") -or $_.Name -like "*_override.tf" -or $_.Name -like "*_override.tf.json") }
     if ($diffClean -and -not $untracked -and -not $overrides) { $clean = "true" }
   }
-  Set-Content -Path (Join-Path $target "run.json") -Value ('{"format":"18COSMOS/L6-6-PLAN/v1","run_id":"' + $Run + '","stack":"' + $Stack + '","captured_at":"' + (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") + '","commit":"' + $commit + '","infra_aws_clean":' + $clean + ',"targets":[' + $targetsJson + ']}') -Encoding utf8
+  # RECON-1A (W-04): the single host's embedded files must BE LF on disk. A clone made before .gitattributes pinned them
+  # eol=lf keeps CRLF copies that git still calls clean (it normalises before comparing), and Terraform's file() /
+  # templatefile() embeds those bytes into the user data: CRLF scripts and units on the host. Any CR there = not clean.
+  $hostCr = @()
+  foreach ($sub in @("files", "templates")) {
+    $root = Join-Path $repo "infra\aws\modules\single-host\$sub"
+    if (Test-Path $root) {
+      foreach ($f in (Get-ChildItem -Path $root -Recurse -File | Sort-Object FullName)) {
+        if ([System.IO.File]::ReadAllBytes($f.FullName) -contains 13) {
+          $hostCr += ($f.FullName.Substring($repo.Length).TrimStart('\', '/') -replace '\\', '/')
+          $clean = "false"
+        }
+      }
+    }
+  }
+  if ($hostCr.Count -gt 0) { Write-Warning "single-host files carry CR (re-clone, or: git rm -r -q --cached infra/aws/modules/single-host; git reset -q --hard): infra/aws is NOT clean" }
+  $hostCrJson = ($hostCr | ForEach-Object { '"' + $_.Replace('\', '\\').Replace('"', '\"') + '"' }) -join ","
+  Set-Content -Path (Join-Path $target "run.json") -Value ('{"format":"18COSMOS/L6-6-PLAN/v1","run_id":"' + $Run + '","stack":"' + $Stack + '","captured_at":"' + (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") + '","commit":"' + $commit + '","infra_aws_clean":' + $clean + ',"targets":[' + $targetsJson + '],"host_inputs_with_cr":[' + $hostCrJson + ']}') -Encoding utf8
   $kept = if ($KeepPlan) { "; the saved plan kept as stack.tfplan" } else { "" }
   Write-Output "plan evidence for $Stack written to $target (exit $code; nothing applied$kept)"
 } finally {

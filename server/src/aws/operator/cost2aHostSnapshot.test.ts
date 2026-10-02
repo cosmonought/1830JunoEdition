@@ -114,6 +114,21 @@ describe("COST-2A: gamesDoctor aws host-snapshot", () => {
     }
   });
 
+  test("RECON-1A: a host-snapshot that throws is a READ failure (exit 1, nothing changed), never a failed mutation (exit 3)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cost2a-snap-"));
+    const blocker = path.join(dir, "not-a-directory");
+    fs.writeFileSync(blocker, "x");
+    const o = io();
+    try {
+      const code = await runAwsOperator(["host-snapshot", "--aws-config", RUNTIME_ARN, "--out", path.join(blocker, "runtime-snapshot.json")], {}, o.sink, { parameters, clientFor: () => client("empty", []) });
+      assert.equal(code, EXIT.findings, o.err.join("\n"));
+      assert.match(o.err.join("\n"), /gamesDoctor aws host-snapshot: a read failed \(nothing was changed\)/);
+      assert.doesNotMatch(o.err.join("\n"), /FAILED \(see the run's evidence item/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("refused: --apply (read-only), no --out; a credential in the environment is refused by name, never by value", async () => {
     const sent: string[] = [];
     const a = io();

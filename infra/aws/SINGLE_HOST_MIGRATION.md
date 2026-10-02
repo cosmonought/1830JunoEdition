@@ -21,6 +21,12 @@
 
 **Running Windows commands:** run `node dist/...` directly; PowerShell's `npm.ps1` swallows `--`.
 
+**A Windows checkout made before RECON-1A** (`.gitattributes` now pins the single host's files `eol=lf`) keeps CRLF
+copies of them that git still reports clean; Terraform would embed those bytes into the host's user data. Before any
+capture, re-clone -- or, in the existing clone, `git rm -r -q --cached infra/aws/modules/single-host` then
+`git reset -q --hard`. `plan-evidence` refuses the checkout as not clean while any of those files carries a CR
+(`run.json` `host_inputs_with_cr`), so every guard FAILs until it is fixed.
+
 ## 0. The accepted starting state
 
 ### 0.1 Staging today (after the GO-B abandonment)
@@ -188,6 +194,7 @@ its own judged saved plan, before any host exists. **Never by an ordinary app-st
     exactly the two policies:
     ```
     infra\aws\scripts\plan-evidence.ps1 -Stack app -Out <D> -Run <run id> -KeepPlan -PlanArgs @("-var-file=staging.tfvars", "-target=module.app.aws_iam_role_policy.bootstrap", "-target=module.app.aws_iam_role_policy.operator[0]")
+    infra/aws/scripts/plan-evidence.sh app <D> <run id> --keep-plan -var-file=staging.tfvars '-target=module.app.aws_iam_role_policy.bootstrap' '-target=module.app.aws_iam_role_policy.operator[0]'
     node dist/server/src/tools/awsDeploy.js migration-guard app-read-authorize --plan-evidence <D>\terraform\app --environment staging --app-account <app> --region <r> --ledger-table-arn <the ledger stack's ledger_table_arn> --commit <reviewed sha> --record <D>\guards\7a.json
     ```
     - The guard requires run.json to record exactly those two `-target`s (an untargeted plan carries the drift); the

@@ -722,7 +722,8 @@ export async function runAwsOperator(argv: readonly string[], env: Readonly<Reco
     const raw = error instanceof Error ? `${error.name}: ${error.message}`.slice(0, 300) : String(error).slice(0, 300);
     /* JX-4B: money's evidence carries no AWS identifier or endpoint, its failures included. */
     const detail = command === "money" ? scrubOperatorText(raw, target) : raw;
-    const mutation = !["status", "game", "games", "wallet-grants", "money", "retire-check", "orphans"].includes(command);
+    /* RECON-1A: host-snapshot (COST-2A) is read-only too -- a failed read or a failed local --out write changed nothing. */
+    const mutation = !["status", "game", "games", "wallet-grants", "money", "host-snapshot", "retire-check", "orphans"].includes(command);
     io.err(`gamesDoctor aws ${command}: ${mutation ? "FAILED (see the run's evidence item, if one was written, before trying again)" : "a read failed (nothing was changed)"} -- ${detail}`);
     return mutation ? EXIT.unknown : EXIT.findings;
   } finally {

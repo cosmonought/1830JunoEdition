@@ -24,7 +24,9 @@
 //                             a job off the actor builds, signs and writes one intent per checkpoint position
 //                             (`checkpointPolicy.ts`); repeated observation is the same slot and the same subject
 //   terminal                  after the coordinator's `intent-prepared`: the sealed prefix is re-derived and MUST equal
-//                             the persisted intent (else HOLD); the terminal checkpoint (seq 2L) then the Settle (2L+1)
+//                             the persisted intent (else HOLD); the terminal checkpoint (seq 2L) then the Settle (2L+1);
+//                             a transient failure before the Settle intent is written is retried by the next chain
+//                             sweep (JX-5B) as well as by a restart's load
 //   after Settle              the chain's SETTLEABLE is observed; Finalize after the window; SETTLED/ANNULLED/CANCELLED
 //                             closes the financial record (whatever route the chain took)
 //
@@ -2050,6 +2052,13 @@ export function createEscrowService(deps: EscrowServiceDeps): EscrowService {
         }
         if (record.roster === null) continue;
         await enqueue(gameId, "the chain sweep", () => observeChain(gameId));
+        /* JX-5B: a terminal Settle job that failed transiently before its intent was durably written (the settlement
+           key unavailable, a chain read, the intent store) left the record at `intent-prepared` with nothing to run it
+           again but a restart's `load()`. The sweep re-offers it through the same per-game queue, AFTER the observation
+           above (a chain that already ended the game closes the record first, and the job then does nothing).
+           `settleJob` re-reads the record and asks the verdict itself, and every slot it signs is idempotent: an
+           existing intent is found before any signature, and the journal keeps one digest per slot. */
+        if (record.phase === "intent-prepared") await enqueue(gameId, "the settlement (sweep retry)", () => settleJob(gameId));
       }
     },
 

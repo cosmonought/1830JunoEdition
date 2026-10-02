@@ -1,4 +1,6 @@
-// server/src/escrow/p5IntCrossSlice.test.ts
+// server/src/aws/runtime/p5IntCrossSlice.test.ts
+//
+// (Under aws/runtime/: it reads the single-host EMF profile, which only the AWS runtime may import -- awsClients.test.ts.)
 //
 // ==================================================================
 //  P5-INT-1: WHERE THE PRESERVED PHASE-5 SLICES MEET -- JX-5B x JX-6B, JX-5B x JX-2B, JX-2B x COST-1
@@ -20,15 +22,15 @@
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ALICE, BUILD, PASS, quietConsole } from "../rooms/testSupport";
-import { sealOf } from "../rooms/lifecycle";
-import type { GameStateResponse } from "../../../frontend/src/gameEngine/gameState";
-import { createSettlementCoordinator } from "./settlementCoordinator";
-import { serverPrefixReplay, type PrefixReplay } from "./settlementEvidence";
-import type { ChainIntentRecord } from "./chainIntents";
-import type { DigestSigner } from "./juno/signer";
-import { RELAYER_ADDRESS, makeWorld, move, passRound, play, startedGame, toStockRound, GAME_A, type World } from "./escrow3bSupport";
-import { singleHostDerived, type MetricRecord } from "../aws/runtime/runtimeMetrics";
+import { ALICE, BUILD, PASS, quietConsole } from "../../rooms/testSupport";
+import { sealOf } from "../../rooms/lifecycle";
+import type { GameStateResponse } from "../../../../frontend/src/gameEngine/gameState";
+import { createSettlementCoordinator } from "../../escrow/settlementCoordinator";
+import { serverPrefixReplay, type PrefixReplay } from "../../escrow/settlementEvidence";
+import type { ChainIntentRecord } from "../../escrow/chainIntents";
+import type { DigestSigner } from "../../escrow/juno/signer";
+import { RELAYER_ADDRESS, makeWorld, move, passRound, play, startedGame, toStockRound, GAME_A, type World } from "../../escrow/escrow3bSupport";
+import { singleHostDerived, type MetricRecord } from "./runtimeMetrics";
 
 quietConsole();
 

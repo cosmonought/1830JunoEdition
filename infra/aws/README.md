@@ -427,10 +427,12 @@ stacks/single-host (COST-1): the same signing_keys pair; the host role signs wit
   app runtime roles: the ECS task role while `ecs_task_role_authorized`, and `app_runtime_role_arns` (only
   `gs-<env>-host-app`) -- both during the migration, the host role alone after it. The host role's own IAM policy names
   the three `signing_keys` ARNs and nothing else, digest-only. Neither side is widened by a key set; adding the host role
-  rewrites the key policies in place and replaces no key (`modules/ledger` test `p5int_*`).
+  changes only the key policies -- every key keeps its ARN (`modules/ledger` test `p5int_*`, mocked provider: it pins the
+  policy statements and the ARNs; the in-place policy update itself is the provider's `aws_kms_key.policy` semantics).
 - **Budget.** `COST_BUDGET.json` `max_kms_keys` = 6 is the LIVE-6 -> JX-1 transition (the three + `relayer-r2` + one
-  financial pair); steady state is 3. A further label or rotation key during it is an owner budget decision
-  (`cost1SingleHost.test.ts`, "P5-INT-1").
+  financial pair); the budget's expected configuration is 3. Keys are `prevent_destroy`: after JX-1 the extra keys stay
+  (and bill, $1/key-month) until a reviewed retirement brings the count back. A further label or rotation key during the
+  transition is an owner budget decision (`cost1SingleHost.test.ts`, "P5-INT-1").
 
 - **Append-only.** Never remove a label from a live environment: removing it would destroy its keys, and
   `prevent_destroy` refuses that plan. Add a new label for a new pair; never reuse one.

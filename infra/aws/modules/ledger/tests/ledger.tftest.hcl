@@ -554,9 +554,10 @@ run "a_financial_key_set_needs_the_signing_keys" {
 /* ------------------------------------------------------------------ */
 /* P5-INT-1: COST-1's app runtime roles x JX-1K's financial key sets   */
 /* ------------------------------------------------------------------ */
-# The "financial" state continues (jx1 + jx2 applied above): authorising the single host's app role re-writes the key
-# policies IN PLACE -- every key keeps its ARN (none replaced) -- and every financial key carries exactly the original
-# keys' grants to exactly the configured runtime roles, the digest-only Sign conditions intact.
+# The "financial" state continues (jx1 + jx2 applied above): authorising the single host's app role changes only the key
+# policies -- every key keeps its ARN (none replaced) -- and every financial key carries exactly the original keys' grants
+# to exactly the configured runtime roles, the digest-only Sign conditions intact. (The mocked policy document renders a
+# constant JSON, so these runs pin the policy STATEMENTS and the ARNs; the in-place update is the provider's semantics.)
 
 run "p5int_financial_keys_authorise_the_host_role_beside_the_task_role" {
   command   = apply

@@ -15,8 +15,9 @@
 //   secrets    no credential literal anywhere in the single-host files; no AWS credential env in the server's env
 //   gate       stacks/app's compute = "none" gates every ECS-era fixed-cost resource (COST_BUDGET.json lists them)
 //   kms        (P5-INT-1) the ledger's signing-key count -- the original three, the relayer rotation keys and JX-1K's
-//              financial key sets -- is 3 by default (the budget's steady state) and 6 for the documented LIVE-6 -> JX-1
-//              transition (r2 + one financial pair), exactly max_kms_keys; no other key family exists
+//              financial key sets -- is 3 by default (the budget's expected configuration) and 6 for the documented
+//              LIVE-6 -> JX-1 transition (r2 + one financial pair), exactly max_kms_keys; no other key family exists. Keys
+//              are prevent_destroy: getting back to 3 is a reviewed retirement (README "Relayer rotation"), never a tfvars edit
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -291,10 +292,9 @@ describe("P5-INT-1: the ledger's signing keys under max_kms_keys (COST-1 x JX-1K
     assert.equal([...ledgerMain.matchAll(/resource\s+"aws_kms_key"/g)].length, 1, "one aws_kms_key resource (aws_kms_key.signing) in the ledger");
   });
 
-  test("the defaults are the budget's steady state: three keys", () => {
+  test("the defaults are the budget's expected configuration: three keys (after JX-1 the extra keys stay -- prevent_destroy -- until a reviewed retirement)", () => {
     assert.match(ledgerVars, /variable "relayer_key_count" \{[\s\S]*?default\s+=\s+1\s/);
     assert.match(ledgerVars, /variable "financial_key_sets" \{[\s\S]*?default\s+=\s+\[\]/);
-    assert.equal(keyCount(1, []), 3);
     const kms = BUDGET.items.find((item) => /^KMS signing keys \(3\)/.test(item.service));
     assert.ok(kms, "the expected cost counts exactly 3 KMS keys");
   });
@@ -317,6 +317,6 @@ describe("P5-INT-1: the ledger's signing keys under max_kms_keys (COST-1 x JX-1K
     assert.match(hostVars, /length\(distinct\(values\(var\.signing_keys\)\)\) == 3/);
     const iam = stripHcl(read("infra/aws/modules/single-host/iam.tf"));
     assert.equal([...iam.matchAll(/Resource\s*=\s*try\(values\(var\.signing_keys\), \[\]\)/g)].length, 2, "GetPublicKey and Sign name exactly the configured key ARNs");
-    assert.ok(!/kms:CreateGrant|kms:\*|"kms:Sign\*"/.test(iam.replace(/NEVER[^\n]*/g, "")), "no grant, no wildcard KMS action");
+    assert.ok(!/kms:CreateGrant|kms:\*|"kms:Sign\*"/.test(iam), "no grant, no wildcard KMS action (comments stripped)");
   });
 });

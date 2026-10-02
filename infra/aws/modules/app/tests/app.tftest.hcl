@@ -287,6 +287,19 @@ run "bootstrap_role_is_separate_and_narrow" {
     condition     = aws_iam_role.bootstrap.name == "gs-staging-bootstrap" && aws_iam_role.task[0].name == "gs-staging-app-task" && aws_iam_role.execution[0].name == "gs-staging-app-execution"
     error_message = "Role names are the ones the ledger stack grants."
   }
+  # COST-2A: the host verifier's reads are describe / get / list only, IAM on the host role alone, and no Run Command.
+  assert {
+    condition     = alltrue([for s in data.aws_iam_policy_document.bootstrap.statement : !startswith(s.sid, "HostVerifier") || alltrue([for a in s.actions : can(regex("^[a-z0-9]+:(Describe|Get|List|View)[A-Za-z]+$", a))])])
+    error_message = "COST-2A: the host verifier's statements grant describe / get / list / view actions only."
+  }
+  assert {
+    condition     = toset(one([for s in data.aws_iam_policy_document.bootstrap.statement : s if s.sid == "HostVerifierHostRole"]).resources) == toset(["arn:aws:iam::111111111111:role/gs-staging-host-app", "arn:aws:iam::111111111111:instance-profile/gs-staging-host-app"])
+    error_message = "COST-2A: the verifier reads the host role and its instance profile only."
+  }
+  assert {
+    condition     = alltrue([for s in data.aws_iam_policy_document.bootstrap.statement : alltrue([for a in s.actions : !contains(["ssm:SendCommand", "ssm:StartSession", "ssm:GetParameters", "ec2:ModifyInstanceAttribute", "ec2:StopInstances", "ec2:TerminateInstances", "iam:PassRole", "secretsmanager:GetSecretValue"], a)])])
+    error_message = "COST-2A: the verifier role runs nothing on the host and changes no instance (the gs-health status line is the operator's opt-in)."
+  }
 }
 
 run "alb_readiness_and_websocket_idle" {

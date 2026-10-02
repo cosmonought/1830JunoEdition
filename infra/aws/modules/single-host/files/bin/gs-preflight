@@ -11,7 +11,8 @@ valid_digest "${GS_IMAGE_DIGEST:-}" || die "release.env: GS_IMAGE_DIGEST must be
 valid_build "${BUILD_ID:-}" || die "release.env: BUILD_ID must match $BUILD_RE"
 
 # References only: the instance role is the ONLY credential source; AWS mode has no data directory and no file escrow config.
-if grep -Eq '^(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AWS_PROFILE|AWS_SHARED_CREDENTIALS_FILE|AWS_CONFIG_FILE|AWS_WEB_IDENTITY_TOKEN_FILE|AWS_CONTAINER_CREDENTIALS_FULL_URI|DATA_DIR|ESCROW_JUNO_CONFIG)=' \
+# (Leading whitespace too: docker's --env-file trims it, so a blank before a credential's name still reaches the container.)
+if grep -Eq '^[[:space:]]*(AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AWS_PROFILE|AWS_SHARED_CREDENTIALS_FILE|AWS_CONFIG_FILE|AWS_WEB_IDENTITY_TOKEN_FILE|AWS_CONTAINER_CREDENTIALS_FULL_URI|DATA_DIR|ESCROW_JUNO_CONFIG)=' \
   "$GS_ETC/server.env" "$GS_ETC/release.env" "$GS_ETC/host.env"; then
   die "a credential, data-directory or file-escrow setting is present in $GS_ETC (the instance role is the only credential source)"
 fi

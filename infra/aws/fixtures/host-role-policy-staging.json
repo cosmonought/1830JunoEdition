@@ -1,0 +1,201 @@
+{
+  "Statement": [
+    {
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1"
+      ],
+      "Sid": "GameTableReadAndCheck"
+    },
+    {
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Condition": {
+        "ForAllValues:StringNotEquals": {
+          "dynamodb:LeadingKeys": [
+            "SYSTEM"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-game-g1"
+      ],
+      "Sid": "GameTableWriteNeverSystem"
+    },
+    {
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Scan",
+        "dynamodb:ConditionCheckItem",
+        "dynamodb:PutItem",
+        "dynamodb:UpdateItem",
+        "dynamodb:DeleteItem"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:111111111111:table/gs-staging-identity"
+      ],
+      "Sid": "IdentityTable"
+    },
+    {
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:ConditionCheckItem"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"
+      ],
+      "Sid": "LedgerReadAndCheck"
+    },
+    {
+      "Action": [
+        "dynamodb:PutItem"
+      ],
+      "Condition": {
+        "ForAllValues:StringNotEquals": {
+          "dynamodb:LeadingKeys": [
+            "APPGEN",
+            "APPGEN#HISTORY"
+          ]
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"
+      ],
+      "Sid": "LedgerAppendNeverAppgen"
+    },
+    {
+      "Action": [
+        "ssm:GetParameter"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1",
+        "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/juno-backend"
+      ],
+      "Sid": "ReadRuntimeConfiguration"
+    },
+    {
+      "Action": [
+        "kms:GetPublicKey"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333",
+        "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111",
+        "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
+      ],
+      "Sid": "SigningKeysPublicKey"
+    },
+    {
+      "Action": [
+        "kms:Sign"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "kms:MessageType": "DIGEST",
+          "kms:SigningAlgorithm": "ECDSA_SHA_256"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333",
+        "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111",
+        "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
+      ],
+      "Sid": "SigningKeysSignDigestOnly"
+    },
+    {
+      "Action": [
+        "ecr:GetAuthorizationToken"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "*"
+      ],
+      "Sid": "EcrAuthTokenUnscopable"
+    },
+    {
+      "Action": [
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:ecr:us-east-1:111111111111:repository/gs-staging-server"
+      ],
+      "Sid": "PullThisRepositoryOnly"
+    },
+    {
+      "Action": [
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:logs:us-east-1:111111111111:log-group:/gs/staging/host:log-stream:*"
+      ],
+      "Sid": "WriteThisHostLogsOnly"
+    },
+    {
+      "Action": [
+        "cloudwatch:PutMetricData"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "cloudwatch:namespace": "18Cosmos/Host"
+        }
+      },
+      "Effect": "Allow",
+      "Resource": [
+        "*"
+      ],
+      "Sid": "HostPressureMetricOnly"
+    },
+    {
+      "Action": [
+        "ssm:UpdateInstanceInformation",
+        "ssm:ListInstanceAssociations"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "arn:aws:ec2:us-east-1:111111111111:instance/*"
+      ],
+      "Sid": "SsmAgentRegister"
+    },
+    {
+      "Action": [
+        "ssmmessages:CreateControlChannel",
+        "ssmmessages:CreateDataChannel",
+        "ssmmessages:OpenControlChannel",
+        "ssmmessages:OpenDataChannel",
+        "ec2messages:AcknowledgeMessage",
+        "ec2messages:DeleteMessage",
+        "ec2messages:FailMessage",
+        "ec2messages:GetEndpoint",
+        "ec2messages:GetMessages",
+        "ec2messages:SendReply"
+      ],
+      "Effect": "Allow",
+      "Resource": [
+        "*"
+      ],
+      "Sid": "SsmAgentChannelsUnscopable"
+    }
+  ],
+  "Version": "2012-10-17"
+}

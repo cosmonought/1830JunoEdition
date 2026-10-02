@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # /opt/gs/bin/gs-health [--wait SECONDS] -- COST-1: one line of host health (no secret). Exit 0 only when /gs/readyz is
-# 200; --wait polls for up to SECONDS.
+# 200; --wait polls for up to SECONDS. COST-2A adds (the host verifier's evidence; still no secret): `digest` (the release
+# file's), `running_digest` (the running container's), `static_credentials` (the NAMES of any static AWS credential
+# source on the host, or "none"), `origin_hostname` (the name Caddy serves and certifies: CloudFront's /gs* origin).
 source "$(dirname "$0")/gs-lib.sh"
 load_env_file "$GS_ETC/host.env"
 wait_for=0
@@ -11,8 +13,12 @@ healthz="$(http_code "$(server_url)/gs/healthz")"
 readyz="$(http_code "$(server_url)/gs/readyz")"
 origin="$(curl -s -o /dev/null -m 5 -w '%{http_code}' --resolve "$GS_ORIGIN_HOSTNAME:443:127.0.0.1" "https://$GS_ORIGIN_HOSTNAME/gs/readyz" 2>/dev/null || printf '000')"
 build="$(release_field "$GS_ETC/release.env" BUILD_ID)"
-hold="none"; [ -e "$(hold_file)" ] && hold="$(tr -d '\n"' <"$(hold_file)")"
-printf '{"server":"%s","caddy":"%s","build":"%s","hold":"%s","healthz":"%s","readyz":"%s","origin_tls_readyz":"%s"}\n' \
+digest="$(release_field "$GS_ETC/release.env" GS_IMAGE_DIGEST)"
+valid_digest "$digest" || digest="none"
+running="$(running_digest)"
+credentials="$(static_credentials)"
+hold="none"; [ -e "$(hold_file)" ] && hold="$(tr -d '\n"\\' <"$(hold_file)")"
+printf '{"server":"%s","caddy":"%s","build":"%s","digest":"%s","running_digest":"%s","hold":"%s","healthz":"%s","readyz":"%s","origin_tls_readyz":"%s","origin_hostname":"%s","static_credentials":"%s"}\n' \
   "$(systemctl is-active gs-server.service 2>/dev/null || true)" "$(systemctl is-active gs-caddy.service 2>/dev/null || true)" \
-  "${build:-none}" "$hold" "$healthz" "$readyz" "$origin"
+  "${build:-none}" "$digest" "$running" "$hold" "$healthz" "$readyz" "$origin" "$GS_ORIGIN_HOSTNAME" "$credentials"
 [ "$ready" = 1 ]

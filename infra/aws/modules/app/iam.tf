@@ -374,6 +374,36 @@ data "aws_iam_policy_document" "bootstrap" {
     actions   = ["cloudwatch:DescribeAlarms"]
     resources = ["*"]
   }
+  # COST-2A: the SINGLE HOST's evidence (infra/aws/scripts/capture-host-evidence) for `awsDeploy verify --topology
+  # coexist | single-host` -- describe / get / list only; nothing here starts, changes or stops anything, reads a
+  # parameter's value, a secret or the instance's user data (DescribeInstanceAttribute is asked only for
+  # disableApiTermination; IAM does not scope by attribute, and user data holds references only: modules/single-host).
+  # Budgets: the account's budgets are listed (describe-budgets), never their subscribers. The host's opt-in status line
+  # (ssm:SendCommand of gs-health) is the OPERATOR's credentials, never this role's.
+  statement {
+    sid = "HostVerifierDescribeUnscopable"
+    actions = [
+      "ec2:DescribeInstances", "ec2:DescribeInstanceAttribute", "ec2:DescribeInstanceCreditSpecifications", "ec2:DescribeVolumes", "ec2:DescribeImages",
+      "ec2:DescribeNetworkInterfaces", "ec2:DescribeAddresses", "ec2:DescribeNatGateways", "ec2:DescribeVpcEndpoints", "ec2:DescribeManagedPrefixLists",
+      "ssm:DescribeInstanceInformation", "logs:DescribeLogGroups",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "HostVerifierEcsEra"
+    actions   = ["ecs:DescribeClusters", "ecs:ListServices"]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "HostVerifierHostRole"
+    actions   = ["iam:GetInstanceProfile", "iam:GetRole", "iam:GetRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies"]
+    resources = ["arn:${local.partition}:iam::${local.account}:role/${local.prefix}-host-app", "arn:${local.partition}:iam::${local.account}:instance-profile/${local.prefix}-host-app"]
+  }
+  statement {
+    sid       = "HostVerifierBudgets"
+    actions   = ["budgets:ViewBudget"]
+    resources = ["arn:${local.partition}:budgets::${local.account}:budget/*"]
+  }
   statement {
     sid = "VerifierDescribeUnscopable"
     actions = [

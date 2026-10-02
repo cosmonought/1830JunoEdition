@@ -40,7 +40,7 @@ locals {
   # LIVE-6 L6-2: the operator (`gamesDoctor aws`, read only here) and the recovery (`npm run recovery`, L6-4) roles.
   operator_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-operator"
   recovery_arn    = "arn:${local.partition}:iam::${var.app_account_id}:role/gs-${var.environment}-recovery"
-  signing_purpose = var.signing_keys_enabled ? toset(concat(["relayer", "settlement", "admission"], [for label in local.relayer_rotation_labels : "relayer-${label}"])) : toset([])
+  signing_purpose = var.signing_keys_enabled ? toset(concat(["relayer", "settlement", "admission"], [for label in local.relayer_rotation_labels : "relayer-${label}"], local.financial_key_purposes)) : toset([])
   tags            = merge(var.tags, { "gs:environment" = var.environment, "gs:component" = "ledger", "gs:slice" = "live5-l5-8" })
 }
 
@@ -52,6 +52,11 @@ locals {
   relayer_rotation_labels = [for n in range(2, var.relayer_key_count + 1) : "r${n}"]
   # The certification's post-rotation proof reads the relayer fences (bootstrap role, read only): only once a rotation exists.
   relayer_rotation_reads = var.signing_keys_enabled && var.relayer_key_count > 1
+  # JX-1K financial key sets: each `financial_key_sets` label <l> adds the pair `settlement-<l>` / `admission-<l>` to
+  # `signing_purpose` -- one more instance each of the same resource, same spec, same key policy, `prevent_destroy`. The
+  # original settlement and admission keys never move; no relayer key is added. Labels are hyphen-free (validated), so
+  # `<purpose>-<label>` splits unambiguously.
+  financial_key_purposes = flatten([for label in var.financial_key_sets : ["settlement-${label}", "admission-${label}"]])
 }
 
 /* ------------------------------------------------------------------ */
@@ -417,6 +422,11 @@ resource "aws_backup_selection" "ledger" {
 # would destroy the NEWEST key and `prevent_destroy` refuses that plan; an OLDER key cannot be named for removal at all.
 # Retiring a relayer key is a separate, reviewed change (a `removed` block with `destroy = false`, then a scheduled
 # deletion by hand), never a variable.
+#
+# JX-1K FINANCIAL KEY SETS. `financial_key_sets` (default []: unchanged) is APPEND-ONLY by label: each label <l> adds
+# `settlement-<l>` and `admission-<l>` -- dedicated settlement / admission identities for a separate financial
+# deployment (e.g. JX-1), same spec and key policy as every key here. Removing a label would destroy its keys:
+# `prevent_destroy` refuses that plan. They are not relayer keys and never join `signing_key_arns`.
 
 data "aws_iam_policy_document" "signing" {
   for_each = local.signing_purpose
@@ -511,8 +521,14 @@ resource "aws_kms_key" "signing" {
   deletion_window_in_days  = 30
   policy                   = data.aws_iam_policy_document.signing[each.key].json
 
-  # The original three keep their L5-8 tags exactly; a rotation key's purpose is `relayer`, its label says which one.
-  tags = merge(local.tags, { Name = "gs-${var.environment}-${each.key}", "gs:signing-purpose" = startswith(each.key, "relayer-") ? "relayer" : each.key }, startswith(each.key, "relayer-") ? { "gs:relayer-key" = trimprefix(each.key, "relayer-") } : {})
+  # The original three keep their L5-8 tags exactly; a rotation key's purpose is `relayer`, its label says which one. A
+  # financial key set's keys: purpose `settlement` / `admission`, `gs:key-set` = the set's label.
+  tags = merge(
+    local.tags,
+    { Name = "gs-${var.environment}-${each.key}", "gs:signing-purpose" = split("-", each.key)[0] },
+    startswith(each.key, "relayer-") ? { "gs:relayer-key" = trimprefix(each.key, "relayer-") } : {},
+    contains(local.financial_key_purposes, each.key) ? { "gs:key-set" = split("-", each.key)[1] } : {},
+  )
 
   lifecycle {
     # Destroying a signing key destroys the relayer account / the settlement or admission identity.

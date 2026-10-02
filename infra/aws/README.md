@@ -64,7 +64,7 @@ resource or key policy, and the role's own IAM policy from the app stack. The le
 | `gs-<env>-identity` | TTL on the attribute **`ttl`**. |
 | `gs-<env>-ledger` | No TTL. `APPGEN` comes from the bootstrap. Resource policy for the task role: GetItem, Query, ConditionCheckItem, and PutItem on any key except `APPGEN`. It gets no Update, Delete or Scan. |
 | **Ledger backup** | AWS Backup daily into `gs-<env>-ledger` (vault lock, governance by default; compliance mode is an owner decision). The vault policy denies DeleteRecoveryPoint and UpdateRecoveryPointLifecycle. The selection is the ledger only, and the backup role cannot restore. Optional copy to another vault. |
-| **KMS** (relayer, settlement, admission) | `ECC_SECG_P256K1` / `SIGN_VERIFY`, single-region, no rotation (a new key is a new chain identity), `prevent_destroy`. The key policy lets the task role GetPublicKey, and Sign only with `ECDSA_SHA_256` over a `DIGEST`. The bootstrap role may DescribeKey, GetPublicKey and ListGrants. The key's own account administers it but gets neither `kms:Sign` nor `kms:CreateGrant`. LIVE-6: `relayer_key_count` (append-only, default 1) adds relayer keys `relayer-r2`, `relayer-r3`, ... beside the original (`r1`, unchanged), each with the same spec and policy; which one is configured is the app stack's `signing_keys.relayer` ("Relayer rotation"). |
+| **KMS** (relayer, settlement, admission) | `ECC_SECG_P256K1` / `SIGN_VERIFY`, single-region, no rotation (a new key is a new chain identity), `prevent_destroy`. The key policy lets the task role GetPublicKey, and Sign only with `ECDSA_SHA_256` over a `DIGEST`. The bootstrap role may DescribeKey, GetPublicKey and ListGrants. The key's own account administers it but gets neither `kms:Sign` nor `kms:CreateGrant`. LIVE-6: `relayer_key_count` (append-only, default 1) adds relayer keys `relayer-r2`, `relayer-r3`, ... beside the original (`r1`, unchanged), each with the same spec and policy; which one is configured is the app stack's `signing_keys.relayer` ("Relayer rotation"). Phase 5: `financial_key_sets` (append-only, default `[]`) adds dedicated `settlement-<label>` / `admission-<label>` pairs ("Financial key sets"). |
 | **SSM** | `/gs/<env>/runtime/<pool>` (`18COSMOS/AWS-RUNTIME/v2` since L6-2: the v1 fields plus `routes`, one entry per pool, `ws_path` `/gs/p/<pool>`; v1 is still read) and `/gs/<env>/juno-backend` (`18COSMOS/JUNO-BACKEND/v3`: `journal` is the same ledger ARN, the signers are the three key ARNs). Both are `String`, never `SecureString`, hold no secret, and are written with `insecure_value` so every change shows in the plan. |
 | **Secrets Manager** | **Nothing.** No secret has a consumer yet, so no secret is created and no role has `secretsmanager:*`. See "Secrets" below. |
 | **ECS** | One Fargate service per pool (desired count 0 or 1), each behind its own target group in awsvpc private subnets with no public IP. Stop-first (0 / 100), AZ rebalancing off, circuit breaker with rollback, no ECS Exec. `stopTimeout` 120. Container health: `node -e` GET `/gs/healthz`, `startPeriod` 300. awslogs to `/gs/<env>/<pool>`. Read-only root filesystem; the image runs as the `node` user. |
@@ -405,6 +405,29 @@ not touch it. Why:
 - its funding deadline keeps running: if it passes, anyone may `Cancel` on chain, which refunds each NET ante -- the
   escrow's basis-point fee on every deposit is not refunded -- and the server must reconcile what the chain shows;
 - a roster frozen for Start (reversible until Start lands) would sit across the window.
+
+## Financial key sets: dedicated settlement + admission keys (Phase 5, JX-1K)
+
+A separate financial deployment (e.g. JX-1, its own escrow contract) signs with its OWN settlement and admission keys,
+never the original ones. The ledger stack creates them by label:
+
+```
+stacks/ledger:  financial_key_sets = ["jx1"]                                   plan, then apply
+  -> exactly two new keys, settlement-jx1 and admission-jx1 (aws_kms_key.signing["settlement-jx1"] / ["admission-jx1"]),
+     beside every existing key: same ECC_SECG_P256K1 / SIGN_VERIFY spec, single-region, same key policy (task role:
+     GetPublicKey + Sign ECDSA_SHA_256 over a DIGEST; bootstrap: DescribeKey / GetPublicKey / ListGrants), prevent_destroy.
+     Tags: gs:signing-purpose = settlement | admission, gs:key-set = jx1.
+  output financial_key_arns = { jx1 = { settlement = <key ARN>, admission = <key ARN> } }
+stacks/app:     signing_keys.settlement = financial_key_arns["jx1"].settlement
+                signing_keys.admission  = financial_key_arns["jx1"].admission   (only when that deployment is repointed)
+```
+
+- **Append-only.** Never remove a label from a live environment: removing it would destroy its keys, and
+  `prevent_destroy` refuses that plan. Add a new label for a new pair; never reuse one.
+- **Financial keys, not relayer keys.** No relayer key is created; `relayer_key_count` / `relayer_key_arns` and
+  `relayer_rotation_key_arns` are unaffected. `signing_key_arns` stays exactly the original three.
+- **Labels:** `^[a-z][a-z0-9]{1,15}$` (no hyphen), unique, never `r<N>`; requires `signing_keys_enabled`. Default `[]`
+  leaves an existing deployment's plan unchanged.
 
 ## Generation switch after a restore (L6-4 §12.1, wired by L6-2)
 
@@ -779,7 +802,7 @@ Terraform state holds only non-secret values: the documents, ARNs and names. KMS
 ## Tests (no AWS)
 
 ```
-cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 12 runs (LIVE-6 relayer rotation: +6)
+cd infra/aws/modules/ledger && terraform init -backend=false && terraform test        # 30 runs (LIVE-6 relayer rotation: +6; COST-1 host role: +7; JX-1K financial key sets: +11)
 cd infra/aws/modules/app    && terraform init -backend=false && terraform test        # 61 runs (app 45 + alarms 16; Terraform >= 1.10)
 cd infra/aws/stacks/app     && terraform init -backend=false && terraform validate    # (and stacks/ledger)
 cd server && npm run build && node --test dist/server/src/aws/deploy/l5_8Deploy.test.js dist/server/src/aws/awsClients.test.js

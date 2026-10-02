@@ -11,6 +11,11 @@ output "relayer_key_arns" {
   value = module.ledger.relayer_key_arns
 }
 
+# JX-1K: each financial key set's settlement / admission key ARNs (the app stack names one pair in signing_keys).
+output "financial_key_arns" {
+  value = module.ledger.financial_key_arns
+}
+
 output "kms_region" {
   value = module.ledger.kms_region
 }

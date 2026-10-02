@@ -367,3 +367,186 @@ run "cost1_never_any_other_app_role" {
   }
   expect_failures = [var.app_runtime_role_arns]
 }
+
+/* ------------------------------------------------------------------ */
+/* JX-1K financial key sets: `financial_key_sets` (append-only)          */
+/* ------------------------------------------------------------------ */
+# One state ("financial") carried through the runs below, as with the rotation: an ARN equal to the earlier run's proves the
+# key was neither replaced nor recreated.
+
+run "financial_baseline_is_the_three_keys" {
+  command   = apply
+  state_key = "financial"
+
+  assert {
+    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission"]) && length(output.financial_key_arns) == 0
+    error_message = "Default []: exactly the three L5-8 keys, no financial key set (financial_key_arns = {})."
+  }
+  assert {
+    condition     = toset(keys(output.signing_key_arns)) == toset(["relayer", "settlement", "admission"]) && join(",", keys(output.relayer_key_arns)) == "r1"
+    error_message = "Default []: signing_key_arns and relayer_key_arns are the L5-8 / LIVE-6 outputs."
+  }
+  assert {
+    condition = alltrue([for k in ["relayer", "settlement", "admission"] :
+    aws_kms_key.signing[k].tags == tomap(merge(local.tags, { Name = "gs-staging-${k}", "gs:signing-purpose" = k })) && aws_kms_key.signing[k].description == "18Cosmos staging ${k} signing key (secp256k1, digest only; named by key ARN, never an alias)"])
+    error_message = "Default []: the three keys' names, descriptions and tags are exactly L5-8's (no gs:key-set tag)."
+  }
+}
+
+run "a_financial_key_set_adds_exactly_settlement_and_admission" {
+  command   = apply
+  state_key = "financial"
+  variables {
+    financial_key_sets = ["jx1"]
+  }
+
+  assert {
+    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission", "settlement-jx1", "admission-jx1"])
+    error_message = "The jx1 set adds exactly settlement-jx1 and admission-jx1 -- no relayer key."
+  }
+  assert {
+    condition     = output.signing_key_arns == run.financial_baseline_is_the_three_keys.signing_key_arns && output.relayer_key_arns == run.financial_baseline_is_the_three_keys.relayer_key_arns
+    error_message = "The original relayer, settlement and admission keys are untouched (same ARNs: not replaced, not recreated); signing_key_arns stays the original three."
+  }
+  assert {
+    condition     = join(",", keys(output.financial_key_arns)) == "jx1" && join(",", keys(output.financial_key_arns["jx1"])) == "admission,settlement"
+    error_message = "financial_key_arns = { jx1 = { settlement, admission } }."
+  }
+  assert {
+    condition = (output.financial_key_arns["jx1"].settlement == aws_kms_key.signing["settlement-jx1"].arn && output.financial_key_arns["jx1"].admission == aws_kms_key.signing["admission-jx1"].arn
+    && length(distinct(concat(values(output.signing_key_arns), [output.financial_key_arns["jx1"].settlement, output.financial_key_arns["jx1"].admission]))) == 5)
+    error_message = "financial_key_arns.jx1 names the two new keys, distinct from each other and from the original three."
+  }
+  assert {
+    condition = alltrue([for k in ["settlement-jx1", "admission-jx1"] :
+      aws_kms_key.signing[k].customer_master_key_spec == "ECC_SECG_P256K1" && aws_kms_key.signing[k].key_usage == "SIGN_VERIFY"
+      && !aws_kms_key.signing[k].multi_region && !aws_kms_key.signing[k].enable_key_rotation && aws_kms_key.signing[k].is_enabled
+    && aws_kms_key.signing[k].deletion_window_in_days == 30])
+    error_message = "The new keys are the same secp256k1 SIGN_VERIFY keys: single-region, no rotation, enabled, 30-day deletion window."
+  }
+  assert {
+    condition     = data.aws_iam_policy_document.signing["settlement-jx1"].statement == data.aws_iam_policy_document.signing["settlement"].statement && data.aws_iam_policy_document.signing["admission-jx1"].statement == data.aws_iam_policy_document.signing["admission"].statement
+    error_message = "The new keys' policies are the originals', statement for statement: task GetPublicKey + digest-only Sign, bootstrap read, no CreateGrant."
+  }
+  assert {
+    condition     = aws_kms_key.signing["settlement-jx1"].policy == data.aws_iam_policy_document.signing["settlement-jx1"].json && aws_kms_key.signing["admission-jx1"].policy == data.aws_iam_policy_document.signing["admission-jx1"].json
+    error_message = "Each new key carries its policy document."
+  }
+  assert {
+    condition = (aws_kms_key.signing["settlement-jx1"].tags == tomap(merge(local.tags, { Name = "gs-staging-settlement-jx1", "gs:signing-purpose" = "settlement", "gs:key-set" = "jx1" }))
+    && aws_kms_key.signing["admission-jx1"].tags == tomap(merge(local.tags, { Name = "gs-staging-admission-jx1", "gs:signing-purpose" = "admission", "gs:key-set" = "jx1" })))
+    error_message = "Tagged by purpose (settlement / admission) and key set (jx1); no gs:relayer-key."
+  }
+  assert {
+    condition     = aws_kms_key.signing["settlement-jx1"].description == "18Cosmos staging settlement-jx1 signing key (secp256k1, digest only; named by key ARN, never an alias)"
+    error_message = "The new key's description names it."
+  }
+  assert {
+    condition = alltrue([for k in ["relayer", "settlement", "admission"] :
+    aws_kms_key.signing[k].tags == tomap(merge(local.tags, { Name = "gs-staging-${k}", "gs:signing-purpose" = k })) && aws_kms_key.signing[k].description == "18Cosmos staging ${k} signing key (secp256k1, digest only; named by key ARN, never an alias)"])
+    error_message = "The three L5-8 keys' descriptions and tags are unchanged (no in-place update either)."
+  }
+  assert {
+    condition     = length([for s in data.aws_iam_policy_document.ledger_resource.statement : s if s.sid == "BootstrapRelayerFenceRead"]) == 0
+    error_message = "A financial key set changes nothing in the ledger table's resource policy (it is not a relayer rotation)."
+  }
+}
+
+run "a_second_financial_key_set_keeps_the_first" {
+  command   = apply
+  state_key = "financial"
+  variables {
+    financial_key_sets = ["jx1", "jx2"]
+  }
+
+  assert {
+    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission", "settlement-jx1", "admission-jx1", "settlement-jx2", "admission-jx2"])
+    error_message = "Appending jx2 adds exactly its pair."
+  }
+  assert {
+    condition     = output.financial_key_arns["jx1"] == run.a_financial_key_set_adds_exactly_settlement_and_admission.financial_key_arns["jx1"] && output.signing_key_arns == run.financial_baseline_is_the_three_keys.signing_key_arns
+    error_message = "jx1's keys and the original three keep their ARNs."
+  }
+}
+
+run "financial_keys_beside_a_rotation" {
+  command   = apply
+  state_key = "rotation"
+  variables {
+    relayer_key_count  = 3
+    financial_key_sets = ["jx1"]
+  }
+
+  assert {
+    condition     = toset(keys(aws_kms_key.signing)) == toset(["relayer", "settlement", "admission", "relayer-r2", "relayer-r3", "settlement-jx1", "admission-jx1"])
+    error_message = "Beside a rotation, a financial key set adds only its own pair."
+  }
+  assert {
+    condition = (output.signing_key_arns == run.rotation_baseline_one_relayer_key.signing_key_arns
+      && output.relayer_key_arns == run.a_later_rotation_adds_r3_and_keeps_r1_r2.relayer_key_arns && join(",", keys(output.relayer_key_arns)) == "r1,r2,r3"
+    && join(",", keys(output.financial_key_arns)) == "jx1")
+    error_message = "r1..r3 and the original three are untouched (same ARNs); relayer_key_arns never lists a financial key."
+  }
+  assert {
+    condition     = aws_kms_key.signing["relayer-r2"].tags == tomap(merge(local.tags, { Name = "gs-staging-relayer-r2", "gs:signing-purpose" = "relayer", "gs:relayer-key" = "r2" }))
+    error_message = "A rotation key's tags are unchanged by a financial key set."
+  }
+}
+
+run "a_financial_label_is_never_a_relayer_label" {
+  command = plan
+  variables {
+    financial_key_sets = ["r2"]
+  }
+  expect_failures = [var.financial_key_sets]
+}
+
+run "a_financial_label_has_no_hyphen" {
+  command = plan
+  variables {
+    financial_key_sets = ["jx-1"]
+  }
+  expect_failures = [var.financial_key_sets]
+}
+
+run "a_financial_label_is_lowercase" {
+  command = plan
+  variables {
+    financial_key_sets = ["JX1"]
+  }
+  expect_failures = [var.financial_key_sets]
+}
+
+run "a_financial_label_starts_with_a_letter" {
+  command = plan
+  variables {
+    financial_key_sets = ["1jx"]
+  }
+  expect_failures = [var.financial_key_sets]
+}
+
+run "a_financial_label_is_bounded" {
+  command = plan
+  variables {
+    financial_key_sets = ["jabcdefghijklmnop"] # 17 characters
+  }
+  expect_failures = [var.financial_key_sets]
+}
+
+run "a_financial_label_is_named_once" {
+  command = plan
+  variables {
+    financial_key_sets = ["jx1", "jx1"]
+  }
+  expect_failures = [var.financial_key_sets]
+}
+
+run "a_financial_key_set_needs_the_signing_keys" {
+  command   = plan
+  state_key = "no-keys-financial"
+  variables {
+    signing_keys_enabled = false
+    financial_key_sets   = ["jx1"]
+  }
+  expect_failures = [var.financial_key_sets]
+}

@@ -32,6 +32,12 @@ variable "relayer_key_count" {
   default = 1
 }
 
+# JX-1K (modules/ledger: append-only by label; never remove one): additional settlement + admission key pairs, e.g. ["jx1"].
+variable "financial_key_sets" {
+  type    = list(string)
+  default = []
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

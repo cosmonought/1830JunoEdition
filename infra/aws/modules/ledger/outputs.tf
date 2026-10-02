@@ -19,8 +19,8 @@ output "ledger_region" {
 }
 
 output "signing_key_arns" {
-  description = "Key ARNs (never aliases) for the Juno configuration: relayer.signer, settlement_key.signer, admission_key.signer. `relayer` is always the ORIGINAL relayer key (r1); a rotation's keys are in relayer_key_arns."
-  value       = { for purpose, key in aws_kms_key.signing : purpose => key.arn if !startswith(purpose, "relayer-") }
+  description = "Key ARNs (never aliases) for the Juno configuration: relayer.signer, settlement_key.signer, admission_key.signer. `relayer` is always the ORIGINAL relayer key (r1); a rotation's keys are in relayer_key_arns. Exactly the ORIGINAL three: a financial key set's keys are in financial_key_arns."
+  value       = { for purpose, key in aws_kms_key.signing : purpose => key.arn if contains(["relayer", "settlement", "admission"], purpose) }
 }
 
 output "relayer_key_arns" {
@@ -31,6 +31,15 @@ output "relayer_key_arns" {
     `relayer_rotation_key_arns`. `signing_key_arns.relayer` stays the ORIGINAL key, whatever is configured.
   EOT
   value       = var.signing_keys_enabled ? merge({ r1 = aws_kms_key.signing["relayer"].arn }, { for label in local.relayer_rotation_labels : label => aws_kms_key.signing["relayer-${label}"].arn }) : {}
+}
+
+output "financial_key_arns" {
+  description = <<-EOT
+    JX-1K financial key sets: { <label> = { settlement = <key ARN>, admission = <key ARN> } } for each
+    `financial_key_sets` label ({} by default). The app stack names one pair as `signing_keys.settlement` /
+    `signing_keys.admission`; `signing_key_arns` stays the ORIGINAL three, whatever is configured.
+  EOT
+  value       = var.signing_keys_enabled ? { for label in var.financial_key_sets : label => { settlement = aws_kms_key.signing["settlement-${label}"].arn, admission = aws_kms_key.signing["admission-${label}"].arn } } : {}
 }
 
 output "kms_region" {

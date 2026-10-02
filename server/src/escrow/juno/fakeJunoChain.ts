@@ -241,6 +241,9 @@ export class FakeJunoChain implements JunoRest {
   loseNextBroadcastAnswer = 0;
   dropNextBroadcast = 0;
   simulateGasOverride: string | null = null;
+  /** JX-2B: while set, every new broadcast is refused at CheckTx with this answer (a node refusing for a reason the
+   *  relayer does not name). */
+  checkTxRefusal: { readonly code: number; readonly codespace: string; readonly raw_log: string } | null = null;
   malformedNextAccount = 0;
   /** A node that does not say the height it answered at (no death or rollback proof can be built on it). */
   heightsHidden = false;
@@ -859,6 +862,8 @@ export class FakeJunoChain implements JunoRest {
       if (!verifyDigest(tx.publicKey, signDocDigest(signDoc), tx.signature)) return "signature verification failed; please verify account number and chain-id: unauthorized";
       const minFee = (tx.gasLimit * (this.options.minGasPriceNum ?? BigInt(75)) + (this.options.minGasPriceDen ?? BigInt(1000)) - BigInt(1)) / (this.options.minGasPriceDen ?? BigInt(1000));
       if (tx.fee < minFee) return `insufficient fees; got: ${tx.fee.toString()}${tx.feeDenom} required: ${minFee.toString()}: insufficient fee`;
+      /* JX-2B: the ante handler's fee deduction (the SDK's DeductFeeDecorator), after the fee check as in the SDK. */
+      if (account.balance < tx.fee) return `insufficient funds to pay for fees; ${account.balance.toString()}${tx.feeDenom} < ${tx.fee.toString()}${tx.feeDenom}: insufficient funds`;
     }
     if (tx.timeoutHeight !== BigInt(0) && BigInt(this.height) >= tx.timeoutHeight) return "tx timeout height";
     return null;
@@ -892,8 +897,10 @@ export class FakeJunoChain implements JunoRest {
       answer = { txhash: tx.hash, height: "0", code: 19, codespace: "sdk", raw_log: "tx already exists in cache" };
     } else {
       const refused = this.checkTx(tx, false);
-      if (refused !== null) {
-        const code = /sequence/.test(refused) ? 32 : /fee/.test(refused) ? 13 : /timeout/.test(refused) ? 30 : 4;
+      if (this.checkTxRefusal !== null && refused === null) {
+        answer = { txhash: tx.hash, height: "0", ...this.checkTxRefusal };
+      } else if (refused !== null) {
+        const code = /sequence/.test(refused) ? 32 : /insufficient funds/.test(refused) ? 5 : /fee/.test(refused) ? 13 : /timeout/.test(refused) ? 30 : 4;
         answer = { txhash: tx.hash, height: "0", code, codespace: "sdk", raw_log: refused };
       } else {
         this.mempool.push(tx);

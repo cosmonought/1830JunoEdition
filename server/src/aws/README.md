@@ -327,6 +327,14 @@ a mint in another account (it cannot share the mirror's transaction); the hint a
   streak reaches the budget;
 - **F-L5-16 wait + page:** `chain.relayer-page` / `chain.relayer-page-cleared` audits and `status().paging` -- an
   unserved deployment's intent and a queue disagreement at once; an undecided verdict and failing passes after 5 minutes;
+- **JX-2B submission refusals:** a CheckTx answer `sdk/5` (insufficient funds) or `sdk/13` (insufficient fee) -- only those,
+  by code and codespace -- is the ACCOUNT's condition: the condition `submission-refused` pages at once (A15, with the
+  action in its reason), an audit `chain.submission-refused` records the answer, the refused bytes are not sent again,
+  and nothing new is signed on the account until a relayer restart. The intent stays pending (never held, no budget
+  spent), its attempt dies by its expiry proof and is kept with the refused answer and its journal entry. Operator: fund
+  the relayer account / raise the configured gas price, then restart the relayer (the primary task); the new process
+  signs afresh at the chain's sequence. Any other refusal stays bounded: an expiry death is counted and (D-1) holds at
+  the failure budget; the 32-attempt cap remains the backstop;
 - **the escrow load** (and its chain sweep) visits the open money games only (`openMoneyGames` =
   `DynamoFinancialStore.openMoneyGameIds`: FINKEYS -> FINIDX#, strict), never `LIST#fin`.
 

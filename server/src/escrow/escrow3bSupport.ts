@@ -121,8 +121,9 @@ export interface WorldOptions {
   /** LIVE-5 L5-6: per process (every `build`, so a `restart` is a new task): the relayer's own journal, its view of the
    *  intents and its role -- a takeover test gives the old and the new task different ones. */
   readonly relayerSeam?: () => { readonly journal?: InspectableSigningJournal; readonly store?: ChainIntentStore; readonly authority?: RelayerAuthority };
-  /** LIVE-6 L6-7: the relayer's page threshold, queue refresh interval and failure budget (defaults: the relayer's). */
-  readonly relayerTuning?: { readonly pageAfterMs?: number; readonly queueRefreshMs?: number; readonly failureBudget?: number };
+  /** LIVE-6 L6-7: the relayer's page threshold, queue refresh interval and failure budget (defaults: the relayer's).
+   *  JX-2B: and its rebroadcast spacing (default here 1 s; production's is 30 s). */
+  readonly relayerTuning?: { readonly pageAfterMs?: number; readonly queueRefreshMs?: number; readonly failureBudget?: number; readonly rebroadcastMs?: number };
   /** LIVE-6 L6-7: the money games the service's load and chain sweep visit (AWS: the open-money-game index). */
   readonly openGames?: () => Promise<string[]>;
 }

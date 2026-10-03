@@ -363,6 +363,11 @@ export async function migrationGuardCommand(argv: readonly string[], out: (line:
   const ctx: MigrationContext = { environment, appAccountId, servingGeneration: generation, pool, retiredPools, originDomain: flags.get("--origin-domain"), minEcrKeepImages: STAGING_DEFAULTS.minEcrKeepImages, region: flags.get("--region"), ledgerTableArn: flags.get("--ledger-table-arn"), signingKeyArns };
 
   const expectCommit = flags.get("--commit");
+  /* STEP 9 ACME HOTFIX (review): the recovery is judged only against the reviewed hotfix commit, never "any clean one". */
+  if (gate === "host-create-complete" && expectCommit === undefined) {
+    out("REFUSED: host-create-complete needs --commit <the reviewed hotfix commit>: the completion plan must come from exactly that checkout");
+    return EXIT_USAGE;
+  }
   if (expectCommit !== undefined && !/^[0-9a-f]{40}$/.test(expectCommit)) {
     out("REFUSED: --commit is a full 40-hex commit id");
     return EXIT_USAGE;

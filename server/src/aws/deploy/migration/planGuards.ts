@@ -384,6 +384,29 @@ export function priorResources(plan: Json): Map<string, { readonly mode: string;
   return out;
 }
 
+/**
+ * STEP 9 ACME HOTFIX (review): the prior state as Terraform writes it -- every entry managed or data, its address exactly
+ * its (module, mode, type, name, index), none repeated (priorResources keeps one entry per address: a duplicate could
+ * hide a second object), every data source one the stacks read. Returns the problems (empty: consistent).
+ */
+export function priorStateEntryProblems(plan: Json): string[] {
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  const walk = (module: Obj, at: string | null): void => {
+    for (const r of arr(module.resources).map(obj)) {
+      const address = String(r.address);
+      if (r.mode !== "managed" && r.mode !== "data") problems.push(`${address}: mode ${String(r.mode)}`);
+      else if (address !== composedAddress(at, String(r.mode), String(r.type), String(r.name), r.index)) problems.push(`${address}: not its module / type / name / index`);
+      if (r.mode === "data" && !ALLOWED_DATA_TYPES.includes(String(r.type))) problems.push(`${address}: data source ${String(r.type)}`);
+      if (seen.has(address)) problems.push(`${address} twice`);
+      seen.add(address);
+    }
+    for (const child of arr(module.child_modules).map(obj)) walk(child, str(child.address));
+  };
+  walk(obj(obj(obj(obj(plan).prior_state).values).root_module), null);
+  return problems;
+}
+
 const hasPriorState = (plan: Json): boolean => Object.keys(obj(obj(obj(plan).prior_state).values)).length > 0;
 
 /**
@@ -1125,7 +1148,7 @@ function hostCreateGate(plan: Json, changes: readonly PlannedChange[], ctx: Migr
       `not created: ${missing.join(", ")}${missing.includes("aws_budgets_budget.monthly[0]") ? " (the budget is REQUIRED at migration: budget.enabled with an owner-named subscriber)" : ""}${existing.length > 0 ? ` -- ${existing.length} already exist (no-op): step 9 was partially applied; host-create judges only the original full create (an interrupted step 9 is completed by migration-guard host-create-complete, which accepts only its one known shape)` : ""}`,
     ),
   );
-  const priorHost = [...priorResources(plan).entries()].filter(([, r]) => r.mode === "managed").map(([a]) => a);
+  const priorHost = [...[...priorResources(plan).entries()].filter(([, r]) => r.mode === "managed").map(([a]) => a), ...priorStateEntryProblems(plan)];
   checks.push(judge("the prior state holds no host resource yet", priorHost.length === 0, "no managed object in the state: the host stack is new", `the state already holds ${priorHost.length}: ${priorHost.slice(0, 6).join(", ")}${priorHost.length > 6 ? ", ..." : ""} -- not the original step 9 (host-create-complete completes the one known interrupted shape; anything else is its own reviewed change)`));
   const instances = changes.filter((c) => c.mode === "managed" && c.type === "aws_instance" && c.kind !== "delete");
   const eips = changes.filter((c) => c.mode === "managed" && c.type === "aws_eip" && c.kind !== "delete");
@@ -1206,6 +1229,13 @@ function step9PriorTopology(plan: Json, ctx: MigrationContext, egressKeys: reado
     https !== null && sgId !== null && https.security_group_id === sgId && https.ip_protocol === "tcp" && https.from_port === 443 && https.to_port === 443 && plId !== null && https.prefix_list_id === plId && blank(https.cidr_ipv4) && blank(https.cidr_ipv6) && blank(https.referenced_security_group_id),
     `the 443 rule is not tcp 443 from CloudFront's origin-facing prefix list (${String(plId)}) on ${String(sgId)}`,
   );
+  /* The group's own ingress / egress attributes are AWS's listing of EVERY live rule (Terraform-managed or not): only the
+     reviewed ones -- an out-of-band rule (port 22 opened by hand) is not the reviewed topology. */
+  const emptyList = (x: Json): boolean => arr(x).length === 0;
+  const badIngress = arr(sg?.ingress).map(obj).filter((r) => !(r.protocol === "tcp" && r.from_port === 443 && r.to_port === 443 && plId !== null && same(arr(r.prefix_list_ids), [plId]) && emptyList(r.cidr_blocks) && emptyList(r.ipv6_cidr_blocks) && emptyList(r.security_groups) && r.self !== true));
+  need(badIngress.length === 0, `the security group admits more than the reviewed 443-from-CloudFront rule: ${badIngress.map((r) => `${String(r.protocol)} ${String(r.from_port)}-${String(r.to_port)} from ${JSON.stringify([...arr(r.cidr_blocks), ...arr(r.ipv6_cidr_blocks), ...arr(r.prefix_list_ids), ...arr(r.security_groups)])}`).join("; ")}`);
+  const badEgress = arr(sg?.egress).map(obj).filter((r) => !(r.protocol === "tcp" && r.from_port === r.to_port && egressKeys.includes(String(r.from_port)) && same(arr(r.cidr_blocks), ["0.0.0.0/0"]) && emptyList(r.ipv6_cidr_blocks) && emptyList(r.prefix_list_ids) && emptyList(r.security_groups) && r.self !== true));
+  need(badEgress.length === 0, `the security group's egress is more than the reviewed rules: ${badEgress.map((r) => `${String(r.protocol)} ${String(r.from_port)}-${String(r.to_port)}`).join("; ")}`);
   for (const key of egressKeys) {
     const e = v(`aws_vpc_security_group_egress_rule.https[${JSON.stringify(key)}]`);
     need(e !== null && sgId !== null && e.security_group_id === sgId && e.ip_protocol === "tcp" && e.from_port === Number(key) && e.to_port === Number(key) && e.cidr_ipv4 === "0.0.0.0/0", `the egress rule ${key} is not tcp ${key} to 0.0.0.0/0 on ${String(sgId)}`);
@@ -1222,10 +1252,11 @@ function step9PriorTopology(plan: Json, ctx: MigrationContext, egressKeys: reado
   const eipId = str(eip?.id);
   need(eip !== null && eipId !== null && /^eipalloc-[0-9a-f]+$/.test(eipId) && eip.domain === "vpc", `the Elastic IP ${String(eipId)} (domain ${String(eip?.domain)})`);
   const assoc = v("aws_eip_association.host");
-  need(assoc !== null && eipId !== null && eniId !== null && assoc.allocation_id === eipId && assoc.network_interface_id === eniId && blank(assoc.instance_id), `the EIP association joins ${String(assoc?.allocation_id)} / ${String(assoc?.network_interface_id)} / instance ${String(assoc?.instance_id)} (exactly the host's EIP and ENI)`);
-
   const inst = v("aws_instance.host");
   const instId = str(inst?.id);
+  /* instance_id: AWS reports the instance the ENI is attached to (blank on a bare ENI): only ever THIS host. */
+  need(assoc !== null && eipId !== null && eniId !== null && assoc.allocation_id === eipId && assoc.network_interface_id === eniId && (blank(assoc.instance_id) || (instId !== null && assoc.instance_id === instId)), `the EIP association joins ${String(assoc?.allocation_id)} / ${String(assoc?.network_interface_id)} / instance ${String(assoc?.instance_id)} (exactly the host's EIP and ENI, and at most this instance)`);
+
   need(inst !== null && instId !== null && /^i-[0-9a-f]+$/.test(instId), `the instance's id ${String(instId)}`);
   need(inst?.iam_instance_profile === role, `the instance's profile is ${String(inst?.iam_instance_profile)}, not ${role}`);
   need(eniId !== null && arr(inst?.primary_network_interface).length === 1 && obj(arr(inst?.primary_network_interface)[0]).network_interface_id === eniId && arr(inst?.network_interface).length === 0, `the instance is not on the host's ENI ${String(eniId)}`);
@@ -1295,8 +1326,11 @@ function hostCreateCompleteGate(plan: Json, changes: readonly PlannedChange[], c
   const outside = priorAddrs.filter((a) => !a.startsWith(`${m}.`));
   const missing = existing.filter((a) => !priorManaged.includes(a));
   const extra = priorManaged.filter((a) => !existing.includes(a));
+  const entryProblems = priorStateEntryProblems(plan);
   const stateProblem = !hasPriorState(plan)
     ? "the plan carries no prior_state: the guard cannot see what step 9 created"
+    : entryProblems.length > 0
+      ? `the prior state is not one Terraform wrote: ${entryProblems.slice(0, 4).join("; ")} (fail closed)`
     : surface === null
       ? "the reviewed surface cannot be derived from the plan's variables"
       : priorManaged.includes(acme)

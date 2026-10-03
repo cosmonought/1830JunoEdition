@@ -273,6 +273,53 @@ describe("STEP 9 ACME HOTFIX: the prior state is the REVIEWED host, wired togeth
       rejects(make(), /the host policy's inputs do not match/, { ...ctx, signingKeyArns: undefined });
     });
   }
+  for (const [name, make, ctx] of BOTH) {
+    test(`${name} (review F1): AWS naming the attached instance on the EIP association is accepted -- only THIS instance`, () => {
+      const p = make();
+      priorOf(p, `${H}.aws_eip_association.host`).values.instance_id = priorOf(p, `${H}.aws_instance.host`).values.id;
+      const r = judgeOf(GATE, p, ctx);
+      assert.equal(r.verdict, "PASS", failures(r).join("\n"));
+      const q = make();
+      priorOf(q, `${H}.aws_eip_association.host`).values.instance_id = "i-0ffffffffffffffff";
+      rejects(q, /the EIP association joins .*at most this instance/, ctx);
+    });
+    test(`${name} (review F2): a live rule outside Terraform on the host group (SSH opened by hand) is not the reviewed topology`, () => {
+      const rule = (o: Obj): Obj => ({ cidr_blocks: [], ipv6_cidr_blocks: [], prefix_list_ids: [], security_groups: [], self: false, description: "", protocol: "tcp", ...o });
+      const pl = priorOf(make(), `${H}.aws_vpc_security_group_ingress_rule.https_from_cloudfront`).values.prefix_list_id as string;
+      const ok = make();
+      Object.assign(priorOf(ok, `${H}.aws_security_group.host`).values, { ingress: [rule({ from_port: 443, to_port: 443, prefix_list_ids: [pl] })], egress: [rule({ from_port: 443, to_port: 443, cidr_blocks: ["0.0.0.0/0"] })] });
+      const r = judgeOf(GATE, ok, ctx);
+      assert.equal(r.verdict, "PASS", failures(r).join("\n"));
+      for (const extra of [rule({ from_port: 22, to_port: 22, cidr_blocks: ["0.0.0.0/0"] }), rule({ from_port: 80, to_port: 80, cidr_blocks: ["0.0.0.0/0"] }), rule({ from_port: 443, to_port: 443, cidr_blocks: ["0.0.0.0/0"] }), rule({ protocol: "-1", from_port: 0, to_port: 0, cidr_blocks: ["10.0.0.0/8"] })]) {
+        const p = clone(ok);
+        priorOf(p, `${H}.aws_security_group.host`).values.ingress.push(extra);
+        rejects(p, /the security group admits more than the reviewed 443-from-CloudFront rule/, ctx);
+      }
+      const eg = clone(ok);
+      priorOf(eg, `${H}.aws_security_group.host`).values.egress.push(rule({ protocol: "-1", from_port: 0, to_port: 0, cidr_blocks: ["0.0.0.0/0"] }));
+      rejects(eg, /egress is more than the reviewed rules/, ctx);
+    });
+    test(`${name} (review F3/F4): a prior state Terraform never writes -- a repeated address, a misfiled entry, a foreign mode or data source`, () => {
+      const dup = make();
+      const host = priorOf(dup, `${H}.aws_instance.host`);
+      const mod = priorList(dup).find((m) => (m.resources as Obj[]).includes(host))!;
+      (mod.resources as Obj[]).unshift({ ...clone(host), values: { ...clone(host.values), id: "i-0ffffffffffffffff" } });
+      rejects(dup, /the prior state is not one Terraform wrote: module\.host\.aws_instance\.host twice/, ctx);
+      const root = make();
+      root.prior_state.values.root_module.resources = [clone(priorOf(root, `${H}.aws_instance.host`))];
+      rejects(root, /not one Terraform wrote: module\.host\.aws_instance\.host: not its module/, ctx);
+      const mode = make();
+      addPrior(mode, { address: `${H}.aws_instance.second`, mode: "Managed", type: "aws_instance", name: "second", provider_name: "registry.terraform.io/hashicorp/aws", values: {} });
+      rejects(mode, /mode Managed/, ctx);
+      /* host-create: the full create over a state carrying only such an entry */
+      const full = clone(PLANS["host-create"]) as Obj;
+      full.prior_state = { format_version: "1.0", values: { root_module: { child_modules: [{ address: H, resources: [{ address: `${H}.aws_instance.second`, mode: "Managed", type: "aws_instance", name: "second", provider_name: "registry.terraform.io/hashicorp/aws", values: {} }] }] } } };
+      rejects(full, /the prior state holds no host resource yet: .*mode Managed/, CTX, "host-create");
+      const data = make();
+      addPrior(data, { address: `${H}.data.aws_instance.x`, mode: "data", type: "aws_instance", name: "x", provider_name: "registry.terraform.io/hashicorp/aws", values: {} });
+      rejects(data, /data source aws_instance/, ctx);
+    });
+  }
   test("synthetic: the role's policy in the state is exactly the module's rendering (hostPolicy)", () => {
     assert.equal(priorOf(synthetic(), `${H}.aws_iam_role_policy.host`).values.policy, hostPolicy());
   });
@@ -494,7 +541,7 @@ describe("STEP 9 ACME HOTFIX: the command -- a clean committed checkout, the sav
     const code = await migrationGuardCommand(argv, (l) => lines.push(l));
     return { code, text: lines.join("\n") };
   };
-  const args = (dir: string, extra: string[] = []) => [GATE, "--plan-evidence", dir, "--environment", "staging", "--app-account", FIXTURE.appAccountId, "--region", FIXTURE.region, "--ledger-table-arn", FIXTURE.ledgerTableArn, "--signing-keys", FIXTURE.signingKeyArns.join(","), ...extra];
+  const args = (dir: string, extra: string[] = ["--commit", COMMIT]) => [GATE, "--plan-evidence", dir, "--environment", "staging", "--app-account", FIXTURE.appAccountId, "--region", FIXTURE.region, "--ledger-table-arn", FIXTURE.ledgerTableArn, "--signing-keys", FIXTURE.signingKeyArns.join(","), ...extra];
 
   test("PASS (exit 0): apply ONLY that saved plan; the record binds it", async () => {
     const dir = evidence();
@@ -509,14 +556,15 @@ describe("STEP 9 ACME HOTFIX: the command -- a clean committed checkout, the sav
     assert.deepEqual(rec.changes, [`${ACME} [create]`]);
   });
   test("a dirty or uncommitted checkout, a mismatched or missing saved plan, the wrong commit or stack: FAIL (exit 1)", async () => {
+    const C = ["--commit", COMMIT];
     const cases: Array<[Parameters<typeof evidence>[0], RegExp, string[]]> = [
-      [{ dirty: true }, /infra\/aws was not clean/, []],
-      [{ noCommit: true }, /run\.json names no commit/, []],
-      [{ tamper: true }, /does not bind stack\.tfplan and plan\.json/, []],
-      [{ keep: false }, /capture with plan-evidence --keep-plan/, []],
+      [{ dirty: true }, /infra\/aws was not clean/, C],
+      [{ noCommit: true }, /run\.json names no commit/, C],
+      [{ tamper: true }, /does not bind stack\.tfplan and plan\.json/, C],
+      [{ keep: false }, /capture with plan-evidence --keep-plan/, C],
       [{}, /not --commit 0000/, ["--commit", "0".repeat(40)]],
-      [{ stack: "app" }, /run\.json names app; host-create-complete judges stacks\/single-host/, []],
-      [{ plan: PLANS["host-create"] }, /prior state: exactly the interrupted step 9/, []],
+      [{ stack: "app" }, /run\.json names app; host-create-complete judges stacks\/single-host/, C],
+      [{ plan: PLANS["host-create"] }, /prior state: exactly the interrupted step 9/, C],
     ];
     for (const [opts, why, extra] of cases) {
       const r = await run(args(evidence(opts), extra));
@@ -530,6 +578,9 @@ describe("STEP 9 ACME HOTFIX: the command -- a clean committed checkout, the sav
     const r = await run([GATE, "--plan-evidence", dir, "--environment", "staging", "--app-account", FIXTURE.appAccountId]);
     assert.equal(r.code, 2);
     assert.match(r.text, /host-create-complete needs --region .*--ledger-table-arn .*--signing-keys/);
+    const noCommit = await run(args(dir, []));
+    assert.equal(noCommit.code, 2);
+    assert.match(noCommit.text, /host-create-complete needs --commit <the reviewed hotfix commit>/);
   });
 });
 

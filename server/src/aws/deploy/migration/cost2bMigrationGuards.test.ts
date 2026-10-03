@@ -1052,6 +1052,7 @@ describe("COST-2B: the command and its evidence binding", () => {
     FIXTURE.appAccountId,
     ...(gate === "edge-cutover" ? ["--origin-domain", FIXTURE.hostOrigin, "--arm64-live-smoke", smokeFile(), "--release-digest", RELEASE, "--instance-id", HOST_ID] : []),
     ...(gate === "host-create" || gate === "host-create-complete" ? ["--region", FIXTURE.region, "--ledger-table-arn", FIXTURE.ledgerTableArn, "--signing-keys", FIXTURE.signingKeyArns.join(",")] : []),
+    ...(gate === "host-create-complete" ? ["--commit", COMMIT] : []),
     ...(gate === "app-read-authorize" ? ["--region", FIXTURE.region, "--ledger-table-arn", FIXTURE.ledgerTableArn] : []),
     ...(gate === "ledger-operator-journal" ? ["--ledger-table-arn", FIXTURE.ledgerTableArn] : []),
   ];

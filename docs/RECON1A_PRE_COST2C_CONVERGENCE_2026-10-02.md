@@ -1,5 +1,8 @@
 # RECON-1A — Pre-COST-2C convergence candidate (2026-10-02)
 
+> **Superseded (same day) by `docs/RECON1_CANONICAL_MIGRATION_CANDIDATE_2026-10-02.md`:** COST-2C `3ab30db` is now merged
+> and RECON-1 is complete. This interim record is kept unchanged below for its lineage.
+
 > ## CONVERGENCE MARKER: **COST-2C PENDING INTEGRATION**
 >
 > This branch (`recon/recon-1-pre-cost2c`) converges every source line RECON-0 had adjudicated **except COST-2C**, which

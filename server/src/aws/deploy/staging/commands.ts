@@ -601,13 +601,13 @@ async function singleHostEdgeProbe(
 
 /**
  * PHASE 1 REMAINDER (F5 / F6): `stage-probe host-role --probe kms|transactions --run-id R --evidence <dir> --capture <file>
- * --environment <env> --generation <N> --pool <pool> --instance-id <i-...> --digest sha256:<hex> --build <id>
- * [--repository <checkout>]` -- OFFLINE: judges the output saved from `gs-host role-probe` (hostRoleProbe.ts) and writes
+ * --environment <env> --generation <N> --pool <pool> --instance-id <i-...> --digest sha256:<hex> --build <id>` -- OFFLINE: judges the output saved from `gs-host role-probe` (hostRoleProbe.ts) and writes
  * the probe's record and the verdict into the evidence directory. Exit 0 PASS, 1 FAIL, 3 NOT EVALUATED. Create-once: a
- * verdict for this probe and run is never overwritten (a retry is a new run id).
+ * verdict for this probe and run is never overwritten (a retry is a new run id, written beside it). The wrapper it compares
+ * against is THIS build's checkout's (no override).
  */
 function hostRoleProbeCommand(argv: readonly string[], deps: DeployDeps, staging: StagingDeps): number {
-  const flags = parseFlags(argv, ["--probe", "--run-id", "--evidence", "--capture", "--environment", "--generation", "--pool", "--instance-id", "--digest", "--build", "--repository"], []);
+  const flags = parseFlags(argv, ["--probe", "--run-id", "--evidence", "--capture", "--environment", "--generation", "--pool", "--instance-id", "--digest", "--build"], []);
   const probe = need(flags, "--probe");
   if (!(HOST_ROLE_PROBES as readonly string[]).includes(probe)) throw new UsageError("--probe is kms (F5) or transactions (F6)");
   const run = runOf(flags);
@@ -623,7 +623,7 @@ function hostRoleProbeCommand(argv: readonly string[], deps: DeployDeps, staging
   const build = need(flags, "--build");
   if (!/^[A-Za-z0-9._-]{1,128}$/.test(build)) throw new UsageError("--build is the serving release's build id");
   const kind = probe as HostRoleProbe;
-  const verdictFile = HOST_ROLE_FILES.verdict(kind);
+  const verdictFile = HOST_ROLE_FILES.verdict(kind, run);
   if (fs.existsSync(path.join(dir, verdictFile))) throw new UsageError(`${verdictFile} already exists in ${dir}: a verdict is never overwritten (run the probe again under a NEW run id)`);
   let raw: Buffer;
   try {
@@ -633,7 +633,7 @@ function hostRoleProbeCommand(argv: readonly string[], deps: DeployDeps, staging
   }
   let wrapper: string | null = null;
   try {
-    wrapper = wrapperSha256(fs.readFileSync(path.join(flags.get("--repository") ?? staging.repository, HOST_ROLE_WRAPPER), "utf8"));
+    wrapper = wrapperSha256(fs.readFileSync(path.join(staging.repository, HOST_ROLE_WRAPPER), "utf8"));
   } catch {
     wrapper = null;
   }
@@ -643,7 +643,7 @@ function hostRoleProbeCommand(argv: readonly string[], deps: DeployDeps, staging
   let verdict = judged.verdict;
   if (judged.record !== null) {
     try {
-      deps.out(`RECORDED: ${writeRecord(dir, HOST_ROLE_FILES.record(kind), judged.record)}`);
+      deps.out(`RECORDED: ${writeRecord(dir, HOST_ROLE_FILES.record(kind, run), judged.record)}`);
     } catch (error) {
       checks = [...checks, { name: "the probe's record is written", status: "fail", detail: (error as Error).message }];
       verdict = "FAIL";

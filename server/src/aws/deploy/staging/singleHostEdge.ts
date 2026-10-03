@@ -16,8 +16,11 @@
 //   <host evidence>/verify.json          `awsDeploy verify --topology coexist|single-host ... --record` -- PASS, this
 //                                        environment / generation, its "edge: /gs* origin" check PASS (the verifier's
 //                                        verdict is recomputed here from its checks, never taken from the field)
-//   <host evidence>/host-evidence.json   the same run's `--report`: PASS, the same topology, THIS instance, and the
-//                                        /gs* origin = THIS host's origin name
+//   <host evidence>/host-evidence.json   the same run's `--report`: PASS, the same topology, THIS instance, the /gs*
+//                                        origin = `--origin-hostname`, and that name = the one the HOST's own Caddy
+//                                        serves (gs-health on the host; the verifier's "host: its origin is
+//                                        --origin-hostname" check PASS) -- so a pre-cutover verification offered with
+//                                        the ALB's custom origin name as `--origin-hostname` is refused
 //   <host evidence>/manifest.json        capture-host-evidence's statement: this environment, this instance
 //   <host evidence>/distribution-config.json
 //                                        (bound to that manifest) the /gs* behaviour's origin is the host's name -- an ALB
@@ -59,6 +62,9 @@ export const HOST_EDGE_FILES = Object.freeze({ verify: "verify.json", report: "h
 
 /** The /gs* check the host verifier writes (hostVerify.ts `checkHostEdge`). */
 const GS_ORIGIN_CHECK = "edge: /gs* origin";
+/** The host verifier's check that THIS host's Caddy serves `--origin-hostname` (hostVerify.ts `checkHostRuntime`, from
+ *  gs-health on the host itself): the origin name is the host's own, never only what the operator typed. */
+const HOST_ORIGIN_CHECK = "host: its origin is --origin-hostname";
 /** An Application / Network / Classic load balancer's AWS DNS name: never the single host's origin. */
 const LOAD_BALANCER_NAME = /\.elb\.amazonaws\.com\.?$|\.elb\.[a-z0-9-]+\.amazonaws\.com\.?$/i;
 
@@ -134,8 +140,10 @@ export function readHostEdgeEvidence(dir: string, expect: HostEdgeExpect): HostE
         `${String(v.format)} topology ${String(v.topology)} (a host topology is required: an ECS verification is never this evidence), ${String(v.environment)} g${String(v.generation)}, verdict ${String(v.verdict)}, recomputed ${recomputed}`,
       ),
     );
-    const origin = vChecks.filter((c) => c.name === GS_ORIGIN_CHECK);
-    checks.push(judge(`${L}: the verifier's /gs* origin check`, origin.length === 1 && origin[0].status === "pass", `PASS: ${String(origin[0]?.detail)}`, origin.length === 0 ? `the record has no "${GS_ORIGIN_CHECK}" check` : `${String(origin[0].status)}: ${String(origin[0].detail)}`));
+    for (const name of [GS_ORIGIN_CHECK, HOST_ORIGIN_CHECK]) {
+      const c = vChecks.filter((x) => x.name === name);
+      checks.push(judge(`${L}: the verifier's "${name}" check`, c.length === 1 && c[0].status === "pass", `PASS: ${String(c[0]?.detail)}`, c.length === 0 ? `the record has no "${name}" check` : `${String(c[0].status)}: ${String(c[0].detail)}`));
+    }
     checks.push(fresh(`${L}: the verification is recent`, verifyAt, expect.now));
   }
 
@@ -147,6 +155,8 @@ export function readHostEdgeEvidence(dir: string, expect: HostEdgeExpect): HostE
     const facts = obj(r.facts);
     const instance = str(obj(facts.ec2).instance_id);
     const gsOrigin = str(obj(facts.cloudfront).gs_origin);
+    /* gs-health's own line, from the host: the name Caddy serves and certifies. */
+    const served = str(obj(facts.host).origin_hostname);
     const recomputed = verdictOf(arr(r.checks).map((c) => ({ status: String(obj(c).status) })));
     checks.push(
       judge(
@@ -157,7 +167,8 @@ export function readHostEdgeEvidence(dir: string, expect: HostEdgeExpect): HostE
       ),
     );
     checks.push(judge(`${L}: the host is this instance`, instance === expect.instanceId, String(instance), `the verified host is ${String(instance)}, not ${expect.instanceId}`));
-    checks.push(judge(`${L}: the verified /gs* origin is this host's`, gsOrigin === expect.originHostname, String(gsOrigin), `the verified /gs* origin is ${String(gsOrigin)}, not ${expect.originHostname} (before the cutover it is the ALB's: run step 16 only after 15b)`));
+    checks.push(judge(`${L}: the host serves --origin-hostname`, served === expect.originHostname, `${String(served)} (gs-health on the host: Caddy's name)`, `the host's Caddy serves ${String(served)}, not ${expect.originHostname} (the origin name must be the host's own, never another origin's)`));
+    checks.push(judge(`${L}: the verified /gs* origin is this host's`, gsOrigin === expect.originHostname && served === gsOrigin, String(gsOrigin), `the verified /gs* origin is ${String(gsOrigin)}; the host serves ${String(served)}; expected ${expect.originHostname} (before the cutover it is the ALB's: run step 16 only after 15b)`));
     const reportAt = Date.parse(String(r.at));
     const recordAt = verifyAt === null ? Number.NaN : Date.parse(verifyAt);
     checks.push(judge(`${L}: one verification run`, Number.isFinite(reportAt) && Number.isFinite(recordAt) && Math.abs(reportAt - recordAt) <= SAME_RUN_MS, `report ${String(r.at)}, record ${String(verifyAt)}`, `report ${String(r.at)}, record ${String(verifyAt)}: not one \`verify\` run`));

@@ -24,9 +24,9 @@
 // probe container gone; the record reassembled from its SHA-256-chained lines, the task-role probe's own, not an ECS
 // task's, made inside the wrapper's window.
 //
-// PASS / FAIL / NOT EVALUATED (exit 0 / 1 / 3). The record (`probe-host-role-<probe>.json`) and the verdict
-// (`host-role-<probe>-verdict.json`, create-once: a retry is a new run id) are written to the evidence directory, each
-// refused if anything in it looks secret.
+// PASS / FAIL / NOT EVALUATED (exit 0 / 1 / 3). The record (`probe-host-role-<probe>-<run>.json`) and the verdict
+// (`host-role-<probe>-<run>-verdict.json`, create-once: a retry is a new run id) are written to the evidence directory,
+// each refused if anything in it looks secret.
 
 import { createHash } from "crypto";
 
@@ -45,9 +45,10 @@ export const HOST_ROLE_WRAPPER = "infra/aws/single-host/host-role-probe.sh";
 export const HOST_ROLE_PROBES = Object.freeze(["kms", "transactions"] as const);
 export type HostRoleProbe = (typeof HOST_ROLE_PROBES)[number];
 
+/** One file pair per probe AND run (a retry under a new run id lands beside the earlier verdict, never over it). */
 export const HOST_ROLE_FILES = Object.freeze({
-  record: (probe: HostRoleProbe) => `probe-host-role-${probe}.json`,
-  verdict: (probe: HostRoleProbe) => `host-role-${probe}-verdict.json`,
+  record: (probe: HostRoleProbe, run: string) => `probe-host-role-${probe}-${run}.json`,
+  verdict: (probe: HostRoleProbe, run: string) => `host-role-${probe}-${run}-verdict.json`,
 });
 
 /** The wrapper's SHA-256 as the host receives it (gs-host sends it LF-normalised). */

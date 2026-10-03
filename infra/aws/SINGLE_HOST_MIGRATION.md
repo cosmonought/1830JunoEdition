@@ -387,9 +387,12 @@ node dist/server/src/tools/awsDeploy.js stage-probe host-role --probe transactio
 (bash: `infra/aws/single-host/gs-host.sh role-probe <i-...> <sha256> <run> kms|transactions 1 p1 [region] | tee ...`.) The
 judge is offline (no AWS) and uses L6-6's own judges; each must end `HOST-ROLE PROBE F5 KMS: PASS` /
 `HOST-ROLE PROBE F6 DYNAMODB: PASS` (exit 0). FAIL (1) or NOT EVALUATED (3: a truncated or unframed capture) is a STOP;
-the verdict file is create-once, so a re-run uses a new run id. The evidence keeps the capture, the reassembled probe
-record (`probe-host-role-<probe>.json`) and the verdict (`host-role-<probe>-verdict.json`) -- no key material, no
-credential: the record holds latencies, fingerprints and booleans, and is refused if anything in it looks secret.
+the verdict file is create-once, so a re-run uses a new run id (its files land beside the earlier ones). The evidence keeps
+the capture, the reassembled probe record (`probe-host-role-<probe>-<run>.json`) and the verdict
+(`host-role-<probe>-<run>-verdict.json`) -- no key material, no credential: the record holds latencies, fingerprints and
+booleans, and is refused if anything in it looks secret. The wrapper also refuses while any earlier `gs-role-probe-*`
+container exists or the host has under 640 MiB available, bounds the probe to 10 minutes, and removes a probe container
+that outlived its run (that run then FAILS).
 
 **After the drills: the FINAL redeploy with `-Measure` (PHASE 1 REMAINDER).** Every drill that redeploys (F7's and F9b's
 recovery, any `gs-deploy` the campaign makes) runs `gs-deploy <digest> <build>` WITHOUT `--measure`, so it writes
@@ -463,12 +466,9 @@ recorded; a forward plan called a rollback FAILS); then the ECS rollback of §F 
     `GS_CERT_SESSION_COOKIE` (PHASE 1 REMAINDER: the ECS path's form needs `stage-cert prerequisite` and the ALB's idle
     timeout, which describe a topology that no longer serves /gs*; the single-host form stands on step 15b's evidence
     instead and never on an ECS prerequisite or ALB attribute):
+    One line (it runs the same in PowerShell and bash; no line continuation), in `server/`:
     ```
-    cd server
-    node dist/server/src/tools/awsDeploy.js stage-probe edge --topology single-host --run-id <run> --evidence <D>\edge \
-      --host-evidence <ev-15b> --instance-id <i-...> --origin-hostname <origin_hostname> \
-      --base-url https://play.<domain> --origin https://play.<domain> --environment staging --generation 1 --pool p1 \
-      --expected-client-ip <your public IP>
+    node dist/server/src/tools/awsDeploy.js stage-probe edge --topology single-host --run-id <run> --evidence <D>\edge --host-evidence <ev-15b> --instance-id <i-...> --origin-hostname <origin_hostname> --base-url https://play.<domain> --origin https://play.<domain> --environment staging --generation 1 --pool p1 --expected-client-ip <your public IP>
     ```
     Before sending anything it refuses unless 15b's `verify.json` and `host-evidence.json` are one recent PASS
     (`--topology coexist` or `single-host`; the verdict recomputed from the checks) for THIS instance, the live

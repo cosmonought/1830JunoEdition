@@ -83,6 +83,9 @@ describe("PHASE 1 REMAINDER: the migration runbook's corrections", () => {
     assert.match(s16, /stage-probe edge --topology single-host/);
     assert.match(s16, /--host-evidence <ev-15b> --instance-id <i-\.\.\.> --origin-hostname <origin_hostname>/);
     assert.match(s16, /SINGLE-HOST EDGE PROBE: PASS/);
+    const command = s16.split("\n").filter((l) => /stage-probe edge --topology single-host --run-id/.test(l));
+    assert.equal(command.length, 1, "one command line");
+    assert.doesNotMatch(s16, / \\$/m, "no bash line continuation (the step runs in PowerShell too)");
     assert.match(between("15b.", "16."), /--record <ev-15b>\/verify\.json --report <ev-15b>/);
   });
 

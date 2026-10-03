@@ -49,6 +49,8 @@ interface HostEvidenceOptions {
   readonly gsOriginDomain?: string;
   readonly reportGsOrigin?: string;
   readonly reportInstance?: string;
+  readonly served?: string;
+  readonly hostOriginCheck?: "pass" | "fail" | "absent";
   readonly topology?: string | null;
   readonly verdict?: string;
   readonly failedCheck?: boolean;
@@ -84,6 +86,7 @@ function hostEvidence(options: HostEvidenceOptions = {}): string {
     { name: "edge: /gs* origin", status: "pass", detail: `${options.gsOriginDomain ?? ORIGIN_HOST} (origin gs-alb)` },
     { name: "host: EC2", status: options.failedCheck === true ? "fail" : "pass", detail: "t4g.small" },
     { name: "Terraform outputs = what runs", status: "skipped", detail: "not asked" },
+    ...(options.hostOriginCheck === "absent" ? [] : [{ name: "host: its origin is --origin-hostname", status: options.hostOriginCheck ?? "pass", detail: `${options.served ?? ORIGIN_HOST} (Caddy's certificate name)` }]),
   ];
   const files: Record<string, unknown> = {
     "manifest.json": { format: HOST_EVIDENCE_FORMAT, captured_at: "2026-10-03T11:48:00Z", environment: "staging", region: "us-east-1", instance_id: INSTANCE, distribution: "E123ABC", calls: [{ file: "distribution-config.json", ok: true }, { file: "origin-request-policy.json", ok: true }] },
@@ -96,7 +99,7 @@ function hostEvidence(options: HostEvidenceOptions = {}): string {
       generation: 1,
       at,
       verdict: options.verdict ?? "PASS",
-      facts: { ec2: { instance_id: options.reportInstance ?? INSTANCE }, cloudfront: { gs_origin: options.reportGsOrigin ?? options.gsOriginDomain ?? ORIGIN_HOST } },
+      facts: { ec2: { instance_id: options.reportInstance ?? INSTANCE }, cloudfront: { gs_origin: options.reportGsOrigin ?? options.gsOriginDomain ?? ORIGIN_HOST }, host: { origin_hostname: options.served ?? ORIGIN_HOST } },
       checks,
     },
   };
@@ -287,12 +290,13 @@ describe("PHASE 1 REMAINDER step 16: the single host's edge probe", () => {
     const cases: Array<[string, HostEvidenceOptions, RegExp]> = [
       ["the /gs* origin is the ALB (the pre-cutover / ECS path)", { gsOriginDomain: ALB_NAME, reportGsOrigin: ORIGIN_HOST }, /is a load balancer: the ECS path, not the single host's/],
       ["the /gs* origin is another host", { gsOriginDomain: "gs-origin-other.example.org", reportGsOrigin: ORIGIN_HOST }, /reaches gs-origin-other\.example\.org, not the single host's/],
-      ["the verified /gs* origin is not this host's", { reportGsOrigin: ALB_NAME }, /the verified \/gs\* origin is .*elb\.amazonaws\.com, not gs-origin-host/],
+      ["the verified /gs* origin is not this host's", { reportGsOrigin: ALB_NAME }, /the verified \/gs\* origin is .*elb\.amazonaws\.com; the host serves gs-origin-host\.example\.org; expected gs-origin-host/],
       ["another instance was verified", { reportInstance: "i-0aaaaaaaaaaaaaaaa" }, /the verified host is i-0aaaaaaaaaaaaaaaa, not i-01fe56536bf591382/],
       ["an ECS-topology verification", { topology: null }, /a host topology is required: an ECS verification is never this evidence/],
       ["a FAIL verification", { verdict: "FAIL" }, /verdict FAIL/],
       ["a PASS label over a failed check", { failedCheck: true }, /verdict PASS, recomputed FAIL/],
       ["a stale verification", { verifiedAt: "2026-10-03T08:00:00.000Z" }, /min old: run step 15b's verification again/],
+      ["a verification without the host-origin check", { hostOriginCheck: "absent" }, /the record has no "host: its origin is --origin-hostname" check/],
       ["a verification from the future", { verifiedAt: "2026-10-03T13:00:00.000Z" }, /in the FUTURE/],
       ["a base URL that is not an alias of this distribution", { aliases: ["play.other.example"] }, /play\.example\.org is not an alias of this distribution/],
       ["an origin read timeout outside CloudFront's range", { originRead: 0 }, /OriginReadTimeout is 0: unreadable or outside/],
@@ -304,6 +308,14 @@ describe("PHASE 1 REMAINDER step 16: the single host's edge probe", () => {
       assert.match(h.out.join("\n"), expected, label);
       assert.equal((h.staging.edge as ReturnType<typeof fakeEdge>).calls.length, 0, label);
     }
+    /* The PRE-cutover verification (its /gs* origin the ALB's custom name -- no elb.amazonaws.com in it) offered with that
+       ALB name as --origin-hostname: refused, because the host's own Caddy (gs-health) serves another name. */
+    const preCutover = harness();
+    const albOrigin = "gs-alb-origin.example.org";
+    const pre = hostArgs(tmp(), hostEvidence({ gsOriginDomain: albOrigin, reportGsOrigin: albOrigin, served: ORIGIN_HOST })).map((a) => (a === ORIGIN_HOST ? albOrigin : a));
+    assert.match(await message(stageProbeCommand(pre, preCutover.deps, preCutover.staging)), /is not PASS/);
+    assert.match(preCutover.out.join("\n"), /the host's Caddy serves gs-origin-host\.example\.org, not gs-alb-origin\.example\.org/);
+    assert.equal((preCutover.staging.edge as ReturnType<typeof fakeEdge>).calls.length, 0);
     /* Probing the host's origin directly (bypassing CloudFront) is refused even if it were listed. */
     const h = harness();
     const direct = hostArgs(tmp(), hostEvidence({ aliases: [PLAY, ORIGIN_HOST] })).map((a) => (a === `https://${PLAY}` ? `https://${ORIGIN_HOST}` : a));

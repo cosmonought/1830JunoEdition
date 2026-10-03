@@ -305,11 +305,11 @@ describe("PHASE 1 REMAINDER F5 / F6: `stage-probe host-role` writes the evidence
     const { code, out } = await run(dir, file);
     assert.equal(code, 0, out.join("\n"));
     assert.match(out[out.length - 1], /^HOST-ROLE PROBE F5 KMS: PASS -- /);
-    const verdict = JSON.parse(fs.readFileSync(path.join(dir, HOST_ROLE_FILES.verdict("kms")), "utf8"));
+    const verdict = JSON.parse(fs.readFileSync(path.join(dir, HOST_ROLE_FILES.verdict("kms", RUN)), "utf8"));
     assert.equal(verdict.format, HOST_ROLE_PROBE_FORMAT);
     assert.deepEqual([verdict.proof, verdict.verdict, verdict.instance_id, verdict.digest], ["F5", "PASS", INSTANCE, DIGEST]);
     assert.equal(verdict.capture_sha256, sha256Hex(fs.readFileSync(file)));
-    const record = JSON.parse(fs.readFileSync(path.join(dir, HOST_ROLE_FILES.record("kms")), "utf8"));
+    const record = JSON.parse(fs.readFileSync(path.join(dir, HOST_ROLE_FILES.record("kms", RUN)), "utf8"));
     assert.equal(record.probe, "task-role");
     assert.match(String((await run(dir, file)).code), /already exists .* a verdict is never overwritten/);
   });
@@ -319,7 +319,7 @@ describe("PHASE 1 REMAINDER F5 / F6: `stage-probe host-role` writes the evidence
     const bad = path.join(tmp(), "f6.txt");
     fs.writeFileSync(bad, capture(await taskRoleRecord({ probe: "transactions", role: "gs-staging-app-task" }), { probe: "transactions" }));
     assert.equal((await run(dir, bad, "transactions")).code, 1);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, HOST_ROLE_FILES.verdict("transactions")), "utf8")).verdict, "FAIL");
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dir, HOST_ROLE_FILES.verdict("transactions", RUN)), "utf8")).verdict, "FAIL");
     const truncated = path.join(tmp(), "t.txt");
     fs.writeFileSync(truncated, capture(await taskRoleRecord(), { end: null }));
     assert.equal((await run(tmp(), truncated)).code, 3);
@@ -348,7 +348,7 @@ interface FakeHost {
   readonly dockerCalls: () => string[];
 }
 
-function fakeHost(options: { probeOut: string; role?: string; running?: string; release?: string; state?: string; hold?: boolean; creds?: boolean; environment?: string; probeExit?: number; leftover?: boolean }): FakeHost {
+function fakeHost(options: { probeOut: string; role?: string; running?: string; release?: string; state?: string; hold?: boolean; creds?: boolean; environment?: string; probeExit?: number; leftover?: boolean; leftoverOther?: boolean; memKb?: number; leftAfterRun?: boolean }): FakeHost {
   const dir = tmp();
   const bin = path.join(dir, "bin");
   const etc = path.join(dir, "etc");
@@ -362,6 +362,8 @@ function fakeHost(options: { probeOut: string; role?: string; running?: string; 
   fs.writeFileSync(path.join(etc, "release.env"), `GS_IMAGE_DIGEST=${options.release ?? DIGEST}\nBUILD_ID=${BUILD}\nGS_MEASURE=1\n`);
   if (options.hold === true) fs.writeFileSync(path.join(dir, "state", "hold"), "exit 3\n");
   if (options.leftover === true) fs.writeFileSync(path.join(dir, "leftover"), "");
+  if (options.leftoverOther === true) fs.writeFileSync(path.join(dir, "leftover-other"), "");
+  fs.writeFileSync(path.join(dir, "meminfo"), `MemTotal:        1949000 kB\nMemFree:          300000 kB\nMemAvailable:    ${options.memKb ?? 1100000} kB\n`);
   fs.writeFileSync(path.join(dir, "probe-out"), options.probeOut);
   const script = (name: string, body: string) => fs.writeFileSync(path.join(bin, name), `#!/usr/bin/env bash\n${body}\n`, { mode: 0o755 });
   script(
@@ -372,7 +374,14 @@ case "$1 $2" in
     if [ "$last" = gs-server ]; then echo "sha256:0123"; exit 0; fi
     [ -e "$FAKE_DIR/leftover" ] && { echo '[]'; exit 0; }; exit 1 ;;
   "image inspect") case "$4" in *RepoDigests*) echo "${REGISTRY}/gs-${environment}-server@${options.running ?? DIGEST}" ;; *Os*) echo "linux/arm64" ;; esac; exit 0 ;;
-  "run --rm") for a in "$@"; do printf '%s\\n' "$a"; done > "$FAKE_DIR/run-args"; cat "$FAKE_DIR/probe-out"; echo "probe stderr" >&2; exit ${options.probeExit ?? 0} ;;
+  "ps -a") [ -e "$FAKE_DIR/leftover-other" ] && echo gs-role-probe-earlier-run-01; exit 0 ;;
+  "rm -f") exit 0 ;;
+esac
+case "$1" in
+  timeout) echo "unexpected: docker called with timeout" >&2; exit 1 ;;
+esac
+case "$1 $2" in
+  "run --rm") for a in "$@"; do printf '%s\\n' "$a"; done > "$FAKE_DIR/run-args";${options.leftAfterRun === true ? ' touch "$FAKE_DIR/leftover";' : ""} cat "$FAKE_DIR/probe-out"; echo "probe stderr" >&2; exit ${options.probeExit ?? 0} ;;
 esac
 exit 1`,
   );
@@ -388,7 +397,7 @@ case "$url" in
   *) exit 22 ;;
 esac`,
   );
-  const env: NodeJS.ProcessEnv = { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`, GS_TEST: "1", GS_TEST_LIB: GS_LIB, GS_ETC: etc, GS_LOCK: path.join(dir, "lock"), GS_STATE_DIR: path.join(dir, "state"), GS_ROOT_AWS_DIR: path.join(dir, "rootaws"), GS_IMDS: "http://imds.invalid", FAKE_DIR: dir, HOME: dir };
+  const env: NodeJS.ProcessEnv = { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}`, GS_TEST: "1", GS_TEST_LIB: GS_LIB, GS_ETC: etc, GS_LOCK: path.join(dir, "lock"), GS_STATE_DIR: path.join(dir, "state"), GS_ROOT_AWS_DIR: path.join(dir, "rootaws"), GS_IMDS: "http://imds.invalid", GS_TEST_MEMINFO: path.join(dir, "meminfo"), FAKE_DIR: dir, HOME: dir };
   const read = (f: string) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f), "utf8").split("\n").filter((l) => l !== "") : []);
   return { dir, env, runArgs: () => (fs.existsSync(path.join(dir, "run-args")) ? read("run-args") : null), curlUrls: () => read("curl.log"), dockerCalls: () => read("docker.log") };
 }
@@ -419,7 +428,8 @@ describe("PHASE 1 REMAINDER F5 / F6: the REAL host-role-probe.sh (with the real 
     const image = args.indexOf(`${REGISTRY}/gs-staging-server@${DIGEST}`);
     assert.ok(image > 0, "the serving release BY DIGEST");
     assert.deepEqual(args.slice(image + 1), ["node", "dist/server/src/tools/awsDeploy.js", "stage-probe", "task-role", "--run-id", RUN, "--runtime-parameter", RUNTIME, "--environment", "staging", "--generation", "1", "--pool", "p1", "--kms-samples", "5"], "F5 sends no --disposable-writes");
-    assert.ok(!host.dockerCalls().some((c) => /^(pull|rm|kill|stop|exec)\b/.test(c)), "nothing is pulled, removed, killed, stopped or exec'd");
+    assert.ok(!host.dockerCalls().some((c) => /^(pull|rm|kill|stop|exec)\b/.test(c)), "nothing is pulled, removed, killed, stopped or exec'd (no leftover to remove)");
+    assert.match(r.stdout, /^mem_available_kb=1100000$/m);
   });
 
   test("F6 end to end: --disposable-writes L6CERT#<run> and nothing else; judged PASS", async () => {
@@ -450,7 +460,9 @@ describe("PHASE 1 REMAINDER F5 / F6: the REAL host-role-probe.sh (with the real 
       [{ probeOut: out, creds: true }, [DIGEST, RUN, "kms", "1", "p1"], /static_credentials=AWS_PROFILE\nrefused=a static AWS credential source/],
       [{ probeOut: out, role: "gs-staging-app-task" }, [DIGEST, RUN, "kms", "1", "p1"], /refused=the instance role is gs-staging-app-task, not gs-staging-host-app/],
       [{ probeOut: out, environment: "prod" }, [DIGEST, RUN, "kms", "1", "p1"], /refused=the host-role probe never runs in a prod\* environment/],
-      [{ probeOut: out, leftover: true }, [DIGEST, RUN, "kms", "1", "p1"], /refused=a container gs-role-probe-.* already exists/],
+      [{ probeOut: out, leftover: true }, [DIGEST, RUN, "kms", "1", "p1"], /refused=a probe container already exists \(gs-role-probe-phase1-f5f6-0001; an interrupted probe\)/],
+      [{ probeOut: out, leftoverOther: true }, [DIGEST, RUN, "kms", "1", "p1"], /refused=a probe container already exists \(gs-role-probe-earlier-run-01; an interrupted probe\)/],
+      [{ probeOut: out, memKb: 600000 }, [DIGEST, RUN, "kms", "1", "p1"], /mem_available_kb=600000\nrefused=MemAvailable is 600000 kB: below 640 MiB/],
       [{ probeOut: out }, [DIGEST, "BAD;id", "kms", "1", "p1"], /refused=the run id must match/],
       [{ probeOut: out }, [DIGEST, RUN, "all", "1", "p1"], /refused=the probe is kms \(F5\) or transactions \(F6\)/],
       [{ probeOut: out }, [DIGEST, RUN, "kms", "1", "p1;id"], /refused=the pool must match/],
@@ -465,6 +477,16 @@ describe("PHASE 1 REMAINDER F5 / F6: the REAL host-role-probe.sh (with the real 
       assert.equal(host.runArgs(), null, `nothing was started: ${JSON.stringify(options)}`);
       assert.equal(judgeHostRoleCapture(r.stdout, expect("kms")).verdict === "PASS", false);
     }
+  });
+
+  test("a probe container that outlived its run is reported, removed, and FAILS the run", async () => {
+    const host = fakeHost({ probeOut: await probeOut("kms"), leftAfterRun: true });
+    const r = runWrapper(host, [DIGEST, RUN, "kms", "1", "p1"]);
+    assert.match(r.stdout, /^probe_container_left=present$/m);
+    assert.ok(host.dockerCalls().includes(`rm -f gs-role-probe-${RUN}`), host.dockerCalls().join("\n"));
+    const j = judgeHostRoleCapture(r.stdout, expect("kms"));
+    assert.equal(j.verdict, "FAIL");
+    assert.match(failed(j), /the probe container is gone: probe_container_left=present/);
   });
 
   test("a probe that failed or printed no record ends framed and is never a PASS", async () => {
@@ -510,15 +532,19 @@ describe("PHASE 1 REMAINDER F5 / F6: the operator wrappers (static)", () => {
     assert.ok(ps1.indexOf("$errText = ") < ps1.indexOf("if ($status -ne 'Success')"), "the status check still follows the stderr rendering");
     assert.ok(!/Write-Warning \$err\b(?!Text)/.test(ps1), "never Write-Warning of the raw pipeline array");
     assert.match(ps1, /ValidateSet\('status', 'deploy', 'rollback', 'stop', 'measure-report', 'arm64-smoke', 'role-probe'\)/);
-    assert.match(ps1, /\$RunId -cnotmatch '\^\[a-z0-9\]\[a-z0-9-\]\{5,39\}\$'/);
+    assert.match(ps1, /\$RunId -cnotmatch '\^\[a-z0-9\]\[a-z0-9-\]\{5,39\}\\z'/);
+    assert.match(ps1, /foreach \(\$value in @\(\$Digest, \$BuildId, \$RunId, \$Probe, \$Pool\)\) \{\n  if \(\$value -and \$value -match '\[\\r\\n\]'\) \{ throw 'gs-host: REFUSED: an argument holds a line break\.' \}/);
     assert.match(ps1, /\$remote = "d=`\$\(mktemp -d\) && printf %s \$probeScript \| base64 -d > `\$d\/p && bash `\$d\/p \$Digest \$RunId \$Probe \$Generation \$Pool; rc=`\$\?; rm -rf `\$d; exit `\$rc"/);
     for (const test of ["gs-host-stderr.test.ps1", "gs-host-role-probe.test.ps1"]) assert.ok(fs.existsSync(path.join(REPO, "infra/aws/single-host/tests", test)), test);
   });
 
   test("the wrapper: one docker run (the probe), the instance role only, the serving release only, refusals framed", () => {
-    assert.equal((wrapper.match(/^docker run /gm) ?? []).length, 1);
-    assert.ok(!/docker (pull|rm|kill|stop|exec|cp)\b/.test(wrapper.replace(/#.*$/gm, "")), "the wrapper never pulls, removes, kills, stops, execs or copies");
-    const run = /^docker run [\s\S]*?2>"\$work\/err"$/m.exec(wrapper)?.[0] ?? "";
+    assert.equal((wrapper.match(/^timeout --kill-after=30 600 docker run /gm) ?? []).length, 1, "one docker run, bounded in time");
+    const code = wrapper.replace(/#.*$/gm, "");
+    assert.ok(!/docker (pull|kill|stop|exec|cp)\b/.test(code), "the wrapper never pulls, kills, stops, execs or copies");
+    assert.deepEqual([...code.matchAll(/docker rm [^;}\n]*/g)].map((m) => m[0].trim()), ['docker rm -f "$name" >/dev/null 2>&1 || true'], "the only removal: THIS run's probe container");
+    assert.match(code, /trap 'cleanup_probe; .*' TERM INT HUP/);
+    const run = /^timeout --kill-after=30 600 docker run [\s\S]*?2>"\$work\/err"$/m.exec(wrapper)?.[0] ?? "";
     assert.ok(run.length > 0, "the docker run block");
     for (const flag of ["--env-file", "--network", "--net=", "--privileged", " -v ", "--volume", "--mount", " -p ", "--publish", "--entrypoint", "--restart", " -d ", "--detach"]) assert.ok(!run.includes(flag), flag);
     assert.match(wrapper, /-e GS_STORAGE=l6-6-probe-not-a-server/);

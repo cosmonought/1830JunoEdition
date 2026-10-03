@@ -40,6 +40,11 @@ param(
   [ValidatePattern('^[a-z][a-z0-9-]{0,15}$')][string]$Pool
 )
 $ErrorActionPreference = 'Stop'
+# .NET's `$` also matches before a trailing newline, so ValidatePattern alone admits "sha256:<hex>`n" -- and AWS-RunShellScript
+# runs every line of the remote command as root. No argument that reaches it may hold a line break (PHASE 1 REMAINDER review).
+foreach ($value in @($Digest, $BuildId, $RunId, $Probe, $Pool)) {
+  if ($value -and $value -match '[\r\n]') { throw 'gs-host: REFUSED: an argument holds a line break.' }
+}
 $aws = Get-Command aws.exe -ErrorAction SilentlyContinue
 if (-not $aws) { throw 'gs-host: REFUSED: AWS CLI v2 (aws.exe) is required.' }
 
@@ -66,7 +71,7 @@ switch ($Command) {
   'role-probe' {
     if (-not $Digest -or -not $RunId -or -not $Probe -or $Generation -lt 1 -or -not $Pool) { throw 'gs-host: REFUSED: role-probe needs -Digest sha256:<64 hex> (the SERVING release), -RunId <run>, -Probe kms|transactions, -Generation <n> and -Pool <pool>.' }
     # ValidatePattern / ValidateSet are case-INSENSITIVE: the host's shapes are exact (lower case), so check them exactly here.
-    if ($Digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or $RunId -cnotmatch '^[a-z0-9][a-z0-9-]{5,39}$' -or $Probe -cnotmatch '^(kms|transactions)$' -or $Pool -cnotmatch '^[a-z][a-z0-9-]{0,15}$') { throw 'gs-host: REFUSED: role-probe arguments are lower case: -Digest sha256:<64 hex>, -RunId ^[a-z0-9][a-z0-9-]{5,39}$, -Probe kms|transactions, -Pool ^[a-z][a-z0-9-]{0,15}$.' }
+    if ($Digest -cnotmatch '^sha256:[0-9a-f]{64}\z' -or $RunId -cnotmatch '^[a-z0-9][a-z0-9-]{5,39}\z' -or $Probe -cnotmatch '^(kms|transactions)\z' -or $Pool -cnotmatch '^[a-z][a-z0-9-]{0,15}\z') { throw 'gs-host: REFUSED: role-probe arguments are lower case: -Digest sha256:<64 hex>, -RunId ^[a-z0-9][a-z0-9-]{5,39}$, -Probe kms|transactions, -Pool ^[a-z][a-z0-9-]{0,15}$.' }
     $text = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'host-role-probe.sh')) -replace "`r`n", "`n"
     $probeScript = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($text))
     $remote = "d=`$(mktemp -d) && printf %s $probeScript | base64 -d > `$d/p && bash `$d/p $Digest $RunId $Probe $Generation $Pool; rc=`$?; rm -rf `$d; exit `$rc"

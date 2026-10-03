@@ -120,7 +120,8 @@ foreach ($missing in @('Digest', 'RunId', 'Probe', 'Generation', 'Pool')) {
 $hostile = @(
   @{ RunId = 'abc123; reboot' }, @{ RunId = 'ABCDEF1' }, @{ RunId = 'run$(id)x' }, @{ Probe = 'kms; reboot' }, @{ Probe = 'all' }, @{ Probe = 'KMS' },
   @{ Pool = 'p1;id' }, @{ Pool = 'p1 p2' }, @{ Pool = '$(id)' }, @{ Pool = 'P1' }, @{ Digest = 'sha256:abc' }, @{ Digest = "$Digest;id" }, @{ Digest = $Digest.ToUpper() },
-  @{ Generation = 0 }, @{ Generation = 10000 }
+  @{ Generation = 0 }, @{ Generation = 10000 },
+  @{ RunId = "reboot`n" }, @{ RunId = "phase1-f5-0001`nreboot" }, @{ Pool = "p1`n" }, @{ Digest = "$Digest`n" }, @{ Digest = "$Digest`r" }, @{ Probe = "kms`n" }
 )
 foreach ($h in $hostile) {
   $r = Invoke-GsHost -Argv (Probe-Argv $h)
@@ -133,6 +134,12 @@ $r = Invoke-GsHost -Status 'Failed' -Stdout "GS-HOST-ROLE-PROBE BEGIN`nrefused=t
 Check 'R5 Failed + multiline stderr: REFUSED: the host command ended Failed.' { $r.Thrown -eq 'gs-host: REFUSED: the host command ended Failed.' -and $r.Warnings.Count -eq 1 -and $r.Warnings[0] -match 'line two' -and $r.ParamsRemoved } $r
 $r = Invoke-GsHost -Status 'Failed' -Stderr "line one`nline two" -Argv ((Probe-Argv) + @{ WarningAction = 'Stop' })
 Check 'R5 ... and with -WarningAction Stop' { $r.Thrown -eq 'gs-host: REFUSED: the host command ended Failed.' } $r
+
+# R5b. The same line-break refusal guards the pre-existing commands (deploy's digest and build id reach the host too).
+foreach ($d in @(@{ Digest = "$Digest`n"; BuildId = 'b1' }, @{ Digest = $Digest; BuildId = "b1`nreboot" })) {
+  $r = Invoke-GsHost -Argv (@{ Command = 'deploy'; InstanceId = $Instance } + $d)
+  Check "R5b deploy with a line break in $(($d.Keys | Sort-Object) -join '/'): refused, nothing sent" { $r.Thrown -and $r.Calls.Count -eq 0 } $r
+}
 
 # R6. The other commands are unchanged (status still sends exactly gs-health).
 $r = Invoke-GsHost -Stdout 'ok' -Argv @{ Command = 'status'; InstanceId = $Instance }

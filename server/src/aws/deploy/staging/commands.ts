@@ -41,7 +41,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 import type { DeployDeps } from "../commands";
-import { actionListOf, clientsFor, collectVerification, environmentOf, gameGenerationsOf, generationOf, loadAndMatch, need, parseFlags, UsageError, EXIT_FAILED, EXIT_OK } from "../commands";
+import { actionListOf, clientsFor, collectVerification, environmentOf, gameGenerationsOf, generationOf, loadAndMatch, need, parseFlags, UsageError, EXIT_FAILED, EXIT_NOT_EVALUATED, EXIT_OK } from "../commands";
 import { EVIDENCE_FILES, expectedNames } from "../deployVerify";
 import { RELAYER_ADDRESS } from "../relayerRotation";
 import { certify, certificationText, clearCertification, idleBoundsOf, prerequisiteChecks, prerequisitePassed, prerequisiteRecord, SCENARIOS, writeCertification, type CertContext, type Scenario, type StagingGate } from "./certify";
@@ -53,12 +53,14 @@ import { EXIT_NOT_YET as EXIT_RESTORE_NOT_YET, RESTORE_CASES, restoreProbeOverri
 import { restoreFencingCommand } from "./restoreFencing";
 import { MAINNET_CHAIN_IDS, type KmsClient } from "../../../escrow/juno/signer";
 import type { JunoBackendConfig } from "../../../escrow/juno/junoConfig";
-import { arr, disposablePartition, EVIDENCE, isoOf, obj, PROBE_FORMAT, readEvidence, recordFromLog, recordLines, runIdProblem, scrub, secretFindings, stableStringify, writeRecord } from "./evidence";
+import { arr, disposablePartition, EVIDENCE, isoOf, obj, PROBE_FORMAT, readEvidence, recordFromLog, recordLines, runIdProblem, scrub, secretFindings, sha256Hex, stableStringify, writeRecord } from "./evidence";
 
 export { recordFromLog, recordLines } from "./evidence";
 import { newProbeNonce, runIamProbe } from "./iamProbe";
 import { adoptionOf, buildCapabilities, readGenerationEvidence, readIdentityRecovery, readRestoreHeartbeats, type RecoveryReaders, type TaskHeartbeatReader } from "./recovery";
 import { runKmsProbe } from "./kmsProbe";
+import { decodeCapture } from "../migration/arm64LiveSmoke";
+import { HOST_ROLE_FILES, HOST_ROLE_PROBES, HOST_ROLE_WRAPPER, hostRoleVerdictRecord, judgeHostRoleCapture, wrapperSha256, type HostRoleProbe } from "./hostRoleProbe";
 import { HOST_EDGE_FILES, judgeSingleHostEdge, readHostEdgeEvidence, SINGLE_HOST_EDGE_VERDICT_FILE, singleHostEdgeVerdictRecord, singleHostRequiredIdleMs } from "./singleHostEdge";
 import { runTransactionProbe } from "./transactionProbe";
 import { collectRotationProof, ROTATION_PROOF_FILE, type RotationReaders } from "./rotationProof";
@@ -253,6 +255,7 @@ export async function stageProbeCommand(argv: readonly string[], deps: DeployDep
   const [sub, ...rest] = argv;
   if (sub === "task-role") return taskRoleProbe(rest, deps, staging);
   if (sub === "edge") return edgeProbe(rest, deps, staging);
+  if (sub === "host-role") return hostRoleProbeCommand(rest, deps, staging);
   if (sub === "collect") {
     const flags = parseFlags(rest, ["--run-id", "--evidence"], []);
     const run = runOf(flags);
@@ -276,7 +279,7 @@ export async function stageProbeCommand(argv: readonly string[], deps: DeployDep
   if (sub === "flip-alarms") return flipAlarmsCommand(rest, deps);
   if (sub === "restore-alarms") return restoreAlarmsCommand(rest, deps);
   if (sub === "restore-fencing") return restoreFencingCommand(rest, deps, (clients, tables) => readGenerationEvidence(staging.recovery, clients, tables));
-  throw new UsageError("stage-probe task-role | edge | collect | flip-alarms | restore-alarms | restore-fencing");
+  throw new UsageError("stage-probe task-role | edge | host-role | collect | flip-alarms | restore-alarms | restore-fencing");
 }
 
 /**
@@ -594,4 +597,60 @@ async function singleHostEdgeProbe(
   for (const c of verdict.checks) deps.out(`${c.status === "pass" ? "PASS" : c.status === "fail" ? "FAIL" : c.status === "skipped" ? "SKIP" : "NOT EVALUATED"}  ${c.name} -- ${c.detail}`);
   deps.out(`SINGLE-HOST EDGE PROBE: ${verdict.passed ? "PASS" : "FAIL"} -- ${written}`);
   return verdict.passed ? EXIT_OK : EXIT_FAILED;
+}
+
+/**
+ * PHASE 1 REMAINDER (F5 / F6): `stage-probe host-role --probe kms|transactions --run-id R --evidence <dir> --capture <file>
+ * --environment <env> --generation <N> --pool <pool> --instance-id <i-...> --digest sha256:<hex> --build <id>
+ * [--repository <checkout>]` -- OFFLINE: judges the output saved from `gs-host role-probe` (hostRoleProbe.ts) and writes
+ * the probe's record and the verdict into the evidence directory. Exit 0 PASS, 1 FAIL, 3 NOT EVALUATED. Create-once: a
+ * verdict for this probe and run is never overwritten (a retry is a new run id).
+ */
+function hostRoleProbeCommand(argv: readonly string[], deps: DeployDeps, staging: StagingDeps): number {
+  const flags = parseFlags(argv, ["--probe", "--run-id", "--evidence", "--capture", "--environment", "--generation", "--pool", "--instance-id", "--digest", "--build", "--repository"], []);
+  const probe = need(flags, "--probe");
+  if (!(HOST_ROLE_PROBES as readonly string[]).includes(probe)) throw new UsageError("--probe is kms (F5) or transactions (F6)");
+  const run = runOf(flags);
+  const dir = need(flags, "--evidence");
+  const environment = environmentOf(need(flags, "--environment"));
+  const generation = generationOf(need(flags, "--generation"));
+  const pool = need(flags, "--pool");
+  if (!/^[a-z][a-z0-9-]{0,15}$/.test(pool)) throw new UsageError("--pool must match ^[a-z][a-z0-9-]{0,15}$");
+  const instanceId = need(flags, "--instance-id");
+  if (!INSTANCE_ID.test(instanceId)) throw new UsageError("--instance-id is the single host's i-... id");
+  const digest = need(flags, "--digest");
+  if (!/^sha256:[0-9a-f]{64}$/.test(digest)) throw new UsageError("--digest is the SERVING release's sha256:<64 hex>");
+  const build = need(flags, "--build");
+  if (!/^[A-Za-z0-9._-]{1,128}$/.test(build)) throw new UsageError("--build is the serving release's build id");
+  const kind = probe as HostRoleProbe;
+  const verdictFile = HOST_ROLE_FILES.verdict(kind);
+  if (fs.existsSync(path.join(dir, verdictFile))) throw new UsageError(`${verdictFile} already exists in ${dir}: a verdict is never overwritten (run the probe again under a NEW run id)`);
+  let raw: Buffer;
+  try {
+    raw = fs.readFileSync(need(flags, "--capture"));
+  } catch {
+    throw new UsageError("--capture is the file the gs-host role-probe output was saved to (Tee-Object / tee)");
+  }
+  let wrapper: string | null = null;
+  try {
+    wrapper = wrapperSha256(fs.readFileSync(path.join(flags.get("--repository") ?? staging.repository, HOST_ROLE_WRAPPER), "utf8"));
+  } catch {
+    wrapper = null;
+  }
+  const expect = { probe: kind, run, environment, generation, pool, instanceId, digest, build, wrapperSha256: wrapper };
+  const judged = judgeHostRoleCapture(decodeCapture(raw), expect);
+  let checks = judged.checks;
+  let verdict = judged.verdict;
+  if (judged.record !== null) {
+    try {
+      deps.out(`RECORDED: ${writeRecord(dir, HOST_ROLE_FILES.record(kind), judged.record)}`);
+    } catch (error) {
+      checks = [...checks, { name: "the probe's record is written", status: "fail", detail: (error as Error).message }];
+      verdict = "FAIL";
+    }
+  }
+  const written = writeRecord(dir, verdictFile, hostRoleVerdictRecord(expect, { ...judged, checks, verdict }, { at: deps.now(), captureSha256: sha256Hex(raw) }));
+  for (const c of checks) deps.out(`${c.status === "pass" ? "PASS" : c.status === "fail" ? "FAIL" : c.status === "skipped" ? "SKIP" : "NOT EVALUATED"}  ${c.name} -- ${c.detail}`);
+  deps.out(`HOST-ROLE PROBE ${kind === "kms" ? "F5 KMS" : "F6 DYNAMODB"}: ${verdict} -- ${written}`);
+  return verdict === "PASS" ? EXIT_OK : verdict === "FAIL" ? EXIT_FAILED : EXIT_NOT_EVALUATED;
 }

@@ -10,22 +10,34 @@
 #   .\gs-host.ps1 -Command stop     -InstanceId i-... [-UntilDeploy]
 #   .\gs-host.ps1 -Command measure-report -InstanceId i-... [-Days 14]
 #   .\gs-host.ps1 -Command arm64-smoke -InstanceId i-... -Digest sha256:<64 hex>      # step 12b: BEFORE deploy / edge cutover
+#   .\gs-host.ps1 -Command role-probe -InstanceId i-... -Digest sha256:<64 hex> -RunId <run> -Probe kms|transactions -Generation 1 -Pool p1   # F5 / F6
 #
 # arm64-smoke (OWNER-GATE FIX 1): the REQUIRED live ARM64 runtime smoke on the real Graviton host. It sends the two
 # REVIEWED repository files -- infra/aws/single-host/arm64-live-smoke.sh and the unchanged
 # infra/aws/modules/single-host/tests/image-smoke.sh -- as base64 (LF-normalised; the remote line holds no quote), and the
 # host runs the wrapper against the release pulled by digest. Save the output (Tee-Object) for
 # `migration-guard edge-cutover --arm64-live-smoke <file>`: the cutover is refused unless it is a complete PASS.
+#
+# role-probe (PHASE 1 REMAINDER, F5 / F6): the L6-6 task-role probe (unchanged; the release image's own `awsDeploy
+# stage-probe task-role`) run ON the host, under the INSTANCE ROLE, from the SERVING release by digest. It sends ONE
+# reviewed repository file -- infra/aws/single-host/host-role-probe.sh -- as base64 (LF-normalised; the remote line holds
+# no quote and nothing the caller typed beyond the validated digest, run id, probe, generation and pool). `kms` = F5
+# (signing identities + disposable digest Signs, < 3 s each); `transactions` = F6 (plus the disposable L6CERT#<run>
+# partition, read back empty). Save the output (Tee-Object) for `awsDeploy stage-probe host-role --capture <file>`.
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('status', 'deploy', 'rollback', 'stop', 'measure-report', 'arm64-smoke')][string]$Command,
+  [Parameter(Mandatory = $true)][ValidateSet('status', 'deploy', 'rollback', 'stop', 'measure-report', 'arm64-smoke', 'role-probe')][string]$Command,
   [Parameter(Mandatory = $true)][ValidatePattern('^i-[0-9a-f]{8,17}$')][string]$InstanceId,
   [ValidatePattern('^[a-z]{2}(-[a-z]+)+-[0-9]$')][string]$Region = 'us-east-1',
   [ValidatePattern('^sha256:[0-9a-f]{64}$')][string]$Digest,
   [ValidatePattern('^[A-Za-z0-9._-]{1,128}$')][string]$BuildId,
   [switch]$Measure,
   [switch]$UntilDeploy,
-  [ValidateRange(1, 365)][int]$Days = 14
+  [ValidateRange(1, 365)][int]$Days = 14,
+  [ValidatePattern('^[a-z0-9][a-z0-9-]{5,39}$')][string]$RunId,
+  [ValidateSet('kms', 'transactions')][string]$Probe,
+  [ValidateRange(1, 9999)][int]$Generation = 0,
+  [ValidatePattern('^[a-z][a-z0-9-]{0,15}$')][string]$Pool
 )
 $ErrorActionPreference = 'Stop'
 $aws = Get-Command aws.exe -ErrorAction SilentlyContinue
@@ -50,6 +62,14 @@ switch ($Command) {
     $wrapper = & $b64 'arm64-live-smoke.sh'
     $smoke = & $b64 '..\modules\single-host\tests\image-smoke.sh'
     $remote = "d=`$(mktemp -d) && printf %s $wrapper | base64 -d > `$d/w && printf %s $smoke | base64 -d > `$d/s && bash `$d/w $Digest `$d/s; rc=`$?; rm -rf `$d; exit `$rc"
+  }
+  'role-probe' {
+    if (-not $Digest -or -not $RunId -or -not $Probe -or $Generation -lt 1 -or -not $Pool) { throw 'gs-host: REFUSED: role-probe needs -Digest sha256:<64 hex> (the SERVING release), -RunId <run>, -Probe kms|transactions, -Generation <n> and -Pool <pool>.' }
+    # ValidatePattern / ValidateSet are case-INSENSITIVE: the host's shapes are exact (lower case), so check them exactly here.
+    if ($Digest -cnotmatch '^sha256:[0-9a-f]{64}$' -or $RunId -cnotmatch '^[a-z0-9][a-z0-9-]{5,39}$' -or $Probe -cnotmatch '^(kms|transactions)$' -or $Pool -cnotmatch '^[a-z][a-z0-9-]{0,15}$') { throw 'gs-host: REFUSED: role-probe arguments are lower case: -Digest sha256:<64 hex>, -RunId ^[a-z0-9][a-z0-9-]{5,39}$, -Probe kms|transactions, -Pool ^[a-z][a-z0-9-]{0,15}$.' }
+    $text = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot 'host-role-probe.sh')) -replace "`r`n", "`n"
+    $probeScript = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($text))
+    $remote = "d=`$(mktemp -d) && printf %s $probeScript | base64 -d > `$d/p && bash `$d/p $Digest $RunId $Probe $Generation $Pool; rc=`$?; rm -rf `$d; exit `$rc"
   }
 }
 

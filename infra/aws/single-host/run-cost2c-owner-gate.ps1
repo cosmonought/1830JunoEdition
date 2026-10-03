@@ -1,36 +1,50 @@
 <#
 .SYNOPSIS
-  COST-2C OWNER GATE -- the complete COST-2C validation sweep, run by the OWNER on the owner's machine.
+  RECON-1 OWNER GATE (COST-2C's runner, extended) -- the ONE validation sweep of the reconciled single-host migration
+  candidate (recon/recon-1-pre-cost2c), run ONCE by the OWNER on the owner's machine.
 
 .DESCRIPTION
-  Runs every gate the COST-2C candidate needs, cheapest first, and writes ONE consolidated log (stdout AND stderr of
+  Runs every gate the RECON-1 candidate needs, cheapest first, and writes ONE consolidated log (stdout AND stderr of
   every command) plus a compact JSON summary under <repo>\evidence\owner-gates\ (ignored by Git):
 
-     1  Environment / source   git HEAD, branch, `git status --short`, tool versions (never fails the gate by itself;
-                               a dirty tree is reported prominently)
-     2  Build                  the server TypeScript build (`npm run build`'s own command)
-     3  COST-2C targeted       aws/deploy/hostcert/hostCert.test.js -- the host drills F7 / F8 / F9a / F9b / replacement,
+     1  Environment / source   git HEAD, branch, `git status --short`, core.autocrlf, tool versions (never fails the
+                               gate by itself; a dirty tree is reported prominently)
+     2  Windows LF checkout    RECON-1A W-04: every eol=lf-pinned single-host file is LF IN THE WORKING TREE
+                               (`git ls-files --eol`; an older clone keeps CRLF copies git calls clean: re-clone, or
+                               `git rm -r -q --cached infra/aws/modules/single-host; git reset -q --hard`)
+     3  Build                  the server TypeScript build (`npm run build`'s own command) = the typecheck
+     4  RECON-1 authorization  deploy/migration/recon1AuthorizationGates (app-read-authorize, ledger-operator-journal,
+                               X-09, the Terraform-made plans, plan-evidence.ps1's targets / CR record -- its PowerShell
+                               test must RUN here: a SKIP of it FAILS the gate -- and host-cert's credential authority /
+                               stale-host classification)
+     5  COST-2B migration      deploy/migration/cost2bMigrationGuards
+     6  COST-2C targeted       aws/deploy/hostcert/hostCert.test.js -- the host drills F7 / F8 / F9a / F9b / replacement,
                                the systemd / HOLD evidence judges, the drill lock, false-PASS / NOT-EVALUATED cases,
-                               the bash templates and gs-exit-hold parity (Git Bash: a SKIP here is NOT RUN, not PASS)
-     4  Ownership / fencing    rooms/l5_3Ownership, conformance/fenceGap, aws/awsClients (import / binding guards),
+                               the bash templates and gs-exit-hold parity, the --host-transport-profile authority
+                               (Git Bash: a SKIP here is NOT RUN, not PASS)
+     7  COST-2A verifier       deploy/cost2aHostVerifier (+ W-02), operator/cost2aHostSnapshot (its .ps1 captures run
+                               under Windows PowerShell / pwsh)
+     8  JX-4C / P5             operator/jx4cOperatorEvidenceIam, runtime/p5IntCrossSlice
+     9  Ownership / fencing    rooms/l5_3Ownership, conformance/fenceGap, aws/awsClients (import / binding guards),
                                conformance/l6_5bAlarms
-     5  awsDeploy / stage-cert deploy/l5_8Deploy, staging/l6_6StagingCert, staging/rotationProof, staging/restoreFencing
-     6  COST-1 guards          deploy/cost1SingleHost, runtime/singleHostMetrics
-     7  COST-2B guards         deploy/migration/cost2bMigrationGuards
-     8  Terraform              fmt -check (infra/aws), `terraform test` in modules/single-host, modules/app,
-                               modules/ledger; init -backend=false + validate in stacks/app, stacks/ledger,
+    10  awsDeploy / stage-cert deploy/l5_8Deploy, staging/l6_6StagingCert, staging/rotationProof (incl. L6-14W1
+                               04138ea), staging/restoreFencing
+    11  COST-1 + portability   deploy/cost1SingleHost (W-03 / W-04 + the host-cert scripts' LF), runtime/singleHostMetrics
+    12  Terraform              fmt -check (infra/aws), `terraform test` in modules/single-host (20), modules/app (69),
+                               modules/ledger (34); init -backend=false + validate in stacks/app, stacks/ledger,
                                stacks/single-host (mocked providers: no AWS account, no credentials)
-     9  Single-host scripts    infra/aws/modules/single-host/tests/host-scripts.test.sh (Git Bash)
-    10  DynamoDB Local         the full `npm run test:dynamodb-local` corpus (COST-2C's drill lock is a conditional
-                               DynamoDB write: hostCertLock.dynamoLocal.test.js is part of it). Starts ONE throw-away
+    13  Single-host scripts    infra/aws/modules/single-host/tests/host-scripts.test.sh (Git Bash)
+    14  DynamoDB Local         the full `npm run test:dynamodb-local` corpus (JX-4B's money evidence and COST-2C's drill
+                               lock -- hostCertLock.dynamoLocal.test.js -- are part of it). Starts ONE throw-away
                                `amazon/dynamodb-local:3.3.1` container (the repository's documented procedure) and
                                removes only that container -- unless GS_DYNAMODB_LOCAL_ENDPOINT is already set, which
                                is then used and nothing is started.
-    11  Full server suite      the complete server `npm test` corpus (LAST: the longest gate)
+    15  Full server suite      the complete server `npm test` corpus (LAST: the longest gate; OWNER-RUN ONLY)
 
   Nothing here touches AWS, Juno or any remote resource. The script never edits, cleans, resets or stashes the tree.
   Exit code: 0 only when EVERY gate passed; 1 otherwise (a FAIL, a BLOCKED gate after a failed build, or a NOT RUN
-  gate whose prerequisite -- Terraform, Docker, Git Bash -- is missing).
+  gate whose prerequisite -- Terraform, Docker, Git Bash, git -- is missing).
+  It certifies the SOURCE only: the live AL2023 / systemd contract stays NOT EVALUATED until the real-host drill.
 
 .PARAMETER Only
   Run only these gates (names as in the summary table, e.g. -Only Build,"COST-2C targeted"). The environment section
@@ -62,7 +76,7 @@ $OnWindows = ($env:OS -eq 'Windows_NT')
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir '../../..')).Path
 if (-not (Test-Path (Join-Path $RepoRoot 'PROJECT_CANONICAL_CONTEXT.md'))) {
-  Write-Host "COST-2C OWNER GATE: cannot find the repository root above $ScriptDir" -ForegroundColor Red
+  Write-Host "RECON-1 OWNER GATE: cannot find the repository root above $ScriptDir" -ForegroundColor Red
   exit 2
 }
 $ServerDir = Join-Path $RepoRoot 'server'
@@ -70,8 +84,8 @@ $FrontendDir = Join-Path $RepoRoot 'frontend'
 $Stamp = [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')
 $GateDir = Join-Path (Join-Path $RepoRoot 'evidence') 'owner-gates'
 if (-not $ListOnly) { New-Item -ItemType Directory -Force -Path $GateDir | Out-Null }
-$LogPath = Join-Path $GateDir "cost2c-owner-gate-$Stamp.log"
-$JsonPath = Join-Path $GateDir "cost2c-owner-gate-$Stamp.json"
+$LogPath = Join-Path $GateDir "recon1-owner-gate-$Stamp.log"
+$JsonPath = Join-Path $GateDir "recon1-owner-gate-$Stamp.json"
 $Utf8 = New-Object System.Text.UTF8Encoding($false)
 $script:Writer = $null
 $script:LastOutput = New-Object System.Collections.ArrayList
@@ -155,6 +169,23 @@ function Add-Gate([string]$Name, [bool]$NeedsBuild, [scriptblock]$Body, [string]
   [void]$Gates.Add([pscustomobject]@{ Name = $Name; NeedsBuild = $NeedsBuild; Body = $Body; Describe = $Describe; Status = 'SKIPPED'; Exit = $null; Seconds = 0.0; Reason = ''; Started = ''; Ended = '' })
 }
 
+Add-Gate 'Windows LF checkout' $false {
+  if ($null -eq $Git) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = 'git is not on PATH (the W-04 checkout cannot be judged)' } }
+  $code = Invoke-Logged $Git @('ls-files', '--eol', '--', 'infra/aws/modules/single-host', 'infra/aws/single-host') $RepoRoot
+  if ($code -ne 0) { return @{ Exit = $code } }
+  $pinned = 0; $bad = @()
+  foreach ($line in $script:LastOutput) {
+    if ($line -match '^i/(\S+)\s+w/(\S*)\s+attr/(\S.*?)\s*\t(.+)$') {
+      $wt = $Matches[2]; $attr = $Matches[3]; $file = $Matches[4]
+      if ($attr -match 'eol=lf') { $pinned++; if ($wt -ne 'lf') { $bad += "$file (w/$wt)" } }
+    }
+  }
+  if ($pinned -lt 25) { return @{ Status = 'FAIL'; Exit = $code; Reason = "only $pinned eol=lf single-host files found (is .gitattributes the RECON-1A one?)" } }
+  if ($bad.Count -gt 0) { return @{ Status = 'FAIL'; Exit = $code; Reason = "CRLF in the working tree of eol=lf files: $($bad -join ', ') -- re-clone, or: git rm -r -q --cached infra/aws/modules/single-host; git reset -q --hard" } }
+  Log "    $pinned eol=lf single-host files, every one LF in the working tree"
+  return @{ Exit = 0 }
+} 'git ls-files --eol -- infra/aws/modules/single-host infra/aws/single-host   (every eol=lf file must be w/lf)'
+
 Add-Gate 'Build' $false {
   if ($null -eq $Node) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = 'node is not on PATH' } }
   $tsc = Join-Path $FrontendDir 'node_modules/typescript/bin/tsc'
@@ -163,6 +194,17 @@ Add-Gate 'Build' $false {
   $code = Invoke-Logged $Node @('../frontend/node_modules/typescript/bin/tsc', '-p', 'tsconfig.json') $ServerDir
   return @{ Exit = $code }
 } 'node ../frontend/node_modules/typescript/bin/tsc -p tsconfig.json   (server; = npm run build)'
+
+Add-Gate 'RECON-1 authorization gates' $true {
+  $code = Invoke-Logged $Node (TestArgs @('aws/deploy/migration/recon1AuthorizationGates.test.js')) $ServerDir
+  $skippedPs = @($script:LastOutput | Where-Object { $_ -match 'plan-evidence\.ps1' -and $_ -match '# SKIP' })
+  if ($code -eq 0 -and $OnWindows -and $skippedPs.Count -gt 0) { return @{ Status = 'FAIL'; Exit = $code; Reason = "plan-evidence.ps1's test was SKIPPED (no Windows PowerShell / pwsh found): the Windows capture path was NOT RUN" } }
+  return @{ Exit = $code }
+} 'node --test deploy/migration/recon1AuthorizationGates   (on Windows its plan-evidence.ps1 test must run)'
+
+Add-Gate 'COST-2B migration guards' $true {
+  return @{ Exit = (Invoke-Logged $Node (TestArgs @('aws/deploy/migration/cost2bMigrationGuards.test.js')) $ServerDir) }
+} 'node --test deploy/migration/cost2bMigrationGuards'
 
 Add-Gate 'COST-2C targeted' $true {
   $envs = @{}
@@ -174,6 +216,14 @@ Add-Gate 'COST-2C targeted' $true {
   return @{ Exit = $code }
 } 'node --test aws/deploy/hostcert/hostCert.test.js   (GS_TEST_BASH = Git Bash; any skip FAILS the gate)'
 
+Add-Gate 'COST-2A verifier/snapshot' $true {
+  return @{ Exit = (Invoke-Logged $Node (TestArgs @('aws/deploy/cost2aHostVerifier.test.js', 'aws/operator/cost2aHostSnapshot.test.js')) $ServerDir) }
+} 'node --test deploy/cost2aHostVerifier, operator/cost2aHostSnapshot'
+
+Add-Gate 'JX-4C / P5 cross-slice' $true {
+  return @{ Exit = (Invoke-Logged $Node (TestArgs @('aws/operator/jx4cOperatorEvidenceIam.test.js', 'aws/runtime/p5IntCrossSlice.test.js')) $ServerDir) }
+} 'node --test operator/jx4cOperatorEvidenceIam, runtime/p5IntCrossSlice'
+
 Add-Gate 'Ownership/fencing regression' $true {
   return @{ Exit = (Invoke-Logged $Node (TestArgs @('rooms/l5_3Ownership.test.js', 'persistence/conformance/fenceGap.test.js', 'aws/awsClients.test.js', 'persistence/conformance/l6_5bAlarms.test.js')) $ServerDir) }
 } 'node --test rooms/l5_3Ownership, conformance/fenceGap, aws/awsClients, conformance/l6_5bAlarms'
@@ -182,13 +232,9 @@ Add-Gate 'awsDeploy/stage-cert regression' $true {
   return @{ Exit = (Invoke-Logged $Node (TestArgs @('aws/deploy/l5_8Deploy.test.js', 'aws/deploy/staging/l6_6StagingCert.test.js', 'aws/deploy/staging/rotationProof.test.js', 'aws/deploy/staging/restoreFencing.test.js')) $ServerDir) }
 } 'node --test deploy/l5_8Deploy, staging/l6_6StagingCert, staging/rotationProof, staging/restoreFencing'
 
-Add-Gate 'COST-1 guards' $true {
+Add-Gate 'COST-1 guards + portability' $true {
   return @{ Exit = (Invoke-Logged $Node (TestArgs @('aws/deploy/cost1SingleHost.test.js', 'aws/runtime/singleHostMetrics.test.js')) $ServerDir) }
 } 'node --test deploy/cost1SingleHost, runtime/singleHostMetrics'
-
-Add-Gate 'COST-2B migration guards' $true {
-  return @{ Exit = (Invoke-Logged $Node (TestArgs @('aws/deploy/migration/cost2bMigrationGuards.test.js')) $ServerDir) }
-} 'node --test deploy/migration/cost2bMigrationGuards'
 
 Add-Gate 'Terraform' $false {
   if ($null -eq $Terraform) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = 'terraform is not on PATH (Terraform >= 1.10 is required)' } }
@@ -264,7 +310,7 @@ Add-Gate 'Full server suite' $true {
 $T0 = [DateTime]::UtcNow
 $Watch = [System.Diagnostics.Stopwatch]::StartNew()
 Log '========================================================================================================'
-Log ' COST-2C OWNER GATE'
+Log ' RECON-1 OWNER GATE (the reconciled single-host migration candidate; COST-2C runner, extended)'
 Log '========================================================================================================'
 Log (" start (UTC):        {0}" -f (UtcNow))
 Log (" repository:         {0}" -f $RepoRoot)
@@ -355,7 +401,7 @@ Log ("total duration: {0} s   (end {1})" -f [math]::Round($Watch.Elapsed.TotalSe
 if ($Dirty.Count -gt 0) { Log '!!! the working tree was NOT clean (see the top of the log) !!!' 'Yellow' }
 
 $summary = [ordered]@{
-  format = '18COSMOS/COST-2C-OWNER-GATE/v1'
+  format = '18COSMOS/RECON-1-OWNER-GATE/v1'
   started_utc = $T0.ToString('yyyy-MM-ddTHH:mm:ssZ')
   finished_utc = (UtcNow)
   repository = $RepoRoot

@@ -605,19 +605,25 @@ function miniRepo(cr: boolean): { readonly repo: string; readonly bin: string } 
   git("add", "-A");
   git("commit", "-qm", "mini");
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), "recon1-bin-"));
+  /* A stub `terraform` (node, so it runs from bash, Windows PowerShell and pwsh alike): -out= gets a binary plan,
+     `version` answers the pinned versions, `plan` exits 2 (changes), `show` answers a plan JSON. */
   fs.writeFileSync(
-    path.join(bin, "terraform"),
-    `#!/usr/bin/env bash
-for a in "$@"; do case "$a" in -out=*) printf 'BINARY-PLAN' > "\${a#-out=}";; esac; done
-case " $* " in *" version "*) echo '{"terraform_version":"1.9.8","provider_selections":{"registry.terraform.io/hashicorp/aws":"6.66.0"}}';; *" plan "*) exit 2;; *" show "*) echo '{"format_version":"1.2"}';; esac
+    path.join(bin, "terraform-stub.js"),
+    `const a = process.argv.slice(2);
+for (const x of a) if (x.startsWith("-out=")) require("fs").writeFileSync(x.slice(5), "BINARY-PLAN");
+if (a.includes("version")) { console.log('{"terraform_version":"1.9.8","provider_selections":{"registry.terraform.io/hashicorp/aws":"6.66.0"}}'); process.exit(0); }
+if (a.includes("plan")) process.exit(2);
+if (a.includes("show")) { console.log('{"format_version":"1.2"}'); process.exit(0); }
 `,
-    { mode: 0o755 },
   );
+  if (process.platform === "win32") fs.writeFileSync(path.join(bin, "terraform.cmd"), `@"${process.execPath}" "%~dp0terraform-stub.js" %*\r\n@exit /b %ERRORLEVEL%\r\n`);
+  else fs.writeFileSync(path.join(bin, "terraform"), `#!/bin/sh\nexec "${process.execPath}" "${path.join(bin, "terraform-stub.js")}" "$@"\n`, { mode: 0o755 });
   return { repo, bin };
 }
 const TARGETS_7A = ["module.app.aws_iam_role_policy.bootstrap", "module.app.aws_iam_role_policy.operator[0]"];
 const POSIX_BASH = process.platform !== "win32" && spawnSync("bash", ["-c", "command -v sha256sum || command -v shasum"]).status === 0 && spawnSync("git", ["--version"]).status === 0;
-const PWSH = process.platform === "win32" ? null : ["pwsh"].find((c) => spawnSync(c, ["-NoProfile", "-NonInteractive", "-Command", "exit 0"]).status === 0) ?? null;
+/* Windows PowerShell 5.1 or PowerShell 7: on Windows this test MUST run (the owner gate fails a skip of it there). */
+const PWSH = (process.platform === "win32" ? ["pwsh", "powershell"] : ["pwsh"]).find((c) => spawnSync(c, ["-NoProfile", "-NonInteractive", "-Command", "exit 0"]).status === 0) ?? null;
 
 describe("RECON-1A plan-evidence.sh: targets recorded; CR in a host file is NOT clean", { skip: POSIX_BASH ? false : "POSIX bash / git not available (Windows: the .ps1 test)" }, () => {
   for (const cr of [false, true]) {
@@ -724,6 +730,38 @@ describe("RECON-1: the stale-host live sub-proof is classified NOT EVALUATED -- 
     const sc = source("server/src/aws/deploy/hostcert/scenarios.ts");
     assert.match(sc, /if \(stale === null\) d\.add\(unknown\("replacement: the stale host's preflight refuses \(not the serving EIP\)"/);
     assert.match(sc, /the old host \$\{b\.instance\} is RUNNING and was not declared --stale-instance-id/);
+  });
+});
+
+describe("RECON-1: the ONE owner gate (COST-2C's runner, extended) covers the reconciled tree", () => {
+  const gate = source("infra/aws/single-host/run-cost2c-owner-gate.ps1");
+  test("every required suite is in it, cheap gates first, the full server suite LAST, one log + JSON, fail on any non-PASS", () => {
+    for (const f of [
+      "aws/deploy/migration/recon1AuthorizationGates.test.js",
+      "aws/deploy/migration/cost2bMigrationGuards.test.js",
+      "aws/deploy/hostcert/hostCert.test.js",
+      "aws/deploy/cost2aHostVerifier.test.js",
+      "aws/operator/cost2aHostSnapshot.test.js",
+      "aws/operator/jx4cOperatorEvidenceIam.test.js",
+      "aws/runtime/p5IntCrossSlice.test.js",
+      "aws/deploy/staging/rotationProof.test.js",
+      "aws/deploy/cost1SingleHost.test.js",
+      "aws/awsClients.test.js",
+      "infra/aws/modules/single-host/tests/host-scripts.test.sh",
+    ])
+      assert.ok(gate.includes(f), f);
+    for (const m of ["modules/single-host", "modules/app", "modules/ledger", "stacks/single-host", "stacks/app", "stacks/ledger"]) assert.ok(gate.includes(`'${m}'`), m);
+    assert.match(gate, /'run', 'test:dynamodb-local'/);
+    assert.match(gate, /'ls-files', '--eol'/);
+    const order = [...gate.matchAll(/^Add-Gate '([^']+)'/gm)].map((m) => m[1]);
+    assert.equal(order[0], "Windows LF checkout");
+    assert.equal(order[1], "Build");
+    assert.equal(order[order.length - 1], "Full server suite");
+    assert.equal(order[order.length - 2], "DynamoDB Local");
+    assert.match(gate, /\$AllPass = \(@\(\$Gates \| Where-Object \{ \$_\.Status -ne 'PASS' \}\)\.Count -eq 0\)/);
+    assert.match(gate, /if \(\$AllPass\) \{ exit 0 \} else \{ exit 1 \}/);
+    for (const k of ["branch =", "head =", "tree_clean =", "started_utc =", "seconds =", "exit ="]) assert.ok(gate.includes(k), k);
+    assert.match(gate, /18COSMOS\/RECON-1-OWNER-GATE\/v1/);
   });
 });
 

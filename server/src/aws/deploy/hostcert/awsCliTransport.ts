@@ -20,9 +20,15 @@
 import { execFile } from "child_process";
 
 import { hostOpProblem, hostScript, OP_TIMEOUTS, type HostOp } from "./hostOps";
-import { takeLiveBrand, type AddressOwner, type FleetInstance, type FleetRead, type FleetView, type HostCertWorld, type HostRun, type HostTransport } from "./transport";
+import { type AddressOwner, type FleetInstance, type FleetRead, type FleetView, type HostCertWorld, type HostRun, type HostTransport } from "./transport";
 
-const brand = takeLiveBrand();
+/* Module-private (review R5): nothing outside this file can add to it. The world AND its host and fleet are branded and
+   frozen, so a branded world cannot have its parts swapped for fakes. */
+const LIVE = new WeakSet<object>();
+
+/** Whether `world` is THE production world (the real AWS CLI over SSM), unaltered. A fake, a copy, a world with a swapped
+ *  part, or anything a test built: no. */
+export const isLiveWorld = (world: HostCertWorld): boolean => LIVE.has(world) && LIVE.has(world.host) && LIVE.has(world.fleet) && Object.isFrozen(world) && Object.isFrozen(world.host) && Object.isFrozen(world.fleet);
 
 export interface AwsCliResult {
   readonly exitCode: number;
@@ -211,10 +217,9 @@ const realAwsCli: AwsCli = (args, timeoutMs) =>
 /** THE production world: SSM Run Command and the EC2 / ECS reads through the real AWS CLI. The only live world. */
 export function productionHostCertWorld(region: string): HostCertWorld {
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-  return brand({
-    host: createSsmHostTransport(realAwsCli, { region, sleep }),
-    fleet: createCliFleetView(realAwsCli, region),
-    now: () => Date.now(),
-    sleep,
-  });
+  const host = Object.freeze(createSsmHostTransport(realAwsCli, { region, sleep }));
+  const fleet = Object.freeze(createCliFleetView(realAwsCli, region));
+  const world: HostCertWorld = Object.freeze({ host, fleet, now: () => Date.now(), sleep });
+  for (const o of [world, host, fleet]) LIVE.add(o);
+  return world;
 }

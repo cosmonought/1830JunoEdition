@@ -59,19 +59,5 @@ export interface HostCertWorld {
   readonly sleep: (ms: number) => Promise<void>;
 }
 
-/* Only `awsCliTransport.ts`'s production constructor adds to this set (module-private brand; never exported mutable). */
-const LIVE_WORLDS = new WeakSet<object>();
-let sealed = false;
-
-/** Called ONCE, by `awsCliTransport.ts` at module load, to obtain the branding function; a second call throws. */
-export function takeLiveBrand(): (world: HostCertWorld) => HostCertWorld {
-  if (sealed) throw new Error("host-cert: the live brand was already taken");
-  sealed = true;
-  return (world) => {
-    LIVE_WORLDS.add(world);
-    return world;
-  };
-}
-
-/** Whether `world` is the production world (the real AWS CLI over SSM). A fake, a test double or a hand-made world: no. */
-export const isLiveWorld = (world: HostCertWorld): boolean => LIVE_WORLDS.has(world);
+/* The live brand is private to `awsCliTransport.ts` (review R5): `isLiveWorld` is exported THERE, never a brand-taking
+   function, and the production world, its host transport and its fleet view are frozen and branded together. */

@@ -51,6 +51,8 @@ export interface Faults {
   fenceStatus?: number;
   /** The incumbent is never fenced by the rival (two writers). */
   noFence?: boolean;
+  /** `docker stop` of the rival fails: it keeps running. */
+  rivalStopFails?: boolean;
   /** The recorder removal fails (cleanup). */
   cleanupFails?: boolean;
   /** These host operations fail at the transport (outcome unknown). */
@@ -375,6 +377,7 @@ export class FakeHost {
         return E(0);
       }
       case "rival-stop":
+        if (this.faults.rivalStopFails) return E(1, "R the rival container is still present");
         this.containers.delete(`gs-cert-rival-${op.run}`);
         world.rival = null;
         return E(0);

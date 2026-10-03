@@ -151,7 +151,7 @@ finish() {
 }
 port() { local p; p="$(envval "$GS_ETC/host.env" GS_CONTAINER_PORT)"; case "$p" in ''|*[!0-9]*) p=8917 ;; esac; printf '%s' "$p"; }
 readyz() { local code; code="$(curl -s -o /dev/null -m "$\{1:-5}" -w '%{http_code}' "http://127.0.0.1:$(port)/gs/readyz" 2>/dev/null)"; [ -n "$code" ] || code=000; printf '%s' "$code"; }
-server_state() { docker container inspect -f '{{.State.Status}}' gs-server 2>/dev/null || printf 'absent'; }
+server_state() { docker info >/dev/null 2>&1 || { printf 'docker-error'; return; }; docker container inspect -f '{{.State.Status}}' gs-server 2>/dev/null || printf 'absent'; }
 `.replace(/\$\\\{/g, "${");
 
 /** The read-only snapshot (see the header). `since` bounds the journal; RUN names the recorder's observation file. */
@@ -334,7 +334,8 @@ rm -f "$out"
 finish 0
 `;
 
-const RIVAL_STOP = String.raw`if docker container inspect "gs-cert-rival-$RUN" >/dev/null 2>&1; then docker stop --time 120 "gs-cert-rival-$RUN" >/dev/null 2>&1; fi
+const RIVAL_STOP = String.raw`if ! docker info >/dev/null 2>&1; then emit E 2; emit R "docker cannot be read: the rival's state is UNKNOWN"; finish 2; fi
+if docker container inspect "gs-cert-rival-$RUN" >/dev/null 2>&1; then docker stop --time 120 "gs-cert-rival-$RUN" >/dev/null 2>&1; fi
 for i in 1 2 3 4 5 6 7 8 9 10; do docker container inspect "gs-cert-rival-$RUN" >/dev/null 2>&1 || break; sleep 2; done
 if docker container inspect "gs-cert-rival-$RUN" >/dev/null 2>&1; then docker rm -f "gs-cert-rival-$RUN" >/dev/null 2>&1; sleep 2; fi
 if docker container inspect "gs-cert-rival-$RUN" >/dev/null 2>&1; then emit E 1; emit R "the rival container is still present"; finish 1; fi

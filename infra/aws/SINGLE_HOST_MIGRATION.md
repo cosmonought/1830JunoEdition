@@ -385,6 +385,17 @@ no Restart= setting), the recorder's `EXIT_CODE` / `EXIT_STATUS` / `SERVICE_RESU
 ("not the serving Elastic IP"), it serves nothing and POOL#p1 does not move. Without a reachable stale host that check is
 NOT EVALUATED (offline proof only).
 
+**Known limits (the COST-2C review's Low findings, NOT fixed; none can produce a false PASS):** "no server process after
+the reboot" is sampled every 5 s (a process that lived between samples is caught only if it took the pool); the F9b fence
+poll may end before ExecStopPost ran (NOT EVALUATED, never PASS); the reboot is `nohup ... systemctl reboot` and may be
+killed with the SSM command (then F8 FAILs / F9b is NOT EVALUATED); only `/etc/systemd/system/gs-server.service.d` is
+listed for foreign drop-ins (the effective `Restart=` / `RestartPreventExitStatus=` / gs-exit-hold are checked); the
+rival uses the server's memory limit on a 2 GB host (an OOM kill shows as a FAIL); a lost renew answer reads as a lost
+lock (the drill stops, the lock expires); the operator role in Terraform has no SSM / EC2 grants (the drill needs
+credentials that have them); host command output is printed before the evidence's secret refusal; and
+`replacement-after` stays NOT EVALUATED unless a stale host is reachable over SSM (the destroy-before-create
+replacement normally leaves none).
+
 **Owner validation:** `powershell -ExecutionPolicy Bypass -File .\infra\aws\single-host\run-cost2c-owner-gate.ps1`
 (the complete COST-2C sweep; one log under `evidence\owner-gates\`).
 

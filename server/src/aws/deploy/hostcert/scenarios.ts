@@ -42,7 +42,8 @@ import { authorityEvidence, judgeOwnershipMoved, judgeOwnershipUnchanged, judgeQ
 import { acquireLock, releaseLock, renewLock, type LockHolder } from "./drillLock";
 import { exitOf, hostOpProblem, keyed, parseHostOutput, rivalName, textsOf, type HostLine, type HostOp } from "./hostOps";
 import { down, foreignDropIns, judgeExit, judgeUnit, latestBanner, nRestarts, ourDropIn, parseObservation, rivals, runningServer, serverContainers, serving, type ExitExpectation, type HostState } from "./hostState";
-import { isLiveWorld, type HostCertWorld } from "./transport";
+import type { HostCertWorld } from "./transport";
+import { isLiveWorld } from "./awsCliTransport";
 import type { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import type { GenerationEvidence } from "../staging/recovery";
 import { judgeGeneration } from "../staging/recovery";
@@ -187,6 +188,10 @@ class Drill {
   readonly facts: Record<string, unknown> = {};
   lock: LockHolder | null = null;
   lockLost = false;
+  /** Writer tasks the drill may legitimately see: the host's own processes (its banners) and, in F9b, the drill's rival. */
+  readonly knownTasks = new Set<string>();
+  /** Review R1: a HOLD on this host may be cleared by the drill ONLY when the drill itself caused it (F9b's proven fence). */
+  drillCausedHold = false;
   phase: Phase = "precheck";
   readonly timing: Timing;
   readonly live: boolean;
@@ -386,6 +391,7 @@ async function precheck(d: Drill): Promise<Baseline | null> {
   d.add(judgeSingleWriter(authority, { label: "baseline writer", pool: input.pool, environment: input.environment, generation: input.generation, task: bannerOk ? (banner as { task: string }).task : null, requireReady: true, now: d.now }));
   d.add(judgeQuiet(authority, { money: spec.quiet, relayQueue: spec.quiet }));
   if (d.checks.precheck.some((c) => c.status !== "pass")) return null;
+  d.knownTasks.add((banner as { task: string }).task);
   return { state, authority, task: (banner as { task: string }).task };
 }
 
@@ -417,6 +423,7 @@ async function judgeServingAgain(d: Drill, label: string, sinceMs: number, befor
   }
   const s = wait.state;
   const banner = latestBanner(s, secondsOf(sinceMs) - 5) as NonNullable<ReturnType<typeof latestBanner>>;
+  d.knownTasks.add(banner.task);
   d.add(passed(`${label}: the service is serving again`, `ready; new process ${banner.task}`));
   d.add(decide(`${label}: a new process`, banner.task !== oldTask, `${oldTask} -> ${banner.task}`, `the banner still names ${oldTask}`));
   d.add(decide(`${label}: no HOLD`, !s.hold.present, "no HOLD", `a HOLD exists: ${String(s.hold.text)}`));
@@ -443,8 +450,52 @@ async function installRecorder(d: Drill): Promise<boolean> {
 
 /** Cleanup: the recorder removed (its observations were already captured); a failure is a cleanup FAIL. */
 async function removeRecorder(d: Drill): Promise<void> {
+  if (d.lockLost || !(await d.keepLock())) {
+    d.add(failed("cleanup: the recorder removed", "the drill lock is not this run's: NOT removed (no change) -- remove gs-server.service.d/90-gs-cert-*.conf by hand"));
+    return;
+  }
   const lines = await d.host("remove the ExecStopPost recorder", { kind: "recorder-remove", run: d.input.run });
   d.add(lines === null ? failed("cleanup: the recorder removed", "the removal's outcome is unknown: check the host (gs-server.service.d/90-gs-cert-*.conf) by hand") : decide("cleanup: the recorder removed", exitOf(lines) === 0, "drop-in, recorder and observations removed; daemon reloaded", `exit ${String(exitOf(lines))}`));
+}
+
+/**
+ * Review R1 / R4: may the drill run gs-deploy (which CLEARS a HOLD and TAKES the pool) now? Only when a fresh observation
+ * shows docker readable and NO rival container, any HOLD is one the drill itself caused (F9b's proven fence), exactly one
+ * host instance exists, the lock is still this run's, and the current pool writer is a process the drill knows -- this
+ * host's own (its banners) or the drill's rival. Anything else: no deploy, FAIL, the operator decides.
+ */
+async function deployGate(d: Drill, label: string, sinceMs: number): Promise<boolean> {
+  if (!(await d.keepLock())) {
+    d.add(failed(`${label}: gs-deploy allowed`, "the drill lock is not this run's: no deploy"));
+    return false;
+  }
+  const s = await d.observe(`${label}: before gs-deploy`, sinceMs);
+  if (s === null) {
+    d.add(failed(`${label}: gs-deploy allowed`, "the host could not be observed (docker unreadable, or the read failed): no deploy over an unknown state"));
+    return false;
+  }
+  for (const b of s.banners) d.knownTasks.add(b.task);
+  if (rivals(s).length > 0) {
+    d.add(failed(`${label}: gs-deploy allowed`, `a rival container still exists (${rivals(s).map((r) => r.name).join(", ")}): no deploy beside a second writer`));
+    return false;
+  }
+  if (s.hold.present && !d.drillCausedHold) {
+    d.add(failed(`${label}: gs-deploy allowed`, `the host is on HOLD (${String(s.hold.text)}) and the drill did NOT cause it: something else took the pool or moved APPGEN -- NOT cleared; the operator investigates`));
+    return false;
+  }
+  const fleet = await d.deps.world.fleet.hostInstances(d.input.environment);
+  if (!fleet.ok || fleet.value.filter((i) => i.state !== "terminated").length !== 1) {
+    d.add(failed(`${label}: gs-deploy allowed`, `the fleet is ${fleet.ok ? `${fleet.value.length} instance(s)` : `unreadable (${fleet.detail})`}: no deploy`));
+    return false;
+  }
+  const a = await d.authority(`${label}: before gs-deploy`);
+  const w = writerOf(a).task;
+  if (w === null || !d.knownTasks.has(w)) {
+    d.add(failed(`${label}: gs-deploy allowed`, `the pool writer is ${w === null ? "unreadable" : `${w}, a process the drill does not know`}: no deploy (it would fence it)`));
+    return false;
+  }
+  d.add(passed(`${label}: gs-deploy allowed`, `no rival, ${s.hold.present ? "the drill's own HOLD" : "no HOLD"}, one host, writer ${w} known`));
+  return true;
 }
 
 /**
@@ -458,13 +509,16 @@ async function ensureServing(d: Drill, label: string, sinceMs: number): Promise<
     d.add(passed(`${label}: the service serves`, "no recovery needed"));
     return s;
   }
-  if (s !== null && rivals(s).length > 0) {
+  if (d.lockLost) {
+    d.add(failed(`${label}: recovery`, "the drill lock is no longer this run's: cleanup makes NO change (observed only) -- the operator recovers the host (remove gs-cert-rival-*, then gs-deploy)"));
+    return s;
+  }
+  if (s !== null && rivals(s).length > 0 && (await d.keepLock())) {
     const r = await d.host(`${label}: remove the rival`, { kind: "rival-stop", run: d.input.run });
     d.add(r === null || exitOf(r) !== 0 ? failed(`${label}: the rival removed`, "the rival container could not be removed: remove gs-cert-rival-* by hand, then gs-deploy") : passed(`${label}: the rival removed`, "gs-cert-rival stopped and gone"));
   }
-  const fleet = await d.deps.world.fleet.hostInstances(d.input.environment);
-  if (!fleet.ok || fleet.value.filter((i) => i.state !== "terminated").length !== 1) {
-    d.add(failed(`${label}: recovery`, `the service is not serving and the fleet is ${fleet.ok ? `${fleet.value.length} instance(s)` : `unreadable (${fleet.detail})`}: NOT recovered automatically -- the operator investigates, then gs-deploy`));
+  if (!(await deployGate(d, label, sinceMs))) {
+    d.add(failed(`${label}: recovery`, "the service is not serving and recovery is not safe: NOT recovered automatically -- the operator investigates, then gs-deploy"));
     return s;
   }
   const lines = await d.host(`${label}: gs-deploy the same release`, { kind: "deploy", run: d.input.run, digest: d.input.digest, build: d.input.build });
@@ -530,6 +584,7 @@ async function gracefulStop(d: Drill, base: Baseline): Promise<void> {
     d.add(decide("F7: ExecMainCode / ExecMainStatus = exited 0", after.props.ExecMainCode === "1" && after.props.ExecMainStatus === "0", "exited 0", `ExecMainCode ${after.props.ExecMainCode} ExecMainStatus ${after.props.ExecMainStatus}`));
   }
   d.phase = "mutation";
+  if (!(await deployGate(d, "F7 redeploy", tStop))) return;
   const tDeploy = d.now;
   await d.mutate("gs-deploy the same digest", { kind: "deploy", run: d.input.run, digest: d.input.digest, build: d.input.build });
   d.phase = "observation";
@@ -654,6 +709,8 @@ async function duplicateFence(d: Drill, base: Baseline): Promise<void> {
   d.add(judgeSingleWriter(a1, writerExpect(d, "F9b rival writer", null, false)));
   d.add(judgeOwnershipMoved("F9b fence", base.authority, a1));
   d.add(decide("F9b: the new writer is not the incumbent", rivalTask !== null && rivalTask !== base.task, `rival ${String(rivalTask)}`, `the writer is ${String(rivalTask)}`));
+  if (rivalTask !== null && rivalTask !== base.task) d.knownTasks.add(rivalTask);
+  d.drillCausedHold = fenceExit && rivalTask !== null && rivalTask !== base.task && a1.pool.state === "ok";
   if (!fenceExit) d.add(unknown("F9b: the HOLD steps (refusals, reboot, deploy)", "the incumbent's exit was not PROVEN 3/5 (see above): the HOLD recovery steps are not run -- NOT EVALUATED, and cleanup recovers the host"));
   else {
     /* 4. The HOLD refuses an ordinary preflight and start. */
@@ -664,7 +721,7 @@ async function duplicateFence(d: Drill, base: Baseline): Promise<void> {
     d.phase = "mutation";
     const start = await d.mutate("systemctl start on HOLD", { kind: "start-attempt", run: input.run }, (c) => c !== 0 && c !== 90);
     d.phase = "observation";
-    if (start !== null) d.add(decide("F9b: an ordinary start is refused on HOLD", keyed(start, "server_container") !== "running" && keyed(start, "active_state") !== "active", `active ${String(keyed(start, "active_state"))}, container ${String(keyed(start, "server_container"))}`, `after systemctl start: active ${String(keyed(start, "active_state"))}, container ${String(keyed(start, "server_container"))}`));
+    if (start !== null) d.add(decide("F9b: an ordinary start is refused on HOLD", keyed(start, "server_container") === "absent" && keyed(start, "active_state") !== "active", `active ${String(keyed(start, "active_state"))}, container ${String(keyed(start, "server_container"))}`, `after systemctl start: active ${String(keyed(start, "active_state"))}, container ${String(keyed(start, "server_container"))}`));
     const a2 = await d.authority("F9b after the refused start");
     d.add(judgeOwnershipUnchanged("F9b refused start", a1, a2));
     /* 5. The rival leaves; 6. REBOOT: the HOLD survives, nothing starts, nothing takes the pool. */
@@ -703,6 +760,7 @@ async function duplicateFence(d: Drill, base: Baseline): Promise<void> {
     }
     /* 7. A REFUSED deploy keeps the HOLD; 8. only the explicit gs-deploy clears it. */
     d.phase = "mutation";
+    if (!(await deployGate(d, "F9b before the deploy probes", tRival))) return void d.add(realHost(d, fenced.state));
     await d.mutate("a gs-deploy that cannot pull (refused)", { kind: "deploy-refused-probe", run: input.run, build: input.build }, (c) => c !== 0 && c !== 90);
     d.phase = "observation";
     const kept = await d.observe("F9b after the refused deploy", tRival);

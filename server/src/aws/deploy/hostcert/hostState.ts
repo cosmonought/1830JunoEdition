@@ -105,6 +105,8 @@ export function parseObservation(lines: readonly HostLine[]): { readonly ok: tru
     for (const name of REQUIRED_PROPS) if (props[name] === undefined) throw new Error(`systemd's ${name} is missing (systemctl show failed or answered partly)`);
     const docker = k("docker");
     if (docker !== "ok" && docker !== "failed") throw new Error("docker is neither ok nor failed");
+    /* Review R2: a failed `docker ps` lists NO container -- it must never read as "no gs-server, no rival". */
+    if (docker !== "ok") throw new Error("docker could not be read (the daemon is down or starting): the containers are UNKNOWN, never none");
     const containers: ContainerLine[] = [];
     for (const c of textsOf(lines, "C")) {
       const parts = c.split("|");

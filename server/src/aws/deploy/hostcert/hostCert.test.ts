@@ -17,7 +17,7 @@ import { describe, test } from "node:test";
 import type { DeployDeps } from "../commands";
 import { readGenerationEvidence } from "../staging/recovery";
 import { secretFindings, stableStringify, writeRecord } from "../staging/evidence";
-import { createCliFleetView, createSsmHostTransport, productionHostCertWorld, ssmCommandLine, type AwsCli } from "./awsCliTransport";
+import { createCliFleetView, createSsmHostTransport, isLiveWorld, productionHostCertWorld, ssmCommandLine, type AwsCli } from "./awsCliTransport";
 import { evidenceFileOf, expectedHostFiles, hostCertCommand } from "./commands";
 import { judgeQuiet, judgeSingleWriter, openMoneyState, readAuthority } from "./controlPlane";
 import { acquireLock, CLOCK_SKEW_MS, LOCK_PK, readLock, releaseLock, renewLock } from "./drillLock";
@@ -25,7 +25,7 @@ import { addMoneyGame, BUILD, DIGEST, EIP, fakeTable, FakeWorld, GAME_TABLE, INS
 import { HOST_FRAME, HOST_OP_KINDS, hostScript, parseHostOutput, recorderScript, type HostOp } from "./hostOps";
 import { expectedHold, judgeExit, judgeUnit, parseExit, parseObservation, type HostState } from "./hostState";
 import { runDrill, SCENARIOS, type DrillInput, type ReplacementBaseline, type Scenario } from "./scenarios";
-import { isLiveWorld, takeLiveBrand } from "./transport";
+
 import { REQUIRES_REAL_AL2023, verdictOf, type CertCheck } from "./verdict";
 
 const REPO = ((): string => {
@@ -183,6 +183,30 @@ describe("COST-2C: false PASS is impossible -- each fault FAILS, refuses or stay
   test("an ordinary crash is distinct from a fence: a fence-status exit in crash-restart => FAIL", () => expectFail("crash-restart", { crashStatus: 3 }, /an ordinary crash/));
   test("graceful stop that does not exit 0 => FAIL", () => expectFail("graceful-stop", { stopStatus: 143 }, /exited 0/));
 
+  test("REVIEW R1: an unexpected fence exit in F7 / F8 is NEVER cleared by the drill (no gs-deploy over a HOLD it did not cause)", async () => {
+    for (const [scenario, faults] of [["crash-restart", { crashStatus: 3 }], ["graceful-stop", { stopStatus: 3 }], ["graceful-stop", { stopStatus: 5 }]] as const) {
+      const { result, world } = await drill(scenario, faults);
+      assert.equal(result.verdict, "FAIL", show(result));
+      const host = world.hosts.get(INSTANCE);
+      assert.ok(host !== undefined && host.hold !== null, `${scenario}: the HOLD is kept`);
+      assert.ok(!host.log.includes("deploy"), `${scenario}: no gs-deploy ran (${host.log.join(",")})`);
+      assert.ok(failing(result, /gs-deploy allowed/));
+    }
+  });
+  test("REVIEW R4: the rival could not be removed => no gs-deploy beside it (scenario and cleanup), FAIL", async () => {
+    const { result, world } = await drill("duplicate-fence", { rivalStopFails: true });
+    assert.equal(result.verdict, "FAIL", show(result));
+    const host = world.hosts.get(INSTANCE);
+    assert.ok(host !== undefined && !host.log.includes("deploy") && !host.log.includes("deploy-refused-probe"), host?.log.join(","));
+    assert.ok(host !== undefined && host.hold !== null, "the HOLD is kept");
+  });
+  test("REVIEW R2: a docker read that failed is UNKNOWN, never 'no container'", () => {
+    const lines = ["K boot_id b", "K os_id amzn", "K os_version_id 2023", "K systemd_version systemd 252", "K instance_id i-0123456789abcdef0", "K public_ip 1.1.1.1", "K expected_ip 1.1.1.1", "K environment staging", "K release_digest d", "K release_build b", "K hold absent", "K readyz 000", "K docker failed", ...["ActiveState=failed", "SubState=failed", "Result=exit-code", "ExecMainCode=1", "ExecMainStatus=3", "NRestarts=0", "InvocationID=x", "UnitFileState=enabled"].map((p) => `P ${p}`)].map((l) => ({ tag: l[0], text: l.slice(2) }));
+    const parsed = parseObservation(lines);
+    assert.equal(parsed.ok, false);
+    const ok = parseObservation(lines.map((l) => (l.text === "docker failed" ? { tag: "K", text: "docker ok" } : l)));
+    assert.equal(ok.ok, true);
+  });
   test("missing exit-status observation (recorder silent) => NOT EVALUATED, never PASS", async () => {
     const { result } = await drill("duplicate-fence", { recorderSilent: true });
     assert.notEqual(result.verdict, "PASS");
@@ -206,7 +230,9 @@ describe("COST-2C: false PASS is impossible -- each fault FAILS, refuses or stay
     assert.equal(result.verdict, "FAIL", show(result));
     assert.ok(failing(result, /the drill lock is still this run's/));
     assert.ok(!(world.hosts.get(INSTANCE)?.log ?? []).includes("kill-container"), "no mutation after the lock was lost");
-    assert.equal(world.hosts.get(INSTANCE)?.dropIns.length, 0, "cleanup removed the recorder");
+    /* Review R3: with the lock reclaimed by another run, cleanup makes NO change (it would act inside another drill). */
+    assert.ok(failing(result, /cleanup: the recorder removed/));
+    assert.ok(!(world.hosts.get(INSTANCE)?.log ?? []).includes("recorder-remove") && !(world.hosts.get(INSTANCE)?.log ?? []).includes("deploy"));
   });
   test("a read failure of a mutation step => NOT EVALUATED (and cleanup still runs)", async () => {
     const { result, world } = await drill("crash-restart", { transportFails: new Set(["kill-container"]) });
@@ -686,8 +712,13 @@ EOF`);
     assert.equal((await fleet.hostInstances("staging")).ok, true);
     const world = { host, fleet, now: () => 0, sleep: async () => undefined };
     assert.equal(isLiveWorld(world), false, "a world over a stub CLI is never live");
-    assert.throws(() => takeLiveBrand(), /already taken/);
-    assert.equal(typeof productionHostCertWorld, "function");
+    /* Review R5: the production world is frozen with its parts; a copy with a swapped part is not live. */
+    const real = productionHostCertWorld("us-east-1");
+    assert.equal(isLiveWorld(real), true);
+    assert.ok(Object.isFrozen(real) && Object.isFrozen(real.host) && Object.isFrozen(real.fleet));
+    assert.throws(() => { (real as { host: unknown }).host = host; });
+    assert.equal(isLiveWorld({ ...real, host }), false);
+    assert.equal(isLiveWorld({ ...real }), false);
   });
 });
 
@@ -771,7 +802,7 @@ describe("COST-2C: source guards", () => {
     assert.deepEqual(spawners, ["aws/deploy/hostcert/awsCliTransport.ts"]);
     const t = code(path.join(SRC, "aws/deploy/hostcert/awsCliTransport.ts"));
     assert.ok(/execFile\("aws"/.test(t) && /shell: false/.test(t) && !/\bexec\(|spawn\(|shell: true/.test(t));
-    const branders = walk(SRC).filter((f) => /takeLiveBrand\(/.test(code(f)) && !/export function takeLiveBrand/.test(code(f))).map(rel);
+    const branders = walk(SRC).filter((f) => /LIVE\.add\(|takeLiveBrand/.test(code(f))).map(rel);
     assert.deepEqual(branders, ["aws/deploy/hostcert/awsCliTransport.ts"]);
   });
   test("the test support is reached by tests only; the hostcert code writes only the lock item; no --force anywhere", () => {

@@ -44,6 +44,8 @@ RECON-0's audit (`docs/RECON0_SOURCE_LINEAGE_2026-10-02.{md,json}`) is preserved
 exactly COST-2A's four `HostVerifier*`, operator + exactly JX-4C's `IdentityEvidenceRead` / `LedgerJournalQuery`, pinned
 to `iam.tf`; nothing else) and `migration-guard ledger-operator-journal` (7b; exactly `OperatorJournalQuery`). No ordinary
 app-stack apply before compute-none, for any reason. Proven against Terraform-made plans (moto). Details: RECON-1A record §3.
+**Superseded in one point by the RECON-1 7A HOTFIX (§13):** on the accepted pre-COST-1 state 7a's targets must also
+carry Terraform's required COST-1 move closure; the two policies stay the only mutations.
 
 ## 4. COST-2C integration
 
@@ -206,3 +208,39 @@ exactly the one evidence shape (no assignment) and import specifiers are normali
 emulation" is concluded only from an exec format error (any other probe failure is NOT RUN, failing the source gate).
 
 **Comprehensive validation: PENDING OWNER GATE** (the whole runner, rerun once at the new head).
+
+## 13. RECON-1 7A HOTFIX (`recon/recon-1-7a-target-moves`, from `ad135a0`) -- step 7a's Terraform target closure
+
+**Found by the real pre-apply gate:** the live starting-state verification passed and step 7b / host-create produced
+guarded PASS plans, but step 7a could not be planned: Terraform refused the two-target plan with "Moved resource
+instances excluded by targeting". The accepted state was written before COST-1, so `modules/app/moved.tf`'s thirteen
+moves are pending; the operator stopped rather than widen the targets. RECON-1A's contract ("exactly the two targets")
+was impossible there: its Terraform-made 7a fixture had been planned on a state that already carried COST-1's addresses.
+
+**Reproduced offline** (Terraform 1.16.5, hashicorp/aws 6.66.0, moto 5.2.3; no AWS account): the app stack applied to
+the mock, then turned into the pre-COST-1 shape (`terraform-real/reproduce-7a/pre_cost1_state.py`). Terraform's refusal
+names SIXTEEN addresses: the thirteen moved resources and three data sources COST-1 also gave `count`
+(`data.aws_iam_policy_document.{ecs_tasks_assume,execution,task}`, moved implicitly). Each is necessary (drop one:
+refused again, naming it); an indexed spelling is refused. With the eighteen targets the plan is 22 entries: the two
+policy updates, thirteen no-op moves, the two roles, ECR, both log groups and both target groups (no-ops); no ECS service.
+Applied to the mock, then re-planned: the two policies alone give "No changes", a step-14-shaped targeted plan has no
+move error, and the services stay desired 0 (the drift untouched).
+
+**The fix** (`planGuards.ts`, `migrationCommands.ts`): the move contract `COST1_SINGLETON_MOVES` is moved.tf block for
+block (pinned both ways: every `count = local.ecs_one` resource is moved; the data closure is exactly the data sources
+so gated). `judgeTargets` judges run.json's targets against the plan: COST-1's thirteen moves pending -> EXACTLY the two
+policies + the sixteen; none pending -> EXACTLY the two (the eighteen would be broader than Terraform requires); a
+duplicate, alias, missing or extra target, or an invalid move state, FAILS. The 7a gate also requires all thirteen moves
+or none, each its exact transition and a pure no-op (raw before == after, a prior object, no replace_paths / action_reason
+/ sensitivity / identity change); every entry inside Terraform's closure (dependencies no-op only; an ECS service, even as
+a no-op, FAILS); no data source deferred to apply. The allowlist is unchanged: the two policies stay the only mutations,
+each gaining exactly its pinned statements. Runbook step 7a carries the eighteen targets and the safety property;
+`recon1SevenATargets.test.ts` (38 tests, in `npm test` and the owner gate's RECON-1 authorization gate).
+
+**Focused review** (one pass): no High / Medium. Fixed: L1 (a "no-op" move judged only on normalised before / after;
+now on the raw entry, as above); L3 (runbook wording "never `module.app`" -> never the whole module). L2 recorded, not a
+risk: the plan cannot show whether the three data moves are pending; the closure requires them with the managed moves
+(COST-1 introduced them together) -- on a hand-split state they would be locally rendered, plan-time reads only.
+
+Validation here: build (typecheck); `recon1SevenATargets` 38/38, `recon1AuthorizationGates` + `cost2bMigrationGuards`
+214/214. Nothing applied or deployed; no AWS contact. **Comprehensive validation: PENDING OWNER GATE.**

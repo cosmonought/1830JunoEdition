@@ -216,6 +216,9 @@ export interface PlannedChange {
   readonly importing: boolean;
   readonly moduleAddress: string | null;
   readonly providerName: string | null;
+  /** The entry exactly as the plan wrote it (RECON-1 7A HOTFIX: a move is judged on its raw before / after, sensitivity,
+   *  identity, replace_paths and action_reason -- not only on the normalised fields above). */
+  readonly raw: Obj;
 }
 
 /** The address Terraform writes for (module, mode, type, name, index): what an entry's `address` must be. */
@@ -355,6 +358,7 @@ export function changesOf(plan: Json): PlannedChange[] {
         importing: change.importing !== undefined && change.importing !== null,
         moduleAddress: str(rc.module_address),
         providerName: str(rc.provider_name),
+        raw: rc,
       };
     });
 }
@@ -1624,6 +1628,23 @@ function appReadPolicyProblem(c: PlannedChange | undefined, expected: ReadonlyMa
 }
 
 /**
+ * RECON-1 7A HOTFIX (review L1): a no-op move must be visibly NOTHING but an address change, on the entry as written: the
+ * object exists before (a non-null object) and after is byte-equal (canonical), the sensitivity and identity markers are
+ * unchanged, and there is no replace_paths or action_reason (a no-op has neither). null = a pure move.
+ */
+function pureMoveProblem(entry: Obj): string | null {
+  const change = obj(entry.change);
+  const before = change.before;
+  if (typeof before !== "object" || before === null || Array.isArray(before)) return "no prior object";
+  if (canonical(before) !== canonical(change.after)) return "before and after differ";
+  if (canonical(change.before_sensitive) !== canonical(change.after_sensitive)) return "sensitivity changes";
+  if (canonical(change.before_identity) !== canonical(change.after_identity)) return "identity changes";
+  if (entry.replace_paths !== undefined && !(Array.isArray(entry.replace_paths) && entry.replace_paths.length === 0)) return "replace_paths present";
+  if (entry.action_reason !== undefined && entry.action_reason !== null) return `action_reason ${String(entry.action_reason)}`;
+  return null;
+}
+
+/**
  * RECON-1 7A HOTFIX: the COST-1 address moves a 7a plan carries. `pending` = all thirteen, each EXACTLY one reviewed
  * moved.tf transition (previous address -> address), each a pure state move (no-op, values unchanged, nothing imported);
  * `none` = no move at all (the state already carries the [0] addresses). Anything else -- a partial set, a duplicate, an
@@ -1645,7 +1666,7 @@ export function cost1MoveState(changes: readonly PlannedChange[]): { readonly st
     }
     if (seen.has(pair[0])) problems.push(`${what}: the move appears twice`);
     seen.add(pair[0]);
-    if (c.kind !== "no-op" || c.mode !== "managed" || c.importing || !same(c.before, c.after) || anyUnknown(c.afterUnknown)) problems.push(`${what}: the move also CHANGES the object -- only a no-op state-address move may accompany 7a`);
+    if (c.kind !== "no-op" || c.mode !== "managed" || c.importing || anyUnknown(c.afterUnknown) || pureMoveProblem(c.raw) !== null) problems.push(`${what}: the move also CHANGES the object -- only a no-op state-address move may accompany 7a${pureMoveProblem(c.raw) === null ? "" : ` (${pureMoveProblem(c.raw)})`}`);
   }
   if (problems.length === 0 && seen.size !== COST1_SINGLETON_MOVES.length) {
     const missing = COST1_SINGLETON_MOVES.filter(([from]) => !seen.has(from)).map(([from]) => `${m}${from}`);
@@ -1662,6 +1683,10 @@ export function cost1MoveState(changes: readonly PlannedChange[]): { readonly st
  *   - no move pending: EXACTLY the two policies (the closure would then be a BROADER set than Terraform requires).
  * A duplicate, an alias (an indexed or quoted spelling, a whole module), a missing or an extra address FAILS, as does a
  * plan whose moves are neither of those two states.
+ * The plan JSON cannot show whether the three DATA moves are pending (prior_state already shows them at [0]): the closure
+ * requires them together with the thirteen managed moves, as COST-1 introduced them together. On a hand-edited state with
+ * one half moved and not the other, the three data targets could be broader than Terraform needs -- harmless (locally
+ * rendered documents read at plan time, their dependencies already in the closure), and no such state is accepted here.
  */
 export function judgeTargets(gate: GateName, recorded: unknown, plan: Json): Check | null {
   const own = GATE_TARGETS[gate];

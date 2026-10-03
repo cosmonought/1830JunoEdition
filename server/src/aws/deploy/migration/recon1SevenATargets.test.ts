@@ -317,6 +317,26 @@ describe("RECON-1 7A HOTFIX (8, 9): an approved moved target must be the exact k
     rc(imported, LB).change.importing = { id: "arn:aws:elasticloadbalancing:x" };
     rejects(imported, /the move also CHANGES the object|nothing imported/);
   });
+  test("(8, review L1) a 'no-op' move with replace_paths / an action_reason / no prior object / non-object values / a sensitivity or identity change FAILS", () => {
+    const cases: Array<[(r: Obj) => void, RegExp]> = [
+      [(r) => Object.assign(r, { replace_paths: [["subnets"]], action_reason: "replace_because_tainted" }), /replace_paths present/],
+      [(r) => (r.action_reason = "replace_because_tainted"), /action_reason replace_because_tainted/],
+      [(r) => Object.assign(r.change, { before: null, after: null }), /no prior object/],
+      [(r) => Object.assign(r.change, { before: [1], after: [2] }), /no prior object/],
+      [(r) => Object.assign(r.change, { before: "x", after: {} }), /no prior object/],
+      [(r) => (r.change.after_sensitive = { ...r.change.before_sensitive, name: true }), /sensitivity changes/],
+      [(r) => (r.change.after_identity = { arn: "arn:aws:elasticloadbalancing:other" }), /identity changes/],
+    ];
+    for (const [mutate, why] of cases) {
+      const p = real();
+      mutate(rc(p, LB));
+      rejects(p, why);
+      targetsFail([...REAL_TARGETS], p, /neither none nor COST-1's thirteen/);
+    }
+    const ok = real();
+    rc(ok, LB).replace_paths = [];
+    passes(ok);
+  });
   test("(9) an unknown previous -> current pair FAILS: another source, another index, the game-table move, a swapped pair", () => {
     const cases: Array<[(p: Obj) => void, RegExp]> = [
       [(p) => (rc(p, LB).previous_address = `${A}.aws_lb.legacy`), /aws_lb\.legacy -> module\.app\.aws_lb\.this\[0\].*not one of modules\/app\/moved\.tf's thirteen/],

@@ -351,12 +351,14 @@ shows nothing: every later guard then judges its own change alone.
       first (step 2).
 
     Every command from the repository root, the host-deploy principal's profile, each output saved (`Tee-Object`):
-    1. `gs-host.ps1 -Command status -InstanceId i-01fe56536bf591382` -- `server` failed or inactive, `hold` none,
-       `digest` = the release above, `running_digest` none (the host-create `gs-health` prints an unanswered probe as
-       `000000`; the certified one prints `000`). Anything else: STOP.
+    1. `gs-host.ps1 -Command status -InstanceId i-01fe56536bf591382` -- EXPECTED to end `gs-host: REFUSED: the host
+       command ended Failed.`: `gs-health` exits non-zero while the server is not ready. Judge its JSON line: `server`
+       failed or inactive, `hold` none, `digest` = the release above, `running_digest` none (the host-create `gs-health`
+       prints an unanswered probe as `000000`; the certified one prints `000`). Any other JSON: STOP.
     2. Disarm: `gs-host.ps1 -Command stop -InstanceId i-01fe56536bf591382 -UntilDeploy` -- drains nothing (no server
-       runs), proves no `gs-server` container, and DISABLES the unit, so no reboot can start the server before step 5's
-       deploy (which enables it again).
+       runs), reports `stopped` (the host-create `gs-stop` asks `docker container inspect`; step 3's listing,
+       `gs_server_container=none`, is the proof) and DISABLES the unit, so no reboot can start the server before step 5's
+       deploy (which enables it again). The unit stays `failed` until step 5's `reset-failed`.
     3. Check, writing NOTHING, in this order -- `gs-lib.sh`, `gs-health`, `gs-preflight`:
        `gs-host.ps1 -Command install-script -InstanceId i-01fe56536bf591382 -HostScript <file> -Sha256 <certified> -ReplacesSha256 <replaces> -Check`.
        Each must print `live_owner=root:root`, `live_mode=755`, `live_sha256=<replaces>`, `server_state=inactive` (or

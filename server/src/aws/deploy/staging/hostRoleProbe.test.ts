@@ -500,7 +500,9 @@ describe("PHASE 1 REMAINDER F5 / F6: the REAL host-role-probe.sh (with the real 
 
 describe("PHASE 1 REMAINDER F5 / F6: the operator wrappers (static)", () => {
   const sh = fs.readFileSync(path.join(REPO, "infra/aws/single-host/gs-host.sh"), "utf8");
-  const ps1 = fs.readFileSync(path.join(REPO, "infra/aws/single-host/gs-host.ps1"), "utf8");
+  // gs-host.ps1 is not eol=lf-pinned (.gitattributes): a Windows checkout reads it CRLF. Its static assertions judge the
+  // source text, not its line endings. (gs-host.sh and the wrapper ARE pinned LF; the wrapper's LF-only check stands.)
+  const ps1 = fs.readFileSync(path.join(REPO, "infra/aws/single-host/gs-host.ps1"), "utf8").replace(/\r\n/g, "\n");
   const wrapper = fs.readFileSync(WRAPPER, "utf8");
 
   test("gs-host.sh role-probe: validates every argument and sends only the reviewed wrapper (no quote in the remote line)", () => {

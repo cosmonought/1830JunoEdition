@@ -50,7 +50,7 @@ section verbatim.
 | A6 / A7 / A13 alarms (L6-5B) | the five host alarms; `HostHealthProblems` = 0 (relayer unusable, escrow inactive and signer unavailable are all in it) |
 | optional `stage-cert ... --scenario replacement` | retired (ECS-only); not part of JX-1 |
 | operator = r2 (assumed post-L6-13) | operator = **`<RELAYER>`, the relayer the single host's Juno document names today** (see §0.3) |
-| KMS keys: 3 + `relayer-r2` + the jx1 pair = 6 | **3 + the jx1 pair = 5** (≤ `COST_BUDGET.json` `max_kms_keys` 6; +$2/month). **No other key is created** (Phase-2 key rotation is deferred: `PHASE2_DECISIONS.md` OD-P2-KR) |
+| KMS keys: 3 + `relayer-r2` + the jx1 pair = 6 | **3 + the jx1 pair = 5** (6 only if a `relayer-r2` key already exists; ≤ `COST_BUDGET.json` `max_kms_keys` 6; +$2/month). **No other key is created** (Phase-2 key rotation is deferred: `PHASE2_DECISIONS.md` OD-P2-KR) |
 | `JX1B_jx1b_plan_guard.py app ... --pools p1,p2` | `JX1B_jx1b_plan_guard.py app ... --pools=` (no pool: it then requires no service and refuses any) |
 
 ### 0.3 The operator / relayer (owner confirmation OD-P2-1)
@@ -290,7 +290,7 @@ python3 JX1B_jx1b_verify.py same <D>\current-before.json <D>\current-after.json 
 | A-13 | `verify --topology single-host` and `--part ledger` VERIFIED; `set-operator-plan` ALREADY + READY | 5.4e-g |
 | A-14 | Frontend pin exact; bundle names `<JX1>`, not `<CURRENT>`; browser config + stake section | §6 |
 | A-15 | The old contract unchanged | `same` → SAME |
-| A-16 | No unexpected AWS change: GO-1 guard ALLOWED; GO-3 app guard ALLOWED and single-host allowlist reviewed; all three stacks plan **0** afterwards; one host, same digest; **exactly 5 KMS signing keys** | guard records, 5.4h, `terraform output` |
+| A-16 | No unexpected AWS change: GO-1 guard ALLOWED; GO-3 app guard ALLOWED and single-host allowlist reviewed; all three stacks plan **0** afterwards; one host, same digest; the ledger holds the S0 signing keys **plus exactly the jx1 pair** (5, or 6 with a pre-existing `relayer-r2`) | guard records, 5.4h, `terraform output` |
 
 Record: Project `claude/JX1_LIVE_<date>.md` (the filled table and the evidence paths).
 

@@ -17,7 +17,7 @@ import { kmsDigestClientFor, ssmParameterSourceFor } from "../aws/deploy/wiring"
 /* LIVE-6 final convergence: L6-4's canonical READERS and startup rule, bound for the staging certification (never a
    second parser; the import guard admits exactly these names for this file), and L6-5A's one TASK# reader. */
 import { adoptionBindingProblem, generationMarkerProblem, readGenerationMarker } from "../aws/game/generationMarker";
-import { identityServingProblem, readIdentityRestore, readIdentityTableSelf } from "../aws/identity/dynamoIdentityStore";
+import { identityServingProblem, readIdentityRestore, readIdentityRole, readIdentityTableSelf } from "../aws/identity/dynamoIdentityStore";
 import { inspectIdentityRestore } from "../aws/identity/identityRestore";
 import { readAdoptionRecord, readAppGeneration } from "../aws/ledger/appGeneration";
 import { oldGenerationHeartbeatsAfter, readTaskStatus } from "../aws/runtime/taskHeartbeats";
@@ -31,6 +31,11 @@ import { readRelayerFence } from "../aws/ledger/dynamoSigningLedger";
 import { relayQueueState } from "../aws/deploy/relayerRotation";
 import { productionJunoChain } from "../aws/deploy/junoChain";
 import type { RotationReaders } from "../aws/deploy/staging/rotationProof";
+/* COST-2C: the mutating single-host certification drills (`aws/deploy/hostcert/`): the SAME readers as above, plus L5-4's
+   identity-writer role reader (read only); the host is reached through the AWS CLI (SSM Run Command), never a shell. */
+import { hostCertCommand, type HostCertDeps } from "../aws/deploy/hostcert/commands";
+import type { HostCertReaders } from "../aws/deploy/hostcert/controlPlane";
+import { productionHostCertWorld } from "../aws/deploy/hostcert/awsCliTransport";
 
 const deps: DeployDeps = {
   parameters: ssmParameterSourceFor(),
@@ -95,6 +100,16 @@ export const STAGING_ROTATION_READERS: RotationReaders = {
   relayQueue: (client, table, address) => relayQueueState(client, table, address),
 };
 
+/**
+ * COST-2C: `HostCertReaders` -- LIVE-6's rotation and recovery readers (above, unchanged) and L5-4's `readIdentityRole`
+ * (the identity table's ROLE#identity-writer item, strongly; read only).
+ */
+export const HOST_CERT_READERS: HostCertReaders = {
+  rotation: STAGING_ROTATION_READERS,
+  recovery: STAGING_RECOVERY_READERS,
+  identityRole: (client, table) => readIdentityRole(client, table).then((r) => (r === null ? null : { epoch: r.epoch, task: r.task, pool: r.pool, taken_at: r.taken_at })),
+};
+
 const staging: StagingDeps = {
   recovery: STAGING_RECOVERY_READERS,
   heartbeats: STAGING_HEARTBEATS,
@@ -126,11 +141,19 @@ const staging: StagingDeps = {
   },
 };
 
+/* COST-2C: the host drills -- the production world (the AWS CLI over SSM) is the ONLY live one. */
+const hostCert: HostCertDeps = {
+  world: (region) => productionHostCertWorld(region),
+  readers: HOST_CERT_READERS,
+  repository: staging.repository,
+};
+
 /* The CLI runs only as the entry (LIVE-6 final convergence: the DynamoDB Local suite imports the binding above). */
 if (require.main === module) {
   runDeployCommand(process.argv.slice(2), deps, {
     "stage-cert": (argv) => stageCertCommand(argv, deps, staging),
     "stage-probe": (argv) => stageProbeCommand(argv, deps, staging),
+    "host-cert": (argv) => hostCertCommand(argv, deps, hostCert),
   }).then(
     (code) => process.exit(code),
     (error) => {

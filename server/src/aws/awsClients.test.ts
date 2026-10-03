@@ -115,7 +115,8 @@ const STAGING_BINDING_NAMES: Readonly<Record<string, readonly string[]>> = Objec
   "aws/game/ownership": ["readPool"],
   "aws/game/relayerRole": ["readRelayerRole"],
   "aws/game/routing": ["readRouting"],
-  "aws/identity/dynamoIdentityStore": ["identityServingProblem", "readIdentityRestore", "readIdentityTableSelf"],
+  /* COST-2C: + L5-4's identity-writer role reader (the host drills' ownership evidence; a strong GetItem, read only). */
+  "aws/identity/dynamoIdentityStore": ["identityServingProblem", "readIdentityRestore", "readIdentityRole", "readIdentityTableSelf"],
   "aws/identity/identityRestore": ["inspectIdentityRestore"],
   "aws/ledger/appGeneration": ["readAdoptionRecord", "readAppGeneration"],
   "aws/ledger/dynamoSigningLedger": ["readRelayerFence"],

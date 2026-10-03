@@ -2535,8 +2535,10 @@ describe("L6-6R: the integration binding is explicit, and no default or fixture 
         assert.ok(!/startupRule\s*:/.test(text), `${rel(f)} fabricates L6-4's rule`);
       }
       if (/readGenerationEvidence\(|readIdentityRecovery\(/.test(text) && rel(f) !== "aws/deploy/staging/recovery.ts") {
-        assert.equal(rel(f), "aws/deploy/staging/commands.ts", `${rel(f)} reads the recovery evidence`);
-        for (const call of text.match(/read(GenerationEvidence|IdentityRecovery)\(([^,]+),/g) ?? []) assert.match(call, /\(staging\.recovery,/, call);
+        /* COST-2C: the host drills' precheck reads the generation evidence through the SAME bound readers (tools/awsDeploy.ts's
+           HOST_CERT_READERS.recovery = STAGING_RECOVERY_READERS), from its own live read -- never a fixture. */
+        assert.ok(rel(f) === "aws/deploy/staging/commands.ts" || rel(f) === "aws/deploy/hostcert/commands.ts", `${rel(f)} reads the recovery evidence`);
+        for (const call of text.match(/read(GenerationEvidence|IdentityRecovery)\(([^,]+),/g) ?? []) assert.match(call, rel(f) === "aws/deploy/hostcert/commands.ts" ? /\(hostReaders\?\.recovery,/ : /\(staging\.recovery,/, call);
       }
     }
   });

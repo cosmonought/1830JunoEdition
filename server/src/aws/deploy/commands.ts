@@ -65,6 +65,12 @@
 //       COST-2B (`migration/migrationCommands.ts`), OFFLINE: each dangerous Terraform step of
 //       infra/aws/SINGLE_HOST_MIGRATION.md judged from its saved plan (fail closed), and the NAT deletion's evidence.
 //
+//   host-cert <scenario> --run-id <run> --acknowledge-mutating-drill <scenario> ...
+//       COST-2C (`hostcert/commands.ts`), MUTATING, staging only: the single host's F7 (graceful-stop), F8 (crash-restart,
+//       reboot-restart), F9a (duplicate-preflight), F9b (duplicate-fence) and replacement certification drills, each
+//       precheck -> mutation -> observation -> cleanup -> postcheck -> evidence -> PASS / FAIL / NOT EVALUATED, under the
+//       staging drill lock. Dispatched by tools/awsDeploy.ts (it binds the readers and the SSM transport).
+//
 // Credentials: the SDK's default chain (the operator's profile or the pipeline's role -- the task's refusal of static
 // keys is the RUNTIME's rule, not this tool's). Regions: the runtime document's and the ARNs', never the environment's.
 // Nothing here prints a credential or a document's content; nothing but `bootstrap --apply` writes (and a migration
@@ -967,6 +973,7 @@ export const USAGE = [
   "  awsDeploy set-operator-plan --runtime-parameter <SSM ARN> --environment <env> --to-relayer <new> [--to-relayer-key <key ARN>]   (read-only: the admin's set_operator, never signed here)",
   "  awsDeploy stage-cert (prerequisite | certify) ...   LIVE-6 L6-6: the real-AWS staging certification (aws/deploy/staging/commands.ts)",
   "  awsDeploy stage-probe (task-role | edge | collect | flip-alarms | restore-alarms | restore-fencing) ...",
+  "  awsDeploy host-cert (graceful-stop | crash-restart | reboot-restart | duplicate-preflight | duplicate-fence | replacement-before | replacement-after) ...   COST-2C: the MUTATING single-host drills F7 / F8 / F9a / F9b / replacement (aws/deploy/hostcert/; staging only)",
   "  awsDeploy migration-guard (app-read-authorize | ledger-operator-journal | ledger-host-authorize | host-create | edge-cutover | ecs-rollback | compute-none | ledger-task-deauthorize | ecr-lifecycle | nat) ...   COST-2B / RECON-1A: offline plan / NAT evidence guards (aws/deploy/migration/)",
 ].join("\n");
 

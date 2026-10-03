@@ -49,14 +49,20 @@
                                util-linux-core (flock) and findutils; the module is copied inside and its files/bin made
                                0755 exactly as cloud-init installs them; the suite's own stubs stand in for docker /
                                systemctl / curl / aws (offline). Git Bash is NOT a substitute (no flock, no python3).
-    16  Image smoke            COST-1's tests/image-smoke.sh for linux/amd64 AND linux/arm64, OFFLINE with respect to AWS /
-                               ECR: `docker buildx build --load` of infra/docker/game-server.Dockerfile into a LOCAL,
-                               disposable tag (never --push, never an ECR login, never build-image.{sh,ps1}'s push path;
-                               BUILD_CA, if set, is passed as the build_ca secret as build-image.sh does), then the
-                               unchanged smoke script run from a pinned docker-cli container on the host network with the
-                               Docker socket (so its 127.0.0.1 health probe reaches the --network host container);
-                               the gate's own images and containers are removed afterwards. arm64 that cannot run here
-                               (no QEMU / binfmt) is NOT RUN, never PASS.
+    16  Image smoke            OFFLINE with respect to AWS / ECR: `docker buildx build --load` of
+        (amd64 run; arm64      infra/docker/game-server.Dockerfile for linux/amd64 AND linux/arm64 into LOCAL, disposable
+        build + architecture)  tags (never --push, never an ECR login, never build-image.{sh,ps1}'s push path; BUILD_CA, if
+                               set, is passed as the build_ca secret as build-image.sh does). For EACH platform: the build
+                               (check-arch-neutral.cjs runs inside it) and the ARCHITECTURE PROOF without executing
+                               anything -- image metadata = the platform AND the image's own /usr/local/bin/node an ELF of
+                               that machine (docker create + docker cp; AArch64 = 183, x86-64 = 62). linux/amd64 then runs
+                               COST-1's unchanged tests/image-smoke.sh (REQUIRED) from a pinned docker-cli container on the
+                               host network with the Docker socket. The gate's images and containers are removed after.
+    16b ARM64 runtime smoke    OWNER-GATE FIX 1: the linux/arm64 image-smoke.sh where this machine can EXECUTE arm64
+                               (emulation) -> PASS / FAIL. Without emulation it is DEFERRED -- never PASS, never inferred
+                               from amd64 -- to the REQUIRED live Graviton gate (SINGLE_HOST_MIGRATION.md step 12b, `gs-host
+                               arm64-smoke`, before any edge cutover; `migration-guard edge-cutover` refuses the cutover
+                               without its PASS), and ONLY when gate 16 passed and that live gate is in the runbook / guard.
     17  DynamoDB Local         the full `npm run test:dynamodb-local` corpus (JX-4B's money evidence and COST-2C's drill
                                lock -- hostCertLock.dynamoLocal.test.js -- are part of it). Starts ONE throw-away
                                `amazon/dynamodb-local:3.3.1` container (the repository's documented procedure) and
@@ -65,11 +71,13 @@
     18  Full server suite      the complete server `npm test` corpus (LAST: the longest gate; OWNER-RUN ONLY)
 
   Nothing here touches AWS, Juno or any remote resource. The script never edits, cleans, resets or stashes the tree.
-  Exit code: 0 only when EVERY gate passed; 1 otherwise (a FAIL, a BLOCKED gate after a failed build, or a NOT RUN
-  gate whose prerequisite -- npm, Terraform, Docker Desktop (with buildx and arm64 emulation), Git Bash, git -- is missing).
+  Exit code: 0 only when the OWNER SOURCE GATE passed -- EVERY gate PASS, the arm64 runtime smoke alone allowed to be
+  DEFERRED (see 16b); 1 otherwise (a FAIL, a BLOCKED gate after a failed build, or a NOT RUN gate whose prerequisite --
+  npm, Terraform, Docker Desktop (with buildx), Git Bash, git -- is missing). arm64 emulation is NOT required.
   Prerequisites: node + npm, git, Git Bash, Terraform >= 1.10, Docker Desktop running (Linux containers) with network
   access to public.ecr.aws, the npm registry and the Amazon Linux 2023 package repositories.
-  It certifies the SOURCE only: the live AL2023 / systemd contract stays NOT EVALUATED until the real-host drill.
+  It certifies the SOURCE only: the summary says OWNER SOURCE GATE PASS / FAIL and LIVE HOST CERTIFICATION PENDING -- the
+  arm64 runtime smoke on the real Graviton host and the live AL2023 / systemd drills stay prerequisites of the cutover.
 
 .PARAMETER Only
   Run only these gates (names as in the summary table, e.g. -Only Build,"COST-2C targeted"). The environment section
@@ -179,6 +187,41 @@ function Harness-Counts([object[]]$Lines, [string]$Pattern) {
   foreach ($line in $Lines) { if ($line -match $Pattern) { $hit = @([int]$Matches[1], [int]$Matches[2]) } }
   return $hit
 }
+
+# OWNER-GATE FIX 1: the ELF machine of one file inside an image, WITHOUT running anything (docker create + docker cp: no
+# emulation needed) -- 183 = AArch64, 62 = x86-64; $null when it cannot be read or is not a 64-bit little-endian ELF.
+function Image-ElfMachine([string]$Image, [string]$Platform, [string]$PathInImage) {
+  $code = Invoke-Logged $Docker @('create', '--platform', $Platform, $Image) $RepoRoot
+  if ($code -ne 0) { return $null }
+  $cid = [string]($script:LastOutput | Where-Object { $_ -match '^[0-9a-f]{64}$' } | Select-Object -Last 1)
+  if ($cid -eq '') { return $null }
+  $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('recon1-elf-' + [guid]::NewGuid().ToString('N'))
+  try {
+    $code = Invoke-Logged $Docker @('cp', "${cid}:$PathInImage", $tmp) $RepoRoot
+    if ($code -ne 0 -or -not (Test-Path $tmp)) { return $null }
+    $h = New-Object byte[] 20
+    $fs = [System.IO.File]::OpenRead($tmp)
+    try { $n = $fs.Read($h, 0, 20) } finally { $fs.Dispose() }
+    if ($n -ne 20 -or $h[0] -ne 0x7F -or $h[1] -ne 0x45 -or $h[2] -ne 0x4C -or $h[3] -ne 0x46 -or $h[4] -ne 2 -or $h[5] -ne 1) { return $null }
+    return ([int]$h[18] + 256 * [int]$h[19])
+  } finally {
+    Invoke-Logged $Docker @('rm', '-f', $cid) $RepoRoot | Out-Null
+    Remove-Item -Force -ErrorAction SilentlyContinue $tmp
+  }
+}
+
+# OWNER-GATE FIX 1: an arm64 runtime check may be DEFERRED (never PASSED) only when the migration carries the mandatory,
+# fail-closed live Graviton gate: the runbook's step 12b (gs-host arm64-smoke) BEFORE the edge cutover, and the cutover
+# guard's refusal without its PASSING output.
+function Live-Arm64-Gate-Present {
+  $book = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'infra/aws/SINGLE_HOST_MIGRATION.md'))
+  $guard = [System.IO.File]::ReadAllText((Join-Path $RepoRoot 'server/src/aws/deploy/migration/migrationCommands.ts'))
+  return (($book -match '(?m)^12b\. ') -and ($book -match 'gs-host\.ps1 -Command arm64-smoke') -and ($book -match 'migration-guard edge-cutover [^\r\n]*--arm64-live-smoke') -and ($guard -match 'the edge cutover needs --arm64-live-smoke'))
+}
+$script:Arm64Runtime = 'NOT RUN'
+$script:Arm64RuntimeDetail = 'the image gate did not reach the arm64 runtime check'
+$ImageGateName = 'Image smoke (amd64 run; arm64 build + architecture)'
+$Arm64RuntimeGateName = 'ARM64 runtime smoke'
 
 # ---------------------------------------------------------------------------------------------------------------------
 # Running one command: echoed first, stdout + stderr into the log AND the console, its exit code returned
@@ -378,29 +421,51 @@ Add-Gate 'Single-host scripts' $false {
   return @{ Exit = $code }
 } 'docker run --rm -v <repo>:/repo:ro <amazonlinux:2023@sha256> : dnf util-linux-core findutils; bash host-scripts.test.sh on a 0755 copy of the module   (genuine AL2023 userspace; offline stubs)'
 
-Add-Gate 'Image smoke' $false {
+# OWNER-GATE FIX 1: the image gate is the SOURCE proof. linux/amd64: build + metadata + the full runtime smoke (required).
+# linux/arm64: the BUILD (the Dockerfile's build stage runs on the builder's platform and the runtime stage only COPIES, so
+# no emulation is needed) + the ARCHITECTURE PROOF without executing anything -- image metadata linux/arm64 AND the image's
+# own node binary an AArch64 ELF (docker create + docker cp) -- with the architecture-neutral dependency guard inside the
+# build (check-arch-neutral.cjs). The arm64 EXECUTION is the next gate's: run here only when this machine can (emulation),
+# otherwise DEFERRED to the required live Graviton gate -- never PASS, never inferred from amd64.
+Add-Gate $ImageGateName $false {
   $why = Docker-Problem
   if ($null -ne $why) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = $why } }
   $code = Invoke-Logged $Docker @('buildx', 'version') $RepoRoot
   if ($code -ne 0) { return @{ Status = 'NOT RUN'; Exit = $code; Reason = 'docker buildx is not available (Docker Desktop ships it)' } }
   $results = [ordered]@{}
-  $worst = 0
-  $notRun = @()
+  $problems = @()
   $tags = @()
+  $script:Arm64Runtime = 'NOT RUN'; $script:Arm64RuntimeDetail = 'the arm64 build / architecture proof did not complete'
   try {
     foreach ($platform in @('linux/amd64', 'linux/arm64')) {
       $arch = $platform.Substring(6)
-      # Can this platform's containers RUN here (arm64 on x86 needs Docker Desktop's QEMU / binfmt)?
-      $c = Invoke-Logged $Docker @('run', '--rm', '--platform', $platform, '--network', 'none', '--entrypoint', 'node', $NodeLinuxImage, '-p', 'process.arch') $RepoRoot
-      $want = if ($arch -eq 'amd64') { 'x64' } else { 'arm64' }
-      if ($c -ne 0 -or -not (($script:LastOutput -join ' ') -match "\b$want\b")) { $notRun += "$platform cannot run here (no emulation)"; $results[$platform] = 'NOT RUN'; continue }
       $tag = ("recon1-owner-gate-smoke:$Stamp-$arch").ToLower()
       $tags += $tag
       $buildArgs = @('buildx', 'build', '--platform', $platform, '-f', 'infra/docker/game-server.Dockerfile', '--label', "org.opencontainers.image.revision=$Head", '--provenance=false', '--load', '-t', $tag)
       if (-not [string]::IsNullOrEmpty($env:BUILD_CA)) { $buildArgs += @('--secret', "id=build_ca,src=$($env:BUILD_CA)") }
       $buildArgs += '.'
       $c = Invoke-Logged $Docker $buildArgs $RepoRoot
-      if ($c -ne 0) { $worst = $c; $results[$platform] = "BUILD FAILED (exit $c)"; continue }
+      if ($c -ne 0) { $problems += "$platform BUILD FAILED (exit $c)"; $results["$platform build"] = "FAILED (exit $c)"; continue }
+      # the architecture proof, without running the image
+      $c = Invoke-Logged $Docker @('image', 'inspect', '-f', '{{.Os}}/{{.Architecture}} {{.Id}}', $tag) $RepoRoot
+      $meta = [string]($script:LastOutput | Select-Object -Last 1)
+      if ($c -ne 0 -or -not $meta.StartsWith("$platform ")) { $problems += "$platform ARCHITECTURE PROOF FAILED (image metadata '$meta')"; $results["$platform build"] = "PASS; architecture proof FAILED ($meta)"; continue }
+      $wantMachine = if ($arch -eq 'amd64') { 62 } else { 183 }
+      $machine = Image-ElfMachine $tag $platform '/usr/local/bin/node'
+      if ($machine -ne $wantMachine) { $problems += "$platform ARCHITECTURE PROOF FAILED (the image's node is ELF machine $machine, not $wantMachine)"; $results["$platform build"] = "PASS; architecture proof FAILED (node ELF machine $machine)"; continue }
+      $results["$platform build"] = "PASS; architecture proof PASS (image $($meta.Split(' ')[0]), $($meta.Split(' ')[1]); node ELF machine $machine)"
+      # Can this platform's containers RUN here (arm64 on x86 needs Docker Desktop's QEMU / binfmt)?
+      $c = Invoke-Logged $Docker @('run', '--rm', '--platform', $platform, '--network', 'none', '--entrypoint', 'node', $NodeLinuxImage, '-p', 'process.arch') $RepoRoot
+      $want = if ($arch -eq 'amd64') { 'x64' } else { 'arm64' }
+      $probeText = ($script:LastOutput -join ' ')
+      $runnable = ($c -eq 0 -and ($probeText -match "\b$want\b"))
+      if (-not $runnable) {
+        $probeLast = [string]($script:LastOutput | Select-Object -Last 1)
+        if ($arch -eq 'amd64') { $problems += "linux/amd64 cannot run here (probe exit $c`: $probeLast): the REQUIRED amd64 runtime smoke was NOT RUN"; $results['linux/amd64 runtime'] = 'NOT RUN' }
+        elseif ($probeText -match 'exec format error') { $script:Arm64Runtime = 'DEFERRED'; $script:Arm64RuntimeDetail = 'linux/arm64 cannot execute on this machine (exec format error: no emulation): the runtime smoke belongs to the REQUIRED live Graviton gate'; $results['linux/arm64 runtime'] = 'DEFERRED TO REQUIRED LIVE GRAVITON GATE (exec format error: no emulation)' }
+        else { $script:Arm64Runtime = 'NOT RUN'; $script:Arm64RuntimeDetail = "the linux/arm64 runnable probe failed for another reason (exit $c`: $probeLast) -- not 'no emulation', so nothing is deferred"; $results['linux/arm64 runtime'] = "NOT RUN (probe exit $c)" }
+        continue
+      }
       $runner = ("recon1-owner-gate-smoke-runner-$Stamp-$arch").ToLower()
       $cmd = 'apk add --no-cache -q bash curl coreutils >/dev/null 2>&1 || exit 97; exec bash /repo/infra/aws/modules/single-host/tests/image-smoke.sh ' + $tag + ' ' + $platform
       try {
@@ -409,20 +474,37 @@ Add-Gate 'Image smoke' $false {
       } finally {
         Invoke-Logged $Docker @('rm', '-f', $runner, "gs-smoke-$arch") $RepoRoot | Out-Null
       }
-      if ($c -eq 97) { $notRun += "$platform smoke runner could not install bash / curl"; $results[$platform] = 'NOT RUN (runner)'; continue }
       $counts = Harness-Counts $out ('^\[' + [regex]::Escape($platform) + '\] (\d+) passed, (\d+) failed$')
-      if ($null -eq $counts) { $worst = 1; $results[$platform] = "no totals (exit $c)"; continue }
-      $results[$platform] = "$($counts[0]) passed, $($counts[1]) failed (exit $c)"
-      if ($c -ne 0 -or $counts[1] -ne 0 -or $counts[0] -lt 7) { $worst = if ($c -ne 0) { $c } else { 1 } }
+      $verdict = if ($c -eq 97) { 'NOT RUN (the smoke runner could not install bash / curl)' } elseif ($null -eq $counts) { "FAIL (no totals, exit $c)" } elseif ($c -ne 0 -or $counts[1] -ne 0 -or $counts[0] -lt 7) { "FAIL ($($counts[0]) passed, $($counts[1]) failed, exit $c)" } else { "PASS ($($counts[0]) passed, 0 failed)" }
+      $results["$platform runtime"] = $verdict
+      if ($arch -eq 'amd64') { if (-not $verdict.StartsWith('PASS')) { $problems += "linux/amd64 runtime smoke $verdict" } }
+      else { $script:Arm64Runtime = if ($verdict.StartsWith('PASS')) { 'PASS' } elseif ($verdict.StartsWith('FAIL')) { 'FAIL' } else { 'NOT RUN' }; $script:Arm64RuntimeDetail = "linux/arm64 runtime smoke (emulated here): $verdict" }
     }
   } finally {
     foreach ($t in $tags) { Invoke-Logged $Docker @('image', 'rm', '-f', $t) $RepoRoot | Out-Null }
   }
   $script:Facts['image_smoke'] = $results
-  if ($worst -ne 0) { return @{ Status = 'FAIL'; Exit = $worst; Reason = (($results.Keys | ForEach-Object { "${_}: $($results[$_])" }) -join '; ') } }
-  if ($notRun.Count -gt 0) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = ($notRun -join '; ') } }
+  if ($problems.Count -gt 0) { return @{ Status = 'FAIL'; Exit = 1; Reason = ($problems -join '; ') } }
   return @{ Exit = 0 }
-} 'docker buildx build --load (LOCAL tags; no push, no ECR login) of game-server.Dockerfile for linux/amd64 and linux/arm64; image-smoke.sh for each from a pinned docker-cli runner (host network + Docker socket); images removed after'
+} 'docker buildx build --load (LOCAL tags; no push, no ECR login) of game-server.Dockerfile for linux/amd64 and linux/arm64; image metadata + the node ELF machine of each (docker create/cp: no execution); image-smoke.sh for amd64 (REQUIRED) from a pinned docker-cli runner (host network + Docker socket); images removed after'
+
+# OWNER-GATE FIX 1: the arm64 EXECUTION proof. PASS only if this machine really executed the arm64 smoke; DEFERRED (not
+# PASS) only when the arm64 BUILD + ARCHITECTURE proof and the amd64 runtime smoke passed AND the migration carries the
+# mandatory live Graviton gate (step 12b before the edge cutover; the cutover guard refuses without its PASS).
+Add-Gate $Arm64RuntimeGateName $false {
+  $image = $Gates | Where-Object { $_.Name -eq $ImageGateName } | Select-Object -First 1
+  if ($null -eq $image -or $image.Status -ne 'PASS') { return @{ Status = 'BLOCKED'; Exit = $null; Reason = "the image gate did not PASS (arm64 build / architecture proof / amd64 runtime smoke): nothing may be deferred" } }
+  switch ($script:Arm64Runtime) {
+    'PASS' { return @{ Exit = 0; Reason = $script:Arm64RuntimeDetail } }
+    'FAIL' { return @{ Status = 'FAIL'; Exit = 1; Reason = $script:Arm64RuntimeDetail } }
+    'DEFERRED' {
+      if (-not (Live-Arm64-Gate-Present)) { return @{ Status = 'FAIL'; Exit = 1; Reason = 'the arm64 runtime smoke cannot run here and the migration has NO mandatory live Graviton gate (runbook step 12b + the edge-cutover guard): deferral refused' } }
+      Log '    ARM64 runtime smoke: DEFERRED TO REQUIRED LIVE GRAVITON GATE (SINGLE_HOST_MIGRATION.md step 12b, gs-host arm64-smoke; migration-guard edge-cutover refuses the cutover without its PASS)' 'Yellow'
+      return @{ Status = 'DEFERRED'; Exit = $null; Reason = 'ARM64 runtime smoke: DEFERRED TO REQUIRED LIVE GRAVITON GATE (step 12b; not PASS)' }
+    }
+    default { return @{ Status = 'NOT RUN'; Exit = $null; Reason = $script:Arm64RuntimeDetail } }
+  }
+} 'the linux/arm64 image-smoke.sh where this machine can execute arm64; otherwise DEFERRED (never PASS) to the REQUIRED live Graviton gate -- only after the arm64 build + architecture proof and the amd64 runtime smoke PASSED'
 
 Add-Gate 'DynamoDB Local' $true {
   $endpoint = $env:GS_DYNAMODB_LOCAL_ENDPOINT
@@ -548,7 +630,7 @@ foreach ($g in $Gates) {
   $sw.Stop()
   $g.Seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
   $g.Ended = UtcNow
-  $color = if ($g.Status -eq 'PASS') { 'Green' } else { 'Red' }
+  $color = if ($g.Status -eq 'PASS') { 'Green' } elseif ($g.Status -eq 'DEFERRED') { 'Yellow' } else { 'Red' }
   Log ("=== {0}: {1}   exit {2}   {3} s   (end {4}){5}" -f $g.Name, $g.Status, $(if ($null -eq $g.Exit) { '-' } else { $g.Exit }), $g.Seconds, $g.Ended, $(if ($g.Reason) { "   -- $($g.Reason)" } else { '' })) $color
 }
 
@@ -556,16 +638,31 @@ foreach ($g in $Gates) {
 # Summary
 # ---------------------------------------------------------------------------------------------------------------------
 $Watch.Stop()
-$AllPass = (@($Gates | Where-Object { $_.Status -ne 'PASS' }).Count -eq 0)
+# OWNER-GATE FIX 1: the OWNER SOURCE GATE passes when every gate PASSED, except that the ONE deferrable check -- the arm64
+# runtime smoke -- may be DEFERRED to the required live Graviton gate, and only beside a PASSING image gate (the arm64
+# build + architecture proof and the amd64 runtime smoke). DEFERRED is never reported as PASS; the live host
+# certification (that smoke, the AL2023 / systemd drills) stays PENDING and is a prerequisite of the edge cutover.
+$Deferrable = @($Arm64RuntimeGateName)
+$ImageGatePassed = (@($Gates | Where-Object { $_.Name -eq $ImageGateName -and $_.Status -eq 'PASS' }).Count -eq 1)
+$Deferred = @($Gates | Where-Object { $_.Status -eq 'DEFERRED' })
+$AllPass = (@($Gates | Where-Object { $_.Status -ne 'PASS' -and -not ($_.Status -eq 'DEFERRED' -and $Deferrable -contains $_.Name -and $ImageGatePassed) }).Count -eq 0)
+$LivePrerequisites = @(
+  'ARM64 runtime smoke on the real Graviton host (SINGLE_HOST_MIGRATION.md step 12b: gs-host arm64-smoke; migration-guard edge-cutover --arm64-live-smoke refuses the cutover without its PASS)',
+  'the AL2023 / systemd host-cert drills on the real host (F7 graceful-stop, F8 crash-/reboot-restart, F9 duplicate-preflight / duplicate-fence)'
+)
 Log ''
 Log '========================================================================================================'
-Log ("{0,-34} {1,-8} {2,6}   {3}" -f 'Gate', 'Status', 'Exit', 'Duration')
-Log ("{0,-34} {1,-8} {2,6}   {3}" -f '----', '------', '----', '--------')
+Log ("{0,-52} {1,-8} {2,6}   {3}" -f 'Gate', 'Status', 'Exit', 'Duration')
+Log ("{0,-52} {1,-8} {2,6}   {3}" -f '----', '------', '----', '--------')
 foreach ($g in $Gates) {
-  Log ("{0,-34} {1,-8} {2,6}   {3} s{4}" -f $g.Name, $g.Status, $(if ($null -eq $g.Exit) { '-' } else { $g.Exit }), $g.Seconds, $(if ($g.Reason) { "   ($($g.Reason))" } else { '' }))
+  Log ("{0,-52} {1,-8} {2,6}   {3} s{4}" -f $g.Name, $g.Status, $(if ($null -eq $g.Exit) { '-' } else { $g.Exit }), $g.Seconds, $(if ($g.Reason) { "   ($($g.Reason))" } else { '' }))
 }
 Log ''
-Log ("OVERALL: {0}" -f $(if ($AllPass) { 'PASS' } else { 'FAIL' })) $(if ($AllPass) { 'Green' } else { 'Red' })
+Log ("OWNER SOURCE GATE: {0}" -f $(if ($AllPass) { 'PASS' } else { 'FAIL' })) $(if ($AllPass) { 'Green' } else { 'Red' })
+foreach ($d in $Deferred) { Log ("  deferred (NOT PASS): {0} -- {1}" -f $d.Name, $d.Reason) 'Yellow' }
+Log 'LIVE HOST CERTIFICATION: PENDING -- required before any edge cutover:' 'Yellow'
+foreach ($p in $LivePrerequisites) { Log ("  - {0}" -f $p) 'Yellow' }
+Log ("OVERALL: {0}" -f $(if ($AllPass) { 'PASS (OWNER SOURCE GATE; LIVE HOST CERTIFICATION PENDING)' } else { 'FAIL' })) $(if ($AllPass) { 'Green' } else { 'Red' })
 Log ("total duration: {0} s   (end {1})" -f [math]::Round($Watch.Elapsed.TotalSeconds, 1), (UtcNow))
 if ($Dirty.Count -gt 0) { Log '!!! the working tree was NOT clean (see the top of the log) !!!' 'Yellow' }
 
@@ -580,6 +677,10 @@ $summary = [ordered]@{
   dirty = @($Dirty | ForEach-Object { [string]$_ })
   powershell = [string]$PSVersionTable.PSVersion
   overall = $(if ($AllPass) { 'PASS' } else { 'FAIL' })
+  owner_source_gate = $(if ($AllPass) { 'PASS' } else { 'FAIL' })
+  live_host_certification = 'PENDING'
+  live_prerequisites = $LivePrerequisites
+  deferred_to_live = @($Deferred | ForEach-Object { [ordered]@{ gate = $_.Name; reason = $_.Reason } })
   total_seconds = [math]::Round($Watch.Elapsed.TotalSeconds, 1)
   pinned_images = [ordered]@{ al2023 = $Al2023Image; node_linux = $NodeLinuxImage; docker_cli = $DockerCliImage }
   facts = $script:Facts

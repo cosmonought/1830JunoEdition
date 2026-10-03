@@ -9,9 +9,16 @@
 #   .\gs-host.ps1 -Command rollback -InstanceId i-...
 #   .\gs-host.ps1 -Command stop     -InstanceId i-... [-UntilDeploy]
 #   .\gs-host.ps1 -Command measure-report -InstanceId i-... [-Days 14]
+#   .\gs-host.ps1 -Command arm64-smoke -InstanceId i-... -Digest sha256:<64 hex>      # step 12b: BEFORE deploy / edge cutover
+#
+# arm64-smoke (OWNER-GATE FIX 1): the REQUIRED live ARM64 runtime smoke on the real Graviton host. It sends the two
+# REVIEWED repository files -- infra/aws/single-host/arm64-live-smoke.sh and the unchanged
+# infra/aws/modules/single-host/tests/image-smoke.sh -- as base64 (LF-normalised; the remote line holds no quote), and the
+# host runs the wrapper against the release pulled by digest. Save the output (Tee-Object) for
+# `migration-guard edge-cutover --arm64-live-smoke <file>`: the cutover is refused unless it is a complete PASS.
 [CmdletBinding()]
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('status', 'deploy', 'rollback', 'stop', 'measure-report')][string]$Command,
+  [Parameter(Mandatory = $true)][ValidateSet('status', 'deploy', 'rollback', 'stop', 'measure-report', 'arm64-smoke')][string]$Command,
   [Parameter(Mandatory = $true)][ValidatePattern('^i-[0-9a-f]{8,17}$')][string]$InstanceId,
   [ValidatePattern('^[a-z]{2}(-[a-z]+)+-[0-9]$')][string]$Region = 'us-east-1',
   [ValidatePattern('^sha256:[0-9a-f]{64}$')][string]$Digest,
@@ -33,6 +40,17 @@ switch ($Command) {
   'rollback' { $remote = '/opt/gs/bin/gs-rollback' }
   'stop' { $remote = '/opt/gs/bin/gs-stop' + $(if ($UntilDeploy) { ' --until-deploy' } else { '' }) }
   'measure-report' { $remote = "/opt/gs/bin/gs-measure-report $Days" }
+  'arm64-smoke' {
+    if (-not $Digest) { throw 'gs-host: REFUSED: arm64-smoke needs -Digest sha256:<64 hex> (the release pushed at step 12).' }
+    $b64 = {
+      param($rel)
+      $text = [System.IO.File]::ReadAllText((Join-Path $PSScriptRoot $rel)) -replace "`r`n", "`n"
+      [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($text))
+    }
+    $wrapper = & $b64 'arm64-live-smoke.sh'
+    $smoke = & $b64 '..\modules\single-host\tests\image-smoke.sh'
+    $remote = "d=`$(mktemp -d) && printf %s $wrapper | base64 -d > `$d/w && printf %s $smoke | base64 -d > `$d/s && bash `$d/w $Digest `$d/s; rc=`$?; rm -rf `$d; exit `$rc"
+  }
 }
 
 $params = New-TemporaryFile

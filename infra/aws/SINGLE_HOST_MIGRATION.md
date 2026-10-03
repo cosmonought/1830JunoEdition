@@ -130,7 +130,7 @@ floor, not the ceiling.
 | 7b | ledger | `migration-guard ledger-operator-journal --ledger-table-arn <ARN>` | the ledger's resource policy updated in place, gaining exactly JX-4C's `OperatorJournalQuery` (Query, the ledger, the app root with `aws:PrincipalArn` = the operator role, `ATTI#*` + key presence); every other statement -- the runtime principals included -- byte-equal; no key policy, table, APPGEN item or AWS Backup change |
 | 8 | ledger | `migration-guard ledger-host-authorize` | the ledger's resource policy and EVERY signing key's policy update in place, each runtime statement gaining exactly `gs-staging-host-app` beside the task role (kept: coexistence); every other statement byte-equal; no table, KMS create / delete / replace, APPGEN item or AWS Backup change |
 | 9 | single-host | `migration-guard host-create` | only creates, exactly the single-host surface (one instance, ENI, EIP + association, SG + rules, role `gs-staging-host-app`, profile, inline policy, log group, the five alarms, the budget); IMDSv2; the host policy reaches only g1, identity and the ledger, never APPGEN / SYSTEM writes, digest-only Sign, no administrative action; no table, key, ALB, ECS, NAT, endpoint, distribution, ECR repository or lifecycle |
-| 14 | app (targeted) | `migration-guard edge-cutover --origin-domain <origin_hostname>` | only the existing distribution, updated in place, only the `gs-alb` origin's `domain_name` -> the named host origin; default origin, behaviours (cache / origin-request policies), aliases, certificate, WAF unchanged; no ECS change (the drift), no table / key / IAM / document change; `compute = "ecs"` |
+| 14 | app (targeted) | `migration-guard edge-cutover --origin-domain <origin_hostname> --arm64-live-smoke <D>\arm64-live-smoke.txt --release-digest <sha256> --instance-id <i-...>` | only the existing distribution, updated in place, only the `gs-alb` origin's `domain_name` -> the named host origin; default origin, behaviours (cache / origin-request policies), aliases, certificate, WAF unchanged; no ECS change (the drift), no table / key / IAM / document change; `compute = "ecs"`; AND (OWNER-GATE FIX 1) step 12b's live ARM64 smoke a complete PASS for that release on a Graviton host -- FAIL or NOT EVALUATED refuses the cutover (`--direction rollback`, the edge back to the ALB, needs no smoke but `--cutover-record`: the forward PASS record, and the plan its exact reverse) |
 | F rollback | app | `migration-guard ecs-rollback` | only `aws_ecs_service.pool["p1"]`, desired 0 -> 1 and nothing else; p2 stays 0; SYSTEM/ROUTING read at plan time names p1 |
 | 20 | app | `migration-guard compute-none` | EVERY ECS-era object in the prior state destroyed (services, task definitions, cluster; ALB, listener, rules, target groups; ECS / ALB / endpoint SGs and rules; gateway and interface endpoints; the per-pool log groups; the L6-5B alarms, composites and flip suppressors; the task / execution roles; p2's runtime document) and nothing else destroyed; the p1 document only loses p2's route; the bootstrap / operator policies only lose p2's document; NEVER g1, identity, a key, the p1 or Juno document, ECR, the distribution, the bootstrap / operator authority; nothing created; the plan-time gates read |
 | 22 | ledger | `migration-guard ledger-task-deauthorize` | the mirror of step 8: the task role leaves exactly the runtime statements, the host role stays |
@@ -244,6 +244,24 @@ shows nothing: every later guard then judges its own change alone.
 ### E. Install and start the same AWS-mode server against the existing authorities
 
 12. Build the release image from the reviewed commit, `linux/arm64`, and push it to the existing ECR repository: `infra/aws/single-host/build-image.ps1`.
+12b. **REQUIRED -- the live ARM64 runtime smoke on the real Graviton host (OWNER-GATE FIX 1), BEFORE deploy and before any
+    edge cutover.** The owner SOURCE gate proves only the arm64 BUILD and its architecture (a workstation without
+    emulation cannot execute arm64: its arm64 runtime smoke is reported DEFERRED, never PASS); the EXECUTION proof is made
+    here, on the target architecture -- never inferred from the amd64 smoke:
+    ```
+    gs-host.ps1 -Command arm64-smoke -InstanceId <id> -Digest <sha256 of the release pushed at step 12> | Tee-Object <D>\arm64-live-smoke.txt
+    ```
+    It sends the two reviewed files (`infra/aws/single-host/arm64-live-smoke.sh` and the UNCHANGED
+    `modules/single-host/tests/image-smoke.sh`); the host pulls the release BY DIGEST (refusing an image that is not
+    linux/arm64), refuses while the game server runs, and runs the smoke: image metadata linux/arm64, Node arm64 as `node`,
+    PROCESS-mode healthz 200 on a loopback port, SIGTERM exit 0, and AWS mode OFFLINE (`--network none`: no AWS call, no
+    authority touched). It must end `[linux/arm64] 7 passed, 0 failed` and `GS-ARM64-LIVE-SMOKE END exit=0`.
+    **FAIL is a STOP** (do not deploy; nothing has started). **NOT EVALUATED** (a truncated capture, an unread instance
+    type, an SSM failure) **blocks the cutover** exactly like a FAIL: re-run it. A host-side refusal (another deploy holds
+    the lock, the server is running, the pull failed) is reported `refused=` and is a FAIL. Step 14's guard judges this
+    saved output (`--arm64-live-smoke`; UTF-16 from PowerShell 5.1's Tee-Object or UTF-8 -- decoded by its BOM) against
+    the release digest and the single host's instance id (`--instance-id`) and refuses the cutover unless it is a complete
+    PASS.
 13. Deploy with the memory measurement on:
     ```
     gs-host.ps1 -Command deploy -InstanceId <id> -Digest <sha256> -BuildId <id> -Measure
@@ -300,10 +318,14 @@ Any failure: STOP. **Rollback before G** (the ONE plan that may start an ECS tas
     **TARGETED** -- an untargeted plan carries the desired-count drift (§0.2):
     ```
     infra\aws\scripts\plan-evidence.ps1 -Stack app -Out <D> -Run <run id> -KeepPlan -PlanArgs @("-var-file=staging.tfvars", "-target=module.app.aws_cloudfront_distribution.site[0]")
-    node dist/server/src/tools/awsDeploy.js migration-guard edge-cutover --plan-evidence <D>\terraform\app --environment staging --app-account <app> --origin-domain <origin_hostname> --record <D>\guards\14.json
+    node dist/server/src/tools/awsDeploy.js migration-guard edge-cutover --plan-evidence <D>\terraform\app --environment staging --app-account <app> --origin-domain <origin_hostname> --arm64-live-smoke <D>\arm64-live-smoke.txt --release-digest <sha256 of the release the host serves> --instance-id <the single host's id> --record <D>\guards\14.json
     ```
     - The plan changes **only** the distribution's `gs-alb` origin domain; the guard refuses anything else (the default
       origin, the `/gs*` behaviour and its cache / origin-request policies, the aliases, the certificate, any ECS change).
+    - **The ARM64 live gate (12b) is part of this guard:** without `--arm64-live-smoke` / `--release-digest` /
+      `--instance-id` it refuses (usage); a smoke capture that is not a complete PASS for that digest on THIS Graviton
+      host (FAIL or NOT EVALUATED) FAILS the guard -- DO NOT APPLY. The edge never moves onto an image that has not
+      executed on the real host. Keep `<D>\guards\14.json`: a rollback needs it.
     - Apply that `stack.tfplan` (`-target` is in it: Terraform warns that the plan is incomplete; expected).
 15. Wait for the distribution to deploy.
 15b. (COST-2A) Once the distribution shows `Deployed` (its configuration names the new origin before the edge serves it),
@@ -311,8 +333,10 @@ Any failure: STOP. **Rollback before G** (the ONE plan that may start an ECS tas
      host's): VERIFIED.
 
 **Rollback:** the same targeted capture with the ALB's origin name in the tfvars, judged with
-`migration-guard edge-cutover --origin-domain <the ALB origin name>`; then the ECS rollback of §F (the host stopped
-`--until-deploy` first).
+`migration-guard edge-cutover --origin-domain <the ALB origin name> --direction rollback --cutover-record <D>\guards\14.json`
+(a rollback needs no ARM64 smoke -- the forward gate never blocks the way back -- but it is PROVEN, not labelled: the
+forward step's PASS record, and a plan that moves the /gs* origin from that record's host origin back to the ALB origin it
+recorded; a forward plan called a rollback FAILS); then the ECS rollback of §F (the host stopped `--until-deploy` first).
 
 ### H. Smoke test through the edge
 
@@ -510,10 +534,15 @@ replacement normally leaves none).
 Windows LF checks, Terraform, DynamoDB Local and the full server suite last; one log under `evidence\owner-gates\`). Run it
 from a CLEAN clone: it installs the locked dependencies itself (`npm ci` in `frontend` and `server`, failing if that changes
 a tracked file), runs `host-scripts.test.sh` in a pinned Amazon Linux 2023 container (never Git Bash: the host scripts need
-`flock` and `python3`), re-runs COST-2C's targeted suite in a pinned Linux Node container, and builds + smokes the image
-locally for linux/amd64 and linux/arm64 (`--load` only: no push, no ECR login). Prerequisites: Node/npm, Git for Windows,
-Terraform >= 1.10, and Docker Desktop (Linux engine, buildx, arm64 emulation) with network access to `public.ecr.aws`, the
-npm registry and the Amazon Linux repositories.
+`flock` and `python3`), re-runs COST-2C's targeted suite in a pinned Linux Node container, and builds the image locally
+for linux/amd64 and linux/arm64 (`--load` only: no push, no ECR login) -- amd64 built, architecture-proven and
+runtime-smoked (REQUIRED); arm64 built and architecture-proven without executing anything (image metadata + the image's
+node an AArch64 ELF). Its summary is **OWNER SOURCE GATE PASS / FAIL** and **LIVE HOST CERTIFICATION PENDING**: the
+arm64 runtime smoke is run locally only where the machine can execute arm64; otherwise it is **DEFERRED TO REQUIRED LIVE
+GRAVITON GATE** (step 12b; never PASS, never inferred from amd64), allowed only beside a passing arm64 build /
+architecture proof and amd64 runtime smoke. The live AL2023 / systemd drills (F7-F9) join that pre-cutover live
+certification. Prerequisites: Node/npm, Git for Windows, Terraform >= 1.10, and Docker Desktop (Linux engine, buildx; no
+arm64 emulation needed) with network access to `public.ecr.aws`, the npm registry and the Amazon Linux repositories.
 
 ## Certification: what remains valid, what reruns, what retires
 
@@ -529,6 +558,7 @@ npm registry and the Amazon Linux repositories.
 | RERUN | Restart | §F7–F8 (`host-cert graceful-stop`, `crash-restart`, `reboot-restart`) |
 | RERUN | Fencing / duplicate process | §F9 (`host-cert duplicate-preflight`, `duplicate-fence`), plus the replacement certification (`host-cert replacement-before` / `replacement-after`; LIVE-6's `stage-cert` replacement scenario is ECS-only and unchanged) |
 | **NOT EVALUATED (classified)** | The stale-host live sub-proof of a replacement (a kept old host's preflight refusal) | destroy-before-create leaves no old host; keeping one would be a second authorised host. Certified offline (gs-preflight EIP / duplicate refusal, the one-host shape, host-create) plus live F9b fencing and the J 24 inventory (above) |
+| **REQUIRED LIVE (pre-cutover)** | **The ARM64 runtime smoke** (the release image EXECUTED on the real Graviton host) | The owner source gate proves the linux/arm64 build and architecture only; a workstation without emulation reports the runtime smoke DEFERRED, never PASS. §E 12b runs it on the host before deploy; step 14's `migration-guard edge-cutover` refuses the cutover unless it is a complete PASS (FAIL / NOT EVALUATED block). |
 | **OPEN** | **The AL2023 / systemd exit-status contract** (gs-exit-hold receives `EXIT_CODE=exited` / `EXIT_STATUS=3` or `5` from ExecStopPost; `RestartPreventExitStatus=3 5` holds) | Proven offline only as far as offline can go (COST-2C). **NOT EVALUATED until `host-cert duplicate-fence` (and the F7 / F8 drills) PASS on the real host.** Not certified. |
 | RERUN | KMS access | §F5 (the instance role is a new principal type) |
 | RERUN | DynamoDB access | §F6, plus the `iam` gate's classification for the host role |

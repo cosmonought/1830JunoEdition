@@ -20,12 +20,22 @@
 //   migration-guard nat --evidence <dir> [--min-quiet-hours 24] [--record <file>]
 //       <dir> is `infra/aws/scripts/capture-nat-evidence`'s output (`natEvidence.ts`). PASS is evidence for the owner's
 //       manual NAT deletion decision (step 23), never a deletion.
+//
+//   OWNER-GATE FIX 1: edge-cutover (step 14) ALSO needs the REQUIRED live ARM64 runtime smoke (step 12b):
+//       --arm64-live-smoke <the saved `gs-host arm64-smoke` output> --release-digest <sha256 of the release served>
+//       --instance-id <the single host's id>. `arm64LiveSmoke.ts` judges it; anything but PASS (FAIL or NOT EVALUATED)
+//       makes the guard FAIL: the edge never moves onto an image that has not executed on the real Graviton host.
+//       `--direction rollback` (the edge back to the ALB) needs no smoke, but it is never taken on the operator's word: it
+//       needs --cutover-record <the forward step's PASS record>, and the plan must move the /gs* origin FROM the host
+//       origin that record moved it to, BACK to the ALB origin that record moved it from. A forward plan labelled
+//       "rollback" therefore FAILS.
 
 import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 
 import type { Check } from "../deployVerify";
+import { decodeCapture, judgeArm64LiveSmoke, smokeScriptSha256 } from "./arm64LiveSmoke";
 import { GATE_NAMES, GATE_TARGETS, GATES, isGateName, judgeMigrationPlan, MIGRATION_GUARD_FORMAT, STAGING_DEFAULTS, type GateName, type MigrationContext } from "./planGuards";
 import { judgeNatEvidence, NAT_EVIDENCE_FORMAT, NAT_FILES, type NatEvidence, type NatFileKey } from "./natEvidence";
 
@@ -33,6 +43,7 @@ export const MIGRATION_USAGE = [
   "usage:",
   `  awsDeploy migration-guard (${GATE_NAMES.join(" | ")}) --plan-evidence <evidence>/terraform/<stack> --environment <env> --app-account <id> [--origin-domain <name>] [--region <r> --ledger-table-arn <ARN> --signing-keys <a,b,c>] [--commit <reviewed sha>] [--generation 1] [--pool p1] [--retired-pools p2] [--record <file>]`,
   "      edge-cutover needs --origin-domain; host-create needs --region, --ledger-table-arn and --signing-keys (the ledger stack's outputs).",
+  "      edge-cutover (the default --direction cutover) ALSO needs --arm64-live-smoke <saved gs-host arm64-smoke output> --release-digest <sha256:...> --instance-id <i-...>: the live ARM64 smoke must PASS; --direction rollback (back to the ALB) needs --cutover-record <the forward PASS record> instead.",
   "      app-read-authorize (step 7a, a TARGETED app plan) needs --region and --ledger-table-arn; ledger-operator-journal (step 7b) needs --ledger-table-arn.",
   "  awsDeploy migration-guard nat --evidence <dir> [--min-quiet-hours 24] [--record <file>]",
 ].join("\n");
@@ -45,7 +56,7 @@ const TERRAFORM_MIN = [1, 9, 0];
 const AWS_PROVIDER = "registry.terraform.io/hashicorp/aws";
 const AWS_PROVIDER_VERSION = "6.66.0";
 
-const FLAGS_WITH_VALUES = new Set(["--plan-evidence", "--environment", "--app-account", "--origin-domain", "--generation", "--pool", "--retired-pools", "--record", "--evidence", "--min-quiet-hours", "--region", "--ledger-table-arn", "--signing-keys", "--commit"]);
+const FLAGS_WITH_VALUES = new Set(["--plan-evidence", "--environment", "--app-account", "--origin-domain", "--generation", "--pool", "--retired-pools", "--record", "--evidence", "--min-quiet-hours", "--region", "--ledger-table-arn", "--signing-keys", "--commit", "--arm64-live-smoke", "--release-digest", "--instance-id", "--direction", "--cutover-record"]);
 
 function parseFlags(argv: readonly string[]): Map<string, string> {
   const out = new Map<string, string>();
@@ -90,6 +101,53 @@ const versionAtLeast = (v: string): boolean => {
  *  every verdict below is PASS only when every check passed). */
 export const STATUS_WORD: Readonly<Record<Check["status"], string>> = Object.freeze({ pass: "PASS", fail: "FAIL", "not-evaluated": "NOT EVALUATED", skipped: "SKIP" });
 export const line = (c: Check): string => `${STATUS_WORD[c.status] ?? "NOT EVALUATED"}  ${c.name}: ${c.detail}`;
+
+/** The /gs* (gs-alb) origin's domain before -> after in the plan's ONE distribution update; null when not exactly that. */
+function gsOriginMove(plan: unknown): { readonly from: string; readonly to: string } | null {
+  const rcs = (plan as { resource_changes?: unknown } | undefined)?.resource_changes;
+  if (!Array.isArray(rcs)) return null;
+  const dist = rcs.filter((r) => (r as { type?: unknown }).type === "aws_cloudfront_distribution" && JSON.stringify((r as { change?: { actions?: unknown } }).change?.actions) === '["update"]');
+  if (dist.length !== 1) return null;
+  const change = (dist[0] as { change: { before?: { origin?: unknown }; after?: { origin?: unknown } } }).change;
+  const pick = (origins: unknown): unknown => (Array.isArray(origins) ? (origins.find((o) => (o as { origin_id?: unknown }).origin_id === "gs-alb") as { domain_name?: unknown } | undefined)?.domain_name : undefined);
+  const from = pick(change.before?.origin);
+  const to = pick(change.after?.origin);
+  return typeof from === "string" && typeof to === "string" ? { from, to } : null;
+}
+
+/** OWNER-GATE FIX 1: a rollback is proven, not labelled: the forward cutover's PASS record, and this plan its exact reverse. */
+function rollbackChecks(file: string, move: { readonly from: string; readonly to: string } | null, ctx: MigrationContext): Check[] {
+  const L = "rollback";
+  const rec = readJson(file) as { format?: unknown; gate?: unknown; direction?: unknown; verdict?: unknown; from_domain?: unknown; to_domain?: unknown; context?: { environment?: unknown; appAccountId?: unknown; originDomain?: unknown }; arm64_live_smoke?: { verdict?: unknown } | null } | undefined;
+  if (rec === undefined) return [{ name: `${L}: the forward cutover record`, status: "not-evaluated", detail: `${file} is missing or unreadable` }];
+  const checks: Check[] = [];
+  const ok = (name: string, cond: boolean, good: string, bad: string): void => void checks.push({ name: `${L}: ${name}`, status: cond ? "pass" : "fail", detail: cond ? good : bad });
+  ok("the forward cutover record", rec.format === MIGRATION_GUARD_FORMAT && rec.gate === "edge-cutover" && rec.direction === "cutover" && rec.verdict === "PASS" && rec.arm64_live_smoke?.verdict === "PASS", "a PASSING edge-cutover (direction cutover, ARM64 live smoke PASS)", `${file} is not a PASSING forward edge-cutover record with a PASSING ARM64 live smoke`);
+  ok("the same deployment", rec.context?.environment === ctx.environment && rec.context?.appAccountId === ctx.appAccountId, `${ctx.environment} / ${ctx.appAccountId}`, `the record is for ${String(rec.context?.environment)} / ${String(rec.context?.appAccountId)}`);
+  const host = typeof rec.context?.originDomain === "string" ? rec.context.originDomain : null;
+  const alb = typeof rec.from_domain === "string" ? rec.from_domain : null;
+  if (host === null || alb === null) {
+    checks.push({ name: `${L}: the forward move`, status: "not-evaluated", detail: "the record names no host origin / from_domain (a record from before this fix)" });
+    return checks;
+  }
+  ok("--origin-domain is the forward step's ALB origin", ctx.originDomain === alb, alb, `--origin-domain ${String(ctx.originDomain)} is not the ALB origin ${alb} the cutover moved away from`);
+  if (move === null) checks.push({ name: `${L}: the plan reverses the cutover`, status: "not-evaluated", detail: "the plan has no single distribution update with a gs-alb origin" });
+  else ok("the plan reverses the cutover", move.from === host && move.to === alb, `${host} -> ${alb}`, `the plan moves ${move.from} -> ${move.to}, not the host ${host} back to the ALB ${alb} (a forward plan is never a rollback)`);
+  return checks;
+}
+
+/** The checkout's image-smoke.sh (the one gs-host sends), as a sha256 -- null when the repository cannot be found. */
+function repositorySmokeSha256(): string | null {
+  let dir = __dirname;
+  for (let i = 0; i < 12; i += 1) {
+    const candidate = path.join(dir, "infra", "aws", "modules", "single-host", "tests", "image-smoke.sh");
+    if (fs.existsSync(path.join(dir, "PROJECT_CANONICAL_CONTEXT.md")) && fs.existsSync(candidate)) return smokeScriptSha256(fs.readFileSync(candidate, "utf8"));
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return null;
+}
 
 function writeRecord(file: string | undefined, record: unknown, out: (line: string) => void): void {
   if (file === undefined) return;
@@ -258,6 +316,34 @@ export async function migrationGuardCommand(argv: readonly string[], out: (line:
     out("REFUSED: edge-cutover needs --origin-domain (the host's origin_hostname; the ALB's name for the rollback)");
     return EXIT_USAGE;
   }
+  const smokeFlags = ["--arm64-live-smoke", "--release-digest", "--instance-id", "--direction", "--cutover-record"].filter((f) => flags.has(f));
+  if (gate !== "edge-cutover" && smokeFlags.length > 0) {
+    out(`REFUSED: ${smokeFlags.join(", ")} belong to edge-cutover only`);
+    return EXIT_USAGE;
+  }
+  const direction = flags.get("--direction") ?? "cutover";
+  if (gate === "edge-cutover") {
+    if (direction !== "cutover" && direction !== "rollback") {
+      out("REFUSED: --direction is cutover (the default: the edge onto the host) or rollback (the edge back to the ALB)");
+      return EXIT_USAGE;
+    }
+    if (direction === "cutover" && (flags.get("--arm64-live-smoke") === undefined || flags.get("--release-digest") === undefined || flags.get("--instance-id") === undefined)) {
+      out("REFUSED: the edge cutover needs --arm64-live-smoke <the saved `gs-host arm64-smoke` output (step 12b)>, --release-digest <sha256 of the release the host serves> and --instance-id <the single host's id>: the image must have EXECUTED on the real Graviton host first");
+      return EXIT_USAGE;
+    }
+    if (direction === "cutover" && (!/^sha256:[0-9a-f]{64}$/.test(String(flags.get("--release-digest"))) || !/^i-[0-9a-f]{8,17}$/.test(String(flags.get("--instance-id"))))) {
+      out("REFUSED: --release-digest is sha256:<64 hex> and --instance-id i-<8-17 hex>");
+      return EXIT_USAGE;
+    }
+    if (direction === "cutover" && flags.has("--cutover-record")) {
+      out("REFUSED: --cutover-record belongs to --direction rollback");
+      return EXIT_USAGE;
+    }
+    if (direction === "rollback" && flags.get("--cutover-record") === undefined) {
+      out("REFUSED: a rollback needs --cutover-record <the forward edge-cutover's PASS record (step 14)>: the direction is proven from it and the plan, never taken on the operator's word");
+      return EXIT_USAGE;
+    }
+  }
   const signingKeyArns = flags.has("--signing-keys") ? String(flags.get("--signing-keys")).split(",").filter((k) => k !== "") : undefined;
   if (gate === "host-create") {
     const region = flags.get("--region");
@@ -292,7 +378,24 @@ export async function migrationGuardCommand(argv: readonly string[], out: (line:
   }
   const evidence = planEvidenceChecks(dir, gate, expectCommit);
   const judged = evidence.plan === undefined ? null : judgeMigrationPlan(gate, evidence.plan, ctx);
-  const checks = [...evidence.checks, ...(judged?.checks ?? [])];
+  /* OWNER-GATE FIX 1: the cutover's live ARM64 runtime prerequisite (step 12b). NOT EVALUATED is not a pass. */
+  let smoke: { file: string; sha256: string | null; verdict: string; digest: string | null; instance_id: string | null; instance_type: string | null } | null = null;
+  const smokeChecks: Check[] = [];
+  const move = gate === "edge-cutover" ? gsOriginMove(evidence.plan) : null;
+  if (gate === "edge-cutover" && direction === "cutover") {
+    const file = String(flags.get("--arm64-live-smoke"));
+    const raw = fs.existsSync(file) ? fs.readFileSync(file) : null;
+    if (raw === null) {
+      smokeChecks.push({ name: "ARM64 live smoke: the saved output", status: "not-evaluated", detail: `${file} is missing: run gs-host arm64-smoke (step 12b) and save its output` });
+      smoke = { file, sha256: null, verdict: "NOT EVALUATED", digest: null, instance_id: null, instance_type: null };
+    } else {
+      const j = judgeArm64LiveSmoke(decodeCapture(raw), { digest: String(flags.get("--release-digest")), smokeSha256: repositorySmokeSha256(), instanceId: String(flags.get("--instance-id")) });
+      smokeChecks.push(...j.checks);
+      smoke = { file, sha256: createHash("sha256").update(raw).digest("hex"), verdict: j.verdict, digest: j.digest, instance_id: j.instanceId, instance_type: j.instanceType };
+    }
+  }
+  if (gate === "edge-cutover" && direction === "rollback") smokeChecks.push(...rollbackChecks(String(flags.get("--cutover-record")), move, ctx));
+  const checks = [...evidence.checks, ...(judged?.checks ?? []), ...smokeChecks];
   const verdict = checks.every((c) => c.status === "pass") && judged !== null ? "PASS" : "FAIL";
   out(`COST-2B migration guard: ${gate} (step ${GATES[gate].step}, stacks/${GATES[gate].stack})`);
   for (const c of checks) out(line(c));
@@ -305,6 +408,6 @@ export async function migrationGuardCommand(argv: readonly string[], out: (line:
       verdict === "PASS" ? ` (apply ONLY this saved plan, with the owner's GO: terraform -chdir=infra/aws/stacks/${GATES[gate].stack} apply ${path.join(dir, SAVED_PLAN)})` : " -- DO NOT APPLY"
     }`,
   );
-  writeRecord(flags.get("--record"), { format: MIGRATION_GUARD_FORMAT, gate, stack: GATES[gate].stack, plan_sha256: evidence.planSha256, saved_plan_sha256: evidence.savedPlanSha256, context: ctx, verdict, checks, changes: judged?.summary.changes ?? [] }, out);
+  writeRecord(flags.get("--record"), { format: MIGRATION_GUARD_FORMAT, gate, stack: GATES[gate].stack, plan_sha256: evidence.planSha256, saved_plan_sha256: evidence.savedPlanSha256, context: ctx, ...(gate === "edge-cutover" ? { direction, from_domain: move?.from ?? null, to_domain: move?.to ?? null, arm64_live_smoke: smoke, ...(direction === "rollback" ? { cutover_record: flags.get("--cutover-record") } : {}) } : {}), verdict, checks, changes: judged?.summary.changes ?? [] }, out);
   return verdict === "PASS" ? EXIT_PASS : EXIT_FAIL;
 }

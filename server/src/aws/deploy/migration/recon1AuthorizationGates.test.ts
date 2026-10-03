@@ -774,10 +774,74 @@ describe("RECON-1: the ONE owner gate (COST-2C's runner, extended) covers the re
     assert.ok(nodeDigest !== undefined && gate.includes(`node:22-bookworm-slim@${nodeDigest}`), "the Linux COST-2C run uses the server image's own pinned base");
     assert.equal(order[order.length - 1], "Full server suite");
     assert.equal(order[order.length - 2], "DynamoDB Local");
-    assert.match(gate, /\$AllPass = \(@\(\$Gates \| Where-Object \{ \$_\.Status -ne 'PASS' \}\)\.Count -eq 0\)/);
+    /* OWNER-GATE FIX 1: every gate must PASS, with ONE exception -- the arm64 runtime smoke may be DEFERRED, and only
+       beside a PASSING image gate (arm64 build + architecture proof, amd64 runtime smoke) */
+    assert.match(gate, /\$AllPass = \(@\(\$Gates \| Where-Object \{ \$_\.Status -ne 'PASS' -and -not \(\$_\.Status -eq 'DEFERRED' -and \$Deferrable -contains \$_\.Name -and \$ImageGatePassed\) \}\)\.Count -eq 0\)/);
+    assert.match(gate, /\$Deferrable = @\(\$Arm64RuntimeGateName\)/);
     assert.match(gate, /if \(\$AllPass\) \{ exit 0 \} else \{ exit 1 \}/);
-    for (const k of ["branch =", "head =", "tree_clean =", "started_utc =", "seconds =", "exit ="]) assert.ok(gate.includes(k), k);
+    for (const k of ["branch =", "head =", "tree_clean =", "started_utc =", "seconds =", "exit =", "owner_source_gate =", "live_host_certification = 'PENDING'", "deferred_to_live ="]) assert.ok(gate.includes(k), k);
     assert.match(gate, /18COSMOS\/RECON-1-OWNER-GATE\/v1/);
+  });
+  test("OWNER-GATE FIX 1: arm64 is BUILT and architecture-proven locally (no execution); its runtime smoke is PASS only when executed, else DEFERRED -- never PASS -- and fail-closed", () => {
+    const code = gate.replace(/^\s*#.*$/gm, "");
+    const image = code.slice(code.indexOf("Add-Gate $ImageGateName"), code.indexOf("Add-Gate $Arm64RuntimeGateName"));
+    const runtime = code.slice(code.indexOf("Add-Gate $Arm64RuntimeGateName"), code.indexOf("Add-Gate 'DynamoDB Local'"));
+    assert.ok(image.length > 0 && runtime.length > 0, "both gates exist, image first");
+    /* the build happens BEFORE (and regardless of) the can-it-run probe; a build or architecture failure FAILS the gate */
+    assert.ok(image.indexOf("'buildx', 'build'") < image.indexOf("'-p', 'process.arch'"), "build before the runnable probe");
+    assert.match(image, /\$problems \+= "\$platform BUILD FAILED/);
+    assert.match(image, /\$problems \+= "\$platform ARCHITECTURE PROOF FAILED \(image metadata/);
+    assert.match(image, /\$wantMachine = if \(\$arch -eq 'amd64'\) \{ 62 \} else \{ 183 \}/);
+    assert.match(image, /Image-ElfMachine \$tag \$platform '\/usr\/local\/bin\/node'/);
+    assert.match(code, /function Image-ElfMachine[\s\S]*?'create', '--platform'[\s\S]*?'cp', "\$\{cid\}:\$PathInImage"/);
+    assert.doesNotMatch(code.slice(code.indexOf("function Image-ElfMachine"), code.indexOf("function Live-Arm64-Gate-Present")), /'run'|'start'/, "the architecture proof never executes the image");
+    /* amd64's runtime smoke is REQUIRED: not runnable or not passing FAILS the image gate */
+    assert.match(image, /linux\/amd64 cannot run here \(probe exit \$c`: \$probeLast\): the REQUIRED amd64 runtime smoke was NOT RUN/);
+    /* "no emulation" is concluded ONLY from an exec format error; any other probe failure is NOT RUN (fails the source gate) */
+    assert.match(image, /elseif \(\$probeText -match 'exec format error'\) \{ \$script:Arm64Runtime = 'DEFERRED'/);
+    assert.match(image, /else \{ \$script:Arm64Runtime = 'NOT RUN'; \$script:Arm64RuntimeDetail = "the linux\/arm64 runnable probe failed for another reason/);
+    assert.match(image, /if \(\$arch -eq 'amd64'\) \{ if \(-not \$verdict\.StartsWith\('PASS'\)\) \{ \$problems \+= /);
+    /* the runtime gate: BLOCKED unless the image gate PASSED; PASS only from an executed smoke; DEFERRED only with the live gate present */
+    assert.match(runtime, /\$image\.Status -ne 'PASS'\) \{ return @\{ Status = 'BLOCKED'/);
+    assert.match(runtime, /'PASS' \{ return @\{ Exit = 0/);
+    assert.match(runtime, /if \(-not \(Live-Arm64-Gate-Present\)\) \{ return @\{ Status = 'FAIL'/);
+    assert.match(runtime, /return @\{ Status = 'DEFERRED'; Exit = \$null; Reason = 'ARM64 runtime smoke: DEFERRED TO REQUIRED LIVE GRAVITON GATE/);
+    assert.equal((code.match(/Status = 'DEFERRED'/g) ?? []).length, 1, "nothing else may be DEFERRED");
+    assert.match(image, /\$script:Arm64Runtime = if \(\$verdict\.StartsWith\('PASS'\)\) \{ 'PASS' \}/);
+    /* the summary distinguishes the source gate from the pending live certification */
+    assert.match(code, /OWNER SOURCE GATE: \{0\}/);
+    assert.match(code, /LIVE HOST CERTIFICATION: PENDING/);
+    assert.match(code, /function Live-Arm64-Gate-Present[\s\S]*?\^12b\\\. [\s\S]*?gs-host\\\.ps1 -Command arm64-smoke[\s\S]*?--arm64-live-smoke[\s\S]*?the edge cutover needs --arm64-live-smoke/);
+  });
+  test("OWNER-GATE FIX 1: the runbook's live ARM64 gate is mandatory, BEFORE deploy and BEFORE the edge cutover, and the cutover guard needs it", () => {
+    const book = source("infra/aws/SINGLE_HOST_MIGRATION.md");
+    const at = (re: RegExp): number => {
+      const m = re.exec(book);
+      assert.ok(m, String(re));
+      return m.index;
+    };
+    const s12 = at(/^12\. Build the release image/m);
+    const s12b = at(/^12b\. \*\*REQUIRED -- the live ARM64 runtime smoke on the real Graviton host/m);
+    const s13 = at(/^13\. Deploy/m);
+    const s14 = at(/^14\. `APP-ADMIN`/m);
+    assert.ok(s12 < s12b && s12b < s13 && s13 < s14, "12 < 12b < 13 < 14");
+    const step12b = book.slice(s12b, s13);
+    assert.match(step12b, /gs-host\.ps1 -Command arm64-smoke -InstanceId <id> -Digest/);
+    assert.match(step12b, /\*\*FAIL is a STOP\*\*/);
+    assert.match(step12b, /\*\*NOT EVALUATED\*\*[\s\S]*\*\*blocks the cutover\*\*/);
+    assert.match(step12b, /never inferred from the amd64 smoke/);
+    assert.match(book.slice(s14), /migration-guard edge-cutover --plan-evidence [^\n]*--arm64-live-smoke <D>\\arm64-live-smoke\.txt --release-digest/);
+    assert.match(book, /\| \*\*REQUIRED LIVE \(pre-cutover\)\*\* \| \*\*The ARM64 runtime smoke\*\*/);
+    assert.match(book, /DEFERRED TO REQUIRED LIVE\s+GRAVITON GATE/);
+    assert.match(book, /--direction rollback/);
+    assert.doesNotMatch(book, /buildx, arm64 emulation\)/, "arm64 emulation is no longer an owner prerequisite");
+    const guard = source("server/src/aws/deploy/migration/migrationCommands.ts");
+    assert.match(guard, /if \(direction === "cutover" && \(flags\.get\("--arm64-live-smoke"\) === undefined \|\| flags\.get\("--release-digest"\) === undefined \|\| flags\.get\("--instance-id"\) === undefined\)\)/);
+    assert.match(guard, /judgeArm64LiveSmoke\(decodeCapture\(raw\)/);
+    /* a rollback is proven from the forward PASS record and the plan, never taken on the operator's word */
+    assert.match(guard, /if \(direction === "rollback" && flags\.get\("--cutover-record"\) === undefined\)/);
+    assert.match(guard, /smokeChecks\.push\(\.\.\.rollbackChecks\(/);
+    assert.match(book, /--direction rollback --cutover-record <D>\\guards\\14\.json/);
   });
 });
 

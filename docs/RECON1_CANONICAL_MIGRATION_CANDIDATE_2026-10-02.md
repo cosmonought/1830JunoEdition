@@ -103,12 +103,15 @@ single-host 20, stack validate); **Single-host scripts** (the COMPLETE `host-scr
 `amazonlinux:2023` container, repository read-only, no credential; dnf adds only `util-linux-core` / `findutils`; >= 40
 passed and 0 failed required; a container that cannot be prepared is NOT RUN); **Image smoke** (`docker buildx build
 --load` of `game-server.Dockerfile` to a LOCAL disposable tag per platform -- no `--push`, no ECR login, not
-`build-image.{sh,ps1}` -- then the unchanged `image-smoke.sh` from a pinned `docker:27-cli` runner; linux/amd64 AND
-linux/arm64, >= 7 passed and 0 failed each; a platform that cannot run is NOT RUN, never PASS; the gate's own images and
-containers are removed); DynamoDB Local (JX-4B, hostCertLock); the full server `npm test` LAST. One log + JSON (with the
-pinned image digests, the lock-file hashes and the per-suite totals) under `evidence\owner-gates\`; exit 1 on any non-PASS.
-Prerequisites: Node/npm, Git for Windows, Terraform >= 1.10, Docker Desktop (Linux engine, buildx, arm64 emulation) with
-network access to `public.ecr.aws`, the npm registry and the Amazon Linux repositories.
+`build-image.{sh,ps1}` -- then the unchanged `image-smoke.sh` from a pinned `docker:27-cli` runner; the gate's own images
+and containers are removed). **Since OWNER-GATE FIX 1 (§12):** linux/amd64 is built, architecture-proven and runtime-smoked
+(>= 7 passed, 0 failed: REQUIRED); linux/arm64 is built and architecture-proven WITHOUT execution (image metadata + the
+image's node an AArch64 ELF), and its runtime smoke is a separate gate -- PASS only where the machine executes arm64,
+otherwise DEFERRED TO REQUIRED LIVE GRAVITON GATE (never PASS); DynamoDB Local (JX-4B, hostCertLock); the full server
+`npm test` LAST. One log + JSON (with the pinned image digests, the lock-file hashes and the per-suite totals) under
+`evidence\owner-gates\`. The summary is OWNER SOURCE GATE PASS / FAIL and LIVE HOST CERTIFICATION PENDING; exit 1 unless
+the source gate passed. Prerequisites: Node/npm, Git for Windows, Terraform >= 1.10, Docker Desktop (Linux engine, buildx;
+no arm64 emulation needed) with network access to `public.ecr.aws`, the npm registry and the Amazon Linux repositories.
 
 **COST-2C's bash disposition.** The targeted suite's bash templates ask only for `bash -n`, `base64`, `sha256sum`,
 `timeout`, `nohup`, `mktemp`, `sed` / `grep` against stub `docker` / `systemctl` / `curl` / `journalctl` -- no `flock`, no
@@ -156,3 +159,50 @@ was BLOCKED; none of them is a PASS, then or now. The image smoke was not in tha
 defects (no dependency bootstrap, the wrong userspace for the host scripts, the missing image-smoke gate) are corrected in
 this branch's next commit (§8); runtime / IaC source is byte-identical to `42ad473`. **Comprehensive validation: PENDING
 OWNER GATE** (the whole runner, rerun once at the new head).
+
+## 12. The first COMPREHENSIVE owner run (at `254cfe7`) -- FAIL, recorded as history -- and OWNER-GATE FIX 1
+
+Windows PowerShell 5.1.26100.9168, branch `recon/recon-1-pre-cost2c`, HEAD `254cfe748f8332ca782a12921eb5556f281139f5`,
+clean tree, 2026-10-03T04:05:55Z-04:17:03Z (`evidence\owner-gates\recon1-owner-gate-20261003-040555.{log,json}`, ignored):
+**OVERALL FAIL. HEAD `254cfe7` FAILED comprehensive owner certification.** Every other gate passed (dependencies, build,
+RECON-1, COST-2B, COST-2C Linux 90/90, COST-2A, JX-4C / P5, ownership / fencing, awsDeploy / stage-cert, COST-1,
+Terraform, single-host scripts in AL2023 43/0, DynamoDB Local), but three findings stand:
+
+1. **Windows COST-2C harness: 1 failure** (89 pass / 1 fail / 0 skipped) -- "observe: the real template's output parses
+   into a state": instance id `unknown`, expected `i-0123456789abcdef0`. Cause (reproduced, harness-only): Git for
+   Windows' `bin\bash.exe` launcher PREPENDS `/mingw64/bin` and `/usr/bin` to the PATH it is given, so Git's real curl
+   shadowed the test's stub curl; the stub was never called. Linux keeps the PATH order (90/90 there).
+2. **Full server suite: 1 stale source-guard failure** (2236 tests: 1972 pass / 1 fail / 263 skipped) -- L6-5A's
+   "nothing in the server reads a TASK# item" flagged `aws/deploy/hostcert/controlPlane.ts`, which only NAMES the writer's
+   heartbeat in a check's evidence text (it judges the value the one bounded staging reader supplies; it reads nothing).
+3. **Local ARM64 runtime: unavailable** -- the arm64 run failed `exec /usr/local/bin/node: exec format error` (no
+   emulation); the gate was NOT RUN (amd64 7/0).
+
+**OWNER-GATE FIX 1 (ordinary commits on top; `254cfe7` is not rewritten):**
+1. `hostCert.test.ts`: the stub host re-asserts its stub directory first INSIDE the bash it starts (`cygpath` on Git Bash)
+   and proves every stub (systemctl / docker / curl / journalctl) resolves before a template runs. The production
+   templates are untouched. Windows 90/90, Linux 90/90.
+2. `l6_5aObservability.test.ts`: the guard is semantic -- every file naming TASK# is still an offender, except the
+   deployment-only `controlPlane.ts`, and only on lines that are a certification check's evidence text (never a key, a
+   table read or a command); and everything under `aws/deploy/` is reachable only from the operator CLI
+   `tools/awsDeploy.ts` (any `from` / `import()` / bare `import` / `require`). Mutation-checked: a TASK# key in
+   controlPlane, a runtime import of host-cert code, and a TASK# name in the game table are each caught.
+3. ARM64 split: the owner SOURCE gate requires the arm64 BUILD and an ARCHITECTURE PROOF without execution (metadata +
+   the image's node an AArch64 ELF) beside the REQUIRED amd64 runtime smoke; the arm64 runtime smoke is PASS only when
+   executed, otherwise DEFERRED TO REQUIRED LIVE GRAVITON GATE (never PASS) -- refused unless the runbook / guard carry the
+   live gate. The live gate: runbook §E **12b** (`gs-host arm64-smoke`: the unchanged image-smoke.sh on the real host,
+   before deploy), judged by `arm64LiveSmoke.ts`; `migration-guard edge-cutover` (step 14) refuses the cutover without its
+   complete PASS for the release digest on THIS host (`--instance-id`; FAIL / NOT EVALUATED block). The summary
+   distinguishes OWNER SOURCE GATE PASS from LIVE HOST CERTIFICATION PENDING (the ARM64 smoke and the AL2023 / systemd
+   drills).
+
+**The focused review of these fixes** (one pass, three lenses) found one High -- `--direction rollback` was taken on the
+operator's word, so a FORWARD plan labelled "rollback" passed without the smoke -- now closed: a rollback needs the forward
+step's PASS record (`--cutover-record`; it keeps the ALB origin it moved from) and the plan must be its exact reverse, or the
+guard FAILS. Fixed besides: Windows PowerShell 5.1's Tee-Object capture (UTF-16LE) is decoded by its BOM; the host wrapper
+frames every exit (a gs-lib refusal or a failing smoke is a framed FAIL, not a truncated NOT EVALUATED) and checks the
+running server under the deploy lock; the capture is bound to the single host's instance id; the TASK# exemption accepts
+exactly the one evidence shape (no assignment) and import specifiers are normalised (`.js`, `/index`, backticks); "no
+emulation" is concluded only from an exec format error (any other probe failure is NOT RUN, failing the source gate).
+
+**Comprehensive validation: PENDING OWNER GATE** (the whole runner, rerun once at the new head).

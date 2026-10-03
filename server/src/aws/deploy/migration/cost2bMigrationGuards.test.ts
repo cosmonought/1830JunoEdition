@@ -18,6 +18,7 @@ import * as path from "path";
 import { GATE_NAMES, GATE_TARGETS, GATES, HOST_MULTI, HOST_SINGLETONS, judgeMigrationPlan, TEARDOWN_CLASSES, type GateName, type MigrationContext } from "./planGuards";
 import { judgeNatEvidence, NAT_EVIDENCE_FORMAT, NAT_FILES, type NatEvidence } from "./natEvidence";
 import { migrationGuardCommand, SAVED_PLAN, SAVED_PLAN_SHA } from "./migrationCommands";
+import { ARM64_SMOKE_MIN_PASSED, decodeCapture, judgeArm64LiveSmoke, smokeScriptSha256 } from "./arm64LiveSmoke";
 import { readCheckoutText } from "../../../testSupport/portability";
 import { FIXTURE, FIXTURE_DIR, fixtureText, HOST_ROLE, hostPolicy, jsonencode, ledgerResourcePolicy, policyDocument, resourceChange, runtimeDocument, signingKeyPolicy, TASK_ROLE, validPlans } from "./planFixtures";
 
@@ -39,6 +40,93 @@ const rc = (p: Obj, address: string): Obj => {
 };
 const judgeOf = (gate: GateName, p: unknown, ctx: MigrationContext = CTX) => judgeMigrationPlan(gate, p, ctx);
 const failed = (r: ReturnType<typeof judgeOf>) => r.checks.filter((c) => c.status === "fail");
+
+/* OWNER-GATE FIX 1: a `gs-host arm64-smoke` capture, as the real Graviton host prints it (arm64-live-smoke.sh framing the
+   unchanged image-smoke.sh's lines). Every mutation below is a way a capture could look "good enough" and must not be. */
+const RELEASE = `sha256:${"b".repeat(64)}`;
+const SMOKE_SHA = smokeScriptSha256(read("infra/aws/modules/single-host/tests/image-smoke.sh"));
+const smokeLines = (): string[] => [
+  "gs-host: arm64-smoke on i-0123456789abcdef0 (command 11111111-2222-3333-4444-555555555555)",
+  "GS-ARM64-LIVE-SMOKE BEGIN",
+  `digest=${RELEASE}`,
+  "host_arch=aarch64",
+  "instance_type=t4g.small",
+  "instance_id=i-0123456789abcdef0",
+  `smoke_script_sha256=${SMOKE_SHA}`,
+  `image=111111111111.dkr.ecr.us-east-1.amazonaws.com/gs-staging-server@${RELEASE}`,
+  "image_platform=linux/arm64",
+  "ok   [linux/arm64] image metadata is linux/arm64",
+  "ok   [linux/arm64] node: arm64 v22.12.0 uid=1000",
+  "ok   [linux/arm64] the server starts; GET /gs/healthz -> 200 (read-only root)",
+  "ok   [linux/arm64] SIGTERM -> graceful exit 0",
+  "ok   [linux/arm64] AWS mode refuses a misspelt metric profile (exit 2, nothing read)",
+  "ok   [linux/arm64] AWS mode refuses static credentials in the environment (exit 2)",
+  "ok   [linux/arm64] AWS mode (single-host profile) starts and fails ONLY on the absent live runtime document (exit 2, offline)",
+  "[linux/arm64] 7 passed, 0 failed",
+  "GS-ARM64-LIVE-SMOKE END exit=0",
+];
+const HOST_ID = "i-0123456789abcdef0";
+const smokeJudge = (lines: string[], digest = RELEASE) => judgeArm64LiveSmoke(lines.join("\n"), { digest, smokeSha256: SMOKE_SHA, instanceId: HOST_ID });
+const swap = (from: RegExp, to: string) => smokeLines().map((l) => (from.test(l) ? to : l));
+
+describe("OWNER-GATE FIX 1: the live ARM64 runtime smoke judge -- PASS only for a complete arm64 run on Graviton", () => {
+  test("a complete Graviton capture PASSES (a Windows CRLF / BOM save tolerated)", () => {
+    assert.equal(smokeJudge(smokeLines()).verdict, "PASS", JSON.stringify(smokeJudge(smokeLines()).checks.filter((c) => c.status !== "pass")));
+    assert.equal(judgeArm64LiveSmoke(`﻿${smokeLines().join("\r\n")}\r\n`, { digest: RELEASE, smokeSha256: SMOKE_SHA, instanceId: HOST_ID }).verdict, "PASS");
+    /* Windows PowerShell 5.1's Tee-Object writes UTF-16LE with a BOM (and big-endian is decoded too): by BOM, it PASSES */
+    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(smokeLines().join("\r\n"), "utf16le")]);
+    assert.equal(judgeArm64LiveSmoke(decodeCapture(utf16), { digest: RELEASE, smokeSha256: SMOKE_SHA, instanceId: HOST_ID }).verdict, "PASS");
+    const be = Buffer.from(smokeLines().join("\n"), "utf16le");
+    be.swap16();
+    assert.equal(judgeArm64LiveSmoke(decodeCapture(Buffer.concat([Buffer.from([0xfe, 0xff]), be])), { digest: RELEASE, smokeSha256: SMOKE_SHA, instanceId: HOST_ID }).verdict, "PASS");
+    assert.equal(ARM64_SMOKE_MIN_PASSED, 7);
+  });
+  test("incomplete evidence is NOT EVALUATED -- never PASS", () => {
+    for (const [lines, why] of [
+      [[], "empty"],
+      [smokeLines().slice(0, -1), "no END (truncated)"],
+      [smokeLines().filter((l) => !/BEGIN/.test(l)), "no BEGIN"],
+      [[...smokeLines(), ...smokeLines()], "two runs"],
+      [smokeLines().filter((l) => !/ passed, /.test(l)), "no totals"],
+      [smokeLines().filter((l) => !/^digest=/.test(l)), "no digest"],
+      [smokeLines().filter((l) => !/^smoke_script_sha256=/.test(l)), "no smoke hash"],
+      [swap(/^instance_type=/, "instance_type=unknown"), "IMDS unread"],
+    ] as Array<[string[], string]>)
+      assert.equal(smokeJudge(lines).verdict, "NOT EVALUATED", why);
+    assert.equal(judgeArm64LiveSmoke(smokeLines().join("\n"), { digest: RELEASE, smokeSha256: null, instanceId: HOST_ID }).verdict, "NOT EVALUATED", "the repository smoke unreadable");
+    assert.equal(smokeJudge(swap(/^instance_id=/, "instance_id=unknown")).verdict, "NOT EVALUATED", "the instance id unread");
+  });
+  test("every wrong answer is a FAIL: refused, a failed check, x86 / emulated, another digest or smoke script, too few checks, an amd64 run", () => {
+    const cases: Array<[string[], RegExp, string?]> = [
+      [[...smokeLines().slice(0, 9), "refused=the game server is running: the live ARM64 smoke runs after the push and BEFORE deploy (step 12b)", "GS-ARM64-LIVE-SMOKE END exit=90"], /refused/],
+      [swap(/^ok {3}\[linux\/arm64\] SIGTERM/, "FAIL [linux/arm64] graceful stop").map((l) => l.replace("7 passed, 0 failed", "6 passed, 1 failed")).map((l) => l.replace("END exit=0", "END exit=1")), /1 failed/],
+      [swap(/^host_arch=/, "host_arch=x86_64"), /not a Graviton host/],
+      [swap(/^instance_type=/, "instance_type=t3.small"), /not a Graviton/],
+      [swap(/^image_platform=/, "image_platform=linux/amd64"), /linux\/amd64/],
+      [smokeLines(), /not the release/, `sha256:${"c".repeat(64)}`],
+      [swap(/^smoke_script_sha256=/, `smoke_script_sha256=${"d".repeat(64)}`), /not the repository's/],
+      [smokeLines().filter((l) => !/SIGTERM/.test(l)).map((l) => l.replace("7 passed", "6 passed")), /at least 7 required/],
+      [smokeLines().map((l) => l.replace(/linux\/arm64\]/g, "linux/amd64]")).map((l) => l.replace("node: arm64", "node: x64")), /ran for linux\/amd64/],
+      [swap(/^instance_id=/, "instance_id=i-0fedcba9876543210"), /not the single host/],
+      [swap(/END exit=0/, "GS-ARM64-LIVE-SMOKE END exit=1"), /exit status/],
+    ];
+    for (const [lines, why, digest] of cases) {
+      const j = smokeJudge(lines, digest);
+      assert.equal(j.verdict, "FAIL", `${why}: ${JSON.stringify(j.checks.filter((c) => c.status !== "pass"))}`);
+      assert.ok(j.checks.some((c) => c.status === "fail" && why.test(`${c.name}: ${c.detail}`)), String(why));
+    }
+  });
+  test("the host wrapper and gs-host twins carry exactly this protocol (and run the UNCHANGED image-smoke.sh)", () => {
+    const wrapper = read("infra/aws/single-host/arm64-live-smoke.sh");
+    for (const marker of ["GS-ARM64-LIVE-SMOKE BEGIN", "GS-ARM64-LIVE-SMOKE END exit=%s", "digest=%s", "host_arch=%s", "instance_type=%s", "smoke_script_sha256=%s", "image_platform=%s", 'bash "$smoke" "$ref" linux/arm64', "systemctl is-active --quiet gs-server.service", "take_lock", 'pull_release "$digest"']) assert.ok(wrapper.includes(marker), marker);
+    for (const twin of ["infra/aws/single-host/gs-host.ps1", "infra/aws/single-host/gs-host.sh"]) {
+      const t = read(twin);
+      assert.match(t, /arm64-smoke/);
+      assert.ok(t.includes("arm64-live-smoke.sh") && /modules[\\/]single-host[\\/]tests[\\/]image-smoke\.sh/.test(t), twin);
+      assert.match(t, /printf %s \$wrapper \| base64 -d > `?\\?\$d\/w && printf %s \$smoke \| base64 -d > `?\\?\$d\/s && bash `?\\?\$d\/w/, twin);
+    }
+  });
+});
 
 /** The plan FAILS the gate, and a failing check's name or detail matches `why`. */
 function rejects(gate: GateName, p: unknown, why: RegExp, ctx: MigrationContext = CTX): void {
@@ -929,9 +1017,9 @@ describe("COST-2B: the command and its evidence binding", () => {
   const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "cost2b-"));
   const sha = (b: Buffer | string) => createHash("sha256").update(b).digest("hex");
   const COMMIT = "7d140b4db777faccf11e220bcf7e3bcbd8fc889a";
-  function evidence(gate: GateName, opts: { keep?: boolean; exit?: string; bom?: boolean; stack?: string; provider?: string; tamper?: boolean; extraProvider?: boolean; dirty?: boolean; noCommit?: boolean } = {}): string {
+  function evidence(gate: GateName, opts: { keep?: boolean; exit?: string; bom?: boolean; stack?: string; provider?: string; tamper?: boolean; extraProvider?: boolean; dirty?: boolean; noCommit?: boolean; plan?: unknown } = {}): string {
     const dir = tmp();
-    const planText = `${opts.bom === true ? "﻿" : ""}${JSON.stringify(PLANS[gate])}`;
+    const planText = `${opts.bom === true ? "﻿" : ""}${JSON.stringify(opts.plan ?? PLANS[gate])}`;
     fs.writeFileSync(path.join(dir, "plan.json"), planText);
     fs.writeFileSync(path.join(dir, "plan-exitcode.txt"), `${opts.exit ?? "2"}\n`);
     fs.writeFileSync(path.join(dir, "version.json"), JSON.stringify({ terraform_version: "1.9.8", provider_selections: { "registry.terraform.io/hashicorp/aws": opts.provider ?? "6.66.0", ...(opts.extraProvider === true ? { "registry.terraform.io/hashicorp/external": "2.3.4" } : {}) } }));
@@ -949,6 +1037,11 @@ describe("COST-2B: the command and its evidence binding", () => {
     const code = await migrationGuardCommand(argv, (l) => lines.push(l));
     return { code, text: lines.join("\n") };
   };
+  const smokeFile = (lines: string[] = smokeLines()): string => {
+    const f = path.join(tmp(), "arm64-live-smoke.txt");
+    fs.writeFileSync(f, `${lines.join("\n")}\n`);
+    return f;
+  };
   const base = (gate: GateName, dir: string) => [
     gate,
     "--plan-evidence",
@@ -957,7 +1050,7 @@ describe("COST-2B: the command and its evidence binding", () => {
     "staging",
     "--app-account",
     FIXTURE.appAccountId,
-    ...(gate === "edge-cutover" ? ["--origin-domain", FIXTURE.hostOrigin] : []),
+    ...(gate === "edge-cutover" ? ["--origin-domain", FIXTURE.hostOrigin, "--arm64-live-smoke", smokeFile(), "--release-digest", RELEASE, "--instance-id", HOST_ID] : []),
     ...(gate === "host-create" ? ["--region", FIXTURE.region, "--ledger-table-arn", FIXTURE.ledgerTableArn, "--signing-keys", FIXTURE.signingKeyArns.join(",")] : []),
     ...(gate === "app-read-authorize" ? ["--region", FIXTURE.region, "--ledger-table-arn", FIXTURE.ledgerTableArn] : []),
     ...(gate === "ledger-operator-journal" ? ["--ledger-table-arn", FIXTURE.ledgerTableArn] : []),
@@ -1013,6 +1106,88 @@ describe("COST-2B: the command and its evidence binding", () => {
     assert.equal(noFacts.code, 2);
     assert.match(noFacts.text, /host-create needs --region .*--ledger-table-arn .*--signing-keys/);
     assert.equal((await run(["compute-none", "--plan-evidence", dir, "--environment", "staging", "--app-account", FIXTURE.appAccountId, "--retired-pools", "p1"])).code, 2);
+  });
+  test("OWNER-GATE FIX 1: the edge cutover REQUIRES the live ARM64 smoke -- missing flags refused, FAIL / NOT EVALUATED block, rollback exempt", async () => {
+    const cut = (smoke: string | null, digest: string | null = RELEASE, extra: string[] = [], instance: string | null = HOST_ID) => [
+      "edge-cutover", "--plan-evidence", evidence("edge-cutover"), "--environment", "staging", "--app-account", FIXTURE.appAccountId, "--origin-domain", FIXTURE.hostOrigin,
+      ...(smoke === null ? [] : ["--arm64-live-smoke", smoke]), ...(digest === null ? [] : ["--release-digest", digest]), ...(instance === null ? [] : ["--instance-id", instance]), ...extra,
+    ];
+    /* no smoke / no digest / no instance / a malformed digest or instance / a bad direction / a cutover with a rollback's
+       record: usage (exit 2) -- the cutover cannot even be judged */
+    for (const argv of [cut(null), cut(smokeFile(), null), cut(smokeFile(), RELEASE, [], null), cut(smokeFile(), "sha256:xyz"), cut(smokeFile(), RELEASE, [], "i-xyz"), cut(smokeFile(), RELEASE, ["--direction", "sideways"]), cut(smokeFile(), RELEASE, ["--cutover-record", "x.json"])]) {
+      const r = await run(argv);
+      assert.equal(r.code, 2, r.text);
+    }
+    assert.match((await run(cut(null))).text, /EXECUTED on the real Graviton host first/);
+    /* a PASSing capture: PASS, and the record carries the smoke's verdict and file hash */
+    const record = path.join(tmp(), "14.json");
+    const ok = await run([...cut(smokeFile()), "--record", record]);
+    assert.equal(ok.code, 0, ok.text);
+    const rec = JSON.parse(fs.readFileSync(record, "utf8"));
+    assert.equal(rec.direction, "cutover");
+    assert.equal(rec.arm64_live_smoke.verdict, "PASS");
+    assert.match(rec.arm64_live_smoke.sha256, /^[0-9a-f]{64}$/);
+    assert.equal(rec.arm64_live_smoke.instance_type, "t4g.small");
+    /* FAIL and NOT EVALUATED captures, and a missing file: the guard FAILS (exit 1, DO NOT APPLY) */
+    for (const [smoke, why] of [
+      [smokeFile(swap(/^host_arch=/, "host_arch=x86_64")), /not a Graviton host/],
+      [smokeFile(smokeLines().slice(0, -1)), /NOT EVALUATED.*no END/],
+      [smokeFile(smokeLines()), /not the release/],
+      [path.join(tmp(), "never-captured.txt"), /run gs-host arm64-smoke \(step 12b\)/],
+    ] as Array<[string, RegExp]>) {
+      const r = await run(cut(smoke, why.source.includes("not the release") ? `sha256:${"e".repeat(64)}` : RELEASE));
+      assert.equal(r.code, 1, r.text);
+      assert.match(r.text, why);
+      assert.match(r.text, /COST-2B MIGRATION GUARD edge-cutover: FAIL -- DO NOT APPLY/);
+    }
+    /* a Windows PowerShell 5.1 Tee-Object capture (UTF-16LE + BOM) is decoded and PASSES; another host's capture FAILS */
+    const utf16 = path.join(tmp(), "tee.txt");
+    fs.writeFileSync(utf16, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(`${smokeLines().join("\r\n")}\r\n`, "utf16le")]));
+    assert.equal((await run(cut(utf16))).code, 0);
+    const other = await run(cut(smokeFile(), RELEASE, [], "i-0fedcba9876543210"));
+    assert.equal(other.code, 1);
+    assert.match(other.text, /not the single host i-0fedcba9876543210/);
+    /* the smoke flags belong to edge-cutover only */
+    assert.equal((await run([...base("ecr-lifecycle", evidence("ecr-lifecycle")), "--arm64-live-smoke", smokeFile()])).code, 2);
+  });
+  test("OWNER-GATE FIX 1: a rollback is PROVEN, never labelled -- the forward PASS record and the plan's exact reverse; a forward plan called a rollback FAILS", async () => {
+    /* the forward step's PASS record (as step 14 writes it) */
+    const forwardRecord = path.join(tmp(), "14.json");
+    assert.equal((await run([...base("edge-cutover", evidence("edge-cutover")), "--record", forwardRecord])).code, 0);
+    const fwd = JSON.parse(fs.readFileSync(forwardRecord, "utf8"));
+    const alb = fwd.from_domain as string;
+    assert.ok(typeof alb === "string" && alb !== FIXTURE.hostOrigin, "the record keeps the ALB origin it moved away from");
+    assert.equal(fwd.to_domain, FIXTURE.hostOrigin);
+    /* the true rollback plan: the same distribution update, reversed (host -> ALB) */
+    const reverse = clone(PLANS["edge-cutover"]) as Obj;
+    const d = (reverse.resource_changes as Obj[]).find((r) => r.type === "aws_cloudfront_distribution");
+    assert.ok(d);
+    for (const o of d!.change.before.origin as Obj[]) if (o.origin_id === "gs-alb") o.domain_name = FIXTURE.hostOrigin;
+    for (const o of d!.change.after.origin as Obj[]) if (o.origin_id === "gs-alb") o.domain_name = alb;
+    const back = (plan: unknown, record: string | null, origin = alb) => [
+      "edge-cutover", "--plan-evidence", evidence("edge-cutover", plan === null ? {} : { plan }), "--environment", "staging", "--app-account", FIXTURE.appAccountId,
+      "--origin-domain", origin, "--direction", "rollback", ...(record === null ? [] : ["--cutover-record", record]),
+    ];
+    /* a rollback without the forward record: usage */
+    assert.equal((await run(back(reverse, null))).code, 2);
+    /* the true rollback: PASS without any smoke */
+    const ok = await run(back(reverse, forwardRecord));
+    assert.equal(ok.code, 0, ok.text);
+    assert.match(ok.text, /PASS  rollback: the plan reverses the cutover/);
+    /* THE BYPASS (review finding): the FORWARD plan judged as a "rollback" toward the host -- FAILS */
+    const bypass = await run(back(null, forwardRecord, FIXTURE.hostOrigin));
+    assert.equal(bypass.code, 1, bypass.text);
+    assert.match(bypass.text, /--origin-domain gs-origin-host\.example\.org is not the ALB origin/);
+    assert.match(bypass.text, /a forward plan is never a rollback/);
+    assert.match(bypass.text, /DO NOT APPLY/);
+    /* a record that is not a PASSING forward cutover with a PASSING smoke: FAIL; an unreadable record: FAIL (not evaluated) */
+    const failedRecord = path.join(tmp(), "14-failed.json");
+    fs.writeFileSync(failedRecord, JSON.stringify({ ...fwd, verdict: "FAIL" }));
+    assert.equal((await run(back(reverse, failedRecord))).code, 1);
+    const noSmoke = path.join(tmp(), "14-nosmoke.json");
+    fs.writeFileSync(noSmoke, JSON.stringify({ ...fwd, arm64_live_smoke: { verdict: "NOT EVALUATED" } }));
+    assert.equal((await run(back(reverse, noSmoke))).code, 1);
+    assert.equal((await run(back(reverse, path.join(tmp(), "absent.json")))).code, 1);
   });
   test("nat: PASS and FAIL through the command", async () => {
     const dir = tmp();

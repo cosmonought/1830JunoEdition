@@ -9,6 +9,11 @@
 #   gs-host.sh rollback <instance-id> [region]
 #   gs-host.sh stop     <instance-id> [--until-deploy] [region]
 #   gs-host.sh measure-report <instance-id> [days] [region]
+#   gs-host.sh arm64-smoke <instance-id> <sha256:digest> [region]      # step 12b: BEFORE deploy / edge cutover
+#
+# arm64-smoke (OWNER-GATE FIX 1): the REQUIRED live ARM64 runtime smoke on the real Graviton host -- the two REVIEWED
+# repository files (arm64-live-smoke.sh and the unchanged modules/single-host/tests/image-smoke.sh) sent as base64 (the
+# remote line holds no quote). Save the output (tee) for `migration-guard edge-cutover --arm64-live-smoke <file>`.
 #
 # Needs AWS CLI v2 and operator credentials allowed ssm:SendCommand (document AWS-RunShellScript) on that instance and
 # ssm:GetCommandInvocation. It prints identifiers and the host's own output only (the host has no secret to print).
@@ -35,7 +40,15 @@ case "$cmd" in
     days="${1:-14}"; [[ "$days" =~ ^[0-9]{1,3}$ ]] || die "days must be a whole number"; shift || true
     [ $# -ge 1 ] && region="$1"
     remote="/opt/gs/bin/gs-measure-report $days" ;;
-  *) die "usage: gs-host.sh status|deploy|rollback|stop|measure-report <instance-id> ..." ;;
+  arm64-smoke)
+    digest="${1:-}"; shift || true
+    [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "arm64-smoke needs the image digest sha256:<64 hex> (the release pushed at step 12)"
+    [ $# -ge 1 ] && region="$1"
+    here="$(cd "$(dirname "$0")" && pwd)"
+    b64() { tr -d '\r' <"$1" | base64 | tr -d '\n'; }
+    wrapper="$(b64 "$here/arm64-live-smoke.sh")"; smoke="$(b64 "$here/../modules/single-host/tests/image-smoke.sh")"
+    remote="d=\$(mktemp -d) && printf %s $wrapper | base64 -d > \$d/w && printf %s $smoke | base64 -d > \$d/s && bash \$d/w $digest \$d/s; rc=\$?; rm -rf \$d; exit \$rc" ;;
+  *) die "usage: gs-host.sh status|deploy|rollback|stop|measure-report|arm64-smoke <instance-id> ..." ;;
 esac
 [[ "$region" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]] || die "region must be an AWS region"
 

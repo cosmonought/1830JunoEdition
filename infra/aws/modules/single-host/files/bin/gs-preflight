@@ -25,12 +25,18 @@ token="$(imds_token)" || die "no IMDSv2 token (IMDSv2 is required)"
 address="$(imds_get "$token" public-ipv4)" || die "IMDS has no public-ipv4 for this host"
 [ "$address" = "$GS_EXPECTED_PUBLIC_IP" ] || die "this host's public address is not the serving Elastic IP"
 
-# One server per host.
-state="$(docker container inspect -f '{{.State.Status}}' gs-server 2>/dev/null || printf 'absent')"
-case "$state" in
-  absent) ;;
-  running | restarting | paused) die "a gs-server container is already $state (one server per host)" ;;
-  *) docker rm gs-server >/dev/null ;;
+# One server per host, asked as a LISTING: `inspect -f` on a missing container prints an empty line and exits 1, exactly
+# as when docker cannot answer (step 13: `inspect || printf absent` read "\nabsent" and refused every first start).
+# `container ls` answers "none" with exit 0 and no line; a docker failure refuses. Only an empty answer is "absent";
+# anything but one known state refuses (rm without -f never removes a running / paused / restarting one).
+states="$(docker container ls --all --filter 'name=^/?gs-server$' --format '{{.State}}')" \
+  || die "docker could not list containers (docker.service?): one server per host is not proven"
+case "$states" in
+  '') ;; # none: a fresh host, or the last run's container removed (--rm)
+  running | restarting | paused) die "a gs-server container is already $states (one server per host)" ;;
+  removing) die "the previous gs-server container is still being removed" ;;
+  created | exited | dead) docker container rm gs-server >/dev/null || die "the $states gs-server container could not be removed" ;;
+  *) die "docker answered $(printf '%q' "$states") for gs-server, not one known state" ;;
 esac
 
 # The release image is present, pinned and of this host's architecture.

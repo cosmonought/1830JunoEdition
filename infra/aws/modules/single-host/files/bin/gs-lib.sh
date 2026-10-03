@@ -42,7 +42,12 @@ take_lock() {
 imds_token() { curl -fsS -m 3 -X PUT "$GS_IMDS/latest/api/token" -H 'X-aws-ec2-metadata-token-ttl-seconds: 60'; }
 imds_get() { curl -fsS -m 3 -H "X-aws-ec2-metadata-token: $1" "$GS_IMDS/latest/meta-data/$2"; }
 
-http_code() { curl -s -o /dev/null -m 5 -w '%{http_code}' "$1" 2>/dev/null || printf '000'; }
+# One GET's status: curl -w prints 000 itself when no answer comes (and fails), so `|| printf 000` read 000000. Three
+# digits from a curl that succeeded, otherwise 000.
+http_code() {
+  local code
+  if code="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "$1" 2>/dev/null)" && [[ "$code" =~ ^[0-9]{3}$ ]]; then printf '%s' "$code"; else printf '000'; fi
+}
 
 server_url() { printf 'http://127.0.0.1:%s' "${GS_CONTAINER_PORT:-8917}"; }
 
@@ -62,14 +67,15 @@ pull_release() {
 # is ALWAYS sent: it also cancels a start in progress (the preflight) or a pending auto-restart, which `is-active` would
 # not report as active -- a "stopped" answer must mean stopped.
 stop_server() {
-  local state
+  local state left
   say "draining: SIGTERM -> graceful shutdown (readiness 503 first; at most 120 s); any pending restart is cancelled"
   systemctl stop gs-server.service
   state="$(systemctl is-active gs-server.service 2>/dev/null || true)"
   case "$state" in inactive | failed) ;; *) die "gs-server.service is still '$state' after the stop" ;; esac
-  if docker container inspect gs-server >/dev/null 2>&1; then
-    die "a gs-server container still exists after the stop (inspect it; nothing else was changed)"
-  fi
+  # A LISTING proves it gone (inspect fails alike for "absent" and "docker cannot answer": a docker failure proves nothing).
+  left="$(docker container ls --all --filter 'name=^/?gs-server$' --format '{{.State}}')" \
+    || die "docker could not list containers after the stop: the stop is NOT proven (nothing else was changed)"
+  [ -z "$left" ] || die "a gs-server container still exists after the stop ($(printf '%q' "$left"); inspect it; nothing else was changed)"
   say "stopped (the last run exited with status $(systemctl show -p ExecMainStatus --value gs-server.service 2>/dev/null || printf '?'))"
 }
 
@@ -118,11 +124,14 @@ static_credentials() {
 }
 
 # COST-2A: the digest the RUNNING gs-server container was started from (its image's repository digest in this host's ECR
-# repository), "none" when no container runs, "unknown" when the image names no such digest.
+# repository), "none" when no container runs, "unknown" when the image names no such digest or docker cannot answer
+# (inspect fails alike for that and "absent": a listing settles it).
 running_digest() {
-  local image digest
-  image="$(docker container inspect -f '{{.Image}}' gs-server 2>/dev/null)" || { printf 'none'; return 0; }
-  [ -n "$image" ] || { printf 'none'; return 0; }
+  local image digest listing
+  if ! image="$(docker container inspect -f '{{.Image}}' gs-server 2>/dev/null)" || [ -z "$image" ]; then
+    if listing="$(docker container ls --all --quiet --filter 'name=^/?gs-server$' 2>/dev/null)" && [ -z "$listing" ]; then printf 'none'; else printf 'unknown'; fi
+    return 0
+  fi
   digest="$(docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$image" 2>/dev/null | grep -E "^${GS_ECR_REGISTRY}/${GS_ECR_REPOSITORY}@sha256:[0-9a-f]{64}$" | head -n 1)" || true
   if [ -n "$digest" ]; then printf '%s' "${digest##*@}"; else printf 'unknown'; fi
 }

@@ -49,7 +49,15 @@
                                container, `--rm`, the repository mounted READ-ONLY, no credential passed; dnf adds only
                                util-linux-core (flock) and findutils; the module is copied inside and its files/bin made
                                0755 exactly as cloud-init installs them; the suite's own stubs stand in for docker /
-                               systemctl / curl / aws (offline). Git Bash is NOT a substitute (no flock, no python3).
+                               systemctl / curl / aws (offline) -- answering as the REAL CLIs do (PHASE 1 FRESH-HOST
+                               HARDENING). Git Bash is NOT a substitute (no flock, no python3).
+    15b Single-host real       PHASE 1 FRESH-HOST HARDENING: tests/preflight-real-docker.test.sh against the REAL Docker
+        Docker                 daemon (the socket mounted) with Amazon Linux 2023's OWN docker CLI (dnf's docker package,
+                               the host's): gs-preflight's one-server check (no container, running / paused / restarting,
+                               exited / created leftovers, daemon unreachable, odd stdout), stop_server, gs-health and
+                               gs-run's argument vector (docker create, never started). The docker stub that let step 13's
+                               fresh-host failure pass every offline gate is not in this path. It creates only gs-server /
+                               gs-rt-* containers, removes them, and refuses to run if a gs-server container exists.
     16  Image smoke            OFFLINE with respect to AWS / ECR: `docker buildx build --load` of
         (amd64 run; arm64      infra/docker/game-server.Dockerfile for linux/amd64 AND linux/arm64 into LOCAL, disposable
         build + architecture)  tags (never --push, never an ECR login, never build-image.{sh,ps1}'s push path; BUILD_CA, if
@@ -421,6 +429,31 @@ Add-Gate 'Single-host scripts' $false {
   if ($code -eq 0 -and ($counts[1] -ne 0 -or $counts[0] -lt 40)) { return @{ Status = 'FAIL'; Exit = $code; Reason = "totals $($counts[0]) passed / $($counts[1]) failed (>= 40 passed, 0 failed required)" } }
   return @{ Exit = $code }
 } 'docker run --rm -v <repo>:/repo:ro <amazonlinux:2023@sha256> : dnf util-linux-core findutils; bash host-scripts.test.sh on a 0755 copy of the module   (genuine AL2023 userspace; offline stubs)'
+
+# PHASE 1 FRESH-HOST HARDENING: the one-server check against a REAL daemon and AL2023's OWN docker CLI (the stub that let
+# step 13's fresh-host failure pass every offline gate is not in this path). The suite exits 2 (NOT RUN) on its own
+# refusals: no daemon, the image absent, or a gs-server container already present (it never touches one it did not make).
+Add-Gate 'Single-host real Docker' $false {
+  $why = Docker-Problem
+  if ($null -ne $why) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = "$why -- the real-Docker regression runs against the Docker daemon" } }
+  $name = "recon1-owner-gate-realdocker-$Stamp".ToLower()
+  # No double quote anywhere in $cmd (Windows PowerShell 5.1 passes native arguments verbatim only without them).
+  $cmd = 'dnf -y -q install docker util-linux-core findutils >/dev/null 2>&1 || exit 97; for c in bash docker flock curl grep mktemp; do command -v $c >/dev/null || exit 98; done; mkdir -p /work && cp -r /repo/infra/aws/modules/single-host /work/single-host && chmod 0755 /work/single-host/files/bin/* || exit 99; docker --version; exec bash /work/single-host/tests/preflight-real-docker.test.sh ' + $Al2023Image
+  try {
+    $code = Invoke-Logged $Docker @('run', '--rm', '--name', $name, '-v', '/var/run/docker.sock:/var/run/docker.sock', '-v', $RepoMountRO, $Al2023Image, 'bash', '-c', $cmd) $RepoRoot
+    $out = @($script:LastOutput)   # kept BEFORE the cleanup command replaces the last output
+  } finally {
+    Invoke-Logged $Docker @('rm', '-f', $name) $RepoRoot | Out-Null
+  }
+  if ($code -eq 97) { return @{ Status = 'NOT RUN'; Exit = $code; Reason = 'READINESS: dnf could not install docker / util-linux-core / findutils in the AL2023 container (network to the Amazon Linux repositories?)' } }
+  if ($code -eq 98 -or $code -eq 99) { return @{ Status = 'NOT RUN'; Exit = $code; Reason = 'READINESS: the AL2023 test userspace could not be prepared (a required command or the module copy is missing)' } }
+  if ($code -eq 2) { return @{ Status = 'NOT RUN'; Exit = $code; Reason = "the suite refused to run: $([string]($out | Where-Object { $_ -match '^NOT RUN' } | Select-Object -Last 1))" } }
+  $counts = Harness-Counts $out '^(\d+) passed, (\d+) failed \(docker CLI'
+  if ($null -eq $counts) { return @{ Status = 'FAIL'; Exit = $code; Reason = 'the suite did not report its totals (it did not finish)' } }
+  $script:Facts['host_real_docker'] = [ordered]@{ image = $Al2023Image; cli = [string]($out | Where-Object { $_ -match '^Docker version ' } | Select-Object -First 1); passed = $counts[0]; failed = $counts[1] }
+  if ($code -eq 0 -and ($counts[1] -ne 0 -or $counts[0] -lt 25)) { return @{ Status = 'FAIL'; Exit = $code; Reason = "totals $($counts[0]) passed / $($counts[1]) failed (>= 25 passed, 0 failed required)" } }
+  return @{ Exit = $code }
+} 'docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v <repo>:/repo:ro <amazonlinux:2023@sha256> : dnf docker (AL2023 CLI) util-linux-core findutils; bash preflight-real-docker.test.sh against the REAL daemon (gs-server / gs-rt-* containers, removed after)'
 
 # OWNER-GATE FIX 1: the image gate is the SOURCE proof. linux/amd64: build + metadata + the full runtime smoke (required).
 # linux/arm64: the BUILD (the Dockerfile's build stage runs on the builder's platform and the runtime stage only COPIES, so

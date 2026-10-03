@@ -558,6 +558,11 @@ describe("PHASE 1 REMAINDER F5 / F6: the operator wrappers (static)", () => {
   test("modules/single-host is untouched by this tooling (the wrapper is sent, never installed)", () => {
     const r = spawnSync("git", ["-C", REPO, "diff", "--name-only", "083d0668556c05a84eb8b3e5befc4e973544aa9a", "--", "infra/aws/modules/single-host"], { encoding: "utf8" });
     if (r.status !== 0) return; // not a git checkout with the base commit (an exported tree): the owner gate's own diff covers it
-    assert.equal(r.stdout.trim(), "", r.stdout);
+    /* PHASE 1 FRESH-HOST HARDENING changed exactly these module files (step 13's gs-preflight fix, its same-class fixes and
+       their tests); nothing else in the module may differ from this tooling's base. */
+    const freshHost = new Set(["files/bin/gs-preflight", "files/bin/gs-lib.sh", "files/bin/gs-health", "tests/host-scripts.test.sh", "tests/preflight-real-docker.test.sh", "README.md"].map((f) => `infra/aws/modules/single-host/${f}`));
+    assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f)), [], r.stdout);
+    assert.ok(!fs.existsSync(path.join(REPO, "infra/aws/modules/single-host/files/bin/host-role-probe.sh")), "the wrapper is never one of the host's installed files");
+    assert.doesNotMatch(fs.readFileSync(path.join(REPO, "infra/aws/modules/single-host/locals.tf"), "utf8"), /host-role-probe/, "cloud-init never installs the wrapper");
   });
 });

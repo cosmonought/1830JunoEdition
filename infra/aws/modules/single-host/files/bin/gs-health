@@ -11,7 +11,8 @@ wait_for=0
 ready=1; wait_ready "$wait_for" || ready=0
 healthz="$(http_code "$(server_url)/gs/healthz")"
 readyz="$(http_code "$(server_url)/gs/readyz")"
-origin="$(curl -s -o /dev/null -m 5 -w '%{http_code}' --resolve "$GS_ORIGIN_HOSTNAME:443:127.0.0.1" "https://$GS_ORIGIN_HOSTNAME/gs/readyz" 2>/dev/null || printf '000')"
+origin="000" # Caddy's TLS answer for its own name: three digits from a curl that succeeded (as http_code), else 000
+if code="$(curl -s -o /dev/null -m 5 -w '%{http_code}' --resolve "$GS_ORIGIN_HOSTNAME:443:127.0.0.1" "https://$GS_ORIGIN_HOSTNAME/gs/readyz" 2>/dev/null)" && [[ "$code" =~ ^[0-9]{3}$ ]]; then origin="$code"; fi
 build="$(release_field "$GS_ETC/release.env" BUILD_ID)"
 digest="$(release_field "$GS_ETC/release.env" GS_IMAGE_DIGEST)"
 valid_digest "$digest" || digest="none"

@@ -748,6 +748,7 @@ describe("RECON-1: the ONE owner gate (COST-2C's runner, extended) covers the re
       "aws/deploy/cost1SingleHost.test.js",
       "aws/awsClients.test.js",
       "infra/aws/modules/single-host/tests/host-scripts.test.sh",
+      "tests/preflight-real-docker.test.sh",
     ])
       assert.ok(gate.includes(f), f);
     for (const m of ["modules/single-host", "modules/app", "modules/ledger", "stacks/single-host", "stacks/app", "stacks/ledger"]) assert.ok(gate.includes(`'${m}'`), m);
@@ -764,6 +765,13 @@ describe("RECON-1: the ONE owner gate (COST-2C's runner, extended) covers the re
     assert.match(gate, /\$Al2023Image = 'public\.ecr\.aws\/amazonlinux\/amazonlinux:2023@sha256:[0-9a-f]{64}'/);
     assert.ok(!/Invoke-Logged \$Bash @\('infra\/aws\/modules\/single-host\/tests\/host-scripts\.test\.sh'\)/.test(gate), "the host scripts never run under Git Bash");
     assert.match(gate, /exec bash \/work\/single-host\/tests\/host-scripts\.test\.sh/);
+    /* PHASE 1 FRESH-HOST HARDENING: the one-server check also runs against the REAL daemon with AL2023's own CLI */
+    const realDocker = gate.slice(gate.indexOf("Add-Gate 'Single-host real Docker'"), gate.indexOf("Add-Gate $ImageGateName"));
+    assert.ok(realDocker.length > 0 && gate.indexOf("Add-Gate 'Single-host scripts'") < gate.indexOf("Add-Gate 'Single-host real Docker'"), "the real-Docker gate follows the stubbed one");
+    assert.match(realDocker, /dnf -y -q install docker util-linux-core findutils/, "AL2023's OWN docker CLI");
+    assert.match(realDocker, /'-v', '\/var\/run\/docker\.sock:\/var\/run\/docker\.sock'/, "the REAL daemon");
+    assert.match(realDocker, /preflight-real-docker\.test\.sh ' \+ \$Al2023Image/);
+    assert.match(realDocker, /\$counts\[0\] -lt 25/);
     assert.match(gate, /'buildx', 'build', '--platform', \$platform, '-f', 'infra\/docker\/game-server\.Dockerfile'/);
     assert.match(gate, /'--load'/);
     assert.ok(!/--push|ecr get-login|docker login|build-image\.(ps1|sh)'/.test(gate.replace(/^\s*#.*$/gm, "").replace(/'[^']*never --push[^']*'/g, "")), "the smoke never pushes or logs in to ECR");

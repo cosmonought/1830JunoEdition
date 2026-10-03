@@ -138,6 +138,11 @@ describe("PHASE 1 REMAINDER: the migration runbook's corrections", () => {
   test("no Terraform module or stack changed since the certified base (the host's resource shape is untouched)", () => {
     const r = spawnSync("git", ["-C", REPO, "diff", "--name-only", BASE, "--", "infra/aws/modules", "infra/aws/stacks"], { encoding: "utf8" });
     if (r.status !== 0) return; // not a checkout holding the base commit: the owner gate's clean-clone diff covers it
-    assert.equal(r.stdout.trim(), "", r.stdout);
+    /* PHASE 1 FRESH-HOST HARDENING changed three HOST SCRIPTS (and the module's bash tests and README) -- no .tf,
+       template, unit or stack. The scripts are embedded in the instance's user data, so a stacks/single-host plan from that commit REPLACES
+       the instance: the live host takes them by the reviewed one-file install (runbook 13r), and step 22b is planned from
+       the host-create commit's module (the runbook says so). */
+    const freshHost = new Set(["files/bin/gs-preflight", "files/bin/gs-lib.sh", "files/bin/gs-health", "tests/host-scripts.test.sh", "tests/preflight-real-docker.test.sh", "README.md"].map((f) => `infra/aws/modules/single-host/${f}`));
+    assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f)), [], r.stdout);
   });
 });

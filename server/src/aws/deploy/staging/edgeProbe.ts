@@ -217,6 +217,10 @@ export interface EdgeProbeOptions {
   readonly originReadTimeoutSeconds: number;
   /** How long the idle socket is held (at least `requiredIdleMs`; never shorter). */
   readonly holdMs: number;
+  /** PHASE 1 REMAINDER (Step 16): the single host's path (client -> CloudFront -> Caddy -> server). Absent: the ECS path
+   *  (CloudFront -> ALB), recorded exactly as before. Present: the host proxy's idle bound replaces the ALB's, and the
+   *  record names the proxy instead of carrying an `alb_idle_seconds` it never measured. */
+  readonly proxy?: { readonly name: "caddy"; readonly idleSeconds: number };
 }
 
 const wsUrlOf = (baseUrl: string, query: string): string => {
@@ -263,13 +267,14 @@ export async function runEdgeProbe(transport: EdgeTransport, options: EdgeProbeO
   const refused = await transport.observeSocket(wsUrlOf(options.baseUrl, announcement), socketHeaders, 20_000);
   result.ws_announcement = { sent: announcement, observation: scrubObservation(refused, clean) };
   const canonical = clientAnnouncementQuery(1, SUPPORTED_RULES_ENGINE_VERSIONS, `l6cert-${options.run}`);
-  const required = requiredIdleMs(options.albIdleSeconds, options.originReadTimeoutSeconds);
+  const proxyIdleSeconds = options.proxy === undefined ? options.albIdleSeconds : options.proxy.idleSeconds;
+  const required = requiredIdleMs(proxyIdleSeconds, options.originReadTimeoutSeconds);
   const hold = Math.max(options.holdMs, required + 10_000);
   const idle = await transport.observeSocket(wsUrlOf(options.baseUrl, canonical), socketHeaders, hold, LOBBY_SUBSCRIPTION);
   result.ws_idle = {
     sent: canonical,
     subscription: LOBBY_SUBSCRIPTION,
-    alb_idle_seconds: options.albIdleSeconds,
+    ...(options.proxy === undefined ? { alb_idle_seconds: options.albIdleSeconds } : { proxy: options.proxy.name, proxy_idle_seconds: options.proxy.idleSeconds }),
     origin_read_timeout_seconds: options.originReadTimeoutSeconds,
     ping_interval_ms: PING_INTERVAL_MS,
     pong_timeout_ms: PONG_TIMEOUT_MS,
@@ -289,15 +294,28 @@ const scrubObservation = (o: SocketObservation, clean: (t: string) => string): S
 const pairKey = (pair: unknown): string => arr(pair).map(String).join(":");
 const multiset = (pairs: readonly unknown[]): string[] => pairs.map(pairKey).sort();
 
-/** §6 and §5 from the recorded GETs. `hopsFromTaskDefinition`: the running task definition's GS_TRUSTED_PROXY_HOPS. */
-export function judgeQueryProbe(section: unknown, expect: { readonly run: string; readonly hopsFromTaskDefinition: string | null }): Check[] {
+/** §6 and §5 from the recorded GETs. `hopsFromTaskDefinition`: the running task definition's GS_TRUSTED_PROXY_HOPS (the
+ *  ECS path). PHASE 1 REMAINDER: `hopsSource: "single-host"` replaces that ECS-only configuration read with the serving
+ *  host process's OWN configured value as it answered through the real edge (both requests must report it); every other
+ *  check is identical for both paths. */
+export function judgeQueryProbe(section: unknown, expect: { readonly run: string; readonly hopsFromTaskDefinition: string | null; readonly hopsSource?: "task-definition" | "single-host" }): Check[] {
   const s = obj(section);
   const q = obj(s.query);
   const sent = arr(q.sent).map((p) => [String(arr(p)[0]), String(arr(p)[1])] as const);
   const requests = arr(q.requests).map(obj);
   const checks: Check[] = [];
   checks.push(judge("edge query: the probe's own material", JSON.stringify(sent) === JSON.stringify(probeQuery(expect.run)), "non-default cp/cr/cb and unrelated parameters", "the recorded query is not this run's probe query"));
-  checks.push(judge("edge: GS_TRUSTED_PROXY_HOPS in the running task definition", expect.hopsFromTaskDefinition === String(TRUSTED_PROXY_HOPS), String(TRUSTED_PROXY_HOPS), `GS_TRUSTED_PROXY_HOPS=${String(expect.hopsFromTaskDefinition)}`));
+  if (expect.hopsSource === "single-host") {
+    const reported = requests.map((r) => obj(r.answer).trusted_proxy_hops);
+    checks.push(
+      judge(
+        "edge: GS_TRUSTED_PROXY_HOPS of the serving single host",
+        requests.length === 2 && reported.every((h) => h === TRUSTED_PROXY_HOPS),
+        `${TRUSTED_PROXY_HOPS} (CloudFront + Caddy), as the host's process answered through the edge`,
+        `the host's process answered GS_TRUSTED_PROXY_HOPS [${reported.map(String).join(", ")}] over ${requests.length} request(s), not ${TRUSTED_PROXY_HOPS}`,
+      ),
+    );
+  } else checks.push(judge("edge: GS_TRUSTED_PROXY_HOPS in the running task definition", expect.hopsFromTaskDefinition === String(TRUSTED_PROXY_HOPS), String(TRUSTED_PROXY_HOPS), `GS_TRUSTED_PROXY_HOPS=${String(expect.hopsFromTaskDefinition)}`));
   if (requests.length !== 2) return [...checks, judge("edge query: both requests", false, "", `${requests.length} request(s) recorded`)];
   const expectedPairs = multiset(sent.map(([n, v]) => [sha256Hex(n), sha256Hex(v)]));
   /* Compared key-order-free: a record written by `writeRecord` has its keys sorted. */
@@ -338,7 +356,7 @@ export function judgeQueryProbe(section: unknown, expect: { readonly run: string
       judge(
         `${label}: exactly ${TRUSTED_PROXY_HOPS} proxies appended to X-Forwarded-For`,
         appended === TRUSTED_PROXY_HOPS,
-        `${String(a.forwarded_entries)} entries = ${spoofed} sent + ${TRUSTED_PROXY_HOPS} (CloudFront, the ALB)`,
+        `${String(a.forwarded_entries)} entries = ${spoofed} sent + ${TRUSTED_PROXY_HOPS} (CloudFront, ${expect.hopsSource === "single-host" ? "Caddy" : "the ALB"})`,
         `${String(a.forwarded_entries)} entries for ${spoofed} sent: ${appended} appended, not ${TRUSTED_PROXY_HOPS} (GS_TRUSTED_PROXY_HOPS=${TRUSTED_PROXY_HOPS} would count the wrong address)`,
       ),
     );
@@ -384,8 +402,9 @@ export function judgeWsAnnouncement(section: unknown): Check[] {
   ];
 }
 
-/** Who most plausibly closed an idle socket that died early (said to be inferred when it is). */
-export function closedBy(o: Record<string, unknown>, bounds: { readonly albIdleMs: number; readonly originReadMs: number }): string {
+/** Who most plausibly closed an idle socket that died early (said to be inferred when it is). `proxy`: the path's proxy
+ *  (the ALB on the ECS path; Caddy on the single host's -- PHASE 1 REMAINDER). */
+export function closedBy(o: Record<string, unknown>, bounds: { readonly albIdleMs: number; readonly originReadMs: number }, proxy: "the ALB" | "Caddy" = "the ALB"): string {
   const events = arr(o.events).map(obj);
   const close = events.find((e) => e.kind === "close");
   if (close === undefined) return o.ended_by === "error" ? "a connection error before the socket opened" : "unknown (no close observed)";
@@ -394,19 +413,32 @@ export function closedBy(o: Record<string, unknown>, bounds: { readonly albIdleM
   const pings = events.filter((e) => e.kind === "ping").length;
   if (pings === 0) return "an edge, with no server ping ever delivered (control frames are not crossing the edge) -- inferred";
   const near = (bound: number) => Math.abs(at - bound) <= 15_000;
-  if (near(bounds.albIdleMs)) return `the ALB (no close frame at ${at} ms, its idle timeout is ${bounds.albIdleMs} ms) -- inferred from timing`;
+  if (near(bounds.albIdleMs)) return `${proxy} (no close frame at ${at} ms, its idle timeout is ${bounds.albIdleMs} ms) -- inferred from timing`;
   if (near(bounds.originReadMs)) return `CloudFront (no close frame at ${at} ms, its origin read timeout is ${bounds.originReadMs} ms) -- inferred from timing`;
   if (near(PONG_TIMEOUT_MS)) return `the server's half-open cut (no close frame at ${at} ms, pong timeout ${PONG_TIMEOUT_MS} ms: were our pongs dropped?) -- inferred from timing`;
   return `unknown: the connection ended without a close frame at ${at} ms (no bound on the path matches) -- an edge or the network`;
 }
 
 /** §7 the idle socket: it stood the browser's lobby subscription, survived the required interval (recomputed from the
- *  evidence) with nothing further sent, and the server's pings crossed. */
+ *  evidence) with nothing further sent, and the server's pings crossed. The ECS path (CloudFront -> ALB); unchanged except
+ *  that a single-host path's record (it names its proxy) is never this path's. */
 export function judgeWsIdle(section: unknown, evidence: { readonly albIdleSeconds: number | null; readonly originReadTimeoutSeconds: number | null }): Check[] {
   const s = obj(obj(section).ws_idle);
   if (s.status === "not-run") return [judge("WebSocket idle", false, "", `not run (${String(s.reason)}): required`)];
   if (evidence.albIdleSeconds === null || evidence.originReadTimeoutSeconds === null) return [judge("WebSocket idle: the bounds", false, "", "the ALB idle timeout or CloudFront's origin read timeout is not in the evidence")];
-  const required = requiredIdleMs(evidence.albIdleSeconds, evidence.originReadTimeoutSeconds);
+  return judgeWsIdleOnPath(section, { proxy: "ALB", proxyIdleSeconds: evidence.albIdleSeconds, originReadTimeoutSeconds: evidence.originReadTimeoutSeconds });
+}
+
+/** PHASE 1 REMAINDER (Step 16): the idle judgement for a named path. `ALB`: the ECS path, its check names exactly
+ *  `judgeWsIdle`'s. `Caddy`: the single host's (client -> CloudFront -> Caddy -> server); the record must name the proxy
+ *  and its idle bound, and carry no ALB bound (it never measured one). The interval is recomputed here from the bounds
+ *  the CALLER read from evidence, never taken from the record. */
+export function judgeWsIdleOnPath(section: unknown, bounds: { readonly proxy: "ALB" | "Caddy"; readonly proxyIdleSeconds: number; readonly originReadTimeoutSeconds: number }): Check[] {
+  const s = obj(obj(section).ws_idle);
+  if (s.status === "not-run") return [judge("WebSocket idle", false, "", `not run (${String(s.reason)}): required`)];
+  const required = requiredIdleMs(bounds.proxyIdleSeconds, bounds.originReadTimeoutSeconds);
+  const caddy = bounds.proxy === "Caddy";
+  const pathRecorded = caddy ? s.proxy === "caddy" && s.proxy_idle_seconds === bounds.proxyIdleSeconds && s.alb_idle_seconds === undefined && s.origin_read_timeout_seconds === bounds.originReadTimeoutSeconds : s.proxy === undefined;
   const o = obj(s.observation);
   const events = arr(o.events).map(obj);
   const frames = events.filter((e) => e.kind === "message").map((e) => `${String(e.frame_kind)}/${String(e.frame_code ?? "-")}`);
@@ -425,12 +457,21 @@ export function judgeWsIdle(section: unknown, evidence: { readonly albIdleSecond
       `${LOBBY_SUBSCRIPTION}, as the browser's lobby sends it, and nothing else`,
       `the probe recorded subscription ${String(s.subscription)} and sent [${sent.map((e) => String(e.frame_kind)).join(", ")}] (a socket subscribed to nothing is reaped by the server at 60 s, so the idle path is never observed)`,
     ),
-    judge("WebSocket idle: the interval is the evidence's", s.required_ms === required && (num(s.hold_ms) ?? 0) >= required, `${required} ms (max(ALB ${evidence.albIdleSeconds} s, CloudFront ${evidence.originReadTimeoutSeconds} s, pong ${PONG_TIMEOUT_MS / 1000} s) + 2 x ${PING_INTERVAL_MS / 1000} s)`, `the probe held for ${String(s.hold_ms)} ms against ${String(s.required_ms)} ms; the evidence requires ${required} ms`),
     judge(
-      "WebSocket idle: survived client -> CloudFront -> ALB -> server",
+      "WebSocket idle: the interval is the evidence's",
+      s.required_ms === required && (num(s.hold_ms) ?? 0) >= required && pathRecorded,
+      `${required} ms (max(${bounds.proxy} ${bounds.proxyIdleSeconds} s, CloudFront ${bounds.originReadTimeoutSeconds} s, pong ${PONG_TIMEOUT_MS / 1000} s) + 2 x ${PING_INTERVAL_MS / 1000} s)`,
+      pathRecorded
+        ? `the probe held for ${String(s.hold_ms)} ms against ${String(s.required_ms)} ms; the evidence requires ${required} ms`
+        : caddy
+          ? `the record is not the single host's path (proxy ${String(s.proxy)}, proxy idle ${String(s.proxy_idle_seconds)} s, ALB idle ${String(s.alb_idle_seconds)} s, CloudFront ${String(s.origin_read_timeout_seconds)} s; expected caddy ${bounds.proxyIdleSeconds} s, no ALB, CloudFront ${bounds.originReadTimeoutSeconds} s)`
+          : `the record is the single host's path (proxy ${String(s.proxy)}), not the ALB's`,
+    ),
+    judge(
+      `WebSocket idle: survived client -> CloudFront -> ${bounds.proxy} -> server`,
       survived,
       `open ${String(o.duration_ms)} ms with nothing sent after the lobby subscription, closed by the probe`,
-      o.opened !== true ? `the upgrade did not open (HTTP ${String(o.upgrade_status)})` : `ended after ${String(o.duration_ms)} ms: closed by ${closedBy(o, { albIdleMs: evidence.albIdleSeconds * 1000, originReadMs: evidence.originReadTimeoutSeconds * 1000 })}`,
+      o.opened !== true ? `the upgrade did not open (HTTP ${String(o.upgrade_status)})` : `ended after ${String(o.duration_ms)} ms: closed by ${closedBy(o, { albIdleMs: bounds.proxyIdleSeconds * 1000, originReadMs: bounds.originReadTimeoutSeconds * 1000 }, caddy ? "Caddy" : "the ALB")}`,
     ),
     judge(
       "WebSocket idle: the server's pings crossed the edge",

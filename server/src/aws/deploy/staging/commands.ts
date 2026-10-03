@@ -17,6 +17,10 @@
 //          stage-probe collect --run-id R --evidence <dir>                   the record, reassembled from the log
 //   4. stage-probe edge --run-id R --evidence <dir> --base-url https://<distribution> --origin https://<allowed origin>
 //        [--expected-client-ip <your public IP>]    (GS_CERT_SESSION_COOKIE: a staging account's session cookie value)
+//      PHASE 1 REMAINDER (SINGLE_HOST_MIGRATION.md step 16): `--topology single-host --host-evidence <step 15b dir>
+//        --instance-id <i-...> --origin-hostname <dns>` probes the SAME edge on the single host's path (CloudFront ->
+//        Caddy), standing on the host's verified evidence instead of the ECS prerequisite / ALB attributes, and judges its
+//        own record (edge-single-host-verdict.json; singleHostEdge.ts). The default (`--topology ecs`) is unchanged.
 //   5. infra/aws/scripts/plan-evidence ... <dir>                            the ledger and app plans (never applied)
 //   6. (replacement scenario) drain-pool ... <dir>, terraform apply, then capture-evidence again
 //   7. capture-evidence ... <dir> again, then
@@ -55,6 +59,7 @@ export { recordFromLog, recordLines } from "./evidence";
 import { newProbeNonce, runIamProbe } from "./iamProbe";
 import { adoptionOf, buildCapabilities, readGenerationEvidence, readIdentityRecovery, readRestoreHeartbeats, type RecoveryReaders, type TaskHeartbeatReader } from "./recovery";
 import { runKmsProbe } from "./kmsProbe";
+import { HOST_EDGE_FILES, judgeSingleHostEdge, readHostEdgeEvidence, SINGLE_HOST_EDGE_VERDICT_FILE, singleHostEdgeVerdictRecord, singleHostRequiredIdleMs } from "./singleHostEdge";
 import { runTransactionProbe } from "./transactionProbe";
 import { collectRotationProof, ROTATION_PROOF_FILE, type RotationReaders } from "./rotationProof";
 
@@ -473,9 +478,18 @@ async function taskRoleProbe(argv: readonly string[], deps: DeployDeps, staging:
   return EXIT_OK;
 }
 
-/** Runs on the operator's machine, against the distribution's public name. */
+/** Runs on the operator's machine, against the distribution's public name. `--topology ecs` (the default) is L6-6's
+ *  probe, unchanged: it stands on `stage-cert prerequisite` and the ALB's idle timeout and is judged by `stage-cert
+ *  certify`. `--topology single-host` (PHASE 1 REMAINDER, step 16) stands on the single host's step-15b evidence instead
+ *  (`singleHostEdge.ts`) and judges its own record. Neither path's evidence can stand in for the other's. */
 async function edgeProbe(argv: readonly string[], deps: DeployDeps, staging: StagingDeps): Promise<number> {
-  const flags = parseFlags(argv, ["--run-id", "--evidence", "--base-url", "--origin", "--environment", "--generation", "--pool", "--expected-client-ip", "--hold-seconds"], []);
+  const flags = parseFlags(argv, ["--run-id", "--evidence", "--base-url", "--origin", "--environment", "--generation", "--pool", "--expected-client-ip", "--hold-seconds", ...EDGE_TOPOLOGY_FLAGS], []);
+  const topology = flags.get("--topology") ?? "ecs";
+  if (topology !== "ecs" && topology !== "single-host") throw new UsageError("--topology is ecs (the default: the ALB path) or single-host (CloudFront -> Caddy on the host)");
+  if (topology === "ecs") {
+    const hostFlags = EDGE_TOPOLOGY_FLAGS.filter((f) => f !== "--topology" && flags.has(f));
+    if (hostFlags.length > 0) throw new UsageError(`${hostFlags.join(", ")}: the single host's evidence belongs to --topology single-host (the ECS path stands on stage-cert prerequisite and the ALB's idle timeout)`);
+  }
   const run = runOf(flags);
   const dir = need(flags, "--evidence");
   const environment = environmentOf(need(flags, "--environment"));
@@ -485,6 +499,7 @@ async function edgeProbe(argv: readonly string[], deps: DeployDeps, staging: Sta
   if (base.protocol !== "https:" || base.pathname !== "/" || base.search !== "" || base.username !== "" || base.password !== "") throw new UsageError("--base-url is https://<the distribution's name or alias> with no path, query or credentials");
   const origin = need(flags, "--origin");
   if (!/^https:\/\/[^/]+$/.test(origin)) throw new UsageError("--origin is an https origin (one of GS_ALLOWED_ORIGINS)");
+  if (topology === "single-host") return singleHostEdgeProbe(flags, { run, dir, environment, generation, pool, base, origin }, deps, staging);
   if (!prerequisitePassed(dir, run)) throw new UsageError(`${EVIDENCE.prerequisite} in ${dir} is not PASS for ${run}: run \`stage-cert prerequisite\` first (no probe runs against an unsettled deployment)`);
   const bounds = idleBoundsOf(dir);
   if (bounds.albIdleSeconds === null || bounds.originReadTimeoutSeconds === null) throw new UsageError(`the evidence has no ALB idle timeout or CloudFront origin read timeout (${EVIDENCE_FILES.loadBalancerAttributes}, ${EVIDENCE_FILES.distributionConfig})`);
@@ -508,4 +523,75 @@ async function edgeProbe(argv: readonly string[], deps: DeployDeps, staging: Sta
   const where = writeRecord(dir, EVIDENCE.edge, JSON.parse(scrub(JSON.stringify(record), cookie === undefined ? [] : [cookie])) as unknown);
   deps.out(`RECORDED: ${where} (judged by stage-cert certify)`);
   return EXIT_OK;
+}
+
+/** `stage-probe edge --topology single-host`'s own flags (refused on the ECS path). */
+const EDGE_TOPOLOGY_FLAGS = ["--topology", "--host-evidence", "--instance-id", "--origin-hostname"];
+
+const INSTANCE_ID = /^i-[0-9a-f]{8,17}$/;
+const DNS_NAME = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+
+/** PHASE 1 REMAINDER (step 16): the edge probe on the single host's path, judged here (`stage-cert certify` is the ECS
+ *  path's). Exit 0 only on PASS; nothing is probed unless the host evidence PASSES first. */
+async function singleHostEdgeProbe(
+  flags: Map<string, string>,
+  p: { readonly run: string; readonly dir: string; readonly environment: string; readonly generation: number; readonly pool: string; readonly base: URL; readonly origin: string },
+  deps: DeployDeps,
+  staging: StagingDeps,
+): Promise<number> {
+  const hostDir = need(flags, "--host-evidence");
+  const instanceId = need(flags, "--instance-id");
+  if (!INSTANCE_ID.test(instanceId)) throw new UsageError("--instance-id is the single host's i-... id");
+  const originHostname = need(flags, "--origin-hostname").toLowerCase();
+  if (!DNS_NAME.test(originHostname)) throw new UsageError("--origin-hostname is the host's origin DNS name (stacks/single-host origin_hostname)");
+  if (path.resolve(hostDir) === path.resolve(p.dir)) throw new UsageError("--host-evidence is step 15b's capture directory; --evidence is this probe's own (they are not the same directory)");
+  /* An older verdict never survives a rerun that fails or is refused. */
+  fs.rmSync(path.join(p.dir, SINGLE_HOST_EDGE_VERDICT_FILE), { force: true });
+  const expectHost = { environment: p.environment, generation: p.generation, instanceId, originHostname, baseHost: p.base.host, now: deps.now() };
+  const evidence = readHostEdgeEvidence(hostDir, expectHost);
+  if (!evidence.ok || evidence.bounds === null || evidence.binding === null) {
+    for (const c of evidence.checks) if (c.status !== "pass") deps.out(`FAIL  ${c.name} -- ${c.detail}`);
+    throw new UsageError(`the single host's edge evidence in ${hostDir} is not PASS (above): no probe runs against an unverified path (run step 15b again: capture-host-evidence, host-snapshot, verify --topology coexist ... --record ${HOST_EDGE_FILES.verify} --report <dir>)`);
+  }
+  const required = singleHostRequiredIdleMs(evidence.bounds.originReadTimeoutSeconds);
+  const hold = flags.has("--hold-seconds") ? Number(flags.get("--hold-seconds")) * 1000 : required + 10_000;
+  if (!Number.isSafeInteger(hold) || hold < required) throw new UsageError(`--hold-seconds must be at least ${Math.ceil(required / 1000)} (the path's longest idle bound plus two server ping periods)`);
+  const cookie = staging.env[SESSION_COOKIE_ENV];
+  const startedAt = isoOf(deps.now());
+  deps.out(`stage-probe edge --topology single-host ${p.run}: ${p.base.host} -> CloudFront -> ${originHostname} (${instanceId}); the idle socket is held ${Math.round(hold / 1000)} s (required ${Math.round(required / 1000)} s: CloudFront ${evidence.bounds.originReadTimeoutSeconds} s, Caddy ${evidence.bounds.proxyIdleSeconds} s)`);
+  const sections = await runEdgeProbe(staging.edge, {
+    run: p.run,
+    baseUrl: p.base.origin,
+    origin: p.origin,
+    sessionCookie: cookie === undefined || cookie === "" ? null : cookie,
+    expectedClientIp: flags.get("--expected-client-ip") ?? null,
+    albIdleSeconds: evidence.bounds.proxyIdleSeconds,
+    originReadTimeoutSeconds: evidence.bounds.originReadTimeoutSeconds,
+    holdMs: hold,
+    proxy: { name: "caddy", idleSeconds: evidence.bounds.proxyIdleSeconds },
+  });
+  const record = {
+    format: PROBE_FORMAT,
+    probe: "edge",
+    topology: "single-host",
+    run_id: p.run,
+    environment: p.environment,
+    generation: p.generation,
+    pool: p.pool,
+    started_at: startedAt,
+    finished_at: isoOf(deps.now()),
+    host: { instance_id: instanceId, origin_hostname: originHostname, evidence: evidence.binding },
+    sections,
+  };
+  const where = writeRecord(p.dir, EVIDENCE.edge, JSON.parse(scrub(JSON.stringify(record), cookie === undefined ? [] : [cookie])) as unknown);
+  deps.out(`RECORDED: ${where}`);
+  /* Judged from the saved bytes against the host evidence as it is NOW (re-read): what was written is what is judged. */
+  const saved = readEvidence(p.dir, EVIDENCE.edge, { ownRecord: true });
+  const expectRun = { run: p.run, environment: p.environment, generation: p.generation, pool: p.pool, instanceId, originHostname };
+  const now = readHostEdgeEvidence(hostDir, { ...expectHost, now: deps.now() });
+  const verdict = saved.ok ? judgeSingleHostEdge(saved.value, now, expectRun) : { passed: false, checks: [{ name: "single-host edge probe: the saved record", status: "fail" as const, detail: saved.problem }], measurements: {} };
+  const written = writeRecord(p.dir, SINGLE_HOST_EDGE_VERDICT_FILE, singleHostEdgeVerdictRecord(expectRun, verdict, deps.now()));
+  for (const c of verdict.checks) deps.out(`${c.status === "pass" ? "PASS" : c.status === "fail" ? "FAIL" : c.status === "skipped" ? "SKIP" : "NOT EVALUATED"}  ${c.name} -- ${c.detail}`);
+  deps.out(`SINGLE-HOST EDGE PROBE: ${verdict.passed ? "PASS" : "FAIL"} -- ${written}`);
+  return verdict.passed ? EXIT_OK : EXIT_FAILED;
 }

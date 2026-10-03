@@ -1,7 +1,7 @@
 // server/src/aws/deploy/hostcert/awsCliTransport.ts
 //
 // COST-2C: the PRODUCTION host transport and fleet view -- the AWS CLI v2 (as infra/aws/single-host/gs-host.sh uses it),
-// run with ARGUMENT ARRAYS through `execFile` (never a shell), with the operator's default credential chain.
+// run with ARGUMENT ARRAYS through `execFile` (never a shell), under the host-deploy principal's named profile (RECON-1).
 //
 //   host operations   `aws ssm send-command --document-name AWS-RunShellScript` with ONE command line that decodes the
 //                     fixed, validated template (`hostOps.ts`, base64) into a temporary file and runs it with bash as
@@ -11,14 +11,15 @@
 //                     `aws ec2 describe-addresses --public-ips`, `aws ecs list-tasks --desired-status RUNNING`.
 //
 // Needs: ssm:SendCommand (AWS-RunShellScript, on the host instance), ssm:GetCommandInvocation, ec2:DescribeInstances,
-// ec2:DescribeAddresses, ecs:ListTasks. Nothing here reads or prints a credential: the CLI's own chain supplies it, and
+// ec2:DescribeAddresses, ecs:ListTasks. Nothing here reads or prints a credential: the named profile supplies it, and
 // only the host's framed answer, identifiers and states are kept.
 //
 // RECON-1 (the credential authority): the production world runs the CLI under ONE explicitly named AWS CLI profile
 // (`--host-transport-profile`): the host-deploy principal that already runs `gs-host deploy` (SSM AWS-RunShellScript on
 // the host is that principal's reviewed authority since COST-1). The child's environment carries NO credential variable
-// (AWS_ACCESS_KEY_ID / SECRET / SESSION_TOKEN / AWS_PROFILE / AWS_DEFAULT_PROFILE are removed), so the named profile is
-// the only source. The control plane (the SDK: DynamoDB reads, the drill lock, the runtime document) stays on the default
+// (AWS_ACCESS_KEY_ID / SECRET / SESSION_TOKEN / AWS_PROFILE / AWS_DEFAULT_PROFILE, the container-credential URIs and
+// tokens are removed) and the instance-metadata fallback is disabled (AWS_EC2_METADATA_DISABLED=true), so a profile
+// without credentials fails rather than falling through to another principal: the named profile is the only source. The control plane (the SDK: DynamoDB reads, the drill lock, the runtime document) stays on the default
 // chain -- the operator role, unchanged: the operator role gains NO SSM / EC2 authority (SendCommand on the host is root
 // on the host, i.e. the host role's KMS Sign and money writes) and no new principal exists.
 //
@@ -215,14 +216,18 @@ export function createCliFleetView(cli: AwsCli, region: string): FleetView {
 /** RECON-1: a profile name the AWS CLI can take (no path, no option, no whitespace). */
 export const CLI_PROFILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 /** The credential variables the transport's child process never inherits (the named profile is its ONLY source). */
-export const CREDENTIAL_ENV = Object.freeze(["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_CREDENTIAL_EXPIRATION"]);
+export const CREDENTIAL_ENV = Object.freeze([
+  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_CREDENTIAL_EXPIRATION",
+  "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_AUTHORIZATION_TOKEN", "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+  "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN", "AWS_ROLE_SESSION_NAME",
+]);
 
 /** RECON-1: the exact invocation for `profile`: `--profile <profile>` first, the environment without credentials. */
 export function cliInvocation(profile: string, args: readonly string[], env: NodeJS.ProcessEnv): { readonly argv: string[]; readonly env: NodeJS.ProcessEnv } {
   if (!CLI_PROFILE.test(profile)) throw new Error("host-cert: --host-transport-profile is not a profile name");
   const clean: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(env)) if (!CREDENTIAL_ENV.includes(k.toUpperCase())) clean[k] = v;
-  return { argv: ["--profile", profile, ...args], env: { ...clean, AWS_PAGER: "" } };
+  return { argv: ["--profile", profile, ...args], env: { ...clean, AWS_PAGER: "", AWS_EC2_METADATA_DISABLED: "true" } };
 }
 
 /** The real AWS CLI (`aws` on PATH: AWS CLI v2) under one named profile, argument arrays only, a bounded time and output. */

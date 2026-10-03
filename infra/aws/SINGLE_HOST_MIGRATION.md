@@ -260,7 +260,8 @@ shows nothing: every later guard then judges its own change alone.
 
 **F0 (COST-2A): the host verifier, coexistence, before the edge moves.** Read-only; README "The single host".
 ```
-infra/aws/scripts/capture-host-evidence.sh staging <region> <i-...> <distribution id> ev-F --host-status --terraform-dir stacks/single-host
+infra/aws/scripts/capture-host-evidence.sh staging <region> <i-...> <distribution id> ev-F --terraform-dir stacks/single-host      # BOOT
+infra/aws/scripts/capture-host-evidence.sh --host-status-only staging <region> <i-...> ev-F      # the host-deploy principal (RECON-1: SSM Run Command of the FIXED gs-health; never the operator role)
 npm run gamesDoctor -- aws host-snapshot --aws-config <runtime p1 ARN> --out ev-F/runtime-snapshot.json      # OPER
 npm run awsDeploy -- verify --topology coexist --runtime-parameter <runtime p1 ARN> --environment staging \
   --primary-pool p1 --pools p1,p2 --generation 1 --evidence ev-F --instance-id <i-...> --origin-hostname <origin_hostname> \
@@ -419,7 +420,9 @@ run `node dist/...` directly.
 | Control plane (SDK) | the runtime / Juno documents' `ssm:GetParameter`; g1 `GetItem` / `Query` (SYSTEM, POOL#, ROLE#relayer, TASK#, FINKEYS / FINIDX#, RELAYQ#, the lock); identity `GetItem` ROLE#identity-writer; ledger `GetItem` APPGEN / FENCE#relayer#; **the one write:** `PutItem` of `OPRUN#host-cert` / `LOCK` | **`gs-staging-operator`** (the default chain), UNCHANGED | its existing grants cover exactly these (`GameTableRead`, `RoutingAndEvidence` with the lock's attributes, `IdentityWriterRoleRead`, `LedgerRead` + the ledger's `OperatorLedgerReadOnly`, `ReadConfiguration`); it gains no SSM / EC2 / ECS authority, no KMS Sign, no money write |
 
 The transport's child process inherits **no** credential variable (`AWS_ACCESS_KEY_ID` / `SECRET` / `SESSION_TOKEN` /
-`AWS_PROFILE`), so the named profile is its only source; the evidence's transport label records the profile name. In the
+`AWS_PROFILE`, the container-credential and web-identity variables) and runs with `AWS_EC2_METADATA_DISABLED=true`, so a
+profile without credentials fails rather than falling through to another principal: the named profile is its only source
+(the profile NAME is recorded, not a resolved identity -- the transport's surface has no STS call); the evidence's transport label records the profile name. In the
 single-account form both halves may be one principal; the flag is still required (an explicit choice). Optional owner
 hardening (outside Terraform, owner-managed, never applied here): scope the host-deploy principal's SSM statement to
 `ssm:SendCommand` on `arn:aws:ssm:<region>::document/AWS-RunShellScript` and `arn:aws:ec2:<region>:<app>:instance/*` with

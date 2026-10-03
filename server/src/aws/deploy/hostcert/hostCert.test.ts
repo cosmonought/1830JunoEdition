@@ -774,13 +774,15 @@ describe("COST-2C: the command refuses before touching AWS; there is no --force"
     for (const bad of ["", "-x", "a b", "../p", "x".repeat(65)]) assert.equal(await hostCertCommand(args("crash-restart", { "--host-transport-profile": bad }), deps, host), 2, JSON.stringify(bad));
   });
   test("RECON-1: the production CLI runs ONLY under the named profile, with no credential variable inherited", () => {
-    const env = { PATH: "/usr/bin", AWS_ACCESS_KEY_ID: "AKIAEXAMPLEEXAMPLE00", AWS_SECRET_ACCESS_KEY: "s", AWS_SESSION_TOKEN: "t", AWS_PROFILE: "gs-operator", aws_default_profile: "x", AWS_REGION: "us-east-1" };
+    const env = { PATH: "/usr/bin", AWS_ACCESS_KEY_ID: "AKIAEXAMPLEEXAMPLE00", AWS_SECRET_ACCESS_KEY: "s", AWS_SESSION_TOKEN: "t", AWS_PROFILE: "gs-operator", aws_default_profile: "x", AWS_REGION: "us-east-1", AWS_CONTAINER_CREDENTIALS_FULL_URI: "http://169.254.170.23/v1/credentials", AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: "/v2/x", AWS_CONTAINER_AUTHORIZATION_TOKEN: "tok", AWS_WEB_IDENTITY_TOKEN_FILE: "/t", AWS_ROLE_ARN: "arn:aws:iam::1:role/x", AWS_EC2_METADATA_DISABLED: "false" };
     const call = cliInvocation("gs-host-deploy", ["ssm", "send-command", "--region", "us-east-1"], env);
     assert.deepEqual(call.argv, ["--profile", "gs-host-deploy", "ssm", "send-command", "--region", "us-east-1"]);
     for (const k of Object.keys(call.env)) assert.ok(!CREDENTIAL_ENV.includes(k.toUpperCase()), k);
     assert.equal(call.env.PATH, "/usr/bin");
     assert.equal(call.env.AWS_REGION, "us-east-1");
     assert.equal(call.env.AWS_PAGER, "");
+    assert.equal(call.env.AWS_EC2_METADATA_DISABLED, "true", "no instance-metadata fallback: a profile without credentials fails, never borrows another principal");
+    for (const k of ["AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_CONTAINER_AUTHORIZATION_TOKEN", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN"]) assert.equal(call.env[k], undefined, k);
     assert.throws(() => cliInvocation("--debug", [], env));
     assert.throws(() => productionHostCertWorld("us-east-1", "bad profile"));
     assert.equal(productionHostCertWorld("us-east-1", "gs-host-deploy").host.label, "aws-cli-ssm profile=gs-host-deploy");

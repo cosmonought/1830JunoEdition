@@ -649,7 +649,7 @@ describe("RECON-1A plan-evidence.ps1 (PowerShell 7 where present): the same reco
       /* exactly the runbook's form: -PlanArgs @(...) */
       const q = (x: string) => `'${x.replace(/'/g, "''")}'`;
       const command = `& ${q(path.join(repo, "infra/aws/scripts/plan-evidence.ps1"))} -Stack app -Out ${q(path.join(repo, "ev"))} -Run recon1-7a-ps -KeepPlan -PlanArgs @("-var-file=x.tfvars", "-target=${TARGETS_7A[0]}", "-target", "${TARGETS_7A[1]}")`;
-      const r = spawnSync(PWSH!, ["-NoProfile", "-NonInteractive", "-Command", command], { env, encoding: "utf8" });
+      const r = spawnSync(PWSH!, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command], { env, encoding: "utf8" });
       assert.equal(r.status, 0, `${r.stdout}\n${r.stderr}`);
       const run = JSON.parse(fs.readFileSync(path.join(repo, "ev/terraform/app/run.json"), "utf8").replace(/^\uFEFF/, ""));
       assert.deepEqual(run.targets, TARGETS_7A);

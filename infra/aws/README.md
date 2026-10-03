@@ -605,7 +605,8 @@ money / RELAYQ -- and every check) and `host-evidence.md`.
 ```
 # 1. control plane (describe / get / list; the bootstrap role's HostVerifier* statements):
 infra/aws/scripts/capture-host-evidence.sh <env> <region> <i-...> <distribution id> <dir> [--terraform-dir stacks/single-host]
-#    the host's status line (the operator's credentials: ssm:SendCommand of the FIXED /opt/gs/bin/gs-health):
+#    the host's status line (RECON-1: the HOST-DEPLOY principal's credentials -- the one that runs gs-host --
+#    ssm:SendCommand of the FIXED /opt/gs/bin/gs-health; the operator role holds no SSM Run Command):
 infra/aws/scripts/capture-host-evidence.sh --host-status-only <env> <region> <i-...> <dir>    # or --host-status above
 # 2. the runtime snapshot (the operator role; read-only) -- AFTER step 1 (the capture empties the directory first):
 npm run gamesDoctor -- aws host-snapshot --aws-config <runtime SSM ARN> --out <dir>/runtime-snapshot.json

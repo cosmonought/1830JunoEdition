@@ -601,8 +601,19 @@ EOF`);
     fs.mkdirSync(hostBin);
     for (const name of ["gs-lib.sh", "gs-preflight", "gs-run", "gs-exit-hold", "gs-deploy", "gs-rollback", "gs-stop", "gs-health"]) lfCopy(`infra/aws/modules/single-host/files/bin/${name}`, hostBin);
     const unit = lfCopy("infra/aws/modules/single-host/files/systemd/gs-server.service", root);
-    const env = { PATH: `${posix(bin)}${PATH_SEP}${process.env.PATH ?? ""}`, GS_ETC: posix(path.join(root, "etc")), GS_STATE_DIR: posix(path.join(root, "state")), GS_CERT_DIR: posix(path.join(root, "cert")), GS_DROPIN_DIR: posix(path.join(root, "dropin")), GS_UNIT_FILE: posix(unit), GS_BIN: posix(hostBin), GS_IMDS: "http://imds.test", STUB_LOG: posix(path.join(root, "log")) };
-    return { root, env, run: (op: HostOp) => bash(["-c", hostScript(op)], { env }), done: () => fs.rmSync(root, { recursive: true, force: true }) };
+    const env = { PATH: `${posix(bin)}${PATH_SEP}${process.env.PATH ?? ""}`, GS_STUB_BIN: posix(bin), GS_ETC: posix(path.join(root, "etc")), GS_STATE_DIR: posix(path.join(root, "state")), GS_CERT_DIR: posix(path.join(root, "cert")), GS_DROPIN_DIR: posix(path.join(root, "dropin")), GS_UNIT_FILE: posix(unit), GS_BIN: posix(hostBin), GS_IMDS: "http://imds.test", STUB_LOG: posix(path.join(root, "log")) };
+    /* The stubs must win the PATH lookup, deterministically. Git for Windows' bin\bash.exe launcher PREPENDS /mingw64/bin
+       and /usr/bin to the PATH it is given, so Git's real curl (/mingw64/bin/curl) shadowed the stub curl and the IMDS
+       reads answered "unknown" (the stub was never called); Linux keeps the given order. The harness therefore re-asserts
+       the stub directory first INSIDE the bash it starts (cygpath on Git Bash; the path as-is elsewhere) and proves every
+       stub resolves before any template runs. The template itself is untouched. */
+    const stubFirst = `PATH="$(cygpath -u "$GS_STUB_BIN" 2>/dev/null || printf '%s' "$GS_STUB_BIN"):$PATH"; export PATH\n`;
+    for (const name of ["systemctl", "docker", "curl", "journalctl"]) {
+      const where = bash(["-c", `${stubFirst}command -v ${name}`], { env });
+      assert.equal(where.status, 0, `${name}: ${where.stderr}`);
+      assert.match(where.stdout.trim(), new RegExp(`/stubs/${name}$`), `the ${name} stub is not the one bash resolves (${where.stdout.trim()})`);
+    }
+    return { root, env, run: (op: HostOp) => bash(["-c", stubFirst + hostScript(op)], { env }), done: () => fs.rmSync(root, { recursive: true, force: true }) };
   };
 
   test("observe: the real template's output parses into a state (journal filtered to systemd and gs: lines; the banner's task only)", { skip: NO_BASH }, () => {

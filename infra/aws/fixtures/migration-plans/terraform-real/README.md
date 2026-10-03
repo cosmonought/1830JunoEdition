@@ -34,3 +34,27 @@ They pin the guards against the shapes Terraform actually writes (aws_iam_policy
 mock has no CloudFront origin-request policies and its CloudWatch alarm API does not match this provider), so they are
 covered by the synthetic fixtures one directory up; the moto runs of the ECS rollback and the compute-none teardown are
 described in the COST-2B report.
+
+## RECON-1 7A HOTFIX: step 7a against the PRE-COST-1 state
+
+RECON-1A's `app-read-authorize.json` (above) was planned on a state whose roles were applied from COST-1's module, so it
+already carried COST-1's `[0]` addresses. The accepted staging state was written BEFORE COST-1: `modules/app/moved.tf`'s
+thirteen moves are still pending there, and the real pre-apply gate found that Terraform REFUSES a plan targeted at the
+two policies alone. Reproduced here, made the same way (Terraform 1.16.5, hashicorp/aws 6.66.0, moto 5.2.3; only the
+provider's `expressions` removed):
+
+| File | What it is |
+|---|---|
+| `app-read-authorize-pre-cost1.json` | `stacks/app` (staging-shaped tfvars: app account `123456789012`, p1 primary + p2, both `desired_count = 1`, `start_services = true`, an operator trust principal, the distribution configured) applied in full to the mock from this branch's module (the mock lacks CloudFront origin-request policies and its CloudWatch alarm API does not match this provider: those objects are absent, none is in 7a's closure), then turned into the pre-COST-1 shape by `reproduce-7a/pre_cost1_state.py` (the thirteen singletons and the three ECS-era policy documents at their unindexed addresses, the six read statements removed, both services drained 0/0 live while the state remembers 1) and planned with the **eighteen** targets of `app-read-authorize-pre-cost1.targets.json` -- 22 entries: the two policy updates, the thirteen moves (each a no-op with its `previous_address`), the two roles, and the ECR repository, both log groups and both target groups (no-ops: dependencies Terraform pulls in). No ECS service is in it. Gate: `app-read-authorize` with that target list. |
+| `app-read-authorize-pre-cost1.targets.json` | the eighteen `-target`s, as `run.json` records them: the two policies + the sixteen addresses Terraform's refusal names |
+| `app-read-authorize-pre-cost1.refusal.txt` | Terraform's own transcript: the two-target plan refused ("Moved resource instances excluded by targeting", naming thirteen managed resources AND the three data sources); each of the sixteen proven NECESSARY (drop one: refused again, naming exactly it); the indexed spelling refused |
+
+The three data sources (`data.aws_iam_policy_document.{ecs_tasks_assume,execution,task}`) are in Terraform's demand
+because COST-1 gave them `count = local.ecs_one` too: their state entries move implicitly (no key -> `[0]`). They are
+rendered locally and read at plan time (no `read` entry in `resource_changes`).
+
+To reproduce: a scratch copy of `infra/aws`; `reproduce-7a/provider_override.tf.example` as `stacks/app/override.tf`;
+`moto_server -p 5000`; a VPC with four subnets, a route table and an ACM certificate created in the mock (their ids in the
+tfvars); `terraform apply` with `start_services = false`, then the SYSTEM/ROUTING (`primary_pool` p1) and
+SYSTEM/GENERATION (generation 1, `gs-staging-game-g1`, origin `bootstrap`) items put into g1, then `terraform apply`
+again with `start_services = true`; save the state, run `pre_cost1_state.py`, and plan with the targets.

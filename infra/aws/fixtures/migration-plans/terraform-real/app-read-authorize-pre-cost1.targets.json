@@ -1,0 +1,20 @@
+[
+  "module.app.aws_iam_role_policy.bootstrap",
+  "module.app.aws_iam_role_policy.operator[0]",
+  "module.app.data.aws_iam_policy_document.ecs_tasks_assume",
+  "module.app.data.aws_iam_policy_document.execution",
+  "module.app.data.aws_iam_policy_document.task",
+  "module.app.aws_ecs_cluster.this",
+  "module.app.aws_iam_role.execution",
+  "module.app.aws_iam_role.task",
+  "module.app.aws_iam_role_policy.execution",
+  "module.app.aws_iam_role_policy.task",
+  "module.app.aws_lb.this",
+  "module.app.aws_lb_listener.https",
+  "module.app.aws_lb_listener_rule.gs",
+  "module.app.aws_security_group.alb",
+  "module.app.aws_security_group.task",
+  "module.app.aws_vpc_security_group_egress_rule.alb_to_tasks",
+  "module.app.aws_vpc_security_group_ingress_rule.alb_from_cloudfront",
+  "module.app.aws_vpc_security_group_ingress_rule.task_from_alb"
+]

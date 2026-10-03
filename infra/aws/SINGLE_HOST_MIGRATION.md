@@ -73,7 +73,8 @@ Both are wrong before step 20. Therefore, until step 20:
 - **no ordinary `terraform apply` of `stacks/app`;** a `terraform plan` is harmless (read-only) and is EXPECTED to show the
   drift -- the drift is not a change to make;
 - the only app-stack applies are (a) the **targeted** read-grant step (step 7a, `-target=module.app.aws_iam_role_policy.bootstrap
-  -target=module.app.aws_iam_role_policy.operator[0]`), (b) the **targeted** cutover (step 14,
+  -target=module.app.aws_iam_role_policy.operator[0]` plus Terraform's required COST-1 move closure -- state-address moves
+  only, see step 7a), (b) the **targeted** cutover (step 14,
   `-target=module.app.aws_cloudfront_distribution.site[0]`) and (c) the explicit **ECS rollback** (§F), each through its
   guard -- then step 20's compute-none teardown;
 - **there is no ordinary app-stack apply before compute-none, for any reason** -- not even to give the host verifier
@@ -126,7 +127,7 @@ floor, not the ceiling.
 
 | Step | Stack | Gate | Passes only if |
 |---|---|---|---|
-| 7a | app (targeted) | `migration-guard app-read-authorize --region <r> --ledger-table-arn <ARN>` | a plan targeted at exactly `aws_iam_role_policy.bootstrap` and `aws_iam_role_policy.operator[0]` (run.json's recorded `-target`s); the bootstrap policy = before + exactly COST-2A's `HostVerifierDescribeUnscopable`, `HostVerifierEcsEra`, `HostVerifierHostRole`, `HostVerifierBudgets`; the operator policy = before + exactly JX-4C's `IdentityEvidenceRead` (GetItem, identity table, `PRIN#*` / `PROF#*` / `FAM#*` + key presence) and `LedgerJournalQuery` (Query, the ledger, `ATTI#*` + key presence) -- each pinned to `modules/app/iam.tf`; every other statement byte-equal; no ECS (the drift), table, document, key, edge or other IAM change; still `compute = "ecs"` |
+| 7a | app (targeted) | `migration-guard app-read-authorize --region <r> --ledger-table-arn <ARN>` | a plan targeted at exactly `aws_iam_role_policy.bootstrap` and `aws_iam_role_policy.operator[0]` plus -- exactly while COST-1's moves are pending -- Terraform's required closure (the thirteen `moved.tf` resources, the three implicitly moved policy documents; run.json's recorded `-target`s, nothing else); every move exactly its `moved.tf` transition and a no-op, the data sources read at plan time, the dependencies Terraform pulls in no-ops; the bootstrap policy = before + exactly COST-2A's `HostVerifierDescribeUnscopable`, `HostVerifierEcsEra`, `HostVerifierHostRole`, `HostVerifierBudgets`; the operator policy = before + exactly JX-4C's `IdentityEvidenceRead` (GetItem, identity table, `PRIN#*` / `PROF#*` / `FAM#*` + key presence) and `LedgerJournalQuery` (Query, the ledger, `ATTI#*` + key presence) -- each pinned to `modules/app/iam.tf`; every other statement byte-equal; no ECS (the drift), table, document, key, edge or other IAM change; still `compute = "ecs"` |
 | 7b | ledger | `migration-guard ledger-operator-journal --ledger-table-arn <ARN>` | the ledger's resource policy updated in place, gaining exactly JX-4C's `OperatorJournalQuery` (Query, the ledger, the app root with `aws:PrincipalArn` = the operator role, `ATTI#*` + key presence); every other statement -- the runtime principals included -- byte-equal; no key policy, table, APPGEN item or AWS Backup change |
 | 8 | ledger | `migration-guard ledger-host-authorize` | the ledger's resource policy and EVERY signing key's policy update in place, each runtime statement gaining exactly `gs-staging-host-app` beside the task role (kept: coexistence); every other statement byte-equal; no table, KMS create / delete / replace, APPGEN item or AWS Backup change |
 | 9 | single-host | `migration-guard host-create` | only creates, exactly the single-host surface (one instance, ENI, EIP + association, SG + rules, role `gs-staging-host-app`, profile, inline policy, log group, the five alarms, the budget); IMDSv2; the host policy reaches only g1, identity and the ledger, never APPGEN / SYSTEM writes, digest-only Sign, no administrative action; no table, key, ALB, ECS, NAT, endpoint, distribution, ECR repository or lifecycle |
@@ -151,8 +152,9 @@ floor, not the ceiling.
    - `aws iam get-role --role-name gs-staging-recovery`: `NoSuchEntity`.
 2. `APP-ADMIN`: `terraform plan` of `stacks/app` with the current tfvars (`recovery_break_glass = false`,
    `recovery_trusted_principal_arns = []`), **read-only, never applied**: it is expected to show the desired-count drift
-   (§0.2) plus -- until step 7a -- the bootstrap and operator policies gaining their read statements (COST-2A, JX-4C).
-   Anything else in it (a recovery role, a document, a table) is a STOP. This plan is never applied: the read grants are
+   (§0.2) plus -- until step 7a -- the bootstrap and operator policies gaining their read statements (COST-2A, JX-4C) and
+   COST-1's thirteen `moved.tf` address moves ("has moved to", no change). Anything else in it (a recovery role, a
+   document, a table) is a STOP. This plan is never applied: the read grants are
    step 7a's, targeted.
 3. Leave `gs-staging-game-g2` exactly as it is (S3).
 
@@ -191,18 +193,38 @@ the `ecs-rollback` (so the ROLLBACK PATH would be blocked) and step 20's `comput
 its own judged saved plan, before any host exists. **Never by an ordinary app-stack apply** (§0.2).
 
 7a. `APP-ADMIN`: `stacks/app` with the current tfvars (still `compute = "ecs"`, break-glass off), planned **TARGETED** at
-    exactly the two policies:
+    the two policies **and Terraform's required COST-1 move closure** (RECON-1 7A HOTFIX). The accepted state was written
+    before COST-1, so `modules/app/moved.tf`'s thirteen address moves are still pending, and Terraform refuses a plan
+    targeted at the two policies alone ("Moved resource instances excluded by targeting"). The closure is exactly the
+    sixteen addresses that refusal names -- the thirteen moved resources and the three ECS-era policy documents COST-1
+    also gave `count` (`data.aws_iam_policy_document.ecs_tasks_assume` / `execution` / `task`, moved implicitly) -- each
+    one proven necessary (`infra/aws/fixtures/migration-plans/terraform-real/app-read-authorize-pre-cost1.refusal.txt`).
+    Give them **exactly as written** (the resource address, never an indexed `[0]` spelling, never `module.app`):
     ```
-    infra\aws\scripts\plan-evidence.ps1 -Stack app -Out <D> -Run <run id> -KeepPlan -PlanArgs @("-var-file=staging.tfvars", "-target=module.app.aws_iam_role_policy.bootstrap", "-target=module.app.aws_iam_role_policy.operator[0]")
-    infra/aws/scripts/plan-evidence.sh app <D> <run id> --keep-plan -var-file=staging.tfvars '-target=module.app.aws_iam_role_policy.bootstrap' '-target=module.app.aws_iam_role_policy.operator[0]'
+    infra\aws\scripts\plan-evidence.ps1 -Stack app -Out <D> -Run <run id> -KeepPlan -PlanArgs @("-var-file=staging.tfvars", "-target=module.app.aws_iam_role_policy.bootstrap", "-target=module.app.aws_iam_role_policy.operator[0]", "-target=module.app.aws_lb.this", "-target=module.app.aws_lb_listener.https", "-target=module.app.aws_lb_listener_rule.gs", "-target=module.app.aws_ecs_cluster.this", "-target=module.app.aws_iam_role.execution", "-target=module.app.aws_iam_role_policy.execution", "-target=module.app.aws_iam_role.task", "-target=module.app.aws_iam_role_policy.task", "-target=module.app.aws_security_group.alb", "-target=module.app.aws_vpc_security_group_ingress_rule.alb_from_cloudfront", "-target=module.app.aws_vpc_security_group_egress_rule.alb_to_tasks", "-target=module.app.aws_security_group.task", "-target=module.app.aws_vpc_security_group_ingress_rule.task_from_alb", "-target=module.app.data.aws_iam_policy_document.ecs_tasks_assume", "-target=module.app.data.aws_iam_policy_document.execution", "-target=module.app.data.aws_iam_policy_document.task")
+    infra/aws/scripts/plan-evidence.sh app <D> <run id> --keep-plan -var-file=staging.tfvars '-target=module.app.aws_iam_role_policy.bootstrap' '-target=module.app.aws_iam_role_policy.operator[0]' '-target=module.app.aws_lb.this' '-target=module.app.aws_lb_listener.https' '-target=module.app.aws_lb_listener_rule.gs' '-target=module.app.aws_ecs_cluster.this' '-target=module.app.aws_iam_role.execution' '-target=module.app.aws_iam_role_policy.execution' '-target=module.app.aws_iam_role.task' '-target=module.app.aws_iam_role_policy.task' '-target=module.app.aws_security_group.alb' '-target=module.app.aws_vpc_security_group_ingress_rule.alb_from_cloudfront' '-target=module.app.aws_vpc_security_group_egress_rule.alb_to_tasks' '-target=module.app.aws_security_group.task' '-target=module.app.aws_vpc_security_group_ingress_rule.task_from_alb' '-target=module.app.data.aws_iam_policy_document.ecs_tasks_assume' '-target=module.app.data.aws_iam_policy_document.execution' '-target=module.app.data.aws_iam_policy_document.task'
     node dist/server/src/tools/awsDeploy.js migration-guard app-read-authorize --plan-evidence <D>\terraform\app --environment staging --app-account <app> --region <r> --ledger-table-arn <the ledger stack's ledger_table_arn> --commit <reviewed sha> --record <D>\guards\7a.json
     ```
-    - The guard requires run.json to record exactly those two `-target`s (an untargeted plan carries the drift); the
-      bootstrap policy gains exactly COST-2A's four `HostVerifier*` statements and the operator policy exactly JX-4C's
-      `IdentityEvidenceRead` and `LedgerJournalQuery`, statement for statement as `modules/app/iam.tf` renders them; nothing
-      else moves -- no ECS service, task definition or cluster, no table, document, key or other IAM statement.
-    - Apply that `stack.tfplan` (Terraform warns the plan is incomplete: `-target`, expected). A plan with no changes
-      (exit 0) means 7a is already applied: keep the evidence and go on.
+    - **The two IAM policies are the ONLY semantic mutations.** The bootstrap policy gains exactly COST-2A's four
+      `HostVerifier*` statements and the operator policy exactly JX-4C's `IdentityEvidenceRead` and `LedgerJournalQuery`,
+      statement for statement as `modules/app/iam.tf` renders them.
+    - **The COST-1 moved addresses accompany them solely as no-op state-address moves**: the plan shows each of the
+      thirteen as "has moved to" with no change. The guard requires all thirteen, each EXACTLY its `moved.tf`
+      `from -> to`, each a no-op with its values unchanged; a partial set, an unknown pair, the game-table move or any
+      move that also changes its object FAILS.
+    - **The data-source closure is read-only, at plan time**: the three documents are `aws_iam_policy_document`
+      (rendered locally); any data source deferred to apply FAILS. Terraform also pulls in, as dependencies, the two
+      roles, the ECR repository, the per-pool log groups and target groups -- each must be a no-op; any other entry
+      (an ECS service, a task definition, a table, a document, a key, the distribution) FAILS.
+    - **The migration guard proves all of this** from run.json and the plan: run.json must record EXACTLY those eighteen
+      `-target`s while the moves are pending, and EXACTLY the two policies once they are not (the eighteen would then be
+      broader than Terraform requires); a duplicate, an alias, a missing or an extra target, or no target list FAILS.
+    - **Ordinary app-stack apply remains forbidden**, and **the ECS desired-count drift stays untouched**: no ECS service
+      is in this plan (it is not in Terraform's closure), so the drift is neither refreshed nor corrected; a plan that
+      would change any ECS object FAILS.
+    - Apply that `stack.tfplan` (Terraform warns the plan is incomplete: `-target`, expected). The apply also records
+      COST-1's moves in the state, so later targeted plans (step 14) need no closure. A plan with no changes (exit 0)
+      means 7a is already applied: keep the evidence and go on.
     - Optional now (COST-2A): `verify --topology coexist --instance-id none` (§F's F0 command, no host yet) proves the ECS
       era drained before any host exists.
 7b. `LEDGER-ADMIN`: `stacks/ledger` with the current tfvars (no `app_runtime_role_arns` change yet: that is step 8).

@@ -1,0 +1,29 @@
+# RECON-1 7A HOTFIX reproduction ONLY: copy into a SCRATCH copy of infra/aws/stacks/app as override.tf (never into the
+# repository's stack). A local backend and every API the stack plans against pointed at a local moto server; no AWS
+# account is reachable. moto's STS answers account 123456789012, so the tfvars use app_account_id = "123456789012".
+terraform {
+  backend "local" {}
+}
+
+provider "aws" {
+  region                      = var.region
+  access_key                  = "test"
+  secret_key                  = "test"
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  endpoints {
+    sts        = "http://127.0.0.1:5000"
+    iam        = "http://127.0.0.1:5000"
+    ec2        = "http://127.0.0.1:5000"
+    elbv2      = "http://127.0.0.1:5000"
+    ecs        = "http://127.0.0.1:5000"
+    ecr        = "http://127.0.0.1:5000"
+    dynamodb   = "http://127.0.0.1:5000"
+    ssm        = "http://127.0.0.1:5000"
+    cloudfront = "http://127.0.0.1:5000"
+    cloudwatch = "http://127.0.0.1:5000"
+    logs       = "http://127.0.0.1:5000"
+    kms        = "http://127.0.0.1:5000"
+    acm        = "http://127.0.0.1:5000"
+  }
+}

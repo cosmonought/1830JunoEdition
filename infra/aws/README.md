@@ -29,6 +29,10 @@ belongs to the LIVE-6 staging gate.
 > `migration-guard app-read-authorize` (7a, a TARGETED app plan: exactly the two policies, exactly those statements) and
 > `migration-guard ledger-operator-journal` (7b) -- never by an ordinary app-stack apply; afterwards every later guard
 > sees no foreign IAM delta (`server/src/aws/deploy/migration/recon1AuthorizationGates.test.ts`).
+> **RECON-1 7A HOTFIX:** on a state written before COST-1, Terraform requires 7a's targets to cover `modules/app/moved.tf`'s
+> thirteen pending moves and the three ECS-era policy documents COST-1 also gave `count`; step 7a carries exactly that
+> closure, the guard accepting the moves only as no-op state-address moves and the data sources only read at plan time --
+> the two policies stay the only mutations (`server/src/aws/deploy/migration/recon1SevenATargets.test.ts`).
 
 ## Tooling
 

@@ -22,6 +22,12 @@
 //                            modules/app/iam.tf -- and nothing else moves: never an ECS change (the drift), a table, a
 //                            document, a key or any other IAM statement. It replaces COST-2A's former D0, an ORDINARY app
 //                            apply that would also have restarted p1 on the frozen app stack.
+//                            RECON-1 7A HOTFIX: on the accepted (pre-COST-1) state Terraform refuses a plan targeted at
+//                            the two policies alone ("Moved resource instances excluded by targeting": moved.tf's thirteen
+//                            pending moves). The plan then carries EXACTLY Terraform's required closure (judgeTargets):
+//                            the thirteen moved resources -- each its reviewed moved.tf transition and a NO-OP -- and the
+//                            three data sources COST-1 also gave `count` (read at plan time); their dependencies appear
+//                            only as no-ops. The two policies stay the ONLY mutations.
 //   ledger-operator-journal  (step 7b, stacks/ledger; RECON-1A) the ledger's resource policy gains EXACTLY JX-4C's
 //                            OperatorJournalQuery (Query, ATTI#* only, the operator role through the app root +
 //                            aws:PrincipalArn); no key policy, table, backup or other statement moves.
@@ -83,10 +89,73 @@ export const GATES = Object.freeze({
 } as const);
 export type GateName = keyof typeof GATES;
 
-/** RECON-1A: the gates whose plan MUST be targeted, and at exactly these addresses (`plan-evidence` records the -target
- *  options in run.json; the command refuses another set, or none). */
+/** RECON-1A: the gates whose plan MUST be targeted, and the step's OWN targets -- its only semantic mutations
+ *  (`plan-evidence` records the -target options in run.json). `judgeTargets` is the whole contract: for step 7a it ALSO
+ *  requires, exactly when the plan carries COST-1's pending address moves, Terraform's required move closure
+ *  (APP_READ_CLOSURE_TARGETS) -- never any other target, never none. */
 export const GATE_TARGETS: Readonly<Partial<Record<GateName, readonly string[]>>> = Object.freeze({
   "app-read-authorize": Object.freeze(["module.app.aws_iam_role_policy.bootstrap", "module.app.aws_iam_role_policy.operator[0]"]),
+});
+
+/* ------------------------------------------------------------------ */
+/* RECON-1 7A HOTFIX: COST-1's pending moves and Terraform's target closure */
+/* ------------------------------------------------------------------ */
+
+/**
+ * COST-1's thirteen ECS-era singleton moves, `from` -> `to`, EXACTLY modules/app/moved.tf's blocks (in file order; pinned
+ * block for block by recon1SevenATargets.test.ts). On a state written before COST-1 (the accepted staging state) every
+ * one is still PENDING, and Terraform refuses any -target plan that does not cover each move's resource
+ * ("Moved resource instances excluded by targeting").
+ */
+export const COST1_SINGLETON_MOVES: ReadonlyArray<readonly [string, string]> = Object.freeze([
+  ["aws_lb.this", "aws_lb.this[0]"],
+  ["aws_lb_listener.https", "aws_lb_listener.https[0]"],
+  ["aws_lb_listener_rule.gs", "aws_lb_listener_rule.gs[0]"],
+  ["aws_ecs_cluster.this", "aws_ecs_cluster.this[0]"],
+  ["aws_iam_role.execution", "aws_iam_role.execution[0]"],
+  ["aws_iam_role_policy.execution", "aws_iam_role_policy.execution[0]"],
+  ["aws_iam_role.task", "aws_iam_role.task[0]"],
+  ["aws_iam_role_policy.task", "aws_iam_role_policy.task[0]"],
+  ["aws_security_group.alb", "aws_security_group.alb[0]"],
+  ["aws_vpc_security_group_ingress_rule.alb_from_cloudfront", "aws_vpc_security_group_ingress_rule.alb_from_cloudfront[0]"],
+  ["aws_vpc_security_group_egress_rule.alb_to_tasks", "aws_vpc_security_group_egress_rule.alb_to_tasks[0]"],
+  ["aws_security_group.task", "aws_security_group.task[0]"],
+  ["aws_vpc_security_group_ingress_rule.task_from_alb", "aws_vpc_security_group_ingress_rule.task_from_alb[0]"],
+] as const);
+
+/** L6-2's game-table key move (modules/app/tables.tf): known to the guards, but NEVER part of step 7a (a table target). */
+export const L62_GAME_TABLE_MOVE: readonly [string, string] = Object.freeze(["aws_dynamodb_table.game", 'aws_dynamodb_table.game["1"]'] as const);
+
+/**
+ * The three data sources COST-1 gave the same `count = local.ecs_one` (modules/app/iam.tf: the ECS-era roles' policy
+ * documents). Terraform moves their state entries implicitly (no key -> [0]) and requires them targeted too -- reproduced
+ * with Terraform 1.16.5 against a synthetic pre-COST-1 state (infra/aws/fixtures/migration-plans/terraform-real/README.md).
+ * They are aws_iam_policy_document (an ALLOWED_DATA_TYPES type, rendered locally, read at plan time).
+ */
+export const COST1_DATA_COUNT_GATE: readonly string[] = Object.freeze(["aws_iam_policy_document.ecs_tasks_assume", "aws_iam_policy_document.execution", "aws_iam_policy_document.task"]);
+
+/** An instance address's containing resource (`aws_lb.this[0]` -> `aws_lb.this`): what Terraform's -target suggestion names. */
+export const containingResource = (address: string): string => address.replace(/\[[^\]]*\]$/, "");
+
+/** Step 7a's two policy targets (the ONLY semantic mutations). */
+export const APP_READ_POLICY_TARGETS: readonly string[] = GATE_TARGETS["app-read-authorize"]!;
+/** The thirteen moved resources, exactly as Terraform's error names them (`-target="module.app.aws_lb.this"`). */
+export const COST1_MOVE_TARGETS: readonly string[] = Object.freeze(COST1_SINGLETON_MOVES.map(([from]) => `module.app.${containingResource(from)}`));
+/** The three implicitly moved data sources, exactly as Terraform's error names them. */
+export const COST1_DATA_TARGETS: readonly string[] = Object.freeze(COST1_DATA_COUNT_GATE.map((d) => `module.app.data.${d}`));
+/** Step 7a against a state with COST-1's moves pending: the two policies + Terraform's REQUIRED closure (each of the
+ *  sixteen proven necessary: drop any one and Terraform refuses again, naming it). Exactly this set. */
+export const APP_READ_CLOSURE_TARGETS: readonly string[] = Object.freeze([...APP_READ_POLICY_TARGETS, ...COST1_MOVE_TARGETS, ...COST1_DATA_TARGETS]);
+
+/**
+ * The managed resources Terraform pulls into a 7a plan as DEPENDENCIES of its targets (whole resources: every instance),
+ * reproduced with Terraform 1.16.5. They may appear only as no-ops. `base`: of the two policies (their roles);
+ * `moves`: added by the move closure (the execution policy's ECR repository and per-pool log groups, the /gs* rule's
+ * target groups). Anything else in a 7a plan is outside Terraform's closure and FAILS.
+ */
+export const APP_READ_DEPENDENCIES = Object.freeze({
+  base: Object.freeze(["aws_iam_role.bootstrap", "aws_iam_role.operator"]),
+  moves: Object.freeze(["aws_ecr_repository.server", "aws_cloudwatch_log_group.pool", "aws_lb_target_group.pool"]),
 });
 export type StackName = (typeof GATES)[GateName]["stack"];
 export const GATE_NAMES = Object.freeze(Object.keys(GATES) as GateName[]);
@@ -501,22 +570,7 @@ const label = (c: PlannedChange): string => `${c.address} [${c.actions.join(",")
 const list = (cs: readonly PlannedChange[], max = 8): string => cs.slice(0, max).map(label).join("; ") + (cs.length > max ? `; ... (${cs.length} in all)` : "");
 
 /** The moves Terraform may still show for the COST-1 `count` gate and L6-2's game-table key (modules/app/moved.tf, tables.tf). */
-const KNOWN_MOVES: ReadonlyArray<readonly [string, string]> = [
-  ["aws_lb.this", "aws_lb.this[0]"],
-  ["aws_lb_listener.https", "aws_lb_listener.https[0]"],
-  ["aws_lb_listener_rule.gs", "aws_lb_listener_rule.gs[0]"],
-  ["aws_ecs_cluster.this", "aws_ecs_cluster.this[0]"],
-  ["aws_iam_role.execution", "aws_iam_role.execution[0]"],
-  ["aws_iam_role_policy.execution", "aws_iam_role_policy.execution[0]"],
-  ["aws_iam_role.task", "aws_iam_role.task[0]"],
-  ["aws_iam_role_policy.task", "aws_iam_role_policy.task[0]"],
-  ["aws_security_group.alb", "aws_security_group.alb[0]"],
-  ["aws_vpc_security_group_ingress_rule.alb_from_cloudfront", "aws_vpc_security_group_ingress_rule.alb_from_cloudfront[0]"],
-  ["aws_vpc_security_group_egress_rule.alb_to_tasks", "aws_vpc_security_group_egress_rule.alb_to_tasks[0]"],
-  ["aws_security_group.task", "aws_security_group.task[0]"],
-  ["aws_vpc_security_group_ingress_rule.task_from_alb", "aws_vpc_security_group_ingress_rule.task_from_alb[0]"],
-  ["aws_dynamodb_table.game", 'aws_dynamodb_table.game["1"]'],
-];
+const KNOWN_MOVES: ReadonlyArray<readonly [string, string]> = [...COST1_SINGLETON_MOVES, L62_GAME_TABLE_MOVE];
 
 /* ------------------------------------------------------------------ */
 /* Checks every gate runs                                               */
@@ -1569,9 +1623,113 @@ function appReadPolicyProblem(c: PlannedChange | undefined, expected: ReadonlyMa
   return { problem: p === null ? null : `${what}: ${p}`, added: p === null };
 }
 
+/**
+ * RECON-1 7A HOTFIX: the COST-1 address moves a 7a plan carries. `pending` = all thirteen, each EXACTLY one reviewed
+ * moved.tf transition (previous address -> address), each a pure state move (no-op, values unchanged, nothing imported);
+ * `none` = no move at all (the state already carries the [0] addresses). Anything else -- a partial set, a duplicate, an
+ * unknown pair, the game-table move, a move that also changes its object -- is `problems` (fail closed).
+ */
+export function cost1MoveState(changes: readonly PlannedChange[]): { readonly state: "none" | "pending" | "invalid"; readonly problems: readonly string[] } {
+  const m = `${STACK_MODULE.app}.`;
+  const moves = changes.filter((c) => c.previousAddress !== null);
+  if (moves.length === 0) return { state: "none", problems: [] };
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  for (const c of moves) {
+    const pair = COST1_SINGLETON_MOVES.find(([from, to]) => `${m}${from}` === c.previousAddress && `${m}${to}` === c.address);
+    const what = `${String(c.previousAddress)} -> ${c.address} [${c.actions.join(",")}]`;
+    if (pair === undefined) {
+      const game = `${m}${L62_GAME_TABLE_MOVE[0]}` === c.previousAddress;
+      problems.push(`${what}: not one of modules/app/moved.tf's thirteen COST-1 transitions${game ? " (the L6-2 game-table move: a table is never step 7a's target)" : ""}`);
+      continue;
+    }
+    if (seen.has(pair[0])) problems.push(`${what}: the move appears twice`);
+    seen.add(pair[0]);
+    if (c.kind !== "no-op" || c.mode !== "managed" || c.importing || !same(c.before, c.after) || anyUnknown(c.afterUnknown)) problems.push(`${what}: the move also CHANGES the object -- only a no-op state-address move may accompany 7a`);
+  }
+  if (problems.length === 0 && seen.size !== COST1_SINGLETON_MOVES.length) {
+    const missing = COST1_SINGLETON_MOVES.filter(([from]) => !seen.has(from)).map(([from]) => `${m}${from}`);
+    problems.push(`only ${seen.size} of the thirteen COST-1 moves are pending (missing: ${missing.join(", ")}): a partial move set is not a state any reviewed plan leaves`);
+  }
+  return { state: problems.length === 0 ? "pending" : "invalid", problems };
+}
+
+/**
+ * The -target contract of a targeted gate, judged against the plan the targets produced (fail closed): `recorded` is
+ * run.json's `targets`. null: the gate is not targeted. For step 7a the ONLY accepted sets are
+ *   - COST-1's moves pending: EXACTLY APP_READ_CLOSURE_TARGETS (the two policies + the thirteen moved resources + the
+ *     three implicitly moved data sources -- Terraform's required closure, each member necessary);
+ *   - no move pending: EXACTLY the two policies (the closure would then be a BROADER set than Terraform requires).
+ * A duplicate, an alias (an indexed or quoted spelling, a whole module), a missing or an extra address FAILS, as does a
+ * plan whose moves are neither of those two states.
+ */
+export function judgeTargets(gate: GateName, recorded: unknown, plan: Json): Check | null {
+  const own = GATE_TARGETS[gate];
+  if (own === undefined) return null;
+  const name = "evidence: the plan is targeted at exactly the step's resources";
+  if (!Array.isArray(recorded) || !recorded.every((t) => typeof t === "string")) {
+    return fail(name, `run.json records no -target list (capture with this branch's plan-evidence, targeted: ${own.map((t) => `-target=${t}`).join(" ")}${gate === "app-read-authorize" ? " -- plus, while COST-1's moves are pending, Terraform's move closure: infra/aws/SINGLE_HOST_MIGRATION.md step 7a" : ""})`);
+  }
+  const targets = recorded as string[];
+  if (targets.length === 0) return fail(name, "run.json targets nothing (an UNTARGETED plan): an ordinary app-stack plan carries the desired-count drift and is never applied before compute-none");
+  const repeated = [...new Set(targets.filter((t, i) => targets.indexOf(t) !== i))];
+  let want: readonly string[] = own;
+  let why = "the step's own targets";
+  if (gate === "app-read-authorize") {
+    if (plan === undefined) return { name, status: "not-evaluated", detail: "plan.json is missing or unreadable: which target contract applies (COST-1's moves pending or not) cannot be judged" };
+    const moves = cost1MoveState(changesOf(plan));
+    if (moves.state === "invalid") return fail(name, `the plan's address moves are neither none nor COST-1's thirteen (${moves.problems.slice(0, 3).join("; ")}): no target contract accepts it`);
+    if (moves.state === "pending") {
+      want = APP_READ_CLOSURE_TARGETS;
+      why = "COST-1's thirteen moves are pending: the two policies + Terraform's required closure (thirteen moved resources, three implicitly moved data sources)";
+    } else why = "no COST-1 move is pending: the two policies alone (the move closure would be broader than Terraform requires)";
+  }
+  const missing = want.filter((t) => !targets.includes(t));
+  const extra = [...new Set(targets.filter((t) => !want.includes(t)))];
+  if (repeated.length === 0 && missing.length === 0 && extra.length === 0 && targets.length === want.length) return pass(name, `run.json targets exactly ${want.length}: ${why}`);
+  const problems: string[] = [];
+  if (repeated.length > 0) problems.push(`repeated: ${repeated.join(", ")}`);
+  if (missing.length > 0) problems.push(`missing: ${missing.join(", ")}`);
+  if (extra.length > 0) problems.push(`not in the contract (never a mutation authority): ${extra.join(", ")}`);
+  return fail(name, `${problems.join("; ")} -- ${why}; exactly ${want.join(", ")} required`);
+}
+
 function appReadAuthorizeGate(plan: Json, changes: readonly PlannedChange[], ctx: MigrationContext): Check[] {
   const m = STACK_MODULE.app;
   const checks: Check[] = [];
+  /* RECON-1 7A HOTFIX: what accompanies the two policies -- COST-1's moves (all or none, each a no-op), their dependency
+     closure (no-ops, only the resources Terraform pulls in), the data sources read at plan time. */
+  const moves = cost1MoveState(changes);
+  checks.push(
+    judge(
+      "COST-1 address moves: all thirteen reviewed moved.tf transitions, each a no-op, or none",
+      moves.state !== "invalid",
+      moves.state === "pending" ? "all thirteen pending, each exactly its modules/app/moved.tf transition and a no-op (a state-address move: no infrastructure change)" : "none pending (the state already carries the [0] addresses)",
+      moves.problems.slice(0, 6).join("; "),
+    ),
+  );
+  const closure = new Set<string>([...APP_READ_POLICY_TARGETS.map((t) => containingResource(t.slice(`${m}.`.length))), ...APP_READ_DEPENDENCIES.base, ...(moves.state === "pending" ? [...COST1_SINGLETON_MOVES.map(([from]) => from), ...APP_READ_DEPENDENCIES.moves] : [])]);
+  const outside = changes.filter((c) => c.mode === "managed" && !closure.has(`${c.type}.${c.name}`));
+  checks.push(
+    judge(
+      "every entry is in step 7a's Terraform target closure",
+      outside.length === 0,
+      `${changes.length} entries: the two policies, their roles${moves.state === "pending" ? ", the thirteen moved resources and the ECR repository / log groups / target groups they depend on" : ""} -- nothing else`,
+      `${list(outside)} -- outside the closure Terraform builds for ${moves.state === "pending" ? "the two policies + COST-1's moves" : "the two policies"} (a broader target set, or another plan)`,
+    ),
+  );
+  const config = obj(obj(obj(obj(obj(obj(plan).configuration).root_module).module_calls)[m.slice("module.".length)]).module);
+  const declared = new Set(arr(config.resources).map(obj).map((r) => `${String(r.mode)}:${String(r.type)}.${String(r.name)}`));
+  const undeclared = COST1_DATA_COUNT_GATE.filter((d) => !declared.has(`data:${d}`) || !ALLOWED_DATA_TYPES.includes(d.split(".")[0]));
+  const deferredReads = changes.filter((c) => c.mode === "data");
+  checks.push(
+    judge(
+      "the data-source closure is read-only, at plan time",
+      deferredReads.length === 0 && (moves.state !== "pending" || undeclared.length === 0),
+      `no data source deferred to apply${moves.state === "pending" ? `; ${COST1_DATA_COUNT_GATE.join(", ")} declared aws_iam_policy_document (rendered locally)` : ""}`,
+      deferredReads.length > 0 ? `${list(deferredReads)} -- read at APPLY time: the plan cannot show what it returns (fail closed)` : `the move closure names data sources the configuration does not declare as aws_iam_policy_document: ${undeclared.join(", ")}`,
+    ),
+  );
   const grants = appReadGrantStatements(ctx);
   checks.push(judge("the facts the grants name are given", grants !== null, `--region ${String(ctx.region)}, --ledger-table-arn ${String(ctx.ledgerTableArn)}`, "--region <app region> and --ledger-table-arn <the ledger stack's ledger_table_arn> are required (the identity table and the ledger the operator's reads name)"));
   const BOOT = `${m}.aws_iam_role_policy.bootstrap`;
@@ -1594,7 +1752,7 @@ function appReadAuthorizeGate(plan: Json, changes: readonly PlannedChange[], ctx
   checks.push(judge("the bootstrap policy: before + exactly COST-2A's four HostVerifier* statements", grants !== null && boot.problem === null, boot.added ? `${BOOTSTRAP_READ_SIDS.join(", ")} added, pinned to modules/app/iam.tf; every other statement byte-equal` : "already holds them exactly (unchanged)", boot.problem ?? "the facts are missing"));
   checks.push(judge("the operator policy: before + exactly JX-4C's IdentityEvidenceRead and LedgerJournalQuery", grants !== null && oper.problem === null, oper.added ? `${OPERATOR_READ_SIDS.join(", ")} added, pinned to modules/app/iam.tf; every other statement byte-equal` : "already holds them exactly (unchanged)", oper.problem ?? "the facts are missing"));
   checks.push(judge("the step adds something", boot.added || oper.added, "at least one policy gains its statements", "neither policy changes: nothing for this step to apply (7a already done?)"));
-  checks.push(ecsUntouchedCheck(plan, changes, "step 7a TARGETED (-target=module.app.aws_iam_role_policy.bootstrap -target=module.app.aws_iam_role_policy.operator[0])"));
+  checks.push(ecsUntouchedCheck(plan, changes, "step 7a TARGETED (the two policies, plus -- while COST-1's moves are pending -- exactly Terraform's move closure: SINGLE_HOST_MIGRATION.md step 7a)"));
   checks.push(
     namedForbidden(
       "no table, document, key, edge or other IAM change",

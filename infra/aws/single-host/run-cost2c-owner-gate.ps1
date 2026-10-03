@@ -21,7 +21,8 @@
      5  RECON-1 authorization  deploy/migration/recon1AuthorizationGates (app-read-authorize, ledger-operator-journal,
                                X-09, the Terraform-made plans, plan-evidence.ps1's targets / CR record -- its PowerShell
                                test must RUN here: a SKIP of it FAILS the gate -- and host-cert's credential authority /
-                               stale-host classification)
+                               stale-host classification) + recon1SevenATargets (RECON-1 7A HOTFIX: 7a's target contract
+                               with Terraform's required COST-1 move closure, against a real pre-COST-1 plan)
      6  COST-2B migration      deploy/migration/cost2bMigrationGuards
      7  COST-2C targeted       aws/deploy/hostcert/hostCert.test.js -- the host drills F7 / F8 / F9a / F9b / replacement,
                                the systemd / HOLD evidence judges, the drill lock, false-PASS / NOT-EVALUATED cases,
@@ -324,11 +325,11 @@ Add-Gate 'Build' $false {
 } 'node ../frontend/node_modules/typescript/bin/tsc -p tsconfig.json   (server; = npm run build)' $true
 
 Add-Gate 'RECON-1 authorization gates' $true {
-  $code = Invoke-Logged $Node (TestArgs @('aws/deploy/migration/recon1AuthorizationGates.test.js')) $ServerDir
+  $code = Invoke-Logged $Node (TestArgs @('aws/deploy/migration/recon1AuthorizationGates.test.js', 'aws/deploy/migration/recon1SevenATargets.test.js')) $ServerDir
   $skippedPs = @($script:LastOutput | Where-Object { $_ -match 'plan-evidence\.ps1' -and $_ -match '# SKIP' })
   if ($code -eq 0 -and $OnWindows -and $skippedPs.Count -gt 0) { return @{ Status = 'FAIL'; Exit = $code; Reason = "plan-evidence.ps1's test was SKIPPED (no Windows PowerShell / pwsh found): the Windows capture path was NOT RUN" } }
   return @{ Exit = $code }
-} 'node --test deploy/migration/recon1AuthorizationGates   (on Windows its plan-evidence.ps1 test must run)'
+} 'node --test deploy/migration/recon1AuthorizationGates + recon1SevenATargets   (on Windows its plan-evidence.ps1 test must run)'
 
 Add-Gate 'COST-2B migration guards' $true {
   return @{ Exit = (Invoke-Logged $Node (TestArgs @('aws/deploy/migration/cost2bMigrationGuards.test.js')) $ServerDir) }

@@ -1,0 +1,68 @@
+# RECON-1 7A HOTFIX -- Terraform 1.16.5 / hashicorp/aws 6.66.0 against the synthetic pre-COST-1 state (moto 5.2.3), stacks/app.
+#
+# 1. The runbook's former step 7a, targeted at the two policies ONLY:
+#      terraform plan -var-file=staging.tfvars -target=module.app.aws_iam_role_policy.bootstrap '-target=module.app.aws_iam_role_policy.operator[0]'
+#    is REFUSED (exit 1, no plan):
+
+Error: Moved resource instances excluded by targeting
+
+Resource instances in your current state have moved to new addresses in the
+latest configuration. Terraform must include those resource instances while
+planning in order to ensure a correct result, but your -target=... options do
+not fully cover all of those resource instances.
+
+To create a valid plan, either remove your -target=... options altogether or
+add the following additional target options:
+  -target="module.app.data.aws_iam_policy_document.ecs_tasks_assume"
+  -target="module.app.data.aws_iam_policy_document.execution"
+  -target="module.app.data.aws_iam_policy_document.task"
+  -target="module.app.aws_ecs_cluster.this"
+  -target="module.app.aws_iam_role.execution"
+  -target="module.app.aws_iam_role.task"
+  -target="module.app.aws_iam_role_policy.execution"
+  -target="module.app.aws_iam_role_policy.task"
+  -target="module.app.aws_lb.this"
+  -target="module.app.aws_lb_listener.https"
+  -target="module.app.aws_lb_listener_rule.gs"
+  -target="module.app.aws_security_group.alb"
+  -target="module.app.aws_security_group.task"
+  -target="module.app.aws_vpc_security_group_egress_rule.alb_to_tasks"
+  -target="module.app.aws_vpc_security_group_ingress_rule.alb_from_cloudfront"
+  -target="module.app.aws_vpc_security_group_ingress_rule.task_from_alb"
+
+Note that adding these options may include further additional resource
+instances in your plan, in order to respect object dependencies.
+
+# 2. MINIMALITY: the plan with the two policies + all sixteen addresses above succeeds (app-read-authorize-pre-cost1.json).
+#    Dropping any ONE of the sixteen is refused again, Terraform naming exactly the dropped address:
+
+without module.app.data.aws_iam_policy_document.ecs_tasks_assume -> demands -target="module.app.data.aws_iam_policy_document.ecs_tasks_assume"
+without module.app.data.aws_iam_policy_document.execution -> demands -target="module.app.data.aws_iam_policy_document.execution"
+without module.app.data.aws_iam_policy_document.task -> demands -target="module.app.data.aws_iam_policy_document.task"
+without module.app.aws_ecs_cluster.this -> demands -target="module.app.aws_ecs_cluster.this"
+without module.app.aws_iam_role.execution -> demands -target="module.app.aws_iam_role.execution"
+without module.app.aws_iam_role.task -> demands -target="module.app.aws_iam_role.task"
+without module.app.aws_iam_role_policy.execution -> demands -target="module.app.aws_iam_role_policy.execution"
+without module.app.aws_iam_role_policy.task -> demands -target="module.app.aws_iam_role_policy.task"
+without module.app.aws_lb.this -> demands -target="module.app.aws_lb.this"
+without module.app.aws_lb_listener.https -> demands -target="module.app.aws_lb_listener.https"
+without module.app.aws_lb_listener_rule.gs -> demands -target="module.app.aws_lb_listener_rule.gs"
+without module.app.aws_security_group.alb -> demands -target="module.app.aws_security_group.alb"
+without module.app.aws_security_group.task -> demands -target="module.app.aws_security_group.task"
+without module.app.aws_vpc_security_group_egress_rule.alb_to_tasks -> demands -target="module.app.aws_vpc_security_group_egress_rule.alb_to_tasks"
+without module.app.aws_vpc_security_group_ingress_rule.alb_from_cloudfront -> demands -target="module.app.aws_vpc_security_group_ingress_rule.alb_from_cloudfront"
+without module.app.aws_vpc_security_group_ingress_rule.task_from_alb -> demands -target="module.app.aws_vpc_security_group_ingress_rule.task_from_alb"
+
+# 3. An INDEXED spelling of a moved resource (-target=module.app.aws_lb.this[0] instead of module.app.aws_lb.this) is refused
+#    the same way (it does not contain the pre-move instance):
+#      Error: Moved resource instances excluded by targeting ... -target="module.app.aws_lb.this"
+#
+# 4. Against a state that ALREADY carries the [0] addresses, the two policies alone plan (exit 2; terraform-real/
+#    app-read-authorize.json is that shape) -- and the eighteen also plan there: Terraform accepts the broader set, so the
+#    guard, not Terraform, refuses it (judgeTargets: no move pending -> exactly the two).
+#
+# 5. That eighteen-target saved plan APPLIED to the mock: "Apply complete! Resources: 0 added, 2 changed, 0 destroyed."
+#    The state then holds every moved object (and the three data sources) at [0]; the two ECS services are still desired 0
+#    live (the drift untouched: no ECS object was in the plan). Re-planned afterwards:
+#      the two policies alone                      -> exit 0, "No changes." (7a done; no move left pending)
+#      -target=module.app.aws_cloudfront_distribution.site[0] (step 14's shape) -> plans (exit 2): no move error remains

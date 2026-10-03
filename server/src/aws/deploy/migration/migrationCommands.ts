@@ -12,8 +12,10 @@
 //       Exit 0: PASS -- with the owner's GO, apply EXACTLY that stack.tfplan (what was judged is what is applied;
 //       Terraform refuses it if the state moved since); 1: FAIL (do NOT apply); 2: usage.
 //
-//   RECON-1A: app-read-authorize (step 7a) judges a TARGETED stacks/app plan -- run.json must record exactly its two
-//   -target addresses (GATE_TARGETS; plan-evidence writes them) -- and needs --region and --ledger-table-arn;
+//   RECON-1A: app-read-authorize (step 7a) judges a TARGETED stacks/app plan -- run.json must record exactly its target
+//   contract (plan-evidence writes the -target list): the two policies, plus -- exactly when the plan carries COST-1's
+//   thirteen pending moves -- Terraform's required move closure (RECON-1 7A HOTFIX; planGuards.judgeTargets) -- and needs
+//   --region and --ledger-table-arn;
 //   ledger-operator-journal (step 7b) needs --ledger-table-arn. Every check prints PASS, FAIL or NOT EVALUATED (never a
 //   bare SKIP for a check that could not be judged); the verdict is PASS only when EVERY check passed.
 //
@@ -36,7 +38,7 @@ import * as path from "path";
 
 import type { Check } from "../deployVerify";
 import { decodeCapture, judgeArm64LiveSmoke, smokeScriptSha256 } from "./arm64LiveSmoke";
-import { GATE_NAMES, GATE_TARGETS, GATES, isGateName, judgeMigrationPlan, MIGRATION_GUARD_FORMAT, STAGING_DEFAULTS, type GateName, type MigrationContext } from "./planGuards";
+import { GATE_NAMES, GATES, isGateName, judgeMigrationPlan, judgeTargets, MIGRATION_GUARD_FORMAT, STAGING_DEFAULTS, type GateName, type MigrationContext } from "./planGuards";
 import { judgeNatEvidence, NAT_EVIDENCE_FORMAT, NAT_FILES, type NatEvidence, type NatFileKey } from "./natEvidence";
 
 export const MIGRATION_USAGE = [
@@ -188,26 +190,6 @@ export function planEvidenceChecks(dir: string, gate: GateName, expectCommit?: s
         },
   );
   checks.push(run?.stack === GATES[gate].stack ? { name: "evidence: the gate's stack", status: "pass", detail: `run.json names stacks/${GATES[gate].stack}` } : { name: "evidence: the gate's stack", status: "fail", detail: `run.json names ${String(run?.stack ?? "(missing)")}; ${gate} judges stacks/${GATES[gate].stack}` });
-  /* RECON-1A: a gate that judges a TARGETED plan requires exactly its targets (an untargeted plan of the frozen app stack
-     carries the desired-count drift and must never be the one applied here). */
-  const wantTargets = GATE_TARGETS[gate];
-  if (wantTargets !== undefined) {
-    const got = (run as { targets?: unknown } | undefined)?.targets;
-    const targets = Array.isArray(got) && got.every((t) => typeof t === "string") ? [...(got as string[])].sort() : null;
-    const ok = targets !== null && targets.length === wantTargets.length && [...wantTargets].sort().every((t, i) => t === targets[i]);
-    checks.push(
-      ok
-        ? { name: "evidence: the plan is targeted at exactly the step's resources", status: "pass", detail: `run.json targets ${wantTargets.join(", ")}` }
-        : {
-            name: "evidence: the plan is targeted at exactly the step's resources",
-            status: "fail",
-            detail:
-              targets === null
-                ? `run.json records no -target list (capture with this branch's plan-evidence, targeted: ${wantTargets.map((t) => `-target=${t}`).join(" ")})`
-                : `run.json targets ${targets.length === 0 ? "nothing (an UNTARGETED plan)" : targets.join(", ")}; exactly ${wantTargets.join(", ")} required`,
-          },
-    );
-  }
   const text = readText(path.join(dir, "plan.json"));
   let plan: unknown;
   try {
@@ -215,6 +197,12 @@ export function planEvidenceChecks(dir: string, gate: GateName, expectCommit?: s
   } catch {
     plan = undefined;
   }
+  /* RECON-1A: a gate that judges a TARGETED plan requires exactly its target contract (an untargeted plan of the frozen app
+     stack carries the desired-count drift and must never be the one applied here). RECON-1 7A HOTFIX: the contract is
+     judged against the plan the targets produced -- step 7a's own two, plus Terraform's required COST-1 move closure
+     exactly when the plan carries those moves (planGuards.judgeTargets). */
+  const targetCheck = judgeTargets(gate, (run as { targets?: unknown } | undefined)?.targets, plan);
+  if (targetCheck !== null) checks.push(targetCheck);
   if (plan === undefined) checks.push({ name: "evidence: plan.json", status: "fail", detail: "missing or unreadable" });
   /* The binary plan this JSON was shown from (plan-evidence --keep-plan): the operator applies EXACTLY it, so what was
      judged is what is applied (Terraform refuses a saved plan whose state has moved since: "Saved plan is stale"). */

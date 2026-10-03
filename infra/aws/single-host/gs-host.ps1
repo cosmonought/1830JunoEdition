@@ -67,7 +67,12 @@ try {
   } while ($status -in @('Pending', 'InProgress', 'Delayed'))
   & aws.exe ssm get-command-invocation --region $Region --command-id $id --instance-id $InstanceId --query StandardOutputContent --output text
   $err = & aws.exe ssm get-command-invocation --region $Region --command-id $id --instance-id $InstanceId --query StandardErrorContent --output text
-  if ($err -and $err -ne 'None') { Write-Warning $err }
+  # Multi-line stderr arrives as SEVERAL pipeline objects: join it into ONE string (Write-Warning -Message takes one), and
+  # never let rendering it (e.g. -WarningAction Stop) skip the status check below. Regression: tests/gs-host-stderr.test.ps1.
+  $errText = (@($err) -join [Environment]::NewLine).Trim()
+  if ($errText -and $errText -ne 'None') {
+    try { Write-Warning -Message $errText } catch { try { Write-Host "gs-host: host stderr:$([Environment]::NewLine)$errText" } catch { } }
+  }
   if ($status -ne 'Success') { throw "gs-host: REFUSED: the host command ended $status." }
 }
 finally {

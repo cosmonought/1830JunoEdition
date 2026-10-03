@@ -507,7 +507,13 @@ replacement normally leaves none).
 
 **Owner validation:** `powershell -ExecutionPolicy Bypass -File .\infra\aws\single-host\run-cost2c-owner-gate.ps1`
 (RECON-1: the ONE owner gate for the whole reconciled candidate -- RECON-1A's gates, COST-1 / 2A / 2B / 2C, JX-4C, P5, the
-Windows LF checks, Terraform, DynamoDB Local and the full server suite last; one log under `evidence\owner-gates\`).
+Windows LF checks, Terraform, DynamoDB Local and the full server suite last; one log under `evidence\owner-gates\`). Run it
+from a CLEAN clone: it installs the locked dependencies itself (`npm ci` in `frontend` and `server`, failing if that changes
+a tracked file), runs `host-scripts.test.sh` in a pinned Amazon Linux 2023 container (never Git Bash: the host scripts need
+`flock` and `python3`), re-runs COST-2C's targeted suite in a pinned Linux Node container, and builds + smokes the image
+locally for linux/amd64 and linux/arm64 (`--load` only: no push, no ECR login). Prerequisites: Node/npm, Git for Windows,
+Terraform >= 1.10, and Docker Desktop (Linux engine, buildx, arm64 emulation) with network access to `public.ecr.aws`, the
+npm registry and the Amazon Linux repositories.
 
 ## Certification: what remains valid, what reruns, what retires
 

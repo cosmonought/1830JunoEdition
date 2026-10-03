@@ -755,7 +755,23 @@ describe("RECON-1: the ONE owner gate (COST-2C's runner, extended) covers the re
     assert.match(gate, /'ls-files', '--eol'/);
     const order = [...gate.matchAll(/^Add-Gate '([^']+)'/gm)].map((m) => m[1]);
     assert.equal(order[0], "Windows LF checkout");
-    assert.equal(order[1], "Build");
+    assert.equal(order[1], "Dependencies (npm ci)");
+    assert.equal(order[2], "Build");
+    /* the owner-gate correction: a clean clone installs its locked dependencies; the host scripts run in AL2023; the
+       COST-2C suite also runs in Linux; the image smokes are built locally and never pushed */
+    assert.match(gate, /'ci', '--ignore-scripts', '--no-audit', '--no-fund'/);
+    assert.match(gate, /npm ci changed tracked \/ unignored files/);
+    assert.match(gate, /\$Al2023Image = 'public\.ecr\.aws\/amazonlinux\/amazonlinux:2023@sha256:[0-9a-f]{64}'/);
+    assert.ok(!/Invoke-Logged \$Bash @\('infra\/aws\/modules\/single-host\/tests\/host-scripts\.test\.sh'\)/.test(gate), "the host scripts never run under Git Bash");
+    assert.match(gate, /exec bash \/work\/single-host\/tests\/host-scripts\.test\.sh/);
+    assert.match(gate, /'buildx', 'build', '--platform', \$platform, '-f', 'infra\/docker\/game-server\.Dockerfile'/);
+    assert.match(gate, /'--load'/);
+    assert.ok(!/--push|ecr get-login|docker login|build-image\.(ps1|sh)'/.test(gate.replace(/^\s*#.*$/gm, "").replace(/'[^']*never --push[^']*'/g, "")), "the smoke never pushes or logs in to ECR");
+    assert.match(gate, /tests\/image-smoke\.sh/);
+    for (const p of ["linux/amd64", "linux/arm64"]) assert.ok(gate.includes(`'${p}'`), p);
+    const dockerfile = source("infra/docker/game-server.Dockerfile");
+    const nodeDigest = /ARG NODE_IMAGE=node:22-bookworm-slim@(sha256:[0-9a-f]{64})/.exec(dockerfile)?.[1];
+    assert.ok(nodeDigest !== undefined && gate.includes(`node:22-bookworm-slim@${nodeDigest}`), "the Linux COST-2C run uses the server image's own pinned base");
     assert.equal(order[order.length - 1], "Full server suite");
     assert.equal(order[order.length - 2], "DynamoDB Local");
     assert.match(gate, /\$AllPass = \(@\(\$Gates \| Where-Object \{ \$_\.Status -ne 'PASS' \}\)\.Count -eq 0\)/);

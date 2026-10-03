@@ -22,7 +22,8 @@ RECON-0's audit (`docs/RECON0_SOURCE_LINEAGE_2026-10-02.{md,json}`) is preserved
 | `0f14ef5` | COST-2C live prerequisites: credential authority, stale-host classification, host-cert LF test |
 | `874431d` | the ONE owner gate (COST-2C's runner extended) |
 | `0c56438` | final-review fixes |
-| (this) | this record; the canonical context |
+| `42ad473` | this record; the canonical context (the head of the FIRST owner run, §11) |
+| (this) | the owner-gate correction (§8, §11): dependency bootstrap, Linux host scripts, image smoke |
 
 `ee14050`, `04138ea`, `161c737`, `ce77f47` and `3ab30db` are all ancestors of the head (`git merge-base --is-ancestor`).
 
@@ -91,11 +92,28 @@ checks the working tree.
 powershell -ExecutionPolicy Bypass -File .\infra\aws\single-host\run-cost2c-owner-gate.ps1
 ```
 
-Gates, in order: Windows LF checkout; Build; RECON-1 authorization gates (its PowerShell test must run on Windows);
-COST-2B migration guards; COST-2C targeted (no skip allowed); COST-2A verifier / snapshot; JX-4C / P5 cross-slice;
-ownership / fencing; awsDeploy / stage-cert (incl. rotationProof / 04138ea); COST-1 + portability; Terraform (fmt, module
-tests app 69 / ledger 34 / single-host 20, stack validate); host scripts; DynamoDB Local (JX-4B, hostCertLock); the full
-server `npm test` LAST. One log + JSON under `evidence\owner-gates\`; exit 1 on any non-PASS.
+Gates, in order: Windows LF checkout; **Dependencies** (`npm ci --ignore-scripts --no-audit --no-fund` in `frontend`
+then `server`, from their lock files; FAIL on an npm failure, a changed lock file, or any tracked / unignored file changed;
+every later gate needing dependencies is then BLOCKED -- never run over stale `node_modules`); Build; RECON-1 authorization
+gates (its PowerShell test must run on Windows); COST-2B migration guards; COST-2C targeted (Windows, Git Bash; no skip
+allowed); **COST-2C targeted (Linux)** (the same suite in the pinned `node:22-bookworm-slim` image, repository read-only,
+`--network none`; no skip allowed); COST-2A verifier / snapshot; JX-4C / P5 cross-slice; ownership / fencing; awsDeploy /
+stage-cert (incl. rotationProof / 04138ea); COST-1 + portability; Terraform (fmt, module tests app 69 / ledger 34 /
+single-host 20, stack validate); **Single-host scripts** (the COMPLETE `host-scripts.test.sh` in a pinned, ephemeral
+`amazonlinux:2023` container, repository read-only, no credential; dnf adds only `util-linux-core` / `findutils`; >= 40
+passed and 0 failed required; a container that cannot be prepared is NOT RUN); **Image smoke** (`docker buildx build
+--load` of `game-server.Dockerfile` to a LOCAL disposable tag per platform -- no `--push`, no ECR login, not
+`build-image.{sh,ps1}` -- then the unchanged `image-smoke.sh` from a pinned `docker:27-cli` runner; linux/amd64 AND
+linux/arm64, >= 7 passed and 0 failed each; a platform that cannot run is NOT RUN, never PASS; the gate's own images and
+containers are removed); DynamoDB Local (JX-4B, hostCertLock); the full server `npm test` LAST. One log + JSON (with the
+pinned image digests, the lock-file hashes and the per-suite totals) under `evidence\owner-gates\`; exit 1 on any non-PASS.
+Prerequisites: Node/npm, Git for Windows, Terraform >= 1.10, Docker Desktop (Linux engine, buildx, arm64 emulation) with
+network access to `public.ecr.aws`, the npm registry and the Amazon Linux repositories.
+
+**COST-2C's bash disposition.** The targeted suite's bash templates ask only for `bash -n`, `base64`, `sha256sum`,
+`timeout`, `nohup`, `mktemp`, `sed` / `grep` against stub `docker` / `systemctl` / `curl` / `journalctl` -- no `flock`, no
+Python -- so Git Bash suffices and the Windows run (with its PowerShell checks) is kept unchanged; the Linux run is
+ADDED so the host semantics also run in Linux. A skip in either FAILS.
 
 ## 9. Validation run here (targeted only)
 
@@ -106,6 +124,15 @@ rotationProof 32, awsClients 11, l6_6StagingCert 135 -- all pass. `terraform tes
 POSIX-only bash suites differ, as Windows skips them). The owner gate script parsed (0 errors) and its LF gate was run alone,
 positive and negative.
 
+**Owner-gate correction, checked here (mechanics only):** pwsh 7 parse 0 errors; `-ListOnly`; Dependencies on a fresh
+clone PASS (then Build PASS), a package.json dependency missing from the lock -> npm ci FAIL and Build / the next gates
+BLOCKED, a fake npm that touches tracked files -> FAIL naming them; COST-2C targeted (Linux) PASS (90 pass, 0 skipped);
+Single-host scripts NOT RUN (exit 97, no repository access for dnf from this sandbox's container) and, with this sandbox's
+proxy CA / network added to a throw-away copy of the runner only, PASS 43 / 0; Image smoke via a throw-away copy (same
+sandbox additions): linux/amd64 7 / 0, linux/arm64 NOT RUN (no emulation here) -> the gate NOT RUN, and a broken Dockerfile
+path -> FAIL (a FAIL outranks a NOT RUN); a CRLF copy of the Dockerfile parses (`buildx build --check`). No container or
+image left behind; the repository unchanged by every run. `recon1AuthorizationGates` pins the order and the new gates.
+
 **Deferred to the owner gate (not run here, by policy):** the full server `npm test`, the DynamoDB Local corpus (incl.
 `hostCertLock` and JX-4B), the full owner sweep, Windows PowerShell 5.1, Git Bash runs on Windows, Docker smokes.
 
@@ -115,3 +142,17 @@ One fresh review: no High / Medium. Lows fixed in `0c56438` (credential fall-thr
 a stale comment, the gs-health Run Command principal in F0 / README). Reported, unchanged: no test executes
 `capture-nat-evidence.ps1` (pre-existing; COST-2B's bash suite is POSIX-only); the transport records the profile name, not
 a resolved identity (no STS call by design).
+
+## 11. The first owner run (at `42ad473`) -- recorded, NOT a certification
+
+Windows PowerShell 5.1.26100.9168, branch `recon/recon-1-pre-cost2c`, HEAD `42ad473c083721c66eb289a6b4afbf216cb732db`,
+clean tree; OVERALL FAIL. It does **not** certify the candidate. It **does** establish: the exact head and a clean tree;
+that real Windows PowerShell 5.1 launches and executes the runner; W-04 LF checkout PASS under `core.autocrlf=true`;
+Terraform PASS on the owner's machine (fmt; modules single-host 20/20, app 69/69, ledger 34/34; the three stacks validate).
+It does **not** establish a host-script source failure: `host-scripts.test.sh` ran under Git Bash (32 pass / 11 fail on
+`flock: command not found` and a missing Python) -- a userspace the production AL2023 scripts do not target. It establishes
+**no result** for any build-dependent suite: Build was NOT RUN (no `node_modules` in the clean clone), so every such gate
+was BLOCKED; none of them is a PASS, then or now. The image smoke was not in that runner's manifest at all. The harness
+defects (no dependency bootstrap, the wrong userspace for the host scripts, the missing image-smoke gate) are corrected in
+this branch's next commit (§8); runtime / IaC source is byte-identical to `42ad473`. **Comprehensive validation: PENDING
+OWNER GATE** (the whole runner, rerun once at the new head).

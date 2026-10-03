@@ -12,38 +12,63 @@
      2  Windows LF checkout    RECON-1A W-04: every eol=lf-pinned single-host file is LF IN THE WORKING TREE
                                (`git ls-files --eol`; an older clone keeps CRLF copies git calls clean: re-clone, or
                                `git rm -r -q --cached infra/aws/modules/single-host; git reset -q --hard`)
-     3  Build                  the server TypeScript build (`npm run build`'s own command) = the typecheck
-     4  RECON-1 authorization  deploy/migration/recon1AuthorizationGates (app-read-authorize, ledger-operator-journal,
+     3  Dependencies           RECON-1 owner-gate correction: `npm ci --ignore-scripts` (the Dockerfile's own contract:
+                               locked, lifecycle scripts never run) in frontend\ and server\ from their package-lock
+                               files -- a CLEAN CLONE needs nothing installed by hand. Fails closed: an npm ci failure,
+                               a changed package-lock, or ANY tracked / unignored file changed by it FAILS (node_modules
+                               is ignored); every later gate is then BLOCKED, never run over stale dependencies.
+     4  Build                  the server TypeScript build (`npm run build`'s own command) = the typecheck
+     5  RECON-1 authorization  deploy/migration/recon1AuthorizationGates (app-read-authorize, ledger-operator-journal,
                                X-09, the Terraform-made plans, plan-evidence.ps1's targets / CR record -- its PowerShell
                                test must RUN here: a SKIP of it FAILS the gate -- and host-cert's credential authority /
                                stale-host classification)
-     5  COST-2B migration      deploy/migration/cost2bMigrationGuards
-     6  COST-2C targeted       aws/deploy/hostcert/hostCert.test.js -- the host drills F7 / F8 / F9a / F9b / replacement,
+     6  COST-2B migration      deploy/migration/cost2bMigrationGuards
+     7  COST-2C targeted       aws/deploy/hostcert/hostCert.test.js -- the host drills F7 / F8 / F9a / F9b / replacement,
                                the systemd / HOLD evidence judges, the drill lock, false-PASS / NOT-EVALUATED cases,
                                the bash templates and gs-exit-hold parity, the --host-transport-profile authority
-                               (Git Bash: a SKIP here is NOT RUN, not PASS)
-     7  COST-2A verifier       deploy/cost2aHostVerifier (+ W-02), operator/cost2aHostSnapshot (its .ps1 captures run
+                               (Git Bash: a SKIP here is NOT RUN, not PASS). Git Bash supplies everything these tests
+                               ask of bash (bash -n, base64, sha256sum, timeout, nohup, mktemp, sed / grep against stub
+                               docker / systemctl / curl / journalctl; no flock, no python), so the Windows run stays.
+     8  COST-2C targeted       the SAME suite again in a genuine Linux userspace: the repository's pinned Node image
+        (Linux)                (node:22-bookworm-slim, the server image's own base), the repository mounted READ-ONLY,
+                               --network none, no credential passed; every test must run (no skip)
+     9  COST-2A verifier       deploy/cost2aHostVerifier (+ W-02), operator/cost2aHostSnapshot (its .ps1 captures run
                                under Windows PowerShell / pwsh)
-     8  JX-4C / P5             operator/jx4cOperatorEvidenceIam, runtime/p5IntCrossSlice
-     9  Ownership / fencing    rooms/l5_3Ownership, conformance/fenceGap, aws/awsClients (import / binding guards),
+    10  JX-4C / P5             operator/jx4cOperatorEvidenceIam, runtime/p5IntCrossSlice
+    11  Ownership / fencing    rooms/l5_3Ownership, conformance/fenceGap, aws/awsClients (import / binding guards),
                                conformance/l6_5bAlarms
-    10  awsDeploy / stage-cert deploy/l5_8Deploy, staging/l6_6StagingCert, staging/rotationProof (incl. L6-14W1
+    12  awsDeploy / stage-cert deploy/l5_8Deploy, staging/l6_6StagingCert, staging/rotationProof (incl. L6-14W1
                                04138ea), staging/restoreFencing
-    11  COST-1 + portability   deploy/cost1SingleHost (W-03 / W-04 + the host-cert scripts' LF), runtime/singleHostMetrics
-    12  Terraform              fmt -check (infra/aws), `terraform test` in modules/single-host (20), modules/app (69),
+    13  COST-1 + portability   deploy/cost1SingleHost (W-03 / W-04 + the host-cert scripts' LF), runtime/singleHostMetrics
+    14  Terraform              fmt -check (infra/aws), `terraform test` in modules/single-host (20), modules/app (69),
                                modules/ledger (34); init -backend=false + validate in stacks/app, stacks/ledger,
                                stacks/single-host (mocked providers: no AWS account, no credentials)
-    13  Single-host scripts    infra/aws/modules/single-host/tests/host-scripts.test.sh (Git Bash)
-    14  DynamoDB Local         the full `npm run test:dynamodb-local` corpus (JX-4B's money evidence and COST-2C's drill
+    15  Single-host scripts    the COMPLETE infra/aws/modules/single-host/tests/host-scripts.test.sh in a genuine Amazon
+                               Linux 2023 userspace (the production OS): an ephemeral, pinned amazonlinux:2023
+                               container, `--rm`, the repository mounted READ-ONLY, no credential passed; dnf adds only
+                               util-linux-core (flock) and findutils; the module is copied inside and its files/bin made
+                               0755 exactly as cloud-init installs them; the suite's own stubs stand in for docker /
+                               systemctl / curl / aws (offline). Git Bash is NOT a substitute (no flock, no python3).
+    16  Image smoke            COST-1's tests/image-smoke.sh for linux/amd64 AND linux/arm64, OFFLINE with respect to AWS /
+                               ECR: `docker buildx build --load` of infra/docker/game-server.Dockerfile into a LOCAL,
+                               disposable tag (never --push, never an ECR login, never build-image.{sh,ps1}'s push path;
+                               BUILD_CA, if set, is passed as the build_ca secret as build-image.sh does), then the
+                               unchanged smoke script run from a pinned docker-cli container on the host network with the
+                               Docker socket (so its 127.0.0.1 health probe reaches the --network host container);
+                               the gate's own images and containers are removed afterwards. arm64 that cannot run here
+                               (no QEMU / binfmt) is NOT RUN, never PASS.
+    17  DynamoDB Local         the full `npm run test:dynamodb-local` corpus (JX-4B's money evidence and COST-2C's drill
                                lock -- hostCertLock.dynamoLocal.test.js -- are part of it). Starts ONE throw-away
                                `amazon/dynamodb-local:3.3.1` container (the repository's documented procedure) and
                                removes only that container -- unless GS_DYNAMODB_LOCAL_ENDPOINT is already set, which
                                is then used and nothing is started.
-    15  Full server suite      the complete server `npm test` corpus (LAST: the longest gate; OWNER-RUN ONLY)
+    18  Full server suite      the complete server `npm test` corpus (LAST: the longest gate; OWNER-RUN ONLY)
 
   Nothing here touches AWS, Juno or any remote resource. The script never edits, cleans, resets or stashes the tree.
   Exit code: 0 only when EVERY gate passed; 1 otherwise (a FAIL, a BLOCKED gate after a failed build, or a NOT RUN
-  gate whose prerequisite -- Terraform, Docker, Git Bash, git -- is missing).
+  gate whose prerequisite -- npm, Terraform, Docker Desktop (with buildx and arm64 emulation), Git Bash, git -- is missing).
+  Prerequisites: node + npm, git, Git Bash, Terraform >= 1.10, Docker Desktop running (Linux containers) with network
+  access to public.ecr.aws, the npm registry and the Amazon Linux 2023 package repositories.
   It certifies the SOURCE only: the live AL2023 / systemd contract stays NOT EVALUATED until the real-host drill.
 
 .PARAMETER Only
@@ -55,6 +80,7 @@
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File .\infra\aws\single-host\run-cost2c-owner-gate.ps1
+  (from a CLEAN clone: node_modules are installed by the Dependencies gate; Docker Desktop must be running)
 .EXAMPLE
   pwsh -File .\infra\aws\single-host\run-cost2c-owner-gate.ps1
 #>
@@ -124,6 +150,36 @@ $Terraform = Find-Tool 'terraform'
 $Docker = Find-Tool 'docker'
 $Bash = Find-Bash
 
+# RECON-1 owner-gate correction: the pinned Linux environments (index digests: each platform resolves its own manifest).
+#   AL2023    the production OS, for the host scripts
+#   NODE      the server image's own base (infra/docker/game-server.Dockerfile's NODE_IMAGE), for the Linux COST-2C run
+#   DOCKERCLI the smoke runner (docker CLI on the host network with the Docker socket)
+$Al2023Image = 'public.ecr.aws/amazonlinux/amazonlinux:2023@sha256:12052e9b5d3fd85769abbdd863dd038e1890c9ace31d5fdbe1afa78eda97d061'
+$NodeLinuxImage = 'public.ecr.aws/docker/library/node:22-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c'
+$DockerCliImage = 'public.ecr.aws/docker/library/docker:27-cli@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c'
+$script:Facts = [ordered]@{}
+$script:DockerReady = $null
+
+# Docker Desktop answering (once): $null when ready, otherwise why not.
+function Docker-Problem {
+  if ($null -eq $Docker) { return 'docker is not on PATH (Docker Desktop is required)' }
+  if ($null -eq $script:DockerReady) {
+    $code = Invoke-Logged $Docker @('version', '--format', '{{.Server.Version}} {{.Server.Os}}/{{.Server.Arch}}') $RepoRoot
+    $script:DockerReady = if ($code -eq 0 -and (($script:LastOutput -join ' ') -match 'linux/')) { '' } else { 'the Docker daemon is not answering with Linux containers (start Docker Desktop, Linux containers mode)' }
+  }
+  if ($script:DockerReady -eq '') { return $null } else { return $script:DockerReady }
+}
+
+# A repository mount for `docker run -v`: read-only, the host path as Docker Desktop takes it.
+$RepoMountRO = "${RepoRoot}:/repo:ro"
+
+# The last "<n> passed, <m> failed" of a bash test harness (null when absent: the run did not finish).
+function Harness-Counts([object[]]$Lines, [string]$Pattern) {
+  $hit = $null
+  foreach ($line in $Lines) { if ($line -match $Pattern) { $hit = @([int]$Matches[1], [int]$Matches[2]) } }
+  return $hit
+}
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Running one command: echoed first, stdout + stderr into the log AND the console, its exit code returned
 # ---------------------------------------------------------------------------------------------------------------------
@@ -165,8 +221,8 @@ $NodeTest = @('--test', '--test-concurrency=1', '--test-reporter=tap')
 function TestArgs([string[]]$Files) { return ($NodeTest + ($Files | ForEach-Object { "$Dist/$_" })) }
 
 $Gates = New-Object System.Collections.ArrayList
-function Add-Gate([string]$Name, [bool]$NeedsBuild, [scriptblock]$Body, [string]$Describe) {
-  [void]$Gates.Add([pscustomobject]@{ Name = $Name; NeedsBuild = $NeedsBuild; Body = $Body; Describe = $Describe; Status = 'SKIPPED'; Exit = $null; Seconds = 0.0; Reason = ''; Started = ''; Ended = '' })
+function Add-Gate([string]$Name, [bool]$NeedsBuild, [scriptblock]$Body, [string]$Describe, [bool]$NeedsDeps = $false) {
+  [void]$Gates.Add([pscustomobject]@{ Name = $Name; NeedsBuild = $NeedsBuild; NeedsDeps = ($NeedsDeps -or $NeedsBuild); Body = $Body; Describe = $Describe; Status = 'SKIPPED'; Exit = $null; Seconds = 0.0; Reason = ''; Started = ''; Ended = '' })
 }
 
 Add-Gate 'Windows LF checkout' $false {
@@ -186,6 +242,35 @@ Add-Gate 'Windows LF checkout' $false {
   return @{ Exit = 0 }
 } 'git ls-files --eol -- infra/aws/modules/single-host infra/aws/single-host   (every eol=lf file must be w/lf)'
 
+Add-Gate 'Dependencies (npm ci)' $false {
+  if ($null -eq $Node -or $null -eq $Npm) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = 'node / npm is not on PATH' } }
+  if ($null -eq $Git) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = 'git is not on PATH (the tree cannot be proven unchanged by npm ci)' } }
+  $locks = @('frontend/package-lock.json', 'server/package-lock.json')
+  foreach ($l in $locks) { if (-not (Test-Path (Join-Path $RepoRoot $l))) { return @{ Status = 'FAIL'; Exit = $null; Reason = "$l is missing: no locked install is possible" } } }
+  $hash = { param($rel) (Get-FileHash -Algorithm SHA256 -Path (Join-Path $RepoRoot $rel)).Hash.ToLowerInvariant() }
+  $lockBefore = @{}; foreach ($l in $locks) { $lockBefore[$l] = & $hash $l }
+  $code = Invoke-Logged $Git @('status', '--porcelain', '--untracked-files=all') $RepoRoot
+  if ($code -ne 0) { return @{ Status = 'FAIL'; Exit = $code; Reason = 'git status failed' } }
+  $treeBefore = @($script:LastOutput | Where-Object { $_ -ne '' })
+  foreach ($d in @('frontend', 'server')) {
+    $c = Invoke-Logged $Npm @('ci', '--ignore-scripts', '--no-audit', '--no-fund') (Join-Path $RepoRoot $d)
+    if ($c -ne 0) { return @{ Status = 'FAIL'; Exit = $c; Reason = "npm ci failed in $d\ (no stale dependency is used: every later gate is BLOCKED)" } }
+  }
+  $changedLocks = @($locks | Where-Object { (& $hash $_) -ne $lockBefore[$_] })
+  if ($changedLocks.Count -gt 0) { return @{ Status = 'FAIL'; Exit = 0; Reason = "npm ci CHANGED $($changedLocks -join ', ')" } }
+  $code = Invoke-Logged $Git @('status', '--porcelain', '--untracked-files=all') $RepoRoot
+  if ($code -ne 0) { return @{ Status = 'FAIL'; Exit = $code; Reason = 'git status failed after npm ci' } }
+  $treeAfter = @($script:LastOutput | Where-Object { $_ -ne '' })
+  $new = @($treeAfter | Where-Object { $treeBefore -notcontains $_ })
+  if ($new.Count -gt 0) { return @{ Status = 'FAIL'; Exit = 0; Reason = "npm ci changed tracked / unignored files: $($new -join '; ')" } }
+  foreach ($need in @('frontend/node_modules/typescript/bin/tsc', 'server/node_modules/@aws-sdk/client-dynamodb')) {
+    if (-not (Test-Path (Join-Path $RepoRoot $need))) { return @{ Status = 'FAIL'; Exit = 0; Reason = "$need is absent after npm ci" } }
+  }
+  $script:Facts['package_locks_sha256'] = $lockBefore
+  Log '    both lock files unchanged; the tracked tree unchanged by npm ci (node_modules is ignored)'
+  return @{ Exit = 0 }
+} 'npm ci --ignore-scripts --no-audit --no-fund in frontend\ and server\ (locked; the tree and both package-lock files must be unchanged after)'
+
 Add-Gate 'Build' $false {
   if ($null -eq $Node) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = 'node is not on PATH' } }
   $tsc = Join-Path $FrontendDir 'node_modules/typescript/bin/tsc'
@@ -193,7 +278,7 @@ Add-Gate 'Build' $false {
   if (-not (Test-Path (Join-Path $ServerDir 'node_modules/@aws-sdk/client-dynamodb'))) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = 'server\node_modules is missing (npm ci in server\ first)' } }
   $code = Invoke-Logged $Node @('../frontend/node_modules/typescript/bin/tsc', '-p', 'tsconfig.json') $ServerDir
   return @{ Exit = $code }
-} 'node ../frontend/node_modules/typescript/bin/tsc -p tsconfig.json   (server; = npm run build)'
+} 'node ../frontend/node_modules/typescript/bin/tsc -p tsconfig.json   (server; = npm run build)' $true
 
 Add-Gate 'RECON-1 authorization gates' $true {
   $code = Invoke-Logged $Node (TestArgs @('aws/deploy/migration/recon1AuthorizationGates.test.js')) $ServerDir
@@ -215,6 +300,24 @@ Add-Gate 'COST-2C targeted' $true {
   if ($code -eq 0 -and $n -ne 0) { return @{ Status = 'FAIL'; Exit = $code; Reason = "$n COST-2C test(s) SKIPPED (Git Bash not found: the templates / gs-exit-hold parity were NOT RUN)" } }
   return @{ Exit = $code }
 } 'node --test aws/deploy/hostcert/hostCert.test.js   (GS_TEST_BASH = Git Bash; any skip FAILS the gate)'
+
+Add-Gate 'COST-2C targeted (Linux)' $true {
+  $why = Docker-Problem
+  if ($null -ne $why) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = $why } }
+  $name = "recon1-owner-gate-cost2c-$Stamp".ToLower()
+  $cmd = 'command -v bash >/dev/null && command -v sha256sum >/dev/null && command -v base64 >/dev/null && command -v timeout >/dev/null || exit 98; exec node --test --test-concurrency=1 --test-reporter=tap dist/server/src/aws/deploy/hostcert/hostCert.test.js'
+  try {
+    $code = Invoke-Logged $Docker @('run', '--rm', '--name', $name, '--network', 'none', '-v', $RepoMountRO, '-w', '/repo/server', $NodeLinuxImage, 'bash', '-c', $cmd) $RepoRoot
+    $out = @($script:LastOutput)   # kept BEFORE the cleanup command replaces the last output
+  } finally {
+    Invoke-Logged $Docker @('rm', '-f', $name) $RepoRoot | Out-Null
+  }
+  if ($code -eq 98) { return @{ Status = 'FAIL'; Exit = $code; Reason = 'READINESS: the Linux image lacks bash / sha256sum / base64 / timeout' } }
+  $n = -1; $p = -1
+  foreach ($line in $out) { if ($line -match '^# skipped (\d+)') { $n = [int]$Matches[1] }; if ($line -match '^# pass (\d+)') { $p = [int]$Matches[1] } }
+  if ($code -eq 0 -and ($n -ne 0 -or $p -le 0)) { return @{ Status = 'FAIL'; Exit = $code; Reason = "the Linux run reported pass=$p skipped=$n (every test must run)" } }
+  return @{ Exit = $code }
+} 'docker run --rm --network none -v <repo>:/repo:ro <node:22-bookworm-slim@sha256 (the server image base)> node --test hostcert/hostCert.test.js   (Linux bash; any skip FAILS)'
 
 Add-Gate 'COST-2A verifier/snapshot' $true {
   return @{ Exit = (Invoke-Logged $Node (TestArgs @('aws/deploy/cost2aHostVerifier.test.js', 'aws/operator/cost2aHostSnapshot.test.js')) $ServerDir) }
@@ -255,9 +358,71 @@ Add-Gate 'Terraform' $false {
 } 'terraform fmt -check -recursive (infra/aws); init -backend=false + test (modules single-host, app, ledger); init -backend=false + validate (stacks single-host, app, ledger)'
 
 Add-Gate 'Single-host scripts' $false {
-  if ($null -eq $Bash) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = 'Git Bash (bash.exe of Git for Windows) not found' } }
-  return @{ Exit = (Invoke-Logged $Bash @('infra/aws/modules/single-host/tests/host-scripts.test.sh') $RepoRoot) }
-} 'bash infra/aws/modules/single-host/tests/host-scripts.test.sh   (Git Bash)'
+  $why = Docker-Problem
+  if ($null -ne $why) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = "$why -- the host scripts run only in a genuine Linux (Amazon Linux 2023) userspace" } }
+  $name = "recon1-owner-gate-hostscripts-$Stamp".ToLower()
+  # No double quote anywhere in $cmd (Windows PowerShell 5.1 passes native arguments verbatim only without them).
+  $cmd = 'dnf -y -q install util-linux-core findutils >/dev/null 2>&1 || exit 97; for c in bash flock python3 find sha256sum timeout awk cut tr date mktemp; do command -v $c >/dev/null || exit 98; done; mkdir -p /work && cp -r /repo/infra/aws/modules/single-host /work/single-host && chmod 0755 /work/single-host/files/bin/* || exit 99; exec bash /work/single-host/tests/host-scripts.test.sh'
+  try {
+    $code = Invoke-Logged $Docker @('run', '--rm', '--name', $name, '-v', $RepoMountRO, $Al2023Image, 'bash', '-c', $cmd) $RepoRoot
+    $out = @($script:LastOutput)   # kept BEFORE the cleanup command replaces the last output
+  } finally {
+    Invoke-Logged $Docker @('rm', '-f', $name) $RepoRoot | Out-Null
+  }
+  if ($code -eq 97) { return @{ Status = 'NOT RUN'; Exit = $code; Reason = 'READINESS: dnf could not install util-linux-core / findutils in the AL2023 container (network to the Amazon Linux repositories?)' } }
+  if ($code -eq 98 -or $code -eq 99) { return @{ Status = 'NOT RUN'; Exit = $code; Reason = 'READINESS: the AL2023 test userspace could not be prepared (a required command or the module copy is missing)' } }
+  $counts = Harness-Counts $out '^(\d+) passed, (\d+) failed$'
+  if ($null -eq $counts) { return @{ Status = 'FAIL'; Exit = $code; Reason = 'the suite did not report its totals (it did not finish)' } }
+  $script:Facts['host_scripts'] = [ordered]@{ image = $Al2023Image; passed = $counts[0]; failed = $counts[1] }
+  if ($code -eq 0 -and ($counts[1] -ne 0 -or $counts[0] -lt 40)) { return @{ Status = 'FAIL'; Exit = $code; Reason = "totals $($counts[0]) passed / $($counts[1]) failed (>= 40 passed, 0 failed required)" } }
+  return @{ Exit = $code }
+} 'docker run --rm -v <repo>:/repo:ro <amazonlinux:2023@sha256> : dnf util-linux-core findutils; bash host-scripts.test.sh on a 0755 copy of the module   (genuine AL2023 userspace; offline stubs)'
+
+Add-Gate 'Image smoke' $false {
+  $why = Docker-Problem
+  if ($null -ne $why) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = $why } }
+  $code = Invoke-Logged $Docker @('buildx', 'version') $RepoRoot
+  if ($code -ne 0) { return @{ Status = 'NOT RUN'; Exit = $code; Reason = 'docker buildx is not available (Docker Desktop ships it)' } }
+  $results = [ordered]@{}
+  $worst = 0
+  $notRun = @()
+  $tags = @()
+  try {
+    foreach ($platform in @('linux/amd64', 'linux/arm64')) {
+      $arch = $platform.Substring(6)
+      # Can this platform's containers RUN here (arm64 on x86 needs Docker Desktop's QEMU / binfmt)?
+      $c = Invoke-Logged $Docker @('run', '--rm', '--platform', $platform, '--network', 'none', '--entrypoint', 'node', $NodeLinuxImage, '-p', 'process.arch') $RepoRoot
+      $want = if ($arch -eq 'amd64') { 'x64' } else { 'arm64' }
+      if ($c -ne 0 -or -not (($script:LastOutput -join ' ') -match "\b$want\b")) { $notRun += "$platform cannot run here (no emulation)"; $results[$platform] = 'NOT RUN'; continue }
+      $tag = ("recon1-owner-gate-smoke:$Stamp-$arch").ToLower()
+      $tags += $tag
+      $buildArgs = @('buildx', 'build', '--platform', $platform, '-f', 'infra/docker/game-server.Dockerfile', '--label', "org.opencontainers.image.revision=$Head", '--provenance=false', '--load', '-t', $tag)
+      if (-not [string]::IsNullOrEmpty($env:BUILD_CA)) { $buildArgs += @('--secret', "id=build_ca,src=$($env:BUILD_CA)") }
+      $buildArgs += '.'
+      $c = Invoke-Logged $Docker $buildArgs $RepoRoot
+      if ($c -ne 0) { $worst = $c; $results[$platform] = "BUILD FAILED (exit $c)"; continue }
+      $runner = ("recon1-owner-gate-smoke-runner-$Stamp-$arch").ToLower()
+      $cmd = 'apk add --no-cache -q bash curl coreutils >/dev/null 2>&1 || exit 97; exec bash /repo/infra/aws/modules/single-host/tests/image-smoke.sh ' + $tag + ' ' + $platform
+      try {
+        $c = Invoke-Logged $Docker @('run', '--rm', '--name', $runner, '--network', 'host', '-v', '/var/run/docker.sock:/var/run/docker.sock', '-v', $RepoMountRO, $DockerCliImage, 'sh', '-c', $cmd) $RepoRoot
+        $out = @($script:LastOutput)   # kept BEFORE the cleanup command replaces the last output
+      } finally {
+        Invoke-Logged $Docker @('rm', '-f', $runner, "gs-smoke-$arch") $RepoRoot | Out-Null
+      }
+      if ($c -eq 97) { $notRun += "$platform smoke runner could not install bash / curl"; $results[$platform] = 'NOT RUN (runner)'; continue }
+      $counts = Harness-Counts $out ('^\[' + [regex]::Escape($platform) + '\] (\d+) passed, (\d+) failed$')
+      if ($null -eq $counts) { $worst = 1; $results[$platform] = "no totals (exit $c)"; continue }
+      $results[$platform] = "$($counts[0]) passed, $($counts[1]) failed (exit $c)"
+      if ($c -ne 0 -or $counts[1] -ne 0 -or $counts[0] -lt 7) { $worst = if ($c -ne 0) { $c } else { 1 } }
+    }
+  } finally {
+    foreach ($t in $tags) { Invoke-Logged $Docker @('image', 'rm', '-f', $t) $RepoRoot | Out-Null }
+  }
+  $script:Facts['image_smoke'] = $results
+  if ($worst -ne 0) { return @{ Status = 'FAIL'; Exit = $worst; Reason = (($results.Keys | ForEach-Object { "${_}: $($results[$_])" }) -join '; ') } }
+  if ($notRun.Count -gt 0) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = ($notRun -join '; ') } }
+  return @{ Exit = 0 }
+} 'docker buildx build --load (LOCAL tags; no push, no ECR login) of game-server.Dockerfile for linux/amd64 and linux/arm64; image-smoke.sh for each from a pinned docker-cli runner (host network + Docker socket); images removed after'
 
 Add-Gate 'DynamoDB Local' $true {
   $endpoint = $env:GS_DYNAMODB_LOCAL_ENDPOINT
@@ -357,13 +522,16 @@ if ($ListOnly) { Log 'ListOnly: nothing was run.'; exit 0 }
 # The gates
 # ---------------------------------------------------------------------------------------------------------------------
 $BuildOk = $true
+$DepsOk = $true
 foreach ($g in $Gates) {
   if ($Only.Count -gt 0 -and -not ($Only -contains $g.Name)) { $g.Status = 'SKIPPED'; $g.Reason = 'not selected (-Only)'; continue }
   $g.Started = UtcNow
   Log ''
   Log ("=== GATE: {0}   (start {1})" -f $g.Name, $g.Started) 'White'
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
-  if ($g.NeedsBuild -and -not $BuildOk) {
+  if ($g.NeedsDeps -and -not $DepsOk) {
+    $g.Status = 'BLOCKED'; $g.Reason = 'the locked dependency install (npm ci) failed or did not run: never run over stale dependencies'
+  } elseif ($g.NeedsBuild -and -not $BuildOk) {
     $g.Status = 'BLOCKED'; $g.Reason = 'the build failed or did not run: its output would be stale or missing'
   } else {
     try {
@@ -376,6 +544,7 @@ foreach ($g in $Gates) {
     }
   }
   if ($g.Name -eq 'Build' -and $g.Status -ne 'PASS') { $BuildOk = $false }
+  if ($g.Name -eq 'Dependencies (npm ci)' -and $g.Status -ne 'PASS') { $DepsOk = $false; $BuildOk = $false }
   $sw.Stop()
   $g.Seconds = [math]::Round($sw.Elapsed.TotalSeconds, 1)
   $g.Ended = UtcNow
@@ -412,6 +581,8 @@ $summary = [ordered]@{
   powershell = [string]$PSVersionTable.PSVersion
   overall = $(if ($AllPass) { 'PASS' } else { 'FAIL' })
   total_seconds = [math]::Round($Watch.Elapsed.TotalSeconds, 1)
+  pinned_images = [ordered]@{ al2023 = $Al2023Image; node_linux = $NodeLinuxImage; docker_cli = $DockerCliImage }
+  facts = $script:Facts
   gates = @($Gates | ForEach-Object { [ordered]@{ name = $_.Name; status = $_.Status; exit = $_.Exit; seconds = $_.Seconds; started_utc = $_.Started; ended_utc = $_.Ended; reason = $_.Reason } })
   log = $LogPath
 }

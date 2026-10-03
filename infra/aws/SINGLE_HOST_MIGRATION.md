@@ -131,6 +131,7 @@ floor, not the ceiling.
 | 7b | ledger | `migration-guard ledger-operator-journal --ledger-table-arn <ARN>` | the ledger's resource policy updated in place, gaining exactly JX-4C's `OperatorJournalQuery` (Query, the ledger, the app root with `aws:PrincipalArn` = the operator role, `ATTI#*` + key presence); every other statement -- the runtime principals included -- byte-equal; no key policy, table, APPGEN item or AWS Backup change |
 | 8 | ledger | `migration-guard ledger-host-authorize` | the ledger's resource policy and EVERY signing key's policy update in place, each runtime statement gaining exactly `gs-staging-host-app` beside the task role (kept: coexistence); every other statement byte-equal; no table, KMS create / delete / replace, APPGEN item or AWS Backup change |
 | 9 | single-host | `migration-guard host-create` | only creates, exactly the single-host surface (one instance, ENI, EIP + association, SG + rules, role `gs-staging-host-app`, profile, inline policy, log group, the five alarms, the budget); IMDSv2; the host policy reaches only g1, identity and the ledger, never APPGEN / SYSTEM writes, digest-only Sign, no administrative action; no table, key, ALB, ECS, NAT, endpoint, distribution, ECR repository or lifecycle |
+| 9 (recovery) | single-host | `migration-guard host-create-complete --commit <sha> --region <r> --ledger-table-arn <ARN> --signing-keys <a,b,c>` | ONLY when step 9 was interrupted with exactly `acme_http01` not created (§D 9r): the prior state is exactly the reviewed step-9 surface minus that rule, each object the reviewed one and wired to the others (one SG / ENI / EIP / instance, role `gs-staging-host-app`, the host policy reaching only g1 for the operator-given ledger and keys; the group's live rules only the reviewed ones -- no out-of-band rule such as a hand-opened 22); every one of them a NO-OP; the ONLY change the create of `acme_http01` -- tcp 80-80 from `0.0.0.0/0` on that existing security group, with a description EC2 accepts; `generation = 1`, `game_generations = [1]`, no emergency SSH, no ECR lifecycle, no second host, nothing foreign |
 | 14 | app (targeted) | `migration-guard edge-cutover --origin-domain <origin_hostname> --arm64-live-smoke <D>\arm64-live-smoke.txt --release-digest <sha256> --instance-id <i-...>` | only the existing distribution, updated in place, only the `gs-alb` origin's `domain_name` -> the named host origin; default origin, behaviours (cache / origin-request policies), aliases, certificate, WAF unchanged; no ECS change (the drift), no table / key / IAM / document change; `compute = "ecs"`; AND (OWNER-GATE FIX 1) step 12b's live ARM64 smoke a complete PASS for that release on a Graviton host -- FAIL or NOT EVALUATED refuses the cutover (`--direction rollback`, the edge back to the ALB, needs no smoke but `--cutover-record`: the forward PASS record, and the plan its exact reverse) |
 | F rollback | app | `migration-guard ecs-rollback` | only `aws_ecs_service.pool["p1"]`, desired 0 -> 1 and nothing else; p2 stays 0; SYSTEM/ROUTING read at plan time names p1 |
 | 20 | app | `migration-guard compute-none` | EVERY ECS-era object in the prior state destroyed (services, task definitions, cluster; ALB, listener, rules, target groups; ECS / ALB / endpoint SGs and rules; gateway and interface endpoints; the per-pool log groups; the L6-5B alarms, composites and flip suppressors; the task / execution roles; p2's runtime document) and nothing else destroyed; the p1 document only loses p2's route; the bootstrap / operator policies only lose p2's document; NEVER g1, identity, a key, the p1 or Juno document, ECR, the distribution, the bootstrap / operator authority; nothing created; the plan-time gates read |
@@ -260,6 +261,28 @@ shows nothing: every later guard then judges its own change alone.
    that `stack.tfplan`. The plan
    **creates only**: the instance, ENI, EIP, security group, role, profile, log group, five alarms and the budget. There is
    no ECR lifecycle policy yet: ECS is still the rollback path and its circuit-breaker images must not expire.
+9r. **Recovery: an interrupted step 9 (STEP 9 ACME HOTFIX).** The normal path is step 9 above (`migration-guard
+   host-create`, which judges ONLY the original full create: every resource a create, nothing of the host in the state).
+   The live step-9 apply created 17 of its 18 reviewed resources and EC2 refused the 18th,
+   `aws_vpc_security_group_ingress_rule.acme_http01`, for its description (`Let's Encrypt ...`: EC2 accepts no apostrophe
+   in a security-group rule description). The host runs and serves nothing; with port 80 closed, Caddy cannot obtain
+   its certificate (step 11) until step 9 is completed. The module now carries an EC2-valid description (`ACME HTTP-01 only - Caddy challenge or 404 on port
+   80`), and that state is completed -- never re-run as host-create, never repaired by hand in AWS:
+   - capture `stacks/single-host` again, **untargeted**, with `--keep-plan`, from a clean checkout of the **reviewed
+     hotfix commit** and the **same tfvars** as step 9 (`generation = 1`, `game_generations = [1]`,
+     `emergency_ssh_cidrs = []`, `manage_ecr_lifecycle = false`, the budget enabled). The single-host module must differ
+     from step 9's commit only by that description: a changed template replaces the instance, and the guard refuses it;
+   - **`migration-guard host-create-complete --commit <the reviewed hotfix commit> --region <r> --ledger-table-arn <the
+     ledger stack's ledger_table_arn> --signing-keys <the three key ARNs>`** must PASS (`--commit` is REQUIRED here): the 17 existing objects each a no-op (and proven the reviewed,
+     wired-together host), the ONE change the create of `acme_http01` (tcp 80 from `0.0.0.0/0` on the existing host
+     security group). Anything else -- another missing object, an update / replace / delete, a second host, port 22, a
+     different port, protocol or source, a different group, ECR, a foreign resource, a deferred read, generation 2 --
+     FAILS;
+   - apply **ONLY that saved PASS plan** (`terraform -chdir=infra/aws/stacks/single-host apply <D>\terraform\single-host\stack.tfplan`),
+     with the owner's GO. Step 9 is then complete; continue at step 10.
+   - An ordinary single-host apply remains forbidden: never a fresh `terraform apply`, never `-target`, never a
+     console or CLI edit of the security group. If the guard FAILs, capture and judge again; a different interrupted
+     shape is its own reviewed change, not this gate's.
 10. `OWNER-DNS`: the A record `origin_hostname` → the `public_ip` output. It is a **new** record; `play.<domain>` is not touched.
 11. Wait until Caddy has its certificate: `gs-host.ps1 -Command status` shows `origin_tls_readyz` ≠ `000`. The server is not running yet, so 503 is expected.
     - Expected noise: the `cpu-credits` alarm fires about 15 minutes after launch and clears after about 75 minutes (T4g/T3 standard mode earns no launch credits). The same happens after every host replacement.

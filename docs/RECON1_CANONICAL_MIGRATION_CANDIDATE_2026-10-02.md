@@ -244,3 +244,50 @@ risk: the plan cannot show whether the three data moves are pending; the closure
 
 Validation here: build (typecheck); `recon1SevenATargets` 38/38, `recon1AuthorizationGates` + `cost2bMigrationGuards`
 214/214. Nothing applied or deployed; no AWS contact. **Comprehensive validation: PENDING OWNER GATE.**
+
+## 14. STEP 9 ACME HOTFIX (`recon/step9-acme-completion`, from `f1f3cac`) -- completing an interrupted step 9
+
+**The incident (live):** step 9 was authorised and its guarded saved plan (`migration-guard host-create` PASS) began
+applying. 17 of the 18 reviewed resources were created: the t4g.small host, ENI, EIP + association, security group, the
+HTTPS-from-CloudFront ingress, the HTTPS egress, the host role / profile / policy, the log group, the five alarms and the
+budget. EC2 refused the 18th, `module.host.aws_vpc_security_group_ingress_rule.acme_http01`: its description
+(`Let's Encrypt HTTP-01 only ...`) contained an apostrophe, which EC2 does not accept in a security-group rule
+description. The host runs; nothing serves; port 80 is closed. Nothing was repaired in AWS.
+
+**The fix (source only):** the description is now `ACME HTTP-01 only - Caddy challenge or 404 on port 80` -- port,
+protocol, CIDR, identity and count unchanged; `cost1SingleHost.test.ts` pins every security-group / rule description of
+the single-host module to EC2's character set (`EC2_SG_DESCRIPTION`).
+
+**The recovery gate** `migration-guard host-create-complete` (runbook §D 9r; `--commit`, `--region`,
+`--ledger-table-arn`, `--signing-keys` required) PASSes only when: the prior state is exactly the reviewed step-9 surface
+minus `acme_http01` (written as Terraform writes it: no repeated or misfiled address, no foreign mode or data source);
+those objects are the reviewed host, cross-referenced (one SG in `network.vpc_id` that the ENI, the 443 and egress rules
+name, its live rule listing only the reviewed rules; the EIP on that ENI, at most this instance; the instance on the ENI
+with the `gs-staging-host-app` profile, IMDSv2, no key, termination protection; role / trust / profile / policy the
+reviewed ones -- the policy exactly the module's rendering for the operator-given ledger and keys, reaching only g1; the
+alarms on this instance; the budget <= $30); every one of them a NO-OP in the plan; and the ONE mutation is the create of
+`acme_http01` -- tcp 80-80 from `0.0.0.0/0` on that existing group, with an EC2-valid description, nothing unknown but
+its ids. `generation = 1`, `game_generations = [1]`, no emergency SSH, no ECR lifecycle, no second host, nothing
+foreign, every data source read at plan time. The evidence binding (clean committed checkout, the saved binary plan) is
+the other gates'.
+
+**`host-create` tightened, not weakened:** at `f1f3cac` its surface check accepted no-ops, so it PASSED the completion
+plan (and any partial re-plan whose remaining creates were allowed). It now requires every surface resource to be a
+CREATE and the prior state to hold no host object.
+
+**Reproduced with real Terraform** (1.16.5, hashicorp/aws 6.66.0; EC2 / IAM / Logs / STS on moto 5.2.3, CloudWatch and
+Budgets on a local echo stand-in): the pre-fix module applied `-target`ed at the other 17, then the fixed module planned
+untargeted -> 17 no-ops + the one create, the group's id known at plan time
+(`infra/aws/fixtures/migration-plans/terraform-real/host-create-complete.json`, `reproduce-step9/`).
+
+**Focused review** (one pass): no realistic false acceptance on a Terraform-written plan. Fixed: F1 (High, false refusal
+of the live plan: AWS reports the attached instance on the EIP association -- now accepted when it is this instance);
+F2 (an out-of-band rule on the host group, e.g. 22 opened by hand, was invisible -- the group's live rule listing is now
+judged); F3 / F4 (a hand-edited prior state could hide a second object behind a repeated address or a foreign mode --
+the prior state's entries are now checked as Terraform writes them, in both host gates); F5 partly: `--commit` is now
+required for this gate. Recorded, by design: the egress ports follow `network.juno_egress_ports` (egress only, as
+host-create); a `-refresh=false` plan cannot be detected (applying it still only creates the rule).
+
+Validation here: build (typecheck); `step9AcmeCompletion` 62/62, `cost2bMigrationGuards` 181/181,
+`recon1AuthorizationGates` 53/53, `recon1SevenATargets` 38/38, `cost1SingleHost` 28/28. Nothing applied or deployed; no
+AWS contact. **Comprehensive validation: PENDING OWNER GATE.**

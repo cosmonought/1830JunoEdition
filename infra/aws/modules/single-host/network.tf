@@ -41,7 +41,10 @@ resource "aws_vpc_security_group_ingress_rule" "https_from_cloudfront" {
 
 resource "aws_vpc_security_group_ingress_rule" "acme_http01" {
   security_group_id = aws_security_group.host.id
-  description       = "Let's Encrypt HTTP-01 only (Caddy serves the challenge and 404; never proxies on 80)"
+  # STEP 9 ACME HOTFIX: an EC2 security-group rule description accepts only a-z A-Z 0-9 space and ._-:/()#,@[]+=&;{}!$*
+  # -- the former "Let's Encrypt ..." apostrophe was refused by AWS at apply (InvalidParameterValue), the only resource of
+  # step 9 that failed. Pinned by cost1SingleHost.test.ts; host-create-complete judges the same character set.
+  description       = "ACME HTTP-01 only - Caddy challenge or 404 on port 80"
   ip_protocol       = "tcp"
   from_port         = 80
   to_port           = 80

@@ -50,7 +50,7 @@ This is the simplest shape that keeps:
 - the release image is pinned by digest, present, and of this host's architecture;
 - `/etc/gs/*` holds no AWS credential, `DATA_DIR` or `ESCROW_JUNO_CONFIG`, and the server env says `GS_STORAGE=aws` and `GS_MODE=production`;
 - **this host holds the serving Elastic IP** (IMDSv2 `public-ipv4` = the expected address), so a stale or stray host never starts and never takes the pool back;
-- no other `gs-server` container is running.
+- no other `gs-server` container is running. The question is asked as a **listing** (`docker container ls --all --filter name=^/?gs-server$`), never with `docker container inspect`: for a missing container the real CLI's `inspect -f` prints an empty line and exits 1, exactly as when the daemon cannot answer (PHASE 1 FRESH-HOST HARDENING: that broke step 13's first start on the fresh host). An empty listing is "none"; running / restarting / paused / removing refuses; an exited / created / dead leftover is removed (`rm` without `-f`, which never removes a running one); a docker failure or any other answer refuses.
 
 **gs-run** runs the image:
 - `--read-only --user node --cap-drop ALL --security-opt no-new-privileges --init --pids-limit 512 --memory <limit>`;
@@ -303,7 +303,8 @@ The **default and target stays t4g.small (2 GB).** There is **no automatic downs
 | Test | Proves |
 |---|---|
 | `tests/single-host.tftest.hcl` (`terraform test`) | The hardened host, IAM least privilege (statement by statement), network, user-data size and absence of credentials, the five alarms, budget, ECR lifecycle |
-| `tests/host-scripts.test.sh` | preflight / run / deploy / rollback / stop / HOLD / health / sampler against stubs |
+| `tests/host-scripts.test.sh` | preflight / run / deploy / rollback / stop / HOLD / health / sampler against stubs that answer as the REAL docker / curl / systemctl do (the unit's start runs the real gs-preflight and gs-run, with systemd's start limit); the fresh host of step 13 and its incident replayed; the 13r one-script install |
+| `tests/preflight-real-docker.test.sh [IMAGE]` (Docker) | gs-preflight's one-server check against a REAL Docker CLI and daemon: no container, running / paused / restarting, exited / created leftovers, the daemon unreachable, odd stdout; stop_server, running_digest, http_code; gs-run's argument vector accepted by the daemon (`docker create`). The owner gate runs it in AL2023 with AL2023's own docker CLI |
 | `tests/edge-smoke.sh` (Docker) | The real Caddy image and the rendered Caddyfile with the unit's flags: TLS, /gs routing, query / cookie / Origin, XFF append, WebSocket, readiness 503, port-80 404 |
 | `tests/image-smoke.sh <image> <platform>` (Docker; arm64 under QEMU on x86) | Image metadata, Node arch / user, the server starting with `/gs/healthz` 200, SIGTERM exit 0, AWS-mode refusals offline, AWS mode reaching the runtime-document read |
 | `server/src/aws/deploy/cost1SingleHost.test.ts` (`npm test`) | The budget manifest and the cost / exposure / credential guards |

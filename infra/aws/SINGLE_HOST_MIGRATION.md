@@ -319,6 +319,66 @@ shows nothing: every later guard then judges its own change alone.
     4. the ledger, then the relayer role (a new ledger fence epoch);
     5. the stores, discovery, the first money sweep;
     6. ready.
+13r. **Recovery: step 13 refused on the fresh host (PHASE 1 FRESH-HOST HARDENING) -- the host is NOT replaced.** What
+    happened (live, `i-01fe56536bf591382`, `sh1-5b4756d-arm64-r1` = `sha256:df981e83477936b4c45ae9a225c3be08733487cf5dac923ed69315d88fc22086`):
+    the pull and `release.env` (`GS_MEASURE=1`) succeeded; `gs-preflight` refused all five systemd starts and the unit hit
+    its start limit. On a host where no `gs-server` container ever existed, the real docker CLI answers
+    `inspect -f` with an EMPTY LINE (exit 1), so the old `inspect || printf absent` read "\nabsent", fell through to
+    `docker rm gs-server` and failed. Nothing ran: no container, no server process, no pool / identity / relayer authority
+    moved (APPGEN 1, g1; POOL#p1 with its pre-existing writer), no HOLD, CloudFront / ALB / NAT unchanged. The fixed
+    `gs-preflight` asks a LISTING and fails closed on any docker failure; the certified commit also carries the audit's
+    same-class fixes in `gs-lib.sh` and `gs-health`. The host takes the three certified scripts by the reviewed install
+    below, then step 13 runs again UNCHANGED.
+    - **Bytes.** From a CLEAN checkout of exactly the certified commit `<C>` (the owner gate PASSED on it; `git rev-parse
+      HEAD` = `<C>`; `git status --porcelain` empty; LF -- `gs-host` refuses a CR). Each install binds the bytes it sends
+      to the certified SHA-256 you type and to the live SHA-256 it may replace (the host-create commit's: 5b4756d, whose
+      module is byte-identical at 61f6c82). The certified values are the files' SHA-256 at `<C>`
+      (`git show <C>:infra/aws/modules/single-host/files/bin/<file> | sha256sum`); at this commit:
+
+      | File | Replaces (live, 5b4756d) | Certified |
+      |---|---|---|
+      | `gs-lib.sh` | `b710332477cd86bb44a2d1dc631f6896baae945e31b7afa31996030a91b1931d` | `e459d31de1e8aff07162e8ddbbbee23f311280e80ac7f4521d69244ba8032df3` |
+      | `gs-health` | `7febe7b5efc696c3eebab4e9ee43efe85446ada907237b2464585aaddfb86e23` | `41248127f6a7c22d7e9a3c8c164d82e110f0a569d406ee416d9dc8a92f68668c` |
+      | `gs-preflight` | `69e6f1d41231bf71dd14130e448ff24f0a2bf8a9265c3b880259c7348089dc37` | `f747ffb8cae4c4bbfdd3ed80c8c561eddf1d7eaa699c99fb23614e661df06ccc` |
+
+    - **Why now, all three:** `gs-preflight` alone makes the first start possible (it uses nothing the live `gs-lib.sh`
+      lacks), but COST-2C's precheck compares EVERY host script with the operator's checkout (F7 / F8 / F9 refuse a host
+      whose `gs-lib.sh` / `gs-health` are not `<C>`'s), so the host takes exactly the three files `<C>` changed -- in one
+      sitting, and no other file.
+    - **Armed once installed.** Step 13's `gs-deploy` ENABLED the unit: from the moment the fixed `gs-preflight` is on the
+      host, ANY start (a reboot, a manual start) passes it and takes POOL#p1. Re-prove step 13's prerequisites
+      immediately before (13-pre: ECS p1 / p2 0/0/0, `SYSTEM/ROUTING` names p1, 0 money games, RELAYQ empty), and disarm
+      first (step 2).
+
+    Every command from the repository root, the host-deploy principal's profile, each output saved (`Tee-Object`):
+    1. `gs-host.ps1 -Command status -InstanceId i-01fe56536bf591382` -- `server` failed or inactive, `hold` none,
+       `digest` = the release above, `running_digest` none (the host-create `gs-health` prints an unanswered probe as
+       `000000`; the certified one prints `000`). Anything else: STOP.
+    2. Disarm: `gs-host.ps1 -Command stop -InstanceId i-01fe56536bf591382 -UntilDeploy` -- drains nothing (no server
+       runs), proves no `gs-server` container, and DISABLES the unit, so no reboot can start the server before step 5's
+       deploy (which enables it again).
+    3. Check, writing NOTHING, in this order -- `gs-lib.sh`, `gs-health`, `gs-preflight`:
+       `gs-host.ps1 -Command install-script -InstanceId i-01fe56536bf591382 -HostScript <file> -Sha256 <certified> -ReplacesSha256 <replaces> -Check`.
+       Each must print `live_owner=root:root`, `live_mode=755`, `live_sha256=<replaces>`, `server_state=inactive` (or
+       `failed`), `gs_server_container=none`, `received_sha256=<certified>`, `syntax=ok`, `result=checked (nothing was
+       written)` and end `GS-HOST-INSTALL END exit=0`. Any refusal (`refused=`, exit 2 / 90-96): STOP. Each check also
+       proves its SSM payload (one file and the installer, at most ~19 KB -- `gs-lib.sh`'s) is delivered intact before
+       anything is installed.
+    4. Install, the same order, the same command without `-Check`: each must end `result=installed`,
+       `installed_sha256=<certified>`, `installed_owner=root:root`, `installed_mode=755`, `END exit=0` (on a repeat:
+       `result=unchanged`). Each is ONE atomic rename of `/opt/gs/bin/<file>` (a temporary file beside it, verified --
+       SHA-256 and `bash -n` -- before the rename and again after), under the deploy lock, only while the server is down;
+       it never starts, stops, enables or deploys anything, and touches no other file.
+    5. Step 13 again, EXACTLY as above (same digest, same build, `-Measure`): `gs-deploy` keeps `release.env` (same
+       release: no `release.previous.env`), enables the unit, `reset-failed` clears the start limit, and the start runs the
+       certified `gs-preflight`, which passes; the server then takes POOL#p1 and runs the certified startup. Then step 13's
+       PASS signals and F0 as written.
+    - **Never:** bypass `gs-preflight`, `systemctl start` or `docker run` by hand, or take the pool by hand.
+    - **Persistence.** cloud-init's `write_files` runs ONCE per instance: a reboot, a stop / start or EC2's automatic
+      recovery (same instance id) never rewrites `/opt/gs/bin`. Terraform's recorded user data still embeds the host-create
+      scripts: a `stacks/single-host` plan from `<C>` or any later commit that changes `modules/single-host/files` shows
+      the host REPLACED (`user_data_replace_on_change`) -- see 22b. A future, deliberate replacement from such a commit
+      (F10) builds the host with the certified scripts by cloud-init; none is needed for Phase 1.
 
 ### F. Prove it
 
@@ -540,10 +600,13 @@ recorded; a forward plan called a rollback FAILS); then the ECS rollback of §F 
     policies; the host role stays); apply that `stack.tfplan`.
 22b. `APP-ADMIN`: `stacks/single-host` with `manage_ecr_lifecycle = true`. Capture with `--keep-plan`;
     **`migration-guard ecr-lifecycle`** must PASS (only the lifecycle policy, keeping >= 20 images); apply that
-    `stack.tfplan`. ECS is gone, so the lifecycle policy may now expire old images, keeping the newest 20 images. The
-    current and previous releases are protected only while they ARE among the newest 20 (a running host keeps its pulled
-    image locally, but a host replacement pulls from ECR): before pushing a 20th newer image, re-deploy or re-tag what
-    must survive.
+    `stack.tfplan`. **Capture it from a clean checkout of the HOST-CREATE commit `5b4756d`** (its `modules/single-host` is
+    byte-identical at 61f6c82): the host scripts are embedded in the instance's user data, and PHASE 1 FRESH-HOST
+    HARDENING's commit changed three of them (13r installed them on the live host), so a plan from that commit or any
+    later one REPLACES the instance -- and the guard refuses it (an allowlist: the lifecycle policy only). ECS is gone,
+    so the lifecycle policy may now expire old images, keeping the newest 20 images. The current and previous releases
+    are protected only while they ARE among the newest 20 (a running host keeps its pulled image locally, but a host
+    replacement pulls from ECR): before pushing a 20th newer image, re-deploy or re-tag what must survive.
 22c. **OWNER GO -- the old ECS cluster's Container Insights log groups (outside Terraform; PHASE 1 REMAINDER).** With
     Container Insights on, CloudWatch creates `/aws/ecs/containerinsights/gs-staging/...` (e.g. `.../performance`) ITSELF:
     Terraform never created them and holds none of them in any state, so step 20's destroy of the cluster stops their

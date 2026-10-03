@@ -17,7 +17,7 @@ import { describe, test } from "node:test";
 import type { DeployDeps } from "../commands";
 import { readGenerationEvidence } from "../staging/recovery";
 import { secretFindings, stableStringify, writeRecord } from "../staging/evidence";
-import { createCliFleetView, createSsmHostTransport, isLiveWorld, productionHostCertWorld, ssmCommandLine, type AwsCli } from "./awsCliTransport";
+import { cliInvocation, createCliFleetView, createSsmHostTransport, CREDENTIAL_ENV, isLiveWorld, productionHostCertWorld, ssmCommandLine, type AwsCli } from "./awsCliTransport";
 import { evidenceFileOf, expectedHostFiles, hostCertCommand } from "./commands";
 import { judgeQuiet, judgeSingleWriter, openMoneyState, readAuthority } from "./controlPlane";
 import { acquireLock, CLOCK_SKEW_MS, LOCK_PK, readLock, releaseLock, renewLock } from "./drillLock";
@@ -713,7 +713,7 @@ EOF`);
     const world = { host, fleet, now: () => 0, sleep: async () => undefined };
     assert.equal(isLiveWorld(world), false, "a world over a stub CLI is never live");
     /* Review R5: the production world is frozen with its parts; a copy with a swapped part is not live. */
-    const real = productionHostCertWorld("us-east-1");
+    const real = productionHostCertWorld("us-east-1", "gs-host-deploy");
     assert.equal(isLiveWorld(real), true);
     assert.ok(Object.isFrozen(real) && Object.isFrozen(real.host) && Object.isFrozen(real.fleet));
     assert.throws(() => { (real as { host: unknown }).host = host; });
@@ -750,7 +750,7 @@ describe("COST-2C: the command refuses before touching AWS; there is no --force"
   };
   const host = { world: () => { throw new Error("no world"); }, readers: undefined, repository: REPO };
   const args = (scenario: string, over: Record<string, string> = {}, extra: string[] = []): string[] => {
-    const f: Record<string, string> = { "--run-id": RUN, "--acknowledge-mutating-drill": scenario, "--environment": "staging", "--runtime-parameter": "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1", "--generation": "1", "--pool": "p1", "--game-table": GAME_TABLE, "--instance-id": INSTANCE, "--digest": DIGEST, "--build": BUILD, "--source-commit": COMMIT, "--operator": "owner", "--evidence": os.tmpdir(), ...over };
+    const f: Record<string, string> = { "--run-id": RUN, "--acknowledge-mutating-drill": scenario, "--environment": "staging", "--runtime-parameter": "arn:aws:ssm:us-east-1:111111111111:parameter/gs/staging/runtime/p1", "--generation": "1", "--pool": "p1", "--game-table": GAME_TABLE, "--instance-id": INSTANCE, "--digest": DIGEST, "--build": BUILD, "--source-commit": COMMIT, "--operator": "owner", "--evidence": os.tmpdir(), "--host-transport-profile": "gs-host-deploy", ...over };
     return [scenario, ...Object.entries(f).flat(), ...extra];
   };
   test("refusals: unknown scenario, ack for another scenario, non-staging, bad run id, --force, missing --before", async () => {
@@ -764,6 +764,33 @@ describe("COST-2C: the command refuses before touching AWS; there is no --force"
     assert.equal(await hostCertCommand(args("replacement-after"), deps, host), 2);
     assert.equal(await hostCertCommand(args("crash-restart", {}, ["--before", "x.json"]), deps, host), 2);
     assert.ok(lines.some((l) => /acknowledge-mutating-drill must name THIS scenario/.test(l)));
+  });
+  test("RECON-1: the host transport's principal is named explicitly (--host-transport-profile), or nothing runs", async () => {
+    const lines: string[] = [];
+    const deps = { ...noAws, out: (l: string) => lines.push(l) };
+    const without = args("crash-restart").filter((a, i, all) => a !== "--host-transport-profile" && all[i - 1] !== "--host-transport-profile");
+    assert.equal(await hostCertCommand(without, deps, host), 2);
+    assert.ok(lines.some((l) => /--host-transport-profile/.test(l)));
+    for (const bad of ["", "-x", "a b", "../p", "x".repeat(65)]) assert.equal(await hostCertCommand(args("crash-restart", { "--host-transport-profile": bad }), deps, host), 2, JSON.stringify(bad));
+  });
+  test("RECON-1: the production CLI runs ONLY under the named profile, with no credential variable inherited", () => {
+    const env = { PATH: "/usr/bin", AWS_ACCESS_KEY_ID: "AKIAEXAMPLEEXAMPLE00", AWS_SECRET_ACCESS_KEY: "s", AWS_SESSION_TOKEN: "t", AWS_PROFILE: "gs-operator", aws_default_profile: "x", AWS_REGION: "us-east-1" };
+    const call = cliInvocation("gs-host-deploy", ["ssm", "send-command", "--region", "us-east-1"], env);
+    assert.deepEqual(call.argv, ["--profile", "gs-host-deploy", "ssm", "send-command", "--region", "us-east-1"]);
+    for (const k of Object.keys(call.env)) assert.ok(!CREDENTIAL_ENV.includes(k.toUpperCase()), k);
+    assert.equal(call.env.PATH, "/usr/bin");
+    assert.equal(call.env.AWS_REGION, "us-east-1");
+    assert.equal(call.env.AWS_PAGER, "");
+    assert.throws(() => cliInvocation("--debug", [], env));
+    assert.throws(() => productionHostCertWorld("us-east-1", "bad profile"));
+    assert.equal(productionHostCertWorld("us-east-1", "gs-host-deploy").host.label, "aws-cli-ssm profile=gs-host-deploy");
+  });
+  test("RECON-1: the host transport's AWS surface is exactly SSM Run Command (AWS-RunShellScript) + its result, two EC2 describes and one ECS list", () => {
+    const src = fs.readFileSync(path.join(SRC, "aws/deploy/hostcert/awsCliTransport.ts"), "utf8");
+    const calls = [...src.matchAll(/\[\s*"(ssm|ec2|ecs|sts|iam|kms|dynamodb|s3|logs|cloudwatch|elbv2|cloudfront|autoscaling)",\s*"([a-z-]+)"/g)].map((m) => `${m[1]} ${m[2]}`);
+    assert.deepEqual([...new Set(calls)].sort(), ["ec2 describe-addresses", "ec2 describe-instances", "ecs list-tasks", "ssm get-command-invocation", "ssm send-command"]);
+    assert.equal((src.match(/"--document-name", "AWS-RunShellScript"/g) ?? []).length, 1);
+    assert.ok(!/AWS-RunPowerShellScript|start-session|send-ssh-public-key|"--targets"/.test(src), "one instance by id, one document, no session");
   });
   test("evidence is create-once", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gs-ev-"));

@@ -143,7 +143,7 @@ const staging: StagingDeps = {
 
 /* COST-2C: the host drills -- the production world (the AWS CLI over SSM) is the ONLY live one. */
 const hostCert: HostCertDeps = {
-  world: (region) => productionHostCertWorld(region),
+  world: (region, transportProfile) => productionHostCertWorld(region, transportProfile),
   readers: HOST_CERT_READERS,
   repository: staging.repository,
 };

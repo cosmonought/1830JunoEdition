@@ -672,6 +672,62 @@ describe("RECON-1A: the guard names a CR-carrying checkout", () => {
 });
 
 /* ------------------------------------------------------------------ */
+/* RECON-1: COST-2C's live prerequisites -- the credential authority; the stale-host proof */
+/* ------------------------------------------------------------------ */
+
+describe("RECON-1: host-cert's credential authority -- two existing principals, no new IAM", () => {
+  const iam = source("infra/aws/modules/app/iam.tf");
+  const doc = (name: string): string => {
+    const head = new RegExp(`data\\s+"aws_iam_policy_document"\\s+"${name}"\\s*\\{`).exec(iam);
+    assert.ok(head, name);
+    return blockBody(iam, head.index + head[0].length - 1);
+  };
+  const statementOf = (body: string, sid: string): string => {
+    const hit = childBlocks(body, /statement/).find((st) => new RegExp(`sid\\s*=\\s*"${sid}"`).test(st));
+    assert.ok(hit, sid);
+    return hit;
+  };
+  test("the operator role holds the control plane's reads and the lock's one PutItem -- and NO SSM / EC2 / ECS / KMS / IAM authority", () => {
+    const op = doc("operator");
+    assert.match(statementOf(op, "GameTableRead"), /"dynamodb:GetItem", "dynamodb:Query"/);
+    assert.match(statementOf(op, "RoutingAndEvidence"), /"OPRUN#\*"/);
+    assert.match(statementOf(op, "IdentityWriterRoleRead"), /"ROLE#identity-writer"/);
+    assert.match(statementOf(op, "LedgerRead"), /"dynamodb:GetItem"/);
+    assert.match(statementOf(op, "ReadConfiguration"), /"ssm:GetParameter"/);
+    const actions = [...op.matchAll(/actions\s*=\s*\[([^\]]*)\]/g)].flatMap((m) => [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]));
+    assert.ok(actions.length >= 10, `${actions.length} operator actions parsed`);
+    for (const a of actions) assert.match(a, /^(dynamodb:(GetItem|Query|Scan|ConditionCheckItem|PutItem|UpdateItem)|ssm:GetParameter|cloudwatch:PutMetricData)$/, `operator action ${a}`);
+    assert.doesNotMatch(op, /ssm:SendCommand|ssm:GetCommandInvocation|ssm:StartSession|ec2:|ecs:|kms:|iam:|sts:/);
+    /* and no other role of the module was given the host transport's SSM authority */
+    const allActions = [...iam.matchAll(/actions\s*=\s*\[([^\]]*)\]/g)].flatMap((m) => [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]));
+    assert.ok(!allActions.some((a) => /^ssm:(SendCommand|StartSession|GetCommandInvocation)$/i.test(a)), "no module role holds SSM Run Command");
+  });
+  test("the runbook names both halves, the profile flag, and why no role is added", () => {
+    const book = source("infra/aws/SINGLE_HOST_MIGRATION.md");
+    assert.match(book, /\*\*The credential authority \(RECON-1\): two existing principals, no new IAM\.\*\*/);
+    assert.match(book, /--host-transport-profile <the host-deploy principal's AWS CLI profile>/);
+    assert.match(book, /SSM Run Command on the host IS root on the host/);
+    assert.match(book, /`gs-staging-operator`\*\* \(the default chain\), UNCHANGED/);
+  });
+});
+
+describe("RECON-1: the stale-host live sub-proof is classified NOT EVALUATED -- never weakened, never called proven", () => {
+  const book = source("infra/aws/SINGLE_HOST_MIGRATION.md");
+  test("the runbook classifies it, says why, and lists what stays certified", () => {
+    assert.match(book, /\*\*The stale-host live sub-proof: CLASSIFIED NOT EVALUATED \(RECON-1\)\.\*\*/);
+    assert.match(book, /an ordinary replacement leaves no old instance, so it proves nothing about a stale one, and it is never\s+called proof of it/);
+    assert.match(book, /no such exercise is run/);
+    for (const kept of [/host-scripts\.test\.sh/, /host-cert duplicate-fence/, /verify --topology single-host/, /migration-guard host-create/]) assert.match(book.slice(book.indexOf("CLASSIFIED NOT EVALUATED")), kept);
+    assert.match(book, /\| \*\*NOT EVALUATED \(classified\)\*\* \| The stale-host live sub-proof/);
+  });
+  test("the scenario still reports it NOT EVALUATED without a reachable stale host (COST-2C's check unchanged)", () => {
+    const sc = source("server/src/aws/deploy/hostcert/scenarios.ts");
+    assert.match(sc, /if \(stale === null\) d\.add\(unknown\("replacement: the stale host's preflight refuses \(not the serving EIP\)"/);
+    assert.match(sc, /the old host \$\{b\.instance\} is RUNNING and was not declared --stale-instance-id/);
+  });
+});
+
+/* ------------------------------------------------------------------ */
 /* The runbook and the README                                           */
 /* ------------------------------------------------------------------ */
 

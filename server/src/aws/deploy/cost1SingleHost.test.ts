@@ -26,6 +26,8 @@ import * as fs from "fs";
 import * as path from "path";
 
 import { normalizeEol, readCheckoutText } from "../../testSupport/portability";
+import { HOST_OP_KINDS, hostScript, recorderScript, type HostOp } from "./hostcert/hostOps";
+import { ssmCommandLine } from "./hostcert/awsCliTransport";
 
 const REPO = path.resolve(__dirname, "../../../../../.."); // dist/server/src/aws/deploy -> the repository
 /* RECON-1A W-03: every source assertion reads the checkout EOL-normalised (LIVE-6 W1's seam): a `$`-anchored or
@@ -385,6 +387,21 @@ describe("RECON-1A W-04: the single host's files are LF whatever core.autocrlf s
     assert.deepEqual(unpinned, [], "each host input must match an eol=lf pattern");
     /* and nothing beyond the host surface was swept in: the module's Terraform and the Windows twins stay text=auto */
     for (const f of ["infra/aws/modules/single-host/locals.tf", "infra/aws/single-host/gs-host.ps1", "infra/aws/modules/single-host/README.md", "server/src/aws/deploy/hostVerify.ts"]) assert.ok(!patterns.some((re) => re.test(f)), `${f} is not pinned`);
+  });
+  test("RECON-1 (COST-2C): every host-cert script sent to AL2023 over SSM is LF -- the templates live in TypeScript (String.raw), whose template literals normalise CRLF to LF on any checkout", () => {
+    const run = "recon1-lf-test";
+    const ops: HostOp[] = HOST_OP_KINDS.map((kind) =>
+      kind === "observe" ? { kind, run, sinceEpochSeconds: 1_800_000_000 } : kind === "deploy" ? { kind, run, digest: `sha256:${"a".repeat(64)}`, build: "b1" } : kind === "deploy-refused-probe" ? { kind, run, build: "b1" } : ({ kind, run } as HostOp),
+    );
+    for (const op of ops) {
+      const script = hostScript(op);
+      assert.ok(script.length > 0 && !script.includes("\r"), `${op.kind}: no CR in the script the host runs`);
+      const line = ssmCommandLine(op);
+      assert.ok(!line.includes("\r"));
+      const b64 = /printf '%s' '([A-Za-z0-9+/=]+)'/.exec(line)?.[1];
+      assert.ok(b64 !== undefined && !Buffer.from(b64, "base64").includes(0x0d), `${op.kind}: the decoded payload is LF`);
+    }
+    assert.ok(!recorderScript().includes("\r"), "the ExecStopPost recorder is LF");
   });
   const git = spawnSync("git", ["-C", REPO, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8" });
   test("git itself resolves eol=lf for every host input", { skip: git.status === 0 && git.stdout.trim() === "true" ? false : "not a git checkout (the .gitattributes test above still holds)" }, () => {

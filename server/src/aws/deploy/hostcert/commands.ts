@@ -19,6 +19,8 @@
 //       [--reclaim-stale-lock <run>]        stale-lock recovery: names the EXPIRED holder exactly (drillLock.ts)
 //       [--before <file>]                   replacement-after: replacement-before's evidence record
 //       [--stale-instance-id i-...]         replacement-after: the old host, kept reachable for the stale-host proof
+//       --host-transport-profile <profile>  RECON-1: the AWS CLI profile of the HOST-DEPLOY principal (the one that runs
+//                                           `gs-host deploy`): SSM Run Command on the host, the EC2 / ECS reads
 //
 //   scenarios: graceful-stop (F7) | crash-restart (F8) | reboot-restart (F8) | duplicate-preflight (F9a) |
 //              duplicate-fence (F9b) | replacement-before | replacement-after   (`scenarios.ts`)
@@ -26,9 +28,15 @@
 //   Exit: 0 PASS; 1 FAIL; 2 usage; 3 NOT EVALUATED (offline evidence always ends here, or an unread step); 4 REFUSED
 //   (the precheck did not pass: nothing was mutated). There is no --force: every precondition is checked, every time.
 //
-// Credentials: the operator's default chain -- the SAME one for the AWS CLI (SSM Run Command on the instance, EC2 / ECS
-// reads) and the SDK (the game table's reads and the drill lock's PutItem in OPRUN#host-cert, the identity-writer role
-// item, the ledger's APPGEN and FENCE#relayer). Nothing here prints a credential, an SSM parameter's value, or server.env.
+// Credentials (RECON-1, two principals, NO new IAM):
+//   the HOST TRANSPORT (AWS CLI: ssm send-command AWS-RunShellScript on the instance, ssm get-command-invocation,
+//     ec2 describe-instances / describe-addresses, ecs list-tasks) runs ONLY under --host-transport-profile -- the
+//     host-deploy principal, whose SSM authority on the host already exists for `gs-host deploy` (COST-1);
+//   the CONTROL PLANE (SDK: the runtime document's GetParameter, the game table's reads and the drill lock's PutItem in
+//     OPRUN#host-cert, the identity-writer role item, the ledger's APPGEN and FENCE#relayer) runs on the default chain --
+//     the operator role gs-<env>-operator, whose grants already cover exactly that (pinned by hostCert.test.ts and
+//     recon1AuthorizationGates.test.ts); it gains NO SSM / EC2 authority.
+// Nothing here prints a credential, an SSM parameter's value, or server.env.
 
 import { createHash } from "crypto";
 import * as fs from "fs";
@@ -37,6 +45,7 @@ import * as path from "path";
 import { clientsFor, environmentOf, generationOf, loadAndMatch, need, parseFlags, UsageError, type DeployDeps } from "../commands";
 import { obj, readEvidence, RUN_ID, writeRecord } from "../staging/evidence";
 import { readGenerationEvidence } from "../staging/recovery";
+import { CLI_PROFILE } from "./awsCliTransport";
 import type { HostCertReaders } from "./controlPlane";
 import { LOCK_FORMAT, type LockHolder } from "./drillLock";
 import { BUILD, DIGEST, HOST_SCRIPT_NAMES } from "./hostOps";
@@ -45,8 +54,9 @@ import type { HostCertWorld } from "./transport";
 import { EXIT_FAIL, EXIT_NOT_EVALUATED, EXIT_PASS, EXIT_REFUSED, EXIT_USAGE } from "./verdict";
 
 export interface HostCertDeps {
-  /** The world for `region` (production: `productionHostCertWorld`; tests: a fake -- never live). */
-  readonly world: (region: string) => HostCertWorld;
+  /** The world for `region`, its host transport under `transportProfile` (production: `productionHostCertWorld`; tests: a
+   *  fake -- never live). */
+  readonly world: (region: string, transportProfile: string) => HostCertWorld;
   /** The deployment's readers (tools/awsDeploy.ts); absent: every authority read is NOT EVALUATED (and the precheck refuses). */
   readonly readers: HostCertReaders | undefined;
   /** The repository root (the reviewed unit and host scripts are hashed from infra/aws/modules/single-host/files). */
@@ -58,7 +68,7 @@ export interface HostCertDeps {
 
 export const HOST_CERT_USAGE = [
   "usage:",
-  `  awsDeploy host-cert (${Object.keys(SCENARIOS).join(" | ")}) --run-id <run> --acknowledge-mutating-drill <the same scenario> --environment staging --runtime-parameter <SSM ARN> --generation 1 --pool p1 --game-table <g1 table> --instance-id <i-...> --digest <sha256:...> --build <id> --source-commit <40 hex> --operator <label> --evidence <dir> [--region <r>] [--ecs-cluster <name>] [--reclaim-stale-lock <run>] [--before <file>] [--stale-instance-id <i-...>]`,
+  `  awsDeploy host-cert (${Object.keys(SCENARIOS).join(" | ")}) --run-id <run> --acknowledge-mutating-drill <the same scenario> --environment staging --runtime-parameter <SSM ARN> --generation 1 --pool p1 --game-table <g1 table> --instance-id <i-...> --digest <sha256:...> --build <id> --source-commit <40 hex> --operator <label> --evidence <dir> [--region <r>] [--ecs-cluster <name>] [--reclaim-stale-lock <run>] [--before <file>] [--stale-instance-id <i-...>] --host-transport-profile <the host-deploy principal's AWS CLI profile>`,
   ...Object.values(SCENARIOS).map((s) => `      ${s.name.padEnd(20)} ${s.property.padEnd(12)} ${s.disruptive ? "DISRUPTIVE" : "non-disruptive"}${s.quiet ? ", needs 0 money games + RELAYQ empty" : ""}: ${s.summary}`),
 ].join("\n");
 
@@ -109,7 +119,7 @@ export async function hostCertCommand(argv: readonly string[], deps: DeployDeps,
   try {
     if (scenarioArg === undefined || !Object.prototype.hasOwnProperty.call(SCENARIOS, scenarioArg)) throw new UsageError(`unknown scenario ${JSON.stringify(scenarioArg ?? "")}`);
     const scenario = scenarioArg as Scenario;
-    const flags = parseFlags(rest, ["--run-id", "--acknowledge-mutating-drill", "--environment", "--runtime-parameter", "--generation", "--pool", "--game-table", "--instance-id", "--digest", "--build", "--source-commit", "--operator", "--evidence", "--region", "--ecs-cluster", "--reclaim-stale-lock", "--before", "--stale-instance-id"], []);
+    const flags = parseFlags(rest, ["--run-id", "--acknowledge-mutating-drill", "--environment", "--runtime-parameter", "--generation", "--pool", "--game-table", "--instance-id", "--digest", "--build", "--source-commit", "--operator", "--evidence", "--region", "--ecs-cluster", "--reclaim-stale-lock", "--before", "--stale-instance-id", "--host-transport-profile"], []);
     const run = need(flags, "--run-id");
     if (!RUN_ID.test(run)) throw new UsageError("--run-id must match ^[a-z0-9][a-z0-9-]{5,39}$");
     if (need(flags, "--acknowledge-mutating-drill") !== scenario) throw new UsageError(`--acknowledge-mutating-drill must name THIS scenario (${scenario}): an explicit acknowledgement that it mutates the staging host`);
@@ -131,6 +141,8 @@ export async function hostCertCommand(argv: readonly string[], deps: DeployDeps,
     const operator = need(flags, "--operator");
     if (!OPERATOR.test(operator)) throw new UsageError("--operator must match ^[A-Za-z0-9._@-]{1,64}$");
     const evidence = need(flags, "--evidence");
+    const transportProfile = need(flags, "--host-transport-profile");
+    if (!CLI_PROFILE.test(transportProfile)) throw new UsageError("--host-transport-profile names the host-deploy principal's AWS CLI profile ([A-Za-z0-9._-], at most 64)");
     const reclaim = flags.get("--reclaim-stale-lock") ?? null;
     if (reclaim !== null && !RUN_ID.test(reclaim)) throw new UsageError("--reclaim-stale-lock names a run id");
     if (reclaim !== null && scenario === "replacement-after") throw new UsageError("replacement-after continues its own lock (--before); it never reclaims one");
@@ -148,8 +160,9 @@ export async function hostCertCommand(argv: readonly string[], deps: DeployDeps,
     const replacementBefore = beforeFile === undefined ? undefined : replacementBaselineOf(beforeFile, run, environment);
     const input: DrillInput = { scenario, run, environment, generation, pool, gameTable, instanceId, digest, build, sourceCommit, operator, ecsCluster, reclaimStaleLock: reclaim, ...(replacementBefore !== undefined ? { replacementBefore } : {}), staleInstanceId: stale };
     deps.out(`host-cert ${scenario} (${SCENARIOS[scenario].property}) run ${run} on ${instanceId} (${environment}, g${generation}, ${pool}) -- ${SCENARIOS[scenario].disruptive ? "DISRUPTIVE" : "non-disruptive"}`);
+    deps.out(`  credentials: host transport = AWS CLI profile ${transportProfile} (the host-deploy principal); control plane and lock = the default chain (the operator role)`);
     const result = await runDrill(input, {
-      world: host.world(region),
+      world: host.world(region, transportProfile),
       readers: host.readers,
       target: { clients, tables, pool, relayer: startup.escrowConfig?.relayer.address ?? null },
       generationEvidence: () => readGenerationEvidence(hostReaders?.recovery, clients, { game: tables.game, ledger: tables.ledger }),

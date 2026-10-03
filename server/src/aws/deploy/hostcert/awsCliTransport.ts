@@ -14,6 +14,14 @@
 // ec2:DescribeAddresses, ecs:ListTasks. Nothing here reads or prints a credential: the CLI's own chain supplies it, and
 // only the host's framed answer, identifiers and states are kept.
 //
+// RECON-1 (the credential authority): the production world runs the CLI under ONE explicitly named AWS CLI profile
+// (`--host-transport-profile`): the host-deploy principal that already runs `gs-host deploy` (SSM AWS-RunShellScript on
+// the host is that principal's reviewed authority since COST-1). The child's environment carries NO credential variable
+// (AWS_ACCESS_KEY_ID / SECRET / SESSION_TOKEN / AWS_PROFILE / AWS_DEFAULT_PROFILE are removed), so the named profile is
+// the only source. The control plane (the SDK: DynamoDB reads, the drill lock, the runtime document) stays on the default
+// chain -- the operator role, unchanged: the operator role gains NO SSM / EC2 authority (SendCommand on the host is root
+// on the host, i.e. the host role's KMS Sign and money writes) and no new principal exists.
+//
 // `productionHostCertWorld` is the ONLY world `isLiveWorld` accepts: a world built over a stub CLI
 // (`createSsmHostTransport` / `createCliFleetView` with a fake `AwsCli`, as the offline tests do) is never live.
 
@@ -57,6 +65,8 @@ export function ssmCommandLine(op: HostOp): string {
 
 export interface SsmTransportOptions {
   readonly region: string;
+  /** RECON-1: the AWS CLI profile the transport runs under (recorded in the label; the production world requires one). */
+  readonly profile?: string;
   readonly sleep: (ms: number) => Promise<void>;
   readonly pollMs?: number;
 }
@@ -66,7 +76,7 @@ export function createSsmHostTransport(cli: AwsCli, options: SsmTransportOptions
   if (!REGION.test(options.region)) throw new Error("host-cert: --region must be an AWS region");
   const poll = options.pollMs ?? 3_000;
   return {
-    label: "aws-cli-ssm",
+    label: options.profile === undefined ? "aws-cli-ssm" : `aws-cli-ssm profile=${options.profile}`,
     async run(instanceId: string, op: HostOp): Promise<HostRun> {
       if (!INSTANCE_ID.test(instanceId)) return { ok: false, detail: "not an instance id", commandId: null };
       const problem = hostOpProblem(op);
@@ -202,10 +212,24 @@ export function createCliFleetView(cli: AwsCli, region: string): FleetView {
   };
 }
 
-/** The real AWS CLI (`aws` on PATH: AWS CLI v2), argument arrays only, a bounded time, a bounded output. */
-const realAwsCli: AwsCli = (args, timeoutMs) =>
+/** RECON-1: a profile name the AWS CLI can take (no path, no option, no whitespace). */
+export const CLI_PROFILE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+/** The credential variables the transport's child process never inherits (the named profile is its ONLY source). */
+export const CREDENTIAL_ENV = Object.freeze(["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN", "AWS_PROFILE", "AWS_DEFAULT_PROFILE", "AWS_CREDENTIAL_EXPIRATION"]);
+
+/** RECON-1: the exact invocation for `profile`: `--profile <profile>` first, the environment without credentials. */
+export function cliInvocation(profile: string, args: readonly string[], env: NodeJS.ProcessEnv): { readonly argv: string[]; readonly env: NodeJS.ProcessEnv } {
+  if (!CLI_PROFILE.test(profile)) throw new Error("host-cert: --host-transport-profile is not a profile name");
+  const clean: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(env)) if (!CREDENTIAL_ENV.includes(k.toUpperCase())) clean[k] = v;
+  return { argv: ["--profile", profile, ...args], env: { ...clean, AWS_PAGER: "" } };
+}
+
+/** The real AWS CLI (`aws` on PATH: AWS CLI v2) under one named profile, argument arrays only, a bounded time and output. */
+const realAwsCli = (profile: string): AwsCli => (args, timeoutMs) =>
   new Promise((resolve, reject) => {
-    execFile("aws", [...args], { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true, shell: false, env: { ...process.env, AWS_PAGER: "" } }, (error, stdout, stderr) => {
+    const call = cliInvocation(profile, args, process.env);
+    execFile("aws", call.argv, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, windowsHide: true, shell: false, env: call.env }, (error, stdout, stderr) => {
       if (error !== null && typeof (error as { code?: unknown }).code !== "number") {
         reject(new Error(`the AWS CLI could not be run (${(error as { code?: unknown }).code === "ENOENT" ? "aws is not on PATH: install AWS CLI v2" : error.message})`));
         return;
@@ -214,11 +238,14 @@ const realAwsCli: AwsCli = (args, timeoutMs) =>
     });
   });
 
-/** THE production world: SSM Run Command and the EC2 / ECS reads through the real AWS CLI. The only live world. */
-export function productionHostCertWorld(region: string): HostCertWorld {
+/** THE production world: SSM Run Command and the EC2 / ECS reads through the real AWS CLI, under the host-deploy
+ *  principal's named profile (RECON-1). The only live world. */
+export function productionHostCertWorld(region: string, transportProfile: string): HostCertWorld {
+  if (!CLI_PROFILE.test(transportProfile)) throw new Error("host-cert: --host-transport-profile is not a profile name");
   const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-  const host = Object.freeze(createSsmHostTransport(realAwsCli, { region, sleep }));
-  const fleet = Object.freeze(createCliFleetView(realAwsCli, region));
+  const cli = realAwsCli(transportProfile);
+  const host = Object.freeze(createSsmHostTransport(cli, { region, sleep, profile: transportProfile }));
+  const fleet = Object.freeze(createCliFleetView(cli, region));
   const world: HostCertWorld = Object.freeze({ host, fleet, now: () => Date.now(), sleep });
   for (const o of [world, host, fleet]) LIVE.add(o);
   return world;

@@ -408,16 +408,31 @@ contract (COST-1's open item) stays **OPEN -- NOT EVALUATED -- until the live dr
 never PASS: every scenario's `real AL2023 host` check is PASS only through the production SSM transport from an Amazon
 Linux 2023 host (`aws/deploy/hostcert/`).
 
-Run by the ONE authorized Claude Code session (or the owner), from the reviewed commit, with operator credentials allowed
-`ssm:SendCommand` (AWS-RunShellScript on the host) / `ssm:GetCommandInvocation`, `ec2:DescribeInstances` /
-`DescribeAddresses`, `ecs:ListTasks`, the operator role's DynamoDB reads, and its `PutItem` on `OPRUN#*` (the drill lock).
-AWS CLI v2 on PATH. On Windows run `node dist/...` directly.
+Run by the ONE authorized Claude Code session (or the owner), from the reviewed commit. AWS CLI v2 on PATH. On Windows
+run `node dist/...` directly.
+
+**The credential authority (RECON-1): two existing principals, no new IAM.**
+
+| Half | Calls (exactly) | Principal | Why this one |
+|---|---|---|---|
+| Host transport (AWS CLI) | `ssm send-command` (document `AWS-RunShellScript`, one `--instance-ids`), `ssm get-command-invocation`, `ec2 describe-instances`, `ec2 describe-addresses`, `ecs list-tasks` | **the host-deploy principal** -- the identity that already runs `gs-host deploy` at step 13 (SSM `AWS-RunShellScript` on the host is its reviewed authority since COST-1), named by `--host-transport-profile <AWS CLI profile>` | SSM Run Command on the host IS root on the host, i.e. the host role's KMS Sign and money writes. Granting it to the operator role, or to a new persistent role, would create a SECOND principal with that power (plus new app- and ledger-stack IAM deltas on the frozen stacks). The deploy principal already holds it. |
+| Control plane (SDK) | the runtime / Juno documents' `ssm:GetParameter`; g1 `GetItem` / `Query` (SYSTEM, POOL#, ROLE#relayer, TASK#, FINKEYS / FINIDX#, RELAYQ#, the lock); identity `GetItem` ROLE#identity-writer; ledger `GetItem` APPGEN / FENCE#relayer#; **the one write:** `PutItem` of `OPRUN#host-cert` / `LOCK` | **`gs-staging-operator`** (the default chain), UNCHANGED | its existing grants cover exactly these (`GameTableRead`, `RoutingAndEvidence` with the lock's attributes, `IdentityWriterRoleRead`, `LedgerRead` + the ledger's `OperatorLedgerReadOnly`, `ReadConfiguration`); it gains no SSM / EC2 / ECS authority, no KMS Sign, no money write |
+
+The transport's child process inherits **no** credential variable (`AWS_ACCESS_KEY_ID` / `SECRET` / `SESSION_TOKEN` /
+`AWS_PROFILE`), so the named profile is its only source; the evidence's transport label records the profile name. In the
+single-account form both halves may be one principal; the flag is still required (an explicit choice). Optional owner
+hardening (outside Terraform, owner-managed, never applied here): scope the host-deploy principal's SSM statement to
+`ssm:SendCommand` on `arn:aws:ssm:<region>::document/AWS-RunShellScript` and `arn:aws:ec2:<region>:<app>:instance/*` with
+`ssm:resourceTag/gs:component = single-host` and `ssm:resourceTag/gs:environment = staging`, `ssm:GetCommandInvocation` on
+`*`, `ec2:DescribeInstances` / `ec2:DescribeAddresses` on `*`, `ecs:ListTasks` with `ecs:cluster` = the retired cluster;
+`gs-host` needs the same SSM statement.
 
 ```
 node dist/server/src/tools/awsDeploy.js host-cert <scenario> --run-id <run> --acknowledge-mutating-drill <scenario>
   --environment staging --runtime-parameter <p1 SSM ARN> --generation 1 --pool p1 --game-table gs-staging-game-g1
   --instance-id <i-...> --digest <sha256:... the serving release> --build <its build id> --source-commit <40 hex>
-  --operator <who> --evidence <D>\host-cert [--reclaim-stale-lock <run>] [--before <file> --stale-instance-id <i-...>]
+  --operator <who> --evidence <D>\host-cert --host-transport-profile <the host-deploy principal's AWS CLI profile>
+  [--reclaim-stale-lock <run>] [--before <file> --stale-instance-id <i-...>]
 ```
 
 | Property | Scenario | Disruptive? | Needs 0 money games + RELAYQ empty | Owner GO required |
@@ -460,19 +475,36 @@ no Restart= setting), the recorder's `EXIT_CODE` / `EXIT_STATUS` / `SERVICE_RESU
 ("not the serving Elastic IP"), it serves nothing and POOL#p1 does not move. Without a reachable stale host that check is
 NOT EVALUATED (offline proof only).
 
+**The stale-host live sub-proof: CLASSIFIED NOT EVALUATED (RECON-1).** The module replaces the host destroy-before-create
+(the one ENI): an ordinary replacement leaves no old instance, so it proves nothing about a stale one, and it is never
+called proof of it. Keeping an old instance alive would mean a second instance carrying the host role -- authorised for
+the tables, the ledger and the signing keys -- beside the serving one, i.e. exactly the simultaneously authorised second
+host this migration forbids; no such exercise is run. `replacement-after` therefore ends NOT EVALUATED on that one check
+(every other check must PASS; the record lists them); that outcome is the expected, final classification for this
+topology, never a PASS. What stays certified instead:
+- **offline:** `gs-preflight`'s Elastic-IP refusal ("not the serving Elastic IP") and its duplicate-process refusal
+  (`modules/single-host/tests/host-scripts.test.sh`), the destroy-before-create ENI / one-host shape
+  (`single-host.tftest.hcl`), `migration-guard host-create` (one instance, one EIP);
+- **live, other drills:** POOL# fencing on the real host -- a later writer fences the earlier one, which exits 3 and is
+  held (`host-cert duplicate-fence`, F9b): the consequence of any stale writer is the proven fence;
+- **live, every replacement:** `replacement-after`'s one-host / EIP-owner / newer-epoch checks (a RUNNING undeclared old
+  host FAILs) and §J 24's judged inventory (`verify --topology single-host`: exactly one host, one host EIP, no
+  unassociated EIP).
+
 **Known limits (the COST-2C review's Low findings, NOT fixed; none can produce a false PASS):** "no server process after
 the reboot" is sampled every 5 s (a process that lived between samples is caught only if it took the pool); the F9b fence
 poll may end before ExecStopPost ran (NOT EVALUATED, never PASS); the reboot is `nohup ... systemctl reboot` and may be
 killed with the SSM command (then F8 FAILs / F9b is NOT EVALUATED); only `/etc/systemd/system/gs-server.service.d` is
 listed for foreign drop-ins (the effective `Restart=` / `RestartPreventExitStatus=` / gs-exit-hold are checked); the
 rival uses the server's memory limit on a 2 GB host (an OOM kill shows as a FAIL); a lost renew answer reads as a lost
-lock (the drill stops, the lock expires); the operator role in Terraform has no SSM / EC2 grants (the drill needs
-credentials that have them); host command output is printed before the evidence's secret refusal; and
+lock (the drill stops, the lock expires); the operator role in Terraform has no SSM / EC2 grants (RECON-1: by design --
+the host transport runs under the host-deploy principal's `--host-transport-profile`, above); host command output is printed before the evidence's secret refusal; and
 `replacement-after` stays NOT EVALUATED unless a stale host is reachable over SSM (the destroy-before-create
 replacement normally leaves none).
 
 **Owner validation:** `powershell -ExecutionPolicy Bypass -File .\infra\aws\single-host\run-cost2c-owner-gate.ps1`
-(the complete COST-2C sweep; one log under `evidence\owner-gates\`).
+(RECON-1: the ONE owner gate for the whole reconciled candidate -- RECON-1A's gates, COST-1 / 2A / 2B / 2C, JX-4C, P5, the
+Windows LF checks, Terraform, DynamoDB Local and the full server suite last; one log under `evidence\owner-gates\`).
 
 ## Certification: what remains valid, what reruns, what retires
 
@@ -487,6 +519,7 @@ replacement normally leaves none).
 | RERUN | WebSocket | the `stage-probe edge` websocket gate through CloudFront → Caddy |
 | RERUN | Restart | §F7–F8 (`host-cert graceful-stop`, `crash-restart`, `reboot-restart`) |
 | RERUN | Fencing / duplicate process | §F9 (`host-cert duplicate-preflight`, `duplicate-fence`), plus the replacement certification (`host-cert replacement-before` / `replacement-after`; LIVE-6's `stage-cert` replacement scenario is ECS-only and unchanged) |
+| **NOT EVALUATED (classified)** | The stale-host live sub-proof of a replacement (a kept old host's preflight refusal) | destroy-before-create leaves no old host; keeping one would be a second authorised host. Certified offline (gs-preflight EIP / duplicate refusal, the one-host shape, host-create) plus live F9b fencing and the J 24 inventory (above) |
 | **OPEN** | **The AL2023 / systemd exit-status contract** (gs-exit-hold receives `EXIT_CODE=exited` / `EXIT_STATUS=3` or `5` from ExecStopPost; `RestartPreventExitStatus=3 5` holds) | Proven offline only as far as offline can go (COST-2C). **NOT EVALUATED until `host-cert duplicate-fence` (and the F7 / F8 drills) PASS on the real host.** Not certified. |
 | RERUN | KMS access | §F5 (the instance role is a new principal type) |
 | RERUN | DynamoDB access | §F6, plus the `iam` gate's classification for the host role |

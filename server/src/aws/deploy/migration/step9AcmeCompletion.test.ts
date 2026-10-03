@@ -115,7 +115,11 @@ describe("STEP 9 ACME HOTFIX: the description EC2 refused, and the corrected one
     const start = tf.indexOf('resource "aws_vpc_security_group_ingress_rule" "acme_http01" {');
     assert.ok(start >= 0);
     const block = tf.slice(start, tf.indexOf("\n}", start));
-    assert.ok(block.split("\n").some((l) => l.trim() === `description       = "${ACME_DESCRIPTION}"`), block);
+    /* the VALUE is pinned, not terraform fmt's alignment (cost1SingleHost.test.ts's style): any assignment whitespace */
+    const descriptionLine = (value: string) => new RegExp(`^\\s*description\\s*=\\s*"${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\s*$`, "m");
+    assert.match(block, descriptionLine(ACME_DESCRIPTION), block);
+    assert.doesNotMatch(block.replace(ACME_DESCRIPTION, `${ACME_DESCRIPTION} (changed)`), descriptionLine(ACME_DESCRIPTION), "another description value must not pass");
+    assert.doesNotMatch(block, descriptionLine("Let's Encrypt HTTP-01 only (Caddy serves the challenge and 404; never proxies on 80)"));
     assert.match(block, /ip_protocol\s+=\s+"tcp"\n\s+from_port\s+=\s+80\n\s+to_port\s+=\s+80\n\s+cidr_ipv4\s+=\s+"0\.0\.0\.0\/0"/);
     assert.equal(acmeAfter(real()).description, ACME_DESCRIPTION);
     assert.equal(acmeAfter(synthetic()).description, ACME_DESCRIPTION);

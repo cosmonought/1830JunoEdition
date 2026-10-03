@@ -413,6 +413,53 @@ function hostCreatePlan(): Obj {
   return planEnvelope(hostVariables(false), rcs, null);
 }
 
+/* STEP 9 ACME HOTFIX: the interrupted step 9 -- every reviewed object but the ACME rule in the state, with the ids AWS
+   gave them and their references to each other -- and the completion plan: those 17 no-ops, the rule's one create. */
+export const STEP9_IDS = Object.freeze({
+  sg: "sg-0a1b2c3d4e5f60718",
+  eni: "eni-0a1b2c3d4e5f60719",
+  eip: "eipalloc-0a1b2c3d4e5f6071a",
+  assoc: "eipassoc-0a1b2c3d4e5f6071b",
+  instance: "i-0a1b2c3d4e5f6071c",
+  prefixList: "pl-3b927c52",
+});
+export const ACME_DESCRIPTION = "ACME HTTP-01 only - Caddy challenge or 404 on port 80";
+function step9Existing(): Rc[] {
+  const I = STEP9_IDS;
+  const ref: Readonly<Record<string, Obj>> = {
+    "aws_instance.host": { id: I.instance, primary_network_interface: [{ network_interface_id: I.eni, delete_on_termination: false }], network_interface: [], key_name: "" },
+    "aws_network_interface.host": { id: I.eni, security_groups: [I.sg] },
+    "aws_eip.host": { id: I.eip, allocation_id: I.eip, public_ip: "198.51.100.10" },
+    "aws_eip_association.host": { id: I.assoc, allocation_id: I.eip, network_interface_id: I.eni, instance_id: "" },
+    "aws_security_group.host": { id: I.sg },
+    "aws_vpc_security_group_ingress_rule.https_from_cloudfront": { id: "sgr-0a1b2c3d4e5f60711", security_group_id: I.sg, prefix_list_id: I.prefixList, cidr_ipv4: null, cidr_ipv6: null, referenced_security_group_id: null },
+    "aws_vpc_security_group_egress_rule.https": { id: "sgr-0a1b2c3d4e5f60712", security_group_id: I.sg },
+    "aws_iam_role.host": { id: `gs-${E}-host-app`, managed_policy_arns: [], permissions_boundary: "", inline_policy: [{ name: "gs-single-host-runtime", policy: hostPolicy() }] },
+    "aws_iam_instance_profile.host": { id: `gs-${E}-host-app` },
+    "aws_iam_role_policy.host": { id: `gs-${E}-host-app:gs-single-host-runtime`, role: `gs-${E}-host-app` },
+    "aws_cloudwatch_log_group.host": { id: `/gs/${E}/host`, kms_key_id: "" },
+    "aws_cloudwatch_metric_alarm.status_check": { dimensions: { InstanceId: I.instance } },
+    "aws_cloudwatch_metric_alarm.cpu_credits": { dimensions: { InstanceId: I.instance } },
+  };
+  return hostSurface()
+    .filter((s) => !(s.type === "aws_vpc_security_group_ingress_rule" && s.name === "acme_http01"))
+    .map((s) => noop(HM, s.type, s.name, { id: `${s.type}-${s.name}`, ...s.after, ...(ref[`${s.type}.${s.name}`] ?? {}) }, s.index));
+}
+function hostCreateCompletePlan(): Obj {
+  const existing = step9Existing();
+  const data: Rc[] = DATA_SOURCES[HM].map(([type, name]) => ({ module: HM, mode: "data", type, name, actions: ["read"], before: type === "aws_ec2_managed_prefix_list" ? { id: STEP9_IDS.prefixList, name: "com.amazonaws.global.cloudfront.origin-facing" } : { id: name }, after: null }));
+  const acme: Rc = {
+    module: HM,
+    type: "aws_vpc_security_group_ingress_rule",
+    name: "acme_http01",
+    actions: ["create"],
+    before: null,
+    after: { ip_protocol: "tcp", from_port: 80, to_port: 80, cidr_ipv4: "0.0.0.0/0", cidr_ipv6: null, prefix_list_id: null, referenced_security_group_id: null, security_group_id: STEP9_IDS.sg, description: ACME_DESCRIPTION, region: R, tags: null },
+    afterUnknown: { arn: true, id: true, security_group_rule_id: true, tags_all: {} },
+  };
+  return planEnvelope(hostVariables(false), [...existing, acme], priorState(HM, existing, data));
+}
+
 function ecrLifecyclePlan(): Obj {
   const existing: Rc[] = hostSurface().map((s) => noop(HM, s.type, s.name, { ...s.after, id: `${s.type}-${s.name}` }, s.index));
   const policy = jsonencode({
@@ -720,6 +767,7 @@ export function validPlans(): Readonly<Record<GateName, Obj>> {
     "ledger-operator-journal": ledgerOperatorJournalPlan(),
     "ledger-host-authorize": ledgerPlan([TASK_ROLE], [TASK_ROLE, HOST_ROLE], true),
     "host-create": hostCreatePlan(),
+    "host-create-complete": hostCreateCompletePlan(),
     "edge-cutover": edgeCutoverPlan(),
     "ecs-rollback": ecsRollbackPlan(),
     "compute-none": computeNonePlan(),

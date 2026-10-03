@@ -1,0 +1,31 @@
+# STEP 9 ACME HOTFIX reproduction: example.tfvars.example's staging shape against the mock (@...@ filled by reproduce.sh).
+region           = "us-east-1"
+app_account_id   = "123456789012"
+environment      = "staging"
+pool             = "p1"
+generation       = 1
+game_generations = [1]
+ledger_table_arn = "arn:aws:dynamodb:us-east-1:222222222222:table/gs-staging-ledger"
+signing_keys = {
+  relayer    = "arn:aws:kms:us-east-1:222222222222:key/11111111-1111-4111-8111-111111111111"
+  settlement = "arn:aws:kms:us-east-1:222222222222:key/22222222-2222-4222-8222-222222222222"
+  admission  = "arn:aws:kms:us-east-1:222222222222:key/33333333-3333-4333-8333-333333333333"
+}
+escrow_enabled          = true
+money_tables_nonmainnet = true
+edge_diagnostic_staging = true
+network = {
+  vpc_id    = "@VPC@"
+  subnet_id = "@SUBNET@"
+}
+instance = {
+  type   = "t4g.small"
+  ami_id = "@AMI@"
+}
+origin_hostname   = "gs-origin-host.example.org"
+allowed_origins   = ["https://play.example.org"]
+alarm_action_arns = []
+budget = {
+  enabled         = true
+  email_addresses = ["owner@example.org"]
+}

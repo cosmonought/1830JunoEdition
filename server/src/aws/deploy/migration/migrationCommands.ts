@@ -16,7 +16,9 @@
 //   contract (plan-evidence writes the -target list): the two policies, plus -- exactly when the plan carries COST-1's
 //   thirteen pending moves -- Terraform's required move closure (RECON-1 7A HOTFIX; planGuards.judgeTargets) -- and needs
 //   --region and --ledger-table-arn;
-//   ledger-operator-journal (step 7b) needs --ledger-table-arn. Every check prints PASS, FAIL or NOT EVALUATED (never a
+//   ledger-operator-journal (step 7b) needs --ledger-table-arn. STEP 9 ACME HOTFIX: host-create-complete (the recovery of
+//   an interrupted step 9) needs the same --region / --ledger-table-arn / --signing-keys as host-create (it judges the
+//   EXISTING host policy in the prior state against them). Every check prints PASS, FAIL or NOT EVALUATED (never a
 //   bare SKIP for a check that could not be judged); the verdict is PASS only when EVERY check passed.
 //
 //   migration-guard nat --evidence <dir> [--min-quiet-hours 24] [--record <file>]
@@ -44,7 +46,8 @@ import { judgeNatEvidence, NAT_EVIDENCE_FORMAT, NAT_FILES, type NatEvidence, typ
 export const MIGRATION_USAGE = [
   "usage:",
   `  awsDeploy migration-guard (${GATE_NAMES.join(" | ")}) --plan-evidence <evidence>/terraform/<stack> --environment <env> --app-account <id> [--origin-domain <name>] [--region <r> --ledger-table-arn <ARN> --signing-keys <a,b,c>] [--commit <reviewed sha>] [--generation 1] [--pool p1] [--retired-pools p2] [--record <file>]`,
-  "      edge-cutover needs --origin-domain; host-create needs --region, --ledger-table-arn and --signing-keys (the ledger stack's outputs).",
+  "      edge-cutover needs --origin-domain; host-create and host-create-complete need --region, --ledger-table-arn and --signing-keys (the ledger stack's outputs).",
+  "      host-create-complete (STEP 9 ACME HOTFIX) judges ONLY the recovery of an interrupted step 9: the state every reviewed step-9 object but acme_http01, the plan creating exactly that rule and nothing else.",
   "      edge-cutover (the default --direction cutover) ALSO needs --arm64-live-smoke <saved gs-host arm64-smoke output> --release-digest <sha256:...> --instance-id <i-...>: the live ARM64 smoke must PASS; --direction rollback (back to the ALB) needs --cutover-record <the forward PASS record> instead.",
   "      app-read-authorize (step 7a, a TARGETED app plan) needs --region and --ledger-table-arn; ledger-operator-journal (step 7b) needs --ledger-table-arn.",
   "  awsDeploy migration-guard nat --evidence <dir> [--min-quiet-hours 24] [--record <file>]",
@@ -333,11 +336,11 @@ export async function migrationGuardCommand(argv: readonly string[], out: (line:
     }
   }
   const signingKeyArns = flags.has("--signing-keys") ? String(flags.get("--signing-keys")).split(",").filter((k) => k !== "") : undefined;
-  if (gate === "host-create") {
+  if (gate === "host-create" || gate === "host-create-complete") {
     const region = flags.get("--region");
     const ledger = flags.get("--ledger-table-arn");
     if (region === undefined || ledger === undefined || signingKeyArns === undefined) {
-      out("REFUSED: host-create needs --region <app region>, --ledger-table-arn <the ledger stack's table ARN> and --signing-keys <relayer,settlement,admission key ARNs> (from the ledger stack's outputs / the Juno document -- never from the plan)");
+      out(`REFUSED: ${gate} needs --region <app region>, --ledger-table-arn <the ledger stack's table ARN> and --signing-keys <relayer,settlement,admission key ARNs> (from the ledger stack's outputs / the Juno document -- never from the plan)`);
       return EXIT_USAGE;
     }
     if (!/^[a-z]{2}(-[a-z]+)+-[0-9]$/.test(region) || !/^arn:aws:dynamodb:[a-z0-9-]+:[0-9]{12}:table\/[A-Za-z0-9_.-]+$/.test(ledger) || signingKeyArns.length !== 3 || new Set(signingKeyArns).size !== 3 || !signingKeyArns.every((k) => /^arn:aws:kms:[a-z0-9-]+:[0-9]{12}:key\/[0-9a-f-]{36}$/.test(k))) {

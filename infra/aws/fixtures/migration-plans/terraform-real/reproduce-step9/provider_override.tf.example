@@ -1,0 +1,23 @@
+# STEP 9 ACME HOTFIX reproduction ONLY: copied by reproduce.sh into a SCRATCH copy of infra/aws/stacks/single-host as
+# override.tf (never into the repository's stack). A local backend; EC2, IAM, Logs and STS on a local moto server,
+# CloudWatch and Budgets on fake_cw_budgets.py. No AWS account is reachable. moto's STS answers account 123456789012.
+terraform {
+  backend "local" {}
+}
+
+provider "aws" {
+  region                      = var.region
+  access_key                  = "test"
+  secret_key                  = "test"
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  endpoints {
+    sts        = "http://127.0.0.1:5000"
+    iam        = "http://127.0.0.1:5000"
+    ec2        = "http://127.0.0.1:5000"
+    logs       = "http://127.0.0.1:5000"
+    ecr        = "http://127.0.0.1:5000"
+    cloudwatch = "http://127.0.0.1:5001"
+    budgets    = "http://127.0.0.1:5001"
+  }
+}

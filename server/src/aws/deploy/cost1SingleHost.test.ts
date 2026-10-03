@@ -28,6 +28,7 @@ import * as path from "path";
 import { normalizeEol, readCheckoutText } from "../../testSupport/portability";
 import { HOST_OP_KINDS, hostScript, recorderScript, type HostOp } from "./hostcert/hostOps";
 import { ssmCommandLine } from "./hostcert/awsCliTransport";
+import { EC2_SG_DESCRIPTION } from "./migration/planGuards";
 
 const REPO = path.resolve(__dirname, "../../../../../.."); // dist/server/src/aws/deploy -> the repository
 /* RECON-1A W-03: every source assertion reads the checkout EOL-normalised (LIVE-6 W1's seam): a `$`-anchored or
@@ -222,6 +223,21 @@ describe("COST-1: exposure and credentials", () => {
     assert.match(body("aws_vpc_security_group_ingress_rule", "emergency_ssh"), /for_each\s*=\s*toset\(var\.emergency_ssh_cidrs\)/);
     assert.ok(!/from_port\s*=\s*(8917|var\.container_port)/.test(TF_ALL), "no rule for the game server's port");
     assert.ok(!/associate_public_ip_address\s*=\s*true/.test(TF_ALL));
+  });
+
+  test("STEP 9 ACME HOTFIX: every security-group / rule description is one EC2 accepts (the apostrophe refused step 9)", () => {
+    const types = ["aws_security_group", "aws_vpc_security_group_ingress_rule", "aws_vpc_security_group_egress_rule", "aws_security_group_rule"];
+    const described = declared("resource").filter((r) => types.includes(r.type));
+    assert.ok(described.length >= 5);
+    for (const r of described) {
+      const m = /^\s*description\s*=\s*"((?:[^"\\]|\\.)*)"/m.exec(body(r.type, r.name));
+      if (m === null) continue;
+      /* an interpolation renders an identifier (gs-<environment>): judge it as one */
+      const rendered = m[1].replace(/\$\{[^}]*\}/g, "staging");
+      assert.match(rendered, EC2_SG_DESCRIPTION, `${r.file}: ${r.type}.${r.name} description ${JSON.stringify(m[1])}`);
+    }
+    assert.match(body("aws_vpc_security_group_ingress_rule", "acme_http01"), /^\s*description\s*=\s*"ACME HTTP-01 only - Caddy challenge or 404 on port 80"\s*$/m);
+    assert.doesNotMatch(body("aws_vpc_security_group_ingress_rule", "acme_http01"), /'/);
   });
 
   test("no credential literal in any single-host file; the server's environment carries references only", () => {

@@ -58,3 +58,25 @@ To reproduce: a scratch copy of `infra/aws`; `reproduce-7a/provider_override.tf.
 tfvars); `terraform apply` with `start_services = false`, then the SYSTEM/ROUTING (`primary_pool` p1) and
 SYSTEM/GENERATION (generation 1, `gs-staging-game-g1`, origin `bootstrap`) items put into g1, then `terraform apply`
 again with `start_services = true`; save the state, run `pre_cost1_state.py`, and plan with the targets.
+
+## STEP 9 ACME HOTFIX: the interrupted step 9 and its completion plan
+
+The live step-9 apply (`host-create`'s saved plan) created 17 of its 18 reviewed resources; EC2 refused the 18th,
+`aws_vpc_security_group_ingress_rule.acme_http01`, for its description (`Let's Encrypt ...`: EC2 accepts no apostrophe in
+a security-group rule description). `host-create-complete.json` is that state's completion plan, made by Terraform
+(1.16.5, hashicorp/aws 6.66.0) with `reproduce-step9/reproduce.sh`:
+
+| Step | What |
+|---|---|
+| 1 | `stacks/single-host` from the **pre-fix** module (`f1f3cac`), staging-shaped tfvars (`reproduce-step9/staging.tfvars.example`: generation 1, `game_generations = [1]`, the budget enabled with a subscriber), applied `-target`ed at the **other 17** reviewed resources -- the state the failed apply left (Terraform records a refused create as nothing) |
+| 2 | moto's three dropped values restored in the state (`reproduce-step9/moto_gaps.py`: the log group's `log_group_class`, the instance's `disable_api_termination` / `maintenance_options`, the prefix-list rule's `description` -- each what the apply SENT and AWS stores; nothing else edited) |
+| 3 | `network.tf` from the **fixed** commit; an **untargeted** `plan -refresh=false` (the mock would drop those values again; the data sources are still read at plan time): **18 entries -- 17 no-ops and the one create**, the rule's `security_group_id` the existing group's (known at plan time) |
+
+The mocks: EC2, IAM, Logs and STS on **moto 5.2.3**; CloudWatch and Budgets on `reproduce-step9/fake_cw_budgets.py` (moto
+answers CloudWatch in the Query/XML protocol where this provider speaks Smithy RPCv2-CBOR, and lacks Budgets'
+`DescribeSubscribersForNotification`): it stores what the provider puts and echoes it back, judging nothing. Afterwards,
+as above, only the provider's `expressions` were removed from `configuration`. Gate: `host-create-complete` (account
+`123456789012`); `host-create` refuses it.
+
+To reproduce: `moto_server -p 5000` and `python3 reproduce-step9/fake_cw_budgets.py` (fresh), then
+`reproduce-step9/reproduce.sh <scratch dir> <repository> <terraform 1.16.5> f1f3cac972e635398227c10f9312900270d879bb <the fixed commit>`.

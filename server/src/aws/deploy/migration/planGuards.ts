@@ -38,6 +38,15 @@
 //   host-create              (step 9, stacks/single-host) creates exactly the single-host surface -- one instance, one
 //                            ENI, one EIP, the security group and its rules, the role / profile / inline policy, the log
 //                            group, the five alarms and the budget -- and nothing else; the role reaches only g<serving>.
+//                            STEP 9 ACME HOTFIX: every resource of that surface a CREATE, over a state that holds no host
+//                            resource yet (a re-plan over a partially applied step 9 is never a host-create).
+//   host-create-complete     (step 9 recovery, stacks/single-host; STEP 9 ACME HOTFIX) the live step-9 apply stopped
+//                            after 17 of its 18 reviewed resources: EC2 refused the ACME rule's description (an
+//                            apostrophe). This gate completes EXACTLY that state: the prior state must be the reviewed
+//                            surface minus aws_vpc_security_group_ingress_rule.acme_http01 (each object the module's,
+//                            cross-referenced: one SG, ENI, EIP, instance, role gs-<env>-host-app reaching only
+//                            g<serving>), every one of those a NO-OP, and the ONLY change the create of that rule --
+//                            tcp 80-80 from 0.0.0.0/0 on the existing host security group, with a description EC2 accepts.
 //   edge-cutover             (step 14, stacks/app, a TARGETED plan) the existing distribution's `gs-alb` origin changes its
 //                            domain name to the named host origin (or back, for the rollback) -- nothing else of the
 //                            distribution, nothing else in the stack.
@@ -81,6 +90,7 @@ export const GATES = Object.freeze({
   "ledger-operator-journal": { stack: "ledger", step: "C2 7b" },
   "ledger-host-authorize": { stack: "ledger", step: "D 8" },
   "host-create": { stack: "single-host", step: "D 9" },
+  "host-create-complete": { stack: "single-host", step: "D 9 (recovery: complete an interrupted step 9)" },
   "edge-cutover": { stack: "app", step: "G 14 (and its rollback)" },
   "ecs-rollback": { stack: "app", step: "F rollback (before G)" },
   "compute-none": { stack: "app", step: "I 20" },
@@ -1102,9 +1112,21 @@ function hostCreateGate(plan: Json, changes: readonly PlannedChange[], ctx: Migr
   ];
   checks.push(allowlistCheck(changes, rules, "exactly the single-host surface, created"));
 
-  const present = (local: string) => changes.some((c) => c.address === `${m}.${local}` && (c.kind === "create" || c.kind === "no-op"));
-  const missing = HOST_SINGLETONS.filter((a) => !present(a));
-  checks.push(judge("the whole surface is in the plan (budget included)", missing.length === 0, `${HOST_SINGLETONS.length} singletons: the host, its ENI / EIP, SG, role, profile, policy, log group, five alarms and the budget`, `missing: ${missing.join(", ")}${missing.includes("aws_budgets_budget.monthly[0]") ? " (the budget is REQUIRED at migration: budget.enabled with an owner-named subscriber)" : ""}`));
+  /* STEP 9 ACME HOTFIX: every singleton CREATED (a no-op is an object the state already holds: a re-plan over a
+     partially applied step 9, which only host-create-complete may judge -- and only its one known shape). */
+  const created = (local: string) => changes.some((c) => c.address === `${m}.${local}` && c.kind === "create");
+  const missing = HOST_SINGLETONS.filter((a) => !created(a));
+  const existing = missing.filter((a) => changes.some((c) => c.address === `${m}.${a}` && c.kind === "no-op"));
+  checks.push(
+    judge(
+      "the whole surface is CREATED by this plan (budget included)",
+      missing.length === 0,
+      `${HOST_SINGLETONS.length} singletons created: the host, its ENI / EIP, SG, role, profile, policy, log group, five alarms and the budget`,
+      `not created: ${missing.join(", ")}${missing.includes("aws_budgets_budget.monthly[0]") ? " (the budget is REQUIRED at migration: budget.enabled with an owner-named subscriber)" : ""}${existing.length > 0 ? ` -- ${existing.length} already exist (no-op): step 9 was partially applied; host-create judges only the original full create (an interrupted step 9 is completed by migration-guard host-create-complete, which accepts only its one known shape)` : ""}`,
+    ),
+  );
+  const priorHost = [...priorResources(plan).entries()].filter(([, r]) => r.mode === "managed").map(([a]) => a);
+  checks.push(judge("the prior state holds no host resource yet", priorHost.length === 0, "no managed object in the state: the host stack is new", `the state already holds ${priorHost.length}: ${priorHost.slice(0, 6).join(", ")}${priorHost.length > 6 ? ", ..." : ""} -- not the original step 9 (host-create-complete completes the one known interrupted shape; anything else is its own reviewed change)`));
   const instances = changes.filter((c) => c.mode === "managed" && c.type === "aws_instance" && c.kind !== "delete");
   const eips = changes.filter((c) => c.mode === "managed" && c.type === "aws_eip" && c.kind !== "delete");
   checks.push(judge("one host, one Elastic IP", instances.length === 1 && eips.length === 1, "exactly one aws_instance and one aws_eip", `${instances.length} instance(s) (${instances.map((c) => c.address).join(", ")}), ${eips.length} Elastic IP(s) (${eips.map((c) => c.address).join(", ")}) -- a second host would fence the first (the pool writer) and a second EIP costs`));
@@ -1116,6 +1138,238 @@ function hostCreateGate(plan: Json, changes: readonly PlannedChange[], ctx: Migr
   if (variable(plan, "manage_ecr_lifecycle") !== false) vars.push(`manage_ecr_lifecycle = ${JSON.stringify(variable(plan, "manage_ecr_lifecycle"))}`);
   if (obj(variable(plan, "budget")).enabled !== true) vars.push("budget.enabled is not true");
   checks.push(judge("variables: one pool, no lifecycle yet, the budget on", vars.length === 0, `pool ${ctx.pool}, manage_ecr_lifecycle false, budget enabled`, vars.join("; ")));
+  return checks;
+}
+
+/* ------------------------------------------------------------------ */
+/* Gate B': host-create-complete (STEP 9 ACME HOTFIX)                   */
+/* ------------------------------------------------------------------ */
+
+/** The one reviewed step-9 resource the live apply did not create (EC2 refused its description's apostrophe). */
+export const STEP9_COMPLETION_RESOURCE = "aws_vpc_security_group_ingress_rule.acme_http01";
+
+/** What EC2 accepts in a security group's or a security-group rule's description (AWS: up to 255 of a-z, A-Z, 0-9,
+ *  spaces and ._-:/()#,@[]+=&;{}!$*). The step-9 failure was an apostrophe; pinned to the module by cost1SingleHost.test. */
+export const EC2_SG_DESCRIPTION = /^[A-Za-z0-9 ._\-:/()#,@[\]+=&;{}!$*]{0,255}$/;
+
+/** The CloudFront origin-facing managed prefix list the module reads (modules/single-host/network.tf). */
+const CLOUDFRONT_ORIGIN_FACING = "com.amazonaws.global.cloudfront.origin-facing";
+
+/**
+ * The reviewed step-9 surface (every object host-create creates), module-local addresses, for this plan's variables: the
+ * seventeen singletons and one egress rule per distinct port of [443, ...network.juno_egress_ports] (for_each keys are
+ * the ports as strings). null when the ports cannot be read (fail closed).
+ */
+export function step9Surface(plan: Json): string[] | null {
+  const extra = obj(variable(plan, "network")).juno_egress_ports;
+  if (extra !== undefined && extra !== null && !Array.isArray(extra)) return null;
+  const ports = [443, ...arr(extra).map(Number)];
+  if (ports.some((p) => !Number.isInteger(p) || p < 1 || p > 65535)) return null;
+  const keys = [...new Set(ports.map(String))];
+  return [...HOST_SINGLETONS, ...keys.map((k) => `aws_vpc_security_group_egress_rule.https[${JSON.stringify(k)}]`)];
+}
+
+const blank = (v: Json): boolean => v === undefined || v === null || v === "";
+
+/**
+ * The prior state's host objects are the module's, wired to each other: one security group (in network.vpc_id) that the
+ * ENI, the 443 rule and every egress rule name; the 443 rule on the CloudFront prefix list the module read; the EIP
+ * associated with exactly that ENI; the instance launched on that ENI with the gs-<env>-host-app profile, IMDSv2, no key
+ * pair, termination protection; the role / profile / policy the reviewed ones (the policy reaches only g<serving>, the
+ * identity table and the operator-given ledger and keys); the log group, the five alarms (the instance ones on THIS
+ * instance) and the budget. Returns the problems (empty: the known topology) and the security group's id.
+ */
+function step9PriorTopology(plan: Json, ctx: MigrationContext, egressKeys: readonly string[]): { readonly problems: string[]; readonly sgId: string | null } {
+  const m = STACK_MODULE["single-host"];
+  const prior = priorResources(plan);
+  const v = (local: string): Obj | null => {
+    const r = prior.get(`${m}.${local}`);
+    return r === undefined || r.mode !== "managed" ? null : r.values;
+  };
+  const problems: string[] = [];
+  const need = (cond: boolean, what: string): void => {
+    if (!cond) problems.push(what);
+  };
+  const role = `gs-${ctx.environment}-host-app`;
+  const network = obj(variable(plan, "network"));
+
+  const sg = v("aws_security_group.host");
+  const sgId = str(sg?.id);
+  need(sg !== null && sgId !== null && /^sg-[0-9a-f]+$/.test(sgId), `the security group's id ${String(sgId)}`);
+  need(sg?.name === `gs-${ctx.environment}-host`, `the security group is named ${String(sg?.name)} (gs-${ctx.environment}-host)`);
+  need(typeof network.vpc_id === "string" && sg?.vpc_id === network.vpc_id, `the security group is in ${String(sg?.vpc_id)}, not network.vpc_id ${String(network.vpc_id)}`);
+
+  const pl = prior.get(`${m}.data.aws_ec2_managed_prefix_list.cloudfront_origin_facing`);
+  const plId = pl === undefined || pl.mode !== "data" || pl.values.name !== CLOUDFRONT_ORIGIN_FACING ? null : str(pl.values.id);
+  const https = v("aws_vpc_security_group_ingress_rule.https_from_cloudfront");
+  need(
+    https !== null && sgId !== null && https.security_group_id === sgId && https.ip_protocol === "tcp" && https.from_port === 443 && https.to_port === 443 && plId !== null && https.prefix_list_id === plId && blank(https.cidr_ipv4) && blank(https.cidr_ipv6) && blank(https.referenced_security_group_id),
+    `the 443 rule is not tcp 443 from CloudFront's origin-facing prefix list (${String(plId)}) on ${String(sgId)}`,
+  );
+  for (const key of egressKeys) {
+    const e = v(`aws_vpc_security_group_egress_rule.https[${JSON.stringify(key)}]`);
+    need(e !== null && sgId !== null && e.security_group_id === sgId && e.ip_protocol === "tcp" && e.from_port === Number(key) && e.to_port === Number(key) && e.cidr_ipv4 === "0.0.0.0/0", `the egress rule ${key} is not tcp ${key} to 0.0.0.0/0 on ${String(sgId)}`);
+  }
+
+  const eni = v("aws_network_interface.host");
+  const eniId = str(eni?.id);
+  need(eni !== null && eniId !== null && /^eni-[0-9a-f]+$/.test(eniId), `the ENI's id ${String(eniId)}`);
+  need(typeof network.subnet_id === "string" && eni?.subnet_id === network.subnet_id, `the ENI is in ${String(eni?.subnet_id)}, not network.subnet_id ${String(network.subnet_id)}`);
+  need(sgId !== null && same(arr(eni?.security_groups), [sgId]), `the ENI's security groups are ${JSON.stringify(eni?.security_groups)} (exactly the host's ${String(sgId)})`);
+  need(eni?.source_dest_check === true, "the ENI's source/destination check is off");
+
+  const eip = v("aws_eip.host");
+  const eipId = str(eip?.id);
+  need(eip !== null && eipId !== null && /^eipalloc-[0-9a-f]+$/.test(eipId) && eip.domain === "vpc", `the Elastic IP ${String(eipId)} (domain ${String(eip?.domain)})`);
+  const assoc = v("aws_eip_association.host");
+  need(assoc !== null && eipId !== null && eniId !== null && assoc.allocation_id === eipId && assoc.network_interface_id === eniId && blank(assoc.instance_id), `the EIP association joins ${String(assoc?.allocation_id)} / ${String(assoc?.network_interface_id)} / instance ${String(assoc?.instance_id)} (exactly the host's EIP and ENI)`);
+
+  const inst = v("aws_instance.host");
+  const instId = str(inst?.id);
+  need(inst !== null && instId !== null && /^i-[0-9a-f]+$/.test(instId), `the instance's id ${String(instId)}`);
+  need(inst?.iam_instance_profile === role, `the instance's profile is ${String(inst?.iam_instance_profile)}, not ${role}`);
+  need(eniId !== null && arr(inst?.primary_network_interface).length === 1 && obj(arr(inst?.primary_network_interface)[0]).network_interface_id === eniId && arr(inst?.network_interface).length === 0, `the instance is not on the host's ENI ${String(eniId)}`);
+  const md = obj(arr(inst?.metadata_options)[0]);
+  need(md.http_tokens === "required" && typeof md.http_put_response_hop_limit === "number" && md.http_put_response_hop_limit <= 2, "the instance does not require IMDSv2 (hop limit <= 2)");
+  need(blank(inst?.key_name), "the instance has an SSH key pair");
+  need(inst?.disable_api_termination === true, "the instance's termination protection is off");
+
+  const r = v("aws_iam_role.host");
+  const trust = r === null ? "missing" : hostTrustProblem(r.assume_role_policy, ctx);
+  need(r?.name === role, `the role is named ${String(r?.name)}, not ${role}`);
+  need(trust === null, `the role's trust: ${String(trust)}`);
+  need(arr(r?.managed_policy_arns).length === 0, `managed policies on the role: ${JSON.stringify(r?.managed_policy_arns)}`);
+  need(blank(r?.permissions_boundary), "a permissions boundary on the role (not the module's)");
+  const prof = v("aws_iam_instance_profile.host");
+  need(prof?.name === role && prof?.role === role, `the instance profile ${String(prof?.name)} wraps ${String(prof?.role)}, not ${role}`);
+  const pol = v("aws_iam_role_policy.host");
+  need(pol?.role === role, `the inline policy is on ${String(pol?.role)}, not ${role}`);
+  /* The role's own inline_policy attribute is AWS's listing of its inline policies: only the one judged here. */
+  const otherInline = arr(r?.inline_policy).map((x) => obj(x).name).filter((n) => !blank(n) && n !== pol?.name);
+  need(otherInline.length === 0, `the role carries another inline policy: ${otherInline.map(String).join(", ")}`);
+  const polProblem = pol === null ? "missing" : hostPolicyProblem(pol.policy, ctx, plan);
+  need(polProblem === null, `the host policy: ${String(polProblem)}`);
+
+  const lg = v("aws_cloudwatch_log_group.host");
+  need(lg?.name === `/gs/${ctx.environment}/host` && blank(lg?.kms_key_id), `the log group is ${String(lg?.name)} (/gs/${ctx.environment}/host, no KMS key)`);
+  const actions = arr(variable(plan, "alarm_action_arns")).map(String).sort();
+  for (const [local, namespace, metric, dims] of HOST_ALARMS) {
+    const a = v(`aws_cloudwatch_metric_alarm.${local}`);
+    const d = obj(a?.dimensions);
+    const dimsOk = dims === "environment" ? same(d, { Environment: ctx.environment }) : instId !== null && same(d, { InstanceId: instId });
+    need(
+      a !== null && a.namespace === namespace && a.metric_name === metric && dimsOk && same(arr(a.alarm_actions).map(String).sort(), actions) && same(arr(a.ok_actions).map(String).sort(), actions) && arr(a.insufficient_data_actions).length === 0,
+      `the ${local} alarm is not ${namespace}/${metric} on ${dims === "environment" ? `{Environment: ${ctx.environment}}` : `this instance ${String(instId)}`} with exactly alarm_action_arns`,
+    );
+  }
+  const b = v("aws_budgets_budget.monthly[0]");
+  need(b?.budget_type === "COST" && b?.time_unit === "MONTHLY" && Number(b?.limit_amount) > 0 && Number(b?.limit_amount) <= 30, `the budget is ${String(b?.budget_type)} ${String(b?.time_unit)} ${String(b?.limit_amount)} (COST, MONTHLY, <= $30)`);
+  return { problems, sgId: problems.some((p) => p.startsWith("the security group")) ? null : sgId };
+}
+
+function hostCreateCompleteGate(plan: Json, changes: readonly PlannedChange[], ctx: MigrationContext): Check[] {
+  const m = STACK_MODULE["single-host"];
+  const checks: Check[] = [];
+  const acme = `${m}.${STEP9_COMPLETION_RESOURCE}`;
+  const surface = step9Surface(plan);
+  const existing = (surface ?? []).filter((a) => a !== STEP9_COMPLETION_RESOURCE).map((a) => `${m}.${a}`);
+  const egressKeys = (surface ?? []).filter((a) => a.startsWith("aws_vpc_security_group_egress_rule.https[")).map((a) => String(JSON.parse(a.slice("aws_vpc_security_group_egress_rule.https[".length, -1))));
+
+  /* 1. The reviewed step-9 inputs, unchanged. */
+  const vars: string[] = [];
+  if (variable(plan, "pool") !== ctx.pool) vars.push(`pool = ${JSON.stringify(variable(plan, "pool"))}`);
+  if (!hasVariable(plan, "generation") || Number(variable(plan, "generation")) !== ctx.servingGeneration) vars.push(`generation = ${JSON.stringify(variable(plan, "generation"))} (exactly ${ctx.servingGeneration})`);
+  const gens = variable(plan, "game_generations");
+  if (!Array.isArray(gens) || !same(gens.map(Number), [ctx.servingGeneration])) vars.push(`game_generations = ${JSON.stringify(gens)} (exactly [${ctx.servingGeneration}])`);
+  if (variable(plan, "manage_ecr_lifecycle") !== false) vars.push(`manage_ecr_lifecycle = ${JSON.stringify(variable(plan, "manage_ecr_lifecycle"))}`);
+  const ssh = variable(plan, "emergency_ssh_cidrs");
+  if (!Array.isArray(ssh) || ssh.length > 0) vars.push(`emergency_ssh_cidrs = ${JSON.stringify(ssh)} (exactly [])`);
+  if (obj(variable(plan, "budget")).enabled !== true) vars.push("budget.enabled is not true");
+  if (surface === null) vars.push(`network.juno_egress_ports = ${JSON.stringify(obj(variable(plan, "network")).juno_egress_ports)} cannot be read`);
+  checks.push(judge("variables: step 9's reviewed inputs", vars.length === 0, `pool ${ctx.pool}, generation ${ctx.servingGeneration}, game_generations [${ctx.servingGeneration}], no ECR lifecycle, no emergency SSH, the budget on`, vars.join("; ")));
+
+  /* 2. The prior state IS the interrupted step 9: every reviewed object but the ACME rule, and nothing else. */
+  const prior = priorResources(plan);
+  const priorAddrs = [...prior.keys()];
+  const priorManaged = [...prior.entries()].filter(([, r]) => r.mode === "managed").map(([a]) => a);
+  const outside = priorAddrs.filter((a) => !a.startsWith(`${m}.`));
+  const missing = existing.filter((a) => !priorManaged.includes(a));
+  const extra = priorManaged.filter((a) => !existing.includes(a));
+  const stateProblem = !hasPriorState(plan)
+    ? "the plan carries no prior_state: the guard cannot see what step 9 created"
+    : surface === null
+      ? "the reviewed surface cannot be derived from the plan's variables"
+      : priorManaged.includes(acme)
+        ? `${acme} already exists: step 9 is complete (or was changed outside a reviewed plan) -- nothing to complete`
+        : outside.length > 0
+          ? `state objects outside ${m}: ${outside.slice(0, 4).join(", ")}`
+          : missing.length > 0 || extra.length > 0
+            ? `${missing.length > 0 ? `missing from the state: ${missing.join(", ")}` : ""}${missing.length > 0 && extra.length > 0 ? "; " : ""}${extra.length > 0 ? `not of step 9: ${extra.join(", ")}` : ""} -- not the interrupted step 9 this gate completes (exactly ${existing.length} objects, everything but ${STEP9_COMPLETION_RESOURCE})`
+            : null;
+  checks.push(judge("prior state: exactly the interrupted step 9 (every reviewed object but the ACME rule)", stateProblem === null, `${existing.length} reviewed objects in the state; ${STEP9_COMPLETION_RESOURCE} the only one absent`, String(stateProblem)));
+
+  /* 3. ... and those objects are the reviewed host, wired together. */
+  const topo = step9PriorTopology(plan, ctx, egressKeys);
+  checks.push(judge("prior state: the reviewed host topology (one SG / ENI / EIP / instance, role gs-<env>-host-app)", topo.problems.length === 0, `security group ${String(topo.sgId)}: the ENI, the 443 and egress rules name it; the EIP on that ENI, the instance on it with ${hostRoleArn(ctx).split("/")[1]}; the policy reaches only g${ctx.servingGeneration}; the alarms on this instance`, topo.problems.slice(0, 8).join("; ") + (topo.problems.length > 8 ? `; ... (${topo.problems.length})` : "")));
+
+  /* 4. Every existing object in the plan, a no-op; nothing else in it but the ACME rule. */
+  const byAddress = new Map(changes.map((c) => [c.address, c] as const));
+  const notNoop = existing.filter((a) => byAddress.get(a)?.kind !== "no-op").map((a) => `${a} [${byAddress.get(a)?.actions.join(",") ?? "not in the plan"}]`);
+  const foreign = changes.filter((c) => c.mode === "managed" && c.address !== acme && !existing.includes(c.address));
+  checks.push(
+    judge(
+      "every existing step-9 object is in the plan, a no-op",
+      surface !== null && notNoop.length === 0 && foreign.length === 0,
+      `${existing.length} no-ops: nothing that exists is updated, replaced, destroyed or forgotten`,
+      `${notNoop.length > 0 ? `${notNoop.slice(0, 6).join("; ")}${notNoop.length > 6 ? "; ..." : ""} (an untargeted plan from the step-9 module shows each existing object as a no-op: anything else changes the live host)` : ""}${notNoop.length > 0 && foreign.length > 0 ? "; " : ""}${foreign.length > 0 ? `not of step 9: ${list(foreign)}` : ""}`,
+    ),
+  );
+
+  /* 5. The ONE change: the ACME rule, created exactly as reviewed, on the existing host security group. */
+  const acmeRule: AllowRule = (c) => {
+    if (c.address !== acme) return { matched: false };
+    if (c.kind !== "create") return { matched: true, problem: `a ${c.kind}: the completion only CREATES the missing rule` };
+    const a = c.after;
+    const u = c.afterUnknown;
+    if (a.ip_protocol !== "tcp" || a.from_port !== 80 || a.to_port !== 80) return { matched: true, problem: `${String(a.ip_protocol)} ${String(a.from_port)}-${String(a.to_port)} (exactly tcp 80-80)` };
+    if (a.cidr_ipv4 !== "0.0.0.0/0" || !blank(a.cidr_ipv6) || !blank(a.prefix_list_id) || !blank(a.referenced_security_group_id)) return { matched: true, problem: `source cidr_ipv4 ${String(a.cidr_ipv4)}, cidr_ipv6 ${String(a.cidr_ipv6)}, prefix list ${String(a.prefix_list_id)}, group ${String(a.referenced_security_group_id)} (exactly 0.0.0.0/0, the reviewed ACME HTTP-01 source)` };
+    if (anyUnknown(u.security_group_id) || topo.sgId === null || a.security_group_id !== topo.sgId) return { matched: true, problem: `on security group ${anyUnknown(u.security_group_id) ? "(unknown until apply)" : String(a.security_group_id)}, not the existing host group ${String(topo.sgId)}` };
+    if (anyUnknown(u.description) || typeof a.description !== "string" || !EC2_SG_DESCRIPTION.test(a.description)) return { matched: true, problem: `description ${anyUnknown(u.description) ? "(unknown until apply)" : JSON.stringify(a.description)} is not one EC2 accepts (a-z A-Z 0-9 space ._-:/()#,@[]+=&;{}!$*, <= 255): the apply would fail again` };
+    if (ctx.region !== undefined && a.region !== undefined && a.region !== null && a.region !== ctx.region) return { matched: true, problem: `in region ${String(a.region)}, not ${ctx.region}` };
+    const unknownOther = Object.keys(u).filter((k) => anyUnknown(u[k]) && !["arn", "id", "security_group_rule_id", "tags_all"].includes(k));
+    if (unknownOther.length > 0) return { matched: true, problem: `unknown until apply (cannot be judged): ${unknownOther.join(", ")}` };
+    return { matched: true };
+  };
+  checks.push(allowlistCheck(changes, [acmeRule], `only ${STEP9_COMPLETION_RESOURCE}, created`));
+  const mutations = changes.filter(mutating);
+  checks.push(judge(`exactly one change: CREATE ${acme}`, mutations.length === 1 && mutations[0].address === acme && mutations[0].kind === "create", `1 create; ${changes.length - 1} other entr${changes.length === 2 ? "y" : "ies"}, none a mutation`, `${mutations.length} mutation(s): ${list(mutations)}`));
+
+  /* 6. Named, so a refusal says why in the operator's terms (each also outside the exact sets above). */
+  const ofType = (type: string): number => priorManaged.filter((a) => prior.get(a)!.type === type).length + changes.filter((c) => c.mode === "managed" && c.type === type && (c.kind === "create" || c.kind === "replace")).length;
+  const counts: ReadonlyArray<readonly [string, number, string]> = [
+    ["aws_instance", 1, "instance"],
+    ["aws_network_interface", 1, "ENI"],
+    ["aws_eip", 1, "Elastic IP"],
+    ["aws_eip_association", 1, "EIP association"],
+    ["aws_security_group", 1, "security group"],
+    ["aws_iam_role", 1, "IAM role"],
+    ["aws_iam_instance_profile", 1, "instance profile"],
+    ["aws_iam_role_policy", 1, "inline policy"],
+    ["aws_cloudwatch_log_group", 1, "log group"],
+    ["aws_cloudwatch_metric_alarm", HOST_ALARMS.length, "alarms"],
+    ["aws_budgets_budget", 1, "budget"],
+    ["aws_vpc_security_group_ingress_rule", 2, "ingress rules (443 from CloudFront, 80 for ACME)"],
+  ];
+  const wrongCounts = counts.filter(([type, n]) => ofType(type) !== n).map(([type, n, what]) => `${ofType(type)} ${what} (${n})`);
+  checks.push(judge("one host: no second instance, ENI, EIP, SG, role, profile, budget, log group or alarm set", wrongCounts.length === 0, "after this plan: one of each, five alarms, two ingress rules", `${wrongCounts.join("; ")} -- a second host would fence the first (the pool writer); a second EIP costs`));
+  const sshNow = priorManaged.filter((a) => prior.get(a)!.type === "aws_vpc_security_group_ingress_rule" && prior.get(a)!.name === "emergency_ssh");
+  const sshPlan = changes.filter((c) => c.type === "aws_vpc_security_group_ingress_rule" && c.name === "emergency_ssh");
+  const port22 = changes.filter((c) => mutating(c) && c.type.startsWith("aws_vpc_security_group_") && Number(c.after.from_port) <= 22 && Number(c.after.to_port) >= 22);
+  checks.push(judge("emergency SSH stays absent", sshNow.length === 0 && sshPlan.length === 0 && port22.length === 0, "no emergency_ssh rule in the state or the plan; nothing opens port 22", `${[...sshNow, ...sshPlan.map(label), ...port22.map(label)].join("; ")} -- emergency SSH is its own reviewed change, never part of step 9`));
+  const ecr = [...priorManaged.filter((a) => prior.get(a)!.type.startsWith("aws_ecr_")), ...changes.filter((c) => c.type.startsWith("aws_ecr_")).map(label)];
+  checks.push(judge("no ECR lifecycle (step 22b)", ecr.length === 0, "no ECR resource in the state or the plan", `${ecr.join("; ")} -- ECS's rollback images must not expire before step 22b`));
+  const banned = changes.filter((c) => c.mode === "managed" && (AUTHORITY_TYPES.includes(c.type) || isKms(c) || ECS_TYPES.includes(c.type) || c.type.startsWith("aws_lb") || c.type === "aws_nat_gateway" || c.type === "aws_vpc_endpoint" || c.type.startsWith("aws_cloudfront_") || c.type.startsWith(BACKUP_PREFIX) || c.type === "aws_ssm_parameter"));
+  checks.push(judge("no authority, ECS-era or foreign resource", banned.length === 0, "no table, key, ALB, ECS, NAT, endpoint, distribution, SSM document or backup", `${list(banned)} -- the host REFERENCES the existing authorities`));
   return checks;
 }
 
@@ -1865,6 +2119,9 @@ export function judgeMigrationPlan(gate: GateName, plan: Json, ctx: MigrationCon
       break;
     case "host-create":
       checks.push(...hostCreateGate(plan, changes, ctx));
+      break;
+    case "host-create-complete":
+      checks.push(...hostCreateCompleteGate(plan, changes, ctx));
       break;
     case "edge-cutover":
       checks.push(...edgeCutoverGate(plan, changes, ctx));

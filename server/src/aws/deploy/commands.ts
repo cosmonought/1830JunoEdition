@@ -974,7 +974,7 @@ export const USAGE = [
   "  awsDeploy stage-cert (prerequisite | certify) ...   LIVE-6 L6-6: the real-AWS staging certification (aws/deploy/staging/commands.ts)",
   "  awsDeploy stage-probe (task-role | edge | collect | flip-alarms | restore-alarms | restore-fencing) ...",
   "  awsDeploy host-cert (graceful-stop | crash-restart | reboot-restart | duplicate-preflight | duplicate-fence | replacement-before | replacement-after) ...   COST-2C: the MUTATING single-host drills F7 / F8 / F9a / F9b / replacement (aws/deploy/hostcert/; staging only)",
-  "  awsDeploy migration-guard (app-read-authorize | ledger-operator-journal | ledger-host-authorize | host-create | edge-cutover | ecs-rollback | compute-none | ledger-task-deauthorize | ecr-lifecycle | nat) ...   COST-2B / RECON-1A: offline plan / NAT evidence guards (aws/deploy/migration/)",
+  "  awsDeploy migration-guard (app-read-authorize | ledger-operator-journal | ledger-host-authorize | host-create | host-create-complete | edge-cutover | ecs-rollback | compute-none | ledger-task-deauthorize | ecr-lifecycle | nat) ...   COST-2B / RECON-1A: offline plan / NAT evidence guards (aws/deploy/migration/)",
 ].join("\n");
 
 /** LIVE-6 L6-6: more commands (the staging certification's), dispatched here so they share the refusals and exit codes. */

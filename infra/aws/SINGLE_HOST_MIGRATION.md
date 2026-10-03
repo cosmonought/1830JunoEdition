@@ -323,16 +323,32 @@ shows nothing: every later guard then judges its own change alone.
 ### F. Prove it
 
 **F0 (COST-2A): the host verifier, coexistence, before the edge moves.** Read-only; README "The single host".
+
+**Working context (PHASE 1 REMAINDER):** every line below runs from the **repository root** of the clean reviewed
+checkout (`server/dist` built), and every relative path is relative to it -- `ev-F` is `<repo>/ev-F`, and the Terraform
+directory is `infra/aws/stacks/single-host` (the bare `stacks/single-host` this step used to give names no directory
+from the root). The `npm run` / `node dist/...` lines run in `server/`; give them the same evidence directory by
+its absolute path (or `../ev-F`). On Windows use the `.ps1` twins (`-TerraformDir .\infra\aws\stacks\single-host`) and
+`node dist/...` (§ "Running Windows commands").
 ```
-infra/aws/scripts/capture-host-evidence.sh staging <region> <i-...> <distribution id> ev-F --terraform-dir stacks/single-host      # BOOT
+infra/aws/scripts/capture-host-evidence.sh staging <region> <i-...> <distribution id> ev-F --terraform-dir infra/aws/stacks/single-host      # BOOT (see the note below)
 infra/aws/scripts/capture-host-evidence.sh --host-status-only staging <region> <i-...> ev-F      # the host-deploy principal (RECON-1: SSM Run Command of the FIXED gs-health; never the operator role)
-npm run gamesDoctor -- aws host-snapshot --aws-config <runtime p1 ARN> --out ev-F/runtime-snapshot.json      # OPER
+cd server
+npm run gamesDoctor -- aws host-snapshot --aws-config <runtime p1 ARN> --out ../ev-F/runtime-snapshot.json      # OPER
 npm run awsDeploy -- verify --topology coexist --runtime-parameter <runtime p1 ARN> --environment staging \
-  --primary-pool p1 --pools p1,p2 --generation 1 --evidence ev-F --instance-id <i-...> --origin-hostname <origin_hostname> \
+  --primary-pool p1 --pools p1,p2 --generation 1 --evidence ../ev-F --instance-id <i-...> --origin-hostname <origin_hostname> \
   --gs-origin <the ALB's origin name: step G has not run> --site-origin <site origin> \
   --expect-digest <the release> --expect-build <its build> --alarm-actions <the module's alarm_action_arns, or none> \
-  --record ev-F/verify.json --report ev-F      # BOOT
+  --record ../ev-F/verify.json --report ../ev-F      # BOOT
 ```
+`--terraform-dir infra/aws/stacks/single-host` runs `terraform output -json` IN that directory: the stack must be
+`terraform init`-ed in this checkout, and the capture's credentials must be able to read its S3 state. BOOT has no grant on
+the state backend (modules/app iam.tf), and a `terraform output` that fails makes "Terraform outputs = what runs" NOT
+EVALUATED -- a STOP. So, before F0, check it read-only with the capture's credentials
+(`terraform -chdir=infra/aws/stacks/single-host output -json`): if it answers, keep the flag; if it does not, OMIT
+`--terraform-dir` (that one check is then an explicit SKIP, which does not block VERIFIED) -- never point the flag at another
+directory and never grant BOOT state access for this.
+
 It must say VERIFIED (exit 0). FAIL (1) or NOT EVALUATED (3) is a STOP: NOT EVALUATED means a read failed, never that a
 property holds. It covers, besides the table below: the ECS era drained (no service task, no running task, no target --
 a second serving writer otherwise), the host's EC2 / network / IAM / KMS allow-list / alarms / budget, and the identity
@@ -342,14 +358,63 @@ writer and relayer held by the host pool's current task.
 |---|---|---|
 | F1 | Generation gate | Startup passed. `gamesDoctor aws status`: APPGEN 1 = the document's generation; the g1 marker `bootstrap`. No `StartupRefused` in the log group. |
 | F2 | Identity writer | `gamesDoctor aws status`: the identity-writer holder is the host's task (its `t-…` id is in the startup banner) and it is current. |
-| F3 | Relayer | `gamesDoctor aws status`: the relayer mirror epoch = the ledger fence epoch, held by the host's task. The task-status line shows `relayer_state: usable`. `awsDeploy set-operator-plan` READY. |
+| F3 | Relayer | `gamesDoctor aws status`: the relayer mirror epoch = the ledger fence epoch, held by the host's task. The task-status line shows `relayer_state: usable`. Then (OPER, read-only) `node dist/server/src/tools/awsDeploy.js set-operator-plan --runtime-parameter <runtime p1 ARN> --environment staging --to-relayer <the ACTIVE relayer: the Juno document's relayer address>` (`--to-relayer` is required): it must print `The contract's operator is ALREADY <that address>` and end `READY: set-operator-plan --to-relayer <address> (operator already set; active-relayer readiness)`. NOT READY, or an admin `set_operator` transaction printed instead (the contract's operator is another address), is a STOP: no rotation belongs in this migration. |
 | F4 | Money sweep | `money-sweep` records every 60 s; `MoneySweepSecondsSinceSuccess` < 180; `HostHealthProblems` = 0. |
-| F5 | KMS | The startup's signer identities verified. Then the L6-6 `kms` probe, run as a one-off `docker run --rm` of the same image on the host (the instance role), < 3 s per Sign. |
-| F6 | DynamoDB | The L6-6 `transactions` probe, the same way (disposable `L6CERT#R` partition, read back empty). |
+| F5 | KMS | The startup's signer identities verified. Then the L6-6 `kms` probe ON THE HOST, as the instance role, from the SERVING release by digest (PHASE 1 REMAINDER; below): `gs-host role-probe ... -Probe kms`, judged `stage-probe host-role --probe kms` PASS -- AWS names `gs-staging-host-app` as the caller, the three signing identities = the configuration's, every disposable digest-only `ECDSA_SHA_256` Sign verified and < 3 s. |
+| F6 | DynamoDB | The L6-6 `transactions` probe the same way (`-Probe transactions`, judged `--probe transactions`): the IAM-in-transaction shapes for the host role, T1-T4 on the disposable `L6CERT#<run>` partition only, read back empty; no money or game item is written. |
 | F7 | SIGTERM (MUTATING, staging) | **`awsDeploy host-cert graceful-stop`** (COST-2C, below): gs-stop -> readiness 503 first -> exit 0 -> no HOLD, no restart; the same digest redeployed serves; generation / pool unchanged. |
 | F8 | Restart safety (MUTATING, staging) | **`awsDeploy host-cert crash-restart`**: `docker kill --signal KILL gs-server` -> a non-fence exit, no HOLD, exactly one automatic restart, a **strictly newer POOL#p1 epoch**, identity writer and relayer moved consistently. **`awsDeploy host-cert reboot-restart`**: the host reboots and the service returns by itself, newer epochs, no HOLD. |
 | F9 | No duplicate writer | **(a)** non-disruptive: **`awsDeploy host-cert duplicate-preflight`** (`/opt/gs/bin/gs-preflight` while the server runs refuses "already running"; nothing moves). **(b)** disruptive, staging only: **`awsDeploy host-cert duplicate-fence`** -- a second container of the same image and env under another name (no port, not under systemd); the **older** process exits 3 and stays down (`RestartPreventExitStatus`), ExecStopPost got `EXIT_CODE=exited EXIT_STATUS=3`, the HOLD is written, survives a reboot, refuses preflight and start, survives a refused deploy; the rival is removed and `gs-deploy` of the same release clears it: one writer at a newer fence. |
 | F10 | Stale host / replacement | Offline: Terraform (destroy-before-create on the ENI) and the preflight's EIP check (`tests/host-scripts.test.sh`). Live (when a replacement is certified): **`awsDeploy host-cert replacement-before`**, the guarded replacement, then **`replacement-after --before <record> [--stale-instance-id <old>]`** (COST-2C, below). |
+
+**F5 / F6 on the host (PHASE 1 REMAINDER) -- the existing L6-6 probe, not a new one.** The ECS-bound runner
+(`run-task-probe`) cannot reach the host role. `gs-host role-probe` sends ONE reviewed repository file,
+`infra/aws/single-host/host-role-probe.sh` (base64, LF; the remote line holds only it and the validated digest, run id,
+probe, generation and pool), which runs the release image's own, unchanged `awsDeploy stage-probe task-role` in a
+throw-away container on the host: the SERVING release by digest (release.env AND the running container must both be it;
+nothing is pulled), the instance role through IMDSv2 (no env file, no credential, refused if a static credential source is
+on the host or the IMDS role is not `gs-staging-host-app`), `GS_STORAGE` overridden so it can never start a server, no port,
+read-only, under the deploy lock; refused while the server is not active, under a HOLD, or in a `prod*` environment. Run
+after step 13, before the drills, with the host-deploy principal (the transport, as `gs-host deploy`), a NEW run id per
+probe run; each takes about 1-3 minutes and may briefly raise the host-pressure alarm:
+```
+.\infra\aws\single-host\gs-host.ps1 -Command role-probe -InstanceId <i-...> -Region <r> -Digest <the serving sha256> -RunId <run-f5> -Probe kms -Generation 1 -Pool p1 6>&1 | Tee-Object <D>\host-role\f5.txt
+.\infra\aws\single-host\gs-host.ps1 -Command role-probe -InstanceId <i-...> -Region <r> -Digest <the serving sha256> -RunId <run-f6> -Probe transactions -Generation 1 -Pool p1 6>&1 | Tee-Object <D>\host-role\f6.txt
+cd server
+node dist/server/src/tools/awsDeploy.js stage-probe host-role --probe kms --run-id <run-f5> --evidence <D>\host-role --capture <D>\host-role\f5.txt --environment staging --generation 1 --pool p1 --instance-id <i-...> --digest <the serving sha256> --build <its build>
+node dist/server/src/tools/awsDeploy.js stage-probe host-role --probe transactions --run-id <run-f6> --evidence <D>\host-role --capture <D>\host-role\f6.txt --environment staging --generation 1 --pool p1 --instance-id <i-...> --digest <the serving sha256> --build <its build>
+```
+(bash: `infra/aws/single-host/gs-host.sh role-probe <i-...> <sha256> <run> kms|transactions 1 p1 [region] | tee ...`.) The
+judge is offline (no AWS) and uses L6-6's own judges; each must end `HOST-ROLE PROBE F5 KMS: PASS` /
+`HOST-ROLE PROBE F6 DYNAMODB: PASS` (exit 0). FAIL (1) or NOT EVALUATED (3: a truncated or unframed capture) is a STOP;
+the verdict file is create-once, so a re-run uses a new run id. The evidence keeps the capture, the reassembled probe
+record (`probe-host-role-<probe>.json`) and the verdict (`host-role-<probe>-verdict.json`) -- no key material, no
+credential: the record holds latencies, fingerprints and booleans, and is refused if anything in it looks secret.
+
+**After the drills: the FINAL redeploy with `-Measure` (PHASE 1 REMAINDER).** Every drill that redeploys (F7's and F9b's
+recovery, any `gs-deploy` the campaign makes) runs `gs-deploy <digest> <build>` WITHOUT `--measure`, so it writes
+`GS_MEASURE=0` and the memory measurement silently stops. After the last of F7 / F8 / F9 (and after any recovery
+redeploy), and before step 14, deploy the SAME release again with the measurement on:
+```
+.\infra\aws\single-host\gs-host.ps1 -Command deploy -InstanceId <i-...> -Region <r> -Digest <the serving sha256> -BuildId <its build> -Measure 6>&1 | Tee-Object <D>\release\post-drill-measure-deploy.txt
+```
+(`gs-deploy` treats a different measurement setting as a different release, so this redeploys: a short downtime.) Then
+`gs-host -Command status` (digest = running digest, the build, no HOLD) and, after about 2 minutes,
+`gs-host -Command measure-report -Days 1` showing fresh samples. Without this the >= 2-week memory plan behind the Savings
+Plan decision has a hole; it is required, not optional.
+
+**Known limitations kept fail-closed (not redesigned here):**
+- **An interrupted drill** (after its recorder drop-in was installed) leaves a `90-gs-cert-*` drop-in that no script
+  removes; every later precheck refuses until it is cleaned up by hand over SSM, under its own owner GO, then
+  `--reclaim-stale-lock` after the lease.
+- **Step 13's READY** (`/gs/readyz` 200) does not prove the identity-writer and relayer roles (readiness excludes the
+  relayer; a standby is 200 too): read the startup log lines and F0 / F2 / F3, never READY alone.
+- **The NAT gate's `-TeardownAppliedAt`** is typed by hand and nothing checks it: record step 20's apply-complete UTC time
+  in the evidence at the moment the apply finishes, and type exactly that.
+- **F10 (replacement)** is not required for Phase 1 (below: only when a replacement is certified).
+- **Alarm notifications during the drills and probes are expected:** the health alarm (missing data = breaching) on F7 /
+  F8b / F9b and the post-drill redeploy, the critical-event alarm on F9b, and possibly the pressure alarm during F9b's
+  rival or a host-role probe. They are the drills observed, not a fault; nothing silences them.
 
 Any failure: STOP. **Rollback before G** (the ONE plan that may start an ECS task again):
 1. `gs-host -Command stop -UntilDeploy` (the host must be down before ECS takes the pool).
@@ -373,10 +438,17 @@ Any failure: STOP. **Rollback before G** (the ONE plan that may start an ECS tas
       host (FAIL or NOT EVALUATED) FAILS the guard -- DO NOT APPLY. The edge never moves onto an image that has not
       executed on the real host. Keep `<D>\guards\14.json`: a rollback needs it.
     - Apply that `stack.tfplan` (`-target` is in it: Terraform warns that the plan is incomplete; expected).
-15. Wait for the distribution to deploy.
-15b. (COST-2A) Once the distribution shows `Deployed` (its configuration names the new origin before the edge serves it),
-     re-run F0 into a fresh directory with `--gs-origin <origin_hostname>` (the /gs* origin of THIS state is now the
-     host's): VERIFIED.
+15. Wait for the distribution to deploy -- explicitly, after the step-14 apply and BEFORE 15b and 16 (the distribution's
+    configuration names the new origin before every edge location serves it):
+    ```
+    aws cloudfront wait distribution-deployed --id <distribution id>
+    aws cloudfront get-distribution --id <distribution id> --query "Distribution.Status" --output text      # Deployed
+    ```
+    The waiter polls every 60 s for up to 35 minutes and exits non-zero on a timeout: run it again; never start 15b or 16
+    on a timeout or on any status but `Deployed`.
+15b. (COST-2A) Once the distribution shows `Deployed`, re-run F0 into a fresh directory (`ev-15b`) with
+     `--gs-origin <origin_hostname>` (the /gs* origin of THIS state is now the host's) and
+     `--record <ev-15b>/verify.json --report <ev-15b>`: VERIFIED. Step 16 stands on exactly these files.
 
 **Rollback:** the same targeted capture with the ALB's origin name in the tfvars, judged with
 `migration-guard edge-cutover --origin-domain <the ALB origin name> --direction rollback --cutover-record <D>\guards\14.json`
@@ -386,10 +458,30 @@ recorded; a forward plan called a rollback FAILS); then the ECS rollback of §F 
 
 ### H. Smoke test through the edge
 
-16. Run `awsDeploy stage-probe edge` through the distribution, with the `/gs/diag/edge` mirror on (`edge_diagnostic_staging`). It covers:
-    - `proxy-hops` (exactly 2);
+16. Run `awsDeploy stage-probe edge --topology single-host` through the distribution's PUBLIC name, with the
+    `/gs/diag/edge` mirror on (`edge_diagnostic_staging`) and a staging account's session cookie in
+    `GS_CERT_SESSION_COOKIE` (PHASE 1 REMAINDER: the ECS path's form needs `stage-cert prerequisite` and the ALB's idle
+    timeout, which describe a topology that no longer serves /gs*; the single-host form stands on step 15b's evidence
+    instead and never on an ECS prerequisite or ALB attribute):
+    ```
+    cd server
+    node dist/server/src/tools/awsDeploy.js stage-probe edge --topology single-host --run-id <run> --evidence <D>\edge \
+      --host-evidence <ev-15b> --instance-id <i-...> --origin-hostname <origin_hostname> \
+      --base-url https://play.<domain> --origin https://play.<domain> --environment staging --generation 1 --pool p1 \
+      --expected-client-ip <your public IP>
+    ```
+    Before sending anything it refuses unless 15b's `verify.json` and `host-evidence.json` are one recent PASS
+    (`--topology coexist` or `single-host`; the verdict recomputed from the checks) for THIS instance, the live
+    distribution's /gs* origin (`distribution-config.json`, bound to that capture's manifest) is the host's origin name --
+    never a load balancer -- and `--base-url` is one of the distribution's aliases. It then covers:
+    - `proxy-hops` (exactly 2: CloudFront + Caddy; the host process's own GS_TRUSTED_PROXY_HOPS = 2);
     - `query-strings` (`cp` / `cr` / `cb` unchanged; an allow-list fails);
-    - `websocket` (idle survival; ping gaps ≤ 60 s).
+    - `websocket` (the announcement on /gs; idle survival for max(CloudFront's origin read timeout from the live
+      distribution, Caddy's 300 s default idle -- the reviewed Caddyfile sets no timeout, pinned by test -- the server's
+      pong timeout) + two ping periods; ping gaps <= 60 s).
+    It writes the normal `probe-edge.json` (naming the host, and the SHA-256 of each 15b file it stood on) and judges it
+    at once into `edge-single-host-verdict.json`; it must end `SINGLE-HOST EDGE PROBE: PASS` (exit 0). FAIL is a STOP:
+    keep the ALB (the edge rollback) until it PASSES.
 17. A browser on `https://play.<domain>`:
     - sign-in;
     - the cookie (`__Host-gs_session`);
@@ -398,7 +490,29 @@ recorded; a forward plan called a rollback FAILS); then the ECS rollback of §F 
 
 ### I. Delete the remaining ECS-era resources
 
-19. `OPER`: `gamesDoctor aws retire-check p2` (R1–R6) must pass.
+19. Prove p2 retired WITH its drained evidence, so R6 is judged (PHASE 1 REMAINDER: without `--evidence` the check stops
+    at R5, says `READY-TO-DRAIN` and still exits 0 -- that is NOT the retirement proof):
+    ```
+    infra/aws/scripts/capture-evidence.sh staging <region> p1 <distribution id> <D>/retire-p2 p2      # BOOT, read-only (the ECS era still exists)
+    cd server
+    node dist/server/src/tools/gamesDoctor.js aws retire-check p2 --evidence <D>/retire-p2 --aws-config <runtime p1 ARN>      # OPER
+    ```
+    (Windows: `capture-evidence.ps1` with the same arguments.) Keep its output. It must print
+    `retire-check p2 (READ-ONLY) -- RETIRED`, with R1-R6 PASS (R6: service desired / running / pending 0 and no target in
+    `gs-staging-p2`). `READY-TO-DRAIN` or `BLOCKED` is a STOP: no step 20.
+20-pre. **STOP / precheck: the ALB's LIVE deletion protection** (read-only; never inferred from the module default --
+    `alb.deletion_protection` defaults to `true` -- nor from the tfvars, and nothing in Terraform is changed for it here):
+    ```
+    aws elbv2 describe-load-balancers --names gs-staging-alb --query "LoadBalancers[0].LoadBalancerArn" --output text
+    aws elbv2 describe-load-balancer-attributes --load-balancer-arn <that ARN> --query "Attributes[?Key=='deletion_protection.enabled'].Value" --output text      # APP-ADMIN
+    ```
+    Keep the answer in `<D>\guards\20-pre-alb-deletion-protection.txt`.
+    - `false`: proceed to step 20.
+    - `true`: **STOP before the compute-none capture and apply.** AWS would refuse the ALB delete part-way through the
+      apply, after the rest of the ECS era is already gone, leaving a state the `compute-none` guard no longer accepts.
+      Unprotecting it is a SEPARATELY reviewed, owner-authorized step, written only once live staging shows it is needed;
+      it is not defined here.
+    - no answer, an error, or not exactly one load balancer: STOP.
 20. `APP-ADMIN`: `stacks/app` with `compute = "none"`, `start_services = true`, `pools = { p1 = { primary = true } }`,
     `recovery_break_glass = false`, `generation = 1`, `game_generations` without 2. Capture (untargeted) with
     `--keep-plan`; **`migration-guard compute-none`** must PASS; apply that `stack.tfplan`.
@@ -419,7 +533,8 @@ recorded; a forward plan called a rollback FAILS); then the ECS rollback of §F 
     **It keeps:** both tables, the p1 runtime document, the Juno document, ECR, the bootstrap / operator roles, the distribution, and the single-host stack (another state).
 
     The guard FAILS (STOP) if a table, the p1 or Juno document, a key, the repository, the distribution or the bootstrap / operator authority is destroyed or replaced, if anything is created, or if an ECS-era object would survive.
-21. Restart the host so it reads the p1-only route table: `gs-host -Command stop`, then `deploy` with the same release.
+21. Restart the host so it reads the p1-only route table: `gs-host -Command stop`, then `deploy` with the same release
+    AND `-Measure` (a deploy without it writes `GS_MEASURE=0` and stops the memory measurement, as after the drills).
 22. `LEDGER-ADMIN`: `stacks/ledger` with `ecs_task_role_authorized = false`. Capture with `--keep-plan`;
     **`migration-guard ledger-task-deauthorize`** must PASS (only the task role ARN removed from the ledger and key
     policies; the host role stays); apply that `stack.tfplan`.
@@ -429,6 +544,19 @@ recorded; a forward plan called a rollback FAILS); then the ECS rollback of §F 
     current and previous releases are protected only while they ARE among the newest 20 (a running host keeps its pulled
     image locally, but a host replacement pulls from ECR): before pushing a 20th newer image, re-deploy or re-tag what
     must survive.
+22c. **OWNER GO -- the old ECS cluster's Container Insights log groups (outside Terraform; PHASE 1 REMAINDER).** With
+    Container Insights on, CloudWatch creates `/aws/ecs/containerinsights/gs-staging/...` (e.g. `.../performance`) ITSELF:
+    Terraform never created them and holds none of them in any state, so step 20's destroy of the cluster stops their
+    ingestion but does NOT delete them -- and step 24's `verify --topology single-host` FAILS while one exists. After step
+    20's apply, before step 24's inventory:
+    1. `APP-ADMIN`, read-only: list exactly that prefix and keep the answer:
+       `aws logs describe-log-groups --log-group-name-prefix /aws/ecs/containerinsights/gs-staging/ --query "logGroups[].[logGroupName,storedBytes,retentionInDays]" --output text`
+       (`<D>\ci\log-groups.txt`). A group outside that prefix is never in scope.
+    2. Optional: export what must be kept first (`aws logs create-export-task`, as step 7): deletion is irreversible.
+    3. Only with the owner's explicit GO naming each listed group: `aws logs delete-log-group --log-group-name <name>` for
+       each one by its full name (never a wildcard), then list the prefix again: empty (keep that answer too).
+    Not Terraform's to do (there is nothing to import or apply), and never before step 20's apply (the cluster would keep
+    writing them).
 23. **Outside Terraform -- never automatically safe:**
     - **the NAT gateway** (and its Elastic IP). No Terraform plan shows who else routes through it. Deleting a NAT another
       workload uses cuts that workload off. The evidence gate, **at least 24 hours after step 20's apply**:
@@ -449,6 +577,8 @@ recorded; a forward plan called a rollback FAILS); then the ECS rollback of §F 
 ### J. Verify the bill and the inventory
 
 24. **Inventory**, read-only. **Any surplus is a HARD FAIL to fix before closing the migration.** A forgotten NAT gateway alone is about $33/month.
+
+    Before it: step 22c is done (the Container Insights groups are gone) and step 23's NAT gate PASSED.
 
     (COST-2A) The final state, judged: F0's capture and snapshot again, then
     `npm run awsDeploy -- verify --topology single-host ... --pools p1 --evidence ev-J --instance-id <i-...> --origin-hostname <origin_hostname> ...`
@@ -471,6 +601,15 @@ recorded; a forward plan called a rollback FAILS); then the ECS rollback of §F 
     - the budget's $15 / $20 / $25 / $30 alerts active.
 
     Expect about **$0.75/day** while the host is on-demand. That is about $23 a month; about $18.61 with the 1-year Savings Plan, which is bought only after the memory plan (`docs/hosting-budget.md`).
+
+**Phase-1 closure (the owner's roadmap; PHASE 1 REMAINDER).** The hard ceiling is unchanged: **$30/month** steady state.
+- **Operational Phase-1 migration closure = step 24**: the clean judged inventory (`verify --topology single-host`
+  VERIFIED plus the CLI cross-check) AND the verified steady-state topology priced under $30/month (the COST_BUDGET items,
+  nothing else).
+- **Step 25 is trailing confirmation**: its 5-7 days of Cost Explorer data confirm the run-rate after the fact and do NOT
+  hold Phase 2 (testnet) work back -- Phase 2 may begin once step 24 closes.
+- **Any later billing evidence above the $30/month ceiling reopens the cost issue** (a STOP for whatever caused it), whenever
+  it appears.
 
 ## COST-2C: the single-host certification drills (`awsDeploy host-cert`)
 
@@ -599,16 +738,16 @@ arm64 emulation needed) with network access to `public.ecr.aws`, the npm registr
 | KEEP VALID | Persistence conformance (L5-1… on DynamoDB Local), the signing ledger / journal cases, wallet binding | Same adapters, same tables. The COST-1 change is metrics-only. |
 | KEEP VALID | Fencing semantics (L5-3 pool writer, L5-4 identity writer, L5-6 relayer), APPGEN / generation (L6-4) | Same code and data model, one pool |
 | **RERUN** | Deployment health | §F1–F4, `gs-health` |
-| RERUN | Origin routing | §H 16, plus `tests/edge-smoke.sh` offline |
-| RERUN | WebSocket | the `stage-probe edge` websocket gate through CloudFront → Caddy |
+| RERUN | Origin routing | §H 16 (`stage-probe edge --topology single-host`), plus `tests/edge-smoke.sh` offline |
+| RERUN | WebSocket | the `stage-probe edge --topology single-host` websocket gate through CloudFront → Caddy |
 | RERUN | Restart | §F7–F8 (`host-cert graceful-stop`, `crash-restart`, `reboot-restart`) |
 | RERUN | Fencing / duplicate process | §F9 (`host-cert duplicate-preflight`, `duplicate-fence`), plus the replacement certification (`host-cert replacement-before` / `replacement-after`; LIVE-6's `stage-cert` replacement scenario is ECS-only and unchanged) |
 | **NOT EVALUATED (classified)** | The stale-host live sub-proof of a replacement (a kept old host's preflight refusal) | destroy-before-create leaves no old host; keeping one would be a second authorised host. Certified offline (gs-preflight EIP / duplicate refusal, the one-host shape, host-create) plus live F9b fencing and the J 24 inventory (above) |
 | **REQUIRED LIVE (pre-cutover)** | **The ARM64 runtime smoke** (the release image EXECUTED on the real Graviton host) | The owner source gate proves the linux/arm64 build and architecture only; a workstation without emulation reports the runtime smoke DEFERRED, never PASS. §E 12b runs it on the host before deploy; step 14's `migration-guard edge-cutover` refuses the cutover unless it is a complete PASS (FAIL / NOT EVALUATED block). |
 | **OPEN** | **The AL2023 / systemd exit-status contract** (gs-exit-hold receives `EXIT_CODE=exited` / `EXIT_STATUS=3` or `5` from ExecStopPost; `RestartPreventExitStatus=3 5` holds) | Proven offline only as far as offline can go (COST-2C). **NOT EVALUATED until `host-cert duplicate-fence` (and the F7 / F8 drills) PASS on the real host.** Not certified. |
-| RERUN | KMS access | §F5 (the instance role is a new principal type) |
-| RERUN | DynamoDB access | §F6, plus the `iam` gate's classification for the host role |
-| RERUN | CloudFront edge | §H 16 (proxy hops, query strings) |
+| RERUN | KMS access | §F5 (the instance role is a new principal type): `gs-host role-probe -Probe kms` judged by `stage-probe host-role` |
+| RERUN | DynamoDB access | §F6, plus the `iam` gate's classification for the host role: `gs-host role-probe -Probe transactions` judged by `stage-probe host-role` |
+| RERUN | CloudFront edge | §H 16 (proxy hops, query strings): `stage-probe edge --topology single-host` |
 | RERUN | Money-game smoke | §H 18 |
 | RERUN | Observability | `HostHealthProblems` / `HostCriticalEvents` appear and the five alarms evaluate. **Drills:** `gs-stop` for 4 minutes fires the health alarm (missing data = breaching). `aws cloudwatch set-alarm-state` on each alarm proves the notification wiring. A misspelt `GS_METRICS_PROFILE` is refused BEFORE the metric sink exists, so it fires only the health alarm, not the critical-event alarm. |
 | **RETIRE** | p1/p2 flip (`flip`, `flip-alarms`, `flip-drill`) | One pool |
@@ -621,4 +760,5 @@ host's evidence (`capture-host-evidence.{sh,ps1}`, read-only; the host's `gs-hea
 Command; the operator's `gamesDoctor aws host-snapshot`) with three answers -- PASS, FAIL, NOT EVALUATED -- beside the
 unchanged data-plane checks (and the COST-2B guard records); `--topology ecs` (the default) is L5-8 / L6-2's verifier,
 untouched, for the ECS era until step I. See infra/aws/README.md "The single host". Still procedural: the DNS record of
-`origin_hostname` (the owner's provider), the edge probes (§H), the money-game smoke, and the billing review (§J 25).
+`origin_hostname` (the owner's provider), the browser smoke (§H 17), the money-game smoke, and the billing review (§J 25).
+The edge probe (§H 16) and the host-role probes (§F5 / F6) are tooled and judged (PHASE 1 REMAINDER).

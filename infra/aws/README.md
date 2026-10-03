@@ -608,7 +608,7 @@ money / RELAYQ -- and every check) and `host-evidence.md`.
 
 ```
 # 1. control plane (describe / get / list; the bootstrap role's HostVerifier* statements):
-infra/aws/scripts/capture-host-evidence.sh <env> <region> <i-...> <distribution id> <dir> [--terraform-dir stacks/single-host]
+infra/aws/scripts/capture-host-evidence.sh <env> <region> <i-...> <distribution id> <dir> [--terraform-dir infra/aws/stacks/single-host]   # from the repository root
 #    the host's status line (RECON-1: the HOST-DEPLOY principal's credentials -- the one that runs gs-host --
 #    ssm:SendCommand of the FIXED /opt/gs/bin/gs-health; the operator role holds no SSM Run Command):
 infra/aws/scripts/capture-host-evidence.sh --host-status-only <env> <region> <i-...> <dir>    # or --host-status above
@@ -679,6 +679,13 @@ empty). There is no `--force`. The code is `server/src/aws/deploy/staging/`; the
 6  infra/aws/scripts/capture-evidence.sh ... <dir>      # again: the captures must post-date the probes
 7  npm run awsDeploy -- stage-cert certify --run-id R --evidence <dir> <the step-2 flags> --scenario read-only --commit <HEAD>
 ```
+
+**The single host (PHASE 1 REMAINDER).** This certification is the ECS era's. On the single host, step 4's probe runs
+as `stage-probe edge --topology single-host --host-evidence <the verified host capture> --instance-id <i-...>
+--origin-hostname <origin>` (it stands on the host's `verify --topology coexist|single-host` record and report instead of
+steps 1-3, and judges its own record: `edge-single-host-verdict.json`), and step 3's task-role probe runs ON the host under
+the instance role as `gs-host role-probe` (infra/aws/single-host/host-role-probe.sh), judged offline by
+`stage-probe host-role`. SINGLE_HOST_MIGRATION.md F5 / F6 and step 16 give the exact commands.
 
 **The cluster listing** (L6-6P, `cluster-tasks.json`, `18COSMOS/L6-6P-CLUSTER-TASKS/v1`): `capture-evidence` lists every
 task of desired status RUNNING **and** STOPPED (a task draining under SIGTERM has desired STOPPED), following every

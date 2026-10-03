@@ -972,7 +972,7 @@ export const USAGE = [
   "  awsDeploy relayer-rotation-gate --runtime-parameter <SSM ARN> --environment <env> --from-relayer <old> --to-relayer <new> --evidence <dir> [--record <file>]",
   "  awsDeploy set-operator-plan --runtime-parameter <SSM ARN> --environment <env> --to-relayer <new> [--to-relayer-key <key ARN>]   (read-only: the admin's set_operator, never signed here)",
   "  awsDeploy stage-cert (prerequisite | certify) ...   LIVE-6 L6-6: the real-AWS staging certification (aws/deploy/staging/commands.ts)",
-  "  awsDeploy stage-probe (task-role | edge | collect | flip-alarms | restore-alarms | restore-fencing) ...",
+  "  awsDeploy stage-probe (task-role | edge [--topology single-host ...] | host-role | collect | flip-alarms | restore-alarms | restore-fencing) ...",
   "  awsDeploy host-cert (graceful-stop | crash-restart | reboot-restart | duplicate-preflight | duplicate-fence | replacement-before | replacement-after) ...   COST-2C: the MUTATING single-host drills F7 / F8 / F9a / F9b / replacement (aws/deploy/hostcert/; staging only)",
   "  awsDeploy migration-guard (app-read-authorize | ledger-operator-journal | ledger-host-authorize | host-create | host-create-complete | edge-cutover | ecs-rollback | compute-none | ledger-task-deauthorize | ecr-lifecycle | nat) ...   COST-2B / RECON-1A: offline plan / NAT evidence guards (aws/deploy/migration/)",
 ].join("\n");

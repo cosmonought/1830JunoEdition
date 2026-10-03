@@ -1210,7 +1210,7 @@ export function checkRuntimeSnapshot(dir: string, expect: HostExpect, escrow: bo
 export function checkTerraformOutputs(dir: string, expect: HostExpect, host: Record<string, Json> | null): HostCheck {
   const read = readHostEvidence(dir, HOST_EVIDENCE_FILES.terraformOutputs);
   const asked = fs.existsSync(path.join(dir, HOST_EVIDENCE_FILES.terraformOutputs)) || fs.existsSync(path.join(dir, "terraform-outputs.error.json"));
-  if (read.kind !== "ok") return asked ? notEvaluated("Terraform outputs = what runs", read.why) : skip("Terraform outputs = what runs", `${read.why} (optional: capture-host-evidence --terraform-dir stacks/single-host)`);
+  if (read.kind !== "ok") return asked ? notEvaluated("Terraform outputs = what runs", read.why) : skip("Terraform outputs = what runs", `${read.why} (optional: capture-host-evidence --terraform-dir infra/aws/stacks/single-host, from the repository root)`);
   const o = obj(read.value);
   const v = (k: string) => obj(o[k]).value;
   const names = hostNames(expect.environment);

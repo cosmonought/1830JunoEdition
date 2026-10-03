@@ -1264,6 +1264,14 @@ describe("L6-5A the TASK# item: diagnostic, ordered, never read", () => {
   test("SOURCE GUARD: nothing in the server reads a TASK# item -- the key is named only by its writer (and tests); the metric and status modules are reached only from the AWS runtime", () => {
     const root = path.resolve(__dirname, "../../../../../src") /* dist/server/src/aws/runtime -> server/src */;
     const offenders: string[] = [];
+    const TASK_NAME = /["'`]TASK#|taskStatusKey|taskStatusPk/;
+    /* COST-2C (owner-gate fix 1): DEPLOYMENT-ONLY certification tooling may NAME the writer's TASK# heartbeat in a check's
+       EVIDENCE TEXT. It judges the HolderStatus value that the ONE bounded reader (`taskHeartbeats.ts`, reached only by
+       `tools/awsDeploy.ts`'s binding) hands it; it never builds the key, never reads the table for it, and decides nothing in
+       the game / money / routing / fencing / admission runtime. It is reachable ONLY from the operator CLI
+       `tools/awsDeploy.ts` -- pinned below for everything under aws/deploy/, and by hostCert.test.ts ("nothing in the
+       server runtime reads the drill lock or the host-cert code"). Every OTHER file naming TASK# is still an offender. */
+    const DEPLOYMENT_OBSERVERS = new Set(["aws/deploy/hostcert/controlPlane.ts"]);
     const walk = (dir: string) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const full = path.join(dir, entry.name);
@@ -1275,9 +1283,22 @@ describe("L6-5A the TASK# item: diagnostic, ordered, never read", () => {
           const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1"); // comments may name it; code may not
           /* LIVE-6 final convergence: ONE reader beside the writer -- the staging certification's restore-quiet evidence
              (`taskHeartbeats.ts`), reached only by `tools/awsDeploy.ts`'s binding; no runtime decision reads it. */
-          if (/["'`]TASK#|taskStatusKey|taskStatusPk/.test(code) && relative !== "aws/runtime/taskStatus.ts" && relative !== "aws/runtime/taskHeartbeats.ts") offenders.push(`${relative}: names the TASK# item`);
-          for (const match of text.matchAll(/from\s+"([^"]+)"/g)) {
-            const target = path.relative(root, path.resolve(path.dirname(full), match[1])).split(path.sep).join("/");
+          if (TASK_NAME.test(code) && relative !== "aws/runtime/taskStatus.ts" && relative !== "aws/runtime/taskHeartbeats.ts") {
+            if (!DEPLOYMENT_OBSERVERS.has(relative)) offenders.push(`${relative}: names the TASK# item`);
+            else
+              /* exactly the one evidence shape that exists: readCheck(..., `TASK#${writer}`)) -- no assignment, no key, no read */
+              for (const l of code.split("\n").filter((x) => TASK_NAME.test(x)))
+                if (!/readCheck\([^;]*`TASK#\$\{writer\}`\)\);?\s*$/.test(l) || /taskStatusKey|taskStatusPk|getItem|queryAll|Command\(|\bKey\b|\bpk\b|\bsk\b|\b(?:const|let|var)\b|[^=!<>]=(?![=>])/.test(l))
+                  offenders.push(`${relative}: names the TASK# item outside a certification check's evidence text: ${l.trim().slice(0, 120)}`);
+          }
+          for (const match of text.matchAll(/(?:\bfrom\s+|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)["'`]([^"'`]+)["'`]/g)) {
+            if (!match[1].startsWith(".")) continue;
+            /* normalised as the compiler resolves it: a .js / .ts suffix and a directory's index are the module itself */
+            const target = path.relative(root, path.resolve(path.dirname(full), match[1])).split(path.sep).join("/").replace(/\.(?:js|ts)$/, "").replace(/\/index$/, "");
+            /* the deployment / certification tooling (aws/deploy/**) is reached only by the operator CLI, never by the
+               production runtime (start.ts, the AWS runtime, the game, the rooms, the money paths) */
+            if ((target === "aws/deploy" || target.startsWith("aws/deploy/")) && !relative.startsWith("aws/deploy/") && relative !== "tools/awsDeploy.ts") offenders.push(`${relative}: reaches deployment tooling ${target} (only the operator CLI tools/awsDeploy.ts may)`);
+            if (target === "tools/awsDeploy") offenders.push(`${relative}: imports the operator CLI`);
             if ((target === "aws/runtime/runtimeMetrics" || target === "aws/runtime/taskStatus") && !relative.startsWith("aws/runtime/")) offenders.push(`${relative}: imports ${target}`);
             if (target === "aws/runtime/taskHeartbeats" && relative !== "tools/awsDeploy.ts") offenders.push(`${relative}: imports the TASK# reader (only the staging certification's binding may)`);
             if (target === "aws/runtime/taskStatus" && /decodeTaskStatusItem/.test(text) && relative !== "aws/runtime/taskHeartbeats.ts") offenders.push(`${relative}: decodes TASK# items (only the certification's reader does)`);

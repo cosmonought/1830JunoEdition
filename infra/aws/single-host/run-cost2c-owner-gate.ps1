@@ -50,7 +50,9 @@
                                util-linux-core (flock) and findutils; the module is copied inside and its files/bin made
                                0755 exactly as cloud-init installs them; the suite's own stubs stand in for docker /
                                systemctl / curl / aws (offline) -- answering as the REAL CLIs do (PHASE 1 FRESH-HOST
-                               HARDENING). Git Bash is NOT a substitute (no flock, no python3).
+                               HARDENING); it also runs 13r's host-script-install.sh / gs-host.sh install-script (the
+                               operator's infra/aws/single-host is copied beside the module). Git Bash is NOT a
+                               substitute (no flock, no python3).
     15b Single-host real       PHASE 1 FRESH-HOST HARDENING: tests/preflight-real-docker.test.sh against the REAL Docker
         Docker                 daemon (the socket mounted) with Amazon Linux 2023's OWN docker CLI (dnf's docker package,
                                the host's): gs-preflight's one-server check (no container, running / paused / restarting,
@@ -414,7 +416,9 @@ Add-Gate 'Single-host scripts' $false {
   if ($null -ne $why) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = "$why -- the host scripts run only in a genuine Linux (Amazon Linux 2023) userspace" } }
   $name = "recon1-owner-gate-hostscripts-$Stamp".ToLower()
   # No double quote anywhere in $cmd (Windows PowerShell 5.1 passes native arguments verbatim only without them).
-  $cmd = 'dnf -y -q install util-linux-core findutils >/dev/null 2>&1 || exit 97; for c in bash flock python3 find sha256sum timeout awk cut tr date mktemp; do command -v $c >/dev/null || exit 98; done; mkdir -p /work && cp -r /repo/infra/aws/modules/single-host /work/single-host && chmod 0755 /work/single-host/files/bin/* || exit 99; exec bash /work/single-host/tests/host-scripts.test.sh'
+  # The module AND the operator's single-host tooling, in their repository layout (the suite also runs 13r's reviewed
+  # host-script-install.sh and gs-host.sh install-script end to end, from infra/aws/single-host).
+  $cmd = 'dnf -y -q install util-linux-core findutils >/dev/null 2>&1 || exit 97; for c in bash flock python3 find sha256sum timeout awk cut tr date mktemp stat; do command -v $c >/dev/null || exit 98; done; mkdir -p /work/aws/modules && cp -r /repo/infra/aws/modules/single-host /work/aws/modules/single-host && cp -r /repo/infra/aws/single-host /work/aws/single-host && chmod 0755 /work/aws/modules/single-host/files/bin/* || exit 99; exec bash /work/aws/modules/single-host/tests/host-scripts.test.sh'
   try {
     $code = Invoke-Logged $Docker @('run', '--rm', '--name', $name, '-v', $RepoMountRO, $Al2023Image, 'bash', '-c', $cmd) $RepoRoot
     $out = @($script:LastOutput)   # kept BEFORE the cleanup command replaces the last output
@@ -426,9 +430,9 @@ Add-Gate 'Single-host scripts' $false {
   $counts = Harness-Counts $out '^(\d+) passed, (\d+) failed$'
   if ($null -eq $counts) { return @{ Status = 'FAIL'; Exit = $code; Reason = 'the suite did not report its totals (it did not finish)' } }
   $script:Facts['host_scripts'] = [ordered]@{ image = $Al2023Image; passed = $counts[0]; failed = $counts[1] }
-  if ($code -eq 0 -and ($counts[1] -ne 0 -or $counts[0] -lt 40)) { return @{ Status = 'FAIL'; Exit = $code; Reason = "totals $($counts[0]) passed / $($counts[1]) failed (>= 40 passed, 0 failed required)" } }
+  if ($code -eq 0 -and ($counts[1] -ne 0 -or $counts[0] -lt 83)) { return @{ Status = 'FAIL'; Exit = $code; Reason = "totals $($counts[0]) passed / $($counts[1]) failed (>= 83 passed, 0 failed required)" } }
   return @{ Exit = $code }
-} 'docker run --rm -v <repo>:/repo:ro <amazonlinux:2023@sha256> : dnf util-linux-core findutils; bash host-scripts.test.sh on a 0755 copy of the module   (genuine AL2023 userspace; offline stubs)'
+} 'docker run --rm -v <repo>:/repo:ro <amazonlinux:2023@sha256> : dnf util-linux-core findutils; bash host-scripts.test.sh on a 0755 copy of the module (+ infra/aws/single-host for 13r)   (genuine AL2023 userspace; offline stubs)'
 
 # PHASE 1 FRESH-HOST HARDENING: the one-server check against a REAL daemon and AL2023's OWN docker CLI (the stub that let
 # step 13's fresh-host failure pass every offline gate is not in this path). The suite exits 2 (NOT RUN) on its own

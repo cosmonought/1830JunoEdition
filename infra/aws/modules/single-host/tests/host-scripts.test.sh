@@ -242,6 +242,8 @@ else bad "remediation rerun failed" "$(cat "$T/out")"; fi
 teardown
 
 # The incident REPLAYED: the same scripts with the pre-fix one-server check (`inspect || printf absent`) on the fresh host.
+# Then 13r's remediation on that very state: the certified gs-preflight installed ALONE by the reviewed installer, and the
+# SAME gs-deploy --measure re-run.
 fresh; rm -f "$T/etc/release.env"; mkdir -p "$T/oldbin"; cp "$BIN"/* "$T/oldbin/"
 python3 - "$T/oldbin/gs-preflight" <<'PY'
 import sys
@@ -263,6 +265,14 @@ if GS_BIN_UNDER_TEST="$T/oldbin" "$T/oldbin/gs-deploy" "$DIGEST_A" sh1-test-arm6
     ok "the step-13 incident REPLAYED: the pre-fix check refuses the fresh host 5 times (docker rm: No such container) -> start-limit-hit; release.env written; no container, no server run, no HOLD"
   else bad "incident replay" "$(cat "$T/out") | $(cat "$S/preflight.log")"; fi
 fi
+if [ -f "$HERE/../../../single-host/host-script-install.sh" ]; then
+  old13="$(sha256sum "$T/oldbin/gs-preflight" | cut -c1-64)"; new13="$(sha256sum "$BIN/gs-preflight" | cut -c1-64)"
+  GS_TEST=1 GS_TEST_BIN="$T/oldbin" GS_TEST_LOCK="$T/oldlock" bash "$HERE/../../../single-host/host-script-install.sh" install gs-preflight "$new13" "$old13" "$BIN/gs-preflight" >"$T/inst.out" 2>&1
+  : >"$S/preflight.log"
+  if grep -qx "result=installed" "$T/inst.out" && GS_BIN_UNDER_TEST="$T/oldbin" "$T/oldbin/gs-deploy" "$DIGEST_A" sh1-test-arm64-r1 --measure >"$T/out" 2>&1 && grep -q "is READY" "$T/out" && [ "$(grep -c 'preflight passed' "$S/preflight.log")" = 1 ] && [ ! -e "$T/lib/hold" ]; then
+    ok "13r on the replayed incident: the certified gs-preflight installed ALONE, the SAME gs-deploy --measure re-run -> reset-failed, preflight passed, READY"
+  else bad "13r rehearsal" "$(cat "$T/inst.out") | $(cat "$T/out")"; fi
+else bad "13r rehearsal: infra/aws/single-host/host-script-install.sh is not beside the module"; fi
 teardown
 
 for st in exited created dead; do
@@ -434,6 +444,84 @@ echo 503 >"$S/ready"; echo 503 >"$S/origin"; run gs-health
 grep -q '"readyz":"503","origin_tls_readyz":"503"' "$T/out" && ok "gs-health: an HTTP answer is its code (503), as real curl reports it" || bad "gs-health 503" "$(cat "$T/out")"
 teardown
 if grep -nE "http_code\}'[^|]*\|\| *printf" "$BIN"/*; then bad "a curl -w '%{http_code}' still falls back with || printf (contaminates)"; else ok "static: no curl -w '%{http_code}' ... || printf fallback in files/bin"; fi
+
+# ------------------------------------------------------------------------------------------------- one-script install (13r)
+# PHASE 1 FRESH-HOST HARDENING's live remediation: infra/aws/single-host/host-script-install.sh (sent by `gs-host
+# install-script`) replaces exactly ONE script on the EXISTING host. Here on a copy of the module's bin, as root would.
+OPS="$HERE/../../../single-host"
+if [ ! -f "$OPS/host-script-install.sh" ] || [ ! -f "$OPS/gs-host.sh" ]; then
+  bad "the operator tooling (infra/aws/single-host) is not beside the module (run it from the repository; the owner gate copies infra/aws)"
+else
+  sha() { sha256sum "$1" | cut -c1-64; }
+  inst() { GS_TEST=1 GS_TEST_BIN="$T/hostbin" GS_TEST_LOCK="$T/hostlock" bash "$OPS/host-script-install.sh" "$@" >"$T/out" 2>&1; }
+  framed() { [ "$(head -n 1 "$T/out")" = "GS-HOST-INSTALL BEGIN" ] && grep -qx "GS-HOST-INSTALL END exit=$1" "$T/out"; }
+  # The live host: the module's scripts with gs-preflight as the host-create commit's (an older, different, valid script).
+  host13() {
+    setup; mkdir -p "$T/hostbin"; cp "$BIN"/* "$T/hostbin/"; chmod 0755 "$T/hostbin"/*
+    printf '# the host-create bytes\n' >>"$T/hostbin/gs-preflight"; cp "$T/hostbin/gs-preflight" "$T/old-preflight"
+    NEW="$(sha "$BIN/gs-preflight")"; OLD="$(sha "$T/old-preflight")"; echo failed >"$S/active"
+    ( cd "$T/hostbin" && sha256sum gs-lib.sh gs-run gs-exit-hold gs-deploy gs-rollback gs-stop gs-health gs-host-sample gs-measure-report ) >"$T/others.before"
+  }
+  others_same() { ( cd "$T/hostbin" && sha256sum gs-lib.sh gs-run gs-exit-hold gs-deploy gs-rollback gs-stop gs-health gs-host-sample gs-measure-report ) | cmp -s - "$T/others.before" && [ -z "$(find "$T/hostbin" -name '.*' -type f)" ]; }
+  host13
+  inst check gs-preflight "$NEW" "$OLD" "$BIN/gs-preflight"
+  if framed 0 && grep -qx "result=checked (nothing was written)" "$T/out" && grep -qx "live_owner=$(id -un):$(id -gn)" "$T/out" && grep -qx "live_mode=755" "$T/out" && grep -qx "live_sha256=$OLD" "$T/out" && [ "$(sha "$T/hostbin/gs-preflight")" = "$OLD" ] && others_same; then
+    ok "13r check: inspects the live file (owner, mode, SHA-256), verifies the certified bytes, writes NOTHING"; else bad "13r check" "$(cat "$T/out")"; fi
+  inst install gs-preflight "$NEW" "$OLD" "$BIN/gs-preflight"
+  if framed 0 && grep -qx "result=installed" "$T/out" && grep -qx "installed_sha256=$NEW" "$T/out" && cmp -s "$BIN/gs-preflight" "$T/hostbin/gs-preflight" && [ "$(stat -c %a "$T/hostbin/gs-preflight")" = 755 ] && others_same; then
+    ok "13r install: exactly the certified bytes, 755, one rename -- every other host script byte-identical, no temporary file left"; else bad "13r install" "$(cat "$T/out")"; fi
+  inst install gs-preflight "$NEW" "$OLD" "$BIN/gs-preflight"
+  framed 0 && grep -q "^result=unchanged" "$T/out" && ok "13r install again: the certified bytes are already live -> unchanged, nothing written" || bad "13r rerun" "$(cat "$T/out")"
+  teardown
+  host13; printf 'exit 0\n' >"$T/other"
+  inst install gs-preflight "$NEW" "$OLD" "$T/other"; c1=$?
+  printf 'if then fi (\n' >"$T/broken"; inst install gs-preflight "$(sha "$T/broken")" "$OLD" "$T/broken"; c2=$?
+  inst install gs-preflight "$NEW" "$(printf '0%.0s' {1..64})" "$BIN/gs-preflight"; c3=$?
+  inst install gs-run "$NEW" "$OLD" "$BIN/gs-preflight"; c4=$?
+  inst install gs-preflight "$NEW" "$OLD"; c5=$?
+  if [ "$c1" = 93 ] && [ "$c2" = 94 ] && [ "$c3" = 91 ] && [ "$c4" = 2 ] && [ "$c5" = 2 ] && [ "$(sha "$T/hostbin/gs-preflight")" = "$OLD" ] && others_same; then
+    ok "13r refuses received bytes that are not the certified ones (93), a script that does not parse (94), a live file it does not expect (91), any other name or a missing file (2) -- nothing changed"
+  else bad "13r refusals" "exits $c1 $c2 $c3 $c4 $c5"; fi
+  echo 1 >"$S/active"; inst install gs-preflight "$NEW" "$OLD" "$BIN/gs-preflight"; c1=$?; echo failed >"$S/active"
+  echo exited >"$S/container"; inst install gs-preflight "$NEW" "$OLD" "$BIN/gs-preflight"; c2=$?; rm -f "$S/container"
+  touch "$S/daemon_down"; inst install gs-preflight "$NEW" "$OLD" "$BIN/gs-preflight"; c3=$?; rm -f "$S/daemon_down"
+  ( flock -n 9 && touch "$T/locked" && sleep 30 ) 9>"$T/hostlock" & holder=$!
+  for _ in $(seq 1 100); do [ -e "$T/locked" ] && break; sleep 0.1; done
+  inst install gs-preflight "$NEW" "$OLD" "$BIN/gs-preflight"; c4=$?; kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+  chmod 0644 "$T/hostbin/gs-preflight"; inst install gs-preflight "$NEW" "$OLD" "$BIN/gs-preflight"; c5=$?; chmod 0755 "$T/hostbin/gs-preflight"
+  if [ "$c1" = 90 ] && [ "$c2" = 90 ] && [ "$c3" = 92 ] && [ "$c4" = 90 ] && [ "$c5" = 91 ] && [ "$(sha "$T/hostbin/gs-preflight")" = "$OLD" ] && others_same && framed 91; then
+    ok "13r refuses while the server is active or a gs-server container exists (90), docker cannot answer (92), a deploy holds the lock (90), the live file is not 755 (91) -- nothing changed, every exit framed"
+  else bad "13r server / lock / mode refusals" "exits $c1 $c2 $c3 $c4 $c5"; fi
+  teardown
+  # End to end through the operator's bash twin: gs-host.sh install-script builds the SSM command; a fake `aws` runs it as
+  # the host would (Run Command) -- the exact payload installs the exact bytes, and a checkout that is not the certified
+  # bytes sends nothing.
+  host13
+  cat >"$T/stubs/aws" <<'EOF'
+#!/usr/bin/env bash
+S="$STUB_STATE"; echo "aws $*" >>"$S/calls"
+case "$*" in
+  *send-command*) p=""; while [ $# -gt 0 ]; do [ "$1" = --parameters ] && p="${2#file://}"; shift; done
+    python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["commands"][0])' "$p" >"$S/remote"
+    ( cd "$S" && GS_TEST=1 GS_TEST_BIN="$GS_HOSTBIN" GS_TEST_LOCK="$GS_HOSTLOCK" bash "$S/remote" >"$S/remote.out" 2>"$S/remote.err"; echo $? >"$S/remote.rc" )
+    echo cmd-0001 ;;
+  *"--query Status"*) [ "$(cat "$S/remote.rc")" = 0 ] && echo Success || echo Failed ;;
+  *StandardOutputContent*) cat "$S/remote.out" ;;
+  *StandardErrorContent*) [ -s "$S/remote.err" ] && cat "$S/remote.err" || echo None ;;
+esac
+EOF
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$T/stubs/sleep"; chmod +x "$T/stubs/aws" "$T/stubs/sleep"
+  export GS_HOSTBIN="$T/hostbin" GS_HOSTLOCK="$T/hostlock"
+  if bash "$OPS/gs-host.sh" install-script i-0123456789abcdef0 gs-preflight "$NEW" "$OLD" >"$T/out" 2>&1 && grep -qx "result=installed" "$T/out" && cmp -s "$BIN/gs-preflight" "$T/hostbin/gs-preflight" && others_same \
+    && grep -q '^d=\$(mktemp -d) && printf %s [A-Za-z0-9+/=]* | base64 -d > \$d/i && printf %s [A-Za-z0-9+/=]* | base64 -d > \$d/f && bash \$d/i install gs-preflight [0-9a-f]\{64\} [0-9a-f]\{64\} \$d/f; rc=\$?; rm -rf \$d; exit \$rc$' "$S/remote" && ! grep -q "[\"']" "$S/remote"; then
+    ok "13r end to end (gs-host.sh install-script -> SSM -> host): the exact certified bytes installed; the remote line is the fixed template, no quote"
+  else bad "13r end to end" "$(cat "$T/out") $(cat "$S/remote.err" 2>/dev/null)"; fi
+  : >"$S/calls"; rm -f "$S/remote"
+  if bash "$OPS/gs-host.sh" install-script i-0123456789abcdef0 gs-preflight "$OLD" "$OLD" >"$T/out" 2>&1; then bad "gs-host.sh sent bytes that are not the typed certified SHA-256"; else
+    grep -q "not the certified" "$T/out" && ! grep -q "send-command" "$S/calls" && ok "13r gs-host.sh refuses a checkout whose bytes are not the typed certified SHA-256 (nothing sent)" || bad "gs-host.sh sha refusal" "$(cat "$T/out")"; fi
+  unset GS_HOSTBIN GS_HOSTLOCK
+  teardown
+fi
 
 # ------------------------------------------------------------------------------------------------- measurement
 setup

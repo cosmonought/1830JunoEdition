@@ -764,8 +764,10 @@ describe("RECON-1: the ONE owner gate (COST-2C's runner, extended) covers the re
     assert.match(gate, /npm ci changed tracked \/ unignored files/);
     assert.match(gate, /\$Al2023Image = 'public\.ecr\.aws\/amazonlinux\/amazonlinux:2023@sha256:[0-9a-f]{64}'/);
     assert.ok(!/Invoke-Logged \$Bash @\('infra\/aws\/modules\/single-host\/tests\/host-scripts\.test\.sh'\)/.test(gate), "the host scripts never run under Git Bash");
-    assert.match(gate, /exec bash \/work\/single-host\/tests\/host-scripts\.test\.sh/);
-    /* PHASE 1 FRESH-HOST HARDENING: the one-server check also runs against the REAL daemon with AL2023's own CLI */
+    /* PHASE 1 FRESH-HOST HARDENING: the module and the operator's infra/aws/single-host keep their layout (13r's installer
+       is tested beside the module), and the one-server check also runs against the REAL daemon with AL2023's own CLI */
+    assert.match(gate, /cp -r \/repo\/infra\/aws\/single-host \/work\/aws\/single-host/);
+    assert.match(gate, /exec bash \/work\/aws\/modules\/single-host\/tests\/host-scripts\.test\.sh/);
     const realDocker = gate.slice(gate.indexOf("Add-Gate 'Single-host real Docker'"), gate.indexOf("Add-Gate $ImageGateName"));
     assert.ok(realDocker.length > 0 && gate.indexOf("Add-Gate 'Single-host scripts'") < gate.indexOf("Add-Gate 'Single-host real Docker'"), "the real-Docker gate follows the stubbed one");
     assert.match(realDocker, /dnf -y -q install docker util-linux-core findutils/, "AL2023's OWN docker CLI");

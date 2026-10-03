@@ -533,11 +533,12 @@ describe("PHASE 1 REMAINDER F5 / F6: the operator wrappers (static)", () => {
       assert.ok(ps1.includes(line), line);
     assert.ok(ps1.indexOf("$errText = ") < ps1.indexOf("if ($status -ne 'Success')"), "the status check still follows the stderr rendering");
     assert.ok(!/Write-Warning \$err\b(?!Text)/.test(ps1), "never Write-Warning of the raw pipeline array");
-    assert.match(ps1, /ValidateSet\('status', 'deploy', 'rollback', 'stop', 'measure-report', 'arm64-smoke', 'role-probe'\)/);
+    assert.match(ps1, /ValidateSet\('status', 'deploy', 'rollback', 'stop', 'measure-report', 'arm64-smoke', 'role-probe', 'install-script'\)/);
     assert.match(ps1, /\$RunId -cnotmatch '\^\[a-z0-9\]\[a-z0-9-\]\{5,39\}\\z'/);
-    assert.match(ps1, /foreach \(\$value in @\(\$Digest, \$BuildId, \$RunId, \$Probe, \$Pool\)\) \{\n  if \(\$value -and \$value -match '\[\\r\\n\]'\) \{ throw 'gs-host: REFUSED: an argument holds a line break\.' \}/);
+    /* PHASE 1 FRESH-HOST HARDENING's install-script arguments reach the host too: the same line-break guard covers them. */
+    assert.match(ps1, /foreach \(\$value in @\(\$Digest, \$BuildId, \$RunId, \$Probe, \$Pool, \$HostScript, \$Sha256, \$ReplacesSha256\)\) \{\n  if \(\$value -and \$value -match '\[\\r\\n\]'\) \{ throw 'gs-host: REFUSED: an argument holds a line break\.' \}/);
     assert.match(ps1, /\$remote = "d=`\$\(mktemp -d\) && printf %s \$probeScript \| base64 -d > `\$d\/p && bash `\$d\/p \$Digest \$RunId \$Probe \$Generation \$Pool; rc=`\$\?; rm -rf `\$d; exit `\$rc"/);
-    for (const test of ["gs-host-stderr.test.ps1", "gs-host-role-probe.test.ps1"]) assert.ok(fs.existsSync(path.join(REPO, "infra/aws/single-host/tests", test)), test);
+    for (const test of ["gs-host-stderr.test.ps1", "gs-host-role-probe.test.ps1", "gs-host-install-script.test.ps1"]) assert.ok(fs.existsSync(path.join(REPO, "infra/aws/single-host/tests", test)), test);
   });
 
   test("the wrapper: one docker run (the probe), the instance role only, the serving release only, refusals framed", () => {

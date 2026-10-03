@@ -11,6 +11,7 @@
 #   gs-host.sh measure-report <instance-id> [days] [region]
 #   gs-host.sh arm64-smoke <instance-id> <sha256:digest> [region]      # step 12b: BEFORE deploy / edge cutover
 #   gs-host.sh role-probe <instance-id> <sha256:digest> <run id> <kms|transactions> <generation> <pool> [region]   # F5 / F6
+#   gs-host.sh install-script <instance-id> <gs-preflight|gs-lib.sh|gs-health> <certified sha256> <replaced sha256> [--check] [region]   # 13r
 #
 # arm64-smoke (OWNER-GATE FIX 1): the REQUIRED live ARM64 runtime smoke on the real Graviton host -- the two REVIEWED
 # repository files (arm64-live-smoke.sh and the unchanged modules/single-host/tests/image-smoke.sh) sent as base64 (the
@@ -19,6 +20,11 @@
 # role-probe (PHASE 1 REMAINDER, F5 / F6): the reviewed host-role-probe.sh, sent the same way, runs the release image's
 # own L6-6 task-role probe on the host under the instance role (kms = F5; transactions = F6, the disposable L6CERT#<run>
 # partition). Save the output (tee) for `awsDeploy stage-probe host-role --capture <file>`.
+#
+# install-script (PHASE 1 FRESH-HOST HARDENING, runbook 13r): ONE certified host script onto the EXISTING host. This
+# checkout's modules/single-host/files/bin/<name> is sent as EXACT bytes (a CR refuses) only if its SHA-256 is the certified
+# one, with the reviewed host-script-install.sh, which replaces only /opt/gs/bin/<name> by one atomic rename after
+# verifying the live file, the server down, the deploy lock, the bytes and `bash -n`. --check writes nothing.
 #
 # Needs AWS CLI v2 and operator credentials allowed ssm:SendCommand (document AWS-RunShellScript) on that instance and
 # ssm:GetCommandInvocation. It prints identifiers and the host's own output only (the host has no secret to print).
@@ -64,7 +70,22 @@ case "$cmd" in
     here="$(cd "$(dirname "$0")" && pwd)"
     script="$(tr -d '\r' <"$here/host-role-probe.sh" | base64 | tr -d '\n')"
     remote="d=\$(mktemp -d) && printf %s $script | base64 -d > \$d/p && bash \$d/p $digest $run $probe $generation $pool; rc=\$?; rm -rf \$d; exit \$rc" ;;
-  *) die "usage: gs-host.sh status|deploy|rollback|stop|measure-report|arm64-smoke|role-probe <instance-id> ..." ;;
+  install-script)
+    name="${1:-}"; sha="${2:-}"; replaces="${3:-}"; shift 3 || die "install-script needs <gs-preflight|gs-lib.sh|gs-health> <certified sha256> <replaced sha256>"
+    case "$name" in gs-preflight | gs-lib.sh | gs-health) ;; *) die "install-script installs gs-preflight, gs-lib.sh or gs-health only" ;; esac
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] && [[ "$replaces" =~ ^[0-9a-f]{64}$ ]] || die "each SHA-256 must be 64 lower-case hex digits"
+    mode=install; if [ "${1:-}" = "--check" ]; then mode=check; shift; fi
+    [ $# -ge 1 ] && region="$1"
+    here="$(cd "$(dirname "$0")" && pwd)"
+    file="$here/../modules/single-host/files/bin/$name"
+    [ -f "$file" ] || die "$file is missing"
+    if grep -q $'\r' "$file"; then die "this checkout's $name holds a CR (not an LF checkout of the certified commit): re-clone"; fi
+    if command -v sha256sum >/dev/null; then local_sha="$(sha256sum "$file" | cut -c1-64)"; else local_sha="$(shasum -a 256 "$file" | cut -c1-64)"; fi
+    [ "$local_sha" = "$sha" ] || die "this checkout's $name is sha256 $local_sha, not the certified $sha (check out the certified commit)"
+    installer="$(tr -d '\r' <"$here/host-script-install.sh" | base64 | tr -d '\n')"; content="$(base64 <"$file" | tr -d '\n')"
+    printf 'gs-host: install-script %s %s -- this checkout'"'"'s bytes are the certified sha256 %s; they replace %s\n' "$mode" "$name" "$local_sha" "$replaces"
+    remote="d=\$(mktemp -d) && printf %s $installer | base64 -d > \$d/i && printf %s $content | base64 -d > \$d/f && bash \$d/i $mode $name $sha $replaces \$d/f; rc=\$?; rm -rf \$d; exit \$rc" ;;
+  *) die "usage: gs-host.sh status|deploy|rollback|stop|measure-report|arm64-smoke|role-probe|install-script <instance-id> ..." ;;
 esac
 [[ "$region" =~ ^[a-z]{2}(-[a-z]+)+-[0-9]$ ]] || die "region must be an AWS region"
 

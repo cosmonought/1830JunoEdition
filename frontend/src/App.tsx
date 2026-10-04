@@ -14899,6 +14899,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               : (gameState?.current_round_type ?? null)
           }
           operatingSubPhase={orSubPhase}
+          /* Phase 3 W1-I (AUD-06.07): the home station is owed before step 1; the reference marks that pre-step
+             rather than the Lay Track the cursor reads meanwhile. */
+          homeStationOwed={pendingHomeToken !== null}
           /* Display props only, per that file's no-`gameState` rule: the round tag for the CURRENT breadcrumb,
              the acting railroad, the derived phase for the key-reference cards, the seat count for the Player
              Limits row, and the ruleset name for the header. */

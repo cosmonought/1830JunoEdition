@@ -174,6 +174,21 @@ describe("AUD-19.01: a read-only queue accessor on the link, outside the drain",
     expect(getActiveLinkQueue()).toBe(IDLE_LINK_QUEUE);
   });
 
+  it("a link that ends itself (an incompatible room) settles what it held and returns the store to idle", async () => {
+    const { client, wire } = live();
+    act(() => wire().open());
+    let pending: Promise<number | null> = Promise.resolve(0);
+    act(() => {
+      pending = client.submit({ PassTurn: { game_id: 0 } } as never);
+    });
+    expect(getActiveLinkQueue().unsettled).toBe(1);
+    act(() =>
+      wire().deliver({ kind: "incompatible", build: "build-1", reason: "This room needs another engine.", pinnedRulesEngineVersion: 99, supportedRulesEngineVersions: [13] }),
+    );
+    await expect(pending).resolves.toBeNull();
+    expect(getActiveLinkQueue()).toBe(IDLE_LINK_QUEUE);
+  });
+
   it("the view: idle says nothing; queued says it will send on reconnect; in flight says it is sending", () => {
     expect(linkQueueView(IDLE_LINK_QUEUE)).toBe(IDLE_LINK_QUEUE_VIEW);
     expect(linkQueueView({ unsent: 1, unsettled: 1, settled: 0, lastOutcome: null })).toEqual({ blocked: true, queued: true, reason: LINK_QUEUED_NOTE });

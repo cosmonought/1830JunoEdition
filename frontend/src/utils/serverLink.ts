@@ -242,7 +242,9 @@ export interface LinkQueueState {
 export const IDLE_LINK_QUEUE: LinkQueueState = Object.freeze({ unsent: 0, unsettled: 0, settled: 0, lastOutcome: null });
 
 /* The ACTIVE link's queue, for the shell's one hook (`useLinkQueue`) -- outside the drain, so reading it never touches
-   the link callbacks. The most recently connected link is the active one; closing it returns the store to idle. */
+   the link callbacks. The active link is the one that most recently PUBLISHED (its first submission, flush or
+   settlement makes it so); a link that ends -- closed, or ending itself on an incompatible room, lost access or a client
+   update -- returns the store to idle. */
 let activeQueue: LinkQueueState = IDLE_LINK_QUEUE;
 let activeOwner: object | null = null;
 const activeListeners = new Set<() => void>();
@@ -347,7 +349,9 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     ) {
       queueState = Object.freeze(next);
     }
-    if (!closedByUs) publishActive(owner, queueState);
+    /* A link that has ended itself (a close, an incompatible room, lost access, a client update) settles everything and
+       then returns the store to idle -- a dead link must not leave a form saying "queued" or "sending". */
+    publishActive(owner, closedByUs ? null : queueState);
   };
   let socket: SocketLike | null = null;
   let open = false;
@@ -486,6 +490,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     for (const item of pending.splice(0)) item.resolve(null);
     orphaned = new Set<string>();
     inFlight = new Set<string>();
+    noteQueue(); // Phase 3 W3-I: nothing held any more (and, on a terminal path, the store returns to idle).
   };
 
   /** LIVE-2D: this tab may not read the game any more. Said once; the link stops and settles what it holds. */

@@ -10,18 +10,6 @@
 import { readFileSync } from "fs";
 import { join } from "path";
 
-const withRulesCalls: unknown[][] = [];
-jest.mock("../gameEngine/boardSelection", () => {
-  const actual = jest.requireActual("../gameEngine/boardSelection");
-  return {
-    ...actual,
-    withRules: (...args: unknown[]) => {
-      withRulesCalls.push(args);
-      return (actual.withRules as (...a: unknown[]) => unknown)(...args);
-    },
-  };
-});
-
 import {
   RING_IN_FLIGHT_REASON,
   ringConfirmState,
@@ -45,6 +33,20 @@ import { terrainBuildFeeAt } from "../components/hexBoardData";
 import { canonicalTileName } from "../components/hexTileCatalog";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse, StationTokenCompany } from "../components/hexContractTypes";
+
+/* babel-jest hoists `jest.mock` above every import, so this block runs exactly where it did when it sat above them;
+   it is written below them only for `import/first`. The recorder is read lazily, inside the wrapped `withRules`. */
+const withRulesCalls: unknown[][] = [];
+jest.mock("../gameEngine/boardSelection", () => {
+  const actual = jest.requireActual("../gameEngine/boardSelection");
+  return {
+    ...actual,
+    withRules: (...args: unknown[]) => {
+      withRulesCalls.push(args);
+      return (actual.withRules as (...a: unknown[]) => unknown)(...args);
+    },
+  };
+});
 
 /* ---------------------------------------------------------------------------------------------------- */
 /*  Fixtures                                                                                             */

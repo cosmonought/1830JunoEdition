@@ -16,6 +16,9 @@ import React, { useState } from "react";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { JOIN_CODE_EXAMPLE } from "../utils/roomProtocol";
 import { BRAND_PINK } from "../styles/palette";
+/* W1-O (AUD-16.05): the narrow rule switches at the same effective width at every text size. */
+import { zoomAwareMediaCss } from "../utils/uiScale";
+import { useUiScale } from "../utils/useUiScale";
 
 export interface SandboxRoomBarProps {
   /** `null` when not in a room -- the ordinary solo sandbox. */
@@ -71,6 +74,7 @@ export function SandboxRoomBar({
   onOpenJoin,
   bare = false,
 }: SandboxRoomBarProps) {
+  const uiScale = useUiScale(); // W1-O: the bar's narrow rule, asked in zoomed pixels
   const [joining, setJoining] = useState(false);
   const [codeText, setCodeText] = useState("");
 
@@ -135,7 +139,7 @@ export function SandboxRoomBar({
           moment a colour like that is a fact rather than a ranking.
           `:active` NEEDS A STYLESHEET, which is #46's standing exception. The class is applied only in bare
           mode, so the in-game bar keeps its own look untouched. */}
-      <style>{BARE_BUTTON_CSS}</style>
+      <style>{zoomAwareMediaCss(BARE_BUTTON_CSS, uiScale)}</style>
       <button
         type="button"
         className={bare ? "sandbox-bare-btn" : undefined}

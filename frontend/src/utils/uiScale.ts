@@ -96,11 +96,15 @@ export function storedUiScale(): number | null {
   }
 }
 
-export function storeUiScale(scale: number): void {
+/** Writes the choice. `false` when the browser refused (private browsing, blocked site data, a full quota) -- W1-O /
+ *  AUD-16.04: the caller says so rather than letting the choice vanish silently on the next load. */
+export function storeUiScale(scale: number): boolean {
   try {
     window.localStorage.setItem(UI_SCALE_STORAGE_KEY, String(snapUiScale(scale)));
+    return true;
   } catch {
-    /* A browser that refuses storage refuses the preference; the default stands. */
+    /* A browser that refuses storage refuses the preference: the choice holds for this window only. */
+    return false;
   }
 }
 
@@ -126,6 +130,33 @@ export function resolveUiScale(): number {
 let current = resolveUiScale();
 const listeners = new Set<() => void>();
 
+/* ==================================================================
+    W1-O (AUD-16.03 / AUD-16.04): SAY WHERE THE NUMBER CAME FROM, AND WHETHER IT WILL STICK
+   ==================================================================
+   The readout said "100%" and nothing else, so a reader could not tell the app's default from their own choice --
+   and a choice made in a window that refuses storage (private browsing) was simply gone on the next load, with no
+   word. Two facts, kept beside the value: whether this browser CHOSE it (a stored choice at load, or a press of
+   the picker since) or it is AUTOMATIC (the default, #1450), and whether the last choice could be REMEMBERED. */
+export type UiScaleProvenance = "chosen" | "automatic";
+
+let provenance: UiScaleProvenance = typeof window !== "undefined" && storedUiScale() !== null ? "chosen" : "automatic";
+let remembered = true;
+
+/** What the picker states beside a choice the browser refused to store. */
+export const UI_SCALE_NOT_REMEMBERED =
+  "This browser would not save the text size, so this choice will not be remembered in this window — it resets when the page reloads.";
+
+export interface UiScaleStatus {
+  scale: number;
+  provenance: UiScaleProvenance;
+  /** `false` once a choice could not be written to storage. */
+  remembered: boolean;
+}
+
+export function getUiScaleStatus(): UiScaleStatus {
+  return { scale: current, provenance, remembered };
+}
+
 export function getUiScale(): number {
   return current;
 }
@@ -134,7 +165,8 @@ export function setUiScale(scale: number): void {
   const next = snapUiScale(scale);
   if (next === current) return;
   current = next;
-  storeUiScale(next);
+  provenance = "chosen";
+  remembered = storeUiScale(next);
   listeners.forEach((listener) => listener());
 }
 
@@ -148,5 +180,48 @@ export function subscribeUiScale(listener: () => void): () => void {
 /** Test seam: put the store back to the resolved value. */
 export function resetUiScaleForTests(): void {
   current = resolveUiScale();
+  provenance = storedUiScale() !== null ? "chosen" : "automatic";
+  remembered = true;
   listeners.forEach((listener) => listener());
+}
+
+/* ==================================================================
+    W1-O (AUD-16.05): A BREAKPOINT SWITCHES AT THE SAME EFFECTIVE WIDTH AT EVERY SCALE
+   ==================================================================
+   Every screen root and the modal layer draw under `zoom: uiScale` (`chromeZoomFor`, `ModalPortal`), but a
+   viewport `@media (max-width: 899px)` measures the WINDOW in unzoomed CSS pixels. At 125% a 1000px window lays
+   out only 800px of content and still gets the desktop layout; at 75% a 1100px window lays out 1467px and gets the
+   narrow one. The query has to be asked in the zoomed root's own pixels: N px of layout is N x scale px of window.
+
+   CONTAINER QUERIES WERE CONSIDERED AND REFUSED: `container-type` on a screen root applies layout containment,
+   which makes it the containing block of every `position: fixed` descendant -- the status dock and every overlay
+   #1144 measured as resolving against the window would start resolving against the root.
+
+   SO THE STYLESHEET IS REWRITTEN AT RENDER: the CSS keeps its authored, at-100% widths (what a reader and a pin
+   see), and `zoomAwareMediaCss(css, scale)` scales the width features of each `@media` prelude. At 1.0 it returns
+   the input unchanged. A `max-width: N` (integer CSS px, "below N + 1") becomes `(N + 1) x scale - 0.01` and a
+   `min-width: N` becomes `N x scale`, so a max/min pair authored back to back (760 / 761) stays back to back at
+   every scale -- no width where neither layout applies. Layout arithmetic, never money. */
+
+/** One width feature, scaled: the window width at which N px of zoomed layout begins or ends. */
+export function zoomAwareWidthPx(feature: "max-width" | "min-width", px: number, scale: number): number {
+  const raw = feature === "max-width" ? (px + 1) * scale - 0.01 : px * scale;
+  return Math.round(raw * 100) / 100;
+}
+
+/** The stylesheet with every `@media` width feature asked in the zoomed root's pixels. Identity at scale 1. Only
+ *  `@media` preludes are touched; a `max-width` declaration inside a rule is a length, not a breakpoint. */
+export function zoomAwareMediaCss(css: string, scale: number): string {
+  if (!Number.isFinite(scale) || scale <= 0 || scale === 1) return css;
+  return css.replace(/@media[^{]*\{/g, (prelude) =>
+    prelude.replace(/\((max-width|min-width)\s*:\s*(\d+(?:\.\d+)?)px\s*\)/g, (_match, feature: "max-width" | "min-width", px: string) =>
+      `(${feature}: ${zoomAwareWidthPx(feature, Number(px), scale)}px)`,
+    ),
+  );
+}
+
+/** A viewport height inside the zoomed layer: `vh` there is scaled with the zoom (#1144), so N real vh is N / scale. */
+export function zoomAwareVh(vh: number, scale: number): string {
+  const safe = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  return `${Math.round((vh / safe) * 1000) / 1000}vh`;
 }

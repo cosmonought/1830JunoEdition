@@ -24,13 +24,16 @@
 import React from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
-import { UI_SCALE_STEPS, setUiScale, snapUiScale } from "../utils/uiScale";
+import { UI_SCALE_NOT_REMEMBERED, UI_SCALE_STEPS, getUiScaleStatus, setUiScale, snapUiScale } from "../utils/uiScale";
 import { useUiScale } from "../utils/useUiScale";
 
 export function UiScalePicker() {
   /* Design note #1294: live. The store re-renders every surface that draws with the scale; no reload, and
      the radio keeps playing. */
   const scale = useUiScale();
+  /* W1-O (AUD-16.03 / AUD-16.04): where the value came from, and whether it will survive a reload. Read at render;
+     both facts only change when the scale does, which is what re-renders this. */
+  const { provenance, remembered } = getUiScaleStatus();
   const at = UI_SCALE_STEPS.indexOf(snapUiScale(scale));
   const choose = (index: number) => {
     setUiScale(UI_SCALE_STEPS[Math.min(UI_SCALE_STEPS.length - 1, Math.max(0, index))]);
@@ -38,8 +41,14 @@ export function UiScalePicker() {
   const percent = `${Math.round(scale * 100)}%`;
   const atMin = at <= 0;
   const atMax = at >= UI_SCALE_STEPS.length - 1;
+  const source = provenance === "chosen" ? "chosen" : "automatic";
+  const said = !remembered
+    ? UI_SCALE_NOT_REMEMBERED
+    : provenance === "chosen"
+      ? "Your choice, remembered by this browser on every screen."
+      : "Automatic: the default size. Choose one with − and + and this browser will remember it.";
   return (
-    <span style={styles.group} role="group" aria-label="Text size" title={`Text size ${percent}. Remembered by this browser on every screen.`}>
+    <span style={styles.group} role="group" aria-label="Text size" title={`Text size ${percent}, ${source}. ${said}`}>
       <span style={styles.glyph} aria-hidden="true">
         Aa
       </span>
@@ -53,7 +62,9 @@ export function UiScalePicker() {
       >
         −
       </button>
-      <span style={styles.readout}>{percent}</span>
+      <span style={styles.readout} data-testid="ui-scale-readout">
+        {percent}
+      </span>
       <button
         type="button"
         style={{ ...styles.step, ...(atMax ? styles.stepDisabled : {}) }}
@@ -64,6 +75,17 @@ export function UiScalePicker() {
       >
         +
       </button>
+      {/* W1-O: the provenance, in words beside the number -- "not saved" when the browser refused the write. */}
+      <span
+        style={{ ...styles.provenance, ...(!remembered ? styles.provenanceWarn : {}) }}
+        data-testid="ui-scale-provenance"
+      >
+        {!remembered ? "not saved" : source}
+      </span>
+      {/* The full sentence for a screen reader, announced when the write fails; sighted readers have the title. */}
+      <span role="status" style={styles.srOnly} data-testid="ui-scale-status">
+        {!remembered ? UI_SCALE_NOT_REMEMBERED : ""}
+      </span>
     </span>
   );
 }
@@ -114,5 +136,18 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     fontVariantNumeric: "tabular-nums",
     color: "#f2f0eb",
+  },
+  provenance: { fontSize: FONT_SIZE.micro, fontWeight: 600, color: "#a8a6a0", whiteSpace: "nowrap", marginLeft: "2px" },
+  provenanceWarn: { color: "#e0b062" },
+  srOnly: {
+    position: "absolute",
+    width: "1px",
+    height: "1px",
+    padding: 0,
+    margin: "-1px",
+    overflow: "hidden",
+    clip: "rect(0 0 0 0)",
+    whiteSpace: "nowrap",
+    border: 0,
   },
 };

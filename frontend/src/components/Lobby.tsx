@@ -41,6 +41,8 @@ import AppFooter from "./AppFooter";
 import { chromeZoomFor } from "../styles/appStyles";
 /* Design note #1294: the chrome scale, live, for the root's zoom and the scene's viewport arithmetic. */
 import { useUiScale } from "../utils/useUiScale";
+/* W1-O (AUD-16.05): breakpoints asked in the zoomed root's own pixels. */
+import { zoomAwareMediaCss } from "../utils/uiScale";
 // Design note #524: the sandbox lobby lives on this screen now.
 import SandboxRoomBar from "./SandboxRoomBar";
 import { createHostedGame, gameIdOf, joinHostedGame, type RoomSetup } from "../utils/sandboxRoom";
@@ -314,7 +316,8 @@ export function Lobby({ onEnterSandbox }: LobbyProps) {
           collapse, and the wordmark's own `min(520px, 84vw)` handles the narrow case inline. What is left is
           the title's entrance, wrapped in `prefers-reduced-motion` because a thing that moves on load is
           exactly what that query exists to switch off. */}
-      <style>{LOBBY_CSS}</style>
+      {/* W1-O (AUD-16.05): the narrow amendment switches at the same effective width at every text size. */}
+      <style>{zoomAwareMediaCss(LOBBY_CSS, uiScale)}</style>
       {/* ==================================================================
            DESIGN NOTE 1130: THE UTILITY ROW LEAVES THE TITLE ALONE
           ==================================================================

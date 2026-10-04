@@ -362,9 +362,9 @@ owner gate pending): `RULES_ENGINE_VERSION = 13`, live list `[13]`, rules revisi
 Round turn), SBS-3 / SBS-4 (the official Brown Bank Pool continuation; V-6.3 not implemented) and OD-4 (automatic
 emergency funding and automatic bankruptcy; `DeclareBankruptcy` retired). Settlement stays `[10, 11, 12]`; v13
 certification is a separate pending pass (`docs/phase3/V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). Keys on that branch:
-`dc1-390107d5e7024f4a9180efeb` (no escrow), `dc1-d01c50c4a70d0dc14cdf915d` (the fixture pin). Not deployable alone (W2-A,
-W2-B with the Auto-Buy correction, a v13-reconciled W2-G, the safe integration reconciliation, the dedicated settlement
-certification, drained v12 rooms and the final owner gate). Owner rulings OD-4, OD-10(a) and OD-17, with the 2026-10-04
+`dc1-390107d5e7024f4a9180efeb` (no escrow), `dc1-d01c50c4a70d0dc14cdf915d` (the fixture pin). Still required before deployment
+(W2-B with the Auto-Buy correction, a v13-reconciled W2-G, the dedicated settlement certification, drained v12 rooms and the
+final owner gate; W2-A and the safe integration reconciliation are done on `phase3/wave2a-v13-integration`). Owner rulings OD-4, OD-10(a) and OD-17, with the 2026-10-04
 continuation rulings 1-5, are in the plan's §7.3.
 
 **LIVE-4 status (2026-09-29): CLOSED.** Integrated at `6da8a1f` (corpus-gate certified), tooled / documented by L4-6

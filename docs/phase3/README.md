@@ -38,8 +38,8 @@ restated in the same places. Still open: OD-14(a), OD-10(b).
 OD-2, SBS-3, SBS-4 and OD-4. Settlement stays certified for `[10, 11, 12]`; the v13 certification pass is pending
 ([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)). The owner's 2026-10-04 rulings 1-5 (only
 enough, Brown continuation and intervening actions, M&H accounting, duplicate legs, exact private-funding relevance) are
-implemented there. Not deployable alone: W2-A, W2-B with the Auto-Buy correction, a v13-reconciled W2-G, the safe
-integration reconciliation, the dedicated settlement certification, drained v12 rooms and the final owner gate.
+implemented there. Still required before deployment: W2-B with the Auto-Buy correction, a v13-reconciled W2-G, the dedicated
+settlement certification, drained v12 rooms and the final owner gate (W2-A and the safe integration reconciliation are done).
 
 ## Check
 

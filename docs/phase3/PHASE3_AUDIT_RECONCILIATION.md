@@ -104,9 +104,9 @@ Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments on
 | W1-M | COMPLETE — L2 `6f42dca` |
 | W1-N | COMPLETE — L7 `9d9376b` + review fixes `06c3a91`; the OD-12 RED R2 call-site deletion `87d63c4` (+ comment follow-up `819a204`); tie-aware game-over strip at the integration (`8dc79e0`) |
 | W1-O | COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`) |
-| W3-K | PARTIAL — rules v13 implemented on `phase3/w3-k-rules-v13` (branch only, not integrated): OD-2, SBS-3, SBS-4, OD-4, with the owner's 2026-10-04 rulings 1-5 and the four review findings; live list [13]; settlement certification for 13 PENDING A DEDICATED PASS (literal stays [10, 11, 12]; `V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). NOT DEPLOYABLE ALONE: needs W2-A, W2-B + the Auto-Buy correction, W2-G v13 reconciliation, the safe integration reconciliation, the dedicated settlement certification, pinned v12 rooms drained and the final integrated owner gate |
+| W3-K | PARTIAL — ledger state only: W3-K's own work is ACCEPTED as COMPLETE (owner, 2026-10-04) and INTEGRATED; the shared row AUD-03.04 (SBS-1 / SBS-2) closes only with W2-B's one-click "Pass Turn" control. ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. RULES_ENGINE_VERSION 13; live list [13]; settlement-certified literal UNCHANGED [10, 11, 12]; v13 settlement certification PENDING A DEDICATED PASS (`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). Not deployable until W2-B, a v13-reconciled W2-G, the v13 settlement certification, drained v12 rooms and the final integrated owner gate |
 
-**W2-A, W2-B and W2-F are not complete** (nor started); **W3-K is PARTIAL** (rules landed on its branch; settlement certification pending; see "W3-K status" below). Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
+*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, kept PARTIAL in the ledger only for AUD-03.04 ("Wave-2A v13 integration status"); W2-B and W2-F are NOT STARTED, UNLOCKED; settlement certification for 13 is pending. Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
 `OPEN`, `NOT STARTED`, `RULED`, `NEEDS PRECISE REPRODUCTION / CLARIFICATION`) is the `status` field of its JSON row; the
 checker verifies that a COMPLETE slice has no unimplemented A/B row and that each status agrees with its disposition.
 
@@ -185,9 +185,18 @@ phase65bShellWiring.test.ts) the result is Wave-2A plus exactly W3-K's own delta
 accepted, not integrated). W2-C, W2-D and W2-F remain **UNLOCKED**. Not deployable until W2-B, the v13-reconciled W2-G, the v13 settlement
 certification, drained v12 rooms and the final integrated owner gate.
 
+**Independent verification (2026-10-04, separate session, nothing pushed):** the merge was rebuilt from `96ccb22` + `be1fd10` and its
+code tree equals `ed5e69a`; the development-corpus closures were run WITH the owner's 13 gitignored corpus files (the canonical 18-file
+corpus: 10 files, 206/206). **Residue recorded, not fixed (no code here):** (R1, W2-G / W2-C) on a revision-2 board the train panel's
+Propose stays live after the trade window closes (`fundedTradeRefusal` refuses it; `dockHold.proposeTrainPurchase` asks only the hold,
+which lets `ProposeTrainPurchase` through) — W2-A's funding-hold matrix runs only at revision 0; (R2, inherited from W3-K, owner placement)
+the post-game statistics (`gameHistory.ts`) count `SellStock` only, so `EmergencySellPortfolio` legs and the automatic liquidation are not
+seen, and the president's emergency contribution is booked by the `EmergencyBuyHardware` actor, which on the derived path can be another
+seat.
+
 ## W3-K status (rules v13, 2026-10-03)
 
-**Branch** `phase3/w3-k-rules-v13` from `phase3/wave1-integration` @ `4e51cff`. Branch only; not integrated; not merged to main.
+**Branch** `phase3/w3-k-rules-v13` from `phase3/wave1-integration` @ `4e51cff`; not merged to main. *(Written as branch-only; since 2026-10-04 ACCEPTED and INTEGRATED on `phase3/wave2a-v13-integration` — see "Wave-2A v13 integration status" above.)*
 
 - **Resolved and implemented (rules revision 2):** OD-2 (one `PassTurn` ends a Stock Round turn), SBS-3 and SBS-4 (the
   official Brown Bank Pool continuation), OD-4 (automatic emergency funding: `EmergencySellPortfolio`, `ForgoTrainTrade`,
@@ -200,9 +209,9 @@ certification, drained v12 rooms and the final integrated owner gate.
   Review findings fixed: bankruptcy narration, no-server derived purchase, Rules Reference copy, changelog wording.
 - **Versions:** `RULES_ENGINE_VERSION` 13; live list `[13]`; settlement literal `[10, 11, 12]` — v13 certification PENDING
   ([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)).
-- **Not deployable alone.** Still required before deployment: W2-A; W2-B with the Auto-Buy correction; W2-G reconciled to
-  the v13 UI authority; the safe integration reconciliation; the dedicated v13 settlement certification; pinned v12
-  rooms drained; the final integrated owner gate.
+- **Not deployable alone.** Still required before deployment: W2-B with the Auto-Buy correction; W2-G reconciled to
+  the v13 UI authority; the dedicated v13 settlement certification; pinned v12 rooms drained; the final integrated owner
+  gate. (W2-A and the safe integration reconciliation are done on `phase3/wave2a-v13-integration`.)
 
 ## Scope and closing remark
 

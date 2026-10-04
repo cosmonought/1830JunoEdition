@@ -442,7 +442,8 @@
    "disp": "A",
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-J `b328e53` (its own OD-12 RED R2 commit: the sold-out rise's Activity Log line reads the marks the reducer was handed, `handedBoard.market_positions`, instead of the market mirror the dispatch had already advanced to the risen board), not integrated"
   },
   {
    "key": "AUD-03.09",
@@ -453,9 +454,10 @@
    "src": "CONFIRMED — `utils/actionLog.ts`:470-486; `gameEngine/sandboxSession.ts`:7522.",
    "slice": "W2-J",
    "disp": "A",
-   "od": "OD-8",
+   "od": "OD-8 (RULED 2026-10-04, Option A: split float/capitalisation narration from the later home-station placement)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-J `8a448d2` + review fixes `99b5651` (OD-8 Option A: `describeFloat` says \"<CORP> has floated. It received $<AMOUNT>.\" on the is_floated false -> true transition -- the purchase that floats it -- with the capital on the settled board; the PlaceHomeStation sentence says only \"<CORP> placed its home station on <HEX>.\" at the first operating turn; the combined #1343 line is gone; copy only), not integrated"
   },
   {
    "key": "AUD-03.10",
@@ -1112,7 +1114,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-J `464dfbe` + review fix `5f5ddd2` (`describeGameplayAction` appends a presidency-change sentence when the settled board crowns a different president than the before board -- read, not re-decided; a first president is not a change -- naming §5.4's clockwise tie-break from the outgoing president when another holder ends level with the new one), not integrated"
   },
   {
    "key": "AUD-10.02",
@@ -4588,6 +4591,18 @@
     "AUD-01.07 closes as an explicit product decision: DECIDED / IMPLEMENTED — opaque game_id intentionally not displayed."
    ],
    "effect": "OD-6: RESOLVED — game_id remains undisplayed; Rules Reference diagnostic line shows Build ID + authoritative rules version. Implemented by W2-I (`c17e844`); AUD-01.07 C → B, IMPLEMENTED. Not integrated. INTEGRATED on `phase3/wave3-i-w2i-v13cert-integration` (merge `78f9164`)."
+  },
+  "OD-8": {
+   "title": "FLOAT NARRATION (W2-J)",
+   "date": "2026-10-04",
+   "ruling": [
+    "OPTION A. The narration must follow the actual event timing.",
+    "At the share purchase that causes the corporation to float, log: \"<CORP> has floated. It received $<AMOUNT>.\"",
+    "At the corporation's later first operating turn, when its home station is actually placed, log: \"<CORP> placed its home station on <HEX>.\"",
+    "Do NOT keep the current combined delayed line.",
+    "Reason: the float and capitalization occur at the purchase, while home-station placement now occurs later; narration should report each event when it actually happens."
+   ],
+   "effect": "OD-8: RULED — split float/capitalisation narration from later home-station placement. Implemented by W2-J (`8a448d2`, review fixes `99b5651`); AUD-03.09 IMPLEMENTED. Copy only. Not integrated."
   }
  },
  "wave1_integration": {
@@ -4690,7 +4705,7 @@
   "W2-G": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave2-bcg-v13cert-integration` (2026-10-04, merge `b84247f` of `phase3/w2-g-v13-emergency-ui` @ `17ab21f`, its 3 commits carried unchanged): the accepted W2-G UI (`695afe9`) reconciled to the integrated v13 emergency authority (`112fa71` + review fixes `02d73b8`). The surface presents `emergencyFundingFor(...).automatic`: the open trade window with `ForgoTrainTrade` (never reopened), ONE `EmergencySellPortfolio` judged by `emergencyPortfolioRefusal`, private funding only while exactly relevant with `ForgoPrivateFunding`, the automatic purchase as a status (no Buy) and the automatic bankruptcy (no `DeclareBankruptcy` anywhere); obligated president only (OD-1), everybody else W2-H's waiting surface; non-dismissible (OD-4); latched. Residue kept as a later bar pass: the now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel` (W2-A's bar test feeds them)",
   "W2-H": "COMPLETE — `phase3/w2-waiting-prompts` `3b7f23b`, `5cc5ccc`, `461d4f0`; integrated at the safe Wave-2 integration (`66977d5`). K-21's second half (the President's Skip while placing) stays W2-A's",
   "W2-I": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-v13cert-integration` (2026-10-04, merge `78f9164` of `phase3/w2-i-status-visibility` @ `60146da`, parents `7a9b16b` / `60146da`, its 3 commits carried unchanged): code `c17e844` + review fix `a18bac4` + tracking `60146da` (from `phase3/wave3-i-v13cert-integration` @ `7a9b16b`). OD-6 RULED (owner Option A, 2026-10-04, re-accepted at integration): game_id remains undisplayed; the Rules Reference diagnostic line shows Build ID + authoritative rules version. AUD-01.07 (C → B, DECIDED), AUD-02.08, AUD-11.03 IMPLEMENTED and INTEGRATED. App regions R-ROOMSTRIP (the delayed-auction chip) and R-RRMOUNT (`gameOver`, `rulesEngineVersion`) only. Presentation only: no engine, server, contract, rules-version or settlement change",
-  "W2-J": "NOT STARTED",
+  "W2-J": "COMPLETE — slice branch `phase3/w2-j-narration` `b328e53` (K-18, its own OD-12 RED R2 commit) + `464dfbe` (K-20) + review fix `5f5ddd2` + `8a448d2` (K-22) + review fixes `99b5651` (from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530`); NOT integrated (integration and owner broad gate pending). AUD-03.08 (K-18), AUD-10.01 (K-20), AUD-03.09 (K-22) IMPLEMENTED. OD-8 RULED 2026-10-04 (Option A). OD-7 ruled copy-only and already landed (W1-L, `ca73834`); OD-12 followed: one RED R2 edit (`soldOutRises`' resolver), its own commit, no neighbouring change. Narration only: no reducer, float/capitalisation/home-placement mechanics, rules-version or settlement change",
   "W2-K": "PARTIAL — `phase3/w2-money-copy` `e223f64` (exact SHA verified), integrated at the safe Wave-2 integration (`fb4eee5`): U-44 timestamps per OD-9(a) and the OD-14(i) bounded money-panel pass are done; the official Keplr logo is ASSET PENDING (OD-9(b), AUD-18.05)",
   "W2-L": "COMPLETE — `phase3/w2-postgame-statistics` `e16aa5a` (derived history only); integrated at the safe Wave-2 integration (`615e183`). AUD-12.07 stays owner-gated (\"traded\" kept); S10-21's non-UR remainder stays open",
   "W2-M": "NOT STARTED",

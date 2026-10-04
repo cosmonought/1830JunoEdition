@@ -174,7 +174,7 @@ describe("an action states its own treasury movement", () => {
     expect(sentenceStatesTreasury({ DeclareDividends: {} } as never)).toBe(true);
     expect(sentenceStatesTreasury({ PassTurn: {} } as never)).toBe(false);
     /* #1343: `BuyStock` moved to TRUE. The only treasury a share purchase moves is the float's capitalisation,
-       and the float's one line -- at the home placement, or `describeFloat` for a herald home -- states it. */
+       and the float's one line -- `describeFloat`, at the purchase that floats it (Phase 3 W2-J, OD-8) -- states it. */
     expect(sentenceStatesTreasury({ BuyStock: {} } as never)).toBe(true);
     expect(sentenceStatesTreasury({ PassTurn: {} } as never)).toBe(false);
   });

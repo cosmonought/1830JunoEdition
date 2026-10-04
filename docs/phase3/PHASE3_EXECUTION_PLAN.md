@@ -742,7 +742,7 @@ gates.
   A finding is fixed (W3-J), proven obsolete, or ruled by the owner. **Deferral to "polish" is not a disposition** (Part F).
 - **Starts:** in L6 after W3-C, or earlier whenever L6 is idle once wave 1 is integrated (read-mostly; its only writes are
   docs). **Gates:** owner review of the findings.
-- **Status (2026-10-04):** COMPLETE — OWNER REVIEW REQUIRED. Audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `c0a44d7`). AUD-00.01 and AUD-22.01 done; findings AUD-25.01 … AUD-25.15 (Part C U-46 … U-55) filed with dispositions: W3-B AUD-25.01 (MEDIUM); W3-J AUD-25.02 (MEDIUM), 25.03–25.10, 25.12; W3-F AUD-25.14, 25.15; owner review AUD-25.11, 25.13, 25.15. Report: `claude/PHASE3_W3G_UI_PARITY_AUDIT_*`.
+- **Status (2026-10-04):** COMPLETE — OWNER REVIEW ACCEPTED (an accepted audit gate, not a product slice). Audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `c0a44d7`; audit `e86a933` + owner-review tracking). AUD-00.01 and AUD-22.01 done; findings AUD-25.01 … AUD-25.15 (Part C U-46 … U-55) accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b; rooms require the game server; no remediation slice); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE; no "polish later"); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed in §7.3). OPEN obligations: W3-B AUD-25.01 (MEDIUM); W3-J AUD-25.02 (MEDIUM), 25.03–25.10, 25.12 and AUD-25.13's FIX items; W3-F AUD-25.14. W3-J is unblocked. Reports: `claude/PHASE3_W3G_UI_PARITY_AUDIT_*`, `claude/PHASE3_W3G_OWNER_REVIEW_*`.
 
 #### W3-H
 **Flourish OPEN residuals and audio** · L4 · **5–8 h** · *new*
@@ -791,7 +791,7 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 | **OD-0** | PRODUCT (base) | **PHASE-3 BASE PIN.** At kickoff the integrator pins the FINAL canonical integrated post-Phase-2 head and confirms: no unique local frontend work exists outside it; the Phase-3 planning facts still apply; any drift is reconciled before P0. **No implementation starts before this pin.** | Planning snapshot only (`8e897f9`) | everything | No |
 | **OD-1** | PRODUCT · PLAYTEST-INFORMED | **RULED 2026-10-03 — see §7.3.** **The waiting model.** While a hold stands or another seat must act: (a) every control greyed with the hold's sentence, board and tabs usable; or (b) the bar replaced by one "Waiting on X" strip. For the home-station and auction prompts, non-actors get a banner or a read-only card (with a focus target). Also: which seats see the emergency modal | Full-screen scrims for everyone; the OR bar ignores holds; four prompts print their own waiting sentence | W2-A, W2-F, W2-H, W2-G | No (re-tunable after Phase 4) |
 | **OD-2** | RULES confirmation (+ PRESENTATION detail) | **RULED 2026-10-03 — see §7.3.** The audit fixes the target: one Pass / End Turn control. Open: **restate the recorded OD-A-2 and OD-A-4 rulings.** The 6.5-B report says they were "recorded, not implemented", but their text is in neither the repository nor the Project docs. OD-A-2: should a Stock Round Pass always end the turn (a v13 rules change, W3-K), or does the one control send the two `PassTurn`s under v12? OD-A-4: may a Brown IPO first purchase open the Pool continuation (SBS-4)? | Two Passes end a no-buy turn; stage buttons only switch tabs | W2-B; W3-K items SBS-2/SBS-4 | No |
-| **OD-3** | PRESENTATION (+ engine scope) | M&H queued request: toast + a persistent table marker + "requested" / "executed" lines; on cancellation, a generic "expired", or authorize engine work (v13, W3-K) to carry the reason | Narrated as executed; no reader of `pending_mh_exchange` | W2-E | No |
+| **OD-3** | PRESENTATION (+ engine scope) | **RULED 2026-10-04 (transcribed at the W3-G owner review: generic expiry; no forensic engine reason) — see §7.3.** M&H queued request: toast + a persistent table marker + "requested" / "executed" lines; on cancellation, a generic "expired", or authorize engine work (v13, W3-K) to carry the reason | Narrated as executed; no reader of `pending_mh_exchange` | W2-E | No |
 | **OD-4** | PRODUCT | **RULED 2026-10-03 — see §7.3.** Emergency modal: Back/close while a decision remains? Non-presidents see a read-only liquidation, or nothing? | Cannot close; every seat sees "Declare bankruptcy" | W2-G | No |
 | **OD-5** | PRESENTATION · PLAYTEST-INFORMED | Notices: persist one-shot notices per game, or derive them from state for late joiners; the focus target and chaining order for forced notices; the tutorial re-arm policy (once per profile? per new game?) | PhaseThree / PrivateRevenue / Herald lost on reload; FleetLoss replays history in a fresh tab; tutorials re-arm on every zero-state mount | W3-A | No; Phase 4 may re-tune |
 | **OD-6** | PRODUCT | **RULED 2026-10-04 (Option A: game_id stays undisplayed; build id + rules version on the Rules Reference build line) — see §7.3.** Show the game id (LIVE-2 §7.2 says never)? Where do the build id and rules version appear? | Room code only on hosted tables; stale build note; version only in error text | W2-I (that part) | No |
@@ -801,8 +801,8 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 | **OD-10** | RULES / PRODUCT | **RULED 2026-10-03 — see §7.3.** (a) Is a v13 rules batch allowed inside Phase 3 (W3-K), or are all rules items owner-placed after Phase 4? (b) Are phone-width game layout, zoom-aware breakpoints and keyboard map access Phase-3 targets, Phase-4 observations only, or Phase-5 work? | v12; no game-shell breakpoints; the map is mouse-only | W3-K; AUD-16.05, AUD-16.09 | (a) No. (b) Partly |
 | **OD-11** | PRODUCT · PLAYTEST-INFORMED | **RULED 2026-10-03 (build: manual route only) — see §7.3.** K-06 city bypass: build in Phase 3 (which hexes, which gesture, how it meets the shortfall refusal) or place it later | No voluntary control; bypass is sent automatically where forced | W3-E | Partly |
 | **OD-12** | PRODUCT (engineering scope) | **RULED 2026-10-03 — see §7.3.** **RED-region permission.** May named Phase-3 fixes edit the RED regions (submit half, apply half, OR verdict, link drain), each as one separately reviewed commit naming its exact lines? Candidates: K-18 (R2), the banner/refusal model and refusal rollbacks (R1, R5), the `press:true` latch (R1), K-24's call site (R2), A-19 if the audio-side fix is not enough (R2), the FleetLoss prune if the store fix is not enough (R4), the queued-state read if it cannot be done outside the drain (R5). A refusal places each named item later (E) — it does not silently drop it | The draft deferred all of these to Phase 4 without a ruling | W2-J, W3-B, W3-C, W3-I, W1-N, W3-A, W3-H | No |
-| **OD-13** | PRESENTATION (derived statistics) | Ratify or amend the candidate resolutions for U-41 and U-43 (1)–(4). Each changes standard-game post-game statistics | Recorded in Part C as candidates "NOT ratified" | W2-L | No |
-| **OD-14** | PRESENTATION | Owner calls the audit names: (a) U-16 — move the step panels back into the bar, or keep; (b) U-7 — extend the card wash to the cash slide-out and payout modal; (c) U-8 — seven-seat palette; (d) GR-3 — keep "traded" for a first-Diesel trade-in or restore "rusted"; (e) the waiting room's extra description line; (f) VF G-1 — a phase-flip cue (which asset); (g) VF G-7 — close as designed or replay; (h) VF I-10 / J-6 — build the static badge icons now; (i) the money panel's styling (a Part C U-44 note, beyond the audit) | Each recorded as open or "owner to say" | W1-I(-b), W3-H, W1-L, W2-K, W2-L | (a)(f) partly |
+| **OD-13** | PRESENTATION (derived statistics) | **RULED 2026-10-04 (transcribed at the W3-G owner review: W2-L's corrections approved as implemented) — see §7.3.** Ratify or amend the candidate resolutions for U-41 and U-43 (1)–(4). Each changes standard-game post-game statistics | Recorded in Part C as candidates "NOT ratified" | W2-L | No |
+| **OD-14** | PRESENTATION | **(d) and (i) RULED 2026-10-04 (transcribed at the W3-G owner review: keep "traded"; a bounded money-panel consistency pass) — see §7.3; (a)–(c), (e)–(h) open.** Owner calls the audit names: (a) U-16 — move the step panels back into the bar, or keep; (b) U-7 — extend the card wash to the cash slide-out and payout modal; (c) U-8 — seven-seat palette; (d) GR-3 — keep "traded" for a first-Diesel trade-in or restore "rusted"; (e) the waiting room's extra description line; (f) VF G-1 — a phase-flip cue (which asset); (g) VF G-7 — close as designed or replay; (h) VF I-10 / J-6 — build the static badge icons now; (i) the money panel's styling (a Part C U-44 note, beyond the audit) | Each recorded as open or "owner to say" | W1-I(-b), W3-H, W1-L, W2-K, W2-L | (a)(f) partly |
 | **OD-15** | PRESENTATION (modal infrastructure) | (a) The intro overlay's scale contract; (b) is the portal / inert layer still needed (and if so, inert behind every modal)? | `zoom: 1 / uiScale` on an `aria-modal` div; `ModalPortal` disowns inert | W3-D | No |
 | **OD-16** | PRODUCT (owner-authored) | The Terms page content (S10-12), required before the first real deposit | None | W2-M (hosting) | No |
 | **OD-17** | RULES | **RULED 2026-10-03 — see §7.3.** Tile-upgrade legality cross-references: VF D-18 (New York #54→#883 offered, #62→#883 not) and VF D-22 (#59 → brown OO facings that break fixed OO; 256 accepted transitions) | The placement filter accepts them | W3-K | No |
@@ -896,12 +896,27 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - AUD-01.07 closes as an explicit product decision: DECIDED / IMPLEMENTED — opaque game_id intentionally not displayed.
 - *Effect on this plan:* OD-6: RESOLVED — game_id remains undisplayed; Rules Reference diagnostic line shows Build ID + authoritative rules version. Implemented by W2-I (`c17e844`); AUD-01.07 C → B, IMPLEMENTED. Integrated on `phase3/wave3-i-w2i-v13cert-integration` (merge `78f9164`).
 
+**OD-3 — M&H QUEUED REQUEST CANCELLATION (W2-E).** (Transcribed 2026-10-04 at the W3-G owner review, AUD-25.15; applied by W2-E.)
+- Generic expiry is sufficient for the M&H queued request.
+- No forensic engine reason is required.
+- *Effect on this plan:* OD-3: RULED — W2-E's generic "expired" line (`4f998b8`) stands; no engine work. AUD-10.03 and AUD-10.06 stay IMPLEMENTED.
+
+**OD-13 — DERIVED POST-GAME STATISTICS (W2-L).** (Transcribed 2026-10-04 at the W3-G owner review, AUD-25.15; applied by W2-L.)
+- Derived-statistics corrections are approved as implemented by W2-L: train discard; Salvager; refused runs; RunManualRoute; Cowboy fixes.
+- *Effect on this plan:* OD-13: RULED — U-41 and U-43 (1)–(4) ratified as implemented (`e16aa5a`). AUD-12.02 and AUD-12.03 stay IMPLEMENTED.
+
+**OD-14 — PRESENTATION CALLS, (d) AND (i).** (Transcribed 2026-10-04 at the W3-G owner review, AUD-25.15; (d) applied by W2-L, (i) by W2-K.)
+- (d) For the first-Diesel trade-in presentation, keep the label: "traded". Earlier 4-trains rusted by the phase event remain rusted.
+- (i) Phase 3 gets a bounded money-panel consistency pass. The goal is to make the money panel visually belong to the rest of the game and stop there.
+- (i) W2-K / W2-M may extend the established styling while touching money UI, but this is NOT permission for a money-panel redesign or broader frontend refactor.
+- *Effect on this plan:* OD-14(d) and OD-14(i): RULED. AUD-12.07 RULED ("traded" kept; no change). (i) bounds W2-K's panel pass and any W2-M money-UI styling. OD-14(a)–(c) and (e)–(h) remain open.
+
 *Also from that brief (constraints on integrated slices, not new rulings):* W2-H keeps the Routes/Dividends informational
 visibility for non-active players (home/auction actors get controls, others a status) — this is OD-1's viewer scope for those two
 prompts, now implemented (`66977d5`). W2-E preserves W1-C's explicit IPO-vs-Bank-Pool choice with no substitution, and its marker / log /
 RR-6 read `pending_mh_exchange`. W2-L is derived history only (no reducer / replay / settlement / rules-version change). OD-3 (W2-E),
-OD-13 and OD-14(d) (W2-L) and OD-14(i) (W2-K's panel pass) were applied by those slices as the owner gave them; their text is not in the brief and is not transcribed
-here. W2-G is implemented but held for the OD-4 v13 work. The tutorial architecture remains later spotlight / whitebox work.
+OD-13 and OD-14(d) (W2-L) and OD-14(i) (W2-K's panel pass) were applied by those slices as the owner gave them; their text was not in that brief. It is
+transcribed above, from the W3-G owner-review brief (2026-10-04; AUD-25.15). W2-G is implemented but held for the OD-4 v13 work. The tutorial architecture remains later spotlight / whitebox work.
 
 *OD-4, OD-10 and OD-17 below are restated from the owner's W3-K rules-v13 brief (2026-10-03).*
 
@@ -938,7 +953,7 @@ here. W2-G is implemented but held for the OD-4 v13 work. The tutorial architect
 - No engine change.
 - *Effect on this plan:* VF/D-18 and VF/D-22 stay C (the ledger still lists them OPEN) with status RULED — no change; the ledger and comment cleanup is a docs task (closure contract item 12).
 
-Still open from wave 1: **OD-14(a)** (W1-I). Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
+Still open from wave 1: **OD-14(a)** (W1-I). (OD-14(d) and (i) are RULED above, 2026-10-04.) Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
 
 ---
 

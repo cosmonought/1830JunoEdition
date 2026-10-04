@@ -1377,7 +1377,7 @@
    "od": "OD-14(d)",
    "p4": "—",
    "notes": "—",
-   "status": "OPEN — W2-L keeps \"traded\" for the first Diesel's trade-in (OD-14(d) as the owner gave it to that slice); no label change; OD-14(d)'s text is not yet transcribed in the plan's §7.3"
+   "status": "RULED — OD-14(d) transcribed 2026-10-04: keep \"traded\" for the first-Diesel trade-in; earlier 4-trains rusted by the phase event remain rusted. No label change (W2-L already presents \"traded\")."
   },
   {
    "key": "AUD-13.01",
@@ -2211,7 +2211,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Cross-slice (W3-I x #1173 latch x W2-G). Remedy: one derived busy reason, e.g. `actionInFlight = pendingAppendIndex !== null || linkQueue.unsettled > 0`, read by every control including the emergency modal; also resolves the two disagreeing busy lines (AUD-25.10)."
+   "notes": "Cross-slice (W3-I x #1173 latch x W2-G). Remedy: one derived busy reason, e.g. `actionInFlight = pendingAppendIndex !== null || linkQueue.unsettled > 0`, read by every control including the emergency modal; also resolves the two disagreeing busy lines (AUD-25.10).",
+   "status": "OPEN — W3-B remediation obligation (MEDIUM; W3-G owner review accepted 2026-10-04); not implemented"
   },
   {
    "key": "AUD-25.02",
@@ -2224,7 +2225,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "S6-7 parity: the board path is correct (glow, click refusal, hex markers); only the copy contradicts it. Copy-only fix."
+   "notes": "S6-7 parity: the board path is correct (glow, click refusal, hex markers); only the copy contradicts it. Copy-only fix.",
+   "status": "OPEN — W3-J remediation obligation (MEDIUM; W3-G owner review accepted 2026-10-04); not implemented"
   },
   {
    "key": "AUD-25.03",
@@ -2341,7 +2343,8 @@
    "disp": "C",
    "od": "—",
    "p4": "—",
-   "notes": "Owner review of the W3-G findings: confirm obsolete (no-server path retired) or place it."
+   "notes": "Owner ruling (owner review of the W3-G findings, 2026-10-04): GR-1b OBSOLETE -- the no-server forced-withhold path is unreachable (rooms require the game server). AUD-25.11 = CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE; no remediation slice.",
+   "status": "RULED — CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (owner, 2026-10-04): GR-1b is obsolete; the no-server forced-withhold path is no longer part of the reachable product architecture -- rooms require the game server. No remediation slice."
   },
   {
    "key": "AUD-25.12",
@@ -2363,11 +2366,12 @@
    "cls": "[UX] W3-G finding · LOW",
    "item": "Accepted Phase-3 LOW / NIT follow-ups that hold no matrix row: scroll-to-card on the Stocks tab (W2-F); duplicate waiting presentation during an emergency-funding private offer (W2-F); the Buy Trains from a Corporation form closes on Send (W3-I); the #750 treasury diagnostic beside the float line on an M&H / C&A float (W2-J); W2-G's unpassed `onEmergencyPurchase` / `emergencyAvailable` props; `executeEmergencyLegs` fail-loud hardening; post-game statistics miss the emergency portfolio legs (R2); a weak `escrow3bAdversarial` assertion; W2-B review nit 3; W3-C's one-slot / one-line NITs, its source-pinned rollback wiring (LOW d) and the refused lay that does not reopen the errand flow.",
    "src": "NOT CODE — collected from the slice statuses, the integration records' `follow_ups` and the reconciliation sections.",
-   "slice": "—",
+   "slice": "W3-J",
    "disp": "C",
    "od": "—",
    "p4": "—",
-   "notes": "Part F: deferral to polish is not a disposition. Owner review of the W3-G findings rules each: fix in W3-J, or accept as a recorded residual. W3-C's Firestore-path LOW is unreachable (no row)."
+   "notes": "Owner ruling (owner review of the W3-G findings, 2026-10-04) applied item by item; every carried LOW / NIT has exactly one disposition (`aud_25_13_dispositions`). Not in this row because each has its own: W3-C LOWs (a) pre-send gates -> AUD-25.05, (b) resync rollback -> AUD-25.06, (c) `error` frame -> AUD-25.07; stale tracking prose -> AUD-25.14. The FIX IN W3-J items are W3-J work (disposition C kept: the row records the rulings, W3-J carries the fixes).",
+   "status": "RULED — owner, 2026-10-04 (no \"polish later\"): reachable and player-visible -> FIX IN W3-J; solely test coverage with no known runtime defect -> RECORDED RESIDUAL; unreachable / obsolete -> CLOSED OBSOLETE. FIX IN W3-J (10): scroll-to-card on the Stocks tab (W2-F, deferred LOW); duplicate waiting presentation during an emergency-funding private offer (W2-F); the Buy Trains from a Corporation form closes on Send -- queued-submission form retention / retype after a drop (W3-I); the #750 treasury diagnostic beside the float line on an M&H / C&A float (W2-J); post-game statistics miss the EmergencySellPortfolio legs and the automatic liquidation (`gameHistory.ts`; R2); W3-C one-slot NIT: one connection slot, so a later connection notice (e.g. reconnecting) replaces a room-status pause notice; W3-C one-line NIT: the one-slot surfaces (waiting room, gate pages) show the refusal before, and so hide, a standing connection notice; W3-C: a refused lay restores the power / JK arm but does not reopen the errand flow; W2-D deferred: an `automatic: true` dispatch bypasses the reload \"catching up\" guard; W2-B out-of-scope note: the tutorial's \"Instead of buying shares, players can Sell...\" copy. RECORDED RESIDUAL (8): W3-C LOW (d): the App.tsx rollback wiring is source-scanned rather than handler-executed; a weak `escrow3bAdversarial` uncertified-board assertion; `executeEmergencyLegs` fail-loud hardening; W2-J K-22 harness repeats the shell's float loop instead of running App.tsx (call site source-pinned); W2-D: the composition test mirrors App's memo (ordering source-pinned); W2-F NIT: the waitingSentence prop docs name `dockHold.turnHoldReason`; W3-I NIT: variable placement in `TrainPurchasePanel`; W2-I NIT: the legacy on-chain strip's \"On-chain game #<id>\" label. OBSOLETE (4): W2-G's now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel`; W2-B review nit 3 / accepted limitation: on a legacy revision-1 board the first Pass Turn press walks that board's Sell -> Buy stage; W3-C: the no-server (Firestore) path's subscribe error is routed as a refusal; W2-B out-of-scope notes: Auto-Buy does not ask `dockHold.pass`; AutoBuyModal \"never passes for you\". Each item and its reason: `aud_25_13_dispositions`."
   },
   {
    "key": "AUD-25.14",
@@ -2393,7 +2397,8 @@
    "disp": "C",
    "od": "OD-3, OD-13, OD-14",
    "p4": "—",
-   "notes": "The owner supplies or confirms the ruling text; then AUD-12.07 can close."
+   "notes": "Transcribed at the owner review of the W3-G findings, 2026-10-04. AUD-12.07 RULED by OD-14(d) (\"traded\" kept; no change). W3-F keeps the remaining Part D bookkeeping (AUD-25.14).",
+   "status": "RULED — owner, 2026-10-04: OD-3, OD-13, OD-14(d) and OD-14(i) transcribed (`owner_rulings`; plan OD table and §7.3). Resolved for these rulings."
   },
   {
    "key": "AUD-23.01",
@@ -4820,6 +4825,33 @@
     "Reason: the float and capitalization occur at the purchase, while home-station placement now occurs later; narration should report each event when it actually happens."
    ],
    "effect": "OD-8: RULED — split float/capitalisation narration from later home-station placement. Implemented by W2-J (`8a448d2`, review fixes `99b5651`); AUD-03.09 IMPLEMENTED. Copy only. Not integrated. INTEGRATED on `phase3/wave3-i-w2i-w2j-v13cert-integration` (merge `32ead52`)."
+  },
+  "OD-3": {
+   "title": "M&H QUEUED REQUEST CANCELLATION (W2-E)",
+   "date": "2026-10-04",
+   "ruling": [
+    "Generic expiry is sufficient for the M&H queued request.",
+    "No forensic engine reason is required."
+   ],
+   "effect": "OD-3: RULED — transcribed at the W3-G owner review (2026-10-04; AUD-25.15) as applied by W2-E (`4f998b8`): the generic \"expired\" line; no engine work. AUD-10.03 and AUD-10.06 IMPLEMENTED (unchanged)."
+  },
+  "OD-13": {
+   "title": "DERIVED POST-GAME STATISTICS (W2-L)",
+   "date": "2026-10-04",
+   "ruling": [
+    "Derived-statistics corrections are approved as implemented by W2-L: train discard; Salvager; refused runs; RunManualRoute; Cowboy fixes."
+   ],
+   "effect": "OD-13: RULED — transcribed at the W3-G owner review (2026-10-04; AUD-25.15). The U-41 and U-43 (1)–(4) resolutions as implemented by W2-L (`e16aa5a`) are ratified. AUD-12.02 and AUD-12.03 IMPLEMENTED (unchanged)."
+  },
+  "OD-14": {
+   "title": "PRESENTATION CALLS — (d) AND (i) ONLY",
+   "date": "2026-10-04",
+   "ruling": [
+    "(d) For the first-Diesel trade-in presentation, keep the label: \"traded\". Earlier 4-trains rusted by the phase event remain rusted.",
+    "(i) Phase 3 gets a bounded money-panel consistency pass. The goal is to make the money panel visually belong to the rest of the game and stop there.",
+    "(i) W2-K / W2-M may extend the established styling while touching money UI, but this is NOT permission for a money-panel redesign or broader frontend refactor."
+   ],
+   "effect": "OD-14(d) and OD-14(i): RULED — transcribed at the W3-G owner review (2026-10-04; AUD-25.15). (d): AUD-12.07 RULED, no change. (i): bounds W2-K's panel pass and any W2-M money-UI styling. OD-14(a)–(c) and (e)–(h) remain OPEN."
   }
  },
  "wave1_integration": {
@@ -4932,13 +4964,13 @@
   "W3-D": "NOT STARTED",
   "W3-E": "COMPLETE — `phase3/w3-manual-city-bypass` `07454d0` + review follow-ups `6d7cfa1`; integrated at the safe Wave-2 integration (`a860178`) under OD-11",
   "W3-F": "NOT STARTED",
-  "W3-G": "COMPLETE — OWNER REVIEW REQUIRED: audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7`); no product code. AUD-00.01 and AUD-22.01 IMPLEMENTED (the audit is done); its findings are AUD-25.01 … AUD-25.15, each with a disposition (W3-B / W3-J fixes, W3-F bookkeeping, owner review). Gate (plan): owner review of the findings. Nothing in the findings blocks starting W3-J; the two MEDIUM rows (AUD-25.01, AUD-25.02) must be fixed before W3-F closes Phase 3",
+  "W3-G": "COMPLETE — OWNER REVIEW ACCEPTED (2026-10-04): audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7`; audit `e86a933`, owner-review tracking on top); no product code. An accepted audit gate, not a product slice. AUD-00.01 and AUD-22.01 IMPLEMENTED (the audit is done); findings AUD-25.01 … AUD-25.15 accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed). OPEN remediation obligations: AUD-25.01 (MEDIUM) -> W3-B, AUD-25.02 (MEDIUM) -> W3-J, AUD-25.03 … 25.10 and 25.12 -> W3-J, AUD-25.14 -> W3-F; both MEDIUM rows must be fixed before W3-F closes Phase 3. W3-J is unblocked",
   "W3-H": "NOT STARTED",
   "W3-I": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-v13cert-integration` (2026-10-04, merge `5a22e38` of `phase3/w3-i-offers` @ `92cdb5d`, parents `c3f43b7` / `92cdb5d`, its 3 commits carried unchanged): code `5c6d7f8` + review fixes `d663b1c` + tracking `92cdb5d` (from `phase3/wave2-bcgdf-v13cert-integration` @ `c3f43b7`). AUD-02.05, AUD-02.06, AUD-03.11, AUD-19.01 IMPLEMENTED. Dependencies W2-F and W2-H integrated in the base. A read-only queue accessor on the room link and one hook outside the drain (no RED region, no OD-12 edit); the par prompt and the three offer forms (Private Companies trade form, Buy Private Company, Buy Trains from a Corporation) read it. OWNER-ACCEPTED reading (2026-10-04): for AUD-03.11 / R4 a refused proposal may leave the form open with its typed values preserved so the player can correct and resend. Not taken (recorded follow-ups elsewhere, unchanged): the W2-F duplicate-waiting LOW and the two NITs. Presentation only: no engine, server, rules-version or settlement change",
   "W3-J": "NOT STARTED",
   "W3-K": "COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click \"Pass Turn\" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D / W2-F and other open slices are tracked separately)"
  },
- "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04).",
+ "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04). OD-3, OD-13, OD-14(d) and OD-14(i): transcribed from the owner's W3-G owner-review brief (2026-10-04), in its words.",
  "wave2_safe_integration": {
   "branch": "phase3/wave2-safe-integration",
   "base": "4e51cff7014632726de94f44024d66fc433b12cb (phase3/wave1-integration)",
@@ -5370,5 +5402,117 @@
    "keys": "unchanged from 7916763 / 18d4762 (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
   },
   "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C COMPLETE and INTEGRATED; no accepted slice awaits integration; not deployable until drained v12 rooms and the final integrated owner gate"
- }
+ },
+ "aud_25_13_dispositions": [
+  {
+   "item": "scroll-to-card on the Stocks tab (W2-F, deferred LOW)",
+   "disposition": "FIX IN W3-J",
+   "reason": "reachable, player-visible"
+  },
+  {
+   "item": "duplicate waiting presentation during an emergency-funding private offer (W2-F)",
+   "disposition": "FIX IN W3-J",
+   "reason": "named by the owner"
+  },
+  {
+   "item": "the Buy Trains from a Corporation form closes on Send -- queued-submission form retention / retype after a drop (W3-I)",
+   "disposition": "FIX IN W3-J",
+   "reason": "named by the owner"
+  },
+  {
+   "item": "the #750 treasury diagnostic beside the float line on an M&H / C&A float (W2-J)",
+   "disposition": "FIX IN W3-J",
+   "reason": "named by the owner (where the duplication is player-visible)"
+  },
+  {
+   "item": "post-game statistics miss the EmergencySellPortfolio legs and the automatic liquidation (`gameHistory.ts`; R2)",
+   "disposition": "FIX IN W3-J",
+   "reason": "reachable, player-visible (post-game statistics); OD-12 RED R2 edit"
+  },
+  {
+   "item": "W3-C one-slot NIT: one connection slot, so a later connection notice (e.g. reconnecting) replaces a room-status pause notice",
+   "disposition": "FIX IN W3-J",
+   "reason": "reachable, player-visible"
+  },
+  {
+   "item": "W3-C one-line NIT: the one-slot surfaces (waiting room, gate pages) show the refusal before, and so hide, a standing connection notice",
+   "disposition": "FIX IN W3-J",
+   "reason": "reachable, player-visible"
+  },
+  {
+   "item": "W3-C: a refused lay restores the power / JK arm but does not reopen the errand flow",
+   "disposition": "FIX IN W3-J",
+   "reason": "named by the owner"
+  },
+  {
+   "item": "W2-D deferred: an `automatic: true` dispatch bypasses the reload \"catching up\" guard",
+   "disposition": "FIX IN W3-J",
+   "reason": "reachable; player-visible as a refusal on a historical board; coordinate with AUD-25.03 (OD-12 RED R1)"
+  },
+  {
+   "item": "W3-C LOW (d): the App.tsx rollback wiring is source-scanned rather than handler-executed",
+   "disposition": "RECORDED RESIDUAL",
+   "reason": "named by the owner; the runtime behaviour is covered by the reducer / helper tests, and the product defects it left uncovered are their own rows (AUD-25.03, AUD-25.04)"
+  },
+  {
+   "item": "a weak `escrow3bAdversarial` uncertified-board assertion",
+   "disposition": "RECORDED RESIDUAL",
+   "reason": "test coverage only; no known runtime defect"
+  },
+  {
+   "item": "`executeEmergencyLegs` fail-loud hardening",
+   "disposition": "RECORDED RESIDUAL",
+   "reason": "defensive hardening only; no known runtime defect, not player-visible"
+  },
+  {
+   "item": "W2-J K-22 harness repeats the shell's float loop instead of running App.tsx (call site source-pinned)",
+   "disposition": "RECORDED RESIDUAL",
+   "reason": "test coverage only"
+  },
+  {
+   "item": "W2-D: the composition test mirrors App's memo (ordering source-pinned)",
+   "disposition": "RECORDED RESIDUAL",
+   "reason": "test coverage only"
+  },
+  {
+   "item": "W2-F NIT: the waitingSentence prop docs name `dockHold.turnHoldReason`",
+   "disposition": "RECORDED RESIDUAL",
+   "reason": "comment only; no runtime or player-visible effect"
+  },
+  {
+   "item": "W3-I NIT: variable placement in `TrainPurchasePanel`",
+   "disposition": "RECORDED RESIDUAL",
+   "reason": "code style only; no runtime or player-visible effect"
+  },
+  {
+   "item": "W2-I NIT: the legacy on-chain strip's \"On-chain game #<id>\" label",
+   "disposition": "RECORDED RESIDUAL",
+   "reason": "the behaviour OD-6 keeps; no defect"
+  },
+  {
+   "item": "W2-G's now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel`",
+   "disposition": "OBSOLETE",
+   "reason": "dead props: nothing passes them, so no reachable behaviour"
+  },
+  {
+   "item": "W2-B review nit 3 / accepted limitation: on a legacy revision-1 board the first Pass Turn press walks that board's Sell -> Buy stage",
+   "disposition": "OBSOLETE",
+   "reason": "reachable only as a development-corpus replay on a local server; live rules are [13]"
+  },
+  {
+   "item": "W3-C: the no-server (Firestore) path's subscribe error is routed as a refusal",
+   "disposition": "OBSOLETE",
+   "reason": "established unreachable no-server path (rooms require the game server)"
+  },
+  {
+   "item": "W2-B out-of-scope notes: Auto-Buy does not ask `dockHold.pass`; AutoBuyModal \"never passes for you\"",
+   "disposition": "OBSOLETE",
+   "reason": "superseded by the #1274 fix: Auto-Buy sends no Pass, so the hold question and the copy are moot (the copy is now accurate)"
+  },
+  {
+   "item": "W2-B out-of-scope note: the tutorial's \"Instead of buying shares, players can Sell...\" copy",
+   "disposition": "FIX IN W3-J",
+   "reason": "reachable, player-visible copy; must match the v13 sell / buy turn"
+  }
+ ]
 }

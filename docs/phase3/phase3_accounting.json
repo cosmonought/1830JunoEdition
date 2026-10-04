@@ -1494,7 +1494,7 @@
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-C support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662` (the room strip's one slot became two -- `utils/roomNotices.ts`: the link's notice WITH ITS KIND and the last refusal of this tab's own action; every clear names a kind (`clear-connection`) or the event (`submission-landed`), never a sentence; the RED R5 link callbacks name their slot and kind, the drain retires `catching-up` by kind, a divergence is a connection notice; `RoomNoticeSlots` draws both, deferring to the standing hold notice; the one-line surfaces read the refusal first), not integrated"
+   "status": "IMPLEMENTED — W3-C support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662` (the room strip's one slot became two -- `utils/roomNotices.ts`: the link's notice WITH ITS KIND and the last refusal of this tab's own action; every clear names a kind (`clear-connection`) or the event (`submission-landed`), never a sentence; the RED R5 link callbacks name their slot and kind, the drain retires `catching-up` by kind, a divergence is a connection notice; `RoomNoticeSlots` draws both, deferring to the standing hold notice; the one-line surfaces read the refusal first); INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` (merge `b32ef6e` of `3454daa`)"
   },
   {
    "key": "AUD-14.02",
@@ -3516,7 +3516,7 @@
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W3-C RED R1 `08d857b` (a landed move dispatches `submission-landed`: the refusal slot is retired whatever it said -- turn gate, server `refused`, stale, unsent -- with the catching-up / resync notices; the reconnecting, paused, build-skew, incompatible and divergence notices stand), not integrated"
+   "status": "IMPLEMENTED — W3-C RED R1 `08d857b` (a landed move dispatches `submission-landed`: the refusal slot is retired whatever it said -- turn gate, server `refused`, stale, unsent -- with the catching-up / resync notices; the reconnecting, paused, build-skew, incompatible and divergence notices stand); INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` (merge `b32ef6e` of `3454daa`)"
   },
   {
    "key": "P3-N005",
@@ -3739,7 +3739,7 @@
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "The draft deferred this to Phase 4. It is a known defect; it stays in Phase 3 behind OD-12.",
-   "status": "IMPLEMENTED — W3-C RED R1 `08d857b` (the room branch answers `allocated !== null`, the per-action signal) + `6cb86e4` (outside RED: a refused run returns before marking 'has run' and moving the step; a refused lay takes back the power key it added to the shell's fallback set and re-arms the JK -- `utils/submissionAnswer.ts`, only the room's `false` rolls back), not integrated"
+   "status": "IMPLEMENTED — W3-C RED R1 `08d857b` (the room branch answers `allocated !== null`, the per-action signal) + `6cb86e4` (outside RED: a refused run returns before marking 'has run' and moving the step; a refused lay takes back the power key it added to the shell's fallback set and re-arms the JK -- `utils/submissionAnswer.ts`, only the room's `false` rolls back); INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` (merge `b32ef6e` of `3454daa`)"
   },
   {
    "key": "P3-N021",
@@ -4714,7 +4714,7 @@
   "W2-M": "NOT STARTED",
   "W3-A": "NOT STARTED",
   "W3-B": "NOT STARTED",
-  "W3-C": "COMPLETE — slice branch `phase3/w3-c-refusal-display` support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662` (from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762`); NOT integrated (integration and owner broad gate pending). AUD-14.01, P3-N004, P3-N020 IMPLEMENTED. OD-12 followed: two RED commits, each its own and independently reviewed -- R1 (two lines: the landed-submission clear and the room branch's answer) and R5 (the server-link callbacks, the drain's catching-up clear and its divergence write; the latter two sit in R5 outside the plan's line range and are named by AUD-14.01's own source). Dependencies W2-J and W1-H integrated in the base. Recorded follow-ups (LOW): the client's own pre-send gates (turn, catching-up, link-down) answer `undefined` and roll nothing back (needs further R1 lines); a resync can settle a landed move null and roll back its shell state (the board stays authoritative); an `error` frame answering a submission is shown as a `transport` connection notice and is not retired by a landed move (unchanged from before); the App wiring of the rollbacks is source-pinned. Presentation only: no engine, server, rules-version or settlement change",
+  "W3-C": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` (2026-10-04, merge `b32ef6e` of `phase3/w3-c-refusal-display` @ `3454daa`, parents `18d4762` / `3454daa`, its 7 commits carried unchanged). slice branch `phase3/w3-c-refusal-display` support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662` (from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762`). AUD-14.01, P3-N004, P3-N020 IMPLEMENTED. OD-12 followed: two RED commits, each its own and independently reviewed -- R1 (two lines: the landed-submission clear and the room branch's answer) and R5 (the server-link callbacks, the drain's catching-up clear and its divergence write; the latter two sit in R5 outside the plan's line range and are named by AUD-14.01's own source). Dependencies W2-J and W1-H integrated in the base. Recorded follow-ups (LOW): the client's own pre-send gates (turn, catching-up, link-down) answer `undefined` and roll nothing back (needs further R1 lines); a resync can settle a landed move null and roll back its shell state (the board stays authoritative); an `error` frame answering a submission is shown as a `transport` connection notice and is not retired by a landed move (unchanged from before); the App wiring of the rollbacks is source-pinned. Presentation only: no engine, server, rules-version or settlement change",
   "W3-D": "NOT STARTED",
   "W3-E": "COMPLETE — `phase3/w3-manual-city-bypass` `07454d0` + review follow-ups `6d7cfa1`; integrated at the safe Wave-2 integration (`a860178`) under OD-11",
   "W3-F": "NOT STARTED",
@@ -5082,7 +5082,7 @@
  "wave3_i_w2i_w2j_v13cert_integration": {
   "branch": "phase3/wave3-i-w2i-w2j-v13cert-integration",
   "base": "c7745306d49854ceb5e09e9f4173a9f8e586dd12 (phase3/wave3-i-w2i-v13cert-integration)",
-  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I and W2-J integrated; no broad Phase-3 owner gate has been run; not merged to main",
+  "status": "SUPERSEDED AS BASELINE by `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` (2026-10-04, W3-C added); otherwise as recorded: PROVISIONAL — was the Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I and W2-J integrated; no broad Phase-3 owner gate has been run; not merged to main",
   "inputs": {
    "W2-J": {
     "branch": "phase3/w2-j-narration",
@@ -5116,5 +5116,45 @@
    "keys": "unchanged from 7916763 / c774530 (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
   },
   "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F, W3-I, W2-I and W2-J COMPLETE and INTEGRATED; no accepted slice awaits integration; not deployable until drained v12 rooms and the final integrated owner gate"
+ },
+ "wave3_i_w2i_w2j_w3c_v13cert_integration": {
+  "branch": "phase3/wave3-i-w2i-w2j-w3c-v13cert-integration",
+  "base": "18d4762083425deb23c46f7d2b1886b99deb616f (phase3/wave3-i-w2i-w2j-v13cert-integration)",
+  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C integrated; no broad Phase-3 owner gate has been run; not merged to main",
+  "inputs": {
+   "W3-C": {
+    "branch": "phase3/w3-c-refusal-display",
+    "head": "3454daa4bc9153d070ed48664e06c4d4cb6a2460",
+    "parent": "18d4762",
+    "merge": "b32ef6e96d2dc279c28bafac73285fe8488c09a0"
+   }
+  },
+  "method": "git merge --no-ff (first parent 18d4762, second parent 3454daa); 3c75394, bfec83c, 08d857b, 21d6b15, 6cb86e4, 6c28662, 3454daa carried unchanged (same SHAs); no squash, no rebase, no source branch moved",
+  "reconciliation": [
+   "No conflict: W3-C was 7 ahead / 0 behind 18d4762, so the merge's tree equals 3454daa's exactly. No server/, gameEngine/, contracts/, rulesVersion.ts, settlement or fixture file differs from 18d4762.",
+   "RED audit (OD-12): R1 `08d857b` is the two accepted lines inside runGameplayAction's room branch (the landed move dispatches `submission-landed`; the branch returns `allocated !== null`). R5 `21d6b15` is confined to the link-drain effect: the server-link callbacks write their slot and kind; the drain's `finally` retires `catching-up` by kind; the divergence verdict is a connection notice.",
+   "The two R5 edits outside the plan's narrower listed lines are kept: AUD-14.01's own source cites the drain `finally` exact-text clear; without the divergence edit the verdict would be routed as a refusal and cleared by the next landed move; both are inside R5 and add no unrelated behaviour.",
+   "Pre-existing meta-test failures compared on 18d4762 and on the merge: sourceGuards (1), boardInEffect (1), liveHygiene (2) -- identical output; PRE-EXISTING / NON-BLOCKING, not fixed here.",
+   "Tracking only in this record's commit: W3-C and its three rows read INTEGRATED; no other slice changed state."
+  ],
+  "follow_ups": [
+   "Accepted W3-C LOWs, unchanged: the client's own pre-send gates answer `undefined` and roll nothing back; a resync can roll back a landed move's shell state (the board stays authoritative); an `error` frame answering a submission stays as a `transport` connection notice; the rollback wiring in App.tsx is source-pinned.",
+   "Integration review LOWs, recorded (not introduced by the integration): the no-server (Firestore) path's subscribe error is routed as a refusal and cleared by the next landed move; a refused lay rolls back the power and the JK arm but not the closed errand flow (the player re-arms it).",
+   "Carried, unchanged: the W2-J treasury-diagnostic LOW, the Buy Trains from a Corporation form LOW, the W2-F duplicate-waiting LOW, the two NITs and the deferred scroll-to-card LOW."
+  ],
+  "versions": {
+   "RULES_ENGINE_VERSION": 13,
+   "SUPPORTED_RULES_ENGINE_VERSIONS": [
+    13
+   ],
+   "SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS": [
+    10,
+    11,
+    12,
+    13
+   ],
+   "keys": "unchanged from 7916763 / 18d4762 (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
+  },
+  "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C COMPLETE and INTEGRATED; no accepted slice awaits integration; not deployable until drained v12 rooms and the final integrated owner gate"
  }
 }

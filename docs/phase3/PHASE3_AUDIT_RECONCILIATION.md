@@ -104,9 +104,9 @@ Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments on
 | W1-M | COMPLETE — L2 `6f42dca` |
 | W1-N | COMPLETE — L7 `9d9376b` + review fixes `06c3a91`; the OD-12 RED R2 call-site deletion `87d63c4` (+ comment follow-up `819a204`); tie-aware game-over strip at the integration (`8dc79e0`) |
 | W1-O | COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`) |
-| W3-K | COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click "Pass Turn" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D since integrated on `phase3/wave2-bcgd-v13cert-integration`, merge `4072fd0`; W2-F since integrated on `phase3/wave2-bcgdf-v13cert-integration`, merge `dfe6d13`; W3-I since integrated on `phase3/wave3-i-v13cert-integration`, merge `5a22e38`; W2-I since integrated on `phase3/wave3-i-w2i-v13cert-integration`, merge `78f9164`; W2-J since integrated on `phase3/wave3-i-w2i-w2j-v13cert-integration`, merge `32ead52`; other open slices are tracked separately) |
+| W3-K | COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click "Pass Turn" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D since integrated on `phase3/wave2-bcgd-v13cert-integration`, merge `4072fd0`; W2-F since integrated on `phase3/wave2-bcgdf-v13cert-integration`, merge `dfe6d13`; W3-I since integrated on `phase3/wave3-i-v13cert-integration`, merge `5a22e38`; W2-I since integrated on `phase3/wave3-i-w2i-v13cert-integration`, merge `78f9164`; W2-J since integrated on `phase3/wave3-i-w2i-w2j-v13cert-integration`, merge `32ead52`; W3-C since integrated on `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration`, merge `b32ef6e`; other open slices are tracked separately) |
 
-*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, its ledger PARTIAL lifted with W2-B; W2-B, W2-C, W2-G and the v13 settlement certification are COMPLETE and integrated ("Wave-2 B+C+G + v13 certification integration status"); W2-D is COMPLETE and integrated ("Wave-2 B+C+G+D integration status"); W2-F is COMPLETE and integrated ("Wave-2 B+C+G+D+F integration status"); W3-I is COMPLETE and integrated ("W3-I integration status"); W2-I is COMPLETE and integrated ("W2-I integration status"); W2-J is COMPLETE and integrated ("W2-J integration status"). Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
+*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, its ledger PARTIAL lifted with W2-B; W2-B, W2-C, W2-G and the v13 settlement certification are COMPLETE and integrated ("Wave-2 B+C+G + v13 certification integration status"); W2-D is COMPLETE and integrated ("Wave-2 B+C+G+D integration status"); W2-F is COMPLETE and integrated ("Wave-2 B+C+G+D+F integration status"); W3-I is COMPLETE and integrated ("W3-I integration status"); W2-I is COMPLETE and integrated ("W2-I integration status"); W2-J is COMPLETE and integrated ("W2-J integration status"); W3-C is COMPLETE and integrated ("W3-C integration status"). Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
 `OPEN`, `NOT STARTED`, `RULED`, `NEEDS PRECISE REPRODUCTION / CLARIFICATION`) is the `status` field of its JSON row; the
 checker verifies that a COMPLETE slice has no unimplemented A/B row and that each status agrees with its disposition.
 
@@ -508,7 +508,8 @@ branch-only; since 2026-10-04 ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j
 
 ## W2-J integration status (2026-10-04)
 
-**Branch** `phase3/wave3-i-w2i-w2j-v13cert-integration` from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530` — **the current provisional Phase-3
+**Branch** `phase3/wave3-i-w2i-w2j-v13cert-integration` from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530` — *(superseded as baseline by
+`phase3/wave3-i-w2i-w2j-w3c-v13cert-integration`, below)* **the provisional Phase-3
 integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** The accepted W2-J slice
 (`phase3/w2-j-narration` @ `0b33f69`) merged `--no-ff` (merge `32ead52`, parents `c774530`, `0b33f69`), its seven commits carried unchanged
 (`b328e53` K-18 RED R2, `464dfbe` K-20, `5f5ddd2` review fix, `9927fd7` interim tracking, `8a448d2` K-22, `99b5651` review fixes,
@@ -532,8 +533,9 @@ integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not
 ## W3-C slice status (2026-10-04)
 
 **Branch** `phase3/w3-c-refusal-display` @ `6c28662` from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762` (the current provisional
-baseline, unchanged). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). Dependencies W2-J
-and W1-H are integrated in the base. OD-12: two RED commits, each its own and independently reviewed.
+baseline at the time). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). *(Written as
+branch-only; since 2026-10-04 ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration`, merge `b32ef6e` — see
+"W3-C integration status" below.)* Dependencies W2-J and W1-H are integrated in the base. OD-12: two RED commits, each its own and independently reviewed.
 
 - **AUD-14.01 — support `3c75394` (+ `bfec83c`), RED R5 `21d6b15`, `6cb86e4`:** the room strip's one error slot (~28 writers,
   exact-text clears) is two slots (`utils/roomNotices.ts`): the link's notice with its KIND (reconnecting, catching-up, resync,
@@ -554,6 +556,33 @@ and W1-H are integrated in the base. OD-12: two RED commits, each its own and in
   before); the one-line reading puts the refusal before a terminal notice.
 - **Not taken:** W3-G, W3-J, W3-F; the W2-F / W3-I / W2-I / W2-J follow-ups. Rules version and settlement unchanged. The four
   pre-existing meta-test failures are identical on `18d4762` and on this branch.
+
+## W3-C integration status (2026-10-04)
+
+**Branch** `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762` — **the current provisional
+Phase-3 integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** The accepted W3-C slice
+(`phase3/w3-c-refusal-display` @ `3454daa`) merged `--no-ff` (merge `b32ef6e`, parents `18d4762`, `3454daa`), its seven commits carried
+unchanged (`3c75394`, `bfec83c` support, `08d857b` RED R1, `21d6b15` RED R5, `6cb86e4` implementation, `6c28662` review fix, `3454daa`
+slice tracking), then this tracking commit.
+
+- **No conflict.** W3-C was 7 ahead / 0 behind `18d4762`, so the merged tree equals `3454daa`'s exactly. No `server/`, `gameEngine/`,
+  `contracts/`, `rulesVersion.ts`, settlement or fixture file differs from `18d4762`; W2-J's RED R2 edit is untouched.
+- **RED audit (OD-12).** R1 `08d857b`: the two accepted lines inside `runGameplayAction`'s room branch -- a landed move dispatches
+  `submission-landed`; the branch returns `allocated !== null`. R5 `21d6b15`: confined to the link-drain effect -- the server-link
+  callbacks write their slot and kind; the drain's `finally` retires `catching-up` by kind; the divergence verdict is a connection
+  notice. **The two R5 edits outside the plan's narrower listed lines are kept:** AUD-14.01's own source cites the `finally`
+  exact-text clear; without the divergence edit the verdict would be routed as a refusal and cleared by the next landed move; both
+  sit inside R5 and add no unrelated behaviour.
+- **Rows:** AUD-14.01, P3-N004, P3-N020 IMPLEMENTED and INTEGRATED. OD-12 remains RULED.
+- **Pre-existing meta-test failures, compared on `18d4762` and on the merge:** `sourceGuards` (1), `boardInEffect` (1), `liveHygiene` (2)
+  -- identical output. PRE-EXISTING / NON-BLOCKING; not fixed here.
+- **Versions:** `RULES_ENGINE_VERSION` 13; supported live `[13]`; settlement-certified `[10, 11, 12, 13]`; keys and fixtures unchanged.
+- **Lanes:** W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C **COMPLETE and INTEGRATED**; no
+  accepted slice awaits integration. Not deployable until drained v12 rooms and the final integrated owner gate.
+- **Follow-ups (not implemented here):** the accepted W3-C LOWs (pre-send gates roll nothing back; a resync can roll back a landed
+  move's shell state; an `error` frame answering a submission stays a connection notice; the rollback wiring is source-pinned); the
+  integration review's LOWs (the no-server path's subscribe error is routed as a refusal; a refused lay does not reopen the errand
+  flow); carried unchanged from earlier integrations.
 
 ## Scope and closing remark
 

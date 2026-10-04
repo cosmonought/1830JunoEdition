@@ -216,7 +216,13 @@ describe("the gates this explains are still in place", () => {
   it("keeps #763's refusal", () => {
     /* The modal EXPLAINS the freeze; it must not become the thing that enforces it. If this gate ever goes,
        the copy would be describing a rule the board no longer applies. */
-    expect(APP_CODE).toContain("homeTokenBlock");
+    /* Phase 3 W2-A (OD-1, P3-N001): the shell no longer names `homeTokenBlock` -- Pass's home arm was dead (Pass
+       renders only outside the Operating Round) and every control now reads the ONE hold answer, `dockHoldView`,
+       which asks the composition whose fourth hold is this one. The refusal is still the authority's. */
+    expect(APP_CODE).toContain("dockHoldView({ state: gameState, mapGrid, homeHexToAxial,");
+    const VIEW = readStripped("utils/dockHoldView.ts");
+    expect(VIEW).toContain("authoritativeHoldRefusal(state, msg, ctx)");
+    expect(readStripped("gameEngine/authoritativeHolds.ts")).toContain("homeStationHold(state, msg, ctx.homeHexToAxial)");
   });
 
   it("keeps the prompt's list in the reducer (the #769 held seat it was paired with is retired by #1610)", () => {

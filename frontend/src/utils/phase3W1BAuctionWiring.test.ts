@@ -29,7 +29,7 @@ describe("AUD-02.02 (K-15): the shell's own words for a contest pass", () => {
     expect(APP).not.toContain("the last drop-out");
   });
 
-  it("the S1 const's contest arm is the contest sentence, still after the home token and the trade hold", () => {
+  it("the S1 const's contest arm is the contest sentence, still after the one hold answer (Phase 3 W2-A: \`dockHold.pass\`)", () => {
     const pass = sliceBetween(APP, "const passDisabledReason =", "return (");
     expect(pass).toContain("contestBarPassSentence(waterfallState, viewerAddress)");
     expect(pass).not.toMatch(/drop out/i);

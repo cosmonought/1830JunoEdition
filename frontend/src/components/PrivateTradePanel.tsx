@@ -161,6 +161,9 @@ export interface ProposePrivatePurchaseProps {
   treasury: number;
   onPropose: (privateId: number, price: number) => void;
   onClose: () => void;
+  /** Phase 3 W2-A (OD-1): a standing authoritative hold's refusal of the proposal, or `null`. Greys every card's
+   *  submit with that sentence; the cards still open, so the rules stay readable. Absent is `null` (no hold). */
+  blockedReason?: string | null;
 }
 
 export function ProposePrivatePurchase({
@@ -173,6 +176,7 @@ export function ProposePrivatePurchase({
   treasury,
   onPropose,
   onClose,
+  blockedReason: holdReason = null,
 }: ProposePrivatePurchaseProps) {
   // Design note #386: the wider set for DISPLAY. `privatePurchaseBlockReason` is still the STRICT predicate,
   // and it is what gates the offer form and the submit inside each card.
@@ -301,7 +305,8 @@ export function ProposePrivatePurchase({
               const priceProblem =
                 blocked !== null
                   ? null
-                  : offerPriceProblem({ priceText, faceValue, treasury, buyerTicker });
+                  : /* Phase 3 W2-A (OD-1): the hold first -- no price would be accepted while it stands. */
+                    (holdReason ?? offerPriceProblem({ priceText, faceValue, treasury, buyerTicker }));
               return (
                 /* Design note #661: THE ROW IS A GROUP, NOT A BUTTON, and #804 keeps that for a narrower
                    reason. #661 needed it because the row carried two controls; there is one control on the

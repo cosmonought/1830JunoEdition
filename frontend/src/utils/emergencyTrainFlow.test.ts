@@ -278,8 +278,16 @@ describe("treasury provenance", () => {
 describe("the surfaces ask the rule module", () => {
   // #490a: the notes quote the old arrangement and must keep doing so -- so the stripped shell.
 
-  it("gates Pass on the obligation", () => {
-    expect(readShell()).toContain("trainPurchaseRefusal({");
+  it("gates the Operating Round's pass (End Turn) on the obligation", () => {
+    /* Phase 3 W2-A (P3-N001): the `trainPurchaseRefusal({` arm in the shell's Pass reason was dead -- it answered only
+       at the Buy Trains step, where the bar renders End Turn instead of that Pass. End Turn carries the obligation
+       (`mustBuyTrain`, the same trainless-and-could-run pair), and now the standing hold beside it. */
+    const shell = readShell();
+    expect(shell).not.toContain("trainPurchaseRefusal({");
+    expect(shell).toContain("const mustBuyTrain = trainlessAndReported && couldRunARouteIfItHadATrain;");
+    expect(shell).toContain("mustBuyTrain={mustBuyTrain}");
+    const { readStripped } = require("./sourceScan") as typeof import("./sourceScan");
+    expect(readStripped("panels/ContextualActionBar.tsx")).toContain("disabled: mustBuyTrain || turnHoldReason !== null,");
   });
 
   it("no longer mounts the modal on the plan alone", () => {

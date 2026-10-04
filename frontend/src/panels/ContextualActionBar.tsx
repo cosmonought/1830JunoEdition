@@ -816,6 +816,7 @@ export default function ContextualActionBar({
   autoPass,
   autoBuy,
   passDisabledReason,
+  turnHoldReason,
   turnActionTaken,
   stockStage = null,
   onShowStocks,
@@ -936,6 +937,13 @@ export default function ContextualActionBar({
    *  waterfall forbids it while no private holds a standing bid
    *  (`waterfall.rs` doc comment #1) -- a fact only the caller has. */
   passDisabledReason: string | null;
+  /** Phase 3 W2-A (OD-1): the standing authoritative hold's refusal of the turn's own moves -- Skip, End Turn, Pay /
+   *  Withhold and Run Trains -- from the shell's one hold answer (`utils/dockHoldView.ts`), or `null` when no hold
+   *  stands. Those controls grey with this sentence on every seat. REQUIRED, per #799: an optional rule prop that is
+   *  never passed is indistinguishable from a rule that does not fire. Nothing that RESOLVES a hold is on this bar
+   *  (the discard, the answers, the home placement and the emergency purchase have their own prompts and panels), and
+   *  the navigation buttons that open those panels dispatch nothing, so they are not greyed by it. */
+  turnHoldReason: string | null;
   /** Design note #745: has the acting seat already sold this turn? The bar renders the fact; the reducer
    *  decides it. `undefined` reads as "no", which is the right answer everywhere outside a Stock Round. */
   turnActionTaken?: boolean;
@@ -1216,6 +1224,8 @@ export default function ContextualActionBar({
     /** Design note #779: the holder's seat colour, resolved by the shell (it has the roster index). */
     colorForAddress?: (address: string) => string | null;
     onPropose: (privateId: number, price: number) => void;
+    /** Phase 3 W2-A (OD-1): the hold's refusal of `ProposePrivatePurchase`, forwarded to the panel's submit. */
+    blockedReason?: string | null;
   } | null;
   /** Design note #508: everything `TrainPurchasePanel` needs, as ONE object. These are not facts this bar
    *  reasons about -- it neither reads nor derives any of them -- they are a child's props passing through,
@@ -1227,6 +1237,8 @@ export default function ContextualActionBar({
     companies: readonly TrainPurchaseCompany[];
     canAct: boolean;
     blockedReason: string | null;
+    /** Phase 3 W2-A (OD-1): the hold's refusal of the depot's `BuyHardwareFromPool`, forwarded. */
+    bankBlockedReason?: string | null;
     onBuyFromBank: (tier: string) => void; // #1255: one train per press
     /** Design note #1326: the tiers for sale now; the panel derives the queue head when absent. */
     openTiers?: readonly DepotTier[];
@@ -1971,7 +1983,11 @@ export default function ContextualActionBar({
                      the total takes the plain position beside the verb. */
                   label: `Pay Dividends $${declaredRevenue} ($${declaredPerShare}/share)`,
                   onClick: onPayDividends,
-                  title: `Splits $${declaredRevenue} between every shareholder at $${declaredPerShare} per 10% share.`,
+                  // Phase 3 W2-A (OD-1): `DeclareDividends` is refused while a hold stands -- greyed with its sentence.
+                  disabled: turnHoldReason !== null,
+                  title:
+                    turnHoldReason ??
+                    `Splits $${declaredRevenue} between every shareholder at $${declaredPerShare} per 10% share.`,
                 },
               ]
             : []),
@@ -1986,8 +2002,11 @@ export default function ContextualActionBar({
                 ? `Withhold $${declaredRevenue} to Treasury`
                 : "Withhold $0 — Share Price Steps Left",
             onClick: onWithholdRevenue,
-            title:
-              declaredRevenue > 0
+            // Phase 3 W2-A (OD-1): the same hold, the same sentence.
+            disabled: turnHoldReason !== null,
+            title: turnHoldReason !== null
+              ? turnHoldReason
+              : declaredRevenue > 0
                 ? `Keeps all $${declaredRevenue} in the corporation's treasury. Shareholders receive nothing.`
                 : /* Phase 3 W1-I (P3-N014): a rule stated to the player, not a statement about the software; and
                      there is no revenue to "withhold", so it no longer says so. */
@@ -2047,10 +2066,14 @@ export default function ContextualActionBar({
             key: "end-turn",
             label: "End Turn",
             onClick: onEndOperatingTurn,
-            disabled: mustBuyTrain,
-            title: !mustBuyTrain
-              ? "Finish this corporation's turn and pass to the next in the queue."
-              : "A corporation must own a train. Buy one from the Bank Depot or another corporation — if the treasury cannot cover it, the president buys it out of pocket.",
+            /* Phase 3 W2-A (OD-1, K-13): End Turn sends `PassTurn`, which every hold refuses -- so a standing offer,
+               an owed discard or the forced purchase greys it with the hold's own sentence, which outranks #293's. */
+            disabled: mustBuyTrain || turnHoldReason !== null,
+            title: turnHoldReason !== null
+              ? turnHoldReason
+              : !mustBuyTrain
+                ? "Finish this corporation's turn and pass to the next in the queue."
+                : "A corporation must own a train. Buy one from the Bank Depot or another corporation — if the treasury cannot cover it, the president buys it out of pocket.",
           },
         ];
         break;
@@ -3456,6 +3479,8 @@ export default function ContextualActionBar({
                   onRunRoute={onRunTrains}
                   drafts={trainDrafts}
                   controlsEnabled={sessionReady}
+                  // Phase 3 W2-A (OD-1): `RunMultipleRoutes` is refused while a hold stands.
+                  blockedReason={turnHoldReason}
                   ownsAnyTrain={ownsAnyTrain}
                   noTrainReason={NO_TRAIN_ROUTE_REASON}
                 />
@@ -3500,13 +3525,19 @@ export default function ContextualActionBar({
                      `Record<string, CSSProperties>` sheet cannot report a style nobody spread. */
                   style={{
                     ...styles.actionBarButton,
-                    ...(!sessionReady ? styles.actionBarButtonDisabled : {}),
+                    ...(!sessionReady || turnHoldReason !== null ? styles.actionBarButtonDisabled : {}),
                   }}
                   onClick={onSkipSubPhase}
-                  disabled={!sessionReady}
+                  /* Phase 3 W2-A (OD-1, K-21 / AUD-06.02): Skip sends `AdvanceOperatingSubPhase`, which every hold
+                     refuses -- the home station owed, an offer standing -- so it greys with the hold's sentence rather
+                     than stepping a turn the server will not step. */
+                  disabled={!sessionReady || turnHoldReason !== null}
                   /* Phase 3 W1-I (P3-N014): player words only -- the action name and the "contract cursor" were
                      developer text in a player tooltip. */
-                  title={`Move past ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. The turn goes on to its next step.`}
+                  title={
+                    turnHoldReason ??
+                    `Move past ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. The turn goes on to its next step.`
+                  }
                 >
                   Skip {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} &#8250;
                 </button>
@@ -4471,6 +4502,8 @@ export default function ContextualActionBar({
           // Design note #779: the holder's seat colour, from the shell that has the roster.
           colorForAddress={privatePurchase.colorForAddress}
           onPropose={privatePurchase.onPropose}
+          // Phase 3 W2-A (OD-1): the hold's refusal of the proposal, on the submit.
+          blockedReason={privatePurchase.blockedReason ?? null}
           onClose={() => undefined}
         />
       )}
@@ -4485,6 +4518,8 @@ export default function ContextualActionBar({
           sessionReady={sessionReady}
           canAct={trainPurchase.canAct}
           blockedReason={trainPurchase.blockedReason}
+          // Phase 3 W2-A (OD-1): the hold's refusal of the depot purchase.
+          bankBlockedReason={trainPurchase.bankBlockedReason ?? null}
           onBuyFromBank={trainPurchase.onBuyFromBank}
           openTiers={trainPurchase.openTiers}
           /* Design note #1101: resolved by the shell, which owns the step list -- see the panel's prop.

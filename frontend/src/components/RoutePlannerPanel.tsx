@@ -205,6 +205,9 @@ export interface RunRoutesButtonProps {
   controlsEnabled: boolean;
   ownsAnyTrain: boolean;
   noTrainReason: string;
+  /** Phase 3 W2-A (OD-1): a standing authoritative hold's refusal of the run, or `null`. Greys the button with that
+   *  sentence; absent is `null` (no hold). */
+  blockedReason?: string | null;
 }
 
 export function RunRoutesButton({
@@ -213,9 +216,10 @@ export function RunRoutesButton({
   controlsEnabled,
   ownsAnyTrain,
   noTrainReason,
+  blockedReason = null,
 }: RunRoutesButtonProps) {
   const { runnable, totalRevenue } = runnableRouteSummary(drafts);
-  const live = runnable > 0 && controlsEnabled;
+  const live = runnable > 0 && controlsEnabled && blockedReason === null;
   // Phase 3 W1-G: a drafted route left out of the run is named here, before the press, rather than vanishing.
   const dropped = droppedDraftsNote(drafts);
   return (
@@ -225,7 +229,9 @@ export function RunRoutesButton({
       disabled={!live}
       style={{ ...styles.runButton, ...(live ? {} : styles.runButtonDisabled) }}
       title={
-        !ownsAnyTrain
+        blockedReason !== null
+          ? blockedReason
+          : !ownsAnyTrain
           ? noTrainReason
           : runnable > 0
             ? runRoutesTitle(runnable, totalRevenue, dropped) // W1-G (K-26): nothing is withheld before the choice

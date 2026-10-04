@@ -278,6 +278,13 @@ describe("both surfaces ask one function", () => {
 
   it("is what the Pass button says", () => {
     /* The button explains itself rather than silently doing nothing -- and it reads FIRST among the pass reasons. */
-    expect(readShell()).toContain("homeTokenBlock({");
+    /* Phase 3 W2-A (OD-1, P3-N001): through the ONE hold answer now -- `dockHold.pass` leads Pass's reasons, and
+       `dockHoldView` asks the composition (whose fourth hold is the home station) with the board's label table.
+       Pass renders only outside the Operating Round, so the home arm it used to carry here was dead; the Operating
+       Round's Skip / End Turn read the same answer through the bar's `turnHoldReason`. */
+    const shell = readShell();
+    expect(sliceBetween(shell, "const passDisabledReason =", "return (")).toMatch(/^const passDisabledReason =\s*dockHold\.pass \?\?/);
+    expect(shell).toContain("dockHoldView({ state: gameState, mapGrid, homeHexToAxial,");
+    expect(shell).toContain("turnHoldReason={dockHold.turnHoldReason}");
   });
 });

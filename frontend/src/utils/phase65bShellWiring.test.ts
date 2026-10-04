@@ -160,11 +160,16 @@ describe("K-01: the Stock Round Private Companies section, its handlers, its pro
     expect(prompt).toContain("onShowCard={handleShowPrivateTradeCard}");
   });
 
-  it("Pass is greyed with the hold, right after the home-token block", () => {
+  it("Pass is greyed with the hold, first among its reasons", () => {
     // P0 S1: the expression is a plain const above the shell's `return (`; the bar reads it by name.
     expect(APP).toContain("passDisabledReason={passDisabledReason}");
     const pass = sliceBetween(APP, "const passDisabledReason =", "return (");
-    expectOrder(pass, "homeTokenBlock({", "privateTradeHold ??");
+    /* Phase 3 W2-A (OD-1, P3-N001): the trade offer's hold (and the home station's, whose arm was dead here) is read
+       from the ONE hold answer -- `dockHold.pass`, the authority's refusal of `PassTurn` -- ahead of the contest and
+       the must-sell reasons. No second derivation of either hold remains in this const. */
+    expectOrder(pass, "dockHold.pass ??", "divestmentRefusal(");
+    expect(pass).not.toContain("privateTradeHold");
+    expect(pass).not.toContain("homeTokenBlock");
   });
 
   it("the M&H's Stock Round exchange chip is greyed with the hold (it is not turn-gated, so only the hold refuses it)", () => {

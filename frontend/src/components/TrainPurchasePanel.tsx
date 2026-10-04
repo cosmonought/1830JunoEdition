@@ -136,6 +136,9 @@ export interface TrainPurchasePanelProps {
   /** Why a new offer cannot be composed right now (one is already
    *  outstanding), or `null`. Stated rather than left as a dead button. */
   blockedReason: string | null;
+  /** Phase 3 W2-A (OD-1): a standing authoritative hold's refusal of the depot's `BuyHardwareFromPool`, or `null`.
+   *  Outranks every depot reason but the empty depot; absent is `null` (no hold). */
+  bankBlockedReason?: string | null;
   /** One `BuyHardwareFromPool` -- design note #1255: one train per press. */
   onBuyFromBank: (tier: string) => void;
   /** Design note #1326: THE OPEN SHELF. The rows a corporation may buy from right now -- one in the printed
@@ -235,6 +238,7 @@ export function TrainPurchasePanel({
   sessionReady,
   canAct,
   blockedReason,
+  bankBlockedReason = null,
   onBuyFromBank,
   openTiers,
   endsTurnAtLimit = false,
@@ -538,7 +542,10 @@ export function TrainPurchasePanel({
   const bankProblem: string | null =
     nextTier === null
       ? "The Bank Depot is empty — every printed train has been bought."
-      : atTrainLimit
+      : /* Phase 3 W2-A (OD-1): while a hold stands the purchase is refused with the hold's sentence, whatever else. */
+        bankBlockedReason !== null
+        ? bankBlockedReason
+        : atTrainLimit
         ? /* Design note #230: the phase's own ceiling, named as such -- this
              says what is true rather than asking for a smaller number.
 

@@ -192,11 +192,11 @@ import { describeTreasuryMoves, treasuryMoveLine } from "./utils/treasuryProvena
 // Design note #768: the board cannot lose tiles; this is what says so out loud when it does.
 import { describeGridChange, gridChangeLine } from "./utils/gridProvenance";
 // Design note #751: the obligation lives on Pass, so the player keeps the choice of how to discharge it.
-import { noDecisionRemains, trainPurchaseRefusal } from "./utils/trainObligation";
+import { noDecisionRemains } from "./utils/trainObligation";
 // Design note #759: the zone exemptions expire, and the debt shuts three doors.
 import { divestmentDebt, divestmentRefusal } from "./gameEngine/forcedDivestment";
 // Design note #763: a floated corporation with no home token stops the game until the token is down.
-import { homeTokenBlock, homeTokenOwed } from "./gameEngine/homeTokenGate";
+import { homeTokenOwed } from "./gameEngine/homeTokenGate";
 // Design note #162: `TileSelectionPopup` is no longer rendered or imported
 // -- the radial selector replaced it, and its two callbacks went with it.
 // The file is retained on disk, unreferenced, until the radial path has been
@@ -683,6 +683,7 @@ import AuctionPromptModal from "./components/AuctionPromptModal";
 import HomeStationPrompt from "./components/HomeStationPrompt";
 import { homeStationViewerIsPresident } from "./utils/homeStationAskView";
 import { viewerIsNamedActor, viewerIsSeatedPlayer } from "./utils/waitingPromptView";
+import { dockHoldView } from "./utils/dockHoldView"; // Phase 3 W2-A (OD-1): the one hold answer
 
 // Step 4: Firebase Real-Time Integration -- see design notes #1 and #22.
 import Lobby from "./components/Lobby";
@@ -1735,7 +1736,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   // Audit G-15: pending corporation-to-corporation train offers. Polled
   // separately from the board because a SELLER must see an offer arrive while
   // it is emphatically not their turn -- this cannot key off turn state.
-  const { offers: trainOffers, refresh: refreshTrainOffers } = useTrainOffersPolling(
+  /* Phase 3 W2-A (P3-N009): its `offers` had one reader, `trainPurchase.blockedReason`, which now asks the shell's
+     hold answer (`dockHold`); the register it read is the chain-era one W1-D retired as a source. Only `refresh`,
+     still called after a proposal, is taken; retiring the hook itself is not this slice. */
+  const { refresh: refreshTrainOffers } = useTrainOffersPolling(
     queryClient,
     CONTRACT_ADDRESS,
     gameId,
@@ -4045,11 +4049,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     () => privateTradeSectionModel(gameState, scrubbing ? null : viewerAddress, privateTradeLabel),
     [gameState, scrubbing, viewerAddress, privateTradeLabel],
   );
-  /** The hold's own sentence while a player trade offer stands (`pendingOfferBlock`), for every share control and
-   *  for Pass -- greyed with it rather than refused after the click (K-13's class, closed for this offer). */
+  /** The hold's own sentence while a player trade offer stands (`pendingOfferBlock`), for every share control --
+   *  greyed with it rather than refused after the click (K-13's class, closed for this offer). Phase 3 W2-A: Pass no
+   *  longer reads this; it reads the shell's one hold answer (`dockHold.pass`), which agrees on every Stock Round
+   *  board (the trade offer is the only hold a Stock Round can carry). The share controls move with W2-C / W2-F. */
   const privateTradeHold = useMemo(
     () => (scrubbing ? null : privateTradeHoldReason(gameState, privateTradeLabel)),
     [gameState, scrubbing, privateTradeLabel],
+  );
+  /* Phase 3 W2-A (OD-1): THE SHELL'S ONE HOLD ANSWER. `authoritativeHoldRefusal` asked once per control, with the
+     message kind that control sends (`utils/dockHoldView.ts`), so the bar, the tile-lay gate, the token ring and the
+     two purchase panels grey with the hold's own sentence exactly when the authority would refuse them -- and never
+     grey what resolves the hold. The only call site; every consumer below reads a field of this. */
+  const dockHold = useMemo(
+    () => dockHoldView({ state: gameState, mapGrid, homeHexToAxial, labelFor: privateTradeLabel, scrubbing }),
+    [gameState, mapGrid, homeHexToAxial, privateTradeLabel, scrubbing],
   );
   const privateTradeProposalRefusalFor = useCallback(
     (intent: { privateId: number; seller: string; buyer: string; price: number }) =>
@@ -11848,6 +11862,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      works regardless of whose turn it is. */
   const tileLayDisabledReason = useMemo(() => {
     if (spectator) return "Planning Mode: Tile lay disabled — you are spectating.";
+    /* Phase 3 W2-A (OD-1): THE HOLD ARM. The lay authority asks the four holds FIRST (`layTileRefusal`), so a lay is
+       refused with the hold's sentence while one stands -- whatever the seat and the step. The shell's one hold
+       answer (`dockHold.layTile`) says so here, ahead of the step and seat tests, rather than leaving the ring to find
+       out on the preview. */
+    if (dockHold.layTile !== null) return `Planning Mode: Tile lay disabled — ${dockHold.layTile}`;
     if (gameState?.current_round_type !== "OperatingRound") {
       return "Planning Mode: Tile lay disabled — track is laid in an Operating Round.";
     }
@@ -11884,7 +11903,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return `Planning Mode: Tile lay disabled — ${secondLay} Use its Lay Track (B20) power, or advance.`;
     }
     return null;
-  }, [spectator, gameState, orSubPhase, viewerAddress, actingProtocolId, homeStationPlacement]);
+  }, [spectator, dockHold.layTile, gameState, orSubPhase, viewerAddress, actingProtocolId, homeStationPlacement]);
   const canLayTileNow = tileLayDisabledReason === null;
 
   /* canLayTileNow decides whether the carousel is narrowed to one corporation's reach - the same predicate the confirm button uses. Sandbox/offline path only; a chain answer is used verbatim.
@@ -13592,26 +13611,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      See docs/ai_architecture/contract_economy.md - App.tsx #311 */
   /* Design note #751: the mandatory purchase is enforced HERE, on Pass, rather than by an
      unskippable modal. The obligation is to acquire a train; buying from a rival discharges
-     it just as well as the Depot does, and #3's undismissable modal made that unreachable. */
+     it just as well as the Depot does, and #3's undismissable modal made that unreachable.
+     (Phase 3 W2-A: still enforced on a pass, but on the Operating Round's End Turn -- the bar's `mustBuyTrain` --
+     which is the only pass the Buy Trains step renders. This const feeds the Stock Round / auction Pass.) */
   const passDisabledReason =
-    /* Design note #763: FIRST, because it outranks every other reason -- while a home token
-       is owed nothing may happen at all, and a player told about some later rule would fix
-       that one and still find the button dead. */
-    homeTokenBlock({
-      state: gameState ?? ({ public_companies: [] } as never),
-      homeHexToAxial,
-      labelForAddress: (address) =>
-        sandboxPlayerLabel(address) ?? truncateAddress(address),
-    }) ??
-    /* 6.5-B (K-01): a standing player <-> player trade offer holds the table (`pendingOfferBlock`); Pass is
-       greyed with the hold's own sentence instead of refused after the click. */
-    privateTradeHold ??
+    /* Phase 3 W2-A (OD-1, P3-N001): FIRST, because a standing hold outranks every other reason (#763's argument,
+       kept) -- and it is now the ONE hold answer (`dockHold`), asked of the authority with the message Pass sends,
+       not two shell arms. It replaces #763's home-token arm and 6.5-B's trade-offer arm: the home hold is the
+       operating corporation's and Pass renders only outside the Operating Round, so that arm was dead; the trade
+       offer is one of the holds the composition already asks, with the same sentence. The Waterfall's own Pass
+       (`WaterfallPass`) is on no hold's pass list either, so the same sentence is the true one there.
+       The train-obligation arm (#751) is gone for the same reason as the home arm: it could only answer at the
+       Buy Trains step, where the bar never renders this Pass -- End Turn carries that obligation (`mustBuyTrain`). */
+    dockHold.pass ??
     (isWaterfallPhase && waterfallState?.mini_auction
       ? contestBarPassSentence(waterfallState, viewerAddress)
-      : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either.
-           Ahead of the train obligation because the two cannot both apply -- one is a Stock
-           Round debt and the other an Operating Round one -- and reading the seat's debt
-           first keeps the Stock Round's refusal from depending on an unrelated check. */
+      : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either. */
         divestmentRefusal(
           divestmentDebt({
             state: gameState ?? ({ current_round_type: null } as never),
@@ -13619,15 +13634,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             marketPrices: sandboxMarketPrices,
             zoneForPrice: marketZoneForPrice,
           }),
-        ) ??
-        trainPurchaseRefusal({
-          atHardwareStep:
-            gameState?.current_round_type === "OperatingRound" &&
-            orSubPhase === "Hardware",
-          trainless: trainlessAndReported,
-          couldRunARoute: couldRunARouteIfItHadATrain,
-          ticker: activeCorporationContext?.ticker ?? "This corporation",
-        }));
+        ));
+
+  /* Phase 3 W2-A (OD-1): the token ring's hold, by the message its tick sends (`handleConfirmTokenPlacement`): a paid
+     token is `PlaceStationToken`; a free one goes through `commitFreeStationPlacement` as `PlaceHomeStation`, "home"
+     for the compulsory home station and "dh" for the D&H's. */
+  const pendingTokenHold =
+    pendingToken === null
+      ? null
+      : pendingToken.kind === "paid"
+        ? dockHold.placeStationToken
+        : homeStationPlacement?.kind === "home-station"
+          ? dockHold.placeHomeStation
+          : dockHold.placeDhStation;
 
   return (
     /* Design note #1144: the chrome's zoom sits on the shell's own root, so everything the game room draws
@@ -14216,6 +14235,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               }
         }
         passDisabledReason={passDisabledReason}
+        /* Phase 3 W2-A (OD-1): the hold's refusal of the turn's own moves -- Skip, End Turn and the step's buttons
+           grey with it on every seat; the controls that resolve a hold live in their prompts and panels. */
+        turnHoldReason={dockHold.turnHoldReason}
         /* Design note #745: read off the replayed state, not off a React flag. The bar is a
            narrator (#400/#685) -- the reducer decides whether the turn has an action in it, and
            an Undo that rewinds past the sale must take the "End Turn" label back with it. */
@@ -14268,6 +14290,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   return seat === -1 ? null : seatColor(address, seat);
                 },
                 onPropose: handleProposePrivatePurchase,
+                // Phase 3 W2-A (OD-1): the hold's refusal of `ProposePrivatePurchase`, from the one hold answer.
+                blockedReason: dockHold.proposePrivatePurchase,
               }
             : null
         }
@@ -14367,11 +14391,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     gameState.public_companies.find(
                       (company) => company.company_id === actingProtocolId,
                     )?.president === viewerAddress),
-                blockedReason: trainOffers.some(
-                  (offer) => offer.buyer_protocol_id === actingProtocolId,
-                )
-                  ? "One offer at a time — answer or rescind the outstanding one first."
-                  : null,
+                /* Phase 3 W2-A (P3-N009): the hold's refusal of `ProposeTrainPurchase`, from the shell's one hold
+                   answer. It replaces a read of the chain-era `trainOffers` register (always empty in a room since
+                   W1-D retired its source), which is how this said "one offer at a time" on no board at all. Under
+                   the funding hold a trade passes (it is one way out), so it stays live there. */
+                blockedReason: dockHold.proposeTrainPurchase,
+                // Phase 3 W2-A: the hold's refusal of `BuyHardwareFromPool`, for the depot's own Buy.
+                bankBlockedReason: dockHold.buyTrainFromBank,
                 onBuyFromBank: handleBuyTrainsFromBank,
                 openTiers, // #1326
                 /* ==================================================================
@@ -14391,14 +14417,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                    who opens it. */
                 onEmergencyPurchase: () => setEmergencyModalOpen(true),
                 emergencyAvailable: emergencyPurchasePlan !== null,
-                dieselExchange: dieselExchangeOffer, // #1303
+                // #1303. Phase 3 W2-A: greyed with the hold's refusal of `ExchangeTrainForDiesel` while one stands.
+                dieselExchange:
+                  dieselExchangeOffer && dockHold.exchangeForDiesel !== null
+                    ? { ...dieselExchangeOffer, problem: dockHold.exchangeForDiesel }
+                    : dieselExchangeOffer,
                 onExchangeForDiesel: handleExchangeForDiesel,
                 /* Design note #1702 (GR-3): whether a Diesel trade-in could still be open after buying `tier` --
                    the Diesel module's screen, asked on this board, so "and End Turn" is never promised where
                    DT-1's auto-skip (#1701) keeps the turn open. */
                 exchangeMayFollowPurchase: (tier: string, price: number) =>
                   dieselExchangeMayFollowPurchase(gameState, actingProtocolId, tier, price),
-                returnedTrains: returnedTrainsForSale, // #1314
+                // #1314. Phase 3 W2-A: a returned train is a `BuyHardwareFromPool` too, so it greys with the depot's hold.
+                returnedTrains:
+                  dockHold.buyTrainFromBank === null
+                    ? returnedTrainsForSale
+                    : returnedTrainsForSale.map((train) => ({ ...train, problem: dockHold.buyTrainFromBank })),
                 /* Design note (VF-8): the Bank Pool's end of a live discard. `null` for all but half
                    a second of the game, and for every viewer whose panel is shut. */
                 discardReceipt: discardEvent
@@ -15481,8 +15515,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           liveryInk={bestContrastTextColor(
             stationTickerColor(pendingToken.companyId ?? actingProtocolId),
           )}
-          canConfirm={controlsEnabled}
-          confirmDisabledReason="Initialize the session key to place a token."
+          /* Phase 3 W2-A (OD-1): and the hold, asked of the message this tick sends -- the compulsory home station
+             (`PlaceHomeStation` home) is what the home hold waits for and is never greyed by it; the D&H's free
+             station and a paid token are refused like any other move while a hold stands. */
+          canConfirm={controlsEnabled && pendingTokenHold === null}
+          confirmDisabledReason={
+            !controlsEnabled ? "Initialize the session key to place a token." : (pendingTokenHold ?? undefined)
+          }
           onConfirm={handleConfirmTokenPlacement}
           onCancel={handleCancelTokenPlacement}
         />

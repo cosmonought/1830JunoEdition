@@ -20,9 +20,11 @@ describe("the Skip tooltip", () => {
     /* The `$` is assembled: `no-template-curly-in-string` flags that syntax in a plain string, and here the string
        IS source text being searched for (as in homeStationWait's harness). */
     const dollar = String.fromCharCode(36);
+    /* Phase 3 W2-A (OD-1): a standing hold's sentence leads (`turnHoldReason ??`); the player tooltip is the fallback. */
     expect(SKIP).toContain(
-      `title={\`Move past ${dollar}{OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. The turn goes on to its next step.\`}`,
+      `\`Move past ${dollar}{OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. The turn goes on to its next step.\``,
     );
+    expect(SKIP).toMatch(/title=\{\s*turnHoldReason \?\?\s*`Move past/);
   });
 
   it("names no action type and no contract internals", () => {

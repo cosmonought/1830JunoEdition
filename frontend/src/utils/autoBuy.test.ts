@@ -225,6 +225,7 @@ describe("#1243: the acting effect waits for the home station", () => {
     expect(APP).toContain(guard);
     expectOrder(APP, guard, decide);
     expectOrder(APP, guard, acted);
-    expect(APP).toContain('import { homeTokenBlock, homeTokenOwed } from "./gameEngine/homeTokenGate";');
+    // Phase 3 W2-A (P3-N001): `homeTokenBlock` left the shell with Pass's dead home arm; the guard's name stays.
+    expect(APP).toContain('import { homeTokenOwed } from "./gameEngine/homeTokenGate";');
   });
 });

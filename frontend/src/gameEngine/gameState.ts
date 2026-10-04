@@ -35,9 +35,9 @@ import type { VgpWire } from "./vgpAmount";
    held the card when that round began, not who will open the next one. The sentence states the rule instead of
    naming a seat, and is true in every round. */
 export const PRIORITY_DEAL_TOOLTIP =
-  "Priority Deal: shows who held the card when this round began. Whoever holds it when a Stock Round opens goes first. " +
-  "It moves only when a round ends: after a Stock Round, to the player after the last one to buy or sell (it stays put if nobody did); " +
-  "after the private company auction, to the player after the last one to buy a private outright.";
+  "Priority Deal: this marker shows who held the card when this round began, and it updates only when a round ends. " +
+  "Whoever holds it when a Stock Round opens goes first. At the end of a Stock Round it goes to the player after the last one to buy or sell (it stays put if nobody did); " +
+  "at the end of the private company auction, to the player after the last one to buy a private outright.";
 
 export type TileColor = "Yellow" | "Green" | "Brown" | "Gray"; // #1312: Gray only under the Project 18XX+ tile set
 /** Pre-Game Waterfall Auction (`waterfall.rs`): every room genesis-starts here, before `"StockRound"` is

@@ -14421,8 +14421,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 // there would be a lie.
                 onProceedToStockRound={sandbox ? handleProceedToStockRound : undefined}
                 /* Phase 3 W1-B (AUD-02.04, H-04): the in-flight latch covers the card-face controls too, so a
-                   double-click cannot send twice. */
-                sessionReady={controlsEnabled && !actionInFlight}
+                   double-click cannot send twice. And a scrubbed past auction is read-only: its cards are judged
+                   against the past board, so they are never live (review finding). */
+                sessionReady={controlsEnabled && !actionInFlight && !scrubbing}
                 onBuyLowest={handleWaterfallBuyLowest}
                 onBidHigher={handleWaterfallBidHigher}
                 onMiniAuctionRaise={handleWaterfallMiniAuctionRaise}

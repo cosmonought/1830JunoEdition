@@ -18,7 +18,7 @@ const APP = readShell();
 describe("AUD-02.04 (H-04): the dashboard mount carries the in-flight latch", () => {
   it("sessionReady is the bar's latch, not the bare connection flag", () => {
     const mount = sliceBetween(APP, "<WaterfallAuctionDashboard", "/>");
-    expect(mount).toContain("sessionReady={controlsEnabled && !actionInFlight}");
+    expect(mount).toContain("sessionReady={controlsEnabled && !actionInFlight && !scrubbing}");
     expect(mount).not.toMatch(/sessionReady=\{controlsEnabled\}/);
   });
 });
@@ -98,6 +98,7 @@ describe("AUD-11.01 (K-16): the Priority Deal tooltip is true in every round", (
   it("it states the rule rather than claiming the marked seat opens the next Stock Round", () => {
     expect(PRIORITY_DEAL_TOOLTIP).not.toContain("Starts the next Stock Round");
     expect(PRIORITY_DEAL_TOOLTIP).toContain("who held the card when this round began");
+    expect(PRIORITY_DEAL_TOOLTIP).toContain("updates only when a round ends");
     expect(PRIORITY_DEAL_TOOLTIP).toContain("the last one to buy or sell");
     expect(PRIORITY_DEAL_TOOLTIP).toContain("the last one to buy a private outright");
   });

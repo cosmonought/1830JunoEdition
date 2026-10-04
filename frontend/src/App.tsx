@@ -9152,14 +9152,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   }, [isInSandboxRoom, copySandboxLog]);
 
   /* W1-N / AUD-01.09: the crash screen's "Copy game log" -- the same export `copySandboxLog` builds, read from the
-     refs at call time. Set on entering and leaving a room, and NOT cleared on unmount: a render crash unmounts this
-     shell, and that is exactly when the crash screen needs it (`utils/gameLogExportSource.ts`). */
+     refs at call time. Registered only while in a room and cleared on leaving or unmounting, so no later crash can
+     hand over this table's log; a crash IN this shell is caught by the boundary, which snapshots the text before
+     these cleanups run (`utils/gameLogExportSource.ts`). */
   useEffect(() => {
-    setGameLogExportSource(
-      isInSandboxRoom
-        ? () => JSON.stringify(buildSandboxLogExport(sandboxLogRef.current, sandboxRoomRef.current), null, 2)
-        : null,
-    );
+    if (!isInSandboxRoom) return undefined;
+    setGameLogExportSource(() => JSON.stringify(buildSandboxLogExport(sandboxLogRef.current, sandboxRoomRef.current), null, 2));
+    return () => setGameLogExportSource(null);
   }, [isInSandboxRoom]);
 
   /* handleUndoToRoundStart is gone with the second button; undoToRoundStart stays exported and tested.

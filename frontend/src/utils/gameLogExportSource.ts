@@ -9,12 +9,15 @@
  * The log export was a hidden Ctrl+Shift+L inside `App.tsx` (`copySandboxLog`, #1334). The game shell now also
  * offers it as a visible "Copy game log" button in the top bar, and the crash screen (#761) needs the same export
  * -- the moment a render throws is exactly when the log is the evidence. But `CrashScreen` is the error boundary
- * AROUND the app: when it renders, the shell has been unmounted and its callbacks with it.
+ * AROUND the app: by the time it paints, the shell has been unmounted and its callbacks with it.
  *
- * So the shell registers a SOURCE here: a function that builds the same export text `copySandboxLog` builds, from
- * the shell's refs, at call time. The shell sets it whenever it enters or leaves a room and deliberately does NOT
- * clear it on unmount -- an unmount caused by a crash is precisely when the crash screen must still reach it. A
- * refresh starts a fresh module, so nothing outlives the page.
+ * So the shell registers a SOURCE here while it is in a room: a function that builds the same export text
+ * `copySandboxLog` builds, from the shell's refs, at call time. It is cleared when the shell leaves the room or
+ * unmounts, so a crash somewhere else later (the Lobby, say) can never hand over a previous table's log as evidence.
+ *
+ * THE CRASH SCREEN READS IT FIRST. `getDerivedStateFromError` runs in the render phase, before React commits the
+ * fallback and runs the crashed tree's effect cleanups -- so the boundary snapshots the text there, while the source
+ * is still registered, and copies that snapshot when the player presses the button.
  *
  * Dependency-free on purpose: `CrashScreen` imports it, and anything the crash screen depends on could be the
  * thing that threw. */
@@ -46,10 +49,10 @@ export function hasGameLogExport(): boolean {
 
 export type GameLogCopyOutcome = "copied" | "console" | "unavailable";
 
-/** Copy the export to the clipboard, falling back to the browser console (#1334: a debug tool that fails silently is
- *  worse than none). Never throws. */
-export async function copyGameLogExport(): Promise<GameLogCopyOutcome> {
-  const text = readGameLogExport();
+/** Copy an export (by default, the registered source's text now) to the clipboard, falling back to the browser
+ *  console (#1334: a debug tool that fails silently is worse than none). Never throws. */
+export async function copyGameLogExport(snapshot?: string | null): Promise<GameLogCopyOutcome> {
+  const text = snapshot === undefined ? readGameLogExport() : snapshot;
   if (text === null) return "unavailable";
   const toConsole = (): GameLogCopyOutcome => {
     // eslint-disable-next-line no-console

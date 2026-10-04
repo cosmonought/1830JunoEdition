@@ -159,9 +159,10 @@ describe("the shell (W1-N's App regions)", () => {
 
   it("AUD-01.09: the top bar gets the same copySandboxLog, only in a room; the crash screen gets its source", () => {
     expect(APP).toContain("onCopyGameLog={isInSandboxRoom ? copySandboxLog : undefined}");
-    const source = sliceBetween(APP, "setGameLogExportSource(", "}, [isInSandboxRoom]);");
+    const source = sliceBetween(APP, "if (!isInSandboxRoom) return undefined;\n    setGameLogExportSource(", "}, [isInSandboxRoom]);");
     expect(source).toContain("buildSandboxLogExport(sandboxLogRef.current, sandboxRoomRef.current)");
-    expect(source).toContain(": null");
+    // Cleared on leaving the room and on unmount: no later crash elsewhere can hand over this table's log.
+    expect(source).toContain("return () => setGameLogExportSource(null);");
     const topBar = readStripped("components/TopBar.tsx");
     expect(topBar).toContain("onClick={onCopyGameLog}");
     expect(topBar).toContain("Copy game log");
@@ -208,6 +209,42 @@ describe("AUD-01.09: the crash screen can copy the game log", () => {
     });
     expect(log).toHaveBeenCalledWith("LOG");
     expect(host.querySelector('[role="status"]')?.textContent).toContain("printed to the browser console");
+  });
+
+  it("snapshots the log as it catches, so the shell's cleanup clearing the source does not take it away", async () => {
+    const writeText = jest.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    /* The crashing child registers the source on mount and clears it on unmount -- as the shell does. The boundary
+       must still offer the text it read before that cleanup ran. */
+    function Shell(): React.ReactElement {
+      React.useEffect(() => {
+        setGameLogExportSource(() => "SHELL-LOG");
+        return () => setGameLogExportSource(null);
+      }, []);
+      return <Bomb />;
+    }
+    let armed = false;
+    function Bomb(): React.ReactElement {
+      if (armed) throw new Error("later render exploded");
+      return <span>ok</span>;
+    }
+    jest.spyOn(console, "error").mockImplementation(() => undefined);
+    act(() => root.render(<CrashScreen><Shell /></CrashScreen>));
+    armed = true;
+    act(() => root.render(<CrashScreen><Shell key="same" /></CrashScreen>));
+    const button = host.querySelector<HTMLButtonElement>('[data-testid="crash-copy-game-log"]');
+    expect(button).not.toBeNull();
+    await act(async () => {
+      button!.click();
+    });
+    expect(writeText).toHaveBeenCalledWith("SHELL-LOG");
+  });
+
+  it("offers no previous table's log once the shell has left it", () => {
+    setGameLogExportSource(() => "OLD-TABLE");
+    setGameLogExportSource(null); // the shell's cleanup on leaving
+    crash();
+    expect(host.querySelector('[data-testid="crash-copy-game-log"]')).toBeNull();
   });
 
   it("shows no log button outside a room", () => {

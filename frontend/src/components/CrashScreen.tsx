@@ -2,7 +2,7 @@ import React from "react";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 import { RADIUS } from "../styles/typography";
 // W1-N / AUD-01.09: the game log, which the shell registered before it went down. Dependency-free by design.
-import { copyGameLogExport, hasGameLogExport, type GameLogCopyOutcome } from "../utils/gameLogExportSource";
+import { copyGameLogExport, readGameLogExport, type GameLogCopyOutcome } from "../utils/gameLogExportSource";
 
 /* ==================================================================
  *  DESIGN NOTE 761: A WHITE SCREEN IS A REPORT NOBODY CAN FILE
@@ -38,6 +38,9 @@ interface CrashScreenState {
   info: string | null;
   /** W1-N: what the last "Copy game log" press did, said in words beside the button. */
   logCopy: GameLogCopyOutcome | null;
+  /** W1-N: the game log as it stood when render broke -- read in `getDerivedStateFromError`, before the crashed
+   *  shell's cleanups clear its source. `null` outside a room. */
+  logText: string | null;
 }
 
 /* ==================================================================
@@ -45,8 +48,9 @@ interface CrashScreenState {
    ==================================================================
    The stack says WHERE render broke; the action log says WHAT BOARD it broke on, and replays it. Before this, the
    only way to export the log was Ctrl+Shift+L inside the shell -- unmounted by the time this screen shows. The shell
-   leaves its export registered (`utils/gameLogExportSource.ts`), so in a room this screen offers the same export
-   the top bar's "Copy game log" does. Outside a room there is no log, and no button. */
+   registers its export (`utils/gameLogExportSource.ts`) and this boundary snapshots it the moment it catches, so in a
+   room this screen offers the same export the top bar's "Copy game log" does. Outside a room there is no log, and no
+   button. */
 const LOG_COPY_SAID: Record<GameLogCopyOutcome, string> = {
   copied: "Game log copied to the clipboard.",
   console: "The clipboard was unavailable; the game log was printed to the browser console.",
@@ -59,11 +63,12 @@ export class CrashScreen extends React.Component<
 > {
   constructor(props: { children?: React.ReactNode }) {
     super(props);
-    this.state = { error: null, info: null, logCopy: null };
+    this.state = { error: null, info: null, logCopy: null, logText: null };
   }
 
   static getDerivedStateFromError(error: Error): Partial<CrashScreenState> {
-    return { error };
+    // W1-N: render phase -- the crashed tree's cleanups have not run yet, so its log source is still registered.
+    return { error, logText: readGameLogExport() };
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
@@ -76,8 +81,8 @@ export class CrashScreen extends React.Component<
   }
 
   render() {
-    const { error, info, logCopy } = this.state;
-    const logAvailable = hasGameLogExport();
+    const { error, info, logCopy, logText } = this.state;
+    const logAvailable = logText !== null;
     if (!error) return this.props.children ?? null;
 
     const report = [
@@ -151,7 +156,7 @@ export class CrashScreen extends React.Component<
               type="button"
               data-testid="crash-copy-game-log"
               onClick={() => {
-                void copyGameLogExport().then((outcome) => this.setState({ logCopy: outcome }));
+                void copyGameLogExport(logText).then((outcome) => this.setState({ logCopy: outcome }));
               }}
               style={{
                 padding: "8px 16px",

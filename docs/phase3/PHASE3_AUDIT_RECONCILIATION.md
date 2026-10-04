@@ -106,7 +106,7 @@ Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments on
 | W1-O | COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`) |
 | W3-K | COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click "Pass Turn" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D since integrated on `phase3/wave2-bcgd-v13cert-integration`, merge `4072fd0`; W2-F and other open slices are tracked separately) |
 
-*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, its ledger PARTIAL lifted with W2-B; W2-B, W2-C, W2-G and the v13 settlement certification are COMPLETE and integrated ("Wave-2 B+C+G + v13 certification integration status"); W2-D is COMPLETE and integrated ("Wave-2 B+C+G+D integration status"); W2-F is NOT STARTED, UNLOCKED. Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
+*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, its ledger PARTIAL lifted with W2-B; W2-B, W2-C, W2-G and the v13 settlement certification are COMPLETE and integrated ("Wave-2 B+C+G + v13 certification integration status"); W2-D is COMPLETE and integrated ("Wave-2 B+C+G+D integration status"); W2-F is COMPLETE on its slice branch, NOT integrated ("W2-F slice status"). Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
 `OPEN`, `NOT STARTED`, `RULED`, `NEEDS PRECISE REPRODUCTION / CLARIFICATION`) is the `status` field of its JSON row; the
 checker verifies that a COMPLETE slice has no unimplemented A/B row and that each status agrees with its disposition.
 
@@ -341,6 +341,28 @@ baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to m
   settlement fixtures unchanged.
 - **Lanes:** W2-B, W2-C, W2-G, the v13 settlement certification and W2-D **COMPLETE and INTEGRATED**. W2-F remains **NOT STARTED,
   UNLOCKED**. Not deployable until drained v12 rooms and the final integrated owner gate.
+
+## W2-F slice status (2026-10-04)
+
+**Branch** `phase3/w2-f-waiting-surface` @ `8d4e9f5` (code `5a0bf37`, independent-review fixes `8d4e9f5`) from `phase3/wave2-bcgd-v13cert-integration` @ `7d8f73e` (the current
+provisional baseline, unchanged). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending).
+Presentation only, over W2-A's one hold answer (`dockHoldView`); nothing restates a rule or chooses between holds.
+
+- **AUD-09.09 (U-6) / AUD-09.08 (U-5):** the five prompts in the consent slot (private purchase offer, train offer, emergency funding
+  offer, player <-> player trade pointer, excess-train discard) print one waiting line (`components/WaitingOnLine.tsx`): who decides
+  ("This is X's decision." / "Waiting on X.", the seat named by the existing seat authorities) and the authority's own sentence, the
+  same on every seat. The three ordinary-offer prompts read `dockHold.standingOffer` (`pendingOfferBlock`, i.e. `describeStandingOffer`)
+  so a higher hold standing beside an offer (a train offer under the v12 funding obligation) never makes the offer prompt describe
+  another decision; the funding-offer and discard prompts read `dockHold.turnHoldReason` (each is the top hold while it stands). A
+  scrubbed board reports no hold and prints the who-line alone. The proposer's withdrawal stays the Rescind button.
+- **AUD-03.10 (I-3):** the player-trade pointer stands aside (`standAside`) while the Private Companies section is on screen (the
+  Stocks tab with a Stock Round model) -- that section carries the offer with the same answer / withdrawal, and the panel states the
+  hold -- so the fixed pointer never covers a card; elsewhere it is unchanged. The other prompts are Operating-Round-only.
+- **Residue closed (W2-A / W2-C / W2-D notes):** the Stock Round share controls read `dockHold.buyStock` / `.sellStock` (the
+  authority's refusal of exactly `BuyStock` / `SellStock`, asked first via `heldFirst`) and the panel flag `.shareControls` (only
+  when both are refused, so the v12 funding hold, which passes `SellStock`, never greys Sell), not 6.5-B's `privateTradeHoldReason`.
+  Auto-Buy keeps its own `purchaseBlockFor`.
+- **Deferred (LOW):** on the Stocks tab nothing scrolls the recipient to the offer's card. Rules version and settlement unchanged.
 
 ## Scope and closing remark
 

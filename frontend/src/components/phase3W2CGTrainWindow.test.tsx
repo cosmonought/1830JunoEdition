@@ -286,6 +286,25 @@ describe("C+G: the corporate train roster follows the v13 emergency trade window
     expectNoUsableProposal(closed, sent);
   });
 
+  it("OPEN -> CLOSED without remounting: a selected, priced offer dies at the typed price when the window closes", () => {
+    const open = liquidatable();
+    const sent: TrainTradeProposal[] = [];
+    mountRoster(open, sent);
+    press(sellerBadges("NYC")[0]);
+    typeInto(priceInput()!, "30");
+    expect([textOf(submits()[0]), live(submits()[0])]).toEqual(["Send Offer", true]);
+    // The same mounted panel (its selection and typed price kept) now sees the board after the liquidation.
+    const closed = apply(open, SELL_PRR_10, P1);
+    expect(automaticOf(closed)).toMatchObject({ tradeWindow: "closed" });
+    mountRoster(closed, sent);
+    expect(priceInput()?.value).toBe("30");
+    const [submit] = submits();
+    expect(live(submit)).toBe(false);
+    expect(submit.title).toBe(authority(closed, "30"));
+    press(submit);
+    expect(sent).toEqual([]);
+  });
+
   it("the panel and its binding hold no local window / emergency test (the UI follows the authority)", () => {
     const panel = readStripped("components/TrainPurchasePanel.tsx");
     const binding = readStripped("utils/offerAuthorityView.ts");

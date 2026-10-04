@@ -1,7 +1,8 @@
 # Rules v13: settlement certification vectors (PASS / CERTIFIED)
 
 **Current status (2026-10-04, `phase3/v13-settlement-certification`): v13 settlement certification PASS / CERTIFIED** on
-this slice branch, not yet integrated into the Phase-3 provisional baseline or `main`. Rules engine `13`; supported live
+this slice branch; since 2026-10-04 INTEGRATED into the Phase-3 provisional baseline `phase3/wave2-bcg-v13cert-integration` (merge `69c7496`;
+evidence, fixtures and keys unchanged), not merged to `main`. Rules engine `13`; supported live
 gameplay `[13]`; settlement-certified `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS = [10, 11, 12, 13]`. Gameplay-engine
 support and settlement certification remain separate axes. The record is §6.
 

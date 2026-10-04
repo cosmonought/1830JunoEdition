@@ -587,6 +587,7 @@ gates.
   requested — runs at …", CAB power-chip region, L2) plus the log lines. `actionLog.ts` is owned by this slice until it lands;
   W2-J follows.
 - **Depends on:** W1-C, W1-L. **Gates:** OD-3.
+- **Safe Wave-2 integration (2026-10-03):** COMPLETE — `4f998b8` + RR-6 `91037ce`, integrated (`09fcb25`). W1-C's explicit IPO / Bank Pool choice is unchanged (no substitution); the marker, log and RR-6 copy read `pending_mh_exchange`.
 
 #### W2-F
 **One "waiting on X" surface** · L3 · **4.5–6.5 h**
@@ -598,7 +599,7 @@ gates.
 
 #### W2-G
 **Emergency funding modal** · L5 · **4–5.5 h**
-- **OD-1 RULED (2026-10-03, §7.3):** the obligated president gets the interactive emergency controls; everyone else gets a simplified status/notification that the named player / corporation is resolving an emergency train purchase. OD-4 is still open. Status: NOT STARTED.
+- **OD-1 RULED (2026-10-03, §7.3):** the obligated president gets the interactive emergency controls; everyone else gets a simplified status/notification that the named player / corporation is resolving an emergency train purchase. OD-4 is still open. Status: **IN PROGRESS — HELD, NOT integrated.** An implementation exists (`phase3/w2-emergency-funding-ui` @ `695afe9`, UI accepted), but it removes the bankruptcy button while v12 still has authority states that require it; it lands together with the OD-4 v13 work.
 - **Rows:** implements AUD-09.05 (K-25), AUD-09.06 (A-9), AUD-09.07 (U-4), P3-N017 (draft OD-4), P3-N018 (draft W2-G)
 - **Surfaces:** `EmergencyTrainPurchaseModal.tsx` (whole file this phase): close/back per OD-4; "Bank Pool" vs "Bank Depot"
   from the train's actual source; funding-offer legality → `fundingPrivateOfferRefusal`; "Declare bankruptcy" only for the
@@ -609,7 +610,7 @@ gates.
 
 #### W2-H
 **Waiting-player prompts** · L5 · **3–4 h**
-- **OD-1 RULED (2026-10-03, §7.3)** — the viewer scope above. Status: NOT STARTED.
+- **OD-1 RULED (2026-10-03, §7.3)** — the viewer scope above. Status: **COMPLETE** — `phase3/w2-waiting-prompts` @ `461d4f0`, integrated at the safe Wave-2 integration (`66977d5`).
 - **Rows:** implements AUD-02.07 (H5 (auction)), AUD-06.01 (K-21 / U-32), AUD-06.04 (H5 (home station))
 - **Surfaces:** `HomeStationPrompt.tsx` and `AuctionPromptModal.tsx` per OD-1 (banner or read-only card for non-actors, with
   a focus target); "has floated" → timing-true copy. Migrating either to `NativeModal` edits
@@ -648,6 +649,7 @@ gates.
   `discarded`, Rust Belt / Gravedigger per the ruling; U-43 (1)–(4) per the ruling. Derived statistics only: no reducer,
   replay, golden or settlement change. Keep the Map key order that the accolades' tie order depends on.
 - **Focused tests:** `gameHistory`, `accolades`, `roundReplay` cases per sub-item. **Gates:** OD-13.
+- **Safe Wave-2 integration (2026-10-03):** COMPLETE — `e16aa5a`, integrated (`615e183`). Derived history only; AUD-12.07 keeps "traded" (owner-gated, OD-14(d)).
 
 #### W2-M
 **Wallet and dispute UX** · L7 · **5–7 h** · *new*
@@ -708,6 +710,7 @@ gates.
 - **Rows:** carries the owner-gated AUD-07.03 (U-17 / K-06)
 - **Surfaces:** a voluntary bypass gesture on eligible city waypoints, sending the existing `bypass: true`; its interaction
   with the shortfall refusal per OD-11. **Gates:** OD-11. If OD-11 = defer, AUD-07.03 becomes owner-placed later (E).
+- **Safe Wave-2 integration (2026-10-03):** OD-11 RULED (build, §7.3). COMPLETE — `07454d0` + `6d7cfa1`, integrated (`a860178`). AUD-07.03 C → B.
 
 #### W3-F
 **Phase-3 closure bookkeeping** · integrator · **2.5–3.5 h**
@@ -762,7 +765,7 @@ gates.
 
 #### W3-K
 **v13 rules batch (conditional)** · L2 (or L6) · **8–14 h incl. settlement certification, only if OD-10(a) = yes**
-- **Owner rulings (2026-10-03, §7.3):** OD-2 puts **SBS-2** ("Pass Turn" ends the turn in one click) into the dedicated v13 rules slice with its settlement certification. **SBS-4 (P3-N024) is NOT resolved** — it needs a precise reproduction / clarification and no rule is built from its current wording. **RR-4 is not a v13 item** (OD-7: copy only). OD-10(a)'s wider question (which other items join v13, and whether it runs inside Phase 3) is still open. Status: NOT STARTED.
+- **Owner rulings (2026-10-03, §7.3):** OD-2 puts **SBS-2** ("Pass Turn" ends the turn in one click) into the dedicated v13 rules slice with its settlement certification. **SBS-4 (P3-N024) is NOT resolved** — it needs a precise reproduction / clarification and no rule is built from its current wording. **RR-4 is not a v13 item** (OD-7: copy only). OD-10(a)'s wider question (which other items join v13, and whether it runs inside Phase 3) is still open. `phase3/v13-scope-verification` (`9b3f60b`) is on an older planning lineage and is NOT merged; its evidence is reconciled here. Status: NOT STARTED; settlement v13 is not certified.
 - **Rows:** carries the owner-gated AUD-04.04 (DH-1), AUD-08.01 (GR-1), VF/D-18, VF/D-22, P3-N023 (SBS-3 (6.5-A)); takes the rule half of AUD-03.04 (SBS-2, ruled in by OD-2). *(Before the 2026-10-03 rulings it also listed AUD-09.10 (RR-4) — now copy-only and done in W1-L (OD-7) — and P3-N024 (SBS-4 / OD-A-4) — now G, needing a precise reproduction before any slice takes it.)*
 - **Scope:** SBS-2 (ruled in by OD-2: one-click "Pass Turn" ends the turn); otherwise only items the owner rules in: DH-1,
   GR-1, SBS-3, D-18 / D-22 (OD-17). SBS-4 only after a precise reproduction and a fresh ruling. RR-4 is out (OD-7: copy).
@@ -791,7 +794,7 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 | **OD-8** | PRESENTATION | U-37 float narration: (a) "floated" at the float plus "placed its home" later, or (b) one line at placement | One line at placement | W2-J | No |
 | **OD-9** | PRESENTATION / PRODUCT | (a) U-44 time convention: local with zone (needs a server copy edit) or UTC everywhere. (b) U-15 Keplr logo asset and brand approval | Local "HH:MM" unlabelled vs the server's "UTC"; no logo asset | W2-K | No |
 | **OD-10** | RULES / PRODUCT | (a) Is a v13 rules batch allowed inside Phase 3 (W3-K), or are all rules items owner-placed after Phase 4? (b) Are phone-width game layout, zoom-aware breakpoints and keyboard map access Phase-3 targets, Phase-4 observations only, or Phase-5 work? | v12; no game-shell breakpoints; the map is mouse-only | W3-K; AUD-16.05, AUD-16.09 | (a) No. (b) Partly |
-| **OD-11** | PRODUCT · PLAYTEST-INFORMED | K-06 city bypass: build in Phase 3 (which hexes, which gesture, how it meets the shortfall refusal) or place it later | No voluntary control; bypass is sent automatically where forced | W3-E | Partly |
+| **OD-11** | PRODUCT · PLAYTEST-INFORMED | **RULED 2026-10-03 (build: manual route only) — see §7.3.** K-06 city bypass: build in Phase 3 (which hexes, which gesture, how it meets the shortfall refusal) or place it later | No voluntary control; bypass is sent automatically where forced | W3-E | Partly |
 | **OD-12** | PRODUCT (engineering scope) | **RULED 2026-10-03 — see §7.3.** **RED-region permission.** May named Phase-3 fixes edit the RED regions (submit half, apply half, OR verdict, link drain), each as one separately reviewed commit naming its exact lines? Candidates: K-18 (R2), the banner/refusal model and refusal rollbacks (R1, R5), the `press:true` latch (R1), K-24's call site (R2), A-19 if the audio-side fix is not enough (R2), the FleetLoss prune if the store fix is not enough (R4), the queued-state read if it cannot be done outside the drain (R5). A refusal places each named item later (E) — it does not silently drop it | The draft deferred all of these to Phase 4 without a ruling | W2-J, W3-B, W3-C, W3-I, W1-N, W3-A, W3-H | No |
 | **OD-13** | PRESENTATION (derived statistics) | Ratify or amend the candidate resolutions for U-41 and U-43 (1)–(4). Each changes standard-game post-game statistics | Recorded in Part C as candidates "NOT ratified" | W2-L | No |
 | **OD-14** | PRESENTATION | Owner calls the audit names: (a) U-16 — move the step panels back into the bar, or keep; (b) U-7 — extend the card wash to the cash slide-out and payout modal; (c) U-8 — seven-seat palette; (d) GR-3 — keep "traded" for a first-Diesel trade-in or restore "rusted"; (e) the waiting room's extra description line; (f) VF G-1 — a phase-flip cue (which asset); (g) VF G-7 — close as designed or replay; (h) VF I-10 / J-6 — build the static badge icons now; (i) the money panel's styling (a Part C U-44 note, beyond the audit) | Each recorded as open or "owner to say" | W1-I(-b), W3-H, W1-L, W2-K, W2-L | (a)(f) partly |
@@ -855,6 +858,23 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - For the Wave-1 integration exactly ONE RED edit: W1-N — delete the obsolete `settleRoomPayout(...)` call site in RED R2, now that settleRoomPayout is intentionally a no-op and the placeholder payout has been removed. Its own commit; no neighboring cleanup; no structural refactor; focused regression; independent review of that commit before continuing.
 - The other OD-12-gated W3 defects are not implemented in that task.
 - *Effect on this plan:* W1-N's R2 call site deleted as its own commit (`87d63c4`, independently reviewed: APPROVE WITH NITS, comment nits fixed outside RED in `819a204`). The remaining OD-12 candidates (W2-J K-18; W3-C, W3-B, W3-I, W3-A, W3-H) each still land as one separately reviewed RED commit under §5.1's serialization rule.
+
+**Recorded at the safe Wave-2 integration (2026-10-03)**, from the owner's brief, in its words:
+
+**OD-11 — CITY BYPASS (W3-E).**
+- W3-E: manual route only.
+- Preserve automatic route optimality unchanged.
+- Stop/Bypass is offered only when the exact crossing supports both arms.
+- Forced bypass remains forced.
+- Whole-set `routeSetRefusal` remains authoritative.
+- *Effect on this plan:* the brief integrates W3-E, so OD-11 = build. W3-E landed (`a860178`); AUD-07.03 C → B, IMPLEMENTED.
+
+*Also from that brief (constraints on integrated slices, not new rulings):* W2-H keeps the Routes/Dividends informational
+visibility for non-active players (home/auction actors get controls, others a status) — this is OD-1's viewer scope for those two
+prompts, now implemented (`66977d5`). W2-E preserves W1-C's explicit IPO-vs-Bank-Pool choice with no substitution, and its marker / log /
+RR-6 read `pending_mh_exchange`. W2-L is derived history only (no reducer / replay / settlement / rules-version change). OD-3 (W2-E),
+OD-13 and OD-14(d) (W2-L) were applied by those slices as the owner gave them; their text is not in the brief and is not transcribed
+here. W2-G is implemented but held for the OD-4 v13 work. The tutorial architecture remains later spotlight / whitebox work.
 
 Still open from wave 1: **OD-14(a)** (W1-I). Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
 

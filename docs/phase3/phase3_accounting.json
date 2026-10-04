@@ -248,7 +248,8 @@
    "disp": "A",
    "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-H `5cc5ccc` (the actor's card through NativeModal; every other viewer a read-only status with a focus target), integrated `66977d5`"
   },
   {
    "key": "AUD-02.08",
@@ -727,7 +728,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-H `3b7f23b` + `461d4f0` (no \"has floated\"; timing-true copy in the prompt, the station-row tooltip and the OR tutorial), integrated `66977d5`"
   },
   {
    "key": "AUD-06.02",
@@ -767,7 +769,8 @@
    "disp": "A",
    "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-H `3b7f23b` (the President keeps the card; everyone else reads a non-modal status banner), integrated `66977d5`"
   },
   {
    "key": "AUD-06.05",
@@ -845,11 +848,12 @@
    "cls": "[UX]",
    "item": "No control for bypassing a city on a route; the engine already supports it.",
    "src": "PARTIAL — `gameEngine/cityBypass.ts`; bypass is sent automatically (auto-route, `withForcedBypass`) but there is no voluntary control.",
-   "slice": "W3-E (conditional)",
-   "disp": "C",
-   "od": "OD-11",
+   "slice": "W3-E (OD-11 ruled: build; landed at the safe Wave-2 integration)",
+   "disp": "B",
+   "od": "OD-11 (RULED 2026-10-03: manual route only; automatic route optimality unchanged; Stop/Bypass only where the exact crossing supports both arms; a forced bypass stays forced; whole-set `routeSetRefusal` stays authoritative)",
    "p4": "—",
-   "notes": "—"
+   "notes": "`utils/manualBypass.ts`: a Stop / Bypass pair on an interior waypoint whose actual crossing the rails offer both ways (Altoona's bow); a forced bypass is stated, not offered; the existing `bypass: true` waypoint flag, no engine, schema or auto-route change. `manualCityBypass.test.tsx`.",
+   "status": "IMPLEMENTED — W3-E `07454d0` + review follow-ups `6d7cfa1`, integrated `a860178`"
   },
   {
    "key": "AUD-07.04",
@@ -1116,7 +1120,8 @@
    "disp": "A",
    "od": "OD-3",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-E `4f998b8` (REQUESTED / EXECUTED from `pending_mh_exchange`), integrated `09fcb25`"
   },
   {
    "key": "AUD-10.04",
@@ -1156,7 +1161,8 @@
    "disp": "A",
    "od": "OD-3",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-E `4f998b8` (requester toast, table marker, chip state, OD-3's generic \"expired\" line), integrated `09fcb25`"
   },
   {
    "key": "AUD-10.07",
@@ -1169,7 +1175,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-E RR-6 `91037ce` (waiver, certificate limit, owner's pile with no substitution, queued timing), integrated `09fcb25`"
   },
   {
    "key": "AUD-11.01",
@@ -1276,7 +1283,8 @@
    "disp": "B",
    "od": "OD-13",
    "p4": "—",
-   "notes": "The draft map sent this to \"its own pass\" without an owner placement; the audit budgets it in Phase 3."
+   "notes": "The draft map sent this to \"its own pass\" without an owner placement; the audit budgets it in Phase 3.",
+   "status": "IMPLEMENTED — W2-L `e16aa5a` (U-41), integrated `615e183`"
   },
   {
    "key": "AUD-12.03",
@@ -1289,7 +1297,8 @@
    "disp": "B",
    "od": "OD-13",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-L `e16aa5a` (U-43 (1)–(4)), integrated `615e183`"
   },
   {
    "key": "AUD-12.04",
@@ -1342,7 +1351,8 @@
    "disp": "C",
    "od": "OD-14(d)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "OPEN — W2-L keeps \"traded\" for the first Diesel's trade-in (OD-14(d) as the owner gave it to that slice); no label change; OD-14(d)'s text is not yet transcribed in the plan's §7.3"
   },
   {
    "key": "AUD-13.01",
@@ -4466,6 +4476,18 @@
     "The other OD-12-gated W3 defects are not implemented in that task."
    ],
    "effect": "W1-N's R2 call site deleted as its own commit (`87d63c4`, independently reviewed: APPROVE WITH NITS, comment nits fixed outside RED in `819a204`). The remaining OD-12 candidates (W2-J K-18; W3-C, W3-B, W3-I, W3-A, W3-H) each still land as one separately reviewed RED commit under §5.1's serialization rule."
+  },
+  "OD-11": {
+   "title": "CITY BYPASS (W3-E)",
+   "date": "2026-10-03",
+   "ruling": [
+    "W3-E: manual route only.",
+    "Preserve automatic route optimality unchanged.",
+    "Stop/Bypass is offered only when the exact crossing supports both arms.",
+    "Forced bypass remains forced.",
+    "Whole-set `routeSetRefusal` remains authoritative."
+   ],
+   "effect": "From the owner's safe Wave-2 integration brief, which integrates W3-E (OD-11 = build). W3-E landed (`a860178`); AUD-07.03 C → B, IMPLEMENTED. No engine, schema, rules-version or auto-route change."
   }
  },
  "wave1_integration": {
@@ -4563,26 +4585,69 @@
   "W2-B": "NOT STARTED",
   "W2-C": "NOT STARTED",
   "W2-D": "NOT STARTED",
-  "W2-E": "NOT STARTED",
+  "W2-E": "COMPLETE — `phase3/w2-mh-queued-visibility` `4f998b8` + RR-6 `91037ce`; integrated at the safe Wave-2 integration (`09fcb25`). Residue outside its rows: `privateCatalog.ts`'s MH ability text (W1-L / W2-J copy) and the chip's Stock-Round-only gate (W2-D)",
   "W2-F": "NOT STARTED",
-  "W2-G": "NOT STARTED",
-  "W2-H": "NOT STARTED",
+  "W2-G": "IN PROGRESS — an implementation exists (`phase3/w2-emergency-funding-ui` `695afe9`; its UI is accepted) but it is HELD and NOT integrated: it removes the bankruptcy button while v12 still has authority states that require it, so it lands together with the OD-4 v13 work",
+  "W2-H": "COMPLETE — `phase3/w2-waiting-prompts` `3b7f23b`, `5cc5ccc`, `461d4f0`; integrated at the safe Wave-2 integration (`66977d5`). K-21's second half (the President's Skip while placing) stays W2-A's",
   "W2-I": "NOT STARTED",
   "W2-J": "NOT STARTED",
-  "W2-K": "NOT STARTED",
-  "W2-L": "NOT STARTED",
+  "W2-K": "IN PROGRESS — implemented (`phase3/w2-money-copy` `e223f64`); not yet integrated (the branch is not yet on GitHub). The official Keplr logo is ASSET PENDING (OD-9(b))",
+  "W2-L": "COMPLETE — `phase3/w2-postgame-statistics` `e16aa5a` (derived history only); integrated at the safe Wave-2 integration (`615e183`). AUD-12.07 stays owner-gated (\"traded\" kept); S10-21's non-UR remainder stays open",
   "W2-M": "NOT STARTED",
   "W3-A": "NOT STARTED",
   "W3-B": "NOT STARTED",
   "W3-C": "NOT STARTED",
   "W3-D": "NOT STARTED",
-  "W3-E": "NOT STARTED",
+  "W3-E": "COMPLETE — `phase3/w3-manual-city-bypass` `07454d0` + review follow-ups `6d7cfa1`; integrated at the safe Wave-2 integration (`a860178`) under OD-11",
   "W3-F": "NOT STARTED",
   "W3-G": "NOT STARTED",
   "W3-H": "NOT STARTED",
   "W3-I": "NOT STARTED",
   "W3-J": "NOT STARTED",
-  "W3-K": "NOT STARTED — OD-2 schedules SBS-2 (\"Pass Turn\" ends the turn in one click) into the v13 rules slice it is the vehicle for; SBS-4 needs reproduction first"
+  "W3-K": "NOT STARTED — OD-2 schedules SBS-2 (\"Pass Turn\" ends the turn in one click) into the v13 rules slice it is the vehicle for; SBS-4 needs reproduction first; `phase3/v13-scope-verification` (`9b3f60b`) is NOT merged (it is on an older planning lineage) — its evidence is reconciled during W3-K. Settlement v13 is not certified"
  },
- "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements."
+ "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words.",
+ "wave2_safe_integration": {
+  "branch": "phase3/wave2-safe-integration",
+  "base": "4e51cff7014632726de94f44024d66fc433b12cb (phase3/wave1-integration)",
+  "status": "PROVISIONAL — integrated; owner broad gate pending; not merged to main",
+  "inputs": {
+   "W2-H": {
+    "branch": "phase3/w2-waiting-prompts",
+    "head": "461d4f0422aab11a947ac7dd1a79baeb4a75bc67",
+    "parent": "fee2f66 (L5)",
+    "merge": "66977d5"
+   },
+   "W2-E": {
+    "branch": "phase3/w2-mh-queued-visibility",
+    "head": "91037cef9eb271981c02f544f253db4b462f7923",
+    "parent": "6f42dca (L2)",
+    "merge": "09fcb25"
+   },
+   "W2-L": {
+    "branch": "phase3/w2-postgame-statistics",
+    "head": "e16aa5ad1b824b1c00e0bfa5dd41ec378eed4d6f",
+    "parent": "8f33f0f (Wave-1 base)",
+    "merge": "615e183"
+   },
+   "W3-E": {
+    "branch": "phase3/w3-manual-city-bypass",
+    "head": "6d7cfa19be5414404c16108f7f5487b8d9aadcb8",
+    "parent": "bee2717 (L4)",
+    "merge": "a860178"
+   }
+  },
+  "integration_commits": {
+   "tileRingView.test.ts import/first hygiene (Wave-1 residue; test-only, no semantic change)": "8d6feaa"
+  },
+  "held": {
+   "W2-G": "phase3/w2-emergency-funding-ui @ 695afe9 — implementation exists, UI accepted; NOT integrated: it removes the bankruptcy button while v12 still has authority states that require it. Lands with the OD-4 v13 work.",
+   "phase3/v13-scope-verification": "9b3f60b — not merged (older planning lineage); its evidence is reconciled during W3-K."
+  },
+  "notes": [
+   "The tutorial architecture remains later spotlight / whitebox work; nothing in this integration changes it.",
+   "OD-3 (W2-E), OD-13 and OD-14(d) (W2-L) were applied by those slices as the owner gave them; their text is not in the integration brief, so it is not transcribed into owner_rulings here.",
+   "No rules-engine version change (v12; settlement-certified [10, 11, 12] unchanged). W3-K and settlement v13 are not complete."
+  ]
+ }
 }

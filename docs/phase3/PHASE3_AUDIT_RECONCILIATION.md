@@ -46,9 +46,9 @@ observation, decision or process item.
 
 | Block | Rows | Dispositions |
 |---|---|---|
-| Audit items (`AUD-*`) | 167 | A 61 · B 43 · C 16 · D 22 · E 2 · F 23 · G 0 |
+| Audit items (`AUD-*`) | 167 | A 61 · B 44 · C 15 · D 22 · E 2 · F 23 · G 0 |
 | Flourish-ledger items the audit counts (`VF/*`: 47 PLAYTEST, 21 recorded owner decisions, 23 OPEN) | 91 | A 0 · B 17 · C 6 · D 47 · E 0 · F 21 · G 0 |
-| **Substantive audit items, total** | **258** | A 61 · B 60 · C 22 · D 69 · E 2 · F 44 · G 0 |
+| **Substantive audit items, total** | **258** | A 61 · B 61 · C 21 · D 69 · E 2 · F 44 · G 0 |
 | Execution-map-only NEW-SOURCE-FINDINGS (`P3-N*`) | 26 | A 21 · B 0 · C 1 · D 0 · E 1 · F 2 · G 1 |
 
 - **G = 0 among the audit's own items.** Where the audit and source disagree, the source evidence was unambiguous and the
@@ -56,6 +56,7 @@ observation, decision or process item.
   ruling (2026-10-03): P3-N024 (SBS-4) needs a precise reproduction / clarification before anything is built from it.
 - **Totals after the Wave-1 integration (2026-10-03):** AUD-09.10 (RR-4) moved C → B when OD-7 was ruled and implemented as
   copy; P3-N024 moved C → G under OD-2. The planning-snapshot totals were A 61 · B 59 · C 23 (audit) and C 2 · G 0 (P3-N).
+- **Totals after the safe Wave-2 integration (2026-10-03):** AUD-07.03 (K-06 / U-17) moved C → B when OD-11 was ruled (build) and W3-E landed.
 - **Every audit bullet** (123 bullets in §1–§21) and every item-bearing statement outside them (scope, gate, highest-risk,
   the Phase-4 list, the closing remark) maps to at least one row; every `AUD-*` / `VF/*` row is reached from the audit. See
   the bullet map at the end and `check_phase3_accounting.py`.
@@ -114,6 +115,31 @@ checker verifies that a COMPLETE slice has no unimplemented A/B row and that eac
 - **OD-12 — RED REGIONS.** W1-N's R2 call site deleted as its own commit (`87d63c4`, independently reviewed: APPROVE WITH NITS, comment nits fixed outside RED in `819a204`). The remaining OD-12 candidates (W2-J K-18; W3-C, W3-B, W3-I, W3-A, W3-H) each still land as one separately reviewed RED commit under §5.1's serialization rule.
 
 Remaining Wave-1 owner blocker: **OD-14(a)** (W1-I's fit-probe removal and the optional W1-I-b). W1-K was not in Wave 1.
+
+## Safe Wave-2 integration status (2026-10-03)
+
+**Branch** `phase3/wave2-safe-integration` from `phase3/wave1-integration` @ `4e51cff`. **PROVISIONAL — integrated, owner broad
+gate pending; not merged to main.** Each input's delta after its accepted Wave-1 parent was merged `--no-ff`; every slice delta and
+Wave-1's own integration edits reverse-apply on the result.
+
+| Slice | Branch @ head (parent) | Merge |
+|---|---|---|
+| W2-H | `phase3/w2-waiting-prompts` @ `461d4f0` (L5 `fee2f66`) | `66977d5` |
+| W2-E | `phase3/w2-mh-queued-visibility` @ `91037ce` (L2 `6f42dca`) | `09fcb25` |
+| W2-L | `phase3/w2-postgame-statistics` @ `e16aa5a` (`8f33f0f`) | `615e183` |
+| W3-E | `phase3/w3-manual-city-bypass` @ `6d7cfa1` (L4 `bee2717`) | `a860178` |
+
+Integration commit: `8d6feaa` — `utils/tileRingView.test.ts` `import/first` hygiene (Wave-1 residue; test-only, no semantic change).
+
+**Slice status:** W2-H, W2-E, W2-L and W3-E COMPLETE (their A/B rows IMPLEMENTED; AUD-07.03 C → B under OD-11). W2-K: IN
+PROGRESS — implemented on `phase3/w2-money-copy` @ `e223f64`, not yet integrated; the official Keplr logo is ASSET PENDING.
+**W2-G: IN PROGRESS — implemented (`695afe9`, UI accepted) but HELD, NOT integrated** (it removes the bankruptcy button while v12
+still has authority states that require it; it lands with the OD-4 v13 work). **W3-K is not complete and settlement v13 is not
+certified**; `phase3/v13-scope-verification` is not merged — its evidence is reconciled during W3-K. The tutorial architecture
+remains later spotlight / whitebox work. Rules version unchanged (v12).
+
+**Owner ruling recorded:** OD-11 (plan §7.3). OD-3, OD-13 and OD-14(d) were applied by W2-E / W2-L as given to those slices; not
+transcribed (their text is not in the integration brief).
 
 ## Scope and closing remark
 
@@ -216,7 +242,7 @@ Remaining Wave-1 owner blocker: **OD-14(a)** (W1-I's fit-probe removal and the o
 |---|---|---|---|---|---|---|---|
 | **AUD-07.01** · K-11 · §7<br>A hand-drawn route set below the maximum is offered, then refused. | [D] | CONFIRMED — pre-check calls `evaluateRouteSet`, not `routeSetRefusal` (`frontend/src/App.tsx`:10093-10116; `gameEngine/routeAuthority.ts`:302-332). | W1-G | **A** | — | — | — |
 | **AUD-07.02** · K-26 · §7<br>The route tooltip says revenue is withheld before the dividend choice. | [D] | CONFIRMED — live at `panels/ContextualActionBar.tsx`:3449 ("Revenue is withheld into the treasury…"); also in the unmounted `RoutePlannerPanel.tsx`. | W1-G | **A** | — | — | — |
-| **AUD-07.03** · U-17 / K-06 · §7<br>No control for bypassing a city on a route; the engine already supports it. | [UX] | PARTIAL — `gameEngine/cityBypass.ts`; bypass is sent automatically (auto-route, `withForcedBypass`) but there is no voluntary control. | W3-E (conditional) | **C** | OD-11 | — | — |
+| **AUD-07.03** · U-17 / K-06 · §7<br>No control for bypassing a city on a route; the engine already supports it. | [UX] | PARTIAL — `gameEngine/cityBypass.ts`; bypass is sent automatically (auto-route, `withForcedBypass`) but there is no voluntary control. | W3-E (OD-11 ruled: build; landed at the safe Wave-2 integration) | **B** | OD-11 (RULED 2026-10-03: manual route only; automatic route optimality unchanged; Stop/Bypass only where the exact crossing supports both arms; a forced bypass stays forced; whole-set `routeSetRefusal` stays authoritative) | — | `utils/manualBypass.ts`: a Stop / Bypass pair on an interior waypoint whose actual crossing the rails offer both ways (Altoona's bow); a forced bypass is stated, not offered; the existing `bypass: true` waypoint flag, no engine, schema or auto-route change. `manualCityBypass.test.tsx`. |
 | **AUD-07.04** · S6-13 · §7, U-28<br>The panel's route validators duplicate the engine's, so click feedback can disagree. | [UX] | CONFIRMED — `RoutePlannerPanel.tsx`:166-200 `isRunnableDraft` vs `routeAuthority.ts`:151, 302. | W1-G | **A** | — | — | — |
 | **AUD-07.05** · RR-1 · §7<br>Copy implies a human must demonstrate a better route. | [UX] | CONFIRMED — `RulesReference.tsx`:613. | W1-L | **A** | — | — | — |
 | **AUD-07.06** · S6-15 / S6-16 · §7<br>Fixed by rules v12. | [R] | RESOLVED — v12 (`gameEngine/rulesVersion.ts`), present at 8e897f9. | — | **F** | — | — | — |

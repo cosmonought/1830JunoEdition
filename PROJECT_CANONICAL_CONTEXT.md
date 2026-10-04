@@ -347,6 +347,14 @@ Phases 1, 2, 2.5, 3A, 3B, ESCROW-JOIN and ESCROW-4: COMPLETE
 
 Gno is parked.
 
+**Phase-3 (player-facing UI / UX) planning is preserved under [`docs/phase3/`](docs/phase3/README.md)** (planned on
+`phase3/reconciled-execution-plan` @ `6455b6e`): the authoritative UI/UX audit, its one-to-one reconciliation matrix and the
+self-contained execution plan. The owner's fixed order is Phase 1 server / infrastructure migration → 2 JUNO testnet live
+proof → **3 player-facing UI / UX** → 4 human playtesting → **5 the major App.tsx refactor** → 6 polish / release testing →
+7 mainnet; the list above predates it and P0 of the plan updates it. **Wave 1 is integrated provisionally on
+`phase3/wave1-integration`** (2026-10-03, from `8f33f0f`, not merged; owner broad gate #1 pending); owner rulings OD-1, OD-2,
+OD-7 and OD-12 are recorded in the plan's §7.3. Gameplay rules stay v12.
+
 **LIVE-4 status (2026-09-29): CLOSED.** Integrated at `6da8a1f` (corpus-gate certified), tooled / documented by L4-6
 (`89a4b5b`) and certified by L4-7 (`f1736bf` on it, plus a documentation-only evidence commit). **LIVE-5 is in progress: L5-1 … L5-6 are done and integrated (`e1f1280`); L5-7 (the AWS runtime convergence: the substrate wired into `GS_STORAGE=aws`) is done on its feature branch `live5/l5-7-aws-runtime`, and L5-8 (the AWS infrastructure and deployment: `infra/aws/`, the bootstrap and verifier; nothing deployed) on `live5/l5-8-aws-infrastructure` on top of it, owner gates pending. LIVE-6 L6-1 (non-primary serving and routing) is done on its feature branch `live6/l6-1-nonprimary-routing` (from the L5-7 head), its owner gate pending; LIVE-6 L6-3 (the AWS operator tooling) is done on its own feature branch `live6/l6-3-dynamodb-operator-tooling` from L5-7, its owner gate pending; L6-2 next.**
 (the owner's brief sets its scope; its LIVE-4 inputs are the L4-7 report's handoffs and `LIVE4_COMPATIBILITY_MODEL.md`
@@ -390,6 +398,7 @@ ESCROW-3A's procedure is how the next rules version is certified for settlement:
 | `RULES_HARDENING_BACKLOG.md` | The living ledger. Read it by section, never whole. Part B: open rules items. **Part C: the one UI/UX backlog (U-items).** Part D: owner decisions (D-n). Part E: the replay/version ledger |
 | `VARIANT_CERT_DELAYED_AUCTION_AUDIT_2026-09-25.md` | The current Delayed Auction audit, at revision 11 (the DA closure record in the repo) |
 | `VISUAL_FLOURISH_BACKLOG.md` | The visual-polish backlog. Only for the UX backlog/polish phase |
+| `docs/phase3/` | **Phase-3 UI/UX planning:** the audit, the reconciliation matrix, the execution plan and their progress (start at its `README.md`) |
 | `contracts/escrow/README.md`, `contracts/escrow/gasbench/README.md` | The escrow contract and its gas harness |
 | `LIVE4_COMPATIBILITY_MODEL.md` | **LIVE-4's compatibility model:** the four identities (rules, hosted, financial, client), the two directions of compatibility, the operator surfaces (banner, `ops/status.json`, `gamesDoctor compat` / `continuation`), the newer-format log runbook, the LIVE-5 edge requirement and the `/gs/api/*` decision |
 | `PLAYTEST_TRANSPORT.md`, `PLAYTEST_NGROK.md`, `start-playtest.ps1` | Runbooks for hosted playtests (build ids are diagnostic for current browsers; LIVE-4) |

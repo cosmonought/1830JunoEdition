@@ -16,6 +16,9 @@ The machine-checkable form is [`phase3_accounting.json`](phase3_accounting.json)
 **Planning snapshot (source facts only — NOT the implementation base).** `recon/phase1-remainder-hardening` at
 `8e897f9c5196f825a69c492dfb7c29088123cf67`. The Phase-3 implementation base is **TBD — the final canonical integrated head
 after Phase 2 closes** (OD-0 in the plan).
+Wave 1 was built on `8f33f0fb72d462c381a572015de7860a93fbd198` by the owner's brief and integrated provisionally on
+`phase3/wave1-integration` (see "Wave-1 integration status" below). The CURRENT-SOURCE STATUS column still records the
+planning snapshot; each row's progress since is its `status`.
 
 **Snapshot facts, measured.**
 - The audit read `7b1a956` (`live6/live-closure-candidate-w1`). Between `7b1a956` and `8e897f9`, `frontend/src` differs only by
@@ -43,19 +46,74 @@ observation, decision or process item.
 
 | Block | Rows | Dispositions |
 |---|---|---|
-| Audit items (`AUD-*`) | 167 | A 61 · B 42 · C 17 · D 22 · E 2 · F 23 · G 0 |
+| Audit items (`AUD-*`) | 167 | A 61 · B 43 · C 16 · D 22 · E 2 · F 23 · G 0 |
 | Flourish-ledger items the audit counts (`VF/*`: 47 PLAYTEST, 21 recorded owner decisions, 23 OPEN) | 91 | A 0 · B 17 · C 6 · D 47 · E 0 · F 21 · G 0 |
-| **Substantive audit items, total** | **258** | A 61 · B 59 · C 23 · D 69 · E 2 · F 44 · G 0 |
-| Execution-map-only NEW-SOURCE-FINDINGS (`P3-N*`) | 26 | A 21 · B 0 · C 2 · D 0 · E 1 · F 2 · G 0 |
+| **Substantive audit items, total** | **258** | A 61 · B 60 · C 22 · D 69 · E 2 · F 44 · G 0 |
+| Execution-map-only NEW-SOURCE-FINDINGS (`P3-N*`) | 26 | A 21 · B 0 · C 1 · D 0 · E 1 · F 2 · G 1 |
 
-- **G = 0.** Where the audit and source disagree, the source evidence was unambiguous and the row is **F**, re-confirmed at
-  the final integrated head in W3-F. No row is left blocked.
+- **G = 0 among the audit's own items.** Where the audit and source disagree, the source evidence was unambiguous and the
+  row is **F**, re-confirmed at the final integrated head in W3-F. **One NEW-SOURCE-FINDING is G** since the owner's OD-2
+  ruling (2026-10-03): P3-N024 (SBS-4) needs a precise reproduction / clarification before anything is built from it.
+- **Totals after the Wave-1 integration (2026-10-03):** AUD-09.10 (RR-4) moved C → B when OD-7 was ruled and implemented as
+  copy; P3-N024 moved C → G under OD-2. The planning-snapshot totals were A 61 · B 59 · C 23 (audit) and C 2 · G 0 (P3-N).
 - **Every audit bullet** (123 bullets in §1–§21) and every item-bearing statement outside them (scope, gate, highest-risk,
   the Phase-4 list, the closing remark) maps to at least one row; every `AUD-*` / `VF/*` row is reached from the audit. See
   the bullet map at the end and `check_phase3_accounting.py`.
 - **One row, one disposition.** Where the audit names an item twice (U-22 in §4 and §11; RR-7 in §9 and §21; U-35's gotcha in
   §10 and §21; I-1/R4 in §2/§3 and §19), there is one row with both references. Where one audit bullet holds several
   distinct defects, it is split into several rows.
+
+## Wave-1 integration status (2026-10-03)
+
+**Branch** `phase3/wave1-integration` from base `8f33f0fb72d462c381a572015de7860a93fbd198` (the owner's Wave-1 brief). **PROVISIONAL — integrated, owner broad gate #1 pending; not merged to main.** Planning record:
+`6455b6ecad5754a9e980c64e1cee2a4a417bc447 (phase3/reconciled-execution-plan)`. Wave 1 was implemented on 8f33f0f by the owner's brief. Whether 8f33f0f is the OD-0 pin, or Wave 1 is carried onto the final post-Phase-2 head, is the owner's call; OD-0's drift check against the final pin is still owed.
+
+| Lane | Branch @ head | Slices |
+|---|---|---|
+| L1 | `phase3/w1-stock-auction` @ `76056b7` | P0 S1, W1-A, W1-B |
+| L2 | `phase3/w1-private-powers` @ `6f42dca` | W1-C, W1-M |
+| L3 | `phase3/w1-offers-rescind` @ `3dbf02b` | W1-D |
+| L4 | `phase3/w1-map-route` @ `bee2717` | W1-E, W1-F, W1-G |
+| L5 | `phase3/w1-shell-status` @ `fee2f66` | W1-I (unconditional), W1-J |
+| L6 | `phase3/w1-refusals-reference` @ `8d6f1e9` | W1-H, W1-L (unconditional) |
+| L7 | `phase3/w1-endgame-hostgame` @ `b19dff5` | W1-N (non-RED), W1-O (non-RulesReference) |
+
+Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments only) `819a204`; OD-7 Rules Reference copy (RR-4) `ca73834`; cross-lane reconciliation `8dc79e0`.
+
+**Slice status** (machine copy: `slice_status` in `phase3_accounting.json`; wave-2 and wave-3 slices not listed are NOT STARTED):
+
+| Slice | Status |
+|---|---|
+| P0 | PARTIAL — only the S1 seam landed (L1 `42c67ee`); the OD-0 drift check, the conventions publication and the roadmap-order update (AUD-00.02) were not run |
+| W1-A | COMPLETE — L1 `82c1de9` (Stock Round reads one authority) |
+| W1-B | COMPLETE — L1 `f0a7183` + review fixes `76056b7` |
+| W1-C | COMPLETE — L2 `91b537f`; modal presentation follow-up at the integration (`8dc79e0`) |
+| W1-D | COMPLETE — L3 `94e5df1` + review fixes `3dbf02b`; rescind Activity Log lines at the integration (`8dc79e0`) |
+| W1-E | COMPLETE — L4 `43a641f` + review follow-ups `bee2717`; canonical tile name in the ring refusal at the integration (`8dc79e0`) |
+| W1-F | COMPLETE — L4 `9baf4da` |
+| W1-G | COMPLETE — L4 `a8b9f27` + review follow-ups `bee2717` |
+| W1-H | COMPLETE — L6 `2e0700b` + review fixes `cb0c49c` |
+| W1-I | PARTIAL — the unconditional portion is complete (L5 `9dcad19`, `b9fd1bf`, `82b93ca`, `beac07a`, `3904533`, `fee2f66`); OD-14(a) remains (the fit-probe removal, AUD-01.01, waits on it, and W1-I-b exists only if it is ruled in) |
+| W1-J | COMPLETE — L5 `5a56987` |
+| W1-K | NOT STARTED — not one of the seven Wave-1 lane branches |
+| W1-L | COMPLETE — unconditional portion, L6 `de22084` + review fix `8d6f1e9`; RR-4 copy per OD-7 at the integration (`ca73834`). AUD-18.07 stays owner-gated (OD-14(e)) |
+| W1-M | COMPLETE — L2 `6f42dca` |
+| W1-N | COMPLETE — L7 `9d9376b` + review fixes `06c3a91`; the OD-12 RED R2 call-site deletion `87d63c4` (+ comment follow-up `819a204`); tie-aware game-over strip at the integration (`8dc79e0`) |
+| W1-O | COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`) |
+| W3-K | NOT STARTED — OD-2 schedules SBS-2 ("Pass Turn" ends the turn in one click) into the v13 rules slice it is the vehicle for; SBS-4 needs reproduction first |
+
+**W2-A, W2-B, W2-F and W3-K are not complete** (nor started). Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
+`OPEN`, `NOT STARTED`, `RULED`, `NEEDS PRECISE REPRODUCTION / CLARIFICATION`) is the `status` field of its JSON row; the
+checker verifies that a COMPLETE slice has no unimplemented A/B row and that each status agrees with its disposition.
+
+**Owner rulings recorded (2026-10-03)** — full text in the plan, §7.3:
+
+- **OD-1 — AUTHORITATIVE HOLD PRESENTATION.** Recorded only. Not implemented in the Wave-1 integration: W2-A and W2-F implement it (W2-G and W2-H take its viewer scope). The Routes/Dividends spectator visibility is unchanged by Wave 1.
+- **OD-2 — STOCK ROUND PASS.** Recorded as RESOLVED; NOT implemented in the Wave-1 integration (no rules or version change). SBS-2 goes to the v13 rules slice (W3-K is its vehicle) with its own settlement certification; W2-B presents the one-click "Pass Turn". P3-N024 (SBS-4) becomes G: needs precise reproduction / clarification. The rules version stays v12.
+- **OD-7 — FORCED TRAIN PURCHASE.** Implemented as copy at the Wave-1 integration (`ca73834`): every RR-4 site in `components/RulesReference.tsx` corrected; the engine (which already allowed any legal treasury-funded purchase) is unchanged. AUD-09.10 C → B, IMPLEMENTED. W2-J and W3-K no longer carry RR-4.
+- **OD-12 — RED REGIONS.** W1-N's R2 call site deleted as its own commit (`87d63c4`, independently reviewed: APPROVE WITH NITS, comment nits fixed outside RED in `819a204`). The remaining OD-12 candidates (W2-J K-18; W3-C, W3-B, W3-I, W3-A, W3-H) each still land as one separately reviewed RED commit under §5.1's serialization rule.
+
+Remaining Wave-1 owner blocker: **OD-14(a)** (W1-I's fit-probe removal and the optional W1-I-b). W1-K was not in Wave 1.
 
 ## Scope and closing remark
 
@@ -88,7 +146,7 @@ observation, decision or process item.
 | **AUD-02.04** · H-04 · §2, §14<br>A double-click on the auction dashboard sends twice (latch does not cover it). | [D] | CONFIRMED — `frontend/src/App.tsx`:14399/14416 `sessionReady={controlsEnabled}` without `actionInFlight`. | W1-B | **A** | — | — | — |
 | **AUD-02.05** · I-1 · §2, §19<br>A second B&O par press after a reconnect produces an error banner (the first, queued, send lands later). | [D] | NOT RE-VERIFIED at runtime — mechanism per 6.5-B §11.5: needs the link's queued-submission state in the modal. | W3-I | **B** | OD-12 (only if the submit half or link drain must change) | — | The draft map deferred this to Phase 4; it is a known defect, so it stays in Phase 3. |
 | **AUD-02.06** · I-2 · §2<br>The "not reached the table yet" note can flash after a send that did land. | [D] | CONFIRMED (copy present) — `components/AuctionPromptModal.tsx` `PAR_NOT_LANDED_NOTE`; timing per 6.5-B §11.5. | W3-I | **B** | — | — | The draft map called this cosmetic and deferred it; a known defect stays in Phase 3. |
-| **AUD-02.07** · H5 (auction) · §2<br>The auction prompt's handoff state has no focusable control; blocked on the same product decision as the home-station prompt. | [UX] | CONFIRMED — modal audit H5; `AuctionPromptModal` handoffPending renders zero tabbable controls. | W2-H | **A** | OD-1 | — | — |
+| **AUD-02.07** · H5 (auction) · §2<br>The auction prompt's handoff state has no focusable control; blocked on the same product decision as the home-station prompt. | [UX] | CONFIRMED — modal audit H5; `AuctionPromptModal` handoffPending renders zero tabbable controls. | W2-H | **A** | OD-1 (RULED 2026-10-03) | — | — |
 | **AUD-02.08** · — · §2<br>No standing "auction owed" indicator; a first-5-train cancellation of the Delayed Auction appears only as a log line. | [UX] | CONFIRMED by reading — no persistent indicator component found; the cancellation is narration only. | W2-I | **B** | — | — | Not in the draft map. Not gated by OD-6. |
 | **AUD-02.09** · DA6-O1 · §2<br>The auction tutorial page "When everybody passes" is wrong. | [D] | RESOLVED (audit text stale) — closed at DA-7 (`RULES_HARDENING_BACKLOG.md`:3666, 3678); `components/TutorialModal.tsx`:120-133 states §1.2.3's two exclusive outcomes. | W3-F (confirm at the final head) | **F** | — | — | — |
 | **AUD-02.10** · H-02 · §2<br>B&O par prompt derived from the board. | [R] | RESOLVED — `boParOwedTo(liveState)` (6.5-B §1.2). | — | **F** | — | — | — |
@@ -103,11 +161,11 @@ observation, decision or process item.
 | **AUD-03.01** · U-23 / K-19 · §3<br>The first-Stock-Round sale ban is restated inside the panel, and its tooltip presents rulebook §5.1 as a house rule. | [D] | CONFIRMED (wording differs) — `components/StockRoundPanel.tsx` local `sellingForbidden`; tooltip "…Project 18XX opens the market to sales from SR2 onward" (a project rule, not §5.1). | W1-A | **A** | — | — | — |
 | **AUD-03.02** · U-25 · §3<br>Par ladder, affordability, share source and multi-buy limit are computed locally; a 0% source still offers Buy. | [D] | PARTIAL — locals at `StockRoundPanel.tsx`:2333, 2412, 2426, 2557-2597, 2861, 2982; an empty source is disabled, but an IPO that is entirely C&A-reserved can be enabled. Engine `maxPurchaseQuantity` / `ordinaryPercentAvailable` exist unused. | W1-A | **A** | — | — | — |
 | **AUD-03.03** · U-39 / K-07 · §3<br>Level Playing Field: a legal fifth certificate cannot be sold into the Bank Pool (panel keeps its own 50% cap). | [D] | CONFIRMED — `StockRoundPanel.tsx` `BANK_POOL_CAP_PERCENT`. | W1-A | **A** | — | — | — |
-| **AUD-03.04** · SBS-1 / SBS-2 · §3<br>Forced sell → Pass → buy walk; ending a turn takes two Pass presses; target one Pass/End Turn control. | [UX] ★ | CONFIRMED — `frontend/src/App.tsx`:14042-14046; `panels/ContextualActionBar.tsx`:4151-4207; `gameEngine/sandboxSession.ts`:5590-5592. | W2-B | **A** | OD-2 | — | The audit cites OD-A-4 here; the 6.5-A register files the Pass question as OD-A-2. OD-2 covers both. |
+| **AUD-03.04** · SBS-1 / SBS-2 · §3<br>Forced sell → Pass → buy walk; ending a turn takes two Pass presses; target one Pass/End Turn control. | [UX] ★ | CONFIRMED — `frontend/src/App.tsx`:14042-14046; `panels/ContextualActionBar.tsx`:4151-4207; `gameEngine/sandboxSession.ts`:5590-5592. | W2-B (the one-click "Pass Turn" control) + W3-K (v13: PassTurn ends the turn) | **A** | OD-2 (RULED 2026-10-03: Sell whenever legal; at most one Buy; after buying, Sell remains; one-click "Pass Turn"; v13 rules slice + settlement certification) | — | The old Sell → Buy → Sell stage walk is superseded. Wave-1's `sellBuySell` pins describe v12 and are interim until the v13 slice replaces them. The audit cites OD-A-4 here; the 6.5-A register files the Pass question as OD-A-2; OD-2 answered OD-A-2. SBS-4 is P3-N024 and is not resolved. |
 | **AUD-03.05** · K-12 · §3<br>Auto-Buy never checks cash, so it stalls. | [D] | CONFIRMED — `frontend/src/App.tsx`:9888-9969; no cash test in `utils/autoBuy.ts` / `sharePurchase.ts`. | W1-A | **A** | — | See AUD-24.03 (the stall's UX is observed in Phase 4). | — |
 | **AUD-03.06** · SBS-5 · §3<br>Auto-Buy passes the stage before checking the must-sell rule. | [D] | CONFIRMED — `frontend/src/App.tsx`:9917-9923 (stage pass) before 9927-9935 (divestment). | W1-A | **A** | — | — | — |
 | **AUD-03.07** · — · §3<br>The must-sell hold is shown only in tooltips. | [UX] | CONFIRMED by reading — `divestmentRefusal` reaches `title` attributes only. | W2-B | **A** | — | — | — |
-| **AUD-03.08** · K-18 / U-36 · §3<br>The sold-out price-rise log line describes a further, hypothetical rise (mirror written before the line). | [D] | CONFIRMED — `frontend/src/App.tsx`:7000-7002 sets the mirror before `soldOutRises` at 7111-7123 (inside the RED apply half). | W2-J | **A** | OD-12 | — | — |
+| **AUD-03.08** · K-18 / U-36 · §3<br>The sold-out price-rise log line describes a further, hypothetical rise (mirror written before the line). | [D] | CONFIRMED — `frontend/src/App.tsx`:7000-7002 sets the mirror before `soldOutRises` at 7111-7123 (inside the RED apply half). | W2-J | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | — |
 | **AUD-03.09** · K-22 / U-37 · §3<br>A float is not logged until the corporation's first OR turn. | [D] | CONFIRMED — `utils/actionLog.ts`:470-486; `gameEngine/sandboxSession.ts`:7522. | W2-J | **A** | OD-8 | — | — |
 | **AUD-03.10** · I-3 · §3<br>The 400 px prompt pointer overlaps the Private Companies card. | [D] | CONFIRMED — `components/PrivateCompaniesSection.tsx`:575-580 (`min(400px, …)`, fixed bottom-right; same at `PrivateTradePanel.tsx`:1071, `TrainPurchasePanel.tsx`:2469). | W2-F | **B** | — | — | The draft map deferred this as cosmetic; it stays in Phase 3. |
 | **AUD-03.11** · R4 · §3, §19<br>The typed offer form is lost if a send is dropped. | [UX] | CONFIRMED — `PrivateCompaniesSection.tsx`:348-349 `onPropose(intent); setDraft(null);` unconditionally. | W3-I | **B** | — | — | The draft map deferred this; it stays in Phase 3. |
@@ -120,7 +178,7 @@ observation, decision or process item.
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |
 |---|---|---|---|---|---|---|---|
-| **AUD-04.01** · K-13 / U-22 · §4, §11<br>While an OR offer (or any authoritative hold) stands, End Turn / Skip / Buy stay enabled; the hold's sentence must show on every seat. | [UX] ★ | CONFIRMED — `panels/ContextualActionBar.tsx`:1826-2117 and 3488-3505 take no hold reason; `authoritativeHoldRefusal` (`gameEngine/authoritativeHolds.ts`:36) has no UI reader. | W2-A | **A** | OD-1 | — | — |
+| **AUD-04.01** · K-13 / U-22 · §4, §11<br>While an OR offer (or any authoritative hold) stands, End Turn / Skip / Buy stay enabled; the hold's sentence must show on every seat. | [UX] ★ | CONFIRMED — `panels/ContextualActionBar.tsx`:1826-2117 and 3488-3505 take no hold reason; `authoritativeHoldRefusal` (`gameEngine/authoritativeHolds.ts`:36) has no UI reader. | W2-A | **A** | OD-1 (RULED 2026-10-03) | — | — |
 | **AUD-04.02** · A-17 · §4<br>Run Trains is marked as run even when nothing was sent. | [D] | CONFIRMED — `frontend/src/App.tsx`:10019, 10086, 10118, 10279, 10283 (empty `turnRoutes` skips dispatch but sets `ran:true` and Dividends). Outside every RED region. | W1-G | **B** | — | — | The draft map excluded this as RED and deferred it to Phase 4. The nothing-sent case is in `handleRunTrains`, not RED, so it stays in W1-G. The refused-run rollback is a separate finding (P3-N020). |
 | **AUD-04.03** · A-8 · §4<br>The JK chip shows outside the Operating Round (and its armed state carries over). | [D] | CONFIRMED — `frontend/src/App.tsx`:2123-2135 (`jkPowerOffer` has no round-type check, unlike its siblings at 2060 and 2100; only an `orSubPhase !== "Track"` guard, and `orSubPhase` falls back to "Track"), 14110; `panels/ContextualActionBar.tsx`:4377 (rendered in the non-OR rail). | W2-D | **B** | — | — | Not in the draft map. |
 | **AUD-04.04** · DH-1 · §4<br>The D&H owner's Tokens step is never auto-skipped in later turns. | [D] (routed to rules batch) | CONFIRMED — `gameEngine/dhPower.ts`:418-438 `dhFreeStationAvailableFor` ignores the one-turn window (checked only at `dhStationAuthority.ts`:149). | W3-K (conditional, OD-10a) | **C** | OD-10(a) | — | A server derivation change is replay-affecting: v13 + its own settlement certification. Not a UI fix. |
@@ -145,9 +203,9 @@ observation, decision or process item.
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |
 |---|---|---|---|---|---|---|---|
 | **AUD-06.01** · K-21 / U-32 · §6<br>The home-station prompt still says "has floated" although it now appears at the first OR turn. | [D] | CONFIRMED — `components/HomeStationPrompt.tsx`:114, 120; pinned by `utils/homeStationWait.test.ts`:84-88. | W2-H | **A** | — | — | — |
-| **AUD-06.02** · K-21 · §6<br>Skip stays live during home-station placement. | [D] | CONFIRMED — `panels/ContextualActionBar.tsx`:3488-3499 Skip disabled only by `!sessionReady`; `homeTokenBlock` gates Pass only. | W2-A | **A** | OD-1 | — | — |
+| **AUD-06.02** · K-21 · §6<br>Skip stays live during home-station placement. | [D] | CONFIRMED — `panels/ContextualActionBar.tsx`:3488-3499 Skip disabled only by `!sessionReady`; `homeTokenBlock` gates Pass only. | W2-A | **A** | OD-1 (RULED 2026-10-03) | — | — |
 | **AUD-06.03** · A-2 · §6<br>A watching seat that is not president gets the home-station form. | [UX] ★ | CONFIRMED — `frontend/src/App.tsx`:13549-13553 (`!viewerAddress` is true for a seatless watcher; no spectator gate). | W1-J | **A** | — | — | The draft map's exec-only finding "watcher sees live Place Home Station" is this item. |
-| **AUD-06.04** · H5 (home station) · §6<br>A non-president gets a scrim with no exit; needs a product decision. | [UX] ★ | CONFIRMED — modal audit H5 (`tabbableCount: 0`). | W2-H | **A** | OD-1 | — | — |
+| **AUD-06.04** · H5 (home station) · §6<br>A non-president gets a scrim with no exit; needs a product decision. | [UX] ★ | CONFIRMED — modal audit H5 (`tabbableCount: 0`). | W2-H | **A** | OD-1 (RULED 2026-10-03) | — | — |
 | **AUD-06.05** · A-5 · §6<br>A reload between the D&H tile lay and the station makes the free station unreachable. | [D] | CONFIRMED — `usedPrivateAbilities` / `dhStationForfeited` are `useState` (`frontend/src/App.tsx`:1090, 3389-3436); `utils/activePrivatePower.ts`:199-216 needs `dh-tile` in that set; the UI never reads `dh_station_pending`. | W1-M | **B** | — | — | Not in the draft map. Fix shape: also offer the station when the board's `dh_station_pending` names the D&H; leave the local set (DH-3 invariant) otherwise. |
 | **AUD-06.06** · DH-2 · §6, Phase-4 list<br>Whether the D&H modal re-offers the free station later. | [PT] | NOT CODE — reachable only if a lay turn ends with the station neither placed nor forfeited. | — | **D** | — | Record any later-turn D&H re-offer with the log index. | — |
 | **AUD-06.07** · — · §6<br>The Rules Reference marks Lay Track as the current step while the home token is owed. | [UX] | CONFIRMED — `RulesReference.tsx`:84, 972-979, 3386-3390 (no home-token step); `frontend/src/App.tsx`:14921 passes `orSubPhase`. | W1-I | **A** | — | — | — |
@@ -182,9 +240,9 @@ observation, decision or process item.
 | **AUD-09.05** · K-25 · §9<br>The emergency modal says "Bank Depot" when the train is in the Bank Pool. | [D] | CONFIRMED — `components/EmergencyTrainPurchaseModal.tsx`:183. | W2-G | **A** | — | — | — |
 | **AUD-09.06** · A-9 · §9<br>The emergency modal cannot be closed. | [D] | CONFIRMED — `EmergencyTrainPurchaseModal.tsx`:110 (props: no `onClose`), :169 (`dismissible={false}`). | W2-G | **A** | OD-4 | — | — |
 | **AUD-09.07** · U-4 · §9<br>The emergency-funding UI is minimal. | [UX] ★ | CONFIRMED — Part C U-4 `DEFERRED` (minimal by design in Batch 5). | W2-G | **A** | OD-4 | — | — |
-| **AUD-09.08** · U-5 · §9<br>The discard UI is minimal. | [UX] ★ | CONFIRMED — Part C U-5 ("fold into U-6"). | W2-F | **A** | OD-1 | — | — |
-| **AUD-09.09** · U-6 · §9<br>The table needs one "waiting on X" surface for every pending offer. | [UX] ★ | CONFIRMED — four prompts each print their own waiting sentence; `describeStandingOffer` (`pendingOfferHold.ts`:89) unused by UI. | W2-F | **A** | OD-1 | — | — |
-| **AUD-09.10** · RR-4 · §9<br>Forced-purchase copy: "cheapest" when the treasury can pay. | [UX] (owner ruling) | CONFIRMED — "must buy the cheapest available train" at `RulesReference.tsx`:677, 736, 1728, 1764; the engine allows any legal purchase. | W2-J (copy) or W3-K | **C** | OD-7 | — | 6.5-B records that an RR-4 ruling was taken but its text is not in the repository; OD-7 is a confirmation, not a new question. |
+| **AUD-09.08** · U-5 · §9<br>The discard UI is minimal. | [UX] ★ | CONFIRMED — Part C U-5 ("fold into U-6"). | W2-F | **A** | OD-1 (RULED 2026-10-03) | — | — |
+| **AUD-09.09** · U-6 · §9<br>The table needs one "waiting on X" surface for every pending offer. | [UX] ★ | CONFIRMED — four prompts each print their own waiting sentence; `describeStandingOffer` (`pendingOfferHold.ts`:89) unused by UI. | W2-F | **A** | OD-1 (RULED 2026-10-03) | — | — |
+| **AUD-09.10** · RR-4 · §9<br>Forced-purchase copy: "cheapest" when the treasury can pay. | [UX] (owner ruling) | CONFIRMED — "must buy the cheapest available train" at `RulesReference.tsx`:677, 736, 1728, 1764; the engine allows any legal purchase. | W1-L (RR-4 copy per OD-7; landed at the Wave-1 integration) | **B** | OD-7 (RULED 2026-10-03: copy only — ordinary choice when the treasury can pay; "cheapest" only in the emergency purchase; no engine change, no v13) | — | Corrected at all four sites (Buy Trains quick line, Forced train purchase detail, Tables > Forced Train Purchase, the gotcha / Watch For). The engine already allowed any legal treasury-funded purchase; `w1lRulesCopy.test.tsx` proves it on a room. No longer in W2-J or W3-K. |
 | **AUD-09.11** · RR-7 · §9, §21<br>Emergency private-sale copy omits phases 3–4, ½–2× face value, never the B&O. | [UX] | CONFIRMED — `RulesReference.tsx`:~1730 ("Still short — President sells shares or private companies…"). | W1-L | **A** | — | — | — |
 
 ## §10 Presidency / share exchange
@@ -239,7 +297,7 @@ observation, decision or process item.
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |
 |---|---|---|---|---|---|---|---|
-| **AUD-14.01** · — · §14<br>One error-banner slot with ~28 writers, cleared by exact-text match; needs a unified banner model. | [UX] ★ | CONFIRMED — `setSandboxRoomError` (`frontend/src/App.tsx`:4180) + 27 call sites; exact-text clears at 6426, 12526, 12621, 12635. | W3-C | **A** | OD-12 | — | — |
+| **AUD-14.01** · — · §14<br>One error-banner slot with ~28 writers, cleared by exact-text match; needs a unified banner model. | [UX] ★ | CONFIRMED — `setSandboxRoomError` (`frontend/src/App.tsx`:4180) + 27 call sites; exact-text clears at 6426, 12526, 12621, 12635. | W3-C | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | — |
 | **AUD-14.02** · S10-1 · §14<br>Reducer refusals are answered "applied", so the REFUSED receipt never fires in room play. | [D] | RESOLVED (audit text stale) — Stage 10.2 #1685: `utils/roomSession.ts`:775-778, 900-932 return `refused`; `utils/serverLink.ts`:774-800 routes it to `onRefused`. Backlog line 3358 lists S10-1 `RESOLVED`. | W3-F (confirm at the final head) | **F** | — | — | W3-G re-confirms with a focused room test that a reducer refusal reaches `onRefused`. |
 | **AUD-14.03** · U-30 · §14<br>Replayed stock refusals carry no reason. | [D] | PARTIAL — `utils/refusedAction.ts`:185-347 has BuyStock/SellStock arms, but the server path passes no `marketZoneFor` (`roomSession.ts`:915), so BuyStock refusals read generically. | W1-H | **A** | — | — | — |
 | **AUD-14.04** · U-29 · §14<br>Refused private and train purchases look like a button that did nothing. | [UX] | CONFIRMED (Part C U-29) — no arms for the proposal/rescind messages in `refusedAction.ts`. | W1-H | **A** | — | — | — |
@@ -309,7 +367,7 @@ observation, decision or process item.
 | **AUD-20.06** · JX-6C · §20<br>The browser should re-read the chain before a Challenge. | [UX] | CONFIRMED — `money/moneyActions.ts`:591-627 builds from `ctx.view`. | W2-M | **B** | — | — | — |
 | **AUD-20.07** · JX-6E · §20<br>The dispute confirm gives no deadline time; the band shows no dispute record. | [UX] | PARTIAL — `SettlementBand.tsx`:70 shows `hhmm(resolverTimeoutAt) \|\| 'its deadline'`; the record is one generic line (`money/moneyFlow.ts`:468). | W2-M | **B** | — | — | — |
 | **AUD-20.08** · S10-12 · §20<br>An owner-authored Terms page is needed before the first real deposit. | [UX] | CONFIRMED — no Terms page, route or string in `frontend/src` or `frontend/public`. | W2-M (hosting only) | **C** | OD-16 | — | — |
-| **AUD-20.09** · K-24 · §20<br>No-money table: placeholder payout computed (floating point) and fired as a console stub. | [D] | CONFIRMED — `gameEngine/endgame.ts`:329 `PLACEHOLDER_TOTAL_ANTE = 100`, 417-418; `utils/closeRoomPayout.ts`:5-10; the call is at `App.tsx`:7828-7834 (RED apply half). | W1-N | **B** | OD-12 (only to delete the App call site) | — | The draft map defaulted this to Phase 5; no owner placement exists, so it stays in Phase 3. Neutralise in `endgame.ts` / `closeRoomPayout.ts`; deleting the call site needs OD-12. |
+| **AUD-20.09** · K-24 · §20<br>No-money table: placeholder payout computed (floating point) and fired as a console stub. | [D] | CONFIRMED — `gameEngine/endgame.ts`:329 `PLACEHOLDER_TOTAL_ANTE = 100`, 417-418; `utils/closeRoomPayout.ts`:5-10; the call is at `App.tsx`:7828-7834 (RED apply half). | W1-N | **B** | OD-12 (RULED 2026-10-03; the call site is deleted, `87d63c4`) | — | The draft map defaulted this to Phase 5; no owner placement exists, so it stays in Phase 3. Neutralise in `endgame.ts` / `closeRoomPayout.ts`; deleting the call site needs OD-12. |
 | **AUD-20.10** · K-24 · §20<br>No-money table: Close Room tooltip. | [D] | RESOLVED (audit text stale) — `panels/ContextualActionBar.tsx`:2112-2114 "Close the room. Any player may do this; it closes on its own if nobody does." (no payout claim). | W3-F (confirm at the final head) | **F** | — | — | — |
 | **AUD-20.12** · K-24 · §20<br>No-money table: the "settled on-chain" copy appears to be fixed. | [R] (in a [D] bullet) | RESOLVED — `components/GameOverModal.tsx`:338 records the removed "settled on-chain when the room closes" copy; no such string remains on the no-money path. | W3-F (confirm at the final head) | **F** | — | — | — |
 | **AUD-20.11** · I-4 · §20<br>A dispute's evidence reads the live board. | [R] | RESOLVED — integrated closure (`SettlementBand` mounts receive `liveState`). | — | **F** | — | — | — |
@@ -463,9 +521,9 @@ reuse U/K/H/A IDs; any legacy alias is shown.
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |
 |---|---|---|---|---|---|---|---|
 | **P3-N001** · draft §0.4 "dead arms" · draft execution map<br>`passDisabledReason`'s home-hold and train-obligation arms are dead: Pass renders only outside the OR. | NEW-SOURCE-FINDING | CONFIRMED — `frontend/src/App.tsx`:14001-14036; `panels/ContextualActionBar.tsx`:2786, 4180-4207. | W2-A | **A** | — | — | P0's S1 seam hoists `passDisabledReason` into a const first; W2-A then removes the dead arms. |
-| **P3-N002** · draft NEW-2 (OR bar) · draft execution map<br>The OR bar knows no authoritative hold at all (discard, funding, home token, offer). | NEW-SOURCE-FINDING | CONFIRMED — `panels/ContextualActionBar.tsx`:1826-2117, 3488-3505. | W2-A | **A** | OD-1 | — | Broader than K-13 (offers only); W2-A's `turnHoldReason` covers all four holds. |
+| **P3-N002** · draft NEW-2 (OR bar) · draft execution map<br>The OR bar knows no authoritative hold at all (discard, funding, home token, offer). | NEW-SOURCE-FINDING | CONFIRMED — `panels/ContextualActionBar.tsx`:1826-2117, 3488-3505. | W2-A | **A** | OD-1 (RULED 2026-10-03) | — | Broader than K-13 (offers only); W2-A's `turnHoldReason` covers all four holds. |
 | **P3-N003** · draft M1 · draft execution map<br>The M&H Stock Round chip is greyed off-turn (`sessionReady` includes `isMyTurn`), contradicting design note #884 ("NOT TURN-GATED"). | NEW-SOURCE-FINDING | CONFIRMED — `panels/ContextualActionBar.tsx`:2236, 2239; `frontend/src/App.tsx`:13960. | W2-D | **A** | — | — | — |
-| **P3-N004** · draft NEW-2 (sticky) · draft execution map<br>A non-turn server refusal stays in the room strip (only `TURN_REFUSAL` is cleared). | NEW-SOURCE-FINDING | CONFIRMED — `frontend/src/App.tsx`:6426 (RED submit half); refusals from `onRefused` (12569) and `onError` (12264) persist. | W3-C | **A** | OD-12 | — | — |
+| **P3-N004** · draft NEW-2 (sticky) · draft execution map<br>A non-turn server refusal stays in the room strip (only `TURN_REFUSAL` is cleared). | NEW-SOURCE-FINDING | CONFIRMED — `frontend/src/App.tsx`:6426 (RED submit half); refusals from `onRefused` (12569) and `onError` (12264) persist. | W3-C | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | — |
 | **P3-N005** · draft A1-new · draft execution map<br>The auction dashboard never asks `acquisitionSolvencyRefusal` (DA-5), so Bid/Buy can show enabled when the engine would refuse. | NEW-SOURCE-FINDING | CONFIRMED — `WaterfallAuctionDashboard.tsx`:497-505, 834, 876; `gameEngine/auctionAuthority.ts`:235, 278, 662. | W1-B | **A** | — | — | — |
 | **P3-N006** · draft W1-D · draft execution map<br>Trade-prompt answerer identity comes from narration fields (`offer.owner`, `offer.seller_president`) instead of `currentPrivateOwner` / `sellerPresident`. | NEW-SOURCE-FINDING | CONFIRMED — `frontend/src/App.tsx`:4053-4060, 15185-15247; `utils/privateProposalView.ts`:33. | W1-D | **A** | — | — | — |
 | **P3-N007** · draft W1-D · draft execution map<br>Optimistic "completed immediately" log lines are written before a non-awaited dispatch lands. | NEW-SOURCE-FINDING | CONFIRMED — `frontend/src/App.tsx`:10430-10442, 10949-10953. | W1-D | **A** | — | — | — |
@@ -481,11 +539,11 @@ reuse U/K/H/A IDs; any legacy alias is shown.
 | **P3-N017** · draft OD-4 · draft execution map<br>Every seat sees "Declare bankruptcy" in the emergency modal (no viewer/president scope). | NEW-SOURCE-FINDING | CONFIRMED — `EmergencyTrainPurchaseModal.tsx`:429-441 (gated only by `canDeclareBankruptcy && sandbox`). | W2-G | **A** | OD-4 | — | — |
 | **P3-N018** · draft W2-G · draft execution map<br>The emergency modal's funding-offer legality is computed locally, not by `fundingPrivateOfferRefusal`. | NEW-SOURCE-FINDING | CONFIRMED — `EmergencyTrainPurchaseModal.tsx`:368-375; `gameEngine/emergencyFunding.ts`:321. | W2-G | **A** | — | — | — |
 | **P3-N019** · draft NEW-1 (fleet loss) · draft execution map<br>The FleetLoss notice replays history in a fresh tab (dismissal is per-tab `sessionStorage`). | NEW-SOURCE-FINDING | CONFIRMED — `frontend/src/App.tsx`:11295-11405 (inside RED OR-verdict region), `rememberDismissed` (sessionStorage). | W3-A | **A** | OD-5; OD-12 if the prune region must change | — | The draft placed this fix in 11295-11405 without flagging that the range is inside its own RED region 11136-11659. Prefer a fix in the dismissal store. |
-| **P3-N020** · draft §9 rollbacks · draft execution map<br>Refused-action rollbacks: an ability/JK spend survives a refused lay; `ran:true` and the step advance survive a refused run. | NEW-SOURCE-FINDING | CONFIRMED by reading — needs a per-action refusal signal from the link callbacks (RED). | W3-C | **A** | OD-12 | — | The draft deferred this to Phase 4. It is a known defect; it stays in Phase 3 behind OD-12. |
-| **P3-N021** · draft §9 press latch · draft execution map<br>The `press:true` latch does not cover the automatic presses (OpenStockRound, M&H exchange, Undo, PlaceHomeStation, SetBoPar). | NEW-SOURCE-FINDING | CONFIRMED by reading — `utils/doubleActionWindow.test.ts` pins the submit-half text. | W3-B | **A** | OD-12 | — | — |
+| **P3-N020** · draft §9 rollbacks · draft execution map<br>Refused-action rollbacks: an ability/JK spend survives a refused lay; `ran:true` and the step advance survive a refused run. | NEW-SOURCE-FINDING | CONFIRMED by reading — needs a per-action refusal signal from the link callbacks (RED). | W3-C | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | The draft deferred this to Phase 4. It is a known defect; it stays in Phase 3 behind OD-12. |
+| **P3-N021** · draft §9 press latch · draft execution map<br>The `press:true` latch does not cover the automatic presses (OpenStockRound, M&H exchange, Undo, PlaceHomeStation, SetBoPar). | NEW-SOURCE-FINDING | CONFIRMED by reading — `utils/doubleActionWindow.test.ts` pins the submit-half text. | W3-B | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | — |
 | **P3-N022** · SI ledger / DH-3 / draft §9 · draft execution map<br>Shell-local OR facts: `routesRunThisTurn`, `mustBuyTrain`, the D&H optimistic ability set and `dhStationForfeited` (DH-3), client auto-skip verdicts vs `nextDerivedAction`. | NEW-SOURCE-FINDING | CONFIRMED (App decomposition audit, 6.5-A §5.5). | Phase 5 (Pass E) | **E** | — | On every derived skip, compare the bar's step with the server's `operating_sub_phase` (export the log). | These are the refactor's behaviour passes (App decomposition plan "Pass E"); the owner's fixed roadmap (plan §1) places the major App.tsx refactor in Phase 5. |
 | **P3-N023** · SBS-3 (6.5-A) · draft execution map<br>Brown Pool Buy → Sell → Buy is accepted (authority too loose). | NEW-SOURCE-FINDING | NOT RE-VERIFIED (rules). | W3-K (conditional, OD-10a) | **C** | OD-10(a) | — | — |
-| **P3-N024** · SBS-4 / OD-A-4 · draft execution map<br>A Brown IPO first purchase opens the Pool continuation. | NEW-SOURCE-FINDING | NOT RE-VERIFIED (rules). | W3-K (conditional, OD-10a) | **C** | OD-2 (confirm recorded OD-A-4) + OD-10(a) | — | — |
+| **P3-N024** · SBS-4 / OD-A-4 · draft execution map<br>A Brown IPO first purchase opens the Pool continuation. | NEW-SOURCE-FINDING | NOT RE-VERIFIED (rules). Owner (OD-2, 2026-10-03): a corporation's first-ever IPO purchase starts it at a PAR space, not a Brown zone, so the wording is internally suspect. | — (needs a precise reproduction before any slice; never W3-K from the current wording) | **G** | OD-2 (SBS-4 part NOT resolved) + OD-10(a) | — | NEEDS PRECISE REPRODUCTION / CLARIFICATION. Do not implement a rule from the current wording. |
 | **P3-N025** · ING-1 · draft execution map<br>City-less token on a two-city hex can strand Routes (draft listed it for a v13 batch). | NEW-SOURCE-FINDING | RESOLVED — v12 refuses creating such a state (`gameEngine/rulesVersion.ts`:396; R12-2 §3). | — | **F** | — | — | — |
 | **P3-N026** · OD-A-3 · draft execution map<br>D10 / E5 follow G19's first-upgrade terrain charge (draft listed it for a v13 batch). | NEW-SOURCE-FINDING | RESOLVED — owner ruling recorded in 6.5-B ("D10 and E5 follow G19"); engine already charges; copy updated (`RULES_HARDENING_BACKLOG.md`:4757). | — | **F** | — | — | — |
 

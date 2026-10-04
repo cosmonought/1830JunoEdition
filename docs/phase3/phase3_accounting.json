@@ -3,7 +3,7 @@
  "planning_snapshot": "8e897f9c5196f825a69c492dfb7c29088123cf67",
  "audit_base": "7b1a956b1eeef31ad17ec6b08b475c4649747f6a",
  "audit_file": "docs/phase3/PHASE3_UIUX_AUDIT_2026-10-03.md",
- "implementation_base": "TBD - pin the final canonical integrated head after Phase 2 closes (OD-0)",
+ "implementation_base": "TBD - pin the final canonical integrated head after Phase 2 closes (OD-0). Wave 1 was built on 8f33f0f by the owner's brief; see wave1_integration",
  "rows": [
   {
    "key": "AUD-00.01",
@@ -29,7 +29,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "This pass adds only a pointer to PROJECT_CANONICAL_CONTEXT.md. P0 updates the roadmap file and Part F to the fixed Phase 1–7 order."
+   "notes": "This pass adds only a pointer to PROJECT_CANONICAL_CONTEXT.md. P0 updates the roadmap file and Part F to the fixed Phase 1–7 order.",
+   "status": "OPEN — P0's roadmap-order update was not part of Wave 1; this branch adds only the docs/phase3 pointer to PROJECT_CANONICAL_CONTEXT.md"
   },
   {
    "key": "AUD-01.01",
@@ -42,7 +43,8 @@
    "disp": "A",
    "od": "OD-14(a) (probe readout may inform it first)",
    "p4": "—",
-   "notes": "Part C U-16: \"Decide, then remove it either way.\" The removal happens whatever OD-14(a) decides, but only after it is recorded, because the probe is the instrument for that decision (AUD-01.02)."
+   "notes": "Part C U-16: \"Decide, then remove it either way.\" The removal happens whatever OD-14(a) decides, but only after it is recorded, because the probe is the instrument for that decision (AUD-01.02).",
+   "status": "OPEN — W1-I's remaining part: the probe is removed only once OD-14(a) is recorded"
   },
   {
    "key": "AUD-01.02",
@@ -55,7 +57,8 @@
    "disp": "C",
    "od": "OD-14(a)",
    "p4": "—",
-   "notes": "If OD-14(a) = move into the bar, lane 5 adds W1-I-b in wave 2 (3–5 h). If it = keep, no work."
+   "notes": "If OD-14(a) = move into the bar, lane 5 adds W1-I-b in wave 2 (3–5 h). If it = keep, no work.",
+   "status": "OPEN — OD-14(a)"
   },
   {
    "key": "AUD-01.03",
@@ -81,7 +84,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Not in the draft map. Fix in the effect only (attach when the ref appears); no layout change."
+   "notes": "Not in the draft map. Fix in the effect only (attach when the ref appears); no layout change.",
+   "status": "IMPLEMENTED — W1-I, L5 `9dcad19`"
   },
   {
    "key": "AUD-01.05",
@@ -94,7 +98,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-F, L4 `9baf4da`"
   },
   {
    "key": "AUD-01.06",
@@ -133,7 +138,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "Where the build id appears is part of OD-6; replacing the stale constant with `CLIENT_BUILD_ID` is not gated."
+   "notes": "Where the build id appears is part of OD-6; replacing the stale constant with `CLIENT_BUILD_ID` is not gated.",
+   "status": "IMPLEMENTED — W1-I, L5 `beac07a`"
   },
   {
    "key": "AUD-01.09",
@@ -146,7 +152,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Not in the draft map."
+   "notes": "Not in the draft map.",
+   "status": "IMPLEMENTED — W1-N, L7 `9d9376b` + `06c3a91`"
   },
   {
    "key": "AUD-02.01",
@@ -159,7 +166,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-B, L1 `f0a7183` + `76056b7`"
   },
   {
    "key": "AUD-02.02",
@@ -172,7 +180,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-B, L1 `f0a7183` + `76056b7`"
   },
   {
    "key": "AUD-02.03",
@@ -185,7 +194,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "The greying half is not reproduced; the contest sentence and the ending indicator remain."
+   "notes": "The greying half is not reproduced; the contest sentence and the ending indicator remain.",
+   "status": "IMPLEMENTED — W1-B, L1 `f0a7183` + `76056b7`"
   },
   {
    "key": "AUD-02.04",
@@ -198,7 +208,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-B, L1 `f0a7183` + `76056b7`"
   },
   {
    "key": "AUD-02.05",
@@ -235,7 +246,7 @@
    "src": "CONFIRMED — modal audit H5; `AuctionPromptModal` handoffPending renders zero tabbable controls.",
    "slice": "W2-H",
    "disp": "A",
-   "od": "OD-1",
+   "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
    "notes": "—"
   },
@@ -328,7 +339,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-A, L1 `82c1de9`"
   },
   {
    "key": "AUD-03.02",
@@ -341,7 +353,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-A, L1 `82c1de9`"
   },
   {
    "key": "AUD-03.03",
@@ -354,7 +367,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-A, L1 `82c1de9`"
   },
   {
    "key": "AUD-03.04",
@@ -363,11 +377,12 @@
    "cls": "[UX] ★",
    "item": "Forced sell → Pass → buy walk; ending a turn takes two Pass presses; target one Pass/End Turn control.",
    "src": "CONFIRMED — `frontend/src/App.tsx`:14042-14046; `panels/ContextualActionBar.tsx`:4151-4207; `gameEngine/sandboxSession.ts`:5590-5592.",
-   "slice": "W2-B",
+   "slice": "W2-B (the one-click \"Pass Turn\" control) + W3-K (v13: PassTurn ends the turn)",
    "disp": "A",
-   "od": "OD-2",
+   "od": "OD-2 (RULED 2026-10-03: Sell whenever legal; at most one Buy; after buying, Sell remains; one-click \"Pass Turn\"; v13 rules slice + settlement certification)",
    "p4": "—",
-   "notes": "The audit cites OD-A-4 here; the 6.5-A register files the Pass question as OD-A-2. OD-2 covers both."
+   "notes": "The old Sell → Buy → Sell stage walk is superseded. Wave-1's `sellBuySell` pins describe v12 and are interim until the v13 slice replaces them. The audit cites OD-A-4 here; the 6.5-A register files the Pass question as OD-A-2; OD-2 answered OD-A-2. SBS-4 is P3-N024 and is not resolved.",
+   "status": "RULED — OD-2; not implemented (rules version stays v12 until the v13 slice and its certification)"
   },
   {
    "key": "AUD-03.05",
@@ -380,7 +395,8 @@
    "disp": "A",
    "od": "—",
    "p4": "See AUD-24.03 (the stall's UX is observed in Phase 4).",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-A, L1 `82c1de9`"
   },
   {
    "key": "AUD-03.06",
@@ -393,7 +409,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-A, L1 `82c1de9`"
   },
   {
    "key": "AUD-03.07",
@@ -417,7 +434,7 @@
    "src": "CONFIRMED — `frontend/src/App.tsx`:7000-7002 sets the mirror before `soldOutRises` at 7111-7123 (inside the RED apply half).",
    "slice": "W2-J",
    "disp": "A",
-   "od": "OD-12",
+   "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "—"
   },
@@ -471,7 +488,8 @@
    "disp": "D",
    "od": "—",
    "p4": "After W1-A: in SR2+, sell, buy, sell again within one turn, and try a Pool buy after a sale. Record every control that is greyed while the server would accept.",
-   "notes": "—"
+   "notes": "—",
+   "status": "PRE-WORK DONE — W1-A; the Phase-4 observation stands"
   },
   {
    "key": "AUD-03.13",
@@ -521,7 +539,7 @@
    "src": "CONFIRMED — `panels/ContextualActionBar.tsx`:1826-2117 and 3488-3505 take no hold reason; `authoritativeHoldRefusal` (`gameEngine/authoritativeHolds.ts`:36) has no UI reader.",
    "slice": "W2-A",
    "disp": "A",
-   "od": "OD-1",
+   "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
    "notes": "—"
   },
@@ -536,7 +554,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "The draft map excluded this as RED and deferred it to Phase 4. The nothing-sent case is in `handleRunTrains`, not RED, so it stays in W1-G. The refused-run rollback is a separate finding (P3-N020)."
+   "notes": "The draft map excluded this as RED and deferred it to Phase 4. The nothing-sent case is in `handleRunTrains`, not RED, so it stays in W1-G. The refused-run rollback is a separate finding (P3-N020).",
+   "status": "IMPLEMENTED — W1-G, L4 `a8b9f27` + `bee2717`"
   },
   {
    "key": "AUD-04.03",
@@ -627,7 +646,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "W1-E owns the receipt and aria labels; W1-L owns `TileReference.tsx`."
+   "notes": "W1-E owns the receipt and aria labels; W1-L owns `TileReference.tsx`.",
+   "status": "IMPLEMENTED — W1-E (receipt and ring aria labels, L4 `43a641f`; ring refusal copy `8dc79e0`) + W1-L (Tiles tab, L6 `de22084`)"
   },
   {
    "key": "AUD-05.02",
@@ -640,7 +660,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-F, L4 `9baf4da`"
   },
   {
    "key": "AUD-05.03",
@@ -666,7 +687,8 @@
    "disp": "D",
    "od": "—",
    "p4": "Upgrade Erie E11 or New York, press Confirm without rotating; record the facing shown and any refusal.",
-   "notes": "W1-E seeds the legal facing and guards Confirm (P3-N010); Phase 4 confirms the experience."
+   "notes": "W1-E seeds the legal facing and guards Confirm (P3-N010); Phase 4 confirms the experience.",
+   "status": "PRE-WORK DONE — W1-E; the Phase-4 observation stands"
   },
   {
    "key": "AUD-05.05",
@@ -716,7 +738,7 @@
    "src": "CONFIRMED — `panels/ContextualActionBar.tsx`:3488-3499 Skip disabled only by `!sessionReady`; `homeTokenBlock` gates Pass only.",
    "slice": "W2-A",
    "disp": "A",
-   "od": "OD-1",
+   "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
    "notes": "—"
   },
@@ -731,7 +753,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "The draft map's exec-only finding \"watcher sees live Place Home Station\" is this item."
+   "notes": "The draft map's exec-only finding \"watcher sees live Place Home Station\" is this item.",
+   "status": "IMPLEMENTED — W1-J, L5 `5a56987`"
   },
   {
    "key": "AUD-06.04",
@@ -742,7 +765,7 @@
    "src": "CONFIRMED — modal audit H5 (`tabbableCount: 0`).",
    "slice": "W2-H",
    "disp": "A",
-   "od": "OD-1",
+   "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
    "notes": "—"
   },
@@ -757,7 +780,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Not in the draft map. Fix shape: also offer the station when the board's `dh_station_pending` names the D&H; leave the local set (DH-3 invariant) otherwise."
+   "notes": "Not in the draft map. Fix shape: also offer the station when the board's `dh_station_pending` names the D&H; leave the local set (DH-3 invariant) otherwise.",
+   "status": "IMPLEMENTED — W1-M, L2 `6f42dca`"
   },
   {
    "key": "AUD-06.06",
@@ -783,7 +807,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-I, L5 `beac07a`"
   },
   {
    "key": "AUD-07.01",
@@ -796,7 +821,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-G, L4 `a8b9f27` + `bee2717`"
   },
   {
    "key": "AUD-07.02",
@@ -809,7 +835,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-G, L4 `a8b9f27` + `bee2717`"
   },
   {
    "key": "AUD-07.03",
@@ -835,7 +862,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-G, L4 `a8b9f27` + `bee2717`"
   },
   {
    "key": "AUD-07.05",
@@ -848,7 +876,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-L, L6 `de22084` + `8d6f1e9`"
   },
   {
    "key": "AUD-07.06",
@@ -913,7 +942,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-D, L3 `94e5df1` + `3dbf02b`; rescind Activity Log lines `8dc79e0`"
   },
   {
    "key": "AUD-09.02",
@@ -952,7 +982,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-D, L3 `94e5df1` + `3dbf02b`; rescind Activity Log lines `8dc79e0`"
   },
   {
    "key": "AUD-09.05",
@@ -1002,7 +1033,7 @@
    "src": "CONFIRMED — Part C U-5 (\"fold into U-6\").",
    "slice": "W2-F",
    "disp": "A",
-   "od": "OD-1",
+   "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
    "notes": "—"
   },
@@ -1015,7 +1046,7 @@
    "src": "CONFIRMED — four prompts each print their own waiting sentence; `describeStandingOffer` (`pendingOfferHold.ts`:89) unused by UI.",
    "slice": "W2-F",
    "disp": "A",
-   "od": "OD-1",
+   "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
    "notes": "—"
   },
@@ -1026,11 +1057,12 @@
    "cls": "[UX] (owner ruling)",
    "item": "Forced-purchase copy: \"cheapest\" when the treasury can pay.",
    "src": "CONFIRMED — \"must buy the cheapest available train\" at `RulesReference.tsx`:677, 736, 1728, 1764; the engine allows any legal purchase.",
-   "slice": "W2-J (copy) or W3-K",
-   "disp": "C",
-   "od": "OD-7",
+   "slice": "W1-L (RR-4 copy per OD-7; landed at the Wave-1 integration)",
+   "disp": "B",
+   "od": "OD-7 (RULED 2026-10-03: copy only — ordinary choice when the treasury can pay; \"cheapest\" only in the emergency purchase; no engine change, no v13)",
    "p4": "—",
-   "notes": "6.5-B records that an RR-4 ruling was taken but its text is not in the repository; OD-7 is a confirmation, not a new question."
+   "notes": "Corrected at all four sites (Buy Trains quick line, Forced train purchase detail, Tables > Forced Train Purchase, the gotcha / Watch For). The engine already allowed any legal treasury-funded purchase; `w1lRulesCopy.test.tsx` proves it on a room. No longer in W2-J or W3-K.",
+   "status": "IMPLEMENTED — OD-7 copy, `ca73834`"
   },
   {
    "key": "AUD-09.11",
@@ -1043,7 +1075,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-L, L6 `de22084` + `8d6f1e9`"
   },
   {
    "key": "AUD-10.01",
@@ -1069,7 +1102,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "`resolvePrivateExchange` is used only by App.tsx; the other `privateExchange.ts` exports are reducer imports and stay."
+   "notes": "`resolvePrivateExchange` is used only by App.tsx; the other `privateExchange.ts` exports are reducer imports and stay.",
+   "status": "IMPLEMENTED — W1-C, L2 `91b537f`; M&H modal presentation `8dc79e0`"
   },
   {
    "key": "AUD-10.03",
@@ -1095,7 +1129,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-C, L2 `91b537f`; M&H modal presentation `8dc79e0`"
   },
   {
    "key": "AUD-10.05",
@@ -1147,7 +1182,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-B, L1 `f0a7183` + `76056b7`"
   },
   {
    "key": "AUD-11.02",
@@ -1212,7 +1248,8 @@
    "disp": "D",
    "od": "—",
    "p4": "Across two ORs with price changes, record the displayed order vs the order played.",
-   "notes": "—"
+   "notes": "—",
+   "status": "PRE-WORK DONE — W1-I; the Phase-4 observation stands"
   },
   {
    "key": "AUD-12.01",
@@ -1225,7 +1262,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-I, L5 `82b93ca`"
   },
   {
    "key": "AUD-12.02",
@@ -1264,7 +1302,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Not in the draft map. Fix in the display (badge every rank-1 row); do not change ranking."
+   "notes": "Not in the draft map. Fix in the display (badge every rank-1 row); do not change ranking.",
+   "status": "IMPLEMENTED — W1-N, L7 `9d9376b` (modal); the game-over strip made tie-aware at the integration `8dc79e0`"
   },
   {
    "key": "AUD-12.05",
@@ -1418,7 +1457,7 @@
    "src": "CONFIRMED — `setSandboxRoomError` (`frontend/src/App.tsx`:4180) + 27 call sites; exact-text clears at 6426, 12526, 12621, 12635.",
    "slice": "W3-C",
    "disp": "A",
-   "od": "OD-12",
+   "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "—"
   },
@@ -1446,7 +1485,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-H, L6 `2e0700b` + `cb0c49c`"
   },
   {
    "key": "AUD-14.04",
@@ -1459,7 +1499,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-H, L6 `2e0700b` + `cb0c49c`"
   },
   {
    "key": "AUD-14.05",
@@ -1472,7 +1513,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Not explicit in the draft map."
+   "notes": "Not explicit in the draft map.",
+   "status": "IMPLEMENTED — W1-H, L6 `2e0700b` + `cb0c49c`"
   },
   {
    "key": "AUD-14.06",
@@ -1524,7 +1566,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-O, L7 `2c3134f` + `b19dff5`"
   },
   {
    "key": "AUD-16.03",
@@ -1537,7 +1580,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-O, L7 `2c3134f` + `b19dff5`"
   },
   {
    "key": "AUD-16.04",
@@ -1550,7 +1594,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Persistence is impossible there; the fix is telling the player."
+   "notes": "Persistence is impossible there; the fix is telling the player.",
+   "status": "IMPLEMENTED — W1-O, L7 `2c3134f` + `b19dff5`"
   },
   {
    "key": "AUD-16.05",
@@ -1563,7 +1608,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "W1-O makes the existing breakpoints zoom-aware. Whether the game shell itself gets a phone-width layout is OD-10(b) (AUD-16.09)."
+   "notes": "W1-O makes the existing breakpoints zoom-aware. Whether the game shell itself gets a phone-width layout is OD-10(b) (AUD-16.09).",
+   "status": "IMPLEMENTED — W1-O, L7 `2c3134f` (Lobby, room list, room bar, waiting room); RulesReference hunk at the integration `8dc79e0`"
   },
   {
    "key": "AUD-16.06",
@@ -1628,7 +1674,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-O, L7 `2c3134f` + `b19dff5`"
   },
   {
    "key": "AUD-17.02",
@@ -1641,7 +1688,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-O, L7 `2c3134f` + `b19dff5`"
   },
   {
    "key": "AUD-17.03",
@@ -1654,7 +1702,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "W1-O also checks MainTabBar's focus style."
+   "notes": "W1-O also checks MainTabBar's focus style.",
+   "status": "IMPLEMENTED — W1-O, L7 `2c3134f` + `b19dff5`"
   },
   {
    "key": "AUD-17.04",
@@ -1680,7 +1729,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-N, L7 `9d9376b` + `06c3a91`"
   },
   {
    "key": "AUD-18.02",
@@ -1693,7 +1743,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-N, L7 `9d9376b` + `06c3a91`"
   },
   {
    "key": "AUD-18.03",
@@ -1706,7 +1757,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-N, L7 `9d9376b` + `06c3a91`"
   },
   {
    "key": "AUD-18.04",
@@ -1719,7 +1771,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "The owner's S9-4 ruling already fixes the policy; the draft's OD-8 sub-question is removed."
+   "notes": "The owner's S9-4 ruling already fixes the policy; the draft's OD-8 sub-question is removed.",
+   "status": "IMPLEMENTED — W1-L, L6 `de22084` + `8d6f1e9`"
   },
   {
    "key": "AUD-18.05",
@@ -1745,7 +1798,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-L, L6 `de22084` + `8d6f1e9`"
   },
   {
    "key": "AUD-18.07",
@@ -1758,7 +1812,8 @@
    "disp": "C",
    "od": "OD-14(e)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "OPEN — OD-14(e) (the waiting room's description line); W1-L's unconditional part is complete"
   },
   {
    "key": "AUD-18.08",
@@ -1797,7 +1852,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "NOT STARTED — W1-K"
   },
   {
    "key": "AUD-19.03",
@@ -1938,9 +1994,10 @@
    "src": "CONFIRMED — `gameEngine/endgame.ts`:329 `PLACEHOLDER_TOTAL_ANTE = 100`, 417-418; `utils/closeRoomPayout.ts`:5-10; the call is at `App.tsx`:7828-7834 (RED apply half).",
    "slice": "W1-N",
    "disp": "B",
-   "od": "OD-12 (only to delete the App call site)",
+   "od": "OD-12 (RULED 2026-10-03; the call site is deleted, `87d63c4`)",
    "p4": "—",
-   "notes": "The draft map defaulted this to Phase 5; no owner placement exists, so it stays in Phase 3. Neutralise in `endgame.ts` / `closeRoomPayout.ts`; deleting the call site needs OD-12."
+   "notes": "The draft map defaulted this to Phase 5; no owner placement exists, so it stays in Phase 3. Neutralise in `endgame.ts` / `closeRoomPayout.ts`; deleting the call site needs OD-12.",
+   "status": "IMPLEMENTED — W1-N, L7 `9d9376b` (no-op payout, no float placeholder); the RED R2 call site deleted under OD-12 `87d63c4`"
   },
   {
    "key": "AUD-20.10",
@@ -2005,7 +2062,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-L, L6 `de22084` + `8d6f1e9`"
   },
   {
    "key": "AUD-21.03",
@@ -2018,7 +2076,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-L, L6 `de22084` + `8d6f1e9`"
   },
   {
    "key": "AUD-21.04",
@@ -2031,7 +2090,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-L, L6 `de22084` + `8d6f1e9`"
   },
   {
    "key": "AUD-21.05",
@@ -2044,7 +2104,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-L, L6 `de22084` + `8d6f1e9`"
   },
   {
    "key": "AUD-21.06",
@@ -2057,7 +2118,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-L, L6 `de22084` + `8d6f1e9`"
   },
   {
    "key": "AUD-21.07",
@@ -2148,7 +2210,8 @@
    "disp": "D",
    "od": "—",
    "p4": "Arm Auto-Buy for an unaffordable share after W1-A; expect it to disarm with a reason.",
-   "notes": "—"
+   "notes": "—",
+   "status": "PRE-WORK DONE — W1-A; the Phase-4 observation stands"
   },
   {
    "key": "AUD-24.04",
@@ -3381,7 +3444,7 @@
    "src": "CONFIRMED — `panels/ContextualActionBar.tsx`:1826-2117, 3488-3505.",
    "slice": "W2-A",
    "disp": "A",
-   "od": "OD-1",
+   "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
    "notes": "Broader than K-13 (offers only); W2-A's `turnHoldReason` covers all four holds."
   },
@@ -3407,7 +3470,7 @@
    "src": "CONFIRMED — `frontend/src/App.tsx`:6426 (RED submit half); refusals from `onRefused` (12569) and `onError` (12264) persist.",
    "slice": "W3-C",
    "disp": "A",
-   "od": "OD-12",
+   "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "—"
   },
@@ -3422,7 +3485,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-B, L1 `f0a7183` + `76056b7`"
   },
   {
    "key": "P3-N006",
@@ -3435,7 +3499,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-D, L3 `94e5df1` + `3dbf02b`; rescind Activity Log lines `8dc79e0`"
   },
   {
    "key": "P3-N007",
@@ -3448,7 +3513,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-D, L3 `94e5df1` + `3dbf02b`; rescind Activity Log lines `8dc79e0`"
   },
   {
    "key": "P3-N008",
@@ -3461,7 +3527,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "The 6.5 register routed K-14 to Rust retirement; retiring dead UI here is behaviour-preserving."
+   "notes": "The 6.5 register routed K-14 to Rust retirement; retiring dead UI here is behaviour-preserving.",
+   "status": "IMPLEMENTED — W1-D, L3 `94e5df1` + `3dbf02b`; rescind Activity Log lines `8dc79e0`"
   },
   {
    "key": "P3-N009",
@@ -3487,7 +3554,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "`utils/stationConnectivity.test.ts` pins exactly 3 matches of `derivePreviewLandings(` followed by a line break (true at 8e897f9; a plain-text count finds 4). W1-E must not add a multi-line call."
+   "notes": "`utils/stationConnectivity.test.ts` pins exactly 3 matches of `derivePreviewLandings(` followed by a line break (true at 8e897f9; a plain-text count finds 4). W1-E must not add a multi-line call.",
+   "status": "IMPLEMENTED — W1-E, L4 `43a641f` + `bee2717`; canonical tile name in the ring refusal `8dc79e0`"
   },
   {
    "key": "P3-N011",
@@ -3500,7 +3568,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "W1-E introduces the preview memo, so it passes the revision there. The draft deferred LOW-4 to Phase 4."
+   "notes": "W1-E introduces the preview memo, so it passes the revision there. The draft deferred LOW-4 to Phase 4.",
+   "status": "IMPLEMENTED — W1-E, L4 `43a641f` + `bee2717`; canonical tile name in the ring refusal `8dc79e0`"
   },
   {
    "key": "P3-N012",
@@ -3513,7 +3582,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "Implementation default: `showActionToast` (`App.tsx`:5521). Not an owner decision."
+   "notes": "Implementation default: `showActionToast` (`App.tsx`:5521). Not an owner decision.",
+   "status": "IMPLEMENTED — W1-F, L4 `9baf4da`"
   },
   {
    "key": "P3-N013",
@@ -3526,7 +3596,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-G, L4 `a8b9f27` + `bee2717`"
   },
   {
    "key": "P3-N014",
@@ -3539,7 +3610,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-I, L5 `b9fd1bf` (+ `fee2f66`)"
   },
   {
    "key": "P3-N015",
@@ -3552,7 +3624,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-I, L5 `9dcad19`"
   },
   {
    "key": "P3-N016",
@@ -3565,7 +3638,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W1-I, L5 `3904533`"
   },
   {
    "key": "P3-N017",
@@ -3615,7 +3689,7 @@
    "src": "CONFIRMED by reading — needs a per-action refusal signal from the link callbacks (RED).",
    "slice": "W3-C",
    "disp": "A",
-   "od": "OD-12",
+   "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "The draft deferred this to Phase 4. It is a known defect; it stays in Phase 3 behind OD-12."
   },
@@ -3628,7 +3702,7 @@
    "src": "CONFIRMED by reading — `utils/doubleActionWindow.test.ts` pins the submit-half text.",
    "slice": "W3-B",
    "disp": "A",
-   "od": "OD-12",
+   "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "—"
   },
@@ -3664,12 +3738,13 @@
    "ref": "draft execution map",
    "cls": "NEW-SOURCE-FINDING",
    "item": "A Brown IPO first purchase opens the Pool continuation.",
-   "src": "NOT RE-VERIFIED (rules).",
-   "slice": "W3-K (conditional, OD-10a)",
-   "disp": "C",
-   "od": "OD-2 (confirm recorded OD-A-4) + OD-10(a)",
+   "src": "NOT RE-VERIFIED (rules). Owner (OD-2, 2026-10-03): a corporation's first-ever IPO purchase starts it at a PAR space, not a Brown zone, so the wording is internally suspect.",
+   "slice": "— (needs a precise reproduction before any slice; never W3-K from the current wording)",
+   "disp": "G",
+   "od": "OD-2 (SBS-4 part NOT resolved) + OD-10(a)",
    "p4": "—",
-   "notes": "—"
+   "notes": "NEEDS PRECISE REPRODUCTION / CLARIFICATION. Do not implement a rule from the current wording.",
+   "status": "NEEDS PRECISE REPRODUCTION / CLARIFICATION"
   },
   {
    "key": "P3-N025",
@@ -4344,5 +4419,168 @@
   "PLAYTEST": 47,
   "OWNER_DECISION": 21,
   "OPEN": 23
- }
+ },
+ "owner_rulings": {
+  "OD-1": {
+   "title": "AUTHORITATIVE HOLD PRESENTATION",
+   "date": "2026-10-03",
+   "ruling": [
+    "Ordinary non-active-player behavior remains as it already was.",
+    "Important deliberate exception: during Run Routes and Dividends, non-active players continue to see the active corporation's route/train information and dividend choices/consequences.",
+    "When an initiated trade/offer creates an authoritative hold: every player gets a clear Waiting on X / what is being decided status; the legitimate answerer retains Accept/Reject controls; the proposer retains Rescind where legal; unrelated controls do not pretend play can continue.",
+    "Emergency train purchase: the obligated president gets the interactive emergency controls; everyone else gets a simplified status/notification that the named player / corporation is resolving an emergency train purchase.",
+    "Do not accidentally remove the Routes/Dividends informational visibility."
+   ],
+   "effect": "Recorded only. Not implemented in the Wave-1 integration: W2-A and W2-F implement it (W2-G and W2-H take its viewer scope). The Routes/Dividends spectator visibility is unchanged by Wave 1."
+  },
+  "OD-2": {
+   "title": "STOCK ROUND PASS",
+   "date": "2026-10-03",
+   "ruling": [
+    "RESOLVED. The intended Stock Round model is: Sell whenever legal; take at most one Buy action; after buying, Buy is unavailable but Sell remains available; the player-facing button is named \"Pass Turn\"; Pass Turn ends the player's turn in ONE click.",
+    "The old Sell → Buy → Sell stage-walking model is superseded.",
+    "Because changing PassTurn replay semantics is a rules-engine change, the actual implementation is scheduled for the dedicated v13 rules slice and its settlement certification.",
+    "Wave-1's sellBuySell pins/comments are not the final desired behavior; they are preserved only until the v13 slice replaces them.",
+    "The separate SBS-4 / \"Brown IPO first purchase opens Pool continuation\" item is NOT resolved. Owner's observation: a corporation's first-ever IPO purchase starts it at a PAR space, not a Brown zone, so the audit wording is internally suspect. SBS-4: NEEDS PRECISE REPRODUCTION / CLARIFICATION. Do not implement a rule from the current wording."
+   ],
+   "effect": "Recorded as RESOLVED; NOT implemented in the Wave-1 integration (no rules or version change). SBS-2 goes to the v13 rules slice (W3-K is its vehicle) with its own settlement certification; W2-B presents the one-click \"Pass Turn\". P3-N024 (SBS-4) becomes G: needs precise reproduction / clarification. The rules version stays v12."
+  },
+  "OD-7": {
+   "title": "FORCED TRAIN PURCHASE",
+   "date": "2026-10-03",
+   "ruling": [
+    "If the corporation can fund a normal legal train purchase from its own treasury, ordinary train-purchase choice applies.",
+    "The \"must buy the cheapest train\" restriction belongs to the emergency purchase/funding situation, where the corporation cannot afford a train from its own treasury and president/emergency funding becomes necessary.",
+    "Apply to player-facing Rules Reference copy only. Do NOT change engine behavior. Do NOT create v13 for OD-7.",
+    "After the correction, the Rules Reference may continue to state that it is the final player-facing authority."
+   ],
+   "effect": "Implemented as copy at the Wave-1 integration (`ca73834`): every RR-4 site in `components/RulesReference.tsx` corrected; the engine (which already allowed any legal treasury-funded purchase) is unchanged. AUD-09.10 C → B, IMPLEMENTED. W2-J and W3-K no longer carry RR-4."
+  },
+  "OD-12": {
+   "title": "RED REGIONS",
+   "date": "2026-10-03",
+   "ruling": [
+    "Owner authorized narrowly controlled RED-region bug fixes.",
+    "This does NOT authorize an App.tsx refactor.",
+    "For the Wave-1 integration exactly ONE RED edit: W1-N — delete the obsolete `settleRoomPayout(...)` call site in RED R2, now that settleRoomPayout is intentionally a no-op and the placeholder payout has been removed. Its own commit; no neighboring cleanup; no structural refactor; focused regression; independent review of that commit before continuing.",
+    "The other OD-12-gated W3 defects are not implemented in that task."
+   ],
+   "effect": "W1-N's R2 call site deleted as its own commit (`87d63c4`, independently reviewed: APPROVE WITH NITS, comment nits fixed outside RED in `819a204`). The remaining OD-12 candidates (W2-J K-18; W3-C, W3-B, W3-I, W3-A, W3-H) each still land as one separately reviewed RED commit under §5.1's serialization rule."
+  }
+ },
+ "wave1_integration": {
+  "branch": "phase3/wave1-integration",
+  "base": "8f33f0fb72d462c381a572015de7860a93fbd198",
+  "status": "PROVISIONAL — integrated, owner broad gate #1 pending; not merged to main",
+  "planning_record": "6455b6ecad5754a9e980c64e1cee2a4a417bc447 (phase3/reconciled-execution-plan)",
+  "lanes": {
+   "L1": {
+    "branch": "phase3/w1-stock-auction",
+    "head": "76056b7513581457a3a5b4b81fc56fa0406d0601",
+    "slices": [
+     "P0 S1",
+     "W1-A",
+     "W1-B"
+    ]
+   },
+   "L2": {
+    "branch": "phase3/w1-private-powers",
+    "head": "6f42dca7726c59e54fe77257f5e0e751ac551599",
+    "slices": [
+     "W1-C",
+     "W1-M"
+    ]
+   },
+   "L3": {
+    "branch": "phase3/w1-offers-rescind",
+    "head": "3dbf02b04eb16bf5793d2ebca5bef00f72942886",
+    "slices": [
+     "W1-D"
+    ]
+   },
+   "L4": {
+    "branch": "phase3/w1-map-route",
+    "head": "bee27176c4c00e653aa2cd6d69e7396f29edaa4c",
+    "slices": [
+     "W1-E",
+     "W1-F",
+     "W1-G"
+    ]
+   },
+   "L5": {
+    "branch": "phase3/w1-shell-status",
+    "head": "fee2f66be1ae274e07033932b4543bf565f946ee",
+    "slices": [
+     "W1-I (unconditional)",
+     "W1-J"
+    ]
+   },
+   "L6": {
+    "branch": "phase3/w1-refusals-reference",
+    "head": "8d6f1e9cb79af85923dba6b68743cddaee32b938",
+    "slices": [
+     "W1-H",
+     "W1-L (unconditional)"
+    ]
+   },
+   "L7": {
+    "branch": "phase3/w1-endgame-hostgame",
+    "head": "b19dff5ff3819abd94f8d3a95cf39ca4e6aead7e",
+    "slices": [
+     "W1-N (non-RED)",
+     "W1-O (non-RulesReference)"
+    ]
+   }
+  },
+  "integration_commits": {
+   "RED R2 (OD-12, W1-N)": "87d63c4",
+   "W1-N follow-up (comments only)": "819a204",
+   "OD-7 Rules Reference copy (RR-4)": "ca73834",
+   "cross-lane reconciliation": "8dc79e0"
+  },
+  "note": "Wave 1 was implemented on 8f33f0f by the owner's brief. Whether 8f33f0f is the OD-0 pin, or Wave 1 is carried onto the final post-Phase-2 head, is the owner's call; OD-0's drift check against the final pin is still owed."
+ },
+ "slice_status": {
+  "P0": "PARTIAL — only the S1 seam landed (L1 `42c67ee`); the OD-0 drift check, the conventions publication and the roadmap-order update (AUD-00.02) were not run",
+  "W1-A": "COMPLETE — L1 `82c1de9` (Stock Round reads one authority)",
+  "W1-B": "COMPLETE — L1 `f0a7183` + review fixes `76056b7`",
+  "W1-C": "COMPLETE — L2 `91b537f`; modal presentation follow-up at the integration (`8dc79e0`)",
+  "W1-D": "COMPLETE — L3 `94e5df1` + review fixes `3dbf02b`; rescind Activity Log lines at the integration (`8dc79e0`)",
+  "W1-E": "COMPLETE — L4 `43a641f` + review follow-ups `bee2717`; canonical tile name in the ring refusal at the integration (`8dc79e0`)",
+  "W1-F": "COMPLETE — L4 `9baf4da`",
+  "W1-G": "COMPLETE — L4 `a8b9f27` + review follow-ups `bee2717`",
+  "W1-H": "COMPLETE — L6 `2e0700b` + review fixes `cb0c49c`",
+  "W1-I": "PARTIAL — the unconditional portion is complete (L5 `9dcad19`, `b9fd1bf`, `82b93ca`, `beac07a`, `3904533`, `fee2f66`); OD-14(a) remains (the fit-probe removal, AUD-01.01, waits on it, and W1-I-b exists only if it is ruled in)",
+  "W1-J": "COMPLETE — L5 `5a56987`",
+  "W1-K": "NOT STARTED — not one of the seven Wave-1 lane branches",
+  "W1-L": "COMPLETE — unconditional portion, L6 `de22084` + review fix `8d6f1e9`; RR-4 copy per OD-7 at the integration (`ca73834`). AUD-18.07 stays owner-gated (OD-14(e))",
+  "W1-M": "COMPLETE — L2 `6f42dca`",
+  "W1-N": "COMPLETE — L7 `9d9376b` + review fixes `06c3a91`; the OD-12 RED R2 call-site deletion `87d63c4` (+ comment follow-up `819a204`); tie-aware game-over strip at the integration (`8dc79e0`)",
+  "W1-O": "COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`)",
+  "W2-A": "NOT STARTED",
+  "W2-B": "NOT STARTED",
+  "W2-C": "NOT STARTED",
+  "W2-D": "NOT STARTED",
+  "W2-E": "NOT STARTED",
+  "W2-F": "NOT STARTED",
+  "W2-G": "NOT STARTED",
+  "W2-H": "NOT STARTED",
+  "W2-I": "NOT STARTED",
+  "W2-J": "NOT STARTED",
+  "W2-K": "NOT STARTED",
+  "W2-L": "NOT STARTED",
+  "W2-M": "NOT STARTED",
+  "W3-A": "NOT STARTED",
+  "W3-B": "NOT STARTED",
+  "W3-C": "NOT STARTED",
+  "W3-D": "NOT STARTED",
+  "W3-E": "NOT STARTED",
+  "W3-F": "NOT STARTED",
+  "W3-G": "NOT STARTED",
+  "W3-H": "NOT STARTED",
+  "W3-I": "NOT STARTED",
+  "W3-J": "NOT STARTED",
+  "W3-K": "NOT STARTED — OD-2 schedules SBS-2 (\"Pass Turn\" ends the turn in one click) into the v13 rules slice it is the vehicle for; SBS-4 needs reproduction first"
+ },
+ "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements."
 }

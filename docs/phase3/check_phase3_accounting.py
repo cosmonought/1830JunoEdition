@@ -13,7 +13,13 @@ Checks:
   5. the VF rows equal the PLAYTEST / OWNER DECISION / OPEN entries of VISUAL_FLOURISH_BACKLOG.md
      (at the planning snapshot: 47 / 21 / 23);
   6. every slice and owner decision named by a row is defined in PHASE3_EXECUTION_PLAN.md;
-  7. PHASE3_AUDIT_RECONCILIATION.md carries every row exactly once with the JSON's disposition.
+  7. PHASE3_AUDIT_RECONCILIATION.md carries every row exactly once with the JSON's disposition;
+  8. progress (added at the Wave-1 integration): every `slice_status` names a defined slice with a known state; every row
+     `status` is a known state that agrees with the row's disposition; a COMPLETE slice has no A/B row left
+     unimplemented; an IMPLEMENTED row names no slice that is NOT STARTED;
+  9. the matrix's Totals table equals the dispositions counted from the JSON;
+ 10. every recorded `owner_rulings` entry is a defined OD, is marked RULED in the plan's owner-decision table, and has
+     its section in the plan's §7.3.
 With --drift: lists the files cited as source evidence that differ between the planning snapshot and <sha>.
 """
 import json, os, re, subprocess, sys
@@ -111,6 +117,73 @@ for r in rows:
     elif ('| **' + r['disp'] + '** |') not in lines[0]:
         errors.append(f"{r['key']}: MD disposition differs from JSON ({r['disp']})")
 
+# 8. progress: slice and row statuses
+SLICE_STATES = ('COMPLETE', 'PARTIAL', 'NOT STARTED', 'IN PROGRESS')
+ROW_STATES = {  # state -> dispositions it may sit on
+    'IMPLEMENTED': 'AB',
+    'PRE-WORK DONE': 'D',
+    'OPEN': 'ABC',
+    'NOT STARTED': 'AB',
+    'RULED': 'ABC',
+    'NEEDS PRECISE REPRODUCTION / CLARIFICATION': 'G',
+}
+state_of = lambda text, states: next((st for st in sorted(states, key=len, reverse=True) if text == st or text.startswith(st + ' ')), None)
+slice_status = acc.get('slice_status', {})
+for sl, text in slice_status.items():
+    if sl not in defined:
+        errors.append(f'slice_status: {sl} is not a slice defined in the plan')
+    if state_of(text, SLICE_STATES) is None:
+        errors.append(f'slice_status: {sl} has an unknown state {text[:40]!r}')
+slice_state = {sl: state_of(text, SLICE_STATES) for sl, text in slice_status.items()}
+for r in rows:
+    st = r.get('status')
+    if st is None:
+        continue
+    state = state_of(st, ROW_STATES)
+    if state is None:
+        errors.append(f"{r['key']}: unknown status {st[:40]!r}")
+        continue
+    if r['disp'] not in ROW_STATES[state]:
+        errors.append(f"{r['key']}: status {state} cannot sit on disposition {r['disp']}")
+    named = set(re.findall(r'\b(W[123]-[A-Z]|P0)\b', r['slice']))
+    if state == 'IMPLEMENTED':
+        for sl in named:
+            if slice_state.get(sl, 'NOT STARTED') == 'NOT STARTED':
+                errors.append(f"{r['key']}: IMPLEMENTED, but its slice {sl} is NOT STARTED")
+for sl, state in slice_state.items():
+    if state != 'COMPLETE':
+        continue
+    for r in rows:
+        if r['disp'] not in 'AB' or not re.search(r'\b' + re.escape(sl) + r'\b', r['slice']):
+            continue
+        if not r.get('status', '').startswith('IMPLEMENTED'):
+            errors.append(f"{sl} is COMPLETE but {r['key']} (disposition {r['disp']}) is not IMPLEMENTED")
+
+# 9. the matrix's Totals table equals the JSON's dispositions
+def tally(prefixes):
+    found = [r['disp'] for r in rows if r['key'].startswith(prefixes)]
+    return len(found), ' · '.join(f'{d} {found.count(d)}' for d in 'ABCDEFG')
+md_text = '\n'.join(md)
+for label, prefixes in (('Audit items (`AUD-*`)', ('AUD-',)), ('Flourish-ledger items', ('VF/',)),
+                        ('**Substantive audit items, total**', ('AUD-', 'VF/')), ('Execution-map-only', ('P3-N',))):
+    n, dist = tally(prefixes)
+    line = next((l for l in md if l.startswith('| ' + label)), None)
+    if line is None:
+        errors.append(f'Totals: no row for {label}')
+    elif not line.rstrip().endswith(f'| {dist} |') or (f'| {n} |' not in line and f'| **{n}** |' not in line):
+        errors.append(f'Totals: {label} should read {n} rows, {dist}')
+
+# 10. recorded owner rulings are defined, marked RULED in the OD table, and written out in section 7.3
+for od in acc.get('owner_rulings', {}):
+    if od not in ods:
+        errors.append(f'owner_rulings: {od} is not defined in the plan')
+        continue
+    row = next(l for l in plan.splitlines() if l.startswith('| **' + od + '**'))
+    if 'RULED' not in row:
+        errors.append(f'owner_rulings: {od} is not marked RULED in the plan\'s owner-decision table')
+    if not re.search(r'^\*\*' + re.escape(od) + r' — ', plan, re.M):
+        errors.append(f'owner_rulings: {od} has no section in the plan\'s 7.3')
+
 if '--drift' in sys.argv:
     sha = sys.argv[sys.argv.index('--drift') + 1]
     cited = set()
@@ -129,6 +202,9 @@ if '--drift' in sys.argv:
 n_aud = sum(1 for r in rows if r['key'].startswith(('AUD-', 'VF/')))
 n_new = sum(1 for r in rows if r['key'].startswith('P3-N'))
 print(f'rows: {len(rows)} (audit items {n_aud}, new-source findings {n_new}); audit bullets {len(parsed)}')
+if slice_status:
+    print('slices: ' + ', '.join(f'{st} {sum(1 for v in slice_state.values() if v == st)}' for st in SLICE_STATES if any(v == st for v in slice_state.values()))
+          + f"; rows with a status: {sum(1 for r in rows if 'status' in r)}; owner rulings recorded: {', '.join(acc.get('owner_rulings', {})) or 'none'}")
 if errors:
     print('FAIL')
     for e in errors:

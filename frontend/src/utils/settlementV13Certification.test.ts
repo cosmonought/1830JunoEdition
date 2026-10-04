@@ -102,7 +102,7 @@ import { emergencyFundingFor, emergencyPortfolioRefusal, fundedTradeRefusal } fr
 import { trainSaleRefusal } from "../gameEngine/trainSaleAuthority";
 import { derivedEntryKey, nextDerivedAction } from "../gameEngine/derivedActions";
 import { turnRefusal } from "../gameEngine/turnAuthority";
-import { marketCellForPrice, projectShareSaleMove } from "../gameEngine/marketGeometry";
+import { marketCellForPrice, marketZoneForPrice, projectShareSaleMove } from "../gameEngine/marketGeometry";
 import { stateDigest } from "../gameEngine/stateDigest";
 import { logHash } from "../gameEngine/logHash";
 import { STANDARD_VARIANTS } from "../gameEngine/gameVariants";
@@ -128,6 +128,7 @@ import {
   v13GoldenBoards,
 } from "./settlementGoldenBoards";
 import {
+  BO,
   CA,
   CO,
   CPR,
@@ -854,6 +855,9 @@ describe("G. the v13 vectors: V13-01 ... V13-21, twenty-five terminals reached b
       expect(stateDigest(restoredBoard(g))).toBe(stateDigest(terminal));
       // The revert really undid something: the reverted board is not the terminal.
       expect(d.revert.reverted_board).not.toBe(d.live);
+      // The stored log keeps the undone entries, the revert, and the action made again: N + 1 + the step's entries.
+      const revertedStep = g.played.find((entry) => entry.label === d.revert.reverted_label)!;
+      expect(d.revert.log_len).toBe(g.entries.length + 1 + revertedStep.entries.length);
     });
 
     it("its payload: the v12 twin's bytes but for [1,33) domain and [91,123) appraisal_state_hash; decodes, checks; the builder agrees once admitted", () => {
@@ -904,9 +908,13 @@ describe("G. the v13 vectors: V13-01 ... V13-21, twenty-five terminals reached b
 
   it("V13-02: one-click PassTurn turns, a Brown continuation and an all-pass ending, then a bank break -- path only", () => {
     const g = game("V13-02");
-    const [buy1, poolCpr, buy2, endTurn, p2Pass, p3Sell, p3End, pass1, pass2, pass3] = g.played;
+    const [buy1, poolBo, buy2, endTurn, p2Pass, p3Sell, p3End, pass1, pass2, pass3] = g.played;
     expect(buy1.after.brown_pool_continuation_company).toBe(CO);
-    expect(poolCpr.kind).not.toBe("applied");
+    // B&O is Brown too, its certificate in the Bank Pool: refused by the v13 rule alone (the continuation is C&O's).
+    expect(marketZoneForPrice(priceOf(buy1.after, BO))).toBe("Brown");
+    expect(company(buy1.after, BO).bank_pool_percentage).toBeGreaterThan(0);
+    expect(poolBo.kind).not.toBe("applied");
+    expect(poolBo.reason).toContain("several Bank Pool certificates of that one corporation");
     expect(buy2.kind).toBe("applied");
     expect(held(buy2.after, CO, P1)).toBe(20);
     expect([endTurn.after.active_player_index, endTurn.after.consecutive_passes]).toEqual([1, 0]); // one message, acted
@@ -950,7 +958,10 @@ describe("G. the v13 vectors: V13-01 ... V13-21, twenty-five terminals reached b
 
   it("V13-03: full liquidation -- every legal leg sold, still short; cash 0 and privates 0 for the bankrupt; the treasury credited; rival prices after the drops", () => {
     const g = game("V13-03");
-    const { record } = bankruptcyProof(g);
+    const { record, funding } = bankruptcyProof(g);
+    // p1's Schuylkill Valley is open and his, but no corporation can pay its $10 minimum: no private path, counted 0.
+    expect(funding.legalPrivateSales).toEqual([]);
+    expect([privateOf(g.terminal, SV).owner, privateOf(g.terminal, SV).closed]).toEqual([P1, false]);
     expect(record.sold).toEqual([{ company_id: PRR, percentage: 10 }, { company_id: NYC, percentage: 10 }, { company_id: CO, percentage: 10 }]);
     // The residue is the rescued corporation's crown alone.
     expect(g.terminal.public_companies.filter((c) => held(g.terminal, c.company_id, P1) > 0).map((c) => [c.company_id, held(g.terminal, c.company_id, P1)])).toEqual([[CO, 20]]);
@@ -1026,7 +1037,7 @@ describe("G. the v13 vectors: V13-01 ... V13-21, twenty-five terminals reached b
 
   it("V13-09: irrelevant private funding -- immediate bankruptcy with the bankrupt's privates still open, excluded for him alone", () => {
     const g = game("V13-09");
-    expect(g.played).toHaveLength(1);
+    expect(g.played.map((step) => step.entries[0])).toEqual(["PassTurn", "AdvanceOperatingSubPhase"]); // ended in the C&O's first burst
     const { funding } = bankruptcyProof(g);
     expect(funding.automatic!.privateFunding).toBe("irrelevant");
     expect(funding.automatic!.privateFundingUpperBound).toBeLessThan(funding.shortfall);
@@ -1075,6 +1086,18 @@ describe("G. the v13 vectors: V13-01 ... V13-21, twenty-five terminals reached b
     }
     // After the purchase the board owes nothing, whatever the guard set holds.
     expect(nextDerivedAction({ state: boardAfter(g, purchase + 1).board, mapGrid: g.grid, emitted: new Set() })).toBeNull();
+    // And after a RESCUE: a crash before the portfolio, between the portfolio and the game's purchase, or after both.
+    for (const id of ["V13-10", "V13-17a", "V13-19", "V13-21b"]) {
+      const rescued = game(id);
+      const at = rescued.entries.findIndex((entry) => "EmergencySellPortfolio" in JSON.parse(entry.payload));
+      expect([id, kinds(rescued.entries).slice(at, at + 2)]).toEqual([id, ["EmergencySellPortfolio", "EmergencyBuyHardware*"]]);
+      for (const cut of [at, at + 1, at + 2]) {
+        const room = crashRestart(rescued, cut);
+        expect([id, cut, room.entries.map((entry) => entry.payload)]).toEqual([id, cut, rescued.entries.map((entry) => entry.payload)]);
+        expect([id, cut, logHash(room.entries)]).toEqual([id, cut, rescued.log_hash]);
+        expect([id, cut, terminalStateHashV1(room.state)]).toEqual([id, cut, terminalStateHashV1(rescued.terminal)]);
+      }
+    }
   });
 
   it("V13-12: ties at the top -- the bankrupt ties P2 (a), and two seats tie in a four-seat bank break (b): equal weights, equal payouts, a shared first rank", () => {
@@ -1120,12 +1143,12 @@ describe("G. the v13 vectors: V13-01 ... V13-21, twenty-five terminals reached b
     expect(funding.automatic!.privateFundingUpperBound).toBeGreaterThanOrEqual(funding.shortfall);
     expect(funding.automatic!.privateFundingMaximum).toBeLessThan(funding.shortfall);
     expect(funding.automatic!.privateFunding).toBe("irrelevant");
-    expect(a.played).toHaveLength(1);
-    const waiting = bb.played[0].after;
+    expect(a.played).toHaveLength(2); // the prior corporation's end of turn, then the C&O's one burst
+    const waiting = bb.played[1].after;
     const bFunding = emergencyFundingFor(waiting, bb.grid)!;
     expect([waiting.current_round_type, bFunding.automatic!.privateFunding, bFunding.bankrupt]).toEqual(["OperatingRound", "relevant", false]);
     expect(bFunding.automatic!.privateFundingMaximum).toBeGreaterThanOrEqual(bFunding.shortfall);
-    expect(bb.played[2].entries).toEqual(["AnswerFundingPrivateOffer", "EmergencyBuyHardware*"]);
+    expect(bb.played[3].entries).toEqual(["AnswerFundingPrivateOffer", "EmergencyBuyHardware*"]);
     expect([privateOf(bb.terminal, CA).owner, privateOf(bb.terminal, CA).owner_protocol_id]).toEqual([null, NYC]);
     expect(treasuryOf(bb.terminal, NYC)).toBe(300);
     expect([a.terminal.bankrupt_president, bb.terminal.bankrupt_president ?? null]).toEqual([P1, null]);
@@ -1198,9 +1221,13 @@ describe("G. the v13 vectors: V13-01 ... V13-21, twenty-five terminals reached b
     expect(canonicalStateText(a.seedBoard)).toBe(canonicalStateText(bb.seedBoard));
     const waiting = a.played[0].after;
     expect(emergencyFundingFor(waiting, a.grid)!.automatic!.tradeWindow).toBe("open");
-    expect(a.played[1].entries).toEqual(["BuyTrainFromCorporation"]);
+    // Two presidents: p1 offers for the C&O, p2 accepts for NYC; the accepted offer settles as the room's derived entry.
+    expect([company(waiting, NYC).president, company(waiting, CO).president]).toEqual([P2, P1]);
+    expect(a.played[1].entries).toEqual(["ProposeTrainPurchase"]);
+    expect(a.played[2].entries).toEqual(["AnswerTrainPurchase", "BuyTrainFromCorporation*"]);
     expect([company(a.terminal, CO).owned_trains, company(a.terminal, NYC).owned_trains]).toEqual([["2"], []]);
     expect(treasuryOf(a.terminal, NYC)).toBe(100 + 60);
+    expect([treasuryOf(a.played[2].after, CO), cashOf(a.played[2].after, P1)]).toEqual([0, 0]); // $30 + $30
     // (b): the board between the portfolio and the game's purchase -- the window is closed and a trade is refused.
     expect(bb.played[1].entries).toEqual(["EmergencySellPortfolio", "EmergencyBuyHardware*"]);
     const portfolioAt = bb.entries.findIndex((entry) => "EmergencySellPortfolio" in JSON.parse(entry.payload));
@@ -1211,6 +1238,22 @@ describe("G. the v13 vectors: V13-01 ... V13-21, twenty-five terminals reached b
     expect(trainSaleRefusal(between, { buyerId: CO, sellerId: NYC, model: "2", price: 50 }, P1, grid, "settlement")).toContain("never with money raised by selling");
     expect([company(bb.terminal, CO).owned_trains, company(bb.terminal, NYC).owned_trains]).toEqual([["2"], ["2"]]);
     expect(kinds(bb.entries).some((k) => k.startsWith("BuyTrainFromCorporation") || k.startsWith("ProposeTrainPurchase"))).toBe(false);
+  });
+
+  it("V13-13 / RevertTo: every revert is LIVE, and on every rescue it undoes the emergency decision itself, with the game's derived purchase", () => {
+    const decisions = ["EmergencySellPortfolio", "AnswerFundingPrivateOffer", "AnswerTrainPurchase", "ForgoTrainTrade"];
+    for (const g of GAMES) {
+      const d = DETERMINISM.get(g.id)!;
+      const step = g.played.find((entry) => entry.label === d.revert.reverted_label)!;
+      expect([g.id, step.after.current_round_type]).not.toEqual([g.id, "GameEnd"]);
+      if (g.reason === "BankBroken" && g.played.some((entry) => entry.entries.includes("EmergencyBuyHardware*"))) {
+        expect([g.id, decisions.includes(step.entries[0]), step.entries[step.entries.length - 1]]).toEqual([g.id, true, "EmergencyBuyHardware*"]);
+      }
+      if (g.reason === "Bankruptcy") {
+        // Immediate bankruptcies undo the previous corporation's end of turn; V13-07 / 08 the walk into the obligation.
+        expect([g.id, step.entries[0]]).toEqual([g.id, g.id === "V13-07" || g.id === "V13-08" ? "AdvanceOperatingSubPhase" : "PassTurn"]);
+      }
+    }
   });
 
   it("V13-13: the same log through RoomEngine.apply (live), a cold restore, the batch replay and a snapshot rebuild ends at one digest -- on every vector", () => {

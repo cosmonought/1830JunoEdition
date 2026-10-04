@@ -1774,8 +1774,8 @@
     "snapshot": "19c2684adde64b70e809d80a3c3a7ce5e11493f16831877bff179a7897ea2a5d",
     "snapshot_after": 15,
     "revert": {
-     "kind": "live",
      "reverted_index": 27,
+     "reverted_label": "3.2 C&O advances",
      "log_len": 33,
      "terminal": "19c2684adde64b70e809d80a3c3a7ce5e11493f16831877bff179a7897ea2a5d",
      "restored": "19c2684adde64b70e809d80a3c3a7ce5e11493f16831877bff179a7897ea2a5d",
@@ -1902,7 +1902,7 @@
      ]
     },
     {
-     "label": "P1's Pool CPR is refused (one corporation only)",
+     "label": "P1's Pool B&O (also Brown) is refused: the continuation is one corporation's",
      "actor": "p1",
      "answer": "refused",
      "reason": "One certificate purchase per turn. The only exception is a Brown-zone Bank Pool purchase: several Bank Pool certificates of that one corporation, bought one after another before you do anything else on your turn.",
@@ -2049,6 +2049,25 @@
      ]
     },
     {
+     "label": "4.1 B&O advances",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "AdvanceOperatingSubPhase",
+      "AdvanceOperatingSubPhase*",
+      "AdvanceOperatingSubPhase*",
+      "DeclareDividends*"
+     ]
+    },
+    {
+     "label": "4.1 B&O ends its turn",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
+    {
      "label": "4.2 NYC advances",
      "actor": "p2",
      "answer": "applied",
@@ -2123,29 +2142,48 @@
      "entries": [
       "PassTurn"
      ]
+    },
+    {
+     "label": "4.2 B&O advances",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "AdvanceOperatingSubPhase",
+      "AdvanceOperatingSubPhase*",
+      "AdvanceOperatingSubPhase*",
+      "DeclareDividends*"
+     ]
+    },
+    {
+     "label": "4.2 B&O ends its turn",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
     }
    ],
-   "log_len": 49,
-   "log_hash": "0b3795e8389e676516a530db776673e74e1711b9fc3210010f69babe0f7862bc",
+   "log_len": 59,
+   "log_hash": "ada3009f40362f208ebedfaf7519ef181a3db2f77b6fc29f71313dcf5084eb2d",
    "terminal": {
-    "state_digest": "17de403def07e3c6",
-    "appraisal_state_hash": "7ee7cd2ecf1687a9c27e0c2bd53719f773f235a3352b0eb7fb033ac5271811b7",
+    "state_digest": "ba5ea11dd78efdbe",
+    "appraisal_state_hash": "0ec27da1e3e7770f8bcdde5319c3cb477474bdb170393b51fc44792afe5f5d3d",
     "bankrupt_president": null,
     "bankruptcy_record": null
    },
    "determinism": {
-    "live": "7ee7cd2ecf1687a9c27e0c2bd53719f773f235a3352b0eb7fb033ac5271811b7",
-    "restore": "7ee7cd2ecf1687a9c27e0c2bd53719f773f235a3352b0eb7fb033ac5271811b7",
-    "replay": "7ee7cd2ecf1687a9c27e0c2bd53719f773f235a3352b0eb7fb033ac5271811b7",
-    "snapshot": "7ee7cd2ecf1687a9c27e0c2bd53719f773f235a3352b0eb7fb033ac5271811b7",
-    "snapshot_after": 24,
+    "live": "0ec27da1e3e7770f8bcdde5319c3cb477474bdb170393b51fc44792afe5f5d3d",
+    "restore": "0ec27da1e3e7770f8bcdde5319c3cb477474bdb170393b51fc44792afe5f5d3d",
+    "replay": "0ec27da1e3e7770f8bcdde5319c3cb477474bdb170393b51fc44792afe5f5d3d",
+    "snapshot": "0ec27da1e3e7770f8bcdde5319c3cb477474bdb170393b51fc44792afe5f5d3d",
+    "snapshot_after": 29,
     "revert": {
-     "kind": "live",
-     "reverted_index": 44,
-     "log_len": 54,
-     "terminal": "7ee7cd2ecf1687a9c27e0c2bd53719f773f235a3352b0eb7fb033ac5271811b7",
-     "restored": "7ee7cd2ecf1687a9c27e0c2bd53719f773f235a3352b0eb7fb033ac5271811b7",
-     "reverted_board": "4343605c2a3721563b45f2981b9b6ea549fb05ae396495900bb01426e95a6396"
+     "reverted_index": 8,
+     "reverted_label": "P3 passes (3): all pass, the Stock Round ends",
+     "log_len": 61,
+     "terminal": "0ec27da1e3e7770f8bcdde5319c3cb477474bdb170393b51fc44792afe5f5d3d",
+     "restored": "0ec27da1e3e7770f8bcdde5319c3cb477474bdb170393b51fc44792afe5f5d3d",
+     "reverted_board": "ffba0c64b4fd6cbab0c60008e7a70c4576e2bc63349284c3651864df3d8d6d04"
     }
    },
    "seat_mapping": [
@@ -2168,18 +2206,18 @@
      "bankrupt": false,
      "cash_in_state": "570",
      "cash": "570",
-     "shares": "665",
+     "shares": "675",
      "privates": "200",
-     "total": "1435"
+     "total": "1445"
     },
     {
      "player_id": "p3",
      "bankrupt": false,
      "cash_in_state": "842",
      "cash": "842",
-     "shares": "630",
+     "shares": "680",
      "privates": "70",
-     "total": "1542"
+     "total": "1592"
     },
     {
      "player_id": "p1",
@@ -2192,35 +2230,35 @@
     }
    ],
    "vector": [
-    "1435",
-    "1542",
+    "1445",
+    "1592",
     "1467"
    ],
    "pools": [
     {
      "pool_ujuno": "5850000",
      "payouts_ujuno": [
-      "1889007",
-      "2029860",
-      "1931131"
+      "1876831",
+      "2067761",
+      "1905406"
      ],
      "dust_ujuno": "2"
     },
     {
      "pool_ujuno": "1000000007",
      "payouts_ujuno": [
-      "322907292",
-      "346984700",
-      "330108013"
+      "320825934",
+      "353463590",
+      "325710481"
      ],
      "dust_ujuno": "2"
     },
     {
      "pool_ujuno": "18446744073709551629",
      "payouts_ujuno": [
-      "5956588151614132895",
-      "6400737930166545592",
-      "6089417991928873141"
+      "5918193869118628353",
+      "6520252345769450753",
+      "6008297858821472522"
      ],
      "dust_ujuno": "1"
     }
@@ -2229,26 +2267,26 @@
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "99",
+    "seq": "119",
     "kind": 1,
     "reason": 1,
-    "log_len": "49",
-    "log_hash": "0b3795e8389e676516a530db776673e74e1711b9fc3210010f69babe0f7862bc",
-    "appraisal_log_len": "49",
-    "appraisal_state_hash": "7ee7cd2ecf1687a9c27e0c2bd53719f773f235a3352b0eb7fb033ac5271811b7",
+    "log_len": "59",
+    "log_hash": "ada3009f40362f208ebedfaf7519ef181a3db2f77b6fc29f71313dcf5084eb2d",
+    "appraisal_log_len": "59",
+    "appraisal_state_hash": "0ec27da1e3e7770f8bcdde5319c3cb477474bdb170393b51fc44792afe5f5d3d",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
-     "1435",
-     "1542",
+     "1445",
+     "1592",
      "1467"
     ],
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d08040000000000000063010100000000000000310b3795e8389e676516a530db776673e74e1711b9fc3210010f69babe0f7862bc00000000000000317ee7cd2ecf1687a9c27e0c2bd53719f773f235a3352b0eb7fb033ac5271811b70001030000000000000000000000000000059b00000000000000000000000000000606000000000000000000000000000005bb00010000000068d5d780",
-   "settle_digest": "bb00b28d4e4385c8b76951b4ac354da680add54578bee4e852a10ccc60724b15",
-   "consent_digest": "4eabc91f553cb53b102fed77343449230e28e2ac5f10dfac91d4ef0c4d171d2b"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d080400000000000000770101000000000000003bada3009f40362f208ebedfaf7519ef181a3db2f77b6fc29f71313dcf5084eb2d000000000000003b0ec27da1e3e7770f8bcdde5319c3cb477474bdb170393b51fc44792afe5f5d3d000103000000000000000000000000000005a500000000000000000000000000000638000000000000000000000000000005bb00010000000068d5d780",
+   "settle_digest": "8469eb48af3cc61412075b7b3e3c7176d3c08da19fcfa427c815b5c1f286a919",
+   "consent_digest": "0fa4478d5f3b6220fd21a713975840cdf7ac19a4d28a94248f9db80d5a133758"
   },
   {
    "id": "V13-03",
@@ -2259,6 +2297,14 @@
    "reason": "Bankruptcy",
    "reason_code": 2,
    "steps": [
+    {
+     "label": "PRR ends its turn",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
     {
      "label": "C&O passes on track; the room walks it to Buy Trains",
      "actor": "p1",
@@ -2271,11 +2317,11 @@
      ]
     }
    ],
-   "log_len": 4,
-   "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
+   "log_len": 5,
+   "log_hash": "9512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e",
    "terminal": {
-    "state_digest": "bd0e9c908762369b",
-    "appraisal_state_hash": "a7504f9065272f3dde27f43f99ac8e94c3a22b2ffbb9f7ff30c132fa8c0435f4",
+    "state_digest": "64401ae78b5849f4",
+    "appraisal_state_hash": "c82c9d71fb54ea31116f09841a9b781b54b48b26f405e7729c6b3d2b1ba1e7dd",
     "bankrupt_president": "p1",
     "bankruptcy_record": {
      "president": "p1",
@@ -2299,18 +2345,18 @@
     }
    },
    "determinism": {
-    "live": "a7504f9065272f3dde27f43f99ac8e94c3a22b2ffbb9f7ff30c132fa8c0435f4",
-    "restore": "a7504f9065272f3dde27f43f99ac8e94c3a22b2ffbb9f7ff30c132fa8c0435f4",
-    "replay": "a7504f9065272f3dde27f43f99ac8e94c3a22b2ffbb9f7ff30c132fa8c0435f4",
-    "snapshot": "a7504f9065272f3dde27f43f99ac8e94c3a22b2ffbb9f7ff30c132fa8c0435f4",
+    "live": "c82c9d71fb54ea31116f09841a9b781b54b48b26f405e7729c6b3d2b1ba1e7dd",
+    "restore": "c82c9d71fb54ea31116f09841a9b781b54b48b26f405e7729c6b3d2b1ba1e7dd",
+    "replay": "c82c9d71fb54ea31116f09841a9b781b54b48b26f405e7729c6b3d2b1ba1e7dd",
+    "snapshot": "c82c9d71fb54ea31116f09841a9b781b54b48b26f405e7729c6b3d2b1ba1e7dd",
     "snapshot_after": 2,
     "revert": {
-     "kind": "log",
      "reverted_index": 0,
-     "log_len": 9,
-     "terminal": "a7504f9065272f3dde27f43f99ac8e94c3a22b2ffbb9f7ff30c132fa8c0435f4",
-     "restored": "a7504f9065272f3dde27f43f99ac8e94c3a22b2ffbb9f7ff30c132fa8c0435f4",
-     "reverted_board": "629b9b6b9386f4108263c59f0fe2e1d6bff5a180a94fdc38ebcb2a1c7074db38"
+     "reverted_label": "PRR ends its turn",
+     "log_len": 7,
+     "terminal": "c82c9d71fb54ea31116f09841a9b781b54b48b26f405e7729c6b3d2b1ba1e7dd",
+     "restored": "c82c9d71fb54ea31116f09841a9b781b54b48b26f405e7729c6b3d2b1ba1e7dd",
+     "reverted_board": "ac9b1a2500d66b8f578754f5102aaf75c111d36b90846ea72b6a3311c026a369"
     }
    },
    "seat_mapping": [
@@ -2352,40 +2398,40 @@
      "cash_in_state": "400",
      "cash": "400",
      "shares": "362",
-     "privates": "250",
-     "total": "1012"
+     "privates": "230",
+     "total": "992"
     }
    ],
    "vector": [
     "816",
     "92",
-    "1012"
+    "992"
    ],
    "pools": [
     {
      "pool_ujuno": "5850000",
      "payouts_ujuno": [
-      "2486250",
-      "280312",
-      "3083437"
+      "2512421",
+      "283263",
+      "3054315"
      ],
      "dust_ujuno": "1"
     },
     {
      "pool_ujuno": "1000000007",
      "payouts_ujuno": [
-      "425000002",
-      "47916667",
-      "527083337"
+      "429473687",
+      "48421052",
+      "522105266"
      ],
-     "dust_ujuno": "1"
+     "dust_ujuno": "2"
     },
     {
      "pool_ujuno": "18446744073709551629",
      "payouts_ujuno": [
-      "7839866231326559442",
-      "883906486865249348",
-      "9722971355517742837"
+      "7922391139024733752",
+      "893210765674357236",
+      "9631142169010460639"
      ],
      "dust_ujuno": "2"
     }
@@ -2394,26 +2440,26 @@
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "9",
+    "seq": "11",
     "kind": 1,
     "reason": 2,
-    "log_len": "4",
-    "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
-    "appraisal_log_len": "4",
-    "appraisal_state_hash": "a7504f9065272f3dde27f43f99ac8e94c3a22b2ffbb9f7ff30c132fa8c0435f4",
+    "log_len": "5",
+    "log_hash": "9512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e",
+    "appraisal_log_len": "5",
+    "appraisal_state_hash": "c82c9d71fb54ea31116f09841a9b781b54b48b26f405e7729c6b3d2b1ba1e7dd",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
      "816",
      "92",
-     "1012"
+     "992"
     ],
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000901020000000000000004bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a0000000000000004a7504f9065272f3dde27f43f99ac8e94c3a22b2ffbb9f7ff30c132fa8c0435f4000103000000000000000000000000000003300000000000000000000000000000005c000000000000000000000000000003f400010000000068d5d780",
-   "settle_digest": "3fa3f465ff6d2902d484f8190e8d5d79121876a9d27ee25e312cdc353b9c03b9",
-   "consent_digest": "33554c287421b807921d906c177597b80c412e4a891621854cd6809555ff22f0"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000059512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e0000000000000005c82c9d71fb54ea31116f09841a9b781b54b48b26f405e7729c6b3d2b1ba1e7dd000103000000000000000000000000000003300000000000000000000000000000005c000000000000000000000000000003e000010000000068d5d780",
+   "settle_digest": "7c7c7f099c0b6843865c010924b4f09d61a9a72d9672be66e8bc659b0872bf58",
+   "consent_digest": "76e65b802d3826e2a5347af2eb06e10373ce3d254948375000df5c9df54208ab"
   },
   {
    "id": "V13-04",
@@ -2424,6 +2470,14 @@
    "reason": "Bankruptcy",
    "reason_code": 2,
    "steps": [
+    {
+     "label": "PRR ends its turn",
+     "actor": "p1",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
     {
      "label": "C&O passes on track; the room walks it to Buy Trains",
      "actor": "p1",
@@ -2436,11 +2490,11 @@
      ]
     }
    ],
-   "log_len": 4,
-   "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
+   "log_len": 5,
+   "log_hash": "1c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d421",
    "terminal": {
-    "state_digest": "ddb15c1a4b67eb7d",
-    "appraisal_state_hash": "eba41f16dff02d05f18045fbc5bd07e79bdde3b8ca33bb3a3badabfc963d5b21",
+    "state_digest": "f5add37a0d04db5b",
+    "appraisal_state_hash": "b45735ac23623d688690fa548c51141fb1b1acc70163d013d630b291b8f4b0f9",
     "bankrupt_president": "p1",
     "bankruptcy_record": {
      "president": "p1",
@@ -2460,18 +2514,18 @@
     }
    },
    "determinism": {
-    "live": "eba41f16dff02d05f18045fbc5bd07e79bdde3b8ca33bb3a3badabfc963d5b21",
-    "restore": "eba41f16dff02d05f18045fbc5bd07e79bdde3b8ca33bb3a3badabfc963d5b21",
-    "replay": "eba41f16dff02d05f18045fbc5bd07e79bdde3b8ca33bb3a3badabfc963d5b21",
-    "snapshot": "eba41f16dff02d05f18045fbc5bd07e79bdde3b8ca33bb3a3badabfc963d5b21",
+    "live": "b45735ac23623d688690fa548c51141fb1b1acc70163d013d630b291b8f4b0f9",
+    "restore": "b45735ac23623d688690fa548c51141fb1b1acc70163d013d630b291b8f4b0f9",
+    "replay": "b45735ac23623d688690fa548c51141fb1b1acc70163d013d630b291b8f4b0f9",
+    "snapshot": "b45735ac23623d688690fa548c51141fb1b1acc70163d013d630b291b8f4b0f9",
     "snapshot_after": 2,
     "revert": {
-     "kind": "log",
      "reverted_index": 0,
-     "log_len": 9,
-     "terminal": "eba41f16dff02d05f18045fbc5bd07e79bdde3b8ca33bb3a3badabfc963d5b21",
-     "restored": "eba41f16dff02d05f18045fbc5bd07e79bdde3b8ca33bb3a3badabfc963d5b21",
-     "reverted_board": "69d154954ce2d483597c9c6b318a8138fc71ede4dbd707833586ef33204caebe"
+     "reverted_label": "PRR ends its turn",
+     "log_len": 7,
+     "terminal": "b45735ac23623d688690fa548c51141fb1b1acc70163d013d630b291b8f4b0f9",
+     "restored": "b45735ac23623d688690fa548c51141fb1b1acc70163d013d630b291b8f4b0f9",
+     "reverted_board": "c71c80e8f3b05138ee72ebebf610dc592313c519340c85946c1edc894a226ca1"
     }
    },
    "seat_mapping": [
@@ -2555,13 +2609,13 @@
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "9",
+    "seq": "11",
     "kind": 1,
     "reason": 2,
-    "log_len": "4",
-    "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
-    "appraisal_log_len": "4",
-    "appraisal_state_hash": "eba41f16dff02d05f18045fbc5bd07e79bdde3b8ca33bb3a3badabfc963d5b21",
+    "log_len": "5",
+    "log_hash": "1c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d421",
+    "appraisal_log_len": "5",
+    "appraisal_state_hash": "b45735ac23623d688690fa548c51141fb1b1acc70163d013d630b291b8f4b0f9",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -2572,9 +2626,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000901020000000000000004bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a0000000000000004eba41f16dff02d05f18045fbc5bd07e79bdde3b8ca33bb3a3badabfc963d5b21000103000000000000000000000000000000e2000000000000000000000000000003bb0000000000000000000000000000033900010000000068d5d780",
-   "settle_digest": "ae2d6f20962dfec247aef852f833f09b07791589eb8399fc209c432c5cd9a17f",
-   "consent_digest": "93e25dbe2a8aecf48a3169e949c057e0908c84c3eca57302c38349a0d916220b"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000051c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d4210000000000000005b45735ac23623d688690fa548c51141fb1b1acc70163d013d630b291b8f4b0f9000103000000000000000000000000000000e2000000000000000000000000000003bb0000000000000000000000000000033900010000000068d5d780",
+   "settle_digest": "d22f96b866dc2306481d42f401c63f16d9602eeb681e888608ee4f84367dcc0e",
+   "consent_digest": "e5431c65d843ac08fcaf75d9976a54f1a4a80b4ce315ad624066ea97bf2cabc1"
   },
   {
    "id": "V13-05",
@@ -2585,6 +2639,14 @@
    "reason": "Bankruptcy",
    "reason_code": 2,
    "steps": [
+    {
+     "label": "CPR ends its turn",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
     {
      "label": "C&O passes on track; the room walks it to Buy Trains",
      "actor": "p1",
@@ -2597,11 +2659,11 @@
      ]
     }
    ],
-   "log_len": 4,
-   "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
+   "log_len": 5,
+   "log_hash": "9512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e",
    "terminal": {
-    "state_digest": "9600805d9ad43746",
-    "appraisal_state_hash": "4c655edb9e8c06ed5ec1f10a61b104cb36b74d7f8e7577d8b27bd2404373d8c9",
+    "state_digest": "6189da03d8d7614a",
+    "appraisal_state_hash": "2520182162da333bd875f5d3d7f3b39417b915ee49b0552b38021f4995bf6d91",
     "bankrupt_president": "p1",
     "bankruptcy_record": {
      "president": "p1",
@@ -2621,18 +2683,18 @@
     }
    },
    "determinism": {
-    "live": "4c655edb9e8c06ed5ec1f10a61b104cb36b74d7f8e7577d8b27bd2404373d8c9",
-    "restore": "4c655edb9e8c06ed5ec1f10a61b104cb36b74d7f8e7577d8b27bd2404373d8c9",
-    "replay": "4c655edb9e8c06ed5ec1f10a61b104cb36b74d7f8e7577d8b27bd2404373d8c9",
-    "snapshot": "4c655edb9e8c06ed5ec1f10a61b104cb36b74d7f8e7577d8b27bd2404373d8c9",
+    "live": "2520182162da333bd875f5d3d7f3b39417b915ee49b0552b38021f4995bf6d91",
+    "restore": "2520182162da333bd875f5d3d7f3b39417b915ee49b0552b38021f4995bf6d91",
+    "replay": "2520182162da333bd875f5d3d7f3b39417b915ee49b0552b38021f4995bf6d91",
+    "snapshot": "2520182162da333bd875f5d3d7f3b39417b915ee49b0552b38021f4995bf6d91",
     "snapshot_after": 2,
     "revert": {
-     "kind": "log",
      "reverted_index": 0,
-     "log_len": 9,
-     "terminal": "4c655edb9e8c06ed5ec1f10a61b104cb36b74d7f8e7577d8b27bd2404373d8c9",
-     "restored": "4c655edb9e8c06ed5ec1f10a61b104cb36b74d7f8e7577d8b27bd2404373d8c9",
-     "reverted_board": "1669e17a7bb1fc94b734a010d2b52d99805ebb08a6c7b9056bdeca47fcaf1a4d"
+     "reverted_label": "CPR ends its turn",
+     "log_len": 7,
+     "terminal": "2520182162da333bd875f5d3d7f3b39417b915ee49b0552b38021f4995bf6d91",
+     "restored": "2520182162da333bd875f5d3d7f3b39417b915ee49b0552b38021f4995bf6d91",
+     "reverted_board": "60c437109c76afdf623aa6807d74fc448eaa9538d93e7d3d63ae04d971656f0a"
     }
    },
    "seat_mapping": [
@@ -2716,13 +2778,13 @@
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "9",
+    "seq": "11",
     "kind": 1,
     "reason": 2,
-    "log_len": "4",
-    "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
-    "appraisal_log_len": "4",
-    "appraisal_state_hash": "4c655edb9e8c06ed5ec1f10a61b104cb36b74d7f8e7577d8b27bd2404373d8c9",
+    "log_len": "5",
+    "log_hash": "9512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e",
+    "appraisal_log_len": "5",
+    "appraisal_state_hash": "2520182162da333bd875f5d3d7f3b39417b915ee49b0552b38021f4995bf6d91",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -2733,9 +2795,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000901020000000000000004bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a00000000000000044c655edb9e8c06ed5ec1f10a61b104cb36b74d7f8e7577d8b27bd2404373d8c90001030000000000000000000000000000035400000000000000000000000000000390000000000000000000000000000000ca00010000000068d5d780",
-   "settle_digest": "63ebb05fe8037f80fce53da34d712b81bb8e2e3cc4dcaf14b12451249068f4e3",
-   "consent_digest": "707f70a8afb9abd21ed89863ad7eebe2036d5e361460c7562a2a7ee6724ee889"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000059512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e00000000000000052520182162da333bd875f5d3d7f3b39417b915ee49b0552b38021f4995bf6d910001030000000000000000000000000000035400000000000000000000000000000390000000000000000000000000000000ca00010000000068d5d780",
+   "settle_digest": "13b671d5374cd1898c6b810b085b64a82eb71192d3afa8881fe27fcbba279183",
+   "consent_digest": "f8d5877ae4500724c7149697b143ae2ef23827857fec3e4f0b448fe0bcb49134"
   },
   {
    "id": "V13-06",
@@ -2746,6 +2808,14 @@
    "reason": "Bankruptcy",
    "reason_code": 2,
    "steps": [
+    {
+     "label": "PRR ends its turn",
+     "actor": "p1",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
     {
      "label": "C&O passes on track; the room walks it to Buy Trains",
      "actor": "p1",
@@ -2758,11 +2828,11 @@
      ]
     }
    ],
-   "log_len": 4,
-   "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
+   "log_len": 5,
+   "log_hash": "1c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d421",
    "terminal": {
-    "state_digest": "03e9c880535bc2cd",
-    "appraisal_state_hash": "bb20fe074614d46909bde25faa188d652542b288acf2013a180a0bbf2a2ecc9b",
+    "state_digest": "160b8a0cf7f767eb",
+    "appraisal_state_hash": "19073505708ee59c32d8f2455b4023eb058df0b168b1160805c10830eff11801",
     "bankrupt_president": "p1",
     "bankruptcy_record": {
      "president": "p1",
@@ -2773,18 +2843,18 @@
     }
    },
    "determinism": {
-    "live": "bb20fe074614d46909bde25faa188d652542b288acf2013a180a0bbf2a2ecc9b",
-    "restore": "bb20fe074614d46909bde25faa188d652542b288acf2013a180a0bbf2a2ecc9b",
-    "replay": "bb20fe074614d46909bde25faa188d652542b288acf2013a180a0bbf2a2ecc9b",
-    "snapshot": "bb20fe074614d46909bde25faa188d652542b288acf2013a180a0bbf2a2ecc9b",
+    "live": "19073505708ee59c32d8f2455b4023eb058df0b168b1160805c10830eff11801",
+    "restore": "19073505708ee59c32d8f2455b4023eb058df0b168b1160805c10830eff11801",
+    "replay": "19073505708ee59c32d8f2455b4023eb058df0b168b1160805c10830eff11801",
+    "snapshot": "19073505708ee59c32d8f2455b4023eb058df0b168b1160805c10830eff11801",
     "snapshot_after": 2,
     "revert": {
-     "kind": "log",
      "reverted_index": 0,
-     "log_len": 9,
-     "terminal": "bb20fe074614d46909bde25faa188d652542b288acf2013a180a0bbf2a2ecc9b",
-     "restored": "bb20fe074614d46909bde25faa188d652542b288acf2013a180a0bbf2a2ecc9b",
-     "reverted_board": "a8c7da214f7656fc492802ce81a8016c7a71f035b9115a861ea3c06839e11705"
+     "reverted_label": "PRR ends its turn",
+     "log_len": 7,
+     "terminal": "19073505708ee59c32d8f2455b4023eb058df0b168b1160805c10830eff11801",
+     "restored": "19073505708ee59c32d8f2455b4023eb058df0b168b1160805c10830eff11801",
+     "reverted_board": "ed57b60d3864aba83f9f8f2603918fb5afb6898c6f562dda305bd80739ead5a1"
     }
    },
    "seat_mapping": [
@@ -2868,13 +2938,13 @@
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "9",
+    "seq": "11",
     "kind": 1,
     "reason": 2,
-    "log_len": "4",
-    "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
-    "appraisal_log_len": "4",
-    "appraisal_state_hash": "bb20fe074614d46909bde25faa188d652542b288acf2013a180a0bbf2a2ecc9b",
+    "log_len": "5",
+    "log_hash": "1c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d421",
+    "appraisal_log_len": "5",
+    "appraisal_state_hash": "19073505708ee59c32d8f2455b4023eb058df0b168b1160805c10830eff11801",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -2885,9 +2955,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000901020000000000000004bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a0000000000000004bb20fe074614d46909bde25faa188d652542b288acf2013a180a0bbf2a2ecc9b0001030000000000000000000000000000035a0000000000000000000000000000016c0000000000000000000000000000046c00010000000068d5d780",
-   "settle_digest": "0e1798e3e29e8215e9407f0bffaf222ffce08562e3db95492a45f6fc791626dd",
-   "consent_digest": "b930b3a1d4599e1d7e48896aca6c8c439b6dbfadfd12576711e06054f903ff78"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000051c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d421000000000000000519073505708ee59c32d8f2455b4023eb058df0b168b1160805c10830eff118010001030000000000000000000000000000035a0000000000000000000000000000016c0000000000000000000000000000046c00010000000068d5d780",
+   "settle_digest": "0aff997f9419dcba0f64fd3080e2bde7d55665cba3a347c16999552a349770ed",
+   "consent_digest": "2dfde21b4943f8f91fb5eae06073b5786b55f458b06ca5e852bb5ac93277fc69"
   },
   {
    "id": "V13-07",
@@ -2910,7 +2980,7 @@
      ]
     },
     {
-     "label": "a $61 trade (beyond treasury + cash) is refused",
+     "label": "a $61 offer for NYC's 2 (beyond treasury + cash) is refused",
      "actor": "p1",
      "answer": "refused",
      "reason": "C&O and its president hold $60 together and cannot pay $61 without selling shares or private companies; a forced purchase is completed through the Bank instead (owner rule).",
@@ -2928,8 +2998,8 @@
    "log_len": 5,
    "log_hash": "7bb0a2295dac023c943a49dbc39d1553523b9f34fed5397f65c1647fcbe30508",
    "terminal": {
-    "state_digest": "2a18b7e3bc29938e",
-    "appraisal_state_hash": "3c69c42b97613d0c3d08f974fae9b8989ad811cc6ff4d475d8d18a65024b0bfe",
+    "state_digest": "25ea3a86279bfd07",
+    "appraisal_state_hash": "c559b153d73a907c00c13bcedcf9e216f56ba4a1fc5c14894b5b6b8b2fd7584b",
     "bankrupt_president": "p1",
     "bankruptcy_record": {
      "president": "p1",
@@ -2940,18 +3010,18 @@
     }
    },
    "determinism": {
-    "live": "3c69c42b97613d0c3d08f974fae9b8989ad811cc6ff4d475d8d18a65024b0bfe",
-    "restore": "3c69c42b97613d0c3d08f974fae9b8989ad811cc6ff4d475d8d18a65024b0bfe",
-    "replay": "3c69c42b97613d0c3d08f974fae9b8989ad811cc6ff4d475d8d18a65024b0bfe",
-    "snapshot": "3c69c42b97613d0c3d08f974fae9b8989ad811cc6ff4d475d8d18a65024b0bfe",
+    "live": "c559b153d73a907c00c13bcedcf9e216f56ba4a1fc5c14894b5b6b8b2fd7584b",
+    "restore": "c559b153d73a907c00c13bcedcf9e216f56ba4a1fc5c14894b5b6b8b2fd7584b",
+    "replay": "c559b153d73a907c00c13bcedcf9e216f56ba4a1fc5c14894b5b6b8b2fd7584b",
+    "snapshot": "c559b153d73a907c00c13bcedcf9e216f56ba4a1fc5c14894b5b6b8b2fd7584b",
     "snapshot_after": 2,
     "revert": {
-     "kind": "live",
      "reverted_index": 0,
+     "reverted_label": "C&O passes on track; the room walks it to Buy Trains and the trade window holds the game",
      "log_len": 10,
-     "terminal": "3c69c42b97613d0c3d08f974fae9b8989ad811cc6ff4d475d8d18a65024b0bfe",
-     "restored": "3c69c42b97613d0c3d08f974fae9b8989ad811cc6ff4d475d8d18a65024b0bfe",
-     "reverted_board": "4ab1b9ad152338a277d792df1040aea0041ea3c58567cc28f72103f132b4bd29"
+     "terminal": "c559b153d73a907c00c13bcedcf9e216f56ba4a1fc5c14894b5b6b8b2fd7584b",
+     "restored": "c559b153d73a907c00c13bcedcf9e216f56ba4a1fc5c14894b5b6b8b2fd7584b",
+     "reverted_board": "a103c27a3a840fe251678a83b07386e06ab75fc732daafb6c54e7552894df508"
     }
    },
    "seat_mapping": [
@@ -2974,61 +3044,61 @@
      "bankrupt": true,
      "cash_in_state": "0",
      "cash": "0",
-     "shares": "316",
+     "shares": "164",
      "privates": "0",
-     "total": "316"
+     "total": "164"
     },
     {
      "player_id": "p2",
      "bankrupt": false,
      "cash_in_state": "300",
      "cash": "300",
-     "shares": "374",
+     "shares": "602",
      "privates": "150",
-     "total": "824"
+     "total": "1052"
     },
     {
      "player_id": "p3",
      "bankrupt": false,
      "cash_in_state": "300",
      "cash": "300",
-     "shares": "508",
+     "shares": "584",
      "privates": "230",
-     "total": "1038"
+     "total": "1114"
     }
    ],
    "vector": [
-    "316",
-    "824",
-    "1038"
+    "164",
+    "1052",
+    "1114"
    ],
    "pools": [
     {
      "pool_ujuno": "5850000",
      "payouts_ujuno": [
-      "848760",
-      "2213223",
-      "2788016"
+      "411759",
+      "2641287",
+      "2796952"
      ],
-     "dust_ujuno": "1"
+     "dust_ujuno": "2"
     },
     {
      "pool_ujuno": "1000000007",
      "payouts_ujuno": [
-      "145087237",
-      "378328744",
-      "476584025"
+      "70386266",
+      "451502149",
+      "478111591"
      ],
      "dust_ujuno": "1"
     },
     {
      "pool_ujuno": "18446744073709551629",
      "payouts_ujuno": [
-      "2676387110786142476",
-      "6978933478758801901",
-      "8791423484164607250"
+      "1298397436947796767",
+      "8328744534567574383",
+      "8819602102194180478"
      ],
-     "dust_ujuno": "2"
+     "dust_ujuno": "1"
     }
    ],
    "domain_name": "set0c-juno-1-3-seat-live-game-3/rules-v13",
@@ -3041,20 +3111,20 @@
     "log_len": "5",
     "log_hash": "7bb0a2295dac023c943a49dbc39d1553523b9f34fed5397f65c1647fcbe30508",
     "appraisal_log_len": "5",
-    "appraisal_state_hash": "3c69c42b97613d0c3d08f974fae9b8989ad811cc6ff4d475d8d18a65024b0bfe",
+    "appraisal_state_hash": "c559b153d73a907c00c13bcedcf9e216f56ba4a1fc5c14894b5b6b8b2fd7584b",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
-     "316",
-     "824",
-     "1038"
+     "164",
+     "1052",
+     "1114"
     ],
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000057bb0a2295dac023c943a49dbc39d1553523b9f34fed5397f65c1647fcbe3050800000000000000053c69c42b97613d0c3d08f974fae9b8989ad811cc6ff4d475d8d18a65024b0bfe0001030000000000000000000000000000013c000000000000000000000000000003380000000000000000000000000000040e00010000000068d5d780",
-   "settle_digest": "295f47140385bc725ff232c7828f4b1324b880f33ab4464e2c242b1e607ca89b",
-   "consent_digest": "358a75aad9a738df4f5748bf370ea3b26530f41ad84175009d271c91910b3c3a"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000057bb0a2295dac023c943a49dbc39d1553523b9f34fed5397f65c1647fcbe305080000000000000005c559b153d73a907c00c13bcedcf9e216f56ba4a1fc5c14894b5b6b8b2fd7584b000103000000000000000000000000000000a40000000000000000000000000000041c0000000000000000000000000000045a00010000000068d5d780",
+   "settle_digest": "451f3aa409a8cb3492ee72d3fb66daae3b86572bfc10b71ec7b0e301be03a6a7",
+   "consent_digest": "ca27fe0e2221c60a9a64be0683235f01ccceb3ed59c0ca9acd8895fcccc5b4f6"
   },
   {
    "id": "V13-08",
@@ -3088,8 +3158,8 @@
    "log_len": 5,
    "log_hash": "7aaf4a562fab551b8f9b5bc7d02075daa0e1ee277ef2b5f7ecedfce31528fcf4",
    "terminal": {
-    "state_digest": "94fd8a211646243a",
-    "appraisal_state_hash": "c0a3b41db64c1eb48655924e81beb09a46002800897bb673736b76767e0ad522",
+    "state_digest": "bca93a7637e052eb",
+    "appraisal_state_hash": "f1191b82ee98e6548debe2100be7b6eeaf153744be1c2e786ab6a0cb5dc988bd",
     "bankrupt_president": "p1",
     "bankruptcy_record": {
      "president": "p1",
@@ -3100,18 +3170,18 @@
     }
    },
    "determinism": {
-    "live": "c0a3b41db64c1eb48655924e81beb09a46002800897bb673736b76767e0ad522",
-    "restore": "c0a3b41db64c1eb48655924e81beb09a46002800897bb673736b76767e0ad522",
-    "replay": "c0a3b41db64c1eb48655924e81beb09a46002800897bb673736b76767e0ad522",
-    "snapshot": "c0a3b41db64c1eb48655924e81beb09a46002800897bb673736b76767e0ad522",
+    "live": "f1191b82ee98e6548debe2100be7b6eeaf153744be1c2e786ab6a0cb5dc988bd",
+    "restore": "f1191b82ee98e6548debe2100be7b6eeaf153744be1c2e786ab6a0cb5dc988bd",
+    "replay": "f1191b82ee98e6548debe2100be7b6eeaf153744be1c2e786ab6a0cb5dc988bd",
+    "snapshot": "f1191b82ee98e6548debe2100be7b6eeaf153744be1c2e786ab6a0cb5dc988bd",
     "snapshot_after": 2,
     "revert": {
-     "kind": "live",
      "reverted_index": 0,
+     "reverted_label": "C&O passes on track; a legal private sale holds the game at Buy Trains",
      "log_len": 10,
-     "terminal": "c0a3b41db64c1eb48655924e81beb09a46002800897bb673736b76767e0ad522",
-     "restored": "c0a3b41db64c1eb48655924e81beb09a46002800897bb673736b76767e0ad522",
-     "reverted_board": "47376597888b2b9a2bde9bc9827a2b16655853bfc9c70d8c1efcb8404dfcf83d"
+     "terminal": "f1191b82ee98e6548debe2100be7b6eeaf153744be1c2e786ab6a0cb5dc988bd",
+     "restored": "f1191b82ee98e6548debe2100be7b6eeaf153744be1c2e786ab6a0cb5dc988bd",
+     "reverted_board": "fabe660929c199e9b950573fe18fd9b7d381a9f9d0d487499ec9274f7cc06213"
     }
    },
    "seat_mapping": [
@@ -3201,7 +3271,7 @@
     "log_len": "5",
     "log_hash": "7aaf4a562fab551b8f9b5bc7d02075daa0e1ee277ef2b5f7ecedfce31528fcf4",
     "appraisal_log_len": "5",
-    "appraisal_state_hash": "c0a3b41db64c1eb48655924e81beb09a46002800897bb673736b76767e0ad522",
+    "appraisal_state_hash": "f1191b82ee98e6548debe2100be7b6eeaf153744be1c2e786ab6a0cb5dc988bd",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -3212,9 +3282,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000057aaf4a562fab551b8f9b5bc7d02075daa0e1ee277ef2b5f7ecedfce31528fcf40000000000000005c0a3b41db64c1eb48655924e81beb09a46002800897bb673736b76767e0ad522000103000000000000000000000000000003b60000000000000000000000000000038e0000000000000000000000000000003c00010000000068d5d780",
-   "settle_digest": "6a5da94484944db4480a4cb2cea8ce89717408c25e7ea884d926dc3f31be37dd",
-   "consent_digest": "c548ce07401eeea1c388b436e069024d94d99a2348512e91b0db14d1a48ed115"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000057aaf4a562fab551b8f9b5bc7d02075daa0e1ee277ef2b5f7ecedfce31528fcf40000000000000005f1191b82ee98e6548debe2100be7b6eeaf153744be1c2e786ab6a0cb5dc988bd000103000000000000000000000000000003b60000000000000000000000000000038e0000000000000000000000000000003c00010000000068d5d780",
+   "settle_digest": "01fc2f673a89583521f402d0b3b72655b2a249c1c6766db4782fe7b20f74f309",
+   "consent_digest": "99c2edbbd0b6e8869438cb7e19688374017d890fa97796ba732f6985eac20ce5"
   },
   {
    "id": "V13-09",
@@ -3225,6 +3295,14 @@
    "reason": "Bankruptcy",
    "reason_code": 2,
    "steps": [
+    {
+     "label": "PRR ends its turn",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
     {
      "label": "C&O passes on track; the room walks it to Buy Trains",
      "actor": "p1",
@@ -3237,11 +3315,11 @@
      ]
     }
    ],
-   "log_len": 4,
-   "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
+   "log_len": 5,
+   "log_hash": "9512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e",
    "terminal": {
-    "state_digest": "88146326974398c1",
-    "appraisal_state_hash": "f58aa341dbc512e81b51b88dd8baa7f4162b2d24ec32496d25276fad1b064601",
+    "state_digest": "8c370d22dfaad503",
+    "appraisal_state_hash": "4434088e27c2c0c8bbc3c0acc72b6c31c4520a386cb12ae90aa0707fb93d45a7",
     "bankrupt_president": "p1",
     "bankruptcy_record": {
      "president": "p1",
@@ -3252,18 +3330,18 @@
     }
    },
    "determinism": {
-    "live": "f58aa341dbc512e81b51b88dd8baa7f4162b2d24ec32496d25276fad1b064601",
-    "restore": "f58aa341dbc512e81b51b88dd8baa7f4162b2d24ec32496d25276fad1b064601",
-    "replay": "f58aa341dbc512e81b51b88dd8baa7f4162b2d24ec32496d25276fad1b064601",
-    "snapshot": "f58aa341dbc512e81b51b88dd8baa7f4162b2d24ec32496d25276fad1b064601",
+    "live": "4434088e27c2c0c8bbc3c0acc72b6c31c4520a386cb12ae90aa0707fb93d45a7",
+    "restore": "4434088e27c2c0c8bbc3c0acc72b6c31c4520a386cb12ae90aa0707fb93d45a7",
+    "replay": "4434088e27c2c0c8bbc3c0acc72b6c31c4520a386cb12ae90aa0707fb93d45a7",
+    "snapshot": "4434088e27c2c0c8bbc3c0acc72b6c31c4520a386cb12ae90aa0707fb93d45a7",
     "snapshot_after": 2,
     "revert": {
-     "kind": "log",
      "reverted_index": 0,
-     "log_len": 9,
-     "terminal": "f58aa341dbc512e81b51b88dd8baa7f4162b2d24ec32496d25276fad1b064601",
-     "restored": "f58aa341dbc512e81b51b88dd8baa7f4162b2d24ec32496d25276fad1b064601",
-     "reverted_board": "968b428146b2a9e19d5957604a2d0b03c398d73c40287b69255c57feeff32470"
+     "reverted_label": "PRR ends its turn",
+     "log_len": 7,
+     "terminal": "4434088e27c2c0c8bbc3c0acc72b6c31c4520a386cb12ae90aa0707fb93d45a7",
+     "restored": "4434088e27c2c0c8bbc3c0acc72b6c31c4520a386cb12ae90aa0707fb93d45a7",
+     "reverted_board": "1db98787bdf24a0a983ccfe2cb20e6459dc649b0bdc9fc35365e5c9f436c3af8"
     }
    },
    "seat_mapping": [
@@ -3347,13 +3425,13 @@
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "9",
+    "seq": "11",
     "kind": 1,
     "reason": 2,
-    "log_len": "4",
-    "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
-    "appraisal_log_len": "4",
-    "appraisal_state_hash": "f58aa341dbc512e81b51b88dd8baa7f4162b2d24ec32496d25276fad1b064601",
+    "log_len": "5",
+    "log_hash": "9512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e",
+    "appraisal_log_len": "5",
+    "appraisal_state_hash": "4434088e27c2c0c8bbc3c0acc72b6c31c4520a386cb12ae90aa0707fb93d45a7",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -3364,9 +3442,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000901020000000000000004bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a0000000000000004f58aa341dbc512e81b51b88dd8baa7f4162b2d24ec32496d25276fad1b064601000103000000000000000000000000000003660000000000000000000000000000003c0000000000000000000000000000044200010000000068d5d780",
-   "settle_digest": "cc67e1f37bb18f9029d02aa05037a401fea103fb77e73e8707b1ea4937f53574",
-   "consent_digest": "7607e4952f2da86a078d19ae3765c5112fe0b49b642a405771096d4b9a9d1449"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000059512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e00000000000000054434088e27c2c0c8bbc3c0acc72b6c31c4520a386cb12ae90aa0707fb93d45a7000103000000000000000000000000000003660000000000000000000000000000003c0000000000000000000000000000044200010000000068d5d780",
+   "settle_digest": "ce0e07d7be3398a449b0dbd12912bdf1fc20a1df1048b8999a7dfec162b60734",
+   "consent_digest": "268cde30496552b930ab493a168261d39467fb44257f7c83c18edbd11d21d6eb"
   },
   {
    "id": "V13-10",
@@ -3459,12 +3537,12 @@
     "snapshot": "fef5a81dfe79b190a13ef1ab8aaa6ad91d2f4898af6e9a674a897e6d5f48534d",
     "snapshot_after": 8,
     "revert": {
-     "kind": "live",
-     "reverted_index": 12,
-     "log_len": 22,
+     "reverted_index": 4,
+     "reverted_label": "P1 sells NYC 10% + PRR 10% in one portfolio ($90 for $80: the smallest legal overshoot)",
+     "log_len": 20,
      "terminal": "fef5a81dfe79b190a13ef1ab8aaa6ad91d2f4898af6e9a674a897e6d5f48534d",
      "restored": "fef5a81dfe79b190a13ef1ab8aaa6ad91d2f4898af6e9a674a897e6d5f48534d",
-     "reverted_board": "bb1fc76ae468ba10c10187d375872150ee688d5479082dc12c9140732d789856"
+     "reverted_board": "041414bda0a623fe3254d66c2842c6218faf74ad1a0cae64072d3613ab8aea45"
     }
    },
    "seat_mapping": [
@@ -3660,12 +3738,12 @@
     "snapshot": "f292913abec1cbbdf178295a06e00450ae16660882bf828406abdbdf1d043d0e",
     "snapshot_after": 8,
     "revert": {
-     "kind": "live",
-     "reverted_index": 12,
-     "log_len": 22,
+     "reverted_index": 4,
+     "reverted_label": "P1 forgoes the trade: the game buys the Bank's train itself",
+     "log_len": 20,
      "terminal": "f292913abec1cbbdf178295a06e00450ae16660882bf828406abdbdf1d043d0e",
      "restored": "f292913abec1cbbdf178295a06e00450ae16660882bf828406abdbdf1d043d0e",
-     "reverted_board": "ce4abb039ae47d86d9728c87a77e1989ba0fcf61c9db146c7ce232dbc062e899"
+     "reverted_board": "9d03363f5d6f32adcb004b297a7b812506e0e2503a3266ad2b559e6a2f5ae61e"
     }
    },
    "seat_mapping": [
@@ -3780,6 +3858,14 @@
    "reason_code": 2,
    "steps": [
     {
+     "label": "PRR ends its turn",
+     "actor": "p1",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
+    {
      "label": "C&O passes on track; the room walks it to Buy Trains",
      "actor": "p1",
      "answer": "applied",
@@ -3791,11 +3877,11 @@
      ]
     }
    ],
-   "log_len": 4,
-   "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
+   "log_len": 5,
+   "log_hash": "1c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d421",
    "terminal": {
-    "state_digest": "0a591e573eb1c88e",
-    "appraisal_state_hash": "3fbc11343b6951ef5f447d548018772193e2c98f61ac51984e4abaff9eae6fd6",
+    "state_digest": "655d854b435879b6",
+    "appraisal_state_hash": "d8c2f4cf7ce83b35d8714777a8d520c6583e367581741242b580ac1fd2cb4051",
     "bankrupt_president": "p1",
     "bankruptcy_record": {
      "president": "p1",
@@ -3806,18 +3892,18 @@
     }
    },
    "determinism": {
-    "live": "3fbc11343b6951ef5f447d548018772193e2c98f61ac51984e4abaff9eae6fd6",
-    "restore": "3fbc11343b6951ef5f447d548018772193e2c98f61ac51984e4abaff9eae6fd6",
-    "replay": "3fbc11343b6951ef5f447d548018772193e2c98f61ac51984e4abaff9eae6fd6",
-    "snapshot": "3fbc11343b6951ef5f447d548018772193e2c98f61ac51984e4abaff9eae6fd6",
+    "live": "d8c2f4cf7ce83b35d8714777a8d520c6583e367581741242b580ac1fd2cb4051",
+    "restore": "d8c2f4cf7ce83b35d8714777a8d520c6583e367581741242b580ac1fd2cb4051",
+    "replay": "d8c2f4cf7ce83b35d8714777a8d520c6583e367581741242b580ac1fd2cb4051",
+    "snapshot": "d8c2f4cf7ce83b35d8714777a8d520c6583e367581741242b580ac1fd2cb4051",
     "snapshot_after": 2,
     "revert": {
-     "kind": "log",
      "reverted_index": 0,
-     "log_len": 9,
-     "terminal": "3fbc11343b6951ef5f447d548018772193e2c98f61ac51984e4abaff9eae6fd6",
-     "restored": "3fbc11343b6951ef5f447d548018772193e2c98f61ac51984e4abaff9eae6fd6",
-     "reverted_board": "d50763a1cf1acbb762403fb3e84a9b23479761aa399a22ae49ddcf801eb72c98"
+     "reverted_label": "PRR ends its turn",
+     "log_len": 7,
+     "terminal": "d8c2f4cf7ce83b35d8714777a8d520c6583e367581741242b580ac1fd2cb4051",
+     "restored": "d8c2f4cf7ce83b35d8714777a8d520c6583e367581741242b580ac1fd2cb4051",
+     "reverted_board": "064ebfc63a6460c268dbc47b00fcd2edd9e541608e0d0a1506a1fb16b9215b1d"
     }
    },
    "seat_mapping": [
@@ -3901,13 +3987,13 @@
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "9",
+    "seq": "11",
     "kind": 1,
     "reason": 2,
-    "log_len": "4",
-    "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
-    "appraisal_log_len": "4",
-    "appraisal_state_hash": "3fbc11343b6951ef5f447d548018772193e2c98f61ac51984e4abaff9eae6fd6",
+    "log_len": "5",
+    "log_hash": "1c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d421",
+    "appraisal_log_len": "5",
+    "appraisal_state_hash": "d8c2f4cf7ce83b35d8714777a8d520c6583e367581741242b580ac1fd2cb4051",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -3918,9 +4004,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000901020000000000000004bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a00000000000000043fbc11343b6951ef5f447d548018772193e2c98f61ac51984e4abaff9eae6fd6000103000000000000000000000000000001620000000000000000000000000000016c0000000000000000000000000000016c00010000000068d5d780",
-   "settle_digest": "08128a4d198c8e3656afbbfa2e02d6d3ff9887ef50a4a15bc39407af13f9806b",
-   "consent_digest": "3f99bcf97c09cf79d8f0cdcc81ed1e105e8a4112c82219ce99f2f9b017090e4a"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000051c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d4210000000000000005d8c2f4cf7ce83b35d8714777a8d520c6583e367581741242b580ac1fd2cb4051000103000000000000000000000000000001620000000000000000000000000000016c0000000000000000000000000000016c00010000000068d5d780",
+   "settle_digest": "8c4b5a37f5c482e808fd26b861f7cf27bff88623b7002911c6cee498a9fdfcdf",
+   "consent_digest": "728428e5298c3b72683941aae71c2290bacb32ad350dff56d844d1f2671cead0"
   },
   {
    "id": "V13-12b",
@@ -3985,8 +4071,8 @@
     "snapshot": "5f6e68464e481bcb4220e8087bdb59590ce395ea9cc28862ce0086da6720d37f",
     "snapshot_after": 5,
     "revert": {
-     "kind": "live",
      "reverted_index": 5,
+     "reverted_label": "3.1 PRR advances",
      "log_len": 15,
      "terminal": "5f6e68464e481bcb4220e8087bdb59590ce395ea9cc28862ce0086da6720d37f",
      "restored": "5f6e68464e481bcb4220e8087bdb59590ce395ea9cc28862ce0086da6720d37f",
@@ -4123,6 +4209,14 @@
    "reason_code": 2,
    "steps": [
     {
+     "label": "PRR ends its turn",
+     "actor": "p1",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
+    {
      "label": "C&O passes on track; the room walks it to Buy Trains",
      "actor": "p1",
      "answer": "applied",
@@ -4134,11 +4228,11 @@
      ]
     }
    ],
-   "log_len": 4,
-   "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
+   "log_len": 5,
+   "log_hash": "1c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d421",
    "terminal": {
-    "state_digest": "31ef3fda9de0eb25",
-    "appraisal_state_hash": "a7885773e7f7ec2e0819b4aabdc13cb071d2e16de8f3d54b32205abeb7d38641",
+    "state_digest": "237f33f06510ae77",
+    "appraisal_state_hash": "139babab6d2e3cbf4faefbf8ec8002e72fc81151ac0a76652cf1dce8054d30d0",
     "bankrupt_president": "p1",
     "bankruptcy_record": {
      "president": "p1",
@@ -4158,18 +4252,18 @@
     }
    },
    "determinism": {
-    "live": "a7885773e7f7ec2e0819b4aabdc13cb071d2e16de8f3d54b32205abeb7d38641",
-    "restore": "a7885773e7f7ec2e0819b4aabdc13cb071d2e16de8f3d54b32205abeb7d38641",
-    "replay": "a7885773e7f7ec2e0819b4aabdc13cb071d2e16de8f3d54b32205abeb7d38641",
-    "snapshot": "a7885773e7f7ec2e0819b4aabdc13cb071d2e16de8f3d54b32205abeb7d38641",
+    "live": "139babab6d2e3cbf4faefbf8ec8002e72fc81151ac0a76652cf1dce8054d30d0",
+    "restore": "139babab6d2e3cbf4faefbf8ec8002e72fc81151ac0a76652cf1dce8054d30d0",
+    "replay": "139babab6d2e3cbf4faefbf8ec8002e72fc81151ac0a76652cf1dce8054d30d0",
+    "snapshot": "139babab6d2e3cbf4faefbf8ec8002e72fc81151ac0a76652cf1dce8054d30d0",
     "snapshot_after": 2,
     "revert": {
-     "kind": "log",
      "reverted_index": 0,
-     "log_len": 9,
-     "terminal": "a7885773e7f7ec2e0819b4aabdc13cb071d2e16de8f3d54b32205abeb7d38641",
-     "restored": "a7885773e7f7ec2e0819b4aabdc13cb071d2e16de8f3d54b32205abeb7d38641",
-     "reverted_board": "58186ff5c272ecc36fb63c12bffeaf6f9bc31aabcd24738d37aa56c700d73a73"
+     "reverted_label": "PRR ends its turn",
+     "log_len": 7,
+     "terminal": "139babab6d2e3cbf4faefbf8ec8002e72fc81151ac0a76652cf1dce8054d30d0",
+     "restored": "139babab6d2e3cbf4faefbf8ec8002e72fc81151ac0a76652cf1dce8054d30d0",
+     "reverted_board": "c01fdee93c8d38589d0be2a6881b3988d75e7767dc8ff3330cafabca3cf01e04"
     }
    },
    "seat_mapping": [
@@ -4253,13 +4347,13 @@
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "9",
+    "seq": "11",
     "kind": 1,
     "reason": 2,
-    "log_len": "4",
-    "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
-    "appraisal_log_len": "4",
-    "appraisal_state_hash": "a7885773e7f7ec2e0819b4aabdc13cb071d2e16de8f3d54b32205abeb7d38641",
+    "log_len": "5",
+    "log_hash": "1c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d421",
+    "appraisal_log_len": "5",
+    "appraisal_state_hash": "139babab6d2e3cbf4faefbf8ec8002e72fc81151ac0a76652cf1dce8054d30d0",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -4270,9 +4364,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000901020000000000000004bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a0000000000000004a7885773e7f7ec2e0819b4aabdc13cb071d2e16de8f3d54b32205abeb7d3864100010300000000000000000000000000000338000000000000000000000000000002d40000000000000000000000000000011c00010000000068d5d780",
-   "settle_digest": "703de34e4a2aa81b797f93f40d8522ee04f834b2026e2a96fb660e6bab68a9b0",
-   "consent_digest": "02fcbf72bbe3858d83e809a25342ac116d0da1e3ef58dffc36da795b58c2b5fe"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000051c8a256dc35ec4416e733e2f20d228422012fda267a65be2dd7415639576d4210000000000000005139babab6d2e3cbf4faefbf8ec8002e72fc81151ac0a76652cf1dce8054d30d000010300000000000000000000000000000338000000000000000000000000000002d40000000000000000000000000000011c00010000000068d5d780",
+   "settle_digest": "c3d99c5b98df63d555ae9ee46e1515048e042ec1a78ec0c6298be0c40c48eb03",
+   "consent_digest": "e924ad706459f78ddede05bd5ac4c8ff01fc6c0c04d82af4718748be462529ee"
   },
   {
    "id": "V13-16a",
@@ -4283,6 +4377,14 @@
    "reason": "Bankruptcy",
    "reason_code": 2,
    "steps": [
+    {
+     "label": "PRR ends its turn",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
     {
      "label": "C&O passes on track; the room walks it to Buy Trains",
      "actor": "p1",
@@ -4295,11 +4397,11 @@
      ]
     }
    ],
-   "log_len": 4,
-   "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
+   "log_len": 5,
+   "log_hash": "9512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e",
    "terminal": {
-    "state_digest": "0587b407e4c8e256",
-    "appraisal_state_hash": "331f15f10ec7e1ccba0e4f9e04f8cbfb647d07d4797c084e83aa16e99e634d41",
+    "state_digest": "27a1a04ff28667d0",
+    "appraisal_state_hash": "bd3393194b29ba2d6f62c2a1cb5ebc3da48b7c791f07531890b4347ccb09b231",
     "bankrupt_president": "p1",
     "bankruptcy_record": {
      "president": "p1",
@@ -4310,18 +4412,18 @@
     }
    },
    "determinism": {
-    "live": "331f15f10ec7e1ccba0e4f9e04f8cbfb647d07d4797c084e83aa16e99e634d41",
-    "restore": "331f15f10ec7e1ccba0e4f9e04f8cbfb647d07d4797c084e83aa16e99e634d41",
-    "replay": "331f15f10ec7e1ccba0e4f9e04f8cbfb647d07d4797c084e83aa16e99e634d41",
-    "snapshot": "331f15f10ec7e1ccba0e4f9e04f8cbfb647d07d4797c084e83aa16e99e634d41",
+    "live": "bd3393194b29ba2d6f62c2a1cb5ebc3da48b7c791f07531890b4347ccb09b231",
+    "restore": "bd3393194b29ba2d6f62c2a1cb5ebc3da48b7c791f07531890b4347ccb09b231",
+    "replay": "bd3393194b29ba2d6f62c2a1cb5ebc3da48b7c791f07531890b4347ccb09b231",
+    "snapshot": "bd3393194b29ba2d6f62c2a1cb5ebc3da48b7c791f07531890b4347ccb09b231",
     "snapshot_after": 2,
     "revert": {
-     "kind": "log",
      "reverted_index": 0,
-     "log_len": 9,
-     "terminal": "331f15f10ec7e1ccba0e4f9e04f8cbfb647d07d4797c084e83aa16e99e634d41",
-     "restored": "331f15f10ec7e1ccba0e4f9e04f8cbfb647d07d4797c084e83aa16e99e634d41",
-     "reverted_board": "479c575d1d1996de37c46a9031ece5a8c27163837b628d3106d30f79826c9e69"
+     "reverted_label": "PRR ends its turn",
+     "log_len": 7,
+     "terminal": "bd3393194b29ba2d6f62c2a1cb5ebc3da48b7c791f07531890b4347ccb09b231",
+     "restored": "bd3393194b29ba2d6f62c2a1cb5ebc3da48b7c791f07531890b4347ccb09b231",
+     "reverted_board": "1a846cec711cd0c494e687c7fad1108afa54953615673510b12e37baaf83ed7f"
     }
    },
    "seat_mapping": [
@@ -4405,13 +4507,13 @@
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "9",
+    "seq": "11",
     "kind": 1,
     "reason": 2,
-    "log_len": "4",
-    "log_hash": "bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a",
-    "appraisal_log_len": "4",
-    "appraisal_state_hash": "331f15f10ec7e1ccba0e4f9e04f8cbfb647d07d4797c084e83aa16e99e634d41",
+    "log_len": "5",
+    "log_hash": "9512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e",
+    "appraisal_log_len": "5",
+    "appraisal_state_hash": "bd3393194b29ba2d6f62c2a1cb5ebc3da48b7c791f07531890b4347ccb09b231",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -4422,9 +4524,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000901020000000000000004bc329ad4c2f529beee87ed6e872e1b4d8a07b7d5de0b39ea383f4ac25258486a0000000000000004331f15f10ec7e1ccba0e4f9e04f8cbfb647d07d4797c084e83aa16e99e634d41000103000000000000000000000000000003200000000000000000000000000000003c0000000000000000000000000000041000010000000068d5d780",
-   "settle_digest": "c9dda777ea97b740fc8137b33c01cd1e0f5da48056cb365c46ac24f10cd921b2",
-   "consent_digest": "541617f31e991b9967c500735d298f5ebe009cfc459c16e9b8d7bce1fc6e1e4b"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000000b010200000000000000059512ba6b9f57c97123aa0fcbb57c47a70183f6c270a0105dbb9b64a3b5e2cd1e0000000000000005bd3393194b29ba2d6f62c2a1cb5ebc3da48b7c791f07531890b4347ccb09b231000103000000000000000000000000000003200000000000000000000000000000003c0000000000000000000000000000041000010000000068d5d780",
+   "settle_digest": "ef71dbb07eb253cbeab4651a68d66db37dc584bc125a9b298a4007ec93a7f28d",
+   "consent_digest": "8ec1e521185c7c0baa95bf9803fda11a9890484859dc034a1d7e53a36a915857"
   },
   {
    "id": "V13-16b",
@@ -4435,6 +4537,14 @@
    "reason": "BankBroken",
    "reason_code": 1,
    "steps": [
+    {
+     "label": "PRR ends its turn",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
     {
      "label": "C&O passes on track; one legal private sale holds the game at Buy Trains",
      "actor": "p1",
@@ -4464,7 +4574,7 @@
      ]
     },
     {
-     "label": "3.1 C&O ends its turn",
+     "label": "3.2 C&O ends its turn",
      "actor": "p1",
      "answer": "applied",
      "entries": [
@@ -4472,27 +4582,27 @@
      ]
     }
    ],
-   "log_len": 8,
-   "log_hash": "1b52fd5205eca9e04e7f7f008e6178a8ff5f5e1e91e3be437199b836dc131ba1",
+   "log_len": 9,
+   "log_hash": "ed5cce6f9dc52d4e47527d60b69c60f74e08a25f5b05381046a3acd0b8cf4b2d",
    "terminal": {
-    "state_digest": "5b0ae069d37fc166",
-    "appraisal_state_hash": "28453f6b3219c2f6968a7cf80d79c6eebd7effe7ed59c81bb0c588f44e85e15d",
+    "state_digest": "aeefa488d7be2d49",
+    "appraisal_state_hash": "72c084587aa8c3c379b31d821e2484896e0cf944c5d0c3fa9390ee394617837e",
     "bankrupt_president": null,
     "bankruptcy_record": null
    },
    "determinism": {
-    "live": "28453f6b3219c2f6968a7cf80d79c6eebd7effe7ed59c81bb0c588f44e85e15d",
-    "restore": "28453f6b3219c2f6968a7cf80d79c6eebd7effe7ed59c81bb0c588f44e85e15d",
-    "replay": "28453f6b3219c2f6968a7cf80d79c6eebd7effe7ed59c81bb0c588f44e85e15d",
-    "snapshot": "28453f6b3219c2f6968a7cf80d79c6eebd7effe7ed59c81bb0c588f44e85e15d",
+    "live": "72c084587aa8c3c379b31d821e2484896e0cf944c5d0c3fa9390ee394617837e",
+    "restore": "72c084587aa8c3c379b31d821e2484896e0cf944c5d0c3fa9390ee394617837e",
+    "replay": "72c084587aa8c3c379b31d821e2484896e0cf944c5d0c3fa9390ee394617837e",
+    "snapshot": "72c084587aa8c3c379b31d821e2484896e0cf944c5d0c3fa9390ee394617837e",
     "snapshot_after": 4,
     "revert": {
-     "kind": "live",
-     "reverted_index": 5,
-     "log_len": 11,
-     "terminal": "28453f6b3219c2f6968a7cf80d79c6eebd7effe7ed59c81bb0c588f44e85e15d",
-     "restored": "28453f6b3219c2f6968a7cf80d79c6eebd7effe7ed59c81bb0c588f44e85e15d",
-     "reverted_board": "2237560b8bfb2bac9abe8101dc3705bf7a616a423b47067f9791a5fa392608d0"
+     "reverted_index": 6,
+     "reverted_label": "NYC's president accepts: the sale settles and the game buys the train",
+     "log_len": 12,
+     "terminal": "72c084587aa8c3c379b31d821e2484896e0cf944c5d0c3fa9390ee394617837e",
+     "restored": "72c084587aa8c3c379b31d821e2484896e0cf944c5d0c3fa9390ee394617837e",
+     "reverted_board": "84a804a9a5336a01d0817a60498314381bda29e4fd3de0c55b094accc0878caf"
     }
    },
    "seat_mapping": [
@@ -4576,13 +4686,13 @@
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "17",
+    "seq": "19",
     "kind": 1,
     "reason": 1,
-    "log_len": "8",
-    "log_hash": "1b52fd5205eca9e04e7f7f008e6178a8ff5f5e1e91e3be437199b836dc131ba1",
-    "appraisal_log_len": "8",
-    "appraisal_state_hash": "28453f6b3219c2f6968a7cf80d79c6eebd7effe7ed59c81bb0c588f44e85e15d",
+    "log_len": "9",
+    "log_hash": "ed5cce6f9dc52d4e47527d60b69c60f74e08a25f5b05381046a3acd0b8cf4b2d",
+    "appraisal_log_len": "9",
+    "appraisal_state_hash": "72c084587aa8c3c379b31d821e2484896e0cf944c5d0c3fa9390ee394617837e",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -4593,9 +4703,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d08040000000000000011010100000000000000081b52fd5205eca9e04e7f7f008e6178a8ff5f5e1e91e3be437199b836dc131ba1000000000000000828453f6b3219c2f6968a7cf80d79c6eebd7effe7ed59c81bb0c588f44e85e15d00010300000000000000000000000000000050000000000000000000000000000003b60000000000000000000000000000038e00010000000068d5d780",
-   "settle_digest": "443651a9d433db518c8cde872c6878f5c4922fc1946ce5aa53baab4c431193ea",
-   "consent_digest": "b2784386bd8443baa6ca5bdf3d580eeb147731a4d5a9edee2f83ac2e5a5d4a9f"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000001301010000000000000009ed5cce6f9dc52d4e47527d60b69c60f74e08a25f5b05381046a3acd0b8cf4b2d000000000000000972c084587aa8c3c379b31d821e2484896e0cf944c5d0c3fa9390ee394617837e00010300000000000000000000000000000050000000000000000000000000000003b60000000000000000000000000000038e00010000000068d5d780",
+   "settle_digest": "2d7d8d0c68b6dc2d47e8353dc4f14cb33d38e16865c8616050076d900c5290f1",
+   "consent_digest": "accc8931bf08e3ad0719342ae6be8b2a3754f15f7aab76ac7852427b78d1bb6f"
   },
   {
    "id": "V13-17a",
@@ -4643,7 +4753,7 @@
      ]
     },
     {
-     "label": "3.1 C&O ends its turn",
+     "label": "3.2 C&O ends its turn",
      "actor": "p1",
      "answer": "applied",
      "entries": [
@@ -4654,24 +4764,24 @@
    "log_len": 9,
    "log_hash": "5d1c3a157092788b8afdac2cd459386416674c4b8071160586f0411b8073a0fc",
    "terminal": {
-    "state_digest": "ec3ae485a4cd75ca",
-    "appraisal_state_hash": "18348459c1c10b8c578dce83313705d6735f1e3e9393389524209b4ea6e0bd37",
+    "state_digest": "4c948bf4a09104c9",
+    "appraisal_state_hash": "d2e949abdfa781e59004a60539a8f3448444007ca8822569b85d54c957ee1e1f",
     "bankrupt_president": null,
     "bankruptcy_record": null
    },
    "determinism": {
-    "live": "18348459c1c10b8c578dce83313705d6735f1e3e9393389524209b4ea6e0bd37",
-    "restore": "18348459c1c10b8c578dce83313705d6735f1e3e9393389524209b4ea6e0bd37",
-    "replay": "18348459c1c10b8c578dce83313705d6735f1e3e9393389524209b4ea6e0bd37",
-    "snapshot": "18348459c1c10b8c578dce83313705d6735f1e3e9393389524209b4ea6e0bd37",
+    "live": "d2e949abdfa781e59004a60539a8f3448444007ca8822569b85d54c957ee1e1f",
+    "restore": "d2e949abdfa781e59004a60539a8f3448444007ca8822569b85d54c957ee1e1f",
+    "replay": "d2e949abdfa781e59004a60539a8f3448444007ca8822569b85d54c957ee1e1f",
+    "snapshot": "d2e949abdfa781e59004a60539a8f3448444007ca8822569b85d54c957ee1e1f",
     "snapshot_after": 4,
     "revert": {
-     "kind": "live",
      "reverted_index": 6,
+     "reverted_label": "P1 sells PRR 10% in one portfolio: the game buys the train",
      "log_len": 12,
-     "terminal": "18348459c1c10b8c578dce83313705d6735f1e3e9393389524209b4ea6e0bd37",
-     "restored": "18348459c1c10b8c578dce83313705d6735f1e3e9393389524209b4ea6e0bd37",
-     "reverted_board": "f7a92c22c9f810c97be108f0e2ed69b77aa89905e0702dbdc6b608b01fc5872e"
+     "terminal": "d2e949abdfa781e59004a60539a8f3448444007ca8822569b85d54c957ee1e1f",
+     "restored": "d2e949abdfa781e59004a60539a8f3448444007ca8822569b85d54c957ee1e1f",
+     "reverted_board": "1f90805cd783c7d92b6ddd24e4367ca587f0b01e48202170e7f5a6ddd774162c"
     }
    },
    "seat_mapping": [
@@ -4761,7 +4871,7 @@
     "log_len": "9",
     "log_hash": "5d1c3a157092788b8afdac2cd459386416674c4b8071160586f0411b8073a0fc",
     "appraisal_log_len": "9",
-    "appraisal_state_hash": "18348459c1c10b8c578dce83313705d6735f1e3e9393389524209b4ea6e0bd37",
+    "appraisal_state_hash": "d2e949abdfa781e59004a60539a8f3448444007ca8822569b85d54c957ee1e1f",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -4772,9 +4882,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d08040000000000000013010100000000000000095d1c3a157092788b8afdac2cd459386416674c4b8071160586f0411b8073a0fc000000000000000918348459c1c10b8c578dce83313705d6735f1e3e9393389524209b4ea6e0bd37000103000000000000000000000000000003d4000000000000000000000000000003ac0000000000000000000000000000004600010000000068d5d780",
-   "settle_digest": "880e91b0508959bb9158d34e00d26a12f8eb4e08262b5b8c7405bb0d7afcb3ec",
-   "consent_digest": "648dd85c04748eb011c387b12ceda28be5224268f41c1c69fd82b0d73c43e451"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d08040000000000000013010100000000000000095d1c3a157092788b8afdac2cd459386416674c4b8071160586f0411b8073a0fc0000000000000009d2e949abdfa781e59004a60539a8f3448444007ca8822569b85d54c957ee1e1f000103000000000000000000000000000003d4000000000000000000000000000003ac0000000000000000000000000000004600010000000068d5d780",
+   "settle_digest": "c809e12942a09361904432c679dca503fe3dede792a47884afbc89bc19b70456",
+   "consent_digest": "eba48adb69ea0da292644bd06e04c7a642a9a190ad17160ea67ca521f3924117"
   },
   {
    "id": "V13-17b",
@@ -4830,7 +4940,7 @@
      ]
     },
     {
-     "label": "3.1 C&O ends its turn",
+     "label": "3.2 C&O ends its turn",
      "actor": "p1",
      "answer": "applied",
      "entries": [
@@ -4841,24 +4951,24 @@
    "log_len": 10,
    "log_hash": "014b6377170ec4b846fb31972822e3ee83ce5f5b297bb3629dd6ec3c1db9f722",
    "terminal": {
-    "state_digest": "bff969f1e04f569a",
-    "appraisal_state_hash": "bfe911dd070046264b392842d2491ee1f80e53abeb2f2a924cd464157fb2d17d",
+    "state_digest": "f408e68c173b3ef5",
+    "appraisal_state_hash": "18b6445db78e07405cc7f95bd0c3689d8bb92efb012ebfb633d2bb475647fae5",
     "bankrupt_president": null,
     "bankruptcy_record": null
    },
    "determinism": {
-    "live": "bfe911dd070046264b392842d2491ee1f80e53abeb2f2a924cd464157fb2d17d",
-    "restore": "bfe911dd070046264b392842d2491ee1f80e53abeb2f2a924cd464157fb2d17d",
-    "replay": "bfe911dd070046264b392842d2491ee1f80e53abeb2f2a924cd464157fb2d17d",
-    "snapshot": "bfe911dd070046264b392842d2491ee1f80e53abeb2f2a924cd464157fb2d17d",
+    "live": "18b6445db78e07405cc7f95bd0c3689d8bb92efb012ebfb633d2bb475647fae5",
+    "restore": "18b6445db78e07405cc7f95bd0c3689d8bb92efb012ebfb633d2bb475647fae5",
+    "replay": "18b6445db78e07405cc7f95bd0c3689d8bb92efb012ebfb633d2bb475647fae5",
+    "snapshot": "18b6445db78e07405cc7f95bd0c3689d8bb92efb012ebfb633d2bb475647fae5",
     "snapshot_after": 5,
     "revert": {
-     "kind": "live",
      "reverted_index": 7,
+     "reverted_label": "PRR's president accepts: the game buys the train",
      "log_len": 13,
-     "terminal": "bfe911dd070046264b392842d2491ee1f80e53abeb2f2a924cd464157fb2d17d",
-     "restored": "bfe911dd070046264b392842d2491ee1f80e53abeb2f2a924cd464157fb2d17d",
-     "reverted_board": "f02d5c967bd62561a773134c7d3c8e6b9db42fb9eaff858dfb37a4988907f367"
+     "terminal": "18b6445db78e07405cc7f95bd0c3689d8bb92efb012ebfb633d2bb475647fae5",
+     "restored": "18b6445db78e07405cc7f95bd0c3689d8bb92efb012ebfb633d2bb475647fae5",
+     "reverted_board": "50a122e99ec686f9cfd1fff86e424c04bbd8993fd2d0ee3e0fa512240008fd61"
     }
    },
    "seat_mapping": [
@@ -4948,7 +5058,7 @@
     "log_len": "10",
     "log_hash": "014b6377170ec4b846fb31972822e3ee83ce5f5b297bb3629dd6ec3c1db9f722",
     "appraisal_log_len": "10",
-    "appraisal_state_hash": "bfe911dd070046264b392842d2491ee1f80e53abeb2f2a924cd464157fb2d17d",
+    "appraisal_state_hash": "18b6445db78e07405cc7f95bd0c3689d8bb92efb012ebfb633d2bb475647fae5",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -4959,9 +5069,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d080400000000000000150101000000000000000a014b6377170ec4b846fb31972822e3ee83ce5f5b297bb3629dd6ec3c1db9f722000000000000000abfe911dd070046264b392842d2491ee1f80e53abeb2f2a924cd464157fb2d17d000103000000000000000000000000000003200000000000000000000000000000003c0000000000000000000000000000041000010000000068d5d780",
-   "settle_digest": "3b5632b457c33ca3d3fc844080b490fdf8425105d505a306ff3acd33e5565ed7",
-   "consent_digest": "d930ed73e32da7c3d05820214bf93b96cbc9bf25af58e172502192b804d162ff"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d080400000000000000150101000000000000000a014b6377170ec4b846fb31972822e3ee83ce5f5b297bb3629dd6ec3c1db9f722000000000000000a18b6445db78e07405cc7f95bd0c3689d8bb92efb012ebfb633d2bb475647fae5000103000000000000000000000000000003200000000000000000000000000000003c0000000000000000000000000000041000010000000068d5d780",
+   "settle_digest": "6b7a2b5fc09d745fb927257f02b9042ac7f954c4e5f8df29535bbcee1d22672e",
+   "consent_digest": "39be9bb0b523a007ebdbdc616d2f4271a54a97c55fd49815ff83ae757518d7f3"
   },
   {
    "id": "V13-18a",
@@ -5136,6 +5246,25 @@
      ]
     },
     {
+     "label": "4.1 B&O advances",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "AdvanceOperatingSubPhase",
+      "AdvanceOperatingSubPhase*",
+      "AdvanceOperatingSubPhase*",
+      "DeclareDividends*"
+     ]
+    },
+    {
+     "label": "4.1 B&O ends its turn",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
+    {
      "label": "4.2 NYC advances",
      "actor": "p2",
      "answer": "applied",
@@ -5210,29 +5339,48 @@
      "entries": [
       "PassTurn"
      ]
+    },
+    {
+     "label": "4.2 B&O advances",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "AdvanceOperatingSubPhase",
+      "AdvanceOperatingSubPhase*",
+      "AdvanceOperatingSubPhase*",
+      "DeclareDividends*"
+     ]
+    },
+    {
+     "label": "4.2 B&O ends its turn",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
     }
    ],
-   "log_len": 50,
-   "log_hash": "7177b00d1030ac321201fef021d6c61df2cc77c919b23442a92d0da8f7661fd7",
+   "log_len": 60,
+   "log_hash": "11f00a261e5722dfaeeef1dec08eebbaf273727f6dfb781a42e0f95f477b69ce",
    "terminal": {
-    "state_digest": "9aaaa031fd6dea78",
-    "appraisal_state_hash": "3c5fb2b4e75f27919b79a4e50228f1b6be80eafca1327beef36004bcbf3b17f2",
+    "state_digest": "6bbad16f518d0030",
+    "appraisal_state_hash": "594da448fb683c8b93eb1af3212f5793575cbeb6e912f3439f8683f783d1849a",
     "bankrupt_president": null,
     "bankruptcy_record": null
    },
    "determinism": {
-    "live": "3c5fb2b4e75f27919b79a4e50228f1b6be80eafca1327beef36004bcbf3b17f2",
-    "restore": "3c5fb2b4e75f27919b79a4e50228f1b6be80eafca1327beef36004bcbf3b17f2",
-    "replay": "3c5fb2b4e75f27919b79a4e50228f1b6be80eafca1327beef36004bcbf3b17f2",
-    "snapshot": "3c5fb2b4e75f27919b79a4e50228f1b6be80eafca1327beef36004bcbf3b17f2",
-    "snapshot_after": 25,
+    "live": "594da448fb683c8b93eb1af3212f5793575cbeb6e912f3439f8683f783d1849a",
+    "restore": "594da448fb683c8b93eb1af3212f5793575cbeb6e912f3439f8683f783d1849a",
+    "replay": "594da448fb683c8b93eb1af3212f5793575cbeb6e912f3439f8683f783d1849a",
+    "snapshot": "594da448fb683c8b93eb1af3212f5793575cbeb6e912f3439f8683f783d1849a",
+    "snapshot_after": 30,
     "revert": {
-     "kind": "live",
-     "reverted_index": 45,
-     "log_len": 55,
-     "terminal": "3c5fb2b4e75f27919b79a4e50228f1b6be80eafca1327beef36004bcbf3b17f2",
-     "restored": "3c5fb2b4e75f27919b79a4e50228f1b6be80eafca1327beef36004bcbf3b17f2",
-     "reverted_board": "546c10365fbb59571b03ecafde5a2c3eb356b6b5496a568f31f3f84a4875a81b"
+     "reverted_index": 6,
+     "reverted_label": "P1 ends his turn with one PassTurn",
+     "log_len": 62,
+     "terminal": "594da448fb683c8b93eb1af3212f5793575cbeb6e912f3439f8683f783d1849a",
+     "restored": "594da448fb683c8b93eb1af3212f5793575cbeb6e912f3439f8683f783d1849a",
+     "reverted_board": "146234c1f4082149d9cbb86587ec577239d3bb2273a5d5fc18e935f4216bc8ed"
     }
    },
    "seat_mapping": [
@@ -5264,50 +5412,50 @@
      "bankrupt": false,
      "cash_in_state": "550",
      "cash": "550",
-     "shares": "705",
+     "shares": "715",
      "privates": "220",
-     "total": "1475"
+     "total": "1485"
     },
     {
      "player_id": "p3",
      "bankrupt": false,
      "cash_in_state": "730",
      "cash": "730",
-     "shares": "720",
+     "shares": "770",
      "privates": "70",
-     "total": "1520"
+     "total": "1570"
     }
    ],
    "vector": [
     "1483",
-    "1475",
-    "1520"
+    "1485",
+    "1570"
    ],
    "pools": [
     {
      "pool_ujuno": "5850000",
      "payouts_ujuno": [
-      "1937371",
-      "1926920",
-      "1985707"
-     ],
-     "dust_ujuno": "2"
-    },
-    {
-     "pool_ujuno": "1000000007",
-     "payouts_ujuno": [
-      "331174633",
-      "329388122",
-      "339437251"
+      "1911756",
+      "1914334",
+      "2023909"
      ],
      "dust_ujuno": "1"
     },
     {
+     "pool_ujuno": "1000000007",
+     "payouts_ujuno": [
+      "326795947",
+      "327236670",
+      "345967388"
+     ],
+     "dust_ujuno": "2"
+    },
+    {
      "pool_ujuno": "18446744073709551629",
      "payouts_ujuno": [
-      "6109093671574646062",
-      "6076138344957925112",
-      "6261512057176980454"
+      "6028321168204333421",
+      "6036451068633469407",
+      "6381971836871748800"
      ],
      "dust_ujuno": "1"
     }
@@ -5316,26 +5464,26 @@
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "101",
+    "seq": "121",
     "kind": 1,
     "reason": 1,
-    "log_len": "50",
-    "log_hash": "7177b00d1030ac321201fef021d6c61df2cc77c919b23442a92d0da8f7661fd7",
-    "appraisal_log_len": "50",
-    "appraisal_state_hash": "3c5fb2b4e75f27919b79a4e50228f1b6be80eafca1327beef36004bcbf3b17f2",
+    "log_len": "60",
+    "log_hash": "11f00a261e5722dfaeeef1dec08eebbaf273727f6dfb781a42e0f95f477b69ce",
+    "appraisal_log_len": "60",
+    "appraisal_state_hash": "594da448fb683c8b93eb1af3212f5793575cbeb6e912f3439f8683f783d1849a",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
      "1483",
-     "1475",
-     "1520"
+     "1485",
+     "1570"
     ],
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d08040000000000000065010100000000000000327177b00d1030ac321201fef021d6c61df2cc77c919b23442a92d0da8f7661fd700000000000000323c5fb2b4e75f27919b79a4e50228f1b6be80eafca1327beef36004bcbf3b17f2000103000000000000000000000000000005cb000000000000000000000000000005c3000000000000000000000000000005f000010000000068d5d780",
-   "settle_digest": "d24ab82ce2fab4165c8ddcfd628499f7e44e7bbb83a62f29a8390060a22811bc",
-   "consent_digest": "b68c5df3044c17648c85d3525313f62791095233532fb343de9c8be4f1359b55"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d080400000000000000790101000000000000003c11f00a261e5722dfaeeef1dec08eebbaf273727f6dfb781a42e0f95f477b69ce000000000000003c594da448fb683c8b93eb1af3212f5793575cbeb6e912f3439f8683f783d1849a000103000000000000000000000000000005cb000000000000000000000000000005cd0000000000000000000000000000062200010000000068d5d780",
+   "settle_digest": "2cf0516adb3d8c47a9f288153e2598ac49d2d928b94202235afe5bd590f457c9",
+   "consent_digest": "e9e01e1c421a020089bc560d6e9c7046f5cc74996aff5a53d39286d979793ce2"
   },
   {
    "id": "V13-18b",
@@ -5478,6 +5626,25 @@
      ]
     },
     {
+     "label": "4.1 B&O advances",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "AdvanceOperatingSubPhase",
+      "AdvanceOperatingSubPhase*",
+      "AdvanceOperatingSubPhase*",
+      "DeclareDividends*"
+     ]
+    },
+    {
+     "label": "4.1 B&O ends its turn",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
+    },
+    {
      "label": "4.2 NYC advances",
      "actor": "p2",
      "answer": "applied",
@@ -5552,29 +5719,48 @@
      "entries": [
       "PassTurn"
      ]
+    },
+    {
+     "label": "4.2 B&O advances",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "AdvanceOperatingSubPhase",
+      "AdvanceOperatingSubPhase*",
+      "AdvanceOperatingSubPhase*",
+      "DeclareDividends*"
+     ]
+    },
+    {
+     "label": "4.2 B&O ends its turn",
+     "actor": "p3",
+     "answer": "applied",
+     "entries": [
+      "PassTurn"
+     ]
     }
    ],
-   "log_len": 46,
-   "log_hash": "846463d530ebd36d709d6409c5233d6f182d37df8bf1e75351370362a8aa98c2",
+   "log_len": 56,
+   "log_hash": "bbb96faf96e8ec8ef6a5a0f647531750a96d2cfd66a6cf5509fa549654879a58",
    "terminal": {
-    "state_digest": "8fe1391d1f1e4992",
-    "appraisal_state_hash": "859cb23ab63cd7be4db7e7e88650fa5ad97be139f3a96eb3a53b3efcb3ddf285",
+    "state_digest": "6187619f0bd16e22",
+    "appraisal_state_hash": "312264a53dc67af07e142631e7fb1bbb8b75269eb3579bff019576dc9277e9bf",
     "bankrupt_president": null,
     "bankruptcy_record": null
    },
    "determinism": {
-    "live": "859cb23ab63cd7be4db7e7e88650fa5ad97be139f3a96eb3a53b3efcb3ddf285",
-    "restore": "859cb23ab63cd7be4db7e7e88650fa5ad97be139f3a96eb3a53b3efcb3ddf285",
-    "replay": "859cb23ab63cd7be4db7e7e88650fa5ad97be139f3a96eb3a53b3efcb3ddf285",
-    "snapshot": "859cb23ab63cd7be4db7e7e88650fa5ad97be139f3a96eb3a53b3efcb3ddf285",
-    "snapshot_after": 23,
+    "live": "312264a53dc67af07e142631e7fb1bbb8b75269eb3579bff019576dc9277e9bf",
+    "restore": "312264a53dc67af07e142631e7fb1bbb8b75269eb3579bff019576dc9277e9bf",
+    "replay": "312264a53dc67af07e142631e7fb1bbb8b75269eb3579bff019576dc9277e9bf",
+    "snapshot": "312264a53dc67af07e142631e7fb1bbb8b75269eb3579bff019576dc9277e9bf",
+    "snapshot_after": 28,
     "revert": {
-     "kind": "live",
-     "reverted_index": 41,
-     "log_len": 51,
-     "terminal": "859cb23ab63cd7be4db7e7e88650fa5ad97be139f3a96eb3a53b3efcb3ddf285",
-     "restored": "859cb23ab63cd7be4db7e7e88650fa5ad97be139f3a96eb3a53b3efcb3ddf285",
-     "reverted_board": "f2350838839c09fec5080529e9d66c093c712762ac688c2fb0159e66b0571cc3"
+     "reverted_index": 2,
+     "reverted_label": "P1 ends his turn with one PassTurn",
+     "log_len": 58,
+     "terminal": "312264a53dc67af07e142631e7fb1bbb8b75269eb3579bff019576dc9277e9bf",
+     "restored": "312264a53dc67af07e142631e7fb1bbb8b75269eb3579bff019576dc9277e9bf",
+     "reverted_board": "df822f90923d85d4793e218afaf3228a37930f2e9633b6b3050bc1f81abd6efb"
     }
    },
    "seat_mapping": [
@@ -5597,18 +5783,18 @@
      "bankrupt": false,
      "cash_in_state": "570",
      "cash": "570",
-     "shares": "705",
+     "shares": "715",
      "privates": "200",
-     "total": "1475"
+     "total": "1485"
     },
     {
      "player_id": "p3",
      "bankrupt": false,
      "cash_in_state": "730",
      "cash": "730",
-     "shares": "720",
+     "shares": "770",
      "privates": "70",
-     "total": "1520"
+     "total": "1570"
     },
     {
      "player_id": "p1",
@@ -5621,63 +5807,63 @@
     }
    ],
    "vector": [
-    "1475",
-    "1520",
+    "1485",
+    "1570",
     "1443"
    ],
    "pools": [
     {
      "pool_ujuno": "5850000",
      "payouts_ujuno": [
-      "1944287",
-      "2003605",
-      "1902106"
+      "1931358",
+      "2041907",
+      "1876734"
      ],
-     "dust_ujuno": "2"
+     "dust_ujuno": "1"
     },
     {
      "pool_ujuno": "1000000007",
      "payouts_ujuno": [
-      "332356919",
-      "342496622",
-      "325146464"
+      "330146734",
+      "349044022",
+      "320809250"
      ],
-     "dust_ujuno": "2"
+     "dust_ujuno": "1"
     },
     {
      "pool_ujuno": "18446744073709551629",
      "payouts_ujuno": [
-      "6130902998810632864",
-      "6317947497079431833",
-      "5997893577819486931"
+      "6090132269777386431",
+      "6438725699360603836",
+      "5917886104571561360"
      ],
-     "dust_ujuno": "1"
+     "dust_ujuno": "2"
     }
    ],
    "domain_name": "set0c-juno-1-3-seat-live-game-3/rules-v13",
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "93",
+    "seq": "113",
     "kind": 1,
     "reason": 1,
-    "log_len": "46",
-    "log_hash": "846463d530ebd36d709d6409c5233d6f182d37df8bf1e75351370362a8aa98c2",
-    "appraisal_log_len": "46",
-    "appraisal_state_hash": "859cb23ab63cd7be4db7e7e88650fa5ad97be139f3a96eb3a53b3efcb3ddf285",
+    "log_len": "56",
+    "log_hash": "bbb96faf96e8ec8ef6a5a0f647531750a96d2cfd66a6cf5509fa549654879a58",
+    "appraisal_log_len": "56",
+    "appraisal_state_hash": "312264a53dc67af07e142631e7fb1bbb8b75269eb3579bff019576dc9277e9bf",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
-     "1475",
-     "1520",
+     "1485",
+     "1570",
      "1443"
     ],
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000005d0101000000000000002e846463d530ebd36d709d6409c5233d6f182d37df8bf1e75351370362a8aa98c2000000000000002e859cb23ab63cd7be4db7e7e88650fa5ad97be139f3a96eb3a53b3efcb3ddf285000103000000000000000000000000000005c3000000000000000000000000000005f0000000000000000000000000000005a300010000000068d5d780",
-   "settle_digest": "e4c98c76c112ee5b9b9b2dd2594aa5dcb20ae6c96fdb403ee59ebfed3017d938",
-   "consent_digest": "30d50f47710b90b41e1f3ac3ec1fbbb24ab9f6c7a34a3424650efee4bb78ff33"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000007101010000000000000038bbb96faf96e8ec8ef6a5a0f647531750a96d2cfd66a6cf5509fa549654879a580000000000000038312264a53dc67af07e142631e7fb1bbb8b75269eb3579bff019576dc9277e9bf000103000000000000000000000000000005cd00000000000000000000000000000622000000000000000000000000000005a300010000000068d5d780",
+   "settle_digest": "9830a8dee7207890787d1b5edaa715a04eab08691a316147d99beba74125a819",
+   "consent_digest": "794787ddb7cf010f6210375c64595740ce8df254064571bcaba03d9f9acea1cf"
   },
   {
    "id": "V13-19",
@@ -5709,7 +5895,7 @@
      ]
     },
     {
-     "label": "3.1 C&O ends its turn",
+     "label": "3.2 C&O ends its turn",
      "actor": "p1",
      "answer": "applied",
      "entries": [
@@ -5717,7 +5903,7 @@
      ]
     },
     {
-     "label": "3.1 PRR advances",
+     "label": "3.2 PRR advances",
      "actor": "p3",
      "answer": "applied",
      "entries": [
@@ -5728,7 +5914,7 @@
      ]
     },
     {
-     "label": "3.1 PRR ends its turn",
+     "label": "3.2 PRR ends its turn",
      "actor": "p3",
      "answer": "applied",
      "entries": [
@@ -5736,7 +5922,7 @@
      ]
     },
     {
-     "label": "3.1 CPR advances",
+     "label": "3.2 CPR advances",
      "actor": "p3",
      "answer": "applied",
      "entries": [
@@ -5747,7 +5933,7 @@
      ]
     },
     {
-     "label": "3.1 CPR ends its turn",
+     "label": "3.2 CPR ends its turn",
      "actor": "p3",
      "answer": "applied",
      "entries": [
@@ -5758,24 +5944,24 @@
    "log_len": 17,
    "log_hash": "2c375e5634ef6cb82c0651d3b3e02d135db797f7bb0bb4c76e87e462386e8c43",
    "terminal": {
-    "state_digest": "ebf5ffeb14ab5088",
-    "appraisal_state_hash": "1b810e1e4f62c2a2873a9a94da58347c9c2c79937449fa52390af3b79cbf4492",
+    "state_digest": "128e3772819403a3",
+    "appraisal_state_hash": "4ad28a312f33df4e69785d5b176241c73bd69fa897128009e75707656d5fa342",
     "bankrupt_president": null,
     "bankruptcy_record": null
    },
    "determinism": {
-    "live": "1b810e1e4f62c2a2873a9a94da58347c9c2c79937449fa52390af3b79cbf4492",
-    "restore": "1b810e1e4f62c2a2873a9a94da58347c9c2c79937449fa52390af3b79cbf4492",
-    "replay": "1b810e1e4f62c2a2873a9a94da58347c9c2c79937449fa52390af3b79cbf4492",
-    "snapshot": "1b810e1e4f62c2a2873a9a94da58347c9c2c79937449fa52390af3b79cbf4492",
+    "live": "4ad28a312f33df4e69785d5b176241c73bd69fa897128009e75707656d5fa342",
+    "restore": "4ad28a312f33df4e69785d5b176241c73bd69fa897128009e75707656d5fa342",
+    "replay": "4ad28a312f33df4e69785d5b176241c73bd69fa897128009e75707656d5fa342",
+    "snapshot": "4ad28a312f33df4e69785d5b176241c73bd69fa897128009e75707656d5fa342",
     "snapshot_after": 8,
     "revert": {
-     "kind": "live",
-     "reverted_index": 12,
-     "log_len": 22,
-     "terminal": "1b810e1e4f62c2a2873a9a94da58347c9c2c79937449fa52390af3b79cbf4492",
-     "restored": "1b810e1e4f62c2a2873a9a94da58347c9c2c79937449fa52390af3b79cbf4492",
-     "reverted_board": "fc5d499fce2b7a207e89333c12a41877d6e32e4746e99e12c6047663de1272bc"
+     "reverted_index": 4,
+     "reverted_label": "P1 sells PRR 10%, NYC 20% and CPR 10% in that order (NYC's presidency passes to P2)",
+     "log_len": 20,
+     "terminal": "4ad28a312f33df4e69785d5b176241c73bd69fa897128009e75707656d5fa342",
+     "restored": "4ad28a312f33df4e69785d5b176241c73bd69fa897128009e75707656d5fa342",
+     "reverted_board": "a3c762c0ce62f128fa07372d7343a0a74d1a41bb49d870cee046ebefc7d6ce6b"
     }
    },
    "seat_mapping": [
@@ -5865,7 +6051,7 @@
     "log_len": "17",
     "log_hash": "2c375e5634ef6cb82c0651d3b3e02d135db797f7bb0bb4c76e87e462386e8c43",
     "appraisal_log_len": "17",
-    "appraisal_state_hash": "1b810e1e4f62c2a2873a9a94da58347c9c2c79937449fa52390af3b79cbf4492",
+    "appraisal_state_hash": "4ad28a312f33df4e69785d5b176241c73bd69fa897128009e75707656d5fa342",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
@@ -5876,9 +6062,9 @@
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d08040000000000000023010100000000000000112c375e5634ef6cb82c0651d3b3e02d135db797f7bb0bb4c76e87e462386e8c4300000000000000111b810e1e4f62c2a2873a9a94da58347c9c2c79937449fa52390af3b79cbf4492000103000000000000000000000000000002ee00000000000000000000000000000091000000000000000000000000000002f400010000000068d5d780",
-   "settle_digest": "b441a7351f3de6c18e74add1188c164e60879486ac461706e8ced153ce82f751",
-   "consent_digest": "c04f3137ae270dc73a85af2aec910f6f7e34fedcafdeb0139c3591a0872ca20a"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d08040000000000000023010100000000000000112c375e5634ef6cb82c0651d3b3e02d135db797f7bb0bb4c76e87e462386e8c4300000000000000114ad28a312f33df4e69785d5b176241c73bd69fa897128009e75707656d5fa342000103000000000000000000000000000002ee00000000000000000000000000000091000000000000000000000000000002f400010000000068d5d780",
+   "settle_digest": "276849b505d1382f8575d5b87268cdd50d0a695858f67eef06d7e958d94965d7",
+   "consent_digest": "902ef5eaa64367f847b7c876a5a009960919d0e47cb2281fec731451d41210cf"
   },
   {
    "id": "V13-20a",
@@ -5952,12 +6138,12 @@
     "snapshot": "ec638a4c82d44d25f7f3b4d2141739758b31e8c8261ca1ee73bc26fde94f1002",
     "snapshot_after": 6,
     "revert": {
-     "kind": "live",
-     "reverted_index": 7,
-     "log_len": 17,
+     "reverted_index": 4,
+     "reverted_label": "P1 sells PRR 10% ($100 for $50)",
+     "log_len": 15,
      "terminal": "ec638a4c82d44d25f7f3b4d2141739758b31e8c8261ca1ee73bc26fde94f1002",
      "restored": "ec638a4c82d44d25f7f3b4d2141739758b31e8c8261ca1ee73bc26fde94f1002",
-     "reverted_board": "a08d57f017eb62ef721116911191acd1228d69ad835be8d44ba6dd676a2b7a74"
+     "reverted_board": "34fa976d5c9a066c9e4d1f63719877d7d41b6ea2a44985d57d1ba0776827c43f"
     }
    },
    "seat_mapping": [
@@ -6134,12 +6320,12 @@
     "snapshot": "ef56f0d8f05c9a2c299adb1c8dc099e66dd1e30b98f47bce6956d3d61ad9804c",
     "snapshot_after": 6,
     "revert": {
-     "kind": "live",
-     "reverted_index": 7,
-     "log_len": 17,
+     "reverted_index": 4,
+     "reverted_label": "P1 sells NYC 10% ($60 for $50)",
+     "log_len": 15,
      "terminal": "ef56f0d8f05c9a2c299adb1c8dc099e66dd1e30b98f47bce6956d3d61ad9804c",
      "restored": "ef56f0d8f05c9a2c299adb1c8dc099e66dd1e30b98f47bce6956d3d61ad9804c",
-     "reverted_board": "a9273b9cbb6d153cbef4e58e6d072bd11773d444470e898b49b411eae8f5145e"
+     "reverted_board": "34fa976d5c9a066c9e4d1f63719877d7d41b6ea2a44985d57d1ba0776827c43f"
     }
    },
    "seat_mapping": [
@@ -6265,11 +6451,20 @@
      ]
     },
     {
-     "label": "C&O buys NYC's 2-train for $60 inside the window (treasury $30, then P1's $30)",
+     "label": "P1 offers $60 for NYC's 2-train inside the window",
      "actor": "p1",
      "answer": "applied",
      "entries": [
-      "BuyTrainFromCorporation"
+      "ProposeTrainPurchase"
+     ]
+    },
+    {
+     "label": "NYC's president accepts: the trade settles (treasury $30, then P1's $30)",
+     "actor": "p2",
+     "answer": "applied",
+     "entries": [
+      "AnswerTrainPurchase",
+      "BuyTrainFromCorporation*"
      ]
     },
     {
@@ -6282,7 +6477,7 @@
     },
     {
      "label": "3.1 NYC advances",
-     "actor": "p1",
+     "actor": "p2",
      "answer": "applied",
      "entries": [
       "AdvanceOperatingSubPhase",
@@ -6293,7 +6488,7 @@
     },
     {
      "label": "3.1 NYC ends its turn",
-     "actor": "p1",
+     "actor": "p2",
      "answer": "applied",
      "entries": [
       "PassTurn"
@@ -6319,27 +6514,27 @@
      ]
     }
    ],
-   "log_len": 16,
-   "log_hash": "72cb93f75d32ebe33e66bdb985154591bd929f4e0ceade59a09976151221fb83",
+   "log_len": 18,
+   "log_hash": "9c1e9bdccffe5279f4c70b1c527d2218dd731ead654c5a89037ba10feeb579fe",
    "terminal": {
-    "state_digest": "80fad4f521e28b76",
-    "appraisal_state_hash": "fe796bf7ec6c077d46bb613ba6194fe03cc787472934a8b3c970b21c0a7ac77c",
+    "state_digest": "112673a05d472815",
+    "appraisal_state_hash": "aa3d5ef2442ae305fd1c57d4a3f852879fdbf448c206d6db87d6bb96aae486ee",
     "bankrupt_president": null,
     "bankruptcy_record": null
    },
    "determinism": {
-    "live": "fe796bf7ec6c077d46bb613ba6194fe03cc787472934a8b3c970b21c0a7ac77c",
-    "restore": "fe796bf7ec6c077d46bb613ba6194fe03cc787472934a8b3c970b21c0a7ac77c",
-    "replay": "fe796bf7ec6c077d46bb613ba6194fe03cc787472934a8b3c970b21c0a7ac77c",
-    "snapshot": "fe796bf7ec6c077d46bb613ba6194fe03cc787472934a8b3c970b21c0a7ac77c",
-    "snapshot_after": 8,
+    "live": "aa3d5ef2442ae305fd1c57d4a3f852879fdbf448c206d6db87d6bb96aae486ee",
+    "restore": "aa3d5ef2442ae305fd1c57d4a3f852879fdbf448c206d6db87d6bb96aae486ee",
+    "replay": "aa3d5ef2442ae305fd1c57d4a3f852879fdbf448c206d6db87d6bb96aae486ee",
+    "snapshot": "aa3d5ef2442ae305fd1c57d4a3f852879fdbf448c206d6db87d6bb96aae486ee",
+    "snapshot_after": 9,
     "revert": {
-     "kind": "live",
-     "reverted_index": 11,
+     "reverted_index": 5,
+     "reverted_label": "NYC's president accepts: the trade settles (treasury $30, then P1's $30)",
      "log_len": 21,
-     "terminal": "fe796bf7ec6c077d46bb613ba6194fe03cc787472934a8b3c970b21c0a7ac77c",
-     "restored": "fe796bf7ec6c077d46bb613ba6194fe03cc787472934a8b3c970b21c0a7ac77c",
-     "reverted_board": "884dbd4b48be8d9beeb84a209984d08f04fe57b314b8d10509dd985f77899d14"
+     "terminal": "aa3d5ef2442ae305fd1c57d4a3f852879fdbf448c206d6db87d6bb96aae486ee",
+     "restored": "aa3d5ef2442ae305fd1c57d4a3f852879fdbf448c206d6db87d6bb96aae486ee",
+     "reverted_board": "53ba7c3f9164cadcbc3f365455bfbeb6e28401e1725a9a8538107f7d13c6574b"
     }
    },
    "seat_mapping": [
@@ -6362,87 +6557,87 @@
      "bankrupt": false,
      "cash_in_state": "300",
      "cash": "300",
-     "shares": "403",
+     "shares": "474",
      "privates": "180",
-     "total": "883"
+     "total": "954"
     },
     {
      "player_id": "p1",
      "bankrupt": false,
      "cash_in_state": "0",
      "cash": "0",
-     "shares": "348",
+     "shares": "206",
      "privates": "40",
-     "total": "388"
+     "total": "246"
     },
     {
      "player_id": "p2",
      "bankrupt": false,
      "cash_in_state": "300",
      "cash": "300",
-     "shares": "319",
+     "shares": "532",
      "privates": "180",
-     "total": "799"
+     "total": "1012"
     }
    ],
    "vector": [
-    "883",
-    "388",
-    "799"
+    "954",
+    "246",
+    "1012"
    ],
    "pools": [
     {
      "pool_ujuno": "5850000",
      "payouts_ujuno": [
-      "2495434",
-      "1096521",
-      "2258043"
+      "2523010",
+      "650587",
+      "2676401"
      ],
      "dust_ujuno": "2"
     },
     {
      "pool_ujuno": "1000000007",
      "payouts_ujuno": [
-      "426570051",
-      "187439614",
-      "385990340"
+      "431283908",
+      "111211574",
+      "457504523"
      ],
      "dust_ujuno": "2"
     },
     {
      "pool_ujuno": "18446744073709551629",
      "payouts_ujuno": [
-      "7868828510669340139",
-      "3457650579999664749",
-      "7120264983040546739"
+      "7955783836491370820",
+      "2051491429535510714",
+      "8439468807682670094"
      ],
-     "dust_ujuno": "2"
+     "dust_ujuno": "1"
     }
    ],
    "domain_name": "set0c-juno-1-3-seat-live-game-3/rules-v13",
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "33",
+    "seq": "37",
     "kind": 1,
     "reason": 1,
-    "log_len": "16",
-    "log_hash": "72cb93f75d32ebe33e66bdb985154591bd929f4e0ceade59a09976151221fb83",
-    "appraisal_log_len": "16",
-    "appraisal_state_hash": "fe796bf7ec6c077d46bb613ba6194fe03cc787472934a8b3c970b21c0a7ac77c",
+    "log_len": "18",
+    "log_hash": "9c1e9bdccffe5279f4c70b1c527d2218dd731ead654c5a89037ba10feeb579fe",
+    "appraisal_log_len": "18",
+    "appraisal_state_hash": "aa3d5ef2442ae305fd1c57d4a3f852879fdbf448c206d6db87d6bb96aae486ee",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
-     "883",
-     "388",
-     "799"
+     "954",
+     "246",
+     "1012"
     ],
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d080400000000000000210101000000000000001072cb93f75d32ebe33e66bdb985154591bd929f4e0ceade59a09976151221fb830000000000000010fe796bf7ec6c077d46bb613ba6194fe03cc787472934a8b3c970b21c0a7ac77c00010300000000000000000000000000000373000000000000000000000000000001840000000000000000000000000000031f00010000000068d5d780",
-   "settle_digest": "1dfbf882dde5593804c792a19d22be84296ef7d3d10c20291ef9c29f666b8f7a",
-   "consent_digest": "b8cae16aacc49c3191747756e08a672efe627ba893e9162670a59201a360a198"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d08040000000000000025010100000000000000129c1e9bdccffe5279f4c70b1c527d2218dd731ead654c5a89037ba10feeb579fe0000000000000012aa3d5ef2442ae305fd1c57d4a3f852879fdbf448c206d6db87d6bb96aae486ee000103000000000000000000000000000003ba000000000000000000000000000000f6000000000000000000000000000003f400010000000068d5d780",
+   "settle_digest": "b47f8563fd023f0bad1caf4662c694d1672fe40354e55f8e20acf079ec261e2e",
+   "consent_digest": "15436aa27752ac12d44f2935014f91ceb33293a92635731c97455c80485fe8f3"
   },
   {
    "id": "V13-21b",
@@ -6483,7 +6678,7 @@
     },
     {
      "label": "3.1 NYC advances",
-     "actor": "p1",
+     "actor": "p2",
      "answer": "applied",
      "entries": [
       "AdvanceOperatingSubPhase",
@@ -6494,7 +6689,7 @@
     },
     {
      "label": "3.1 NYC ends its turn",
-     "actor": "p1",
+     "actor": "p2",
      "answer": "applied",
      "entries": [
       "PassTurn"
@@ -6521,26 +6716,26 @@
     }
    ],
    "log_len": 17,
-   "log_hash": "e08194529a4193d285fa91f7055a39211ec6d9811a5e929d914bd581a4b528f4",
+   "log_hash": "39048aa5976e8cb6fb3b877a410446ef0d2f53c7eb9a59ab097b24d2fa25ede2",
    "terminal": {
-    "state_digest": "774a5aae4220a525",
-    "appraisal_state_hash": "4f982971e90f30a726a8b4076fdfd0027cfab63e9a21e00005c6c4f9eb70000f",
+    "state_digest": "1e164a8d74a8b612",
+    "appraisal_state_hash": "53aa0829d8d718796dc3a2529a04a67b78f1876000b5db5cba756c115f4521ca",
     "bankrupt_president": null,
     "bankruptcy_record": null
    },
    "determinism": {
-    "live": "4f982971e90f30a726a8b4076fdfd0027cfab63e9a21e00005c6c4f9eb70000f",
-    "restore": "4f982971e90f30a726a8b4076fdfd0027cfab63e9a21e00005c6c4f9eb70000f",
-    "replay": "4f982971e90f30a726a8b4076fdfd0027cfab63e9a21e00005c6c4f9eb70000f",
-    "snapshot": "4f982971e90f30a726a8b4076fdfd0027cfab63e9a21e00005c6c4f9eb70000f",
+    "live": "53aa0829d8d718796dc3a2529a04a67b78f1876000b5db5cba756c115f4521ca",
+    "restore": "53aa0829d8d718796dc3a2529a04a67b78f1876000b5db5cba756c115f4521ca",
+    "replay": "53aa0829d8d718796dc3a2529a04a67b78f1876000b5db5cba756c115f4521ca",
+    "snapshot": "53aa0829d8d718796dc3a2529a04a67b78f1876000b5db5cba756c115f4521ca",
     "snapshot_after": 8,
     "revert": {
-     "kind": "live",
-     "reverted_index": 12,
-     "log_len": 22,
-     "terminal": "4f982971e90f30a726a8b4076fdfd0027cfab63e9a21e00005c6c4f9eb70000f",
-     "restored": "4f982971e90f30a726a8b4076fdfd0027cfab63e9a21e00005c6c4f9eb70000f",
-     "reverted_board": "8adddd747c32001b43df079f3e3a22d2f984ac2fe6548cc755df3a1717f886f9"
+     "reverted_index": 4,
+     "reverted_label": "P1 sells PRR 10% instead: the window closes and the game buys the Bank's train",
+     "log_len": 20,
+     "terminal": "53aa0829d8d718796dc3a2529a04a67b78f1876000b5db5cba756c115f4521ca",
+     "restored": "53aa0829d8d718796dc3a2529a04a67b78f1876000b5db5cba756c115f4521ca",
+     "reverted_board": "2ad4ff9de07cf774f2c14748ce50c67da3d62d9dea685845644ddea5b19b1cb6"
     }
    },
    "seat_mapping": [
@@ -6563,61 +6758,61 @@
      "bankrupt": false,
      "cash_in_state": "30",
      "cash": "30",
-     "shares": "306",
+     "shares": "164",
      "privates": "40",
-     "total": "376"
+     "total": "234"
     },
     {
      "player_id": "p2",
      "bankrupt": false,
      "cash_in_state": "300",
      "cash": "300",
-     "shares": "307",
+     "shares": "520",
      "privates": "180",
-     "total": "787"
+     "total": "1000"
     },
     {
      "player_id": "p3",
      "bankrupt": false,
      "cash_in_state": "300",
      "cash": "300",
-     "shares": "379",
+     "shares": "450",
      "privates": "180",
-     "total": "859"
+     "total": "930"
     }
    ],
    "vector": [
-    "376",
-    "787",
-    "859"
+    "234",
+    "1000",
+    "930"
    ],
    "pools": [
     {
      "pool_ujuno": "5850000",
      "payouts_ujuno": [
-      "1087833",
-      "2276928",
-      "2485237"
+      "632578",
+      "2703327",
+      "2514094"
      ],
-     "dust_ujuno": "2"
+     "dust_ujuno": "1"
     },
     {
      "pool_ujuno": "1000000007",
      "payouts_ujuno": [
-      "185954501",
-      "389218598",
-      "424826907"
+      "108133087",
+      "462107212",
+      "429759707"
      ],
      "dust_ujuno": "1"
     },
     {
      "pool_ujuno": "18446744073709551629",
      "payouts_ujuno": [
-      "3430255079977641648",
-      "7179815818995755258",
-      "7836673174736154722"
+      "1994703379504637283",
+      "8524373416686484116",
+      "7927667277518430228"
      ],
-     "dust_ujuno": "1"
+     "dust_ujuno": "2"
     }
    ],
    "domain_name": "set0c-juno-1-3-seat-live-game-3/rules-v13",
@@ -6628,22 +6823,22 @@
     "kind": 1,
     "reason": 1,
     "log_len": "17",
-    "log_hash": "e08194529a4193d285fa91f7055a39211ec6d9811a5e929d914bd581a4b528f4",
+    "log_hash": "39048aa5976e8cb6fb3b877a410446ef0d2f53c7eb9a59ab097b24d2fa25ede2",
     "appraisal_log_len": "17",
-    "appraisal_state_hash": "4f982971e90f30a726a8b4076fdfd0027cfab63e9a21e00005c6c4f9eb70000f",
+    "appraisal_state_hash": "53aa0829d8d718796dc3a2529a04a67b78f1876000b5db5cba756c115f4521ca",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
-     "376",
-     "787",
-     "859"
+     "234",
+     "1000",
+     "930"
     ],
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000002301010000000000000011e08194529a4193d285fa91f7055a39211ec6d9811a5e929d914bd581a4b528f400000000000000114f982971e90f30a726a8b4076fdfd0027cfab63e9a21e00005c6c4f9eb70000f00010300000000000000000000000000000178000000000000000000000000000003130000000000000000000000000000035b00010000000068d5d780",
-   "settle_digest": "ad4d91e25cb8e8efe2529638c262cb0a6ce149454fcc1c3f1b8414bdaa27d268",
-   "consent_digest": "1aaca6ad43ee9c8342ccc2fcd9f14920daf51a77ee3654954d68488617a18077"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d080400000000000000230101000000000000001139048aa5976e8cb6fb3b877a410446ef0d2f53c7eb9a59ab097b24d2fa25ede2000000000000001153aa0829d8d718796dc3a2529a04a67b78f1876000b5db5cba756c115f4521ca000103000000000000000000000000000000ea000000000000000000000000000003e8000000000000000000000000000003a200010000000068d5d780",
+   "settle_digest": "dbea1a1312f4b38d64d69be08fb07f965ddb1702dd229aa21c04abf026f1577a",
+   "consent_digest": "d4ea22fd3cf4fee9cfef07882bc250d069f2e817c227518b8634904da5a813ad"
   }
  ],
  "checkpoints": [
@@ -6652,7 +6847,7 @@
    "vector_id": "V13-02",
    "log_len": 9,
    "round": "OperatingRound/4/1",
-   "appraisal_state_hash": "5dc81a14bc3cda84a3e285f1a46e0d5521ca81622b61529fde5354e52a6a4eb0",
+   "appraisal_state_hash": "cce0b94f27310cd3ae1d90e000688045d89c7cc55a68fbc68505f64222655388",
    "seat_mapping": [
     {
      "seat_index": 0,
@@ -6668,8 +6863,8 @@
     }
    ],
    "vector": [
-    "1577",
-    "1709",
+    "1604",
+    "1844",
     "1637"
    ],
    "domain_name": "set0c-juno-1-3-seat-live-game-3/rules-v13",
@@ -6682,27 +6877,27 @@
     "log_len": "9",
     "log_hash": "e127d42f8a57a544db08f17a72d70167e328303f3ad30d31c14fc25290d27689",
     "appraisal_log_len": "9",
-    "appraisal_state_hash": "5dc81a14bc3cda84a3e285f1a46e0d5521ca81622b61529fde5354e52a6a4eb0",
+    "appraisal_state_hash": "cce0b94f27310cd3ae1d90e000688045d89c7cc55a68fbc68505f64222655388",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
-     "1577",
-     "1709",
+     "1604",
+     "1844",
      "1637"
     ],
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000001200000000000000000009e127d42f8a57a544db08f17a72d70167e328303f3ad30d31c14fc25290d2768900000000000000095dc81a14bc3cda84a3e285f1a46e0d5521ca81622b61529fde5354e52a6a4eb000010300000000000000000000000000000629000000000000000000000000000006ad0000000000000000000000000000066500010000000068d5d780",
-   "settle_digest": "bc887c7c07ae0f696f6d3d1046696e2ab9522d8a7f7f60feee12236b5cda7817",
-   "consent_digest": "8250c58ac7531bed2a6da346198307ff402580b08f6f917d49014f1524fbad01"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000001200000000000000000009e127d42f8a57a544db08f17a72d70167e328303f3ad30d31c14fc25290d276890000000000000009cce0b94f27310cd3ae1d90e000688045d89c7cc55a68fbc68505f6422265538800010300000000000000000000000000000644000000000000000000000000000007340000000000000000000000000000066500010000000068d5d780",
+   "settle_digest": "b72ff50739b249a3afba51986aa75931e14eb7f637fdbf39921b7f1474395e74",
+   "consent_digest": "86c5b368fce96b3d390c9eb81a422b478b18e44e87d7c4b7d632a16149aecbe5"
   },
   {
-   "name": "V13-02-PASSTURN-BROWN-ALLPASS-BANK-BREAK/checkpoint@29",
+   "name": "V13-02-PASSTURN-BROWN-ALLPASS-BANK-BREAK/checkpoint@34",
    "vector_id": "V13-02",
-   "log_len": 29,
+   "log_len": 34,
    "round": "OperatingRound/4/2",
-   "appraisal_state_hash": "7d3be9d6877947444e0fb8a1cadf84dd5139162fb171d3acf25961000110dd97",
+   "appraisal_state_hash": "39462413d103baf559d4df92ba03d491eb2194410ce4a32980999c159bdadb55",
    "seat_mapping": [
     {
      "seat_index": 0,
@@ -6718,34 +6913,34 @@
     }
    ],
    "vector": [
-    "1516",
-    "1628",
+    "1534",
+    "1718",
     "1556"
    ],
    "domain_name": "set0c-juno-1-3-seat-live-game-3/rules-v13",
    "payload": {
     "version": 1,
     "domain": "560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804",
-    "seq": "58",
+    "seq": "68",
     "kind": 0,
     "reason": 0,
-    "log_len": "29",
-    "log_hash": "841d64e43a695d87b1d18ce42363ce3e379cfcc9a10951c044f3578542bfb709",
-    "appraisal_log_len": "29",
-    "appraisal_state_hash": "7d3be9d6877947444e0fb8a1cadf84dd5139162fb171d3acf25961000110dd97",
+    "log_len": "34",
+    "log_hash": "06c345c3264858b58360be37b5488021398ab44a63b1115c1bf8a963121a71f5",
+    "appraisal_log_len": "34",
+    "appraisal_state_hash": "39462413d103baf559d4df92ba03d491eb2194410ce4a32980999c159bdadb55",
     "state_schema_version": 1,
     "seat_count": 3,
     "settlement_weights": [
-     "1516",
-     "1628",
+     "1534",
+     "1718",
      "1556"
     ],
     "signer_key_id": 1,
     "issued_at": "1758844800"
    },
-   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d0804000000000000003a0000000000000000001d841d64e43a695d87b1d18ce42363ce3e379cfcc9a10951c044f3578542bfb709000000000000001d7d3be9d6877947444e0fb8a1cadf84dd5139162fb171d3acf25961000110dd97000103000000000000000000000000000005ec0000000000000000000000000000065c0000000000000000000000000000061400010000000068d5d780",
-   "settle_digest": "7d18a485690dd689f1cb79933ec606230601f0565c33a5b489af68b08cf6ed0a",
-   "consent_digest": "f75b46527653ffcf3c4917a1813b83a18182e8e8db948876c3645974c4368b82"
+   "encoded": "01560c7b323057a31715883a43b39f1fcc2b4cf8e46a0d6d972126aa032a0d080400000000000000440000000000000000002206c345c3264858b58360be37b5488021398ab44a63b1115c1bf8a963121a71f5000000000000002239462413d103baf559d4df92ba03d491eb2194410ce4a32980999c159bdadb55000103000000000000000000000000000005fe000000000000000000000000000006b60000000000000000000000000000061400010000000068d5d780",
+   "settle_digest": "7856c570ce8f0ab2907c1b08d7296b9fbeb9aee751bde8b26f3f0113599c6615",
+   "consent_digest": "178ed3f8d33280b689d4a9318ec7075068c5137b1f16a3eca7627393bba74b0f"
   }
  ]
 }

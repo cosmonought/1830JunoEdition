@@ -148,15 +148,18 @@ constructed, named starting board (provenance in `settlementV13Vectors.ts`). For
 pin-independently: its pin gate is the only reader of the pin, and the canonical texts at 13 and 12 differ in that one
 token), an independent oracle written in the test and the independent Python oracle, and `rankPlayers` agree seat by
 seat; Σ payouts + dust = pool with 0 <= dust < n on three pools (n × the SET-0A ante, a prime, 2^64 + 13); the terminal
-hash is identical live, after a cold restore, after `replayLog`, after a snapshot rebuild and after a RevertTo; the
+hash is identical live, after a cold restore, after `replayLog`, after a snapshot rebuild and after a LIVE RevertTo (a
+room undoes the vector's last scripted non-terminal action -- on every rescue the emergency decision itself with the
+game's derived purchase; ahead of an immediate bankruptcy the previous corporation's end of turn, since a room refuses a
+revert once the board is at GameEnd -- makes it again and plays on; a cold restore of that log agrees); the
 payload equals its v12 twin's (the same board at pin 12, built by the certified builder) outside `[1,33)` (`domain`) and
 `[91,123)` (`appraisal_state_hash`); VGP is conserved from seed to terminal.
 
 | # | Terminal(s) | Ends by | What the evidence shows |
 |---|---|---|---|
 | V13-01 | 1 | bank | SYN-01's GR-4 room at revision 2 is SYN-01's certified board but for `variants.rules`; SET-0A's vector and payouts. |
-| V13-02 | 1 | bank | Acted turns end in one `PassTurn` without counting; a true pass counts; Pool C&O → Pool C&O continues, Pool CPR refused; an all-pass ending. |
-| V13-03 | 1 | bankruptcy | Every legal leg (PRR, NYC, C&O 10% each) liquidated and still short; the residue is C&O's crown; the record equals the engine's `maximumLiquidation`. |
+| V13-02 | 1 | bank | Acted turns end in one `PassTurn` without counting; a true pass counts; Pool C&O → Pool C&O continues, Pool B&O (also Brown) refused by the one-corporation rule; an all-pass ending. |
+| V13-03 | 1 | bankruptcy | Every legal leg (PRR, NYC, C&O 10% each) liquidated and still short; the residue is C&O's crown; the record equals the engine's `maximumLiquidation`; the bankrupt's open Schuylkill Valley (no buyer can pay $10) counts 0. |
 | V13-04 | 1 | bankruptcy | PRR's President's Certificate stays unsold (options [10, 20]); kept shares valued at the fallen prices. |
 | V13-05 | 1 | bankruptcy | NYC's pool at 40%: one card sold, the pool ends at 50%, 20% kept and valued. |
 | V13-06 | 1 | bankruptcy | No legal bundle: the portfolio is untouched; $40 cash to the C&O treasury. |
@@ -164,7 +167,7 @@ payload equals its v12 twin's (the same board at pin 12, built by the certified 
 | V13-08 | 1 | bankruptcy | Private funding relevant until `ForgoPrivateFunding`; the bankrupt's open C&A counts 0, others' privates counted. |
 | V13-09 | 1 | bankruptcy | Private funding irrelevant (bound < shortfall): immediate; the bankrupt's SV and C&StL open, counted 0. |
 | V13-10 | 1 | bank | `{NYC 10, PRR 10}` = $90 for $80 (neither alone funds); the derived purchase; $10 overshoot counted; play continues. |
-| V13-11 | 1 | bank | The derived, keyed `EmergencyBuyHardware` appears once; a crash before or after it reproduces the same log and board. |
+| V13-11 | 1 | bank | The derived, keyed `EmergencyBuyHardware` appears once; a crash before or after it -- and, on the portfolio rescues V13-10, 17a, 19 and 21b, before the portfolio, between it and the purchase, or after both -- reproduces the same log and board. |
 | V13-12 | 2 | bankruptcy / bank | (a) the bankrupt ties p2 at the top; (b) two seats tie in a four-seat bank break: equal weights and payouts, rank 1 shared. |
 | V13-13 | all | — | The five readers of one log (live, restore, replay, snapshot, RevertTo) reach one digest on every vector. |
 | V13-14 | — | — | A v12-pinned (revision 1) deal is held before any `RoomEngine.apply`; the settlement replay has no board; the browser check is `unavailable`. |
@@ -174,4 +177,14 @@ payload equals its v12 twin's (the same board at pin 12, built by the certified 
 | V13-18 | 2 | bank | The third / second Pool C&O refused after p1's accepted trade (a) or M&H exchange (b); p2's off-turn rejection did not interrupt (a). |
 | V13-19 | 1 | bank | One entry `[PRR 10, NYC 20, CPR 10]` at today's prices ($195); NYC's presidency passes to p2; arrivals in the submitted order. |
 | V13-20 | 2 | bank | One seed, two logs: the $100 card and the $60 card both legal, both together refused; two terminals. |
-| V13-21 | 2 | bank | (a) NYC's 2 bought for $60 inside the window; (b) after the PRR sale the window is closed and the trade refused; the Bank's train bought. |
+| V13-21 | 2 | bank | (a) p1 offers $60 for NYC's 2 inside the window and NYC's president p2 accepts (the room's derived settlement); (b) after the PRR sale the window is closed and the trade refused; the Bank's train bought. |
+
+**Limits of the device, stated.** Every vector starts from a constructed board, not a `SetupGame` deal, so the
+production replays that begin at the default seed are exercised over these logs through the same `RoomSession` restore
+with the vector's own seed (V13-14 replays a real v13 deal). The bank-break seeds are latched at $0 (SYN-01's device),
+so their money does not add up to $12,000; the appraisal reads no bank or treasury, and each vector conserves VGP from
+seed to terminal. `ForgoTrainTrade` and `ForgoPrivateFunding` are the president's declared choices (owner rulings OD-4:
+the trade and private funding are optional, rulebook 6.6.2 / 6.6.3), so V13-07 and V13-08 end in bankruptcy although a
+trade or a private sale could have rescued; no bankruptcy is ever declared by `DeclareBankruptcy` (refused on
+revision 2). V13-18 (a) follows owner ruling 2 as W3-K implemented and reviewed it: a proposal and another player's
+off-turn rejection do not close the continuation; the accepted trade does.

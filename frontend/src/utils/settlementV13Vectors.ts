@@ -16,28 +16,41 @@
 // patched between steps and no terminal field is grafted (the bank-break vectors end by the reducer's own set-end rule
 // on a latched bank; the bankruptcy vectors end in the transition that proved the bankruptcy).
 //
-// PROVENANCE OF THE STARTING BOARDS (constructed, named, each fact legal on its own):
+// PROVENANCE OF THE STARTING BOARDS (constructed and named; what is set rather than earned is said):
 //   * Rules: standard 1830 at RULES REVISION 2, pinned 13 -- what every hosted v13 deal is stamped with -- replayed under
 //     `SERVER_REPLAY_POLICY`; no legacy adapter is involved.
-//   * Seats p1, p2, p3 (p4 on V13-12b). p1 presides the C&O in every emergency-funding vector (all but V13-01, 02, 12b, 18).
+//   * Seats p1, p2, p3 (p4 on V13-12b). p1 presides the C&O in every emergency-funding vector (all but V13-01, 02, 12b,
+//     18).
 //   * THE OBLIGATION (the emergency vectors; constructed, as UR-7 constructs C&O's I5 station): the C&O is trainless,
 //     its station on H16 with a yellow city there and a curve on I17 -- the corridor the W3-K emergency suites use, a
-//     legal two-stop route -- so it owes a train at Buy Trains. The cursor is the C&O's Lay Track step; p1's one "advance" walks the turn there through
-//     the room's own derived skips and forced $0 withhold. Every other corporation's token is on its REAL home hex with
-//     no track: none of them has a route, so its turns are ordinary (GR-4's device).
-//   * Phase: 2 (no corporation owns a 3; the 2-train costs $80; corporations may not buy privates), or 3 (NYC or CPR owns
-//     a 3; the 3-train costs $180; privates may be sold to corporations for half to twice face). Fleets within limits.
-//   * Corporations: the eight, three to five of them parred with par values from the printed ladder and share prices on
-//     real chart cells (constructed, as UR-7's are); holdings, IPO and Bank Pool always sum to 100%; the rest unstarted.
+//     legal two-stop route -- so it owes a train at Buy Trains. The cursor is the C&O's Lay Track step -- or, ahead of an
+//     immediate bankruptcy, the Buy Trains step of the corporation operating just before it, whose president ends its
+//     turn first (a live action the RevertTo check can undo; a room refuses any revert once the board is at GameEnd).
+//     p1's one "advance" walks the C&O's turn to Buy Trains through the room's own derived skips and forced $0 withhold.
+//     Every other corporation's token is on its REAL home hex with no track: none of them has a route, so its turns are
+//     ordinary (GR-4's device).
+//   * Phase: 2 (no corporation owns a 3; the 2-train costs $80; corporations may not buy privates), or 3 (a 3 is owned
+//     and 2-trains are still running; the 3-train costs $180; privates may be sold to corporations for half to twice
+//     face; the C&O's turn is in the last OR of a two-round set). Fleets within limits.
+//   * Corporations: the eight, two to five of them parred with par values from the printed ladder and share prices on
+//     real chart cells (constructed, as UR-7's are); holdings, IPO and Bank Pool always sum to 100%, and every floated
+//     corporation has at least 60% out of its IPO (`v13Board` refuses less); the rest unstarted. The operating order is
+//     the vector's (constructed), not re-derived from the prices.
 //   * Privates: the six, all sold in the opening auction -- the five player privates open with the owners named, the
 //     B&O private closed (#660).
-//   * Money: the bankruptcy vectors' bank holds every dollar of the $12,000 not in a hand or a treasury; the bank-break
-//     vectors' bank is $0 and latched broken by the payout before the board (SYN-01's device), so the set ends the game.
+//   * Money: the bankruptcy vectors' bank holds every dollar of the $12,000 not in a hand or a treasury. The bank-break
+//     vectors' bank is $0 and latched broken (SYN-01's device), so the set ends the game; on those boards the money in
+//     hands and treasuries does NOT add up to $12,000 (a constructed fact: the appraisal reads no treasury and no bank,
+//     and every vector's own play conserves VGP from seed to terminal).
+// THE ONE LIMIT OF THE DEVICE: every vector's log starts from its constructed board, not from a `SetupGame` deal, so the
+// production replays that start from the default seed (`replaySealedPrefix`, the server's `verifySession`) are run over
+// these logs through the same `RoomSession` restore with the vector's seed. A v13 deal itself is replayed in V13-14.
 // What is CONSTRUCTED rather than earned is named above; everything after the seed is the room's.
 //
 // THE VECTORS (V13-13 is the determinism of every one of them; V13-14, the v12 log, is in the test file):
 //   V13-01  SYN-01's GR-4 room at revision 2: an ordinary bank break with no emergency.
-//   V13-02  a Stock Round of one-click PassTurns, a Brown Bank Pool continuation and an all-pass ending, then two ORs.
+//   V13-02  a Stock Round of one-click PassTurns, a Brown Bank Pool continuation (a second Brown corporation's Pool
+//           certificate refused) and an all-pass ending, then two ORs.
 //   V13-03  automatic bankruptcy: every legal leg liquidated, still short.
 //   V13-04  ... where the presidency rule keeps shares (a President's Certificate nobody can take) unsold.
 //   V13-05  ... where the 50% Bank Pool cap limits a leg.
@@ -56,7 +69,8 @@
 //           rejection in between does not interrupt it.
 //   V13-19  an atomic three-corporation portfolio in the submitted order, with NYC's presidency passing inside it.
 //   V13-20  one obligation rescued by the $100 card (a) and by the $60 card (b): both legal (owner ruling 1).
-//   V13-21  (a) an intercorporate trade inside the window; (b) the same obligation after a liquidation closed it.
+//   V13-21  (a) an intercorporate trade inside the window (p1 offers, NYC's president p2 accepts); (b) the same
+//           obligation after a liquidation closed the window.
 
 import type { GameStateResponse, PublicCompanyState, PrivateCompanyState } from "../gameEngine/gameState";
 import type { MapGridResponse } from "../components/hexContractTypes";
@@ -174,6 +188,8 @@ export function v13Board(spec: BoardSpec): Board {
     const held = corp.holdings.reduce((sum, [, pct]) => sum + pct, 0);
     const pool = corp.pool ?? 0;
     if (held + pool > 100) throw new Error(`${TICKER[id]}: holdings ${held} + pool ${pool} exceed 100`);
+    // 1830 floats a corporation at 60% sold, and a sold share never returns to the IPO (it goes to the Bank Pool).
+    if (held + pool < 60) throw new Error(`${TICKER[id]}: only ${held + pool}% out of the IPO -- not a floated corporation`);
     const at = stationOf(corp);
     return {
       company_id: id, ticker: TICKER[id], is_floated: true, treasury: String(corp.treasury), total_shares_issued: 10,
@@ -250,6 +266,7 @@ export const ANSWER = (privateId: number, accept: boolean) => ({ AnswerFundingPr
 export const TRADE = (seller: number, buyer: number, model: string, price: number) => ({ BuyTrainFromCorporation: { game_id: 1, buyer_protocol_id: buyer, seller_protocol_id: seller, model_type: model, price: String(price) } });
 export const PROPOSE_TRAIN = (seller: number, buyer: number, model: string, price: number) =>
   ({ ProposeTrainPurchase: { game_id: 1, seller_protocol_id: seller, seller_ticker: TICKER[seller], seller_president: null, buyer_protocol_id: buyer, buyer_ticker: TICKER[buyer], model_type: model, price: String(price) } });
+export const ANSWER_TRAIN = (seller: number, accept: boolean) => ({ AnswerTrainPurchase: { game_id: 1, seller_protocol_id: seller, accept } });
 export const BUY = (id: number, source: "Ipo" | "Bank") => ({ BuyStock: { game_id: 1, protocol_id: id, source } });
 export const SELL = (id: number, percentage = 10) => ({ SellStock: { game_id: 1, protocol_id: id, percentage } });
 export const PROPOSE_PRIVATE = (privateId: number, seller: string, buyer: string, price: number) => ({ ProposePrivateTrade: { game_id: 1, private_id: privateId, seller, buyer, price } });
@@ -399,24 +416,38 @@ export function playVector(def: VectorDef): VectorGame {
 const syn01AtRevision2 = (): Board =>
   ({ ...GR.certificationStart(), variants: resolveVariants({ rules: 2 }), virtual_bank_vgp: "0", bank_broken: true }) as Board;
 
-/** The Stock Round seed. */
+/** The Stock Round seed (phase 3, SR 4): C&O ($30) and B&O ($27) both in the Brown zone with certificates in their Bank
+ *  Pools; p1 holds the Schuylkill Valley (to trade) and the Mohawk & Hudson (to exchange for one of NYC's IPO shares). */
 const stockRoundSeed = (): Board =>
   v13Board({
     cash: { [P1]: 600, [P2]: 500, [P3]: 700 },
     bankBroken: true,
     corps: [
-      { id: NYC, president: P2, holdings: [[P2, 50], [P1, 20], [P3, 10]], pool: 0, par: 100, price: 112, treasury: 900, trains: ["3"] },
-      { id: PRR, president: P1, holdings: [[P1, 60], [P2, 20], [P3, 20]], par: 100, price: 100, treasury: 700, trains: ["3"] },
+      { id: NYC, president: P2, holdings: [[P2, 50], [P1, 20], [P3, 10]], par: 100, price: 112, treasury: 900, trains: ["3", "2"] },
+      { id: PRR, president: P1, holdings: [[P1, 60], [P2, 20], [P3, 20]], par: 100, price: 100, treasury: 700, trains: ["3", "2"] },
       { id: CPR, president: P3, holdings: [[P3, 60], [P1, 10], [P2, 10]], pool: 10, par: 90, price: 82, treasury: 600, trains: ["2"] },
+      { id: BO, president: P3, holdings: [[P3, 50], [P2, 10]], pool: 20, par: 67, price: 27, treasury: 200, trains: ["2"] },
       { id: CO, president: P3, holdings: [[P3, 40], [P2, 20]], pool: 30, par: 76, price: 30, treasury: 300, trains: ["2"] },
     ],
     privates: [{ id: SV, owner: P1 }, { id: CSL, owner: P2 }, { id: DH, owner: P3 }, { id: MH, owner: P1 }, { id: CA, owner: P2 }, { id: BOP, owner: P3, closed: true }],
     round: { kind: "SR", seat: 0, macro: 4 },
   });
 
-/** An Operating Round obligation seed: C&O (station H16, the corridor) at Lay Track, trainless; the rest from `extra`. */
-const orSeed = (spec: Omit<BoardSpec, "round"> & { order: number[]; step?: string }): Board =>
-  v13Board({ ...spec, round: { kind: "OR", order: spec.order, active: CO, step: spec.step ?? "Track" } });
+/** An Operating Round obligation seed: C&O (station H16, the corridor), trainless. The cursor is the C&O's Lay Track
+ *  step -- or, with `prior`, the Buy Trains step of the corporation operating just before it (its president then ends
+ *  its turn: a live, revertible action ahead of an immediate bankruptcy). Phase 3 seeds play the last OR of a two-round
+ *  set, so the C&O's turn is the set's last before the bank's ending. */
+const orSeed = (spec: Omit<BoardSpec, "round"> & { order: number[]; prior?: number; phase3?: boolean }): Board =>
+  v13Board({
+    ...spec,
+    round: {
+      kind: "OR",
+      order: spec.order,
+      active: spec.prior ?? CO,
+      step: spec.prior === undefined ? "Track" : "Hardware",
+      ...(spec.phase3 ? { sub: 2, length: 2 } : {}),
+    },
+  });
 
 /** The six privates, all sold in the opening auction: the five player privates open with the owners named (in
  *  private-id order SV, C&StL, D&H, M&H, C&A), the B&O private closed (#660: the B&O bought a train). */
@@ -430,10 +461,12 @@ const privatesOwnedBy = (sv: string, csl: string, dh: string, mh: string, ca: st
 ];
 
 const C_O_TRACK = (label = "C&O passes on track; the room walks it to Buy Trains"): Step => ({ label, actor: P1, msg: ADVANCE(CO) });
+/** The corporation before the C&O ends its turn at Buy Trains (`prior` seeds). */
+const PRIOR_ENDS = (id: number, president: string): Step => ({ label: `${TICKER[id]} ends its turn`, actor: president, msg: PASS });
 
 /* Seeds shared by two logs. */
 
-/** V13-07: C&O $20 short; NYC (P1 presides) holds a 2-train within the $60 budget; nothing P1 holds is saleable. */
+/** V13-07: C&O $20 short; NYC (p2 presides) holds a 2-train within the $60 budget; nothing p1 holds is saleable. */
 const forgoTradeSeed = (): Board =>
   orSeed({
     cash: { [P1]: 30, [P2]: 300, [P3]: 300 },
@@ -441,7 +474,7 @@ const forgoTradeSeed = (): Board =>
     order: [CO, NYC, PRR],
     corps: [
       { id: CO, president: P1, holdings: [[P1, 20], [P2, 20], [P3, 20]], par: 90, price: 90, treasury: 30, station: "H16" },
-      { id: NYC, president: P1, holdings: [[P1, 20], [P2, 10], [P3, 10]], par: 76, price: 76, treasury: 100, trains: ["2"] },
+      { id: NYC, president: P2, holdings: [[P2, 40], [P3, 20]], par: 76, price: 76, treasury: 100, trains: ["2"] },
       { id: PRR, president: P3, holdings: [[P3, 40], [P2, 20]], par: 67, price: 67, treasury: 200 },
     ],
     privates: privatesOwnedBy(P1, P2, P3, P2, P3),
@@ -455,13 +488,13 @@ const tradeWindowSeed = (): Board =>
     order: [CO, NYC, PRR],
     corps: [
       { id: CO, president: P1, holdings: [[P1, 20], [P2, 20], [P3, 20]], par: 90, price: 90, treasury: 30, station: "H16" },
-      { id: NYC, president: P1, holdings: [[P1, 20], [P2, 10], [P3, 10]], par: 76, price: 76, treasury: 100, trains: ["2"] },
+      { id: NYC, president: P2, holdings: [[P2, 40], [P3, 20]], par: 76, price: 76, treasury: 100, trains: ["2"] },
       { id: PRR, president: P3, holdings: [[P3, 40], [P2, 20], [P1, 10]], par: 67, price: 50, treasury: 200 },
     ],
     privates: privatesOwnedBy(P2, P1, P3, P3, P2),
   });
 
-/** V13-20: $50 short; P1 holds PRR 10% at $100 and NYC 10% at $60 -- each one legal card that funds alone. */
+/** V13-20: $50 short; p1 holds PRR 10% at $100 and NYC 10% at $60 -- each one legal card that funds alone. */
 const overshootSeed = (): Board =>
   orSeed({
     cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
@@ -475,16 +508,19 @@ const overshootSeed = (): Board =>
     privates: privatesOwnedBy(P3, P2, P1, P2, P3),
   });
 
-/** Phase 3 private-funding seeds: NYC owns the 3 (the 3-train costs $180); C&O and P1 have $0; P1's only paper is
- *  C&O's tied crown, so a share portfolio raises nothing (or `prr10` adds a saleable PRR 10% at $50). */
-const privateSeed = (input: { owners: [string, string, string, string, string]; nyc: number; prr: number; prr10?: boolean; bankBroken?: boolean }): Board =>
+/** Phase 3 private-funding seeds: NYC owns the 3 (the 3-train costs $180) and two 2s, PRR three 2s; C&O and p1 have $0;
+ *  p1's only paper is C&O's tied crown, so a share portfolio raises nothing (or `prr10` adds a saleable PRR 10% at $50).
+ *  With `prior`, the cursor is PRR's Buy Trains (PRR operates just before the C&O). */
+const privateSeed = (input: { owners: [string, string, string, string, string]; nyc: number; prr: number; prr10?: boolean; bankBroken?: boolean; prior?: boolean }): Board =>
   orSeed({
     cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
     bankBroken: input.bankBroken,
     order: [NYC, PRR, CO],
+    prior: input.prior ? PRR : undefined,
+    phase3: true,
     corps: [
-      { id: NYC, president: P2, holdings: [[P2, 40], [P3, 20]], par: 100, price: 100, treasury: input.nyc, trains: ["3"] },
-      { id: PRR, president: P3, holdings: input.prr10 ? [[P3, 40], [P2, 20], [P1, 10]] : [[P3, 40], [P2, 20]], par: 67, price: 50, treasury: input.prr },
+      { id: NYC, president: P2, holdings: [[P2, 40], [P3, 20]], par: 100, price: 100, treasury: input.nyc, trains: ["3", "2", "2"] },
+      { id: PRR, president: P3, holdings: input.prr10 ? [[P3, 40], [P2, 20], [P1, 10]] : [[P3, 40], [P2, 20]], par: 67, price: 50, treasury: input.prr, trains: ["2", "2", "2"] },
       { id: CO, president: P1, holdings: [[P1, 20], [P2, 20], [P3, 20]], par: 82, price: 40, treasury: 0, station: "H16" },
     ],
     privates: privatesOwnedBy(...input.owners),
@@ -511,7 +547,7 @@ export function v13VectorDefs(): VectorDef[] {
       grid: ALBANY,
       steps: [
         { label: "P1 buys C&O from the Bank Pool (Brown: the continuation opens)", actor: P1, msg: BUY(CO, "Bank") },
-        { label: "P1's Pool CPR is refused (one corporation only)", actor: P1, msg: BUY(CPR, "Bank"), expect: "refused" },
+        { label: "P1's Pool B&O (also Brown) is refused: the continuation is one corporation's", actor: P1, msg: BUY(BO, "Bank"), expect: "refused" },
         { label: "P1 buys C&O from the Bank Pool again (the continuation)", actor: P1, msg: BUY(CO, "Bank") },
         { label: "P1 ends his acted turn with one PassTurn", actor: P1, msg: PASS },
         { label: "P2 passes (a true pass)", actor: P2, msg: PASS },
@@ -533,15 +569,18 @@ export function v13VectorDefs(): VectorDef[] {
         orSeed({
           cash: { [P1]: 0, [P2]: 400, [P3]: 350 },
           order: [NYC, PRR, CO],
+          prior: PRR,
+          phase3: true,
           corps: [
-            { id: NYC, president: P2, holdings: [[P2, 50], [P1, 10], [P3, 10]], par: 76, price: 50, treasury: 300, trains: ["3"] },
-            { id: PRR, president: P3, holdings: [[P3, 50], [P1, 10], [P2, 10]], par: 67, price: 50, treasury: 250, trains: ["3"] },
+            { id: NYC, president: P2, holdings: [[P2, 50], [P1, 10], [P3, 10]], par: 76, price: 50, treasury: 5, trains: ["3", "2", "2"] },
+            { id: PRR, president: P3, holdings: [[P3, 50], [P1, 10], [P2, 10]], par: 67, price: 50, treasury: 5, trains: ["3", "2", "2"] },
             { id: CO, president: P1, holdings: [[P1, 30], [P2, 20], [P3, 10]], par: 67, price: 60, treasury: 0, station: "H16" },
           ],
-          privates: privatesOwnedBy(P2, P3, P2, P3, P2),
+          // p1's Schuylkill Valley is open, but no corporation can pay its $10 minimum: private funding cannot help.
+          privates: privatesOwnedBy(P1, P3, P2, P3, P2),
         }),
       grid: CORRIDOR,
-      steps: [C_O_TRACK()],
+      steps: [PRIOR_ENDS(PRR, P3), C_O_TRACK()],
       continueToEnd: false,
       reason: "Bankruptcy",
       pins: "Cash 0 and privates 0 for the bankrupt; the obligated treasury is credited; rival prices after the drops.",
@@ -554,15 +593,17 @@ export function v13VectorDefs(): VectorDef[] {
         orSeed({
           cash: { [P1]: 0, [P2]: 400, [P3]: 350 },
           order: [NYC, PRR, CO],
+          prior: PRR,
+          phase3: true,
           corps: [
-            { id: NYC, president: P2, holdings: [[P2, 50], [P1, 10], [P3, 10]], par: 76, price: 50, treasury: 300, trains: ["3"] },
-            { id: PRR, president: P1, holdings: [[P1, 40], [P2, 10], [P3, 10]], par: 67, price: 60, treasury: 200 },
+            { id: NYC, president: P2, holdings: [[P2, 50], [P1, 10], [P3, 10]], par: 76, price: 50, treasury: 300, trains: ["3", "2", "2"] },
+            { id: PRR, president: P1, holdings: [[P1, 40], [P2, 10], [P3, 10]], par: 67, price: 60, treasury: 200, trains: ["2", "2"] },
             { id: CO, president: P1, holdings: [[P1, 20], [P2, 20], [P3, 20]], par: 76, price: 71, treasury: 0, station: "H16" },
           ],
           privates: privatesOwnedBy(P3, P2, P3, P2, P3),
         }),
       grid: CORRIDOR,
-      steps: [C_O_TRACK()],
+      steps: [PRIOR_ENDS(PRR, P1), C_O_TRACK()],
       continueToEnd: false,
       reason: "Bankruptcy",
       pins: "The kept shares count in the share term (O-6).",
@@ -575,15 +616,17 @@ export function v13VectorDefs(): VectorDef[] {
         orSeed({
           cash: { [P1]: 0, [P2]: 400, [P3]: 350 },
           order: [NYC, CPR, CO],
+          prior: CPR,
+          phase3: true,
           corps: [
-            { id: NYC, president: P2, holdings: [[P2, 30], [P1, 30]], pool: 40, par: 76, price: 40, treasury: 300, trains: ["3"] },
-            { id: CPR, president: P3, holdings: [[P3, 60], [P1, 10]], par: 67, price: 45, treasury: 300 },
+            { id: NYC, president: P2, holdings: [[P2, 30], [P1, 30]], pool: 40, par: 76, price: 40, treasury: 300, trains: ["3", "2"] },
+            { id: CPR, president: P3, holdings: [[P3, 60], [P1, 10]], par: 67, price: 45, treasury: 300, trains: ["2", "2"] },
             { id: CO, president: P1, holdings: [[P1, 20], [P2, 20], [P3, 20]], par: 82, price: 76, treasury: 0, station: "H16" },
           ],
           privates: privatesOwnedBy(P2, P2, P3, P3, P2),
         }),
       grid: CORRIDOR,
-      steps: [C_O_TRACK()],
+      steps: [PRIOR_ENDS(CPR, P3), C_O_TRACK()],
       continueToEnd: false,
       reason: "Bankruptcy",
       pins: "The cap is respected in liquidation; the remainder is kept and valued.",
@@ -596,15 +639,16 @@ export function v13VectorDefs(): VectorDef[] {
         orSeed({
           cash: { [P1]: 40, [P2]: 400, [P3]: 350 },
           order: [PRR, CO, NYC],
+          prior: PRR,
           corps: [
-            { id: PRR, president: P1, holdings: [[P1, 20], [P2, 10], [P3, 10]], par: 100, price: 100, treasury: 400 },
+            { id: PRR, president: P1, holdings: [[P1, 20], [P2, 10], [P3, 10]], pool: 20, par: 100, price: 100, treasury: 400 },
             { id: CO, president: P1, holdings: [[P1, 20], [P2, 20], [P3, 20]], par: 90, price: 90, treasury: 0, station: "H16" },
             { id: NYC, president: P2, holdings: [[P2, 40], [P3, 20]], par: 67, price: 67, treasury: 300 },
           ],
           privates: privatesOwnedBy(P1, P2, P1, P3, P2),
         }),
       grid: CORRIDOR,
-      steps: [C_O_TRACK()],
+      steps: [PRIOR_ENDS(PRR, P1), C_O_TRACK()],
       continueToEnd: false,
       reason: "Bankruptcy",
       pins: "The terminal portfolio is untouched; only the cash moves.",
@@ -617,7 +661,7 @@ export function v13VectorDefs(): VectorDef[] {
       grid: CORRIDOR,
       steps: [
         C_O_TRACK("C&O passes on track; the room walks it to Buy Trains and the trade window holds the game"),
-        { label: "a $61 trade (beyond treasury + cash) is refused", actor: P1, msg: TRADE(NYC, CO, "2", 61), expect: "refused" },
+        { label: "a $61 offer for NYC's 2 (beyond treasury + cash) is refused", actor: P1, msg: PROPOSE_TRAIN(NYC, CO, "2", 61), expect: "refused" },
         { label: "P1 forgoes the train trade: nothing else can rescue, the bankruptcy follows", actor: P1, msg: FORGO_TRADE },
       ],
       continueToEnd: false,
@@ -642,9 +686,9 @@ export function v13VectorDefs(): VectorDef[] {
       id: "V13-09",
       name: "V13-09-IRRELEVANT-PRIVATE-IMMEDIATE",
       seedName: "irrelevant-private",
-      seed: () => privateSeed({ owners: [P1, P1, P2, P3, P2], nyc: 500, prr: 30 }),
+      seed: () => privateSeed({ owners: [P1, P1, P2, P3, P2], nyc: 500, prr: 30, prior: true }),
       grid: CORRIDOR,
-      steps: [C_O_TRACK()],
+      steps: [PRIOR_ENDS(PRR, P3), C_O_TRACK()],
       continueToEnd: false,
       reason: "Bankruptcy",
       pins: "Face value excluded for the bankrupt only; other players' privates counted.",
@@ -707,15 +751,16 @@ export function v13VectorDefs(): VectorDef[] {
         orSeed({
           cash: { [P1]: 40, [P2]: 0, [P3]: 50 },
           order: [PRR, CO, NYC],
+          prior: PRR,
           corps: [
-            { id: PRR, president: P1, holdings: [[P1, 20], [P2, 10], [P3, 10]], par: 100, price: 100, treasury: 400 },
+            { id: PRR, president: P1, holdings: [[P1, 20], [P2, 10], [P3, 10]], pool: 20, par: 100, price: 100, treasury: 400 },
             { id: CO, president: P1, holdings: [[P1, 20], [P2, 20], [P3, 20]], par: 90, price: 90, treasury: 0, station: "H16" },
-            { id: NYC, president: P2, holdings: [[P2, 20], [P3, 10]], par: 67, price: 40, treasury: 300 },
+            { id: NYC, president: P2, holdings: [[P2, 20], [P3, 10]], pool: 30, par: 67, price: 40, treasury: 300 },
           ],
           privates: privatesOwnedBy(P2, P1, P1, P1, P1),
         }),
       grid: CORRIDOR,
-      steps: [C_O_TRACK()],
+      steps: [PRIOR_ENDS(PRR, P1), C_O_TRACK()],
       continueToEnd: false,
       reason: "Bankruptcy",
       pins: "The tie rule is unchanged under bankruptcy: the bankrupt and P2 share the top, with equal weights and equal payouts.",
@@ -750,16 +795,18 @@ export function v13VectorDefs(): VectorDef[] {
         orSeed({
           cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
           order: [NYC, CPR, PRR, CO],
+          prior: PRR,
+          phase3: true,
           corps: [
-            { id: PRR, president: P1, holdings: [[P1, 20], [P3, 10], [P2, 10]], par: 67, price: 50, treasury: 500 },
-            { id: NYC, president: P2, holdings: [[P2, 30], [P1, 30]], pool: 30, par: 76, price: 40, treasury: 500, trains: ["3"] },
-            { id: CPR, president: P3, holdings: [[P3, 60], [P1, 20]], par: 67, price: 30, treasury: 500 },
+            { id: PRR, president: P1, holdings: [[P1, 20], [P3, 10], [P2, 10]], pool: 20, par: 67, price: 50, treasury: 500 },
+            { id: NYC, president: P2, holdings: [[P2, 30], [P1, 30]], pool: 30, par: 76, price: 40, treasury: 500, trains: ["3", "2"] },
+            { id: CPR, president: P3, holdings: [[P3, 60], [P1, 20]], par: 67, price: 30, treasury: 500, trains: ["2", "2"] },
             { id: CO, president: P1, holdings: [[P1, 20], [P2, 20], [P3, 20]], par: 90, price: 90, treasury: 0, station: "H16" },
           ],
           privates: privatesOwnedBy(P2, P3, P2, P3, P2),
         }),
       grid: CORRIDOR,
-      steps: [C_O_TRACK()],
+      steps: [PRIOR_ENDS(PRR, P1), C_O_TRACK()],
       continueToEnd: false,
       reason: "Bankruptcy",
       pins: "The exact maximumLiquidation, in public_companies order; every dollar to the obligated treasury; the residue valued.",
@@ -768,9 +815,9 @@ export function v13VectorDefs(): VectorDef[] {
       id: "V13-16a",
       name: "V13-16a-LOOSE-BOUND-ONLY-ENDS-AT-ONCE",
       seedName: "private-bound-only",
-      seed: () => privateSeed({ owners: [P2, P3, P1, P1, P2], nyc: 150, prr: 30, bankBroken: true }),
+      seed: () => privateSeed({ owners: [P2, P3, P1, P1, P2], nyc: 150, prr: 30, bankBroken: true, prior: true }),
       grid: CORRIDOR,
-      steps: [C_O_TRACK()],
+      steps: [PRIOR_ENDS(PRR, P3), C_O_TRACK()],
       continueToEnd: false,
       reason: "Bankruptcy",
       pins: "Only exact legal possibility holds the game: one buyer cannot pay for the two privates the loose bound counts, so the game ends at once.",
@@ -779,9 +826,10 @@ export function v13VectorDefs(): VectorDef[] {
       id: "V13-16b",
       name: "V13-16b-LEGAL-PRIVATE-WAITS-THEN-RESCUES",
       seedName: "private-legal",
-      seed: () => privateSeed({ owners: [P2, P3, P2, P3, P1], nyc: 500, prr: 30, bankBroken: true }),
+      seed: () => privateSeed({ owners: [P2, P3, P2, P3, P1], nyc: 500, prr: 30, bankBroken: true, prior: true }),
       grid: CORRIDOR,
       steps: [
+        PRIOR_ENDS(PRR, P3),
         C_O_TRACK("C&O passes on track; one legal private sale holds the game at Buy Trains"),
         { label: "P1 offers the C&A to NYC for $200", actor: P1, msg: OFFER(CA, NYC, 200) },
         { label: "NYC's president accepts: the sale settles and the game buys the train", actor: P2, msg: ANSWER(CA, true) },
@@ -868,11 +916,12 @@ export function v13VectorDefs(): VectorDef[] {
           cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
           bankBroken: true,
           order: [NYC, CO, PRR, CPR],
+          phase3: true,
           corps: [
-            { id: NYC, president: P1, holdings: [[P1, 30], [P2, 20], [P3, 10]], par: 67, price: 60, treasury: 300 },
+            { id: NYC, president: P1, holdings: [[P1, 30], [P2, 20], [P3, 10]], par: 67, price: 60, treasury: 300, trains: ["2", "2"] },
             { id: CO, president: P1, holdings: [[P1, 20], [P2, 20], [P3, 20]], par: 67, price: 50, treasury: 0, station: "H16" },
             { id: PRR, president: P3, holdings: [[P3, 40], [P2, 10], [P1, 10]], par: 67, price: 45, treasury: 300 },
-            { id: CPR, president: P3, holdings: [[P3, 50], [P1, 10]], par: 67, price: 30, treasury: 300, trains: ["3"] },
+            { id: CPR, president: P3, holdings: [[P3, 50], [P1, 10]], par: 67, price: 30, treasury: 300, trains: ["3", "2"] },
           ],
           privates: privatesOwnedBy(P2, P3, P2, P3, P2),
         }),
@@ -915,7 +964,8 @@ export function v13VectorDefs(): VectorDef[] {
       grid: CORRIDOR,
       steps: [
         C_O_TRACK("C&O passes on track; the trade window holds the game"),
-        { label: "C&O buys NYC's 2-train for $60 inside the window (treasury $30, then P1's $30)", actor: P1, msg: TRADE(NYC, CO, "2", 60) },
+        { label: "P1 offers $60 for NYC's 2-train inside the window", actor: P1, msg: PROPOSE_TRAIN(NYC, CO, "2", 60) },
+        { label: "NYC's president accepts: the trade settles (treasury $30, then P1's $30)", actor: P2, msg: ANSWER_TRAIN(NYC, true) },
       ],
       continueToEnd: true,
       reason: "BankBroken",
@@ -965,10 +1015,10 @@ export interface DeterminismEvidence {
   /** A `RoomEngine` seeded with the board, grid and chart after entry `snapshot_after`, fed the rest of the log. */
   snapshot: string;
   snapshot_after: number;
-  /** The RevertTo variant: `live` -- a live room undid the last non-terminal player action and played it again;
-   *  `log` -- the vector's only player action ends the game (a room refuses a revert after GameEnd, RV-3), so the
-   *  stored log carries the revert entry and the re-played entries, and a cold restore resolves them. */
-  revert: { kind: "live" | "log"; reverted_index: number; log_len: number; terminal: string; restored: string; reverted_board: string };
+  /** The RevertTo variant (`revertVariant`): a live room undid one action and made it again; `terminal` is that room's
+   *  board, `restored` a cold restore of its log (revert entry included), `reverted_board` the board right after the
+   *  revert. */
+  revert: { reverted_index: number; reverted_label: string; log_len: number; terminal: string; restored: string; reverted_board: string };
 }
 
 const replayProvidersFor = (game: VectorGame) => ({ ...sandboxReplayProviders(), initialGrid: game.grid, initialMarket: game.seedBoard.market_positions as never });
@@ -997,40 +1047,27 @@ export function snapshotRebuiltBoard(game: VectorGame, after: number): Board {
 
 const REVERT = (index: number, player: string) => ({ RevertTo: { index, player, summary: "undo" } });
 
-/** The RevertTo variant of a vector (see `DeterminismEvidence.revert`). */
-export function revertVariant(game: VectorGame): { kind: "live" | "log"; reverted_index: number; entries: readonly ServerLogEntry[]; terminal: Board; reverted: Board } {
+/** The RevertTo variant of a vector (see `DeterminismEvidence.revert`): the vector's last SCRIPTED player action after
+ *  which the game had not ended -- the emergency decision of a rescue, the step that walked the C&O into its obligation,
+ *  or (ahead of an immediate bankruptcy) the previous corporation's end of turn -- is undone live by its author (a live
+ *  room refuses any revert once the board is at GameEnd, RV-3) and made again, and the rest of the game is replayed.
+ *  A vector with no scripted step reverts its last non-terminal action. */
+export function revertVariant(game: VectorGame): { reverted_index: number; reverted_label: string; entries: readonly ServerLogEntry[]; terminal: Board; reverted: Board } {
   const applied = game.played.filter((step) => step.kind === "applied");
-  // The last applied player step after which the game had not ended: undone live, then made again.
-  let k = -1;
-  for (let at = applied.length - 1; at >= 0; at -= 1) {
-    if (applied[at].after.current_round_type !== "GameEnd") {
-      k = at;
-      break;
-    }
-  }
-  if (k >= 0) {
-    const room = roomFor(game.seedBoard, game.grid, `${game.name}-revert`);
-    for (let at = 0; at <= k; at += 1) submitStep(room, { label: applied[at].label, actor: applied[at].actor, msg: applied[at].msg });
-    // The undone action is the last non-derived entry: the one step k appended first.
-    const target = [...room.entries].reverse().find((entry) => entry.derived !== true)!;
-    const reverted = submitStep(room, { label: "revert", actor: applied[k].actor, msg: REVERT(target.index, applied[k].actor) });
-    void reverted;
-    const atRevert = room.state;
-    for (let at = k; at < applied.length; at += 1) submitStep(room, { label: applied[at].label, actor: applied[at].actor, msg: applied[at].msg });
-    if (room.state.current_round_type !== "GameEnd") throw new Error(`${game.name}: the revert variant did not reach GameEnd`);
-    return { kind: "live", reverted_index: target.index, entries: [...room.entries], terminal: room.state, reverted: atRevert };
-  }
-  // The only player action ends the game: the stored log carries a revert of it and then the same entries again.
-  const first = game.entries.find((entry) => entry.derived !== true)!;
-  const actor = first.actor;
-  const n = game.entries.length;
-  const withRevert: ServerLogEntry[] = [
-    ...game.entries,
-    { index: n, id: `${game.name}-revert`, actor, payload: JSON.stringify(REVERT(first.index, actor)) },
-    ...game.entries.map((entry, at) => ({ ...entry, index: n + 1 + at, id: `${entry.id}-again` })),
-  ];
-  const revertedOnly = withRevert.slice(0, n + 1);
-  return { kind: "log", reverted_index: first.index, entries: withRevert, terminal: restoredBoard(game, withRevert), reverted: restoredBoard(game, revertedOnly) };
+  const scripted = new Set(game.steps.map((step) => step.label));
+  const candidates = applied.filter((step) => step.after.current_round_type !== "GameEnd");
+  const pick = [...candidates].reverse().find((step) => scripted.has(step.label)) ?? candidates[candidates.length - 1];
+  if (pick === undefined) throw new Error(`${game.name}: no live-revertible action`);
+  const k = applied.indexOf(pick);
+  const room = roomFor(game.seedBoard, game.grid, `${game.name}-revert`);
+  for (let at = 0; at <= k; at += 1) submitStep(room, { label: applied[at].label, actor: applied[at].actor, msg: applied[at].msg });
+  // The undone action is the last non-derived entry: the one step k appended first.
+  const target = [...room.entries].reverse().find((entry) => entry.derived !== true)!;
+  submitStep(room, { label: "revert", actor: applied[k].actor, msg: REVERT(target.index, applied[k].actor) });
+  const atRevert = room.state;
+  for (let at = k; at < applied.length; at += 1) submitStep(room, { label: applied[at].label, actor: applied[at].actor, msg: applied[at].msg });
+  if (room.state.current_round_type !== "GameEnd") throw new Error(`${game.name}: the revert variant did not reach GameEnd`);
+  return { reverted_index: target.index, reverted_label: pick.label, entries: [...room.entries], terminal: room.state, reverted: atRevert };
 }
 
 export function determinismOf(game: VectorGame): DeterminismEvidence {
@@ -1043,8 +1080,8 @@ export function determinismOf(game: VectorGame): DeterminismEvidence {
     snapshot: terminalStateHashV1(snapshotRebuiltBoard(game, after)),
     snapshot_after: after,
     revert: {
-      kind: revert.kind,
       reverted_index: revert.reverted_index,
+      reverted_label: revert.reverted_label,
       log_len: revert.entries.length,
       terminal: terminalStateHashV1(revert.terminal),
       restored: terminalStateHashV1(restoredBoard(game, revert.entries)),

@@ -12862,7 +12862,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               });
               divergenceReportedAtRef.current = verdict.reportedAt;
               divergenceEverAgreedRef.current = verdict.everAgreed;
-              if (verdict.message) setSandboxRoomError(verdict.message);
+              // Phase 3 W3-C (OD-12 RED R5): a divergence is a fact about the link's board, not a refusal.
+              if (verdict.message) dispatchRoomNotice({ type: "connection", kind: "divergence", text: verdict.message });
               if (verdict.message || verdict.note) {
                 /* BOTH HASHES AND THE INDEX, ALWAYS. The sentence on screen is for the player; this line is
                    for whoever has to find out WHY -- and a divergence is diagnosed by replaying the log to
@@ -12902,8 +12903,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         }
       } finally {
         replayingRef.current = false;
-        // #1407: the catch-up notice was about this drain, which is over.
-        setSandboxRoomError((current) => (current === CATCHING_UP_BANNER ? null : current));
+        // #1407: the catch-up notice was about this drain, which is over. W3-C: retired by its kind, not its text.
+        dispatchRoomNotice({ type: "clear-connection", kind: "catching-up" });
       }
     };
 
@@ -12923,8 +12924,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const unsubscribe = GAME_SERVER_URL
       ? (() => {
           const accumulated: SandboxAction[] = [];
-          /** LIVE-3A: the room-status banner this link put up, so `live` clears only its own. */
-          let roomStatusBanner: string | null = null;
           const link = connectServerLink({
             url: GAME_SERVER_URL,
             /* LIVE-2D: the game's server-minted id. The link says nothing about who this tab is -- the socket was
@@ -12944,21 +12943,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               for (const entry of entries) accumulated.push(entry as SandboxAction);
               void drain([...accumulated]);
             },
+            /* Phase 3 W3-C (AUD-14.01, OD-12 RED R5): each callback names its slot and, for the link's own notices,
+               their kind -- so a refusal no longer replaces the reconnecting banner, and no clear compares a sentence. */
             onRefused: (reason) => {
               linkExplainedRef.current = true;
-              setSandboxRoomError(withoutSupportRef(reason));
+              dispatchRoomNotice({ type: "refusal", text: withoutSupportRef(reason) });
             },
             onStale: () => {
               linkExplainedRef.current = true;
-              setSandboxRoomError("The room had moved on — this tab has caught up. Try that again.");
+              dispatchRoomNotice({ type: "refusal", text: "The room had moved on — this tab has caught up. Try that again." });
             },
             onBuildSkew: (clientBuild, serverBuild) => {
               linkExplainedRef.current = true;
               /* #1206: NOT a desync, and saying so is the point. A client that reported this as a divergence
                  would send somebody hunting a bug that is a deploy. */
-              setSandboxRoomError(
-                `This tab is running build ${clientBuild} and the server is on ${serverBuild}. Reload to catch up.`,
-              );
+              dispatchRoomNotice({
+                type: "connection",
+                kind: "build-skew",
+                text: `This tab is running build ${clientBuild} and the server is on ${serverBuild}. Reload to catch up.`,
+              });
             },
             onIncompatible: (reason, pinned, supported, why) => {
               linkExplainedRef.current = true;
@@ -12966,7 +12969,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  built nothing and will apply nothing. The link has closed for good; reloading does not change the
                  answer, and the sentence says what would. LIVE-4 (L4-3): the server's sentence is for the ACTUAL
                  reason (`why`), and the rules versions are named only when the rules pin is that reason. */
-              setSandboxRoomError(incompatibleNotice({ reason, why, pinned, supported }));
+              dispatchRoomNotice({ type: "connection", kind: "incompatible", text: incompatibleNotice({ reason, why, pinned, supported }) });
             },
             onError: (message) => {
               linkExplainedRef.current = true;
@@ -12975,7 +12978,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  which `onStatus("open")` below is the only thing that clears -- so after a game-server restart
                  every table kept "connection error" in its top bar although it was live again (e2e: restart with
                  two devices seated). It is the reconnecting banner, and it goes when the socket is back. */
-              setSandboxRoomError(message === "connection error" ? RECONNECTING_BANNER : withoutSupportRef(message));
+              dispatchRoomNotice(
+                message === "connection error"
+                  ? { type: "connection", kind: "reconnecting", text: RECONNECTING_BANNER }
+                  : { type: "connection", kind: "transport", text: withoutSupportRef(message) },
+              );
             },
             /* LIVE-2D: read access to this game was withdrawn (kicked, the table cancelled or expired, a private
                table dealt without this tab, a full watcher cap). The link has stopped; the shell says so once. */
@@ -12991,28 +12998,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             onResync: () => {
               accumulated.length = 0;
               linkExplainedRef.current = true;
-              setSandboxRoomError(RESYNC_BANNER);
+              dispatchRoomNotice({ type: "connection", kind: "resync", text: RESYNC_BANNER });
             },
-            /* LIVE-3A (E-10): the room's availability. `live` clears the banner this link put up, and only that. */
+            /* LIVE-3A (E-10): the room's availability. `live` clears the room-status notice, whatever the server
+               wrote in it (W3-C: by kind, so no copy of the sentence is kept to compare). */
             onRoomStatus: (state, reason) => {
               if (state === "live") {
-                const shown = roomStatusBanner;
-                roomStatusBanner = null;
-                setSandboxRoomError((current) => (current !== null && current === shown ? null : current));
+                dispatchRoomNotice({ type: "clear-connection", kind: "room-status" });
                 return;
               }
-              roomStatusBanner = reason ?? ROOM_PAUSED_BANNER;
               linkExplainedRef.current = true;
-              setSandboxRoomError(roomStatusBanner);
+              dispatchRoomNotice({ type: "connection", kind: "room-status", text: reason ?? ROOM_PAUSED_BANNER });
             },
             /* #1253: the wire's own state, so a player can tell "the server is thinking" from "the wire is
                down". The banner is cleared only if it is still this one -- a refusal that arrived meanwhile
                is not ours to erase. */
             onStatus: (status) => {
               if (status === "reconnecting") {
-                setSandboxRoomError(RECONNECTING_BANNER);
+                dispatchRoomNotice({ type: "connection", kind: "reconnecting", text: RECONNECTING_BANNER });
               } else {
-                setSandboxRoomError((current) => (current === RECONNECTING_BANNER ? null : current));
+                dispatchRoomNotice({ type: "clear-connection", kind: "reconnecting" });
               }
             },
           });

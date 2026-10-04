@@ -39,8 +39,9 @@ export const NATIVE_DENOM = "ujuno";
  *  prompts, the room-creation prompt, the join prompt and the transaction memo all spelled it out
  *  independently, so renaming meant finding every literal -- and a prompt that disagrees with the one before
  *  it is exactly the kind of thing a cautious user reads as a phishing attempt.
- *  BRANDING ONLY. The rules sentences elsewhere name the game in PROSE ("Project 18XX has no $0 dividend"),
- *  and reading those from a constant would make an ordinary sentence a template for no benefit. */
+ *  BRANDING ONLY. The rules sentences elsewhere name the game in PROSE ("In Project 18XX a corporation that
+ *  earns nothing withholds"), and reading those from a constant would make an ordinary sentence a template for
+ *  no benefit. */
 export const APP_NAME = "Project 18XX";
 
 export const NATIVE_DENOM_DISPLAY = "JUNO";

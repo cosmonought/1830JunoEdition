@@ -293,11 +293,12 @@ describe("no player reads the number 1830", () => {
   it("catches a 1830 injected into a real player-facing sentence", () => {
     /* THE SCAN'S NEGATIVE CONTROL, on a real live file and a real sentence a player reads at the Dividends step. */
     const bar = abs("panels/ContextualActionBar.tsx");
-    const sentence = "Project 18XX has no $0 dividend";
+    /* Phase 3 W1-I (P3-N014): the Dividends tooltip was rewritten; the control rides on its new sentence. */
+    const sentence = "In Project 18XX a corporation that earns nothing withholds";
     const lines = withoutComments(bar);
     expect(lines.some((line) => line.includes(sentence))).toBe(true);
     const injected = (file: string) =>
-      withoutComments(file).map((line) => (file === bar ? line.split(sentence).join("1830 has no $0 dividend") : line));
+      withoutComments(file).map((line) => (file === bar ? line.split(sentence).join("In 1830 a corporation that earns nothing withholds") : line));
     const found = offendersIn([bar], injected);
     expect(found).toHaveLength(lines.filter((line) => line.includes(sentence)).length);
     for (const entry of found) expect(entry.startsWith("panels/ContextualActionBar.tsx:")).toBe(true);
@@ -372,10 +373,13 @@ describe("the name is stated once", () => {
   });
 
   it("does not template the rules sentences", () => {
-    /* BRANDING ONLY. "Project 18XX has no $0 dividend" is a SENTENCE, and turning an ordinary sentence into a
+    /* BRANDING ONLY. "In Project 18XX a corporation that earns nothing withholds" is a SENTENCE, and turning an ordinary sentence into a
        template buys nothing and costs its readability. The constant exists for the places the app introduces
        itself, not for every place it is mentioned. */
     const bar = readSource("panels/ContextualActionBar.tsx");
-    expect(bar).toContain("Project 18XX has no $0 dividend");
+    /* Phase 3 W1-I (P3-N014): the sentence pinned here was rewritten as a plain rule; it still names the game in
+       prose, untemplated. */
+    expect(bar).toContain("In Project 18XX a corporation that earns nothing withholds");
+    expect(bar).not.toContain("Project 18XX has no $0 dividend");
   });
 });

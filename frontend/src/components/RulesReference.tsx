@@ -51,7 +51,7 @@ import { tileErasAt, type TrainTier } from "../gameEngine/gamePhase";
    answers, so the base row stays the printed game and the variant clause cannot drift from the depot. */
 import { firstPurchaseEffects } from "../gameEngine/depotSchedule";
 // Design note #640: which build the browser is actually running.
-import { UI_BUILD_LABEL } from "../utils/buildStamp";
+import { UI_BUILD_ID, UI_BUILD_LABEL } from "../utils/buildStamp";
 import type { GameVariants } from "../gameEngine/gameVariants";
 /* The player-count limits the lobby deals from -- read, not retyped, so this page and the Stocks tab agree. */
 import {
@@ -977,6 +977,10 @@ const HOME_STATION: { tag: string; text: string } = {
      Operating Turn", filed under the optional additional-station step. */
   text: operatingQuick("station", "At the start of its first operating turn") ?? "",
 };
+
+/** Phase 3 W1-I (AUD-06.07): the pre-step's name where the reference marks it CURRENT -- the breadcrumb. The same
+ *  verb the President's prompt uses. A marker label, not rules copy: the rule's own text stays `HOME_STATION`. */
+const HOME_STATION_STEP_LABEL = "Place Home Station";
 
 /** ==================================================================
  *   THE TWO HOME HEXES, IN LAY TRACK'S SUBORDINATE DETAIL
@@ -2320,6 +2324,11 @@ export interface RulesReferenceProps {
   /** Live Operating Round cursor from `App.tsx`'s own `orSubPhase`; read only while
    *  `roundType === "OperatingRound"`. */
   operatingSubPhase?: RulesOperatingSubPhase | null;
+  /** Phase 3 W1-I (AUD-06.07): the operating corporation still owes its home station (`App.tsx`'s
+   *  `pendingHomeToken`). Rulebook 6.1 / 6.3.1 put that placement BEFORE step 1, so while it is owed the reference
+   *  marks the home-station pre-step as current and no numbered step -- the shell's cursor reads Lay Track
+   *  meanwhile, which is not where the turn is. Read only while `roundType === "OperatingRound"`. */
+  homeStationOwed?: boolean | null;
   /** The live Stock Round action, where the caller can tell one -- `Sell` or `Buy` marks that card current.
    *  A Stock Round turn has no sub-phase cursor, so this is optional and `null` marks the round card instead. */
   stockRoundAction?: StockRoundAction | null;
@@ -2394,6 +2403,7 @@ function SectionHeading({ children, aside }: { children: React.ReactNode; aside?
 function ContextStrip({
   roundType,
   operatingSubPhase,
+  homeStationLive = false,
   roundLabel,
   activeCorporation,
   section,
@@ -2401,6 +2411,8 @@ function ContextStrip({
 }: {
   roundType: RulesRoundType | null;
   operatingSubPhase: RulesOperatingSubPhase | null;
+  /** Phase 3 W1-I: the home-station pre-step is the live position (see `homeStationOwed`). */
+  homeStationLive?: boolean;
   roundLabel: string | null;
   activeCorporation: RulesReferenceProps["activeCorporation"];
   section: RulesSection;
@@ -2424,7 +2436,8 @@ function ContextStrip({
        ticker is what decides whether there is a crumb. */
     const ticker = activeCorporation && typeof activeCorporation.ticker === "string" ? activeCorporation.ticker.trim() : "";
     if (ticker) crumbs.push(ticker);
-    if (operatingSubPhase) crumbs.push(SUB_PHASE_DISPLAY[operatingSubPhase]);
+    if (homeStationLive) crumbs.push(HOME_STATION_STEP_LABEL);
+    else if (operatingSubPhase) crumbs.push(SUB_PHASE_DISPLAY[operatingSubPhase]);
   }
   const livePage = sectionForRound(roundType);
   /* TWO SIGNALS, TWO MEANINGS. The green pill says THIS IS LIVE; the round's own accent says WHICH ROUND it
@@ -3041,6 +3054,7 @@ interface ActionExplain {
 function OverviewPage({
   roundType,
   liveSubPhase,
+  homeStationLive = false,
   stockAction,
   roundLabel,
   activeCorporation,
@@ -3054,6 +3068,8 @@ function OverviewPage({
 }: {
   roundType: RulesRoundType | null;
   liveSubPhase: RulesOperatingSubPhase | null;
+  /** Phase 3 W1-I: the home-station pre-step is the live position. */
+  homeStationLive?: boolean;
   stockAction: StockRoundAction | null;
   roundLabel: string | null;
   activeCorporation: RulesReferenceProps["activeCorporation"];
@@ -3384,9 +3400,16 @@ function OverviewPage({
               adjacent to the turn sequence and outside it. `styles.opAsideTag` is deliberately reused rather
               than copied, so one note cannot come to wear two labels. */}
           {roundType === "OperatingRound" && (
-            <p style={styles.flowNote} data-testid="rules-overview-home-station">
+            <p
+              style={styles.flowNote}
+              data-testid="rules-overview-home-station"
+              data-live={homeStationLive ? "true" : undefined}
+              aria-current={homeStationLive ? "step" : undefined}
+            >
               <span style={styles.opAsideTag}>{HOME_STATION.tag}</span>
               {HOME_STATION.text}
+              {/* Phase 3 W1-I (AUD-06.07): while the home token is owed, THIS is where the turn is. */}
+              {homeStationLive && <span style={{ ...styles.opFlowNow, marginLeft: 8 }}>Current</span>}
             </p>
           )}
           {/* ==================================================================
@@ -4217,10 +4240,13 @@ function OpBlock({
 
 function OperatingRoundPage({
   liveSubPhase,
+  homeStationLive = false,
   currentRef,
   onNavigateTo,
 }: {
   liveSubPhase: RulesOperatingSubPhase | null;
+  /** Phase 3 W1-I: the home-station pre-step is the live position. */
+  homeStationLive?: boolean;
   currentRef: React.RefObject<HTMLDivElement>;
   onNavigateTo: (section: RulesSection, anchor?: string) => void;
 }) {
@@ -4328,9 +4354,16 @@ function OperatingRoundPage({
         </div>
         {/* ADJACENT TO THE FLOW, OUTSIDE IT. Mandatory, free, and before step 1, so it is neither a sixth
             stage nor a line inside step 2. Rulebook 6.1 and 6.3.1. */}
-        <p style={styles.opHomeStation} data-testid="rules-operating-home-station">
+        <p
+          style={styles.opHomeStation}
+          data-testid="rules-operating-home-station"
+          data-live={homeStationLive ? "true" : undefined}
+          aria-current={homeStationLive ? "step" : undefined}
+        >
           <span style={styles.opAsideTag}>{HOME_STATION.tag}</span>
           {HOME_STATION.text}
+          {/* Phase 3 W1-I (AUD-06.07): while the home token is owed, THIS is where the turn is. */}
+          {homeStationLive && <span style={{ ...styles.opFlowNow, marginLeft: 8 }}>Current</span>}
         </p>
         {/* THE SIDE ACTION, NAMED BESIDE THE FLOW AND EXPLAINED BELOW IT. The availability window is the part
             a player checks in a hurry, so the window is the part that is up here. */}
@@ -5316,6 +5349,7 @@ export function RulesReference({
   className,
   roundType: roundTypeProp,
   operatingSubPhase: operatingSubPhaseProp,
+  homeStationOwed,
   stockRoundAction: stockRoundActionProp,
   roundLabel,
   activeCorporation,
@@ -5331,7 +5365,11 @@ export function RulesReference({
      it is done; a delayed auction is done only when the state says so. */
   const auctionDone: boolean =
     roundType !== null && roundType !== "WaterfallAuction" && (activeScopes.has("delayedAuction") ? auctionComplete === true : true);
-  const liveSubPhase: RulesOperatingSubPhase | null = roundType === "OperatingRound" ? (operatingSubPhaseProp ?? null) : null;
+  /* Phase 3 W1-I (AUD-06.07): while the home station is owed the turn is BEFORE step 1, so no numbered step is live
+     -- the shell's cursor still reads Lay Track then -- and the home-station pre-step is marked instead. */
+  const homeStationLive = roundType === "OperatingRound" && homeStationOwed === true;
+  const liveSubPhase: RulesOperatingSubPhase | null =
+    roundType === "OperatingRound" && !homeStationLive ? (operatingSubPhaseProp ?? null) : null;
   const livePage = sectionForRound(roundType);
   const dockOffset = useStickyDockOffset();
   /* The rulebook's phase number for the Tables page: 1 while the auction runs, else from the train tier in
@@ -5409,8 +5447,14 @@ export function RulesReference({
       <div style={styles.header}>
         <h2 style={styles.pageTitle}>Rules Reference</h2>
         <span style={styles.rulesetPill}>{rulesetLabel ?? "18XX"}</span>
-        {/* Design note #640: the build stamp, quiet, for bug reports. */}
-        <span style={styles.buildStamp} title="Quote this in a bug report — it says which build of the interface you are running.">
+        {/* Design note #640: the build stamp, quiet, for bug reports. Phase 3 W1-I (AUD-01.08): it reads the deploy's
+            own id (`CLIENT_BUILD_ID`, via `buildStamp.ts`), not the hand-bumped `UI_BUILD_NOTE = 640` it went stale
+            behind. The title carries the full id when the label shortens it. */}
+        <span
+          style={styles.buildStamp}
+          title={`Quote this in a bug report — it says which build of the interface you are running (${UI_BUILD_ID}).`}
+          data-testid="rules-build-stamp"
+        >
           {UI_BUILD_LABEL}
         </span>
       </div>
@@ -5446,12 +5490,13 @@ export function RulesReference({
         })}
       </div>
 
-      <ContextStrip roundType={roundType} operatingSubPhase={liveSubPhase} roundLabel={roundLabel ?? null} activeCorporation={activeCorporation} section={section} onGoToCurrent={goToCurrent} />
+      <ContextStrip roundType={roundType} operatingSubPhase={liveSubPhase} homeStationLive={homeStationLive} roundLabel={roundLabel ?? null} activeCorporation={activeCorporation} section={section} onGoToCurrent={goToCurrent} />
 
       {section === "overview" && (
         <OverviewPage
           roundType={roundType}
           liveSubPhase={liveSubPhase}
+          homeStationLive={homeStationLive}
           stockAction={roundType === "StockRound" ? (stockRoundActionProp ?? null) : null}
           roundLabel={roundLabel ?? null}
           activeCorporation={activeCorporation}
@@ -5473,7 +5518,12 @@ export function RulesReference({
         />
       )}
       {section === "operating" && (
-        <OperatingRoundPage liveSubPhase={liveSubPhase} currentRef={currentStepRef} onNavigateTo={navigateTo} />
+        <OperatingRoundPage
+          liveSubPhase={liveSubPhase}
+          homeStationLive={homeStationLive}
+          currentRef={currentStepRef}
+          onNavigateTo={navigateTo}
+        />
       )}
       {section === "auction" && (
         <AuctionPage auctionLive={auctionLive} currentRef={currentStepRef} />

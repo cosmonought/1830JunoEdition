@@ -113,3 +113,63 @@ export function runTrainsRefusal(drafts: readonly RunnableDraftShape[]): string 
 
   return "No drafted route can run yet.";
 }
+
+/* ==================================================================
+    PHASE 3 W1-G (AUD-07.01 K-11, AUD-07.02 K-26, AUD-07.04 S6-13, P3-N013): ONE RUNNABLE SET, PRICED AND EXPLAINED
+   ==================================================================
+   THE FAULT. `RoutePlannerPanel.isRunnableDraft` was a second copy of `runnableDrafts` WITHOUT #474's token arm, and
+   `runnableRouteSummary` -- what the bar's Run button prices and counts -- read it. So a tokenless route was counted
+   and priced on the button and then skipped by `handleRunTrains`: the projected revenue promised a train the
+   dispatch never sent, and nothing said so. The panel's `firstProblem` was a third copy of `runTrainsRefusal` with
+   the opposite order (too long, then ending, then token), which #883 records as the decision this file owns.
+
+   SO THERE IS ONE SET, `runnableDrafts`, and everything below is read off it: the button's count and total are the
+   drafts the handler sends, and every drafted route left out is named with the sentence `runTrainsRefusal` gives
+   for it alone -- the same order, asked one draft at a time. */
+
+/** What the Run button prices: exactly the drafts `handleRunTrains` sends (#275: the rest are skipped, not refused). */
+export function runnableRouteTotal<T extends RunnableDraftShape>(drafts: readonly T[]): {
+  runnable: number;
+  drafted: number;
+  totalRevenue: number;
+} {
+  const runnable = runnableDrafts(drafts);
+  return {
+    runnable: runnable.length,
+    drafted: drafts.filter((draft) => draft.hexLabels.length > 0).length,
+    totalRevenue: runnable.reduce((sum, draft) => sum + (draft.value ?? 0), 0),
+  };
+}
+
+/** Why some drafted routes are not in the run, or `null` when every drafted route is. Named per draft with the
+ *  sentence `runTrainsRefusal` would give for that draft alone, so it cannot disagree with the empty-run refusal. */
+export function droppedDraftsNote<T extends RunnableDraftShape & { model: string }>(
+  drafts: readonly T[],
+  /** The drafts actually sent. Defaults to `runnableDrafts(drafts)`; the handler passes what survived its own
+   *  path conversion, so a draft dropped there is named too. */
+  sent: readonly T[] = runnableDrafts(drafts),
+): string | null {
+  const drafted = drafts.filter((draft) => draft.hexLabels.length > 0);
+  const dropped = drafted.filter((draft) => !sent.includes(draft));
+  if (dropped.length === 0) return null;
+  const first = dropped[0];
+  const why = runnableDrafts([first]).length > 0 ? UNREADABLE_ROUTE_REASON : runTrainsRefusal([first]);
+  const count = `${dropped.length} of ${drafted.length} drafted route${drafted.length === 1 ? "" : "s"}`;
+  return `${count} cannot run and ${dropped.length === 1 ? "is" : "are"} not in this run — the ${first.model}-train's: ${why}`;
+}
+
+/** A draft that passed `runnableDrafts` but did not reach the map as a path of two or more points (#1020's filter). */
+export const UNREADABLE_ROUTE_REASON =
+  "its route could not be read from the map as a path of two or more hexes. Redraw it, then run trains again.";
+
+/** When nothing at all survives to be sent: the run is not made, so the step is not marked run (A-17). */
+export const NOTHING_SENT_REASON =
+  "No drafted route could be read from the map as a path of two or more hexes, so nothing was run. Redraw the route, then run trains again.";
+
+/** K-26: the Run button's tooltip. Running trains decides nothing about the money -- the revenue is held for the
+ *  Dividends step, where the president pays it out or withholds it into the treasury. */
+export function runRoutesTitle(runnable: number, totalRevenue: number, droppedNote: string | null = null): string {
+  const declares = `Declares ${runnable === 1 ? "this route" : `all ${runnable} routes`} for $${totalRevenue}.`;
+  const then = "Pay it out or withhold it in the Dividends step that follows — nothing is paid or withheld yet.";
+  return droppedNote ? `${declares} ${then} ${droppedNote}` : `${declares} ${then}`;
+}

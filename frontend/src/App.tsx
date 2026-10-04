@@ -38,7 +38,7 @@ import HexGridRenderer, {
   type StationPreviewMarker,
 } from "./components/HexGridRenderer";
 import { assignRouteSet } from "./gameEngine/routeAutoTrace";
-import { evaluateRouteSet } from "./gameEngine/routeAuthority"; // #1554: the authority's own preview
+import { routeSetRefusal } from "./gameEngine/routeAuthority"; // #1554 / W1-G (K-11): the authority's own pre-dispatch question
 import {
   cityEnteredFrom,
   reachableNetwork,
@@ -763,7 +763,7 @@ import { editRouteDraft } from "./utils/routeDraftEdit";
 import { isRouteBuilderArmed, selectActingPresenceEntry } from "./utils/routeOverlaySource";
 // Design note #1024: the splice is a rule about an array, so it lives where it can be tested as one.
 import { stopsRemovedByTruncating, truncateRouteAtHex } from "./utils/routeTruncate";
-import { runnableDrafts, runTrainsRefusal } from "./utils/runTrainsRules";
+import { droppedDraftsNote, NOTHING_SENT_REASON, runnableDrafts, runTrainsRefusal } from "./utils/runTrainsRules"; // W1-G: + dropped / nothing-sent
 import { errandLaysBonus } from "./gameEngine/bonusLay";
 import { stepsFor } from "./gameEngine/operatingCursor";
 // Design note #673: one computation of what a previewed lay costs, read by the
@@ -10096,89 +10096,115 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       }));
 
     /* ==================================================================
+        PHASE 3 W1-G (AUD-04.02 A-17): NOTHING SENT IS NOTHING RUN
+       ==================================================================
+       Every runnable draft can still fail #1020's two-point filter, and this handler then skipped the dispatch and
+       went on to mark the corporation as having RUN and to step to Dividends -- a run with no message behind it,
+       which `skippedRoutes` then read as a real one. Now the step stays at Run Trains and says why. */
+    if (turnRoutes.length === 0) {
+      setRouteFeedback(NOTHING_SENT_REASON);
+      return;
+    }
+
+    /* ==================================================================
         DESIGN NOTE 1554: THE AUTHORITY IS ASKED BEFORE THE DISPATCH, AND ITS SENTENCE IS SHOWN
        ==================================================================
        Batch 6 moved route legality into the reducer (`routeAuthority.ts`, #1550). The reducer's answer is a
        refusal by identity, and in a room the server's `refused` frame lands in the room-error banner -- true,
        but not where the player is looking. So the same evaluator is asked here, on the same board, and its
        reason goes to the route panel instead. A PREVIEW, NEVER A VERDICT: the reducer asks again with the
-       authoritative state, and a draft this passes can still be refused there. */
+       authoritative state, and a draft this passes can still be refused there.
+       Phase 3 W1-G (AUD-07.01 K-11): THE WHOLE QUESTION, NOT ITS GEOMETRY HALF. This asked `evaluateRouteSet`,
+       which is only the set's legality; the reducer and ingress ask `routeSetRefusal` -- one run per turn, the
+       Run Trains step, that evaluation, and the demonstrated-maximum rule (#1556). So a hand-drawn set below the
+       maximum the search can show was offered here and refused there. It is the same composition now, on the
+       message about to be sent, and its sentence ("a legal combination worth $N is available") is shown beside
+       the routes before anything moves. */
     const previewState = sandboxStateRef.current; // #1017: the ref, so `gameState` stays out of the deps.
-    if (turnRoutes.length > 0 && previewState && actingProtocolId !== null) {
-      const preview = evaluateRouteSet({
-        state: previewState,
+    if (previewState && actingProtocolId !== null) {
+      const refusal = routeSetRefusal(
+        previewState,
+        {
+          protocol_id: actingProtocolId,
+          routes: turnRoutes.map((entry) => entry.path),
+          trains: turnRoutes.map((entry) => entry.train),
+          train_indices: turnRoutes.map((entry) => entry.trainIndex),
+        },
         mapGrid,
-        era: tileEraFor(previewState),
-        companyId: actingProtocolId,
-        routes: turnRoutes.map((entry) => entry.path),
-        trainIndices: turnRoutes.map((entry) => entry.trainIndex),
-        trains: turnRoutes.map((entry) => entry.train),
-      });
-      if (preview.kind === "refused") {
-        setRouteFeedback(preview.reason);
+        tileEraFor(previewState),
+      );
+      if (refusal !== null) {
+        setRouteFeedback(refusal);
         return;
       }
     }
 
-    if (turnRoutes.length > 0) {
-      await runGameplayAction("RunMultipleRoutes", {
-        RunMultipleRoutes: {
-          game_id: gameId,
-          protocol_id: actingProtocolId,
-          routes: turnRoutes.map((entry) => entry.path),
-          /* ==================================================================
-             DESIGN NOTE 1020: WHICH TRAIN RAN WHICH ROUTE, ON THE WIRE
-             ==================================================================
-             REPORTED, the other half: the log "incorrectly labeled it as the D-train's run".
+    /* Phase 3 W1-G: NO DRAFT DISAPPEARS SILENTLY. #275 runs the good routes without the bad ones; the ones left
+       out are named (the button's tooltip already said so before the press, and this says it after, where the
+       player is looking once the step moves on). */
+    const droppedNote = droppedDraftsNote(
+      trainDrafts,
+      trainDrafts.filter((draft) => turnRoutes.some((entry) => entry.trainIndex === draft.trainIndex)),
+    );
 
-             IT WAS NOT A MISLABEL SO MUCH AS A GUESS. `actionLog` had no way to know which train ran a given
-             route, so it named the corporation's LARGEST OWNED train and attached that -- see its own note.
-             With one route and a 5-train and a D-train in the fleet, the sentence necessarily said "with a
-             D-train" whichever train had actually run.
+    await runGameplayAction("RunMultipleRoutes", {
+      RunMultipleRoutes: {
+        game_id: gameId,
+        protocol_id: actingProtocolId,
+        routes: turnRoutes.map((entry) => entry.path),
+        /* ==================================================================
+           DESIGN NOTE 1020: WHICH TRAIN RAN WHICH ROUTE, ON THE WIRE
+           ==================================================================
+           REPORTED, the other half: the log "incorrectly labeled it as the D-train's run".
 
-             A PARALLEL ARRAY RATHER THAN A NEW ROUTE SHAPE, deliberately. Every action already in a saved log
-             carries `routes` as an array of paths, and this game is rebuilt by replaying that log -- changing
-             the element type would make every historical entry unreadable. `trains[i]` describes `routes[i]`,
-             is optional, and #232's rule covers its absence: a log that does not say which train ran is a log
-             that does not say, and the narration falls back to what it did before. */
-          trains: turnRoutes.map((entry) => entry.train),
-          // Design note #1031: the same list, identifying the FLEET SLOT rather than the model, so a
-          // corporation with two 5-trains can still be told which one earned what.
-          train_indices: turnRoutes.map((entry) => entry.trainIndex),
-          /* ==================================================================
-              DESIGN NOTE 1051: THE DIE IS ROLLED HERE, ONCE, AND THEN IT IS HISTORY
-             ==================================================================
-             THIS IS THE ONLY PLACE IN THE APP THAT DRAWS. The reducer cannot -- it replays on every client --
-             and the old hash could not, which is why it was predictable. One dispatch, one draw, written into
-             the message so every other client reads the number rather than computing one.
-             AND IT IS NOT ALWAYS A DRAW. `seedAlreadyRolled` scans the RAW log, including the entries an undo
-             has killed, for this turn's earlier roll. Found means the player has run, undone and come back:
-             they get the face they already saw, which is the requirement this feature was specified with --
-             "Undoing it should not change their roll, otherwise players would just slot machine their way to
-             +20%." Absent means this turn has genuinely not rolled yet.
-             `sandboxLogRef`, NOT the effective history. Every other reader in this file wants
-             `effectiveActions` and would be wrong here: the entry being looked for is BY DEFINITION one an
-             undo has struck out. See `turnSeed.ts` #1051 -- a tidy-up that "corrects" this to the effective
-             log reinstates the slot machine and nothing fails. */
-          revenue_seed: (() => {
-            const key = turnSeedKey(
-              gameState?.macro_round_number ?? 0,
-              gameState?.sub_round_index ?? 0,
-              actingProtocolId,
-            );
-            return seedAlreadyRolled(sandboxLogRef.current, key) ?? randomTurnSeed();
-          })(),
-          revenue_turn: turnSeedKey(
+           IT WAS NOT A MISLABEL SO MUCH AS A GUESS. `actionLog` had no way to know which train ran a given
+           route, so it named the corporation's LARGEST OWNED train and attached that -- see its own note.
+           With one route and a 5-train and a D-train in the fleet, the sentence necessarily said "with a
+           D-train" whichever train had actually run.
+
+           A PARALLEL ARRAY RATHER THAN A NEW ROUTE SHAPE, deliberately. Every action already in a saved log
+           carries `routes` as an array of paths, and this game is rebuilt by replaying that log -- changing
+           the element type would make every historical entry unreadable. `trains[i]` describes `routes[i]`,
+           is optional, and #232's rule covers its absence: a log that does not say which train ran is a log
+           that does not say, and the narration falls back to what it did before. */
+        trains: turnRoutes.map((entry) => entry.train),
+        // Design note #1031: the same list, identifying the FLEET SLOT rather than the model, so a
+        // corporation with two 5-trains can still be told which one earned what.
+        train_indices: turnRoutes.map((entry) => entry.trainIndex),
+        /* ==================================================================
+            DESIGN NOTE 1051: THE DIE IS ROLLED HERE, ONCE, AND THEN IT IS HISTORY
+           ==================================================================
+           THIS IS THE ONLY PLACE IN THE APP THAT DRAWS. The reducer cannot -- it replays on every client --
+           and the old hash could not, which is why it was predictable. One dispatch, one draw, written into
+           the message so every other client reads the number rather than computing one.
+           AND IT IS NOT ALWAYS A DRAW. `seedAlreadyRolled` scans the RAW log, including the entries an undo
+           has killed, for this turn's earlier roll. Found means the player has run, undone and come back:
+           they get the face they already saw, which is the requirement this feature was specified with --
+           "Undoing it should not change their roll, otherwise players would just slot machine their way to
+           +20%." Absent means this turn has genuinely not rolled yet.
+           `sandboxLogRef`, NOT the effective history. Every other reader in this file wants
+           `effectiveActions` and would be wrong here: the entry being looked for is BY DEFINITION one an
+           undo has struck out. See `turnSeed.ts` #1051 -- a tidy-up that "corrects" this to the effective
+           log reinstates the slot machine and nothing fails. */
+        revenue_seed: (() => {
+          const key = turnSeedKey(
             gameState?.macro_round_number ?? 0,
             gameState?.sub_round_index ?? 0,
             actingProtocolId,
-          ),
-          // Withhold at Routes; the pay-or-withhold decision belongs to the very next step.
-          // See docs/ai_architecture/routing_pathfinding.md - App.tsx #373
-          payout_strategy: "Withhold",
-        },
-      });
-    }
+          );
+          return seedAlreadyRolled(sandboxLogRef.current, key) ?? randomTurnSeed();
+        })(),
+        revenue_turn: turnSeedKey(
+          gameState?.macro_round_number ?? 0,
+          gameState?.sub_round_index ?? 0,
+          actingProtocolId,
+        ),
+        // Withhold at Routes; the pay-or-withhold decision belongs to the very next step.
+        // See docs/ai_architecture/routing_pathfinding.md - App.tsx #373
+        payout_strategy: "Withhold",
+      },
+    });
+    if (droppedNote !== null) showActionToast(droppedNote);
 
     /* ==================================================================
         DESIGN NOTE 917: THE DIVIDEND PAYS WHAT WAS BANKED, NOT WHAT WAS PLANNED
@@ -10294,7 +10320,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        callback on every poll for a read it no longer makes. */
     /* Design note #1020: `routeDrafts` joins the deps because the payload reads it directly now. It is the
        state `trainDrafts` is already derived from, so this adds no rebuild the callback was not doing. */
-  }, [runGameplayAction, gameId, trainDrafts, routeDrafts, actingProtocolId, ownsAnyTrain, mapGrid]);
+  }, [runGameplayAction, gameId, trainDrafts, routeDrafts, actingProtocolId, ownsAnyTrain, mapGrid, showActionToast]);
 
   // revenue_amount reads the same field the panel renders, so the figure on screen and the figure in the message cannot differ. Read inside the callback for declaration order.
   // See docs/ai_architecture/routing_pathfinding.md - App.tsx #198

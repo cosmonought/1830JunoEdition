@@ -1843,8 +1843,12 @@ const GOTCHAS: readonly { text: string; page: RulesSection }[] = [
   { text: "Buy Private Company is not a sixth operating step. From Phase 3 a corporation may buy one at any time during its Operating Turn.", page: "operating" },
   {
     /* Track-laying, so it belongs on Operating Round -- it linked to Auction before, which is where the
-       privates are listed but not where this rule lives. */
-    text: "A hex holding a Private Company a player still owns cannot be tiled. The CSL and DH exception hexes are not reserved: any corporation may tile them under the normal connection rules, and once another corporation tiles the DH hex the DH's special placement is gone.",
+       privates are listed but not where this rule lives.
+       PHASE 3 W3-J (AUD-25.02): this line said the CSL and DH hexes "are not reserved" -- false for the CSL, whose
+       B-20 the `LayTile` authority bars while a player owns it (`privateHexRefusal`; only the DH's F-16 is excepted,
+       #1694a). It now quotes this page's own authoritative sentences, verbatim: the track step's private-hex rule
+       and the DH card's lapse sentence (pinned by `phase3W3JRulesReferenceReservation.test.ts`). */
+    text: "A corporation may not place a tile on a hex containing a Private Company owned by a player. A hex containing a closed Private Company or a Private Company owned by a corporation may be tiled. If another corporation lays a tile on the DH starting hex under the ordinary rules, the DH special ability is no longer available.",
     page: "operating",
   },
   { text: "Withheld revenue, dividends on Bank Pool shares, and a corporation-owned Private Company's revenue all go to the corporation's treasury — the last is never paid out as dividends.", page: "operating" },
@@ -2211,7 +2215,7 @@ const CURSOR_PLANS: Readonly<Record<RulesWatchKey, CursorPlan>> = {
   },
   "or:Track": {
     watch: [
-      { label: "Privates on the map", from: () => gotchaText("A hex holding a Private Company a player still owns") },
+      { label: "Privates on the map", from: () => gotchaText("A corporation may not place a tile on a hex containing a Private Company") },
       { label: "Labelled hexes", from: () => operatingProse("track", "For labeled yellow-hex locations") },
       { label: "Cities", from: () => operatingProse("track", "The tile and hex must have") },
     ],

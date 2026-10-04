@@ -742,7 +742,7 @@ gates.
   A finding is fixed (W3-J), proven obsolete, or ruled by the owner. **Deferral to "polish" is not a disposition** (Part F).
 - **Starts:** in L6 after W3-C, or earlier whenever L6 is idle once wave 1 is integrated (read-mostly; its only writes are
   docs). **Gates:** owner review of the findings.
-- **Status (2026-10-04):** COMPLETE — OWNER REVIEW ACCEPTED (an accepted audit gate, not a product slice). Audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `c0a44d7`; audit `e86a933` + owner-review tracking). AUD-00.01 and AUD-22.01 done; findings AUD-25.01 … AUD-25.15 (Part C U-46 … U-55) accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b; rooms require the game server; no remediation slice); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE; no "polish later"); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed in §7.3). **INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration`** (merge `72ccd00` of `967e4e7`, parents `c0a44d7` / `967e4e7`; the current provisional baseline). Owner-observed follow-up AUD-25.16 (HIGH; Watch / stale actionable board; part (a) awaits OD-19) added 2026-10-04 -> W3-J; the gate's accepted status is unchanged. OPEN obligations: W3-B AUD-25.01 (MEDIUM); W3-J AUD-25.02 (MEDIUM), 25.03–25.10, 25.12 and AUD-25.13's FIX items; W3-F AUD-25.14. W3-J is unblocked. Reports: `claude/PHASE3_W3G_UI_PARITY_AUDIT_*`, `claude/PHASE3_W3G_OWNER_REVIEW_*`.
+- **Status (2026-10-04):** COMPLETE — OWNER REVIEW ACCEPTED (an accepted audit gate, not a product slice). Audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `c0a44d7`; audit `e86a933` + owner-review tracking). AUD-00.01 and AUD-22.01 done; findings AUD-25.01 … AUD-25.15 (Part C U-46 … U-55) accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b; rooms require the game server; no remediation slice); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE; no "polish later"); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed in §7.3). **INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration`** (merge `72ccd00` of `967e4e7`, parents `c0a44d7` / `967e4e7`; the current provisional baseline). Owner-observed follow-up AUD-25.16 (HIGH; Watch / stale actionable board; (A) resolved by OD-19, RULED 2026-10-04; (B), (C) OPEN) added 2026-10-04 -> W3-J; the gate's accepted status is unchanged. OPEN obligations: W3-B AUD-25.01 (MEDIUM); W3-J AUD-25.02 (MEDIUM), 25.03–25.10, 25.12 and AUD-25.13's FIX items; W3-F AUD-25.14. W3-J is unblocked. Reports: `claude/PHASE3_W3G_UI_PARITY_AUDIT_*`, `claude/PHASE3_W3G_OWNER_REVIEW_*`.
 
 #### W3-H
 **Flourish OPEN residuals and audio** · L4 · **5–8 h** · *new*
@@ -770,9 +770,12 @@ gates.
 **U-28 findings remediation** · distributed to the owning lane · **4–10 h reserve**
 - Each W3-G finding with a Phase-3 implementation disposition is assigned to the lane that owns its region and lands
   through the integrator like any slice.
-- **AUD-25.16 (HIGH, owner-observed 2026-10-04):** a stale board must never present an actionable state as current -- parts (b)
-  (stale at rest, no notice) and (c) (live controls; a tip-stamped click reaches the server) are W3-J work now; part (a) (Watch
-  identity) follows OD-19. Characterization tests: `components/phase3W3GWatchDefect.test.tsx` (DEFECT tests flip; KEEP tests stay).
+- **AUD-25.16 (HIGH, owner-observed 2026-10-04; OD-19 RULED):** (A) Watch identity RESOLVED BY OD-19 -- Watch is a read-only
+  spectator view, always (W3-J implements it; reopening a seat stays "Your tables" / Open / Rejoin); (B) a stale board can rest
+  silently behind -- OPEN; (C) a stale board can present and submit live gameplay actions -- OPEN, HIGH safety defect. W3-J meets
+  the stale-board safety requirement (§7.3 OD-19) on BOTH layers: non-actionable controls while replay / catch-up / divergence is
+  unresolved, AND a submission bound to the client's APPLIED log position that the server rejects when it does not match the
+  authoritative pre-action position. Characterization tests: `components/phase3W3GWatchDefect.test.tsx` (DEFECT tests flip; KEEP tests stay).
 
 #### W3-K
 **v13 rules batch** · L2 (or L6) · **8–14 h planned; ~14–22 h with OD-4 and its certification (an estimate)**
@@ -810,7 +813,7 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 | **OD-16** | PRODUCT (owner-authored) | The Terms page content (S10-12), required before the first real deposit | None | W2-M (hosting) | No |
 | **OD-17** | RULES | **RULED 2026-10-03 — see §7.3.** Tile-upgrade legality cross-references: VF D-18 (New York #54→#883 offered, #62→#883 not) and VF D-22 (#59 → brown OO facings that break fixed OO; 256 accepted transitions) | The placement filter accepts them | W3-K | No |
 | **OD-18** | PRODUCT | Confirm or reject the later placement of U-10 (clock / live-vs-async UX: the offer answerer on the clock, auto-decline, pause cap) and of the recorded limits (no host succession, no clock or forfeit for an absent seat). Confirmed → E with the ruling cited; rejected → scoped as Phase-3 slices | U-10 `DEFERRED` in Part C; the limits recorded in the 6.5 preflight | AUD-11.04, AUD-19.04 | No |
-| **OD-19** | PRODUCT | **Watch for a seated principal** (AUD-25.16 (a), owner-observed 2026-10-04). The Watch button promises "You will not have a seat", while the seat is the server's principal -> seat answer for every door. Either (a) Watch is ALWAYS read-only -- an explicit watch intent the shell (and, preferably, the server per socket) honours even for a participant; or (b) a participant is never offered Watch for their own table -- the row offers their seat's door ("Your tables" already lists it) and Watch stays for non-participants | One door (`onEnterSandbox(gameId)`); a participant who presses Watch is seated | W3-J (AUD-25.16 (a)) | No |
+| **OD-19** | PRODUCT | **RULED 2026-10-04 (Watch = read-only spectator, always; the participant path reopens a seat) — see §7.3.** **Watch for a seated principal** (AUD-25.16 (a), owner-observed 2026-10-04). The Watch button promises "You will not have a seat", while the seat is the server's principal -> seat answer for every door. Either (a) Watch is ALWAYS read-only -- an explicit watch intent the shell (and, preferably, the server per socket) honours even for a participant; or (b) a participant is never offered Watch for their own table -- the row offers their seat's door ("Your tables" already lists it) and Watch stays for non-participants | One door (`onEnterSandbox(gameId)`); a participant who presses Watch is seated | W3-J (AUD-25.16 (a)) | No |
 
 ### 7.1 Not owner decisions (implementation defaults; the owner may object at a gate)
 
@@ -914,6 +917,19 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - (i) Phase 3 gets a bounded money-panel consistency pass. The goal is to make the money panel visually belong to the rest of the game and stop there.
 - (i) W2-K / W2-M may extend the established styling while touching money UI, but this is NOT permission for a money-panel redesign or broader frontend refactor.
 - *Effect on this plan:* OD-14(d) and OD-14(i): RULED. AUD-12.07 RULED ("traded" kept; no change). (i) bounds W2-K's panel pass and any W2-M money-UI styling. OD-14(a)–(c) and (e)–(h) remain open.
+
+**OD-19 — WATCH IS A READ-ONLY SPECTATOR VIEW (AUD-25.16).** (Ruled 2026-10-04, from the owner's OD-19 decision on the W3-G Watch-defect triage.)
+- ACCEPT the Watch defect classification as HIGH.
+- "Watch" always opens a READ-ONLY spectator view.
+- This remains true even when the signed-in user already occupies a seat in that game.
+- Watch must NOT silently reinterpret the viewer as their seated player.
+- Re-entering an owned seat belongs to the existing participant path: "Your tables" / Open / Rejoin.
+- Preserve the existing user-facing meaning already stated by the Watch control: "Watch this game. You will not have a seat."
+- **Stale-board safety requirement (recorded separately, part of AUD-25.16; independent of spectator policy):** a client whose locally APPLIED board state is behind the authoritative game state must never be allowed to submit a gameplay action as though its board were current. The W3-J remediation addresses BOTH layers:
+  - CLIENT: while replay / catch-up / divergence remains unresolved, gameplay controls are non-actionable; stale local turn authority must not enable a move.
+  - SUBMISSION / SERVER SAFETY: do not rely only on the browser hiding / disabling controls; the submission must carry / bind to the revision / log position actually APPLIED to the client's board, not merely the newest log position received; the server must reject a gameplay action whose client-applied position does not match the authoritative pre-action position.
+  - The exact protocol implementation belongs to W3-J investigation / review.
+- *Effect on this plan:* OD-19: RULED. AUD-25.16 (U-56) stays OPEN, HIGH, owner W3-J: (A) Watch identity RESOLVED BY OD-19 as policy (W3-J implements the read-only Watch); (B) stale board can remain silently behind -- OPEN / W3-J; (C) stale board can present and submit live gameplay actions -- OPEN / W3-J, HIGH safety defect. W3-G stays COMPLETE — OWNER REVIEW ACCEPTED; W3-J unblocked.
 
 *Also from that brief (constraints on integrated slices, not new rulings):* W2-H keeps the Routes/Dividends informational
 visibility for non-active players (home/auction actors get controls, others a status) — this is OD-1's viewer scope for those two

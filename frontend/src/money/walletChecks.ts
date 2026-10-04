@@ -292,9 +292,50 @@ export interface ChainGameFacts {
   /** The settlement Juno stores for the game, if any: its sequence and payload digest (review S-H1: what a device
    *  approves is what the chain holds, read here). */
   readonly settlement: { readonly seq: string; readonly payloadDigest: string } | null;
+  /** W2-M (JX-6C): the escrow's challenge bond (base units), exactly what a Dispute must attach; null before Start. */
+  readonly bond: string | null;
+  /** W2-M (JX-6C): when the challenge window closes (ms; the chain gives it only while SETTLEABLE). */
+  readonly challengeWindowEndMs: number | null;
+  /** W2-M (JX-6E): when the resolver's time runs out (ms; the chain gives it only while DISPUTED). */
+  readonly resolverTimeoutAtMs: number | null;
+  /** W2-M (JX-6E): the game's resolver window (seconds after a dispute lands), from the terms it was created with. */
+  readonly resolverTimeoutSecs: number | null;
+  /** W2-M (JX-6E): the game's dispute record, as Juno keeps it (also after the resolver or the timeout closed it). */
+  readonly dispute: ChainDisputeRecord | null;
+}
+
+/** How Juno closed a dispute (the contract's `DisputeResolution`). */
+export type ChainDisputeResolution = "upheld" | "replaced" | "annulled" | "resolver_timeout";
+
+/** A game's dispute record as Juno holds it (`DisputeRecord`): who disputed, the bond, the evidence, when, and how it
+ *  ended (null while open). Read by this browser through the pinned endpoint; never the server's word. */
+export interface ChainDisputeRecord {
+  readonly challenger: string;
+  readonly bond: string | null;
+  readonly evidenceHash: string | null;
+  readonly disputedAtMs: number | null;
+  readonly resolution: ChainDisputeResolution | null;
+  readonly resolvedAtMs: number | null;
 }
 
 const nanosToMs = (value: unknown): number | null => (typeof value === "string" && /^[0-9]{1,30}$/.test(value) ? Number(BigInt(value) / BigInt(1_000_000)) : null);
+const RESOLUTIONS: readonly ChainDisputeResolution[] = ["upheld", "replaced", "annulled", "resolver_timeout"];
+
+/** A dispute record, read tolerantly: no challenger, no record (null). */
+function disputeOf(raw: unknown, hex32: (value: unknown) => string | null, decimal: (value: unknown) => string | null): ChainDisputeRecord | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const d = raw as Record<string, unknown>;
+  if (typeof d.challenger !== "string" || d.challenger === "") return null;
+  const resolution = typeof d.resolution === "string" && (RESOLUTIONS as readonly string[]).includes(d.resolution) ? (d.resolution as ChainDisputeResolution) : null;
+  return { challenger: d.challenger, bond: decimal(d.bond), evidenceHash: hex32(d.evidence_hash), disputedAtMs: nanosToMs(d.disputed_at), resolution, resolvedAtMs: nanosToMs(d.resolved_at) };
+}
+
+/** The game's resolver window in seconds (a JSON integer, or its decimal text), or null. */
+function secondsOf(value: unknown): number | null {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return value;
+  if (typeof value === "string" && /^(0|[1-9][0-9]{0,14})$/.test(value)) return Number(value);
+  return null;
+}
 
 /** A chain `GameResponse`, read tolerantly for the checked fields only (null: not one). */
 export function chainGameFactsOf(raw: unknown): ChainGameFacts | null {
@@ -311,6 +352,9 @@ export function chainGameFactsOf(raw: unknown): ChainGameFacts | null {
   });
   const hex32 = (value: unknown): string | null => (typeof value === "string" && /^[0-9a-fA-F]{64}$/.test(value) ? value.toLowerCase() : null);
   const decimal = (value: unknown): string | null => (typeof value === "string" && /^(0|[1-9][0-9]{0,19})$/.test(value) ? value : null);
+  /* Base units (Uint128): up to 39 digits, never a float. */
+  const amount = (value: unknown): string | null => (typeof value === "string" && /^(0|[1-9][0-9]{0,38})$/.test(value) ? value : null);
+  const terms = typeof g.terms === "object" && g.terms !== null ? (g.terms as Record<string, unknown>) : {};
   const stored = g.settlement as Record<string, unknown> | null | undefined;
   const payload = typeof stored === "object" && stored !== null ? (stored.payload as Record<string, unknown> | undefined) : undefined;
   const storedSeq = typeof payload === "object" && payload !== null ? decimal(payload.seq) : null;
@@ -330,7 +374,29 @@ export function chainGameFactsOf(raw: unknown): ChainGameFacts | null {
     domain: hex32(g.domain),
     trustedSeq: decimal(r.trusted_seq),
     settlement: storedSeq !== null && storedDigest !== null ? { seq: storedSeq, payloadDigest: storedDigest } : null,
+    bond: amount(g.bond),
+    challengeWindowEndMs: nanosToMs(d.challenge_window_end),
+    resolverTimeoutAtMs: nanosToMs(d.resolver_timeout_at),
+    resolverTimeoutSecs: secondsOf(terms.resolver_timeout_secs),
+    dispute: disputeOf(g.dispute, hex32, amount),
   };
+}
+
+/** W2-M (AUD-20.06, JX-6C): why a Dispute must not be signed against the escrow game as Juno holds it now (null: it
+ *  may). The bond the browser attaches and the settlement it disputes are bound to the ones this page showed the
+ *  player: Juno -- read here through the pinned endpoint -- must still be open to a challenge, store exactly that
+ *  settlement (sequence and payload digest), ask exactly that bond, and its window must not have closed. Any
+ *  difference refuses before Keplr opens; nothing is signed. */
+export function challengeProblem(view: RoomMoneyView, facts: ChainGameFacts, now: number): string | null {
+  const s = view.settlement;
+  if (s === null || s.seq === null || s.settleDigest === null) return "Juno hasn't recorded a payout this page can show, so there's nothing to dispute yet. Nothing was sent.";
+  if (facts.state !== "SETTLEABLE") return `The payout on Juno can't be disputed now (the escrow is ${facts.state.toLowerCase().replace(/_/g, " ")}), so nothing was sent.`;
+  if (facts.settlement === null || facts.settlement.seq !== s.seq || facts.settlement.payloadDigest !== s.settleDigest) {
+    return "The payout Juno holds isn't the one this page showed you (it may have just changed), so nothing was sent. Look at the payout again before disputing.";
+  }
+  if (facts.bond === null || s.bond === null || facts.bond !== s.bond) return "Juno asks for a different dispute bond than this page showed you, so nothing was sent. Look at the payout again before disputing.";
+  if (facts.challengeWindowEndMs === null || facts.challengeWindowEndMs <= now) return "The challenge window on Juno has closed, so a dispute can't land. Nothing was sent.";
+  return null;
 }
 
 /** Why a Join must not be sent into this chain game (null: it matches the table exactly and is taking deposits). */

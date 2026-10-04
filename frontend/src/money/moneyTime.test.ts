@@ -62,8 +62,12 @@ describe("W2-K: one money-time formatter, local time with an explicit zone", () 
       const source = readStripped(file);
       expect({ file, hhmm: /\bhhmm\b|getHours\(|getMinutes\(|toLocaleTimeString\(|toISOString\(/.test(source) }).toEqual({ file, hhmm: false });
     }
-    for (const file of ["money/moneyFlow.ts", "components/money/MoneyPanel.tsx", "components/money/SettlementBand.tsx"]) {
+    for (const file of ["money/moneyFlow.ts", "components/money/MoneyPanel.tsx"]) {
       expect({ file, uses: readStripped(file).includes("formatMoneyTime(") }).toEqual({ file, uses: true });
     }
+    /* W2-M (AUD-20.07): the band's one time -- the resolver's deadline in the dispute confirm -- is worded by
+       moneyFlow's `disputeConfirmSentence` (which uses the formatter above), as is its dispute record. */
+    const band = readStripped("components/money/SettlementBand.tsx");
+    expect({ uses: band.includes("formatMoneyTime(") || (band.includes("disputeConfirmSentence(") && band.includes("disputeRecordLines(")) }).toEqual({ uses: true });
   });
 });

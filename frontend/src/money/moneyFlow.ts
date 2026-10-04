@@ -23,6 +23,7 @@
 
 import { formatAmount, shortWallet, type MoneyAction, type MoneySeatFunding, type MoneyStartBlocker, type RoomMoneyView } from "../utils/moneyProtocol";
 import type { PendingWalletTx } from "./pendingTx";
+import type { ChainDisputeRecord, ChainDisputeResolution } from "./walletChecks";
 import { formatMoneyTime } from "./moneyTime";
 
 export type StepKey = "connect" | "confirm" | "link" | "review" | "approve" | "sent" | "funded" | "locked";
@@ -63,7 +64,9 @@ export type ActionKind =
   | "move-signing-key"
   /* Started on Juno but not dealt here (the waiting room still shows): the escrow's own exits (review R-M10). */
   | "liveness-settle"
-  | "annul";
+  | "annul"
+  /* W2-M (AUD-20.02): prove the SAME linked wallet again (free) -- a deposit needs a proof from the last 24 hours. */
+  | "reprove";
 
 export interface FlowAction {
   readonly kind: ActionKind;
@@ -102,6 +105,22 @@ export interface FlowInput {
   /** UI-local: the review card is open, or Keplr is being asked right now. */
   readonly ui: "idle" | "review" | "approving";
   readonly now: number;
+  /** W2-M (AUD-20.02): this seat's wallet proof can't be counted on for a deposit -- `aged`: the newest proof this
+   *  page knows of (the link's own time, or a re-proof from this page) is older than the server accepts; `refused`:
+   *  the server refused a deposit for want of a fresh proof (its own word). Absent or null: nothing known against it. */
+  readonly proof?: "aged" | "refused" | null;
+}
+
+/** The server's limit on a wallet proof's age for a deposit's join approval (`server/src/escrow/escrowPorts.ts`
+ *  `WALLET_PROOF_MAX_AGE_MS`). Mirrored for the panel's wording only: the server still decides every admission. */
+export const WALLET_PROOF_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+/** A proof this close to the limit is treated as aged: a deposit takes a few minutes from Review to the approval. */
+export const WALLET_PROOF_MARGIN_MS = 5 * 60 * 1000;
+
+/** Whether a proof made at `provenAt` may be too old for a deposit's approval at `now` (null: no proof known). */
+export function proofAgedOut(provenAt: number | null, now: number): boolean {
+  if (provenAt === null || !Number.isFinite(provenAt)) return true;
+  return now - provenAt >= WALLET_PROOF_MAX_AGE_MS - WALLET_PROOF_MARGIN_MS;
 }
 
 export const amountText = (view: RoomMoneyView, base: string | null): string => formatAmount(base, view.deployment.exponent, view.deployment.symbol);
@@ -292,6 +311,28 @@ export function seatFlow(input: FlowInput): SeatFlow {
     offer("cancel-escrow", CANCEL_FLOW);
     offer("refund-after-deadline", REFUND_FLOW);
     const blocker = walletBlocker(wallet, link.wallet);
+    /* W2-M (AUD-20.02, JX-3A E-1): a joiner's deposit needs the server's join approval, and that needs a wallet proof
+       from the last 24 hours. A seat whose proof can't be counted on no longer reads "Wallet linked" with a Deposit
+       that will be refused: it says so, and offers the free re-proof of the SAME wallet (Connect and Confirm first,
+       as a link does) -- never "Change wallet", which is for another wallet. The host's own CreateGame needs no
+       approval, so a host is never sent here. */
+    if (canDeposit && !isHost && input.proof != null && ui !== "approving") {
+      const needs: FlowAction =
+        wallet.kind !== "connected" ? { kind: "connect", label: "Connect wallet", tone: "primary" } : !confirmed ? { kind: "confirm", label: "Confirm it's you", tone: "primary" } : { kind: "reprove", label: "Re-prove wallet (free)", tone: "primary", title: "Keplr signs a message proving you still control this wallet. It moves no funds." };
+      const why =
+        input.proof === "refused"
+          ? "The server needs a fresh proof that you control this wallet before it approves a deposit."
+          : "This wallet was linked more than a day ago, and a deposit needs a proof from the last 24 hours that you control it.";
+      return {
+        stage: "funding",
+        step: needs.kind === "connect" ? "connect" : needs.kind === "confirm" ? "confirm" : "link",
+        headline: `Re-prove ${shortWallet(link.wallet)} to deposit`,
+        detail: `${why} Re-proving is free: Keplr signs a message and nothing moves. Then deposit.${closes === null ? "" : ` ${closes}`}${rolledBack}`,
+        primary: has(view, "link-wallet") ? needs : null,
+        others,
+        blocker,
+      };
+    }
     if (!canDeposit) {
       return {
         stage: "funding",
@@ -472,4 +513,96 @@ function settlementFlowFor(input: SettlementInput): SettlementFlow {
     default:
       return { headline: "The settlement's state isn't known yet.", detail: null, actions: acts, paid };
   }
+}
+
+/* ==================================================================
+    W2-M: SENTENCES FOR WHAT EXPIRED, AND FOR A DISPUTE (pure; the hook and the band call them)
+   ================================================================== */
+
+/** W2-M (AUD-20.04, JX-3A E-3): the server answered `reauth-required`. If this page believed it held a "Confirm it's
+ *  you" grant (`believedUntil`, the page's own record of the server's answer), say what happened to it -- it lapsed
+ *  at a time, or the server ended it early -- instead of the generic "Confirm it's you first". Null when this page
+ *  never confirmed: the server's own sentence is the right one then. */
+export function reconfirmSentence(believedUntil: number | null, now: number): string | null {
+  if (believedUntil === null || !Number.isFinite(believedUntil)) return null;
+  if (believedUntil > now) {
+    return "Your “Confirm it's you” ended early on the server (signing in again, a session refresh or a sign-out from another device ends it). Confirm it's you again to continue; nothing was changed.";
+  }
+  return `Your “Confirm it's you” expired at ${formatMoneyTime(believedUntil, { now })} (it lasts 5 minutes). Confirm it's you again to continue; nothing was changed.`;
+}
+
+/** W2-M (AUD-20.04, JX-3A E-3): the server no longer holds the link request this page had Keplr sign
+ *  (`challenge-expired`). Past the request's own expiry (`expiresAt`, from the text this page checked), it expired
+ *  while Keplr was open; before it, the server dropped it (a newer request from this session replaces it, and a
+ *  session refresh or a server restart ends it). Nothing was linked either way. */
+export function linkRequestEndedSentence(expiresAt: number | null, now: number): string {
+  if (expiresAt !== null && Number.isFinite(expiresAt) && now >= expiresAt) {
+    return `The link request expired at ${formatMoneyTime(expiresAt, { now })}, before it reached the server (a request lasts 5 minutes, and Keplr was open longer). Nothing was linked; start the link again.`;
+  }
+  return "The server no longer holds that link request (a newer link request from this device, a session refresh or a server restart replaces it). Nothing was linked; start the link again.";
+}
+
+/** A whole number of seconds as words ("2 hours", "1 day 6 hours", "45 minutes"): integers only, two units at most. */
+export function durationText(seconds: number): string {
+  if (!Number.isSafeInteger(seconds) || seconds < 0) return "";
+  const units: ReadonlyArray<readonly [number, string]> = [
+    [86_400, "day"],
+    [3_600, "hour"],
+    [60, "minute"],
+    [1, "second"],
+  ];
+  const parts: string[] = [];
+  let left = seconds;
+  for (const [size, name] of units) {
+    const count = Math.floor(left / size);
+    if (count > 0 && parts.length < 2) parts.push(`${count} ${name}${count === 1 ? "" : "s"}`);
+    left -= count * size;
+  }
+  return parts.length === 0 ? "0 seconds" : parts.join(" ");
+}
+
+/** What this page read from Juno for the dispute confirm and the dispute record (`moneyActions.disputeChainFacts`):
+ *  loading, the chain's facts, or why they couldn't be read. Never the server's word. */
+export type DisputeRead =
+  | { readonly kind: "loading" }
+  | { readonly kind: "read"; readonly resolverTimeoutSecs: number | null; readonly bond: string | null; readonly dispute: ChainDisputeRecord | null; readonly seats: readonly string[] }
+  | { readonly kind: "unavailable"; readonly reason: string };
+
+/** W2-M (AUD-20.07, JX-6E): the question asked before a Dispute opens Keplr -- the bond, and WHEN the resolver must
+ *  decide. While the payout is still open to a challenge Juno has no resolver deadline yet (it starts when a dispute
+ *  lands), so the time is the game's own resolver window, read from Juno, counted from now. */
+export function disputeConfirmSentence(view: RoomMoneyView, read: DisputeRead | null, now: number): string {
+  const bond = amountText(view, read?.kind === "read" && read.bond !== null ? read.bond : (view.settlement?.bond ?? null));
+  const ask = `Dispute the payout recorded on Juno? Keplr attaches the ${bond} bond.`;
+  let deadline: string;
+  if (read === null || read.kind === "loading") deadline = "The resolver's deadline is being read from Juno…";
+  else if (read.kind === "unavailable" || read.resolverTimeoutSecs === null) deadline = "The resolver's deadline couldn't be read from Juno just now; Juno sets it when the dispute lands.";
+  else deadline = `If Juno records it now, the resolver has ${durationText(read.resolverTimeoutSecs)} to decide: until about ${formatMoneyTime(now + read.resolverTimeoutSecs * 1000, { now })}.`;
+  return `${ask} ${deadline} If the dispute fails, the bond joins the pool.`;
+}
+
+const RESOLVED: Readonly<Record<ChainDisputeResolution, string>> = {
+  upheld: "The resolver upheld the recorded payout",
+  replaced: "The resolver replaced the recorded payout",
+  annulled: "The resolver annulled the game; deposits came back",
+  resolver_timeout: "The resolver didn't decide in time; the dispute closed through Juno's timeout",
+};
+
+/** W2-M (AUD-20.07, JX-6E): the band's dispute record, as Juno holds it -- who disputed (you, or which seat), when,
+ *  the bond, the evidence it recorded, and how it ended. Empty when there is no dispute; one honest line when Juno
+ *  couldn't be read (the headline still says where the money is). */
+export function disputeRecordLines(view: RoomMoneyView, read: DisputeRead | null, now: number): string[] {
+  if (read === null || read.kind === "loading") return [];
+  if (read.kind === "unavailable") return ["The dispute's record couldn't be read from Juno just now."];
+  const d = read.dispute;
+  if (d === null) return [];
+  const seatIndex = read.seats.indexOf(d.challenger);
+  const mine = view.you?.payoutWallet != null && view.you.payoutWallet === d.challenger;
+  const who = mine ? "you" : seatIndex >= 0 ? `seat ${seatIndex + 1} (${shortWallet(d.challenger)})` : shortWallet(d.challenger);
+  const when = d.disputedAtMs === null ? "" : ` at ${formatMoneyTime(d.disputedAtMs, { now })}`;
+  const bond = d.bond === null ? "" : `, with a ${amountText(view, d.bond)} bond`;
+  const lines = [`Disputed by ${who}${when}${bond}.`];
+  if (d.evidenceHash !== null) lines.push(`Evidence recorded on Juno: ${d.evidenceHash.slice(0, 16)}…`);
+  if (d.resolution !== null) lines.push(`${RESOLVED[d.resolution]}${d.resolvedAtMs === null ? "" : ` at ${formatMoneyTime(d.resolvedAtMs, { now })}`}.`);
+  return lines;
 }

@@ -20,11 +20,13 @@ import type { SessionPort } from "../utils/sessionBootstrap";
 import {
   agreeToAnnul,
   approveDeposit,
+  disputeChainFacts,
   approvePayout,
   connectWallet,
   escrowExit,
   linkWallet,
   moveSigningKeyHere,
+  prepareReplace,
   reconcilePending,
   resendPending,
   settleLandedDeposits,
@@ -34,11 +36,12 @@ import {
   type TableContext,
   type Verification,
 } from "./moneyActions";
-import { seatFlow, settlementFlow, type ActionKind, type SeatFlow, type SettlementActionKind, type SettlementFlow, type WalletState } from "./moneyFlow";
-import { bumpLocal, isConfirmed, moneyServices, updateMoneySession, useMoneySession, type MoneyServices } from "./moneySession";
+import { proofAgedOut, seatFlow, settlementFlow, type ActionKind, type DisputeRead, type SeatFlow, type SettlementActionKind, type SettlementFlow, type WalletState } from "./moneyFlow";
+import { bumpLocal, isConfirmed, moneyServices, moneySession, proofKey, updateMoneySession, useMoneySession, type MoneyServices } from "./moneySession";
 import type { PendingWalletTx } from "./pendingTx";
 
-export type MoneyActionKind = ActionKind | SettlementActionKind;
+/** `replace-confirmed`: the player answered "Replace wallet" to the question "Change wallet" asked first (W2-M). */
+export type MoneyActionKind = ActionKind | SettlementActionKind | "replace-confirmed";
 
 export interface MoneyTableInput {
   readonly gameId: string;
@@ -68,8 +71,16 @@ export interface MoneyTable {
   readonly busy: MoneyActionKind | null;
   readonly notice: string | null;
   readonly error: string | null;
-  /** A step the player must take before the action can run: "Confirm it's you", or the wallet replacement question. */
-  readonly needs: { readonly kind: "confirm"; readonly then: MoneyActionKind | null } | { readonly kind: "replace" } | null;
+  /** A step the player must take before the action can run: "Confirm it's you", or the wallet replacement question
+   *  (W2-M: asked BEFORE Keplr signs, naming the linked wallet and the one Keplr is on, when they are known). */
+  readonly needs: { readonly kind: "confirm"; readonly then: MoneyActionKind | null } | { readonly kind: "replace"; readonly from: string | null; readonly to: string | null; readonly again: boolean } | null;
+  /** W2-M (AUD-20.07, JX-6E): Juno's dispute facts for the dispute confirm (read when it opens), or null. */
+  readonly disputeTerms: DisputeRead | null;
+  /** W2-M (AUD-20.07, JX-6E): Juno's dispute record for the band (read while disputed or once a resolver route
+   *  closed it), or null when there is none to read. */
+  readonly disputeRecord: DisputeRead | null;
+  /** Read Juno's dispute facts for the confirm the band is about to show (W2-M). */
+  readDisputeTerms(): void;
   /** The review card is open (deposit terms shown before "Approve in Keplr"). */
   readonly reviewing: boolean;
   run(kind: MoneyActionKind): Promise<void>;
@@ -94,6 +105,13 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
   const [holdsChainKey, setHoldsChainKey] = useState(false);
   const [verification, setVerification] = useState<Verification | null>(null);
   const [now, setNow] = useState(() => services.now());
+  /* W2-M (AUD-20.02): the server refused a deposit's approval for want of a fresh proof -- for THIS link (wallet and
+     epoch); a later accepted link clears it. */
+  const [proofRefusedFor, setProofRefusedFor] = useState<string | null>(null);
+  const [disputeTerms, setDisputeTerms] = useState<DisputeRead | null>(null);
+  const [disputeRecord, setDisputeRecord] = useState<DisputeRead | null>(null);
+  /* W2-M (AUD-20.03): the wallet the player agreed to replace the link with (what "Replace wallet" links, or nothing). */
+  const replaceTo = useRef<string | null>(null);
   const busyRef = useRef<MoneyActionKind | null>(null);
   const latest = useRef(input);
   latest.current = input;
@@ -212,11 +230,47 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     return () => clearTimeout(timer);
   }, [verification, settleStatus]);
 
+  /* W2-M (AUD-20.02): can this seat's wallet proof be counted on for a deposit? The newest proof this page knows of is
+     the link's own (`linkedAt`) or one this page had accepted since (the session's record); the server's refusal is
+     its own word. Nothing here says a proof is fresh that the server hasn't accepted. */
+  const link = you?.link ?? null;
+  const linkTag = link === null ? null : `${link.wallet}#${link.epoch}`;
+  const renewedAt = link === null || you === null ? undefined : session.proofRenewedAt[proofKey(input.gameId, you.playerId, link.wallet)];
+  const proof: "aged" | "refused" | null = link === null ? null : proofRefusedFor !== null && proofRefusedFor === linkTag ? "refused" : proofAgedOut(Math.max(link.linkedAt, renewedAt ?? Number.NEGATIVE_INFINITY), now) ? "aged" : null;
+
   const confirmedNow = isConfirmed(session, now);
   const flow = useMemo(
-    () => (view === null ? null : seatFlow({ view, isHost: input.isHost, wallet, confirmed: confirmedNow, pending, holdsChainKey, ui: busy === "approve" ? "approving" : reviewing ? "review" : "idle", now })),
-    [view, input.isHost, wallet, confirmedNow, pending, holdsChainKey, busy, reviewing, now],
+    () => (view === null ? null : seatFlow({ view, isHost: input.isHost, wallet, confirmed: confirmedNow, pending, holdsChainKey, ui: busy === "approve" ? "approving" : reviewing ? "review" : "idle", now, proof })),
+    [view, input.isHost, wallet, confirmedNow, pending, holdsChainKey, busy, reviewing, now, proof],
   );
+
+  /* W2-M (AUD-20.07, JX-6E): the band's dispute record, read from Juno while the payout is disputed, and once a
+     resolver route (or its timeout) closed it -- again whenever the status or route moves, and every 30 s while it
+     couldn't be read. */
+  const chainGameId = view?.escrow.chainGameId ?? null;
+  const settleRoute = view?.settlement?.route ?? null;
+  const wantsRecord = view !== null && view.you !== null && chainGameId !== null && (settleStatus === "disputed" || (settleRoute !== null && settleRoute.startsWith("resolver_")));
+  const [recordRetry, setRecordRetry] = useState(0);
+  useEffect(() => {
+    if (!wantsRecord) {
+      setDisputeRecord(null);
+      return undefined;
+    }
+    let live = true;
+    setDisputeRecord((current) => current ?? { kind: "loading" });
+    void disputeChainFacts(latest.current.view as RoomMoneyView, services).then((read) => {
+      if (live) setDisputeRecord(read);
+    });
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wantsRecord, chainGameId, settleStatus, settleRoute, recordRetry]);
+  useEffect(() => {
+    if (disputeRecord === null || disputeRecord.kind !== "unavailable" || !wantsRecord) return undefined;
+    const timer = setTimeout(() => setRecordRetry((count) => count + 1), 30_000);
+    return () => clearTimeout(timer);
+  }, [disputeRecord, wantsRecord]);
   /* A check is about ONE recorded payout: a result for another digest (the view moved on) counts as none. */
   const checked = verification !== null && verification.settleDigest === settleDigest ? verification : null;
   const settlement = useMemo(() => (view === null ? null : settlementFlow({ view, holdsChainKey, verification: checked?.result ?? "unavailable", now, keplr: wallet.kind !== "unavailable" && wallet.kind !== "no-pin" })), [view, holdsChainKey, checked, now, wallet.kind]);
@@ -239,8 +293,24 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
         case "link":
         case "relink":
           return linkWallet(ctx);
-        case "replace-link":
-          return linkWallet(ctx, { replace: true });
+        case "reprove": {
+          /* W2-M (AUD-20.02): the SAME linked wallet, proven again -- never another one. */
+          const wallet = ctx.view.you?.link?.wallet;
+          return wallet === undefined ? { ok: false, reason: "This seat has no linked wallet to prove again." } : linkWallet(ctx, { expectWallet: wallet, reprove: true });
+        }
+        case "replace-link": {
+          /* W2-M (AUD-20.03): ask first, sign once. Nothing is asked of Keplr here but its current account. */
+          const asked = await prepareReplace(ctx);
+          if (!asked.ok) return asked.outcome;
+          replaceTo.current = asked.to;
+          setNeeds({ kind: "replace", from: asked.from, to: asked.to, again: false });
+          return { ok: true };
+        }
+        case "replace-confirmed": {
+          const to = replaceTo.current;
+          if (to === null) return { ok: false, reason: "Press Change wallet again: the wallet to link isn't known." };
+          return linkWallet(ctx, { replace: true, expectWallet: to });
+        }
         case "open-review":
           setReviewing(true);
           return { ok: true };
@@ -289,12 +359,26 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
         const outcome = await perform(kind);
         if (outcome.ok) {
           if (outcome.notice) setNotice(outcome.notice);
-          if (kind !== "confirm") setNeeds(null);
+          /* "Change wallet" opens its question (the replacement); every other success closes any. */
+          if (kind !== "confirm" && kind !== "replace-link") setNeeds(null);
+          if (kind === "link" || kind === "relink" || kind === "reprove" || kind === "replace-confirmed") {
+            setProofRefusedFor(null);
+            if (kind === "replace-confirmed") replaceTo.current = null;
+          }
+        } else if (outcome.needs === "replace") {
+          /* The server asked whether to replace (the view hadn't shown the standing link yet; its answer spent that link
+             request, so Keplr signs once more -- the case only a server change could save). The question names both
+             wallets as far as this page knows them: one surface, not an error beside it. */
+          replaceTo.current = moneySession().address;
+          setNeeds({ kind: "replace", from: latest.current.view?.you?.link?.wallet ?? null, to: replaceTo.current, again: true });
         } else {
           setError(outcome.reason);
           if (outcome.needs === "confirm") setNeeds({ kind: "confirm", then: kind });
-          else if (outcome.needs === "replace") setNeeds({ kind: "replace" });
           else if (outcome.needs === "connect") updateMoneySession({ wallet: "disconnected", address: null });
+          else if (outcome.needs === "reprove") {
+            const current = latest.current.view?.you?.link ?? null;
+            setProofRefusedFor(current === null ? null : `${current.wallet}#${current.epoch}`);
+          }
         }
       } catch (thrown) {
         /* Nothing here should throw; if something does, say so plainly (and nothing was signed after a throw). */
@@ -340,7 +424,18 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     openReview: () => setReviewing(true),
     closeReview: () => setReviewing(false),
     confirmed: continueAfterConfirm,
-    cancelNeeds: () => setNeeds(null),
+    disputeTerms,
+    disputeRecord,
+    readDisputeTerms: () => {
+      const current = latest.current.view;
+      if (current === null) return;
+      setDisputeTerms({ kind: "loading" });
+      void disputeChainFacts(current, services).then(setDisputeTerms);
+    },
+    cancelNeeds: () => {
+      replaceTo.current = null;
+      setNeeds(null);
+    },
     dismiss: () => {
       setNotice(null);
       setError(null);

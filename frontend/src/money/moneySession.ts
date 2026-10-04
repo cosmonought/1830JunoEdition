@@ -22,6 +22,11 @@ export interface MoneySessionState {
   readonly address: string | null;
   /** Server ms until which this session's "Confirm it's you" grant is believed live (null: none). */
   readonly confirmedUntil: number | null;
+  /** W2-M (AUD-20.02): when THIS page last had a wallet proof accepted by the server, per table, seat and wallet
+   *  (`proofKey`). The view's `linkedAt` is when the link was made; a same-wallet re-proof keeps it, so without this a
+   *  page that just re-proved would still read as aged. Like the grant above: this page's own knowledge, never
+   *  persisted -- after a reload the browser goes by `linkedAt` alone (at worst, one more free re-proof). */
+  readonly proofRenewedAt: Readonly<Record<string, number>>;
   /** Bumped when this browser's pending transactions or signing keys change (components re-read them). */
   readonly localVersion: number;
 }
@@ -49,7 +54,7 @@ export function installMoneyServicesForTests(next: MoneyServices | null): void {
   listeners.forEach((listener) => listener());
 }
 
-const INITIAL: MoneySessionState = Object.freeze({ wallet: "unknown", address: null, confirmedUntil: null, localVersion: 0 });
+const INITIAL: MoneySessionState = Object.freeze({ wallet: "unknown", address: null, confirmedUntil: null, proofRenewedAt: Object.freeze({}), localVersion: 0 });
 let state: MoneySessionState = INITIAL;
 const listeners = new Set<() => void>();
 
@@ -76,6 +81,14 @@ export function subscribeMoneySession(listener: () => void): () => void {
 
 export function useMoneySession(): MoneySessionState {
   return useSyncExternalStore(subscribeMoneySession, moneySession, moneySession);
+}
+
+/** The key of `proofRenewedAt`: one table, one seat, one wallet. */
+export const proofKey = (gameId: string, playerId: string, wallet: string): string => `${gameId}\u0000${playerId}\u0000${wallet}`;
+
+/** The server accepted a fresh wallet proof from this page at `at` (W2-M, AUD-20.02). */
+export function recordProofRenewed(gameId: string, playerId: string, wallet: string, at: number): void {
+  updateMoneySession({ proofRenewedAt: Object.freeze({ ...state.proofRenewedAt, [proofKey(gameId, playerId, wallet)]: at }) });
 }
 
 /** Whether the page believes it holds a live grant (the server still decides; a refusal clears it). */

@@ -503,6 +503,9 @@ describe("T3 fast path (owner priority): what must be known before T3, what may 
   });
 
   test("T0 is read-only: every AWS CLI call in it (and in the fast path) reads, and no Terraform command in it writes", () => {
+    /* A read that errors is never an empty answer; Git Bash's path conversion cannot turn one into "none". */
+    assert.match(TEARDOWN, /^- A read that errors is a STOP, never an empty answer \("none", "no match", `\[\]`\)\.$/m);
+    assert.match(TEARDOWN, /under Git Bash set `MSYS_NO_PATHCONV=1` first \(MSYS rewrites arguments such as `\/gs\/staging\/p1` into\s+Windows paths\)/);
     for (const [name, text] of [["T0", T0], ["the fast path", FAST]] as const) {
       for (const call of text.split("\n").flatMap(awsCalls)) {
         assert.match(call, /^[a-z0-9-]+ (describe-|list-|get-|lookup-|head-|filter-)|^dynamodb query$|^s3 cp$/, `${name}: ${call} is a read`);
@@ -586,6 +589,14 @@ describe("T3 fast path (owner priority): what must be known before T3, what may 
     assert.match(String(INVENTORY.terraform_states.rule), /for the T3 fast path an owner ruling may first place it provisionally as REVIEW/);
     const prompt = PLAN.slice(PLAN.indexOf("**A. P1-R1 read-only inventory**"), PLAN.indexOf("**B. The OWNER-GO boundary for P1-R3**"));
     assert.ok(prompt.indexOf("**Part A, before T3**") > 0 && prompt.indexOf("**Part B, after T3 if need be**") > prompt.indexOf("**Part A, before T3**"));
+    /* Part A names the app-account states; the ledger's own-account state is part B (T0.11). */
+    const promptA = prompt.slice(prompt.indexOf("**Part A, before T3**"), prompt.indexOf("**Part B, after T3 if need be**"));
+    assert.match(promptA, /At least app, single-host, `gs\/staging\/rpc-proxy\.tfstate`/);
+    assert.doesNotMatch(promptA, /At least app, ledger/);
+    assert.match(promptA, /The ledger's state is read here when R1 finds it in the\s+app account's bucket; in its own account it is part B \(T0\.11\)/);
+    /* The batchable GOs follow T0 part A; T4 / T5 also wait for their part-B items. */
+    assert.match(TEARDOWN, /GO-T1, GO-T2, GO-T4 and GO-T5 may be sent together after T0 part A PASSES\. Each is\s+still conditional on its own guard PASS, and GO-T4 \/ GO-T5 also on T0 part B's items for their step\./);
+    assert.match(PLAN, /After R1 part A and T0\s+part A PASS:/);
   });
 
   test("the review's wording fixes: GO-T7 only on the proven-not-owned path, Z's owner exception, the NAT's ownership evidence, no unproven cost claim", () => {

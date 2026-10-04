@@ -28,7 +28,9 @@ safety waits in front of it, and nothing is relaxed for it.
 
 **Labels:** `APP-ADMIN` (Terraform / CLI in the app account), `LEDGER-ADMIN` (the ledger account), `BOOT`
 (`gs-staging-bootstrap`), `OPER` (`gs-staging-operator`), `HOST-DEPLOY` (the host-deploy principal: `gs-host`),
-`OWNER-DNS`. On Windows run `node dist/...` directly (PowerShell's `npm.ps1` swallows `--`).
+`OWNER-DNS`. On Windows run `node dist/...` directly (PowerShell's `npm.ps1` swallows `--`). Run the AWS CLI from
+PowerShell; under Git Bash set `MSYS_NO_PATHCONV=1` first (MSYS rewrites arguments such as `/gs/staging/p1` into
+Windows paths).
 
 ## STOP rules (every step)
 
@@ -39,6 +41,7 @@ safety waits in front of it, and nothing is relaxed for it.
 - An apply that errors part-way is a STOP: save `terraform state list` and the error; a partially applied teardown is
   completed only by a separately reviewed path (the `compute-none` guard refuses a state it no longer recognises).
 - Anything a step names "read-only" that would need a write is a STOP.
+- A read that errors is a STOP, never an empty answer ("none", "no match", `[]`).
 - A money game opening, a `RELAYQ#` entry appearing, an ECS task starting, a HOLD on the host or a second writer at any
   point is a STOP.
 - **External Terraform stacks are never touched.** A plan, command or console action that would change a resource of a
@@ -318,7 +321,8 @@ Save everything under `<D>\teardown\t0\`. Each item is tagged:
          no use after this workload's last task stopped (0.4 and 0.10's captured events; a standalone probe task that
          CloudTrail's `RunTask` shows is this workload's own). A later use is another user: STOP.
          - If 0.10's capture was missed, the reference is the later of CloudTrail's last `UpdateService` and last
-           `RunTask` for `gs-staging`.
+           `RunTask` for `gs-staging`. Tasks stop minutes after `UpdateService`, so a use inside that drain is this
+           workload's own; the owner rules on a borderline one.
          - With no reference at all, the owner rules on it (recorded), or it is a STOP.
     3. **The host does not use it.** By item 2's rules only the tasks could reach the interface endpoints, so the host,
        which is serving (0.3), does not use them, and T3 cannot cut a path it uses. If the host's subnet's route table

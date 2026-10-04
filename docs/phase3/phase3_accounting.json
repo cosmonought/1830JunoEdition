@@ -542,7 +542,8 @@
    "disp": "A",
    "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-A `e5fcfcc` (Skip / End Turn / Pay / Withhold / Run / depot Buy / train and private proposals greyed with the authority's hold sentence on every seat; resolvers keep their prompts), not integrated"
   },
   {
    "key": "AUD-04.02",
@@ -742,7 +743,8 @@
    "disp": "A",
    "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-A `e5fcfcc` (Skip greys with the home-station hold's sentence), not integrated"
   },
   {
    "key": "AUD-06.03",
@@ -3445,7 +3447,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "P0's S1 seam hoists `passDisabledReason` into a const first; W2-A then removes the dead arms."
+   "notes": "P0's S1 seam hoists `passDisabledReason` into a const first; W2-A then removes the dead arms.",
+   "status": "IMPLEMENTED — W2-A `e5fcfcc` (the dead home-token and train-obligation arms removed; Pass reads `dockHold.pass`), not integrated"
   },
   {
    "key": "P3-N002",
@@ -3458,7 +3461,8 @@
    "disp": "A",
    "od": "OD-1 (RULED 2026-10-03)",
    "p4": "—",
-   "notes": "Broader than K-13 (offers only); W2-A's `turnHoldReason` covers all four holds."
+   "notes": "Broader than K-13 (offers only); W2-A's `turnHoldReason` covers all four holds.",
+   "status": "IMPLEMENTED — W2-A `e5fcfcc` (`turnHoldReason` covers the discard, funding, offer, home-station and game-end holds), not integrated"
   },
   {
    "key": "P3-N003",
@@ -3553,7 +3557,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-A `e5fcfcc` (`trainPurchase.blockedReason` asks the hold; the `trainOffers` read is gone), not integrated"
   },
   {
    "key": "P3-N010",
@@ -4594,7 +4599,7 @@
   "W1-M": "COMPLETE — L2 `6f42dca`",
   "W1-N": "COMPLETE — L7 `9d9376b` + review fixes `06c3a91`; the OD-12 RED R2 call-site deletion `87d63c4` (+ comment follow-up `819a204`); tie-aware game-over strip at the integration (`8dc79e0`)",
   "W1-O": "COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`)",
-  "W2-A": "NOT STARTED",
+  "W2-A": "COMPLETE — slice branch `phase3/w2-a-authoritative-holds` `e5fcfcc` (from `bfb7635`); NOT integrated (integration and owner broad gate pending). One hold answer (`utils/dockHoldView.ts`, one App call site) threaded to the bar's `turnHoldReason`, Pass, the tile-lay gate, the token ring and both purchase panels. Residue outside its rows: the Stock Round share controls and the M&H chip still read `privateTradeHoldReason` (same answer on every reachable board; W2-C / W2-F)",
   "W2-B": "NOT STARTED",
   "W2-C": "NOT STARTED",
   "W2-D": "NOT STARTED",

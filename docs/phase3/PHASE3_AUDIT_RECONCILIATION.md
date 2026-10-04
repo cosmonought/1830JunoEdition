@@ -142,6 +142,18 @@ remains later spotlight / whitebox work. Rules version unchanged (v12).
 **Owner rulings recorded:** OD-9(a) and OD-11 (plan §7.3). OD-3, OD-13, OD-14(d) and OD-14(i) were applied by W2-E / W2-L / W2-K as
 given to those slices; not transcribed (their text is not in the integration brief).
 
+## W2-A slice status (2026-10-04)
+
+**Branch** `phase3/w2-a-authoritative-holds` @ `e5fcfcc` from `phase3/wave2-safe-integration` @ `bfb7635`. **COMPLETE on its slice
+branch; NOT integrated** (integration and owner broad gate pending). One pure hold answer, `utils/dockHoldView.ts`, asks
+`authoritativeHoldRefusal` once per control with the message kind it sends; `App.tsx` derives it once (`dockHold`) and threads it to
+the bar's new `turnHoldReason` (Skip, End Turn, Pay / Withhold, Run Trains), the Stock Round / auction Pass, the tile-lay gate, the
+token ring, the train panel (`blockedReason`, new `bankBlockedReason`, returned trains, Diesel) and the private-purchase panel.
+Resolvers keep their prompts; Routes / Dividends informational readouts for non-active seats are unchanged (OD-1). AUD-04.01,
+AUD-06.02, P3-N001, P3-N002 and P3-N009 IMPLEMENTED. Residue outside its rows: the Stock Round share controls and the M&H chip still
+read `privateTradeHoldReason` (the same answer on every reachable board) -- W2-C / W2-F. W2-B / C / D / F not started; W2-G held;
+W3-K not complete. Rules version unchanged (v12).
+
 ## Scope and closing remark
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |

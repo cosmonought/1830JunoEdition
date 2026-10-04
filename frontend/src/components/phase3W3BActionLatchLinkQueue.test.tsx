@@ -211,9 +211,9 @@ function Shell({
   );
   link.drain = () => {
     const entries = link.inbox.splice(0);
-    setBoard((current) =>
-      entries.reduce((next, entry) => apply(next, link.msgOf((entry as { submission_id?: string }).submission_id ?? "")), current),
-    );
+    // This tab's entries carry their message on the wire; another seat's entry only advances the index here.
+    const ours = entries.map((entry) => (entry as { submission_id?: string }).submission_id).filter((id): id is string => id !== undefined);
+    setBoard((current) => ours.reduce((next, id) => apply(next, link.msgOf(id)), current));
     appliedIndexRef.current += entries.length;
     // RED R5, as is: the drain releases the latch against the index it was taken at.
     setPendingAppendIndex((current) => (current !== null && appliedIndexRef.current > current ? null : current));
@@ -795,6 +795,29 @@ describe("AUD-25.01 (11): only THIS tab's held gameplay submission busies the co
     expect(link.client.queue.unsettled).toBe(0);
     expect(sellButton()!.disabled).toBe(false);
     expect(passButton().disabled).toBe(false);
+  });
+
+  it("another seat's entry landing MID-HOLD releases the latch by index, but the link still keeps the controls busy", () => {
+    const link = room();
+    act(() => link.wire().open());
+    mountStockRound(link);
+    openCard("PRR");
+    click(sellButton());
+    // The server is still committing this tab's sale (LIVE-3A `unavailable`): the link holds it.
+    act(() => link.wire().deliver({ kind: "refused", build: "build-1", code: "unavailable", reason: "Could not confirm.", inReplyTo: "n1" }));
+    // Another seat's move arrives and the drain applies it: the press's index is passed, the latch is released...
+    act(() =>
+      link.wire().deliver({ kind: "applied", build: "build-1", digest: "0".repeat(16), entries: [{ index: 0, id: "e0", actor: "p-ben", payload: "{}" }] }),
+    );
+    act(() => link.drain());
+    expect(prrHeld()).toBe(20); // the other seat's entry moved no share of this tab's
+    // ...but the link still holds the sale, so nothing re-arms -- not now, and not past the backstop.
+    expect(link.client.queue.unsettled).toBe(1);
+    expect(sellButton()!.disabled).toBe(true);
+    advance(LONG_PAST);
+    expect(sellButton()!.disabled).toBe(true);
+    click(sellButton());
+    expect(link.allSubmits()).toHaveLength(1);
   });
 
   it("browsing is not acting: the cards open while the link holds a submission", () => {

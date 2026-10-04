@@ -24,6 +24,11 @@
         that hands the entries to the shell, whose drain applies them later -- releasing at the link's settlement
         instead would re-arm the controls on a board one round trip old, #1173's own window), the refusal / dropped
         `null` in the submit half, and the backstop only for what neither of those answers.
+   RECORDED RESIDUAL (W3-B independent review, LOW): the drain releases the latch by INDEX, so if another seat's entry
+   carries the drain past the press's index while the link still holds the press, rule 1 alone keeps the controls busy;
+   when the press's own `applied` answer then settles, they re-arm for the drain's few milliseconds before it applies
+   that entry. Narrowing that window needs the drain to report the link's own index (RED R5); the baseline re-armed for
+   the whole hold. The server still judges any press made in it.
    Without a room link (the Firestore / hotseat path) the queue is idle and the latch behaves exactly as before.
 
    THE LATCH ITSELF STAYS THE SHELL'S STATE (`useState` in App.tsx, set by the submit half and released by the drain,

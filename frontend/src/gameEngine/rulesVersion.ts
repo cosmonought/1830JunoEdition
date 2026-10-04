@@ -67,7 +67,7 @@ import { effectiveActions } from "./logRevert";
 
 /** The rules engine this build carries. Bump it, and add a line below, when a deployment changes what a
  *  stored log replays to. Do NOT bump it for UI, protocol or narration changes. */
-export const RULES_ENGINE_VERSION = 12;
+export const RULES_ENGINE_VERSION = 13;
 
 /** Every version this engine can replay faithfully. One entry until somebody builds a versioned reducer;
  *  the point of the list is that "supported" is an explicit statement rather than "whatever is running". */
@@ -406,6 +406,40 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "River, dividends priced on Montreal / Norfolk's flat figures or on #62 at $90, a run past a one-circle Norfolk or Montreal a v12 " +
       "board no longer shuts, shortfall and skip refusals against the old (heuristic) demonstration, and a city-less placement on " +
       "New York, so it is refused, never reinterpreted.",
+  },
+  {
+    version: 13,
+    note:
+      "Phase 3 W3-K (2026-10-03): the Stock Round turn and emergency-funding corrections the Phase-3 verification " +
+      "(V13_SCOPE_VERIFICATION) resolved, all switched by RULES REVISION 2 (`variants.rules >= 2`; `passEndsStockTurn`, " +
+      "`brownPoolContinuationInForce`, `automaticEmergencyFundingInForce` in `gameVariants.ts`), which every hosted v13 " +
+      "deal is stamped with -- so unpinned development history (revision 0 / 1) replays unchanged. (1) OD-2: ONE " +
+      "`PassTurn` ends a Stock Round turn (no stage move first); a sale stays legal before and after the one ordinary " +
+      "purchase; a true pass (no action this turn) counts toward the all-pass streak and an acted turn end does not; " +
+      "must-sell, the sold-this-round lockout, Priority Deal and rotation are unchanged. (2) SBS-3 / SBS-4, THE OFFICIAL " +
+      "BROWN RULE: an explicit turn-scoped continuation (`brown_pool_continuation_company`) opened only by a Brown-zone " +
+      "purchase from the Bank Pool; it admits further Bank Pool certificates of that ONE corporation and closes on any " +
+      "sale, `PassTurn`, seat advance, round end and every purchase-state reset -- IPO then Pool, Pool then IPO, Pool / " +
+      "sell / Pool, Pool in one corporation then Pool in another, and any second non-Brown purchase are refused. NOT " +
+      "IMPLEMENTED: V-6.3 'Buy All'. (3) OD-4, EMERGENCY FUNDING: the intercorporate trade window is budgeted at treasury " +
+      "plus the president's cash and is closed for the obligation by any decision (`ForgoTrainTrade`, a private offer, " +
+      "a sale) and never reopens -- a trade funded by liquidation is refused; the treasury-plus-cash purchase is made " +
+      "automatically (a derived `EmergencyBuyHardware`, keyed per operating turn); share raising is ONE atomic " +
+      "`EmergencySellPortfolio` (submitted order kept, every leg an ordinary sale, simulated and proven before any " +
+      "board moves, 'only enough' judged over the whole portfolio with the smallest legal overshoot, a portfolio that " +
+      "cannot fund the purchase refused -- no self-made bankruptcy) and the single forced `SellStock` is refused; " +
+      "private-company funding stays optional (`ForgoPrivateFunding` declines it); bankruptcy is AUTOMATIC once the " +
+      "exact insolvency oracle proves no window, offer, private or portfolio can fund the train: everything legally " +
+      "saleable is sold, the president's cash goes to the obligated corporation, and the game ends (`bankrupt_president`). " +
+      "`DeclareBankruptcy` is refused on a board of rules revision 2. Per-obligation marks: `emergency_funding_marks`. NOT RULES, " +
+      "named so the row is not read as them: the closed schema's three new kinds (52) and the hosted ingress refusals. " +
+      "NOT IN THIS ROW: DH-1, GR-1 / S10-27, GR-1b (UI only), D-18 (invalid), D-22 (already correct), RR-4. LIVE LIST: " +
+      "[13] alone (owner policy: pinned v12 rooms are drained before deployment, no dual support). SETTLEMENT IS A " +
+      "SEPARATE AXIS: `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` stays [10, 11, 12], so a v13 board is refused for " +
+      "money settlement until v13's own certification pass (`docs/phase3/V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). A " +
+      "version-12 log can carry a two-message Stock Round turn end, a second Pool purchase across corporations or after " +
+      "a sale, a single forced sale, a president-sent emergency purchase and a declared bankruptcy, so it is refused, " +
+      "never reinterpreted.",
   },
 ];
 

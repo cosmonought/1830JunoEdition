@@ -549,7 +549,7 @@ gates.
 
 #### W2-B
 **Stock Round turn presentation** · L1 · **3–4 h**
-- **OD-2 RULED (2026-10-03, §7.3):** Sell whenever legal; at most one Buy; after buying, Buy is unavailable but Sell remains; the button is **"Pass Turn"** and ends the turn in ONE click; the Sell → Buy → Sell stage walk is superseded. Changing `PassTurn`'s replay semantics is a rules change, so the rule lands in the dedicated **v13 rules slice** (W3-K's vehicle) with its settlement certification; this slice presents it. Wave-1's `sellBuySell` pins are interim (v12) until then. The rule landed in W3-K (rules v13, revision 2); **this slice is required before v13 deploys** (with W1-A and the removal of Auto-Buy's stage Pass). Status: COMPLETE on its slice branch `phase3/w2-b-stock-round-v13-ui` (code `90d5588`, review fix `ca68b43`; from `868bd83`); NOT integrated.
+- **OD-2 RULED (2026-10-03, §7.3):** Sell whenever legal; at most one Buy; after buying, Buy is unavailable but Sell remains; the button is **"Pass Turn"** and ends the turn in ONE click; the Sell → Buy → Sell stage walk is superseded. Changing `PassTurn`'s replay semantics is a rules change, so the rule lands in the dedicated **v13 rules slice** (W3-K's vehicle) with its settlement certification; this slice presents it. Wave-1's `sellBuySell` pins are interim (v12) until then. The rule landed in W3-K (rules v13, revision 2); **this slice is required before v13 deploys** (with W1-A and the removal of Auto-Buy's stage Pass). Status: COMPLETE on its slice branch `phase3/w2-b-stock-round-v13-ui` (code `90d5588`, review fix `ca68b43`, #1274 fix `794e03c` / `699160c`; from `868bd83`); NOT integrated.
 - **Rows:** implements AUD-03.04 (SBS-1 / SBS-2), AUD-03.07
 - **Surfaces:** the bar stage block; `stockStage`; a must-sell banner in `StockRoundPanel` from `divestmentDebt`. Implements
   the audit's target: **one Pass / End Turn control** that ends the turn in one press, without a forced sell → Pass → buy
@@ -557,7 +557,7 @@ gates.
   change (Pass always ends the turn) is not this slice**; it is v13 and W3-K.
 - **App.tsx regions:** group "stage", R-SRPANEL. **Focused tests:** `sellBuySell`, `sellIsNotAPass`; a banner render test.
 - **Depends on:** W1-A, W2-A. **Gates:** OD-2.
-- **Status (2026-10-04): COMPLETE on its slice branch** `phase3/w2-b-stock-round-v13-ui` (code `90d5588`, review fix `ca68b43`; from `868bd83`), **NOT integrated**: one "Pass Turn" control (one `PassTurn`, in every state), the stage block / `stockStage` and the revision-1 copy removed, Auto-Buy's stage Pass removed (`autoBuyTurnStep`), the must-sell banner from `divestmentDebt`; no reducer change. Focused tests: `phase3W2BStockRoundPassTurn`, `sellBuySell`, `sellIsNotAPass`.
+- **Status (2026-10-04): COMPLETE on its slice branch** `phase3/w2-b-stock-round-v13-ui` (code `90d5588`, review fix `ca68b43`, #1274 fix `794e03c` / `699160c`; from `868bd83`), **NOT integrated**: one "Pass Turn" control (one `PassTurn`, in every state), the stage block / `stockStage` and the revision-1 copy removed, Auto-Buy's stage Pass removed and no Pass after its purchase (`autoBuyTurnStep`; #1274), the must-sell banner from `divestmentDebt`; no reducer change. Focused tests: `phase3W2BStockRoundPassTurn`, `sellBuySell`, `sellIsNotAPass`.
 
 #### W2-C
 **Offer panels read their authority** · L3 · **3–4 h**

@@ -154,9 +154,10 @@ variable "ticket_alarm_action_arns" {
   default     = []
 }
 
-# COST-1: "ecs" (default, unchanged) or "none" -- the single host serves (stacks/single-host); this stack then keeps only
-# the tables, the SSM documents, ECR, the operator roles and CloudFront. infra/aws/SINGLE_HOST_MIGRATION.md step I.
+# COST-1: "ecs" or "none" -- the single host serves (stacks/single-host); this stack then keeps only the tables, the SSM
+# documents, ECR, the operator roles and CloudFront. PHASE 1 CLEAN-BUILD RESET: NO DEFAULT. Every plan of this root states
+# it, so the retired ECS / ALB / endpoint topology can never come back through an omitted line (the final state is
+# "none": infra/aws/PHASE1_CLEAN_BUILD.md, PHASE1_INVENTORY.json). The module's own default is unchanged.
 variable "compute" {
-  type    = string
-  default = "ecs"
+  type = string
 }

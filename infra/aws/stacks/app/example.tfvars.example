@@ -33,10 +33,16 @@ network = {
 build_id        = "2026-09-30-da317f0"
 allowed_origins = ["https://play.example.com"]
 
+# PHASE 1 CLEAN-BUILD RESET: REQUIRED (no default). The final state is "none": the single host (stacks/single-host) serves
+# and this stack keeps only the authorities and the edge (infra/aws/PHASE1_CLEAN_BUILD.md). "ecs" recreates the retired
+# ECS / ALB / endpoint topology and its cost. Under "none" the alb block and the task / ALB subnets below are inert.
+compute = "none"
+
 # LIVE-6 L6-2: every pool gets its own target group and exact /gs/p/<pool> rule; `primary` follows SYSTEM/ROUTING
 # (move it only after `gamesDoctor aws flip ... --apply`). desired_count 0: a drained / retired pool (never the primary).
+# The final state is ONE pool, p1.
 pools          = { p1 = { primary = true } }
-start_services = false # true only after the bootstrap and verify
+start_services = false # a NEW environment's first apply only; true after the bootstrap and verify (and always once a host serves)
 
 alb = {
   certificate_arn = "arn:aws:acm:us-east-1:111111111111:certificate/44444444-4444-4444-8444-444444444444"

@@ -11,6 +11,12 @@ backup = {
   vault_lock_mode = "governance" # "compliance" (+ changeable_for_days >= 3) is irreversible: an owner decision
 }
 
+# COST-1 / PHASE 1 CLEAN-BUILD RESET: the app runtime role is the single host's (stacks/single-host output app_role_arn).
+# ecs_task_role_authorized is REQUIRED (no default) and false in the final state: the retired ECS task role's name keeps
+# no ledger or key grant (infra/aws/PHASE1_LEGACY_TEARDOWN.md T5).
+app_runtime_role_arns    = ["arn:aws:iam::111111111111:role/gs-staging-host-app"]
+ecs_task_role_authorized = false
+
 # LIVE-6 relayer rotation (infra/aws/README.md "Relayer rotation"): 1 = one relayer key. Raise by ONE to prepare a
 # rotation (the new key r<N> is created beside the current one); never lower it (prevent_destroy refuses).
 # relayer_key_count = 2

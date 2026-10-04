@@ -49,7 +49,9 @@ variable "app_runtime_role_arns" {
   default = []
 }
 
+# PHASE 1 CLEAN-BUILD RESET: NO DEFAULT. Every plan of this root states it: after the ECS teardown it is false, and an
+# omitted line can never re-grant the deleted task role's NAME (a later role of that name would inherit the ledger and
+# key grants). infra/aws/PHASE1_LEGACY_TEARDOWN.md T5. The module's own default is unchanged.
 variable "ecs_task_role_authorized" {
-  type    = bool
-  default = true
+  type = bool
 }

@@ -7,10 +7,21 @@ restates what the runtime already requires.
 **What exists is DEFINED and TESTED, not DEPLOYED.** No AWS resource was created by L5-8. The first real deployment
 belongs to the LIVE-6 staging gate.
 
+> **PHASE 1 CLEAN-BUILD RESET (2026-10-04): the governing Phase-1 plan is `infra/aws/PHASE1_CLEAN_BUILD.md`.** Staging has
+> no production users, so Phase 1 is the final single-host topology built and certified DIRECTLY (P1-R0 … P1-R6), not
+> a continuity-preserving migration. `SINGLE_HOST_MIGRATION.md` is RETIRED as the governing plan, and kept as the
+> historical record and command reference. Supporting documents:
+> - the retain / delete / review classification: `PHASE1_INVENTORY.json`;
+> - the legacy teardown (LIVE only, an owner GO per mutation): `PHASE1_LEGACY_TEARDOWN.md`.
+>
+> The final topology, its guards and every money / fencing semantic are unchanged. `stacks/app`'s `compute` and
+> `stacks/ledger`'s `ecs_task_role_authorized` now have NO default (every plan states them; the final values are `"none"`
+> and `false`).
+
 > **COST-1 (2026-10-02): the low-cost single-host topology.** The owner's hard ceiling is **$30/month** for the whole
 > recurring infrastructure (target <= $20): `docs/hosting-budget.md`, `infra/aws/COST_BUDGET.json` (pinned by
-> `server/src/aws/deploy/cost1SingleHost.test.ts`). The ECS/ALB topology below stays the default of `stacks/app`
-> (`compute = "ecs"`, unchanged); the replacement is ONE EC2 host running the same AWS-mode image against the same tables,
+> `server/src/aws/deploy/cost1SingleHost.test.ts`). The ECS/ALB topology below is `stacks/app`'s `compute = "ecs"` (the
+> module's default; the stack requires the choice explicitly since PHASE 1 CLEAN-BUILD RESET); the replacement is ONE EC2 host running the same AWS-mode image against the same tables,
 > keys and documents -- `modules/single-host` + `stacks/single-host` (its README: runtime, Caddy origin, IAM, fencing,
 > deploy / rollback, observability, memory plan) -- and `stacks/app` with `compute = "none"` keeping only the tables, SSM
 > documents, ECR, the operator roles and CloudFront. The ledger authorises the host's role through `app_runtime_role_arns`.

@@ -38,7 +38,12 @@ browser ──https──► CloudFront (existing distribution; play.<domain> un
 
 - **Module and stack:** `infra/aws/modules/single-host`, `infra/aws/stacks/single-host`.
 - **Runtime design:** `infra/aws/modules/single-host/README.md`.
-- **Migration:** `infra/aws/SINGLE_HOST_MIGRATION.md`.
+- **Phase 1 (the governing plan since PHASE 1 CLEAN-BUILD RESET, 2026-10-04):** `infra/aws/PHASE1_CLEAN_BUILD.md`.
+  It covers the direct clean build and certification of this topology; staging has no users, so it is no longer a
+  migration.
+  - The classification is `infra/aws/PHASE1_INVENTORY.json`.
+  - The ECS-era teardown is `infra/aws/PHASE1_LEGACY_TEARDOWN.md`.
+  - The former migration runbook, `infra/aws/SINGLE_HOST_MIGRATION.md`, is the historical record.
 
 ## 3. Prohibited fixed-cost resources (unless the owner changes this decision)
 
@@ -62,7 +67,12 @@ In the active low-cost architecture, none of the following may appear:
 
 The guard test fails on any of these in `COST_BUDGET.json`'s `scan_roots`.
 
-The ECS-era resources still exist in `stacks/app` behind `compute = "ecs"` (the default, unchanged). The migration switches that to `compute = "none"`, which removes every one of them. The test pins that gate too.
+The ECS-era resources still exist in `stacks/app` behind `compute = "ecs"` (the module's default).
+- The Phase-1 teardown (`infra/aws/PHASE1_LEGACY_TEARDOWN.md` T3) switches the stack to `compute = "none"`, which removes
+  every one of them.
+- Since PHASE 1 CLEAN-BUILD RESET the stack has no default for `compute`: every plan states it, so an omitted line cannot
+  bring the ECS-era cost back.
+- The tests pin both the gate and the explicit variable.
 
 ## 4. The money-safety authorities that are retained (unchanged)
 

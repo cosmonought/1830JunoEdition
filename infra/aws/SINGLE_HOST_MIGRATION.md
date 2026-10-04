@@ -1,5 +1,22 @@
 # Migrating staging from the drained ECS topology to the single host (COST-1, reconciled by COST-2B, COST-2A and RECON-1A)
 
+> **RETIRED AS THE GOVERNING PHASE-1 PLAN (PHASE 1 CLEAN-BUILD RESET, 2026-10-04).** Staging has no production users or
+> live workload needing continuity, so the owner retired this migration procedure. The governing plan is
+> **`infra/aws/PHASE1_CLEAN_BUILD.md`** (P1-R0 … P1-R6: the final state and its DIRECT certification). Its companions:
+> - the retain / delete / review classification: `infra/aws/PHASE1_INVENTORY.json`;
+> - the legacy teardown, LIVE only: `infra/aws/PHASE1_LEGACY_TEARDOWN.md`.
+>
+> Retired as Phase-1 gates:
+> - coexistence (F0 / 15b `--topology coexist`);
+> - the F7 / F8 / F9 campaign as PRE-CUTOVER gates (F8 / F9 return as final-system tests; F7 moves to Phase 6 / 7);
+> - step 14's choreography and every rollback (the ECS rollback, the edge rollback);
+> - the "ECS era stays as the rollback path" rule;
+> - the quiet-period wait anchored at step 20.
+>
+> The steps and guards the clean build reuses are mapped in `PHASE1_CLEAN_BUILD.md` §10. Below this banner the text is
+> UNCHANGED: the historical / audit record of steps 1–13 (all done) and the reference for the commands the new plan
+> reuses. Do not execute it as a sequence.
+
 **Status:** a PLAN. Nothing here has been executed.
 
 **Prerequisites:**

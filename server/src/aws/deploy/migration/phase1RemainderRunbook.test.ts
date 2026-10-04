@@ -143,6 +143,10 @@ describe("PHASE 1 REMAINDER: the migration runbook's corrections", () => {
        the instance: the live host takes them by the reviewed one-file install (runbook 13r), and step 22b is planned from
        the host-create commit's module (the runbook says so). */
     const freshHost = new Set(["files/bin/gs-preflight", "files/bin/gs-lib.sh", "files/bin/gs-health", "tests/host-scripts.test.sh", "tests/preflight-real-docker.test.sh", "README.md"].map((f) => `infra/aws/modules/single-host/${f}`));
-    assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f)), [], r.stdout);
+    /* PHASE 1 CLEAN-BUILD RESET removed exactly two ROOT variables' defaults (stacks/app `compute`, stacks/ledger
+       `ecs_task_role_authorized`) and stated them in the examples -- no resource, module, template or single-host change;
+       migration/phase1CleanBuild pins that each variables.tf differs from its base by that one default only. */
+    const cleanBuild = new Set(["infra/aws/stacks/app/variables.tf", "infra/aws/stacks/app/example.tfvars.example", "infra/aws/stacks/ledger/variables.tf", "infra/aws/stacks/ledger/example.tfvars.example"]);
+    assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f) && !cleanBuild.has(f)), [], r.stdout);
   });
 });

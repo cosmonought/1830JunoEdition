@@ -2,7 +2,9 @@
 
 **The decision and the budget:** `docs/hosting-budget.md` and `infra/aws/COST_BUDGET.json`.
 
-**The migration from ECS:** `infra/aws/SINGLE_HOST_MIGRATION.md`.
+**Phase 1 (PHASE 1 CLEAN-BUILD RESET, 2026-10-04):** `infra/aws/PHASE1_CLEAN_BUILD.md` -- the direct clean build and
+certification of this deployment, with the ECS-era teardown in `infra/aws/PHASE1_LEGACY_TEARDOWN.md`. The former
+migration runbook `infra/aws/SINGLE_HOST_MIGRATION.md` is the historical record and command reference.
 
 **What it is:** one EC2 host runs the **same AWS-mode game server** the ECS task ran. It serves the **existing** authorities: the DynamoDB game, identity and ledger tables, the KMS keys, the SSM documents, ECR and the CloudFront distribution. Nothing here creates or duplicates them.
 

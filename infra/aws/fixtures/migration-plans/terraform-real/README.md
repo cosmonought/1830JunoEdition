@@ -8,6 +8,13 @@ Only the provider block was pointed at the mock. Two edits were made afterwards,
 in the scratch copy of the root) was restored to the repository's relative `../../modules/<module>`. Nothing else was
 edited: `configuration` is kept because the guards judge it (provisioners, data sources, providers, the module call).
 
+**Reproducing after PHASE 1 CLEAN-BUILD RESET (2026-10-04).** Two root variables lost their defaults, so a reproduction
+now states them:
+- `stacks/app` `compute`: `"ecs"` for every app-stack run below;
+- `stacks/ledger` `ecs_task_role_authorized`: `true` where a row says "with the defaults", `false` where it says so.
+
+The committed plans are unchanged; the variables they record are the same values.
+
 | File | How it was made | Gate it must pass |
 |---|---|---|
 | `host-create.json` | `stacks/single-host` from `example.tfvars.example` (the budget enabled with a subscriber), empty state | `host-create` |

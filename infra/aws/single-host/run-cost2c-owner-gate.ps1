@@ -44,7 +44,9 @@
     13b PHASE-1 targeted       PHASE 1 CERTIFICATION CLOSURE: migration/phase1FreshHost (runbook 13r's install table, order
                                and never-list; the param() guard below), phase1RemainderRunbook (steps 13-25),
                                step9AcmeCompletion, staging/singleHostEdge (step 16's single-host edge probe),
-                               staging/hostRoleProbe (F5 / F6). Their pins diff against 5b4756d and 083d066: a clone
+                               staging/hostRoleProbe (F5 / F6), and (PHASE 1 CLEAN-BUILD RESET) migration/phase1CleanBuild
+                               (the P1-R1 inventory against the modules and guards, the explicit stack variables, the
+                               teardown order, the R5 suite). Their pins diff against 5b4756d and 083d066: a clone
                                without either (shallow) FAILS, and so does a SKIP of 13r's host-create pins
     13c PHASE-1 targeted       staging/hostRoleProbe again in the pinned Linux Node image (node:22-bookworm-slim, --network
         (Linux)                none, the repository READ-ONLY): F5 / F6's REAL host-role-probe.sh with the real gs-lib.sh on
@@ -111,7 +113,8 @@
   Prerequisites: node + npm, git, Git Bash, Terraform >= 1.10, Docker Desktop running (Linux containers) with network
   access to public.ecr.aws, the npm registry and the Amazon Linux 2023 package repositories.
   It certifies the SOURCE only: the summary says OWNER SOURCE GATE PASS / FAIL and LIVE HOST CERTIFICATION PENDING -- the
-  arm64 runtime smoke on the real Graviton host and the live AL2023 / systemd drills stay prerequisites of the cutover.
+  arm64 runtime smoke on the real Graviton host (a prerequisite of teardown T1) and the live AL2023 / systemd drills (P1-R5,
+  after the teardown: infra/aws/PHASE1_CLEAN_BUILD.md) stay live work.
 
 .PARAMETER Only
   Run only these gates (names as in the summary table, e.g. -Only Build,"COST-2C targeted"). The environment section
@@ -419,17 +422,18 @@ Add-Gate 'COST-1 guards + portability' $true {
 # PHASE 1 CERTIFICATION CLOSURE: the Phase-1 suites as named gates (cheap and static; the full suite runs them again).
 # Their pins diff against the host-create commit 5b4756d and the stderr hotfix 083d066: a clone without either (a shallow
 # one) would SKIP or silently pass them, so both must be in this clone, and a SKIP of 13r's host-create pins FAILS too.
+# PHASE 1 CLEAN-BUILD RESET: phase1CleanBuild's diff pin is against the reset's base 50c1cfc; its SKIP FAILS the same way.
 Add-Gate 'PHASE-1 targeted' $true {
   if ($null -eq $Git) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = 'git is not on PATH (the Phase-1 pins diff against their base commits)' } }
   foreach ($base in @('5b4756dbd98e8d9abe5ed4bbdf4314466ef8045d', '083d0668556c05a84eb8b3e5befc4e973544aa9a')) {
     $c = Invoke-Logged $Git @('cat-file', '-e', ($base + '^{commit}')) $RepoRoot
     if ($c -ne 0) { return @{ Status = 'FAIL'; Exit = $c; Reason = "git cannot show commit $base here (a shallow or partial clone, or git refused the repository): the Phase-1 pins diff against it -- use a full clone" } }
   }
-  $code = Invoke-Logged $Node (TestArgs @('aws/deploy/migration/phase1FreshHost.test.js', 'aws/deploy/migration/phase1RemainderRunbook.test.js', 'aws/deploy/migration/step9AcmeCompletion.test.js', 'aws/deploy/staging/singleHostEdge.test.js', 'aws/deploy/staging/hostRoleProbe.test.js')) $ServerDir
-  $skippedPins = @($script:LastOutput | Where-Object { $_ -match '# SKIP not a checkout holding the host-create commit' })
-  if ($code -eq 0 -and $skippedPins.Count -gt 0) { return @{ Status = 'FAIL'; Exit = $code; Reason = "13r's host-create pins were SKIPPED (this clone lacks commit 5b4756d -- a shallow clone?): clone the full history" } }
+  $code = Invoke-Logged $Node (TestArgs @('aws/deploy/migration/phase1FreshHost.test.js', 'aws/deploy/migration/phase1RemainderRunbook.test.js', 'aws/deploy/migration/step9AcmeCompletion.test.js', 'aws/deploy/staging/singleHostEdge.test.js', 'aws/deploy/staging/hostRoleProbe.test.js', 'aws/deploy/migration/phase1CleanBuild.test.js')) $ServerDir
+  $skippedPins = @($script:LastOutput | Where-Object { $_ -match '# SKIP not a checkout holding the host-create commit' -or $_ -match '# SKIP not a checkout holding the Phase-1 base' })
+  if ($code -eq 0 -and $skippedPins.Count -gt 0) { return @{ Status = 'FAIL'; Exit = $code; Reason = "Phase-1 pins were SKIPPED (this clone lacks 13r's host-create commit 5b4756d or the clean-build reset's base 50c1cfc -- a shallow clone?): clone the full history" } }
   return @{ Exit = $code }
-} 'node --test migration/phase1FreshHost (13r; its host-create pins must RUN), phase1RemainderRunbook, step9AcmeCompletion, staging/singleHostEdge (step 16), staging/hostRoleProbe (F5 / F6)'
+} 'node --test migration/phase1FreshHost (13r; its host-create pins must RUN), phase1RemainderRunbook, step9AcmeCompletion, staging/singleHostEdge (step 16), staging/hostRoleProbe (F5 / F6), migration/phase1CleanBuild (P1-R0..R6)'
 
 # PHASE 1 CERTIFICATION CLOSURE: F5 / F6's REAL host-role-probe.sh (with the real gs-lib.sh) on a fake host runs only on
 # Linux (flock, sha256sum, fold, awk) -- hostRoleProbe SKIPS it on Windows -- so it runs here, in the server image's own
@@ -802,9 +806,11 @@ $Deferrable = @($Arm64RuntimeGateName)
 $ImageGatePassed = (@($Gates | Where-Object { $_.Name -eq $ImageGateName -and $_.Status -eq 'PASS' }).Count -eq 1)
 $Deferred = @($Gates | Where-Object { $_.Status -eq 'DEFERRED' })
 $AllPass = (@($Gates | Where-Object { $_.Status -ne 'PASS' -and -not ($_.Status -eq 'DEFERRED' -and $Deferrable -contains $_.Name -and $ImageGatePassed) }).Count -eq 0)
+# PHASE 1 CLEAN-BUILD RESET: the live certification is now P1-R5 (infra/aws/PHASE1_CLEAN_BUILD.md section 7), run on the
+# final system after the legacy teardown; F7 graceful-stop is no longer a Phase-1 gate (Phase 6 / 7 availability).
 $LivePrerequisites = @(
-  'ARM64 runtime smoke on the real Graviton host (SINGLE_HOST_MIGRATION.md step 12b: gs-host arm64-smoke; migration-guard edge-cutover --arm64-live-smoke refuses the cutover without its PASS)',
-  'the AL2023 / systemd host-cert drills on the real host (F7 graceful-stop, F8 crash-/reboot-restart, F9 duplicate-preflight / duplicate-fence)'
+  'ARM64 runtime smoke on the real Graviton host (step 12b: gs-host arm64-smoke; migration-guard edge-cutover --arm64-live-smoke refuses teardown T1 -- the /gs* origin move -- without its PASS)',
+  'P1-R5, the direct certification on the final system (PHASE1_CLEAN_BUILD.md section 7): the AL2023 / systemd host-cert drills (F8 crash-/reboot-restart, F9 duplicate-preflight / duplicate-fence), the host-role probes, the edge probe and the money smoke'
 )
 # PHASE 1 CERTIFICATION CLOSURE: Windows PowerShell 5.1 is PROVEN only on Windows and only by the three gs-host.ps1 gates
 # themselves (each PASS means the child's own header said 5.1 / Desktop and named the candidate's gs-host.ps1) -- never
@@ -837,7 +843,7 @@ Log ''
 Log ("OWNER SOURCE GATE: {0}" -f $(if ($AllPass) { 'PASS' } else { 'FAIL' })) $(if ($AllPass) { 'Green' } else { 'Red' })
 foreach ($d in $Deferred) { Log ("  deferred (NOT PASS): {0} -- {1}" -f $d.Name, $d.Reason) 'Yellow' }
 Log ("WINDOWS POWERSHELL 5.1 (the gs-host.ps1 regressions, as documented): {0} -- {1}" -f $Ps51, $Ps51Detail) $(if ($Ps51 -eq 'PROVEN') { 'Green' } else { 'Yellow' })
-Log 'LIVE HOST CERTIFICATION: PENDING -- required before any edge cutover:' 'Yellow'
+Log 'LIVE HOST CERTIFICATION: PENDING -- the live Phase-1 certification (PHASE1_CLEAN_BUILD.md):' 'Yellow'
 foreach ($p in $LivePrerequisites) { Log ("  - {0}" -f $p) 'Yellow' }
 Log ("OVERALL: {0}" -f $(if ($CertifyingRun) { 'PASS (OWNER SOURCE GATE; LIVE HOST CERTIFICATION PENDING)' } elseif ($AllPass) { 'PASS (OWNER SOURCE GATE; LIVE HOST CERTIFICATION PENDING) -- NOT A CERTIFYING RUN: Windows PowerShell 5.1 NOT PROVEN here (the certifying run is on Windows)' } else { 'FAIL' })) $(if ($CertifyingRun) { 'Green' } elseif ($AllPass) { 'Yellow' } else { 'Red' })
 Log ("total duration: {0} s   (end {1})" -f [math]::Round($Watch.Elapsed.TotalSeconds, 1), (UtcNow))

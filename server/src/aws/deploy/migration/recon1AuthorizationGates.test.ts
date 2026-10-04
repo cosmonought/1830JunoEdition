@@ -749,6 +749,11 @@ describe("RECON-1: the ONE owner gate (COST-2C's runner, extended) covers the re
       "aws/awsClients.test.js",
       "infra/aws/modules/single-host/tests/host-scripts.test.sh",
       "tests/preflight-real-docker.test.sh",
+      "aws/deploy/migration/phase1FreshHost.test.js",
+      "aws/deploy/staging/hostRoleProbe.test.js",
+      "tests/gs-host-stderr.test.ps1",
+      "tests/gs-host-role-probe.test.ps1",
+      "tests/gs-host-install-script.test.ps1",
     ])
       assert.ok(gate.includes(f), f);
     for (const m of ["modules/single-host", "modules/app", "modules/ledger", "stacks/single-host", "stacks/app", "stacks/ledger"]) assert.ok(gate.includes(`'${m}'`), m);
@@ -791,6 +796,49 @@ describe("RECON-1: the ONE owner gate (COST-2C's runner, extended) covers the re
     assert.match(gate, /if \(\$AllPass\) \{ exit 0 \} else \{ exit 1 \}/);
     for (const k of ["branch =", "head =", "tree_clean =", "started_utc =", "seconds =", "exit =", "owner_source_gate =", "live_host_certification = 'PENDING'", "deferred_to_live ="]) assert.ok(gate.includes(k), k);
     assert.match(gate, /18COSMOS\/RECON-1-OWNER-GATE\/v1/);
+  });
+  test("PHASE 1 CERTIFICATION CLOSURE: the Phase-1 suites and the three gs-host.ps1 regressions are gates of this ONE run -- Windows PowerShell 5.1 on Windows, as documented, never claimed elsewhere", () => {
+    const code = gate.replace(/^\s*#.*$/gm, "");
+    const order = [...gate.matchAll(/^Add-Gate '([^']+)'/gm)].map((m) => m[1]);
+    const ps = ["gs-host.ps1 stderr regression", "gs-host.ps1 role-probe regression", "gs-host.ps1 install-script regression"];
+    const seq = ["COST-1 guards + portability", "PHASE-1 targeted", "PHASE-1 targeted (Linux)", ...ps, "Terraform"].map((n) => order.indexOf(n));
+    assert.ok(seq.every((at, k) => at >= 0 && (k === 0 || at === seq[k - 1] + 1)), `the closure's gates in place: ${order.join(" | ")}`);
+    /* the Phase-1 suites on this machine; 13r's host-create pins must RUN (a shallow clone skips them: FAIL) */
+    const phase1 = code.slice(code.indexOf("Add-Gate 'PHASE-1 targeted' "), code.indexOf("Add-Gate 'PHASE-1 targeted (Linux)'"));
+    for (const f of ["migration/phase1FreshHost", "migration/phase1RemainderRunbook", "migration/step9AcmeCompletion", "staging/singleHostEdge", "staging/hostRoleProbe"]) assert.ok(phase1.includes(`'aws/deploy/${f}.test.js'`), f);
+    assert.match(phase1, /\$_ -match '# SKIP not a checkout holding the host-create commit'/);
+    assert.match(phase1, /if \(\$code -eq 0 -and \$skippedPins\.Count -gt 0\) \{ return @\{ Status = 'FAIL'/);
+    /* F5 / F6's real wrapper on a fake host is Linux-only (skipped on Windows): it runs in the pinned Linux image, no skip */
+    const linux = code.slice(code.indexOf("Add-Gate 'PHASE-1 targeted (Linux)'"), code.indexOf("$GsHostPsGateNames = "));
+    assert.match(linux, /'run', '--rm', '--name', \$name, '--network', 'none', '-v', \$RepoMountRO, '-w', '\/repo\/server', \$NodeLinuxImage, 'bash', '-c', \$cmd/);
+    assert.match(linux, /for c in bash flock sha256sum fold awk base64 mktemp timeout; do command -v \$c >\/dev\/null \|\| exit 98; done; exec node --test [^']*dist\/server\/src\/aws\/deploy\/staging\/hostRoleProbe\.test\.js'/);
+    assert.match(linux, /if \(\$code -eq 0 -and \(\$n -ne 0 -or \$p -lt 20\)\) \{ return @\{ Status = 'FAIL'/);
+    /* the three regressions: Windows PowerShell 5.1 (System32) on Windows, -File, NO -Target; the test's own header must
+       name 5.1 / Desktop and the candidate's gs-host.ps1; floors; NOT RUN (never PASS) without 5.1 on Windows */
+    const runner = code.slice(code.indexOf("function Find-WindowsPowerShell51"), code.indexOf("Add-Gate 'gs-host.ps1 stderr regression'"));
+    assert.match(runner, /\$exe = Join-Path \$root 'System32\\WindowsPowerShell\\v1\.0\\powershell\.exe'/);
+    assert.match(runner, /if \(\$OnWindows\) \{\n    \$exe = Find-WindowsPowerShell51\n    if \(\$null -eq \$exe\) \{ return @\{ Status = 'NOT RUN'; Exit = \$null; Reason = 'Windows PowerShell 5\.1 /);
+    assert.deepEqual([...runner.matchAll(/\$exe = (.*)$/gm)].map((m) => m[1]), ["Join-Path $root 'System32\\WindowsPowerShell\\v1.0\\powershell.exe'", "Find-WindowsPowerShell51", "(Get-Process -Id $PID).Path"], "the engine: 5.1 on Windows, this PowerShell elsewhere -- nothing else");
+    const argvs = [...runner.matchAll(/\$argv = @\(([^)]*)\)/g)].map((m) => m[1]);
+    assert.deepEqual(argvs, ["'-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $file", "'-NoProfile', '-NonInteractive', '-File', $file"], "the documented invocation, never -Target");
+    assert.match(runner, /\$code = Invoke-Logged \$exe \$argv \$RepoRoot \$envs/, "into the ONE log");
+    assert.ok(runner.includes("'^gs-host ' + [regex]::Escape($Test) + ' regression -- PowerShell (\\S+) \\((\\w+)\\) -- (.+)$'"), "the header the tests print");
+    assert.ok(runner.includes("'^gs-host ' + [regex]::Escape($Test) + ' regression: (\\d+) passed / (\\d+) failed$'"), "the totals the tests print");
+    assert.match(runner, /if \(\$null -eq \$head\) \{ return @\{ Status = 'FAIL'/);
+    assert.match(runner, /if \(\$OnWindows -and \(\$head\[0\] -notmatch '\^5\\\.1\\\.' -or \$head\[1\] -ne 'Desktop'\)\) \{ return @\{ Status = 'FAIL'/);
+    assert.match(runner, /\$sameTarget = if \(\$OnWindows\) \{ \$head\[2\] -eq \$want \} else \{ \$head\[2\] -ceq \$want \}\n  if \(-not \$sameTarget\) \{ return @\{ Status = 'FAIL'/);
+    assert.match(runner, /if \(\$code -ne 0 -or \$counts\[1\] -ne 0 -or \$counts\[0\] -lt \$Floor\) \{ return @\{ Status = 'FAIL'/);
+    assert.match(runner, /\$proof = if \(\$OnWindows\) \{ 'the Windows PowerShell 5\.1 proof' \} else \{ 'NOT a Windows PowerShell 5\.1 proof \(not Windows\)' \}/);
+    for (const [n, floor] of [["stderr", 25], ["role-probe", 38], ["install-script", 27]] as const) assert.match(code, new RegExp(`^Add-Gate 'gs-host\\.ps1 ${n} regression' \\$false \\{ return \\(Invoke-GsHostPsRegression '${n}' ${floor}\\) \\}`, "m"), n);
+    assert.match(code, /^\$GsHostPsGateNames = @\('gs-host\.ps1 stderr regression', 'gs-host\.ps1 role-probe regression', 'gs-host\.ps1 install-script regression'\)$/m);
+    /* Windows PowerShell 5.1 is PROVEN only on Windows, only from these three gates' PASSes; summary + JSON say which */
+    assert.match(code, /\nif \(-not \$OnWindows\) \{\n  \$Ps51 = 'NOT PROVEN'\n/);
+    assert.match(code, /\n\} elseif \(\$PsGateResults\.Count -eq \$GsHostPsGateNames\.Count -and @\(\$PsGateResults \| Where-Object \{ \$_\.Status -ne 'PASS' \}\)\.Count -eq 0\) \{\n  \$Ps51 = 'PROVEN'\n/);
+    assert.equal((code.match(/\$Ps51 = 'PROVEN'/g) ?? []).length, 1, "PROVEN is set in one place");
+    assert.match(code, /Log \("WINDOWS POWERSHELL 5\.1 \(the gs-host\.ps1 regressions, as documented\): \{0\} -- \{1\}" -f \$Ps51, \$Ps51Detail\)/);
+    for (const k of ["windows_powershell_51 = $Ps51", "windows_powershell_51_detail = $Ps51Detail"]) assert.ok(code.includes(k), k);
+    /* ordinary gates: a FAIL / NOT RUN fails the owner source gate ($AllPass, pinned above); none is deferrable */
+    assert.doesNotMatch(runner, /'DEFERRED'|'SKIPPED'/);
   });
   test("OWNER-GATE FIX 1: arm64 is BUILT and architecture-proven locally (no execution); its runtime smoke is PASS only when executed, else DEFERRED -- never PASS -- and fail-closed", () => {
     const code = gate.replace(/^\s*#.*$/gm, "");

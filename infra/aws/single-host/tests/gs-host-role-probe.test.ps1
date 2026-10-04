@@ -8,9 +8,20 @@
 #
 #   Windows PowerShell 5.1:  powershell -NoProfile -ExecutionPolicy Bypass -File .\infra\aws\single-host\tests\gs-host-role-probe.test.ps1
 #   PowerShell 7:            pwsh -NoProfile -File ./infra/aws/single-host/tests/gs-host-role-probe.test.ps1
+#   (the owner gate, run-cost2c-owner-gate.ps1, runs the first line itself on Windows: Windows PowerShell 5.1, no -Target)
+#
+# Exit 0 = every case passed. Without -Target it tests the gs-host.ps1 beside this tests folder; -Target runs the same
+# cases against another copy of gs-host.ps1.
 [CmdletBinding()]
-param([string]$Target = (Join-Path (Split-Path -Parent $PSScriptRoot) 'gs-host.ps1'))
+param([ValidateNotNullOrEmpty()][string]$Target)
 $ErrorActionPreference = 'Stop'
+# The default is resolved HERE, never in param(): Windows PowerShell 5.1 leaves $PSScriptRoot EMPTY in an advanced script's
+# parameter defaults under `powershell -File` (PowerShell/PowerShell#4688: the automatic variables are not set up before
+# parameter binding), so `Split-Path -Parent $PSScriptRoot` threw before the first case. The body knows its own path.
+if (-not $PSBoundParameters.ContainsKey('Target')) {
+  if ([string]::IsNullOrEmpty($MyInvocation.MyCommand.Path)) { throw 'gs-host-role-probe.test: REFUSED: run it as a file (-File, or & <path>), or pass -Target <gs-host.ps1>' }
+  $Target = Join-Path (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) 'gs-host.ps1'
+}
 $Target = (Resolve-Path -LiteralPath $Target).Path
 $ProbeScript = Join-Path (Split-Path -Parent $Target) 'host-role-probe.sh'
 $global:GsSelf = (Get-Process -Id $PID).Path

@@ -793,6 +793,13 @@ GRAVITON GATE** (step 12b; never PASS, never inferred from amd64), allowed only 
 architecture proof and amd64 runtime smoke. The live AL2023 / systemd drills (F7-F9) join that pre-cutover live
 certification. Prerequisites: Node/npm, Git for Windows, Terraform >= 1.10, and Docker Desktop (Linux engine, buildx; no
 arm64 emulation needed) with network access to `public.ecr.aws`, the npm registry and the Amazon Linux repositories.
+PHASE 1 CERTIFICATION CLOSURE: the same ONE command carries every Phase-1 regression -- `PHASE-1 targeted` (13r's pins,
+which must RUN: clone the full history; steps 13-25; step 9; step 16's edge probe; F5 / F6), `PHASE-1 targeted (Linux)`
+(F5 / F6's real `host-role-probe.sh` on a fake host, Linux-only, in the pinned Linux Node container), the real-Docker
+fresh-host gate, and gs-host.ps1's three offline regressions (`tests/gs-host-stderr`, `-role-probe`,
+`-install-script.test.ps1`), each its own gate, run under **Windows PowerShell 5.1** exactly as documented (no
+`-Target`). Its summary and JSON state **WINDOWS POWERSHELL 5.1: PROVEN / NOT PROVEN** -- PROVEN only on Windows, from
+those runs. No separate PowerShell 5.1 command remains.
 
 ## Certification: what remains valid, what reruns, what retires
 

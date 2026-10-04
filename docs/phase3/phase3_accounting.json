@@ -1493,7 +1493,8 @@
    "disp": "A",
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-C support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662` (the room strip's one slot became two -- `utils/roomNotices.ts`: the link's notice WITH ITS KIND and the last refusal of this tab's own action; every clear names a kind (`clear-connection`) or the event (`submission-landed`), never a sentence; the RED R5 link callbacks name their slot and kind, the drain retires `catching-up` by kind, a divergence is a connection notice; `RoomNoticeSlots` draws both, deferring to the standing hold notice; the one-line surfaces read the refusal first), not integrated"
   },
   {
    "key": "AUD-14.02",
@@ -3514,7 +3515,8 @@
    "disp": "A",
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W3-C RED R1 `08d857b` (a landed move dispatches `submission-landed`: the refusal slot is retired whatever it said -- turn gate, server `refused`, stale, unsent -- with the catching-up / resync notices; the reconnecting, paused, build-skew, incompatible and divergence notices stand), not integrated"
   },
   {
    "key": "P3-N005",
@@ -3736,7 +3738,8 @@
    "disp": "A",
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
-   "notes": "The draft deferred this to Phase 4. It is a known defect; it stays in Phase 3 behind OD-12."
+   "notes": "The draft deferred this to Phase 4. It is a known defect; it stays in Phase 3 behind OD-12.",
+   "status": "IMPLEMENTED — W3-C RED R1 `08d857b` (the room branch answers `allocated !== null`, the per-action signal) + `6cb86e4` (outside RED: a refused run returns before marking 'has run' and moving the step; a refused lay takes back the power key it added to the shell's fallback set and re-arms the JK -- `utils/submissionAnswer.ts`, only the room's `false` rolls back), not integrated"
   },
   {
    "key": "P3-N021",
@@ -4711,7 +4714,7 @@
   "W2-M": "NOT STARTED",
   "W3-A": "NOT STARTED",
   "W3-B": "NOT STARTED",
-  "W3-C": "NOT STARTED",
+  "W3-C": "COMPLETE — slice branch `phase3/w3-c-refusal-display` support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662` (from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762`); NOT integrated (integration and owner broad gate pending). AUD-14.01, P3-N004, P3-N020 IMPLEMENTED. OD-12 followed: two RED commits, each its own and independently reviewed -- R1 (two lines: the landed-submission clear and the room branch's answer) and R5 (the server-link callbacks, the drain's catching-up clear and its divergence write; the latter two sit in R5 outside the plan's line range and are named by AUD-14.01's own source). Dependencies W2-J and W1-H integrated in the base. Recorded follow-ups (LOW): the client's own pre-send gates (turn, catching-up, link-down) answer `undefined` and roll nothing back (needs further R1 lines); a resync can settle a landed move null and roll back its shell state (the board stays authoritative); an `error` frame answering a submission is shown as a `transport` connection notice and is not retired by a landed move (unchanged from before); the App wiring of the rollbacks is source-pinned. Presentation only: no engine, server, rules-version or settlement change",
   "W3-D": "NOT STARTED",
   "W3-E": "COMPLETE — `phase3/w3-manual-city-bypass` `07454d0` + review follow-ups `6d7cfa1`; integrated at the safe Wave-2 integration (`a860178`) under OD-11",
   "W3-F": "NOT STARTED",

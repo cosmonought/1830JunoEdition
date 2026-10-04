@@ -19,7 +19,7 @@
 // Design note #605: the status dock's scroll compensation is a `useLayoutEffect` -- it has to run after React
 // commits the new bottom padding and before the browser paints, or the correction is visible as a jump. Since
 // Phase 3 W1-I it lives in `utils/useStatusDockHeight.ts` with the dock's observer.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { WalletProvider, useWallet, CONTRACT_ADDRESS } from "./context/WalletContext";
 import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate";
@@ -29,10 +29,24 @@ import { connectServerLink, type ServerLink } from "./utils/serverLink";
 // Phase 3 W3-I: the active room link's read-only queue, for the par prompt and the offer forms.
 import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
 import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
+import { rollBackIfRefused, submissionRefused } from "./utils/submissionAnswer"; // Phase 3 W3-C (P3-N020)
+import { RoomNoticeSlots } from "./components/RoomNoticeSlots"; // Phase 3 W3-C (AUD-14.01)
 import { boardRulesVersion } from "./utils/buildStamp"; // Phase 3 W2-I / OD-6 (AUD-01.07)
 /* #1223: the alarm #1207 argued for and nobody connected. The comparison lives in its own module so it is
    testable without a socket, a server or this file. */
 import { divergenceVerdict } from "./utils/divergenceWatch";
+/* Phase 3 W3-C (AUD-14.01): the room strip's notice constants live with its two-slot model (`roomNotices.ts`). */
+import {
+  CATCHING_UP_BANNER,
+  NO_ROOM_NOTICES,
+  RECONNECTING_BANNER,
+  RESYNC_BANNER,
+  ROOM_PAUSED_BANNER,
+  TURN_REFUSAL,
+  noticeActionFor,
+  roomNoticeLine,
+  roomNoticesReducer,
+} from "./utils/roomNotices";
 import { divergentFields, fieldDigests, stateDigest } from "./gameEngine/stateDigest";
 import { GameSessionProvider, useGameSession } from "./context/GameSessionContext";
 import HexGridRenderer, {
@@ -888,17 +902,6 @@ const ACTION_LATCH_BACKSTOP_MS = 6000;
  *  the shell waits for a frame before playing the line anyway (a viewer who is not on the map). */
 const HAUNTING_AUDIO_GRACE_MS = 1500;
 
-/** #1253: the room-error banner while the link is between sockets. A constant so the clear can recognise it. */
-const RECONNECTING_BANNER = "Connection to the room was lost — reconnecting…";
-/** #1407: the turn refusal's one wording -- the client gate's and `turnAuthority`'s -- so a landed move can
- *  recognise and retire it. */
-const TURN_REFUSAL = "It is not your turn.";
-/** #1407: what a click during the reload's replay is told, in place of a turn refusal about a historical board. */
-const CATCHING_UP_BANNER = "Catching up with the room — try that again in a moment.";
-/** LIVE-3A: while this tab rebuilds a room whose history it turned out not to share (`ahead` / `resync`). */
-const RESYNC_BANNER = "This tab's copy of the room did not match the server's — reloading the room's history.";
-/** LIVE-3A: while the server holds the room (`status`) and gave no sentence of its own. */
-const ROOM_PAUSED_BANNER = "The game server has paused this room. It will resume on its own.";
 
 /* Design note #875: `RIVAL_ROUTE_INDEX_BASE` lives in `watcherRouteChips.ts`, which is now the only thing
    that applies it -- for chip rows built with `watcherTrainDrafts` outside an Operating Round's Routes step,
@@ -2155,7 +2158,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           actor?: string | null;
           at?: number;
         },
-      ) => Promise<void> | void)
+        /* Phase 3 W3-C (P3-N020): a room submission now answers whether it landed (`false` when it did not). */
+      ) => Promise<boolean | undefined | void> | void)
     | null
   >(null);
 
@@ -4369,7 +4373,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [routeFeedback, setRouteFeedback] = useState<string | null>(null);
   /* last_route_revenue cannot say whether revenue was earned THIS turn, so the turn's own history is observed; null enforces. #522: the room cursor, three refs so dispatching effects are not re-armed.
      See docs/ai_architecture/state_machine.md - App.tsx #278 */
-  const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
+  /* ==================================================================
+      PHASE 3 W3-C (AUD-14.01, P3-N004): TWO SLOTS -- THE CONNECTION AND THE REFUSAL (`roomNotices.ts`)
+     ==================================================================
+     `sandboxRoomError` was one slot with ~28 writers and exact-text clears. It is now the two-slot model: the
+     connection notice (with its kind) and the last refusal. `dispatchRoomNotice` names the slot and the kind;
+     `setSandboxRoomError(sentence)` stays for the writers that hand a bare sentence and is routed by
+     `noticeActionFor` (the connection constants by identity, everything else a refusal). `sandboxRoomError` is the
+     one-line reading for the surfaces that have one slot. */
+  const [roomNotices, dispatchRoomNotice] = useReducer(roomNoticesReducer, NO_ROOM_NOTICES);
+  const sandboxRoomError = roomNoticeLine(roomNotices);
+  /* A sentence only: no writer clears by comparing text any more (the RED R1 / R5 callers name a kind). */
+  const setSandboxRoomError = useCallback((sentence: string) => dispatchRoomNotice(noticeActionFor(sentence)), []);
   const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
   const [sandboxAppliedCount, setSandboxAppliedCount] = useState(0);
   /* ==================================================================
@@ -6671,8 +6686,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                contradicted is not information; it is the thing the player is reading instead of the game. So
                a landed submission clears exactly the turn refusals -- the reconnecting banner and a
                divergence verdict are about other facts and stand. */
+            /* Phase 3 W3-C (AUD-14.01 / P3-N004, OD-12 RED R1): a landed move retires the REFUSAL SLOT -- any refusal,
+               not only the turn refusal (a server `refused` or stale answer stayed up after the turn was played on) --
+               and the two connection kinds a landed move contradicts (`roomNotices.ts`). No sentence is compared. */
             if (options?.automatic !== true) {
-              setSandboxRoomError((current) => (current === TURN_REFUSAL ? null : current));
+              dispatchRoomNotice({ type: "submission-landed" });
             }
           }
           if (allocated !== null && appliedIndexRef.current === appendAt) {
@@ -6709,7 +6727,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            * STILL ONLY THE PLAYER WHO ACTED, which is what #697's placement was also buying. The drain runs on
            * every client, so the actor test does that job instead -- and it is the same comparison #786 makes
            * in reverse for the payout notice, so the two can never both fire. */
-          return;
+          /* Phase 3 W3-C (P3-N020, OD-12 RED R1): THE PER-ACTION ANSWER, to the caller that dispatched it -- `false`
+             when the room did not apply this submission (refused, stale, not sent), so a handler can roll back the
+             shell state it set for the move (a spent power, the run marking). `undefined` from every other path. */
+          return allocated !== null;
         }
 
         /* Setup is handled first and returns: it is not a move. Idempotent by position, and a roster 1830 cannot deal leaves state untouched.
@@ -10457,7 +10478,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       trainDrafts.filter((draft) => turnRoutes.some((entry) => entry.trainIndex === draft.trainIndex)),
     );
 
-    await runGameplayAction("RunMultipleRoutes", {
+    const runAnswer = await runGameplayAction("RunMultipleRoutes", {
       RunMultipleRoutes: {
         game_id: gameId,
         protocol_id: actingProtocolId,
@@ -10514,6 +10535,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         payout_strategy: "Withhold",
       },
     });
+    /* Phase 3 W3-C (P3-N020): a run the room did not apply marks nothing -- no "has run", no step advance, no note
+       about drafts left out of a run that did not happen. The refusal's sentence is in the room strip. */
+    if (submissionRefused(runAnswer)) return;
     if (droppedNote !== null) showActionToast(droppedNote);
 
     /* ==================================================================
@@ -11982,7 +12006,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     ) => {
       /* The board write lives inside runGameplayAction's sandbox branch - outside it, a replayed lay charged the treasury and left the board blank.
          See docs/ai_architecture/canvas_rendering.md - App.tsx #522 */
-      runGameplayAction("LayTile (sandbox)", {
+      // Phase 3 W3-C (P3-N020): the room's per-action answer goes back to the lay that sent it.
+      const answer = runGameplayAction("LayTile (sandbox)", {
         LayTile: {
           game_id: gameId,
           protocol_id: actingProtocolId,
@@ -12016,6 +12041,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       /* Design note #1145: the ghost is NOT cleared here. It is marked sent and held until the board comes
          back with the lay -- see `handleRingConfirmed` for why, and the release effect below for when. */
       setPreviewTile((current) => (current ? { ...current, committed: true } : current));
+      return answer;
     },
     [runGameplayAction, gameId, actingProtocolId],
   );
@@ -12827,7 +12853,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               });
               divergenceReportedAtRef.current = verdict.reportedAt;
               divergenceEverAgreedRef.current = verdict.everAgreed;
-              if (verdict.message) setSandboxRoomError(verdict.message);
+              // Phase 3 W3-C (OD-12 RED R5): a divergence is a fact about the link's board, not a refusal.
+              if (verdict.message) dispatchRoomNotice({ type: "connection", kind: "divergence", text: verdict.message });
               if (verdict.message || verdict.note) {
                 /* BOTH HASHES AND THE INDEX, ALWAYS. The sentence on screen is for the player; this line is
                    for whoever has to find out WHY -- and a divergence is diagnosed by replaying the log to
@@ -12867,8 +12894,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         }
       } finally {
         replayingRef.current = false;
-        // #1407: the catch-up notice was about this drain, which is over.
-        setSandboxRoomError((current) => (current === CATCHING_UP_BANNER ? null : current));
+        // #1407: the catch-up notice was about this drain, which is over. W3-C: retired by its kind, not its text.
+        dispatchRoomNotice({ type: "clear-connection", kind: "catching-up" });
       }
     };
 
@@ -12888,8 +12915,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const unsubscribe = GAME_SERVER_URL
       ? (() => {
           const accumulated: SandboxAction[] = [];
-          /** LIVE-3A: the room-status banner this link put up, so `live` clears only its own. */
-          let roomStatusBanner: string | null = null;
           const link = connectServerLink({
             url: GAME_SERVER_URL,
             /* LIVE-2D: the game's server-minted id. The link says nothing about who this tab is -- the socket was
@@ -12909,21 +12934,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               for (const entry of entries) accumulated.push(entry as SandboxAction);
               void drain([...accumulated]);
             },
+            /* Phase 3 W3-C (AUD-14.01, OD-12 RED R5): each callback names its slot and, for the link's own notices,
+               their kind -- so a refusal no longer replaces the reconnecting banner, and no clear compares a sentence. */
             onRefused: (reason) => {
               linkExplainedRef.current = true;
-              setSandboxRoomError(withoutSupportRef(reason));
+              dispatchRoomNotice({ type: "refusal", text: withoutSupportRef(reason) });
             },
             onStale: () => {
               linkExplainedRef.current = true;
-              setSandboxRoomError("The room had moved on — this tab has caught up. Try that again.");
+              dispatchRoomNotice({ type: "refusal", text: "The room had moved on — this tab has caught up. Try that again." });
             },
             onBuildSkew: (clientBuild, serverBuild) => {
               linkExplainedRef.current = true;
               /* #1206: NOT a desync, and saying so is the point. A client that reported this as a divergence
                  would send somebody hunting a bug that is a deploy. */
-              setSandboxRoomError(
-                `This tab is running build ${clientBuild} and the server is on ${serverBuild}. Reload to catch up.`,
-              );
+              dispatchRoomNotice({
+                type: "connection",
+                kind: "build-skew",
+                text: `This tab is running build ${clientBuild} and the server is on ${serverBuild}. Reload to catch up.`,
+              });
             },
             onIncompatible: (reason, pinned, supported, why) => {
               linkExplainedRef.current = true;
@@ -12931,7 +12960,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  built nothing and will apply nothing. The link has closed for good; reloading does not change the
                  answer, and the sentence says what would. LIVE-4 (L4-3): the server's sentence is for the ACTUAL
                  reason (`why`), and the rules versions are named only when the rules pin is that reason. */
-              setSandboxRoomError(incompatibleNotice({ reason, why, pinned, supported }));
+              dispatchRoomNotice({ type: "connection", kind: "incompatible", text: incompatibleNotice({ reason, why, pinned, supported }) });
             },
             onError: (message) => {
               linkExplainedRef.current = true;
@@ -12940,7 +12969,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                  which `onStatus("open")` below is the only thing that clears -- so after a game-server restart
                  every table kept "connection error" in its top bar although it was live again (e2e: restart with
                  two devices seated). It is the reconnecting banner, and it goes when the socket is back. */
-              setSandboxRoomError(message === "connection error" ? RECONNECTING_BANNER : withoutSupportRef(message));
+              dispatchRoomNotice(
+                message === "connection error"
+                  ? { type: "connection", kind: "reconnecting", text: RECONNECTING_BANNER }
+                  : { type: "connection", kind: "transport", text: withoutSupportRef(message) },
+              );
             },
             /* LIVE-2D: read access to this game was withdrawn (kicked, the table cancelled or expired, a private
                table dealt without this tab, a full watcher cap). The link has stopped; the shell says so once. */
@@ -12956,28 +12989,26 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             onResync: () => {
               accumulated.length = 0;
               linkExplainedRef.current = true;
-              setSandboxRoomError(RESYNC_BANNER);
+              dispatchRoomNotice({ type: "connection", kind: "resync", text: RESYNC_BANNER });
             },
-            /* LIVE-3A (E-10): the room's availability. `live` clears the banner this link put up, and only that. */
+            /* LIVE-3A (E-10): the room's availability. `live` clears the room-status notice, whatever the server
+               wrote in it (W3-C: by kind, so no copy of the sentence is kept to compare). */
             onRoomStatus: (state, reason) => {
               if (state === "live") {
-                const shown = roomStatusBanner;
-                roomStatusBanner = null;
-                setSandboxRoomError((current) => (current !== null && current === shown ? null : current));
+                dispatchRoomNotice({ type: "clear-connection", kind: "room-status" });
                 return;
               }
-              roomStatusBanner = reason ?? ROOM_PAUSED_BANNER;
               linkExplainedRef.current = true;
-              setSandboxRoomError(roomStatusBanner);
+              dispatchRoomNotice({ type: "connection", kind: "room-status", text: reason ?? ROOM_PAUSED_BANNER });
             },
             /* #1253: the wire's own state, so a player can tell "the server is thinking" from "the wire is
                down". The banner is cleared only if it is still this one -- a refusal that arrived meanwhile
                is not ours to erase. */
             onStatus: (status) => {
               if (status === "reconnecting") {
-                setSandboxRoomError(RECONNECTING_BANNER);
+                dispatchRoomNotice({ type: "connection", kind: "reconnecting", text: RECONNECTING_BANNER });
               } else {
-                setSandboxRoomError((current) => (current === RECONNECTING_BANNER ? null : current));
+                dispatchRoomNotice({ type: "clear-connection", kind: "reconnecting" });
               }
             },
           });
@@ -13043,7 +13074,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       const gameIdNow = sandboxRoomRef.current;
       if (!gameIdNow) return false;
       if (options?.busy !== false) setSandboxRoomBusy(true);
-      setSandboxRoomError(null);
+      dispatchRoomNotice({ type: "clear-refusal" }); // W3-C: a new op retires the last refusal, not the link's notice
       try {
         const answer = await roomOp(op, gameIdNow);
         if (!answer.ok) {
@@ -13068,7 +13099,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** Design note #522: opens a table from the shell's own gate -- `room-op create` with the printed game's terms. */
   const handleHostSandboxRoom = useCallback(async () => {
     setSandboxRoomBusy(true);
-    setSandboxRoomError(null);
+    dispatchRoomNotice({ type: "clear-refusal" });
     try {
       /* LIVE-2E: nobody chose a name on this path, so the host's seat starts with the profile's. */
       const answer = await createHostedGame(STANDARD_VARIANTS, undefined, profileNickname());
@@ -13092,7 +13123,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return;
     }
     setSandboxRoomBusy(true);
-    setSandboxRoomError(null);
+    dispatchRoomNotice({ type: "clear-refusal" });
     try {
       const answer = await joinHostedGame(code, true);
       const joined = gameIdOf(answer);
@@ -13120,7 +13151,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     /* Forget the room on leave, so the next refresh does not silently rejoin it.
        See docs/ai_architecture/firebase_middleware.md - App.tsx #551 */
     writeActiveSandboxRoom(null);
-    setSandboxRoomError(null);
+    dispatchRoomNotice({ type: "reset" }); // W3-C: nothing on the strip belongs to the next table
     appliedIndexRef.current = 0;
     setSandboxAppliedCount(0);
   }, [roomLost]);
@@ -13385,8 +13416,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         ? JK_TILE_ABILITY_KEY
         : undefined;
     if (spentAbility === JK_TILE_ABILITY_KEY) setJkLayArmed(false);
+    /* Phase 3 W3-C (P3-N020): the dispatch's answer, so a refused lay can take back the power it spent below. */
+    let layAnswer: unknown;
     if (sandbox) {
-      handleSandboxLayTile(
+      layAnswer = handleSandboxLayTile(
         q,
         r,
         tileId,
@@ -13397,7 +13430,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         spentAbility,
       );
     } else {
-      runGameplayAction("LayTile", {
+      layAnswer = runGameplayAction("LayTile", {
         LayTile: {
           game_id: gameId,
           protocol_id: actingProtocolId,
@@ -13436,6 +13469,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       setHomeStationPlacement(null);
       if (homeStationPlacement) setActiveMainTab(homeStationPlacement.returnTab);
     }
+    /* Phase 3 W3-C (P3-N020): A REFUSED LAY SPENDS NOTHING. The room's answer, when it says the lay was not applied,
+       takes back exactly what this handler set for it: the power key added to the shell's fallback set, and the
+       JK's arm (pressed again, it would have been armed). The board never recorded either -- it applied nothing. */
+    const errandKey = errandClaimsLay(homeStationPlacement, q, r) ? homeStationPlacement?.abilityKey ?? null : null;
+    void rollBackIfRefused(layAnswer, () => {
+      if (errandKey !== null) {
+        setUsedPrivateAbilities((prev) => {
+          if (!prev.has(errandKey)) return prev;
+          const next = new Set(prev);
+          next.delete(errandKey);
+          return next;
+        });
+      }
+      if (spentAbility === JK_TILE_ABILITY_KEY) setJkLayArmed(true);
+    });
     // Design note #1145: closes the ring, keeps the tile.
     handleRingConfirmed();
   }, [
@@ -14237,9 +14285,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 {holdNoticeFor(sandboxRoom)}
               </span>
             )}
-            {sandboxRoomCode && sandboxRoomError && sandboxRoomError !== holdNoticeFor(sandboxRoom) && (
-              <span style={styles.roomStripError}>{sandboxRoomError}</span>
-            )}
+            {/* Phase 3 W3-C (AUD-14.01): the strip's two slots, each shown once -- the link's notice and the last
+               refusal of this tab's own action -- and neither repeats the room's standing hold notice. */}
+            {sandboxRoomCode && <RoomNoticeSlots notices={roomNotices} holdNotice={holdNoticeFor(sandboxRoom)} />}
           </>
         }
         /* Design note #1083: the sandbox room's code, in the slot the Neta DAO credit vacated. `null` for a

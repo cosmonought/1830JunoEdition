@@ -529,6 +529,32 @@ integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not
 - **Follow-ups (not implemented here):** the W2-J LOW (treasury diagnostic beside the float line on an M&H / C&A float); carried unchanged:
   the Buy Trains from a Corporation form LOW, the W2-F duplicate-waiting LOW, the two NITs and the deferred scroll-to-card LOW.
 
+## W3-C slice status (2026-10-04)
+
+**Branch** `phase3/w3-c-refusal-display` @ `6c28662` from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762` (the current provisional
+baseline, unchanged). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). Dependencies W2-J
+and W1-H are integrated in the base. OD-12: two RED commits, each its own and independently reviewed.
+
+- **AUD-14.01 — support `3c75394` (+ `bfec83c`), RED R5 `21d6b15`, `6cb86e4`:** the room strip's one error slot (~28 writers,
+  exact-text clears) is two slots (`utils/roomNotices.ts`): the link's notice with its KIND (reconnecting, catching-up, resync,
+  room-status, build-skew, incompatible, divergence, transport) and the last refusal of this tab's own action. Every clear names a
+  kind or the landed-move event, never a sentence. RED R5: the server-link callbacks name their slot and kind (`onRoomStatus('live')`
+  and `onStatus('open')` retire their kind), the drain's end retires `catching-up` by kind and the divergence verdict is a connection
+  notice (both in R5, outside the plan's line range, named by this row's own source). `RoomNoticeSlots` draws both slots and defers
+  to the standing hold notice; the one-line surfaces read the refusal first.
+- **P3-N004 — RED R1 `08d857b`:** a landed move retires the refusal slot whatever it said (it cleared only `TURN_REFUSAL`), and the
+  catching-up / resync notices a landed move contradicts; the link's other notices stand.
+- **P3-N020 — RED R1 `08d857b` + `6cb86e4`:** the room branch of `runGameplayAction` answers `allocated !== null` -- the per-action
+  signal -- and the handlers take back what they set: a refused run marks nothing (no "has run", no step advance); a refused lay
+  removes the power key it added to the shell's fallback set and re-arms the JK (`utils/submissionAnswer.ts`: only `false` rolls back).
+- **Recorded follow-ups (LOW, not implemented here):** the client's own pre-send gates (turn, catching-up, link-down) answer
+  `undefined` and roll nothing back (further R1 lines); a resync can settle a landed move null and roll back its shell state (the
+  board stays authoritative); an `error` frame answering a submission shows as a `transport` notice not retired by a landed move
+  (as before); the App wiring of the rollbacks is source-pinned. NITs: one connection slot (a later kind replaces an earlier one, as
+  before); the one-line reading puts the refusal before a terminal notice.
+- **Not taken:** W3-G, W3-J, W3-F; the W2-F / W3-I / W2-I / W2-J follow-ups. Rules version and settlement unchanged. The four
+  pre-existing meta-test failures are identical on `18d4762` and on this branch.
+
 ## Scope and closing remark
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |

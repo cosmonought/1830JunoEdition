@@ -195,12 +195,26 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
     acronym: "MH",
     revenue: 20,
     faceValue: 110,
+    /* PHASE 3 W3-J (AUD-25.12, W2-E's residue): this entry predated the M&H authority (`mohawkExchange.ts`, #1630) and
+       OD-3 -- it said the exchange happens "between turns" and that taking it closes the company, with no word of the
+       owner's choice of pile, the Orange/Brown waiver, the certificate limit or the queued timing (a request made off
+       the owner's own Stock Round turn executes only at the next turn boundary, if it is still legal then). W2-E
+       corrected the Rules Reference card (RR-6) but not this one. The long form is now the card's own sentences, verbatim
+       (`RulesReference.tsx` "mh"; pinned by `phase3W3JCopy.test.ts`), so the two surfaces cannot disagree again. */
     abilityBullets: [
       "Owner may trade it in for a 10% NYC share from the IPO or the Bank Pool.",
-      "Available in either round type, between turns. Taking it closes the company.",
+      /* The card's bullets are held to two lines of at most 100 characters (`privateCardCopy.test.ts`), so this one is
+         the card's queued-timing and closure sentences said short; the long form below is the card's, verbatim. */
+      "Queued unless it is the owner's own Stock Round turn; it closes the M&H when it executes.",
     ],
     ability:
-      "Its owning player may trade it in for a 10% NYC share, so long as they hold under 60% of the NYC already and a share is actually free in the IPO or the Bank Pool. The trade can be made on their own stock-round turn, or in the gap between any other player\u2019s or corporation\u2019s turn, in either kind of round. Taking it closes the company.",
+      "A player owning Mohawk & Hudson may exchange it for one 10% share of New York Central. " +
+      "The player must hold under 60% of the NYC, and an NYC share must be free in the IPO or the Bank Pool. " +
+      "The 60% cap does not apply while NYC is in the Orange or Brown zone, and the exchange may not leave the player over the certificate limit. " +
+      "The owner chooses the IPO or the Bank Pool; the other pile is never substituted. " +
+      "The exchange may happen during the owner's Stock Round turn, or between other players' or corporations' turns in either round. " +
+      "On the owner's own Stock Round turn it executes at once. Requested at any other time, it is queued and executes at the next turn boundary only if it is still legal then. " +
+      "The exchange closes Mohawk & Hudson when it executes.",
   },
   5: {
     acronym: "CA",

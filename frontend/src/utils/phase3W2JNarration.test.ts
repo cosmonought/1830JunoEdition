@@ -218,6 +218,29 @@ describe("AUD-10.01 (K-20): a presidency change is narrated, with its tie-break"
     expect(second.line).toContain("Cal and Bob each hold 30%; the tie goes to the player seated closest to Ann going clockwise, which is Cal.");
   });
 
+  it("review fix: the level holders are listed clockwise from the outgoing president, the winner first", () => {
+    // p1 presides with 40%, p0 and p2 at 30%; p1 sells 20%. Seated p0, p1, p2: clockwise from p1 is p2 then p0.
+    const before = board(["p0", "p1", "p2"], {
+      active_player_index: 1,
+      public_companies: [
+        company({
+          president: "p1",
+          ipo_pool_percentage: 0,
+          player_holdings: [
+            { player: "p0", percentage: 30 },
+            { player: "p1", percentage: 40 },
+            { player: "p2", percentage: 30 },
+          ],
+        }),
+      ],
+      market_positions: { [PRR]: { ...START.start, enteredAt: 1 } },
+    } as never);
+    const after = applySandboxAction(before, SELL(20) as never, { actor: "p1" });
+    expect(after.public_companies[0].president).toBe("p2");
+    const line = describeGameplayAction(SELL(20) as never, context(before, after));
+    expect(line).toContain("Cal and Ann each hold 30%; the tie goes to the player seated closest to Bob going clockwise, which is Cal.");
+  });
+
   it("no presidency sentence when the crown does not move (an equal holding leaves it where it is)", () => {
     const before = presided(["p0", "p1", "p2"], [{ player: "p1", percentage: 30 }]);
     const { after, line } = narrate(before, SELL(10));

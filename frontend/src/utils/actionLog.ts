@@ -490,7 +490,14 @@ function presidencyChangeSentence(context: ActionLogContext): string | null {
       .filter((entry) => entry.player !== to && entry.player !== from && entry.percentage === winner)
       .map((entry) => entry.player);
     if (level.length > 0) {
-      const tied = [to, ...level].sort((a, b) => seating.indexOf(a) - seating.indexOf(b)).map(who);
+      /* Listed around the circle the tie is counted on -- clockwise from the outgoing president -- so the named
+         order is the rule's own order; a holder the roster does not seat (a fixture's board) goes last. */
+      const origin = Math.max(0, seating.indexOf(from));
+      const around = (player: string) => {
+        const seat = seating.indexOf(player);
+        return seat === -1 ? Number.POSITIVE_INFINITY : (seat - origin + seating.length) % seating.length;
+      };
+      const tied = [to, ...level].sort((a, b) => around(a) - around(b)).map(who);
       const named = tied.length === 2 ? `${tied[0]} and ${tied[1]}` : `${tied.slice(0, -1).join(", ")} and ${tied[tied.length - 1]}`;
       sentence +=
         ` ${named} each hold ${winner}%; the tie goes to the player seated closest to ${who(from)} going clockwise, ` +

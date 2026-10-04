@@ -9,9 +9,16 @@
 (`Tee-Object`; never `-Append` onto an earlier capture).
 
 **What it does:** removes the ECS-era hosting plane of this workload -- and only that -- from staging, then proves it is
-gone. It never touches a durable authority: the game, identity and ledger tables, the backup vault, the KMS keys, the
-SSM documents (the p1 document only loses p2's route), ECR, the CloudFront distribution (its `/gs*` origin domain moves
-once, T1), the bootstrap / operator roles, the host (`stacks/single-host`) or the VPC.
+gone.
+- **It never destroys or replaces a durable authority:** the game, identity and ledger tables; the backup vault; the KMS
+  keys; the SSM documents; ECR; the CloudFront distribution; the bootstrap / operator roles; the host
+  (`stacks/single-host`); the VPC.
+- **Its only in-place edits of them are guarded:**
+  - T1 moves the distribution's `/gs*` origin domain (`edge-cutover`);
+  - T3 narrows the p1 document's route table and the bootstrap / operator policies' document lists to p1
+    (`compute-none`);
+  - T5 removes the ECS task role's name from the ledger's resource policy and every signing-key policy
+    (`ledger-task-deauthorize`).
 
 **What it is not:** a migration. There is no coexistence proof, no rollback to ECS, no traffic choreography and no
 zero-downtime requirement (`/gs*` has been offline since the pools were drained; downtime is accepted).
@@ -35,8 +42,17 @@ zero-downtime requirement (`/gs*` has been offline since the pools were drained;
 ## The OWNER-GO boundary
 
 T0 is read-only and needs no GO. **Every mutation needs its own explicit owner GO, consumed immediately before that
-mutation.** The owner may send the GO lines together in one message after T0 PASSES; the session still executes them in
-order and stops at the first result that is not a PASS. Each GO names its object:
+mutation.**
+- **Batchable (reversible):** GO-T1, GO-T2, GO-T4 and GO-T5 may be sent together after T0 PASSES. Each is still
+  conditional on its own guard PASS. The session executes them in order and stops at the first result that is not a PASS.
+- **Never batched (irreversible):** GO-T3, GO-T6, GO-T7 and each GO-T8a–d come in their OWN owner message, sent only
+  AFTER the session has posted what that GO authorises:
+  - for T3: the judged compute-none plan and its destroy list (pool log data and alarm history go with it);
+  - for T6: the listed log-group names;
+  - for T7: the NAT evidence PASS, plus the owner's RAM / no-planned-workload confirmation;
+  - for T8: that item's evidence.
+
+Each GO names its object:
 
 | GO | Exact text | Mutation |
 |---|---|---|
@@ -47,7 +63,7 @@ order and stops at the first result that is not a PASS. Each GO names its object
 | GO-T5 | `GO P1-R3 T5 ledger-task-deauthorize: apply <D>\teardown\t5\terraform\ledger\stack.tfplan (guard PASS)` | the task role leaves the ledger and key policies |
 | GO-T6 | `GO P1-R3 T6 delete log groups <each full name>` | Container Insights groups |
 | GO-T7 | `GO P1-R3 T7 delete NAT <nat-...> and release <eipalloc-...> (nat guard PASS)` | the NAT gateway and its EIP |
-| GO-T8a / T8b / T8c | `GO P1-R3 T8a delete DNS <name>` / `T8b delete certificate <ARN>` / `T8c delete table gs-staging-game-g2` | legacy leftovers |
+| GO-T8a / T8b / T8c / T8d | `GO P1-R3 T8a delete DNS <name>` / `T8b delete certificate <ARN>` / `T8c delete table gs-staging-game-g2` / `T8d deregister task definitions <the listed revision ARNs>` | legacy leftovers |
 
 A GO for an object other than the one T0 / the guard recorded is not a GO.
 
@@ -83,12 +99,19 @@ Save everything under `<D>\teardown\t0\`.
     aws elbv2 describe-load-balancer-attributes --load-balancer-arn <that ARN> --query "Attributes[?Key=='deletion_protection.enabled'].Value" --output text
     ```
     `false`: T2 is skipped. `true`: T2 is required. No answer, an error, or not exactly one load balancer: STOP.
-0.7 **The ARM64 execution proof of the serving release.** Step 12b's saved capture (`arm64-live-smoke.txt`) for the
-    digest the host serves, pre-judged offline (the 12b record's command) to `PASS`. T1's guard requires it. A different
+0.7 **The ARM64 execution proof of the serving release.** Step 12b's saved capture (`arm64-live-smoke.txt`), unedited,
+    for the digest the host serves. T1.3's guard judges it (`--arm64-live-smoke`): anything but PASS stops T1. A different
     serving digest needs a new 12b run first (`gs-host -Command arm64-smoke`, its own GO).
-0.8 **Logs to keep.** The owner decides whether `/gs/staging/p1` and `/gs/staging/p2` are kept; if so, export them now
-    (read-only to AWS: `aws logs filter-log-events --log-group-name /gs/staging/p1 --output json > <D>\teardown\t0\logs-p1.json`,
-    and p2). T3 deletes them; their data is not recoverable afterwards.
+0.8 **Evidence that T3 and T5 destroy** -- REQUIRED, unless the owner records a decision to discard an item. All of it
+    is read-only to AWS and saved under `<D>\teardown\t0\export\`:
+    - the pool log groups: `aws logs filter-log-events --log-group-name /gs/staging/p1 --output json > logs-p1.json`
+      (and p2);
+    - the alarms' history (CloudWatch keeps 30 days; the CLI pages it itself):
+      `aws cloudwatch describe-alarm-history --output json > alarm-history.json`;
+    - the state, before T3 and before T5:
+      - `terraform -chdir=infra/aws/stacks/app state pull > app.tfstate.json`;
+      - `terraform -chdir=infra/aws/stacks/ledger state pull > ledger.tfstate.json` (`LEDGER-ADMIN`).
+    T3 deletes the log groups and alarms; their data is not recoverable afterwards.
 0.9 **Terraform reads** (each `terraform plan` is read-only and is NEVER applied):
     - `terraform -chdir=infra/aws/stacks/app state list` → saved. It must hold the ECS-era addresses of the inventory's
       `DELETE-LEGACY` Terraform entries and the authorities -- nothing else foreign;
@@ -98,12 +121,18 @@ Save everything under `<D>\teardown\t0\`.
     - `stacks/ledger` planned with the current tfvars plus `ecs_task_role_authorized = true` (now required): no changes;
     - `stacks/single-host` planned from a clean checkout of **5b4756d** with its live tfvars: no changes. (From any later
       commit the plan REPLACES the instance -- the 13r scripts -- which is not a teardown action.)
-0.10 **The NAT** (`APP-ADMIN`, read-only): its id, VPC, subnet and allocation id; every route table routing to it
-    (`aws ec2 describe-route-tables --filters Name=route.nat-gateway-id,Values=<nat-...>`); and **T_drain**, the end of
-    this workload's last NAT use: the ECS service events of both services
-    (`aws ecs describe-services --cluster gs-staging --services gs-staging-p1 gs-staging-p2 --query "services[].events[0:20]"`)
-    showing the last task stopped and none started since, together with 0.4's empty task list. If the events no longer
-    reach back to the drain, T_drain is **unproven** (T7 then anchors at T3).
+0.10 **The NAT** (`APP-ADMIN`, read-only):
+    - its id, VPC, subnet and allocation id;
+    - every route table routing to it (`aws ec2 describe-route-tables --filters Name=route.nat-gateway-id,Values=<nat-...>`);
+    - which of those tables also carry the gateway endpoints (network.private_route_table_ids);
+    - **T_drain**, the end of this workload's last NAT use. It is proven only by BOTH:
+      - the ECS service events of both services
+        (`aws ecs describe-services --cluster gs-staging --services gs-staging-p1 gs-staging-p2 --query "services[].events[0:20]"`)
+        showing the last service task stopped, with 0.4's empty task list;
+      - no standalone task since then (the run-*-probe scripts' `RunTask`s): `aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=RunTask --start-time <T_drain>`
+        and the same for `StartTask` name no `gs-staging` cluster.
+    - T_drain is **unproven** if the events no longer reach back to it, if T_drain is more than 60 days old (CloudWatch's
+      1,440 hourly points), or if CloudTrail's 90-day history does not cover it. T7 then anchors at T3.
 
 **T0 PASSES** only when 0.1–0.10 all hold. Then the owner's GO lines.
 
@@ -167,8 +196,9 @@ answer: STOP.
    roles; p2's runtime document); the p1 document only loses p2's route; the bootstrap / operator policies only lose
    p2's document; never a table, a key, the p1 or Juno document, ECR, the distribution or the bootstrap / operator
    authority; nothing created; both plan-time gates read.
-4. The owner reads the plan's destroy list against the inventory's `DELETE-LEGACY` Terraform entries.
-5. **GO-T3**, then `terraform -chdir=infra/aws/stacks/app apply <D>\teardown\t3\terraform\app\stack.tfplan`. **Record
+4. The session posts the guard record and the plan's destroy list. The owner reads it against the inventory's
+   `DELETE-LEGACY` Terraform entries.
+5. **GO-T3** -- its own owner message, after step 4 -- then `terraform -chdir=infra/aws/stacks/app apply <D>\teardown\t3\terraform\app\stack.tfplan`. **Record
    the apply-complete UTC time** in `<D>\teardown\guards\t3-applied-at.txt` at the moment it finishes.
 6. `terraform -chdir=infra/aws/stacks/app state list` → saved: no ECS-era address remains.
 
@@ -207,38 +237,46 @@ CloudWatch created them itself; no Terraform state holds them; T3 stopped their 
 1. `aws logs describe-log-groups --log-group-name-prefix /aws/ecs/containerinsights/gs-staging/ --query "logGroups[].[logGroupName,storedBytes,retentionInDays]" --output text`
    → `<D>\teardown\t6\before.txt`. A group outside that prefix is never in scope.
 2. Optional export of what must be kept (deletion is irreversible).
-3. **GO-T6** naming each listed group, then `aws logs delete-log-group --log-group-name <full name>` for each -- never a
+3. **GO-T6** -- its own owner message, naming each group step 1 listed -- then `aws logs delete-log-group --log-group-name <full name>` for each -- never a
    wildcard -- and list the prefix again: empty (`<D>\teardown\t6\after.txt`).
 
 ## T7 — The NAT gateway: delete only on evidence (GO-T7)
 
 The NAT is outside Terraform and belongs to the existing VPC (inventory `outside.nat-gateway`, **REVIEW**). It is deleted
-only if the evidence gate proves no other workload uses it.
+only if the evidence gate proves no other workload uses it. This wait is evidence about OTHER users, not migration
+continuity: it runs in parallel with R4 and R5 and delays only R6's item 4.
 
-**The quiet window's anchor.** `capture-nat-evidence`'s `TeardownAppliedAt` argument is the start of the quiet window:
-the guard needs >= 24 whole hours, all zero, from it to the capture. Give it **T_anchor = T_drain** (T0.10): the NAT
-carried only the ECS tasks' Juno egress; since the drain this workload has sent nothing through it -- the host sits in a
-public subnet behind the internet gateway, and the interface endpoints and the ALB never route through a NAT -- so ANY
-traffic in the window is another user's and FAILS the gate (keep the NAT). A window reaching back to the drain is more
-evidence, never less; the 24-hour minimum, N1-N4 and N6 are unchanged, and the capture still runs AFTER T3 (the endpoint
-ENIs gone, so N3 can pass). If T_drain was unproven, `T_anchor` = T3's recorded apply time, and the capture waits
->= 24 whole hours after it.
+**The window.**
+- `capture-nat-evidence`'s `TeardownAppliedAt` argument is the start of the quiet window. The guard needs >= 24 whole
+  hours, all zero, from it to the capture.
+- Give it **T_anchor = T_drain** when T0.10 proved it, otherwise T3's recorded apply time. Since the drain, this
+  workload has sent nothing through the NAT: the host sits in a public subnet behind the internet gateway, and the
+  endpoints and the ALB never route through a NAT. So traffic anywhere in the window is another user's, and the gate FAILS.
+- **The capture runs no earlier than 24 whole hours after T3's recorded apply time, whatever T_anchor is.** T3 removes the
+  gateway endpoints from the shared private route tables. A workload there that only talks to S3 or DynamoDB used the
+  endpoints until T3 and would use the NAT after it, so the window must include >= 24 h of the post-T3 routing.
+- An earlier start adds evidence. It never shortens the post-T3 observation. N1–N6 and the 24-hour minimum are unchanged
+  (the CLI refuses a quiet minimum below 24 hours).
 
-1. After T3: `infra\aws\scripts\capture-nat-evidence.ps1 -Environment staging -Region <r> -NatGatewayId <nat-...> -VpcId <vpc-...> -TeardownAppliedAt <T_anchor, UTC> -Out <D>\teardown\t7\nat`
+1. At or after T3 + 24 whole hours:
+   `infra\aws\scripts\capture-nat-evidence.ps1 -Environment staging -Region <r> -NatGatewayId <nat-...> -VpcId <vpc-...> -TeardownAppliedAt <T_anchor, UTC> -Out <D>\teardown\t7\nat`
    (`.sh` on Linux).
 2. `node dist/server/src/tools/awsDeploy.js migration-guard nat --evidence <D>\teardown\t7\nat --record <D>\teardown\guards\t7-nat.json`
    must say `COST-2B NAT DELETION EVIDENCE: PASS`.
 3. The owner confirms in the record's notes what evidence cannot prove: the VPC is not RAM-shared with another account,
    and no planned workload is waiting for this NAT.
-4. **GO-T7**, then `aws ec2 delete-nat-gateway --nat-gateway-id <nat-...>`, `aws ec2 wait nat-gateway-deleted --nat-gateway-ids <nat-...>`,
-   then `aws ec2 release-address --allocation-id <its eipalloc-...>`.
+4. The session posts 1–3. Then, on **GO-T7** (its own owner message):
+   - `aws ec2 delete-nat-gateway --nat-gateway-id <nat-...>`;
+   - `aws ec2 wait nat-gateway-deleted --nat-gateway-ids <nat-...>`;
+   - `aws ec2 release-address --allocation-id <its eipalloc-...>`.
+
    The private route tables keep a blackhole default route: harmless, and Phase 1 deletes no route table (`outside.vpc`
    is REVIEW).
 
 **A FAIL keeps the NAT.** It is then another workload's (or not yet proven quiet): record it, and the owner decides
 whether it is excluded from this workload's cost (R6 item 6) or investigated. Never delete it on a FAIL.
 
-## T8 — Legacy leftovers outside Terraform (GO each)
+## T8 — Legacy leftovers outside Terraform's state (one GO each, its own message)
 
 - **T8a** (`OWNER-DNS`): delete the ALB's origin DNS name (the `gs-alb` origin domain T1 replaced, recorded by R1).
   Required for R6 (inventory `DELETE-LEGACY`); costs nothing either way.
@@ -251,6 +289,17 @@ whether it is excluded from this workload's cost (R6 item 6) or investigated. Ne
   (`aws dynamodb describe-table --table-name gs-staging-game-g2`, the item count, an on-demand backup only if the owner
   wants one) is saved. `DeletionProtectionEnabled = true` is a STOP. Then
   `aws dynamodb delete-table --table-name gs-staging-game-g2`. Irreversible without a backup. Not an R6 blocker.
+- **T8d** (`APP-ADMIN`): the ECS task-definition revisions. The module sets `skip_destroy = true` (the circuit breaker
+  rolled back to earlier revisions), so T3 only removed them from Terraform's state and every `gs-staging-p1` /
+  `gs-staging-p2` revision is still ACTIVE: inert without a cluster, but each still names the deleted task / execution
+  roles.
+  1. List them: `aws ecs list-task-definitions --family-prefix gs-staging-p --status ACTIVE --output text`. Save the
+     list; only the `gs-staging-p1` / `gs-staging-p2` families are in scope (R1 placed anything else).
+  2. On **GO-T8d** naming the listed ARNs: `aws ecs deregister-task-definition --task-definition <each ARN>`.
+  3. List again: empty.
+
+  Deregistration cannot be undone, but Terraform re-registers a revision if one is ever needed. Required for R6
+  (inventory `DELETE-LEGACY`); costs nothing either way.
 
 ## T9 — Prove the legacy plane is gone (read-only)
 
@@ -261,15 +310,16 @@ Each answer saved under `<D>\teardown\t9\`:
 | ALB | `aws elbv2 describe-load-balancers --names gs-staging-alb` | `LoadBalancerNotFound` |
 | target groups | `aws elbv2 describe-target-groups --names gs-staging-p1 gs-staging-p2` | `TargetGroupNotFound` |
 | ECS | `aws ecs describe-clusters --clusters gs-staging --query "clusters[].status"` | `INACTIVE` or nothing |
+| task definitions | `aws ecs list-task-definitions --family-prefix gs-staging-p --status ACTIVE` | none (T8d) |
 | endpoints | `aws ec2 describe-vpc-endpoints --filters Name=vpc-id,Values=<vpc-...>` | none (or only those R1 placed as another workload's) |
 | ECS-era SGs | `aws ec2 describe-security-groups --filters Name=group-name,Values=gs-staging-alb,gs-staging-task,gs-staging-endpoints` | none |
 | roles | `aws iam get-role --role-name gs-staging-app-task` / `gs-staging-app-execution` | `NoSuchEntity` |
 | p2 document | `aws ssm get-parameter --name /gs/staging/runtime/p2` | `ParameterNotFound` |
 | log groups | `aws logs describe-log-groups --log-group-name-prefix /gs/staging/` | only `/gs/staging/host` |
 | Container Insights | `aws logs describe-log-groups --log-group-name-prefix /aws/ecs/containerinsights/gs-staging/` | none |
-| alarms | `aws cloudwatch describe-alarms --alarm-name-prefix gs-staging` | exactly the five `gs-staging-host-*` alarms |
+| alarms | `aws cloudwatch describe-alarms --alarm-name-prefix gs-staging --alarm-types MetricAlarm CompositeAlarm` | exactly the five `gs-staging-host-*` metric alarms, no composite |
 | NAT | `aws ec2 describe-nat-gateways --filter Name=vpc-id,Values=<vpc-...> Name=state,Values=pending,available` | none (or the one T7 kept, recorded) |
-| EIPs | `aws ec2 describe-addresses` | exactly the host's EIP (no unassociated address) |
+| EIPs | `aws ec2 describe-addresses` | the host's EIP, plus only the kept NAT's EIP (if T7 kept it) and the addresses R1 placed as other workloads'; no unassociated address |
 | ledger | `LEDGER-ADMIN`: `aws dynamodb get-resource-policy --resource-arn <ledger ARN>`; `aws kms get-key-policy --key-id <each signing key> --policy-name default` | no `gs-staging-app-task`; `gs-staging-host-app` present |
 | state | `terraform -chdir=infra/aws/stacks/app state list` | no ECS-era address |
 

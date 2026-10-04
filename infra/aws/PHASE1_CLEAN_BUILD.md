@@ -78,8 +78,9 @@ before anything else.**
 - **coexistence:** F0 / 15b `verify --topology coexist`, the "ECS era stays as the rollback path" rule, and the
   "F0–F9 PASS before step 14" rule;
 - **migration authority hand-off, migration-specific graceful cutover, old / new pool choreography;**
-- **the long quiet-period retirement.** Step 23's "≥ 24 h after step 20" anchor becomes T7's evidence-anchored window:
-  the 24-hour rule is unchanged, but the window starts at this workload's last NAT use;
+- **the quiet period as a sequence gate.** The NAT's ≥ 24 whole quiet hours after the teardown are kept, because they
+  are evidence about OTHER users of a NAT this repository never created, not migration continuity. They now run in
+  parallel with R4 / R5 and delay only R6 item 4. The window may start earlier, at this workload's last NAT use (T7);
 - **step 25 (Cost Explorer 5–7 days) as a gate.** It is trailing confirmation and never blocks Phase 2.
 
 **Kept as operational tooling, not as Phase-1 gates:** `host-cert graceful-stop` (F7), `host-cert replacement-before /
@@ -101,11 +102,11 @@ Each entry records:
 
 | Class | Resources (staging names) |
 |---|---|
-| **KEEP-DURABLE** | game table `gs-staging-game-g1`; identity table; the p1 runtime document and the Juno document; ECR `gs-staging-server`; the CloudFront distribution + its `/gs*` origin-request policy; the bootstrap and operator roles (+ the absent recovery role's capability); the ledger table + resource policy; the locked backup vault, plan, selection and role; the KMS signing keys; the Terraform state backends; `play.<domain>` and its viewer certificate |
+| **KEEP-DURABLE** | game table `gs-staging-game-g1`; identity table; the p1 runtime document and the Juno document; ECR `gs-staging-server`; the CloudFront distribution + its `/gs*` origin-request policy; the bootstrap and operator roles (+ the absent recovery role's capability); the ledger table + resource policy; the locked backup vault, plan, selection and role (+ its customer-managed key / copy vault, if configured); the KMS signing keys; the Terraform state backends; `play.<domain>` and its viewer certificate |
 | **KEEP-HOST** | the instance `i-01fe56536bf591382`; its ENI, EIP + association, security group + rules; `gs-staging-host-app` (role, profile, inline policy); the log group `/gs/staging/host` and the five host alarms; the monthly budget; the ECR lifecycle policy (created in R4); the origin A record |
-| **DELETE-LEGACY** | ECS cluster `gs-staging`, services and task definitions p1 / p2; ALB `gs-staging-alb`, listener, rules, target groups; ALB / task / endpoint security groups and rules; the gateway and interface VPC endpoints; task and execution roles (+ policies); pool log groups `/gs/staging/p1`, `/gs/staging/p2`; the L6-5B alarms, composites and flip suppressors; `/gs/staging/runtime/p2`; the Container Insights log groups; the ALB's origin DNS name and ACM certificate |
+| **DELETE-LEGACY** | ECS cluster `gs-staging`, services p1 / p2 and their task-definition revisions (T8d: `skip_destroy` leaves them ACTIVE); ALB `gs-staging-alb`, listener, rules, target groups; ALB / task / endpoint security groups and rules; the gateway and interface VPC endpoints; task and execution roles (+ policies); pool log groups `/gs/staging/p1`, `/gs/staging/p2`; the L6-5B alarms, composites and flip suppressors; `/gs/staging/runtime/p2`; the Container Insights log groups; the ALB's origin DNS name and ACM certificate |
 | **DELETE-MIGRATION** | `gs-staging-game-g2` (the unadopted restore), only after its preconditions are proven -- owner decision, not a closure blocker |
-| **REVIEW** | the NAT gateway and its EIP (DELETE only on the T7 evidence that it is this workload's alone); the VPC, subnets, route tables, IGW (never deleted by Phase 1); the host-deploy principal; the alarm destinations; the service-linked roles; the evidence exports |
+| **REVIEW** | the NAT gateway and its EIP (DELETE only on the T7 evidence that it is this workload's alone); the VPC, subnets, route tables, IGW (never deleted by Phase 1); the host-deploy principal; the alarm destinations; the service-linked roles; the evidence exports and any on-demand backups |
 
 **Principal effects (the IAM / KMS question):**
 - Every cross-account grant in `modules/ledger` names the app account root with an `aws:PrincipalArn` condition. So
@@ -158,12 +159,15 @@ The smallest change that makes the active Phase-1 procedure "final state → dir
 - **T5** `ledger-task-deauthorize`;
 - **T6** Container Insights log groups;
 - **T7** the NAT, on evidence only;
-- **T8** the ALB's DNS name and certificate, and optionally g2;
+- **T8** the ALB's DNS name and certificate, the ECS task-definition revisions, and optionally g2;
 - **T9** read-only proof that the legacy plane is gone.
 
-**Why this order.** The existing guards force T1 before T3: `edge-cutover` requires `compute = "ecs"`, and
-`compute-none` forbids any distribution change. T3 must come before T5, T6 and T7, and T7's capture must follow T3 (the
-endpoint ENIs leave the NAT-routed subnets).
+**Why this order.** The existing guards fix T1 before T3:
+- `edge-cutover` refuses `compute = "none"`;
+- `compute-none` refuses any distribution change. T3's tfvars name the host origin, so a T3 run before T1 FAILS its guard.
+
+T3 must also come before T5, T6 and T7. T7's capture must come ≥ 24 whole hours after T3: the gateway / interface
+endpoints are gone by then, so another workload's traffic would now cross the NAT.
 
 **OWNER-GO boundary:** §11 B.
 
@@ -241,7 +245,7 @@ After it: 12b on the new host, deploy, and the R5 suite in full, plus `host-cert
 | D2 | Game-table / identity / ledger paths (after T5 changed the ledger policy) | `gs-host role-probe -Probe transactions` judged by `stage-probe host-role --probe transactions`; C1's role reads | `HOST-ROLE PROBE F6 DYNAMODB: PASS` |
 | D3 | Restart does not lose application state | a no-money game created in F1 before B4; after B4, B5 and C3: `gamesDoctor aws game <id>` shows the same game (owner the host's current epoch) and the browser reconnects to it at the same position | same game, same log position |
 | E1 | Relayer usable; contract operator correct; testnet reserve sufficient | C1's `relayer_state: usable`; `awsDeploy set-operator-plan --runtime-parameter <p1 ARN> --environment staging --to-relayer <the Juno document's relayer>` | `ALREADY <relayer>` and `READY` (the one-game planning reserve met) |
-| E2 | A controlled one-game JUNO money smoke | the Phase-2 pack (`phase2/live-run-procedure-pack` @ `c6d7e76`, `docs/phase2/`): Session 1 setup (S0 checks, relayer top-up) and ONE Session-2 core money game (2A–2L) on the final system | Session 2's PASS block; the game settled and finalized |
+| E2 | A controlled one-game JUNO money smoke | ONE 2-seat money game on the escrow the host is configured for TODAY (the Juno document's chain, contract and keys) -- no KMS key, contract, document, frontend or stack change ("E2" below) | settled on chain and finalized; payouts = the independent integer computation; `money <game> --chain` all green |
 | E3 | Money sweep healthy; `gamesDoctor` clean | `money-sweep` every 60 s, `MoneySweepSecondsSinceSuccess` < 180, `HostHealthProblems` 0; `gamesDoctor aws status`, `games --money` (none open after E2), `orphans` (none), `money <game> --chain` (every verdict green) | all hold |
 | F1 | Browser join / play smoke | `https://play.<domain>`: sign-in, `__Host-gs_session`, lobby, a no-money game (kept for D3), reconnect | the owner records it |
 | Z | The closure record | A1 again, after E2 and every drill (fresh capture and run id) | `VERIFIED` |
@@ -256,12 +260,56 @@ After it: 12b on the new host, deploy, and the R5 suite in full, plus `host-cert
 The disruptive drills require 0 open money games and RELAYQ empty (their precheck refuses otherwise), so they run before
 E2's game opens or after it finalizes.
 
-**Owner GO** (one message may carry them all; each is consumed immediately before its mutation, and the session stops at
-the first non-PASS):
+**E2 -- the controlled money smoke** (the former step 18). It is Phase 1's own smoke on the deployment the final system
+already serves. It is NOT the Phase-2 pack's Session 1 (which creates new KMS keys, a new JX-1 contract, a host key swap
+and a frontend republish) and does not replace it.
+- **Preconditions** (read-only; any one unmet is a STOP for the owner):
+  - R5 A–D accepted and E1 `READY`;
+  - the host renders `ESCROW_MONEY_TABLES=nonmainnet`, and the play origin is in `GS_ALLOWED_ORIGINS` (R4 item 1;
+    fixing either is the R4 rebuild contingency);
+  - the Juno document says `network_class` testnet (chain `uni-7`), and the host's startup logged `Juno backend OPENED`
+    (the deployment verified against the chain);
+  - the published frontend's pinned deployment (`REACT_APP_ESCROW_DEPLOYMENT` of the live build: the owner's build record
+    or the string in the served bundle) names the same chain, contract and code checksum (a republish is a separate
+    owner action);
+  - the contract's own `config` read (`min_ante`, the funding / challenge windows: the game's pace) is recorded;
+  - 0 open money games and RELAYQ empty;
+  - two owner test Keplr accounts `KA`, `KB` (each in its own browser profile) hold at least the ante plus fees plus one
+    bond in reserve.
+- **The game:**
+  - KA hosts a 2-seat money table at the contract's minimum ante, short bank where available; KB joins;
+  - both link their wallets (ADR-036);
+  - KA CreateGame, KB Join (with the server's admission), funding confirmed from the chain;
+  - KA Start, the relayer's Start confirmed, the deal checkpoint;
+  - play to the end;
+  - Settle (automatic);
+  - the payout is checked: the settlement preview equals an independent integer computation
+    `amountᵢ = floor(P·wᵢ / Σw)`, and both devices' bands say "Checked on this device";
+  - at most one consent (KB);
+  - Finalize at the window's end (automatic).
+- **Step reference:** Session 2's sheet 2A–2L, read with `git show c6d7e76:docs/phase2/SESSION2_CORE_GAME.md`
+  (branch `phase2/live-run-procedure-pack`, not in this tree). Substitute:
+  - `<JX1>` / `<JX1_TREASURY>` → the current contract and its treasury;
+  - the 900 s / 3600 s windows and the 2 JUNOX ante → the current contract's `config`;
+  - the signer proof (`jx2VerifyTx`) → against the current relayer key.
+  - Its prerequisite S2-P1 ("Session 1 PASS") is replaced by the preconditions above.
+- **Evidence:** `gamesDoctor aws money <g> --chain` after CreateGame, Join, Start, Settle and Finalize (FIN, ROSTER MATCH,
+  CHAIN BINDING MATCH, JOURNAL MATCH, no stuck intent); the balances before / after; the independent computation; RELAYQ
+  empty at the end.
+- **Owner GO, one per step** (each spends testnet JUNOX or moves money on chain; never batched with the drills):
+  - `GO P1-R5 E2 fund KA / KB` (plain bank sends, only if needed);
+  - `GO P1-R5 E2 CreateGame`;
+  - `GO P1-R5 E2 Join`;
+  - `GO P1-R5 E2 Start`;
+  - `GO P1-R5 E2 final move` (from here Settle and Finalize are automatic);
+  - `GO P1-R5 E2 consent` (after the payout check; a mismatch is ruled before the window ends: a Challenge or a recorded
+    let-it-finalize).
+
+**Owner GO for the drills and probes.** These are staging-only and recoverable, so one message may carry them all. Each is
+consumed immediately before its mutation, and the session stops at the first non-PASS:
 - `GO P1-R5 host-cert duplicate-preflight / crash-restart / reboot-restart / duplicate-fence on i-01fe56536bf591382, run <run>`;
 - `GO P1-R5 role-probe kms / transactions`;
-- `GO P1-R5 deploy -Measure`;
-- `GO P1-R5 money smoke` (it spends testnet JUNOX: the pack's budget).
+- `GO P1-R5 deploy -Measure`.
 
 **Accepting a host-cert record.** A drill is **accepted** when its record says PASS (exit 0). It is also accepted -- and
 the record kept with a note -- when it says NOT EVALUATED and its ONLY not-evaluated checks are availability
@@ -307,8 +355,19 @@ budget's alerts. Any later billing evidence above $30 / month reopens the cost i
 ## 9. Phase 2 and Phase 3
 
 - **Phase 2** begins as soon as P1-R6 closes, with the existing Phase-2 pack (`phase2/live-run-procedure-pack` @
-  `c6d7e76`). No retired migration gate is required. R5-E2 IS that pack's Session 1 and a Session-2 game: its evidence
-  serves both records, so Phase 2 continues from Session 2's closure, not from a second Session 1.
+  `c6d7e76`, written for the migration). No retired migration gate is required. Read its prerequisites this way:
+  - **S1-P1 "Phase 1 closed (migration steps A–J, step 24 …)"** → the P1-R6 closure record:
+    - R5's Z replaces step 24;
+    - R3's T0–T9 replace A–J;
+    - the owner gate and 12b PASS are unchanged;
+  - **S1-P2:**
+    - G-14 (the step-16 edge probe) → R5-B3;
+    - G-8 (KMS) → R5-D1;
+    - "step 18 deferred to Session 2" → done in R5-E2. Session 2 still runs its own JX-1 game;
+  - **P-2 (no drift) and GO-3** (the host signing-key swap): any `stacks/single-host` plan is captured from `5b4756d`'s
+    module (R4: from a later commit it replaces the instance), unless the host was deliberately rebuilt first (the R4
+    contingency).
+  - Session 1's GO-1 adds two KMS keys (the documented transition, within `max_kms_keys`).
 - **Phase 3** source work is independent and continues in parallel.
 
 ## 10. Migration gates retired vs final-system gates retained
@@ -317,7 +376,7 @@ budget's alerts. Any later billing evidence above $30 / month reopens the cost i
 |---|---|
 | §A 1–3 start-state proof | DONE; superseded by R1 / T0 |
 | §B "ECS-era resources stay as the rollback path" | RETIRED |
-| §C 6–7 preserve / export | RETAINED as T0.8 (export before the irreversible log deletion) |
+| §C 6–7 preserve / export | RETAINED as T0.8 (required: the pool logs, the alarm history and the state pulls, unless the owner records a discard) |
 | 7a, 7b, 8, 9, 9r, 10, 11, 12, 12b, 13, 13r | DONE (historical); 12 / 12b / 13 remain the release procedure |
 | F0 `verify --topology coexist` | RETIRED (no coexistence) |
 | F1–F4 | RETAINED as R5-C1 / E1 / E3 on the final system |
@@ -341,7 +400,7 @@ budget's alerts. Any later billing evidence above $30 / month reopens the cost i
 | 22 ledger-task-deauthorize | RETAINED as T5 |
 | 22b ECR lifecycle | RETAINED as R4 item 2 |
 | 22c Container Insights | RETAINED as T6 |
-| 23 NAT gate (≥ 24 h after step 20) | RETAINED as T7 (the same gate; the window anchored at this workload's last NAT use) |
+| 23 NAT gate (≥ 24 h after step 20) | RETAINED as T7: the same gate; the capture ≥ 24 whole hours after T3, the window allowed to start at this workload's last NAT use; it runs in parallel with R4 / R5 |
 | 24 inventory | RETAINED as T9 + R5-A1 / Z |
 | 25 billing | trailing confirmation (R6), never a gate |
 
@@ -362,14 +421,18 @@ budget's alerts. Any later billing evidence above $30 / month reopens the cost i
 
 Output: one record, `<D>\r1\`, PASS only when everything is placed and nothing drifted.
 
-**B. The OWNER-GO boundary for P1-R3.** After R1 PASSES and T0 PASSES, the owner sends the GO lines of
-`PHASE1_LEGACY_TEARDOWN.md` ("The OWNER-GO boundary"). The irreversible ones need special care:
-- T3 deletes the pool log data unless exported;
-- T6 deletes log data;
-- T7 releases the NAT's public IP;
-- T8c deletes g2 without a backup.
-
-Each needs its own GO line naming the object. Nothing destructive happens on a GO given before T0's record exists.
+**B. The OWNER-GO boundary for P1-R3** (`PHASE1_LEGACY_TEARDOWN.md`, "The OWNER-GO boundary"). After R1 and T0 PASS:
+- **The reversible steps may be batched.** The owner may send GO-T1, T2, T4 and T5 together; each is still conditional on
+  its own guard PASS and consumed immediately before its mutation.
+- **The irreversible steps never are.** Each comes in its own owner message, sent AFTER the session has posted what it
+  authorises:
+  - GO-T3 follows the judged compute-none plan, whose destroy list the owner reads (it deletes the pool logs and alarm
+    history);
+  - GO-T6 follows the listed log-group names;
+  - GO-T7 follows the NAT evidence PASS and the owner's own RAM / no-planned-workload confirmation (it releases the NAT's
+    public IP);
+  - each GO-T8a–d follows that item's evidence (T8c deletes g2 without a backup).
+- Nothing destructive happens on a GO given before its evidence exists.
 
 **C. P1-R4 / P1-R5:**
 - R4: item 1 read (R1), item 2 (the ECR lifecycle, one GO);

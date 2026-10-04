@@ -345,15 +345,34 @@ describe("P1-R3: the teardown runs in the order the guards force, forward only, 
     assert.ok(TEARDOWN.indexOf("modify-load-balancer-attributes") > at("## T2 ") && TEARDOWN.indexOf("modify-load-balancer-attributes") < at("## T3 "));
   });
 
-  test("T7 keeps the NAT gate's rules: the unchanged guard, >= 24 whole hours, the capture after T3, a FAIL keeps the NAT", () => {
+  test("T7 keeps the NAT gate's rules: the unchanged guard, >= 24 whole hours, the capture >= 24 h AFTER T3, a FAIL keeps the NAT", () => {
     const t7 = TEARDOWN.slice(TEARDOWN.indexOf("## T7 "), TEARDOWN.indexOf("## T8 "));
-    assert.match(t7, />= 24 whole hours/);
-    assert.match(t7, /1\. After T3: `infra\\aws\\scripts\\capture-nat-evidence\.ps1/);
+    assert.match(t7, />= 24 whole\s+hours, all zero/);
+    /* The post-T3 routing (the gateway endpoints gone from the shared route tables) is always observed for >= 24 h. */
+    assert.match(t7, /\*\*The capture runs no earlier than 24 whole hours after T3's recorded apply time, whatever T_anchor is\.\*\*/);
+    assert.match(t7, /1\. At or after T3 \+ 24 whole hours:\s+`infra\\aws\\scripts\\capture-nat-evidence\.ps1/);
+    assert.match(t7, /\*\*T_anchor = T_drain\*\* when T0\.10 proved it, otherwise T3's recorded apply time/);
     assert.match(t7, /COST-2B NAT DELETION EVIDENCE: PASS/);
     assert.match(t7, /\*\*A FAIL keeps the NAT\.\*\*/);
-    assert.match(t7, /If T_drain was unproven, `T_anchor` = T3's recorded apply time/);
     assert.doesNotMatch(TEARDOWN, /--min-quiet-hours/, "the quiet minimum is never lowered");
     assert.match(read("server/src/aws/deploy/migration/migrationCommands.ts"), /minQuietHours < 24/, "the CLI refuses a minimum below 24 hours");
+    /* T_drain is proven against standalone tasks too (the probes' RunTask), or T7 anchors at T3. */
+    const t0 = TEARDOWN.slice(TEARDOWN.indexOf("## T0 "), TEARDOWN.indexOf("## T1 "));
+    assert.match(t0, /aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=RunTask --start-time <T_drain>/);
+    assert.match(t0, /T7 then anchors at T3/);
+  });
+
+  test("the irreversible steps are never batched: GO-T3 / T6 / T7 / T8 each in its own message, after their evidence; T0 exports first", () => {
+    const boundary = TEARDOWN.slice(TEARDOWN.indexOf("## The OWNER-GO boundary"), TEARDOWN.indexOf("## T0 "));
+    assert.match(boundary, /\*\*Batchable \(reversible\):\*\* GO-T1, GO-T2, GO-T4 and GO-T5/);
+    assert.match(boundary, /\*\*Never batched \(irreversible\):\*\* GO-T3, GO-T6, GO-T7 and each GO-T8a–d come in their OWN owner message/);
+    assert.match(TEARDOWN, /5\. \*\*GO-T3\*\* -- its own owner message, after step 4 -- then/);
+    assert.match(TEARDOWN, /0\.8 \*\*Evidence that T3 and T5 destroy\*\* -- REQUIRED, unless the owner records a decision to discard an item\./);
+    for (const kept of ["filter-log-events --log-group-name /gs/staging/p1", "describe-alarm-history", "stacks/app state pull", "stacks/ledger state pull"]) assert.ok(TEARDOWN.includes(kept), kept);
+    /* compute-none leaves the skip_destroy task definitions ACTIVE: T8d deregisters them and T9 proves it. */
+    assert.match(read("infra/aws/modules/app/ecs.tf"), /skip_destroy\s+=\s+true/);
+    assert.equal(TEARDOWN.split("list-task-definitions --family-prefix gs-staging-p --status ACTIVE").length - 1, 2, "listed in T8d and checked in T9");
+    assert.equal(ENTRIES.find((e) => e.id === "app.ecs-task-definitions")?.teardown_step, "T8");
   });
 });
 
@@ -377,6 +396,15 @@ describe("P1-R5: the direct final-system certification", () => {
     const text = rows.join("\n");
     for (const tool of ["verify --topology single-host", "stage-probe edge --topology single-host", "host-cert crash-restart", "host-cert reboot-restart", "host-cert duplicate-preflight", "host-cert duplicate-fence", "role-probe -Probe kms", "role-probe -Probe transactions", "set-operator-plan", "--to-relayer", "gamesDoctor aws status", "orphans", "money <game> --chain"]) assert.ok(text.includes(tool), tool);
     for (const retired of ["graceful-stop", "--topology coexist", "ecs-rollback", "replacement-before", "replacement-after", "--direction rollback", "--gs-origin"]) assert.ok(!text.includes(retired), `${retired} is not a Phase-1 requirement`);
+  });
+
+  test("E2 is a money smoke on the escrow the host already serves -- no key, contract, frontend or stack change; one GO per money step", () => {
+    const e2 = PLAN.slice(PLAN.indexOf("**E2 -- the controlled money smoke**"), PLAN.indexOf("**Owner GO for the drills and probes.**"));
+    assert.ok(e2.length > 0);
+    assert.match(e2, /It is NOT the Phase-2 pack's Session 1/);
+    assert.match(rows.find((l) => l.startsWith("| E2 |")) ?? "", /no KMS key, contract, document, frontend or stack change/);
+    for (const go of ["CreateGame", "Join", "Start", "final move", "consent"]) assert.ok(e2.includes(`\`GO P1-R5 E2 ${go}\``), go);
+    assert.match(e2, /never batched with the drills/);
   });
 
   test("the acceptance rule's availability-only checks are the drills' own check names; everything safety-relevant must PASS", () => {

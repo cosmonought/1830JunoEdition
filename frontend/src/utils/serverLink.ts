@@ -463,27 +463,37 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     }
   };
 
-  /** LIVE-3A: this client's history is not the room's. Settle everything, forget what was applied, and say hello
-   *  again from -1 on the same socket. Never a merge: the room's history is the only one there is. */
+  /** LIVE-3A: this client's history is not the room's. Forget what was applied, and say hello again from -1 on the
+   *  same socket. Never a merge: the room's history is the only one there is.
+   *  PHASE 3 W3-J (AUD-25.06, with W3-C's accepted LOW (b)): what was ON THE WIRE IS NOT SETTLED HERE ANY MORE. It used
+   *  to resolve `null` at once -- "not applied" -- with a stale refusal ("this tab has caught up. Try that again.") put
+   *  beside the resync notice ("reloading the room's history"): two sentences that contradict each other, about a move
+   *  that may well have landed (the shell then rolled back a landed move's state). Each sent submission is now an
+   *  ORPHAN, exactly as after a dropped socket (#1253): the fresh catch-up this resync asks for is the whole log, and
+   *  `reconcileOrphans` reads it -- landed resolves with its index, still committing stays in flight, and only one
+   *  that did not land resolves `null`, with the stale sentence, once the tab really has caught up. */
   const resync = (reason: string) => {
     resyncs += 1;
     // eslint-disable-next-line no-console
     console.warn(`[resync] game ${options.gameId}: ${reason} (resync ${resyncs}; LIVE-3 §5.2 counts every one)`);
-    const settled = pending.splice(0);
-    orphaned = new Set<string>();
+    for (const item of pending) if (item.sent) orphaned.add(item.id);
     inFlight = new Set<string>();
     delivered = new Set<string>();
     appliedIndex = -1;
     appliedId = undefined;
-    if (settled.length > 0) options.onStale?.();
     options.onResync?.(reason);
-    for (const item of settled) item.resolve(null);
     resyncing = true;
     if (open && socket) {
       awaitingHello = true;
       socket.send(helloFrame());
     }
+    noteQueue();
   };
+
+  /** PHASE 3 W3-J (AUD-25.07): orphans settled by a reconciliation that was itself caused by an answer the player has
+   *  already been shown (an unaddressed `internal` error): one that did not land resolves `null` without the stale
+   *  sentence -- the error's own sentence is the explanation. */
+  let explainedOrphans = new Set<string>();
 
   /** Settle everything still pending as not seen applied -- the link is closing for good. */
   const settleAll = () => {
@@ -613,10 +623,11 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         continue;
       }
       pending.splice(pending.indexOf(item), 1);
-      if (index === undefined) options.onStale?.();
+      if (index === undefined && !explainedOrphans.has(item.id)) options.onStale?.();
       item.resolve(index ?? null);
     }
     orphaned = new Set<string>();
+    explainedOrphans = new Set<string>();
   };
 
   const applyEntries = (
@@ -940,6 +951,35 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         if (code === "not-found" || code === "gone" || code === "kicked" || code === "forbidden" || code === "room-full") {
           loseAccess(code, reason);
           return;
+        }
+        /* ==================================================================
+            PHASE 3 W3-J (AUD-25.07): AN `internal` ERROR THAT NAMES NO SUBMISSION, WHILE ONE IS ON THE WIRE
+           ==================================================================
+           A server handler that throws outside its own guard answers the frame with `error {code: "internal"}` and no
+           `inReplyTo` (`gameServer.ts`'s per-frame catch). Past the hello, the only frames this link has outstanding
+           are its submits, so the error answered one of them -- but which, and whether it was committed before the
+           throw, the frame does not say. It used to settle nothing: the submission stayed pending until the next
+           reconnect (the queue-aware forms and the par prompt held on "Sending your last action") and the sentence sat
+           in the strip as a `transport` notice no landed move retires.
+           SO THE LINK ASKS THE ROOM, the way it already does after a dropped socket (#1253): every sent submission
+           becomes an orphan and a hello is sent on the same socket; its catch-up says which landed (resolved with the
+           index -- an accepted move is never reported refused), which are still committing (kept in flight), and
+           which did not land (resolved `null`). The sentence is the answer to this tab's action, so it goes to the
+           refusal slot (`onRefused`), which the next landed move retires; it is not repeated by the stale sentence.
+           A hello that is itself answered `internal` is the old path below: no second hello, so no loop. */
+        if (answers === undefined && code === "internal" && !awaitingHello && open && socket) {
+          const unanswered = pending.filter((item) => item.sent && !inFlight.has(item.id) && !orphaned.has(item.id));
+          if (unanswered.length > 0) {
+            for (const item of unanswered) {
+              orphaned.add(item.id);
+              explainedOrphans.add(item.id);
+            }
+            if (options.onRefused) options.onRefused(reason);
+            else options.onError?.(reason);
+            awaitingHello = true;
+            socket.send(helloFrame());
+            return;
+          }
         }
         options.onError?.(reason);
         if (answers !== undefined) settleById(answers, null);

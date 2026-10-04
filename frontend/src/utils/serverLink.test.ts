@@ -593,7 +593,10 @@ describe("LIVE-3A: answers are matched by the submission they name", () => {
     ]);
   });
 
-  it("`ahead`: everything pending resolves null, the history is dropped, and the link rejoins from -1 on the same socket", async () => {
+  it("`ahead`: the history is dropped, the link rejoins from -1 on the same socket, and the fresh catch-up settles what was pending", async () => {
+    /* PHASE 3 W3-J (AUD-25.06): what was on the wire is no longer settled `null` AT the resync (with the stale sentence
+       beside the resync notice) -- each is an orphan the fresh catch-up reconciles, so a move that landed resolves with
+       its index (`phase3W3JLink.test.ts`). Here neither is in the fresh history, so both resolve null after it. */
     const { client, wire, stale, resyncs, entries } = live();
     wire.open();
     wire.deliver(hello([entry(0), entry(1)]));
@@ -601,8 +604,8 @@ describe("LIVE-3A: answers are matched by the submission they name", () => {
     const b = client.submit(PASS);
     wire.sent.length = 0;
     wire.deliver({ kind: "refused", build: "build-1", code: "ahead", watermark: 0, reason: "ahead", inReplyTo: "n1" });
-    await expect(Promise.all([a, b])).resolves.toEqual([null, null]);
-    expect(stale).toEqual([1]);
+    expect(await settledYet(a)).toBe(false);
+    expect(stale).toEqual([]);
     expect(resyncs).toEqual(["ahead"]);
     expect(client.resyncs).toBe(1);
     expect(client.appliedIndex).toBe(-1);
@@ -618,6 +621,8 @@ describe("LIVE-3A: answers are matched by the submission they name", () => {
     wire.deliver(hello([entry(0)]));
     expect(entries[entries.length - 1]).toEqual([entry(0)]);
     expect(client.appliedIndex).toBe(0);
+    await expect(Promise.all([a, b])).resolves.toEqual([null, null]);
+    expect(stale.length).toBeGreaterThan(0); // said once the tab has caught up, not beside the resync notice
   });
 
   it("a hello answered `error{code:\"resync\"}` takes the same path", () => {

@@ -798,10 +798,11 @@ steps 13-25, step 9, step 16's edge probe, F5 / F6; their base commits `5b4756d`
 clone the full history), `PHASE-1 targeted (Linux)` (F5 / F6's real `host-role-probe.sh` on a fake host, Linux-only, in
 the pinned Linux Node container), the real-Docker fresh-host gate, and gs-host.ps1's three offline regressions
 (`tests/gs-host-stderr`, `-role-probe`, `-install-script.test.ps1`), each its own gate, run under **Windows PowerShell
-5.1** with their documented command (no `-Target`; the gate adds `-NonInteractive`). Its summary and JSON state
-**WINDOWS POWERSHELL 5.1: PROVEN / NOT PROVEN** -- PROVEN only on Windows, from those runs. The **certifying run** is the
-owner's, on Windows: OWNER SOURCE GATE PASS with 5.1 PROVEN (JSON `certifying_run: true`); a PASS anywhere else says NOT A
-CERTIFYING RUN on its OVERALL line. No separate PowerShell 5.1 command remains.
+5.1** with their documented command (no `-Target`; the gate adds `-NonInteractive` and gives the child Windows
+PowerShell's own module path). Its summary and JSON state **WINDOWS POWERSHELL 5.1: PROVEN / NOT PROVEN** -- PROVEN only
+on Windows, from those runs. The **certifying run** is the owner's, on Windows: OWNER SOURCE GATE PASS with 5.1 PROVEN
+(JSON `certifying_run: true`); a PASS anywhere else says NOT A CERTIFYING RUN on its OVERALL line. No separate
+PowerShell 5.1 command remains.
 
 ## Certification: what remains valid, what reruns, what retires
 

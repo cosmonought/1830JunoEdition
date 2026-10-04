@@ -421,7 +421,7 @@ Add-Gate 'PHASE-1 targeted' $true {
   if ($null -eq $Git) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = 'git is not on PATH (the Phase-1 pins diff against their base commits)' } }
   foreach ($base in @('5b4756dbd98e8d9abe5ed4bbdf4314466ef8045d', '083d0668556c05a84eb8b3e5befc4e973544aa9a')) {
     $c = Invoke-Logged $Git @('cat-file', '-e', ($base + '^{commit}')) $RepoRoot
-    if ($c -ne 0) { return @{ Status = 'FAIL'; Exit = $c; Reason = "this clone lacks commit $base (a shallow clone?): the Phase-1 pins diff against it -- clone the full history" } }
+    if ($c -ne 0) { return @{ Status = 'FAIL'; Exit = $c; Reason = "git cannot show commit $base here (a shallow or partial clone, or git refused the repository): the Phase-1 pins diff against it -- use a full clone" } }
   }
   $code = Invoke-Logged $Node (TestArgs @('aws/deploy/migration/phase1FreshHost.test.js', 'aws/deploy/migration/phase1RemainderRunbook.test.js', 'aws/deploy/migration/step9AcmeCompletion.test.js', 'aws/deploy/staging/singleHostEdge.test.js', 'aws/deploy/staging/hostRoleProbe.test.js')) $ServerDir
   $skippedPins = @($script:LastOutput | Where-Object { $_ -match '# SKIP not a checkout holding the host-create commit' })

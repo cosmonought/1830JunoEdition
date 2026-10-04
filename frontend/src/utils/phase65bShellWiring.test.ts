@@ -191,14 +191,14 @@ describe("K-01: the Stock Round Private Companies section, its handlers, its pro
 });
 
 describe("no reducer, authority, version or settlement change rides with this pass", () => {
-  it("the rules version was still 11 (moved to 12 only by Route v12 R12-2) and settlement was certified for exactly [10, 11] (12 added only by R12-3)", () => {
+  it("the rules version was still 11 (moved to 12 only by Route v12 R12-2) and settlement was certified for exactly [10, 11] (12 added only by R12-3, 13 only by the v13 certification)", () => {
     const { RULES_ENGINE_VERSION, RULES_ENGINE_CHANGELOG } = require("../gameEngine/rulesVersion") as typeof import("../gameEngine/rulesVersion");
     const { SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS } =
       require("../gameEngine/settlementAppraisal") as typeof import("../gameEngine/settlementAppraisal");
     expect(RULES_ENGINE_VERSION).toBeGreaterThanOrEqual(11);
     // No version was added by this pass: every row after 11 is a later pass's own (R12-2's route repair; Phase 3 W3-K's v13).
     expect(RULES_ENGINE_CHANGELOG.filter((row) => row.version > 11).every((row) => /^(Route v12 R12-2|Phase 3 W3-K)/.test(row.note))).toBe(true);
-    // No settlement version was added by this pass: 12 is R12-3's own certification.
-    expect([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS]).toEqual([10, 11, 12]);
+    // No settlement version was added by this pass: 12 is R12-3's own certification, 13 Phase 3's dedicated v13 one.
+    expect([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS]).toEqual([10, 11, 12, 13]);
   });
 });

@@ -661,11 +661,12 @@ describe("chain seat order, never turn order; no player or principal id in the b
 /* 7. Rules engine v10 only, and the builder's refusals               */
 /* ------------------------------------------------------------------ */
 
-describe("settlement is certified for rules engines v10, v11 and v12, each explicitly -- an axis independent of the gameplay engine (DA-8, ESCROW-3A, R12-3)", () => {
-  it("TRIPWIRE: the certified list is the literal [10, 11, 12] whatever engine the game plays -- a gameplay bump never widens settlement", () => {
+describe("settlement is certified for rules engines v10, v11, v12 and v13, each explicitly -- an axis independent of the gameplay engine (DA-8, ESCROW-3A, R12-3, Phase 3 v13)", () => {
+  it("TRIPWIRE: the certified list is the literal [10, 11, 12, 13] whatever engine the game plays -- a gameplay bump never widens settlement", () => {
     /* ESCROW-3A added 11 by its own recertification (`settlementV11Certification.test.ts`), Route v12 R12-3 added 12 by
-       its own (`settlementV12Certification.test.ts`); this vector file stays v10's. */
-    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11, 12]);
+       its own (`settlementV12Certification.test.ts`), Phase 3 added 13 by its own (`settlementV13Certification.test.ts`);
+       this vector file stays v10's. */
+    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11, 12, 13]);
     /* SET-0C wrote this as `RULES_ENGINE_VERSION === 10` and `SUPPORTED === [10]`, to fail on DA-8's bump. DA-8 took the
        bump (the game plays v11) and the owner ruled the two axes independent: a board is appraised when its pin is
        CERTIFIED, not when this build still plays it. So the tripwire now pins the separation itself -- the certified
@@ -679,13 +680,13 @@ describe("settlement is certified for rules engines v10, v11 and v12, each expli
 
   it("a board pinned to any other engine is refused by the appraisal the builder runs, before any byte is written", () => {
     const SEATS = seatsOf(["p2", "p1", "p3"]);
-    for (const pin of [9, 13]) {
+    for (const pin of [9, RULES_ENGINE_VERSION + 1]) {
       const board = { ...boards["SYN-01-CLASSIC-BANKBREAK"], rules_engine_version: pin } as GameStateResponse;
       expect(() => build(board, SEATS, { kind: "Checkpoint" }, 1)).toThrow(
-        `UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=${pin} (supported: 10, 11, 12)`,
+        `UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=${pin} (supported: 10, 11, 12, 13)`,
       );
     }
-    expect(() => appraiseSeats({ ...boards["SYN-01-CLASSIC-BANKBREAK"], rules_engine_version: 13 } as GameStateResponse, SEATS)).toThrow(
+    expect(() => appraiseSeats({ ...boards["SYN-01-CLASSIC-BANKBREAK"], rules_engine_version: RULES_ENGINE_VERSION + 1 } as GameStateResponse, SEATS)).toThrow(
       "UNSUPPORTED_RULES_ENGINE_VERSION",
     );
   });

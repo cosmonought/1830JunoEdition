@@ -46,7 +46,8 @@
 //   C. the fifteen SET-0C payloads rebuilt at v12: identical to the frozen v10 bytes -- and to the v11 certification's
 //      -- outside [1,33) `domain` and [91,123) `appraisal_state_hash`; same codec, digests, payout arithmetic, contract;
 //   D. v10, v11 and v12 coexist, each board settling only under a domain declaring its own pin;
-//   E. every uncertified pin (9, 13, 14, …, RULES_ENGINE_VERSION + 1) fails closed; the certified list is a literal;
+//   E. every uncertified pin (9, 14, 15, …, RULES_ENGINE_VERSION + 1; 13 until the v13 certification) fails closed; the
+//      certified list is a literal;
 //   F. SET-0A §14's parity sweep at pin 12 on every board of the five in-repo logs;
 //   G. THE v12 FORKS (`settlementV12Forks.ts`): three turns the v11 and v12 laws play differently -- a real PRR turn
 //      (re-entry past the herald, the S6-3 demonstration), a real B&O turn (Norfolk's two circles and $30) and a
@@ -267,7 +268,8 @@ describe("A. the v12 golden set: the SET-0A recipes through the v12 engine, at p
     expect([SET0A_CERTIFIED_RULES_ENGINE_VERSION, SET0A_V11_RULES_ENGINE_VERSION, SET0A_V12_RULES_ENGINE_VERSION]).toEqual([10, 11, 12]);
     /* Phase 3 W3-K: rules engine v13 now deals the room recipes (pin 13; their deals carry no rules revision, so none
        of v13's revision-2 corrections is in force) and they still reach their certified v12 boards byte for byte
-       (every hash below). The set itself stays at the v12 pin; v13 is NOT settlement-certified (PENDING). */
+       (every hash below). The set itself stays at the v12 pin; v13 is certified by its own pass
+       (`settlementV13Certification.test.ts`), never by this set. */
     expect(RULES_ENGINE_VERSION).toBe(13);
     expect(Object.values(dealtPins)).toEqual([RULES_ENGINE_VERSION, RULES_ENGINE_VERSION, RULES_ENGINE_VERSION]);
     for (const board of Object.values(boards)) expect(board.rules_engine_version).toBe(12);
@@ -411,7 +413,8 @@ describe("D. coexistence: each board settles under a domain declaring its own pi
   };
 
   it("all three certified: v10 reproduces the frozen v10 vector, v11 the v11 certification's, v12 builds", () => {
-    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11, 12]);
+    // [10, 11, 12] at R12-3; 13 added by Phase 3's dedicated v13 certification (`settlementV13Certification.test.ts`).
+    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11, 12, 13]);
     expect(buildSettlementPayloadV1(argsAt(10)).encoded_hex).toBe(v.encoded);
     expect(buildSettlementPayloadV1(argsAt(11)).encoded_hex).toBe((V11.payload_vectors as Loose[]).find((x) => x.name === v.name)!.encoded);
     expect(buildSettlementPayloadV1(argsAt(12)).encoded_hex).toBe(buildSettlementPayloadV1(v12Args).encoded_hex);
@@ -436,18 +439,18 @@ describe("E. uncertified pins fail closed; the certified list is an explicit lit
   const board = boards["SYN-01-CLASSIC-BANKBREAK"];
   const seats = seatsOf(["p2", "p1", "p3"]);
 
-  it("the literal is [10, 11, 12], frozen; the gameplay axis is separate (a future bump is refused until certified)", () => {
-    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11, 12]);
+  it("the literal is [10, 11, 12, 13] ([10, 11, 12] at R12-3), frozen; the gameplay axis is separate (a future bump is refused until certified)", () => {
+    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11, 12, 13]);
     expect(Object.isFrozen(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS)).toBe(true);
     expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([RULES_ENGINE_VERSION]);
     const source = readFileSync(join(__dirname, "..", "gameEngine", "settlementAppraisal.ts"), "utf8");
-    expect(source).toContain("SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10, 11, 12]);");
+    expect(source).toContain("SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10, 11, 12, 13]);");
     expect(source).not.toMatch(/from\s+"\.\/rulesVersion"/);
   });
 
-  it("9, 13, 14, 999, 2^31 and RULES_ENGINE_VERSION + 1 are refused before a value is read", () => {
-    for (const pin of [9, 13, 14, 999, 2 ** 31, RULES_ENGINE_VERSION + 1]) {
-      expect(() => appraiseSeats(atPin(board, pin), seats)).toThrow(`UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=${pin} (supported: 10, 11, 12)`);
+  it("9, 14, 15, 999, 2^31 and RULES_ENGINE_VERSION + 1 are refused before a value is read (13 was, until the v13 certification)", () => {
+    for (const pin of [9, 14, 15, 999, 2 ** 31, RULES_ENGINE_VERSION + 1]) {
+      expect(() => appraiseSeats(atPin(board, pin), seats)).toThrow(`UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=${pin} (supported: 10, 11, 12, 13)`);
     }
   });
 
@@ -458,11 +461,11 @@ describe("E. uncertified pins fail closed; the certified list is an explicit lit
     expect(code(() => appraiseSeats({ ...board, rules_engine_version: null } as never, seats))).toBe("UNPINNED_BOARD");
   });
 
-  it("a v13 domain on a v13 board is refused by the builder's appraisal: no bytes are ever written for it", () => {
+  it("a v14 domain on a v14 board (v13 until the v13 certification) is refused by the builder's appraisal: no bytes are ever written for it", () => {
     const v = (V10_PAYLOADS.payload_vectors as Loose[])[0];
     const args = v12ArgsFor(v);
-    const d13 = { ...(args.domain_inputs as SettlementDomainInputs), rules_engine_version: 13 };
-    expect(code(() => buildSettlementPayloadV1({ ...args, board: { state: atPin(v12BoardOf(v), 13) }, domain: settlementDomainV1(d13), domain_inputs: d13 }))).toBe(
+    const d14 = { ...(args.domain_inputs as SettlementDomainInputs), rules_engine_version: 14 };
+    expect(code(() => buildSettlementPayloadV1({ ...args, board: { state: atPin(v12BoardOf(v), 14) }, domain: settlementDomainV1(d14), domain_inputs: d14 }))).toBe(
       "UNSUPPORTED_RULES_ENGINE_VERSION",
     );
   });

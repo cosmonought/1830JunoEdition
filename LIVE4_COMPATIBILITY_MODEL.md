@@ -45,12 +45,13 @@ Equal keys are one pool (a rolling replacement); a different key is a different 
 
 | Configuration | Key |
 |---|---|
-| No escrow configured | On `phase3/w3-k-rules-v13` (rules 13, settlement `[10, 11, 12]`, not merged): `dc1-390107d5e7024f4a9180efeb`. `dc1-41eb96a737cd33aa90a62808` (rules 12, settlement `[10, 11, 12]`, ROUTE v12 R12-3); R12-2's was `dc1-ade748b9407a3db380e5ed72`; LIVE-4's rules-11 key was `dc1-68c4b829b3a20e63f3e55cde` |
-| The test fixture pin | On `phase3/w3-k-rules-v13` (rules 13): `dc1-d01c50c4a70d0dc14cdf915d`. `dc1-63af8114005a5f202d7d349c` (R12-3); R12-2's was `dc1-eb48b18e50d46d0c50807710`; LIVE-4's rules-11 key was `dc1-4308649847947d1d12ccdd41` |
+| No escrow configured | On `phase3/v13-settlement-certification` (rules 13, settlement `[10, 11, 12, 13]`, not merged): `dc1-e8d0b4792a7ba07e67199ad2`. On `phase3/w3-k-rules-v13` (rules 13, settlement `[10, 11, 12]`, not merged): `dc1-390107d5e7024f4a9180efeb`. `dc1-41eb96a737cd33aa90a62808` (rules 12, settlement `[10, 11, 12]`, ROUTE v12 R12-3); R12-2's was `dc1-ade748b9407a3db380e5ed72`; LIVE-4's rules-11 key was `dc1-68c4b829b3a20e63f3e55cde` |
+| The test fixture pin | On `phase3/v13-settlement-certification` (rules 13, settlement `[10, 11, 12, 13]`): `dc1-32fcc4967978e78f10874490`. On `phase3/w3-k-rules-v13` (rules 13): `dc1-d01c50c4a70d0dc14cdf915d`. `dc1-63af8114005a5f202d7d349c` (R12-3); R12-2's was `dc1-eb48b18e50d46d0c50807710`; LIVE-4's rules-11 key was `dc1-4308649847947d1d12ccdd41` |
 
 The key moves whenever an axis moves: R12-2's rules bump (11 → 12, settlement still `[10, 11]`) is a new pool, so a
 v11 server and a v12 server never share one, and a stored v11 game is `not-continued` on a v12 process. R12-3's
 certification of 12 (settlement `[10, 11, 12]`) moved the keys again: the certified list is part of the rules axis.
+Phase 3's dedicated v13 certification (settlement `[10, 11, 12, 13]`, gameplay still `[13]`) moved them once more.
 
 ---
 

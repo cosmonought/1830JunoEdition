@@ -97,9 +97,10 @@ const sha = (bytes: Buffer | string) => createHash("sha256").update(bytes).diges
 /* Route v12 R12-2 moved both keys on the rules axis alone (rules 12; LIVE-4 certified dc1-68c4b829… / dc1-43086498… on 11),
    and R12-3 moved them again by certifying 12 for settlement (R12-2's were dc1-ade748b9… / dc1-eb48b18e…). Phase 3 W3-K
    moved them once more, on the rules axis alone (rules 13 reading [13], settlement still [10, 11, 12]; R12-3's were
-   dc1-41eb96a7… / dc1-63af8114…). */
-const KEY_NO_ESCROW = "dc1-390107d5e7024f4a9180efeb";
-const KEY_FIXTURE_PIN = "dc1-d01c50c4a70d0dc14cdf915d";
+   dc1-41eb96a7… / dc1-63af8114…), and Phase 3's dedicated v13 certification moved them by certifying 13 alone
+   (settlement [10, 11, 12, 13]; W3-K's were dc1-390107d5… / dc1-d01c50c4…). */
+const KEY_NO_ESCROW = "dc1-e8d0b4792a7ba07e67199ad2";
+const KEY_FIXTURE_PIN = "dc1-32fcc4967978e78f10874490";
 
 const OTHER_CHECKSUM = "ab".repeat(32);
 const PIN_B: FinancialDeploymentPin = Object.freeze({ ...PIN, contract_address: WALLETS[2] });
@@ -223,11 +224,11 @@ const lastIndex = (answer: Frame): number => {
 /* §1. The pins                                                                                       */
 /* ================================================================================================= */
 
-describe("LIVE-4 L4-7 §1: the certified identity -- no version or key moved (but for Route v12 R12-2's rules bump, R12-3's certification and W3-K's v13)", () => {
-  test("rules 13 (reads [13]; 11 / [11] at L4-7, 12 / [12] until W3-K); settlement [10, 11, 12] ([10, 11] at L4-7); hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the two pinned keys", () => {
+describe("LIVE-4 L4-7 §1: the certified identity -- no version or key moved (but for Route v12 R12-2's rules bump, R12-3's certification, W3-K's v13 and the v13 certification)", () => {
+  test("rules 13 (reads [13]; 11 / [11] at L4-7, 12 / [12] until W3-K); settlement [10, 11, 12, 13] ([10, 11] at L4-7, 13 by the v13 certification); hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the two pinned keys", () => {
     assert.equal(RULES_ENGINE_VERSION, 13);
     assert.deepEqual([...SUPPORTED_RULES_ENGINE_VERSIONS], [13]);
-    assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11, 12]);
+    assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11, 12, 13]);
     assert.equal(HOSTED_PROTOCOL_VERSION, 1);
     assert.equal(FINANCIAL_PROTOCOL_VERSION, 3);
     assert.equal(CLIENT_PROTOCOL_VERSION, 1);
@@ -1347,8 +1348,9 @@ describe("LIVE-4 L4-7 §7: the stored-data matrix -- every class over file store
     { name: "no money: current (dealt on this build)", setup: (dir) => noMoneyGameOnDisk(dir, { deal: { build: BUILD } }), doctor: "continues", hello: "continues", play: true, writes: [LOG] },
     { name: "no money: dealt on another build (a protocol-1 tab on a third build)", setup: (dir) => noMoneyGameOnDisk(dir), doctor: "continues", hello: "continues", play: true, writes: [LOG] },
     { name: "no money: an older rules pin (10) this pool does not play", setup: (dir) => noMoneyGameOnDisk(dir, { deal: { rules_engine_version: 10 } }), doctor: "not-continued/rules-not-supported", hello: "not-continued/rules-not-supported", writes: [] },
-    /* Route v12 R12-2 made 12 this build's own engine, so "newer" is 13 (a stale constant, not a certification change). */
-    { name: "no money: a newer rules pin (13)", setup: (dir) => noMoneyGameOnDisk(dir, { deal: { rules_engine_version: 13 } }), doctor: "not-continued/rules-not-supported", hello: "not-continued/rules-not-supported", writes: [] },
+    /* Route v12 R12-2 made 12 this build's own engine and W3-K made it 13, so "newer" is read off the engine: the next
+       version, which this build neither plays nor certifies (a stale constant, not a certification change). */
+    { name: `no money: a newer rules pin (${RULES_ENGINE_VERSION + 1})`, setup: (dir) => noMoneyGameOnDisk(dir, { deal: { rules_engine_version: RULES_ENGINE_VERSION + 1 } }), doctor: "not-continued/rules-not-supported", hello: "not-continued/rules-not-supported", writes: [] },
     { name: "no money: an unsupported hosted protocol (2)", setup: (dir) => noMoneyGameOnDisk(dir, { deal: { hosted_protocol: 2 } }), doctor: "not-continued/hosted-protocol", hello: "not-continued/hosted-protocol", writes: [] },
     /* A GameRecord this build cannot read authorizes nobody (LIVE-3C): a hello is `not-found`, exactly as for no game.
        A newer schema is derived (discovery: incompatible record-schema-newer, nothing written); damage is held once. */

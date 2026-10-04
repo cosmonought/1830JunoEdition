@@ -181,12 +181,12 @@ describe("ESCROW-3A §5: terminal evidence is derived from the sealed prefix alo
     assert.ok(!JSON.stringify(evidence).match(/pr_|pf_|se_|sf_/), "no identity id in the evidence");
   });
 
-  test("v10, v11 and v12 pins all settle (certified; 12 since Route v12 R12-3); 13 is held rules-not-certified; a board that is not terminal, or that the appraiser refuses, is held", () => {
+  test("v10, v11, v12 and v13 pins all settle (certified; 12 since Route v12 R12-3, 13 since the v13 certification); the next engine is held rules-not-certified; a board that is not terminal, or that the appraiser refuses, is held", () => {
     const entries = history(3);
     const seal = sealAt(entries);
-    for (const pin of [10, 11, 12]) assert.equal(prepareTerminalEvidence({ gameId: GAME, entries, seal, replay: graftedReplay({ rules_engine_version: pin }) }).ok, true, `pin ${pin}`);
-    const thirteen = prepareTerminalEvidence({ gameId: GAME, entries, seal, replay: graftedReplay({ rules_engine_version: 13 }) });
-    assert.deepEqual([thirteen.ok, (thirteen as { code: string }).code], [false, "rules-not-certified"]);
+    for (const pin of [10, 11, 12, 13]) assert.equal(prepareTerminalEvidence({ gameId: GAME, entries, seal, replay: graftedReplay({ rules_engine_version: pin }) }).ok, true, `pin ${pin}`);
+    const next = prepareTerminalEvidence({ gameId: GAME, entries, seal, replay: graftedReplay({ rules_engine_version: RULES_ENGINE_VERSION + 1 }) });
+    assert.deepEqual([next.ok, (next as { code: string }).code], [false, "rules-not-certified"]);
     const notEnded = prepareTerminalEvidence({ gameId: GAME, entries, seal, replay: graftedReplay({ current_round_type: "StockRound" } as never) });
     assert.equal((notEnded as { code: string }).code, "board-not-terminal");
     const noReason = prepareTerminalEvidence({ gameId: GAME, entries, seal, replay: graftedReplay({ bank_broken: false } as never) });
@@ -431,9 +431,10 @@ describe("ESCROW-3A §4, §6: the settlement coordinator converges on one durabl
     c.stop();
   });
 
-  test("an uncertified board holds; an incompatible continuation is NOT CONTINUED (L4-4: nothing written); v10, v11 and v12 boards all prepare", async () => {
-    // Route v12 R12-3 certified 12; 13 is the uncertified pin now.
-    for (const [pin, expected] of [[10, "intent-prepared"], [11, "intent-prepared"], [12, "intent-prepared"], [13, "held"]] as const) {
+  test("an uncertified board holds; an incompatible continuation is NOT CONTINUED (L4-4: nothing written); v10, v11, v12 and v13 boards all prepare", async () => {
+    // Route v12 R12-3 certified 12 and Phase 3's dedicated v13 certification certified 13; the next engine is the uncertified pin now.
+    const uncertified = RULES_ENGINE_VERSION + 1;
+    for (const [pin, expected] of [[10, "intent-prepared"], [11, "intent-prepared"], [12, "intent-prepared"], [13, "intent-prepared"], [uncertified, "held"]] as const) {
       const store = createMemoryFinancialGameStore();
       await seedFinancial(store, inProgress(GAME));
       const c = coordinatorOver(store, graftedReplay({ rules_engine_version: pin }));
@@ -441,7 +442,7 @@ describe("ESCROW-3A §4, §6: the settlement coordinator converges on one durabl
       await c.drain();
       const record = (await store.load(GAME))!;
       assert.equal(record.phase, expected, `pin ${pin}`);
-      if (pin === 13) assert.equal(record.hold?.code, "rules-not-certified");
+      if (pin === uncertified) assert.equal(record.hold?.code, "rules-not-certified");
     }
     /* A money identity this pool does not continue (another hosted protocol): step -1 decides it BEFORE the seal is
        written, so nothing is -- no seal, no durable continuation-incompatible hold (F-L4-3); the pool that speaks
@@ -608,15 +609,17 @@ describe("ESCROW-3A §8: a funded game continues across builds only under a comp
     assert.deepEqual(moneyContinuationVerdict(current), { continues: true });
     assert.equal((moneyContinuationVerdict({ ...current, rules_engine_version: 10 }) as { why: string }).why, "rules-not-supported", "a v10 game on a v12 server: never reinterpreted");
     assert.equal((moneyContinuationVerdict({ ...current, rules_engine_version: 11 }) as { why: string }).why, "rules-not-supported", "a v11 game on a v12 server: never reinterpreted");
-    assert.equal((moneyContinuationVerdict({ ...current, rules_engine_version: 13 }) as { why: string }).why, "rules-not-supported", "a newer game on this server");
+    assert.equal((moneyContinuationVerdict({ ...current, rules_engine_version: RULES_ENGINE_VERSION + 1 }) as { why: string }).why, "rules-not-supported", "a newer game on this server");
     assert.equal((moneyContinuationVerdict(current, { ...THIS_DEPLOYMENT, certifiedRules: [10] }) as { why: string }).why, "rules-not-certified");
     assert.equal((moneyContinuationVerdict({ ...current, hosted_protocol: 2 }) as { why: string }).why, "hosted-protocol");
     assert.equal((moneyContinuationVerdict({ ...current, financial_protocol: current.financial_protocol + 1 }) as { why: string }).why, "financial-protocol");
     assert.equal((moneyContinuationVerdict({ ...current, settlement_codec: "18GNO/v1" }) as { why: string }).why, "settlement-codec");
     assert.equal((moneyContinuationVerdict({ ...current, git: "abc" }) as { why: string }).why, "malformed");
-    /* A NEWER server that silently reinterprets: it plays 13 and settles [10, 11, 12, 13] but the game's protocol is 1 and
-       its own is 2 -- refused. (Written with 12 before Route v12 R12-2 made 12 this build's own engine.) */
-    assert.equal((moneyContinuationVerdict(current, { ...THIS_DEPLOYMENT, supportedRules: [13], certifiedRules: [10, 11, 12, 13], hostedProtocol: 2 }) as { why: string }).why, "rules-not-supported");
+    /* A NEWER server that silently reinterprets: it plays the next engine and settles it too, but the game's protocol is 1
+       and its own is 2 -- refused. (Written with 12 before Route v12 R12-2 made 12 this build's own engine, then 13 until
+       W3-K made 13 this build's own; read off the engine now.) */
+    const newer = RULES_ENGINE_VERSION + 1;
+    assert.equal((moneyContinuationVerdict(current, { ...THIS_DEPLOYMENT, supportedRules: [newer], certifiedRules: [10, 11, 12, 13, newer], hostedProtocol: 2 }) as { why: string }).why, "rules-not-supported");
   });
 
   /* LIVE-4 (L4-2): ESCROW-3A's build-keyed seam (`continuesDealtBuild` / `continuationPolicyOf`) was asked only for a

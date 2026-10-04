@@ -6,7 +6,8 @@
 // ==================================================================
 //
 // One bump (12 -> 13), one changelog row; the live list is [13] (owner policy: pinned v12 rooms are drained or abandoned
-// before v13 deploys -- no [12, 13] dual support); settlement stays [10, 11, 12] (v13 certification PENDING). The v13
+// before v13 deploys -- no [12, 13] dual support); the rules landing left settlement at [10, 11, 12], and Phase 3's
+// dedicated v13 certification (`settlementV13Certification.test.ts`) then added 13 in its own commit. The v13
 // corrections are switched by rules revision 2, which every hosted v13 deal is stamped with -- so:
 //   * a v13 board uses the new rules;
 //   * a pinned v12 room is refused before a single entry is applied (never reinterpreted);
@@ -60,9 +61,9 @@ describe("one bump, one row, the live list and the settlement axis", () => {
     expect(row).toMatch(/SETTLEMENT IS A SEPARATE AXIS/);
   });
 
-  it("settlement stays certified for [10, 11, 12] exactly -- 13 is NOT certified by the rules landing", () => {
-    expect([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS]).toEqual([10, 11, 12]);
-    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS.includes(RULES_ENGINE_VERSION)).toBe(false);
+  it("settlement is certified for [10, 11, 12, 13] exactly -- 13 by its own certification, never by the rules landing; the next engine is not certified", () => {
+    expect([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS]).toEqual([10, 11, 12, 13]);
+    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS.includes(RULES_ENGINE_VERSION + 1)).toBe(false);
   });
 
   it("v13 deals rules revision 2, and a v12-era build reads a revision-2 deal as a NEWER format (never misreads it)", () => {

@@ -4536,7 +4536,9 @@
    "RED R2 (OD-12, W1-N)": "87d63c4",
    "W1-N follow-up (comments only)": "819a204",
    "OD-7 Rules Reference copy (RR-4)": "ca73834",
-   "cross-lane reconciliation": "8dc79e0"
+   "cross-lane reconciliation": "8dc79e0",
+   "shared pin repairs (actionReceipt, sellThenBuyLock, sourceGuards G2)": "7199b07",
+   "review fix: one contest-end count (auction dashboard)": "d6fe5a6"
   },
   "note": "Wave 1 was implemented on 8f33f0f by the owner's brief. Whether 8f33f0f is the OD-0 pin, or Wave 1 is carried onto the final post-Phase-2 head, is the owner's call; OD-0's drift check against the final pin is still owed."
  },

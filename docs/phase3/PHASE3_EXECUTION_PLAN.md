@@ -245,7 +245,7 @@ only if needed) → W3-C (R1 + R5) → W3-B (R1 `press:true`) → W3-I (R5, only
 
 | File | Regions / order |
 |---|---|
-| `components/RulesReference.tsx` | L6 owns copy (W1-L; W2-J for RR-4). L5 owns the step marker (84, 972–979, 3386–3390; W1-I), the build-id line (5412–5415; W1-I) and the game-over state (83, 2409–2414, 3310; W2-I). L2 owns the M&H block (1392–1419; W2-E). Disjoint line ranges; land W1-L before W2-E and W2-I |
+| `components/RulesReference.tsx` | L6 owns copy (W1-L; RR-4 also W1-L since OD-7 — landed at the Wave-1 integration). L5 owns the step marker (84, 972–979, 3386–3390; W1-I), the build-id line (5412–5415; W1-I) and the game-over state (83, 2409–2414, 3310; W2-I). L2 owns the M&H block (1392–1419; W2-E). Disjoint line ranges; land W1-L before W2-E and W2-I |
 | `utils/actionLog.ts` | L2 (W2-E: 514–522) → L6 (W2-J) |
 | `components/FinancialLedger.tsx` | L5 (W1-I: 161–189) → L4 (W3-H: TrainChips events) |
 | `components/WaterfallAuctionDashboard.tsx` | L1 (W1-B) → L4 (W3-H: palette) |
@@ -627,10 +627,10 @@ gates.
 #### W2-J
 **Narration corrections** · L6 · **4–6 h**
 - **Wave-1 integration (2026-10-03):** RR-4's copy is **done** (OD-7 ruled: copy only, `ca73834`) and leaves this slice. **OD-12 ruled:** K-18's RED R2 edit may land as its own separately reviewed commit (§5.1 order). Status: NOT STARTED.
-- **Rows:** implements AUD-03.08 (K-18 / U-36), AUD-03.09 (K-22 / U-37), AUD-10.01 (K-20 / U-33); carries the owner-gated AUD-09.10 (RR-4)
+- **Rows:** implements AUD-03.08 (K-18 / U-36), AUD-03.09 (K-22 / U-37), AUD-10.01 (K-20 / U-33). *(It carried the owner-gated AUD-09.10 (RR-4) until OD-7 was ruled copy-only; that copy landed in W1-L at the Wave-1 integration.)*
 - **Surfaces:** K-18 — pass the before-board's market positions to `soldOutRises` (RED R2 7111–7123: OD-12); K-20 — a
-  presidency-change sentence with the tie-break reason; K-22 — the float line per OD-8; RR-4 copy if OD-7 rules "any legal
-  purchase".
+  presidency-change sentence with the tie-break reason; K-22 — the float line per OD-8. (RR-4's copy, once listed here "if OD-7
+  rules 'any legal purchase'", is done: OD-7 ruled it and it landed in W1-L.)
 - **App.tsx regions:** RED R2 only under OD-12. **Pins likely to move:** `shellNarration`, `parMarkArrival`.
 - **Depends on:** W2-E. **Gates:** OD-7, OD-8, OD-12.
 
@@ -763,9 +763,9 @@ gates.
 #### W3-K
 **v13 rules batch (conditional)** · L2 (or L6) · **8–14 h incl. settlement certification, only if OD-10(a) = yes**
 - **Owner rulings (2026-10-03, §7.3):** OD-2 puts **SBS-2** ("Pass Turn" ends the turn in one click) into the dedicated v13 rules slice with its settlement certification. **SBS-4 (P3-N024) is NOT resolved** — it needs a precise reproduction / clarification and no rule is built from its current wording. **RR-4 is not a v13 item** (OD-7: copy only). OD-10(a)'s wider question (which other items join v13, and whether it runs inside Phase 3) is still open. Status: NOT STARTED.
-- **Rows:** carries the owner-gated AUD-04.04 (DH-1), AUD-08.01 (GR-1), AUD-09.10 (RR-4), VF/D-18, VF/D-22, P3-N023 (SBS-3 (6.5-A)), P3-N024 (SBS-4 / OD-A-4)
-- **Scope:** only items the owner rules in: DH-1, GR-1, SBS-3, SBS-4 (OD-A-4), SBS-2 (if OD-2 / OD-A-2 makes Pass end the
-  turn), RR-4 if ruled a defect (OD-7), D-18 / D-22 (OD-17).
+- **Rows:** carries the owner-gated AUD-04.04 (DH-1), AUD-08.01 (GR-1), VF/D-18, VF/D-22, P3-N023 (SBS-3 (6.5-A)); takes the rule half of AUD-03.04 (SBS-2, ruled in by OD-2). *(Before the 2026-10-03 rulings it also listed AUD-09.10 (RR-4) — now copy-only and done in W1-L (OD-7) — and P3-N024 (SBS-4 / OD-A-4) — now G, needing a precise reproduction before any slice takes it.)*
+- **Scope:** SBS-2 (ruled in by OD-2: one-click "Pass Turn" ends the turn); otherwise only items the owner rules in: DH-1,
+  GR-1, SBS-3, D-18 / D-22 (OD-17). SBS-4 only after a precise reproduction and a fresh ruling. RR-4 is out (OD-7: copy).
 - **Procedure:** a deliberate `RULES_ENGINE_VERSION` bump with a changelog row; settlement certification for v13 through
   ESCROW-3A's procedure (goldens beside the old ones, then the literal in its own reviewed change). **Gameplay and
   settlement versions are separate axes:** v13 is not settlement-certified until that change lands.
@@ -787,7 +787,7 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 | **OD-4** | PRODUCT | Emergency modal: Back/close while a decision remains? Non-presidents see a read-only liquidation, or nothing? | Cannot close; every seat sees "Declare bankruptcy" | W2-G | No |
 | **OD-5** | PRESENTATION · PLAYTEST-INFORMED | Notices: persist one-shot notices per game, or derive them from state for late joiners; the focus target and chaining order for forced notices; the tutorial re-arm policy (once per profile? per new game?) | PhaseThree / PrivateRevenue / Herald lost on reload; FleetLoss replays history in a fresh tab; tutorials re-arm on every zero-state mount | W3-A | No; Phase 4 may re-tune |
 | **OD-6** | PRODUCT | Show the game id (LIVE-2 §7.2 says never)? Where do the build id and rules version appear? | Room code only on hosted tables; stale build note; version only in error text | W2-I (that part) | No |
-| **OD-7** | RULES (confirmation) | **RULED 2026-10-03 — see §7.3.** RR-4: when the treasury can pay a forced purchase, must it be the cheapest train? "Yes" is a rules defect (v13, W3-K); "No" is a copy fix (W2-J). **The 6.5-B report says an RR-4 ruling was recorded; restate it for Part D** | Engine allows any legal purchase; the Reference says "cheapest" at 4 sites | W2-J / W3-K | No |
+| **OD-7** | RULES (confirmation) | **RULED 2026-10-03 — see §7.3.** RR-4: when the treasury can pay a forced purchase, must it be the cheapest train? "Yes" is a rules defect (v13, W3-K); "No" is a copy fix (W2-J). **The 6.5-B report says an RR-4 ruling was recorded; restate it for Part D** | Engine allows any legal purchase; the Reference said "cheapest" at 4 sites (corrected, `ca73834`) | W2-J / W3-K — ruled: W1-L copy, done | No |
 | **OD-8** | PRESENTATION | U-37 float narration: (a) "floated" at the float plus "placed its home" later, or (b) one line at placement | One line at placement | W2-J | No |
 | **OD-9** | PRESENTATION / PRODUCT | (a) U-44 time convention: local with zone (needs a server copy edit) or UTC everywhere. (b) U-15 Keplr logo asset and brand approval | Local "HH:MM" unlabelled vs the server's "UTC"; no logo asset | W2-K | No |
 | **OD-10** | RULES / PRODUCT | (a) Is a v13 rules batch allowed inside Phase 3 (W3-K), or are all rules items owner-placed after Phase 4? (b) Are phone-width game layout, zoom-aware breakpoints and keyboard map access Phase-3 targets, Phase-4 observations only, or Phase-5 work? | v12; no game-shell breakpoints; the map is mouse-only | W3-K; AUD-16.05, AUD-16.09 | (a) No. (b) Partly |

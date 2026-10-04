@@ -78,7 +78,7 @@ observation, decision or process item.
 | L6 | `phase3/w1-refusals-reference` @ `8d6f1e9` | W1-H, W1-L (unconditional) |
 | L7 | `phase3/w1-endgame-hostgame` @ `b19dff5` | W1-N (non-RED), W1-O (non-RulesReference) |
 
-Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments only) `819a204`; OD-7 Rules Reference copy (RR-4) `ca73834`; cross-lane reconciliation `8dc79e0`.
+Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments only) `819a204`; OD-7 Rules Reference copy (RR-4) `ca73834`; cross-lane reconciliation `8dc79e0`; shared pin repairs (actionReceipt, sellThenBuyLock, sourceGuards G2) `7199b07`; review fix: one contest-end count (auction dashboard) `d6fe5a6`.
 
 **Slice status** (machine copy: `slice_status` in `phase3_accounting.json`; wave-2 and wave-3 slices not listed are NOT STARTED):
 

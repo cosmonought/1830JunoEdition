@@ -335,6 +335,8 @@ import {
 import { JK_PRIVATE_ID } from "./gameEngine/levelPlayingField";
 // Design note #808: one predicate for the bow, consulted by the tracer, the legality check and the pricing.
 import { hexOffersBypass, withForcedBypass } from "./gameEngine/cityBypass";
+// Phase 3 W3-E (K-06, OD-11): the manual Stop / Bypass choice on a waypoint with a track around its centre.
+import { bypassChoicesFor, clearEndpointBypass, setDraftBypass } from "./utils/manualBypass";
 // Design note #809: whose clicks the Lay Track glow may swallow -- watchers keep the inspector.
 import { inspectorClickRefused } from "./utils/inspectorClick";
 /* Design note #817: an armed errand's lifecycle -- what a click means, which lay is its own, and when it
@@ -4459,7 +4461,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       if (next === points) return prev;
       const updated = { ...prev };
       if (next.length === 0) delete updated[trainIndex];
-      else updated[trainIndex] = next as RoutePoint[];
+      // Phase 3 W3-E: the new last point is where the train stops, so it cannot stay bypassed.
+      else updated[trainIndex] = clearEndpointBypass(next as RoutePoint[]);
       return updated;
     });
     setRouteFeedback(null);
@@ -4471,6 +4474,31 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     (trainIndex: number, hexLabel: string) =>
       stopsRemovedByTruncating(routeDrafts[trainIndex] ?? [], hexLabel),
     [routeDrafts],
+  );
+
+  /* ==================================================================
+      PHASE 3 W3-E (K-06 / U-17, OD-11): STOP OR BYPASS, CHOSEN BY HAND
+     ==================================================================
+     The rule is `setDraftBypass`'s (`manualBypass.ts`): only an interior waypoint whose crossing the rails
+     offer both ways, never where the city is closed (the bow is required there and `withForcedBypass` marks
+     it). This writes the draft or shows the refusal -- nothing is dispatched, and the auto-router is not
+     consulted: its own choice arrives in the draft as a flag and is simply the starting state. */
+  const handleSetRouteBypass = useCallback(
+    (trainIndex: number, pointIndex: number, bypass: boolean) => {
+      setRouteDrafts((prev) => {
+        const points = prev[trainIndex] ?? [];
+        const edit = setDraftBypass(mapGrid, points, pointIndex, bypass, blocksThroughCityRef.current);
+        if (!edit.ok) {
+          setRouteFeedback(edit.reason);
+          return prev;
+        }
+        setRouteFeedback(null);
+        if (edit.points === points) return prev;
+        return { ...prev, [trainIndex]: edit.points };
+      });
+    },
+    // The blocking predicate is read through its ref (#850), as the click handler reads it.
+    [mapGrid],
   );
 
   /** Design note #275: which train the map is drafting for. */
@@ -4636,7 +4664,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           return all;
         }
         setRouteFeedback(null);
-        return { ...all, [trainIndex]: edit.points };
+        /* Phase 3 W3-E: a step back can leave a bypassed waypoint at the end, where a train stops. */
+        return { ...all, [trainIndex]: clearEndpointBypass(edit.points) };
       });
     },
     // mapGrid joins for #186's track check; the draft and active train are read through refs so the canvas
@@ -4678,6 +4707,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         points.length < 2
           ? null
           : sandboxRouteBreakdown(mapGrid, routePointsToWaypoints(points), era, actingProtocolId ?? undefined);
+      /* Phase 3 W3-E (K-06): the waypoints with a track around their centre, and whether each stops or goes
+         round -- read off the SAME `points` the pricing above used, so the control and the figure agree. */
+      const bypassChoices = bypassChoicesFor(mapGrid, points, blocksThroughCityRef.current);
       /* An unknown train falls back to the smallest real capacity rather than having none; the count is stops.length, the list the panel renders.
          See docs/ai_architecture/routing_pathfinding.md - App.tsx #285 */
       const centres = breakdown?.stops.length ?? 0;
@@ -4690,6 +4722,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         maxDistance: train.maxDistance,
         hexLabels: points.map((point) => point.hexLabel),
         stops: breakdown?.stops ?? [],
+        bypassChoices,
         /* Design note #250: `null`, not `0`, for a corporation with no
            trains -- zero is a real answer meaning "worth nothing" and the
            honest answer there is that the question does not apply. */
@@ -14393,6 +14426,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onClearRoute={handleClearRoute}
         // Design note #1024: the granular edit the report asked for.
         onRemoveRouteStop={handleRemoveRouteStop}
+        // Phase 3 W3-E (K-06): the manual Stop / Bypass choice.
+        onSetRouteBypass={handleSetRouteBypass}
         stopsRemovedByRemoval={stopsRemovedByRemoval}
         currentGlobalEra={gameState?.current_global_era ?? null}
         isMyTurn={isMyTurn}

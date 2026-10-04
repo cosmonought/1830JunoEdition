@@ -21,6 +21,8 @@
 // learned its seat, a board that names no president -- gets the waiting card, which is the safe direction: the
 // waiting card offers no control, and the President's own client still has the form.
 
+import { viewerIsNamedActor } from "./waitingPromptView";
+
 export interface HomeStationAskInput {
   /** `mode === "spectate"`: a read-only viewer, whatever address its wallet holds. */
   spectator: boolean;
@@ -30,11 +32,11 @@ export interface HomeStationAskInput {
   viewerAddress: string | null | undefined;
 }
 
-/** True only for the President's own, non-spectating screen. */
+/** True only for the President's own, non-spectating screen.
+ *
+ *  Phase 3 W2-H: the rule itself moved to `waitingPromptView.ts`, so the home station, the B&O par and the
+ *  auction handoff -- and later the emergency purchase -- ask ONE viewer policy rather than three copies of it.
+ *  The rule is unchanged: not spectating, a named president, and that president is this viewer. */
 export function homeStationViewerIsPresident({ spectator, president, viewerAddress }: HomeStationAskInput): boolean {
-  if (spectator) return false;
-  /* No president on the board, or no seat on this tab: nobody here can be asked. `""` is a watcher's id, so it is
-     excluded by the same test rather than by a separate falsy arm. */
-  if (typeof president !== "string" || president.length === 0) return false;
-  return president === viewerAddress;
+  return viewerIsNamedActor({ spectator, actor: president, viewerAddress });
 }

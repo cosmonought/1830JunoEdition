@@ -73,8 +73,13 @@ const strip = (raw: string) =>
 
 const CODE = strip(PROMPT);
 const APP_CODE = readShell();
-/** Phase 3 W1-J: the viewer rule the prop now calls. */
-const RULE_CODE = readStripped("utils/homeStationAskView.ts");
+/** Phase 3 W1-J: the viewer rule the prop now calls. Phase 3 W2-H: it delegates to the shared viewer policy, so the
+ *  comparison itself is read from there. */
+const RULE_CODE = readStripped("utils/homeStationAskView.ts") + readStripped("utils/waitingPromptView.ts");
+/** Phase 3 W2-H (OD-1): the waiting seats' arm -- an early return of the non-modal status -- and the President's card
+ *  after it. */
+const WAITING_ARM = sliceBetween(CODE, "if (!viewerIsPresident) {", "</WaitingStatusBanner>");
+const PRESIDENT_ARM = CODE.slice(CODE.indexOf('role="dialog"'));
 
 describe("a watcher is told what the table is waiting for", () => {
   it("names the person", () => {
@@ -86,8 +91,16 @@ describe("a watcher is told what the table is waiting for", () => {
   it("names the corporation", () => {
     // The `$` is assembled: `no-template-curly-in-string` rightly flags that syntax inside a plain string,
     // and this is the rare case where the string IS source text being searched for (as in #779's harness).
+    /* Phase 3 W2-H (K-21 / U-32): WAS `${ticker} has floated`. The prompt appears at the corporation's first
+       operating turn, not at its float (#1610), so the heading names the corporation by what it owes now. */
     const dollar = String.fromCharCode(36);
-    expect(CODE).toContain(`\`${dollar}{pending.ticker} has floated\``);
+    expect(WAITING_ARM).toContain(`heading={\`${dollar}{pending.ticker} must place its home station\`}`);
+  });
+
+  it("says the timing that is true: the first operating turn, never the float (K-21 / U-32)", () => {
+    expect(CODE).not.toContain("has floated");
+    expect(WAITING_ARM).toContain("is starting its first operating turn and cannot operate until its home station");
+    expect(PRESIDENT_ARM).toContain("is starting its first operating turn and its home station is not on the board yet.");
   });
 
   it("says play resumes, rather than leaving the reader to infer it", () => {
@@ -102,9 +115,13 @@ describe("a watcher is told what the table is waiting for", () => {
 
 describe("the ask belongs to the President alone", () => {
   it("keeps the place button inside the president's branch", () => {
-    expect(CODE).toContain("{viewerIsPresident && (");
-    const branch = CODE.slice(CODE.indexOf("{viewerIsPresident && ("));
-    expect(branch).toContain("onPlace(pending.companyId");
+    /* Phase 3 W2-H: WAS `{viewerIsPresident && (` around the button. The waiting seats now leave by an early return
+       (the non-modal status), so everything after it is the President's alone. */
+    expect(WAITING_ARM.length).toBeGreaterThan(50);
+    expect(WAITING_ARM).toContain("return (");
+    expect(WAITING_ARM).not.toContain("onPlace");
+    expect(WAITING_ARM).not.toContain("<button");
+    expect(PRESIDENT_ARM).toContain("onPlace(pending.companyId");
   });
 
   it("offers a watcher no control at all", () => {
@@ -141,7 +158,8 @@ describe("the default cannot regress an existing caller", () => {
 
   it("compares the seat rather than the corporation", () => {
     expect(APP_CODE).toContain("president: pendingHomeToken?.president,");
-    expect(RULE_CODE).toContain("return president === viewerAddress;");
+    expect(RULE_CODE).toContain("actor: president");
+    expect(RULE_CODE).toContain("return actor === viewerAddress;");
   });
 });
 
@@ -176,16 +194,21 @@ describe("the watcher's arm can actually be reached (design note #788)", () => {
     // The question did not disappear; it moved to where it can be answered without hiding the modal.
     // Phase 3 W1-J: the prop calls the one rule, which compares the named president with this viewer.
     expect(APP_CODE).toContain("viewerIsPresident={homeStationViewerIsPresident({");
-    expect(RULE_CODE).toContain("return president === viewerAddress;");
+    expect(RULE_CODE).toContain("return actor === viewerAddress;");
   });
 
-  it("covers the screen while it waits", () => {
-    /* The other half of the report: "prohibit players from doing anything until the Home Station is placed."
-       `position: fixed` with `inset: 0` over the whole viewport is what makes the modal a stop rather than a
-       notice -- #763's gate refuses the action, and this stops the click being worth attempting. */
+  it("stops the President's screen, and tells the waiting seats without covering theirs (Phase 3 W2-H, OD-1)", () => {
+    /* WAS "covers the screen while it waits": #783's report asked to "prohibit players from doing anything until the
+       Home Station is placed", and the card's full-viewport scrim did that for every seat. The authority already
+       refuses every held action (#763 / #1612), so the scrim added nothing for a waiting seat but a dialog with no
+       focusable control (the modal audit's H5). OD-1: the President's card keeps the stop; every other seat gets the
+       non-modal status, which says why the table has stopped and leaves the board usable. */
+    expect(PRESIDENT_ARM).toContain('aria-modal="true"');
     expect(CODE).toContain('position: "fixed"');
     expect(CODE).toContain("inset: 0");
-    expect(CODE).toContain('aria-modal="true"');
+    expect(WAITING_ARM).toContain("<WaitingStatusBanner");
+    expect(WAITING_ARM).not.toContain("aria-modal");
+    expect(WAITING_ARM).not.toContain("styles.backdrop");
   });
 });
 

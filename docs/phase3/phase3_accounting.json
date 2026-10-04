@@ -2401,6 +2401,19 @@
    "status": "RULED — owner, 2026-10-04: OD-3, OD-13, OD-14(d) and OD-14(i) transcribed (`owner_rulings`; plan OD table and §7.3). Resolved for these rulings."
   },
   {
+   "key": "AUD-25.16",
+   "ids": "U-56",
+   "ref": "W3-G (U-28) — owner-observed",
+   "cls": "[UX] W3-G finding · HIGH",
+   "item": "Owner-observed (2026-10-04): a seated principal pressed the Lobby's public-list \"Watch\" on their own game; the table opened in their SEAT, ONE TURN BEHIND the game, and offered them their turn from that stale board. Three separate facts: (a) WATCH IDENTITY -- Watch and \"Your tables\" are one door (`onEnterSandbox(gameId)`); no watch intent reaches the shell or the wire, and the seat is the server's principal -> seat answer, so a participant who presses Watch is seated, against the button's \"You will not have a seat.\"; (b) STALE AT REST -- the drain counts an entry applied before dispatching it, with no catch and no retry, and on a fresh entry the first board comparison is muted (console only), so the board can rest behind the room with no notice; (c) ACTIONABLE WHILE STALE -- the only currentness gate is a drain in progress; the turn gate reads the shell's own board, and the link stamps a click with the index it RECEIVED, so the server's staleness guard does not fire and the click is judged on the real board (refused, or APPLIED when legal there).",
+   "src": "CONFIRMED (source + in-memory tests, `phase3W3GWatchDefect.test.tsx`) — (a) `Lobby.tsx` `onWatch` / `onOpen` -> `onEnterSandbox`; `App.tsx` `handleEnterSandbox` (no intent, `mode: \"sandbox\"`); `server/src/rooms/gameRecord.ts` `roomViewFor` role by `seatOf(record, principalId)`; `LobbyRoomList.tsx` Watch title. (b) `App.tsx` drain `appliedCountRef.current = at + 1` before `await runGameplayActionRef.current?.(...)`, try/finally only; `divergenceWatch.ts` `everAgreed` false -> `message: null`. The exact trigger of the owner's stale entry (a client reducer no-op / refusal vs a thrown replay) is NOT PROVEN -- the owner's console (`[divergence] … have not agreed` vs an unhandled rejection) distinguishes them. (c) `App.tsx` turn gate (`replayingRef` only; `actingAddress(boardNow, …)`); `serverLink.ts` `flushUnsent` `baseIndex: appliedIndex` advanced in `applyEntries`; `roomSession.ts` staleness `baseIndex < nextIndex - 1` -- a tip-stamped click from a stale board is refused by authority, or applied (test: index 3 lands).",
+   "slice": "W3-J",
+   "disp": "B",
+   "od": "OD-19",
+   "p4": "—",
+   "notes": "HIGH: a stale view can submit, the click reaches the server and can land (proven in memory; no live game touched). (b) and (c) are W3-J work regardless of OD-19: a board must never present an actionable state as current -- e.g. hold controls until the settle point agrees with the server's digest / tip, surface the first-check mismatch, and catch + re-request (resync) on a replay throw. (a) awaits OD-19 (Watch for a seated principal: always read-only, or not offered / relabelled as the seat's door). Characterization tests are pinned to flip in W3-J (DEFECT) or stay (KEEP: the Play / Rejoin seat path)."
+  },
+  {
    "key": "AUD-23.01",
    "ids": "—",
    "ref": "Highest-risk #2",
@@ -4680,7 +4693,8 @@
    "AUD-25.12",
    "AUD-25.13",
    "AUD-25.14",
-   "AUD-25.15"
+   "AUD-25.15",
+   "AUD-25.16"
   ]
  },
  "vf_counts": {
@@ -4964,7 +4978,7 @@
   "W3-D": "NOT STARTED",
   "W3-E": "COMPLETE — `phase3/w3-manual-city-bypass` `07454d0` + review follow-ups `6d7cfa1`; integrated at the safe Wave-2 integration (`a860178`) under OD-11",
   "W3-F": "NOT STARTED",
-  "W3-G": "COMPLETE — OWNER REVIEW ACCEPTED (2026-10-04) and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` (merge `72ccd00` of `967e4e7`, parents `c0a44d7` / `967e4e7`): audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7`; audit `e86a933`, owner-review tracking on top); no product code. An accepted audit gate, not a product slice. AUD-00.01 and AUD-22.01 IMPLEMENTED (the audit is done); findings AUD-25.01 … AUD-25.15 accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed). OPEN remediation obligations: AUD-25.01 (MEDIUM) -> W3-B, AUD-25.02 (MEDIUM) -> W3-J, AUD-25.03 … 25.10 and 25.12 -> W3-J, AUD-25.14 -> W3-F; both MEDIUM rows must be fixed before W3-F closes Phase 3. W3-J is unblocked",
+  "W3-G": "COMPLETE — OWNER REVIEW ACCEPTED (2026-10-04) and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` (merge `72ccd00` of `967e4e7`, parents `c0a44d7` / `967e4e7`): audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7`; audit `e86a933`, owner-review tracking on top); no product code. An accepted audit gate, not a product slice. AUD-00.01 and AUD-22.01 IMPLEMENTED (the audit is done); findings AUD-25.01 … AUD-25.15 accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed). OPEN remediation obligations: AUD-25.01 (MEDIUM) -> W3-B, AUD-25.02 (MEDIUM) -> W3-J, AUD-25.03 … 25.10 and 25.12 -> W3-J, AUD-25.14 -> W3-F; both MEDIUM rows must be fixed before W3-F closes Phase 3. W3-J is unblocked; owner-observed follow-up AUD-25.16 (HIGH, Watch opens a participant's seat on a stale, actionable board) added 2026-10-04 on `phase3/w3-g-watch-defect-triage` -- W3-J (parts (b), (c) unconditionally; part (a) after OD-19); the gate's accepted status is unchanged",
   "W3-H": "NOT STARTED",
   "W3-I": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-v13cert-integration` (2026-10-04, merge `5a22e38` of `phase3/w3-i-offers` @ `92cdb5d`, parents `c3f43b7` / `92cdb5d`, its 3 commits carried unchanged): code `5c6d7f8` + review fixes `d663b1c` + tracking `92cdb5d` (from `phase3/wave2-bcgdf-v13cert-integration` @ `c3f43b7`). AUD-02.05, AUD-02.06, AUD-03.11, AUD-19.01 IMPLEMENTED. Dependencies W2-F and W2-H integrated in the base. A read-only queue accessor on the room link and one hook outside the drain (no RED region, no OD-12 edit); the par prompt and the three offer forms (Private Companies trade form, Buy Private Company, Buy Trains from a Corporation) read it. OWNER-ACCEPTED reading (2026-10-04): for AUD-03.11 / R4 a refused proposal may leave the form open with its typed values preserved so the player can correct and resend. Not taken (recorded follow-ups elsewhere, unchanged): the W2-F duplicate-waiting LOW and the two NITs. Presentation only: no engine, server, rules-version or settlement change",
   "W3-J": "NOT STARTED",

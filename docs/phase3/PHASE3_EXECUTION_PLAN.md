@@ -742,7 +742,7 @@ gates.
   A finding is fixed (W3-J), proven obsolete, or ruled by the owner. **Deferral to "polish" is not a disposition** (Part F).
 - **Starts:** in L6 after W3-C, or earlier whenever L6 is idle once wave 1 is integrated (read-mostly; its only writes are
   docs). **Gates:** owner review of the findings.
-- **Status (2026-10-04):** COMPLETE — OWNER REVIEW ACCEPTED (an accepted audit gate, not a product slice). Audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `c0a44d7`; audit `e86a933` + owner-review tracking). AUD-00.01 and AUD-22.01 done; findings AUD-25.01 … AUD-25.15 (Part C U-46 … U-55) accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b; rooms require the game server; no remediation slice); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE; no "polish later"); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed in §7.3). **INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration`** (merge `72ccd00` of `967e4e7`, parents `c0a44d7` / `967e4e7`; the current provisional baseline). OPEN obligations: W3-B AUD-25.01 (MEDIUM); W3-J AUD-25.02 (MEDIUM), 25.03–25.10, 25.12 and AUD-25.13's FIX items; W3-F AUD-25.14. W3-J is unblocked. Reports: `claude/PHASE3_W3G_UI_PARITY_AUDIT_*`, `claude/PHASE3_W3G_OWNER_REVIEW_*`.
+- **Status (2026-10-04):** COMPLETE — OWNER REVIEW ACCEPTED (an accepted audit gate, not a product slice). Audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `c0a44d7`; audit `e86a933` + owner-review tracking). AUD-00.01 and AUD-22.01 done; findings AUD-25.01 … AUD-25.15 (Part C U-46 … U-55) accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b; rooms require the game server; no remediation slice); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE; no "polish later"); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed in §7.3). **INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration`** (merge `72ccd00` of `967e4e7`, parents `c0a44d7` / `967e4e7`; the current provisional baseline). Owner-observed follow-up AUD-25.16 (HIGH; Watch / stale actionable board; part (a) awaits OD-19) added 2026-10-04 -> W3-J; the gate's accepted status is unchanged. OPEN obligations: W3-B AUD-25.01 (MEDIUM); W3-J AUD-25.02 (MEDIUM), 25.03–25.10, 25.12 and AUD-25.13's FIX items; W3-F AUD-25.14. W3-J is unblocked. Reports: `claude/PHASE3_W3G_UI_PARITY_AUDIT_*`, `claude/PHASE3_W3G_OWNER_REVIEW_*`.
 
 #### W3-H
 **Flourish OPEN residuals and audio** · L4 · **5–8 h** · *new*
@@ -770,6 +770,9 @@ gates.
 **U-28 findings remediation** · distributed to the owning lane · **4–10 h reserve**
 - Each W3-G finding with a Phase-3 implementation disposition is assigned to the lane that owns its region and lands
   through the integrator like any slice.
+- **AUD-25.16 (HIGH, owner-observed 2026-10-04):** a stale board must never present an actionable state as current -- parts (b)
+  (stale at rest, no notice) and (c) (live controls; a tip-stamped click reaches the server) are W3-J work now; part (a) (Watch
+  identity) follows OD-19. Characterization tests: `components/phase3W3GWatchDefect.test.tsx` (DEFECT tests flip; KEEP tests stay).
 
 #### W3-K
 **v13 rules batch** · L2 (or L6) · **8–14 h planned; ~14–22 h with OD-4 and its certification (an estimate)**
@@ -807,6 +810,7 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 | **OD-16** | PRODUCT (owner-authored) | The Terms page content (S10-12), required before the first real deposit | None | W2-M (hosting) | No |
 | **OD-17** | RULES | **RULED 2026-10-03 — see §7.3.** Tile-upgrade legality cross-references: VF D-18 (New York #54→#883 offered, #62→#883 not) and VF D-22 (#59 → brown OO facings that break fixed OO; 256 accepted transitions) | The placement filter accepts them | W3-K | No |
 | **OD-18** | PRODUCT | Confirm or reject the later placement of U-10 (clock / live-vs-async UX: the offer answerer on the clock, auto-decline, pause cap) and of the recorded limits (no host succession, no clock or forfeit for an absent seat). Confirmed → E with the ruling cited; rejected → scoped as Phase-3 slices | U-10 `DEFERRED` in Part C; the limits recorded in the 6.5 preflight | AUD-11.04, AUD-19.04 | No |
+| **OD-19** | PRODUCT | **Watch for a seated principal** (AUD-25.16 (a), owner-observed 2026-10-04). The Watch button promises "You will not have a seat", while the seat is the server's principal -> seat answer for every door. Either (a) Watch is ALWAYS read-only -- an explicit watch intent the shell (and, preferably, the server per socket) honours even for a participant; or (b) a participant is never offered Watch for their own table -- the row offers their seat's door ("Your tables" already lists it) and Watch stays for non-participants | One door (`onEnterSandbox(gameId)`); a participant who presses Watch is seated | W3-J (AUD-25.16 (a)) | No |
 
 ### 7.1 Not owner decisions (implementation defaults; the owner may object at a gate)
 

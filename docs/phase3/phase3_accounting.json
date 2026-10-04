@@ -443,7 +443,7 @@
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W2-J `b328e53` (its own OD-12 RED R2 commit: the sold-out rise's Activity Log line reads the marks the reducer was handed, `handedBoard.market_positions`, instead of the market mirror the dispatch had already advanced to the risen board), not integrated"
+   "status": "IMPLEMENTED — W2-J `b328e53` (its own OD-12 RED R2 commit: the sold-out rise's Activity Log line reads the marks the reducer was handed, `handedBoard.market_positions`, instead of the market mirror the dispatch had already advanced to the risen board); INTEGRATED on `phase3/wave3-i-w2i-w2j-v13cert-integration` (merge `32ead52` of `0b33f69`)"
   },
   {
    "key": "AUD-03.09",
@@ -457,7 +457,7 @@
    "od": "OD-8 (RULED 2026-10-04, Option A: split float/capitalisation narration from the later home-station placement)",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W2-J `8a448d2` + review fixes `99b5651` (OD-8 Option A: `describeFloat` says \"<CORP> has floated. It received $<AMOUNT>.\" on the is_floated false -> true transition -- the purchase that floats it -- with the capital on the settled board; the PlaceHomeStation sentence says only \"<CORP> placed its home station on <HEX>.\" at the first operating turn; the combined #1343 line is gone; copy only), not integrated"
+   "status": "IMPLEMENTED — W2-J `8a448d2` + review fixes `99b5651` (OD-8 Option A: `describeFloat` says \"<CORP> has floated. It received $<AMOUNT>.\" on the is_floated false -> true transition -- the purchase that floats it -- with the capital on the settled board; the PlaceHomeStation sentence says only \"<CORP> placed its home station on <HEX>.\" at the first operating turn; the combined #1343 line is gone; copy only); INTEGRATED on `phase3/wave3-i-w2i-w2j-v13cert-integration` (merge `32ead52` of `0b33f69`)"
   },
   {
    "key": "AUD-03.10",
@@ -1115,7 +1115,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W2-J `464dfbe` + review fix `5f5ddd2` (`describeGameplayAction` appends a presidency-change sentence when the settled board crowns a different president than the before board -- read, not re-decided; a first president is not a change -- naming §5.4's clockwise tie-break from the outgoing president when another holder ends level with the new one), not integrated"
+   "status": "IMPLEMENTED — W2-J `464dfbe` + review fix `5f5ddd2` (`describeGameplayAction` appends a presidency-change sentence when the settled board crowns a different president than the before board -- read, not re-decided; a first president is not a change -- naming §5.4's clockwise tie-break from the outgoing president when another holder ends level with the new one); INTEGRATED on `phase3/wave3-i-w2i-w2j-v13cert-integration` (merge `32ead52` of `0b33f69`)"
   },
   {
    "key": "AUD-10.02",
@@ -4602,7 +4602,7 @@
     "Do NOT keep the current combined delayed line.",
     "Reason: the float and capitalization occur at the purchase, while home-station placement now occurs later; narration should report each event when it actually happens."
    ],
-   "effect": "OD-8: RULED — split float/capitalisation narration from later home-station placement. Implemented by W2-J (`8a448d2`, review fixes `99b5651`); AUD-03.09 IMPLEMENTED. Copy only. Not integrated."
+   "effect": "OD-8: RULED — split float/capitalisation narration from later home-station placement. Implemented by W2-J (`8a448d2`, review fixes `99b5651`); AUD-03.09 IMPLEMENTED. Copy only. Not integrated. INTEGRATED on `phase3/wave3-i-w2i-w2j-v13cert-integration` (merge `32ead52`)."
   }
  },
  "wave1_integration": {
@@ -4705,7 +4705,7 @@
   "W2-G": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave2-bcg-v13cert-integration` (2026-10-04, merge `b84247f` of `phase3/w2-g-v13-emergency-ui` @ `17ab21f`, its 3 commits carried unchanged): the accepted W2-G UI (`695afe9`) reconciled to the integrated v13 emergency authority (`112fa71` + review fixes `02d73b8`). The surface presents `emergencyFundingFor(...).automatic`: the open trade window with `ForgoTrainTrade` (never reopened), ONE `EmergencySellPortfolio` judged by `emergencyPortfolioRefusal`, private funding only while exactly relevant with `ForgoPrivateFunding`, the automatic purchase as a status (no Buy) and the automatic bankruptcy (no `DeclareBankruptcy` anywhere); obligated president only (OD-1), everybody else W2-H's waiting surface; non-dismissible (OD-4); latched. Residue kept as a later bar pass: the now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel` (W2-A's bar test feeds them)",
   "W2-H": "COMPLETE — `phase3/w2-waiting-prompts` `3b7f23b`, `5cc5ccc`, `461d4f0`; integrated at the safe Wave-2 integration (`66977d5`). K-21's second half (the President's Skip while placing) stays W2-A's",
   "W2-I": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-v13cert-integration` (2026-10-04, merge `78f9164` of `phase3/w2-i-status-visibility` @ `60146da`, parents `7a9b16b` / `60146da`, its 3 commits carried unchanged): code `c17e844` + review fix `a18bac4` + tracking `60146da` (from `phase3/wave3-i-v13cert-integration` @ `7a9b16b`). OD-6 RULED (owner Option A, 2026-10-04, re-accepted at integration): game_id remains undisplayed; the Rules Reference diagnostic line shows Build ID + authoritative rules version. AUD-01.07 (C → B, DECIDED), AUD-02.08, AUD-11.03 IMPLEMENTED and INTEGRATED. App regions R-ROOMSTRIP (the delayed-auction chip) and R-RRMOUNT (`gameOver`, `rulesEngineVersion`) only. Presentation only: no engine, server, contract, rules-version or settlement change",
-  "W2-J": "COMPLETE — slice branch `phase3/w2-j-narration` `b328e53` (K-18, its own OD-12 RED R2 commit) + `464dfbe` (K-20) + review fix `5f5ddd2` + `8a448d2` (K-22) + review fixes `99b5651` (from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530`); NOT integrated (integration and owner broad gate pending). AUD-03.08 (K-18), AUD-10.01 (K-20), AUD-03.09 (K-22) IMPLEMENTED. OD-8 RULED 2026-10-04 (Option A). OD-7 ruled copy-only and already landed (W1-L, `ca73834`); OD-12 followed: one RED R2 edit (`soldOutRises`' resolver), its own commit, no neighbouring change. Narration only: no reducer, float/capitalisation/home-placement mechanics, rules-version or settlement change",
+  "W2-J": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j-v13cert-integration` (2026-10-04, merge `32ead52` of `phase3/w2-j-narration` @ `0b33f69`, parents `c774530` / `0b33f69`, its 7 commits carried unchanged): K-18 `b328e53` (its own OD-12 RED R2 commit) + K-20 `464dfbe` + review fix `5f5ddd2` + interim tracking `9927fd7` + K-22 `8a448d2` + review fixes `99b5651` + tracking `0b33f69` (from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530`). AUD-03.08 (K-18), AUD-10.01 (K-20), AUD-03.09 (K-22) IMPLEMENTED and INTEGRATED. OD-8 RULED 2026-10-04 (Option A). OD-7 ruled copy-only and already landed (W1-L, `ca73834`); OD-12 followed: one RED R2 edit (`soldOutRises`' resolver), its own commit, no neighbouring change. Narration only: no reducer, float/capitalisation/home-placement mechanics, rules-version or settlement change; the only gameEngine edit is the `describeFloat` narration helper",
   "W2-K": "PARTIAL — `phase3/w2-money-copy` `e223f64` (exact SHA verified), integrated at the safe Wave-2 integration (`fb4eee5`): U-44 timestamps per OD-9(a) and the OD-14(i) bounded money-panel pass are done; the official Keplr logo is ASSET PENDING (OD-9(b), AUD-18.05)",
   "W2-L": "COMPLETE — `phase3/w2-postgame-statistics` `e16aa5a` (derived history only); integrated at the safe Wave-2 integration (`615e183`). AUD-12.07 stays owner-gated (\"traded\" kept); S10-21's non-UR remainder stays open",
   "W2-M": "NOT STARTED",
@@ -5039,7 +5039,7 @@
  "wave3_i_w2i_v13cert_integration": {
   "branch": "phase3/wave3-i-w2i-v13cert-integration",
   "base": "7a9b16bdb6ba0505a0f3639bb4f0efb54576fb0f (phase3/wave3-i-v13cert-integration)",
-  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I and W2-I integrated; no broad Phase-3 owner gate has been run; not merged to main",
+  "status": "SUPERSEDED AS BASELINE by `phase3/wave3-i-w2i-w2j-v13cert-integration` (2026-10-04, W2-J added); otherwise as recorded: PROVISIONAL — was the Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I and W2-I integrated; no broad Phase-3 owner gate has been run; not merged to main",
   "inputs": {
    "W2-I": {
     "branch": "phase3/w2-i-status-visibility",
@@ -5075,5 +5075,43 @@
    "keys": "unchanged from 7916763 / 7a9b16b (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
   },
   "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F, W3-I and W2-I COMPLETE and INTEGRATED; no accepted slice awaits integration; not deployable until drained v12 rooms and the final integrated owner gate"
+ },
+ "wave3_i_w2i_w2j_v13cert_integration": {
+  "branch": "phase3/wave3-i-w2i-w2j-v13cert-integration",
+  "base": "c7745306d49854ceb5e09e9f4173a9f8e586dd12 (phase3/wave3-i-w2i-v13cert-integration)",
+  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I and W2-J integrated; no broad Phase-3 owner gate has been run; not merged to main",
+  "inputs": {
+   "W2-J": {
+    "branch": "phase3/w2-j-narration",
+    "head": "0b33f69264d7eb8357673293037667522adfeab6",
+    "parent": "c774530",
+    "merge": "32ead52a943368da11878f0d1c648d4cf764d67a"
+   }
+  },
+  "method": "git merge --no-ff (first parent c774530, second parent 0b33f69); b328e53, 464dfbe, 5f5ddd2, 9927fd7, 8a448d2, 99b5651, 0b33f69 carried unchanged (same SHAs); no squash, no rebase, no source branch moved",
+  "reconciliation": [
+   "No conflict: W2-J was 7 ahead / 0 behind c774530, so the merge's tree equals 0b33f69's exactly (code, tests and the slice's own tracking).",
+   "No server/, contracts/, rulesVersion.ts, settlement or fixture file differs from c774530. The only gameEngine change is the `describeFloat` narration helper in sandboxSession.ts (called only by the shell's float loop): no reducer transition, float threshold, capitalisation, home-placement timing or board mutation changed. App.tsx differs only by the accepted K-18 RED R2 resolver line.",
+   "Pre-existing meta-test failures compared on c774530 and on the merge: sourceGuards (1), boardInEffect (1), liveHygiene (2) -- identical output on both; PRE-EXISTING / NON-BLOCKING for this integration, not fixed here.",
+   "Tracking only in this record's commit: W2-J and its three rows read INTEGRATED; no other slice changed state."
+  ],
+  "follow_ups": [
+   "LOW (W2-J review, pre-existing #750 behaviour): on a float through an M&H exchange or a C&A grant the treasury diagnostic still prints beside the new float line on the same entry.",
+   "Carried, unchanged: the Buy Trains from a Corporation form LOW (W3-I), the W2-F duplicate-waiting LOW, the two NITs and the deferred scroll-to-card LOW; the pre-existing meta-test failures."
+  ],
+  "versions": {
+   "RULES_ENGINE_VERSION": 13,
+   "SUPPORTED_RULES_ENGINE_VERSIONS": [
+    13
+   ],
+   "SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS": [
+    10,
+    11,
+    12,
+    13
+   ],
+   "keys": "unchanged from 7916763 / c774530 (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
+  },
+  "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F, W3-I, W2-I and W2-J COMPLETE and INTEGRATED; no accepted slice awaits integration; not deployable until drained v12 rooms and the final integrated owner gate"
  }
 }

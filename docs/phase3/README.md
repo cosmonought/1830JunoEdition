@@ -28,7 +28,8 @@ or attachment.
 | Wave 2 B+C+G+D + v13 cert (provisional; superseded as baseline) | `phase3/wave2-bcgd-v13cert-integration` @ `7d8f73e` (2026-10-04, from `9b19d9d`): the accepted W2-D (`f0abdd7`) merged `--no-ff` (`4072fd0`) plus tracking commits; no owner gate; not merged. See the matrix's "Wave-2 B+C+G+D integration status" / `wave2_bcgd_v13cert_integration` in the JSON |
 | Wave 2 B+C+G+D+F + v13 cert (provisional; superseded as baseline) | `phase3/wave2-bcgdf-v13cert-integration` @ `c3f43b7` (2026-10-04, from `7d8f73e`): the accepted W2-F (`f19a22b`) merged `--no-ff` (`dfe6d13`) plus one tracking commit; no owner gate; not merged. See the matrix's "Wave-2 B+C+G+D+F integration status" / `wave2_bcgdf_v13cert_integration` in the JSON |
 | Wave 2 B+C+G+D+F + W3-I + v13 cert (provisional; superseded as baseline) | `phase3/wave3-i-v13cert-integration` @ `7a9b16b` (2026-10-04, from `c3f43b7`): the accepted W3-I (`92cdb5d`) merged `--no-ff` (`5a22e38`) plus one tracking commit; no owner gate; not merged. See the matrix's "W3-I integration status" / `wave3_i_v13cert_integration` in the JSON |
-| **Wave 2 B+C+G+D+F + W3-I + W2-I + v13 cert (provisional, current baseline)** | `phase3/wave3-i-w2i-v13cert-integration` (2026-10-04, from `7a9b16b`): the accepted W2-I (`60146da`) merged `--no-ff` (`78f9164`) plus one tracking commit; OD-6 RULED (Option A); no owner gate; not merged. See the matrix's "W2-I integration status" / `wave3_i_w2i_v13cert_integration` in the JSON |
+| Wave 2 B+C+G+D+F + W3-I + W2-I + v13 cert (provisional; superseded as baseline) | `phase3/wave3-i-w2i-v13cert-integration` @ `c774530` (2026-10-04, from `7a9b16b`): the accepted W2-I (`60146da`) merged `--no-ff` (`78f9164`) plus one tracking commit; OD-6 RULED (Option A); no owner gate; not merged. See the matrix's "W2-I integration status" / `wave3_i_w2i_v13cert_integration` in the JSON |
+| **Wave 2 B+C+G+D+F + W3-I + W2-I + W2-J + v13 cert (provisional, current baseline)** | `phase3/wave3-i-w2i-w2j-v13cert-integration` (2026-10-04, from `c774530`): the accepted W2-J (`0b33f69`) merged `--no-ff` (`32ead52`) plus one tracking commit; OD-8 RULED (Option A); no owner gate; not merged. See the matrix's "W2-J integration status" / `wave3_i_w2i_w2j_v13cert_integration` in the JSON |
 | Phase-4 playtest baseline | TBD — recorded at Phase-3 closure (W3-F) |
 
 ## Owner rulings recorded
@@ -43,7 +44,7 @@ restated in the same places. Still open: OD-14(a), OD-10(b).
 OD-2, SBS-3, SBS-4 and OD-4. The owner's 2026-10-04 rulings 1-5 (only enough, Brown continuation and intervening actions, M&H
 accounting, duplicate legs, exact private-funding relevance) are implemented there. **v13 settlement certification: PASS / CERTIFIED
 and INTEGRATED** with W2-B, W2-C and the v13 W2-G on `phase3/wave2-bcg-v13cert-integration` (2026-10-04; carried into the current provisional baseline
-`phase3/wave3-i-w2i-v13cert-integration` with W2-D, W2-F, W3-I and W2-I, not merged to main): rules engine `13`, supported live gameplay `[13]`, settlement-certified `[10, 11, 12, 13]` -- gameplay-engine
+`phase3/wave3-i-w2i-w2j-v13cert-integration` with W2-D, W2-F, W3-I, W2-I and W2-J, not merged to main): rules engine `13`, supported live gameplay `[13]`, settlement-certified `[10, 11, 12, 13]` -- gameplay-engine
 support and settlement certification stay separate axes ([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)).
 Still required before deployment: drained v12 rooms and the final owner gate.
 

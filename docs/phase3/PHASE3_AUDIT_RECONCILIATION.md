@@ -104,9 +104,9 @@ Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments on
 | W1-M | COMPLETE — L2 `6f42dca` |
 | W1-N | COMPLETE — L7 `9d9376b` + review fixes `06c3a91`; the OD-12 RED R2 call-site deletion `87d63c4` (+ comment follow-up `819a204`); tie-aware game-over strip at the integration (`8dc79e0`) |
 | W1-O | COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`) |
-| W3-K | COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click "Pass Turn" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D since integrated on `phase3/wave2-bcgd-v13cert-integration`, merge `4072fd0`; W2-F since integrated on `phase3/wave2-bcgdf-v13cert-integration`, merge `dfe6d13`; W3-I since integrated on `phase3/wave3-i-v13cert-integration`, merge `5a22e38`; W2-I since integrated on `phase3/wave3-i-w2i-v13cert-integration`, merge `78f9164`; other open slices are tracked separately) |
+| W3-K | COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click "Pass Turn" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D since integrated on `phase3/wave2-bcgd-v13cert-integration`, merge `4072fd0`; W2-F since integrated on `phase3/wave2-bcgdf-v13cert-integration`, merge `dfe6d13`; W3-I since integrated on `phase3/wave3-i-v13cert-integration`, merge `5a22e38`; W2-I since integrated on `phase3/wave3-i-w2i-v13cert-integration`, merge `78f9164`; W2-J since integrated on `phase3/wave3-i-w2i-w2j-v13cert-integration`, merge `32ead52`; other open slices are tracked separately) |
 
-*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, its ledger PARTIAL lifted with W2-B; W2-B, W2-C, W2-G and the v13 settlement certification are COMPLETE and integrated ("Wave-2 B+C+G + v13 certification integration status"); W2-D is COMPLETE and integrated ("Wave-2 B+C+G+D integration status"); W2-F is COMPLETE and integrated ("Wave-2 B+C+G+D+F integration status"); W3-I is COMPLETE and integrated ("W3-I integration status"); W2-I is COMPLETE and integrated ("W2-I integration status"). Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
+*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, its ledger PARTIAL lifted with W2-B; W2-B, W2-C, W2-G and the v13 settlement certification are COMPLETE and integrated ("Wave-2 B+C+G + v13 certification integration status"); W2-D is COMPLETE and integrated ("Wave-2 B+C+G+D integration status"); W2-F is COMPLETE and integrated ("Wave-2 B+C+G+D+F integration status"); W3-I is COMPLETE and integrated ("W3-I integration status"); W2-I is COMPLETE and integrated ("W2-I integration status"); W2-J is COMPLETE and integrated ("W2-J integration status"). Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
 `OPEN`, `NOT STARTED`, `RULED`, `NEEDS PRECISE REPRODUCTION / CLARIFICATION`) is the `status` field of its JSON row; the
 checker verifies that a COMPLETE slice has no unimplemented A/B row and that each status agrees with its disposition.
 
@@ -459,7 +459,8 @@ branch-only; since 2026-10-04 ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-v13
 
 ## W2-I integration status (2026-10-04)
 
-**Branch** `phase3/wave3-i-w2i-v13cert-integration` from `phase3/wave3-i-v13cert-integration` @ `7a9b16b` — **the current provisional Phase-3 integration
+**Branch** `phase3/wave3-i-w2i-v13cert-integration` from `phase3/wave3-i-v13cert-integration` @ `7a9b16b` — *(superseded as baseline by
+`phase3/wave3-i-w2i-w2j-v13cert-integration`, below)* **the provisional Phase-3 integration
 baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** The accepted W2-I slice
 (`phase3/w2-i-status-visibility` @ `60146da`) merged `--no-ff` (merge `78f9164`, parents `7a9b16b`, `60146da`), its three commits carried
 unchanged (`c17e844` code, `a18bac4` review fix, `60146da` slice tracking), then this tracking commit.
@@ -483,7 +484,8 @@ unchanged (`c17e844` code, `a18bac4` review fix, `60146da` slice tracking), then
 ## W2-J slice status (2026-10-04)
 
 **Branch** `phase3/w2-j-narration` @ `99b5651` from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530` (the current provisional baseline,
-unchanged). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). OD-8 RULED 2026-10-04 (Option A).
+unchanged). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). OD-8 RULED 2026-10-04 (Option A). *(Written as
+branch-only; since 2026-10-04 ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j-v13cert-integration`, merge `32ead52` — see "W2-J integration status" below.)*
 
 - **AUD-03.08 (K-18 / U-36), OD-12 RED R2 — its own commit `b328e53`:** the sold-out rise's Activity Log line read its marks from the
   shell's market mirror, which the dispatch had already advanced to the risen board, so it described a further, hypothetical rise. The
@@ -503,6 +505,29 @@ unchanged). **COMPLETE on its slice branch; NOT integrated** (integration and ow
 - **OD-7:** ruled copy-only and already landed in W1-L (`ca73834`); nothing here. **Not taken:** W3-C, the W2-F / W3-I / W2-I
   follow-ups. Rules version and settlement unchanged. The four pre-existing meta-test failures are identical on `c774530` and on this
   branch.
+
+## W2-J integration status (2026-10-04)
+
+**Branch** `phase3/wave3-i-w2i-w2j-v13cert-integration` from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530` — **the current provisional Phase-3
+integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** The accepted W2-J slice
+(`phase3/w2-j-narration` @ `0b33f69`) merged `--no-ff` (merge `32ead52`, parents `c774530`, `0b33f69`), its seven commits carried unchanged
+(`b328e53` K-18 RED R2, `464dfbe` K-20, `5f5ddd2` review fix, `9927fd7` interim tracking, `8a448d2` K-22, `99b5651` review fixes,
+`0b33f69` slice tracking), then this tracking commit.
+
+- **No conflict.** W2-J was 7 ahead / 0 behind `c774530`, so the merged tree equals `0b33f69`'s exactly. No `server/`, `contracts/`,
+  `rulesVersion.ts`, settlement or fixture file differs from `c774530`; `App.tsx` differs only by the accepted K-18 RED R2 resolver line.
+- **gameEngine audit:** the only change is the `describeFloat` narration helper (`sandboxSession.ts`, called only by the shell's float
+  loop); no reducer transition, float threshold, capitalisation, home-placement timing or board mutation changed.
+- **Owner ruling OD-8 (Option A) intact:** "<CORP> has floated. It received $<AMOUNT>." at the purchase that floats it; "<CORP> placed its
+  home station on <HEX>." at the placement; the combined line absent.
+- **Rows:** AUD-03.08, AUD-10.01, AUD-03.09 IMPLEMENTED and INTEGRATED.
+- **Pre-existing meta-test failures, compared on `c774530` and on the merge:** `sourceGuards` (1), `boardInEffect` (1), `liveHygiene` (2)
+  -- identical output on both. PRE-EXISTING / NON-BLOCKING; not fixed here.
+- **Versions:** `RULES_ENGINE_VERSION` 13; supported live `[13]`; settlement-certified `[10, 11, 12, 13]`; keys and fixtures unchanged.
+- **Lanes:** W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I and W2-J **COMPLETE and INTEGRATED**; no accepted
+  slice awaits integration. Not deployable until drained v12 rooms and the final integrated owner gate.
+- **Follow-ups (not implemented here):** the W2-J LOW (treasury diagnostic beside the float line on an M&H / C&A float); carried unchanged:
+  the Buy Trains from a Corporation form LOW, the W2-F duplicate-waiting LOW, the two NITs and the deferred scroll-to-card LOW.
 
 ## Scope and closing remark
 

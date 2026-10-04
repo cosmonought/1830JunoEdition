@@ -631,7 +631,7 @@ gates.
 
 #### W2-J
 **Narration corrections** · L6 · **4–6 h**
-- **Wave-1 integration (2026-10-03):** RR-4's copy is **done** (OD-7 ruled: copy only, `ca73834`) and leaves this slice. **OD-12 ruled:** K-18's RED R2 edit may land as its own separately reviewed commit (§5.1 order). **OD-8 RULED (2026-10-04, §7.3) — Option A.** Status: **COMPLETE on its slice branch** `phase3/w2-j-narration` @ `99b5651` (from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530`; K-18 RED R2 commit `b328e53`, K-20 `464dfbe` + review fix `5f5ddd2`, K-22 `8a448d2` + review fixes `99b5651`); NOT integrated. AUD-03.08, AUD-10.01 and AUD-03.09 IMPLEMENTED.
+- **Wave-1 integration (2026-10-03):** RR-4's copy is **done** (OD-7 ruled: copy only, `ca73834`) and leaves this slice. **OD-12 ruled:** K-18's RED R2 edit may land as its own separately reviewed commit (§5.1 order). **OD-8 RULED (2026-10-04, §7.3) — Option A.** Status: **COMPLETE on its slice branch** `phase3/w2-j-narration` @ `99b5651` (from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530`; K-18 RED R2 commit `b328e53`, K-20 `464dfbe` + review fix `5f5ddd2`, K-22 `8a448d2` + review fixes `99b5651`); **ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j-v13cert-integration` (merge `32ead52` of `0b33f69`, 2026-10-04).** AUD-03.08, AUD-10.01 and AUD-03.09 IMPLEMENTED.
 - **Rows:** implements AUD-03.08 (K-18 / U-36), AUD-03.09 (K-22 / U-37), AUD-10.01 (K-20 / U-33). *(It carried the owner-gated AUD-09.10 (RR-4) until OD-7 was ruled copy-only; that copy landed in W1-L at the Wave-1 integration.)*
 - **Surfaces:** K-18 — pass the before-board's market positions to `soldOutRises` (RED R2 7111–7123: OD-12); K-20 — a
   presidency-change sentence with the tie-break reason; K-22 — the float line per OD-8. (RR-4's copy, once listed here "if OD-7
@@ -885,7 +885,7 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - At the corporation's later first operating turn, when its home station is actually placed, log: "<CORP> placed its home station on <HEX>."
 - Do NOT keep the current combined delayed line.
 - Reason: the float and capitalization occur at the purchase, while home-station placement now occurs later; narration should report each event when it actually happens.
-- *Effect on this plan:* OD-8: RULED — split float/capitalisation narration from later home-station placement. Implemented by W2-J (`8a448d2`, review fixes `99b5651`); AUD-03.09 IMPLEMENTED. Not integrated.
+- *Effect on this plan:* OD-8: RULED — split float/capitalisation narration from later home-station placement. Implemented by W2-J (`8a448d2`, review fixes `99b5651`); AUD-03.09 IMPLEMENTED. Integrated on `phase3/wave3-i-w2i-w2j-v13cert-integration` (merge `32ead52`).
 
 **OD-6 — GAME ID / BUILD ID / RULES VERSION PLACEMENT (W2-I).** (Ruled 2026-10-04, from the owner's W2-I decision.)
 - OPTION A. Keep `game_id` OFF SCREEN. The LIVE-2 identity rule remains authoritative: `game_id` is the server key, not the player's game name, and the interface must not display it.

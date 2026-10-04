@@ -308,7 +308,7 @@ describe("the auction's end, and the variants, are separated from the base proce
     auctionPage(LPF);
     const variants = required("rules-auction-variants");
     expect(variants.textContent).toContain("Variant in play on this table");
-    expect(variants.textContent).toContain("Delayed auction");
+    expect(variants.textContent).toContain("Delayed Auction"); // W1-L (DA6-n): the host's spelling
     const ends = required("rules-auction-ends");
     expect(ends.compareDocumentPosition(variants) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     /* And never inside the interruption, which is the base game's. */

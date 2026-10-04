@@ -105,15 +105,19 @@ export type RuleScope =
   | "dynamicStockMarket"
   | "plusTiles";
 
-/** The tag a scoped block wears, so a player can see which switch put it there. */
+/** The tag a scoped block wears, so a player can see which switch put it there.
+ *  Phase 3 W1-L (DA6-n): THE SAME NAMES THE HOST CHOSE THEM BY. The four house rules wore sentence-case tags here
+ *  ("Delayed auction") while Host Game and the room list title them "Delayed Auction", "Gentle Rust", "Dynamic
+ *  Market" and "Unpredictable Revenue" (`HOUSE_RULE_ROWS`, `LobbyRoomList`'s `RULE_TITLES`; UR-6's canonical name).
+ *  One variant, one spelling. */
 const SCOPE_LABEL: Readonly<Record<RuleScope, string | null>> = {
   standard: null,
   plus: "18XX+",
   levelPlayingField: "LPF",
-  delayedAuction: "Delayed auction",
-  gentleRust: "Gentle rust",
-  unpredictableRevenue: "Unpredictable revenue",
-  dynamicStockMarket: "Dynamic market",
+  delayedAuction: "Delayed Auction",
+  gentleRust: "Gentle Rust",
+  unpredictableRevenue: "Unpredictable Revenue",
+  dynamicStockMarket: "Dynamic Market",
   plusTiles: "18XX+ tiles",
 };
 
@@ -179,6 +183,16 @@ const SECTION_ORDER: readonly { id: RulesSection; label: string; short: string }
   { id: "auction", label: "Auction & Privates", short: "Privates" },
   { id: "tables", label: "Tables", short: "Tables" },
 ];
+
+/** ==================================================================
+ *   THIS PAGE IS THE RULES (U-40, the owner's S9-4 ruling)
+ *  ==================================================================
+ *  The game is Project 18XX; the expanded board is Project 18XX+. The 1830 rulebooks are the source material the
+ *  game was built from and are how a source discrepancy is resolved -- they are not the authority a player is
+ *  pointed at. The Rules Reference is the sole and final player-facing authority for this game's rules, and it
+ *  says so once, on every page, beneath the content. */
+export const RULES_AUTHORITY_SENTENCE =
+  "This Rules Reference is the final word on Project 18XX's rules. Where a printed rulebook or any other guide differs, the game plays as written here.";
 
 /** The player-visible name of a page. EVERY cross-page link label is generated through this, so a link and
  *  the strip it points at physically cannot come to disagree about what a page is called. */
@@ -491,7 +505,9 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
       /* NOT "must be placed on your first Operating Turn" as an item of step 2: the home station is placed
          BEFORE Lay Track, so it cannot be part of the optional step this list belongs to. `HOME_STATION.text`
          reads this bullet, so the Overview preview and the Operating Round page state it in one voice. */
-      "At the start of its first operating turn, the corporation places its home-station token for free — before Lay Track.",
+      /* Phase 3 W1-L (U-32): the timing stated whole -- the corporation's first Operating Round turn, not the float
+         (#1610/#1612). The leading clause is what `HOME_STATION.text` and the Overview's `cede` list find it by. */
+      "At the start of its first operating turn — its first turn in an Operating Round, not when it floats — the corporation places its home-station token for free, before Lay Track.",
       "Home station: free. First additional station: $40. Later additional stations: $100 each.",
       "The destination city must have an empty station circle.",
       "You cannot have two stations on the same hex.",
@@ -516,13 +532,28 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
       {
         p: "Normally, the corporation must be able to trace an unblocked train route of any length from one of its other stations to the destination city. The DH Private Company provides an exception to this connection requirement.",
       },
+      /* Phase 3 W1-L (RR-5): the printed schedule, and the Level Playing Field's beside it (`LPF_STATION_TOKEN_SCHEDULE`,
+         #1320): the home station free and every station after it $100 -- no $40 station at that table. The Operating
+         Round page, the Overview's Tokens lookup and the Tables page each show the one the table plays. */
       {
+        unless: "levelPlayingField",
         table: {
           columns: ["Station", "Cost"],
           rows: [
             ["Home station", "Free"],
             ["First additional station", "$40"],
             ["Each later additional station", "$100"],
+          ],
+          numeric: [1],
+        },
+      },
+      {
+        scope: "levelPlayingField",
+        table: {
+          columns: ["Station", "Cost"],
+          rows: [
+            ["Home station", "Free"],
+            ["Each additional station", "$100"],
           ],
           numeric: [1],
         },
@@ -610,8 +641,13 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
       { p: "Trains may not be combined or “double headed” to create a longer route." },
       { h: "Highest revenue rule" },
       { p: "When declaring routes, the corporation should choose the combination producing the highest possible revenue." },
-      { p: "If another player demonstrates a route combination producing higher revenue, the higher-revenue combination must be used." },
-      { p: "Players are not required to point out every higher-revenue possibility." },
+      /* Phase 3 W1-L (RR-1): WAS "If another player demonstrates a route combination producing higher revenue, the
+         higher-revenue combination must be used." No player demonstrates anything here: the game plays that player
+         (`routeAuthority.ts` #1556, S6-3). It searches the corporation's own trains for a legal combination and
+         refuses a declared set worth less than what it found, naming the figure; its search is a lower bound, so a
+         legal set worth as much or more always stands. */
+      { p: "The game checks this for you: it searches the corporation's own trains for the best legal combination it can find, and refuses a declared set that earns less, naming the better figure." },
+      { p: "The search sets a floor, not a ceiling: any legal combination that earns at least as much as the one it found is accepted." },
     ],
   },
   {
@@ -717,11 +753,24 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
       { h: "Diesels" },
       { p: "After the first 6-train is purchased, Diesels become available." },
       {
+        unless: "levelPlayingField",
         table: {
           columns: ["Purchase", "Price"],
           rows: [
             ["Diesel", "$1,100"],
             ["Diesel with a 4-, 5-, or 6-train trade-in", "$800"],
+          ],
+          numeric: [1],
+        },
+      },
+      /* Phase 3 W1-L (RR-5): the Level Playing Field's Diesel (`LPF_DIESEL_COST`, `LPF_DIESEL_EXCHANGE_COST`, #1326). */
+      {
+        scope: "levelPlayingField",
+        table: {
+          columns: ["Purchase", "Price"],
+          rows: [
+            ["Diesel", "$900"],
+            ["Diesel with a 4-, 5-, or 6-train trade-in", "$750"],
           ],
           numeric: [1],
         },
@@ -737,6 +786,10 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
           "If the corporation does not have enough money but the corporation and its president together have enough, the corporation must spend all of its money and the president pays the difference.",
           "When the president's personal money is being used for this forced purchase, a train bought from another corporation may not cost more than its face value.",
           "A cash-strapped corporation is not required to buy another corporation's train merely because it is cheaper than a train in the Bank or Bank Pool.",
+          /* Phase 3 W1-L (RR-7): what the president may sell, and the private sale's own limits (`emergencyFunding.ts`
+             #1541): the ordinary private purchase's restrictions stand -- phases 3 and 4, half to twice face value,
+             never the B&O private, a buyer that is another corporation paying from its treasury. */
+          "If the president's cash is still short, the president sells shares to raise the rest. The president may also sell a Private Company they own to another corporation — only in Phases 3 and 4, for ½ to 2× its face value, and never the B&O — but is never required to.",
         ],
       },
       { p: "If the corporation has no legal train route, it does not have to own or purchase a train." },
@@ -1117,8 +1170,10 @@ function withoutProse(nodes: readonly RuleNode[], prefix: string): readonly Rule
 }
 
 /** The wording the CURRENT breadcrumb and the game-flow chips use for each cursor value -- the same `stepLabel`
- *  strings `OperatingSubPhaseStepper.tsx` shows in the action bar, so a step is called one thing everywhere. */
-const SUB_PHASE_DISPLAY: Readonly<Record<RulesOperatingSubPhase, string>> = {
+ *  strings `OperatingSubPhaseStepper.tsx` shows in the action bar, so a step is called one thing everywhere.
+ *  Phase 3 W1-L: exported for `rulesSubPhaseParity.test.ts`, which holds it equal to `OPERATING_SUB_PHASE_LABELS`'
+ *  `stepLabel`s (deriving it is S10-14's Phase-5 consolidation). */
+export const SUB_PHASE_DISPLAY: Readonly<Record<RulesOperatingSubPhase, string>> = {
   BuyPrivate: "Buy Private",
   Track: "Lay Track",
   Tokens: "Station Tokens",
@@ -1668,8 +1723,10 @@ const OTHER_REFERENCE_GROUPS: readonly ReferenceGroup[] = [
         value: "Free — except the first green upgrade of a preprinted yellow hex with an unpaid printed terrain cost (G19, D10, E5), which pays it once",
       },
       { label: "Home station", value: "Free" },
-      { label: "First additional station", value: "$40" },
-      { label: "Each later station", value: "$100" },
+      { label: "First additional station", value: "$40", unless: "levelPlayingField" },
+      { label: "Each later station", value: "$100", unless: "levelPlayingField" },
+      // Phase 3 W1-L (RR-5): the Level Playing Field's schedule (#1320).
+      { label: "Each additional station", value: "$100", scope: "levelPlayingField" },
     ],
   },
   {
@@ -1694,7 +1751,9 @@ const OTHER_REFERENCE_GROUPS: readonly ReferenceGroup[] = [
     rows: [
       { label: "Train from another corporation", value: "$1 minimum, any agreed price" },
       { label: "Forced purchase with the president's money, train from another corporation", value: "Not above face value" },
-      { label: "Diesel trade-in (4-, 5- or 6-train)", value: "$800 instead of $1,100" },
+      { label: "Diesel trade-in (4-, 5- or 6-train)", value: "$800 instead of $1,100", unless: "levelPlayingField" },
+      // Phase 3 W1-L (RR-5): the Level Playing Field's Diesel (#1326).
+      { label: "Diesel trade-in (4-, 5- or 6-train)", value: "$750 instead of $900", scope: "levelPlayingField" },
       { label: "Over the train limit", value: "Discard to the Bank Pool, no refund" },
     ],
   },
@@ -1727,7 +1786,9 @@ const OTHER_REFERENCE_GROUPS: readonly ReferenceGroup[] = [
     rows: [
       { label: "Corporation can afford a train", value: "Must buy the cheapest available" },
       { label: "Corporation + president can afford one", value: "Corporation spends everything; president pays the difference" },
-      { label: "Still short", value: "President sells shares or private companies to raise it" },
+      /* Phase 3 W1-L (RR-7): WAS "President sells shares or private companies to raise it" -- the private sale has
+         the ordinary purchase's limits (`emergencyFunding.ts` #1541) and is never required. */
+      { label: "Still short", value: "President sells shares to raise it; may also sell a private company to another corporation (Phases 3–4, ½–2× face value, never the B&O)" },
       { label: "Cannot raise it", value: "President is bankrupt; the game ends" },
     ],
   },
@@ -1885,7 +1946,12 @@ const STOCK_CARDS: readonly StockCard[] = [
     lead: "A corporation floats when 60% of its shares have been bought from the Initial Offering. It begins operating in the next Operating Round.",
     quick: [
       "Shares in the Bank Pool, and shares gained through the BO, CA and MH Private Companies, count toward the 60% — what matters is that they left the Initial Offering.",
-      "At the end of the Stock Round in which it floats, the president receives the corporation's charter, its station tokens and its starting money: 10 × par value.",
+      /* Phase 3 W1-L (RR-3): WAS "At the end of the Stock Round in which it floats, the president receives ... its
+         starting money". The engine capitalises on the purchase that crosses 60% (`applyFloatThreshold`, #376/#749),
+         not at the round's end. */
+      "The moment it floats — on the purchase that takes the 60th percent out of the Initial Offering — the Bank pays its starting money, 10 × par value, into its treasury, and the president takes its charter and station tokens.",
+      /* Phase 3 W1-L (U-32): floating places nothing (#1610). The home station is the first operating turn's. */
+      "Floating places no token: the home station goes down at the start of the corporation's first Operating Round turn — see Operating Round.",
       "A corporation's money is kept strictly separate from its president's own cash.",
     ],
     detail: [],
@@ -1898,9 +1964,12 @@ const STOCK_CARDS: readonly StockCard[] = [
     quick: [
       "The change is immediate: the new president receives the President's Certificate and hands over two single certificates of that corporation in exchange.",
       "The charter, trains, station tokens and treasury pass to the new president.",
-      "If several players exceed the president with the same total, the new president is the next of them in player order after the former president.",
+      /* Phase 3 W1-L (U-33): checked against `presidentFor` (`presidencyTransfer.ts`): strictly more (#596b), and
+         among tied challengers the nearest clockwise from the former president's seat (#1620). */
+      "If several players exceed the president with the same total, the new president is the one seated nearest after the former president, going clockwise in player order.",
       "The President's Certificate never enters the Bank Pool. A president selling down past another holder transfers the presidency first; only then do the ordinary certificates go to the pool. There must be another holder with at least 20%.",
-      "A former president left over a certificate limit by the exchange must sell down — now if it is their turn, otherwise on their next Stock Round turn.",
+      // Phase 3 W1-L (AUD-21.02): the curable-only qualifier DA6-O2 gave the Certificate Limits card (DA-5, D-58).
+      "A former president left over a certificate limit by the exchange must sell down — now if it is their turn, otherwise on their next Stock Round turn — as far as a legal sale can fix it.",
     ],
     detail: [],
   },
@@ -2235,13 +2304,17 @@ interface LookupExcerpt {
   anchor?: string;
 }
 
-function detailTable(nodes: readonly RuleNode[], firstColumn: string): RuleTable | null {
-  const found = nodes.find((node) => "table" in node && node.table.columns[0] === firstColumn);
+/* Phase 3 W1-L (RR-5): A SCOPED TABLE IS FOUND ONLY AT A TABLE IT APPLIES TO. The Level Playing Field's station and
+   Diesel tables sit beside the printed ones (`unless` / `scope`), and a lookup by first column alone returned the
+   first of the pair whatever the table played. `applies` is the page's own scope predicate; absent, every node is a
+   candidate, which is what an unscoped step has always meant. */
+function detailTable(nodes: readonly RuleNode[], firstColumn: string, applies?: (item: Scoped) => boolean): RuleTable | null {
+  const found = nodes.find((node) => (applies === undefined || applies(node)) && "table" in node && node.table.columns[0] === firstColumn);
   return found !== undefined && "table" in found ? found.table : null;
 }
-function stepTable(id: OperatingStep["id"], firstColumn: string): RuleTable | null {
+function stepTable(id: OperatingStep["id"], firstColumn: string, applies?: (item: Scoped) => boolean): RuleTable | null {
   const step = OPERATING_STEPS.find((entry) => entry.id === id);
-  return step ? detailTable(step.detail, firstColumn) : null;
+  return step ? detailTable(step.detail, firstColumn, applies) : null;
 }
 
 /** `"Dividend declared: right one box; ..."` becomes a label and a value, rather than being retyped as two. */
@@ -2284,7 +2357,7 @@ export function lookupFor(key: RulesWatchKey, applies: (item: Scoped) => boolean
     case "or:Track":
       return table("Tiles by phase", stepTable("track", "Tile"), "operating", "rules-section-track");
     case "or:Tokens":
-      return table("Station costs", stepTable("station", "Station"), "operating", "rules-section-station");
+      return table("Station costs", stepTable("station", "Station", applies), "operating", "rules-section-station");
     case "or:Routes":
       return table("Train range", stepTable("routes", "Train"), "operating", "rules-section-routes");
     case "or:Dividends": {
@@ -4263,7 +4336,7 @@ function OperatingRoundPage({
   const highestRevenueLead = highestRevenue[0];
   const highestRevenueRest = highestRevenue.slice(1);
   const routeRangeTable = detailTable(routeDetail, "Train");
-  const stationCostTable = detailTable(stationDetail, "Station");
+  const stationCostTable = detailTable(stationDetail, "Station", applies);
 
   /* ---- Buy Trains: the three sources read better as three rows of one list than as three headed blocks
      down the page, and the exceptional procedure is pulled out from under them. ---- */
@@ -4277,7 +4350,7 @@ function OperatingRoundPage({
     },
   ].filter((row) => row.text !== "");
   const trainLimitTable = detailTable(trainDetail, "Phase");
-  const dieselTable = detailTable(trainDetail, "Purchase");
+  const dieselTable = detailTable(trainDetail, "Purchase", applies);
   const oneAtATime = operatingQuick("buyTrains", "Buy trains one at a time");
   const boughtAtTheEnd = detailProse(OPERATING_ROUND_OVERVIEW.detail, "A newly purchased train is purchased at the end");
 
@@ -5479,6 +5552,9 @@ export function RulesReference({
         <AuctionPage auctionLive={auctionLive} currentRef={currentStepRef} />
       )}
       {section === "tables" && <TablesPage playerCount={playerCount ?? null} livePhase={livePhase} plusTiles={activeScopes.has("plusTiles")} />}
+
+      {/* Phase 3 W1-L (U-40): the page's standing, said once beneath every page. */}
+      <p style={styles.authorityNote} data-testid="rules-authority">{RULES_AUTHORITY_SENTENCE}</p>
     </div>
     </ScopeContext.Provider>
   );
@@ -6222,6 +6298,16 @@ const styles: Record<string, React.CSSProperties> = {
   tdStrong: { color: INK_TEXT, fontWeight: 700 },
   tdMuted: { color: INK_TEXT_MUTED },
   liveDot: { display: "inline-block", width: "6px", height: "6px", marginLeft: "8px", verticalAlign: "middle", borderRadius: RADIUS.circle, backgroundColor: LIVE_INK },
+  /* Phase 3 W1-L (U-40): the authority line -- the footnote's quiet ink, set off from the page above it. */
+  authorityNote: {
+    margin: "28px 0 0",
+    paddingTop: "12px",
+    borderTop: `1px solid ${RULE}`,
+    fontSize: FONT_SIZE.small,
+    color: INK_TEXT_DIMMEST,
+    lineHeight: 1.5,
+    maxWidth: "68ch",
+  },
 };
 
 /* Built from `th` after the object exists: a header allowed to wrap, aligned to the row's baseline. */

@@ -1,0 +1,203 @@
+/** @jest-environment jsdom */
+//
+// ==================================================================
+//  PHASE 3 W1-L -- THE RULES REFERENCE SAYS WHAT THE GAME DOES (the copy that needs no ruling)
+// ==================================================================
+//
+// RR-1 (the route search), RR-3 (capitalisation at the float), RR-5 (the Level Playing Field's station and Diesel
+// prices), RR-7 (the emergency private sale's limits), U-32 (the home station is the first Operating Round turn's),
+// the remaining must-sell qualifier, U-40 (the page's standing) and U-38 (the Tiles tab's canonical names). Each
+// sentence is checked against the engine figure it states, read from the engine's own constant where one exists.
+// RR-4 (OD-7) and the waiting room's description line (OD-14(e)) are owner-gated and deliberately untouched here.
+
+import { act } from "react";
+import { createRoot, type Root } from "react-dom/client";
+
+import RulesReference, { RULES_AUTHORITY_SENTENCE, type RulesReferenceProps } from "./RulesReference";
+import { LPF_STATION_TOKEN_SCHEDULE } from "./hexBoardDataLpf";
+import { STANDARD_STATION_TOKEN_SCHEDULE } from "../gameEngine/stationTokens";
+import { DEPOT_COST, LPF_DIESEL_COST } from "../gameEngine/gamePhase";
+import { DIESEL_EXCHANGE_COST, LPF_DIESEL_EXCHANGE_COST } from "../gameEngine/dieselExchange";
+import { FULL_CAPITALISATION_MULTIPLE } from "../gameEngine/floatThreshold";
+import { canonicalTileName } from "./hexTileCatalog";
+import { readStripped } from "../utils/sourceScan";
+
+declare global {
+  // eslint-disable-next-line no-var
+  var IS_REACT_ACT_ENVIRONMENT: boolean;
+}
+global.IS_REACT_ACT_ENVIRONMENT = true;
+
+let container: HTMLDivElement;
+let root: Root;
+
+const PHASE_3: RulesReferenceProps["phase"] = { label: "Phase 3", tier: "3", trainLimit: 4 };
+const BASE: RulesReferenceProps = { roundType: "OperatingRound", roundLabel: "OR 2.1", operatingSubPhase: "Track", playerCount: 4, phase: PHASE_3 };
+const LPF: RulesReferenceProps = {
+  ...BASE,
+  variants: {
+    expandedMap: true,
+    levelPlayingField: true,
+    delayedAuction: false,
+    gentleRust: false,
+    unpredictableRevenue: false,
+    dynamicStockMarket: false,
+    plusTiles: true,
+  },
+};
+
+beforeEach(() => {
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  act(() => {
+    root = createRoot(container);
+  });
+});
+
+afterEach(() => {
+  act(() => root.unmount());
+  container.remove();
+});
+
+function page(id: "overview" | "stock" | "operating" | "auction" | "tables", props: RulesReferenceProps = BASE): string {
+  act(() => {
+    root.render(<RulesReference {...props} />);
+  });
+  const tab = container.querySelector(`[data-testid="rules-page-${id}"]`);
+  if (!tab) throw new Error(`no tab: ${id}`);
+  act(() => {
+    tab.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  return container.textContent ?? "";
+}
+
+function section(id: string): string {
+  const found = container.querySelector<HTMLElement>(`#${id}`);
+  if (!found) throw new Error(`no section: ${id}`);
+  return found.textContent ?? "";
+}
+
+const money = (n: number) => `$${n.toLocaleString("en-US")}`;
+
+describe("U-40 · the Rules Reference states its standing on every page", () => {
+  it.each(["overview", "stock", "operating", "auction", "tables"] as const)("%s", (id) => {
+    page(id);
+    const line = container.querySelector('[data-testid="rules-authority"]');
+    expect(line?.textContent).toBe(RULES_AUTHORITY_SENTENCE);
+    expect(RULES_AUTHORITY_SENTENCE).toMatch(/final word on Project 18XX's rules/);
+    expect(RULES_AUTHORITY_SENTENCE).not.toMatch(/1830/);
+  });
+});
+
+describe("RR-1 · the highest-revenue rule says the game checks it", () => {
+  it("no longer waits for another player to demonstrate a better route", () => {
+    const text = page("operating");
+    expect(text).not.toContain("If another player demonstrates");
+    expect(text).toContain("searches the corporation's own trains for the best legal combination it can find");
+    expect(text).toContain("any legal combination that earns at least as much as the one it found is accepted");
+  });
+});
+
+describe("RR-3 / U-32 · floating capitalises at once and places nothing", () => {
+  it("the float card", () => {
+    const text = page("stock");
+    expect(text).not.toContain("At the end of the Stock Round in which it floats");
+    expect(text).toContain("The moment it floats");
+    expect(text).toContain(`${FULL_CAPITALISATION_MULTIPLE} × par value, into its treasury`);
+    expect(text).toContain("Floating places no token: the home station goes down at the start of the corporation's first Operating Round turn");
+  });
+
+  it("the home station's timing names the Operating Round turn, not the float", () => {
+    const text = page("operating");
+    expect(text).toContain("its first turn in an Operating Round, not when it floats");
+  });
+});
+
+describe("RR-5 · the Level Playing Field's station and Diesel prices are the engine's", () => {
+  it("the Tables page: a standard table keeps the printed schedule", () => {
+    page("tables");
+    const stations = section("rules-reference-terrain");
+    expect(stations).toContain(`First additional station${money(STANDARD_STATION_TOKEN_SCHEDULE.second)}`);
+    expect(stations).toContain(`Each later station${money(STANDARD_STATION_TOKEN_SCHEDULE.later)}`);
+    expect(stations).not.toContain("Each additional station");
+    expect(section("rules-reference-trains")).toContain(`${money(DIESEL_EXCHANGE_COST)} instead of ${money(DEPOT_COST.D)}`);
+  });
+
+  it("the Tables page: a Level Playing Field table shows its own", () => {
+    page("tables", LPF);
+    const stations = section("rules-reference-terrain");
+    expect(LPF_STATION_TOKEN_SCHEDULE.second).toBe(LPF_STATION_TOKEN_SCHEDULE.later);
+    // The row wears the variant's tag between its label and its value.
+    expect(stations).toContain(`Each additional stationLPF${money(LPF_STATION_TOKEN_SCHEDULE.later)}`);
+    expect(stations).not.toContain("First additional station");
+    expect(stations).not.toContain("Each later station");
+    const trains = section("rules-reference-trains");
+    expect(trains).toContain(`LPF${money(LPF_DIESEL_EXCHANGE_COST)} instead of ${money(LPF_DIESEL_COST)}`);
+    expect(trains).not.toContain(money(DEPOT_COST.D));
+  });
+
+  it("the Operating Round page: the Diesel and station-cost lookups follow the table", () => {
+    const lpf = page("operating", LPF);
+    expect(lpf).toContain(`Diesel${money(LPF_DIESEL_COST)}`);
+    expect(lpf).toContain(`trade-in${money(LPF_DIESEL_EXCHANGE_COST)}`);
+    expect(lpf).not.toContain(money(DEPOT_COST.D));
+    const lpfStations = section("rules-section-station");
+    expect(lpfStations).toContain(`Each additional station${money(LPF_STATION_TOKEN_SCHEDULE.later)}`);
+    expect(lpfStations).not.toContain("First additional station");
+    const standard = page("operating");
+    expect(standard).toContain(`Diesel${money(DEPOT_COST.D)}`);
+    expect(standard).toContain(`trade-in${money(DIESEL_EXCHANGE_COST)}`);
+    expect(section("rules-section-station")).toContain(`First additional station${money(STANDARD_STATION_TOKEN_SCHEDULE.second)}`);
+  });
+});
+
+describe("RR-5 · the Overview's Tokens lookup is the table's schedule", () => {
+  it("a Level Playing Field table at the Tokens step sees $100 stations, a standard one the printed $40", () => {
+    page("overview", { ...LPF, operatingSubPhase: "Tokens" });
+    const lpf = container.querySelector('[data-testid="rules-lookup-excerpt"]')?.textContent ?? "";
+    expect(lpf).toContain(`Each additional station${money(LPF_STATION_TOKEN_SCHEDULE.later)}`);
+    expect(lpf).not.toContain("$40");
+    page("overview", { ...BASE, operatingSubPhase: "Tokens" });
+    const standard = container.querySelector('[data-testid="rules-lookup-excerpt"]')?.textContent ?? "";
+    expect(standard).toContain(`First additional station${money(STANDARD_STATION_TOKEN_SCHEDULE.second)}`);
+  });
+});
+
+describe("RR-7 · the emergency private sale carries its limits", () => {
+  it("the Forced Train Purchase table", () => {
+    page("tables");
+    const forced = section("rules-reference-forced-purchase");
+    expect(forced).toContain("President sells shares to raise it");
+    expect(forced).toContain("Phases 3–4");
+    expect(forced).toContain("½–2× face value");
+    expect(forced).toContain("never the B&O");
+    // RR-4 (OD-7) is owner-gated: its row is untouched.
+    expect(forced).toContain("Must buy the cheapest available");
+  });
+});
+
+describe("must-sell · the presidency exchange carries the curable-only qualifier", () => {
+  it("both must-sell sentences on the Stock Round page say 'as far as a legal sale can fix it'", () => {
+    const text = page("stock");
+    expect(text).toContain("by the exchange must sell down — now if it is their turn, otherwise on their next Stock Round turn — as far as a legal sale can fix it.");
+    expect(text).toContain("before buying or passing — as far as a legal sale can fix it");
+  });
+
+  it("the presidency tie reads as the engine settles it: strictly more, then nearest clockwise", () => {
+    const text = page("stock");
+    expect(text).toContain("a tie changes nothing");
+    expect(text).toContain("the one seated nearest after the former president, going clockwise in player order");
+  });
+});
+
+describe("U-38 · the Tiles tab names every tile canonically", () => {
+  it("prints no hand-built `#id` label", () => {
+    const source = readStripped("components/TileReference.tsx");
+    expect(source).not.toMatch(/#\{tileId\}|#\$\{tileId\}/);
+    expect(source.match(/canonicalTileName\(tileId\)/g)?.length).toBe(6);
+  });
+
+  it("the three errata identities are what that function returns", () => {
+    expect([canonicalTileName(626), canonicalTileName(36), canonicalTileName(35)]).toEqual(["#8861", "oo13", "oo14"]);
+  });
+});

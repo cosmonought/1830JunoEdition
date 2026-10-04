@@ -288,7 +288,7 @@ describe("the delayed auction does not leave a base-game claim standing", () => 
     expect(rows[0].textContent).toContain("end of the Operating Round set in which the first 3-train is bought");
     expect(rows[1].textContent).toContain("Start of the game");
     expect(rows[1].textContent).toContain("no Private Companies in play");
-    expect(rows[0].textContent).toContain("Delayed auction");
+    expect(rows[0].textContent).toContain("Delayed Auction"); // W1-L (DA6-n): the host's spelling
   });
 
   it("keeps the base-game cells when the variant is off", () => {
@@ -491,7 +491,7 @@ describe("the lookup sections do the work of their shape", () => {
     const certs = section("rules-reference-certificates").textContent ?? "";
     expect(certs).toContain("$450");
     expect(certs).not.toContain("$350");
-    expect(certs).toContain("Dynamic market");
+    expect(certs).toContain("Dynamic Market"); // W1-L (DA6-n): the host's spelling
   });
 
   it("shows the extra terrain tier only on a table that has one", () => {

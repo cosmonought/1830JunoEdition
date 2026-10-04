@@ -246,7 +246,9 @@ describe("both doors, one question (design note #846)", () => {
     /* Design note #884: was `"...(onUsePowerOffer"`, the spread that mixed the chips into
        `contextualButtons`. The guard moved to the single producer and gained a second clause -- see #884 for
        why `mayActThisTurn` belongs on it rather than being applied twice. */
-    expect(BAR).toContain("onUsePowerOffer && mayActThisTurn");
+    /* Phase 3 W2-D: the turn clause moved onto the chips (`mayActThisTurn || chip.offTurn`, asserted in
+       `powerRefusalAndChips.test.ts`); the guard on the shell's answer is still the producer's first test. */
+    expect(BAR).toMatch(/const powerChips: ActionBarButton\[\] =\s*onUsePowerOffer\s*\?\s*powerOffers\.map\(/);
   });
 });
 

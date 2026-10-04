@@ -341,7 +341,6 @@ import {
   licensesHeldBy,
   licensesRemainingForSale,
 } from "./gameEngine/kanawhaLicense";
-import { JK_PRIVATE_ID } from "./gameEngine/levelPlayingField";
 // Design note #808: one predicate for the bow, consulted by the tracer, the legality check and the pricing.
 import { hexOffersBypass, withForcedBypass } from "./gameEngine/cityBypass";
 // Phase 3 W3-E (K-06, OD-11): the manual Stop / Bypass choice on a waypoint with a track around its centre.
@@ -775,6 +774,8 @@ import {
   mhExchangeRequestFor,
   ownsPrivateByCorporation,
   stockRoundExchangeOffers,
+  jkPowerOfferFor,
+  jkArmScope,
 } from "./utils/activePrivatePower";
 // Phase 3 W2-E (OD-3): every reader of `pending_mh_exchange` -- the chip, the table marker, the log, the toast.
 import {
@@ -2234,24 +2235,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     jkLayArmedRef.current = jkLayArmed;
   }, [jkLayArmed]);
   // The arming is for one step of one corporation's turn; anything else moving disarms it.
+  /* Phase 3 W2-D (AUD-04.03 / A-8): ONE STEP OF ONE CORPORATION'S TURN IN ONE OPERATING ROUND. Keyed on
+     `[actingProtocolId, orSubPhase]` alone, an OR that ended with the same corporation and step on the cursor kept
+     the arm through the Stock Round and into the next OR. `jkArmScope` adds the round's identity. */
+  const jkArmScopeKey = jkArmScope(gameState, actingProtocolId, orSubPhase);
   useEffect(() => {
     setJkLayArmed(false);
-  }, [actingProtocolId, orSubPhase]);
+  }, [jkArmScopeKey]);
 
-  const jkPowerOffer = useMemo(() => {
-    if (!gameState || actingProtocolId === null || !kanawhaLicensesInPlay(gameState)) return null;
-    if (orSubPhase !== "Track") return null;
-    const jk = gameState.private_companies.find((entry) => entry.private_id === JK_PRIVATE_ID);
-    if (!jk || jk.closed || jk.owner_protocol_id !== actingProtocolId) return null;
-    if ((gameState.used_private_abilities ?? []).includes(JK_TILE_ABILITY_KEY)) return null;
-    return {
-      abilityKey: JK_TILE_ABILITY_KEY,
-      chipLabel: jkLayArmed ? "JK armed — lay beside Coal River" : "Use JK Power",
-      chipTitle: jkLayArmed
-        ? "Your next tile lay on a hex beside Coal River (L8) pays half its terrain cost and closes the JK. Press again to stand down."
-        : "Close the JK to lay one tile on a hex beside Coal River (L8) at half its terrain cost. Uses this turn's tile lay.",
-    };
-  }, [gameState, actingProtocolId, orSubPhase, jkLayArmed]);
+  /* Phase 3 W2-D (AUD-04.03 / A-8): `jkPowerOfferFor` (`activePrivatePower.ts`) -- the ROUND is the gate, then the
+     step, as `kanawhaLicenseControl` above asks (#1342). Copy unchanged. */
+  const jkPowerOffer = useMemo(
+    () => jkPowerOfferFor({ state: gameState, actingProtocolId, orSubPhase, armed: jkLayArmed }),
+    [gameState, actingProtocolId, orSubPhase, jkLayArmed],
+  );
 
   /* Design note #899: mirrored for the closure handler, which runs inside a dispatch. */
   finalStandingsRef.current = finalStandings;
@@ -3587,33 +3584,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         : null,
     [pendingMhExchange],
   );
-  const stockRoundPowerOffers = useMemo(
-    /* Design note #887: `stockRoundExchangeOffers` in `activePrivatePower.ts`. The three rules this memo
-       used to state inline -- #883's sandbox gate, the Stock Round test, and #441's PLAYER-scope ownership --
-       are now three branches a test can exercise one at a time instead of three sentences a scan has to
-       find. The note above still explains WHY the offer travels with the bar; what it no longer has to do is
-       be the only record of what the code checks. */
-    () => {
-      const offers = stockRoundExchangeOffers({
-        state: gameState,
-        viewerAddress,
-        sandbox,
-        mhPrivateId: MH_PRIVATE_ID,
-      });
-      /* 6.5-B (K-01): the M&H's exchange is not turn-gated, so while a player <-> player trade offer holds the
-         table the hold is the one thing that refuses it -- the chip is greyed with that sentence instead. */
-      const hold = privateTradeHoldReason(gameState, (address) => sandboxPlayerLabel(address) ?? truncateAddress(address));
-      const held = hold === null ? offers : offers.map((offer) => ({ ...offer, blockedReason: hold }));
-      /* Phase 3 W2-E (OD-3): while `pending_mh_exchange` stands the chip says so -- relabelled as pending and
-         greyed with the request's own sentence, which is also why a second request would be refused. The same
-         pure view the table marker reads, asked of the same board (so `gameState` is its whole dependency). */
-      return withPendingMhExchangeChip(
-        held,
-        pendingMhExchangeView(gameState, (address) => sandboxPlayerLabel(address) ?? truncateAddress(address)),
-      );
-    },
-    [gameState, viewerAddress, sandbox],
-  );
+  /* Phase 3 W2-D: `stockRoundPowerOffers` (the M&H's exchange-request chip) is composed further down, after
+     `dockHold` and W2-C's offer authorities -- its hold is `dockHold.exchangePrivate`, and a memo here cannot read a
+     binding declared below it (`memoDeadZone.test.ts`). */
 
   /* Read through a ref for the same reason `isMyTurnRef` is: the click handler is a `useCallback` the canvas
      holds across renders, and a click is a user event long after the commit that set it. */
@@ -4178,6 +4151,39 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         ? privateTradeProposalRefusal(gameState, viewerAddress, intent, privateTradeLabel)
         : "The board is not loaded yet.",
     [gameState, viewerAddress, privateTradeLabel],
+  );
+  const stockRoundPowerOffers = useMemo(
+    /* Design note #887: `stockRoundExchangeOffers` in `activePrivatePower.ts`. The three rules this memo
+       used to state inline -- #883's sandbox gate, the Stock Round test, and #441's PLAYER-scope ownership --
+       are now three branches a test can exercise one at a time instead of three sentences a scan has to
+       find. The note above still explains WHY the offer travels with the bar; what it no longer has to do is
+       be the only record of what the code checks.
+       Phase 3 W2-D (AUD-10.05, P3-N003): offered in the Operating Round as well, and marked `offTurn` -- the name is
+       historical. Declared HERE, below `dockHold` and W2-C's offer authorities, because the hold is read from the
+       shell's one hold answer. */
+    () => {
+      const offers = stockRoundExchangeOffers({
+        state: gameState,
+        viewerAddress,
+        sandbox,
+        mhPrivateId: MH_PRIVATE_ID,
+      });
+      /* Phase 3 W2-D: the M&H's exchange is not turn-gated, so a hold is what refuses it -- and refuses rather than
+         queues (`mohawkExchange.ts`). The sentence is the authority's refusal of `ExchangePrivate`, asked once in
+         `dockHold` (W2-A's one call site), not 6.5-B's narrower trade-offer answer: in the Operating Round a
+         discard, the funding hold, a train / private offer or the home hold can stand as well. `null` while
+         scrubbing, as every `dockHold` field is. */
+      const hold = dockHold.exchangePrivate;
+      const held = hold === null ? offers : offers.map((offer) => ({ ...offer, blockedReason: hold }));
+      /* Phase 3 W2-E (OD-3): while `pending_mh_exchange` stands the chip says so -- relabelled as pending and
+         greyed with the request's own sentence, which is also why a second request would be refused. The same
+         pure view the table marker reads, asked of the same board. Applied LAST, so pending > hold > live. */
+      return withPendingMhExchangeChip(
+        held,
+        pendingMhExchangeView(gameState, (address) => sandboxPlayerLabel(address) ?? truncateAddress(address)),
+      );
+    },
+    [gameState, viewerAddress, sandbox, dockHold.exchangePrivate],
   );
 
   /* Design note #205 said: "Trains have a full on-chain offer flow; privates are single-party.
@@ -14508,8 +14514,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            disagree about whether a power is available. Empty outside Lay Track by construction --
            `dhPower`/`cslPower` report the lay unavailable once it is spent or forfeited. */
         /* Design note #871: the hex powers in an Operating Round, the M&H in a Stock Round. The two
-           lists are disjoint by round, so this concatenation never shows both. */
+           lists are disjoint by round, so this concatenation never shows both.
+           Phase 3 W2-D (AUD-10.05): no longer disjoint -- the M&H's request is offered in the Operating Round too.
+           The bar keeps them apart by SEAT instead: the hex and JK chips stay with the acting seat
+           (`mayActThisTurn`), the M&H's `offTurn` chip shows to its owner on any seat's turn. */
         powerOffers={[...privatePowerOfferList, ...stockRoundPowerOffers, ...(jkPowerOffer ? [jkPowerOffer] : [])]}
+        /* Phase 3 W2-D (P3-N003): the M&H chip's readiness, `sessionReady` without its turn component. */
+        offTurnPowerReady={controlsEnabled && !actionInFlight && !scrubbing}
         /* ==================================================================
             DESIGN NOTE 1388: THE BUTTON OPENS THE MODAL; ONLY THE MODAL BUYS
            ==================================================================

@@ -167,6 +167,8 @@ function barProps(state: GameStateResponse, viewer: string, onPassTurn: () => vo
     roundType: state.current_round_type as RoundType,
     orSubPhase: "Track", // read only in an Operating Round
     sessionReady: mine,
+    // Phase 3 W2-D: the shell's off-turn power readiness (a live session, not the turn) -- every seat here is live.
+    offTurnPowerReady: true,
     isMyTurn: mine,
     onPassTurn,
     passDisabledReason: passGate(state, viewer, hold),

@@ -172,10 +172,15 @@ describe("K-01: the Stock Round Private Companies section, its handlers, its pro
     expect(pass).not.toContain("homeTokenBlock");
   });
 
-  it("the M&H's Stock Round exchange chip is greyed with the hold (it is not turn-gated, so only the hold refuses it)", () => {
-    const memo = sliceBetween(APP, "const stockRoundPowerOffers = useMemo(", "const privatePowerOffersRef");
+  it("the M&H's exchange chip is greyed with the hold (it is not turn-gated, so only the hold refuses it)", () => {
+    /* Phase 3 W2-D: the hold is the authority's refusal of `ExchangePrivate` from the shell's one hold answer
+       (`dockHold.exchangePrivate`), not 6.5-B's trade-offer-only `privateTradeHoldReason` -- in the Operating Round
+       a discard, the funding hold, a train / private offer or the home hold can stand as well. The memo therefore
+       sits below `dockHold`, and its end anchor is the binding that now follows it. */
+    const memo = sliceBetween(APP, "const stockRoundPowerOffers = useMemo(", "const pendingDiscard = useMemo(");
     expect(memo).toContain("stockRoundExchangeOffers({");
-    expect(memo).toContain("privateTradeHoldReason(gameState,");
+    expect(memo).toContain("const hold = dockHold.exchangePrivate;");
+    expect(memo).not.toContain("privateTradeHoldReason");
     expect(memo).toContain("blockedReason: hold");
     const BAR = readStripped("panels/ContextualActionBar.tsx");
     const chips = sliceBetween(BAR, "const powerChips: ActionBarButton[] =", "const powerChipNodes");

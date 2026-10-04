@@ -549,7 +549,7 @@ gates.
 
 #### W2-B
 **Stock Round turn presentation** · L1 · **3–4 h**
-- **OD-2 RULED (2026-10-03, §7.3):** Sell whenever legal; at most one Buy; after buying, Buy is unavailable but Sell remains; the button is **"Pass Turn"** and ends the turn in ONE click; the Sell → Buy → Sell stage walk is superseded. Changing `PassTurn`'s replay semantics is a rules change, so the rule lands in the dedicated **v13 rules slice** (W3-K's vehicle) with its settlement certification; this slice presents it. Wave-1's `sellBuySell` pins are interim (v12) until then. Status: NOT STARTED.
+- **OD-2 RULED (2026-10-03, §7.3):** Sell whenever legal; at most one Buy; after buying, Buy is unavailable but Sell remains; the button is **"Pass Turn"** and ends the turn in ONE click; the Sell → Buy → Sell stage walk is superseded. Changing `PassTurn`'s replay semantics is a rules change, so the rule lands in the dedicated **v13 rules slice** (W3-K's vehicle) with its settlement certification; this slice presents it. Wave-1's `sellBuySell` pins are interim (v12) until then. The rule landed in W3-K (rules v13, revision 2); **this slice is required before v13 deploys** (with W1-A and the removal of Auto-Buy's stage Pass). Status: NOT STARTED.
 - **Rows:** implements AUD-03.04 (SBS-1 / SBS-2), AUD-03.07
 - **Surfaces:** the bar stage block; `stockStage`; a must-sell banner in `StockRoundPanel` from `divestmentDebt`. Implements
   the audit's target: **one Pass / End Turn control** that ends the turn in one press, without a forced sell → Pass → buy
@@ -598,7 +598,7 @@ gates.
 
 #### W2-G
 **Emergency funding modal** · L5 · **4–5.5 h**
-- **OD-1 RULED (2026-10-03, §7.3):** the obligated president gets the interactive emergency controls; everyone else gets a simplified status/notification that the named player / corporation is resolving an emergency train purchase. OD-4 is still open. Status: NOT STARTED.
+- **OD-1 RULED (2026-10-03, §7.3):** the obligated president gets the interactive emergency controls; everyone else gets a simplified status/notification that the named player / corporation is resolving an emergency train purchase. **OD-4 RULED (2026-10-03, §7.3) and implemented in W3-K (rules v13):** before this slice starts it must be reconciled to the v13 authority — no player "Declare bankruptcy" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`). Status: NOT STARTED.
 - **Rows:** implements AUD-09.05 (K-25), AUD-09.06 (A-9), AUD-09.07 (U-4), P3-N017 (draft OD-4), P3-N018 (draft W2-G)
 - **Surfaces:** `EmergencyTrainPurchaseModal.tsx` (whole file this phase): close/back per OD-4; "Bank Pool" vs "Bank Depot"
   from the train's actual source; funding-offer legality → `fundingPrivateOfferRefusal`; "Declare bankruptcy" only for the
@@ -761,15 +761,12 @@ gates.
   through the integrator like any slice.
 
 #### W3-K
-**v13 rules batch (conditional)** · L2 (or L6) · **8–14 h incl. settlement certification, only if OD-10(a) = yes**
-- **Owner rulings (2026-10-03, §7.3):** OD-2 puts **SBS-2** ("Pass Turn" ends the turn in one click) into the dedicated v13 rules slice with its settlement certification. **SBS-4 (P3-N024) is NOT resolved** — it needs a precise reproduction / clarification and no rule is built from its current wording. **RR-4 is not a v13 item** (OD-7: copy only). OD-10(a)'s wider question (which other items join v13, and whether it runs inside Phase 3) is still open. Status: NOT STARTED.
-- **Rows:** carries the owner-gated AUD-04.04 (DH-1), AUD-08.01 (GR-1), VF/D-18, VF/D-22, P3-N023 (SBS-3 (6.5-A)); takes the rule half of AUD-03.04 (SBS-2, ruled in by OD-2). *(Before the 2026-10-03 rulings it also listed AUD-09.10 (RR-4) — now copy-only and done in W1-L (OD-7) — and P3-N024 (SBS-4 / OD-A-4) — now G, needing a precise reproduction before any slice takes it.)*
-- **Scope:** SBS-2 (ruled in by OD-2: one-click "Pass Turn" ends the turn); otherwise only items the owner rules in: DH-1,
-  GR-1, SBS-3, D-18 / D-22 (OD-17). SBS-4 only after a precise reproduction and a fresh ruling. RR-4 is out (OD-7: copy).
-- **Procedure:** a deliberate `RULES_ENGINE_VERSION` bump with a changelog row; settlement certification for v13 through
-  ESCROW-3A's procedure (goldens beside the old ones, then the literal in its own reviewed change). **Gameplay and
-  settlement versions are separate axes:** v13 is not settlement-certified until that change lands.
-- If OD-10(a) = no, every W3-K row becomes owner-placed later (E) at W3-F.
+**v13 rules batch** · L2 (or L6) · **8–14 h planned; ~14–22 h with OD-4 and its certification (an estimate)**
+- **Owner rulings (2026-10-03, §7.3):** OD-10(a) RULED — one consolidated v13 batch inside Phase 3: OD-2 (SBS-2), SBS-3, SBS-4 (precisely reproduced, V13_SCOPE_VERIFICATION §5) and OD-4 (automatic emergency funding). OD-17: D-18 and D-22 need no change. RR-4 is not a v13 item (OD-7: copy). Status: **PARTIAL — implemented on `phase3/w3-k-rules-v13` (branch only); settlement certification for 13 pending.**
+- **Rows:** implements P3-N023 (SBS-3), P3-N024 (SBS-4) and the rule half of AUD-03.04 (SBS-2). AUD-04.04 (DH-1) and AUD-08.01 (GR-1 / S10-27) left the batch: derivation-only, no version bump, placement open. VF/D-18 and VF/D-22: no change (OD-17).
+- **Scope (as built):** rules revision 2 (`CURRENT_RULES_REVISION = 2`) switches every correction; one `RULES_ENGINE_VERSION` bump 12 → 13 with one changelog row; live list `[13]` (no dual v12 support); three new room messages (`EmergencySellPortfolio`, `ForgoTrainTrade`, `ForgoPrivateFunding`) with codec, ingress, reducer, replay, rebuild, RevertTo, log wording and idempotence; `DeclareBankruptcy` refused on revision 2; V-6.3 "Buy All" not implemented.
+- **Procedure:** settlement certification for v13 through ESCROW-3A's procedure (goldens beside the old ones, then the literal in its own reviewed change), with bankruptcy vectors: `V13_SETTLEMENT_CERTIFICATION_VECTORS.md`. **Gameplay and settlement versions are separate axes:** v13 is not settlement-certified until that change lands.
+- **Not deployable alone:** the deployment that ships revision 2 needs W1-A, the removal of Auto-Buy's stage Pass, W2-B's single "Pass Turn" control and W2-G reconciled to the v13 emergency authority.
 
 ---
 
@@ -784,20 +781,20 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 | **OD-1** | PRODUCT · PLAYTEST-INFORMED | **RULED 2026-10-03 — see §7.3.** **The waiting model.** While a hold stands or another seat must act: (a) every control greyed with the hold's sentence, board and tabs usable; or (b) the bar replaced by one "Waiting on X" strip. For the home-station and auction prompts, non-actors get a banner or a read-only card (with a focus target). Also: which seats see the emergency modal | Full-screen scrims for everyone; the OR bar ignores holds; four prompts print their own waiting sentence | W2-A, W2-F, W2-H, W2-G | No (re-tunable after Phase 4) |
 | **OD-2** | RULES confirmation (+ PRESENTATION detail) | **RULED 2026-10-03 — see §7.3.** The audit fixes the target: one Pass / End Turn control. Open: **restate the recorded OD-A-2 and OD-A-4 rulings.** The 6.5-B report says they were "recorded, not implemented", but their text is in neither the repository nor the Project docs. OD-A-2: should a Stock Round Pass always end the turn (a v13 rules change, W3-K), or does the one control send the two `PassTurn`s under v12? OD-A-4: may a Brown IPO first purchase open the Pool continuation (SBS-4)? | Two Passes end a no-buy turn; stage buttons only switch tabs | W2-B; W3-K items SBS-2/SBS-4 | No |
 | **OD-3** | PRESENTATION (+ engine scope) | M&H queued request: toast + a persistent table marker + "requested" / "executed" lines; on cancellation, a generic "expired", or authorize engine work (v13, W3-K) to carry the reason | Narrated as executed; no reader of `pending_mh_exchange` | W2-E | No |
-| **OD-4** | PRODUCT | Emergency modal: Back/close while a decision remains? Non-presidents see a read-only liquidation, or nothing? | Cannot close; every seat sees "Declare bankruptcy" | W2-G | No |
+| **OD-4** | PRODUCT | **RULED 2026-10-03 — see §7.3.** Emergency modal: Back/close while a decision remains? Non-presidents see a read-only liquidation, or nothing? | Cannot close; every seat sees "Declare bankruptcy" | W2-G | No |
 | **OD-5** | PRESENTATION · PLAYTEST-INFORMED | Notices: persist one-shot notices per game, or derive them from state for late joiners; the focus target and chaining order for forced notices; the tutorial re-arm policy (once per profile? per new game?) | PhaseThree / PrivateRevenue / Herald lost on reload; FleetLoss replays history in a fresh tab; tutorials re-arm on every zero-state mount | W3-A | No; Phase 4 may re-tune |
 | **OD-6** | PRODUCT | Show the game id (LIVE-2 §7.2 says never)? Where do the build id and rules version appear? | Room code only on hosted tables; stale build note; version only in error text | W2-I (that part) | No |
 | **OD-7** | RULES (confirmation) | **RULED 2026-10-03 — see §7.3.** RR-4: when the treasury can pay a forced purchase, must it be the cheapest train? "Yes" is a rules defect (v13, W3-K); "No" is a copy fix (W2-J). **The 6.5-B report says an RR-4 ruling was recorded; restate it for Part D** | Engine allows any legal purchase; the Reference said "cheapest" at 4 sites (corrected, `ca73834`) | W2-J / W3-K — ruled: W1-L copy, done | No |
 | **OD-8** | PRESENTATION | U-37 float narration: (a) "floated" at the float plus "placed its home" later, or (b) one line at placement | One line at placement | W2-J | No |
 | **OD-9** | PRESENTATION / PRODUCT | (a) U-44 time convention: local with zone (needs a server copy edit) or UTC everywhere. (b) U-15 Keplr logo asset and brand approval | Local "HH:MM" unlabelled vs the server's "UTC"; no logo asset | W2-K | No |
-| **OD-10** | RULES / PRODUCT | (a) Is a v13 rules batch allowed inside Phase 3 (W3-K), or are all rules items owner-placed after Phase 4? (b) Are phone-width game layout, zoom-aware breakpoints and keyboard map access Phase-3 targets, Phase-4 observations only, or Phase-5 work? | v12; no game-shell breakpoints; the map is mouse-only | W3-K; AUD-16.05, AUD-16.09 | (a) No. (b) Partly |
+| **OD-10** | RULES / PRODUCT | **RULED 2026-10-03 — see §7.3.** (a) Is a v13 rules batch allowed inside Phase 3 (W3-K), or are all rules items owner-placed after Phase 4? (b) Are phone-width game layout, zoom-aware breakpoints and keyboard map access Phase-3 targets, Phase-4 observations only, or Phase-5 work? | v12; no game-shell breakpoints; the map is mouse-only | W3-K; AUD-16.05, AUD-16.09 | (a) No. (b) Partly |
 | **OD-11** | PRODUCT · PLAYTEST-INFORMED | K-06 city bypass: build in Phase 3 (which hexes, which gesture, how it meets the shortfall refusal) or place it later | No voluntary control; bypass is sent automatically where forced | W3-E | Partly |
 | **OD-12** | PRODUCT (engineering scope) | **RULED 2026-10-03 — see §7.3.** **RED-region permission.** May named Phase-3 fixes edit the RED regions (submit half, apply half, OR verdict, link drain), each as one separately reviewed commit naming its exact lines? Candidates: K-18 (R2), the banner/refusal model and refusal rollbacks (R1, R5), the `press:true` latch (R1), K-24's call site (R2), A-19 if the audio-side fix is not enough (R2), the FleetLoss prune if the store fix is not enough (R4), the queued-state read if it cannot be done outside the drain (R5). A refusal places each named item later (E) — it does not silently drop it | The draft deferred all of these to Phase 4 without a ruling | W2-J, W3-B, W3-C, W3-I, W1-N, W3-A, W3-H | No |
 | **OD-13** | PRESENTATION (derived statistics) | Ratify or amend the candidate resolutions for U-41 and U-43 (1)–(4). Each changes standard-game post-game statistics | Recorded in Part C as candidates "NOT ratified" | W2-L | No |
 | **OD-14** | PRESENTATION | Owner calls the audit names: (a) U-16 — move the step panels back into the bar, or keep; (b) U-7 — extend the card wash to the cash slide-out and payout modal; (c) U-8 — seven-seat palette; (d) GR-3 — keep "traded" for a first-Diesel trade-in or restore "rusted"; (e) the waiting room's extra description line; (f) VF G-1 — a phase-flip cue (which asset); (g) VF G-7 — close as designed or replay; (h) VF I-10 / J-6 — build the static badge icons now; (i) the money panel's styling (a Part C U-44 note, beyond the audit) | Each recorded as open or "owner to say" | W1-I(-b), W3-H, W1-L, W2-K, W2-L | (a)(f) partly |
 | **OD-15** | PRESENTATION (modal infrastructure) | (a) The intro overlay's scale contract; (b) is the portal / inert layer still needed (and if so, inert behind every modal)? | `zoom: 1 / uiScale` on an `aria-modal` div; `ModalPortal` disowns inert | W3-D | No |
 | **OD-16** | PRODUCT (owner-authored) | The Terms page content (S10-12), required before the first real deposit | None | W2-M (hosting) | No |
-| **OD-17** | RULES | Tile-upgrade legality cross-references: VF D-18 (New York #54→#883 offered, #62→#883 not) and VF D-22 (#59 → brown OO facings that break fixed OO; 256 accepted transitions) | The placement filter accepts them | W3-K | No |
+| **OD-17** | RULES | **RULED 2026-10-03 — see §7.3.** Tile-upgrade legality cross-references: VF D-18 (New York #54→#883 offered, #62→#883 not) and VF D-22 (#59 → brown OO facings that break fixed OO; 256 accepted transitions) | The placement filter accepts them | W3-K | No |
 | **OD-18** | PRODUCT | Confirm or reject the later placement of U-10 (clock / live-vs-async UX: the offer answerer on the clock, auto-decline, pause cap) and of the recorded limits (no host succession, no clock or forfeit for an absent seat). Confirmed → E with the ruling cited; rejected → scoped as Phase-3 slices | U-10 `DEFERRED` in Part C; the limits recorded in the 6.5 preflight | AUD-11.04, AUD-19.04 | No |
 
 ### 7.1 Not owner decisions (implementation defaults; the owner may object at a gate)
@@ -855,6 +852,35 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - For the Wave-1 integration exactly ONE RED edit: W1-N — delete the obsolete `settleRoomPayout(...)` call site in RED R2, now that settleRoomPayout is intentionally a no-op and the placeholder payout has been removed. Its own commit; no neighboring cleanup; no structural refactor; focused regression; independent review of that commit before continuing.
 - The other OD-12-gated W3 defects are not implemented in that task.
 - *Effect on this plan:* W1-N's R2 call site deleted as its own commit (`87d63c4`, independently reviewed: APPROVE WITH NITS, comment nits fixed outside RED in `819a204`). The remaining OD-12 candidates (W2-J K-18; W3-C, W3-B, W3-I, W3-A, W3-H) each still land as one separately reviewed RED commit under §5.1's serialization rule.
+
+*OD-4, OD-10 and OD-17 below are restated from the owner's W3-K rules-v13 brief (2026-10-03).*
+
+**OD-4 — EMERGENCY FUNDING (AUTOMATIC BANKRUPTCY).**
+- Emergency funding becomes automatic in the v13 rules batch (owner sub-rulings O-1 to O-6 of V13_SCOPE_VERIFICATION §3.6).
+- O-1: the intercorporate trade window is budgeted at the treasury plus the president's cash before any liquidation; a ForgoTrainTrade message closes it; it never reopens.
+- O-3: a liquidation-funded intercorporate trade is illegal.
+- The treasury-plus-cash commitment and the purchase are automatic, through the derived-action machinery with durable keys.
+- Share raising is one atomic EmergencySellPortfolio: the submitted order is preserved; the whole portfolio is validated, simulated and proven legal; any failure returns the original board; ordinary sale law is reused.
+- O-4: "only enough" applies to the whole portfolio, and the smallest legal overshoot is allowed.
+- O-5: no self-created bankruptcy: an insufficient portfolio is refused. The insolvency oracle must be exact.
+- O-2: private funding stays optional; fundingPrivateOfferRefusal is preserved and ForgoPrivateFunding is added.
+- Bankruptcy is automatic, with no player Declare: liquidate as far as legally possible, apply the cash to the obligated corporation, then GameEnd with bankrupt_president. DeclareBankruptcy is refused on v13.
+- O-6: shares that could not be sold are scored as the bankrupt's shares.
+- Expose the authority W2-G needs. Not in this batch: DH-1, GR-1 / S10-27, GR-1b, D-18, D-22, RR-4, V-6.3.
+- *Effect on this plan:* Implemented in W3-K on `phase3/w3-k-rules-v13` (rules v13, gated on rules revision 2). W2-G (AUD-09.05/06/07, P3-N017/018) must be reconciled to the v13 authority before it starts. Settlement certification for 13 is pending (bankruptcy vectors required).
+
+**OD-10 — V13 RULES BATCH IN PHASE 3.**
+- (a) One consolidated v13 rules batch is allowed inside Phase 3 (W3-K): OD-2, SBS-3, SBS-4 and OD-4, with the official/default Brown rule. V-6.3 "Buy All" is not implemented.
+- One RULES_ENGINE_VERSION bump (12 → 13), one changelog entry, no speculative rules. The live list is [13] only; no dual v12 support (pinned v12 rooms are drained or abandoned before deployment).
+- The settlement-certified literal stays [10, 11, 12]; 13 is added only by its own certification pass. The future v13 certification vectors, including bankruptcy terminal states, are documented.
+- DH-1 and GR-1 / S10-27 (derivation-only), GR-1b (UI only), D-18 and D-22 are not in the batch.
+- (b) is not addressed by this ruling.
+- *Effect on this plan:* W3-K implemented on `phase3/w3-k-rules-v13` (branch only). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open.
+
+**OD-17 — TILE-UPGRADE CROSS-REFERENCES.**
+- D-18 and D-22 are excluded from the v13 batch: V13_SCOPE_VERIFICATION found D-18 INVALID (the printed rule) and D-22 ALREADY CORRECT (Stage 9.3 rule 5b, rules v7).
+- No engine change.
+- *Effect on this plan:* VF/D-18 and VF/D-22 stay C (the ledger still lists them OPEN) with status RULED — no change; the ledger and comment cleanup is a docs task (closure contract item 12).
 
 Still open from wave 1: **OD-14(a)** (W1-I). Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
 

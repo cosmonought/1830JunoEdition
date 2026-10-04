@@ -10,6 +10,7 @@ or attachment.
 | [`PHASE3_UIUX_AUDIT_2026-10-03.md`](PHASE3_UIUX_AUDIT_2026-10-03.md) | The authoritative Phase-3 UI/UX audit, preserved (one chat-preamble line dropped and a final newline added; see its header) |
 | [`phase3_accounting.json`](phase3_accounting.json) | The matrix in machine-checkable form (rows and the audit-bullet → row map) |
 | [`check_phase3_accounting.py`](check_phase3_accounting.py) | The accounting check, plus `--drift <sha>` for the kickoff drift check |
+| [`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md) | What the separate rules-v13 settlement certification pass must prove (bankruptcy vectors; the tests red by design until then) |
 | [`archive/PHASE3_EXECUTION_MAP_DRAFT_2026-10-03.md`](archive/PHASE3_EXECUTION_MAP_DRAFT_2026-10-03.md) | The superseded parallel draft, kept for provenance only |
 
 ## Pins
@@ -25,7 +26,15 @@ or attachment.
 ## Owner rulings recorded
 
 OD-1, OD-2, OD-7 and OD-12 were ruled on 2026-10-03, during wave 1 — verbatim in the plan's §7.3 and `owner_rulings` in the
-JSON. Still open from wave 1: OD-14(a).
+JSON. OD-4, OD-10(a) and OD-17 were ruled by the owner's W3-K rules-v13 brief (2026-10-03), restated in the same places.
+Still open: OD-14(a), OD-10(b).
+
+## Rules v13 (W3-K)
+
+`phase3/w3-k-rules-v13` (branch only, not integrated): `RULES_ENGINE_VERSION` 13, live list `[13]`, rules revision 2 —
+OD-2, SBS-3, SBS-4 and OD-4. Settlement stays certified for `[10, 11, 12]`; the v13 certification pass is pending
+([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)). Not deployable alone: W1-A, Auto-Buy's
+stage-Pass removal, W2-B and a reconciled W2-G must ship with it.
 
 ## Check
 

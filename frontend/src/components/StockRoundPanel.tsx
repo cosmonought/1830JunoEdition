@@ -100,6 +100,8 @@ import { BO_LOCKED_CARD_NOTE } from "../gameEngine/gameVariants";
 // 6.5-B (K-01): the Stock Round's player <-> player private-company trade surface.
 import { PrivateCompaniesSection, type PrivateTradeIntent } from "./PrivateCompaniesSection";
 import type { PrivateTradeSectionModel } from "../utils/stockRoundPrivateTrade";
+// Phase 3 W2-B (AUD-03.07): the must-sell banner's shape (the shell computes it from the authority's debt).
+import type { MustSellBanner } from "../utils/mustSellBanner";
 import { certificateCardsHeld, certificateCardsInPool } from "../gameEngine/doubleCertificate";
 /* ==================================================================
     DESIGN NOTE 1451: THE CARD IS THE STAGE
@@ -290,6 +292,11 @@ export interface StockRoundPanelProps {
    *  the panel's one flag (#32), so every share control is greyed WITH the hold's reason rather than refused after
    *  the click. The trade's own answer and rescind are not share controls and are not held. */
   offerHoldReason?: string | null;
+  /** Phase 3 W2-B (AUD-03.07): the viewer's own must-sell debt (#759 rule iii, the curable excess only -- DA-5), as the
+   *  shell reads it from the authority (`divestmentDebt` -> `mustSellBannerOf`), or `null` when nothing is owed. Drawn
+   *  as one banner above the roster; the sentence is the exact one that greys the Pass and the Buy controls, which
+   *  stay governed by `purchaseBlockFor` and the bar's `passDisabledReason` as before. Absent reads as nothing owed. */
+  mustSell?: MustSellBanner | null;
 }
 
 // Design note #8: the corporation roster -- a card each, so "who controls what, and what would it
@@ -3217,6 +3224,7 @@ export function StockRoundPanel({
   onAnswerPrivateTrade,
   onRescindPrivateTrade,
   offerHoldReason = null,
+  mustSell = null,
 }: StockRoundPanelProps) {
   /* Design note #32: out of phase counts as "controls disabled" exactly the
      same way an unready session does -- one flag, so no control can be
@@ -3317,6 +3325,19 @@ export function StockRoundPanel({
         <span style={styles.readOnlyNotice} data-testid="stock-round-offer-hold">
           {offerHoldReason}
         </span>
+      )}
+      {/* Phase 3 W2-B (AUD-03.07): THE MUST-SELL HOLD, SAID ONCE WHERE THE SHARES ARE. It was a tooltip on greyed
+          buttons; it is the player's own obligation, so it stands here whatever the turn has done and clears itself
+          when the sales are made (the debt is re-read from the board). An obligation about holdings, not a stage of
+          the turn -- the controls below say what is open, by the authority's answer. */}
+      {mustSell && (
+        <div style={styles.mustSellBanner} role="status" data-testid="stock-round-must-sell">
+          <span style={styles.mustSellTitle}>You must sell before buying or passing</span>
+          <span style={styles.mustSellText}>{mustSell.reason}</span>
+          <span style={styles.mustSellText}>
+            {`At least ${mustSell.minimumCertificates} certificate${mustSell.minimumCertificates === 1 ? "" : "s"} to sell.`}
+          </span>
+        </div>
       )}
 
       <CorporationRoster
@@ -3943,6 +3964,26 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: FONT_SIZE.small,
     color: "#c9a94c",
     fontWeight: 600,
+  },
+  /* Phase 3 W2-B (AUD-03.07): the must-sell banner -- the panel's dark ground, a red edge because the player's own
+     moves are held until it is answered, and the same type scale as the notices beside it. */
+  mustSellBanner: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "3px",
+    padding: "8px 12px",
+    borderRadius: RADIUS.card,
+    border: "1px solid #a04848",
+    backgroundColor: "#2a1b1b",
+  },
+  mustSellTitle: {
+    fontSize: FONT_SIZE.small,
+    fontWeight: 800,
+    color: "#f0b4b4",
+  },
+  mustSellText: {
+    fontSize: FONT_SIZE.small,
+    color: "#e8d2d2",
   },
   rosterPriceRow: { display: "flex", gap: "18px", alignItems: "flex-end" },
   /* Design note #31: the front-face operating snapshot. A bordered strip rather than three loose pairs, so

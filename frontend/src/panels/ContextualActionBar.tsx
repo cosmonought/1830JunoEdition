@@ -76,7 +76,7 @@ import { CorporateLogo } from "../components/CorporateLogo";
 // Design note #552: the shipped crown, not a platform emoji.
 import { PresidentCrown, PRESIDENT_CROWN_GOLD } from "../components/PresidentCrown";
 import { NO_TRAIN_ROUTE_REASON } from "../gameEngine/gameConstants";
-import { passButtonLabel, passButtonTitle } from "../gameEngine/turnAction";
+import { PASS_LABEL, passButtonTitle } from "../gameEngine/turnAction";
 import {
   canPinWithoutTrapping,
   restingHeight,
@@ -818,8 +818,6 @@ export default function ContextualActionBar({
   passDisabledReason,
   turnHoldReason,
   turnActionTaken,
-  stockStage = null,
-  onShowStocks,
   onPlaceStationTokenHint,
   stationTokenCost,
   maxRouteRevenue = null,
@@ -944,14 +942,11 @@ export default function ContextualActionBar({
    *  (the discard, the answers, the home placement and the emergency purchase have their own prompts and panels), and
    *  the navigation buttons that open those panels dispatch nothing, so they are not greyed by it. */
   turnHoldReason: string | null;
-  /** Design note #745: has the acting seat already sold this turn? The bar renders the fact; the reducer
-   *  decides it. `undefined` reads as "no", which is the right answer everywhere outside a Stock Round. */
+  /** Design note #745: has the acting seat already acted (sold, bought or traded) this turn? The bar renders the
+   *  fact; the reducer decides it. `undefined` reads as "no", which is the right answer everywhere outside a Stock
+   *  Round. Phase 3 W2-B (OD-2): it decides the Pass Turn's title only -- the label is "Pass Turn" either way.
+   *  (#1443's `stockStage` / `onShowStocks`, the stage button's two props, are retired with the stage walk.) */
   turnActionTaken?: boolean;
-  /** #1443: the Sell-Buy-Sell stage of the seat's Stock Round turn, or `null` off the revision / outside a
-   *  Stock Round. Decides the stage button and the Pass button's label. */
-  stockStage?: "sell" | "buy" | "sell_again" | null;
-  /** #1443: the stage button's destination -- the Stocks tab, where the sell and buy controls are. */
-  onShowStocks?: () => void;
   onPlaceStationTokenHint: () => void;
   /** Design note #181: what a token costs this corporation, for the button
    *  label. A number rather than a formatted string so the caller cannot
@@ -4190,32 +4185,23 @@ export default function ContextualActionBar({
           </span>
           <span style={styles.actionBarButtonsCentre}>
           {/* ==================================================================
-               DESIGN NOTE 1443: SELL | AUTO | PASS  ->  BUY | AUTO | PASS  ->  SELL | AUTO | END TURN
+               PHASE 3 W2-B (OD-2, RULES v13): PASS TURN | AUTO -- THE STAGE WALK IS GONE
               ==================================================================
-              RULED: "The Action Bar should therefore initially show: Sell | Auto | Pass. Then if they sell or
-              pass, it should show Buy | Auto | Pass, and after they buy or pass it should show Sell | Auto |
-              End Turn." The stage button names what this stage is for and goes to the Stocks tab, where the
-              controls are; the Pass button walks the stages (reducer #1443) and reads "End Turn" once a
-              share has been bought. A sale keeps the Sell stage rather than advancing it, so a player can
-              sell out of several corporations before moving on -- the rule is "any number of certificates". */}
-          {stockStage !== null && roundType === "StockRound" && isMyTurn && (
-            <button
-              type="button"
-              style={{ ...styles.actionBarButton, ...(!sessionReady ? styles.actionBarButtonDisabled : {}) }}
-              onClick={onShowStocks}
-              disabled={!sessionReady}
-              title={
-                stockStage === "buy"
-                  ? "Buy one certificate from the IPO or the Bank Pool on the Stocks tab."
-                  : stockStage === "sell_again"
-                    ? "You have bought this turn. You may still sell any number of certificates on the Stocks tab, then end your turn."
-                    : "Sell any number of certificates on the Stocks tab. Pass when you are done selling to move on to buying."
-              }
-              data-testid="stock-stage-button"
-            >
-              {stockStage === "buy" ? "Buy a Share" : "Sell Shares"}
-            </button>
-          )}
+              SUPERSEDED: #1443's "Sell | Auto | Pass -> Buy | Auto | Pass -> Sell | Auto | End Turn". That bar
+              narrated a stage walk the reducer drove with the Pass itself (a Pass in Sell moved to Buy), so the
+              bar needed a stage button and a Pass whose label changed with the stage.
+              OWNER RULE (OD-2): sell whenever legal, at most one ordinary Buy, Sell still legal after it, and ONE
+              control named "Pass Turn" that ends the turn in ONE click. Rules revision 2 (W3-K) made that the
+              reducer's: no Pass walks a stage, and the stage never refused a Buy or a Sell. So the stage button
+              is gone -- it named a stage and opened the Stocks tab, which is where a Stock Round already opens --
+              and the Pass reads "Pass Turn" whatever the turn has done. WHETHER a Buy or a Sell is still open is
+              not this bar's to say: every share control on the Stocks tab asks the stock authority
+              (`stockPurchaseRefusal` / `stockSaleRefusal`, W1-A), which refuses the second ordinary Buy with its
+              own sentence and leaves the sale live.
+              ONE PRESS, ONE MESSAGE: `onPassTurn` sends exactly one `PassTurn`; there is no second Pass for the
+              bar to send. The title says which of #745's two meanings that one message has (`passButtonTitle`,
+              off the reducer's `turn_action_taken`). The holds are untouched: `passDisabledReason` -- W2-A's
+              `dockHold.pass` first, then the must-sell debt -- still greys it with its own sentence. */}
           {/* Design note #31: Pass leads -- it is the action available in
               every phase, and the one a player reaches for most. */}
           <button
@@ -4229,23 +4215,11 @@ export default function ContextualActionBar({
             onClick={onPassTurn}
             disabled={!sessionReady || passDisabledReason !== null}
             data-testid="pass-turn-button"
-            /* Design note #745: the label is the rule. A player who has just sold is looking at the only
-               button that will end their turn, and while it read "Pass Turn" the reasonable inference was
-               that pressing it forfeits something -- which is how the reported bug was found. */
-            title={
-              passDisabledReason ??
-              (stockStage === "sell"
-                ? "Done selling (or nothing to sell) — move on to buying."
-                : stockStage === "buy"
-                  ? turnActionTaken === true
-                    ? "Decline the share purchase and end your turn. You have already sold, so this does not count as a pass."
-                    : "Buy nothing and end your turn. Passing without selling or buying counts toward ending the Stock Round."
-                  : stockStage === "sell_again"
-                    ? "End your turn."
-                    : passButtonTitle(turnActionTaken === true))
-            }
+            /* Design note #745: the label is the rule -- W2-B: one rule now, so one label; the title carries
+               which kind of ending this press is. */
+            title={passDisabledReason ?? passButtonTitle(turnActionTaken === true, roundType === "StockRound")}
           >
-            {stockStage === "sell_again" ? "End Turn" : stockStage !== null ? "Pass" : passButtonLabel(turnActionTaken === true)}
+            {PASS_LABEL}
           </button>
           {/* Design note #717: AUTO-PASS SITS BESIDE PASS, because it is the same decision with a duration.
               Only in a Stock Round -- an Operating Round turn is a corporation's, not a player's, and there is

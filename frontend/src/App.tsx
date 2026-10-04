@@ -195,6 +195,8 @@ import { describeGridChange, gridChangeLine } from "./utils/gridProvenance";
 import { noDecisionRemains } from "./utils/trainObligation";
 // Design note #759: the zone exemptions expire, and the debt shuts three doors.
 import { divestmentDebt, divestmentRefusal } from "./gameEngine/forcedDivestment";
+// Phase 3 W2-B (AUD-03.07): the Stock Round panel's must-sell banner, read off the same debt as the Pass gate.
+import { mustSellBannerOf } from "./utils/mustSellBanner";
 // Design note #763: a floated corporation with no home token stops the game until the token is down.
 import { homeTokenOwed } from "./gameEngine/homeTokenGate";
 // Design note #162: `TileSelectionPopup` is no longer rendered or imported
@@ -409,6 +411,7 @@ import AutoBuyModal from "./components/AutoBuyModal";
 import {
   armAutoBuy,
   autoBuyDecision,
+  autoBuyTurnStep, // Phase 3 W2-B: buy, or end the bought turn -- never a stage Pass
   holdingPercent,
   refreshAutoBuyWatch,
   type AutoBuyPlan,
@@ -579,7 +582,6 @@ import {
 import { turnGuardKey } from "./gameEngine/turnGuardKey";
 import {
   CURRENT_RULES_REVISION, // #1443
-  sellBuySellInForce,
   boIsLocked,
   dividendStepsFor,
   /* Design note #1051: the pre-#1051 die, for a log entry written before the roll was recorded. Only the
@@ -642,7 +644,6 @@ import {
 } from "./components/EmergencyTrainPurchaseModal";
 import type { GameplayExecuteMsg } from "./utils/sessionKey";
 import {
-  stockTurnStage, // #1443
   applySandboxAction,
   sandboxChartStepReport,
   applyPrivateRevenue,
@@ -10053,10 +10054,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        their Auto-Buy would flood the same way. Not written into `autoBuyDecision` because the hex lookup lives
        in `components/` (#7) -- same reason the reducer takes it through `ctx`. */
     if (homeTokenOwed(gameState, homeHexToAxial)) return;
-    /* Phase 3 W1-A (AUD-03.06, SBS-5): THE MUST-SELL COMES BEFORE THE STAGE PASS. The tool used to Pass the Sell
+    /* Phase 3 W1-A (AUD-03.06, SBS-5): THE MUST-SELL COMES BEFORE ANY DISPATCH. The tool used to Pass the Sell
        stage first and only then notice the debt, so a seat that owed a sale sent a Pass the hold refuses
        (`divestmentPassRefusal`) and sat armed against it. A player who owes a sell-down can neither buy nor pass
-       (#759), so the tool stops here, with the reason, before it sends anything. */
+       (#759), so the tool stops here, with the reason, before it sends anything. (W2-B: the stage Pass itself is
+       gone; the order still guards the buy and the end-of-turn Pass below.) */
     const owed = divestmentDebt({
       state: gameState,
       player: viewerAddress,
@@ -10068,18 +10070,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       logInfo("Auto-Buy", "You owe a forced sale this turn, which Auto-Buy will not make for you. Auto-Buy is off.");
       return;
     }
-    /* #1443: under Sell-Buy-Sell the purchase leaves the seat with the buyer. The standing instruction was to
-       buy, and a bought turn is done -- so the tool ends it, rather than sitting on a seat it cannot use and
-       reading its own purchase as "nothing qualifies" (#1274's stop). Selling again is the player's, not a
-       tool's; a player who wants that turns Auto-Buy off. */
-    if (sellBuySellInForce(resolveVariants(gameState.variants))) {
-      const stage = stockTurnStage(gameState);
-      if (stage !== "buy") {
-        // Sell stage: Pass moves to Buy. Sell Again: the purchase is made, so Pass ends the turn.
-        autoBoughtAtLogIndexRef.current = lastLogIndex;
-        void handlePassTurn();
-        return;
-      }
+    /* ==================================================================
+        PHASE 3 W2-B (OD-2, RULES v13): NO STAGE PASS -- BUY, THEN ONE PASS TURN
+       ==================================================================
+       REMOVED: #1443's stage Pass. On a turn with no purchase yet the tool used to send `PassTurn` first, "to move
+       on to buying" -- and under rules revision 2 that one Pass ENDS the turn as a true pass, so an armed Auto-Buy
+       would have passed every turn and never bought. The stage never refused a Buy on any revision (W1-A removed
+       the shell's two stage refusals for exactly that reason), so the Pass was never needed: the tool now buys
+       straight away. `autoBuyTurnStep` reads the one board fact that decides it -- whether this turn's purchase is
+       made -- and no stage.
+       KEPT: the end of a bought turn. The purchase leaves the seat with the buyer (Sell stays legal), and the
+       standing instruction was to buy, so a bought turn is done -- the tool ends it with the turn's ONE `PassTurn`,
+       which the reducer reads as the end of an acted turn (`turn_action_taken`), never a true pass. Without it the
+       tool would sit on a seat it cannot use and read its own purchase as "nothing qualifies" (#1274's stop).
+       Selling again is the player's, not a tool's; a player who wants that turns Auto-Buy off. One `PassTurn` per
+       turn, at most: the #816 log-index guard above spends the turn's dispatch on each step. */
+    if (autoBuyTurnStep(gameState) === "end-turn") {
+      autoBoughtAtLogIndexRef.current = lastLogIndex;
+      void handlePassTurn();
+      return;
     }
 
     /* Phase 3 W1-A (AUD-03.05, K-12): `purchaseBlockFor` is the stock authority now, so the cash a purchase needs
@@ -10135,7 +10144,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     logInfo,
     sandboxMarketPrices,
     homeHexToAxial,
-    handlePassTurn, // #1443
+    handlePassTurn, // #1443 / W2-B: the end of a bought turn
   ]);
 
   const handleSellShares = useCallback(
@@ -13607,6 +13616,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       </section>
     ) : null;
 
+  /* ==================================================================
+      PHASE 3 W2-B (AUD-03.07): THE VIEWER'S MUST-SELL DEBT, READ ONCE FOR THE PASS AND THE BANNER
+     ==================================================================
+     #759's debt (rule iii: no buying, no passing, no auto-passing until the curable excess is sold) reached the
+     player only as a tooltip -- on the Pass below and on the greyed Buy controls. The Stock Round panel now says it
+     in a banner (`mustSell`, `mustSellBannerOf`), and both read THIS one value, computed exactly as the Pass gate
+     always computed it, through the same `divestmentRefusal` sentence -- so the banner and the greyed Pass cannot
+     disagree. `divestmentDebt` is the authority's own reading (the same `assessExcess` the locks'
+     `divestmentPassRefusal` asks); it answers "nothing owed" outside a Stock Round and for a seatless viewer. A
+     debt, not a stage: it says nothing about the turn's order, only what must be sold before buying or passing. */
+  const viewerDivestmentDebt = divestmentDebt({
+    state: gameState ?? ({ current_round_type: null } as never),
+    player: viewerAddress ?? "",
+    marketPrices: sandboxMarketPrices,
+    zoneForPrice: marketZoneForPrice,
+  });
+
   /* Passing is always legal: an all-pass round is what marks the cheapest private down $5. A live mini-auction is still blocked - it has its own cursor and message.
      See docs/ai_architecture/contract_economy.md - App.tsx #311 */
   /* Design note #751: the mandatory purchase is enforced HERE, on Pass, rather than by an
@@ -13626,15 +13652,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     dockHold.pass ??
     (isWaterfallPhase && waterfallState?.mini_auction
       ? contestBarPassSentence(waterfallState, viewerAddress)
-      : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either. */
-        divestmentRefusal(
-          divestmentDebt({
-            state: gameState ?? ({ current_round_type: null } as never),
-            player: viewerAddress ?? "",
-            marketPrices: sandboxMarketPrices,
-            zoneForPrice: marketZoneForPrice,
-          }),
-        ));
+      : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either. W2-B: the one reading
+           above, shared with the panel's must-sell banner. */
+        divestmentRefusal(viewerDivestmentDebt));
 
   /* Phase 3 W2-A (OD-1): the token ring's hold, by the message its tick sends (`handleConfirmTokenPlacement`): a paid
      token is `PlaceStationToken`; a free one goes through `commitFreeStationPlacement` as `PlaceHomeStation`, "home"
@@ -14240,15 +14260,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         turnHoldReason={dockHold.turnHoldReason}
         /* Design note #745: read off the replayed state, not off a React flag. The bar is a
            narrator (#400/#685) -- the reducer decides whether the turn has an action in it, and
-           an Undo that rewinds past the sale must take the "End Turn" label back with it. */
+           an Undo that rewinds past the sale must take the "End Turn" label back with it. (W2-B: the label is
+           "Pass Turn" either way now; it is the Pass Turn's TITLE -- "does not count as a pass" -- that goes back.) */
         turnActionTaken={gameState?.turn_action_taken === true}
-        /* #1443: the Sell-Buy-Sell stage, on the revision only; the stage button goes to the Stocks tab. */
-        stockStage={
-          gameState && gameState.current_round_type === "StockRound" && sellBuySellInForce(resolveVariants(gameState.variants))
-            ? stockTurnStage(gameState)
-            : null
-        }
-        onShowStocks={() => setActiveMainTab("corps")}
+        /* Phase 3 W2-B (OD-2, rules v13): #1443's `stockStage` / `onShowStocks` are retired with the stage walk -- the
+           bar's one Stock Round control is "Pass Turn", which sends one `PassTurn`; the Stocks tab's share controls
+           ask the stock authority for what is still open. */
         onPlaceStationTokenHint={handlePlaceStationTokenHint}
         stationTokenCost={stationTokenCost}
         /* Design note #707: the same probe the Routes panel's Auto Route runs, so the button and
@@ -14731,6 +14748,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     onAnswerPrivateTrade={handleAnswerPrivateTrade}
                     onRescindPrivateTrade={handleRescindPrivateTrade}
                     offerHoldReason={privateTradeHold}
+                    /* Phase 3 W2-B (AUD-03.07): the viewer's must-sell debt, said once at the top of the panel -- the
+                       same reading that greys the Pass (`viewerDivestmentDebt`). */
+                    mustSell={mustSellBannerOf(viewerDivestmentDebt)}
                   onPeekSaleMarket={openSalePeek}
                     onSellShares={handleSellShares}
                     sessionReady={controlsEnabled}

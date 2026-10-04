@@ -228,8 +228,18 @@ describe("what is exempt, and why each one is", () => {
     /* ART AT VIEWPORT SIZE IS NOT CHROME. The cinematic and the sign are pictures sized to the window, with
        controls and type authored to the picture; the modals are chrome and shrink with the rest, which is why
        they are deliberately absent from this list. */
+    /* Phase 3 W3-D (OD-15(a)): THE TWO CINEMATICS ARE EXEMPT BY POSITION NOW, NOT BY A RECIPROCAL. This read
+       `expect(INTRO).toContain("zoom: 1 / uiScale")`. The owner ruled the counter-zoom out: the intro and the
+       end-game film render outside every scaled root (`CinematicTakeover`), so neither may carry a zoom or read
+       the scale at all. The behaviour is pinned in `phase3W3DCinematicTakeover.test.tsx`; this keeps the
+       exemption list honest. The sign is not a cinematic and keeps #1294's counter-zoom. */
+    const OUTRO = readStripped("components/GameOutroOverlay.tsx");
+    for (const [name, source] of [["intro", INTRO], ["outro", OUTRO]] as const) {
+      expect([name, source.includes("zoom")]).toEqual([name, false]);
+      expect([name, source.includes("useUiScale")]).toEqual([name, false]);
+      expect([name, source.includes("<CinematicTakeover")]).toEqual([name, true]);
+    }
     // Design note #1294: written per render from the live scale.
-    expect(INTRO).toContain("zoom: 1 / uiScale");
     expect(SIGN).toContain("zoom: 1 / uiScale");
     expect(readStripped("components/MarketPeekModal.tsx")).not.toContain("UI_SCALE");
     expect(readStripped("components/AutoPassModal.tsx")).not.toContain("UI_SCALE");

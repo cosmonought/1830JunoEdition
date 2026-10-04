@@ -185,6 +185,26 @@ phase65bShellWiring.test.ts) the result is Wave-2A plus exactly W3-K's own delta
 accepted, not integrated). W2-C, W2-D and W2-F remain **UNLOCKED**. Not deployable until W2-B, the v13-reconciled W2-G, the v13 settlement
 certification, drained v12 rooms and the final integrated owner gate.
 
+## W2-G v13 reconciliation status (2026-10-04)
+
+**Branch** `phase3/w2-g-v13-emergency-ui` from `phase3/wave2a-v13-integration` @ `868bd83`: code `112fa71`, independent-review
+fixes `02d73b8`, then this tracking commit. **W2-G: COMPLETE on its slice branch — NOT integrated**, not merged to main, no broad owner gate.
+
+- **Reused from `695afe9` (accepted UI):** the non-dismissible president-only modal (OD-4 / OD-1), the intercorporate step first,
+  the K-25 "Bank Pool" / "Bank Depot" from `train.source`, the automatic treasury / cash ledger, the authority-judged trade and
+  private offers (`proposeTrainPurchaseRefusal`, `fundingPrivateOfferRefusal`), the in-modal answer when the president presides
+  over the buyer, the press latch, the waiting sentence for every other seat and watcher.
+- **Discarded v12 assumptions:** the presentation-only Skip (now the real `ForgoTrainTrade`, with the authority's projected
+  consequence); one `SellStock` per press (now ONE `EmergencySellPortfolio` judged by `emergencyPortfolioRefusal`); the
+  president's Buy (`EmergencyBuyHardware` is derived by the game; W3-K's no-server forwarding untouched); the "faces bankruptcy"
+  guess; the private section shown whenever a private could be offered (now only while `automatic.privateFunding` is relevant);
+  `DeclareBankruptcy` (no control or message anywhere). A legacy (revision < 2) board gets no forced dialog and no v12 control.
+- **Waiting surface:** W2-H's `WaitingStatusBanner` (not modal, focusable, no controls). W2-A holds unchanged.
+- **Rows implemented:** AUD-09.05, AUD-09.06, AUD-09.07, P3-N017, P3-N018. The AUD-14.06 latch residue stays W3-B's.
+- **Residue (not W2-G's surface):** the bar / `TrainPurchasePanel` still declare the now-unpassed `onEmergencyPurchase` /
+  `emergencyAvailable` props (W2-A's bar test feeds them); removal belongs to a later bar pass.
+- **Versions:** rules 13 UNCHANGED; settlement-certified `[10, 11, 12]` UNCHANGED. No AWS, no JUNO.
+
 ## W3-K status (rules v13, 2026-10-03)
 
 **Branch** `phase3/w3-k-rules-v13` from `phase3/wave1-integration` @ `4e51cff`. Branch only; not integrated; not merged to main.

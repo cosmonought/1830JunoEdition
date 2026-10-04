@@ -761,6 +761,7 @@ gates.
   kept until the proposal lands or is refused; the "not reached the table yet" note fires only after the landing signal.
 - **App.tsx regions:** R-CONSENT; R-HOMEPROMPT's `AuctionPromptModal` props (after W2-H hands over); RED R5 only under OD-12.
 - **Depends on:** W2-F, W2-H. **Gates:** OD-12 only if the drain must change.
+- **Status:** COMPLETE on its slice branch `phase3/w3-i-offers` @ `d663b1c` (code `5c6d7f8` + review fixes `d663b1c`, from `phase3/wave2-bcgdf-v13cert-integration` @ `c3f43b7`); NOT integrated. The drain did not have to change (no OD-12 edit): a read-only queue accessor on the link and `utils/useLinkQueue.ts` feed the par prompt and the three offer forms.
 
 #### W3-J
 **U-28 findings remediation** · distributed to the owning lane · **4–10 h reserve**

@@ -641,6 +641,7 @@ gates.
 - **Surfaces:** one time helper replaces the three `hhmm` copies (U-44 per OD-9(a)); the server copy in
   `server/src/escrow/moneyTables.ts` changes only if OD-9(a) picks local-with-zone; the Keplr logo (U-15) per OD-9(b).
 - **Pins likely to move:** `moneyVocabulary`, money panel tests. **Gates:** OD-9.
+- **Safe Wave-2 integration (2026-10-03):** OD-9(a) RULED (§7.3). PARTIAL — `e223f64` (exact SHA verified), integrated (`fb4eee5`): one local-with-zone formatter, relative server refusal copy, machine evidence UTC, the OD-14(i) panel pass. AUD-20.01 C → B. **The official Keplr logo is ASSET PENDING** (AUD-18.05; an empty slot, nothing fabricated).
 
 #### W2-L
 **Post-game statistics residuals** · L7 · **4–6 h** · *new*
@@ -792,7 +793,7 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 | **OD-6** | PRODUCT | Show the game id (LIVE-2 §7.2 says never)? Where do the build id and rules version appear? | Room code only on hosted tables; stale build note; version only in error text | W2-I (that part) | No |
 | **OD-7** | RULES (confirmation) | **RULED 2026-10-03 — see §7.3.** RR-4: when the treasury can pay a forced purchase, must it be the cheapest train? "Yes" is a rules defect (v13, W3-K); "No" is a copy fix (W2-J). **The 6.5-B report says an RR-4 ruling was recorded; restate it for Part D** | Engine allows any legal purchase; the Reference said "cheapest" at 4 sites (corrected, `ca73834`) | W2-J / W3-K — ruled: W1-L copy, done | No |
 | **OD-8** | PRESENTATION | U-37 float narration: (a) "floated" at the float plus "placed its home" later, or (b) one line at placement | One line at placement | W2-J | No |
-| **OD-9** | PRESENTATION / PRODUCT | (a) U-44 time convention: local with zone (needs a server copy edit) or UTC everywhere. (b) U-15 Keplr logo asset and brand approval | Local "HH:MM" unlabelled vs the server's "UTC"; no logo asset | W2-K | No |
+| **OD-9** | PRESENTATION / PRODUCT | **(a) RULED 2026-10-03 — see §7.3; (b) the Keplr logo stays ASSET PENDING.** (a) U-44 time convention: local with zone (needs a server copy edit) or UTC everywhere. (b) U-15 Keplr logo asset and brand approval | Local "HH:MM" unlabelled vs the server's "UTC"; no logo asset | W2-K | No |
 | **OD-10** | RULES / PRODUCT | (a) Is a v13 rules batch allowed inside Phase 3 (W3-K), or are all rules items owner-placed after Phase 4? (b) Are phone-width game layout, zoom-aware breakpoints and keyboard map access Phase-3 targets, Phase-4 observations only, or Phase-5 work? | v12; no game-shell breakpoints; the map is mouse-only | W3-K; AUD-16.05, AUD-16.09 | (a) No. (b) Partly |
 | **OD-11** | PRODUCT · PLAYTEST-INFORMED | **RULED 2026-10-03 (build: manual route only) — see §7.3.** K-06 city bypass: build in Phase 3 (which hexes, which gesture, how it meets the shortfall refusal) or place it later | No voluntary control; bypass is sent automatically where forced | W3-E | Partly |
 | **OD-12** | PRODUCT (engineering scope) | **RULED 2026-10-03 — see §7.3.** **RED-region permission.** May named Phase-3 fixes edit the RED regions (submit half, apply half, OR verdict, link drain), each as one separately reviewed commit naming its exact lines? Candidates: K-18 (R2), the banner/refusal model and refusal rollbacks (R1, R5), the `press:true` latch (R1), K-24's call site (R2), A-19 if the audio-side fix is not enough (R2), the FleetLoss prune if the store fix is not enough (R4), the queued-state read if it cannot be done outside the drain (R5). A refusal places each named item later (E) — it does not silently drop it | The draft deferred all of these to Phase 4 without a ruling | W2-J, W3-B, W3-C, W3-I, W1-N, W3-A, W3-H | No |
@@ -861,6 +862,13 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 
 **Recorded at the safe Wave-2 integration (2026-10-03)**, from the owner's brief, in its words:
 
+**OD-9 — MONEY TIME / COPY CONVENTIONS (W2-K).**
+- APPROVED convention: persistent player UI: local absolute time + explicit time zone;
+- server refusal copy: relative duration is acceptable because the server has no player time zone;
+- machine evidence remains UTC.
+- Official Keplr logo remains ASSET PENDING; do not fabricate one.
+- *Effect on this plan:* OD-9(a) implemented by W2-K (`fb4eee5`); AUD-20.01 C → B, IMPLEMENTED. OD-9(b) open: AUD-18.05 ASSET PENDING.
+
 **OD-11 — CITY BYPASS (W3-E).**
 - W3-E: manual route only.
 - Preserve automatic route optimality unchanged.
@@ -873,7 +881,7 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 visibility for non-active players (home/auction actors get controls, others a status) — this is OD-1's viewer scope for those two
 prompts, now implemented (`66977d5`). W2-E preserves W1-C's explicit IPO-vs-Bank-Pool choice with no substitution, and its marker / log /
 RR-6 read `pending_mh_exchange`. W2-L is derived history only (no reducer / replay / settlement / rules-version change). OD-3 (W2-E),
-OD-13 and OD-14(d) (W2-L) were applied by those slices as the owner gave them; their text is not in the brief and is not transcribed
+OD-13 and OD-14(d) (W2-L) and OD-14(i) (W2-K's panel pass) were applied by those slices as the owner gave them; their text is not in the brief and is not transcribed
 here. W2-G is implemented but held for the OD-4 v13 work. The tutorial architecture remains later spotlight / whitebox work.
 
 Still open from wave 1: **OD-14(a)** (W1-I). Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).

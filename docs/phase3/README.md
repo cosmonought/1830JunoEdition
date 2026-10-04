@@ -20,12 +20,12 @@ or attachment.
 | Audit's own base | `7b1a956b1eeef31ad17ec6b08b475c4649747f6a` (`live6/live-closure-candidate-w1`); production `frontend/src` identical to the snapshot's |
 | **Phase-3 implementation base** | **TBD — pin the final canonical integrated head after Phase 2 closes (OD-0 / P0). Record the full SHA here.** |
 | Wave 1 (provisional) | Built on `8f33f0fb72d462c381a572015de7860a93fbd198` by the owner's brief; integrated on `phase3/wave1-integration` (2026-10-03), not merged. Status per slice: the matrix's "Wave-1 integration status" section / `slice_status` in the JSON |
-| Safe Wave 2 (provisional) | `phase3/wave2-safe-integration` on `4e51cff` (2026-10-03): W2-H, W2-E, W2-L, W3-E integrated; W2-G held for the OD-4 v13 work; not merged. See the matrix's "Safe Wave-2 integration status" |
+| Safe Wave 2 (provisional) | `phase3/wave2-safe-integration` on `4e51cff` (2026-10-03): W2-H, W2-E, W2-L, W3-E, W2-K integrated (Keplr logo ASSET PENDING); W2-G held for the OD-4 v13 work; not merged. See the matrix's "Safe Wave-2 integration status" |
 | Phase-4 playtest baseline | TBD — recorded at Phase-3 closure (W3-F) |
 
 ## Owner rulings recorded
 
-OD-1, OD-2, OD-7 and OD-12 were ruled on 2026-10-03, during wave 1; OD-11 at the safe Wave-2 integration — verbatim in the
+OD-1, OD-2, OD-7 and OD-12 were ruled on 2026-10-03, during wave 1; OD-9(a) and OD-11 at the safe Wave-2 integration — verbatim in the
 plan's §7.3 and `owner_rulings` in the JSON. Still open from wave 1: OD-14(a).
 
 ## Check

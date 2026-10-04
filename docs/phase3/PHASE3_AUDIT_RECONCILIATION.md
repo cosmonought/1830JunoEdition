@@ -46,9 +46,9 @@ observation, decision or process item.
 
 | Block | Rows | Dispositions |
 |---|---|---|
-| Audit items (`AUD-*`) | 167 | A 61 · B 44 · C 15 · D 22 · E 2 · F 23 · G 0 |
+| Audit items (`AUD-*`) | 167 | A 61 · B 45 · C 14 · D 22 · E 2 · F 23 · G 0 |
 | Flourish-ledger items the audit counts (`VF/*`: 47 PLAYTEST, 21 recorded owner decisions, 23 OPEN) | 91 | A 0 · B 17 · C 6 · D 47 · E 0 · F 21 · G 0 |
-| **Substantive audit items, total** | **258** | A 61 · B 61 · C 21 · D 69 · E 2 · F 44 · G 0 |
+| **Substantive audit items, total** | **258** | A 61 · B 62 · C 20 · D 69 · E 2 · F 44 · G 0 |
 | Execution-map-only NEW-SOURCE-FINDINGS (`P3-N*`) | 26 | A 21 · B 0 · C 1 · D 0 · E 1 · F 2 · G 1 |
 
 - **G = 0 among the audit's own items.** Where the audit and source disagree, the source evidence was unambiguous and the
@@ -56,7 +56,7 @@ observation, decision or process item.
   ruling (2026-10-03): P3-N024 (SBS-4) needs a precise reproduction / clarification before anything is built from it.
 - **Totals after the Wave-1 integration (2026-10-03):** AUD-09.10 (RR-4) moved C → B when OD-7 was ruled and implemented as
   copy; P3-N024 moved C → G under OD-2. The planning-snapshot totals were A 61 · B 59 · C 23 (audit) and C 2 · G 0 (P3-N).
-- **Totals after the safe Wave-2 integration (2026-10-03):** AUD-07.03 (K-06 / U-17) moved C → B when OD-11 was ruled (build) and W3-E landed.
+- **Totals after the safe Wave-2 integration (2026-10-03):** AUD-07.03 (K-06 / U-17) moved C → B when OD-11 was ruled (build) and W3-E landed; AUD-20.01 (U-44) moved C → B when OD-9(a) was ruled and W2-K landed. AUD-18.05 (the Keplr logo) stays C, ASSET PENDING.
 - **Every audit bullet** (123 bullets in §1–§21) and every item-bearing statement outside them (scope, gate, highest-risk,
   the Phase-4 list, the closing remark) maps to at least one row; every `AUD-*` / `VF/*` row is reached from the audit. See
   the bullet map at the end and `check_phase3_accounting.py`.
@@ -128,18 +128,19 @@ Wave-1's own integration edits reverse-apply on the result.
 | W2-E | `phase3/w2-mh-queued-visibility` @ `91037ce` (L2 `6f42dca`) | `09fcb25` |
 | W2-L | `phase3/w2-postgame-statistics` @ `e16aa5a` (`8f33f0f`) | `615e183` |
 | W3-E | `phase3/w3-manual-city-bypass` @ `6d7cfa1` (L4 `bee2717`) | `a860178` |
+| W2-K | `phase3/w2-money-copy` @ `e223f64` — exact SHA `e223f647bf544ed2fffaf3d56bc9b5c96994ed98` verified (L7 `b19dff5`) | `fb4eee5` |
 
 Integration commit: `8d6feaa` — `utils/tileRingView.test.ts` `import/first` hygiene (Wave-1 residue; test-only, no semantic change).
 
-**Slice status:** W2-H, W2-E, W2-L and W3-E COMPLETE (their A/B rows IMPLEMENTED; AUD-07.03 C → B under OD-11). W2-K: IN
-PROGRESS — implemented on `phase3/w2-money-copy` @ `e223f64`, not yet integrated; the official Keplr logo is ASSET PENDING.
+**Slice status:** W2-H, W2-E, W2-L and W3-E COMPLETE (their A/B rows IMPLEMENTED; AUD-07.03 C → B under OD-11). W2-K:
+PARTIAL — integrated (AUD-20.01 C → B under OD-9(a)); **the official Keplr logo is ASSET PENDING** (AUD-18.05).
 **W2-G: IN PROGRESS — implemented (`695afe9`, UI accepted) but HELD, NOT integrated** (it removes the bankruptcy button while v12
 still has authority states that require it; it lands with the OD-4 v13 work). **W3-K is not complete and settlement v13 is not
 certified**; `phase3/v13-scope-verification` is not merged — its evidence is reconciled during W3-K. The tutorial architecture
 remains later spotlight / whitebox work. Rules version unchanged (v12).
 
-**Owner ruling recorded:** OD-11 (plan §7.3). OD-3, OD-13 and OD-14(d) were applied by W2-E / W2-L as given to those slices; not
-transcribed (their text is not in the integration brief).
+**Owner rulings recorded:** OD-9(a) and OD-11 (plan §7.3). OD-3, OD-13, OD-14(d) and OD-14(i) were applied by W2-E / W2-L / W2-K as
+given to those slices; not transcribed (their text is not in the integration brief).
 
 ## Scope and closing remark
 
@@ -385,7 +386,7 @@ transcribed (their text is not in the integration brief).
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |
 |---|---|---|---|---|---|---|---|
-| **AUD-20.01** · U-44 · §20<br>The server writes "HH:MM UTC" while the client shows unlabelled local times. | [UX] | CONFIRMED — three `hhmm` copies (`money/moneyFlow.ts`:106-109, `components/money/MoneyPanel.tsx`:41-44, `SettlementBand.tsx`:42-45); `server/src/escrow/moneyTables.ts`:1027, 1150. | W2-K | **C** | OD-9(a) | — | — |
+| **AUD-20.01** · U-44 · §20<br>The server writes "HH:MM UTC" while the client shows unlabelled local times. | [UX] | CONFIRMED — three `hhmm` copies (`money/moneyFlow.ts`:106-109, `components/money/MoneyPanel.tsx`:41-44, `SettlementBand.tsx`:42-45); `server/src/escrow/moneyTables.ts`:1027, 1150. | W2-K (OD-9(a) ruled; landed at the safe Wave-2 integration) | **B** | OD-9(a) (RULED 2026-10-03: persistent player UI — local absolute time + explicit time zone; server refusal copy — relative duration; machine evidence stays UTC) | — | One formatter `money/moneyTime.ts` (`formatMoneyTime`) replaces the three `hhmm` copies; the two server refusal sentences in `server/src/escrow/moneyTables.ts` give the time remaining; instants, codes, wire and logs unchanged. |
 | **AUD-20.02** · JX-3A E-1 · §20<br>A stale wallet proof still shows "Wallet linked". | [UX] | CONFIRMED — `money/moneyFlow.ts`:121-122 reads server `funding === "linked"` without freshness. | W2-M | **B** | — | — | — |
 | **AUD-20.03** · JX-3A E-2 · §20<br>Replacing a wallet takes two Keplr prompts. | [UX] | CONFIRMED — `money/moneyActions.ts`:167-197 (`replace-required` then `linkWallet({replace:true})`). | W2-M | **B** | — | — | — |
 | **AUD-20.04** · JX-3A E-3 · §20<br>Expiry messages are generic. | [UX] | CONFIRMED by reading — `money/useMoneyTable.ts`:240-241, 294. | W2-M | **B** | — | — | — |

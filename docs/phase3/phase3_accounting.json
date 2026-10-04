@@ -1795,7 +1795,8 @@
    "disp": "C",
    "od": "OD-9(b)",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "OPEN — ASSET PENDING (OD-9(b)): W2-K `e223f64` adds the empty `components/money/KeplrMark.tsx` slot (`KEPLR_OFFICIAL_LOGO = null`, renders nothing; textual \"Keplr\" kept); no logo drawn, approximated or scraped. Integrated `fb4eee5`"
   },
   {
    "key": "AUD-18.06",
@@ -1898,11 +1899,12 @@
    "cls": "[UX]",
    "item": "The server writes \"HH:MM UTC\" while the client shows unlabelled local times.",
    "src": "CONFIRMED — three `hhmm` copies (`money/moneyFlow.ts`:106-109, `components/money/MoneyPanel.tsx`:41-44, `SettlementBand.tsx`:42-45); `server/src/escrow/moneyTables.ts`:1027, 1150.",
-   "slice": "W2-K",
-   "disp": "C",
-   "od": "OD-9(a)",
+   "slice": "W2-K (OD-9(a) ruled; landed at the safe Wave-2 integration)",
+   "disp": "B",
+   "od": "OD-9(a) (RULED 2026-10-03: persistent player UI — local absolute time + explicit time zone; server refusal copy — relative duration; machine evidence stays UTC)",
    "p4": "—",
-   "notes": "—"
+   "notes": "One formatter `money/moneyTime.ts` (`formatMoneyTime`) replaces the three `hhmm` copies; the two server refusal sentences in `server/src/escrow/moneyTables.ts` give the time remaining; instants, codes, wire and logs unchanged.",
+   "status": "IMPLEMENTED — W2-K `e223f64`, integrated `fb4eee5`"
   },
   {
    "key": "AUD-20.02",
@@ -4488,6 +4490,17 @@
     "Whole-set `routeSetRefusal` remains authoritative."
    ],
    "effect": "From the owner's safe Wave-2 integration brief, which integrates W3-E (OD-11 = build). W3-E landed (`a860178`); AUD-07.03 C → B, IMPLEMENTED. No engine, schema, rules-version or auto-route change."
+  },
+  "OD-9": {
+   "title": "MONEY TIME / COPY CONVENTIONS (W2-K)",
+   "date": "2026-10-03",
+   "ruling": [
+    "APPROVED convention: persistent player UI: local absolute time + explicit time zone;",
+    "server refusal copy: relative duration is acceptable because the server has no player time zone;",
+    "machine evidence remains UTC.",
+    "Official Keplr logo remains ASSET PENDING; do not fabricate one."
+   ],
+   "effect": "From the owner's safe Wave-2 integration brief. OD-9(a) is ruled and implemented by W2-K (`e223f64`, integrated `fb4eee5`): AUD-20.01 C → B, IMPLEMENTED. OD-9(b) stays open: AUD-18.05 is ASSET PENDING (an empty official-logo slot, nothing fabricated)."
   }
  },
  "wave1_integration": {
@@ -4591,7 +4604,7 @@
   "W2-H": "COMPLETE — `phase3/w2-waiting-prompts` `3b7f23b`, `5cc5ccc`, `461d4f0`; integrated at the safe Wave-2 integration (`66977d5`). K-21's second half (the President's Skip while placing) stays W2-A's",
   "W2-I": "NOT STARTED",
   "W2-J": "NOT STARTED",
-  "W2-K": "IN PROGRESS — implemented (`phase3/w2-money-copy` `e223f64`); not yet integrated (the branch is not yet on GitHub). The official Keplr logo is ASSET PENDING (OD-9(b))",
+  "W2-K": "PARTIAL — `phase3/w2-money-copy` `e223f64` (exact SHA verified), integrated at the safe Wave-2 integration (`fb4eee5`): U-44 timestamps per OD-9(a) and the OD-14(i) bounded money-panel pass are done; the official Keplr logo is ASSET PENDING (OD-9(b), AUD-18.05)",
   "W2-L": "COMPLETE — `phase3/w2-postgame-statistics` `e16aa5a` (derived history only); integrated at the safe Wave-2 integration (`615e183`). AUD-12.07 stays owner-gated (\"traded\" kept); S10-21's non-UR remainder stays open",
   "W2-M": "NOT STARTED",
   "W3-A": "NOT STARTED",
@@ -4606,7 +4619,7 @@
   "W3-J": "NOT STARTED",
   "W3-K": "NOT STARTED — OD-2 schedules SBS-2 (\"Pass Turn\" ends the turn in one click) into the v13 rules slice it is the vehicle for; SBS-4 needs reproduction first; `phase3/v13-scope-verification` (`9b3f60b`) is NOT merged (it is on an older planning lineage) — its evidence is reconciled during W3-K. Settlement v13 is not certified"
  },
- "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words.",
+ "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words.",
  "wave2_safe_integration": {
   "branch": "phase3/wave2-safe-integration",
   "base": "4e51cff7014632726de94f44024d66fc433b12cb (phase3/wave1-integration)",
@@ -4635,6 +4648,13 @@
     "head": "6d7cfa19be5414404c16108f7f5487b8d9aadcb8",
     "parent": "bee2717 (L4)",
     "merge": "a860178"
+   },
+   "W2-K": {
+    "branch": "phase3/w2-money-copy",
+    "head": "e223f647bf544ed2fffaf3d56bc9b5c96994ed98",
+    "parent": "b19dff5 (L7)",
+    "merge": "fb4eee5",
+    "exact_sha_verified": true
    }
   },
   "integration_commits": {
@@ -4645,8 +4665,9 @@
    "phase3/v13-scope-verification": "9b3f60b — not merged (older planning lineage); its evidence is reconciled during W3-K."
   },
   "notes": [
+   "W2-K's official Keplr logo is ASSET PENDING (OD-9(b)); the slot renders nothing until the owner supplies the asset.",
    "The tutorial architecture remains later spotlight / whitebox work; nothing in this integration changes it.",
-   "OD-3 (W2-E), OD-13 and OD-14(d) (W2-L) were applied by those slices as the owner gave them; their text is not in the integration brief, so it is not transcribed into owner_rulings here.",
+   "OD-3 (W2-E), OD-13 and OD-14(d) (W2-L) and OD-14(i) (W2-K's panel pass) were applied by those slices as the owner gave them; their text is not in the integration brief, so it is not transcribed into owner_rulings here.",
    "No rules-engine version change (v12; settlement-certified [10, 11, 12] unchanged). W3-K and settlement v13 are not complete."
   ]
  }

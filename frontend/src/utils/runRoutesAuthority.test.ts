@@ -85,7 +85,7 @@ describe("W1-G: no draft disappears silently", () => {
     ];
     const note = droppedDraftsNote(drafts);
     expect(note).toContain("1 of 2 drafted routes cannot run and is not in this run");
-    expect(note).toContain("the 2-train's");
+    expect(note).toContain("(2-train): ");
     expect(note).toContain(TOKENLESS);
     expect(note).toContain(runTrainsRefusal([drafts[1]]) as string);
   });
@@ -97,7 +97,7 @@ describe("W1-G: no draft disappears silently", () => {
   it("names a runnable draft the handler could not read as a path", () => {
     const drafts = [draft({ trainIndex: 0 }), draft({ trainIndex: 1, model: "4" })];
     const note = droppedDraftsNote(drafts, [drafts[0]]);
-    expect(note).toContain("the 4-train's");
+    expect(note).toContain("(4-train): ");
     expect(note).toContain(UNREADABLE_ROUTE_REASON);
   });
 });

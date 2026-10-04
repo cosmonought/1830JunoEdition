@@ -11915,8 +11915,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* Phase 3 W1-E: one answer for the ring's tick and its tooltip -- who may lay now, then the in-flight latch, then
      the authority's verdict on this lay (`utils/tileRingView.ts`). */
   const ringConfirm = useMemo(
-    () => ringConfirmState({ layDisabledReason: tileLayDisabledReason, inFlight: actionInFlight, previewRefusal: ringLayRefusal }),
-    [tileLayDisabledReason, actionInFlight, ringLayRefusal],
+    () =>
+      ringConfirmState({
+        layDisabledReason: tileLayDisabledReason,
+        // A preview already sent (#1145's `committed` ghost) is a press in flight too, whatever the room's index says.
+        inFlight: actionInFlight || previewTile?.committed === true,
+        previewRefusal: ringLayRefusal,
+      }),
+    [tileLayDisabledReason, actionInFlight, previewTile?.committed, ringLayRefusal],
   );
 
   /* ==================================================================

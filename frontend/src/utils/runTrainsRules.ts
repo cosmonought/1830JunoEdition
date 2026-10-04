@@ -155,12 +155,12 @@ export function droppedDraftsNote<T extends RunnableDraftShape & { model: string
   const first = dropped[0];
   const why = runnableDrafts([first]).length > 0 ? UNREADABLE_ROUTE_REASON : runTrainsRefusal([first]);
   const count = `${dropped.length} of ${drafted.length} drafted route${drafted.length === 1 ? "" : "s"}`;
-  return `${count} cannot run and ${dropped.length === 1 ? "is" : "are"} not in this run — the ${first.model}-train's: ${why}`;
+  return `${count} cannot run and ${dropped.length === 1 ? "is" : "are"} not in this run (${first.model}-train): ${why}`;
 }
 
 /** A draft that passed `runnableDrafts` but did not reach the map as a path of two or more points (#1020's filter). */
 export const UNREADABLE_ROUTE_REASON =
-  "its route could not be read from the map as a path of two or more hexes. Redraw it, then run trains again.";
+  "Its route could not be read from the map as a path of two or more hexes. Redraw it, then run trains again.";
 
 /** When nothing at all survives to be sent: the run is not made, so the step is not marked run (A-17). */
 export const NOTHING_SENT_REASON =

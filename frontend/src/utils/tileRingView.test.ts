@@ -308,8 +308,10 @@ describe("W1-E wiring in the shell", () => {
     expect(ring).toContain("if (ringConfirm.canConfirm) handleConfirmRadialLay();");
     expect(ring).not.toContain("pendingLayCost?.short");
     expect(ring).not.toContain("onConfirm={handleConfirmRadialLay}");
-    const gate = sliceBetween(APP, "const ringConfirm = useMemo(", "]);");
-    expect(gate).toContain("ringConfirmState({ layDisabledReason: tileLayDisabledReason, inFlight: actionInFlight, previewRefusal: ringLayRefusal })");
+    const gate = sliceBetween(APP, "const ringConfirm = useMemo(", "ringLayRefusal],");
+    expect(gate).toContain("layDisabledReason: tileLayDisabledReason,");
+    expect(gate).toContain("inFlight: actionInFlight || previewTile?.committed === true,");
+    expect(gate).toContain("previewRefusal: ringLayRefusal,");
   });
 
   it("the preview memo asks the authority on the message the handler sends, and derives no landings itself", () => {

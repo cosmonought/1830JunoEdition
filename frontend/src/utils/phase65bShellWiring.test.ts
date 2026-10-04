@@ -126,7 +126,10 @@ describe("K-01: the Stock Round Private Companies section, its handlers, its pro
   it("the section view, the hold and the proposal predicate are derived from the board; read-only while scrubbing", () => {
     const derived = sliceBetween(APP, "const privateTradeLabel = useCallback(", "const pendingDiscard = useMemo(");
     expect(derived).toContain("privateTradeSectionModel(gameState, scrubbing ? null : viewerAddress, privateTradeLabel)");
-    expect(derived).toContain("scrubbing ? null : privateTradeHoldReason(gameState, privateTradeLabel)");
+    /* Phase 3 W2-F: the share controls' hold is no longer 6.5-B's `privateTradeHoldReason`; it is the shell's one hold
+       answer (`dockHoldView`, which reports nothing on a scrubbed board -- the same read-only rule). */
+    expect(derived).not.toContain("privateTradeHoldReason(");
+    expect(derived).toContain("dockHoldView({ state: gameState, mapGrid, homeHexToAxial, labelFor: privateTradeLabel, scrubbing })");
     expect(derived).toContain("privateTradeProposalRefusal(gameState, viewerAddress, intent, privateTradeLabel)");
   });
 
@@ -147,7 +150,10 @@ describe("K-01: the Stock Round Private Companies section, its handlers, its pro
     expect(panel).toContain("onProposePrivateTrade={handleProposePrivateTrade}");
     expect(panel).toContain("onAnswerPrivateTrade={handleAnswerPrivateTrade}");
     expect(panel).toContain("onRescindPrivateTrade={handleRescindPrivateTrade}");
-    expect(panel).toContain("offerHoldReason={privateTradeHold}");
+    // Phase 3 W2-F: the hold on the share controls is the shell's one hold answer, asked with the kinds they send.
+    expect(panel).toContain("offerHoldReason={dockHold.shareControls}");
+    expect(panel).toContain("purchaseBlockFor={heldPurchaseBlockFor}");
+    expect(panel).toContain("saleBlockFor={heldSaleBlockFor}");
   });
 
   it("the consent slot carries the pointer, after the other prompts", () => {

@@ -54,6 +54,8 @@ import { CONSENT_IN_FLIGHT_TITLE } from "../utils/offerConsentView";
 /* Design note #1702 (GR-3): the trade-in row's inputs -- the table's price and the Final Run copies included --
    as `dieselExchangeOfferFor` builds them. Re-exported for the bar, which forwards it. */
 import type { DieselExchangeOffer } from "../gameEngine/dieselExchange";
+// Phase 3 W2-F (OD-1, U-6): the one waiting line every consent / discard prompt prints.
+import { WaitingOnLine } from "./WaitingOnLine";
 export type { DieselExchangeOffer };
 
 /** The subset of a corporation both sections need. */
@@ -1664,6 +1666,8 @@ export interface TrainTradePromptProps {
   onRescind?: () => void;
   /** Phase 3 W1-D: the shell's in-flight latch (#1173) -- greys every live control while the last action is unconfirmed. */
   actionInFlight?: boolean;
+  /** Phase 3 W2-F (OD-1, U-6): the hold's own sentence (`dockHold.turnHoldReason`) for the one waiting line. */
+  waitingSentence?: string | null;
 }
 
 /** The counterparty's Accept / Reject. Deliberately the same shape and the same corner as
@@ -1677,6 +1681,7 @@ export function TrainTradePrompt({
   viewerIsProposer = false,
   onRescind,
   actionInFlight = false,
+  waitingSentence = null,
 }: TrainTradePromptProps) {
   if (!proposal) return null;
   const bloodPrice = proposal.bloodPrice === true;
@@ -1712,13 +1717,13 @@ export function TrainTradePrompt({
         </p>
       )}
 
-      <p style={styles.promptWho}>
-        {viewerIsSeller
-          ? `This is ${proposal.sellerPresidentLabel}'s decision.`
-          : canRescind
-            ? `Waiting on ${proposal.sellerPresidentLabel} — or you can withdraw the offer.`
-            : `Waiting on ${proposal.sellerPresidentLabel}.`}
-      </p>
+      {/* Phase 3 W2-F (OD-1, U-6): the one waiting line; the proposer's withdrawal is the Rescind button below. */}
+      <WaitingOnLine
+        who={proposal.sellerPresidentLabel}
+        viewerDecides={viewerIsSeller}
+        sentence={waitingSentence}
+        style={styles.promptWho}
+      />
 
       <div style={styles.promptActions}>
         {/* 6.5-B (K-09): REJECT IS AN ANSWER TOO, and the answer is the selling president's alone
@@ -1786,9 +1791,17 @@ export interface FundingPrivateOfferPromptProps {
   onAnswer: (privateId: number, accept: boolean) => void;
   /** Phase 3 W1-D: the shell's in-flight latch (#1173). */
   actionInFlight?: boolean;
+  /** Phase 3 W2-F (OD-1, U-6): the hold's own sentence (`dockHold.turnHoldReason`) for the one waiting line. */
+  waitingSentence?: string | null;
 }
 
-export function FundingPrivateOfferPrompt({ offer, viewerIsBuyerPresident, onAnswer, actionInFlight = false }: FundingPrivateOfferPromptProps) {
+export function FundingPrivateOfferPrompt({
+  offer,
+  viewerIsBuyerPresident,
+  onAnswer,
+  actionInFlight = false,
+  waitingSentence = null,
+}: FundingPrivateOfferPromptProps) {
   if (!offer) return null;
   const canAnswer = viewerIsBuyerPresident && !actionInFlight;
   return (
@@ -1802,11 +1815,13 @@ export function FundingPrivateOfferPrompt({ offer, viewerIsBuyerPresident, onAns
         <strong>{offer.buyerTicker}</strong> for <strong>${offer.price}</strong>, to fund a forced train purchase.
         {offer.buyerTicker} pays from its treasury and keeps the company for good.
       </p>
-      <p style={styles.promptWho}>
-        {viewerIsBuyerPresident
-          ? `This is ${offer.buyerPresidentLabel}'s decision.`
-          : `Waiting on ${offer.buyerPresidentLabel} — nothing else can happen until they answer.`}
-      </p>
+      {/* Phase 3 W2-F (OD-1, U-6): the one waiting line -- the funding offer's hold sentence on every seat. */}
+      <WaitingOnLine
+        who={offer.buyerPresidentLabel}
+        viewerDecides={viewerIsBuyerPresident}
+        sentence={waitingSentence}
+        style={styles.promptWho}
+      />
       <div style={styles.promptActions}>
         <button
           type="button"
@@ -1864,9 +1879,17 @@ export interface TrainDiscardPromptProps {
   onDiscard: (modelType: string) => void;
   /** Phase 3 W1-D: the shell's in-flight latch (#1173) -- a second press must not discard a second train. */
   actionInFlight?: boolean;
+  /** Phase 3 W2-F (OD-1, U-5 folded into U-6): the discard hold's own sentence (`dockHold.turnHoldReason`). */
+  waitingSentence?: string | null;
 }
 
-export function TrainDiscardPrompt({ due, viewerIsPresident, onDiscard, actionInFlight = false }: TrainDiscardPromptProps) {
+export function TrainDiscardPrompt({
+  due,
+  viewerIsPresident,
+  onDiscard,
+  actionInFlight = false,
+  waitingSentence = null,
+}: TrainDiscardPromptProps) {
   if (!due) return null;
   const canDiscard = viewerIsPresident && !actionInFlight;
   /* One button per MODEL, not per train: two 3-trains are interchangeable and the message names a model. */
@@ -1894,11 +1917,15 @@ export function TrainDiscardPrompt({ due, viewerIsPresident, onDiscard, actionIn
           Final Run trains do not count against the train limit and are not eligible for this discard.
         </p>
       )}
-      <p style={styles.promptWho}>
-        {viewerIsPresident
-          ? `This is ${due.presidentLabel}'s decision. Choose the train to discard.`
-          : `Waiting on ${due.presidentLabel} to discard — nothing else can happen until ${due.ticker} is at the limit.`}
-      </p>
+      {/* Phase 3 W2-F (OD-1, U-5 joins U-6): the discard is waited on through the same line as every offer -- who
+          decides, and the discard hold's own sentence (`pendingDiscardBlock`) on every seat. */}
+      <WaitingOnLine
+        who={due.presidentLabel}
+        viewerDecides={viewerIsPresident}
+        sentence={waitingSentence}
+        style={styles.promptWho}
+      />
+      {viewerIsPresident && <p style={styles.promptWho}>Choose the train to discard.</p>}
       <div style={styles.promptActions}>
         {models.map((model) => (
           <button

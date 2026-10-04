@@ -37,6 +37,8 @@ import { privatePriceBounds } from "../gameEngine/privatePriceBand";
 import { CONSENT_IN_FLIGHT_TITLE } from "../utils/offerConsentView";
 // Phase 3 W2-C: the typed price as the proposal's authority reads it -- and as the shell then sends it.
 import { offerPriceForAuthority } from "../utils/offerAuthorityView";
+// Phase 3 W2-F (OD-1, U-6): the one waiting line every consent / discard prompt prints.
+import { WaitingOnLine } from "./WaitingOnLine";
 
 /** A live proposal. Client-side only -- design note #0. */
 export interface PrivateTradeProposal {
@@ -648,6 +650,9 @@ export interface PrivateTradePromptProps {
   /** Phase 3 W1-D: the shell's in-flight latch (#1173). While the viewer's last action is unconfirmed, every live
    *  control here is greyed, so a second press cannot send a second answer or withdrawal. */
   actionInFlight?: boolean;
+  /** Phase 3 W2-F (OD-1, U-6): the hold's own sentence (`dockHold.turnHoldReason`), printed on every seat by the one
+   *  waiting line (`WaitingOnLine`). `null` prints the who-line alone. */
+  waitingSentence?: string | null;
 }
 
 /* Design note #2: WHY SANDBOX LETS ONE PERSON ANSWER THEIR OWN OFFER. A hotseat sandbox has one wallet and one
@@ -666,6 +671,7 @@ export function PrivateTradePrompt({
   viewerIsProposer = false,
   onRescind,
   actionInFlight = false,
+  waitingSentence = null,
 }: PrivateTradePromptProps) {
   if (!proposal) return null;
   const canAnswer = viewerIsOwner && !actionInFlight;
@@ -687,13 +693,15 @@ export function PrivateTradePrompt({
         <strong>{proposal.privateName}</strong> for <strong>${proposal.price}</strong>.
       </p>
 
-      <p style={styles.promptWho}>
-        {viewerIsOwner
-          ? `This is ${proposal.ownerLabel}'s decision.`
-          : canRescind
-            ? `Waiting on ${proposal.ownerLabel} — or you can withdraw the offer.`
-            : `Waiting on ${proposal.ownerLabel}.`}
-      </p>
+      {/* Phase 3 W2-F (OD-1, U-6): the one waiting line -- who decides, and the hold's own sentence on every seat. The
+          proposer's withdrawal is the Rescind button below (the sentence says the offer waits "until it is answered or
+          withdrawn"). */}
+      <WaitingOnLine
+        who={proposal.ownerLabel}
+        viewerDecides={viewerIsOwner}
+        sentence={waitingSentence}
+        style={styles.promptWho}
+      />
 
       {/* ==================================================================
            DESIGN NOTE 932: WHAT ACCEPTING DOES TO THE MONEY

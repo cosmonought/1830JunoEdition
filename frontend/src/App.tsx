@@ -115,7 +115,6 @@ import { displayedOperatingSubPhase } from "./utils/displayedOperatingStep";
 import { PlayerPrivateTradePrompt } from "./components/PrivateCompaniesSection";
 import {
   answerPrivateTradeMsg,
-  privateTradeHoldReason,
   privateTradeProposalRefusal,
   privateTradeSectionModel,
   proposePrivateTradeMsg,
@@ -695,7 +694,7 @@ import AuctionPromptModal from "./components/AuctionPromptModal";
 import HomeStationPrompt from "./components/HomeStationPrompt";
 import { homeStationViewerIsPresident } from "./utils/homeStationAskView";
 import { viewerIsNamedActor, viewerIsSeatedPlayer } from "./utils/waitingPromptView";
-import { dockHoldView } from "./utils/dockHoldView"; // Phase 3 W2-A (OD-1): the one hold answer
+import { dockHoldView, heldFirst } from "./utils/dockHoldView"; // Phase 3 W2-A (OD-1): the one hold answer
 // Phase 3 W2-C: the two offer panels' authorities, bound to the board and seat beside the hold answer.
 import { privateProposalRefusal, trainOfferRefusal, type OfferAuthorityInput, type TrainOfferIntent } from "./utils/offerAuthorityView";
 
@@ -4112,14 +4111,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     () => privateTradeSectionModel(gameState, scrubbing ? null : viewerAddress, privateTradeLabel),
     [gameState, scrubbing, viewerAddress, privateTradeLabel],
   );
-  /** The hold's own sentence while a player trade offer stands (`pendingOfferBlock`), for every share control --
-   *  greyed with it rather than refused after the click (K-13's class, closed for this offer). Phase 3 W2-A: Pass no
-   *  longer reads this; it reads the shell's one hold answer (`dockHold.pass`), which agrees on every Stock Round
-   *  board (the trade offer is the only hold a Stock Round can carry). The share controls move with W2-C / W2-F. */
-  const privateTradeHold = useMemo(
-    () => (scrubbing ? null : privateTradeHoldReason(gameState, privateTradeLabel)),
-    [gameState, scrubbing, privateTradeLabel],
-  );
+  /* Phase 3 W2-F: 6.5-B's `privateTradeHold` (the trade offer's hold, asked with a `PassTurn` probe) is gone. The Stock
+     Round's share controls read the shell's one hold answer below, asked with the two kinds they send (`dockHold.buyStock`
+     / `.sellStock`, and the panel's single flag `.shareControls`). */
   /* Phase 3 W2-A (OD-1): THE SHELL'S ONE HOLD ANSWER. `authoritativeHoldRefusal` asked once per control, with the
      message kind that control sends (`utils/dockHoldView.ts`), so the bar, the tile-lay gate, the token ring and the
      two purchase panels grey with the hold's own sentence exactly when the authority would refuse them -- and never
@@ -9877,6 +9871,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     },
     [gameState, viewerAddress, mapGrid],
   );
+  /* Phase 3 W2-F: the Stock Round panel's per-control answers with the hold asked FIRST, as the reducer asks it --
+     `dockHold.buyStock` / `.sellStock` (the authority's refusal of exactly the message each control sends), then the
+     stock authority above. A hold that refuses only one kind greys only that control; one refusing both is the panel's
+     single flag (`dockHold.shareControls`). Auto-Buy keeps asking `purchaseBlockFor` itself, unchanged. */
+  const heldPurchaseBlockFor = useCallback(
+    (companyId: number, source: "Ipo" | "Bank", quantity: number, certificate?: "double"): string | null =>
+      heldFirst(dockHold.buyStock, () => purchaseBlockFor(companyId, source, quantity, certificate)),
+    [dockHold.buyStock, purchaseBlockFor],
+  );
+  const heldSaleBlockFor = useCallback(
+    (companyId: number, percentage: number): string | null =>
+      heldFirst(dockHold.sellStock, () => saleBlockFor(companyId, percentage)),
+    [dockHold.sellStock, saleBlockFor],
+  );
 
   /* ==================================================================
       DESIGN NOTE 1141: THE SHELL OWNS THE MINI-CAMERA
@@ -14925,20 +14933,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     onPresidencyCue={handlePresidencyCue}
                     floatEvent={floatEvent}
                     onFloatCue={handleFloatCue}
-                    purchaseBlockFor={purchaseBlockFor}
-                    saleBlockFor={saleBlockFor}
+                    /* Phase 3 W2-F: each share control's own answer, with the hold asked first. */
+                    purchaseBlockFor={heldPurchaseBlockFor}
+                    saleBlockFor={heldSaleBlockFor}
                     salePriceAfter={salePriceAfter}
-                    /* 6.5-B (K-01): the Private Companies section below the listing, and the standing offer's
-                       hold on every share control. */
+                    /* 6.5-B (K-01): the Private Companies section below the listing. Phase 3 W2-F: the hold on the
+                       share controls is the shell's one hold answer (`dockHold.shareControls`), not 6.5-B's. */
                     privateTrade={privateTradeSection}
                     privateTradeProposalRefusal={privateTradeProposalRefusalFor}
                     onProposePrivateTrade={handleProposePrivateTrade}
                     onAnswerPrivateTrade={handleAnswerPrivateTrade}
                     onRescindPrivateTrade={handleRescindPrivateTrade}
-                    offerHoldReason={privateTradeHold}
+                    offerHoldReason={dockHold.shareControls}
                     /* Phase 3 W2-B (AUD-03.07): the viewer's must-sell debt, said once at the top of the panel -- the
                        same reading that greys the Pass (`viewerDivestmentDebt`). Not while scrubbing the epilogue replay,
-                       as `privateTradeHold` is not: a past board's debt is not an obligation now. */
+                       as the hold view is not (it reports nothing on a scrubbed board): a past board's debt is not an obligation now. */
                     mustSell={scrubbing ? null : mustSellBannerOf(viewerDivestmentDebt)}
                   onPeekSaleMarket={openSalePeek}
                     onSellShares={handleSellShares}
@@ -15596,6 +15605,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onReject={handleRejectSandboxTrainOffer}
         onRescind={handleRescindSandboxTrainOffer}
         actionInFlight={actionInFlight}
+        // Phase 3 W2-F (OD-1, U-6): the hold's own sentence, the one every waiting line prints on every seat.
+        waitingSentence={dockHold.turnHoldReason}
       />
       {/* #1530: the excess-train discard the game is waiting for. Same slot as the trade prompt; the two cannot
          stand at once (an offer cannot be made while a discard is owed). */}
@@ -15605,12 +15616,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         viewerIsBuyerPresident={fundingPrivateOffer !== null && fundingPrivateOffer.buyerPresident === viewerAddress}
         onAnswer={handleAnswerFundingPrivateOffer}
         actionInFlight={actionInFlight}
+        waitingSentence={dockHold.turnHoldReason}
       />
       <TrainDiscardPrompt
         due={pendingDiscard}
         viewerIsPresident={pendingDiscard !== null && pendingDiscard.president === viewerAddress}
         onDiscard={handleDiscardTrain}
         actionInFlight={actionInFlight}
+        waitingSentence={dockHold.turnHoldReason}
       />
       <PrivateTradePrompt
         proposal={privateProposalShown}
@@ -15636,6 +15649,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onReject={handleRejectPrivateOffer}
         onRescind={handleRescindPrivateOffer}
         actionInFlight={actionInFlight}
+        waitingSentence={dockHold.turnHoldReason}
       />
       {/* 6.5-B (K-01): the player <-> player trade's pointer, in the same slot. The card on the Stocks tab is the
           primary surface; this is what makes the offer impossible to miss from another tab, since it holds the
@@ -15653,6 +15667,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onAnswer={handleAnswerPrivateTrade}
         onRescind={handleRescindPrivateTrade}
         onShowCard={handleShowPrivateTradeCard}
+        waitingSentence={dockHold.turnHoldReason}
+        /* Phase 3 W2-F (AUD-03.10 / I-3): on the Stocks tab the Private Companies section is on screen and carries this
+           offer itself, so the fixed pointer stands aside rather than cover a card. */
+        standAside={activeMainTab === "corps" && privateTradeSection !== null}
       />
       {/* Design note #1043: the ten-second haunting. Inert to the pointer and screen-blended, so the player
           keeps their turn and the board shows through -- both ruled, both in the component. */}

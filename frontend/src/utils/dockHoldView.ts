@@ -32,16 +32,22 @@
 // ONE CALL SITE. `App.tsx` derives this view once per board (the "holds/purchase" group) and threads its fields to
 // the bar (`turnHoldReason`), the Stock Round / auction Pass (`passDisabledReason`), the tile-lay gate, the token ring,
 // the train panel and the private-purchase panel. None of those asks the hold a second, subtly different question.
-// OUTSIDE THIS SLICE, and recorded rather than widened into: the Stock Round's share controls still read 6.5-B's
-// `privateTradeHoldReason` (the trade offer's hold, the only one a Stock Round can carry, so the answers agree on every
-// reachable board). Folding them into this view is W2-F's surface, not W2-A's.
+// PHASE 3 W2-F: THE STOCK ROUND'S SHARE CONTROLS READ THIS VIEW NOW. They read 6.5-B's `privateTradeHoldReason` (the
+// trade offer's hold, asked with a `PassTurn` probe). They are asked here with the two kinds they actually send --
+// `BuyStock` (Buy, the 20% certificate) and `SellStock` (Sell) -- each judged on its own, because the holds do not
+// treat them alike: the v12 funding hold lets `SellStock` through (the forced sale is one way out) and refuses
+// `BuyStock`. `shareControls` is the panel's single flag (#32): the hold's sentence only when it refuses BOTH kinds, so
+// a hold that refuses one never greys the other; the one it refuses is greyed on its own control (`heldFirst`).
 // PHASE 3 W2-D: THE M&H CHIP READS THIS VIEW NOW (`exchangePrivate`, the authority's refusal of `ExchangePrivate`).
 // Once the request is offered in the Operating Round (AUD-10.05) the trade offer is no longer the only hold it can
 // meet -- a discard, the funding hold, a standing train / private offer and the home hold all refuse it, and refuse
 // rather than queue (`mohawkExchange.ts`) -- so the narrower 6.5-B answer would leave the chip live under them.
 //
-// NOT HERE: the emergency purchase modal and its viewer scope (W2-G), the one global "Waiting on X" strip (W2-F), the
-// v13 emergency semantics (W3-K). Ordinary off-turn behaviour (OD-1) is untouched: this view greys only while a hold
+// PHASE 3 W2-F (OD-1, U-6 / U-5): `turnHoldReason` is also the WAITING SENTENCE every consent / discard prompt prints --
+// the one sentence a standing offer, a funding offer or an owed discard holds the table with (`describeStandingOffer`
+// inside `pendingOfferBlock`, `emergencyFundingBlock`, `pendingDiscardBlock`), in the authority's own priority.
+//
+// NOT HERE: the emergency purchase modal and its viewer scope (W2-G), the v13 emergency semantics (W3-K). Ordinary off-turn behaviour (OD-1) is untouched: this view greys only while a hold
 // stands, and every field is `null` otherwise.
 
 import type { MapGridResponse } from "../components/hexContractTypes";
@@ -91,6 +97,13 @@ export interface DockHoldView {
   proposePrivatePurchase: string | null;
   /** `ExchangePrivate` (the M&H's exchange-request chip, in either round -- Phase 3 W2-D). */
   exchangePrivate: string | null;
+  /** Phase 3 W2-F: `BuyStock` (the Stock Round's Buy and 20% certificate controls). */
+  buyStock: string | null;
+  /** Phase 3 W2-F: `SellStock` (the Stock Round's Sell controls). */
+  sellStock: string | null;
+  /** Phase 3 W2-F: the Stock Round panel's single flag (#32) -- the hold's sentence when it refuses BOTH `BuyStock` and
+   *  `SellStock`, else `null`. A hold that refuses only one reaches that control alone, through `heldFirst`. */
+  shareControls: string | null;
 }
 
 export const NO_DOCK_HOLD: DockHoldView = Object.freeze({
@@ -106,10 +119,13 @@ export const NO_DOCK_HOLD: DockHoldView = Object.freeze({
   proposeTrainPurchase: null,
   proposePrivatePurchase: null,
   exchangePrivate: null,
+  buyStock: null,
+  sellStock: null,
+  shareControls: null,
 });
 
 /** The probe each control's dispatch is judged by -- the kind it sends, in its minimal shape. */
-function probes(gameId: number): Record<Exclude<keyof DockHoldView, "turnHoldReason"> | "declareDividends" | "runRoutes", SandboxLogMsg> {
+function probes(gameId: number): Record<Exclude<keyof DockHoldView, "turnHoldReason" | "shareControls"> | "declareDividends" | "runRoutes", SandboxLogMsg> {
   const at = { game_id: gameId, protocol_id: 0 };
   return {
     pass: { PassTurn: { game_id: gameId } },
@@ -129,7 +145,9 @@ function probes(gameId: number): Record<Exclude<keyof DockHoldView, "turnHoldRea
       ProposePrivatePurchase: { game_id: gameId, protocol_id: 0, private_id: 0, price: "0" },
     },
     exchangePrivate: { ExchangePrivate: { game_id: gameId, private_id: 0, company_id: 0, player: "", source: "Ipo" } },
-  } as unknown as Record<Exclude<keyof DockHoldView, "turnHoldReason"> | "declareDividends" | "runRoutes", SandboxLogMsg>;
+    buyStock: { BuyStock: { ...at, source: "Ipo", par_value: null } },
+    sellStock: { SellStock: { ...at, percentage: 10 } },
+  } as unknown as Record<Exclude<keyof DockHoldView, "turnHoldReason" | "shareControls"> | "declareDividends" | "runRoutes", SandboxLogMsg>;
 }
 
 /** The shell's one hold answer for this board. Every field is `null` when no hold stands (or nothing is live). */
@@ -145,6 +163,8 @@ export function dockHoldView(input: DockHoldInput): DockHoldView {
   const p = probes(typeof state.game_id === "number" ? state.game_id : 0);
   const pass = ask(p.pass);
   const skip = ask(p.skip);
+  const buyStock = ask(p.buyStock);
+  const sellStock = ask(p.sellStock);
   return {
     turnHoldReason: pass ?? skip ?? ask(p.declareDividends) ?? ask(p.runRoutes),
     pass,
@@ -158,5 +178,15 @@ export function dockHoldView(input: DockHoldInput): DockHoldView {
     proposeTrainPurchase: ask(p.proposeTrainPurchase),
     proposePrivatePurchase: ask(p.proposePrivatePurchase),
     exchangePrivate: ask(p.exchangePrivate),
+    buyStock,
+    sellStock,
+    shareControls: buyStock !== null && sellStock !== null ? buyStock : null,
   };
+}
+
+/** Phase 3 W2-F: a control's refusal with the hold asked FIRST, as the reducer and ingress ask the holds ahead of the
+ *  transaction's own authority -- the hold's sentence when it refuses this control's message, else the control's own
+ *  answer. Composition only: both halves are the authorities' answers, unchanged. */
+export function heldFirst(hold: string | null, own: () => string | null): string | null {
+  return hold ?? own();
 }

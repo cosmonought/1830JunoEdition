@@ -28,6 +28,8 @@ import { CLIENT_BUILD_ID, GAME_SERVER_URL, JUNO_RPC_ENDPOINT } from "./config";
 import { connectServerLink, type ServerLink } from "./utils/serverLink";
 // Phase 3 W3-I: the active room link's read-only queue, for the par prompt and the offer forms.
 import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
+import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
+import { boardRulesVersion } from "./utils/buildStamp"; // Phase 3 W2-I / OD-6 (AUD-01.07)
 /* #1223: the alarm #1207 argued for and nobody connected. The comparison lives in its own module so it is
    testable without a socket, a server or this file. */
 import { divergenceVerdict } from "./utils/divergenceWatch";
@@ -14216,6 +14218,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             </span>
           </>
         )}
+            {/* Phase 3 W2-I (AUD-02.08): the Delayed Auction's standing status -- owed, or cancelled by the first 5-train
+               (D-55) -- read off the shown board (`delayedAuctionStatus`), on hosted, sandbox and legacy tables alike.
+               Silent outside the variant, during the auction itself (its dashboard says so) and at GameEnd. */}
+            <DelayedAuctionStatusChip board={gameState} />
             {chatError && <span style={styles.roomStripError}>{chatError}</span>}
             {/* Design note #1083: the room's own error moved here with the room's name. It reports the same
                KIND of fact `chatError` does -- this room's connection is unhappy -- and the bar that used to
@@ -15372,6 +15378,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              the auction-complete flag lets the Overview mark a delayed auction as pending or done. */
           variants={tableVariants}
           auctionComplete={gameState?.private_auction_complete ?? null}
+          /* Phase 3 W2-I (AUD-11.03): the ended game is its own state, not "No live round" (the round type stays null --
+             #898 above). OD-6 (AUD-01.07): the table's pinned rules version beside the build stamp, from the live
+             board's own `rules_engine_version` (`null` on a legacy unpinned board, omitted with no board) -- the LIVE
+             board on purpose: the pin is the table's, while the game-over flag and the room strip's auction status
+             follow the board on screen (a scrub shows the scrubbed position's), as every other board fact does. */
+          gameOver={gameState?.current_round_type === "GameEnd"}
+          rulesEngineVersion={boardRulesVersion(liveState)}
         />
       )}
 

@@ -36,3 +36,12 @@ export function buildStampLabel(buildId: string): string {
 
 /** The label the Rules Reference header shows. */
 export const UI_BUILD_LABEL: string = buildStampLabel(UI_BUILD_ID);
+
+/** Phase 3 W2-I / OD-6 (AUD-01.07): the rules half of the Rules Reference's diagnostic line, read off the board --
+ *  its own `rules_engine_version` (the pin the `SetupGame` arm copied from the server-stamped message, #1551).
+ *  `undefined` with no board (the stamp shows the build alone); `null` for a board from a legacy unpinned log.
+ *  Never a client constant: the line says what THIS table is pinned to. */
+export function boardRulesVersion(board: { rules_engine_version?: number | null } | null | undefined): number | null | undefined {
+  if (!board) return undefined;
+  return typeof board.rules_engine_version === "number" ? board.rules_engine_version : null;
+}

@@ -46,9 +46,9 @@ observation, decision or process item.
 
 | Block | Rows | Dispositions |
 |---|---|---|
-| Audit items (`AUD-*`) | 167 | A 61 · B 45 · C 14 · D 22 · E 2 · F 23 · G 0 |
+| Audit items (`AUD-*`) | 167 | A 61 · B 46 · C 13 · D 22 · E 2 · F 23 · G 0 |
 | Flourish-ledger items the audit counts (`VF/*`: 47 PLAYTEST, 21 recorded owner decisions, 23 OPEN) | 91 | A 0 · B 17 · C 6 · D 47 · E 0 · F 21 · G 0 |
-| **Substantive audit items, total** | **258** | A 61 · B 62 · C 20 · D 69 · E 2 · F 44 · G 0 |
+| **Substantive audit items, total** | **258** | A 61 · B 63 · C 19 · D 69 · E 2 · F 44 · G 0 |
 | Execution-map-only NEW-SOURCE-FINDINGS (`P3-N*`) | 26 | A 23 · B 0 · C 0 · D 0 · E 1 · F 2 · G 0 |
 
 - **G = 0 among the audit's own items.** Where the audit and source disagree, the source evidence was unambiguous and the
@@ -435,6 +435,26 @@ baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to m
   train offer must be retyped. Carried unchanged from the W2-F integration: the duplicate emergency-waiting LOW, the two NITs, and the
   deferred scroll-to-card LOW.
 
+## W2-I slice status (2026-10-04)
+
+**Branch** `phase3/w2-i-status-visibility` @ `a18bac4` (code `c17e844`, independent-review fix `a18bac4`) from `phase3/wave3-i-v13cert-integration` @ `7a9b16b` (the current provisional
+baseline, unchanged). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). OD-6 RESOLVED
+(owner Option A, 2026-10-04). Presentation only; App regions R-ROOMSTRIP and R-RRMOUNT.
+
+- **AUD-01.07 (OD-6, C → B):** DECIDED — the opaque `game_id` is intentionally not displayed (LIVE-2 §7.2). The visible identity is
+  unchanged (room code / "Private game" / the legacy on-chain game number). The Rules Reference's existing build line reads
+  "Build <id> · Rules v13": the build from `CLIENT_BUILD_ID`, the version from the live board's own `rules_engine_version`
+  (`boardRulesVersion`; "Rules unpinned (legacy)" on an unpinned board; the build alone with no board). Nothing added to the top bar.
+- **AUD-02.08:** `DelayedAuctionStatusChip` in the room strip (hosted, sandbox and legacy tables): "Delayed auction owed" while
+  `private_auction_complete === false`; "Delayed auction cancelled" once the first 5-train's D-55 transition leaves every private
+  closed and ownerless (`utils/delayedAuctionStatus.ts`; board fields only, no log text). Silent outside the variant, during the
+  auction round (its dashboard says so) and at GameEnd. Review HIGH fixed in `a18bac4`: the B&O's first-train closure and the M&H
+  exchange also release their owner, so the test is EVERY private ownerless, not ANY.
+- **AUD-11.03:** at GameEnd the Rules Reference says "Game over" / "This game has ended" (context strip, Overview heading, kicker and
+  lead) instead of "No live round"; copy only, from the board's GameEnd; a live round type wins.
+- **Not taken:** W2-J, W2-M; the W2-F / W3-I follow-ups and the "Buy Trains from a Corporation form closes after Send" LOW stay
+  recorded where they are. Rules version and settlement unchanged.
+
 ## Scope and closing remark
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |
@@ -452,7 +472,7 @@ baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to m
 | **AUD-01.04** · A-14 · §1<br>Status-dock height fixed at 96 px because the dock's ResizeObserver never attaches. | [D] | CONFIRMED — `frontend/src/App.tsx`:3104-3123 (`useState(96)`, `useEffect(…, [])` returns while the ref is null; rooms render a gate first). | W1-I | **B** | — | — | Not in the draft map. Fix in the effect only (attach when the ref appears); no layout change. |
 | **AUD-01.05** · A-21 · §1<br>Hex click indicators are misplaced at any uiScale other than 1. | [D] | CONFIRMED — `frontend/src/App.tsx`:14949-14989; `styles/appStyles.ts`:2432-2443 (`position: fixed`, `left: clientX + 16` inside the zoomed root; no uiScale correction). | W1-F | **B** | — | — | — |
 | **AUD-01.06** · A-13 · §1<br>Tutorials reset on every AppShell mount. | [D] | CONFIRMED — `frontend/src/App.tsx`:1080-1083 (`replayTutorials` whenever the sandbox is in zero state; the default scenario is zero state). | W3-A | **A** | OD-5 (re-arm policy) | — | — |
-| **AUD-01.07** · — · §1<br>The game id is not shown anywhere. | [UX] | PARTIAL — hosted tables show the room code only (`frontend/src/App.tsx`:13748, 13776); `StockMarketRenderer.tsx`:844 shows "Game #…" on the legacy path. | W2-I | **C** | OD-6 | — | LIVE-2 §7.2 says the game id is never displayed, so showing it is a product decision. |
+| **AUD-01.07** · — · §1<br>The game id is not shown anywhere. | [UX] | PARTIAL — hosted tables show the room code only (`frontend/src/App.tsx`:13748, 13776); `StockMarketRenderer.tsx`:844 shows "Game #…" on the legacy path. | W2-I | **B** | OD-6 (RULED 2026-10-04, Option A) | — | LIVE-2 §7.2 says the game id is never displayed, so showing it was a product decision. OD-6 RULED (Option A): DECIDED — the opaque game_id is intentionally not displayed; the Rules Reference build line shows the build id + the board's rules version. C → B. |
 | **AUD-01.08** · — · §1<br>The "UI build #640" stamp is stale. | [UX] | CONFIRMED — `utils/buildStamp.ts`:21 `UI_BUILD_NOTE = 640`; `components/RulesReference.tsx`:5412-5415. `CLIENT_BUILD_ID` exists (`config.ts`:129-132). | W1-I | **A** | — | — | Where the build id appears is part of OD-6; replacing the stale constant with `CLIENT_BUILD_ID` is not gated. |
 | **AUD-01.09** · — · §1<br>Log export only through hidden Ctrl+Shift+L; a visible "Copy game log" button is wanted, including on the crash screen. | [UX] | CONFIRMED — `frontend/src/App.tsx`:9104-9144 (keydown → `copySandboxLog`, the only caller); `components/CrashScreen.tsx` has "Reload and replay" and "Copy error details" only. | W1-N | **B** | — | — | Not in the draft map. |
 

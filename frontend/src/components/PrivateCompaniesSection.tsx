@@ -22,7 +22,7 @@
 // messages go out through the shell's handlers, unchanged in meaning: `ProposePrivateTrade`, `AnswerPrivateTrade`
 // (off-turn, the consent-answer exemption), `RescindPrivateTrade`.
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ACTION_GREEN,
@@ -45,6 +45,8 @@ import {
 } from "../utils/stockRoundPrivateTrade";
 // Phase 3 W2-F (OD-1, U-6): the one waiting line every consent / discard prompt prints.
 import { WaitingOnLine } from "./WaitingOnLine";
+// Phase 3 W3-I (AUD-19.01 / AUD-03.11): the room link's queue, as the shell reads it.
+import { type LinkQueueView } from "../utils/useLinkQueue";
 
 export interface PrivateTradeIntent {
   privateId: number;
@@ -67,6 +69,10 @@ export interface PrivateCompaniesSectionProps {
   sessionReady: boolean;
   /** The viewer's last press has not landed yet (#1173). */
   actionInFlight?: boolean;
+  /** Phase 3 W3-I (AUD-19.01 / I-1): the room link's queue (`linkQueueView`). While the link still holds this tab's last
+   *  submission the section's controls take no second press, and the open form says why ("Queued — will send on
+   *  reconnect." while it waits for a socket). Absent / idle: as before. */
+  linkQueue?: LinkQueueView | null;
 }
 
 type Draft =
@@ -95,6 +101,7 @@ export function PrivateCompaniesSection({
   onRescind,
   sessionReady,
   actionInFlight = false,
+  linkQueue = null,
 }: PrivateCompaniesSectionProps) {
   const [draft, setDraft] = useState<Draft | null>(null);
 
@@ -113,9 +120,13 @@ export function PrivateCompaniesSection({
      viewer's own session rather than the board. The board's conditions are already in the model. */
   const busyReason = !sessionReady
     ? "Initialize the session key to act."
-    : actionInFlight
-      ? "Sending your last action — one moment."
-      : null;
+    : /* Phase 3 W3-I: the link's own sentence first -- the shell's latch has a backstop and can release while the link
+         still holds the submission, and "queued" says more than "sending". */
+      linkQueue?.blocked === true
+      ? linkQueue.reason
+      : actionInFlight
+        ? "Sending your last action — one moment."
+        : null;
 
   return (
     <section style={styles.section} aria-label="Private Companies" data-testid="private-companies-section">
@@ -278,6 +289,18 @@ function OfferForm({
         ? { privateId: card.privateId, seller: viewer, buyer: draft.recipient, price }
         : { privateId: card.privateId, seller: owner, buyer: viewer, price };
   const refusal = intent === null ? PRICE_ENTRY_PROMPT : (busyReason ?? proposalRefusal(intent));
+  /* Phase 3 W3-I (AUD-03.11 / R4): THE TYPED FORM IS KEPT. The Send used to close it (`setDraft(null)`) at the press, so
+     a proposal the link dropped -- or one refused -- took the typed recipient and price with it. The form now stays
+     until the proposal lands: an offer standing on the board withdraws every opener, and the section's own effect then
+     closes the draft (the `openersKey` reset above). Until then it is greyed by `busyReason` -- the shell's latch and
+     the link's queue -- and if the send does not land it is simply live again, with what was typed.
+     `sendLatch` covers the one window those cannot: a second press in the same task, before React has committed the
+     first (W2-C's `submitLatch`, for the same reason). Released after the next commit. */
+  const sendLatch = useRef(false);
+  const [, setSendCommit] = useState(0);
+  useEffect(() => {
+    sendLatch.current = false;
+  });
 
   /* Each recipient, at the price typed, says why they could not take it -- cash or the certificate limit. */
   const recipientNotes = useMemo(() => {
@@ -346,9 +369,10 @@ function OfferForm({
           disabled={refusal !== null}
           title={refusal ?? undefined}
           onClick={() => {
-            if (intent === null || refusal !== null) return;
+            if (intent === null || refusal !== null || sendLatch.current) return;
+            sendLatch.current = true;
+            setSendCommit((count) => count + 1);
             onPropose(intent);
-            setDraft(null);
           }}
         >
           Send Offer

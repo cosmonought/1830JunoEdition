@@ -35,6 +35,8 @@ import TrainPurchasePanel, {
   type TrainTradeProposal,
 } from "../components/TrainPurchasePanel";
 // Phase 3 W2-C: the shape of the train offer the bound sale authority is asked about (forwarded, never read here).
+// Phase 3 W3-I: the room link's queue view, forwarded to the two offer forms (never read here).
+import type { LinkQueueView } from "../utils/useLinkQueue";
 import type { TrainOfferIntent } from "../utils/offerAuthorityView";
 import type { TrainRouteDraft } from "../components/RoutePlannerPanel";
 import StationTokenRow from "../components/StationTokenRow";
@@ -1246,6 +1248,8 @@ export default function ContextualActionBar({
     proposalRefusal?: (privateId: number, price: string | number) => string | null;
     /** Phase 3 W2-C: the shell's in-flight latch (#1173), forwarded so the panel's submit cannot send twice. */
     actionInFlight?: boolean;
+    /** Phase 3 W3-I (AUD-19.01): the room link's queue (`linkQueueView`), forwarded to the panel's submit. */
+    linkQueue?: LinkQueueView | null;
   } | null;
   /** Design note #508: everything `TrainPurchasePanel` needs, as ONE object. These are not facts this bar
    *  reasons about -- it neither reads nor derives any of them -- they are a child's props passing through,
@@ -1261,6 +1265,8 @@ export default function ContextualActionBar({
     bankBlockedReason?: string | null;
     /** Phase 3 W2-C (AUD-09.02): the sale's authority, bound by the shell (`TrainPurchasePanel`'s `offerRefusal`). */
     offerRefusal?: (offer: TrainOfferIntent) => string | null;
+    /** Phase 3 W3-I (AUD-19.01): the room link's queue (`linkQueueView`), forwarded to the offer form. */
+    linkQueue?: LinkQueueView | null;
     onBuyFromBank: (tier: string) => void; // #1255: one train per press
     /** Design note #1326: the tiers for sale now; the panel derives the queue head when absent. */
     openTiers?: readonly DepotTier[];
@@ -4514,6 +4520,8 @@ export default function ContextualActionBar({
           // Phase 3 W2-C (AUD-09.03): the proposal's own authority, and the shell's latch on the submit.
           proposalRefusal={privatePurchase.proposalRefusal}
           actionInFlight={privatePurchase.actionInFlight ?? false}
+          // Phase 3 W3-I (AUD-19.01): the room link's queue on the submit.
+          linkQueue={privatePurchase.linkQueue ?? null}
           onClose={() => undefined}
         />
       )}
@@ -4547,6 +4555,8 @@ export default function ContextualActionBar({
           onProposeTrade={trainPurchase.onProposeTrade}
           // Phase 3 W2-C (AUD-09.02): the sale's authority on the roster and the offer form.
           offerRefusal={trainPurchase.offerRefusal}
+          // Phase 3 W3-I (AUD-19.01): the room link's queue on the offer form.
+          linkQueue={trainPurchase.linkQueue ?? null}
           labelForAddress={trainPurchase.labelForAddress}
           colorForAddress={trainPurchase.colorForAddress}
           /* Design note #785: still `condensed` when the BAR is condensed. The panel is no longer inside the

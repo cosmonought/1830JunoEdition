@@ -56,6 +56,8 @@ import { CONSENT_IN_FLIGHT_TITLE } from "../utils/offerConsentView";
 import type { DieselExchangeOffer } from "../gameEngine/dieselExchange";
 // Phase 3 W2-F (OD-1, U-6): the one waiting line every consent / discard prompt prints.
 import { WaitingOnLine } from "./WaitingOnLine";
+// Phase 3 W3-I (AUD-19.01): the room link's queue, as the shell reads it.
+import { type LinkQueueView } from "../utils/useLinkQueue";
 export type { DieselExchangeOffer };
 
 /** The subset of a corporation both sections need. */
@@ -215,6 +217,10 @@ export interface TrainPurchasePanelProps {
    *  stands (`blockedReason` is asked first). Absent, the section states no rule of its own: only the hold greys, and the
    *  dispatch is judged at the door. */
   offerRefusal?: (offer: TrainOfferIntent) => string | null;
+  /** Phase 3 W3-I (AUD-19.01 / I-1): the room link's queue (`linkQueueView`). While the link still holds this tab's
+   *  last submission the offer form does not accept a second press, and while that submission waits for a socket the
+   *  form says so ("Queued — will send on reconnect."). Absent / idle: the form is exactly as before. */
+  linkQueue?: LinkQueueView | null;
   /** Renders a wallet as a readable name. */
   labelForAddress: (address: string) => string;
   /* ==================================================================
@@ -264,6 +270,7 @@ export function TrainPurchasePanel({
   discardReceipt = null,
   onProposeTrade,
   offerRefusal,
+  linkQueue = null,
   labelForAddress,
   colorForAddress,
   defaultCorporateOpen = false,
@@ -691,8 +698,10 @@ export function TrainPurchasePanel({
           ...(selection.gilded === null ? {} : { gilded: selection.gilded }),
         })
       : null;
+  /* Phase 3 W3-I: the link still holding the last submission is a reason not to send a second, said in its own words. */
+  const linkHeld = linkQueue?.blocked === true;
   const canPropose =
-    canTrade && !!selectedSeller && offerProblem === null && typeof offerPrice === "string";
+    canTrade && !!selectedSeller && offerProblem === null && typeof offerPrice === "string" && !linkHeld;
 
   return (
     <div
@@ -1603,6 +1612,7 @@ export function TrainPurchasePanel({
                     }}
                     title={
                       offerProblem ??
+                      (linkHeld ? linkQueue?.reason ?? undefined : undefined) ??
                       (samePresident
                         ? "You preside over both corporations, so this completes immediately."
                         : `Ask ${selectedSeller.president ? labelForAddress(selectedSeller.president) : "the seller"} to accept.`)
@@ -1619,6 +1629,12 @@ export function TrainPurchasePanel({
                   </button>
                 </div>
                 {offerProblem && <p style={styles.problem}>{offerProblem}</p>}
+                {/* Phase 3 W3-I (AUD-19.01): the last submission is still on the link -- no second press, and why. */}
+                {!offerProblem && linkHeld && (
+                  <p style={styles.note} role="status" data-testid="train-offer-link-queued">
+                    {linkQueue?.reason}
+                  </p>
+                )}
                 {samePresident && !offerProblem && (
                   <p style={styles.note}>
                     You are President of both corporations, so this sale completes immediately --

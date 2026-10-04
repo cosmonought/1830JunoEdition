@@ -26,6 +26,8 @@ import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate";
 
 import { CLIENT_BUILD_ID, GAME_SERVER_URL, JUNO_RPC_ENDPOINT } from "./config";
 import { connectServerLink, type ServerLink } from "./utils/serverLink";
+// Phase 3 W3-I: the active room link's read-only queue, for the par prompt and the offer forms.
+import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
 /* #1223: the alarm #1207 argued for and nobody connected. The comparison lives in its own module so it is
    testable without a socket, a server or this file. */
 import { divergenceVerdict } from "./utils/divergenceWatch";
@@ -4429,6 +4431,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  A REF RATHER THAN STATE, for the reason every other atom in this file has one (#265/#537a): the dispatch
    *  reads it inside an awaited call, and a closure over committed state would be a render behind. */
   const serverLinkRef = useRef<ServerLink | null>(null);
+  /* Phase 3 W3-I (AUD-19.01 / AUD-02.05 / AUD-02.06 / AUD-03.11): THE LINK'S QUEUE, READ ONCE, OUTSIDE THE DRAIN. The
+     active room link's read-only queue state (`serverLink.ts`), through one hook -- never touching the link callbacks.
+     The par prompt reads it raw (it needs the landing signal); the offer forms read its view (still held / queued). On
+     the Firestore / hotseat path there is no room link and both are idle. */
+  const linkQueue = useLinkQueue();
+  const linkQueueNote = useMemo(() => linkQueueView(linkQueue), [linkQueue]);
   /* ==================================================================
       DESIGN NOTE 1218: THE GENERIC MESSAGE WAS EATING THE SPECIFIC ONE
      ==================================================================
@@ -13925,6 +13933,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         /* DA-6 (DA-F8b): the round the handoff really opens -- the slot the auction occupies (#905). */
         nextStockRound={gameState?.macro_round_number ?? 1}
         delayedAuction={tableVariants.delayedAuction === true}
+        /* Phase 3 W3-I (AUD-02.05 / AUD-02.06): the room link's queue -- no second par press while the link holds the
+           first, "queued" while it waits for a socket, and "not reached the table yet" only after the link says the
+           press did not land. Absent on the path with no room link (the prompt's own timers, as before). */
+        linkQueue={GAME_SERVER_URL ? linkQueue : undefined}
       />
 
       {/* Design note #416: blocking, for the same reason the B&O prompt is -- a floated corporation owes its
@@ -14502,6 +14514,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 // Phase 3 W2-C (AUD-09.03): the proposal's own authority, then the in-flight latch on the submit.
                 proposalRefusal: privateOfferRefusal,
                 actionInFlight,
+                // Phase 3 W3-I (AUD-19.01): the room link's queue on the submit.
+                linkQueue: linkQueueNote,
               }
             : null
         }
@@ -14615,6 +14629,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 bankBlockedReason: dockHold.buyTrainFromBank,
                 // Phase 3 W2-C (AUD-09.02): the sale's own authority, on the roster and the offer form.
                 offerRefusal: trainOfferRefusalFor,
+                // Phase 3 W3-I (AUD-19.01): the room link's queue on the offer form.
+                linkQueue: linkQueueNote,
                 onBuyFromBank: handleBuyTrainsFromBank,
                 openTiers, // #1326
                 /* ==================================================================
@@ -14956,6 +14972,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     // Design note #1173: the fourth condition on #32's single flag, for the window between a
                     // press and the snapshot that proves it landed.
                     actionInFlight={actionInFlight}
+                    // Phase 3 W3-I (AUD-19.01 / AUD-03.11): the room link's queue, for the Private Companies offer form.
+                    linkQueue={linkQueueNote}
                     connectedAddress={viewerAddress}
                     // Design note #31 in that file: powers the front-face
                     // operating snapshot -- train limit and which tier is

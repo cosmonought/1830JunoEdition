@@ -98,6 +98,8 @@ import { showsCurseBesideName } from "../utils/carcosaCurse";
 import CarcosaMark from "./CarcosaMark";
 import { BO_LOCKED_CARD_NOTE } from "../gameEngine/gameVariants";
 // 6.5-B (K-01): the Stock Round's player <-> player private-company trade surface.
+// Phase 3 W3-I: the room link's queue view, forwarded to the Private Companies section.
+import { type LinkQueueView } from "../utils/useLinkQueue";
 import { PrivateCompaniesSection, type PrivateTradeIntent } from "./PrivateCompaniesSection";
 import type { PrivateTradeSectionModel } from "../utils/stockRoundPrivateTrade";
 // Phase 3 W2-B (AUD-03.07): the must-sell banner's shape (the shell computes it from the authority's debt).
@@ -300,6 +302,10 @@ export interface StockRoundPanelProps {
    *  as one banner above the roster; the sentence is the exact one that greys the Pass and the Buy controls, which
    *  stay governed by `purchaseBlockFor` and the bar's `passDisabledReason` as before. Absent reads as nothing owed. */
   mustSell?: MustSellBanner | null;
+  /** Phase 3 W3-I (AUD-19.01 / AUD-03.11): the room link's queue (`linkQueueView`), forwarded to the Private Companies
+   *  section only -- its offer form shows "Queued — will send on reconnect." and takes no second press while the link
+   *  holds the last submission. Absent / idle: as before. */
+  linkQueue?: LinkQueueView | null;
 }
 
 // Design note #8: the corporation roster -- a card each, so "who controls what, and what would it
@@ -3215,6 +3221,7 @@ export function StockRoundPanel({
   outlook,
   actionsLockedReason,
   actionInFlight = false,
+  linkQueue = null,
   roundType,
   lockedCompanyIds,
   transaction,
@@ -3431,6 +3438,7 @@ export function StockRoundPanel({
             onRescind={onRescindPrivateTrade}
             sessionReady={sessionReady}
             actionInFlight={actionInFlight}
+            linkQueue={linkQueue}
           />
         )}
 

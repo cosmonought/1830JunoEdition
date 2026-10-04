@@ -259,6 +259,7 @@ import {
   type TrainTradeProposal,
 } from "./components/TrainPurchasePanel";
 import WaterfallAuctionDashboard from "./components/WaterfallAuctionDashboard";
+import { contestBarPassSentence } from "./utils/auctionDashboardView"; // Phase 3 W1-B (K-15)
 import StockRoundPanel from "./components/StockRoundPanel";
 import {
   useGameStatePolling,
@@ -8995,7 +8996,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       WaterfallBidHigher: "the last bid",
       WaterfallPass: "the last pass",
       WaterfallMiniAuctionRaise: "the last raise",
-      WaterfallMiniAuctionPass: "the last drop-out",
+      // Phase 3 W1-B (K-15): a contest pass is not a drop-out -- the bidder stays in with the bid standing.
+      WaterfallMiniAuctionPass: "the last contest pass",
       SetBoPar: "the B&O's par price",
       ExchangePrivate: "the last private company exchange",
       OpenStockRound: "opening the Stock Round",
@@ -13433,7 +13435,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        greyed with the hold's own sentence instead of refused after the click. */
     privateTradeHold ??
     (isWaterfallPhase && waterfallState?.mini_auction
-      ? "A mini-auction is running — use Drop out on the highlighted company card to leave it."
+      ? contestBarPassSentence(waterfallState, viewerAddress)
       : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either.
            Ahead of the train obligation because the two cannot both apply -- one is a Stock
            Round debt and the other an Operating Round one -- and reading the seat's debt
@@ -14414,7 +14416,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 // a live chain advances its own round, and a client button
                 // there would be a lie.
                 onProceedToStockRound={sandbox ? handleProceedToStockRound : undefined}
-                sessionReady={controlsEnabled}
+                /* Phase 3 W1-B (AUD-02.04, H-04): the in-flight latch covers the card-face controls too, so a
+                   double-click cannot send twice. */
+                sessionReady={controlsEnabled && !actionInFlight}
                 onBuyLowest={handleWaterfallBuyLowest}
                 onBidHigher={handleWaterfallBidHigher}
                 onMiniAuctionRaise={handleWaterfallMiniAuctionRaise}

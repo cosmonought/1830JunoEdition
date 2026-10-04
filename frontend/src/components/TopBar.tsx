@@ -100,6 +100,7 @@ export default function TopBar({
   roomContext,
   roomName = null,
   onLeaveGame,
+  onCopyGameLog,
   audio,
 }: {
   /** Room identity / sandbox controls, owned by `AppShell` -- see design
@@ -110,6 +111,9 @@ export default function TopBar({
    *  batch is removing, not something to reintroduce one line up. */
   roomName?: string | null;
   onLeaveGame?: () => void;
+  /** W1-N / AUD-01.09: copies the table's action log (the shell's `copySandboxLog`, the same export as Ctrl+Shift+L,
+   *  which was its only way in). Absent outside a room, where there is no log -- and then there is no button. */
+  onCopyGameLog?: () => void;
   /** ==================================================================
    *   DESIGN NOTE 1009: STATE FROM THE SHELL, LAYOUT FROM THE HEADER
    *  ==================================================================
@@ -237,6 +241,20 @@ export default function TopBar({
       {/* LIVE-2E: who this browser plays as, and its profile actions (link a device, rotate the recovery key, sign
           out). With the player-only controls, before the wallet cluster that can cost money. */}
       <ProfileMenu />
+
+      {/* W1-N / AUD-01.09: the log export, visible. It writes nothing to the room, so it sits with the player-only
+          controls, before the wallet cluster; the shell says in the Activity Log whether it reached the clipboard. */}
+      {onCopyGameLog && (
+        <button
+          type="button"
+          style={styles.topBarButton}
+          onClick={onCopyGameLog}
+          data-testid="top-bar-copy-game-log"
+          title="Copy this table's action log to the clipboard, to attach to a report (also Ctrl+Shift+L)."
+        >
+          Copy game log
+        </button>
+      )}
 
       {/* ==================================================================
            DESIGN NOTE 1119: THE ENV VAR WAS THE PART ONLY A DEVELOPER COULD USE

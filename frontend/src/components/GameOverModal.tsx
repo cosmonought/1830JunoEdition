@@ -207,6 +207,11 @@ export function GameOverModal({
   if (!reason) return null;
 
   const viewer = standings.find((row) => row.address === viewerAddress) ?? null;
+  /* W1-N / H-06 (AUD-12.04): WHO WON is every row ranked first. `rankPlayers` already gives tied players one shared
+     rank and is unchanged; only the badge read `isWinner`, which names a single champion (`sorted[0]`) and so
+     crowned whichever tied player happened to sort first. */
+  const isRankedFirst = (row: PlayerStanding) => row.rank === 1;
+  const sharedFirst = standings.filter(isRankedFirst).length > 1;
 
   /* Design note #1: the verdict is about the VIEWER, and the two headline
      cases are not opposites -- a player can be neither. A spectator, or a
@@ -216,8 +221,8 @@ export function GameOverModal({
     ? null
     : viewer.isBankrupt
       ? { text: "You Went Bankrupt!", style: styles.verdictLost }
-      : viewer.isWinner
-        ? { text: "You Won!", style: styles.verdictWon }
+      : isRankedFirst(viewer)
+        ? { text: sharedFirst ? "You Won! (tied for 1st)" : "You Won!", style: styles.verdictWon }
         : { text: `You came in ${ordinal(viewer.rank)} place.`, style: styles.verdictPlaced }; // #1430
 
   return (
@@ -313,7 +318,7 @@ export function GameOverModal({
                   <CarcosaMark meaning="president" size={13} />
                 )}
                 {isViewer && <span style={styles.tagYou}>YOU</span>}
-                {row.isWinner && <span style={styles.tagWinner}>WINNER</span>}
+                {isRankedFirst(row) && <span style={styles.tagWinner}>WINNER</span>}
                 {row.isBankrupt && <span style={styles.tagBankrupt}>BANKRUPT</span>}
               </span>
               <span style={styles.cellNum}>${row.cash}</span>

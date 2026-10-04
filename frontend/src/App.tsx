@@ -593,8 +593,9 @@ import {
    struck out, which is what makes an undo unable to re-roll the die. */
 import { seedAlreadyRolled, turnSeedKey } from "./utils/turnSeed";
 import {
-  AUTO_CLOSE_MS,
+  autoCloseRemainingMs,
   formatCountdown,
+  gameEndedAtFromLog,
   settleRoomPayout,
 } from "./utils/closeRoomPayout";
 import {
@@ -750,6 +751,8 @@ import {
 } from "./gameEngine/privateExchange";
 import { effectiveActions, undoReachFor } from "./gameEngine/logRevert";
 import { buildSandboxLogExport } from "./utils/logExport";
+// W1-N / AUD-01.09: the same export, reachable from the crash screen once the shell is gone.
+import { setGameLogExportSource } from "./utils/gameLogExportSource";
 import { watcherTrainDrafts } from "./utils/watcherRouteChips";
 import { autoSkipExit } from "./gameEngine/autoSkipExit";
 // Design note #1247: the accepted offer's purchase, owed by the board and sent here only where no server can.
@@ -2138,8 +2141,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* Design note #899: mirrored for the closure handler, which runs inside a dispatch. */
   finalStandingsRef.current = finalStandings;
 
-  /** Design note #899: the room's closure, and whether anything is still counting down toward it. */
-  const roomClosed = gameState?.room_closed === true;
+  /** Design note #899: the room's closure, and whether anything is still counting down toward it.
+   *  W1-N / A-11 (AUD-18.03): read from the LIVE board, never the round scrubber's snapshot -- an earlier round
+   *  was open, and reading it there put "Close Room" back on a closed room while scrubbing. */
+  const roomClosed = liveState?.room_closed === true;
 
   /* ==================================================================
       DESIGN NOTE 899: EVERY CLIENT COUNTS DOWN, AND THAT IS THE POINT
@@ -2148,7 +2153,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      person the countdown was meant to route around. So all of them count, all of them dispatch, and the
      reducer takes the first -- #546's rule, which argued this before the countdown existed.
      THE DEADLINE IS DERIVED FROM WHEN THE GAME ENDED, not from when this effect mounted. A player who opens
-     the tab ten minutes late must not restart the clock, and one who refreshes must not either. */
+     the tab ten minutes late must not restart the clock, and one who refreshes must not either.
+     W1-N / A-10 (AUD-18.02): and "when the game ended" is the SERVER's stamp on the ending entry
+     (`gameEndedAtFromLog`, the terminal seal's `at`), not this tab's `Date.now()` at first sight -- which is what
+     restarted the clock on every refresh. Re-read whenever the live board moves (only `CloseRoom` can, after the
+     end). The log ref is read inside the effect, at run time: it is declared further down this component. */
   const [gameEndedAt, setGameEndedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
@@ -2157,8 +2166,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       setGameEndedAt(null);
       return;
     }
-    setGameEndedAt((current) => current ?? Date.now());
-  }, [gameEndReason]);
+    setGameEndedAt(gameEndedAtFromLog(sandboxLogRef.current));
+  }, [gameEndReason, liveState]);
 
   useEffect(() => {
     if (!gameEndReason || roomClosed || gameEndedAt === null) return undefined;
@@ -2166,8 +2175,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return () => window.clearInterval(tick);
   }, [gameEndReason, roomClosed, gameEndedAt]);
 
-  const autoCloseRemaining =
-    gameEndedAt === null || roomClosed ? null : Math.max(0, gameEndedAt + AUTO_CLOSE_MS - now);
+  const autoCloseRemaining = autoCloseRemainingMs(gameEndedAt, roomClosed, now);
 
   const closeRoom = useCallback((trigger: "manual" | "timer") => {
     /* The trigger is stamped on a ref rather than carried in the message, and deliberately: it describes
@@ -9143,6 +9151,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     return () => window.removeEventListener("keydown", onKey);
   }, [isInSandboxRoom, copySandboxLog]);
 
+  /* W1-N / AUD-01.09: the crash screen's "Copy game log" -- the same export `copySandboxLog` builds, read from the
+     refs at call time. Set on entering and leaving a room, and NOT cleared on unmount: a render crash unmounts this
+     shell, and that is exactly when the crash screen needs it (`utils/gameLogExportSource.ts`). */
+  useEffect(() => {
+    setGameLogExportSource(
+      isInSandboxRoom
+        ? () => JSON.stringify(buildSandboxLogExport(sandboxLogRef.current, sandboxRoomRef.current), null, 2)
+        : null,
+    );
+  }, [isInSandboxRoom]);
+
   /* handleUndoToRoundStart is gone with the second button; undoToRoundStart stays exported and tested.
      See docs/ai_architecture/state_machine.md - App.tsx #592 */
 
@@ -12780,6 +12799,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     setSandboxAppliedCount(0);
   }, [roomLost]);
 
+  /** W1-N / A-12 (AUD-18.01): leave the table AND go to the Lobby -- Game Over's "Leave game". Leaving alone drops the
+   *  player on the sandbox gate ("Open a room or join one"), a screen nobody at a finished table asked for; the
+   *  waiting room's and the lost-table screen's exits already pair the two in this order. */
+  const handleLeaveTableToLobby = useCallback(() => {
+    handleLeaveSandboxRoom();
+    onLeaveGame();
+  }, [handleLeaveSandboxRoom, onLeaveGame]);
+
   /* #1415: the house rules are chosen on the host's setup card before the table exists and are frozen after. What
      the host can still do in the anteroom is the table itself: remove a joiner, hand the host role on, make it
      public or private, give it a new code, cancel it, and start it. The server checks it is the host asking and
@@ -13650,8 +13677,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           if (file) playVariantCue(file, sfxEnabledRef.current, { uncapped: true });
         }}
         ceremonySoundsReady={ceremonySoundsReady}
-        /* #1420: "Leave Game" beside "View final board" -- the same door the title bar's back-arrow is. */
-        onLeaveGame={handleLeaveSandboxRoom}
+        /* #1420: "Leave Game" beside "View final board" -- the same door the title bar's back-arrow is.
+           W1-N / A-12: and that door is the Lobby -- leave the table, then the game. */
+        onLeaveGame={handleLeaveTableToLobby}
         /* Design note #899: no button once it is closed -- there is nothing left to do, and a control that
            silently no-ops is worse than one that is not there. */
         onCloseRoom={roomClosed ? null : () => closeRoom("manual")}
@@ -13675,6 +13703,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          is worse than chat saying it is broken. */}
       <TopBar
         onLeaveGame={onLeaveGame}
+        // W1-N / AUD-01.09: the visible log export -- the same `copySandboxLog` as Ctrl+Shift+L; only in a room.
+        onCopyGameLog={isInSandboxRoom ? copySandboxLog : undefined}
         // Design note #1009: state from the shell, layout from the header.
         audio={audioControls}
         roomContext={

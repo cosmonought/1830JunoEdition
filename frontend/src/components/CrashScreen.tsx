@@ -1,6 +1,8 @@
 import React from "react";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 import { RADIUS } from "../styles/typography";
+// W1-N / AUD-01.09: the game log, which the shell registered before it went down. Dependency-free by design.
+import { copyGameLogExport, hasGameLogExport, type GameLogCopyOutcome } from "../utils/gameLogExportSource";
 
 /* ==================================================================
  *  DESIGN NOTE 761: A WHITE SCREEN IS A REPORT NOBODY CAN FILE
@@ -34,7 +36,22 @@ import { RADIUS } from "../styles/typography";
 interface CrashScreenState {
   error: Error | null;
   info: string | null;
+  /** W1-N: what the last "Copy game log" press did, said in words beside the button. */
+  logCopy: GameLogCopyOutcome | null;
 }
+
+/* ==================================================================
+    W1-N / AUD-01.09: THE LOG IS THE OTHER HALF OF THE REPORT
+   ==================================================================
+   The stack says WHERE render broke; the action log says WHAT BOARD it broke on, and replays it. Before this, the
+   only way to export the log was Ctrl+Shift+L inside the shell -- unmounted by the time this screen shows. The shell
+   leaves its export registered (`utils/gameLogExportSource.ts`), so in a room this screen offers the same export
+   the top bar's "Copy game log" does. Outside a room there is no log, and no button. */
+const LOG_COPY_SAID: Record<GameLogCopyOutcome, string> = {
+  copied: "Game log copied to the clipboard.",
+  console: "The clipboard was unavailable; the game log was printed to the browser console.",
+  unavailable: "There is no game log to copy in this window.",
+};
 
 export class CrashScreen extends React.Component<
   { children?: React.ReactNode },
@@ -42,7 +59,7 @@ export class CrashScreen extends React.Component<
 > {
   constructor(props: { children?: React.ReactNode }) {
     super(props);
-    this.state = { error: null, info: null };
+    this.state = { error: null, info: null, logCopy: null };
   }
 
   static getDerivedStateFromError(error: Error): Partial<CrashScreenState> {
@@ -59,7 +76,8 @@ export class CrashScreen extends React.Component<
   }
 
   render() {
-    const { error, info } = this.state;
+    const { error, info, logCopy } = this.state;
+    const logAvailable = hasGameLogExport();
     if (!error) return this.props.children ?? null;
 
     const report = [
@@ -128,7 +146,34 @@ export class CrashScreen extends React.Component<
           >
             Copy error details
           </button>
+          {logAvailable && (
+            <button
+              type="button"
+              data-testid="crash-copy-game-log"
+              onClick={() => {
+                void copyGameLogExport().then((outcome) => this.setState({ logCopy: outcome }));
+              }}
+              style={{
+                padding: "8px 16px",
+                borderRadius: RADIUS.card,
+                border: "1px solid #4a4a4a",
+                backgroundColor: "#1c1c1c",
+                color: "#c8c6c0",
+                fontSize: "14px",
+                fontFamily: "inherit",
+                cursor: "pointer",
+              }}
+            >
+              Copy game log
+            </button>
+          )}
         </div>
+        {/* A live region present before it has anything to say, so the outcome is announced when it arrives. */}
+        {logAvailable && (
+          <p role="status" style={{ margin: logCopy ? "-6px 0 16px" : 0, color: "#a8a6a0", fontSize: "13px" }}>
+            {logCopy ? LOG_COPY_SAID[logCopy] : ""}
+          </p>
+        )}
 
         <pre
           style={{

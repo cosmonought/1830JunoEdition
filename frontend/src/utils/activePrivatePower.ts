@@ -239,6 +239,41 @@ export interface ActivePowerFlowInput {
 }
 
 /* ==================================================================
+    PHASE 3 W1-M (AUD-06.05 / A-5): THE FREE STATION SURVIVES A RELOAD
+   ==================================================================
+   A reload between the D&H's tile lay and its free station emptied `usedPrivateAbilities` (a `useState` in the
+   shell), so `dhOwed` below went false and the free station -- still legal on the board for the rest of that
+   operating turn -- became unreachable. The UI never read `dh_station_pending`, the reducer's own turn-scoped
+   record of the window (gameState.ts #1660; written by the `LayTile` arm only when the D&H's lay succeeds,
+   cleared at the turn change, on leaving the Operating Round, and by the placement itself).
+
+   SO THE BOARD IS ASKED TOO, narrowly: the window names the corporation that OWNS the (open) D&H, and the viewer
+   is that corporation's president. That is a READ of an authoritative fact, not a second rule -- whether the
+   placement is legal is still `dhStationRefusal`'s question when it is sent. The local set, `dhStationForfeited`
+   and the `dhForfeited` lapse keep exactly their meaning (the DH-3 / SI invariant): a station placed, a power
+   lapsed, or a placement forfeited IN THIS TAB is not re-offered, and with no `dh_station_pending` on the board
+   nothing changes at all.
+
+   KNOWN LIMIT, deliberately not papered over: the forfeit is a local decision with no message, so the reducer
+   never closes the window for it. A player who forfeits and then reloads IN THE SAME TURN is asked again -- and
+   the board agrees the free station is still legal then, so nothing the authority has closed is resurrected.
+   Making the forfeit survive a reload needs an authoritative forfeit (a reducer change), out of W1-M's scope. */
+export function dhStationOwedByBoard(
+  state: GameStateResponse | null,
+  dhPrivateId: number,
+  viewerAddress: string | null,
+): boolean {
+  const pendingFor = state?.dh_station_pending ?? null;
+  if (pendingFor === null || viewerAddress === null) return false;
+  const dh = state?.private_companies?.find((row) => row.private_id === dhPrivateId);
+  if (!dh || dh.closed) return false;
+  const owner = dh.owner_protocol_id ?? null;
+  if (owner === null || owner !== pendingFor) return false;
+  const corporation = state?.public_companies?.find((entry) => entry.company_id === owner);
+  return !!corporation && corporation.president === viewerAddress;
+}
+
+/* ==================================================================
     DESIGN NOTE 849: THE MODAL IS DERIVED, NOT ONLY OPENED
    ==================================================================
    SPECIFIED: "Once a player has clicked the 'Lay Track on F16' button and completed that action, the modal
@@ -279,12 +314,10 @@ export function deriveActivePowerFlow(input: ActivePowerFlowInput): PowerFlow | 
   /* THE STANDING OBLIGATION FIRST. A D&H lay with the station unresolved raises the modal whether or not
      anybody asked for it: the game is waiting on an answer, and #818 exists because a player who is not
      asked does not know they are deciding. */
-  const dhLaid = usedAbilities.has("dh-tile");
-  const dhOwed =
-    dhLaid &&
-    dhStation === "pending" &&
-    !dhForfeited &&
-    ownsPrivateByCorporation(state, dhPrivateId, actingProtocolId);
+  const localOwed =
+    usedAbilities.has("dh-tile") && ownsPrivateByCorporation(state, dhPrivateId, actingProtocolId);
+  const boardOwed = dhStationOwedByBoard(state, dhPrivateId, viewerAddress);
+  const dhOwed = (localOwed || boardOwed) && dhStation === "pending" && !dhForfeited;
   const key: PowerAbilityKey | null = dhOwed ? "dh-tile" : request;
   if (key === null) return null;
 
@@ -320,7 +353,9 @@ export function deriveActivePowerFlow(input: ActivePowerFlowInput): PowerFlow | 
       state?.public_companies.find((entry) => entry.company_id === actingProtocolId)?.ticker ??
       "This corporation",
     hexLabel: hex.hexLabel,
-    layDone: usedAbilities.has(key),
+    /* W1-M: on a reloaded board the local set is empty, but a standing `dh_station_pending` IS the record that
+       this turn's D&H lay happened -- the reducer writes it only when that lay succeeds. */
+    layDone: usedAbilities.has(key) || (key === "dh-tile" && boardOwed),
     station: key === "dh-tile" ? dhStation : "none",
   });
 }

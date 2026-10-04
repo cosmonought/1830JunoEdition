@@ -299,6 +299,52 @@ describe("deriveActivePowerFlow (design notes #818/#849/#871)", () => {
     ).toBeNull();
   });
 
+  /* Phase 3 W1-M (AUD-06.05): the board's `dh_station_pending` raises the obligation after a reload, when the
+     local set is empty. `phase3W1MDhStationReload.test.ts` plays the same thing through a room. */
+  describe("the board's window survives a reload (W1-M)", () => {
+    const pending = (over: Partial<GameStateResponse> = {}) =>
+      state({
+        current_round_type: "OperatingRound",
+        private_companies: [priv({ private_id: DH, owner_protocol_id: PRR })],
+        public_companies: [{ ...pub(PRR, "PRR"), president: ALICE } as PublicCompanyState],
+        dh_station_pending: PRR,
+        ...over,
+      });
+
+    it("offers the station to the president with an empty local set, the lay shown done", () => {
+      const flow = deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR });
+      expect(flow!.abilityKey).toBe("dh-tile");
+      expect(flow!.steps.map((step) => [step.key, step.done, step.enabled])).toEqual([
+        ["lay", true, false],
+        ["station", false, true],
+      ]);
+    });
+
+    it("not to anybody else", () => {
+      expect(deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR, viewerAddress: BOB })).toBeNull();
+      expect(deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR, viewerAddress: null })).toBeNull();
+    });
+
+    it("keeps the forfeit, the placement and the lapse exactly as they were", () => {
+      expect(
+        deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR, dhStationForfeited: true }),
+      ).toBeNull();
+      expect(
+        deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR, usedAbilities: new Set(["dh-token"]) }),
+      ).toBeNull();
+      expect(deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR, dhForfeited: true })).toBeNull();
+    });
+
+    it("changes nothing when the window is absent or names another corporation", () => {
+      expect(
+        deriveActivePowerFlow({ ...base, state: pending({ dh_station_pending: undefined }), actingProtocolId: PRR }),
+      ).toBeNull();
+      expect(
+        deriveActivePowerFlow({ ...base, state: pending({ dh_station_pending: NYC }), actingProtocolId: PRR }),
+      ).toBeNull();
+    });
+  });
+
   it("lets the standing obligation win over a different request", () => {
     /* THE ORDERING, which the extracted function states in one line and which no scan could execute: an
        unresolved D&H station outranks whatever chip was last pressed, because the game is WAITING. */

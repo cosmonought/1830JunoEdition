@@ -283,7 +283,8 @@ describe("one click opens the card, and the card is the whole transaction", () =
     expect(card).toContain("onPropose(entry.private_id, price)");
     // Phase 3 W2-C: and latched -- the shell's in-flight latch greys the submit too.
     expect(card).toContain("disabled={submitDead}");
-    expect(CODE).toContain('const submitDead = priceProblem !== null || actionInFlight || typeof wirePrice !== "string";');
+    // Phase 3 W3-I (AUD-19.01): and while the room link still holds the last submission.
+    expect(CODE).toContain('const submitDead = priceProblem !== null || actionInFlight || linkHeld || typeof wirePrice !== "string";');
   });
 
   it("has exactly one submit in the file", () => {

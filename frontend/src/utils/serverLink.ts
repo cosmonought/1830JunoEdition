@@ -217,6 +217,63 @@ export interface ServerLinkOptions {
   routeEnvironment?: { pageOrigin: string; bundleBase: string };
 }
 
+/* ==================================================================
+    PHASE 3 W3-I (AUD-19.01 / AUD-02.05 / AUD-02.06): WHAT THIS LINK STILL HOLDS, READ-ONLY
+   ==================================================================
+   A form could not tell that its submission was still on this link -- queued while the socket was down, or sent and
+   not yet answered -- so the shell's latch backstop (#1173) or the par prompt's hold could release while the first send
+   was still going to land, and a second press became a second message the authority refuses. This is the queue's
+   state as a READ: how many submissions are waiting for a socket (`unsent`), how many are not settled at all
+   (`unsettled`), and the last settlement's outcome (`applied`: the server allocated an index -- the landing signal --
+   or `not-applied`) with a counter, so a caller can tell "my press settled" from "something settled earlier".
+   It changes nothing about the queue: the same items, sent and settled exactly as before. No caller can submit,
+   cancel or reorder through it. */
+export interface LinkQueueState {
+  /** Submissions waiting for a socket (queued while the link was down; sent after the next hello). */
+  readonly unsent: number;
+  /** Every submission not yet settled -- unsent, on the wire, or still being committed. */
+  readonly unsettled: number;
+  /** How many submissions this link has settled, in total. */
+  readonly settled: number;
+  /** The last settlement: `applied` (an index was allocated -- the entry is in the log) or `not-applied`. */
+  readonly lastOutcome: "applied" | "not-applied" | null;
+}
+
+export const IDLE_LINK_QUEUE: LinkQueueState = Object.freeze({ unsent: 0, unsettled: 0, settled: 0, lastOutcome: null });
+
+/* The ACTIVE link's queue, for the shell's one hook (`useLinkQueue`) -- outside the drain, so reading it never touches
+   the link callbacks. The active link is the one that most recently PUBLISHED (its first submission, flush or
+   settlement makes it so); a link that ends -- closed, or ending itself on an incompatible room, lost access or a client
+   update -- returns the store to idle. */
+let activeQueue: LinkQueueState = IDLE_LINK_QUEUE;
+let activeOwner: object | null = null;
+const activeListeners = new Set<() => void>();
+const publishActive = (owner: object, state: LinkQueueState | null) => {
+  let next: LinkQueueState;
+  if (state === null) {
+    if (activeOwner !== owner) return;
+    activeOwner = null;
+    next = IDLE_LINK_QUEUE;
+  } else {
+    activeOwner = owner;
+    next = state;
+  }
+  if (next === activeQueue) return;
+  activeQueue = next;
+  for (const listener of Array.from(activeListeners)) listener();
+};
+/** The active link's queue state (the same object until it changes), or `IDLE_LINK_QUEUE`. */
+export function getActiveLinkQueue(): LinkQueueState {
+  return activeQueue;
+}
+/** Subscribe to the active link's queue state. Returns the unsubscribe. */
+export function subscribeActiveLinkQueue(listener: () => void): () => void {
+  activeListeners.add(listener);
+  return () => {
+    activeListeners.delete(listener);
+  };
+}
+
 export interface ServerLink {
   /** Send a move. Resolves to the index the server allocated, or `null` if it was not applied.
    *
@@ -228,6 +285,8 @@ export interface ServerLink {
   readonly appliedIndex: number;
   /** LIVE-3A: how many times this link has had to rebuild the room's history from the start. */
   readonly resyncs: number;
+  /** Phase 3 W3-I: what this link still holds (read-only; the same object until it changes). */
+  readonly queue: LinkQueueState;
   close(): void;
 }
 
@@ -273,6 +332,27 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
 
   const schedule = options.schedule ?? ((callback: () => void, delayMs: number) => { setTimeout(callback, delayMs); });
   const pending: Pending[] = [];
+  /* Phase 3 W3-I: the read-only queue snapshot, recomputed whenever the queue may have changed and published as the
+     active link's. Identity-stable while nothing changes, so a store reader re-renders only on a real change. */
+  const owner = {};
+  let settledCount = 0;
+  let lastOutcome: LinkQueueState["lastOutcome"] = null;
+  let queueState: LinkQueueState = IDLE_LINK_QUEUE;
+  const noteQueue = () => {
+    const unsent = pending.filter((item) => !item.sent).length;
+    const next = { unsent, unsettled: pending.length, settled: settledCount, lastOutcome };
+    if (
+      next.unsent !== queueState.unsent ||
+      next.unsettled !== queueState.unsettled ||
+      next.settled !== queueState.settled ||
+      next.lastOutcome !== queueState.lastOutcome
+    ) {
+      queueState = Object.freeze(next);
+    }
+    /* A link that has ended itself (a close, an incompatible room, lost access, a client update) settles everything and
+       then returns the store to idle -- a dead link must not leave a form saying "queued" or "sending". */
+    publishActive(owner, closedByUs ? null : queueState);
+  };
   let socket: SocketLike | null = null;
   let open = false;
   let appliedIndex = -1;
@@ -340,7 +420,10 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
 
   /** Put a frame on the wire now if there is one, else leave it for the next hello. */
   const flushUnsent = () => {
-    if (!open || !socket) return;
+    if (!open || !socket) {
+      noteQueue(); // Phase 3 W3-I: a submission made while the wire is down is queued -- the snapshot says so.
+      return;
+    }
     for (const item of pending) {
       if (!item.sent) {
         item.sent = true;
@@ -356,6 +439,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         );
       }
     }
+    noteQueue();
   };
 
   /** LIVE-3A: settle exactly the submission a frame names. A frame naming one this link no longer holds (an
@@ -406,6 +490,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     for (const item of pending.splice(0)) item.resolve(null);
     orphaned = new Set<string>();
     inFlight = new Set<string>();
+    noteQueue(); // Phase 3 W3-I: nothing held any more (and, on a terminal path, the store returns to idle).
   };
 
   /** LIVE-2D: this tab may not read the game any more. Said once; the link stops and settles what it holds. */
@@ -874,7 +959,15 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     submit(msg) {
       return new Promise<number | null>((resolve) => {
         const id = mintId();
-        pending.push({ id, resolve, msg, sent: false });
+        /* Phase 3 W3-I: every settlement passes through here -- it is always called after the item left `pending` --
+           so the counter, the outcome and the published snapshot cannot miss one. */
+        const settle = (index: number | null) => {
+          settledCount += 1;
+          lastOutcome = index === null ? "not-applied" : "applied";
+          resolve(index);
+          noteQueue();
+        };
+        pending.push({ id, resolve: settle, msg, sent: false });
         // Sent now if there is a socket to send on; otherwise it waits for the next hello.
         flushUnsent();
       });
@@ -885,9 +978,13 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     get resyncs() {
       return resyncs;
     },
+    get queue() {
+      return queueState;
+    },
     close() {
       closedByUs = true;
       socket?.close();
+      publishActive(owner, null);
     },
   };
 }

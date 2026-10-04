@@ -39,6 +39,8 @@ import { CONSENT_IN_FLIGHT_TITLE } from "../utils/offerConsentView";
 import { offerPriceForAuthority } from "../utils/offerAuthorityView";
 // Phase 3 W2-F (OD-1, U-6): the one waiting line every consent / discard prompt prints.
 import { WaitingOnLine } from "./WaitingOnLine";
+// Phase 3 W3-I (AUD-19.01): the room link's queue, as the shell reads it.
+import { type LinkQueueView } from "../utils/useLinkQueue";
 
 /** A live proposal. Client-side only -- design note #0. */
 export interface PrivateTradeProposal {
@@ -162,6 +164,10 @@ export interface ProposePrivatePurchaseProps {
   /** Phase 3 W2-C: the shell's in-flight latch (#1173), as the consent prompts take it (W1-D). While the viewer's last
    *  action is unconfirmed every submit is greyed, so a second press cannot send a second proposal. */
   actionInFlight?: boolean;
+  /** Phase 3 W3-I (AUD-19.01 / I-1): the room link's queue (`linkQueueView`). While the link still holds this tab's last
+   *  submission every submit is greyed -- the shell's latch has a backstop and can release first -- and while it waits
+   *  for a socket the open card says "Queued — will send on reconnect.". Absent / idle: as before. */
+  linkQueue?: LinkQueueView | null;
 }
 
 export function ProposePrivatePurchase({
@@ -176,7 +182,9 @@ export function ProposePrivatePurchase({
   blockedReason: holdReason = null,
   proposalRefusal,
   actionInFlight = false,
+  linkQueue = null,
 }: ProposePrivatePurchaseProps) {
+  const linkHeld = linkQueue?.blocked === true;
   // Design note #386: the wider set for DISPLAY. Phase 3 W2-C: the STRICT answer -- what may be proposed -- is the
   // authority's (`proposalRefusal`), and it is what gates the offer form and the submit inside each card.
   const eligible = useMemo(() => purchasablePrivatesInPlay(privates), [privates]);
@@ -341,7 +349,7 @@ export function ProposePrivatePurchase({
                     (holdReason ?? proposalRefusal?.(entry.private_id, wirePrice) ?? null);
               /* Phase 3 W2-C: the submit is dead on a problem, while the shell's latch is held, or for a price that is not a
                  whole number (never sent -- with no authority bound, nothing would have judged it). */
-              const submitDead = priceProblem !== null || actionInFlight || typeof wirePrice !== "string";
+              const submitDead = priceProblem !== null || actionInFlight || linkHeld || typeof wirePrice !== "string";
               return (
                 /* Design note #661: THE ROW IS A GROUP, NOT A BUTTON, and #804 keeps that for a narrower
                    reason. #661 needed it because the row carried two controls; there is one control on the
@@ -554,6 +562,7 @@ export function ProposePrivatePurchase({
                             }}
                             title={
                               priceProblem ??
+                              (linkHeld ? linkQueue?.reason ?? undefined : undefined) ??
                               (actionInFlight
                                 ? CONSENT_IN_FLIGHT_TITLE
                                 : `Offer $${price} to ${entry.owner ? labelForAddress(entry.owner) : "the owner"} for ${entry.name}.`)
@@ -581,6 +590,13 @@ export function ProposePrivatePurchase({
                              putting it in the row would make the row change height as a player types, moving
                              the button they are reaching for. */}
                           {priceProblem && <p style={styles.problem}>{priceProblem}</p>}
+                          {/* Phase 3 W3-I (AUD-19.01): the last submission is still on the link -- no second press,
+                             and why, on its own line for #842's reason. */}
+                          {!priceProblem && linkHeld && (
+                            <p style={styles.linkNote} role="status" data-testid="private-offer-link-queued">
+                              {linkQueue?.reason}
+                            </p>
+                          )}
                         </>
                       )}
                     </div>
@@ -1102,6 +1118,8 @@ const styles: Record<string, React.CSSProperties> = {
   /* `priceBand` is GONE, not left unused (#772): it was the monospace-green "face $20 · $10-$40" span, and
      both of its facts moved -- the band into `priceLabel`, the face value into the Rules Reference (#843). */
   problem: { margin: 0, fontSize: FONT_SIZE.small, color: "#fb7185", lineHeight: 1.45 },
+  /* Phase 3 W3-I: the link's waiting sentence -- a status, not a problem, so not the problem's red. */
+  linkNote: { margin: 0, fontSize: FONT_SIZE.small, color: "#c4b384", lineHeight: 1.45 },
   /* Design note #804: `footer` and `secondaryButton` are GONE with the panel-level submit and the Cancel
      button beside it -- #772's rule again, since neither `tsc` nor ESLint can see an orphan key here. */
   primaryButton: {

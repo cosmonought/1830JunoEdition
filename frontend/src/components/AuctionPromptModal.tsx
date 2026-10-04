@@ -25,6 +25,8 @@ import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { NativeModal } from "./NativeModal";
 import { PAR_VALUE_LADDER } from "./StockRoundPanel";
 import { WaitingStatusBanner } from "./WaitingStatusBanner";
+import type { LinkQueueState } from "../utils/serverLink";
+import { LINK_QUEUED_NOTE } from "../utils/useLinkQueue";
 
 /* ==================================================================
     6.5-B (H-02): THE PROMPT FOLLOWS THE BOARD, SO THE BUTTON HOLDS ITS OWN PRESS
@@ -41,7 +43,20 @@ import { WaitingStatusBanner } from "./WaitingStatusBanner";
        control.
    A release while the par is still owed says so ("not reached the table yet"), because the reason itself -- the
    link's banner or the refusal -- is drawn under this modal's backdrop.
-   This is a debounce of one button, not an obligation: whether the prompt shows is still only the board's. */
+   This is a debounce of one button, not an obligation: whether the prompt shows is still only the board's.
+
+   PHASE 3 W3-I (AUD-02.05 / I-1, AUD-02.06 / I-2, AUD-19.01): WITH A ROOM LINK, THE LINK SAYS WHEN THE PRESS IS DONE.
+     - I-1: a par sent while the link was reconnecting waits on the link, and the 4 s hold used to hand the owner a
+       second press anyway; that second `SetBoPar` landed after the first and was refused. Now nothing releases the
+       press while the link still holds a submission (`linkQueue.unsettled > 0`), and while it waits for a socket the
+       card says so: "Queued — will send on reconnect." The link itself settles everything when it gives up (a resync,
+       a close), so this can never hold for ever.
+     - I-2: the note "not reached the table yet" used to fire on a timer, so a send that DID land but whose entry the
+       drain had not applied within the grace was told to press again. Now it fires only after the landing signal:
+       the link settled this press and reported it NOT applied (or nothing was sent at all). A press the link reports
+       APPLIED keeps the card held until the board stops owing the par -- the card then goes away by itself -- and, as
+       the last resort the old cap was, is released silently after another `PAR_SEND_HOLD_MS`.
+   Without a room link (`linkQueue` absent: the Firestore / hotseat path) the behaviour above the line is unchanged. */
 export const PAR_SEND_HOLD_MS = 4000;
 export const PAR_SETTLE_GRACE_MS = 1500;
 export const PAR_NOT_LANDED_NOTE = "Your par price has not reached the table yet — press again to retry.";
@@ -75,6 +90,8 @@ export interface AuctionPromptModalProps {
    *  "seated only"); a watcher or spectator may not, and reads a status instead of the card. Decided in `App.tsx`
    *  by `viewerIsSeatedPlayer`. Defaults `true` so an existing caller is unaffected. */
   viewerActsOnHandoff?: boolean;
+  /** Phase 3 W3-I: the room link's read-only queue state (`useLinkQueue`), or absent on a path with no room link. */
+  linkQueue?: LinkQueueState;
 }
 
 export function AuctionPromptModal({
@@ -87,6 +104,7 @@ export function AuctionPromptModal({
   nextStockRound = 1,
   delayedAuction = false,
   viewerActsOnHandoff = true,
+  linkQueue,
 }: AuctionPromptModalProps) {
   /* Seeded at the top of the ladder rather than left blank. Every rung is
      legal, so there is no "unset" state worth representing -- and a
@@ -101,17 +119,49 @@ export function AuctionPromptModal({
   const [notLanded, setNotLanded] = useState(false);
   const sendSerial = useRef(0);
   const activeToken = useRef<number | null>(null);
-  const release = useCallback((token: number) => {
+  /* Phase 3 W3-I: the link's queue, read by the timers below at the moment they fire, and its settlement count at the
+     press, so "this press settled" is told apart from "something settled earlier". */
+  const queueRef = useRef<LinkQueueState | undefined>(linkQueue);
+  queueRef.current = linkQueue;
+  const settledAtPress = useRef(0);
+  /** Whether a landed press has already had its one extra hold. */
+  const landedGrace = useRef(false);
+  /** What the link says about the press now: still held, landed (an index was allocated), or not applied / unknown. */
+  const linkVerdict = useCallback((): "held" | "landed" | "not-landed" => {
+    const queue = queueRef.current;
+    if (!queue) return "not-landed";
+    if (queue.unsettled > 0) return "held";
+    if (queue.settled > settledAtPress.current && queue.lastOutcome === "applied") return "landed";
+    return "not-landed";
+  }, []);
+  const release = useCallback((token: number, note = true) => {
     if (activeToken.current !== token) return;
     activeToken.current = null;
     setSending(null);
-    setNotLanded(true);
+    setNotLanded(note);
   }, []);
+  /* The hold. With a room link it never releases while the link still holds the press (I-1) -- it re-arms -- and a
+     press the link reports landed is released without the note (I-2). */
+  const [holdRound, setHoldRound] = useState(0);
   useEffect(() => {
     if (sending === null) return undefined;
-    const timer = window.setTimeout(() => release(sending), PAR_SEND_HOLD_MS);
+    const timer = window.setTimeout(() => {
+      const verdict = linkVerdict();
+      if (verdict === "held") {
+        setHoldRound((round) => round + 1);
+        return;
+      }
+      /* Landed: the drain will apply the entry and the board will stop owing the par. Give it one more hold, then let
+         go silently -- never with the note, which would invite a second press of a par that has landed. */
+      if (verdict === "landed" && !landedGrace.current) {
+        landedGrace.current = true;
+        setHoldRound((round) => round + 1);
+        return;
+      }
+      release(sending, verdict !== "landed");
+    }, PAR_SEND_HOLD_MS);
     return () => window.clearTimeout(timer);
-  }, [sending, release]);
+  }, [sending, release, linkVerdict, holdRound]);
   // The par is no longer this viewer's to set (it landed, or was never theirs): nothing is in flight any more.
   useEffect(() => {
     if (parPending) return;
@@ -120,16 +170,27 @@ export function AuctionPromptModal({
     setNotLanded(false);
   }, [parPending]);
 
+  /* W3-I (I-1): a submission the link still holds -- this press's, or one made before this card was (re)mounted -- is
+     never followed by a second press. */
+  const linkHolds = linkQueue !== undefined && linkQueue.unsettled > 0;
+  const confirmHeld = sending !== null || linkHolds;
   const confirmPar = () => {
-    if (sending !== null) return;
+    if (confirmHeld) return;
     sendSerial.current += 1;
     const token = sendSerial.current;
     activeToken.current = token;
+    settledAtPress.current = queueRef.current?.settled ?? 0;
+    landedGrace.current = false;
     setSending(token);
     setNotLanded(false);
     const result = onConfirmPar(selected);
     const settled = () => {
-      window.setTimeout(() => release(token), PAR_SETTLE_GRACE_MS);
+      window.setTimeout(() => {
+        /* W3-I (I-2): the note only after the landing signal says it did NOT land. Still held -> the hold above waits;
+           landed -> the board will stop owing the par and the card goes away (the hold's cap is the backstop). */
+        if (linkVerdict() !== "not-landed") return;
+        release(token);
+      }, PAR_SETTLE_GRACE_MS);
     };
     if (result && typeof (result as Promise<unknown>).then === "function") {
       (result as Promise<unknown>).then(settled, settled);
@@ -233,16 +294,22 @@ export function AuctionPromptModal({
 
             <button
               type="button"
-              style={{ ...styles.confirm, ...(sending !== null ? styles.confirmDisabled : {}) }}
+              style={{ ...styles.confirm, ...(confirmHeld ? styles.confirmDisabled : {}) }}
               onClick={confirmPar}
-              disabled={sending !== null}
-              title={sending !== null ? "Sending your par price — one moment." : undefined}
+              disabled={confirmHeld}
+              title={confirmHeld ? (linkQueue !== undefined && linkQueue.unsent > 0 ? LINK_QUEUED_NOTE : "Sending your par price — one moment.") : undefined}
             >
-              {sending !== null
+              {confirmHeld
                 ? "Sending…"
                 : <>Take the President&rsquo;s Certificate at ${selected}</>}
             </button>
-            {sending === null && notLanded && (
+            {/* Phase 3 W3-I (I-1): the press is waiting for the link to reconnect -- said, and no second press. */}
+            {linkQueue !== undefined && linkQueue.unsent > 0 && (
+              <span style={styles.waiting} role="status" data-testid="par-link-queued">
+                {LINK_QUEUED_NOTE}
+              </span>
+            )}
+            {!confirmHeld && notLanded && (
               <span style={styles.waiting} role="status">
                 {PAR_NOT_LANDED_NOTE}
               </span>

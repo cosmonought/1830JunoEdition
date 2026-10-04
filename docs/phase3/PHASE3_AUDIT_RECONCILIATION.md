@@ -390,6 +390,26 @@ unchanged (`5a0bf37` code, `8d4e9f5` review fixes, `f19a22b` slice tracking), th
   W2-G's emergency waiting card and the funding prompt's waiting line. NIT -- the `waitingSentence` prop comments on the three
   ordinary-offer prompts and `WaitingOnLine` name `dockHold.turnHoldReason`; those prompts are passed `dockHold.standingOffer`.
 
+## W3-I slice status (2026-10-04)
+
+**Branch** `phase3/w3-i-offers` @ `d663b1c` (code `5c6d7f8`, independent-review fixes `d663b1c`) from `phase3/wave2-bcgdf-v13cert-integration` @ `c3f43b7` (the current provisional
+baseline, unchanged). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). Its
+dependencies W2-F and W2-H are integrated in the base. Presentation only; the drain and `runGameplayAction` are untouched (no OD-12
+edit).
+
+- **AUD-19.01 (I-1 / R4):** a read-only queue accessor on the room link (`serverLink.ts` `LinkQueueState`: `unsent`, `unsettled`,
+  `settled`, `lastOutcome`; `link.queue` and the active-link store, idle again when the link ends) read once through
+  `utils/useLinkQueue.ts`, outside the drain. The queue itself is unchanged. The B&O par prompt and the three offer forms (Private
+  Companies trade form, Buy Private Company, Buy Trains from a Corporation) show "Queued — will send on reconnect." and take no second
+  press while the link holds the last submission.
+- **AUD-02.05 (I-1):** the par prompt never releases while the link holds its press (the 4 s hold re-arms).
+- **AUD-02.06 (I-2):** "not reached the table yet" only after the link reports the press NOT applied (or nothing was sent); a press
+  reported applied stays held until the board stops owing the par (one extra hold, then a silent release). No room link: unchanged.
+- **AUD-03.11 (R4):** the Private Companies offer form is kept until the proposal lands (the standing offer closes it); a dropped or
+  refused send leaves it live with what was typed. Reading recorded: kept open after a refusal rather than closed.
+- **Not taken:** the W2-F follow-ups (the duplicate-waiting LOW, the two NITs) stay recorded where they are. Rules version and
+  settlement unchanged.
+
 ## Scope and closing remark
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |

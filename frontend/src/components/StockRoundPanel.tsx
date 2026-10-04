@@ -290,7 +290,10 @@ export interface StockRoundPanelProps {
   onRescindPrivateTrade?: (privateId: number) => void;
   /** 6.5-B (K-01): the standing-offer hold's own sentence while a player trade offer stands, or `null`. Folded into
    *  the panel's one flag (#32), so every share control is greyed WITH the hold's reason rather than refused after
-   *  the click. The trade's own answer and rescind are not share controls and are not held. */
+   *  the click. The trade's own answer and rescind are not share controls and are not held.
+   *  Phase 3 W2-F: the shell passes `dockHold.shareControls` -- the authoritative hold's sentence when it refuses both
+   *  `BuyStock` and `SellStock` (any hold, not only the trade offer's); a hold refusing one kind reaches that control
+   *  through `purchaseBlockFor` / `saleBlockFor` instead. */
   offerHoldReason?: string | null;
   /** Phase 3 W2-B (AUD-03.07): the viewer's own must-sell debt (#759 rule iii, the curable excess only -- DA-5), as the
    *  shell reads it from the authority (`divestmentDebt` -> `mustSellBannerOf`), or `null` when nothing is owed. Drawn

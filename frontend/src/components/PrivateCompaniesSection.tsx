@@ -43,6 +43,8 @@ import {
   type PrivateTradeOfferView,
   type PrivateTradeSectionModel,
 } from "../utils/stockRoundPrivateTrade";
+// Phase 3 W2-F (OD-1, U-6): the one waiting line every consent / discard prompt prints.
+import { WaitingOnLine } from "./WaitingOnLine";
 
 export interface PrivateTradeIntent {
   privateId: number;
@@ -438,10 +440,25 @@ export interface PlayerPrivateTradePromptProps {
   /** The proposer's `RescindPrivateTrade`, one click from any tab. */
   onRescind: (privateId: number) => void;
   onShowCard: (privateId: number) => void;
+  /** Phase 3 W2-F (OD-1, U-6): the hold's own sentence (`dockHold.turnHoldReason`) for the one waiting line. */
+  waitingSentence?: string | null;
+  /** Phase 3 W2-F (AUD-03.10 / I-3): `true` while the Private Companies section itself is on screen (the Stocks tab in
+   *  a Stock Round). That section is this offer's primary surface -- the offer on its own card with the same answer and
+   *  withdrawal, and the hold's sentence above the share controls -- so the fixed pointer stands aside there instead of
+   *  covering a card. Everywhere else it shows exactly as before. */
+  standAside?: boolean;
 }
 
-export function PlayerPrivateTradePrompt({ offer, answerBlockedReason, onAnswer, onRescind, onShowCard }: PlayerPrivateTradePromptProps) {
-  if (!offer) return null;
+export function PlayerPrivateTradePrompt({
+  offer,
+  answerBlockedReason,
+  onAnswer,
+  onRescind,
+  onShowCard,
+  waitingSentence = null,
+  standAside = false,
+}: PlayerPrivateTradePromptProps) {
+  if (!offer || standAside) return null;
   const isRecipient = offer.viewerRole === "counterparty";
   const acceptBlocked = answerBlockedReason ?? offer.acceptRefusal;
   return (
@@ -451,13 +468,13 @@ export function PlayerPrivateTradePrompt({ offer, answerBlockedReason, onAnswer,
         <span style={styles.promptTitle}>{isRecipient ? "Offer received" : "Private company offer"}</span>
       </div>
       <p style={styles.promptBody}>{offer.summary}</p>
-      <p style={styles.promptWho}>
-        {isRecipient
-          ? `This is your decision. Nothing else can happen until you answer.`
-          : `Waiting on ${offer.counterpartyLabel} — nothing else can happen until they answer${
-              offer.viewerRole === "proposer" ? " or you withdraw it" : ""
-            }.`}
-      </p>
+      {/* Phase 3 W2-F (OD-1, U-6): the one waiting line; the proposer's withdrawal is the Rescind button below. */}
+      <WaitingOnLine
+        who={isRecipient ? "you" : offer.counterpartyLabel}
+        viewerDecides={isRecipient}
+        sentence={waitingSentence}
+        style={styles.promptWho}
+      />
       {isRecipient && offer.acceptRefusal !== null && <p style={styles.promptRefusal}>{offer.acceptRefusal}</p>}
       <div style={styles.promptActions}>
         <button type="button" data-testid="player-private-trade-show" style={styles.promptButton} onClick={() => onShowCard(offer.privateId)}>

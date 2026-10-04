@@ -282,7 +282,8 @@ describe("one click opens the card, and the card is the whole transaction", () =
     expect(card).toContain("styles.priceInput");
     expect(card).toContain("onPropose(entry.private_id, price)");
     // Phase 3 W2-C: and latched -- the shell's in-flight latch greys the submit too.
-    expect(card).toContain("disabled={priceProblem !== null || actionInFlight}");
+    expect(card).toContain("disabled={submitDead}");
+    expect(CODE).toContain('const submitDead = priceProblem !== null || actionInFlight || typeof wirePrice !== "string";');
   });
 
   it("has exactly one submit in the file", () => {

@@ -183,6 +183,15 @@ describe("Buy Private Company reads `proposePrivatePurchaseRefusal`", () => {
     }
   });
 
+  it("an all-digit entry's leading zeros are the input's: \"070\" is $70, live, and sent as 70", () => {
+    const sent: number[] = [];
+    render(panel(board(), { onPropose: (_id, price) => sent.push(price) }));
+    openCard(/Delaware & Hudson/);
+    typeInto(priceField("Delaware & Hudson"), "070");
+    press(one("Propose Purchase to Ben"));
+    expect(sent).toEqual([70]);
+  });
+
   it("the refusal shown is the authority's sentence, byte for byte (no panel prose beside it)", () => {
     const state = board();
     render(panel(state));
@@ -246,6 +255,19 @@ describe("Buy Private Company reads `proposePrivatePurchaseRefusal`", () => {
       // The predicate's own one-offer sentence never competes with the hold's.
       expect(host.textContent).not.toContain("An offer is already standing");
       expect(asked).not.toHaveBeenCalled();
+    });
+
+    it("under the hold even the B&O card opens to its rule and a greyed submit with the hold's sentence (W2-A's wording)", () => {
+      const held = TRAIN_OFFERED();
+      render(panel(held, { blockedReason: HOLD }));
+      openCard(/Baltimore & Ohio/);
+      expect(buttons("Propose Purchase to Ben")).toHaveLength(1); // the B&O's own card is the one open
+      const submit = one("Propose Purchase to Ben");
+      expect([live(submit), submit.title]).toEqual([false, HOLD]);
+      // Not restated locally: the ban is the authority's answer once the hold clears (below), not the panel's under it.
+      expect(host.textContent).not.toContain("may never be sold to a corporation");
+      render(panel(board()));
+      expect(host.textContent).toContain("Baltimore & Ohio may never be sold to a corporation.");
     });
   });
 
@@ -375,6 +397,15 @@ describe("Buy Trains from a Corporation reads `proposeTrainPurchaseRefusal` / `t
     expect(sent[0]).toMatchObject({ sellerProtocolId: NYC, buyerProtocolId: PRR, modelType: "3", price: "150" });
   });
 
+  it("an all-digit entry's leading zeros are the input's: \"007\" is sent as \"7\", the spelling judged", () => {
+    const sent: TrainTradeProposal[] = [];
+    render(roster(board(), { onProposeTrade: (proposal) => sent.push(proposal) }));
+    press(sellerBadges("NYC")[0]);
+    typeInto(priceInput(), "007");
+    press(submit());
+    expect(sent[0]).toMatchObject({ price: "7" });
+  });
+
   it.each([
     ["$0", "0", TRAIN_FLOOR],
     ["an empty field", "", TRAIN_FLOOR],
@@ -465,6 +496,16 @@ describe("the wiring: the shell binds both authorities beside its one hold answe
     expect(trainGroup).toContain("blockedReason: dockHold.proposeTrainPurchase,");
     expect(trainGroup).toContain("bankBlockedReason: dockHold.buyTrainFromBank,");
     expect(trainGroup).toContain("offerRefusal: trainOfferRefusalFor,");
+  });
+
+  it("the same-president fork `sellsDirect` mirrors is still the shell's own (one president over both sides)", () => {
+    const shell = readShell();
+    const train = sliceBetween(shell, "const handleProposeTrainTrade = useCallback(", "ProposeTrainPurchase: {");
+    expect(train).toMatch(/const samePresident =\s*!!buyer\?\.president && buyer\.president === proposal\.sellerPresident;/);
+    expect(train).toContain("handleMakeTrainOffer({");
+    const priv = sliceBetween(shell, "const handleProposePrivatePurchase = useCallback(", "ProposePrivatePurchase: {");
+    expect(priv).toContain("if (buyer?.president && buyer.president === target.owner) {");
+    expect(priv).toContain("BuyPrivateCompany: {");
   });
 
   it("the bar forwards them to the embedded panels", () => {

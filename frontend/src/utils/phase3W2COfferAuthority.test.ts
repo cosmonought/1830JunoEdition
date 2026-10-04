@@ -67,8 +67,14 @@ describe("the typed price, as the authority reads it", () => {
     expect(offerPriceForAuthority("0")).toBe("0");
   });
 
+  it("reads an all-digit entry's leading zeros as the input's, not a spelling (\"070\" typed is $70)", () => {
+    expect(offerPriceForAuthority("070")).toBe("70");
+    expect(offerPriceForAuthority("007")).toBe("7");
+    expect(offerPriceForAuthority("000")).toBe("0");
+  });
+
   it("hands over NaN for anything that is not a whole number -- never a coerced value", () => {
-    for (const text of ["", "   ", "70.5", "1e2", "070", "-5", "abc", "0x46"]) {
+    for (const text of ["", "   ", "70.5", "1e2", "-5", "+5", "abc", "0x46", "7 0"]) {
       expect(offerPriceForAuthority(text)).toBeNaN();
     }
   });

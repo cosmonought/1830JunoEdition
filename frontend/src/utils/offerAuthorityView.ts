@@ -36,7 +36,9 @@
 // THE TYPED PRICE. A panel holds its price as text. `offerPriceForAuthority` hands the authority the canonical whole-VGP
 // spelling (`vgpAmount.ts`: digits, no sign, no leading zero, no exponent), or `NaN` for anything else -- which each
 // authority refuses in its own words (the private's band sentence, the train's "whole number of at least $1"). Surrounding
-// whitespace is the input's, not a spelling, and is trimmed. The panels send exactly the spelling that was judged.
+// whitespace and the leading zeros of an all-digit entry are the input's, not a spelling ("070" typed is $70, as a number
+// field means it) -- that is parsing, not a rule, and the canonical result is what is judged. Anything else ("1e2",
+// "70.5", "-5") is not a whole number and is refused. The panels send exactly the spelling that was judged.
 
 import type { MapGridResponse } from "../components/hexContractTypes";
 import type { GameStateResponse } from "../gameEngine/gameState";
@@ -77,7 +79,9 @@ const named = (state: GameStateResponse, refusal: string | null, labelFor: (addr
 
 /** The typed price as the authority judges it -- see the header's last paragraph. */
 export function offerPriceForAuthority(text: string): string | number {
-  return canonicalWholeVgp(text.trim()) ?? Number.NaN;
+  const trimmed = text.trim();
+  const digits = /^[0-9]+$/.test(trimmed) ? trimmed.replace(/^0+(?=[0-9])/, "") : trimmed;
+  return canonicalWholeVgp(digits) ?? Number.NaN;
 }
 
 /** Why the operating corporation may not offer `price` for this private now, in the authority's words, or `null`. */
@@ -96,7 +100,8 @@ export function privateProposalRefusal(input: OfferAuthorityInput, privateId: nu
  *  board -- the same fork `handleProposeTrainTrade` takes. */
 export function sellsDirect(state: GameStateResponse, buyerId: number, sellerId: number): boolean {
   const buyer = state.public_companies.find((entry) => entry.company_id === buyerId)?.president ?? null;
-  return buyer !== null && buyer === sellerPresident(state, sellerId);
+  // Truthiness, exactly as the shell's fork and the panel's `samePresident` read it.
+  return !!buyer && buyer === sellerPresident(state, sellerId);
 }
 
 /** Why this train offer may not be sent now, in the authority's words, or `null`: the proposal's predicate, or the sale's

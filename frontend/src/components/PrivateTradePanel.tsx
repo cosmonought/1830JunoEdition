@@ -105,7 +105,12 @@ export function purchasablePrivatesInPlay(
    ("may be bought by corporations but not sold by them"), so a crafted dispatch fails at the door as well.
    THE DELETED HELPERS' NOTES, KEPT (#490a -- a pass must not satisfy an absence by deleting the reasoning with it):
      #660 on the block reason: the B&O ban was checked FIRST, "because it is the reason that cannot change" -- the
-     authority keeps that order (the card's sellability before its owner).
+     authority keeps that order among the card's own arms (sellability before owner). UNDER A HOLD IT IS NOT ASKED:
+     the authority (and the reducer, which asks the holds first) answers a held board with the hold, so every card --
+     the B&O, an unsold card, one the treasury cannot reach included -- opens to its rule and a submit greyed with the
+     hold's sentence, which is W2-A's own wording ("greys every card's submit ... the cards still open"). The card's
+     permanent reason returns the moment the hold clears; restating it under the hold would be the local copy this
+     slice deletes.
      #804 on the price refusals: "LIFTED OUT OF THE RENDER, AND ONE ARM DELETED. ... What is gone is the sixth arm,
      "Choose a private company first.", and it is gone BY CONSTRUCTION: the price field now lives inside the card of
      the private it belongs to." Still true: the authority is asked per card, about that card's own price. */
@@ -332,6 +337,9 @@ export function ProposePrivatePurchase({
                   : /* Phase 3 W2-A (OD-1): the hold first -- no price would be accepted while it stands. Then
                        W2-C: the proposal's authority at the typed price, in its own words. */
                     (holdReason ?? proposalRefusal?.(entry.private_id, wirePrice) ?? null);
+              /* Phase 3 W2-C: the submit is dead on a problem, while the shell's latch is held, or for a price that is not a
+                 whole number (never sent -- with no authority bound, nothing would have judged it). */
+              const submitDead = priceProblem !== null || actionInFlight || typeof wirePrice !== "string";
               return (
                 /* Design note #661: THE ROW IS A GROUP, NOT A BUTTON, and #804 keeps that for a narrower
                    reason. #661 needed it because the row carried two controls; there is one control on the
@@ -532,14 +540,12 @@ export function ProposePrivatePurchase({
                             type="button"
                             style={{
                               ...styles.primaryButton,
-                              ...(priceProblem || actionInFlight ? styles.buttonDisabled : {}),
+                              ...(submitDead ? styles.buttonDisabled : {}),
                             }}
                             /* Phase 3 W2-C: latched -- see `submitLatch`. */
-                            disabled={priceProblem !== null || actionInFlight}
+                            disabled={submitDead}
                             onClick={() => {
-                              if (priceProblem !== null || actionInFlight || submitLatch.current) return;
-                              // Never send a spelling the authority did not judge (no authority bound: nothing judged it).
-                              if (typeof wirePrice !== "string") return;
+                              if (submitDead || submitLatch.current) return;
                               submitLatch.current = true;
                               setSubmitCommit((count) => count + 1);
                               onPropose(entry.private_id, price);

@@ -2158,7 +2158,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           actor?: string | null;
           at?: number;
         },
-      ) => Promise<void> | void)
+        /* Phase 3 W3-C (P3-N020): a room submission now answers whether it landed (`false` when it did not). */
+      ) => Promise<boolean | undefined | void> | void)
     | null
   >(null);
 

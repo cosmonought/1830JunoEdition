@@ -794,7 +794,7 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
           "When the president's personal money is being used for this forced purchase, a train bought from another corporation may not cost more than its face value.",
           /* Phase 3 W3-K (OD-4, rules v13): the intercorporate window is budgeted at treasury + president cash and
              closes for good at the first decision (`emergencyFunding.ts` `emergencyTradeWindow` / `fundedTradeRefusal`). */
-          "A train from another corporation is agreed before the president sells anything, and is paid only from the corporation's money and the president's cash — never with money raised by selling shares. Once the president declines it, or sells, that chance does not return.",
+          "A train from another corporation is agreed before the president sells anything, and is paid only from the corporation's money and the president's cash — never with money raised by selling shares. Once the president chooses the Bank instead, offers a private company for emergency funding, or sells shares, that chance does not return.",
           "A cash-strapped corporation is not required to buy another corporation's train merely because it is cheaper than a train in the Bank or Bank Pool.",
           /* Phase 3 W1-L (RR-7): what the president may sell, and the private sale's own limits (`emergencyFunding.ts`
              #1541): the ordinary private purchase's restrictions stand -- phases 3 and 4, half to twice face value,
@@ -1845,9 +1845,11 @@ const GOTCHAS: readonly { text: string; page: RulesSection }[] = [
 /** NOT a missed-rule gotcha but a consequence, so it is marked differently. Verified against the rulebook:
  *  a president short of the money for a forced purchase must sell their own shares to raise it (6.6.3), those
  *  are ordinary sales, so each share sold drops that corporation's token one box (4.5) -- and if they still
- *  cannot pay, the game ends immediately (6.7 / 7.1), freezing every holding where it stands. */
+ *  cannot pay, the game ends immediately (6.7 / 7.1), freezing every holding where it stands.
+ *  Phase 3 W3-K (rules v13, OD-4): the bankruptcy is AUTOMATIC once no legal rescue remains, and it first sells
+ *  the president's shares as far as legally possible (`sandboxSession.ts` `automaticBankruptcy`). */
 const BANKRUPTCY_WARNING =
-  "A president forced to buy a train must sell their own shares to raise the money, and every share sold drops that corporation's share value one box. Someone else's emergency can therefore cut the value of corporations you hold too — and if they still cannot pay, the game ends immediately, at whatever those prices have become.";
+  "A president forced to buy a train must sell their own shares to raise the money, and every share sold drops that corporation's share value one box. Someone else's emergency can therefore cut the value of corporations you hold too. Once no legal rescue remains, bankruptcy is automatic: the president's shares are sold as far as the rules allow, all of their money goes to the corporation, and the game ends immediately, at whatever those prices have become.";
 
 
 

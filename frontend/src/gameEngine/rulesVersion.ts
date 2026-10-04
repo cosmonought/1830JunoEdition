@@ -419,7 +419,9 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "must-sell, the sold-this-round lockout, Priority Deal and rotation are unchanged. (2) SBS-3 / SBS-4, THE OFFICIAL " +
       "BROWN RULE: an explicit turn-scoped continuation (`brown_pool_continuation_company`) opened only by a Brown-zone " +
       "purchase from the Bank Pool; it admits further Bank Pool certificates of that ONE corporation and closes on any " +
-      "sale, `PassTurn`, seat advance, round end and every purchase-state reset -- IPO then Pool, Pool then IPO, Pool / " +
+      "sale, `PassTurn`, seat advance, round end, every purchase-state reset and (owner ruling 2026-10-04) any other " +
+      "accepted state-changing turn action of the active player -- an accepted private trade, an M&H exchange -- but " +
+      "never on another player's off-turn answer or on derived bookkeeping; IPO then Pool, Pool then IPO, Pool / " +
       "sell / Pool, Pool in one corporation then Pool in another, and any second non-Brown purchase are refused. NOT " +
       "IMPLEMENTED: V-6.3 'Buy All'. (3) OD-4, EMERGENCY FUNDING: the intercorporate trade window is budgeted at treasury " +
       "plus the president's cash and is closed for the obligation by any decision (`ForgoTrainTrade`, a private offer, " +
@@ -428,7 +430,9 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "`EmergencySellPortfolio` (submitted order kept, every leg an ordinary sale, simulated and proven before any " +
       "board moves, 'only enough' judged over the whole portfolio with the smallest legal overshoot, a portfolio that " +
       "cannot fund the purchase refused -- no self-made bankruptcy) and the single forced `SellStock` is refused; " +
-      "private-company funding stays optional (`ForgoPrivateFunding` declines it); bankruptcy is AUTOMATIC once the " +
+      "private-company funding stays optional (`ForgoPrivateFunding` declines it) and holds the game only while a " +
+      "legally valid private sale or sequence of sales could complete a rescue (judged exactly, never by a loose bound); " +
+      "bankruptcy is AUTOMATIC once the " +
       "exact insolvency oracle proves no window, offer, private or portfolio can fund the train: everything legally " +
       "saleable is sold, the president's cash goes to the obligated corporation, and the game ends (`bankrupt_president`). " +
       "`DeclareBankruptcy` is refused on a board of rules revision 2. Per-obligation marks: `emergency_funding_marks`. NOT RULES, " +
@@ -437,9 +441,11 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "[13] alone (owner policy: pinned v12 rooms are drained before deployment, no dual support). SETTLEMENT IS A " +
       "SEPARATE AXIS: `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` stays [10, 11, 12], so a v13 board is refused for " +
       "money settlement until v13's own certification pass (`docs/phase3/V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). A " +
-      "version-12 log can carry a two-message Stock Round turn end, a second Pool purchase across corporations or after " +
-      "a sale, a single forced sale, a president-sent emergency purchase and a declared bankruptcy, so it is refused, " +
-      "never reinterpreted.",
+      "version-12 log can carry a two-message Stock Round turn end, a Brown Bank Pool purchase continued after a sale " +
+      "(SBS-3), after an IPO purchase (SBS-4) or across another turn action, a single forced sale, a president-sent " +
+      "emergency purchase and a declared bankruptcy, so it is refused, never reinterpreted. (A second Brown Pool " +
+      "purchase in ANOTHER corporation is not among them: #1570's same-corporation guard has refused it on every board " +
+      "that records `bought_this_turn_company`; only history older than that guard can hold one.)",
   },
 ];
 

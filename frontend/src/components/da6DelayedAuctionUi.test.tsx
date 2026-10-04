@@ -78,6 +78,26 @@ const handoff = (extra: Record<string, unknown> = {}) => (
 
 /* ================================================================================================== */
 describe("DA-F8b: the handoff names the Stock Round it opens", () => {
+  /* Phase 3 W2-H: the actor's handoff card is a `NativeModal` now, rendered through the modal layer the application
+     mounts beside the screen -- committed first, on its own root, exactly as the Phase 3 notice below is. */
+  let layerHost: HTMLDivElement;
+  let layerRoot: Root;
+  beforeEach(() => {
+    layerHost = document.createElement("div");
+    document.body.appendChild(layerHost);
+    layerRoot = createRoot(layerHost);
+    act(() => {
+      layerRoot.render(<ModalLayerHost />);
+    });
+  });
+  afterEach(() => {
+    act(() => {
+      root.render(<></>);
+    });
+    act(() => layerRoot.unmount());
+    layerHost.remove();
+  });
+
   it("the standard game's card is unchanged -- Stock Round 1", () => {
     render(handoff());
     expect(text()).toContain("The Waterfall Auction is complete");

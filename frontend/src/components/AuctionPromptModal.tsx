@@ -2,8 +2,15 @@
 // price and the handoff into the Stock Round that follows it (Stock Round 1 in
 // the standard game; a later one under the Delayed Auction -- DA-6, DA-F8b).
 //
-// Modal and undismissable -- the private is already won and the certificate
-// already owed, so there is no legal state on the other side of cancelling.
+// Modal and undismissable FOR THE ACTOR -- the private is already won and the
+// certificate already owed, so there is no legal state on the other side of
+// cancelling.
+//
+// Phase 3 W2-H (OD-1, H5): only the actor gets this card -- the B&O par's owner,
+// or, for the handoff, a seated player once nothing is owed. It is a
+// `NativeModal` now: H5's blocker (a handoff card with zero tabbable controls)
+// is gone, because a viewer who cannot act no longer gets the card at all. Every
+// other viewer gets the non-modal `WaitingStatusBanner`, with no control.
 // `parPending` and `handoffPending` are independent booleans rendering
 // independent sections, so the three cases (par only / handoff only / both)
 // merge without any internal step state. The par ladder is the Stock Round's
@@ -15,7 +22,9 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
+import { NativeModal } from "./NativeModal";
 import { PAR_VALUE_LADDER } from "./StockRoundPanel";
+import { WaitingStatusBanner } from "./WaitingStatusBanner";
 
 /* ==================================================================
     6.5-B (H-02): THE PROMPT FOLLOWS THE BOARD, SO THE BUTTON HOLDS ITS OWN PRESS
@@ -62,6 +71,10 @@ export interface AuctionPromptModalProps {
   nextStockRound?: number;
   /** DA-6: the table plays the Delayed Auction, so the auction is not "the Waterfall Auction" that opened the game. */
   delayedAuction?: boolean;
+  /** Phase 3 W2-H (OD-1): may THIS viewer open the Stock Round? Any seated player may (the server's `submit` row is
+   *  "seated only"); a watcher or spectator may not, and reads a status instead of the card. Decided in `App.tsx`
+   *  by `viewerIsSeatedPlayer`. Defaults `true` so an existing caller is unaffected. */
+  viewerActsOnHandoff?: boolean;
 }
 
 export function AuctionPromptModal({
@@ -73,6 +86,7 @@ export function AuctionPromptModal({
   onProceed,
   nextStockRound = 1,
   delayedAuction = false,
+  viewerActsOnHandoff = true,
 }: AuctionPromptModalProps) {
   /* Seeded at the top of the ladder rather than left blank. Every rung is
      legal, so there is no "unset" state worth representing -- and a
@@ -124,21 +138,65 @@ export function AuctionPromptModal({
     }
   };
 
-  if (!parPending && !handoffPending) return null;
-
   const blocked = awaitingParFrom !== null;
   const stockRound = `Stock Round ${nextStockRound}`;
   const completeHeading = delayedAuction ? "The private company auction is complete" : "The Waterfall Auction is complete";
 
+  /* ==================================================================
+      PHASE 3 W2-H (OD-1, H5): THE ACTOR GETS THE CARD; EVERYONE ELSE GETS A STATUS
+     ==================================================================
+     WAS: every seat got the full-screen card. A seat that did not owe the par got the handoff half with a DISABLED
+     Proceed -- the modal audit's H5, a scrim with zero tabbable controls -- and a seatless watcher got a live Proceed
+     the server refuses. Now there are exactly two actors and one waiting surface:
+       - the par's owner (`parPending`): the ladder and the confirm, as before;
+       - with nothing owed, a seated player (`viewerActsOnHandoff`): the handoff and its Proceed, always live;
+       - anyone else -- a seat while somebody else owes the par, or a watcher -- reads who the table is waiting on.
+     TIMING THAT IS TRUE: the par is owed BEFORE anything else happens (`auctionHandoffRefusal` /
+     `boParRefusal`: "before the Stock Round opens", "before the auction goes on"), and the Stock Round opens when a
+     seated player proceeds, not by itself. */
+  const parActor = parPending;
+  const handoffActor = !parPending && handoffPending && !blocked && viewerActsOnHandoff;
+
+  if (!parActor && !handoffActor) {
+    if (blocked) {
+      return (
+        <WaitingStatusBanner
+          heading={handoffPending ? completeHeading : "The B&O par comes first"}
+          testId="auction-waiting"
+        >
+          {/* Design note #547: named, because "waiting" without a name is indistinguishable from being stuck. */}
+          Waiting for {awaitingParFrom} to set the B&amp;O&rsquo;s par price.{" "}
+          {handoffPending ? (
+            <>Every private company has been allocated; {stockRound} can open once the par is set.</>
+          ) : (
+            <>The auction goes on once the par is set.</>
+          )}
+        </WaitingStatusBanner>
+      );
+    }
+    if (handoffPending) {
+      return (
+        <WaitingStatusBanner heading={completeHeading} testId="auction-waiting">
+          Every private company has been allocated. Waiting for a player to open {stockRound}.
+        </WaitingStatusBanner>
+      );
+    }
+    return null;
+  }
+
   return (
-    <div
-      style={styles.backdrop}
-      role="dialog"
-      aria-modal="true"
-      aria-label={parPending ? "Set the B&O par value" : completeHeading}
+    <NativeModal
+      name={parActor ? "Set the B&O par value" : completeHeading}
+      /* Forced: there is no legal state on the other side of closing (see the file note). */
+      dismissible={false}
+      /* The forced prompts never restored focus (batch 4B stopped short of choosing a target), and the player's
+         next stop is the Stock Round, not the control that was focused before the card. */
+      restoreOpener={false}
+      scrimStyle={styles.backdrop}
+      testId="auction-prompt"
     >
       <div style={styles.card}>
-        {parPending ? (
+        {parActor ? (
           <>
             <span style={styles.heading}>
               {parWinnerLabel} wins the Baltimore &amp; Ohio
@@ -207,39 +265,29 @@ export function AuctionPromptModal({
               )}
             </p>
 
-            {blocked && (
-              /* Design note #547: named, because "waiting" without a name is
-                 indistinguishable from being stuck. */
-              <span style={styles.waiting}>
-                Waiting for {awaitingParFrom} to set the B&amp;O&rsquo;s par price.
-              </span>
-            )}
-
+            {/* W2-H: never disabled. A viewer who cannot proceed (a par still owed, or a watcher) is on the waiting
+               status above and never reaches this button. */}
             <button
               type="button"
-              style={{ ...styles.confirm, ...(blocked ? styles.confirmDisabled : {}) }}
+              style={styles.confirm}
               onClick={onProceed}
-              disabled={blocked}
-              title={
-                blocked
-                  ? "The B&O has a president and no share price yet."
-                  : `Close the auction and open ${stockRound}.`
-              }
+              title={`Close the auction and open ${stockRound}.`}
             >
               Proceed to {stockRound} &#8250;
             </button>
           </>
         )}
       </div>
-    </div>
+    </NativeModal>
   );
 }
 
 const styles: Record<string, React.CSSProperties> = {
+  /* W2-H: a `<dialog>` in the top layer now (`NativeModal`), so the `zIndex: 4000` that stood here decides nothing
+     and is gone, as on every other migrated surface (#1651). */
   backdrop: {
     position: "fixed",
     inset: 0,
-    zIndex: 4000,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",

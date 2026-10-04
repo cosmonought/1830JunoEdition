@@ -87,8 +87,13 @@ describe("H-02: the B&O par prompt is the board's `boParOwedTo`, not a latch", (
 
   it("the prompt, its owner, and the Proceed block all read `boParOwner`", () => {
     const modal = sliceBetween(APP, "<AuctionPromptModal", "/>");
-    expect(modal).toContain("parPending={boParOwner !== null && boParOwner === viewerAddress}");
-    expect(modal).toContain("boParOwner !== null && boParOwner !== viewerAddress");
+    /* Phase 3 W2-H (OD-1): WAS `boParOwner !== null && boParOwner === viewerAddress` (and its negation for the
+       waiting name). Both now read the shared viewer rule over the same `boParOwner`, so a spectator holding the
+       owner's wallet is never asked and is told who the table waits on. */
+    expect(APP).toContain("const boParViewerIsOwner = viewerIsNamedActor({ spectator, actor: boParOwner, viewerAddress });");
+    expect(modal).toContain("parPending={boParViewerIsOwner}");
+    expect(modal).toContain("boParOwner !== null && !boParViewerIsOwner");
+    expect(modal).toContain("viewerActsOnHandoff={auctionHandoffViewerActs}");
     expect(modal).toContain("onConfirmPar={handleConfirmBoPar}");
   });
 

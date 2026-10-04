@@ -616,6 +616,10 @@ describe("#1651 three families, on the same boundary", () => {
       "FleetLossModal",
       "PrivatePowerFlowModal",
       "EmergencyTrainPurchaseModal",
+      /* Phase 3 W2-H (OD-1): H5's blocker was a handoff card with zero tabbable controls. A viewer who cannot act
+         now gets the non-modal `WaitingStatusBanner` instead, so the card is only ever the actor's, with a live
+         control -- and it renders through the boundary, forced (`dismissible={false}`). */
+      "AuctionPromptModal",
     ];
     for (const name of migrated) {
       const source = readStripped(`components/${name}.tsx`);
@@ -636,7 +640,11 @@ describe("#1651 three families, on the same boundary", () => {
        forced prompts and the intro overlay are excluded for reasons recorded in the note. None of them may
        have acquired the boundary by accident. LIVE-2D: the PIN exclusion, `SeatPinModal`, is deleted with the
        seat PINs (`settingsDialogDismissal.test.tsx` pins that it stays gone). */
-    for (const name of ["TutorialModal", "PrivateTradePanel", "HomeStationPrompt", "AuctionPromptModal", "GameIntroOverlay"]) {
+    /* Phase 3 W2-H: `AuctionPromptModal` left this list (it is migrated, above). `HomeStationPrompt` stays: its
+       President's card hands off to the MAP (#440 / #1331), and at the start of an Operating Round it opens beside
+       the forced private-revenue notice -- a second top-layer dialog there would leave whichever is on top making the
+       board the President must click inert. Its waiting seats no longer get a scrim at all (`WaitingStatusBanner`). */
+    for (const name of ["TutorialModal", "PrivateTradePanel", "HomeStationPrompt", "GameIntroOverlay"]) {
       const source = readStripped(`components/${name}.tsx`);
       expect([name, "untouched by the boundary", source.includes("NativeModal")]).toEqual([
         name,

@@ -559,7 +559,8 @@ branch-only; since 2026-10-04 ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j
 
 ## W3-C integration status (2026-10-04)
 
-**Branch** `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762` — **the current provisional
+**Branch** `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762` — *(superseded as baseline at `c0a44d7` by
+`phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration`, below)* **the provisional
 Phase-3 integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** The accepted W3-C slice
 (`phase3/w3-c-refusal-display` @ `3454daa`) merged `--no-ff` (merge `b32ef6e`, parents `18d4762`, `3454daa`), its seven commits carried
 unchanged (`3c75394`, `bfec83c` support, `08d857b` RED R1, `21d6b15` RED R5, `6cb86e4` implementation, `6c28662` review fix, `3454daa`
@@ -583,6 +584,23 @@ slice tracking), then this tracking commit.
   move's shell state; an `error` frame answering a submission stays a connection notice; the rollback wiring is source-pinned); the
   integration review's LOWs (the no-server path's subscribe error is routed as a refusal; a refused lay does not reopen the errand
   flow); carried unchanged from earlier integrations.
+
+## W3-G integration status (2026-10-04)
+
+**Branch** `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7` — **the current provisional
+Phase-3 integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** The accepted W3-G audit
+(`phase3/w3-g-ui-parity-audit` @ `967e4e7`: audit `e86a933` + owner review `967e4e7`) merged `--no-ff` (merge `72ccd00`, parents `c0a44d7`,
+`967e4e7`), both commits carried unchanged, then this tracking commit.
+
+- **No conflict; docs/tracking only.** W3-G was 2 ahead / 0 behind `c0a44d7`. The merge touches only `PROJECT_CANONICAL_CONTEXT.md`,
+  `RULES_HARDENING_BACKLOG.md` and `docs/phase3/`; no product-code, `server/`, `gameEngine/`, `contracts/`, `rulesVersion.ts`, settlement
+  or fixture file differs from `c0a44d7`. No product test suite was run (docs-only; accounting PASS, `git diff --check` clean).
+- **W3-G: COMPLETE — OWNER REVIEW ACCEPTED** (an accepted audit gate, not a product slice). All fifteen findings stand. AUD-25.11 CLOSED —
+  OBSOLETE / UNREACHABLE ARCHITECTURE; AUD-25.13 ruled item by item (above); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i)); AUD-12.07 RULED.
+- **Still OPEN:** AUD-25.01 (MEDIUM) -> W3-B; AUD-25.02 (MEDIUM) -> W3-J; AUD-25.03 … 25.10, 25.12 and AUD-25.13's FIX items -> W3-J;
+  AUD-25.14 -> W3-F. No slice changed implementation state. **W3-J is unblocked from this baseline.**
+- **Versions:** `RULES_ENGINE_VERSION` 13; supported live `[13]`; settlement-certified `[10, 11, 12, 13]`; keys and fixtures unchanged.
+- **Pre-existing meta-test failures** (`sourceGuards` 1, `boardInEffect` 1, `liveHygiene` 2) unchanged.
 
 ## Scope and closing remark
 
@@ -862,7 +880,7 @@ slice tracking), then this tracking commit.
 
 ## W3-G retrospective UI-parity findings (U-28 / AUD-22.01; AUD-00.01) — 2026-10-04
 
-Filed by the W3-G audit at `c0a44d7` (the current provisional baseline). The CURRENT-SOURCE column for these rows is `c0a44d7`, not
+Filed by the W3-G audit at `c0a44d7` (then the current provisional baseline; since superseded by `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration`). The CURRENT-SOURCE column for these rows is `c0a44d7`, not
 `8e897f9`. Each finding is fixed in W3-J (or the named slice), proven obsolete, or ruled by the owner before W3-F closes Phase 3
 (Part F: deferral to polish is not a disposition).
 

@@ -4964,7 +4964,7 @@
   "W3-D": "NOT STARTED",
   "W3-E": "COMPLETE — `phase3/w3-manual-city-bypass` `07454d0` + review follow-ups `6d7cfa1`; integrated at the safe Wave-2 integration (`a860178`) under OD-11",
   "W3-F": "NOT STARTED",
-  "W3-G": "COMPLETE — OWNER REVIEW ACCEPTED (2026-10-04): audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7`; audit `e86a933`, owner-review tracking on top); no product code. An accepted audit gate, not a product slice. AUD-00.01 and AUD-22.01 IMPLEMENTED (the audit is done); findings AUD-25.01 … AUD-25.15 accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed). OPEN remediation obligations: AUD-25.01 (MEDIUM) -> W3-B, AUD-25.02 (MEDIUM) -> W3-J, AUD-25.03 … 25.10 and 25.12 -> W3-J, AUD-25.14 -> W3-F; both MEDIUM rows must be fixed before W3-F closes Phase 3. W3-J is unblocked",
+  "W3-G": "COMPLETE — OWNER REVIEW ACCEPTED (2026-10-04) and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` (merge `72ccd00` of `967e4e7`, parents `c0a44d7` / `967e4e7`): audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7`; audit `e86a933`, owner-review tracking on top); no product code. An accepted audit gate, not a product slice. AUD-00.01 and AUD-22.01 IMPLEMENTED (the audit is done); findings AUD-25.01 … AUD-25.15 accepted and preserved. Owner rulings: AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE (GR-1b); AUD-25.13 ruled item by item (FIX IN W3-J / RECORDED RESIDUAL / OBSOLETE); AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed). OPEN remediation obligations: AUD-25.01 (MEDIUM) -> W3-B, AUD-25.02 (MEDIUM) -> W3-J, AUD-25.03 … 25.10 and 25.12 -> W3-J, AUD-25.14 -> W3-F; both MEDIUM rows must be fixed before W3-F closes Phase 3. W3-J is unblocked",
   "W3-H": "NOT STARTED",
   "W3-I": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-v13cert-integration` (2026-10-04, merge `5a22e38` of `phase3/w3-i-offers` @ `92cdb5d`, parents `c3f43b7` / `92cdb5d`, its 3 commits carried unchanged): code `5c6d7f8` + review fixes `d663b1c` + tracking `92cdb5d` (from `phase3/wave2-bcgdf-v13cert-integration` @ `c3f43b7`). AUD-02.05, AUD-02.06, AUD-03.11, AUD-19.01 IMPLEMENTED. Dependencies W2-F and W2-H integrated in the base. A read-only queue accessor on the room link and one hook outside the drain (no RED region, no OD-12 edit); the par prompt and the three offer forms (Private Companies trade form, Buy Private Company, Buy Trains from a Corporation) read it. OWNER-ACCEPTED reading (2026-10-04): for AUD-03.11 / R4 a refused proposal may leave the form open with its typed values preserved so the player can correct and resend. Not taken (recorded follow-ups elsewhere, unchanged): the W2-F duplicate-waiting LOW and the two NITs. Presentation only: no engine, server, rules-version or settlement change",
   "W3-J": "NOT STARTED",
@@ -5366,7 +5366,7 @@
  "wave3_i_w2i_w2j_w3c_v13cert_integration": {
   "branch": "phase3/wave3-i-w2i-w2j-w3c-v13cert-integration",
   "base": "18d4762083425deb23c46f7d2b1886b99deb616f (phase3/wave3-i-w2i-w2j-v13cert-integration)",
-  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C integrated; no broad Phase-3 owner gate has been run; not merged to main",
+  "status": "SUPERSEDED AS BASELINE by `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` (2026-10-04, the accepted W3-G audit added) at `c0a44d7374de71b3fd1a093b6c0f82c69f2e08fa`; otherwise as recorded: PROVISIONAL — was the Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C integrated; no broad Phase-3 owner gate has been run; not merged to main",
   "inputs": {
    "W3-C": {
     "branch": "phase3/w3-c-refusal-display",
@@ -5514,5 +5514,46 @@
    "disposition": "FIX IN W3-J",
    "reason": "reachable, player-visible copy; must match the v13 sell / buy turn"
   }
- ]
+ ],
+ "wave3_i_w2i_w2j_w3c_w3g_v13cert_integration": {
+  "branch": "phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration",
+  "base": "c0a44d7374de71b3fd1a093b6c0f82c69f2e08fa (phase3/wave3-i-w2i-w2j-w3c-v13cert-integration)",
+  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C integrated, plus the accepted W3-G audit (docs/tracking only); no broad Phase-3 owner gate has been run; not merged to main",
+  "inputs": {
+   "W3-G": {
+    "branch": "phase3/w3-g-ui-parity-audit",
+    "head": "967e4e75a46395dbdfc1cdff02f2b41085021236",
+    "audit_commit": "e86a93386e36febf511e1135fa598e9333e6ba5d",
+    "owner_review_commit": "967e4e75a46395dbdfc1cdff02f2b41085021236",
+    "parent": "c0a44d7",
+    "merge": "72ccd000a14f3f15e0147426b9ccecd10827f913"
+   }
+  },
+  "method": "git merge --no-ff (first parent c0a44d7, second parent 967e4e7); e86a933 and 967e4e7 carried unchanged (same SHAs); no squash, no rebase, no source branch moved",
+  "reconciliation": [
+   "No conflict: W3-G was 2 ahead / 0 behind c0a44d7. Docs/tracking only: the merge changes PROJECT_CANONICAL_CONTEXT.md, RULES_HARDENING_BACKLOG.md and docs/phase3/ (accounting JSON, matrix, plan); no product-code, server/, gameEngine/, contracts/, rulesVersion.ts, settlement or fixture file differs from c0a44d7.",
+   "W3-G is an accepted audit gate, not a product slice: COMPLETE — OWNER REVIEW ACCEPTED. All 15 findings (AUD-25.01 … AUD-25.15) preserved. AUD-25.11 CLOSED — OBSOLETE / UNREACHABLE ARCHITECTURE; AUD-25.13 ruled item by item; AUD-25.15 resolved (OD-3, OD-13, OD-14(d), OD-14(i) transcribed); AUD-12.07 RULED.",
+   "No broad product test suite run (docs-only integration, as the brief allows); accounting PASS and `git diff --check` clean on the merge.",
+   "Tracking only in this record's commit: the new baseline recorded and c0a44d7 superseded; no slice changed implementation state (W3-B, W3-J, W2-M, W3-F and every other open slice unchanged)."
+  ],
+  "follow_ups": [
+   "OPEN remediation obligations from W3-G: AUD-25.01 (MEDIUM) -> W3-B; AUD-25.02 (MEDIUM) -> W3-J; AUD-25.03 … 25.10, 25.12 and AUD-25.13's FIX IN W3-J items -> W3-J; AUD-25.14 -> W3-F. Both MEDIUM rows must be fixed before W3-F closes Phase 3.",
+   "AUD-25.13's RECORDED RESIDUAL and OBSOLETE items need no further work (`aud_25_13_dispositions`).",
+   "Pre-existing meta-test failures (sourceGuards 1, boardInEffect 1, liveHygiene 2) unchanged; not touched by this docs-only merge."
+  ],
+  "versions": {
+   "RULES_ENGINE_VERSION": 13,
+   "SUPPORTED_RULES_ENGINE_VERSIONS": [
+    13
+   ],
+   "SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS": [
+    10,
+    11,
+    12,
+    13
+   ],
+   "keys": "unchanged from 7916763 / 18d4762 (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
+  },
+  "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C COMPLETE and INTEGRATED; the W3-G audit gate ACCEPTED and INTEGRATED; no accepted slice awaits integration; W3-J is unblocked from this baseline; not deployable until drained v12 rooms and the final integrated owner gate"
+ }
 }

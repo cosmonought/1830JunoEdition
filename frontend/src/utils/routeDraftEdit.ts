@@ -26,6 +26,8 @@ import { bridgeWaypoints } from "../gameEngine/routeAutoTrace";
 // Design note #1025: the rail-level connection and visited rules, derived from the draft itself.
 import { connectionForClick, segmentsUsedBy } from "./routeConnection";
 import { axialHexDistance, type RoutePoint } from "./routeWaypoints";
+// Phase 3 W3-E: whether a crossing has a rail around its centre, for the drawing cap.
+import { bowAvailableAt } from "./manualBypass";
 import { isRevenueCentreHex, isRouteTerminusHex } from "../gameEngine/sandboxSession";
 import { stopEnteredFrom } from "../gameEngine/trackReach";
 import { isUnlimitedReach, reachForDrafting } from "../gameEngine/trainReach";
@@ -72,12 +74,25 @@ export interface RouteDraftEditInput {
   forCompanyId?: number;
 }
 
-/** How many of these points pay. The cap counts revenue CENTRES, not hexes travelled (#156). */
+/** How many of these points pay. The cap counts revenue CENTRES, not hexes travelled (#156).
+ *
+ *  Phase 3 W3-E (K-06): AN INTERIOR CROSSING THAT MAY GO ROUND ITS CENTRE IS NOT COUNTED HERE. A bypassed hex
+ *  pays nothing and spends no stop (#737), and the Stop / Bypass choice can only be made once the hex is
+ *  between two others -- so counting it at the click would refuse the very click that makes the choice
+ *  possible (a PRR 2-train drawing Pittsburgh, Altoona, then the city beyond). The priced draft still counts
+ *  it while it is a stop, so "Too many stops" shows until the player picks Bypass, and the authority judges
+ *  the run either way. A waypoint already flagged `bypass` on an interior crossing is uncounted for the same
+ *  reason: the pricing (`sandboxRouteBreakdown`) and the authority do not count it either.
+ *  ONLY WHILE UNDECIDED: a crossing that already names its arm (`variant` set -- the auto-router's Stop, or the
+ *  player's) counts as it is drawn, so editing an auto draft is capped exactly as before. */
 function centresIn(mapGrid: MapGridResponse, points: readonly RoutePoint[], forCompanyId?: number): number {
-  return points.reduce(
-    (total, entry) => (isRevenueCentreHex(mapGrid, entry.hexLabel, forCompanyId) ? total + 1 : total),
-    0,
-  );
+  return points.reduce((total, entry, index) => {
+    if (!isRevenueCentreHex(mapGrid, entry.hexLabel, forCompanyId)) return total;
+    const interior = index > 0 && index < points.length - 1;
+    if (interior && entry.bypass === true) return total;
+    if (interior && entry.variant === undefined && bowAvailableAt(mapGrid, points, index)) return total;
+    return total + 1;
+  }, 0);
 }
 
 export function editRouteDraft(input: RouteDraftEditInput): RouteDraftEdit {

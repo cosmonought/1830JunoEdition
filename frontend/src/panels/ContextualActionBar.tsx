@@ -879,6 +879,7 @@ export default function ContextualActionBar({
   onClearRoute,
   onRemoveRouteStop,
   stopsRemovedByRemoval,
+  onSetRouteBypass,
   currentGlobalEra,
   activeTab,
   onSelectTab,
@@ -1340,6 +1341,9 @@ export default function ContextualActionBar({
   onRemoveRouteStop?: (trainIndex: number, hexLabel: string) => void;
   /** How many drafted hexes that removal would take. The shell owns the walk; the panel only sees the stops. */
   stopsRemovedByRemoval?: (trainIndex: number, hexLabel: string) => number;
+  /** Phase 3 W3-E (K-06): the president's Stop / Bypass choice on a waypoint with a track around its centre.
+   *  Keyed by the waypoint's index in the full drafted walk (`TrainRouteDraft.bypassChoices[i].index`). */
+  onSetRouteBypass?: (trainIndex: number, pointIndex: number, bypass: boolean, hexLabel: string) => void;
   /** Buy Private Company Action Tray -- design note #14. Already filtered
    *  down to what `activePlayerAddress` actually still owns and could sell
    *  (`playerSellablePrivateCompanies`), not the full room-wide list. */
@@ -3787,6 +3791,8 @@ export default function ContextualActionBar({
               /* Design note #1024: the granular edit, beside the global one. */
               onRemoveStop={onRemoveRouteStop}
               stopsRemovedBy={stopsRemovedByRemoval}
+              /* Phase 3 W3-E (K-06): Stop / Bypass on a waypoint with a track around its centre. */
+              onSetBypass={onSetRouteBypass}
               onClose={() => setOpenTrainIndex(null)}
               /* #802: the panel's click feedback had nowhere else to go. A refused draft explaining itself
                  here beats it explaining itself nowhere, which is what deleting the panel would otherwise

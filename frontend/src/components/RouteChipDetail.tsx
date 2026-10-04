@@ -60,6 +60,19 @@ export interface RouteChipDetailProps {
    *  truncates rather than splicing from the middle. Supplied by the caller because it owns the full walk;
    *  this component only ever sees the paying stops. */
   stopsRemovedBy?: (trainIndex: number, hexLabel: string) => number;
+  /** ==================================================================
+   *   PHASE 3 W3-E (K-06 / U-17, OD-11): STOP OR BYPASS, ON THE WAYPOINT ITSELF
+   *  ==================================================================
+   *
+   * A route crossing a hex with a track around its revenue centre (Altoona's bow, H12) may stop there or go
+   * round it. The draft names those waypoints (`draft.bypassChoices`); this renders one small Stop / Bypass
+   * pair per waypoint, in the strip that already lists the route's stops, so the choice sits beside the route
+   * it changes -- not a secret gesture on the map. A forced bypass (the city is closed to this corporation) is
+   * stated, not offered.
+   *
+   * GATED ON `canClear`, the edit permission the X and Clear already carry: a watcher may read, not choose.
+   * OPTIONAL, so a caller that offers no choice renders exactly as before. */
+  onSetBypass?: (trainIndex: number, pointIndex: number, bypass: boolean, hexLabel: string) => void;
   /** Closes the detail without touching the route. */
   onClose: () => void;
   /** The panel's own click feedback, so a refused draft explains itself here rather than nowhere. */
@@ -74,6 +87,27 @@ export function removeStopTitle(hex: string, hexesRemoved: number): string {
     : `Remove ${hex} and the ${hexesRemoved - 1} hex${hexesRemoved === 2 ? "" : "es"} drawn after it — a route is a single path, so the tail goes with it. You can carry on drawing from the new end.`;
 }
 
+/** Phase 3 W3-E: one sentence per button, so the tooltip and the accessible name cannot drift apart. */
+export function bypassChoiceTitle(hex: string, bypass: boolean): string {
+  return bypass
+    ? `Bypass ${hex}: take the track around its revenue centre. It pays nothing and does not use one of this train's stops.`
+    : `Stop at ${hex}: it counts as one of this train's stops and pays its revenue.`;
+}
+
+/** Phase 3 W3-E: what a forced bypass is, stated rather than offered. */
+export function forcedBypassNote(hex: string): string {
+  return `${hex}: bypassed — the city is closed to this corporation, so the train takes the track around it.`;
+}
+
+/** Phase 3 W3-E: the over-reach line, naming the stop a Bypass would save -- only when bypassing would be
+ *  enough (`overBy` stops too many, each choice saving one). */
+export function tooManyStopsNote(model: string, choices: TrainRouteDraft["bypassChoices"], overBy = 1): string {
+  const savable = (choices ?? []).filter((choice) => choice.kind === "choice" && !choice.bypassed);
+  return savable.length > 0 && overBy <= savable.length
+    ? `Too many stops for a ${model}. Bypass ${savable.map((choice) => choice.hexLabel).join(" and ")} to save ${overBy === 1 ? "a stop" : `${overBy} stops`}, or shorten the route.`
+    : `Too many stops for a ${model}.`;
+}
+
 /** The open chip's route, or nothing. */
 export function RouteChipDetail({
   draft,
@@ -81,12 +115,14 @@ export function RouteChipDetail({
   onClearRoute,
   onRemoveStop,
   stopsRemovedBy,
+  onSetBypass,
   onClose,
   feedback,
 }: RouteChipDetailProps): React.ReactElement | null {
   if (!draft) return null;
 
   const stops = draft.stops ?? [];
+  const bypassChoices = draft.bypassChoices ?? [];
   const model = draft.model ?? "Train";
   /* Design note #869: the route's own ink, from the one function that decides it (#494). The chip above, the
      line on the map and this head are now three drawings of one colour rather than three opinions. */
@@ -179,8 +215,57 @@ export function RouteChipDetail({
         </>
       )}
 
+      {/* Phase 3 W3-E (K-06): one Stop / Bypass pair per waypoint that has a track around its centre. On its
+          own line, because a bypassed hex pays nothing and so is not in the stop list above it. */}
+      {bypassChoices.length > 0 && (
+        <span style={styles.bypassRow}>
+          {bypassChoices.map((choice) =>
+            choice.kind === "forced" ? (
+              <span key={`bypass-${choice.index}`} style={styles.bypassForced}>
+                {forcedBypassNote(choice.hexLabel)}
+              </span>
+            ) : (
+              <span
+                key={`bypass-${choice.index}`}
+                style={styles.bypassGroup}
+                role="group"
+                aria-label={`${choice.hexLabel}: stop or bypass`}
+              >
+                <span style={styles.bypassHex}>{choice.hexLabel}</span>
+                {canClear && onSetBypass ? (
+                  ([false, true] as const).map((bypass) => (
+                    <button
+                      key={bypass ? "bypass" : "stop"}
+                      type="button"
+                      aria-pressed={choice.bypassed === bypass}
+                      style={{
+                        ...styles.bypassOption,
+                        ...(choice.bypassed === bypass ? styles.bypassOptionOn : {}),
+                      }}
+                      onClick={() => onSetBypass(draft.trainIndex, choice.index, bypass, choice.hexLabel)}
+                      title={bypassChoiceTitle(choice.hexLabel, bypass)}
+                      aria-label={bypassChoiceTitle(choice.hexLabel, bypass)}
+                    >
+                      {bypass ? "Bypass" : "Stop"}
+                    </button>
+                  ))
+                ) : (
+                  <span style={styles.bypassReadOnly}>{choice.bypassed ? "bypassed" : "stops"}</span>
+                )}
+              </span>
+            ),
+          )}
+        </span>
+      )}
+
       {draft.exceedsMaxDistance && (
-        <span style={styles.problem}>Too many stops for a {model}.</span>
+        <span style={styles.problem}>
+          {tooManyStopsNote(
+            model,
+            draft.bypassChoices,
+            draft.maxDistance === undefined ? 1 : draft.revenueCentres - draft.maxDistance,
+          )}
+        </span>
       )}
       {draft.endsOffTerminus && (
         <span style={styles.problem}>A route must finish at a city, a town or a red off-board hex.</span>
@@ -279,6 +364,27 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1,
     cursor: "pointer",
   },
+  /* Phase 3 W3-E: the Stop / Bypass pair. A small two-segment control rather than a checkbox, so both
+     outcomes are named and the current one is the lit one (`aria-pressed`). Longhand borders (#840). */
+  bypassRow: { display: "flex", flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: "4px 12px", flexBasis: "100%" },
+  bypassGroup: { display: "inline-flex", alignItems: "center", gap: "4px", whiteSpace: "nowrap" },
+  bypassHex: { fontWeight: 700, marginRight: "2px" },
+  bypassOption: {
+    padding: "1px 8px",
+    borderRadius: RADIUS.control,
+    borderWidth: "1px",
+    borderStyle: "solid",
+    borderColor: "#4a4a4a",
+    backgroundColor: "transparent",
+    color: "#c8c6c0",
+    fontFamily: "inherit",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    cursor: "pointer",
+  },
+  bypassOptionOn: { borderColor: "#7fd18c", backgroundColor: "#24342a", color: "#f2f0eb" },
+  bypassReadOnly: { fontSize: FONT_SIZE.micro, color: "#a8a6a0" },
+  bypassForced: { fontSize: FONT_SIZE.micro, color: "#a8a6a0" },
   clear: {
     padding: "2px 9px",
     borderRadius: RADIUS.control,

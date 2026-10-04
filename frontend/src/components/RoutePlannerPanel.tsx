@@ -25,6 +25,8 @@ import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { routeTrainColor } from "../styles/routeLivery";
 // Phase 3 W1-G: the one runnable set and the one refusal order (#883), and the K-26 tooltip.
 import { droppedDraftsNote, runRoutesTitle, runTrainsRefusal, runnableDrafts, runnableRouteTotal } from "../utils/runTrainsRules";
+// Phase 3 W3-E: the Stop / Bypass state a draft carries.
+import type { BypassChoice } from "../utils/manualBypass";
 
 /* `RouteBuildMode` is GONE -- design note #493. It was `"auto" | "manual"`, and the note above it argued at
    length about which value the step should open on. That argument is what gave the removal away: both values
@@ -65,6 +67,10 @@ export interface TrainRouteDraft {
    *  token, or `null` when it can. 1830 requires a route to PASS THROUGH a
    *  city the corporation has a token in -- at any point along the run. */
   tokenBlockReason: string | null;
+  /** Phase 3 W3-E (K-06): the waypoints of this draft that have a track around their revenue centre, with the
+   *  Stop / Bypass state of each (`manualBypass.ts`). Absent or empty for nearly every route, and absent on a
+   *  watcher's copy -- the choice is the acting president's. */
+  bypassChoices?: ReadonlyArray<BypassChoice>;
 }
 
 export interface RoutePlannerPanelProps {

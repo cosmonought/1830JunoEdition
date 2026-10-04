@@ -1,0 +1,236 @@
+/** @jest-environment node */
+// SCRATCH (W3-K pre-certification, not committed): OD-2 Pass Turn, SBS-3, SBS-4 under rules v12.
+import { applySandboxAction, stockTurnStage } from "../../gameEngine/sandboxSession";
+import { CURRENT_RULES_REVISION, STANDARD_VARIANTS } from "../../gameEngine/gameVariants";
+import { stockPurchaseRefusal, chartContextFromState } from "../../gameEngine/stockTransactionAuthority";
+import { marketCellForPrice, marketZoneForPrice, PAR_BOX_PRICES } from "../../gameEngine/marketGeometry";
+import { PRICE_GRID } from "../../components/StockMarketRenderer";
+import type { GameStateResponse } from "../../gameEngine/gameState";
+
+const SEATS = ["p0", "p1", "p2", "p3"];
+const PRR = 1;
+const CPR = 2;
+const NYC = 3;
+
+function mark(company_id: number, price: number, enteredAt: number) {
+  const cell = marketCellForPrice(price);
+  if (!cell) throw new Error(`no cell for ${price}`);
+  return { x: cell.x, y: cell.y, price, enteredAt, company_id };
+}
+
+function board(over: Partial<GameStateResponse> = {}): GameStateResponse {
+  return {
+    player_addresses: SEATS,
+    player_cash: SEATS.map((player) => ({ player, cash_vgp: "2000" })),
+    private_companies: [],
+    current_round_type: "StockRound",
+    macro_round_number: 4,
+    active_player_index: 0,
+    consecutive_passes: 0,
+    priority_deal_index: 0,
+    last_trader_index: null,
+    operating_round_just_ended: false,
+    stock_round_just_ended: false,
+    rules_engine_version: 12,
+    variants: { ...STANDARD_VARIANTS, rules: CURRENT_RULES_REVISION },
+    public_companies: [
+      {
+        company_id: PRR, ticker: "PRR", president: "p1", par_value: "100",
+        ipo_pool_percentage: 30, bank_pool_percentage: 0,
+        player_holdings: [ { player: "p0", percentage: 20 }, { player: "p1", percentage: 50 } ],
+        station_token_hexes: [],
+      },
+      {
+        // CPR: started long ago at $76, token crashed to $30 (Brown), 20% still in the IPO, 30% in the Bank Pool.
+        company_id: CPR, ticker: "CPR", president: "p2", par_value: "76",
+        ipo_pool_percentage: 20, bank_pool_percentage: 30,
+        player_holdings: [ { player: "p2", percentage: 30 }, { player: "p3", percentage: 20 } ],
+        station_token_hexes: [],
+      },
+      {
+        company_id: NYC, ticker: "NYC", president: "p3", par_value: "90",
+        ipo_pool_percentage: 40, bank_pool_percentage: 0,
+        player_holdings: [ { player: "p0", percentage: 10 }, { player: "p3", percentage: 50 } ],
+        station_token_hexes: [],
+      },
+    ],
+    market_positions: { [PRR]: mark(PRR, 100, 1), [CPR]: mark(CPR, 30, 2), [NYC]: mark(NYC, 90, 3) },
+    ...over,
+  } as unknown as GameStateResponse;
+}
+
+const seatOf = (s: GameStateResponse) => s.player_addresses[s.active_player_index];
+const ctxOf = (s: GameStateResponse) => {
+  const chart = chartContextFromState(s);
+  return { actor: seatOf(s), marketZoneFor: chart.marketZoneFor, sharePrice: 100 } as never;
+};
+const act = (s: GameStateResponse, msg: unknown) => applySandboxAction(s, msg as never, ctxOf(s));
+const buy = (s: GameStateResponse, id: number, source: "Ipo" | "Bank") => act(s, { BuyStock: { game_id: 1, protocol_id: id, source } });
+const sell = (s: GameStateResponse, id: number, percentage = 10) => act(s, { SellStock: { game_id: 1, protocol_id: id, percentage } });
+const pass = (s: GameStateResponse) => act(s, { PassTurn: { game_id: 1 } });
+const refusal = (s: GameStateResponse, id: number, source: "Ipo" | "Bank") =>
+  stockPurchaseRefusal({ state: s, buy: { companyId: id, source } as never, actor: seatOf(s), ctx: chartContextFromState(s) });
+const holding = (s: GameStateResponse, id: number, who = "p0") =>
+  s.public_companies.find((c) => c.company_id === id)!.player_holdings.find((h) => h.player === who)?.percentage ?? 0;
+
+describe("chart facts", () => {
+  it("no par box is Brown; CPR at $30 is Brown", () => {
+    const zones = PAR_BOX_PRICES.map((p) => [p, marketZoneForPrice(p)]);
+    // eslint-disable-next-line no-console
+    console.log("par zones", JSON.stringify(zones));
+    const brown = Array.from(new Set(PRICE_GRID.filter((c: { price: number }) => marketZoneForPrice(c.price) === "Brown").map((c: { price: number }) => c.price))).sort((a, b) => a - b);
+    // eslint-disable-next-line no-console
+    console.log("brown prices", JSON.stringify(brown));
+    for (const [, z] of zones) expect(z).not.toBe("Brown");
+    expect(marketZoneForPrice(30)).toBe("Brown");
+  });
+});
+
+describe("OD-2: v12 Pass semantics (rules revision 1, pinned v12 board)", () => {
+  it("a no-action turn takes two PassTurns; the first is a stage move only", () => {
+    const p1 = pass(board());
+    expect(p1.active_player_index).toBe(0);
+    expect(stockTurnStage(p1)).toBe("buy");
+    expect(p1.consecutive_passes).toBe(0);
+    const p2 = pass(p1);
+    expect(p2.active_player_index).toBe(1);
+    expect(p2.consecutive_passes).toBe(1);
+  });
+  it("sell-only turn: two PassTurns, acted (streak 0); buy-first turn: one PassTurn", () => {
+    const s = sell(board(), NYC);
+    expect(holding(s, NYC)).toBe(0);
+    const a = pass(s);
+    expect(a.active_player_index).toBe(0);
+    const b = pass(a);
+    expect(b.active_player_index).toBe(1);
+    expect(b.consecutive_passes).toBe(0);
+    const bought = buy(board(), PRR, "Ipo");
+    expect(holding(bought, PRR)).toBe(30);
+    expect(stockTurnStage(bought)).toBe("sell_again");
+    const sold = sell(bought, NYC);
+    expect(holding(sold, NYC)).toBe(0);
+    expect(buy(sold, PRR, "Ipo")).toEqual(sold); // second buy refused
+    const ended = pass(sold);
+    expect(ended.active_player_index).toBe(1);
+    expect(ended.consecutive_passes).toBe(0);
+  });
+  it("Priority Deal: the stage Pass marks no trader; four true passes end the round with the deal left of the last trader", () => {
+    let s = buy(board(), PRR, "Ipo"); // p0 trades
+    s = pass(s); // p0 ends turn (acted)
+    for (let i = 0; i < 4; i++) {
+      s = pass(s); // stage
+      if (i < 3) expect(s.current_round_type).toBe("StockRound");
+      s = pass(s); // true pass
+    }
+    // eslint-disable-next-line no-console
+    console.log("after 4 true passes", s.current_round_type, "just ended", s.stock_round_just_ended, "streak", s.consecutive_passes, "priority", s.priority_deal_index, "last trader", s.last_trader_index, "macro", s.macro_round_number, "seat", s.active_player_index);
+    expect(s.macro_round_number).not.toBe(4);
+    expect(s.priority_deal_index).toBe(1);
+  });
+  it("must-sell: the first (stage) Pass is already refused at ingress while a curable excess is owed", () => {
+    // left to the existing DA-5 suites; noted here only
+    expect(true).toBe(true);
+  });
+});
+
+describe("SBS-3: Brown Pool Buy -> Sell (other corp) -> Pool Buy", () => {
+  it("is accepted under v12 (a second Buy action)", () => {
+    const b1 = buy(board(), CPR, "Bank");
+    expect(holding(b1, CPR)).toBe(10);
+    const s = sell(b1, NYC);
+    expect(holding(s, NYC)).toBe(0);
+    expect(refusal(s, CPR, "Bank")).toBeNull();
+    const b2 = buy(s, CPR, "Bank");
+    expect(holding(b2, CPR)).toBe(20);
+    expect(b2.bought_this_turn).toBe(2);
+  });
+  it("control: without the sale the continuation is accepted (the zone allowance)", () => {
+    const b2 = buy(buy(board(), CPR, "Bank"), CPR, "Bank");
+    expect(holding(b2, CPR)).toBe(20);
+  });
+  it("control: selling the SAME corp trips the buy-back lockout (needs a holding first)", () => {
+    const own = board({});
+    own.public_companies[1].player_holdings.push({ player: "p0", percentage: 10 } as never);
+    (own.public_companies[1] as { bank_pool_percentage: number }).bank_pool_percentage = 20;
+    const b1 = buy(own, CPR, "Bank");
+    const s = sell(b1, CPR);
+    const r = refusal(s, CPR, "Bank");
+    // eslint-disable-next-line no-console
+    console.log("same-corp sale then buy:", r);
+    expect(r).not.toBeNull();
+  });
+});
+
+describe("SBS-4: Brown IPO first purchase opens the Pool continuation", () => {
+  it("IPO (CPR in Brown) -> Pool CPR is accepted under v12", () => {
+    const b1 = buy(board(), CPR, "Ipo");
+    expect(holding(b1, CPR)).toBe(10);
+    const cash1 = b1.player_cash.find((c) => c.player === "p0")!.cash_vgp;
+    expect(refusal(b1, CPR, "Bank")).toBeNull();
+    const b2 = buy(b1, CPR, "Bank");
+    expect(holding(b2, CPR)).toBe(20);
+    // eslint-disable-next-line no-console
+    console.log("IPO paid at par: cash after IPO", cash1, "after pool", b2.player_cash.find((c) => c.player === "p0")!.cash_vgp);
+  });
+  it("the reverse order, Pool CPR -> IPO CPR, is refused under v12 (asymmetric)", () => {
+    const b1 = buy(board(), CPR, "Bank");
+    const r = refusal(b1, CPR, "Ipo");
+    // eslint-disable-next-line no-console
+    console.log("pool then IPO:", r);
+    expect(r).not.toBeNull();
+    expect(buy(b1, CPR, "Ipo")).toEqual(b1);
+  });
+  it("a first-ever purchase (President's Certificate at par) can never be Brown", () => {
+    for (const p of PAR_BOX_PRICES) expect(marketZoneForPrice(p)).not.toBe("Brown");
+  });
+});
+
+/* MODEL OF THE PROPOSED v13 CHANGE (no tracked file touched): the only reducer change is that, under the new
+   revision, the PassTurn arm no longer takes the `stage === "sell" -> stock_turn_stage: "buy"` branch. Modelled
+   here by handing the unchanged reducer a board already past that branch. */
+const pass13 = (s: GameStateResponse) => pass({ ...s, stock_turn_stage: "buy" } as GameStateResponse);
+
+describe("OD-2 model: one PassTurn ends the turn", () => {
+  it("no-action turn: one Pass, counted as a true pass", () => {
+    const p = pass13(board());
+    expect(p.active_player_index).toBe(1);
+    expect(p.consecutive_passes).toBe(1);
+    expect(p.stock_turn_stage).toBeUndefined();
+  });
+  it("sell-only turn: one Pass, acted (streak reset, not counted)", () => {
+    const p = pass13(sell({ ...board(), consecutive_passes: 2 } as GameStateResponse, NYC));
+    expect(p.active_player_index).toBe(1);
+    expect(p.consecutive_passes).toBe(0);
+  });
+  it("sell -> buy -> sell -> one Pass; a second buy refused throughout", () => {
+    let s = sell(board(), NYC);
+    s = buy(s, PRR, "Ipo");
+    expect(holding(s, PRR)).toBe(30);
+    s = sell(s, PRR); // sell after buy is legal (a different certificate than the lockout covers? PRR sale of own)
+    const again = buy(s, PRR, "Ipo");
+    expect(again).toEqual(s);
+    const e = pass13(s);
+    expect(e.active_player_index).toBe(1);
+    expect(e.consecutive_passes).toBe(0);
+  });
+  it("all-pass ending: N consecutive single passes end the round; Priority Deal left of the last trader", () => {
+    let s = buy(board(), PRR, "Ipo"); // p0 trades
+    s = pass13(s); // p0 ends, acted
+    expect(s.consecutive_passes).toBe(0);
+    for (let i = 0; i < 3; i++) {
+      s = pass13(s);
+      expect(s.macro_round_number).toBe(4);
+    }
+    s = pass13(s); // fourth consecutive true pass
+    expect(s.macro_round_number).not.toBe(4);
+    expect(s.priority_deal_index).toBe(1);
+  });
+  it("a purchase in the middle of a streak resets it", () => {
+    let s = pass13(board()); // p0 passes (1)
+    s = pass13(s); // p1 passes (2)
+    s = buy(s, NYC, "Ipo"); // p2 buys
+    s = pass13(s);
+    expect(s.consecutive_passes).toBe(0);
+    expect(s.active_player_index).toBe(3);
+  });
+});

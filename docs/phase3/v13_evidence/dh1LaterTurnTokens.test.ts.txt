@@ -1,0 +1,164 @@
+/** @jest-environment node */
+// SCRATCH (v13 scope verification, DH-1 / AUD-04.04). Not a tracked test. Demonstrates current v12 behaviour:
+// the D&H owner lays F16 with the power, does NOT place the free station, its turn ends; on its NEXT operating
+// turn, at Tokens, `dhFreeStationAvailableFor` still answers true, the authority refuses the free placement
+// (window closed), and the server's derived loop does NOT skip the Tokens step although no ordinary placement
+// exists -- while the rival in the identical topological situation IS skipped.
+
+import type { GameStateResponse } from "../../gameEngine/gameState";
+import type { MapGridResponse } from "../../components/hexContractTypes";
+import { STATIC_BOARD_HEXES, activateBoard, STANDARD_BOARD } from "../../components/hexBoardData";
+import { dhStationRefusal } from "../../gameEngine/dhStationAuthority";
+import { DH_PRIVATE_ID, dhFreeStationAvailableFor } from "../../gameEngine/dhPower";
+import { nextDerivedAction } from "../../gameEngine/derivedActions";
+import { stationPlacementBlockReason } from "../../gameEngine/stationTokens";
+import { operatingCorporationId } from "../../gameEngine/dividendGate";
+import { replayLog } from "../../gameEngine/replayLog";
+import { sandboxReplayProviders } from "../../gameEngine/replayProviders";
+import { DEVELOPMENT_CORPUS_POLICY } from "../../gameEngine/rulesVersion";
+import { stateDigest } from "../../gameEngine/stateDigest";
+import { board, P1, P2, DH } from "../../utils/offerFixtures74";
+import { roomFor, withCorp, withState, GRID } from "../../utils/offerMatrix74Support";
+
+afterAll(() => activateBoard(STANDARD_BOARD));
+
+const hexAt = (label: string) => STATIC_BOARD_HEXES.find((entry) => entry.label === label)!;
+const at = (label: string): [number, number] => [hexAt(label).q, hexAt(label).r];
+
+const OWNER = 31;
+const RIVAL = 32;
+
+/** OWNER (D&H owner, home I15) operates first at TRACK; RIVAL (home H12) second. Two ORs in the set, so OWNER
+ *  operates again after RIVAL without a Stock Round. No D&H power used yet. Empty grid. */
+function seed(): GameStateResponse {
+  const state = board({
+    round: "OperatingRound",
+    corps: [
+      { id: OWNER, ticker: "OWN", president: P1, trains: ["2"], treasury: "500", price: 100 },
+      { id: RIVAL, ticker: "RIV", president: P2, trains: ["2"], treasury: "500", price: 90 },
+    ],
+    privates: [{ id: DH, owner: null, ownerCorp: OWNER, cost: "70" }],
+    operating: OWNER,
+    step: "Track",
+    over: { operating_round_sequence_length: 2 } as Partial<GameStateResponse>,
+  });
+  let out = withCorp(state, OWNER, { home_hex_label: "I15", station_token_hexes: [at("I15")], station_tokens: [], station_token_limit: 4 });
+  out = withCorp(out, RIVAL, { home_hex_label: "H12", station_token_hexes: [at("H12")], station_tokens: [], station_token_limit: 4 });
+  return withState(out, { used_private_abilities: [] });
+}
+
+const LAY_DH = {
+  LayTile: { game_id: 1, protocol_id: OWNER, q: hexAt("F16").q, r: hexAt("F16").r, tile_id: 57, orientation: 0, ability_key: "dh-tile" },
+};
+const ADV = (id: number) => ({ AdvanceOperatingSubPhase: { game_id: 1, protocol_id: id } });
+const PASS = { PassTurn: { game_id: 1 } };
+const DH_STATION = { PlaceHomeStation: { game_id: 1, company_id: OWNER, q: hexAt("F16").q, r: hexAt("F16").r, kind: "dh", city_index: 0, hex_label: "F16" } };
+
+const gridOf = (r: ReturnType<typeof roomFor>): MapGridResponse =>
+  (r.room as unknown as { engine: { snapshot: { grid: MapGridResponse } } }).engine.snapshot.grid;
+
+const availableFor = (state: GameStateResponse, grid: MapGridResponse, companyId: number) =>
+  dhFreeStationAvailableFor({
+    companyId,
+    privates: state.private_companies,
+    usedAbilities: state.used_private_abilities ?? [],
+    dhHexBuilt: grid.tiles.some((t) => t.q === hexAt("F16").q && t.r === hexAt("F16").r),
+  });
+
+describe("DH-1: the free-station window vs. the derived Tokens skip", () => {
+  it("reproduces through a RoomSession: lay F16 (turn 1), decline the station, next turn's Tokens step is held", () => {
+    const r = roomFor(seed(), GRID);
+    const log: string[] = [];
+    const go = (actor: string, msg: unknown, label: string) => {
+      const res = r.submit(actor, msg);
+      const line = `${label}: ${res.kind} ${JSON.stringify(r.kinds(res))} -> ${r.room.state.operating_sub_phase} op=${operatingCorporationId(r.room.state)} sub=${r.room.state.sub_round_index} pending=${r.room.state.dh_station_pending} used=${JSON.stringify(r.room.state.used_private_abilities)}`;
+      log.push(line);
+      return res;
+    };
+
+    // ---- OWNER's turn 1: the power's lay. The window opens; Tokens is (correctly) held.
+    expect(go(P1, LAY_DH, "OWN turn1 LayTile dh-tile").kind).toBe("applied");
+    expect(r.room.state.dh_station_pending).toBe(OWNER);
+    expect(r.room.state.operating_sub_phase).toBe("Tokens");
+    // Same-turn control: free station available AND legal; the hold is correct here.
+    expect(availableFor(r.room.state, gridOf(r), OWNER)).toBe(true);
+    expect(dhStationRefusal(r.room.state, DH_STATION.PlaceHomeStation, gridOf(r))).toBeNull();
+
+    // The president declines (skips Tokens). Routes/Dividends/... follow by derivation.
+    go(P1, ADV(OWNER), "OWN turn1 manual skip Tokens (decline)");
+    // End OWNER's turn if the derived loop did not.
+    while (operatingCorporationId(r.room.state) === OWNER && r.room.state.sub_round_index === 1) {
+      const res = go(P1, r.room.state.operating_sub_phase === "Hardware" ? PASS : ADV(OWNER), "OWN turn1 continue");
+      if (res.kind !== "applied") break;
+    }
+    // The window closed at the turn change; `dh-token` was never recorded.
+    expect(r.room.state.dh_station_pending ?? null).toBeNull();
+    expect(r.room.state.used_private_abilities).toEqual(["dh-tile"]);
+
+    // ---- RIVAL's turn: Track is never auto-skipped; its manual skip of Track lands on Tokens, where it has
+    //      nowhere to place -- and the room DERIVES the skip (the control).
+    expect(operatingCorporationId(r.room.state)).toBe(RIVAL);
+    const rivalTrack = go(P2, ADV(RIVAL), "RIV manual skip Track");
+    expect(r.kinds(rivalTrack)[1]).toBe("AdvanceOperatingSubPhase*"); // Tokens skipped by the server
+    while (operatingCorporationId(r.room.state) === RIVAL) {
+      const res = go(P2, r.room.state.operating_sub_phase === "Hardware" ? PASS : ADV(RIVAL), "RIV continue");
+      if (res.kind !== "applied") break;
+    }
+
+    // ---- OWNER's turn 2 (OR 2 of the set).
+    expect(operatingCorporationId(r.room.state)).toBe(OWNER);
+    expect(r.room.state.sub_round_index).toBe(2);
+    expect(r.room.state.operating_sub_phase).toBe("Track");
+    const ownTrack = go(P1, ADV(OWNER), "OWN turn2 manual skip Track");
+    const state = r.room.state;
+    const grid = gridOf(r);
+
+    // THE FINDING, in four facts:
+    // (1) the server derived NOTHING after the Track skip: OWNER is held on Tokens.
+    expect(r.kinds(ownTrack)).toEqual(["AdvanceOperatingSubPhase"]);
+    expect(state.operating_sub_phase).toBe("Tokens");
+    expect(state.dh_station_pending ?? null).toBeNull();
+    // (2) because the shared rule still answers "free station available" ...
+    expect(availableFor(state, grid, OWNER)).toBe(true);
+    // (3) ... while the authority refuses that very placement (window closed) -- at ingress and in the reducer.
+    expect(dhStationRefusal(state, DH_STATION.PlaceHomeStation, grid)).toBe(
+      "The Delaware & Hudson's free station only comes with the same turn's lay. That turn has ended, so OWN would need an ordinary, connected station on F16 instead.",
+    );
+    const attempt = go(P1, DH_STATION, "OWN turn2 tries the free station");
+    expect(attempt.kind).toBe("refused");
+    // (4) no ordinary placement exists either: with the D&H flag off the step is skippable, and the derived
+    //     loop would skip it.
+    const ordinary = stationPlacementBlockReason({
+      mapGrid: grid,
+      company: state.public_companies.find((c) => c.company_id === OWNER)!,
+      allCompanies: state.public_companies,
+      boardHexes: STATIC_BOARD_HEXES.map((h) => [h.q, h.r] as const),
+      extraTokenAvailable: false,
+    });
+    expect(ordinary).not.toBeNull();
+    const asIs = nextDerivedAction({ state, mapGrid: grid, emitted: new Set() });
+    const windowAware = nextDerivedAction({ state, mapGrid: grid, emitted: new Set(), extraStationAvailable: false });
+    expect(asIs).toBeNull();
+    expect(windowAware?.msg).toHaveProperty("AdvanceOperatingSubPhase");
+    expect(windowAware?.kind).toBe("skip");
+
+    // The player's only way on: a manual Skip, which is accepted (no action is blocked, no state is wrong).
+    const manual = go(P1, ADV(OWNER), "OWN turn2 manual skip Tokens");
+    expect(manual.kind).toBe("applied");
+    expect(r.kinds(manual)[0]).toBe("AdvanceOperatingSubPhase");
+
+    // ---- REPLAY: the stored log (with the player's manual Tokens skip) replays to the room's board. A fixed
+    //      derivation would only change what NEW rooms append; `apply` never derives.
+    const replayed = replayLog(
+      r.room.entries.map((e) => ({ index: e.index, id: e.id, actor: e.actor, payload: e.payload, ...(e.derived ? { derived: true } : {}) })),
+      { ...sandboxReplayProviders(), initialGrid: GRID },
+      { state: seed(), waterfall: null },
+      undefined,
+      DEVELOPMENT_CORPUS_POLICY,
+    );
+    expect(stateDigest(replayed.state)).toBe(stateDigest(r.room.state));
+
+    // eslint-disable-next-line no-console
+    console.log(["DH-1 room trace:", ...log, `asIs=${JSON.stringify(asIs)}`, `windowAware=${JSON.stringify(windowAware)}`, `ordinaryBlock=${ordinary}`].join("\n"));
+  });
+});

@@ -1,0 +1,224 @@
+/** @jest-environment node */
+// v13 scope verification scratch (analysis only; NOT a tracked file).
+// D-18 (New York #54/#62 -> #883) and D-22 (#59 -> brown OO facings) from VISUAL_FLOURISH_BACKLOG.md.
+// Measures the CURRENT authority (`filterSandboxPlacements`, which `boardLayRefused` injects into the reducer)
+// and restates the geometry independently from the catalog's `paths` / `cityGroups`.
+
+import { filterSandboxPlacements, priorTopologyAt } from "../../components/sandboxTileLegality";
+import * as boardData from "../../components/hexBoardData";
+import { localCatalogPlacements, liveEdges, rotateConnections } from "../../components/hexGeometry";
+import { TILE_CATALOG_BY_ID, type TileColorTier } from "../../components/hexTileCatalog";
+import { withRules } from "../../gameEngine/boardSelection";
+import { resolveVariants } from "../../gameEngine/gameVariants";
+import { boardLayRefused } from "../../gameEngine/replayProviders";
+import { resetTileUpgradeGraph, tileUpgradeGraph } from "../../utils/tileUpgrades";
+import type { MapGridResponse } from "../../components/hexContractTypes";
+
+const TABLES = {
+  standard: resolveVariants({}),
+  plus: resolveVariants({ expandedMap: true, plusTiles: true }),
+  lpf: resolveVariants({ levelPlayingField: true }),
+} as const;
+type Table = keyof typeof TABLES;
+const TIERS: readonly TileColorTier[] = ["Yellow", "Green", "Brown", "Gray"];
+const ALL = localCatalogPlacements();
+const F = [0, 1, 2, 3, 4, 5] as const;
+
+const hexAt = (label: string) => boardData.STATIC_BOARD_HEXES.find((h) => h.label === label);
+const grid = (q: number, r: number, tileId?: number, orientation = 0): MapGridResponse =>
+  ({ game_id: 1, tiles: tileId === undefined ? [] : [{ q, r, tile_id: tileId, orientation, landmark: null }] }) as unknown as MapGridResponse;
+
+/** Every placement the authority accepts at any era (union), as [tile, facing]. */
+function offered(g: MapGridResponse, q: number, r: number): Array<[number, number]> {
+  const seen = new Set<string>();
+  for (const era of TIERS) for (const p of filterSandboxPlacements(ALL, { mapGrid: g, q, r, era })) seen.add(`${p.tile_id}@${p.orientation}`);
+  return Array.from(seen).sort().map((k) => k.split("@").map(Number) as [number, number]);
+}
+
+/* ---------------- independent geometry, written here, not imported ---------------- */
+const turn = (e: number, r: number) => (e + r) % 6;
+const segs = (id: number, r: number) => (TILE_CATALOG_BY_ID.get(id)!.paths ?? []).map(([a, b]) => [turn(a, r), turn(b, r)] as const);
+const segKey = ([a, b]: readonly [number, number]) => (a <= b ? `${a}:${b}` : `${b}:${a}`);
+const edgesOf = (id: number, r: number) => liveEdges(rotateConnections(TILE_CATALOG_BY_ID.get(id)!.connections, r));
+/** Connected components over `paths` (self-loops = terminus, joins nothing). */
+function components(id: number, r: number): number[][] {
+  const parent = new Map<number, number>(edgesOf(id, r).map((e) => [e, e]));
+  const find = (x: number): number => (parent.get(x) === x ? x : find(parent.get(x)!));
+  for (const [a, b] of segs(id, r)) if (a !== b) parent.set(find(a), find(b));
+  const out = new Map<number, number[]>();
+  for (const e of Array.from(parent.keys()).sort()) out.set(find(e), [...(out.get(find(e)) ?? []), e]);
+  return Array.from(out.values());
+}
+/** City exit groups: `cityGroups` when present, else the components (a one-city hub is one component). */
+const cities = (id: number, r: number): number[][] => {
+  const e = TILE_CATALOG_BY_ID.get(id)!;
+  return e.cityGroups ? e.cityGroups.map((g) => g.map((x) => turn(x, r))) : components(id, r);
+};
+/** Track preservation (6.2.2 ❸): every real old segment kept; every old live edge kept. */
+function trackPreserved(fromId: number, fr: number, toId: number, tr: number): boolean {
+  const have = new Set(segs(toId, tr).map(segKey));
+  const toEdges = new Set(edgesOf(toId, tr));
+  return edgesOf(fromId, fr).every((e) => toEdges.has(e)) && segs(fromId, fr).every((s) => s[0] === s[1] || have.has(segKey(s)));
+}
+/** Station anchoring (6.2.2 ❹ first sentence): each old city's exits all reach ONE new city. Returns new-city index per old city. */
+function cityMap(fromId: number, fr: number, toId: number, tr: number): Array<number | null> {
+  const dest = cities(toId, tr);
+  return cities(fromId, fr).map((exits) => {
+    const idx = dest.findIndex((g) => exits.every((x) => g.includes(x)));
+    return idx === -1 ? null : idx;
+  });
+}
+
+/* ================================================================================================ */
+describe("D-18: New York #54 / #62 -> #883", () => {
+  it("measures every NY transition the authority accepts on all three tables", () => {
+    const report: string[] = [];
+    for (const table of Object.keys(TABLES) as Table[]) {
+      withRules(TABLES[table], () => {
+        const g19 = hexAt("G19")!;
+        const { q, r } = g19;
+        const printed = offered(grid(q, r), q, r).filter(([id]) => TILE_CATALOG_BY_ID.get(id)!.color === "Green");
+        report.push(`[${table}] printed G19 -> ${printed.map(([i, f]) => `#${i}@${f}`).join(" ")}`);
+        const prior = priorTopologyAt(grid(q, r), q, r);
+        report.push(`[${table}]   printed NY prior: mask=${prior?.mask.toString(2)} segs=${JSON.stringify(prior?.segments)} source=${prior?.source}`);
+        for (const [, o54] of printed.filter(([id]) => id === 54)) {
+          const next = offered(grid(q, r, 54, o54), q, r);
+          report.push(`[${table}]   #54@${o54} -> ${next.map(([i, f]) => `#${i}@${f}(${TILE_CATALOG_BY_ID.get(i)!.color})`).join(" ")}`);
+          for (const [to, tf] of next) {
+            report.push(
+              `[${table}]     #54@${o54} -> #${to}@${tf}: trackPreserved=${trackPreserved(54, o54, to, tf)} cityMap=${JSON.stringify(cityMap(54, o54, to, tf))} ` +
+                `from cities ${JSON.stringify(cities(54, o54))} to cities ${JSON.stringify(cities(to, tf))}`,
+            );
+          }
+          // #62 at the same facing (it is the only #62 facing reachable from #54@o54): what may follow it?
+          for (const o62 of F) {
+            const after62 = offered(grid(q, r, 62, o62), q, r);
+            const refused883 = F.map((f) => boardLayRefused(grid(q, r, 62, o62), q, r, 883, f, "Gray"));
+            report.push(`[${table}]   #62@${o62} -> [${after62.map(([i, f]) => `#${i}@${f}`).join(" ")}]  boardLayRefused(#883@0..5, era Gray)=${refused883.map((b) => (b ? "R" : "ok")).join(",")}`);
+            expect(after62).toEqual([]);
+            expect(refused883.every(Boolean)).toBe(true);
+          }
+          // geometry only (illegal by tier anyway): would #62 -> #883 even preserve track?
+          for (const f of F) if (trackPreserved(62, o54, 883, f)) report.push(`[${table}]   (geometry only) #62@${o54} -> #883@${f} preserves track; cityMap=${JSON.stringify(cityMap(62, o54, 883, f))}`);
+        }
+        resetTileUpgradeGraph();
+        const graph = tileUpgradeGraph();
+        report.push(`[${table}] upgrade graph: NY printed -> ${JSON.stringify(graph.printedStarts.get("NY"))}; 54 -> ${JSON.stringify(graph.successors.get(54))}; 62 -> ${JSON.stringify(graph.successors.get(62))}; 883 -> ${JSON.stringify(graph.successors.get(883))}`);
+        report.push(`[${table}] sources of 883: ${JSON.stringify(Array.from(graph.successors).filter(([, t]) => t.includes(883)).map(([s]) => s))}`);
+        if (table === "standard") expect(graph.successors.get(54)).toEqual([62]);
+        else expect(graph.successors.get(54)).toEqual([62, 883]);
+        expect(graph.successors.get(62)).toEqual([]);
+      });
+    }
+    // eslint-disable-next-line no-console
+    console.log(report.join("\n"));
+  });
+});
+
+/* ================================================================================================ */
+type Edge = { table: Table; hex: string; from: string; to: number; facing: number };
+
+/** The placement filter's walk: every hex, printed/bare start, every accepted facing at the next tier, recursively;
+ *  DISTINCT edges (table, hex, from-state, to@facing). */
+function walkAll(table: Table): { edges: Edge[]; states: number } {
+  const edges: Edge[] = [];
+  let states = 0;
+  withRules(TABLES[table], () => {
+    for (const hex of boardData.STATIC_BOARD_HEXES) {
+      const { q, r, label } = hex;
+      const seen = new Set<string>();
+      const visit = (fromKey: string, g: MapGridResponse, tierIndex: number) => {
+        const next = TIERS[tierIndex + 1];
+        if (!next) return;
+        states += 1;
+        for (const p of filterSandboxPlacements(ALL, { mapGrid: g, q, r, era: next })) {
+          if (TILE_CATALOG_BY_ID.get(p.tile_id)!.color !== next) continue;
+          edges.push({ table, hex: label, from: fromKey, to: p.tile_id, facing: p.orientation });
+          const key = `${p.tile_id}@${p.orientation}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          visit(key, grid(q, r, p.tile_id, p.orientation), tierIndex + 1);
+        }
+      };
+      visit(hex.printedColor === "Yellow" ? "printed" : "bare", grid(q, r), hex.printedColor === "Yellow" ? 0 : -1);
+    }
+  });
+  return { edges, states };
+}
+
+describe("D-22: #59 -> brown OO", () => {
+  it("walks all three tables with and without rule 5b, and classifies every #59 transition by geometry", () => {
+    const report: string[] = [];
+    const entry59 = TILE_CATALOG_BY_ID.get(59)! as { separateSystems?: true };
+    const run = (label: string) => {
+      const all = (Object.keys(TABLES) as Table[]).flatMap((t) => walkAll(t).edges);
+      const from59 = all.filter((e) => e.from.startsWith("59@"));
+      const rows = from59.map((e) => {
+        const s = Number(e.from.split("@")[1]);
+        const map = cityMap(59, s, e.to, e.facing);
+        const joined = map[0] !== null && map[0] === map[1];
+        const comps = components(e.to, e.facing);
+        const sameComponent = comps.some((c) => c.includes(turn(0, s)) && c.includes(turn(2, s)));
+        return { ...e, s, map, joined, sameComponent, track: trackPreserved(59, s, e.to, e.facing) };
+      });
+      const bad = rows.filter((x) => x.joined || x.sameComponent);
+      const byTo = new Map<number, number>();
+      bad.forEach((x) => byTo.set(x.to, (byTo.get(x.to) ?? 0) + 1));
+      const byHex = new Map<string, number>();
+      bad.forEach((x) => byHex.set(`${x.table}:${x.hex}`, (byHex.get(`${x.table}:${x.hex}`) ?? 0) + 1));
+      const okByTo = new Map<number, number>();
+      rows.filter((x) => !x.joined && !x.sameComponent).forEach((x) => okByTo.set(x.to, (okByTo.get(x.to) ?? 0) + 1));
+      report.push(`--- ${label} ---`);
+      report.push(`total distinct accepted transitions (3 tables): ${all.length}`);
+      for (const t of Object.keys(TABLES)) report.push(`  ${t}: ${all.filter((e) => e.table === t).length}`);
+      report.push(`#59 -> * transitions: ${rows.length}; joining both #59 exits (fixed-OO violations): ${bad.length}`);
+      report.push(`  joining, by destination: ${JSON.stringify(Object.fromEntries(byTo))}`);
+      report.push(`  joining, by table:hex: ${JSON.stringify(Object.fromEntries(byHex))}`);
+      report.push(`  non-joining, by destination: ${JSON.stringify(Object.fromEntries(okByTo))}`);
+      report.push(`  any accepted #59 transition that breaks track preservation: ${rows.filter((x) => !x.track).length}`);
+      report.push(`  any accepted #59 transition where an old city's exits do not all land in one new city: ${rows.filter((x) => x.map.includes(null)).length}`);
+      report.push(`  joined-but-cityGroups-disagree (component join without city join): ${rows.filter((x) => x.sameComponent !== x.joined).length}`);
+      if (bad.length) report.push(`  sample: ${bad.slice(0, 6).map((x) => `${x.table}:${x.hex} #59@${x.s}->#${x.to}@${x.facing} map=${JSON.stringify(x.map)}`).join(" | ")}`);
+      return { all: all.length, bad: bad.length, rows };
+    };
+    const now = run("CURRENT (rules v12, rule 5b in force)");
+    expect(now.bad).toBe(0);
+    expect(now.rows.every((x) => x.track && !x.map.includes(null))).toBe(true);
+
+    // Emulate pre-Stage-9.3 (no separation clause) IN MEMORY ONLY, to reproduce D-22's 256.
+    const saved = entry59.separateSystems;
+    try {
+      delete entry59.separateSystems;
+      const pre = run("EMULATED PRE-9.3 (#59 separateSystems removed in memory)");
+      report.push(`difference in total transitions: ${pre.all - now.all}`);
+    } finally {
+      entry59.separateSystems = saved;
+    }
+    expect(TILE_CATALOG_BY_ID.get(59)!.separateSystems).toBe(true);
+    // eslint-disable-next-line no-console
+    console.log(report.join("\n"));
+  });
+
+  it("prints the per-facing table for #59@0 on E11 (standard) with geometry", () => {
+    const report: string[] = [];
+    withRules(TABLES.plus, () => {
+      const { q, r } = hexAt("E11")!;
+      const acc = new Set(offered(grid(q, r, 59, 0), q, r).map(([i, f]) => `${i}@${f}`));
+      for (const to of [64, 65, 66, 67, 68, 984, 36, 35]) {
+        const cells = F.map((f) => {
+          const m = cityMap(59, 0, to, f);
+          const geo = !trackPreserved(59, 0, to, f) ? "x" : m.includes(null) ? "?" : m[0] === m[1] ? "J" : "s";
+          return `${f}:${geo}${acc.has(`${to}@${f}`) ? "+" : "-"}`;
+        });
+        report.push(`#${to} cities=${JSON.stringify(TILE_CATALOG_BY_ID.get(to)!.cityGroups)}  ${cells.join("  ")}`);
+        for (const f of F) {
+          const m = cityMap(59, 0, to, f);
+          if (acc.has(`${to}@${f}`)) expect(m[0] !== null && m[1] !== null && m[0] !== m[1]).toBe(true);
+          if (trackPreserved(59, 0, to, f) && !m.includes(null) && m[0] !== m[1]) expect(acc.has(`${to}@${f}`)).toBe(true);
+        }
+      }
+    });
+    // eslint-disable-next-line no-console
+    console.log("legend: x=drops a #59 exit, J=joins both #59 cities, s=separate (fixed OO ok); +accepted -refused\n" + report.join("\n"));
+  });
+});

@@ -1,0 +1,180 @@
+/** @jest-environment node */
+// SCRATCH (v13 scope verification, audit GR-1 / AUD-08.01 = backlog S10-27). Not a tracked test.
+// Gentle Rust ALONE, legal play through a RoomSession: C&O's only trains are Final Run 2s; it runs $40 at Routes,
+// the 2s are destroyed entering Dividends, and the derived loop mints a forced $0 withhold the reducer refuses
+// (`dividendAmountRefusal`: $0 != $40). The room appends it anyway (derived: true). Shows: the entry is a pure
+// no-op on the board, no loop/stall, the president then declares $40; and that a stored log with or without the
+// no-op entry replays to the same board.
+
+import type { GameStateResponse } from "../../gameEngine/gameState";
+import type { MapGridResponse, MapTileEntry } from "../../components/hexContractTypes";
+import type { ServerLogEntry } from "../../utils/roomSession";
+import { RoomSession } from "../../utils/roomSession";
+import { BO, CO, NYC, PRR, P1, board, company, fleetOf, BUY, PASS, headTier, type Msg } from "../../utils/gentleRustPresentationSupport";
+import { applySandboxAction } from "../../gameEngine/sandboxSession";
+import { resolveVariants } from "../../gameEngine/gameVariants";
+import { withRules } from "../../gameEngine/boardSelection";
+import { stateDigest } from "../../gameEngine/stateDigest";
+import { STATIC_BOARD_HEXES } from "../../components/hexBoardData";
+import { nextDerivedAction } from "../../gameEngine/derivedActions";
+import { dividendAmountRefusal } from "../../gameEngine/routeAuthority";
+import { replayLog } from "../../gameEngine/replayLog";
+import { sandboxReplayProviders } from "../../gameEngine/replayProviders";
+import { DEVELOPMENT_CORPUS_POLICY } from "../../gameEngine/rulesVersion";
+
+const at = (label: string) => {
+  const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === label)!;
+  return { q: hex.q, r: hex.r };
+};
+const LINE: MapGridResponse = {
+  game_id: 1,
+  tiles: (["I5", "I7", "I9"] as const).map((label) => ({ ...at(label), tile_id: 57, orientation: 0 }) as MapTileEntry),
+};
+const dispatch = (state: GameStateResponse, msg: Msg, actor: string) =>
+  withRules(resolveVariants(state.variants), () => applySandboxAction(state, msg, { actor, mapGrid: LINE, era: "Yellow" }));
+
+/** gentleRustCertification.test.ts's graceBoard(true): NYC buys the first 4 (dooming every 2) and passes; C&O,
+ *  holding only 2s (both now Final Run), opens its grace turn at Track. */
+function graceSeed(): GameStateResponse {
+  const before = board({
+    corps: [
+      { id: NYC, trains: ["3"] },
+      { id: CO, trains: ["2", "2"], treasury: "100" },
+      { id: PRR, trains: ["2", "2", "3", "3"] },
+      { id: BO, trains: ["2", "2", "3", "3"] },
+    ],
+    operating: NYC,
+    gentle: true,
+  });
+  if (headTier(before) !== "4") throw new Error("depot head is not the first 4");
+  const bought = dispatch(before, BUY(NYC), "p2");
+  return dispatch(bought, PASS, "p2");
+}
+
+const RUN = { RunMultipleRoutes: { game_id: 1, protocol_id: CO, routes: [[{ hex: "I5" }, { hex: "I7" }]], train_indices: [0] } };
+const ADV = { AdvanceOperatingSubPhase: { game_id: 1, protocol_id: CO } };
+const DECLARE = (revenue: string) => ({ DeclareDividends: { game_id: 1, protocol_id: CO, distribute: false, revenue_amount: revenue } });
+
+function newRoom(seed: GameStateResponse) {
+  let minted = 0;
+  return new RoomSession({
+    providers: { ...sandboxReplayProviders(), initialGrid: LINE, initialMarket: seed.market_positions! },
+    seed: { state: seed, waterfall: null },
+    build: "b",
+    mintId: () => `m${(minted += 1)}`,
+  });
+}
+const kinds = (res: unknown) =>
+  ((res as { entries?: ServerLogEntry[] }).entries ?? []).map((e) => `${Object.keys(JSON.parse(e.payload))[0]}${e.derived ? "*" : ""}`);
+const toReplay = (entries: readonly ServerLogEntry[]) =>
+  entries.map((e) => ({ index: e.index, id: e.id, actor: e.actor, payload: e.payload, ...(e.derived ? { derived: true } : {}) }));
+
+describe("GR-1 (audit) / S10-27: a refused derived withhold is appended", () => {
+  it("reproduces with Gentle Rust alone through a RoomSession", () => {
+    const seed = graceSeed();
+    expect([fleetOf(seed, CO), company(seed, CO).pending_rust_trains, seed.operating_sub_phase]).toEqual([["2", "2"], ["2", "2"], "Track"]);
+    const room = newRoom(seed);
+    const trace: string[] = [];
+    const submit = (msg: unknown, label: string) => {
+      const res = room.submit({ actor: P1, build: "b", host: P1, msg: msg as Msg, baseIndex: room.nextIndex - 1 });
+      const c = company(room.state, CO);
+      trace.push(`${label}: ${res.kind} ${JSON.stringify(kinds(res))} -> ${room.state.operating_sub_phase} fleet=${JSON.stringify(c.owned_trains)} ran=${c.routes_run_this_turn} rev=${c.last_route_revenue} treasury=${c.treasury}${res.kind === "refused" ? " reason=" + (res as { reason: string }).reason : ""}`);
+      return res;
+    };
+
+    // Track -> (Tokens) -> Routes, the president's own skips; the server derives whatever it owes.
+    submit(ADV, "skip Track");
+    while (room.state.operating_sub_phase !== "Routes") {
+      const res = submit(ADV, `skip ${room.state.operating_sub_phase}`);
+      if (res.kind !== "applied") throw new Error(trace.join("\n"));
+    }
+
+    const lenBeforeRun = room.entries.length;
+    const run = submit(RUN, "run I5-I7 with a Final Run 2");
+    expect(run.kind).toBe("applied");
+    // THE FINDING: the run plus ONE derived entry -- the forced $0 withhold.
+    expect(kinds(run)).toEqual(["RunMultipleRoutes", "DeclareDividends*"]);
+    const runEntry = room.entries[lenBeforeRun];
+    const derivedEntry = room.entries[lenBeforeRun + 1];
+    expect(derivedEntry.derived).toBe(true);
+    expect(JSON.parse(derivedEntry.payload).DeclareDividends).toMatchObject({ revenue_amount: "0", distribute: false });
+
+    // The board after the burst: still Dividends, trainless, the $40 run standing.
+    const after = room.state;
+    const co = company(after, CO);
+    expect([after.operating_sub_phase, co.owned_trains, co.pending_rust_trains, co.last_route_revenue, co.routes_run_this_turn]).toEqual(["Dividends", [], [], "40", 1]);
+    expect(dividendAmountRefusal(after, JSON.parse(derivedEntry.payload).DeclareDividends)).toBe(
+      "C&O ran $40 this turn; a dividend declaration of $0 does not match it.",
+    );
+
+    // The derived entry was a pure no-op: replay the log up to and including the run, then up to and including
+    // the derived entry -- identical board (digest AND deep equality).
+    const providers = { ...sandboxReplayProviders(), initialGrid: LINE, initialMarket: seed.market_positions! };
+    const upToRun = replayLog(toReplay(room.entries.slice(0, lenBeforeRun + 1)), providers, { state: seed, waterfall: null }, undefined, DEVELOPMENT_CORPUS_POLICY);
+    const upToDerived = replayLog(toReplay(room.entries.slice(0, lenBeforeRun + 2)), providers, { state: seed, waterfall: null }, undefined, DEVELOPMENT_CORPUS_POLICY);
+    expect(stateDigest(upToDerived.state)).toBe(stateDigest(upToRun.state));
+    expect(upToDerived.state).toEqual(upToRun.state);
+    expect(upToDerived.grid).toEqual(upToRun.grid);
+    void runEntry;
+
+    // What the derivation looks like on that board (fresh emitted set, as a pre-fix loop sees it):
+    const owed = nextDerivedAction({ state: upToRun.state, mapGrid: LINE, emitted: new Set() });
+    expect(owed?.kind).toBe("forced-withhold");
+    expect(owed?.reason).toBe("it owns no trains, so there is no route to run");
+
+    // No loop, no stall: the turn key is spent, the next submit owes no repair, and the president declares $40.
+    const declared = submit(DECLARE("40"), "president withholds $40");
+    expect(declared.kind).toBe("applied");
+    expect(kinds(declared)[0]).toBe("DeclareDividends");
+    expect(room.state.operating_sub_phase).toBe("Hardware");
+    expect(Number(company(room.state, CO).treasury)).toBe(140);
+
+    // ---- REPLAY: the stored log WITH the no-op and the same log WITHOUT it replay to the same final board.
+    const full = replayLog(toReplay(room.entries), providers, { state: seed, waterfall: null }, undefined, DEVELOPMENT_CORPUS_POLICY);
+    const withoutNoop = replayLog(
+      toReplay(room.entries.filter((e) => e !== derivedEntry)).map((e, i) => ({ ...e, index: i })),
+      providers,
+      { state: seed, waterfall: null },
+      undefined,
+      DEVELOPMENT_CORPUS_POLICY,
+    );
+    expect(stateDigest(full.state)).toBe(stateDigest(room.state));
+    expect(stateDigest(withoutNoop.state)).toBe(stateDigest(full.state));
+    expect(withoutNoop.state).toEqual(full.state);
+
+    // ---- RESTORE: a v12 log that ENDS at the no-op (server stopped before the president declared) restores and
+    //      owes nothing more (the stored derived entry re-spends its key); the same log WITHOUT the no-op
+    //      re-derives and re-appends it under today's code.
+    const restoredWith = newRoom(seed);
+    restoredWith.restore(room.entries.slice(0, lenBeforeRun + 2) as ServerLogEntry[]);
+    const restoredWithout = newRoom(seed);
+    restoredWithout.restore(room.entries.slice(0, lenBeforeRun + 1) as ServerLogEntry[]);
+    const ping = (r: RoomSession) =>
+      kinds(r.submit({ actor: P1, build: "b", host: P1, msg: DECLARE("40") as Msg, baseIndex: r.nextIndex - 1 }));
+    const a = ping(restoredWith);
+    const b = ping(restoredWithout);
+    trace.push(`restore WITH no-op then declare: ${JSON.stringify(a)}`);
+    trace.push(`restore WITHOUT no-op then declare: ${JSON.stringify(b)}`);
+    expect(stateDigest(restoredWith.state)).toBe(stateDigest(restoredWithout.state));
+
+    // eslint-disable-next-line no-console
+    console.log(["GR-1 room trace:", ...trace].join("\n"));
+  });
+
+  it("SHELL (no-server path) contrast: the shell's forced withhold sends last_route_revenue, which the reducer ACCEPTS", () => {
+    // App.tsx's forced-withhold effect fires on the same `noEarnableRevenue` (trainless) and dispatches
+    // `declareDividendsChoice(false, true)`, whose amount is `dividendDeclaration(...)` -- the run's $40, not $0.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { dividendDeclaration } = require("../../utils/dividendStep") as typeof import("../../utils/dividendStep");
+    const seed = graceSeed();
+    let s = dispatch(seed, ADV as Msg, P1);
+    s = dispatch(s, ADV as Msg, P1);
+    s = dispatch(s, RUN as Msg, P1);
+    expect([s.operating_sub_phase, company(s, CO).owned_trains, company(s, CO).last_route_revenue]).toEqual(["Dividends", [], "40"]);
+    const shellAmount = dividendDeclaration({ lastRouteRevenue: company(s, CO).last_route_revenue, skippedRoutes: false, committedRevenue: null }).revenue;
+    expect(shellAmount).toBe(40);
+    const after = dispatch(s, DECLARE(String(shellAmount)) as Msg, P1);
+    // Accepted: the step moves on and the $40 is withheld -- the president was never offered "pay out".
+    expect([after.operating_sub_phase, Number(company(after, CO).treasury)]).toEqual(["Hardware", 140]);
+  });
+});

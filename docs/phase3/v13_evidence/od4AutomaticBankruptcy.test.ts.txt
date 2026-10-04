@@ -1,0 +1,358 @@
+/** @jest-environment node */
+// OD-4 scratch reproduction (analysis only; not a tracked file). Asserts CURRENT v12 behaviour, and runs a
+// prototype insolvency proof (upper bound + single-pass witness) against the same boards.
+export {};
+
+const { applySandboxAction } = require("../../gameEngine/sandboxSession") as typeof import("../../gameEngine/sandboxSession");
+const { emergencyFundingFor, forcedSaleRefusal, declareBankruptcyRefusal, fundedTradeRefusal, sharePriceFor } =
+  require("../../gameEngine/emergencyFunding") as typeof import("../../gameEngine/emergencyFunding");
+const { trainSaleRefusal } = require("../../gameEngine/trainSaleAuthority") as typeof import("../../gameEngine/trainSaleAuthority");
+const { nextDerivedAction } = require("../../gameEngine/derivedActions") as typeof import("../../gameEngine/derivedActions");
+const { sandboxReplayProviders } = require("../../gameEngine/replayProviders") as typeof import("../../gameEngine/replayProviders");
+const { STATIC_BOARD_HEXES } = require("../../components/hexBoardData") as typeof import("../../components/hexBoardData");
+const { marketCellForPrice, projectShareSaleMove } = require("../../gameEngine/marketGeometry") as typeof import("../../gameEngine/marketGeometry");
+const { certificateCardsInPool, hasDoubleCertificate } = require("../../gameEngine/doubleCertificate") as typeof import("../../gameEngine/doubleCertificate");
+const { presidentAfterSale } = require("../../gameEngine/presidencyTransfer") as typeof import("../../gameEngine/presidencyTransfer");
+
+type GameStateResponse = import("../../gameEngine/gameState").GameStateResponse;
+type MapGridResponse = import("../../components/hexContractTypes").MapGridResponse;
+type EmergencyFunding = import("../../gameEngine/emergencyFunding").EmergencyFunding;
+
+const hex = (label: string) => STATIC_BOARD_HEXES.find((entry) => entry.label === label)!;
+const H16 = hex("H16");
+const I17 = hex("I17");
+const CORRIDOR: MapGridResponse = {
+  game_id: 1,
+  tiles: [
+    { q: H16.q, r: H16.r, tile_id: 57, orientation: 2 },
+    { q: I17.q, r: I17.r, tile_id: 7, orientation: 2 },
+  ],
+} as unknown as MapGridResponse;
+
+const CO = 5;
+const NYC = 2;
+const PRR = 1;
+const BO = 4;
+const P1 = "p1";
+const P2 = "p2";
+const P3 = "p3";
+
+interface Corp {
+  id: number;
+  ticker: string;
+  president: string;
+  trains: string[];
+  treasury: string;
+  holdings: Array<[string, number]>;
+  pool?: number;
+  price: number;
+  x?: number;
+  y?: number;
+  double?: string;
+}
+
+function board(input: { corps: Corp[]; step?: string; cash: Record<string, number>; privates?: Array<{ private_id: number; owner: string; cost: string }> }): GameStateResponse {
+  const order = input.corps.map((corp) => corp.id);
+  return {
+    player_addresses: [P1, P2, P3],
+    player_cash: [P1, P2, P3].map((player) => ({ player, cash_vgp: String(input.cash[player] ?? 0) })),
+    virtual_bank_vgp: "10000",
+    private_companies: (input.privates ?? []).map((priv) => ({
+      private_id: priv.private_id, name: `Private ${priv.private_id}`, cost: priv.cost, revenue_per_or: "10",
+      owner: priv.owner, owner_protocol_id: null, closed: false,
+    })),
+    current_round_type: "OperatingRound",
+    macro_round_number: 3,
+    active_player_index: 0,
+    active_operating_order: order,
+    active_corporation_index: order.indexOf(CO),
+    sub_round_index: 1,
+    operating_round_sequence_length: 1,
+    consecutive_passes: 0,
+    operating_sub_phase: input.step ?? "Hardware",
+    market_positions: Object.fromEntries(
+      input.corps.map((corp, index) => [corp.id, { price: corp.price, x: corp.x ?? 5 + index, y: corp.y ?? 6, enteredAt: index + 1 }]),
+    ),
+    public_companies: input.corps.map((corp) => ({
+      company_id: corp.id, ticker: corp.ticker, is_floated: true, president: corp.president, par_value: String(corp.price),
+      ipo_pool_percentage: 0, bank_pool_percentage: corp.pool ?? 0, treasury: corp.treasury, owned_trains: corp.trains,
+      player_holdings: corp.holdings.map(([player, percentage]) => ({ player, percentage })),
+      station_token_hexes: [[H16.q, H16.r]], station_tokens: [[H16.q, H16.r, 0]], station_token_limit: 3, home_hex_label: "F6",
+      ...(corp.double ? { double_certificate: { at: corp.double } } : {}),
+    })),
+  } as unknown as GameStateResponse;
+}
+
+const providers = sandboxReplayProviders();
+/** The reducer exactly as RoomEngine hands it a message: grid + chart injections + market context, so a sale walks the chart. */
+const apply = (state: GameStateResponse, msg: never, actor: string) =>
+  applySandboxAction(state, msg, {
+    actor, mapGrid: CORRIDOR, ...providers.chartInjections(state),
+    marketContext: providers.marketContext(state, msg, actor), parCellFor: providers.parCellFor,
+  });
+const funding = (state: GameStateResponse) => emergencyFundingFor(state, CORRIDOR);
+const cash = (state: GameStateResponse, player: string) => Number(state.player_cash.find((entry) => entry.player === player)?.cash_vgp);
+const SELL = (id: number, percentage: number) => ({ SellStock: { game_id: 1, protocol_id: id, percentage } }) as never;
+const ADVANCE = (id: number) => ({ AdvanceOperatingSubPhase: { game_id: 1, protocol_id: id } }) as never;
+const DECLARE = { DeclareBankruptcy: { game_id: 1 } } as never;
+const cell = (price: number) => marketCellForPrice(price)!;
+
+/* ================================================================== */
+/*  PROTOTYPE (not engine code): the proof a v13 would derive          */
+/* ================================================================== */
+/** Upper bound on certificates of `companyId` the president could EVER sell in this obligation, by any sequence. */
+function sellableCertsUpperBound(state: GameStateResponse, f: EmergencyFunding, companyId: number): number {
+  const company = state.public_companies.find((entry) => entry.company_id === companyId)!;
+  const held = company.player_holdings.find((entry) => entry.player === f.president)?.percentage ?? 0;
+  if (held <= 0) return 0;
+  const others = company.player_holdings.filter((entry) => entry.player !== f.president).map((entry) => entry.percentage);
+  const maxOther = others.length ? Math.max(...others) : 0;
+  let floor = 0;
+  if (company.president === f.president) {
+    if (companyId === f.companyId) floor = Math.max(20, maxOther); // 6.6.3: the crown may not move
+    else floor = maxOther >= 20 ? 0 : 20; // nobody can take the President's Certificate
+  }
+  const certs = Math.max(0, Math.floor((held - floor) / 10));
+  const room = Math.max(0, 5 - certificateCardsInPool(company, "Bank"));
+  return Math.min(certs, hasDoubleCertificate(company) ? room * 2 : room);
+}
+function upperBound(state: GameStateResponse, f: EmergencyFunding): number {
+  let u = 0;
+  for (const company of state.public_companies) {
+    const price = sharePriceFor(state, company.company_id);
+    if (price === null) continue;
+    u += sellableCertsUpperBound(state, f, company.company_id) * price; // prices only fall during the obligation
+  }
+  return u;
+}
+function privateBound(f: EmergencyFunding): number {
+  return f.legalPrivateSales.reduce((sum, sale) => sum + Math.min(sale.maxPrice, Math.max(...sale.buyers.map((b) => b.treasury))), 0);
+}
+/** One bundle per corporation at today's price (corporations are independent), with the true running shortfall and
+ *  the engine's own `forcedSaleRefusal` as the oracle -- no market model needed because no corporation is sold twice. */
+function witness(state: GameStateResponse, f: EmergencyFunding): boolean {
+  let remaining = f.shortfall;
+  for (const company of state.public_companies) {
+    if (remaining <= 0) break;
+    const price = sharePriceFor(state, company.company_id);
+    if (price === null) continue;
+    const held = company.player_holdings.find((entry) => entry.player === f.president)?.percentage ?? 0;
+    const legal: number[] = [];
+    for (let pct = 10; pct <= held; pct += 10) {
+      if (forcedSaleRefusal(state, { ...f, shortfall: remaining }, f.president, company.company_id, pct) === null) legal.push(pct);
+    }
+    if (legal.length === 0) continue;
+    const covering = legal.find((pct) => (pct / 10) * price >= remaining);
+    remaining -= ((covering ?? legal[legal.length - 1]) / 10) * price;
+  }
+  return remaining <= 0;
+}
+type Verdict = "no-obligation" | "funded-now" | "insolvent-proven" | "solvent-witness" | "undecided";
+function verdict(state: GameStateResponse, includePrivates = true): Verdict {
+  const f = funding(state);
+  if (f === null) return "no-obligation";
+  if (f.shortfall === 0) return "funded-now";
+  const bound = upperBound(state, f) + (includePrivates ? privateBound(f) : 0);
+  if (bound < f.shortfall) return "insolvent-proven";
+  if (witness(state, f)) return "solvent-witness";
+  return "undecided";
+}
+
+/* ================================================================== */
+
+describe("OD-4 v12 reproduction", () => {
+  it("R1 / V1: a single futile sale is REQUIRED before v12 derives bankruptcy (bound proves insolvency up front)", () => {
+    // 2-train $80; treasury 0, cash 0; P1 holds C&O 20 (tied with P2: unsellable) and PRR 10% at $50. 50 < 80.
+    const state = board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "0", holdings: [[P1, 20], [P2, 20]], price: 90 },
+        { id: NYC, ticker: "NYC", president: P2, trains: [], treasury: "500", holdings: [[P2, 30]], price: 100, x: 8, y: 8 },
+        { id: PRR, ticker: "PRR", president: P3, trains: [], treasury: "500", holdings: [[P3, 40], [P1, 10]], price: 50, ...cell(50) },
+      ],
+      cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+    });
+    const f = funding(state)!;
+    expect(f).toMatchObject({ shortfall: 80, bankrupt: false, canDeclareBankruptcy: false });
+    expect(f.legalSales.map((s) => [s.ticker, s.bundles])).toEqual([["PRR", [10]]]);
+    expect(state.current_round_type).toBe("OperatingRound");
+    expect(declareBankruptcyRefusal(f, P1)).toContain("A share sale is still possible");
+    expect(applySandboxAction(state, DECLARE, { actor: P1, mapGrid: CORRIDOR }).current_round_type).toBe("OperatingRound");
+    // v12 has no automatic end: nothing is derived for the server to append.
+    expect(nextDerivedAction({ state, mapGrid: CORRIDOR, emitted: new Set() })).toBeNull();
+    // The prototype proof: 0 + 0 + U(50) < 80.
+    expect(upperBound(state, f)).toBe(50);
+    expect(verdict(state)).toBe("insolvent-proven");
+    // v12: the futile sale is made, and only then GameEnd.
+    const sold = apply(state, SELL(PRR, 10), P1);
+    expect(cash(sold, P1)).toBe(50);
+    expect(sold.current_round_type).toBe("GameEnd");
+    expect(sold.bankrupt_president).toBe(P1);
+    // Settlement consequence: the futile sale moved PRR's token down (P3's 40% is now worth less) and turned P1's
+    // PRR share into $50 of cash that a bankrupt's score does not count (settlementAppraisal NW(bankrupt)).
+    expect(sold.market_positions![PRR]!.price).toBeLessThan(50);
+    expect(sold.public_companies.find((c) => c.company_id === PRR)!.player_holdings.find((h) => h.player === P1)?.percentage ?? 0).toBe(0);
+  });
+
+  it("R2 / V1b: two futile sales, one at a time, before v12 ends the game", () => {
+    // 3-train $180 (all six 2s owned); P1 holds NYC 10 @100 and PRR 10 @50; U = 150 < 180.
+    const state = board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "0", holdings: [[P1, 20], [P2, 20]], price: 90 },
+        { id: NYC, ticker: "NYC", president: P2, trains: [], treasury: "500", holdings: [[P2, 30], [P1, 10]], price: 100, ...cell(100) },
+        { id: PRR, ticker: "PRR", president: P3, trains: ["2", "2", "2", "2"], treasury: "500", holdings: [[P3, 60], [P1, 10]], price: 50, ...cell(50) },
+        { id: BO, ticker: "B&O", president: P3, trains: ["2", "2"], treasury: "500", holdings: [[P3, 60]], price: 50, x: 2 },
+      ],
+      cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+    });
+    const f = funding(state)!;
+    expect(f).toMatchObject({ shortfall: 180, train: { tier: "3", cost: 180 }, bankrupt: false });
+    expect(verdict(state)).toBe("insolvent-proven");
+    const one = apply(state, SELL(NYC, 10), P1);
+    expect(one.current_round_type).toBe("OperatingRound"); // still alive after the first futile sale
+    expect(funding(one)!.shortfall).toBe(80);
+    expect(verdict(one)).toBe("insolvent-proven");
+    const two = apply(one, SELL(PRR, 10), P1);
+    expect(two.current_round_type).toBe("GameEnd");
+    expect(cash(two, P1)).toBe(150);
+  });
+
+  it("R3 / V5: v12 derives bankruptcy on ENTRY to Buy Trains, pre-empting a legal intercorporate purchase", () => {
+    // Treasury 30 + cash 30 = 60 < $80; no legal share sale; P1 also presides NYC, which owns a 2-train.
+    const corps = (step?: string) =>
+      board({
+        step,
+        corps: [
+          { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "30", holdings: [[P1, 20], [P2, 20]], price: 90 },
+          { id: NYC, ticker: "NYC", president: P1, trains: ["2"], treasury: "100", holdings: [[P1, 20], [P2, 10]], price: 100, x: 8, y: 8 },
+          { id: PRR, ticker: "PRR", president: P3, trains: [], treasury: "500", holdings: [[P3, 40]], price: 50, x: 3 },
+        ],
+        cash: { [P1]: 30, [P2]: 300, [P3]: 300 },
+      });
+    const atHardware = corps();
+    const f = funding(atHardware)!;
+    expect(f).toMatchObject({ shortfall: 20, legalSales: [], bankrupt: true });
+    // The trade the owner rule (D-6) permits: $60 <= treasury + cash, $60 <= face $80, P1 presides both.
+    expect(fundedTradeRefusal(atHardware, f, CO, 60, 80)).toBeNull();
+    expect(trainSaleRefusal(atHardware, { buyerId: CO, sellerId: NYC, model: "2", price: 60 }, P1, CORRIDOR, "settlement")).toBeNull();
+    // ...but the transition INTO the step already ended the game, so the trade can never be sent.
+    const entered = apply(corps("Dividends"), ADVANCE(CO), P1);
+    expect(entered.current_round_type).toBe("GameEnd");
+    expect(entered.bankrupt_president).toBe(P1);
+  });
+
+  it("R4 / V7: a double certificate jams 'only enough' -- v12 derives bankruptcy though a 20% block sale would fund", () => {
+    // Shortfall $50; P1's only sellable paper is NYC's other-20 (one card) at $100; the pool has no 10% to exchange.
+    const state = board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "30", holdings: [[P1, 20], [P2, 20]], price: 90 },
+        { id: NYC, ticker: "NYC", president: P2, trains: [], treasury: "500", holdings: [[P2, 30], [P1, 20]], price: 100, x: 8, y: 8, double: P1 },
+        { id: PRR, ticker: "PRR", president: P3, trains: [], treasury: "500", holdings: [[P3, 40]], price: 50, x: 3 },
+      ],
+      cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+    });
+    const f = funding(state)!;
+    expect(f.shortfall).toBe(50);
+    expect(forcedSaleRefusal(state, f, P1, NYC, 10)).toContain("needs a 10% share in the Bank Pool");
+    expect(forcedSaleRefusal(state, f, P1, NYC, 20)).toContain("Only enough may be sold");
+    expect(f.legalSales).toEqual([]);
+    expect(f.bankrupt).toBe(true); // v12 would end the game here
+    expect(upperBound(state, f)).toBe(200);
+    expect(verdict(state)).toBe("undecided"); // bound says maybe; no single legal bundle exists under v12's only-enough
+  });
+
+  it("R5: after a forced sale, the intercorporate trade is funded from the sale proceeds (D-6 'currently available cash')", () => {
+    const state = board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "0", holdings: [[P1, 20], [P2, 20]], price: 90 },
+        { id: NYC, ticker: "NYC", president: P1, trains: ["2"], treasury: "100", holdings: [[P1, 20], [P2, 10]], price: 100, x: 8, y: 8 },
+        { id: PRR, ticker: "PRR", president: P3, trains: [], treasury: "500", holdings: [[P3, 40], [P1, 10]], price: 50, ...cell(50) },
+        { id: BO, ticker: "B&O", president: P3, trains: [], treasury: "500", holdings: [[P3, 40], [P1, 10]], price: 20, ...cell(20) },
+      ],
+      cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+    });
+    expect(trainSaleRefusal(state, { buyerId: CO, sellerId: NYC, model: "2", price: 50 }, P1, CORRIDOR, "settlement")).toContain("without selling shares");
+    const sold = apply(state, SELL(PRR, 10), P1);
+    expect(sold.current_round_type).toBe("OperatingRound");
+    expect(cash(sold, P1)).toBe(50);
+    expect(trainSaleRefusal(sold, { buyerId: CO, sellerId: NYC, model: "2", price: 50 }, P1, CORRIDOR, "settlement")).toBeNull();
+  });
+
+  it("V3: bundling decides solvency; v12 lets a bad split run to a futile last sale, the bound ends it one sale earlier", () => {
+    // 2-train $80; P1 holds PRR 20% (non-president) at $40. One 20% bundle = $80 (funded). 10 + 10 = 40 + (next row) < 80.
+    const below = projectShareSaleMove(cell(40), 1)!;
+    expect(below.price).toBeLessThan(40);
+    const state = board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "0", holdings: [[P1, 20], [P2, 20]], price: 90 },
+        { id: NYC, ticker: "NYC", president: P2, trains: [], treasury: "500", holdings: [[P2, 30]], price: 100, x: 8, y: 8 },
+        { id: PRR, ticker: "PRR", president: P3, trains: [], treasury: "500", holdings: [[P3, 40], [P1, 20]], price: 40, ...cell(40) },
+      ],
+      cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+    });
+    const f = funding(state)!;
+    expect(f.legalSales.map((s) => [s.ticker, s.bundles])).toEqual([["PRR", [10, 20]]]);
+    expect(verdict(state)).toBe("solvent-witness");
+    const good = apply(state, SELL(PRR, 20), P1);
+    expect(funding(good)).toMatchObject({ shortfall: 0, canPurchase: true });
+    const half = apply(state, SELL(PRR, 10), P1);
+    expect(half.current_round_type).toBe("OperatingRound");
+    expect(funding(half)!.shortfall).toBe(40);
+    expect(half.market_positions![PRR]!.price).toBe(below.price);
+    expect(verdict(half)).toBe("insolvent-proven"); // v13 would end the game HERE
+    const last = apply(half, SELL(PRR, 10), P1); // v12 demands this futile sale first
+    expect(last.current_round_type).toBe("GameEnd");
+    expect(cash(last, P1)).toBe(40 + below.price);
+  });
+
+  it("V4: a private that could fund keeps v12 alive via DeclareBankruptcy; one that could never fund does too (bound would end it)", () => {
+    const phaseThree = (privCost: string) =>
+      board({
+        corps: [
+          { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "0", holdings: [[P1, 20], [P2, 20]], price: 90 },
+          { id: NYC, ticker: "NYC", president: P2, trains: ["3"], treasury: "500", holdings: [[P2, 30]], price: 100, x: 8, y: 8 },
+          { id: PRR, ticker: "PRR", president: P3, trains: [], treasury: "100", holdings: [[P3, 40]], price: 50, x: 3 },
+        ],
+        cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+        privates: [{ private_id: 2, owner: P1, cost: privCost }],
+      });
+    const able = phaseThree("160"); // up to $320 from NYC: could cover $180
+    expect(funding(able)).toMatchObject({ shortfall: 180, bankrupt: false, canDeclareBankruptcy: true });
+    expect(verdict(able)).toBe("undecided"); // only a consented private sale can fund it
+    expect(verdict(able, false)).toBe("insolvent-proven"); // shares alone cannot
+    const futile = phaseThree("20"); // at most $40 for it: can never cover $180
+    expect(funding(futile)).toMatchObject({ shortfall: 180, bankrupt: false, canDeclareBankruptcy: true });
+    expect(verdict(futile)).toBe("insolvent-proven"); // v13: automatic; v12: waits for a DeclareBankruptcy click
+  });
+
+  it("V6: treasury + cash suffice -> v12 waits for the president's EmergencyBuyHardware; nothing is derived", () => {
+    const state = board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "30", holdings: [[P1, 60], [P2, 20]], price: 90 },
+        { id: NYC, ticker: "NYC", president: P2, trains: [], treasury: "500", holdings: [[P2, 30], [P1, 20]], price: 100, x: 8, y: 8 },
+      ],
+      cash: { [P1]: 100, [P2]: 300, [P3]: 300 },
+    });
+    expect(funding(state)).toMatchObject({ shortfall: 0, canPurchase: true });
+    expect(verdict(state)).toBe("funded-now");
+    expect(nextDerivedAction({ state, mapGrid: CORRIDOR, emitted: new Set() })).toBeNull();
+  });
+
+  it("V2: bound inconclusive, exact legality resolves: the rescued corporation's other-20 can only be half-sold", () => {
+    // C&O: P1 = President's 20 + other-20 (40%), P2 30% -> floor 30, bound counts 1 cert ($90) >= $80, but the
+    // half-sale needs a 10% in the pool and there is none: no legal sale exists. v12 and v13 agree (GameEnd).
+    const state = board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "0", holdings: [[P1, 40], [P2, 30]], price: 90, double: P1 },
+        { id: NYC, ticker: "NYC", president: P2, trains: [], treasury: "500", holdings: [[P2, 30]], price: 100, x: 8, y: 8 },
+      ],
+      cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+    });
+    const f = funding(state)!;
+    expect(f.shortfall).toBe(80);
+    expect(upperBound(state, f)).toBe(90);
+    expect(presidentAfterSale(state.public_companies[0], P1, 10, [P1, P2, P3])).toBe(P1);
+    expect(f.legalSales).toEqual([]);
+    expect(f.bankrupt).toBe(true);
+    expect(verdict(state)).toBe("undecided"); // the prototype's witness finds nothing; exact step = "no legal sale" -> insolvent
+  });
+});

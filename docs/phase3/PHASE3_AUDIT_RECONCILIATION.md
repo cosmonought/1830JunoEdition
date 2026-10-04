@@ -106,7 +106,7 @@ Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments on
 | W1-O | COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`) |
 | W3-K | COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click "Pass Turn" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D / W2-F and other open slices are tracked separately) |
 
-*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, its ledger PARTIAL lifted with W2-B; W2-B, W2-C, W2-G and the v13 settlement certification are COMPLETE and integrated ("Wave-2 B+C+G + v13 certification integration status"); W2-D and W2-F are NOT STARTED, UNLOCKED. Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
+*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, its ledger PARTIAL lifted with W2-B; W2-B, W2-C, W2-G and the v13 settlement certification are COMPLETE and integrated ("Wave-2 B+C+G + v13 certification integration status"); W2-D is COMPLETE and integrated ("Wave-2 B+C+G+D integration status"); W2-F is NOT STARTED, UNLOCKED. Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
 `OPEN`, `NOT STARTED`, `RULED`, `NEEDS PRECISE REPRODUCTION / CLARIFICATION`) is the `status` field of its JSON row; the
 checker verifies that a COMPLETE slice has no unimplemented A/B row and that each status agrees with its disposition.
 
@@ -272,7 +272,8 @@ surfaces). Rules version unchanged (v12); settlement unchanged.
 
 ## Wave-2 B+C+G + v13 certification integration status (2026-10-04)
 
-**Branch** `phase3/wave2-bcg-v13cert-integration` from `phase3/wave2a-v13-integration` @ `16b79b2` — **the current provisional Phase-3
+**Branch** `phase3/wave2-bcg-v13cert-integration` from `phase3/wave2a-v13-integration` @ `16b79b2` — *(superseded as baseline by
+`phase3/wave2-bcgd-v13cert-integration`, below)* **the provisional Phase-3
 integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** Four accepted lines merged `--no-ff`,
 every accepted commit carried unchanged (same SHAs), in the order W2-B, W2-C, W2-G, certification:
 
@@ -310,7 +311,7 @@ Then one test-only integration commit (`70483ef`, the C+G train-window regressio
 
 **Branch** `phase3/w2-d-mh-offturn-jk` @ `a7488ff` (code `db50c38`, independent-review fixes `a7488ff`) from
 `phase3/wave2-bcg-v13cert-integration` @ `9b19d9d`. **COMPLETE on its slice branch; NOT integrated** (integration and owner broad
-gate pending). Presentation only -- the engine already owned every rule (`mohawkExchange.ts`: the SR + OR window, own-SR-turn
+gate pending). *(Written as branch-only; since 2026-10-04 ACCEPTED and INTEGRATED on `phase3/wave2-bcgd-v13cert-integration`, merge `4072fd0` — see "Wave-2 B+C+G+D integration status" below.)* Presentation only -- the engine already owned every rule (`mohawkExchange.ts`: the SR + OR window, own-SR-turn
 executes / everything else queues, holds refuse rather than queue, one pending request). `stockRoundExchangeOffers` admits the
 Operating Round and marks the M&H offer `offTurn` (auction / finished game / non-owner / corporation-owned / closed / non-sandbox
 still offer nothing). The bar lets an `offTurn` offer past `mayActThisTurn` and readies it on the new required `offTurnPowerReady`
@@ -324,6 +325,22 @@ residue and W2-A's M&H-chip residue resolved (the Stock Round share controls' re
 (new); moved pins `activePrivatePower`, `powerRefusalAndChips`, `privatePowerOffer`, `phase65bShellWiring`,
 `phase3W2EMhQueuedVisibility`; the two rendered-bar harnesses gain the required prop. Known, not taken (pre-existing, out of
 scope): an `automatic: true` dispatch bypasses the reload "catching up" guard. Rules version unchanged (v13); settlement unchanged.
+
+## Wave-2 B+C+G+D integration status (2026-10-04)
+
+**Branch** `phase3/wave2-bcgd-v13cert-integration` from `phase3/wave2-bcg-v13cert-integration` @ `9b19d9d` — **the current provisional Phase-3 integration
+baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** The accepted W2-D slice
+(`phase3/w2-d-mh-offturn-jk` @ `f0abdd7`) merged `--no-ff` (merge `4072fd0`), its three commits carried unchanged (`db50c38` code,
+`a7488ff` review fixes, `f0abdd7` slice tracking), then this tracking commit.
+
+- **No conflict.** W2-D was 3 ahead / 0 behind `9b19d9d`, so the merged tree equals `f0abdd7`'s exactly. No `server/`, `gameEngine/`,
+  `rulesVersion.ts` or settlement file differs from `9b19d9d`.
+- **Rows:** AUD-04.03, AUD-10.05, P3-N003 IMPLEMENTED and INTEGRATED. W2-E's "Stock-Round-only chip" residue and W2-A's M&H-chip
+  residue are closed; the Stock Round share controls' `privateTradeHoldReason` residue stays W2-F's.
+- **Versions:** `RULES_ENGINE_VERSION` 13; supported live `[13]`; settlement-certified `[10, 11, 12, 13]`; compatibility keys and
+  settlement fixtures unchanged.
+- **Lanes:** W2-B, W2-C, W2-G, the v13 settlement certification and W2-D **COMPLETE and INTEGRATED**. W2-F remains **NOT STARTED,
+  UNLOCKED**. Not deployable until drained v12 rooms and the final integrated owner gate.
 
 ## Scope and closing remark
 

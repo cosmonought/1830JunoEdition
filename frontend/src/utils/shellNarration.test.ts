@@ -90,7 +90,25 @@ describe("#1246: the sentences that left the shell", () => {
       { ExchangePrivate: { private_id: 5, company_id: BO, player: "p1", source: "Ipo" } } as never,
       context(board()) as never,
     );
-    expect(closes).toBe("Host exchanged the Mohawk & Hudson for a 10% share of B&O. The private company closes.");
+    /* Phase 3 W2-E (OD-3): with no after-board the line can only say a request was made -- it used to claim the
+       exchange happened, which is K-17 (a queued request narrated as executed). */
+    expect(closes).toBe("Host requested an exchange of the Mohawk & Hudson for a 10% share of B&O from the IPO.");
+    /* And when the after-board shows the M&H closed, the exchange happened here: EXECUTED. */
+    const executed = describeGameplayAction(
+      { ExchangePrivate: { private_id: 5, company_id: BO, player: "p1", source: "Ipo" } } as never,
+      {
+        ...context(board()),
+        afterState: board({
+          private_companies: [
+            { private_id: 5, name: "Mohawk & Hudson", owner: null, closed: true },
+            { private_id: 6, name: "Camden & Amboy", owner: "p2", closed: false },
+          ],
+        } as never),
+      } as never,
+    );
+    expect(executed).toBe(
+      "M&H exchange EXECUTED — Host exchanged the Mohawk & Hudson for a 10% share of B&O from the IPO. The private company closes.",
+    );
     const stays = describeGameplayAction(
       { ExchangePrivate: { private_id: 6, company_id: BO, player: "p2", source: "Ipo", keep_open: true } } as never,
       context(board()) as never,

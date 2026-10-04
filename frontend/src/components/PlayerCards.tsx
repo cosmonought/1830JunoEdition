@@ -71,6 +71,11 @@ export interface PlayerCardsProps {
    * AN INPUT, NOT A DERIVATION -- see `PrivateCompanyPills`, which takes the same value for the same reason.
    * Absent means "not near" rather than "unknown", so an untaught caller renders the cards it always did. */
   privateClosureAlert?: PrivateClosureAlert | null;
+  /** Phase 3 W2-E (owner ruling OD-3): a standing note on ONE private's row -- today only the M&H's queued exchange
+   *  (`pending_mh_exchange`). `label` is the few words on the row; `title` the full sentence. `null` (or absent)
+   *  draws the row as it always was. An input, not a derivation, for #1035's reason: the card knows nothing of
+   *  the board. */
+  privatePendingNote?: (privateId: number) => { label: string; title: string } | null;
 }
 
 /* Design note #569: the palette moved to `utils/playerLabels.ts`, beside the
@@ -115,6 +120,7 @@ export function PlayerCards({
   colorForSeat,
   privateDescription,
   privateClosureAlert = null,
+  privatePendingNote,
 }: PlayerCardsProps) {
   /* Design note #568: which private row is open, keyed by id. One map for
      the whole grid rather than state per card -- a player may want the
@@ -333,6 +339,7 @@ export function PlayerCards({
                        remembering some of the names". #423 removed the numeric chips because a bare `3` names nothing away from
                        the auction's numbered list; a number IN FRONT OF the name is the opposite trade and costs two characters. */
                     const title = numberedPrivate(entry.privateId, entry.name); // #1370: the auction position
+                    const pendingNote = privatePendingNote?.(entry.privateId) ?? null;
                     return (
                       <React.Fragment key={entry.privateId}>
                         <tr>
@@ -369,6 +376,17 @@ export function PlayerCards({
                                 title={closureTitle ?? title}
                               >
                                 {title}
+                              </span>
+                            )}
+                            {/* Phase 3 W2-E (OD-3): the request is queued, not executed -- the private is still
+                                open and still this player's, so the row stays and says what is pending. */}
+                            {pendingNote && (
+                              <span
+                                style={styles.privatePending}
+                                title={pendingNote.title}
+                                data-testid={`private-pending-${entry.privateId}`}
+                              >
+                                {pendingNote.label}
                               </span>
                             )}
                           </td>
@@ -674,4 +692,19 @@ export const styles: Record<string, React.CSSProperties> = {
      money, which is the correction this note records. */
   privateNameWarn: { color: ALERT_WARN_INK },
   privateNameCritical: { color: ALERT_CRITICAL_INK },
+  /* Phase 3 W2-E (OD-3): a pending request, on its own line under the name. Not the amber/red of #1035 -- a
+     queued exchange is not a warning that the private is closing, only that a request stands. A dashed border
+     reads as "not yet", which is the whole message; the full sentence is the title. */
+  privatePending: {
+    display: "inline-block",
+    marginTop: "2px",
+    padding: "0 5px",
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    lineHeight: 1.5,
+    whiteSpace: "nowrap",
+    color: "#9ec5ff",
+    border: "1px dashed #5b7099",
+    borderRadius: RADIUS.control,
+  },
 };

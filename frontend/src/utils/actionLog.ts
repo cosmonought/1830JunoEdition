@@ -12,7 +12,12 @@
 //
 // See docs/ai_architecture/ui_shell_layout.md - actionLog.ts #0, #1
 
-import { actingAddress, type GameStateResponse, type WaterfallStateResponse } from "../gameEngine/gameState";
+import {
+  actingAddress,
+  type GameStateResponse,
+  type PendingMhExchange,
+  type WaterfallStateResponse,
+} from "../gameEngine/gameState";
 import { dividendSplit } from "../gameEngine/dividendSplit";
 import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
@@ -32,6 +37,13 @@ import { KANAWHA_LICENSE_COST } from "../gameEngine/kanawhaLicense";
 import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
 import { numberedPrivate } from "../gameEngine/privateOrdinal";
 import { saleCopyKind } from "./saleCopyDisclosure";
+/* Phase 3 W2-E (OD-3): the M&H's REQUESTED / EXECUTED sentences, read from `pending_mh_exchange`. */
+import {
+  mhExchangeDispatchOutcome,
+  mhExchangeExecutedSentence,
+  mhExchangeRequestedSentence,
+} from "./mhQueuedExchange";
+import { exchangeSourceLabel } from "./privatePowerFlow";
 
 export interface ActionLogContext {
   /** The board and room as they stand BEFORE this action -- design note #1. */
@@ -512,13 +524,31 @@ export function describeGameplayAction(
   }
 
   if ("ExchangePrivate" in msg) {
-    const { private_id, company_id, player, keep_open } = msg.ExchangePrivate;
+    const { private_id, company_id, player, keep_open, source } = msg.ExchangePrivate;
     const who = context.labelForAddress(player);
     const priv = gameState?.private_companies.find((row) => row.private_id === private_id)?.name ?? "private company";
     const ticker = corp(gameState, company_id);
-    return keep_open === true
-      ? `${who} receives a free 10% share of ${ticker} with the ${priv}, which stays open.`
-      : `${who} exchanged the ${priv} for a 10% share of ${ticker}. The private company closes.`;
+    if (keep_open === true) return `${who} receives a free 10% share of ${ticker} with the ${priv}, which stays open.`;
+    /* ==================================================================
+       PHASE 3 W2-E (K-17, owner ruling OD-3): REQUESTED IS NOT EXECUTED
+       ==================================================================
+       This always said "exchanged ... The private company closes." -- including for a request the reducer had
+       only QUEUED as `pending_mh_exchange`, with the M&H still open on the board. The after-board decides
+       (`mhExchangeDispatchOutcome`): a request recorded here reads REQUESTED, an exchange that happened here
+       reads EXECUTED, and a queued request that later settles gets its own line from the shell
+       (`mhSettlementSentence`). The pile is the request's own (W1-C / R2), never a substitute. */
+    const request: PendingMhExchange = {
+      player,
+      private_id,
+      company_id,
+      source: source === "Bank" ? "Bank" : "Ipo",
+    };
+    const outcome = mhExchangeDispatchOutcome(gameState, context.afterState, request);
+    if (outcome === "requested") return mhExchangeRequestedSentence(gameState, request, context.labelForAddress);
+    if (outcome === "executed") return mhExchangeExecutedSentence(gameState, request, context.labelForAddress);
+    /* Neither on the board: a refused request (the shell prefixes REFUSED and the reason), or no after-board.
+       Claim only that it was asked for. */
+    return `${who} requested an exchange of the ${priv} for a 10% share of ${ticker} from the ${exchangeSourceLabel(request.source)}.`;
   }
 
   /* #1248: the closure. One sentence for the close that won; the ones that lost the race print nothing at all

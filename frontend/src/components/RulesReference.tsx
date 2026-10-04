@@ -1460,10 +1460,15 @@ const COMPANY_CARDS: readonly CompanyCard[] = [
     title: "Mohawk & Hudson (MH)",
     meta: companyMeta(4),
     lead: "Its owner may exchange it for a 10% NYC share when the required conditions are met.",
+    /* Phase 3 W2-E (RR-6): the page omitted the Orange/Brown waiver, the certificate-limit check, the owner's
+       choice of pile and the queued timing -- all of which `mohawkExchange.ts` (#1630) enforces. Copy only. */
     quick: [
       "The player must hold under 60% of the NYC, and an NYC share must be free in the IPO or the Bank Pool.",
+      "The 60% cap does not apply while NYC is in the Orange or Brown zone, and the exchange may not leave the player over the certificate limit.",
+      "The owner chooses the IPO or the Bank Pool; the other pile is never substituted.",
       "The exchange may happen during the owner's Stock Round turn, or between other players' or corporations' turns in either round.",
-      "The exchange closes Mohawk & Hudson immediately.",
+      "On the owner's own Stock Round turn it executes at once. Requested at any other time, it is queued and executes at the next turn boundary only if it is still legal then.",
+      "The exchange closes Mohawk & Hudson when it executes.",
     ],
     detail: [
       { p: "A player owning Mohawk & Hudson may exchange it for one 10% share of New York Central." },
@@ -1476,12 +1481,18 @@ const COMPANY_CARDS: readonly CompanyCard[] = [
              reference. `privateCatalog.ts`'s long form already said "under 60%", so the two now agree.
              Design note #771: the piles are the IPO and the BANK POOL. 3.0 calls them "the bank or the pool",
              which names the same two -- unsold initial shares, and shares players have sold back. */
-          "the player must hold under 60% of the NYC;",
-          "an NYC share must be free in the IPO or the Bank Pool.",
+          /* RR-6: the waiver, the certificate limit and the owner's pile, as `mohawkExchange.ts` asks them. These
+             items are also run together into the auction catalog's MH note (`sentenceFrom`), so each is a clause. */
+          "the player must hold under 60% of the NYC, unless NYC is in the Orange or Brown zone;",
+          "the exchange must not leave the player over the certificate limit;",
+          "an ordinary NYC share must be free in the pile the owner chooses, the IPO or the Bank Pool.",
         ],
       },
       { callout: "The exchange may occur during the player's Stock Round turn, or between the turns of other players or corporations in either a Stock Round or an Operating Round.", tag: "Own timing window" },
-      { p: "The exchange closes Mohawk & Hudson immediately." },
+      /* RR-6: the queued half of the window, as the engine runs it (`mhExchangeDisposition`, `settleMhExchange`). */
+      { p: "On the owner's own Stock Round turn the exchange executes at once. Requested during any other turn, it is queued and executes at the next turn boundary, after every condition above is checked again." },
+      { p: "A queued request reserves nothing. If it is no longer legal at that boundary — the chosen pile has emptied, the M&H has closed or changed hands, or a limit now applies — it expires without effect, and the other pile is never substituted." },
+      { p: "The exchange closes Mohawk & Hudson when it executes." },
     ],
   },
   {
@@ -4733,7 +4744,12 @@ function privateExceptions(id: number): readonly string[] {
           detailProse(card.detail, "If another corporation lays a tile on the DH starting hex"),
         ]
       : cardId === "mh"
-        ? [sentenceFrom(detailList(card.detail))]
+        ? [
+            sentenceFrom(detailList(card.detail)),
+            /* Phase 3 W2-E (RR-6): the queued timing is what surprises an owner -- a request made off-turn has
+               not happened yet, and may never. */
+            detailProse(card.detail, "On the owner's own Stock Round turn the exchange executes at once"),
+          ]
         : cardId === "ca"
           ? [detailProse(card.detail, "The free share does not establish PRR")]
           : cardId === "bo"

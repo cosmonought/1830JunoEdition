@@ -1,7 +1,12 @@
-# Rules v13: settlement certification vectors (PENDING)
+# Rules v13: settlement certification vectors (PASS / CERTIFIED)
 
-**Status (2026-10-04, W3-K `phase3/w3-k-rules-v13`, with the owner's rulings of 2026-10-04): rules engine v13 is LIVE in
-the engine; it is NOT settlement-certified — v13 settlement certification is PENDING A DEDICATED PASS.**
+**Current status (2026-10-04, `phase3/v13-settlement-certification`): v13 settlement certification PASS / CERTIFIED** on
+this slice branch, not yet integrated into the Phase-3 provisional baseline or `main`. Rules engine `13`; supported live
+gameplay `[13]`; settlement-certified `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS = [10, 11, 12, 13]`. Gameplay-engine
+support and settlement certification remain separate axes. The record is §6.
+
+**Status at W3-K (2026-10-04, W3-K `phase3/w3-k-rules-v13`, with the owner's rulings of 2026-10-04), kept as written: rules
+engine v13 is LIVE in the engine; it is NOT settlement-certified — v13 settlement certification is PENDING A DEDICATED PASS.**
 `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` stays `[10, 11, 12]`. A v13 board is refused for money settlement with
 `UNSUPPORTED_RULES_ENGINE_VERSION` until a separate certification pass adds 13 on its own evidence, in its own reviewed
 change. This file lists what that pass must prove. W3-K does not certify anything.
@@ -17,7 +22,8 @@ Gameplay rules and settlement certification are separate version axes. Rule 13 i
 > `verify_v13_settlement_vectors.py` (an independent Python appraisal and the escrow crate's encoder, run by hand).
 > The evidence is green with the literal at `[10, 11, 12]` (it is built from the certified primitives; every production
 > path must refuse a v13 board until the literal admits 13). The literal is changed only in its own commit after the
-> evidence is independently reviewed; see §5.
+> evidence is independently reviewed; see §5. **Done:** the evidence (`e36f3a1`) was owner-accepted and the literal
+> admitted 13 in its own commit; see §6.
 
 ## 1. What v13 changes that settlement can see
 
@@ -188,3 +194,39 @@ the trade and private funding are optional, rulebook 6.6.2 / 6.6.3), so V13-07 a
 trade or a private sale could have rescued; no bankruptcy is ever declared by `DeclareBankruptcy` (refused on
 revision 2). V13-18 (a) follows owner ruling 2 as W3-K implemented and reviewed it: a proposal and another player's
 off-turn rejection do not close the continuation; the accepted trade does.
+
+## 6. Certification admission and validation record (2026-10-04)
+
+**v13 settlement certification: PASS / CERTIFIED** on `phase3/v13-settlement-certification` (base `be1fd10`; evidence
+`e36f3a1`, owner-accepted after two independent reviews; admission in its own commit after it). Not yet integrated into the
+Phase-3 provisional baseline or `main`.
+
+- **Authoritative state on this branch:** rules engine `13`; supported live gameplay `[13]`; settlement-certified
+  `[10, 11, 12, 13]`, still an explicit frozen literal in `settlementAppraisal.ts` that never reads the gameplay version.
+  The two axes stay separate.
+- **Admission commit:** the literal, its provenance paragraph, `EXPECTED_SETTLEMENT_LITERAL`, the tests whose only stale
+  assumption was "settlement ends at 12" / "13 is the newer, unsupported pin" (each refusal moved to 14 /
+  `RULES_ENGINE_VERSION + 1`, none deleted), and the compatibility keys derived from the literal: no escrow
+  `dc1-e8d0b4792a7ba07e67199ad2`, fixture pin `dc1-32fcc4967978e78f10874490` (W3-K's `dc1-390107d5…` / `dc1-d01c50c4…`
+  reproduce with certified `[10, 11, 12]` and stay pinned as history).
+- **Nothing pinned moved:** the v13 fixtures were not regenerated; the five frozen v10 files and the v11 / v12 evidence
+  files are byte-identical (SHA-256 guards green); the production paths reproduce the pre-admission v13 bytes exactly. No
+  appraisal arithmetic, codec, payload layout, contract or gameplay rule changed.
+- **Validation:** `settlementV13Certification` 265 pass / 1 skip (the skip needs owner-local server data). 26 focused
+  frontend suites (settlement v11 / v12 / v13, payload goldens / conformance / mutation, adversarial, the Juno oracle, DA-7,
+  DA-8, the three rules-v13 suites, corpus parity, digest, preview policy, variants, live-4 model / compatibility /
+  certification, shell wiring, and the three money suites) 1415 pass / 4 skip. The formerly designed-red suites are green
+  with no change to their money behaviour: frontend `walletChecks`, `moneyActions` and `settlementCheck` (unchanged
+  files; `settlementCheck` was missing from §3's list but was red for the same reason); server `escrow4Money` 30/30,
+  `live4MoneyContinuation` 35/35, `settlementLifecycle` 22/22, `escrow3aOperator` 8/8, `escrow3bAdversarial` 41/41,
+  `escrow3bBackend` 1/1, `rooms/live4Certification` 63/63, `rooms/live4Integration` 35/35, `tools/l4_6Tooling` 13/13,
+  `rooms/live4NoMoneyContinuation` 9/9. `verify_v13_settlement_vectors.py` and `verify_set0c_payload_vectors.py` OK;
+  frontend `tsc --noEmit` clean; server build clean; accounting PASS; `git diff --check` clean. Broad owner gate not run.
+- **Independent review of the admission: PASS** (no MEDIUM or higher). Mutations it ran: a literal of
+  `[10, 11, 12, 13, 14]` fails 20 frontend and 10 server tests; reverting the literal while keeping the edited tests
+  restores the pre-admission failure counts; a pin-13-only appraisal skew fails 141 v13 tests.
+- **Follow-ups (not blockers):** (1) `automaticBankruptcy` → `executeEmergencyLegs` skips a liquidation leg the sale law
+  refuses instead of failing loudly; the evidence guards the current behaviour on every bankruptcy vector
+  (`bankruptcy_record.sold == maximumLiquidation`); hardening it is a separate task. (2) The "uncertified board never
+  builds" check in `escrow3bAdversarial` uses hand-built evidence whose zero hashes hold it as `evidence-mismatch` for any
+  pin; the real refusal is covered by `settlementLifecycle`. It predates this pass and could assert `rules-not-certified`.

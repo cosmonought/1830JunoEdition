@@ -103,9 +103,9 @@ Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments on
 | W1-M | COMPLETE — L2 `6f42dca` |
 | W1-N | COMPLETE — L7 `9d9376b` + review fixes `06c3a91`; the OD-12 RED R2 call-site deletion `87d63c4` (+ comment follow-up `819a204`); tie-aware game-over strip at the integration (`8dc79e0`) |
 | W1-O | COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`) |
-| W3-K | PARTIAL — rules v13 implemented on `phase3/w3-k-rules-v13` (branch only, not integrated): OD-2, SBS-3, SBS-4, OD-4, with the owner's 2026-10-04 rulings 1-5 and the four review findings; live list [13]; settlement certification for 13 PENDING A DEDICATED PASS (literal stays [10, 11, 12]; `V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). NOT DEPLOYABLE ALONE: needs W2-A, W2-B + the Auto-Buy correction, W2-G v13 reconciliation, the safe integration reconciliation, the dedicated settlement certification, pinned v12 rooms drained and the final integrated owner gate |
+| W3-K | PARTIAL — rules v13 implemented on `phase3/w3-k-rules-v13` (branch only, not integrated): OD-2, SBS-3, SBS-4, OD-4, with the owner's 2026-10-04 rulings 1-5 and the four review findings; live list [13]; v13 settlement certification PASS / CERTIFIED on its own slice branch `phase3/v13-settlement-certification` (2026-10-04, not yet integrated: rules engine 13, supported live gameplay [13], settlement-certified [10, 11, 12, 13] -- separate axes; `V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). NOT DEPLOYABLE ALONE: needs W2-A, W2-B + the Auto-Buy correction, W2-G v13 reconciliation, the safe integration reconciliation, the v13 settlement certification integrated, pinned v12 rooms drained and the final integrated owner gate |
 
-**W2-A, W2-B and W2-F are not complete** (nor started); **W3-K is PARTIAL** (rules landed on its branch; settlement certification pending; see "W3-K status" below). Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
+**W2-A, W2-B and W2-F are not complete** (nor started); **W3-K is PARTIAL** (rules landed on its branch; v13 settlement certification PASS / CERTIFIED on its own slice branch, not yet integrated; see "W3-K status" below). Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
 `OPEN`, `NOT STARTED`, `RULED`, `NEEDS PRECISE REPRODUCTION / CLARIFICATION`) is the `status` field of its JSON row; the
 checker verifies that a COMPLETE slice has no unimplemented A/B row and that each status agrees with its disposition.
 
@@ -115,8 +115,8 @@ checker verifies that a COMPLETE slice has no unimplemented A/B row and that eac
 - **OD-2 — STOCK ROUND PASS.** Recorded as RESOLVED; NOT implemented in the Wave-1 integration (no rules or version change). SBS-2 goes to the v13 rules slice (W3-K is its vehicle) with its own settlement certification; W2-B presents the one-click "Pass Turn". P3-N024 (SBS-4) becomes G: needs precise reproduction / clarification. The rules version stays v12.
 - **OD-7 — FORCED TRAIN PURCHASE.** Implemented as copy at the Wave-1 integration (`ca73834`): every RR-4 site in `components/RulesReference.tsx` corrected; the engine (which already allowed any legal treasury-funded purchase) is unchanged. AUD-09.10 C → B, IMPLEMENTED. W2-J and W3-K no longer carry RR-4.
 - **OD-12 — RED REGIONS.** W1-N's R2 call site deleted as its own commit (`87d63c4`, independently reviewed: APPROVE WITH NITS, comment nits fixed outside RED in `819a204`). The remaining OD-12 candidates (W2-J K-18; W3-C, W3-B, W3-I, W3-A, W3-H) each still land as one separately reviewed RED commit under §5.1's serialization rule.
-- **OD-4 — EMERGENCY FUNDING (AUTOMATIC BANKRUPTCY).** Implemented in W3-K on `phase3/w3-k-rules-v13` (rules v13, gated on rules revision 2). W2-G (AUD-09.05/06/07, P3-N017/018) must be reconciled to the v13 authority before it starts. Settlement certification for 13 is pending (bankruptcy vectors required). The 2026-10-04 rulings 1, 4 and 5 and the four review findings are implemented on the same branch.
-- **OD-10 — V13 RULES BATCH IN PHASE 3.** W3-K implemented on `phase3/w3-k-rules-v13` (branch only). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open. The 2026-10-04 rulings 2 and 3 are implemented on the same branch.
+- **OD-4 — EMERGENCY FUNDING (AUTOMATIC BANKRUPTCY).** Implemented in W3-K on `phase3/w3-k-rules-v13` (rules v13, gated on rules revision 2). W2-G (AUD-09.05/06/07, P3-N017/018) must be reconciled to the v13 authority before it starts. Settlement certification for 13: PASS / CERTIFIED on `phase3/v13-settlement-certification` (bankruptcy vectors included; not yet integrated). The 2026-10-04 rulings 1, 4 and 5 and the four review findings are implemented on the same branch.
+- **OD-10 — V13 RULES BATCH IN PHASE 3.** W3-K implemented on `phase3/w3-k-rules-v13` (branch only). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open. The 2026-10-04 rulings 2 and 3 are implemented on the same branch. v13 settlement certification: PASS / CERTIFIED on `phase3/v13-settlement-certification` (not yet integrated).
 - **OD-17 — TILE-UPGRADE CROSS-REFERENCES.** VF/D-18 and VF/D-22 stay C (the ledger still lists them OPEN) with status RULED — no change; the ledger and comment cleanup is a docs task (closure contract item 12).
 
 Remaining Wave-1 owner blocker: **OD-14(a)** (W1-I's fit-probe removal and the optional W1-I-b). W1-K was not in Wave 1.
@@ -134,10 +134,12 @@ Remaining Wave-1 owner blocker: **OD-14(a)** (W1-I's fit-probe removal and the o
   overshoot (1); an active-player turn action closes the Brown continuation, an off-turn answer does not (2); the M&H
   exchange stays outside stock-turn accounting (3); one leg per corporation (4); private funding relevance is exact (5).
   Review findings fixed: bankruptcy narration, no-server derived purchase, Rules Reference copy, changelog wording.
-- **Versions:** `RULES_ENGINE_VERSION` 13; live list `[13]`; settlement literal `[10, 11, 12]` — v13 certification PENDING
-  ([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)).
+- **Versions:** `RULES_ENGINE_VERSION` 13; live list `[13]`; settlement literal `[10, 11, 12]` on this branch. **v13
+  settlement certification: PASS / CERTIFIED** on `phase3/v13-settlement-certification` (2026-10-04, not yet integrated):
+  rules engine `13`, supported live gameplay `[13]`, settlement-certified `[10, 11, 12, 13]` — gameplay-engine support and
+  settlement certification stay separate axes ([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)).
 - **Not deployable alone.** Still required before deployment: W2-A; W2-B with the Auto-Buy correction; W2-G reconciled to
-  the v13 UI authority; the safe integration reconciliation; the dedicated v13 settlement certification; pinned v12
+  the v13 UI authority; the safe integration reconciliation; the v13 settlement certification integrated (certified on its slice branch); pinned v12
   rooms drained; the final integrated owner gate.
 
 ## Scope and closing remark

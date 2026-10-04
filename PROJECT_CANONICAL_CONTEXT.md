@@ -357,11 +357,14 @@ OD-7 and OD-12 are recorded in the plan's §7.3. Gameplay rules stay v12 on the 
 implemented on `phase3/w3-k-rules-v13`** (2026-10-03, from `phase3/wave1-integration` @ `4e51cff`; branch only, not merged;
 owner gate pending): `RULES_ENGINE_VERSION = 13`, live list `[13]`, rules revision 2 — OD-2 (one `PassTurn` ends a Stock
 Round turn), SBS-3 / SBS-4 (the official Brown Bank Pool continuation; V-6.3 not implemented) and OD-4 (automatic
-emergency funding and automatic bankruptcy; `DeclareBankruptcy` retired). Settlement stays `[10, 11, 12]`; v13
-certification is a separate pending pass (`docs/phase3/V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). Keys on that branch:
-`dc1-390107d5e7024f4a9180efeb` (no escrow), `dc1-d01c50c4a70d0dc14cdf915d` (the fixture pin). Not deployable alone (W2-A,
-W2-B with the Auto-Buy correction, a v13-reconciled W2-G, the safe integration reconciliation, the dedicated settlement
-certification, drained v12 rooms and the final owner gate). Owner rulings OD-4, OD-10(a) and OD-17, with the 2026-10-04
+emergency funding and automatic bankruptcy; `DeclareBankruptcy` retired). Settlement stays `[10, 11, 12]` on that branch.
+Keys on that branch: `dc1-390107d5e7024f4a9180efeb` (no escrow), `dc1-d01c50c4a70d0dc14cdf915d` (the fixture pin). **v13
+settlement certification: PASS / CERTIFIED** by its own pass on `phase3/v13-settlement-certification` (2026-10-04, from
+`be1fd10`; not merged, not yet in the Phase-3 provisional baseline): rules engine `13`, supported live gameplay `[13]`,
+settlement-certified `[10, 11, 12, 13]` -- separate axes (`docs/phase3/V13_SETTLEMENT_CERTIFICATION_VECTORS.md` §6); keys
+there `dc1-e8d0b4792a7ba07e67199ad2` (no escrow), `dc1-32fcc4967978e78f10874490` (the fixture pin). Not deployable alone
+(W2-A, W2-B with the Auto-Buy correction, a v13-reconciled W2-G, the safe integration reconciliation, the v13 settlement
+certification integrated, drained v12 rooms and the final owner gate). Owner rulings OD-4, OD-10(a) and OD-17, with the 2026-10-04
 continuation rulings 1-5, are in the plan's §7.3.
 
 **LIVE-4 status (2026-09-29): CLOSED.** Integrated at `6da8a1f` (corpus-gate certified), tooled / documented by L4-6

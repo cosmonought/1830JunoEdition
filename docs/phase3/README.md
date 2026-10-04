@@ -33,8 +33,10 @@ Still open: OD-14(a), OD-10(b).
 
 `phase3/w3-k-rules-v13` (branch only, not integrated): `RULES_ENGINE_VERSION` 13, live list `[13]`, rules revision 2 —
 OD-2, SBS-3, SBS-4 and OD-4. Settlement stays certified for `[10, 11, 12]`; the v13 certification pass is pending
-([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)). Not deployable alone: W1-A, Auto-Buy's
-stage-Pass removal, W2-B and a reconciled W2-G must ship with it.
+([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)). The owner's 2026-10-04 rulings 1-5 (only
+enough, Brown continuation and intervening actions, M&H accounting, duplicate legs, exact private-funding relevance) are
+implemented there. Not deployable alone: W2-A, W2-B with the Auto-Buy correction, a v13-reconciled W2-G, the safe
+integration reconciliation, the dedicated settlement certification, drained v12 rooms and the final owner gate.
 
 ## Check
 

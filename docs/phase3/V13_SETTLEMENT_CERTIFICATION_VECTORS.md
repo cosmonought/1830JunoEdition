@@ -1,6 +1,7 @@
 # Rules v13: settlement certification vectors (PENDING)
 
-**Status (2026-10-03, W3-K `phase3/w3-k-rules-v13`): rules engine v13 is LIVE in the engine; it is NOT settlement-certified.**
+**Status (2026-10-04, W3-K `phase3/w3-k-rules-v13`, with the owner's rulings of 2026-10-04): rules engine v13 is LIVE in
+the engine; it is NOT settlement-certified — v13 settlement certification is PENDING A DEDICATED PASS.**
 `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` stays `[10, 11, 12]`. A v13 board is refused for money settlement with
 `UNSUPPORTED_RULES_ENGINE_VERSION` until a separate certification pass adds 13 on its own evidence, in its own reviewed
 change. This file lists what that pass must prove. W3-K does not certify anything.
@@ -17,7 +18,7 @@ privates count 0, rulebook 6.6.3 note, OD-SET-1 (a)). What v13 changes is **whic
 | Change | Rules revision 2 | Terminal effect |
 |---|---|---|
 | OD-2: one `PassTurn` ends a Stock Round turn | yes | Path only. Valuation semantics are unchanged. |
-| SBS-3 / SBS-4: the Brown Bank Pool continuation | yes | Path only. Fewer multi-purchase turns are legal than under v12. |
+| SBS-3 / SBS-4: the Brown Bank Pool continuation | yes | Path only. Fewer multi-purchase turns are legal than under v12. Owner ruling 2: any other accepted turn action of the active player (a sale, an accepted private trade, an M&H exchange, Pass Turn) closes it; another player's off-turn answer does not. |
 | OD-4: automatic emergency funding and automatic bankruptcy | yes | **Terminal boards differ.** See below. |
 
 OD-4's terminal differences from v12:
@@ -38,6 +39,16 @@ OD-4's terminal differences from v12:
   (v12's V3) does not exist on v13.
 - **No liquidation-funded intercorporate trade.** A train bought from another corporation is paid only from the treasury
   plus the president's cash, while the trade window is open. Terminal boards built on v12's R5 trades do not exist.
+- **"Only enough" is the president's choice among legal portfolios (owner ruling 1).** No redundant leg and no leg larger
+  than a smaller legal bundle of the same holding that would still fund; the smallest legal indivisible bundle may
+  overshoot. The engine does NOT require the globally smallest dollar overshoot, so two different rescue portfolios of one
+  obligation are both legal and lead to different terminal boards (different prices fall, different cash is left).
+- **Each corporation appears once in a portfolio (owner ruling 4).** A duplicate leg is refused.
+- **Private funding holds the game only while a LEGAL path exists (owner ruling 5).** Bankruptcy waits for an offer or
+  `ForgoPrivateFunding` only while a legally valid private sale, or a sequence of them, could complete a rescue with the
+  most a legal share portfolio adds (judged exactly by `maximumPrivateFunding`; buyer consent is assumed, never treated as
+  a refusal). A loose upper bound never holds the game, so a terminal that v13's first draft would have held open for a
+  `ForgoPrivateFunding` ends at once instead.
 
 ## 2. Vectors the certification pass must add
 
@@ -66,7 +77,15 @@ checks three things:
 | V13-13 | The same log replayed by `RoomEngine.apply` and rebuilt from a snapshot | The terminal digests match. |
 | V13-14 | A v12-pinned log offered to a v13 engine | Refused before the first apply (never reinterpreted); there is no settlement path. |
 
-The vectors that end in bankruptcy (V13-03 to V13-09, and V13-12 where it applies) are required. The v12 corpus re-run
+| V13-15 | Bankruptcy after the maximal legal liquidation, mixing a Pool-capped leg, a presidency-locked holding and a fully sold one | The exact `maximumLiquidation`, in `public_companies` order; every dollar to the obligated treasury; the residue valued. |
+| V13-16 | A legal private-funding path versus an upper-bound-only path: (a) one buyer whose treasury cannot pay for two privates the bound counts twice, so the game ends at once; (b) one private the buyer can pay for, so the game waits and then rescues | Only exact legal possibility holds the game; the two terminal boards differ exactly there. |
+| V13-17 | A private sale followed by a share portfolio, and two private sales to two buyers, each completing a rescue | The sequence replays identically; the buyer treasuries and the private owners on the terminal board. |
+| V13-18 | A Brown Bank Pool continuation interrupted by the active player's accepted private trade or M&H exchange, then play to a bank break | The second Pool purchase is refused at the interruption; an off-turn rejection in between does not interrupt it. |
+| V13-19 | An atomic rescue portfolio of several corporations, in the submitted order, with a presidency change inside it | One entry, today's prices per leg, the presidency where the ordinary sale puts it. |
+| V13-20 | The smallest legal overshoot, both ways: one obligation rescued by the $100 card in one log and by the $60 card in another | Both legal (owner ruling 1); two certified terminal boards from one starting board. |
+| V13-21 | An intercorporate train trade inside the window, and the same obligation after the window closed | The window-funded trade terminal; no liquidation-funded trade terminal exists. |
+
+The vectors that end in bankruptcy (V13-03 to V13-09, V13-15, V13-16 (a), and V13-12 where it applies) are required. The v12 corpus re-run
 alone does not certify v13, because no v12 terminal board can show the automatic-bankruptcy shapes.
 
 ## 3. Tests that are red by design until certification
@@ -103,5 +122,7 @@ ESCROW-3A's procedure, as in R12-3:
    flip the designed-red tests above.
 4. Owner certification gate.
 
-Deploying rules v13 also needs the UI coupling: W1-A, the removal of Auto-Buy's stage Pass, W2-B's single "Pass Turn"
-control, and W2-G reconciled to the v13 emergency authority. Without it the W3-K branch is **not deployable alone**.
+Deploying rules v13 also needs: W2-A, W2-B's single "Pass Turn" control with the Auto-Buy correction (W1-A's stage
+refusals removed, Auto-Buy's stage Pass removed), W2-G reconciled to the v13 emergency authority, the safe integration
+reconciliation, this dedicated settlement certification, pinned v12 rooms drained, and the final integrated owner gate.
+Without them the W3-K branch is **not deployable alone**.

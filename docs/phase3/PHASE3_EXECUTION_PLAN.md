@@ -867,7 +867,11 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - Bankruptcy is automatic, with no player Declare: liquidate as far as legally possible, apply the cash to the obligated corporation, then GameEnd with bankrupt_president. DeclareBankruptcy is refused on v13.
 - O-6: shares that could not be sold are scored as the bankrupt's shares.
 - Expose the authority W2-G needs. Not in this batch: DH-1, GR-1 / S10-27, GR-1b, D-18, D-22, RR-4, V-6.3.
-- *Effect on this plan:* Implemented in W3-K on `phase3/w3-k-rules-v13` (rules v13, gated on rules revision 2). W2-G (AUD-09.05/06/07, P3-N017/018) must be reconciled to the v13 authority before it starts. Settlement certification for 13 is pending (bankruptcy vectors required).
+- Owner ruling 1 (2026-10-04): KEEP the portfolio rule. "Only enough" means no redundant leg and no unnecessarily large percentage within a leg when a smaller LEGAL bundle of that same holding would still fund; the smallest legal indivisible bundle may overshoot. It does NOT mean the globally smallest dollar overshoot: with $50 short, { B 10% } raising $100 and { C 10% } raising $60 are both legal and the player chooses.
+- Owner ruling 4 (2026-10-04): KEEP the refusal. EmergencySellPortfolio may contain each corporation at most once; 20% of PRR is one 20% leg, never two 10% legs.
+- Owner ruling 5 (2026-10-04): private-funding relevance is EXACT. The question is whether at least one legally valid private-funding path (one sale or a legal sequence, assuming buyer consent, under the existing #1541 authority) could contribute to a complete rescue. An upper bound may be used only to prune; if exact authority proves no legal private path can rescue, bankruptcy does not wait.
+- Review findings fixed (2026-10-04): the automatic bankruptcy is narrated as an outcome; the no-server shell forwards the keyed automatic emergency purchase through #1247's derived-action path; the Rules Reference trade-window and bankruptcy-warning copy; the v13 changelog wording.
+- *Effect on this plan:* Implemented in W3-K on `phase3/w3-k-rules-v13` (rules v13, gated on rules revision 2). W2-G (AUD-09.05/06/07, P3-N017/018) must be reconciled to the v13 authority before it starts. Settlement certification for 13 is pending (bankruptcy vectors required). The 2026-10-04 rulings 1, 4 and 5 and the four review findings are implemented on the same branch.
 
 **OD-10 — V13 RULES BATCH IN PHASE 3.**
 - (a) One consolidated v13 rules batch is allowed inside Phase 3 (W3-K): OD-2, SBS-3, SBS-4 and OD-4, with the official/default Brown rule. V-6.3 "Buy All" is not implemented.
@@ -875,7 +879,9 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - The settlement-certified literal stays [10, 11, 12]; 13 is added only by its own certification pass. The future v13 certification vectors, including bankruptcy terminal states, are documented.
 - DH-1 and GR-1 / S10-27 (derivation-only), GR-1b (UI only), D-18 and D-22 are not in the batch.
 - (b) is not addressed by this ruling.
-- *Effect on this plan:* W3-K implemented on `phase3/w3-k-rules-v13` (branch only). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open.
+- Owner ruling 2 (2026-10-04): the Brown Bank Pool continuation is one contiguous multi-certificate purchase by the ACTIVE Stock Round player. Any accepted state-changing turn action by that player which is not another qualifying Brown Bank Pool purchase closes it (a sale, an accepted private trade, an M&H exchange, Pass Turn, any other stock-turn action). Another player's off-turn consent or answer, and derived / system bookkeeping, do not. Decided from actor / turn semantics, not log adjacency; a refused or no-op message closes nothing.
+- Owner ruling 3 (2026-10-04): KEEP the existing Stock Round semantics for the M&H exchange: it is not a stock purchase or sale for turn_action_taken, the true-pass / all-pass streak, or Priority Deal / last-trader purposes. It can close an already-open Brown purchase (ruling 2) without becoming stock trading.
+- *Effect on this plan:* W3-K implemented on `phase3/w3-k-rules-v13` (branch only). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open. The 2026-10-04 rulings 2 and 3 are implemented on the same branch.
 
 **OD-17 — TILE-UPGRADE CROSS-REFERENCES.**
 - D-18 and D-22 are excluded from the v13 batch: V13_SCOPE_VERIFICATION found D-18 INVALID (the printed rule) and D-22 ALREADY CORRECT (Stage 9.3 rule 5b, rules v7).

@@ -3023,6 +3023,13 @@ export function applySandboxAction(
        does here;
      * a refused or no-op message (the board unchanged) closes nothing; an off-turn actor (a queued M&H request,
        an answer) and a derived entry attributed to nobody ("") close nothing.
+   WHY A PROPOSAL CLOSES NOTHING, AND WHY AN ACCEPTANCE CLOSES IT (review round 2, read off the ruling's own cases):
+   in a Stock Round only the seat holder proposes (`proposePrivateTradeRefusal`) and the standing offer holds every
+   other message (`pendingOfferHold`), so the ONLY off-turn answer that can arrive between two purchases is an answer
+   to the active player's own proposal. Case C (that answer leaves the purchase open) is therefore reachable only if
+   the proposal did not close it; a proposal that is rejected or withdrawn transacts nothing (case D's spirit). An
+   acceptance closes it because the active player's trade SETTLED (case A; N2 makes it his turn activity), not because
+   an answer was sent: an acceptance that does not settle changes nothing and closes nothing.
    Only a board that carries the continuation -- rules revision 2 -- is ever touched. */
 function closeBrownContinuationOnInterveningAction(
   before: GameStateResponse,
@@ -4471,11 +4478,24 @@ function automaticBankruptcy(
   const money = playerCashOf(liquidated, funding.president) ?? 0;
   const handedOver = money > 0 ? transfer(liquidated, { player: funding.president }, { corporation: funding.companyId }, money) : null;
   const settled = handedOver === null || !handedOver.ok ? liquidated : handedOver.state;
+  // Review finding 1: the outcome, recorded where it happened, for the Activity Log (evidence only; nothing reads it as a rule).
+  const heldBy = (board: GameStateResponse, companyId: number) =>
+    board.public_companies.find((entry) => entry.company_id === companyId)?.player_holdings.find((entry) => entry.player === funding.president)?.percentage ?? 0;
+  const sold = state.public_companies
+    .map((company) => ({ company_id: company.company_id, percentage: heldBy(state, company.company_id) - heldBy(liquidated, company.company_id) }))
+    .filter((leg) => leg.percentage > 0);
   return {
     ...settled,
     current_round_type: "GameEnd" as const,
     bankrupt_president: funding.president,
     operating_sub_phase: undefined,
+    bankruptcy_record: {
+      president: funding.president,
+      company_id: funding.companyId,
+      sold,
+      liquidation_proceeds: (playerCashOf(liquidated, funding.president) ?? 0) - (playerCashOf(state, funding.president) ?? 0),
+      handed_over: handedOver !== null && handedOver.ok ? money : 0,
+    },
   };
 }
 

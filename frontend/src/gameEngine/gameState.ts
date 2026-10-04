@@ -748,6 +748,20 @@ export interface GameStateResponse {
     trade_window_closed?: true;
     private_funding_forgone?: true;
   };
+  /** W3-K (rules engine v13, review finding 1): what the AUTOMATIC bankruptcy did, written by the reducer at the moment
+   *  it did it (`sandboxSession.ts` `automaticBankruptcy`) and never again -- the bankrupt president, the obligated
+   *  corporation, the legal liquidation leg by leg (percentages in `public_companies` order), what it raised, and the
+   *  whole of his money handed to the corporation. The Activity Log narrates the outcome from it, because the
+   *  transition that proves insolvency may also move other money (a withheld run) that a before / after difference
+   *  would mis-attribute. Evidence only: no rule and no settlement figure reads it (the appraisal formula is unchanged;
+   *  the bankrupt's cash counts 0 either way). Present only on a rules-revision-2 board that ended by bankruptcy. */
+  bankruptcy_record?: {
+    president: string;
+    company_id: number;
+    sold: Array<{ company_id: number; percentage: number }>;
+    liquidation_proceeds: number;
+    handed_over: number;
+  };
   /** #1443: the Stock Round turn's stage under Sell-Buy-Sell. Absent is "sell" (the opening stage); `"buy"`
    *  once the player has declined to sell further; the third stage ("sell again") is implied by
    *  `bought_this_turn > 0`. Cleared wherever the seat moves. */

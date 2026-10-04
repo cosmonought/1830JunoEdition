@@ -461,6 +461,11 @@ describe("owner ruling 2: the Brown continuation is one contiguous purchase by t
     const proposed = act(pool, PROPOSE, "p0");
     const rejectedByNobody = applySandboxAction(proposed, ANSWER(false) as never, { ...(ctxOf(proposed) as object), actor: "" } as never);
     expect(rejectedByNobody.brown_pool_continuation_company).toBe(CPR);
+    // A state-changing message that is NOT an answer, attributed to nobody (a system entry): it moves the board, yet it
+    // is not the active player's turn action, so the purchase stays open.
+    const bySystem = applySandboxAction(pool, EXCHANGE_MH("p0") as never, { ...(ctxOf(pool) as object), actor: "" } as never);
+    expect(holding(bySystem, NYC)).toBe(20); // it did execute
+    expect(bySystem.brown_pool_continuation_company).toBe(CPR);
   });
 
   it("D. a refused or no-op message does not close the continuation merely because it was attempted", () => {

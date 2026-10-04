@@ -441,38 +441,33 @@ export function describeGameplayAction(
    On a rules-revision-2 board no player declares bankruptcy: the reducer ends the game inside whatever transition
    proved that no legal rescue remained (entering Buy Trains, `ForgoTrainTrade`, `ForgoPrivateFunding`, a declined
    or accepted funding offer, a derived entry). That message's own sentence says what was DECIDED; this one says
-   what HAPPENED, and is appended to it. Nothing client-side is invented: it is read off the BEFORE and AFTER boards
-   the log line already has (design note #1) -- the bankrupt president's holdings that went down (the legal
-   liquidation), the obligated corporation's treasury that went up (everything he had, applied to the train), the
-   holdings still in his hand (what could not legally be sold), and `bankrupt_president` / `GameEnd`. No settlement
-   figure is computed here. Silent unless this transition is the one that ended the game by bankruptcy on a
+   what HAPPENED, and is appended to it. Nothing client-side is invented: it is read off the AFTER board the log line
+   already has (design note #1) -- `bankruptcy_record`, which the reducer writes at the moment of the bankruptcy (the
+   legal liquidation leg by leg, what it raised, the whole of the president's money handed to the corporation), the
+   holdings still in his hand (what could not legally be sold), and `bankrupt_president` / `GameEnd`. NOT a before /
+   after treasury difference: the proving transition may also move other money (a withheld run, review round 2), and
+   that would be mis-attributed to the president. No settlement figure is computed here. Silent unless this transition is the one that ended the game by bankruptcy on a
    revision-2 board; a v12 `DeclareBankruptcy` keeps its own sentence alone. */
 function automaticBankruptcySentence(context: ActionLogContext): string | null {
   const before = context.gameState;
   const after = context.afterState ?? null;
   if (!before || !after) return null;
-  const president = after.bankrupt_president ?? null;
-  if (president === null || after.current_round_type !== "GameEnd" || before.current_round_type === "GameEnd") return null;
-  if (!automaticFundingInForce(before)) return null;
-  const companyId = operatingCorporationId(before);
-  const who = context.labelForAddress(president);
-  const ticker = companyId === null ? null : corp(before, companyId);
-  const holdingOf = (state: GameStateResponse, id: number) =>
-    state.public_companies.find((entry) => entry.company_id === id)?.player_holdings.find((entry) => entry.player === president)?.percentage ?? 0;
-  const sold: string[] = [];
-  const kept: string[] = [];
-  for (const company of before.public_companies) {
-    const was = holdingOf(before, company.company_id);
-    const now = holdingOf(after, company.company_id);
-    if (was > now) sold.push(`${was - now}% of ${company.ticker}`);
-    if (now > 0) kept.push(`${now}% of ${company.ticker}`);
-  }
-  const treasuryOf = (state: GameStateResponse, id: number) => Number(state.public_companies.find((entry) => entry.company_id === id)?.treasury ?? 0) || 0;
-  const applied = companyId === null ? 0 : Math.max(0, treasuryOf(after, companyId) - treasuryOf(before, companyId));
+  const record = after.bankruptcy_record ?? null;
+  if (record === null || after.current_round_type !== "GameEnd" || before.current_round_type === "GameEnd") return null;
+  if (!automaticFundingInForce(before) || after.bankrupt_president !== record.president) return null;
+  const who = context.labelForAddress(record.president);
+  const ticker = corp(before, record.company_id);
+  const sold = record.sold.map((leg) => `${leg.percentage}% of ${corp(before, leg.company_id)}`);
+  const kept = after.public_companies
+    .map((company) => ({ ticker: company.ticker, percentage: company.player_holdings.find((entry) => entry.player === record.president)?.percentage ?? 0 }))
+    .filter((entry) => entry.percentage > 0)
+    .map((entry) => `${entry.percentage}% of ${entry.ticker}`);
   return (
-    `Automatic bankruptcy: no legal rescue remained for ${ticker === null ? "the forced train purchase" : `${ticker}'s forced train purchase`}. ` +
-    (sold.length > 0 ? `${who}'s shares were sold as far as the rules allow (${sold.join(", ")}), and ` : `${who} had no shares that could legally be sold, and `) +
-    `$${applied} of ${who}'s money went to ${ticker ?? "the corporation"}'s treasury. ` +
+    `Automatic bankruptcy: no legal rescue remained for ${ticker}'s forced train purchase. ` +
+    (sold.length > 0
+      ? `${who}'s shares were sold as far as the rules allow (${sold.join(", ")}, raising $${record.liquidation_proceeds}), and `
+      : `${who} had no shares that could legally be sold, and `) +
+    `all of ${who}'s money ($${record.handed_over}) went to ${ticker}'s treasury. ` +
     (kept.length > 0 ? `${who} keeps ${kept.join(", ")}, which could not legally be sold. ` : "") +
     `${who} is bankrupt and the game ends, because the train could not be paid for.`
   );

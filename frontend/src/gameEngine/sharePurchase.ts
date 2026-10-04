@@ -211,7 +211,7 @@ export function sharePurchaseBlock(input: SharePurchaseInput): string | null {
      board keeps v12's reading so its stored log replays as it was played. */
   if (boughtThisTurn > 0 && brownPoolContinuationInForce(resolveVariants(state.variants))) {
     if (state.brown_pool_continuation_company !== companyId || !allowsExtraPoolBuys(zone, source)) {
-      return `One certificate purchase per turn. The only exception is a Brown-zone Bank Pool purchase: several Bank Pool certificates of that one corporation, bought before you sell anything.`;
+      return `One certificate purchase per turn. The only exception is a Brown-zone Bank Pool purchase: several Bank Pool certificates of that one corporation, bought one after another before you do anything else on your turn.`;
     }
   } else if (boughtThisTurn > 0 && !allowsExtraPoolBuys(zone, source)) {
     return `One certificate purchase per turn. Only Brown-zone shares bought from the Bank Pool may be taken several at a time.`;

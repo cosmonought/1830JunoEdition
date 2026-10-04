@@ -748,8 +748,9 @@ describe("automatic bankruptcy liquidates as far as legally possible (22-27)", (
     const after = enter(insolvent());
     const line = describeGameplayAction(ADVANCE(CO) as never, context(before, after))!;
     expect(line).toContain("Automatic bankruptcy: no legal rescue remained for C&O's forced train purchase.");
-    expect(line).toContain("P1's shares were sold as far as the rules allow (20% of NYC, 10% of B&O)");
-    expect(line).toContain("$100 of P1's money went to C&O's treasury."); // the liquidation's $100, as C&O's treasury shows
+    expect(line).toContain("P1's shares were sold as far as the rules allow (20% of NYC, 10% of B&O, raising $100)");
+    expect(line).toContain("all of P1's money ($100) went to C&O's treasury.");
+    expect(after.bankruptcy_record).toEqual({ president: P1, company_id: CO, sold: [{ company_id: NYC, percentage: 20 }, { company_id: BO, percentage: 10 }], liquidation_proceeds: 100, handed_over: 100 });
     expect(line).toContain("P1 keeps 20% of C&O, 10% of NYC, 20% of PRR, which could not legally be sold.");
     expect(line).toMatch(/P1 is bankrupt and the game ends, because the train could not be paid for\.$/);
     // Appended to the deciding message's own sentence (ForgoPrivateFunding ends it here), never replacing it.
@@ -757,7 +758,27 @@ describe("automatic bankruptcy liquidates as far as legally possible (22-27)", (
     const forgone = apply(seed, FORGO_PRIVATE, P1);
     const forgoLine = describeGameplayAction(FORGO_PRIVATE as never, context(seed, forgone))!;
     expect(forgoLine.startsWith("C&O's president declined to sell a private company")).toBe(true);
-    expect(forgoLine).toContain("P1 had no shares that could legally be sold, and $0 of P1's money went to C&O's treasury.");
+    expect(forgoLine).toContain("P1 had no shares that could legally be sold, and all of P1's money ($0) went to C&O's treasury.");
+    // Review round 2: the proving transition may move OTHER money too -- here C&O withholds a $40 run on the way into
+    // Buy Trains. The narration reports the president's own handover ($0), never the treasury's whole change ($40).
+    // No train anywhere (no trade window), the $80 2-train, P1 with $0 and nothing he may sell.
+    const withholding = board({
+      step: "Dividends",
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "0", holdings: [[P1, 20], [P2, 20]], price: 90 },
+        { id: NYC, ticker: "NYC", president: P2, trains: [], treasury: "500", holdings: [[P2, 30]], price: 100 },
+      ],
+      cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+    });
+    const withheldBefore = { ...withholding, public_companies: withholding.public_companies.map((entry) => (entry.company_id === CO ? { ...entry, last_route_revenue: "40" } : entry)) } as GameStateResponse;
+    const WITHHOLD = { DeclareDividends: { game_id: 1, protocol_id: CO, distribute: false, revenue_amount: "40" } };
+    const withheldAfter = apply(withheldBefore, WITHHOLD, P1);
+    expect(withheldAfter.current_round_type).toBe("GameEnd");
+    expect(treasury(withheldAfter, CO)).toBe(40); // the withheld run
+    expect(withheldAfter.bankruptcy_record).toMatchObject({ handed_over: 0, liquidation_proceeds: 0, sold: [] });
+    const withheldLine = describeGameplayAction(WITHHOLD as never, context(withheldBefore, withheldAfter))!;
+    expect(withheldLine).toContain("all of P1's money ($0) went to C&O's treasury.");
+    expect(withheldLine).not.toContain("($40)");
     // Silent when nothing ended: an ordinary transition, and a revision-1 declaration (its own sentence alone).
     const declined = apply(apply(seed, OFFER(2, NYC, 200), P1), ANSWER(2, false), P2);
     expect(describeGameplayAction(ANSWER(2, false) as never, context(apply(seed, OFFER(2, NYC, 200), P1), declined))).not.toContain("Automatic bankruptcy");

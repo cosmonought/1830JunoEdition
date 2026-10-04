@@ -33,6 +33,10 @@ OD-4's terminal differences from v12:
   from v12's terminal boards.
 - **Shares that could not be sold stay with the bankrupt.** For example, a presidency that cannot be passed on. They are
   valued in the share term (owner sub-ruling O-6: "shares he could not sell").
+- **A bankruptcy record on the terminal board.** An automatic bankruptcy writes `bankruptcy_record` (the bankrupt, the
+  obligated corporation, the liquidation legs, what they raised, the money handed over) for the Activity Log. No rule and
+  no appraisal term reads it, but it is part of the terminal board's bytes, so the v13 goldens' `appraisal_state_hash`
+  covers it.
 - **No player-declared bankruptcy.** `DeclareBankruptcy` is refused on revision 2, so a terminal reached by an early
   declaration does not exist on v13.
 - **No self-made bankruptcy.** A portfolio that cannot fund the purchase is refused. A terminal reached by a bad split

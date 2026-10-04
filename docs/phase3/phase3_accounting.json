@@ -122,10 +122,11 @@
    "item": "The game id is not shown anywhere.",
    "src": "PARTIAL — hosted tables show the room code only (`frontend/src/App.tsx`:13748, 13776); `StockMarketRenderer.tsx`:844 shows \"Game #…\" on the legacy path.",
    "slice": "W2-I",
-   "disp": "C",
-   "od": "OD-6",
+   "disp": "B",
+   "od": "OD-6 (RULED 2026-10-04, owner Option A: game_id stays undisplayed; the Rules Reference build line shows the build id + the board's rules version)",
    "p4": "—",
-   "notes": "LIVE-2 §7.2 says the game id is never displayed, so showing it is a product decision."
+   "notes": "LIVE-2 §7.2 says the game id is never displayed, so showing it was a product decision. OD-6 RULED (Option A): DECIDED — the opaque game_id is intentionally not displayed; the visible identity stays the room code / \"Private game\" / the legacy on-chain game number. C → B.",
+   "status": "IMPLEMENTED — W2-I `c17e844` + review fix `a18bac4`: DECIDED (OD-6 Option A), the opaque game_id intentionally not displayed; the Rules Reference's existing build line reads \"Build <id> · Rules v13\" -- the build from `CLIENT_BUILD_ID` (`buildStamp.ts`), the version from the live board's own `rules_engine_version` (`boardRulesVersion`; \"Rules unpinned (legacy)\" on an unpinned board); nothing added to the top bar; not integrated"
   },
   {
    "key": "AUD-01.08",
@@ -264,7 +265,8 @@
    "disp": "B",
    "od": "—",
    "p4": "—",
-   "notes": "Not in the draft map. Not gated by OD-6."
+   "notes": "Not in the draft map. Not gated by OD-6.",
+   "status": "IMPLEMENTED — W2-I `c17e844` + review fix `a18bac4` (`DelayedAuctionStatusChip` in the room strip, every table kind: \"Delayed auction owed\" while `private_auction_complete === false`, \"Delayed auction cancelled\" once the first 5-train's D-55 transition leaves every private closed and ownerless -- `utils/delayedAuctionStatus.ts`, from the board's own fields, no log text; silent outside the variant, during the auction round and at GameEnd), not integrated"
   },
   {
    "key": "AUD-02.09",
@@ -1234,7 +1236,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "Copy only; the draft's OD-6 sub-question is removed (not a product decision)."
+   "notes": "Copy only; the draft's OD-6 sub-question is removed (not a product decision).",
+   "status": "IMPLEMENTED — W2-I `c17e844` + review fix `a18bac4` (the Rules Reference reads the board's GameEnd -- `gameOver` -- and says \"Game over\" / \"This game has ended\" in the context strip and the Overview instead of \"No live round\"; copy only, no new predicate; a live round type wins), not integrated"
   },
   {
    "key": "AUD-11.04",
@@ -4574,6 +4577,17 @@
     "No engine change."
    ],
    "effect": "VF/D-18 and VF/D-22 stay C (the ledger still lists them OPEN) with status RULED — no change; the ledger and comment cleanup is a docs task (closure contract item 12)."
+  },
+  "OD-6": {
+   "title": "GAME ID / BUILD ID / RULES VERSION PLACEMENT (W2-I)",
+   "date": "2026-10-04",
+   "ruling": [
+    "OPTION A. Keep `game_id` OFF SCREEN. The LIVE-2 identity rule remains authoritative: `game_id` is the server key, not the player's game name, and the interface must not display it.",
+    "The human-visible table identity remains: the room code where visible; \"Private game\" where the room code is intentionally hidden; the existing on-chain game number only on the old on-chain path.",
+    "For W2-I diagnostics: keep the existing build ID in the Rules Reference header and add the authoritative rules version on that same line (\"Build <id> · Rules v13\"); the rules version from the board's authoritative `rules_engine_version`, the build ID from the existing build-ID source; do not duplicate either value in the top bar; no new persistent gameplay chrome.",
+    "AUD-01.07 closes as an explicit product decision: DECIDED / IMPLEMENTED — opaque game_id intentionally not displayed."
+   ],
+   "effect": "OD-6: RESOLVED — game_id remains undisplayed; Rules Reference diagnostic line shows Build ID + authoritative rules version. Implemented by W2-I (`c17e844`); AUD-01.07 C → B, IMPLEMENTED. Not integrated."
   }
  },
  "wave1_integration": {
@@ -4675,7 +4689,7 @@
   "W2-F": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave2-bcgdf-v13cert-integration` (2026-10-04, merge `dfe6d13` of `phase3/w2-f-waiting-surface` @ `f19a22b`, its 3 commits carried unchanged): code `5a0bf37` + review fixes `8d4e9f5` + tracking `f19a22b` (from `phase3/wave2-bcgd-v13cert-integration` @ `7d8f73e`). The owner accepted the I-3 reading (the redundant player-trade pointer stands aside on the Stocks tab, where the Private Companies card carries the same offer and controls). AUD-03.10, AUD-09.08, AUD-09.09 IMPLEMENTED. One waiting line (`components/WaitingOnLine.tsx`) in the five consent / discard prompts: who decides (the existing seat authorities) and the authority's own sentence from W2-A's one hold answer -- `dockHold.standingOffer` (`pendingOfferBlock` / `describeStandingOffer`) for the three ordinary offers, `dockHold.turnHoldReason` for the funding offer and the discard; nothing chosen locally. I-3: the player-trade pointer stands aside while the Private Companies section is on screen (the Stocks tab in a Stock Round). Residue CLOSED: the Stock Round share controls read `dockHold.buyStock` / `.sellStock` (each control's own message, hold first via `heldFirst`) and the panel flag `.shareControls` (both refused) instead of 6.5-B's `privateTradeHoldReason`; Auto-Buy unchanged. Deferred (LOW, recorded): on the Stocks tab nothing scrolls the recipient to the offer's card (the pointer's \"Show on Stocks\" jump is not needed there; the hold notice is at the top of the panel). Presentation only: no engine, server, rules-version or settlement change",
   "W2-G": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave2-bcg-v13cert-integration` (2026-10-04, merge `b84247f` of `phase3/w2-g-v13-emergency-ui` @ `17ab21f`, its 3 commits carried unchanged): the accepted W2-G UI (`695afe9`) reconciled to the integrated v13 emergency authority (`112fa71` + review fixes `02d73b8`). The surface presents `emergencyFundingFor(...).automatic`: the open trade window with `ForgoTrainTrade` (never reopened), ONE `EmergencySellPortfolio` judged by `emergencyPortfolioRefusal`, private funding only while exactly relevant with `ForgoPrivateFunding`, the automatic purchase as a status (no Buy) and the automatic bankruptcy (no `DeclareBankruptcy` anywhere); obligated president only (OD-1), everybody else W2-H's waiting surface; non-dismissible (OD-4); latched. Residue kept as a later bar pass: the now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel` (W2-A's bar test feeds them)",
   "W2-H": "COMPLETE — `phase3/w2-waiting-prompts` `3b7f23b`, `5cc5ccc`, `461d4f0`; integrated at the safe Wave-2 integration (`66977d5`). K-21's second half (the President's Skip while placing) stays W2-A's",
-  "W2-I": "NOT STARTED",
+  "W2-I": "COMPLETE — slice branch `phase3/w2-i-status-visibility` `c17e844` + review fix `a18bac4` (from `phase3/wave3-i-v13cert-integration` @ `7a9b16b`); NOT integrated (integration and owner broad gate pending). OD-6 RESOLVED (owner Option A, 2026-10-04): game_id remains undisplayed; the Rules Reference diagnostic line shows Build ID + authoritative rules version. AUD-01.07 (C → B, DECIDED), AUD-02.08, AUD-11.03 IMPLEMENTED. App regions R-ROOMSTRIP (the delayed-auction chip) and R-RRMOUNT (`gameOver`, `rulesEngineVersion`) only. Presentation only: no engine, server, contract, rules-version or settlement change",
   "W2-J": "NOT STARTED",
   "W2-K": "PARTIAL — `phase3/w2-money-copy` `e223f64` (exact SHA verified), integrated at the safe Wave-2 integration (`fb4eee5`): U-44 timestamps per OD-9(a) and the OD-14(i) bounded money-panel pass are done; the official Keplr logo is ASSET PENDING (OD-9(b), AUD-18.05)",
   "W2-L": "COMPLETE — `phase3/w2-postgame-statistics` `e16aa5a` (derived history only); integrated at the safe Wave-2 integration (`615e183`). AUD-12.07 stays owner-gated (\"traded\" kept); S10-21's non-UR remainder stays open",

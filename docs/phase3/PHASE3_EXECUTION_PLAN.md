@@ -627,6 +627,7 @@ gates.
 - **Surfaces:** a standing "auction owed" / "auction cancelled by the first 5-train" indicator (not gated); the Rules
   Reference's game-over state; per OD-6, the game id, build id and rules version in `TopBar.tsx` / the room strip.
 - **App.tsx regions:** R-ROOMSTRIP, R-RRMOUNT. **Depends on:** W1-L. **Gates:** OD-6 (game id / version placement only).
+- **OD-6 RULED (2026-10-04, §7.3) — Option A:** game_id remains undisplayed; the Rules Reference diagnostic line shows Build ID + authoritative rules version. Status: COMPLETE on its slice branch `phase3/w2-i-status-visibility` @ `a18bac4` (code `c17e844` + review fix `a18bac4`, from `phase3/wave3-i-v13cert-integration` @ `7a9b16b`); NOT integrated. AUD-01.07 (C → B, DECIDED), AUD-02.08 (the room strip's delayed-auction owed / cancelled chip), AUD-11.03 (the Rules Reference's game-over state) IMPLEMENTED.
 
 #### W2-J
 **Narration corrections** · L6 · **4–6 h**
@@ -791,7 +792,7 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 | **OD-3** | PRESENTATION (+ engine scope) | M&H queued request: toast + a persistent table marker + "requested" / "executed" lines; on cancellation, a generic "expired", or authorize engine work (v13, W3-K) to carry the reason | Narrated as executed; no reader of `pending_mh_exchange` | W2-E | No |
 | **OD-4** | PRODUCT | **RULED 2026-10-03 — see §7.3.** Emergency modal: Back/close while a decision remains? Non-presidents see a read-only liquidation, or nothing? | Cannot close; every seat sees "Declare bankruptcy" | W2-G | No |
 | **OD-5** | PRESENTATION · PLAYTEST-INFORMED | Notices: persist one-shot notices per game, or derive them from state for late joiners; the focus target and chaining order for forced notices; the tutorial re-arm policy (once per profile? per new game?) | PhaseThree / PrivateRevenue / Herald lost on reload; FleetLoss replays history in a fresh tab; tutorials re-arm on every zero-state mount | W3-A | No; Phase 4 may re-tune |
-| **OD-6** | PRODUCT | Show the game id (LIVE-2 §7.2 says never)? Where do the build id and rules version appear? | Room code only on hosted tables; stale build note; version only in error text | W2-I (that part) | No |
+| **OD-6** | PRODUCT | **RULED 2026-10-04 (Option A: game_id stays undisplayed; build id + rules version on the Rules Reference build line) — see §7.3.** Show the game id (LIVE-2 §7.2 says never)? Where do the build id and rules version appear? | Room code only on hosted tables; stale build note; version only in error text | W2-I (that part) | No |
 | **OD-7** | RULES (confirmation) | **RULED 2026-10-03 — see §7.3.** RR-4: when the treasury can pay a forced purchase, must it be the cheapest train? "Yes" is a rules defect (v13, W3-K); "No" is a copy fix (W2-J). **The 6.5-B report says an RR-4 ruling was recorded; restate it for Part D** | Engine allows any legal purchase; the Reference said "cheapest" at 4 sites (corrected, `ca73834`) | W2-J / W3-K — ruled: W1-L copy, done | No |
 | **OD-8** | PRESENTATION | U-37 float narration: (a) "floated" at the float plus "placed its home" later, or (b) one line at placement | One line at placement | W2-J | No |
 | **OD-9** | PRESENTATION / PRODUCT | **(a) RULED 2026-10-03 — see §7.3; (b) the Keplr logo stays ASSET PENDING.** (a) U-44 time convention: local with zone (needs a server copy edit) or UTC everywhere. (b) U-15 Keplr logo asset and brand approval | Local "HH:MM" unlabelled vs the server's "UTC"; no logo asset | W2-K | No |
@@ -877,6 +878,13 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - Forced bypass remains forced.
 - Whole-set `routeSetRefusal` remains authoritative.
 - *Effect on this plan:* the brief integrates W3-E, so OD-11 = build. W3-E landed (`a860178`); AUD-07.03 C → B, IMPLEMENTED.
+
+**OD-6 — GAME ID / BUILD ID / RULES VERSION PLACEMENT (W2-I).** (Ruled 2026-10-04, from the owner's W2-I decision.)
+- OPTION A. Keep `game_id` OFF SCREEN. The LIVE-2 identity rule remains authoritative: `game_id` is the server key, not the player's game name, and the interface must not display it.
+- The human-visible table identity remains: the room code where visible; "Private game" where the room code is intentionally hidden; the existing on-chain game number only on the old on-chain path.
+- For W2-I diagnostics: keep the existing build ID in the Rules Reference header and add the authoritative rules version on that same line ("Build <id> · Rules v13"); the rules version from the board's authoritative `rules_engine_version`, the build ID from the existing build-ID source; do not duplicate either value in the top bar; no new persistent gameplay chrome.
+- AUD-01.07 closes as an explicit product decision: DECIDED / IMPLEMENTED — opaque game_id intentionally not displayed.
+- *Effect on this plan:* OD-6: RESOLVED — game_id remains undisplayed; Rules Reference diagnostic line shows Build ID + authoritative rules version. Implemented by W2-I (`c17e844`); AUD-01.07 C → B, IMPLEMENTED. Not integrated.
 
 *Also from that brief (constraints on integrated slices, not new rulings):* W2-H keeps the Routes/Dividends informational
 visibility for non-active players (home/auction actors get controls, others a status) — this is OD-1's viewer scope for those two
@@ -1157,7 +1165,7 @@ counts toward the gate (after the owner confirms the intended rule); wording tha
   dropped in the browser (link reconnecting, or catch-up) loses the typed form.
 - **LOW-4 (R12-2 report).** The lay preview's `layTileRefusal` call uses `withRules` without the board's rules revision;
   harmless today because the revision changes no tile-lay rule.
-- **Game id (LIVE-2 §7.2).** The hosted table shows its room code, never its game id. Showing it is OD-6.
+- **Game id (LIVE-2 §7.2).** The hosted table shows its room code, never its game id. Showing it was OD-6 — RULED 2026-10-04 (Option A): it stays undisplayed.
 - **OD-A-2 / OD-A-4 / RR-4 (6.5-B header).** "RR-4, OD-A-2 and OD-A-4/SBS-4 recorded, not implemented; OD-A-3 (D10 and E5
   follow G19) reflected in the copy only." Only OD-A-3's content is on record, so OD-2 and OD-7 ask for the others' text.
 - **App decomposition module names** used in §9: M5 room gate / waiting room / money panel; M7 notice and modal layer;

@@ -169,6 +169,22 @@ AUD-06.02, P3-N001, P3-N002 and P3-N009 IMPLEMENTED. Residue outside its rows: t
 read `privateTradeHoldReason` (the same answer on every reachable board) -- W2-C / W2-F. W2-B / C / D / F not started; W2-G held;
 W3-K not complete. Rules version unchanged (v12).
 
+## Wave-2A v13 integration status (2026-10-04)
+
+**Branch** `phase3/wave2a-v13-integration` from `phase3/wave2a-integration` @ `96ccb22` — **the current provisional Phase-3 integration
+baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** W3-K is **ACCEPTED and INTEGRATED**: `phase3/w3-k-rules-v13`
+@ `be1fd10` merged `--no-ff` (`ed5e69a`), its 9 commits carried unchanged; one explicit reconciliation commit (`447e28d`, test-only: the W2-E
+queued-M&H fixture walked revision 1's two-Pass turn on a current-revision board; under OD-2 one Pass Turn is the boundary); then one
+tracking-only commit. Code merged without textual conflict; in each shared file (App.tsx, RulesReference.tsx, actionLog.ts,
+phase65bShellWiring.test.ts) the result is Wave-2A plus exactly W3-K's own delta. W2-A, W2-H, W2-E, W2-L, W3-E and W2-K behaviour is preserved.
+
+**Versions:** `RULES_ENGINE_VERSION` 13; live list `[13]`; settlement-certified `[10, 11, 12]` UNCHANGED; v13 settlement certification
+**PENDING** ([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)).
+
+**Lanes:** W2-B **UNLOCKED** for implementation against the integrated v13 semantics. W2-G **UNLOCKED FOR v13 UI RECONCILIATION** (not
+accepted, not integrated). W2-C, W2-D and W2-F remain **UNLOCKED**. Not deployable until W2-B, the v13-reconciled W2-G, the v13 settlement
+certification, drained v12 rooms and the final integrated owner gate.
+
 ## W3-K status (rules v13, 2026-10-03)
 
 **Branch** `phase3/w3-k-rules-v13` from `phase3/wave1-integration` @ `4e51cff`. Branch only; not integrated; not merged to main.

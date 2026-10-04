@@ -88,8 +88,8 @@ Full matrix: [`PHASE3_AUDIT_RECONCILIATION.md`](PHASE3_AUDIT_RECONCILIATION.md).
 | | Count |
 |---|---|
 | Substantive audit items accounted | **258** = 167 audit rows + 91 flourish-ledger rows (47 PLAYTEST, 21 recorded decisions, 23 OPEN) |
-| Dispositions of audit items | A 61 · B 60 · C 22 · D 69 · E 2 · F 44 · G 0 (at planning: B 59 · C 23; AUD-09.10 moved C → B with OD-7, 2026-10-03) |
-| NEW-SOURCE-FINDINGS kept from the draft (`P3-N001`…`P3-N026`) | 26 (A 21 · B 0 · C 1 · D 0 · E 1 · F 2 · G 1) — P3-N024 (SBS-4) moved C → G under OD-2 (needs precise reproduction) |
+| Dispositions of audit items | A 61 · B 62 · C 20 · D 69 · E 2 · F 44 · G 0 (at planning: B 59 · C 23; AUD-09.10 moved C → B with OD-7, 2026-10-03; AUD-07.03 and AUD-20.01 C → B at the safe Wave-2 integration) |
+| NEW-SOURCE-FINDINGS kept from the draft (`P3-N001`…`P3-N026`) | 26 (A 23 · B 0 · C 0 · D 0 · E 1 · F 2 · G 0) — P3-N024 (SBS-4) moved C → G under OD-2 (needs precise reproduction), then P3-N023 (SBS-3) C → A and P3-N024 G → A in W3-K (rules v13) |
 | Orphaned audit items | **none** (machine-checked) |
 | Audit items the draft had lost and that are now placed | about 45. They include A-14, A-21, A-13's policy, log export, the auction-owed indicator, I-1/I-2/I-3/R4, A-8, A-5, A-17, U-41/U-43, H-06, U-7/U-8/GR-3, A-20, the intro-overlay and portal decisions, ING-2/I-6, the 23 OPEN flourish items, A-19, Host Game a11y and responsive, A-10/A-11/A-12, JX-3A E-1…B-3, JX-6C/6E, S10-12, K-24, DA6-O2's remaining site, U-32/U-33 copy, DA6-n, the waiting-room line, U-28 and the GitHub-issues gap |
 | Audit claims not reproduced in source (now F, re-confirmed at the final head in W3-F) | tile picker Escape; S10-1; DA6-O1; UR-F20 copy; seat PIN dialog; K-24's Close Room tooltip; K-24's on-chain copy |
@@ -557,6 +557,7 @@ gates.
   change (Pass always ends the turn) is not this slice**; it is v13 and W3-K.
 - **App.tsx regions:** group "stage", R-SRPANEL. **Focused tests:** `sellBuySell`, `sellIsNotAPass`; a banner render test.
 - **Depends on:** W1-A, W2-A. **Gates:** OD-2.
+- **Status (2026-10-04): NOT STARTED — UNLOCKED** for implementation against the integrated v13 semantics on `phase3/wave2a-v13-integration`: the OD-2 rule is now the reducer's (W3-K), so this slice is the presentation — one "Pass Turn" control and the stage block / copy, which still describe the revision-1 Sell → Buy walk — plus the Auto-Buy correction.
 
 #### W2-C
 **Offer panels read their authority** · L3 · **3–4 h**
@@ -599,7 +600,7 @@ gates.
 
 #### W2-G
 **Emergency funding modal** · L5 · **4–5.5 h**
-- **OD-1 RULED (2026-10-03, §7.3):** the obligated president gets the interactive emergency controls; everyone else gets a simplified status/notification that the named player / corporation is resolving an emergency train purchase. **OD-4 RULED (2026-10-03, §7.3) and implemented in W3-K (rules v13):** before this slice starts it must be reconciled to the v13 authority — no player "Declare bankruptcy" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`). Status: **IN PROGRESS — HELD, NOT integrated.** An implementation exists (`phase3/w2-emergency-funding-ui` @ `695afe9`, UI accepted, built against the v12 authority); it must be reconciled to the v13 authority above before it is integrated.
+- **OD-1 RULED (2026-10-03, §7.3):** the obligated president gets the interactive emergency controls; everyone else gets a simplified status/notification that the named player / corporation is resolving an emergency train purchase. **OD-4 RULED (2026-10-03, §7.3) and implemented in W3-K (rules v13):** before this slice starts it must be reconciled to the v13 authority — no player "Declare bankruptcy" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`). Status: **UNLOCKED FOR v13 UI RECONCILIATION (2026-10-04) — NOT accepted, NOT integrated.** An implementation exists (`phase3/w2-emergency-funding-ui` @ `695afe9`, UI accepted, built against the v12 authority); it must be reconciled to the v13 authority above, now integrated on `phase3/wave2a-v13-integration`, before it is integrated. Until it lands, no shipped UI sends the three v13 emergency messages.
 - **Rows:** implements AUD-09.05 (K-25), AUD-09.06 (A-9), AUD-09.07 (U-4), P3-N017 (draft OD-4), P3-N018 (draft W2-G)
 - **Surfaces:** `EmergencyTrainPurchaseModal.tsx` (whole file this phase): close/back per OD-4; "Bank Pool" vs "Bank Depot"
   from the train's actual source; funding-offer legality → `fundingPrivateOfferRefusal`; "Declare bankruptcy" only for the
@@ -766,7 +767,7 @@ gates.
 
 #### W3-K
 **v13 rules batch** · L2 (or L6) · **8–14 h planned; ~14–22 h with OD-4 and its certification (an estimate)**
-- **Owner rulings (2026-10-03, §7.3):** OD-10(a) RULED — one consolidated v13 batch inside Phase 3: OD-2 (SBS-2), SBS-3, SBS-4 (precisely reproduced, V13_SCOPE_VERIFICATION §5) and OD-4 (automatic emergency funding). OD-17: D-18 and D-22 need no change. RR-4 is not a v13 item (OD-7: copy). Status: **PARTIAL — implemented on `phase3/w3-k-rules-v13` (branch only); settlement certification for 13 pending.**
+- **Owner rulings (2026-10-03, §7.3):** OD-10(a) RULED — one consolidated v13 batch inside Phase 3: OD-2 (SBS-2), SBS-3, SBS-4 (precisely reproduced, V13_SCOPE_VERIFICATION §5) and OD-4 (automatic emergency funding). OD-17: D-18 and D-22 need no change. RR-4 is not a v13 item (OD-7: copy). Status: **accepted as COMPLETE (2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (merge `ed5e69a` of `be1fd10` onto `96ccb22`; not merged to main); settlement certification for 13 PENDING (dedicated pass). The ledger keeps W3-K PARTIAL only because AUD-03.04 closes with W2-B's control.**
 - **Rows:** implements P3-N023 (SBS-3), P3-N024 (SBS-4) and the rule half of AUD-03.04 (SBS-2). AUD-04.04 (DH-1) and AUD-08.01 (GR-1 / S10-27) left the batch: derivation-only, no version bump, placement open. VF/D-18 and VF/D-22: no change (OD-17).
 - **Scope (as built):** rules revision 2 (`CURRENT_RULES_REVISION = 2`) switches every correction; one `RULES_ENGINE_VERSION` bump 12 → 13 with one changelog row; live list `[13]` (no dual v12 support); three new room messages (`EmergencySellPortfolio`, `ForgoTrainTrade`, `ForgoPrivateFunding`) with codec, ingress, reducer, replay, rebuild, RevertTo, log wording and idempotence; `DeclareBankruptcy` refused on revision 2; V-6.3 "Buy All" not implemented.
 - **Procedure:** settlement certification for v13 through ESCROW-3A's procedure (goldens beside the old ones, then the literal in its own reviewed change), with bankruptcy vectors: `V13_SETTLEMENT_CERTIFICATION_VECTORS.md`. **Gameplay and settlement versions are separate axes:** v13 is not settlement-certified until that change lands.

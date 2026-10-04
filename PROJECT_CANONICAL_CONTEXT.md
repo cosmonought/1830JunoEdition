@@ -353,7 +353,10 @@ self-contained execution plan. The owner's fixed order is Phase 1 server / infra
 proof → **3 player-facing UI / UX** → 4 human playtesting → **5 the major App.tsx refactor** → 6 polish / release testing →
 7 mainnet; the list above predates it and P0 of the plan updates it. **Wave 1 is integrated provisionally on
 `phase3/wave1-integration`** (2026-10-03, from `8f33f0f`, not merged; owner broad gate #1 pending); owner rulings OD-1, OD-2,
-OD-7 and OD-12 are recorded in the plan's §7.3. Gameplay rules stay v12 on the integration branch. **W3-K (rules v13) is
+OD-7 and OD-12 are recorded in the plan's §7.3. **2026-10-04: W3-K is ACCEPTED and INTEGRATED on `phase3/wave2a-v13-integration`** (from
+`phase3/wave2a-integration` @ `96ccb22`; merge `ed5e69a`; the current provisional Phase-3 baseline; not merged to main; no broad owner gate):
+rules 13, live `[13]`, settlement `[10, 11, 12]` unchanged, v13 settlement certification pending; W2-B unlocked; W2-G unlocked for v13 UI
+reconciliation (docs/phase3 "Wave-2A v13 integration status"). **W3-K (rules v13) was
 implemented on `phase3/w3-k-rules-v13`** (2026-10-03, from `phase3/wave1-integration` @ `4e51cff`; branch only, not merged;
 owner gate pending): `RULES_ENGINE_VERSION = 13`, live list `[13]`, rules revision 2 — OD-2 (one `PassTurn` ends a Stock
 Round turn), SBS-3 / SBS-4 (the official Brown Bank Pool continuation; V-6.3 not implemented) and OD-4 (automatic

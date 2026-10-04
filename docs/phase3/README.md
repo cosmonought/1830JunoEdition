@@ -22,7 +22,8 @@ or attachment.
 | **Phase-3 implementation base** | **TBD — pin the final canonical integrated head after Phase 2 closes (OD-0 / P0). Record the full SHA here.** |
 | Wave 1 (provisional) | Built on `8f33f0fb72d462c381a572015de7860a93fbd198` by the owner's brief; integrated on `phase3/wave1-integration` (2026-10-03), not merged. Status per slice: the matrix's "Wave-1 integration status" section / `slice_status` in the JSON |
 | Safe Wave 2 (provisional) | `phase3/wave2-safe-integration` on `4e51cff` (2026-10-03): W2-H, W2-E, W2-L, W3-E, W2-K integrated (Keplr logo ASSET PENDING); W2-G held for the OD-4 v13 work; not merged. See the matrix's "Safe Wave-2 integration status" |
-| Wave 2A (provisional, current baseline) | `phase3/wave2a-integration` on `bfb7635` (2026-10-04): W2-A accepted and integrated (its commits `e5fcfcc`, `2d0fd0a` carried linearly) plus one tracking commit; W2-C / W2-D / W2-F unlocked; W2-B blocked on W3-K v13; W2-G held; no broad owner gate run; not merged. See the matrix's "Wave-2A integration status" |
+| Wave 2A (provisional; superseded as baseline) | `phase3/wave2a-integration` on `bfb7635` (2026-10-04): W2-A accepted and integrated (its commits `e5fcfcc`, `2d0fd0a` carried linearly) plus one tracking commit; W2-C / W2-D / W2-F unlocked; W2-B blocked on W3-K v13; W2-G held; no broad owner gate run; not merged. See the matrix's "Wave-2A integration status" |
+| Wave 2A + v13 (provisional, current baseline) | `phase3/wave2a-v13-integration` on `96ccb22` (2026-10-04): the accepted W3-K rules v13 (`be1fd10`) merged `--no-ff` (`ed5e69a`), one W2-E test reconciliation (`447e28d`) and one tracking commit. Rules 13, live `[13]`, settlement `[10, 11, 12]` unchanged, v13 settlement certification pending; W2-B unlocked; W2-G unlocked for v13 UI reconciliation; no owner gate; not merged. See the matrix's "Wave-2A v13 integration status" section / `wave2a_v13_integration` in the JSON |
 | Phase-4 playtest baseline | TBD — recorded at Phase-3 closure (W3-F) |
 
 ## Owner rulings recorded
@@ -33,7 +34,7 @@ restated in the same places. Still open: OD-14(a), OD-10(b).
 
 ## Rules v13 (W3-K)
 
-`phase3/w3-k-rules-v13` (branch only, not integrated): `RULES_ENGINE_VERSION` 13, live list `[13]`, rules revision 2 —
+`phase3/w3-k-rules-v13` (accepted; integrated on `phase3/wave2a-v13-integration`, 2026-10-04, not merged to main): `RULES_ENGINE_VERSION` 13, live list `[13]`, rules revision 2 —
 OD-2, SBS-3, SBS-4 and OD-4. Settlement stays certified for `[10, 11, 12]`; the v13 certification pass is pending
 ([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)). The owner's 2026-10-04 rulings 1-5 (only
 enough, Brown continuation and intervening actions, M&H accounting, duplicate legs, exact private-funding relevance) are

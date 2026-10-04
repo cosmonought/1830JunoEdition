@@ -10,11 +10,10 @@ import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameSt
  * refresh/re-order at the start of each OR rather than continuously with each corporation's actions."
  *
  * THE ROUND ALREADY WORKS THAT WAY; THE TABLE DID NOT. `beginOperatingRound` builds `active_operating_order`
- * once when the round opens and the cursor walks it -- that queue is frozen for the whole round, which is
- * 1830's rule. #449 then taught the table to show operating order instead of `company_id` order, and did it
- * by REPRODUCING the comparison rather than reading the queue: "the same rule `buildOperatingOrder` uses:
- * market price descending, then par, then id. Reproduced rather than imported because that function returns
- * only the FLOATED queue and this table shows every corporation."
+ * when the round opens and the cursor walks it. #449 then taught the table to show operating order instead of
+ * `company_id` order, and did it by REPRODUCING the comparison rather than reading the queue: "the same rule
+ * `buildOperatingOrder` uses: market price descending, then par, then id. Reproduced rather than imported
+ * because that function returns only the FLOATED queue and this table shows every corporation."
  *
  * THAT REASONING IS SOUND AND THE CONCLUSION WAS WRONG. Reproducing a comparison reproduces it against
  * WHATEVER THE PRICES ARE NOW -- and prices move during an Operating Round, on every dividend. So the table
@@ -35,12 +34,28 @@ import type { GameStateResponse, PublicCompanyState } from "../gameEngine/gameSt
  * Corrected rather than deleted because the reasoning is the recurring failure worth remembering: I found a
  * case the new code handles better, checked that it handles it, and never checked whether the case exists.
  *
+ * ==================================================================
+ *  PHASE 3 W1-I (P3-N016): THE QUEUE IS NOT FROZEN, AND THIS NOTE NO LONGER SAYS IT IS
+ * ==================================================================
+ *
+ * The paragraph above used to call the queue fixed for the whole round and credit that to the printed rules.
+ * Neither half holds any more. Since #1600 the engine settles the queue after every entry
+ * (`settleOperatingQueue` in `gameEngine/operatingOrder.ts`): the corporations that have operated, and the one
+ * operating now, keep their places; the ones still WAITING are re-sorted by rule 6.0 whenever a share value
+ * moved. Whether that matches the
+ * printed game's dynamic operating order across rounds is a playtest question (U-34, the Phase-4 row AUD-11.06),
+ * and this note makes no claim about it either way.
+ *
+ * WHAT STILL HOLDS is the fix: the table READS the queue rather than re-deriving an order from live prices. So it
+ * shows the order the round will actually play -- re-ordered when, and only when, the engine re-orders the
+ * waiting corporations -- and never moves a corporation that has already acted.
+ *
  * THE TESTS FOR IT SURVIVE AS INVARIANTS RATHER THAN AS REGRESSIONS. "A corporation absent from the queue
  * sorts after it, whatever its price" is a true and useful property of this function -- it is what keeps an
  * unfloated corporation out of the operating order -- and it is worth pinning. What it is not is a bug fix.
  */
 
-/** Where each corporation sits in the round's frozen queue, by `company_id`. */
+/** Where each corporation sits in the round's queue, by `company_id`. */
 export function operatingOrderRanks(
   state: Pick<GameStateResponse, "active_operating_order">,
 ): ReadonlyMap<number, number> {
@@ -79,7 +94,8 @@ export function sortForOperatingOrder(
     const rankB = ranks.get(b.company_id);
 
     /* IN THE QUEUE BEATS OUT OF IT, whatever the prices say. This is the whole fix: a corporation's place in
-       the round is a fact the round decided, not a function of what its shares are worth right now. */
+       the round is the engine's queue -- which already re-sorts the waiting corporations when a share value
+       moves (#1600) -- not a second ordering computed here from what the shares are worth right now. */
     if (rankA !== undefined && rankB !== undefined) return rankA - rankB;
     if (rankA !== undefined) return -1;
     if (rankB !== undefined) return 1;

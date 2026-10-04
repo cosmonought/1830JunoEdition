@@ -25,7 +25,9 @@ export interface MoneySessionState {
   /** W2-M (AUD-20.02): when THIS page last had a wallet proof accepted by the server, per table, seat and wallet
    *  (`proofKey`). The view's `linkedAt` is when the link was made; a same-wallet re-proof keeps it, so without this a
    *  page that just re-proved would still read as aged. Like the grant above: this page's own knowledge, never
-   *  persisted -- after a reload the browser goes by `linkedAt` alone (at worst, one more free re-proof). */
+   *  persisted -- after a reload (or in another tab) the browser goes by `linkedAt` alone, so a link over a day old
+   *  reads "aged" even if re-proven since; the Deposit then stays offered beside the re-proof, and the server decides.
+   *  Exact freshness needs the server to show the proof's own time (`verified_at`): a server change, outside W2-M. */
   readonly proofRenewedAt: Readonly<Record<string, number>>;
   /** Bumped when this browser's pending transactions or signing keys change (components re-read them). */
   readonly localVersion: number;

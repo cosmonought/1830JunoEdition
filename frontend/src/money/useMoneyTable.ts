@@ -55,6 +55,8 @@ export interface MoneyTableInput {
   readonly services?: MoneyServices;
   /** The room's own Start (`room-op start-game`): the money panel's Start presses it. */
   readonly onStart?: () => void;
+  /** W2-M: read Juno's dispute record for this surface (the result's band); false where it is never shown (the bar). */
+  readonly disputeRecord?: boolean;
 }
 
 export interface MoneyTable {
@@ -73,7 +75,7 @@ export interface MoneyTable {
   readonly error: string | null;
   /** A step the player must take before the action can run: "Confirm it's you", or the wallet replacement question
    *  (W2-M: asked BEFORE Keplr signs, naming the linked wallet and the one Keplr is on, when they are known). */
-  readonly needs: { readonly kind: "confirm"; readonly then: MoneyActionKind | null } | { readonly kind: "replace"; readonly from: string | null; readonly to: string | null; readonly again: boolean } | null;
+  readonly needs: { readonly kind: "confirm"; readonly then: MoneyActionKind | null } | { readonly kind: "replace"; readonly from: string | null; readonly to: string | null; readonly again: boolean; readonly said: string | null } | null;
   /** W2-M (AUD-20.07, JX-6E): Juno's dispute facts for the dispute confirm (read when it opens), or null. */
   readonly disputeTerms: DisputeRead | null;
   /** W2-M (AUD-20.07, JX-6E): Juno's dispute record for the band (read while disputed or once a resolver route
@@ -112,6 +114,8 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
   const [disputeRecord, setDisputeRecord] = useState<DisputeRead | null>(null);
   /* W2-M (AUD-20.03): the wallet the player agreed to replace the link with (what "Replace wallet" links, or nothing). */
   const replaceTo = useRef<string | null>(null);
+  /* ...and the linked wallet the question named (Replace refuses if the link moved meanwhile). */
+  const replaceFrom = useRef<string | null>(null);
   const busyRef = useRef<MoneyActionKind | null>(null);
   const latest = useRef(input);
   latest.current = input;
@@ -249,7 +253,7 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
      couldn't be read. */
   const chainGameId = view?.escrow.chainGameId ?? null;
   const settleRoute = view?.settlement?.route ?? null;
-  const wantsRecord = view !== null && view.you !== null && chainGameId !== null && (settleStatus === "disputed" || (settleRoute !== null && settleRoute.startsWith("resolver_")));
+  const wantsRecord = input.disputeRecord !== false && view !== null && view.you !== null && chainGameId !== null && (settleStatus === "disputed" || (settleRoute !== null && settleRoute.startsWith("resolver_")));
   const [recordRetry, setRecordRetry] = useState(0);
   useEffect(() => {
     if (!wantsRecord) {
@@ -267,10 +271,13 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wantsRecord, chainGameId, settleStatus, settleRoute, recordRetry]);
   useEffect(() => {
-    if (disputeRecord === null || disputeRecord.kind !== "unavailable" || !wantsRecord) return undefined;
+    /* Read again while it couldn't be read -- or while the view says disputed and Juno's answer (through this page's
+       endpoint, which may lag the server's) has no record yet. */
+    const again = disputeRecord !== null && (disputeRecord.kind === "unavailable" || (disputeRecord.kind === "read" && disputeRecord.dispute === null && settleStatus === "disputed"));
+    if (!again || !wantsRecord) return undefined;
     const timer = setTimeout(() => setRecordRetry((count) => count + 1), 30_000);
     return () => clearTimeout(timer);
-  }, [disputeRecord, wantsRecord]);
+  }, [disputeRecord, wantsRecord, settleStatus]);
   /* A check is about ONE recorded payout: a result for another digest (the view moved on) counts as none. */
   const checked = verification !== null && verification.settleDigest === settleDigest ? verification : null;
   const settlement = useMemo(() => (view === null ? null : settlementFlow({ view, holdsChainKey, verification: checked?.result ?? "unavailable", now, keplr: wallet.kind !== "unavailable" && wallet.kind !== "no-pin" })), [view, holdsChainKey, checked, now, wallet.kind]);
@@ -303,12 +310,17 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
           const asked = await prepareReplace(ctx);
           if (!asked.ok) return asked.outcome;
           replaceTo.current = asked.to;
-          setNeeds({ kind: "replace", from: asked.from, to: asked.to, again: false });
+          replaceFrom.current = asked.from;
+          setNeeds({ kind: "replace", from: asked.from, to: asked.to, again: false, said: null });
           return { ok: true };
         }
         case "replace-confirmed": {
           const to = replaceTo.current;
-          if (to === null) return { ok: false, reason: "Press Change wallet again: the wallet to link isn't known." };
+          if (to === null) return { ok: false, reason: "The wallet to link isn't known, so nothing was signed. Start again." };
+          /* The question named the link it replaces: if the seat's link has moved since, ask again rather than replace
+             a wallet the player wasn't asked about. */
+          const from = replaceFrom.current;
+          if (from !== null && ctx.view.you?.link?.wallet !== from) return { ok: false, reason: "This seat's linked wallet changed since you were asked, so nothing was signed. Look at it again before replacing it." };
           return linkWallet(ctx, { replace: true, expectWallet: to });
         }
         case "open-review":
@@ -363,14 +375,18 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
           if (kind !== "confirm" && kind !== "replace-link") setNeeds(null);
           if (kind === "link" || kind === "relink" || kind === "reprove" || kind === "replace-confirmed") {
             setProofRefusedFor(null);
-            if (kind === "replace-confirmed") replaceTo.current = null;
+            if (kind === "replace-confirmed") {
+              replaceTo.current = null;
+              replaceFrom.current = null;
+            }
           }
         } else if (outcome.needs === "replace") {
           /* The server asked whether to replace (the view hadn't shown the standing link yet; its answer spent that link
              request, so Keplr signs once more -- the case only a server change could save). The question names both
              wallets as far as this page knows them: one surface, not an error beside it. */
           replaceTo.current = moneySession().address;
-          setNeeds({ kind: "replace", from: latest.current.view?.you?.link?.wallet ?? null, to: replaceTo.current, again: true });
+          replaceFrom.current = null;
+          setNeeds({ kind: "replace", from: null, to: replaceTo.current, again: true, said: outcome.reason });
         } else {
           setError(outcome.reason);
           if (outcome.needs === "confirm") setNeeds({ kind: "confirm", then: kind });
@@ -434,6 +450,7 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     },
     cancelNeeds: () => {
       replaceTo.current = null;
+      replaceFrom.current = null;
       setNeeds(null);
     },
     dismiss: () => {

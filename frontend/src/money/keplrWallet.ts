@@ -177,7 +177,7 @@ export const DECLINED_IN_KEPLR = "You declined in Keplr. Nothing was sent.";
  *  here (Keplr asks to unlock, or for the account, while the transaction is being simulated) is `rejected`, never
  *  `unknown` (W2-M, AUD-20.05). It is checked after the chain's own refusals, so a contract error that happens to say
  *  "cancelled" is still the contract's. */
-export function classifyChainError(error: unknown): WalletFailure {
+export function classifyChainError(error: unknown, options: { readonly keplrAsked?: boolean } = {}): WalletFailure {
   const text = messageOf(error);
   if (/insufficient funds|insufficient fee|does not exist on chain|account .* not found/i.test(text)) {
     return fail("insufficient-funds", "Your wallet doesn't have enough JUNO for this (the deposit plus the network fee). Nothing was sent.");
@@ -188,7 +188,8 @@ export function classifyChainError(error: unknown): WalletFailure {
   if (/fetch|network|ECONN|timed out|timeout|Failed to fetch|socket/i.test(text)) {
     return fail("rpc-unreachable", "Juno couldn't be reached from this browser just now. Nothing was sent; try again in a moment.");
   }
-  if (rejectedText(error)) return fail("rejected", DECLINED_IN_KEPLR);
+  /* Only where Keplr was asked: a node's refusal of a broadcast is never a player's decline, whatever its words. */
+  if (options.keplrAsked !== false && rejectedText(error)) return fail("rejected", DECLINED_IN_KEPLR);
   return fail("unknown", `Keplr stopped without finishing (it said: '${text}'). Nothing was sent.`);
 }
 
@@ -299,7 +300,8 @@ export function createKeplrWallet(win: unknown = typeof window === "undefined" ?
         client = await SigningCosmWasmClient.connectWithSigner(pin.rpc, signer, { gasPrice });
         if ((await client.getChainId()) !== pin.chainId) return fail("wrong-network", `This site's Juno connection isn't on ${pin.chainName}, so nothing was sent.`);
       } catch (error) {
-        if (rejectedText(error)) return fail("rejected", DECLINED_IN_KEPLR);
+        /* The same order as `classifyChainError`: the network's own failure first, then a decline in Keplr. */
+        if (!/fetch|network|ECONN|timed out|timeout|Failed to fetch|socket/i.test(messageOf(error)) && rejectedText(error)) return fail("rejected", DECLINED_IN_KEPLR);
         return fail("rpc-unreachable", "Juno couldn't be reached from this browser just now. Nothing was sent; try again in a moment.");
       }
       const encoded = {
@@ -342,7 +344,7 @@ export function createKeplrWallet(win: unknown = typeof window === "undefined" ?
         if (error instanceof BroadcastTxError) {
           /* Already in the mempool or already committed: it is on its way (or there). */
           if (error.code === 19 || /already in (mempool|cache)|tx already exists/i.test(error.log ?? "")) return { kind: "accepted" };
-          return { kind: "refused", reason: classifyChainError(new Error(error.log ?? `code ${error.code}`)).reason };
+          return { kind: "refused", reason: classifyChainError(new Error(error.log ?? `code ${error.code}`), { keplrAsked: false }).reason };
         }
         return { kind: "unknown" };
       }

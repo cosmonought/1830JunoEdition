@@ -312,24 +312,28 @@ export function seatFlow(input: FlowInput): SeatFlow {
     offer("refund-after-deadline", REFUND_FLOW);
     const blocker = walletBlocker(wallet, link.wallet);
     /* W2-M (AUD-20.02, JX-3A E-1): a joiner's deposit needs the server's join approval, and that needs a wallet proof
-       from the last 24 hours. A seat whose proof can't be counted on no longer reads "Wallet linked" with a Deposit
-       that will be refused: it says so, and offers the free re-proof of the SAME wallet (Connect and Confirm first,
-       as a link does) -- never "Change wallet", which is for another wallet. The host's own CreateGame needs no
-       approval, so a host is never sent here. */
+       from the last 24 hours. A seat whose proof can't be counted on no longer reads "Wallet linked": it says so, and
+       offers the free re-proof of the SAME wallet (Connect and Confirm first, as a link does) -- never "Change wallet",
+       which is for another wallet. The re-proof is the primary whatever the action list says: the server sends a
+       linked joiner `deposit` OR `link-wallet`, never both, and its link route takes the same wallet again
+       (`unchanged`, a fresh proof) whenever a deposit is open. `aged` is this page's inference from the link's own
+       time (a re-proof made elsewhere keeps that time), so the Deposit stays offered beside it and the server
+       decides; `refused` is the server's own answer, so it does not. The host's CreateGame needs no approval. */
     if (canDeposit && !isHost && input.proof != null && ui !== "approving") {
       const needs: FlowAction =
         wallet.kind !== "connected" ? { kind: "connect", label: "Connect wallet", tone: "primary" } : !confirmed ? { kind: "confirm", label: "Confirm it's you", tone: "primary" } : { kind: "reprove", label: "Re-prove wallet (free)", tone: "primary", title: "Keplr signs a message proving you still control this wallet. It moves no funds." };
       const why =
         input.proof === "refused"
           ? "The server needs a fresh proof that you control this wallet before it approves a deposit."
-          : "This wallet was linked more than a day ago, and a deposit needs a proof from the last 24 hours that you control it.";
+          : "This wallet was linked more than a day ago. A deposit needs a proof from the last 24 hours that you control it, so unless you've re-proven it since, prove it again first.";
+      const depositAnyway: FlowAction[] = input.proof === "aged" ? [{ kind: "open-review", label: `Deposit ${ante}`, tone: "secondary", title: "If this wallet was re-proven in the last 24 hours, the deposit goes ahead; if not, the server says so." }] : [];
       return {
         stage: "funding",
         step: needs.kind === "connect" ? "connect" : needs.kind === "confirm" ? "confirm" : "link",
         headline: `Re-prove ${shortWallet(link.wallet)} to deposit`,
-        detail: `${why} Re-proving is free: Keplr signs a message and nothing moves. Then deposit.${closes === null ? "" : ` ${closes}`}${rolledBack}`,
-        primary: has(view, "link-wallet") ? needs : null,
-        others,
+        detail: `${why} Re-proving is free: Keplr signs a message and nothing moves.${closes === null ? "" : ` ${closes}`}${rolledBack}`,
+        primary: needs,
+        others: [...depositAnyway, ...others],
         blocker,
       };
     }
@@ -519,13 +523,17 @@ function settlementFlowFor(input: SettlementInput): SettlementFlow {
     W2-M: SENTENCES FOR WHAT EXPIRED, AND FOR A DISPUTE (pure; the hook and the band call them)
    ================================================================== */
 
+/** How far this device's clock and the server's may disagree before a sentence blames anything but the clock. */
+export const CLOCK_GRACE_MS = 60_000;
+
 /** W2-M (AUD-20.04, JX-3A E-3): the server answered `reauth-required`. If this page believed it held a "Confirm it's
  *  you" grant (`believedUntil`, the page's own record of the server's answer), say what happened to it -- it lapsed
  *  at a time, or the server ended it early -- instead of the generic "Confirm it's you first". Null when this page
  *  never confirmed: the server's own sentence is the right one then. */
 export function reconfirmSentence(believedUntil: number | null, now: number): string | null {
   if (believedUntil === null || !Number.isFinite(believedUntil)) return null;
-  if (believedUntil > now) {
+  /* A minute's grace: clocks differ, and the request took time -- an ordinary lapse is not called "ended early". */
+  if (believedUntil - now > CLOCK_GRACE_MS) {
     return "Your “Confirm it's you” ended early on the server (signing in again, a session refresh or a sign-out from another device ends it). Confirm it's you again to continue; nothing was changed.";
   }
   return `Your “Confirm it's you” expired at ${formatMoneyTime(believedUntil, { now })} (it lasts 5 minutes). Confirm it's you again to continue; nothing was changed.`;
@@ -536,7 +544,7 @@ export function reconfirmSentence(believedUntil: number | null, now: number): st
  *  while Keplr was open; before it, the server dropped it (a newer request from this session replaces it, and a
  *  session refresh or a server restart ends it). Nothing was linked either way. */
 export function linkRequestEndedSentence(expiresAt: number | null, now: number): string {
-  if (expiresAt !== null && Number.isFinite(expiresAt) && now >= expiresAt) {
+  if (expiresAt !== null && Number.isFinite(expiresAt) && now >= expiresAt - CLOCK_GRACE_MS) {
     return `The link request expired at ${formatMoneyTime(expiresAt, { now })}, before it reached the server (a request lasts 5 minutes, and Keplr was open longer). Nothing was linked; start the link again.`;
   }
   return "The server no longer holds that link request (a newer link request from this device, a session refresh or a server restart replaces it). Nothing was linked; start the link again.";
@@ -572,8 +580,11 @@ export type DisputeRead =
  *  decide. While the payout is still open to a challenge Juno has no resolver deadline yet (it starts when a dispute
  *  lands), so the time is the game's own resolver window, read from Juno, counted from now. */
 export function disputeConfirmSentence(view: RoomMoneyView, read: DisputeRead | null, now: number): string {
-  const bond = amountText(view, read?.kind === "read" && read.bond !== null ? read.bond : (view.settlement?.bond ?? null));
-  const ask = `Dispute the payout recorded on Juno? Keplr attaches the ${bond} bond.`;
+  /* The bond shown is the one Continue holds Juno to (the view's); if Juno now asks another, say so here. */
+  const shown = view.settlement?.bond ?? null;
+  const chainBond = read?.kind === "read" ? read.bond : null;
+  const differs = chainBond !== null && shown !== null && chainBond !== shown;
+  const ask = `Dispute the payout recorded on Juno? Keplr attaches the ${amountText(view, shown)} bond.${differs ? ` Juno now asks for ${amountText(view, chainBond)}, so the dispute won't be sent until this page shows that.` : ""}`;
   let deadline: string;
   if (read === null || read.kind === "loading") deadline = "The resolver's deadline is being read from Juno…";
   else if (read.kind === "unavailable" || read.resolverTimeoutSecs === null) deadline = "The resolver's deadline couldn't be read from Juno just now; Juno sets it when the dispute lands.";
@@ -596,9 +607,9 @@ export function disputeRecordLines(view: RoomMoneyView, read: DisputeRead | null
   if (read.kind === "unavailable") return ["The dispute's record couldn't be read from Juno just now."];
   const d = read.dispute;
   if (d === null) return [];
-  const seatIndex = read.seats.indexOf(d.challenger);
+  /* "you", or the player by the wallet Juno names (the chain's seat order is deposit order, which no other surface shows). */
   const mine = view.you?.payoutWallet != null && view.you.payoutWallet === d.challenger;
-  const who = mine ? "you" : seatIndex >= 0 ? `seat ${seatIndex + 1} (${shortWallet(d.challenger)})` : shortWallet(d.challenger);
+  const who = mine ? "you" : `the player whose wallet is ${shortWallet(d.challenger)}`;
   const when = d.disputedAtMs === null ? "" : ` at ${formatMoneyTime(d.disputedAtMs, { now })}`;
   const bond = d.bond === null ? "" : `, with a ${amountText(view, d.bond)} bond`;
   const lines = [`Disputed by ${who}${when}${bond}.`];

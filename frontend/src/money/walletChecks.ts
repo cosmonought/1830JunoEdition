@@ -396,6 +396,10 @@ export function challengeProblem(view: RoomMoneyView, facts: ChainGameFacts, now
   }
   if (facts.bond === null || s.bond === null || facts.bond !== s.bond) return "Juno asks for a different dispute bond than this page showed you, so nothing was sent. Look at the payout again before disputing.";
   if (facts.challengeWindowEndMs === null || facts.challengeWindowEndMs <= now) return "The challenge window on Juno has closed, so a dispute can't land. Nothing was sent.";
+  /* The window this page showed is Juno's (to the second: the server reads it in seconds, this page in nanoseconds). */
+  if (s.windowEnd !== null && Math.floor(s.windowEnd / 1000) !== Math.floor(facts.challengeWindowEndMs / 1000)) {
+    return "Juno's challenge window ends at a different time than this page showed you, so nothing was sent. Look at the payout again before disputing.";
+  }
   return null;
 }
 

@@ -104,13 +104,16 @@ const challengeAnswer = (wallet: string) => ({
   expiresAt: T0 + 300_000,
 });
 
-/** A joiner at a bound table, linked to TEST_WALLET at `linkedAt`, allowed to deposit (and to link). */
+/** A joiner at a bound FUNDING table, linked to TEST_WALLET at `linkedAt`: the server's action set there is `deposit`
+ *  alone (never with `link-wallet`). */
 const joinerMoney = (linkedAt: number, consentKeys: string[] = []) =>
   moneyView({
     escrow: { chainGameId: "7", state: "FUNDING", fundingDeadline: T0 + HOUR },
     start: { blocker: "need-funding" },
-    you: linked(consentKeys, { actions: ["deposit", "link-wallet"], link: { wallet: TEST_WALLET, epoch: 1, ticket: TICKET, linkedAt, consentKeys } }),
+    you: linked(consentKeys, { actions: ["deposit"], link: { wallet: TEST_WALLET, epoch: 1, ticket: TICKET, linkedAt, consentKeys } }),
   });
+/** A joiner linked before the host opened the table: the server allows a link (`link-wallet`), so Change wallet shows. */
+const unboundMoney = () => moneyView({ you: linked([], { actions: ["link-wallet"] }) });
 
 function connectedWorld(address: string = TEST_WALLET) {
   const services = testServices();
@@ -125,15 +128,16 @@ function connectedWorld(address: string = TEST_WALLET) {
 /* ================================================================== */
 
 describe("W2-M AUD-20.02, rendered: an aged proof reads re-prove, and re-proving brings the deposit back", () => {
-  it("linked more than a day ago: no 'Wallet linked', no Deposit -- 'Re-prove', one signature for the same wallet, then Deposit", async () => {
+  it("linked more than a day ago: no 'Wallet linked' -- 'Re-prove' first (Deposit only beside it), one signature for the same wallet, then Deposit", async () => {
     const { services, port } = connectedWorld();
     port.answer("money/wallet-challenge", 200, challengeAnswer(TEST_WALLET));
     port.answer("money/wallet-link", 200, { ok: true, mode: "unchanged", wallet: TEST_WALLET, epoch: 1, ticket: TICKET });
     await render(<MoneyPanel room={room(joinerMoney(T0 - 25 * HOUR))} onStart={() => undefined} services={services} port={port} />);
     expect(byTestId("money-headline")?.textContent).toBe(`Re-prove ${shortWallet(TEST_WALLET)} to deposit`);
     expect(container.textContent).not.toMatch(/Wallet linked/);
-    expect(byTestId("money-action-open-review")).toBeNull();
-    expect(byTestId("money-action-replace-link")?.textContent).toBe("Change wallet");
+    expect(byTestId("money-action-reprove")?.textContent).toBe("Re-prove wallet (free)");
+    /* The deposit stays beside it (a re-proof elsewhere keeps the link's time; the server decides). */
+    expect(byTestId("money-action-open-review")?.textContent).toBe("Deposit 1 JUNOX");
     await click(byTestId("money-action-reprove"));
     expect(signLinks(services.wallet.calls)).toEqual([`signLink:${TEST_WALLET}:18COSMOS/WALLET-LINK/v1`]);
     expect(port.requests.find((request) => request.path === "money/wallet-link")?.body.replace).toBeUndefined();
@@ -157,6 +161,8 @@ describe("W2-M AUD-20.02, rendered: an aged proof reads re-prove, and re-proving
     expect(byTestId("money-error")?.textContent).toBe("Link your wallet to this seat again (the proof is missing or too old).");
     expect(byTestId("money-headline")?.textContent).toBe(`Re-prove ${shortWallet(TEST_WALLET)} to deposit`);
     expect(byTestId("money-detail")?.textContent).toMatch(/^The server needs a fresh proof/);
+    expect(byTestId("money-action-open-review")).toBeNull();
+    expect(byTestId("money-action-approve")).toBeNull();
     /* Something else in the room changed (a player went offline): the money state is the money's own. */
     await render(<MoneyPanel room={room(money, { players: [{ id: "p-me", nickname: "Brad", isReady: false, online: true }, { id: "p-other", nickname: "Ana", isReady: false, online: false }] })} onStart={() => undefined} services={services} port={port} />);
     expect(byTestId("money-headline")?.textContent).toBe(`Re-prove ${shortWallet(TEST_WALLET)} to deposit`);
@@ -187,7 +193,7 @@ describe("W2-M AUD-20.02, rendered: an aged proof reads re-prove, and re-proving
 describe("W2-M AUD-20.03, rendered: Change wallet asks first, then one signature", () => {
   it("the question names both wallets and signs nothing; Replace signs once with replace; Keep closes it", async () => {
     const { services, port } = connectedWorld(OTHER_WALLET);
-    await render(<MoneyPanel room={room(joinerMoney(T0))} onStart={() => undefined} services={services} port={port} />);
+    await render(<MoneyPanel room={room(unboundMoney())} onStart={() => undefined} services={services} port={port} />);
     await click(byTestId("money-action-replace-link"));
     expect(byTestId("money-replace-question")?.textContent).toBe(
       `This seat is linked to ${shortWallet(TEST_WALLET)}. Replace it with ${shortWallet(OTHER_WALLET)}? The old link stops working; nothing is charged. Keplr then asks you to sign one link message.`,
@@ -213,7 +219,7 @@ describe("W2-M AUD-20.03, rendered: Change wallet asks first, then one signature
 
   it("Keplr on the linked wallet: Change wallet says to switch accounts first, and asks Keplr and the server nothing", async () => {
     const { services, port } = connectedWorld(TEST_WALLET);
-    await render(<MoneyPanel room={room(joinerMoney(T0))} onStart={() => undefined} services={services} port={port} />);
+    await render(<MoneyPanel room={room(unboundMoney())} onStart={() => undefined} services={services} port={port} />);
     await click(byTestId("money-action-replace-link"));
     expect(byTestId("money-error")?.textContent).toMatch(/already linked to this seat.*switch accounts in Keplr first/);
     expect(byTestId("money-replace")).toBeNull();
@@ -227,8 +233,10 @@ describe("W2-M AUD-20.03, rendered: Change wallet asks first, then one signature
     port.answer("money/wallet-link", 409, { error: "replace-required", reason: `This seat is linked to ${OTHER_WALLET}. Replace it with this wallet?` });
     await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
     await click(byTestId("money-action-link"));
-    expect(byTestId("money-replace-question")?.textContent).toMatch(/Keplr asks you to sign the link message once more\.$/);
+    /* The server's sentence names the wallet that really stands (the view didn't know it). */
+    expect(byTestId("money-replace-question")?.textContent).toBe(`This seat is linked to ${OTHER_WALLET}. Replace it with this wallet? The old link stops working; nothing is charged. Keplr asks you to sign the link message once more.`);
     expect(byTestId("money-error")).toBeNull();
+    expect(byTestId("money-replace-confirm")).toBeTruthy();
   });
 });
 
@@ -329,7 +337,7 @@ describe("W2-M AUD-20.07 / 20.06, rendered: the dispute's deadline, Juno re-read
     const paid = bandMoney(settlementView({ status: "paid", phase: "closed", chainState: "SETTLED", route: "resolver_uphold", amounts: ["1480000", "500000"] }), "SETTLED");
     await render(<SettlementBand room={finished(paid)} port={port} services={services} />);
     expect(byTestId("settlement-headline")?.textContent).toBe(`Paid: 1.48 JUNOX sent to ${shortWallet(TEST_WALLET)}.`);
-    expect(byTestId("settlement-dispute-record")?.textContent).toContain(`Disputed by seat 2 (${shortWallet(OTHER_WALLET)})`);
+    expect(byTestId("settlement-dispute-record")?.textContent).toContain(`Disputed by the player whose wallet is ${shortWallet(OTHER_WALLET)}`);
     expect(byTestId("settlement-dispute-record")?.textContent).toContain(`The resolver upheld the recorded payout at ${formatMoneyTime(T0 + HOUR, { now: T0 })}.`);
     act(() => root.unmount());
     root = createRoot(container);
@@ -345,6 +353,31 @@ describe("W2-M AUD-20.07 / 20.06, rendered: the dispute's deadline, Juno re-read
     const paid = bandMoney(settlementView({ status: "paid", phase: "closed", chainState: "SETTLED", route: "consent_completed", amounts: ["1480000", "500000"] }), "SETTLED");
     await render(<SettlementBand room={finished(paid)} port={port} services={services} />);
     expect(byTestId("settlement-dispute-record")).toBeNull();
+    expect(services.wallet.calls).not.toContain("chainGame:7");
+  });
+});
+
+describe("W2-M review fixes, rendered", () => {
+  it("Replace refuses if the seat's link moved after the question (no wallet replaced that the player wasn't asked about)", async () => {
+    const { services, port } = connectedWorld(OTHER_WALLET);
+    await render(<MoneyPanel room={room(unboundMoney())} onStart={() => undefined} services={services} port={port} />);
+    await click(byTestId("money-action-replace-link"));
+    expect(byTestId("money-replace-question")?.textContent).toContain(shortWallet(TEST_WALLET));
+    /* Another device relinked the seat to a third wallet meanwhile. */
+    const moved = moneyView({ you: linked([], { actions: ["link-wallet"], link: { wallet: "juno1qyqszqgpqyqszqgpqyqszqgpqyqszqgpjnp7du", epoch: 2, ticket: TICKET, linkedAt: T0, consentKeys: [] } }) });
+    await render(<MoneyPanel room={room(moved)} onStart={() => undefined} services={services} port={port} />);
+    await click(byTestId("money-replace-confirm"));
+    expect(byTestId("money-error")?.textContent).toMatch(/linked wallet changed since you were asked, so nothing was signed/);
+    expect(signLinks(services.wallet.calls)).toEqual([]);
+    expect(port.requests).toEqual([]);
+  });
+
+  it("the table bar's strip never reads Juno for the dispute record it doesn't show", async () => {
+    const { services, port } = connectedWorld();
+    services.wallet.game = chainFacts({ state: "DISPUTED", challengeWindowEndMs: null, dispute: { challenger: TEST_WALLET, bond: "500000", evidenceHash: null, disputedAtMs: T0, resolution: null, resolvedAtMs: null } });
+    const money = bandMoney(settlementView({ status: "disputed", phase: "disputed", chainState: "DISPUTED", windowEnd: null, resolverTimeoutAt: T0 + 2 * HOUR }), "DISPUTED");
+    await render(<SettlementBand room={finished(money)} compact port={port} services={services} />);
+    expect(byTestId("money-strip")?.textContent).toMatch(/A player disputed the payout/);
     expect(services.wallet.calls).not.toContain("chainGame:7");
   });
 });

@@ -41,7 +41,7 @@ export interface SettlementBandProps {
 
 export function SettlementBand({ room, log = null, board = null, compact = false, port, services }: SettlementBandProps): JSX.Element | null {
   const money = room.money ?? null;
-  const table = useMoneyTable({ gameId: room.gameId, view: money, variants: room.variants, isHost: room.you.role === "host", log, board, port, services });
+  const table = useMoneyTable({ gameId: room.gameId, view: money, variants: room.variants, isHost: room.you.role === "host", log, board, port, services, disputeRecord: !compact });
   const [asking, setAsking] = useState<SettlementActionKind | null>(null);
   if (money === null || table.settlement === null || money.you === null) {
     return money === null || compact ? null : (
@@ -152,7 +152,7 @@ export function SettlementBand({ room, log = null, board = null, compact = false
       {table.verification !== null && table.verification.result !== "match" && s?.status === "recorded" ? <p style={styles.faint}>{table.verification.detail}</p> : null}
       {s?.lastCheckpoint ? <p style={styles.faint}>Standings last recorded on Juno at {s.lastCheckpoint.roundKey}.</p> : null}
       {record.length > 0 ? (
-        <div data-testid="settlement-dispute-record" aria-label="Dispute record">
+        <div role="group" data-testid="settlement-dispute-record" aria-label="Dispute record">
           {record.map((line) => (
             <p key={line} style={styles.detail}>
               {line}

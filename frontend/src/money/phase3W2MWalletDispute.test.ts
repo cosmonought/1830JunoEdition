@@ -47,7 +47,9 @@ const challengeText = (wallet: string, expiresAt = T0 + 300_000) =>
 /* ================================================================== */
 
 describe("W2-M AUD-20.02: a proof that can't be counted on reads 're-prove', never 'Wallet linked'", () => {
-  const joinerView = (linkedAt = T0) => moneyView({ escrow: bound, you: linked([], { actions: ["deposit", "link-wallet"], link: { wallet: TEST_WALLET, epoch: 1, ticket: TICKET, linkedAt, consentKeys: [] } }) });
+  /* The server's real action set for a linked joiner at a bound FUNDING table: `deposit` alone (never with
+     `link-wallet`: `server/src/escrow/moneyTables.ts` actionsOf). */
+  const joinerView = (linkedAt = T0) => moneyView({ escrow: bound, you: linked([], { actions: ["deposit"], link: { wallet: TEST_WALLET, epoch: 1, ticket: TICKET, linkedAt, consentKeys: [] } }) });
 
   it("the server's limit, with a margin: fresh under it, aged near and past it, aged with no proof at all", () => {
     expect(WALLET_PROOF_MAX_AGE_MS).toBe(24 * HOUR);
@@ -64,10 +66,13 @@ describe("W2-M AUD-20.02: a proof that can't be counted on reads 're-prove', nev
     expect(aged.headline).toBe(`Re-prove ${shortWallet(TEST_WALLET)} to deposit`);
     expect(aged.headline).not.toMatch(/Wallet linked/);
     expect([aged.step, aged.primary?.kind, aged.primary?.label]).toEqual(["link", "reprove", "Re-prove wallet (free)"]);
-    expect(aged.detail).toMatch(/linked more than a day ago.*proof from the last 24 hours.*free.*nothing moves/);
-    expect(aged.others.map((action) => action.kind)).toEqual(["replace-link"]);
+    expect(aged.detail).toMatch(/linked more than a day ago.*proof from the last 24 hours.*unless you've re-proven it since.*free.*nothing moves/);
+    /* `aged` is this page's inference from the link's time: the deposit stays offered beside it, and the server decides. */
+    expect(aged.others.map((action) => [action.kind, action.label, action.tone])).toEqual([["open-review", "Deposit 1 JUNOX", "secondary"]]);
     const refused = seatFlow(flowInput({ view: joinerView(), proof: "refused" }));
     expect(refused.detail).toMatch(/^The server needs a fresh proof/);
+    /* `refused` is the server's own answer: no deposit until the re-proof. */
+    expect([refused.primary?.kind, refused.others]).toEqual(["reprove", []]);
   });
 
   it("re-proving needs what a link needs: Keplr connected, then Confirm it's you; Keplr on another account blocks it", () => {
@@ -88,9 +93,9 @@ describe("W2-M AUD-20.02: a proof that can't be counted on reads 're-prove', nev
     expect([unbound.headline, unbound.primary]).toEqual([expect.stringMatching(/^Wallet linked/), null]);
     const approving = seatFlow(flowInput({ view: joinerView(), proof: "aged", ui: "approving" }));
     expect(approving.headline).toBe("Approve in Keplr…");
-    /* The server's actions still decide: no link-wallet, no re-prove button (the sentence stays). */
-    const noLink = seatFlow(flowInput({ view: moneyView({ escrow: bound, you: linked([], { actions: ["deposit"] }) }), proof: "aged" }));
-    expect([noLink.headline.startsWith("Re-prove"), noLink.primary]).toEqual([true, null]);
+    /* No deposit offered by the server (the escrow isn't taking them): no re-prove either -- nothing to re-prove for. */
+    const notTaking = seatFlow(flowInput({ view: moneyView({ escrow: { ...bound, state: "FUNDED" }, you: linked([], { actions: ["link-wallet"] }) }), proof: "refused" }));
+    expect(notTaking.headline).toMatch(/^Wallet linked/);
   });
 
   it("the re-proof signs once for the linked wallet, says so, and the page records the accepted proof", async () => {
@@ -133,7 +138,8 @@ describe("W2-M AUD-20.02: a proof that can't be counted on reads 're-prove', nev
 /* ================================================================== */
 
 describe("W2-M AUD-20.03: Change wallet asks first, then Keplr signs once", () => {
-  const view = moneyView({ escrow: bound, you: linked([], { actions: ["deposit", "link-wallet"] }) });
+  /* "Change wallet" is offered while the server allows a link (`link-wallet`: before the host opens the table). */
+  const view = moneyView({ you: linked([], { actions: ["link-wallet"] }) });
 
   it("Keplr on the linked wallet: no change, nothing asked of Keplr beyond its account, nothing asked of the server", async () => {
     const services = testServices();
@@ -190,11 +196,14 @@ describe("W2-M AUD-20.04: an ended Confirm-it's-you and an ended link request sa
   const reauth = { error: "reauth-required", reason: "Confirm it's you first (your recovery key), then link the wallet." };
 
   it("the sentences: ended early (believed live), expired at a time (believed until then), none when never confirmed", () => {
-    expect(reconfirmSentence(T0 + 60_000, T0)).toMatch(/ended early on the server.*Confirm it's you again.*nothing was changed/);
+    expect(reconfirmSentence(T0 + 120_000, T0)).toMatch(/ended early on the server.*Confirm it's you again.*nothing was changed/);
+    /* Within a minute of the believed end: an ordinary lapse (clocks differ), not "ended early". */
+    expect(reconfirmSentence(T0 + 30_000, T0)).toMatch(/^Your “Confirm it's you” expired at/);
     expect(reconfirmSentence(T0 - 60_000, T0)).toBe(`Your “Confirm it's you” expired at ${formatMoneyTime(T0 - 60_000, { now: T0 })} (it lasts 5 minutes). Confirm it's you again to continue; nothing was changed.`);
     expect(reconfirmSentence(null, T0)).toBeNull();
     expect(linkRequestEndedSentence(T0 - 1, T0)).toMatch(/^The link request expired at .*Keplr was open longer\). Nothing was linked/);
-    expect(linkRequestEndedSentence(T0 + 60_000, T0)).toMatch(/^The server no longer holds that link request.*Nothing was linked/);
+    expect(linkRequestEndedSentence(T0 + 120_000, T0)).toMatch(/^The server no longer holds that link request.*Nothing was linked/);
+    expect(linkRequestEndedSentence(T0 + 30_000, T0)).toMatch(/^The link request expired at/);
   });
 
   it.each([
@@ -241,6 +250,8 @@ describe("W2-M AUD-20.05: a Keplr decline reads as rejected, wherever Keplr aske
     expect(classifyChainError(new Error("insufficient funds: 10ujunox is smaller than 25000ujunox")).code).toBe("insufficient-funds");
     expect(classifyChainError(new Error("Failed to fetch")).code).toBe("rpc-unreachable");
     expect(classifyChainError(new Error("something else entirely")).code).toBe("unknown");
+    /* A node's refusal of a broadcast is never a player's decline, whatever its words. */
+    expect(classifyChainError(new Error("tx rejected by the mempool"), { keplrAsked: false }).code).toBe("unknown");
   });
 
   it("Keplr declined while handing over a signer (an unlock prompt): rejected, not unsupported", async () => {
@@ -349,6 +360,9 @@ describe("W2-M AUD-20.06: a Dispute is built only against the payout and bond th
     expect(challengeProblem(view, settleableFacts({ bond: null }), T0)).toMatch(/different dispute bond/);
     expect(challengeProblem(view, settleableFacts({ challengeWindowEndMs: T0 }), T0)).toMatch(/window on Juno has closed/);
     expect(challengeProblem(view, settleableFacts({ challengeWindowEndMs: null }), T0)).toMatch(/window on Juno has closed/);
+    /* The window shown is Juno's to the second (the server reads seconds; Juno's nanoseconds may carry a fraction). */
+    expect(challengeProblem(view, settleableFacts({ challengeWindowEndMs: T0 + 600_000 + 400 }), T0)).toBeNull();
+    expect(challengeProblem(view, settleableFacts({ challengeWindowEndMs: T0 + 900_000 }), T0)).toMatch(/ends at a different time than this page showed you/);
     expect(challengeProblem(disputeView(recorded({ seq: null })), settleableFacts(), T0)).toMatch(/nothing to dispute yet/);
   });
 
@@ -413,13 +427,15 @@ describe("W2-M AUD-20.07: the dispute confirm gives a time; the record is Juno's
     expect(disputeConfirmSentence(view, null, T0)).toMatch(/being read from Juno/);
     expect(disputeConfirmSentence(view, { kind: "unavailable", reason: "x" }, T0)).toMatch(/couldn't be read from Juno just now; Juno sets it when the dispute lands/);
     expect(disputeConfirmSentence(view, read({ resolverTimeoutSecs: null }), T0)).toMatch(/couldn't be read from Juno/);
+    /* The bond shown is the one Continue holds Juno to; a different one on Juno is said, not silently swapped in. */
+    expect(disputeConfirmSentence(view, read({ bond: "900000" }), T0)).toMatch(/^Dispute the payout recorded on Juno\? Keplr attaches the 0\.5 JUNOX bond\. Juno now asks for 0\.9 JUNOX, so the dispute won't be sent until this page shows that\./);
   });
 
   it("the record: you or which seat, when, the bond, the evidence; how it ended; nothing when there is none", () => {
     const record = { challenger: TEST_WALLET, bond: "500000", evidenceHash: "ee".repeat(32), disputedAtMs: T0, resolution: null, resolvedAtMs: null } as const;
     expect(disputeRecordLines(view, read({ dispute: record }), T0)).toEqual([`Disputed by you at ${formatMoneyTime(T0, { now: T0 })}, with a 0.5 JUNOX bond.`, `Evidence recorded on Juno: ${"ee".repeat(8)}…`]);
     const theirs = disputeRecordLines(view, read({ dispute: { ...record, challenger: OTHER_WALLET } }), T0);
-    expect(theirs[0]).toBe(`Disputed by seat 2 (${shortWallet(OTHER_WALLET)}) at ${formatMoneyTime(T0, { now: T0 })}, with a 0.5 JUNOX bond.`);
+    expect(theirs[0]).toBe(`Disputed by the player whose wallet is ${shortWallet(OTHER_WALLET)} at ${formatMoneyTime(T0, { now: T0 })}, with a 0.5 JUNOX bond.`);
     const upheld = disputeRecordLines(view, read({ dispute: { ...record, resolution: "upheld", resolvedAtMs: T0 + HOUR } }), T0);
     expect(upheld[2]).toBe(`The resolver upheld the recorded payout at ${formatMoneyTime(T0 + HOUR, { now: T0 })}.`);
     expect(disputeRecordLines(view, read({ dispute: { ...record, resolution: "resolver_timeout" } }), T0)[2]).toMatch(/didn't decide in time/);
@@ -429,7 +445,7 @@ describe("W2-M AUD-20.07: the dispute confirm gives a time; the record is Juno's
     expect(disputeRecordLines(view, { kind: "loading" }, T0)).toEqual([]);
     expect(disputeRecordLines(view, { kind: "unavailable", reason: "x" }, T0)).toEqual(["The dispute's record couldn't be read from Juno just now."]);
     /* A scrubbed record (no time, no bond, no evidence) says only what it has. */
-    expect(disputeRecordLines(view, read({ dispute: { challenger: OTHER_WALLET, bond: null, evidenceHash: null, disputedAtMs: null, resolution: null, resolvedAtMs: null } }), T0)).toEqual([`Disputed by seat 2 (${shortWallet(OTHER_WALLET)}).`]);
+    expect(disputeRecordLines(view, read({ dispute: { challenger: OTHER_WALLET, bond: null, evidenceHash: null, disputedAtMs: null, resolution: null, resolvedAtMs: null } }), T0)).toEqual([`Disputed by the player whose wallet is ${shortWallet(OTHER_WALLET)}.`]);
   });
 
   it("disputeChainFacts: read through the pinned endpoint; no pin, no table, no answer -- a sentence, never a guess", async () => {

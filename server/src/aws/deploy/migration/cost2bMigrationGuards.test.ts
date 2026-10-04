@@ -15,7 +15,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 
-import { GATE_NAMES, GATE_TARGETS, GATES, HOST_MULTI, HOST_SINGLETONS, judgeMigrationPlan, TEARDOWN_CLASSES, type GateName, type MigrationContext } from "./planGuards";
+import { GATE_NAMES, GATE_TARGETS, GATES, HOST_MULTI, HOST_SINGLETONS, judgeMigrationPlan, originForComparison, TEARDOWN_CLASSES, type GateName, type MigrationContext } from "./planGuards";
 import { judgeNatEvidence, NAT_EVIDENCE_FORMAT, NAT_FILES, type NatEvidence } from "./natEvidence";
 import { migrationGuardCommand, SAVED_PLAN, SAVED_PLAN_SHA } from "./migrationCommands";
 import { ARM64_SMOKE_MIN_PASSED, decodeCapture, judgeArm64LiveSmoke, smokeScriptSha256 } from "./arm64LiveSmoke";
@@ -521,6 +521,120 @@ describe("COST-2B false-negative probes: the host", () => {
     const repo = plan("ecr-lifecycle");
     rc(repo, `${H}.aws_ecr_lifecycle_policy.server[0]`).change.after.repository = "gs-prod-server";
     rejects("ecr-lifecycle", repo, /on repository gs-prod-server/);
+  });
+});
+
+describe("T1 provider 6.66: the cutover compares origins with ONLY the two optional-unset representations folded", () => {
+  const D = `${A}.aws_cloudfront_distribution.site[0]`;
+  const byId = (o: Obj, id: string): Obj => (o.origin as Obj[]).find((x) => x.origin_id === id)!;
+  /** The edge-cutover fixture, with `edit(before, after)` applied to the distribution's values. */
+  const cut = (edit: (b: Obj, a: Obj) => void): Obj => {
+    const p = plan("edge-cutover");
+    const c = rc(p, D).change;
+    edit(c.before, c.after);
+    return p;
+  };
+  const passes = (p: Obj, why: string) => {
+    const r = judgeOf("edge-cutover", p);
+    assert.equal(r.verdict, "PASS", `${why}: ${failed(r).map((x) => `${x.name}: ${x.detail}`).join("; ")}`);
+  };
+  /** The live T1 plan's shape: state "" (read back), plan null (omitted in the configuration); gs-alb pins 0 both sides. */
+  const live = (b: Obj, a: Obj) => {
+    for (const v of [b, a]) byId(v, "gs-alb").response_completion_timeout = 0;
+    byId(a, "site").origin_access_control_id = null;
+    byId(a, "site").custom_origin_config[0].ip_address_type = null;
+  };
+
+  test("the fixture's own shape is unchanged: both fields are \"\" before and after, and the plan PASSES", () => {
+    for (const id of ["site", "gs-alb"]) {
+      const o = byId(rc(plan("edge-cutover"), D).change.before, id);
+      assert.equal(o.origin_access_control_id, "");
+      assert.equal(o.custom_origin_config[0].ip_address_type, "");
+    }
+    passes(plan("edge-cutover"), "fixture");
+  });
+
+  test("PASS: unset is unset -- \"\" / null / missing, either direction, site and gs-alb, alone and together", () => {
+    passes(cut((_b, a) => (byId(a, "site").origin_access_control_id = null)), "site OAC \"\" -> null");
+    passes(cut((_b, a) => (byId(a, "site").custom_origin_config[0].ip_address_type = null)), "site ip_address_type \"\" -> null");
+    passes(cut(live), "both, with gs-alb's domain moving to the host (the live T1 shape)");
+    passes(cut((b, a) => { live(b, a); delete byId(a, "site").origin_access_control_id; delete byId(a, "site").custom_origin_config[0].ip_address_type; }), "missing in the plan");
+    passes(cut((b, a) => { byId(b, "site").origin_access_control_id = null; byId(b, "site").custom_origin_config[0].ip_address_type = null; }), "null -> \"\"");
+    passes(cut((_b, a) => { byId(a, "gs-alb").origin_access_control_id = null; byId(a, "gs-alb").custom_origin_config[0].ip_address_type = null; }), "gs-alb's own unset fields, with its domain move");
+    const r = judgeOf("edge-cutover", cut(live));
+    assert.ok(r.checks.some((c) => c.status === "pass" && /only the \/gs\* origin's domain/.test(c.name)), "the cutover allowlist itself passed");
+  });
+
+  test("FAIL: a nonempty value set, cleared or changed on the site origin is still a site-origin change", () => {
+    for (const [what, edit] of [
+      ["OAC unset -> an id", (_b: Obj, a: Obj) => (byId(a, "site").origin_access_control_id = "E123EXAMPLEOAC")],
+      ["OAC null -> an id", (_b: Obj, a: Obj) => { live(_b, a); byId(a, "site").origin_access_control_id = "E123EXAMPLEOAC"; }],
+      ["OAC an id -> unset", (b: Obj, a: Obj) => { byId(b, "site").origin_access_control_id = "E123EXAMPLEOAC"; byId(a, "site").origin_access_control_id = null; }],
+      ["OAC one id -> another", (b: Obj, a: Obj) => { byId(b, "site").origin_access_control_id = "E1"; byId(a, "site").origin_access_control_id = "E2"; }],
+      ["OAC unset -> whitespace", (_b: Obj, a: Obj) => (byId(a, "site").origin_access_control_id = " ")],
+      ["ip_address_type unset -> ipv4", (_b: Obj, a: Obj) => (byId(a, "site").custom_origin_config[0].ip_address_type = "ipv4")],
+      ["ip_address_type unset -> dualstack", (_b: Obj, a: Obj) => { live(_b, a); byId(a, "site").custom_origin_config[0].ip_address_type = "dualstack"; }],
+      ["ip_address_type ipv6 -> unset", (b: Obj, a: Obj) => { byId(b, "site").custom_origin_config[0].ip_address_type = "ipv6"; byId(a, "site").custom_origin_config[0].ip_address_type = null; }],
+      ["the site domain", (b: Obj, a: Obj) => { live(b, a); byId(a, "site").domain_name = "evil.example.org"; }],
+      ["the site origin path", (b: Obj, a: Obj) => { live(b, a); byId(a, "site").origin_path = "/x"; }],
+      ["the site connection attempts", (b: Obj, a: Obj) => { live(b, a); byId(a, "site").connection_attempts = 1; }],
+      ["a site custom header", (b: Obj, a: Obj) => { live(b, a); byId(a, "site").custom_header = [{ name: "X-Origin-Verify", value: "x" }]; }],
+      ["the site protocol", (b: Obj, a: Obj) => { live(b, a); byId(a, "site").custom_origin_config[0].origin_protocol_policy = "http-only"; }],
+      ["the site TLS", (b: Obj, a: Obj) => { live(b, a); byId(a, "site").custom_origin_config[0].origin_ssl_protocols = ["TLSv1.1", "TLSv1.2"]; }],
+      ["the site read timeout", (b: Obj, a: Obj) => { live(b, a); byId(a, "site").custom_origin_config[0].origin_read_timeout = 60; }],
+      ["the site response_completion_timeout", (b: Obj, a: Obj) => { live(b, a); byId(a, "site").response_completion_timeout = 120; }],
+      ["the site S3 config", (b: Obj, a: Obj) => { live(b, a); byId(a, "site").s3_origin_config = [{ origin_access_identity: "x" }]; }],
+    ] as Array<[string, (b: Obj, a: Obj) => void]>) {
+      rejects("edge-cutover", cut(edit), /DEFAULT \(site\) origin changes/);
+      assert.ok(what);
+    }
+  });
+
+  test("FAIL: gs-alb may change only its domain (to the requested host); its own nonempty transitions are still refused", () => {
+    for (const [what, edit] of [
+      ["OAC unset -> an id", (b: Obj, a: Obj) => { live(b, a); byId(a, "gs-alb").origin_access_control_id = "E123EXAMPLEOAC"; }],
+      ["ip_address_type unset -> ipv6", (b: Obj, a: Obj) => { live(b, a); byId(a, "gs-alb").custom_origin_config[0].ip_address_type = "ipv6"; }],
+      ["the protocol", (b: Obj, a: Obj) => { live(b, a); byId(a, "gs-alb").custom_origin_config[0].origin_protocol_policy = "match-viewer"; }],
+      ["the read timeout", (b: Obj, a: Obj) => { live(b, a); byId(a, "gs-alb").custom_origin_config[0].origin_read_timeout = 30; }],
+      ["response_completion_timeout 0 -> 120", (b: Obj, a: Obj) => { live(b, a); byId(a, "gs-alb").response_completion_timeout = 120; }],
+      ["response_completion_timeout 0 -> null (not one of the folded fields)", (b: Obj, a: Obj) => { live(b, a); byId(a, "gs-alb").response_completion_timeout = null; }],
+      ["a header", (b: Obj, a: Obj) => { live(b, a); byId(a, "gs-alb").custom_header = [{ name: "X", value: "y" }]; }],
+      ["the path", (b: Obj, a: Obj) => { live(b, a); byId(a, "gs-alb").origin_path = "/gs"; }],
+    ] as Array<[string, (b: Obj, a: Obj) => void]>) {
+      rejects("edge-cutover", cut(edit), /more than its domain name/);
+      assert.ok(what);
+    }
+    rejects("edge-cutover", cut((b, a) => { live(b, a); byId(a, "gs-alb").domain_name = "elsewhere.example.org"; }), /would point at elsewhere\.example\.org/);
+    rejects("edge-cutover", cut((b, a) => { live(b, a); (a.origin as Obj[]).push({ ...byId(a, "site"), origin_id: "extra" }); }), /the origin set changes/);
+    rejects("edge-cutover", cut((b, a) => { live(b, a); a.ordered_cache_behavior[0].target_origin_id = "site"; }), /the \/gs\* behaviour/);
+  });
+
+  test("FAIL closed: any true after_unknown leaf under origin, including on a folded field", () => {
+    for (const marker of [
+      [{ origin_access_control_id: true }, {}],
+      [{}, { custom_origin_config: [{ ip_address_type: true }] }],
+      [{ response_completion_timeout: true }, {}],
+    ]) {
+      const p = cut(live);
+      rc(p, D).change.after_unknown.origin = marker;
+      rejects("edge-cutover", p, /origins are unknown until apply/);
+    }
+  });
+
+  test("originForComparison: folds exactly the two fields' null / missing / \"\", copies, touches nothing else", () => {
+    const input = { origin_id: "o", domain_name: "", origin_path: "", origin_access_control_id: "", custom_origin_config: [{ ip_address_type: "", origin_read_timeout: 30, http_port: 80 }], custom_header: [] };
+    const frozen = JSON.stringify(input);
+    const out = originForComparison(input);
+    assert.equal(JSON.stringify(input), frozen, "the input is not mutated");
+    assert.equal(out.origin_access_control_id, null);
+    assert.equal((out.custom_origin_config as Obj[])[0].ip_address_type, null);
+    assert.equal(out.domain_name, "", "domain_name \"\" is NOT folded");
+    assert.equal(out.origin_path, "", "origin_path \"\" is NOT folded");
+    assert.deepEqual(originForComparison({}), { origin_access_control_id: null }, "missing -> null; no custom_origin_config invented");
+    assert.equal(originForComparison({ origin_access_control_id: "E1" }).origin_access_control_id, "E1");
+    assert.equal(originForComparison({ origin_access_control_id: 0 }).origin_access_control_id, 0, "only \"\", null and missing fold");
+    assert.equal((originForComparison({ custom_origin_config: [{ ip_address_type: "ipv4" }] }).custom_origin_config as Obj[])[0].ip_address_type, "ipv4");
+    assert.deepEqual(originForComparison({ custom_origin_config: [] }).custom_origin_config, []);
   });
 });
 

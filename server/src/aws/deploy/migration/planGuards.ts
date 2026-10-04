@@ -1424,6 +1424,33 @@ const DISTRIBUTION_NAMES: Readonly<Record<string, string>> = {
   origin_group: "the origin groups",
 };
 
+/**
+ * One CloudFront origin, for COMPARISON ONLY: the plan's two representations of an UNSET optional field folded into one.
+ * hashicorp/aws 6.66.0 records these two optional fields as "" in state (read back from the API) but as null in a plan
+ * built from a configuration that omits them; both mean "not set", and the provider sends CloudFront the same thing
+ * either way:
+ *   - origin_access_control_id (Optional, NoZeroValues): flattenOrigin writes the API's pointer as is (CloudFront returns
+ *     "" for an origin with no OAC); the expander sends the element's value, "" when the configuration omits it.
+ *   - custom_origin_config[0].ip_address_type (Optional, enum): the expander sets the API field only when nonempty, and
+ *     the flattener writes it only when nonempty.
+ * Only null / missing / "" fold (to null). Any other value -- a real OAC id, a concrete ip_address_type -- is compared as
+ * is, so setting, clearing or changing one is still refused. No other field is touched; only custom_origin_config[0]
+ * folds (the schema's MaxItems is 1), so any further element is compared raw and fails closed. An unknown origin value is
+ * refused before this runs (originCutoverProblem), and a plan's unknown is null in `after`, so it never reaches here.
+ */
+export function originForComparison(origin: Json): Obj {
+  const unset = (v: Json): boolean => v === undefined || v === null || v === "";
+  const o: Obj = { ...obj(origin) };
+  if (unset(o.origin_access_control_id)) o.origin_access_control_id = null;
+  const custom = o.custom_origin_config;
+  if (Array.isArray(custom) && custom.length > 0 && typeof custom[0] === "object" && custom[0] !== null && !Array.isArray(custom[0])) {
+    const first: Obj = { ...(custom[0] as Obj) };
+    if (unset(first.ip_address_type)) first.ip_address_type = null;
+    o.custom_origin_config = [first, ...custom.slice(1)];
+  }
+  return o;
+}
+
 /** The distribution's update, before -> after: null when ONLY gs-alb's domain moved to `to`. */
 export function originCutoverProblem(c: PlannedChange, to: string): string | null {
   const { changed, unknown } = changedAttributes(c, DISTRIBUTION_COMPUTED);
@@ -1443,10 +1470,10 @@ export function originCutoverProblem(c: PlannedChange, to: string): string | nul
   for (const [id, b] of before) {
     const a = after.get(id)!;
     if (id !== "gs-alb") {
-      if (!same(a, b)) return `the ${id === "site" ? "DEFAULT (site)" : id} origin changes`;
+      if (!same(originForComparison(a), originForComparison(b))) return `the ${id === "site" ? "DEFAULT (site)" : id} origin changes`;
       continue;
     }
-    if (!same({ ...a, domain_name: null }, { ...b, domain_name: null })) return "the /gs* origin changes more than its domain name (protocol, TLS, timeouts, headers or path)";
+    if (!same({ ...originForComparison(a), domain_name: null }, { ...originForComparison(b), domain_name: null })) return "the /gs* origin changes more than its domain name (protocol, TLS, timeouts, headers or path)";
     if (a.domain_name !== to) return `the /gs* origin would point at ${String(a.domain_name)}, not ${to}`;
     if (b.domain_name === to) return `the /gs* origin already points at ${to}`;
   }

@@ -147,6 +147,10 @@ describe("PHASE 1 REMAINDER: the migration runbook's corrections", () => {
        `ecs_task_role_authorized`) and stated them in the examples -- no resource, module, template or single-host change;
        migration/phase1CleanBuild pins that each variables.tf differs from its base by that one default only. */
     const cleanBuild = new Set(["infra/aws/stacks/app/variables.tf", "infra/aws/stacks/app/example.tfvars.example", "infra/aws/stacks/ledger/variables.tf", "infra/aws/stacks/ledger/example.tfvars.example"]);
-    assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f) && !cleanBuild.has(f)), [], r.stdout);
+    /* PHASE 1 T1 PROVIDER-6.66 pinned `response_completion_timeout = 0` on edge.tf's gs-alb origin (one line; the API
+       request is unchanged) -- migration/phase1CleanBuild's "since the Phase-1 base, only those two root variables, ..."
+       test pins that edge.tf differs from its base by that line only; this allowlist is narrow only while that pin stands. */
+    const t1Provider666 = new Set(["infra/aws/modules/app/edge.tf"]);
+    assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !freshHost.has(f) && !cleanBuild.has(f) && !t1Provider666.has(f)), [], r.stdout);
   });
 });

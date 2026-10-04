@@ -247,11 +247,21 @@ describe("K-09: Reject is live only for the seat the authority lets answer", () 
     expect(t.room.state.train_purchase_offer ?? null).toBeNull();
   });
 
-  it("K-05 stays deferred: neither prompt grows a Rescind for the proposer", () => {
+  it("a seat that is not the proposer is never offered a Rescind (K-05 landed in Phase 3 W1-D: `phase3W1dOfferRescind`)", () => {
     const t = S.roomFor(F.operatingBoard());
     t.submit(P1, M.proposePrivate(CA, PRR, 160));
     const proposal = ordinaryPrivateProposalView(t.room.state.private_purchase_offer, label)!;
-    render(<PrivateTradePrompt proposal={proposal} viewerIsOwner={false} consentIsBinding onAccept={() => undefined} onReject={() => undefined} />);
+    render(
+      <PrivateTradePrompt
+        proposal={proposal}
+        viewerIsOwner={false}
+        viewerIsProposer={false}
+        consentIsBinding
+        onAccept={() => undefined}
+        onReject={() => undefined}
+        onRescind={() => undefined}
+      />,
+    );
     expect(buttons().map((entry) => entry.textContent)).toEqual(["Reject", "Accept"]);
     void CO;
   });

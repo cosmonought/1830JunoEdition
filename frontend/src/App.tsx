@@ -106,6 +106,8 @@ import {
 import { canonicalWholeVgp } from "./gameEngine/vgpAmount";
 // 6.5-B (K-10): the ordinary private offer's prompt view, which is `null` for a funding offer.
 import { ordinaryPrivateProposalView } from "./utils/privateProposalView";
+// Phase 3 W1-D (P3-N006): who answers and who may withdraw, asked of the authority's own identity predicates.
+import { privateOfferConsentRoles, trainOfferConsentRoles } from "./utils/offerConsentView";
 // 6.5-B (SI-H01): the Action Bar draws the live Operating step on the hosted server path.
 import { displayedOperatingSubPhase } from "./utils/displayedOperatingStep";
 // 6.5-B (K-01): the Stock Round's Private Companies section and its pointer in the consent slot.
@@ -247,7 +249,8 @@ import { movementToShow, treasuryMovements } from "./utils/treasuryMovement";
 import { deservesActionReceipt } from "./utils/actionReceipt";
 // Design note #677: the Tiles tab.
 import TileReference from "./components/TileReference";
-import TrainTradePanel from "./components/TrainTradePanel";
+/* Phase 3 W1-D (P3-N008): the chain-era `TrainTradePanel` ledger is no longer mounted -- its Accept / Reject /
+   Rescind sent `AcceptTrainOffer` / `RejectTrainOffer` / `RescindTrainOffer`, which pinned boards refuse (D-23). */
 /* Design note #508: the default export is gone from this import -- the panel
    is mounted by `ContextualActionBar` now, so this file supplies its props
    and no longer renders it. `TrainTradePrompt` still mounts here: it is the
@@ -663,7 +666,7 @@ import {
 /* Design note #1091: the curse's vocabulary, shared by the log, the three name surfaces and the
    scoreboard so none of them can word it differently. */
 import { CARCOSA_STAMP_STEP, carcosaEpitaph, cursedCompanies } from "./utils/carcosaCurse";
-import { offerSettlesAsBloodPrice, saleCopyKind } from "./utils/saleCopyDisclosure";
+import { offerSettlesAsBloodPrice } from "./utils/saleCopyDisclosure";
 import AppFooter from "./components/AppFooter";
 import GameIntroOverlay from "./components/GameIntroOverlay";
 import GameOutroOverlay from "./components/GameOutroOverlay";
@@ -4054,13 +4057,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const sandboxTrainProposal = useMemo<TrainTradeProposal | null>(() => {
     const offer = gameState?.train_purchase_offer ?? null;
     if (!offer || offer.accepted) return null; // #1247, as for the private
+    /* Phase 3 W1-D (P3-N006): the seller's CURRENT president, as `answerTrainPurchaseRefusal` re-derives it -- the
+       offer's `seller_president` is what the proposal recorded (narration) and is read only to label a seller with
+       no president on the board. */
+    const answerer = trainOfferConsentRoles(gameState, null).answerer;
+    const shownSeller = answerer ?? offer.seller_president ?? "";
     return {
       sellerProtocolId: offer.seller_protocol_id,
       sellerTicker: offer.seller_ticker,
-      sellerPresident: offer.seller_president,
-      sellerPresidentLabel:
-        sandboxPlayerLabel(offer.seller_president ?? "") ??
-        truncateAddress(offer.seller_president ?? ""),
+      sellerPresident: answerer,
+      sellerPresidentLabel: sandboxPlayerLabel(shownSeller) ?? truncateAddress(shownSeller),
       buyerProtocolId: offer.buyer_protocol_id,
       buyerTicker: offer.buyer_ticker,
       modelType: offer.model_type,
@@ -4074,6 +4080,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       bloodPrice: offerSettlesAsBloodPrice(gameState, offer),
     };
   }, [gameState]);
+
+  /* Phase 3 W1-D (K-05, P3-N006): the two Operating Round offers' parties as this viewer stands to them. The
+     answer controls go to the authority's answerer (the private's current owner, the seller's current president);
+     Rescind goes to the buying corporation's current president, the only seat the authority lets withdraw. A
+     watcher is neither. */
+  const privateOfferRoles = useMemo(
+    () => privateOfferConsentRoles(gameState, viewerAddress),
+    [gameState, viewerAddress],
+  );
+  const trainOfferRoles = useMemo(
+    () => trainOfferConsentRoles(gameState, viewerAddress),
+    [gameState, viewerAddress],
+  );
+  /* The private prompt NAMES the same party its buttons go to: the authority's answerer, not the offer's recorded
+     `owner` (which it falls back to only when the board names nobody). */
+  const privateProposalShown = useMemo<PrivateTradeProposal | null>(() => {
+    const answerer = privateOfferRoles.answerer;
+    if (!privateProposal || answerer === null || answerer === privateProposal.ownerAddress) return privateProposal;
+    return {
+      ...privateProposal,
+      ownerAddress: answerer,
+      ownerLabel: sandboxPlayerLabel(answerer) ?? truncateAddress(answerer),
+    };
+  }, [privateProposal, privateOfferRoles.answerer]);
 
   /* Inspecting and dispatching are separate gestures; only the green check is gated.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #163 */
@@ -10447,7 +10477,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         (c) => c.company_id === actingProtocolId,
       );
       const buyerTicker = buyer?.ticker ?? `#${actingProtocolId}`;
-      const ownerLabel = sandboxPlayerLabel(target.owner) ?? truncateAddress(target.owner);
       /* Design note #715: nothing to dismiss. The sheet closed itself here when it was a modal; embedded, it
          leaves when the step does -- and the step advances on the purchase the way every other one does. */
 
@@ -10462,10 +10491,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             price: String(price),
           },
         });
-        logInfo(
-          "Buy Private Company",
-          `${buyerTicker} bought ${target.name} from ${ownerLabel} for $${price} — its own President owned it, so it completed immediately.`,
-        );
+        /* Phase 3 W1-D (P3-N007): no "completed immediately" line here. The dispatch is not awaited, so that line
+           was written before the purchase landed -- and stood even when it was refused. The drain narrates the
+           purchase from the message once it applies (`describeGameplayAction`'s `BuyPrivateCompany`), on every
+           client alike. */
         return;
       }
 
@@ -10489,7 +10518,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          itself, so every client reads the same sentence. Writing it here as
          well would give the buyer two entries and the seller one. */
     },
-    [gameState, logInfo, actingProtocolId, runGameplayAction, gameId],
+    [gameState, actingProtocolId, runGameplayAction, gameId],
   );
 
   /** The answer is a log entry, not a local dismissal: the drain clears the prompt on every client and dispatches the purchase on yes.
@@ -10512,6 +10541,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       { offTurn: true },
     );
   }, [privateProposal, runGameplayAction]);
+
+  /* Phase 3 W1-D (K-05, U-21): THE PROPOSER WITHDRAWS. `RescindPrivatePurchase` is the buying corporation's
+     current president's (`rescindPrivatePurchaseRefusal`), and that president is the seat the Operating Round is
+     on -- so this goes ON TURN through the ordinary gate, with no off-turn exemption. Only the answers are owed by
+     a player who is not on turn (#701). The drain clears the prompt on every client when it applies. */
+  const handleRescindPrivateOffer = useCallback(() => {
+    if (!privateProposal) return;
+    runGameplayAction(`Withdrew the offer for ${privateProposal.privateName}`, {
+      RescindPrivatePurchase: { game_id: gameId, private_id: privateProposal.privateId },
+    });
+  }, [privateProposal, runGameplayAction, gameId]);
 
   /* ==================================================================
       6.5-B (K-01): THE THREE PLAYER-TRADE MESSAGES, EXACTLY AS THE AUTHORITY TAKES THEM
@@ -10963,22 +11003,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           price: proposal.price,
           gilded: proposal.gilded, // UR-4: the copy (sandbox only -- see `handleMakeTrainOffer`)
         });
-        /* UR-6 (U-42): the copy, as the drain's own trade line names it (`saleCopyKind`, the authority's predicates on
-           the board this sale is judged on) -- the gold-trimmed copy's sale is the Blood Price, an ordinary copy beside
-           it is not. A seller with no gold-trimmed copy of the model reads exactly as before. */
-        const copyKind = saleCopyKind(gameState, proposal.sellerProtocolId, proposal.modelType, proposal.gilded);
-        const trainPhrase =
-          copyKind === "bloodPrice"
-            ? `the gold-trimmed ${proposal.modelType}-train`
-            : copyKind === "ordinaryBesideGilded"
-              ? `an ordinary ${proposal.modelType}-train`
-              : `a ${proposal.modelType}-train`;
-        logInfo(
-          "Train Trade",
-          samePresident
-            ? `${proposal.buyerTicker} bought ${trainPhrase} from ${proposal.sellerTicker} for $${proposal.price} — same President, so it completed immediately.`
-            : `${proposal.buyerTicker} offered $${proposal.price} to ${proposal.sellerTicker} for ${trainPhrase}. Awaiting ${proposal.sellerPresidentLabel}.`,
-        );
+        /* Phase 3 W1-D (P3-N007): no "completed immediately" line here. The dispatch is not awaited, so that line was
+           written before the sale landed -- and stood even when it was refused. The drain narrates the executed
+           transfer from the message once it applies (`describeGameplayAction`'s `BuyTrainFromCorporation`, which
+           names the copy as UR-6 asked), on every client alike. */
         return;
       }
 
@@ -11003,7 +11031,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         },
       );
     },
-    [gameState, sandbox, handleMakeTrainOffer, logInfo, runGameplayAction],
+    [gameState, sandbox, handleMakeTrainOffer, runGameplayAction],
   );
 
   /** The answer is a log entry, not a local dismissal: the drain clears the prompt on every client and
@@ -11083,77 +11111,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     );
   }, [sandboxTrainProposal, runGameplayAction]);
 
-  const handleAcceptTrainOffer = useCallback(
-    (offerId: number) => {
-      runGameplayAction("AcceptTrainOffer", {
-        AcceptTrainOffer: { game_id: gameId, offer_id: offerId },
-      });
-      refreshTrainOffers();
-    },
-    [runGameplayAction, gameId, refreshTrainOffers],
-  );
-
-  const handleRejectTrainOffer = useCallback(
-    (offerId: number) => {
-      runGameplayAction("RejectTrainOffer", {
-        RejectTrainOffer: { game_id: gameId, offer_id: offerId },
-      });
-      refreshTrainOffers();
-    },
-    [runGameplayAction, gameId, refreshTrainOffers],
-  );
-
-  const handleRescindTrainOffer = useCallback(
-    (offerId: number) => {
-      runGameplayAction("RescindTrainOffer", {
-        RescindTrainOffer: { game_id: gameId, offer_id: offerId },
-      });
-      refreshTrainOffers();
-    },
-    [runGameplayAction, gameId, refreshTrainOffers],
-  );
-
-  /* A pending offer addressed to you should interrupt: the same prompt is derived from GetTrainOffers online. One at a time (#233 scopes the ledger to offers this viewer is party to).
-     See docs/ai_architecture/session_keys_wallet.md - App.tsx #218 */
-  const viewerTrainOffers = useMemo(() => {
-    if (sandbox) return trainOffers;
-    if (!viewerAddress) return [];
-    return trainOffers.filter(
-      (offer) =>
-        offer.seller_president === viewerAddress || offer.buyer_president === viewerAddress,
-    );
-  }, [sandbox, viewerAddress, trainOffers]);
-
-  const liveTrainOffer = useMemo(() => {
-    if (sandbox || !viewerAddress) return null;
-    const offer = trainOffers.find((entry) => entry.seller_president === viewerAddress);
-    if (!offer) return null;
-    const tickerFor = (id: number) =>
-      gameState?.public_companies.find((company) => company.company_id === id)?.ticker ?? `#${id}`;
-    const proposal: TrainTradeProposal = {
-      sellerProtocolId: offer.seller_protocol_id,
-      sellerTicker: tickerFor(offer.seller_protocol_id),
-      sellerPresident: offer.seller_president,
-      sellerPresidentLabel:
-        sandboxPlayerLabel(offer.seller_president ?? "") ??
-        truncateAddress(offer.seller_president ?? ""),
-      buyerProtocolId: offer.buyer_protocol_id,
-      buyerTicker: tickerFor(offer.buyer_protocol_id),
-      modelType: offer.model_type,
-      price: offer.price,
-    };
-    return { offerId: offer.offer_id, proposal };
-  }, [sandbox, viewerAddress, trainOffers, gameState]);
-
-  const handleAcceptLiveTrainOffer = useCallback(() => {
-    if (!liveTrainOffer) return;
-    handleAcceptTrainOffer(liveTrainOffer.offerId);
-  }, [liveTrainOffer, handleAcceptTrainOffer]);
-
-  const handleRejectLiveTrainOffer = useCallback(() => {
-    if (!liveTrainOffer) return;
-    handleRejectTrainOffer(liveTrainOffer.offerId);
-  }, [liveTrainOffer, handleRejectTrainOffer]);
+  /* Phase 3 W1-D (K-05, U-21): THE PROPOSER WITHDRAWS THE TRAIN OFFER. `RescindTrainPurchase` is the buying
+     corporation's current president's (`rescindTrainPurchaseRefusal`) -- the seat on turn -- so it goes through the
+     ordinary turn gate with no off-turn exemption, exactly like the private's withdrawal above.
+     (P3-N008) The chain-era trio that stood here -- `AcceptTrainOffer` / `RejectTrainOffer` / `RescindTrainOffer` by
+     `offer_id` -- and the `GetTrainOffers` ledger panel they answered are retired from room play: every table is a
+     room (LIVE-2D), and pinned boards refuse all three (D-23). The `GetTrainOffers` POLL itself still feeds the Buy
+     Trains `blockedReason`; that read is the holds/purchase group's (W2-A / W2-C), not this slice's. */
+  const handleRescindSandboxTrainOffer = useCallback(() => {
+    if (!sandboxTrainProposal) return;
+    runGameplayAction(`Withdrew the offer for a ${sandboxTrainProposal.modelType}-train`, {
+      RescindTrainPurchase: { game_id: gameId, seller_protocol_id: sandboxTrainProposal.sellerProtocolId },
+    });
+  }, [sandboxTrainProposal, runGameplayAction, gameId]);
 
 
 
@@ -14473,46 +14443,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                    follows it instead of quietly pointing at the wrong surface. */}
                 {/* Design note #508: `TrainPurchasePanel` used to mount here. It is rendered BY the bar now, so it inherits
                    the bar's stickiness and travels with the player -- which is also what retired #491's jump button. */}
-                {/* Design note #233: THE LEDGER APPEARS WHEN THERE IS ONE. This rendered on every Hardware step, empty,
-                   reading "No offers outstanding" -- a permanent panel whose permanent content was that it had nothing to
-                   show, sitting directly under the purchase panel.
-                   A pending offer is an EVENT: it arrives, blocks a turn, gets answered and goes away. The gate is scoped
-                   to offers the VIEWER is party to rather than any offer in the room, because this is where they ANSWER
-                   one. `TrainTradePanel #1`'s "a pending offer is public information" is still true and is what the Action
-                   Log carries; a dedicated panel on the buy screen is a different claim -- that you have something to do. */}
-                {/* Design note #419: the offer ledger is the purchase panel's sibling and leaked identically -- same phase
-                   gate, same missing tab gate, same four tabs. Fixed together, because a fix that left the ledger bleeding
-                   onto the Stock Market tab would have answered the report rather than the bug. */}
-                {activeMainTab === surfaceTabFor("OperatingRound") &&
-                  gameState?.current_round_type === "OperatingRound" &&
-                  orSubPhase === "Hardware" &&
-                  viewerTrainOffers.length > 0 && (
-                  <TrainTradePanel
-                    // Design note #6 in that file: the compose form moved to
-                    // `TrainPurchasePanel`; this renders the offer LEDGER.
-                    composeEnabled={false}
-                    offers={trainOffers}
-                    companies={(gameState?.public_companies ?? []).map((company) => ({
-                      company_id: company.company_id,
-                      ticker: company.ticker,
-                      president: company.president ?? null,
-                      // Audit G-15c: drives the greyed-out model options.
-                      // Passed through UNCHANGED, `undefined` included --
-                      // that value means "this chain doesn't say", and the
-                      // panel treats it differently from an empty list.
-                      owned_train_models: company.owned_trains,
-                    }))}
-                    activeProtocolId={
-                      gameState.active_operating_order[gameState.active_corporation_index] ?? null
-                    }
-                    connectedAddress={viewerAddress}
-                    sessionReady={controlsEnabled}
-                    onMakeOffer={handleMakeTrainOffer}
-                    onAccept={handleAcceptTrainOffer}
-                    onReject={handleRejectTrainOffer}
-                    onRescind={handleRescindTrainOffer}
-                  />
-                )}
+                {/* Phase 3 W1-D (P3-N008, K-14): the chain-era `TrainTradePanel` offer ledger (#233, #419) mounted here. It
+                   read `GetTrainOffers`, which no room answers, and its Accept / Reject / Rescind sent chain-era messages
+                   pinned boards refuse (D-23). Retired: a room's train offer is `train_purchase_offer`, answered and
+                   withdrawn in the consent slot (`TrainTradePrompt`). */}
 
                 {/* Stock Round panel -- requirement 1's "directly above the Stock Market Matrix", gated on a live Stock
                    Round (the Waterfall bypasses this branch entirely).
@@ -15208,24 +15142,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           }}
         />
       )}
-      {/* The train consent prompt -- design notes #205 and #218. ONE component, TWO sources, decided by
-         deployment: SANDBOX uses local state (no chain to record an offer in, no second client to show it to),
-         ONLINE derives from the contract's own register so the prompt reaches the real counterparty.
-         Mutually exclusive by construction, so this can never show two offers at once. */}
+      {/* The train consent prompt -- design notes #205 and #218. ONE source now: the room's own register,
+         `train_purchase_offer` (Phase 3 W1-D retired the chain-era `GetTrainOffers` source, P3-N008), so the
+         prompt reaches the real counterparty and every other seat reads the same pending offer. */}
       <TrainTradePrompt
-        proposal={liveTrainOffer?.proposal ?? sandboxTrainProposal}
-        /* Online, `liveTrainOffer` only exists for the seller's president, so its presence IS the check.
-           Offline the wallets are compared.
-           Design note #701 removed `sandbox ||` from the middle of this expression. #536's note read "Sandbox
-           names the seller so the clicker knows whose decision they stand in for" -- written when a sandbox
-           was one human at one wallet. #578 removed solo mode, and this bypass turned "the seller must
-           consent" into "whoever proposed it may consent for them". #662 struck the identical clause out of
-           `viewerIsOwner`; this is the same line on the other prompt. */
-        viewerIsSeller={
-          liveTrainOffer !== null || sandboxTrainProposal?.sellerPresident === viewerAddress
-        }
-        onAccept={liveTrainOffer ? handleAcceptLiveTrainOffer : handleAcceptSandboxTrainOffer}
-        onReject={liveTrainOffer ? handleRejectLiveTrainOffer : handleRejectSandboxTrainOffer}
+        proposal={sandboxTrainProposal}
+        /* Design note #701 removed `sandbox ||` from the middle of this expression -- a mode never stands in for
+           consent. Phase 3 W1-D (P3-N006): the answerer is the seller's CURRENT president as the authority
+           re-derives it (`sellerPresident`), not the offer's recorded `seller_president`. */
+        viewerIsSeller={trainOfferRoles.viewerIsAnswerer}
+        // Phase 3 W1-D (K-05): the buying corporation's current president, and only them, may withdraw.
+        viewerIsProposer={trainOfferRoles.viewerIsProposer}
+        onAccept={handleAcceptSandboxTrainOffer}
+        onReject={handleRejectSandboxTrainOffer}
+        onRescind={handleRescindSandboxTrainOffer}
+        actionInFlight={actionInFlight}
       />
       {/* #1530: the excess-train discard the game is waiting for. Same slot as the trade prompt; the two cannot
          stand at once (an offer cannot be made while a discard is owed). */}
@@ -15234,17 +15165,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         offer={fundingPrivateOffer}
         viewerIsBuyerPresident={fundingPrivateOffer !== null && fundingPrivateOffer.buyerPresident === viewerAddress}
         onAnswer={handleAnswerFundingPrivateOffer}
+        actionInFlight={actionInFlight}
       />
       <TrainDiscardPrompt
         due={pendingDiscard}
         viewerIsPresident={pendingDiscard !== null && pendingDiscard.president === viewerAddress}
         onDiscard={handleDiscardTrain}
+        actionInFlight={actionInFlight}
       />
       <PrivateTradePrompt
-        proposal={privateProposal}
+        proposal={privateProposalShown}
         /* The owner answers in EVERY mode - the sandbox bypass turned "the owner must consent" into "whoever proposed it may consent for them".
-           See docs/ai_architecture/contract_economy.md - App.tsx #662 */
-        viewerIsOwner={privateProposal?.ownerAddress === viewerAddress}
+           See docs/ai_architecture/contract_economy.md - App.tsx #662
+           Phase 3 W1-D (P3-N006): the owner is the private's CURRENT owner as the authority re-derives it
+           (`currentPrivateOwner`), not the offer's recorded `owner`. */
+        viewerIsOwner={privateOfferRoles.viewerIsAnswerer}
+        // Phase 3 W1-D (K-05): the buying corporation's current president, and only them, may withdraw.
+        viewerIsProposer={privateOfferRoles.viewerIsProposer}
         // Design note #0 in that file: `BuyPrivateCompany` has no accept
         // step, so outside sandbox this is a confirmation and says so.
         consentIsBinding={sandbox}
@@ -15253,11 +15190,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            a guessed end (#670). */
         recipientCash={
           privateProposal
-            ? cashByPlayer(gameState)[privateProposal.ownerAddress] ?? null
+            ? cashByPlayer(gameState)[privateProposalShown?.ownerAddress ?? privateProposal.ownerAddress] ?? null
             : null
         }
         onAccept={handleAcceptPrivateOffer}
         onReject={handleRejectPrivateOffer}
+        onRescind={handleRescindPrivateOffer}
+        actionInFlight={actionInFlight}
       />
       {/* 6.5-B (K-01): the player <-> player trade's pointer, in the same slot. The card on the Stocks tab is the
           primary surface; this is what makes the offer impossible to miss from another tab, since it holds the

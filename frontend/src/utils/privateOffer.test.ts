@@ -151,7 +151,9 @@ describe("who may answer", () => {
   const source = readShell();
 
   it("compares the viewer's wallet to the owner's", () => {
-    expect(source).toContain("viewerIsOwner={privateProposal?.ownerAddress === viewerAddress}");
+    // Phase 3 W1-D (P3-N006): the private's CURRENT owner, as `answerPrivatePurchaseRefusal` re-derives it.
+    expect(source).toContain("viewerIsOwner={privateOfferRoles.viewerIsAnswerer}");
+    expect(source).toContain("privateOfferConsentRoles(gameState, viewerAddress)");
   });
 
   it("does not let the mode stand in for consent", () => {

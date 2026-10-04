@@ -213,9 +213,10 @@ describe("what an inactive player can still DO", () => {
   it("gates the private prompt on OWNERSHIP, not on the turn", () => {
     /* The owner answers whether or not it is their turn -- it never is, by
        construction, since the offer comes from the corporation that IS acting. */
-    expect(SHELL).toMatch(
-      /viewerIsOwner=\{privateProposal\?\.ownerAddress === viewerAddress\}/,
-    );
+    /* Phase 3 W1-D (P3-N006): ownership as the authority re-derives it -- the private's CURRENT owner
+       (`privateOfferConsentRoles`), which never consults whose turn it is. */
+    expect(SHELL).toContain("viewerIsOwner={privateOfferRoles.viewerIsAnswerer}");
+    expect(SHELL).toContain("privateOfferConsentRoles(gameState, viewerAddress)");
   });
 
   it("gates the train prompt on being the seller, not on the turn", () => {

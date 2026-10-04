@@ -701,6 +701,7 @@ gates.
   signal from the link callbacks). Touches RED R1 (6425–6427) and RED R5 (12567–12640).
 - **Gates:** **OD-12 required.** If refused, the RED parts become owner-placed later (E) and are recorded so at W3-F.
 - **Depends on:** W2-J; W1-H.
+- **Status:** COMPLETE on its slice branch `phase3/w3-c-refusal-display` @ `6c28662` (from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762`; support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662`); NOT integrated. OD-12 followed: the R1 and R5 edits are each their own independently reviewed commit. AUD-14.01, P3-N004, P3-N020 IMPLEMENTED.
 
 #### W3-D
 **Accessibility minimum and modal infrastructure** · L5 · **2–4 h**

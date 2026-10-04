@@ -29,6 +29,8 @@ import { connectServerLink, type ServerLink } from "./utils/serverLink";
 // Phase 3 W3-I: the active room link's read-only queue, for the par prompt and the offer forms.
 import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
 import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
+import { rollBackIfRefused, submissionRefused } from "./utils/submissionAnswer"; // Phase 3 W3-C (P3-N020)
+import { RoomNoticeSlots } from "./components/RoomNoticeSlots"; // Phase 3 W3-C (AUD-14.01)
 import { boardRulesVersion } from "./utils/buildStamp"; // Phase 3 W2-I / OD-6 (AUD-01.07)
 /* #1223: the alarm #1207 argued for and nobody connected. The comparison lives in its own module so it is
    testable without a socket, a server or this file. */
@@ -44,8 +46,6 @@ import {
   noticeActionFor,
   roomNoticeLine,
   roomNoticesReducer,
-  type RoomNoticeAction,
-  type RoomNotices,
 } from "./utils/roomNotices";
 import { divergentFields, fieldDigests, stateDigest } from "./gameEngine/stateDigest";
 import { GameSessionProvider, useGameSession } from "./context/GameSessionContext";
@@ -4381,24 +4381,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      `setSandboxRoomError(sentence)` stays for the writers that hand a bare sentence and is routed by
      `noticeActionFor` (the connection constants by identity, everything else a refusal). `sandboxRoomError` is the
      one-line reading for the surfaces that have one slot. */
-  const [roomNotices, dispatchRoomNotice] = useReducer(
-    (state: RoomNotices, action: RoomNoticeAction | { type: "legacy-map"; map: (current: string | null) => string | null }) => {
-      if (action.type !== "legacy-map") return roomNoticesReducer(state, action);
-      /* Transitional (removed once the RED callers name their kind): an exact-text clear applied to each slot. */
-      let next = state;
-      if (next.refusal !== null && action.map(next.refusal) === null) next = roomNoticesReducer(next, { type: "clear-refusal" });
-      if (next.connection !== null && action.map(next.connection.text) === null) {
-        next = roomNoticesReducer(next, { type: "clear-connection", kind: next.connection.kind });
-      }
-      return next;
-    },
-    NO_ROOM_NOTICES,
-  );
+  const [roomNotices, dispatchRoomNotice] = useReducer(roomNoticesReducer, NO_ROOM_NOTICES);
   const sandboxRoomError = roomNoticeLine(roomNotices);
-  const setSandboxRoomError = useCallback((update: string | ((current: string | null) => string | null)) => {
-    if (typeof update === "function") dispatchRoomNotice({ type: "legacy-map", map: update });
-    else dispatchRoomNotice(noticeActionFor(update));
-  }, []);
+  /* A sentence only: no writer clears by comparing text any more (the RED R1 / R5 callers name a kind). */
+  const setSandboxRoomError = useCallback((sentence: string) => dispatchRoomNotice(noticeActionFor(sentence)), []);
   const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
   const [sandboxAppliedCount, setSandboxAppliedCount] = useState(0);
   /* ==================================================================
@@ -10492,7 +10478,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       trainDrafts.filter((draft) => turnRoutes.some((entry) => entry.trainIndex === draft.trainIndex)),
     );
 
-    await runGameplayAction("RunMultipleRoutes", {
+    const runAnswer = await runGameplayAction("RunMultipleRoutes", {
       RunMultipleRoutes: {
         game_id: gameId,
         protocol_id: actingProtocolId,
@@ -10549,6 +10535,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         payout_strategy: "Withhold",
       },
     });
+    /* Phase 3 W3-C (P3-N020): a run the room did not apply marks nothing -- no "has run", no step advance, no note
+       about drafts left out of a run that did not happen. The refusal's sentence is in the room strip. */
+    if (submissionRefused(runAnswer)) return;
     if (droppedNote !== null) showActionToast(droppedNote);
 
     /* ==================================================================
@@ -12017,7 +12006,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     ) => {
       /* The board write lives inside runGameplayAction's sandbox branch - outside it, a replayed lay charged the treasury and left the board blank.
          See docs/ai_architecture/canvas_rendering.md - App.tsx #522 */
-      runGameplayAction("LayTile (sandbox)", {
+      // Phase 3 W3-C (P3-N020): the room's per-action answer goes back to the lay that sent it.
+      const answer = runGameplayAction("LayTile (sandbox)", {
         LayTile: {
           game_id: gameId,
           protocol_id: actingProtocolId,
@@ -12051,6 +12041,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       /* Design note #1145: the ghost is NOT cleared here. It is marked sent and held until the board comes
          back with the lay -- see `handleRingConfirmed` for why, and the release effect below for when. */
       setPreviewTile((current) => (current ? { ...current, committed: true } : current));
+      return answer;
     },
     [runGameplayAction, gameId, actingProtocolId],
   );
@@ -13425,8 +13416,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         ? JK_TILE_ABILITY_KEY
         : undefined;
     if (spentAbility === JK_TILE_ABILITY_KEY) setJkLayArmed(false);
+    /* Phase 3 W3-C (P3-N020): the dispatch's answer, so a refused lay can take back the power it spent below. */
+    let layAnswer: unknown;
     if (sandbox) {
-      handleSandboxLayTile(
+      layAnswer = handleSandboxLayTile(
         q,
         r,
         tileId,
@@ -13437,7 +13430,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         spentAbility,
       );
     } else {
-      runGameplayAction("LayTile", {
+      layAnswer = runGameplayAction("LayTile", {
         LayTile: {
           game_id: gameId,
           protocol_id: actingProtocolId,
@@ -13476,6 +13469,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       setHomeStationPlacement(null);
       if (homeStationPlacement) setActiveMainTab(homeStationPlacement.returnTab);
     }
+    /* Phase 3 W3-C (P3-N020): A REFUSED LAY SPENDS NOTHING. The room's answer, when it says the lay was not applied,
+       takes back exactly what this handler set for it: the power key added to the shell's fallback set, and the
+       JK's arm (pressed again, it would have been armed). The board never recorded either -- it applied nothing. */
+    const errandKey = errandClaimsLay(homeStationPlacement, q, r) ? homeStationPlacement?.abilityKey ?? null : null;
+    void rollBackIfRefused(layAnswer, () => {
+      if (errandKey !== null) {
+        setUsedPrivateAbilities((prev) => {
+          if (!prev.has(errandKey)) return prev;
+          const next = new Set(prev);
+          next.delete(errandKey);
+          return next;
+        });
+      }
+      if (spentAbility === JK_TILE_ABILITY_KEY) setJkLayArmed(true);
+    });
     // Design note #1145: closes the ring, keeps the tile.
     handleRingConfirmed();
   }, [
@@ -14279,16 +14287,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             )}
             {/* Phase 3 W3-C (AUD-14.01): the strip's two slots, each shown once -- the link's notice and the last
                refusal of this tab's own action -- and neither repeats the room's standing hold notice. */}
-            {sandboxRoomCode && roomNotices.connection && roomNotices.connection.text !== holdNoticeFor(sandboxRoom) && (
-              <span style={styles.roomStripError} data-testid="room-connection-notice" data-kind={roomNotices.connection.kind}>
-                {roomNotices.connection.text}
-              </span>
-            )}
-            {sandboxRoomCode && roomNotices.refusal && roomNotices.refusal !== holdNoticeFor(sandboxRoom) && (
-              <span style={styles.roomStripError} data-testid="room-refusal-notice">
-                {roomNotices.refusal}
-              </span>
-            )}
+            {sandboxRoomCode && <RoomNoticeSlots notices={roomNotices} holdNotice={holdNoticeFor(sandboxRoom)} />}
           </>
         }
         /* Design note #1083: the sandbox room's code, in the slot the Neta DAO credit vacated. `null` for a

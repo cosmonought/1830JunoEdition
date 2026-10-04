@@ -241,8 +241,7 @@ describe("the room bar's in-room strip is gone, piece by piece", () => {
        something else -- the error is still reachable in the room; this pin had not been moved with it. */
     /* Phase 3 W3-C (AUD-14.01): the one slot became two -- the link's notice and the last refusal -- each still gated on
        being in a room and each still deferring to the standing hold notice. */
-    expect(APP).toContain("{sandboxRoomCode && roomNotices.connection && roomNotices.connection.text !== holdNoticeFor(sandboxRoom) && (");
-    expect(APP).toContain("{sandboxRoomCode && roomNotices.refusal && roomNotices.refusal !== holdNoticeFor(sandboxRoom) && (");
+    expect(APP).toContain("{sandboxRoomCode && <RoomNoticeSlots notices={roomNotices} holdNotice={holdNoticeFor(sandboxRoom)} />}");
     expect(APP).toContain("{sandboxRoomCode && holdNoticeFor(sandboxRoom) !== null && (");
     expect(ROOMBAR).toContain("{error && <span style={styles.error}>{error}</span>}");
   });

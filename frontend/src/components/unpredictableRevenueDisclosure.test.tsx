@@ -315,10 +315,14 @@ describe("U-42. the Activity Log's offer, answer and trade lines name the copy, 
     }
   });
 
-  it("the shell's same-president line names the copy with the same predicate (source pin)", () => {
+  it("the same-president sale is narrated by the drain's line, which names the copy with the same predicate (source pin)", () => {
+    /* Phase 3 W1-D (P3-N007): the shell's own "same President, so it completed immediately" line is gone -- it was
+       written before the un-awaited `BuyTrainFromCorporation` landed. The executed transfer's sentence is the drain's
+       (`describeGameplayAction`), asserted byte for byte above, and it names the copy with `saleCopyKind`. */
     const APP = readShell();
-    expect(APP).toContain("const copyKind = saleCopyKind(gameState, proposal.sellerProtocolId, proposal.modelType, proposal.gilded);");
-    expect(APP).toContain("bought ${trainPhrase} from ${proposal.sellerTicker}");
+    expect(APP).not.toContain("completed immediately");
+    const LOG = readStripped("utils/actionLog.ts");
+    expect(LOG).toContain("const kind = saleCopyKind(gameState, seller_protocol_id, model_type, gilded);");
   });
 });
 

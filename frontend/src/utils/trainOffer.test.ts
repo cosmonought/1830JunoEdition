@@ -168,9 +168,12 @@ describe("who may answer", () => {
   const source = readShell();
 
   it("compares the viewer's wallet to the seller president's", () => {
-    expect(source).toContain(
-      "liveTrainOffer !== null || sandboxTrainProposal?.sellerPresident === viewerAddress",
-    );
+    /* Phase 3 W1-D (P3-N006): the seller's CURRENT president, re-derived from the board by the authority's own
+       `sellerPresident` (`trainOfferConsentRoles`) -- not the offer's recorded `seller_president` -- and the
+       chain-era `liveTrainOffer` source is gone (P3-N008). */
+    expect(source).toContain("viewerIsSeller={trainOfferRoles.viewerIsAnswerer}");
+    expect(source).toContain("trainOfferConsentRoles(gameState, viewerAddress)");
+    expect(source).not.toContain("liveTrainOffer");
   });
 
   it("does not let the mode stand in for consent", () => {

@@ -48,6 +48,7 @@ import { stationTickerColor } from "./hexContractTypes";
    for them -- asked, never restated, so the roster greys exactly what `trainSaleRefusal` refuses. */
 import { finalRunPositions } from "../gameEngine/gentleRustGrace";
 import { gildedSalePositions, reprievedSaleReason } from "../gameEngine/trainSaleAuthority";
+import { CONSENT_IN_FLIGHT_TITLE } from "../utils/offerConsentView";
 /* Design note #1702 (GR-3): the trade-in row's inputs -- the table's price and the Final Run copies included --
    as `dieselExchangeOfferFor` builds them. Re-exported for the bar, which forwards it. */
 import type { DieselExchangeOffer } from "../gameEngine/dieselExchange";
@@ -1556,6 +1557,13 @@ export interface TrainTradePromptProps {
   viewerIsSeller: boolean;
   onAccept: () => void;
   onReject: () => void;
+  /** Phase 3 W1-D (K-05): true when the viewer is the BUYING corporation's current president -- the one seat the
+   *  authority lets withdraw the offer (`rescindTrainPurchaseRefusal`). */
+  viewerIsProposer?: boolean;
+  /** Phase 3 W1-D (K-05): the proposer's `RescindTrainPurchase`. Rendered only for the proposer. */
+  onRescind?: () => void;
+  /** Phase 3 W1-D: the shell's in-flight latch (#1173) -- greys every live control while the last action is unconfirmed. */
+  actionInFlight?: boolean;
 }
 
 /** The counterparty's Accept / Reject. Deliberately the same shape and the same corner as
@@ -1566,9 +1574,16 @@ export function TrainTradePrompt({
   viewerIsSeller,
   onAccept,
   onReject,
+  viewerIsProposer = false,
+  onRescind,
+  actionInFlight = false,
 }: TrainTradePromptProps) {
   if (!proposal) return null;
   const bloodPrice = proposal.bloodPrice === true;
+  const canAnswer = viewerIsSeller && !actionInFlight;
+  const canRescind = viewerIsProposer && onRescind !== undefined;
+  const answerTitle = (live: string | undefined, other: string): string | undefined =>
+    !viewerIsSeller ? other : actionInFlight ? CONSENT_IN_FLIGHT_TITLE : live;
 
   return (
     <div style={styles.promptRoot} role="alertdialog" aria-label="Train offer">
@@ -1600,39 +1615,53 @@ export function TrainTradePrompt({
       <p style={styles.promptWho}>
         {viewerIsSeller
           ? `This is ${proposal.sellerPresidentLabel}'s decision.`
-          : `Waiting on ${proposal.sellerPresidentLabel}.`}
+          : canRescind
+            ? `Waiting on ${proposal.sellerPresidentLabel} — or you can withdraw the offer.`
+            : `Waiting on ${proposal.sellerPresidentLabel}.`}
       </p>
 
       <div style={styles.promptActions}>
         {/* 6.5-B (K-09): REJECT IS AN ANSWER TOO, and the answer is the selling president's alone
-            (`answerTrainPurchaseRefusal`). It was live on every seat -- the buyer's president, who has no Rescind
-            yet (K-05), and every third player -- and the authority refused each of those clicks. Gated on the same
+            (`answerTrainPurchaseRefusal`). It was live on every seat -- the buyer's president, who withdraws with
+            Rescind instead (W1-D), and every third player -- and the authority refused each of those clicks. Gated on the same
             fact Accept already was. */}
+        {/* Phase 3 W1-D (K-05): THE PROPOSER'S WITHDRAWAL, on the buying president's screen only, sent on turn. */}
+        {canRescind && (
+          <button
+            type="button"
+            data-testid="train-offer-rescind"
+            onClick={onRescind}
+            disabled={actionInFlight}
+            style={{ ...styles.promptButton, ...(actionInFlight ? styles.buttonDisabled : {}) }}
+            title={actionInFlight ? CONSENT_IN_FLIGHT_TITLE : "Withdraw your offer."}
+          >
+            Rescind
+          </button>
+        )}
         <button
           type="button"
           onClick={onReject}
-          disabled={!viewerIsSeller}
+          disabled={!canAnswer}
           style={{
             ...styles.promptButton,
-            ...(viewerIsSeller ? styles.promptReject : styles.buttonDisabled),
+            ...(canAnswer ? styles.promptReject : styles.buttonDisabled),
           }}
-          title={viewerIsSeller ? undefined : `Only ${proposal.sellerPresidentLabel} can answer this offer.`}
+          title={answerTitle(undefined, `Only ${proposal.sellerPresidentLabel} can answer this offer.`)}
         >
           Reject
         </button>
         <button
           type="button"
           onClick={onAccept}
-          disabled={!viewerIsSeller}
+          disabled={!canAnswer}
           style={{
             ...styles.promptButton,
-            ...(viewerIsSeller ? styles.promptAccept : styles.buttonDisabled),
+            ...(canAnswer ? styles.promptAccept : styles.buttonDisabled),
           }}
-          title={
-            viewerIsSeller
-              ? `Sell ${bloodPrice ? "the gold-trimmed" : "one"} ${proposal.modelType}-train to ${proposal.buyerTicker} for $${proposal.price}.`
-              : `Only ${proposal.sellerPresidentLabel} can accept this offer.`
-          }
+          title={answerTitle(
+            `Sell ${bloodPrice ? "the gold-trimmed" : "one"} ${proposal.modelType}-train to ${proposal.buyerTicker} for $${proposal.price}.`,
+            `Only ${proposal.sellerPresidentLabel} can accept this offer.`,
+          )}
         >
           Accept
         </button>
@@ -1655,10 +1684,13 @@ export interface FundingPrivateOfferPromptProps {
   offer: { privateId: number; privateName: string; sellerLabel: string; buyerTicker: string; buyerPresidentLabel: string; price: number } | null;
   viewerIsBuyerPresident: boolean;
   onAnswer: (privateId: number, accept: boolean) => void;
+  /** Phase 3 W1-D: the shell's in-flight latch (#1173). */
+  actionInFlight?: boolean;
 }
 
-export function FundingPrivateOfferPrompt({ offer, viewerIsBuyerPresident, onAnswer }: FundingPrivateOfferPromptProps) {
+export function FundingPrivateOfferPrompt({ offer, viewerIsBuyerPresident, onAnswer, actionInFlight = false }: FundingPrivateOfferPromptProps) {
   if (!offer) return null;
+  const canAnswer = viewerIsBuyerPresident && !actionInFlight;
   return (
     <div style={styles.promptRoot} role="alertdialog" aria-label="Private company offered">
       <div style={styles.promptHeader}>
@@ -1679,17 +1711,24 @@ export function FundingPrivateOfferPrompt({ offer, viewerIsBuyerPresident, onAns
         <button
           type="button"
           onClick={() => onAnswer(offer.privateId, false)}
-          disabled={!viewerIsBuyerPresident}
-          style={{ ...styles.promptButton, ...(viewerIsBuyerPresident ? styles.promptReject : styles.buttonDisabled) }}
+          disabled={!canAnswer}
+          style={{ ...styles.promptButton, ...(canAnswer ? styles.promptReject : styles.buttonDisabled) }}
+          title={viewerIsBuyerPresident && actionInFlight ? CONSENT_IN_FLIGHT_TITLE : undefined}
         >
           Reject
         </button>
         <button
           type="button"
           onClick={() => onAnswer(offer.privateId, true)}
-          disabled={!viewerIsBuyerPresident}
-          style={{ ...styles.promptButton, ...(viewerIsBuyerPresident ? styles.promptAccept : styles.buttonDisabled) }}
-          title={viewerIsBuyerPresident ? `Buy ${offer.privateName} for $${offer.price}.` : `Only ${offer.buyerPresidentLabel} can answer.`}
+          disabled={!canAnswer}
+          style={{ ...styles.promptButton, ...(canAnswer ? styles.promptAccept : styles.buttonDisabled) }}
+          title={
+            !viewerIsBuyerPresident
+              ? `Only ${offer.buyerPresidentLabel} can answer.`
+              : actionInFlight
+                ? CONSENT_IN_FLIGHT_TITLE
+                : `Buy ${offer.privateName} for $${offer.price}.`
+          }
         >
           Accept
         </button>
@@ -1723,10 +1762,13 @@ export interface TrainDiscardPromptProps {
   /** Whether the viewer is the president who must decide. */
   viewerIsPresident: boolean;
   onDiscard: (modelType: string) => void;
+  /** Phase 3 W1-D: the shell's in-flight latch (#1173) -- a second press must not discard a second train. */
+  actionInFlight?: boolean;
 }
 
-export function TrainDiscardPrompt({ due, viewerIsPresident, onDiscard }: TrainDiscardPromptProps) {
+export function TrainDiscardPrompt({ due, viewerIsPresident, onDiscard, actionInFlight = false }: TrainDiscardPromptProps) {
   if (!due) return null;
+  const canDiscard = viewerIsPresident && !actionInFlight;
   /* One button per MODEL, not per train: two 3-trains are interchangeable and the message names a model. */
   const models = Array.from(new Set(due.choices));
   return (
@@ -1763,12 +1805,14 @@ export function TrainDiscardPrompt({ due, viewerIsPresident, onDiscard }: TrainD
             key={model}
             type="button"
             onClick={() => onDiscard(model)}
-            disabled={!viewerIsPresident}
-            style={{ ...styles.promptButton, ...(viewerIsPresident ? styles.promptReject : styles.buttonDisabled) }}
+            disabled={!canDiscard}
+            style={{ ...styles.promptButton, ...(canDiscard ? styles.promptReject : styles.buttonDisabled) }}
             title={
-              viewerIsPresident
-                ? `Discard one ${model}-train from ${due.ticker} to the Bank Pool.`
-                : `Only ${due.presidentLabel} can choose.`
+              !viewerIsPresident
+                ? `Only ${due.presidentLabel} can choose.`
+                : actionInFlight
+                  ? CONSENT_IN_FLIGHT_TITLE
+                  : `Discard one ${model}-train from ${due.ticker} to the Bank Pool.`
             }
           >
             Discard {model}-train

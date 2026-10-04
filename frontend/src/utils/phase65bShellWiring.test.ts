@@ -36,8 +36,9 @@ describe("K-10: the ordinary private prompt never represents a funding offer", (
 
 describe("K-09: the consent props that now gate Reject as well as Accept are unchanged", () => {
   it("the owner and the selling president, compared by wallet", () => {
-    expect(APP).toContain("viewerIsOwner={privateProposal?.ownerAddress === viewerAddress}");
-    expect(APP).toContain("liveTrainOffer !== null || sandboxTrainProposal?.sellerPresident === viewerAddress");
+    // Phase 3 W1-D (P3-N006): compared against the authority's answerer (`utils/offerConsentView.ts`).
+    expect(APP).toContain("viewerIsOwner={privateOfferRoles.viewerIsAnswerer}");
+    expect(APP).toContain("viewerIsSeller={trainOfferRoles.viewerIsAnswerer}");
     // K-10's funding prompt: the buying president answers. `phase65bConsentPrompts` renders a copy of this
     // expression, so the shell's own is pinned here (Integration Pass 2 review).
     expect(APP).toContain(
@@ -52,8 +53,10 @@ describe("K-09: the consent props that now gate Reject as well as Accept are unc
     ] as const) {
       const SOURCE = readStripped(file);
       const reject = sliceBetween(SOURCE, "onClick={onReject}", "Reject\n");
-      expect(reject).toContain(`disabled={!${prop}}`);
+      // Phase 3 W1-D: the gate is `canAnswer` = that prop AND not in flight (the double-send latch).
+      expect(reject).toContain("disabled={!canAnswer}");
       expect(reject).toContain("styles.buttonDisabled");
+      expect(SOURCE).toContain(`const canAnswer = ${prop} && !actionInFlight;`);
     }
   });
 });

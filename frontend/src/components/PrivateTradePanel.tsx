@@ -33,6 +33,7 @@ import { numberedPrivate } from "../gameEngine/privateOrdinal";
 /** The band the contract enforces, mirrored -- design note #1. #1541: the band lives in the engine now
  *  (`gameEngine/privatePriceBand.ts`), shared with the emergency private sale; re-exported here for its callers. */
 import { privatePriceBounds } from "../gameEngine/privatePriceBand";
+import { CONSENT_IN_FLIGHT_TITLE } from "../utils/offerConsentView";
 
 /** A live proposal. Client-side only -- design note #0. */
 export interface PrivateTradeProposal {
@@ -596,6 +597,14 @@ export interface PrivateTradePromptProps {
   /** Design note #932: the answering player's cash before the sale, for the projection. `null` when the shell
    *  cannot say, which renders no projection rather than one with a guessed end. */
   recipientCash?: number | null;
+  /** Phase 3 W1-D (K-05): true when the viewer is the buying corporation's CURRENT president -- the one seat the
+   *  authority lets withdraw the offer (`rescindPrivatePurchaseRefusal`). */
+  viewerIsProposer?: boolean;
+  /** Phase 3 W1-D (K-05): the proposer's `RescindPrivatePurchase`. Rendered only for the proposer. */
+  onRescind?: () => void;
+  /** Phase 3 W1-D: the shell's in-flight latch (#1173). While the viewer's last action is unconfirmed, every live
+   *  control here is greyed, so a second press cannot send a second answer or withdrawal. */
+  actionInFlight?: boolean;
 }
 
 /* Design note #2: WHY SANDBOX LETS ONE PERSON ANSWER THEIR OWN OFFER. A hotseat sandbox has one wallet and one
@@ -611,8 +620,15 @@ export function PrivateTradePrompt({
   onAccept,
   onReject,
   recipientCash = null,
+  viewerIsProposer = false,
+  onRescind,
+  actionInFlight = false,
 }: PrivateTradePromptProps) {
   if (!proposal) return null;
+  const canAnswer = viewerIsOwner && !actionInFlight;
+  const canRescind = viewerIsProposer && onRescind !== undefined;
+  const answerTitle = (live: string | undefined, other: string): string | undefined =>
+    !viewerIsOwner ? other : actionInFlight ? CONSENT_IN_FLIGHT_TITLE : live;
 
   return (
     <div style={styles.promptRoot} role="alertdialog" aria-label="Private company offer">
@@ -631,7 +647,9 @@ export function PrivateTradePrompt({
       <p style={styles.promptWho}>
         {viewerIsOwner
           ? `This is ${proposal.ownerLabel}'s decision.`
-          : `Waiting on ${proposal.ownerLabel}.`}
+          : canRescind
+            ? `Waiting on ${proposal.ownerLabel} — or you can withdraw the offer.`
+            : `Waiting on ${proposal.ownerLabel}.`}
       </p>
 
       {/* ==================================================================
@@ -664,34 +682,47 @@ export function PrivateTradePrompt({
 
       <div style={styles.promptActions}>
         {/* 6.5-B (K-09): REJECT IS AN ANSWER TOO, and the answer is the owner's alone
-            (`answerPrivatePurchaseRefusal`). It was live on every seat -- the buying president, who has no
-            Rescind yet (K-05), and every third player -- and the authority refused each of those clicks. Gated on
+            (`answerPrivatePurchaseRefusal`). It was live on every seat -- the buying president, who withdraws
+            with Rescind instead (W1-D), and every third player -- and the authority refused each of those clicks. Gated on
             the same fact Accept already was. */}
+        {/* Phase 3 W1-D (K-05): THE PROPOSER'S WITHDRAWAL, on the proposer's screen only. Sent on turn -- the buyer's
+            president is the seat the Operating Round is waiting on -- and latched like the answers. */}
+        {canRescind && (
+          <button
+            type="button"
+            data-testid="private-offer-rescind"
+            onClick={onRescind}
+            disabled={actionInFlight}
+            style={{ ...styles.promptButton, ...(actionInFlight ? styles.buttonDisabled : {}) }}
+            title={actionInFlight ? CONSENT_IN_FLIGHT_TITLE : "Withdraw your offer."}
+          >
+            Rescind
+          </button>
+        )}
         <button
           type="button"
           onClick={onReject}
-          disabled={!viewerIsOwner}
+          disabled={!canAnswer}
           style={{
             ...styles.promptButton,
-            ...(viewerIsOwner ? styles.promptReject : styles.buttonDisabled),
+            ...(canAnswer ? styles.promptReject : styles.buttonDisabled),
           }}
-          title={viewerIsOwner ? undefined : `Only ${proposal.ownerLabel} can answer this offer.`}
+          title={answerTitle(undefined, `Only ${proposal.ownerLabel} can answer this offer.`)}
         >
           Reject
         </button>
         <button
           type="button"
           onClick={onAccept}
-          disabled={!viewerIsOwner}
+          disabled={!canAnswer}
           style={{
             ...styles.promptButton,
-            ...(viewerIsOwner ? styles.promptAccept : styles.buttonDisabled),
+            ...(canAnswer ? styles.promptAccept : styles.buttonDisabled),
           }}
-          title={
-            viewerIsOwner
-              ? `Sell ${proposal.privateName} to ${proposal.buyerTicker} for $${proposal.price}.`
-              : `Only ${proposal.ownerLabel} can accept this offer.`
-          }
+          title={answerTitle(
+            `Sell ${proposal.privateName} to ${proposal.buyerTicker} for $${proposal.price}.`,
+            `Only ${proposal.ownerLabel} can accept this offer.`,
+          )}
         >
           Accept
         </button>

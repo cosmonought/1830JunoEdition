@@ -2212,7 +2212,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Cross-slice (W3-I x #1173 latch x W2-G). Remedy: one derived busy reason, e.g. `actionInFlight = pendingAppendIndex !== null || linkQueue.unsettled > 0`, read by every control including the emergency modal; also resolves the two disagreeing busy lines (AUD-25.10).",
-   "status": "IMPLEMENTED — W3-B `26f5982` + review fix `5fd3a7b` on `phase3/w3-b-action-latch-linkqueue` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`): the shell's latch is bounded by the room link (`utils/actionLatch.ts` `useActionLatch`): `actionInFlight` is busy while a press is latched OR the active link still holds a submission of this tab's (W3-I's `linkQueueView(...).blocked`; no new queue model), and the 6 s backstop does not run while the link holds -- the drain (landed), the submit half's `null` (refused / dropped) and only then the clock release it. Every control the row names already read `actionInFlight` (OR / SR bar and Pass, the Stocks tab's Buy / Sell, the five consent prompts, the W2-G emergency modal), so no mount changed; no RED region edited; reducer, server, protocol, settlement and rules version unchanged. Copy unchanged: the disagreeing busy lines stay AUD-25.10 (W3-J). Recorded residual (LOW): another seat's entry passing the press's index mid-hold leaves only the link holding, so the controls re-arm for the drain's few milliseconds after the press's own `applied` answer. Not integrated"
+   "status": "IMPLEMENTED — INTEGRATED — W3-B `26f5982` + review fix `5fd3a7b` on `phase3/w3-b-action-latch-linkqueue` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`): the shell's latch is bounded by the room link (`utils/actionLatch.ts` `useActionLatch`): `actionInFlight` is busy while a press is latched OR the active link still holds a submission of this tab's (W3-I's `linkQueueView(...).blocked`; no new queue model), and the 6 s backstop does not run while the link holds -- the drain (landed), the submit half's `null` (refused / dropped) and only then the clock release it. Every control the row names already read `actionInFlight` (OR / SR bar and Pass, the Stocks tab's Buy / Sell, the five consent prompts, the W2-G emergency modal), so no mount changed; no RED region edited; reducer, server, protocol, settlement and rules version unchanged. Copy unchanged: the disagreeing busy lines stay AUD-25.10 (W3-J). Recorded residual (LOW): another seat's entry passing the press's index mid-hold leaves only the link holding, so the controls re-arm for the drain's few milliseconds after the press's own `applied` answer. INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration` (2026-10-04, merge `00b2b3c` of `phase3/w3-b-action-latch-linkqueue` @ `7efda71`, parents `d29bb2f` / `7efda71`, its 3 commits carried unchanged). ACCEPTED LOW (future owned residue, RED R5; not fixed, not PASS): if another seat's move lands while this tab's press remains held, the controls may briefly re-arm once this tab's own move lands -- closing it requires RED R5 work. AUD-25.10 copy handed to W3-J (unchanged)"
   },
   {
    "key": "AUD-25.02",
@@ -4959,7 +4959,7 @@
   "W2-L": "COMPLETE — `phase3/w2-postgame-statistics` `e16aa5a` (derived history only); integrated at the safe Wave-2 integration (`615e183`). AUD-12.07 stays owner-gated (\"traded\" kept); S10-21's non-UR remainder stays open",
   "W2-M": "NOT STARTED",
   "W3-A": "NOT STARTED",
-  "W3-B": "PARTIAL — AUD-25.01 (U-46, MEDIUM) IMPLEMENTED on the slice branch `phase3/w3-b-action-latch-linkqueue`: implementation `26f5982` + review fix `5fd3a7b` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated (integration and owner broad gate pending). Independent review APPROVE WITH NITS (no HIGH / MEDIUM). No RED region edited (OD-12 not used). AUD-14.06 and P3-N021 NOT STARTED (the latch residue for BuyLicenseModal, PrivatePowerFlowModal, the token confirm and route edits waits on W3-H; P3-N021's R1 `press:true` latch on OD-12) -- on the server path an `automatic` press now greys the controls while the link holds it, which narrows P3-N021's window but does not implement it. W3-G remains COMPLETE — OWNER REVIEW ACCEPTED",
+  "W3-B": "PARTIAL — INTEGRATED THROUGH AUD-25.01: AUD-25.01 (U-46, MEDIUM) IMPLEMENTED on the slice branch `phase3/w3-b-action-latch-linkqueue` (implementation `26f5982` + review fix `5fd3a7b` + tracking `7efda71`, from `d29bb2f`) and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration` (2026-10-04, merge `00b2b3c` of `phase3/w3-b-action-latch-linkqueue` @ `7efda71`, parents `d29bb2f` / `7efda71`, its 3 commits carried unchanged). Slice review APPROVE WITH NITS, integration review APPROVE (no HIGH / MEDIUM). No RED region edited (OD-12 not used); R1 / R5 byte-identical. ACCEPTED LOW (future owned residue, RED R5; not fixed, not PASS): if another seat's move lands while this tab's press remains held, the controls may briefly re-arm once this tab's own move lands -- closing it requires RED R5 work. OPEN (W3-B NOT COMPLETE): AUD-14.06 and P3-N021 NOT STARTED (the latch residue for BuyLicenseModal, PrivatePowerFlowModal, the token confirm and route edits waits on W3-H; P3-N021's R1 `press:true` latch on OD-12) -- on the server path an `automatic` press now greys the controls while the link holds it, which narrows P3-N021's window but does not implement it. W3-G remains COMPLETE — OWNER REVIEW ACCEPTED",
   "W3-C": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` (2026-10-04, merge `b32ef6e` of `phase3/w3-c-refusal-display` @ `3454daa`, parents `18d4762` / `3454daa`, its 7 commits carried unchanged). slice branch `phase3/w3-c-refusal-display` support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662` (from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762`). AUD-14.01, P3-N004, P3-N020 IMPLEMENTED. OD-12 followed: two RED commits, each its own and independently reviewed -- R1 (two lines: the landed-submission clear and the room branch's answer) and R5 (the server-link callbacks, the drain's catching-up clear and its divergence write; the latter two sit in R5 outside the plan's line range and are named by AUD-14.01's own source). Dependencies W2-J and W1-H integrated in the base. Recorded follow-ups (LOW): the client's own pre-send gates (turn, catching-up, link-down) answer `undefined` and roll nothing back (needs further R1 lines); a resync can settle a landed move null and roll back its shell state (the board stays authoritative); an `error` frame answering a submission is shown as a `transport` connection notice and is not retired by a landed move (unchanged from before); the App wiring of the rollbacks is source-pinned. Presentation only: no engine, server, rules-version or settlement change",
   "W3-D": "NOT STARTED",
   "W3-E": "COMPLETE — `phase3/w3-manual-city-bypass` `07454d0` + review follow-ups `6d7cfa1`; integrated at the safe Wave-2 integration (`a860178`) under OD-11",
@@ -5518,7 +5518,7 @@
  "wave3_i_w2i_w2j_w3c_w3g_v13cert_integration": {
   "branch": "phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration",
   "base": "c0a44d7374de71b3fd1a093b6c0f82c69f2e08fa (phase3/wave3-i-w2i-w2j-w3c-v13cert-integration)",
-  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C integrated, plus the accepted W3-G audit (docs/tracking only); no broad Phase-3 owner gate has been run; not merged to main",
+  "status": "SUPERSEDED AS BASELINE by `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration` (2026-10-04, the accepted W3-B AUD-25.01 added) at `d29bb2f9485fe8127d9f6d9595313d1c6de99c4f`; otherwise as recorded: PROVISIONAL — was the Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C integrated, plus the accepted W3-G audit (docs/tracking only); no broad Phase-3 owner gate has been run; not merged to main",
   "inputs": {
    "W3-G": {
     "branch": "phase3/w3-g-ui-parity-audit",
@@ -5555,5 +5555,50 @@
    "keys": "unchanged from 7916763 / 18d4762 (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
   },
   "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C COMPLETE and INTEGRATED; the W3-G audit gate ACCEPTED and INTEGRATED; no accepted slice awaits integration; W3-J is unblocked from this baseline; not deployable until drained v12 rooms and the final integrated owner gate"
+ },
+ "wave3_i_w2i_w2j_w3c_w3g_w3b_v13cert_integration": {
+  "branch": "phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration",
+  "base": "d29bb2f9485fe8127d9f6d9595313d1c6de99c4f (phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration)",
+  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J, W3-C and the accepted W3-G audit integrated, plus W3-B through AUD-25.01 (W3-B PARTIAL); no broad Phase-3 owner gate has been run; not merged to main",
+  "inputs": {
+   "W3-B (AUD-25.01)": {
+    "branch": "phase3/w3-b-action-latch-linkqueue",
+    "head": "7efda710552ebffa6efa5abd220d140144c23407",
+    "implementation_commit": "26f5982",
+    "review_fix_commit": "5fd3a7b",
+    "tracking_commit": "7efda71",
+    "parent": "d29bb2f",
+    "merge": "00b2b3c37e0c1a38ef55c72c47102d5432b81e60"
+   }
+  },
+  "method": "git merge --no-ff (first parent d29bb2f, second parent 7efda71); 26f5982, 5fd3a7b and 7efda71 carried unchanged (same SHAs); no squash, no rebase, no source branch moved; main unmoved (e1f1280)",
+  "reconciliation": [
+   "No conflict: W3-B was 3 ahead / 0 behind d29bb2f; the merge tree equals the slice tree. It touches App.tsx (the latch declaration block only, above runGameplayAction), utils/actionLatch.ts (new), two tests and the tracking docs; no server/, gameEngine/, contracts/, serverLink.ts, useLinkQueue.ts, rulesVersion.ts, settlement or fixture file differs from d29bb2f.",
+   "Behaviour audit: actionInFlight = a latched press OR the active link holds a submission of this tab's (W3-I's linkQueueView(...).blocked; no new queue model, no legality mirror); the 6 s backstop does not run while the link holds. Every AUD-25.01 surface reads actionInFlight (OR / SR bar and Pass, the Stocks tab's Buy / Sell, the five consent prompts, the W2-G emergency modal); the par prompt and the offer forms keep W3-I's behaviour. The second-sale test fails when the link guard is removed.",
+   "RED untouched: App.tsx from `const runGameplayAction = useCallback(` to EOF is byte-identical to d29bb2f (sha256 5b6ed2a1...), so R1 submit and R5 drain are unchanged.",
+   "Focused coverage: 36 suites, 1153 passed / 1 skipped (W3-B, W3-I, Stock Round, OR bar, consent, W2-G emergency, par / offers, W3-C, shell wiring, v13 pins, v13 settlement certification); typecheck and production build green, ESLint warnings identical to d29bb2f; accounting PASS; `git diff --check` clean.",
+   "Integration review (independent): APPROVE -- no HIGH / MEDIUM / integration-introduced finding; no review-fix commit."
+  ],
+  "follow_ups": [
+   "ACCEPTED LOW (future owned residue, RED R5; not fixed, not PASS): if another seat's move lands while this tab's press remains held, the controls may briefly re-arm once this tab's own move lands -- closing it requires RED R5 work.",
+   "AUD-25.10 (W3-J, copy unchanged here): the Stocks tab, the consent prompts and the emergency modal say \"Sending your last action — one moment.\" for a whole outage while the offer forms say \"Queued — will send on reconnect.\"",
+   "W3-B stays PARTIAL: AUD-14.06 (waits on W3-H) and P3-N021 (OD-12 RED R1 `press:true` latch) open.",
+   "Other open obligations unchanged: AUD-25.02 (MEDIUM) -> W3-J; AUD-25.03 … 25.10, 25.12 and AUD-25.13's FIX IN W3-J items -> W3-J; AUD-25.14 -> W3-F.",
+   "Pre-existing meta-test failures (sourceGuards 1, boardInEffect 1, liveHygiene 2) identical on d29bb2f and the merge."
+  ],
+  "versions": {
+   "RULES_ENGINE_VERSION": 13,
+   "SUPPORTED_RULES_ENGINE_VERSIONS": [
+    13
+   ],
+   "SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS": [
+    10,
+    11,
+    12,
+    13
+   ],
+   "keys": "unchanged from 7916763 / 18d4762 (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
+  },
+  "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F, W3-I, W2-I, W2-J and W3-C COMPLETE and INTEGRATED; the W3-G audit gate ACCEPTED and INTEGRATED; W3-B PARTIAL, INTEGRATED THROUGH AUD-25.01; no accepted slice awaits integration; not deployable until drained v12 rooms and the final integrated owner gate"
  }
 }

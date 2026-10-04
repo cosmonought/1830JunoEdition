@@ -587,7 +587,8 @@ slice tracking), then this tracking commit.
 
 ## W3-G integration status (2026-10-04)
 
-**Branch** `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7` — **the current provisional
+**Branch** `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` from `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` @ `c0a44d7` — *(superseded as baseline at `d29bb2f` by
+`phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration`, below)* **the provisional
 Phase-3 integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** The accepted W3-G audit
 (`phase3/w3-g-ui-parity-audit` @ `967e4e7`: audit `e86a933` + owner review `967e4e7`) merged `--no-ff` (merge `72ccd00`, parents `c0a44d7`,
 `967e4e7`), both commits carried unchanged, then this tracking commit.
@@ -603,6 +604,8 @@ Phase-3 integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been 
 - **Pre-existing meta-test failures** (`sourceGuards` 1, `boardInEffect` 1, `liveHygiene` 2) unchanged.
 
 ## W3-B slice status (2026-10-04) — AUD-25.01 only
+
+*(Since 2026-10-04 INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration`, merge `00b2b3c`; see "W3-B AUD-25.01 integration status" below.)*
 
 **Branch** `phase3/w3-b-action-latch-linkqueue` @ `5fd3a7b` from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f` (the current provisional baseline, unchanged). **AUD-25.01 IMPLEMENTED on the slice branch; NOT
 integrated** (integration and owner broad gate pending). W3-B is PARTIAL: AUD-14.06 and P3-N021 are NOT STARTED. No RED region edited
@@ -633,6 +636,33 @@ integrated** (integration and owner broad gate pending). W3-B is PARTIAL: AUD-14
   one moment." for a whole outage while the offer forms say "Queued — will send on reconnect."
 - **Not taken:** AUD-14.06, P3-N021 (an `automatic` press now greys the controls while the link holds it on the server path, which narrows
   but does not implement P3-N021), W3-J, W3-F. Rules version, settlement, server, protocol and RoomEngine unchanged.
+
+## W3-B AUD-25.01 integration status (2026-10-04)
+
+**Branch** `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration` from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f` — **the current provisional
+Phase-3 integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** The accepted W3-B slice
+(`phase3/w3-b-action-latch-linkqueue` @ `7efda710552ebffa6efa5abd220d140144c23407`) merged `--no-ff` (merge `00b2b3c37e0c1a38ef55c72c47102d5432b81e60`, parents `d29bb2f`,
+`7efda71`), its three commits carried unchanged (`26f5982` implementation, `5fd3a7b` review fix, `7efda71` slice tracking), then this tracking commit.
+`main` did not move.
+
+- **No conflict; merge tree = slice tree.** W3-B was 3 ahead / 0 behind `d29bb2f`. Product change: `App.tsx` (the latch declaration block,
+  above `runGameplayAction`) and `utils/actionLatch.ts`; no `server/`, `gameEngine/`, `contracts/`, `serverLink.ts`, `useLinkQueue.ts`,
+  `rulesVersion.ts`, settlement or fixture file differs. RED untouched: `App.tsx` from `runGameplayAction` to EOF is byte-identical to `d29bb2f`.
+- **Behaviour audit:** the local latch covers the immediate press window; W3-I's `LinkQueueState` is authoritative while this tab's submission
+  is held (busy = latched press OR the link holds one; the 6 s backstop does not run while it holds). The OR bar, the Stock Round Buy / Sell /
+  Pass, the consent prompts and the W2-G emergency modal stay unavailable through a held submission and re-arm after the link's resolution
+  plus ordinary authority; the par prompt and offer forms keep W3-I's behaviour; the duplicate Stock Round sale cannot return (the test
+  fails without the link guard). No new queue model; no legality mirror; no copy change; no W3-H or W3-J work.
+- **AUD-25.01 IMPLEMENTED — INTEGRATED; U-46 RESOLVED. W3-B stays PARTIAL** (integrated through AUD-25.01): AUD-14.06 (waits on W3-H) and P3-N021
+  (OD-12 RED R1 `press:true` latch) remain open.
+- **Accepted LOW — future owned residue (RED R5), not fixed, not PASS:** if another seat's move lands while this tab's press remains held, the
+  controls may briefly re-arm once this tab's own move lands; closing it requires RED R5 work.
+- **Handed to W3-J (AUD-25.10, unchanged copy):** some surfaces say "Sending your last action — one moment." during an outage while the offer
+  forms say "Queued — will send on reconnect."
+- **Validation:** 36 focused suites, 1153 passed / 1 skipped; typecheck and production build green (ESLint warnings identical to `d29bb2f`);
+  accounting PASS; `git diff --check` clean. Independent integration review: APPROVE (no integration-introduced finding; no review-fix commit).
+- **Versions:** `RULES_ENGINE_VERSION` 13; supported live `[13]`; settlement-certified `[10, 11, 12, 13]`; keys and fixtures unchanged.
+- **Pre-existing meta-test failures** (`sourceGuards` 1, `boardInEffect` 1, `liveHygiene` 2) identical on `d29bb2f` and the merge — PRE-EXISTING / NON-BLOCKING.
 
 ## Scope and closing remark
 
@@ -918,7 +948,7 @@ Filed by the W3-G audit at `c0a44d7` (then the current provisional baseline; sin
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |
 |---|---|---|---|---|---|---|---|
-| **AUD-25.01** · U-46 · W3-G (U-28)<br>The shell's action latch releases after 6 s while the room link still holds the submission; only the par prompt and the three offer forms read the link queue, so the OR bar, the Stock Round buy/sell/pass, the consent prompts and the W2-G emergency modal re-arm and a second press can queue a duplicate (a second sale can legally land). | [UX] W3-G finding · MEDIUM | CONFIRMED — `App.tsx`:900 `ACTION_LATCH_BACKSTOP_MS`, 4426 `actionInFlight = pendingAppendIndex !== null`, 4436-4440 backstop; `await link.submit` does not settle while the link is down; W3-I wired `linkQueue` only into `AuctionPromptModal` and the offer forms; `EmergencyTrainPurchaseModal.tsx`:196-229 own 4 s latch. | W3-B | **B** | — | — | Cross-slice (W3-I x #1173 latch x W2-G). Remedy: one derived busy reason, e.g. `actionInFlight = pendingAppendIndex !== null \|\| linkQueue.unsettled > 0`, read by every control including the emergency modal; also resolves the two disagreeing busy lines (AUD-25.10). **Owner review 2026-10-04: OPEN — W3-B remediation obligation (MEDIUM).** **W3-B 2026-10-04: IMPLEMENTED on `phase3/w3-b-action-latch-linkqueue` (`26f5982` + review fix `5fd3a7b`); NOT integrated** (see "W3-B slice status"). |
+| **AUD-25.01** · U-46 · W3-G (U-28)<br>The shell's action latch releases after 6 s while the room link still holds the submission; only the par prompt and the three offer forms read the link queue, so the OR bar, the Stock Round buy/sell/pass, the consent prompts and the W2-G emergency modal re-arm and a second press can queue a duplicate (a second sale can legally land). | [UX] W3-G finding · MEDIUM | CONFIRMED — `App.tsx`:900 `ACTION_LATCH_BACKSTOP_MS`, 4426 `actionInFlight = pendingAppendIndex !== null`, 4436-4440 backstop; `await link.submit` does not settle while the link is down; W3-I wired `linkQueue` only into `AuctionPromptModal` and the offer forms; `EmergencyTrainPurchaseModal.tsx`:196-229 own 4 s latch. | W3-B | **B** | — | — | Cross-slice (W3-I x #1173 latch x W2-G). Remedy: one derived busy reason, e.g. `actionInFlight = pendingAppendIndex !== null \|\| linkQueue.unsettled > 0`, read by every control including the emergency modal; also resolves the two disagreeing busy lines (AUD-25.10). **Owner review 2026-10-04: OPEN — W3-B remediation obligation (MEDIUM).** **W3-B 2026-10-04: IMPLEMENTED on `phase3/w3-b-action-latch-linkqueue` (`26f5982` + review fix `5fd3a7b`); INTEGRATED** on `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration` (merge `00b2b3c`; see "W3-B AUD-25.01 integration status"); the RED-R5 LOW stays an accepted residue. |
 | **AUD-25.02** · U-47 · W3-G (U-28)<br>The Rules Reference says "The CSL and DH exception hexes are not reserved: any corporation may tile them"; the authority bars the C&SL's B20 while a player owns it (only the D&H's F16 is excepted, #1694a). | [UX] W3-G finding · MEDIUM | CONFIRMED — `RulesReference.tsx`:1847 (and the Track watch line at :2214 that reuses it) vs `privateReservations.ts`:82-83 and `layTileAuthority.ts` `privateHexRefusal`; the correct sentence is already at `RulesReference.tsx`:453. | W3-J | **B** | — | — | S6-7 parity: the board path is correct (glow, click refusal, hex markers); only the copy contradicts it. Copy-only fix. **Owner review 2026-10-04: OPEN — W3-J remediation obligation (MEDIUM); not implemented.** |
 | **AUD-25.03** · U-48 · W3-G (U-28)<br>A refusal is not retired when a later AUTOMATIC-flagged player decision lands (B&O par, home station, M&H exchange, Undo): `submission-landed` fires only for `automatic !== true`, so the P3-N004 symptom survives on those paths. | [UX] W3-G finding · LOW | CONFIRMED — `App.tsx`:6692 (RED R1) gate `options?.automatic !== true`; the par (9809), `PlaceHomeStation` (9769), `ExchangePrivate` (6115) and `RevertTo` (9347) are sent `automatic: true`. | W3-J | **B** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | One-line RED R1 change (gate on `derived !== true`), its own reviewed commit. |
 | **AUD-25.04** · U-49 · W3-G (U-28)<br>The free station placement (home / D&H) neither awaits nor rolls back: a refused D&H station leaves `dh-token` in the shell's fallback set (the power reads used), and the President's home-station prompt re-pops for the whole round trip (and any outage), inviting a second `PlaceHomeStation`. | [UX] W3-G finding · LOW | CONFIRMED by reading — `commitFreeStationPlacement` (`App.tsx`:9747-9790); `HomeStationPrompt` mount `pending={homeStationPlacement ? null : pendingHomeToken}` (`App.tsx`:14001); the path is `automatic`, so it never arms the latch. | W3-J | **B** | — | — | Extends P3-N020's rollbacks (W3-C covered lay and run only); the latch half is W3-B's P3-N021. |

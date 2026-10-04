@@ -749,6 +749,13 @@ import {
   ownsPrivateByCorporation,
   stockRoundExchangeOffers,
 } from "./utils/activePrivatePower";
+// Phase 3 W2-E (OD-3): every reader of `pending_mh_exchange` -- the chip, the table marker, the log, the toast.
+import {
+  mhQueuedAcknowledgement,
+  mhSettlementSentence,
+  pendingMhExchangeView,
+  withPendingMhExchangeChip,
+} from "./utils/mhQueuedExchange";
 import { playerFinances } from "./utils/playerFinance";
 import { CA_BONUS_TICKER, CA_PRIVATE_ID, MH_PRIVATE_ID } from "./gameEngine/privateExchange";
 import { effectiveActions, undoReachFor } from "./gameEngine/logRevert";
@@ -3464,6 +3471,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      -- "M&H and C&A are share exchanges" -- and that its list "can never hold more than two entries". Growing
      it here would falsify a note that is load-bearing for `privatePowerHexKeys`, which feeds the board's glow
      and must never be handed a power with no hex. Two lists, joined only where the bar takes a generic chip. */
+  /* Phase 3 W2-E (OD-3): the standing M&H request, read from `pending_mh_exchange` for the table marker. The chip
+     (below) asks the same pure function of the same board, so the two cannot describe the request differently. */
+  const pendingMhExchange = useMemo(
+    () =>
+      pendingMhExchangeView(gameState, (address) => sandboxPlayerLabel(address) ?? truncateAddress(address)),
+    [gameState],
+  );
+  const pendingMhExchangeNote = useCallback(
+    (privateId: number) =>
+      pendingMhExchange !== null && pendingMhExchange.privateId === privateId
+        ? { label: pendingMhExchange.marker, title: pendingMhExchange.sentence }
+        : null,
+    [pendingMhExchange],
+  );
   const stockRoundPowerOffers = useMemo(
     /* Design note #887: `stockRoundExchangeOffers` in `activePrivatePower.ts`. The three rules this memo
        used to state inline -- #883's sandbox gate, the Stock Round test, and #441's PLAYER-scope ownership --
@@ -3480,7 +3501,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       /* 6.5-B (K-01): the M&H's exchange is not turn-gated, so while a player <-> player trade offer holds the
          table the hold is the one thing that refuses it -- the chip is greyed with that sentence instead. */
       const hold = privateTradeHoldReason(gameState, (address) => sandboxPlayerLabel(address) ?? truncateAddress(address));
-      return hold === null ? offers : offers.map((offer) => ({ ...offer, blockedReason: hold }));
+      const held = hold === null ? offers : offers.map((offer) => ({ ...offer, blockedReason: hold }));
+      /* Phase 3 W2-E (OD-3): while `pending_mh_exchange` stands the chip says so -- relabelled as pending and
+         greyed with the request's own sentence, which is also why a second request would be refused. The same
+         pure view the table marker reads, asked of the same board (so `gameState` is its whole dependency). */
+      return withPendingMhExchangeChip(
+        held,
+        pendingMhExchangeView(gameState, (address) => sandboxPlayerLabel(address) ?? truncateAddress(address)),
+      );
     },
     [gameState, viewerAddress, sandbox],
   );
@@ -7793,6 +7821,27 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               sandboxMarketRef.current = marked;
               setSandboxMarket(marked);
             }
+          }
+
+          /* ==================================================================
+              PHASE 3 W2-E (K-17, owner ruling OD-3): THE QUEUED M&H EXCHANGE, SETTLED OR ACKNOWLEDGED
+             ==================================================================
+             `pending_mh_exchange` is the authority. A request the reducer QUEUED is settled -- executed or
+             retired -- inside whichever later action reaches the between-turns boundary, so it has no message of
+             its own to narrate: the two boards either side of THAT action are the only witness, read here the way
+             `describeFloat` reads a float. EXECUTED only when the certificate moved and the M&H closed; otherwise
+             OD-3's generic "expired" line, never a guessed reason. Every client runs this, rebuilds included, so
+             the log reads the same everywhere. The requester's acknowledgement is a toast, theirs alone, and
+             `showActionToast` stays silent during a rebuild (#825). */
+          if (before) {
+            const mhSettled = mhSettlementSentence(
+              before,
+              after,
+              (address) => sandboxPlayerLabel(address) ?? truncateAddress(address),
+            );
+            if (mhSettled) logInfo("Private Power", mhSettled);
+            const mhQueued = mhQueuedAcknowledgement(before, after, viewerAddressRef.current);
+            if (mhQueued) showActionToast(mhQueued);
           }
 
           if (before) {
@@ -13430,6 +13479,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           }
           // Design note #1035: amber at two buys from closure, red at one.
           privateClosureAlert={closureAlert}
+          // Phase 3 W2-E (OD-3): the queued M&H exchange, marked on the table while it stands.
+          privatePendingNote={pendingMhExchangeNote}
         />
       </section>
     ) : null;
@@ -14874,6 +14925,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     privateDescription={(privateId) =>
                       PRIVATE_COMPANY_CATALOG[privateId]?.ability ?? null
                     }
+                    // Phase 3 W2-E (OD-3): the same pending marker the Stock Round cards carry.
+                    privatePendingNote={pendingMhExchangeNote}
                   />
                 )}
               </>

@@ -1457,7 +1457,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      re-run the memo that reads it every time it grew. */
   /* Design note #899: the standings and the trigger the closure handler needs, mirrored during render. The
      handler runs inside a dispatch and cannot read a `useMemo` from a later line; a ref written during render
-     is the same arrangement `gameStateRef` uses two hundred lines up, for the same reason. */
+     is the same arrangement `gameStateRef` uses two hundred lines up, for the same reason.
+     W1-N / OD-12: their one reader, the RED R2 payout call, is deleted; both are write-only until a later cleanup. */
   const finalStandingsRef = useRef<PlayerStanding[]>([]);
   const closeRoomTriggerRef = useRef<"manual" | "timer">("manual");
 
@@ -2188,7 +2189,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   const closeRoom = useCallback((trigger: "manual" | "timer") => {
     /* The trigger is stamped on a ref rather than carried in the message, and deliberately: it describes
-       which CLIENT dispatched, which is local colour for the payout log line. Putting it in the payload
+       which CLIENT dispatched, which was local colour for the payout log line (W1-N / OD-12: that reader, the
+       RED R2 payout call, is deleted, so the ref is write-only until a later cleanup). Putting it in the payload
        would make it part of the shared log, where four clients would write four different answers to a
        question about one closure.
        THROUGH THE REF, like `handleProceedToStockRound`: `runGameplayAction` is declared two thousand lines

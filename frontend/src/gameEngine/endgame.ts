@@ -333,10 +333,10 @@ export interface PlayerStanding {
  *  column, the field and the arithmetic are gone; `rankPlayers` computes standings and nothing that looks like
  *  money.
  *
- *  THE CONSTANT STAYS EXPORTED ONLY AS AN INERT ARGUMENT, passed in three places that all ignore it: to
- *  `settleRoomPayout` inside `runGameplayAction`'s apply half (a RED region, OD-12 -- now a no-op that reads none of
- *  it), to `rankPlayers` (`totalAnte`, ignored below), and as `GameOverModal`'s retired `totalAnte` prop. Delete all
- *  three, with the constant, once OD-12 permits the RED call site to go. */
+ *  THE CONSTANT STAYS EXPORTED ONLY AS AN INERT ARGUMENT, passed in two places that both ignore it: to
+ *  `rankPlayers` (`totalAnte`, ignored below) and as `GameOverModal`'s retired `totalAnte` prop. The third, the
+ *  `settleRoomPayout` call inside `runGameplayAction`'s apply half (RED R2), was deleted under OD-12. Delete the
+ *  remaining two, with the constant and `closeRoomPayout.ts`'s retired payout hook, in a later cleanup. */
 export const PLACEHOLDER_TOTAL_ANTE = 100;
 
 export function rankPlayers(args: {

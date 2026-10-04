@@ -18,13 +18,13 @@
  * timer, a replay) are moot for a function that does nothing; the reducer's `room_closed` latch still makes every
  * `CloseRoom` after the first a no-op, and the escrow's own idempotency is the chain's business.
  *
- * WHY IT STILL EXISTS: its one caller sits inside `runGameplayAction`'s apply half (App.tsx, RED region R2). That
- * call site may be deleted only under owner decision OD-12; until then the signature stays so it compiles, and
- * the call does nothing. Delete this function, `RoomPayoutRequest` and `PLACEHOLDER_TOTAL_ANTE` with it. */
+ * IT HAS NO CALLER. Its one caller sat inside `runGameplayAction`'s apply half (App.tsx, RED region R2) and was
+ * deleted under owner decision OD-12 (Phase 3 Wave-1 integration, its own commit). The function, its request shape
+ * and `PLACEHOLDER_TOTAL_ANTE` stay only until a later cleanup removes them together; nothing in the app reads them. */
 
 import type { PlayerStanding } from "../gameEngine/endgame";
 
-/** The shape the remaining (RED R2) caller passes. Nothing in it is read. */
+/** The shape the retired (RED R2) caller passed. Nothing in it is read. */
 export interface RoomPayoutRequest {
   roomCode: string | null;
   standings: readonly PlayerStanding[];

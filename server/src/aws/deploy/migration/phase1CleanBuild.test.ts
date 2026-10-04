@@ -350,7 +350,8 @@ describe("P1-R3: the teardown runs in the order the guards force, forward only, 
     assert.match(t7, />= 24 whole\s+hours, all zero/);
     /* The post-T3 routing (the gateway endpoints gone from the shared route tables) is always observed for >= 24 h. */
     assert.match(t7, /\*\*The capture runs no earlier than 24 whole hours after T3's recorded apply time, whatever T_anchor is\.\*\*/);
-    assert.match(t7, /1\. At or after T3 \+ 24 whole hours:\s+`infra\\aws\\scripts\\capture-nat-evidence\.ps1/);
+    assert.match(t7, /1\. At or after ceil_hour\(T3\) \+ 24 h[^\n]*\n[^\n]*\n\s+`infra\\aws\\scripts\\capture-nat-evidence\.ps1/);
+    assert.match(t7, /check that `capture\.json`'s `metrics_end` ≥ T3's apply time\s+\(`t3-applied-at\.txt`\) rounded UP to the hour, plus 24 h/);
     assert.match(t7, /\*\*T_anchor = T_drain\*\* when T0\.10 proved it, otherwise T3's recorded apply time/);
     assert.match(t7, /COST-2B NAT DELETION EVIDENCE: PASS/);
     assert.match(t7, /\*\*A FAIL keeps the NAT\.\*\*/);
@@ -405,6 +406,14 @@ describe("P1-R5: the direct final-system certification", () => {
     assert.match(rows.find((l) => l.startsWith("| E2 |")) ?? "", /no KMS key, contract, document, frontend or stack change/);
     for (const go of ["CreateGame", "Join", "Start", "final move", "consent"]) assert.ok(e2.includes(`\`GO P1-R5 E2 ${go}\``), go);
     assert.match(e2, /never batched with the drills/);
+  });
+
+  test("R5 may proceed during T7's wait only with the pending NAT marked PROVISIONAL; the closure record Z never carries one", () => {
+    assert.match(PLAN, /A1 then names that NAT with `--allow-nat <nat-\.\.\.>`, marked \*\*PROVISIONAL\*\* in the record/);
+    const z = rows.find((l) => l.startsWith("| Z |")) ?? "";
+    assert.match(z, /after E2, every drill and T7/);
+    assert.match(z, /never a provisional one/);
+    assert.match(PLAN, /R5's Z record is `VERIFIED` \(no provisional `--allow-nat`\), and T9 is\s+recorded in full/);
   });
 
   test("the acceptance rule's availability-only checks are the drills' own check names; everything safety-relevant must PASS", () => {

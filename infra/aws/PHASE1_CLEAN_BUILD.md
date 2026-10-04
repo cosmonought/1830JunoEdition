@@ -79,8 +79,9 @@ before anything else.**
   "F0–F9 PASS before step 14" rule;
 - **migration authority hand-off, migration-specific graceful cutover, old / new pool choreography;**
 - **the quiet period as a sequence gate.** The NAT's ≥ 24 whole quiet hours after the teardown are kept, because they
-  are evidence about OTHER users of a NAT this repository never created, not migration continuity. They now run in
-  parallel with R4 / R5 and delay only R6 item 4. The window may start earlier, at this workload's last NAT use (T7);
+  are evidence about OTHER users of a NAT this repository never created, not migration continuity. R4 / R5 proceed
+  meanwhile (A1 names the pending NAT PROVISIONAL); the wait delays only Z and R6. The window may start earlier, at this
+  workload's last NAT use (T7);
 - **step 25 (Cost Explorer 5–7 days) as a gate.** It is trailing confirmation and never blocks Phase 2.
 
 **Kept as operational tooling, not as Phase-1 gates:** `host-cert graceful-stop` (F7), `host-cert replacement-before /
@@ -222,7 +223,9 @@ After it: 12b on the new host, deploy, and the R5 suite in full, plus `host-cert
 ## 7. P1-R5 — Direct final-system certification
 
 **Preconditions:**
-- R3 complete (T9 recorded);
+- R3 complete except T7, which may still be in its ≥ 24 h wait, and T9 recorded except its NAT row.
+  - A1 then names that NAT with `--allow-nat <nat-...>`, marked **PROVISIONAL** in the record.
+  - Z, the closure record, is taken only after T7 and T9's NAT row, and never with a provisional `--allow-nat`;
 - R4 complete;
 - every drill and probe run from the reviewed checkout, with a NEW run id per run;
 - the evidence under `<D>\r5\`.
@@ -231,7 +234,7 @@ After it: 12b on the new host, deploy, and the R5 suite in full, plus `host-cert
 
 | # | Property | How (existing tooling) | PASS |
 |---|---|---|---|
-| A1 | Topology: exactly one application host; no retired ECS workload; no workload ALB; no workload NAT / endpoints unless REVIEW-placed as another workload's; the correct EIP / ENI; the correct CloudFront origin; the five host alarms | `capture-host-evidence` (BOOT; `--terraform-dir infra/aws/stacks/single-host` only if BOOT can read the state, else omitted = an explicit SKIP) + `--host-status-only` (HOST-DEPLOY) + `gamesDoctor aws host-snapshot` (OPER), then `awsDeploy verify --topology single-host --runtime-parameter <p1 ARN> --environment staging --primary-pool p1 --pools p1 --generation 1 --evidence <D>\r5\a --instance-id i-01fe56536bf591382 --origin-hostname <origin_hostname> --site-origin <site origin> --expect-digest <serving> --expect-build <build> --alarm-actions <ARNs or none> --record <D>\r5\a\verify.json --report <D>\r5\a` (`--allow-nat <id>` only for a NAT T7 kept as another workload's) + T9's CLI table | `VERIFIED` (exit 0) |
+| A1 | Topology: exactly one application host; no retired ECS workload; no workload ALB; no workload NAT / endpoints unless REVIEW-placed as another workload's; the correct EIP / ENI; the correct CloudFront origin; the five host alarms | `capture-host-evidence` (BOOT; `--terraform-dir infra/aws/stacks/single-host` only if BOOT can read the state, else omitted = an explicit SKIP) + `--host-status-only` (HOST-DEPLOY) + `gamesDoctor aws host-snapshot` (OPER), then `awsDeploy verify --topology single-host --runtime-parameter <p1 ARN> --environment staging --primary-pool p1 --pools p1 --generation 1 --evidence <D>\r5\a --instance-id i-01fe56536bf591382 --origin-hostname <origin_hostname> --site-origin <site origin> --expect-digest <serving> --expect-build <build> --alarm-actions <ARNs or none> --record <D>\r5\a\verify.json --report <D>\r5\a` (`--allow-nat <id>` only for the NAT T7 has not yet judged -- recorded PROVISIONAL -- or one T7 kept as another workload's) + T9's CLI table | `VERIFIED` (exit 0) |
 | B1 | ARM64 image executes on real Graviton | step 12b's capture for the serving digest (re-run for any new release) | `[linux/arm64] 7 passed, 0 failed`, `END exit=0` |
 | B2 | Server healthy; Caddy → server | A1's `gs-health` line: ready, `origin_tls_readyz` 200, `server` / `caddy` active, digest = running digest, `hold none` | inside A1 |
 | B3 | WebSocket; CloudFront `/gs*` route; query / cookie / header behaviour | `awsDeploy stage-probe edge --topology single-host --run-id <run> --evidence <D>\r5\f --host-evidence <D>\r5\a --instance-id i-01fe56536bf591382 --origin-hostname <origin_hostname> --base-url https://play.<domain> --origin https://play.<domain> --environment staging --generation 1 --pool p1 --expected-client-ip <ip>` (one line; `GS_CERT_SESSION_COOKIE` set) | `SINGLE-HOST EDGE PROBE: PASS` |
@@ -248,7 +251,7 @@ After it: 12b on the new host, deploy, and the R5 suite in full, plus `host-cert
 | E2 | A controlled one-game JUNO money smoke | ONE 2-seat money game on the escrow the host is configured for TODAY (the Juno document's chain, contract and keys) -- no KMS key, contract, document, frontend or stack change ("E2" below) | settled on chain and finalized; payouts = the independent integer computation; `money <game> --chain` all green |
 | E3 | Money sweep healthy; `gamesDoctor` clean | `money-sweep` every 60 s, `MoneySweepSecondsSinceSuccess` < 180, `HostHealthProblems` 0; `gamesDoctor aws status`, `games --money` (none open after E2), `orphans` (none), `money <game> --chain` (every verdict green) | all hold |
 | F1 | Browser join / play smoke | `https://play.<domain>`: sign-in, `__Host-gs_session`, lobby, a no-money game (kept for D3), reconnect | the owner records it |
-| Z | The closure record | A1 again, after E2 and every drill (fresh capture and run id) | `VERIFIED` |
+| Z | The closure record | A1 again, after E2, every drill and T7 (fresh capture and run id; `--allow-nat` only for a NAT T7 kept as another workload's, never a provisional one) | `VERIFIED` |
 
 **Order:**
 1. A1, B1, B2, C1, C4, then D1, D2;
@@ -267,12 +270,15 @@ and a frontend republish) and does not replace it.
   - R5 A–D accepted and E1 `READY`;
   - the host renders `ESCROW_MONEY_TABLES=nonmainnet`, and the play origin is in `GS_ALLOWED_ORIGINS` (R4 item 1;
     fixing either is the R4 rebuild contingency);
-  - the Juno document says `network_class` testnet (chain `uni-7`), and the host's startup logged `Juno backend OPENED`
-    (the deployment verified against the chain);
+  - the Juno document says `network_class` testnet (chain `uni-7`), and the host's startup log shows both:
+    - `escrow: Juno backend VERIFIED on uni-7 at height …` (the deployment verified against the chain);
+    - `money: real-money tables are ENABLED on uni-7 (testnet) …`;
   - the published frontend's pinned deployment (`REACT_APP_ESCROW_DEPLOYMENT` of the live build: the owner's build record
     or the string in the served bundle) names the same chain, contract and code checksum (a republish is a separate
     owner action);
-  - the contract's own `config` read (`min_ante`, the funding / challenge windows: the game's pace) is recorded;
+  - the contract's own config is read and recorded (`min_ante` and the funding / challenge windows: the game's pace).
+    Use `junod q wasm contract-state smart <contract> '{"config":{}}' --node <rpc>`, or the REST
+    `GET <rest>/cosmwasm/wasm/v1/contract/<contract>/smart/eyJjb25maWciOnt9fQ==` (base64 of `{"config":{}}`);
   - 0 open money games and RELAYQ empty;
   - two owner test Keplr accounts `KA`, `KB` (each in its own browser profile) hold at least the ante plus fees plus one
     bond in reserve.
@@ -338,7 +344,8 @@ fix its cause and re-run.
 ## 8. P1-R6 — Closure
 
 Phase 1 closes when all six hold, each with its record:
-1. **The final topology is directly verified:** R5's Z record is `VERIFIED`, and T9 is recorded.
+1. **The final topology is directly verified:** R5's Z record is `VERIFIED` (no provisional `--allow-nat`), and T9 is
+   recorded in full.
 2. **The durable safety authorities are green:** C1–C4, D1, D2 and D3 accepted.
 3. **The direct money smoke is green:** E1–E3.
 4. **This workload's obsolete hosting resources are gone:** every `DELETE-LEGACY` inventory entry absent (T9).
@@ -347,6 +354,8 @@ Phase 1 closes when all six hold, each with its record:
 5. **The source budget guard passes:** `cost1SingleHost` and `phase1CleanBuild` (the owner's gate).
 6. **The projected steady state is ≤ $30 / month:** the `COST_BUDGET.json` items priced on-demand (≈ $23.20) and
    nothing else billed for this workload.
+   - A customer-managed key on the ledger's backup vault, if R1 found one, adds $1 / month. It is recorded and counted
+     here.
    - A NAT another workload owns is excluded only by a recorded owner decision.
 
 **Trailing confirmation, never a gate:** Cost Explorer daily for 5–7 days (the `gs:cost` tag activated) and the
@@ -400,7 +409,7 @@ budget's alerts. Any later billing evidence above $30 / month reopens the cost i
 | 22 ledger-task-deauthorize | RETAINED as T5 |
 | 22b ECR lifecycle | RETAINED as R4 item 2 |
 | 22c Container Insights | RETAINED as T6 |
-| 23 NAT gate (≥ 24 h after step 20) | RETAINED as T7: the same gate; the capture ≥ 24 whole hours after T3, the window allowed to start at this workload's last NAT use; it runs in parallel with R4 / R5 |
+| 23 NAT gate (≥ 24 h after step 20) | RETAINED as T7: the same gate; the capture ≥ 24 whole hours after T3, the window allowed to start at this workload's last NAT use; R4 / R5 proceed meanwhile (A1 PROVISIONAL), it delays only Z and R6 |
 | 24 inventory | RETAINED as T9 + R5-A1 / Z |
 | 25 billing | trailing confirmation (R6), never a gate |
 

@@ -107,10 +107,13 @@ Save everything under `<D>\teardown\t0\`.
     - the pool log groups: `aws logs filter-log-events --log-group-name /gs/staging/p1 --output json > logs-p1.json`
       (and p2);
     - the alarms' history (CloudWatch keeps 30 days; the CLI pages it itself):
-      `aws cloudwatch describe-alarm-history --output json > alarm-history.json`;
-    - the state, before T3 and before T5:
+      `aws cloudwatch describe-alarm-history --alarm-types MetricAlarm CompositeAlarm --output json > alarm-history.json`
+      (the `-notify` composites included);
+    - the state, now and again immediately before T3's and T5's captures (T3.0, T5.0):
       - `terraform -chdir=infra/aws/stacks/app state pull > app.tfstate.json`;
       - `terraform -chdir=infra/aws/stacks/ledger state pull > ledger.tfstate.json` (`LEDGER-ADMIN`).
+
+      These are evidence files: under Windows PowerShell 5.1, `>` writes UTF-16, which is acceptable here.
     T3 deletes the log groups and alarms; their data is not recoverable afterwards.
 0.9 **Terraform reads** (each `terraform plan` is read-only and is NEVER applied):
     - `terraform -chdir=infra/aws/stacks/app state list` → saved. It must hold the ECS-era addresses of the inventory's
@@ -130,7 +133,7 @@ Save everything under `<D>\teardown\t0\`.
         (`aws ecs describe-services --cluster gs-staging --services gs-staging-p1 gs-staging-p2 --query "services[].events[0:20]"`)
         showing the last service task stopped, with 0.4's empty task list;
       - no standalone task since then (the run-*-probe scripts' `RunTask`s): `aws cloudtrail lookup-events --lookup-attributes AttributeKey=EventName,AttributeValue=RunTask --start-time <T_drain>`
-        and the same for `StartTask` name no `gs-staging` cluster.
+        and the same for `StartTask` names no `gs-staging` cluster.
     - T_drain is **unproven** if the events no longer reach back to it, if T_drain is more than 60 days old (CloudWatch's
       1,440 hourly points), or if CloudTrail's 90-day history does not cover it. T7 then anchors at T3.
 
@@ -177,6 +180,7 @@ answer: STOP.
 
 ## T3 — Destroy the ECS era: `compute-none` (GO-T3)
 
+0. `terraform -chdir=infra/aws/stacks/app state pull > <D>\teardown\t3\app.tfstate.before.json` (the state T3 changes).
 1. App tfvars (the inventory's `final_state."stacks/app"`): `compute = "none"`, `start_services = true`,
    `pools = { p1 = { primary = true } }`, `generation = 1`, `game_generations` without 2, `recovery_break_glass = false`,
    `recovery_trusted_principal_arns = []`, `edge.alb_origin_domain_name` = the host's origin (as T1 left it).
@@ -220,6 +224,7 @@ writes `GS_MEASURE=0` and stops the memory measurement). Any STOP signal of runb
 
 Deleting `gs-staging-app-task` (T3) invalidated nothing -- every cross-account grant names the app account root with an
 `aws:PrincipalArn` condition -- but until this step a NEW role of that name would inherit ledger appends and KMS Sign.
+0. `LEDGER-ADMIN`: `terraform -chdir=infra/aws/stacks/ledger state pull > <D>\teardown\t5\ledger.tfstate.before.json`.
 1. Ledger tfvars: `app_runtime_role_arns = ["arn:aws:iam::<app>:role/gs-staging-host-app"]`,
    `ecs_task_role_authorized = false` (the stack now requires the line).
 2. `LEDGER-ADMIN`: `infra\aws\scripts\plan-evidence.ps1 -Stack ledger -Out <D>\teardown\t5 -Run <run id> -KeepPlan -PlanArgs @("-var-file=staging.tfvars")`
@@ -244,7 +249,8 @@ CloudWatch created them itself; no Terraform state holds them; T3 stopped their 
 
 The NAT is outside Terraform and belongs to the existing VPC (inventory `outside.nat-gateway`, **REVIEW**). It is deleted
 only if the evidence gate proves no other workload uses it. This wait is evidence about OTHER users, not migration
-continuity: it runs in parallel with R4 and R5 and delays only R6's item 4.
+continuity: R4 and R5 proceed meanwhile (R5's A1 names the pending NAT as PROVISIONAL), and it delays only R5's closure
+record Z and R6.
 
 **The window.**
 - `capture-nat-evidence`'s `TeardownAppliedAt` argument is the start of the quiet window. The guard needs >= 24 whole
@@ -255,10 +261,15 @@ continuity: it runs in parallel with R4 and R5 and delays only R6's item 4.
 - **The capture runs no earlier than 24 whole hours after T3's recorded apply time, whatever T_anchor is.** T3 removes the
   gateway endpoints from the shared private route tables. A workload there that only talks to S3 or DynamoDB used the
   endpoints until T3 and would use the NAT after it, so the window must include >= 24 h of the post-T3 routing.
+- **Checked by hand, not by the guard.** No tool compares the window with T3, and `capture-nat-evidence` floors the
+  window's end to the hour. Before step 2, check that `capture.json`'s `metrics_end` ≥ T3's apply time
+  (`t3-applied-at.txt`) rounded UP to the hour, plus 24 h. Record both values in the guard record's notes. A capture
+  earlier than that is discarded and taken again later.
 - An earlier start adds evidence. It never shortens the post-T3 observation. N1–N6 and the 24-hour minimum are unchanged
   (the CLI refuses a quiet minimum below 24 hours).
 
-1. At or after T3 + 24 whole hours:
+1. At or after ceil_hour(T3) + 24 h (T3's apply time rounded up to the hour, plus 24 h: the floored `metrics_end` then
+   covers >= 24 whole post-T3 hours):
    `infra\aws\scripts\capture-nat-evidence.ps1 -Environment staging -Region <r> -NatGatewayId <nat-...> -VpcId <vpc-...> -TeardownAppliedAt <T_anchor, UTC> -Out <D>\teardown\t7\nat`
    (`.sh` on Linux).
 2. `node dist/server/src/tools/awsDeploy.js migration-guard nat --evidence <D>\teardown\t7\nat --record <D>\teardown\guards\t7-nat.json`

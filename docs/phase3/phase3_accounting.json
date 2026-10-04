@@ -1007,7 +1007,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (slice branch; not integrated)"
   },
   {
    "key": "AUD-09.06",
@@ -1020,7 +1021,8 @@
    "disp": "A",
    "od": "OD-4 (RULED 2026-10-03: automatic emergency funding, v13)",
    "p4": "—",
-   "notes": "W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`)."
+   "notes": "W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`).",
+   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (slice branch; not integrated)"
   },
   {
    "key": "AUD-09.07",
@@ -1033,7 +1035,8 @@
    "disp": "A",
    "od": "OD-4 (RULED 2026-10-03: automatic emergency funding, v13)",
    "p4": "—",
-   "notes": "W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`)."
+   "notes": "W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`).",
+   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (slice branch; not integrated)"
   },
   {
    "key": "AUD-09.08",
@@ -3676,7 +3679,8 @@
    "disp": "A",
    "od": "OD-4 (RULED 2026-10-03: automatic emergency funding, v13)",
    "p4": "—",
-   "notes": "On a revision-2 board `DeclareBankruptcy` is refused (`retiredDeclarationRefusal`) and `canDeclareBankruptcy` is false; the button must go. W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`)."
+   "notes": "On a revision-2 board `DeclareBankruptcy` is refused (`retiredDeclarationRefusal`) and `canDeclareBankruptcy` is false; the button must go. W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`).",
+   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (slice branch; not integrated)"
   },
   {
    "key": "P3-N018",
@@ -3689,7 +3693,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (slice branch; not integrated)"
   },
   {
    "key": "P3-N019",
@@ -4658,7 +4663,7 @@
   "W2-D": "NOT STARTED — UNLOCKED: its W2-A dependency is integrated at `phase3/wave2a-integration`; unchanged by the v13 integration (`phase3/wave2a-v13-integration`)",
   "W2-E": "COMPLETE — `phase3/w2-mh-queued-visibility` `4f998b8` + RR-6 `91037ce`; integrated at the safe Wave-2 integration (`09fcb25`). Residue outside its rows: `privateCatalog.ts`'s MH ability text (W1-L / W2-J copy) and the chip's Stock-Round-only gate (W2-D)",
   "W2-F": "NOT STARTED — UNLOCKED: its W2-A dependency is integrated at `phase3/wave2a-integration`; unchanged by the v13 integration (`phase3/wave2a-v13-integration`)",
-  "W2-G": "IN PROGRESS — UNLOCKED FOR v13 UI RECONCILIATION (2026-10-04), NOT accepted and NOT integrated: the held implementation (`phase3/w2-emergency-funding-ui` `695afe9`, UI accepted against the v12 authority) must be reconciled to the integrated v13 emergency authority on `phase3/wave2a-v13-integration` — no player Declare bankruptcy (refused on revision 2), one `EmergencySellPortfolio`, `ForgoTrainTrade` / `ForgoPrivateFunding`, the automatic purchase and bankruptcy. Until it lands, no shipped UI sends the three v13 emergency messages, so a v13 emergency needing a president's decision cannot be advanced from the UI",
+  "W2-G": "COMPLETE — on its slice branch `phase3/w2-g-v13-emergency-ui` (from `phase3/wave2a-v13-integration` @ `868bd83`), NOT integrated: the accepted W2-G UI (`695afe9`) reconciled to the integrated v13 emergency authority (`112fa71` + review fixes `02d73b8`). The surface presents `emergencyFundingFor(...).automatic`: the open trade window with `ForgoTrainTrade` (never reopened), ONE `EmergencySellPortfolio` judged by `emergencyPortfolioRefusal`, private funding only while exactly relevant with `ForgoPrivateFunding`, the automatic purchase as a status (no Buy) and the automatic bankruptcy (no `DeclareBankruptcy` anywhere); obligated president only (OD-1), everybody else W2-H's waiting surface; non-dismissible (OD-4); latched. Rules 13 unchanged; settlement [10, 11, 12] unchanged",
   "W2-H": "COMPLETE — `phase3/w2-waiting-prompts` `3b7f23b`, `5cc5ccc`, `461d4f0`; integrated at the safe Wave-2 integration (`66977d5`). K-21's second half (the President's Skip while placing) stays W2-A's",
   "W2-I": "NOT STARTED",
   "W2-J": "NOT STARTED",

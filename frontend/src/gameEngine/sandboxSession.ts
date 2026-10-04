@@ -1017,7 +1017,7 @@ function limitForTier(state: GameStateResponse, tier: string): number {
 }
 
 /** #1530: the train limit of the phase in force -- `null` when the board reports no phase. */
-function limitInForce(state: GameStateResponse): number | null {
+export function limitInForce(state: GameStateResponse): number | null {
   const phase = derivePhase(state);
   return phase && phase.known ? phase.trainLimit : null;
 }

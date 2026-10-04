@@ -44,28 +44,27 @@ import {
   authorityDeclined,
   unchangedMeansRefused,
 } from "../gameEngine/actionOutcome";
-import { sharePurchaseBlock, type PriceZone } from "../gameEngine/sharePurchase";
-import { shareSaleBlock } from "../gameEngine/shareSale";
+import type { PriceZone } from "../gameEngine/sharePurchase";
 import { dividendRefusal } from "../gameEngine/dividendGate";
+import { dividendAmountRefusal } from "../gameEngine/routeAuthority";
 // Design note #1019: the purchase gate, asked here on the same state the reducer asked it on.
 import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
-import { depotInventory } from "../gameEngine/gamePhase";
-import { boPresidencyRefusal, returnedTrainRefusal } from "../gameEngine/sandboxSession";
-import { BO_TICKER } from "../gameEngine/gameConstants";
+import { depotInventory, openDepotTiers } from "../gameEngine/gamePhase";
 import {
-  auctionHandoffRefusal,
-  auctionRefusal,
-  boParRefusal,
-  isAuctionMessage,
-} from "../gameEngine/auctionAuthority";
+  SANDBOX_NOMINAL_SHARE_PRICE,
+  boPresidencyRefusal,
+  limitInForce,
+  returnedTrainRefusal,
+} from "../gameEngine/sandboxSession";
+import { BO_TICKER } from "../gameEngine/gameConstants";
+import { auctionLifecycleRefusal, isAuctionLifecycleMessage } from "../gameEngine/auctionAuthority";
 import { dieselExchangeRefusal } from "../gameEngine/dieselExchange";
 // UR-3 (OD-UR-1 = 1-A, D-37): the pinned table's refusal of a client-sent Yellow Sign, shared with ingress and the gate.
 import { yellowSignRequestRefusal } from "../gameEngine/yellowSign";
 import { roundTransitionRefusal } from "../gameEngine/roundTransitionAuthority"; // RR2A-F1
-import { discardTrainRefusal, pendingDiscardBlock } from "../gameEngine/trainDiscard";
+import { discardTrainRefusal } from "../gameEngine/trainDiscard";
 import {
   declareBankruptcyRefusal,
-  emergencyFundingBlock,
   emergencyFundingFor,
   emergencyPurchaseRefusal,
   forcedSaleRefusal,
@@ -73,6 +72,42 @@ import {
   fundingPrivateOfferRefusal,
   fundingPrivateRescindRefusal,
 } from "../gameEngine/emergencyFunding";
+/* W1-H (Phase 3): the remaining predicates the reducer asks -- the hold composition (#1613), the offers' three
+   authorities and the pinned-board refusal of the chain-era messages (#1590-#1595), the train obligation (#1513),
+   the must-sell pass (DA-5), the stock transaction (#1570) -- and the scope ingress judges in (R12-2). */
+import { authoritativeHoldRefusal } from "../gameEngine/authoritativeHolds";
+import { boardHomeHexToAxial, type HomeHexToAxial } from "../gameEngine/homeStationAuthority";
+import { legacyOfferMessageRefusal } from "../gameEngine/pendingOfferHold";
+import { HARMLESS_DUPLICATE_ANSWER_SENTENCE, harmlessDuplicateAnswer } from "../gameEngine/harmlessDuplicate";
+import {
+  answerPrivatePurchaseRefusal,
+  privatePurchaseRefusal,
+  proposePrivatePurchaseRefusal,
+  rescindPrivatePurchaseRefusal,
+} from "../gameEngine/privatePurchaseAuthority";
+import {
+  answerTrainPurchaseRefusal,
+  proposeTrainPurchaseRefusal,
+  rescindTrainPurchaseRefusal,
+  trainSaleRefusal,
+} from "../gameEngine/trainSaleAuthority";
+import {
+  answerPrivateTradeRefusal,
+  proposePrivateTradeRefusal,
+  rescindPrivateTradeRefusal,
+} from "../gameEngine/privateTradeAuthority";
+import { cheapestPurchasableTrain, trainObligationRefusal } from "../gameEngine/trainAvailability";
+import { divestmentPassRefusal } from "../gameEngine/forcedDivestment";
+import {
+  chartContextFromState,
+  parLadderRefusal,
+  purchaseIntentOf,
+  stockPurchaseRefusal,
+  stockSaleRefusal,
+  type StockChartContext,
+} from "../gameEngine/stockTransactionAuthority";
+import { routeRulesRevisionOf, withRules } from "../gameEngine/boardSelection";
+import { resolveVariants } from "../gameEngine/gameVariants";
 
 /* ==================================================================
     DESIGN NOTE 1685 (Stage 10.2, S10-1): THE IDENTITY BELOW WAS DEFEATED BY THE CHART, AND IS GONE
@@ -178,8 +213,11 @@ export interface RefusalContext {
   /** #1540: the board's grid, for the forced-purchase obligation's reasons (a route walk). */
   mapGrid?: MapGridResponse;
   marketZoneFor?: (companyId: number) => PriceZone;
-  marketPricesByCompany?: Readonly<Record<number, number>> | null;
-  zoneForPrice?: (price: number | null | undefined) => PriceZone;
+  /** W1-H: widened to the reducer's own type (`SandboxActionContext`), so the server's chart injections pass as-is. */
+  marketPricesByCompany?: Readonly<Record<number, number | null>> | null;
+  zoneForPrice?: (price: number | null | undefined) => string | null;
+  /** W1-H: the board's label table for the home-station hold; absent, the board's own (`boardHomeHexToAxial`). */
+  homeHexToAxial?: HomeHexToAxial;
 }
 
 export function refusalReasonFor(
@@ -188,160 +226,246 @@ export function refusalReasonFor(
   ctx?: RefusalContext,
 ): string | null {
   if (!before || typeof msg !== "object" || msg === null) return null;
+  /* W1-H (Phase 3, AUD-14.03): ASKED WITH THE TABLE'S OWN BOARD, TRAY AND CHART IN EFFECT -- `turnRefusal`'s R12-2
+     scope, for the same reason. The reducer is already inside one (`applySandboxAction`); the server's refusal
+     transport (`RoomSession.submit`) is not, so a par ladder, a price zone or a home table read there was read off
+     whichever board was last activated. Nested, it is the same scope (the shell's receipt). */
+  const board = before;
+  return withRules(
+    resolveVariants(board.variants),
+    () => refusalReasonOnTableBoard(board, msg, ctx),
+    routeRulesRevisionOf(board),
+  );
+}
 
-  /* #1530: the same two questions the reducer's gate asked first, on the same `before` state: is a discard
-     owed (then nothing else runs), and is THIS discard the right corporation's, its president's, of a train
-     it holds. */
-  const held = pendingDiscardBlock(before, msg);
+/* ==================================================================
+    W1-H (Phase 3 -- AUD-14.03 / U-30, AUD-14.04 / U-29, AUD-14.05 / ING-2 + I-6): EVERY ARM IS THE REDUCER'S
+   ==================================================================
+   #784's rule, applied to the arms it had not reached: the Activity Log's REFUSED line (and the server's `refused`
+   frame, which asks this function when ingress let a message through and the reducer then declined it) carries the
+   sentence of the predicate the reducer asked, on the same board, in the reducer's order -- the board gate
+   (`applySandboxActionOnBoard`: the four holds, the auction lifecycle, the round transition) and then the core
+   (`applySandboxActionCoreJudged`). Nothing here states a rule; each arm is one call into the module that owns it.
+   What W1-H added:
+     * the four holds as ONE composition (`authoritativeHoldRefusal`) -- the standing ordinary offer and the home
+       station joined the discard and the forced purchase (U-29: a held proposal read "a rule declined this");
+     * the three offer kinds' proposals, answers and withdrawals, and the two consented settlements (U-29);
+     * the stock transaction through `stockPurchaseRefusal` / `stockSaleRefusal` -- the reducer's and ingress's
+       predicates -- instead of the two inner blocks, so the round, the first-Stock-Round ban, the price, the
+       card's availability and affordability carry their sentences (U-30, I-6);
+     * the Pass that a train purchase or a curable must-sell still owes (ING-2), and the B&O's par ladder;
+     * the train purchase priced at the tier and limit the reducer prices it at (I-6). */
+function refusalReasonOnTableBoard(
+  before: GameStateResponse,
+  msg: SandboxLogMsg,
+  ctx?: RefusalContext,
+): string | null {
+  const actor = ctx?.actor ?? null;
+
+  /* ---- the board gate (#1613): the four holds, in their priority -------------------------------------------
+     #1530 the discard, #1540 the forced purchase and the finished game, #1590 a standing ordinary offer, #1612 the
+     operating corporation's home station. The home table defaults to the board's own -- what ingress asks with and
+     what both reducer contexts inject (`sandboxReplayProviders().chartInjections`). */
+  const held = authoritativeHoldRefusal(before, msg, {
+    mapGrid: ctx?.mapGrid,
+    homeHexToAxial: ctx?.homeHexToAxial ?? boardHomeHexToAxial,
+  });
   if (held !== null) return held;
-  if ("DiscardTrain" in msg) {
-    const { protocol_id, model_type } = (msg as { DiscardTrain: { protocol_id: number; model_type: string } }).DiscardTrain;
-    return discardTrainRefusal(before, { protocol_id, model_type }, ctx?.actor ?? null);
-  }
-  /* #1540/#1541: the forced-purchase hold and its own actions, each with the reducer's reason. */
-  {
-    const heldByFunding = emergencyFundingBlock(before, msg, ctx?.mapGrid);
-    if (heldByFunding !== null) return heldByFunding;
-    const funding = ctx?.mapGrid === undefined ? null : emergencyFundingFor(before, ctx.mapGrid);
-    if (funding !== null && "SellStock" in msg && ctx?.actor) {
-      const sell = (msg as { SellStock: { protocol_id: number; percentage: number } }).SellStock;
-      const forced = forcedSaleRefusal(before, funding, ctx.actor, sell.protocol_id, sell.percentage);
-      if (forced !== null) return forced;
-    }
-    if ("EmergencyBuyHardware" in msg && ctx?.mapGrid !== undefined) {
-      const { protocol_id } = (msg as { EmergencyBuyHardware: { protocol_id: number } }).EmergencyBuyHardware;
-      const refusal = emergencyPurchaseRefusal(before, protocol_id, ctx.mapGrid, ctx?.actor ?? null);
-      if (refusal !== null) return refusal;
-    }
-    if ("OfferPrivateForFunding" in msg) {
-      if (funding === null) return "No forced train purchase is owed, so no private company can be offered to fund one.";
-      return fundingPrivateOfferRefusal(before, funding, (msg as { OfferPrivateForFunding: { private_id: number; buyer_protocol_id: number; price: number } }).OfferPrivateForFunding, ctx?.actor ?? null);
-    }
-    if ("AnswerFundingPrivateOffer" in msg) {
-      return fundingPrivateAnswerRefusal(before, (msg as { AnswerFundingPrivateOffer: { private_id: number; accept?: boolean } }).AnswerFundingPrivateOffer, ctx?.actor ?? null, ctx?.mapGrid);
-    }
-    if ("RescindFundingPrivateOffer" in msg) {
-      return fundingPrivateRescindRefusal(before, (msg as { RescindFundingPrivateOffer: { private_id: number } }).RescindFundingPrivateOffer, ctx?.actor ?? null);
-    }
-    if ("DeclareBankruptcy" in msg) return declareBankruptcyRefusal(funding, ctx?.actor ?? null);
+
+  /* DA-3 (DA-F1, DA-F2, DA-F7): the auction's own gate, the handoff's, and the B&O private's owner -- the lifecycle
+     predicate the board gate asks. */
+  if (isAuctionLifecycleMessage(msg)) {
+    const auction = auctionLifecycleRefusal(before, before.waterfall ?? null, msg);
+    if (auction !== null) return auction;
   }
 
-  /* UR-3 (OD-UR-1): a `YellowSignEvent` on a pinned table, after the holds -- ingress's order (`turnRefusal`) and its
-     sentence. */
-  if ("YellowSignEvent" in msg) {
-    const sign = yellowSignRequestRefusal(before);
-    if (sign !== null) return sign;
-  }
-
-  /* RR2A-F1: a pinned table's rounds turn over by themselves -- the board gate's predicate, in ingress's order (after
-     the holds and the Yellow Sign) and with its sentence. */
+  /* RR2A-F1: a pinned table's rounds turn over by themselves. */
   {
     const round = roundTransitionRefusal(before, msg);
     if (round !== null) return round;
   }
 
-  if ("BuyStock" in msg && ctx?.actor && ctx.marketZoneFor) {
-    const buy = (msg as { BuyStock: { protocol_id: number; source: "Ipo" | "Bank"; quantity?: number } })
-      .BuyStock;
-    return sharePurchaseBlock({
-      state: before,
-      buyer: ctx.actor,
-      companyId: buy.protocol_id,
-      source: buy.source,
-      quantity: buy.quantity ?? 1,
-      zone: ctx.marketZoneFor(buy.protocol_id),
-      marketPrices: ctx.marketPricesByCompany ?? null,
-      zoneForPrice: ctx.zoneForPrice,
-    });
+  /* ---- the core ---------------------------------------------------------------------------------------------- */
+
+  /* #1530: THIS discard -- the right corporation's, its president's, of a train it holds. */
+  if ("DiscardTrain" in msg) {
+    const { protocol_id, model_type } = msg.DiscardTrain;
+    return discardTrainRefusal(before, { protocol_id, model_type }, actor);
   }
 
-  if ("SellStock" in msg && ctx?.actor) {
-    const sell = (msg as { SellStock: { protocol_id: number; percentage: number } }).SellStock;
-    return shareSaleBlock({
-      state: before,
-      seller: ctx.actor,
-      companyId: sell.protocol_id,
-      percentage: sell.percentage,
-    });
+  /* UR-3 (OD-UR-1): a `YellowSignEvent` on a pinned table. */
+  if ("YellowSignEvent" in msg) {
+    const sign = yellowSignRequestRefusal(before);
+    if (sign !== null) return sign;
   }
 
+  /* #1540/#1541: the forced purchase's own actions, each with the reducer's reason. */
+  {
+    const funding = ctx?.mapGrid === undefined ? null : emergencyFundingFor(before, ctx.mapGrid);
+    if (funding !== null && "SellStock" in msg && actor) {
+      const forced = forcedSaleRefusal(before, funding, actor, msg.SellStock.protocol_id, msg.SellStock.percentage);
+      if (forced !== null) return forced;
+    }
+    if ("EmergencyBuyHardware" in msg && ctx?.mapGrid !== undefined) {
+      const refusal = emergencyPurchaseRefusal(before, msg.EmergencyBuyHardware.protocol_id, ctx.mapGrid, actor);
+      if (refusal !== null) return refusal;
+    }
+    if ("OfferPrivateForFunding" in msg) {
+      if (funding === null) return "No forced train purchase is owed, so no private company can be offered to fund one.";
+      return fundingPrivateOfferRefusal(before, funding, msg.OfferPrivateForFunding, actor);
+    }
+    if ("AnswerFundingPrivateOffer" in msg) {
+      return fundingPrivateAnswerRefusal(before, msg.AnswerFundingPrivateOffer, actor, ctx?.mapGrid);
+    }
+    if ("RescindFundingPrivateOffer" in msg) {
+      return fundingPrivateRescindRefusal(before, msg.RescindFundingPrivateOffer, actor);
+    }
+  }
+
+  /* Q11 / D-23: the chain-era offer messages, on a pinned board. */
+  {
+    const legacy = legacyOfferMessageRefusal(before, msg);
+    if (legacy !== null) return legacy;
+  }
+
+  /* #1595 (Batch 7.4): the three ordinary offers' proposals, answers and withdrawals, each judged against the
+     board by its transaction's own predicate. AN ANSWER THAT FOUND NOTHING TO ANSWER is #662's harmless duplicate,
+     and the server answers it with one no-blame sentence (C2-02); the receipt says the same (I-6). */
+  if (harmlessDuplicateAnswer(before, msg)) return HARMLESS_DUPLICATE_ANSWER_SENTENCE;
+  if ("ProposePrivatePurchase" in msg) return proposePrivatePurchaseRefusal(before, msg.ProposePrivatePurchase, actor);
+  if ("AnswerPrivatePurchase" in msg) return answerPrivatePurchaseRefusal(before, msg.AnswerPrivatePurchase, actor);
+  if ("RescindPrivatePurchase" in msg) return rescindPrivatePurchaseRefusal(before, msg.RescindPrivatePurchase, actor);
+  if ("ProposeTrainPurchase" in msg) {
+    return proposeTrainPurchaseRefusal(before, msg.ProposeTrainPurchase, actor, ctx?.mapGrid);
+  }
+  if ("AnswerTrainPurchase" in msg) {
+    return answerTrainPurchaseRefusal(before, msg.AnswerTrainPurchase, actor, ctx?.mapGrid);
+  }
+  if ("RescindTrainPurchase" in msg) return rescindTrainPurchaseRefusal(before, msg.RescindTrainPurchase, actor);
+  if ("ProposePrivateTrade" in msg) return proposePrivateTradeRefusal(before, msg.ProposePrivateTrade, actor);
+  if ("AnswerPrivateTrade" in msg) return answerPrivateTradeRefusal(before, msg.AnswerPrivateTrade, actor);
+  if ("RescindPrivateTrade" in msg) return rescindPrivateTradeRefusal(before, msg.RescindPrivateTrade, actor);
+
+  if ("DeclareBankruptcy" in msg) {
+    const funding = ctx?.mapGrid === undefined ? null : emergencyFundingFor(before, ctx.mapGrid);
+    return declareBankruptcyRefusal(funding, actor);
+  }
+
+  /* #1513 (ING-2): THE TURN DOES NOT END WHILE A TRAIN IS OWED that the treasury can pay for -- the gate that
+     answered a `PassTurn` / `AdvanceOperatingSubPhase` at Buy Trains with the generic sentence. */
+  {
+    const owed = trainObligationRefusal(before, msg, ctx?.mapGrid);
+    if (owed !== null) return owed;
+  }
+
+  /* #774, then Batch 6 (#1552): the step that owns the choice, then the declared amount against the run. */
   if ("DeclareDividends" in msg) {
-    const declare = (msg as { DeclareDividends: { protocol_id: number } }).DeclareDividends;
-    return dividendRefusal(before, declare.protocol_id);
+    return (
+      dividendRefusal(before, msg.DeclareDividends.protocol_id) ??
+      dividendAmountRefusal(before, msg.DeclareDividends)
+    );
   }
 
   /* ==================================================================
       DESIGN NOTE 1019: THE PURCHASE OWNS UP TOO
      ==================================================================
      REPORTED: "the reducer partially executed, drained the $340 to $0, failed to award the train, but still
-     printed a success log."
-
-     THE SUCCESS LOG WAS A CONSEQUENCE, NOT A SECOND BUG. #778 detects a refusal by identity, and a reducer
-     that mutates has not refused -- so the log was reporting exactly what happened. With the gate in place the
-     purchase returns its state unchanged, the drain sees the identity, and this arm supplies the sentence.
-
-     THE SAME CALL THE REDUCER MADE, on the same `before` state and the same tier lookup -- #784's whole
-     argument for this function existing. A second opinion assembled here would be a guess about which rule
-     fired, and a confident wrong reason in an authoritative log is what cost an earlier session three
-     investigations.
-
-     BOTH MESSAGES, because both reach `buyDepotTrain`. `EmergencyBuyHardware` waives only the funds check --
-     it has already covered the shortfall by the time the reducer charges -- so it is asked with
-     `requireFunds: false` here for the same reason it is there: a reason that named a shortfall the president
-     had just paid would be a false accusation. */
+     printed a success log." THE SAME CALL THE REDUCER MADE, on the same `before` state -- #784's whole argument for
+     this function existing. W1-H (I-6): AND THE SAME TRAIN AND LIMIT. The depot purchase is priced at the tier the
+     arm will deliver (`openDepotTiers`, the named shelf tier under the Level Playing Field) against the limit in
+     force (#1530); the emergency purchase at the cheapest train for sale (#1513), against the current row's limit.
+     A named tier that is not for sale is refused by the reducer without a predicate, so it stays unattributed. */
   // Design note #1314: a purchase naming a returned train has its own gate.
-  if ("BuyHardwareFromPool" in msg) {
-    const buy = (msg as { BuyHardwareFromPool: { protocol_id: number; returned_model_type?: string } })
-      .BuyHardwareFromPool;
-    if (buy.returned_model_type !== undefined) {
-      return returnedTrainRefusal(before, buy.protocol_id, buy.returned_model_type);
-    }
+  if ("BuyHardwareFromPool" in msg && msg.BuyHardwareFromPool.returned_model_type !== undefined) {
+    return returnedTrainRefusal(before, msg.BuyHardwareFromPool.protocol_id, msg.BuyHardwareFromPool.returned_model_type);
   }
-  const purchase =
-    "BuyHardwareFromPool" in msg
-      ? { companyId: (msg as { BuyHardwareFromPool: { protocol_id: number } }).BuyHardwareFromPool.protocol_id, requireFunds: true }
-      : "EmergencyBuyHardware" in msg
-        ? { companyId: (msg as { EmergencyBuyHardware: { protocol_id: number } }).EmergencyBuyHardware.protocol_id, requireFunds: false }
-        : null;
-  if (purchase) {
-    const tier = depotInventory(before).find(
-      (row) => row.remaining === null || row.remaining > 0,
+  if ("EmergencyBuyHardware" in msg) {
+    const cheapest = cheapestPurchasableTrain(before);
+    if (!cheapest) return null;
+    const limitRow = depotInventory(before).find((row) => row.isCurrent);
+    return trainPurchaseRefusal(before, msg.EmergencyBuyHardware.protocol_id, {
+      cost: cheapest.cost,
+      trainLimit: limitRow?.trainLimit ?? null,
+      requireFunds: false,
+    });
+  }
+  /* Design note #1592 / #1591: the two consented settlements, as the reducer's core judges them (U-29). */
+  if ("BuyTrainFromCorporation" in msg) {
+    const { buyer_protocol_id, seller_protocol_id, model_type, price, gilded } = msg.BuyTrainFromCorporation;
+    return trainSaleRefusal(
+      before,
+      { buyerId: buyer_protocol_id, sellerId: seller_protocol_id, model: model_type, price, gilded },
+      actor,
+      ctx?.mapGrid,
+      "settlement",
     );
-    return trainPurchaseRefusal(before, purchase.companyId, {
+  }
+  if ("BuyPrivateCompany" in msg) {
+    const { protocol_id, private_id, price } = msg.BuyPrivateCompany;
+    return privatePurchaseRefusal(before, { buyerId: protocol_id, privateId: private_id, price }, actor, "settlement");
+  }
+  if ("BuyHardwareFromPool" in msg) {
+    const named = msg.BuyHardwareFromPool.model_type;
+    const open = openDepotTiers(before);
+    const tier = named === undefined ? open[0] : open.find((row) => row.tier === named);
+    if (named !== undefined && !tier) return null;
+    return trainPurchaseRefusal(before, msg.BuyHardwareFromPool.protocol_id, {
       cost: tier?.cost ?? null,
-      trainLimit: tier?.trainLimit ?? null,
-      requireFunds: purchase.requireFunds,
+      trainLimit: limitInForce(before) ?? tier?.trainLimit ?? null,
+      requireFunds: true,
     });
   }
 
   // Design note #1303: the same gate the reducer asked, on the same `before` state.
   if ("ExchangeTrainForDiesel" in msg) {
-    const { protocol_id, model_type } = (
-      msg as { ExchangeTrainForDiesel: { protocol_id: number; model_type: string } }
-    ).ExchangeTrainForDiesel;
+    const { protocol_id, model_type } = msg.ExchangeTrainForDiesel;
     return dieselExchangeRefusal(before, protocol_id, model_type);
   }
 
-  /* #1246: the B&O grant's own refusal (#904b), the same call the reducer's arm makes on the same state. The
-     shell used to print this sentence itself before falling through; now the REFUSED line carries it. */
-  if ("SetBoPar" in msg) {
-    /* DA-3 (DA-F2): the private's ownership first -- the reducer's board gate asks it before the arm asks #904b. */
-    const { player } = (msg as { SetBoPar: { player: string } }).SetBoPar;
-    return boParRefusal(before, player) ?? boPresidencyRefusal(before, BO_TICKER);
+  /* ==================================================================
+      DESIGN NOTE 1570: THE STOCK TRANSACTION, AS THE REDUCER JUDGES IT (W1-H: U-30, I-6)
+     ==================================================================
+     `stockPurchaseRefusal` / `stockSaleRefusal` are the predicates the reducer's core and ingress both ask; they
+     compose `sharePurchaseBlock` / `shareSaleBlock` (which this arm used to ask alone) with the round, the
+     corporation, the price, the card's availability, the Brown continuation and affordability. The chart context
+     is the reducer's (`stockChartContext`): the zone rules from the caller's injection and from nowhere else --
+     #712's "absent means unenforced" -- and the price and the pin from the board's own positions (#1196). */
+  if ("BuyStock" in msg || "SellStock" in msg) {
+    const fromState = chartContextFromState(before);
+    const chart: StockChartContext = {
+      parCellFor: fromState.parCellFor,
+      marketZoneFor: ctx?.marketZoneFor,
+      marketPricesByCompany: ctx?.marketPricesByCompany ?? null,
+      zoneForPrice: ctx?.zoneForPrice,
+      priceFor: fromState.priceFor,
+      pinnedBoard: fromState.pinnedBoard,
+      nominalPrice: SANDBOX_NOMINAL_SHARE_PRICE,
+    };
+    if ("BuyStock" in msg) {
+      return stockPurchaseRefusal({ state: before, buy: purchaseIntentOf(msg.BuyStock), actor, ctx: chart });
+    }
+    return stockSaleRefusal({
+      state: before,
+      sell: { companyId: msg.SellStock.protocol_id, percentage: msg.SellStock.percentage },
+      actor,
+      mapGrid: ctx?.mapGrid,
+      ctx: chart,
+    });
   }
 
-  /* DA-3 (DA-F1, DA-F7): the auction's own gate and the handoff's, the predicates the reducer's board gate asks. */
-  if ("OpenStockRound" in msg) return auctionHandoffRefusal(before, before.waterfall ?? null);
-  if (isAuctionMessage(msg)) return auctionRefusal(before, before.waterfall ?? null, msg);
+  /* DA-5 (D-53, D-58): #759's must-sell hold on the Stock Round pass -- only a curable excess is owed. */
+  if ("PassTurn" in msg) {
+    const owed = divestmentPassRefusal(before);
+    if (owed !== null) return owed;
+  }
 
-  /* #1247: a second answer finds the question settled (#662). The arm returns the state unchanged, which the
-     drain reads as a refusal -- and it is one, of the harmless kind, so the line says which. */
-  if ("AnswerPrivatePurchase" in msg || "AnswerTrainPurchase" in msg) {
-    const offer =
-      "AnswerPrivatePurchase" in msg ? before.private_purchase_offer : before.train_purchase_offer;
-    return !offer || offer.accepted
-      ? "That offer had already been answered."
-      : "That answer did not match the offer on the table.";
+  /* #1246 / #1570: the B&O grant -- the private's ownership (the lifecycle gate, above), the par ladder (the core),
+     then the presidency (#904b, the arm). */
+  if ("SetBoPar" in msg) {
+    return (
+      parLadderRefusal(msg.SetBoPar.par_value, chartContextFromState(before), BO_TICKER) ??
+      boPresidencyRefusal(before, BO_TICKER)
+    );
   }
 
   return null;

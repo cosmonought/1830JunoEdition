@@ -40,18 +40,18 @@ describe("a refused exchange keeps the question open (design note #882)", () => 
     const body = sliceBetween(APP, "const handlePowerFlowAct", "const handlePowerFlowDecline");
     expect(body).not.toBe("");
     expect(body).toContain(
-      'if (runPrivateExchange(MH_PRIVATE_ID, "Exchange for NYC share")) {',
+      'if (runPrivateExchange(exchangeSource, "Exchange for NYC share")) {',
     );
     /* AND THE OLD SHAPE IS GONE. Asserted separately, because the positive above would still pass if a
        stray unconditional close survived below it -- which is precisely the arrangement being removed. */
     expect(body).not.toContain(
-      'runPrivateExchange(MH_PRIVATE_ID, "Exchange for NYC share");',
+      'runPrivateExchange(exchangeSource, "Exchange for NYC share");',
     );
   });
 
   it("reports the outcome instead of leaving the caller to guess", () => {
     /* A RETURN VALUE RATHER THAN A SECOND PIECE OF STATE the caller inspects: `ok` is what the caller needs
-       and `resolvePrivateExchange` already computed it. A caller reading the error state instead would be
+       and the legality check (W1-C: `mhExchangeRequestFor`) already computed it. A caller reading the error state instead would be
        reading a value written for the modal, one render late. */
     const body = sliceBetween(APP, "const runPrivateExchange = useCallback(", "const handlePowerFlowAct");
     expect(body).not.toBe("");

@@ -170,8 +170,22 @@ describe("deriveActivePowerFlow (design notes #818/#849/#871)", () => {
     mhPrivateId: MH,
   };
 
+  /* Phase 3 W1-C: the flow now asks the authority for each pile, so the board carries the NYC it would be
+     exchanged for -- 50% in the IPO, nothing in the pool, nobody holding any -- making the IPO the one legal
+     pile. `phase3W1CMhExchangeSource.test.ts` covers the full source matrix. */
+  const nycPub = {
+    company_id: NYC,
+    ticker: "NYC",
+    president: null,
+    is_floated: false,
+    par_value: null,
+    ipo_pool_percentage: 50,
+    bank_pool_percentage: 0,
+    player_holdings: [],
+  } as unknown as PublicCompanyState;
   const mhState = state({
     private_companies: [priv({ private_id: MH, owner: ALICE, revenue_per_or: "20" })],
+    public_companies: [nycPub],
   });
 
   const dhState = state({
@@ -190,7 +204,9 @@ describe("deriveActivePowerFlow (design notes #818/#849/#871)", () => {
     expect(flow!.abilityKey).toBe("mh-exchange");
     /* THE FIGURE THE DECISION TURNS ON (#443/#871), read out of the rendered sentence rather than out of the
        source that formats it. */
-    expect(flow!.steps[0].text).toContain("$20/OR revenue");
+    expect(flow!.prompt).toContain("$20/OR revenue");
+    /* W1-C: the one legal pile, as its own step. */
+    expect(flow!.steps.map((step) => step.key)).toEqual(["exchange-ipo"]);
   });
 
   it("re-checks ownership rather than trusting the click (#871)", () => {
@@ -213,10 +229,11 @@ describe("deriveActivePowerFlow (design notes #818/#849/#871)", () => {
        fixture is a non-numeric string, which is what a malformed response actually looks like. */
     const odd = state({
       private_companies: [priv({ private_id: MH, owner: ALICE, revenue_per_or: "n/a" })],
+      public_companies: [nycPub],
     });
     const flow = deriveActivePowerFlow({ ...base, state: odd, request: "mh-exchange" });
-    expect(flow!.steps[0].text).toContain("its Operating Round revenue");
-    expect(flow!.steps[0].text).not.toContain("$0");
+    expect(flow!.prompt).toContain("its Operating Round revenue");
+    expect(flow!.prompt).not.toContain("$0");
   });
 
   it("raises the D&H's station question with nobody asking (#818)", () => {

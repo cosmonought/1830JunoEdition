@@ -22,14 +22,25 @@
 
 import { readSource, readStripped, stripComments, readShell, sliceBetween, expectOrder } from "./sourceScan";
 
-import { powerFlowOpen, privatePowerFlow } from "./privatePowerFlow";
+import {
+  exchangeSourceForStep,
+  powerFlowOpen,
+  privatePowerFlow,
+  type ExchangeSourceOption,
+} from "./privatePowerFlow";
 
 const dh = (layDone: boolean, station: "pending" | "placed" | "forfeited") =>
   privatePowerFlow({ abilityKey: "dh-tile", holder: "NNH", hexLabel: "F16", layDone, station });
 const csl = (layDone: boolean) =>
   privatePowerFlow({ abilityKey: "csl-tile", holder: "NNH", hexLabel: "B20", layDone, station: "none" });
-const mh = (revenuePerOr?: number) =>
-  privatePowerFlow({ abilityKey: "mh-exchange", holder: "B", revenuePerOr });
+/* W1-C: the authority's verdicts arrive with the input. The default is the ordinary case -- the IPO legal, the
+   Bank Pool empty -- so the pre-W1-C single-question tests below still describe the one-pile flow. */
+const IPO_ONLY: readonly ExchangeSourceOption[] = [
+  { source: "Ipo", refusal: null },
+  { source: "Bank", refusal: "The Bank Pool holds no NYC certificate to exchange for." },
+];
+const mh = (revenuePerOr?: number, sources: readonly ExchangeSourceOption[] = IPO_ONLY) =>
+  privatePowerFlow({ abilityKey: "mh-exchange", holder: "B", revenuePerOr, sources });
 
 describe("the D&H is two steps, in order", () => {
   it("opens with the lay live and the station greyed", () => {
@@ -275,19 +286,22 @@ describe("one hex, one question (design note #850)", () => {
 // selecting no."
 describe("the M&H is one question (design note #871)", () => {
   it("asks once and names the revenue it costs", () => {
+    /* W1-C: the question moved from the step to the flow's `prompt` -- with two piles there are two steps
+       answering ONE question, so the question cannot live on either of them. */
     const flow = mh(20);
     expect(flow.steps).toHaveLength(1);
-    expect(flow.steps[0].key).toBe("exchange");
-    expect(flow.steps[0].text).toBe(
-      "Exchanging this Private Company for an NYC share forfeits its $20/OR revenue. Are you sure?",
+    expect(flow.steps[0].key).toBe("exchange-ipo");
+    expect(flow.prompt).toBe(
+      "Exchanging this Private Company for an NYC share forfeits its $20/OR revenue. Are you sure? " +
+        "The Bank Pool holds no NYC certificate to exchange for.",
     );
   });
 
   it("names the loss without a figure when the room has not reported one", () => {
     /* `|| 0` WOULD BE THE TEMPTING WRONG ANSWER -- it would tell a player they are giving up nothing, which
        is the opposite of the fact the sentence exists to carry. */
-    expect(mh().steps[0].text).toContain("forfeits its Operating Round revenue");
-    expect(mh().steps[0].text).not.toContain("$");
+    expect(mh().prompt).toContain("forfeits its Operating Round revenue");
+    expect(mh().prompt).not.toContain("$");
   });
 
   it("offers a No as well as an X", () => {
@@ -319,6 +333,97 @@ describe("the M&H is one question (design note #871)", () => {
        two corporate hex powers and wrong for this one -- the M&H belongs to a PERSON (#441). */
     expect(mh(20).holderLine).toBe("B holds this power.");
     expect(dh(false, "pending").holderLine).toBe("NNH holds this power.");
+  });
+});
+
+// ==================================================================
+//  PHASE 3 W1-C (harness): ONE STEP PER LEGAL SOURCE, AND NO SILENT PREFERENCE
+// ==================================================================
+//
+// AUD-10.04 (K-03): "No choice between IPO and Bank Pool for the M&H share (owner ruled it required)." The flow
+// is handed the authority's verdict for each pile and must offer EXACTLY the legal ones -- both when both are
+// legal, only the legal one otherwise, none when neither is -- and must never pick between them itself.
+describe("the M&H offers one step per legal source (W1-C, AUD-10.04)", () => {
+  const legal = (source: "Ipo" | "Bank"): ExchangeSourceOption => ({ source, refusal: null });
+  const refused = (source: "Ipo" | "Bank", refusal: string): ExchangeSourceOption => ({ source, refusal });
+  const IPO_EMPTY = "The IPO holds no NYC certificate to exchange for.";
+  const POOL_EMPTY = "The Bank Pool holds no NYC certificate to exchange for.";
+  const CAP = "You already hold 60% of the NYC and no player may exceed 60%. The Orange and Brown zones lift this cap.";
+
+  it.each([
+    ["both legal", [legal("Ipo"), legal("Bank")], ["exchange-ipo", "exchange-bank"]],
+    ["only the IPO", [legal("Ipo"), refused("Bank", POOL_EMPTY)], ["exchange-ipo"]],
+    ["only the Bank Pool", [refused("Ipo", IPO_EMPTY), legal("Bank")], ["exchange-bank"]],
+    ["neither", [refused("Ipo", CAP), refused("Bank", CAP)], []],
+  ] as const)("%s → exactly those steps", (_name, sources, keys) => {
+    const flow = mh(20, sources);
+    expect(flow.steps.map((step) => step.key)).toEqual(keys);
+  });
+
+  it("both legal: both are live, neither is done, and the prompt asks for the choice", () => {
+    /* NO SILENT IPO-FIRST: a preference would show up as one step disabled, missing or pre-marked. */
+    const flow = mh(20, [legal("Ipo"), legal("Bank")]);
+    expect(flow.steps.every((step) => step.enabled && !step.done)).toBe(true);
+    expect(flow.steps.map((step) => step.actionLabel)).toEqual([
+      "Exchange for IPO Share",
+      "Exchange for Bank Pool Share",
+    ]);
+    expect(flow.prompt).toContain("Choose where the share comes from.");
+    expect(flow.unavailable).toBeNull();
+  });
+
+  it("each step names its own pile, and the step key maps back to exactly that pile", () => {
+    const flow = mh(20, [legal("Ipo"), legal("Bank")]);
+    expect(flow.steps.map((step) => exchangeSourceForStep(step.key))).toEqual(["Ipo", "Bank"]);
+    expect(flow.steps[0].text).toContain("from the IPO");
+    expect(flow.steps[1].text).toContain("from the Bank Pool");
+    // The hex powers' steps are not exchanges.
+    expect(exchangeSourceForStep("lay")).toBeNull();
+    expect(exchangeSourceForStep("station")).toBeNull();
+  });
+
+  it("the single No sits under the last choice, not under each pile", () => {
+    const both = mh(20, [legal("Ipo"), legal("Bank")]);
+    expect(both.steps.map((step) => step.declineLabel)).toEqual([null, "No, Keep the Private"]);
+    const bankOnly = mh(20, [refused("Ipo", IPO_EMPTY), legal("Bank")]);
+    expect(bankOnly.steps.map((step) => step.declineLabel)).toEqual(["No, Keep the Private"]);
+  });
+
+  it("one legal pile: the other's refusal says why it is missing, in the authority's words", () => {
+    const flow = mh(20, [refused("Ipo", IPO_EMPTY), legal("Bank")]);
+    expect(flow.prompt).toContain(IPO_EMPTY);
+    expect(flow.unavailable).toBeNull();
+  });
+
+  it("neither legal: no step to press, and the authority's sentence said once", () => {
+    const flow = mh(20, [refused("Ipo", CAP), refused("Bank", CAP)]);
+    expect(flow.steps).toEqual([]);
+    expect(flow.prompt).toBeNull();
+    expect(flow.unavailable).toBe(CAP);
+    // Nothing committed, so the X is the way out; the flow is open so the reason can be read.
+    expect(flow.cancellable).toBe(true);
+    expect(powerFlowOpen(flow)).toBe(true);
+  });
+
+  it("neither legal for two different pile reasons: both sentences, in order", () => {
+    const flow = mh(20, [refused("Ipo", IPO_EMPTY), refused("Bank", POOL_EMPTY)]);
+    expect(flow.unavailable).toBe(`${IPO_EMPTY} ${POOL_EMPTY}`);
+  });
+
+  it("the exchange choices are alternatives and are not numbered; the hex powers' steps are a sequence", () => {
+    expect(mh(20, [legal("Ipo"), legal("Bank")]).alternatives).toBe(true);
+    expect(dh(false, "pending").alternatives).toBe(false);
+    expect(csl(false).alternatives).toBe(false);
+  });
+
+  it("the modal renders the flow's prompt, its unavailable reason and the numbering rule, writing none of them", () => {
+    const MODAL = readStripped("components/PrivatePowerFlowModal.tsx");
+    expect(MODAL).toContain("{flow.prompt}");
+    expect(MODAL).toContain("{flow.unavailable}");
+    expect(MODAL).toContain("!flow.alternatives");
+    // No pile preference or exchange copy of its own.
+    expect(MODAL).not.toContain("Bank Pool");
+    expect(MODAL).not.toContain("forfeits");
   });
 });
 

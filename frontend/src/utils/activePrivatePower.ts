@@ -50,11 +50,18 @@ import { privateAcronym } from "./privateCatalog";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import {
   privatePowerFlow,
+  type ExchangeSource,
+  type ExchangeSourceOption,
   type PowerAbilityKey,
   type PowerFlow,
   type StationOutcome,
 } from "./privatePowerFlow";
 import { privateHexFor } from "../gameEngine/privateReservations";
+import {
+  MH_EXCHANGE_TICKER,
+  mhExchangeRequestRefusal,
+  type MhExchangeRequest,
+} from "../gameEngine/mohawkExchange";
 
 /** Design note #727: whether the ACTING CORPORATION holds a private -- `owner_protocol_id`, not `owner`.
  *  A power belongs to the railroad, not to the president personally (#441), so the player's own certificate
@@ -158,6 +165,60 @@ export function stockRoundExchangeOffers(
   ];
 }
 
+/* ==================================================================
+    PHASE 3 W1-C (AUD-10.02 / AUD-10.04): THE EXCHANGE ASKS THE AUTHORITY, ONCE PER PILE
+   ==================================================================
+   The modal and the dispatch used to ask `resolvePrivateExchange`, a client-side copy of the rule with a flat
+   60% cap (no Orange/Brown waiver), no certificate-limit check and a silent IPO-first source choice. The
+   reducer and ingress ask `mhExchangeRequestRefusal` (`mohawkExchange.ts`, #1630). These two helpers ask THAT
+   predicate -- the same one, with the same request shape `ExchangePrivate` carries -- so the modal offers
+   exactly what the room will accept, and the shell sends exactly the pile the player chose. Nothing here
+   restates a rule. */
+
+/** The two piles, in display order. ORDER ONLY: neither is a default and neither is tried first. */
+export const MH_EXCHANGE_SOURCES: readonly ExchangeSource[] = ["Ipo", "Bank"];
+
+export type MhExchangeRequestOutcome =
+  | { ok: true; request: MhExchangeRequest }
+  | { ok: false; reason: string };
+
+/** The `ExchangePrivate` body for this viewer taking the NYC share from `source`, judged by the authority.
+ *
+ *  The request is built exactly as the shell sends it (no `keep_open`, the viewer as `player`) and the
+ *  viewer is passed as the actor, which is what ingress binds the socket identity to. A board without the
+ *  NYC is not special-cased here: the authority is asked with an id no corporation carries and answers with
+ *  its own sentence ("That corporation is not in this game."). */
+export function mhExchangeRequestFor(
+  state: GameStateResponse | null,
+  viewerAddress: string | null,
+  mhPrivateId: number,
+  source: ExchangeSource,
+): MhExchangeRequestOutcome {
+  if (!state) return { ok: false, reason: "No game state yet." };
+  const nyc = state.public_companies.find((entry) => entry.ticker === MH_EXCHANGE_TICKER) ?? null;
+  const player = viewerAddress ?? "";
+  const request: MhExchangeRequest = {
+    private_id: mhPrivateId,
+    company_id: nyc?.company_id ?? -1,
+    player,
+    source,
+  };
+  const reason = mhExchangeRequestRefusal(state, request, player);
+  return reason === null ? { ok: true, request } : { ok: false, reason };
+}
+
+/** Both piles, each with the authority's verdict for this viewer -- what the flow turns into steps. */
+export function mhExchangeSourceOptions(
+  state: GameStateResponse | null,
+  viewerAddress: string | null,
+  mhPrivateId: number,
+): readonly ExchangeSourceOption[] {
+  return MH_EXCHANGE_SOURCES.map((source) => {
+    const outcome = mhExchangeRequestFor(state, viewerAddress, mhPrivateId, source);
+    return { source, refusal: outcome.ok ? null : outcome.reason };
+  });
+}
+
 export interface ActivePowerFlowInput {
   state: GameStateResponse | null;
   /** What a chip or a click asked for, or `null`. */
@@ -246,6 +307,8 @@ export function deriveActivePowerFlow(input: ActivePowerFlowInput): PowerFlow | 
       /* `undefined` RATHER THAN A GUESS when the figure is unreadable: the sentence then names the loss
          without a number, which is honest, where `|| 0` would tell a player they are giving up nothing. */
       revenuePerOr: Number.isFinite(revenue) ? revenue : undefined,
+      /* W1-C: one verdict per pile, from the authority. The flow makes a step of each legal one. */
+      sources: mhExchangeSourceOptions(state, viewerAddress, mhPrivateId),
     });
   }
 

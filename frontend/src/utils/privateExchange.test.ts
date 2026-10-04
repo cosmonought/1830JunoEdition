@@ -19,8 +19,6 @@
 
 import {
   applyPrivateExchange,
-  PLAYER_HOLDING_CAP_PERCENT,
-  resolvePrivateExchange,
   type ExchangeGrant,
 } from "../gameEngine/privateExchange";
 import type { GameStateResponse } from "../gameEngine/gameState";
@@ -82,85 +80,10 @@ const prrOf = (state: GameStateResponse) =>
   state.public_companies.find((c) => c.company_id === 1)!;
 const privOf = (state: GameStateResponse) => state.private_companies[0];
 
-describe("resolvePrivateExchange", () => {
-  it("exchanges the Mohawk & Hudson for an NYC share", () => {
-    const mh = resolvePrivateExchange(board({ privateId: MH }), MH, ADA);
-    expect(mh.ok && mh.ticker).toBe("NYC");
-  });
-
-  it("refuses to EXCHANGE the Camden & Amboy at all", () => {
-    /* ==============================================================
-     *  DESIGN NOTE 576 (harness): THE C&A IS NOT AN EXCHANGE
-     * ==============================================================
-     *
-     * The previous pass put the C&A in `PRIVATE_EXCHANGES` on the strength
-     * of `PrivatePowerPanel`'s description, while `privateCatalog.ts` -- the
-     * same author's own rewrite, two passes earlier -- said the opposite and
-     * said it correctly: the share arrives on PURCHASE, free, and the
-     * company STAYS OPEN.
-     *
-     * Two things went wrong and only one was reported. The share never
-     * arrived, which is what the player saw. And had the button ever fired
-     * it would have CLOSED a company that pays $25 an Operating Round for
-     * the rest of the game -- a silent, permanent loss the player would have
-     * had no way to attribute.
-     *
-     * So this asserts the ABSENCE, which is the only way to stop it coming
-     * back the next time the two descriptions are read in the wrong order. */
-    expect(resolvePrivateExchange(board({ privateId: MH }), CA, ADA).ok).toBe(false);
-  });
-
-  it("takes from the IPO while it has shares", () => {
-    const outcome = resolvePrivateExchange(board({ ipo: 100, pool: 50, privateId: MH }), MH, ADA);
-    expect(outcome.ok && outcome.source).toBe("Ipo");
-  });
-
-  it("falls back to the pool when the IPO is empty", () => {
-    const outcome = resolvePrivateExchange(board({ ipo: 0, pool: 20, privateId: MH }), MH, ADA);
-    expect(outcome.ok && outcome.source).toBe("Bank");
-  });
-
-  it("refuses at the 60% holding cap, and says so", () => {
-    /* THE REPORT'S OWN HYPOTHESIS. A refusal here must be legible AND must
-       leave the power intact -- that second half is enforced at the call
-       site, but it is only reachable because this returns `ok: false`
-       rather than throwing or silently succeeding. */
-    const outcome = resolvePrivateExchange(board({ held: 60, privateId: MH }), MH, ADA);
-    expect(outcome.ok).toBe(false);
-    expect(!outcome.ok && outcome.reason).toContain("60%");
-    expect(!outcome.ok && outcome.reason).toMatch(/stays available/i);
-  });
-
-  it("allows the exchange that lands exactly on the cap", () => {
-    // 50 + 10 = 60 is legal; 60 + 10 is not. An off-by-one here either
-    // blocks a legal move or permits an illegal holding.
-    expect(resolvePrivateExchange(board({ held: 50, privateId: MH }), MH, ADA).ok).toBe(true);
-    expect(resolvePrivateExchange(board({ held: 60, privateId: MH }), MH, ADA).ok).toBe(false);
-    expect(PLAYER_HOLDING_CAP_PERCENT).toBe(60);
-  });
-
-  it("refuses when no certificate exists anywhere", () => {
-    const outcome = resolvePrivateExchange(board({ ipo: 0, pool: 0, privateId: MH }), MH, ADA);
-    expect(outcome.ok).toBe(false);
-    expect(!outcome.ok && outcome.reason).toMatch(/stays available/i);
-  });
-
-  it("refuses somebody else's private", () => {
-    expect(resolvePrivateExchange(board({ owner: BEN, privateId: MH }), MH, ADA).ok).toBe(false);
-    expect(resolvePrivateExchange(board({ owner: null, privateId: MH }), MH, ADA).ok).toBe(false);
-  });
-
-  it("refuses one already exchanged", () => {
-    const outcome = resolvePrivateExchange(board({ closed: true, privateId: MH }), MH, ADA);
-    expect(outcome.ok).toBe(false);
-    expect(!outcome.ok && outcome.reason).toMatch(/already been exchanged/i);
-  });
-
-  it("refuses a private with no exchange at all", () => {
-    // The Schuylkill Valley has no power; asking must not invent one.
-    expect(resolvePrivateExchange(board(), 1, ADA).ok).toBe(false);
-  });
-});
+/* Phase 3 W1-C (AUD-10.02): the `resolvePrivateExchange` block that stood here tested the shell's retired
+   client-side copy of the M&H rule (flat 60% cap, no zone waiver, no certificate check, IPO first). The rule it
+   approximated is `mhExchangeRequestRefusal`, exhaustively covered by `mohawkExchangeAuthority.test.ts`; the
+   shell's per-pile use of it is covered by `activePrivatePower.test.ts` and `privatePowerFlow.test.ts`. */
 
 describe("applyPrivateExchange", () => {
   const grant = (over: Partial<ExchangeGrant> = {}): ExchangeGrant => ({

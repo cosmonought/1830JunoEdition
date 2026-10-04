@@ -19,7 +19,7 @@
 // Design note #605: the status dock's scroll compensation is a `useLayoutEffect` -- it has to run after React
 // commits the new bottom padding and before the browser paints, or the correction is visible as a jump. Since
 // Phase 3 W1-I it lives in `utils/useStatusDockHeight.ts` with the dock's observer.
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import { WalletProvider, useWallet, CONTRACT_ADDRESS } from "./context/WalletContext";
 import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate";
@@ -33,6 +33,20 @@ import { boardRulesVersion } from "./utils/buildStamp"; // Phase 3 W2-I / OD-6 (
 /* #1223: the alarm #1207 argued for and nobody connected. The comparison lives in its own module so it is
    testable without a socket, a server or this file. */
 import { divergenceVerdict } from "./utils/divergenceWatch";
+/* Phase 3 W3-C (AUD-14.01): the room strip's notice constants live with its two-slot model (`roomNotices.ts`). */
+import {
+  CATCHING_UP_BANNER,
+  NO_ROOM_NOTICES,
+  RECONNECTING_BANNER,
+  RESYNC_BANNER,
+  ROOM_PAUSED_BANNER,
+  TURN_REFUSAL,
+  noticeActionFor,
+  roomNoticeLine,
+  roomNoticesReducer,
+  type RoomNoticeAction,
+  type RoomNotices,
+} from "./utils/roomNotices";
 import { divergentFields, fieldDigests, stateDigest } from "./gameEngine/stateDigest";
 import { GameSessionProvider, useGameSession } from "./context/GameSessionContext";
 import HexGridRenderer, {
@@ -888,17 +902,6 @@ const ACTION_LATCH_BACKSTOP_MS = 6000;
  *  the shell waits for a frame before playing the line anyway (a viewer who is not on the map). */
 const HAUNTING_AUDIO_GRACE_MS = 1500;
 
-/** #1253: the room-error banner while the link is between sockets. A constant so the clear can recognise it. */
-const RECONNECTING_BANNER = "Connection to the room was lost — reconnecting…";
-/** #1407: the turn refusal's one wording -- the client gate's and `turnAuthority`'s -- so a landed move can
- *  recognise and retire it. */
-const TURN_REFUSAL = "It is not your turn.";
-/** #1407: what a click during the reload's replay is told, in place of a turn refusal about a historical board. */
-const CATCHING_UP_BANNER = "Catching up with the room — try that again in a moment.";
-/** LIVE-3A: while this tab rebuilds a room whose history it turned out not to share (`ahead` / `resync`). */
-const RESYNC_BANNER = "This tab's copy of the room did not match the server's — reloading the room's history.";
-/** LIVE-3A: while the server holds the room (`status`) and gave no sentence of its own. */
-const ROOM_PAUSED_BANNER = "The game server has paused this room. It will resume on its own.";
 
 /* Design note #875: `RIVAL_ROUTE_INDEX_BASE` lives in `watcherRouteChips.ts`, which is now the only thing
    that applies it -- for chip rows built with `watcherTrainDrafts` outside an Operating Round's Routes step,
@@ -4369,7 +4372,32 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [routeFeedback, setRouteFeedback] = useState<string | null>(null);
   /* last_route_revenue cannot say whether revenue was earned THIS turn, so the turn's own history is observed; null enforces. #522: the room cursor, three refs so dispatching effects are not re-armed.
      See docs/ai_architecture/state_machine.md - App.tsx #278 */
-  const [sandboxRoomError, setSandboxRoomError] = useState<string | null>(null);
+  /* ==================================================================
+      PHASE 3 W3-C (AUD-14.01, P3-N004): TWO SLOTS -- THE CONNECTION AND THE REFUSAL (`roomNotices.ts`)
+     ==================================================================
+     `sandboxRoomError` was one slot with ~28 writers and exact-text clears. It is now the two-slot model: the
+     connection notice (with its kind) and the last refusal. `dispatchRoomNotice` names the slot and the kind;
+     `setSandboxRoomError(sentence)` stays for the writers that hand a bare sentence and is routed by
+     `noticeActionFor` (the connection constants by identity, everything else a refusal). `sandboxRoomError` is the
+     one-line reading for the surfaces that have one slot. */
+  const [roomNotices, dispatchRoomNotice] = useReducer(
+    (state: RoomNotices, action: RoomNoticeAction | { type: "legacy-map"; map: (current: string | null) => string | null }) => {
+      if (action.type !== "legacy-map") return roomNoticesReducer(state, action);
+      /* Transitional (removed once the RED callers name their kind): an exact-text clear applied to each slot. */
+      let next = state;
+      if (next.refusal !== null && action.map(next.refusal) === null) next = roomNoticesReducer(next, { type: "clear-refusal" });
+      if (next.connection !== null && action.map(next.connection.text) === null) {
+        next = roomNoticesReducer(next, { type: "clear-connection", kind: next.connection.kind });
+      }
+      return next;
+    },
+    NO_ROOM_NOTICES,
+  );
+  const sandboxRoomError = roomNoticeLine(roomNotices);
+  const setSandboxRoomError = useCallback((update: string | ((current: string | null) => string | null)) => {
+    if (typeof update === "function") dispatchRoomNotice({ type: "legacy-map", map: update });
+    else dispatchRoomNotice(noticeActionFor(update));
+  }, []);
   const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
   const [sandboxAppliedCount, setSandboxAppliedCount] = useState(0);
   /* ==================================================================
@@ -13043,7 +13071,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       const gameIdNow = sandboxRoomRef.current;
       if (!gameIdNow) return false;
       if (options?.busy !== false) setSandboxRoomBusy(true);
-      setSandboxRoomError(null);
+      dispatchRoomNotice({ type: "clear-refusal" }); // W3-C: a new op retires the last refusal, not the link's notice
       try {
         const answer = await roomOp(op, gameIdNow);
         if (!answer.ok) {
@@ -13068,7 +13096,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** Design note #522: opens a table from the shell's own gate -- `room-op create` with the printed game's terms. */
   const handleHostSandboxRoom = useCallback(async () => {
     setSandboxRoomBusy(true);
-    setSandboxRoomError(null);
+    dispatchRoomNotice({ type: "clear-refusal" });
     try {
       /* LIVE-2E: nobody chose a name on this path, so the host's seat starts with the profile's. */
       const answer = await createHostedGame(STANDARD_VARIANTS, undefined, profileNickname());
@@ -13092,7 +13120,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return;
     }
     setSandboxRoomBusy(true);
-    setSandboxRoomError(null);
+    dispatchRoomNotice({ type: "clear-refusal" });
     try {
       const answer = await joinHostedGame(code, true);
       const joined = gameIdOf(answer);
@@ -13120,7 +13148,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     /* Forget the room on leave, so the next refresh does not silently rejoin it.
        See docs/ai_architecture/firebase_middleware.md - App.tsx #551 */
     writeActiveSandboxRoom(null);
-    setSandboxRoomError(null);
+    dispatchRoomNotice({ type: "reset" }); // W3-C: nothing on the strip belongs to the next table
     appliedIndexRef.current = 0;
     setSandboxAppliedCount(0);
   }, [roomLost]);
@@ -14237,8 +14265,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 {holdNoticeFor(sandboxRoom)}
               </span>
             )}
-            {sandboxRoomCode && sandboxRoomError && sandboxRoomError !== holdNoticeFor(sandboxRoom) && (
-              <span style={styles.roomStripError}>{sandboxRoomError}</span>
+            {/* Phase 3 W3-C (AUD-14.01): the strip's two slots, each shown once -- the link's notice and the last
+               refusal of this tab's own action -- and neither repeats the room's standing hold notice. */}
+            {sandboxRoomCode && roomNotices.connection && roomNotices.connection.text !== holdNoticeFor(sandboxRoom) && (
+              <span style={styles.roomStripError} data-testid="room-connection-notice" data-kind={roomNotices.connection.kind}>
+                {roomNotices.connection.text}
+              </span>
+            )}
+            {sandboxRoomCode && roomNotices.refusal && roomNotices.refusal !== holdNoticeFor(sandboxRoom) && (
+              <span style={styles.roomStripError} data-testid="room-refusal-notice">
+                {roomNotices.refusal}
+              </span>
             )}
           </>
         }

@@ -549,7 +549,7 @@ gates.
 
 #### W2-B
 **Stock Round turn presentation** · L1 · **3–4 h**
-- **OD-2 RULED (2026-10-03, §7.3):** Sell whenever legal; at most one Buy; after buying, Buy is unavailable but Sell remains; the button is **"Pass Turn"** and ends the turn in ONE click; the Sell → Buy → Sell stage walk is superseded. Changing `PassTurn`'s replay semantics is a rules change, so the rule lands in the dedicated **v13 rules slice** (W3-K's vehicle) with its settlement certification; this slice presents it. Wave-1's `sellBuySell` pins are interim (v12) until then. The rule landed in W3-K (rules v13, revision 2); **this slice is required before v13 deploys** (with W1-A and the removal of Auto-Buy's stage Pass). Status: NOT STARTED.
+- **OD-2 RULED (2026-10-03, §7.3):** Sell whenever legal; at most one Buy; after buying, Buy is unavailable but Sell remains; the button is **"Pass Turn"** and ends the turn in ONE click; the Sell → Buy → Sell stage walk is superseded. Changing `PassTurn`'s replay semantics is a rules change, so the rule lands in the dedicated **v13 rules slice** (W3-K's vehicle) with its settlement certification; this slice presents it. Wave-1's `sellBuySell` pins are interim (v12) until then. The rule landed in W3-K (rules v13, revision 2); **this slice is required before v13 deploys** (with W1-A and the removal of Auto-Buy's stage Pass). Status: COMPLETE on its slice branch `phase3/w2-b-stock-round-v13-ui` (code `90d5588`, review fix `ca68b43`, #1274 fix `794e03c` / `699160c`; from `868bd83`); NOT integrated.
 - **Rows:** implements AUD-03.04 (SBS-1 / SBS-2), AUD-03.07
 - **Surfaces:** the bar stage block; `stockStage`; a must-sell banner in `StockRoundPanel` from `divestmentDebt`. Implements
   the audit's target: **one Pass / End Turn control** that ends the turn in one press, without a forced sell → Pass → buy
@@ -557,7 +557,7 @@ gates.
   change (Pass always ends the turn) is not this slice**; it is v13 and W3-K.
 - **App.tsx regions:** group "stage", R-SRPANEL. **Focused tests:** `sellBuySell`, `sellIsNotAPass`; a banner render test.
 - **Depends on:** W1-A, W2-A. **Gates:** OD-2.
-- **Status (2026-10-04): NOT STARTED — UNLOCKED** for implementation against the integrated v13 semantics on `phase3/wave2a-v13-integration`: the OD-2 rule is now the reducer's (W3-K), so this slice is the presentation — one "Pass Turn" control and the stage block / copy, which still describe the revision-1 Sell → Buy walk — plus the Auto-Buy correction.
+- **Status (2026-10-04): COMPLETE on its slice branch** `phase3/w2-b-stock-round-v13-ui` (code `90d5588`, review fix `ca68b43`, #1274 fix `794e03c` / `699160c`; from `868bd83`), **NOT integrated**: one "Pass Turn" control (one `PassTurn`, in every state), the stage block / `stockStage` and the revision-1 copy removed, Auto-Buy's stage Pass removed and no Pass after its purchase (`autoBuyTurnStep`; #1274), the must-sell banner from `divestmentDebt`; no reducer change. Focused tests: `phase3W2BStockRoundPassTurn`, `sellBuySell`, `sellIsNotAPass`.
 
 #### W2-C
 **Offer panels read their authority** · L3 · **3–4 h**
@@ -767,7 +767,7 @@ gates.
 
 #### W3-K
 **v13 rules batch** · L2 (or L6) · **8–14 h planned; ~14–22 h with OD-4 and its certification (an estimate)**
-- **Owner rulings (2026-10-03, §7.3):** OD-10(a) RULED — one consolidated v13 batch inside Phase 3: OD-2 (SBS-2), SBS-3, SBS-4 (precisely reproduced, V13_SCOPE_VERIFICATION §5) and OD-4 (automatic emergency funding). OD-17: D-18 and D-22 need no change. RR-4 is not a v13 item (OD-7: copy). Status: **accepted as COMPLETE (2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (merge `ed5e69a` of `be1fd10` onto `96ccb22`; not merged to main); settlement certification for 13 PENDING (dedicated pass). The ledger keeps W3-K PARTIAL only because AUD-03.04 closes with W2-B's control.**
+- **Owner rulings (2026-10-03, §7.3):** OD-10(a) RULED — one consolidated v13 batch inside Phase 3: OD-2 (SBS-2), SBS-3, SBS-4 (precisely reproduced, V13_SCOPE_VERIFICATION §5) and OD-4 (automatic emergency funding). OD-17: D-18 and D-22 need no change. RR-4 is not a v13 item (OD-7: copy). Status: **accepted as COMPLETE (2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (merge `ed5e69a` of `be1fd10` onto `96ccb22`; not merged to main); settlement certification for 13 PENDING (dedicated pass). The ledger kept W3-K PARTIAL only because AUD-03.04 closes with W2-B's control; on W2-B's slice branch (`90d5588`) that control has landed and the ledger reads W3-K COMPLETE (no W3-K work changed) -- on the provisional baseline, once W2-B is integrated.**
 - **Rows:** implements P3-N023 (SBS-3), P3-N024 (SBS-4) and the rule half of AUD-03.04 (SBS-2). AUD-04.04 (DH-1) and AUD-08.01 (GR-1 / S10-27) left the batch: derivation-only, no version bump, placement open. VF/D-18 and VF/D-22: no change (OD-17).
 - **Scope (as built):** rules revision 2 (`CURRENT_RULES_REVISION = 2`) switches every correction; one `RULES_ENGINE_VERSION` bump 12 → 13 with one changelog row; live list `[13]` (no dual v12 support); three new room messages (`EmergencySellPortfolio`, `ForgoTrainTrade`, `ForgoPrivateFunding`) with codec, ingress, reducer, replay, rebuild, RevertTo, log wording and idempotence; `DeclareBankruptcy` refused on revision 2; V-6.3 "Buy All" not implemented.
 - **Procedure:** settlement certification for v13 through ESCROW-3A's procedure (goldens beside the old ones, then the literal in its own reviewed change), with bankruptcy vectors: `V13_SETTLEMENT_CERTIFICATION_VECTORS.md`. **Gameplay and settlement versions are separate axes:** v13 is not settlement-certified until that change lands.
@@ -967,7 +967,7 @@ never marked READY because code was written.
 | System (App audit module) | Status now | Phase-3 slices | Phase-4 validation needed | READY when |
 |---|---|---|---|---|
 | Action-dock model (M16) | NOT STARTED | W1-I, W2-A, W2-B (+ W1-I-b) | Yes: holds, Pass/End Turn, the dock height | W2-A/W2-B landed and the S-4 / U-2 rows pass |
-| Pass / End Turn presentation (OD-2) | NOT STARTED | W2-B | Yes: S-4 | OD-2 applied and S-4 observed clean |
+| Pass / End Turn presentation (OD-2) | PHASE-3 SLICE (W2-B `90d5588` + `ca68b43`, slice branch; not integrated) | W2-B | Yes: S-4 | OD-2 applied and S-4 observed clean |
 | Notice / modal policy (M7) | NOT STARTED | W3-A, W3-D | Yes: Firefox/Safari, chaining | Policy applied and AUD-13.08 clean |
 | Game-screen heading / focus target | NOT STARTED | W3-A | Yes: screen reader | AUD-17.04 clean |
 | Map interaction controller (M11) | NOT STARTED | W1-E, W1-F, W1-M (+ W3-E) | Yes: first facing, DH-2 | AUD-05.04 / AUD-06.06 clean |

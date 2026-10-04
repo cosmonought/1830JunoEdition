@@ -22,7 +22,7 @@
 // again and the round could never end. Two facts, two lifetimes, two fields.
 
 import { applySandboxAction } from "../gameEngine/sandboxSession";
-import { hasActedThisTurn, passButtonLabel, passButtonTitle } from "../gameEngine/turnAction";
+import { hasActedThisTurn, PASS_LABEL, passButtonTitle } from "../gameEngine/turnAction";
 import { passedSeatIndices } from "./passedSeats";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { readShell } from "./sourceScan";
@@ -229,23 +229,29 @@ describe("an Operating Round is untouched", () => {
 });
 
 describe("the button says which one it is", () => {
-  it("names the decision that is left, not just the end of the turn", () => {
-    /* Why a label change ships with a reducer fix: the player who found this had no way to tell that pressing
-       the button marked "Pass Turn" would not forfeit their turn. The rule is invisible until it is named.
-       "Skip Buy Share" over "End Turn" because 1830's sell-then-buy ordering means a player who has sold is
-       standing at exactly one remaining decision, so the label can name it rather than describe the clock. */
-    expect(passButtonLabel(true)).toBe("Skip Buy Share");
-    expect(passButtonTitle(true)).toMatch(/does not count as a pass/);
+  /* PHASE 3 W2-B (OD-2, rules v13): ONE LABEL, TWO TITLES. #745 changed the LABEL ("Pass Turn" -> "Skip Buy Share")
+     because under the old ordering a player who had sold stood at exactly one decision. The owner's OD-2 ruling names
+     the one control "Pass Turn" and has it end the turn in one click whatever the turn has done (after a sale the buy
+     is still open; after a buy the sale is), so the label no longer moves. #745's distinction survives where it can
+     still be true: the TITLE says whether this press ends an acted turn or is a true pass. */
+  it("reads Pass Turn in both states -- the owner's one control", () => {
+    expect(PASS_LABEL).toBe("Pass Turn");
   });
 
-  it("reads Pass Turn when neither half has been taken", () => {
-    expect(passButtonLabel(false)).toBe("Pass Turn");
+  it("names, in the title, that ending an acted turn is not a pass", () => {
+    expect(passButtonTitle(true)).toMatch(/does not count as a pass/);
+    expect(passButtonTitle(true, true)).toMatch(/does not count as a pass/);
+  });
+
+  it("names, in the Stock Round title, that an untouched turn is a true pass toward the round's close", () => {
+    expect(passButtonTitle(false, true)).toMatch(/is a pass/);
+    expect(passButtonTitle(false, true)).toMatch(/every player passes/);
     expect(passButtonTitle(false)).toMatch(/Pass/);
   });
 
   it("gives the two states different words", () => {
-    // A label pair that collapsed would leave the reducer's distinction with no surface at all.
-    expect(passButtonLabel(true)).not.toBe(passButtonLabel(false));
+    // A title pair that collapsed would leave the reducer's distinction with no surface at all.
+    expect(passButtonTitle(true, true)).not.toBe(passButtonTitle(false, true));
   });
 });
 
@@ -260,10 +266,13 @@ describe("the surfaces ask the rule module", () => {
 
   it("leaves no hardcoded label on the bar", () => {
     /* The structural half. A caption that agrees today because somebody typed the same words twice is the
-       shape of bug this project keeps finding -- #723, #736, #712 -- so the bar renders the function. */
+       shape of bug this project keeps finding -- #723, #736, #712 -- so the bar renders the module's label and title.
+       W2-B: the label is the one constant; the title still reads the reducer's flag. */
     const bar = read("panels/ContextualActionBar.tsx");
-    expect(bar).toContain("passButtonLabel(turnActionTaken === true)");
+    expect(bar).toContain("{PASS_LABEL}");
+    expect(bar).toContain('passButtonTitle(turnActionTaken === true, roundType === "StockRound")');
     expect(bar).not.toMatch(/>\s*Pass Turn\s*</);
+    expect(bar).not.toContain("Skip Buy Share");
   });
 
   it("feeds the bar from replayed state", () => {

@@ -152,26 +152,38 @@ describe("Sell-Buy-Sell: the stages of a turn", () => {
   });
 });
 
-describe("the shell walks the stages (design notes #1443/#1444)", () => {
+/* ==================================================================
+    PHASE 3 W2-B (OD-2, rules v13): THE SHELL NO LONGER WALKS THE STAGES
+   ==================================================================
+   These pins used to assert #1443/#1444's bar -- "Sell | Auto | Pass -> Buy | Auto | Pass -> Sell | Auto | End Turn" --
+   and Auto-Buy's stage Pass. Both are superseded: the owner's OD-2 rule is one "Pass Turn" control that ends the turn
+   in one click, which rules revision 2 made the reducer's (W3-K). The reducer cases above still pin revision 1's walk,
+   because a revision-1 log must replay exactly; the SHELL presents only the current rule
+   (`phase3W2BStockRoundPassTurn.test.tsx` drives it). */
+describe("the shell presents one Pass Turn, not the stage walk (Phase 3 W2-B)", () => {
   const { readStripped, readShell, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
   const app = readShell();
   const bar = readStripped("panels/ContextualActionBar.tsx");
 
-  it("stamps the revision when it deals, and hands the bar the stage", () => {
+  it("the server stamps the revision when it deals; the shell hands the bar no stage", () => {
     /* LIVE-2D: the SERVER deals now (`start-game`), and stamps the revision exactly as the shell used to. */
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
     const service = fs.readFileSync(path.join(__dirname, "..", "..", "..", "server", "src", "rooms", "roomService.ts"), "utf8");
     expect(service).toContain("variants: { ...plan.variants, rules: CURRENT_RULES_REVISION },");
     expect(app).not.toContain("rules: CURRENT_RULES_REVISION }");
-    expect(app).toContain("? stockTurnStage(gameState)");
-    expect(app).toContain('onShowStocks={() => setActiveMainTab("corps")}');
+    expect(app).not.toContain("stockTurnStage(");
+    expect(app).not.toContain("stockStage=");
+    expect(app).not.toContain("onShowStocks=");
   });
 
-  it("the bar shows Sell | Auto | Pass, Buy | Auto | Pass, Sell | Auto | End Turn", () => {
-    expect(bar).toContain('data-testid="stock-stage-button"');
-    expect(bar).toContain('{stockStage === "buy" ? "Buy a Share" : "Sell Shares"}');
-    expect(bar).toContain('{stockStage === "sell_again" ? "End Turn" : stockStage !== null ? "Pass" : passButtonLabel(turnActionTaken === true)}');
+  it("the bar shows Pass Turn | Auto: no stage button, no stage labels", () => {
+    expect(bar).not.toContain("stock-stage-button");
+    expect(bar).not.toContain("Buy a Share");
+    expect(bar).not.toContain("Sell Shares");
+    expect(bar).not.toContain("Done selling");
+    expect(bar).not.toContain("move on to buying");
+    expect(bar).toContain("{PASS_LABEL}");
     expect(bar).toContain('data-testid="auto-button"');
     expect(bar).not.toContain('{autoBuy.armed ? "Auto-Buy: On" : "Auto-Buy"}');
   });
@@ -185,8 +197,9 @@ describe("the shell walks the stages (design notes #1443/#1444)", () => {
     expect(sliceBetween(app, "const saleBlockFor = useCallback(", "const [marketPeek, setMarketPeek]")).toContain("stockSaleRefusal({");
   });
 
-  it("Auto-Buy walks the stages and arming one automation disarms the other", () => {
-    expect(app).toContain('if (stage !== "buy") {');
+  it("Auto-Buy sends no stage Pass (nor any Pass, #1274), and arming one automation disarms the other", () => {
+    expect(app).not.toContain('if (stage !== "buy") {');
+    expect(app).toContain('if (autoBuyTurnStep(gameState) === "hand-back") {');
     expect(app).toContain("setAutoBuyPlan(null); // #1444: one or the other");
     expect(app).toContain("setAutoPassArm(null); // #1444: one or the other");
     const picker = readStripped("components/AutoModePicker.tsx");

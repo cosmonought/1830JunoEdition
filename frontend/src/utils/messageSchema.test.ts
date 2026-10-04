@@ -75,7 +75,8 @@ describe("the discriminant", () => {
     expect(GAMEPLAY_MESSAGE_KINDS).toContain("DeclareBankruptcy"); // #1541
     expect(GAMEPLAY_MESSAGE_KINDS).toContain("ProposePrivateTrade"); // #1594
     expect(GAMEPLAY_MESSAGE_KINDS).toContain("RescindTrainPurchase"); // #1594
-    expect(GAMEPLAY_MESSAGE_KINDS.length).toBe(49); // 44 + Batch 7.4's five (#1594)
+    expect(GAMEPLAY_MESSAGE_KINDS).toContain("EmergencySellPortfolio"); // W3-K (v13, OD-4)
+    expect(GAMEPLAY_MESSAGE_KINDS.length).toBe(52); // 44 + Batch 7.4's five (#1594) + W3-K's three (v13, OD-4)
   });
 });
 

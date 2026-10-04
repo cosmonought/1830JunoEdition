@@ -1190,8 +1190,9 @@ describe("identity: client protocol 1 is spoken; nothing else moved", () => {
     expect(CLIENT_PROTOCOL_VERSION).toBe(1);
     expect(CLIENT_PROTOCOL_CHANGELOG.map((row) => row.version)).toEqual([0, 1]);
     expect(CLIENT_PROTOCOL_CHANGELOG[1].note).toMatch(/spoken from L4-3/);
-    expect(RULES_ENGINE_VERSION).toBe(12);
-    expect([...SUPPORTED_RULES_ENGINE_VERSIONS]).toEqual([12]);
+    // Phase 3 W3-K: rules engine v13 replaced 12 as the one supported version; settlement stays [10, 11, 12] (v13 PENDING).
+    expect(RULES_ENGINE_VERSION).toBe(13);
+    expect([...SUPPORTED_RULES_ENGINE_VERSIONS]).toEqual([13]);
     expect([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS]).toEqual([10, 11, 12]);
     expect(HOSTED_PROTOCOL_VERSION).toBe(1);
     expect(FINANCIAL_PROTOCOL_VERSION).toBe(3);
@@ -1204,15 +1205,19 @@ describe("identity: client protocol 1 is spoken; nothing else moved", () => {
     expect(compatibilityKey(atEleven({ client_protocols: [0] }))).toBe("dc1-5e141a8b20871e5069520928");
   });
 
-  it("Route v12 R12-2 moved the key once more, on the rules axis alone: dc1-68c4b829… -> dc1-ade748b9…; R12-3's certification of 12 moved it again", () => {
+  it("Route v12 R12-2 moved the key once more, on the rules axis alone: dc1-68c4b829… -> dc1-ade748b9…; R12-3's certification of 12 moved it again; W3-K's v13 again (dc1-390107d5…)", () => {
     // R12-2: rules 12, certified still [10, 11].
     expect(compatibilityKey(thisPool({ rules: { current: 12, supported: [12], certified: [10, 11] } }))).toBe("dc1-ade748b9407a3db380e5ed72");
     expect(compatibilityKey(thisPool({ rules: { current: 12, supported: [12], certified: [10, 11] }, client_protocols: [0] }))).toBe("dc1-38ec6470f41eb199b158126a");
     // R12-3: the certified list is a rules-axis field, so certifying 12 is a new pool.
+    const atTwelve = { current: 12, supported: [12], certified: [10, 11, 12] };
+    expect(compatibilityKey(thisPool({ rules: atTwelve }))).toBe("dc1-41eb96a737cd33aa90a62808");
+    expect(compatibilityKey(thisPool({ rules: atTwelve, client_protocols: [0] }))).toBe("dc1-5a32b3ba76970f03f558aff4");
+    // Phase 3 W3-K: rules engine v13 moves the key once more, on the rules axis alone (13 supported; 13 not certified).
     const now = thisPool();
-    expect(now.rules).toEqual({ current: 12, supported: [12], certified: [10, 11, 12] });
-    expect(compatibilityKey(now)).toBe("dc1-41eb96a737cd33aa90a62808");
-    expect(compatibilityKey(thisPool({ client_protocols: [0] }))).toBe("dc1-5a32b3ba76970f03f558aff4");
+    expect(now.rules).toEqual({ current: 13, supported: [13], certified: [10, 11, 12] });
+    expect(compatibilityKey(now)).toBe("dc1-390107d5e7024f4a9180efeb");
+    expect(compatibilityKey(thisPool({ client_protocols: [0] }))).toBe("dc1-de419f731b1a81e7f0d9dbbc");
     // Put the rules back and it is the LIVE-4 key again: nothing but the rules moved.
     expect(compatibilityKey(thisPool({ rules: { current: 11, supported: [11], certified: [10, 11] } }))).toBe("dc1-68c4b829b3a20e63f3e55cde");
   });

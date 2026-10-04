@@ -182,12 +182,12 @@ describe("§16 message schema and compatibility", () => {
   const NEW_KINDS = ["RescindPrivatePurchase", "RescindTrainPurchase", "ProposePrivateTrade", "AnswerPrivateTrade", "RescindPrivateTrade"];
 
   it("the live count is 49 and the five new kinds are in it, each seat-exempt with its own owner", () => {
-    expect(GAMEPLAY_MESSAGE_KINDS.length).toBe(49);
+    expect(GAMEPLAY_MESSAGE_KINDS.length).toBe(52); // 49 at Batch 7.4; W3-K (v13, OD-4) added three emergency-funding kinds
     for (const kind of NEW_KINDS) {
       expect(GAMEPLAY_MESSAGE_KINDS).toContain(kind);
       expect(isSandboxOnlyMsg({ [kind]: {} } as never)).toBe(true);
     }
-    expect(Object.keys(GAMEPLAY_MESSAGE_SCHEMA).length).toBe(49);
+    expect(Object.keys(GAMEPLAY_MESSAGE_SCHEMA).length).toBe(52); // + W3-K's three (v13, OD-4)
   });
 
   it("the five shapes are accepted structurally, with and without game_id", () => {

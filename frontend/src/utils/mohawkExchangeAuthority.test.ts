@@ -41,7 +41,6 @@ import { metFloatThreshold, soldFromIpoPercent } from "../gameEngine/floatThresh
 import { MH_PRIVATE_ID } from "../gameEngine/privateExchange";
 import { buildOperatingOrder } from "../gameEngine/operatingOrder";
 import { certificateBreakdown } from "../gameEngine/gameState";
-import { CURRENT_RULES_REVISION } from "../gameEngine/gameVariants";
 import { turnRefusal } from "../gameEngine/turnAuthority";
 import { RoomEngine, type ReplayEntry } from "../gameEngine/replayLog";
 import { sandboxReplayProviders } from "../gameEngine/replayProviders";
@@ -123,9 +122,12 @@ function board(input: {
   const operatingPresident = inOr ? input.corps.find((corp) => corp.id === order[index])?.president : undefined;
   return {
     game_id: 1,
-    /* #1443: Sell-Buy-Sell, the revision this engine deals -- so a purchase leaves the seat with the buyer and
-       the turn ends on a Pass, which is what makes "the exchange consumed nothing" an observable claim. */
-    variants: { rules: CURRENT_RULES_REVISION },
+    /* #1443: Sell-Buy-Sell -- so a purchase leaves the seat with the buyer and the turn ends on a Pass, which is what
+       makes "the exchange consumed nothing" an observable claim. W3-K (v13): revision 1 EXPLICITLY. These cases were
+       written against revision 1's stage walk (`endStockTurn` is its two Passes: Sell -> Buy, then end); rules engine
+       v13 deals revision 2, where one Pass ends the turn (`rulesV13StockRound.test.ts`), and the M&H boundary is
+       the same seat move either way -- it only arrives one message earlier. */
+    variants: { rules: 1 },
     player_addresses: players,
     player_cash: players.map((player) => ({ player, cash_vgp: String(input.cash?.[player] ?? 500) })),
     virtual_bank_vgp: "10000",

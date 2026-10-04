@@ -63,7 +63,7 @@ import {
   doubleSaleEffect,
 } from "./doubleCertificate";
 import { PAR_BOX_PRICES, marketZoneForPrice, parBoxCellFor } from "./marketGeometry";
-import { emergencyFundingFor, forcedSaleRefusal } from "./emergencyFunding";
+import { emergencyObligationFor, forcedSaleRefusal } from "./emergencyFunding";
 import type { MapGridResponse } from "../components/hexContractTypes";
 
 /** The chart facts a stock rule needs, injected on #7's rule.
@@ -504,6 +504,11 @@ export interface StockSaleRefusalInput {
    *  is #757's answer and the one the reducer's own gates give. */
   mapGrid?: MapGridResponse;
   ctx?: StockChartContext;
+  /** W3-K (v13, OD-4): this sale is one leg of an atomic `EmergencySellPortfolio` (or of the bankruptcy
+   *  liquidation), executed by the reducer itself -- judged by the ordinary rules and 6.6.3's presidency rule, with
+   *  "only enough" and the funding requirement owned by the portfolio authority. Never set by a message: the
+   *  reducer's portfolio executor is the only author (`SandboxActionContext.emergencySaleLeg`). */
+  emergencyLeg?: boolean;
 }
 
 /** Whether this is the FIRST Stock Round -- the one §5.1 forbids sales in.
@@ -522,7 +527,8 @@ export function stockSaleRefusal(input: StockSaleRefusalInput): string | null {
   const { state, sell, actor, mapGrid, ctx } = input;
 
   /* ---- 1. The round: a Stock Round, or the §6.6.3 forced sale (Batch 5, preserved) ------------ */
-  const funding = state.current_round_type === "OperatingRound" ? emergencyFundingFor(state, mapGrid) : null;
+  // W3-K: the obligation's facts are all this rule reads (who owes it, and how much is still short).
+  const funding = state.current_round_type === "OperatingRound" ? emergencyObligationFor(state, mapGrid) : null;
   const forced = funding !== null && actor != null && funding.president === actor;
   if (state.current_round_type !== "StockRound" && !forced) {
     return state.current_round_type === "OperatingRound"
@@ -574,7 +580,7 @@ export function stockSaleRefusal(input: StockSaleRefusalInput): string | null {
     if (double.kind === "refused") return double.reason;
     /* #1540/D-6: the forced sale's own three rules, on top of the ordinary ones and never instead of them. */
     if (forced && funding !== null) {
-      const refusal = forcedSaleRefusal(state, funding, actor, sell.companyId, percentage);
+      const refusal = forcedSaleRefusal(state, funding, actor, sell.companyId, percentage, input.emergencyLeg === true ? "leg" : "single");
       if (refusal !== null) return refusal;
     }
   }

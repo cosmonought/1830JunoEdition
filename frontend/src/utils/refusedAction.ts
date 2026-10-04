@@ -66,11 +66,15 @@ import { discardTrainRefusal } from "../gameEngine/trainDiscard";
 import {
   declareBankruptcyRefusal,
   emergencyFundingFor,
+  emergencyPortfolioRefusal,
   emergencyPurchaseRefusal,
   forcedSaleRefusal,
+  forgoPrivateFundingRefusal,
+  forgoTrainTradeRefusal,
   fundingPrivateAnswerRefusal,
   fundingPrivateOfferRefusal,
   fundingPrivateRescindRefusal,
+  retiredDeclarationRefusal,
 } from "../gameEngine/emergencyFunding";
 /* W1-H (Phase 3): the remaining predicates the reducer asks -- the hold composition (#1613), the offers' three
    authorities and the pinned-board refusal of the chain-era messages (#1590-#1595), the train obligation (#1513),
@@ -323,6 +327,15 @@ function refusalReasonOnTableBoard(
     if ("RescindFundingPrivateOffer" in msg) {
       return fundingPrivateRescindRefusal(before, msg.RescindFundingPrivateOffer, actor);
     }
+    /* W3-K (v13, OD-4): the three decisions, each with the reducer's own sentence. */
+    if ("ForgoTrainTrade" in msg) return forgoTrainTradeRefusal(before, funding, actor);
+    if ("ForgoPrivateFunding" in msg) return forgoPrivateFundingRefusal(before, funding, actor);
+    if ("EmergencySellPortfolio" in msg) {
+      return (
+        emergencyPortfolioRefusal(before, funding, msg.EmergencySellPortfolio.sales, actor) ??
+        "The emergency sale could not be completed as submitted: a leg did not settle as projected, so nothing was sold."
+      );
+    }
   }
 
   /* Q11 / D-23: the chain-era offer messages, on a pinned board. */
@@ -350,6 +363,8 @@ function refusalReasonOnTableBoard(
   if ("RescindPrivateTrade" in msg) return rescindPrivateTradeRefusal(before, msg.RescindPrivateTrade, actor);
 
   if ("DeclareBankruptcy" in msg) {
+    const retired = retiredDeclarationRefusal(before); // W3-K (v13, OD-4)
+    if (retired !== null) return retired;
     const funding = ctx?.mapGrid === undefined ? null : emergencyFundingFor(before, ctx.mapGrid);
     return declareBankruptcyRefusal(funding, actor);
   }

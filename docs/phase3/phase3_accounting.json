@@ -382,8 +382,8 @@
    "disp": "A",
    "od": "OD-2 (RULED 2026-10-03: Sell whenever legal; at most one Buy; after buying, Sell remains; one-click \"Pass Turn\"; v13 rules slice + settlement certification)",
    "p4": "—",
-   "notes": "The old Sell → Buy → Sell stage walk is superseded. Wave-1's `sellBuySell` pins describe v12 and are interim until the v13 slice replaces them. The audit cites OD-A-4 here; the 6.5-A register files the Pass question as OD-A-2; OD-2 answered OD-A-2. SBS-4 is P3-N024 and is not resolved.",
-   "status": "RULED — OD-2; not implemented (rules version stays v12 until the v13 slice and its certification)"
+   "notes": "The old Sell → Buy → Sell stage walk is superseded on rules revision 2 (W3-K). Wave-1's `sellBuySell` pins now pin revision-1 boards only. The audit cites OD-A-4 here; the 6.5-A register files the Pass question as OD-A-2; OD-2 answered OD-A-2. SBS-4 is P3-N024 (implemented in W3-K).",
+   "status": "OPEN — the rule half is IMPLEMENTED in W3-K (rules v13 / revision 2: one `PassTurn` ends the Stock Round turn; `phase3/w3-k-rules-v13`, not integrated); W2-B's one-click \"Pass Turn\" control is NOT STARTED and is required before v13 deploys"
   },
   {
    "key": "AUD-03.05",
@@ -579,11 +579,12 @@
    "cls": "[D] (routed to rules batch)",
    "item": "The D&H owner's Tokens step is never auto-skipped in later turns.",
    "src": "CONFIRMED — `gameEngine/dhPower.ts`:418-438 `dhFreeStationAvailableFor` ignores the one-turn window (checked only at `dhStationAuthority.ts`:149).",
-   "slice": "W3-K (conditional, OD-10a)",
+   "slice": "— (out of W3-K: derivation-only, no version bump; slice placement is the owner's)",
    "disp": "C",
-   "od": "OD-10(a)",
+   "od": "OD-10(a) (RULED 2026-10-03: one v13 batch; this item excluded from it)",
    "p4": "—",
-   "notes": "A server derivation change is replay-affecting: v13 + its own settlement certification. Not a UI fix."
+   "notes": "Corrected by the v13 scope verification (§4.1): the earlier \"replay-affecting: v13\" does not hold. A derivation-only fix; it may land in any server/derivation slice with no version bump. Not a UI fix.",
+   "status": "OPEN — V13_SCOPE_VERIFICATION §4: APPROVED DEFECT, but derivation-only (`RoomEngine.apply` never derives; stored logs replay identically), so not v13; the owner's W3-K brief excluded it"
   },
   {
    "key": "AUD-04.05",
@@ -905,11 +906,12 @@
    "cls": "[D]",
    "item": "A refused derived withhold is still logged (Gentle Rust).",
    "src": "PARTIAL — no Gentle-Rust-specific code; the general mechanism: the derived loop appends a minted action without checking refusal (`utils/replayLog.ts`:641-655, `derivedActions.ts`:283-308).",
-   "slice": "W3-K (conditional, OD-10a)",
+   "slice": "— (out of W3-K: derivation-only, no version bump; slice placement is the owner's)",
    "disp": "C",
-   "od": "OD-10(a)",
+   "od": "OD-10(a) (RULED 2026-10-03: one v13 batch; this item excluded from it)",
    "p4": "—",
-   "notes": "Changing what the derived loop appends is replay-affecting (v13)."
+   "notes": "Corrected by the v13 scope verification (§4.2): it is backlog S10-27, a derivation / append-policy fix, not v13. GR-1b (new: the shell's no-server forced-withhold sends the run's $40 as a withhold) is a UI-only defect, routed to a UI slice, not v13.",
+   "status": "OPEN — V13_SCOPE_VERIFICATION §4: APPROVED DEFECT, but derivation-only (`RoomEngine.apply` never derives; stored logs replay identically), so not v13; the owner's W3-K brief excluded it"
   },
   {
    "key": "AUD-08.02",
@@ -1013,9 +1015,9 @@
    "src": "CONFIRMED — `EmergencyTrainPurchaseModal.tsx`:110 (props: no `onClose`), :169 (`dismissible={false}`).",
    "slice": "W2-G",
    "disp": "A",
-   "od": "OD-4",
+   "od": "OD-4 (RULED 2026-10-03: automatic emergency funding, v13)",
    "p4": "—",
-   "notes": "—"
+   "notes": "W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`)."
   },
   {
    "key": "AUD-09.07",
@@ -1026,9 +1028,9 @@
    "src": "CONFIRMED — Part C U-4 `DEFERRED` (minimal by design in Batch 5).",
    "slice": "W2-G",
    "disp": "A",
-   "od": "OD-4",
+   "od": "OD-4 (RULED 2026-10-03: automatic emergency funding, v13)",
    "p4": "—",
-   "notes": "—"
+   "notes": "W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`)."
   },
   {
    "key": "AUD-09.08",
@@ -3222,11 +3224,12 @@
    "cls": "[UX] OPEN",
    "item": "Rules cross-reference: New York's four-slot city (#54→#883 vs #62→#883).",
    "src": "OPEN in `VISUAL_FLOURISH_BACKLOG.md` (line 1177)",
-   "slice": "W3-K (conditional, OD-10a)",
+   "slice": "— (no change: out of W3-K)",
    "disp": "C",
-   "od": "OD-17",
+   "od": "OD-17 (RULED 2026-10-03: no change)",
    "p4": "—",
-   "notes": "Tile-upgrade legality is a rules question."
+   "notes": "Tile-upgrade legality is the printed rule; nothing to build.",
+   "status": "RULED — no change: V13_SCOPE_VERIFICATION §6.1 found it INVALID (the printed T-09 upgrade path); the ledger's OPEN entry and comment cleanup are owed to a docs pass"
   },
   {
    "key": "VF/D-21",
@@ -3248,11 +3251,12 @@
    "cls": "[UX] OPEN",
    "item": "Rules cross-reference: #59 → brown OO facings that break fixed OO (256 accepted transitions).",
    "src": "OPEN in `VISUAL_FLOURISH_BACKLOG.md` (line 1271)",
-   "slice": "W3-K (conditional, OD-10a)",
+   "slice": "— (no change: out of W3-K)",
    "disp": "C",
-   "od": "OD-17",
+   "od": "OD-17 (RULED 2026-10-03: no change)",
    "p4": "—",
-   "notes": "Placement-filter legality; replay-affecting if changed."
+   "notes": "Placement-filter legality already enforced; the 256 count reproduces only with rule 5b removed.",
+   "status": "RULED — no change: V13_SCOPE_VERIFICATION §6.2 found it ALREADY CORRECT (Stage 9.3 rule 5b, rules v7; 0 accepted transitions today); the ledger's OPEN entry and the D-15 / D-21 / D-24 wording are owed to a docs pass"
   },
   {
    "key": "VF/D-30",
@@ -3667,9 +3671,9 @@
    "src": "CONFIRMED — `EmergencyTrainPurchaseModal.tsx`:429-441 (gated only by `canDeclareBankruptcy && sandbox`).",
    "slice": "W2-G",
    "disp": "A",
-   "od": "OD-4",
+   "od": "OD-4 (RULED 2026-10-03: automatic emergency funding, v13)",
    "p4": "—",
-   "notes": "—"
+   "notes": "On a revision-2 board `DeclareBankruptcy` is refused (`retiredDeclarationRefusal`) and `canDeclareBankruptcy` is false; the button must go. W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`)."
   },
   {
    "key": "P3-N018",
@@ -3742,12 +3746,13 @@
    "ref": "draft execution map",
    "cls": "NEW-SOURCE-FINDING",
    "item": "Brown Pool Buy → Sell → Buy is accepted (authority too loose).",
-   "src": "NOT RE-VERIFIED (rules).",
-   "slice": "W3-K (conditional, OD-10a)",
-   "disp": "C",
-   "od": "OD-10(a)",
+   "src": "CONFIRMED — V13_SCOPE_VERIFICATION §4.3 (APPROVED DEFECT, reproduced at 6455b6e).",
+   "slice": "W3-K (rules v13)",
+   "disp": "A",
+   "od": "OD-10(a) (RULED 2026-10-03: in the v13 batch, the official Brown rule)",
    "p4": "—",
-   "notes": "—"
+   "notes": "Official Brown rule only; V-6.3 \"Buy All\" is NOT implemented.",
+   "status": "IMPLEMENTED — W3-K, `phase3/w3-k-rules-v13` (not integrated): the turn-scoped Brown Bank Pool continuation closes on any sale; Pool → Sell → Pool refused (`rulesV13StockRound.test.ts`)"
   },
   {
    "key": "P3-N024",
@@ -3755,13 +3760,13 @@
    "ref": "draft execution map",
    "cls": "NEW-SOURCE-FINDING",
    "item": "A Brown IPO first purchase opens the Pool continuation.",
-   "src": "NOT RE-VERIFIED (rules). Owner (OD-2, 2026-10-03): a corporation's first-ever IPO purchase starts it at a PAR space, not a Brown zone, so the wording is internally suspect.",
-   "slice": "— (needs a precise reproduction before any slice; never W3-K from the current wording)",
-   "disp": "G",
-   "od": "OD-2 (SBS-4 part NOT resolved) + OD-10(a)",
+   "src": "CONFIRMED — V13_SCOPE_VERIFICATION §5 precise reproduction: the first purchase of the turn from a STARTED Brown-zone corporation's IPO opened the Pool continuation (the owner's par-space objection applies only to a corporation's first-ever purchase).",
+   "slice": "W3-K (rules v13)",
+   "disp": "A",
+   "od": "OD-2 (SBS-4 part) resolved by the precise reproduction + OD-10(a) (RULED 2026-10-03)",
    "p4": "—",
-   "notes": "NEEDS PRECISE REPRODUCTION / CLARIFICATION. Do not implement a rule from the current wording.",
-   "status": "NEEDS PRECISE REPRODUCTION / CLARIFICATION"
+   "notes": "Formerly G (needs a precise reproduction); reproduced in V13_SCOPE_VERIFICATION §5, then implemented.",
+   "status": "IMPLEMENTED — W3-K, `phase3/w3-k-rules-v13` (not integrated): only a Brown-zone Bank Pool purchase opens the continuation; IPO → Pool and Pool → IPO refused (`rulesV13StockRound.test.ts`)"
   },
   {
    "key": "P3-N025",
@@ -4506,6 +4511,51 @@
     "Official Keplr logo remains ASSET PENDING; do not fabricate one."
    ],
    "effect": "From the owner's safe Wave-2 integration brief. OD-9(a) is ruled and implemented by W2-K (`e223f64`, integrated `fb4eee5`): AUD-20.01 C → B, IMPLEMENTED. OD-9(b) stays open: AUD-18.05 is ASSET PENDING (an empty official-logo slot, nothing fabricated)."
+  },
+  "OD-4": {
+   "title": "EMERGENCY FUNDING (AUTOMATIC BANKRUPTCY)",
+   "date": "2026-10-03",
+   "ruling": [
+    "Emergency funding becomes automatic in the v13 rules batch (owner sub-rulings O-1 to O-6 of V13_SCOPE_VERIFICATION §3.6).",
+    "O-1: the intercorporate trade window is budgeted at the treasury plus the president's cash before any liquidation; a ForgoTrainTrade message closes it; it never reopens.",
+    "O-3: a liquidation-funded intercorporate trade is illegal.",
+    "The treasury-plus-cash commitment and the purchase are automatic, through the derived-action machinery with durable keys.",
+    "Share raising is one atomic EmergencySellPortfolio: the submitted order is preserved; the whole portfolio is validated, simulated and proven legal; any failure returns the original board; ordinary sale law is reused.",
+    "O-4: \"only enough\" applies to the whole portfolio, and the smallest legal overshoot is allowed.",
+    "O-5: no self-created bankruptcy: an insufficient portfolio is refused. The insolvency oracle must be exact.",
+    "O-2: private funding stays optional; fundingPrivateOfferRefusal is preserved and ForgoPrivateFunding is added.",
+    "Bankruptcy is automatic, with no player Declare: liquidate as far as legally possible, apply the cash to the obligated corporation, then GameEnd with bankrupt_president. DeclareBankruptcy is refused on v13.",
+    "O-6: shares that could not be sold are scored as the bankrupt's shares.",
+    "Expose the authority W2-G needs. Not in this batch: DH-1, GR-1 / S10-27, GR-1b, D-18, D-22, RR-4, V-6.3.",
+    "Owner ruling 1 (2026-10-04): KEEP the portfolio rule. \"Only enough\" means no redundant leg and no unnecessarily large percentage within a leg when a smaller LEGAL bundle of that same holding would still fund; the smallest legal indivisible bundle may overshoot. It does NOT mean the globally smallest dollar overshoot: with $50 short, { B 10% } raising $100 and { C 10% } raising $60 are both legal and the player chooses.",
+    "Owner ruling 4 (2026-10-04): KEEP the refusal. EmergencySellPortfolio may contain each corporation at most once; 20% of PRR is one 20% leg, never two 10% legs.",
+    "Owner ruling 5 (2026-10-04): private-funding relevance is EXACT. The question is whether at least one legally valid private-funding path (one sale or a legal sequence, assuming buyer consent, under the existing #1541 authority) could contribute to a complete rescue. An upper bound may be used only to prune; if exact authority proves no legal private path can rescue, bankruptcy does not wait.",
+    "Review findings fixed (2026-10-04): the automatic bankruptcy is narrated as an outcome; the no-server shell forwards the keyed automatic emergency purchase through #1247's derived-action path; the Rules Reference trade-window and bankruptcy-warning copy; the v13 changelog wording."
+   ],
+   "effect": "Implemented in W3-K on `phase3/w3-k-rules-v13` (rules v13, gated on rules revision 2). W2-G (AUD-09.05/06/07, P3-N017/018) must be reconciled to the v13 authority before it starts. Settlement certification for 13 is pending (bankruptcy vectors required). The 2026-10-04 rulings 1, 4 and 5 and the four review findings are implemented on the same branch."
+  },
+  "OD-10": {
+   "title": "V13 RULES BATCH IN PHASE 3",
+   "date": "2026-10-03",
+   "ruling": [
+    "(a) One consolidated v13 rules batch is allowed inside Phase 3 (W3-K): OD-2, SBS-3, SBS-4 and OD-4, with the official/default Brown rule. V-6.3 \"Buy All\" is not implemented.",
+    "One RULES_ENGINE_VERSION bump (12 → 13), one changelog entry, no speculative rules. The live list is [13] only; no dual v12 support (pinned v12 rooms are drained or abandoned before deployment).",
+    "The settlement-certified literal stays [10, 11, 12]; 13 is added only by its own certification pass. The future v13 certification vectors, including bankruptcy terminal states, are documented.",
+    "DH-1 and GR-1 / S10-27 (derivation-only), GR-1b (UI only), D-18 and D-22 are not in the batch.",
+    "(b) is not addressed by this ruling.",
+    "Owner ruling 2 (2026-10-04): the Brown Bank Pool continuation is one contiguous multi-certificate purchase by the ACTIVE Stock Round player. Any accepted state-changing turn action by that player which is not another qualifying Brown Bank Pool purchase closes it (a sale, an accepted private trade, an M&H exchange, Pass Turn, any other stock-turn action). Another player's off-turn consent or answer, and derived / system bookkeeping, do not. Decided from actor / turn semantics, not log adjacency; a refused or no-op message closes nothing.",
+    "Owner ruling 3 (2026-10-04): KEEP the existing Stock Round semantics for the M&H exchange: it is not a stock purchase or sale for turn_action_taken, the true-pass / all-pass streak, or Priority Deal / last-trader purposes. It can close an already-open Brown purchase (ruling 2) without becoming stock trading."
+   ],
+   "effect": "W3-K implemented on `phase3/w3-k-rules-v13` (branch only). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open. The 2026-10-04 rulings 2 and 3 are implemented on the same branch."
+  },
+  "OD-17": {
+   "title": "TILE-UPGRADE CROSS-REFERENCES",
+   "date": "2026-10-03",
+   "ruling": [
+    "D-18 and D-22 are excluded from the v13 batch: V13_SCOPE_VERIFICATION found D-18 INVALID (the printed rule) and D-22 ALREADY CORRECT (Stage 9.3 rule 5b, rules v7).",
+    "No engine change."
+   ],
+   "effect": "VF/D-18 and VF/D-22 stay C (the ledger still lists them OPEN) with status RULED — no change; the ledger and comment cleanup is a docs task (closure contract item 12)."
   }
  },
  "wave1_integration": {
@@ -4622,9 +4672,9 @@
   "W3-H": "NOT STARTED",
   "W3-I": "NOT STARTED",
   "W3-J": "NOT STARTED",
-  "W3-K": "NOT STARTED — OD-2 schedules SBS-2 (\"Pass Turn\" ends the turn in one click) into the v13 rules slice it is the vehicle for; SBS-4 needs reproduction first; `phase3/v13-scope-verification` (`9b3f60b`) is NOT merged (it is on an older planning lineage) — its evidence is reconciled during W3-K. Settlement v13 is not certified. BLOCKED pending owner rulings / review; no W3-K work is integrated on `phase3/wave2a-integration`"
+  "W3-K": "PARTIAL — rules v13 implemented on `phase3/w3-k-rules-v13` (branch only, not integrated): OD-2, SBS-3, SBS-4, OD-4, with the owner's 2026-10-04 rulings 1-5 and the four review findings; live list [13]; settlement certification for 13 PENDING A DEDICATED PASS (literal stays [10, 11, 12]; `V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). NOT DEPLOYABLE ALONE: needs W2-A, W2-B + the Auto-Buy correction, W2-G v13 reconciliation, the safe integration reconciliation, the dedicated settlement certification, pinned v12 rooms drained and the final integrated owner gate"
  },
- "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words.",
+ "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04).",
  "wave2_safe_integration": {
   "branch": "phase3/wave2-safe-integration",
   "base": "4e51cff7014632726de94f44024d66fc433b12cb (phase3/wave1-integration)",

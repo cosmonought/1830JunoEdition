@@ -1595,9 +1595,12 @@ describe("DA-T11: a bank break inside the trigger set -- the set finishes, the g
        AS IT STANDS: its certificates conserve (DA-F6's mint, SET-0A F-7, is closed at v11), and it appraises exactly as
        the same board at the v10 pin. The rule under test (an unsold private is nobody's) is the appraiser's. */
     expect(game.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
-    /* Route v12 R12-2 moved the game to v12; Route v12 R12-3 certified v12 for settlement -- so the board as dealt is
-       appraised again AS IT STANDS, and must agree with the same board at the earlier certified pins, 11 and 10. */
-    const appraisal = appraiseSeats(game.state, seats);
+    /* Route v12 R12-2 moved the game to v12; Route v12 R12-3 certified v12 for settlement. Phase 3 W3-K moved it to v13,
+       which is NOT settlement-certified (PENDING its dedicated pass): the board as dealt is refused, fail closed, before a
+       value is read -- the R12-2 shape. The appraiser's rule under test is proven on the same board at the certified
+       pins, which must agree with one another. (The v13 certification pass appraises it AS IT STANDS again.) */
+    expect(() => appraiseSeats(game.state, seats)).toThrow(/UNSUPPORTED_RULES_ENGINE_VERSION/);
+    const appraisal = appraiseSeats({ ...game.state, rules_engine_version: 12 } as State, seats);
     expect(appraisal).toEqual(appraiseSeats({ ...game.state, rules_engine_version: 11 } as State, seats));
     expect(appraisal).toEqual(appraiseSeats({ ...game.state, rules_engine_version: 10 } as State, seats));
     for (const seat of appraisal) {

@@ -19,6 +19,8 @@ import {
   type WaterfallStateResponse,
 } from "../gameEngine/gameState";
 import { dividendSplit } from "../gameEngine/dividendSplit";
+import { operatingCorporationId } from "../gameEngine/dividendGate"; // W3-K (v13): the obligated corporation
+import { automaticFundingInForce } from "../gameEngine/emergencyFunding"; // W3-K (v13): the automatic bankruptcy
 import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 /* #1630 (Slice 9.3, S9-21): THE SENTENCE NAMES THE TILE, so it must use the tile's NAME. `tile_id` is the
@@ -439,6 +441,54 @@ export function describeGameplayAction(
   msg: SandboxLogMsg,
   context: ActionLogContext,
 ): string | null {
+  const line = describeGameplayActionItself(msg, context);
+  const bankruptcy = automaticBankruptcySentence(context);
+  if (bankruptcy === null) return line;
+  return line === null ? bankruptcy : `${line} ${bankruptcy}`;
+}
+
+/* ==================================================================
+    PHASE 3 W3-K (rules engine v13, review finding 1): THE AUTOMATIC BANKRUPTCY IS NARRATED AS AN OUTCOME
+   ==================================================================
+   On a rules-revision-2 board no player declares bankruptcy: the reducer ends the game inside whatever transition
+   proved that no legal rescue remained (entering Buy Trains, `ForgoTrainTrade`, `ForgoPrivateFunding`, a declined
+   or accepted funding offer, a derived entry). That message's own sentence says what was DECIDED; this one says
+   what HAPPENED, and is appended to it. Nothing client-side is invented: it is read off the AFTER board the log line
+   already has (design note #1) -- `bankruptcy_record`, which the reducer writes at the moment of the bankruptcy (the
+   legal liquidation leg by leg, what it raised, the whole of the president's money handed to the corporation), the
+   holdings still in his hand (what could not legally be sold), and `bankrupt_president` / `GameEnd`. NOT a before /
+   after treasury difference: the proving transition may also move other money (a withheld run, review round 2), and
+   that would be mis-attributed to the president. No settlement figure is computed here. Silent unless this transition is the one that ended the game by bankruptcy on a
+   revision-2 board; a v12 `DeclareBankruptcy` keeps its own sentence alone. */
+function automaticBankruptcySentence(context: ActionLogContext): string | null {
+  const before = context.gameState;
+  const after = context.afterState ?? null;
+  if (!before || !after) return null;
+  const record = after.bankruptcy_record ?? null;
+  if (record === null || after.current_round_type !== "GameEnd" || before.current_round_type === "GameEnd") return null;
+  if (!automaticFundingInForce(before) || after.bankrupt_president !== record.president) return null;
+  const who = context.labelForAddress(record.president);
+  const ticker = corp(before, record.company_id);
+  const sold = record.sold.map((leg) => `${leg.percentage}% of ${corp(before, leg.company_id)}`);
+  const kept = after.public_companies
+    .map((company) => ({ ticker: company.ticker, percentage: company.player_holdings.find((entry) => entry.player === record.president)?.percentage ?? 0 }))
+    .filter((entry) => entry.percentage > 0)
+    .map((entry) => `${entry.percentage}% of ${entry.ticker}`);
+  return (
+    `Automatic bankruptcy: no legal rescue remained for ${ticker}'s forced train purchase. ` +
+    (sold.length > 0
+      ? `${who}'s shares were sold as far as the rules allow (${sold.join(", ")}, raising $${record.liquidation_proceeds}), and `
+      : `${who} had no shares that could legally be sold, and `) +
+    `all of ${who}'s money ($${record.handed_over}) went to ${ticker}'s treasury. ` +
+    (kept.length > 0 ? `${who} keeps ${kept.join(", ")}, which could not legally be sold. ` : "") +
+    `${who} is bankrupt and the game ends, because the train could not be paid for.`
+  );
+}
+
+function describeGameplayActionItself(
+  msg: SandboxLogMsg,
+  context: ActionLogContext,
+): string | null {
   const { gameState, mapGrid, era } = context;
 
   /* ---- Operating Round: the corporation acts. ---- */
@@ -584,6 +634,24 @@ export function describeGameplayAction(
   if ("DeclareBankruptcy" in msg) {
     const president = context.afterState?.bankrupt_president ?? null;
     return `${president ? context.labelForAddress(president) : "The president"} could not fund the forced train purchase and is bankrupt. The game ends.`;
+  }
+  /* W3-K (rules engine v13, OD-4): the obligated president's three decisions. Read off the BEFORE board (the one the
+     decision was made on); the portfolio names every leg in the order it executed. A bankruptcy that ends the game in
+     the same transition is narrated by `automaticBankruptcySentence` (appended to whichever line it follows). */
+  if ("ForgoTrainTrade" in msg) {
+    const companyId = gameState ? operatingCorporationId(gameState) : null;
+    return `${companyId === null ? "The president" : `${corp(gameState, companyId)}'s president`} will buy the forced train from the Bank — no train from another corporation.`;
+  }
+  if ("ForgoPrivateFunding" in msg) {
+    const companyId = gameState ? operatingCorporationId(gameState) : null;
+    return `${companyId === null ? "The president" : `${corp(gameState, companyId)}'s president`} declined to sell a private company to fund the forced train purchase.`;
+  }
+  if ("EmergencySellPortfolio" in msg) {
+    const legs = msg.EmergencySellPortfolio.sales.map((leg) => `${leg.percentage}% of ${corp(gameState, leg.protocol_id)}`);
+    const companyId = gameState ? operatingCorporationId(gameState) : null;
+    return (
+      `Emergency share sale${companyId === null ? "" : ` for ${corp(gameState, companyId)}'s train`}: ${legs.join(", then ")}, sold as one transaction.`
+    );
   }
 
   if ("AnswerPrivatePurchase" in msg) {

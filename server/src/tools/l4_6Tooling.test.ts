@@ -69,10 +69,12 @@ const why = (verdict: ContinuationVerdict): string => (verdict.kind === "continu
 const GAMES_DOCTOR = path.join(__dirname, "gamesDoctor.js");
 
 /** The keys L4-3 pinned and the integration kept (`live4Integration`, §5 of its report) -- as Route v12 R12-2 moved
- *  them, on the rules axis alone (rules 12; LIVE-4's were dc1-68c4b829… and dc1-43086498… on rules 11), and as R12-3 moved
- *  them again by certifying 12 for settlement (R12-2's were dc1-ade748b9… and dc1-eb48b18e…). */
-const KEY_NO_ESCROW = "dc1-41eb96a737cd33aa90a62808";
-const KEY_FIXTURE_PIN = "dc1-63af8114005a5f202d7d349c";
+ *  them, on the rules axis alone (rules 12; LIVE-4's were dc1-68c4b829… and dc1-43086498… on rules 11), as R12-3 moved
+ *  them again by certifying 12 for settlement (R12-2's were dc1-ade748b9… and dc1-eb48b18e…), and as Phase 3 W3-K moved
+ *  them on the rules axis alone (rules 13 reading [13], settlement still [10, 11, 12]; R12-3's were dc1-41eb96a7… and
+ *  dc1-63af8114…). */
+const KEY_NO_ESCROW = "dc1-390107d5e7024f4a9180efeb";
+const KEY_FIXTURE_PIN = "dc1-d01c50c4a70d0dc14cdf915d";
 
 const PIN_B: FinancialDeploymentPin = Object.freeze({ ...PIN, contract_address: WALLETS[2] });
 const PIN_TYPO: FinancialDeploymentPin = Object.freeze({ ...PIN, denom: "ujunoy" });
@@ -192,13 +194,13 @@ describe("LIVE-4 L4-6: the compatibility descriptor", () => {
     });
   });
 
-  test("the axes are the capability's facts, named: rules 12 reading [12] and settling [10, 11, 12] (12 by Route v12 R12-3); hosted [1]; financial [] without escrow and [3] with it; client 1 accepting [0, 1]; codec 18JUNO/v1", () => {
+  test("the axes are the capability's facts, named: rules 13 reading [13] and settling [10, 11, 12] (12 by Route v12 R12-3; 13 PENDING, W3-K); hosted [1]; financial [] without escrow and [3] with it; client 1 accepting [0, 1]; codec 18JUNO/v1", () => {
     const none = compatibilityDescriptor(thisDeploymentCapability([]));
     assert.deepEqual(
       { ...none.axes },
       {
-        rules_engine_version: 12,
-        readable_rules: [12],
+        rules_engine_version: 13,
+        readable_rules: [13],
         settlement_certified_rules: [10, 11, 12],
         hosted_protocols: [1],
         financial_protocols: [],
@@ -555,9 +557,9 @@ describe("LIVE-4 L4-6: no inspection command writes", () => {
 /* ================================================================================================= */
 
 describe("LIVE-4 L4-6: no protocol or version moved", () => {
-  test("8. rules 12 (reads [12]; 11 / [11] through LIVE-4, moved by Route v12 R12-2); settlement [10, 11, 12] (12 certified by R12-3); hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the keys as R12-3 moved them", () => {
-    assert.equal(RULES_ENGINE_VERSION, 12);
-    assert.deepEqual([...SUPPORTED_RULES_ENGINE_VERSIONS], [12]);
+  test("8. rules 13 (reads [13]; 11 / [11] through LIVE-4, 12 / [12] from Route v12 R12-2 until W3-K); settlement [10, 11, 12] (12 certified by R12-3; 13 PENDING); hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the keys as W3-K moved them", () => {
+    assert.equal(RULES_ENGINE_VERSION, 13);
+    assert.deepEqual([...SUPPORTED_RULES_ENGINE_VERSIONS], [13]);
     assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11, 12]);
     assert.equal(HOSTED_PROTOCOL_VERSION, 1);
     assert.equal(FINANCIAL_PROTOCOL_VERSION, 3);

@@ -95,9 +95,11 @@ const sha = (bytes: Buffer | string) => createHash("sha256").update(bytes).diges
 
 /** The keys L4-3 pinned and every later pass kept. */
 /* Route v12 R12-2 moved both keys on the rules axis alone (rules 12; LIVE-4 certified dc1-68c4b829… / dc1-43086498… on 11),
-   and R12-3 moved them again by certifying 12 for settlement (R12-2's were dc1-ade748b9… / dc1-eb48b18e…). */
-const KEY_NO_ESCROW = "dc1-41eb96a737cd33aa90a62808";
-const KEY_FIXTURE_PIN = "dc1-63af8114005a5f202d7d349c";
+   and R12-3 moved them again by certifying 12 for settlement (R12-2's were dc1-ade748b9… / dc1-eb48b18e…). Phase 3 W3-K
+   moved them once more, on the rules axis alone (rules 13 reading [13], settlement still [10, 11, 12]; R12-3's were
+   dc1-41eb96a7… / dc1-63af8114…). */
+const KEY_NO_ESCROW = "dc1-390107d5e7024f4a9180efeb";
+const KEY_FIXTURE_PIN = "dc1-d01c50c4a70d0dc14cdf915d";
 
 const OTHER_CHECKSUM = "ab".repeat(32);
 const PIN_B: FinancialDeploymentPin = Object.freeze({ ...PIN, contract_address: WALLETS[2] });
@@ -221,10 +223,10 @@ const lastIndex = (answer: Frame): number => {
 /* §1. The pins                                                                                       */
 /* ================================================================================================= */
 
-describe("LIVE-4 L4-7 §1: the certified identity -- no version or key moved (but for Route v12 R12-2's rules bump and R12-3's certification)", () => {
-  test("rules 12 (reads [12]; 11 / [11] at L4-7); settlement [10, 11, 12] ([10, 11] at L4-7); hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the two pinned keys", () => {
-    assert.equal(RULES_ENGINE_VERSION, 12);
-    assert.deepEqual([...SUPPORTED_RULES_ENGINE_VERSIONS], [12]);
+describe("LIVE-4 L4-7 §1: the certified identity -- no version or key moved (but for Route v12 R12-2's rules bump, R12-3's certification and W3-K's v13)", () => {
+  test("rules 13 (reads [13]; 11 / [11] at L4-7, 12 / [12] until W3-K); settlement [10, 11, 12] ([10, 11] at L4-7); hosted 1; financial 3; client 1 accepting [0, 1]; money GameRecords schema 2; the two pinned keys", () => {
+    assert.equal(RULES_ENGINE_VERSION, 13);
+    assert.deepEqual([...SUPPORTED_RULES_ENGINE_VERSIONS], [13]);
     assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11, 12]);
     assert.equal(HOSTED_PROTOCOL_VERSION, 1);
     assert.equal(FINANCIAL_PROTOCOL_VERSION, 3);
@@ -999,7 +1001,7 @@ describe("LIVE-4 L4-7 §5: one capability, one key -- banner, ops/status.json, g
     const base = thisDeploymentCapability([PIN]);
     const key = compatibilityKey(base);
     const moved = [
-      { ...base, rules: { ...base.rules, current: 12, supported: [11, 12] } },
+      { ...base, rules: { ...base.rules, current: 13, supported: [12, 13] } },
       { ...base, rules: { ...base.rules, certified: [11] } },
       { ...base, hosted_protocols: [1, 2] },
       { ...base, financial_protocols: [3, 4] },

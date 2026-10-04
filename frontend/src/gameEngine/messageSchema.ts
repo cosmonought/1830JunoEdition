@@ -165,6 +165,7 @@ type FieldKind =
   | "choices"
   | "players"
   | "variants"
+  | "sales"
   | `enum:${string}`;
 
 type FieldSpec = FieldKind | `${FieldKind}?`;
@@ -241,6 +242,14 @@ const SETUP_PLAYER_FIELDS: Readonly<Record<string, FieldSpec>> = nullTable<Field
 const CHOICE_FIELDS: Readonly<Record<string, FieldSpec>> = nullTable<FieldSpec>({
   company_id: "int",
   payout: "bool",
+});
+
+/** W3-K (v13, OD-4): one leg of an `EmergencySellPortfolio`, CLOSED. `percentage` is an INT: a fractional or
+ *  non-finite percentage is not a sale at all; whether it is a legal bundle (whole 10% certificates, held, sellable)
+ *  is the authority's (`emergencyPortfolioRefusal`). */
+const SALE_LEG_FIELDS: Readonly<Record<string, FieldSpec>> = nullTable<FieldSpec>({
+  protocol_id: "int",
+  percentage: "int",
 });
 
 /** Rebuild an object from `fields` alone. Unknown keys are counted into `strip` and not carried. */
@@ -370,6 +379,14 @@ function parseField(value: unknown, spec: FieldSpec, strip: { count: number }): 
       });
     case "variants":
       return parseObject(value, VARIANT_FIELDS, strip, "an object");
+    /* W3-K (v13, OD-4): the portfolio's legs, ORDER PRESERVED (the president's submitted order is the order the
+       transaction executes in), at most `MAX_LIST_LENGTH`, each a closed `{protocol_id, percentage}`. Empty and
+       duplicate-corporation portfolios are well-formed and the authority's to refuse, with its sentence. */
+    case "sales":
+      return parseList(value, "sale legs", (entry) => {
+        const parsed = parseObject(entry, SALE_LEG_FIELDS, strip, "an object");
+        return parsed.ok ? parsed : bad(`has a sale leg whose ${parsed.complaint}`);
+      });
     default:
       /* An unreachable arm (#788) written as a real failure rather than a silent pass: a kind added to the
          union and forgotten here must refuse, not admit. */
@@ -574,6 +591,11 @@ const RAW_GAMEPLAY_MESSAGE_SCHEMA: Record<string, Readonly<Record<string, FieldS
   AnswerPrivateTrade: { game_id: "int?", private_id: "int", accept: "bool" },
   RescindPrivateTrade: { game_id: "int?", private_id: "int" },
   BuyKanawhaLicense: { game_id: "int?", protocol_id: "int" },
+  /* W3-K (rules engine v13, OD-4): the obligated president's three emergency-funding decisions (`emergencyFunding.ts`).
+     Shape only: who may send each, on which board, and whether the portfolio is legal are the authority's. */
+  ForgoTrainTrade: { game_id: "int?" },
+  EmergencySellPortfolio: { game_id: "int?", sales: "sales" },
+  ForgoPrivateFunding: { game_id: "int?" },
 };
 
 /** Every gameplay discriminant and its declared fields, as null-prototype tables (LIVE-2 §11.1 item 4): a lookup

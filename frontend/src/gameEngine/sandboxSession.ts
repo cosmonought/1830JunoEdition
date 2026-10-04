@@ -28,6 +28,7 @@ import {
   creditPlayer,
   creditTreasury,
   debitBank,
+  playerCashOf,
   transfer,
   type LedgerResult,
 } from "./cashLedger";
@@ -39,6 +40,8 @@ import {
   legacyTurnSeed,
   resolveVariants,
   sellBuySellInForce,
+  passEndsStockTurn, // W3-K (v13, OD-2)
+  brownPoolContinuationInForce, // W3-K (v13, SBS-3 / SBS-4)
   rollTurnRevenue,
   type RevenueSeedParts,
 } from "./gameVariants";
@@ -71,6 +74,9 @@ import {
   isRescindPrivatePurchaseMsg,
   isRescindPrivateTradeMsg,
   isRescindTrainPurchaseMsg,
+  isForgoTrainTradeMsg, // W3-K (v13, OD-4)
+  isForgoPrivateFundingMsg,
+  isEmergencySellPortfolioMsg,
   isSetBoParMsg,
   isSetupGameMsg,
   waterfallForRoster,
@@ -172,14 +178,23 @@ import { stationPlacementRefusal } from "./stationPlacementGate";
 import { cheapestPurchasableTrain, trainObligationRefusal } from "./trainAvailability";
 import { discardTrainRefusal, pendingDiscardBlock } from "./trainDiscard";
 import {
+  automaticFundingInForce,
   declareBankruptcyRefusal,
   emergencyFundingBlock,
   emergencyFundingFor,
+  emergencyObligationFor,
+  emergencyPortfolioRefusal,
   emergencyPurchaseRefusal,
   forcedSaleRefusal,
+  forgoPrivateFundingRefusal,
+  forgoTrainTradeRefusal,
   fundingPrivateAnswerRefusal,
   fundingPrivateOfferRefusal,
   fundingPrivateRescindRefusal,
+  projectedPortfolioProceeds,
+  retiredDeclarationRefusal,
+  withEmergencyMark,
+  type EmergencySaleLeg,
 } from "./emergencyFunding";
 // Design note #1019: the purchase gate the reducer never had.
 import { trainPurchaseRefusal } from "./trainPurchaseGate";
@@ -349,6 +364,13 @@ export function stockTurnStage(
   return state.stock_turn_stage === "buy" ? "buy" : "sell";
 }
 
+/** W3-K (v13, SBS-3 / SBS-4): the Brown Bank Pool continuation, closed -- written only where it is open, so a
+ *  revision-1 or legacy board (which never carries the field) gains no key at all. Spread by every site that clears
+ *  `bought_this_turn`. */
+function closedBrownContinuation(state: GameStateResponse): Pick<GameStateResponse, "brown_pool_continuation_company"> {
+  return state.brown_pool_continuation_company === undefined ? {} : { brown_pool_continuation_company: undefined };
+}
+
 function advanceSeat(state: GameStateResponse): GameStateResponse {
   const count = state.player_addresses.length;
   if (count === 0) return state;
@@ -364,6 +386,7 @@ function advanceSeat(state: GameStateResponse): GameStateResponse {
     bought_this_turn: 0,
     // Design note #1570: and the corporation it was spent on -- the Brown continuation's other half (S7-18).
     bought_this_turn_company: undefined,
+    ...closedBrownContinuation(state), // W3-K (v13): the Brown Bank Pool continuation dies with the turn
     stock_turn_stage: undefined, // #1443: the Sell-Buy-Sell stage clears with the seat
   };
 }
@@ -575,6 +598,7 @@ function recordPass(state: GameStateResponse): GameStateResponse {
     // Design note #1172: and the purchase count with it.
     bought_this_turn: 0,
     bought_this_turn_company: undefined, // #1570: and the corporation it was spent on
+    ...closedBrownContinuation(state), // W3-K (v13): and the Brown Bank Pool continuation
     stock_turn_stage: undefined, // #1443: the Sell-Buy-Sell stage clears with the seat
   };
 
@@ -918,6 +942,12 @@ export interface SandboxActionContext {
   /** Live prices per company, for the certificate limit's zone exemption. */
   marketPricesByCompany?: Readonly<Record<number, number | null>> | null;
   zoneForPrice?: (price: number | null | undefined) => string | null;
+  /** W3-K (v13, OD-4): INTERNAL -- this `SellStock` is one leg of an atomic `EmergencySellPortfolio` or of the
+   *  bankruptcy liquidation, executed by the reducer on a private copy of the board. The leg is judged by the
+   *  ordinary sale law and 6.6.3's presidency rule only (`forcedSaleRefusal`'s `"leg"` mode), and the settle step
+   *  that could end the game (`settleBankruptcy`) does not run between legs. No context builder sets it and no
+   *  message can: only `executeEmergencyLegs` below does. */
+  emergencySaleLeg?: boolean;
 }
 
 /** Pure bookkeeping: clamps the pool at zero rather than validating, because refusing would be enforcing a rule.
@@ -1058,6 +1088,7 @@ export function openingStockRoundReset(
   | "turn_action_taken"
   | "bought_this_turn"
   | "bought_this_turn_company"
+  | "brown_pool_continuation_company"
   | "active_player_index"
 > {
   return {
@@ -1074,6 +1105,7 @@ export function openingStockRoundReset(
        being MOVED without going through either seat-moving function". */
     bought_this_turn: 0,
     bought_this_turn_company: undefined, // #1570: and the corporation it was spent on
+    ...closedBrownContinuation(state), // W3-K (v13): and the Brown Bank Pool continuation
     stock_turn_stage: undefined, // #1443: the Sell-Buy-Sell stage clears with the seat
     // The Priority Deal holder opens the Stock Round -- design note #353.
     active_player_index: state.priority_deal_index,
@@ -2967,7 +2999,58 @@ export function applySandboxAction(
   const variants = isSetupGameMsg(msg) ? msg.SetupGame.variants : state.variants;
   /* R12-2: and the route rules the state's pin names (an unpinned legacy board keeps the pre-v12 ones). */
   const revision = routeRulesRevisionOf(isSetupGameMsg(msg) ? (msg.SetupGame as { rules_engine_version?: number | null }) : state);
-  return withRules(resolveVariants(variants), () => applySandboxActionOnBoard(state, msg, ctx), revision);
+  const next = withRules(resolveVariants(variants), () => applySandboxActionOnBoard(state, msg, ctx), revision);
+  return closeBrownContinuationOnInterveningAction(state, next, msg, ctx);
+}
+
+/* ==================================================================
+    PHASE 3 W3-K (v13, owner ruling 2 on SBS-3 / SBS-4): AN INTERVENING TURN ACTION ENDS THE BROWN PURCHASE
+   ==================================================================
+   The Brown Bank Pool continuation is ONE contiguous multi-certificate purchase by the ACTIVE Stock Round player.
+   Owner ruling (2026-10-04): an accepted, state-changing turn action by that player which is not another
+   qualifying Brown Bank Pool purchase CLOSES it -- a sale, an accepted private trade, an M&H exchange, Pass Turn,
+   any other stock-turn action. Another player's off-turn consent or answer, and derived / system bookkeeping, do
+   NOT: they are not the active player ending the purchase. Decided from actor and turn semantics, never from log
+   adjacency:
+     * `BuyStock`, `SellStock`, `PassTurn` and every seat / round / buy-state reset close or keep it in their own
+       arms (the arms are the authority for the purchase itself);
+     * an ACCEPTED private trade closes it whoever sends the acceptance, because the settled trade is the
+       current-turn player's transaction activity (owner ruling N2, D-27: `turn_action_taken`, `markTrader`); a
+       rejection, a proposal and a withdrawal transact nothing and close nothing;
+     * any other message whose actor is the seat holder and which changed the board closes it -- an M&H exchange
+       executed on the owner's own turn among them. An M&H exchange still is NOT stock trading (owner ruling 3:
+       no `turn_action_taken`, no pass-streak or Priority Deal effect); closing the purchase is the only thing it
+       does here;
+     * a refused or no-op message (the board unchanged) closes nothing; an off-turn actor (a queued M&H request,
+       an answer) and a derived entry attributed to nobody ("") close nothing.
+   WHY A PROPOSAL CLOSES NOTHING, AND WHY AN ACCEPTANCE CLOSES IT (review round 2, read off the ruling's own cases):
+   in a Stock Round only the seat holder proposes (`proposePrivateTradeRefusal`) and the standing offer holds every
+   other message (`pendingOfferHold`), so the ONLY off-turn answer that can arrive between two purchases is an answer
+   to the active player's own proposal. Case C (that answer leaves the purchase open) is therefore reachable only if
+   the proposal did not close it; a proposal that is rejected or withdrawn transacts nothing (case D's spirit). An
+   acceptance closes it because the active player's trade SETTLED (case A; N2 makes it his turn activity), not because
+   an answer was sent: an acceptance that does not settle changes nothing and closes nothing.
+   Only a board that carries the continuation -- rules revision 2 -- is ever touched. */
+function closeBrownContinuationOnInterveningAction(
+  before: GameStateResponse,
+  after: GameStateResponse,
+  msg: SandboxLogMsg,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
+  if (before.brown_pool_continuation_company === undefined || after.brown_pool_continuation_company === undefined) return after;
+  if ("BuyStock" in msg || "SellStock" in msg || "PassTurn" in msg) return after;
+  if (isProposePrivateTradeMsg(msg) || isRescindPrivateTradeMsg(msg)) return after;
+  const changed = canonicalJson(after) !== canonicalJson(before); // by value: S7-17, no decision by object identity
+  if (!changed) return after;
+  const settledTrade = isAnswerPrivateTradeMsg(msg) && msg.AnswerPrivateTrade.accept === true && (after.private_trade_offer ?? null) === null;
+  const seat = stockRoundSeat(before);
+  // #549's attribution, exactly as the arms resolve it: `undefined` is solo (the cursor acts), "" or an unseated
+  // author is nobody -- so a derived entry attributed to no one never reads as the active player's turn action.
+  const logged = ctx?.actor;
+  const actor = logged === undefined ? seat : logged;
+  const byActivePlayer = seat !== null && actor === seat && !isAnswerPrivateTradeMsg(msg);
+  if (!settledTrade && !byActivePlayer) return after;
+  return { ...after, ...closedBrownContinuation(after) };
 }
 
 /* ==================================================================
@@ -3134,6 +3217,7 @@ function openAuctionOnPriorityDeal(
     turn_action_taken: false,
     bought_this_turn: 0,
     bought_this_turn_company: undefined,
+    ...closedBrownContinuation(state),
     stock_turn_stage: undefined,
   };
 }
@@ -3203,9 +3287,125 @@ function applySandboxActionOnBoard(
   const gate = boardGateRefusal(state, msg, ctx);
   if (gate === "held") return retireRefusedSettlement(state, msg);
   if (gate === "auction" || gate === "round") return state;
+  // W3-K (v13, OD-4): the atomic emergency sale is judged and executed whole, here, above both atoms.
+  if (isEmergencySellPortfolioMsg(msg)) return applyEmergencySellPortfolio(state, msg, ctx);
   // #1340: the auction first, as `App.tsx` always ran it -- its charges land before the board is judged.
   const afterAuction = applyAuctionStep(state, msg, ctx);
   return settleAuctionLifecycle(applySandboxActionAfterAuction(afterAuction, msg, ctx), msg);
+}
+
+/* ==================================================================
+    PHASE 3 W3-K (v13, OD-4): THE ATOMIC EMERGENCY SALE -- JUDGED WHOLE, EXECUTED BY THE ORDINARY SALE LAW
+   ==================================================================
+   OWNER RULE: "Emergency rescue share liquidation is ONE PORTFOLIO TRANSACTION ... Before mutating the shared board:
+   validate the entire portfolio; simulate its complete ordered outcome; prove every leg remains legal at the point
+   it executes; prove the combined result satisfies the rescue requirement. If any leg or the complete result is
+   illegal: return the ORIGINAL board unchanged."
+   SO, IN THIS ORDER, ON ONE MESSAGE:
+     1. `emergencyPortfolioRefusal` -- the obligated president, no offer standing, a shortfall, one leg per
+        corporation, every leg a legal bundle on the current board, the whole funding the train, and "only enough"
+        for the whole (`emergencyFunding.ts`);
+     2. every leg EXECUTED, in the submitted order, as a real `SellStock` through this reducer's own sale pipeline
+        (`applySandboxActionOnBoard`: the holds, the chart step, the core's sale law, the presidency settle, the
+        operating queue) on a PRIVATE copy of the board -- there is no second implementation of selling. Each leg must
+        land exactly (the holding falls by the leg's percentage) and pay exactly what step 1 projected, or the whole
+        message is refused;
+     3. the result must leave the obligation funded (shortfall 0), and the intercorporate window is closed for this
+        obligation (a liquidation closes it: owner rule).
+   Any failure returns `state` -- the original board, by identity. The legs' intermediate boards are locals of this
+   function: no entry, no digest, no frame and no replay index ever names one. The automatic purchase that follows is
+   the game's next derived action (`derivedActions.ts`), on the board this one entry produced. */
+function applyEmergencySellPortfolio(
+  state: GameStateResponse,
+  msg: { EmergencySellPortfolio: { game_id?: number; sales: readonly EmergencySaleLeg[] } },
+  ctx?: SandboxActionContext,
+): GameStateResponse {
+  if (ctx?.mapGrid === undefined) return state; // #757: the obligation cannot be judged without the board -- fail closed
+  const funding = emergencyFundingFor(state, ctx.mapGrid);
+  const sales = msg.EmergencySellPortfolio.sales;
+  if (funding === null || emergencyPortfolioRefusal(state, funding, sales, ctx.actor) !== null) return state;
+  const executed = executeEmergencyLegs(state, sales, funding.president, ctx, projectedPortfolioProceeds(state, sales), msg.EmergencySellPortfolio.game_id);
+  if (executed === null) return state;
+  const after = emergencyObligationFor(executed, ctx.mapGrid);
+  if (after === null || after.companyId !== funding.companyId || after.shortfall > 0) return state;
+  return withEmergencyMark(executed, after, "trade_window_closed");
+}
+
+/** The legs, executed one by one through the ordinary sale pipeline on a private copy. `expected` (the portfolio's
+ *  projection) makes it all-or-nothing: a leg that does not land exactly, or pays anything else, returns `null`.
+ *  Without `expected` (the bankruptcy liquidation) a leg that does not land is skipped -- "as far as legally
+ *  possible" -- and the rest still run. */
+function executeEmergencyLegs(
+  state: GameStateResponse,
+  legs: readonly EmergencySaleLeg[],
+  seller: string,
+  ctx: SandboxActionContext | undefined,
+  expected: readonly number[] | null,
+  gameId = 0,
+): GameStateResponse | null {
+  /* Each leg is judged against the chart OF ITS OWN BOARD: the caller's chart resolvers (`chartInjections`) were
+     built over the entry's starting positions, so for every leg after the first they are re-read off the board
+     that leg is applied to (#1177's rule: "the chart this dispatch produced, never a committed copy one step
+     behind"). Supplied only where the caller supplied them -- an absent resolver stays absent (#712). */
+  const legCtxFor = (board: GameStateResponse): SandboxActionContext => {
+    const positions = board.market_positions;
+    if (!positions) return { ...ctx, actor: seller, emergencySaleLeg: true };
+    const chart = chartContextFromState(board);
+    return {
+      ...ctx,
+      actor: seller,
+      emergencySaleLeg: true,
+      ...(ctx?.marketZoneFor ? { marketZoneFor: chart.marketZoneFor } : {}),
+      ...(ctx?.marketPricesByCompany ? { marketPricesByCompany: chart.marketPricesByCompany ?? null } : {}),
+      ...(ctx?.marketPriceFor ? { marketPriceFor: (companyId: number) => positions[companyId]?.price ?? null } : {}),
+      ...(ctx?.marketMarkFor ? { marketMarkFor: (companyId: number) => positions[companyId] ?? null } : {}),
+    };
+  };
+  const holding = (board: GameStateResponse, companyId: number) =>
+    board.public_companies.find((entry) => entry.company_id === companyId)?.player_holdings.find((entry) => entry.player === seller)?.percentage ?? 0;
+  let board = state;
+  for (let i = 0; i < legs.length; i += 1) {
+    const leg = legs[i];
+    const heldBefore = holding(board, leg.protocol_id);
+    const cashBefore = playerCashOf(board, seller) ?? 0;
+    const next = applySandboxActionOnBoard(
+      board,
+      { SellStock: { game_id: gameId, protocol_id: leg.protocol_id, percentage: leg.percentage } },
+      legCtxFor(board),
+    );
+    const landed = heldBefore - holding(next, leg.protocol_id) === leg.percentage;
+    const paid = (playerCashOf(next, seller) ?? 0) - cashBefore;
+    if (!landed || (expected !== null && paid !== expected[i])) {
+      if (expected !== null) return null;
+      continue;
+    }
+    board = next;
+  }
+  return board;
+}
+
+/** W3-K (v13, OD-4): what an `EmergencySellPortfolio` would do, without committing anything -- for the v13
+ *  emergency UI's "Projected proceeds / After sale" line. The SAME judgement and execution the reducer commits
+ *  (`applySandboxAction` on the portfolio message), so the projection cannot promise a result the authority would
+ *  refuse. `after` is `null` exactly when the reducer would refuse the message. */
+export function projectEmergencySellPortfolio(
+  state: GameStateResponse,
+  sales: readonly EmergencySaleLeg[],
+  ctx: SandboxActionContext,
+): { refusal: string | null; proceeds: number[]; total: number; after: GameStateResponse | null } {
+  const proceeds = projectedPortfolioProceeds(state, sales);
+  const total = proceeds.reduce((sum, value) => sum + value, 0);
+  const revision = routeRulesRevisionOf(state);
+  const refusal = withRules(
+    resolveVariants(state.variants),
+    () => emergencyPortfolioRefusal(state, ctx.mapGrid === undefined ? null : emergencyFundingFor(state, ctx.mapGrid), sales, ctx.actor),
+    revision,
+  );
+  if (refusal !== null) return { refusal, proceeds, total, after: null };
+  const after = applySandboxAction(state, { EmergencySellPortfolio: { game_id: 0, sales: [...sales] } }, ctx);
+  return after === state
+    ? { refusal: "The sale could not be completed as submitted on this board.", proceeds, total, after: null }
+    : { refusal: null, proceeds, total, after };
 }
 
 /** Design note #1690 (Stage 10.3, S10-4): the chart step's WHOLE context -- the caller's geometry
@@ -3249,6 +3449,7 @@ function chartStepContext(
           actor: seller,
           mapGrid: ctx?.mapGrid,
           ctx: stockChartContext(state, ctx),
+          emergencyLeg: ctx?.emergencySaleLeg === true, // W3-K: the same leg judgement the core asks
         }) !== null
       );
     },
@@ -3672,10 +3873,12 @@ function applySandboxActionCoreJudged(
      Design note #1613 (Slice 8.2): `emergencyFundingBlock` itself is asked in `applySandboxActionOnBoard` now,
      before anything moves; the forced sale's and the emergency purchase's own rules stay below. */
   if ("SellStock" in msg && ctx?.actor) {
-    const funding = emergencyFundingFor(state, ctx.mapGrid);
+    // W3-K: the obligation's facts are all the forced sale's rules read; a portfolio leg is judged as a leg.
+    const funding = emergencyObligationFor(state, ctx.mapGrid);
     if (funding !== null) {
       const { protocol_id, percentage } = msg.SellStock;
-      if (forcedSaleRefusal(state, funding, ctx.actor, protocol_id, Math.round(percentage)) !== null) return state;
+      const mode = ctx.emergencySaleLeg === true ? "leg" : "single";
+      if (forcedSaleRefusal(state, funding, ctx.actor, protocol_id, Math.round(percentage), mode) !== null) return state;
     }
   }
   if ("EmergencyBuyHardware" in msg) {
@@ -3746,11 +3949,26 @@ function applySandboxActionCoreJudged(
     if (rescindPrivateTradeRefusal(state, msg.RescindPrivateTrade, ctx?.actor) !== null) return state;
   }
   if ("DeclareBankruptcy" in msg) {
+    // W3-K (v13, OD-4): retired on a rules-revision-2 board -- bankruptcy is the authority's arithmetic.
+    if (retiredDeclarationRefusal(state) !== null) return state;
     /* Without a grid the obligation cannot be judged (#757): the declaration is refused rather than admitted
        on a guess -- fail closed, because it ends the game. */
     const funding = ctx?.mapGrid === undefined ? null : emergencyFundingFor(state, ctx.mapGrid);
     if (declareBankruptcyRefusal(funding, ctx?.actor) !== null) return state;
   }
+  /* W3-K (v13, OD-4): the president's two decisions, judged against the standing obligation by the same predicates
+     ingress asks; off a rules-revision-2 board, or with no obligation, refused by identity (so the default arm's
+     seat advance can never meet them). Without a grid the obligation cannot be judged: fail closed (#757). */
+  if (isForgoTrainTradeMsg(msg)) {
+    const funding = ctx?.mapGrid === undefined ? null : emergencyFundingFor(state, ctx.mapGrid);
+    if (forgoTrainTradeRefusal(state, funding, ctx?.actor) !== null) return state;
+  }
+  if (isForgoPrivateFundingMsg(msg)) {
+    const funding = ctx?.mapGrid === undefined ? null : emergencyFundingFor(state, ctx.mapGrid);
+    if (forgoPrivateFundingRefusal(state, funding, ctx?.actor) !== null) return state;
+  }
+  // The portfolio is judged and executed one layer up (`applySandboxActionOnBoard`); it never reaches an arm.
+  if (isEmergencySellPortfolioMsg(msg)) return state;
   if (operatingIdentityRefusal(state, msg) !== null) return state;
   /* Design note #1513: THE TURN DOES NOT END WHILE A TRAIN IS OWED. `PassTurn` and `AdvanceOperatingSubPhase`
      at the Buy Trains step are refused for a corporation with no train, a legal route, and a train for sale
@@ -3991,6 +4209,7 @@ function applySandboxActionCoreJudged(
         actor: ctx?.actor ?? null,
         mapGrid: ctx?.mapGrid,
         ctx: stockChartContext(state, ctx),
+        emergencyLeg: ctx?.emergencySaleLeg === true, // W3-K: a portfolio leg is judged as a leg
       }) !== null
     ) {
       return state;
@@ -4206,13 +4425,77 @@ function seatBoundaryExchange(
    the board. */
 function settleBankruptcy(state: GameStateResponse, ctx?: SandboxActionContext): GameStateResponse {
   if (state.current_round_type !== "OperatingRound") return state;
+  // W3-K (v13): never between the legs of one atomic sale -- the transaction is judged whole, by its executor.
+  if (ctx?.emergencySaleLeg === true) return state;
   const funding = emergencyFundingFor(state, ctx?.mapGrid);
   if (funding === null || !funding.bankrupt) return state;
+  if (funding.automatic !== undefined) return automaticBankruptcy(state, funding, ctx);
   return {
     ...state,
     current_round_type: "GameEnd" as const,
     bankrupt_president: funding.president,
     operating_sub_phase: undefined,
+  };
+}
+
+/* ==================================================================
+    PHASE 3 W3-K (v13, OD-4): AUTOMATIC BANKRUPTCY STILL LIQUIDATES THE PORTFOLIO
+   ==================================================================
+   OWNER RULE: "Automatic bankruptcy does NOT let the bankrupt player keep shares merely because the engine skipped
+   futile manual clicks. Bankruptcy immediately liquidates the bankrupt player's stock portfolio AS FAR AS LEGALLY
+   POSSIBLE. The resulting cash is applied toward the obligated corporation ... Then the game enters GameEnd."
+   THE RULEBOOK'S READING, DETERMINED HERE (1830 Classic C-2.3 / C-2.4, p.27 of the repository's PDF):
+     * WHAT IS SOLD: "If there is not enough money after the president sells all of his shares that he is ALLOWED
+       to, he goes bankrupt." So every share the forced-sale rules allow -- the ordinary sale law (the Bank Pool's
+       five-certificate ceiling, the President's Certificate never entering the pool, a presidency that can only pass
+       to a holder of 20% or more, the double certificate's half-sale) and C-2.3's "The share sales may not cause a
+       change in the presidency of the railroad that is without a train". "Only enough" does not limit it (nothing
+       is enough), and nothing need fund anything. Per corporation, the LARGEST legal bundle -- the exact maximum
+       (`rescueAnalysis.maximumLiquidation`, the same factorised oracle the rescue uses) -- executed in
+       `public_companies` order, each as a real `SellStock` through the ordinary pipeline (`executeEmergencyLegs`),
+       so prices fall, the Bank Pool fills and other presidencies change exactly as a sale makes them.
+     * PRESIDENCIES: another corporation's presidency moves where the sale law moves it, at once ("Any changes of
+       president caused by share sales take place immediately"); the trainless corporation's never does.
+     * WHAT CANNOT BE SOLD stays in the bankrupt president's hand and is his score: "The bankrupt president's final
+       score (i.e., wealth) is the value of all of the shares that he could not sell" -- the President's Certificate
+       nobody can take, shares the Bank Pool's ceiling refuses, an unpriced corporation's. Private companies are not
+       sold (a private sale needs a willing buyer, and he "is not required to do so"); the certified valuation counts
+       none of a bankrupt president's privates or cash.
+     * THE MONEY: "both the railroad and its president spend all of their money" -- the president's whole cash,
+       the liquidation's proceeds included, goes to the obligated corporation's treasury (one ledger transfer:
+       conserved). The train is still not affordable, so nothing is bought; the treasury and the bankrupt's cash are
+       outside every player's settled wealth either way, so this placement changes no score.
+   One transition, then `GameEnd` with `bankrupt_president`: derived on every client and every replay from the same
+   board, undone by a `RevertTo` past the entry that made it unavoidable, and never repeated (everything after
+   `GameEnd` is held). */
+function automaticBankruptcy(
+  state: GameStateResponse,
+  funding: NonNullable<ReturnType<typeof emergencyFundingFor>>,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
+  const liquidation = funding.automatic?.rescue.maximumLiquidation ?? [];
+  const liquidated = executeEmergencyLegs(state, liquidation, funding.president, ctx, null) ?? state;
+  const money = playerCashOf(liquidated, funding.president) ?? 0;
+  const handedOver = money > 0 ? transfer(liquidated, { player: funding.president }, { corporation: funding.companyId }, money) : null;
+  const settled = handedOver === null || !handedOver.ok ? liquidated : handedOver.state;
+  // Review finding 1: the outcome, recorded where it happened, for the Activity Log (evidence only; nothing reads it as a rule).
+  const heldBy = (board: GameStateResponse, companyId: number) =>
+    board.public_companies.find((entry) => entry.company_id === companyId)?.player_holdings.find((entry) => entry.player === funding.president)?.percentage ?? 0;
+  const sold = state.public_companies
+    .map((company) => ({ company_id: company.company_id, percentage: heldBy(state, company.company_id) - heldBy(liquidated, company.company_id) }))
+    .filter((leg) => leg.percentage > 0);
+  return {
+    ...settled,
+    current_round_type: "GameEnd" as const,
+    bankrupt_president: funding.president,
+    operating_sub_phase: undefined,
+    bankruptcy_record: {
+      president: funding.president,
+      company_id: funding.companyId,
+      sold,
+      liquidation_proceeds: (playerCashOf(liquidated, funding.president) ?? 0) - (playerCashOf(state, funding.president) ?? 0),
+      handed_over: handedOver !== null && handedOver.ok ? money : 0,
+    },
   };
 }
 
@@ -5587,7 +5870,20 @@ function applyOneAction(
        to wait on and that refusal is gone; the turn ends exactly as any other purchase turn does.
        ONLY UNDER THE REVISION: a log dealt before it (#1443 in `gameVariants.ts`) ends the turn on the buy
        as it always did, so it replays to the same board. */
-    if (sellBuySellInForce(resolveVariants(state.variants))) {
+    /* ==================================================================
+        PHASE 3 W3-K (v13, OD-2): ONE PASS TURN ENDS THE TURN
+       ==================================================================
+       OWNER RULE: "Sell whenever otherwise legal. Take at most one ordinary Buy action. After buying, ordinary Buy
+       is unavailable. Sell remains legal after buying. One player-facing action named 'Pass Turn' ends the player's
+       Stock Round turn in ONE message." So under rules revision 2 the stage walk above is gone: no Pass moves SELL
+       to BUY (nothing ever refused a Buy or a Sell by the stage -- it was read only here), and this one Pass ends
+       the turn. #745's distinction is untouched and is the whole of the true-pass rule: a turn that bought, sold or
+       traded (`turn_action_taken`) ends through `advanceSeat` and leaves the all-pass streak at zero; a turn that
+       did nothing is a TRUE pass and counts (`recordPass`). The must-sell hold (`divestmentPassRefusal`) still
+       refuses this Pass at both locks; the Priority Deal still moves only on a trade (`markTrader`). A revision-1
+       board keeps the stage walk exactly, so its stored two-Pass turns replay unchanged. */
+    const stockVariants = resolveVariants(state.variants);
+    if (sellBuySellInForce(stockVariants) && !passEndsStockTurn(stockVariants)) {
       const stage = stockTurnStage(state);
       if (stage === "sell") return { ...state, stock_turn_stage: "buy" };
     }
@@ -5776,11 +6072,31 @@ function applyOneAction(
        spells that allowance as several messages -- so the corporation of the FIRST purchase of the turn is
        what the continuation is judged against. Written once and not overwritten by the continuation itself,
        which names the same corporation anyway; cleared with `bought_this_turn` by all three seat sites. */
+    /* ==================================================================
+        PHASE 3 W3-K (v13, SBS-3 / SBS-4): THE BROWN BANK POOL CONTINUATION IS OPENED HERE, AND ONLY HERE
+       ==================================================================
+       Under rules revision 2 the turn's purchase stays open for MORE certificates only when it is a Brown-zone
+       purchase from the BANK POOL (rulebook p.13): the first purchase of the turn opens it when it is one, and a
+       continuation keeps it (it can only be one -- `sharePurchaseBlock` rule 4 refused anything else). An IPO
+       purchase -- even of a started corporation whose token has fallen into Brown (SBS-4) -- is the turn's
+       ordinary one purchase and opens nothing. Any sale closes it (the `SellStock` arm). The zone is the injected
+       chart's, exactly the one rule 4 judged; without a chart there is no zone, no opinion and no continuation
+       (#712). A revision-1 board writes nothing. */
+    const opensContinuation =
+      brownPoolContinuationInForce(resolveVariants(state.variants)) &&
+      kind === "ordinary" &&
+      source === "Bank" &&
+      ctx?.marketZoneFor?.(protocol_id) === "Brown" &&
+      ((state.bought_this_turn ?? 0) === 0 || state.brown_pool_continuation_company === protocol_id);
+    const continuation: Pick<GameStateResponse, "brown_pool_continuation_company"> = opensContinuation
+      ? { brown_pool_continuation_company: protocol_id }
+      : closedBrownContinuation(state);
     const counted: GameStateResponse = {
       ...settlePresidencies(floated).state,
       bought_this_turn: (state.bought_this_turn ?? 0) + certificates,
       bought_this_turn_company: state.bought_this_turn_company ?? protocol_id,
       turn_action_taken: true,
+      ...continuation,
     };
     const settledBuy = markTrader(counted, actor);
 
@@ -5892,8 +6208,12 @@ function applyOneAction(
        the turn was putting the streak straight back to one and erasing the sale. The flag is what survives
        between the two messages. Set here rather than in `moveShares` because a sale is the only Stock Round
        action that leaves the seat where it is; every other one ends the turn itself. */
+    /* W3-K (v13, SBS-3): AND A SALE ENDS THE BROWN BANK POOL BUY ACTION. Once the player sells, the multi-
+       certificate purchase is over and cannot reopen this turn -- `brown_pool_continuation_company` is cleared, so
+       rule 4 refuses the next purchase. Revision 2 only; a revision-1 board never carries the field. */
+    const saleClosesContinuation = closedBrownContinuation(state);
     const settled = markTrader(
-      { ...settlePresidencies(returned).state, consecutive_passes: 0, turn_action_taken: true },
+      { ...settlePresidencies(returned).state, consecutive_passes: 0, turn_action_taken: true, ...saleClosesContinuation },
       actor,
     );
     if (!actor) return settled;
@@ -6200,7 +6520,7 @@ function applyOneAction(
     const priv = state.private_companies.find((entry) => entry.private_id === private_id);
     const buyer = state.public_companies.find((entry) => entry.company_id === buyer_protocol_id);
     if (!priv || !priv.owner || !buyer) return state;
-    return {
+    const offered: GameStateResponse = {
       ...state,
       private_purchase_offer: {
         private_id,
@@ -6212,7 +6532,22 @@ function applyOneAction(
         funding: true,
       },
     };
+    /* W3-K (v13, OD-4): a private funding offer is a liquidation, so it closes the intercorporate window for this
+       obligation (owner rule: no train from another corporation may be bought with liquidation money). */
+    const obligation = automaticFundingInForce(state) ? emergencyObligationFor(state, ctx?.mapGrid) : null;
+    return obligation === null ? offered : withEmergencyMark(offered, obligation, "trade_window_closed");
   }
+  /* W3-K (v13, OD-4): the president's decisions, recorded against the obligation they are about. The core has
+     already refused every one that is not the obligated president's, on a revision-2 board, with the decision open. */
+  if (isForgoTrainTradeMsg(msg)) {
+    const obligation = emergencyObligationFor(state, ctx?.mapGrid);
+    return obligation === null ? state : withEmergencyMark(state, obligation, "trade_window_closed");
+  }
+  if (isForgoPrivateFundingMsg(msg)) {
+    const obligation = emergencyObligationFor(state, ctx?.mapGrid);
+    return obligation === null ? state : withEmergencyMark(state, obligation, "private_funding_forgone");
+  }
+  if (isEmergencySellPortfolioMsg(msg)) return state; // executed one layer up; never an arm's
   if ("AnswerFundingPrivateOffer" in msg) {
     const offer = state.private_purchase_offer ?? null;
     if (!offer || !offer.funding || offer.private_id !== msg.AnswerFundingPrivateOffer.private_id) return state;

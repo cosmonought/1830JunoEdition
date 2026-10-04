@@ -52,12 +52,18 @@ import { dhStationRefusal } from "./dhStationAuthority";
 import { revertRefusal, type RevertableAction, type UndoPolicy } from "./logRevert";
 import { pendingDiscardBlock, pendingTrainDiscards } from "./trainDiscard";
 import {
+  automaticFundingInForce,
   declareBankruptcyRefusal,
   emergencyFundingBlock,
   emergencyFundingFor,
+  emergencyObligationFor,
+  emergencyPortfolioRefusal,
   emergencyPurchaseRefusal,
+  forgoPrivateFundingRefusal,
+  forgoTrainTradeRefusal,
   fundingPrivateOfferRefusal,
   fundingPrivateRescindRefusal,
+  retiredDeclarationRefusal,
 } from "./emergencyFunding";
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { dividendAmountRefusal, routeSetRefusal, routeSkipRefusal } from "./routeAuthority";
@@ -200,10 +206,17 @@ function turnRefusalOnTableBoard(input: TurnAuthorityInput): string | null {
     const held = emergencyFundingBlock(state, msg, input.mapGrid);
     if (held !== null) return held;
     if ("SellStock" in msg || "EmergencyBuyHardware" in msg) {
-      const funding = emergencyFundingFor(state, input.mapGrid);
+      // W3-K: the obligation's facts name its owner; no analysis is needed for this question.
+      const funding = emergencyObligationFor(state, input.mapGrid);
       if (funding !== null && actor !== funding.president) {
         return `Only ${funding.ticker}'s president can resolve its train purchase.`;
       }
+    }
+    /* W3-K (v13, OD-4): THE EMERGENCY PURCHASE IS THE GAME'S. On a rules-revision-2 board the treasury and the
+       president's cash are committed automatically and the game derives the purchase (exemption 1 above lets the
+       derived entry through); a player never sends one. */
+    if ("EmergencyBuyHardware" in msg && automaticFundingInForce(state)) {
+      return "The emergency train purchase is made automatically once it is funded; there is nothing to send.";
     }
     /* The emergency purchase is an obligation's action, so its standing is answered here with its reason
        (owed at all; the right corporation; funded) rather than appended as a no-op the reducer declines. */
@@ -224,6 +237,9 @@ function turnRefusalOnTableBoard(input: TurnAuthorityInput): string | null {
       if (refusal !== null) return refusal;
     }
     if ("DeclareBankruptcy" in msg) {
+      // W3-K (v13, OD-4): retired on a rules-revision-2 board, obligation or none.
+      const retired = retiredDeclarationRefusal(state);
+      if (retired !== null) return retired;
       const funding = input.mapGrid === undefined ? null : emergencyFundingFor(state, input.mapGrid);
       const refusal = declareBankruptcyRefusal(funding, actor);
       if (refusal !== null) return refusal;
@@ -707,6 +723,20 @@ function roomMessageRefusal(input: TurnAuthorityInput, actor: string): string | 
       msg.ProposePrivateTrade,
       actor,
     );
+  }
+
+  /* ==================================================================
+      W3-K (v13, OD-4): THE EMERGENCY-FUNDING DECISIONS ARE THE OBLIGATED PRESIDENT'S
+     ==================================================================
+     Room-only and seat-exempt like the rest of this family, so each gets its owner AND its whole legality here --
+     the same predicate the reducer's core asks, so the submitter hears the sentence and the log never grows by a
+     decision the reducer declines. Without a grid the obligation cannot be judged (#757) and the decision is
+     refused, as the reducer refuses it. */
+  if ("ForgoTrainTrade" in msg || "ForgoPrivateFunding" in msg || "EmergencySellPortfolio" in msg) {
+    const funding = input.mapGrid === undefined ? null : emergencyFundingFor(state, input.mapGrid);
+    if ("ForgoTrainTrade" in msg) return forgoTrainTradeRefusal(state, funding, actor);
+    if ("ForgoPrivateFunding" in msg) return forgoPrivateFundingRefusal(state, funding, actor);
+    return emergencyPortfolioRefusal(state, funding, msg.EmergencySellPortfolio.sales, actor);
   }
 
   /* Design note #1323: THE LICENCE IS THE OPERATING PRESIDENT'S TO BUY. It is sandbox-only (the chain has

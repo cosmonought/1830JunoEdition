@@ -265,8 +265,11 @@ describe("A. the v12 golden set: the SET-0A recipes through the v12 engine, at p
 
   it("the room-dealt recipes are DEALT AND PLAYED by the v12 engine (pinned, so under the v12 route law); every board carries pin 12", () => {
     expect([SET0A_CERTIFIED_RULES_ENGINE_VERSION, SET0A_V11_RULES_ENGINE_VERSION, SET0A_V12_RULES_ENGINE_VERSION]).toEqual([10, 11, 12]);
-    expect(RULES_ENGINE_VERSION).toBe(12);
-    expect(Object.values(dealtPins)).toEqual([12, 12, 12]);
+    /* Phase 3 W3-K: rules engine v13 now deals the room recipes (pin 13; their deals carry no rules revision, so none
+       of v13's revision-2 corrections is in force) and they still reach their certified v12 boards byte for byte
+       (every hash below). The set itself stays at the v12 pin; v13 is NOT settlement-certified (PENDING). */
+    expect(RULES_ENGINE_VERSION).toBe(13);
+    expect(Object.values(dealtPins)).toEqual([RULES_ENGINE_VERSION, RULES_ENGINE_VERSION, RULES_ENGINE_VERSION]);
     for (const board of Object.values(boards)) expect(board.rules_engine_version).toBe(12);
   });
 

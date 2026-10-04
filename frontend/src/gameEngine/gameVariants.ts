@@ -526,12 +526,48 @@ export interface GameVariants {
   rules: number;
 }
 
-/** #1443: the revision new games are dealt under. 1 = the Stock Round is Sell-Buy-Sell. */
-export const CURRENT_RULES_REVISION = 1;
+/** #1443: the revision new games are dealt under. 1 = the Stock Round is Sell-Buy-Sell. 2 = the rules-engine v13
+ *  corrections (Phase 3 W3-K): one `PassTurn` ends a Stock Round turn (OD-2), the official Brown-zone Bank Pool
+ *  continuation (SBS-3 / SBS-4) and automatic emergency train funding (OD-4). */
+export const CURRENT_RULES_REVISION = 2;
 
 /** #1443: whether a table plays the Stock Round as Sell-Buy-Sell (a buy leaves the seat with the buyer). */
 export function sellBuySellInForce(variants: Pick<GameVariants, "rules">): boolean {
   return variants.rules >= 1;
+}
+
+/* ==================================================================
+    PHASE 3 W3-K (RULES ENGINE v13): RULES REVISION 2 -- THE THREE v13 CORRECTIONS, ONE SWITCH
+   ==================================================================
+   WHY THE REVISION AND NOT THE PIN. #1443's revision is the per-table switch the reducer BRANCHES ON, and it is
+   exactly the right shape for a correction that must not reinterpret a stored log: every hosted deal is stamped
+   with the dealing server's own revision (`roomService.ts` `buildSetupGame`; a client may not name one), so every
+   v13-pinned board carries revision 2, and every v12-pinned or unpinned development-corpus log carries 0 or 1 and
+   replays exactly as it did -- even when a test, a CLI or a settlement tool replays it outside the replay gate. A
+   v12 build reading a revision-2 deal classifies it as a newer format (`sessionContinuation.ts` `dealFormatOf`), so
+   an older pool never misreads a v13 log either. The no-server table (the shell) is dealt the same revision, so
+   both paths play one set of rules.
+   ONE PREDICATE PER CORRECTION, so a reader finds the rule by its name and a later revision can move one alone. */
+
+/** v13 (OD-2): one `PassTurn` ends the Stock Round turn -- the Sell-Buy-Sell stage walk's "Pass to move on to
+ *  buying" is gone. A turn that bought or sold ends without counting toward the all-pass streak (#745); a turn
+ *  that did nothing is a true pass. */
+export function passEndsStockTurn(variants: Pick<GameVariants, "rules">): boolean {
+  return variants.rules >= 2;
+}
+
+/** v13 (SBS-3 / SBS-4): the official Brown-zone rule -- any number of certificates from the Bank Pool of ONE
+ *  corporation whose token is in a brown box, as the turn's one purchase. Opened only by a Brown-zone Bank Pool
+ *  purchase and closed by any sale (`brown_pool_continuation_company`). Not the optional V-6.3 "Buy All". */
+export function brownPoolContinuationInForce(variants: Pick<GameVariants, "rules">): boolean {
+  return variants.rules >= 2;
+}
+
+/** v13 (OD-4): emergency train funding is automatic -- the intercorporate window, the automatic treasury and
+ *  president's cash, the one atomic `EmergencySellPortfolio`, optional private funding, the automatic purchase
+ *  and the automatic bankruptcy with its liquidation (`emergencyFunding.ts`). `DeclareBankruptcy` is retired. */
+export function automaticEmergencyFundingInForce(variants: Pick<GameVariants, "rules">): boolean {
+  return variants.rules >= 2;
 }
 
 /* ==================================================================

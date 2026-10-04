@@ -21,6 +21,7 @@ import type {
   WaterfallPrivateStatus,
   WaterfallStateResponse,
 } from "./gameState";
+import { miniAuctionPassesToEnd } from "./gameState"; // the contest-end count, shared with the auction dashboard
 import { bankIsBroken } from "./endgame";
 import {
   BANK,
@@ -2668,7 +2669,7 @@ export function applySandboxWaterfallAction(
        else first. */
     const passes = (mini.passes_since_raise ?? 0) + 1;
 
-    if (passes >= Math.max(1, mini.bidders.length - 1)) {
+    if (passes >= miniAuctionPassesToEnd(mini.bidders)) {
       const winner = mini.high_bidder;
       const target = waterfall.privates.find((entry) => entry.private_id === mini.private_id);
       const price = Number(mini.high_bid) || 0;

@@ -1361,6 +1361,14 @@ export interface WaterfallMiniAuctionStatus {
   passes_since_raise?: number;
 }
 
+/** How many passes in a row end a mini-auction contest (§1.2.2, #1581 above): every bidder but the high bidder, and
+ *  never fewer than one. ONE FUNCTION, asked by the reducer's `WaterfallMiniAuctionPass` arm (`sandboxSession.ts`)
+ *  and by the auction dashboard's progress line (`utils/auctionDashboardView.ts`, Phase 3 W1-B), so the display
+ *  cannot restate the rule (Wave-1 integration review). Behaviour-identical to the inline expression it replaced. */
+export function miniAuctionPassesToEnd(bidders: readonly string[]): number {
+  return Math.max(1, bidders.length - 1);
+}
+
 /** `QueryMsg::GetWaterfallState`'s response -- mirrors `msg.rs`'s
  *  `WaterfallStateResponse` exactly. */
 export interface WaterfallStateResponse {

@@ -12,6 +12,8 @@
 //    is unchanged.
 // (4. the Rules Reference zoom hunk is pinned and rendered in `hostGameW1O.test.tsx`; 5. the M&H modal's presentation
 //  in `phase3W1CMhModalPresentation.test.tsx`.)
+// 6. From the integration review: the auction dashboard's contest-progress line asks the reducer's own contest-end
+//    count (`miniAuctionPassesToEnd`) instead of restating `bidders.length - 1`.
 
 import { describeGameplayAction, type ActionLogContext } from "../utils/actionLog";
 import { ringLayPreviewRefusal, withCanonicalTileName, type RingLayPreview } from "../utils/tileRingView";
@@ -21,7 +23,9 @@ import { tileEraFor } from "../gameEngine/gameConstants";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "./hexContractTypes";
 import { canonicalTileName } from "./hexTileCatalog";
-import { readShell, sliceBetween } from "../utils/sourceScan";
+import { readShell, readStripped, sliceBetween } from "../utils/sourceScan";
+import { miniAuctionPassesToEnd } from "../gameEngine/gameState";
+import { contestStanding } from "../utils/auctionDashboardView";
 import * as F from "../utils/offerFixtures74";
 import * as S from "../utils/offerMatrix74Support";
 
@@ -213,5 +217,28 @@ describe("3. the game-over strip names every player ranked first, like the Game 
     const strip = sliceBetween(readShell(), 'data-testid="game-over-strip"', "</span>");
     expect(strip).toContain("{gameOverStripResult(finalStandings)}");
     expect(strip).not.toContain("isWinner");
+  });
+});
+
+/* ================================================================== */
+/* 6. One contest-end count, the reducer's                              */
+/* ================================================================== */
+
+describe("6. the dashboard's contest progress asks the reducer's contest-end count", () => {
+  it("every bidder but the high bidder, never fewer than one", () => {
+    expect([0, 1, 2, 3, 4].map((n) => miniAuctionPassesToEnd(Array.from({ length: n }, (_, i) => `p${i}`)))).toEqual([1, 1, 1, 2, 3]);
+  });
+
+  it("the reducer's pass arm and the dashboard both call it; neither restates the rule", () => {
+    const reducer = readStripped("gameEngine/sandboxSession.ts");
+    const view = readStripped("utils/auctionDashboardView.ts");
+    expect(reducer).toContain("if (passes >= miniAuctionPassesToEnd(mini.bidders)) {");
+    expect(view).toContain("miniAuctionPassesToEnd(bidders)");
+    for (const source of [reducer, view]) expect(source).not.toMatch(/bidders\.length - 1/);
+  });
+
+  it("the dashboard's standing reads that count", () => {
+    const mini = { private_id: 1, bidders: ["a", "b", "c"], current_turn: "a", high_bid: "120", high_bidder: "c", passes_since_raise: 1 };
+    expect(contestStanding(mini)).toMatchObject({ passes: 1, passesToEnd: 2, remaining: 1 });
   });
 });

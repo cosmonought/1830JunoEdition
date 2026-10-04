@@ -22,10 +22,11 @@
 // with a verdict computed for another player.
 
 import { auctionRefusal } from "../gameEngine/auctionAuthority";
-import type {
-  GameStateResponse,
-  WaterfallMiniAuctionStatus,
-  WaterfallStateResponse,
+import {
+  miniAuctionPassesToEnd,
+  type GameStateResponse,
+  type WaterfallMiniAuctionStatus,
+  type WaterfallStateResponse,
 } from "../gameEngine/gameState";
 
 /** The auction predicates never read `game_id`; the room stamps the real one when the message is sent. */
@@ -105,7 +106,7 @@ export interface ContestStanding {
 
 export function contestStanding(mini: WaterfallMiniAuctionStatus): ContestStanding {
   const bidders = mini.bidders ?? [];
-  const passesToEnd = Math.max(1, bidders.length - 1);
+  const passesToEnd = miniAuctionPassesToEnd(bidders); // the reducer's own count (gameState.ts)
   const passes = Math.max(0, Math.min(Number(mini.passes_since_raise ?? 0) || 0, passesToEnd));
   const passedSinceRaise: string[] = [];
   const at = bidders.indexOf(mini.current_turn);

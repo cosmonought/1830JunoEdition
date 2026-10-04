@@ -50,8 +50,10 @@ import {
   EMPTY_PORTFOLIO_DRAFT,
   decisionConsequenceFor,
   emergencyStageFor,
+  emergencySurfaceFor,
   emergencyViewerIsPresident,
   emergencyWaitingSentence,
+  fundingAcceptRefusalForViewer,
   fundingAnswerRefusalForViewer,
   fundingOfferDraftRefusal,
   intercorporateOfferRefusal,
@@ -255,7 +257,6 @@ const planOf = (state: GameStateResponse): EmergencyPurchasePlan => {
     privateOfferBuyerPresident: state.private_purchase_offer?.funding
       ? state.public_companies.find((entry) => entry.company_id === state.private_purchase_offer!.buyer_protocol_id)?.president ?? null
       : null,
-    rulesRevision: typeof state.variants?.rules === "number" ? state.variants.rules : 0,
   });
 };
 
@@ -341,11 +342,11 @@ describe("the forgo consequence is the authority's projection, not prose of ours
   it("ForgoTrainTrade on a funded board: the game then buys the train", () => {
     const state = funded(["2"]);
     expect(fundingOf(state).automatic).toMatchObject({ tradeWindow: "open", autoPurchase: false });
-    const consequence = decisionConsequenceFor(state, fundingOf(state), CORRIDOR, "trade_window_closed", "Alice")!;
+    const consequence = decisionConsequenceFor(state, fundingOf(state), CORRIDOR, "trade_window_closed")!;
     expect(consequence).toEqual({
       outcome: "automatic-purchase",
       severity: "notice",
-      text: "The game then buys the 2-train from the Bank Depot automatically: C&O pays its whole treasury ($30) and Alice pays $50 of personal cash.",
+      text: "The game then buys the 2-train from the Bank Depot automatically: C&O pays its whole treasury ($30) and you pay $50 of your own cash.",
     });
     // And the reducer agrees: the forgo, then the derived purchase.
     const after = apply(state, FORGO_TRADE, P1);
@@ -354,7 +355,7 @@ describe("the forgo consequence is the authority's projection, not prose of ours
 
   it("ForgoTrainTrade when the window is the only rescue: bankruptcy, prominently -- and the reducer ends the game", () => {
     const state = tradeOnly();
-    const consequence = decisionConsequenceFor(state, fundingOf(state), CORRIDOR, "trade_window_closed", "Alice")!;
+    const consequence = decisionConsequenceFor(state, fundingOf(state), CORRIDOR, "trade_window_closed")!;
     expect(consequence.outcome).toBe("bankruptcy");
     expect(consequence.severity).toBe("prominent");
     expect(consequence.text).toContain("sold as far as the rules allow");
@@ -365,7 +366,7 @@ describe("the forgo consequence is the authority's projection, not prose of ours
 
   it("ForgoPrivateFunding when a private is the only rescue: bankruptcy, prominently", () => {
     const state = privateOnly("160");
-    const consequence = decisionConsequenceFor(state, fundingOf(state), CORRIDOR, "private_funding_forgone", "Alice")!;
+    const consequence = decisionConsequenceFor(state, fundingOf(state), CORRIDOR, "private_funding_forgone")!;
     expect(consequence.outcome).toBe("bankruptcy");
     expect(apply(state, FORGO_PRIVATE, P1).current_round_type).toBe("GameEnd");
   });
@@ -455,7 +456,7 @@ function propsFor(current: GameStateResponse, overrides: Partial<EmergencyTrainP
     onRescindTrade: (sellerId) => calls.rescindTrades.push(sellerId),
     forgoTrade: {
       refusal: funding ? forgoTrainTradeRefusal(current, funding, viewer) : "none",
-      consequence: funding ? decisionConsequenceFor(current, funding, CORRIDOR, "trade_window_closed", label(P1)) : null,
+      consequence: funding ? decisionConsequenceFor(current, funding, CORRIDOR, "trade_window_closed") : null,
     },
     onForgoTrainTrade: () => {
       calls.forgoTrades += 1;
@@ -470,10 +471,11 @@ function propsFor(current: GameStateResponse, overrides: Partial<EmergencyTrainP
     onOfferPrivate: (privateId, buyer, price) => calls.offers.push([privateId, buyer, price]),
     onRescindPrivateOffer: (privateId) => calls.rescindPrivates.push(privateId),
     fundingAnswerRefusal: current.private_purchase_offer?.funding ? fundingAnswerRefusalForViewer(current, CORRIDOR, viewer) : "none",
+    fundingAcceptRefusal: current.private_purchase_offer?.funding ? fundingAcceptRefusalForViewer(current, CORRIDOR, viewer) : "none",
     onAnswerFundingOffer: (privateId, accept) => calls.answers.push([privateId, accept]),
     forgoPrivate: {
       refusal: funding ? forgoPrivateFundingRefusal(current, funding, viewer) : "none",
-      consequence: funding ? decisionConsequenceFor(current, funding, CORRIDOR, "private_funding_forgone", label(P1)) : null,
+      consequence: funding ? decisionConsequenceFor(current, funding, CORRIDOR, "private_funding_forgone") : null,
     },
     onForgoPrivateFunding: () => {
       calls.forgoPrivates += 1;
@@ -658,7 +660,8 @@ describe("the modal: the atomic share portfolio", () => {
     expect(text()).toContain("This sale raises $50, and $80 is needed");
     choose(select("Shares of NYC to sell"), "10");
     expect(text()).toContain("Sold in this order: PRR, NYC.");
-    expect(text()).toContain("Your cash $0 → $90 — covers the $80 needed");
+    // The cash the president actually keeps: $90 raised, then the automatic purchase takes $80 (C&O had nothing).
+    expect(text()).toContain("Your cash $0 → $90 — covers the $80 needed; the game then buys the train automatically and you keep $10");
     expect(live(sell())).toBe(true);
     click(sell());
     expect(calls.portfolios).toEqual([[{ protocol_id: PRR, percentage: 10 }, { protocol_id: NYC, percentage: 10 }]]);
@@ -740,7 +743,7 @@ describe("the modal: private funding", () => {
     expect(enter(boundOnly()).current_round_type).toBe("GameEnd");
   });
 
-  it("a standing private offer: the seller may only withdraw; a president over the buyer answers here", () => {
+  it("a standing private offer: the seller (not the buyer's president) may only withdraw", () => {
     mount(apply(privateOnly("160"), OFFER(2, NYC, 200), P1));
     expect(text()).toContain("Waiting on Bob");
     expect(hasButton(/^Sell/)).toBe(false);
@@ -776,7 +779,7 @@ describe("the modal: the automatic purchase and the automatic bankruptcy", () =>
     expect(dialog()).toBeNull();
     const app = readShell();
     expect(app).toContain('if (gameState?.current_round_type === "GameEnd" && gameState.bankrupt_president) return "bankruptcy";');
-    expect(app).toContain("if (!gameState || !emergencyPurchasePlan || emergencyForPresident) return null;");
+    expect(app).toContain('if (!gameState || !emergencyPurchasePlan || emergencySurface !== "waiting") return null;');
   });
 });
 
@@ -837,11 +840,147 @@ describe("the modal: the double-send latch", () => {
   });
 });
 
+describe("viewer scope, rendered: the workflow for the obligated president, the waiting card for everybody else", () => {
+  /** The shell's mount decision (`emergencySurfaceFor`) and what it mounts, for one screen. */
+  function renderScreen(current: GameStateResponse, input: { viewerAddress: string; spectator?: boolean; sandbox?: boolean; scrubbing?: boolean }) {
+    const plan = planOf(current);
+    const surface = emergencySurfaceFor({
+      sandbox: input.sandbox ?? true,
+      spectator: input.spectator ?? false,
+      scrubbing: input.scrubbing ?? false,
+      viewerAddress: input.viewerAddress,
+      plan,
+    });
+    mount(current, { plan: surface === "workflow" ? plan : null });
+    const waiting = document.createElement("div");
+    document.body.appendChild(waiting);
+    const waitingRoot = createRoot(waiting);
+    const sentence =
+      surface === "waiting"
+        ? emergencyWaitingSentence({ ticker: plan.corporationTicker, presidentLabel: label(plan.presidentAddress), privateOffer: null, trainOffer: null, automaticPurchase: plan.stage === "automatic-purchase" })
+        : null;
+    act(() => waitingRoot.render(<EmergencyPurchaseWaitingCard sentence={sentence} />));
+    const card = document.querySelector(`[${WAITING_STATUS_ATTRIBUTE}]`);
+    const result = { surface, dialog: dialog(), card: card?.textContent ?? null, cardControls: waiting.querySelectorAll("button, input, select").length };
+    act(() => waitingRoot.unmount());
+    return result;
+  }
+
+  it("the obligated president gets the dialog and its controls; no waiting card", () => {
+    const seen = renderScreen(twoHoldings(), { viewerAddress: P1 });
+    expect(seen.surface).toBe("workflow");
+    expect(seen.dialog).not.toBeNull();
+    expect(seen.card).toBeNull();
+  });
+
+  it("another seat, a spectator and a seatless watcher get the waiting card and no dialog", () => {
+    for (const input of [{ viewerAddress: P2 }, { viewerAddress: P3 }, { viewerAddress: P1, spectator: true }, { viewerAddress: "" }]) {
+      const seen = renderScreen(twoHoldings(), input);
+      expect([input, seen.surface]).toEqual([input, "waiting"]);
+      expect(seen.dialog).toBeNull();
+      expect(seen.card).toContain("C&O is resolving an emergency train purchase — waiting on Alice.");
+      expect(seen.cardControls).toBe(0);
+    }
+  });
+
+  it("the president's screen never opens the forced dialog where it could not send: the contract path, a replay scrub", () => {
+    expect(renderScreen(twoHoldings(), { viewerAddress: P1, sandbox: false }).dialog).toBeNull();
+    expect(renderScreen(twoHoldings(), { viewerAddress: P1, scrubbing: true }).dialog).toBeNull();
+  });
+});
+
+describe("the president also presides over the buying corporation: the answer is offered inside the surface", () => {
+  /** Phase 3; Alice presides over PRR (treasury $500), which may buy her private. */
+  const ownBuyer = () =>
+    board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "0", holdings: [[P1, 20], [P2, 20]], price: 90 },
+        { id: NYC, ticker: "NYC", president: P2, trains: ["3"], treasury: "500", holdings: [[P2, 30]], price: 100 },
+        { id: PRR, ticker: "PRR", president: P1, trains: [], treasury: "500", holdings: [[P1, 20]], price: 50 },
+      ],
+      cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+      privates: [{ private_id: 2, owner: P1, cost: "160" }],
+    });
+
+  it("Accept and Reject for the buyer, judged by the authority's acceptance verdict; one press, one answer", () => {
+    const offered = apply(ownBuyer(), OFFER(2, PRR, 200), P1);
+    expect(offered.private_purchase_offer).toMatchObject({ buyer_protocol_id: PRR, funding: true });
+    mount(offered);
+    expect(text()).toContain("You preside over PRR too, so the answer is yours.");
+    expect(hasButton(/^Withdraw/)).toBe(false);
+    const accept = button("Accept for PRR");
+    expect(live(accept)).toBe(true);
+    expect(live(button("Reject for PRR"))).toBe(true);
+    click(accept);
+    click(accept);
+    expect(calls.answers).toEqual([[2, true]]);
+  });
+
+  it("an acceptance the authority would refuse is greyed with its sentence", () => {
+    mount(apply(ownBuyer(), OFFER(2, PRR, 200), P1), { fundingAcceptRefusal: "The sale cannot be settled without the board to judge the obligation on." });
+    expect(live(button("Accept for PRR"))).toBe(false);
+    expect(text()).toContain("The sale cannot be settled without the board to judge the obligation on.");
+    expect(live(button("Reject for PRR"))).toBe(true);
+  });
+});
+
+describe("an open trade window while a private sale could still rescue", () => {
+  /** Phase 3: the 3-train at $180; C&O $30 + Alice $30 = $60; PRR (Cara) owns a 2 within that budget; Alice owns a
+   *  $160 private NYC could buy for up to $320; no share Alice may sell. */
+  const windowAndPrivate = () =>
+    board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "30", holdings: [[P1, 20], [P2, 20]], price: 90 },
+        { id: NYC, ticker: "NYC", president: P2, trains: ["3"], treasury: "500", holdings: [[P2, 30]], price: 100 },
+        { id: PRR, ticker: "PRR", president: P3, trains: ["2"], treasury: "100", holdings: [[P3, 40]], price: 50 },
+      ],
+      cash: { [P1]: 30, [P2]: 300, [P3]: 300 },
+      privates: [{ private_id: 2, owner: P1, cost: "160" }],
+    });
+
+  it("the forgo consequence says a private sale must come first; after it, the private section is offered", () => {
+    const state0 = windowAndPrivate();
+    expect(fundingOf(state0).automatic).toMatchObject({ tradeWindow: "open", privateFunding: "relevant" });
+    const consequence = decisionConsequenceFor(state0, fundingOf(state0), CORRIDOR, "trade_window_closed")!;
+    expect(consequence.outcome).toBe("funding");
+    expect(consequence.severity).toBe("notice");
+    expect(consequence.text).toContain("a private company would have to be sold first");
+    mount(state0);
+    expect(text()).not.toContain("Offer a private company"); // not while the window is open
+    click(button(/instead$/));
+    click(button("Buy from the Bank Depot"));
+    expect(calls.forgoTrades).toBe(1);
+    expect(state.current_round_type).toBe("OperatingRound"); // no bankruptcy: the private path stands
+    render();
+    expect(text()).toContain("Offer a private company — optional");
+    expect(live(button("Don't sell a private company"))).toBe(true);
+  });
+});
+
+describe("the latch releases when a refused press leaves the board unchanged", () => {
+  it("the shell's send completing (in flight -> idle) frees the controls again", () => {
+    mount(twoHoldings(), { onSellPortfolio: (legs) => calls.portfolios.push(legs) }); // a refusal: the board never moves
+    choose(select("Shares of PRR to sell"), "10");
+    choose(select("Shares of NYC to sell"), "10");
+    click(button(/^Sell the chosen shares/));
+    expect(live(button(/^Sell the chosen shares/))).toBe(false);
+    inFlight = true;
+    render({ onSellPortfolio: (legs) => calls.portfolios.push(legs) });
+    inFlight = false;
+    render({ onSellPortfolio: (legs) => calls.portfolios.push(legs) });
+    expect(text()).not.toContain("Sending your last action");
+  });
+});
+
 describe("a legacy (revision-1) board", () => {
-  it("presents no v12 manual control at all", () => {
-    mount({ ...twoHoldings(), variants: { rules: 1 }, rules_engine_version: 12 } as GameStateResponse);
-    expect(text()).toContain("before automatic emergency funding");
-    expect(buttons()).toHaveLength(0);
+  it("never traps the president behind a forced dialog with no v13 controls, and offers no v12 control", () => {
+    const legacy = { ...twoHoldings(), variants: { rules: 1 }, rules_engine_version: 12 } as GameStateResponse;
+    const plan = planOf(legacy);
+    expect(plan.stage).toBe("legacy");
+    expect(emergencySurfaceFor({ sandbox: true, spectator: false, scrubbing: false, viewerAddress: P1, plan })).toBeNull();
+    expect(emergencySurfaceFor({ sandbox: true, spectator: false, scrubbing: false, viewerAddress: P2, plan })).toBe("waiting");
+    mount(legacy); // even if handed the plan, the component renders nothing
+    expect(dialog()).toBeNull();
   });
 });
 
@@ -900,10 +1039,10 @@ describe("the shell's wiring", () => {
   const app = readShell();
 
   it("mounts the workflow for the obligated president alone, and the waiting card for everybody else", () => {
-    expect(app).toContain("emergencyViewerIsPresident({ spectator, president: emergencyPurchasePlan.presidentAddress, viewerAddress })");
+    expect(app).toContain("emergencySurfaceFor({ sandbox, spectator, scrubbing, viewerAddress, plan: emergencyPurchasePlan })");
+    expect(app).toContain('const emergencyForPresident = emergencySurface === "workflow";');
     expect(app).toContain("const emergencyModalPlan = emergencyForPresident ? emergencyPurchasePlan : null;");
     expect(app).toContain("<EmergencyPurchaseWaitingCard sentence={emergencyWaiting} />");
-    expect(app).toMatch(/const emergencyForPresident =\s*sandbox &&/);
   });
 
   it("has no opener and no dismissal", () => {

@@ -90,8 +90,6 @@ export interface EmergencyPurchasePlan {
   privateOffer: PrivatePurchaseOffer | null;
   /** The label of the president who must answer `privateOffer`. */
   privateOfferBuyerPresidentLabel: string | null;
-  /** The rules revision this board plays, for the legacy notice. */
-  rulesRevision: number | null;
 }
 
 /* ==================================================================
@@ -105,7 +103,6 @@ export function buildEmergencyPurchasePlan(args: {
   labelForAddress: (address: string) => string;
   /** The BUYING corporation's current president, when a funding offer stands -- read off the board by the caller. */
   privateOfferBuyerPresident?: string | null;
-  rulesRevision?: number | null;
 }): EmergencyPurchasePlan {
   const { funding, labelForAddress } = args;
   const presidentLabel = labelForAddress(funding.president);
@@ -132,7 +129,6 @@ export function buildEmergencyPurchasePlan(args: {
     privateSales: funding.legalPrivateSales,
     privateOffer: funding.privateOffer,
     privateOfferBuyerPresidentLabel: buyerPresident === null ? null : labelForAddress(buyerPresident),
-    rulesRevision: args.rulesRevision ?? null,
   };
 }
 
@@ -170,6 +166,8 @@ export interface EmergencyTrainPurchaseModalProps {
   /** When the obligated president also presides over the BUYING corporation, the answer is theirs and must be
    *  offered here -- this surface covers the ordinary prompt. `null` refusal = this viewer answers. */
   fundingAnswerRefusal?: string | null;
+  /** The acceptance's own verdict (`fundingPrivateAnswerRefusal` with `accept: true`), or `null`: Accept may be sent. */
+  fundingAcceptRefusal?: string | null;
   onAnswerFundingOffer?: (privateId: number, accept: boolean) => void;
   /** `ForgoPrivateFunding`: `forgoPrivateFundingRefusal` and the projected outcome. */
   forgoPrivate: ForgoDecision;
@@ -249,6 +247,7 @@ export function EmergencyTrainPurchaseModal({
   onOfferPrivate,
   onRescindPrivateOffer,
   fundingAnswerRefusal = "Not your answer.",
+  fundingAcceptRefusal = "Not your answer.",
   onAnswerFundingOffer,
   forgoPrivate,
   onForgoPrivateFunding,
@@ -262,14 +261,19 @@ export function EmergencyTrainPurchaseModal({
 
   const signature = plan ? boardSignature(plan, intercorporate) : "";
   const [pressed, press] = usePressLatch(signature, actionInFlight);
-  /* A draft belongs to the board it was composed on; a new board (anything settled) clears it. */
+  /* A draft belongs to the board it was composed on; a new board (anything settled) clears every one of them. */
   React.useEffect(() => {
     setDraft(EMPTY_PORTFOLIO_DRAFT);
     setConfirming(null);
+    setTradeKey(null);
+    setTradePrice("");
+    setPrivateDrafts({});
   }, [signature]);
 
-  /* AFTER the hooks, never before (rules of hooks). */
-  if (!plan) return null;
+  /* AFTER the hooks, never before (rules of hooks). A legacy (revision-1) board has no v13 controls, and a forced
+     surface with nothing to press would trap its president -- the shell does not mount it there
+     (`emergencySurfaceFor`), and it renders nothing if it is. */
+  if (!plan || plan.stage === "legacy") return null;
 
   const latched = pressed || actionInFlight;
   const blocked: string | null = !sandbox
@@ -301,14 +305,10 @@ export function EmergencyTrainPurchaseModal({
           {plan.trainSourceName}. This stays open until the train is bought or the game ends.
         </p>
 
-        {plan.stage !== "legacy" && (
-          <ol style={styles.steps} aria-label="Emergency purchase steps">
-            <li style={tradeStage ? styles.stepCurrent : styles.stepDone}>Another corporation</li>
-            <li style={tradeStage ? styles.stepLater : styles.stepCurrent}>{plan.trainSourceName}</li>
-          </ol>
-        )}
-
-        {plan.stage === "legacy" && <LegacyNotice plan={plan} />}
+        <ol style={styles.steps} aria-label="Emergency purchase steps">
+          <li style={tradeStage ? styles.stepCurrent : styles.stepDone}>Another corporation</li>
+          <li style={tradeStage ? styles.stepLater : styles.stepCurrent}>{plan.trainSourceName}</li>
+        </ol>
 
         {plan.stage === "train-offer" && (
           <StandingTradeOffer plan={plan} step={intercorporate} blocked={blocked} labelForAddress={labelForAddress} onRescind={(sellerId) => press(() => onRescindTrade(sellerId))} />
@@ -338,6 +338,7 @@ export function EmergencyTrainPurchaseModal({
             offer={plan.privateOffer}
             blocked={blocked}
             fundingAnswerRefusal={fundingAnswerRefusal}
+            fundingAcceptRefusal={fundingAcceptRefusal}
             onAnswer={onAnswerFundingOffer ? (privateId, accept) => press(() => onAnswerFundingOffer(privateId, accept)) : undefined}
             onRescind={(privateId) => press(() => onRescindPrivateOffer(privateId))}
           />
@@ -363,19 +364,6 @@ export function EmergencyTrainPurchaseModal({
         )}
       </div>
     </NativeModal>
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/* A board below rules revision 2                                       */
-/* ------------------------------------------------------------------ */
-
-function LegacyNotice({ plan }: { plan: EmergencyPurchasePlan }) {
-  return (
-    <p style={styles.note} role="status">
-      This table was dealt under rules revision {plan.rulesRevision ?? 0}, before automatic emergency funding. Its
-      manual emergency controls are retired in this version of the game, so none are offered here.
-    </p>
   );
 }
 
@@ -610,6 +598,7 @@ function StandingPrivateOffer({
   offer,
   blocked,
   fundingAnswerRefusal,
+  fundingAcceptRefusal,
   onAnswer,
   onRescind,
 }: {
@@ -617,6 +606,7 @@ function StandingPrivateOffer({
   offer: PrivatePurchaseOffer;
   blocked: string | null;
   fundingAnswerRefusal: string | null;
+  fundingAcceptRefusal: string | null;
   onAnswer?: (privateId: number, accept: boolean) => void;
   onRescind: (privateId: number) => void;
 }) {
@@ -643,13 +633,14 @@ function StandingPrivateOffer({
             </button>
             <button
               type="button"
-              style={{ ...styles.primaryButton, ...(blocked ? styles.buttonDisabled : {}) }}
-              disabled={blocked !== null}
-              title={blocked ?? undefined}
+              style={{ ...styles.primaryButton, ...(blocked || fundingAcceptRefusal ? styles.buttonDisabled : {}) }}
+              disabled={blocked !== null || fundingAcceptRefusal !== null}
+              title={blocked ?? fundingAcceptRefusal ?? undefined}
               onClick={() => onAnswer(offer.private_id, true)}
             >
               Accept for {offer.buyer_ticker}
             </button>
+            {fundingAcceptRefusal !== null && <span style={styles.reason}>{fundingAcceptRefusal}</span>}
           </>
         ) : (
           <button
@@ -806,6 +797,9 @@ function PortfolioSection({
   const reason = blocked ?? verdict.refusal;
   const tickerOf = (id: number) => plan.rescue.find((corp) => corp.companyId === id)?.ticker ?? String(id);
   const cashAfter = plan.presidentCash + verdict.total;
+  /* What the automatic purchase then takes from the president: the train's price less the whole treasury (6.6.2) --
+     the same figure the ledger above commits, now that the sale has covered it. */
+  const leftAfterPurchase = cashAfter - Math.max(0, plan.trainCost - plan.treasury);
   return (
     <div style={styles.subsection}>
       <span style={styles.sectionTitle}>Sell shares — one transaction</span>
@@ -857,7 +851,10 @@ function PortfolioSection({
         {verdict.total < short ? (
           <span style={styles.stillShort}> — still ${short - verdict.total} short</span>
         ) : (
-          <span style={styles.covers}> — covers the ${short} needed</span>
+          <span style={styles.covers}>
+            {" "}
+            — covers the ${short} needed; the game then buys the train automatically and you keep ${leftAfterPurchase}
+          </span>
         )}
       </span>
       <div style={styles.footer}>

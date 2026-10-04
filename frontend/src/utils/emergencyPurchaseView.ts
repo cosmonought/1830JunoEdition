@@ -60,6 +60,27 @@ export function emergencyViewerIsPresident(input: {
   return homeStationViewerIsPresident(input);
 }
 
+/** Which emergency surface THIS screen gets, or `null` for none:
+ *  - `workflow`: the obligated president's own, non-spectating screen at a hosted table, on a v13 board, on the live
+ *    board (not a replay scrub) -- the non-dismissible modal;
+ *  - `waiting`: every other seat and every watcher -- the read-only status card;
+ *  - `null`: no obligation, or the president's own screen where the workflow cannot open (a legacy board, the contract
+ *    path, a replay scrub). The forced modal is never mounted where none of its controls could resolve the obligation,
+ *    so it can never trap a president behind a dialog with nothing to press. */
+export function emergencySurfaceFor(input: {
+  sandbox: boolean;
+  spectator: boolean;
+  scrubbing: boolean;
+  viewerAddress: string | null | undefined;
+  plan: { presidentAddress: string; stage: EmergencyStage } | null;
+}): "workflow" | "waiting" | null {
+  const { plan } = input;
+  if (plan === null) return null;
+  const president = emergencyViewerIsPresident({ spectator: input.spectator, president: plan.presidentAddress, viewerAddress: input.viewerAddress });
+  if (!president) return "waiting";
+  return input.sandbox && !input.scrubbing && plan.stage !== "legacy" ? "workflow" : null;
+}
+
 /** The read-only sentence every other seat and every watcher sees. Names whoever the table is actually waiting on:
  *  the obligated president, the president who must answer an offer the obligation made -- or nobody, while the game
  *  itself is making the funded purchase. */
@@ -287,7 +308,6 @@ export function decisionConsequenceFor(
   funding: EmergencyFunding,
   mapGrid: MapGridResponse | undefined,
   mark: "trade_window_closed" | "private_funding_forgone",
-  presidentLabel: string,
 ): DecisionConsequence | null {
   const after = emergencyFundingFor(withEmergencyMark(state, funding, mark), mapGrid);
   if (after === null || after.automatic === undefined) return null;
@@ -299,7 +319,7 @@ export function decisionConsequenceFor(
       severity: "notice",
       text:
         `The game then buys the ${after.train.tier}-train from the ${where} automatically: ${after.ticker} pays its ` +
-        `whole treasury ($${after.treasury}) and ${presidentLabel} pays $${fromCash} of personal cash.`,
+        `whole treasury ($${after.treasury}) and you pay $${fromCash} of your own cash.`,
     };
   }
   if (after.bankrupt) {
@@ -308,19 +328,19 @@ export function decisionConsequenceFor(
       severity: "prominent",
       text:
         `No legal way to fund the ${after.train.tier}-train would remain, so bankruptcy follows at once: ` +
-        `${presidentLabel}'s shares are sold as far as the rules allow, all of ${presidentLabel}'s money goes to ` +
-        `${after.ticker}, and the game ends.`,
+        `your shares are sold as far as the rules allow, all of your money goes to ${after.ticker}, and the game ends.`,
     };
   }
-  return {
-    outcome: "funding",
-    severity: "notice",
-    text:
-      `${after.ticker} pays its whole treasury ($${after.treasury}) and ${presidentLabel} pays all of their cash ` +
-      `($${after.presidentCash}) toward the ${after.train.tier}-train ($${after.train.cost}) from the ${where}. ` +
-      `The remaining $${after.shortfall} must then be raised by selling shares in one transaction` +
-      (after.automatic.privateFunding === "relevant" ? " (or by selling a private company)." : "."),
-  };
+  const head =
+    `${after.ticker} pays its whole treasury ($${after.treasury}) and you pay all of your cash ` +
+    `($${after.presidentCash}) toward the ${after.train.tier}-train ($${after.train.cost}) from the ${where}. `;
+  const privateRelevant = after.automatic.privateFunding === "relevant";
+  const rest = after.automatic.rescue.canFund
+    ? `The remaining $${after.shortfall} must then be raised by selling shares in one transaction` +
+      (privateRelevant ? " (or by selling a private company first)." : ".")
+    : `Your shares alone can raise at most $${after.automatic.rescue.maximumProceeds} of the remaining $${after.shortfall}, ` +
+      "so a private company would have to be sold first.";
+  return { outcome: "funding", severity: "notice", text: head + rest };
 }
 
 /* ------------------------------------------------------------------ */
@@ -411,4 +431,16 @@ export function fundingAnswerRefusalForViewer(
   /* A rejection needs no board; the acceptance is re-validated in full against it. A viewer the authority refuses
      even a rejection from is not the answerer. */
   return fundingPrivateAnswerRefusal(state, { private_id: offer.private_id, accept: false }, actor, mapGrid);
+}
+
+/** The ACCEPTANCE's own verdict for this viewer: an acceptance settles the sale, so the authority re-validates it in
+ *  full against the current board (`fundingPrivateAnswerRefusal` with `accept: true`). `null` when Accept may be sent. */
+export function fundingAcceptRefusalForViewer(
+  state: GameStateResponse,
+  mapGrid: MapGridResponse | undefined,
+  actor: string | null | undefined,
+): string | null {
+  const offer = state.private_purchase_offer ?? null;
+  if (!offer || !offer.funding) return "There is no funding offer to answer.";
+  return fundingPrivateAnswerRefusal(state, { private_id: offer.private_id, accept: true }, actor, mapGrid);
 }

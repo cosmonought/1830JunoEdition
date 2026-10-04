@@ -642,8 +642,9 @@ import { EmergencyPurchaseWaitingCard } from "./components/EmergencyPurchaseWait
 import {
   decisionConsequenceFor,
   emergencyStageFor,
-  emergencyViewerIsPresident,
+  emergencySurfaceFor,
   emergencyWaitingSentence,
+  fundingAcceptRefusalForViewer,
   fundingAnswerRefusalForViewer,
   fundingOfferDraftRefusal,
   intercorporateOfferRefusal,
@@ -1982,7 +1983,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         offer === null
           ? null
           : gameState.public_companies.find((company) => company.company_id === offer.buyer_protocol_id)?.president ?? null,
-      rulesRevision: typeof gameState.variants?.rules === "number" ? gameState.variants.rules : 0,
     });
   }, [gameState, emergencyFunding]);
 
@@ -2004,12 +2004,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * private funding offer / withdrawal / answer, `ForgoPrivateFunding`, the intercorporate offer / withdrawal). The
    * funded purchase is the game's (#1247's no-server effect below forwards it where no server does), and bankruptcy
    * is the reducer's -- no `SellStock`, `EmergencyBuyHardware` or `DeclareBankruptcy` is sent from here. */
-  /* Rooms only: the contract path has no emergency message, and a surface that cannot be closed must never open on a
-     screen where none of its controls could send. */
-  const emergencyForPresident =
-    sandbox &&
-    emergencyPurchasePlan !== null &&
-    emergencyViewerIsPresident({ spectator, president: emergencyPurchasePlan.presidentAddress, viewerAddress });
+  /* Rooms only, on the live board, on a v13 board: a surface that cannot be closed must never open on a screen where
+     none of its controls could send (the contract path, a replay scrub #1425, a legacy board with no v13 controls). */
+  const emergencySurface = emergencySurfaceFor({ sandbox, spectator, scrubbing, viewerAddress, plan: emergencyPurchasePlan });
+  const emergencyForPresident = emergencySurface === "workflow";
 
   const emergencyModalPlan = emergencyForPresident ? emergencyPurchasePlan : null;
 
@@ -2026,23 +2024,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /* The two "forgo" decisions: the authority's refusal for this viewer, and the authority's own projection of what
      the board owes once the decision is recorded (automatic purchase, the share portfolio, or bankruptcy). */
   const emergencyForgo = useMemo(() => {
-    if (!emergencyForPresident || !gameState || !emergencyFunding || !emergencyPurchasePlan) return null;
-    const label = emergencyPurchasePlan.presidentLabel;
+    if (!emergencyForPresident || !gameState || !emergencyFunding) return null;
     return {
       trade: {
         refusal: forgoTrainTradeRefusal(gameState, emergencyFunding, viewerAddress),
-        consequence: decisionConsequenceFor(gameState, emergencyFunding, mapGrid, "trade_window_closed", label),
+        consequence: decisionConsequenceFor(gameState, emergencyFunding, mapGrid, "trade_window_closed"),
       },
       private: {
         refusal: forgoPrivateFundingRefusal(gameState, emergencyFunding, viewerAddress),
-        consequence: decisionConsequenceFor(gameState, emergencyFunding, mapGrid, "private_funding_forgone", label),
+        consequence: decisionConsequenceFor(gameState, emergencyFunding, mapGrid, "private_funding_forgone"),
       },
     };
-  }, [emergencyForPresident, gameState, emergencyFunding, emergencyPurchasePlan, mapGrid, viewerAddress]);
+  }, [emergencyForPresident, gameState, emergencyFunding, mapGrid, viewerAddress]);
 
   /* The read-only sentence for everybody else: who the table is waiting on. */
   const emergencyWaiting = useMemo(() => {
-    if (!gameState || !emergencyPurchasePlan || emergencyForPresident) return null;
+    if (!gameState || !emergencyPurchasePlan || emergencySurface !== "waiting") return null;
     const label = (address: string | null | undefined) =>
       !address
         ? "its president"
@@ -2055,7 +2052,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const ours = trade !== null && trade.buyer_protocol_id === emergencyPurchasePlan.corporationId ? trade : null;
     return emergencyWaitingSentence({
       ticker: emergencyPurchasePlan.corporationTicker,
-      presidentLabel: emergencyPurchasePlan.presidentLabel,
+      presidentLabel: label(emergencyPurchasePlan.presidentAddress),
       privateOffer: funding
         ? {
             privateName: funding.private_name,
@@ -2078,7 +2075,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         : null,
       automaticPurchase: emergencyPurchasePlan.stage === "automatic-purchase",
     });
-  }, [gameState, emergencyPurchasePlan, emergencyForPresident, viewerAddress]);
+  }, [gameState, emergencyPurchasePlan, emergencySurface, viewerAddress]);
 
   /* Two endings, both derived: bankruptcy is read off the emergency plan and wins over a broken bank.
      See docs/ai_architecture/state_machine.md - App.tsx #359 */
@@ -13962,6 +13959,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         fundingAnswerRefusal={
           gameState && emergencyModalPlan?.privateOffer
             ? fundingAnswerRefusalForViewer(gameState, mapGrid, viewerAddress)
+            : "There is no funding offer to answer."
+        }
+        fundingAcceptRefusal={
+          gameState && emergencyModalPlan?.privateOffer
+            ? fundingAcceptRefusalForViewer(gameState, mapGrid, viewerAddress)
             : "There is no funding offer to answer."
         }
         onAnswerFundingOffer={handleAnswerFundingPrivateOffer}

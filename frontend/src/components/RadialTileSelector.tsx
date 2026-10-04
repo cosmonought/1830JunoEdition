@@ -27,7 +27,7 @@ import { FONT_SIZE, RADIUS } from "../styles/typography";
 /* Design note #1294: the chrome scale, live, for the counter-zoom. */
 import { useUiScale } from "../utils/useUiScale";
 import { isUpgradeDeadEnd } from "../utils/tileUpgrades"; // #1393
-import { TILE_CATALOG_BY_ID } from "./hexTileCatalog";
+import { TILE_CATALOG_BY_ID, canonicalTileName } from "./hexTileCatalog"; // W1-E: canonicalTileName (U-38)
 
 /** #1393, RULED: the "!" is for yellow and green tiles that nothing replaces -- a brown or gray tile is
  *  the end of every ladder and needs no warning about it. `isUpgradeDeadEnd` already excludes the game's
@@ -510,6 +510,9 @@ export function RadialTileSelector({
   // Deduplicated by tile: the ring offers TILES, and rotation is chosen
   // afterwards on the board itself. Six ring entries for one tile at six
   // rotations would be six thumbnails a player cannot tell apart.
+  /* Phase 3 W1-E: `firstOrientation` is the tile's first RAW placement -- the first the board geometry produced,
+     which the station authority may refuse. It is an offer, not a verdict: the shell seeds the preview from
+     `stationLegalFacings` (`seedRingFacing`) and greys Confirm with the lay authority's sentence. */
   const tiles: { tileId: number; firstOrientation: number }[] = [];
   const seen = new Set<number>();
   for (const placement of candidates) {
@@ -633,8 +636,8 @@ export function RadialTileSelector({
                    The id is printed on the tile and its tier is its colour -- both readable without hovering. */
                 aria-label={
                   exhausted
-                    ? `Tile ${tile.tileId} — none left in the supply`
-                    : `Preview tile ${tile.tileId} on ${hexLabel}`
+                    ? `Tile ${canonicalTileName(tile.tileId)} — none left in the supply`
+                    : `Preview tile ${canonicalTileName(tile.tileId)} on ${hexLabel}`
                 }
                 style={{
                   ...styles.candidate,
@@ -650,7 +653,7 @@ export function RadialTileSelector({
                     the treasury effect saying 'This tile does not upgrade further.'" The mark rides the
                     candidate's corner while choosing; the sentence sits in the preview caption under the cost. */}
                 {isFinalCandidate(tile.tileId) && (
-                  <span style={styles.candidateFinal} aria-label={`Tile ${tile.tileId} does not upgrade further`} title="This tile does not upgrade further.">
+                  <span style={styles.candidateFinal} aria-label={`Tile ${canonicalTileName(tile.tileId)} does not upgrade further`} title="This tile does not upgrade further.">
                     !
                   </span>
                 )}
@@ -682,7 +685,7 @@ export function RadialTileSelector({
                             ? styles.candidateStockLast
                             : {}),
                       }}
-                      aria-label={`${stock.remaining} of ${stock.printed} copies of tile ${tile.tileId} remain`}
+                      aria-label={`${stock.remaining} of ${stock.printed} copies of tile ${canonicalTileName(tile.tileId)} remain`}
                     >
                       {stock.remaining === 0 ? "none left" : `${stock.remaining} left`}
                     </span>

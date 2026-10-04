@@ -605,7 +605,11 @@ import {
 } from "./utils/fleetLossNotice";
 import { operatingCorporationId } from "./gameEngine/dividendGate";
 // Design note #1683 (Stage 10.1): the one `LayTile` authority the grid asks, and the one board geometry it is handed.
-import { layTileRefusal } from "./gameEngine/layTileAuthority";
+import { layTileRefusal, layTimingRefusal } from "./gameEngine/layTileAuthority";
+// Phase 3 W1-E: the ring's step and second-lay sentences are the lay authority's; the previewed lay is judged by it.
+import { ordinaryLayTakenRefusal } from "./gameEngine/privateLayClaim";
+import { ringConfirmState, ringLayPreviewRefusal, seedRingFacing } from "./utils/tileRingView";
+import { canonicalTileName } from "./components/hexTileCatalog";
 import { sandboxReplayProviders } from "./gameEngine/replayProviders";
 import { layAuthorityContext, sandboxActionContext } from "./gameEngine/actionContext"; // #1690 (Stage 10.3)
 import { cheapestPurchasableTrain } from "./gameEngine/trainAvailability";
@@ -3808,7 +3812,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         }
         const laidHere = mapGridRef.current.tiles.find((tile) => tile.q === state.q && tile.r === state.r);
         if (laidHere && isMyTurnRef.current && isUpgradeDeadEnd(laidHere.tile_id)) {
-          showActionToast(`Tile #${laidHere.tile_id} has no upgrade in this game — ${state.hexLabel} stays as it is.`);
+          // Phase 3 W1-E (AUD-05.01 U-38): the tile's canonical name (#1630), never an errata-voided number.
+          showActionToast(`Tile ${canonicalTileName(laidHere.tile_id)} has no upgrade in this game — ${state.hexLabel} stays as it is.`);
         }
         setRadialSelector(null);
         setPreviewTile(null);
@@ -11744,7 +11749,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (gameState?.current_round_type !== "OperatingRound") {
       return "Planning Mode: Tile lay disabled — track is laid in an Operating Round.";
     }
-    if (orSubPhase !== "Track") {
+    /* Phase 3 W1-E (P3-N010): THE STEP IS THE LAY AUTHORITY'S QUESTION FIRST. `layTimingRefusal` is what the reducer
+       answers a mistimed lay with on a pinned board, so the ring now says that sentence -- and accepts the pre-#1440
+       `BuyPrivate` cursor exactly where the authority does. The shell's own step test below survives only for a
+       LEGACY board, where the authority has no timing opinion and the shell has always offered the lay at Track. */
+    const layTiming = gameState ? layTimingRefusal(gameState, { protocol_id: actingProtocolId }) : null;
+    if (layTiming !== null) return `Planning Mode: Tile lay disabled — ${layTiming}`;
+    if (typeof gameState?.rules_engine_version !== "number" && orSubPhase !== "Track") {
       // Direction-aware: from Phase 3 the turn OPENS on BuyPrivate, so "past the Track step" was wrong in the commonest case.
       // See docs/ai_architecture/ui_shell_layout.md - App.tsx #440
       const order = OPERATING_SUB_PHASE_ORDER;
@@ -11761,12 +11772,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     }
     /* Design note #1697 (Stage 10.6, S6-6): the step is held on Track only for the C&SL's bonus lay -- the ordinary
        lay is spent, and the authority refuses a second one (`ordinaryLayTakenRefusal`). The C&SL's own errand is the
-       one lay left, so the picker stays open for it and for nothing else. */
-    if (
-      gameState?.ordinary_lay_taken === actingProtocolId &&
-      !errandLaysBonus(homeStationPlacement)
-    ) {
-      return "Planning Mode: Ordinary tile lay made — only the C&SL's bonus lay on B20 remains (use its Lay Track (B20) power), or advance.";
+       one lay left, so the picker stays open for it and for nothing else.
+       Phase 3 W1-E: ASKED OF `ordinaryLayTakenRefusal` ITSELF (an armed C&SL errand is the bonus claim it exempts),
+       and its sentence is the one shown; the shell adds only where the remaining lay is. */
+    const secondLay = gameState
+      ? ordinaryLayTakenRefusal(gameState, { protocol_id: actingProtocolId, bonus_lay: errandLaysBonus(homeStationPlacement) })
+      : null;
+    if (secondLay !== null) {
+      return `Planning Mode: Tile lay disabled — ${secondLay} Use its Lay Track (B20) power, or advance.`;
     }
     return null;
   }, [spectator, gameState, orSubPhase, viewerAddress, actingProtocolId, homeStationPlacement]);
@@ -11837,6 +11850,45 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (gameState === null) return Array.from(new Set(angles)).sort((a, b) => a - b);
     return stationLegalFacings(gameState, mapGrid, previewTile.q, previewTile.r, previewTile.tileId, angles, actingProtocolId);
   }, [radialCandidates, previewTile, mapGrid, gameState, actingProtocolId]);
+
+  /* ==================================================================
+      PHASE 3 W1-E (P3-N010 / P3-N011): THE PREVIEWED LAY IS JUDGED BY THE ONE LAY AUTHORITY
+     ==================================================================
+     The ring's Confirm asked whether a lay is allowed NOW (`canLayTileNow`) and whether the fee was short, and
+     never whether THIS lay would be accepted -- so a facing the station authority refuses, a hold, a private's
+     hex or a connectivity break was lit green and refused on click. This is the ONE question the ring now asks
+     about the lay itself: `layTileRefusal`, the composition the reducer and both grids ask, about the message
+     `handleConfirmRadialLay` would send (the same errand claim, power key and token map), on the table's rules
+     and route revision (`ringLayPreviewRefusal`). The fee sentence the ring used to build by hand is the
+     authority's `terrainAffordabilityRefusal` now -- JK halving included. No derivation of the landings here:
+     the preview already holds them (#886), and `derivePreviewLandings` keeps its pinned call sites. */
+  const ringLayRefusal = useMemo(() => {
+    if (!radialSelector || !previewTile || previewTile.committed || gameState === null || !canLayTileNow) return null;
+    const { q, r } = radialSelector;
+    const claimsErrand = errandClaimsLay(homeStationPlacement, q, r);
+    return ringLayPreviewRefusal(SHELL_PROVIDERS, gameState, mapGrid, {
+      gameId,
+      protocolId: actingProtocolId,
+      q,
+      r,
+      tileId: previewTile.tileId,
+      orientation: previewTile.orientation,
+      bonusLay: errandLaysBonus(homeStationPlacement) && claimsErrand,
+      abilityKey: claimsErrand
+        ? homeStationPlacement?.abilityKey ?? undefined
+        : jkLayArmed && isCoalRiverNeighbour(q, r) && jkTileRefusal(gameState, actingProtocolId, q, r) === null
+          ? JK_TILE_ABILITY_KEY
+          : undefined,
+      tokenCity: previewTile.tokenCity,
+      tokenCities: previewTile.tokenCities ?? [],
+    });
+  }, [radialSelector, previewTile, gameState, canLayTileNow, homeStationPlacement, mapGrid, gameId, actingProtocolId, jkLayArmed]);
+  /* Phase 3 W1-E: one answer for the ring's tick and its tooltip -- who may lay now, then the in-flight latch, then
+     the authority's verdict on this lay (`utils/tileRingView.ts`). */
+  const ringConfirm = useMemo(
+    () => ringConfirmState({ layDisabledReason: tileLayDisabledReason, inFlight: actionInFlight, previewRefusal: ringLayRefusal }),
+    [tileLayDisabledReason, actionInFlight, ringLayRefusal],
+  );
 
   /* ==================================================================
       DESIGN NOTE 874: LEAVING THE PICKER LEAVES THE POWER
@@ -12158,8 +12210,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          facing (`legalRotations[0]`), so the marker on the thumbnail is the marker they then see on the board
          rather than a guess that changes under them.
          AND AN ILLEGAL CANDIDATE DRAWS NO MARKER, which is honest: if no facing of this tile can seat the
-         tokens, there is no destination to promise. The candidate itself is filtered out of the ring by the
-         same rule (#879 in `legalRotations`), so this is the belt to that braces. */
+         tokens, there is no destination to promise.
+         Phase 3 W1-E CORRECTION: this note used to add that "the candidate itself is filtered out of the ring
+         by the same rule (#879 in `legalRotations`)". It is not -- `legalRotations` narrows the facings of the
+         tile ALREADY previewed, and the ring still offers every candidate the board geometry produced. What
+         keeps such a candidate from being laid is the authority: its preview opens on the ring's own offer
+         (`seedRingFacing` has no legal facing to prefer) and Confirm is greyed with `ringLayRefusal`'s sentence. */
       /* Design note #1682 (Stage 10.1, S10-25): the same authority answer the rotation list is built from --
          the lowest facing `stationLegalFacings` keeps, and that facing's plan from `stationAnchorPlan`. */
       if (gameState === null) return [];
@@ -15344,17 +15400,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              control that refuses on click but invites the click is Lobby.tsx #3's silent button in reverse.
              SAME FIGURE, SAME SENTENCE: `pendingLayCost.short` is what the handler refuses on, and the
              tooltip says what the log would have said. */
-          canConfirm={canLayTileNow && !pendingLayCost?.short}
-          confirmDisabledReason={
-            tileLayDisabledReason ??
-            (pendingLayCost?.short
-              ? `${activeCorporationContext?.ticker ?? "This corporation"} cannot afford the $${pendingLayCost.fee} terrain cost here — its treasury holds $${pendingLayCost.before ?? 0}.`
-              : undefined)
-          }
+          /* Phase 3 W1-E: #1382's property kept and widened. The tick is lit exactly when the lay authority would
+             accept THIS lay (`ringLayRefusal`, which carries #891's fee sentence as the authority words it), and
+             it is latched while the last press is still travelling. One answer feeds the button and its tooltip. */
+          canConfirm={ringConfirm.canConfirm}
+          confirmDisabledReason={ringConfirm.reason}
           provisional={radialSelector.provisional}
-          // The ring hands back that tile's FIRST legal orientation
-          // (design note #173), so the preview never opens on an angle the
-          // rotate cycle would then refuse to return to.
+          /* Phase 3 W1-E: the ring hands back that tile's first RAW placement orientation -- the first entry the
+             board geometry produced, which the station authority may refuse. The comment here used to call it the
+             first LEGAL one; it was not, so the preview is seeded below from `stationLegalFacings` (the facing
+             the thumbnail already draws and the rotate cycle returns to). */
           onSelectCandidate={(tileId, orientation) => {
             /* ==================================================================
                DESIGN NOTE 886: THE FIRST PREVIEW DERIVES LIKE EVERY OTHER
@@ -15378,15 +15433,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                wrong -- every city is equally legal -- so opening at the first one and letting the president
                rotate is #824's design, not #1's superseded index-preservation. An ANCHORED token is untouched
                by this: `seedPreviewArrangement` hands its derived city straight back. */
+            /* Phase 3 W1-E (AUD-05.04 pre-work): THE FACING IS SEEDED FROM THE STATION AUTHORITY, the lowest facing
+               `stationLegalFacings` keeps for this candidate -- the facing its thumbnail draws (#879) and the one
+               the rotate cycle (`legalRotations`) returns to. The ring's raw offer is kept only where the authority
+               keeps none, and then Confirm is greyed with its sentence (`ringLayRefusal`). */
+            const facing = seedRingFacing(
+              orientation,
+              gameState === null
+                ? []
+                : stationLegalFacings(gameState, mapGrid, radialSelector.q, radialSelector.r, tileId, radialCandidates.filter((placement) => placement.tile_id === tileId).map((placement) => placement.orientation), actingProtocolId),
+            );
             const probe = derivePreviewLandings(
               radialSelector.q,
               radialSelector.r,
               tileId,
-              orientation,
+              facing,
               undefined,
             );
             const seed = seedPreviewArrangement({
-              orientation,
+              orientation: facing,
               fit: probe,
               freeCityChoices: freeCityChoices(tileCityCount(tileId)),
             });
@@ -15394,14 +15459,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               radialSelector.q,
               radialSelector.r,
               tileId,
-              orientation,
+              seed.orientation,
               seed.tokenCity,
             );
             setPreviewTile({
               q: radialSelector.q,
               r: radialSelector.r,
               tileId,
-              orientation,
+              orientation: seed.orientation,
               tokenCity: seed.tokenCity,
               tokenCities: landing.tokenCities,
             });
@@ -15423,7 +15488,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              from the board rather than queried -- see `utils/tileSupply.ts`
              for why that arithmetic is exact and what would replace it. */
           stockFor={radialStockFor}
-          onConfirm={handleConfirmRadialLay}
+          /* Phase 3 W1-E: LATCHED AT THE MOUNT. The handler is only reached while the tick is lit, so a press
+             that arrives while the last action is in flight, or on a lay the authority refuses, does nothing. */
+          onConfirm={() => {
+            if (ringConfirm.canConfirm) handleConfirmRadialLay();
+          }}
           onCancel={() => setPreviewTile(null)}
           /* Design note #874: present only while a private power is armed, because only then is there
              somewhere to go BACK to. An ordinary lay keeps #471's bare click-away. */

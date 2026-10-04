@@ -697,7 +697,7 @@ import MainTabBar, {
   surfaceTabFor,
   type MainTab,
 } from "./components/MainTabBar";
-import { chromeZoomFor, styles } from "./styles/appStyles";
+import { chromeZoomFor, hexIndicatorPosition, styles } from "./styles/appStyles";
 import { ModalLayerHost } from "./components/ModalPortal";
 import { PHASE_SHIFT_PULSE_CSS, TURN_PULSE_KEYFRAMES_CSS } from "./styles/animations";
 import {
@@ -10645,14 +10645,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           })
         : { allowed: isTokenableHex(mapGrid, q, r), reason: null };
 
+      /* Phase 3 W1-F (P3-N012): THE REFUSAL IS SAID WHERE THE CLICK WAS. It was written to `routeFeedback`, the slot
+         only the Routes step's chip renders (`RouteChipDetail`), so a refused city click at Tokens explained itself
+         nowhere the player could see. The general action toast is the shell's existing visible surface (implementation
+         default, plan §7.1); the sentence is still `evaluateStationPlacement`'s own. Routes' slot is no longer touched. */
       if (!placement.allowed) {
-        setRouteFeedback(
+        showActionToast(
           placement.reason ??
             `${hexLabel} has no city to place a token in. Pick a city hex, or lay a city tile there first.`,
         );
         return;
       }
-      setRouteFeedback(null);
       // Stage, do not place, so a click on another city re-aims. #453: the node travels with the stage.
       // See docs/ai_architecture/canvas_rendering.md - App.tsx #201
       setPendingToken({
@@ -10671,7 +10674,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         offsetY: nodeY,
       });
     },
-    [mapGrid, activeStationCompany, gameState],
+    [mapGrid, activeStationCompany, gameState, showActionToast],
   );
 
   /** The green check. THIS is where the token is placed and the treasury
@@ -14718,10 +14721,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                           ? undefined
                           : CONTRACT_ADDRESS
                       }
+                      /* Phase 3 W1-F (AUD-05.02 A-7): A HOME-STATION ERRAND OWNS THE CLICK. `gameId` / `protocolId` are
+                         what let the renderer go on from `onHexClick` to open the tile picker; `queryClient` was
+                         already withheld for a station errand (#440/#444) and these two were not, so one click both
+                         staged the station and opened the ring. Withheld at render time on the same condition, so the
+                         click opens only the station ring. The tile errand (`private-tile`) still needs the picker. */
                       gameId={
                         !tileInspectorArmed ||
                         routeSelectMode ||
                         tokenTargetMode ||
+                        (homeStationPlacement !== null && homeStationPlacement.kind !== "private-tile") ||
                         previewRotateArmed
                           ? undefined
                           : gameId
@@ -14730,6 +14739,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                         !tileInspectorArmed ||
                         routeSelectMode ||
                         tokenTargetMode ||
+                        (homeStationPlacement !== null && homeStationPlacement.kind !== "private-tile") ||
                         previewRotateArmed
                           ? undefined
                           : actingProtocolId
@@ -15006,8 +15016,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         <div
           style={{
             ...styles.hexClickIndicator,
-            left: hexClickQuery.clientX + 16,
-            top: hexClickQuery.clientY + 16,
+            ...hexIndicatorPosition(hexClickQuery.clientX, hexClickQuery.clientY, uiScale), // W1-F (A-21)
           }}
         >
           Querying legal placements at {hexClickQuery.hexLabel}...
@@ -15018,8 +15027,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           style={{
             ...styles.hexClickIndicator,
             ...styles.hexClickIndicatorError,
-            left: hexClickQuery.clientX + 16,
-            top: hexClickQuery.clientY + 16,
+            ...hexIndicatorPosition(hexClickQuery.clientX, hexClickQuery.clientY, uiScale), // W1-F (A-21)
           }}
         >
           GetLegalTilePlacements failed: {hexClickQuery.message}
@@ -15037,8 +15045,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             style={{
               ...styles.hexClickIndicator,
               ...styles.hexClickIndicatorBlocked,
-              left: hexClickQuery.clientX + 16,
-              top: hexClickQuery.clientY + 16,
+              ...hexIndicatorPosition(hexClickQuery.clientX, hexClickQuery.clientY, uiScale), // W1-F (A-21)
             }}
           >
             🚫 {hexClickQuery.message}

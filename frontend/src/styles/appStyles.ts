@@ -139,6 +139,26 @@ export function chromeZoomFor(scale: number): React.CSSProperties {
   return { zoom: scale, minHeight: `${100 / scale}vh` };
 }
 
+/* ==================================================================
+    PHASE 3 W1-F (AUD-01.05 A-21): THE HEX INDICATOR IS PLACED IN THE ZOOMED ROOT'S UNITS
+   ==================================================================
+   The click indicators (`styles.hexClickIndicator`, `position: fixed`) render inside the root that carries
+   `chromeZoomFor(uiScale)`, so their `left` / `top` are multiplied by the zoom before they reach the screen. The
+   pointer's `clientX` / `clientY` are viewport pixels -- the board pane cancels the zoom (`zoom: 1 / uiScale`), so
+   the renderer reports true viewport coordinates. Writing `clientX + 16` therefore drew the indicator at
+   `(clientX + 16) * uiScale`: 37% short of the pointer at 63%, half again past it at 150%, right only at 100%.
+   Divided back out here, so the indicator's corner sits `HEX_INDICATOR_OFFSET_PX` screen pixels from the pointer at
+   every scale while its text keeps the UI scale. A non-finite or non-positive scale is read as 1. */
+export const HEX_INDICATOR_OFFSET_PX = 16;
+
+export function hexIndicatorPosition(clientX: number, clientY: number, scale: number): { left: number; top: number } {
+  const zoom = Number.isFinite(scale) && scale > 0 ? scale : 1;
+  return {
+    left: (clientX + HEX_INDICATOR_OFFSET_PX) / zoom,
+    top: (clientY + HEX_INDICATOR_OFFSET_PX) / zoom,
+  };
+}
+
 export const styles: Record<string, React.CSSProperties> = {
   /* Design note #34: the single slim top bar. 6px vertical against the old header's 16px -- the point of
      the consolidation was vertical space, so the row has to actually be short. `flexWrap` stays on: the

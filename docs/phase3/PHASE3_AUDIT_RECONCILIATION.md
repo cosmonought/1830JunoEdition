@@ -480,6 +480,26 @@ unchanged (`c17e844` code, `a18bac4` review fix, `60146da` slice tracking), then
 - **Follow-ups (not implemented here):** carried unchanged from the W3-I integration -- the Buy Trains from a Corporation form LOW, the
   W2-F duplicate-waiting LOW, the two NITs and the deferred scroll-to-card LOW.
 
+## W2-J slice status (2026-10-04)
+
+**Branch** `phase3/w2-j-narration` @ `5f5ddd2` from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530` (the current provisional baseline,
+unchanged). **PARTIAL on its slice branch; NOT integrated.** OD-8 is the sole blocker to completion.
+
+- **AUD-03.08 (K-18 / U-36), OD-12 RED R2 — its own commit `b328e53`:** the sold-out rise's Activity Log line read its marks from the
+  shell's market mirror, which the dispatch had already advanced to the risen board, so it described a further, hypothetical rise. The
+  one resolver line now reads `handedBoard.market_positions` (the marks the reducer was handed and rose from). Nothing else in RED R2
+  changed.
+- **AUD-10.01 (K-20 / U-33) — `464dfbe` + review fix `5f5ddd2`:** `describeGameplayAction` appends "X becomes president of T with N%,
+  taking the President's Certificate from Y, who now holds M%." when the settled board crowns a different president than the before
+  board (read off the two boards, not re-decided; a first president is not a change), and, when another holder ends level with the new
+  president, "… each hold N%; the tie goes to the player seated closest to Y going clockwise, which is X." (§5.4), the level holders
+  listed clockwise from Y.
+- **AUD-03.09 (K-22 / U-37): OPEN — OWNER DECISION (OD-8), NOT IMPLEMENTED.** Since #1616 the home station is placed at the start of the
+  corporation's first operating turn, and #1343's one float line rides that placement.
+- **OD-7:** ruled copy-only and already landed in W1-L (`ca73834`); nothing here. **Not taken:** W3-C, the W2-F / W3-I / W2-I
+  follow-ups. Rules version and settlement unchanged. The four pre-existing meta-test failures are identical on `c774530` and on this
+  branch.
+
 ## Scope and closing remark
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |

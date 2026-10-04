@@ -631,7 +631,7 @@ gates.
 
 #### W2-J
 **Narration corrections** · L6 · **4–6 h**
-- **Wave-1 integration (2026-10-03):** RR-4's copy is **done** (OD-7 ruled: copy only, `ca73834`) and leaves this slice. **OD-12 ruled:** K-18's RED R2 edit may land as its own separately reviewed commit (§5.1 order). Status: NOT STARTED.
+- **Wave-1 integration (2026-10-03):** RR-4's copy is **done** (OD-7 ruled: copy only, `ca73834`) and leaves this slice. **OD-12 ruled:** K-18's RED R2 edit may land as its own separately reviewed commit (§5.1 order). Status: **PARTIAL on its slice branch** `phase3/w2-j-narration` @ `5f5ddd2` (from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530`; K-18 RED R2 commit `b328e53`, K-20 `464dfbe`, review fix `5f5ddd2`); NOT integrated. AUD-03.08 and AUD-10.01 IMPLEMENTED; AUD-03.09 (K-22) waits on OD-8, the sole blocker to completion.
 - **Rows:** implements AUD-03.08 (K-18 / U-36), AUD-03.09 (K-22 / U-37), AUD-10.01 (K-20 / U-33). *(It carried the owner-gated AUD-09.10 (RR-4) until OD-7 was ruled copy-only; that copy landed in W1-L at the Wave-1 integration.)*
 - **Surfaces:** K-18 — pass the before-board's market positions to `soldOutRises` (RED R2 7111–7123: OD-12); K-20 — a
   presidency-change sentence with the tie-break reason; K-22 — the float line per OD-8. (RR-4's copy, once listed here "if OD-7

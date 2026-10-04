@@ -178,22 +178,24 @@ export type AutoBuyDecision =
   | { action: "stop"; reason: string };
 
 /* ==================================================================
-    PHASE 3 W2-B (OD-2, RULES v13): WHAT THE TURN NEEDS FROM THE TOOL -- A BUY, OR THE ONE PASS THAT ENDS IT
+    PHASE 3 W2-B (OD-2, RULES v13): WHAT THE TURN NEEDS FROM THE TOOL -- A BUY, OR NOTHING
    ==================================================================
    #1443 had the caller read the Sell-Buy-Sell STAGE and send a `PassTurn` in the Sell stage "to move on to buying".
    Under rules revision 2 there is no stage to move: one `PassTurn` ends the turn, so that Pass ended every turn as
    a true pass and the tool never bought. Nor did any revision need it -- a Buy is legal from the turn's first
    moment (the stage refused nothing; W1-A removed the shell's copies of the refusal).
    SO THE ONLY QUESTION IS THE BOARD'S: has this turn's purchase been made? `bought_this_turn` is the reducer's own
-   count (#1172, cleared with the seat), and under the Stock Round rules in force a purchase leaves the seat with
-   the buyer. Not yet: the tool buys (`autoBuyDecision`). Made: the instruction is spent for this turn and the tool
-   ends it with ONE `PassTurn` -- the end of an acted turn, which the reducer never counts as a pass.
+   count (#1172, cleared with the seat). Not yet: the tool buys (`autoBuyDecision`). Made: the instruction is spent
+   for this turn and the tool HANDS THE TURN BACK -- it sends nothing, and above all not a `PassTurn`. #1274's rule:
+   "a standing instruction to BUY is not a standing instruction to PASS"; and under OD-2 the purchase leaves the seat
+   with the buyer and Sell stays legal after it, so the next move -- a sale, or the ordinary Pass Turn -- is the
+   player's. The plan stays armed: the next turn starts at 0 and the tool buys again.
    On a board where a purchase still ends the turn (rules revision 0), `bought_this_turn` is cleared by the same
-   message, so "end-turn" is never answered there and the tool only ever buys. */
-export type AutoBuyTurnStep = "buy" | "end-turn";
+   message, so "hand-back" is never answered there and the tool only ever buys. */
+export type AutoBuyTurnStep = "buy" | "hand-back";
 
 export function autoBuyTurnStep(state: Pick<GameStateResponse, "bought_this_turn">): AutoBuyTurnStep {
-  return (state.bought_this_turn ?? 0) > 0 ? "end-turn" : "buy";
+  return (state.bought_this_turn ?? 0) > 0 ? "hand-back" : "buy";
 }
 
 /** The order the sources are tried in, for one corporation, under the plan's preference. */

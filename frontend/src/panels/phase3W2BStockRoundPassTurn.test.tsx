@@ -16,7 +16,8 @@
 //      authority's sentence and Sell stays live;
 //   4. W2-A's holds and the must-sell debt still grey the one Pass, and a greyed Pass sends nothing;
 //   5. the must-sell banner is the authority's debt, said once at the top of the panel;
-//   6. Auto-Buy sends no stage Pass: it buys from the turn's first moment, then ends the bought turn with ONE Pass.
+//   6. Auto-Buy sends no stage Pass and no Pass after its purchase (#1274): it buys from the turn's first moment, then
+//      hands the turn back -- the player keeps the seat, may sell, and ends the turn with the ordinary Pass Turn.
 
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -489,33 +490,89 @@ describe("5. the must-sell banner (AUD-03.07) is the authority's debt, said once
 });
 
 /* ================================================================================================================ */
-describe("6. Auto-Buy: no stage Pass -- it buys at once, then ends the bought turn with ONE PassTurn", () => {
+describe("6. Auto-Buy: no stage Pass, and no Pass after the Buy -- it buys, then hands the turn back (#1274)", () => {
   const plan = (state: GameStateResponse) =>
     armAutoBuy(state, "p0", { targets: [{ companyId: PRR, maxPercent: 60 }], source: "Ipo", stopOnPar: false, stopOnSale: false });
 
-  /** The acting effect's dispatch path, step by step (`App`: the must-sell stop, `autoBuyTurnStep`, the decision). */
+  /** ONE run of the acting effect for p0, mirroring `App` (the turn gate, `autoBuyTurnStep`, the decision, the one
+   *  dispatch): what it did. It is re-run on every board change, exactly as the effect is. */
+  function autoBuyEffect(t: ReturnType<typeof table>, armed: ReturnType<typeof plan>): "not-my-turn" | "hand-back" | "buy" | "stop" {
+    if (seatOf(t.state) !== "p0") return "not-my-turn";
+    if (autoBuyTurnStep(t.state) === "hand-back") return "hand-back";
+    const g = gates(t.state, "p0");
+    const decision = autoBuyDecision(t.state, armed, (companyId, source) => g.purchaseBlockFor(companyId, source, 1));
+    if (decision.action !== "buy") return "stop";
+    t.dispatch(BUY(decision.companyId, decision.source));
+    return "buy";
+  }
+
+  /** The effect at turn start, then re-run on the committed board several times over: what it sent. */
   function runAutoBuyTurn(start: GameStateResponse) {
     const t = table(start);
     const armed = plan(start);
-    for (let step = 0; step < 4 && seatOf(t.state) === "p0"; step++) {
-      if (autoBuyTurnStep(t.state) === "end-turn") {
-        t.dispatch(PASS);
-        continue;
-      }
-      const g = gates(t.state, "p0");
-      const decision = autoBuyDecision(t.state, armed, (companyId, source) => g.purchaseBlockFor(companyId, source, 1));
-      if (decision.action !== "buy") break;
-      t.dispatch(BUY(decision.companyId, decision.source));
-    }
-    return t;
+    const runs = [autoBuyEffect(t, armed)];
+    for (let again = 0; again < 3; again++) runs.push(autoBuyEffect(t, armed));
+    return { t, armed, runs };
   }
 
-  it("v13: the first thing sent is the Buy; the only PassTurn is the one that ends the bought turn", () => {
-    const t = runAutoBuyTurn(board({ consecutive_passes: 2 } as Partial<GameStateResponse>));
-    expect(t.sent).toEqual(["BuyStock", "PassTurn"]);
+  it("v13: the ONLY message is the Buy; once it is committed the tool hands back, every time it re-runs", () => {
+    const { t, runs } = runAutoBuyTurn(board({ consecutive_passes: 2 } as Partial<GameStateResponse>));
+    expect(t.sent).toEqual(["BuyStock"]);
+    expect(runs).toEqual(["buy", "hand-back", "hand-back", "hand-back"]);
+    expect(t.sent.filter((kind) => kind === "PassTurn")).toHaveLength(0);
     expect(holding(t.state, PRR)).toBe(30);
+  });
+
+  it("#1274: a completed Auto-Buy does not pass the player -- the same seat keeps the turn, and nothing counts as a pass", () => {
+    const { t } = runAutoBuyTurn(board({ consecutive_passes: 2 } as Partial<GameStateResponse>));
+    expect(t.state.active_player_index).toBe(0);
+    expect(seatOf(t.state)).toBe("p0");
+    expect(t.state.consecutive_passes).toBe(2); // untouched: no PassTurn ran (one would have moved the seat and reset it)
+    expect(t.state.bought_this_turn).toBe(1);
+    expect(t.state.turn_action_taken).toBe(true);
+  });
+
+  it("after the committed Buy: Buy is refused (the one purchase is used) and Sell stays available, at both locks", () => {
+    const { t } = runAutoBuyTurn(board());
+    const g = gates(t.state, "p0");
+    const refused = ingress(t.state, "p0", BUY(PRR, "Ipo"));
+    expect(refused).toContain("One certificate purchase per turn");
+    expect(g.purchaseBlockFor(PRR, "Ipo", 1)).toBe(refused);
+    expect(g.purchaseBlockFor(NYC, "Ipo", 1)).not.toBeNull();
+    expect(ingress(t.state, "p0", SELL(NYC))).toBeNull();
+    expect(g.saleBlockFor(NYC, 10)).toBeNull();
+  });
+
+  it("the player's turn after the hand-back: a legal sale, no second Auto-Buy, then their own Pass Turn -- ONE PassTurn, an acted end", () => {
+    const { t, armed } = runAutoBuyTurn(board({ consecutive_passes: 2 } as Partial<GameStateResponse>));
+    // The player sells; the effect re-runs on the new board and still sends nothing.
+    t.dispatch(SELL(NYC));
+    expect(holding(t.state, NYC)).toBe(0);
+    expect(autoBuyEffect(t, armed)).toBe("hand-back");
+    expect(t.sent).toEqual(["BuyStock", "SellStock"]);
+    // The ordinary Pass Turn, clicked on the real bar.
+    renderBar(barProps(t.state, "p0", () => t.dispatch(PASS)));
+    expect(text(passButton())).toBe(PASS_LABEL);
+    expect(passButton().disabled).toBe(false);
+    click(passButton());
+    expect(t.sent).toEqual(["BuyStock", "SellStock", "PassTurn"]);
     expect(t.state.active_player_index).toBe(1);
-    expect(t.state.consecutive_passes).toBe(0); // an acted turn's end, never a true pass
+    expect(t.state.consecutive_passes).toBe(0); // an acted turn's end -- the true-pass streak is not incremented
+    expect(autoBuyEffect(t, armed)).toBe("not-my-turn");
+  });
+
+  it("the plan stays armed: on the player's next turn it buys again, once", () => {
+    const { t, armed } = runAutoBuyTurn(board());
+    renderBar(barProps(t.state, "p0", () => t.dispatch(PASS)));
+    click(passButton());
+    for (let seat = 1; seat < SEATS.length; seat++) t.dispatch(PASS); // p1..p3 pass
+    expect(seatOf(t.state)).toBe("p0");
+    expect(t.state.current_round_type).toBe("StockRound");
+    expect(autoBuyEffect(t, armed)).toBe("buy");
+    expect(autoBuyEffect(t, armed)).toBe("hand-back");
+    expect(holding(t.state, PRR)).toBe(40);
+    expect(t.sent.filter((kind) => kind === "BuyStock")).toHaveLength(2);
+    expect(seatOf(t.state)).toBe("p0");
   });
 
   it("what the removed stage Pass did on v13: the old code read the stage as 'sell' and passed -- ending the turn, nothing bought", () => {
@@ -525,19 +582,21 @@ describe("6. Auto-Buy: no stage Pass -- it buys at once, then ends the bought tu
     expect(passed.active_player_index).toBe(1);
     expect(passed.consecutive_passes).toBe(3); // a TRUE pass
     expect(holding(passed, PRR)).toBe(20); // and no purchase
-    expect(autoBuyTurnStep(start)).toBe("buy");
+    expect(autoBuyTurnStep(start)).toBe("buy"); // the tool buys first; no PRE-buy Pass
   });
 
-  it("revision 1 needed no stage Pass either: the Buy is legal from the opening stage, and one Pass ends the bought turn", () => {
-    const t = runAutoBuyTurn(board({}, 1));
-    expect(t.sent).toEqual(["BuyStock", "PassTurn"]);
-    expect(t.state.active_player_index).toBe(1);
-    expect(t.state.consecutive_passes).toBe(0);
-  });
-
-  it("revision 0 (a purchase ends the turn): the tool only ever buys -- the buy moves the seat and no PassTurn is sent", () => {
-    const t = runAutoBuyTurn(board({ consecutive_passes: 2 } as Partial<GameStateResponse>, 0));
+  it("revision 1: the same -- only the Buy, from the opening stage; the seat stays with the buyer", () => {
+    const { t, runs } = runAutoBuyTurn(board({}, 1));
     expect(t.sent).toEqual(["BuyStock"]);
+    expect(runs).toEqual(["buy", "hand-back", "hand-back", "hand-back"]);
+    expect(t.state.active_player_index).toBe(0);
+    expect(stockTurnStage(t.state)).toBe("sell_again");
+  });
+
+  it("revision 0 (a purchase ends the turn): only the Buy -- the reducer's buy moves the seat, no shim", () => {
+    const { t, runs } = runAutoBuyTurn(board({ consecutive_passes: 2 } as Partial<GameStateResponse>, 0));
+    expect(t.sent).toEqual(["BuyStock"]);
+    expect(runs).toEqual(["buy", "not-my-turn", "not-my-turn", "not-my-turn"]);
     expect(holding(t.state, PRR)).toBe(30);
     expect(t.state.active_player_index).toBe(1);
     expect(t.state.consecutive_passes).toBe(0);
@@ -546,18 +605,28 @@ describe("6. Auto-Buy: no stage Pass -- it buys at once, then ends the bought tu
   it("autoBuyTurnStep reads only whether the turn's purchase is made", () => {
     expect(autoBuyTurnStep({})).toBe("buy");
     expect(autoBuyTurnStep({ bought_this_turn: 0 })).toBe("buy");
-    expect(autoBuyTurnStep({ bought_this_turn: 1 })).toBe("end-turn");
-    expect(autoBuyTurnStep({ bought_this_turn: 3 })).toBe("end-turn"); // a Brown Bank Pool continuation
+    expect(autoBuyTurnStep({ bought_this_turn: 1 })).toBe("hand-back");
+    expect(autoBuyTurnStep({ bought_this_turn: 3 })).toBe("hand-back"); // a Brown Bank Pool continuation
   });
 
-  it("the shell's effect asks autoBuyTurnStep, never the stage, and holds exactly one PassTurn dispatch", () => {
+  it("#1274 in the shell: the Auto-Buy effect never passes -- no PassTurn dispatch, no stage, the hand-back before the decision", () => {
     const APP = readShell();
     const effect = sliceBetween(APP, "if (homeTokenOwed(gameState, homeHexToAxial)) return;", "const handleSellShares");
+    expect(effect).not.toContain("handlePassTurn");
+    expect(effect).not.toContain("PassTurn");
     expect(effect).not.toContain("stockTurnStage(");
     expect(effect).not.toContain("sellBuySellInForce(");
     expect(effect).not.toContain('stage !== "buy"');
-    expect(effect.split("handlePassTurn()").length - 1).toBe(1);
-    expectOrder(effect, "divestmentDebt({", "if (owed) {", 'if (autoBuyTurnStep(gameState) === "end-turn") {', "void handlePassTurn();", "autoBuyDecision(", "buyOneShare(");
+    expectOrder(effect, "divestmentDebt({", "if (owed) {", 'if (autoBuyTurnStep(gameState) === "hand-back") {', "autoBuyDecision(", "buyOneShare(");
+    const handBack = sliceBetween(effect, 'if (autoBuyTurnStep(gameState) === "hand-back") {', "autoBuyDecision(");
+    expect(handBack).not.toContain("setAutoBuyPlan(null)"); // stays armed for the next turn
+    expect(handBack).not.toContain("buyOneShare(");
+    expect(handBack).toContain("return;"); // nothing after the hand-back runs this turn
+    // #816's latch is unchanged: the one dispatch (the buy) is still spent against the log index.
+    const whole = sliceBetween(APP, "if (autoBuyPlan.player !== viewerAddress) return;", "const handleSellShares");
+    expectOrder(whole, "if (autoPassAlreadyActed(autoBoughtAtLogIndexRef.current, lastLogIndex)) return;", "if (homeTokenOwed(gameState, homeHexToAxial)) return;");
+    expectOrder(effect, "autoBoughtAtLogIndexRef.current = lastLogIndex;", "buyOneShare(");
+    expect(effect.split("autoBoughtAtLogIndexRef.current = lastLogIndex;").length - 1).toBe(1); // the buy is the one dispatch
   });
 });
 

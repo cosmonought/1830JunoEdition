@@ -197,9 +197,9 @@ describe("the shell presents one Pass Turn, not the stage walk (Phase 3 W2-B)", 
     expect(sliceBetween(app, "const saleBlockFor = useCallback(", "const [marketPeek, setMarketPeek]")).toContain("stockSaleRefusal({");
   });
 
-  it("Auto-Buy sends no stage Pass, and arming one automation disarms the other", () => {
+  it("Auto-Buy sends no stage Pass (nor any Pass, #1274), and arming one automation disarms the other", () => {
     expect(app).not.toContain('if (stage !== "buy") {');
-    expect(app).toContain('if (autoBuyTurnStep(gameState) === "end-turn") {');
+    expect(app).toContain('if (autoBuyTurnStep(gameState) === "hand-back") {');
     expect(app).toContain("setAutoBuyPlan(null); // #1444: one or the other");
     expect(app).toContain("setAutoPassArm(null); // #1444: one or the other");
     const picker = readStripped("components/AutoModePicker.tsx");

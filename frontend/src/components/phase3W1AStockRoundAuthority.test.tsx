@@ -357,11 +357,11 @@ describe("AUD-03.05 (K-12) / AUD-03.06 (SBS-5): Auto-Buy", () => {
   });
 
   it("the must-sell check comes before any dispatch, and stops without dispatching", () => {
-    /* Phase 3 W2-B: the Sell-stage Pass this check was first ordered against is gone (OD-2, rules v13); the check
-       now precedes the end-of-bought-turn Pass (`autoBuyTurnStep`) and the buy, which is the same guarantee. */
+    /* Phase 3 W2-B: the Sell-stage Pass this check was first ordered against is gone (OD-2, rules v13), and the tool
+       sends no Pass at all (#1274); the check now precedes the hand-back (`autoBuyTurnStep`) and the buy. */
     const APP = readShell();
     const effect = sliceBetween(APP, "if (homeTokenOwed(gameState, homeHexToAxial)) return;", "const handleSellShares");
-    expectOrder(effect, "divestmentDebt({", "if (owed) {", "setAutoBuyPlan(null);", 'if (autoBuyTurnStep(gameState) === "end-turn") {', "autoBuyDecision(");
+    expectOrder(effect, "divestmentDebt({", "if (owed) {", "setAutoBuyPlan(null);", 'if (autoBuyTurnStep(gameState) === "hand-back") {', "autoBuyDecision(");
     const stop = sliceBetween(effect, "if (owed) {", "if (autoBuyTurnStep(");
     expect(stop).not.toContain("handlePassTurn");
     expect(stop).not.toContain("buyOneShare");

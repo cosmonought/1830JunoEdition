@@ -411,7 +411,7 @@ import AutoBuyModal from "./components/AutoBuyModal";
 import {
   armAutoBuy,
   autoBuyDecision,
-  autoBuyTurnStep, // Phase 3 W2-B: buy, or end the bought turn -- never a stage Pass
+  autoBuyTurnStep, // Phase 3 W2-B: buy, or hand the bought turn back -- never a Pass (#1274)
   holdingPercent,
   refreshAutoBuyWatch,
   type AutoBuyPlan,
@@ -9969,6 +9969,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    * and hands the turn back rather than spinning against two refusals. */
   const [autoBuyPlan, setAutoBuyPlan] = useState<AutoBuyPlan | null>(null);
   const autoBoughtAtLogIndexRef = useRef<number | null>(null);
+  /* Phase 3 W2-B (#1274): whether this turn's hand-back has been said in the log -- once per bought turn, cleared when
+     the tool next finds a turn with no purchase in it (or is armed / disarmed). Presentation only: it gates a line,
+     never a dispatch. */
+  const autoBuyHandedBackRef = useRef(false);
   const [autoBuyOpen, setAutoBuyOpen] = useState(false);
   /* Design note #1333: the whole instruction -- per-corporation caps, source, the two off-switches. */
   const [autoBuyChoices, setAutoBuyChoices] = useState<AutoBuySettings>({
@@ -9999,6 +10003,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       if (!gameState || !viewerAddress) return;
       setAutoBuyChoices(settings);
       autoBoughtAtLogIndexRef.current = null;
+      autoBuyHandedBackRef.current = false;
       setAutoBuyPlan(armAutoBuy(gameState, viewerAddress, settings));
       setAutoPassArm(null); // #1444: one or the other
       autoPassedAtLogIndexRef.current = null;
@@ -10019,6 +10024,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const handleDisarmAutoBuy = useCallback(() => {
     setAutoBuyPlan(null);
     autoBoughtAtLogIndexRef.current = null;
+    autoBuyHandedBackRef.current = false;
     logInfo("Auto-Buy", "Auto-Buy is off.");
   }, [logInfo]);
 
@@ -10071,25 +10077,35 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       return;
     }
     /* ==================================================================
-        PHASE 3 W2-B (OD-2, RULES v13): NO STAGE PASS -- BUY, THEN ONE PASS TURN
+        PHASE 3 W2-B (OD-2, RULES v13): NO STAGE PASS, AND NO PASS AFTER THE BUY -- #1274'S RULE
        ==================================================================
        REMOVED: #1443's stage Pass. On a turn with no purchase yet the tool used to send `PassTurn` first, "to move
        on to buying" -- and under rules revision 2 that one Pass ENDS the turn as a true pass, so an armed Auto-Buy
        would have passed every turn and never bought. The stage never refused a Buy on any revision (W1-A removed
-       the shell's two stage refusals for exactly that reason), so the Pass was never needed: the tool now buys
+       the shell's two stage refusals for exactly that reason), so the Pass was never needed: the tool buys
        straight away. `autoBuyTurnStep` reads the one board fact that decides it -- whether this turn's purchase is
        made -- and no stage.
-       KEPT: the end of a bought turn. The purchase leaves the seat with the buyer (Sell stays legal), and the
-       standing instruction was to buy, so a bought turn is done -- the tool ends it with the turn's ONE `PassTurn`,
-       which the reducer reads as the end of an acted turn (`turn_action_taken`), never a true pass. Without it the
-       tool would sit on a seat it cannot use and read its own purchase as "nothing qualifies" (#1274's stop).
-       Selling again is the player's, not a tool's; a player who wants that turns Auto-Buy off. One `PassTurn` per
-       turn, at most: the #816 log-index guard above spends the turn's dispatch on each step. */
-    if (autoBuyTurnStep(gameState) === "end-turn") {
-      autoBoughtAtLogIndexRef.current = lastLogIndex;
-      void handlePassTurn();
+       ALSO REMOVED: #1443's end-of-turn Pass after the tool's own purchase. #1274 is the rule: "a standing
+       instruction to BUY is not a standing instruction to PASS ... when an Auto-Buy completes, players are not
+       auto-passed: they must then choose what they're doing." Under OD-2 the purchase leaves the seat with the buyer
+       and SELL STAYS LEGAL after it, so a Pass sent here would take a legal post-buy sale away from the player. Once
+       the turn's purchase is committed the tool's work for THIS turn is done: it sends nothing, says so once, and
+       hands the turn back -- the player sells if they wish and ends the turn with the ordinary Pass Turn. It stays
+       ARMED for their next turn, where `bought_this_turn` is back to 0 and it buys again (no second buy this turn:
+       the hand-back answers before `autoBuyDecision` is ever asked). Nothing is dispatched here, so the #816
+       log-index latch above is untouched: it still spends the one dispatch -- the buy -- per step. On a board where
+       the purchase itself ends the turn (revision 0) the hand-back is never reached. */
+    if (autoBuyTurnStep(gameState) === "hand-back") {
+      if (!autoBuyHandedBackRef.current) {
+        autoBuyHandedBackRef.current = true;
+        logInfo(
+          "Auto-Buy",
+          "This turn's purchase is made. The rest of the turn is yours: sell if you wish, then Pass Turn. Auto-Buy stays on for your next turn.",
+        );
+      }
       return;
     }
+    autoBuyHandedBackRef.current = false;
 
     /* Phase 3 W1-A (AUD-03.05, K-12): `purchaseBlockFor` is the stock authority now, so the cash a purchase needs
        is asked with everything else -- a share the player cannot pay for is refused here, and the tool disarms
@@ -10144,7 +10160,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     logInfo,
     sandboxMarketPrices,
     homeHexToAxial,
-    handlePassTurn, // #1443 / W2-B: the end of a bought turn
   ]);
 
   const handleSellShares = useCallback(

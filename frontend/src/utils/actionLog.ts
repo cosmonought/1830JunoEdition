@@ -591,7 +591,7 @@ function describeGameplayActionItself(
       return `${corp(gameState, company_id)} placed a free station token on ${where} using the Delaware & Hudson.`;
     }
     /* ==================================================================
-        DESIGN NOTE 1343: THE FLOAT IS ONE LINE, AND IT IS THIS ONE
+        DESIGN NOTE 1343: THE FLOAT IS ONE LINE, AND IT IS THIS ONE -- SUPERSEDED (Phase 3 W2-J, OD-8; see below)
        ==================================================================
        REPORTED (feedback 2): a float printed three lines -- the treasury diagnostic (#750), `describeFloat`'s
        "must now be placed", and this placement -- for one event a player experiences as one thing. Ruled:

@@ -5,6 +5,7 @@
 
 import { seatFlow, settlementFlow, startBlockerSentence, type FlowInput } from "./moneyFlow";
 import { linked, moneyView, you, T0, TEST_WALLET, TICKET } from "./moneyTestSupport";
+import { formatMoneyTime } from "./moneyTime";
 import type { PendingWalletTx } from "./pendingTx";
 import type { MoneySettlementView } from "../utils/moneyProtocol";
 
@@ -83,7 +84,9 @@ describe("ESCROW-4: the funding progression, reload by reload", () => {
     expect(rolledBack.detail).toMatch(/last Start didn't go through on Juno; the table is back to funding/);
     /* A funded joiner while the host hasn't started: when they may (review R-H2). */
     const waiting = seatFlow(input({ view: moneyView({ escrow: { ...bound, state: "FUNDED", fundedSeats: 2 }, start: { state: "ready", blocker: null, canStart: false, anyoneMayStartAt: T0 + 600_000 }, you: fundedYou }) }));
-    expect(waiting.detail).toMatch(/The host can start now; if they haven't by \d\d:\d\d, you can\./);
+    /* W2-K (OD-9(a)): local time with its zone, from the one formatter -- never a bare HH:MM. */
+    expect(waiting.detail).toContain(`The host can start now; if they haven't by ${formatMoneyTime(T0 + 600_000, { now: T0 })}, you can.`);
+    expect(waiting.detail).not.toMatch(/by \d{1,2}:\d\d,/);
     /* A host whose deposit left the escrow (the contract lets a creator withdraw): Cancel, with why. */
     const emptied = seatFlow(input({ isHost: true, wallet: connected, view: moneyView({ escrow: bound, you: linked([], { actions: ["cancel-escrow"] }) }) }));
     expect([emptied.primary, emptied.others.map((action) => action.kind)]).toEqual([null, ["cancel-escrow"]]);

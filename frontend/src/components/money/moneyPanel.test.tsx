@@ -22,6 +22,7 @@ import { httpSessionPort } from "../../utils/sessionBootstrap";
 import type { RoomView } from "../../utils/roomProtocol";
 import type { RoomMoneyView } from "../../utils/moneyProtocol";
 import { readShell, readStripped } from "../../utils/sourceScan";
+import { formatMoneyTime } from "../../money/moneyTime";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -105,6 +106,9 @@ describe("ESCROW-4: the money panel", () => {
     port.answer("profile/reauth", 200, { ok: true, expiresAt: T0 + 5 * 60 * 1000 });
     await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} port={port} />);
     expect(byTestId("money-headline")?.textContent).toMatch(/A real-money table: 1 JUNOX per seat/);
+    /* W2-K (OD-9(b)): the official Keplr logo is pending, so the connect button is its words alone -- no stand-in mark. */
+    expect(byTestId("money-action-connect")?.textContent).toBe("Connect wallet");
+    expect(container.querySelector('[data-testid="keplr-mark"]')).toBeNull();
     await click(byTestId("money-action-connect"));
     expect(services.wallet.calls).toContain("connect");
     expect(byTestId("money-action-confirm")).toBeTruthy();
@@ -234,5 +238,40 @@ describe("ESCROW-4: the waiting room, the result, the profile menu", () => {
     } finally {
       (window as unknown as { location: Location }).location = realLocation;
     }
+  });
+});
+
+describe("PHASE 3 W2-K: money times and the panel's place in the waiting room", () => {
+  it("every money time on the panel is local time with its zone, from the one formatter -- never a bare HH:MM", async () => {
+    const services = testServices();
+    installMoneyServicesForTests(services);
+    updateMoneySession({ wallet: "connected", address: TEST_WALLET });
+    const deadline = T0 + 3_600_000;
+    const view = moneyView({ escrow: { chainGameId: "7", state: "FUNDING", fundingDeadline: deadline }, terms: { anteNet: "990000", pot: "1980000" }, you: linked([], { actions: ["deposit", "link-wallet"] }) });
+    await render(<MoneyPanel room={room(view)} onStart={() => undefined} services={services} />);
+    const local = formatMoneyTime(deadline, { now: T0 });
+    expect(local).not.toBe("");
+    expect(byTestId("money-stake-strip")?.textContent).toContain(`· funding closes ${local}`);
+    await click(byTestId("money-action-open-review"));
+    expect(byTestId("money-review")?.textContent).toContain(`Funding closes${local}`);
+    /* A bare clock -- minutes followed by nothing, a full stop or the strip's separator -- appears nowhere. */
+    expect(container.textContent).not.toMatch(/closes ?(at )?\d{1,2}:\d\d(?:$|[.·]|\s*(?:·|$))/m);
+  });
+
+  it("is a region of the waiting room: its section label, no boxed surface, the room's focus ring and touch floor", async () => {
+    const services = testServices();
+    installMoneyServicesForTests(services);
+    act(() => updateMoneySession({ wallet: "disconnected", address: null, confirmedUntil: null }));
+    await render(<MoneyPanel room={room(moneyView())} onStart={() => undefined} services={services} />);
+    const panel = byTestId("money-panel") as HTMLElement;
+    expect(panel.getAttribute("aria-label")).toBe("Your deposit");
+    expect(panel.classList.contains("money-seat-panel")).toBe(true);
+    expect(panel.style.backgroundColor).toBe("");
+    expect(panel.style.border).toBe("");
+    expect(panel.querySelector("p")?.textContent).toBe("Your deposit");
+    expect(panel.querySelector("style")?.textContent).toMatch(/\.money-seat-panel summary:focus-visible[\s\S]*outline: 2px solid #8a8a86; outline-offset: 2px;/);
+    const buttons = Array.from(panel.querySelectorAll("button"));
+    expect(buttons.length).toBeGreaterThan(0);
+    expect(buttons.every((button) => button.classList.contains("wr-touch"))).toBe(true);
   });
 });

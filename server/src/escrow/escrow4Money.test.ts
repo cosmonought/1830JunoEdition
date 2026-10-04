@@ -367,6 +367,9 @@ describe("ESCROW-4: the Join admission and R-J1 -- the seat is locked while an a
       const kick = await host.client.op({ type: "kick", playerId: joiner.playerId }, table.gameId);
       assert.equal(kick.ok, false);
       assert.equal(kick.code, "admission-outstanding");
+      /* W2-K (OD-9(a)): the player reads how long, never a clock in a zone that isn't theirs. */
+      assert.match(String(kick.reason), /for about (a minute|\d+ minutes|\d+ hours) more/);
+      assert.doesNotMatch(String(kick.reason), /\d\d:\d\d|UTC/);
       const release = await joiner.who.client.op({ type: "release-seat" }, table.gameId);
       assert.equal(release.code, "admission-outstanding");
       /* Nor can the seat's link be replaced (a second wallet admitted for one seat). */
@@ -505,6 +508,8 @@ describe("ESCROW-4: Start -- the reversible freeze, the relayer's Start, the dea
       const early = await joiner.who.client.op({ type: "start-game" }, table.gameId);
       assert.equal(early.ok, false);
       assert.equal(early.code, "host-grace");
+      assert.match(String(early.reason), /any funded player can in about (a minute|\d+ minutes)\.$/);
+      assert.doesNotMatch(String(early.reason), /\d\d:\d\d|UTC/);
       const started = await host.client.op({ type: "start-game" }, table.gameId);
       assert.equal(started.ok, true, JSON.stringify(started));
       assert.deepEqual(started.data, { starting: true });

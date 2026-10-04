@@ -136,10 +136,11 @@ describe("applyCardOrder -- the held arrangement", () => {
 describe("describeFloat", () => {
   const unfloated = { is_floated: false };
 
-  /* Design note #1343: ONE LINE PER FLOAT. A corporation that owes a home token is announced at the
-     placement (`actionLog.ts`), so this is silent for it; a herald home (PRR on 18XX+/LPF) and a corporation
-     with no home hex are announced here, in the ruled shape, with no "must now be placed". */
-  it("is silent for a corporation that owes a home token -- the placement line says it all", () => {
+  /* Design note #1343, superseded by Phase 3 W2-J (OD-8 RULED 2026-10-04, Option A): the float is said WHEN IT
+     HAPPENS -- at the purchase that floats the corporation, with its capital -- for a corporation that owes a home
+     token too; the placement, later, says only that it was placed (`actionLog.ts`). A herald home and a corporation
+     with no home hex are announced here as before, with no "must now be placed". */
+  it("says the float and its capital for a corporation that owes a home token -- nothing about the home", () => {
     expect(
       describeFloat(unfloated, {
         ticker: "PRR",
@@ -147,13 +148,13 @@ describe("describeFloat", () => {
         is_floated: true,
         home_hex_label: "H12",
       }),
-    ).toBeNull();
+    ).toBe("PRR has floated. It received $1000.");
     expect(
       describeFloat(
         { is_floated: false, station_token_hexes: [] },
         { ticker: "ERIE", treasury: "710", is_floated: true, home_hex_label: "E11", station_token_hexes: [] },
       ),
-    ).toBeNull();
+    ).toBe("ERIE has floated. It received $710.");
   });
 
   it("says so, in the ruled shape, for a corporation that genuinely has no home hex", () => {

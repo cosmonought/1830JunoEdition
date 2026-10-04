@@ -9,7 +9,8 @@
 //   hypothetical rise. It now reads the marks the reducer was HANDED (`handedBoard.market_positions`).
 // AUD-10.01 (K-20 / U-33) -- a presidency change is narrated on the entry that caused it, with §5.4's clockwise
 //   tie-break named when the new president was level with another holder.
-// AUD-03.09 (K-22 / U-37) -- NOT IMPLEMENTED / OWNER DECISION (OD-8). See the last block.
+// AUD-03.09 (K-22 / U-37, OD-8 RULED 2026-10-04, Option A) -- the float and its capital are said at the purchase that
+//   floats the corporation; the home placement, at its first operating turn, says only that it was placed.
 
 import {
   applySandboxAction,
@@ -273,15 +274,138 @@ describe("AUD-10.01 (K-20): a presidency change is narrated, with its tie-break"
 
 /* ================================================================================================ */
 
-describe("AUD-03.09 (K-22): NOT IMPLEMENTED — OWNER DECISION (OD-8); characterisation only, not a pass for the row", () => {
-  /* OD-8 is open: (a) "floated" at the float plus "placed its home" later, or (b) one line at the placement (the
-     current #1343 sentence, which #1616 moved to the corporation's first operating turn). This block records the
-     CURRENT behaviour the decision is about; it is not a pass for AUD-03.09. */
-  it("NOT IMPLEMENTED (OD-8): pins today's behaviour -- a float that owes a home token prints nothing at the float", () => {
-    const line = describeFloat(
-      { is_floated: false, station_token_hexes: [] },
-      { company_id: PRR, ticker: "PRR", treasury: "1000", is_floated: true, home_hex_label: "H12", station_token_hexes: [] },
+describe("AUD-03.09 (K-22, OD-8 RULED Option A): the float is said at the purchase, the home at its placement", () => {
+  /* A REAL game: dealt by the room engine (delayed auction, so Stock Round 1 opens at once), PRR parred and bought to
+     60% through both locks, the round closed, and PRR's home placed at the start of its first operating turn. Every
+     step is narrated the way the shell narrates it: the message's own sentence (`describeGameplayAction`, on the
+     before/after boards) and the float lines the shell's loop reads off every company (`describeFloat`). */
+  type Engine = InstanceType<typeof import("../gameEngine/replayLog").RoomEngine>;
+  const RL = require("../gameEngine/replayLog") as typeof import("../gameEngine/replayLog");
+  const { sandboxReplayProviders } = require("../gameEngine/replayProviders") as typeof import("../gameEngine/replayProviders");
+  const { withEmptyRoster, waterfallForRoster } = require("../gameEngine/gameSetup") as typeof import("../gameEngine/gameSetup");
+  const SS = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
+  const { turnRefusal } = require("../gameEngine/turnAuthority") as typeof import("../gameEngine/turnAuthority");
+  const { actingAddress } = require("../gameEngine/gameState") as typeof import("../gameEngine/gameState");
+  const { RULES_ENGINE_VERSION } = require("../gameEngine/rulesVersion") as typeof import("../gameEngine/rulesVersion");
+  const { pendingHomeTokens } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
+  const { boardHomeHexToAxial } = require("../gameEngine/homeStationAuthority") as typeof import("../gameEngine/homeStationAuthority");
+  const { STATIC_BOARD_HEXES } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
+
+  const [A, B, C] = ["p0", "p1", "p2"];
+  const GRID = { game_id: 1, tiles: [] } as unknown as ActionLogContext["mapGrid"];
+  let serial = 0;
+  const entry = (actor: string, msg: unknown) =>
+    RL.entriesFromExport([{ index: serial, id: `w2j-${serial}`, actor, at: (serial += 1), msg: msg as never }])[0];
+  const boardOf = (engine: Engine): State => ({ ...engine.snapshot.state, waterfall: engine.snapshot.waterfall }) as State;
+  const seatOf = (state: State) => state.player_addresses[state.active_player_index];
+  const prr = (state: State) => state.public_companies.find((entry) => entry.ticker === "PRR")!;
+
+  /** The shell's narration of one applied entry: the entry's sentence, then the float lines (`logInfo("Float", …)`). */
+  type Narrated = { kind: string; lines: string[] };
+  const log: Narrated[] = [];
+  function send(engine: Engine, actor: string, msg: unknown) {
+    const before = boardOf(engine);
+    expect([Object.keys(msg as object)[0], turnRefusal({ state: before, waterfall: before.waterfall ?? null, actor, msg: msg as never })]).toEqual([
+      Object.keys(msg as object)[0],
+      null,
+    ]);
+    engine.apply(entry(actor, msg));
+    const after = boardOf(engine);
+    const lines: string[] = [];
+    const sentence = describeGameplayAction(msg as never, { ...context(before, after), mapGrid: GRID });
+    if (sentence) lines.push(sentence);
+    for (const company of after.public_companies) {
+      const previously = before.public_companies.find((entry) => entry.company_id === company.company_id);
+      const line = previously ? describeFloat(previously, company) : null;
+      if (line) lines.push(line);
+    }
+    log.push({ kind: Object.keys(msg as object)[0], lines });
+    return { before, after, lines };
+  }
+
+  function play() {
+    log.length = 0;
+    const seed = withEmptyRoster(SS.sandboxScenarioState(SS.DEFAULT_SANDBOX_SCENARIO, 0, "default"));
+    const waterfall = waterfallForRoster(SS.sandboxWaterfallState(SS.sandboxScenario(SS.DEFAULT_SANDBOX_SCENARIO).phase, 0, true), []);
+    const engine: Engine = new RL.RoomEngine(
+      { ...sandboxReplayProviders(), ...(seed.market_positions ? { initialMarket: seed.market_positions } : {}) } as never,
+      { state: { ...seed, waterfall }, waterfall } as never,
     );
-    expect(line).toBeNull();
+    engine.apply(
+      entry(A, {
+        SetupGame: {
+          players: [
+            { id: A, nickname: "Ann" },
+            { id: B, nickname: "Bob" },
+            { id: C, nickname: "Cal" },
+          ],
+          variants: { delayedAuction: true, length: "standard", rules: 1 },
+          rules_engine_version: RULES_ENGINE_VERSION,
+        },
+      }),
+    );
+    const id = prr(boardOf(engine)).company_id;
+    const buy = (par?: number) => {
+      const player = seatOf(boardOf(engine));
+      send(engine, player, { PassTurn: { game_id: 0 } }); // declines to sell (#1443)
+      const bought = send(engine, player, {
+        BuyStock: { game_id: 0, protocol_id: id, source: "Ipo", ...(par === undefined ? {} : { par_value: String(par) }) },
+      });
+      send(engine, player, { PassTurn: { game_id: 0 } });
+      return bought;
+    };
+    const purchases = [buy(100), buy(), buy(), buy(), buy()]; // A 20%, B 10%, C 10%, A 10%, B 10% = 60%
+    for (let guard = 0; boardOf(engine).current_round_type === "StockRound"; guard += 1) {
+      if (guard > 12) throw new Error("the Stock Round did not end");
+      send(engine, seatOf(boardOf(engine)), { PassTurn: { game_id: 0 } });
+    }
+    const opened = boardOf(engine);
+    const owed = pendingHomeTokens(opened, boardHomeHexToAxial, GRID as never)[0] ?? null;
+    const hex = STATIC_BOARD_HEXES.find((entry) => entry.label === owed?.hexLabel)!;
+    const placed = send(engine, owed!.president!, {
+      PlaceHomeStation: { game_id: 1, company_id: id, q: hex.q, r: hex.r, kind: "home", city_index: null, hex_label: owed!.hexLabel },
+    });
+    return { purchases, opened, owed, placed };
+  }
+
+  it("1-2. the purchase that takes PRR to 60% floats it, and that entry says so with the capital it actually received", () => {
+    const { purchases } = play();
+    const floating = purchases.findIndex(({ before, after }) => !prr(before).is_floated && prr(after).is_floated);
+    expect(floating).toBe(4); // the fifth purchase: 60%
+    const { after, lines } = purchases[floating];
+    expect(Number(prr(after).treasury)).toBe(1000); // 10 x par, on the settled board
+    // The purchase's own sentence (priced by the shell's chart, which this harness does not pass), then the float.
+    expect(lines).toEqual(["Bob bought a 10% share of PRR from the IPO.", "PRR has floated. It received $1000."]);
+    // No earlier purchase said anything about a float.
+    for (const earlier of purchases.slice(0, floating)) expect(earlier.lines.join(" ")).not.toContain("floated");
+  });
+
+  it("3. nothing about the home station is said at the float", () => {
+    const { purchases } = play();
+    expect(purchases[4].lines.join(" ")).not.toMatch(/home station/i);
+  });
+
+  it("4. the home line is said when the home is actually placed, at PRR's first operating turn -- and only that", () => {
+    const { opened, owed, placed } = play();
+    expect(opened.current_round_type).toBe("OperatingRound");
+    expect(owed).toMatchObject({ ticker: "PRR", president: A });
+    expect(prr(placed.after).station_token_hexes?.length).toBe(1); // the reducer placed it
+    expect(placed.lines).toEqual([`PRR placed its home station on ${owed!.hexLabel}.`]);
+  });
+
+  it("5-6. the old combined line never appears, and the float and the home are each said exactly once", () => {
+    play();
+    const all = log.flatMap((step) => step.lines);
+    expect(all.join("\n")).not.toContain("is placed.");
+    expect(all.join("\n")).not.toMatch(/has floated\..*home station/);
+    expect(all.filter((line) => line.includes("PRR has floated."))).toHaveLength(1);
+    expect(all.filter((line) => line.includes("placed its home station"))).toHaveLength(1);
+  });
+
+  it("a herald home and NNH keep their float lines (only the owed-home case changed)", () => {
+    expect(describeFloat({ is_floated: false }, { ticker: "NNH", treasury: "670", is_floated: true, home_hex_label: null })).toBe(
+      "NNH has floated. It received $670. It has no home hex on this board, so no home token is placed.",
+    );
+    expect(describeFloat({ is_floated: true }, { ticker: "PRR", treasury: "1000", is_floated: true, home_hex_label: "H12" })).toBeNull();
   });
 });

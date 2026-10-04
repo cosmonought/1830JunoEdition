@@ -395,7 +395,7 @@ export function sentenceStatesTreasury(msg: SandboxLogMsg): boolean {
     "BuyPrivateCompany" in msg ||
     "BuyTrainFromCorporation" in msg ||
     /* #1343: the only treasury a share purchase moves is the float's capitalisation, and the float's one
-       line (#1343, at the home placement; `describeFloat` for a herald home) states it. */
+       line states it -- `describeFloat`, at the purchase that floats the corporation (Phase 3 W2-J, OD-8). */
     "BuyStock" in msg
   );
 }
@@ -603,9 +603,12 @@ function describeGameplayActionItself(
        the treasury diagnostic treats a `BuyStock` as a sentence that states its own movement
        (`sentenceStatesTreasury`). The figure is the corporation's treasury on the settled board -- the home
        token is free, so nothing has left it yet -- rather than 10 x par recomputed here. */
-    const treasury = treasuryIn(context.afterState, company_id) ?? treasuryIn(gameState, company_id);
-    const received = treasury !== undefined ? ` It received $${treasury}.` : "";
-    return `${corp(gameState, company_id)} has floated.${received} Its home station on ${where} is placed.`;
+    /* Phase 3 W2-J (AUD-03.09 / K-22, OD-8 RULED 2026-10-04 -- Option A): THE PLACEMENT SAYS ONLY THE PLACEMENT.
+       #1343's combined line ("has floated ... Its home station on [hex] is placed") was said here because the
+       placement once followed the float at once; #1616 moved it to the corporation's first operating turn. The
+       float and its capital are now said at the purchase that floats it (`describeFloat`), so this line names the
+       one event happening now. The home token is free, so no treasury figure belongs to it. */
+    return `${corp(gameState, company_id)} placed its home station on ${where}.`;
   }
 
   /* ==================================================================

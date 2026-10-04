@@ -7874,14 +7874,16 @@ export function describeFloat(
     company.company_id !== undefined && company.home_hex_label
       ? heraldHexFor(company.company_id)
       : null;
-  /* Design note #1343 (feedback 2 / 2a): ONE LINE PER FLOAT. A corporation that owes a home token gets its
-     line at the placement (`actionLog.ts` #1343), so this says nothing for it; a corporation that owes none
-     -- the herald home -- gets the same line here, without the placement clause. */
-  if (herald) {
+  /* Phase 3 W2-J (AUD-03.09 / K-22, OD-8 RULED 2026-10-04 -- Option A): THE FLOAT IS SAID WHEN IT HAPPENS. #1343
+     put every float's one line at the home placement, on the premise that the placement followed the float at once;
+     #1616 moved the placement to the corporation's first operating turn, so a float and its capital went unlogged
+     for the rest of the Stock Round. Ruled: "<CORP> has floated. It received $<AMOUNT>." at the purchase that
+     floats it (this transition -- `is_floated` false -> true -- with the treasury the settled board holds), and
+     the placement says only "<CORP> placed its home station on <HEX>." when it happens (`actionLog.ts`). A herald
+     home (#1332) owes no token and gets the same float line; NNH, with no home hex, keeps its own sentence. */
+  if (herald || company.home_hex_label) {
     return `${company.ticker} has floated. It received $${company.treasury}.`;
   }
-
-  if (company.home_hex_label) return null;
 
   /* NNH has no home hex on this board (see `applyFloatThreshold`), so it
      floats without one. Said outright rather than leaving the sentence half

@@ -572,6 +572,7 @@ gates.
 
 #### W2-D
 **M&H request off-turn and in the OR; the JK chip** · L2 · **3.5–4.5 h**
+- **Status:** COMPLETE on its slice branch `phase3/w2-d-mh-offturn-jk` @ `a7488ff` (code `db50c38` + review fixes `a7488ff`, from `phase3/wave2-bcg-v13cert-integration` @ `9b19d9d`); NOT integrated.
 - **Rows:** implements AUD-04.03 (A-8), AUD-10.05 (K-04), P3-N003 (draft M1)
 - **Surfaces:** `utils/activePrivatePower.ts` (offer the M&H request in the OR; JK only in the OR, disarmed at OR end); exempt
   the M&H chip from `sessionReady`'s turn component; the chip's blocked reason adds `authoritativeHoldRefusal`.

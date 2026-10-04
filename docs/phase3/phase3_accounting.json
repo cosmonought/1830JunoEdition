@@ -383,7 +383,7 @@
    "od": "OD-2 (RULED 2026-10-03: Sell whenever legal; at most one Buy; after buying, Sell remains; one-click \"Pass Turn\"; v13 rules slice + settlement certification)",
    "p4": "—",
    "notes": "The old Sell → Buy → Sell stage walk is superseded on rules revision 2 (W3-K). Wave-1's `sellBuySell` pins now pin revision-1 boards only. The audit cites OD-A-4 here; the 6.5-A register files the Pass question as OD-A-2; OD-2 answered OD-A-2. SBS-4 is P3-N024 (implemented in W3-K).",
-   "status": "OPEN — the rule half is IMPLEMENTED in W3-K (rules v13 / revision 2: one `PassTurn` ends the Stock Round turn; `phase3/w3-k-rules-v13`, not integrated); W2-B's one-click \"Pass Turn\" control is NOT STARTED and is required before v13 deploys"
+   "status": "IMPLEMENTED — both halves. The rule: W3-K (rules v13 / revision 2: one `PassTurn` ends the Stock Round turn), integrated on `phase3/wave2a-v13-integration`. The presentation: W2-B `90d5588` + review fix `ca68b43` (`phase3/w2-b-stock-round-v13-ui`, not integrated): the bar's one \"Pass Turn\" control sends one `PassTurn` in every state; the #1443 stage button, `stockStage` and the revision-1 copy are gone; Auto-Buy's stage Pass is removed (`autoBuyTurnStep`)"
   },
   {
    "key": "AUD-03.05",
@@ -424,7 +424,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-B `90d5588` + review fix `ca68b43` (a must-sell banner in `StockRoundPanel` from the viewer's `divestmentDebt` via `mustSellBannerOf` -- the same reading and sentence that greys the Pass), not integrated"
   },
   {
    "key": "AUD-03.08",
@@ -4650,7 +4651,7 @@
   "W1-N": "COMPLETE — L7 `9d9376b` + review fixes `06c3a91`; the OD-12 RED R2 call-site deletion `87d63c4` (+ comment follow-up `819a204`); tie-aware game-over strip at the integration (`8dc79e0`)",
   "W1-O": "COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`)",
   "W2-A": "COMPLETE — ACCEPTED and INTEGRATED into `phase3/wave2a-integration` (2026-10-04): slice branch `phase3/w2-a-authoritative-holds` @ `2d0fd0a` (code `e5fcfcc`, tracking `2d0fd0a`) carried linearly onto `bfb7635`, commits unchanged. One hold answer (`utils/dockHoldView.ts`, one App call site) threaded to the bar's `turnHoldReason`, Pass, the tile-lay gate, the token ring and both purchase panels. Residue outside its rows: the Stock Round share controls and the M&H chip still read `privateTradeHoldReason` (same answer on every reachable board; W2-C / W2-F)",
-  "W2-B": "NOT STARTED — UNLOCKED (2026-10-04) for implementation against the integrated v13 semantics on `phase3/wave2a-v13-integration`: the OD-2 rule (one Pass Turn ends the turn; at most one ordinary Buy; Sell after Buy) is now the reducer's, so W2-B is the presentation (one \"Pass Turn\" control, the stage block and its copy, which still describe the revision-1 Sell -> Buy walk) plus the Auto-Buy correction; its W2-A dependency is integrated",
+  "W2-B": "COMPLETE — slice branch `phase3/w2-b-stock-round-v13-ui` `90d5588` + review fix `ca68b43` (from `868bd83`); NOT integrated into the provisional baseline (integration and owner broad gate pending). OD-2 presented over the integrated v13 reducer: one \"Pass Turn\" control (one `PassTurn`; its title says whether the press ends an acted turn or is a true pass), the #1443 stage block / `stockStage` / revision-1 copy removed, Auto-Buy's obsolete stage Pass removed (`autoBuyTurnStep`: buy at once, then one `PassTurn` ends the bought turn), the must-sell banner from `divestmentDebt` (AUD-03.07); W2-A's holds unchanged. Accepted limitation: on a legacy revision-1 board (development-corpus replay only; live rules are [13]) the one Pass Turn's first press walks that board's own Sell -> Buy stage, as its reducer revision says; no v12 shim (OD-2). No reducer change; rules 13, live [13], settlement [10, 11, 12] unchanged",
   "W2-C": "NOT STARTED — UNLOCKED: its W2-A dependency is integrated at `phase3/wave2a-integration`; unchanged by the v13 integration (`phase3/wave2a-v13-integration`)",
   "W2-D": "NOT STARTED — UNLOCKED: its W2-A dependency is integrated at `phase3/wave2a-integration`; unchanged by the v13 integration (`phase3/wave2a-v13-integration`)",
   "W2-E": "COMPLETE — `phase3/w2-mh-queued-visibility` `4f998b8` + RR-6 `91037ce`; integrated at the safe Wave-2 integration (`09fcb25`). Residue outside its rows: `privateCatalog.ts`'s MH ability text (W1-L / W2-J copy) and the chip's Stock-Round-only gate (W2-D)",
@@ -4672,7 +4673,7 @@
   "W3-H": "NOT STARTED",
   "W3-I": "NOT STARTED",
   "W3-J": "NOT STARTED",
-  "W3-K": "PARTIAL — ledger state only: W3-K's own work is ACCEPTED as COMPLETE (owner, 2026-10-04) and INTEGRATED; the shared row AUD-03.04 (SBS-1 / SBS-2) closes only with W2-B's one-click \"Pass Turn\" control. ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. RULES_ENGINE_VERSION 13; live list [13]; settlement-certified literal UNCHANGED [10, 11, 12]; v13 settlement certification PENDING A DEDICATED PASS (`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). Not deployable until W2-B, a v13-reconciled W2-G, the v13 settlement certification, drained v12 rooms and the final integrated owner gate"
+  "W3-K": "COMPLETE — ledger reconciliation only (W2-B slice branch, 2026-10-04): the shared row AUD-03.04 (SBS-1 / SBS-2) is closed by W2-B's one-click \"Pass Turn\" control (`90d5588`), so the PARTIAL the ledger held for that row alone lifts here; on the provisional baseline it lifts when W2-B is integrated. No W3-K work changed. ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. RULES_ENGINE_VERSION 13; live list [13]; settlement-certified literal UNCHANGED [10, 11, 12]; v13 settlement certification PENDING A DEDICATED PASS (`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). Not deployable until W2-B, a v13-reconciled W2-G, the v13 settlement certification, drained v12 rooms and the final integrated owner gate"
  },
  "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04).",
  "wave2_safe_integration": {

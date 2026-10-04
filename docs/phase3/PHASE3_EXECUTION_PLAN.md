@@ -742,6 +742,7 @@ gates.
   A finding is fixed (W3-J), proven obsolete, or ruled by the owner. **Deferral to "polish" is not a disposition** (Part F).
 - **Starts:** in L6 after W3-C, or earlier whenever L6 is idle once wave 1 is integrated (read-mostly; its only writes are
   docs). **Gates:** owner review of the findings.
+- **Status (2026-10-04):** COMPLETE — OWNER REVIEW REQUIRED. Audit branch `phase3/w3-g-ui-parity-audit` (docs only, from `c0a44d7`). AUD-00.01 and AUD-22.01 done; findings AUD-25.01 … AUD-25.15 (Part C U-46 … U-55) filed with dispositions: W3-B AUD-25.01 (MEDIUM); W3-J AUD-25.02 (MEDIUM), 25.03–25.10, 25.12; W3-F AUD-25.14, 25.15; owner review AUD-25.11, 25.13, 25.15. Report: `claude/PHASE3_W3G_UI_PARITY_AUDIT_*`.
 
 #### W3-H
 **Flourish OPEN residuals and audio** · L4 · **5–8 h** · *new*

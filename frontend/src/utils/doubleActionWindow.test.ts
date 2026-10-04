@@ -234,7 +234,12 @@ describe("the controls go quiet while a press is in flight", () => {
   });
 
   it("cannot outlast a plausible round trip", () => {
-    expect(APP).toContain("setTimeout(() => setPendingAppendIndex(null), ACTION_LATCH_BACKSTOP_MS)");
+    /* Phase 3 W3-B (AUD-25.01): the backstop moved, unchanged in figure, into `useActionLatch` -- and it now waits
+       for the room link to let go of the submission (behaviour: `components/phase3W3BActionLatchLinkQueue.test.tsx`). */
+    const LATCH = readStripped("utils/actionLatch.ts");
+    expect(LATCH).toContain("setTimeout(() => setPendingAppendIndex(null), backstopMs)");
+    expect(LATCH).toContain("if (pendingAppendIndex === null || linkHolds) return undefined;");
+    expect(APP).toContain("useActionLatch(pendingAppendIndex, setPendingAppendIndex, linkQueueNote.blocked, ACTION_LATCH_BACKSTOP_MS)");
     expect(APP).toContain("const ACTION_LATCH_BACKSTOP_MS = 6000;");
   });
 

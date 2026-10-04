@@ -22,7 +22,7 @@ const { runnableRouteSummary } = require("../components/RoutePlannerPanel") as t
 const { evaluateRouteSet, routeSetRefusal } = require("../gameEngine/routeAuthority") as typeof import("../gameEngine/routeAuthority");
 const { RULES_ENGINE_VERSION } = require("../gameEngine/rulesVersion") as typeof import("../gameEngine/rulesVersion");
 const { STATIC_BOARD_HEXES } = require("../components/hexBoardData") as typeof import("../components/hexBoardData");
-const { readShell, readSource, sliceBetween, stripComments } = require("./sourceScan") as typeof import("./sourceScan");
+const { expectOrder, readShell, readSource, sliceBetween, stripComments } = require("./sourceScan") as typeof import("./sourceScan");
 
 /* ---------------------------------------------------------------------------------------------------- */
 /*  Drafts                                                                                               */
@@ -217,16 +217,16 @@ describe("W1-G (A-17): when nothing legal is sent, the step is not marked run an
   const handler = sliceBetween(APP, "const handleRunTrains = useCallback(", "}, [runGameplayAction, gameId, trainDrafts");
 
   it("every path that marks `ran: true` and steps to Dividends has dispatched first", () => {
-    const empty = handler.indexOf("if (turnRoutes.length === 0) {\n      setRouteFeedback(NOTHING_SENT_REASON);\n      return;\n    }");
-    const authority = handler.indexOf("const refusal = routeSetRefusal(");
-    const dispatch = handler.indexOf('await runGameplayAction("RunMultipleRoutes"');
-    const marked = handler.indexOf("setRoutesRunThisTurn({ protocolId: actingProtocolId, ran: true });");
-    const advanced = handler.indexOf('setLiveOrSubPhase("Dividends");');
-    expect(empty).toBeGreaterThan(-1);
-    expect(authority).toBeGreaterThan(empty);
-    expect(dispatch).toBeGreaterThan(authority);
-    expect(marked).toBeGreaterThan(dispatch);
-    expect(advanced).toBeGreaterThan(marked);
+    // Wave-1 integration: one `expectOrder` instead of bare `indexOf` arithmetic on shell text (sourceGuards G2) --
+    // every anchor must exist (a missing one throws) and they must appear in this order.
+    expectOrder(
+      handler,
+      "if (turnRoutes.length === 0) {\n      setRouteFeedback(NOTHING_SENT_REASON);\n      return;\n    }",
+      "const refusal = routeSetRefusal(",
+      'await runGameplayAction("RunMultipleRoutes"',
+      "setRoutesRunThisTurn({ protocolId: actingProtocolId, ran: true });",
+      'setLiveOrSubPhase("Dividends");',
+    );
     // The dispatch is no longer conditional, so nothing can fall past it unsent.
     expect(handler).not.toContain("if (turnRoutes.length > 0)");
     expect(handler.match(/await runGameplayAction\(/g)?.length).toBe(1);

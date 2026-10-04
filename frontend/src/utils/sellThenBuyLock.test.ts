@@ -22,7 +22,7 @@
 import { applySandboxAction } from "../gameEngine/sandboxSession";
 import { sharePurchaseBlock, soldThisRound } from "../gameEngine/sharePurchase";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { readShell } from "./sourceScan";
+import { readShell, sliceBetween } from "./sourceScan";
 
 const ME = "me";
 const RIVAL = "rival";
@@ -203,6 +203,13 @@ describe("both surfaces ask the same function", () => {
   });
 
   it("is what disables the button", () => {
-    expect(readShell()).toContain("return sharePurchaseBlock({");
+    /* Phase 3 W1-A: the button asks the stock authority itself -- `stockPurchaseRefusal`, the predicate ingress and
+       the reducer ask -- instead of calling `sharePurchaseBlock` directly. The lockout still greys it, because that
+       authority composes `sharePurchaseBlock` (the sold-this-round rule included). Re-pinned at the Wave-1
+       integration, which owns this cross-lane pin. */
+    const purchase = sliceBetween(readShell(), "const purchaseBlockFor = useCallback(", "const saleBlockFor = useCallback(");
+    expect(purchase).toContain("stockPurchaseRefusal({");
+    const authority = read("gameEngine/stockTransactionAuthority.ts");
+    expect(authority.slice(authority.indexOf("export function stockPurchaseRefusal("))).toContain("sharePurchaseBlock({");
   });
 });

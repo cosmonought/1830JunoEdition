@@ -20,7 +20,7 @@ import GameOverModal from "./GameOverModal";
 import { CrashScreen } from "./CrashScreen";
 import { rankPlayers, type PlayerStanding } from "../gameEngine/endgame";
 import { setGameLogExportSource } from "../utils/gameLogExportSource";
-import { readShell, readStripped, sliceBetween } from "../utils/sourceScan";
+import { expectOrder, readShell, readStripped, sliceBetween } from "../utils/sourceScan";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -140,8 +140,9 @@ describe("the shell (W1-N's App regions)", () => {
     expect(APP).toContain("onLeaveGame={handleLeaveTableToLobby}");
     expect(APP).not.toContain("onLeaveGame={handleLeaveSandboxRoom}");
     const handler = sliceBetween(APP, "const handleLeaveTableToLobby = useCallback(() => {", "}, [handleLeaveSandboxRoom, onLeaveGame]);");
-    expect(handler.indexOf("handleLeaveSandboxRoom();")).toBeGreaterThanOrEqual(0);
-    expect(handler.indexOf("onLeaveGame();")).toBeGreaterThan(handler.indexOf("handleLeaveSandboxRoom();"));
+    // Wave-1 integration: `expectOrder`, not bare `indexOf` arithmetic on shell text (sourceGuards G2) -- a missing
+    // anchor throws instead of comparing -1.
+    expectOrder(handler, "handleLeaveSandboxRoom();", "onLeaveGame();");
   });
 
   it("A-11: roomClosed reads the live board, never the scrubbed snapshot", () => {

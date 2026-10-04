@@ -210,8 +210,13 @@ describe("every toast is mounted behind a rule", () => {
        says why, in the `LayTile` authority's own sentence (`describePrivateHexStatus`), where before the glow left
        the hex out and the click did nothing. Guarded on `restrictedHere`, which exists only for the acting viewer
        on a barred hex -- listed below. */
+    /* Phase 3 W1-F (P3-N012) ADDED THE FIFTH: a refused station click at Tokens says why, in
+       `evaluateStationPlacement`'s own sentence, where before it went to the Routes-only slot and was seen nowhere.
+       Guarded on `!placement.allowed` -- listed below. (W1-G's dropped-draft note is a sixth, written on one line
+       behind `droppedNote !== null`, which this line-start count does not see; it is pinned on its own below.)
+       Re-pinned at the Wave-1 integration, which owns this multi-region suite. */
     const calls = APP.match(/^\s*showActionToast\(/gm) ?? [];
-    expect(calls).toHaveLength(4);
+    expect(calls).toHaveLength(5);
   });
 
   it("gates the receipt on the message deserving one", () => {
@@ -366,10 +371,14 @@ describe("every toast is mounted behind a rule", () => {
       "refusalWasRefused && refusalReason",
       "isMyTurnRef.current && isUpgradeDeadEnd(laidHere.tile_id)", // #1390
       "if (restrictedHere) {", // #1694: `restrictedHere` is null unless the acting viewer clicked a barred hex
+      "if (!placement.allowed) {", // W1-F: only a station click the placement authority refused
     ];
     for (const guard of guards) {
       expect(APP).toContain(guard);
     }
     expect(guards).toHaveLength((APP.match(/^\s*showActionToast\(/gm) ?? []).length);
+    // W1-F's call is the guard's own body, and W1-G's one-line call carries its guard on the same line.
+    expect(APP).toMatch(/if \(!placement\.allowed\) \{\s*showActionToast\(/);
+    expect(APP).toContain("if (droppedNote !== null) showActionToast(droppedNote);");
   });
 });

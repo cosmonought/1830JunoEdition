@@ -1985,7 +1985,9 @@ export default function ContextualActionBar({
             title:
               declaredRevenue > 0
                 ? `Keeps all $${declaredRevenue} in the corporation's treasury. Shareholders receive nothing.`
-                : "This corporation earned nothing this turn. Project 18XX has no $0 dividend — the revenue is withheld and the share price moves one step left.",
+                : /* Phase 3 W1-I (P3-N014): a rule stated to the player, not a statement about the software; and
+                     there is no revenue to "withhold", so it no longer says so. */
+                  "No revenue this turn, so there is no dividend to pay. In Project 18XX a corporation that earns nothing withholds, and its share price moves one step left.",
           },
         ];
         break;
@@ -3498,7 +3500,9 @@ export default function ContextualActionBar({
                   }}
                   onClick={onSkipSubPhase}
                   disabled={!sessionReady}
-                  title={`Move past ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. Dispatches AdvanceOperatingSubPhase — the contract moves its own cursor one step.`}
+                  /* Phase 3 W1-I (P3-N014): player words only -- the action name and the "contract cursor" were
+                     developer text in a player tooltip. */
+                  title={`Move past ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. The turn goes on to its next step.`}
                 >
                   Skip {OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} &#8250;
                 </button>

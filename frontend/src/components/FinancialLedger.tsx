@@ -51,6 +51,7 @@ import type { TrainTier } from "../gameEngine/gamePhase";
 import { EraHex } from "./EraHex";
 // Design note #1035: how close the privates are to closing, for the pills that show them.
 import { privateClosureAlert } from "../utils/purchaseWarnings";
+import { bankTreasuryView } from "../utils/bankTreasuryView";
 import { formatNativeAmountCompact, NATIVE_DENOM_DISPLAY } from "../config";
 import { stationTickerColor } from "./hexContractTypes";
 import { PrivateCompanyPills } from "./PrivateCompanyPills";
@@ -160,10 +161,9 @@ export default FinancialLedger;
 /* ------------------------------------------------------------------ */
 
 function BankTreasurySection({ gameState }: { gameState: GameStateResponse }) {
-  const start = Number(gameState.virtual_bank_start);
-  const current = Number(gameState.virtual_bank_vgp);
-  const spentPercent =
-    Number.isFinite(start) && start > 0 ? Math.round(((start - current) / start) * 100) : null;
+  /* Phase 3 W1-I (K-23 / U-27): a negative balance reads "Bank broken — owes $N", and the paid share is clamped to
+     the true share of the starting bank (never below 0% or past 100%). `bankTreasuryView.ts` says why. */
+  const bank = bankTreasuryView(gameState);
 
   return (
     <details open style={{ ...styles.section, ...styles.sectionBank }}>
@@ -185,11 +185,18 @@ function BankTreasurySection({ gameState }: { gameState: GameStateResponse }) {
             </tr>
             <tr>
               <td style={styles.tdB}>Remaining Bank Cash</td>
-              <td style={styles.tdNum}>${gameState.virtual_bank_vgp}</td>
+              <td
+                style={bank.broken ? { ...styles.tdNum, color: ALERT_CRITICAL_INK } : styles.tdNum}
+                data-testid="ledger-bank-remaining"
+              >
+                {bank.remaining}
+              </td>
             </tr>
             <tr>
               <td style={styles.tdB}>Paid Out So Far</td>
-              <td style={styles.tdNum}>{spentPercent !== null ? `${spentPercent}%` : "--"}</td>
+              <td style={styles.tdNum} data-testid="ledger-bank-paid-out">
+                {bank.paidOut}
+              </td>
             </tr>
             <tr>
               {/* Design note #12: the pool arrives as `ujuno` -- micro-JUNO, the Cosmos base unit -- so a 40 JUNO pool

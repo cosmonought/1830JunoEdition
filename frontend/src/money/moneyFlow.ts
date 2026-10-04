@@ -319,7 +319,8 @@ export function seatFlow(input: FlowInput): SeatFlow {
        (`unchanged`, a fresh proof) whenever a deposit is open. `aged` is this page's inference from the link's own
        time (a re-proof made elsewhere keeps that time), so the Deposit stays offered beside it and the server
        decides; `refused` is the server's own answer, so it does not. The host's CreateGame needs no approval. */
-    if (canDeposit && !isHost && input.proof != null && ui !== "approving") {
+    /* `aged` yields to a deposit the player chose to try (the review, then Keplr); `refused` holds until re-proven. */
+    if (canDeposit && !isHost && (input.proof === "refused" ? ui !== "approving" : input.proof === "aged" && ui === "idle")) {
       const needs: FlowAction =
         wallet.kind !== "connected" ? { kind: "connect", label: "Connect wallet", tone: "primary" } : !confirmed ? { kind: "confirm", label: "Confirm it's you", tone: "primary" } : { kind: "reprove", label: "Re-prove wallet (free)", tone: "primary", title: "Keplr signs a message proving you still control this wallet. It moves no funds." };
       const why =

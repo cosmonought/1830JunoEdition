@@ -91,6 +91,9 @@ describe("W2-M AUD-20.02: a proof that can't be counted on reads 're-prove', nev
     expect(host.primary?.kind).toBe("open-review");
     const unbound = seatFlow(flowInput({ view: moneyView({ you: linked([], { actions: ["link-wallet"] }) }), proof: "aged" }));
     expect([unbound.headline, unbound.primary]).toEqual([expect.stringMatching(/^Wallet linked/), null]);
+    /* The player chose the Deposit beside an aged re-prove: the review goes ahead (the server decides); a refusal holds. */
+    expect(seatFlow(flowInput({ view: joinerView(), proof: "aged", ui: "review" })).primary?.kind).toBe("approve");
+    expect(seatFlow(flowInput({ view: joinerView(), proof: "refused", ui: "review" })).primary?.kind).toBe("reprove");
     const approving = seatFlow(flowInput({ view: joinerView(), proof: "aged", ui: "approving" }));
     expect(approving.headline).toBe("Approve in Keplr…");
     /* No deposit offered by the server (the escrow isn't taking them): no re-prove either -- nothing to re-prove for. */

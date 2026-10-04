@@ -173,6 +173,16 @@ describe("W2-M AUD-20.02, rendered: an aged proof reads re-prove, and re-proving
     expect(byTestId("money-action-approve")).toBeTruthy();
   });
 
+  it("aged: the Deposit beside Re-prove opens the review and reaches Approve in Keplr (the server then decides)", async () => {
+    const { services, port } = connectedWorld();
+    await render(<MoneyPanel room={room(joinerMoney(T0 - 25 * HOUR))} onStart={() => undefined} services={services} port={port} />);
+    expect(byTestId("money-headline")?.textContent).toMatch(/^Re-prove/);
+    await click(byTestId("money-action-open-review"));
+    expect(byTestId("money-review")).toBeTruthy();
+    expect(byTestId("money-action-approve")?.textContent).toBe("Approve in Keplr");
+    expect(signLinks(services.wallet.calls)).toEqual([]);
+  });
+
   it("a device without Keplr: the re-prove state says why it can't be done here, and nothing is pressed", async () => {
     const services = testServices();
     services.wallet.present = false;

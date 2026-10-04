@@ -95,6 +95,7 @@ import { LEGACY_CLIENT_PROTOCOL } from "../gameEngine/protocolVersions";
 import type { GameplayExecuteMsg } from "./sessionKey";
 import { isSetupGameMsg, type SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { GameStateResponse } from "../gameEngine/gameState";
+import type { SandboxActionContext } from "../gameEngine/sandboxSession";
 /* #1662 (S9-1): the ingress seam #1520 opened, generalised -- the version pin, the turn's draw, and the
    playtest waiver a hosted room does not admit. `isSetupGameMsg` / `stampRulesEngineVersion` moved inside it. */
 import { normalizeForCommit } from "./serverIngress";
@@ -104,6 +105,17 @@ import { unchangedMeansRefused } from "../gameEngine/actionOutcome";
 /* C2-02 (DA-7): the consent answer that found nothing to answer -- settled for its sender, never recorded. */
 import { HARMLESS_DUPLICATE_ANSWER_SENTENCE, harmlessDuplicateAnswer } from "../gameEngine/harmlessDuplicate";
 import { refusalReasonFor } from "./refusedAction";
+
+/** W1-H: the part of the reducer's chart injections the refusal describer reads -- the zone rules (#712) and the
+ *  home table (#1612). */
+function refusalChartOf(chart: Partial<SandboxActionContext>) {
+  return {
+    marketZoneFor: chart.marketZoneFor,
+    marketPricesByCompany: chart.marketPricesByCompany,
+    zoneForPrice: chart.zoneForPrice,
+    homeHexToAxial: chart.homeHexToAxial,
+  };
+}
 
 /** An entry as this server stores it: the shared shape plus the nonce that makes a retry safe. */
 export interface ServerLogEntry extends ReplayEntry {
@@ -912,7 +924,15 @@ export class RoomSession {
         const kind = Object.keys(input.msg as Record<string, unknown>)[0] ?? "That move";
         const reason = harmless
           ? HARMLESS_DUPLICATE_ANSWER_SENTENCE
-          : refusalReasonFor(boardBefore, input.msg, { actor: input.actor, mapGrid: gridBefore }) ??
+          : refusalReasonFor(boardBefore, input.msg, {
+              actor: input.actor,
+              mapGrid: gridBefore,
+              /* W1-H (Phase 3, AUD-14.03 / U-30): the chart injections the reducer judged this message with
+                 (`sandboxActionContext` spreads the same `chartInjections`), so a refused `BuyStock` carries
+                 its zone rule -- the 60% cap, the certificate limit -- and not only the rules that need no zone.
+                 Read off the board it was judged on (#1196); narration only, no state is written. */
+              ...refusalChartOf(this.options.providers.chartInjections(boardBefore)),
+            }) ??
             `${kind} was declined by the rules: the board did not change, and nothing was recorded.`;
         return this.refusedFrame(reason, repaired, input.baseIndex);
       }

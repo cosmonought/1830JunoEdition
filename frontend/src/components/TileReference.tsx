@@ -31,7 +31,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 import { TilePreviewThumbnail } from "./HexGridRenderer";
-import { TILE_CATALOG_BY_ID, type TileColorTier } from "./hexTileCatalog";
+/* Phase 3 W1-L (U-38): every tile is named by `canonicalTileName` -- the errata's #8861 / oo13 / oo14, never the voided
+   #626 / #36 / #35 the catalog keeps as storage keys; the other tiles' names are byte-identical `#N`. */
+import { TILE_CATALOG_BY_ID, canonicalTileName, type TileColorTier } from "./hexTileCatalog";
 import type { MapGridResponse } from "./hexContractTypes";
 import { FONT_SIZE, RADIUS, VIEWPORT_RADIUS } from "../styles/typography";
 import { tileStockTable, type TileStock } from "../utils/tileSupply";
@@ -87,7 +89,7 @@ function TileChip({ tileId, size = 30 }: { tileId: number; size?: number }) {
     <span style={{ ...styles.chip, ...(size > 40 ? styles.chipStacked : {}) }}>
       <TilePreviewThumbnail tileId={tileId} orientation={0} size={size} />
       <span style={{ ...styles.chipId, color: entry ? TIER_INK[entry.color] : "#8a8a86" }}>
-        #{tileId}
+        {canonicalTileName(tileId)}
       </span>
     </span>
   );
@@ -180,7 +182,7 @@ function TileUpgradeDetail({
   return (
     <div style={{ ...styles.detail, borderColor: TIER_INK[tier] }} role="group">
       <div style={styles.detailHead}>
-        <span style={{ ...styles.detailTitle, color: TIER_INK[tier] }}>#{tileId}</span>
+        <span style={{ ...styles.detailTitle, color: TIER_INK[tier] }}>{canonicalTileName(tileId)}</span>
         {entry && <span style={styles.detailTerrain}>{TERRAIN_LABEL[entry.terrain] ?? entry.terrain}</span>}
         <button type="button" style={styles.detailClose} onClick={onClose} aria-label="Close">
           ✕
@@ -218,7 +220,7 @@ function TileUpgradeDetail({
                  was in the tray because this is the panel a player opens to ask the question. */
               <span style={styles.detailEnd}>
                 {isUpgradeDeadEnd(tileId)
-                  ? `Nothing replaces #${tileId}. Laying it fixes that hex at ${tier.toLowerCase()} for the rest of the game.`
+                  ? `Nothing replaces ${canonicalTileName(tileId)}. Laying it fixes that hex at ${tier.toLowerCase()} for the rest of the game.`
                   : "The top tier — nothing replaces it."}
               </span>
             )}
@@ -303,7 +305,7 @@ function TileTray({
                   <button
                     type="button"
                     aria-pressed={isSelected}
-                    aria-label={`Tile #${tileId} — ${isSelected ? "hide" : "show"} its upgrade path`}
+                    aria-label={`Tile ${canonicalTileName(tileId)} — ${isSelected ? "hide" : "show"} its upgrade path`}
                     onClick={() => setSelectedTileId(isSelected ? null : tileId)}
                     style={{
                       ...styles.trayTile,
@@ -324,7 +326,7 @@ function TileTray({
                     <TilePreviewThumbnail tileId={tileId} orientation={0} size={TRAY_TILE_PX} />
 
                     <span style={{ ...styles.tileId, color: TIER_INK[tier] }}>
-                      #{tileId}
+                      {canonicalTileName(tileId)}
                       {family && (
                         <span style={styles.familyTag} title={FAMILY_BLURB[family]}>
                           {family}
@@ -361,7 +363,7 @@ function TileTray({
                     {isUpgradeDeadEnd(tileId) && (
                       <span
                         style={styles.deadEnd}
-                        title={`No green or brown tile can replace #${tileId}, so laying it fixes that hex at ${tier.toLowerCase()} for the rest of the game.`}
+                        title={`No green or brown tile can replace ${canonicalTileName(tileId)}, so laying it fixes that hex at ${tier.toLowerCase()} for the rest of the game.`}
                       >
                         No upgrade
                       </span>

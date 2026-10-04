@@ -70,7 +70,7 @@ describe("where the rule lives: two tagged blocks, on the steps where they act",
     expect(dieBlock()!.querySelector("h4")?.textContent).toMatch(/^Unpredictable Revenue/);
     expect(carcosaBlock()!.querySelector("h4")?.textContent).toMatch(/^Gold-trimmed Carcosa trains/);
     // Each wears the variant's tag, as the Gentle Rust block does.
-    for (const block of [dieBlock()!, carcosaBlock()!]) expect(block.querySelector("h4")?.textContent).toMatch(/Unpredictable revenue$/);
+    for (const block of [dieBlock()!, carcosaBlock()!]) expect(block.querySelector("h4")?.textContent).toMatch(/Unpredictable Revenue$/); // W1-L (DA6-n)
     // The old one-sentence note is gone rather than repeated beside the block.
     expect(host.textContent).not.toContain("This table plays unpredictable revenue");
   });

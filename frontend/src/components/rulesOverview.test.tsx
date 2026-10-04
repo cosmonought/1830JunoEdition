@@ -1092,7 +1092,8 @@ describe("the Station Tokens preview says what the Operating Round page says", (
     /* 6.1 and 6.3.1: mandatory, free, and before step 1 -- so it is adjacent to the sequence, not in it. */
     expect(note.textContent).toContain("First turn only");
     expect(note.textContent).toContain(
-      "At the start of its first operating turn, the corporation places its home-station token for free \u2014 before Lay Track.",
+      /* W1-L (U-32): the timing stated whole -- the first Operating Round turn, not the float. */
+      "At the start of its first operating turn \u2014 its first turn in an Operating Round, not when it floats \u2014 the corporation places its home-station token for free, before Lay Track.",
     );
     /* Outside the five-step row, and after it. */
     expect(required("rules-action-flow").contains(note)).toBe(false);

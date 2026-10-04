@@ -766,7 +766,8 @@ import { setGameLogExportSource } from "./utils/gameLogExportSource";
 import { watcherTrainDrafts } from "./utils/watcherRouteChips";
 import { autoSkipExit } from "./gameEngine/autoSkipExit";
 // Design note #1247: the accepted offer's purchase, owed by the board and sent here only where no server can.
-import { buyTrainsAutoSkipReason, nextDerivedAction } from "./gameEngine/derivedActions";
+import { buyTrainsAutoSkipReason } from "./gameEngine/derivedActions";
+import { noServerDerivedToSend } from "./utils/noServerDerivedForwarding"; // W3-K: #1247's forwarding, extended
 import { overrunsReach, reachForDrafting } from "./gameEngine/trainReach";
 import { editRouteDraft } from "./utils/routeDraftEdit";
 import { isRouteBuilderArmed, selectActingPresenceEntry } from "./utils/routeOverlaySource";
@@ -11578,16 +11579,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      path the server generates it (#1203) and `runGameplayAction` refuses to send a `derived` dispatch while a
      link exists (#1213), so this effect decides and sends nothing there. On Firestore there is nobody else to
      owe it, so the on-turn client sends it -- the same three guards as the auto-skip above: derived from the
-     board, my turn only (#774), and one dispatch per key. The key is the derived action's own. */
+     board, my turn only (#774), and one dispatch per key. The key is the derived action's own.
+     PHASE 3 W3-K (rules v13, review finding 2): the automatic emergency train purchase (`forced-purchase`, key
+     `emergency-purchase:<turn key>`) is forwarded the same way, so a funded emergency obligation advances on the
+     no-server path instead of stalling. Which kinds, and the decision itself, are `noServerDerivedToSend`'s --
+     `nextDerivedAction`, the server's own derivation; the shell decides nothing about the emergency. */
   const acceptedOfferSentRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!gameState || !isMyTurn) return;
-    const accepted =
-      gameState.private_purchase_offer?.accepted === true ||
-      gameState.train_purchase_offer?.accepted === true;
-    if (!accepted) return;
-    const owed = nextDerivedAction({ state: gameState, mapGrid, emitted: acceptedOfferSentRef.current });
-    if (!owed || owed.kind !== "accepted-offer") return;
+    const owed = noServerDerivedToSend({ state: gameState, mapGrid, emitted: acceptedOfferSentRef.current, isMyTurn });
+    if (!owed) return;
     acceptedOfferSentRef.current.add(owed.key);
     void runGameplayAction(Object.keys(owed.msg)[0] ?? "purchase", owed.msg, {
       automatic: true,

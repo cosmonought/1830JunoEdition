@@ -739,6 +739,33 @@ describe("automatic bankruptcy liquidates as far as legally possible (22-27)", (
     expect(p1.netWorth).toBe(2 * 90 + ended.market_positions![NYC]!.price + 2 * 50);
   });
 
+  it("review finding 1: the automatic bankruptcy is narrated as an OUTCOME, read off the before / after boards", () => {
+    const { describeGameplayAction } = require("./actionLog") as typeof import("./actionLog");
+    const context = (before: GameStateResponse, after: GameStateResponse) => ({
+      gameState: before, afterState: after, mapGrid: CORRIDOR, era: "Yellow" as never, labelForAddress: (address: string) => address.toUpperCase(),
+    });
+    const before = { ...insolvent(), operating_sub_phase: "Dividends" } as GameStateResponse;
+    const after = enter(insolvent());
+    const line = describeGameplayAction(ADVANCE(CO) as never, context(before, after))!;
+    expect(line).toContain("Automatic bankruptcy: no legal rescue remained for C&O's forced train purchase.");
+    expect(line).toContain("P1's shares were sold as far as the rules allow (20% of NYC, 10% of B&O)");
+    expect(line).toContain("$100 of P1's money went to C&O's treasury."); // the liquidation's $100, as C&O's treasury shows
+    expect(line).toContain("P1 keeps 20% of C&O, 10% of NYC, 20% of PRR, which could not legally be sold.");
+    expect(line).toMatch(/P1 is bankrupt and the game ends, because the train could not be paid for\.$/);
+    // Appended to the deciding message's own sentence (ForgoPrivateFunding ends it here), never replacing it.
+    const seed = privateOnly("160");
+    const forgone = apply(seed, FORGO_PRIVATE, P1);
+    const forgoLine = describeGameplayAction(FORGO_PRIVATE as never, context(seed, forgone))!;
+    expect(forgoLine.startsWith("C&O's president declined to sell a private company")).toBe(true);
+    expect(forgoLine).toContain("P1 had no shares that could legally be sold, and $0 of P1's money went to C&O's treasury.");
+    // Silent when nothing ended: an ordinary transition, and a revision-1 declaration (its own sentence alone).
+    const declined = apply(apply(seed, OFFER(2, NYC, 200), P1), ANSWER(2, false), P2);
+    expect(describeGameplayAction(ANSWER(2, false) as never, context(apply(seed, OFFER(2, NYC, 200), P1), declined))).not.toContain("Automatic bankruptcy");
+    const legacy = board({ rules: 1, corps: [{ id: CO, ticker: "C&O", president: P1, trains: [], treasury: "0", holdings: [[P1, 20], [P2, 20]], price: 90 }], cash: { [P1]: 0 } });
+    const legacyEnded = { ...legacy, current_round_type: "GameEnd", bankrupt_president: P1 } as GameStateResponse;
+    expect(describeGameplayAction(DECLARE as never, context(legacy, legacyEnded))).toBe("P1 could not fund the forced train purchase and is bankrupt. The game ends.");
+  });
+
   it("26. the bankruptcy enters GameEnd exactly once: nothing further applies, and a replay ends it at the same entry", () => {
     const ended = enter(insolvent());
     for (const msg of [PASS, SELL(NYC, 10), PORTFOLIO([NYC, 10]), FORGO_PRIVATE, EMERGENCY(CO)]) {
@@ -836,5 +863,182 @@ describe("the three new messages at ingress (actor, phase, obligation, staleness
     for (const msg of [PORTFOLIO([NYC, 10]), FORGO_PRIVATE, FORGO_TRADE]) {
       expect(ingress(standing, P1, msg)).toContain("is on offer to NYC");
     }
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Owner rulings 1, 4 and 5 (2026-10-04)                               */
+/* ------------------------------------------------------------------ */
+
+describe("owner ruling 1: \"only enough\" is no redundant leg and no oversized leg -- NOT a global minimum overshoot", () => {
+  /** Shortfall $50 (treasury $30, the $80 2-train); P1 holds PRR 10% at $100 and NYC 10% at $60, each one legal card. */
+  const choice = () =>
+    board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "30", holdings: [[P1, 20], [P2, 20]], price: 90 },
+        { id: NYC, ticker: "NYC", president: P2, trains: [], treasury: "500", holdings: [[P2, 30], [P1, 10]], price: 60 },
+        { id: PRR, ticker: "PRR", president: P3, trains: [], treasury: "500", holdings: [[P3, 40], [P1, 10]], price: 100 },
+      ],
+      cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+    });
+
+  it("$50 short: { PRR 10% } ($100, $50 over) and { NYC 10% } ($60, $10 over) are BOTH legal -- the president chooses", () => {
+    const state = choice();
+    const owed = funding(state)!;
+    expect(owed.shortfall).toBe(50);
+    expect(emergencyPortfolioRefusal(state, owed, [{ protocol_id: PRR, percentage: 10 }], P1)).toBeNull();
+    expect(emergencyPortfolioRefusal(state, owed, [{ protocol_id: NYC, percentage: 10 }], P1)).toBeNull();
+    const viaPrr = apply(state, PORTFOLIO([PRR, 10]), P1);
+    expect(cash(viaPrr, P1)).toBe(100);
+    expect(funding(viaPrr)).toMatchObject({ shortfall: 0 });
+    const viaNyc = apply(state, PORTFOLIO([NYC, 10]), P1);
+    expect(cash(viaNyc, P1)).toBe(60);
+    expect(funding(viaNyc)).toMatchObject({ shortfall: 0 });
+    expect(ingress(state, P1, PORTFOLIO([PRR, 10]))).toBeNull();
+    expect(ingress(state, P1, PORTFOLIO([NYC, 10]))).toBeNull();
+    // Both together carry a redundant leg: refused.
+    expect(emergencyPortfolioRefusal(state, owed, [{ protocol_id: PRR, percentage: 10 }, { protocol_id: NYC, percentage: 10 }], P1)).toContain("Only enough may be sold");
+  });
+});
+
+describe("owner ruling 4: each corporation appears at most once in an EmergencySellPortfolio", () => {
+  it("PRR 10% + PRR 10% as two legs is refused at the reducer and at ingress; PRR 20% as one leg is the way", () => {
+    // Shortfall $80; P1 holds PRR 20% at $40 (two legal cards) -- the full 20% is exactly enough.
+    const state = board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "0", holdings: [[P1, 20], [P2, 20]], price: 90 },
+        { id: PRR, ticker: "PRR", president: P3, trains: [], treasury: "500", holdings: [[P3, 40], [P1, 20]], price: 40 },
+      ],
+      cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+    });
+    const split = PORTFOLIO([PRR, 10], [PRR, 10]);
+    expect(same(apply(state, split, P1), state)).toBe(true);
+    expect(ingress(state, P1, split)).toContain("Each corporation appears once");
+    expect(emergencyPortfolioRefusal(state, funding(state)!, split.EmergencySellPortfolio.sales, P1)).toContain("Each corporation appears once");
+    const whole = apply(state, PORTFOLIO([PRR, 20]), P1);
+    expect(held(whole, PRR, P1)).toBe(0);
+    expect(funding(whole)).toMatchObject({ shortfall: 0 });
+  });
+});
+
+describe("owner ruling 5: private funding holds the game only while a LEGAL private path could complete a rescue", () => {
+  /** Phase 3 (NYC owns a 3); the 3-train at $180; treasury and cash $0; P1's own C&O 20% is tied and unsellable.
+   *  `privates`: P1's privates by face value; NYC / PRR treasuries as given; P1 may also hold PRR 10% at $50. */
+  const privateBoard = (input: { faces: string[]; nyc: string; prr: string; prrShare?: boolean }) =>
+    board({
+      corps: [
+        { id: CO, ticker: "C&O", president: P1, trains: [], treasury: "0", holdings: [[P1, 20], [P2, 20]], price: 90 },
+        { id: NYC, ticker: "NYC", president: P2, trains: ["3"], treasury: input.nyc, holdings: [[P2, 30]], price: 100 },
+        { id: PRR, ticker: "PRR", president: P3, trains: [], treasury: input.prr, holdings: input.prrShare ? [[P3, 40], [P1, 10]] : [[P3, 40]], price: 50 },
+      ],
+      cash: { [P1]: 0, [P2]: 300, [P3]: 300 },
+      privates: input.faces.map((cost, index) => ({ private_id: index + 2, owner: P1, cost })),
+    });
+
+  it("A. the loose bound says enough, but no legal sequence can rescue: no wait -- insolvency proceeds", () => {
+    // Two $100 privates (each $50-$200), and ONE eligible buyer: NYC with $150 (PRR's $40 is below either minimum).
+    // The bound counts each private against the richest buyer: $150 + $150 = $300 >= $180. Legally NYC can pay $150 in all.
+    const state = privateBoard({ faces: ["100", "100"], nyc: "150", prr: "40" });
+    const owed = funding(state)!;
+    expect(owed.automatic).toMatchObject({ privateFundingUpperBound: 300, privateFundingMaximum: 150, privateFunding: "irrelevant" });
+    expect(owed.bankrupt).toBe(true);
+    const ended = enter(privateBoard({ faces: ["100", "100"], nyc: "150", prr: "40" }));
+    expect(ended.current_round_type).toBe("GameEnd");
+    expect(ended.bankrupt_president).toBe(P1);
+  });
+
+  it("B. one legal private offer could rescue if accepted: the game waits for the offer or ForgoPrivateFunding", () => {
+    const state = privateBoard({ faces: ["100"], nyc: "500", prr: "40" }); // up to $200 from NYC >= $180
+    const owed = funding(state)!;
+    expect(owed.automatic).toMatchObject({ privateFunding: "relevant", privateFundingMaximum: 200 });
+    expect(owed.bankrupt).toBe(false);
+    expect(enter(state).current_round_type).toBe("OperatingRound");
+    expect(forgoPrivateFundingRefusal(state, owed, P1)).toBeNull();
+    const forgone = apply(state, FORGO_PRIVATE, P1);
+    expect(forgone.current_round_type).toBe("GameEnd");
+  });
+
+  it("C. a legal first private sale plus a later legal step can rescue: the path is preserved and works in sequence", () => {
+    // (i) a private ($35-$140 from NYC) then a share portfolio (PRR 10% at $50): neither alone, both together $190.
+    const mixed = privateBoard({ faces: ["70"], nyc: "500", prr: "500", prrShare: true });
+    const owed = funding(mixed)!;
+    expect(owed.automatic!.rescue.maximumProceeds).toBe(50);
+    expect(owed.automatic).toMatchObject({ privateFunding: "relevant", privateFundingMaximum: 140 });
+    expect(owed.bankrupt).toBe(false);
+    const sold = apply(apply(mixed, OFFER(2, NYC, 140), P1), ANSWER(2, true), P2);
+    expect(funding(sold)).toMatchObject({ shortfall: 40 });
+    const rescued = apply(sold, PORTFOLIO([PRR, 10]), P1);
+    expect(funding(rescued)).toMatchObject({ shortfall: 0, canPurchase: true });
+    // (ii) two privates to two different buyers, each buyer able to pay only one: $100 + $100 = $200 >= $180.
+    const twoBuyers = privateBoard({ faces: ["50", "50"], nyc: "100", prr: "100" });
+    expect(funding(twoBuyers)!.automatic).toMatchObject({ privateFunding: "relevant", privateFundingMaximum: 200 });
+    const first = apply(apply(twoBuyers, OFFER(2, NYC, 100), P1), ANSWER(2, true), P2);
+    expect(funding(first)!.automatic).toMatchObject({ privateFunding: "relevant", privateFundingMaximum: 100 }); // PRR still can
+    const second = apply(apply(first, OFFER(3, PRR, 100), P1), ANSWER(3, true), P3);
+    expect(funding(second)).toMatchObject({ shortfall: 0, canPurchase: true });
+  });
+
+  it("D. a buyer without the legal treasury does not count: nominal value is not proceeds", () => {
+    // One $160 private ($80-$320). NYC holds $120 (it can pay at most $120); PRR's $70 is below the $80 minimum.
+    const state = privateBoard({ faces: ["160"], nyc: "120", prr: "70" });
+    const owed = funding(state)!;
+    expect(owed.legalPrivateSales[0].buyers.map((buyer) => buyer.ticker)).toEqual(["NYC"]);
+    // NYC's $120 is all any legal sale raises; even the pruning bound is short, so the exact search is not run.
+    expect(owed.automatic).toMatchObject({ privateFundingUpperBound: 120, privateFundingMaximum: 0, privateFunding: "irrelevant" });
+    expect(emergencyModule.maximumPrivateFunding(owed.legalPrivateSales)).toBe(120);
+    expect(owed.bankrupt).toBe(true);
+    // And the offer authority agrees: more than NYC holds is refused.
+    expect(apply(state, OFFER(2, NYC, 180), P1).private_purchase_offer ?? null).toBeNull();
+  });
+
+  it("the exact maximum itself: an assignment search, not a sum of per-private ceilings", () => {
+    const { maximumPrivateFunding } = emergencyModule;
+    const sale = (privateId: number, min: number, max: number, buyers: Array<[number, number]>) => ({
+      privateId, name: `P${privateId}`, faceValue: max / 2, minPrice: min, maxPrice: max,
+      buyers: buyers.map(([companyId, treasuryValue]) => ({ companyId, ticker: `C${companyId}`, president: P2, treasury: treasuryValue })),
+    });
+    expect(maximumPrivateFunding([])).toBe(0);
+    expect(maximumPrivateFunding([sale(1, 50, 200, [[1, 150]]), sale(2, 50, 200, [[1, 150]])])).toBe(150); // one buyer, one budget
+    expect(maximumPrivateFunding([sale(1, 50, 200, [[1, 150], [2, 90]]), sale(2, 50, 200, [[1, 150], [2, 90]])])).toBe(240); // spread over both
+    expect(maximumPrivateFunding([sale(1, 100, 200, [[1, 150]]), sale(2, 100, 200, [[1, 150]])])).toBe(150); // both minima do not fit together
+  });
+});
+
+describe("review finding 2: the no-server (Firestore) shell forwards the keyed automatic emergency purchase", () => {
+  const { noServerDerivedToSend } = require("./noServerDerivedForwarding") as typeof import("./noServerDerivedForwarding");
+
+  it("a fully funded emergency obligation ADVANCES on the no-server path: the server's own derived action, sent once, applied once", () => {
+    const owedBoard = funded(); // treasury $30 + cash $100 cover the $80 2-train; nothing else stands
+    expect(funding(owedBoard)!.automatic!.autoPurchase).toBe(true);
+    const emitted = new Set<string>();
+    // Off-turn clients send nothing; the obligated president's client is the one whose turn it is.
+    expect(noServerDerivedToSend({ state: owedBoard, mapGrid: CORRIDOR, emitted, isMyTurn: false })).toBeNull();
+    const owed = noServerDerivedToSend({ state: owedBoard, mapGrid: CORRIDOR, emitted, isMyTurn: true })!;
+    // The same message and key the server derives -- no client-side authority of its own.
+    expect(owed).toEqual(nextDerivedAction({ state: owedBoard, mapGrid: CORRIDOR, emitted: new Set() }));
+    expect(owed.kind).toBe("forced-purchase");
+    expect(owed.key).toMatch(/^emergency-purchase:/);
+    emitted.add(owed.key); // the effect spends the key before it dispatches
+    // While the append is in flight the same board owes nothing more to this client: no double dispatch.
+    expect(noServerDerivedToSend({ state: owedBoard, mapGrid: CORRIDOR, emitted, isMyTurn: true })).toBeNull();
+    // The dispatch: a derived entry (ingress passes derived entries), applied by the one reducer.
+    expect(turnRefusal({ state: owedBoard, waterfall: null, actor: P1, msg: owed.msg as never, mapGrid: CORRIDOR, derived: true })).toBeNull();
+    const bought = apply(owedBoard, owed.msg, P1);
+    expect(company(bought, CO).owned_trains).toEqual(["2"]);
+    expect(funding(bought)).toBeNull(); // advanced, not stalled
+    // Reload safe: a fresh client (empty key set) on the bought board owes nothing, and a duplicate is refused.
+    expect(noServerDerivedToSend({ state: bought, mapGrid: CORRIDOR, emitted: new Set(), isMyTurn: true })).toBeNull();
+    expect(same(apply(bought, owed.msg, P1), bought)).toBe(true);
+    // Rebuild safe: replaying the stored derived entry reproduces the board, and records the same key.
+    expect(derivedEntryKey(owedBoard, owed.msg as never)).toBe(owed.key);
+    const replayProviders = { ...sandboxReplayProviders(), initialGrid: CORRIDOR, initialMarket: owedBoard.market_positions! };
+    const rebuilt = replayLog([{ index: 0, id: "d0", actor: P1, payload: JSON.stringify(owed.msg), derived: true } as never], replayProviders, { state: owedBoard, waterfall: null }, undefined, DEVELOPMENT_CORPUS_POLICY);
+    // (the replay engine carries the seed's auction atom as `waterfall: null`; the board is otherwise identical)
+    expect(stateDigest({ ...rebuilt.state, waterfall: undefined })).toBe(stateDigest({ ...bought, waterfall: undefined }));
+  });
+
+  it("a revision-1 board is untouched: no automatic purchase is derived or forwarded (the president buys it himself)", () => {
+    const legacy = { ...funded(), variants: { rules: 1 }, rules_engine_version: 12 } as GameStateResponse;
+    expect(noServerDerivedToSend({ state: legacy, mapGrid: CORRIDOR, emitted: new Set(), isMyTurn: true })).toBeNull();
   });
 });

@@ -147,8 +147,9 @@
 //      reduced to a smaller legal sale (or removed) while the rest still funds; an unavoidable overshoot -- the
 //      smallest LEGAL sale is worth more than what is missing, e.g. an indivisible other-20 -- is legal;
 //      sequential emergency `SellStock` is refused;
-//   5. optional private-company funding (#1541, every restriction preserved) -- never forced, but while it could
-//      still rescue the obligation the president must either offer or `ForgoPrivateFunding`;
+//   5. optional private-company funding (#1541, every restriction preserved) -- never forced, but while a LEGAL
+//      private-funding path (one sale or a sequence, assuming consent) could still complete a rescue the president
+//      must either offer or `ForgoPrivateFunding` (owner ruling 5: judged exactly, `maximumPrivateFunding`);
 //   6. the automatic purchase once funded;
 //   7. the automatic bankruptcy once no legal rescue remains: the trade window closed or unavailable, no legal
 //      rescue portfolio, private funding forgone or unable to rescue, no offer standing. There is no player-facing
@@ -234,12 +235,16 @@ export interface EmergencyAutomation {
   tradeWindow: "open" | "closed" | "unavailable";
   /** The legal share-sale bundles, corporation by corporation, and the maximum legal liquidation. */
   rescue: RescueAnalysis;
-  /** `relevant`: a private could still be offered and private plus share proceeds could reach the shortfall (an
-   *  upper bound: half to twice face, capped by the richest eligible buyer); `forgone`: the president declined the
-   *  category for this obligation; `irrelevant`: no offer could rescue it. */
+  /** `relevant`: at least one LEGALLY VALID private-funding path remains which, assuming the buyers' consent, could
+   *  contribute to a complete rescue (owner ruling 5: judged EXACTLY, `maximumPrivateFunding`); `forgone`: the
+   *  president declined the category for this obligation; `irrelevant`: no legal private sale or sequence of them,
+   *  with the most a legal share portfolio could add, reaches the shortfall. */
   privateFunding: "relevant" | "forgone" | "irrelevant";
-  /** The bound `privateFunding` was judged with: what private sales could raise at most. */
+  /** A loose bound on private proceeds (each private at most twice its face, capped by the richest eligible buyer) --
+   *  used ONLY to prune the exact search, never as the reason to wait. */
   privateFundingUpperBound: number;
+  /** The exact most a legal sequence of private sales could raise (`maximumPrivateFunding`); 0 when pruned. */
+  privateFundingMaximum: number;
   /** Treasury and cash cover the train, the window is not open and no offer stands: the game buys it now. */
   autoPurchase: boolean;
 }
@@ -577,11 +582,62 @@ export function rescueAnalysis(
   };
 }
 
-/** The most private sales could raise for this obligation: each offerable private at most twice its face, and never
- *  more than the richest corporation that could buy it holds. An UPPER BOUND (two privates may want the same buyer),
- *  which is the safe direction: it can only keep a rescue path open, never close a real one. */
+/** A LOOSE bound on what private sales could raise: each offerable private at most twice its face, and never more
+ *  than the richest corporation that could buy it holds. Two privates may need the same buyer, so this can promise
+ *  money no legal sequence raises -- owner ruling 5 (2026-10-04): it is a PRUNING step only (below it nothing can
+ *  rescue, so the exact search is skipped), never the reason the game waits. */
 function privateFundingUpperBound(sales: readonly LegalPrivateSale[]): number {
   return sales.reduce((sum, sale) => sum + Math.min(sale.maxPrice, Math.max(0, ...sale.buyers.map((buyer) => buyer.treasury))), 0);
+}
+
+/* ==================================================================
+    W3-K (v13, OWNER RULING 5): PRIVATE FUNDING IS RELEVANT ONLY WHILE A LEGAL PATH EXISTS
+   ==================================================================
+   The authoritative question: does at least one LEGALLY VALID private-funding path remain which, assuming the
+   buyers' consent, could contribute to a complete rescue? Consent is unknowable and is never treated as a refusal;
+   legality is the existing #1541 authority (`legalPrivateSalesFor` / `fundingPrivateSaleRefusal`): the president's
+   own open private, phases 3-4, never the B&O, a floated presided buyer other than the rescued corporation, a
+   price in the half-to-twice band paid from that buyer's treasury, one offer at a time.
+
+   SALES IN SEQUENCE. While the obligation stands every other message is held, so a private sale changes exactly
+   three things: the president's cash (up by the price), the buyer's treasury (down by it) and the card's owner.
+   Nothing else a later step reads -- no share price, no other private, no phase. So a SEQUENCE of sales is legal
+   iff each buyer's treasury covers the sum of the prices it pays, each price inside its private's band (the
+   shortfall stays positive before every sale by ordering them, and the last may complete the rescue). Because the
+   prices are whole dollars anywhere in each band, a buyer can pay any total in [Σ min, Σ max] of the privates it
+   takes, so it contributes min(treasury, Σ max) when Σ min fits and nothing otherwise. The exact maximum is the
+   best assignment of each private to one eligible buyer or to no one -- enumerated (a president holds a handful of
+   privates; the loose bound prunes the search away whenever even it is short).
+
+   A share portfolio is all-or-nothing (an insufficient portfolio is refused), so it can only be the LAST step: the
+   path rescues iff private proceeds plus the most a legal portfolio raises (`rescue.maximumProceeds`) reach the
+   shortfall. */
+export function maximumPrivateFunding(sales: readonly LegalPrivateSale[]): number {
+  const budgets = new Map<number, { treasury: number; min: number; max: number }>();
+  let best = 0;
+  const visit = (index: number): void => {
+    if (index === sales.length) {
+      let total = 0;
+      for (const budget of Array.from(budgets.values())) {
+        if (budget.min > budget.treasury) return; // this buyer cannot pay even the lowest legal prices together
+        total += Math.min(budget.treasury, budget.max);
+      }
+      if (total > best) best = total;
+      return;
+    }
+    visit(index + 1); // this private is not sold
+    const sale = sales[index];
+    for (const buyer of sale.buyers) {
+      const current = budgets.get(buyer.companyId) ?? { treasury: buyer.treasury, min: 0, max: 0 };
+      if (current.min + sale.minPrice > current.treasury) continue;
+      budgets.set(buyer.companyId, { treasury: current.treasury, min: current.min + sale.minPrice, max: current.max + sale.maxPrice });
+      visit(index + 1);
+      if (current.min === 0 && current.max === 0) budgets.delete(buyer.companyId);
+      else budgets.set(buyer.companyId, current);
+    }
+  };
+  visit(0);
+  return best;
 }
 
 function automaticEmergencyFunding(
@@ -595,9 +651,13 @@ function automaticEmergencyFunding(
   const legalPrivateSales = shortfall === 0 ? [] : legalPrivateSalesFor(state, skeleton);
   const tradeWindow = emergencyTradeWindow(state, skeleton, mapGrid);
   const upperBound = privateFundingUpperBound(legalPrivateSales);
-  const privateFunding: EmergencyAutomation["privateFunding"] = privateFundingForgone(state, skeleton)
+  const forgone = privateFundingForgone(state, skeleton);
+  // Owner ruling 5: the bound prunes; the exact legal maximum decides.
+  const prunedAway = forgone || legalPrivateSales.length === 0 || shortfall <= 0 || upperBound + rescue.maximumProceeds < shortfall;
+  const privateMaximum = prunedAway ? 0 : maximumPrivateFunding(legalPrivateSales);
+  const privateFunding: EmergencyAutomation["privateFunding"] = forgone
     ? "forgone"
-    : legalPrivateSales.length > 0 && shortfall > 0 && upperBound + rescue.maximumProceeds >= shortfall
+    : !prunedAway && privateMaximum > 0 && privateMaximum + rescue.maximumProceeds >= shortfall
       ? "relevant"
       : "irrelevant";
   const trainOfferStands = state.train_purchase_offer != null;
@@ -627,6 +687,7 @@ function automaticEmergencyFunding(
       rescue,
       privateFunding,
       privateFundingUpperBound: upperBound,
+      privateFundingMaximum: privateMaximum,
       autoPurchase,
     },
   };

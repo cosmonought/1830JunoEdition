@@ -264,8 +264,12 @@ describe("the boundary itself, #1247", () => {
     // The Firestore-path effect: derived, so #1213 refuses to send it while a link exists.
     expect(APP).toContain("const acceptedOfferSentRef");
     const effect = sliceFrom(APP, "const acceptedOfferSentRef", { length: 900 });
-    expect(effect).toContain('owed.kind !== "accepted-offer"');
+    /* W3-K (rules v13, review finding 2): the kind filter and the my-turn guard moved into the shared, tested
+       `noServerDerivedToSend` (accepted offers AND the automatic emergency purchase); the effect only sends. */
+    expect(effect).toContain("noServerDerivedToSend({ state: gameState, mapGrid, emitted: acceptedOfferSentRef.current, isMyTurn })");
     expect(effect).toContain("derived: true,");
-    expect(effect).toContain("if (!gameState || !isMyTurn) return;");
+    const { NO_SERVER_FORWARDED_DERIVED_KINDS, noServerDerivedToSend } = require("./noServerDerivedForwarding") as typeof import("./noServerDerivedForwarding");
+    expect([...NO_SERVER_FORWARDED_DERIVED_KINDS]).toEqual(["accepted-offer", "forced-purchase"]);
+    expect(noServerDerivedToSend({ state: null, mapGrid: GRID, emitted: new Set(), isMyTurn: true })).toBeNull();
   });
 });

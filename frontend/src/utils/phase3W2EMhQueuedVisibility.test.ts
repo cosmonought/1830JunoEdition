@@ -127,17 +127,24 @@ const nycOf = (state: GameStateResponse) => state.public_companies.find((c) => c
 const held = (state: GameStateResponse, player: string) =>
   nycOf(state).player_holdings.find((h) => h.player === player)?.percentage ?? 0;
 
-/** Bob is seated; Alice queues from `source`; returns every board along the way. */
+/** Bob is seated; Alice queues from `source`; returns every board along the way.
+ *
+ *  PHASE 3 W2-A x W3-K reconciliation (rules v13, OD-2): this board deals the CURRENT rules revision, where ONE
+ *  "Pass Turn" ends a Stock Round turn (`rulesV13StockRound.test.ts`). The revision-1 driver this replaced reached
+ *  the boundary with two Passes (Sell -> Buy, then end, #1443) and used the first as the "non-boundary" step; on
+ *  revision 2 that first Pass IS the boundary. The non-boundary step is now Bob's one ordinary Buy, taken from the
+ *  pile Alice did NOT choose (so her request stays legal), which leaves the turn with Bob until his Pass Turn. A
+ *  test that supplies `beforeBoundary` supplies its own mid-turn step instead. */
 function queuedThenBoundary(source: "Ipo" | "Bank", ipo = 30, pool = 20, beforeBoundary?: (submit: (a: string, m: unknown) => void) => void) {
   const seed = board(1, ipo, pool);
   const { room, submit } = roomFor(seed);
   submit(P1, EXCHANGE(source));
   const queued = room.state;
-  beforeBoundary?.(submit);
+  if (beforeBoundary) beforeBoundary(submit);
+  else submit(P2, BUY_NYC(source === "Ipo" ? "Bank" : "Ipo")); // Bob's one Buy: still Bob's turn (OD-2), not a boundary
   const preBoundary = room.state;
-  submit(P2, PASS); // Sell -> Buy: still Bob's turn (#1443), not a boundary
-  const midTurn = room.state;
-  submit(P2, PASS); // Bob's turn ends: the boundary
+  const midTurn = preBoundary;
+  submit(P2, PASS); // OD-2: one Pass Turn ends Bob's turn -- the boundary
   const settled = room.state;
   return { seed, queued, preBoundary, midTurn, settled };
 }
@@ -175,8 +182,13 @@ describe("1. a queued request reads REQUESTED, and only the requester is acknowl
 });
 
 describe("2. the request stays visibly pending until the boundary, and not one step longer", () => {
-  it("chip and table read the same view while it stands, including through the non-boundary Pass", () => {
+  it("chip and table read the same view while it stands, including through the non-boundary Buy", () => {
     const { seed, queued, midTurn, settled } = queuedThenBoundary("Ipo");
+    // The non-boundary step really happened (OD-2): Bob bought from the Bank Pool and still holds the turn.
+    expect(held(midTurn, P2)).toBe(held(queued, P2) + 10);
+    expect(nycOf(midTurn).bank_pool_percentage).toBe(nycOf(queued).bank_pool_percentage - 10);
+    expect(midTurn.active_player_index).toBe(1);
+    expect(settled.active_player_index).not.toBe(1);
     expect(pendingMhExchangeView(seed, nameFor)).toBeNull();
     for (const standing of [queued, midTurn]) {
       const view = pendingMhExchangeView(standing, nameFor)!;
@@ -227,8 +239,9 @@ describe("3. at the boundary it reads EXECUTED only when the exchange actually h
 
 describe("4. a request that became impossible reads OD-3's generic line -- and nothing is substituted", () => {
   it("the chosen IPO empties before the boundary: expired, M&H still open, the Bank Pool untouched", () => {
-    const { preBoundary, midTurn: settled } = queuedThenBoundary("Ipo", 10, 30, (submit) => submit(P2, BUY_NYC("Ipo")));
-    /* Bob bought, so his turn is at Buy and ONE Pass ends it (#1443): the boundary is that Pass. */
+    const { preBoundary, settled } = queuedThenBoundary("Ipo", 10, 30, (submit) => submit(P2, BUY_NYC("Ipo")));
+    /* Bob bought; his turn continues until ONE Pass Turn ends it (OD-2; on revision 1 the same single Pass, #1443):
+       the boundary is that Pass. */
     const midTurn = preBoundary;
     expect(nycOf(preBoundary).ipo_pool_percentage).toBe(0);
     expect(preBoundary.pending_mh_exchange).not.toBeNull(); // still standing after Bob's purchase

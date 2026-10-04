@@ -684,6 +684,8 @@ import HomeStationPrompt from "./components/HomeStationPrompt";
 import { homeStationViewerIsPresident } from "./utils/homeStationAskView";
 import { viewerIsNamedActor, viewerIsSeatedPlayer } from "./utils/waitingPromptView";
 import { dockHoldView } from "./utils/dockHoldView"; // Phase 3 W2-A (OD-1): the one hold answer
+// Phase 3 W2-C: the two offer panels' authorities, bound to the board and seat beside the hold answer.
+import { privateProposalRefusal, trainOfferRefusal, type OfferAuthorityInput, type TrainOfferIntent } from "./utils/offerAuthorityView";
 
 // Step 4: Firebase Real-Time Integration -- see design notes #1 and #22.
 import Lobby from "./components/Lobby";
@@ -4064,6 +4066,23 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const dockHold = useMemo(
     () => dockHoldView({ state: gameState, mapGrid, homeHexToAxial, labelFor: privateTradeLabel, scrubbing }),
     [gameState, mapGrid, homeHexToAxial, privateTradeLabel, scrubbing],
+  );
+  /* Phase 3 W2-C (AUD-09.02 / AUD-09.03): THE OFFER PANELS' AUTHORITIES, bound once per board to this seat and the
+     operating corporation (`utils/offerAuthorityView.ts`) -- `proposePrivatePurchaseRefusal` for the Buy Private Company
+     panel; `proposeTrainPurchaseRefusal`, or `trainSaleRefusal` at "settlement" for the same-president sale, for the
+     corporate roster. The panels ask these only while no hold stands: `dockHold` above is asked first, as the reducer
+     asks the holds first. Stable per board, so the roster asks each badge once. */
+  const offerAuthority = useMemo<OfferAuthorityInput>(
+    () => ({ state: gameState, actor: viewerAddress, buyerId: actingProtocolId, mapGrid, labelFor: privateTradeLabel }),
+    [gameState, viewerAddress, actingProtocolId, mapGrid, privateTradeLabel],
+  );
+  const privateOfferRefusal = useCallback(
+    (privateId: number, price: string | number) => privateProposalRefusal(offerAuthority, privateId, price),
+    [offerAuthority],
+  );
+  const trainOfferRefusalFor = useCallback(
+    (offer: TrainOfferIntent) => trainOfferRefusal(offerAuthority, offer),
+    [offerAuthority],
   );
   const privateTradeProposalRefusalFor = useCallback(
     (intent: { privateId: number; seller: string; buyer: string; price: number }) =>
@@ -14292,6 +14311,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 onPropose: handleProposePrivatePurchase,
                 // Phase 3 W2-A (OD-1): the hold's refusal of `ProposePrivatePurchase`, from the one hold answer.
                 blockedReason: dockHold.proposePrivatePurchase,
+                // Phase 3 W2-C (AUD-09.03): the proposal's own authority, then the in-flight latch on the submit.
+                proposalRefusal: privateOfferRefusal,
+                actionInFlight,
               }
             : null
         }
@@ -14398,6 +14420,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 blockedReason: dockHold.proposeTrainPurchase,
                 // Phase 3 W2-A: the hold's refusal of `BuyHardwareFromPool`, for the depot's own Buy.
                 bankBlockedReason: dockHold.buyTrainFromBank,
+                // Phase 3 W2-C (AUD-09.02): the sale's own authority, on the roster and the offer form.
+                offerRefusal: trainOfferRefusalFor,
                 onBuyFromBank: handleBuyTrainsFromBank,
                 openTiers, // #1326
                 /* ==================================================================

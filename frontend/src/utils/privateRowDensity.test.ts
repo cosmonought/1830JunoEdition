@@ -67,8 +67,11 @@
 // private company first" while explaining their removal, so every assertion below runs against a
 // comment-stripped copy -- and the notes are separately asserted to survive.
 
-import { offerPriceProblem, privatePriceBounds } from "../components/PrivateTradePanel";
+import { privatePriceBounds } from "../components/PrivateTradePanel";
 import { readShell } from "./sourceScan";
+// Phase 3 W2-C: the card's refusals are the proposal's authority, bound as the shell binds it.
+import { privateProposalRefusal } from "./offerAuthorityView";
+import { DH, operatingBoard, P1, P2, PRR } from "./offerFixtures74";
 
 const read = (relative: string) => {
   const fs = require("fs") as typeof import("fs");
@@ -278,7 +281,8 @@ describe("one click opens the card, and the card is the whole transaction", () =
     expect(card).toContain("styles.cardRule");
     expect(card).toContain("styles.priceInput");
     expect(card).toContain("onPropose(entry.private_id, price)");
-    expect(card).toContain("disabled={priceProblem !== null}");
+    // Phase 3 W2-C: and latched -- the shell's in-flight latch greys the submit too.
+    expect(card).toContain("disabled={priceProblem !== null || actionInFlight}");
   });
 
   it("has exactly one submit in the file", () => {
@@ -346,44 +350,42 @@ describe("nothing was fixed by deleting a fact", () => {
   });
 });
 
-describe("the offer's refusals, as a function", () => {
-  /* Design note #804: lifted out of the render, where they were a six-armed ternary nobody could call. The
-     Schuylkill Valley: face $20, so the band is $10-$40. */
-  const SV = { faceValue: 20, treasury: 300, buyerTicker: "PRR" };
+/** Phase 3 W2-C: the D&H (face $70, band $35-$140) proposed for by PRR's president, through the card's bound authority. */
+const ask = (price: string) =>
+  privateProposalRefusal(
+    { state: operatingBoard({ privates: [{ id: DH, owner: P2, cost: "70" }] }), actor: P1, buyerId: PRR, labelFor: (a) => a },
+    DH,
+    price,
+  );
 
-  it("asks for a price when the field is empty", () => {
-    expect(offerPriceProblem({ ...SV, priceText: "" })).toBe("Enter a price between $10 and $40.");
-    expect(offerPriceProblem({ ...SV, priceText: "   " })).toBe("Enter a price between $10 and $40.");
+describe("the offer's refusals are the authority's (Phase 3 W2-C)", () => {
+  /* Design note #804 lifted these out of the render as `offerPriceProblem` -- five sentences of the panel's own, a
+     copy of the band and the treasury. Phase 3 W2-C (AUD-09.03) RETIRED THE COPY: the card asks
+     `proposePrivatePurchaseRefusal`, bound by the shell (`utils/offerAuthorityView.ts`), and shows its sentence. #804's
+     "each failure named separately" gives way to the authority's one band sentence -- two wordings of one rule is what
+     the slice removed. The matrix (both band edges, the treasury, malformed text) is `phase3W2COfferAuthority` and
+     `phase3W2COfferPanels`; what stays here is the card's shape. D&H: face $70, so the band is $35-$140. */
+  it("asks the bound authority at the typed price, after the hold", () => {
+    expect(CODE).toContain("(holdReason ?? proposalRefusal?.(entry.private_id, wirePrice) ?? null)");
   });
 
-  it("refuses a fraction", () => {
-    // The contract deals in whole VGP; a decimal here would be rounded somewhere the player cannot see.
-    expect(offerPriceProblem({ ...SV, priceText: "12.5" })).toBe("Price must be a whole number.");
-    expect(offerPriceProblem({ ...SV, priceText: "abc" })).toBe("Price must be a whole number.");
+  it("keeps no price sentence of its own", () => {
+    for (const gone of [
+      "offerPriceProblem",
+      "Enter a price between",
+      "Price must be a whole number.",
+      "is below 50% of face value",
+      "is above 200% of face value",
+    ]) {
+      expect(CODE).not.toContain(gone);
+    }
   });
 
-  it("names which end of the band was missed", () => {
-    /* Each failure gets its own sentence. "Invalid price" would leave the player guessing which of five
-       things was wrong, and the band is the one they most often trip on. */
-    expect(offerPriceProblem({ ...SV, priceText: "9" })).toBe(
-      "$9 is below 50% of face value ($10 minimum).",
-    );
-    expect(offerPriceProblem({ ...SV, priceText: "41" })).toBe(
-      "$41 is above 200% of face value ($40 maximum).",
-    );
-  });
-
-  it("names the treasury that cannot pay", () => {
-    expect(offerPriceProblem({ ...SV, treasury: 30, priceText: "40" })).toBe(
-      "PRR's treasury holds $30 — it cannot pay $40.",
-    );
-  });
-
-  it("permits the seeded face value", () => {
+  it("permits the seeded face value, and both ends of the band", () => {
     // The neutral offer, which is what the card opens with -- it must never open onto an error.
-    expect(offerPriceProblem({ ...SV, priceText: "20" })).toBeNull();
-    expect(offerPriceProblem({ ...SV, priceText: "10" })).toBeNull();
-    expect(offerPriceProblem({ ...SV, priceText: "40" })).toBeNull();
+    expect(ask("70")).toBeNull();
+    expect(ask("35")).toBeNull();
+    expect(ask("140")).toBeNull();
   });
 
   it("no longer has a case for no selection at all", () => {
@@ -402,11 +404,13 @@ describe("the mirrored price band", () => {
     expect(privatePriceBounds(45)).toEqual({ min: 23, max: 90 });
   });
 
-  it("agrees with the sentences the panel prints", () => {
-    // One authority, consulted by the bound and by the refusal -- not two arithmetics that happen to match.
-    const bounds = privatePriceBounds(220);
-    expect(offerPriceProblem({ faceValue: 220, treasury: 9999, buyerTicker: "NYC", priceText: String(bounds.min) })).toBeNull();
-    expect(offerPriceProblem({ faceValue: 220, treasury: 9999, buyerTicker: "NYC", priceText: String(bounds.min - 1) })).toContain("below 50%");
+  it("agrees with the authority whose band it labels", () => {
+    /* One band, consulted by the label and by the refusal -- not two arithmetics that happen to match. Phase 3 W2-C: the
+       refusal is the authority's now, so the label is checked against it. */
+    const bounds = privatePriceBounds(70);
+    expect(ask(String(bounds.min))).toBeNull();
+    expect(ask(String(bounds.min - 1))).toContain(`between $${bounds.min} and $${bounds.max}`);
+    expect(ask(String(bounds.max + 1))).toContain(`between $${bounds.min} and $${bounds.max}`);
   });
 });
 

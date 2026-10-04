@@ -17,16 +17,17 @@
 // Design note #1: the price band is MIRRORED, not invented -- [50%, 200%] of face value. Acceptable client-side
 // validation only because the band is a STATIC arithmetic property of one number, not a stateful judgement
 // about the board: it cannot go stale between render and dispatch, and the contract still has the final say.
+// Phase 3 W2-C: THE MIRROR NO LONGER VALIDATES. It labels the price field; whether an offer may be sent is asked of
+// `proposePrivatePurchaseRefusal` itself, bound by the shell (the W2-C note above `ProposePrivatePurchase`).
 //
 // Design notes #2/#386/#660a/#661: see `docs/ai_architecture/contract_economy.md`.
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/palette";
 
 import type { PrivateCompanyState } from "../gameEngine/gameState";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { STICKY_OPTIONAL } from "../utils/stickyCollapse";
-import { corporateSaleBlockReason } from "../gameEngine/baltimorePrivate";
 import { PRIVATE_COMPANY_CATALOG, abilitySummary } from "../utils/privateCatalog";
 import { numberedPrivate } from "../gameEngine/privateOrdinal";
 
@@ -34,6 +35,8 @@ import { numberedPrivate } from "../gameEngine/privateOrdinal";
  *  (`gameEngine/privatePriceBand.ts`), shared with the emergency private sale; re-exported here for its callers. */
 import { privatePriceBounds } from "../gameEngine/privatePriceBand";
 import { CONSENT_IN_FLIGHT_TITLE } from "../utils/offerConsentView";
+// Phase 3 W2-C: the typed price as the proposal's authority reads it -- and as the shell then sends it.
+import { offerPriceForAuthority } from "../utils/offerAuthorityView";
 
 /** A live proposal. Client-side only -- design note #0. */
 export interface PrivateTradeProposal {
@@ -81,53 +84,31 @@ export function purchasablePrivatesInPlay(
   return privates.filter((entry) => !entry.closed && entry.owner_protocol_id === null);
 }
 
-/** Why this private cannot be proposed for, or `null` when it can be.
- *  One sentence per reason, at the row that carries it. */
-export function privatePurchaseBlockReason(entry: PrivateCompanyState): string | null {
-  /* Design note #660: checked FIRST, because it is the reason that cannot
-     change. "Still unsold" describes a moment; the B&O ban describes the
-     certificate, and telling a player to wait for an owner on a private no
-     corporation may ever buy would be worse than saying nothing. */
-  const corporateBan = corporateSaleBlockReason(entry);
-  if (corporateBan) return corporateBan;
-  if (entry.owner === null) {
-    /* DA-6 (DA-F8l): "still unsold in the auction" assumed an auction under way; under the Delayed Auction a private is
-       unsold BEFORE its auction has run. Timing-neutral, and true in both games. */
-    return "Not sold yet in the private company auction — there is no owner to sell it.";
-  }
-  return null;
-}
-
-/** Why the typed offer cannot be sent, or `null` when it can.
- *
- *  Design note #804: LIFTED OUT OF THE RENDER, AND ONE ARM DELETED. These five sentences were a nested
- *  ternary inside the component -- unreachable from a test, and the panel's entire error vocabulary. The
- *  wording is unchanged. What is gone is the sixth arm, "Choose a private company first.", and it is gone
- *  BY CONSTRUCTION: the price field now lives inside the card of the private it belongs to, so there is no
- *  longer a state in which a price has been typed for nothing.
- *
- *  DELETED RATHER THAN LEFT AS REASSURANCE, which is #788's lesson. An arm that can no longer be reached
- *  still passes every test written for it, and reads to the next maintainer as a case that happens. */
-export function offerPriceProblem(input: {
-  priceText: string;
-  faceValue: number;
-  treasury: number;
-  buyerTicker: string;
-}): string | null {
-  const { priceText, faceValue, treasury, buyerTicker } = input;
-  const bounds = privatePriceBounds(faceValue);
-  const price = Number(priceText);
-  /* Each failure named separately. "Invalid price" would leave the player guessing which of five things was
-     wrong, and the band is the one they most often trip on. */
-  if (priceText.trim() === "") return `Enter a price between $${bounds.min} and $${bounds.max}.`;
-  if (!Number.isFinite(price) || !Number.isInteger(price)) return "Price must be a whole number.";
-  if (price < bounds.min) return `$${price} is below 50% of face value ($${bounds.min} minimum).`;
-  if (price > bounds.max) return `$${price} is above 200% of face value ($${bounds.max} maximum).`;
-  if (price > treasury) {
-    return `${buyerTicker}'s treasury holds $${treasury} — it cannot pay $${price}.`;
-  }
-  return null;
-}
+/* ==================================================================
+    PHASE 3 W2-C (AUD-09.03 / U-20): THE PANEL READS ITS AUTHORITY
+   ==================================================================
+   `privatePurchaseBlockReason` and `offerPriceProblem` are DELETED. Between them they were this panel's whole rule
+   book -- the B&O ban, "no owner yet", the 50-200% band and the treasury -- written a second time, in different words,
+   beside the predicate the reducer and ingress actually ask (`proposePrivatePurchaseRefusal`, #1591 / #1595). Whatever
+   that predicate refuses that they did not copy -- the operating corporation, phases 3 and 4, a floated buyer with a
+   president, the buyer's current president as proposer -- reached the player only as a refusal after the click.
+   NOW THE SHELL HANDS IN THAT PREDICATE, bound to the board and the seat (`proposalRefusal`, built by
+   `utils/offerAuthorityView.ts`), and the panel asks it twice: at the band's floor, which decides whether a card can be
+   offered for at all (every price rule the predicate asks is met first by the cheapest price -- the floor of the band
+   and the treasury alike -- so a refusal there is a refusal at every price, and the card shows that sentence instead of
+   a form); and at the typed price, which decides the submit. Its sentences are shown as they are.
+   THE BAND STAYS ON THE FIELD as a label and as the input's own `min` / `max` (`privatePriceBounds`, the engine's band
+   -- read, not restated). #804's "each failure named separately" gives way to the authority's one band sentence:
+   two wordings of one rule is the thing this slice removes.
+   CORPORATION-OWNED PRIVATES ARE STILL NOT OFFERED (`purchasablePrivatesInPlay`, display): the audit's U-20 half that
+   did not reproduce at the planning snapshot, now pinned by `phase3W2COffer*`. The authority refuses one too
+   ("may be bought by corporations but not sold by them"), so a crafted dispatch fails at the door as well.
+   THE DELETED HELPERS' NOTES, KEPT (#490a -- a pass must not satisfy an absence by deleting the reasoning with it):
+     #660 on the block reason: the B&O ban was checked FIRST, "because it is the reason that cannot change" -- the
+     authority keeps that order (the card's sellability before its owner).
+     #804 on the price refusals: "LIFTED OUT OF THE RENDER, AND ONE ARM DELETED. ... What is gone is the sixth arm,
+     "Choose a private company first.", and it is gone BY CONSTRUCTION: the price field now lives inside the card of
+     the private it belongs to." Still true: the authority is asked per card, about that card's own price. */
 
 /* ------------------------------------------------------------------ */
 /* Propose                                                            */
@@ -156,14 +137,24 @@ export interface ProposePrivatePurchaseProps {
    *  has both -- answers. Optional: a caller without a roster gets the grey it had before rather than a
    *  wrong colour, which on a table where colour identifies a person is the worse failure. */
   colorForAddress?: (address: string) => string | null;
-  /** The buying corporation's treasury, so an unaffordable price is caught
-   *  before it is proposed. */
+  /** The buying corporation's treasury. Phase 3 W2-C: NO LONGER READ -- the treasury rule is the authority's, which reads
+   *  the board's own figure (`proposalRefusal`). Kept in the shape the bar already hands over; removing it is a cleanup
+   *  for the bar's prop object, not a rule. */
   treasury: number;
   onPropose: (privateId: number, price: number) => void;
   onClose: () => void;
   /** Phase 3 W2-A (OD-1): a standing authoritative hold's refusal of the proposal, or `null`. Greys every card's
    *  submit with that sentence; the cards still open, so the rules stay readable. Absent is `null` (no hold). */
   blockedReason?: string | null;
+  /** Phase 3 W2-C (AUD-09.03 / U-20): THE PROPOSAL'S AUTHORITY -- `proposePrivatePurchaseRefusal`, bound by the shell to
+   *  this board and seat (`utils/offerAuthorityView.ts`). Asked with a price as the authority reads it; `null` is a legal
+   *  proposal. Decides which cards can be offered for at all and whether the typed offer can be sent, in its own words.
+   *  Consulted only while no hold stands (the hold is asked first, as the reducer asks it). Absent, the panel states no
+   *  rule of its own: only the hold greys, and the dispatch is judged at the door. */
+  proposalRefusal?: (privateId: number, price: string | number) => string | null;
+  /** Phase 3 W2-C: the shell's in-flight latch (#1173), as the consent prompts take it (W1-D). While the viewer's last
+   *  action is unconfirmed every submit is greyed, so a second press cannot send a second proposal. */
+  actionInFlight?: boolean;
 }
 
 export function ProposePrivatePurchase({
@@ -173,14 +164,37 @@ export function ProposePrivatePurchase({
   privates,
   labelForAddress,
   colorForAddress,
-  treasury,
   onPropose,
   onClose,
   blockedReason: holdReason = null,
+  proposalRefusal,
+  actionInFlight = false,
 }: ProposePrivatePurchaseProps) {
-  // Design note #386: the wider set for DISPLAY. `privatePurchaseBlockReason` is still the STRICT predicate,
-  // and it is what gates the offer form and the submit inside each card.
+  // Design note #386: the wider set for DISPLAY. Phase 3 W2-C: the STRICT answer -- what may be proposed -- is the
+  // authority's (`proposalRefusal`), and it is what gates the offer form and the submit inside each card.
   const eligible = useMemo(() => purchasablePrivatesInPlay(privates), [privates]);
+
+  /* ==================================================================
+      PHASE 3 W2-C: THE SUBMIT IS LATCHED
+     ==================================================================
+     The consent prompts were latched by W1-D; this submit was not, so a second press while the first proposal was
+     still on its way sent a second `ProposePrivatePurchase` (or, on the same-president shortcut, a second
+     `BuyPrivateCompany`). Two locks, the same two the ring's confirm has (W1-E):
+       - `actionInFlight` is the shell's latch (#1173): set synchronously in the press that dispatches, released when
+         THAT action is applied -- by which time the board carries the standing offer and W2-A's hold greys every
+         card, or the bought private has left the list. It greys the submit and is what the player sees.
+       - `submitLatch` covers the one window the shell's latch cannot: a second press delivered before React has
+         committed the first (two clicks in one task). Taken synchronously in the handler and released after the next
+         commit -- which always follows the press (`setSubmitCommit`), and by which time `actionInFlight` has taken
+         over if anything was sent. Nothing was sent -> the submit is live again, so a dispatch the shell refused
+         locally never leaves the card stuck (#1173's "a stuck latch is a worse bug than the one it prevents").
+     NOT AUTHORITY, like #1173 itself: if the shell's backstop releases before a slow snapshot lands, a repeat press
+     is a second proposal the authority refuses ("An offer is already standing"), never a second offer. */
+  const submitLatch = useRef(false);
+  const [, setSubmitCommit] = useState(0);
+  useEffect(() => {
+    submitLatch.current = false;
+  });
 
   /* Design note #804: ONE PIECE OF STATE WHERE THERE WERE TWO.
      REPORTED: "players click a Private Company and it expands to display the full rule, then they have to
@@ -290,23 +304,34 @@ export function ProposePrivatePurchase({
         ) : (
           <div style={styles.list}>
             {eligible.map((entry) => {
-              // Design note #386: shown either way, and captioned with the reason it cannot be bought.
-              const blocked = privatePurchaseBlockReason(entry);
               const catalog = PRIVATE_COMPANY_CATALOG[entry.private_id];
               const isOpen = openIds.has(entry.private_id);
               const detailId = `private-card-${entry.private_id}`;
               const faceValue = Number(entry.cost);
               const bounds = privatePriceBounds(faceValue);
+              /* Design note #386: shown either way, and captioned with the reason it cannot be bought.
+                 Phase 3 W2-C: THE REASON IS THE AUTHORITY'S, asked at the band's floor -- the cheapest price it could
+                 accept, so a refusal there holds at every price (the B&O ban, an unsold card, a treasury short of the
+                 floor, an operating corporation that is not this one). Not asked while a hold stands: the hold is the
+                 answer then (W2-A), every card opens to its rule, and its submit carries the hold's sentence. */
+              const blocked =
+                holdReason !== null || proposalRefusal === undefined
+                  ? null
+                  : proposalRefusal(entry.private_id, String(bounds.min));
               const priceText = priceTexts.get(entry.private_id) ?? String(entry.cost);
-              const price = Number(priceText);
+              /* Phase 3 W2-C: the canonical spelling the authority judges and the shell sends (`NaN` when the text is
+                 not a whole number -- refused by the authority in its own words, and never sent). */
+              const wirePrice = offerPriceForAuthority(priceText);
+              const price = Number(wirePrice);
               /* A blocked private has no offer form to complain about, so the price is not consulted for it
                  at all -- the block reason takes that space instead, which is the first time it has been
                  anywhere a player can read it rather than in a `title` no tablet ever shows. */
               const priceProblem =
                 blocked !== null
                   ? null
-                  : /* Phase 3 W2-A (OD-1): the hold first -- no price would be accepted while it stands. */
-                    (holdReason ?? offerPriceProblem({ priceText, faceValue, treasury, buyerTicker }));
+                  : /* Phase 3 W2-A (OD-1): the hold first -- no price would be accepted while it stands. Then
+                       W2-C: the proposal's authority at the typed price, in its own words. */
+                    (holdReason ?? proposalRefusal?.(entry.private_id, wirePrice) ?? null);
               return (
                 /* Design note #661: THE ROW IS A GROUP, NOT A BUTTON, and #804 keeps that for a narrower
                    reason. #661 needed it because the row carried two controls; there is one control on the
@@ -507,16 +532,23 @@ export function ProposePrivatePurchase({
                             type="button"
                             style={{
                               ...styles.primaryButton,
-                              ...(priceProblem ? styles.buttonDisabled : {}),
+                              ...(priceProblem || actionInFlight ? styles.buttonDisabled : {}),
                             }}
-                            disabled={priceProblem !== null}
+                            /* Phase 3 W2-C: latched -- see `submitLatch`. */
+                            disabled={priceProblem !== null || actionInFlight}
                             onClick={() => {
-                              if (priceProblem) return;
+                              if (priceProblem !== null || actionInFlight || submitLatch.current) return;
+                              // Never send a spelling the authority did not judge (no authority bound: nothing judged it).
+                              if (typeof wirePrice !== "string") return;
+                              submitLatch.current = true;
+                              setSubmitCommit((count) => count + 1);
                               onPropose(entry.private_id, price);
                             }}
                             title={
                               priceProblem ??
-                              `Offer $${price} to ${entry.owner ? labelForAddress(entry.owner) : "the owner"} for ${entry.name}.`
+                              (actionInFlight
+                                ? CONSENT_IN_FLIGHT_TITLE
+                                : `Offer $${price} to ${entry.owner ? labelForAddress(entry.owner) : "the owner"} for ${entry.name}.`)
                             }
                           >
                             {/* Design note #811: THE BUTTON NAMES WHO IT GOES TO.

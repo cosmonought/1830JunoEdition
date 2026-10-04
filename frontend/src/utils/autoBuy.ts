@@ -136,6 +136,15 @@ export function refreshAutoBuyWatch(plan: AutoBuyPlan, state: GameStateResponse)
   return { ...plan, watch: autoBuyWatchOf(state, plan.targets) };
 }
 
+/** Phase 3 W2-B (#1274): whether two watches see the same board -- so the hand-back can keep the watch current through
+ *  the player's own post-buy turn without re-setting an unchanged plan (which would re-run the effect for nothing). */
+export function sameAutoBuyWatch(a: AutoBuyWatch, b: AutoBuyWatch): boolean {
+  if (a.parred.length !== b.parred.length || a.parred.some((id, index) => b.parred[index] !== id)) return false;
+  const keys = Object.keys(a.pool);
+  if (keys.length !== Object.keys(b.pool).length) return false;
+  return keys.every((key) => b.pool[Number(key)] === a.pool[Number(key)]);
+}
+
 export function holdingPercent(state: GameStateResponse, companyId: number, player: string): number {
   const company = state.public_companies.find((entry) => entry.company_id === companyId);
   if (!company) return 0;

@@ -32,7 +32,7 @@ import { chartForDivestment, divestmentDebt, divestmentPassRefusal, divestmentRe
 import { turnRefusal } from "../gameEngine/turnAuthority";
 import { routeRulesRevisionOf, withRules } from "../gameEngine/boardSelection";
 import { PASS_LABEL, passButtonTitle } from "../gameEngine/turnAction";
-import { armAutoBuy, autoBuyDecision, autoBuyTurnStep } from "../utils/autoBuy";
+import { armAutoBuy, autoBuyDecision, autoBuyTurnStep, refreshAutoBuyWatch, sameAutoBuyWatch } from "../utils/autoBuy";
 import { mustSellBannerOf } from "../utils/mustSellBanner";
 import { expectOrder, readShell, readStripped, sliceBetween } from "../utils/sourceScan";
 import type { GameStateResponse, RoundType } from "../gameEngine/gameState";
@@ -575,6 +575,37 @@ describe("6. Auto-Buy: no stage Pass, and no Pass after the Buy -- it buys, then
     expect(seatOf(t.state)).toBe("p0");
   });
 
+  it("the player's own post-buy sale of a listed corporation does not turn the plan off next turn (the hand-back keeps the watch)", () => {
+    // Both corporations listed, the stop-on-sale wake ON: PRR is bought, then the player sells NYC (listed) themselves.
+    const start = board();
+    let armed = armAutoBuy(start, "p0", {
+      targets: [{ companyId: PRR, maxPercent: 60 }, { companyId: NYC, maxPercent: 60 }],
+      source: "Ipo",
+      stopOnPar: true,
+      stopOnSale: true,
+    });
+    const t = table(start);
+    armed = refreshAutoBuyWatch(armed, t.state); // the effect refreshes before its buy
+    expect(autoBuyEffect(t, armed)).toBe("buy");
+    t.dispatch(SELL(NYC));
+    // The hand-back's refresh, as the shell runs it (set only when the board moved).
+    const watched = refreshAutoBuyWatch(armed, t.state);
+    expect(sameAutoBuyWatch(watched.watch, armed.watch)).toBe(false);
+    const kept = watched;
+    expect(sameAutoBuyWatch(refreshAutoBuyWatch(kept, t.state).watch, kept.watch)).toBe(true); // no loop: the next run sets nothing
+    renderBar(barProps(t.state, "p0", () => t.dispatch(PASS)));
+    click(passButton());
+    for (let seat = 1; seat < SEATS.length; seat++) t.dispatch(PASS);
+    expect(seatOf(t.state)).toBe("p0");
+    // Kept current, the plan buys again; the stale watch would have stopped on the player's own sale.
+    expect(autoBuyEffect(t, kept)).toBe("buy");
+    const g = gates(t.state, "p0");
+    const stale = autoBuyDecision(t.state, armed, (companyId, source) => g.purchaseBlockFor(companyId, source, 1));
+    expect(stale.action).toBe("stop");
+    expect((stale as { reason: string }).reason).toContain("NYC shares have been sold to the pool");
+    expect(t.sent.filter((kind) => kind === "PassTurn")).toHaveLength(4); // p0's own click and p1..p3 -- none from the tool
+  });
+
   it("what the removed stage Pass did on v13: the old code read the stage as 'sell' and passed -- ending the turn, nothing bought", () => {
     const start = board({ consecutive_passes: 2 } as Partial<GameStateResponse>);
     expect(stockTurnStage(start)).toBe("sell"); // the reading the old effect sent its Pass on
@@ -612,18 +643,20 @@ describe("6. Auto-Buy: no stage Pass, and no Pass after the Buy -- it buys, then
   it("#1274 in the shell: the Auto-Buy effect never passes -- no PassTurn dispatch, no stage, the hand-back before the decision", () => {
     const APP = readShell();
     const effect = sliceBetween(APP, "if (homeTokenOwed(gameState, homeHexToAxial)) return;", "const handleSellShares");
-    expect(effect).not.toContain("handlePassTurn");
-    expect(effect).not.toContain("PassTurn");
+    const whole = sliceBetween(APP, "if (autoBuyPlan.player !== viewerAddress) return;", "const handleSellShares");
+    expect(whole).not.toContain("handlePassTurn");
+    expect(whole).not.toContain("PassTurn");
     expect(effect).not.toContain("stockTurnStage(");
     expect(effect).not.toContain("sellBuySellInForce(");
     expect(effect).not.toContain('stage !== "buy"');
     expectOrder(effect, "divestmentDebt({", "if (owed) {", 'if (autoBuyTurnStep(gameState) === "hand-back") {', "autoBuyDecision(", "buyOneShare(");
     const handBack = sliceBetween(effect, 'if (autoBuyTurnStep(gameState) === "hand-back") {', "autoBuyDecision(");
     expect(handBack).not.toContain("setAutoBuyPlan(null)"); // stays armed for the next turn
+    expect(handBack).not.toContain("handleDisarmAutoBuy");
+    expect(handBack).toContain("if (!sameAutoBuyWatch(watched.watch, autoBuyPlan.watch)) setAutoBuyPlan(watched);");
     expect(handBack).not.toContain("buyOneShare(");
     expect(handBack).toContain("return;"); // nothing after the hand-back runs this turn
     // #816's latch is unchanged: the one dispatch (the buy) is still spent against the log index.
-    const whole = sliceBetween(APP, "if (autoBuyPlan.player !== viewerAddress) return;", "const handleSellShares");
     expectOrder(whole, "if (autoPassAlreadyActed(autoBoughtAtLogIndexRef.current, lastLogIndex)) return;", "if (homeTokenOwed(gameState, homeHexToAxial)) return;");
     expectOrder(effect, "autoBoughtAtLogIndexRef.current = lastLogIndex;", "buyOneShare(");
     expect(effect.split("autoBoughtAtLogIndexRef.current = lastLogIndex;").length - 1).toBe(1); // the buy is the one dispatch

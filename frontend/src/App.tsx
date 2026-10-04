@@ -414,6 +414,7 @@ import {
   autoBuyTurnStep, // Phase 3 W2-B: buy, or hand the bought turn back -- never a Pass (#1274)
   holdingPercent,
   refreshAutoBuyWatch,
+  sameAutoBuyWatch, // Phase 3 W2-B (#1274): the hand-back keeps the watch on the player's own sales
   type AutoBuyPlan,
   type AutoBuySettings,
 } from "./utils/autoBuy";
@@ -10063,8 +10064,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     /* Phase 3 W1-A (AUD-03.06, SBS-5): THE MUST-SELL COMES BEFORE ANY DISPATCH. The tool used to Pass the Sell
        stage first and only then notice the debt, so a seat that owed a sale sent a Pass the hold refuses
        (`divestmentPassRefusal`) and sat armed against it. A player who owes a sell-down can neither buy nor pass
-       (#759), so the tool stops here, with the reason, before it sends anything. (W2-B: the stage Pass itself is
-       gone; the order still guards the buy and the end-of-turn Pass below.) */
+       (#759), so the tool stops here, with the reason, before it sends anything. (W2-B: the stage Pass is gone and
+       the tool sends no Pass at all (#1274); the order still guards the buy below.) */
     const owed = divestmentDebt({
       state: gameState,
       player: viewerAddress,
@@ -10094,8 +10095,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        ARMED for their next turn, where `bought_this_turn` is back to 0 and it buys again (no second buy this turn:
        the hand-back answers before `autoBuyDecision` is ever asked). Nothing is dispatched here, so the #816
        log-index latch above is untouched: it still spends the one dispatch -- the buy -- per step. On a board where
-       the purchase itself ends the turn (revision 0) the hand-back is never reached. */
+       the purchase itself ends the turn (revision 0) the hand-back is never reached.
+       THE WATCH FOLLOWS THE PLAYER'S OWN TURN. Staying armed means the player's own post-buy sales happen under a
+       live plan, and #1333's sale wake would read one of a listed corporation, next turn, as somebody else's ("sold
+       to the pool ... Auto-Buy is off"). While the turn is theirs nobody else moves a pool, so the watch is brought
+       up to the board here -- the same rule as the tool's own purchase -- and set only when it changed. */
     if (autoBuyTurnStep(gameState) === "hand-back") {
+      const watched = refreshAutoBuyWatch(autoBuyPlan, gameState);
+      if (!sameAutoBuyWatch(watched.watch, autoBuyPlan.watch)) setAutoBuyPlan(watched);
       if (!autoBuyHandedBackRef.current) {
         autoBuyHandedBackRef.current = true;
         logInfo(

@@ -6700,8 +6700,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                contradicted is not information; it is the thing the player is reading instead of the game. So
                a landed submission clears exactly the turn refusals -- the reconnecting banner and a
                divergence verdict are about other facts and stand. */
+            /* Phase 3 W3-C (AUD-14.01 / P3-N004, OD-12 RED R1): a landed move retires the REFUSAL SLOT -- any refusal,
+               not only the turn refusal (a server `refused` or stale answer stayed up after the turn was played on) --
+               and the two connection kinds a landed move contradicts (`roomNotices.ts`). No sentence is compared. */
             if (options?.automatic !== true) {
-              setSandboxRoomError((current) => (current === TURN_REFUSAL ? null : current));
+              dispatchRoomNotice({ type: "submission-landed" });
             }
           }
           if (allocated !== null && appliedIndexRef.current === appendAt) {
@@ -6738,7 +6741,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            * STILL ONLY THE PLAYER WHO ACTED, which is what #697's placement was also buying. The drain runs on
            * every client, so the actor test does that job instead -- and it is the same comparison #786 makes
            * in reverse for the payout notice, so the two can never both fire. */
-          return;
+          /* Phase 3 W3-C (P3-N020, OD-12 RED R1): THE PER-ACTION ANSWER, to the caller that dispatched it -- `false`
+             when the room did not apply this submission (refused, stale, not sent), so a handler can roll back the
+             shell state it set for the move (a spent power, the run marking). `undefined` from every other path. */
+          return allocated !== null;
         }
 
         /* Setup is handled first and returns: it is not a move. Idempotent by position, and a roster 1830 cannot deal leaves state untouched.

@@ -145,7 +145,11 @@ describe("the one-purchase-per-turn rule can finally fire", () => {
   it("is fed by BOTH callers now, which is the whole of #1172", () => {
     /* The parameter existed, was defaulted, was read -- and no caller passed it. The rule was documentation. */
     expect(REDUCER).toContain("boughtThisTurn: state.bought_this_turn ?? 0");
-    expect(APP).toContain("boughtThisTurn: gameState.bought_this_turn ?? 0");
+    // Phase 3 W1-A: the shell feeds it through the stock authority, which reads the count off the board it is handed.
+    expect(sliceBetween(APP, "const purchaseBlockFor = useCallback(", "const saleBlockFor = useCallback(")).toContain(
+      "stockPurchaseRefusal({",
+    );
+    expect(readStripped("gameEngine/stockTransactionAuthority.ts")).toContain("boughtThisTurn: state.bought_this_turn ?? 0,");
   });
 
   it("counts certificates on the purchase, and accumulates rather than sets", () => {

@@ -29,7 +29,15 @@ import type { VgpWire } from "./vgpAmount";
 /** Hover text for the inline Priority Deal marker. Defined once and shared by every surface that renders
  *  it, so two panels cannot drift into explaining the same indicator two different ways -- which is exactly
  *  what happens when a tooltip string is retyped per call site. */
-export const PRIORITY_DEAL_TOOLTIP = "Priority Deal: Starts the next Stock Round.";
+/* Phase 3 W1-B (AUD-11.01, K-16): "Starts the next Stock Round" named the wrong opener mid-round. The marker shows
+   `priority_deal_index`, which moves only when a round ends (a Stock Round's end: left of the last trader; the
+   auction's close: left of its last direct purchase, DA-4) -- so during a Stock Round or the auction it shows who
+   held the card when that round began, not who will open the next one. The sentence states the rule instead of
+   naming a seat, and is true in every round. */
+export const PRIORITY_DEAL_TOOLTIP =
+  "Priority Deal: this marker shows who held the card when this round began, and it updates only when a round ends. " +
+  "Whoever holds it when a Stock Round opens goes first. At the end of a Stock Round it goes to the player after the last one to buy or sell (it stays put if nobody did); " +
+  "at the end of the private company auction, to the player after the last one to buy a private outright.";
 
 export type TileColor = "Yellow" | "Green" | "Brown" | "Gray"; // #1312: Gray only under the Project 18XX+ tile set
 /** Pre-Game Waterfall Auction (`waterfall.rs`): every room genesis-starts here, before `"StockRound"` is

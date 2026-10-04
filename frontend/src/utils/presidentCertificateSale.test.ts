@@ -344,6 +344,8 @@ describe("the rule reaches the authority, not only the button", () => {
 
   it("is still asked by the panel", () => {
     // #712's point: the reducer is the authority, and the button still has to explain itself before the click.
-    expect(readShell()).toContain("return shareSaleBlock({");
+    // Phase 3 W1-A: the panel asks the sale authority, which composes this rule -- the same call ingress makes.
+    expect(readShell()).toContain("stockSaleRefusal({");
+    expect(read("gameEngine/stockTransactionAuthority.ts")).toContain("const blocked = shareSaleBlock({ state, seller: actor, companyId: sell.companyId, percentage });");
   });
 });

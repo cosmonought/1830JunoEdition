@@ -59,14 +59,14 @@ describe("K-09: the consent props that now gate Reject as well as Accept are unc
 });
 
 describe("K-08: the Stock Round sale verdict asks the sale authority first for an unparred corporation", () => {
-  it("`saleBlockFor` = the Sell-Buy-Sell stage gate, then `unstartedCorporationSaleRefusal`, then `shareSaleBlock`", () => {
+  it("`saleBlockFor` is the sale authority itself (Phase 3 W1-A), so the unstarted corporation's rule 4 answers with its own sentence", () => {
     const body = sliceBetween(APP, "const saleBlockFor = useCallback(", "const [marketPeek, setMarketPeek]");
-    expectOrder(
-      body,
-      'stockTurnStage(gameState) === "buy"',
-      "unstartedCorporationSaleRefusal({ state: gameState, seller: viewerAddress, companyId, percentage })",
-      "return shareSaleBlock({ state: gameState, seller: viewerAddress, companyId, percentage });",
-    );
+    expect(body).toContain("stockSaleRefusal({");
+    expect(body).toContain("actor: viewerAddress,");
+    expect(body).toContain("ctx: chartContextFromState(gameState),");
+    // The shell-only Sell-Buy-Sell stage refusal is gone (S-4: the server has no such rule).
+    expect(body).not.toContain("stockTurnStage(");
+    expect(readStripped("gameEngine/stockTransactionAuthority.ts")).toContain("if (company.par_value === null || company.par_value === undefined) {");
   });
 
   it("the shared `shareSaleBlock` gained no par check of its own", () => {
@@ -153,7 +153,9 @@ describe("K-01: the Stock Round Private Companies section, its handlers, its pro
   });
 
   it("Pass is greyed with the hold, right after the home-token block", () => {
-    const pass = sliceBetween(APP, "passDisabledReason={", "turnActionTaken=");
+    // P0 S1: the expression is a plain const above the shell's `return (`; the bar reads it by name.
+    expect(APP).toContain("passDisabledReason={passDisabledReason}");
+    const pass = sliceBetween(APP, "const passDisabledReason =", "return (");
     expectOrder(pass, "homeTokenBlock({", "privateTradeHold ??");
   });
 

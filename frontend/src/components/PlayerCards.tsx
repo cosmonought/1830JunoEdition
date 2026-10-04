@@ -29,6 +29,7 @@ import type { PlayerFinances } from "../utils/playerFinance";
 import { ALERT_CRITICAL_INK, ALERT_WARN_INK } from "../styles/palette";
 import type { PrivateClosureAlert } from "../utils/purchaseWarnings";
 import { numberedPrivate } from "../gameEngine/privateOrdinal";
+import { PRIORITY_DEAL_TOOLTIP } from "../gameEngine/gameState"; // Phase 3 W1-B (K-16): one sentence, every surface
 
 /** The player card's paper; washed per card toward the seat colour by `washedPlayerSurface` (#1347). */
 const CARD_PARCHMENT = "#f4f1e8";
@@ -200,11 +201,11 @@ export function PlayerCards({
                   )}
                 {player.address === priorityAddress && (
                   /* Design note #563: the Priority Deal lives in the stripe because it is a property of the SEAT rather than of
-                     the portfolio -- it says who opens the next Stock Round, not what this player owns. Everything below the
+                     the portfolio -- it is about turn order (who goes first in a Stock Round), not what this player owns. Everything below the
                      stripe is holdings; this is not. */
                   <span
                     style={{ ...styles.priorityTag, color: ink, borderColor: ink }}
-                    title="Starts the next Stock Round."
+                    title={PRIORITY_DEAL_TOOLTIP}
                   >
                     Priority Deal
                   </span>

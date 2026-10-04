@@ -13,10 +13,20 @@
 import PresidentCrown from "./PresidentCrown";
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
+  GameStateResponse,
   PrivateCompanyState,
   PublicCompanyState,
   RoundType,
 } from "../gameEngine/gameState";
+// Phase 3 W1-A: the card reads the stock transaction authority's own readings of the board -- what a source holds
+// for sale, which purchase starts a corporation, which Stock Round bans sales -- rather than keeping copies.
+import {
+  isFirstStockRound,
+  isPresidentPurchase as purchaseStartsCorporation,
+  ordinaryPercentAvailable,
+  reservedPercentOf,
+} from "../gameEngine/stockTransactionAuthority";
+import { SHARE_PERCENT, reservedIpoRefusal } from "../gameEngine/sharePurchase";
 import type { GamePhase, TierRustOutlook, TrainTier } from "../gameEngine/gamePhase";
 // Design note #409: `TrainChips` is back, inline in the asset row. `CapacityPill` and
 // `LastRoutePayout` stay out -- the train LIMIT is an Operating Round question, and the payout rides
@@ -37,7 +47,6 @@ import {
   type TreasuryProjection,
 } from "../utils/treasuryProjection";
 import {
-  allowsMultipleBankPoolBuys,
   marketZoneForPrice,
   // Design note #712: the zone-tinted figure, shared with the dividend move line.
   ZonedPrice,
@@ -2325,15 +2334,23 @@ function CompanyActions({
   const [source, setSource] = useState<"Ipo" | "Bank">("Ipo");
   const [buyQuantity, setBuyQuantity] = useState(1);
 
-  // Design note #33: Brown is the only zone that permits several bank-pool
-  // shares in one turn, and the pool itself is the ceiling. `marketPrice`
-  // is `null` for an unfloated company, which `marketZoneForPrice` reports
-  // as no zone -- so an unfloated card can never show the selector.
-  const zone = marketZoneForPrice(marketPrice);
-  const multiBuyMax =
-    allowsMultipleBankPoolBuys(zone) && source === "Bank"
-      ? Math.max(1, Math.floor(company.bank_pool_percentage / 10))
-      : 1;
+  /* Design note #33: Brown is the only zone that permits several bank-pool shares in one turn, and the pool itself
+     is the ceiling.
+     Phase 3 W1-A (AUD-03.02, U-25): THE CEILING IS THE AUTHORITY'S. The selector offered `bank_pool_percentage / 10`
+     -- counting the LPF 20% card as two and asking nothing about the certificate limit, the 60% cap, the Brown
+     continuation's corporation or the cash. Now it is the largest quantity the stock authority accepts, asked one
+     quantity at a time (the walk `maxPurchaseQuantity` makes, over the whole purchase predicate), from the pool's
+     ordinary certificates. Only a Brown Bank Pool purchase is ever accepted above one, so no other card shows it. */
+  const multiBuyMax = (() => {
+    if (source !== "Bank" || !purchaseBlockFor) return 1;
+    const inPool = Math.floor(ordinaryPercentAvailable(company, "Bank") / SHARE_PERCENT);
+    let allowed = 1;
+    for (let take = 2; take <= inPool; take += 1) {
+      if (purchaseBlockFor(company.company_id, "Bank", take) !== null) break;
+      allowed = take;
+    }
+    return allowed;
+  })();
   const effectiveQuantity = Math.min(Math.max(1, buyQuantity), multiBuyMax);
 
   /* Design note #712: THE RULES THE CHART ALREADY DESCRIBED. The chart's own tooltips have told players for a
@@ -2363,7 +2380,9 @@ function CompanyActions({
      degrades to the conservative answer rather than advertising a certificate that cannot exist.
      Design note #587: the real test is "has this been STARTED" -- the Camden & Amboy hands out a
      certificate before anyone founds the company, and `par_value` is the field that says so. */
-  const isPresidentPurchase = company.president === null && company.par_value === null;
+  /* Phase 3 W1-A: the authority's reading (`isPresidentPurchase`): from the IPO, of a corporation with no president
+     and no par. A Bank Pool purchase never starts a corporation. */
+  const isPresidentPurchase = purchaseStartsCorporation(company, source);
   const buyLabel = (() => {
     if (!priceKnown) {
       // No market position and no par yet -- nothing honest to quote.
@@ -2384,11 +2403,13 @@ function CompanyActions({
      like a broken toggle rather than "you have no shares here". */
   const [sellPercentage, setSellPercentage] = useState<number>(SELL_PERCENTAGE_OPTIONS[0]);
 
-  /** Design note #21: only sources that actually hold certificates. */
-  const availableSources = ([] as Array<"Ipo" | "Bank">).concat(
-    company.ipo_pool_percentage > 0 ? ["Ipo"] : [],
-    company.bank_pool_percentage > 0 ? ["Bank"] : [],
-  );
+  /** Design note #21: only sources that actually hold certificates.
+   *  Phase 3 W1-A (AUD-03.02, U-25): "holds a certificate FOR SALE", as the authority reads it. `ordinaryPercentAvailable`
+   *  already leaves out the unsold President's Certificate, the LPF 20% card and the Delayed Auction's reserved C&A
+   *  share, so a 0% or reserved-only source is never offered; the 20% card is offered where it sits (its own button). */
+  const sourceOffers = (option: "Ipo" | "Bank"): boolean =>
+    ordinaryPercentAvailable(company, option) > 0 || doubleCertificateAt(company) === option;
+  const availableSources = (["Ipo", "Bank"] as Array<"Ipo" | "Bank">).filter(sourceOffers);
 
   // Keeps the local choice legal as pools drain under it -- otherwise a card
   // left on "Bank" after the pool empties would dispatch against a source
@@ -2408,8 +2429,14 @@ function CompanyActions({
   /* Design note #356: `macroRoundNumber` is 1 for the first Stock Round.
      `undefined` -- a room that does not report it -- permits the sale
      rather than blocking it: the contract refuses an illegal one, and a
-     UI that hid Sell on missing data would hide it for the whole game. */
-  const sellingForbidden = macroRoundNumber === 1;
+     UI that hid Sell on missing data would hide it for the whole game.
+     Phase 3 W1-A (AUD-03.01, U-23 / K-19): the authority's own reading (`isFirstStockRound`), which is what makes it
+     right under the Delayed Auction too. It decides only the card's SHAPE (the selector hidden, the button's label);
+     whether the sale is legal, and the sentence, are `saleBlockFor`'s. */
+  const sellingForbidden =
+    tradingOpen &&
+    macroRoundNumber !== undefined &&
+    isFirstStockRound({ current_round_type: "StockRound", macro_round_number: macroRoundNumber } as GameStateResponse);
 
   /* Design note #357: a player cannot spend what they do not have. The button gated on turn and session
      readiness, never on price; the sandbox reducer's `adjustCash` floors at zero rather than refusing, so
@@ -2423,23 +2450,19 @@ function CompanyActions({
     if (isPresidentPurchase) return price * 2;
     return price * (multiBuyMax > 1 ? effectiveQuantity : 1);
   })();
-  const cannotAfford =
-    playerCash != null && totalCost != null && totalCost > playerCash;
-  const bankPoolPercent = company.bank_pool_percentage;
-  /* Design note #713: THE SUCCESSOR RULE, WHICH THIS CONTROL NEVER ASKED ABOUT. `sellOptionState` checked
-     that the player held enough and that the pool had room, and would sell a presidency into nobody's hands.
-     `sellableHoldings` has computed the rule since #6 -- "some OTHER single player already holds enough to
-     take the certificate" -- and no sell control consulted it.
-     RESOLVED BY `App`, because the rule reads EVERY player's holdings and this card is handed only its own
-     company. The local `sellOptionState` still answers first: its two messages are about the bundle the
-     player just picked, and they are the ones a player hits most. */
-  const localSellState = sellOptionState(sellPercentage, playerHoldingPercent, bankPoolPercent);
-  const saleBlock = saleBlockFor?.(company.company_id, sellPercentage) ?? null;
-  const selectedSellState: { enabled: boolean; reason?: string } = localSellState.enabled
-    ? saleBlock
-      ? { enabled: false, reason: saleBlock }
-      : localSellState
-    : localSellState;
+  /* Phase 3 W1-A (AUD-03.05): `cannotAfford` is gone -- affordability is the authority's rule 8, inside
+     `purchaseBlock`, with the server's sentence and against the VIEWER's cash (this card's `playerCash` is the acting
+     seat's, which is the projection's figure, not the buyer's balance).
+     Design note #713: THE SUCCESSOR RULE, WHICH THIS CONTROL NEVER ASKED ABOUT -- resolved by `App`, because the
+     rule reads EVERY player's holdings.
+     Phase 3 W1-A (AUD-03.03, U-39 / K-07): AND NOW EVERY SALE RULE IS. `sellOptionState` and its 50% pool cap
+     answered first with a local reading -- percentage points where the rule is five physical certificates (#1670),
+     which refused the Level Playing Field's legal fifth Pool certificate behind a 20% card. `saleBlockFor` is the
+     sale authority (`stockSaleRefusal`): holdings, the five-card pool, the presidency, the half-sale, the first
+     Stock Round and the unstarted corporation, in the server's order and words. */
+  const saleBlockOf = (percentage: number): string | null =>
+    saleBlockFor?.(company.company_id, percentage) ?? null;
+  const selectedSaleBlock = saleBlockOf(sellPercentage);
 
   /* Design note #683: whether a treasury projection is attached beneath each action, hoisted because THREE
      things read it -- the block itself, and the two controls above it that square their bottom corners to meet
@@ -2452,7 +2475,7 @@ function CompanyActions({
     priceKnown && typeof playerCash === "number" && totalCost !== null;
   const showSellProjection =
     !sellingForbidden &&
-    selectedSellState.enabled &&
+    selectedSaleBlock === null &&
     typeof playerCash === "number" &&
     // Design note #713: the SALE's price, which is the market's and not the buy toggle's.
     typeof marketPrice === "number";
@@ -2556,9 +2579,7 @@ function CompanyActions({
             aria-label="Share source"
           >
             {(["Ipo", "Bank"] as const).map((option) => {
-              const available = option === "Ipo"
-                ? company.ipo_pool_percentage > 0
-                : company.bank_pool_percentage > 0;
+              const available = sourceOffers(option);
               return (
                 <button
                   key={option}
@@ -2579,14 +2600,15 @@ function CompanyActions({
                   disabled={controlsDisabled || !available}
                   title={
                     !available
-                      ? option === "Ipo"
-                        ? "The IPO Warehouse is empty."
-                        : "The Bank Pool is empty."
+                      ? /* Phase 3 W1-A: the authority's own sentences for a source with nothing for sale -- the
+                           reserved C&A share named as such (DA-6, D-52), otherwise rule 5's. */
+                        (reservedIpoRefusal(company, option, SHARE_PERCENT) ??
+                        `The ${option === "Ipo" ? "IPO" : "Bank Pool"} holds no ordinary ${company.ticker} certificate to sell.`)
                       : (controlsBlockedReason ??
                         (option === "Ipo"
                           ? /* DA-6 (D-52): under the Delayed Auction a share may be held for the C&A's buyer. */
-                            reservedIpoPercent(company) > 0
-                            ? `Buy from the IPO at par. ${company.ipo_pool_percentage - reservedIpoPercent(company)}% for sale; ${reservedIpoPercent(company)}% is held for whoever buys the C&A.`
+                            reservedPercentOf(company) > 0
+                            ? `Buy from the IPO at par. ${company.ipo_pool_percentage - reservedPercentOf(company)}% for sale; ${reservedPercentOf(company)}% is held for whoever buys the C&A.`
                             : `Buy from the IPO at par. ${company.ipo_pool_percentage}% left.`
                           : `Buy from the Bank Pool at market price. ${company.bank_pool_percentage}% left.`))
                   }
@@ -2629,24 +2651,18 @@ function CompanyActions({
                 ...styles.actionButton,
                 ...styles.buyButtonFill,
                 ...(showBuyProjection ? styles.attachedAbove : {}),
-                ...(controlsDisabled || cannotAfford || purchaseBlock
+                ...(controlsDisabled || purchaseBlock !== null
                   ? styles.actionButtonDisabled
                   : {}),
               }}
-              disabled={controlsDisabled || cannotAfford || purchaseBlock !== null}
+              disabled={controlsDisabled || purchaseBlock !== null}
               /* Design note #681: #466 got the LOOK right here and left the tooltip saying nothing
                  for every reason but affordability. Cost leads because it is the specific one; the
                  shared reason answers the rest.
                  Design note #712: a RULE beats a price. "You cannot afford it" is advice to come back with
                  more cash; "no player may hold more than 60%" is advice to do something else entirely, and a
                  player told only the first would keep saving toward a purchase the rules forbid. */
-              title={
-                purchaseBlock
-                  ? purchaseBlock
-                  : cannotAfford
-                    ? `Insufficient funds — costs $${totalCost}, you hold $${playerCash}.`
-                    : (controlsBlockedReason ?? undefined)
-              }
+              title={purchaseBlock ?? controlsBlockedReason ?? undefined}
             >
               {/* Design note #35: one computed label, so the price cannot
                   disappear depending on which branch built the string. */}
@@ -2668,9 +2684,8 @@ function CompanyActions({
             (() => {
               const doubleBlock = purchaseBlockFor?.(company.company_id, source, 1, "double") ?? null;
               const doubleCost = priceKnown ? (unitPrice as number) * 2 : null;
-              const doubleUnaffordable =
-                playerCash != null && doubleCost != null && doubleCost > playerCash;
-              const blocked = controlsDisabled || doubleUnaffordable || doubleBlock !== null;
+              // Phase 3 W1-A: affordability is inside `doubleBlock` (the authority's rule 8).
+              const blocked = controlsDisabled || doubleBlock !== null;
               return (
                 <button
                   type="button"
@@ -2682,12 +2697,9 @@ function CompanyActions({
                   }}
                   disabled={blocked}
                   title={
-                    doubleBlock
-                      ? doubleBlock
-                      : doubleUnaffordable
-                        ? `Insufficient funds — costs $${doubleCost}, you hold $${playerCash}.`
-                        : (controlsBlockedReason ??
-                          "One certificate of 20%, at twice the share price. Counts as one toward the certificate limit.")
+                    doubleBlock ??
+                    controlsBlockedReason ??
+                    "One certificate of 20%, at twice the share price. Counts as one toward the certificate limit."
                   }
                 >
                   {doubleCost === null
@@ -2775,7 +2787,7 @@ function CompanyActions({
            are `aria-hidden`, so a screen reader hears five options rather than "10 percent slash 20 percent". */}
         <div style={styles.sellSlashRow} role="group" aria-label="Sell size">
           {SELL_PERCENTAGE_OPTIONS.map((pct, index) => {
-            const state = sellOptionState(pct, playerHoldingPercent, bankPoolPercent);
+            const verdict = saleBlockOf(pct);
             const active = sellPercentage === pct;
             return (
               <React.Fragment key={pct}>
@@ -2790,17 +2802,17 @@ function CompanyActions({
                   // rather than a custom one: a disabled button does not
                   // fire pointer events in every browser, so a JS-driven
                   // tooltip is unreliable in exactly the state it is needed.
-                  title={state.reason ?? controlsBlockedReason ?? undefined}
+                  title={verdict ?? controlsBlockedReason ?? undefined}
                   aria-pressed={active}
                   style={{
                     ...styles.sellSlashOption,
                     ...(active ? styles.sellSlashOptionActive : {}),
-                    ...(state.enabled ? {} : styles.sellSlashOptionDisabled),
+                    ...(verdict === null ? {} : styles.sellSlashOptionDisabled),
                     // Design note #681 (sweep): the size buttons had a look for
                     // an illegal SIZE and none for a blocked moment.
                     ...(controlsDisabled ? styles.actionButtonDisabled : {}),
                   }}
-                  disabled={controlsDisabled || !state.enabled}
+                  disabled={controlsDisabled || verdict !== null}
                   onClick={() => setSellPercentage(pct)}
                 >
                   {pct}%
@@ -2812,8 +2824,8 @@ function CompanyActions({
         {/* The reason the CURRENT selection cannot be sold, stated inline.
             The per-button tooltip only appears on hover, which a player who
             has already committed to a size will not think to do. */}
-        {!selectedSellState.enabled && (
-          <span style={styles.sellHint}>{selectedSellState.reason}</span>
+        {selectedSaleBlock !== null && (
+          <span style={styles.sellHint}>{selectedSaleBlock}</span>
         )}
         </div>
         )}
@@ -2841,8 +2853,8 @@ function CompanyActions({
       {/* Design note #683: the sell button's own zero-gap group, same reasoning as the buy row above. */}
       <div style={styles.attachedGroup}>
       {playerHoldingPercent > 0 && (() => {
-        const sellDisabled =
-          controlsDisabled || sellingForbidden || !selectedSellState.enabled;
+        /* Phase 3 W1-A: one verdict -- the sale authority's, which carries the first-Stock-Round ban too. */
+        const sellDisabled = controlsDisabled || selectedSaleBlock !== null;
         return (
           <button
             type="button"
@@ -2856,11 +2868,10 @@ function CompanyActions({
             }}
             onClick={() => onSellShares(company.company_id, sellPercentage)}
             disabled={sellDisabled}
-            title={
-              sellingForbidden
-                ? "No selling in the first Stock Round — Project 18XX opens the market to sales from SR2 onward."
-                : (controlsBlockedReason ?? undefined)
-            }
+            /* Phase 3 W1-A (AUD-03.01, U-23 / K-19): the authority's sentence. In the first Stock Round that is
+               rulebook §5.1 stated as the rule ("Certificates may not be sold in the first Stock Round."), not a
+               "Project 18XX" choice. */
+            title={selectedSaleBlock ?? controlsBlockedReason ?? undefined}
           >
             {sellingForbidden ? "Selling Opens in SR2" : `Sell ${sellPercentage}% Bundle`}
           </button>
@@ -2977,36 +2988,9 @@ export const PAR_VALUE_LADDER: readonly string[] = PAR_BOX_PRICES.map(String);
  *  says "would exceed the 50% Bank Pool cap" teaches the rule when it applies. */
 const SELL_PERCENTAGE_OPTIONS: readonly number[] = [10, 20, 30, 40, 50];
 
-/** The 1830 Bank Pool cap: no company may have more than 50% of its shares
- *  sitting in the pool at once. Mirrors the backend's own bound. */
-const BANK_POOL_CAP_PERCENT = 50;
-
-/** Whether one sell size is legal, and if not, why. TWO independent limits, reported separately because
- *  they call for different actions: HOLDINGS cannot change this turn, while the POOL CAP moves as other
- *  players buy out of the pool -- so a player who knows the reason knows to wait.
- *  Holdings is checked first: a pool-cap message about shares you never had is less useful. */
-function sellOptionState(
-  percentage: number,
-  playerHoldingPercent: number,
-  bankPoolPercent: number,
-): { enabled: boolean; reason?: string } {
-  if (percentage > playerHoldingPercent) {
-    return {
-      enabled: false,
-      reason: `You hold ${playerHoldingPercent}% — not enough for a ${percentage}% bundle`,
-    };
-  }
-  const poolRoom = Math.max(0, BANK_POOL_CAP_PERCENT - bankPoolPercent);
-  if (percentage > poolRoom) {
-    return {
-      enabled: false,
-      reason:
-        `Bank Pool is at ${bankPoolPercent}% and caps at ${BANK_POOL_CAP_PERCENT}% — ` +
-        `only ${poolRoom}% more can be sold into it`,
-    };
-  }
-  return { enabled: true };
-}
+/* Phase 3 W1-A (AUD-03.03, U-39 / K-07): `BANK_POOL_CAP_PERCENT` and `sellOptionState` are gone. Each size's verdict is
+   the sale authority's (`saleBlockFor` -> `stockSaleRefusal`), whose pool ceiling is five physical certificates
+   (#1670) -- the 50-point copy here refused the Level Playing Field's legal fifth Pool certificate. */
 
 /* Design note #682: THE CONSEQUENCE, UNDER THE BUTTON THAT CAUSES IT.
 
@@ -3486,11 +3470,7 @@ function selfRowTint(seat: string | null): React.CSSProperties {
   };
 }
 
-/** DA-6 (D-52): the IPO percentage held back for the C&A's buyer under the Delayed Auction, or 0. */
-function reservedIpoPercent(company: { reserved_certificate?: { percentage: number } | null }): number {
-  const reserved = Number(company.reserved_certificate?.percentage ?? 0);
-  return Number.isFinite(reserved) && reserved > 0 ? reserved : 0;
-}
+/* Phase 3 W1-A: `reservedIpoPercent` went to the authority's own `reservedPercentOf` (D-52). */
 
 const styles: Record<string, React.CSSProperties> = {
   /* Design note #8: the corporation roster.

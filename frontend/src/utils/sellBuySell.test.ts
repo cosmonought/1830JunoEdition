@@ -146,7 +146,7 @@ describe("Sell-Buy-Sell: the stages of a turn", () => {
 });
 
 describe("the shell walks the stages (design notes #1443/#1444)", () => {
-  const { readStripped, readShell } = require("./sourceScan") as typeof import("./sourceScan");
+  const { readStripped, readShell, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
   const app = readShell();
   const bar = readStripped("panels/ContextualActionBar.tsx");
 
@@ -169,9 +169,13 @@ describe("the shell walks the stages (design notes #1443/#1444)", () => {
     expect(bar).not.toContain('{autoBuy.armed ? "Auto-Buy: On" : "Auto-Buy"}');
   });
 
-  it("the panel greys the other stage's controls with the way forward", () => {
-    expect(app).toContain("Selling comes first. Press Pass on the action bar when you are done selling to move on to buying.");
-    expect(app).toContain("You have moved on to buying. Buy a share (or Pass) — you can sell again after a purchase.");
+  it("Phase 3 W1-A (S-4): the panel no longer refuses by stage -- the server walks the stages on the Pass and refuses neither", () => {
+    /* The two shell-only stage refusals were stricter than the engine (AUD-03.12): a buy in the Sell stage and a
+       sale in the Buy stage are both accepted by ingress and the reducer. The panel now asks the stock authority. */
+    expect(app).not.toContain("Selling comes first. Press Pass on the action bar when you are done selling to move on to buying.");
+    expect(app).not.toContain("You have moved on to buying. Buy a share (or Pass) — you can sell again after a purchase.");
+    expect(sliceBetween(app, "const purchaseBlockFor = useCallback(", "const saleBlockFor = useCallback(")).toContain("stockPurchaseRefusal({");
+    expect(sliceBetween(app, "const saleBlockFor = useCallback(", "const [marketPeek, setMarketPeek]")).toContain("stockSaleRefusal({");
   });
 
   it("Auto-Buy walks the stages and arming one automation disarms the other", () => {

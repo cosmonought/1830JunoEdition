@@ -7,7 +7,7 @@
 // component is the room's entire canvas rather than a tray bolted onto the layout.
 //
 // Six private-company cards own the full width and ARE the interface -- each carries its own action
-// (Buy for the lowest offer, Place Bid otherwise, Raise/Drop-out under a live mini-auction), buttons
+// (Buy for the lowest offer, Place Bid / Raise Bid otherwise, Raise/Pass under a live mini-auction), buttons
 // bottom-anchored so they align. Pass and Undo are turn-level and live in the single app-wide
 // `ContextualActionBar` (design note #31 there).
 //
@@ -22,11 +22,20 @@ import { seatColor } from "../utils/playerLabels";
 import { washedPlayerSurface } from "../styles/palette";
 import {
   auctionFunds,
-  bidRejectionReason,
   minimumBidFor,
   MIN_BID_INCREMENT,
   type PlayerAuctionFunds,
 } from "../gameEngine/auctionEscrow";
+// Phase 3 W1-B: every card-face verdict is the auction authority's (`auctionRefusal`), asked through one view module.
+import {
+  contestPassTooltip,
+  contestProgressSentence,
+  contestStanding,
+  dashboardBidRefusal,
+  dashboardBuyRefusal,
+  dashboardContestPassRefusal,
+  dashboardContestRaiseRefusal,
+} from "../utils/auctionDashboardView";
 import {
   CARD_ACCENT,
   CARD_BORDER,
@@ -309,6 +318,8 @@ export function WaterfallAuctionDashboard({
               <PrivateCard
                 key={entry.priv.private_id}
                 priv={entry.priv}
+                gameState={gameState}
+                waterfallState={waterfallState}
                 playerLabel={playerLabel}
                 seatColorFor={seatColorFor}
                 connectedWalletAddress={connectedWalletAddress}
@@ -385,6 +396,8 @@ function PrivateCard({
   playerLabel,
   seatColorFor,
   priv,
+  gameState,
+  waterfallState,
   connectedWalletAddress,
   miniAuction,
   sessionReady,
@@ -398,6 +411,9 @@ function PrivateCard({
   onMiniAuctionPass,
 }: {
   priv: WaterfallPrivateStatus;
+  /** Phase 3 W1-B: the board and atom the auction authority judges, so the card asks it rather than a copy. */
+  gameState: GameStateResponse | null;
+  waterfallState: WaterfallStateResponse | null;
   connectedWalletAddress: string | null | undefined;
   /** Design note #31: the card renders bidder names, so it needs the same
    *  resolver the dashboard around it uses. */
@@ -469,40 +485,38 @@ function PrivateCard({
 
   const canBuyOutright = priv.is_lowest_offered;
 
-  /* Design note #315: THE AFFORDABILITY GATE. Both money gates in one expression, so `disabled` and the
-     tooltip are driven by one thing.
-     RAISE subtracts this seat's standing bid -- that money is already escrowed against this private, so a
-     raise funds only the increment; charging the full figure would stop a player defending a bid they have
-     already paid for. BUYING OUTRIGHT is gated on AVAILABLE cash: escrow elsewhere is refundable in
-     principle but is not refunded YET, and `WaterfallBuyLowest` settles immediately. */
+  /* Design note #315: THIS SEAT'S OWN STANDING BID ON THIS PRIVATE. That money is already committed here, so a
+     raise funds only the increase -- the authority makes the same allowance (`standingBidOn` as `raisingFrom`).
+     Kept for the DISPLAY (the hint and the tooltip); no verdict below is computed from it.
+     Phase 3 W1-B (AUD-02.01, K-02 / U-26): design note #384's "one bid per private company" gate is GONE. It was a
+     rule the engine does not have -- owner ruling D-16 makes raising one's own standing bid legal outside a contest
+     too -- so the button refused a bid the board would have taken. */
   const ownRaiseEscrow = fundsSeat
     ? priv.bids
         .filter((bid) => bid.bidder === fundsSeat)
         .reduce((sum, bid) => sum + (Number(bid.bid_amount) || 0), 0)
     : 0;
-  /* Design note #384: ONE BID PER PRIVATE, in the waterfall proper. Players could spam bids, each
-     escrowing more cash against the same certificate -- `ownRaiseEscrow` only needs to SUM because a seat
-     could have several. A second bid where you already lead is bidding against yourself; a second bid
-     behind someone else is the move that should be a raise.
-     SO THE GATE IS "HAVE I BID HERE", not "am I winning here" -- same mistake, same refusal.
-     THE MINI-AUCTION LIFTS IT, which is the point of the exception: raising repeatedly is how a contest is
-     fought, and gating that would make a triggered auction unwinnable by whoever opened it.
-     `ownRaiseEscrow > 0` rather than a second scan of `priv.bids` -- deriving the same fact twice is how
-     two answers start to disagree. */
-  const alreadyBidHere = !isCompetingInMiniAuction && ownRaiseEscrow > 0;
-  const repeatBidReason = alreadyBidHere
-    ? `You already have a $${ownRaiseEscrow} bid on ${priv.name}. One bid per private company — if someone outbids you, a mini-auction opens and you can raise there.`
-    : null;
+  const raisingOwnBid = !isCompetingInMiniAuction && ownRaiseEscrow > 0;
+  const contestPassers =
+    isCompetingInMiniAuction && miniAuction ? contestStanding(miniAuction).passedSinceRaise : [];
 
-  const bidReason = repeatBidReason ?? bidRejectionReason(funds, bidAmount, minimumBid);
-  const raiseReason = bidRejectionReason(funds, raiseAmount, minimumRaise, ownRaiseEscrow);
-  const buyPrice = Number(priv.face_value) || 0;
-  const buyReason =
-    funds && buyPrice > funds.available
-      ? funds.escrowed > 0
-        ? `Only $${funds.available} available — $${funds.escrowed} of your $${funds.total} is escrowed in standing bids.`
-        : `Only $${funds.available} available.`
-      : null;
+  /* ==================================================================
+      PHASE 3 W1-B: ONE AUTHORITY FOR EVERY CONTROL ON THE CARD (AUD-02.01, AUD-02.03, P3-N005)
+     ==================================================================
+     Each verdict is `auctionRefusal`'s -- the reducer's and ingress's one entry point -- so the Delayed Auction's
+     acquisition-solvency refusal (DA-5) shows BEFORE the click, and no Bid/Buy/Raise is drawn enabled while the
+     board would refuse it. The authority judges the atom's cursor, so it is asked only on this seat's own turn;
+     on anyone else's turn the control is greyed with the turn sentence. During a contest the sibling cards are
+     greyed with the contest's own sentence (the same one the authority refuses a main-sequence action with). */
+  const contestHold =
+    miniAuction && !isCompetingInMiniAuction ? dashboardBuyRefusal(gameState, waterfallState) : null;
+  const notYourTurn = contestHold ?? "Not your turn yet.";
+  const buyReason = isMyMainTurn ? dashboardBuyRefusal(gameState, waterfallState) : null;
+  const bidReason = isMyMainTurn
+    ? dashboardBidRefusal(gameState, waterfallState, priv.private_id, bidAmount)
+    : null;
+  const raiseReason = isMyMiniTurn ? dashboardContestRaiseRefusal(gameState, waterfallState, raiseAmount) : null;
+  const contestPassReason = isMyMiniTurn ? dashboardContestPassRefusal(gameState, waterfallState) : null;
 
   return (
     <div
@@ -696,6 +710,9 @@ function PrivateCard({
             sortedBids.map((bid) => {
               const isLeader = isCompetingInMiniAuction && miniAuction?.high_bidder === bid.bidder;
               const isTurn = isCompetingInMiniAuction && miniAuction?.current_turn === bid.bidder;
+              /* Phase 3 W1-B (AUD-02.02): the bidder list under §1.2.2. Nobody leaves a contest by passing, so every
+                 bidder stays listed with the bid standing; those who have passed since the last raise say so. */
+              const passedSinceRaise = contestPassers.includes(bid.bidder);
               /* ==================================================================
                   DESIGN NOTE 1369: A BID IS A SEAT, AND IT WEARS THE SEAT'S COLOUR
                  ==================================================================
@@ -725,6 +742,14 @@ function PrivateCard({
                   <span style={styles.bidRowName}>
                     {nameFor(bid.bidder, playerLabel, 6, 4)}
                     {isTurn && <span style={styles.youBadge}>TURN</span>}
+                    {passedSinceRaise && (
+                      <span
+                        style={styles.passedBadge}
+                        title={`${nameFor(bid.bidder, playerLabel)} has passed since the last raise — still in the contest, bid standing.`}
+                      >
+                        PASSED
+                      </span>
+                    )}
                     {/* Design note #321: A STAR, NOT A WORD. #302 was right about WHO it belongs on and wrong about the
                        shape: "LEADING" is seven characters saying what the largest number in the column already says, and it
                        sat next to "TURN", so the busiest row carried two shouted words competing for one glance.
@@ -765,10 +790,15 @@ function PrivateCard({
                 {" \u00b7 min raise "}
                 ${minimumRaise}
               </span>
+              {/* Phase 3 W1-B (AUD-02.03): how close the contest is to ending, from the atom's own
+                  `passes_since_raise` -- the count §1.2.2 ends a contest on, which had no reader. */}
+              <span style={styles.cardActionsHint} data-testid={`contest-progress-${priv.private_id}`}>
+                {contestProgressSentence(miniAuction, nameFor(miniAuction.high_bidder, playerLabel, 6, 4))}
+              </span>
 
-              {/* Design note #27: input, Raise and Drop Out on ONE line. Three stacked blocks with a hint between them
+              {/* Design note #27: input, Raise and Pass on ONE line. Three stacked blocks with a hint between them
                  read as three unrelated decisions and cost four rows in a card that has to fit six across. They are one
-                 decision -- how much, or not at all. */}
+                 decision -- how much, or not this time. */}
               <div style={styles.inlineActionRow}>
                 <input
                   type="number"
@@ -792,7 +822,7 @@ function PrivateCard({
                   onClick={() => onMiniAuctionRaise(raiseAmount)}
                   disabled={!sessionReady || !isMyMiniTurn || raiseReason !== null}
                   title={
-                    raiseReason ??
+                    (isMyMiniTurn ? raiseReason : notYourTurn) ??
                     (ownRaiseEscrow > 0
                       ? `Raise your bid in this mini-auction. $${ownRaiseEscrow} of this is already escrowed, so only the increase is charged against your available cash.`
                       : "Raise your bid in this mini-auction.")
@@ -800,17 +830,23 @@ function PrivateCard({
                 >
                   Raise
                 </button>
+                {/* Phase 3 W1-B (AUD-02.02, K-15): "Drop out … refunded in full" described the old elimination rule.
+                    §1.2.2 / design note #1581: a pass is counted, the passer STAYS in the contest with the bid
+                    standing, and may raise again if the contest goes on. The control says so. */}
                 <button
                   type="button"
                   style={{
-                    ...styles.inlineDropButton,
-                    ...(!sessionReady || !isMyMiniTurn ? styles.controlDisabled : {}),
+                    ...styles.inlinePassButton,
+                    ...(!sessionReady || !isMyMiniTurn || contestPassReason !== null ? styles.controlDisabled : {}),
                   }}
                   onClick={onMiniAuctionPass}
-                  disabled={!sessionReady || !isMyMiniTurn}
-                  title="Drop out of this mini-auction. Your escrowed bid is refunded in full."
+                  disabled={!sessionReady || !isMyMiniTurn || contestPassReason !== null}
+                  title={
+                    (isMyMiniTurn ? contestPassReason : notYourTurn) ??
+                    contestPassTooltip(miniAuction, ownRaiseEscrow, nameFor(miniAuction.high_bidder, playerLabel, 6, 4))
+                  }
                 >
-                  Drop out
+                  Pass
                 </button>
               </div>
               {!isMyMiniTurn && (
@@ -832,7 +868,7 @@ function PrivateCard({
                 }}
                 onClick={onBuyLowest}
                 disabled={!sessionReady || !isMyMainTurn || buyReason !== null}
-                title={buyReason ?? "Buys this company for face value."}
+                title={(isMyMainTurn ? buyReason : notYourTurn) ?? "Buys this company for face value."}
               >
                 Buy {priv.name} &mdash; ${priv.face_value}
               </button>
@@ -841,29 +877,28 @@ function PrivateCard({
                   ? buyReason
                   : isMyMainTurn
                     ? "This is the lowest-offered private, so it is bought outright rather than bid on."
-                    : "Not your turn yet."}
+                    : notYourTurn}
               </span>
             </>
           ) : (
-            /* Every other still-unowned private takes bids. */
+            /* Every other still-unowned private takes bids -- including a raise of this seat's own standing bid
+               (D-16), which the authority judges on the increase alone. */
             <>
               <span style={styles.cardActionsTitle}>
-                {alreadyBidHere ? "Your bid stands" : "Place a bid"}
+                {raisingOwnBid ? "Raise your bid" : "Place a bid"}
               </span>
               <div style={styles.bidRow}>
                 <input
                   type="number"
                   style={{
                     ...styles.numberInput,
-                    ...(!sessionReady || !isMyMainTurn || alreadyBidHere ? styles.controlDisabled : {}),
+                    ...(!sessionReady || !isMyMainTurn ? styles.controlDisabled : {}),
                   }}
                   min={minimumBid}
                   step={MIN_BID_INCREMENT}
                   value={bidAmount}
                   onChange={(e) => setBidAmount(Number(e.target.value))}
-                  // Design note #384: the FIELD goes too, not just the button. A live input above a dead button invites the
-                  // player to type a figure and then discover it cannot be sent.
-                  disabled={!sessionReady || !isMyMainTurn || alreadyBidHere}
+                  disabled={!sessionReady || !isMyMainTurn}
                   aria-label={`Bid amount for ${priv.name}`}
                 />
                 <button
@@ -875,29 +910,23 @@ function PrivateCard({
                   onClick={() => onBidHigher(priv.private_id, bidAmount)}
                   disabled={!sessionReady || !isMyMainTurn || bidReason !== null}
                   title={
-                    bidReason ??
-                    "Minimum bid = current high bid + $5. Funds are escrowed until this private is sold or auctioned."
+                    (isMyMainTurn ? bidReason : notYourTurn) ??
+                    (raisingOwnBid
+                      ? `Raise your $${ownRaiseEscrow} bid. Your new bid replaces it, and only the increase is drawn from your free cash.`
+                      : "Minimum bid = current high bid + $5. Funds are escrowed until this private is sold or auctioned.")
                   }
                 >
-                  Place Bid
+                  {raisingOwnBid ? "Raise Bid" : "Place Bid"}
                 </button>
               </div>
               {/* Design note #22: the backend explanation moved onto the button's tooltip. Three lines of `waterfall.rs`
                  reference sat permanently at the bottom of every card -- read once, then pure noise occupying space six
                  cards needed. The number stays visible; the reasoning is one hover away. */}
               <span style={styles.cardActionsHint}>
-                {/* Design note #384: when the bid is refused for being a
-                    repeat, the hint says so instead of reciting a minimum
-                    the player is not allowed to meet. */}
-                {alreadyBidHere ? (
-                  `Bid $${ownRaiseEscrow}, escrowed until this private is sold or auctioned`
-                ) : (
-                  <>
-                    Min ${minimumBid}
-                    {funds && ` \u00b7 $${funds.available} available`}
-                    {!isMyMainTurn && " \u00b7 not your turn"}
-                  </>
-                )}
+                {raisingOwnBid && `Your $${ownRaiseEscrow} bid stands \u00b7 `}
+                Min ${minimumBid}
+                {funds && ` \u00b7 $${funds.available} available`}
+                {contestHold ? ` \u00b7 ${contestHold}` : !isMyMainTurn && " \u00b7 not your turn"}
               </span>
             </>
           )}
@@ -1486,7 +1515,8 @@ const styles: Record<string, React.CSSProperties> = {
     cursor: "pointer",
     whiteSpace: "nowrap",
   },
-  inlineDropButton: {
+  /* Phase 3 W1-B (K-15): a contest Pass is not a retreat -- the bid stands -- so it loses the drop-out's red. */
+  inlinePassButton: {
     flex: "0 0 auto",
     fontSize: FONT_SIZE.small,
     fontWeight: 700,
@@ -1494,9 +1524,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: RADIUS.control,
     borderWidth: "1px",
     borderStyle: "solid",
-    borderColor: "#a06a5a",
+    borderColor: CARD_BORDER,
     backgroundColor: "transparent",
-    color: "#8a4a38",
+    color: CARD_INK_MUTED,
     cursor: "pointer",
     whiteSpace: "nowrap",
   },
@@ -1605,6 +1635,16 @@ const styles: Record<string, React.CSSProperties> = {
     border: "1px solid #2f5a2f",
     borderRadius: RADIUS.control,
     padding: "1px 5px",
+  },
+  /* Phase 3 W1-B: a bidder who has passed since the last raise -- quiet, because nothing about them has ended. */
+  passedBadge: {
+    fontSize: FONT_SIZE.micro,
+    fontWeight: 700,
+    color: CARD_INK_MUTED,
+    border: `1px solid ${CARD_BORDER}`,
+    borderRadius: RADIUS.control,
+    padding: "1px 5px",
+    marginLeft: "4px",
   },
   /* Design note #302: red. It marks the player everyone else must outbid -- an alarm for the other bidders
      rather than a decoration for the leader.

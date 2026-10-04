@@ -192,7 +192,7 @@ const SECTION_ORDER: readonly { id: RulesSection; label: string; short: string }
  *  pointed at. The Rules Reference is the sole and final player-facing authority for this game's rules, and it
  *  says so once, on every page, beneath the content. */
 export const RULES_AUTHORITY_SENTENCE =
-  "This Rules Reference is the final word on Project 18XX's rules. Where a printed rulebook or any other guide differs, the game plays as written here.";
+  "This Rules Reference is the final word on Project 18XX's rules. Where a printed rulebook or any other guide differs, follow this page.";
 
 /** The player-visible name of a page. EVERY cross-page link label is generated through this, so a link and
  *  the strip it points at physically cannot come to disagree about what a page is called. */

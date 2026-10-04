@@ -53,7 +53,7 @@ export {};
 // BOARD and identical on every client; "is this viewer the one who must place it" is a different question
 // with its own home. A viewer test creeping back into the first is the regression to catch.
 
-const { readShell, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
+const { readShell, readStripped, sliceBetween } = require("./sourceScan") as typeof import("./sourceScan");
 
 const PROMPT = (() => {
   const fs = require("fs") as typeof import("fs");
@@ -73,6 +73,8 @@ const strip = (raw: string) =>
 
 const CODE = strip(PROMPT);
 const APP_CODE = readShell();
+/** Phase 3 W1-J: the viewer rule the prop now calls. */
+const RULE_CODE = readStripped("utils/homeStationAskView.ts");
 
 describe("a watcher is told what the table is waiting for", () => {
   it("names the person", () => {
@@ -128,13 +130,18 @@ describe("the default cannot regress an existing caller", () => {
     expect(CODE).toContain("viewerIsPresident = true");
   });
 
-  it("treats a hotseat screen as the President's", () => {
-    // `viewerAddress` is null with no room; the same reasoning `holding.isSelf` uses on the roster.
-    expect(APP_CODE).toContain("!viewerAddress ||");
+  it("no longer treats a screen without a seat as the President's (Phase 3 W1-J, A-2)", () => {
+    /* WAS "treats a hotseat screen as the President's", pinning a `!viewerAddress ||` arm on the prop. Hotseat is
+       gone (#578), and in a room a seatless watcher's id is "" -- falsy -- so that arm handed a watcher the
+       President's form. The rule now lives in `homeStationAskView.ts`, with no escape arm. */
+    const MOUNT = sliceBetween(APP_CODE, "<HomeStationPrompt", "liveryColor=");
+    expect(MOUNT).not.toContain("!viewerAddress");
+    expect(MOUNT).toContain("viewerIsPresident={homeStationViewerIsPresident({");
   });
 
   it("compares the seat rather than the corporation", () => {
-    expect(APP_CODE).toContain("pendingHomeToken.president === viewerAddress");
+    expect(APP_CODE).toContain("president: pendingHomeToken?.president,");
+    expect(RULE_CODE).toContain("return president === viewerAddress;");
   });
 });
 
@@ -167,7 +174,9 @@ describe("the watcher's arm can actually be reached (design note #788)", () => {
 
   it("still decides the ASK by the viewer, at the prop", () => {
     // The question did not disappear; it moved to where it can be answered without hiding the modal.
-    expect(APP_CODE).toContain("pendingHomeToken.president === viewerAddress");
+    // Phase 3 W1-J: the prop calls the one rule, which compares the named president with this viewer.
+    expect(APP_CODE).toContain("viewerIsPresident={homeStationViewerIsPresident({");
+    expect(RULE_CODE).toContain("return president === viewerAddress;");
   });
 
   it("covers the screen while it waits", () => {

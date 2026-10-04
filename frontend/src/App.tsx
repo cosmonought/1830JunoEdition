@@ -665,6 +665,7 @@ import GameOutroOverlay from "./components/GameOutroOverlay";
 import { CEREMONY_SOUNDS, ceremonySoundFor } from "./utils/ceremonySounds";
 import AuctionPromptModal from "./components/AuctionPromptModal";
 import HomeStationPrompt from "./components/HomeStationPrompt";
+import { homeStationViewerIsPresident } from "./utils/homeStationAskView";
 
 // Step 4: Firebase Real-Time Integration -- see design notes #1 and #22.
 import Lobby from "./components/Lobby";
@@ -13543,14 +13544,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               truncateAddress(pendingHomeToken.president)
             : null
         }
-        /* Design note #783: the whole table sees the card; only the President sees the ask. `viewerAddress`
-           is null in hotseat, where one screen IS the president's, so the default there is the actionable
-           form -- the same reasoning `holding.isSelf` uses on the roster. */
-        viewerIsPresident={
-          !pendingHomeToken?.president ||
-          !viewerAddress ||
-          pendingHomeToken.president === viewerAddress
-        }
+        /* Design note #783: the whole table sees the card; only the President sees the ask.
+           Phase 3 W1-J (A-2): no escape arm. The old `!viewerAddress` arm served hotseat (gone, #578) and, in a
+           room, matched a seatless watcher -- whose id is "" -- so a watcher was handed the President's form.
+           `homeStationAskView.ts` holds the one rule: not spectating, and this viewer IS the named president. */
+        viewerIsPresident={homeStationViewerIsPresident({
+          spectator,
+          president: pendingHomeToken?.president,
+          viewerAddress,
+        })}
         liveryColor={
           pendingHomeToken ? stationTickerColor(pendingHomeToken.companyId) : "#0f0f0f"
         }

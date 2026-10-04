@@ -227,8 +227,12 @@ describe("the shell sends one action (design note #968)", () => {
   });
 
   it("sends nothing when nothing survives the marking", () => {
-    /* An empty `routes` array would advance the cursor past Routes for a turn that ran nothing. */
-    expect(block).toContain("if (turnRoutes.length > 0)");
+    /* An empty `routes` array would advance the cursor past Routes for a turn that ran nothing.
+       Phase 3 W1-G (A-17): the guard was `if (turnRoutes.length > 0)` around the dispatch, which still let the
+       handler fall through to `ran: true` and Dividends with nothing sent. It is an early return now, ahead of the
+       dispatch AND the marking -- the same property, and the half it was missing. */
+    expect(block).toContain("if (turnRoutes.length === 0) {\n      setRouteFeedback(NOTHING_SENT_REASON);\n      return;\n    }");
+    expect(block).not.toContain("if (turnRoutes.length > 0)");
   });
 });
 

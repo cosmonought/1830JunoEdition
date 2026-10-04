@@ -176,7 +176,10 @@ describe("the preview derives once and everybody reads it (design note #886)", (
        `stationAnchorAuthority`, the module the reducer asks. A `planTokenUpgrade(` appearing here again would be
        the second derivation #879 warned about, back under a new name. */
     expect((APP.match(/planTokenUpgrade\(/g) ?? []).length).toBe(0);
-    expect((APP.match(/stationLegalFacings\(/g) ?? []).length).toBe(2);
+    /* Phase 3 W1-E: THREE askers of the legality question, all the same authority -- the rotation list, the
+       thumbnail's facing, and now the SEED (`onSelectCandidate` opens on the lowest facing it keeps, which is the
+       thumbnail's facing). A fourth would be a new legality path and is what this count still guards. */
+    expect((APP.match(/stationLegalFacings\(/g) ?? []).length).toBe(3);
     expect((APP.match(/stationAnchorPlan\(/g) ?? []).length).toBe(2);
   });
 });

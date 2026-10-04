@@ -38,7 +38,7 @@ import HexGridRenderer, {
   type StationPreviewMarker,
 } from "./components/HexGridRenderer";
 import { assignRouteSet } from "./gameEngine/routeAutoTrace";
-import { evaluateRouteSet } from "./gameEngine/routeAuthority"; // #1554: the authority's own preview
+import { routeSetRefusal } from "./gameEngine/routeAuthority"; // #1554 / W1-G (K-11): the authority's own pre-dispatch question
 import {
   cityEnteredFrom,
   reachableNetwork,
@@ -613,7 +613,11 @@ import {
 } from "./utils/fleetLossNotice";
 import { operatingCorporationId } from "./gameEngine/dividendGate";
 // Design note #1683 (Stage 10.1): the one `LayTile` authority the grid asks, and the one board geometry it is handed.
-import { layTileRefusal } from "./gameEngine/layTileAuthority";
+import { layTileRefusal, layTimingRefusal } from "./gameEngine/layTileAuthority";
+// Phase 3 W1-E: the ring's step and second-lay sentences are the lay authority's; the previewed lay is judged by it.
+import { ordinaryLayTakenRefusal } from "./gameEngine/privateLayClaim";
+import { ringConfirmState, ringLayPreviewRefusal, seedRingFacing } from "./utils/tileRingView";
+import { canonicalTileName } from "./components/hexTileCatalog";
 import { sandboxReplayProviders } from "./gameEngine/replayProviders";
 import { layAuthorityContext, sandboxActionContext } from "./gameEngine/actionContext"; // #1690 (Stage 10.3)
 import { cheapestPurchasableTrain } from "./gameEngine/trainAvailability";
@@ -701,7 +705,7 @@ import MainTabBar, {
   surfaceTabFor,
   type MainTab,
 } from "./components/MainTabBar";
-import { chromeZoomFor, styles } from "./styles/appStyles";
+import { chromeZoomFor, hexIndicatorPosition, styles } from "./styles/appStyles";
 import { ModalLayerHost } from "./components/ModalPortal";
 import { PHASE_SHIFT_PULSE_CSS, TURN_PULSE_KEYFRAMES_CSS } from "./styles/animations";
 import {
@@ -763,7 +767,7 @@ import { editRouteDraft } from "./utils/routeDraftEdit";
 import { isRouteBuilderArmed, selectActingPresenceEntry } from "./utils/routeOverlaySource";
 // Design note #1024: the splice is a rule about an array, so it lives where it can be tested as one.
 import { stopsRemovedByTruncating, truncateRouteAtHex } from "./utils/routeTruncate";
-import { runnableDrafts, runTrainsRefusal } from "./utils/runTrainsRules";
+import { droppedDraftsNote, NOTHING_SENT_REASON, runnableDrafts, runTrainsRefusal } from "./utils/runTrainsRules"; // W1-G: + dropped / nothing-sent
 import { errandLaysBonus } from "./gameEngine/bonusLay";
 import { stepsFor } from "./gameEngine/operatingCursor";
 // Design note #673: one computation of what a previewed lay costs, read by the
@@ -3812,7 +3816,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         }
         const laidHere = mapGridRef.current.tiles.find((tile) => tile.q === state.q && tile.r === state.r);
         if (laidHere && isMyTurnRef.current && isUpgradeDeadEnd(laidHere.tile_id)) {
-          showActionToast(`Tile #${laidHere.tile_id} has no upgrade in this game — ${state.hexLabel} stays as it is.`);
+          // Phase 3 W1-E (AUD-05.01 U-38): the tile's canonical name (#1630), never an errata-voided number.
+          showActionToast(`Tile ${canonicalTileName(laidHere.tile_id)} has no upgrade in this game — ${state.hexLabel} stays as it is.`);
         }
         setRadialSelector(null);
         setPreviewTile(null);
@@ -10147,89 +10152,115 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       }));
 
     /* ==================================================================
+        PHASE 3 W1-G (AUD-04.02 A-17): NOTHING SENT IS NOTHING RUN
+       ==================================================================
+       Every runnable draft can still fail #1020's two-point filter, and this handler then skipped the dispatch and
+       went on to mark the corporation as having RUN and to step to Dividends -- a run with no message behind it,
+       which `skippedRoutes` then read as a real one. Now the step stays at Run Trains and says why. */
+    if (turnRoutes.length === 0) {
+      setRouteFeedback(NOTHING_SENT_REASON);
+      return;
+    }
+
+    /* ==================================================================
         DESIGN NOTE 1554: THE AUTHORITY IS ASKED BEFORE THE DISPATCH, AND ITS SENTENCE IS SHOWN
        ==================================================================
        Batch 6 moved route legality into the reducer (`routeAuthority.ts`, #1550). The reducer's answer is a
        refusal by identity, and in a room the server's `refused` frame lands in the room-error banner -- true,
        but not where the player is looking. So the same evaluator is asked here, on the same board, and its
        reason goes to the route panel instead. A PREVIEW, NEVER A VERDICT: the reducer asks again with the
-       authoritative state, and a draft this passes can still be refused there. */
+       authoritative state, and a draft this passes can still be refused there.
+       Phase 3 W1-G (AUD-07.01 K-11): THE WHOLE QUESTION, NOT ITS GEOMETRY HALF. This asked `evaluateRouteSet`,
+       which is only the set's legality; the reducer and ingress ask `routeSetRefusal` -- one run per turn, the
+       Run Trains step, that evaluation, and the demonstrated-maximum rule (#1556). So a hand-drawn set below the
+       maximum the search can show was offered here and refused there. It is the same composition now, on the
+       message about to be sent, and its sentence ("a legal combination worth $N is available") is shown beside
+       the routes before anything moves. */
     const previewState = sandboxStateRef.current; // #1017: the ref, so `gameState` stays out of the deps.
-    if (turnRoutes.length > 0 && previewState && actingProtocolId !== null) {
-      const preview = evaluateRouteSet({
-        state: previewState,
+    if (previewState && actingProtocolId !== null) {
+      const refusal = routeSetRefusal(
+        previewState,
+        {
+          protocol_id: actingProtocolId,
+          routes: turnRoutes.map((entry) => entry.path),
+          trains: turnRoutes.map((entry) => entry.train),
+          train_indices: turnRoutes.map((entry) => entry.trainIndex),
+        },
         mapGrid,
-        era: tileEraFor(previewState),
-        companyId: actingProtocolId,
-        routes: turnRoutes.map((entry) => entry.path),
-        trainIndices: turnRoutes.map((entry) => entry.trainIndex),
-        trains: turnRoutes.map((entry) => entry.train),
-      });
-      if (preview.kind === "refused") {
-        setRouteFeedback(preview.reason);
+        tileEraFor(previewState),
+      );
+      if (refusal !== null) {
+        setRouteFeedback(refusal);
         return;
       }
     }
 
-    if (turnRoutes.length > 0) {
-      await runGameplayAction("RunMultipleRoutes", {
-        RunMultipleRoutes: {
-          game_id: gameId,
-          protocol_id: actingProtocolId,
-          routes: turnRoutes.map((entry) => entry.path),
-          /* ==================================================================
-             DESIGN NOTE 1020: WHICH TRAIN RAN WHICH ROUTE, ON THE WIRE
-             ==================================================================
-             REPORTED, the other half: the log "incorrectly labeled it as the D-train's run".
+    /* Phase 3 W1-G: NO DRAFT DISAPPEARS SILENTLY. #275 runs the good routes without the bad ones; the ones left
+       out are named (the button's tooltip already said so before the press, and this says it after, where the
+       player is looking once the step moves on). */
+    const droppedNote = droppedDraftsNote(
+      trainDrafts,
+      trainDrafts.filter((draft) => turnRoutes.some((entry) => entry.trainIndex === draft.trainIndex)),
+    );
 
-             IT WAS NOT A MISLABEL SO MUCH AS A GUESS. `actionLog` had no way to know which train ran a given
-             route, so it named the corporation's LARGEST OWNED train and attached that -- see its own note.
-             With one route and a 5-train and a D-train in the fleet, the sentence necessarily said "with a
-             D-train" whichever train had actually run.
+    await runGameplayAction("RunMultipleRoutes", {
+      RunMultipleRoutes: {
+        game_id: gameId,
+        protocol_id: actingProtocolId,
+        routes: turnRoutes.map((entry) => entry.path),
+        /* ==================================================================
+           DESIGN NOTE 1020: WHICH TRAIN RAN WHICH ROUTE, ON THE WIRE
+           ==================================================================
+           REPORTED, the other half: the log "incorrectly labeled it as the D-train's run".
 
-             A PARALLEL ARRAY RATHER THAN A NEW ROUTE SHAPE, deliberately. Every action already in a saved log
-             carries `routes` as an array of paths, and this game is rebuilt by replaying that log -- changing
-             the element type would make every historical entry unreadable. `trains[i]` describes `routes[i]`,
-             is optional, and #232's rule covers its absence: a log that does not say which train ran is a log
-             that does not say, and the narration falls back to what it did before. */
-          trains: turnRoutes.map((entry) => entry.train),
-          // Design note #1031: the same list, identifying the FLEET SLOT rather than the model, so a
-          // corporation with two 5-trains can still be told which one earned what.
-          train_indices: turnRoutes.map((entry) => entry.trainIndex),
-          /* ==================================================================
-              DESIGN NOTE 1051: THE DIE IS ROLLED HERE, ONCE, AND THEN IT IS HISTORY
-             ==================================================================
-             THIS IS THE ONLY PLACE IN THE APP THAT DRAWS. The reducer cannot -- it replays on every client --
-             and the old hash could not, which is why it was predictable. One dispatch, one draw, written into
-             the message so every other client reads the number rather than computing one.
-             AND IT IS NOT ALWAYS A DRAW. `seedAlreadyRolled` scans the RAW log, including the entries an undo
-             has killed, for this turn's earlier roll. Found means the player has run, undone and come back:
-             they get the face they already saw, which is the requirement this feature was specified with --
-             "Undoing it should not change their roll, otherwise players would just slot machine their way to
-             +20%." Absent means this turn has genuinely not rolled yet.
-             `sandboxLogRef`, NOT the effective history. Every other reader in this file wants
-             `effectiveActions` and would be wrong here: the entry being looked for is BY DEFINITION one an
-             undo has struck out. See `turnSeed.ts` #1051 -- a tidy-up that "corrects" this to the effective
-             log reinstates the slot machine and nothing fails. */
-          revenue_seed: (() => {
-            const key = turnSeedKey(
-              gameState?.macro_round_number ?? 0,
-              gameState?.sub_round_index ?? 0,
-              actingProtocolId,
-            );
-            return seedAlreadyRolled(sandboxLogRef.current, key) ?? randomTurnSeed();
-          })(),
-          revenue_turn: turnSeedKey(
+           IT WAS NOT A MISLABEL SO MUCH AS A GUESS. `actionLog` had no way to know which train ran a given
+           route, so it named the corporation's LARGEST OWNED train and attached that -- see its own note.
+           With one route and a 5-train and a D-train in the fleet, the sentence necessarily said "with a
+           D-train" whichever train had actually run.
+
+           A PARALLEL ARRAY RATHER THAN A NEW ROUTE SHAPE, deliberately. Every action already in a saved log
+           carries `routes` as an array of paths, and this game is rebuilt by replaying that log -- changing
+           the element type would make every historical entry unreadable. `trains[i]` describes `routes[i]`,
+           is optional, and #232's rule covers its absence: a log that does not say which train ran is a log
+           that does not say, and the narration falls back to what it did before. */
+        trains: turnRoutes.map((entry) => entry.train),
+        // Design note #1031: the same list, identifying the FLEET SLOT rather than the model, so a
+        // corporation with two 5-trains can still be told which one earned what.
+        train_indices: turnRoutes.map((entry) => entry.trainIndex),
+        /* ==================================================================
+            DESIGN NOTE 1051: THE DIE IS ROLLED HERE, ONCE, AND THEN IT IS HISTORY
+           ==================================================================
+           THIS IS THE ONLY PLACE IN THE APP THAT DRAWS. The reducer cannot -- it replays on every client --
+           and the old hash could not, which is why it was predictable. One dispatch, one draw, written into
+           the message so every other client reads the number rather than computing one.
+           AND IT IS NOT ALWAYS A DRAW. `seedAlreadyRolled` scans the RAW log, including the entries an undo
+           has killed, for this turn's earlier roll. Found means the player has run, undone and come back:
+           they get the face they already saw, which is the requirement this feature was specified with --
+           "Undoing it should not change their roll, otherwise players would just slot machine their way to
+           +20%." Absent means this turn has genuinely not rolled yet.
+           `sandboxLogRef`, NOT the effective history. Every other reader in this file wants
+           `effectiveActions` and would be wrong here: the entry being looked for is BY DEFINITION one an
+           undo has struck out. See `turnSeed.ts` #1051 -- a tidy-up that "corrects" this to the effective
+           log reinstates the slot machine and nothing fails. */
+        revenue_seed: (() => {
+          const key = turnSeedKey(
             gameState?.macro_round_number ?? 0,
             gameState?.sub_round_index ?? 0,
             actingProtocolId,
-          ),
-          // Withhold at Routes; the pay-or-withhold decision belongs to the very next step.
-          // See docs/ai_architecture/routing_pathfinding.md - App.tsx #373
-          payout_strategy: "Withhold",
-        },
-      });
-    }
+          );
+          return seedAlreadyRolled(sandboxLogRef.current, key) ?? randomTurnSeed();
+        })(),
+        revenue_turn: turnSeedKey(
+          gameState?.macro_round_number ?? 0,
+          gameState?.sub_round_index ?? 0,
+          actingProtocolId,
+        ),
+        // Withhold at Routes; the pay-or-withhold decision belongs to the very next step.
+        // See docs/ai_architecture/routing_pathfinding.md - App.tsx #373
+        payout_strategy: "Withhold",
+      },
+    });
+    if (droppedNote !== null) showActionToast(droppedNote);
 
     /* ==================================================================
         DESIGN NOTE 917: THE DIVIDEND PAYS WHAT WAS BANKED, NOT WHAT WAS PLANNED
@@ -10345,7 +10376,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        callback on every poll for a read it no longer makes. */
     /* Design note #1020: `routeDrafts` joins the deps because the payload reads it directly now. It is the
        state `trainDrafts` is already derived from, so this adds no rebuild the callback was not doing. */
-  }, [runGameplayAction, gameId, trainDrafts, routeDrafts, actingProtocolId, ownsAnyTrain, mapGrid]);
+  }, [runGameplayAction, gameId, trainDrafts, routeDrafts, actingProtocolId, ownsAnyTrain, mapGrid, showActionToast]);
 
   // revenue_amount reads the same field the panel renders, so the figure on screen and the figure in the message cannot differ. Read inside the callback for declaration order.
   // See docs/ai_architecture/routing_pathfinding.md - App.tsx #198
@@ -10706,14 +10737,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           })
         : { allowed: isTokenableHex(mapGrid, q, r), reason: null };
 
+      /* Phase 3 W1-F (P3-N012): THE REFUSAL IS SAID WHERE THE CLICK WAS. It was written to `routeFeedback`, the slot
+         only the Routes step's chip renders (`RouteChipDetail`), so a refused city click at Tokens explained itself
+         nowhere the player could see. The general action toast is the shell's existing visible surface (implementation
+         default, plan §7.1); the sentence is still `evaluateStationPlacement`'s own. Routes' slot is no longer touched. */
       if (!placement.allowed) {
-        setRouteFeedback(
+        showActionToast(
           placement.reason ??
             `${hexLabel} has no city to place a token in. Pick a city hex, or lay a city tile there first.`,
         );
         return;
       }
-      setRouteFeedback(null);
       // Stage, do not place, so a click on another city re-aims. #453: the node travels with the stage.
       // See docs/ai_architecture/canvas_rendering.md - App.tsx #201
       setPendingToken({
@@ -10732,7 +10766,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         offsetY: nodeY,
       });
     },
-    [mapGrid, activeStationCompany, gameState],
+    [mapGrid, activeStationCompany, gameState, showActionToast],
   );
 
   /** The green check. THIS is where the token is placed and the treasury
@@ -11740,7 +11774,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (gameState?.current_round_type !== "OperatingRound") {
       return "Planning Mode: Tile lay disabled — track is laid in an Operating Round.";
     }
-    if (orSubPhase !== "Track") {
+    /* Phase 3 W1-E (P3-N010): THE STEP IS THE LAY AUTHORITY'S QUESTION FIRST. `layTimingRefusal` is what the reducer
+       answers a mistimed lay with on a pinned board, so the ring now says that sentence -- and accepts the pre-#1440
+       `BuyPrivate` cursor exactly where the authority does. The shell's own step test below survives only for a
+       LEGACY board, where the authority has no timing opinion and the shell has always offered the lay at Track. */
+    const layTiming = gameState ? layTimingRefusal(gameState, { protocol_id: actingProtocolId }) : null;
+    if (layTiming !== null) return `Planning Mode: Tile lay disabled — ${layTiming}`;
+    if (typeof gameState?.rules_engine_version !== "number" && orSubPhase !== "Track") {
       // Direction-aware: from Phase 3 the turn OPENS on BuyPrivate, so "past the Track step" was wrong in the commonest case.
       // See docs/ai_architecture/ui_shell_layout.md - App.tsx #440
       const order = OPERATING_SUB_PHASE_ORDER;
@@ -11757,12 +11797,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     }
     /* Design note #1697 (Stage 10.6, S6-6): the step is held on Track only for the C&SL's bonus lay -- the ordinary
        lay is spent, and the authority refuses a second one (`ordinaryLayTakenRefusal`). The C&SL's own errand is the
-       one lay left, so the picker stays open for it and for nothing else. */
-    if (
-      gameState?.ordinary_lay_taken === actingProtocolId &&
-      !errandLaysBonus(homeStationPlacement)
-    ) {
-      return "Planning Mode: Ordinary tile lay made — only the C&SL's bonus lay on B20 remains (use its Lay Track (B20) power), or advance.";
+       one lay left, so the picker stays open for it and for nothing else.
+       Phase 3 W1-E: ASKED OF `ordinaryLayTakenRefusal` ITSELF (an armed C&SL errand is the bonus claim it exempts),
+       and its sentence is the one shown; the shell adds only where the remaining lay is. */
+    const secondLay = gameState
+      ? ordinaryLayTakenRefusal(gameState, { protocol_id: actingProtocolId, bonus_lay: errandLaysBonus(homeStationPlacement) })
+      : null;
+    if (secondLay !== null) {
+      return `Planning Mode: Tile lay disabled — ${secondLay} Use its Lay Track (B20) power, or advance.`;
     }
     return null;
   }, [spectator, gameState, orSubPhase, viewerAddress, actingProtocolId, homeStationPlacement]);
@@ -11833,6 +11875,51 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (gameState === null) return Array.from(new Set(angles)).sort((a, b) => a - b);
     return stationLegalFacings(gameState, mapGrid, previewTile.q, previewTile.r, previewTile.tileId, angles, actingProtocolId);
   }, [radialCandidates, previewTile, mapGrid, gameState, actingProtocolId]);
+
+  /* ==================================================================
+      PHASE 3 W1-E (P3-N010 / P3-N011): THE PREVIEWED LAY IS JUDGED BY THE ONE LAY AUTHORITY
+     ==================================================================
+     The ring's Confirm asked whether a lay is allowed NOW (`canLayTileNow`) and whether the fee was short, and
+     never whether THIS lay would be accepted -- so a facing the station authority refuses, a hold, a private's
+     hex or a connectivity break was lit green and refused on click. This is the ONE question the ring now asks
+     about the lay itself: `layTileRefusal`, the composition the reducer and both grids ask, about the message
+     `handleConfirmRadialLay` would send (the same errand claim, power key and token map), on the table's rules
+     and route revision (`ringLayPreviewRefusal`). The fee sentence the ring used to build by hand is the
+     authority's `terrainAffordabilityRefusal` now -- JK halving included. No derivation of the landings here:
+     the preview already holds them (#886), and `derivePreviewLandings` keeps its pinned call sites. */
+  const ringLayRefusal = useMemo(() => {
+    if (!radialSelector || !previewTile || previewTile.committed || gameState === null || !canLayTileNow) return null;
+    const { q, r } = radialSelector;
+    const claimsErrand = errandClaimsLay(homeStationPlacement, q, r);
+    return ringLayPreviewRefusal(SHELL_PROVIDERS, gameState, mapGrid, {
+      gameId,
+      protocolId: actingProtocolId,
+      q,
+      r,
+      tileId: previewTile.tileId,
+      orientation: previewTile.orientation,
+      bonusLay: errandLaysBonus(homeStationPlacement) && claimsErrand,
+      abilityKey: claimsErrand
+        ? homeStationPlacement?.abilityKey ?? undefined
+        : jkLayArmed && isCoalRiverNeighbour(q, r) && jkTileRefusal(gameState, actingProtocolId, q, r) === null
+          ? JK_TILE_ABILITY_KEY
+          : undefined,
+      tokenCity: previewTile.tokenCity,
+      tokenCities: previewTile.tokenCities ?? [],
+    });
+  }, [radialSelector, previewTile, gameState, canLayTileNow, homeStationPlacement, mapGrid, gameId, actingProtocolId, jkLayArmed]);
+  /* Phase 3 W1-E: one answer for the ring's tick and its tooltip -- who may lay now, then the in-flight latch, then
+     the authority's verdict on this lay (`utils/tileRingView.ts`). */
+  const ringConfirm = useMemo(
+    () =>
+      ringConfirmState({
+        layDisabledReason: tileLayDisabledReason,
+        // A preview already sent (#1145's `committed` ghost) is a press in flight too, whatever the room's index says.
+        inFlight: actionInFlight || previewTile?.committed === true,
+        previewRefusal: ringLayRefusal,
+      }),
+    [tileLayDisabledReason, actionInFlight, previewTile?.committed, ringLayRefusal],
+  );
 
   /* ==================================================================
       DESIGN NOTE 874: LEAVING THE PICKER LEAVES THE POWER
@@ -12154,8 +12241,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
          facing (`legalRotations[0]`), so the marker on the thumbnail is the marker they then see on the board
          rather than a guess that changes under them.
          AND AN ILLEGAL CANDIDATE DRAWS NO MARKER, which is honest: if no facing of this tile can seat the
-         tokens, there is no destination to promise. The candidate itself is filtered out of the ring by the
-         same rule (#879 in `legalRotations`), so this is the belt to that braces. */
+         tokens, there is no destination to promise.
+         Phase 3 W1-E CORRECTION: this note used to add that "the candidate itself is filtered out of the ring
+         by the same rule (#879 in `legalRotations`)". It is not -- `legalRotations` narrows the facings of the
+         tile ALREADY previewed, and the ring still offers every candidate the board geometry produced. What
+         keeps such a candidate from being laid is the authority: its preview opens on the ring's own offer
+         (`seedRingFacing` has no legal facing to prefer) and Confirm is greyed with `ringLayRefusal`'s sentence. */
       /* Design note #1682 (Stage 10.1, S10-25): the same authority answer the rotation list is built from --
          the lowest facing `stationLegalFacings` keeps, and that facing's plan from `stationAnchorPlan`. */
       if (gameState === null) return [];
@@ -14626,10 +14717,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                           ? undefined
                           : CONTRACT_ADDRESS
                       }
+                      /* Phase 3 W1-F (AUD-05.02 A-7): A HOME-STATION ERRAND OWNS THE CLICK. `gameId` / `protocolId` are
+                         what let the renderer go on from `onHexClick` to open the tile picker; `queryClient` was
+                         already withheld for a station errand (#440/#444) and these two were not, so one click both
+                         staged the station and opened the ring. Withheld at render time on the same condition, so the
+                         click opens only the station ring. The tile errand (`private-tile`) still needs the picker. */
                       gameId={
                         !tileInspectorArmed ||
                         routeSelectMode ||
                         tokenTargetMode ||
+                        (homeStationPlacement !== null && homeStationPlacement.kind !== "private-tile") ||
                         previewRotateArmed
                           ? undefined
                           : gameId
@@ -14638,6 +14735,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                         !tileInspectorArmed ||
                         routeSelectMode ||
                         tokenTargetMode ||
+                        (homeStationPlacement !== null && homeStationPlacement.kind !== "private-tile") ||
                         previewRotateArmed
                           ? undefined
                           : actingProtocolId
@@ -14914,8 +15012,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         <div
           style={{
             ...styles.hexClickIndicator,
-            left: hexClickQuery.clientX + 16,
-            top: hexClickQuery.clientY + 16,
+            ...hexIndicatorPosition(hexClickQuery.clientX, hexClickQuery.clientY, uiScale), // W1-F (A-21)
           }}
         >
           Querying legal placements at {hexClickQuery.hexLabel}...
@@ -14926,8 +15023,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           style={{
             ...styles.hexClickIndicator,
             ...styles.hexClickIndicatorError,
-            left: hexClickQuery.clientX + 16,
-            top: hexClickQuery.clientY + 16,
+            ...hexIndicatorPosition(hexClickQuery.clientX, hexClickQuery.clientY, uiScale), // W1-F (A-21)
           }}
         >
           GetLegalTilePlacements failed: {hexClickQuery.message}
@@ -14945,8 +15041,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             style={{
               ...styles.hexClickIndicator,
               ...styles.hexClickIndicatorBlocked,
-              left: hexClickQuery.clientX + 16,
-              top: hexClickQuery.clientY + 16,
+              ...hexIndicatorPosition(hexClickQuery.clientX, hexClickQuery.clientY, uiScale), // W1-F (A-21)
             }}
           >
             🚫 {hexClickQuery.message}
@@ -15313,17 +15408,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              control that refuses on click but invites the click is Lobby.tsx #3's silent button in reverse.
              SAME FIGURE, SAME SENTENCE: `pendingLayCost.short` is what the handler refuses on, and the
              tooltip says what the log would have said. */
-          canConfirm={canLayTileNow && !pendingLayCost?.short}
-          confirmDisabledReason={
-            tileLayDisabledReason ??
-            (pendingLayCost?.short
-              ? `${activeCorporationContext?.ticker ?? "This corporation"} cannot afford the $${pendingLayCost.fee} terrain cost here — its treasury holds $${pendingLayCost.before ?? 0}.`
-              : undefined)
-          }
+          /* Phase 3 W1-E: #1382's property kept and widened. The tick is lit exactly when the lay authority would
+             accept THIS lay (`ringLayRefusal`, which carries #891's fee sentence as the authority words it), and
+             it is latched while the last press is still travelling. One answer feeds the button and its tooltip. */
+          canConfirm={ringConfirm.canConfirm}
+          confirmDisabledReason={ringConfirm.reason}
           provisional={radialSelector.provisional}
-          // The ring hands back that tile's FIRST legal orientation
-          // (design note #173), so the preview never opens on an angle the
-          // rotate cycle would then refuse to return to.
+          /* Phase 3 W1-E: the ring hands back that tile's first RAW placement orientation -- the first entry the
+             board geometry produced, which the station authority may refuse. The comment here used to call it the
+             first LEGAL one; it was not, so the preview is seeded below from `stationLegalFacings` (the facing
+             the thumbnail already draws and the rotate cycle returns to). */
           onSelectCandidate={(tileId, orientation) => {
             /* ==================================================================
                DESIGN NOTE 886: THE FIRST PREVIEW DERIVES LIKE EVERY OTHER
@@ -15347,15 +15441,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                wrong -- every city is equally legal -- so opening at the first one and letting the president
                rotate is #824's design, not #1's superseded index-preservation. An ANCHORED token is untouched
                by this: `seedPreviewArrangement` hands its derived city straight back. */
+            /* Phase 3 W1-E (AUD-05.04 pre-work): THE FACING IS SEEDED FROM THE STATION AUTHORITY, the lowest facing
+               `stationLegalFacings` keeps for this candidate -- the facing its thumbnail draws (#879) and the one
+               the rotate cycle (`legalRotations`) returns to. The ring's raw offer is kept only where the authority
+               keeps none, and then Confirm is greyed with its sentence (`ringLayRefusal`). */
+            const facing = seedRingFacing(
+              orientation,
+              gameState === null
+                ? []
+                : stationLegalFacings(gameState, mapGrid, radialSelector.q, radialSelector.r, tileId, radialCandidates.filter((placement) => placement.tile_id === tileId).map((placement) => placement.orientation), actingProtocolId),
+            );
             const probe = derivePreviewLandings(
               radialSelector.q,
               radialSelector.r,
               tileId,
-              orientation,
+              facing,
               undefined,
             );
             const seed = seedPreviewArrangement({
-              orientation,
+              orientation: facing,
               fit: probe,
               freeCityChoices: freeCityChoices(tileCityCount(tileId)),
             });
@@ -15363,14 +15467,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
               radialSelector.q,
               radialSelector.r,
               tileId,
-              orientation,
+              seed.orientation,
               seed.tokenCity,
             );
             setPreviewTile({
               q: radialSelector.q,
               r: radialSelector.r,
               tileId,
-              orientation,
+              orientation: seed.orientation,
               tokenCity: seed.tokenCity,
               tokenCities: landing.tokenCities,
             });
@@ -15392,7 +15496,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
              from the board rather than queried -- see `utils/tileSupply.ts`
              for why that arithmetic is exact and what would replace it. */
           stockFor={radialStockFor}
-          onConfirm={handleConfirmRadialLay}
+          /* Phase 3 W1-E: LATCHED AT THE MOUNT. The handler is only reached while the tick is lit, so a press
+             that arrives while the last action is in flight, or on a lay the authority refuses, does nothing. */
+          onConfirm={() => {
+            if (ringConfirm.canConfirm) handleConfirmRadialLay();
+          }}
           onCancel={() => setPreviewTile(null)}
           /* Design note #874: present only while a private power is armed, because only then is there
              somewhere to go BACK to. An ordinary lay keeps #471's bare click-away. */

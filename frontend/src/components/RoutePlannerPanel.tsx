@@ -23,6 +23,8 @@ import React from "react";
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 // Design note #494: the same per-train ink the map's route overlay uses.
 import { routeTrainColor } from "../styles/routeLivery";
+// Phase 3 W1-G: the one runnable set and the one refusal order (#883), and the K-26 tooltip.
+import { droppedDraftsNote, runRoutesTitle, runTrainsRefusal, runnableDrafts, runnableRouteTotal } from "../utils/runTrainsRules";
 
 /* `RouteBuildMode` is GONE -- design note #493. It was `"auto" | "manual"`, and the note above it argued at
    length about which value the step should open on. That argument is what gave the removal away: both values
@@ -162,15 +164,8 @@ export function AutoRouteButton({
   );
 }
 
-/** A draft the contract could actually be asked to run. */
-function isRunnableDraft(draft: TrainRouteDraft): boolean {
-  return (
-    draft.value !== null &&
-    draft.value > 0 &&
-    !draft.exceedsMaxDistance &&
-    !draft.endsOffTerminus
-  );
-}
+/* Phase 3 W1-G (S6-13): `isRunnableDraft` WAS RETIRED. It was a second copy of `runnableDrafts` without #474's
+   token arm, so the button priced a tokenless route the dispatch then skipped. The one set is `runnableDrafts`. */
 
 /* Design note #623: ONE ANSWER TO "WHAT WOULD RUN, AND FOR HOW MUCH". Exported because the Run button now
    exists twice -- at the bottom of this panel and on the action bar -- and the two must not be able to
@@ -183,12 +178,8 @@ export function runnableRouteSummary(drafts: readonly TrainRouteDraft[]): {
   drafted: number;
   totalRevenue: number;
 } {
-  const runnable = drafts.filter(isRunnableDraft);
-  return {
-    runnable: runnable.length,
-    drafted: drafts.filter((draft) => draft.hexLabels.length > 0).length,
-    totalRevenue: runnable.reduce((sum, draft) => sum + (draft.value ?? 0), 0),
-  };
+  // Phase 3 W1-G: exactly the drafts `handleRunTrains` sends (`runnableDrafts`), so the figure is what runs.
+  return runnableRouteTotal(drafts);
 }
 
 /* Design note #623: THE STEP'S PRIMARY ACTION, ON THE STEP'S TOOLBAR. #266 moved Run out of the toolbar
@@ -219,6 +210,8 @@ export function RunRoutesButton({
 }: RunRoutesButtonProps) {
   const { runnable, totalRevenue } = runnableRouteSummary(drafts);
   const live = runnable > 0 && controlsEnabled;
+  // Phase 3 W1-G: a drafted route left out of the run is named here, before the press, rather than vanishing.
+  const dropped = droppedDraftsNote(drafts);
   return (
     <button
       type="button"
@@ -229,7 +222,7 @@ export function RunRoutesButton({
         !ownsAnyTrain
           ? noTrainReason
           : runnable > 0
-            ? `Declares ${runnable === 1 ? "this route" : `all ${runnable} routes`} for $${totalRevenue}. Revenue is withheld into the treasury; pay it out in the Dividends step that follows.`
+            ? runRoutesTitle(runnable, totalRevenue, dropped) // W1-G (K-26): nothing is withheld before the choice
             : "Draw a route worth more than $0 to run it — use Auto-Route, or click hexes on the Rail Map."
       }
     >
@@ -298,16 +291,13 @@ export function RoutePlannerPanel({
     : drafted.length === 0
       ? "Draw a route first — pick Auto-Route above, or click hexes on the Rail Map."
       : runnableCount === 0
-        ? firstProblem(drafted)
+        ? runTrainsRefusal(drafts) // W1-G (P3-N013): the one refusal order (#883), not a second one here
         : null;
 
   /* A partial set is worth saying out loud rather than silently dropping:
      the total on the button would otherwise be quietly missing a train the
      player believes they drew. */
-  const partialNote =
-    runnableCount > 0 && runnableCount < draftedCount
-      ? `${draftedCount - runnableCount} of ${draftedCount} drafted routes cannot run yet and are not in this total.`
-      : null;
+  const partialNote = runnableCount > 0 && runnableCount < draftedCount ? droppedDraftsNote(drafts) : null;
 
   return (
     <div style={styles.panel}>
@@ -426,10 +416,9 @@ export function RoutePlannerPanel({
                     <span
                       style={{
                         ...styles.revenue,
-                        // Design note #623: the module-level predicate the
-                        // summary uses, so a row cannot look runnable while
-                        // the total leaves it out.
-                        ...(isRunnableDraft(draft) ? {} : styles.revenueMuted),
+                        // Design note #623: the predicate the summary uses, so a row cannot look runnable
+                        // while the total leaves it out -- `runnableDrafts` since W1-G.
+                        ...(runnableDrafts([draft]).length > 0 ? {} : styles.revenueMuted),
                       }}
                     >
                       {draft.value === null || draft.value === 0 ? "--" : `$${draft.value}`}
@@ -518,7 +507,7 @@ export function RoutePlannerPanel({
           disabled={runnableCount === 0 || !controlsEnabled}
           title={
             runnableCount > 0
-              ? `Declares ${runnableCount === 1 ? "this route" : `all ${runnableCount} routes`}. Revenue is withheld into the treasury; pay it out in the Dividends step that follows.`
+              ? runRoutesTitle(runnableCount, totalRevenue, partialNote) // W1-G (K-26)
               : (blockedReason ?? "Draw a route worth more than $0 to run it.")
           }
         >
@@ -532,24 +521,9 @@ export function RoutePlannerPanel({
   );
 }
 
-/** The first thing wrong with a set of drafts none of which can run. One sentence rather than one per train:
- *  three broken routes usually have the same problem, and three copies of it is the clutter #3 removed. */
-function firstProblem(drafted: readonly TrainRouteDraft[]): string {
-  const overLong = drafted.find((draft) => draft.exceedsMaxDistance);
-  if (overLong) {
-    return `Too many stops for the ${overLong.model}-train. Plain track between stops is free — only revenue centres count.`;
-  }
-  if (drafted.some((draft) => draft.endsOffTerminus)) {
-    return "A route ends somewhere it cannot. Extend it to a city, a town or a red off-board hex — plain track only carries a route.";
-  }
-  /* Design note #474: reported AFTER the geometric problems and before the generic "worth nothing", because a
-     route that misses the corporation's tokens is usually a well-formed route in the wrong place -- the player
-     has drawn something valid-looking and needs to be told which rule it misses rather than that it is
-     worthless. */
-  const tokenless = drafted.find((draft) => draft.tokenBlockReason !== null);
-  if (tokenless?.tokenBlockReason) return tokenless.tokenBlockReason;
-  return "No drafted route is worth anything yet — each needs at least two paying stops.";
-}
+/* Phase 3 W1-G (P3-N013): `firstProblem` WAS RETIRED. It was a second refusal order -- too long, then the ending,
+   then the token -- the reverse of the order #883 (`utils/runTrainsRules.ts`) records as the decision, on #474's
+   ground that a tokenless route is the larger misunderstanding. The panel now asks `runTrainsRefusal`. */
 
 const styles: Record<string, React.CSSProperties> = {
   panel: {

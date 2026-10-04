@@ -124,6 +124,10 @@ const SANDBOX_ONLY_KEYS: Record<KeysOf<SandboxOnlyMsg>, true> = {
   AnswerPrivateTrade: true,
   RescindPrivateTrade: true,
   BuyKanawhaLicense: true,
+  // W3-K (rules engine v13, OD-4): the obligated president's emergency-funding decisions.
+  ForgoTrainTrade: true,
+  EmergencySellPortfolio: true,
+  ForgoPrivateFunding: true,
   RevertTo: true,
 };
 
@@ -159,7 +163,7 @@ describe("A. the log-wide type is one union and the chain's set stays narrow", (
 
   it("A2: GAMEPLAY_MESSAGE_KEYS holds no room-only key, and isSandboxOnlyMsg is exactly the room-only list", () => {
     const roomOnly = Object.keys(SANDBOX_ONLY_KEYS);
-    expect(roomOnly).toHaveLength(17);
+    expect(roomOnly).toHaveLength(20); // W3-K (v13, OD-4): + ForgoTrainTrade, EmergencySellPortfolio, ForgoPrivateFunding
     for (const key of roomOnly) {
       expect([key, (GAMEPLAY_MESSAGE_KEYS as readonly string[]).includes(key)]).toEqual([key, false]);
       expect([key, isSandboxOnlyMsg({ [key]: {} })]).toEqual([key, true]);

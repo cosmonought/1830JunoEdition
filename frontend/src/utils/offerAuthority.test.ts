@@ -726,7 +726,7 @@ describe("A. the Batch-5 paths keep their semantics beside the ordinary ones", (
 
 describe("M. the five new messages are in the schema (44 -> 49) and nothing else changed", () => {
   it("validates the new shapes and refuses the malformed", () => {
-    expect(GAMEPLAY_MESSAGE_KINDS.length).toBe(49);
+    expect(GAMEPLAY_MESSAGE_KINDS.length).toBe(52); // 49 here; W3-K (v13, OD-4) added three emergency-funding kinds
     for (const msg of [RESCIND_PRIVATE(3), RESCIND_TRAIN(2), PROPOSE_TRADE(3, P2, P1, 0), ANSWER_TRADE(3, true), RESCIND_TRADE(3)]) {
       expect(validateGameplayMessage(msg)).toMatchObject({ ok: true });
     }

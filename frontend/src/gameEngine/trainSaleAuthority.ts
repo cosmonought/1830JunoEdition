@@ -38,7 +38,7 @@ import type { MapGridResponse } from "../components/hexContractTypes";
 import { depotCostFor, depotInventory, derivePhase, type TrainTier } from "./gamePhase";
 import { countableTrainCount, isTrainLocked } from "./trainLimit";
 import { TRAIN_PURCHASE_SUB_PHASE } from "./trainPurchaseGate";
-import { emergencyFundingFor, fundedTradeRefusal } from "./emergencyFunding";
+import { emergencyObligationFor, fundedTradeRefusal } from "./emergencyFunding";
 import { treasuryOf } from "./cashLedger";
 import { anyOfferStands, trainSettlementMatches } from "./pendingOfferHold";
 import { ownsOnlyReprievedCopiesOf } from "./gentleRustGrace";
@@ -155,7 +155,10 @@ export function trainSaleRefusal(
   const price = Number(intent.price);
 
   /* ---- 1. D-6 FIRST, exactly where the core has asked it since #1541 --------------------------- */
-  const funding = emergencyFundingFor(state, mapGrid);
+  /* W3-K: the obligation's FACTS (`emergencyObligationFor`) -- all D-6 ever read of it (the buyer, the treasury, the
+     president's cash) -- rather than the full analysis, which on a v13 board asks this very predicate to judge the
+     intercorporate window and would otherwise recurse. */
+  const funding = emergencyObligationFor(state, mapGrid);
   if (funding !== null && Number.isFinite(price)) {
     const face = depotCostFor(state, intent.model as TrainTier);
     const forced = fundedTradeRefusal(state, funding, intent.buyerId, price, Number.isFinite(face) ? face : null);

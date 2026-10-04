@@ -270,6 +270,11 @@ describe("the shell-owned messages, #1220", () => {
       "ProposePrivateTrade",
       "AnswerPrivateTrade",
       "RescindPrivateTrade",
+      // W3-K (v13, OD-4): the obligated president's three emergency-funding decisions -- each with its owner and its
+      // whole legality in `roomMessageRefusal` (the same predicates the reducer's core asks), none a seat's move.
+      "ForgoTrainTrade",
+      "EmergencySellPortfolio",
+      "ForgoPrivateFunding",
     ];
     const source = require("fs").readFileSync(
       require("path").join(__dirname, "..", "gameEngine", "gameSetup.ts"),

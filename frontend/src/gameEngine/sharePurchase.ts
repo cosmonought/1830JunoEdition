@@ -34,7 +34,7 @@
 // See docs/ai_architecture/stock_market.md, sharePurchase.ts #712.
 
 import { certificateBreakdown, type GameStateResponse } from "./gameState";
-import { BO_LOCKED_REASON, boIsLocked, resolveVariants } from "./gameVariants";
+import { BO_LOCKED_REASON, boIsLocked, brownPoolContinuationInForce, resolveVariants } from "./gameVariants";
 import { BO_TICKER } from "./gameConstants";
 // Design note #759: the expiry of #7 and #712's zone exemptions.
 import { divestmentDebt, divestmentRefusal } from "./forcedDivestment";
@@ -199,7 +199,21 @@ export function sharePurchaseBlock(input: SharePurchaseInput): string | null {
   }
 
   /* ---- 4. One purchase per turn, waived for pool shares in Brown ------------------------------- */
-  if (boughtThisTurn > 0 && !allowsExtraPoolBuys(zone, source)) {
+  /* ==================================================================
+      PHASE 3 W3-K (v13, SBS-3 / SBS-4): THE CONTINUATION IS A FACT ABOUT THE TURN, NOT ABOUT THIS PURCHASE
+     ==================================================================
+     v12 asked only whether THIS purchase is a Brown-zone Bank Pool one, so an IPO purchase could open a Bank Pool
+     continuation (SBS-4: IPO CPR -> Pool CPR) and a sale between two Brown purchases did not end the Buy action
+     (SBS-3: Pool CPR -> Sell -> Pool CPR). Under rules revision 2 a further purchase is legal only while the turn's
+     Brown Bank Pool purchase is still OPEN for this corporation (`brown_pool_continuation_company`: opened only by
+     a Brown-zone Bank Pool purchase, closed by any sale) and this certificate is itself Brown and from the Bank
+     Pool. The official/default rule (rulebook p.13), never the optional V-6.3 "Buy All". A revision-1 or legacy
+     board keeps v12's reading so its stored log replays as it was played. */
+  if (boughtThisTurn > 0 && brownPoolContinuationInForce(resolveVariants(state.variants))) {
+    if (state.brown_pool_continuation_company !== companyId || !allowsExtraPoolBuys(zone, source)) {
+      return `One certificate purchase per turn. The only exception is a Brown-zone Bank Pool purchase: several Bank Pool certificates of that one corporation, bought before you sell anything.`;
+    }
+  } else if (boughtThisTurn > 0 && !allowsExtraPoolBuys(zone, source)) {
     return `One certificate purchase per turn. Only Brown-zone shares bought from the Bank Pool may be taken several at a time.`;
   }
   if (quantity > 1 && !allowsExtraPoolBuys(zone, source)) {

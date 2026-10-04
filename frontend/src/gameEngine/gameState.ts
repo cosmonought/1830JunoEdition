@@ -713,6 +713,41 @@ export interface GameStateResponse {
    * written before this field existed carries no continuation rule, which is what keeps a legacy replay
    * replaying rather than refusing a purchase the old engine allowed. */
   bought_this_turn_company?: number;
+  /** ==================================================================
+   *   PHASE 3 W3-K (v13, SBS-3 / SBS-4): THE OFFICIAL BROWN BANK POOL CONTINUATION
+   *  ==================================================================
+   *
+   * Rulebook p.13: "you may purchase any number of certificates from the bank pool of one corporation whose share
+   * value token is in a brown grid box. This purchase counts as your one certificate purchase for the turn." The
+   * engine spells that one purchase as one or more `BuyStock` messages, so whether a further message CONTINUES it
+   * is a turn-scoped fact: the corporation whose Brown-zone Bank Pool purchase is still open, or absent.
+   *
+   * OPENED ONLY by a Brown-zone purchase FROM THE BANK POOL as the turn's first purchase (an IPO purchase is the
+   * turn's ordinary one purchase and opens nothing -- SBS-4), and kept only by further Bank Pool certificates of
+   * that same Brown corporation. CLOSED by any sale (SBS-3: the multi-certificate Buy action is over once the
+   * player sells) and wherever `bought_this_turn` is cleared -- the seat move, the pass, the Stock Round opening
+   * and the auction's opening seat. Never the optional V-6.3 "Buy All".
+   *
+   * WRITTEN AND READ ONLY UNDER RULES REVISION 2 (`brownPoolContinuationInForce`). Absent on every revision-1 or
+   * legacy board, which keeps v12's reading (#232), so a stored log replays exactly as it was played. */
+  brown_pool_continuation_company?: number;
+  /** ==================================================================
+   *   PHASE 3 W3-K (v13, OD-4): THE PRESIDENT'S DECISIONS ON ONE EMERGENCY OBLIGATION
+   *  ==================================================================
+   *
+   * The forced train purchase is derived from the board (#1540) and stores nothing -- but two of the owner's v13
+   * steps are DECISIONS the board cannot derive: "I am done considering a train from another corporation"
+   * (`ForgoTrainTrade`, or implicitly the first emergency share-sale portfolio or private funding offer) and "I
+   * will not pursue private-company funding" (`ForgoPrivateFunding`). Each is recorded here against the
+   * obligation it was made for -- `obligation` is `emergencyObligationKey` (the Operating turn and the
+   * corporation) -- so a mark for one obligation can never be read as a decision about another: a stale key is
+   * read as no mark at all. Rebuilt from the log on every replay like every other field, so it survives reload,
+   * restore and `RevertTo`. Written and read only under rules revision 2. */
+  emergency_funding_marks?: {
+    obligation: string;
+    trade_window_closed?: true;
+    private_funding_forgone?: true;
+  };
   /** #1443: the Stock Round turn's stage under Sell-Buy-Sell. Absent is "sell" (the opening stage); `"buy"`
    *  once the player has declined to sell further; the third stage ("sell again") is implied by
    *  `bought_this_turn > 0`. Cleared wherever the seat moves. */

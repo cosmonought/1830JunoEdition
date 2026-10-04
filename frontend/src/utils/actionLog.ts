@@ -14,6 +14,7 @@
 
 import { actingAddress, type GameStateResponse, type WaterfallStateResponse } from "../gameEngine/gameState";
 import { dividendSplit } from "../gameEngine/dividendSplit";
+import { operatingCorporationId } from "../gameEngine/dividendGate"; // W3-K (v13): the obligated corporation
 import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
 /* #1630 (Slice 9.3, S9-21): THE SENTENCE NAMES THE TILE, so it must use the tile's NAME. `tile_id` is the
@@ -554,6 +555,25 @@ export function describeGameplayAction(
   if ("DeclareBankruptcy" in msg) {
     const president = context.afterState?.bankrupt_president ?? null;
     return `${president ? context.labelForAddress(president) : "The president"} could not fund the forced train purchase and is bankrupt. The game ends.`;
+  }
+  /* W3-K (rules engine v13, OD-4): the obligated president's three decisions. Read off the BEFORE board (the one the
+     decision was made on); the portfolio names every leg in the order it executed, and says when the game ended in
+     the same transition (it cannot: a portfolio is refused unless it funds the train -- the suffix is defensive). */
+  if ("ForgoTrainTrade" in msg) {
+    const companyId = gameState ? operatingCorporationId(gameState) : null;
+    return `${companyId === null ? "The president" : `${corp(gameState, companyId)}'s president`} will buy the forced train from the Bank — no train from another corporation.`;
+  }
+  if ("ForgoPrivateFunding" in msg) {
+    const companyId = gameState ? operatingCorporationId(gameState) : null;
+    return `${companyId === null ? "The president" : `${corp(gameState, companyId)}'s president`} declined to sell a private company to fund the forced train purchase.`;
+  }
+  if ("EmergencySellPortfolio" in msg) {
+    const legs = msg.EmergencySellPortfolio.sales.map((leg) => `${leg.percentage}% of ${corp(gameState, leg.protocol_id)}`);
+    const companyId = gameState ? operatingCorporationId(gameState) : null;
+    return (
+      `Emergency share sale${companyId === null ? "" : ` for ${corp(gameState, companyId)}'s train`}: ${legs.join(", then ")}, sold as one transaction.` +
+      (context.afterState?.current_round_type === "GameEnd" ? " The game ends." : "")
+    );
   }
 
   if ("AnswerPrivatePurchase" in msg) {

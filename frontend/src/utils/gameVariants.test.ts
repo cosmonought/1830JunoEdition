@@ -67,7 +67,7 @@ describe("the config a game with no config reads as (design note #902)", () => {
     expect(resolveVariants(undefined)).toEqual(legacy);
     expect(resolveVariants(null)).toEqual(legacy);
     expect(resolveVariants({})).toEqual(legacy);
-    expect(STANDARD_VARIANTS.rules).toBe(1);
+    expect(STANDARD_VARIANTS.rules).toBe(2); // W3-K: rules engine v13 deals rules revision 2
   });
 
   it("fills gaps field by field rather than substituting the whole default", () => {

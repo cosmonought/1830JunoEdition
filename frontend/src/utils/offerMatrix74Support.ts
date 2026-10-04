@@ -112,8 +112,11 @@ export const guarded = (state: GameStateResponse) => ({
     state.last_trader_index ?? null,
     state.bought_this_turn ?? 0,
     state.bought_this_turn_company ?? null,
+    state.brown_pool_continuation_company ?? null, // W3-K (v13)
     state.stock_turn_stage ?? null,
   ],
+  /* W3-K (v13, OD-4): the president's recorded decisions on an emergency obligation -- a refusal may not set them. */
+  emergencyMarks: state.emergency_funding_marks ?? null,
   operatingStep: [state.operating_sub_phase ?? null, state.active_corporation_index],
   seat: state.active_player_index,
   round: [state.current_round_type, state.macro_round_number, state.sub_round_index],

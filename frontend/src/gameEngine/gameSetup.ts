@@ -524,6 +524,48 @@ export interface RescindPrivateTradeMsg {
   };
 }
 
+/* ==================================================================
+    PHASE 3 W3-K (RULES ENGINE v13, OD-4): THE PRESIDENT'S THREE EMERGENCY-FUNDING DECISIONS
+   ==================================================================
+   Room-only, like every message the chain has never heard of. Each is the obligated president's, valid only while a
+   forced train purchase stands on a rules-revision-2 board (`emergencyFunding.ts`), judged by one predicate at both
+   locks, and refused -- never reinterpreted -- on any other board. */
+
+/** The president is done considering a train from another corporation and will fund the purchase through the Bank
+ *  (`emergencyFunding.ts` step 2). Closes the intercorporate window for this obligation; it never reopens. */
+export interface ForgoTrainTradeMsg {
+  ForgoTrainTrade: {
+    game_id?: number;
+  };
+}
+
+/** ONE atomic emergency share sale: every leg is submitted together, simulated in THIS order through the ordinary
+ *  sale law, and the whole portfolio must fund the train or nothing moves. `percentage` is the total of that
+ *  corporation sold (one leg per corporation). */
+export interface EmergencySellPortfolioMsg {
+  EmergencySellPortfolio: {
+    game_id?: number;
+    sales: Array<{ protocol_id: number; percentage: number }>;
+  };
+}
+
+/** The president declines optional private-company funding for this obligation. */
+export interface ForgoPrivateFundingMsg {
+  ForgoPrivateFunding: {
+    game_id?: number;
+  };
+}
+
+export function isForgoTrainTradeMsg(msg: unknown): msg is ForgoTrainTradeMsg {
+  return typeof msg === "object" && msg !== null && "ForgoTrainTrade" in msg;
+}
+export function isEmergencySellPortfolioMsg(msg: unknown): msg is EmergencySellPortfolioMsg {
+  return typeof msg === "object" && msg !== null && "EmergencySellPortfolio" in msg;
+}
+export function isForgoPrivateFundingMsg(msg: unknown): msg is ForgoPrivateFundingMsg {
+  return typeof msg === "object" && msg !== null && "ForgoPrivateFunding" in msg;
+}
+
 export function isRescindPrivatePurchaseMsg(msg: unknown): msg is RescindPrivatePurchaseMsg {
   return typeof msg === "object" && msg !== null && "RescindPrivatePurchase" in msg;
 }
@@ -568,6 +610,10 @@ export type SandboxOnlyMsg =
   | RescindPrivateTradeMsg
   // Design note #1323: the licence purchase, which the chain has never heard of.
   | BuyKanawhaLicenseMsg
+  // W3-K (v13, OD-4): the obligated president's emergency-funding decisions.
+  | ForgoTrainTradeMsg
+  | EmergencySellPortfolioMsg
+  | ForgoPrivateFundingMsg
   | RevertToMsg;
 
 /** Everything the room log can carry -- the contract's own message set, plus the room-only events. A PRECISE
@@ -652,6 +698,9 @@ export function isSandboxOnlyMsg(msg: unknown): msg is SandboxOnlyMsg {
     isAnswerPrivatePurchaseMsg(msg) ||
     isProposeTrainPurchaseMsg(msg) ||
     isAnswerTrainPurchaseMsg(msg) ||
+    isForgoTrainTradeMsg(msg) ||
+    isEmergencySellPortfolioMsg(msg) ||
+    isForgoPrivateFundingMsg(msg) ||
     isRevertToMsg(msg)
   );
 }

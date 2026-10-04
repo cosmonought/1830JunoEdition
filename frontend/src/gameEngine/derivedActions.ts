@@ -87,6 +87,9 @@ import { boardHomeHexToAxial, owedHomeStation } from "./homeStationAuthority";
 import { privateSettlementMatches, trainSettlementMatches } from "./pendingOfferHold";
 import type { PrivatePurchaseOffer, TrainPurchaseOffer } from "./gameState";
 import { tokenCityIndex } from "../components/hexContractTypes";
+// W3-K (v13, OD-4): the automatic emergency purchase's verdict. A cycle with `emergencyFunding.ts` (through
+// `trainAvailability.ts`), resolved at call time: both sides use the other only inside functions.
+import { automaticFundingInForce, emergencyFundingFor } from "./emergencyFunding";
 import { STATIC_BOARD_HEXES, routeRulesV12InEffect } from "../components/hexBoardData";
 
 /** One action the game sends on a corporation's behalf. */
@@ -98,7 +101,9 @@ export interface DerivedAction {
   /** Why, for the caller's log line. #1057: a step where nothing happened earns no line, but an auto-withheld
    *  dividend MOVES THE SHARE PRICE, so that one still prints. The dividing line is the consequence. */
   reason: string;
-  kind: "skip" | "end-turn" | "forced-withhold" | "accepted-offer";
+  /** W3-K (v13, OD-4): `forced-purchase` -- the emergency train purchase the treasury and the president's cash
+   *  already cover, made by the game (rules revision 2). */
+  kind: "skip" | "end-turn" | "forced-withhold" | "accepted-offer" | "forced-purchase";
 }
 
 export interface DerivedActionInput {
@@ -240,6 +245,33 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
 
   if (state.current_round_type !== "OperatingRound") return null;
 
+  /* ==================================================================
+      PHASE 3 W3-K (v13, OD-4): THE FUNDED EMERGENCY PURCHASE IS THE GAME'S
+     ==================================================================
+     OWNER RULE: "corporation treasury is committed automatically; then the president's personal cash is committed
+     automatically as required. The player should not have to press a button merely to transfer money that the rules
+     require." So on a rules-revision-2 board, once the obligation is funded (treasury plus cash cover the cheapest
+     train), the intercorporate window is not open and no offer stands (`automatic.autoPurchase`), the game derives
+     the `EmergencyBuyHardware` -- the existing arm and its existing gates, nothing new -- exactly once per
+     obligation: the key is `emergency-purchase:<turn key>`, its OWN key, so it never spends the Hardware step's turn
+     key (an End Turn the filled fleet might owe still derives, #1598's lesson), and `derivedEntryKey` records the
+     same string on replay, so a restart or a rebuild never sends it twice. Asked before the step logic below, which
+     owes nothing at a trainless corporation's Hardware step anyway. */
+  if (automaticFundingInForce(state)) {
+    const funding = emergencyFundingFor(state, mapGrid);
+    if (funding?.automatic?.autoPurchase === true) {
+      const key = emergencyPurchaseKey(state, funding.companyId);
+      if (!emitted.has(key)) {
+        return {
+          msg: { EmergencyBuyHardware: { game_id: 0, protocol_id: funding.companyId } },
+          key,
+          reason: `${funding.ticker}'s treasury and its president's cash pay for the ${funding.train.tier}-train it must buy`,
+          kind: "forced-purchase",
+        };
+      }
+    }
+  }
+
   const protocolId = operatingCorporationId(state);
   if (protocolId === null) return null;
 
@@ -340,6 +372,12 @@ export function nextDerivedAction(input: DerivedActionInput): DerivedAction | nu
       };
 }
 
+/** W3-K (v13, OD-4): the automatic emergency purchase's idempotency key -- the obligation's turn and step, under a
+ *  prefix of its own so it is never the Hardware step's turn key. */
+export function emergencyPurchaseKey(state: GameStateResponse, companyId: number): string {
+  return `emergency-purchase:${turnGuardKey(state, companyId, state.operating_sub_phase ?? "Hardware")}`;
+}
+
 /** The derived settlement's idempotency key for an accepted ordinary private offer (#1597). */
 export function privateOfferKey(offer: PrivatePurchaseOffer): string {
   return typeof offer.instance === "number"
@@ -390,6 +428,9 @@ export function derivedEntryKey(state: GameStateResponse, msg: SandboxLogMsg): s
   }
   const owed = operatingCorporationId(state);
   const step = state.operating_sub_phase;
+  /* W3-K (v13, OD-4): the automatic emergency purchase consumes its own key (`emergencyPurchaseKey`), never the
+     step's turn key -- the live loop records the same string when it derives one. */
+  if ("EmergencyBuyHardware" in msg && owed !== null && automaticFundingInForce(state)) return emergencyPurchaseKey(state, owed);
   return owed !== null && step !== undefined ? turnGuardKey(state, owed, step) : null;
 }
 

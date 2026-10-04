@@ -82,6 +82,8 @@ function sample(spec: string): unknown {
       ];
     case "variants":
       return { length: "standard", mode: "live", gentleRust: false, rules: 1 };
+    case "sales": // W3-K (v13, OD-4): the emergency portfolio's legs
+      return [{ protocol_id: 1, percentage: 10 }, { protocol_id: 2, percentage: 20 }];
     default:
       throw new Error(`no sample for ${spec}`);
   }

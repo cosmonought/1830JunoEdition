@@ -1,11 +1,11 @@
 /** @jest-environment node */
 // frontend/src/utils/sellBuySell.test.ts -- design note #1443: the Stock Round is Sell-Buy-Sell.
 //
-// INTERIM (owner ruling OD-2, 2026-10-03; docs/phase3 plan §7.3). These pins describe the v12 engine's Sell -> Buy -> Sell
-// stage walk, which the owner has SUPERSEDED: sell whenever legal, at most one Buy, Sell still available after buying,
-// and one "Pass Turn" that ends the turn in one click. That is a PassTurn replay change, so it lands only in the
-// dedicated v13 rules slice with its settlement certification, which replaces these pins. Until then they guard v12's
-// behaviour; they are not the desired final behaviour.
+// RULES REVISION 1 (owner ruling OD-2, 2026-10-03; docs/phase3 plan §7.3). These pins describe the Sell -> Buy -> Sell
+// stage walk of rules revision 1 -- the v12 engine's, and every revision-1 log's -- which the owner has SUPERSEDED for
+// new games: rules engine v13 deals revision 2, where one "Pass Turn" ends the turn (`rulesV13StockRound.test.ts`).
+// The board below pins `rules: 1` explicitly, so these cases keep guarding that a revision-1 log replays exactly as
+// it was played; they are not the behaviour of a new game.
 import { applySandboxAction, stockTurnStage } from "../gameEngine/sandboxSession";
 import { CURRENT_RULES_REVISION, resolveVariants, sellBuySellInForce, STANDARD_VARIANTS } from "../gameEngine/gameVariants";
 import type { GameStateResponse } from "../gameEngine/gameState";
@@ -26,7 +26,8 @@ function board(over: Partial<GameStateResponse> = {}): GameStateResponse {
     last_trader_index: null,
     operating_round_just_ended: false,
     stock_round_just_ended: false,
-    variants: { ...STANDARD_VARIANTS, rules: CURRENT_RULES_REVISION },
+    // W3-K: revision 1 explicitly -- the stage walk these cases pin is revision 1's (v13 deals revision 2).
+    variants: { ...STANDARD_VARIANTS, rules: 1 },
     public_companies: [
       {
         company_id: PRR,

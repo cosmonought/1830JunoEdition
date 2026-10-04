@@ -63,6 +63,9 @@
 // #1240 already did with IPO first.
 
 import type { GameStateResponse } from "../gameEngine/gameState";
+// Phase 3 W1-A: "a share on offer" is the authority's reading of the pool (the President's Certificate, the LPF 20% card
+// and the Delayed Auction's reserved C&A certificate are not ordinary shares on offer).
+import { ordinaryPercentAvailable } from "../gameEngine/stockTransactionAuthority";
 
 export type AutoBuySource = "Ipo" | "Bank";
 /** 10c: which source to buy from. `Cheapest` compares the two prices each turn. */
@@ -211,6 +214,11 @@ export function autoBuyDecision(
   const woken = autoBuyWake(state, plan);
   if (woken) return { action: "stop", reason: woken };
 
+  /* Phase 3 W1-A (AUD-03.05, K-12): the first refusal the authority gave for a share that IS on offer, kept so
+     that "nothing qualifies" can say why -- a player out of cash is told the price and the balance, not that the
+     list is done. `blockFor` is the stock authority (`App.purchaseBlockFor` -> `stockPurchaseRefusal`), so the
+     sentence is the server's. */
+  let firstRefusal: string | null = null;
   for (const target of plan.targets) {
     const company = state.public_companies.find((entry) => entry.company_id === target.companyId);
     if (!company) continue;
@@ -219,12 +227,17 @@ export function autoBuyDecision(
 
     const sources = autoBuySourceOrder(
       plan.source,
-      { ipo: company.ipo_pool_percentage > 0, bank: company.bank_pool_percentage > 0 },
+      { ipo: ordinaryPercentAvailable(company, "Ipo") > 0, bank: ordinaryPercentAvailable(company, "Bank") > 0 },
       (source) => priceFor(target.companyId, source),
     );
     for (const source of sources) {
-      if (blockFor(target.companyId, source) === null) return { action: "buy", companyId: target.companyId, source };
+      const refusal = blockFor(target.companyId, source);
+      if (refusal === null) return { action: "buy", companyId: target.companyId, source };
+      firstRefusal ??= `${company.ticker}: ${refusal}`;
     }
+  }
+  if (firstRefusal !== null) {
+    return { action: "done", reason: `Auto-Buy cannot buy what is left on its list — ${firstRefusal}` };
   }
   return { action: "done", reason: "Auto-Buy has nothing left to buy — the turn is yours." };
 }

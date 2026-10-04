@@ -80,7 +80,9 @@ describe("the Buy button consults the answer", () => {
   it("disables on a block", () => {
     /* THE REPORT, as the property. With the prop wired, `purchaseBlock` is a sentence and the button greys;
        without it, `?? null` reads as permission. */
-    expect(CODE).toContain("disabled={controlsDisabled || cannotAfford || purchaseBlock !== null}");
+    // Phase 3 W1-A: affordability is inside the block (the authority's rule 8), not a second local gate.
+    expect(CODE).toContain("disabled={controlsDisabled || purchaseBlock !== null}");
+    expect(CODE).not.toContain("cannotAfford");
   });
 
   it("greys as well as disabling", () => {

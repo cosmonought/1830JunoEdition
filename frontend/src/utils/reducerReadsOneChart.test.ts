@@ -73,7 +73,9 @@ describe("the reducer is given one chart, from the synchronous source", () => {
     const grid = sliceBetween(APP, "const marketGrid = useMemo<MarketGridResponse>(", "  );");
     expect(grid).toContain("sandboxMarketPositions(sandboxMarket)");
     expect(grid).not.toContain("sandboxMarketRef");
-    expect(sliceBetween(APP, "const purchaseBlockFor = useCallback(", "  );")).toContain("marketGrid");
+    // Phase 3 W1-A: the Buy gate reads the committed board's own chart, as ingress does (`chartContextFromState`).
+    expect(sliceBetween(APP, "const purchaseBlockFor = useCallback(", "  );")).toContain("chartContextFromState(gameState)");
+    expect(sliceBetween(APP, "const purchaseBlockFor = useCallback(", "  );")).not.toContain("Ref.current");
   });
 });
 

@@ -8,8 +8,9 @@
 // bought PRR's President's Certificate. The card offered a live "Sell 10% Bundle" -- its verdict was `shareSaleBlock`,
 // which has no par check -- and the server refused the sale (rulebook p.15, `stockSaleRefusal` rule 4).
 //
-// The shell's verdict is now `unstartedCorporationSaleRefusal ?? shareSaleBlock` (`App.saleBlockFor`); this drives the
-// real Stock Round panel with exactly that composition, and the real room with the sale.
+// The shell's verdict is now the sale authority itself (`App.saleBlockFor`, Phase 3 W1-A: `stockSaleRefusal` with the
+// viewer and the board's chart); this drives the real Stock Round panel with exactly that composition, and the real
+// room with the sale.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -17,7 +18,7 @@ import { createRoot, type Root } from "react-dom/client";
 import StockRoundPanel from "./StockRoundPanel";
 import type { GameStateResponse, RoundType } from "../gameEngine/gameState";
 import { shareSaleBlock } from "../gameEngine/shareSale";
-import { stockSaleRefusal } from "../gameEngine/stockTransactionAuthority";
+import { chartContextFromState, stockSaleRefusal } from "../gameEngine/stockTransactionAuthority";
 import { unstartedCorporationSaleRefusal } from "../utils/stockRoundSaleBlock";
 import * as F from "../utils/offerFixtures74";
 import * as S from "../utils/offerMatrix74Support";
@@ -47,10 +48,9 @@ function s13(): GameStateResponse {
   return built;
 }
 
-/** `App.saleBlockFor`'s composition (after its Sell-Buy-Sell stage gate, which this legacy-revision board skips). */
+/** `App.saleBlockFor`'s composition (Phase 3 W1-A): the sale authority, the viewer as the seller, the board's chart. */
 const shellSaleBlock = (state: GameStateResponse, seller: string) => (companyId: number, percentage: number) =>
-  unstartedCorporationSaleRefusal({ state, seller, companyId, percentage }) ??
-  shareSaleBlock({ state, seller, companyId, percentage });
+  stockSaleRefusal({ state, sell: { companyId, percentage }, actor: seller, ctx: chartContextFromState(state) });
 
 let host: HTMLDivElement;
 let root: Root;

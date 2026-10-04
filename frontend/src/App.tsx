@@ -301,12 +301,9 @@ import { privateClosureAlert } from "./utils/purchaseWarnings";
 import { finalRunScheduleFor } from "./utils/finalRunTiming";
 // Design note #705: the Pay column's before-and-after, alongside the Withhold column's.
 import { projectDividendPayouts } from "./utils/dividendProjection";
-// Design note #712: the market-zone purchase rules.
-import { sharePurchaseBlock } from "./gameEngine/sharePurchase";
-// Design note #713: the sale's guards.
-import { shareSaleBlock } from "./gameEngine/shareSale";
-// 6.5-B (K-08): the sale authority's own sentence for a granted share of a corporation nobody has started.
-import { unstartedCorporationSaleRefusal } from "./utils/stockRoundSaleBlock";
+// Phase 3 W1-A: the Stock Round's Buy and Sell read the stock transaction authority the server asks (ingress and the
+// reducer), with the board's own chart -- not `sharePurchaseBlock` / `shareSaleBlock` alone, which it composes.
+import { chartContextFromState, stockPurchaseRefusal, stockSaleRefusal } from "./gameEngine/stockTransactionAuthority";
 // 6.5-B (H-02): the B&O par obligation, read off the board (DA-3) rather than kept in a latch.
 import { boParOwedTo } from "./gameEngine/auctionAuthority";
 // Design note #725: the D&H's two halves, and the order between them.
@@ -9554,12 +9551,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [runGameplayAction, gameId, parValueFor],
   );
 
-  /* Design note #712: THE ZONE RULES, RESOLVED WHERE THE BOARD IS. `sharePurchaseBlock` needs the private
-     roster and the room's size for the certificate limit, and the panel is given neither -- so the answer is
-     computed here and handed down as a question the card can ask with the source and quantity it has
-     selected.
-     `marketZoneForPrice` is injected for the reason #7 gives about `certificateBreakdown`: the price-to-zone
-     table lives in `components/` and `utils/` may not import from it. */
+  /* ==================================================================
+      PHASE 3 W1-A: THE STOCK ROUND READS ONE AUTHORITY (AUD-03.01, 03.02, 03.03, 03.05, 03.06; AUD-03.12 pre-work)
+     ==================================================================
+     Design notes #712/#713 resolved the purchase and sale gates HERE because the panel is handed neither the
+     private roster nor every player's holdings -- right about WHERE, and still a second reading of the rules:
+     `sharePurchaseBlock` / `shareSaleBlock` alone, priced from the shell's grid copy, with no round gate, no
+     card-availability rule, no first-Stock-Round ban, no unstarted-corporation rule and no affordability. And
+     two Sell-Buy-Sell stage refusals the server has never had (#1443's stages are walked by the Pass; a buy in
+     the Sell stage and a sale in the Buy stage are both accepted) -- S-4's "the UI is stricter than the engine".
+     NOW EACH IS THE AUTHORITY ITSELF: `stockPurchaseRefusal` / `stockSaleRefusal`, the predicates ingress
+     (`turnRefusal`) and the reducer both ask, with the viewer as the actor, the message the button would send
+     (the IPO purchase carries this card's par selection, exactly as `buyOneShare` does), the board's own chart
+     (`chartContextFromState`, which reads `market_positions` as ingress does) and the table's rules in scope
+     (`withRules`, as ingress's `stockChartRefusal`). A greyed control carries the server's own sentence.
+     The seat rule stays the panel's `controlsDisabled` (`isMyTurn`), and the standing-offer hold its
+     `offerHoldReason`; the four-hold dock model is W2-A's. */
   const purchaseBlockFor = useCallback(
     (
       companyId: number,
@@ -9568,61 +9575,48 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       certificate?: "double", // #1324
     ): string | null => {
       if (!gameState || !viewerAddress) return null;
-      /* #1443: SELL-BUY-SELL -- the stages are walked on the action bar. A buy is offered in the Buy stage;
-         the Sell stage greys it with the way forward, and the Sell Again stage is #1172's one-purchase rule. */
-      if (
-        gameState.current_round_type === "StockRound" &&
-        sellBuySellInForce(resolveVariants(gameState.variants)) &&
-        stockTurnStage(gameState) === "sell"
-      ) {
-        return "Selling comes first. Press Pass on the action bar when you are done selling to move on to buying.";
-      }
-      return sharePurchaseBlock({
-        state: gameState,
-        buyer: viewerAddress,
-        companyId,
-        source,
-        quantity,
-        certificate,
-        zone: marketZoneForPrice(marketPriceForCompany(companyId)),
-        marketPrices: Object.fromEntries(
-          (marketGrid?.positions ?? []).map((entry) => [entry.company_id, Number(entry.price)]),
-        ),
-        zoneForPrice: marketZoneForPrice,
-        /* Design note #1172: the panel passes it too, so the button is GREYED with the sentence rather than
-           refusing after the click -- #619's rule, and the reason the reducer's copy of this call is not
-           enough on its own. The two now hand `sharePurchaseBlock` the same five facts. */
-        boughtThisTurn: gameState.bought_this_turn ?? 0,
-      });
+      return withRules(
+        resolveVariants(gameState.variants),
+        () =>
+          stockPurchaseRefusal({
+            state: gameState,
+            buy: {
+              companyId,
+              source,
+              parValue: source === "Ipo" ? parValueFor(companyId) : null,
+              quantity: certificate === "double" ? null : quantity,
+              certificate: certificate ?? null,
+            },
+            actor: viewerAddress,
+            ctx: chartContextFromState(gameState),
+          }),
+        routeRulesRevisionOf(gameState),
+      );
     },
-    [gameState, viewerAddress, marketGrid, marketPriceForCompany],
+    [gameState, viewerAddress, parValueFor],
   );
 
-  /* Design note #713: THE SALE'S TWO ANSWERS, resolved where the board and the chart both are.
-     The successor rule reads every player's holdings and the price walk needs the token's CELL -- the Stock
-     Round panel is handed neither, so both arrive as questions it can ask about the bundle it has selected. */
+  /* Phase 3 W1-A: the sale, the same way -- `stockSaleRefusal` composes `shareSaleBlock` (holdings, the five-card
+     Bank Pool ceiling the Level Playing Field's 20% card needs, the presidency), the double's half-sale, the
+     first-Stock-Round ban (§5.1), the unstarted corporation (p.15, which 6.5-B's K-08 answered separately) and
+     the chart price. The grid is the room's, for the forced-sale arm ingress also hands it. */
   const saleBlockFor = useCallback(
     (companyId: number, percentage: number): string | null => {
       if (!gameState || !viewerAddress) return null;
-      // #1443: in the Buy stage the selling is behind you until you have bought.
-      if (
-        gameState.current_round_type === "StockRound" &&
-        sellBuySellInForce(resolveVariants(gameState.variants)) &&
-        stockTurnStage(gameState) === "buy"
-      ) {
-        return "You have moved on to buying. Buy a share (or Pass) — you can sell again after a purchase.";
-      }
-      /* 6.5-B (K-08): A GRANTED SHARE OF AN UNSTARTED CORPORATION. The C&A's PRR share (and the M&H's NYC share)
-         is held before anybody has bought the President's Certificate, so the card showed a live Sell that the
-         sale authority refuses (rulebook p.15; `stockSaleRefusal` rule 4). `shareSaleBlock` is shared with the
-         reducer, divestment and emergency funding and is NOT touched; for an unparred corporation the sale
-         authority itself answers first, so the greyed button carries the sentence the server would give. Every
-         parred corporation still gets `shareSaleBlock`'s answer, unchanged. */
-      const unstarted = unstartedCorporationSaleRefusal({ state: gameState, seller: viewerAddress, companyId, percentage });
-      if (unstarted !== null) return unstarted;
-      return shareSaleBlock({ state: gameState, seller: viewerAddress, companyId, percentage });
+      return withRules(
+        resolveVariants(gameState.variants),
+        () =>
+          stockSaleRefusal({
+            state: gameState,
+            sell: { companyId, percentage },
+            actor: viewerAddress,
+            mapGrid,
+            ctx: chartContextFromState(gameState),
+          }),
+        routeRulesRevisionOf(gameState),
+      );
     },
-    [gameState, viewerAddress],
+    [gameState, viewerAddress, mapGrid],
   );
 
   /* ==================================================================
@@ -9912,6 +9906,21 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        their Auto-Buy would flood the same way. Not written into `autoBuyDecision` because the hex lookup lives
        in `components/` (#7) -- same reason the reducer takes it through `ctx`. */
     if (homeTokenOwed(gameState, homeHexToAxial)) return;
+    /* Phase 3 W1-A (AUD-03.06, SBS-5): THE MUST-SELL COMES BEFORE THE STAGE PASS. The tool used to Pass the Sell
+       stage first and only then notice the debt, so a seat that owed a sale sent a Pass the hold refuses
+       (`divestmentPassRefusal`) and sat armed against it. A player who owes a sell-down can neither buy nor pass
+       (#759), so the tool stops here, with the reason, before it sends anything. */
+    const owed = divestmentDebt({
+      state: gameState,
+      player: viewerAddress,
+      marketPrices: sandboxMarketPrices,
+      zoneForPrice: marketZoneForPrice,
+    }).owed;
+    if (owed) {
+      setAutoBuyPlan(null);
+      logInfo("Auto-Buy", "You owe a forced sale this turn, which Auto-Buy will not make for you. Auto-Buy is off.");
+      return;
+    }
     /* #1443: under Sell-Buy-Sell the purchase leaves the seat with the buyer. The standing instruction was to
        buy, and a bought turn is done -- so the tool ends it, rather than sitting on a seat it cannot use and
        reading its own purchase as "nothing qualifies" (#1274's stop). Selling again is the player's, not a
@@ -9926,27 +9935,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       }
     }
 
-    const owed = divestmentDebt({
-      state: gameState,
-      player: viewerAddress,
-      marketPrices: sandboxMarketPrices,
-      zoneForPrice: marketZoneForPrice,
-    }).owed;
-    const decision = owed
-      ? ({ action: "stop", reason: "You owe a forced sale this turn, which Auto-Buy will not make for you." } as const)
-      : autoBuyDecision(
-          gameState,
-          autoBuyPlan,
-          (companyId, source) => purchaseBlockFor(companyId, source, 1),
-          /* #1333 (10c): par for the IPO, the market for the pool. */
-          (companyId, source) => {
-            if (source === "Ipo") {
-              const par = gameState.public_companies.find((c) => c.company_id === companyId)?.par_value;
-              return par === null || par === undefined ? null : Number(par);
-            }
-            return sandboxMarketPrices[companyId] ?? null;
-          },
-        );
+    /* Phase 3 W1-A (AUD-03.05, K-12): `purchaseBlockFor` is the stock authority now, so the cash a purchase needs
+       is asked with everything else -- a share the player cannot pay for is refused here, and the tool disarms
+       with that sentence instead of sending a buy the server refuses and stalling on it. */
+    const decision = autoBuyDecision(
+      gameState,
+      autoBuyPlan,
+      (companyId, source) => purchaseBlockFor(companyId, source, 1),
+      /* #1333 (10c): par for the IPO, the market for the pool. */
+      (companyId, source) => {
+        if (source === "Ipo") {
+          const par = gameState.public_companies.find((c) => c.company_id === companyId)?.par_value;
+          return par === null || par === undefined ? null : Number(par);
+        }
+        return sandboxMarketPrices[companyId] ?? null;
+      },
+    );
 
     /* Design note #1274: `done` is a stop that hands the turn back rather than passing it. Same off-switch,
        same line in the log, and NO dispatch -- the player decides what happens next. */

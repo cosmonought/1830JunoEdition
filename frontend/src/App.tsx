@@ -7361,7 +7361,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             const rises = soldOutRises({
               before,
               after,
-              markFor: marketMarkForCompany,
+              /* Phase 3 W2-J (K-18, OD-12 RED R2): the marks the reducer was HANDED, not the mirror -- the mirror
+                 already holds the risen positions (written from `after` above), so reading it described a
+                 further, hypothetical rise. */
+              markFor: (companyId) => handedBoard?.market_positions?.[companyId] ?? null,
               projectRise: (from) => projectRiseMove(from),
             });
             /* #1211: THE COMMIT MOVED TO THE REDUCER and only the sentence is left here. #746b put the

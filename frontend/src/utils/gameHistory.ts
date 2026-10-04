@@ -51,7 +51,8 @@ import { effectiveActions } from "../gameEngine/logRevert";
 import { depotCostFor, depotInventory, derivePhase, trainTier } from "../gameEngine/gamePhase";
 import { citySlotCount } from "../gameEngine/stationTokens";
 import { boardFor, withRules } from "../gameEngine/boardSelection";
-import { flavorBucketFor, resolveVariants, revenueFlavourClause, rollTurnRevenue } from "../gameEngine/gameVariants";
+import { flavorBucketFor, legacyTurnSeed, resolveVariants, revenueFlavourClause, rollTurnRevenue } from "../gameEngine/gameVariants";
+import { pendingTrainDiscards } from "../gameEngine/trainDiscard";
 import {
   describeFogAtSetEnd,
   fogIsDue,
@@ -263,6 +264,11 @@ function roomSeed() {
 
 type Tally = Map<string, number>;
 const bump = (tally: Tally, key: string, by: number) => tally.set(key, (tally.get(key) ?? 0) + by);
+/** W2-L (OD-13): a key's PLACE in a tally without a value -- `ranked` drops zeros, and its stable sort breaks a tie by
+ *  insertion order, so an entry the history no longer books can still hold the place it always held. */
+const reserve = (tally: Tally, key: string) => {
+  if (!tally.has(key)) tally.set(key, 0);
+};
 /** #1416: the tally in order, best first, so an accolade can carry its runner-up and know whether it was
  *  tied. `lowest` ranks the other way; zeros are left out either way -- nobody wins for doing nothing. */
 const ranked = (tally: Tally, direction: "highest" | "lowest" = "highest"): Array<[string, number]> =>
@@ -326,10 +332,12 @@ interface RunBooking {
   completed: Array<{ model: string; printed: number }>;
   /** The round's sample the run is written onto (#1420), kept so a legacy Mark can correct it. */
   sample: CorporationSample | undefined;
-  /** #1429 / UR-5 (UR-F9): whether the flavour line printed for this run was one of the Cowboy's animal lines. */
+  /** #1429 / UR-5 (UR-F9): whether the flavour line printed for this run was one of the Cowboy's animal lines. On a
+   *  refused run (W2-L) it is the reading the history used to make, kept only to hold the Cowboy's tally order. */
   wildlife: boolean;
-  /** Whether the authority accepted the run (its `routes_run_this_turn` rose). A refused run is booked as it always was
-   *  -- at the figures the board still holds -- but a legacy Sign settles only the run that was accepted. */
+  /** Whether the authority accepted the run (its `routes_run_this_turn` rose). W2-L (OD-13, U-43 (2)): a refused run
+   *  books NOTHING -- it is kept here, at the figure the board still held, only so the tallies' key order (the accolades'
+   *  tie order) stays where it always was -- and a legacy Sign settles only the run that was accepted. */
   accepted: boolean;
   /** Whether the corporation's Dividends step has paid this run out. From then on the paid figure is history: a legacy
    *  request delayed past it (UR-F2's shape) moves `last_route_revenue`, not the money that was paid. */
@@ -347,6 +355,14 @@ function completedRoutesOf(company: Pick<PublicCompanyState, "last_run_breakdown
 }
 
 const turnOf = (state: GameStateResponse, companyId: number) => `${roundKey(state)}#${companyId}`;
+
+/** W2-L (OD-13): a booking's share of its turn's figure. The board's figure is cumulative over the turn (both run arms
+ *  add to it), so a booking holds the figure LESS what the turn's other accepted bookings already hold -- the whole
+ *  figure when it is the turn's only booking. */
+function turnShare(bookings: readonly RunBooking[], booking: Pick<RunBooking, "turn">, figure: number): number {
+  const others = bookings.filter((entry) => entry !== booking && entry.turn === booking.turn && entry.accepted);
+  return Math.max(0, figure - others.reduce((sum, entry) => sum + entry.paid, 0));
+}
 
 /* ==================================================================
     UR-5 (UR-F9): THE COWBOY COUNTS THE LINE THE TABLE READ, NOT THE ONE THE DIE DREW
@@ -440,6 +456,10 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
      first reached it. The cause of every rust that tier wrought, remembered because under Gentle Rust the loss is
      booked at a later destruction whose own entry names somebody else (or nobody). Keyed by the ARRIVING tier. */
   const rustCauseByTier = new Map<string, string | null>();
+  /* W2-L (OD-13, U-41): who put the standing excess-train obligation on the board -- the actor of the entry under which
+     a corporation first went over the limit (the purchase that turned the phase), or null when none stands. */
+  let limitCause: string | null = null;
+  let discardsOwed = pendingTrainDiscards(engine.snapshot.state) !== null;
   const dumps: Tally = new Map();
   const walls: Tally = new Map();
   // UR-5: every run, as it settled -- the run tallies below are drawn from these once, after the replay.
@@ -562,7 +582,37 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
 
     /* MASTER OF THE LINE and lifetime revenue: the run the reducer priced -- booked as it SETTLED (UR-5, OD-UR-6:
        `RunBooking` above), the corporation's paid figure and each completed route's printed one. */
-    if (kind === "RunMultipleRoutes") {
+    /* ==================================================================
+        W2-L (OD-13, U-43 (2)-(4)): ONE BOOKING PER ACCEPTED TURN'S RUN, WHICHEVER MESSAGE CARRIED IT
+       ==================================================================
+       REFUSED IS NOT RUN (U-43 (2)). A run the authority refused (its `routes_run_this_turn` did not rise) left the board
+       as it was, so the old booking read whatever figure the board still held: $0 on a turn's first message, but a
+       refused duplicate after the turn's real run booked that run a second time -- lifetime revenue, the Juggernaut, the
+       fleet ledger's runs, the OR chart, the Cowboy and The Wall's "most recent run" all moved for a run that never
+       happened. It books nothing now. It is still recorded (`accepted: false`), at the figure the board held and the
+       Cowboy's old reading, ONLY so that the tallies it used to touch keep their key order (`reserve`, after the replay):
+       `ranked` breaks a tie by insertion order, so taking the refused entry out would otherwise re-break ties nobody
+       asked to change.
+       THE LEGACY `RunManualRoute` IS A RUN (U-43 (3)). It is one train's route of the turn (#968's predecessor: one message
+       per train, each adding to the turn's figures, #903 / #941), and the reducer's arm accepts it on an unpinned board
+       exactly as it does `RunMultipleRoutes` -- `routes_run_this_turn` rises, `last_route_revenue` /
+       `printed_route_revenue` accumulate the turn. So it is booked the way the equivalent accepted `RunMultipleRoutes`
+       is, and the turn's messages are ONE run: the first accepted message of a turn opens the turn's booking and every
+       later accepted message of the same turn AMENDS it -- the paid figure is the board's turn figure (cumulative by
+       construction, so summing the messages would book the first train's money once per later train), less whatever
+       the turn's other bookings already hold (`turnShare`). The train /
+       route level books only the routes a message WROTE into `last_run_breakdown`: `RunManualRoute` names no train and
+       writes none, so -- as for a `RunMultipleRoutes` whose trains the log cannot name (#1031: "a list of figures attached
+       to guesses") -- the turn's money is booked and no per-train figure is invented. A run accepted after the turn's
+       run was already declared (no live path) opens a second booking for only what it added.
+       THE COWBOY COUNTS WHAT THE TABLE READ (U-43 (4), OD-13). The line is resolved through `printedFlavourOf` -- the
+       shell's own resolution, the Sign's replacement and #1017's silence included -- on the roll the authority actually
+       made: the recorded `revenue_seed`, or for a run logged before #1051 the `legacyTurnSeed` the reducer priced that
+       run on and the shell narrated it from (the same expression in both). A later legacy `YellowSignEvent` still
+       replaces the line (below). A `RunManualRoute` prints no flavour line of its own (the shell narrates the turn's die
+       only on `RunMultipleRoutes`), so it meets no animal.
+       Derived statistics only: no board, message, digest or version changes. */
+    if (kind === "RunMultipleRoutes" || kind === "RunManualRoute") {
       const companyId = Number(body.protocol_id);
       const company = companyById(after, companyId);
       if (company) {
@@ -579,28 +629,14 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
            field but a different moment: each run is written onto the sample of the round it happened in, as
            it happens. The figure is the one the reducer priced, and the Final sample (which repeats the last
            OR) is left alone -- the chart does not draw it. (UR-5: the paid figure, OD-UR-6.1.) */
-        const booking: RunBooking = {
-          companyId,
-          turn: turnOf(before, companyId),
-          round: roundLabelOf(before),
-          ticker: company.ticker,
-          holder: company.president ?? null,
-          paid: paidRevenueOf(company),
-          completed: completedRoutesOf(company),
-          sample: rounds[rounds.length - 1]?.corporations.find((c) => c.companyId === companyId),
-          wildlife: false,
-          accepted: (company.routes_run_this_turn ?? 0) > (companyById(before, companyId)?.routes_run_this_turn ?? 0),
-          declared: false,
-        };
-        if (booking.sample) booking.sample.revenue = booking.paid;
-        /* #1429: JUGGERNAUT (the biggest single run -- drawn from the bookings after the replay, UR-5), the rounds a
-           corporation operated (the divisor for the Dividend Machine, the Little Engine and the White Elephant), and
-           THE FARMHAND -- the Unpredictable Revenue flavour read back off the run's own recorded seed, the way the
-           shell composed it, and classed by the sound it would have played: an animal's, or not. (UR-5, UR-F9: the
-           line the shell PRINTED -- `printedFlavourOf`.) */
-        bump(runsOperated, String(companyId), 1);
-        const turnSeed = typeof body.revenue_seed === "number" ? body.revenue_seed : null;
-        if (turnSeed !== null && resolveVariants(after.variants).unpredictableRevenue) {
+        const was = companyById(before, companyId);
+        const accepted = (company.routes_run_this_turn ?? 0) > (was?.routes_run_this_turn ?? 0);
+        const turn = turnOf(before, companyId);
+        const multi = kind === "RunMultipleRoutes";
+        /* #1429: THE FARMHAND -- the Unpredictable Revenue flavour, classed by the sound it would have played: an
+           animal's, or not. (UR-5, UR-F9: the line the shell PRINTED -- `printedFlavourOf`.) */
+        const wildlifeOn = (turnSeed: number | null): boolean => {
+          if (!multi || turnSeed === null || !resolveVariants(after.variants).unpredictableRevenue) return false;
           const printedLine = printedFlavourOf(
             before,
             after,
@@ -608,14 +644,55 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
             turnSeed,
             Array.isArray(body.train_indices) ? (body.train_indices as number[]) : null,
           );
-          if (printedLine) {
-            const cue = variantCueFor({ line: printedLine.resolution.line, bucket: printedLine.bucket, stage: printedLine.resolution.stage });
-            booking.wildlife = cue.audio !== null && ANIMAL_SOUNDS.has(cue.audio);
+          if (!printedLine) return false;
+          const cue = variantCueFor({ line: printedLine.resolution.line, bucket: printedLine.bucket, stage: printedLine.resolution.stage });
+          return cue.audio !== null && ANIMAL_SOUNDS.has(cue.audio);
+        };
+        const recordedSeed = typeof body.revenue_seed === "number" ? body.revenue_seed : null;
+        const booking = (paid: number, completed: RunBooking["completed"], wildlife: boolean): RunBooking => ({
+          companyId,
+          turn,
+          round: roundLabelOf(before),
+          ticker: company.ticker,
+          holder: company.president ?? null,
+          paid,
+          completed,
+          sample: rounds[rounds.length - 1]?.corporations.find((c) => c.companyId === companyId),
+          wildlife,
+          accepted,
+          declared: false,
+        });
+        if (!accepted) {
+          /* U-43 (2): books nothing; kept for the tallies' key order only -- as the old reading made it (the recorded
+             seed, or none). The old history never booked a `RunManualRoute`, so a refused one holds no place at all. */
+          if (multi) runBookings.push({ ...booking(paidRevenueOf(company), [], wildlifeOn(recordedSeed)), sample: undefined });
+        } else {
+          // The routes THIS message completed: the breakdown it wrote, or none (a message that names no train writes none).
+          const wrote = JSON.stringify(was?.last_run_breakdown ?? []) !== JSON.stringify(company.last_run_breakdown ?? []);
+          const completed = wrote ? completedRoutesOf(company) : [];
+          const wildlife = wildlifeOn(recordedSeed ?? legacyTurnSeed(before.macro_round_number ?? 0, before.sub_round_index ?? 0, companyId));
+          const sameTurn = runBookings.filter((entry) => entry.turn === turn && entry.accepted);
+          const open = sameTurn[sameTurn.length - 1];
+          const hexes = multi
+            ? (Array.isArray(body.routes) ? (body.routes as Array<Array<{ hex?: string }>>) : []).flat()
+            : Array.isArray(body.path) ? (body.path as Array<{ hex?: string }>) : [];
+          const stood = hexes.map((stop) => stop?.hex ?? "").filter(Boolean);
+          if (open && !open.declared) {
+            // A later message of the turn's run: the turn's figure as it now stands, plus whatever routes it wrote.
+            open.paid = turnShare(runBookings, open, paidRevenueOf(company));
+            open.completed = [...open.completed, ...completed];
+            open.wildlife = open.wildlife || wildlife;
+            if (open.sample) open.sample.revenue = paidRevenueOf(company);
+            for (const hex of stood) lastRoutes.get(companyId)?.add(hex);
+          } else {
+            const fresh = booking(turnShare(runBookings, { turn }, paidRevenueOf(company)), completed, wildlife);
+            if (fresh.sample) fresh.sample.revenue = paidRevenueOf(company);
+            // The rounds a corporation operated (#1429's divisor) -- once per turn's run.
+            bump(runsOperated, String(companyId), 1);
+            runBookings.push(fresh);
+            lastRoutes.set(companyId, new Set(stood));
           }
         }
-        runBookings.push(booking);
-        const routes = Array.isArray(body.routes) ? (body.routes as Array<Array<{ hex?: string }>>) : [];
-        lastRoutes.set(companyId, new Set(routes.flat().map((stop) => stop?.hex ?? "").filter(Boolean)));
       }
     }
 
@@ -656,9 +733,10 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
     /* GRAVEDIGGER and THE RUST BELT (#1422): trains rusted or discarded to the limit, read by the same diff
        the fleet-loss notices use -- which already leaves out a sold train (#1245) and one the Yellow Sign took
        (#1264), and under Gentle Rust reports the reprieve as the rust event (#979) -- which, since #1704, these
-       tallies do NOT book: see the note below. A trade-in's returned
-       model is taken out here: it left the roster, but nobody scrapped it. The loser is the corporation's
-       president; the cause is whoever dispatched the purchase that turned the phase.
+       tallies do NOT book: see the note below. The loser is the corporation's president; the cause is whoever
+       dispatched the purchase that turned the phase. [W2-L (OD-13, U-43 (1)): this diff used to take a Bank Pool
+       purchase's `returned_model_type` out as a "trade-in's returned model". That field names the pool train BOUGHT;
+       a pool purchase takes nothing off the buyer's roster, so the arm was dormant and is gone.]
        #1702 (GR-3, U-6): THE DIESEL TRADE-IN NO LONGER REACHES THIS DIFF -- the narrator splices it out, as it
        does a sale and the Sign's Mark, because it was being told as a rust (standard, first Diesel) or a limit
        discard (Gentle Rust). So it is not "returned" here any more (taking it out a second time would take out a
@@ -700,23 +778,13 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
       if (tierBefore !== null && tierAfter !== null && tierAfter !== tierBefore) rustCauseByTier.set(tierAfter, actor);
     }
     if (kind !== "YellowSignEvent") {
-      const returned =
-        kind === "BuyHardwareFromPool" && typeof body.returned_model_type === "string" ? body.returned_model_type
-        : null;
       for (const loss of describeFleetLosses(before, after, msg ?? undefined)) {
         // #1704: under Gentle Rust these are the MARKS -- rusted, still owned; booked at their destruction below.
         const rusted = gentleTable ? [] : loss.rusted;
-        // #1431: the ledger's fates, before the trade-in is taken out of the scrap count below.
+        // #1431: the ledger's fates.
         for (const model of rusted) fate(loss.companyId, model, "rusted");
-        for (const model of loss.discarded) {
-          if (returned && Number(body.protocol_id) === loss.companyId && model === returned) fate(loss.companyId, model, "traded");
-          else fate(loss.companyId, model, "discarded");
-        }
+        for (const model of loss.discarded) fate(loss.companyId, model, "discarded");
         const scrapped = [...rusted, ...loss.discarded];
-        if (returned && Number(body.protocol_id) === loss.companyId) {
-          const at = scrapped.indexOf(returned);
-          if (at >= 0) scrapped.splice(at, 1);
-        }
         const president = companyById(before, loss.companyId)?.president ?? null;
         for (const model of scrapped) {
           const tier = trainTier(model);
@@ -752,6 +820,51 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
           }
         }
       }
+    }
+    /* ==================================================================
+        W2-L (OD-13, U-41): A TRAIN DISCARDED TO MEET THE LIMIT IS LOST TO THE LIMIT
+       ==================================================================
+       RULED: "A train actually discarded to satisfy the train limit is recorded with fate: discarded. It is not rusted
+       and not traded." The player who loses the rolling stock takes the Rust Belt loss; the purchase that caused the limit
+       reduction takes the Gravedigger's credit ("Laid waste to $X of trains through rust and limits" -- #1422 counted
+       the limit in both from the start; #1431 lists "discarded to the limit" among the ledger's fates).
+       WHY IT WAS MISSING: #1530 made the discard the president's own `DiscardTrain`, and `describeFleetLosses` splices
+       that model out of the diff above (the action narrates itself), so nothing booked it. It is read here off the
+       message, ONLY when the named model actually left that corporation's roster in this entry -- a refused discard
+       (a reprieved or gilded train, the wrong corporation) books nothing, and the diff above never sees the model, so
+       it cannot be booked twice. The value is the tier's depot price, as for every other scrapped train.
+         THE LOSER is the discarding corporation's president at the discard.
+         THE CAUSE is `limitCause`: the actor of the entry under which the obligation first stood (the purchase that
+       turned the phase and lowered the limit) -- never the discard's own actor, who is the victim. A legacy log whose
+       adapter supplies the discards inside the purchase's own entry (#1530's `engine-chose-cheapest`) is booked by the
+       diff above, at that entry, to that same purchaser; this block never sees those.
+       GENTLE RUST'S DESTRUCTION-TIME ACCOUNTING (#1704) IS UNTOUCHED: only a countable train may be discarded -- never a
+       reprieved one (`discardTrainRefusal`) -- so a discard is a loss of an unmarked train at the moment it leaves, and
+       the marked copies are still booked when they are destroyed. Derived statistics only. */
+    if (kind === "DiscardTrain") {
+      const companyId = Number(body.protocol_id);
+      const model = String(body.model_type ?? "");
+      const left = trainsRemoved(companyById(before, companyId)?.owned_trains ?? [], companyById(after, companyId)?.owned_trains ?? []);
+      if (model && left.includes(model)) {
+        fate(companyId, model, "discarded");
+        const tier = trainTier(model);
+        const value = tier ? depotCostFor(before, tier) : 0;
+        const president = companyById(before, companyId)?.president ?? null;
+        if (president) {
+          bump(trainsLostCount, president, 1);
+          bump(trainsLostValue, president, value);
+        }
+        if (limitCause) {
+          bump(trainsSentCount, limitCause, 1);
+          bump(trainsSentValue, limitCause, value);
+        }
+      }
+    }
+    {
+      const owed = pendingTrainDiscards(after) !== null;
+      if (owed && !discardsOwed) limitCause = actor; // the entry that put a corporation over the limit
+      if (!owed) limitCause = null;
+      discardsOwed = owed;
     }
 
     /* THE WALL: a token that fills a city's last slot on a hex some other corporation's run stood in. */
@@ -835,16 +948,29 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
         firstDiesel = { companyId: company.company_id, ticker: company.ticker, president: company.president ?? null, round: roundLabelOf(before) };
       }
     }
-    if (kind === "ExchangeTrainForDiesel" || (kind === "BuyHardwareFromPool" && typeof body.returned_model_type === "string" && body.returned_model_type)) {
-      bump(tradeIns, String(body.protocol_id), 1);
-    }
-    /* #1431 / #1702 (GR-3, U-6): the traded-in train's fate, from the message -- the fleet-loss diff above no
-       longer carries it. Only when the exchange actually took that model off the roster. */
-    if (kind === "ExchangeTrainForDiesel") {
+    /* ==================================================================
+        W2-L (OD-13, U-43 (1); OD-14(d)): THE SALVAGER COUNTS A TRAIN THAT WAS ACTUALLY TRADED IN
+       ==================================================================
+       RULED: "A Bank Pool / Diesel purchase that actually returns a train as a trade-in counts as a trade-in." The one
+       purchase that returns a train is the Diesel exchange: `ExchangeTrainForDiesel` names the 4, 5 or 6 given up and the
+       arm puts it back with the Bank (#1303 / #1314). It counts when that model actually left the buying corporation's
+       roster in this entry -- one trade-in, the Salvager's count and the ledger's `traded` fate read off the same fact.
+       Two things no longer count: a `BuyHardwareFromPool` naming `returned_model_type` (#1314's Bank Pool purchase --
+       the field names the pool train BOUGHT; the buyer returns nothing), and an exchange the authority refused (a
+       reprieved or gilded train, no Diesel for sale), which moved nothing. Each still holds the place in the tally it
+       used to open (`reserve`), so the Salvager's ties break as before.
+       OD-14(d): the traded-in train's fate stays `traded` -- on the first Diesel too, where the old diff filed it as
+       "rusted" (#1702). It was deliberately returned, not destroyed. */
+    if (kind === "ExchangeTrainForDiesel" || kind === "BuyHardwareFromPool") {
       const companyId = Number(body.protocol_id);
-      const model = String(body.model_type ?? "");
+      const model = String((kind === "ExchangeTrainForDiesel" ? body.model_type : null) ?? "");
       const removed = trainsRemoved(companyById(before, companyId)?.owned_trains ?? [], companyById(after, companyId)?.owned_trains ?? []);
-      if (model && removed.includes(model)) fate(companyId, model, "traded");
+      if (model && removed.includes(model)) {
+        bump(tradeIns, String(companyId), 1);
+        fate(companyId, model, "traded"); // #1431 / #1702: off the message -- the fleet-loss diff above never carries it
+      } else if (kind === "ExchangeTrainForDiesel" || (typeof body.returned_model_type === "string" && body.returned_model_type)) {
+        reserve(tradeIns, String(companyId));
+      }
     }
 
     /* #1429: TRAIN SPEND, for the White Elephant and the Little Engine -- what the buying corporation's treasury
@@ -932,8 +1058,8 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
           if (applied.stage === "mark" && applied.model) {
             booking.completed = completedRoutesOf({ last_run_breakdown: runWithoutTrain(company, applied.model, null).breakdown });
             if (!booking.declared) {
-              booking.paid = paidRevenueOf(companyAfter);
-              if (booking.sample) booking.sample.revenue = booking.paid;
+              booking.paid = turnShare(runBookings, booking, paidRevenueOf(companyAfter));
+              if (booking.sample) booking.sample.revenue = paidRevenueOf(companyAfter);
             }
           }
           booking.wildlife = false;
@@ -1029,6 +1155,15 @@ export function gameHistoryFrom(log: readonly SandboxAction[], policy: ReplayPol
   let bestRun: { holder: string | null; ticker: string; model: string; revenue: number; round: string } | null = null;
   for (const booking of runBookings) {
     const id = String(booking.companyId);
+    /* W2-L (OD-13, U-43 (2)): a refused run books nothing. It holds only the places the old booking gave its keys --
+       lifetime revenue always, the Juggernaut where its figure would have led, the Cowboy where its old line was an
+       animal's -- so every tie breaks exactly as before; `ranked` never shows a zero. */
+    if (!booking.accepted) {
+      reserve(lifetimeRevenue, id);
+      if (booking.paid > (peakRun.get(id) ?? 0)) reserve(peakRun, id);
+      if (booking.wildlife && booking.holder) reserve(animalRuns, booking.holder);
+      continue;
+    }
     bump(lifetimeRevenue, id, booking.paid);
     if (booking.paid > (peakRun.get(id) ?? 0)) {
       peakRun.set(id, booking.paid);

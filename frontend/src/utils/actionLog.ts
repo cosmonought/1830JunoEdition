@@ -442,9 +442,63 @@ export function describeGameplayAction(
   context: ActionLogContext,
 ): string | null {
   const line = describeGameplayActionItself(msg, context);
-  const bankruptcy = automaticBankruptcySentence(context);
-  if (bankruptcy === null) return line;
-  return line === null ? bankruptcy : `${line} ${bankruptcy}`;
+  /* Phase 3 W2-J (K-20 / U-33): a crown that moved in this transition is said on the same line, before an
+     automatic bankruptcy (which ends the game and so reads last). */
+  const appended = [presidencyChangeSentence(context), automaticBankruptcySentence(context)].filter(
+    (entry): entry is string => entry !== null,
+  );
+  if (appended.length === 0) return line;
+  const tail = appended.join(" ");
+  return line === null ? tail : `${line} ${tail}`;
+}
+
+/* ==================================================================
+    PHASE 3 W2-J (AUD-10.01, K-20 / U-33): A PRESIDENCY CHANGE IS NARRATED, WITH ITS TIE-BREAK
+   ==================================================================
+   `presidencyHandoff` drove only the card flourish and the cue; the Activity Log never said a crown had moved.
+   NOTHING IS DECIDED HERE. The reducer has already settled every presidency (`settlePresidencies`, §5.4 via
+   `presidentFor`), so the change is READ: one field compared across the BEFORE board (`gameState`, #1) and the
+   settled AFTER board -- the reading `describeStockTransaction` already makes for the crown (#1451). Any message
+   that moves holdings can move a crown (a purchase, a sale, an emergency portfolio sale, the M&H exchange), so
+   the sentence rides every entry rather than one arm, the way the automatic bankruptcy does.
+   A corporation's FIRST president is not a change: the opening purchase's own sentence names the President's
+   Certificate (#770) and the B&O grant names its winner, so `from === null` says nothing more.
+   THE TIE-BREAK IS STATED, NOT RE-RUN. When another holder ends the transition level with the new president,
+   the crown was decided by §5.4's clockwise rule -- the only rule that separates equal challengers (#1620) --
+   and the sentence names it with the outgoing president the circle is counted from. The holders and figures are
+   the after board's. */
+function presidencyChangeSentence(context: ActionLogContext): string | null {
+  const before = context.gameState;
+  const after = context.afterState ?? null;
+  if (!before || !after) return null;
+  const seating = after.player_addresses ?? [];
+  const sentences: string[] = [];
+  for (const company of after.public_companies) {
+    const previous = before.public_companies.find((entry) => entry.company_id === company.company_id);
+    const from = previous?.president ?? null;
+    const to = company.president ?? null;
+    if (from === null || to === null || from === to) continue;
+    const held = (player: string) =>
+      company.player_holdings.find((entry) => entry.player === player)?.percentage ?? 0;
+    const winner = held(to);
+    const left = held(from);
+    const who = context.labelForAddress;
+    let sentence =
+      `${who(to)} becomes president of ${company.ticker} with ${winner}%, taking the President's Certificate from ` +
+      `${who(from)}, who now holds ${left > 0 ? `${left}%` : "none"}.`;
+    const level = company.player_holdings
+      .filter((entry) => entry.player !== to && entry.player !== from && entry.percentage === winner)
+      .map((entry) => entry.player);
+    if (level.length > 0) {
+      const tied = [to, ...level].sort((a, b) => seating.indexOf(a) - seating.indexOf(b)).map(who);
+      const named = tied.length === 2 ? `${tied[0]} and ${tied[1]}` : `${tied.slice(0, -1).join(", ")} and ${tied[tied.length - 1]}`;
+      sentence +=
+        ` ${named} each hold ${winner}%; the tie goes to the player seated closest to ${who(from)} going clockwise, ` +
+        `which is ${who(to)}.`;
+    }
+    sentences.push(sentence);
+  }
+  return sentences.length > 0 ? sentences.join(" ") : null;
 }
 
 /* ==================================================================

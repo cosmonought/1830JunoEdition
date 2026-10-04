@@ -384,7 +384,11 @@ describe("the private-company catalog is read from the game, not typed out here"
     /* Rulebook 3.0 states the eligibility as a threshold -- "provided he does not already hold 60% of the NYC
        shares" -- where the player-aid summary softens it to "provided he may hold another share of the NYC".
        The page and `privateCatalog.ts`'s long form now both use the threshold. */
-    expect(mh).toContain("hold under 60% of the NYC, and an NYC share must be free in the IPO or the Bank Pool.");
+    /* Phase 3 W2-E (RR-6): the note now carries the Orange/Brown waiver, the certificate limit and the owner's
+       choice of pile, each of which the authority (`mohawkExchange.ts`) enforces. */
+    expect(mh).toContain(
+      "The player must hold under 60% of the NYC, unless NYC is in the Orange or Brown zone; the exchange must not leave the player over the certificate limit, and an ordinary NYC share must be free in the pile the owner chooses, the IPO or the Bank Pool.",
+    );
     expect(mh).not.toContain("applicable ownership limit");
     /* Design note #771: the two piles are the IPO and the Bank Pool. */
     expect(mh).not.toContain("Bank or Bank Pool");

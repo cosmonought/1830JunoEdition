@@ -383,7 +383,7 @@
    "od": "OD-2 (RULED 2026-10-03: Sell whenever legal; at most one Buy; after buying, Sell remains; one-click \"Pass Turn\"; v13 rules slice + settlement certification)",
    "p4": "—",
    "notes": "The old Sell → Buy → Sell stage walk is superseded on rules revision 2 (W3-K). Wave-1's `sellBuySell` pins now pin revision-1 boards only. The audit cites OD-A-4 here; the 6.5-A register files the Pass question as OD-A-2; OD-2 answered OD-A-2. SBS-4 is P3-N024 (implemented in W3-K).",
-   "status": "IMPLEMENTED — both halves. The rule: W3-K (rules v13 / revision 2: one `PassTurn` ends the Stock Round turn), integrated on `phase3/wave2a-v13-integration`. The presentation: W2-B `90d5588` + review fix `ca68b43` + #1274 fix `794e03c` / `699160c` (`phase3/w2-b-stock-round-v13-ui`, not integrated): the bar's one \"Pass Turn\" control sends one `PassTurn` in every state; the #1443 stage button, `stockStage` and the revision-1 copy are gone; Auto-Buy's stage Pass is removed and it sends no Pass after its purchase (`autoBuyTurnStep`; #1274)"
+   "status": "IMPLEMENTED — both halves. The rule: W3-K (rules v13 / revision 2: one `PassTurn` ends the Stock Round turn), integrated on `phase3/wave2a-v13-integration`. The presentation: W2-B `90d5588` + review fix `ca68b43` + #1274 fix `794e03c` / `699160c` (`phase3/w2-b-stock-round-v13-ui`; integrated on `phase3/wave2-bcg-v13cert-integration`, merge `181e51e`): the bar's one \"Pass Turn\" control sends one `PassTurn` in every state; the #1443 stage button, `stockStage` and the revision-1 copy are gone; Auto-Buy's stage Pass is removed and it sends no Pass after its purchase (`autoBuyTurnStep`; #1274)"
   },
   {
    "key": "AUD-03.05",
@@ -425,7 +425,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W2-B `90d5588` + review fix `ca68b43` (a must-sell banner in `StockRoundPanel` from the viewer's `divestmentDebt` via `mustSellBannerOf` -- the same reading and sentence that greys the Pass), not integrated"
+   "status": "IMPLEMENTED — W2-B `90d5588` + review fix `ca68b43` (a must-sell banner in `StockRoundPanel` from the viewer's `divestmentDebt` via `mustSellBannerOf` -- the same reading and sentence that greys the Pass), integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`)"
   },
   {
    "key": "AUD-03.08",
@@ -966,7 +966,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W2-C `e629687` + review fixes `0975c04` (the corporate roster and offer form ask `proposeTrainPurchaseRefusal`, or `trainSaleRefusal` at settlement for the same-president sale, through `utils/offerAuthorityView.ts`; `trainPriceError` and the local train-limit arm deleted), not integrated"
+   "status": "IMPLEMENTED — W2-C `e629687` + review fixes `0975c04` (the corporate roster and offer form ask `proposeTrainPurchaseRefusal`, or `trainSaleRefusal` at settlement for the same-president sale, through `utils/offerAuthorityView.ts`; `trainPriceError` and the local train-limit arm deleted), integrated on `phase3/wave2-bcg-v13cert-integration` (merge `904598a`)"
   },
   {
    "key": "AUD-09.03",
@@ -980,7 +980,7 @@
    "od": "—",
    "p4": "—",
    "notes": "W2-C adds a regression proving corporation-owned privates are not offered (the half the audit stated, not reproduced).",
-   "status": "IMPLEMENTED — W2-C `e629687` + review fixes `0975c04` (card availability and the submit ask `proposePrivatePurchaseRefusal`; the local band / treasury / B&O / unsold copy deleted; the embedded submit latched; corporation-owned privates not offered, now pinned), not integrated"
+   "status": "IMPLEMENTED — W2-C `e629687` + review fixes `0975c04` (card availability and the submit ask `proposePrivatePurchaseRefusal`; the local band / treasury / B&O / unsold copy deleted; the embedded submit latched; corporation-owned privates not offered, now pinned), integrated on `phase3/wave2-bcg-v13cert-integration` (merge `904598a`)"
   },
   {
    "key": "AUD-09.04",
@@ -1008,7 +1008,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (slice branch; not integrated)"
+   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (integrated on `phase3/wave2-bcg-v13cert-integration`, merge `b84247f`)"
   },
   {
    "key": "AUD-09.06",
@@ -1022,7 +1022,7 @@
    "od": "OD-4 (RULED 2026-10-03: automatic emergency funding, v13)",
    "p4": "—",
    "notes": "W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`).",
-   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (slice branch; not integrated)"
+   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (integrated on `phase3/wave2-bcg-v13cert-integration`, merge `b84247f`)"
   },
   {
    "key": "AUD-09.07",
@@ -1036,7 +1036,7 @@
    "od": "OD-4 (RULED 2026-10-03: automatic emergency funding, v13)",
    "p4": "—",
    "notes": "W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`).",
-   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (slice branch; not integrated)"
+   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (integrated on `phase3/wave2-bcg-v13cert-integration`, merge `b84247f`)"
   },
   {
    "key": "AUD-09.08",
@@ -3680,7 +3680,7 @@
    "od": "OD-4 (RULED 2026-10-03: automatic emergency funding, v13)",
    "p4": "—",
    "notes": "On a revision-2 board `DeclareBankruptcy` is refused (`retiredDeclarationRefusal`) and `canDeclareBankruptcy` is false; the button must go. W2-G must be reconciled to the v13 authority before it starts: no player \"Declare bankruptcy\" (refused on revision 2), one `EmergencySellPortfolio` instead of single forced sales, `ForgoTrainTrade` / `ForgoPrivateFunding`, an automatic purchase and an automatic bankruptcy (`emergencyFundingFor(...).automatic`).",
-   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (slice branch; not integrated)"
+   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (integrated on `phase3/wave2-bcg-v13cert-integration`, merge `b84247f`)"
   },
   {
    "key": "P3-N018",
@@ -3694,7 +3694,7 @@
    "od": "—",
    "p4": "—",
    "notes": "—",
-   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (slice branch; not integrated)"
+   "status": "IMPLEMENTED — W2-G v13 reconciliation, `phase3/w2-g-v13-emergency-ui` `112fa71` + review fixes `02d73b8` (integrated on `phase3/wave2-bcg-v13cert-integration`, merge `b84247f`)"
   },
   {
    "key": "P3-N019",
@@ -4658,12 +4658,12 @@
   "W1-N": "COMPLETE — L7 `9d9376b` + review fixes `06c3a91`; the OD-12 RED R2 call-site deletion `87d63c4` (+ comment follow-up `819a204`); tie-aware game-over strip at the integration (`8dc79e0`)",
   "W1-O": "COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`)",
   "W2-A": "COMPLETE — ACCEPTED and INTEGRATED into `phase3/wave2a-integration` (2026-10-04): slice branch `phase3/w2-a-authoritative-holds` @ `2d0fd0a` (code `e5fcfcc`, tracking `2d0fd0a`) carried linearly onto `bfb7635`, commits unchanged. One hold answer (`utils/dockHoldView.ts`, one App call site) threaded to the bar's `turnHoldReason`, Pass, the tile-lay gate, the token ring and both purchase panels. Residue outside its rows: the Stock Round share controls and the M&H chip still read `privateTradeHoldReason` (same answer on every reachable board; W2-C / W2-F)",
-  "W2-B": "COMPLETE — slice branch `phase3/w2-b-stock-round-v13-ui` `90d5588` + review fix `ca68b43` + #1274 fix `794e03c` / `699160c` (from `868bd83`); NOT integrated into the provisional baseline (integration and owner broad gate pending). OD-2 presented over the integrated v13 reducer: one \"Pass Turn\" control (one `PassTurn`; its title says whether the press ends an acted turn or is a true pass), the #1443 stage block / `stockStage` / revision-1 copy removed, Auto-Buy's obsolete stage Pass removed and no Pass after its purchase (`autoBuyTurnStep`: buy at once, then hand the turn back -- the player may sell and presses Pass Turn; #1274), the must-sell banner from `divestmentDebt` (AUD-03.07); W2-A's holds unchanged. Accepted limitation: on a legacy revision-1 board (development-corpus replay only; live rules are [13]) the one Pass Turn's first press walks that board's own Sell -> Buy stage, as its reducer revision says; no v12 shim (OD-2). No reducer change; rules 13, live [13], settlement [10, 11, 12] unchanged",
-  "W2-C": "COMPLETE — slice branch `phase3/w2-c-offer-authority` `e629687` + review fixes `0975c04` (from `96ccb22`); NOT integrated (integration and owner broad gate pending). Both offer panels ask the engine's own predicates (`proposePrivatePurchaseRefusal`; `proposeTrainPurchaseRefusal` / `trainSaleRefusal`), bound once per board beside W2-A's `dockHold` (`utils/offerAuthorityView.ts`), which stays asked first; the embedded `ProposePrivatePurchase` submit is latched. Not taken: the Stock Round share controls / M&H chip `privateTradeHoldReason` residue W2-A assigned to \"W2-C / W2-F\" (outside W2-C's surfaces; W2-F / W2-D)",
+  "W2-B": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave2-bcg-v13cert-integration` (2026-10-04, merge `181e51e` of `phase3/w2-b-stock-round-v13-ui` @ `3fc3d0e`, its 6 commits carried unchanged): code `90d5588` + review fix `ca68b43` + #1274 fix `794e03c` / `699160c`. OD-2 presented over the integrated v13 reducer: one \"Pass Turn\" control (one `PassTurn`; its title says whether the press ends an acted turn or is a true pass), the #1443 stage block / `stockStage` / revision-1 copy removed, Auto-Buy's obsolete stage Pass removed and no Pass after its purchase (`autoBuyTurnStep`: buy at once, then hand the turn back -- the player may sell and presses Pass Turn; #1274), the must-sell banner from `divestmentDebt` (AUD-03.07); W2-A's holds unchanged. Accepted limitation: on a legacy revision-1 board (development-corpus replay only; live rules are [13]) the one Pass Turn's first press walks that board's own Sell -> Buy stage, as its reducer revision says; no v12 shim (OD-2). No reducer change",
+  "W2-C": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave2-bcg-v13cert-integration` (2026-10-04, merge `904598a` of `phase3/w2-c-offer-authority` @ `c3db730`, its 3 commits carried unchanged): code `e629687` + review fixes `0975c04`. Both offer panels ask the engine's own predicates (`proposePrivatePurchaseRefusal`; `proposeTrainPurchaseRefusal` / `trainSaleRefusal`), bound once per board beside W2-A's `dockHold` (`utils/offerAuthorityView.ts`), which stays asked first; the embedded `ProposePrivatePurchase` submit is latched. Reconciled onto v13 with no code change: on a revision-2 board `proposeTrainPurchaseRefusal` reaches `fundedTradeRefusal`, so the roster's Propose dies once the emergency trade window closes -- the Wave-2A v13 residue R1 is CLOSED (`phase3W2CGTrainWindow.test.tsx`, `70483ef`). Not taken: the Stock Round share controls / M&H chip `privateTradeHoldReason` residue W2-A assigned to \"W2-C / W2-F\" (outside W2-C's surfaces; W2-F / W2-D)",
   "W2-D": "NOT STARTED — UNLOCKED: its W2-A dependency is integrated at `phase3/wave2a-integration`; unchanged by the v13 integration (`phase3/wave2a-v13-integration`)",
   "W2-E": "COMPLETE — `phase3/w2-mh-queued-visibility` `4f998b8` + RR-6 `91037ce`; integrated at the safe Wave-2 integration (`09fcb25`). Residue outside its rows: `privateCatalog.ts`'s MH ability text (W1-L / W2-J copy) and the chip's Stock-Round-only gate (W2-D)",
   "W2-F": "NOT STARTED — UNLOCKED: its W2-A dependency is integrated at `phase3/wave2a-integration`; unchanged by the v13 integration (`phase3/wave2a-v13-integration`)",
-  "W2-G": "COMPLETE — on its slice branch `phase3/w2-g-v13-emergency-ui` (from `phase3/wave2a-v13-integration` @ `868bd83`), NOT integrated: the accepted W2-G UI (`695afe9`) reconciled to the integrated v13 emergency authority (`112fa71` + review fixes `02d73b8`). The surface presents `emergencyFundingFor(...).automatic`: the open trade window with `ForgoTrainTrade` (never reopened), ONE `EmergencySellPortfolio` judged by `emergencyPortfolioRefusal`, private funding only while exactly relevant with `ForgoPrivateFunding`, the automatic purchase as a status (no Buy) and the automatic bankruptcy (no `DeclareBankruptcy` anywhere); obligated president only (OD-1), everybody else W2-H's waiting surface; non-dismissible (OD-4); latched. Rules 13 unchanged; settlement [10, 11, 12] unchanged",
+  "W2-G": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave2-bcg-v13cert-integration` (2026-10-04, merge `b84247f` of `phase3/w2-g-v13-emergency-ui` @ `17ab21f`, its 3 commits carried unchanged): the accepted W2-G UI (`695afe9`) reconciled to the integrated v13 emergency authority (`112fa71` + review fixes `02d73b8`). The surface presents `emergencyFundingFor(...).automatic`: the open trade window with `ForgoTrainTrade` (never reopened), ONE `EmergencySellPortfolio` judged by `emergencyPortfolioRefusal`, private funding only while exactly relevant with `ForgoPrivateFunding`, the automatic purchase as a status (no Buy) and the automatic bankruptcy (no `DeclareBankruptcy` anywhere); obligated president only (OD-1), everybody else W2-H's waiting surface; non-dismissible (OD-4); latched. Residue kept as a later bar pass: the now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel` (W2-A's bar test feeds them)",
   "W2-H": "COMPLETE — `phase3/w2-waiting-prompts` `3b7f23b`, `5cc5ccc`, `461d4f0`; integrated at the safe Wave-2 integration (`66977d5`). K-21's second half (the President's Skip while placing) stays W2-A's",
   "W2-I": "NOT STARTED",
   "W2-J": "NOT STARTED",
@@ -4680,7 +4680,7 @@
   "W3-H": "NOT STARTED",
   "W3-I": "NOT STARTED",
   "W3-J": "NOT STARTED",
-  "W3-K": "COMPLETE — ledger reconciliation only (W2-B slice branch, 2026-10-04): the shared row AUD-03.04 (SBS-1 / SBS-2) is closed by W2-B's one-click \"Pass Turn\" control (`90d5588`), so the PARTIAL the ledger held for that row alone lifts here; on the provisional baseline it lifts when W2-B is integrated. No W3-K work changed. ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. RULES_ENGINE_VERSION 13; live list [13]; settlement-certified literal UNCHANGED [10, 11, 12]; v13 settlement certification PENDING A DEDICATED PASS (`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). Not deployable until W2-B, a v13-reconciled W2-G, the v13 settlement certification, drained v12 rooms and the final integrated owner gate"
+  "W3-K": "COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click \"Pass Turn\" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D / W2-F and other open slices are tracked separately)"
  },
  "owner_rulings_source": "The owner's Phase-3 Wave-1 integration brief (2026-10-03), in its words; instructions addressed to that integration turned into statements. OD-9 and OD-11: the owner's safe Wave-2 integration brief (2026-10-03), in its words. OD-4, OD-10 and OD-17: restated from the owner's W3-K rules-v13 brief (2026-10-03); instructions addressed to that slice turned into statements. The 2026-10-04 additions to OD-4 and OD-10 are restated from the owner's W3-K continuation brief (2026-10-04).",
  "wave2_safe_integration": {
@@ -4812,5 +4812,78 @@
    "Residue (recorded, not fixed): R1 (W2-G / W2-C) on a revision-2 board the train panel's Propose stays live after the trade window closes — `fundedTradeRefusal` refuses it, but `dockHold.proposeTrainPurchase` asks only the hold, which passes `ProposeTrainPurchase`; W2-A's funding-hold matrix runs only at revision 0. R2 (inherited from W3-K, owner placement) post-game statistics (`gameHistory.ts`) count `SellStock` only, so `EmergencySellPortfolio` legs and the automatic liquidation are not seen, and the president's emergency contribution is booked by the `EmergencyBuyHardware` actor, which on the derived path can be another seat."
   ],
   "independent_verification": "2026-10-04, separate session, nothing pushed: the merge rebuilt from 96ccb22 + be1fd10 has the same code tree as ed5e69a; lineage, one-sided-file identity and shared-file deltas re-verified on 868bd83; focused suites and corpus closures green; independent review APPROVE WITH NITS (these tracking nits)."
+ },
+ "wave2_bcg_v13cert_integration": {
+  "branch": "phase3/wave2-bcg-v13cert-integration",
+  "base": "16b79b277c7e99d1ee0f2b22f468423508f7a5ca (phase3/wave2a-v13-integration)",
+  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G and the v13 settlement certification integrated; no broad Phase-3 owner gate has been run; not merged to main",
+  "inputs": {
+   "W2-B": {
+    "branch": "phase3/w2-b-stock-round-v13-ui",
+    "head": "3fc3d0eaca6714dd97336069f1efb23568fb02a6",
+    "parent": "868bd83",
+    "merge": "181e51e"
+   },
+   "W2-C": {
+    "branch": "phase3/w2-c-offer-authority",
+    "head": "c3db7305a6f92263ab61bee721f02c2671ce4c38",
+    "parent": "96ccb22",
+    "merge": "904598a"
+   },
+   "W2-G": {
+    "branch": "phase3/w2-g-v13-emergency-ui",
+    "head": "17ab21f6718ffce762e7a3e22cf93a988fd95a5d",
+    "parent": "868bd83",
+    "merge": "b84247f"
+   },
+   "v13 settlement certification": {
+    "branch": "phase3/v13-settlement-certification",
+    "head": "79167631ec724593a2fda44106a7f297dc665438",
+    "parent": "be1fd10",
+    "merge": "69c7496"
+   }
+  },
+  "method": "git merge --no-ff, in the order W2-B, W2-C, W2-G, certification; every accepted commit carried unchanged (same SHAs); no squash, no rebase, no source branch moved",
+  "integration_commits": {
+   "C+G train-window regression, test-only (phase3W2CGTrainWindow.test.tsx)": "70483ef",
+   "Phase-3 tracking only (this record)": "the integration branch HEAD"
+  },
+  "reconciliation": [
+   "Code merged without a textual conflict in all four merges. App.tsx's merged delta over 16b79b2 is exactly the union of W2-B's, W2-C's and W2-G's own deltas (385 changed lines, identical multiset); ContextualActionBar.tsx's is exactly W2-B's plus W2-C's (89 lines). Every other code file only one input changed equals that input's tip; phase65bShellWiring.test.ts carries exactly the certification's delta over W3-K's.",
+   "Conflicts were tracking-only: PHASE3_AUDIT_RECONCILIATION.md (independent sections appended at the same point: all kept; the certification's two v13-PENDING hunks took the baseline's later text), phase3_accounting.json slice_status (W2-C's side carried a stale pre-v13 W2-B line: the baseline's kept; the certification's W3-K line superseded), PROJECT_CANONICAL_CONTEXT.md and docs/phase3/README.md (the baseline's later text); the integrated state is written in this tracking commit.",
+   "W2-C was built on the pre-v13 Wave-2A base; reconciled with no code change: on revision 2 `proposeTrainPurchaseRefusal` -> `trainSaleRefusal` -> `fundedTradeRefusal` refuses once the emergency trade window is closed, so the roster follows the window through the authority. R1 (Wave-2A v13 verification) CLOSED, proven open / closed-by-ForgoTrainTrade / closed-by-EmergencySellPortfolio in phase3W2CGTrainWindow.test.tsx (with the W2-C binding removed, both closed cases fail).",
+   "Compatibility keys unchanged from 7916763 (no escrow `dc1-e8d0b4792a7ba07e67199ad2`, fixture pin `dc1-32fcc4967978e78f10874490`): gameEngine/compat, rulesVersion.ts, settlementAppraisal.ts, every settlement fixture and every key-pinning test are byte-identical to 7916763, and the pins pass."
+  ],
+  "versions": {
+   "rules_engine": 13,
+   "supported_live": [
+    13
+   ],
+   "settlement_certified": [
+    10,
+    11,
+    12,
+    13
+   ],
+   "v13_settlement_certification": "PASS / CERTIFIED — integrated"
+  },
+  "lanes": {
+   "W2-B": "COMPLETE — integrated",
+   "W2-C": "COMPLETE — integrated",
+   "W2-G": "COMPLETE — integrated",
+   "v13 settlement certification": "COMPLETE — integrated",
+   "W2-D": "UNLOCKED (not started)",
+   "W2-F": "UNLOCKED (not started)"
+  },
+  "follow_ups": [
+   "Bankruptcy `executeEmergencyLegs` fail-loud hardening (non-blocking; not implemented here).",
+   "Post-game statistics (`gameHistory.ts`) miss `EmergencySellPortfolio` legs and the automatic liquidation (R2; non-blocking; not implemented here).",
+   "The older `escrow3bAdversarial` uncertified-board assertion is weak (non-blocking; not implemented here).",
+   "The now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel` (W2-G residue; a later bar pass)."
+  ],
+  "notes": [
+   "Focused validation only; no broad Phase-3 owner gate, full Jest, full server npm test, DynamoDB Local or test-summary.ps1 was run. No AWS, no JUNO.",
+   "The formerly designed-red frontend money tests (walletChecks, moneyActions) and the server money-path suites are green because 13 is settlement-certified."
+  ]
  }
 }

@@ -35,11 +35,12 @@ restated in the same places. Still open: OD-14(a), OD-10(b).
 ## Rules v13 (W3-K)
 
 `phase3/w3-k-rules-v13` (accepted; integrated on `phase3/wave2a-v13-integration`, 2026-10-04, not merged to main): `RULES_ENGINE_VERSION` 13, live list `[13]`, rules revision 2 —
-OD-2, SBS-3, SBS-4 and OD-4. Settlement stays certified for `[10, 11, 12]`; the v13 certification pass is pending
-([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)). The owner's 2026-10-04 rulings 1-5 (only
-enough, Brown continuation and intervening actions, M&H accounting, duplicate legs, exact private-funding relevance) are
-implemented there. Still required before deployment: W2-B with the Auto-Buy correction, a v13-reconciled W2-G, the dedicated
-settlement certification, drained v12 rooms and the final owner gate (W2-A and the safe integration reconciliation are done).
+OD-2, SBS-3, SBS-4 and OD-4. The owner's 2026-10-04 rulings 1-5 (only enough, Brown continuation and intervening actions, M&H
+accounting, duplicate legs, exact private-funding relevance) are implemented there. **v13 settlement certification: PASS / CERTIFIED
+and INTEGRATED** with W2-B, W2-C and the v13 W2-G on `phase3/wave2-bcg-v13cert-integration` (2026-10-04; the current provisional baseline, not
+merged to main): rules engine `13`, supported live gameplay `[13]`, settlement-certified `[10, 11, 12, 13]` -- gameplay-engine
+support and settlement certification stay separate axes ([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)).
+Still required before deployment: drained v12 rooms and the final owner gate.
 
 ## Check
 

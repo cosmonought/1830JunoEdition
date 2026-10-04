@@ -104,9 +104,9 @@ Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments on
 | W1-M | COMPLETE — L2 `6f42dca` |
 | W1-N | COMPLETE — L7 `9d9376b` + review fixes `06c3a91`; the OD-12 RED R2 call-site deletion `87d63c4` (+ comment follow-up `819a204`); tie-aware game-over strip at the integration (`8dc79e0`) |
 | W1-O | COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`) |
-| W3-K | PARTIAL — ledger state only: W3-K's own work is ACCEPTED as COMPLETE (owner, 2026-10-04) and INTEGRATED; the shared row AUD-03.04 (SBS-1 / SBS-2) closes only with W2-B's one-click "Pass Turn" control. ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. RULES_ENGINE_VERSION 13; live list [13]; settlement-certified literal UNCHANGED [10, 11, 12]; v13 settlement certification PENDING A DEDICATED PASS (`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). Not deployable until W2-B, a v13-reconciled W2-G, the v13 settlement certification, drained v12 rooms and the final integrated owner gate |
+| W3-K | COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click "Pass Turn" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D / W2-F and other open slices are tracked separately) |
 
-*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, kept PARTIAL in the ledger only for AUD-03.04 ("Wave-2A v13 integration status"); W2-B and W2-F are NOT STARTED, UNLOCKED; settlement certification for 13 is pending. Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
+*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, its ledger PARTIAL lifted with W2-B; W2-B, W2-C, W2-G and the v13 settlement certification are COMPLETE and integrated ("Wave-2 B+C+G + v13 certification integration status"); W2-D and W2-F are NOT STARTED, UNLOCKED. Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
 `OPEN`, `NOT STARTED`, `RULED`, `NEEDS PRECISE REPRODUCTION / CLARIFICATION`) is the `status` field of its JSON row; the
 checker verifies that a COMPLETE slice has no unimplemented A/B row and that each status agrees with its disposition.
 
@@ -197,7 +197,7 @@ seat.
 ## W2-B slice status (2026-10-04)
 
 **Branch** `phase3/w2-b-stock-round-v13-ui` (code `90d5588`, review fix `ca68b43`, #1274 fix `794e03c` / `699160c`) from `phase3/wave2a-v13-integration` @ `868bd83`. **COMPLETE on its slice branch;
-NOT integrated** into the provisional baseline (integration and owner broad gate pending). OD-2 presented over the integrated v13 reducer,
+NOT integrated** into the provisional baseline (integration and owner broad gate pending). *(Written as branch-only; since 2026-10-04 ACCEPTED and INTEGRATED on `phase3/wave2-bcg-v13cert-integration`, merge `181e51e` — see "Wave-2 B+C+G + v13 certification integration status" below.)* OD-2 presented over the integrated v13 reducer,
 with no reducer change: the action bar's Stock Round control is one "Pass Turn" that sends one `PassTurn` in every state (its title says
 whether the press ends an acted turn or is a true pass, off `turn_action_taken`); #1443's stage button, the `stockStage` / `onShowStocks`
 props and the revision-1 copy ("Done selling…", "Buy a Share", "End Turn", "Skip Buy Share") are gone; Sell / Buy availability stays the
@@ -218,7 +218,7 @@ COMPLETE; no W3-K work changed, and on the provisional baseline that follows W2-
 ## W2-G v13 reconciliation status (2026-10-04)
 
 **Branch** `phase3/w2-g-v13-emergency-ui` from `phase3/wave2a-v13-integration` @ `868bd83`: code `112fa71`, independent-review
-fixes `02d73b8`, then this tracking commit. **W2-G: COMPLETE on its slice branch — NOT integrated**, not merged to main, no broad owner gate.
+fixes `02d73b8`, then this tracking commit. **W2-G: COMPLETE on its slice branch — NOT integrated**, not merged to main, no broad owner gate. *(Written as branch-only; since 2026-10-04 ACCEPTED and INTEGRATED on `phase3/wave2-bcg-v13cert-integration`, merge `b84247f`.)*
 
 - **Reused from `695afe9` (accepted UI):** the non-dismissible president-only modal (OD-4 / OD-1), the intercorporate step first,
   the K-25 "Bank Pool" / "Bank Depot" from `train.source`, the automatic treasury / cash ledger, the authority-judged trade and
@@ -248,7 +248,7 @@ fixes `02d73b8`, then this tracking commit. **W2-G: COMPLETE on its slice branch
   overshoot (1); an active-player turn action closes the Brown continuation, an off-turn answer does not (2); the M&H
   exchange stays outside stock-turn accounting (3); one leg per corporation (4); private funding relevance is exact (5).
   Review findings fixed: bankruptcy narration, no-server derived purchase, Rules Reference copy, changelog wording.
-- **Versions:** `RULES_ENGINE_VERSION` 13; live list `[13]`; settlement literal `[10, 11, 12]` — v13 certification PENDING
+- **Versions:** `RULES_ENGINE_VERSION` 13; live list `[13]`; settlement literal `[10, 11, 12]` — v13 certification PENDING *(at W3-K; since 2026-10-04 CERTIFIED and integrated: `[10, 11, 12, 13]`, see below)*
   ([`V13_SETTLEMENT_CERTIFICATION_VECTORS.md`](V13_SETTLEMENT_CERTIFICATION_VECTORS.md)).
 - **Not deployable alone.** Still required before deployment: W2-B with the Auto-Buy correction; W2-G reconciled to
   the v13 UI authority; the dedicated v13 settlement certification; pinned v12 rooms drained; the final integrated owner
@@ -257,7 +257,7 @@ fixes `02d73b8`, then this tracking commit. **W2-G: COMPLETE on its slice branch
 ## W2-C slice status (2026-10-04)
 
 **Branch** `phase3/w2-c-offer-authority` @ `0975c04` (code `e629687`, independent-review fixes `0975c04`) from `phase3/wave2a-integration` @
-`96ccb22`. **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). A pure binding,
+`96ccb22`. **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). *(Written as branch-only on the pre-v13 base; since 2026-10-04 ACCEPTED and INTEGRATED on `phase3/wave2-bcg-v13cert-integration`, merge `904598a`, reconciled onto v13 with no code change.)* A pure binding,
 `utils/offerAuthorityView.ts`, hands each offer panel the engine's own predicate, bound once per board (beside `dockHold`) to the
 seat and the operating corporation: the Buy Private Company panel asks `proposePrivatePurchaseRefusal` (card availability at the
 band's floor, the submit at the typed price); the corporate train roster asks `proposeTrainPurchaseRefusal`, or `trainSaleRefusal`
@@ -269,6 +269,42 @@ submit is latched (the shell's in-flight latch plus a same-commit latch). Corpor
 AUD-09.02 and AUD-09.03 IMPLEMENTED. Tests: `phase3W2COfferAuthority`, `phase3W2COfferPanels`; moved pins `privateRowDensity`,
 `baltimorePrivate`. Not taken: the Stock Round share controls / M&H chip residue W2-A assigned to "W2-C / W2-F" (outside W2-C's
 surfaces). Rules version unchanged (v12); settlement unchanged.
+
+## Wave-2 B+C+G + v13 certification integration status (2026-10-04)
+
+**Branch** `phase3/wave2-bcg-v13cert-integration` from `phase3/wave2a-v13-integration` @ `16b79b2` — **the current provisional Phase-3
+integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** Four accepted lines merged `--no-ff`,
+every accepted commit carried unchanged (same SHAs), in the order W2-B, W2-C, W2-G, certification:
+
+| Input | Accepted head | Merge |
+|---|---|---|
+| W2-B (Stock Round v13 UI, #1274 Auto-Buy fix) | `phase3/w2-b-stock-round-v13-ui` @ `3fc3d0e` | `181e51e` |
+| W2-C (offer authority) | `phase3/w2-c-offer-authority` @ `c3db730` | `904598a` |
+| W2-G (v13 emergency UI) | `phase3/w2-g-v13-emergency-ui` @ `17ab21f` | `b84247f` |
+| v13 settlement certification | `phase3/v13-settlement-certification` @ `7916763` | `69c7496` |
+
+Then one test-only integration commit (`70483ef`, the C+G train-window regression) and this tracking commit.
+
+- **Code merged without a textual conflict.** `App.tsx`'s merged delta over `16b79b2` is exactly the union of W2-B's, W2-C's and W2-G's
+  own deltas; `ContextualActionBar.tsx`'s exactly W2-B's plus W2-C's (one Pass Turn, no stage walk, W2-C's forwarded authority props,
+  W2-A's holds). Every other code file only one input changed equals that input's tip.
+- **Conflicts were tracking-only** (this file, `phase3_accounting.json`, `PROJECT_CANONICAL_CONTEXT.md`, `README.md`): independent
+  sections kept; stale branch-only lines superseded here.
+- **W2-C onto v13, and R1 closed.** W2-C was built on the pre-v13 Wave-2A base and needed no code change: on a revision-2 board
+  `proposeTrainPurchaseRefusal` → `trainSaleRefusal` → `fundedTradeRefusal` refuses once the emergency trade window is closed, so the
+  corporate roster follows the window through the authority, not through a local test. `phase3W2CGTrainWindow.test.tsx` proves it with
+  the real reducer and the real panel bound as the shell binds it: OPEN — a legal candidate is offered and sent once; CLOSED by
+  `ForgoTrainTrade` and CLOSED by `EmergencySellPortfolio` — no usable badge or submit, nothing sent, the authority's own sentence, while
+  W2-A's hold still passes `ProposeTrainPurchase`. With the W2-C binding removed both closed cases fail. **R1 is CLOSED.**
+- **Versions:** `RULES_ENGINE_VERSION` 13; supported live `[13]`; `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` `[10, 11, 12, 13]` —
+  v13 settlement certification **PASS / CERTIFIED and INTEGRATED**. Compatibility keys unchanged from `7916763`
+  (`dc1-e8d0b4792a7ba07e67199ad2` no escrow, `dc1-32fcc4967978e78f10874490` the fixture pin); fixtures not regenerated; frozen v10 / v11 / v12
+  evidence unchanged.
+- **Lanes:** W2-B, W2-C, W2-G and the v13 settlement certification **COMPLETE and INTEGRATED**. W2-D and W2-F remain **UNLOCKED** (not
+  started). Not deployable until drained v12 rooms and the final integrated owner gate.
+- **Follow-ups (non-blocking, not implemented here):** bankruptcy `executeEmergencyLegs` fail-loud hardening; post-game statistics miss
+  `EmergencySellPortfolio` legs and the automatic liquidation (R2); the older `escrow3bAdversarial` uncertified-board assertion is weak;
+  the now-unpassed `onEmergencyPurchase` / `emergencyAvailable` bar props (W2-G residue).
 
 ## Scope and closing remark
 
@@ -316,10 +352,10 @@ surfaces). Rules version unchanged (v12); settlement unchanged.
 | **AUD-03.01** · U-23 / K-19 · §3<br>The first-Stock-Round sale ban is restated inside the panel, and its tooltip presents rulebook §5.1 as a house rule. | [D] | CONFIRMED (wording differs) — `components/StockRoundPanel.tsx` local `sellingForbidden`; tooltip "…Project 18XX opens the market to sales from SR2 onward" (a project rule, not §5.1). | W1-A | **A** | — | — | — |
 | **AUD-03.02** · U-25 · §3<br>Par ladder, affordability, share source and multi-buy limit are computed locally; a 0% source still offers Buy. | [D] | PARTIAL — locals at `StockRoundPanel.tsx`:2333, 2412, 2426, 2557-2597, 2861, 2982; an empty source is disabled, but an IPO that is entirely C&A-reserved can be enabled. Engine `maxPurchaseQuantity` / `ordinaryPercentAvailable` exist unused. | W1-A | **A** | — | — | — |
 | **AUD-03.03** · U-39 / K-07 · §3<br>Level Playing Field: a legal fifth certificate cannot be sold into the Bank Pool (panel keeps its own 50% cap). | [D] | CONFIRMED — `StockRoundPanel.tsx` `BANK_POOL_CAP_PERCENT`. | W1-A | **A** | — | — | — |
-| **AUD-03.04** · SBS-1 / SBS-2 · §3<br>Forced sell → Pass → buy walk; ending a turn takes two Pass presses; target one Pass/End Turn control. | [UX] ★ | CONFIRMED — `frontend/src/App.tsx`:14042-14046; `panels/ContextualActionBar.tsx`:4151-4207; `gameEngine/sandboxSession.ts`:5590-5592. | W2-B (the one-click "Pass Turn" control) + W3-K (v13: PassTurn ends the turn) | **A** | OD-2 (RULED 2026-10-03: Sell whenever legal; at most one Buy; after buying, Sell remains; one-click "Pass Turn"; v13 rules slice + settlement certification) | — | The old Sell → Buy → Sell stage walk is superseded on rules revision 2 (W3-K). Wave-1's `sellBuySell` pins now pin revision-1 boards only. The audit cites OD-A-4 here; the 6.5-A register files the Pass question as OD-A-2; OD-2 answered OD-A-2. SBS-4 is P3-N024 (implemented in W3-K). **Status:** IMPLEMENTED — both halves: the rule in W3-K (rules v13 / revision 2: one `PassTurn` ends the Stock Round turn; integrated on `phase3/wave2a-v13-integration`) and the presentation in W2-B `90d5588` + review fix `ca68b43` + #1274 fix `794e03c` / `699160c` (`phase3/w2-b-stock-round-v13-ui`, not integrated): one "Pass Turn" control sending one `PassTurn`; the stage button, `stockStage` and the revision-1 copy removed; Auto-Buy's stage Pass removed, and no Pass after its purchase (#1274). |
+| **AUD-03.04** · SBS-1 / SBS-2 · §3<br>Forced sell → Pass → buy walk; ending a turn takes two Pass presses; target one Pass/End Turn control. | [UX] ★ | CONFIRMED — `frontend/src/App.tsx`:14042-14046; `panels/ContextualActionBar.tsx`:4151-4207; `gameEngine/sandboxSession.ts`:5590-5592. | W2-B (the one-click "Pass Turn" control) + W3-K (v13: PassTurn ends the turn) | **A** | OD-2 (RULED 2026-10-03: Sell whenever legal; at most one Buy; after buying, Sell remains; one-click "Pass Turn"; v13 rules slice + settlement certification) | — | The old Sell → Buy → Sell stage walk is superseded on rules revision 2 (W3-K). Wave-1's `sellBuySell` pins now pin revision-1 boards only. The audit cites OD-A-4 here; the 6.5-A register files the Pass question as OD-A-2; OD-2 answered OD-A-2. SBS-4 is P3-N024 (implemented in W3-K). **Status:** IMPLEMENTED — both halves: the rule in W3-K (rules v13 / revision 2: one `PassTurn` ends the Stock Round turn; integrated on `phase3/wave2a-v13-integration`) and the presentation in W2-B `90d5588` + review fix `ca68b43` + #1274 fix `794e03c` / `699160c` (`phase3/w2-b-stock-round-v13-ui`, integrated on `phase3/wave2-bcg-v13cert-integration`, merge `181e51e`): one "Pass Turn" control sending one `PassTurn`; the stage button, `stockStage` and the revision-1 copy removed; Auto-Buy's stage Pass removed, and no Pass after its purchase (#1274). |
 | **AUD-03.05** · K-12 · §3<br>Auto-Buy never checks cash, so it stalls. | [D] | CONFIRMED — `frontend/src/App.tsx`:9888-9969; no cash test in `utils/autoBuy.ts` / `sharePurchase.ts`. | W1-A | **A** | — | See AUD-24.03 (the stall's UX is observed in Phase 4). | — |
 | **AUD-03.06** · SBS-5 · §3<br>Auto-Buy passes the stage before checking the must-sell rule. | [D] | CONFIRMED — `frontend/src/App.tsx`:9917-9923 (stage pass) before 9927-9935 (divestment). | W1-A | **A** | — | — | — |
-| **AUD-03.07** · — · §3<br>The must-sell hold is shown only in tooltips. | [UX] | CONFIRMED by reading — `divestmentRefusal` reaches `title` attributes only. | W2-B | **A** | — | — | **Status:** IMPLEMENTED — W2-B `90d5588` + review fix `ca68b43` (`phase3/w2-b-stock-round-v13-ui`, not integrated): a must-sell banner at the top of `StockRoundPanel`, from the viewer's `divestmentDebt` (`mustSellBannerOf`) -- the same reading and sentence that greys the Pass. |
+| **AUD-03.07** · — · §3<br>The must-sell hold is shown only in tooltips. | [UX] | CONFIRMED by reading — `divestmentRefusal` reaches `title` attributes only. | W2-B | **A** | — | — | **Status:** IMPLEMENTED — W2-B `90d5588` + review fix `ca68b43` (`phase3/w2-b-stock-round-v13-ui`; integrated on `phase3/wave2-bcg-v13cert-integration`, merge `181e51e`): a must-sell banner at the top of `StockRoundPanel`, from the viewer's `divestmentDebt` (`mustSellBannerOf`) -- the same reading and sentence that greys the Pass. |
 | **AUD-03.08** · K-18 / U-36 · §3<br>The sold-out price-rise log line describes a further, hypothetical rise (mirror written before the line). | [D] | CONFIRMED — `frontend/src/App.tsx`:7000-7002 sets the mirror before `soldOutRises` at 7111-7123 (inside the RED apply half). | W2-J | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | — |
 | **AUD-03.09** · K-22 / U-37 · §3<br>A float is not logged until the corporation's first OR turn. | [D] | CONFIRMED — `utils/actionLog.ts`:470-486; `gameEngine/sandboxSession.ts`:7522. | W2-J | **A** | OD-8 | — | — |
 | **AUD-03.10** · I-3 · §3<br>The 400 px prompt pointer overlaps the Private Companies card. | [D] | CONFIRMED — `components/PrivateCompaniesSection.tsx`:575-580 (`min(400px, …)`, fixed bottom-right; same at `PrivateTradePanel.tsx`:1071, `TrainPurchasePanel.tsx`:2469). | W2-F | **B** | — | — | The draft map deferred this as cosmetic; it stays in Phase 3. |
@@ -697,8 +733,8 @@ reuse U/K/H/A IDs; any legacy alias is shown.
 | **P3-N020** · draft §9 rollbacks · draft execution map<br>Refused-action rollbacks: an ability/JK spend survives a refused lay; `ran:true` and the step advance survive a refused run. | NEW-SOURCE-FINDING | CONFIRMED by reading — needs a per-action refusal signal from the link callbacks (RED). | W3-C | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | The draft deferred this to Phase 4. It is a known defect; it stays in Phase 3 behind OD-12. |
 | **P3-N021** · draft §9 press latch · draft execution map<br>The `press:true` latch does not cover the automatic presses (OpenStockRound, M&H exchange, Undo, PlaceHomeStation, SetBoPar). | NEW-SOURCE-FINDING | CONFIRMED by reading — `utils/doubleActionWindow.test.ts` pins the submit-half text. | W3-B | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | — |
 | **P3-N022** · SI ledger / DH-3 / draft §9 · draft execution map<br>Shell-local OR facts: `routesRunThisTurn`, `mustBuyTrain`, the D&H optimistic ability set and `dhStationForfeited` (DH-3), client auto-skip verdicts vs `nextDerivedAction`. | NEW-SOURCE-FINDING | CONFIRMED (App decomposition audit, 6.5-A §5.5). | Phase 5 (Pass E) | **E** | — | On every derived skip, compare the bar's step with the server's `operating_sub_phase` (export the log). | These are the refactor's behaviour passes (App decomposition plan "Pass E"); the owner's fixed roadmap (plan §1) places the major App.tsx refactor in Phase 5. |
-| **P3-N023** · SBS-3 (6.5-A) · draft execution map<br>Brown Pool Buy → Sell → Buy is accepted (authority too loose). | NEW-SOURCE-FINDING | CONFIRMED — V13_SCOPE_VERIFICATION §4.3 (APPROVED DEFECT, reproduced at 6455b6e). | W3-K (rules v13) | **A** | OD-10(a) (RULED 2026-10-03: in the v13 batch, the official Brown rule) | — | Official Brown rule only; V-6.3 "Buy All" is NOT implemented. **Status:** IMPLEMENTED — W3-K, `phase3/w3-k-rules-v13` (not integrated): the turn-scoped Brown Bank Pool continuation closes on any sale; Pool → Sell → Pool refused (`rulesV13StockRound.test.ts`). |
-| **P3-N024** · SBS-4 / OD-A-4 · draft execution map<br>A Brown IPO first purchase opens the Pool continuation. | NEW-SOURCE-FINDING | CONFIRMED — V13_SCOPE_VERIFICATION §5 precise reproduction: the first purchase of the turn from a STARTED Brown-zone corporation's IPO opened the Pool continuation (the owner's par-space objection applies only to a corporation's first-ever purchase). | W3-K (rules v13) | **A** | OD-2 (SBS-4 part) resolved by the precise reproduction + OD-10(a) (RULED 2026-10-03) | — | Formerly G (needs a precise reproduction); reproduced in V13_SCOPE_VERIFICATION §5, then implemented. **Status:** IMPLEMENTED — W3-K, `phase3/w3-k-rules-v13` (not integrated): only a Brown-zone Bank Pool purchase opens the continuation; IPO → Pool and Pool → IPO refused (`rulesV13StockRound.test.ts`). |
+| **P3-N023** · SBS-3 (6.5-A) · draft execution map<br>Brown Pool Buy → Sell → Buy is accepted (authority too loose). | NEW-SOURCE-FINDING | CONFIRMED — V13_SCOPE_VERIFICATION §4.3 (APPROVED DEFECT, reproduced at 6455b6e). | W3-K (rules v13) | **A** | OD-10(a) (RULED 2026-10-03: in the v13 batch, the official Brown rule) | — | Official Brown rule only; V-6.3 "Buy All" is NOT implemented. **Status:** IMPLEMENTED — W3-K, `phase3/w3-k-rules-v13` (integrated on `phase3/wave2a-v13-integration`, merge `ed5e69a`): the turn-scoped Brown Bank Pool continuation closes on any sale; Pool → Sell → Pool refused (`rulesV13StockRound.test.ts`). |
+| **P3-N024** · SBS-4 / OD-A-4 · draft execution map<br>A Brown IPO first purchase opens the Pool continuation. | NEW-SOURCE-FINDING | CONFIRMED — V13_SCOPE_VERIFICATION §5 precise reproduction: the first purchase of the turn from a STARTED Brown-zone corporation's IPO opened the Pool continuation (the owner's par-space objection applies only to a corporation's first-ever purchase). | W3-K (rules v13) | **A** | OD-2 (SBS-4 part) resolved by the precise reproduction + OD-10(a) (RULED 2026-10-03) | — | Formerly G (needs a precise reproduction); reproduced in V13_SCOPE_VERIFICATION §5, then implemented. **Status:** IMPLEMENTED — W3-K, `phase3/w3-k-rules-v13` (integrated on `phase3/wave2a-v13-integration`, merge `ed5e69a`): only a Brown-zone Bank Pool purchase opens the continuation; IPO → Pool and Pool → IPO refused (`rulesV13StockRound.test.ts`). |
 | **P3-N025** · ING-1 · draft execution map<br>City-less token on a two-city hex can strand Routes (draft listed it for a v13 batch). | NEW-SOURCE-FINDING | RESOLVED — v12 refuses creating such a state (`gameEngine/rulesVersion.ts`:396; R12-2 §3). | — | **F** | — | — | — |
 | **P3-N026** · OD-A-3 · draft execution map<br>D10 / E5 follow G19's first-upgrade terrain charge (draft listed it for a v13 batch). | NEW-SOURCE-FINDING | RESOLVED — owner ruling recorded in 6.5-B ("D10 and E5 follow G19"); engine already charges; copy updated (`RULES_HARDENING_BACKLOG.md`:4757). | — | **F** | — | — | — |
 

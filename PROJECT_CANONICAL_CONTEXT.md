@@ -101,7 +101,7 @@ When this file names a Project document, it writes `Project: claude/<name>`.
   - the v10 historical scan is clean.
 
 **Settlement certification**
-- Settlement is certified for **v10, v11 and v12**: `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS = Object.freeze([10, 11, 12])` (`frontend/src/gameEngine/settlementAppraisal.ts`; 12 added by ROUTE v12 R12-3 on the R12 branch, `main` still `[10, 11]`). It is a literal and never derived from `RULES_ENGINE_VERSION`.
+- Settlement is certified for **v10, v11 and v12**: `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS = Object.freeze([10, 11, 12])` (`frontend/src/gameEngine/settlementAppraisal.ts`; 12 added by ROUTE v12 R12-3 on the R12 branch, `main` still `[10, 11]`). It is a literal and never derived from `RULES_ENGINE_VERSION`. *(Phase 3: 13 is added by the dedicated v13 certification -- `[10, 11, 12, 13]` on the Phase-3 baseline `phase3/wave2-bcg-v13cert-integration`; see the Phase-3 paragraph.)*
 - `checkPin` accepts certified pins only. Every other pin (9, 13, …) is refused with `UNSUPPORTED_RULES_ENGINE_VERSION … (supported: 10, 11, 12)`.
 - **v12's evidence** (R12-3) sits beside v10's and v11's: `settlementV12Certification.test.ts` and `settlementV12CertificationVectors.json`. The thirteen SET-0A recipes rebuilt by the v12 engine at pin 12 are the certified v10 / v11 boards but for the pin (same vectors, payouts, dust; payload bytes differ only in `domain` and `appraisal_state_hash`). Three **v12 forks** (turns the v11 and v12 route laws play differently -- a real PRR re-entry run, a real B&O Norfolk run, a constructed #62 run -- each played both ways through a server room) show v12 terminal boards differing from v11's only in cash (each seat by exactly its dividend difference), the bank and the running corporation's turn record, VGP conserved, the appraiser equal to rankPlayers. No codec, contract, wasm or payout change; no v10 / v11 file rewritten. **R12-4 delta (2026-09-30):** the exact search demonstrates a different equal-value witness for the B&O fork ($240 either way: `H18>I19>I17>I15` + `H10>H12>H14>I15>J14>K15>L16`, where R12-3's heuristic showed `I15>I17>I19>H18` + `I15>J14>K15>L16>L14>M13`), so that fork's `routes`, `log_hash`, `encoded`, `settle_digest` and `consent_digest` were regenerated from the existing generator; weights, payouts and `appraisal_state_hash` are unchanged, the PRR and #62 forks are unchanged, v10 / v11 evidence byte-identical. File SHA-256 `270a75c0…` → `f65726ad…`.
 - v10 is certified byte for byte, as before. v11's evidence sits beside it (`settlementV11Certification.test.ts` and `settlementV11CertificationVectors.json`). v11 payloads differ from v10 only in `domain` [1,33) and `appraisal_state_hash` [91,123). No contract, wasm or codec change was needed.
@@ -356,12 +356,19 @@ proof → **3 player-facing UI / UX** → 4 human playtesting → **5 the major 
 OD-7 and OD-12 are recorded in the plan's §7.3. **2026-10-04: W3-K is ACCEPTED and INTEGRATED on `phase3/wave2a-v13-integration`** (from
 `phase3/wave2a-integration` @ `96ccb22`; merge `ed5e69a`; the current provisional Phase-3 baseline; not merged to main; no broad owner gate):
 rules 13, live `[13]`, settlement `[10, 11, 12]` unchanged, v13 settlement certification pending; W2-B unlocked; W2-G unlocked for v13 UI
-reconciliation (docs/phase3 "Wave-2A v13 integration status"). **W3-K (rules v13) was
+reconciliation (docs/phase3 "Wave-2A v13 integration status"). **2026-10-04, later: W2-B, W2-C, W2-G and the v13 settlement
+certification are ACCEPTED and INTEGRATED on `phase3/wave2-bcg-v13cert-integration`** (from `16b79b2`; merges `181e51e`, `904598a`, `b84247f`,
+`69c7496`, every accepted commit unchanged; **the current provisional Phase-3 baseline**; not merged to main; no broad owner gate): rules
+engine `13`, supported live gameplay `[13]`, **settlement-certified `[10, 11, 12, 13]`** -- separate axes
+(`docs/phase3/V13_SETTLEMENT_CERTIFICATION_VECTORS.md` §6); keys `dc1-e8d0b4792a7ba07e67199ad2` (no escrow),
+`dc1-32fcc4967978e78f10874490` (the fixture pin), unchanged from the certification's `7916763`. The Wave-2A v13 residue R1 (the train
+roster's Propose after the v13 trade window closes) is closed by W2-C's delegation (docs/phase3 "Wave-2 B+C+G + v13 certification
+integration status"). W2-D / W2-F remain unlocked; not deployable until drained v12 rooms and the final owner gate. **W3-K (rules v13) was
 implemented on `phase3/w3-k-rules-v13`** (2026-10-03, from `phase3/wave1-integration` @ `4e51cff`; branch only, not merged;
 owner gate pending): `RULES_ENGINE_VERSION = 13`, live list `[13]`, rules revision 2 — OD-2 (one `PassTurn` ends a Stock
 Round turn), SBS-3 / SBS-4 (the official Brown Bank Pool continuation; V-6.3 not implemented) and OD-4 (automatic
-emergency funding and automatic bankruptcy; `DeclareBankruptcy` retired). Settlement stays `[10, 11, 12]`; v13
-certification is a separate pending pass (`docs/phase3/V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). Keys on that branch:
+emergency funding and automatic bankruptcy; `DeclareBankruptcy` retired). Settlement stayed `[10, 11, 12]` there; v13
+certification was a separate pass (since CERTIFIED and integrated, above) (`docs/phase3/V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). Keys on that branch:
 `dc1-390107d5e7024f4a9180efeb` (no escrow), `dc1-d01c50c4a70d0dc14cdf915d` (the fixture pin). Still required before deployment
 (W2-B with the Auto-Buy correction, a v13-reconciled W2-G, the dedicated settlement certification, drained v12 rooms and the
 final owner gate; W2-A and the safe integration reconciliation are done on `phase3/wave2a-v13-integration`). Owner rulings OD-4, OD-10(a) and OD-17, with the 2026-10-04

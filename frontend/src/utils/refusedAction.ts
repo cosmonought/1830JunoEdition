@@ -46,7 +46,7 @@ import {
 } from "../gameEngine/actionOutcome";
 import type { PriceZone } from "../gameEngine/sharePurchase";
 import { dividendRefusal } from "../gameEngine/dividendGate";
-import { dividendAmountRefusal } from "../gameEngine/routeAuthority";
+import { dividendAmountRefusal, routeSkipRefusal } from "../gameEngine/routeAuthority";
 // Design note #1019: the purchase gate, asked here on the same state the reducer asked it on.
 import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
 import { depotInventory, openDepotTiers } from "../gameEngine/gamePhase";
@@ -239,7 +239,7 @@ export function refusalReasonFor(
 }
 
 /* ==================================================================
-    W1-H (Phase 3 -- AUD-14.03 / U-30, AUD-14.04 / U-29, AUD-14.05 / ING-2 + I-6): EVERY ARM IS THE REDUCER'S
+    W1-H (Phase 3 -- AUD-14.03 / U-30, AUD-14.04 / U-29, AUD-14.05 / ING-2 + I-6): EVERY ARM HERE IS THE REDUCER'S
    ==================================================================
    #784's rule, applied to the arms it had not reached: the Activity Log's REFUSED line (and the server's `refused`
    frame, which asks this function when ingress let a message through and the reducer then declined it) carries the
@@ -254,7 +254,10 @@ export function refusalReasonFor(
        predicates -- instead of the two inner blocks, so the round, the first-Stock-Round ban, the price, the
        card's availability and affordability carry their sentences (U-30, I-6);
      * the Pass that a train purchase or a curable must-sell still owes (ING-2), and the B&O's par ladder;
-     * the train purchase priced at the tier and limit the reducer prices it at (I-6). */
+     * the train purchase priced at the tier and limit the reducer prices it at (I-6).
+   NOT EVERY REDUCER GATE HAS AN ARM. The lay, the paid station, the route set and the Coal River, the home and D&H
+   placements and `RunManualRoute` stay unattributed (#778: `null`, the plain line) -- ingress answers each of them
+   with its sentence on the server path before the reducer is reached. */
 function refusalReasonOnTableBoard(
   before: GameStateResponse,
   msg: SandboxLogMsg,
@@ -303,7 +306,7 @@ function refusalReasonOnTableBoard(
   {
     const funding = ctx?.mapGrid === undefined ? null : emergencyFundingFor(before, ctx.mapGrid);
     if (funding !== null && "SellStock" in msg && actor) {
-      const forced = forcedSaleRefusal(before, funding, actor, msg.SellStock.protocol_id, msg.SellStock.percentage);
+      const forced = forcedSaleRefusal(before, funding, actor, msg.SellStock.protocol_id, Math.round(msg.SellStock.percentage));
       if (forced !== null) return forced;
     }
     if ("EmergencyBuyHardware" in msg && ctx?.mapGrid !== undefined) {
@@ -351,8 +354,9 @@ function refusalReasonOnTableBoard(
     return declareBankruptcyRefusal(funding, actor);
   }
 
-  /* #1513 (ING-2): THE TURN DOES NOT END WHILE A TRAIN IS OWED that the treasury can pay for -- the gate that
-     answered a `PassTurn` / `AdvanceOperatingSubPhase` at Buy Trains with the generic sentence. */
+  /* #1513 (ING-2): THE TURN DOES NOT END WHILE A TRAIN IS OWED -- the gate that answered a `PassTurn` /
+     `AdvanceOperatingSubPhase` at Buy Trains with the generic sentence. (A train the treasury and the president cannot
+     fund is the forced-purchase hold's, above.) */
   {
     const owed = trainObligationRefusal(before, msg, ctx?.mapGrid);
     if (owed !== null) return owed;
@@ -457,6 +461,12 @@ function refusalReasonOnTableBoard(
   if ("PassTurn" in msg) {
     const owed = divestmentPassRefusal(before);
     if (owed !== null) return owed;
+  }
+
+  /* Batch 6 (#1552): Run Trains is not skipped past a paying route -- on a pinned board only, as the reducer asks it. */
+  if (typeof before.rules_engine_version === "number") {
+    const skip = routeSkipRefusal(before, msg, ctx?.mapGrid);
+    if (skip !== null) return skip;
   }
 
   /* #1246 / #1570: the B&O grant -- the private's ownership (the lifecycle gate, above), the par ladder (the core),

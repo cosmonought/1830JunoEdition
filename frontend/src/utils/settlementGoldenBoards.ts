@@ -457,3 +457,91 @@ export function v12GoldenBoards(): V12GoldenBoards {
   v12Cache = { boards, dealtPins, syn01Submissions: built.submissions };
   return v12Cache;
 }
+
+/* ==================================================================
+    PHASE 3: THE v13 GOLDEN SET, BESIDE THE v10, v11 AND v12 ONES -- NEVER OVER THEM
+   ==================================================================
+   The dedicated rules-v13 settlement certification runs the SAME thirteen SET-0A recipes through the v13 engine and
+   pins what they make at pin 13, exactly as ESCROW-3A (v11) and R12-3 (v12) did. `goldenBoards()`, `v11GoldenBoards()`
+   and `v12GoldenBoards()` are untouched. What the recipes ARE under v13, stated rather than assumed:
+
+     - the three ROOM-DEALT recipes (SYN-01's and SYN-02's GR-4 rooms, SYN-03's UR-7 game) are dealt by the room at the
+       CURRENT engine -- 13 -- but their constructed starts carry NO rules revision (revision 0), so none of v13's
+       revision-2 corrections (OD-2, SBS-3 / SBS-4, OD-4) is in force on them; they play exactly as they did at 12. The
+       stamp below changes nothing on their pin. SYN-04 and SYN-08..12 are SET-0A's grafts on SYN-01's board;
+     - the CORPUS recipes (SYN-05 / SYN-07 on Z6C, SYN-06 on G6J, SYN-13 on CV4) replay unpinned development logs, as
+       before, and SET-0A grafts the terminal fields and the pin onto the result.
+   So this set is the v13 PIN on boards whose histories v12 already certified: it proves the appraisal, the codec and the
+   payout arithmetic carry the pin change and nothing else. What a REVISION-2 history does to a terminal board -- the
+   automatic bankruptcy, the liquidation, the one-click Stock Round turn, the Brown continuation -- is certified by the
+   v13 vectors (`settlementV13Vectors.ts`), played through a server room, never by pretending these boards are one. */
+export const SET0A_V13_RULES_ENGINE_VERSION = 13;
+
+/** A board stamped with the v13 settlement pin (the v13 golden set only). */
+export const atV13SettlementPin = (board: Board): Board =>
+  ({ ...board, rules_engine_version: SET0A_V13_RULES_ENGINE_VERSION }) as Board;
+
+/** The corpus graft at the v13 pin (SYN-05, 06, 13 of the v13 set). */
+export const corpusTerminalGraftV13 = (board: Board): Board =>
+  atV13SettlementPin({ ...board, current_round_type: "GameEnd", bank_broken: true } as Board);
+
+/** How each v13 golden recipe came to be (see above). */
+export const V13_RECIPE_HISTORY: Readonly<Record<string, "v13-room-game-revision-0" | "v13-room-game-revision-0+graft" | "pre-v12-corpus-replay+graft">> = Object.freeze({
+  "SYN-01-CLASSIC-BANKBREAK": "v13-room-game-revision-0",
+  "SYN-02-GENTLE-RUST-BANKBREAK": "v13-room-game-revision-0",
+  "SYN-03-UNPREDICTABLE-REVENUE-END": "v13-room-game-revision-0+graft",
+  "SYN-04-BANKRUPTCY": "v13-room-game-revision-0+graft",
+  "SYN-05-Z6C-COMPOSED-END": "pre-v12-corpus-replay+graft",
+  "SYN-06-G6J-UNPARRED-GRANT-END": "pre-v12-corpus-replay+graft",
+  "SYN-07-DOUBLE-CERT-AND-DYNAMIC-450": "pre-v12-corpus-replay+graft",
+  "SYN-08-DELAYED-AUCTION-UNSOLD": "v13-room-game-revision-0+graft",
+  "SYN-09-DELAYED-AUCTION-PHASE5-UNSOLD-CLOSED": "v13-room-game-revision-0+graft",
+  "SYN-10-ZERO-VALUE-SEAT-4P": "v13-room-game-revision-0+graft",
+  "SYN-11-SIX-PLAYERS": "v13-room-game-revision-0+graft",
+  "SYN-12-SEVEN-PLAYERS-LPF": "v13-room-game-revision-0+graft",
+  "SYN-13-CV4-TWO-PLAYER-END": "pre-v12-corpus-replay+graft",
+});
+
+export type V13GoldenBoards = V11GoldenBoards;
+
+let v13Cache: V13GoldenBoards | null = null;
+
+/** The v13 golden set: the thirteen SET-0A recipes, run by the current (v13) engine, at the v13 pin. Built once per test
+ *  file; callers must not mutate (clone before grafting). */
+export function v13GoldenBoards(): V13GoldenBoards {
+  if (v13Cache) return v13Cache;
+  const built = syn01ClassicBankBreak();
+  const syn02 = syn02GentleRustBankBreak();
+  const syn03Board = syn03();
+  const dealtPins: Record<string, unknown> = {
+    "SYN-01-CLASSIC-BANKBREAK": built.board.rules_engine_version,
+    "SYN-02-GENTLE-RUST-BANKBREAK": syn02.rules_engine_version,
+    "SYN-03-UNPREDICTABLE-REVENUE-END": syn03Board.rules_engine_version,
+  };
+  const s01 = atV13SettlementPin(built.board);
+  const s05 = corpusTerminalGraftV13(replayBoards(readExport(join(__dirname, "__fixtures__z6cLog.json"))));
+  const s08 = syn08(s01);
+  const recipes: Record<string, Board> = {
+    "SYN-01-CLASSIC-BANKBREAK": s01,
+    "SYN-02-GENTLE-RUST-BANKBREAK": syn02,
+    "SYN-03-UNPREDICTABLE-REVENUE-END": syn03Board,
+    "SYN-04-BANKRUPTCY": syn04(s01),
+    "SYN-05-Z6C-COMPOSED-END": s05,
+    "SYN-06-G6J-UNPARRED-GRANT-END": corpusTerminalGraftV13(replayBoards(readJsonl(join(FROZEN_LOG_DIR, "JUNO-G6J.log.jsonl")))),
+    "SYN-07-DOUBLE-CERT-AND-DYNAMIC-450": syn07(s05),
+    "SYN-08-DELAYED-AUCTION-UNSOLD": s08,
+    "SYN-09-DELAYED-AUCTION-PHASE5-UNSOLD-CLOSED": syn09(s08),
+    "SYN-10-ZERO-VALUE-SEAT-4P": withExtraSeats(s01, [["p4", "0"]]),
+    "SYN-11-SIX-PLAYERS": withExtraSeats(s01, [["p4", "310"], ["p5", "0"], ["p6", "1"]]),
+    "SYN-12-SEVEN-PLAYERS-LPF": withExtraSeats(
+      s01,
+      [["p4", "360"], ["p5", "360"], ["p6", "0"], ["p7", "5"]],
+      { levelPlayingField: true, expandedMap: true, plusTiles: true },
+    ),
+    "SYN-13-CV4-TWO-PLAYER-END": corpusTerminalGraftV13(replayBoards(readJsonl(join(FROZEN_LOG_DIR, "JUNO-CV4.log.jsonl")))),
+  };
+  const boards: Record<string, Board> = {};
+  for (const [name, board] of Object.entries(recipes)) boards[name] = atV13SettlementPin(board);
+  v13Cache = { boards, dealtPins, syn01Submissions: built.submissions };
+  return v13Cache;
+}

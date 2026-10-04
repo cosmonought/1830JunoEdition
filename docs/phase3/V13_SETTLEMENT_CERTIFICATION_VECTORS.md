@@ -9,6 +9,16 @@ change. This file lists what that pass must prove. W3-K does not certify anythin
 Gameplay rules and settlement certification are separate version axes. Rule 13 is in force for gameplay because
 `RULES_ENGINE_VERSION = 13` and the live list is `[13]`. Settlement accepts only versions it has certified.
 
+> **Dedicated pass (2026-10-04, `phase3/v13-settlement-certification`, from `be1fd10`): THE EVIDENCE IS BUILT.**
+> Every vector below is a terminal board reached by play through a server `RoomSession` and pinned beside the v10 / v11
+> / v12 evidence: `frontend/src/utils/settlementV13Certification.test.ts` (the test, sections A-H),
+> `frontend/src/utils/settlementV13Vectors.ts` (the vector games), `frontend/src/utils/__fixtures__/settlement/`
+> `settlementV13CertificationVectors.json` and `settlementV13TerminalBoards.json` (generated, pinned), and
+> `verify_v13_settlement_vectors.py` (an independent Python appraisal and the escrow crate's encoder, run by hand).
+> The evidence is green with the literal at `[10, 11, 12]` (it is built from the certified primitives; every production
+> path must refuse a v13 board until the literal admits 13). The literal is changed only in its own commit after the
+> evidence is independently reviewed; see §5.
+
 ## 1. What v13 changes that settlement can see
 
 The appraisal formula (`settlementAppraisal.ts`, §1) is unchanged:
@@ -130,3 +140,38 @@ Deploying rules v13 also needs: W2-A, W2-B's single "Pass Turn" control with the
 refusals removed, Auto-Buy's stage Pass removed), W2-G reconciled to the v13 emergency authority, the safe integration
 reconciliation, this dedicated settlement certification, pinned v12 rooms drained, and the final integrated owner gate.
 Without them the W3-K branch is **not deployable alone**.
+
+## 5. The evidence, vector by vector (the dedicated pass)
+
+All terminals are rules-revision-2 boards pinned 13, each the room's board after the last entry of a fixed script on a
+constructed, named starting board (provenance in `settlementV13Vectors.ts`). For every one: the certified appraiser (read
+pin-independently: its pin gate is the only reader of the pin, and the canonical texts at 13 and 12 differ in that one
+token), an independent oracle written in the test and the independent Python oracle, and `rankPlayers` agree seat by
+seat; Σ payouts + dust = pool with 0 <= dust < n on three pools (n × the SET-0A ante, a prime, 2^64 + 13); the terminal
+hash is identical live, after a cold restore, after `replayLog`, after a snapshot rebuild and after a RevertTo; the
+payload equals its v12 twin's (the same board at pin 12, built by the certified builder) outside `[1,33)` (`domain`) and
+`[91,123)` (`appraisal_state_hash`); VGP is conserved from seed to terminal.
+
+| # | Terminal(s) | Ends by | What the evidence shows |
+|---|---|---|---|
+| V13-01 | 1 | bank | SYN-01's GR-4 room at revision 2 is SYN-01's certified board but for `variants.rules`; SET-0A's vector and payouts. |
+| V13-02 | 1 | bank | Acted turns end in one `PassTurn` without counting; a true pass counts; Pool C&O → Pool C&O continues, Pool CPR refused; an all-pass ending. |
+| V13-03 | 1 | bankruptcy | Every legal leg (PRR, NYC, C&O 10% each) liquidated and still short; the residue is C&O's crown; the record equals the engine's `maximumLiquidation`. |
+| V13-04 | 1 | bankruptcy | PRR's President's Certificate stays unsold (options [10, 20]); kept shares valued at the fallen prices. |
+| V13-05 | 1 | bankruptcy | NYC's pool at 40%: one card sold, the pool ends at 50%, 20% kept and valued. |
+| V13-06 | 1 | bankruptcy | No legal bundle: the portfolio is untouched; $40 cash to the C&O treasury. |
+| V13-07 | 1 | bankruptcy | The window held the game; a $61 trade refused (needs liquidation); `ForgoTrainTrade` ends it; NYC keeps its 2. |
+| V13-08 | 1 | bankruptcy | Private funding relevant until `ForgoPrivateFunding`; the bankrupt's open C&A counts 0, others' privates counted. |
+| V13-09 | 1 | bankruptcy | Private funding irrelevant (bound < shortfall): immediate; the bankrupt's SV and C&StL open, counted 0. |
+| V13-10 | 1 | bank | `{NYC 10, PRR 10}` = $90 for $80 (neither alone funds); the derived purchase; $10 overshoot counted; play continues. |
+| V13-11 | 1 | bank | The derived, keyed `EmergencyBuyHardware` appears once; a crash before or after it reproduces the same log and board. |
+| V13-12 | 2 | bankruptcy / bank | (a) the bankrupt ties p2 at the top; (b) two seats tie in a four-seat bank break: equal weights and payouts, rank 1 shared. |
+| V13-13 | all | — | The five readers of one log (live, restore, replay, snapshot, RevertTo) reach one digest on every vector. |
+| V13-14 | — | — | A v12-pinned (revision 1) deal is held before any `RoomEngine.apply`; the settlement replay has no board; the browser check is `unavailable`. |
+| V13-15 | 1 | bankruptcy | NYC 20% (pool-capped) and CPR 20% (fully sold) in `public_companies` order; PRR's crown locked; $140 to the C&O. |
+| V13-16 | 2 | bankruptcy / bank | (a) bound $290 ≥ $180 but the exact maximum is $150: ends at once; (b) one legal C&A sale: waits, then rescues; the seeds differ only in privates and NYC's treasury. |
+| V13-17 | 2 | bank | (a) D&H to NYC then PRR 10%; (b) M&H to NYC, D&H to PRR: corporate owners and buyer treasuries on the terminal. |
+| V13-18 | 2 | bank | The third / second Pool C&O refused after p1's accepted trade (a) or M&H exchange (b); p2's off-turn rejection did not interrupt (a). |
+| V13-19 | 1 | bank | One entry `[PRR 10, NYC 20, CPR 10]` at today's prices ($195); NYC's presidency passes to p2; arrivals in the submitted order. |
+| V13-20 | 2 | bank | One seed, two logs: the $100 card and the $60 card both legal, both together refused; two terminals. |
+| V13-21 | 2 | bank | (a) NYC's 2 bought for $60 inside the window; (b) after the PRR sale the window is closed and the trade refused; the Bank's train bought. |

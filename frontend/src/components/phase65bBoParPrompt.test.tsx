@@ -11,14 +11,21 @@
 // The shell now reads one fact: `boParOwner = boParOwedTo(liveBoard)` (DA-3's derived obligation). This drives a
 // real standard-game auction through a `RoomSession` to the B&O award and renders `AuctionPromptModal` for each seat
 // with the shell's own prop expressions over that board:
-//   parPending      = boParOwner !== null && boParOwner === viewer
-//   awaitingParFrom = boParOwner !== null && boParOwner !== viewer ? label(boParOwner) : null
+//   parPending          = viewerIsNamedActor({ spectator, actor: boParOwner, viewerAddress })      (Phase 3 W2-H)
+//   awaitingParFrom     = boParOwner !== null && !parPending ? label(boParOwner) : null
+//   viewerActsOnHandoff = viewerIsSeatedPlayer({ spectator, viewerAddress, seats: player_addresses })
 // through the award, a lost submission, a refused one, the held button, a successful retry, and a restore.
+//
+// Phase 3 W2-H (OD-1, H5): a seat that does not owe the par no longer gets the card with a DISABLED Proceed; it gets
+// the non-modal waiting status naming the owner, and no control at all. The actor's card renders through the modal
+// layer (`NativeModal`), so the harness mounts `ModalLayerHost` and reads the whole document.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { AuctionPromptModal, PAR_NOT_LANDED_NOTE, PAR_SEND_HOLD_MS, PAR_SETTLE_GRACE_MS } from "./AuctionPromptModal";
+import { ModalLayerHost } from "./ModalPortal";
+import { viewerIsNamedActor, viewerIsSeatedPlayer } from "../utils/waitingPromptView";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { boParOwedTo, auctionHandoffRefusal } from "../gameEngine/auctionAuthority";
 import { RoomSession } from "../utils/roomSession";
@@ -82,7 +89,16 @@ function awarded() {
 
 let host: HTMLDivElement;
 let root: Root;
+let layerHost: HTMLDivElement;
+let layerRoot: Root;
 beforeEach(() => {
+  /* The modal layer first, committed on its own root: `ModalPortal` needs it in the DOM during render (#1651). */
+  layerHost = document.createElement("div");
+  document.body.appendChild(layerHost);
+  layerRoot = createRoot(layerHost);
+  act(() => {
+    layerRoot.render(<ModalLayerHost />);
+  });
   host = document.createElement("div");
   document.body.appendChild(host);
   act(() => {
@@ -92,20 +108,31 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount());
   host.remove();
+  act(() => layerRoot.unmount());
+  layerHost.remove();
   jest.useRealTimers();
 });
+/** The whole document: the actor's card is in the modal layer, the waiting status in the screen. */
+const page = () => document.body;
 
 /** `AuctionPromptModal` as the shell mounts it for `viewer`, over `board` (live, never scrubbed). */
-function drawPrompt(board: GameStateResponse, viewer: string | null, onConfirmPar: (par: string) => void | Promise<unknown>) {
+function drawPrompt(
+  board: GameStateResponse,
+  viewer: string | null,
+  onConfirmPar: (par: string) => void | Promise<unknown>,
+  spectator = false,
+) {
   const boParOwner = boParOwedTo(board);
+  const owner = viewerIsNamedActor({ spectator, actor: boParOwner, viewerAddress: viewer });
   act(() => {
     root.render(
       <AuctionPromptModal
-        parPending={boParOwner !== null && boParOwner === viewer}
+        parPending={owner}
         parWinnerLabel={boParOwner !== null ? label(boParOwner) : ""}
         onConfirmPar={onConfirmPar}
         handoffPending={board.current_round_type === "WaterfallAuction" && (board.waterfall?.privates.length ?? -1) === 0}
-        awaitingParFrom={boParOwner !== null && boParOwner !== viewer ? label(boParOwner) : null}
+        awaitingParFrom={boParOwner !== null && !owner ? label(boParOwner) : null}
+        viewerActsOnHandoff={viewerIsSeatedPlayer({ spectator, viewerAddress: viewer, seats: board.player_addresses })}
         onProceed={() => undefined}
       />,
     );
@@ -113,9 +140,10 @@ function drawPrompt(board: GameStateResponse, viewer: string | null, onConfirmPa
 }
 
 const confirmButton = () =>
-  Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find((button) => /President|Sending/.test(button.textContent ?? ""));
+  Array.from(page().querySelectorAll<HTMLButtonElement>("button")).find((button) => /President|Sending/.test(button.textContent ?? ""));
 const proceedButton = () =>
-  Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find((button) => /^Proceed to/.test(button.textContent ?? ""));
+  Array.from(page().querySelectorAll<HTMLButtonElement>("button")).find((button) => /^Proceed to/.test(button.textContent ?? ""));
+const waitingStatus = () => page().querySelector('[data-testid="auction-waiting"]');
 const click = (node: Element | null | undefined) => {
   if (!node) throw new Error("nothing to click");
   act(() => {
@@ -123,20 +151,30 @@ const click = (node: Element | null | undefined) => {
   });
 };
 
-describe("H-02: the award raises the par for its owner, and blocks Proceed for everybody else", () => {
-  it("owner: the par ladder; others: a blocked Proceed that names the owner", () => {
+describe("H-02: the award raises the par for its owner, and every other viewer reads who it waits on", () => {
+  it("owner: the par ladder; others: a read-only status that names the owner, and no control (W2-H, OD-1)", () => {
     const { room, owner } = awarded();
     drawPrompt(room.state, owner, () => undefined);
-    expect(host.textContent).toContain(`${label(owner)} wins the Baltimore & Ohio`);
+    expect(page().textContent).toContain(`${label(owner)} wins the Baltimore & Ohio`);
     expect(proceedButton()).toBeUndefined(); // the owner is never offered the handoff while the par is owed
+    expect(waitingStatus()).toBeNull();
     for (const other of [A, B, C].filter((seat) => seat !== owner)) {
       drawPrompt(room.state, other, () => undefined);
-      expect(host.textContent).toContain(`Waiting for ${label(owner)} to set the B&O’s par price.`);
-      expect(proceedButton()?.disabled).toBe(true);
+      expect(page().textContent).toContain(`Waiting for ${label(owner)} to set the B&O’s par price.`);
+      expect(waitingStatus()).not.toBeNull();
+      // WAS a disabled Proceed (H5: a scrim with nothing to focus). Now no control at all, and no dialog.
+      expect(proceedButton()).toBeUndefined();
+      expect(confirmButton()).toBeUndefined();
+      expect(page().querySelector("dialog")).toBeNull();
     }
-    // A seatless watcher too.
+    // A seatless watcher too, and the owner's own seat opened as a spectator.
     drawPrompt(room.state, null, () => undefined);
-    expect(proceedButton()?.disabled).toBe(true);
+    expect(page().textContent).toContain(`Waiting for ${label(owner)} to set the B&O’s par price.`);
+    expect(proceedButton()).toBeUndefined();
+    drawPrompt(room.state, owner, () => undefined, true);
+    expect(page().textContent).not.toContain("wins the Baltimore & Ohio");
+    expect(page().textContent).toContain(`Waiting for ${label(owner)} to set the B&O’s par price.`);
+    expect(page().querySelectorAll("button")).toHaveLength(0);
   });
 });
 
@@ -158,15 +196,16 @@ describe("H-02: a SetBoPar that does not land leaves the prompt where it is", ()
       jest.advanceTimersByTime(PAR_SETTLE_GRACE_MS);
     });
     expect(confirmButton()?.disabled).toBe(false);
-    expect(host.textContent).toContain(PAR_NOT_LANDED_NOTE);
+    expect(page().textContent).toContain(PAR_NOT_LANDED_NOTE);
     // The next render reads the board, which did not move: the owner still has the par and can press again.
     drawPrompt(room.state, owner, lost);
-    expect(host.textContent).toContain("wins the Baltimore & Ohio");
+    expect(page().textContent).toContain("wins the Baltimore & Ohio");
     click(confirmButton());
     expect(presses).toHaveLength(2);
     for (const other of [A, B, C].filter((seat) => seat !== owner)) {
       drawPrompt(room.state, other, () => undefined);
-      expect(proceedButton()?.disabled).toBe(true);
+      expect(proceedButton()).toBeUndefined(); // W2-H: the waiting status, not a disabled Proceed
+      expect(waitingStatus()).not.toBeNull();
     }
     // And the server agrees the handoff must wait.
     expect(auctionHandoffRefusal(room.state, room.state.waterfall ?? null)).toContain("The B&O par comes first");
@@ -184,7 +223,7 @@ describe("H-02: a SetBoPar that does not land leaves the prompt where it is", ()
     expect(stateDigest(room.state)).toBe(before);
     expect(boParOwedTo(room.state)).toBe(owner);
     drawPrompt(room.state, owner, () => undefined);
-    expect(host.textContent).toContain("wins the Baltimore & Ohio");
+    expect(page().textContent).toContain("wins the Baltimore & Ohio");
   });
 
   it("the confirm is held only while ITS send is in flight: gone when the par lands, released after a settle grace, and by the clock", async () => {
@@ -204,13 +243,13 @@ describe("H-02: a SetBoPar that does not land leaves the prompt where it is", ()
       jest.advanceTimersByTime(PAR_SETTLE_GRACE_MS);
     });
     expect(confirmButton()?.disabled).toBe(false);
-    expect(host.textContent).toContain(PAR_NOT_LANDED_NOTE);
+    expect(page().textContent).toContain(PAR_NOT_LANDED_NOTE);
 
     // A send that never answers is released by the hold's own deadline, so the owner can never be stranded.
     drawPrompt(room.state, owner, () => new Promise<void>(() => undefined));
     click(confirmButton());
     expect(confirmButton()?.disabled).toBe(true);
-    expect(host.textContent).not.toContain(PAR_NOT_LANDED_NOTE);
+    expect(page().textContent).not.toContain(PAR_NOT_LANDED_NOTE);
     act(() => {
       jest.advanceTimersByTime(PAR_SEND_HOLD_MS);
     });
@@ -221,8 +260,8 @@ describe("H-02: a SetBoPar that does not land leaves the prompt where it is", ()
     click(confirmButton());
     expect(submit(owner, PAR(owner, "100")).kind).toBe("applied");
     drawPrompt(room.state, owner, () => undefined);
-    expect(host.textContent).not.toContain("wins the Baltimore & Ohio");
-    expect(host.textContent).not.toContain(PAR_NOT_LANDED_NOTE);
+    expect(page().textContent).not.toContain("wins the Baltimore & Ohio");
+    expect(page().textContent).not.toContain(PAR_NOT_LANDED_NOTE);
   });
 });
 
@@ -233,13 +272,17 @@ describe("H-02: a successful retry, and replay", () => {
     expect(submit(owner, PAR(owner, "100")).kind).toBe("applied"); // the retry
     expect(boParOwedTo(room.state)).toBeNull();
     drawPrompt(room.state, owner, () => undefined);
-    expect(host.textContent).not.toContain("wins the Baltimore & Ohio");
+    expect(page().textContent).not.toContain("wins the Baltimore & Ohio");
     expect(proceedButton()?.disabled).toBe(false);
     for (const other of [A, B, C].filter((seat) => seat !== owner)) {
       drawPrompt(room.state, other, () => undefined);
       expect(proceedButton()?.disabled).toBe(false);
-      expect(host.textContent).not.toContain("Waiting for");
+      expect(page().textContent).not.toContain("Waiting for");
     }
+    // W2-H: a watcher cannot open the Stock Round (the server's submit row is seated-only), so it reads a status.
+    drawPrompt(room.state, null, () => undefined);
+    expect(proceedButton()).toBeUndefined();
+    expect(page().textContent).toContain("Waiting for a player to open Stock Round 1.");
     expect(submit(owner, OPEN).kind).toBe("applied");
     expect(room.state.current_round_type).toBe("StockRound");
   });
@@ -250,19 +293,19 @@ describe("H-02: a successful retry, and replay", () => {
     restoredBefore.restore(room.entries);
     expect(stateDigest(restoredBefore.state)).toBe(stateDigest(room.state));
     drawPrompt(restoredBefore.state, owner, () => undefined);
-    expect(host.textContent).toContain("wins the Baltimore & Ohio");
+    expect(page().textContent).toContain("wins the Baltimore & Ohio");
 
     expect(submit(owner, PAR(owner, "90")).kind).toBe("applied");
     const restoredAfter = newRoom("s").room;
     restoredAfter.restore(room.entries);
     expect(boParOwedTo(restoredAfter.state)).toBeNull();
     drawPrompt(restoredAfter.state, owner, () => undefined);
-    expect(host.textContent).not.toContain("wins the Baltimore & Ohio");
+    expect(page().textContent).not.toContain("wins the Baltimore & Ohio");
     // An undo of the par brings the obligation -- and the prompt -- back.
     const parIndex = room.entries.findIndex((entry) => JSON.parse(entry.payload).SetBoPar !== undefined);
     expect(submit(owner, { RevertTo: { index: room.entries[parIndex].index, player: owner, summary: "the par" } }).kind).toBe("applied");
     expect(boParOwedTo(room.state)).toBe(owner);
     drawPrompt(room.state, owner, () => undefined);
-    expect(host.textContent).toContain("wins the Baltimore & Ohio");
+    expect(page().textContent).toContain("wins the Baltimore & Ohio");
   });
 });

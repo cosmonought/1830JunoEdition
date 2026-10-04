@@ -304,7 +304,8 @@ export const OPERATING_ROUND_TUTORIAL: readonly TutorialPage[] = [
   {
     title: "Step 3: Place Stations",
     body:
-      "3. Place Stations: Home stations are placed for free upon floating. Subsequent stations " +
+      "3. Place Stations: A corporation's home station is placed for free at the start of its first " +
+      "Operating Round turn, before it does anything else. Subsequent stations " +
       "cost $40 or $100 (limit 1 station per corporation per Operating Round turn). Stations " +
       "extend route connectivity. When all token slots in a city are occupied, only tokened " +
       "corporations may pass through; rival trains are blocked!",

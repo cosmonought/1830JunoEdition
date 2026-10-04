@@ -680,6 +680,7 @@ import { CEREMONY_SOUNDS, ceremonySoundFor } from "./utils/ceremonySounds";
 import AuctionPromptModal from "./components/AuctionPromptModal";
 import HomeStationPrompt from "./components/HomeStationPrompt";
 import { homeStationViewerIsPresident } from "./utils/homeStationAskView";
+import { viewerIsNamedActor, viewerIsSeatedPlayer } from "./utils/waitingPromptView";
 
 // Step 4: Firebase Real-Time Integration -- see design notes #1 and #22.
 import Lobby from "./components/Lobby";
@@ -2921,6 +2922,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      fact from the LIVE board (never a scrubbed past one): the prompt stays exactly as long as the board owes the
      par, whatever happened to a click, and leaves when the server's `SetBoPar` lands. */
   const boParOwner = liveState ? boParOwedTo(liveState) : null;
+  /* ==================================================================
+      PHASE 3 W2-H (OD-1, H5): WHO ACTS ON THE AUCTION'S TWO DECISIONS, BY THE ONE VIEWER POLICY
+     ==================================================================
+     The par is the named owner's (`viewerIsNamedActor`: never a spectator, never a seatless watcher); the handoff is
+     any SEATED player's -- the server's `submit` row admits `OpenStockRound` from any seat, once the par is not owed.
+     Everyone else reads a non-modal status instead of a scrim (`AuctionPromptModal`'s waiting arm). */
+  const boParViewerIsOwner = viewerIsNamedActor({ spectator, actor: boParOwner, viewerAddress });
+  const auctionHandoffViewerActs = viewerIsSeatedPlayer({
+    spectator,
+    viewerAddress,
+    seats: liveState?.player_addresses,
+  });
 
   /** Whose turn it is, as a name. `null` outside a seat-driven round or
    *  when the room has not started -- the header then shows nothing rather
@@ -13628,17 +13641,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         /* 6.5-B (H-02): all three read `boParOwner` -- the board's answer to "who owes the B&O par" -- so the
            owner keeps the par control, and everybody else keeps a blocked Proceed, for exactly as long as the
            board owes it. The owner is never shown the handoff while it is owed: `parPending` wins in the card. */
-        parPending={boParOwner !== null && boParOwner === viewerAddress}
+        /* Phase 3 W2-H (OD-1): the owner, by the shared rule -- a spectator holding the owner's wallet is not asked;
+           every other viewer, the owner's spectating tab included, reads who the table is waiting on. */
+        parPending={boParViewerIsOwner}
         parWinnerLabel={
           boParOwner !== null ? sandboxPlayerLabel(boParOwner) ?? truncateAddress(boParOwner) : ""
         }
         onConfirmPar={handleConfirmBoPar}
         handoffPending={auctionHandoffPending}
         awaitingParFrom={
-          boParOwner !== null && boParOwner !== viewerAddress
+          boParOwner !== null && !boParViewerIsOwner
             ? sandboxPlayerLabel(boParOwner) ?? truncateAddress(boParOwner)
             : null
         }
+        viewerActsOnHandoff={auctionHandoffViewerActs}
         onProceed={handleProceedToStockRound}
         /* DA-6 (DA-F8b): the round the handoff really opens -- the slot the auction occupies (#905). */
         nextStockRound={gameState?.macro_round_number ?? 1}

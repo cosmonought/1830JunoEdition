@@ -64,14 +64,17 @@ export function StationTokenRow({
         // Design note #362: the home slot is captioned by WHERE, the rest
         // by HOW MUCH.
         const showsHex = slot.isHome && homeHexLabel !== null;
+        /* Phase 3 W2-H (K-21 / U-32): WAS "granted free when the corporation floated" / "placed free when the
+           corporation floats". The home is owed at the start of the corporation's FIRST OPERATING TURN, not at its
+           float (#1610), and the President places it then. */
         const title = slot.isHome
           ? homeHexLabel !== null
             ? slot.placed
-              ? `Home station on ${homeHexLabel} — granted free when the corporation floated.`
-              : `Home station on ${homeHexLabel} — placed free when the corporation floats.`
+              ? `Home station on ${homeHexLabel} — placed free.`
+              : `Home station on ${homeHexLabel} — the President places it free at the start of the corporation's first operating turn.`
             : slot.placed
-              ? "Home station — granted free when the corporation floated."
-              : "Home station — placed free when the corporation floats."
+              ? "Home station — placed free."
+              : "Home station — the President places it free at the start of the corporation's first operating turn."
           : slot.placed
             ? `Placed. Cost $${slot.cost}.`
             : `Costs $${slot.cost} from the treasury.`;

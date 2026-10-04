@@ -132,9 +132,14 @@ describe("App passes the rule, with no escape arm", () => {
   });
 
   it("keeps the rule free of a falsy escape arm", () => {
-    const RULE = readStripped("utils/homeStationAskView.ts");
+    /* Phase 3 W2-H: the rule's body moved to the shared viewer policy (`waitingPromptView.ts`), which the B&O par
+       and the auction handoff ask too; the home-station rule delegates to it unchanged. */
+    const ASK = readStripped("utils/homeStationAskView.ts");
+    expect(ASK).toContain("return viewerIsNamedActor({ spectator, actor: president, viewerAddress });");
+    const RULE = readStripped("utils/waitingPromptView.ts");
     expect(RULE).toContain("if (spectator) return false;");
-    expect(RULE).toContain("return president === viewerAddress;");
+    expect(RULE).toContain("return actor === viewerAddress;");
     expect(RULE).not.toMatch(/!\s*viewerAddress\s*\|\|/);
+    expect(ASK).not.toMatch(/!\s*viewerAddress\s*\|\|/);
   });
 });

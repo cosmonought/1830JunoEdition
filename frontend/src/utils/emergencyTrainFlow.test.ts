@@ -282,16 +282,21 @@ describe("the surfaces ask the rule module", () => {
     expect(readShell()).toContain("trainPurchaseRefusal({");
   });
 
-  it("no longer mounts the modal on the plan alone", () => {
-    /* #3's line was `const emergencyModalPlan = emergencyPurchasePlan;`. The structural half of #751: if
-       that came back, the button would still work and the alternative route would silently close again. */
+  it("mounts the forced surface on the obligation and the president, with no opener", () => {
+    /* #3 mounted on the plan alone for EVERY seat; #751b moved the mount behind a button so a rival's train stayed
+       reachable on another panel -- and the button-opened modal could then not be closed (A-9). Phase 3 W2-G
+       (owner ruling, OD-4): the surface opens ITSELF for the obligated president, is non-dismissible, and hosts the
+       rival's train as its first step. Every other seat and watcher reads a waiting card instead (OD-1). */
     const app = readShell();
     expect(app).not.toMatch(/emergencyModalPlan = emergencyPurchasePlan;/);
-    expect(app).toContain("emergencyModalOpen || emergencyForced");
+    expect(app).not.toContain("emergencyModalOpen || emergencyForced");
+    expect(app).toContain("const emergencyModalPlan = emergencyForPresident ? emergencyPurchasePlan : null;");
   });
 
-  it("still opens itself when nothing remains to decide", () => {
-    expect(readShell()).toContain("noDecisionRemains(emergencyPurchasePlan)");
+  it("no longer needs the bankrupt-only self-open", () => {
+    /* #751a opened the modal by itself only when nothing remained to decide. The surface now always opens itself for
+       the president, and the reducer ends the game in the same transition that makes bankruptcy certain. */
+    expect(readShell()).not.toContain("noDecisionRemains(emergencyPurchasePlan)");
   });
 
   it("logs every treasury movement", () => {

@@ -190,7 +190,7 @@ import { describeTreasuryMoves, treasuryMoveLine } from "./utils/treasuryProvena
 // Design note #768: the board cannot lose tiles; this is what says so out loud when it does.
 import { describeGridChange, gridChangeLine } from "./utils/gridProvenance";
 // Design note #751: the obligation lives on Pass, so the player keeps the choice of how to discharge it.
-import { noDecisionRemains, trainPurchaseRefusal } from "./utils/trainObligation";
+import { trainPurchaseRefusal } from "./utils/trainObligation";
 // Design note #759: the zone exemptions expire, and the debt shuts three doors.
 import { divestmentDebt, divestmentRefusal } from "./gameEngine/forcedDivestment";
 // Design note #763: a floated corporation with no home token stops the game until the token is down.
@@ -611,7 +611,7 @@ import { sandboxReplayProviders } from "./gameEngine/replayProviders";
 import { layAuthorityContext, sandboxActionContext } from "./gameEngine/actionContext"; // #1690 (Stage 10.3)
 import { cheapestPurchasableTrain } from "./gameEngine/trainAvailability";
 import { pendingTrainDiscards } from "./gameEngine/trainDiscard"; // #1530
-import { emergencyFundingFor } from "./gameEngine/emergencyFunding"; // #1540
+import { emergencyFundingFor, emergencyPurchaseRefusal } from "./gameEngine/emergencyFunding"; // #1540
 import { dividendSplit } from "./gameEngine/dividendSplit";
 import {
   actionWasRefused,
@@ -625,6 +625,15 @@ import {
   EmergencyTrainPurchaseModal,
   buildEmergencyPurchasePlan,
 } from "./components/EmergencyTrainPurchaseModal";
+import { EmergencyPurchaseWaitingCard } from "./components/EmergencyPurchaseWaitingCard"; // Phase 3 W2-G (OD-1)
+import {
+  emergencyViewerIsPresident,
+  emergencyWaitingSentence,
+  fundingAnswerRefusalForViewer,
+  fundingOfferDraftRefusal,
+  intercorporateOfferRefusal,
+  intercorporateStepFor,
+} from "./utils/emergencyPurchaseView"; // Phase 3 W2-G
 import type { GameplayExecuteMsg } from "./utils/sessionKey";
 import {
   stockTurnStage, // #1443
@@ -1924,46 +1933,98 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  being treated as sufficient. */
   const mustBuyTrain = trainlessAndReported && couldRunARouteIfItHadATrain;
 
+  /* Design note #1540: THE REDUCER'S OBLIGATION, NOT A PLAN OF THIS SHELL'S. `emergencyFundingFor` is what the
+     authority derives -- the required train and where it is, the treasury, the president's cash, the shortfall,
+     every legal forced sale, the privates that could be offered -- read off the same state and grid the reducer
+     reads. */
+  const emergencyFunding = useMemo(
+    () => (gameState ? emergencyFundingFor(gameState, mapGrid) : null),
+    [gameState, mapGrid],
+  );
+
   const emergencyPurchasePlan = useMemo(() => {
-    /* Design note #1540: THE REDUCER'S OBLIGATION, NOT A PLAN OF THIS SHELL'S. `emergencyFundingFor` is what
-       the authority derives -- the required train, the treasury, the president's cash, the shortfall, every
-       legal forced sale and whether bankruptcy has become unavoidable -- read off the same state and grid
-       the reducer reads. #358's three conditions and #1512's cheapest-train question are inside it. */
-    if (!gameState) return null;
-    const funding = emergencyFundingFor(gameState, mapGrid);
-    if (!funding) return null;
+    if (!gameState || !emergencyFunding) return null;
+    const offer = emergencyFunding.privateOffer;
     return buildEmergencyPurchasePlan({
-      funding,
+      funding: emergencyFunding,
       labelForAddress: (address) => sandboxPlayerLabel(address) ?? truncateAddress(address),
+      privateOfferBuyerPresident:
+        offer === null
+          ? null
+          : gameState.public_companies.find((company) => company.company_id === offer.buyer_protocol_id)?.president ?? null,
     });
-  }, [gameState, mapGrid]);
+  }, [gameState, emergencyFunding]);
 
   /* ==================================================================
-   *  DESIGN NOTE 751b: THE PLAN IS NO LONGER THE MOUNT CONDITION
+   *  PHASE 3 W2-G (OD-4 / OD-1): THE PLAN AND THE VIEWER ARE THE MOUNT CONDITION -- AND THERE IS NO DISMISSAL
    * ==================================================================
    *
-   * #3 read "the plan IS the mount condition; there is no dismissal", which enforced the obligation by
-   * removing every other way of meeting it. #751 moves the enforcement to Pass, so the modal opens when the
-   * president ASKS for it -- because buying a rival's train is the other legal answer and it lives on a
-   * different panel.
+   * #751b made the modal open on a button so a rival's train stayed reachable on another panel; once opened it
+   * could not be closed (A-9), so that panel was not reachable after all. The owner's ruling: the surface is
+   * NON-DISMISSIBLE and opens itself for the obligated president the moment the obligation stands, and buying from
+   * another corporation is its FIRST STEP rather than a different panel. The authoritative hold
+   * (`emergencyFundingBlock`) stands until the purchase is made or the game ends.
    *
-   * ONE EXCEPTION, AND IT IS #751a's: when the president cannot raise the money by any legal combination
-   * there is nothing to choose, so the modal opens itself. Leaving that behind a button would let a player
-   * who has already lost decline to press it and stall the table indefinitely, which is the exact failure
-   * the report asks to prevent. */
-  const [emergencyModalOpen, setEmergencyModalOpen] = useState(false);
+   * VIEWER SCOPE: only the obligated president's own, non-spectating screen gets the workflow
+   * (`emergencyViewerIsPresident`, W1-J's rule). Every other seat and every watcher gets the read-only
+   * `EmergencyPurchaseWaitingCard` -- never an actionable funding or bankruptcy control. */
+  /* Rooms only: the contract path has no emergency message, and a surface that cannot be closed must never open on a
+     screen where none of its controls could send. */
+  const emergencyForPresident =
+    sandbox &&
+    emergencyPurchasePlan !== null &&
+    emergencyViewerIsPresident({ spectator, president: emergencyPurchasePlan.presidentAddress, viewerAddress });
 
-  const emergencyForced =
-    emergencyPurchasePlan !== null && noDecisionRemains(emergencyPurchasePlan);
+  const emergencyModalPlan = emergencyForPresident ? emergencyPurchasePlan : null;
 
-  /* Closing the Hardware step closes the modal with it: a plan that has gone away cannot be acted on, and a
-     modal outliving its plan would be a dialog about a turn that has ended. */
-  useEffect(() => {
-    if (emergencyPurchasePlan === null) setEmergencyModalOpen(false);
-  }, [emergencyPurchasePlan]);
+  /* Step 1, from the authority: every train another corporation could sell, judged by `proposeTrainPurchaseRefusal`
+     for this viewer, and the obligated corporation's own standing offer. Only the president's screen needs it. */
+  const emergencyTradeStep = useMemo(
+    () =>
+      emergencyForPresident && gameState && emergencyFunding
+        ? intercorporateStepFor(gameState, emergencyFunding, mapGrid, viewerAddress)
+        : null,
+    [emergencyForPresident, gameState, emergencyFunding, mapGrid, viewerAddress],
+  );
 
-  const emergencyModalPlan =
-    emergencyModalOpen || emergencyForced ? emergencyPurchasePlan : null;
+  /* The read-only sentence for everybody else: who the table is waiting on. */
+  const emergencyWaiting = useMemo(() => {
+    if (!gameState || !emergencyPurchasePlan || emergencyForPresident) return null;
+    const label = (address: string | null | undefined) =>
+      !address
+        ? "its president"
+        : address === viewerAddress
+          ? "you"
+          : (sandboxPlayerLabel(address) ?? truncateAddress(address));
+    const offer = gameState.private_purchase_offer ?? null;
+    const funding = offer !== null && offer.funding ? offer : null;
+    const trade = gameState.train_purchase_offer ?? null;
+    const ours = trade !== null && trade.buyer_protocol_id === emergencyPurchasePlan.corporationId ? trade : null;
+    return emergencyWaitingSentence({
+      ticker: emergencyPurchasePlan.corporationTicker,
+      presidentLabel: emergencyPurchasePlan.presidentLabel,
+      privateOffer: funding
+        ? {
+            privateName: funding.private_name,
+            buyerTicker: funding.buyer_ticker,
+            buyerPresidentLabel: label(
+              gameState.public_companies.find((company) => company.company_id === funding.buyer_protocol_id)?.president,
+            ),
+          }
+        : null,
+      trainOffer: ours
+        ? {
+            sellerTicker: ours.seller_ticker,
+            model: ours.model_type,
+            price: String(ours.price),
+            sellerPresidentLabel: label(
+              gameState.public_companies.find((company) => company.company_id === ours.seller_protocol_id)?.president,
+            ),
+            accepted: ours.accepted === true,
+          }
+        : null,
+    });
+  }, [gameState, emergencyPurchasePlan, emergencyForPresident, viewerAddress]);
 
   /* Two endings, both derived: bankruptcy is read off the emergency plan and wins over a broken bank.
      See docs/ai_architecture/state_machine.md - App.tsx #359 */
@@ -13541,18 +13602,59 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onPlace={handlePlaceHomeStation}
       />
 
+      {/* Phase 3 W2-G (OD-4): the obligated president's guided, non-dismissible workflow. Mounted with a plan only on
+          that president's own screen (`emergencyForPresident`); keyed on the obligation so a new one starts at step 1. */}
       <EmergencyTrainPurchaseModal
+        key={
+          emergencyModalPlan && gameState
+            ? `emergency:${emergencyModalPlan.corporationId}:${gameState.macro_round_number}:${gameState.sub_round_index}`
+            : "emergency:none"
+        }
         plan={emergencyModalPlan}
         sandbox={sandbox}
-        /* The forced sale dispatches the ordinary SellStock; endgame.ts already validated the block.
-           See docs/ai_architecture/stock_market.md - App.tsx #490 */
+        actionInFlight={actionInFlight}
+        labelForAddress={(address) => sandboxPlayerLabel(address) ?? truncateAddress(address)}
+        intercorporate={emergencyTradeStep}
+        intercorporateOfferRefusal={(draft) =>
+          gameState && emergencyFunding
+            ? intercorporateOfferRefusal(gameState, emergencyFunding, mapGrid, viewerAddress, draft)
+            : "No forced train purchase is owed."
+        }
+        /* Step 1: the ordinary intercorporate path -- a direct buy when one president sits over both corporations,
+           otherwise an offer the seller answers (`handleProposeTrainTrade` owns that fork). */
+        onProposeTrade={(option, price) => {
+          if (!emergencyModalPlan) return;
+          handleProposeTrainTrade({
+            sellerProtocolId: option.sellerId,
+            sellerTicker: option.sellerTicker,
+            sellerPresident: option.sellerPresident,
+            sellerPresidentLabel: option.sellerPresident
+              ? sandboxPlayerLabel(option.sellerPresident) ?? truncateAddress(option.sellerPresident)
+              : `${option.sellerTicker}'s president`,
+            buyerProtocolId: emergencyModalPlan.corporationId,
+            buyerTicker: emergencyModalPlan.corporationTicker,
+            modelType: option.model,
+            price,
+            ...(option.gilded === undefined ? {} : { gilded: option.gilded }),
+          });
+        }}
+        onRescindTrade={(sellerId) => {
+          void runGameplayAction("Withdrew the train offer", {
+            RescindTrainPurchase: { game_id: gameId, seller_protocol_id: sellerId },
+          });
+        }}
+        /* The forced sale is the ordinary SellStock, one actual sale per press; the authority judged the bundle. */
         onSellShares={(companyId, percentage) => {
           void runGameplayAction("SellStock: emergency funding", {
             SellStock: { game_id: gameId, protocol_id: companyId, percentage },
           });
         }}
-        /* #1541: the seller-initiated private offer, its withdrawal, and the declaration. Each is the
-           obligated president's own message; the reducer and the authority judge it. */
+        /* #1541 / P3-N018: the funding offer's legality is the authority's `fundingPrivateOfferRefusal`. */
+        privateOfferRefusal={(draft) =>
+          gameState && emergencyFunding
+            ? fundingOfferDraftRefusal(gameState, emergencyFunding, viewerAddress, draft)
+            : "No forced train purchase is owed."
+        }
         onOfferPrivate={(privateId, buyerProtocolId, price) => {
           void runGameplayAction("Offered a private company to fund a train", {
             OfferPrivateForFunding: { game_id: gameId, private_id: privateId, buyer_protocol_id: buyerProtocolId, price },
@@ -13563,9 +13665,19 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
             RescindFundingPrivateOffer: { game_id: gameId, private_id: privateId },
           });
         }}
-        onDeclareBankruptcy={() => {
-          void runGameplayAction("Declared bankruptcy", { DeclareBankruptcy: { game_id: gameId } });
-        }}
+        /* The obligated president may also preside over the BUYING corporation; this surface covers the ordinary
+           prompt, so their answer is offered inside it. */
+        fundingAnswerRefusal={
+          gameState && emergencyModalPlan?.privateOffer
+            ? fundingAnswerRefusalForViewer(gameState, mapGrid, viewerAddress)
+            : "There is no funding offer to answer."
+        }
+        onAnswerFundingOffer={handleAnswerFundingPrivateOffer}
+        purchaseRefusal={
+          gameState && emergencyModalPlan
+            ? emergencyPurchaseRefusal(gameState, emergencyModalPlan.corporationId, mapGrid, viewerAddress)
+            : "No forced train purchase is owed."
+        }
         onConfirm={() => {
           const plan = emergencyModalPlan;
           if (!plan) return;
@@ -13577,14 +13689,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           );
           logInfo(
             "Emergency Purchase",
-            `${plan.presidentLabel} covered $${plan.shortfall} of ${plan.corporationTicker}'s $${plan.trainCost} ${plan.trainModel}-train — $${plan.treasuryContribution} treasury, $${plan.fromPlayerCash} personal cash.`,
+            `${plan.corporationTicker} asked to buy a ${plan.trainModel}-train from the ${plan.trainSourceName} for $${plan.trainCost} — $${plan.treasury} treasury, $${plan.fromPlayerCash} of ${plan.presidentLabel}'s cash.`,
           );
         }}
       />
+      {/* Phase 3 W2-G (OD-1): everybody but the obligated president -- other seats and watchers -- reads who the table
+          is waiting on, with no control. */}
+      <EmergencyPurchaseWaitingCard sentence={emergencyWaiting} />
 
       {/* Design note #0 in `GameOverModal.tsx`: both endings, one surface.
-          Mounted above the emergency modal in z-order because bankruptcy is
-          declared FROM that modal -- the game ending has to be able to
+          Mounted above the emergency modal in z-order because bankruptcy
+          ends the game WHILE that modal is up -- the game ending has to be able to
           cover the screen the president was looking at when it happened. */}
       <GameOverModal
         /* Design note #900: dismissal hides the modal and nothing else -- the ending stands, and the rail
@@ -14183,12 +14298,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                    where `gameState` is, so the button and the auto-skip cannot disagree about whether the
                    turn is over. */
                 endsTurnAtLimit: autoSkipExit("Hardware", stepsFor(gameState)) === "end-turn",
-                /* Design note #751c: the button that replaces #3's unskippable modal. It is
-                   offered exactly when a plan exists, which is the same condition the modal
-                   itself used -- so nothing changed about WHEN the emergency applies, only about
-                   who opens it. */
-                onEmergencyPurchase: () => setEmergencyModalOpen(true),
-                emergencyAvailable: emergencyPurchasePlan !== null,
+                /* Phase 3 W2-G: no "Emergency purchase" opener -- the forced surface opens itself for the
+                   obligated president (#751c's button retired with the button-opened modal). */
                 dieselExchange: dieselExchangeOffer, // #1303
                 onExchangeForDiesel: handleExchangeForDiesel,
                 /* Design note #1702 (GR-3): whether a Diesel trade-in could still be open after buying `tier` --

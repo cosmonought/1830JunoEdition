@@ -64,6 +64,10 @@ resource "aws_cloudfront_distribution" "site" {
   origin {
     origin_id   = "gs-alb"
     domain_name = var.edge.alb_origin_domain_name
+    # Pinned, not left to the provider: hashicorp/aws 6.66.0 made this Optional+Computed, so omitting it leaves a
+    # replaced origin-set element (the edge cutover changes domain_name) unknown until apply and the cutover guard
+    # refuses the plan. 0 = no maximum (the provider never sends 0 to CloudFront; the live value reads back as 0).
+    response_completion_timeout = 0
     custom_origin_config {
       http_port                = 80
       https_port               = 443

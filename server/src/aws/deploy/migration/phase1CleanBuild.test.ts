@@ -618,6 +618,34 @@ describe("T3 fast path (owner priority): what must be known before T3, what may 
     assert.match(read("docs/hosting-budget.md"), /expected to be pay-as-you-go: P1-R1 part B confirms that it has no WAF, real-time logs or flat-rate plan/);
     assert.match(String(INVENTORY.classes["KEEP-HOST"]), /the VPC, subnets, route tables and IGW: never deleted, whichever stack owns them/);
   });
+
+  test("T1 (provider 6.66): the gs-alb origin pins response_completion_timeout = 0 at origin level, so the cutover plan is fully known; the site origin is untouched", () => {
+    /* hashicorp/aws 6.66.0 made origin.response_completion_timeout Optional+Computed. T1 changes gs-alb's domain_name, so that
+     * origin-set element is replaced in the plan and an omitted value is unknown until apply: the edge-cutover guard refused
+     * the live T1 plan ("the origins are unknown until apply"). The source pins the live value (0 = no maximum) instead of
+     * weakening the guard. */
+    const hcl = stripHcl(read("infra/aws/modules/app/edge.tf"));
+    const blockAt = (text: string, start: number): string => {
+      let depth = 0;
+      for (let i = text.indexOf("{", start); i < text.length; i += 1) {
+        if (text[i] === "{") depth += 1;
+        if (text[i] === "}" && --depth === 0) return text.slice(start, i + 1);
+      }
+      throw new Error("unbalanced block");
+    };
+    const dist = blockAt(hcl, hcl.search(/resource\s+"aws_cloudfront_distribution"\s+"site"\s*\{/));
+    const origins = [...dist.matchAll(/^\s*origin\s*\{/gm)].map((m) => blockAt(dist, m.index!));
+    const byId = new Map(origins.map((o) => [/origin_id\s*=\s*"([^"]+)"/.exec(o)?.[1], o] as const));
+    assert.deepEqual([...byId.keys()].sort(), ["gs-alb", "site"]);
+    const gs = byId.get("gs-alb")!;
+    const custom = blockAt(gs, gs.search(/custom_origin_config\s*\{/));
+    const originLevel = gs.replace(custom, "");
+    assert.equal([...originLevel.matchAll(/^\s*response_completion_timeout\s*=\s*0\s*$/gm)].length, 1, "gs-alb: response_completion_timeout = 0, once, at origin level");
+    assert.doesNotMatch(custom, /response_completion_timeout/, "not inside custom_origin_config");
+    assert.doesNotMatch(byId.get("site")!, /response_completion_timeout/, "the site origin is unchanged");
+    /* The guard itself is not relaxed: an unknown origin is still refused (cost2bMigrationGuards pins the message). */
+    assert.match(read("server/src/aws/deploy/migration/planGuards.ts"), /if \(unknown\.includes\("origin"\)\) return "the origins are unknown until apply";/);
+  });
 });
 
 /* ================================================================== */
@@ -651,10 +679,10 @@ describe("P1-R2: the expensive topology and the task role's grants cannot come b
     assert.match(ledgerExample, /^app_runtime_role_arns\s*=\s*\["arn:aws:iam::111111111111:role\/gs-staging-host-app"\]\s*$/m);
   });
 
-  test("since the Phase-1 base, only those two root variables, their examples and the module README moved under infra/aws/modules and infra/aws/stacks", { skip: baseAvailable ? false : `not a checkout holding the Phase-1 base ${RESET_BASE.slice(0, 7)} (a shallow clone)` }, () => {
+  test("since the Phase-1 base, only those two root variables, their examples, the module README and the gs-alb origin's pinned response_completion_timeout moved under infra/aws/modules and infra/aws/stacks", { skip: baseAvailable ? false : `not a checkout holding the Phase-1 base ${RESET_BASE.slice(0, 7)} (a shallow clone)` }, () => {
     const r = git(["diff", "--name-only", RESET_BASE, "--", "infra/aws/modules", "infra/aws/stacks"]);
     assert.equal(r.status, 0, r.stderr);
-    const allowed = new Set(["infra/aws/stacks/app/variables.tf", "infra/aws/stacks/app/example.tfvars.example", "infra/aws/stacks/ledger/variables.tf", "infra/aws/stacks/ledger/example.tfvars.example", "infra/aws/modules/single-host/README.md"]);
+    const allowed = new Set(["infra/aws/stacks/app/variables.tf", "infra/aws/stacks/app/example.tfvars.example", "infra/aws/stacks/ledger/variables.tf", "infra/aws/stacks/ledger/example.tfvars.example", "infra/aws/modules/single-host/README.md", "infra/aws/modules/app/edge.tf"]);
     assert.deepEqual(r.stdout.trim().split("\n").filter((f) => f !== "" && !allowed.has(f)), [], "no module, resource, template, host file or stacks/single-host change");
     /* Each variables.tf differs from the base ONLY by its one removed default (comments aside). */
     for (const [file, name] of [["infra/aws/stacks/app/variables.tf", "compute"], ["infra/aws/stacks/ledger/variables.tf", "ecs_task_role_authorized"]] as const) {
@@ -668,6 +696,15 @@ describe("P1-R2: the expensive topology and the task role's grants cannot come b
       assert.equal(squash(read(file)), squash(stripHcl(before.stdout.replace(/\r\n?/g, "\n")).replace(block, withoutDefault)), `${file}: only ${name}'s default was removed`);
       assert.notEqual(squash(read(file)), base);
     }
+    /* edge.tf differs from the base ONLY by the gs-alb origin's `response_completion_timeout = 0` (provider 6.66, T1; comments aside). */
+    const edgeBefore = git(["show", `${RESET_BASE}:infra/aws/modules/app/edge.tf`]);
+    assert.equal(edgeBefore.status, 0, edgeBefore.stderr);
+    const lines = (hcl: string) => stripHcl(hcl.replace(/\r\n?/g, "\n")).split("\n").map((l) => l.trim()).filter((l) => l !== "");
+    const pin = "response_completion_timeout = 0";
+    const now = lines(read("infra/aws/modules/app/edge.tf"));
+    const at = now.indexOf(pin);
+    assert.ok(at > 0 && now.lastIndexOf(pin) === at && now[at - 1] === "domain_name = var.edge.alb_origin_domain_name", "edge.tf: the pin, once, right after the gs-alb domain_name");
+    assert.deepEqual([...now.slice(0, at), ...now.slice(at + 1)], lines(edgeBefore.stdout), "edge.tf: nothing else changed since the base");
   });
 });
 

@@ -72,7 +72,7 @@ export interface RouteChipDetailProps {
    *
    * GATED ON `canClear`, the edit permission the X and Clear already carry: a watcher may read, not choose.
    * OPTIONAL, so a caller that offers no choice renders exactly as before. */
-  onSetBypass?: (trainIndex: number, pointIndex: number, bypass: boolean) => void;
+  onSetBypass?: (trainIndex: number, pointIndex: number, bypass: boolean, hexLabel: string) => void;
   /** Closes the detail without touching the route. */
   onClose: () => void;
   /** The panel's own click feedback, so a refused draft explains itself here rather than nowhere. */
@@ -99,11 +99,12 @@ export function forcedBypassNote(hex: string): string {
   return `${hex}: bypassed — the city is closed to this corporation, so the train takes the track around it.`;
 }
 
-/** Phase 3 W3-E: the over-reach line, naming the stop a Bypass would save when there is one to choose. */
-export function tooManyStopsNote(model: string, choices: TrainRouteDraft["bypassChoices"]): string {
-  const savable = (choices ?? []).find((choice) => choice.kind === "choice" && !choice.bypassed);
-  return savable
-    ? `Too many stops for a ${model}. Bypass ${savable.hexLabel} to save a stop, or shorten the route.`
+/** Phase 3 W3-E: the over-reach line, naming the stop a Bypass would save -- only when bypassing would be
+ *  enough (`overBy` stops too many, each choice saving one). */
+export function tooManyStopsNote(model: string, choices: TrainRouteDraft["bypassChoices"], overBy = 1): string {
+  const savable = (choices ?? []).filter((choice) => choice.kind === "choice" && !choice.bypassed);
+  return savable.length > 0 && overBy <= savable.length
+    ? `Too many stops for a ${model}. Bypass ${savable.map((choice) => choice.hexLabel).join(" and ")} to save ${overBy === 1 ? "a stop" : `${overBy} stops`}, or shorten the route.`
     : `Too many stops for a ${model}.`;
 }
 
@@ -241,7 +242,7 @@ export function RouteChipDetail({
                         ...styles.bypassOption,
                         ...(choice.bypassed === bypass ? styles.bypassOptionOn : {}),
                       }}
-                      onClick={() => onSetBypass(draft.trainIndex, choice.index, bypass)}
+                      onClick={() => onSetBypass(draft.trainIndex, choice.index, bypass, choice.hexLabel)}
                       title={bypassChoiceTitle(choice.hexLabel, bypass)}
                       aria-label={bypassChoiceTitle(choice.hexLabel, bypass)}
                     >
@@ -258,7 +259,13 @@ export function RouteChipDetail({
       )}
 
       {draft.exceedsMaxDistance && (
-        <span style={styles.problem}>{tooManyStopsNote(model, draft.bypassChoices)}</span>
+        <span style={styles.problem}>
+          {tooManyStopsNote(
+            model,
+            draft.bypassChoices,
+            draft.maxDistance === undefined ? 1 : draft.revenueCentres - draft.maxDistance,
+          )}
+        </span>
       )}
       {draft.endsOffTerminus && (
         <span style={styles.problem}>A route must finish at a city, a town or a red off-board hex.</span>

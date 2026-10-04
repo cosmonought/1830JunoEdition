@@ -336,7 +336,7 @@ import { JK_PRIVATE_ID } from "./gameEngine/levelPlayingField";
 // Design note #808: one predicate for the bow, consulted by the tracer, the legality check and the pricing.
 import { hexOffersBypass, withForcedBypass } from "./gameEngine/cityBypass";
 // Phase 3 W3-E (K-06, OD-11): the manual Stop / Bypass choice on a waypoint with a track around its centre.
-import { bypassChoicesFor, clearEndpointBypass, setDraftBypass } from "./utils/manualBypass";
+import { bypassChoicesFor, bypassedStationReason, clearEndpointBypass, setDraftBypass } from "./utils/manualBypass";
 // Design note #809: whose clicks the Lay Track glow may swallow -- watchers keep the inspector.
 import { inspectorClickRefused } from "./utils/inspectorClick";
 /* Design note #817: an armed errand's lifecycle -- what a click means, which lay is its own, and when it
@@ -4484,10 +4484,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      it). This writes the draft or shows the refusal -- nothing is dispatched, and the auto-router is not
      consulted: its own choice arrives in the draft as a flag and is simply the starting state. */
   const handleSetRouteBypass = useCallback(
-    (trainIndex: number, pointIndex: number, bypass: boolean) => {
+    (trainIndex: number, pointIndex: number, bypass: boolean, hexLabel: string) => {
+      if (!isMyTurnRef.current) return; // the click handler's own guard: only the acting president edits
       setRouteDrafts((prev) => {
         const points = prev[trainIndex] ?? [];
-        const edit = setDraftBypass(mapGrid, points, pointIndex, bypass, blocksThroughCityRef.current);
+        const edit = setDraftBypass(mapGrid, points, pointIndex, bypass, blocksThroughCityRef.current, hexLabel);
         if (!edit.ok) {
           setRouteFeedback(edit.reason);
           return prev;
@@ -4756,6 +4757,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            See docs/ai_architecture/routing_pathfinding.md - App.tsx #474 */
         tokenBlockReason:
           routeTokenBlockReason(points, routeTokenHexes, mapGrid) ??
+          /* Phase 3 W3-E: a bypassed hex is not a visit, so its station does not count (R12-2, IL-7). */
+          bypassedStationReason(points, routeTokenHexes, mapGrid) ??
           /* Design note #730a: and the wall, for a route drawn by hand. The tracer cannot produce one; a
              player can, and both go to the same dispatch. */
           routeBlockedCityReason(

@@ -1343,7 +1343,7 @@ export default function ContextualActionBar({
   stopsRemovedByRemoval?: (trainIndex: number, hexLabel: string) => number;
   /** Phase 3 W3-E (K-06): the president's Stop / Bypass choice on a waypoint with a track around its centre.
    *  Keyed by the waypoint's index in the full drafted walk (`TrainRouteDraft.bypassChoices[i].index`). */
-  onSetRouteBypass?: (trainIndex: number, pointIndex: number, bypass: boolean) => void;
+  onSetRouteBypass?: (trainIndex: number, pointIndex: number, bypass: boolean, hexLabel: string) => void;
   /** Buy Private Company Action Tray -- design note #14. Already filtered
    *  down to what `activePlayerAddress` actually still owns and could sell
    *  (`playerSellablePrivateCompanies`), not the full room-wide list. */

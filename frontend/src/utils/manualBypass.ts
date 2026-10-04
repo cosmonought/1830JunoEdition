@@ -32,7 +32,8 @@ import type { MapGridResponse } from "../components/hexContractTypes";
 import { traversalsFrom } from "../gameEngine/trackSegments";
 import { bypassForcedAt, type BlocksThrough } from "../gameEngine/cityBypass";
 import { edgeToward } from "./routeConnection";
-import type { RoutePoint } from "./routeWaypoints";
+import { routeIncludesOwnedToken, type RoutePoint } from "./routeWaypoints";
+import type { StationToken } from "../gameEngine/trackReach";
 
 /** The Stop / Bypass state of one waypoint that has a way around its revenue centre. */
 export type BypassChoice =
@@ -118,9 +119,13 @@ export function setDraftBypass(
   index: number,
   bypass: boolean,
   blocksThrough: BlocksThrough | undefined,
+  /** The waypoint the control was rendered for. A draft that changed under the click is refused, not re-aimed. */
+  expectedHexLabel?: string,
 ): DraftBypassEdit {
   const here = points[index];
-  if (!here) return { ok: false, reason: "That stop is no longer on this route." };
+  if (!here || (expectedHexLabel !== undefined && here.hexLabel !== expectedHexLabel)) {
+    return { ok: false, reason: "That stop is no longer on this route." };
+  }
   if (index === 0 || index === points.length - 1) {
     return {
       ok: false,
@@ -150,6 +155,28 @@ export function setDraftBypass(
     ? { ...rest, variant: ways.bowVariant, bypass: true }
     : { ...rest, variant: ways.throughVariant };
   return { ok: true, points: next };
+}
+
+/** Why a draft has no station once its bypassed waypoints are taken out, or `null`.
+ *
+ *  A bypass is not a visit (R12-2, IL-7): the bow does not reach the station on the hex it goes round, so a PRR
+ *  that bypasses Altoona with no other station on the route has none -- and the authority refuses that run.
+ *  `routeTokenBlockReason` matches tokens by hex and cannot see the flag, so the draft would look runnable
+ *  until Run. Asked only of a draft that HAS a bypass flag, and only of the tokens on bypassed hexes, so every
+ *  other route (and every auto draft, which the search already judges with the authority's walk) is untouched. */
+export function bypassedStationReason(
+  points: readonly RoutePoint[],
+  tokens: ReadonlyArray<StationToken>,
+  mapGrid: MapGridResponse | undefined,
+): string | null {
+  const passed = points.filter((point) => point.bypass === true);
+  if (passed.length === 0) return null;
+  const onPassed = (token: StationToken) => passed.some((point) => point.q === token[0] && point.r === token[1]);
+  const kept = tokens.filter((token) => !onPassed(token));
+  if (kept.length === tokens.length) return null;
+  if (routeIncludesOwnedToken(points, kept, mapGrid)) return null;
+  const where = passed.filter((point) => tokens.some((token) => point.q === token[0] && point.r === token[1]))[0];
+  return `Bypassing ${where?.hexLabel ?? "that city"} leaves this route without one of this corporation's stations — stop there, or run through another of its stations.`;
 }
 
 /** A draft with no bypass flag on its first or last point -- a route stops where it starts and ends.

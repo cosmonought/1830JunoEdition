@@ -30,6 +30,7 @@ import { editRouteDraft } from "./routeDraftEdit";
 import {
   bowAvailableAt,
   bypassChoiceAt,
+  bypassedStationReason,
   bypassChoicesFor,
   clearEndpointBypass,
   setDraftBypass,
@@ -158,6 +159,22 @@ describe("W3-E: the PRR may choose to pass its own Altoona home", () => {
   it("but a bypass of the PRR's ONLY station leaves no station on the route -- the authority still says so", () => {
     const homeOnly = board(PRR, [prr(["2"], [["H12", 0]])]);
     expect(why(homeOnly, PRR, [bypassed()])).toMatch(/must pass through a city this corporation has a station token in/);
+  });
+
+  it("and the draft says so before Run, so the route is dropped by name rather than blocking the set", () => {
+    const home: Array<[number, number, number]> = [[H12.q, H12.r, 0]];
+    const both: Array<[number, number, number]> = [[H12.q, H12.r, 0], [hex("H10").q, hex("H10").r, 0]];
+    expect(bypassedStationReason(bypassed(), home, ALTOONA)).toBe(
+      "Bypassing H12 leaves this route without one of this corporation's stations — stop there, or run through another of its stations.",
+    );
+    expect(bypassedStationReason(bypassed(), both, ALTOONA)).toBeNull();
+    expect(bypassedStationReason(THROUGH, home, ALTOONA)).toBeNull();
+  });
+
+  it("a choice aimed at a waypoint that has since changed is refused, not re-aimed", () => {
+    const stale = setDraftBypass(ALTOONA, pts("H10", "H12", "H14"), 1, true, undefined, "H14");
+    expect(!stale.ok && stale.reason).toBe("That stop is no longer on this route.");
+    expect(setDraftBypass(ALTOONA, THROUGH, 1, true, undefined, "H12").ok).toBe(true);
   });
 });
 
@@ -306,6 +323,16 @@ describe("W3-E: drawing past Altoona on a short train", () => {
     expect(price(bypassed(drawn.points), PRR).centres).toBe(2);
   });
 
+  it("but a crossing that already names its arm is counted as drawn: an auto draft's or the player's Stop", () => {
+    const decided = (variant: number, bypass?: true): RoutePoint[] => [point("H10"), { ...point("H12"), variant, ...(bypass ? { bypass } : {}) }];
+    const click = (points: RoutePoint[]) =>
+      editRouteDraft({ mapGrid: ALTOONA, points, click: point("H14"), displayLabel: "H14", maxDistance: 2, forCompanyId: PRR });
+    const stop = click(decided(0));
+    expect(!stop.ok && stop.reason).toMatch(/3 stops and it can only run 2/);
+    expect(click(decided(1, true)).ok).toBe(true); // already bypassed: no stop spent
+    expect(click(pts("H10", "H12")).ok).toBe(true); // undecided: the choice is still to be made
+  });
+
   it("the same holds where the bypass is forced", () => {
     expect(draw(ALTOONA, ["H10", "H12", "H14"], 2, NYC, BLOCKS_H12).ok).toBe(true);
   });
@@ -354,15 +381,19 @@ describe("W3-E: the Stop / Bypass control in the route strip", () => {
 
   it("states a forced bypass instead of offering it", () => {
     const html = render(draft([{ index: 1, hexLabel: "H12", kind: "forced" }]));
-    expect(html).toContain(forcedBypassNote("H12").replace("—", "—"));
+    expect(html).toContain(forcedBypassNote("H12"));
     expect(html).not.toContain(">Bypass<");
     expect(html).not.toContain(">Stop<");
   });
 
   it("shows a watcher the state without buttons", () => {
-    const html = render(draft([{ index: 1, hexLabel: "H12", kind: "choice", bypassed: false }]), false);
-    expect(html).toContain("stops");
-    expect(html).not.toContain("<button type=\"button\" aria-pressed");
+    for (const bypassed of [false, true]) {
+      const html = render(draft([{ index: 1, hexLabel: "H12", kind: "choice", bypassed }]), false);
+      expect(html).toContain(`>${bypassed ? "bypassed" : "stops"}</span>`);
+      expect(html).not.toContain(">Stop<");
+      expect(html).not.toContain(">Bypass<");
+      expect(html).not.toContain("aria-pressed");
+    }
   });
 
   it("renders nothing new on a route with no bow", () => {
@@ -375,7 +406,11 @@ describe("W3-E: the Stop / Bypass control in the route strip", () => {
       "Too many stops for a 2. Bypass H12 to save a stop, or shorten the route.",
     );
     expect(tooManyStopsNote("2", [{ index: 1, hexLabel: "H12", kind: "forced" }])).toBe("Too many stops for a 2.");
-    expect(render(draft([{ index: 1, hexLabel: "H12", kind: "choice", bypassed: false }], { exceedsMaxDistance: true }))).toContain("Bypass H12 to save a stop");
+    // Not when one saved stop would not be enough.
+    expect(tooManyStopsNote("2", [{ index: 1, hexLabel: "H12", kind: "choice", bypassed: false }], 2)).toBe("Too many stops for a 2.");
+    const over = { exceedsMaxDistance: true, revenueCentres: 3 };
+    expect(render(draft([{ index: 1, hexLabel: "H12", kind: "choice", bypassed: false }], over))).toContain("Bypass H12 to save a stop");
+    expect(render(draft([{ index: 1, hexLabel: "H12", kind: "choice", bypassed: false }], { ...over, revenueCentres: 4 }))).not.toContain("Bypass H12 to save");
   });
 });
 
@@ -388,7 +423,8 @@ describe("W3-E: wired from the shell, and the auto-router untouched", () => {
 
   it("the shell writes the choice through `setDraftBypass`, and the bar hands it to the strip", () => {
     const handler = sliceBetween(APP, "const handleSetRouteBypass = useCallback(", "const handleSelectRouteTrain = useCallback(");
-    expect(handler).toContain("setDraftBypass(mapGrid, points, pointIndex, bypass, blocksThroughCityRef.current)");
+    expect(handler).toContain("setDraftBypass(mapGrid, points, pointIndex, bypass, blocksThroughCityRef.current, hexLabel)");
+    expect(handler).toContain("if (!isMyTurnRef.current) return;");
     expect(handler).toContain("setRouteFeedback(edit.reason);");
     expect(APP).toContain("onSetRouteBypass={handleSetRouteBypass}");
     expect(readStripped("panels/ContextualActionBar.tsx")).toContain("onSetBypass={onSetRouteBypass}");
@@ -398,6 +434,7 @@ describe("W3-E: wired from the shell, and the auto-router untouched", () => {
     const memo = sliceBetween(APP, "const trainDrafts = useMemo<TrainRouteDraft[]>(() => {", "endsOffTerminus:");
     expect(memo).toContain("const bypassChoices = bypassChoicesFor(mapGrid, points, blocksThroughCityRef.current);");
     expect(memo).toContain("bypassChoices,");
+    expect(APP).toContain("bypassedStationReason(points, routeTokenHexes, mapGrid) ??");
   });
 
   it("hand edits clear an endpoint's flag", () => {

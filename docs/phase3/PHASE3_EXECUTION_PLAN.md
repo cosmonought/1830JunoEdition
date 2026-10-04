@@ -427,6 +427,7 @@ gates.
 #### W1-I
 **Dock hygiene and status facts** · L5 · **5–6.5 h**
 - **Status (Wave-1 integration, 2026-10-03):** PARTIAL — the unconditional portion is complete (L5 `9dcad19`, `b9fd1bf`, `82b93ca`, `beac07a`, `3904533`, `fee2f66`); OD-14(a) remains (the fit-probe removal, AUD-01.01, waits on it, and W1-I-b exists only if it is ruled in).
+- **Status (2026-10-04):** COMPLETE on its slice branch `phase3/w1-i-completion` @ `1b76512` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated. OD-14(a) RULED (§7.3): keep the current step-panel placement and remove the probe; W1-I-b not opened. AUD-01.01 IMPLEMENTED (`1b76512`: `useStickyFitProbe`, its readout and style removed; `stickyFitProbe.test.ts` deleted; `stickyTrap`, `stepJumpButton`, `stickyBarSplit` re-anchored); AUD-01.02 RULED — resolved by OD-14(a).
 - **Outcome:** no developer text or temporary instrument in front of players; the dock's height follows its content; the bank,
   build and current-step facts are true.
 - **Rows:** implements AUD-01.01 (U-16), AUD-01.04 (A-14), AUD-01.08, AUD-06.07, AUD-12.01 (K-23 / U-27), P3-N014 (draft NEW-5), P3-N015 (draft W1-I), P3-N016 (draft W1-I (U-34 note)); carries the owner-gated AUD-01.02 (U-16); is Phase-3 pre-work for the Phase-4 rows AUD-11.06 (U-34)
@@ -802,7 +803,7 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 | **OD-11** | PRODUCT · PLAYTEST-INFORMED | **RULED 2026-10-03 (build: manual route only) — see §7.3.** K-06 city bypass: build in Phase 3 (which hexes, which gesture, how it meets the shortfall refusal) or place it later | No voluntary control; bypass is sent automatically where forced | W3-E | Partly |
 | **OD-12** | PRODUCT (engineering scope) | **RULED 2026-10-03 — see §7.3.** **RED-region permission.** May named Phase-3 fixes edit the RED regions (submit half, apply half, OR verdict, link drain), each as one separately reviewed commit naming its exact lines? Candidates: K-18 (R2), the banner/refusal model and refusal rollbacks (R1, R5), the `press:true` latch (R1), K-24's call site (R2), A-19 if the audio-side fix is not enough (R2), the FleetLoss prune if the store fix is not enough (R4), the queued-state read if it cannot be done outside the drain (R5). A refusal places each named item later (E) — it does not silently drop it | The draft deferred all of these to Phase 4 without a ruling | W2-J, W3-B, W3-C, W3-I, W1-N, W3-A, W3-H | No |
 | **OD-13** | PRESENTATION (derived statistics) | **RULED 2026-10-04 (transcribed at the W3-G owner review: W2-L's corrections approved as implemented) — see §7.3.** Ratify or amend the candidate resolutions for U-41 and U-43 (1)–(4). Each changes standard-game post-game statistics | Recorded in Part C as candidates "NOT ratified" | W2-L | No |
-| **OD-14** | PRESENTATION | **(d) and (i) RULED 2026-10-04 (transcribed at the W3-G owner review: keep "traded"; a bounded money-panel consistency pass) — see §7.3; (a)–(c), (e)–(h) open.** Owner calls the audit names: (a) U-16 — move the step panels back into the bar, or keep; (b) U-7 — extend the card wash to the cash slide-out and payout modal; (c) U-8 — seven-seat palette; (d) GR-3 — keep "traded" for a first-Diesel trade-in or restore "rusted"; (e) the waiting room's extra description line; (f) VF G-1 — a phase-flip cue (which asset); (g) VF G-7 — close as designed or replay; (h) VF I-10 / J-6 — build the static badge icons now; (i) the money panel's styling (a Part C U-44 note, beyond the audit) | Each recorded as open or "owner to say" | W1-I(-b), W3-H, W1-L, W2-K, W2-L | (a)(f) partly |
+| **OD-14** | PRESENTATION | **(a), (d) and (i) RULED 2026-10-04 ((a) at the W1-I completion: keep the step-panel placement, remove the probe; (d) and (i) transcribed at the W3-G owner review: keep "traded"; a bounded money-panel consistency pass) — see §7.3; (b), (c), (e)–(h) open.** Owner calls the audit names: (a) U-16 — move the step panels back into the bar, or keep; (b) U-7 — extend the card wash to the cash slide-out and payout modal; (c) U-8 — seven-seat palette; (d) GR-3 — keep "traded" for a first-Diesel trade-in or restore "rusted"; (e) the waiting room's extra description line; (f) VF G-1 — a phase-flip cue (which asset); (g) VF G-7 — close as designed or replay; (h) VF I-10 / J-6 — build the static badge icons now; (i) the money panel's styling (a Part C U-44 note, beyond the audit) | Each recorded as open or "owner to say" | W1-I(-b), W3-H, W1-L, W2-K, W2-L | (a)(f) partly |
 | **OD-15** | PRESENTATION (modal infrastructure) | (a) The intro overlay's scale contract; (b) is the portal / inert layer still needed (and if so, inert behind every modal)? | `zoom: 1 / uiScale` on an `aria-modal` div; `ModalPortal` disowns inert | W3-D | No |
 | **OD-16** | PRODUCT (owner-authored) | The Terms page content (S10-12), required before the first real deposit | None | W2-M (hosting) | No |
 | **OD-17** | RULES | **RULED 2026-10-03 — see §7.3.** Tile-upgrade legality cross-references: VF D-18 (New York #54→#883 offered, #62→#883 not) and VF D-22 (#59 → brown OO facings that break fixed OO; 256 accepted transitions) | The placement filter accepts them | W3-K | No |
@@ -813,7 +814,7 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 - Station refusals are shown through the existing `showActionToast` (W1-F).
 - The K-16 tooltip may state the rule rather than name a seat (W1-B).
 - The Rules Reference's game-over copy (W2-I) and the U-40 authority sentence (W1-L) are drafted by the slice and reviewed at the gate.
-- U-16's probe is removed in any case (Part C: "remove it either way"); only the panel placement is OD-14(a).
+- U-16's probe is removed in any case (Part C: "remove it either way"); only the panel placement is OD-14(a). (OD-14(a) RULED 2026-10-04: keep; the probe is removed by W1-I `1b76512`.)
 
 ### 7.2 Draft decisions eliminated or corrected
 
@@ -905,11 +906,15 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - Derived-statistics corrections are approved as implemented by W2-L: train discard; Salvager; refused runs; RunManualRoute; Cowboy fixes.
 - *Effect on this plan:* OD-13: RULED — U-41 and U-43 (1)–(4) ratified as implemented (`e16aa5a`). AUD-12.02 and AUD-12.03 stay IMPLEMENTED.
 
-**OD-14 — PRESENTATION CALLS, (d) AND (i).** (Transcribed 2026-10-04 at the W3-G owner review, AUD-25.15; (d) applied by W2-L, (i) by W2-K.)
+**OD-14 — PRESENTATION CALLS, (a), (d) AND (i).** ((a) ruled by the owner 2026-10-04 at the W1-I completion, applied by W1-I `1b76512`. (d) and (i) transcribed 2026-10-04 at the W3-G owner review, AUD-25.15; (d) applied by W2-L, (i) by W2-K.)
+- (a) Approved: keep the step panels outside the action bar.
+- (a) Remove the temporary sticky-fit probe rather than moving the step panels back into the bar.
+- (a) Record OD-14(a) as RULED by the owner. Preserve the current external step-panel placement; do not open the W1-I-b "move panels into bar" sub-scope.
 - (d) For the first-Diesel trade-in presentation, keep the label: "traded". Earlier 4-trains rusted by the phase event remain rusted.
 - (i) Phase 3 gets a bounded money-panel consistency pass. The goal is to make the money panel visually belong to the rest of the game and stop there.
 - (i) W2-K / W2-M may extend the established styling while touching money UI, but this is NOT permission for a money-panel redesign or broader frontend refactor.
-- *Effect on this plan:* OD-14(d) and OD-14(i): RULED. AUD-12.07 RULED ("traded" kept; no change). (i) bounds W2-K's panel pass and any W2-M money-UI styling. OD-14(a)–(c) and (e)–(h) remain open.
+- *Effect on this plan:* OD-14(a): RULED. AUD-01.01 IMPLEMENTED (W1-I `1b76512`, not integrated); AUD-01.02 RULED — resolved; W1-I-b not opened; W1-I COMPLETE. Transcription note (W1-I, from source at `d29bb2f`): since design note #828 the step-panel wrapper (`stepPanelRef`, a full-width row of its own) renders inside the sticky action bar's element, and `1b76512` leaves it there; the ruling's operative effect is no relocation -- the panels stay exactly where they are and W1-I-b is not opened.
+- *Effect on this plan:* OD-14(d) and OD-14(i): RULED. AUD-12.07 RULED ("traded" kept; no change). (i) bounds W2-K's panel pass and any W2-M money-UI styling. OD-14(b), (c) and (e)–(h) remain open.
 
 *Also from that brief (constraints on integrated slices, not new rulings):* W2-H keeps the Routes/Dividends informational
 visibility for non-active players (home/auction actors get controls, others a status) — this is OD-1's viewer scope for those two
@@ -953,7 +958,7 @@ transcribed above, from the W3-G owner-review brief (2026-10-04; AUD-25.15). W2-
 - No engine change.
 - *Effect on this plan:* VF/D-18 and VF/D-22 stay C (the ledger still lists them OPEN) with status RULED — no change; the ledger and comment cleanup is a docs task (closure contract item 12).
 
-Still open from wave 1: **OD-14(a)** (W1-I). (OD-14(d) and (i) are RULED above, 2026-10-04.) Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
+Still open from wave 1: none. (OD-14(a) is RULED above, 2026-10-04, at the W1-I completion; OD-14(d) and (i) are RULED above, 2026-10-04.) Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
 
 ---
 
@@ -1034,7 +1039,7 @@ narrow runs, review fixes). Where one change resolves several audit items, it is
 | Integration, rebases and shared-pin repair (~42 landings) | 10–16 |
 | Diagnosing owner-gate failures (4 gates) | 5–9 |
 | **Total (unconditional)** | **≈ 160–231 h** |
-| Conditional, only if the owner rules them in | W3-E 5–8 (OD-11) · W1-I-b 3–5 (OD-14a) · W3-K 8–14 (OD-10a) |
+| Conditional, only if the owner rules them in | W3-E 5–8 (OD-11) · W1-I-b 3–5 (OD-14a; not opened — OD-14(a) RULED keep, 2026-10-04) · W3-K 8–14 (OD-10a) |
 
 *Comparison:* the audit's 70–115 h was a backlog sum without parallel-integration overhead. The draft's 115–150 h covered
 fewer items (it lost about 45). Neither is inherited.

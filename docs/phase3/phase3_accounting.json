@@ -45,7 +45,7 @@
    "od": "OD-14(a) (probe readout may inform it first)",
    "p4": "—",
    "notes": "Part C U-16: \"Decide, then remove it either way.\" The removal happens whatever OD-14(a) decides, but only after it is recorded, because the probe is the instrument for that decision (AUD-01.02).",
-   "status": "OPEN — W1-I's remaining part: the probe is removed only once OD-14(a) is recorded"
+   "status": "IMPLEMENTED — W1-I `1b76512` on `phase3/w1-i-completion`, after OD-14(a) was RULED (owner, 2026-10-04): `useStickyFitProbe`, its call, its player-visible readout (\"Temporary instrument …\") and the `fitProbe` style removed, with the now-unused `canPinWithoutTrapping` import (the predicate stays in `utils/stickyCollapse.ts`); `stickyFitProbe.test.ts` deleted; `stickyTrap`, `stepJumpButton` and `stickyBarSplit` re-anchored (absence pins added); no layout change; not integrated"
   },
   {
    "key": "AUD-01.02",
@@ -59,7 +59,7 @@
    "od": "OD-14(a)",
    "p4": "—",
    "notes": "If OD-14(a) = move into the bar, lane 5 adds W1-I-b in wave 2 (3–5 h). If it = keep, no work.",
-   "status": "OPEN — OD-14(a)"
+   "status": "RULED — RESOLVED BY OD-14(a) (owner, 2026-10-04): keep the current step-panel placement and remove the probe rather than moving the step panels; the conditional W1-I-b sub-scope is not opened (no work). Transcription note (W1-I, from source at `d29bb2f`): since design note #828 the step-panel wrapper (`stepPanelRef`, a full-width row of its own) renders inside the sticky action bar's element, and `1b76512` leaves it there; the ruling's operative effect is no relocation -- the panels stay exactly where they are and W1-I-b is not opened."
   },
   {
    "key": "AUD-01.03",
@@ -4844,14 +4844,17 @@
    "effect": "OD-13: RULED — transcribed at the W3-G owner review (2026-10-04; AUD-25.15). The U-41 and U-43 (1)–(4) resolutions as implemented by W2-L (`e16aa5a`) are ratified. AUD-12.02 and AUD-12.03 IMPLEMENTED (unchanged)."
   },
   "OD-14": {
-   "title": "PRESENTATION CALLS — (d) AND (i) ONLY",
+   "title": "PRESENTATION CALLS — (a), (d) AND (i)",
    "date": "2026-10-04",
    "ruling": [
+    "(a) Approved: keep the step panels outside the action bar.",
+    "(a) Remove the temporary sticky-fit probe rather than moving the step panels back into the bar.",
+    "(a) Record OD-14(a) as RULED by the owner. Preserve the current external step-panel placement; do not open the W1-I-b \"move panels into bar\" sub-scope.",
     "(d) For the first-Diesel trade-in presentation, keep the label: \"traded\". Earlier 4-trains rusted by the phase event remain rusted.",
     "(i) Phase 3 gets a bounded money-panel consistency pass. The goal is to make the money panel visually belong to the rest of the game and stop there.",
     "(i) W2-K / W2-M may extend the established styling while touching money UI, but this is NOT permission for a money-panel redesign or broader frontend refactor."
    ],
-   "effect": "OD-14(d) and OD-14(i): RULED — transcribed at the W3-G owner review (2026-10-04; AUD-25.15). (d): AUD-12.07 RULED, no change. (i): bounds W2-K's panel pass and any W2-M money-UI styling. OD-14(a)–(c) and (e)–(h) remain OPEN."
+   "effect": "OD-14(a): RULED (owner, 2026-10-04, at the W1-I completion) — the probe is removed (AUD-01.01 IMPLEMENTED, W1-I `1b76512`, not integrated); AUD-01.02 resolved; W1-I-b not opened; W1-I COMPLETE. Transcription note (W1-I, from source at `d29bb2f`): since design note #828 the step-panel wrapper (`stepPanelRef`, a full-width row of its own) renders inside the sticky action bar's element, and `1b76512` leaves it there; the ruling's operative effect is no relocation -- the panels stay exactly where they are and W1-I-b is not opened. OD-14(d) and OD-14(i): RULED — transcribed at the W3-G owner review (2026-10-04; AUD-25.15). (d): AUD-12.07 RULED, no change. (i): bounds W2-K's panel pass and any W2-M money-UI styling. OD-14(b), (c) and (e)–(h) remain OPEN."
   }
  },
  "wave1_integration": {
@@ -4938,7 +4941,7 @@
   "W1-F": "COMPLETE — L4 `9baf4da`",
   "W1-G": "COMPLETE — L4 `a8b9f27` + review follow-ups `bee2717`",
   "W1-H": "COMPLETE — L6 `2e0700b` + review fixes `cb0c49c`",
-  "W1-I": "PARTIAL — the unconditional portion is complete (L5 `9dcad19`, `b9fd1bf`, `82b93ca`, `beac07a`, `3904533`, `fee2f66`); OD-14(a) remains (the fit-probe removal, AUD-01.01, waits on it, and W1-I-b exists only if it is ruled in)",
+  "W1-I": "COMPLETE — slice branch `phase3/w1-i-completion` `1b76512` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated (integration and owner broad gate pending). OD-14(a) RULED (owner, 2026-10-04: keep the current step-panel placement; remove the temporary fit probe; W1-I-b not opened). AUD-01.01 IMPLEMENTED (`1b76512`); AUD-01.02 RULED — resolved by OD-14(a). The unconditional portion was integrated at Wave 1 (L5 `9dcad19`, `b9fd1bf`, `82b93ca`, `beac07a`, `3904533`, `fee2f66`).",
   "W1-J": "COMPLETE — L5 `5a56987`",
   "W1-K": "NOT STARTED — not one of the seven Wave-1 lane branches",
   "W1-L": "COMPLETE — unconditional portion, L6 `de22084` + review fix `8d6f1e9`; RR-4 copy per OD-7 at the integration (`ca73834`). AUD-18.07 stays owner-gated (OD-14(e))",

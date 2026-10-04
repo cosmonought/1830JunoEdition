@@ -97,7 +97,7 @@ Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments on
 | W1-F | COMPLETE — L4 `9baf4da` |
 | W1-G | COMPLETE — L4 `a8b9f27` + review follow-ups `bee2717` |
 | W1-H | COMPLETE — L6 `2e0700b` + review fixes `cb0c49c` |
-| W1-I | PARTIAL — the unconditional portion is complete (L5 `9dcad19`, `b9fd1bf`, `82b93ca`, `beac07a`, `3904533`, `fee2f66`); OD-14(a) remains (the fit-probe removal, AUD-01.01, waits on it, and W1-I-b exists only if it is ruled in) |
+| W1-I | PARTIAL — the unconditional portion is complete (L5 `9dcad19`, `b9fd1bf`, `82b93ca`, `beac07a`, `3904533`, `fee2f66`); OD-14(a) remains (the fit-probe removal, AUD-01.01, waits on it, and W1-I-b exists only if it is ruled in). **2026-10-04: COMPLETE on `phase3/w1-i-completion` @ `1b76512`, NOT integrated** — OD-14(a) RULED; see "W1-I completion status" |
 | W1-J | COMPLETE — L5 `5a56987` |
 | W1-K | NOT STARTED — not one of the seven Wave-1 lane branches |
 | W1-L | COMPLETE — unconditional portion, L6 `de22084` + review fix `8d6f1e9`; RR-4 copy per OD-7 at the integration (`ca73834`). AUD-18.07 stays owner-gated (OD-14(e)) |
@@ -120,7 +120,7 @@ checker verifies that a COMPLETE slice has no unimplemented A/B row and that eac
 - **OD-10 — V13 RULES BATCH IN PHASE 3.** W3-K implemented on `phase3/w3-k-rules-v13`; integrated on `phase3/wave2a-v13-integration` (merge `ed5e69a`). AUD-04.04 and AUD-08.01 leave W3-K (owner placement open; no version bump needed). P3-N023 and P3-N024 C/G → A, IMPLEMENTED. OD-10(b) stays open. The 2026-10-04 rulings 2 and 3 are implemented on the same branch. v13 settlement certification: PASS / CERTIFIED on `phase3/v13-settlement-certification`, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `69c7496`).
 - **OD-17 — TILE-UPGRADE CROSS-REFERENCES.** VF/D-18 and VF/D-22 stay C (the ledger still lists them OPEN) with status RULED — no change; the ledger and comment cleanup is a docs task (closure contract item 12).
 
-Remaining Wave-1 owner blocker: **OD-14(a)** (W1-I's fit-probe removal and the optional W1-I-b). W1-K was not in Wave 1.
+Remaining Wave-1 owner blocker: **OD-14(a)** (W1-I's fit-probe removal and the optional W1-I-b) — **RULED 2026-10-04** (keep; probe removed by W1-I `1b76512`; W1-I-b not opened). W1-K was not in Wave 1.
 
 ## Safe Wave-2 integration status (2026-10-03)
 
@@ -529,6 +529,23 @@ integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not
   slice awaits integration. Not deployable until drained v12 rooms and the final integrated owner gate.
 - **Follow-ups (not implemented here):** the W2-J LOW (treasury diagnostic beside the float line on an M&H / C&A float); carried unchanged:
   the Buy Trains from a Corporation form LOW, the W2-F duplicate-waiting LOW, the two NITs and the deferred scroll-to-card LOW.
+
+## W1-I completion status (2026-10-04)
+
+**Branch** `phase3/w1-i-completion` @ `1b76512` from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f` (the current provisional baseline, unchanged). **COMPLETE on its slice branch; NOT integrated**
+(integration and owner broad gate pending). The unconditional portion was integrated at Wave 1; this branch closes the owner-gated rest.
+
+- **OD-14(a) — RULED (owner, 2026-10-04):** keep the step panels where they are; remove the temporary sticky-fit probe rather than
+  moving the panels; do not open W1-I-b (plan §7.3). Transcription note (W1-I, from source at `d29bb2f`): since design note #828 the step-panel wrapper (`stepPanelRef`, a full-width row of its own) renders inside the sticky action bar's element, and `1b76512` leaves it there; the ruling's operative effect is no relocation -- the panels stay exactly where they are and W1-I-b is not opened.
+- **AUD-01.01 (U-16) — IMPLEMENTED, `1b76512`:** `useStickyFitProbe`, its call, its player-visible readout and the `fitProbe` style are removed,
+  with the now-unused `canPinWithoutTrapping` import (#720's predicate and constant stay in `utils/stickyCollapse.ts` with their own tests).
+  Tests: `stickyFitProbe.test.ts` deleted (it pinned only the probe); `stickyTrap` re-scopes the hook to end at the component and pins the
+  probe's absence; `stepJumpButton` and `stickyBarSplit` re-anchor the slice end that was the probe onto the session hint.
+- **AUD-01.02 (U-16) — RULED, resolved by OD-14(a):** no relocation; W1-I-b not opened (no work).
+- **Evidence:** focused suites (`phase3W1I*`, `phase3W1IntegrationReconciliation`, `appNaming`, `rulesOverview`, `stickyTrap`,
+  `stickyBarSplit`, `stepJumpButton`, `stickyRemeasure`, `stickyCollapse`) pass; frontend typecheck and production build exit 0 (no warning
+  in a touched file); meta-tests identical to `d29bb2f` (the pre-existing `sourceGuards` 1, `boardInEffect` 1, `liveHygiene` 2, same
+  failure detail). Rules engine 13, live `[13]`, settlement-certified `[10, 11, 12, 13]` unchanged; no server, rules or settlement file touched.
 
 ## W3-C slice status (2026-10-04)
 

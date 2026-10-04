@@ -4268,7 +4268,9 @@ asset in the tree as of 2026-09-15). The "Join Game modal listing active games" 
 `DEFERRED` (owner).
 **U-16.** (sweep) `panels/ContextualActionBar.tsx` `useStickyFitProbe` (#813) is a self-described *temporary
 instrument* — a fit readout rendered outside the action bar to decide whether the step panels can move back
-into it. Decide, then remove it either way. `OPEN`.
+into it. Decide, then remove it either way. `RESOLVED` on a Phase-3 slice branch, not yet integrated — OD-14(a) RULED by the owner
+2026-10-04 (keep the step-panel placement; no relocation; W1-I-b not opened) and the probe removed by W1-I `1b76512`
+(`phase3/w1-i-completion`; AUD-01.01 IMPLEMENTED, AUD-01.02 resolved).
 **U-17.** (sweep) `gameEngine/cityBypass.ts` #808 known debt: no control lets a corporation that *could* enter a
 one-slot city choose to bypass it (the PRR skipping its own home to save a stop) — new UI on one waypoint. The
 reducer half is done (Batch 6: a `bypass: true` waypoint is honoured wherever the rails offer a bow, shut city or

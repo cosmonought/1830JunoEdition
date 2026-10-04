@@ -38,7 +38,7 @@ or attachment.
 
 OD-1, OD-2, OD-7 and OD-12 were ruled on 2026-10-03, during wave 1; OD-9(a) and OD-11 at the safe Wave-2 integration — verbatim in the
 plan's §7.3 and `owner_rulings` in the JSON. OD-4, OD-10(a) and OD-17 were ruled by the owner's W3-K rules-v13 brief (2026-10-03),
-restated in the same places. OD-6 and OD-8 were ruled 2026-10-04 (W2-I, W2-J); OD-3, OD-13, OD-14(d) and OD-14(i) were transcribed at the W3-G owner review (2026-10-04). Still open: OD-14(a)–(c), (e)–(h), OD-10(b).
+restated in the same places. OD-6 and OD-8 were ruled 2026-10-04 (W2-I, W2-J); OD-3, OD-13, OD-14(d) and OD-14(i) were transcribed at the W3-G owner review (2026-10-04); OD-14(a) was ruled 2026-10-04 at the W1-I completion (keep the step-panel placement; remove the probe). Still open: OD-14(b), (c), (e)–(h), OD-10(b).
 
 ## Rules v13 (W3-K)
 

@@ -627,7 +627,7 @@ gates.
 - **Surfaces:** a standing "auction owed" / "auction cancelled by the first 5-train" indicator (not gated); the Rules
   Reference's game-over state; per OD-6, the game id, build id and rules version in `TopBar.tsx` / the room strip.
 - **App.tsx regions:** R-ROOMSTRIP, R-RRMOUNT. **Depends on:** W1-L. **Gates:** OD-6 (game id / version placement only).
-- **OD-6 RULED (2026-10-04, §7.3) — Option A:** game_id remains undisplayed; the Rules Reference diagnostic line shows Build ID + authoritative rules version. Status: COMPLETE on its slice branch `phase3/w2-i-status-visibility` @ `a18bac4` (code `c17e844` + review fix `a18bac4`, from `phase3/wave3-i-v13cert-integration` @ `7a9b16b`); NOT integrated. AUD-01.07 (C → B, DECIDED), AUD-02.08 (the room strip's delayed-auction owed / cancelled chip), AUD-11.03 (the Rules Reference's game-over state) IMPLEMENTED.
+- **OD-6 RULED (2026-10-04, §7.3) — Option A:** game_id remains undisplayed; the Rules Reference diagnostic line shows Build ID + authoritative rules version. Status: COMPLETE on its slice branch `phase3/w2-i-status-visibility` @ `a18bac4` (code `c17e844` + review fix `a18bac4`, from `phase3/wave3-i-v13cert-integration` @ `7a9b16b`); NOT integrated. AUD-01.07 (C → B, DECIDED), AUD-02.08 (the room strip's delayed-auction owed / cancelled chip), AUD-11.03 (the Rules Reference's game-over state) IMPLEMENTED. **ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-v13cert-integration` (merge `78f9164` of `60146da`, 2026-10-04).**
 
 #### W2-J
 **Narration corrections** · L6 · **4–6 h**
@@ -884,7 +884,7 @@ Recorded from the owner's Wave-1 integration brief, in its words; only instructi
 - The human-visible table identity remains: the room code where visible; "Private game" where the room code is intentionally hidden; the existing on-chain game number only on the old on-chain path.
 - For W2-I diagnostics: keep the existing build ID in the Rules Reference header and add the authoritative rules version on that same line ("Build <id> · Rules v13"); the rules version from the board's authoritative `rules_engine_version`, the build ID from the existing build-ID source; do not duplicate either value in the top bar; no new persistent gameplay chrome.
 - AUD-01.07 closes as an explicit product decision: DECIDED / IMPLEMENTED — opaque game_id intentionally not displayed.
-- *Effect on this plan:* OD-6: RESOLVED — game_id remains undisplayed; Rules Reference diagnostic line shows Build ID + authoritative rules version. Implemented by W2-I (`c17e844`); AUD-01.07 C → B, IMPLEMENTED. Not integrated.
+- *Effect on this plan:* OD-6: RESOLVED — game_id remains undisplayed; Rules Reference diagnostic line shows Build ID + authoritative rules version. Implemented by W2-I (`c17e844`); AUD-01.07 C → B, IMPLEMENTED. Integrated on `phase3/wave3-i-w2i-v13cert-integration` (merge `78f9164`).
 
 *Also from that brief (constraints on integrated slices, not new rulings):* W2-H keeps the Routes/Dividends informational
 visibility for non-active players (home/auction actors get controls, others a status) — this is OD-1's viewer scope for those two

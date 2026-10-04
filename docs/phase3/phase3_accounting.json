@@ -126,7 +126,7 @@
    "od": "OD-6 (RULED 2026-10-04, owner Option A: game_id stays undisplayed; the Rules Reference build line shows the build id + the board's rules version)",
    "p4": "—",
    "notes": "LIVE-2 §7.2 says the game id is never displayed, so showing it was a product decision. OD-6 RULED (Option A): DECIDED — the opaque game_id is intentionally not displayed; the visible identity stays the room code / \"Private game\" / the legacy on-chain game number. C → B.",
-   "status": "IMPLEMENTED — W2-I `c17e844` + review fix `a18bac4`: DECIDED (OD-6 Option A), the opaque game_id intentionally not displayed; the Rules Reference's existing build line reads \"Build <id> · Rules v13\" -- the build from `CLIENT_BUILD_ID` (`buildStamp.ts`), the version from the live board's own `rules_engine_version` (`boardRulesVersion`; \"Rules unpinned (legacy)\" on an unpinned board); nothing added to the top bar; not integrated"
+   "status": "IMPLEMENTED — W2-I `c17e844` + review fix `a18bac4`: DECIDED (OD-6 Option A), the opaque game_id intentionally not displayed; the Rules Reference's existing build line reads \"Build <id> · Rules v13\" -- the build from `CLIENT_BUILD_ID` (`buildStamp.ts`), the version from the live board's own `rules_engine_version` (`boardRulesVersion`; \"Rules unpinned (legacy)\" on an unpinned board); nothing added to the top bar; INTEGRATED on `phase3/wave3-i-w2i-v13cert-integration` (merge `78f9164` of `60146da`)"
   },
   {
    "key": "AUD-01.08",
@@ -266,7 +266,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Not in the draft map. Not gated by OD-6.",
-   "status": "IMPLEMENTED — W2-I `c17e844` + review fix `a18bac4` (`DelayedAuctionStatusChip` in the room strip, every table kind: \"Delayed auction owed\" while `private_auction_complete === false`, \"Delayed auction cancelled\" once the first 5-train's D-55 transition leaves every private closed and ownerless -- `utils/delayedAuctionStatus.ts`, from the board's own fields, no log text; silent outside the variant, during the auction round and at GameEnd), not integrated"
+   "status": "IMPLEMENTED — W2-I `c17e844` + review fix `a18bac4` (`DelayedAuctionStatusChip` in the room strip, every table kind: \"Delayed auction owed\" while `private_auction_complete === false`, \"Delayed auction cancelled\" once the first 5-train's D-55 transition leaves every private closed and ownerless -- `utils/delayedAuctionStatus.ts`, from the board's own fields, no log text; silent outside the variant, during the auction round and at GameEnd); INTEGRATED on `phase3/wave3-i-w2i-v13cert-integration` (merge `78f9164` of `60146da`)"
   },
   {
    "key": "AUD-02.09",
@@ -1237,7 +1237,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Copy only; the draft's OD-6 sub-question is removed (not a product decision).",
-   "status": "IMPLEMENTED — W2-I `c17e844` + review fix `a18bac4` (the Rules Reference reads the board's GameEnd -- `gameOver` -- and says \"Game over\" / \"This game has ended\" in the context strip and the Overview instead of \"No live round\"; copy only, no new predicate; a live round type wins), not integrated"
+   "status": "IMPLEMENTED — W2-I `c17e844` + review fix `a18bac4` (the Rules Reference reads the board's GameEnd -- `gameOver` -- and says \"Game over\" / \"This game has ended\" in the context strip and the Overview instead of \"No live round\"; copy only, no new predicate; a live round type wins); INTEGRATED on `phase3/wave3-i-w2i-v13cert-integration` (merge `78f9164` of `60146da`)"
   },
   {
    "key": "AUD-11.04",
@@ -4587,7 +4587,7 @@
     "For W2-I diagnostics: keep the existing build ID in the Rules Reference header and add the authoritative rules version on that same line (\"Build <id> · Rules v13\"); the rules version from the board's authoritative `rules_engine_version`, the build ID from the existing build-ID source; do not duplicate either value in the top bar; no new persistent gameplay chrome.",
     "AUD-01.07 closes as an explicit product decision: DECIDED / IMPLEMENTED — opaque game_id intentionally not displayed."
    ],
-   "effect": "OD-6: RESOLVED — game_id remains undisplayed; Rules Reference diagnostic line shows Build ID + authoritative rules version. Implemented by W2-I (`c17e844`); AUD-01.07 C → B, IMPLEMENTED. Not integrated."
+   "effect": "OD-6: RESOLVED — game_id remains undisplayed; Rules Reference diagnostic line shows Build ID + authoritative rules version. Implemented by W2-I (`c17e844`); AUD-01.07 C → B, IMPLEMENTED. Not integrated. INTEGRATED on `phase3/wave3-i-w2i-v13cert-integration` (merge `78f9164`)."
   }
  },
  "wave1_integration": {
@@ -4689,7 +4689,7 @@
   "W2-F": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave2-bcgdf-v13cert-integration` (2026-10-04, merge `dfe6d13` of `phase3/w2-f-waiting-surface` @ `f19a22b`, its 3 commits carried unchanged): code `5a0bf37` + review fixes `8d4e9f5` + tracking `f19a22b` (from `phase3/wave2-bcgd-v13cert-integration` @ `7d8f73e`). The owner accepted the I-3 reading (the redundant player-trade pointer stands aside on the Stocks tab, where the Private Companies card carries the same offer and controls). AUD-03.10, AUD-09.08, AUD-09.09 IMPLEMENTED. One waiting line (`components/WaitingOnLine.tsx`) in the five consent / discard prompts: who decides (the existing seat authorities) and the authority's own sentence from W2-A's one hold answer -- `dockHold.standingOffer` (`pendingOfferBlock` / `describeStandingOffer`) for the three ordinary offers, `dockHold.turnHoldReason` for the funding offer and the discard; nothing chosen locally. I-3: the player-trade pointer stands aside while the Private Companies section is on screen (the Stocks tab in a Stock Round). Residue CLOSED: the Stock Round share controls read `dockHold.buyStock` / `.sellStock` (each control's own message, hold first via `heldFirst`) and the panel flag `.shareControls` (both refused) instead of 6.5-B's `privateTradeHoldReason`; Auto-Buy unchanged. Deferred (LOW, recorded): on the Stocks tab nothing scrolls the recipient to the offer's card (the pointer's \"Show on Stocks\" jump is not needed there; the hold notice is at the top of the panel). Presentation only: no engine, server, rules-version or settlement change",
   "W2-G": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave2-bcg-v13cert-integration` (2026-10-04, merge `b84247f` of `phase3/w2-g-v13-emergency-ui` @ `17ab21f`, its 3 commits carried unchanged): the accepted W2-G UI (`695afe9`) reconciled to the integrated v13 emergency authority (`112fa71` + review fixes `02d73b8`). The surface presents `emergencyFundingFor(...).automatic`: the open trade window with `ForgoTrainTrade` (never reopened), ONE `EmergencySellPortfolio` judged by `emergencyPortfolioRefusal`, private funding only while exactly relevant with `ForgoPrivateFunding`, the automatic purchase as a status (no Buy) and the automatic bankruptcy (no `DeclareBankruptcy` anywhere); obligated president only (OD-1), everybody else W2-H's waiting surface; non-dismissible (OD-4); latched. Residue kept as a later bar pass: the now-unpassed `onEmergencyPurchase` / `emergencyAvailable` props on the bar and `TrainPurchasePanel` (W2-A's bar test feeds them)",
   "W2-H": "COMPLETE — `phase3/w2-waiting-prompts` `3b7f23b`, `5cc5ccc`, `461d4f0`; integrated at the safe Wave-2 integration (`66977d5`). K-21's second half (the President's Skip while placing) stays W2-A's",
-  "W2-I": "COMPLETE — slice branch `phase3/w2-i-status-visibility` `c17e844` + review fix `a18bac4` (from `phase3/wave3-i-v13cert-integration` @ `7a9b16b`); NOT integrated (integration and owner broad gate pending). OD-6 RESOLVED (owner Option A, 2026-10-04): game_id remains undisplayed; the Rules Reference diagnostic line shows Build ID + authoritative rules version. AUD-01.07 (C → B, DECIDED), AUD-02.08, AUD-11.03 IMPLEMENTED. App regions R-ROOMSTRIP (the delayed-auction chip) and R-RRMOUNT (`gameOver`, `rulesEngineVersion`) only. Presentation only: no engine, server, contract, rules-version or settlement change",
+  "W2-I": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-v13cert-integration` (2026-10-04, merge `78f9164` of `phase3/w2-i-status-visibility` @ `60146da`, parents `7a9b16b` / `60146da`, its 3 commits carried unchanged): code `c17e844` + review fix `a18bac4` + tracking `60146da` (from `phase3/wave3-i-v13cert-integration` @ `7a9b16b`). OD-6 RULED (owner Option A, 2026-10-04, re-accepted at integration): game_id remains undisplayed; the Rules Reference diagnostic line shows Build ID + authoritative rules version. AUD-01.07 (C → B, DECIDED), AUD-02.08, AUD-11.03 IMPLEMENTED and INTEGRATED. App regions R-ROOMSTRIP (the delayed-auction chip) and R-RRMOUNT (`gameOver`, `rulesEngineVersion`) only. Presentation only: no engine, server, contract, rules-version or settlement change",
   "W2-J": "NOT STARTED",
   "W2-K": "PARTIAL — `phase3/w2-money-copy` `e223f64` (exact SHA verified), integrated at the safe Wave-2 integration (`fb4eee5`): U-44 timestamps per OD-9(a) and the OD-14(i) bounded money-panel pass are done; the official Keplr logo is ASSET PENDING (OD-9(b), AUD-18.05)",
   "W2-L": "COMPLETE — `phase3/w2-postgame-statistics` `e16aa5a` (derived history only); integrated at the safe Wave-2 integration (`615e183`). AUD-12.07 stays owner-gated (\"traded\" kept); S10-21's non-UR remainder stays open",
@@ -4985,7 +4985,7 @@
  "wave3_i_v13cert_integration": {
   "branch": "phase3/wave3-i-v13cert-integration",
   "base": "c3f43b726abe54f91f16679f6579288c52c59630 (phase3/wave2-bcgdf-v13cert-integration)",
-  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F and W3-I integrated; no broad Phase-3 owner gate has been run; not merged to main",
+  "status": "SUPERSEDED AS BASELINE by `phase3/wave3-i-w2i-v13cert-integration` (2026-10-04, W2-I added); otherwise as recorded: PROVISIONAL — was the Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F and W3-I integrated; no broad Phase-3 owner gate has been run; not merged to main",
   "inputs": {
    "W3-I": {
     "branch": "phase3/w3-i-offers",
@@ -5020,5 +5020,45 @@
    "keys": "unchanged from 7916763 / c3f43b7 (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
   },
   "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F and W3-I COMPLETE and INTEGRATED (lane L3 complete); no accepted slice awaits integration; not deployable until drained v12 rooms and the final integrated owner gate"
+ },
+ "wave3_i_w2i_v13cert_integration": {
+  "branch": "phase3/wave3-i-w2i-v13cert-integration",
+  "base": "7a9b16bdb6ba0505a0f3639bb4f0efb54576fb0f (phase3/wave3-i-v13cert-integration)",
+  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F, W3-I and W2-I integrated; no broad Phase-3 owner gate has been run; not merged to main",
+  "inputs": {
+   "W2-I": {
+    "branch": "phase3/w2-i-status-visibility",
+    "head": "60146da4fec4f3f4ab09e5703f05a1272617f16d",
+    "parent": "7a9b16b",
+    "merge": "78f9164e9b8b849e0dfef675ecdd01c17bddfcd2"
+   }
+  },
+  "method": "git merge --no-ff (first parent 7a9b16b, second parent 60146da); c17e844, a18bac4, 60146da carried unchanged (same SHAs); no squash, no rebase, no source branch moved",
+  "reconciliation": [
+   "No conflict: W2-I was 3 ahead / 0 behind 7a9b16b, so the merge's tree equals 60146da's exactly (code, tests and the slice's own tracking).",
+   "No server/, gameEngine/, contracts/, rulesVersion.ts, settlement or fixture file differs from 7a9b16b; App.tsx gains only the room-strip chip (R-ROOMSTRIP) and two RulesReference props (R-RRMOUNT).",
+   "Owner ruling at integration: OD-6 Option A accepted -- the opaque game_id stays off screen; room code / \"Private game\" remains the visible identity; the Rules Reference shows Build <id> · Rules v13 from authoritative sources.",
+   "Pre-existing meta-test failures compared on 7a9b16b and on the merge: sourceGuards G1/G2 (older W2-F, W3-I, W2-D tests), boardInEffect (settlementV13Vectors.ts and two aws/deploy/migration files) and liveHygiene (two LIVE-0 bind tests) -- the same 4 failed tests with identical output on both; PRE-EXISTING / NON-BLOCKING for this integration, not fixed here.",
+   "Tracking only in this record's commit: W2-I and its three rows read INTEGRATED; no other slice changed state."
+  ],
+  "follow_ups": [
+   "NIT (integration review): the legacy on-chain room strip's pre-existing \"On-chain game #<id>\" label is the on-chain game number OD-6 keeps; unchanged.",
+   "Carried, unchanged (from the W3-I integration): LOW -- the Buy Trains from a Corporation offer form still closes on Send; the W2-F duplicate-waiting LOW, the two NITs and the deferred scroll-to-card LOW.",
+   "Pre-existing meta-test failures (above) remain for a separate pass."
+  ],
+  "versions": {
+   "RULES_ENGINE_VERSION": 13,
+   "SUPPORTED_RULES_ENGINE_VERSIONS": [
+    13
+   ],
+   "SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS": [
+    10,
+    11,
+    12,
+    13
+   ],
+   "keys": "unchanged from 7916763 / 7a9b16b (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
+  },
+  "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F, W3-I and W2-I COMPLETE and INTEGRATED; no accepted slice awaits integration; not deployable until drained v12 rooms and the final integrated owner gate"
  }
 }

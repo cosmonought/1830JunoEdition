@@ -19,6 +19,11 @@
 //   first D  (P3, B&O's trade-in):  PRR 4 (4.1) · B&O 4 (4.1)                                         -- 2 x $300
 // Presidents: P1 PRR and C&O, P2 NYC, P3 CPR and B&O. The history is cut at chosen entries to read the tallies as the
 // game stood then -- every cut is a real prefix of the room's log with the room's own boards.
+// W2-L (OD-13, U-41): AND THE LIMIT. P3's FIRST 5 (B&O, 3.1) lowers the limit to 2, and three presidents discard an
+// unmarked train to meet it: PRR's 3 (P1, $180), CPR's 4 (P3, $300), B&O's 5 (P3, $450). Each is booked at its discard --
+// fate `discarded`, the Rust Belt to its president, the Gravedigger to P3 (the purchase that lowered the limit) -- which
+// these pins left out until W2-L (they recorded the U-41 gap). The destruction-time figures are unchanged; every cut from
+// "3.1 B&O discards its 5" on carries the discards on top of them (`LIMIT_*` below).
 //
 // A GAME THAT REACHES THE FIRST D CANNOT BE BUILT FROM A DEFAULT-SEED LOG, so -- as GR-3's
 // `gentleRustExchangeStats.test.ts` does -- the history's replay engine is replaced by a script of the real boards
@@ -89,6 +94,11 @@ const top = (history: History, key: string) => [accolade(history, key).holder, a
 const fates = (history: History, companyId: number, model: string) =>
   history.autopsy.find((row) => row.companyId === companyId)?.fleetLedger.find((row) => row.model === model)?.fates;
 
+/** W2-L (U-41): the three limit discards at 3.1 -- credited to P3 (the FIRST 5's buyer), lost by their presidents. */
+const LIMIT_SENT_P3 = 180 + 300 + 450;
+const LIMIT_LOST_P1 = 180; // PRR's 3
+const LIMIT_LOST_P3 = 300 + 450; // CPR's 4, B&O's 5
+
 describe("U-9 (owner ruling: destruction-time). The obsolescence statistics book a Gentle Rust train when it is destroyed", () => {
   const game = playedGame();
   const cut = (label: string) => {
@@ -115,33 +125,36 @@ describe("U-9 (owner ruling: destruction-time). The obsolescence statistics book
   it("identical copies keep their multiplicity: CPR's two 3s add exactly two losses and two credits", () => {
     const beforeCpr = cut("3.2 PRR ends");
     const afterCpr = cut("3.2 CPR grace turn");
-    // P2 (who bought the first 6) is credited PRR's one 3 before CPR's turn, and CPR's two after it.
-    expect(top(beforeCpr, "gravedigger")).toEqual([G.P1, 6 * 80, 180]);
-    expect(top(afterCpr, "gravedigger")).toEqual([G.P2, 3 * 180, 6 * 80]);
+    // P2 (who bought the first 6) is credited PRR's one 3 before CPR's turn (behind P1's six 2s), and CPR's two after
+    // it: 3 x $180, not 2 x. (W2-L: P3 leads throughout on the three limit discards, so P2's figure is the runner-up.)
+    expect(top(beforeCpr, "gravedigger")).toEqual([G.P3, LIMIT_SENT_P3, 6 * 80]);
+    expect(top(afterCpr, "gravedigger")).toEqual([G.P3, LIMIT_SENT_P3, 3 * 180]);
   });
 
   it("two rust groups destroyed in ONE entry are each credited to their own cause, and a self-trigger's president is both the cause and the victim", () => {
     // PRR's grace turn destroys its 2 (doomed by P1's own first 4 -- a self-trigger) and its 3 (doomed by P2's first
     // 6) in the same entry. By then every 2 is gone: P1 has sent all six; P2 exactly the one 3.
     const h = cut("3.2 PRR grace turn");
-    expect(top(h, "gravedigger")).toEqual([G.P1, 6 * 80, 180]);
-    // P1 LOST C&O's 2, PRR's own 2 and PRR's 3 -- the same player that sent the 2 to the scrapheap is its victim.
-    expect(top(h, "rust-belt")).toEqual([G.P1, 80 + 80 + 180, 2 * 80]);
+    expect(top(h, "gravedigger")).toEqual([G.P3, LIMIT_SENT_P3, 6 * 80]);
+    // P1 LOST C&O's 2, PRR's own 2 and PRR's 3 -- the same player that sent the 2 to the scrapheap is its victim -- and
+    // (W2-L) PRR's discarded 3. P3 leads on B&O's two 2s and its two limit discards.
+    expect(top(h, "rust-belt")).toEqual([G.P3, 2 * 80 + LIMIT_LOST_P3, 80 + 80 + 180 + LIMIT_LOST_P1]);
   });
 
   it("GAME ENDS DURING GRACE: cut straight after the first D, the doomed 4s (and NYC's 3) are KEPT -- rusted 0, no loss, no credit to the D's buyer", () => {
     const h = cut("3.2 B&O trades an ordinary 4 for the FIRST D");
     expect(fates(h, G.BO, "4")).toMatchObject({ rusted: 0, traded: 1, kept: 1 });
     expect(fates(h, G.PRR, "4")).toMatchObject({ rusted: 0, kept: 1 });
-    // Destroyed by now: six 2s (P1's), PRR's 3 and CPR's two 3s (P2's). None of P3's first-D rust has happened.
-    expect(top(h, "gravedigger")).toEqual([G.P2, 3 * 180, 6 * 80]);
-    expect(top(h, "rust-belt")).toEqual([G.P3, 2 * 80 + 2 * 180, 80 + 80 + 180]);
+    // Destroyed by now: six 2s (P1's), PRR's 3 and CPR's two 3s (P2's). None of P3's first-D rust has happened; P3's
+    // figure is the three limit discards alone (W2-L).
+    expect(top(h, "gravedigger")).toEqual([G.P3, LIMIT_SENT_P3, 3 * 180]);
+    expect(top(h, "rust-belt")).toEqual([G.P3, 2 * 80 + 2 * 180 + LIMIT_LOST_P3, 80 + 80 + 180 + LIMIT_LOST_P1]);
   });
 
   it("the finished game: every doomed train was destroyed, so every loss and credit is booked once -- P3 is credited the first D's two 4s only now", () => {
     const h = historyOf(game.entries, game.boards);
-    expect(top(h, "gravedigger")).toEqual([G.P2, 4 * 180, 2 * 300]);
-    expect(top(h, "rust-belt")).toEqual([G.P3, 2 * 80 + 2 * 180 + 300, 80 + 80 + 180 + 300]);
+    expect(top(h, "gravedigger")).toEqual([G.P3, LIMIT_SENT_P3 + 2 * 300, 4 * 180]);
+    expect(top(h, "rust-belt")).toEqual([G.P3, 2 * 80 + 2 * 180 + 300 + LIMIT_LOST_P3, 80 + 80 + 180 + 300 + LIMIT_LOST_P1]);
     expect(fates(h, G.PRR, "4")).toMatchObject({ rusted: 1, kept: 0 });
     expect(fates(h, G.BO, "4")).toMatchObject({ rusted: 1, traded: 1, kept: 0 });
   });
@@ -151,6 +164,12 @@ describe("U-9 (owner ruling: destruction-time). The obsolescence statistics book
     expect(fates(h, G.CPR, "4")).toMatchObject({ rusted: 0 });
     expect(fates(h, G.BO, "5")).toMatchObject({ rusted: 0 });
     expect(fates(h, G.BO, "4")).toMatchObject({ traded: 1 });
+    // W2-L (U-41): each limit discard is `discarded`, once. (PRR's discarded 3 -- and its refused attempt on the reprieved
+    // 2 -- are on trains it held from the deal, which the ledger has no row for; they are read through the Rust Belt above.)
+    expect(fates(h, G.CPR, "4")).toMatchObject({ discarded: 1, traded: 0 });
+    expect(fates(h, G.BO, "5")).toMatchObject({ discarded: 1, traded: 0 });
+    // W2-L (U-43 (1)): B&O's refused second exchange (its reprieved 4) is no trade-in -- the Salvager counts one.
+    expect(accolade(h, "salvager")).toMatchObject({ companyId: G.BO, value: 1 });
   });
 });
 

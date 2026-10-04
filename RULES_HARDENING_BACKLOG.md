@@ -4679,6 +4679,14 @@ phase-changing purchase lowered the limit (Gravedigger). It would change standar
 its own owner review and tests. **Not a GR-4 / Gentle Rust certification blocker** (no gameplay clause depends on it).
 **Deferred to a dedicated statistics / residual pass** (alongside the UI / readiness + residual sweep, Part F). **No
 reducer change, no replay effect, no golden.** Source: `VARIANT_CERT_GENTLE_RUST_CERTIFICATION_2026-09-24.md` §L.
+*(Phase 3 W2-L, 2026-10-03, branch `phase3/w2-postgame-statistics` -- **`RESOLVED`** under owner ruling **OD-13**: the
+candidate resolution as ratified. A `DiscardTrain` whose named model actually left the corporation's roster is fate
+`discarded`; its depot value is the discarding president's Rust Belt loss and the Gravedigger credit of the actor of the
+entry that first put a corporation over the limit (the purchase that lowered it). A refused discard books nothing; a legacy
+log's adapter-supplied discards are still booked once, by the fleet-loss diff at the purchase. Gentle Rust's
+destruction-time accounting (#1704) unchanged: only an unmarked train can be discarded. The GR-4 certification game's
+pins (`gentleRustCertificationStats.test.ts`) now carry the three limit discards (P3 credited $930). Evidence:
+`postgameStatisticsResiduals.test.ts`. Derived statistics only.)*
 
 **U-42.** (UR-4, 2026-09-25 — the UI-parity classification of UR-F21 / UR-F22; S9-7) **The Blood Price's copy choice and
 the buyer's warning — `RESOLVED` in UR-4 (the two surfaces), with two copy items routed to UR-6** *(both `RESOLVED` in UR-6,
@@ -4718,7 +4726,17 @@ effect, no golden.** Source: UR audit "UR-5 implementation (rev 9)", backlog S9-
 2026-09-25 — status and routing of this item unchanged: the same pass should also take S10-21's non-UR remainder, the
 completed-game Bagholder / Little Engine detail-format lines in `accolades.test.ts` (vacuous on CV4) and the
 more-than-ten-OR timeline in `roundReplay.test.ts` / `gameHistory.test.ts` — test coverage for standard epilogue
-statistics, not a rule; see S10-21.)*
+statistics, not a rule; see S10-21.)* *(Phase 3 W2-L, 2026-10-03, branch `phase3/w2-postgame-statistics` -- (1)-(4)
+**`RESOLVED`** under owner ruling **OD-13** (OD-14(d): the first Diesel's trade-in stays `traded`): (1) the Salvager
+counts an `ExchangeTrainForDiesel` whose named train actually left the roster -- never a Bank Pool purchase, never a
+refused exchange; (2) a refused run books nothing (lifetime revenue, Juggernaut, ledger runs, Master of the Line, the OR
+chart, The Wall, the Cowboy); (3) an accepted `RunManualRoute` is booked as the equivalent `RunMultipleRoutes` whose
+trains the log does not name -- one booking per turn, at the turn's cumulative figure (each booking holds its share,
+`turnShare`), no per-train figure invented; (4) the Cowboy resolves the printed line on the roll the authority made
+(`revenue_seed`, else the `legacyTurnSeed` the reducer and shell used), after the Sign's replacement; a `RunManualRoute`
+prints no line. Each tally keeps its old key order (`reserve`) so accolade ties break as before. Evidence:
+`postgameStatisticsResiduals.test.ts`. S10-21's non-UR remainder (Bagholder / Little Engine formats, >10-OR timeline) is
+NOT taken by W2-L and stays open.)*
 
 **U-44.** (filed 2026-09-28 by ESCROW-4) **Money-surface times.** The server's money sentences say "HH:MM UTC" (seat locks,
 the Start grace); the money panel, band and review card show local "HH:MM" unlabelled. Pick one convention (local with the zone,

@@ -329,7 +329,8 @@ describe("P1-R1 amendment: staging Terraform stacks whose configuration is NOT i
   });
 
   test("R1 enumerates EVERY staging Terraform state, records what the brief asks per external state, and STOPS on an unknown one", () => {
-    assert.match(PLAN, /R1 enumerates every state object in the staging state bucket\(s\) -- every\s+`\.tfstate` key, not only the staging prefix/);
+    assert.match(PLAN, /R1 enumerates every state object in the staging state bucket\(s\) -- every\s+object key, not only `\*\.tfstate` \(the S3 backend accepts any key name\), not only the staging prefix/);
+    assert.match(String(INVENTORY.terraform_states.rule), /every object key -- the S3 backend accepts any key name, not only \*\.tfstate/);
     assert.match(PLAN, /\*\*An unknown state is a STOP\*\*, exactly like an unknown resource/);
     assert.match(PLAN, /The known list is not a closed count/);
     for (const item of [/the S3 key, and whether it can be read/, /its resource addresses/, /the live resources behind them, and their inventory classification/, /the owning checkout or stack, if known/, /whether any Phase-1 teardown step proposes to mutate one of them/]) assert.match(PLAN, item);
@@ -483,6 +484,10 @@ describe("T3 fast path (owner priority): what must be known before T3, what may 
       const item = body.slice(s.at, i + 1 < starts.length ? starts[i + 1].at : body.indexOf("**T0 part A PASSES**"));
       assert.match(item, /`\[(PRE-T3|AFTER T3 OK|CAPTURE BEFORE T3)\]`/, `0.${s.n} carries its tag`);
       if ([10].includes(s.n)) assert.doesNotMatch(item, /`\[PRE-T3\]`/, "the NAT is never a T3 precondition");
+      /* The body's tags for 0.N are exactly the table's tags for 0.N. */
+      const inBody = [...new Set([...item.matchAll(/`\[(PRE-T3|AFTER T3 OK|CAPTURE BEFORE T3)\]`/g)].map((m) => `\`[${m[1]}]\``))].sort();
+      const inTable = [...new Set(T0_ROWS.filter((r) => r.item.split(" ")[0] === `0.${s.n}`).map((r) => r.tag))].sort();
+      assert.deepEqual(inBody, inTable, `0.${s.n}: the body's tags agree with the table`);
     });
     const nat = body.slice(body.indexOf("0.10 **The NAT**"), body.indexOf("0.11 **"));
     assert.match(nat, /T3 never touches it/);
@@ -509,13 +514,20 @@ describe("T3 fast path (owner priority): what must be known before T3, what may 
   test("T0.12, the T3 casualty check: no other state manages what T3 destroys, nothing outside the app state hangs on it, and T3 repeats it on the plan's own destroy ids", () => {
     const c = T0.slice(T0.indexOf("0.12 **The T3 casualty check**"), T0.indexOf("**T0 part A PASSES**"));
     assert.ok(c.length > 0);
-    assert.match(c, /\*\*No other stack manages what T3 destroys\.\*\*/);
-    assert.match(c, /None of them may appear in another state's `\.tsv` \(0\.11\),\s+even inside a longer id/);
+    assert.match(c, /\*\*No other stack manages what T3 destroys or changes\.\*\*/);
+    assert.match(c, /plus those it updates in place \(the p1 runtime document, the\s+bootstrap and operator policies\)/);
+    assert.match(c, /None of them may appear in another state's `\.tsv`\s+\(0\.11\), even inside a longer id/);
     assert.match(c, /An app-account state that cannot be\s+read is a STOP too/);
-    for (const read of ["aws ec2 describe-network-interfaces --filters Name=group-id,Values=<the three>", "Name=ip-permission.group-id,Values=<the three>", "Name=egress.ip-permission.group-id", "aws ec2 describe-security-group-rules --filters Name=group-id,Values=<the three>", "aws iam list-instance-profiles-for-role --role-name gs-staging-app-task", "Role.RoleLastUsed"]) assert.ok(c.includes(read), read);
+    /* The search proves itself first: it must find every id in the app's own file (a UTF-16 file finds nothing). */
+    assert.match(c, /\*\*Positive\s+control first:\*\* the same search must find every one of these ids in the app's own `\.tsv`/);
+    assert.match(T0, /written as ASCII, never\s+UTF-16: in PowerShell append `\| Set-Content -Encoding ascii <that file>`/);
+    for (const read of ["aws ec2 describe-network-interfaces --filters Name=group-id,Values=<the three>", "Name=ip-permission.group-id,Values=<the three>", "Name=egress.ip-permission.group-id", "aws ec2 describe-security-group-rules --filters Name=group-id,Values=<the three>", "aws iam list-instance-profiles-for-role --role-name gs-staging-app-task", "Role.RoleLastUsed", "aws ecs list-services --cluster gs-staging", "aws ecs list-container-instances --cluster gs-staging", 'aws elbv2 describe-target-groups --names gs-staging-p1 gs-staging-p2 --query "TargetGroups[].LoadBalancerArns"', "aws elbv2 describe-listeners --load-balancer-arn <the T0.6 ARN>", 'aws elbv2 describe-rules --listener-arn <it> --query "Rules[?!IsDefault].RuleArn"', "aws logs describe-subscription-filters --log-group-name /gs/staging/p1", "aws cloudwatch describe-alarms --alarm-types CompositeAlarm"]) assert.ok(c.includes(read), read);
+    assert.match(c, /If 0\.10's capture was missed, the reference is the later of CloudTrail's last `UpdateService` and last\s+`RunTask` for `gs-staging`/);
+    assert.match(c, /With no reference at all, the owner rules on it \(recorded\), or it is a STOP\./);
     assert.match(c, /\*\*The host does not use it\.\*\*/);
     /* T3 step 3: the same comparison on the judged plan's destroy ids; a delete is the change whose `after` is null. */
-    assert.match(T3, /\*\*The casualty re-check\*\* \(read-only\), after the PASS: the ids this plan destroys,\s+`jq -r '\.resource_changes\[\] \| select\(\.change\.after == null\) \| \.change\.before\.id' <D>\\teardown\\t3\\terraform\\app\\plan\.json`/);
+    assert.match(T3, /\*\*The casualty re-check\*\* \(read-only\), after the PASS: the ids this plan destroys or changes,\s+`jq -r '\.resource_changes\[\] \| select\(\.change\.before != \.change\.after\) \| \.change\.before\.id \/\/ empty' <D>\\teardown\\t3\\terraform\\app\\plan\.json`/);
+    assert.match(T3, /Use T0\.12's search and its positive control\./);
     assert.match(read("infra/aws/scripts/plan-evidence.ps1"), /Join-Path \$target "plan\.json"/, "plan-evidence saves plan.json beside the kept plan");
     /* The ledger stack cannot hold an app-account resource: its only provider is pinned to the ledger account. */
     assert.match(T0, /the ledger stack's state is not needed before T3 when R1 recorded a separate ledger account/);
@@ -527,12 +539,22 @@ describe("T3 fast path (owner priority): what must be known before T3, what may 
     const s = T0.slice(T0.indexOf("0.11 **Every Terraform state"), T0.indexOf("0.12 **"));
     assert.ok(s.length > 0);
     assert.match(s, /\(`APP-ADMIN`, read-only\)\. `\[PRE-T3\]`/);
-    assert.ok(s.includes(`aws s3api list-objects-v2 --bucket gs-staging-tfstate-992163310414 --query "Contents[?ends_with(Key, '.tfstate')].[Key,ETag,LastModified]" --output text`), "the bucket's every .tfstate key, listed now");
+    assert.ok(s.includes(`aws s3api list-objects-v2 --bucket gs-staging-tfstate-992163310414 --query "Contents[].[Key,ETag,LastModified]" --output text`), "the bucket's EVERY key, listed now");
+    assert.match(s, /EVERY key, because the S3 backend accepts any key name, not only `\*\.tfstate`/);
+    assert.match(s, /or be a listed state's lock object \(`<its key>\.tflock`\)\. Any other key is a STOP/);
+    assert.doesNotMatch(TEARDOWN + PLAN, /ends_with\(Key, '\.tfstate'\)/, "no listing filters keys by name");
     assert.ok(s.includes("aws s3 cp s3://gs-staging-tfstate-992163310414/<key> - | jq -r '.resources[] | . as $r | .instances[] | [$r.mode, $r.module, $r.type, $r.name, .index_key, .attributes.id] | @tsv'"), "the one read form");
     assert.match(s, /never the attributes \(which can hold secrets\)/);
     assert.ok(s.includes('aws cloudfront get-distribution --id E271XZAA1MQR4H --query "[ETag, Distribution.Status, Distribution.DistributionConfig.Origins.Items[0].DomainName]"'), "the rpc-proxy read");
     assert.ok(s.includes('aws s3api head-object --bucket gs-staging-tfstate-992163310414 --key gs/staging/rpc-proxy.tfstate --query "[ETag, LastModified]"'), "the state object's metadata");
     assert.match(TEARDOWN, /Never `terraform init` in `infra\/aws\/stacks\/\*`\s+against another stack's key, never `-migrate-state` or `-force-copy`, never a plan or apply of an external stack\./);
+    /* Anywhere in the teardown and the plan, `terraform ... init` (or -migrate-state / -force-copy / -reconfigure) appears only inside a prohibition. */
+    for (const [name, doc] of [["TEARDOWN", TEARDOWN], ["PLAN", PLAN]] as const) {
+      for (const m of doc.matchAll(/terraform\s+(?:-chdir=\S+\s+)?init\b|-migrate-state|-force-copy|-reconfigure/g)) {
+        const before = doc.slice(Math.max(0, (m.index ?? 0) - 40), m.index).replace(/\s+/g, " ");
+        assert.match(before, /[Nn]ever (a )?`$|never `-migrate-state` or `$/, `${name}: "${m[0]}" outside a prohibition: ...${before}`);
+      }
+    }
     assert.match(PLAN, /Never a\s+`terraform init` against another stack's key, never `-migrate-state` or `-force-copy`/);
     assert.match(String(INVENTORY.terraform_states.rule), /never terraform init in infra\/aws\/stacks\/\* against another stack's key/);
     /* T9 re-lists the objects; T1's changed distribution is the app state's own. */
@@ -560,7 +582,7 @@ describe("T3 fast path (owner priority): what must be known before T3, what may 
     assert.doesNotMatch(partA, /T_drain|user agent|single-host plan|ledger plan|rendered configuration/, "part A waits for nothing T3 does not need");
     const partB = r1.slice(r1.indexOf("**Part B"));
     for (const item of [/members of `network\.tfstate`, their tags and\s+CloudTrail's user agent \(T7\)/, /which state, if any, holds the VPC, subnets, route tables and IGW, and whether the private route tables are\s+network-owned/, /the ledger plan of T0\.9 \(T5\)/, /the single-host plan of T0\.9 \(R4\)/]) assert.match(partB, item);
-    assert.match(r1, /\*\*T3 fast path only\.\*\* An owner ruling recorded in the R1 record may place a newly found state or resource\s+provisionally, as REVIEW and never in a DELETE class/);
+    assert.match(r1, /\*\*T3 fast path only\.\*\* An owner ruling recorded in the R1 record may place a newly found state or resource\s+provisionally, as REVIEW and never in a DELETE class, when all of these hold:\n    - it can be read;\n    - T0\.12 finds that it shares nothing with T3's destroy set and hangs on nothing in it;\n    - no step T1–T3 touches it;\n    - the ruling records the dependency analysis for the resource's own type/);
     assert.match(String(INVENTORY.terraform_states.rule), /for the T3 fast path an owner ruling may first place it provisionally as REVIEW/);
     const prompt = PLAN.slice(PLAN.indexOf("**A. P1-R1 read-only inventory**"), PLAN.indexOf("**B. The OWNER-GO boundary for P1-R3**"));
     assert.ok(prompt.indexOf("**Part A, before T3**") > 0 && prompt.indexOf("**Part B, after T3 if need be**") > prompt.indexOf("**Part A, before T3**"));

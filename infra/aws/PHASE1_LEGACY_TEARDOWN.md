@@ -57,8 +57,9 @@ safety waits in front of it, and nothing is relaxed for it.
 
 T0 is read-only and needs no GO. **Every mutation needs its own explicit owner GO, consumed immediately before that
 mutation.**
-- **Batchable (reversible):** GO-T1, GO-T2, GO-T4 and GO-T5 may be sent together after T0 PASSES. Each is still
-  conditional on its own guard PASS. The session executes them in order and stops at the first result that is not a PASS.
+- **Batchable (reversible):** GO-T1, GO-T2, GO-T4 and GO-T5 may be sent together after T0 part A PASSES. Each is
+  still conditional on its own guard PASS, and GO-T4 / GO-T5 also on T0 part B's items for their step. The session
+  executes them in order and stops at the first result that is not a PASS.
 - **Never batched (irreversible):** GO-T3, GO-T6, GO-T7 and each GO-T8a–d come in their OWN owner message, sent only
   AFTER the session has posted what that GO authorises:
   - for T3: `READY FOR GO-T3` (T3 step 4): the judged compute-none plan and its destroy list (pool log data and alarm
@@ -214,7 +215,8 @@ Save everything under `<D>\teardown\t0\`. Each item is tagged:
       to show ONLY the desired-count drift (§0.2 of `SINGLE_HOST_MIGRATION.md`: a service 0 → 1, or its destroy with
       `start_services = false`). Anything else -- a policy, a document, a table, a role, the distribution -- is drift: STOP;
     - `[AFTER T3 OK]` (before T5) `stacks/ledger` planned with the current tfvars plus `ecs_task_role_authorized = true`
-      (now required): no changes;
+      (now required): no changes. It is cheap (`LEDGER-ADMIN`): the owner may have it run before T3 to see ledger drift
+      early, but it never blocks T3;
     - `[AFTER T3 OK]` (before R4 item 2) `stacks/single-host` planned from a clean checkout of **5b4756d** with its live
       tfvars: no changes. (From any later commit the plan REPLACES the instance -- the 13r scripts -- which is not a
       teardown action.)
@@ -253,17 +255,20 @@ Save everything under `<D>\teardown\t0\`. Each item is tagged:
         marker (a `gs:managed-by=terraform` or `gs:stack` tag, or a Terraform user agent). A marker that no listed
         state's membership explains points at a state R1 has not found, so the ownership is **unproven**.
 0.11 **Every Terraform state, and the external stacks** (`APP-ADMIN`, read-only). `[PRE-T3]`
-    - the state objects, listed again now (not only from R1's record), in each app-account state bucket R1 recorded:
-      `aws s3api list-objects-v2 --bucket gs-staging-tfstate-992163310414 --query "Contents[?ends_with(Key, '.tfstate')].[Key,ETag,LastModified]" --output text`.
-      Each key must be a `PHASE1_INVENTORY.json` `terraform_states` entry, or carry R1's recorded provisional
-      placement. Any other key is a STOP;
+    - the state objects, listed again now (not only from R1's record), in each app-account state bucket R1 recorded --
+      EVERY key, because the S3 backend accepts any key name, not only `*.tfstate`:
+      `aws s3api list-objects-v2 --bucket gs-staging-tfstate-992163310414 --query "Contents[].[Key,ETag,LastModified]" --output text`.
+      Each key must be a `PHASE1_INVENTORY.json` `terraform_states` entry, carry R1's recorded provisional placement,
+      or be a listed state's lock object (`<its key>.tflock`). Any other key is a STOP;
     - every app-account state's managed addresses and ids (app, single-host, rpc-proxy, network, and any other R1
       placed), by the ONE allowed read form for a state that this step does not plan. It streams the object and keeps
       only these columns, never the attributes (which can hold secrets):
       `aws s3 cp s3://gs-staging-tfstate-992163310414/<key> - | jq -r '.resources[] | . as $r | .instances[] | [$r.mode, $r.module, $r.type, $r.name, .index_key, .attributes.id] | @tsv'`
-      → `<D>\teardown\t0\states\<stack>.tsv` (jq, or the same columns from any JSON tool). This repository's states are
-      read the same way, so that 0.12 compares one format; 0.8's pull and 0.9's state list stay as they are. An external
-      state's contents are never saved beyond these columns;
+      → `<D>\teardown\t0\states\<stack>.tsv` (jq, or the same columns from any JSON tool), written as ASCII, never
+      UTF-16: in PowerShell append `| Set-Content -Encoding ascii <that file>` (Windows PowerShell 5.1's `>` writes
+      UTF-16, which `grep` / `findstr` cannot search); in bash, `>`. This repository's states are read the same way, so
+      that 0.12 compares one format; 0.8's pull and 0.9's state list stay as they are. An external state's contents are
+      never saved beyond these columns;
     - the ledger stack's state is not needed before T3 when R1 recorded a separate ledger account (the design): the
       stack's only provider is pinned to that account (`allowed_account_ids`), so it cannot hold an app-account
       resource. Its listing and `.tsv` are R1 part B (`LEDGER-ADMIN`, before T5). If R1 found the ledger in the app
@@ -274,11 +279,16 @@ Save everything under `<D>\teardown\t0\`. Each item is tagged:
       (and `.../network.tfstate`).
 0.12 **The T3 casualty check** (`APP-ADMIN`, read-only). `[PRE-T3]` T3 may destroy only what the app state holds, and
      nothing outside it may hang on what it destroys:
-    1. **No other stack manages what T3 destroys.** Take the ids of the app state's managed resources of the inventory's
-       `DELETE-LEGACY` Terraform entries (0.11's app `.tsv`). None of them may appear in another state's `.tsv` (0.11),
-       even inside a longer id (an endpoint's route-table association, a rule on one of its security groups). Any
-       match is a STOP: T3 would remove something another stack also manages. An app-account state that cannot be
-       read is a STOP too: read access is the fix. T3 step 3 repeats this with the plan's own destroy ids.
+    1. **No other stack manages what T3 destroys or changes.** Take the ids of the app state's managed resources of the
+       inventory's `DELETE-LEGACY` Terraform entries, plus those it updates in place (the p1 runtime document, the
+       bootstrap and operator policies), from 0.11's app `.tsv`. None of them may appear in another state's `.tsv`
+       (0.11), even inside a longer id (an endpoint's route-table association, a rule on one of its security groups).
+       - Search with a tool that reads the files as written (`grep -F`, or `Select-String -SimpleMatch`). **Positive
+         control first:** the same search must find every one of these ids in the app's own `.tsv`. A search that
+         cannot find them there proves nothing (a wrong encoding, a wrong file): STOP.
+       - Any match in another state is a STOP: T3 would remove or change something another stack also manages.
+       - An app-account state that cannot be read is a STOP too: read access is the fix.
+       - T3 step 3 repeats this with the plan's own changed ids.
     2. **Nothing else depends on it.** First take the three ECS-era security groups' ids:
        `aws ec2 describe-security-groups --filters Name=group-name,Values=gs-staging-alb,gs-staging-task,gs-staging-endpoints --query "SecurityGroups[].GroupId" --output text`.
        - `aws ec2 describe-network-interfaces --filters Name=group-id,Values=<the three> --query "NetworkInterfaces[].[NetworkInterfaceId,InterfaceType,Description]" --output text`
@@ -289,11 +299,27 @@ Save everything under `<D>\teardown\t0\`. Each item is tagged:
          that references them would fail their deletion part-way through T3: STOP.
        - `aws ec2 describe-security-group-rules --filters Name=group-id,Values=<the three> --query "SecurityGroupRules[].SecurityGroupRuleId" --output text`
          lists only the app state's rule ids.
+       - The cluster: `aws ecs list-services --cluster gs-staging` lists exactly the app state's two service ARNs, and
+         `aws ecs list-container-instances --cluster gs-staging` is empty. Anything else fails the cluster's delete
+         late in T3: STOP.
+       - The ALB's children: `aws elbv2 describe-target-groups --names gs-staging-p1 gs-staging-p2 --query "TargetGroups[].LoadBalancerArns"`
+         names only the T0.6 ALB; `aws elbv2 describe-listeners --load-balancer-arn <the T0.6 ARN> --query "Listeners[].ListenerArn"`
+         and, for each listener, `aws elbv2 describe-rules --listener-arn <it> --query "Rules[?!IsDefault].RuleArn"` list
+         only the app state's ids. A foreign listener or rule would be deleted with the ALB without a trace in the plan:
+         STOP.
+       - The pool log groups: `aws logs describe-subscription-filters --log-group-name /gs/staging/p1` (and p2) lists
+         none. A filter would be deleted with its group: STOP.
+       - The alarms: `aws cloudwatch describe-alarms --alarm-types CompositeAlarm --query "CompositeAlarms[].[AlarmName,AlarmRule]" --output text`.
+         Every composite whose rule names a `gs-staging` alarm that T3 deletes must be in the app `.tsv`: STOP
+         otherwise.
        - `aws iam list-instance-profiles-for-role --role-name gs-staging-app-task` (and `gs-staging-app-execution`)
          answers `[]`. T3 deletes both roles.
        - `aws iam get-role --role-name gs-staging-app-task --query "Role.RoleLastUsed"` (and the execution role) shows
          no use after this workload's last task stopped (0.4 and 0.10's captured events; a standalone probe task that
          CloudTrail's `RunTask` shows is this workload's own). A later use is another user: STOP.
+         - If 0.10's capture was missed, the reference is the later of CloudTrail's last `UpdateService` and last
+           `RunTask` for `gs-staging`.
+         - With no reference at all, the owner rules on it (recorded), or it is a STOP.
     3. **The host does not use it.** By item 2's rules only the tasks could reach the interface endpoints, so the host,
        which is serving (0.3), does not use them, and T3 cannot cut a path it uses. If the host's subnet's route table
        is one of the gateway endpoints' tables (0.10's capture), its DynamoDB and S3 traffic moves to the internet
@@ -368,10 +394,10 @@ answer: STOP.
    p2's document; never a table, a key, the p1 or Juno document, ECR, the distribution or the bootstrap / operator
    authority; nothing created; both plan-time gates read.
 
-   **The casualty re-check** (read-only), after the PASS: the ids this plan destroys,
-   `jq -r '.resource_changes[] | select(.change.after == null) | .change.before.id' <D>\teardown\t3\terraform\app\plan.json`,
-   appear in no other state's `.tsv` (T0.11), even inside a longer id. Re-read a state first if its object's ETag has
-   moved since T0.11. Any match: STOP.
+   **The casualty re-check** (read-only), after the PASS: the ids this plan destroys or changes,
+   `jq -r '.resource_changes[] | select(.change.before != .change.after) | .change.before.id // empty' <D>\teardown\t3\terraform\app\plan.json`,
+   appear in no other state's `.tsv` (T0.11), even inside a longer id. Use T0.12's search and its positive control.
+   Re-read a state first if its object's ETag has moved since T0.11. Any match: STOP.
 
    **The private route tables.** T3 destroys this repository's own gateway endpoints (`aws_vpc_endpoint.gateway`, whose
    `route_table_ids` are the private route tables), so their prefix-list routes leave those tables. That is expected,
@@ -540,7 +566,7 @@ Each answer saved under `<D>\teardown\t9\`:
 | EIPs | `aws ec2 describe-addresses` | the host's EIP, plus only the NAT's EIP while T7 keeps or blocks it, and the addresses R1 placed as other workloads'; no unassociated address |
 | rpc-proxy | `aws cloudfront get-distribution --id E271XZAA1MQR4H --query "[ETag, Distribution.Status, Distribution.DistributionConfig.Origins.Items[0].DomainName]"` | T0.11's answer, unchanged (same ETag, `Deployed`, `juno.rpc.t.stavr.tech`) |
 | external states | `aws s3api head-object --bucket gs-staging-tfstate-992163310414 --key gs/staging/rpc-proxy.tfstate --query "[ETag, LastModified]"` (and `network.tfstate`) | T0.11's answer, unchanged -- `network.tfstate` changes only through T7's separately reviewed change, if one ran |
-| state objects | `aws s3api list-objects-v2 --bucket gs-staging-tfstate-992163310414 --query "Contents[?ends_with(Key, '.tfstate')].[Key,ETag,LastModified]" --output text` | T0.11's keys, no new one; the external keys' ETags as in the row above |
+| state objects | `aws s3api list-objects-v2 --bucket gs-staging-tfstate-992163310414 --query "Contents[].[Key,ETag,LastModified]" --output text` | T0.11's keys, no new one; the external keys' ETags as in the row above |
 | ledger | `LEDGER-ADMIN`: `aws dynamodb get-resource-policy --resource-arn <ledger ARN>`; `aws kms get-key-policy --key-id <each signing key> --policy-name default` | no `gs-staging-app-task`; `gs-staging-host-app` present |
 | state | `terraform -chdir=infra/aws/stacks/app state list` | no ECS-era address |
 

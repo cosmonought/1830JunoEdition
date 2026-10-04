@@ -141,8 +141,9 @@ T3: the services are destroyed, never restarted.
 critical path (`PHASE1_LEGACY_TEARDOWN.md` "The T3 fast path"):
 - **Part A -- before T3: what T1, T2 and T3 depend on.**
   - **Every Terraform state object.** R1 enumerates every state object in the staging state bucket(s) -- every
-    `.tfstate` key, not only the staging prefix, and not only the states this repository expects. Each is named and
-    mapped to a `terraform_states` entry. For each state, R1 records:
+    object key, not only `*.tfstate` (the S3 backend accepts any key name), not only the staging prefix, and not only
+    the states this repository expects. Each is named and mapped to a `terraform_states` entry; a listed state's
+    `.tflock` object is its own. For each state, R1 records:
     - the S3 key, and whether it can be read;
     - its resource addresses and ids, by T0.11's streaming read form, which keeps nothing else of the state. Never a
       `terraform init` against another stack's key, never `-migrate-state` or `-force-copy`, never a plan or apply of
@@ -169,10 +170,13 @@ critical path (`PHASE1_LEGACY_TEARDOWN.md` "The T3 fast path"):
 - **A live resource or state the inventory cannot place, or any state drift, is a STOP.** It is an owner decision, and
   the source inventory is amended in a reviewed change.
   - **T3 fast path only.** An owner ruling recorded in the R1 record may place a newly found state or resource
-    provisionally, as REVIEW and never in a DELETE class, when all three hold:
+    provisionally, as REVIEW and never in a DELETE class, when all of these hold:
     - it can be read;
     - T0.12 finds that it shares nothing with T3's destroy set and hangs on nothing in it;
-    - no step T1–T3 touches it.
+    - no step T1–T3 touches it;
+    - the ruling records the dependency analysis for the resource's own type: what it calls and what calls it. T0.12's
+      reads cover ENIs, security groups, rules, instance profiles, role use and the ALB's, cluster's and alarms'
+      children, not, say, a Lambda, an EventBridge target or another distribution whose origin is the ALB.
 
     Its reviewed source amendment then follows before any later step touches it, and before R6. Anything else stays a
     STOP.
@@ -495,8 +499,9 @@ budget's alerts. Any later billing evidence above $30 / month reopens the cost i
 **A. P1-R1 read-only inventory** -- two parts (§3). **Part A, before T3** (the T3 fast path):
 - EVERY Terraform state object in the staging state bucket(s): each named and mapped to `terraform_states`, its
   addresses and ids read by T0.11's streaming form (nothing else of it kept; never a `terraform init` against another
-  stack's key). At least app, ledger, single-host, `gs/staging/rpc-proxy.tfstate`
-  and `gs/staging/network.tfstate`; an unknown state is a STOP;
+  stack's key). At least app, single-host, `gs/staging/rpc-proxy.tfstate`
+  and `gs/staging/network.tfstate`; an unknown state is a STOP. The ledger's state is read here when R1 finds it in the
+  app account's bucket; in its own account it is part B (T0.11);
 - every app-account resource in the inventory's `live_names` (present / absent), and any app-account `gs-staging*` /
   `gs:environment=staging` resource NOT in the inventory (a STOP, or §3's provisional placement);
 - the rpc-proxy distribution's ETag and status, and the external state objects' metadata (T0.11);

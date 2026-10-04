@@ -668,6 +668,11 @@ gates.
 - **Constraints:** browser UX only. No contract, payload, codec, settlement, `FINANCIAL_PROTOCOL_VERSION` or server
   money-route change. If E-2 needs a server change, stop and record it for the owner.
 - **Focused tests:** `src/money/`, `src/components/money/` suites touched. **Gates:** OD-16 (Terms content).
+- **Status (2026-10-04):** PARTIAL — NOT INTEGRATED. `phase3/w2-m-wallet-dispute-ux` from `c0a44d7`: implementation
+  `90a3608`, review fixes `8d34474` + `5c7334b`. AUD-20.02–20.07 IMPLEMENTED (browser only; no server, contract, payload,
+  codec, settlement, protocol, rules or App.tsx change). AUD-20.08 stays OWNER-GATED on OD-16 (nothing hosted). Server
+  follow-ups for the owner: project the wallet proof's `verified_at` (exact E-1 freshness after a reload); a
+  `replace-required` answer spends the link challenge (the server-asked replacement costs a second signature).
 
 ### Wave 3
 

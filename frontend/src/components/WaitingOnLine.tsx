@@ -14,7 +14,9 @@
      - WHAT: the authority's sentence for the hold the table is under -- the shell's one hold answer
        (`dockHoldView(...).turnHoldReason`): `describeStandingOffer` inside `pendingOfferBlock`, the funding offer's
        `emergencyFundingBlock`, the discard's `pendingDiscardBlock`, in the authority's own priority, with names for
-       seat ids. Every seat reads the same sentence. Nothing here restates a rule or chooses between holds.
+       seat ids. Every seat reads the same sentence. The three ORDINARY-offer prompts read `dockHold.standingOffer`
+       instead -- the offer's own `pendingOfferBlock` sentence -- so a higher hold standing beside the offer (a train
+       offer under the v12 funding obligation) never makes the offer prompt describe a different decision. Nothing here restates a rule or chooses between holds.
    `null` (no hold reported -- a scrubbed past board) prints the WHO line alone rather than a guessed sentence. */
 
 import React from "react";
@@ -38,7 +40,8 @@ export function waitingOnLead(who: string, viewerDecides: boolean): string {
 
 export function WaitingOnLine({ who, viewerDecides, sentence, style }: WaitingOnLineProps) {
   return (
-    <p style={style} role="status" data-testid="waiting-on-line">
+    /* No live region of its own: every prompt that renders this line is already an `alertdialog`, which announces it. */
+    <p style={style} data-testid="waiting-on-line">
       <span data-testid="waiting-on-who">{waitingOnLead(who, viewerDecides)}</span>
       {sentence !== null && (
         <>

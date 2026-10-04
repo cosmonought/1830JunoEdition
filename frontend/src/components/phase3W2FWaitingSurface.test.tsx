@@ -268,9 +268,11 @@ describe("Residue, rendered: the real Stock Round panel greys each share control
 describe("AUD-09.09 (U-6): every offer prompt prints one waiting line -- who decides, and the hold's own sentence", () => {
   it("the private purchase offer: the sentence is `describeStandingOffer`'s, the same on every seat", () => {
     const board = PRIVATE_OFFERED();
-    const hold = viewOf(board).turnHoldReason!;
+    const hold = viewOf(board).standingOffer!;
     const standing = standingOrdinaryOffer(board)!;
     expect(hold.startsWith(describeStandingOffer(standing))).toBe(true);
+    // With no other hold it is also the table's one sentence (the bar's, every seat's).
+    expect(hold).toBe(viewOf(board).turnHoldReason);
     const proposal = { privateId: DH, privateName: "Delaware & Hudson", ownerAddress: P2, ownerLabel: "Ben", buyerProtocolId: PRR, buyerTicker: "PRR", price: 100 };
     for (const [viewerIsOwner, viewerIsProposer, lead] of [
       [true, false, "This is Ben's decision."],
@@ -297,7 +299,8 @@ describe("AUD-09.09 (U-6): every offer prompt prints one waiting line -- who dec
 
   it("the train purchase offer: the selling president decides; every seat reads the hold", () => {
     const board = TRAIN_OFFERED();
-    const hold = viewOf(board).turnHoldReason!;
+    const hold = viewOf(board).standingOffer!;
+    expect(hold).toBe(viewOf(board).turnHoldReason);
     expect(hold).toMatch(/^PRR's offer of \$150 for NYC's 3-train is waiting for the selling president's answer; nothing else can happen until it is answered or withdrawn\.$/);
     const proposal = {
       sellerProtocolId: NYC,
@@ -328,6 +331,34 @@ describe("AUD-09.09 (U-6): every offer prompt prints one waiting line -- who dec
     }
   });
 
+  it("an offer standing beside a higher hold still prints ITS OWN sentence (a train offer under the v12 funding obligation)", () => {
+    const board = {
+      ...FORCED(),
+      train_purchase_offer: {
+        buyer_protocol_id: CO,
+        buyer_ticker: "C&O",
+        seller_protocol_id: NYC,
+        seller_ticker: "NYC",
+        seller_president: P2,
+        model_type: "3",
+        price: "150",
+        instance: 1,
+      },
+      offer_serial: 1,
+    } as unknown as GameStateResponse;
+    const view = viewOf(board, corridor());
+    // The table is held by the obligation first (the authority's priority) -- that stays the bar's sentence...
+    expect(view.turnHoldReason).toMatch(/must buy a 3-train/);
+    // ...while the offer prompt says what the OFFER waits for, from `describeStandingOffer`.
+    const standing = standingOrdinaryOffer(board)!;
+    expect(view.standingOffer!.startsWith(describeStandingOffer(standing))).toBe(true);
+    expect(view.standingOffer).toMatch(/^C&O's offer of \$150 for NYC's 3-train is waiting for the selling president's answer/);
+    // No ordinary offer, no offer sentence: the funding offer is not an ordinary offer (it keeps `turnHoldReason`).
+    expect(viewOf(FUNDING_OFFERED(), corridor()).standingOffer).toBeNull();
+    expect(viewOf(DISCARD_OWED()).standingOffer).toBeNull();
+    expect(viewOf(TRADE_OFFERED(), GRID, true).standingOffer).toBeNull();
+  });
+
   it("the emergency funding offer: its own hold sentence (`emergencyFundingBlock`), not an invented one", () => {
     const board = FUNDING_OFFERED();
     const hold = viewOf(board, corridor()).turnHoldReason!;
@@ -342,8 +373,9 @@ describe("AUD-09.09 (U-6): every offer prompt prints one waiting line -- who dec
 
   it("the player <-> player trade pointer: the recipient decides; the proposer and a third seat wait on them", () => {
     const board = TRADE_OFFERED();
-    const hold = viewOf(board).turnHoldReason!;
+    const hold = viewOf(board).standingOffer!;
     expect(hold).toBe(viewOf(board).shareControls);
+    expect(hold).toBe(viewOf(board).turnHoldReason);
     for (const [viewer, lead] of [
       [P2, "This is your decision."],
       [P1, "Waiting on Ben."],
@@ -406,7 +438,7 @@ describe("AUD-03.10 (I-3): the pointer never covers the Private Companies card",
           onAnswer={() => undefined}
           onRescind={() => undefined}
           onShowCard={() => undefined}
-          waitingSentence={viewOf(board).turnHoldReason}
+          waitingSentence={viewOf(board).standingOffer}
           standAside={standAside}
         />,
       );
@@ -422,8 +454,13 @@ describe("AUD-03.10 (I-3): the pointer never covers the Private Companies card",
 describe("the shell's wiring (source pins over the comment-stripped App)", () => {
   const APP = readStripped("App.tsx");
 
-  it("every prompt in the consent slot is handed the one hold sentence", () => {
-    for (const prompt of ["<TrainTradePrompt", "<FundingPrivateOfferPrompt", "<TrainDiscardPrompt", "<PrivateTradePrompt", "<PlayerPrivateTradePrompt"]) {
+  it("every prompt in the consent slot is handed the authority's sentence from the one hold answer", () => {
+    // The three ordinary-offer prompts: the standing offer's own sentence.
+    for (const prompt of ["<TrainTradePrompt", "<PrivateTradePrompt", "<PlayerPrivateTradePrompt"]) {
+      expect(sliceBetween(APP, prompt, "/>")).toContain("waitingSentence={dockHold.standingOffer}");
+    }
+    // The funding offer and the discard: the table's hold sentence (each is the top hold while it stands).
+    for (const prompt of ["<FundingPrivateOfferPrompt", "<TrainDiscardPrompt"]) {
       expect(sliceBetween(APP, prompt, "/>")).toContain("waitingSentence={dockHold.turnHoldReason}");
     }
   });

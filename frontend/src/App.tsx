@@ -15605,8 +15605,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onReject={handleRejectSandboxTrainOffer}
         onRescind={handleRescindSandboxTrainOffer}
         actionInFlight={actionInFlight}
-        // Phase 3 W2-F (OD-1, U-6): the hold's own sentence, the one every waiting line prints on every seat.
-        waitingSentence={dockHold.turnHoldReason}
+        // Phase 3 W2-F (OD-1, U-6): the standing offer's own hold sentence (`describeStandingOffer`), on every seat.
+        waitingSentence={dockHold.standingOffer}
       />
       {/* #1530: the excess-train discard the game is waiting for. Same slot as the trade prompt; the two cannot
          stand at once (an offer cannot be made while a discard is owed). */}
@@ -15649,7 +15649,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onReject={handleRejectPrivateOffer}
         onRescind={handleRescindPrivateOffer}
         actionInFlight={actionInFlight}
-        waitingSentence={dockHold.turnHoldReason}
+        waitingSentence={dockHold.standingOffer}
       />
       {/* 6.5-B (K-01): the player <-> player trade's pointer, in the same slot. The card on the Stocks tab is the
           primary surface; this is what makes the offer impossible to miss from another tab, since it holds the
@@ -15667,7 +15667,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onAnswer={handleAnswerPrivateTrade}
         onRescind={handleRescindPrivateTrade}
         onShowCard={handleShowPrivateTradeCard}
-        waitingSentence={dockHold.turnHoldReason}
+        waitingSentence={dockHold.standingOffer}
         /* Phase 3 W2-F (AUD-03.10 / I-3): on the Stocks tab the Private Companies section is on screen and carries this
            offer itself, so the fixed pointer stands aside rather than cover a card. */
         standAside={activeMainTab === "corps" && privateTradeSection !== null}

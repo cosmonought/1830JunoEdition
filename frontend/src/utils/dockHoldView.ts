@@ -52,6 +52,7 @@
 
 import type { MapGridResponse } from "../components/hexContractTypes";
 import { authoritativeHoldRefusal } from "../gameEngine/authoritativeHolds";
+import { pendingOfferBlock } from "../gameEngine/pendingOfferHold";
 import type { SandboxLogMsg } from "../gameEngine/gameSetup";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { boardHomeHexToAxial, type HomeHexToAxial } from "../gameEngine/homeStationAuthority";
@@ -104,6 +105,11 @@ export interface DockHoldView {
   /** Phase 3 W2-F: the Stock Round panel's single flag (#32) -- the hold's sentence when it refuses BOTH `BuyStock` and
    *  `SellStock`, else `null`. A hold that refuses only one reaches that control alone, through `heldFirst`. */
   shareControls: string | null;
+  /** Phase 3 W2-F (U-6): the STANDING ORDINARY OFFER's own hold sentence (`pendingOfferBlock`, built on
+   *  `describeStandingOffer`), for the three ordinary-offer prompts. Not `turnHoldReason`, because a higher-priority hold
+   *  can stand beside an offer (a train offer under the v12 funding obligation) and the offer prompt must say what IT is
+   *  waiting for. `null` when no ordinary offer stands. */
+  standingOffer: string | null;
 }
 
 export const NO_DOCK_HOLD: DockHoldView = Object.freeze({
@@ -122,6 +128,7 @@ export const NO_DOCK_HOLD: DockHoldView = Object.freeze({
   buyStock: null,
   sellStock: null,
   shareControls: null,
+  standingOffer: null,
 });
 
 /** The probe each control's dispatch is judged by -- the kind it sends, in its minimal shape. */
@@ -181,6 +188,7 @@ export function dockHoldView(input: DockHoldInput): DockHoldView {
     buyStock,
     sellStock,
     shareControls: buyStock !== null && sellStock !== null ? buyStock : null,
+    standingOffer: ((held) => (held === null ? null : labelSentence(held, players, labelFor)))(pendingOfferBlock(state, p.pass)),
   };
 }
 

@@ -572,7 +572,7 @@ gates.
 
 #### W2-D
 **M&H request off-turn and in the OR; the JK chip** · L2 · **3.5–4.5 h**
-- **Status:** COMPLETE on its slice branch `phase3/w2-d-mh-offturn-jk` @ `a7488ff` (code `db50c38` + review fixes `a7488ff`, from `phase3/wave2-bcg-v13cert-integration` @ `9b19d9d`); **ACCEPTED and INTEGRATED on `phase3/wave2-bcgd-v13cert-integration` (merge `4072fd0` of `f0abdd7`, 2026-10-04)**: the M&H request offered in the Stock and Operating Rounds as an `offTurn` chip readied on `offTurnPowerReady`, its hold `dockHold.exchangePrivate`; the JK chip only in OR Track, its arm keyed on `jkArmScope`.
+- **Status:** COMPLETE on its slice branch `phase3/w2-d-mh-offturn-jk` @ `f0abdd7` (code `db50c38` + review fixes `a7488ff` + tracking `f0abdd7`, from `phase3/wave2-bcg-v13cert-integration` @ `9b19d9d`); **ACCEPTED and INTEGRATED on `phase3/wave2-bcgd-v13cert-integration` (merge `4072fd0` of `f0abdd7`, 2026-10-04)**: the M&H request offered in the Stock and Operating Rounds as an `offTurn` chip readied on `offTurnPowerReady`, its hold `dockHold.exchangePrivate`; the JK chip only in OR Track, its arm keyed on `jkArmScope`.
 - **Rows:** implements AUD-04.03 (A-8), AUD-10.05 (K-04), P3-N003 (draft M1)
 - **Surfaces:** `utils/activePrivatePower.ts` (offer the M&H request in the OR; JK only in the OR, disarmed at OR end); exempt
   the M&H chip from `sessionReady`'s turn component; the chip's blocked reason adds `authoritativeHoldRefusal`.

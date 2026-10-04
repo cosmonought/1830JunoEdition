@@ -459,7 +459,7 @@ describe("5. the must-sell banner (AUD-03.07) is the authority's debt, said once
     expect(node.getAttribute("role")).toBe("status");
     expect(node.textContent).toContain(banner!.reason);
     expect(node.textContent).toContain("At least 1 certificate to sell.");
-    expect(node.textContent).toContain("You must sell before buying or passing");
+    expect(node.textContent).toContain("Must sell");
     // An obligation, not a stage: none of the retired walk's words.
     expect(node.textContent).not.toMatch(/Done selling|move on to buying|Buy a Share|stage/i);
   });
@@ -483,7 +483,7 @@ describe("5. the must-sell banner (AUD-03.07) is the authority's debt, said once
   it("the shell reads ONE debt for the banner and the Pass gate", () => {
     const APP = readShell();
     expect(APP).toContain("const viewerDivestmentDebt = divestmentDebt({");
-    expect(APP).toContain("mustSell={mustSellBannerOf(viewerDivestmentDebt)}");
+    expect(APP).toContain("mustSell={scrubbing ? null : mustSellBannerOf(viewerDivestmentDebt)}");
     expect(sliceBetween(APP, "const passDisabledReason =", "return (")).toContain("divestmentRefusal(viewerDivestmentDebt)");
   });
 });
@@ -531,6 +531,14 @@ describe("6. Auto-Buy: no stage Pass -- it buys at once, then ends the bought tu
   it("revision 1 needed no stage Pass either: the Buy is legal from the opening stage, and one Pass ends the bought turn", () => {
     const t = runAutoBuyTurn(board({}, 1));
     expect(t.sent).toEqual(["BuyStock", "PassTurn"]);
+    expect(t.state.active_player_index).toBe(1);
+    expect(t.state.consecutive_passes).toBe(0);
+  });
+
+  it("revision 0 (a purchase ends the turn): the tool only ever buys -- the buy moves the seat and no PassTurn is sent", () => {
+    const t = runAutoBuyTurn(board({ consecutive_passes: 2 } as Partial<GameStateResponse>, 0));
+    expect(t.sent).toEqual(["BuyStock"]);
+    expect(holding(t.state, PRR)).toBe(30);
     expect(t.state.active_player_index).toBe(1);
     expect(t.state.consecutive_passes).toBe(0);
   });

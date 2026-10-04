@@ -14749,8 +14749,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                     onRescindPrivateTrade={handleRescindPrivateTrade}
                     offerHoldReason={privateTradeHold}
                     /* Phase 3 W2-B (AUD-03.07): the viewer's must-sell debt, said once at the top of the panel -- the
-                       same reading that greys the Pass (`viewerDivestmentDebt`). */
-                    mustSell={mustSellBannerOf(viewerDivestmentDebt)}
+                       same reading that greys the Pass (`viewerDivestmentDebt`). Not while scrubbing the epilogue replay,
+                       as `privateTradeHold` is not: a past board's debt is not an obligation now. */
+                    mustSell={scrubbing ? null : mustSellBannerOf(viewerDivestmentDebt)}
                   onPeekSaleMarket={openSalePeek}
                     onSellShares={handleSellShares}
                     sessionReady={controlsEnabled}

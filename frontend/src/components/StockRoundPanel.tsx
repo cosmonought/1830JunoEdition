@@ -3332,7 +3332,7 @@ export function StockRoundPanel({
           the turn -- the controls below say what is open, by the authority's answer. */}
       {mustSell && (
         <div style={styles.mustSellBanner} role="status" data-testid="stock-round-must-sell">
-          <span style={styles.mustSellTitle}>You must sell before buying or passing</span>
+          <span style={styles.mustSellTitle}>Must sell</span>
           <span style={styles.mustSellText}>{mustSell.reason}</span>
           <span style={styles.mustSellText}>
             {`At least ${mustSell.minimumCertificates} certificate${mustSell.minimumCertificates === 1 ? "" : "s"} to sell.`}

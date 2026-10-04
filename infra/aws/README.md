@@ -922,7 +922,7 @@ GS_DYNAMODB_LOCAL_ENDPOINT=http://127.0.0.1:8000 node --test dist/server/src/per
 # alarm drill (offline; the scripts against a stub AWS CLI where bash / PowerShell exist)
 node --test dist/server/src/aws/deploy/staging/restoreAlarmDrill.test.js dist/server/src/aws/deploy/staging/restoreFencing.test.js dist/server/src/aws/runtime/restoreFenceProbe.test.js dist/server/src/aws/operator/suppressionOverlap.test.js dist/server/src/persistence/conformance/l6RestoreDrill.test.js dist/server/src/aws/deploy/staging/flipAlarmDrill.test.js
 # COST-1 / COST-2A: the single host -- the module (20 runs), its scripts, the host verifier (and its capture scripts
-# against a stub AWS CLI where bash / PowerShell exist). The host scripts need a Linux userspace (flock, python3): on
+# against a stub AWS CLI where bash / PowerShell exist). The host scripts need a Linux userspace (flock, python3, cmp): on
 # Windows the owner gate (run-cost2c-owner-gate.ps1) runs them in a pinned Amazon Linux 2023 container, never Git Bash.
 cd infra/aws/modules/single-host && terraform init -backend=false && terraform test && bash tests/host-scripts.test.sh
 node --test dist/server/src/aws/deploy/cost1SingleHost.test.js dist/server/src/aws/deploy/cost2aHostVerifier.test.js

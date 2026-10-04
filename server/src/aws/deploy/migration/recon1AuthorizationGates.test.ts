@@ -773,6 +773,13 @@ describe("RECON-1: the ONE owner gate (COST-2C's runner, extended) covers the re
        is tested beside the module), and the one-server check also runs against the REAL daemon with AL2023's own CLI */
     assert.match(gate, /cp -r \/repo\/infra\/aws\/single-host \/work\/aws\/single-host/);
     assert.match(gate, /exec bash \/work\/aws\/modules\/single-host\/tests\/host-scripts\.test\.sh/);
+    /* PHASE 1 OWNER-GATE CLOSURE: the AL2023 test userspace provides cmp (diffutils) -- the suite's byte comparisons and
+       gs-deploy's release check use it, and the host has it -- and without it the gate is NOT RUN, never a different run */
+    const scripts = gate.slice(gate.indexOf("Add-Gate 'Single-host scripts'"), gate.indexOf("Add-Gate 'Single-host real Docker'"));
+    assert.match(scripts, /\$cmd = 'dnf -y -q install util-linux-core findutils diffutils >\/dev\/null 2>&1 \|\| exit 97; for c in bash flock python3 find sha256sum timeout awk cut tr date mktemp stat cmp; do command -v \$c >\/dev\/null \|\| exit 98; done; /);
+    assert.match(scripts, /if \(\$code -eq 97\) \{ return @\{ Status = 'NOT RUN'/);
+    assert.match(scripts, /if \(\$code -eq 98 -or \$code -eq 99\) \{ return @\{ Status = 'NOT RUN'/);
+    assert.match(source("infra/aws/modules/single-host/tests/host-scripts.test.sh"), /cmp -s /, "the suite's own byte comparisons (why cmp is required)");
     const realDocker = gate.slice(gate.indexOf("Add-Gate 'Single-host real Docker'"), gate.indexOf("Add-Gate $ImageGateName"));
     assert.ok(realDocker.length > 0 && gate.indexOf("Add-Gate 'Single-host scripts'") < gate.indexOf("Add-Gate 'Single-host real Docker'"), "the real-Docker gate follows the stubbed one");
     assert.match(realDocker, /dnf -y -q install docker util-linux-core findutils/, "AL2023's OWN docker CLI");

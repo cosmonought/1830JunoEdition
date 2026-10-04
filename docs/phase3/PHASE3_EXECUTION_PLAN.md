@@ -531,7 +531,7 @@ gates.
 
 #### W2-A
 **Holds visible everywhere** · L3 · **8–10 h**
-- **OD-1 RULED (2026-10-03, §7.3):** ordinary non-active-player behaviour stays; **non-active players keep seeing the active corporation's route/train information and dividend choices/consequences during Run Routes and Dividends**; an offer's hold gives every player a clear "Waiting on X / what is being decided" status, the legitimate answerer keeps Accept/Reject, the proposer keeps Rescind where legal, and unrelated controls do not pretend play can continue. Status: COMPLETE on its slice branch `phase3/w2-a-authoritative-holds` @ `e5fcfcc` (from `bfb7635`); NOT integrated.
+- **OD-1 RULED (2026-10-03, §7.3):** ordinary non-active-player behaviour stays; **non-active players keep seeing the active corporation's route/train information and dividend choices/consequences during Run Routes and Dividends**; an offer's hold gives every player a clear "Waiting on X / what is being decided" status, the legitimate answerer keeps Accept/Reject, the proposer keeps Rescind where legal, and unrelated controls do not pretend play can continue. Status: COMPLETE — ACCEPTED and INTEGRATED into `phase3/wave2a-integration` (slice `phase3/w2-a-authoritative-holds` @ `2d0fd0a`, carried linearly onto `bfb7635`). W2-C, W2-D and W2-F are unlocked by it; W2-B stays blocked on W3-K's v13 semantics.
 - **Outcome:** while any authoritative hold stands (discard, funding, offer, home token), no seat sees a live control the
   server would refuse, and every seat reads the same sentence.
 - **Rows:** implements AUD-04.01 (K-13 / U-22), AUD-06.02 (K-21), P3-N001 (draft §0.4 "dead arms"), P3-N002 (draft NEW-2 (OR bar)), P3-N009 (draft NEW-1 (blockedReason))

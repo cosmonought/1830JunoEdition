@@ -142,10 +142,19 @@ remains later spotlight / whitebox work. Rules version unchanged (v12).
 **Owner rulings recorded:** OD-9(a) and OD-11 (plan §7.3). OD-3, OD-13, OD-14(d) and OD-14(i) were applied by W2-E / W2-L / W2-K as
 given to those slices; not transcribed (their text is not in the integration brief).
 
-## W2-A slice status (2026-10-04)
+## Wave-2A integration status (2026-10-04)
 
-**Branch** `phase3/w2-a-authoritative-holds` @ `e5fcfcc` from `phase3/wave2-safe-integration` @ `bfb7635`. **COMPLETE on its slice
-branch; NOT integrated** (integration and owner broad gate pending). One pure hold answer, `utils/dockHoldView.ts`, asks
+**Branch** `phase3/wave2a-integration` from `phase3/wave2-safe-integration` @ `bfb7635` — **the current provisional Phase-3 integration
+baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** W2-A is **ACCEPTED and INTEGRATED**: its two
+commits (`e5fcfcc` code, `2d0fd0a` tracking; slice branch `phase3/w2-a-authoritative-holds`) are carried linearly and unchanged, followed by
+one tracking-only integration commit. Rules version unchanged (v12); no runtime code beyond the reviewed W2-A commits.
+
+**Lanes after W2-A:** W2-B NOT STARTED — **BLOCKED** on W3-K's v13 semantics (OD-2). W2-C, W2-D and W2-F NOT STARTED — **UNLOCKED**.
+W2-G remains HELD. W3-K remains BLOCKED pending owner rulings / review (nothing of it is integrated here).
+
+### W2-A slice record
+
+**Slice branch** `phase3/w2-a-authoritative-holds` @ `2d0fd0a` (code `e5fcfcc`) from `bfb7635`; integrated as above. One pure hold answer, `utils/dockHoldView.ts`, asks
 `authoritativeHoldRefusal` once per control with the message kind it sends; `App.tsx` derives it once (`dockHold`) and threads it to
 the bar's new `turnHoldReason` (Skip, End Turn, Pay / Withhold, Run Trains), the Stock Round / auction Pass, the tile-lay gate, the
 token ring, the train panel (`blockedReason`, new `bankBlockedReason`, returned trains, Diesel) and the private-purchase panel.

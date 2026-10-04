@@ -133,10 +133,15 @@ describe("the bar wires both flags to the same measurement", () => {
        proxy. Two of those were in this same batch of sticky tests.
        THE PROPERTY WAS ALWAYS ABOUT THE HOOK: the pin test and the pin distance must come off ONE rect, so
        they cannot be read at different moments and disagree. The probe is a separate instrument that reads
-       separate nodes, and it was never in scope. */
+       separate nodes, and it was never in scope.
+       Phase 3 W1-I (OD-14(a), 2026-10-04) removed the probe, so the hook's far bound is now the component
+       itself, the next top-level declaration after it. Still scoped to the hook: the property never was
+       about the file. */
     const hookStart = bar.indexOf("function useCondensedWhenPinned(");
     expect(hookStart).toBeGreaterThan(-1);
-    const hook = bar.slice(hookStart, bar.indexOf("function useStickyFitProbe(", hookStart));
+    const hookEnd = bar.indexOf("export default function ContextualActionBar(", hookStart);
+    expect(hookEnd).toBeGreaterThan(hookStart);
+    const hook = bar.slice(hookStart, hookEnd);
     expect(hook.length).toBeGreaterThan(0);
     expect(hook.match(/getBoundingClientRect\(\)/g) ?? []).toHaveLength(1);
   });
@@ -238,22 +243,26 @@ describe("the bar asks the two questions of the two heights", () => {
 
   it("asks one threshold on both edges", () => {
     /* #863: the comfort test is no longer a decision anywhere in the hook. Asserted as an ABSENCE from the
-       hook rather than from the file, because the fit probe still consults it as an instrument and that is
-       deliberate -- see the next test. */
+       hook; since Phase 3 W1-I removed the fit probe (OD-14(a)) it is also absent from the file -- see the
+       next test. The hook's far bound is the component, the next top-level declaration after it. */
     const start = CODE.indexOf("function useCondensedWhenPinned(");
     expect(start).toBeGreaterThan(-1);
-    const end = CODE.indexOf("function useStickyFitProbe(", start);
+    const end = CODE.indexOf("export default function ContextualActionBar(", start);
     expect(end).toBeGreaterThan(start);
     const hook = CODE.slice(start, end);
     expect(hook).not.toContain("canPinWithoutTrapping");
     expect(hook).toContain("shouldReleasePin(");
   });
 
-  it("leaves the comfort rule available to the instrument", () => {
-    /* NOT DELETED, AND THE DISTINCTION MATTERS. #720's constant still describes something true -- half the
-       viewport is where a companion becomes a passenger -- and the fit probe reports that verdict so a
-       playtest can see it. What #863 withdrew is its power to decide, not its opinion. */
-    expect(CODE).toContain("canPinWithoutTrapping(resting, viewport, stickyTop)");
+  it("keeps the comfort rule in the utility, with no instrument left in the bar (Phase 3 W1-I, OD-14(a))", () => {
+    /* #863 withdrew the rule's power to decide; #813's fit probe was the last thing in the bar that consulted
+       it, as an instrument for OD-14(a). The owner ruled OD-14(a) on 2026-10-04 -- no relocation of the step
+       panels -- and the probe came out, as U-16 required either way. #720's predicate stays in
+       `stickyCollapse.ts` and keeps its own tests above; the bar neither imports nor calls it. */
+    expect(CODE).not.toContain("canPinWithoutTrapping");
+    expect(CODE).not.toContain("useStickyFitProbe");
+    expect(CODE).not.toContain("Temporary instrument");
+    expect(typeof canPinWithoutTrapping).toBe("function");
   });
 
   it("still carries the player when it releases (design note #861)", () => {

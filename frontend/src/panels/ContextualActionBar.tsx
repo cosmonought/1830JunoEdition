@@ -82,7 +82,6 @@ import { PresidentCrown, PRESIDENT_CROWN_GOLD } from "../components/PresidentCro
 import { NO_TRAIN_ROUTE_REASON } from "../gameEngine/gameConstants";
 import { PASS_LABEL, passButtonTitle } from "../gameEngine/turnAction";
 import {
-  canPinWithoutTrapping,
   restingHeight,
   shouldCondenseSticky,
   shouldReleasePin,
@@ -594,7 +593,9 @@ function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, bo
            80% one.
            A GENUINELY OVERSIZED BAR whose resting height is past 80% releases and stays released, which is
            the outcome #720 wanted and never actually produced.
-         `canPinWithoutTrapping` IS DELIBERATELY LEFT IMPORTED for the fit probe, and #720's constant with it.
+         `canPinWithoutTrapping` was left imported for #813's fit probe; Phase 3 W1-I removed the probe (OD-14(a),
+         2026-10-04: no relocation of the step panels) and the import with it. The predicate and #720's constant
+         stay in `utils/stickyCollapse.ts`, still pinned by `stickyTrap.test.ts`.
          If the comfort rule should ever bite, the honest place is the SEED -- measure the first frame instead
          of asserting it -- and that is a change in what the bar does on load, which is not what was reported
          here. Written down so the choice is a choice. */
@@ -690,127 +691,6 @@ function useCondensedWhenPinned(): [React.RefObject<HTMLDivElement>, boolean, bo
 
   return [ref, condensed, mayPin, barClearance];
 }
-
-/** ==================================================================
- *   DESIGN NOTE 813: WOULD THEY FIT? MEASURE IT INSTEAD OF GUESSING AGAIN
- *  ==================================================================
- *
- *  ASKED: "we have slimmed the Buy Trains subpanel so much that I am wondering if it makes sense to condense
- *  it into the sticky Action Bar ... My only fear is that Buy Trains from Corporation, when there are 8
- *  operating corporations, may expand and create a scrolling problem like we had before."
- *
- *  THE FEAR IS THE RIGHT ONE AND WE HAVE GUESSED THIS TWICE. #508 moved the panel INTO the bar on the
- *  reasoning that it would be "sticky by inheritance"; #720 then found that a sticky element past half the
- *  viewport traps the page and taught the bar to unpin itself; #785 moved the panel back OUT because the depot
- *  reliably tripped that. Two moves, two guesses about one number, and the failure mode is silent -- a bar
- *  that stops being sticky looks like a bar that was never sticky, which is exactly how it was reported.
- *
- *  SO THIS MEASURES THE QUESTION RATHER THAN ANSWERING IT. The number that matters is not the bar's height
- *  today: it is what the bar WOULD be with the step panel inside it, against the viewport it is actually
- *  played on. Both nodes already carry refs, so both can be read.
- *
- *  IT CONSULTS THE AUTHORITY RATHER THAN REIMPLEMENTING IT. The verdict comes from `canPinWithoutTrapping`,
- *  the same predicate #720 enforces, so the probe cannot say "would pin" about a bar the rule would unpin --
- *  which is the failure this session has found four times in other guises.
- *
- *  RENDERED OUTSIDE THE BAR, deliberately. A readout inside the element being measured adds its own height to
- *  the reading, and a measurement that changes what it measures is worse than none.
- *
- *  TEMPORARY, and saying so is part of it: this exists to settle one question. Once the answer is in, either
- *  the panels move and this comes out, or they stay and this comes out. */
-function useStickyFitProbe(
-  barRef: React.RefObject<HTMLDivElement>,
-  panelRef: React.RefObject<HTMLDivElement>,
-): string | null {
-  const [reading, setReading] = React.useState<string | null>(null);
-
-  React.useEffect(() => {
-    if (typeof window === "undefined") return undefined;
-    let queued = false;
-
-    const measure = () => {
-      const bar = barRef.current;
-      if (!bar) return;
-      const barHeight = Math.round(bar.getBoundingClientRect().height);
-      const panelHeight = Math.round(panelRef.current?.getBoundingClientRect().height ?? 0);
-      // Nothing rendered on this step: a probe about a panel that is not there would read as a verdict.
-      if (panelHeight === 0) {
-        setReading((was) => (was === null ? was : null));
-        return;
-      }
-      const viewport = window.innerHeight;
-      const stickyTop = measuredStickyTop(bar);
-      /* ==================================================================
-         DESIGN NOTE 828a: THE PROBE HAD TO STOP ADDING WHAT IT NOW CONTAINS
-         ==================================================================
-
-         #813 measured `bar + panel` because the panel was a SIBLING and the question was what the bar would
-         become if it swallowed it. #828 moved the panel inside, so `getBoundingClientRect` on the bar already
-         includes it -- and the same arithmetic would have reported roughly double, said WOULD UNPIN, and been
-         believed. An instrument that lies is worse than none, which is the sentence its own harness opens
-         with; this is that sentence being tested.
-
-         ASKED OF THE DOM RATHER THAN OF A FLAG. `contains` is true exactly when the panel is nested, so the
-         probe cannot fall out of step with a later move the way a hand-set boolean would. It is also what
-         makes the readout self-describing: it says which arrangement it measured. */
-      const nested = panelRef.current !== null && bar.contains(panelRef.current);
-      const combined = nested ? barHeight : barHeight + panelHeight;
-      const share = viewport > 0 ? Math.round((combined / viewport) * 100) : 0;
-      /* Design note #837: THE VERDICT IS TAKEN ON THE SAME NUMBER THE PIN TEST USES, which is the resting
-         height. It read `combined` -- the pixels on screen -- so the probe agreed with the deadlock instead of
-         exposing it: it said WOULD UNPIN while the bar was unpinned BECAUSE it was unpinned, which is a
-         reading that confirms whatever it finds. #828a's own warning, one turn later. */
-      const resting = Math.round(restingHeight(bar));
-      const verdict = canPinWithoutTrapping(resting, viewport, stickyTop)
-        ? "would stay pinned"
-        : "WOULD UNPIN";
-      const shape = nested
-        ? `bar ${barHeight} (panel ${panelHeight} inside)`
-        : `bar ${barHeight} + panel ${panelHeight}`;
-      /* Design note #861a: AND WHICH STATE IT IS ACTUALLY IN. Reported: "when I closed that Upcoming trains
-         section, the Action Bar stayed pinned instead of becoming sticky again" -- and I could not reproduce
-         it by reading, which is the same position #813 was in before it built this probe. `verdict` is what
-         the rule WOULD say; `now` is what the bar is doing. If those two disagree in a playtest, the fault is
-         between the measurement and the style; if they agree, the measurement is what is wrong. */
-      const now = bar.getBoundingClientRect().top <= stickyTop + 1 ? "pinned" : "travelling";
-      const next =
-        `fit probe · ${shape} = ${combined}px · ${share}% of ${viewport}px` +
-        ` · resting ${resting}px · ${verdict} · now ${now}`;
-      setReading((was) => (was === next ? was : next));
-    };
-
-    const schedule = () => {
-      if (queued) return;
-      queued = true;
-      window.requestAnimationFrame(() => {
-        queued = false;
-        measure();
-      });
-    };
-
-    measure();
-    window.addEventListener("scroll", schedule, { passive: true });
-    window.addEventListener("resize", schedule);
-    /* #758's lesson, applied here from the start rather than after a report: the panel's height changes with
-       the corporate accordion and with the number of operating corporations, neither of which is a scroll or
-       a resize. Feature-detected for the same reason -- jsdom does not always define it. */
-    const observer =
-      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => schedule());
-    if (observer) {
-      if (barRef.current) observer.observe(barRef.current);
-      if (panelRef.current) observer.observe(panelRef.current);
-    }
-
-    return () => {
-      window.removeEventListener("scroll", schedule);
-      window.removeEventListener("resize", schedule);
-      observer?.disconnect();
-    };
-  }, [barRef, panelRef]);
-
-  return reading;
-}
-
 
 export default function ContextualActionBar({
   roundType,
@@ -1504,9 +1384,6 @@ export default function ContextualActionBar({
    * seems adequate". It is. The arrow was decorating a claim rather than making one, and the `title` already
    * says "scrolls to ... below" -- prose can hedge a direction; an arrowhead cannot. */
   const stepPanelRef = React.useRef<HTMLDivElement>(null);
-
-  // Design note #813: the temporary instrument that decides whether these panels can move back into the bar.
-  const stickyFitProbe = useStickyFitProbe(actionBarRef, stepPanelRef);
 
   /* ==================================================================
    *  DESIGN NOTE 797: A SCROLL BUTTON FOR A PANEL ALREADY ON SCREEN
@@ -4629,12 +4506,6 @@ export default function ContextualActionBar({
           the controls stay with them. */}
       {/* Design note #792: ONE WRAPPER, so the bar's jump button has a single destination whichever step is
           live. Both panels are mutually exclusive by sub-phase, so this holds exactly one at a time. */}
-      {/* Design note #813: the probe, OUTSIDE both measured elements -- see the hook for why that matters. */}
-      {stickyFitProbe && (
-        <div style={styles.fitProbe} title="Temporary instrument (design note #813): what the sticky bar would measure with this step's panel inside it, judged by the same rule that unpins it.">
-          {stickyFitProbe}
-        </div>
-      )}
 
       {/* Design note #885: `<PrivatePowerPanel>` rendered here, with eleven props. Deleted -- App.tsx #885
           records what it held, where each piece went, and why its rules table went with it rather than being

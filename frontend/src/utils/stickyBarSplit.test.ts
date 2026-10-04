@@ -69,9 +69,10 @@ const STICKY_START = CODE.lastIndexOf("ref={actionBarRef}");
 
    A GREEN TEST OVER THE WRONG TEXT is the failure this file already records once, in the note above: the
    first draft sliced from `indexOf` and swallowed the whole component. That one failed loudly. This one did
-   not, which is worse, and is why the anchor is now something that CANNOT move inside: the fit probe renders
-   after the bar closes and its own harness asserts so. */
-const STICKY_END = CODE.indexOf("{stickyFitProbe && (");
+   not, which is worse, and is why the anchor is now something that CANNOT move inside: it was #813's fit
+   probe, which rendered after the bar closed. Phase 3 W1-I removed the probe (OD-14(a)), so the anchor is
+   now the session hint, the bar's next sibling in the same fragment. */
+const STICKY_END = CODE.indexOf("{!sessionReady && (");
 const sticky = CODE.slice(STICKY_START, STICKY_END);
 /* `outside` is GONE with the arrangement it described. Every assertion that used it was about a panel lifted
    past the bar's closing tag, and #828 put both of them back inside -- so the region it named is now the

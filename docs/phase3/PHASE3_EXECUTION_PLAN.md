@@ -692,6 +692,7 @@ gates.
   R-PRIVEXCH (`PrivatePowerFlowModal`), group "powers"; RED R1 only under OD-12 and the RED serialization rule.
   **Pins likely to move:** `doubleActionWindow` (pins submit-half text). **Depends on:** W2-A, W2-D, W3-H. **Gates:** OD-12
   for P3-N021.
+- **Status (2026-10-04):** PARTIAL — AUD-25.01 (U-46, MEDIUM, from the W3-G audit) IMPLEMENTED on the slice branch `phase3/w3-b-action-latch-linkqueue` (`26f5982` + review fix `5fd3a7b`, from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`); NOT integrated. No RED region edited (OD-12 not used). AUD-14.06 and P3-N021 NOT STARTED (W3-H; OD-12).
 
 #### W3-C
 **Refusal display model** · L6 · **3.5–5.5 h**

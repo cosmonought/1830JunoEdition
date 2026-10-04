@@ -58,6 +58,8 @@ export interface MoneyTable {
   readonly view: RoomMoneyView | null;
   readonly flow: SeatFlow | null;
   readonly settlement: SettlementFlow | null;
+  /** This hook's clock (ticks every 15 s): the instant a render's money times are judged from (W2-K). */
+  readonly now: number;
   readonly wallet: WalletState;
   readonly pending: PendingWalletTx | null;
   readonly holdsChainKey: boolean;
@@ -324,6 +326,7 @@ export function useMoneyTable(input: MoneyTableInput): MoneyTable {
     view,
     flow,
     settlement,
+    now,
     wallet,
     pending,
     holdsChainKey,

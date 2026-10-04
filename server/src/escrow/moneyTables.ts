@@ -265,7 +265,16 @@ export function disabledStake(record: GameRecord): RoomStakeSummary | null {
 
 const HINT_KINDS: readonly MoneyHintKind[] = ["create", "join", "withdraw", "cancel", "set-consent-key", "challenge", "liveness-settle", "finalize"];
 const CONSENT_KEY = /^0[23][0-9a-f]{64}$/;
-const time = (ms: number) => new Date(ms).toISOString().slice(11, 16);
+/* PHASE 3 W2-K (U-44, owner OD-9(a)): a player reads money times in their own local time with its zone -- which only
+   the browser knows. These refusal sentences go to one player at the moment of the refusal, so they say how long
+   from now rather than a clock in a zone the player doesn't live in. Copy only: the instants, the checks and the
+   codes are unchanged; machine evidence and logs stay UTC. */
+const fromNow = (at: number, now: number): string => {
+  const minutes = Math.max(1, Math.ceil((at - now) / 60_000));
+  if (minutes === 1) return "about a minute";
+  if (minutes < 120) return `about ${minutes} minutes`;
+  return `about ${Math.round(minutes / 60)} hours`;
+};
 
 /* ==================================================================
     THE MONEY LAYER
@@ -1024,7 +1033,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
     const outstanding = grants.filter((grant) => admissionOutstanding(grant.admitted_until_secs, deps.now()));
     if (outstanding.length > 0) {
       const until = Math.max(...outstanding.map((grant) => (grant.admitted_until_secs as number) * 1000)) + 120_000;
-      return { code: "admission-outstanding", reason: `This seat can still be funded on Juno until about ${time(until)} UTC (its join approval hasn't expired), so it can't be released or removed before then.` };
+      return { code: "admission-outstanding", reason: `This seat can still be funded on Juno for ${fromNow(until, deps.now())} more (its join approval hasn't expired), so it can't be released or removed before then.` };
     }
     /* A joiner's Join can land only under a live admission (checked above, with the clock margin): a hint adds nothing
        to that lock, and a hint is only the browser's word -- so it never locks a joiner's seat (review S-M2). The
@@ -1147,7 +1156,7 @@ export function createMoneyTables(deps: MoneyTablesDeps, room: MoneyRoomPort) {
       if (claims.bySeat.get(seat.player_id)?.funding !== "funded") return no("forbidden", "Only the host -- or, ten minutes after the table is fully funded, any funded player -- can start this table.");
       const fullyFundedAt = fullyFundedAtOf(game.game);
       if (fullyFundedAt === null || now < fullyFundedAt + START_GRACE_MS) {
-        return no("host-grace", fullyFundedAt === null ? "The table isn't fully funded on Juno yet." : `The host can start now; any funded player can from ${time(fullyFundedAt + START_GRACE_MS)} UTC.`);
+        return no("host-grace", fullyFundedAt === null ? "The table isn't fully funded on Juno yet." : `The host can start now; any funded player can in ${fromNow(fullyFundedAt + START_GRACE_MS, now)}.`);
       }
     }
     if (game.paused) return no("paused", START_REFUSALS.paused);

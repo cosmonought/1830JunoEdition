@@ -23,6 +23,7 @@
 
 import { formatAmount, shortWallet, type MoneyAction, type MoneySeatFunding, type MoneyStartBlocker, type RoomMoneyView } from "../utils/moneyProtocol";
 import type { PendingWalletTx } from "./pendingTx";
+import { formatMoneyTime } from "./moneyTime";
 
 export type StepKey = "connect" | "confirm" | "link" | "review" | "approve" | "sent" | "funded" | "locked";
 
@@ -103,12 +104,6 @@ export interface FlowInput {
   readonly now: number;
 }
 
-const hhmm = (ms: number | null): string => {
-  if (ms === null || !Number.isFinite(ms)) return "";
-  const date = new Date(ms);
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-};
-
 export const amountText = (view: RoomMoneyView, base: string | null): string => formatAmount(base, view.deployment.exponent, view.deployment.symbol);
 
 /** What a seat's funding tag says in the roster (replacing Ready at a money table). */
@@ -128,10 +123,10 @@ export function fundingTag(funding: MoneySeatFunding): string {
 }
 
 /** Why the table can't start, as a sentence everybody at the table reads the same way. */
-export function startBlockerSentence(view: RoomMoneyView, blocker: MoneyStartBlocker | null): string | null {
+export function startBlockerSentence(view: RoomMoneyView, blocker: MoneyStartBlocker | null, now?: number): string | null {
   const funded = view.escrow.fundedSeats;
   const seats = view.terms.seats;
-  const closes = view.escrow.fundingDeadline === null ? "" : ` Funding closes at ${hhmm(view.escrow.fundingDeadline)}.`;
+  const closes = view.escrow.fundingDeadline === null ? "" : ` Funding closes at ${formatMoneyTime(view.escrow.fundingDeadline, { now })}.`;
   switch (blocker) {
     case null:
       return null;
@@ -188,12 +183,12 @@ function walletBlocker(wallet: WalletState, need: string | null): string | null 
 
 /** The waiting-room derivation for THIS viewer's seat (and a watcher's line). */
 export function seatFlow(input: FlowInput): SeatFlow {
-  const { view, isHost, wallet, confirmed, pending, ui } = input;
+  const { view, isHost, wallet, confirmed, pending, ui, now } = input;
   const you = view.you;
   const ante = amountText(view, view.terms.anteGross);
   const base = { primary: null, others: [] as FlowAction[], blocker: null, detail: null };
   if (you === null) {
-    return { ...base, stage: "watching", step: null, headline: `A real-money table: ${ante} per seat on ${view.deployment.chainId}.`, detail: startBlockerSentence(view, view.start.blocker) };
+    return { ...base, stage: "watching", step: null, headline: `A real-money table: ${ante} per seat on ${view.deployment.chainId}.`, detail: startBlockerSentence(view, view.start.blocker, now) };
   }
   const funding: MoneySeatFunding = you.funding;
   const link = you.link;
@@ -239,7 +234,7 @@ export function seatFlow(input: FlowInput): SeatFlow {
   }
 
   const rolledBack = view.start.state === "rolled-back" ? " The last Start didn't go through on Juno; the table is back to funding." : "";
-  const closes = view.escrow.fundingDeadline === null ? null : `Funding closes at ${hhmm(view.escrow.fundingDeadline)}.`;
+  const closes = view.escrow.fundingDeadline === null ? null : `Funding closes at ${formatMoneyTime(view.escrow.fundingDeadline, { now })}.`;
 
   /* A local deposit that may still land (or landed, not yet shown): nothing else is built for this seat until then. */
   const localDeposit = pending !== null && isDepositKind(pending.kind);
@@ -252,7 +247,7 @@ export function seatFlow(input: FlowInput): SeatFlow {
     const waitingForHost = primary === null && view.start.state === "ready" && !isHost && anyoneAt !== null;
     const detail =
       [
-        waitingForHost ? `Everyone is funded. The host can start now; if they haven't by ${hhmm(anyoneAt)}, you can.` : primary === null ? startBlockerSentence(view, view.start.blocker) : isHost ? "Everyone is funded: you can start the game." : "Everyone is funded and the host hasn't started: you can start the game.",
+        waitingForHost ? `Everyone is funded. The host can start now; if they haven't by ${formatMoneyTime(anyoneAt, { now })}, you can.` : primary === null ? startBlockerSentence(view, view.start.blocker, now) : isHost ? "Everyone is funded: you can start the game." : "Everyone is funded and the host hasn't started: you can start the game.",
         isHost ? "Until the game starts you can cancel the table on Juno (every deposit comes back, minus the fee)." : "Until the game starts you can withdraw (the fee isn't refunded).",
       ]
         .filter(Boolean)
@@ -304,11 +299,11 @@ export function seatFlow(input: FlowInput): SeatFlow {
         headline: `Wallet linked · ${shortWallet(link.wallet)}`,
         detail: !bound
           ? isHost
-            ? startBlockerSentence(view, view.start.blocker)
+            ? startBlockerSentence(view, view.start.blocker, now)
             : "Waiting for the host to open the table on Juno. Your deposit button appears then."
           : view.escrow.state !== "FUNDING" && view.escrow.state !== "FUNDED"
             ? /* Juno can't be read just now (or the escrow moved on): say that, never guess what it holds. */
-              (startBlockerSentence(view, view.start.blocker) ?? startBlockerSentence(view, "chain-unavailable"))
+              (startBlockerSentence(view, view.start.blocker, now) ?? startBlockerSentence(view, "chain-unavailable", now))
             : isHost
               ? "Your deposit isn't in this table's escrow on Juno anymore, so the table can't fill. Cancel it on Juno: every deposit comes back, minus the fee."
               : `This table's escrow isn't taking deposits right now.${closes === null ? "" : ` ${closes}`}`,
@@ -403,7 +398,7 @@ export function settlementFlow(input: SettlementInput): SettlementFlow {
 }
 
 function settlementFlowFor(input: SettlementInput): SettlementFlow {
-  const { view, holdsChainKey, verification } = input;
+  const { view, holdsChainKey, verification, now } = input;
   const s = view.settlement;
   const you = view.you;
   const chainSeat = you?.chainSeatIndex ?? null;
@@ -432,7 +427,7 @@ function settlementFlowFor(input: SettlementInput): SettlementFlow {
       if (legal("annul")) acts.push({ kind: "annul", label: "Agree to cancel this game", tone: "secondary", title: "If every player signs, the game is annulled and every deposit comes back (minus the fee)." });
       const checkpoint = s.lastCheckpoint;
       const recorded = checkpoint === null ? "Standings are recorded on Juno every round." : `Standings last recorded on Juno at ${checkpoint.roundKey}${checkpoint.confirmed ? "" : " (being confirmed)"}.`;
-      const exit = s.livenessAvailableAt !== null && input.now < s.livenessAvailableAt ? ` If no round finishes by ${hhmm(s.livenessAvailableAt)}, any player may close the table on Juno and be paid from the last recorded standings.` : "";
+      const exit = s.livenessAvailableAt !== null && input.now < s.livenessAvailableAt ? ` If no round finishes by ${formatMoneyTime(s.livenessAvailableAt, { now })}, any player may close the table on Juno and be paid from the last recorded standings.` : "";
       return { headline: recorded, detail: `Nothing is needed from you while the game is played; closing the browser changes nothing about your deposit.${exit}`, actions: acts, paid };
     }
     case "preparing":
@@ -453,7 +448,7 @@ function settlementFlowFor(input: SettlementInput): SettlementFlow {
             : verification === "unavailable"
               ? "This device can't re-check the result right now, so it doesn't offer early approval. You'll be paid when the window closes."
               : "Checked on this device: Juno's recorded result covers exactly this game's moves.";
-      return { headline: `Recorded on Juno. The payout is released at ${hhmm(releaseAt)} unless a player disputes it.`, detail: note, actions: acts, paid };
+      return { headline: `Recorded on Juno. The payout is released at ${formatMoneyTime(releaseAt, { now })} unless a player disputes it.`, detail: note, actions: acts, paid };
     }
     case "release-available":
       if (legal("release-payout")) acts.unshift({ kind: "release-payout", label: "Release payout", tone: "primary", title: "Anyone may send this once the window has closed (Keplr pays the network fee)." });
@@ -465,7 +460,7 @@ function settlementFlowFor(input: SettlementInput): SettlementFlow {
       return { headline: "Juno's escrow is paused, so approvals and releases wait.", detail: "Nothing is lost; they resume when it unpauses. Disputes and the inactivity exit still work.", actions: acts, paid };
     case "disputed":
       if (legal("liveness-settle")) acts.push({ kind: "liveness-settle", label: "Close through the inactivity exit", tone: "secondary" });
-      return { headline: `A player disputed the payout. The resolver decides by ${hhmm(s.resolverTimeoutAt)}.`, detail: "After that, any seated player's wallet may close it through the inactivity exit.", actions: acts, paid };
+      return { headline: `A player disputed the payout. The resolver decides by ${formatMoneyTime(s.resolverTimeoutAt, { now })}.`, detail: "After that, any seated player's wallet may close it through the inactivity exit.", actions: acts, paid };
     case "paid":
       return { headline: paid === null ? "Paid out on Juno." : paid === "0" ? "No payout for this seat." : `Paid: ${amountText(view, paid)} sent to ${shortWallet(you?.payoutWallet ?? null)}.`, detail: null, actions: [], paid };
     case "refunded":

@@ -11,7 +11,16 @@ import { FONT_FAMILY_MONO, FONT_SIZE, LINE_HEIGHT, RADIUS } from "../../styles/t
 const sheet = <T extends Record<string, React.CSSProperties>>(styles: T): T => styles;
 
 export const moneyStyles = sheet({
-  panel: { display: "flex", flexDirection: "column", gap: "10px", marginTop: "18px", padding: "14px 16px", borderRadius: RADIUS.card, border: "1px solid #2f4a68", backgroundColor: "#101a26", minWidth: 0 },
+  /* W2-K (OD-14(i)): the seat's money panel is a REGION of the waiting room, not a box inside it. The waiting room
+     groups by structure -- section labels and hairlines, nothing boxed except a transient confirmation (#1443-#1445)
+     -- and a blue card here was the one grouping that still nested a surface. The review card and the confirmations
+     below stay bounded: they are states, the same exception the room makes for its ante confirmation. */
+  panel: { display: "flex", flexDirection: "column", gap: "10px", minWidth: 0 },
+  /* The waiting room's section label (its `subHeading`): micro, heavy, tracked, the faint step. */
+  sectionLabel: { margin: 0, fontSize: FONT_SIZE.micro, fontWeight: 800, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8a8a86" },
+  /* "Escrow details": a quiet disclosure, read as a control rather than as a sentence. */
+  disclosure: { fontSize: FONT_SIZE.small, fontWeight: 700, color: "#a8a6a0", cursor: "pointer", width: "fit-content" },
+  disclosureBody: { marginTop: "8px" },
   strip: { display: "flex", flexWrap: "wrap", alignItems: "baseline", gap: "6px 12px", fontSize: FONT_SIZE.small, color: "#c8c6c0", lineHeight: LINE_HEIGHT.normal },
   stakeTag: { fontSize: FONT_SIZE.micro, fontWeight: 800, letterSpacing: "0.06em", textTransform: "uppercase", color: "#9ec5ff", border: "1px solid #2f4a68", borderRadius: RADIUS.control, padding: "2px 8px", whiteSpace: "nowrap" },
   steps: { display: "flex", flexWrap: "wrap", gap: "4px", margin: 0, padding: 0, listStyle: "none" },

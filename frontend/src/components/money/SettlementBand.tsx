@@ -25,6 +25,7 @@ import type { SessionPort } from "../../utils/sessionBootstrap";
 import { ConfirmItsYou } from "../ConfirmItsYou";
 import type { SettlementActionKind } from "../../money/moneyFlow";
 import type { MoneyServices } from "../../money/moneySession";
+import { formatMoneyTime } from "../../money/moneyTime";
 import { useMoneyTable } from "../../money/useMoneyTable";
 import { buttonStyle, moneyStyles as styles } from "./moneyStyles";
 
@@ -38,12 +39,6 @@ export interface SettlementBandProps {
   port?: SessionPort;
   services?: MoneyServices;
 }
-
-const hhmm = (ms: number | null): string => {
-  if (ms === null) return "";
-  const date = new Date(ms);
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-};
 
 export function SettlementBand({ room, log = null, board = null, compact = false, port, services }: SettlementBandProps): JSX.Element | null {
   const money = room.money ?? null;
@@ -67,7 +62,7 @@ export function SettlementBand({ room, log = null, board = null, compact = false
   const consequence = (kind: SettlementActionKind): string => {
     switch (kind) {
       case "challenge":
-        return `Dispute the payout recorded on Juno? Keplr attaches the ${fmt(s?.bond ?? null)} bond. The resolver decides by ${hhmm(s?.resolverTimeoutAt ?? null) || "its deadline"}; if the dispute fails, the bond joins the pool.`;
+        return `Dispute the payout recorded on Juno? Keplr attaches the ${fmt(s?.bond ?? null)} bond. The resolver decides by ${formatMoneyTime(s?.resolverTimeoutAt ?? null, { now: table.now }) || "its deadline"}; if the dispute fails, the bond joins the pool.`;
       case "liveness-settle":
         return "Close the table on Juno and pay everyone from the last recorded standings? This can't be undone; the payout is then released after its own challenge window.";
       case "annul":

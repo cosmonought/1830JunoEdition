@@ -25,7 +25,9 @@ import { explorerLink } from "../../money/escrowDeployment";
 import { amountText, FUNDING_STEPS, startBlockerSentence, type FlowAction } from "../../money/moneyFlow";
 import type { MoneyServices } from "../../money/moneySession";
 import { moneyServices } from "../../money/moneySession";
+import { formatMoneyTime } from "../../money/moneyTime";
 import { useMoneyTable, type MoneyActionKind } from "../../money/useMoneyTable";
+import { KeplrMark } from "./KeplrMark";
 import { buttonStyle, moneyStyles as styles } from "./moneyStyles";
 
 export interface MoneyPanelProps {
@@ -38,12 +40,6 @@ export interface MoneyPanelProps {
   services?: MoneyServices;
 }
 
-const hhmm = (ms: number | null): string => {
-  if (ms === null) return "";
-  const date = new Date(ms);
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-};
-
 /** Basis points as a percentage, in integers only ("100" -> "1%", "250" -> "2.5%"). */
 export function bpsText(bps: number): string {
   if (!Number.isInteger(bps) || bps < 0) return "";
@@ -53,7 +49,7 @@ export function bpsText(bps: number): string {
 }
 
 /** The one line every seat (and a watcher) reads first: what kind of table this is. */
-export function StakeStrip({ money }: { money: RoomMoneyView }): JSX.Element {
+export function StakeStrip({ money, now }: { money: RoomMoneyView; now?: number }): JSX.Element {
   const fee = money.terms.feeBps === null ? null : `${bpsText(money.terms.feeBps)} fee`;
   const network = money.deployment.networkClass === "testnet" ? `Juno testnet (${money.deployment.chainId})` : money.deployment.networkClass === "local" ? `local Juno (${money.deployment.chainId})` : `Juno (${money.deployment.chainId})`;
   return (
@@ -65,13 +61,13 @@ export function StakeStrip({ money }: { money: RoomMoneyView }): JSX.Element {
       <span>
         · {money.escrow.fundedSeats} of {money.terms.seats} funded
       </span>
-      {money.escrow.fundingDeadline !== null ? <span>· funding closes {hhmm(money.escrow.fundingDeadline)}</span> : null}
+      {money.escrow.fundingDeadline !== null ? <span>· funding closes {formatMoneyTime(money.escrow.fundingDeadline, { now })}</span> : null}
     </p>
   );
 }
 
 /** The deposit's terms, in full, before "Approve in Keplr" (brief §14's list). */
-function ReviewCard({ money, isHost, wallet }: { money: RoomMoneyView; isHost: boolean; wallet: string }): JSX.Element {
+function ReviewCard({ money, isHost, wallet, now }: { money: RoomMoneyView; isHost: boolean; wallet: string; now: number }): JSX.Element {
   const exponent = money.deployment.exponent;
   const symbol = money.deployment.symbol;
   const fmt = (base: string | null) => formatAmount(base, exponent, symbol);
@@ -111,7 +107,7 @@ function ReviewCard({ money, isHost, wallet }: { money: RoomMoneyView; isHost: b
         <dt style={styles.termLabel}>Winnings go to</dt>
         <dd style={styles.termValue}>{shortWallet(wallet)} — the depositing wallet; it can't change once the game starts</dd>
         <dt style={styles.termLabel}>Funding closes</dt>
-        <dd style={styles.termValue}>{money.escrow.fundingDeadline === null ? (isHost ? "set by Juno when you open the table" : "—") : hhmm(money.escrow.fundingDeadline)}</dd>
+        <dd style={styles.termValue}>{money.escrow.fundingDeadline === null ? (isHost ? "set by Juno when you open the table" : "—") : formatMoneyTime(money.escrow.fundingDeadline, { now })}</dd>
       </dl>
       <p style={styles.faint}>Until the game starts you can withdraw your deposit (the fee isn't refunded). Once it starts, the deposit stays in escrow until the game ends.</p>
       <p style={styles.faint}>Deposits on Juno are public: anyone can see which wallet funded this table.</p>
@@ -141,6 +137,15 @@ const CONFIRM_PURPOSE: Partial<Record<MoneyActionKind, string>> = {
   "move-signing-key": "To set up signing on this device",
 };
 
+/* W2-K (OD-14(i)): the waiting room's keyboard focus ring (`.wr-columns button:focus-visible`) reaches this panel's
+   buttons; its disclosure and its explorer link get the same ring here, so every stop in the panel shows focus the
+   same way. Scoped to the panel's own class. */
+const MONEY_PANEL_CSS = `
+.money-seat-panel summary:focus-visible,
+.money-seat-panel a:focus-visible,
+.money-seat-panel button:focus-visible { outline: 2px solid #8a8a86; outline-offset: 2px; }
+`;
+
 export function MoneyPanel({ room, onStart, busy = false, port, services }: MoneyPanelProps): JSX.Element | null {
   const money = room.money ?? null;
   const svc = services ?? moneyServices();
@@ -160,11 +165,15 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
   };
   const wallet = table.wallet.kind === "connected" ? table.wallet.address : (money.you?.link?.wallet ?? "");
   const pendingLink = table.pending !== null && pinned.ok ? explorerLink(pinned.pin, table.pending.txHash) : null;
-  const tableLine = flow.stage === "funding" && flow.step !== "funded" ? startBlockerSentence(money, money.start.blocker) : null;
+  const tableLine = flow.stage === "funding" && flow.step !== "funded" ? startBlockerSentence(money, money.start.blocker, table.now) : null;
 
   return (
-    <section style={styles.panel} aria-label="Your deposit" data-testid="money-panel">
-      <StakeStrip money={money} />
+    <section className="money-seat-panel" style={styles.panel} aria-label="Your deposit" data-testid="money-panel">
+      <style>{MONEY_PANEL_CSS}</style>
+      <p style={styles.sectionLabel} aria-hidden="true">
+        Your deposit
+      </p>
+      <StakeStrip money={money} now={table.now} />
       {flow.stage === "funding" || flow.stage === "starting" ? (
         <ol style={styles.steps} aria-label="Funding progress" data-testid="money-steps">
           {FUNDING_STEPS.map((step, index) => (
@@ -201,17 +210,17 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
         <div style={styles.confirm} role="group" aria-label="Replace the linked wallet" data-testid="money-replace">
           <p style={styles.detail}>This seat is linked to another wallet. Replace it with {shortWallet(wallet)}? The old link stops working; nothing is charged.</p>
           <div style={styles.row}>
-            <button type="button" style={buttonStyle("primary", inFlight)} disabled={inFlight} onClick={() => void table.run("replace-link")} data-testid="money-replace-confirm">
+            <button type="button" className="wr-touch" style={buttonStyle("primary", inFlight)} disabled={inFlight} onClick={() => void table.run("replace-link")} data-testid="money-replace-confirm">
               Replace wallet
             </button>
-            <button type="button" style={buttonStyle("secondary", inFlight)} disabled={inFlight} onClick={table.cancelNeeds}>
+            <button type="button" className="wr-touch" style={buttonStyle("secondary", inFlight)} disabled={inFlight} onClick={table.cancelNeeds}>
               Keep the linked wallet
             </button>
           </div>
         </div>
       ) : null}
 
-      {table.reviewing && flow.step === "review" && money.you?.link ? <ReviewCard money={money} isHost={room.you.role === "host"} wallet={money.you.link.wallet} /> : null}
+      {table.reviewing && flow.step === "review" && money.you?.link ? <ReviewCard money={money} isHost={room.you.role === "host"} wallet={money.you.link.wallet} now={table.now} /> : null}
 
       {asking !== null ? (
         <div style={styles.confirm} role="group" aria-label="Confirm" data-testid="money-exit-confirm">
@@ -219,6 +228,7 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
           <div style={styles.row}>
             <button
               type="button"
+              className="wr-touch"
               style={buttonStyle(asking === "cancel-escrow" ? "danger" : "primary", inFlight)}
               disabled={inFlight}
               onClick={() => {
@@ -230,7 +240,7 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
             >
               {asking === "annul" ? "Sign my agreement" : "Continue in Keplr"}
             </button>
-            <button type="button" style={buttonStyle("secondary", false)} onClick={() => setAsking(null)}>
+            <button type="button" className="wr-touch" style={buttonStyle("secondary", false)} onClick={() => setAsking(null)}>
               Keep it
             </button>
           </div>
@@ -242,22 +252,24 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
           {flow.primary !== null ? (
             <button
               type="button"
+              className="wr-touch"
               style={buttonStyle("primary", inFlight || flow.blocker !== null)}
               disabled={inFlight || flow.blocker !== null}
               title={flow.primary.title}
               onClick={() => press(flow.primary as FlowAction)}
               data-testid={`money-action-${flow.primary.kind}`}
             >
+              {flow.primary.kind === "connect" ? <KeplrMark /> : null}
               {table.busy === flow.primary.kind ? `${flow.primary.label}…` : flow.primary.label}
             </button>
           ) : null}
           {table.reviewing && flow.step === "review" ? (
-            <button type="button" style={buttonStyle("secondary", inFlight)} disabled={inFlight} onClick={table.closeReview} data-testid="money-review-close">
+            <button type="button" className="wr-touch" style={buttonStyle("secondary", inFlight)} disabled={inFlight} onClick={table.closeReview} data-testid="money-review-close">
               Not now
             </button>
           ) : null}
           {flow.others.map((action) => (
-            <button key={action.kind} type="button" style={buttonStyle(action.tone, inFlight)} disabled={inFlight} title={action.title} onClick={() => press(action)} data-testid={`money-action-${action.kind}`}>
+            <button key={action.kind} type="button" className="wr-touch" style={buttonStyle(action.tone, inFlight)} disabled={inFlight} title={action.title} onClick={() => press(action)} data-testid={`money-action-${action.kind}`}>
               {table.busy === action.kind ? `${action.label}…` : action.label}
             </button>
           ))}
@@ -298,8 +310,8 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
       ) : null}
 
       <details data-testid="money-details">
-        <summary style={styles.faint}>Escrow details</summary>
-        <dl style={styles.terms}>
+        <summary style={styles.disclosure}>Escrow details</summary>
+        <dl style={{ ...styles.terms, ...styles.disclosureBody }}>
           <dt style={styles.termLabel}>Network</dt>
           <dd style={styles.termValue}>{money.deployment.chainId}</dd>
           <dt style={styles.termLabel}>Contract</dt>

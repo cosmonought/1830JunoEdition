@@ -11,9 +11,10 @@
 // the choice will not be remembered in this window · AUD-16.05 the Lobby / waiting-room / room-bar breakpoints switch
 // at the same effective width at every scale.
 //
-// NOT HERE: `RulesReference.tsx`'s breakpoint block. That hunk lands at integration after Lanes 5 and 6 (W1-L, W1-I),
-// through the same `zoomAwareMediaCss` these surfaces use. `:focus-visible` and real layout are not implemented by
-// jsdom; the at-360x640 footer and the rings are asserted structurally here and observed in a browser at the gate.
+// `RulesReference.tsx`'s breakpoint block landed at the Wave-1 integration, after Lanes 5 and 6 (W1-L, W1-I), through
+// the same `zoomAwareMediaCss` these surfaces use (pinned and rendered below). `:focus-visible` and real layout are not
+// implemented by jsdom; the at-360x640 footer and the rings are asserted structurally here and observed in a browser
+// at the gate.
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -22,6 +23,7 @@ import { ModalLayerHost } from "./ModalPortal";
 import HostSetupCard from "./HostSetupCard";
 import { UiScalePicker } from "./UiScalePicker";
 import { LobbyRoomList } from "./LobbyRoomList";
+import RulesReference from "./RulesReference";
 import {
   UI_SCALE_NOT_REMEMBERED,
   getUiScaleStatus,
@@ -302,12 +304,25 @@ describe("AUD-16.05: breakpoints switch at the same effective width at every sca
     expect(css()).not.toContain("@media (max-width: 899px)");
   });
 
+  it("the Rules Reference renders its breakpoints in zoomed pixels (the integration hunk, after W1-L and W1-I)", () => {
+    render(<RulesReference roundType="OperatingRound" operatingSubPhase="Track" />);
+    const css = () => Array.from(host.querySelectorAll("style")).map((el) => el.textContent ?? "").join("\n");
+    expect(css()).toContain("@media (max-width: 760px)");
+    expect(css()).toContain("@media (min-width: 761px)");
+    act(() => setUiScale(1.25));
+    // N px of layout is N x 1.25 px of window; the 760 / 761 pair stays back to back.
+    expect(css()).toContain(`@media (max-width: ${zoomAwareWidthPx("max-width", 760, 1.25)}px)`);
+    expect(css()).toContain(`@media (min-width: ${zoomAwareWidthPx("min-width", 761, 1.25)}px)`);
+    expect(css()).not.toContain("@media (max-width: 760px)");
+  });
+
   it("every other changed surface hands its sheet through the helper with the live scale", () => {
     for (const [file, sheet] of [
       ["components/Lobby.tsx", "LOBBY_CSS"],
       ["components/LobbyRoomList.tsx", "LOBBY_ROOMS_CSS"],
       ["components/SandboxRoomBar.tsx", "BARE_BUTTON_CSS"],
       ["components/SandboxWaitingRoom.tsx", "WAITING_ROOM_CSS"],
+      ["components/RulesReference.tsx", "RULES_REFERENCE_CSS"],
     ] as const) {
       const src = readStripped(file);
       expect([file, src.includes(`<style>{zoomAwareMediaCss(${sheet}, uiScale)}</style>`)]).toEqual([file, true]);

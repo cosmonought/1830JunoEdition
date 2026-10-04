@@ -126,6 +126,14 @@ export function PrivatePowerFlowModal({
             {flow.unavailable}
           </p>
         )}
+        {/* Wave-1 integration: why the other pile is missing, in the authority's words, BEFORE the question --
+            the fact the choice is made under, not an afterthought to "Are you sure?". Same box as the reasons
+            above: it is the same kind of answer. */}
+        {flow.sourceNote && (
+          <p style={styles.refusal} role="status">
+            {flow.sourceNote}
+          </p>
+        )}
         {/* W1-C: the question the alternative steps answer (the M&H's sources). */}
         {flow.prompt && <p style={styles.stepText}>{flow.prompt}</p>}
 
@@ -153,7 +161,9 @@ export function PrivatePowerFlowModal({
               {/* Design note #674: the decline is a peer, not a lesser -- forfeiting to keep a marker for a
                   city that matters more is an ordinary play. It is drawn as a secondary control because it
                   is the negative of the pair, not because it is the worse choice. */}
-              {step.declineLabel && (
+              {/* Wave-1 integration: a sequence's decline belongs to its step (the D&H's forfeit); an
+                  alternative's belongs to the whole choice and is drawn below all of them, not in a pile's row. */}
+              {step.declineLabel && !flow.alternatives && (
                 <button
                   type="button"
                   style={{
@@ -194,6 +204,30 @@ export function PrivatePowerFlowModal({
             </div>
           </div>
         ))}
+
+        {/* Wave-1 integration (M&H presentation): THE ONE "NO" ANSWERS THE WHOLE QUESTION. The flow carries a single
+            decline on its last alternative (#871: "allows them to escape by selecting no"); drawing it inside that
+            pile's row made it read as "not from this pile". It sits under every choice instead, outside the step
+            boxes, and sends the same press it always did. */}
+        {flow.alternatives &&
+          flow.steps
+            .filter((step) => step.declineLabel)
+            .map((step) => (
+              <div key={`${step.key}-decline`} style={styles.choiceDecline}>
+                <button
+                  type="button"
+                  style={{
+                    ...styles.secondary,
+                    ...(step.enabled ? {} : styles.buttonDisabled),
+                  }}
+                  disabled={!step.enabled}
+                  onClick={() => onDecline(step.key)}
+                  title={step.declineHint ?? undefined}
+                >
+                  {step.declineLabel}
+                </button>
+              </div>
+            ))}
       </div>
     </NativeModal>
   );
@@ -277,6 +311,8 @@ const styles: Record<string, React.CSSProperties> = {
   stepIndex: { fontWeight: 700, color: "#a8a6a0" },
   supply: { margin: 0, fontSize: FONT_SIZE.small, color: "#a8a6a0" },
   stepActions: { display: "flex", flexDirection: "row", justifyContent: "flex-end", gap: "10px" },
+  /* The alternatives' shared decline: right-aligned like the steps' own actions, outside every step box. */
+  choiceDecline: { display: "flex", flexDirection: "row", justifyContent: "flex-end" },
   primary: {
     padding: "9px 16px",
     borderRadius: RADIUS.card,

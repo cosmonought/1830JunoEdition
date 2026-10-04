@@ -52,6 +52,9 @@ import { tileErasAt, type TrainTier } from "../gameEngine/gamePhase";
 import { firstPurchaseEffects } from "../gameEngine/depotSchedule";
 // Design note #640: which build the browser is actually running.
 import { UI_BUILD_ID, UI_BUILD_LABEL } from "../utils/buildStamp";
+/* W1-O (AUD-16.05): the page's breakpoints are asked in the zoomed root's pixels, like the Lobby's. */
+import { zoomAwareMediaCss } from "../utils/uiScale";
+import { useUiScale } from "../utils/useUiScale";
 import type { GameVariants } from "../gameEngine/gameVariants";
 /* The player-count limits the lobby deals from -- read, not retyped, so this page and the Stocks tab agree. */
 import {
@@ -5452,6 +5455,7 @@ export function RulesReference({
     roundType === "OperatingRound" && !homeStationLive ? (operatingSubPhaseProp ?? null) : null;
   const livePage = sectionForRound(roundType);
   const dockOffset = useStickyDockOffset();
+  const uiScale = useUiScale(); // W1-O: the stylesheet's @media widths, asked at the live chrome scale
   /* The rulebook's phase number for the Tables page: 1 while the auction runs, else from the train tier in
      force. The Level Playing Field's 7-train tier has no rulebook phase and marks nothing.
      NOT PHASE 1 WHEN THE AUCTION IS DELAYED. Phase 1 IS the auction in the printed game, so the live round
@@ -5522,7 +5526,7 @@ export function RulesReference({
   return (
     <ScopeContext.Provider value={activeScopes}>
     <div style={styles.root} className={className ? `${className} rr-root` : "rr-root"}>
-      <style>{RULES_REFERENCE_CSS}</style>
+      <style>{zoomAwareMediaCss(RULES_REFERENCE_CSS, uiScale)}</style>
 
       <div style={styles.header}>
         <h2 style={styles.pageTitle}>Rules Reference</h2>

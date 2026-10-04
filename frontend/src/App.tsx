@@ -606,6 +606,7 @@ import {
   formatCountdown,
   gameEndedAtFromLog,
 } from "./utils/closeRoomPayout";
+import { gameOverStripResult } from "./utils/gameOverStripView";
 import {
   fleetLossNotices,
   nextDueNotice,
@@ -13982,9 +13983,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         <div style={{ ...styles.gameOverStrip, ...styles.gameOverStripAsBar }} role="status" data-testid="game-over-strip">
           <span style={styles.gameOverStripText}>
             🏁 Game over
-            {finalStandings.find((row) => row.isWinner)
-              ? ` — ${finalStandings.find((row) => row.isWinner)!.label} wins with $${finalStandings.find((row) => row.isWinner)!.netWorth}.`
-              : "."}
+            {/* W1-N follow-up: every player ranked first, as the Game Over modal badges them (H-06). */}
+            {gameOverStripResult(finalStandings)}
             {roomClosed
               ? " The room is closed."
               : autoCloseRemaining !== null

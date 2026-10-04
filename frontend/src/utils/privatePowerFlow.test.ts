@@ -291,10 +291,9 @@ describe("the M&H is one question (design note #871)", () => {
     const flow = mh(20);
     expect(flow.steps).toHaveLength(1);
     expect(flow.steps[0].key).toBe("exchange-ipo");
-    expect(flow.prompt).toBe(
-      "Exchanging this Private Company for an NYC share forfeits its $20/OR revenue. Are you sure? " +
-        "The Bank Pool holds no NYC certificate to exchange for.",
-    );
+    expect(flow.prompt).toBe("Exchanging this Private Company for an NYC share forfeits its $20/OR revenue. Are you sure?");
+    // Wave-1 integration: the missing pile's reason is its own field, shown before the question (not after it).
+    expect(flow.sourceNote).toBe("The Bank Pool holds no NYC certificate to exchange for.");
   });
 
   it("names the loss without a figure when the room has not reported one", () => {
@@ -391,8 +390,17 @@ describe("the M&H offers one step per legal source (W1-C, AUD-10.04)", () => {
 
   it("one legal pile: the other's refusal says why it is missing, in the authority's words", () => {
     const flow = mh(20, [refused("Ipo", IPO_EMPTY), legal("Bank")]);
-    expect(flow.prompt).toContain(IPO_EMPTY);
+    // Wave-1 integration: said as its own note (rendered before the question), never appended to "Are you sure?".
+    expect(flow.sourceNote).toBe(IPO_EMPTY);
+    expect(flow.prompt).not.toContain(IPO_EMPTY);
     expect(flow.unavailable).toBeNull();
+  });
+
+  it("no note when every pile is offered, when none is (the unavailable reason says it), or for a hex power", () => {
+    expect(mh(20, [legal("Ipo"), legal("Bank")]).sourceNote).toBeNull();
+    expect(mh(20, [refused("Ipo", CAP), refused("Bank", CAP)]).sourceNote).toBeNull();
+    expect(dh(false, "pending").sourceNote).toBeNull();
+    expect(csl(false).sourceNote).toBeNull();
   });
 
   it("neither legal: no step to press, and the authority's sentence said once", () => {
@@ -420,6 +428,7 @@ describe("the M&H offers one step per legal source (W1-C, AUD-10.04)", () => {
     const MODAL = readStripped("components/PrivatePowerFlowModal.tsx");
     expect(MODAL).toContain("{flow.prompt}");
     expect(MODAL).toContain("{flow.unavailable}");
+    expect(MODAL).toContain("{flow.sourceNote}");
     expect(MODAL).toContain("!flow.alternatives");
     // No pile preference or exchange copy of its own.
     expect(MODAL).not.toContain("Bank Pool");

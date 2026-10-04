@@ -564,6 +564,25 @@ export function describeGameplayAction(
   }
 
   /* ==================================================================
+      PHASE 3 W1-D FOLLOW-UP (Wave-1 integration): THE PROPOSER'S WITHDRAWALS NARRATE TOO
+     ==================================================================
+     W1-D gave the buying corporation's president `RescindPrivatePurchase` / `RescindTrainPurchase`, but no arm here
+     named them, so the drain's fallback label -- "Sandbox room" on every other client and on the server path -- was
+     the whole Activity Log line. Read off the BEFORE board, the one that still holds the offer, like the answers
+     beside them; the withdrawing party is the buying corporation. ALWAYS A SENTENCE: should the before board not
+     hold the matching offer (an entry replayed without it), the line still names what was withdrawn rather than
+     falling back. A refused withdrawal never reaches here as a success -- it gets its REFUSED line (W1-H). */
+  if ("RescindPrivatePurchase" in msg) {
+    const offer = gameState?.private_purchase_offer ?? null;
+    const { private_id } = msg.RescindPrivatePurchase;
+    if (offer && offer.funding !== true && offer.private_id === private_id) {
+      return `${offer.buyer_ticker} withdrew its offer of $${offer.price} for ${offer.private_name}.`;
+    }
+    const name = gameState?.private_companies.find((entry) => entry.private_id === private_id)?.name ?? "a private company";
+    return `${actingActor(context)} withdrew its offer for ${name}.`;
+  }
+
+  /* ==================================================================
       6.5-B (K-01): THE PLAYER <-> PLAYER TRADE, NARRATED LIKE THE OTHER OFFERS
      ==================================================================
      These three messages printed the drain's fallback label, so every other client read "Sandbox room" for a
@@ -638,6 +657,21 @@ export function describeGameplayAction(
       `${context.labelForAddress(offer.seller_president ?? "")} ${accept ? "accepted" : "declined"} ` +
       `$${offer.price} for ${offer.seller_ticker}'s ${copy}${offer.model_type}-train.`
     );
+  }
+
+  /* W1-D follow-up: the train offer's withdrawal, named the way its proposal and answer name the copy. */
+  if ("RescindTrainPurchase" in msg) {
+    const offer = gameState?.train_purchase_offer ?? null;
+    const { seller_protocol_id } = msg.RescindTrainPurchase;
+    if (offer && offer.seller_protocol_id === seller_protocol_id) {
+      const kind = saleCopyKind(gameState, offer.seller_protocol_id, offer.model_type, offer.gilded);
+      const copy = kind === "bloodPrice" ? "gold-trimmed " : kind === "ordinaryBesideGilded" ? "ordinary " : "";
+      return (
+        `${offer.buyer_ticker} withdrew its offer of $${offer.price} for ` +
+        `${offer.seller_ticker}'s ${copy}${offer.model_type}-train.`
+      );
+    }
+    return `${actingActor(context)} withdrew its offer for a train from ${corp(gameState, seller_protocol_id)}.`;
   }
 
   /* ==================================================================

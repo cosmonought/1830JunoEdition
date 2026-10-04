@@ -187,6 +187,10 @@ export interface PowerFlow {
   /** W1-C: why NOTHING is offered -- every source refused by the authority, in the authority's own words.
    *  Non-null only when `steps` is empty. */
   unavailable: string | null;
+  /** Wave-1 integration (M&H presentation): why the OTHER pile is missing when only one is legal, in the
+   *  authority's own words -- said BEFORE the question rather than after "Are you sure?". `null` when every pile
+   *  is offered, when none is (`unavailable` says it then), and for the hex powers. */
+  sourceNote: string | null;
   /** W1-C: the steps are alternative answers (pick one), not an order of operations, so the modal does not
    *  number them -- "1." / "2." would claim the IPO comes before the Bank Pool. */
   alternatives: boolean;
@@ -311,12 +315,14 @@ export function privatePowerFlow(input: PowerFlowInput): PowerFlow {
     });
     /* When exactly one pile is legal, the other's sentence says why it is missing -- only the pile can
        differ between the two verdicts (the holding, certificate and timing rules do not depend on it), so
-       that sentence is the authority's `mhSourceRefusal` answer. */
+       that sentence is the authority's `mhSourceRefusal` answer. Wave-1 integration: it is its own field
+       (`sourceNote`), shown BEFORE the question -- appended after "Are you sure?" it read as the last word of a
+       confirmation rather than as the fact the choice is made under. The question itself is unchanged. */
     const prompt =
       steps.length === 0
         ? null
         : `Exchanging this Private Company for an NYC share forfeits ${cost}. Are you sure?` +
-          (steps.length > 1 ? " Choose where the share comes from." : refusalText ? ` ${refusalText}` : "");
+          (steps.length > 1 ? " Choose where the share comes from." : "");
     return {
       abilityKey,
       /* Design note #881: the old literal was "Exchange the M&H for an NYC share?" -- kept on one line per
@@ -325,6 +331,7 @@ export function privatePowerFlow(input: PowerFlowInput): PowerFlow {
       holderLine: `${holder} holds this power.`,
       prompt,
       unavailable: steps.length === 0 ? refusalText || "No NYC share can be exchanged for right now." : null,
+      sourceNote: steps.length > 0 && refusalText ? refusalText : null,
       alternatives: true,
       steps,
       /* THE X AND THE "NO" BOTH MEAN THE SAME THING HERE, and that is correct rather than redundant: nothing
@@ -356,6 +363,7 @@ export function privatePowerFlow(input: PowerFlowInput): PowerFlow {
       holderLine: `${holder} holds this power.`,
       prompt: null,
       unavailable: null,
+      sourceNote: null,
       alternatives: false,
       steps: [lay],
       cancellable: !layDone,
@@ -396,6 +404,7 @@ export function privatePowerFlow(input: PowerFlowInput): PowerFlow {
     holderLine: `${holder} holds this power.`,
     prompt: null,
     unavailable: null,
+    sourceNote: null,
     alternatives: false,
     steps: [lay, stationStep],
     /* NOTHING COMMITTED YET. Once the tile is on the board the power is partly spent and cannot be handed

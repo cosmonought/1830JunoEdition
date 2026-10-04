@@ -13,10 +13,10 @@
      - `private_auction_complete` -- the engine's one "no auction is owed" flag (#904a). `false` is OWED. Absent
        reads as complete, the same direction `boIsLocked` takes for pre-field logs;
      - the private companies -- `cancelPendingDelayedAuction` reaches `complete: true` WITHOUT selling anything, so
-       its privates are closed with no owner, player or corporation. An auction that RAN sells every private
-       before it closes (`delayedAuctionUnderway`: the Stock Round opens "once every private company is sold"),
-       and a closure keeps the owner it found (`closed: true` only). So "complete, and a private closed with no
-       owner" is the cancellation and nothing else.
+       EVERY private is closed with no owner, player or corporation. An auction that RAN sells every private
+       before it closes (`delayedAuctionUnderway`: the Stock Round opens "once every private company is sold");
+       Phase 5 keeps the owners it found, and the only closures that release an owner (the B&O's, the M&H's) reach
+       one private each. So "complete, and every private closed with no owner" is the cancellation and nothing else.
    No log text is read, no rule is restated, and no flag is kept beside the board's.
 
    SILENT WHERE ANOTHER SURFACE ALREADY SAYS IT, OR WHERE IT IS NO LONGER A LIVE FACT:
@@ -37,9 +37,13 @@ export function delayedAuctionStatus(board: StatusBoard | null | undefined): Del
   if (!resolveVariants(board.variants).delayedAuction) return null;
   if (board.current_round_type === "WaterfallAuction" || board.current_round_type === "GameEnd") return null;
   if (board.private_auction_complete === false) return "owed";
-  const neverSold = (board.private_companies ?? []).some(
-    (priv) => priv.closed && priv.owner === null && priv.owner_protocol_id === null,
-  );
+  /* EVERY private closed with no owner, not ANY: two closures in a game whose auction ran also release their owner
+     (`settleBaoPrivate`, the B&O's first train; `applyPrivateExchange`, the M&H's NYC exchange), but they reach one
+     private each and the others keep the owner the auction gave them. D-55 fires before anything is sold, so its
+     board -- and only its board -- has the whole set closed and ownerless. */
+  const privates = board.private_companies ?? [];
+  const neverSold =
+    privates.length > 0 && privates.every((priv) => priv.closed && priv.owner === null && priv.owner_protocol_id === null);
   return neverSold ? "cancelled" : null;
 }
 

@@ -49,6 +49,10 @@ const { withEmptyRoster, waterfallForRoster } = require("../gameEngine/gameSetup
 const SS = require("../gameEngine/sandboxState") as typeof import("../gameEngine/sandboxState");
 const { applyPhaseChange } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { RULES_ENGINE_VERSION } = require("../gameEngine/rulesVersion") as typeof import("../gameEngine/rulesVersion");
+const { BAO_COMPANY_ID, BAO_PRIVATE_ID, settleBaoPrivate } =
+  require("../gameEngine/baltimorePrivate") as typeof import("../gameEngine/baltimorePrivate");
+const { applyPrivateExchange } = require("../gameEngine/privateExchange") as typeof import("../gameEngine/privateExchange");
+const MH_PRIVATE_ID = 4;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -229,6 +233,38 @@ describe("AUD-02.08: the Delayed Auction's standing status, read off the board",
     const closed = applyPhaseChange(held, "5");
     expect(closed.private_companies.every((priv) => priv.closed)).toBe(true);
     expect(delayedAuctionStatus(closed)).toBeNull();
+  });
+
+  it("review fix: the B&O's first-train closure and the M&H's NYC exchange (both release their owner) never read as cancelled", () => {
+    const board = operating(dealt(true));
+    const held = {
+      ...board,
+      private_auction_complete: true,
+      private_companies: board.private_companies.map((priv, i) => ({ ...priv, owner: [A, B, C][i % 3] })),
+    } as State;
+    const bao = held.public_companies.find((company) => company.company_id === BAO_COMPANY_ID)!;
+    const baoClosed = settleBaoPrivate({
+      ...held,
+      public_companies: held.public_companies.map((company) => (company === bao ? { ...company, owned_trains: ["2"] } : company)),
+    } as State);
+    const baoPriv = baoClosed.private_companies.find((priv) => priv.private_id === BAO_PRIVATE_ID)!;
+    expect([baoPriv.closed, baoPriv.owner, baoPriv.owner_protocol_id]).toEqual([true, null, null]); // the engine released it
+    expect(delayedAuctionStatus(baoClosed)).toBeNull();
+    const mh = baoClosed.private_companies.find((priv) => priv.private_id === MH_PRIVATE_ID)!;
+    const nyc = baoClosed.public_companies.find((company) => company.ticker === "NYC")!;
+    const exchanged = applyPrivateExchange(baoClosed, {
+      ok: true,
+      privateId: MH_PRIVATE_ID,
+      companyId: nyc.company_id,
+      ticker: "NYC",
+      player: mh.owner as string,
+      source: "Ipo",
+    });
+    const mhAfter = exchanged.private_companies.find((priv) => priv.private_id === MH_PRIVATE_ID)!;
+    expect([mhAfter.closed, mhAfter.owner]).toEqual([true, null]);
+    expect(delayedAuctionStatus(exchanged)).toBeNull();
+    // ...and Phase 5 on top of both still is not a cancellation.
+    expect(delayedAuctionStatus(applyPhaseChange(exchanged, "5"))).toBeNull();
   });
 
   it("silent outside the variant, during the auction round itself, at GameEnd, and with no board", () => {

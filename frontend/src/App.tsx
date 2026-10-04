@@ -15380,7 +15380,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           auctionComplete={gameState?.private_auction_complete ?? null}
           /* Phase 3 W2-I (AUD-11.03): the ended game is its own state, not "No live round" (the round type stays null --
              #898 above). OD-6 (AUD-01.07): the table's pinned rules version beside the build stamp, from the live
-             board's own `rules_engine_version` (`null` on a legacy unpinned board, omitted with no board). */
+             board's own `rules_engine_version` (`null` on a legacy unpinned board, omitted with no board) -- the LIVE
+             board on purpose: the pin is the table's, while the game-over flag and the room strip's auction status
+             follow the board on screen (a scrub shows the scrubbed position's), as every other board fact does. */
           gameOver={gameState?.current_round_type === "GameEnd"}
           rulesEngineVersion={boardRulesVersion(liveState)}
         />

@@ -792,6 +792,9 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
           "If the corporation can pay for a train from its own treasury, the ordinary purchase rules apply: it may buy any train it could legally buy, not only the cheapest.",
           "If the corporation's treasury cannot cover the cheapest available train, this is an emergency purchase: it must buy the cheapest available train, the corporation spends all of its money, and the president pays the difference.",
           "When the president's personal money is being used for this forced purchase, a train bought from another corporation may not cost more than its face value.",
+          /* Phase 3 W3-K (OD-4, rules v13): the intercorporate window is budgeted at treasury + president cash and
+             closes for good at the first decision (`emergencyFunding.ts` `emergencyTradeWindow` / `fundedTradeRefusal`). */
+          "A train from another corporation is agreed before the president sells anything, and is paid only from the corporation's money and the president's cash — never with money raised by selling shares. Once the president declines it, or sells, that chance does not return.",
           "A cash-strapped corporation is not required to buy another corporation's train merely because it is cheaper than a train in the Bank or Bank Pool.",
           /* Phase 3 W1-L (RR-7): what the president may sell, and the private sale's own limits (`emergencyFunding.ts`
              #1541): the ordinary private purchase's restrictions stand -- phases 3 and 4, half to twice face value,

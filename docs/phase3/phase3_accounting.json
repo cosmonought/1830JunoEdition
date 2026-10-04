@@ -223,7 +223,7 @@
    "od": "OD-12 (only if the submit half or link drain must change)",
    "p4": "—",
    "notes": "The draft map deferred this to Phase 4; it is a known defect, so it stays in Phase 3.",
-   "status": "IMPLEMENTED — W3-I `5c6d7f8` + review fixes `d663b1c` (the par prompt never releases its press while the link still holds it -- the 4 s hold re-arms -- so a par queued while the link reconnects is never followed by a second `SetBoPar`; the card says it is queued), not integrated"
+   "status": "IMPLEMENTED — W3-I `5c6d7f8` + review fixes `d663b1c` (the par prompt never releases its press while the link still holds it -- the 4 s hold re-arms -- so a par queued while the link reconnects is never followed by a second `SetBoPar`; the card says it is queued); INTEGRATED on `phase3/wave3-i-v13cert-integration` (merge `5a22e38` of `92cdb5d`)"
   },
   {
    "key": "AUD-02.06",
@@ -237,7 +237,7 @@
    "od": "—",
    "p4": "—",
    "notes": "The draft map called this cosmetic and deferred it; a known defect stays in Phase 3.",
-   "status": "IMPLEMENTED — W3-I `5c6d7f8` + review fixes `d663b1c` (\"not reached the table yet\" only after the link settles the press NOT applied, or nothing was sent; a press reported applied stays held until the board stops owing the par -- one extra hold, then a silent release; no room link: unchanged), not integrated"
+   "status": "IMPLEMENTED — W3-I `5c6d7f8` + review fixes `d663b1c` (\"not reached the table yet\" only after the link settles the press NOT applied, or nothing was sent; a press reported applied stays held until the board stops owing the par -- one extra hold, then a silent release; no room link: unchanged); INTEGRATED on `phase3/wave3-i-v13cert-integration` (merge `5a22e38` of `92cdb5d`)"
   },
   {
    "key": "AUD-02.07",
@@ -481,7 +481,7 @@
    "od": "—",
    "p4": "—",
    "notes": "The draft map deferred this; it stays in Phase 3.",
-   "status": "IMPLEMENTED — W3-I `5c6d7f8` + review fixes `d663b1c` (the Private Companies offer form is no longer closed by the press: it is kept until the proposal lands -- the standing offer withdraws the openers and the form closes -- and a dropped or refused send leaves it live with what was typed; a synchronous send latch guards a same-task double press), not integrated"
+   "status": "IMPLEMENTED — W3-I `5c6d7f8` + review fixes `d663b1c` (the Private Companies offer form is no longer closed by the press: it is kept until the proposal lands -- the standing offer withdraws the openers and the form closes -- and a dropped or refused send leaves it live with what was typed; a synchronous send latch guards a same-task double press); INTEGRATED on `phase3/wave3-i-v13cert-integration` (merge `5a22e38` of `92cdb5d`)"
   },
   {
    "key": "AUD-03.12",
@@ -1869,7 +1869,7 @@
    "od": "OD-12 (only if the submit half or link drain must change)",
    "p4": "—",
    "notes": "The draft map deferred this to Phase 4; it stays in Phase 3.",
-   "status": "IMPLEMENTED — W3-I `5c6d7f8` + review fixes `d663b1c` (a read-only queue accessor on the room link -- `serverLink.ts` `LinkQueueState` / `link.queue` / the active-link store -- read once through `utils/useLinkQueue.ts`, outside the drain; the B&O par prompt and the three offer forms show \"Queued — will send on reconnect.\" and take no second press while the link holds the last submission), not integrated"
+   "status": "IMPLEMENTED — W3-I `5c6d7f8` + review fixes `d663b1c` (a read-only queue accessor on the room link -- `serverLink.ts` `LinkQueueState` / `link.queue` / the active-link store -- read once through `utils/useLinkQueue.ts`, outside the drain; the B&O par prompt and the three offer forms show \"Queued — will send on reconnect.\" and take no second press while the link holds the last submission); INTEGRATED on `phase3/wave3-i-v13cert-integration` (merge `5a22e38` of `92cdb5d`)"
   },
   {
    "key": "AUD-19.02",
@@ -4688,7 +4688,7 @@
   "W3-F": "NOT STARTED",
   "W3-G": "NOT STARTED",
   "W3-H": "NOT STARTED",
-  "W3-I": "COMPLETE — slice branch `phase3/w3-i-offers` `5c6d7f8` + review fixes `d663b1c` (from `phase3/wave2-bcgdf-v13cert-integration` @ `c3f43b7`); NOT integrated (integration and owner broad gate pending). AUD-02.05, AUD-02.06, AUD-03.11, AUD-19.01 IMPLEMENTED. Dependencies W2-F and W2-H integrated in the base. A read-only queue accessor on the room link and one hook outside the drain (no RED region, no OD-12 edit); the par prompt and the three offer forms (Private Companies trade form, Buy Private Company, Buy Trains from a Corporation) read it. Reading recorded: the R4 form is kept open (live, with what was typed) after a refusal rather than closed. Not taken (recorded follow-ups elsewhere, unchanged): the W2-F duplicate-waiting LOW and the two NITs. Presentation only: no engine, server, rules-version or settlement change",
+  "W3-I": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-v13cert-integration` (2026-10-04, merge `5a22e38` of `phase3/w3-i-offers` @ `92cdb5d`, parents `c3f43b7` / `92cdb5d`, its 3 commits carried unchanged): code `5c6d7f8` + review fixes `d663b1c` + tracking `92cdb5d` (from `phase3/wave2-bcgdf-v13cert-integration` @ `c3f43b7`). AUD-02.05, AUD-02.06, AUD-03.11, AUD-19.01 IMPLEMENTED. Dependencies W2-F and W2-H integrated in the base. A read-only queue accessor on the room link and one hook outside the drain (no RED region, no OD-12 edit); the par prompt and the three offer forms (Private Companies trade form, Buy Private Company, Buy Trains from a Corporation) read it. OWNER-ACCEPTED reading (2026-10-04): for AUD-03.11 / R4 a refused proposal may leave the form open with its typed values preserved so the player can correct and resend. Not taken (recorded follow-ups elsewhere, unchanged): the W2-F duplicate-waiting LOW and the two NITs. Presentation only: no engine, server, rules-version or settlement change",
   "W3-J": "NOT STARTED",
   "W3-K": "COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click \"Pass Turn\" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D / W2-F and other open slices are tracked separately)"
  },
@@ -4932,7 +4932,7 @@
  "wave2_bcgdf_v13cert_integration": {
   "branch": "phase3/wave2-bcgdf-v13cert-integration",
   "base": "7d8f73ecb58242de866b786088fd9be7f93595e2 (phase3/wave2-bcgd-v13cert-integration)",
-  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D and W2-F integrated; no broad Phase-3 owner gate has been run; not merged to main",
+  "status": "SUPERSEDED AS BASELINE by `phase3/wave3-i-v13cert-integration` (2026-10-04, W3-I added); otherwise as recorded: PROVISIONAL — was the Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D and W2-F integrated; no broad Phase-3 owner gate has been run; not merged to main",
   "inputs": {
    "W2-F": {
     "branch": "phase3/w2-f-waiting-surface",
@@ -4967,5 +4967,44 @@
    "keys": "unchanged from 7916763 / 7d8f73e (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
   },
   "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D and W2-F COMPLETE and INTEGRATED; no accepted slice awaits integration; not deployable until drained v12 rooms and the final integrated owner gate"
+ },
+ "wave3_i_v13cert_integration": {
+  "branch": "phase3/wave3-i-v13cert-integration",
+  "base": "c3f43b726abe54f91f16679f6579288c52c59630 (phase3/wave2-bcgdf-v13cert-integration)",
+  "status": "PROVISIONAL — the current Phase-3 integration baseline; W2-B, W2-C, W2-G, the v13 settlement certification, W2-D, W2-F and W3-I integrated; no broad Phase-3 owner gate has been run; not merged to main",
+  "inputs": {
+   "W3-I": {
+    "branch": "phase3/w3-i-offers",
+    "head": "92cdb5dd4cc10658e344ad2c3defc86e6e4d250f",
+    "parent": "c3f43b7",
+    "merge": "5a22e38"
+   }
+  },
+  "method": "git merge --no-ff (first parent c3f43b7, second parent 92cdb5d); 5c6d7f8, d663b1c, 92cdb5d carried unchanged (same SHAs); no squash, no rebase, no source branch moved",
+  "reconciliation": [
+   "No conflict: W3-I was 3 ahead / 0 behind c3f43b7, so the merge's tree equals 92cdb5d's exactly (code, tests and the slice's own tracking).",
+   "No server/, gameEngine/, contracts/, rulesVersion.ts, settlement or fixture file differs from c3f43b7; App.tsx gains only the one hook read and four prop hand-offs (no drain, link-callback or runGameplayAction change).",
+   "Owner ruling at integration: for AUD-03.11 / R4 a refused proposal may leave the form open with its typed values preserved so the player can correct and resend.",
+   "Tracking only in this record's commit: W3-I and its four rows read INTEGRATED; no other slice changed state."
+  ],
+  "follow_ups": [
+   "LOW (integration review, W3-I coverage): the Buy Trains from a Corporation offer form still closes on Send (TrainPurchasePanel setSelection(null)); a second press is prevented (canPropose excludes the link hold), but its queued line shows only if the form is reopened while the link holds the offer, and a dropped train offer must be retyped. Outside AUD-03.11's cited source; a later pass may keep that form too.",
+   "Carried, unchanged (from the W2-F integration): LOW -- duplicate waiting presentation during an emergency funding private offer for non-president seats; NIT -- the waitingSentence prop comments name dockHold.turnHoldReason; NIT -- older tracking prose still calls superseded branches current.",
+   "LOW (deferred, W2-F, unchanged): on the Stocks tab nothing scrolls the trade recipient to the offer's card."
+  ],
+  "versions": {
+   "RULES_ENGINE_VERSION": 13,
+   "SUPPORTED_RULES_ENGINE_VERSIONS": [
+    13
+   ],
+   "SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS": [
+    10,
+    11,
+    12,
+    13
+   ],
+   "keys": "unchanged from 7916763 / c3f43b7 (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
+  },
+  "lanes": "W2-B, W2-C, W2-G, v13 settlement certification, W2-D, W2-F and W3-I COMPLETE and INTEGRATED (lane L3 complete); no accepted slice awaits integration; not deployable until drained v12 rooms and the final integrated owner gate"
  }
 }

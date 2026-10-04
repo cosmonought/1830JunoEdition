@@ -53,6 +53,15 @@ before anything else.**
   - g2 prepared but UNADOPTED, outside Terraform;
   - 0 money games, RELAYQ empty;
   - the recovery role absent, break-glass off.
+- **External Terraform stacks** (the first P1-R1 run, 2026-10-04, stopped correctly on them). Both state objects sit in
+  `s3://gs-staging-tfstate-992163310414/gs/staging/`, beside this repository's stacks, and neither stack's configuration
+  is in this repository:
+  - **rpc-proxy** (`rpc-proxy.tfstate`, from the ops-local checkout `1830-staging-ops\rpc-proxy`):
+    - CloudFront distribution `E271XZAA1MQR4H`, the CORS proxy for the uni-7 RPC `juno.rpc.t.stavr.tech`;
+    - its origin-request and response-headers policies.
+    - The published frontend's `pin-final.json` and the Keplr money path use it. Owner classification: **KEEP-DURABLE**.
+  - **network** (`network.tfstate`, created 2026-10-01): **REVIEW**. Its contents are not yet enumerated; it may own the
+    VPC, subnets, route tables, IGW, NAT and NAT EIP.
 
 ## 1. The milestones
 
@@ -103,11 +112,11 @@ Each entry records:
 
 | Class | Resources (staging names) |
 |---|---|
-| **KEEP-DURABLE** | game table `gs-staging-game-g1`; identity table; the p1 runtime document and the Juno document; ECR `gs-staging-server`; the CloudFront distribution + its `/gs*` origin-request policy; the bootstrap and operator roles (+ the absent recovery role's capability); the ledger table + resource policy; the locked backup vault, plan, selection and role (+ its customer-managed key / copy vault, if configured); the KMS signing keys; the Terraform state backends; `play.<domain>` and its viewer certificate |
-| **KEEP-HOST** | the instance `i-01fe56536bf591382`; its ENI, EIP + association, security group + rules; `gs-staging-host-app` (role, profile, inline policy); the log group `/gs/staging/host` and the five host alarms; the monthly budget; the ECR lifecycle policy (created in R4); the origin A record |
+| **KEEP-DURABLE** | the external **rpc-proxy** stack (`external-terraform:rpc-proxy`, `gs/staging/rpc-proxy.tfstate`): distribution `E271XZAA1MQR4H` and policies `gs-staging-uni7-rpc-origin-request` / `gs-staging-uni7-rpc-cors` -- never touched by Phase 1; game table `gs-staging-game-g1`; identity table; the p1 runtime document and the Juno document; ECR `gs-staging-server`; the CloudFront distribution + its `/gs*` origin-request policy; the bootstrap and operator roles (+ the absent recovery role's capability); the ledger table + resource policy; the locked backup vault, plan, selection and role (+ its customer-managed key / copy vault, if configured); the KMS signing keys; the Terraform state backends; `play.<domain>` and its viewer certificate |
+| **KEEP-HOST** | the instance `i-01fe56536bf591382`; its ENI, EIP + association, security group + rules; `gs-staging-host-app` (role, profile, inline policy); the log group `/gs/staging/host` and the five host alarms; the monthly budget; the ECR lifecycle policy (created in R4); the origin A record; the VPC, subnets, route tables and IGW (KEEP / NEVER DELETE, whichever stack owns them: ownership `unresolved` until R1) |
 | **DELETE-LEGACY** | ECS cluster `gs-staging`, services p1 / p2 and their task-definition revisions (T8d: `skip_destroy` leaves them ACTIVE); ALB `gs-staging-alb`, listener, rules, target groups; ALB / task / endpoint security groups and rules; the gateway and interface VPC endpoints; task and execution roles (+ policies); pool log groups `/gs/staging/p1`, `/gs/staging/p2`; the L6-5B alarms, composites and flip suppressors; `/gs/staging/runtime/p2`; the Container Insights log groups; the ALB's origin DNS name and ACM certificate |
 | **DELETE-MIGRATION** | `gs-staging-game-g2` (the unadopted restore), only after its preconditions are proven -- owner decision, not a closure blocker |
-| **REVIEW** | the NAT gateway and its EIP (DELETE only on the T7 evidence that it is this workload's alone); the VPC, subnets, route tables, IGW (never deleted by Phase 1); the host-deploy principal; the alarm destinations; the service-linked roles; the evidence exports and any on-demand backups |
+| **REVIEW** | the external **network** stack (`external-terraform:network`, `gs/staging/network.tfstate`; contents UNKNOWN until R1); the NAT gateway and its EIP (ownership `unresolved`: deleted only on T7's ownership rule AND its evidence); the host-deploy principal; the alarm destinations; the service-linked roles; the evidence exports and any on-demand backups |
 
 **Principal effects (the IAM / KMS question):**
 - Every cross-account grant in `modules/ledger` names the app account root with an `aws:PrincipalArn` condition. So
@@ -120,11 +129,35 @@ Each entry records:
 **State reconciliation needed:** none to import. g2 was never imported, and stays out. The desired-count drift ends in
 T3: the services are destroyed, never restarted.
 
-**Live confirmation (the LIVE session, read-only; the prompt in §11 A).** Every live resource of the app and ledger
-accounts that carries the environment's names or tags, or that the stacks' state lists, is matched to an inventory
-entry. Its `terraform state list` per stack, the three read-only plans of T0.9, the host's rendered configuration (§6)
-and the NAT facts (T0.10) are recorded. **A live resource the inventory cannot place, or any state drift, is a STOP**
-(an owner decision; the source inventory is amended in a reviewed change).
+**External Terraform ownership.** The inventory distinguishes four ownership forms (`ownership_forms`):
+- `terraform:<app|ledger|single-host>`: this repository's stacks;
+- `external-terraform:<stack>`: a staging stack whose configuration is elsewhere, with its `state_key`;
+- `outside-terraform:<who>`: no Terraform known;
+- `unresolved:<candidates>`: not yet proven, and never mutated.
+
+`terraform_states` lists every known state object.
+
+**Live confirmation (the LIVE session, read-only; the prompt in §11 A).**
+- **Every Terraform state object.** R1 enumerates every state object under the staging state bucket(s) and prefix --
+  not only the states this repository expects. Each is named and mapped to a `terraform_states` entry. For each
+  EXTERNAL state, R1 records:
+  - the S3 key, and whether it can be read;
+  - its resource addresses (a read-only `terraform state list`, or an equivalent read-only state inspection that saves
+    nothing but the addresses);
+  - the live resources behind them, and their inventory classification;
+  - the owning checkout or stack, if known;
+  - whether any Phase-1 teardown step proposes to mutate one of them.
+  - **An unknown state is a STOP**, exactly like an unknown resource. The known list is not a closed count: five are
+    known today (app, ledger, single-host, rpc-proxy, network).
+- **Every live resource.** Every live resource of the app and ledger accounts that carries the environment's names or
+  tags, or that any state lists, is matched to an inventory entry.
+- **Also recorded:**
+  - the three read-only plans of T0.9;
+  - the host's rendered configuration (§6);
+  - the NAT facts (T0.10), including whether the NAT and NAT EIP are members of `network.tfstate`;
+  - which state, if any, holds the VPC, subnets, route tables and IGW.
+- **A live resource or state the inventory cannot place, or any state drift, is a STOP.** It is an owner decision, and
+  the source inventory is amended in a reviewed change.
 
 ## 4. P1-R2 — Source / IaC reconciliation (this branch)
 
@@ -159,9 +192,14 @@ The smallest change that makes the active Phase-1 procedure "final state → dir
 - **T4** host restart onto the p1-only document (`-Measure`);
 - **T5** `ledger-task-deauthorize`;
 - **T6** Container Insights log groups;
-- **T7** the NAT, on evidence only;
+- **T7** the NAT: ownership first, then evidence. A Terraform-owned NAT is never deleted directly; an unproven
+  ownership BLOCKS T7;
 - **T8** the ALB's DNS name and certificate, the ECS task-definition revisions, and optionally g2;
 - **T9** read-only proof that the legacy plane is gone.
+
+**External stacks.** No teardown step touches the rpc-proxy stack: T1's plan is the app stack's, targeted at its own
+distribution, and T0 / T9 only read `E271XZAA1MQR4H`. No teardown step touches the network stack either, except through
+T7's separately reviewed change (if the NAT belongs to it).
 
 **Why this order.** The existing guards fix T1 before T3:
 - `edge-cutover` refuses `compute = "none"`;
@@ -223,9 +261,13 @@ After it: 12b on the new host, deploy, and the R5 suite in full, plus `host-cert
 ## 7. P1-R5 — Direct final-system certification
 
 **Preconditions:**
-- R3 complete except T7, which may still be in its ≥ 24 h wait, and T9 recorded except its NAT row.
+- R3 complete except T7, which may still be in its ≥ 24 h wait or BLOCKED on the NAT's ownership, and T9 recorded except
+  its NAT row.
   - A1 then names that NAT with `--allow-nat <nat-...>`, marked **PROVISIONAL** in the record.
-  - Z, the closure record, is taken only after T7 and T9's NAT row, and never with a provisional `--allow-nat`;
+  - Z, the closure record, is taken only after T7 and T9's NAT row, and never with a provisional `--allow-nat`.
+  - If the NAT stays because its ownership is unproven, or because it belongs to an external stack whose reviewed change
+    has not run, Z waits. The exception is the owner's recorded amendment of the closure policy, under which Z names that
+    NAT as an owner-ruled exception, not a provisional one;
 - R4 complete;
 - every drill and probe run from the reviewed checkout, with a NEW run id per run;
 - the evidence under `<D>\r5\`.
@@ -350,7 +392,10 @@ Phase 1 closes when all six hold, each with its record:
 3. **The direct money smoke is green:** E1–E3.
 4. **This workload's obsolete hosting resources are gone:** every `DELETE-LEGACY` inventory entry absent (T9).
    - the NAT is gone, or recorded by T7 as another workload's;
-   - g2 is the owner's separate decision.
+   - if T7 is BLOCKED (ownership unproven), or the NAT belongs to an external stack whose reviewed change has not run,
+     R6 waits -- unless the owner explicitly amends the closure policy (recorded);
+   - g2 is the owner's separate decision;
+   - the external rpc-proxy stack is KEEP-DURABLE: never part of this item.
 5. **The source budget guard passes:** `cost1SingleHost` and `phase1CleanBuild` (the owner's gate).
 6. **The projected steady state is ≤ $30 / month:** the `COST_BUDGET.json` items priced on-demand (≈ $23.20) and
    nothing else billed for this workload.
@@ -417,13 +462,17 @@ budget's alerts. Any later billing evidence above $30 / month reopens the cost i
 
 **A. P1-R1 read-only inventory** -- what to read:
 - every resource in the inventory's `live_names` (present / absent);
-- `terraform state list` of each stack;
+- EVERY Terraform state object under the staging state bucket(s) and prefix: each named and mapped to
+  `terraform_states`, with its contents listed read-only. At least app, ledger, single-host, `gs/staging/rpc-proxy.tfstate`
+  and `gs/staging/network.tfstate`; an unknown state is a STOP;
 - the T0.9 plans;
 - the host's rendered configuration and script hashes (§6 item 1): `gs-host -Command status`, plus ONE read-only Run
   Command under the host-deploy principal printing `sha256sum /opt/gs/bin/* /etc/systemd/system/gs-*.service` and the
   lines of `/etc/gs/server.env` and `/etc/gs/host.env`. Both files hold references only, never a secret: any line that
   looks like a credential is a STOP;
-- the NAT facts and T_drain (T0.10);
+- the NAT facts, T_drain and the NAT's / NAT EIP's state membership (T0.10); which state holds the VPC, subnets,
+  route tables and IGW;
+- the rpc-proxy distribution's ETag and status, and the external state objects' metadata (T0.11);
 - the ALB deletion-protection value;
 - `gamesDoctor aws status` / `games --money` / `orphans`;
 - any `gs-staging*` / `gs:environment=staging` resource NOT in the inventory (a STOP).

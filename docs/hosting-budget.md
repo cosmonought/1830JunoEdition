@@ -44,6 +44,17 @@ browser ──https──► CloudFront (existing distribution; play.<domain> un
   - The classification is `infra/aws/PHASE1_INVENTORY.json`.
   - The ECS-era teardown is `infra/aws/PHASE1_LEGACY_TEARDOWN.md`.
   - The former migration runbook, `infra/aws/SINGLE_HOST_MIGRATION.md`, is the historical record.
+- **External staging stacks** (outside this repository's IaC; found by P1-R1, 2026-10-04):
+  - **`rpc-proxy`**:
+    - a second CloudFront distribution, `E271XZAA1MQR4H`: the CORS proxy for the uni-7 RPC that the published frontend
+      and the Keplr money path use;
+    - owner classification KEEP-DURABLE;
+    - pay-as-you-go with no fixed charge, so its usage counts under the CloudFront line;
+    - §3's "no new CloudFront distribution" is this repository's IaC rule (the guard scans `scan_roots`). This owner-kept
+      external distribution is not a breach of it. Whether `COST_BUDGET.json` should list it is an owner decision, not
+      made here.
+  - **`network`**: may own the VPC and the NAT. The NAT's cost leaves this workload only through
+    `PHASE1_LEGACY_TEARDOWN.md` T7's ownership rule.
 
 ## 3. Prohibited fixed-cost resources (unless the owner changes this decision)
 

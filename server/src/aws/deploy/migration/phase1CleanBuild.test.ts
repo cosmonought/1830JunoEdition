@@ -17,6 +17,11 @@
 //              acceptance rule names the drills' own availability-only checks
 //   pointers   SINGLE_HOST_MIGRATION.md is RETIRED as the governing plan; the canonical context, the budget record and
 //              the READMEs point at PHASE1_CLEAN_BUILD.md; this suite runs in `npm test` and the owner gate
+//   external   (PHASE 1 EXTERNAL-STACK INVENTORY AMENDMENT) staging Terraform stacks whose configuration is NOT in this
+//              repository: the rpc-proxy stack is KEEP-DURABLE and no teardown step can touch it; the network stack is
+//              REVIEW with its state key recorded; every known state is listed and mapped; R1 stops on an unknown
+//              state; the VPC / subnets / route tables / IGW are never deleted; T7 never deletes a Terraform-owned NAT
+//              directly and BLOCKS on unproven ownership
 
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
@@ -115,7 +120,10 @@ describe("P1-R1: the retain / delete / review inventory", () => {
     for (const e of ENTRIES) {
       assert.ok((CLASSES as readonly string[]).includes(e.class), `${e.id}: class ${e.class}`);
       for (const field of ["what", "ownership", "account", "resources", "live_names", "dependencies", "reversible", "principal_effect", "state_action", "budget_items"]) assert.ok(field in e, `${e.id} has ${field}`);
-      assert.ok(/^(terraform:(app|ledger|single-host)\b|outside-terraform:)/.test(e.ownership), `${e.id}: ownership ${e.ownership}`);
+      assert.ok(/^(terraform:(app|ledger|single-host)\b|external-terraform:[a-z][a-z0-9-]*$|outside-terraform:|unresolved:)/.test(e.ownership), `${e.id}: ownership ${e.ownership}`);
+      /* An external Terraform stack is recorded with its state; unresolved ownership is never deleted. */
+      if (e.ownership.startsWith("external-terraform:")) assert.match(String(e.state_key), /^s3:\/\/[a-z0-9.-]+\/.+\.tfstate$/, `${e.id}: its state_key`);
+      if (e.ownership.startsWith("unresolved:")) assert.ok(!e.class.startsWith("DELETE"), `${e.id}: unresolved ownership is never in a delete class`);
       if (stackOf(e) === null) assert.deepEqual(e.resources, [], `${e.id}: an outside resource names no Terraform declaration`);
       else assert.ok(e.resources.length > 0, `${e.id}: a Terraform entry names its declarations`);
       /* A deletion has its place in the teardown; a kept resource has none; a REVIEW entry may name the step that judges it. */
@@ -188,12 +196,12 @@ describe("P1-R1: the retain / delete / review inventory", () => {
     for (const e of ENTRIES.filter((x) => x.class === "KEEP-HOST")) for (const [t] of e.resources) assert.ok(!(BUDGET.prohibited_resource_types as string[]).includes(t), `${e.id}: ${t} is prohibited in the low-cost topology`);
   });
 
-  test("the NAT and the VPC are REVIEW (never deleted without evidence); g2 is deleted only after its proof; nothing outside Terraform is silently kept or deleted", () => {
+  test("the NAT is REVIEW and the VPC KEEP (never deleted); g2 is deleted only after its proof; nothing outside Terraform is silently kept or deleted", () => {
     const byId = new Map(ENTRIES.map((e) => [e.id, e] as const));
     assert.equal(byId.get("outside.nat-gateway")?.class, "REVIEW");
     assert.equal(byId.get("outside.nat-gateway")?.teardown_step, "T7", "T7's evidence gate judges it (and a FAIL keeps it)");
     for (const e of ENTRIES.filter((x) => x.class === "REVIEW" && x.id !== "outside.nat-gateway")) assert.equal(e.teardown_step, undefined, `${e.id}: Phase 1 deletes no other REVIEW resource`);
-    assert.equal(byId.get("outside.vpc")?.class, "REVIEW");
+    assert.equal(byId.get("outside.vpc")?.class, "KEEP-HOST", "the VPC, subnets, route tables and IGW: KEEP / NEVER DELETE, whichever stack owns them");
     assert.match(String(byId.get("outside.vpc")?.state_action), /deletes no VPC, subnet, route table or IGW/);
     const g2 = byId.get("outside.g2-table");
     assert.equal(g2?.class, "DELETE-MIGRATION");
@@ -247,6 +255,135 @@ describe("P1-R1: the retain / delete / review inventory", () => {
     /* Retired is not deleted: the source stays (operational / recovery tooling). */
     for (const file of ["server/src/aws/deploy/migration/planGuards.ts", "server/src/aws/deploy/hostcert/scenarios.ts", "server/src/aws/deploy/hostVerify.ts"]) assert.ok(fs.existsSync(path.join(REPO, file)), file);
     assert.match(read("server/src/aws/deploy/migration/planGuards.ts"), /case "ecs-rollback":/);
+  });
+});
+
+/* ================================================================== */
+
+describe("P1-R1 amendment: staging Terraform stacks whose configuration is NOT in this repository", () => {
+  const byId = new Map(ENTRIES.map((e) => [e.id, e] as const));
+  const STATES = INVENTORY.terraform_states as { rule: string; known: Array<{ stack: string; ownership: string; key: string; configuration: string; contents: string }> };
+  const RPC_STATE = "s3://gs-staging-tfstate-992163310414/gs/staging/rpc-proxy.tfstate";
+  const NETWORK_STATE = "s3://gs-staging-tfstate-992163310414/gs/staging/network.tfstate";
+  const RPC_IDS = ["E271XZAA1MQR4H", "87caeb33-3047-4fd6-9d43-13a84cde1f30", "b5ed161f-d059-4e48-b706-abef86b0954c"];
+  const mentionsRpc = (text: string) => /rpc-proxy|E271XZAA1MQR4H|87caeb33-3047|b5ed161f-d059|uni7-rpc/.test(text);
+
+  test("rpc-proxy: KEEP-DURABLE, external Terraform, its state key, its distribution and both policies named, never torn down", () => {
+    const rpc = byId.get("external.rpc-proxy");
+    assert.ok(rpc, "the rpc-proxy stack is classified");
+    assert.equal(rpc.class, "KEEP-DURABLE");
+    assert.equal(rpc.ownership, "external-terraform:rpc-proxy");
+    assert.equal(rpc.state_key, RPC_STATE);
+    const names = (rpc.live_names as string[]).join("\n");
+    for (const id of [...RPC_IDS, "gs-staging-uni7-rpc-origin-request", "gs-staging-uni7-rpc-cors", "d3d68n2c5eingb.cloudfront.net"]) assert.ok(names.includes(id), id);
+    assert.match(String(rpc.what), /juno\.rpc\.t\.stavr\.tech/);
+    assert.match(String(rpc.what), /pin-final\.json/);
+    assert.equal(rpc.teardown_step, undefined);
+    /* No entry that names the proxy may sit in a delete class. */
+    for (const e of ENTRIES.filter((x) => mentionsRpc(JSON.stringify(x)))) assert.ok(!e.class.startsWith("DELETE"), `${e.id} names the rpc-proxy and is ${e.class}`);
+    assert.ok(ENTRIES.filter((x) => x.ownership === "external-terraform:rpc-proxy").every((x) => x.class === "KEEP-DURABLE"));
+  });
+
+  test("network: REVIEW / external Terraform, its state key recorded, its contents deliberately UNKNOWN, never torn down", () => {
+    const net = byId.get("external.network-stack");
+    assert.ok(net);
+    assert.equal(net.class, "REVIEW");
+    assert.equal(net.ownership, "external-terraform:network");
+    assert.equal(net.state_key, NETWORK_STATE);
+    assert.deepEqual(net.resources, []);
+    assert.match((net.live_names as string[]).join(" "), /UNKNOWN until R1 enumerates network\.tfstate/);
+    assert.equal(net.teardown_step, undefined);
+    /* What it may own keeps its Phase-1 class: the VPC family KEEP, the NAT REVIEW -- both unresolved until R1. */
+    assert.ok(byId.get("outside.vpc")?.class.startsWith("KEEP"));
+    assert.equal(byId.get("outside.nat-gateway")?.class, "REVIEW");
+    for (const id of ["outside.vpc", "outside.nat-gateway"]) assert.match(String(byId.get(id)?.ownership), /^unresolved:.*external-terraform:network/, id);
+  });
+
+  test("every known staging state is listed and mapped both ways; the list is not a closed count", () => {
+    const stacks = STATES.known.map((x) => x.stack);
+    assert.equal(new Set(stacks).size, stacks.length, "each state once");
+    for (const stack of ["app", "ledger", "single-host", "rpc-proxy", "network"]) assert.ok(stacks.includes(stack), `${stack} is listed`);
+    assert.equal(STATES.known.find((x) => x.stack === "rpc-proxy")?.key, RPC_STATE);
+    assert.equal(STATES.known.find((x) => x.stack === "network")?.key, NETWORK_STATE);
+    assert.match(STATES.known.find((x) => x.stack === "network")?.contents ?? "", /^UNKNOWN until R1 enumerates it/);
+    for (const st of STATES.known) {
+      const owners = ENTRIES.filter((e) => e.ownership === st.ownership);
+      assert.ok(owners.length > 0, `${st.stack}: an inventory entry carries ${st.ownership}`);
+      if (st.ownership.startsWith("external-terraform:")) {
+        assert.equal(owners.length, 1, `${st.stack}: one entry for the external stack`);
+        assert.equal(owners[0].state_key, st.key, `${st.stack}: the entry's state_key is the listed key`);
+        assert.match(st.configuration, /^NOT in this repository/);
+      } else assert.ok(fs.existsSync(path.join(REPO, st.configuration)), `${st.stack}: its configuration is this repository's ${st.configuration}`);
+    }
+    /* Every external or candidate ownership the entries name is a listed state. */
+    for (const e of ENTRIES) for (const m of e.ownership.matchAll(/external-terraform:([a-z][a-z0-9-]*)/g)) assert.ok(stacks.includes(m[1]), `${e.id} names the unlisted state ${m[1]}`);
+    assert.match(STATES.rule, /An unlisted state is a STOP/);
+    assert.match(STATES.rule, /The list is not closed/);
+    assert.match(read("infra/aws/README.md"), /gs\/staging\/rpc-proxy\.tfstate/);
+  });
+
+  test("R1 enumerates EVERY staging Terraform state, records what the brief asks per external state, and STOPS on an unknown one", () => {
+    assert.match(PLAN, /R1 enumerates every state object under the staging state bucket\(s\) and prefix/);
+    assert.match(PLAN, /\*\*An unknown state is a STOP\*\*, exactly like an unknown resource/);
+    assert.match(PLAN, /The known list is not a closed count/);
+    for (const item of [/the S3 key, and whether it can be read/, /its resource addresses/, /the live resources behind them, and their inventory classification/, /the owning checkout or stack, if known/, /whether any Phase-1 teardown step proposes to mutate one of them/]) assert.match(PLAN, item);
+    const prompt = PLAN.slice(PLAN.indexOf("**A. P1-R1 read-only inventory**"), PLAN.indexOf("**B. The OWNER-GO boundary for P1-R3**"));
+    assert.match(prompt, /`gs\/staging\/rpc-proxy\.tfstate`/);
+    assert.match(prompt, /`gs\/staging\/network\.tfstate`; an unknown state is a STOP/);
+    assert.match(TEARDOWN, /A Terraform state that `PHASE1_INVENTORY\.json` `terraform_states` does not list is a STOP/);
+  });
+
+  test("no Phase-1 teardown step can touch the rpc-proxy: it is only READ, and nothing mutates a CloudFront resource but T1's guarded app plan", () => {
+    assert.match(TEARDOWN, /\*\*External Terraform stacks are never touched\.\*\*/);
+    const commands = [...TEARDOWN.matchAll(/`(aws [^`]+)`/g)].map((m) => m[1]);
+    for (const c of commands.filter(mentionsRpc)) assert.match(c, /^aws (cloudfront get-distribution|s3api head-object) /, `a read only: ${c}`);
+    assert.ok(commands.some((c) => c.startsWith("aws cloudfront get-distribution --id E271XZAA1MQR4H")), "T0.11 / T9 read it");
+    assert.ok(!commands.some((c) => /^aws cloudfront (create|update|delete|tag|untag)-/.test(c)), "no direct CloudFront mutation anywhere");
+    assert.ok(!commands.some((c) => /^aws s3 (cp|mv|rm|sync)|^aws s3api (put|delete|copy)-/.test(c)), "no state object is written");
+    for (const step of ["## T1 ", "## T2 ", "## T3 ", "## T4 ", "## T5 ", "## T6 ", "## T7 ", "## T8 "]) {
+      const from = TEARDOWN.indexOf(step);
+      const next = TEARDOWN.indexOf("\n## ", from + 1);
+      const body = TEARDOWN.slice(from, next);
+      const named = body.split("\n").filter(mentionsRpc);
+      if (step === "## T1 ") assert.ok(named.length === 1 && /lives in another state, so it can never appear in it/.test(named[0]), `T1 names it only to exclude it: ${named.join(" / ")}`);
+      else assert.deepEqual(named, [], `${step.trim()} names the rpc-proxy`);
+    }
+    assert.match(TEARDOWN, /the rpc-proxy distribution `E271XZAA1MQR4H` lives in another state, so it can never appear in it/);
+    const t9 = TEARDOWN.slice(TEARDOWN.indexOf("## T9 "));
+    assert.match(t9, /\| rpc-proxy \| `aws cloudfront get-distribution --id E271XZAA1MQR4H [^|]*\| T0\.11's answer, unchanged/);
+  });
+
+  test("T7: ownership first -- a Terraform-owned NAT is never deleted directly; unproven ownership BLOCKS; provisional NAT; R6 waits", () => {
+    const t7 = TEARDOWN.slice(TEARDOWN.indexOf("## T7 "), TEARDOWN.indexOf("## T8 "));
+    assert.match(t7, /^## T7 — The NAT gateway: ownership first, then evidence \(fail closed\)/);
+    assert.match(t7, /- \*\*Terraform-owned\*\* -- the NAT or its EIP is in `network\.tfstate`, or in any other listed state:\n  - \*\*no direct AWS deletion\*\*/);
+    assert.match(t7, /the deletion is a separately reviewed change against the OWNING stack/);
+    assert.match(t7, /only the NAT \/ NAT-EIP removals plus the expected route-table consequences/);
+    assert.match(t7, /the >= 24 h post-T3 evidence below must PASS first, and the owner's GO comes after both/);
+    assert.match(t7, /- \*\*Ownership unproven\*\*[^\n]*\*\*T7 is BLOCKED\.\*\*/);
+    assert.match(t7, /R5 continues, with A1 naming it PROVISIONAL/);
+    assert.match(t7, /R6's final closure waits until the ownership is resolved, or until the owner explicitly amends the closure policy/);
+    /* The direct deletion exists ONLY under the "proven NOT Terraform-owned" path, and the Terraform-owned path stops. */
+    const only = t7.indexOf(`**ONLY on the "proven NOT Terraform-owned" path**`);
+    const stop = t7.indexOf("**Terraform-owned:** STOP here.");
+    assert.ok(only > 0 && stop > only, "the direct path, then the Terraform-owned STOP");
+    for (const cmd of ["aws ec2 delete-nat-gateway", "aws ec2 release-address"]) {
+      assert.equal(TEARDOWN.split(cmd).length - 1, 1, `${cmd}: written once`);
+      const at = t7.indexOf(cmd);
+      assert.ok(at > only && at < stop, `${cmd} only under the proven-not-Terraform-owned path`);
+    }
+    assert.match(TEARDOWN, /\| GO-T7 \| `GO P1-R3 T7 delete NAT <nat-\.\.\.> and release <eipalloc-\.\.\.> \(nat guard PASS; R1: not Terraform-owned\)` -- ONLY on T7's "proven NOT Terraform-owned" path/);
+    assert.match(PLAN, /if T7 is BLOCKED \(ownership unproven\), or the NAT belongs to an external stack whose reviewed change has not run,\s+R6 waits/);
+    assert.match(TEARDOWN, /0\.10 \*\*The NAT\*\*[\s\S]*?\*\*its ownership, as P1-R1 proved it from the states' contents:\*\*/);
+  });
+
+  test("the VPC, subnets, route tables and IGW are never deleted, whichever stack owns them", () => {
+    const vpcWords = /\bVPC\b(?! endpoints?)|\bsubnets?\b|route tables?|internet gateway|\bIGW\b/i;
+    for (const e of ENTRIES.filter((x) => x.class.startsWith("DELETE"))) {
+      assert.doesNotMatch([String(e.what), ...(e.live_names as string[])].join("\n"), vpcWords, `${e.id} (${e.class}) must not name a VPC / subnet / route table / IGW`);
+    }
+    assert.match(TEARDOWN, /On every path, the VPC, its subnets, route tables and IGW are never deleted \(`outside\.vpc`, KEEP\)/);
+    assert.ok(!/aws ec2 delete-(vpc|subnet|route-table|route|internet-gateway)\b|detach-internet-gateway/.test(TEARDOWN), "no VPC-family deletion command");
   });
 });
 
@@ -450,7 +587,7 @@ describe("P1-R0 / P1-R6: the governing plan and its pointers", () => {
 
   test("the canonical context, the budget record and the READMEs point at the governing plan", () => {
     const context = read("PROJECT_CANONICAL_CONTEXT.md");
-    assert.match(context.split("\n").find((l) => l.startsWith("**Last updated:**")) ?? "", /PHASE 1 CLEAN-BUILD RESET/);
+    assert.match(context.split("\n").find((l) => l.startsWith("**Last updated:**")) ?? "", /PHASE 1 (CLEAN-BUILD RESET|EXTERNAL-STACK INVENTORY AMENDMENT)/);
     assert.match(context, /\*\*The governing plan is `infra\/aws\/PHASE1_CLEAN_BUILD\.md`:\*\*/);
     assert.match(read("docs/hosting-budget.md"), /`infra\/aws\/PHASE1_CLEAN_BUILD\.md`/);
     assert.match(read("infra/aws/README.md"), /the governing Phase-1 plan is `infra\/aws\/PHASE1_CLEAN_BUILD\.md`/);

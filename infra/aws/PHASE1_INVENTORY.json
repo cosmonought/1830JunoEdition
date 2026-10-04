@@ -3,7 +3,23 @@
   "decision": "PHASE 1 CLEAN-BUILD RESET (owner, 2026-10-04): the staging service has no production users, so Phase 1 is a clean build of the FINAL single-host topology and its direct certification, not a continuity-preserving migration. The final topology, the money/security authorities and the $30/month ceiling are unchanged (docs/hosting-budget.md, infra/aws/COST_BUDGET.json).",
   "governing_procedure": "infra/aws/PHASE1_CLEAN_BUILD.md",
   "teardown_procedure": "infra/aws/PHASE1_LEGACY_TEARDOWN.md",
-  "scope": "Every AWS resource the repository's Terraform declares (modules/app, modules/ledger, modules/single-host -- each declaration classified exactly once, pinned by server/src/aws/deploy/migration/phase1CleanBuild.test.ts) and every resource outside Terraform that the repository's procedures created, depend on or must remove. Live names are staging's (environment `staging`); another environment substitutes its own. This is the SOURCE classification; P1-R1 confirms it read-only against live AWS and STOPS on any live resource it cannot place here.",
+  "scope": "Every AWS resource the repository's Terraform declares (modules/app, modules/ledger, modules/single-host -- each declaration classified exactly once, pinned by server/src/aws/deploy/migration/phase1CleanBuild.test.ts) and every resource outside this repository's Terraform that its procedures created, depend on or must remove -- including the staging Terraform stacks whose configuration is NOT in this repository (`ownership_forms`, `terraform_states`). Live names are staging's (environment `staging`); another environment substitutes its own. This is the SOURCE classification; P1-R1 confirms it read-only against live AWS and STOPS on any live resource it cannot place here.",
+  "ownership_forms": {
+    "terraform:<app|ledger|single-host>": "one of THIS repository's stacks (configuration under infra/aws/stacks; its state listed in terraform_states)",
+    "external-terraform:<stack>": "a Terraform stack whose configuration is NOT in this repository (an ops-local checkout); the entry records its state_key, which terraform_states lists. Phase 1 never plans, applies or edits it, except through a separately reviewed change against that stack",
+    "outside-terraform:<who>": "not Terraform-managed, as far as the evidence shows",
+    "unresolved:<candidate>|<candidate>": "ownership not yet proven: P1-R1 resolves it from the states' contents, and nothing with unresolved ownership is mutated"
+  },
+  "terraform_states": {
+    "rule": "EVERY Terraform state object P1-R1 finds under the staging state bucket(s) and prefix is listed here and mapped to an ownership. An unlisted state is a STOP, exactly like an unplaced AWS resource. The list is not closed: it records what is known. A newly found state is added only by an owner decision and a reviewed amendment, never by R1 itself.",
+    "known": [
+      { "stack": "app", "ownership": "terraform:app", "key": "this repository's convention gs/<env>/app.tfstate (-backend-config key=...); R1 records the live bucket and key", "configuration": "infra/aws/stacks/app", "source": "repository", "contents": "R1: terraform state list" },
+      { "stack": "ledger", "ownership": "terraform:ledger", "key": "the same convention, gs/<env>/ledger.tfstate, in the ledger account's backend if that account is separate; R1 records it", "configuration": "infra/aws/stacks/ledger", "source": "repository", "contents": "R1: terraform state list" },
+      { "stack": "single-host", "ownership": "terraform:single-host", "key": "the single-host stack's -backend-config key; R1 records it", "configuration": "infra/aws/stacks/single-host", "source": "repository", "contents": "R1: terraform state list" },
+      { "stack": "rpc-proxy", "ownership": "external-terraform:rpc-proxy", "key": "s3://gs-staging-tfstate-992163310414/gs/staging/rpc-proxy.tfstate", "configuration": "NOT in this repository: the ops-local checkout 1830-staging-ops\\rpc-proxy", "source": "the P1-R1 live report (2026-10-04)", "contents": "R1: a read-only state list / state read. The report named one CloudFront distribution, one origin-request policy and one response-headers policy" },
+      { "stack": "network", "ownership": "external-terraform:network", "key": "s3://gs-staging-tfstate-992163310414/gs/staging/network.tfstate", "configuration": "NOT in this repository; the owning checkout is not yet recorded (R1)", "source": "the P1-R1 live report (2026-10-04): the object exists, created 2026-10-01", "contents": "UNKNOWN until R1 enumerates it. Some or all of the VPC, subnets, route tables, internet gateway, NAT gateway and NAT EIP may be in it" }
+    ]
+  },
   "classes": {
     "KEEP-DURABLE": "KEEP -- durable application / security authority (never deleted, replaced or moved by Phase 1)",
     "KEEP-HOST": "KEEP -- the final low-cost hosting plane (stacks/single-host and its DNS)",
@@ -413,15 +429,15 @@
     {
       "id": "outside.terraform-state",
       "class": "KEEP-DURABLE",
-      "what": "The S3 backends holding the three stacks' state (app, ledger, single-host), and any state-lock table if one exists.",
+      "what": "The S3 state backend(s) and any state-lock table. They hold this repository's three stacks (app, ledger, single-host) AND independently managed staging stacks whose configuration is not in this repository (rpc-proxy, network: see terraform_states). The repository does not own those stacks' configuration.",
       "ownership": "outside-terraform:owner",
       "account": "both",
       "resources": [],
-      "live_names": ["the -backend-config bucket / keys gs/<env>/{app,ledger,single-host}.tfstate"],
+      "live_names": ["bucket gs-staging-tfstate-992163310414 (P1-R1 report)", "this repository's keys (gs/<env>/{app,ledger}.tfstate convention; the single-host key)", "external keys gs/staging/rpc-proxy.tfstate and gs/staging/network.tfstate", "any other key R1 finds: a STOP until listed"],
       "dependencies": ["every guarded plan reads it"],
       "reversible": "kept",
       "principal_effect": "none",
-      "state_action": "R1 records `terraform state list` of each stack (read-only)",
+      "state_action": "R1 lists EVERY state object under the staging prefix and records each one's contents read-only (terraform state list for this repository's stacks; a read-only state list or state read for the external ones)",
       "budget_items": ["S3 (Terraform state)"]
     },
     {
@@ -485,8 +501,8 @@
     {
       "id": "outside.nat-gateway",
       "class": "REVIEW",
-      "what": "The existing VPC's NAT gateway (and its Elastic IP) that the ECS tasks used for Juno egress. Not created by this repository. DELETE only if the NAT evidence gate proves it belongs to this workload alone; otherwise it is another workload's and is excluded from this workload's cost by an owner decision.",
-      "ownership": "outside-terraform:existing VPC",
+      "what": "The VPC's NAT gateway (and its Elastic IP) that the ECS tasks used for Juno egress. Not created by this repository's Terraform, but possibly a member of the external network stack's state. Deleted only when T7's ownership rule AND its evidence gate both allow it; otherwise it stays (another workload's, or ownership unproven).",
+      "ownership": "unresolved:external-terraform:network|outside-terraform",
       "account": "app",
       "resources": [],
       "live_names": ["nat-... (R1 records the id, its subnet, its EIP and every route table naming it)"],
@@ -494,21 +510,21 @@
       "teardown_step": "T7",
       "reversible": "NO for its public IP (a recreated NAT gets a new address); the gateway itself is recreatable",
       "principal_effect": "none",
-      "state_action": "none (outside Terraform)",
+      "state_action": "none until R1 proves ownership. If it is in network.tfstate: only a separately reviewed plan against that stack, never a direct AWS deletion. If proven outside Terraform: T7's evidence path. If unproven: T7 is BLOCKED (the NAT stays; R6 waits or the owner amends closure policy)",
       "budget_items": []
     },
     {
       "id": "outside.vpc",
-      "class": "REVIEW",
-      "what": "The existing VPC, its subnets (public: the host; private: the former task subnets), route tables and internet gateway. Not created by this repository.",
-      "ownership": "outside-terraform:existing VPC",
+      "class": "KEEP-HOST",
+      "what": "The VPC, its subnets (public: the host's; private: the former task subnets), route tables and internet gateway. Not created by this repository's Terraform, but possibly members of the external network stack's state. KEEP / NEVER DELETE in Phase 1, whichever stack owns them: the host needs its public subnet, its route table and the IGW.",
+      "ownership": "unresolved:external-terraform:network|outside-terraform",
       "account": "app",
       "resources": [],
       "live_names": ["network.vpc_id and its subnets (R1 records them)"],
       "dependencies": ["the host's public subnet and IGW route are REQUIRED", "the private subnets / route tables cost nothing"],
       "reversible": "kept",
       "principal_effect": "none",
-      "state_action": "none -- Phase 1 deletes no VPC, subnet, route table or IGW",
+      "state_action": "none -- Phase 1 deletes no VPC, subnet, route table or IGW (R1 records which state, if any, holds them)",
       "budget_items": []
     },
     {
@@ -525,6 +541,38 @@
       "reversible": "NO without a backup",
       "principal_effect": "none",
       "state_action": "none (never imported)",
+      "budget_items": []
+    },
+    {
+      "id": "external.rpc-proxy",
+      "class": "KEEP-DURABLE",
+      "what": "The external rpc-proxy stack: a CloudFront distribution that is the CORS proxy for the uni-7 RPC juno.rpc.t.stavr.tech (one origin, id uni7-rpc), with its origin-request and response-headers policies. The published frontend's pin-final.json points at it, and the browser / Keplr money path uses it: it is NOT legacy or migration debris. CloudFront is pay-as-you-go here, with no fixed charge; its usage counts under the CloudFront line (R6 item 6).",
+      "ownership": "external-terraform:rpc-proxy",
+      "state_key": "s3://gs-staging-tfstate-992163310414/gs/staging/rpc-proxy.tfstate",
+      "owning_checkout": "ops-local 1830-staging-ops\\rpc-proxy (not this repository)",
+      "account": "app",
+      "resources": [],
+      "live_names": ["CloudFront distribution E271XZAA1MQR4H (d3d68n2c5eingb.cloudfront.net; comment '1830/Juno staging: CORS proxy for the uni-7 RPC juno.rpc.t.stavr.tech'; tags gs:environment=staging, gs:managed-by=terraform, gs:stack=rpc-proxy)", "origin-request policy 87caeb33-3047-4fd6-9d43-13a84cde1f30 (gs-staging-uni7-rpc-origin-request)", "response-headers policy b5ed161f-d059-4e48-b706-abef86b0954c (gs-staging-uni7-rpc-cors)"],
+      "dependencies": ["the published frontend's pin-final.json", "the browser / Keplr money gate (R5-E2)", "the upstream uni-7 RPC juno.rpc.t.stavr.tech"],
+      "reversible": "kept",
+      "principal_effect": "none",
+      "state_action": "none -- never planned, applied, edited or deleted by Phase 1. T1's targeted app-stack plan cannot reach it (it lives in another state). T0 records its ETag; T9 re-reads it unchanged",
+      "budget_items": []
+    },
+    {
+      "id": "external.network-stack",
+      "class": "REVIEW",
+      "what": "The external network stack (its state object, created 2026-10-01). Its resources are deliberately UNKNOWN until P1-R1 enumerates the state. Some or all of the VPC, subnets, route tables, internet gateway, NAT gateway and NAT EIP may be in it. Any VPC / subnet / route table / IGW found there stays KEEP (outside.vpc). A NAT / NAT EIP found there stays REVIEW under T7's ownership rule (outside.nat-gateway).",
+      "ownership": "external-terraform:network",
+      "state_key": "s3://gs-staging-tfstate-992163310414/gs/staging/network.tfstate",
+      "owning_checkout": "not yet recorded (R1)",
+      "account": "app",
+      "resources": [],
+      "live_names": ["UNKNOWN until R1 enumerates network.tfstate (read-only)"],
+      "dependencies": ["R1's read-only enumeration of the state", "outside.vpc and outside.nat-gateway resolve their ownership against it"],
+      "reversible": "kept",
+      "principal_effect": "none",
+      "state_action": "none -- Phase 1 plans, applies and edits nothing in it. Removing a NAT from it would be a separately reviewed change against this stack (T7), not part of this repository",
       "budget_items": []
     },
     {

@@ -3,7 +3,25 @@
 **Read this file first.** It is the small, current map of the project. It states where things stand, which documents
 are the current truth, what must not change, and how work is done here.
 
-**Last updated:** 2026-10-04, by PHASE 1 CLEAN-BUILD RESET on `phase1/clean-build-reset` (from `50c1cfc`; NOT merged; docs / inventory / two stack-variable defaults removed / tests / the owner gate's Phase-1 list and live-certification wording -- no runtime, image, gameplay, settlement, contract, guard code, module, `stacks/single-host`, host-script or AWS change; nothing run against AWS or Juno). **Owner decision:** staging has no production users, so the ECS → single-host **migration procedure is RETIRED as the governing Phase-1 plan**; the final single-host architecture is NOT abandoned. **The governing plan is `infra/aws/PHASE1_CLEAN_BUILD.md`:**
+**Last updated:** 2026-10-04, by PHASE 1 EXTERNAL-STACK INVENTORY AMENDMENT on `phase1/clean-build-reset` (on `529a03e`; NOT merged; inventory / runbook / docs / tests only -- no runtime, Terraform, guard or AWS change). **The trigger:** the first P1-R1 LIVE inventory stopped, correctly, on an unclassified live resource.
+- **The resource:** CloudFront distribution `E271XZAA1MQR4H`, the CORS proxy for the uni-7 RPC `juno.rpc.t.stavr.tech` that the published frontend's `pin-final.json` and the Keplr money path use. It comes from an ops-local Terraform stack, `rpc-proxy` (`s3://gs-staging-tfstate-992163310414/gs/staging/rpc-proxy.tfstate`).
+- **A second external state:** the same discovery found `gs/staging/network.tfstate` (created 2026-10-01).
+
+**The amendment:**
+- **Ownership forms:** the inventory now distinguishes this repository's stacks, `external-terraform:<stack>` (with its `state_key`), `outside-terraform` and `unresolved` ownership, and lists every known state in `terraform_states`.
+- **rpc-proxy:** KEEP-DURABLE, never touched by Phase 1. T0 / T9 only read its ETag; T1 cannot reach it.
+- **network:** REVIEW / external, its contents UNKNOWN until R1 enumerates them.
+- **VPC, subnets, route tables, IGW:** KEEP / never delete, whichever stack owns them.
+- **NAT / NAT EIP:** REVIEW, with `unresolved` ownership.
+- **R1 rule:** R1 enumerates EVERY staging Terraform state object; an unknown state is a STOP.
+- **T7 rule (ownership first, fail closed):**
+  - a Terraform-owned NAT is never deleted directly. Only a separately reviewed plan against the owning stack may remove it, after the >= 24 h post-T3 evidence and the owner's GO;
+  - a NAT proven outside Terraform follows the existing evidence path;
+  - if ownership is unproven, T7 is BLOCKED: the NAT stays provisional, R5 continues, and R6 waits or the owner amends the closure policy.
+
+**Tests:** `phase1CleanBuild` pins all of this. Record: Project `claude/PHASE1_EXTERNAL_STACK_INVENTORY_AMENDMENT_2026-10-04.md`.
+
+**Before that:** 2026-10-04, by PHASE 1 CLEAN-BUILD RESET on `phase1/clean-build-reset` (from `50c1cfc`; NOT merged; docs / inventory / two stack-variable defaults removed / tests / the owner gate's Phase-1 list and live-certification wording -- no runtime, image, gameplay, settlement, contract, guard code, module, `stacks/single-host`, host-script or AWS change; nothing run against AWS or Juno). **Owner decision:** staging has no production users, so the ECS → single-host **migration procedure is RETIRED as the governing Phase-1 plan**; the final single-host architecture is NOT abandoned. **The governing plan is `infra/aws/PHASE1_CLEAN_BUILD.md`:**
 - P1-R0: freeze;
 - P1-R1: inventory -- `infra/aws/PHASE1_INVENTORY.json`, every Terraform declaration and outside resource classified KEEP-DURABLE / KEEP-HOST / DELETE-LEGACY / DELETE-MIGRATION / REVIEW;
 - P1-R2: this source reconciliation;
@@ -301,6 +319,12 @@ When this file names a Project document, it writes `Project: claude/<name>`.
 - **The teardown:** `infra/aws/PHASE1_LEGACY_TEARDOWN.md`, executed by the dedicated LIVE session only:
   - T0 read-only (incl. the required exports: pool logs, alarm history, state pulls); T1 edge-cutover (before T3: the guards fix the order); T2 ALB unprotect if needed; T3 compute-none; T4 host restart `-Measure`; T5 ledger-task-deauthorize; T6 Container Insights; T7 the NAT on evidence (capture >= 24 h after T3); T8 leftovers (incl. the task-definition revisions); T9 proof;
   - an owner GO per mutation: the reversible T1 / T2 / T4 / T5 may be batched; T3, T6, T7 and each T8 item need their own message after their judged plan / listing / evidence.
+- **External Terraform stacks (the amendment):**
+  - `rpc-proxy` (uni-7 RPC CORS proxy, distribution `E271XZAA1MQR4H`) is KEEP-DURABLE and never touched;
+  - the `network` state is REVIEW until R1 enumerates it;
+  - the VPC, subnets, route tables and IGW are KEEP;
+  - the NAT's ownership decides T7's path. A Terraform-owned NAT is removed only by a reviewed change to its own stack; unproven ownership is BLOCKED;
+  - R1 enumerates every staging state; an unknown state is a STOP.
 - **The principal effect:** every cross-account ledger / KMS grant names the app account root with an `aws:PrincipalArn` condition, so deleting the ECS task role invalidates no policy. T5 removes its name so that a new role of that name inherits nothing.
 - **Final-system certification:** `PHASE1_CLEAN_BUILD.md` §7 (A topology, B runtime, C safety authority, D persistence / signing, E money, F edge).
   - Its acceptance rule: a host-cert record is accepted on PASS, or on NOT EVALUATED whose only open checks are the readiness-503 sampler or the journal wording (with EXIT_CODE / EXIT_STATUS proven).

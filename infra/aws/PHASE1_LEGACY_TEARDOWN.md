@@ -38,6 +38,13 @@ zero-downtime requirement (`/gs*` has been offline since the pools were drained;
 - Anything a step names "read-only" that would need a write is a STOP.
 - A money game opening, a `RELAYQ#` entry appearing, an ECS task starting, a HOLD on the host or a second writer at any
   point is a STOP.
+- **External Terraform stacks are never touched.** A plan, command or console action that would change a resource of a
+  stack whose configuration is not in this repository is a STOP. The known stacks are rpc-proxy and network
+  (`PHASE1_INVENTORY.json` `terraform_states`). The one exception is T7's separately reviewed change against the
+  owning network stack.
+  - The rpc-proxy distribution `E271XZAA1MQR4H` (the uni-7 RPC CORS proxy the published frontend and the Keplr money
+    path use) and its two policies are only ever READ.
+- A Terraform state that `PHASE1_INVENTORY.json` `terraform_states` does not list is a STOP (P1-R1's rule).
 
 ## The OWNER-GO boundary
 
@@ -62,7 +69,7 @@ Each GO names its object:
 | GO-T4 | `GO P1-R3 T4 restart <instance id> on <digest> -Measure` | host stop + deploy (minutes of downtime) |
 | GO-T5 | `GO P1-R3 T5 ledger-task-deauthorize: apply <D>\teardown\t5\terraform\ledger\stack.tfplan (guard PASS)` | the task role leaves the ledger and key policies |
 | GO-T6 | `GO P1-R3 T6 delete log groups <each full name>` | Container Insights groups |
-| GO-T7 | `GO P1-R3 T7 delete NAT <nat-...> and release <eipalloc-...> (nat guard PASS)` | the NAT gateway and its EIP |
+| GO-T7 | `GO P1-R3 T7 delete NAT <nat-...> and release <eipalloc-...> (nat guard PASS; R1: not Terraform-owned)` -- ONLY on T7's "proven NOT Terraform-owned" path | the NAT gateway and its EIP |
 | GO-T8a / T8b / T8c / T8d | `GO P1-R3 T8a delete DNS <name>` / `T8b delete certificate <ARN>` / `T8c delete table gs-staging-game-g2` / `T8d deregister task definitions <the listed revision ARNs>` | legacy leftovers |
 
 A GO for an object other than the one T0 / the guard recorded is not a GO.
@@ -136,8 +143,18 @@ Save everything under `<D>\teardown\t0\`.
         and the same for `StartTask` names no `gs-staging` cluster.
     - T_drain is **unproven** if the events no longer reach back to it, if T_drain is more than 60 days old (CloudWatch's
       1,440 hourly points), or if CloudTrail's 90-day history does not cover it. T7 then anchors at T3.
+    - **its ownership, as P1-R1 proved it from the states' contents:** whether the NAT gateway and its EIP are members of
+      `network.tfstate` (or of any other listed state), or proven outside Terraform, or unproven. T7's path follows from
+      this answer.
+0.11 **The external stacks, unchanged and accounted for** (read-only):
+    - R1's record lists EVERY staging state object, each mapped in `PHASE1_INVENTORY.json` `terraform_states`; any other
+      state is a STOP;
+    - `aws cloudfront get-distribution --id E271XZAA1MQR4H --query "[ETag, Distribution.Status, Distribution.DistributionConfig.Origins.Items[0].DomainName]"`
+      → its ETag, `Deployed`, `juno.rpc.t.stavr.tech` (T9 compares the same answer);
+    - each external state object's metadata, `aws s3api head-object --bucket gs-staging-tfstate-992163310414 --key gs/staging/rpc-proxy.tfstate --query "[ETag, LastModified]"`
+      (and `.../network.tfstate`). This is metadata only; the state's contents are never saved.
 
-**T0 PASSES** only when 0.1–0.10 all hold. Then the owner's GO lines.
+**T0 PASSES** only when 0.1–0.11 all hold. Then the owner's GO lines.
 
 ## T1 — Repoint CloudFront `/gs*` at the host (GO-T1)
 
@@ -156,7 +173,9 @@ it is destroyed).
    node dist/server/src/tools/awsDeploy.js migration-guard edge-cutover --plan-evidence <D>\teardown\t1\terraform\app --environment staging --app-account <app> --origin-domain <origin_hostname> --arm64-live-smoke <the 12b capture> --release-digest <the serving sha256> --instance-id i-01fe56536bf591382 --commit <T0.1 sha> --record <D>\teardown\guards\t1-edge.json
    ```
    PASS: only the `gs-alb` origin's `domain_name` moves to the host; nothing else of the distribution, no ECS, table, key,
-   IAM or document change.
+   IAM or document change. The plan is the app stack's, targeted at `module.app.aws_cloudfront_distribution.site[0]`;
+   the rpc-proxy distribution `E271XZAA1MQR4H` lives in another state, so it can never appear in it. A plan naming any
+   other distribution is a STOP.
 4. **GO-T1**, then `terraform -chdir=infra/aws/stacks/app apply <D>\teardown\t1\terraform\app\stack.tfplan` (Terraform
    warns that `-target` makes the plan incomplete: expected).
 5. `aws cloudfront wait distribution-deployed --id <distribution id>` (re-run on a timeout; never continue on a timeout),
@@ -245,12 +264,33 @@ CloudWatch created them itself; no Terraform state holds them; T3 stopped their 
 3. **GO-T6** -- its own owner message, naming each group step 1 listed -- then `aws logs delete-log-group --log-group-name <full name>` for each -- never a
    wildcard -- and list the prefix again: empty (`<D>\teardown\t6\after.txt`).
 
-## T7 — The NAT gateway: delete only on evidence (GO-T7)
+## T7 — The NAT gateway: ownership first, then evidence (fail closed)
 
-The NAT is outside Terraform and belongs to the existing VPC (inventory `outside.nat-gateway`, **REVIEW**). It is deleted
-only if the evidence gate proves no other workload uses it. This wait is evidence about OTHER users, not migration
-continuity: R4 and R5 proceed meanwhile (R5's A1 names the pending NAT as PROVISIONAL), and it delays only R5's closure
-record Z and R6.
+The NAT is not this repository's Terraform (inventory `outside.nat-gateway`, **REVIEW**). It may be a member of the
+external network stack's state, `s3://gs-staging-tfstate-992163310414/gs/staging/network.tfstate`. It is deleted only
+when BOTH hold:
+- its ownership path allows a deletion;
+- the evidence gate proves no other workload uses it.
+
+This wait is evidence about OTHER users, not migration continuity. R4 and R5 proceed meanwhile (R5's A1 names the
+pending NAT as PROVISIONAL); it delays only R5's closure record Z and R6.
+
+**Ownership first (T0.10, from P1-R1's enumeration of every state):**
+- **Terraform-owned** -- the NAT or its EIP is in `network.tfstate`, or in any other listed state:
+  - **no direct AWS deletion**: no `delete-nat-gateway`, no `release-address` and no console action, because each would
+    leave the owning state stale;
+  - the deletion is a separately reviewed change against the OWNING stack, outside this repository. Its exact plan must
+    show only the NAT / NAT-EIP removals plus the expected route-table consequences (the private tables' default route
+    to the NAT);
+  - the >= 24 h post-T3 evidence below must PASS first, and the owner's GO comes after both;
+  - this repository defines no such change. T7 records its plan, its review and its result.
+- **Proven NOT Terraform-owned** (in no listed state, and R1 proved it): the evidence path below, then step 4's direct
+  deletion.
+- **Ownership unproven** -- a state could not be read or enumerated, or the answer is ambiguous: **T7 is BLOCKED.**
+  - The NAT stays, provisionally.
+  - R5 continues, with A1 naming it PROVISIONAL.
+  - R6's final closure waits until the ownership is resolved, or until the owner explicitly amends the closure policy.
+- On every path, the VPC, its subnets, route tables and IGW are never deleted (`outside.vpc`, KEEP).
 
 **The window.**
 - `capture-nat-evidence`'s `TeardownAppliedAt` argument is the start of the quiet window. The guard needs >= 24 whole
@@ -276,13 +316,17 @@ record Z and R6.
    must say `COST-2B NAT DELETION EVIDENCE: PASS`.
 3. The owner confirms in the record's notes what evidence cannot prove: the VPC is not RAM-shared with another account,
    and no planned workload is waiting for this NAT.
-4. The session posts 1–3. Then, on **GO-T7** (its own owner message):
-   - `aws ec2 delete-nat-gateway --nat-gateway-id <nat-...>`;
-   - `aws ec2 wait nat-gateway-deleted --nat-gateway-ids <nat-...>`;
-   - `aws ec2 release-address --allocation-id <its eipalloc-...>`.
+4. The session posts 1–3 and the ownership answer.
+   - **ONLY on the "proven NOT Terraform-owned" path**, then on **GO-T7** (its own owner message):
+     - `aws ec2 delete-nat-gateway --nat-gateway-id <nat-...>`;
+     - `aws ec2 wait nat-gateway-deleted --nat-gateway-ids <nat-...>`;
+     - `aws ec2 release-address --allocation-id <its eipalloc-...>`.
 
-   The private route tables keep a blackhole default route: harmless, and Phase 1 deletes no route table (`outside.vpc`
-   is REVIEW).
+     The private route tables keep a blackhole default route: harmless, and Phase 1 deletes no route table
+     (`outside.vpc` is KEEP).
+   - **Terraform-owned:** STOP here. The separately reviewed change against the owning stack, with its own GO, replaces
+     this step.
+   - **Unproven:** T7 is BLOCKED (above).
 
 **A FAIL keeps the NAT.** It is then another workload's (or not yet proven quiet): record it, and the owner decides
 whether it is excluded from this workload's cost (R6 item 6) or investigated. Never delete it on a FAIL.
@@ -329,8 +373,10 @@ Each answer saved under `<D>\teardown\t9\`:
 | log groups | `aws logs describe-log-groups --log-group-name-prefix /gs/staging/` | only `/gs/staging/host` |
 | Container Insights | `aws logs describe-log-groups --log-group-name-prefix /aws/ecs/containerinsights/gs-staging/` | none |
 | alarms | `aws cloudwatch describe-alarms --alarm-name-prefix gs-staging --alarm-types MetricAlarm CompositeAlarm` | exactly the five `gs-staging-host-*` metric alarms, no composite |
-| NAT | `aws ec2 describe-nat-gateways --filter Name=vpc-id,Values=<vpc-...> Name=state,Values=pending,available` | none (or the one T7 kept, recorded) |
-| EIPs | `aws ec2 describe-addresses` | the host's EIP, plus only the kept NAT's EIP (if T7 kept it) and the addresses R1 placed as other workloads'; no unassociated address |
+| NAT | `aws ec2 describe-nat-gateways --filter Name=vpc-id,Values=<vpc-...> Name=state,Values=pending,available` | none, or the one T7 kept / BLOCKED / left to the owning stack's reviewed change (recorded) |
+| EIPs | `aws ec2 describe-addresses` | the host's EIP, plus only the NAT's EIP while T7 keeps or blocks it, and the addresses R1 placed as other workloads'; no unassociated address |
+| rpc-proxy | `aws cloudfront get-distribution --id E271XZAA1MQR4H --query "[ETag, Distribution.Status, Distribution.DistributionConfig.Origins.Items[0].DomainName]"` | T0.11's answer, unchanged (same ETag, `Deployed`, `juno.rpc.t.stavr.tech`) |
+| external states | `aws s3api head-object --bucket gs-staging-tfstate-992163310414 --key gs/staging/rpc-proxy.tfstate --query "[ETag, LastModified]"` (and `network.tfstate`) | T0.11's answer, unchanged -- `network.tfstate` changes only through T7's separately reviewed change, if one ran |
 | ledger | `LEDGER-ADMIN`: `aws dynamodb get-resource-policy --resource-arn <ledger ARN>`; `aws kms get-key-policy --key-id <each signing key> --policy-name default` | no `gs-staging-app-task`; `gs-staging-host-app` present |
 | state | `terraform -chdir=infra/aws/stacks/app state list` | no ECS-era address |
 

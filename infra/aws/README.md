@@ -17,6 +17,15 @@ belongs to the LIVE-6 staging gate.
 > The final topology, its guards and every money / fencing semantic are unchanged. `stacks/app`'s `compute` and
 > `stacks/ledger`'s `ecs_task_role_authorized` now have NO default (every plan states them; the final values are `"none"`
 > and `false`).
+>
+> **External Terraform stacks (P1-R1, 2026-10-04).** The staging state bucket (`gs-staging-tfstate-992163310414`) also
+> holds stacks whose configuration is NOT in this repository:
+> - `gs/staging/rpc-proxy.tfstate`: CloudFront `E271XZAA1MQR4H`, the uni-7 RPC CORS proxy the frontend and the Keplr money
+>   path use. KEEP-DURABLE, never touched;
+> - `gs/staging/network.tfstate`: REVIEW, contents unknown until R1 enumerates them.
+>
+> R1 enumerates every staging state; an unknown state is a STOP. The NAT's state membership decides T7: a Terraform-owned
+> NAT is never deleted directly (`PHASE1_INVENTORY.json` `terraform_states`; `PHASE1_LEGACY_TEARDOWN.md` T7).
 
 > **COST-1 (2026-10-02): the low-cost single-host topology.** The owner's hard ceiling is **$30/month** for the whole
 > recurring infrastructure (target <= $20): `docs/hosting-budget.md`, `infra/aws/COST_BUDGET.json` (pinned by

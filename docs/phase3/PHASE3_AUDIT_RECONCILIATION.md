@@ -234,6 +234,22 @@ COMPLETE; no W3-K work changed, and on the provisional baseline that follows W2-
   the v13 UI authority; the dedicated v13 settlement certification; pinned v12 rooms drained; the final integrated owner
   gate. (W2-A and the safe integration reconciliation are done on `phase3/wave2a-v13-integration`.)
 
+## W2-C slice status (2026-10-04)
+
+**Branch** `phase3/w2-c-offer-authority` @ `0975c04` (code `e629687`, independent-review fixes `0975c04`) from `phase3/wave2a-integration` @
+`96ccb22`. **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). A pure binding,
+`utils/offerAuthorityView.ts`, hands each offer panel the engine's own predicate, bound once per board (beside `dockHold`) to the
+seat and the operating corporation: the Buy Private Company panel asks `proposePrivatePurchaseRefusal` (card availability at the
+band's floor, the submit at the typed price); the corporate train roster asks `proposeTrainPurchaseRefusal`, or `trainSaleRefusal`
+at "settlement" for the same-president sale the shell sends directly (each badge at the $1 opening offer, the form at the typed
+price). The panels' local copies of the law are deleted (`offerPriceProblem`, `privatePurchaseBlockReason`, `trainPriceError`, the
+roster's train-limit arm); refusals are the authority's sentences. W2-A's hold answer is unchanged and still asked first: under a
+hold the predicates are not consulted and every card / badge carries the hold's sentence. The embedded `ProposePrivatePurchase`
+submit is latched (the shell's in-flight latch plus a same-commit latch). Corporation-owned privates remain unlisted, now pinned.
+AUD-09.02 and AUD-09.03 IMPLEMENTED. Tests: `phase3W2COfferAuthority`, `phase3W2COfferPanels`; moved pins `privateRowDensity`,
+`baltimorePrivate`. Not taken: the Stock Round share controls / M&H chip residue W2-A assigned to "W2-C / W2-F" (outside W2-C's
+surfaces). Rules version unchanged (v12); settlement unchanged.
+
 ## Scope and closing remark
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |

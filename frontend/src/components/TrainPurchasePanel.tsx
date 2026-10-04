@@ -48,6 +48,8 @@ import { stationTickerColor } from "./hexContractTypes";
    for them -- asked, never restated, so the roster greys exactly what `trainSaleRefusal` refuses. */
 import { finalRunPositions } from "../gameEngine/gentleRustGrace";
 import { gildedSalePositions, reprievedSaleReason } from "../gameEngine/trainSaleAuthority";
+/* Phase 3 W2-C (AUD-09.02): the sale's authority, as the shell binds it, and the typed price as that authority reads it. */
+import { offerPriceForAuthority, type TrainOfferIntent } from "../utils/offerAuthorityView";
 import { CONSENT_IN_FLIGHT_TITLE } from "../utils/offerConsentView";
 /* Design note #1702 (GR-3): the trade-in row's inputs -- the table's price and the Final Run copies included --
    as `dieselExchangeOfferFor` builds them. Re-exported for the bar, which forwards it. */
@@ -108,15 +110,16 @@ export interface TrainTradeProposal {
   bloodPrice?: boolean;
 }
 
-/** A price is any integer of at least 1 -- `train_trade::MINIMUM_TRAIN_PRICE`.
- *  Validated as a STRING; see `TrainTradeProposal.price`. */
-export function trainPriceError(raw: string): string | null {
-  const trimmed = raw.trim();
-  if (trimmed.length === 0) return "Enter a price.";
-  if (!/^\d+$/.test(trimmed)) return "Whole numbers only.";
-  if (/^0+$/.test(trimmed)) return "A train must sell for at least $1.";
-  return null;
-}
+/* Phase 3 W2-C (AUD-09.02 / U-21): `trainPriceError` IS DELETED. Its three sentences ("Enter a price.", "Whole numbers
+   only.", "A train must sell for at least $1.") were this panel's copy of rule 6.6's floor; the sale's own predicate
+   (`trainSaleRefusal`) says it once, in its words, and the offer form now asks that predicate (`offerRefusal`). The price
+   is still carried as a STRING (`TrainTradeProposal.price`): the canonical whole-VGP spelling the authority judged
+   (`offerPriceForAuthority`). */
+
+/** Phase 3 W2-C: the price the offer form opens on -- and so the price each roster badge is asked about. $1 is the
+ *  cheapest the sale's authority could accept: every price rule it asks (6.6's floor, the treasury, D-6's two caps) is
+ *  met first by the lowest price, so a refusal at the opening offer is a refusal at every price. */
+const OPENING_TRAIN_OFFER = "1";
 
 /* `countByModel` is GONE with design note #282. It collapsed a roster into model-and-count for the trade
    badges and nothing else ever wanted that shape -- the corporation table has always drawn one chip per
@@ -203,6 +206,13 @@ export interface TrainPurchasePanelProps {
    *  immediately or waits on the seller is the caller's decision, because
    *  only the caller knows who is signing. */
   onProposeTrade: (proposal: TrainTradeProposal) => void;
+  /** Phase 3 W2-C (AUD-09.02 / U-21): THE SALE'S AUTHORITY, bound by the shell to this board and seat
+   *  (`utils/offerAuthorityView.ts`): `proposeTrainPurchaseRefusal` for an offer, `trainSaleRefusal` at "settlement" for
+   *  the same-president purchase the shell sends directly. `null` is a legal offer. Asked per roster badge at the opening
+   *  offer and by the offer form at the typed price; its sentences are shown as they are. Consulted only while no hold
+   *  stands (`blockedReason` is asked first). Absent, the section states no rule of its own: only the hold greys, and the
+   *  dispatch is judged at the door. */
+  offerRefusal?: (offer: TrainOfferIntent) => string | null;
   /** Renders a wallet as a readable name. */
   labelForAddress: (address: string) => string;
   /* ==================================================================
@@ -251,6 +261,7 @@ export function TrainPurchasePanel({
   onBuyReturnedTrain,
   discardReceipt = null,
   onProposeTrade,
+  offerRefusal,
   labelForAddress,
   colorForAddress,
   defaultCorporateOpen = false,
@@ -334,7 +345,7 @@ export function TrainPurchasePanel({
     position: number;
     gilded: boolean | null;
   } | null>(null);
-  const [priceText, setPriceText] = useState("1");
+  const [priceText, setPriceText] = useState(OPENING_TRAIN_OFFER);
 
   // Design note #182 (App.tsx): the depot sells the cheapest tier it still
   // holds, and only that one. `depotInventory` already applies the queue
@@ -578,12 +589,23 @@ export function TrainPurchasePanel({
      Design note #485: the reason no longer ends "scrap or sell a train before buying another" -- a
      corporation cannot scrap and the Bank does not buy trains back, so the sentence instructed the player to
      take an action 1830 does not contain. It is a lock, not a prerequisite. */
-  const tradeBlockedReason: string | null =
-    blockedReason ??
-    (atTrainLimit
-      ? `Train limit reached — ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`
-      : null);
-  const canTrade = canAct && sessionReady && tradeBlockedReason === null;
+  /* ==================================================================
+      PHASE 3 W2-C (AUD-09.02 / U-21): THE ROSTER READS THE SALE'S AUTHORITY
+     ==================================================================
+     #281's train-limit arm (and `trainPriceError`'s floor, above) were this section's copy of the law, and it never
+     asked the predicate the reducer asks of an intercorporate sale (`trainSaleRefusal`, through
+     `proposeTrainPurchaseRefusal` for an offer). So it greyed only for the limit, and offered every other train the
+     authority would refuse -- outside the Purchase Trains step, a seller with no president, a copy UR-4 makes ambiguous,
+     a treasury that cannot meet even the $1 floor, a D-6 cap.
+     NOW THE SHELL HANDS THAT PREDICATE IN (`offerRefusal`), and the roster asks it once per badge at the opening offer
+     ($1, `OPENING_TRAIN_OFFER`). A sentence every asked badge shares (the limit, the step, the treasury) is said once,
+     above the roster, where #281 put the limit; a sentence only some badges carry is said under their row. The offer
+     form asks again at the typed price. The limit is therefore said in the sale authority's words here; the depot's own
+     sentence above belongs to a different message (`BuyHardwareFromPool`) and is not this slice's.
+     THE HOLD STILL COMES FIRST (`blockedReason`, W2-A): while one stands the predicate is not asked, and every badge and
+     the form carry the hold's sentence, exactly as before. Final Run copies keep #1702's own sentence and are not asked
+     (the authority refuses them in those same words). */
+  const canTrade = canAct && sessionReady && blockedReason === null;
 
   /* Design note #232: ONLY LIST CORPORATIONS THAT HAVE SOMETHING TO SELL. It listed all seven with a "no
      trains" placeholder each, on the reasoning that a complete roster is easier to scan. In practice the
@@ -604,6 +626,47 @@ export function TrainPurchasePanel({
   );
   const selectedSeller = sellers.find((entry) => entry.company_id === selection?.sellerId) ?? null;
 
+  /** Phase 3 W2-C: the authority's answer for each roster badge at the opening offer, keyed `seller:position`, and the
+   *  one sentence (if any) every asked badge shares. Empty while a hold stands or with no authority bound. Identical
+   *  questions (same seller, model and copy) are asked once. */
+  const rosterRefusals = useMemo(() => {
+    const byBadge = new Map<string, string>();
+    let asked = 0;
+    if (blockedReason !== null || offerRefusal === undefined) return { byBadge, shared: null as string | null };
+    const answers = new Map<string, string | null>();
+    for (const company of sellers) {
+      const trains = company.owned_trains ?? [];
+      const finalRunAt = finalRunPositions(company);
+      const gildedAt = gildedSalePositions(company);
+      const gildedModels = new Set(trains.filter((_, at) => gildedAt[at]));
+      for (let position = 0; position < trains.length; position += 1) {
+        if (finalRunAt[position] === true) continue;
+        const model = trains[position];
+        const named = gildedModels.has(model) ? gildedAt[position] === true : null;
+        const question = `${company.company_id}:${model}:${String(named)}`;
+        if (!answers.has(question)) {
+          answers.set(
+            question,
+            offerRefusal({
+              sellerProtocolId: company.company_id,
+              modelType: model,
+              price: OPENING_TRAIN_OFFER,
+              ...(named === null ? {} : { gilded: named }),
+            }),
+          );
+        }
+        asked += 1;
+        const refusal = answers.get(question) ?? null;
+        if (refusal !== null) byBadge.set(`${company.company_id}:${position}`, refusal);
+      }
+    }
+    const distinct = Array.from(new Set(byBadge.values()));
+    const shared = asked > 0 && byBadge.size === asked && distinct.length === 1 ? distinct[0] : null;
+    return { byBadge, shared };
+  }, [sellers, blockedReason, offerRefusal]);
+  /** The sentence above the roster: the hold's, else the one the authority gives every badge. */
+  const tradeBlockedReason: string | null = blockedReason ?? rosterRefusals.shared;
+
   // Design note #3 in `TrainTradePanel`: one player presiding over both
   // corporations means the contract settles on the spot and writes no offer.
   // Warned about BEFORE submitting, so the difference does not surprise
@@ -614,9 +677,20 @@ export function TrainPurchasePanel({
     !!selectedSeller.president &&
     selectedSeller.president === buyer.president;
 
-  const priceProblem = trainPriceError(priceText);
+  /* Phase 3 W2-C: the typed offer, asked of the sale's authority at the price typed -- in the canonical spelling it is
+     then sent in (`offerPriceForAuthority`; `NaN` for text that is not a whole number, refused in the authority's words). */
+  const offerPrice = offerPriceForAuthority(priceText);
+  const offerProblem: string | null =
+    selection && selectedSeller && blockedReason === null && offerRefusal !== undefined
+      ? offerRefusal({
+          sellerProtocolId: selectedSeller.company_id,
+          modelType: selection.model,
+          price: offerPrice,
+          ...(selection.gilded === null ? {} : { gilded: selection.gilded }),
+        })
+      : null;
   const canPropose =
-    canTrade && !!selectedSeller && !priceProblem;
+    canTrade && !!selectedSeller && offerProblem === null && typeof offerPrice === "string";
 
   return (
     <div
@@ -1306,6 +1380,15 @@ export function TrainPurchasePanel({
                       .filter((reason): reason is string => reason !== null),
                   ),
                 );
+                /* Phase 3 W2-C: the authority's sentences this row's badges carry that the roster as a whole does not --
+                   said under the row, readable without hovering, like the Final Run notes below. */
+                const saleRefusalNotes = Array.from(
+                  new Set(
+                    (trains ?? [])
+                      .map((_, at) => rosterRefusals.byBadge.get(`${company.company_id}:${at}`) ?? null)
+                      .filter((reason): reason is string => reason !== null && reason !== tradeBlockedReason),
+                  ),
+                );
                 return (
                   <div key={company.company_id} style={styles.rosterRow}>
                     <span style={styles.rosterName}>
@@ -1369,11 +1452,14 @@ export function TrainPurchasePanel({
                           /* UR-4: the copy is named only when the seller holds a gilded copy of this model -- then
                              this badge IS a choice between the Blood Price and an ordinary sale. */
                           const namedCopy = gildedModels.has(model) ? isGilded : null;
+                          // Phase 3 W2-C: the sale's authority at the opening offer (no hold standing; not a Final Run copy).
+                          const saleRefusal = rosterRefusals.byBadge.get(`${company.company_id}:${position}`) ?? null;
+                          const badgeDead = !canTrade || isFinalRun || saleRefusal !== null;
                           return (
                             <button
                               key={`${model}-${position}`}
                               type="button"
-                              disabled={!canTrade || isFinalRun}
+                              disabled={badgeDead}
                               aria-label={
                                 isFinalRun
                                   ? `${model}-train on its Final Run: ${finalRunReason ?? "it cannot be sold to another corporation."}`
@@ -1388,18 +1474,19 @@ export function TrainPurchasePanel({
                                   position,
                                   gilded: namedCopy,
                                 });
-                                setPriceText("1");
+                                setPriceText(OPENING_TRAIN_OFFER);
                               }}
                               style={{
                                 ...styles.badge,
                                 // UR-4: the gold trim first, so the selection's border still shows on a chosen gilded badge.
                                 ...(isGilded ? styles.badgeGilded : {}),
                                 ...(isSelected ? styles.badgeSelected : {}),
-                                ...(!canTrade || isFinalRun ? styles.badgeDisabled : {}),
+                                ...(badgeDead ? styles.badgeDisabled : {}),
                                 ...(isFinalRun ? styles.badgeFinalRun : {}),
                               }}
                               title={
                                 finalRunReason ??
+                                saleRefusal ??
                                 (canTrade && isGilded
                                   ? `Offer for ${company.ticker}'s gold-trimmed Carcosa ${model}-train — buying it pays the Blood Price.`
                                   : canTrade
@@ -1418,6 +1505,11 @@ export function TrainPurchasePanel({
                         not reliably shown, and the rule must not be hover-only. Full width, under the badges. */}
                     {finalRunReasons.map((reason) => (
                       <p key={reason} style={{ ...styles.note, flexBasis: "100%" }} data-testid="sale-final-run-note">
+                        {reason}
+                      </p>
+                    ))}
+                    {saleRefusalNotes.map((reason) => (
+                      <p key={reason} style={{ ...styles.note, flexBasis: "100%" }} data-testid="sale-refusal-note">
                         {reason}
                       </p>
                     ))}
@@ -1489,7 +1581,7 @@ export function TrainPurchasePanel({
                     }}
                     disabled={!canPropose}
                     onClick={() => {
-                      if (!canPropose || !buyer) return;
+                      if (!canPropose || !buyer || typeof offerPrice !== "string") return;
                       onProposeTrade({
                         sellerProtocolId: selectedSeller.company_id,
                         sellerTicker: selectedSeller.ticker,
@@ -1500,14 +1592,15 @@ export function TrainPurchasePanel({
                         buyerProtocolId: buyer.company_id,
                         buyerTicker: buyer.ticker,
                         modelType: selection.model,
-                        price: priceText.trim(),
+                        // Phase 3 W2-C: the canonical spelling the authority judged.
+                        price: offerPrice,
                         // UR-4: the copy, only when the seller holds a gold-trimmed one of this model.
                         ...(selection.gilded === null ? {} : { gilded: selection.gilded }),
                       });
                       setSelection(null);
                     }}
                     title={
-                      priceProblem ??
+                      offerProblem ??
                       (samePresident
                         ? "You preside over both corporations, so this completes immediately."
                         : `Ask ${selectedSeller.president ? labelForAddress(selectedSeller.president) : "the seller"} to accept.`)
@@ -1523,14 +1616,14 @@ export function TrainPurchasePanel({
                     Cancel
                   </button>
                 </div>
-                {priceProblem && <p style={styles.problem}>{priceProblem}</p>}
-                {samePresident && !priceProblem && (
+                {offerProblem && <p style={styles.problem}>{offerProblem}</p>}
+                {samePresident && !offerProblem && (
                   <p style={styles.note}>
                     You are President of both corporations, so this sale completes immediately --
                     no offer is sent and nothing needs accepting.
                   </p>
                 )}
-                {!samePresident && !priceProblem && (
+                {!samePresident && !offerProblem && (
                   <p style={styles.note}>
                     {selectedSeller.president
                       ? `${labelForAddress(selectedSeller.president)} must accept before the train changes hands.`

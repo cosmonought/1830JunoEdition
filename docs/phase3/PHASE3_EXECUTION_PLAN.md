@@ -561,6 +561,7 @@ gates.
 
 #### W2-C
 **Offer panels read their authority** · L3 · **3–4 h**
+- **Status:** COMPLETE on its slice branch `phase3/w2-c-offer-authority` @ `0975c04` (code `e629687` + review fixes `0975c04`, from `96ccb22`); NOT integrated.
 - **Rows:** implements AUD-09.02 (U-21), AUD-09.03 (U-20)
 - **Surfaces:** `PrivateTradePanel.tsx` → `proposePrivatePurchaseRefusal`; `TrainPurchasePanel.tsx` →
   `proposeTrainPurchaseRefusal` / `trainSaleRefusal`; latch the embedded `ProposePrivatePurchase`; a regression that

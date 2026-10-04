@@ -965,7 +965,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—"
+   "notes": "—",
+   "status": "IMPLEMENTED — W2-C `e629687` + review fixes `0975c04` (the corporate roster and offer form ask `proposeTrainPurchaseRefusal`, or `trainSaleRefusal` at settlement for the same-president sale, through `utils/offerAuthorityView.ts`; `trainPriceError` and the local train-limit arm deleted), not integrated"
   },
   {
    "key": "AUD-09.03",
@@ -978,7 +979,8 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "W2-C adds a regression proving corporation-owned privates are not offered (the half the audit stated, not reproduced)."
+   "notes": "W2-C adds a regression proving corporation-owned privates are not offered (the half the audit stated, not reproduced).",
+   "status": "IMPLEMENTED — W2-C `e629687` + review fixes `0975c04` (card availability and the submit ask `proposePrivatePurchaseRefusal`; the local band / treasury / B&O / unsold copy deleted; the embedded submit latched; corporation-owned privates not offered, now pinned), not integrated"
   },
   {
    "key": "AUD-09.04",
@@ -4652,7 +4654,7 @@
   "W1-O": "COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`)",
   "W2-A": "COMPLETE — ACCEPTED and INTEGRATED into `phase3/wave2a-integration` (2026-10-04): slice branch `phase3/w2-a-authoritative-holds` @ `2d0fd0a` (code `e5fcfcc`, tracking `2d0fd0a`) carried linearly onto `bfb7635`, commits unchanged. One hold answer (`utils/dockHoldView.ts`, one App call site) threaded to the bar's `turnHoldReason`, Pass, the tile-lay gate, the token ring and both purchase panels. Residue outside its rows: the Stock Round share controls and the M&H chip still read `privateTradeHoldReason` (same answer on every reachable board; W2-C / W2-F)",
   "W2-B": "COMPLETE — slice branch `phase3/w2-b-stock-round-v13-ui` `90d5588` + review fix `ca68b43` + #1274 fix `794e03c` / `699160c` (from `868bd83`); NOT integrated into the provisional baseline (integration and owner broad gate pending). OD-2 presented over the integrated v13 reducer: one \"Pass Turn\" control (one `PassTurn`; its title says whether the press ends an acted turn or is a true pass), the #1443 stage block / `stockStage` / revision-1 copy removed, Auto-Buy's obsolete stage Pass removed and no Pass after its purchase (`autoBuyTurnStep`: buy at once, then hand the turn back -- the player may sell and presses Pass Turn; #1274), the must-sell banner from `divestmentDebt` (AUD-03.07); W2-A's holds unchanged. Accepted limitation: on a legacy revision-1 board (development-corpus replay only; live rules are [13]) the one Pass Turn's first press walks that board's own Sell -> Buy stage, as its reducer revision says; no v12 shim (OD-2). No reducer change; rules 13, live [13], settlement [10, 11, 12] unchanged",
-  "W2-C": "NOT STARTED — UNLOCKED: its W2-A dependency is integrated at `phase3/wave2a-integration`; unchanged by the v13 integration (`phase3/wave2a-v13-integration`)",
+  "W2-C": "COMPLETE — slice branch `phase3/w2-c-offer-authority` `e629687` + review fixes `0975c04` (from `96ccb22`); NOT integrated (integration and owner broad gate pending). Both offer panels ask the engine's own predicates (`proposePrivatePurchaseRefusal`; `proposeTrainPurchaseRefusal` / `trainSaleRefusal`), bound once per board beside W2-A's `dockHold` (`utils/offerAuthorityView.ts`), which stays asked first; the embedded `ProposePrivatePurchase` submit is latched. Not taken: the Stock Round share controls / M&H chip `privateTradeHoldReason` residue W2-A assigned to \"W2-C / W2-F\" (outside W2-C's surfaces; W2-F / W2-D)",
   "W2-D": "NOT STARTED — UNLOCKED: its W2-A dependency is integrated at `phase3/wave2a-integration`; unchanged by the v13 integration (`phase3/wave2a-v13-integration`)",
   "W2-E": "COMPLETE — `phase3/w2-mh-queued-visibility` `4f998b8` + RR-6 `91037ce`; integrated at the safe Wave-2 integration (`09fcb25`). Residue outside its rows: `privateCatalog.ts`'s MH ability text (W1-L / W2-J copy) and the chip's Stock-Round-only gate (W2-D)",
   "W2-F": "NOT STARTED — UNLOCKED: its W2-A dependency is integrated at `phase3/wave2a-integration`; unchanged by the v13 integration (`phase3/wave2a-v13-integration`)",

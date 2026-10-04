@@ -28,10 +28,10 @@ import {
   isSellableToCorporation,
   settleBaoPrivate,
 } from "../gameEngine/baltimorePrivate";
-import {
-  privatePurchaseBlockReason,
-  purchasablePrivatesInPlay,
-} from "../components/PrivateTradePanel";
+import { purchasablePrivatesInPlay } from "../components/PrivateTradePanel";
+// Phase 3 W2-C: the panel's gate is the proposal's authority, bound as the shell binds it.
+import { privatePriceBounds } from "../gameEngine/privatePriceBand";
+import { privateProposalRefusal } from "./offerAuthorityView";
 import type { GameStateResponse, PrivateCompanyState, PublicCompanyState } from "../gameEngine/gameState";
 
 const ALICE = "juno1alice";
@@ -211,21 +211,35 @@ describe("the corporate sale ban", () => {
     /* Design note #660a: the first draft of this test asserted against
        `eligiblePrivatesForPurchase`, and passed -- against a function no
        caller ever ran. The modal renders `purchasablePrivatesInPlay` and
-       gates selection on `privatePurchaseBlockReason`, so those are what the
-       rule has to hold against.
+       gates selection on what may be proposed, so those are what the rule has
+       to hold against.
+
+       Phase 3 W2-C (AUD-09.03): THE GATE IS THE AUTHORITY NOW. It was
+       `privatePurchaseBlockReason`, a copy of this ban beside the predicate
+       the reducer asks; the panel asks `proposePrivatePurchaseRefusal`
+       itself, bound as the shell binds it (`privateProposalRefusal`), at the
+       band's floor. So the board is moved to phase 3 (PRR holds the first 3)
+       -- the authority asks the phase before it reaches the card.
 
        The B&O is still SHOWN. Design note #386 renders an unbuyable private
        as an inert row so the player learns it exists; what must be true is
        that it can never be selected. */
-    const shown = purchasablePrivatesInPlay(boardBeforeTheFirstTrain().private_companies);
+    const board = boardBeforeTheFirstTrain();
+    const shown = purchasablePrivatesInPlay(board.private_companies);
     expect(shown.map((entry) => entry.private_id)).toContain(BAO_PRIVATE_ID);
 
-    const bao = shown.find((entry) => entry.private_id === BAO_PRIVATE_ID);
-    expect(bao).toBeDefined();
-    expect(privatePurchaseBlockReason(bao!)).toContain("never be sold to a corporation");
-
-    const dh = shown.find((entry) => entry.private_id === 3);
-    expect(privatePurchaseBlockReason(dh!)).toBeNull();
+    const phaseThree: GameStateResponse = {
+      ...board,
+      public_companies: board.public_companies.map((c) => (c.company_id === 1 ? { ...c, owned_trains: ["3"] } : c)),
+    };
+    const gate = (privateId: number) =>
+      privateProposalRefusal(
+        { state: phaseThree, actor: ALICE, buyerId: BAO_COMPANY_ID, labelFor: (address) => address },
+        privateId,
+        String(privatePriceBounds(100).min),
+      );
+    expect(gate(BAO_PRIVATE_ID)).toContain("never be sold to a corporation");
+    expect(gate(3)).toBeNull();
   });
 
   it("drops the B&O from the list entirely once it has closed", () => {

@@ -153,7 +153,9 @@ describe("K-01: the Stock Round Private Companies section, its handlers, its pro
   });
 
   it("Pass is greyed with the hold, right after the home-token block", () => {
-    const pass = sliceBetween(APP, "passDisabledReason={", "turnActionTaken=");
+    // P0 S1: the expression is a plain const above the shell's `return (`; the bar reads it by name.
+    expect(APP).toContain("passDisabledReason={passDisabledReason}");
+    const pass = sliceBetween(APP, "const passDisabledReason =", "return (");
     expectOrder(pass, "homeTokenBlock({", "privateTradeHold ??");
   });
 

@@ -13414,6 +13414,47 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       </section>
     ) : null;
 
+  /* Passing is always legal: an all-pass round is what marks the cheapest private down $5. A live mini-auction is still blocked - it has its own cursor and message.
+     See docs/ai_architecture/contract_economy.md - App.tsx #311 */
+  /* Design note #751: the mandatory purchase is enforced HERE, on Pass, rather than by an
+     unskippable modal. The obligation is to acquire a train; buying from a rival discharges
+     it just as well as the Depot does, and #3's undismissable modal made that unreachable. */
+  const passDisabledReason =
+    /* Design note #763: FIRST, because it outranks every other reason -- while a home token
+       is owed nothing may happen at all, and a player told about some later rule would fix
+       that one and still find the button dead. */
+    homeTokenBlock({
+      state: gameState ?? ({ public_companies: [] } as never),
+      homeHexToAxial,
+      labelForAddress: (address) =>
+        sandboxPlayerLabel(address) ?? truncateAddress(address),
+    }) ??
+    /* 6.5-B (K-01): a standing player <-> player trade offer holds the table (`pendingOfferBlock`); Pass is
+       greyed with the hold's own sentence instead of refused after the click. */
+    privateTradeHold ??
+    (isWaterfallPhase && waterfallState?.mini_auction
+      ? "A mini-auction is running — use Drop out on the highlighted company card to leave it."
+      : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either.
+           Ahead of the train obligation because the two cannot both apply -- one is a Stock
+           Round debt and the other an Operating Round one -- and reading the seat's debt
+           first keeps the Stock Round's refusal from depending on an unrelated check. */
+        divestmentRefusal(
+          divestmentDebt({
+            state: gameState ?? ({ current_round_type: null } as never),
+            player: viewerAddress ?? "",
+            marketPrices: sandboxMarketPrices,
+            zoneForPrice: marketZoneForPrice,
+          }),
+        ) ??
+        trainPurchaseRefusal({
+          atHardwareStep:
+            gameState?.current_round_type === "OperatingRound" &&
+            orSubPhase === "Hardware",
+          trainless: trainlessAndReported,
+          couldRunARoute: couldRunARouteIfItHadATrain,
+          ticker: activeCorporationContext?.ticker ?? "This corporation",
+        }));
+
   return (
     /* Design note #1144: the chrome's zoom sits on the shell's own root, so everything the game room draws
        is inside it -- the tab strip, the panels, the action bar and the status dock alike. The two canvas
@@ -13993,47 +14034,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                 onDisarm: handleDisarmAutoBuy,
               }
         }
-        /* Passing is always legal: an all-pass round is what marks the cheapest private down $5. A live mini-auction is still blocked - it has its own cursor and message.
-           See docs/ai_architecture/contract_economy.md - App.tsx #311 */
-        /* Design note #751: the mandatory purchase is enforced HERE, on Pass, rather than by an
-           unskippable modal. The obligation is to acquire a train; buying from a rival discharges
-           it just as well as the Depot does, and #3's undismissable modal made that unreachable. */
-        passDisabledReason={
-          /* Design note #763: FIRST, because it outranks every other reason -- while a home token
-             is owed nothing may happen at all, and a player told about some later rule would fix
-             that one and still find the button dead. */
-          homeTokenBlock({
-            state: gameState ?? ({ public_companies: [] } as never),
-            homeHexToAxial,
-            labelForAddress: (address) =>
-              sandboxPlayerLabel(address) ?? truncateAddress(address),
-          }) ??
-          /* 6.5-B (K-01): a standing player <-> player trade offer holds the table (`pendingOfferBlock`); Pass is
-             greyed with the hold's own sentence instead of refused after the click. */
-          privateTradeHold ??
-          (isWaterfallPhase && waterfallState?.mini_auction
-            ? "A mini-auction is running — use Drop out on the highlighted company card to leave it."
-            : /* Design note #759, rule (iii): a player who owes a sell-down may not pass either.
-                 Ahead of the train obligation because the two cannot both apply -- one is a Stock
-                 Round debt and the other an Operating Round one -- and reading the seat's debt
-                 first keeps the Stock Round's refusal from depending on an unrelated check. */
-              divestmentRefusal(
-                divestmentDebt({
-                  state: gameState ?? ({ current_round_type: null } as never),
-                  player: viewerAddress ?? "",
-                  marketPrices: sandboxMarketPrices,
-                  zoneForPrice: marketZoneForPrice,
-                }),
-              ) ??
-              trainPurchaseRefusal({
-                atHardwareStep:
-                  gameState?.current_round_type === "OperatingRound" &&
-                  orSubPhase === "Hardware",
-                trainless: trainlessAndReported,
-                couldRunARoute: couldRunARouteIfItHadATrain,
-                ticker: activeCorporationContext?.ticker ?? "This corporation",
-              }))
-        }
+        passDisabledReason={passDisabledReason}
         /* Design note #745: read off the replayed state, not off a React flag. The bar is a
            narrator (#400/#685) -- the reducer decides whether the turn has an action in it, and
            an Undo that rewinds past the sale must take the "End Turn" label back with it. */

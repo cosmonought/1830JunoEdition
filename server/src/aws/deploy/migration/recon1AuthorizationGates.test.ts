@@ -808,6 +808,11 @@ describe("RECON-1: the ONE owner gate (COST-2C's runner, extended) covers the re
     for (const f of ["migration/phase1FreshHost", "migration/phase1RemainderRunbook", "migration/step9AcmeCompletion", "staging/singleHostEdge", "staging/hostRoleProbe"]) assert.ok(phase1.includes(`'aws/deploy/${f}.test.js'`), f);
     assert.match(phase1, /\$_ -match '# SKIP not a checkout holding the host-create commit'/);
     assert.match(phase1, /if \(\$code -eq 0 -and \$skippedPins\.Count -gt 0\) \{ return @\{ Status = 'FAIL'/);
+    /* ... and the base commits those pins diff against must be in the clone (a shallow one FAILS, never passes silently) */
+    const bases = /foreach \(\$base in @\('([0-9a-f]{40})', '([0-9a-f]{40})'\)\) \{\n    \$c = Invoke-Logged \$Git @\('cat-file', '-e', \(\$base \+ '\^\{commit\}'\)\) \$RepoRoot\n    if \(\$c -ne 0\) \{ return @\{ Status = 'FAIL'/.exec(phase1);
+    assert.ok(bases !== null, "the base-commit check");
+    assert.match(source("server/src/aws/deploy/migration/phase1FreshHost.test.ts"), new RegExp(`const HOST_CREATE = "${bases[1]}"`), "phase1FreshHost's base");
+    for (const f of ["server/src/aws/deploy/migration/phase1RemainderRunbook.test.ts", "server/src/aws/deploy/staging/hostRoleProbe.test.ts"]) assert.ok(source(f).includes(`"${bases[2]}"`), `${f}'s base`);
     /* F5 / F6's real wrapper on a fake host is Linux-only (skipped on Windows): it runs in the pinned Linux image, no skip */
     const linux = code.slice(code.indexOf("Add-Gate 'PHASE-1 targeted (Linux)'"), code.indexOf("$GsHostPsGateNames = "));
     assert.match(linux, /'run', '--rm', '--name', \$name, '--network', 'none', '-v', \$RepoMountRO, '-w', '\/repo\/server', \$NodeLinuxImage, 'bash', '-c', \$cmd/);
@@ -836,7 +841,10 @@ describe("RECON-1: the ONE owner gate (COST-2C's runner, extended) covers the re
     assert.match(code, /\n\} elseif \(\$PsGateResults\.Count -eq \$GsHostPsGateNames\.Count -and @\(\$PsGateResults \| Where-Object \{ \$_\.Status -ne 'PASS' \}\)\.Count -eq 0\) \{\n  \$Ps51 = 'PROVEN'\n/);
     assert.equal((code.match(/\$Ps51 = 'PROVEN'/g) ?? []).length, 1, "PROVEN is set in one place");
     assert.match(code, /Log \("WINDOWS POWERSHELL 5\.1 \(the gs-host\.ps1 regressions, as documented\): \{0\} -- \{1\}" -f \$Ps51, \$Ps51Detail\)/);
-    for (const k of ["windows_powershell_51 = $Ps51", "windows_powershell_51_detail = $Ps51Detail"]) assert.ok(code.includes(k), k);
+    for (const k of ["windows_powershell_51 = $Ps51", "windows_powershell_51_detail = $Ps51Detail", "certifying_run = $CertifyingRun"]) assert.ok(code.includes(k), k);
+    /* the certifying run is the owner's on Windows: a PASS without the 5.1 proof says so on its OVERALL line */
+    assert.match(code, /\n\$CertifyingRun = \(\$AllPass -and \$Ps51 -eq 'PROVEN'\)\n/);
+    assert.match(code, /Log \("OVERALL: \{0\}" -f \$\(if \(\$CertifyingRun\) \{ 'PASS \(OWNER SOURCE GATE; LIVE HOST CERTIFICATION PENDING\)' \} elseif \(\$AllPass\) \{ 'PASS \(OWNER SOURCE GATE; LIVE HOST CERTIFICATION PENDING\) -- NOT A CERTIFYING RUN: Windows PowerShell 5\.1 NOT PROVEN here/);
     /* ordinary gates: a FAIL / NOT RUN fails the owner source gate ($AllPass, pinned above); none is deferrable */
     assert.doesNotMatch(runner, /'DEFERRED'|'SKIPPED'/);
   });

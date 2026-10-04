@@ -42,19 +42,21 @@
                                04138ea), staging/restoreFencing
     13  COST-1 + portability   deploy/cost1SingleHost (W-03 / W-04 + the host-cert scripts' LF), runtime/singleHostMetrics
     13b PHASE-1 targeted       PHASE 1 CERTIFICATION CLOSURE: migration/phase1FreshHost (runbook 13r's install table, order
-                               and never-list; the param() guard below; its host-create pins must RUN -- a clone without
-                               5b4756d SKIPS them, which FAILS), phase1RemainderRunbook (steps 13-25), step9AcmeCompletion,
-                               staging/singleHostEdge (step 16's single-host edge probe), staging/hostRoleProbe (F5 / F6)
+                               and never-list; the param() guard below), phase1RemainderRunbook (steps 13-25),
+                               step9AcmeCompletion, staging/singleHostEdge (step 16's single-host edge probe),
+                               staging/hostRoleProbe (F5 / F6). Their pins diff against 5b4756d and 083d066: a clone
+                               without either (shallow) FAILS, and so does a SKIP of 13r's host-create pins
     13c PHASE-1 targeted       staging/hostRoleProbe again in the pinned Linux Node image (node:22-bookworm-slim, --network
         (Linux)                none, the repository READ-ONLY): F5 / F6's REAL host-role-probe.sh with the real gs-lib.sh on
                                a fake host runs only on Linux (it is SKIPPED on Windows), so it runs here; any skip FAILS
     13d gs-host.ps1            PHASE 1 CERTIFICATION CLOSURE: infra/aws/single-host/tests/gs-host-stderr / -role-probe /
-        stderr / role-probe /  -install-script.test.ps1 -- three gates -- each run EXACTLY as documented: -File <test>, NO
-        install-script         -Target (the test resolves the candidate's own gs-host.ps1), in a child process. On Windows
-        regression             the engine is WINDOWS POWERSHELL 5.1 (%SystemRoot%\System32\WindowsPowerShell\v1.0\
-                               powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass; missing = NOT RUN) and the
-                               test's own header must say 5.1 / Desktop and name the candidate's gs-host.ps1; >= 25 / 38 /
-                               27 passed, 0 failed, exit 0. Elsewhere they run under this PowerShell 7 and the summary says
+        stderr / role-probe /  -install-script.test.ps1 -- three gates -- each run with its header's documented command
+        install-script         (-NoProfile -ExecutionPolicy Bypass -File <test>, NO -Target: the test resolves the
+        regression             candidate's own gs-host.ps1), plus -NonInteractive, in a child process. On Windows the
+                               engine is WINDOWS POWERSHELL 5.1 (%SystemRoot%\System32\WindowsPowerShell\v1.0\
+                               powershell.exe, with Windows PowerShell's own module path; missing = NOT RUN) and the test's
+                               own header must say 5.1 / Desktop and name the candidate's gs-host.ps1; >= 25 / 38 / 27
+                               passed, 0 failed, exit 0. Elsewhere they run under this PowerShell 7 and the summary says
                                WINDOWS POWERSHELL 5.1: NOT PROVEN -- a 5.1 PASS is never claimed where 5.1 cannot run.
     14  Terraform              fmt -check (infra/aws), `terraform test` in modules/single-host (20), modules/app (69),
                                modules/ledger (34); init -backend=false + validate in stacks/app, stacks/ledger,
@@ -101,7 +103,9 @@
   DEFERRED (see 16b); 1 otherwise (a FAIL, a BLOCKED gate after a failed build, or a NOT RUN gate whose prerequisite --
   npm, Terraform, Docker Desktop (with buildx), Git Bash, git, on Windows Windows PowerShell 5.1 -- is missing). arm64
   emulation is NOT required. The summary also states WINDOWS POWERSHELL 5.1: PROVEN / NOT PROVEN (13d; JSON
-  windows_powershell_51): PROVEN only on Windows, from the three gs-host.ps1 gates' own 5.1 runs.
+  windows_powershell_51): PROVEN only on Windows, from the three gs-host.ps1 gates' own 5.1 runs. The CERTIFYING run is
+  the owner's on Windows -- OWNER SOURCE GATE PASS with 5.1 PROVEN (JSON certifying_run = true); a PASS where 5.1 cannot
+  run says NOT A CERTIFYING RUN on its OVERALL line (exit 0 alone never means certified).
   Prerequisites: node + npm, git, Git Bash, Terraform >= 1.10, Docker Desktop running (Linux containers) with network
   access to public.ecr.aws, the npm registry and the Amazon Linux 2023 package repositories.
   It certifies the SOURCE only: the summary says OWNER SOURCE GATE PASS / FAIL and LIVE HOST CERTIFICATION PENDING -- the
@@ -411,9 +415,14 @@ Add-Gate 'COST-1 guards + portability' $true {
 } 'node --test deploy/cost1SingleHost, runtime/singleHostMetrics'
 
 # PHASE 1 CERTIFICATION CLOSURE: the Phase-1 suites as named gates (cheap and static; the full suite runs them again).
-# 13r's host-create pins (phase1FreshHost) must RUN: a clone without the host-create commit 5b4756d SKIPS them, and that
-# FAILS here (the full suite would pass it silently).
+# Their pins diff against the host-create commit 5b4756d and the stderr hotfix 083d066: a clone without either (a shallow
+# one) would SKIP or silently pass them, so both must be in this clone, and a SKIP of 13r's host-create pins FAILS too.
 Add-Gate 'PHASE-1 targeted' $true {
+  if ($null -eq $Git) { return @{ Status = 'NOT RUN'; Exit = $null; Reason = 'git is not on PATH (the Phase-1 pins diff against their base commits)' } }
+  foreach ($base in @('5b4756dbd98e8d9abe5ed4bbdf4314466ef8045d', '083d0668556c05a84eb8b3e5befc4e973544aa9a')) {
+    $c = Invoke-Logged $Git @('cat-file', '-e', ($base + '^{commit}')) $RepoRoot
+    if ($c -ne 0) { return @{ Status = 'FAIL'; Exit = $c; Reason = "this clone lacks commit $base (a shallow clone?): the Phase-1 pins diff against it -- clone the full history" } }
+  }
   $code = Invoke-Logged $Node (TestArgs @('aws/deploy/migration/phase1FreshHost.test.js', 'aws/deploy/migration/phase1RemainderRunbook.test.js', 'aws/deploy/migration/step9AcmeCompletion.test.js', 'aws/deploy/staging/singleHostEdge.test.js', 'aws/deploy/staging/hostRoleProbe.test.js')) $ServerDir
   $skippedPins = @($script:LastOutput | Where-Object { $_ -match '# SKIP not a checkout holding the host-create commit' })
   if ($code -eq 0 -and $skippedPins.Count -gt 0) { return @{ Status = 'FAIL'; Exit = $code; Reason = "13r's host-create pins were SKIPPED (this clone lacks commit 5b4756d -- a shallow clone?): clone the full history" } }
@@ -444,10 +453,12 @@ Add-Gate 'PHASE-1 targeted (Linux)' $true {
 } 'docker run --rm --network none -v <repo>:/repo:ro <node:22-bookworm-slim@sha256 (the server image base)> node --test staging/hostRoleProbe.test.js   (F5 / F6: the REAL host-role-probe.sh on a fake host -- Linux only; any skip FAILS)'
 
 # PHASE 1 CERTIFICATION CLOSURE: gs-host.ps1's three offline regressions (infra/aws/single-host/tests), each its own gate,
-# each run EXACTLY as its header documents -- -File and NO -Target, so the test resolves the candidate's own gs-host.ps1
-# itself -- in a child process (their fakes shadow aws.exe globally). On Windows the engine is WINDOWS POWERSHELL 5.1,
-# System32's powershell.exe (the engine the runbook runs gs-host.ps1 with), whichever PowerShell runs this gate, and the
-# test's OWN header must say so; elsewhere it is this PowerShell, and nothing calls that a Windows PowerShell 5.1 proof.
+# each run with its header's documented command -- -NoProfile -ExecutionPolicy Bypass -File <test>, NO -Target, so the
+# test resolves the candidate's own gs-host.ps1 itself; this gate adds only -NonInteractive and, on Windows, Windows
+# PowerShell's own module path -- in a child process (their fakes shadow aws.exe globally). On Windows the engine is
+# WINDOWS POWERSHELL 5.1, System32's powershell.exe (the engine the runbook runs gs-host.ps1 with), whichever PowerShell
+# runs this gate, and the test's OWN header must say so; elsewhere it is this PowerShell, and nothing calls that a Windows
+# PowerShell 5.1 proof.
 $GsHostPsGateNames = @('gs-host.ps1 stderr regression', 'gs-host.ps1 role-probe regression', 'gs-host.ps1 install-script regression')
 $script:Facts['gs_host_powershell'] = [ordered]@{}
 function Find-WindowsPowerShell51 {
@@ -809,6 +820,10 @@ if (-not $OnWindows) {
   $Ps51 = 'NOT PROVEN'
   $Ps51Detail = (@($PsGateResults | Where-Object { $_.Status -ne 'PASS' } | ForEach-Object { "$($_.Name): $($_.Status)" }) -join '; ')
 }
+# The certifying run is the owner's on Windows: the OWNER SOURCE GATE passed AND Windows PowerShell 5.1 is PROVEN (on
+# Windows the first implies the second). A PASS where 5.1 cannot run is a source gate PASS, NOT a certifying run -- the
+# OVERALL line and the JSON (certifying_run) say so; it is never left to be inferred from the exit code.
+$CertifyingRun = ($AllPass -and $Ps51 -eq 'PROVEN')
 Log ''
 Log '========================================================================================================'
 Log ("{0,-52} {1,-8} {2,6}   {3}" -f 'Gate', 'Status', 'Exit', 'Duration')
@@ -822,7 +837,7 @@ foreach ($d in $Deferred) { Log ("  deferred (NOT PASS): {0} -- {1}" -f $d.Name,
 Log ("WINDOWS POWERSHELL 5.1 (the gs-host.ps1 regressions, as documented): {0} -- {1}" -f $Ps51, $Ps51Detail) $(if ($Ps51 -eq 'PROVEN') { 'Green' } else { 'Yellow' })
 Log 'LIVE HOST CERTIFICATION: PENDING -- required before any edge cutover:' 'Yellow'
 foreach ($p in $LivePrerequisites) { Log ("  - {0}" -f $p) 'Yellow' }
-Log ("OVERALL: {0}" -f $(if ($AllPass) { 'PASS (OWNER SOURCE GATE; LIVE HOST CERTIFICATION PENDING)' } else { 'FAIL' })) $(if ($AllPass) { 'Green' } else { 'Red' })
+Log ("OVERALL: {0}" -f $(if ($CertifyingRun) { 'PASS (OWNER SOURCE GATE; LIVE HOST CERTIFICATION PENDING)' } elseif ($AllPass) { 'PASS (OWNER SOURCE GATE; LIVE HOST CERTIFICATION PENDING) -- NOT A CERTIFYING RUN: Windows PowerShell 5.1 NOT PROVEN here (the certifying run is on Windows)' } else { 'FAIL' })) $(if ($CertifyingRun) { 'Green' } elseif ($AllPass) { 'Yellow' } else { 'Red' })
 Log ("total duration: {0} s   (end {1})" -f [math]::Round($Watch.Elapsed.TotalSeconds, 1), (UtcNow))
 if ($Dirty.Count -gt 0) { Log '!!! the working tree was NOT clean (see the top of the log) !!!' 'Yellow' }
 
@@ -841,6 +856,7 @@ $summary = [ordered]@{
   live_host_certification = 'PENDING'
   windows_powershell_51 = $Ps51
   windows_powershell_51_detail = $Ps51Detail
+  certifying_run = $CertifyingRun
   live_prerequisites = $LivePrerequisites
   deferred_to_live = @($Deferred | ForEach-Object { [ordered]@{ gate = $_.Name; reason = $_.Reason } })
   total_seconds = [math]::Round($Watch.Elapsed.TotalSeconds, 1)

@@ -150,7 +150,7 @@ const closingBracket = (s: string, open: number): number => {
 /* A script's OWN param(...) block -- its first statement, after comments, `using` lines and attributes such as
    [CmdletBinding()] -- with comments and literal strings blanked; null when the script has none. */
 const scriptParamBlock = (source: string): string | null => {
-  const { matchable, referable } = blankPs(source.replace(/\r\n/g, "\n"));
+  const { matchable, referable } = blankPs(source.replace(/\r\n?/g, "\n"));
   let i = 0;
   for (;;) {
     while (i < matchable.length && /\s/.test(matchable[i])) i++;
@@ -194,6 +194,7 @@ describe("PHASE 1 CERTIFICATION CLOSURE: the gs-host PowerShell regressions run 
     assert.doesNotMatch(block, SELF_PATH, "a comment, a literal string, a function's param() and the body are not the script's defaults");
     assert.match(scriptParamBlock("param($P = \"$PSScriptRoot\\x\")") ?? "", SELF_PATH, "an expandable string IS a reference");
     assert.match(scriptParamBlock("param($P = ${PSCommandPath})") ?? "", SELF_PATH);
+    assert.match(scriptParamBlock("# CR-only line ends\r[CmdletBinding()]\rparam($P = $PSScriptRoot)\r") ?? "", SELF_PATH, "a comment ends at a lone CR too");
     assert.equal(scriptParamBlock("Set-StrictMode -Version 2\nparam($Late)\n"), null, "param() after a statement is not the script's");
     assert.throws(() => scriptParamBlock("param([string]$Open = (Join-Path a b)\n"), /never closes/);
   });

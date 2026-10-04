@@ -17,7 +17,12 @@ describe("the Skip tooltip", () => {
   const SKIP = sliceBetween(BAR, "onClick={onSkipSubPhase}", "</button>");
 
   it("says what the player is doing", () => {
-    expect(SKIP).toContain("title={`Move past ${OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. The turn goes on to its next step.`}");
+    /* The `$` is assembled: `no-template-curly-in-string` flags that syntax in a plain string, and here the string
+       IS source text being searched for (as in homeStationWait's harness). */
+    const dollar = String.fromCharCode(36);
+    expect(SKIP).toContain(
+      `title={\`Move past ${dollar}{OPERATING_SUB_PHASE_LABELS[orSubPhase].stepLabel} without acting. The turn goes on to its next step.\`}`,
+    );
   });
 
   it("names no action type and no contract internals", () => {

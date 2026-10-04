@@ -2450,6 +2450,18 @@ export interface RulesReferenceProps {
   /** `GameStateResponse.private_auction_complete` -- whether the Private Company Auction has concluded.
    *  Absent on older logs and in standard games, where the auction is the opening round. */
   auctionComplete?: boolean | null;
+  /** Phase 3 W2-I (AUD-11.03): the game has ended (`current_round_type === "GameEnd"`, which `roundType` does not
+   *  carry -- #898). The reference then says the game is over instead of "No live round". Display only. */
+  gameOver?: boolean | null;
+  /** Phase 3 W2-I / OD-6 (AUD-01.07): the table's pinned rules version, `GameStateResponse.rules_engine_version`,
+   *  shown beside the build stamp. `null` for a board dealt from a legacy (unpinned) log; omitted with no board, when
+   *  the stamp shows the build alone. The game id is never shown (LIVE-2 §7.2; OD-6 RESOLVED). */
+  rulesEngineVersion?: number | null;
+}
+
+/** OD-6 (AUD-01.07): the diagnostic line's rules half -- `Rules v13`; a legacy unpinned board says so. */
+export function rulesVersionStampLabel(version: number | null): string {
+  return version === null ? "Rules unpinned (legacy)" : `Rules v${version}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2507,8 +2519,11 @@ function ContextStrip({
   activeCorporation,
   section,
   onGoToCurrent,
+  gameOver = false,
 }: {
   roundType: RulesRoundType | null;
+  /** Phase 3 W2-I (AUD-11.03): the game has ended -- said instead of "No live round". */
+  gameOver?: boolean;
   operatingSubPhase: RulesOperatingSubPhase | null;
   /** Phase 3 W1-I: the home-station pre-step is the live position (see `homeStationOwed`). */
   homeStationLive?: boolean;
@@ -2519,9 +2534,11 @@ function ContextStrip({
 }) {
   if (!roundType) {
     return (
-      <div className="rr-context" style={styles.contextStrip}>
-        <span style={styles.contextLabelMuted}>Reference</span>
-        <span style={styles.contextMuted}>No live round — showing the full reference.</span>
+      <div className="rr-context" style={styles.contextStrip} data-testid="rules-context-strip">
+        <span style={styles.contextLabelMuted}>{gameOver ? "Game over" : "Reference"}</span>
+        <span style={styles.contextMuted}>
+          {gameOver ? "This game has ended — showing the full reference." : "No live round — showing the full reference."}
+        </span>
       </div>
     );
   }
@@ -3164,8 +3181,11 @@ function OverviewPage({
   onToggleFlow,
   onNavigate,
   onNavigateTo,
+  gameOver = false,
 }: {
   roundType: RulesRoundType | null;
+  /** Phase 3 W2-I (AUD-11.03): the game has ended (only read while `roundType` is null). */
+  gameOver?: boolean;
   liveSubPhase: RulesOperatingSubPhase | null;
   /** Phase 3 W1-I: the home-station pre-step is the live position. */
   homeStationLive?: boolean;
@@ -3424,7 +3444,9 @@ function OverviewPage({
   const buyPrivateShown = roundType === "OperatingRound" && (privates.buyable || buyPrivateLive);
   const roundHeading =
     roundType === null
-      ? "No live round"
+      ? gameOver
+        ? "Game over"
+        : "No live round"
       : roundType === "OperatingRound" && roundLabel
         ? `Operating Round ${roundLabel.replace(/^OR\s*/, "")}`
         : roundType === "StockRound" && roundLabel
@@ -3434,7 +3456,7 @@ function OverviewPage({
   const currentRound = (
     <section style={styles.block} aria-label="Current round" data-testid="rules-current-round">
       <div style={styles.roundHead}>
-        <span style={{ ...styles.roundKicker, color: accent.ink }}>{roundType === null ? "Reference" : "Current round"}</span>
+        <span style={{ ...styles.roundKicker, color: accent.ink }}>{roundType === null ? (gameOver ? "Final" : "Reference") : "Current round"}</span>
         <h3 style={styles.roundName}>{roundHeading}</h3>
         {roundType === "OperatingRound" && activeCorporation && <span style={styles.roundMeta}>{activeCorporation.ticker}</span>}
       </div>
@@ -3442,8 +3464,10 @@ function OverviewPage({
 
       {roundType === null ? (
         <>
-          <p style={styles.explainLead}>
-            No round is live. The reference is complete and unfiltered — each round has its own page, and the numbers are on Tables.
+          <p style={styles.explainLead} data-testid="rules-no-round-lead">
+            {gameOver
+              ? "This game has ended; no further rounds will be played. The reference is complete and unfiltered — each round has its own page, and how the game ends is on Tables."
+              : "No round is live. The reference is complete and unfiltered — each round has its own page, and the numbers are on Tables."}
           </p>
           <div style={styles.explainFoot}>
             <PageLink section="auction" onNavigate={onNavigate}>
@@ -5462,8 +5486,12 @@ export function RulesReference({
   rulesetLabel,
   variants,
   auctionComplete,
+  gameOver: gameOverProp,
+  rulesEngineVersion,
 }: RulesReferenceProps) {
   const roundType: RulesRoundType | null = roundTypeProp ?? null;
+  /* Phase 3 W2-I (AUD-11.03): only a round-less reference can be the ended game -- a live round type wins. */
+  const gameOver = roundType === null && gameOverProp === true;
   const activeScopes = useMemo(() => activeScopesFor(variants), [variants]);
   /* Has the Private Company Auction happened? A standard game opens with it, so once any other round is live
      it is done; a delayed auction is done only when the state says so. */
@@ -5557,10 +5585,15 @@ export function RulesReference({
             behind. The title carries the full id when the label shortens it. */}
         <span
           style={styles.buildStamp}
-          title={`Quote this in a bug report — it says which build of the interface you are running (${UI_BUILD_ID}).`}
+          title={`Quote this in a bug report — it says which build of the interface you are running (${UI_BUILD_ID})${rulesEngineVersion !== undefined ? " and which rules version this table is pinned to" : ""}.`}
           data-testid="rules-build-stamp"
         >
           {UI_BUILD_LABEL}
+          {/* Phase 3 W2-I / OD-6 (AUD-01.07): the table's pinned rules version on the same quiet line, from the board's
+              own `rules_engine_version`. Never the game id -- the server's key, not the game's name (LIVE-2 §7.2). */}
+          {rulesEngineVersion !== undefined && (
+            <span data-testid="rules-version-stamp">{` · ${rulesVersionStampLabel(rulesEngineVersion)}`}</span>
+          )}
         </span>
       </div>
 
@@ -5595,11 +5628,12 @@ export function RulesReference({
         })}
       </div>
 
-      <ContextStrip roundType={roundType} operatingSubPhase={liveSubPhase} homeStationLive={homeStationLive} roundLabel={roundLabel ?? null} activeCorporation={activeCorporation} section={section} onGoToCurrent={goToCurrent} />
+      <ContextStrip roundType={roundType} gameOver={gameOver} operatingSubPhase={liveSubPhase} homeStationLive={homeStationLive} roundLabel={roundLabel ?? null} activeCorporation={activeCorporation} section={section} onGoToCurrent={goToCurrent} />
 
       {section === "overview" && (
         <OverviewPage
           roundType={roundType}
+          gameOver={gameOver}
           liveSubPhase={liveSubPhase}
           homeStationLive={homeStationLive}
           stockAction={roundType === "StockRound" ? (stockRoundActionProp ?? null) : null}

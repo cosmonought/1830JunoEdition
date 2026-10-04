@@ -104,9 +104,9 @@ Integration commits: RED R2 (OD-12, W1-N) `87d63c4`; W1-N follow-up (comments on
 | W1-M | COMPLETE — L2 `6f42dca` |
 | W1-N | COMPLETE — L7 `9d9376b` + review fixes `06c3a91`; the OD-12 RED R2 call-site deletion `87d63c4` (+ comment follow-up `819a204`); tie-aware game-over strip at the integration (`8dc79e0`) |
 | W1-O | COMPLETE — L7 `2c3134f` + review fix `b19dff5`; the RulesReference breakpoint hunk at the integration (`8dc79e0`) |
-| W3-K | COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click "Pass Turn" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D since integrated on `phase3/wave2-bcgd-v13cert-integration`, merge `4072fd0`; W2-F and other open slices are tracked separately) |
+| W3-K | COMPLETE — ACCEPTED (owner, 2026-10-04) and INTEGRATED on `phase3/wave2a-v13-integration` (2026-10-04): `phase3/w3-k-rules-v13` @ `be1fd10` merged `--no-ff` onto `phase3/wave2a-integration` @ `96ccb22`, its 9 commits carried unchanged (same SHAs). OD-2, SBS-3, SBS-4, OD-4 with the owner's 2026-10-04 rulings 1-5 and the four review findings. The ledger's PARTIAL (held only for the shared row AUD-03.04) lifted with W2-B's one-click "Pass Turn" control, integrated on `phase3/wave2-bcg-v13cert-integration` (merge `181e51e`). v13 settlement certification PASS / CERTIFIED and INTEGRATED there (merge `69c7496` of `phase3/v13-settlement-certification` @ `7916763`). RULES_ENGINE_VERSION 13; supported live [13]; settlement-certified [10, 11, 12, 13]. Not deployable until drained v12 rooms and the final integrated owner gate (W2-D since integrated on `phase3/wave2-bcgd-v13cert-integration`, merge `4072fd0`; W2-F since integrated on `phase3/wave2-bcgdf-v13cert-integration`, merge `dfe6d13`; other open slices are tracked separately) |
 
-*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, its ledger PARTIAL lifted with W2-B; W2-B, W2-C, W2-G and the v13 settlement certification are COMPLETE and integrated ("Wave-2 B+C+G + v13 certification integration status"); W2-D is COMPLETE and integrated ("Wave-2 B+C+G+D integration status"); W2-F is COMPLETE on its slice branch, NOT integrated ("W2-F slice status"). Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
+*(At the Wave-1 integration: W2-A, W2-B and W2-F were not started and W3-K had not landed.)* Since then W2-A is COMPLETE and integrated ("Wave-2A integration status"), and W3-K is ACCEPTED and INTEGRATED, its ledger PARTIAL lifted with W2-B; W2-B, W2-C, W2-G and the v13 settlement certification are COMPLETE and integrated ("Wave-2 B+C+G + v13 certification integration status"); W2-D is COMPLETE and integrated ("Wave-2 B+C+G+D integration status"); W2-F is COMPLETE and integrated ("Wave-2 B+C+G+D+F integration status"). Every W1 row's own status (`IMPLEMENTED`, `PRE-WORK DONE`,
 `OPEN`, `NOT STARTED`, `RULED`, `NEEDS PRECISE REPRODUCTION / CLARIFICATION`) is the `status` field of its JSON row; the
 checker verifies that a COMPLETE slice has no unimplemented A/B row and that each status agrees with its disposition.
 
@@ -328,7 +328,8 @@ scope): an `automatic: true` dispatch bypasses the reload "catching up" guard. R
 
 ## Wave-2 B+C+G+D integration status (2026-10-04)
 
-**Branch** `phase3/wave2-bcgd-v13cert-integration` from `phase3/wave2-bcg-v13cert-integration` @ `9b19d9d` — **the current provisional Phase-3 integration
+**Branch** `phase3/wave2-bcgd-v13cert-integration` from `phase3/wave2-bcg-v13cert-integration` @ `9b19d9d` — *(superseded as baseline by `phase3/wave2-bcgdf-v13cert-integration`,
+below)* **the provisional Phase-3 integration
 baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** The accepted W2-D slice
 (`phase3/w2-d-mh-offturn-jk` @ `f0abdd7`) merged `--no-ff` (merge `4072fd0`), its three commits carried unchanged (`db50c38` code,
 `a7488ff` review fixes, `f0abdd7` slice tracking), then this tracking commit.
@@ -336,16 +337,19 @@ baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to m
 - **No conflict.** W2-D was 3 ahead / 0 behind `9b19d9d`, so the merged tree equals `f0abdd7`'s exactly. No `server/`, `gameEngine/`,
   `rulesVersion.ts` or settlement file differs from `9b19d9d`.
 - **Rows:** AUD-04.03, AUD-10.05, P3-N003 IMPLEMENTED and INTEGRATED. W2-E's "Stock-Round-only chip" residue and W2-A's M&H-chip
-  residue are closed; the Stock Round share controls' `privateTradeHoldReason` residue stays W2-F's.
+  residue are closed; the Stock Round share controls' `privateTradeHoldReason` residue stays W2-F's *(since closed by W2-F and
+  integrated, merge `dfe6d13`)*.
 - **Versions:** `RULES_ENGINE_VERSION` 13; supported live `[13]`; settlement-certified `[10, 11, 12, 13]`; compatibility keys and
   settlement fixtures unchanged.
 - **Lanes:** W2-B, W2-C, W2-G, the v13 settlement certification and W2-D **COMPLETE and INTEGRATED**. W2-F remains **NOT STARTED,
-  UNLOCKED**. Not deployable until drained v12 rooms and the final integrated owner gate.
+  UNLOCKED** *(as written; since COMPLETE and INTEGRATED, merge `dfe6d13`)*. Not deployable until drained v12 rooms and the final integrated owner gate.
 
 ## W2-F slice status (2026-10-04)
 
-**Branch** `phase3/w2-f-waiting-surface` @ `8d4e9f5` (code `5a0bf37`, independent-review fixes `8d4e9f5`) from `phase3/wave2-bcgd-v13cert-integration` @ `7d8f73e` (the current
-provisional baseline, unchanged). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending).
+**Branch** `phase3/w2-f-waiting-surface` @ `8d4e9f5` (code `5a0bf37`, independent-review fixes `8d4e9f5`) from `phase3/wave2-bcgd-v13cert-integration` @ `7d8f73e` (the
+provisional baseline at the time). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending).
+*(Written as branch-only; since 2026-10-04 ACCEPTED and INTEGRATED on `phase3/wave2-bcgdf-v13cert-integration`, merge `dfe6d13` — see "Wave-2 B+C+G+D+F integration status"
+below.)*
 Presentation only, over W2-A's one hold answer (`dockHoldView`); nothing restates a rule or chooses between holds.
 
 - **AUD-09.09 (U-6) / AUD-09.08 (U-5):** the five prompts in the consent slot (private purchase offer, train offer, emergency funding
@@ -363,6 +367,28 @@ Presentation only, over W2-A's one hold answer (`dockHoldView`); nothing restate
   when both are refused, so the v12 funding hold, which passes `SellStock`, never greys Sell), not 6.5-B's `privateTradeHoldReason`.
   Auto-Buy keeps its own `purchaseBlockFor`.
 - **Deferred (LOW):** on the Stocks tab nothing scrolls the recipient to the offer's card. Rules version and settlement unchanged.
+
+## Wave-2 B+C+G+D+F integration status (2026-10-04)
+
+**Branch** `phase3/wave2-bcgdf-v13cert-integration` from `phase3/wave2-bcgd-v13cert-integration` @ `7d8f73e` — **the current provisional Phase-3 integration
+baseline. PROVISIONAL: no broad Phase-3 owner gate has been run; not merged to main.** The accepted W2-F slice
+(`phase3/w2-f-waiting-surface` @ `f19a22b`) merged `--no-ff` (merge `dfe6d13`, parents `7d8f73e`, `f19a22b`), its three commits carried
+unchanged (`5a0bf37` code, `8d4e9f5` review fixes, `f19a22b` slice tracking), then this tracking commit.
+
+- **No conflict.** W2-F was 3 ahead / 0 behind `7d8f73e`, so the merged tree equals `f19a22b`'s exactly. No `server/`, `gameEngine/`,
+  `contracts/`, `rulesVersion.ts`, settlement or fixture file differs from `7d8f73e`.
+- **Owner ruling:** the I-3 implementation is ACCEPTED -- the redundant player-trade pointer stands aside on the Stocks tab, where the
+  Private Companies card carries the same offer and controls.
+- **Rows:** AUD-03.10, AUD-09.08, AUD-09.09 IMPLEMENTED and INTEGRATED. The Stock Round share controls' `privateTradeHoldReason`
+  residue stays CLOSED.
+- **Versions:** `RULES_ENGINE_VERSION` 13; supported live `[13]`; settlement-certified `[10, 11, 12, 13]`; compatibility keys and
+  settlement fixtures unchanged.
+- **Lanes:** W2-B, W2-C, W2-G, the v13 settlement certification, W2-D and W2-F **COMPLETE and INTEGRATED**; no accepted slice awaits
+  integration. Not deployable until drained v12 rooms and the final integrated owner gate.
+- **Follow-ups (not implemented here):** LOW (deferred, W2-F) -- on the Stocks tab nothing scrolls the trade recipient to the offer's
+  card. LOW (predates W2-F, integration review) -- while an emergency funding private offer stands, a non-president seat sees both
+  W2-G's emergency waiting card and the funding prompt's waiting line. NIT -- the `waitingSentence` prop comments on the three
+  ordinary-offer prompts and `WaitingOnLine` name `dockHold.turnHoldReason`; those prompts are passed `dockHold.standingOffer`.
 
 ## Scope and closing remark
 

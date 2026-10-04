@@ -28,6 +28,7 @@ import { CLIENT_BUILD_ID, GAME_SERVER_URL, JUNO_RPC_ENDPOINT } from "./config";
 import { connectServerLink, type ServerLink } from "./utils/serverLink";
 // Phase 3 W3-I: the active room link's read-only queue, for the par prompt and the offer forms.
 import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
+import { useActionLatch } from "./utils/actionLatch"; // Phase 3 W3-B (AUD-25.01)
 import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
 import { rollBackIfRefused, submissionRefused } from "./utils/submissionAnswer"; // Phase 3 W3-C (P3-N020)
 import { RoomNoticeSlots } from "./components/RoomNoticeSlots"; // Phase 3 W3-C (AUD-14.01)
@@ -4423,7 +4424,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      player on turn" without reading the cursor #549 forbids it to read. This is the courtesy that stops the
      hand; the rule it would take belongs to the audit. */
   const [pendingAppendIndex, setPendingAppendIndex] = useState<number | null>(null);
-  const actionInFlight = pendingAppendIndex !== null;
+  /* Phase 3 W3-I (AUD-19.01 / AUD-02.05 / AUD-02.06 / AUD-03.11): THE LINK'S QUEUE, READ ONCE, OUTSIDE THE DRAIN. The
+     active room link's read-only queue state (`serverLink.ts`), through one hook -- never touching the link callbacks.
+     The par prompt reads it raw (it needs the landing signal); the offer forms read its view (still held / queued). On
+     the Firestore / hotseat path there is no room link and both are idle. */
+  const linkQueue = useLinkQueue();
+  const linkQueueNote = useMemo(() => linkQueueView(linkQueue), [linkQueue]);
+  /* Phase 3 W3-B (AUD-25.01 / U-46): the latch, bounded by the link (`utils/actionLatch.ts`). `actionInFlight` is busy
+     while a press is latched OR the room link still holds a submission of this tab's, and the latch's backstop waits
+     for the link to let go -- so no control re-arms while the link says "queued" or "sending". */
+  const actionInFlight = useActionLatch(pendingAppendIndex, setPendingAppendIndex, linkQueueNote.blocked, ACTION_LATCH_BACKSTOP_MS);
 
   /* Design note #1173c: THE RELEASE MOVED INTO THE DRAIN. It was an effect here comparing
      `sandboxAppliedCount` -- a count of EFFECTIVE actions -- against an index taken from the raw log, two
@@ -4432,12 +4442,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* Design note #1173: and never longer than a plausible round trip. A write that failed, or a room whose
      listener has dropped, must not leave a player unable to act -- a stuck latch is a worse bug than the one
-     it prevents, because the player cannot even retry their way out of it. */
-  useEffect(() => {
-    if (pendingAppendIndex === null) return undefined;
-    const timer = window.setTimeout(() => setPendingAppendIndex(null), ACTION_LATCH_BACKSTOP_MS);
-    return () => window.clearTimeout(timer);
-  }, [pendingAppendIndex]);
+     it prevents, because the player cannot even retry their way out of it. The backstop is `useActionLatch`'s
+     (Phase 3 W3-B): `ACTION_LATCH_BACKSTOP_MS` once the room link holds nothing; while it holds a submission the
+     link -- which settles, drops or refuses it -- is the guard, never the clock. */
   /* Design note #527: the table's game id, in a ref for the dispatch callbacks. `null` when there is no table. */
   const sandboxRoomRef = useRef<string | null>(null);
   /** The next LOG index to append at -- the log's own length, which never
@@ -4448,12 +4455,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
    *  A REF RATHER THAN STATE, for the reason every other atom in this file has one (#265/#537a): the dispatch
    *  reads it inside an awaited call, and a closure over committed state would be a render behind. */
   const serverLinkRef = useRef<ServerLink | null>(null);
-  /* Phase 3 W3-I (AUD-19.01 / AUD-02.05 / AUD-02.06 / AUD-03.11): THE LINK'S QUEUE, READ ONCE, OUTSIDE THE DRAIN. The
-     active room link's read-only queue state (`serverLink.ts`), through one hook -- never touching the link callbacks.
-     The par prompt reads it raw (it needs the landing signal); the offer forms read its view (still held / queued). On
-     the Firestore / hotseat path there is no room link and both are idle. */
-  const linkQueue = useLinkQueue();
-  const linkQueueNote = useMemo(() => linkQueueView(linkQueue), [linkQueue]);
   /* ==================================================================
       DESIGN NOTE 1218: THE GENERIC MESSAGE WAS EATING THE SPECIFIC ONE
      ==================================================================

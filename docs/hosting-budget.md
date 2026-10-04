@@ -48,11 +48,11 @@ browser ──https──► CloudFront (existing distribution; play.<domain> un
   - **`rpc-proxy`**:
     - a second CloudFront distribution, `E271XZAA1MQR4H`: the CORS proxy for the uni-7 RPC that the published frontend
       and the Keplr money path use;
-    - owner classification KEEP-DURABLE;
-    - pay-as-you-go with no fixed charge, so its usage counts under the CloudFront line;
-    - §3's "no new CloudFront distribution" is this repository's IaC rule (the guard scans `scan_roots`). This owner-kept
-      external distribution is not a breach of it. Whether `COST_BUDGET.json` should list it is an owner decision, not
-      made here.
+    - kept by the owner's KEEP-DURABLE ruling;
+    - expected to be pay-as-you-go: P1-R1 part B confirms that it has no WAF, real-time logs or flat-rate plan;
+    - §3's "no new CloudFront distribution" is this repository's IaC rule (the guard scans `scan_roots`), and this
+      distribution is not in this repository's IaC. Whether §3 or `COST_BUDGET.json` should name it is an owner
+      decision, not made here.
   - **`network`**: may own the VPC and the NAT. The NAT's cost leaves this workload only through
     `PHASE1_LEGACY_TEARDOWN.md` T7's ownership rule.
 

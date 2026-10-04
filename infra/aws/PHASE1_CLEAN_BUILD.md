@@ -53,9 +53,9 @@ before anything else.**
   - g2 prepared but UNADOPTED, outside Terraform;
   - 0 money games, RELAYQ empty;
   - the recovery role absent, break-glass off.
-- **External Terraform stacks** (the first P1-R1 run, 2026-10-04, stopped correctly on them). Both state objects sit in
-  `s3://gs-staging-tfstate-992163310414/gs/staging/`, beside this repository's stacks, and neither stack's configuration
-  is in this repository:
+- **External Terraform stacks.** The first P1-R1 run (2026-10-04) stopped correctly on the distribution; `network.tfstate`
+  was a second discovery. Both state objects sit in `s3://gs-staging-tfstate-992163310414/gs/staging/` (R1 confirms
+  where this repository's own states sit), and neither stack's configuration is in this repository:
   - **rpc-proxy** (`rpc-proxy.tfstate`, from the ops-local checkout `1830-staging-ops\rpc-proxy`):
     - CloudFront distribution `E271XZAA1MQR4H`, the CORS proxy for the uni-7 RPC `juno.rpc.t.stavr.tech`;
     - its origin-request and response-headers policies.
@@ -137,27 +137,45 @@ T3: the services are destroyed, never restarted.
 
 `terraform_states` lists every known state object.
 
-**Live confirmation (the LIVE session, read-only; the prompt in §11 A).**
-- **Every Terraform state object.** R1 enumerates every state object under the staging state bucket(s) and prefix --
-  not only the states this repository expects. Each is named and mapped to a `terraform_states` entry. For each
-  EXTERNAL state, R1 records:
-  - the S3 key, and whether it can be read;
-  - its resource addresses (a read-only `terraform state list`, or an equivalent read-only state inspection that saves
-    nothing but the addresses);
-  - the live resources behind them, and their inventory classification;
-  - the owning checkout or stack, if known;
-  - whether any Phase-1 teardown step proposes to mutate one of them.
+**Live confirmation (the LIVE session, read-only; the prompt in §11 A).** R1 runs in two parts, because T3 is the
+critical path (`PHASE1_LEGACY_TEARDOWN.md` "The T3 fast path"):
+- **Part A -- before T3: what T1, T2 and T3 depend on.**
+  - **Every Terraform state object.** R1 enumerates every state object in the staging state bucket(s) -- every
+    `.tfstate` key, not only the staging prefix, and not only the states this repository expects. Each is named and
+    mapped to a `terraform_states` entry. For each state, R1 records:
+    - the S3 key, and whether it can be read;
+    - its resource addresses and ids, by T0.11's streaming read form, which keeps nothing else of the state. Never a
+      `terraform init` against another stack's key, never `-migrate-state` or `-force-copy`, never a plan or apply of
+      an external stack.
   - **An unknown state is a STOP**, exactly like an unknown resource. The known list is not a closed count: five are
     known today (app, ledger, single-host, rpc-proxy, network).
-- **Every live resource.** Every live resource of the app and ledger accounts that carries the environment's names or
-  tags, or that any state lists, is matched to an inventory entry.
-- **Also recorded:**
-  - the three read-only plans of T0.9;
-  - the host's rendered configuration (§6);
-  - the NAT facts (T0.10), including whether the NAT and NAT EIP are members of `network.tfstate`;
-  - which state, if any, holds the VPC, subnets, route tables and IGW.
+  - **Every live resource of the app account** that carries the environment's names or tags, or that any state lists,
+    is matched to an inventory entry.
+  - the rpc-proxy distribution's ETag and status (T0.11), and every other `[PRE-T3]` fact of T0, including T0.12's
+    casualty check: no other state manages what T3 destroys, and nothing else hangs on it.
+- **Part B -- may follow T3.** Each item gates the later step it names:
+  - for each EXTERNAL state, beyond its addresses (T7, R6):
+    - the live resources behind them, and their inventory classification;
+    - the owning checkout or stack, if known;
+    - whether any Phase-1 teardown step proposes to mutate one of them;
+  - the NAT facts (T0.10), including whether the NAT and NAT EIP are members of `network.tfstate`, their tags and
+    CloudTrail's user agent (T7);
+  - which state, if any, holds the VPC, subnets, route tables and IGW, and whether the private route tables are
+    network-owned (recorded; T7, R6);
+  - every live resource of the ledger account, its state's listing, and the ledger plan of T0.9 (T5);
+  - the host's rendered configuration (§6) and the single-host plan of T0.9 (R4);
+  - the backup vault's key and any on-demand backups, and the rpc-proxy's cost facts: expected pay-as-you-go, with R1
+    confirming no WAF, real-time logs or flat-rate plan (R6 item 6).
 - **A live resource or state the inventory cannot place, or any state drift, is a STOP.** It is an owner decision, and
   the source inventory is amended in a reviewed change.
+  - **T3 fast path only.** An owner ruling recorded in the R1 record may place a newly found state or resource
+    provisionally, as REVIEW and never in a DELETE class, when all three hold:
+    - it can be read;
+    - T0.12 finds that it shares nothing with T3's destroy set and hangs on nothing in it;
+    - no step T1–T3 touches it.
+
+    Its reviewed source amendment then follows before any later step touches it, and before R6. Anything else stays a
+    STOP.
 
 ## 4. P1-R2 — Source / IaC reconciliation (this branch)
 
@@ -197,9 +215,20 @@ The smallest change that makes the active Phase-1 procedure "final state → dir
 - **T8** the ALB's DNS name and certificate, the ECS task-definition revisions, and optionally g2;
 - **T9** read-only proof that the legacy plane is gone.
 
+**The critical path is T3** (owner, 2026-10-04). The teardown's "T3 fast path" runs, in order:
+1. R1 part A and T0's `[PRE-T3]` items;
+2. T1, which the guards make a prerequisite;
+3. T2, only if the ALB is deletion-protected;
+4. the judged `compute-none` plan;
+5. `READY FOR GO-T3`.
+
+The network stack's contents beyond T0.12's overlap check, the NAT's ownership and window, the ledger and single-host
+plans, R4 / R5, T4–T9 and Phase-3 work all come after T3 and never delay it.
+
 **External stacks.** No teardown step touches the rpc-proxy stack: T1's plan is the app stack's, targeted at its own
 distribution, and T0 / T9 only read `E271XZAA1MQR4H`. No teardown step touches the network stack either, except through
-T7's separately reviewed change (if the NAT belongs to it).
+T7's separately reviewed change (if the NAT belongs to it). T3 removes this repository's own gateway endpoints and so
+their routes in the private route tables; that is not a change to the network stack (the teardown's T3 step 3).
 
 **Why this order.** The existing guards fix T1 before T3:
 - `edge-cutover` refuses `compute = "none"`;
@@ -293,7 +322,7 @@ After it: 12b on the new host, deploy, and the R5 suite in full, plus `host-cert
 | E2 | A controlled one-game JUNO money smoke | ONE 2-seat money game on the escrow the host is configured for TODAY (the Juno document's chain, contract and keys) -- no KMS key, contract, document, frontend or stack change ("E2" below) | settled on chain and finalized; payouts = the independent integer computation; `money <game> --chain` all green |
 | E3 | Money sweep healthy; `gamesDoctor` clean | `money-sweep` every 60 s, `MoneySweepSecondsSinceSuccess` < 180, `HostHealthProblems` 0; `gamesDoctor aws status`, `games --money` (none open after E2), `orphans` (none), `money <game> --chain` (every verdict green) | all hold |
 | F1 | Browser join / play smoke | `https://play.<domain>`: sign-in, `__Host-gs_session`, lobby, a no-money game (kept for D3), reconnect | the owner records it |
-| Z | The closure record | A1 again, after E2, every drill and T7 (fresh capture and run id; `--allow-nat` only for a NAT T7 kept as another workload's, never a provisional one) | `VERIFIED` |
+| Z | The closure record | A1 again, after E2, every drill and T7 (fresh capture and run id; `--allow-nat` only for a NAT T7 kept as another workload's, or one named by the owner's recorded closure-policy amendment, never a provisional one) | `VERIFIED` |
 
 **Order:**
 1. A1, B1, B2, C1, C4, then D1, D2;
@@ -402,6 +431,9 @@ Phase 1 closes when all six hold, each with its record:
    - A customer-managed key on the ledger's backup vault, if R1 found one, adds $1 / month. It is recorded and counted
      here.
    - A NAT another workload owns is excluded only by a recorded owner decision.
+   - The rpc-proxy distribution is kept by the owner's KEEP-DURABLE ruling. It is expected to be pay-as-you-go, and R1
+     part B confirms it has no WAF, real-time logs or flat-rate plan. Whether `COST_BUDGET.json` names it is the
+     owner's decision.
 
 **Trailing confirmation, never a gate:** Cost Explorer daily for 5–7 days (the `gs:cost` tag activated) and the
 budget's alerts. Any later billing evidence above $30 / month reopens the cost issue.
@@ -460,35 +492,49 @@ budget's alerts. Any later billing evidence above $30 / month reopens the cost i
 
 ## 11. For the LIVE session
 
-**A. P1-R1 read-only inventory** -- what to read:
-- every resource in the inventory's `live_names` (present / absent);
-- EVERY Terraform state object under the staging state bucket(s) and prefix: each named and mapped to
-  `terraform_states`, with its contents listed read-only. At least app, ledger, single-host, `gs/staging/rpc-proxy.tfstate`
+**A. P1-R1 read-only inventory** -- two parts (§3). **Part A, before T3** (the T3 fast path):
+- EVERY Terraform state object in the staging state bucket(s): each named and mapped to `terraform_states`, its
+  addresses and ids read by T0.11's streaming form (nothing else of it kept; never a `terraform init` against another
+  stack's key). At least app, ledger, single-host, `gs/staging/rpc-proxy.tfstate`
   and `gs/staging/network.tfstate`; an unknown state is a STOP;
-- the T0.9 plans;
-- the host's rendered configuration and script hashes (§6 item 1): `gs-host -Command status`, plus ONE read-only Run
-  Command under the host-deploy principal printing `sha256sum /opt/gs/bin/* /etc/systemd/system/gs-*.service` and the
-  lines of `/etc/gs/server.env` and `/etc/gs/host.env`. Both files hold references only, never a secret: any line that
-  looks like a credential is a STOP;
-- the NAT facts, T_drain and the NAT's / NAT EIP's state membership (T0.10); which state holds the VPC, subnets,
-  route tables and IGW;
+- every app-account resource in the inventory's `live_names` (present / absent), and any app-account `gs-staging*` /
+  `gs:environment=staging` resource NOT in the inventory (a STOP, or §3's provisional placement);
 - the rpc-proxy distribution's ETag and status, and the external state objects' metadata (T0.11);
-- the ALB deletion-protection value;
-- `gamesDoctor aws status` / `games --money` / `orphans`;
-- any `gs-staging*` / `gs:environment=staging` resource NOT in the inventory (a STOP).
+- every other `[PRE-T3]` item of T0:
+  - the money / relay / HOLD reads and `gs-host status` (T0.3);
+  - the ALB deletion-protection value (T0.6);
+  - the app state list and plan (T0.9);
+  - the T3 casualty check (T0.12);
+- T0.10's `[CAPTURE BEFORE T3]` reads.
 
-Output: one record, `<D>\r1\`, PASS only when everything is placed and nothing drifted.
+**Part B, after T3 if need be** (each before the step it gates):
+- the external states' resources classified (T7, R6);
+- the NAT facts: T_drain, and the NAT's / NAT EIP's state membership, tags and CloudTrail user agent (T0.10; T7);
+- which state holds the VPC, subnets, route tables and IGW (T7, R6);
+- the ledger account's resources, its state's listing and the ledger plan (T5);
+- the host's rendered configuration and script hashes (§6 item 1; R4): `gs-host -Command status`, plus ONE read-only
+  Run Command under the host-deploy principal printing `sha256sum /opt/gs/bin/* /etc/systemd/system/gs-*.service` and
+  the lines of `/etc/gs/server.env` and `/etc/gs/host.env`. Both files hold references only, never a secret: any line
+  that looks like a credential is a STOP;
+- the single-host plan (R4);
+- `orphans`; the backup vault's key and on-demand backups; the rpc-proxy's cost facts (R6).
 
-**B. The OWNER-GO boundary for P1-R3** (`PHASE1_LEGACY_TEARDOWN.md`, "The OWNER-GO boundary"). After R1 and T0 PASS:
-- **The reversible steps may be batched.** The owner may send GO-T1, T2, T4 and T5 together; each is still conditional on
-  its own guard PASS and consumed immediately before its mutation.
+Output: one record, `<D>\r1\`:
+- part A's PASS: everything T1–T3 depend on placed, and nothing drifted;
+- part B's open items, each with the step it gates.
+
+**B. The OWNER-GO boundary for P1-R3** (`PHASE1_LEGACY_TEARDOWN.md`, "The OWNER-GO boundary"). After R1 part A and T0
+part A PASS:
+- **The reversible steps may be batched.** The owner may send GO-T1, T2, T4 and T5 together. Each is still conditional
+  on its own guard PASS and on T0 part B's items for that step, and is consumed immediately before its mutation.
 - **The irreversible steps never are.** Each comes in its own owner message, sent AFTER the session has posted what it
   authorises:
-  - GO-T3 follows the judged compute-none plan, whose destroy list the owner reads (it deletes the pool logs and alarm
-    history);
+  - GO-T3 follows `READY FOR GO-T3`: the judged compute-none plan, whose destroy list the owner reads (it deletes the
+    pool logs and alarm history);
   - GO-T6 follows the listed log-group names;
-  - GO-T7 follows the NAT evidence PASS and the owner's own RAM / no-planned-workload confirmation (it releases the NAT's
-    public IP);
+  - GO-T7 follows R1's ownership answer, the NAT evidence PASS and the owner's own RAM / no-planned-workload
+    confirmation (it releases the NAT's public IP). GO-T7 exists only on T7's "proven NOT Terraform-owned" path. A
+    Terraform-owned NAT's removal has its own GO, which names the reviewed external plan and never uses GO-T7's text;
   - each GO-T8a–d follows that item's evidence (T8c deletes g2 without a backup).
 - Nothing destructive happens on a GO given before its evidence exists.
 

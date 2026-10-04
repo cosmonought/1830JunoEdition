@@ -18,6 +18,22 @@ are the current truth, what must not change, and how work is done here.
   - a Terraform-owned NAT is never deleted directly. Only a separately reviewed plan against the owning stack may remove it, after the >= 24 h post-T3 evidence and the owner's GO;
   - a NAT proven outside Terraform follows the existing evidence path;
   - if ownership is unproven, T7 is BLOCKED: the NAT stays provisional, R5 continues, and R6 waits or the owner amends the closure policy.
+  - "Proven NOT Terraform-owned" needs both: no listed state holds it, and it carries no Terraform marker (tags, CloudTrail user agent).
+
+**The owner's priority (same day): T3 (`compute = "none"`) is the critical path.** This is `PHASE1_LEGACY_TEARDOWN.md` "The T3 fast path".
+- **R1 and T0 run in two parts:**
+  - **Part A, `[PRE-T3]`:** what T1–T3 depend on;
+  - **Part B, `[AFTER T3 OK]`:** each item gates a named later step.
+- **Before T3:**
+  - every state is enumerated and read by addresses and ids only (streamed, nothing else kept; never a `terraform init` against another stack's key);
+  - the T3 casualty check (T0.12): no other state manages what T3 destroys, and nothing else hangs on it.
+- **The sequence:**
+  1. T0 part A;
+  2. T1, a prerequisite the guards force;
+  3. T2, only if the ALB is deletion-protected;
+  4. the judged plan and its casualty re-check;
+  5. `READY FOR GO-T3`, the earliest point for GO-T3 (its own message).
+- **Not T3 blockers:** the network stack's contents beyond the overlap check, the NAT's ownership and 24 h window, the ledger and single-host plans, T4–T9, R4–R6, and Phase-3.
 
 **Tests:** `phase1CleanBuild` pins all of this. Record: Project `claude/PHASE1_EXTERNAL_STACK_INVENTORY_AMENDMENT_2026-10-04.md`.
 
@@ -325,6 +341,9 @@ When this file names a Project document, it writes `Project: claude/<name>`.
   - the VPC, subnets, route tables and IGW are KEEP;
   - the NAT's ownership decides T7's path. A Terraform-owned NAT is removed only by a reviewed change to its own stack; unproven ownership is BLOCKED;
   - R1 enumerates every staging state; an unknown state is a STOP.
+- **The critical path is T3** (`PHASE1_LEGACY_TEARDOWN.md` "The T3 fast path"):
+  - R1 part A and T0's `[PRE-T3]` items, then T1, then T2 if needed, then the judged plan, then `READY FOR GO-T3`;
+  - everything else follows T3.
 - **The principal effect:** every cross-account ledger / KMS grant names the app account root with an `aws:PrincipalArn` condition, so deleting the ECS task role invalidates no policy. T5 removes its name so that a new role of that name inherits nothing.
 - **Final-system certification:** `PHASE1_CLEAN_BUILD.md` §7 (A topology, B runtime, C safety authority, D persistence / signing, E money, F edge).
   - Its acceptance rule: a host-cert record is accepted on PASS, or on NOT EVALUATED whose only open checks are the readiness-503 sampler or the journal wording (with EXIT_CODE / EXIT_STATUS proven).

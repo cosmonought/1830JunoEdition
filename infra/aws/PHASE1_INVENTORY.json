@@ -11,18 +11,18 @@
     "unresolved:<candidate>|<candidate>": "ownership not yet proven: P1-R1 resolves it from the states' contents, and nothing with unresolved ownership is mutated"
   },
   "terraform_states": {
-    "rule": "EVERY Terraform state object P1-R1 finds under the staging state bucket(s) and prefix is listed here and mapped to an ownership. An unlisted state is a STOP, exactly like an unplaced AWS resource. The list is not closed: it records what is known. A newly found state is added only by an owner decision and a reviewed amendment, never by R1 itself.",
+    "rule": "EVERY Terraform state object P1-R1 finds in the staging state bucket(s) (every .tfstate key, not only the staging prefix) is listed here and mapped to an ownership. An unlisted state is a STOP, exactly like an unplaced AWS resource. The list is not closed: it records what is known. A newly found state is added only by an owner decision and a reviewed amendment, never by R1 itself (for the T3 fast path an owner ruling may first place it provisionally as REVIEW: PHASE1_CLEAN_BUILD.md section 3). A state is read only by its addresses and ids (PHASE1_LEGACY_TEARDOWN.md T0.11: streamed, nothing else kept); never terraform init in infra/aws/stacks/* against another stack's key, never -migrate-state or -force-copy, never a plan or apply of an external stack.",
     "known": [
       { "stack": "app", "ownership": "terraform:app", "key": "this repository's convention gs/<env>/app.tfstate (-backend-config key=...); R1 records the live bucket and key", "configuration": "infra/aws/stacks/app", "source": "repository", "contents": "R1: terraform state list" },
       { "stack": "ledger", "ownership": "terraform:ledger", "key": "the same convention, gs/<env>/ledger.tfstate, in the ledger account's backend if that account is separate; R1 records it", "configuration": "infra/aws/stacks/ledger", "source": "repository", "contents": "R1: terraform state list" },
       { "stack": "single-host", "ownership": "terraform:single-host", "key": "the single-host stack's -backend-config key; R1 records it", "configuration": "infra/aws/stacks/single-host", "source": "repository", "contents": "R1: terraform state list" },
-      { "stack": "rpc-proxy", "ownership": "external-terraform:rpc-proxy", "key": "s3://gs-staging-tfstate-992163310414/gs/staging/rpc-proxy.tfstate", "configuration": "NOT in this repository: the ops-local checkout 1830-staging-ops\\rpc-proxy", "source": "the P1-R1 live report (2026-10-04)", "contents": "R1: a read-only state list / state read. The report named one CloudFront distribution, one origin-request policy and one response-headers policy" },
-      { "stack": "network", "ownership": "external-terraform:network", "key": "s3://gs-staging-tfstate-992163310414/gs/staging/network.tfstate", "configuration": "NOT in this repository; the owning checkout is not yet recorded (R1)", "source": "the P1-R1 live report (2026-10-04): the object exists, created 2026-10-01", "contents": "UNKNOWN until R1 enumerates it. Some or all of the VPC, subnets, route tables, internet gateway, NAT gateway and NAT EIP may be in it" }
+      { "stack": "rpc-proxy", "ownership": "external-terraform:rpc-proxy", "key": "s3://gs-staging-tfstate-992163310414/gs/staging/rpc-proxy.tfstate", "configuration": "NOT in this repository: the ops-local checkout 1830-staging-ops\\rpc-proxy", "source": "the P1-R1 live report (2026-10-04)", "contents": "R1 part A: its addresses and ids by T0.11's streaming read form. The report named one CloudFront distribution, one origin-request policy and one response-headers policy" },
+      { "stack": "network", "ownership": "external-terraform:network", "key": "s3://gs-staging-tfstate-992163310414/gs/staging/network.tfstate", "configuration": "NOT in this repository; the owning checkout is not yet recorded (R1)", "source": "the P1-R1 live report (2026-10-04): the object exists, created 2026-10-01", "contents": "UNKNOWN until R1 enumerates it. Some or all of the VPC, subnets, route tables, internet gateway, NAT gateway and NAT EIP may be in it. Before T3, R1 part A reads only its addresses and ids (T0.12: no id T3 destroys is in it); classifying them is R1 part B (before T7)" }
     ]
   },
   "classes": {
     "KEEP-DURABLE": "KEEP -- durable application / security authority (never deleted, replaced or moved by Phase 1)",
-    "KEEP-HOST": "KEEP -- the final low-cost hosting plane (stacks/single-host and its DNS)",
+    "KEEP-HOST": "KEEP -- the final low-cost hosting plane (stacks/single-host and its DNS) and the network it sits in (the VPC, subnets, route tables and IGW: never deleted, whichever stack owns them)",
     "DELETE-LEGACY": "DELETE -- legacy ECS-era hosting belonging only to this workload",
     "DELETE-MIGRATION": "DELETE -- migration / drill-only resource, only after its stated proof",
     "REVIEW": "REVIEW -- ownership or shared-use ambiguity: never deleted by Phase 1 without the stated evidence and an owner decision"
@@ -437,7 +437,7 @@
       "dependencies": ["every guarded plan reads it"],
       "reversible": "kept",
       "principal_effect": "none",
-      "state_action": "R1 lists EVERY state object under the staging prefix and records each one's contents read-only (terraform state list for this repository's stacks; a read-only state list or state read for the external ones)",
+      "state_action": "R1 lists EVERY state object (every .tfstate key of the bucket, not only the staging prefix) and reads each one's addresses and ids by T0.11's streaming form, which keeps nothing else (plus terraform state list for this repository's stacks). T0.11 and T9 list the objects again; no state object is ever written",
       "budget_items": ["S3 (Terraform state)"]
     },
     {
@@ -510,7 +510,7 @@
       "teardown_step": "T7",
       "reversible": "NO for its public IP (a recreated NAT gets a new address); the gateway itself is recreatable",
       "principal_effect": "none",
-      "state_action": "none until R1 proves ownership. If it is in network.tfstate: only a separately reviewed plan against that stack, never a direct AWS deletion. If proven outside Terraform: T7's evidence path. If unproven: T7 is BLOCKED (the NAT stays; R6 waits or the owner amends closure policy)",
+      "state_action": "none until R1 proves ownership (part B; never a T3 blocker). If it is in network.tfstate: only a separately reviewed plan against that stack, never a direct AWS deletion. Proven outside Terraform (in no listed state AND no Terraform marker: no gs:managed-by=terraform or gs:stack tag on it or its EIP, no Terraform user agent in CloudTrail): T7's evidence path. A marker no listed state explains, or any other doubt: unproven, T7 is BLOCKED (the NAT stays; R6 waits or the owner amends closure policy)",
       "budget_items": []
     },
     {
@@ -521,7 +521,7 @@
       "account": "app",
       "resources": [],
       "live_names": ["network.vpc_id and its subnets (R1 records them)"],
-      "dependencies": ["the host's public subnet and IGW route are REQUIRED", "the private subnets / route tables cost nothing"],
+      "dependencies": ["the host's public subnet and IGW route are REQUIRED", "the private subnets / route tables cost nothing", "T3 removes this repository's gateway endpoints and so their prefix-list routes from the private route tables: expected, not a change to whichever stack holds the tables"],
       "reversible": "kept",
       "principal_effect": "none",
       "state_action": "none -- Phase 1 deletes no VPC, subnet, route table or IGW (R1 records which state, if any, holds them)",
@@ -546,7 +546,7 @@
     {
       "id": "external.rpc-proxy",
       "class": "KEEP-DURABLE",
-      "what": "The external rpc-proxy stack: a CloudFront distribution that is the CORS proxy for the uni-7 RPC juno.rpc.t.stavr.tech (one origin, id uni7-rpc), with its origin-request and response-headers policies. The published frontend's pin-final.json points at it, and the browser / Keplr money path uses it: it is NOT legacy or migration debris. CloudFront is pay-as-you-go here, with no fixed charge; its usage counts under the CloudFront line (R6 item 6).",
+      "what": "The external rpc-proxy stack: a CloudFront distribution that is the CORS proxy for the uni-7 RPC juno.rpc.t.stavr.tech (one origin, id uni7-rpc), with its origin-request and response-headers policies. The published frontend's pin-final.json points at it, and the browser / Keplr money path uses it: it is NOT legacy or migration debris. CloudFront is expected to be pay-as-you-go here; R1 part B confirms that it has no WAF, real-time logs or flat-rate plan. It is kept by the owner's KEEP-DURABLE ruling; whether COST_BUDGET.json names it is the owner's decision (R6 item 6).",
       "ownership": "external-terraform:rpc-proxy",
       "state_key": "s3://gs-staging-tfstate-992163310414/gs/staging/rpc-proxy.tfstate",
       "owning_checkout": "ops-local 1830-staging-ops\\rpc-proxy (not this repository)",
@@ -569,10 +569,10 @@
       "account": "app",
       "resources": [],
       "live_names": ["UNKNOWN until R1 enumerates network.tfstate (read-only)"],
-      "dependencies": ["R1's read-only enumeration of the state", "outside.vpc and outside.nat-gateway resolve their ownership against it"],
+      "dependencies": ["R1's read-only enumeration of the state", "before T3 (T0.12): no id that T3 destroys is in it, not even inside a longer id; its classification may follow T3", "outside.vpc and outside.nat-gateway resolve their ownership against it"],
       "reversible": "kept",
       "principal_effect": "none",
-      "state_action": "none -- Phase 1 plans, applies and edits nothing in it. Removing a NAT from it would be a separately reviewed change against this stack (T7), not part of this repository",
+      "state_action": "none -- Phase 1 plans, applies and edits nothing in it. T3's removal of this repository's own gateway endpoints (and so their prefix-list routes in the private route tables) is not a change to it: the AWS provider's aws_route_table skips vpce- routes. Removing a NAT from it would be a separately reviewed change against this stack (T7), not part of this repository",
       "budget_items": []
     },
     {

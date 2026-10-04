@@ -18,14 +18,18 @@ belongs to the LIVE-6 staging gate.
 > `stacks/ledger`'s `ecs_task_role_authorized` now have NO default (every plan states them; the final values are `"none"`
 > and `false`).
 >
-> **External Terraform stacks (P1-R1, 2026-10-04).** The staging state bucket (`gs-staging-tfstate-992163310414`) also
-> holds stacks whose configuration is NOT in this repository:
+> **External Terraform stacks (P1-R1, 2026-10-04).** The staging state bucket (`gs-staging-tfstate-992163310414`)
+> holds stacks whose configuration is NOT in this repository (R1 confirms where this repository's own states sit):
 > - `gs/staging/rpc-proxy.tfstate`: CloudFront `E271XZAA1MQR4H`, the uni-7 RPC CORS proxy the frontend and the Keplr money
 >   path use. KEEP-DURABLE, never touched;
 > - `gs/staging/network.tfstate`: REVIEW, contents unknown until R1 enumerates them.
 >
 > R1 enumerates every staging state; an unknown state is a STOP. The NAT's state membership decides T7: a Terraform-owned
 > NAT is never deleted directly (`PHASE1_INVENTORY.json` `terraform_states`; `PHASE1_LEGACY_TEARDOWN.md` T7).
+>
+> **The critical path is T3** (`compute = "none"`; owner, 2026-10-04): `PHASE1_LEGACY_TEARDOWN.md` "The T3 fast path".
+> R1 part A and T0's `[PRE-T3]` items, then T1, then T2 if needed, then the judged plan, then `READY FOR GO-T3`. The
+> network stack's ownership questions, the NAT and everything after T3 never delay it.
 
 > **COST-1 (2026-10-02): the low-cost single-host topology.** The owner's hard ceiling is **$30/month** for the whole
 > recurring infrastructure (target <= $20): `docs/hosting-budget.md`, `infra/aws/COST_BUDGET.json` (pinned by

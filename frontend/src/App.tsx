@@ -605,7 +605,6 @@ import {
   autoCloseRemainingMs,
   formatCountdown,
   gameEndedAtFromLog,
-  settleRoomPayout,
 } from "./utils/closeRoomPayout";
 import {
   fleetLossNotices,
@@ -7852,25 +7851,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
                   });
                 }
               }
-            }
-
-            /* #1248: THE PAYOUT FIRES ON THE TRANSITION, never on the state (#899) -- and now on the
-               transition the REDUCER made, read the way a float is read: the board was open, the board is
-               closed. `replayingHistory` is what keeps a rebuild from firing it a second time; the Set inside
-               `settleRoomPayout` is the per-session courtesy behind that, and the contract still owes the
-               real guard (`closeRoomPayout.ts` #899).
-               ESCROW-4: closing the room pays nobody -- the #899 stub only writes to the console. The activity-log
-               line that said "the payout distribution has been dispatched for on-chain settlement" is gone: untrue
-               for a table played for fun (there is no payout) and for a real-money table (its escrow settles on
-               Juno on its own schedule; the result's financial band says where the money is). The closure itself
-               is still the general path's sentence, one entry up. */
-            if (before.room_closed !== true && after.room_closed === true && !replayingHistory) {
-              settleRoomPayout({
-                roomCode: sandboxRoomCode,
-                standings: finalStandingsRef.current,
-                totalAnte: PLACEHOLDER_TOTAL_ANTE,
-                trigger: closeRoomTriggerRef.current,
-              });
             }
 
             /* Design note #704: THE TRAINS THE PHASE TOOK. `applyPhaseChange` has rusted and trimmed fleets

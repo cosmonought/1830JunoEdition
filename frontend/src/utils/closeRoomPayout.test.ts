@@ -5,8 +5,8 @@
 // ==================================================================
 //
 // K-24 (AUD-20.09): the #899 payout stub apportioned a placeholder ante in floating point and logged it as if it
-// were a dispatch. It is a no-op now -- no arithmetic, nothing read from the request -- kept only because its one
-// caller sits in a RED region (OD-12). A-10 (AUD-18.02): the auto-close deadline is the server's game-end stamp
+// were a dispatch. It is a no-op now -- no arithmetic, nothing read from the request. Its one caller, in RED region
+// R2, was deleted under OD-12 (`shellMessageArms.test.ts` pins the absence). A-10 (AUD-18.02): the auto-close deadline is the server's game-end stamp
 // (the terminal seal's `at`), so a refresh cannot restart it. The countdown's own format is unchanged.
 
 import {

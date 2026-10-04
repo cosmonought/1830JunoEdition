@@ -172,11 +172,11 @@ describe("the room closure, #899", () => {
 
     const APP = readShell();
     expect(APP).not.toContain("isCloseRoomMsg(msg)");
-    // The payout fires on the transition the reducer made, and never from a rebuild.
-    const HOOK = "if (before.room_closed !== true && after.room_closed === true && !replayingHistory) {";
-    expect(APP).toContain(HOOK);
-    expect(sliceFrom(APP, HOOK, { length: 400 })).toContain("settleRoomPayout({");
-    expect((APP.match(/settleRoomPayout\(\{/g) ?? []).length).toBe(1);
+    // W1-N / K-24 under OD-12 (the one authorized RED R2 edit): the client payout hook is gone. Closing a room pays
+    // nobody from the client, so the apply half no longer reacts to the closure transition at all -- no call, no
+    // import, no `room_closed` edge left to fire it (and so nothing a rebuild could fire a second time).
+    expect(APP).not.toContain("settleRoomPayout");
+    expect(APP).not.toContain("after.room_closed === true && !replayingHistory");
     // And the general path asks the rule before it writes the entry.
     // #1685 (Stage 10.2): asked of the board the reducer was HANDED and the grid pair, by content.
     expect(APP).toContain("const quietDuplicate = silentWhenUnchanged(gameplay, handedToReducer ?? before, after, receiptAtoms);");

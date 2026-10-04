@@ -9,8 +9,8 @@
 // deadline is the server's game-end stamp · AUD-01.09 a visible "Copy game log" in the top bar and on the crash
 // screen. (K-24's no-op payout and the deadline helper are pinned in `utils/closeRoomPayout.test.ts`.)
 //
-// NOT HERE, ON PURPOSE: the `settleRoomPayout(...)` call site inside `runGameplayAction`'s apply half (RED R2) is
-// untouched -- deleting it needs owner decision OD-12. `shellMessageArms.test.ts` still pins it, once.
+// NOT HERE: the `settleRoomPayout(...)` call site that sat inside `runGameplayAction`'s apply half (RED R2) was
+// deleted under owner decision OD-12, as its own commit; `shellMessageArms.test.ts` pins its absence.
 
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";

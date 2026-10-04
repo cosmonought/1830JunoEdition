@@ -384,6 +384,11 @@ describe("W1-D: the shell sends the rescissions on turn, retires the chain-era c
     expect(train).toContain("onRescind={handleRescindSandboxTrainOffer}");
     expect(train).toContain("actionInFlight={actionInFlight}");
     const priv = sliceBetween(APP, "<PrivateTradePrompt", "/>");
+    // The prompt names the authority's answerer (P3-N006), the party its live buttons go to.
+    expect(priv).toContain("proposal={privateProposalShown}");
+    expect(sliceBetween(APP, "const privateProposalShown = useMemo", "}, [privateProposal, privateOfferRoles.answerer]);")).toContain(
+      "const answerer = privateOfferRoles.answerer;",
+    );
     expect(priv).toContain("viewerIsOwner={privateOfferRoles.viewerIsAnswerer}");
     expect(priv).toContain("viewerIsProposer={privateOfferRoles.viewerIsProposer}");
     expect(priv).toContain("onRescind={handleRescindPrivateOffer}");

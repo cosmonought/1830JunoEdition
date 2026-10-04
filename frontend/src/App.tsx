@@ -4092,6 +4092,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     () => trainOfferConsentRoles(gameState, viewerAddress),
     [gameState, viewerAddress],
   );
+  /* The private prompt NAMES the same party its buttons go to: the authority's answerer, not the offer's recorded
+     `owner` (which it falls back to only when the board names nobody). */
+  const privateProposalShown = useMemo<PrivateTradeProposal | null>(() => {
+    const answerer = privateOfferRoles.answerer;
+    if (!privateProposal || answerer === null || answerer === privateProposal.ownerAddress) return privateProposal;
+    return {
+      ...privateProposal,
+      ownerAddress: answerer,
+      ownerLabel: sandboxPlayerLabel(answerer) ?? truncateAddress(answerer),
+    };
+  }, [privateProposal, privateOfferRoles.answerer]);
 
   /* Inspecting and dispatching are separate gestures; only the green check is gated.
      See docs/ai_architecture/canvas_rendering.md - App.tsx #163 */
@@ -11078,8 +11089,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      corporation's current president's (`rescindTrainPurchaseRefusal`) -- the seat on turn -- so it goes through the
      ordinary turn gate with no off-turn exemption, exactly like the private's withdrawal above.
      (P3-N008) The chain-era trio that stood here -- `AcceptTrainOffer` / `RejectTrainOffer` / `RescindTrainOffer` by
-     `offer_id`, with the `GetTrainOffers` ledger they answered -- is retired from room play: every table is a room
-     (LIVE-2D), and pinned boards refuse all three (D-23). */
+     `offer_id` -- and the `GetTrainOffers` ledger panel they answered are retired from room play: every table is a
+     room (LIVE-2D), and pinned boards refuse all three (D-23). The `GetTrainOffers` POLL itself still feeds the Buy
+     Trains `blockedReason`; that read is the holds/purchase group's (W2-A / W2-C), not this slice's. */
   const handleRescindSandboxTrainOffer = useCallback(() => {
     if (!sandboxTrainProposal) return;
     runGameplayAction(`Withdrew the offer for a ${sandboxTrainProposal.modelType}-train`, {
@@ -15132,7 +15144,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         actionInFlight={actionInFlight}
       />
       <PrivateTradePrompt
-        proposal={privateProposal}
+        proposal={privateProposalShown}
         /* The owner answers in EVERY mode - the sandbox bypass turned "the owner must consent" into "whoever proposed it may consent for them".
            See docs/ai_architecture/contract_economy.md - App.tsx #662
            Phase 3 W1-D (P3-N006): the owner is the private's CURRENT owner as the authority re-derives it
@@ -15148,7 +15160,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            a guessed end (#670). */
         recipientCash={
           privateProposal
-            ? cashByPlayer(gameState)[privateOfferRoles.answerer ?? privateProposal.ownerAddress] ?? null
+            ? cashByPlayer(gameState)[privateProposalShown?.ownerAddress ?? privateProposal.ownerAddress] ?? null
             : null
         }
         onAccept={handleAcceptPrivateOffer}

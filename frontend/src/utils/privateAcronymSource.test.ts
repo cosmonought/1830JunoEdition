@@ -63,6 +63,7 @@ describe("the modal titles are built from it", () => {
       abilityKey: "mh-exchange",
       holder: "Alice",
       revenuePerOr: 20,
+      sources: [{ source: "Ipo", refusal: null }],
     });
     expect(flow.title).toBe("Exchange the MH for an NYC share?");
     /* BOTH HALVES. The positive pins the exact string; the negative is what would catch a fallback that

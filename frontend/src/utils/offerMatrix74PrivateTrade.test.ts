@@ -19,14 +19,13 @@ const { privateTradeRefusal, proposePrivateTradeRefusal, answerPrivateTradeRefus
 const { privatePriceBounds } = require("../gameEngine/privatePriceBand") as typeof import("../gameEngine/privatePriceBand");
 const { certificateBreakdown } = require("../gameEngine/gameState") as typeof import("../gameEngine/gameState");
 const { moneyTotal, moneyConservationBreach } = require("../gameEngine/cashLedger") as typeof import("../gameEngine/cashLedger");
-const { resolvePrivateExchange } = require("../gameEngine/privateExchange") as typeof import("../gameEngine/privateExchange");
 const { applyPrivateRevenue, boPresidencyRefusal } = require("../gameEngine/sandboxSession") as typeof import("../gameEngine/sandboxSession");
 const { currentPrivateOwner } = require("../gameEngine/privatePurchaseAuthority") as typeof import("../gameEngine/privatePurchaseAuthority");
 const { dhFreeStationAvailableFor, DH_PRIVATE_ID } = require("../gameEngine/dhPower") as typeof import("../gameEngine/dhPower");
 const { privateHexFor } = require("../gameEngine/privateReservations") as typeof import("../gameEngine/privateReservations");
 const { jkTileRefusal, JK_TILE_REFUSALS } = require("../gameEngine/kanawhaLicense") as typeof import("../gameEngine/kanawhaLicense");
 const { JK_PRIVATE_ID } = require("../gameEngine/levelPlayingField") as typeof import("../gameEngine/levelPlayingField");
-const { stockRoundExchangeOffers, ownsPrivateByCorporation } = require("./activePrivatePower") as typeof import("./activePrivatePower");
+const { stockRoundExchangeOffers, ownsPrivateByCorporation, mhExchangeRequestFor } = require("./activePrivatePower") as typeof import("./activePrivatePower");
 const { stateDigest } = require("../gameEngine/stateDigest") as typeof import("../gameEngine/stateDigest");
 const F = require("./offerFixtures74") as typeof import("./offerFixtures74");
 const S = require("./offerMatrix74Support") as typeof import("./offerMatrix74Support");
@@ -362,10 +361,11 @@ describe("§6 D-26: every unexercised ownership-dependent power follows the card
 
   it("the M&H exchange follows the M&H: resolver, ingress owner, Stock Round chip and the reducer all read the new owner", () => {
     const before = fullBoard();
-    expect(resolvePrivateExchange(before, MH, P2).ok).toBe(true);
+    /* Phase 3 W1-C: the shell's retired `resolvePrivateExchange` replaced by the per-pile authority read it now uses. */
+    expect(mhExchangeRequestFor(before, P2, MH, "Ipo").ok).toBe(true);
     const traded = trade(before, MH);
-    expect(resolvePrivateExchange(traded, MH, P1).ok).toBe(true);
-    expect(resolvePrivateExchange(traded, MH, P2)).toEqual({ ok: false, reason: "The Mohawk & Hudson is not yours to exchange." });
+    expect(mhExchangeRequestFor(traded, P1, MH, "Ipo").ok).toBe(true);
+    expect(mhExchangeRequestFor(traded, P2, MH, "Ipo")).toEqual({ ok: false, reason: "The Mohawk & Hudson is not yours to exchange." });
     const exchange = (player: string) => ({ ExchangePrivate: { game_id: 1, private_id: MH, company_id: NYC, player, source: "Ipo" } });
     expect(ingress(traded, P1, exchange(P1))).toBeNull();
     expect(ingress(traded, P2, exchange(P2))).toBe("Only the Mohawk & Hudson's owner can exchange it.");

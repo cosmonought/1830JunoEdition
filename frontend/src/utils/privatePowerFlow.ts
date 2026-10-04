@@ -106,8 +106,48 @@ function flowAcronym(abilityKey: PowerAbilityKey): string {
 /** What has happened to the D&H's free station. `"none"` for a power that has no station step at all. */
 export type StationOutcome = "none" | "pending" | "placed" | "forfeited";
 
+/* ==================================================================
+    PHASE 3 W1-C (AUD-10.02 / AUD-10.04): ONE STEP PER LEGAL SOURCE, AND THE OWNER PICKS
+   ==================================================================
+   The M&H's exchange used to be ONE step whose source the shell decided silently -- IPO first, then the pool
+   (`resolvePrivateExchange`, now retired). The authority (`mohawkExchange.ts`, R2) says the opposite: "When both
+   the IPO and the Bank Pool hold a legal ordinary 10%, the owner picks. When only one does, only that one is
+   legal. There is NO silent IPO-first rule." So the flow carries one step PER LEGAL SOURCE, each its own
+   answer, and the step key IS the source -- the shell reads the pile out of the key the player pressed and
+   sends exactly that one. This module judges nothing: every legal / refused verdict arrives already decided by
+   `mhExchangeRequestRefusal`, asked per source by `activePrivatePower.ts`. */
+/** Where an M&H exchange takes its certificate from -- `ExchangePrivate`'s `source`. */
+export type ExchangeSource = "Ipo" | "Bank";
+
+/** The two exchange steps. Distinct keys rather than one key plus a field, so a React list key, a click and
+ *  a dispatch all name the pile without a second lookup that could disagree with the first. */
+export type ExchangeStepKey = "exchange-ipo" | "exchange-bank";
+
+const EXCHANGE_STEP_FOR: Readonly<Record<ExchangeSource, ExchangeStepKey>> = {
+  Ipo: "exchange-ipo",
+  Bank: "exchange-bank",
+};
+
+/** The pile an exchange step takes from, or `null` for a step that is not an exchange. */
+export function exchangeSourceForStep(key: PowerFlowStep["key"]): ExchangeSource | null {
+  if (key === "exchange-ipo") return "Ipo";
+  if (key === "exchange-bank") return "Bank";
+  return null;
+}
+
+/** The pile's name as the rulebook and the authority's sentences spell it. */
+export function exchangeSourceLabel(source: ExchangeSource): string {
+  return source === "Bank" ? "Bank Pool" : "IPO";
+}
+
+/** One source, as the authority judged it for this player on this board: `refusal === null` is legal. */
+export interface ExchangeSourceOption {
+  source: ExchangeSource;
+  refusal: string | null;
+}
+
 export interface PowerFlowStep {
-  key: "lay" | "station" | "exchange";
+  key: "lay" | "station" | ExchangeStepKey;
   /** The sentence above the buttons. */
   text: string;
   /** The committing button. */
@@ -141,6 +181,15 @@ export interface PowerFlow {
    *  for the M&H (#441: "a PLAYER owning the MH may exchange it"), so the modal cannot assemble it from a
    *  ticker without being wrong for one of the three. */
   holderLine: string;
+  /** W1-C: the question the steps answer, when they are alternatives rather than a sequence (the M&H's
+   *  sources). `null` for the hex powers, whose question lives in each step's own sentence. */
+  prompt: string | null;
+  /** W1-C: why NOTHING is offered -- every source refused by the authority, in the authority's own words.
+   *  Non-null only when `steps` is empty. */
+  unavailable: string | null;
+  /** W1-C: the steps are alternative answers (pick one), not an order of operations, so the modal does not
+   *  number them -- "1." / "2." would claim the IPO comes before the Bank Pool. */
+  alternatives: boolean;
   steps: readonly PowerFlowStep[];
   /** Whether the X is offered. False the moment anything is committed. */
   cancellable: boolean;
@@ -175,6 +224,9 @@ export type PowerFlowInput =
       /** The revenue per Operating Round the exchange gives up. Absent only when the room has not reported
        *  it; the sentence then names the loss without a figure rather than printing a guess. */
       revenuePerOr?: number;
+      /** W1-C: both piles, each already judged by `mhExchangeRequestRefusal`. A legal one becomes a step; a
+       *  refused one does not, and its sentence is said instead. */
+      sources: readonly ExchangeSourceOption[];
     };
 
 /** The D&H's own hex is a mountain; the sentence says so because the token being free does not make the
@@ -233,22 +285,48 @@ export function privatePowerFlow(input: PowerFlowInput): PowerFlow {
        asked again." */
     const cost =
       revenuePerOr === undefined ? "its Operating Round revenue" : `its $${revenuePerOr}/OR revenue`;
-    const exchange: PowerFlowStep = {
-      key: "exchange",
-      text: `Exchanging this Private Company for an NYC share forfeits ${cost}. Are you sure?`,
-      actionLabel: "Exchange for NYC Share",
-      declineLabel: "No, Keep the Private",
-      declineHint: "Closes this question. The private company and its power are untouched.",
-      done: false,
-      enabled: true,
-    };
+    /* W1-C: the authority's verdicts, split. Display order is the input's (IPO, then Bank Pool) and is
+       ORDER ONLY: both legal steps are live, neither is preselected, and the shell sends whichever the
+       player presses. */
+    const legal = input.sources.filter((option) => option.refusal === null);
+    const refused = input.sources.filter((option) => option.refusal !== null);
+    /* The authority's own sentences, de-duplicated: a refusal that is not about the pile (the 60% cap, the
+       certificate limit, a request already pending, the round) is the same sentence for both sources and is
+       said once. */
+    const refusalText = Array.from(new Set(refused.map((option) => option.refusal as string))).join(" ");
+    const steps: PowerFlowStep[] = legal.map((option, index) => {
+      const where = exchangeSourceLabel(option.source);
+      const last = index === legal.length - 1;
+      return {
+        key: EXCHANGE_STEP_FOR[option.source],
+        text: `Take the 10% NYC share from the ${where}.`,
+        actionLabel: `Exchange for ${where} Share`,
+        /* "allows them to escape by selecting no" (#871): ONE named No, under the last choice, rather than
+           one per pile -- declining is a single answer to the whole question, not to a pile. */
+        declineLabel: last ? "No, Keep the Private" : null,
+        declineHint: last ? "Closes this question. The private company and its power are untouched." : null,
+        done: false,
+        enabled: true,
+      };
+    });
+    /* When exactly one pile is legal, the other's sentence says why it is missing -- only the pile can
+       differ between the two verdicts (the holding, certificate and timing rules do not depend on it), so
+       that sentence is the authority's `mhSourceRefusal` answer. */
+    const prompt =
+      steps.length === 0
+        ? null
+        : `Exchanging this Private Company for an NYC share forfeits ${cost}. Are you sure?` +
+          (steps.length > 1 ? " Choose where the share comes from." : refusalText ? ` ${refusalText}` : "");
     return {
       abilityKey,
       /* Design note #881: the old literal was "Exchange the M&H for an NYC share?" -- kept on one line per
          #814, since a wrapped quote preserves the words and destroys the string. */
       title: `Exchange the ${flowAcronym(abilityKey)} for an NYC share?`,
       holderLine: `${holder} holds this power.`,
-      steps: [exchange],
+      prompt,
+      unavailable: steps.length === 0 ? refusalText || "No NYC share can be exchanged for right now." : null,
+      alternatives: true,
+      steps,
       /* THE X AND THE "NO" BOTH MEAN THE SAME THING HERE, and that is correct rather than redundant: nothing
          is committed until the exchange fires, so every exit is the same exit. On the D&H they diverge, which
          is exactly why that flow withdraws its X once the tile is down. */
@@ -276,6 +354,9 @@ export function privatePowerFlow(input: PowerFlowInput): PowerFlow {
       /* Design note #881: was "Use the C&SL's extra tile lay?". */
       title: `Use the ${flowAcronym(abilityKey)}'s extra tile lay?`,
       holderLine: `${holder} holds this power.`,
+      prompt: null,
+      unavailable: null,
+      alternatives: false,
       steps: [lay],
       cancellable: !layDone,
       complete: layDone,
@@ -313,6 +394,9 @@ export function privatePowerFlow(input: PowerFlowInput): PowerFlow {
     /* Design note #881: was "Use the D&H's private power?". */
     title: `Use the ${flowAcronym(abilityKey)}'s private power?`,
     holderLine: `${holder} holds this power.`,
+    prompt: null,
+    unavailable: null,
+    alternatives: false,
     steps: [lay, stationStep],
     /* NOTHING COMMITTED YET. Once the tile is on the board the power is partly spent and cannot be handed
        back; from then on the only exit is the forfeit button, which says what it does. */

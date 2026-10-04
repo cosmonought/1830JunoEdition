@@ -120,7 +120,9 @@ describe("one dispatch, two doors", () => {
        produce a BACKWARDS slice, i.e. `""`, which passes every `not.toContain` beside it. `sliceBetween`
        throws instead (APP-TEST-0A). Pinned. */
     expect(actBody).not.toBe("");
-    expect(actBody).toContain("runPrivateExchange(MH_PRIVATE_ID,");
+    /* Phase 3 W1-C: the pile the player pressed -- read from the step key -- is what reaches the dispatch. */
+    expect(actBody).toContain("const exchangeSource = exchangeSourceForStep(step);");
+    expect(actBody).toContain("runPrivateExchange(exchangeSource,");
 
     /* AND THERE IS NO SECOND DOOR LEFT TO ASK. #881 routed the panel's button through the modal; #885 then
        deleted the panel and `handleUsePrivateAbility` with it, so the chip is the only entry point and the
@@ -149,7 +151,7 @@ describe("one dispatch, two doors", () => {
     /* THE DIFFERENCE FROM THE D&H, in the shell rather than in the copy. #845: "Two modals, two rules, and
        the difference is whether the question can be asked again." */
     const body = sliceBetween(APP, "const handlePowerFlowDecline", "setDhStationForfeited");
-    expect(body).toContain('if (step === "exchange")');
+    expect(body).toContain("if (exchangeSourceForStep(step) !== null) {");
     expect(body).toContain("setPrivatePowerRequest(null)");
     expect(body).not.toContain("usedPrivateAbilities");
   });

@@ -315,7 +315,14 @@ import {
 /* Design note #887: `privatePowerFlow` itself is no longer imported here. The shell used to CALL it, in the
    memo that decided which flow was open; that decision moved to `activePrivatePower.ts`, which calls it
    instead. What is left is the open/closed predicate and the key type -- the two things the render needs. */
-import { powerFlowOpen, type PowerAbilityKey } from "./utils/privatePowerFlow";
+import {
+  exchangeSourceForStep,
+  exchangeSourceLabel,
+  powerFlowOpen,
+  type ExchangeSource,
+  type PowerAbilityKey,
+  type PowerFlowStep,
+} from "./utils/privatePowerFlow";
 // Design note #729: which cities a corporation may not run through.
 import { cityBlockerFor } from "./gameEngine/cityBlocking";
 import {
@@ -736,16 +743,12 @@ import { PRIVATE_COMPANY_CATALOG } from "./utils/privateCatalog";
 // Design note #887: the shell's private-power derivations, extracted so a test can call them.
 import {
   deriveActivePowerFlow,
+  mhExchangeRequestFor,
   ownsPrivateByCorporation,
   stockRoundExchangeOffers,
 } from "./utils/activePrivatePower";
 import { playerFinances } from "./utils/playerFinance";
-import {
-  CA_BONUS_TICKER,
-  CA_PRIVATE_ID,
-  MH_PRIVATE_ID,
-  resolvePrivateExchange,
-} from "./gameEngine/privateExchange";
+import { CA_BONUS_TICKER, CA_PRIVATE_ID, MH_PRIVATE_ID } from "./gameEngine/privateExchange";
 import { effectiveActions, undoReachFor } from "./gameEngine/logRevert";
 import { buildSandboxLogExport } from "./utils/logExport";
 import { watcherTrainDrafts } from "./utils/watcherRouteChips";
@@ -5820,34 +5823,49 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      already holding 60% of the NYC and one for no certificate being left in the IPO or the bank pool.
 
      THE RETURN VALUE IS THE FIX, not a second piece of state the caller inspects. `ok` is what the caller
-     needs and it is what `resolvePrivateExchange` already computed; handing it back means the modal cannot
-     close on a refusal without someone deliberately ignoring the answer.
+     needs and it is what the legality check already computed (W1-C: `mhExchangeRequestFor`); handing it back
+     means the modal cannot close on a refusal without someone deliberately ignoring the answer.
      #573b's ARGUMENT IS WHY IT GOES IN THE MODAL AND NOT ONLY IN THE LOG: "the interesting refusals ... are
      facts about somewhere else on the board ... this one has to be a sentence the player can act on." That
      note predates the modal by three hundred numbers; the modal is where the player is standing when they
      ask, and it was already the right place the moment #871 built it. */
-  const runPrivateExchange = useCallback((privateId: number, actionLabel: string): boolean => {
-    const owner = viewerAddressRef.current;
-    const outcome = resolvePrivateExchange(gameStateRef.current, privateId, owner ?? "");
+  /* ==================================================================
+      PHASE 3 W1-C (AUD-10.02 / AUD-10.04): THE PILE IS THE PLAYER'S, AND THE AUTHORITY JUDGES IT
+     ==================================================================
+     This used to ask `resolvePrivateExchange` -- a client-side copy of the rule with a flat 60% cap, no
+     Orange/Brown waiver, no certificate-limit check, and a SILENT IPO-FIRST choice of pile. It now takes the
+     pile the player pressed and asks `mhExchangeRequestRefusal` (`mohawkExchange.ts`, the reducer's and
+     ingress's own predicate) through `mhExchangeRequestFor`, so the press is judged by the rule the room
+     will apply and the message carries exactly the pile that was chosen -- never a substitute.
+     Asked AGAIN at the press even though the flow already offered only legal piles: the board can move
+     between render and click, and #882's rule stands -- a refusal reaches the asker and the modal stays open. */
+  const runPrivateExchange = useCallback((source: ExchangeSource, actionLabel: string): boolean => {
+    const outcome = mhExchangeRequestFor(
+      gameStateRef.current,
+      viewerAddressRef.current,
+      MH_PRIVATE_ID,
+      source,
+    );
     if (!outcome.ok) {
       setPrivatePowerRefusal({ abilityKey: "mh-exchange", reason: outcome.reason });
       logInfoRef.current?.("Private Power", outcome.reason);
       return false;
     }
     setPrivatePowerRefusal(null);
+    const { request } = outcome;
     void runGameplayActionRef.current?.(
-      `${actionLabel} — exchanging for a 10% ${outcome.ticker} share.`,
+      `${actionLabel} — exchanging for a 10% NYC share from the ${exchangeSourceLabel(request.source)}.`,
       {
         ExchangePrivate: {
-          private_id: outcome.privateId,
-          company_id: outcome.companyId,
-          player: outcome.player,
-          source: outcome.source,
+          private_id: request.private_id,
+          company_id: request.company_id,
+          player: request.player,
+          source: request.source,
         },
       },
       /* `automatic`: an exchange may be taken between other players' turns (the M&H's own rule), so the turn
          gate would refuse the one moment the power is most useful. Ownership is the gate here and
-         `resolvePrivateExchange` has already checked it. */
+         `mhExchangeRequestRefusal` has already checked it. */
       { automatic: true },
     );
     /* Deliberately NOT marked used: design note #573a closes the COMPANY instead, which removes the row
@@ -5859,23 +5877,25 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      module decides WHICH buttons are live; these decide what each one does, and neither duplicates the
      other's judgement. */
   const handlePowerFlowAct = useCallback(
-    (step: "lay" | "station" | "exchange") => {
+    (step: PowerFlowStep["key"]) => {
       const key = activePowerFlow?.abilityKey;
       if (!key) return;
       /* Design note #871: the exchange fires here rather than from the panel button, and it is the SAME
-         dispatch `handleUsePrivateAbility` already makes -- `resolvePrivateExchange` for the legality answer,
+         dispatch `handleUsePrivateAbility` already makes -- `mhExchangeRequestRefusal` for the legality answer,
          `ExchangePrivate` for the message, `automatic: true` because the M&H may be traded between other
          players' turns. What changed is that a confirmation now stands in front of it; the rule underneath is
          untouched, which is what keeps the panel's button and this modal from becoming two accounts of one
          move. */
-      if (step === "exchange") {
+      /* W1-C: the step key names the pile -- one step per legal source -- and that pile is what is sent. */
+      const exchangeSource = exchangeSourceForStep(step);
+      if (exchangeSource !== null) {
         /* Design note #882: CLOSED ONLY IF IT FIRED. This read `runPrivateExchange(...); setPrivatePowerRequest(null);`
            -- two statements with no relationship between them, so the question was dismissed whether or not
            it had been answered. On a refusal the modal now stays open with the reason in it, which is also
            what makes the reason worth writing: #573b's "SHOWN AFTER THE ATTEMPT rather than pre-emptively,
            because the attempt costs nothing" only holds if the player is still looking at the thing they
            attempted. */
-        if (runPrivateExchange(MH_PRIVATE_ID, "Exchange for NYC share")) {
+        if (runPrivateExchange(exchangeSource, "Exchange for NYC share")) {
           setPrivatePowerRequest(null);
         }
         return;
@@ -5914,7 +5934,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     [activePowerFlow, armPrivateHexErrand, runPrivateExchange],
   );
 
-  const handlePowerFlowDecline = useCallback((step: "lay" | "station" | "exchange") => {
+  const handlePowerFlowDecline = useCallback((step: PowerFlowStep["key"]) => {
     /* ==================================================================
        DESIGN NOTE 871: TWO DECLINES, TWO MEANINGS, AND THEY MUST NOT BE MERGED
        ==================================================================
@@ -5926,7 +5946,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        whether the question can be asked again." Same distinction, third power.
        SO THE EXCHANGE JUST CLOSES. No `usedPrivateAbilities` entry, no log line -- nothing happened, and a
        log entry for a question answered "no" would be a record of a non-event. */
-    if (step === "exchange") {
+    if (exchangeSourceForStep(step) !== null) {
       setPrivatePowerRequest(null);
       return;
     }

@@ -170,8 +170,22 @@ describe("deriveActivePowerFlow (design notes #818/#849/#871)", () => {
     mhPrivateId: MH,
   };
 
+  /* Phase 3 W1-C: the flow now asks the authority for each pile, so the board carries the NYC it would be
+     exchanged for -- 50% in the IPO, nothing in the pool, nobody holding any -- making the IPO the one legal
+     pile. `phase3W1CMhExchangeSource.test.ts` covers the full source matrix. */
+  const nycPub = {
+    company_id: NYC,
+    ticker: "NYC",
+    president: null,
+    is_floated: false,
+    par_value: null,
+    ipo_pool_percentage: 50,
+    bank_pool_percentage: 0,
+    player_holdings: [],
+  } as unknown as PublicCompanyState;
   const mhState = state({
     private_companies: [priv({ private_id: MH, owner: ALICE, revenue_per_or: "20" })],
+    public_companies: [nycPub],
   });
 
   const dhState = state({
@@ -190,7 +204,9 @@ describe("deriveActivePowerFlow (design notes #818/#849/#871)", () => {
     expect(flow!.abilityKey).toBe("mh-exchange");
     /* THE FIGURE THE DECISION TURNS ON (#443/#871), read out of the rendered sentence rather than out of the
        source that formats it. */
-    expect(flow!.steps[0].text).toContain("$20/OR revenue");
+    expect(flow!.prompt).toContain("$20/OR revenue");
+    /* W1-C: the one legal pile, as its own step. */
+    expect(flow!.steps.map((step) => step.key)).toEqual(["exchange-ipo"]);
   });
 
   it("re-checks ownership rather than trusting the click (#871)", () => {
@@ -213,10 +229,11 @@ describe("deriveActivePowerFlow (design notes #818/#849/#871)", () => {
        fixture is a non-numeric string, which is what a malformed response actually looks like. */
     const odd = state({
       private_companies: [priv({ private_id: MH, owner: ALICE, revenue_per_or: "n/a" })],
+      public_companies: [nycPub],
     });
     const flow = deriveActivePowerFlow({ ...base, state: odd, request: "mh-exchange" });
-    expect(flow!.steps[0].text).toContain("its Operating Round revenue");
-    expect(flow!.steps[0].text).not.toContain("$0");
+    expect(flow!.prompt).toContain("its Operating Round revenue");
+    expect(flow!.prompt).not.toContain("$0");
   });
 
   it("raises the D&H's station question with nobody asking (#818)", () => {
@@ -280,6 +297,52 @@ describe("deriveActivePowerFlow (design notes #818/#849/#871)", () => {
         dhForfeited: true,
       }),
     ).toBeNull();
+  });
+
+  /* Phase 3 W1-M (AUD-06.05): the board's `dh_station_pending` raises the obligation after a reload, when the
+     local set is empty. `phase3W1MDhStationReload.test.ts` plays the same thing through a room. */
+  describe("the board's window survives a reload (W1-M)", () => {
+    const pending = (over: Partial<GameStateResponse> = {}) =>
+      state({
+        current_round_type: "OperatingRound",
+        private_companies: [priv({ private_id: DH, owner_protocol_id: PRR })],
+        public_companies: [{ ...pub(PRR, "PRR"), president: ALICE } as PublicCompanyState],
+        dh_station_pending: PRR,
+        ...over,
+      });
+
+    it("offers the station to the president with an empty local set, the lay shown done", () => {
+      const flow = deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR });
+      expect(flow!.abilityKey).toBe("dh-tile");
+      expect(flow!.steps.map((step) => [step.key, step.done, step.enabled])).toEqual([
+        ["lay", true, false],
+        ["station", false, true],
+      ]);
+    });
+
+    it("not to anybody else", () => {
+      expect(deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR, viewerAddress: BOB })).toBeNull();
+      expect(deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR, viewerAddress: null })).toBeNull();
+    });
+
+    it("keeps the forfeit, the placement and the lapse exactly as they were", () => {
+      expect(
+        deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR, dhStationForfeited: true }),
+      ).toBeNull();
+      expect(
+        deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR, usedAbilities: new Set(["dh-token"]) }),
+      ).toBeNull();
+      expect(deriveActivePowerFlow({ ...base, state: pending(), actingProtocolId: PRR, dhForfeited: true })).toBeNull();
+    });
+
+    it("changes nothing when the window is absent or names another corporation", () => {
+      expect(
+        deriveActivePowerFlow({ ...base, state: pending({ dh_station_pending: undefined }), actingProtocolId: PRR }),
+      ).toBeNull();
+      expect(
+        deriveActivePowerFlow({ ...base, state: pending({ dh_station_pending: NYC }), actingProtocolId: PRR }),
+      ).toBeNull();
+    });
   });
 
   it("lets the standing obligation win over a different request", () => {

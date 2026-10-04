@@ -118,6 +118,16 @@ export function PrivatePowerFlowModal({
             {refusal}
           </p>
         )}
+        {/* W1-C: WHY NOTHING IS OFFERED, in the authority's words -- every source refused before the click,
+            so there is no step to press and the sentence takes its place. The same amber box as a refusal,
+            because it is the same kind of answer; not repeated when a press has just been refused. */}
+        {!refusal && flow.unavailable && (
+          <p style={styles.refusal} role="status">
+            {flow.unavailable}
+          </p>
+        )}
+        {/* W1-C: the question the alternative steps answer (the M&H's sources). */}
+        {flow.prompt && <p style={styles.stepText}>{flow.prompt}</p>}
 
         {flow.steps.map((step, index) => (
           <div
@@ -129,7 +139,9 @@ export function PrivatePowerFlowModal({
             }}
           >
             <p style={styles.stepText}>
-              <span style={styles.stepIndex}>{index + 1}.</span> {step.text}
+              {/* W1-C: alternatives (pick one pile) are not numbered -- a number would claim an order. */}
+              {!flow.alternatives && <span style={styles.stepIndex}>{index + 1}. </span>}
+              {step.text}
             </p>
             {/* Design note #818: the supply, on the step that spends it. */}
             {step.key === "station" && tokensLeft !== null && (

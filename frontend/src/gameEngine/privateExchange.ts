@@ -53,98 +53,25 @@ export const PRIVATE_EXCHANGES: Readonly<
 export const CA_PRIVATE_ID = 5;
 export const CA_BONUS_TICKER = "PRR";
 
-export interface ExchangeRefusal {
-  ok: false;
-  /** A whole sentence, for the player. */
-  reason: string;
-}
-
 export interface ExchangeGrant {
   ok: true;
   privateId: number;
   companyId: number;
   ticker: string;
   player: string;
-  /** Where the certificate comes from -- the IPO first, then the pool. */
+  /** Where the certificate comes from. Phase 3 W1-C: always the pile the OWNER chose (`mohawkExchange.ts` R2),
+   *  or the Camden & Amboy grant's own checked pile -- never a preference this module applies. */
   source: "Ipo" | "Bank";
   /** Design note #576: the C&A's bonus leaves the company open and paying.
    *  Default (absent/false) closes it, which is the M&H's exchange. */
   keepOpen?: boolean;
 }
 
-export type ExchangeOutcome = ExchangeRefusal | ExchangeGrant;
-
-/** Can this player exchange this private right now, and for what?
- *
- *  PURE, and separate from the state change on purpose: the panel wants the
- *  reason on a disabled button BEFORE the click, and the dispatch wants the same
- *  answer at the moment it fires. One function asked twice cannot drift the way a
- *  disabled-check and a guard would. */
-export function resolvePrivateExchange(
-  state: GameStateResponse | null,
-  privateId: number,
-  player: string,
-): ExchangeOutcome {
-  const target = PRIVATE_EXCHANGES[privateId];
-  if (!target) return { ok: false, reason: "This private cannot be exchanged." };
-  if (!state) return { ok: false, reason: "No game state yet." };
-
-  const priv = state.private_companies.find((entry) => entry.private_id === privateId);
-  if (!priv) return { ok: false, reason: "That private company is not in this game." };
-  if (priv.closed) return { ok: false, reason: `The ${priv.name} has already been exchanged.` };
-  if (priv.owner !== player) {
-    return { ok: false, reason: `The ${priv.name} is not yours to exchange.` };
-  }
-
-  const company = state.public_companies.find((entry) => entry.ticker === target.ticker);
-  if (!company) {
-    return { ok: false, reason: `The ${target.corporationName} is not in this game.` };
-  }
-
-  const held = company.player_holdings
-    .filter((entry) => entry.player === player)
-    .reduce((sum, entry) => sum + entry.percentage, 0);
-  if (held + EXCHANGE_SHARE_PERCENT > PLAYER_HOLDING_CAP_PERCENT) {
-    /* Design note #573b: the reason names the NUMBER, because "you are at
-       the limit" leaves the player checking it themselves -- and says the
-       power survives, because the whole point of refusing rather than
-       spending is that they can come back to it. */
-    return {
-      ok: false,
-      reason:
-        `You already hold ${held}% of the ${target.ticker} and no player may exceed ` +
-        `${PLAYER_HOLDING_CAP_PERCENT}%. Sell a share first — the exchange stays available.`,
-    };
-  }
-
-  /* IPO FIRST, THEN THE POOL. 1830's exchange takes a certificate from the
-     bank or the pool, and the IPO is the pile that exists from the start --
-     taking from the pool while the IPO still holds shares would quietly
-     shrink the supply a player can buy at par. */
-  const source: "Ipo" | "Bank" | null =
-    company.ipo_pool_percentage >= EXCHANGE_SHARE_PERCENT
-      ? "Ipo"
-      : company.bank_pool_percentage >= EXCHANGE_SHARE_PERCENT
-        ? "Bank"
-        : null;
-  if (source === null) {
-    return {
-      ok: false,
-      reason:
-        `No ${target.ticker} certificate is available in the IPO or the bank pool. ` +
-        `The exchange stays available.`,
-    };
-  }
-
-  return {
-    ok: true,
-    privateId,
-    companyId: company.company_id,
-    ticker: target.ticker,
-    player,
-    source,
-  };
-}
+/* Phase 3 W1-C (AUD-10.02): `resolvePrivateExchange` -- the shell's client-side legality check, with a flat 60%
+   cap, no Orange/Brown waiver, no certificate-limit check and a silent IPO-first source -- is RETIRED. The shell
+   was its only caller; it now asks `mhExchangeRequestRefusal` (`mohawkExchange.ts`), the predicate the reducer and
+   ingress already ask, per pile the player may choose. `applyPrivateExchange` and the constants above stay: the
+   reducer and `mohawkExchange.ts` import them. */
 
 /** Performs the exchange: the share arrives, the private closes.
  *
@@ -158,8 +85,8 @@ export function applyPrivateExchange(
   if (!priv || priv.closed) return state;
   /* DA-5 (DA-F6): A CERTIFICATE THE PILE DOES NOT HOLD IS NOT GRANTED. The two subtractions below are floored at
      zero, so a pile short of 10% gave the holder a share and removed less than one -- probe Q2's PRR at 110%, the
-     board SET-0A's appraiser refuses. Every caller now names a pile it has checked (`resolvePrivateExchange`,
-     `camdenGrantSource`); this is the boundary that makes minting impossible rather than merely avoided. */
+     board SET-0A's appraiser refuses. Every caller now names a pile it has checked (`mohawkExchange.ts`'s
+     `mhSourceRefusal`, `camdenGrantSource`); this is the boundary that makes minting impossible rather than merely avoided. */
   const target = state.public_companies.find((company) => company.company_id === grant.companyId);
   const pile = grant.source === "Ipo" ? target?.ipo_pool_percentage : target?.bank_pool_percentage;
   if (!target || !(Number(pile) >= EXCHANGE_SHARE_PERCENT)) return state;

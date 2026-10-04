@@ -16,10 +16,10 @@
 // Design notes #15-#21 (map fixtures, activity log, tab rename, ticker,
 // turn alerts) extracted - see docs/ai_architecture/INDEX.md
 
-// Design note #605: `useLayoutEffect` for the status dock's scroll
-// compensation -- it has to run after React commits the new bottom padding
-// and before the browser paints, or the correction is visible as a jump.
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+// Design note #605: the status dock's scroll compensation is a `useLayoutEffect` -- it has to run after React
+// commits the new bottom padding and before the browser paints, or the correction is visible as a jump. Since
+// Phase 3 W1-I it lives in `utils/useStatusDockHeight.ts` with the dock's observer.
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { WalletProvider, useWallet, CONTRACT_ADDRESS } from "./context/WalletContext";
 import { CosmWasmClient } from "@cosmjs/cosmwasm-stargate";
@@ -59,6 +59,7 @@ import { STATIC_BOARD_HEXES, heraldHexFor } from "./components/hexBoardData";
 import { activateRules, boardFor, routeRulesRevisionOf, withRules } from "./gameEngine/boardSelection";
 /* Design note #1294: the chrome scale, live. */
 import { useUiScale } from "./utils/useUiScale";
+import { useStatusDockHeight } from "./utils/useStatusDockHeight";
 import { initialGridFor } from "./gameEngine/initialGrid";
 import {
   dieselExchangeMayFollowPurchase,
@@ -3102,34 +3103,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
 
   /* The dock's real height is measured by a ResizeObserver and reserved as root padding; #605 also scrolls the page by the delta, in a layout effect, so the growth does not cover content.
      See docs/ai_architecture/ui_shell_layout.md - App.tsx #599 */
-  const statusDockRef = useRef<HTMLDivElement | null>(null);
-  const [statusDockHeight, setStatusDockHeight] = useState(96);
-  const measuredDockHeightRef = useRef<number | null>(null);
-  const pendingDockScrollRef = useRef(0);
-  useEffect(() => {
-    const node = statusDockRef.current;
-    if (!node || typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver(() => {
-      const next = node.getBoundingClientRect().height;
-      const previous = measuredDockHeightRef.current;
-      // Sub-pixel churn from fractional layout is not a resize anyone asked
-      // about, and compensating for it would fight the scroller.
-      if (previous !== null && Math.abs(next - previous) < 1) return;
-      if (previous !== null) pendingDockScrollRef.current += next - previous;
-      measuredDockHeightRef.current = next;
-      setStatusDockHeight(next);
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-  useLayoutEffect(() => {
-    const delta = pendingDockScrollRef.current;
-    if (delta === 0) return;
-    pendingDockScrollRef.current = 0;
-    // `scrollBy` clamps itself at both ends, so a collapse at the top of the
-    // page is a no-op rather than a negative scroll.
-    window.scrollBy(0, delta);
-  }, [statusDockHeight]);
+  /* Phase 3 W1-I (A-14): the observer used to sit here with `[]` deps and a plain ref, so a room -- which renders a
+     gate page first -- never attached it and the dock stayed at 96 px. The hook takes a callback ref and attaches
+     when the dock node exists; the measurement and the scroll compensation are unchanged. */
+  const { dockRef: statusDockRef, dockHeight: statusDockHeight } = useStatusDockHeight();
   const [isTickerExpanded, setIsTickerExpanded] = useState(false);
   const [feedFilter, setFeedFilter] = useState<FeedFilter>("all");
   // Counts CHAT items seen, not feed items - the two figures are subtracted, so they must share units.
@@ -13828,7 +13805,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           the lobby's own panel. Both are surfaces where there is genuinely no room yet, which is the only
           state this component has anything to say in. */}
       {/* #1423: one sticky dock for the action bar and the minimised epilogue beneath it. */}
-      <div style={styles.actionDock} data-sticky-dock="true">
+      {/* Phase 3 W1-I (P3-N015): the dock is a named landmark, so assistive tech can jump to the turn's controls. */}
+      <div style={styles.actionDock} data-sticky-dock="true" role="region" aria-label="Game actions">
       {spectator ? (
         <div style={styles.spectatorNotice}>
           👁 Watching game #{gameId}. Board, ledger and market are live; every action

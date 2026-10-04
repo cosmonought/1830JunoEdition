@@ -108,7 +108,9 @@ describe("R12-2: hosted ingress and the reducer are scoped to the table's rules 
 
   it("the reducer's entries and the replay engine name the pin's route rules wherever they open the table's rules", () => {
     const SESSION = readStripped("gameEngine/sandboxSession.ts");
-    expect(SESSION).toContain("return withRules(resolveVariants(variants), () => applySandboxActionOnBoard(state, msg, ctx), revision);");
+    // W3-K (rules v13, owner ruling 2): the result is then handed to the Brown-continuation close, still under the same rules.
+    expect(SESSION).toContain("const next = withRules(resolveVariants(variants), () => applySandboxActionOnBoard(state, msg, ctx), revision);");
+    expect(SESSION).toContain("return closeBrownContinuationOnInterveningAction(state, next, msg, ctx);");
     const REPLAY = readStripped("gameEngine/replayLog.ts");
     expect(REPLAY).toContain("withRules(resolveVariants(variants), () => this.applyOnBoard(entry, msg, observe), revision);");
     expect(REPLAY).toContain("routeRulesRevisionOf(this.state),");

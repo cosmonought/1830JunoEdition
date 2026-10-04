@@ -381,3 +381,133 @@ describe("the official Brown Bank Pool rule (SBS-3 / SBS-4), not V-6.3 Buy All",
     expect(holding(buy(sold, CPR, "Bank"), CPR)).toBe(20);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* Owner rulings 2 and 3 (2026-10-04): intervening actions and the M&H  */
+/* ------------------------------------------------------------------ */
+
+const SV = 1; // Schuylkill Valley: p0's, for a player-to-player trade
+const MH = 4; // Mohawk & Hudson: p0's, exchanges for an NYC 10%
+/** The Stock Round board with two privates in p0's hand (the seat holder). */
+function withPrivates(over: Partial<GameStateResponse> = {}): GameStateResponse {
+  return board({
+    private_companies: [
+      { private_id: SV, name: "Schuylkill Valley", cost: "20", revenue_per_or: "5", owner: "p0", owner_protocol_id: null, closed: false },
+      { private_id: MH, name: "Mohawk & Hudson", cost: "110", revenue_per_or: "20", owner: "p0", owner_protocol_id: null, closed: false },
+    ],
+    ...over,
+  } as Partial<GameStateResponse>);
+}
+const PROPOSE = { ProposePrivateTrade: { game_id: 1, private_id: SV, seller: "p0", buyer: "p1", price: 30 } };
+const ANSWER = (accept: boolean) => ({ AnswerPrivateTrade: { game_id: 1, private_id: SV, accept } });
+const EXCHANGE_MH = (player = "p0") => ({ ExchangePrivate: { game_id: 1, private_id: MH, company_id: NYC, player, source: "Ipo" } });
+const ownerOf = (s: GameStateResponse, id: number) => s.private_companies.find((entry) => entry.private_id === id)!;
+
+describe("owner ruling 2: the Brown continuation is one contiguous purchase by the ACTIVE player", () => {
+  it("A. Pool CPR -> an accepted private trade on p0's turn -> Pool CPR: the final Pool CPR is REFUSED", () => {
+    const pool = buy(withPrivates(), CPR, "Bank");
+    expect(pool.brown_pool_continuation_company).toBe(CPR);
+    const proposed = act(pool, PROPOSE, "p0");
+    expect(proposed.private_trade_offer?.private_id).toBe(SV);
+    expect(proposed.brown_pool_continuation_company).toBe(CPR); // a proposal transacts nothing
+    const traded = act(proposed, ANSWER(true), "p1"); // the counterparty's acceptance settles p0's trade
+    expect(ownerOf(traded, SV).owner).toBe("p1");
+    expect(traded.brown_pool_continuation_company).toBeUndefined();
+    expect(seatOf(traded)).toBe("p0"); // the turn is still p0's ...
+    expect(refusal(traded, CPR, "Bank")).toContain("One certificate purchase per turn"); // ... but the purchase is over
+    expect(unchanged(buy(traded, CPR, "Bank"), traded)).toBe(true);
+    expect(ingress(traded, "p0", BUY(CPR, "Bank"))).toContain("One certificate purchase per turn");
+  });
+
+  it("B. Pool CPR -> an M&H exchange by p0 on p0's own turn -> Pool CPR: the final Pool CPR is REFUSED", () => {
+    const pool = buy(withPrivates(), CPR, "Bank");
+    const exchanged = act(pool, EXCHANGE_MH("p0"), "p0");
+    expect(ownerOf(exchanged, MH).closed).toBe(true);
+    expect(holding(exchanged, NYC)).toBe(20); // executed at once: the owner's own turn
+    expect(exchanged.brown_pool_continuation_company).toBeUndefined();
+    expect(refusal(exchanged, CPR, "Bank")).toContain("One certificate purchase per turn");
+    expect(unchanged(buy(exchanged, CPR, "Bank"), exchanged)).toBe(true);
+  });
+
+  it("C. Pool CPR -> another player's off-turn answer (a rejection) -> Pool CPR: the continuation remains", () => {
+    const pool = buy(withPrivates(), CPR, "Bank");
+    const rejected = act(act(pool, PROPOSE, "p0"), ANSWER(false), "p1");
+    expect(rejected.private_trade_offer ?? null).toBeNull();
+    expect(ownerOf(rejected, SV).owner).toBe("p0");
+    expect(rejected.brown_pool_continuation_company).toBe(CPR);
+    expect(refusal(rejected, CPR, "Bank")).toBeNull();
+    expect(holding(buy(rejected, CPR, "Bank"), CPR)).toBe(20);
+    // And a proposal the proposer withdraws is the same: nothing was transacted.
+    const rescinded = act(act(pool, PROPOSE, "p0"), { RescindPrivateTrade: { game_id: 1, private_id: SV } }, "p0");
+    expect(rescinded.brown_pool_continuation_company).toBe(CPR);
+    expect(holding(buy(rescinded, CPR, "Bank"), CPR)).toBe(20);
+  });
+
+  it("C'. another player's off-turn M&H REQUEST (queued, not executed) does not close p0's continuation", () => {
+    const base = withPrivates();
+    const pool = buy(
+      { ...base, private_companies: base.private_companies.map((entry) => (entry.private_id === MH ? { ...entry, owner: "p1" } : entry)) },
+      CPR,
+      "Bank",
+    );
+    const queued = act(pool, EXCHANGE_MH("p1"), "p1");
+    expect(queued.pending_mh_exchange?.player).toBe("p1");
+    expect(queued.brown_pool_continuation_company).toBe(CPR);
+    expect(holding(buy(queued, CPR, "Bank"), CPR)).toBe(20);
+  });
+
+  it("C''. a derived entry attributed to nobody (\"\") is bookkeeping, never the active player's turn action", () => {
+    const pool = buy(withPrivates(), CPR, "Bank");
+    const proposed = act(pool, PROPOSE, "p0");
+    const rejectedByNobody = applySandboxAction(proposed, ANSWER(false) as never, { ...(ctxOf(proposed) as object), actor: "" } as never);
+    expect(rejectedByNobody.brown_pool_continuation_company).toBe(CPR);
+  });
+
+  it("D. a refused or no-op message does not close the continuation merely because it was attempted", () => {
+    const pool = buy(withPrivates(), CPR, "Bank");
+    // p0 offers a private p0 does not own: refused, board unchanged, the purchase still open.
+    const refusedTrade = act(pool, { ProposePrivateTrade: { game_id: 1, private_id: 99, seller: "p0", buyer: "p1", price: 30 } }, "p0");
+    expect(unchanged(refusedTrade, pool)).toBe(true);
+    expect(refusedTrade.brown_pool_continuation_company).toBe(CPR);
+    // An M&H exchange that is illegal (keep_open asserted) is refused and closes nothing.
+    const refusedExchange = act(pool, { ExchangePrivate: { game_id: 1, private_id: MH, company_id: NYC, player: "p0", source: "Ipo", keep_open: true } }, "p0");
+    expect(unchanged(refusedExchange, pool)).toBe(true);
+    expect(refusedExchange.brown_pool_continuation_company).toBe(CPR);
+    // An answer to an offer that does not exist is a no-op.
+    const stray = act(pool, ANSWER(true), "p1");
+    expect(stray.brown_pool_continuation_company).toBe(CPR);
+    expect(holding(buy(stray, CPR, "Bank"), CPR)).toBe(20);
+  });
+
+  it("revision 1 is untouched: the same trade and exchange write no continuation key at all", () => {
+    const legacy = withPrivates({ variants: { ...STANDARD_VARIANTS, rules: 1 }, rules_engine_version: 12 } as Partial<GameStateResponse>);
+    const pool = buy(legacy, CPR, "Bank");
+    const exchanged = act(pool, EXCHANGE_MH("p0"), "p0");
+    expect(Object.prototype.hasOwnProperty.call(exchanged, "brown_pool_continuation_company")).toBe(false);
+  });
+});
+
+describe("owner ruling 3: an M&H exchange is NOT stock trading -- yet it closes an open Brown purchase", () => {
+  it("an M&H exchange alone, then Pass Turn: the Pass is a TRUE pass (streak counts; no turn action; Priority Deal unmoved)", () => {
+    const start = withPrivates({ consecutive_passes: 1, last_trader_index: 2 } as Partial<GameStateResponse>);
+    const exchanged = act(start, EXCHANGE_MH("p0"), "p0");
+    expect(holding(exchanged, NYC)).toBe(20);
+    expect(exchanged.turn_action_taken ?? false).toBe(false);
+    expect(exchanged.consecutive_passes).toBe(1);
+    expect(exchanged.last_trader_index).toBe(2);
+    const passed = pass(exchanged);
+    expect(passed.consecutive_passes).toBe(2); // counted toward the all-pass streak
+    expect(passed.last_trader_index).toBe(2); // not a trader
+    expect(seatOf(passed)).toBe("p1");
+  });
+
+  it("the distinction, pinned: after Pool CPR the same exchange closes the purchase but leaves the turn's stock accounting alone", () => {
+    const pool = buy(withPrivates(), CPR, "Bank");
+    const exchanged = act(pool, EXCHANGE_MH("p0"), "p0");
+    expect(exchanged.brown_pool_continuation_company).toBeUndefined(); // ruling 2
+    expect(exchanged.bought_this_turn).toBe(pool.bought_this_turn); // ruling 3: not a purchase ...
+    expect(exchanged.turn_action_taken).toBe(pool.turn_action_taken); // ... the BUY made this an acted turn, not the M&H
+    expect(exchanged.last_trader_index).toBe(pool.last_trader_index);
+    expect(exchanged.consecutive_passes).toBe(pool.consecutive_passes);
+  });
+});

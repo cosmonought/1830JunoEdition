@@ -2999,7 +2999,51 @@ export function applySandboxAction(
   const variants = isSetupGameMsg(msg) ? msg.SetupGame.variants : state.variants;
   /* R12-2: and the route rules the state's pin names (an unpinned legacy board keeps the pre-v12 ones). */
   const revision = routeRulesRevisionOf(isSetupGameMsg(msg) ? (msg.SetupGame as { rules_engine_version?: number | null }) : state);
-  return withRules(resolveVariants(variants), () => applySandboxActionOnBoard(state, msg, ctx), revision);
+  const next = withRules(resolveVariants(variants), () => applySandboxActionOnBoard(state, msg, ctx), revision);
+  return closeBrownContinuationOnInterveningAction(state, next, msg, ctx);
+}
+
+/* ==================================================================
+    PHASE 3 W3-K (v13, owner ruling 2 on SBS-3 / SBS-4): AN INTERVENING TURN ACTION ENDS THE BROWN PURCHASE
+   ==================================================================
+   The Brown Bank Pool continuation is ONE contiguous multi-certificate purchase by the ACTIVE Stock Round player.
+   Owner ruling (2026-10-04): an accepted, state-changing turn action by that player which is not another
+   qualifying Brown Bank Pool purchase CLOSES it -- a sale, an accepted private trade, an M&H exchange, Pass Turn,
+   any other stock-turn action. Another player's off-turn consent or answer, and derived / system bookkeeping, do
+   NOT: they are not the active player ending the purchase. Decided from actor and turn semantics, never from log
+   adjacency:
+     * `BuyStock`, `SellStock`, `PassTurn` and every seat / round / buy-state reset close or keep it in their own
+       arms (the arms are the authority for the purchase itself);
+     * an ACCEPTED private trade closes it whoever sends the acceptance, because the settled trade is the
+       current-turn player's transaction activity (owner ruling N2, D-27: `turn_action_taken`, `markTrader`); a
+       rejection, a proposal and a withdrawal transact nothing and close nothing;
+     * any other message whose actor is the seat holder and which changed the board closes it -- an M&H exchange
+       executed on the owner's own turn among them. An M&H exchange still is NOT stock trading (owner ruling 3:
+       no `turn_action_taken`, no pass-streak or Priority Deal effect); closing the purchase is the only thing it
+       does here;
+     * a refused or no-op message (the board unchanged) closes nothing; an off-turn actor (a queued M&H request,
+       an answer) and a derived entry attributed to nobody ("") close nothing.
+   Only a board that carries the continuation -- rules revision 2 -- is ever touched. */
+function closeBrownContinuationOnInterveningAction(
+  before: GameStateResponse,
+  after: GameStateResponse,
+  msg: SandboxLogMsg,
+  ctx?: SandboxActionContext,
+): GameStateResponse {
+  if (before.brown_pool_continuation_company === undefined || after.brown_pool_continuation_company === undefined) return after;
+  if ("BuyStock" in msg || "SellStock" in msg || "PassTurn" in msg) return after;
+  if (isProposePrivateTradeMsg(msg) || isRescindPrivateTradeMsg(msg)) return after;
+  const changed = canonicalJson(after) !== canonicalJson(before); // by value: S7-17, no decision by object identity
+  if (!changed) return after;
+  const settledTrade = isAnswerPrivateTradeMsg(msg) && msg.AnswerPrivateTrade.accept === true && (after.private_trade_offer ?? null) === null;
+  const seat = stockRoundSeat(before);
+  // #549's attribution, exactly as the arms resolve it: `undefined` is solo (the cursor acts), "" or an unseated
+  // author is nobody -- so a derived entry attributed to no one never reads as the active player's turn action.
+  const logged = ctx?.actor;
+  const actor = logged === undefined ? seat : logged;
+  const byActivePlayer = seat !== null && actor === seat && !isAnswerPrivateTradeMsg(msg);
+  if (!settledTrade && !byActivePlayer) return after;
+  return { ...after, ...closedBrownContinuation(after) };
 }
 
 /* ==================================================================

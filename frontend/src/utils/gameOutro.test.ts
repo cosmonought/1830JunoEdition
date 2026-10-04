@@ -88,7 +88,8 @@ describe("the second pass (design note #1420)", () => {
     const modal = readStripped("components/GameOverModal.tsx");
     expect(modal).toContain('data-testid="game-over-leave"');
     const app = readShell();
-    expect(app).toContain("onLeaveGame={handleLeaveSandboxRoom}");
+    // W1-N / A-12: Leave goes to the Lobby -- the table is left first (`handleLeaveTableToLobby`).
+    expect(app).toContain("onLeaveGame={handleLeaveTableToLobby}");
   });
 });
 

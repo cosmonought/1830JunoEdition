@@ -64,6 +64,8 @@ import { setSkipIntroPreferred, skipIntroPreferred } from "../utils/introPrefere
 import { chromeZoomFor } from "../styles/appStyles";
 /* Design note #1294: the chrome scale, live. */
 import { useUiScale } from "../utils/useUiScale";
+/* W1-O (AUD-16.05): breakpoints asked in the zoomed root's own pixels. */
+import { zoomAwareMediaCss } from "../utils/uiScale";
 /* Design note #1122: the sandbox signal ladder. */
 import {
   SANDBOX_TITLE,
@@ -322,7 +324,7 @@ export function SandboxWaitingRoom({
      player has been reading it at, because they have been reading everything at 70%. */
   return (
     <div style={{ ...styles.root, ...chromeZoomFor(uiScale) }}>
-      <style>{WAITING_ROOM_CSS}</style>
+      <style>{zoomAwareMediaCss(WAITING_ROOM_CSS, uiScale)}</style>
       {/* Design note #1266: the photograph, on its own fixed layer. */}
       <div style={styles.sceneLayer} aria-hidden="true" />
       {/* Design note #1138: the anteroom gets the shell's own title bar -- one control, one position, both
@@ -988,7 +990,7 @@ export function SandboxWaitingRoomHold({
   const uiScale = useUiScale();
   return (
     <div style={{ ...styles.root, ...chromeZoomFor(uiScale) }}>
-      <style>{WAITING_ROOM_CSS}</style>
+      <style>{zoomAwareMediaCss(WAITING_ROOM_CSS, uiScale)}</style>
       <div style={styles.sceneLayer} aria-hidden="true" />
       <TopBar roomName={roomCode} onLeaveGame={onLeave} audio={audio} />
       <div style={styles.surfaceWrap}>

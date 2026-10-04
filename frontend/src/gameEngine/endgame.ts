@@ -317,31 +317,34 @@ export interface PlayerStanding {
   netWorth: number;
   /** 1-based, after sorting. Ties share a rank. */
   rank: number;
+  /** The single champion `sorted[0]` -- kept exactly as #1540 computes it (one row, even on a tie). A display that
+   *  names WHO WON reads `rank === 1` instead (W1-N / AUD-12.04): every row sharing first place is a winner. */
   isWinner: boolean;
   isBankrupt: boolean;
-  /** Design note #4: this player's cut of the prize pool. */
-  expectedPayout: number;
 }
 
-/** Placeholder ante for the payout column, per the brief. The real figure
- *  is the sum of every player's real-JUNO deposit and lives on the lobby's
- *  contract; $100 stands in until that is wired. */
+/** ==================================================================
+ *   W1-N / K-24 (AUD-20.09): THE PLACEHOLDER PAYOUT IS RETIRED
+ *  ==================================================================
+ *  Design note #4 apportioned a `PLACEHOLDER_TOTAL_ANTE` of 100 by share of net worth, in floating point
+ *  (`Math.round(x / total * ante * 100) / 100`), and published it on every row as `expectedPayout`. Nothing true
+ *  ever came of that number: a no-money table pays nobody, and a real-money table's payout is the escrow's,
+ *  derived by the server's certified settlement from the terminal board -- never by this display. So the
+ *  column, the field and the arithmetic are gone; `rankPlayers` computes standings and nothing that looks like
+ *  money.
+ *
+ *  THE CONSTANT STAYS EXPORTED ONLY AS AN INERT ARGUMENT, passed in three places that all ignore it: to
+ *  `settleRoomPayout` inside `runGameplayAction`'s apply half (a RED region, OD-12 -- now a no-op that reads none of
+ *  it), to `rankPlayers` (`totalAnte`, ignored below), and as `GameOverModal`'s retired `totalAnte` prop. Delete all
+ *  three, with the constant, once OD-12 permits the RED call site to go. */
 export const PLACEHOLDER_TOTAL_ANTE = 100;
 
-/* Design note #4: the payout column is proportional to net worth and it is a
-   PLACEHOLDER. Proportional degrades sensibly -- no rules about places, sums to
-   the ante by construction, and a bankrupt player gets nothing without a special
-   case.
-
-   IT IS NOT THE CONTRACT'S ANSWER. `total_juno_pool` is real money held by
-   `lobby.rs`, and winner-takes-all and proportional are both defensible; the
-   contract has not said which. The constant is named `PLACEHOLDER_*` so nobody
-   mistakes it for a figure that came off the chain. */
 export function rankPlayers(args: {
   state: GameStateResponse;
   priceForCompany: (companyId: number) => number | null;
   labelForAddress: (address: string) => string;
   bankruptAddress?: string | null;
+  /** K-24: retired and ignored -- there is no payout to apportion. Accepted so existing callers still compile. */
   totalAnte?: number;
 }): PlayerStanding[] {
   const {
@@ -349,7 +352,6 @@ export function rankPlayers(args: {
     priceForCompany,
     labelForAddress,
     bankruptAddress = null,
-    totalAnte = PLACEHOLDER_TOTAL_ANTE,
   } = args;
 
   const rows = state.player_addresses.map((address) => {
@@ -395,7 +397,6 @@ export function rankPlayers(args: {
   });
 
   const sorted = [...rows].sort((a, b) => b.netWorth - a.netWorth);
-  const total = sorted.reduce((sum, row) => sum + Math.max(0, row.netWorth), 0);
 
   /* Design note #5, SUPERSEDED BY #1540 above: the winner is the wealthiest player (7.0), bankrupt or not.
      Somebody still wins -- the first row after sorting -- and a bankrupt president whose unsellable paper
@@ -414,8 +415,6 @@ export function rankPlayers(args: {
       rank,
       // #1540: the wealthiest player wins, bankrupt or not (6.6.3, 7.0).
       isWinner: champion !== null && row.address === champion.address,
-      expectedPayout:
-        total <= 0 ? 0 : Math.round((Math.max(0, row.netWorth) / total) * totalAnte * 100) / 100,
     };
   });
 }

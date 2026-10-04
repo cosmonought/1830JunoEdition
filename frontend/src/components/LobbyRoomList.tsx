@@ -38,6 +38,9 @@ import {
 } from "../gameEngine/gameVariants";
 import type { RoomSummary } from "../utils/roomProtocol";
 import { formatAmount } from "../utils/moneyProtocol";
+/* W1-O (AUD-16.05): the narrow layout switches at the same effective width at every text size. */
+import { zoomAwareMediaCss } from "../utils/uiScale";
+import { useUiScale } from "../utils/useUiScale";
 
 /** The rule variants a row names, in the house-rules order, by their short titles (#1415). */
 const RULE_TITLES: ReadonlyArray<{
@@ -163,6 +166,7 @@ export interface LobbyRoomListProps {
 
 export function LobbyRoomList({ rooms, loading, error, available, busy, refusal, onJoin, onWatch }: LobbyRoomListProps) {
   const [pace, setPace] = useState<PaceFilter>("all");
+  const uiScale = useUiScale();
 
   const all = useMemo(() => rooms.map(publicRoomRow), [rooms]);
   const shown = useMemo(() => filterByPace(all, pace), [all, pace]);
@@ -192,7 +196,7 @@ export function LobbyRoomList({ rooms, loading, error, available, busy, refusal,
 
   return (
     <section style={styles.section} aria-labelledby="lobby-public-games" data-testid="lobby-public-games">
-      <style>{LOBBY_ROOMS_CSS}</style>
+      <style>{zoomAwareMediaCss(LOBBY_ROOMS_CSS, uiScale)}</style>
       <div style={styles.head}>
         <h2 id="lobby-public-games" style={styles.heading}>
           Public games

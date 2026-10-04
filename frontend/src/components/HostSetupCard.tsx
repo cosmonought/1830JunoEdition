@@ -17,7 +17,7 @@
    MOUNTED AT THE LOBBY'S ROOT like the rejoin cards (#1360): the scene is `pointer-events: none`, and a card
    inside it is a card nobody can click. */
 
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import {
@@ -39,6 +39,9 @@ import {
 import { MIN_PLAYERS, maxPlayersFor } from "../gameEngine/gameSetup";
 import { DEFAULT_ROOM_SETUP, type RoomSetup, type RoomVisibility } from "../utils/sandboxRoomSummary";
 import { NativeModal } from "./NativeModal";
+/* W1-O (AUD-16.02 / AUD-16.05): the card's height is asked in real viewport units under the layer's zoom. */
+import { zoomAwareVh } from "../utils/uiScale";
+import { useUiScale } from "../utils/useUiScale";
 /* ESCROW-4: the stake, when the server opens real-money tables on this build's escrow. */
 import { HostStakeSection, stakeChoice, useMoneyTableOffer } from "./money/HostStakeSection";
 
@@ -131,6 +134,11 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
   const [artFailed, setArtFailed] = useState<Partial<Record<GameType, boolean>>>({});
 
   const gameRadio = useRadioGroup(GAME_TYPE_ORDER, type, setType);
+  /* W1-O (AUD-17.01): the notes under the step-two controls, linked by id so each control is DESCRIBED by them. */
+  const noteId = useId();
+  /* W1-O (AUD-16.02): the modal layer draws under `zoom: uiScale`, and a `vh` inside a zoom is scaled with it
+     (#1144) -- so "the window minus the scrim's padding" has to be asked in real viewport units. */
+  const uiScale = useUiScale();
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const headingRef = useRef<HTMLSpanElement | null>(null);
@@ -292,7 +300,7 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
            the dialog is still up. With this, such a click lands here instead. It is `-1`, so it is not a Tab
            stop and `tabbableWithin` excludes it. */
         tabIndex={-1}
-        style={{ ...styles.card, ...(step === "type" ? styles.cardGallery : null) }}
+        style={{ ...styles.card, maxHeight: `calc(${zoomAwareVh(100, uiScale)} - 48px)`, ...(step === "type" ? styles.cardGallery : null) }}
         onClick={(event) => event.stopPropagation()}
       >
         <div style={styles.header}>
@@ -315,6 +323,10 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
 
         {step === "type" ? (
           <>
+            {/* W1-O (AUD-16.02): the step's content scrolls; the header above and the footer below do not, so
+                Continue / Create Room stay in view however short the window (the 360x640 target) -- they were
+                in-flow at the end of the content, below the fold. */}
+            <div style={styles.body} className="host-body" data-testid="host-body">
             {/* ==================================================================
                  DESIGN NOTE 1447: THREE EDITIONS, NOT THREE SETTINGS
                 ==================================================================
@@ -367,7 +379,9 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
                       )}
                       <span style={styles.typeText}>
                         <span style={styles.typeLabelRow}>
-                          <span style={styles.typeLabel}>{GAME_TYPE_COPY[candidate].label}</span>
+                          <span style={styles.typeLabel} id={gameRadio.labelId(candidate)}>
+                            {GAME_TYPE_COPY[candidate].label}
+                          </span>
                           <span
                             aria-hidden="true"
                             style={{ ...styles.typeMark, ...(selected ? styles.typeMarkOn : null) }}
@@ -375,7 +389,9 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
                             {selected ? "✓" : ""}
                           </span>
                         </span>
-                        <span style={styles.typeBlurb}>{HOST_TYPE_BLURB[candidate]}</span>
+                        <span style={styles.typeBlurb} id={gameRadio.descriptionId(candidate)}>
+                          {HOST_TYPE_BLURB[candidate]}
+                        </span>
                       </span>
                     </button>
                   );
@@ -408,8 +424,9 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
                 name="visibility"
               />
             </Section>
+            </div>
 
-            <div style={styles.footer}>
+            <div style={styles.footer} data-testid="host-footer">
               <button type="button" style={styles.secondaryButton} onClick={onClose}>
                 Cancel
               </button>
@@ -420,6 +437,7 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
           </>
         ) : (
           <>
+            <div style={styles.body} className="host-body" data-testid="host-body">
             <p style={styles.terms}>
               {GAME_TYPE_COPY[type].label} · {GAME_MODE_COPY[mode].label} · {VISIBILITY_COPY[visibility].label}
             </p>
@@ -441,9 +459,18 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
               ) : (
                 <>
                   <div style={styles.row}>
-                    <input style={{ ...styles.input, ...styles.inputDisabled }} value="0 JUNO" disabled aria-label="Ante" readOnly />
+                    <input
+                      style={{ ...styles.input, ...styles.inputDisabled }}
+                      value="0 JUNO"
+                      disabled
+                      aria-label="Ante"
+                      aria-describedby={`${noteId}-ante`}
+                      readOnly
+                    />
                   </div>
-                  <p style={styles.note}>{ANTE_SUBSIDY_NOTE}</p>
+                  <p style={styles.note} id={`${noteId}-ante`}>
+                    {ANTE_SUBSIDY_NOTE}
+                  </p>
                 </>
               )}
             </Section>
@@ -452,6 +479,7 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
               <select
                 style={styles.select}
                 aria-label="Player count"
+                aria-describedby={`${noteId}-players`}
                 value={playerCount === null ? "any" : String(playerCount)}
                 onChange={(event) => setPlayerCount(event.target.value === "any" ? null : Number(event.target.value))}
                 data-testid="host-player-count"
@@ -463,7 +491,7 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
                   </option>
                 ))}
               </select>
-              <p style={styles.note}>
+              <p style={styles.note} id={`${noteId}-players`}>
                 {playerCount === null
                   ? "The host may start once two seats are ready; the table closes when the board's seats are full."
                   : `Nobody may join past ${playerCount}, and the game starts only when exactly ${playerCount} seats are ready.`}
@@ -489,6 +517,7 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
               <select
                 style={styles.select}
                 aria-label="Bank size"
+                aria-describedby={`${noteId}-bank`}
                 value={variants.length}
                 onChange={(event) => setVariants((current) => ({ ...current, length: event.target.value as GameLength }))}
                 data-testid="host-bank-size"
@@ -502,7 +531,9 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
                   </option>
                 ))}
               </select>
-              <p style={styles.note}>{GAME_LENGTH_BLURB[variants.length]}</p>
+              <p style={styles.note} id={`${noteId}-bank`}>
+                {GAME_LENGTH_BLURB[variants.length]}
+              </p>
             </Section>
 
             {HOUSE_RULE_ROWS.map((row) => (
@@ -517,9 +548,18 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
               />
             ))}
 
-            {error && <p style={styles.warning}>{error}</p>}
+            </div>
 
-            <div style={styles.footer}>
+            {/* W1-O review: the refusal sits beside the button that produced it, outside the scrolling body --
+                in the body's tail it rendered below the fold of a short window, under a pinned Create Room, and
+                nothing visible changed. `role="alert"` so it is announced, as it was not before either. */}
+            {error && (
+              <p style={styles.warning} role="alert" data-testid="host-error">
+                {error}
+              </p>
+            )}
+
+            <div style={styles.footer} data-testid="host-footer">
               <button type="button" style={styles.secondaryButton} onClick={() => setStep("type")} disabled={busy}>
                 Back
               </button>
@@ -574,8 +614,17 @@ const ARROW_STEP: Readonly<Record<string, number>> = {
   ArrowUp: -1,
 };
 
+/* W1-O (AUD-17.02): Home and End, the other two keys the platform's radio group answers -- first and last option,
+   selecting and focusing together like the arrows (#1448). No wrap question arises: they are absolute. */
+const EDGE_KEYS: ReadonlySet<string> = new Set(["Home", "End"]);
+
 function useRadioGroup<T extends string>(keys: ReadonlyArray<T>, value: T, onChange: (next: T) => void) {
   const ref = useRef<HTMLDivElement | null>(null);
+  /* W1-O (AUD-17.01): each option is NAMED by its label and DESCRIBED by its sentence. Before, the whole button's
+     text -- label and blurb run together -- was its name, and nothing was its description. */
+  const idBase = useId();
+  const labelId = (key: T) => `${idBase}-${key}-label`;
+  const descriptionId = (key: T) => `${idBase}-${key}-description`;
 
   /* Focus follows the value. The node is focused before React re-renders, while its `tabIndex` is still -1 --
      which `focus()` does not care about; only Tab does. */
@@ -585,6 +634,12 @@ function useRadioGroup<T extends string>(keys: ReadonlyArray<T>, value: T, onCha
   };
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (EDGE_KEYS.has(event.key)) {
+      if (keys.length === 0) return;
+      event.preventDefault(); // or Home/End scrolls the dialog's body to its top or bottom
+      select(event.key === "Home" ? keys[0] : keys[keys.length - 1]);
+      return;
+    }
     const step = ARROW_STEP[event.key];
     if (step === undefined) return;
     event.preventDefault(); // or ArrowUp/ArrowDown scrolls the dialog out from under the group
@@ -599,10 +654,12 @@ function useRadioGroup<T extends string>(keys: ReadonlyArray<T>, value: T, onCha
     "aria-checked": key === value,
     tabIndex: key === value ? 0 : -1,
     "data-radio-key": key,
+    "aria-labelledby": labelId(key),
+    "aria-describedby": descriptionId(key),
     onClick: () => select(key),
   });
 
-  return { ref, onKeyDown, optionProps };
+  return { ref, onKeyDown, optionProps, labelId, descriptionId };
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -647,8 +704,12 @@ function Segmented<T extends string>({
             style={{ ...styles.segment, ...(selected ? styles.segmentSelected : {}) }}
             data-testid={`host-${name}-${option.key}`}
           >
-            <span style={styles.segmentLabel}>{option.label}</span>
-            <span style={styles.segmentBlurb}>{option.blurb}</span>
+            <span style={styles.segmentLabel} id={radio.labelId(option.key)}>
+              {option.label}
+            </span>
+            <span style={styles.segmentBlurb} id={radio.descriptionId(option.key)}>
+              {option.blurb}
+            </span>
           </button>
         );
       })}
@@ -679,15 +740,27 @@ function ToggleRow({
   onChange: (checked: boolean) => void;
   testId: string;
 }) {
+  /* W1-O (AUD-17.01): named by the title (and its tag), described by the sentence -- not one run-on name. */
+  const id = useId();
   return (
     <label style={styles.toggleRow}>
-      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} data-testid={testId} style={styles.checkbox} />
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        data-testid={testId}
+        style={styles.checkbox}
+        aria-labelledby={`${id}-title`}
+        aria-describedby={`${id}-blurb`}
+      />
       <span style={styles.toggleText}>
-        <span style={styles.toggleTitle}>
+        <span style={styles.toggleTitle} id={`${id}-title`}>
           {title}
           {tag && <span style={{ ...styles.tag, ...(tag === "recommended" ? styles.tagRecommended : {}) }}>({TAG_TEXT[tag]})</span>}
         </span>
-        <span style={styles.toggleBlurb}>{blurb}</span>
+        <span style={styles.toggleBlurb} id={`${id}-blurb`}>
+          {blurb}
+        </span>
       </span>
     </label>
   );
@@ -698,6 +771,12 @@ function ToggleRow({
 const HOST_SETUP_CSS = `
 .host-type-card:focus-visible,
 .host-segment:focus-visible { outline: 2px solid #8a8a86; outline-offset: 2px; }
+/* W1-O (AUD-17.03): ON THE SELECTED OPTION the house grey ring sat flush against the green edge and greyed it out --
+   the accent that says "chosen" vanished exactly when the keyboard arrived (focus follows the selection, #1448, so
+   that is every keyboard visit). There the ring stands one pixel further off, in the accent's own lighter green:
+   the green edge stays whole inside it, and "chosen" and "you are here" read as two marks of one control. */
+.host-type-card[aria-checked="true"]:focus-visible,
+.host-segment[aria-checked="true"]:focus-visible { outline-color: #9fe0b8; outline-offset: 3px; }
 /* Design note #1630: neither of these is a control, and both are focused programmatically -- the card as a
    fallback for a click on dead space, the heading when the step changes. So the resting :focus outline is
    dropped and the ring is left entirely to :focus-visible, which is the engine's own judgement about whether
@@ -724,8 +803,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   card: {
     width: "min(600px, 100%)",
+    /* W1-O: the cap is set at render, zoom-aware (`zoomAwareVh`); this is the at-100% value it replaces. */
     maxHeight: "calc(100vh - 48px)",
-    overflowY: "auto",
+    /* W1-O (AUD-16.02): the BODY scrolls, not the card -- the header and the footer stay in view. */
+    overflow: "hidden",
     display: "flex",
     flexDirection: "column",
     gap: "14px",
@@ -857,7 +938,19 @@ const styles: Record<string, React.CSSProperties> = {
   tagRecommended: { color: "#9ed8b4" },
   toggleBlurb: { fontSize: FONT_SIZE.micro, color: "#c8c6c0", lineHeight: 1.4 },
   warning: { fontSize: FONT_SIZE.small, color: "#e0b062", lineHeight: 1.4, margin: 0 },
-  footer: { display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "8px", marginTop: "4px" },
+  /* W1-O (AUD-16.02): the scrolling part of a step. The 6px pad and its negative margin leave room for the focus
+     ring (3px gap + 2px) that the overflow would otherwise clip. */
+  body: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "14px",
+    flex: "1 1 auto",
+    minHeight: 0,
+    overflowY: "auto",
+    padding: "6px",
+    margin: "-6px",
+  },
+  footer: { display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "8px", marginTop: "4px", flex: "none" },
   secondaryButton: {
     padding: "7px 14px",
     borderRadius: RADIUS.card,

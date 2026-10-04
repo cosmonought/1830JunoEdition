@@ -1,108 +1,49 @@
 // frontend/src/utils/closeRoomPayout.ts
 //
-// Settling the real JUNO when a finished room closes.
+// A finished room's closure: the auto-close countdown, its server-clock deadline, and the retired payout hook.
 //
 /* ==================================================================
- *  DESIGN NOTE 899: THE PAYOUT IS A STUB, AND ITS GUARDS ARE NOT
+ *  W1-N / K-24 (AUD-20.09): THE CLIENT DISPATCHES NO PAYOUT -- A NO-OP, NOT A STUB
  * ==================================================================
  *
- * AGREED SCOPE: "Write a placeholder stub for the payout dispatch that simply logs to the console for now. We
- * will fill this with the actual ExecuteMsg logic in Phase 5."
+ * DESIGN NOTE 899 made this a `console.info` stub for "the payout dispatch", to be filled with an `ExecuteMsg` in
+ * Phase 5, and fed it `expectedPayout`: a floating-point split of a placeholder 100-JUNO ante by share of net worth.
+ * That is not how money moves, and it never will be. A real-money table's JUNO is held by the escrow and settled
+ * from the server's certified settlement of the terminal board (whole-VGP weights, integer arithmetic, the
+ * certified rules version), on the escrow's own schedule; a no-money table has nothing to settle. No browser
+ * apportions, rounds or dispatches a payout, so there is nothing here to fill in later.
  *
- * SO THE BODY IS A `console.info` AND EVERYTHING AROUND IT IS REAL. A stub that is only a stub teaches the
- * Phase 5 author nothing; the hard part of this dispatch is not the message, it is the three ways it can fire
- * more than once, and all three exist TODAY with fake money. Getting them right now costs a few lines and
- * getting them wrong later costs somebody's JUNO.
+ * SO THIS IS A NO-OP AND DOES NO ARITHMETIC. It reads nothing from the request -- no standings, no ante -- and
+ * always answers `dispatched: false`. #899's three double-fire hazards (every client's timer, the button racing a
+ * timer, a replay) are moot for a function that does nothing; the reducer's `room_closed` latch still makes every
+ * `CloseRoom` after the first a no-op, and the escrow's own idempotency is the chain's business.
  *
- * THE THREE WAYS IT DOUBLE-FIRES, in the order they will actually happen:
- *
- *   1. EVERY CLIENT'S TIMER. Four players, four fifteen-minute countdowns, four dispatches within a second of
- *      each other. This is by design (#899 in `gameSetup.ts`: an elected owner strands the table when they
- *      close their tab), and it is handled in the REDUCER -- `room_closed` makes the second through fourth
- *      `CloseRoom` actions no-ops, so only one of them ever reaches this function.
- *
- *   2. THE MANUAL BUTTON RACING A TIMER. Same mechanism, same answer.
- *
- *   3. A REPLAY. This is the dangerous one and the reducer cannot help with it. Undo rebuilds state by
- *      replaying the whole log, so a log containing `CloseRoom` reaches the open -> closed transition again on
- *      every rebuild -- and a payout fired from a rebuild is a second real transfer for one game. The guard
- *      below is per-room and per-session, which stops it within one browser; it CANNOT stop a different
- *      client, or the same client after a refresh, from replaying that log and arriving here.
- *
- * WHICH MEANS PHASE 5 OWES THE CONTRACT AN IDEMPOTENCY CHECK, and this note is where that requirement is
- * written down rather than discovered. The chain is the only place that can hold "this room has already paid
- * out" across every client and every refresh. A client-side Set is a courtesy; `CloseRoom` on an
- * already-settled room must be refused by the contract, not merely skipped by the caller.
- *
- * See docs/ai_architecture/contract_economy.md, closeRoomPayout.ts #899. */
+ * WHY IT STILL EXISTS: its one caller sits inside `runGameplayAction`'s apply half (App.tsx, RED region R2). That
+ * call site may be deleted only under owner decision OD-12; until then the signature stays so it compiles, and
+ * the call does nothing. Delete this function, `RoomPayoutRequest` and `PLACEHOLDER_TOTAL_ANTE` with it. */
 
 import type { PlayerStanding } from "../gameEngine/endgame";
 
-/** What the settlement needs to know. Deliberately the standings rather than the game state: the split is
- *  already computed and already shown to the players, and re-deriving it here would be a second authority on
- *  the one number that moves real money. */
+/** The shape the remaining (RED R2) caller passes. Nothing in it is read. */
 export interface RoomPayoutRequest {
-  /** `null` for a local game with no room -- which never reaches a real dispatch. */
   roomCode: string | null;
-  /** Every player, ranked, with `expectedPayout` already apportioned by share of net worth. */
   standings: readonly PlayerStanding[];
-  /** The real JUNO pool the percentages divide. */
+  /** Retired with the placeholder payout (K-24). Ignored. */
   totalAnte: number;
-  /** How the closure was reached, for the log line. */
   trigger: "manual" | "timer";
 }
 
 export type RoomPayoutResult =
   | { dispatched: true }
-  /** Already settled in this session, or nothing to settle. */
   | { dispatched: false; reason: string };
 
-/** Rooms this browser session has already settled -- guard 3 above, to the extent a client can implement it. */
-const settled = new Set<string>();
+/** Why nothing was dispatched -- the only answer this function gives. */
+export const NO_CLIENT_PAYOUT_REASON =
+  "No payout is dispatched from the client: a real-money table settles through its escrow, and a table played for fun has nothing to settle.";
 
-/** Dispatches the on-chain settlement for a closed room.
- *
- *  PHASE 5: replace the `console.info` with the real `ExecuteMsg`. Do not remove the guards around it, and do
- *  not treat them as sufficient -- see the header. */
-export function settleRoomPayout(request: RoomPayoutRequest): RoomPayoutResult {
-  const key = request.roomCode ?? "local";
-
-  if (settled.has(key)) {
-    /* Not an error and not a warning. A replay reaching this point is the NORMAL case after an Undo, and
-       logging it as a failure would train whoever reads the console to ignore it. */
-    return { dispatched: false, reason: "This room's payout has already been dispatched in this session." };
-  }
-
-  const payable = request.standings.filter((row) => row.expectedPayout > 0);
-  if (payable.length === 0) {
-    /* A pool of nothing, or a table where every net worth is zero. Refused rather than dispatched empty: a
-       transfer of nothing is still a transaction somebody pays gas for. */
-    return { dispatched: false, reason: "There is nothing to distribute." };
-  }
-
-  settled.add(key);
-
-  /* ---- PHASE 5 REPLACES EVERYTHING BELOW THIS LINE ---- */
-  console.info(
-    `[closeRoomPayout #899] STUB — would settle ${payable.length} payouts from a ${request.totalAnte} JUNO ` +
-      `pool for room ${key} (closed by ${request.trigger}):`,
-    payable.map((row) => ({
-      address: row.address,
-      label: row.label,
-      netWorth: row.netWorth,
-      juno: row.expectedPayout,
-    })),
-  );
-  /* ---- PHASE 5 REPLACES EVERYTHING ABOVE THIS LINE ---- */
-
-  return { dispatched: true };
-}
-
-/** Test seam, and the reason it exists is worth a line: without it a case that settles a room would poison
- *  every later case in the same file, and the failure would look like the guard misfiring rather than like
- *  state leaking between tests. */
-export function resetSettledRooms(): void {
-  settled.clear();
+/** K-24: a no-op. Closing a room pays nobody from the client; see the header. */
+export function settleRoomPayout(_request: RoomPayoutRequest): RoomPayoutResult {
+  return { dispatched: false, reason: NO_CLIENT_PAYOUT_REASON };
 }
 
 /* ------------------------------------------------------------------ */
@@ -125,4 +66,54 @@ export function formatCountdown(msRemaining: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+/* ==================================================================
+    W1-N / A-10 (AUD-18.02): THE DEADLINE IS THE SERVER'S GAME-END MOMENT, NOT THIS TAB'S
+   ==================================================================
+   The countdown latched `Date.now()` in the first tab that SAW the ending, so a refresh -- or a player who opened
+   the table late -- started a fresh fifteen minutes. The moment the game ended is a fact the log already holds:
+   the server stamps every entry (`at`, #643), and after GameEnd the engine admits nothing but the `CloseRoom`
+   marker. So the game-end moment is the stamp of the last entry that is not a `CloseRoom` -- exactly the
+   server's terminal seal (`server/src/rooms/lifecycle.ts` `sealOf`, whose `at` the record caches as
+   `completed_at`), read from the same log every client holds. Every client and every refresh derives one
+   deadline.
+
+   ABSENT IS NOT A VALUE (#232). An ending entry with no stamp yields `null`, and the shell then shows no
+   countdown rather than inventing one from this tab's clock; any player may still close the room. */
+
+/** The minimal log-entry shape this reads: `SandboxAction` / `ServerLogEntry` both satisfy it. */
+export interface StampedLogEntry {
+  index: number;
+  id: string;
+  payload: string;
+  at?: number;
+}
+
+function isCloseRoomEntry(entry: StampedLogEntry): boolean {
+  try {
+    const parsed = JSON.parse(entry.payload) as unknown;
+    return typeof parsed === "object" && parsed !== null && "CloseRoom" in parsed;
+  } catch {
+    return false;
+  }
+}
+
+/** When gameplay ended, by the server's stamp: the last non-`CloseRoom` entry's `at` in replay order (index, then
+ *  id -- #1026). `null` for an empty log or an unstamped ending entry. Call it only once the board has ended. */
+export function gameEndedAtFromLog(entries: readonly StampedLogEntry[]): number | null {
+  const ordered = [...entries].sort((a, b) => a.index - b.index || a.id.localeCompare(b.id));
+  for (let at = ordered.length - 1; at >= 0; at -= 1) {
+    const entry = ordered[at];
+    if (isCloseRoomEntry(entry)) continue;
+    return typeof entry.at === "number" && Number.isFinite(entry.at) ? entry.at : null;
+  }
+  return null;
+}
+
+/** Milliseconds until the room auto-closes, from the server's game-end stamp. `null` when there is no stamp or
+ *  the room is already closed; clamped at zero. */
+export function autoCloseRemainingMs(gameEndedAt: number | null, roomClosed: boolean, now: number): number | null {
+  if (gameEndedAt === null || roomClosed) return null;
+  return Math.max(0, gameEndedAt + AUTO_CLOSE_MS - now);
 }

@@ -439,8 +439,9 @@ export const RULES_ENGINE_CHANGELOG: ReadonlyArray<{ version: number; note: stri
       "named so the row is not read as them: the closed schema's three new kinds (52) and the hosted ingress refusals. " +
       "NOT IN THIS ROW: DH-1, GR-1 / S10-27, GR-1b (UI only), D-18 (invalid), D-22 (already correct), RR-4. LIVE LIST: " +
       "[13] alone (owner policy: pinned v12 rooms are drained before deployment, no dual support). SETTLEMENT IS A " +
-      "SEPARATE AXIS: `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` stays [10, 11, 12], so a v13 board is refused for " +
-      "money settlement until v13's own certification pass (`docs/phase3/V13_SETTLEMENT_CERTIFICATION_VECTORS.md`). A " +
+      "SEPARATE AXIS: W3-K left `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` at [10, 11, 12], so a v13 board was refused for " +
+      "money settlement until v13's own certification pass (`docs/phase3/V13_SETTLEMENT_CERTIFICATION_VECTORS.md`) -- " +
+      "Phase 3's dedicated v13 certification (2026-10-04), which added 13 on its own evidence (`settlementV13Certification`). A " +
       "version-12 log can carry a two-message Stock Round turn end, a Brown Bank Pool purchase continued after a sale " +
       "(SBS-3), after an IPO purchase (SBS-4) or across another turn action, a single forced sale, a president-sent " +
       "emergency purchase and a declared bankruptcy, so it is refused, never reinterpreted. (A second Brown Pool " +

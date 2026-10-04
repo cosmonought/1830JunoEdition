@@ -33,14 +33,15 @@
 // So the formula is unchanged and still the correct reading of a v13 board, and v13 boards differ from v12 ones through
 // those channels only. The vectors (G) show it on real turns, including every bankruptcy shape the spec requires.
 //
-// THE LITERAL, AND HOW THIS FILE IS GREEN ON BOTH SIDES OF IT. The evidence is built WITHOUT the certified list's
-// consent: the appraiser reads `rules_engine_version` in its pin gate and nowhere else, so a v13 board's appraisal is
-// the certified appraiser's answer on the same board with the pin token read as 12 (section B proves the two canonical
-// texts differ in that one token), and the payload bytes are composed from the certified primitives (the domain over
-// the u32 rules engine 13, `terminal_state_hash_v1` of the pin-13 board, the codec). `EXPECTED_SETTLEMENT_LITERAL`
-// below names the literal this file expects. While it is [10, 11, 12] every production path (the appraiser, the
-// builder, the conformance verifier, the GNOLAND core, the browser's re-derivation) must REFUSE a v13 board; once the
-// literal commit adds 13, the same paths must reproduce the pinned evidence byte for byte. Nothing pinned moves.
+// THE LITERAL. The evidence was built and independently reviewed WITHOUT the certified list's consent: the appraiser
+// reads `rules_engine_version` in its pin gate and nowhere else, so a v13 board's appraisal is the certified appraiser's
+// answer on the same board with the pin token read as 12 (section B proves the two canonical texts differ in that one
+// token), and the payload bytes are composed from the certified primitives (the domain over the u32 rules engine 13,
+// `terminal_state_hash_v1` of the pin-13 board, the codec). Only then did its own commit add 13 to
+// `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` (`EXPECTED_SETTLEMENT_LITERAL` below names the literal this file expects).
+// Now every production path (the appraiser, the builder, the conformance verifier, the GNOLAND core, the browser's
+// re-derivation) must reproduce that pinned, pre-admission evidence byte for byte, and the pin-independent reading is
+// still asserted beside each one. Nothing pinned moved when 13 was admitted; 14 and later stay refused.
 //
 // THE EVIDENCE BELOW:
 //   A. the v13 golden set (the thirteen SET-0A recipes through the v13 engine, at pin 13): re-stamped at 10, 11 and 12
@@ -167,12 +168,9 @@ const atPin = (board: GameStateResponse, pin: number) => ({ ...board, rules_engi
 /* The literal this evidence expects                                   */
 /* ------------------------------------------------------------------ */
 
-/** The certified literal this file expects. The evidence commits: [10, 11, 12] (v13 PENDING). The literal commit adds
- *  13 to `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS`; the commit after it re-pins this expectation. */
-const EXPECTED_SETTLEMENT_LITERAL: readonly number[] = [10, 11, 12];
-/** Whether the production paths admit a v13 board -- read off the real literal, never assumed. */
-const V13_ADMITTED = SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS.includes(13);
-const UNSUPPORTED_13 = `UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=13 (supported: ${SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS.join(", ")})`;
+/** The certified literal this file expects. The evidence commits ran at [10, 11, 12]; the certification-admission commit
+ *  added 13 to `SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS` and re-pinned this expectation in the same commit. */
+const EXPECTED_SETTLEMENT_LITERAL: readonly number[] = [10, 11, 12, 13];
 
 /* The frozen v10 evidence and the v11 / v12 certification evidence -- READ, never written. */
 const V10_GOLDEN = readJson(join(SETTLEMENT, "SET0A_golden_vectors_rev2.derived.json")) as {
@@ -239,21 +237,18 @@ function rankedWorth(state: GameStateResponse): Record<string, { netWorth: numbe
 /* The pin-independent v13 appraisal, and an oracle that shares no code */
 /* ------------------------------------------------------------------ */
 
-/** The certified appraiser's reading of a pin-13 board WITHOUT the certified list's consent: the same canonical bytes but
- *  the pin token read as 12 (proved below to be the only difference), then -- once 13 is admitted -- the direct
- *  appraisal, which must be the same answer. Before that, the direct appraisal must refuse. */
+/** The certified appraiser's direct appraisal of a pin-13 board, and beside it the pin-independent reading the evidence
+ *  was built from: the same canonical bytes but the pin token read as 12 (proved below to be the only difference). The
+ *  two must be the same answer. */
 function appraiseV13(board: GameStateResponse, seats: readonly SettlementSeat[]): readonly SeatAppraisal[] {
   expect(board.rules_engine_version).toBe(13);
   const text13 = canonicalStateText(board);
   expect(text13.split('"rules_engine_version":13').length).toBe(2);
   expect(text13.replace('"rules_engine_version":13', '"rules_engine_version":12')).toBe(canonicalStateText(atPin(board, 12)));
   const viaPin12 = appraiseSeats(atPin(board, 12), seats);
-  if (V13_ADMITTED) {
-    expect(appraiseSeats(board, seats)).toEqual(viaPin12);
-  } else {
-    expect(() => appraiseSeats(board, seats)).toThrow(UNSUPPORTED_13);
-  }
-  return viaPin12;
+  const direct = appraiseSeats(board, seats);
+  expect(direct).toEqual(viaPin12);
+  return direct;
 }
 
 /** AN INDEPENDENT ORACLE: NW(p) written from the rulebook's sentence and SET-0A §4, reading the board's raw fields with
@@ -350,8 +345,8 @@ interface ComposedPayload {
 }
 
 /** A v13 payload composed from the certified primitives: the domain over rules 13, `terminal_state_hash_v1` of the
- *  pin-13 board, the weights from the pin-independent appraisal and the policy, the codec. It is what
- *  `buildSettlementPayloadV1` writes for the same arguments once 13 is certified -- asserted wherever it is admitted. */
+ *  pin-13 board, the weights from the appraisal (checked against the pin-independent reading) and the policy, the codec.
+ *  `buildSettlementPayloadV1` must write exactly these bytes for the same arguments -- asserted wherever it is used. */
 function composeV13(args: BuildSettlementPayloadArgs): ComposedPayload {
   const board = (args.board as { state: GameStateResponse }).state;
   expect(settlementDomainV1(args.domain_inputs)).toBe(args.domain);
@@ -385,24 +380,15 @@ function composeV13(args: BuildSettlementPayloadArgs): ComposedPayload {
   return { payload, encoded_hex, settle_digest, consent_digest: consentDigestV1(payload.domain, payload.seq, settle_digest) };
 }
 
-/** Once 13 is admitted the production builder writes the composed bytes; before, it refuses the v13 board. */
+/** The production builder writes the composed bytes, and the conformance verifier accepts them. */
 function expectBuilderAgrees(args: BuildSettlementPayloadArgs, composed: ComposedPayload): void {
-  if (V13_ADMITTED) {
-    const built = buildSettlementPayloadV1(args);
-    expect(built.encoded_hex).toBe(composed.encoded_hex);
-    expect(built.settle_digest).toBe(composed.settle_digest);
-    expect(built.payload).toEqual(decodeSettlementPayloadV1(hexToBytes(composed.encoded_hex)));
-    const usage = built.usage;
-    const verified = verifySettlementPayloadV1(built.payload, built.canonical_text, built.seats, TERMS, usage);
-    expect(verified.settle_digest).toBe(composed.settle_digest);
-  } else {
-    expect(code(() => buildSettlementPayloadV1(args))).toBe("UNSUPPORTED_RULES_ENGINE_VERSION");
-    const board = (args.board as { state: GameStateResponse }).state;
-    const seats = args.bindings.map((binding) => ({ seat_index: binding.chain_seat_index, player_id: binding.player_id }));
-    expect(code(() => verifySettlementPayloadV1(decodeSettlementPayloadV1(hexToBytes(composed.encoded_hex)), canonicalStateText(board), seats, TERMS))).toBe(
-      "UNSUPPORTED_RULES_ENGINE_VERSION",
-    );
-  }
+  const built = buildSettlementPayloadV1(args);
+  expect(built.encoded_hex).toBe(composed.encoded_hex);
+  expect(built.settle_digest).toBe(composed.settle_digest);
+  expect(built.payload).toEqual(decodeSettlementPayloadV1(hexToBytes(composed.encoded_hex)));
+  const usage = built.usage;
+  const verified = verifySettlementPayloadV1(built.payload, built.canonical_text, built.seats, TERMS, usage);
+  expect(verified.settle_digest).toBe(composed.settle_digest);
 }
 
 /* ------------------------------------------------------------------ */
@@ -564,7 +550,7 @@ describe("C. the fifteen SET-0C payloads at v13: identical to the frozen v10 byt
     });
   }
 
-  it("the chain-neutral core (GNOLAND-1) with the certified Juno codec: the identical v13 bytes once admitted, a refusal before", () => {
+  it("the chain-neutral core (GNOLAND-1) with the certified Juno codec: the identical v13 bytes", () => {
     for (const v of V10_PAYLOADS.payload_vectors as Loose[]) {
       const args = v13ArgsFor(v);
       const intent = args.intent.kind === "Checkpoint" ? args.intent : { kind: "Terminal" as const, outcome: args.intent.outcome, terms: { pool_net: b(0), ante_net: ANTE_NET } };
@@ -574,12 +560,8 @@ describe("C. the fifteen SET-0C payloads at v13: identical to the frozen v10 byt
           bindings: args.bindings.map((s) => ({ chain_seat_index: s.chain_seat_index, player_id: s.player_id, payout_address: s.wallet })),
           intent,
         });
-      if (V13_ADMITTED) {
-        const core = run();
-        expect([v.name, core.encoded_hex]).toEqual([v.name, composeV13(args).encoded_hex]);
-      } else {
-        expect([v.name, code(run)]).toEqual([v.name, "UNSUPPORTED_RULES_ENGINE_VERSION"]);
-      }
+      const core = run();
+      expect([v.name, core.encoded_hex]).toEqual([v.name, composeV13(args).encoded_hex]);
     }
   });
 });
@@ -597,21 +579,24 @@ describe("D. coexistence: each board settles under a domain declaring its own pi
     return { ...v13Args, board: { state: atPin(boards["SYN-01-CLASSIC-BANKBREAK"], pin) }, domain: settlementDomainV1(inputs), domain_inputs: inputs };
   };
 
-  it("v10 reproduces the frozen v10 vector, v11 the v11 certification's, v12 the v12 certification's; v13 composes (and builds once admitted)", () => {
+  it("v10 reproduces the frozen v10 vector, v11 the v11 certification's, v12 the v12 certification's; v13 builds the composed v13 bytes", () => {
     expect(buildSettlementPayloadV1(argsAt(10)).encoded_hex).toBe(v.encoded);
     expect(buildSettlementPayloadV1(argsAt(11)).encoded_hex).toBe((V11.payload_vectors as Loose[]).find((x) => x.name === v.name)!.encoded);
     expect(buildSettlementPayloadV1(argsAt(12)).encoded_hex).toBe((V12.payload_vectors as Loose[]).find((x) => x.name === v.name)!.encoded);
     expectBuilderAgrees(argsAt(13), composeV13(v13Args));
   });
 
-  it("every crosswise pair is RULES_ENGINE_VERSION_MISMATCH -- a v13 board is refused UNSUPPORTED first while 13 is not admitted", () => {
+  it("every crosswise pair among 10, 11, 12 and 13 is RULES_ENGINE_VERSION_MISMATCH; a v14 board is UNSUPPORTED under any domain", () => {
     for (const boardPin of [10, 11, 12, 13]) {
       for (const domainPin of [10, 11, 12, 13]) {
         if (boardPin === domainPin) continue;
         const args = { ...argsAt(domainPin), board: argsAt(boardPin).board };
-        const want = boardPin === 13 && !V13_ADMITTED ? "UNSUPPORTED_RULES_ENGINE_VERSION" : "RULES_ENGINE_VERSION_MISMATCH";
-        expect([boardPin, domainPin, code(() => buildSettlementPayloadV1(args))]).toEqual([boardPin, domainPin, want]);
+        expect([boardPin, domainPin, code(() => buildSettlementPayloadV1(args))]).toEqual([boardPin, domainPin, "RULES_ENGINE_VERSION_MISMATCH"]);
       }
+    }
+    for (const domainPin of [10, 11, 12, 13]) {
+      const args = { ...argsAt(domainPin), board: { state: atPin(boards["SYN-01-CLASSIC-BANKBREAK"], 14) } };
+      expect([14, domainPin, code(() => buildSettlementPayloadV1(args))]).toEqual([14, domainPin, "UNSUPPORTED_RULES_ENGINE_VERSION"]);
     }
   });
 });
@@ -633,8 +618,8 @@ describe("E. uncertified pins fail closed; the certified list is an explicit lit
     expect(source).not.toMatch(/from\s+"\.\/rulesVersion"/);
   });
 
-  it("9, 14, 15, 999, 2^31 and RULES_ENGINE_VERSION + 1 are refused before a value is read (and 13 too while it is not admitted)", () => {
-    const pins = [9, 14, 15, 999, 2 ** 31, RULES_ENGINE_VERSION + 1, ...(V13_ADMITTED ? [] : [13])];
+  it("9, 14, 15, 999, 2^31 and RULES_ENGINE_VERSION + 1 are refused before a value is read", () => {
+    const pins = [9, 14, 15, 999, 2 ** 31, RULES_ENGINE_VERSION + 1];
     for (const pin of pins) {
       expect(() => appraiseSeats(atPin(board, pin), seats)).toThrow(`UNSUPPORTED_RULES_ENGINE_VERSION: rules_engine_version=${pin} (supported: ${EXPECTED_SETTLEMENT_LITERAL.join(", ")})`);
     }
@@ -678,9 +663,10 @@ describe("F. SET-0A §14's parity sweep at the v13 pin: rankPlayers equals the a
       const state = atPin(board, 13);
       try {
         const ranked = rankedWorth(state);
-        // The pin-independent v13 appraisal (the gate is the only reader of the pin); direct once admitted.
+        // The direct v13 appraisal; it equals the pin-independent reading (the gate is the only reader of the pin).
         const seats = seatsOf(board.player_addresses);
-        const appraised = V13_ADMITTED ? appraiseSeats(state, seats) : appraiseSeats(atPin(board, 12), seats);
+        const appraised = appraiseSeats(state, seats);
+        expect(appraised).toEqual(appraiseSeats(atPin(board, 12), seats));
         for (const seat of appraised) {
           if (ranked[seat.player_id].netWorth !== Number(seat.total.toString())) out.mismatches.push(`idx ${index} ${seat.player_id}`);
         }
@@ -860,7 +846,7 @@ describe("G. the v13 vectors: V13-01 ... V13-21, twenty-five terminals reached b
       expect(d.revert.log_len).toBe(g.entries.length + 1 + revertedStep.entries.length);
     });
 
-    it("its payload: the v12 twin's bytes but for [1,33) domain and [91,123) appraisal_state_hash; decodes, checks; the builder agrees once admitted", () => {
+    it("its payload: the v12 twin's bytes but for [1,33) domain and [91,123) appraisal_state_hash; decodes, checks; the production builder writes it", () => {
       const args = vectorArgs(g);
       const composed = composeV13(args);
       expect(decodeSettlementPayloadV1(hexToBytes(composed.encoded_hex))).toEqual(composed.payload);
@@ -876,7 +862,7 @@ describe("G. the v13 vectors: V13-01 ... V13-21, twenty-five terminals reached b
       expectBuilderAgrees(args, composed);
     });
 
-    it("the browser's re-derivation (`checkTerminalSettlement`): a match once admitted, `unavailable` (not certified) before", () => {
+    it("the browser's re-derivation (`checkTerminalSettlement`): a match", () => {
       const composed = composeV13(vectorArgs(g));
       const roster = mapping.map((playerId, chainSeatIndex) => ({ playerId, chainSeatIndex }));
       const result = checkTerminalSettlement({
@@ -887,7 +873,7 @@ describe("G. the v13 vectors: V13-01 ... V13-21, twenty-five terminals reached b
         chainSeatIndex: 0,
         replay: (prefix) => restoredBoard(g, prefix as readonly ServerLogEntry[]),
       });
-      expect(result.result).toBe(V13_ADMITTED ? "match" : "unavailable");
+      expect(result.result).toBe("match");
     });
   });
 
@@ -1365,7 +1351,7 @@ describe("G. v13 round-boundary checkpoints: the Checkpoint payload of a mid-gam
   });
 
   for (const c of CHECKPOINTS) {
-    it(`${c.name}: a Checkpoint (kind 0, reason 0), weights = the appraisal, the builder agrees once admitted`, () => {
+    it(`${c.name}: a Checkpoint (kind 0, reason 0), weights = the appraisal, the production builder writes it`, () => {
       expect(stateDigest(boardAfter(c.game, c.log_len).board)).toBe(stateDigest(c.board));
       const args = vectorArgs(c.game, c.board, c.log_len, { kind: "Checkpoint" });
       const composed = composeV13(args);

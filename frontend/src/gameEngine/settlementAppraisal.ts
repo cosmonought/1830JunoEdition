@@ -358,8 +358,22 @@ interface CompanyFacts {
  * seat by exactly its dividend difference), the bank and the running corporation's turn record, with VGP conserved and
  * the appraiser matching rankPlayers on both. No codec, digest, payout arithmetic, contract or wasm byte moved, and no v10
  * or v11 evidence was rewritten. 13 and later stay refused until each is certified the same way, here, by name.
+ *
+ * PHASE 3 v13 (2026-10-04): 13 ADDED, BY ITS OWN CERTIFICATION -- `utils/settlementV13Certification.test.ts`, vectors
+ * V13-01..V13-21 of `docs/phase3/V13_SETTLEMENT_CERTIFICATION_VECTORS.md`, independently reviewed before this change.
+ * SET-0A's audit questions were rerun against rules revision 2 (OD-2 PassTurn, the SBS-3/SBS-4 Brown Bank Pool
+ * continuation, OD-4 automatic emergency funding and bankruptcy): none changes what a field the appraisal reads MEANS --
+ * the bankruptcy record and the treasuries are hashed but never read, and a bankrupt president is still scored by unsold
+ * shares alone. 25 terminals were reached by play through a server room from named revision-2 seeds (no board patched,
+ * no field grafted) and agree across this appraiser, an independent in-test oracle, rankPlayers and a Python oracle;
+ * their state hashes hold across a live room, a cold restore, a replay, a snapshot rebuild and a live RevertTo. The
+ * thirteen golden recipes at pin 13 are their certified boards but for the pin token, and the fifteen SET-0C payloads at
+ * pin 13 equal the v10/v11/v12 bytes outside `domain` and `appraisal_state_hash`. No codec, digest, payout arithmetic,
+ * contract or wasm byte moved, and no v10, v11 or v12
+ * evidence was rewritten. The gameplay axis is unchanged by this: `SUPPORTED_RULES_ENGINE_VERSIONS` is [13] and stays a
+ * separate list. 14 and later stay refused until each is certified the same way, here, by name.
  */
-export const SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10, 11, 12]);
+export const SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS: readonly number[] = Object.freeze([10, 11, 12, 13]);
 
 /** The engines a board may be appraised under: the certified list, and only it (DA-8 -- see above). */
 function settleableRulesEngineVersions(): readonly number[] {

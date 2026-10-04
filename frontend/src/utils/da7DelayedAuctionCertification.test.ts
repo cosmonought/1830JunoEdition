@@ -1596,13 +1596,13 @@ describe("DA-T11: a bank break inside the trigger set -- the set finishes, the g
        the same board at the v10 pin. The rule under test (an unsold private is nobody's) is the appraiser's. */
     expect(game.state.rules_engine_version).toBe(RULES_ENGINE_VERSION);
     /* Route v12 R12-2 moved the game to v12; Route v12 R12-3 certified v12 for settlement. Phase 3 W3-K moved it to v13,
-       which is NOT settlement-certified (PENDING its dedicated pass): the board as dealt is refused, fail closed, before a
-       value is read -- the R12-2 shape. The appraiser's rule under test is proven on the same board at the certified
-       pins, which must agree with one another. (The v13 certification pass appraises it AS IT STANDS again.) */
-    expect(() => appraiseSeats(game.state, seats)).toThrow(/UNSUPPORTED_RULES_ENGINE_VERSION/);
-    const appraisal = appraiseSeats({ ...game.state, rules_engine_version: 12 } as State, seats);
+       and Phase 3's dedicated v13 certification certified v13 for settlement: the board is appraised AS IT STANDS again,
+       and agrees with the same board at every earlier certified pin. The next engine stays refused, fail closed. */
+    const appraisal = appraiseSeats(game.state, seats);
+    expect(appraisal).toEqual(appraiseSeats({ ...game.state, rules_engine_version: 12 } as State, seats));
     expect(appraisal).toEqual(appraiseSeats({ ...game.state, rules_engine_version: 11 } as State, seats));
     expect(appraisal).toEqual(appraiseSeats({ ...game.state, rules_engine_version: 10 } as State, seats));
+    expect(() => appraiseSeats({ ...game.state, rules_engine_version: RULES_ENGINE_VERSION + 1 } as State, seats)).toThrow(/UNSUPPORTED_RULES_ENGINE_VERSION/);
     for (const seat of appraisal) {
       expect([seat.player_id, seat.privates, seat.bankrupt]).toEqual([seat.player_id, BigInt(0), false]);
       expect(seat.total).toBe(seat.cash_counted + seat.shares);

@@ -230,7 +230,7 @@ describe("the protocol axes (L4-1 §A)", () => {
     expect(Object.isFrozen(ACCEPTED_CLIENT_PROTOCOLS)).toBe(true);
   });
 
-  it("moves nothing on the rules axis: rules engine 11, supported [11], settlement certified [10, 11] (12 / [12] since Route v12 R12-2; certified [10, 11, 12] since R12-3)", () => {
+  it("moves nothing on the rules axis: rules engine 11, supported [11], settlement certified [10, 11] (12 / [12] since Route v12 R12-2; certified [10, 11, 12] since R12-3; 13 / [13] since W3-K; certified [10, 11, 12, 13] since the v13 certification)", () => {
     /* LIVE-4 moved no rules version; Route v12 R12-2's replacing bump did (11 -> 12), and replaced the one supported
        version, as every bump before it -- it is not a dual-support bump. */
     /* Phase 3 W3-K: v13 replaced 12 the same way (owner policy: pinned v12 rooms are drained before v13 deploys). */
@@ -238,7 +238,8 @@ describe("the protocol axes (L4-1 §A)", () => {
     /* A second supported version is a dual-support rules bump: allowed only with a replay-equivalence certificate
        (OD-L4-2), after which the list is a literal that certificate's test owns. */
     expect(SUPPORTED_RULES_ENGINE_VERSIONS).toEqual([13]);
-    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11, 12]);
+    /* Phase 3's dedicated v13 certification added 13 to the settlement axis in its own commit. */
+    expect(SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS).toEqual([10, 11, 12, 13]);
   });
 });
 

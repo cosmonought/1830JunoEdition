@@ -219,15 +219,15 @@ describe("LIVE-4 L4-4: what this pass must not move", () => {
       [1],
     );
     // Route v12 R12-2: rules 12 (11 through LIVE-4); Route v12 R12-3 certified 12 for settlement, by its own pass.
-    // Phase 3 W3-K: rules 13, NOT settlement-certified (its own pass is PENDING) -- the certified literal is unchanged.
+    // Phase 3 W3-K: rules 13; Phase 3's dedicated v13 certification then added 13 to the certified literal, by its own pass.
     assert.equal(RULES_ENGINE_VERSION, 13);
-    assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11, 12]);
+    assert.deepEqual([...SETTLEMENT_CERTIFIED_RULES_ENGINE_VERSIONS], [10, 11, 12, 13]);
     assert.equal(FINANCIAL_VERSION, 2, "the financial record's own file format");
     assert.deepEqual(currentMoneyContinuation(), { format: "18COSMOS/MONEY-CONTINUATION/v1", rules_engine_version: 13, hosted_protocol: 1, financial_protocol: 3, settlement_codec: "18JUNO/v1" });
     const capability = thisDeploymentCapability([PIN]);
     assert.deepEqual(
       [capability.rules.current, [...capability.rules.supported], [...capability.rules.certified], [...capability.hosted_protocols], [...capability.financial_protocols], [...capability.settlement_codecs]],
-      [13, [13], [10, 11, 12], [1], [3], ["18JUNO/v1"]],
+      [13, [13], [10, 11, 12, 13], [1], [3], ["18JUNO/v1"]],
     );
     assert.match(source("server/src/rooms/gameRecord.ts"), /value\.record_schema === 2 && isGameMoneyTerms\(value\.money\)/, "a money table is record_schema 2");
   });

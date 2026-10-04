@@ -8,7 +8,9 @@
 // prices), RR-7 (the emergency private sale's limits), U-32 (the home station is the first Operating Round turn's),
 // the remaining must-sell qualifier, U-40 (the page's standing) and U-38 (the Tiles tab's canonical names). Each
 // sentence is checked against the engine figure it states, read from the engine's own constant where one exists.
-// RR-4 (OD-7) and the waiting room's description line (OD-14(e)) are owner-gated and deliberately untouched here.
+// The waiting room's description line (OD-14(e)) is owner-gated and deliberately untouched here. RR-4 was gated on
+// OD-7 and is now ruled (2026-10-03): the cheapest-train restriction is the emergency purchase's only -- its cases
+// are at the end of this file (Phase 3 Wave-1 integration).
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -21,6 +23,9 @@ import { DIESEL_EXCHANGE_COST, LPF_DIESEL_EXCHANGE_COST } from "../gameEngine/di
 import { FULL_CAPITALISATION_MULTIPLE } from "../gameEngine/floatThreshold";
 import { canonicalTileName } from "./hexTileCatalog";
 import { readStripped } from "../utils/sourceScan";
+import { cheapestPurchasableTrain } from "../gameEngine/trainAvailability";
+import * as F from "../utils/offerFixtures74";
+import * as S from "../utils/offerMatrix74Support";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -171,7 +176,7 @@ describe("RR-7 · the emergency private sale carries its limits", () => {
     expect(forced).toContain("Phases 3–4");
     expect(forced).toContain("½–2× face value");
     expect(forced).toContain("never the B&O");
-    // RR-4 (OD-7) is owner-gated: its row is untouched.
+    // RR-4 (OD-7, ruled): "cheapest" now sits on the emergency row only -- see the OD-7 cases below.
     expect(forced).toContain("Must buy the cheapest available");
   });
 });
@@ -201,3 +206,72 @@ describe("U-38 · the Tiles tab names every tile canonically", () => {
     expect([canonicalTileName(626), canonicalTileName(36), canonicalTileName(35)]).toEqual(["#8861", "oo13", "oo14"]);
   });
 });
+
+/* ==================================================================
+    RR-4 · OD-7 (owner ruling, 2026-10-03): "CHEAPEST" IS THE EMERGENCY PURCHASE'S RESTRICTION ONLY
+   ==================================================================
+   A corporation whose treasury can fund a legal train purchase buys under the ordinary rules; the "must buy the
+   cheapest train" restriction belongs to the emergency purchase, where the treasury cannot cover a train and the
+   president's money becomes necessary. Copy only: the engine already allowed any legal treasury-funded purchase,
+   and the last case proves it on a real room rather than asserting it. */
+describe("RR-4 · OD-7 · a treasury-funded forced purchase is an ordinary purchase", () => {
+  const TREASURY_CHEAPEST = /enough money to buy a train itself, it must purchase the cheapest/;
+
+  it("the Operating Round's Buy Trains page: ordinary rules when the treasury can pay, cheapest only in the emergency", () => {
+    const text = page("operating", { ...BASE, operatingSubPhase: "Hardware" });
+    expect(text).not.toMatch(TREASURY_CHEAPEST);
+    expect(text).toContain(
+      "If the corporation can pay for a train from its own treasury, the ordinary purchase rules apply: it may buy any train it could legally buy, not only the cheapest.",
+    );
+    expect(text).toContain(
+      "If the corporation's treasury cannot cover the cheapest available train, this is an emergency purchase: it must buy the cheapest available train",
+    );
+  });
+
+  it("the Tables page's Forced Train Purchase rows put 'cheapest' on the emergency row, not the treasury row", () => {
+    page("tables");
+    const rows = Array.from(container.querySelectorAll<HTMLElement>("#rules-reference-forced-purchase tr")).map(
+      (row) => row.textContent ?? "",
+    );
+    const treasuryRow = rows.find((row) => row.startsWith("Corporation can afford a train")) ?? "";
+    const emergencyRow = rows.find((row) => row.startsWith("Corporation + president can afford one")) ?? "";
+    expect(treasuryRow).toContain("Ordinary purchase rules: any train it may legally buy");
+    expect(treasuryRow).not.toContain("cheapest");
+    expect(emergencyRow).toContain("Must buy the cheapest available");
+  });
+
+  it("no page says a corporation that can pay from its treasury must buy the cheapest train", () => {
+    for (const id of ["overview", "stock", "operating", "auction", "tables"] as const) {
+      const text = page(id, { ...BASE, operatingSubPhase: "Hardware" });
+      expect([id, TREASURY_CHEAPEST.test(text)]).toEqual([id, false]);
+      expect([id, text.includes("must buy the cheapest available train — from its own treasury first")]).toEqual([id, false]);
+      expect([id, text.includes("must buy the cheapest train available: its treasury first")]).toEqual([id, false]);
+    }
+    // The Watch For reminder and the gotcha it reads say "cheapest" only for the treasury that cannot cover it.
+    const overview = page("overview", { ...BASE, operatingSubPhase: "Hardware" });
+    expect(overview).toContain("Only when its treasury cannot cover the cheapest train available must it buy that train");
+  });
+
+  it("the page still states its standing (U-40) now that RR-4 agrees with the engine", () => {
+    for (const id of ["operating", "tables"] as const) {
+      page(id);
+      expect(container.querySelector('[data-testid="rules-authority"]')?.textContent).toBe(RULES_AUTHORITY_SENTENCE);
+    }
+  });
+
+  it("the engine agrees: a trainless corporation with treasury to spare may buy a train dearer than the cheapest", () => {
+    // PRR (Alice) owns no train and holds $500, enough for the cheapest train for sale. PRR offers $70 MORE than
+    // that cheapest train for one of NYC's 3-trains, and the room accepts the offer and settles it.
+    const board = S.withCorp(F.operatingBoard(), F.PRR, { owned_trains: [] });
+    const cheapest = cheapestPurchasableTrain(board)!;
+    const price = cheapest.cost + 70;
+    expect(price).toBeLessThanOrEqual(F.treasury(board, F.PRR));
+    const room = S.roomFor(board);
+    expect(room.submit(F.P1, S.M.proposeTrain(F.NYC, F.PRR, "3", String(price))).kind).toBe("applied");
+    expect(room.submit(F.P2, S.M.answerTrain(F.NYC, true)).kind).toBe("applied");
+    const prr = room.room.state.public_companies.find((entry) => entry.company_id === F.PRR)!;
+    expect(prr.owned_trains).toEqual(["3"]);
+    expect(Number(prr.treasury)).toBe(F.treasury(board, F.PRR) - price);
+  });
+});
+

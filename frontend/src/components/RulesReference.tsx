@@ -710,7 +710,9 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
       "Trains may be purchased from the Bank, the Bank Pool, or another corporation.",
       "Buy trains one at a time, because a purchase can immediately trigger a phase change.",
       "Train limit: 4 in Phases 2–3, 3 in Phase 4, 2 from Phase 5.",
-      "A corporation with a legal route but no train must buy the cheapest available train — from its own treasury first, then the president's cash.",
+      /* Phase 3 OD-7 (RR-4, owner ruling 2026-10-03): "cheapest" is the emergency purchase's restriction only. A
+         treasury that can pay buys under the ordinary rules; the engine has always allowed any legal purchase. */
+      "A corporation with a legal route but no train must buy one. If its treasury can pay, it may buy any train it could legally buy; only when the treasury cannot cover the cheapest available train must it buy that one, with the president paying the difference.",
     ],
     detail: [
       { p: "A corporation may purchase trains at the end of its Operating Turn." },
@@ -782,8 +784,10 @@ const OPERATING_STEPS: readonly OperatingStep[] = [
       { p: "The corporation may use the normal purchase rules to buy from the Bank, the Bank Pool, or another corporation." },
       {
         ul: [
-          "If the corporation has enough money to buy a train itself, it must purchase the cheapest available train — if 5-trains, 6-trains and diesels are all on offer, that is a 5-train.",
-          "If the corporation does not have enough money but the corporation and its president together have enough, the corporation must spend all of its money and the president pays the difference.",
+          /* Phase 3 OD-7 (RR-4, owner ruling 2026-10-03): a treasury-funded forced purchase is an ordinary purchase;
+             the cheapest-train restriction belongs to the emergency purchase, where president funding is needed. */
+          "If the corporation can pay for a train from its own treasury, the ordinary purchase rules apply: it may buy any train it could legally buy, not only the cheapest.",
+          "If the corporation's treasury cannot cover the cheapest available train, this is an emergency purchase: it must buy the cheapest available train, the corporation spends all of its money, and the president pays the difference.",
           "When the president's personal money is being used for this forced purchase, a train bought from another corporation may not cost more than its face value.",
           "A cash-strapped corporation is not required to buy another corporation's train merely because it is cheaper than a train in the Bank or Bank Pool.",
           /* Phase 3 W1-L (RR-7): what the president may sell, and the private sale's own limits (`emergencyFunding.ts`
@@ -1788,8 +1792,10 @@ const OTHER_REFERENCE_GROUPS: readonly ReferenceGroup[] = [
     anchor: "rules-reference-forced-purchase",
     heads: ["Situation", "Outcome"],
     rows: [
-      { label: "Corporation can afford a train", value: "Must buy the cheapest available" },
-      { label: "Corporation + president can afford one", value: "Corporation spends everything; president pays the difference" },
+      /* Phase 3 OD-7 (RR-4, owner ruling 2026-10-03): the treasury-funded row is the ordinary purchase; "cheapest"
+         moves to the emergency row, where the president's money is needed. */
+      { label: "Corporation can afford a train", value: "Ordinary purchase rules: any train it may legally buy" },
+      { label: "Corporation + president can afford one", value: "Must buy the cheapest available; corporation spends everything, president pays the difference" },
       /* Phase 3 W1-L (RR-7): WAS "President sells shares or private companies to raise it" -- the private sale has
          the ordinary purchase's limits (`emergencyFunding.ts` #1541) and is never required. */
       { label: "Still short", value: "President sells shares to raise it; may also sell a private company to another corporation (Phases 3–4, ½–2× face value, never the B&O)" },
@@ -1826,7 +1832,8 @@ const GOTCHAS: readonly { text: string; page: RulesSection }[] = [
   },
   { text: "Withheld revenue, dividends on Bank Pool shares, and a corporation-owned Private Company's revenue all go to the corporation's treasury — the last is never paid out as dividends.", page: "operating" },
   { text: "Trains are bought at the end of the turn, so a train bought this turn cannot run — a corporation never runs a train on its first Operating Turn.", page: "operating" },
-  { text: "A corporation with a legal route but no train must buy the cheapest train available: its treasury first, then the president's own money, then forced share sales.", page: "operating" },
+  /* Phase 3 OD-7 (RR-4): "cheapest" only when the treasury cannot pay (owner ruling 2026-10-03). */
+  { text: "A corporation with a legal route but no train must buy one. Only when its treasury cannot cover the cheapest train available must it buy that train: its treasury first, then the president's own money, then forced share sales.", page: "operating" },
 ];
 
 /** NOT a missed-rule gotcha but a consequence, so it is marked differently. Verified against the rulebook:

@@ -548,8 +548,16 @@ export function HostSetupCard({ busy, error, onClose, onCreate }: HostSetupCardP
               />
             ))}
 
-            {error && <p style={styles.warning}>{error}</p>}
             </div>
+
+            {/* W1-O review: the refusal sits beside the button that produced it, outside the scrolling body --
+                in the body's tail it rendered below the fold of a short window, under a pinned Create Room, and
+                nothing visible changed. `role="alert"` so it is announced, as it was not before either. */}
+            {error && (
+              <p style={styles.warning} role="alert" data-testid="host-error">
+                {error}
+              </p>
+            )}
 
             <div style={styles.footer} data-testid="host-footer">
               <button type="button" style={styles.secondaryButton} onClick={() => setStep("type")} disabled={busy}>

@@ -197,6 +197,15 @@ describe("AUD-16.02: the footer is reachable without scrolling the card", () => 
     }
   });
 
+  it("shows a refusal outside the scrolling body, beside the pinned button, and announces it", () => {
+    render(<HostSetupCard busy={false} error={"That room could not be opened."} onClose={() => {}} onCreate={() => {}} />);
+    act(() => byTestId<HTMLButtonElement>("host-continue").click());
+    const error = byTestId("host-error");
+    expect(error.getAttribute("role")).toBe("alert");
+    expect(byTestId("host-body").contains(error)).toBe(false);
+    expect(error.nextElementSibling).toBe(byTestId("host-footer"));
+  });
+
   it("caps the card at the window, in real viewport units, at two scales", () => {
     mountHost();
     const card = () => byTestId("host-footer").parentElement as HTMLElement;

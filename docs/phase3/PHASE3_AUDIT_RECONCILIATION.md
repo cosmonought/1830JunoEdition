@@ -482,8 +482,8 @@ unchanged (`c17e844` code, `a18bac4` review fix, `60146da` slice tracking), then
 
 ## W2-J slice status (2026-10-04)
 
-**Branch** `phase3/w2-j-narration` @ `5f5ddd2` from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530` (the current provisional baseline,
-unchanged). **PARTIAL on its slice branch; NOT integrated.** OD-8 is the sole blocker to completion.
+**Branch** `phase3/w2-j-narration` @ `99b5651` from `phase3/wave3-i-w2i-v13cert-integration` @ `c774530` (the current provisional baseline,
+unchanged). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). OD-8 RULED 2026-10-04 (Option A).
 
 - **AUD-03.08 (K-18 / U-36), OD-12 RED R2 — its own commit `b328e53`:** the sold-out rise's Activity Log line read its marks from the
   shell's market mirror, which the dispatch had already advanced to the risen board, so it described a further, hypothetical rise. The
@@ -494,8 +494,12 @@ unchanged). **PARTIAL on its slice branch; NOT integrated.** OD-8 is the sole bl
   board (read off the two boards, not re-decided; a first president is not a change), and, when another holder ends level with the new
   president, "… each hold N%; the tie goes to the player seated closest to Y going clockwise, which is X." (§5.4), the level holders
   listed clockwise from Y.
-- **AUD-03.09 (K-22 / U-37): OPEN — OWNER DECISION (OD-8), NOT IMPLEMENTED.** Since #1616 the home station is placed at the start of the
-  corporation's first operating turn, and #1343's one float line rides that placement.
+- **AUD-03.09 (K-22 / U-37), OD-8 Option A — `8a448d2` + review fixes `99b5651`:** since #1616 the home station is placed at the start
+  of the corporation's first operating turn, and #1343's combined float line rode that placement. Now `describeFloat` says "<CORP> has
+  floated. It received $<AMOUNT>." on the purchase that floats the corporation (the `is_floated` false -> true transition, with the
+  capital on the settled board), and the placement says only "<CORP> placed its home station on <HEX>."; the combined line is gone.
+  Copy only. Recorded LOW (pre-existing #750 behaviour): on a float through an M&H exchange or a C&A grant the treasury diagnostic
+  still prints beside the float line on the same entry.
 - **OD-7:** ruled copy-only and already landed in W1-L (`ca73834`); nothing here. **Not taken:** W3-C, the W2-F / W3-I / W2-I
   follow-ups. Rules version and settlement unchanged. The four pre-existing meta-test failures are identical on `c774530` and on this
   branch.
@@ -551,7 +555,7 @@ unchanged). **PARTIAL on its slice branch; NOT integrated.** OD-8 is the sole bl
 | **AUD-03.06** · SBS-5 · §3<br>Auto-Buy passes the stage before checking the must-sell rule. | [D] | CONFIRMED — `frontend/src/App.tsx`:9917-9923 (stage pass) before 9927-9935 (divestment). | W1-A | **A** | — | — | — |
 | **AUD-03.07** · — · §3<br>The must-sell hold is shown only in tooltips. | [UX] | CONFIRMED by reading — `divestmentRefusal` reaches `title` attributes only. | W2-B | **A** | — | — | **Status:** IMPLEMENTED — W2-B `90d5588` + review fix `ca68b43` (`phase3/w2-b-stock-round-v13-ui`; integrated on `phase3/wave2-bcg-v13cert-integration`, merge `181e51e`): a must-sell banner at the top of `StockRoundPanel`, from the viewer's `divestmentDebt` (`mustSellBannerOf`) -- the same reading and sentence that greys the Pass. |
 | **AUD-03.08** · K-18 / U-36 · §3<br>The sold-out price-rise log line describes a further, hypothetical rise (mirror written before the line). | [D] | CONFIRMED — `frontend/src/App.tsx`:7000-7002 sets the mirror before `soldOutRises` at 7111-7123 (inside the RED apply half). | W2-J | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | — |
-| **AUD-03.09** · K-22 / U-37 · §3<br>A float is not logged until the corporation's first OR turn. | [D] | CONFIRMED — `utils/actionLog.ts`:470-486; `gameEngine/sandboxSession.ts`:7522. | W2-J | **A** | OD-8 | — | — |
+| **AUD-03.09** · K-22 / U-37 · §3<br>A float is not logged until the corporation's first OR turn. | [D] | CONFIRMED — `utils/actionLog.ts`:470-486; `gameEngine/sandboxSession.ts`:7522. | W2-J | **A** | OD-8 (RULED 2026-10-04, Option A) | — | — |
 | **AUD-03.10** · I-3 · §3<br>The 400 px prompt pointer overlaps the Private Companies card. | [D] | CONFIRMED — `components/PrivateCompaniesSection.tsx`:575-580 (`min(400px, …)`, fixed bottom-right; same at `PrivateTradePanel.tsx`:1071, `TrainPurchasePanel.tsx`:2469). | W2-F | **B** | — | — | The draft map deferred this as cosmetic; it stays in Phase 3. |
 | **AUD-03.11** · R4 · §3, §19<br>The typed offer form is lost if a send is dropped. | [UX] | CONFIRMED — `PrivateCompaniesSection.tsx`:348-349 `onPropose(intent); setDraft(null);` unconditionally. | W3-I | **B** | — | — | The draft map deferred this; it stays in Phase 3. |
 | **AUD-03.12** · S-4 · §3, Phase-4 list<br>The UI may be stricter than the engine about turn stages. | [PT] | CONFIRMED as a mechanism — shell-only stage refusals `frontend/src/App.tsx`:9569-9577, 9604-9612. | W1-A (pre-work) | **D** | — | After W1-A: in SR2+, sell, buy, sell again within one turn, and try a Pool buy after a sale. Record every control that is greyed while the server would accept. | — |

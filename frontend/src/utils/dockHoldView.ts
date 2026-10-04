@@ -32,9 +32,13 @@
 // ONE CALL SITE. `App.tsx` derives this view once per board (the "holds/purchase" group) and threads its fields to
 // the bar (`turnHoldReason`), the Stock Round / auction Pass (`passDisabledReason`), the tile-lay gate, the token ring,
 // the train panel and the private-purchase panel. None of those asks the hold a second, subtly different question.
-// OUTSIDE THIS SLICE, and recorded rather than widened into: the Stock Round's share controls and the M&H chip still
-// read 6.5-B's `privateTradeHoldReason` (the trade offer's hold, the only one a Stock Round can carry, so the answers
-// agree on every reachable board). Folding them into this view is W2-C / W2-F's surface, not W2-A's.
+// OUTSIDE THIS SLICE, and recorded rather than widened into: the Stock Round's share controls still read 6.5-B's
+// `privateTradeHoldReason` (the trade offer's hold, the only one a Stock Round can carry, so the answers agree on every
+// reachable board). Folding them into this view is W2-F's surface, not W2-A's.
+// PHASE 3 W2-D: THE M&H CHIP READS THIS VIEW NOW (`exchangePrivate`, the authority's refusal of `ExchangePrivate`).
+// Once the request is offered in the Operating Round (AUD-10.05) the trade offer is no longer the only hold it can
+// meet -- a discard, the funding hold, a standing train / private offer and the home hold all refuse it, and refuse
+// rather than queue (`mohawkExchange.ts`) -- so the narrower 6.5-B answer would leave the chip live under them.
 //
 // NOT HERE: the emergency purchase modal and its viewer scope (W2-G), the one global "Waiting on X" strip (W2-F), the
 // v13 emergency semantics (W3-K). Ordinary off-turn behaviour (OD-1) is untouched: this view greys only while a hold
@@ -85,6 +89,8 @@ export interface DockHoldView {
   proposeTrainPurchase: string | null;
   /** `ProposePrivatePurchase` (the embedded Buy Private Company panel). */
   proposePrivatePurchase: string | null;
+  /** `ExchangePrivate` (the M&H's exchange-request chip, in either round -- Phase 3 W2-D). */
+  exchangePrivate: string | null;
 }
 
 export const NO_DOCK_HOLD: DockHoldView = Object.freeze({
@@ -99,6 +105,7 @@ export const NO_DOCK_HOLD: DockHoldView = Object.freeze({
   exchangeForDiesel: null,
   proposeTrainPurchase: null,
   proposePrivatePurchase: null,
+  exchangePrivate: null,
 });
 
 /** The probe each control's dispatch is judged by -- the kind it sends, in its minimal shape. */
@@ -121,6 +128,7 @@ function probes(gameId: number): Record<Exclude<keyof DockHoldView, "turnHoldRea
     proposePrivatePurchase: {
       ProposePrivatePurchase: { game_id: gameId, protocol_id: 0, private_id: 0, price: "0" },
     },
+    exchangePrivate: { ExchangePrivate: { game_id: gameId, private_id: 0, company_id: 0, player: "", source: "Ipo" } },
   } as unknown as Record<Exclude<keyof DockHoldView, "turnHoldReason"> | "declareDividends" | "runRoutes", SandboxLogMsg>;
 }
 
@@ -149,5 +157,6 @@ export function dockHoldView(input: DockHoldInput): DockHoldView {
     exchangeForDiesel: ask(p.exchangeForDiesel),
     proposeTrainPurchase: ask(p.proposeTrainPurchase),
     proposePrivatePurchase: ask(p.proposePrivatePurchase),
+    exchangePrivate: ask(p.exchangePrivate),
   };
 }

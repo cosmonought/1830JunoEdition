@@ -119,12 +119,29 @@ describe("stockRoundExchangeOffers (design notes #871/#881/#883)", () => {
     ).toEqual([]);
   });
 
-  it("offers nothing outside a Stock Round", () => {
+  /* Phase 3 W2-D (AUD-10.05 / K-04): INVERTED. This asserted "offers nothing outside a Stock Round"; the authority's
+     window is the Stock Round AND the Operating Round (D-29: everything but the owner's own Stock Round turn queues),
+     so the request is offered in both -- and marked `offTurn`, because in the OR it is always somebody else's turn
+     or a corporation's. The two rounds it can never be raised in are still empty. */
+  it("offers the request in an Operating Round too, marked off-turn", () => {
     const operating = state({
       current_round_type: "OperatingRound",
       private_companies: [priv({ private_id: MH, owner: ALICE })],
     });
-    expect(stockRoundExchangeOffers({ state: operating, ...SANDBOX })).toEqual([]);
+    const offers = stockRoundExchangeOffers({ state: operating, ...SANDBOX });
+    expect(offers).toHaveLength(1);
+    expect(offers[0].abilityKey).toBe("mh-exchange");
+    expect(offers[0].offTurn).toBe(true);
+  });
+
+  it("offers nothing in the auction or a finished game", () => {
+    for (const round of ["WaterfallAuction", "GameEnd"] as const) {
+      const board = state({
+        current_round_type: round,
+        private_companies: [priv({ private_id: MH, owner: ALICE })],
+      });
+      expect(stockRoundExchangeOffers({ state: board, ...SANDBOX })).toEqual([]);
+    }
   });
 
   it("offers nothing to a player who does not hold it", () => {

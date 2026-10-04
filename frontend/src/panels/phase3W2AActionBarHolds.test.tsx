@@ -75,6 +75,8 @@ function baseProps(over: Partial<Props> = {}): Props {
     roundType: "OperatingRound",
     orSubPhase: "Track",
     sessionReady: true,
+    // Phase 3 W2-D: the required off-turn power readiness (no chips are offered by this harness).
+    offTurnPowerReady: true,
     isMyTurn: true,
     onPassTurn: noop,
     passDisabledReason: null,

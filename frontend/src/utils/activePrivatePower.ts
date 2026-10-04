@@ -57,6 +57,9 @@ import {
   type StationOutcome,
 } from "./privatePowerFlow";
 import { privateHexFor } from "../gameEngine/privateReservations";
+import { JK_TILE_ABILITY_KEY, kanawhaLicensesInPlay } from "../gameEngine/kanawhaLicense";
+import { JK_PRIVATE_ID } from "../gameEngine/levelPlayingField";
+import type { OperatingSubPhase } from "../components/OperatingSubPhaseStepper";
 import {
   MH_EXCHANGE_TICKER,
   mhExchangeRequestRefusal,
@@ -87,6 +90,10 @@ export interface ExchangeChipOffer {
   abilityKey: "mh-exchange";
   chipLabel: string;
   chipTitle: string;
+  /** Phase 3 W2-D (P3-N003): the exchange is NOT TURN-GATED (#871/#884). The bar renders an `offTurn` offer to a
+   *  seat that is not acting and readies it on `offTurnPowerReady` rather than `sessionReady`. WHETHER the request
+   *  executes, queues or is refused is still the authority's answer (`mhExchangeRequestRefusal`), not this flag's. */
+  offTurn: true;
 }
 
 export interface StockRoundExchangeInput {
@@ -113,7 +120,13 @@ export interface StockRoundExchangeInput {
    SEPARATE FROM `privatePowerOffers`, deliberately. That module's note is explicit that it holds HEX powers
    -- "M&H and C&A are share exchanges" -- and that its list "can never hold more than two entries". Growing
    it there would falsify a note that is load-bearing for `privatePowerHexKeys`, which feeds the board's glow
-   and must never be handed a power with no hex. Two lists, joined only where the bar takes a generic chip. */
+   and must never be handed a power with no hex. Two lists, joined only where the bar takes a generic chip.
+   PHASE 3 W2-D (AUD-10.05, P3-N003): THE NAME IS HISTORICAL. The offer stands in the Stock Round AND the Operating
+   Round (U-35 (iii): "the authority queues a request from any Stock or Operating Round moment; the current control
+   is reachable only where the panel draws it"), and it is marked `offTurn` so the bar shows it to the owner on
+   another seat's turn as well. Kept under its old name because four suites anchor on it. The chip still raises the
+   question and dispatches nothing; the modal asks `mhExchangeRequestRefusal` per pile and the reducer decides
+   whether the request executes or queues. */
 export function stockRoundExchangeOffers(
   input: StockRoundExchangeInput,
 ): readonly ExchangeChipOffer[] {
@@ -134,8 +147,13 @@ export function stockRoundExchangeOffers(
      by silently withdrawing a control. */
   if (!sandbox) return [];
 
-  /* THE ROUND, read from `current_round_type` -- the same field the shell's round label reads. */
-  if (state?.current_round_type !== "StockRound") return [];
+  /* THE ROUND, read from `current_round_type` -- the same field the shell's round label reads.
+     Phase 3 W2-D (AUD-10.05 / K-04; U-35 (iii)): the Stock Round AND the Operating Round. That is the window the
+     authority already admits (`mhExchangeRefusal`, D-29): the owner's own Stock Round turn executes, every other
+     Stock or Operating Round moment queues to the next legal between-turn boundary. This line restates none of
+     that -- it only stops offering the chip where the window cannot be open at all (the auction, `GameEnd`). */
+  const round = state?.current_round_type;
+  if (round !== "StockRound" && round !== "OperatingRound") return [];
 
   const mh = state?.private_companies?.find((row) => row.private_id === mhPrivateId);
   /* OWNED BY THIS VIEWER AND STILL OPEN. `owner` is the PLAYER field -- #441: "a PLAYER owning the MH may
@@ -161,6 +179,7 @@ export function stockRoundExchangeOffers(
       /* Design note #884: the hover sentence travels with the label it sits beside, so the bar -- which #848
          says "writes no rules and no copy" -- does not have to choose between two sentences. */
       chipTitle: "Opens the exchange question — nothing is spent until you answer it.",
+      offTurn: true,
     },
   ];
 }
@@ -358,4 +377,66 @@ export function deriveActivePowerFlow(input: ActivePowerFlowInput): PowerFlow | 
     layDone: usedAbilities.has(key) || (key === "dh-tile" && boardOwed),
     station: key === "dh-tile" ? dhStation : "none",
   });
+}
+
+/* ==================================================================
+    PHASE 3 W2-D (AUD-04.03 / A-8): THE JK CHIP BELONGS TO ONE OPERATING ROUND'S LAY TRACK STEP
+   ==================================================================
+   MOVED FROM `App.tsx`'s R-JK, where the offer tested only `orSubPhase !== "Track"`. `orSubPhase` reads
+   `operating_sub_phase ?? liveOrSubPhase`, and both it and the acting corporation outlive the Operating Round they
+   belong to (#1235 leaves the cursor where the OR ended) -- so the chip showed in a Stock Round, which is #1342's
+   finding for the licence chip beside it, fixed there and not here. THE ROUND IS THE GATE, THEN THE STEP, exactly as
+   `kanawhaLicenseControl` already asks. Copy unchanged. Nothing here decides the lay: `jkTileRefusal` still answers
+   whether the armed lay is legal, and the reducer halves the fee and closes the JK. */
+
+export interface JkPowerOfferInput {
+  state: GameStateResponse | null;
+  /** The corporation operating -- the JK's power is the corporation's (#441). */
+  actingProtocolId: number | null;
+  /** The shell's Operating Round step. Read only once the round itself is known to be an Operating Round. */
+  orSubPhase: OperatingSubPhase;
+  /** Whether the next lay is armed to spend the JK (the shell's local flag). Changes the copy only. */
+  armed: boolean;
+}
+
+export interface JkChipOffer {
+  abilityKey: typeof JK_TILE_ABILITY_KEY;
+  chipLabel: string;
+  chipTitle: string;
+}
+
+/** The JK's armed-lay chip for the acting corporation, or `null` outside its one moment. */
+export function jkPowerOfferFor(input: JkPowerOfferInput): JkChipOffer | null {
+  const { state, actingProtocolId, orSubPhase, armed } = input;
+  if (!state || actingProtocolId === null || !kanawhaLicensesInPlay(state)) return null;
+  if (state.current_round_type !== "OperatingRound" || orSubPhase !== "Track") return null;
+  const jk = state.private_companies.find((entry) => entry.private_id === JK_PRIVATE_ID);
+  if (!jk || jk.closed || jk.owner_protocol_id !== actingProtocolId) return null;
+  if ((state.used_private_abilities ?? []).includes(JK_TILE_ABILITY_KEY)) return null;
+  return {
+    abilityKey: JK_TILE_ABILITY_KEY,
+    chipLabel: armed ? "JK armed — lay beside Coal River" : "Use JK Power",
+    chipTitle: armed
+      ? "Your next tile lay on a hex beside Coal River (L8) pays half its terrain cost and closes the JK. Press again to stand down."
+      : "Close the JK to lay one tile on a hex beside Coal River (L8) at half its terrain cost. Uses this turn's tile lay.",
+  };
+}
+
+/** The identity of the moment a JK arm belongs to: one step of one corporation's turn in one Operating Round.
+ *  The shell disarms whenever this changes. The ROUND's identity is in it (`current_round_type`,
+ *  `macro_round_number`, `sub_round_index`), not only the corporation and the step -- an OR that ends with the
+ *  same corporation and step on the cursor as the next one begins with (or as a Stock Round's stale cursor shows)
+ *  used to leave the arm standing. A key, not a decision: it says nothing about whether a lay is legal. */
+export function jkArmScope(
+  state: GameStateResponse | null,
+  actingProtocolId: number | null,
+  orSubPhase: OperatingSubPhase,
+): string {
+  return [
+    state?.current_round_type ?? "none",
+    state?.macro_round_number ?? "none",
+    state?.sub_round_index ?? "none",
+    actingProtocolId ?? "none",
+    orSubPhase,
+  ].join("|");
 }

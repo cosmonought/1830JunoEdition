@@ -126,13 +126,15 @@ describe("the exchange is offered only where it can be honoured (design note #88
        WHAT IS LEFT FOR THE SHELL TO GET WRONG is the WIRING: passing a constant, passing the wrong flag, or
        omitting it from the dependency list. That is what this asserts, and it is genuinely the shell's
        business rather than the module's. */
-    const body = sliceBetween(APP, "const stockRoundPowerOffers", "const privatePowerOffersRef");
+    /* Phase 3 W2-D: the memo moved below `dockHold` (its hold is `dockHold.exchangePrivate`), so its end anchor is the
+       binding that now follows it. */
+    const body = sliceBetween(APP, "const stockRoundPowerOffers", "const pendingDiscard = useMemo(");
     expect(body).not.toBe("");
     expect(body).toContain("stockRoundExchangeOffers({");
     expect(body).toContain("sandbox,");
     /* IN THE DEPENDENCY ARRAY, because a dependency omitted for being constant today is a promise about the
        caller rather than about this memo. */
-    expect(body).toContain("[gameState, viewerAddress, sandbox]");
+    expect(body).toContain("[gameState, viewerAddress, sandbox, dockHold.exchangePrivate]");
   });
 });
 
@@ -162,7 +164,13 @@ describe("the chips have their own group and their own mark (design note #884)",
        applying it to the chips withdraws the hex powers from a watcher and leaves the exchange alone,
        without this file knowing which power is which. That is the assertion: one expression, reused. */
     expect(BAR).toContain('const mayActThisTurn = roundType !== "OperatingRound" || isMyTurn;');
-    expect(BAR).toContain("onUsePowerOffer && mayActThisTurn");
+    /* Phase 3 W2-D (P3-N003 / AUD-10.05): was `onUsePowerOffer && mayActThisTurn`. Offered in the Operating Round
+       too, the exchange would have been withdrawn from its owner on another seat's turn, so the OFFER now says it is
+       off-turn and the same filter lets it through. Still one expression, still no power named in the bar. */
+    const chips = sliceBetween(BAR, "const powerChips: ActionBarButton[] =", "const powerChipNodes");
+    expect(chips).toContain(".filter((chip) => mayActThisTurn || chip.offTurn)");
+    expect(chips).toContain("offTurn: offer.offTurn === true,");
+    expect(chips).not.toMatch(/mh-exchange|jk-tile|"mh"|"jk"/);
   });
 
   it("renders one definition of the chip in both rails", () => {

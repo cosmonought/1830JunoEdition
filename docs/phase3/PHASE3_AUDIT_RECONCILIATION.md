@@ -306,6 +306,25 @@ Then one test-only integration commit (`70483ef`, the C+G train-window regressio
   `EmergencySellPortfolio` legs and the automatic liquidation (R2); the older `escrow3bAdversarial` uncertified-board assertion is weak;
   the now-unpassed `onEmergencyPurchase` / `emergencyAvailable` bar props (W2-G residue).
 
+## W2-D slice status (2026-10-04)
+
+**Branch** `phase3/w2-d-mh-offturn-jk` @ `a7488ff` (code `db50c38`, independent-review fixes `a7488ff`) from
+`phase3/wave2-bcg-v13cert-integration` @ `9b19d9d`. **COMPLETE on its slice branch; NOT integrated** (integration and owner broad
+gate pending). Presentation only -- the engine already owned every rule (`mohawkExchange.ts`: the SR + OR window, own-SR-turn
+executes / everything else queues, holds refuse rather than queue, one pending request). `stockRoundExchangeOffers` admits the
+Operating Round and marks the M&H offer `offTurn` (auction / finished game / non-owner / corporation-owned / closed / non-sandbox
+still offer nothing). The bar lets an `offTurn` offer past `mayActThisTurn` and readies it on the new required `offTurnPowerReady`
+(`controlsEnabled && !actionInFlight && !scrubbing`); ordinary corporate chips keep `mayActThisTurn` and `sessionReady`, which is
+unchanged; the bar names no power. The chip's hold is the authority's refusal of `ExchangePrivate`, a new `dockHold.exchangePrivate`
+field asked through W2-A's one call site (the memo now sits after `dockHold` and W2-C's offer authorities), replacing 6.5-B's
+`privateTradeHoldReason` for the chip; W2-E's pending > hold > live precedence kept. The JK chip is extracted to `jkPowerOfferFor`
+(Operating Round + Track only) and its arm's disarm is keyed on `jkArmScope` (round type, macro round, sub-round, acting
+corporation, step), so it never survives an OR. AUD-04.03, AUD-10.05 and P3-N003 IMPLEMENTED; W2-E's "Stock-Round-only chip"
+residue and W2-A's M&H-chip residue resolved (the Stock Round share controls' residue stays W2-F's). Tests: `phase3W2DMhOffTurnJk`
+(new); moved pins `activePrivatePower`, `powerRefusalAndChips`, `privatePowerOffer`, `phase65bShellWiring`,
+`phase3W2EMhQueuedVisibility`; the two rendered-bar harnesses gain the required prop. Known, not taken (pre-existing, out of
+scope): an `automatic: true` dispatch bypasses the reload "catching up" guard. Rules version unchanged (v13); settlement unchanged.
+
 ## Scope and closing remark
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |

@@ -145,6 +145,8 @@ interface ActionBarButton {
   onClick: () => void;
   disabled?: boolean;
   title?: string;
+  /** Phase 3 W2-D: a power chip readied on `offTurnPowerReady` rather than `sessionReady` (its offer's `offTurn`). */
+  offTurn?: boolean;
   /* ==================================================================
       DESIGN NOTE 936: A SLOT FOR THE MARK, BESIDE THE WORDS
      ==================================================================
@@ -814,6 +816,7 @@ export default function ContextualActionBar({
   roomClosed = false,
   orSubPhase,
   sessionReady,
+  offTurnPowerReady,
   onPassTurn,
   autoPass,
   autoBuy,
@@ -899,6 +902,12 @@ export default function ContextualActionBar({
    *  note #10/item 2. */
   orSubPhase: OperatingSubPhase;
   sessionReady: boolean;
+  /** Phase 3 W2-D (P3-N003): readiness for a power chip whose offer is marked `offTurn` -- a live session, nothing
+   *  in flight, not scrubbing, and NO turn component. `sessionReady` keeps its meaning (it includes the turn) for
+   *  Pass and every ordinary chip; this answers only "can this seat send a request right now" for an offer whose
+   *  owner may raise it on another seat's turn. Required (#799): a caller that forgets it must not compile. Which
+   *  offers are `offTurn` is the offer's business, never this bar's (#848/#884). */
+  offTurnPowerReady: boolean;
   onPassTurn: () => void;
   /** Design note #717: the standing-pass control. `null` where there is no such thing to offer. */
   autoPass?: {
@@ -1206,9 +1215,19 @@ export default function ContextualActionBar({
      the chips into one group would have forced a choice between one wrong sentence and a `switch` in this
      file on which power it is, which is this component writing copy about a rule it does not own (#848's
      rule, and #872's correction of two strings that had escaped it). */
-  /** 6.5-B (K-01): `blockedReason` greys a chip with the sentence the authority would refuse it with -- the M&H's
-   *  Stock Round exchange while a player <-> player trade offer holds the table (`pendingOfferBlock`). */
-  powerOffers?: readonly { abilityKey: string; chipLabel: string; chipTitle?: string; blockedReason?: string | null }[];
+  /** 6.5-B (K-01): `blockedReason` greys a chip with the sentence the authority would refuse it with -- first the
+   *  M&H's Stock Round exchange under a player <-> player trade offer; since Phase 3 W2-D, the M&H's request in either
+   *  round under any authoritative hold (`dockHold.exchangePrivate`), or W2-E's pending-request sentence.
+   *  Phase 3 W2-D (P3-N003): `offTurn` marks an offer its owner may raise on another seat's turn -- it is shown
+   *  past `mayActThisTurn` and readied on `offTurnPowerReady` instead of `sessionReady`. Absent means an ordinary
+   *  chip: hidden from a non-acting Operating Round seat and gated on the turn, exactly as before. */
+  powerOffers?: readonly {
+    abilityKey: string;
+    chipLabel: string;
+    chipTitle?: string;
+    blockedReason?: string | null;
+    offTurn?: boolean;
+  }[];
   /** Raises the prompt for one of them. Absent means no chips, the same way an absent `mapEl` means no jump. */
   onUsePowerOffer?: (abilityKey: string) => void;
   /** Design note #715: everything the embedded `ProposePrivatePurchase` needs, as ONE object -- the same
@@ -2197,8 +2216,13 @@ export default function ContextualActionBar({
      the hex chips and the M&H's Stock Round chip is untouched. That is exactly #871's rule -- the exchange is
      "NOT TURN-GATED, and that is the M&H's own rule rather than an oversight" -- preserved without this file
      having to know which power is which. */
+  /* PHASE 3 W2-D (P3-N003 / AUD-10.05): AN OFFER MARKED `offTurn` PASSES `mayActThisTurn`. The rule above held only
+     because the M&H's chip existed only in the Stock Round, where `mayActThisTurn` is always true. Offered in the
+     Operating Round too, it would have been withdrawn from exactly the seat it is for -- the owner on another
+     corporation's turn. Ordinary chips keep the filter unchanged (OD-1: the hex powers stay with the acting seat).
+     The flag is the OFFER's, so this file still does not know which power is which. */
   const powerChips: ActionBarButton[] =
-    onUsePowerOffer && mayActThisTurn
+    onUsePowerOffer
       ? powerOffers.map((offer) => ({
           key: `power-${offer.abilityKey}`,
           label: offer.chipLabel,
@@ -2218,10 +2242,11 @@ export default function ContextualActionBar({
              considered and overruled rather than missed. */
           icon: <PrivatePowerStar height={POWER_CHIP_STAR_PX} />,
           onClick: () => onUsePowerOffer(offer.abilityKey),
-          // 6.5-B (K-01): greyed WITH the hold's sentence while a player trade offer stands, not refused later.
+          // 6.5-B (K-01): greyed WITH the hold's sentence (W2-D: any authoritative hold, either round), not refused later.
           disabled: (offer.blockedReason ?? null) !== null,
           title: offer.blockedReason ?? offer.chipTitle ?? "Opens the question — nothing is spent until you answer it.",
-        }))
+          offTurn: offer.offTurn === true,
+        })).filter((chip) => mayActThisTurn || chip.offTurn)
       : [];
 
   /* ==================================================================
@@ -2265,10 +2290,10 @@ export default function ContextualActionBar({
       style={{
         ...styles.actionBarButton,
         ...styles.actionBarPowerChip,
-        ...(chip.disabled || !sessionReady ? styles.actionBarButtonDisabled : {}),
+        ...(chip.disabled || !(chip.offTurn ? offTurnPowerReady : sessionReady) ? styles.actionBarButtonDisabled : {}),
       }}
       onClick={chip.onClick}
-      disabled={chip.disabled || !sessionReady}
+      disabled={chip.disabled || !(chip.offTurn ? offTurnPowerReady : sessionReady)}
       title={chip.title}
     >
       {/* ==================================================================

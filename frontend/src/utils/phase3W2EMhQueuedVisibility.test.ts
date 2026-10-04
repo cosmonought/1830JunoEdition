@@ -308,7 +308,8 @@ describe("6. the shell wiring (source pins) -- W1-C preserved", () => {
   });
 
   it("the chip and both player-card mounts read the one pending view", () => {
-    const chip = sliceBetween(APP, "const stockRoundPowerOffers", "const privatePowerOffersRef");
+    // Phase 3 W2-D: the memo moved below `dockHold`; its end anchor is the binding that now follows it.
+    const chip = sliceBetween(APP, "const stockRoundPowerOffers", "const pendingDiscard = useMemo(");
     expect(chip).toContain("return withPendingMhExchangeChip(");
     expect(chip).toContain("pendingMhExchangeView(gameState,");
     expect(APP.split("privatePendingNote={pendingMhExchangeNote}").length - 1).toBe(2);

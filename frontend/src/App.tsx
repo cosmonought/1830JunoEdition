@@ -4156,7 +4156,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     /* Design note #887: `stockRoundExchangeOffers` in `activePrivatePower.ts`. The three rules this memo
        used to state inline -- #883's sandbox gate, the Stock Round test, and #441's PLAYER-scope ownership --
        are now three branches a test can exercise one at a time instead of three sentences a scan has to
-       find. The note above still explains WHY the offer travels with the bar; what it no longer has to do is
+       find. Design note #871 (on `stockRoundExchangeOffers`) still explains WHY the offer travels with the bar; what it no longer has to do is
        be the only record of what the code checks.
        Phase 3 W2-D (AUD-10.05, P3-N003): offered in the Operating Round as well, and marked `offTurn` -- the name is
        historical. Declared HERE, below `dockHold` and W2-C's offer authorities, because the hold is read from the

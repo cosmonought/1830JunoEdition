@@ -128,7 +128,7 @@ function probes(gameId: number): Record<Exclude<keyof DockHoldView, "turnHoldRea
     proposePrivatePurchase: {
       ProposePrivatePurchase: { game_id: gameId, protocol_id: 0, private_id: 0, price: "0" },
     },
-    exchangePrivate: { ExchangePrivate: { private_id: 0, company_id: 0, player: "", source: "Ipo" } },
+    exchangePrivate: { ExchangePrivate: { game_id: gameId, private_id: 0, company_id: 0, player: "", source: "Ipo" } },
   } as unknown as Record<Exclude<keyof DockHoldView, "turnHoldReason"> | "declareDividends" | "runRoutes", SandboxLogMsg>;
 }
 

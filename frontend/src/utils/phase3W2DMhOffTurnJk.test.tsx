@@ -364,6 +364,21 @@ describe("4. the rendered bar: the M&H chip alone is shown and live off-turn", (
     expect(mhChip().title).toBe(sentence);
   });
 
+  it("a queued request's pending chip still reaches the off-turn OR owner, greyed with the request's sentence", () => {
+    /* Review follow-up: W2-E's relabel must keep the offer's `offTurn`, or the bar would filter the pending chip
+       out for exactly the seat that queued it. Built from a real queued board, through the real composition. */
+    const queued = apply(orBoard("Hardware"), EXCHANGE_PROBE, P2);
+    const view = pendingMhExchangeView(queued, labelFor)!;
+    expect(view).not.toBeNull();
+    const pending = withPendingMhExchangeChip(stockRoundExchangeOffers({ state: queued, viewerAddress: P2, ...SANDBOX }), view);
+    render(barProps({ powerOffers: [...HEX_OFFERS, ...pending] }));
+    const found = chips(view.chipLabel);
+    expect(found).toHaveLength(1);
+    expect(found[0].disabled).toBe(true);
+    expect(found[0].title).toBe(view.sentence);
+    for (const hex of HEX_OFFERS) expect(chips(hex.chipLabel)).toHaveLength(0);
+  });
+
   it("Pass Turn stays disabled when sessionReady is false, whatever offTurnPowerReady says", () => {
     render(barProps({ roundType: "StockRound", powerOffers: [MH_OFFER], offTurnPowerReady: true, sessionReady: false }));
     const pass = Array.from(host.querySelectorAll<HTMLButtonElement>('[data-testid="pass-turn-button"]'));

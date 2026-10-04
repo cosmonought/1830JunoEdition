@@ -1215,9 +1215,10 @@ export default function ContextualActionBar({
      the chips into one group would have forced a choice between one wrong sentence and a `switch` in this
      file on which power it is, which is this component writing copy about a rule it does not own (#848's
      rule, and #872's correction of two strings that had escaped it). */
-  /** 6.5-B (K-01): `blockedReason` greys a chip with the sentence the authority would refuse it with -- the M&H's
-   *  Stock Round exchange while a player <-> player trade offer holds the table (`pendingOfferBlock`). */
-  /** Phase 3 W2-D (P3-N003): `offTurn` marks an offer its owner may raise on another seat's turn -- it is shown
+  /** 6.5-B (K-01): `blockedReason` greys a chip with the sentence the authority would refuse it with -- first the
+   *  M&H's Stock Round exchange under a player <-> player trade offer; since Phase 3 W2-D, the M&H's request in either
+   *  round under any authoritative hold (`dockHold.exchangePrivate`), or W2-E's pending-request sentence.
+   *  Phase 3 W2-D (P3-N003): `offTurn` marks an offer its owner may raise on another seat's turn -- it is shown
    *  past `mayActThisTurn` and readied on `offTurnPowerReady` instead of `sessionReady`. Absent means an ordinary
    *  chip: hidden from a non-acting Operating Round seat and gated on the turn, exactly as before. */
   powerOffers?: readonly {
@@ -2241,7 +2242,7 @@ export default function ContextualActionBar({
              considered and overruled rather than missed. */
           icon: <PrivatePowerStar height={POWER_CHIP_STAR_PX} />,
           onClick: () => onUsePowerOffer(offer.abilityKey),
-          // 6.5-B (K-01): greyed WITH the hold's sentence while a player trade offer stands, not refused later.
+          // 6.5-B (K-01): greyed WITH the hold's sentence (W2-D: any authoritative hold, either round), not refused later.
           disabled: (offer.blockedReason ?? null) !== null,
           title: offer.blockedReason ?? offer.chipTitle ?? "Opens the question — nothing is spent until you answer it.",
           offTurn: offer.offTurn === true,

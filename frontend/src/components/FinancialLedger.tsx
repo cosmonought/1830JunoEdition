@@ -56,6 +56,8 @@ import { formatNativeAmountCompact, NATIVE_DENOM_DISPLAY } from "../config";
 import { stationTickerColor } from "./hexContractTypes";
 import { PrivateCompanyPills } from "./PrivateCompanyPills";
 import { CapacityPill, LastRoutePayout, lastRunFigure, TrainChips } from "./TrainBadges";
+import type { RustFlourishEvent } from "./trainRustFlourish"; // W3-H (VF I-8)
+import type { TrainDiscardEvent } from "./trainDiscardFlourish"; // W3-H (VF J-5)
 // Design note #710: the Liquidity column, from the same rules the emergency-purchase plan reads.
 import { playerLiquidity } from "../gameEngine/endgame";
 import { marketZoneForPrice, type MarketGridResponse } from "./StockMarketRenderer";
@@ -95,6 +97,11 @@ export interface FinancialLedgerProps {
   /** Design note #405: passed through to the Player Assets table so seats
    *  read as names rather than truncated addresses. */
   playerLabel?: (address: string) => string | null;
+  /** W3-H (VF I-8 / J-5): the live rust and train-limit discard events, forwarded to the Corporation Assets
+   *  table's train chips exactly as the Round Detail corporations table takes them. Optional: absent, every
+   *  row renders its authoritative roster (A-3). */
+  rust?: RustFlourishEvent | null;
+  discard?: TrainDiscardEvent | null;
 }
 
 export function FinancialLedger({
@@ -107,6 +114,8 @@ export function FinancialLedger({
   gameId,
   marketGrid,
   playerLabel,
+  rust = null,
+  discard = null,
 }: FinancialLedgerProps) {
   // Called unconditionally (React hook rules) even before `gameState` resolves -- the hook no-ops cleanly on
   // an empty address list, and the fresh-array-every-render is safe because it depends only on the JOINED
@@ -144,7 +153,7 @@ export function FinancialLedger({
           />
           {/* Design note #14: exactly three tables -- Bank, Players,
               Corporations. */}
-          <CorporationAssetsSection gameState={gameState} marketGrid={marketGrid} />
+          <CorporationAssetsSection gameState={gameState} marketGrid={marketGrid} rust={rust} discard={discard} />
           {error && (
             <p style={styles.staleNote}>Showing last known state — latest refresh failed: {error}</p>
           )}
@@ -760,9 +769,13 @@ function SeatName({ address, seat, label }: { address: string; seat: number; lab
 function CorporationAssetsSection({
   gameState,
   marketGrid,
+  rust,
+  discard,
 }: {
   gameState: GameStateResponse;
   marketGrid?: MarketGridResponse | null;
+  rust: RustFlourishEvent | null;
+  discard: TrainDiscardEvent | null;
 }) {
   const phase = derivePhase(gameState);
   const outlook = rustOutlook(gameState);
@@ -884,6 +897,13 @@ function CorporationAssetsSection({
                         reprievedThisTurn={finalRunScheduleFor(gameState, company.company_id).thisTurn} // #1702 (GR-3)
                         // Design note #1088: the Carcosa gift, so its chip shows the sign rather than a locomotive.
                         ghosts={company.carcosan_trains}
+                        /* W3-H (VF I-8 / J-5): the Ledger was the narrow gap both ledgers named -- a player on
+                           this tab saw a rusted or discarded fleet change without a flourish. The row takes its
+                           own share of the one global event, as the Round Detail table does. The depot table
+                           above is a price list with no corporation, so it has no share to take. */
+                        companyId={company.company_id}
+                        rust={rust}
+                        discard={discard}
                       />
                     </td>
                     <td style={styles.tdCenterB}>

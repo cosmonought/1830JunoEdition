@@ -15397,6 +15397,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           marketGrid={marketGrid}
           // Design note #405: names, not truncated addresses.
           playerLabel={sandbox ? sandboxPlayerLabel : undefined}
+          // W3-H (VF I-8 / J-5): the same rust and discard events the Round Detail table receives.
+          rust={rustEvent}
+          discard={discardEvent}
         />
       )}
 

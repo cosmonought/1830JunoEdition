@@ -2028,7 +2028,7 @@ fill is far more opaque than those were, and it DARKENS rather than tints, but i
 against all eight. **What to watch:** NNH (`#ee7c22`) and any brown-adjacent livery, where an oxide wash may
 simply disappear. If it does, the fix is a darker oxide rather than a more saturated one.
 
-### I-8 · `OPEN` · Three of the five `TrainChips` call sites do not receive the event
+### I-8 · `RESOLVED` (W3-H, 2026-10-04) · Three of the five `TrainChips` call sites do not receive the event
 Wired: the Round Detail corporations table (every fleet at once — the surface a multi-corporation rust is
 watched on) and the action bar's acting-corporation strip (the buyer's own chips, and the bar renders on
 every tab since #1084). **Not wired:** the Stock Round card fronts and the Ledger's two tables. The Stock
@@ -2037,6 +2037,8 @@ rust event can be live while those cards are on screen. **The Ledger is a real i
 sitting on the Ledger tab when a rust fires sees the new rosters appear without a flourish (the action bar
 above still animates the acting corporation's). Left unwired rather than threaded through a fourth panel for
 a tab nobody watches during a train purchase; it is A-3's fallback behaving correctly rather than a defect.
+
+**RESOLVED by W3-H** — the Ledger's Corporation Assets table now receives the rust event: `FinancialLedger` takes `rust` / `discard` props (the shell passes the same `rustEvent` / `discardEvent` the Round Detail table gets) and each row hands its `companyId` to `TrainChips`, which takes its own share. The Ledger's other `TrainChips` site is the depot tier list — a price list with no corporation, so a per-corporation event has nothing there to stage (the `Rusts` column already tells that story). The Stock Round card fronts stay unwired for the reason above (no rust is live while they are on screen). Pinned by `components/w3hLedgerFlourishEvents.test.tsx` (fails with the Ledger unwired).
 
 ### I-9 · `PLAYTEST` · Rust outranks both warning animations, and nothing was watched
 A chip being destroyed drops the `app-train-rust-critical` pulse and the `app-train-final-run` fade — two
@@ -2105,12 +2107,14 @@ the receiving pop is a bonus that fires for the minority of discards where the p
 departure has to carry the whole meaning on its own for the rest. **If that proves too weak at playtest**,
 the cheap fix is a Bank Pool count somewhere persistent rather than a longer animation.
 
-### J-5 · `OPEN` · Three of the five `TrainChips` call sites do not receive the event
+### J-5 · `RESOLVED` (W3-H, 2026-10-04) · Three of the five `TrainChips` call sites do not receive the event
 Exactly VF-7's I-8, and wired the same way: the Round Detail corporations table and the action bar's
 acting-corporation strip receive it; the Stock Round card fronts and the Ledger's two tables do not. **The
 Stock Round is genuinely not a gap** — a discard obligation exists only inside an Operating Round. **The
 Ledger is the same narrow gap rust has:** a player sitting on that tab sees the roster change without a cut.
 Left unwired rather than threaded through a fourth panel; A-3's fallback behaving correctly.
+
+**RESOLVED by W3-H** — wired with I-8, the same way: the Ledger's Corporation Assets rows receive the discard event and stage the cut on the discarding corporation only. Pinned by `components/w3hLedgerFlourishEvents.test.tsx`.
 
 ### J-6 · `OPEN` · The discard's static badge icon is not implemented
 The brief asks that the vocabulary be structured so a later badge pass can derive a static "train limit

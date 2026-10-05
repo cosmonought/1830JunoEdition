@@ -692,6 +692,38 @@ Phase-3 integration baseline. PROVISIONAL: no broad Phase-3 owner gate has been 
   accounting PASS; `git diff --check` clean. Independent integration review: APPROVE (no integration-introduced finding; no review-fix commit).
 - **Versions:** `RULES_ENGINE_VERSION` 13; supported live `[13]`; settlement-certified `[10, 11, 12, 13]`; keys and fixtures unchanged.
 - **Pre-existing meta-test failures** (`sourceGuards` 1, `boardInEffect` 1, `liveHygiene` 2) identical on `d29bb2f` and the merge — PRE-EXISTING / NON-BLOCKING.
+## W3-A slice status (2026-10-05)
+
+**Branch** `phase3/w3-a` from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f` (the provisional baseline named by the
+owner's W3-A brief). **COMPLETE on its slice branch; NOT integrated** (integration and owner broad gate pending). OD-5 RULED 2026-10-04
+(plan §7.3). Dependencies W2-G and W2-H are integrated in the base. OD-12: one RED commit, its own and independently audited.
+
+- **OD-5 transcription — `9962745`** (tracking only).
+- **AUD-11.02, P3-N019 — `b70f087` (+ review fixes `ac78dc9`, `ce705b2`, `ce6afe8`):** `NoticeLedger` (`utils/noticeAcknowledgements.ts`)
+  replaces #1107's per-room `sessionStorage` set. It holds this player's acknowledgements and their own witnessed-but-unanswered notices
+  for Fleet Loss, Private Revenue, Phase Three and Herald, per game and per seat, in `localStorage` (`1830juno.notice_ack.v1.<game>.<seatN|watcher>`;
+  the seat's public table position, never its player id -- LIVE-2D; a stored payout's id-shaped labels are replaced by the nickname or
+  "Seat N"). An answer holds across reload, reconnect, new tab and remount, and another tab's answer closes the notice here; an unanswered
+  notice comes back. NO BACKLOG: during the mount's first history load every event counts as already shown except the player's own pending
+  ones, and stays so through a later Undo replay; the Phase 3 edge is armed only after that load. The fleet-loss raiser (RED R2) is
+  unchanged: `dismissedFleetNoticesRef.has` now asks the ledger. Bounded to 40 games; storage failure degrades to memory.
+- **AUD-13.07 — `b70f087`, RED R4 `e8b9504`, `ac78dc9`:** the forced notices present one at a time in the ruled order (`utils/noticeChain.ts`:
+  Emergency, Fleet Loss, Private Revenue, Phase Three, Herald, Tutorial); each waits while a non-notice native dialog is open
+  (`utils/nativeModalRegistry.ts`, registered by `NativeModal`); an armed tutorial is held, not consumed. Game Over, the B&O par prompt and
+  a private power's flow open themselves and wait for the screen (`components/NativeModalTurn.tsx`). RED R4: #1049a's payout-first hold in
+  `dueFleetNotice` removed (the ruled order reverses it; the chain now sequences the two).
+- **AUD-01.03, AUD-13.02 — `b70f087`:** a stable, visually hidden game-screen `<h1>` (`components/GameScreenHeading.tsx`); when the chain is
+  exhausted focus moves there once (`utils/useNoticeChain.ts`), never during ordinary play, never into another open dialog.
+- **AUD-01.06 — `b70f087`:** the zero-state effect that cleared every tutorial's seen flag on each shell mount is removed; tutorials arm
+  once per profile.
+- **Tests:** `utils/noticeAcknowledgements.test.ts` and `components/noticeChain.test.tsx` (the real notice components and `GameOverModal`
+  driven by the real chain; shell wiring source-pinned), mutation-checked. Superseded pins rewritten with the supersession noted at the
+  site: `batch49` (#1049a), `batch64` (#1107), `phaseThreeNotice`, `activeGame` (storage-write allowlist), `trainRustFlourish`.
+- **Review:** RED R4 audit APPROVE WITH NITS (nit folded into `e8b9504`); slice review REQUEST CHANGES (2 MEDIUM, 4 LOW, 1 NIT) -> fixed
+  in `ac78dc9`; re-review one new MEDIUM -> fixed in `ce705b2`; final APPROVE WITH NITS -> both nits fixed in `ce6afe8`.
+- **Not taken:** W3-B, W3-J, W2-M, W3-F, W3-D (HomeStationPrompt's `aria-modal` div and tutorials as native dialogs stay W3-D's). The
+  README's stale "Still open" prose stays AUD-25.14 / W3-F. Rules version and settlement unchanged. The four pre-existing meta-test
+  failures are identical on `d29bb2f` and on this branch.
 
 ## Scope and closing remark
 

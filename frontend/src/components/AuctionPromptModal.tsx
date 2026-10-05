@@ -23,6 +23,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { NativeModal } from "./NativeModal";
+import { NativeModalTurn } from "./NativeModalTurn";
 import { PAR_VALUE_LADDER } from "./StockRoundPanel";
 import { WaitingStatusBanner } from "./WaitingStatusBanner";
 import type { LinkQueueState } from "../utils/serverLink";
@@ -246,6 +247,8 @@ export function AuctionPromptModal({
   }
 
   return (
+    /* W3-A (AUD-13.07): opens itself, so it waits until no other native dialog is open (`NativeModalTurn`). */
+    <NativeModalTurn>
     <NativeModal
       name={parActor ? "Set the B&O par value" : completeHeading}
       /* Forced: there is no legal state on the other side of closing (see the file note). */
@@ -346,6 +349,7 @@ export function AuctionPromptModal({
         )}
       </div>
     </NativeModal>
+    </NativeModalTurn>
   );
 }
 

@@ -289,7 +289,8 @@ export interface ActionToastProps {
    * cites #1032 as evidence that recurring modals are unwelcome; #1032 is evidence that STALE ones are, and
    * #1032 fixed the staleness. A payout modal is about money that moved a moment ago and cannot be old.
    * The desensitisation worry was the half worth keeping and is answered in `App.tsx` #1049a by SEQUENCING the
-   * two modals rather than by omitting one, so they are never a stack to click through.
+   * two modals rather than by omitting one, so they are never a stack to click through. (W3-A / OD-5(c): the
+   * sequence is now the shell's notice chain, `utils/noticeChain.ts`, with Fleet Loss first.)
    * KEPT IN PLACE, NOT DELETED, because a note that quietly loses its argument teaches the next reader that
    * the question was never asked.
    *

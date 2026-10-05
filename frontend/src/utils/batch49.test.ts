@@ -26,6 +26,7 @@ const { bestContrastTextColor, relativeLuminance } =
 const { readStripped, sliceBetween, readShell } = require("./sourceScan") as typeof import("./sourceScan");
 
 const APP = readShell();
+const { NOTICE_PRIORITY } = require("./noticeChain") as typeof import("./noticeChain");
 const MODAL = readStripped("components/PrivateRevenueModal.tsx");
 const SUMMARY = readStripped("gameEngine/sandboxSession.ts");
 
@@ -210,10 +211,18 @@ describe("the phase is raised once, when the viewer collected", () => {
 /* A sequence, not a stack                                             */
 /* ------------------------------------------------------------------ */
 
-describe("the payout is read before the fleet loss", () => {
+/* ==================================================================
+    SUPERSEDED BY W3-A / OD-5(c), NOT LOOSENED: STILL A SEQUENCE, NOW IN THE RULED ORDER
+   ==================================================================
+   #1049a put the payout first by withholding the fleet notice while the payout was open, inside the memo. RULED
+   (2026-10-04): "1. Emergency 2. Fleet Loss 3. Private Revenue ... Only one forced notice is presented at a time."
+   So the order is reversed, and it moved out of the memo into the shell's notice chain (`noticeChain.ts`), which is
+   also what now keeps the two from ever being on screen together. "A sequence, not a stack" is unchanged, and is
+   asserted behaviourally in `noticeChain.test.tsx`. The cases below keep their claims and say what moved. */
+describe("the fleet loss and the payout, one at a time", () => {
   const memo = sliceBetween(APP, "const dueFleetNotice = useMemo<FleetLossNotice | null>(", "}, [");
 
-  it("withholds the fleet notice while the payout is open", () => {
+  it("orders the two by the ruled priority, in the chain rather than by a hold in the memo", () => {
     /* ==================================================================
         THE COLLISION IS ORDINARY FROM PHASE 4 ON
        ==================================================================
@@ -221,8 +230,10 @@ describe("the payout is read before the fleet loss", () => {
        and the first corporation is already acting at that moment. Two modals were accepted -- "two modals
        carrying meaningful information does not seem so overwhelming" -- but IN A ROW was the operative
        phrase, and #1047's surviving worry is that an undifferentiated stack trains a player to click through
-       the one where clicking through costs a turn. */
-    expect(memo).toContain("if (privatePayoutPhase !== null) return null;");
+       the one where clicking through costs a turn. OD-5(c) ranks the fleet loss -- the one that costs a turn --
+       first. */
+    expect(memo).not.toContain("if (privatePayoutPhase !== null) return null;");
+    expect(NOTICE_PRIORITY.indexOf("fleetLoss")).toBeLessThan(NOTICE_PRIORITY.indexOf("privateRevenue"));
   });
 
   it("keeps every gate the notice already had", () => {
@@ -234,12 +245,12 @@ describe("the payout is read before the fleet loss", () => {
     expect(memo).toContain("president === viewerAddress");
   });
 
-  it("lifts the suppression on its own when the payout closes", () => {
-    /* THE STALE-MEMO FAILURE, AND IT WOULD BE PERMANENT. A ref read here would suppress the notice and never
-       re-run to discover it was safe to show it -- the fleet-loss modal would be lost for that turn, which is
-       exactly the cost #896 wrote the notice to avoid. */
+  it("no longer depends on the payout, which no longer gates it", () => {
+    /* THE STALE-MEMO FAILURE #1049a guarded against cannot arise: the memo reads no payout state, so there is no
+       suppression to lift. A notice the chain holds is re-presented by the chain on its own (`noticeChain.test.tsx`,
+       "comes back unanswered"). */
     const deps = sliceBetween(APP, "const dueFleetNotice = useMemo<FleetLossNotice | null>(", "]);");
-    expect(deps).toContain("privatePayoutPhase,");
+    expect(deps).not.toContain("privatePayoutPhase");
   });
 
   it("defers the notice without consuming it", () => {
@@ -251,22 +262,21 @@ describe("the payout is read before the fleet loss", () => {
        NOT `not.toContain("dismissedFleetNoticesRef")`, which was the first draft of this case and would have
        been wrong: the memo legitimately READS that ref, passing it to `nextDueNotice` so an already-answered
        notice is not raised again. The forbidden thing is the `.add`. */
-    const beforeFilter = sliceBetween(
-      APP,
-      "const dueFleetNotice = useMemo<FleetLossNotice | null>(",
-      "const presidentOf =",
-    );
-    expect(beforeFilter).toContain("if (privatePayoutPhase !== null) return null;");
+    /* W3-A: the wait is now the chain's, which hands the modal `null` without touching the queue or the ledger --
+       still "waiting, not dropping". */
     expect(memo).not.toContain("dismissedFleetNoticesRef.current.add");
+    expect(memo).not.toContain("noticeLedger.acknowledge");
   });
 
   it("mounts and clears the modal in the shell", () => {
     /* THE GAP THIS PROJECT KEEPS FINDING (#1006): a correct predicate the deciding caller never asks, or in
        this case a piece of state nothing renders. Asserted at the mount and at the exit, because a modal with
        no way to clear its state is a soft-lock and a state with no mount is invisible. */
+    /* W3-A: mounted through the notice chain, and the exit is the acknowledgement (OD-5(a)), which clears the state. */
     expect(APP).toContain("<PrivateRevenueModal");
-    expect(APP).toContain("round={privatePayoutPhase}");
-    expect(APP).toContain("onAcknowledge={() => setPrivatePayoutPhase(null)}");
+    expect(APP).toContain('round={presentedNotice === "privateRevenue" ? privatePayoutPhase : null}');
+    expect(APP).toContain("onAcknowledge={acknowledgePrivateRevenue}");
+    expect(sliceBetween(APP, "const acknowledgePrivateRevenue = useCallback(", "}, [")).toContain("setPrivatePayoutPhase(null);");
   });
 
   it("sits above the fleet-loss modal if the suppression is ever lost", () => {
@@ -277,8 +287,8 @@ describe("the payout is read before the fleet loss", () => {
        decides nothing AND READS AS IF IT DID, which is the worse of the two failures -- a later author would
        adjust 3900 and 3800 against each other believing the adjustment took. So the replacement FORBIDS one
        coming back, on each scrim's own style block, where a slice that loses its anchor throws (#886).
-       WHAT THE PAIR ACTUALLY BOUGHT IS UNCHANGED AND STILL CHECKED. The memo above is what keeps the two from
-       ever being raised together; if that suppression is lost, the order between two top-layer dialogs is the
+       WHAT THE PAIR ACTUALLY BOUGHT IS UNCHANGED AND STILL CHECKED. The notice chain (W3-A / OD-5(c); until then the
+       memo above) is what keeps the two from ever being raised together; if that suppression is lost, the order between two top-layer dialogs is the
        order they were opened, which is mount order, which is the memo's order. The failure is still a modal in
        the wrong ORDER rather than a modal invisible UNDERNEATH another one -- the recoverable direction, now
        guaranteed by the engine instead of by two numbers kept in step by hand. */

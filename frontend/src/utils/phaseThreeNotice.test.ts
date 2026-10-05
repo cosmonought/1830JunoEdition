@@ -1,6 +1,6 @@
 /** @jest-environment node */
 // frontend/src/utils/phaseThreeNotice.test.ts -- design notes #1440/#1441.
-import { readStripped, readShell } from "./sourceScan";
+import { readStripped, readShell, sliceBetween } from "./sourceScan";
 
 describe("the Phase 3 notice (design note #1441)", () => {
   const app = readShell();
@@ -23,8 +23,12 @@ describe("the Phase 3 notice (design note #1441)", () => {
     expect(app).toContain('if (previous === "2" && tier === "3") {');
     expect(app).toContain("setPhaseThreeNotice(true)");
     expect(app).toContain("if (previous === undefined) return; // the first observation seeds; it is not an edge");
-    /* DA-6: the mount gained the Delayed Auction's reading -- the same two props, and the third on its own line. */
-    expect(app).toContain("open={phaseThreeNotice}\n        onAcknowledge={() => setPhaseThreeNotice(false)}");
+    /* DA-6: the mount gained the Delayed Auction's reading -- the same two props, and the third on its own line.
+       W3-A / OD-5: the notice is raised as before and presents when the forced-notice chain gives it the screen;
+       answering it is the player's acknowledgement for this game, which also clears the shell state. */
+    expect(app).toContain('open={presentedNotice === "phaseThree"}\n        onAcknowledge={acknowledgePhaseThree}');
+    expect(app).toContain("phaseThree: phaseThreeNotice && !noticeLedger.isAcknowledged(PHASE_THREE_NOTICE_KEY)");
+    expect(sliceBetween(app, "const acknowledgePhaseThree = useCallback(", "}, [")).toContain("setPhaseThreeNotice(false);");
     expect(app).toContain(
       "delayedAuctionPending={tableVariants.delayedAuction === true && gameState?.private_auction_complete === false}",
     );

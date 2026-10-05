@@ -291,6 +291,8 @@ export function EmergencyTrainPurchaseModal({
          no close control. `restoreOpener={false}`: nothing opened it -- it opens itself. */
       dismissible={false}
       restoreOpener={false}
+      /* W3-A (OD-5(c)): the first of the forced notices; the shell's notice chain decides when it presents. */
+      chainedNotice
       scrimStyle={styles.backdrop}
     >
       <div style={styles.panel}>

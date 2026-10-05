@@ -17,6 +17,7 @@ import type { GameHistory } from "../utils/gameHistory";
 
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import { NativeModal } from "./NativeModal";
+import { NativeModalTurn } from "./NativeModalTurn";
 import type { PlayerStanding } from "../gameEngine/endgame";
 import CarcosaMark from "./CarcosaMark";
 
@@ -226,7 +227,9 @@ export function GameOverModal({
         : { text: `You came in ${ordinal(viewer.rank)} place.`, style: styles.verdictPlaced }; // #1430
 
   return (
-    /* Design note #900: the backdrop dismisses, unlike #896's. Nothing is pending behind it. */
+    /* W3-A (AUD-13.07): opens itself, so it waits until no other native dialog is open (`NativeModalTurn`). */
+    <NativeModalTurn>
+    {/* Design note #900: the backdrop dismisses, unlike #896's. Nothing is pending behind it. */}
     <NativeModal
       name="Game Over"
       /* #1645, carried forward by #1651: Escape performs the same HIDE the backdrop does -- NOT `onCloseRoom`,
@@ -433,6 +436,7 @@ export function GameOverModal({
         </div>
       </div>
     </NativeModal>
+    </NativeModalTurn>
   );
 }
 

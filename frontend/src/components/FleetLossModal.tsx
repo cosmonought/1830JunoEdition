@@ -72,6 +72,8 @@ export function FleetLossModal({
     <NativeModal
       alert
       name={noticeHeadline(notice)}
+      /* W3-A (OD-5(c)): one of the forced notices; the shell's notice chain decides when it presents. */
+      chainedNotice
       /* #1651: A FORCED SURFACE, SAID AS A POLICY RATHER THAN AS AN ABSENCE. `dismissible={false}` becomes
          `closedby="none"`, which was measured to refuse Escape outright -- no `cancel`, no `close`, and it
          survived six rapid Escapes. Before this, "no Escape" was simply the absence of a listener, which is a

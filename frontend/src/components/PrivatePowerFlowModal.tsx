@@ -27,6 +27,7 @@ import { ACTION_GREEN, ACTION_GREEN_BORDER, ACTION_GREEN_INK } from "../styles/p
 import { FONT_SIZE, RADIUS } from "../styles/typography";
 import type { PowerFlow, PowerFlowStep } from "../utils/privatePowerFlow";
 import { NativeModal } from "./NativeModal";
+import { NativeModalTurn } from "./NativeModalTurn";
 
 export interface PrivatePowerFlowModalProps {
   flow: PowerFlow;
@@ -71,6 +72,8 @@ export function PrivatePowerFlowModal({
   onCancel,
 }: PrivatePowerFlowModalProps): React.ReactElement {
   return (
+    /* W3-A (AUD-13.07): opens itself, so it waits until no other native dialog is open (`NativeModalTurn`). */
+    <NativeModalTurn>
     <NativeModal
       alert
       name={flow.title}
@@ -230,6 +233,7 @@ export function PrivatePowerFlowModal({
             ))}
       </div>
     </NativeModal>
+    </NativeModalTurn>
   );
 }
 

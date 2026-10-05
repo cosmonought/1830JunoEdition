@@ -69,6 +69,8 @@ export function PhaseThreeNoticeModal({ open, onAcknowledge, delayedAuctionPendi
   return (
     <NativeModal
       name={delayedAuctionPending ? "Phase 3: the private company auction is next" : "Phase 3: private companies are for sale"}
+      /* W3-A (OD-5(c)): one of the forced notices; the shell's notice chain decides when it presents. */
+      chainedNotice
       /* #1645, carried forward by #1651: Escape performs the same dismissal the backdrop already performs --
          which on this surface IS the acknowledgment, because the backdrop already acknowledged. It does not
          reach for a control that advances the game; there is none here but "Got it", which is this same

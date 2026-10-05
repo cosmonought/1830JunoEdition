@@ -6080,7 +6080,7 @@
   "coverage_test": "frontend/src/components/phase3W3BLatchResidue.test.tsx: 53 call sites / 51 keys (46 LATCHED, 5 EXEMPT); enumerated from the AST (non-null / parenthesised callees unwrapped); stray (aliased) references fail; handler reference counts pinned so a new door fails.",
   "independent_review": {
    "red_commit": "APPROVE (no finding above NIT; the NIT -- the commit's causal wording -- corrected in the rebuilt RED commit before push)",
-   "composition": "APPROVE WITH NITS -> every LOW / NIT fixed in f855b8b except: the Auto-Pass / Auto-Buy waits are source-pinned only (the effects live in the shell); the no-server-path R4 residual (recorded above)"
+   "composition": "APPROVE WITH NITS -> every LOW / NIT fixed in f855b8b except: the Auto-Pass / Auto-Buy waits and the map route-click swap are source-pinned only (they live in the shell); the no-server-path R4 residual (recorded above). Re-review of the rebuilt history: RED APPROVE, fixes APPROVE, tracking APPROVE WITH NITS (wording + the .call/.apply/.bind stray NIT, applied in the follow-up commit)"
   },
   "validation": "See PHASE3_AUDIT_RECONCILIATION.md \"W3-B latch residue slice status\".",
   "residuals": [

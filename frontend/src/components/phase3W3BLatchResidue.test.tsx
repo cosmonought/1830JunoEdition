@@ -973,7 +973,8 @@ describe("AUD-14.06: the dispatch is only ever CALLED, and no door is added unse
         const isDispatch =
           (ts.isIdentifier(node) && node.text === "runGameplayAction") ||
           (ts.isPropertyAccessExpression(node) && calleeName(node) === "runGameplayActionRef.current");
-        if (isDispatch && !(ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node && ts.isIdentifier(node))) {
+        // W3-B re-review: `runGameplayAction.call(...)` / `.apply` / `.bind` are strays too -- no property access is excused.
+        if (isDispatch) {
           let up: import("typescript").Node = node.parent;
           while (ts.isNonNullExpression(up) || ts.isParenthesizedExpression(up)) up = up.parent;
           const asCallee = ts.isCallExpression(up) && calleeName(up.expression) !== null && up.expression.getStart(sf) === node.getStart(sf);

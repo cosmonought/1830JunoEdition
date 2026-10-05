@@ -1214,9 +1214,9 @@ not merged to main (`e1f1280` unmoved). Record: `consolidated_pre_playtest_integ
   latched handler (a new door) fails the registry until classified.
 - **Behaviour** (real link, hand-driven socket, real hooks and surfaces): double click; held > 6 s; network loss and reconnect (one
   message); the same player's submission landing (held until the drain applies it); another seat's move (nothing greys; mid-hold the link
-  keeps controls busy); refusal re-arms at once; token confirm; route edit; private power modal; licence modal; Proceed / par / Undo;
-  automatic presses in the landed-not-drained window; a derived dispatch never releases a held press. Every case asserts one message on
-  the wire.
+  keeps controls busy); refusal re-arms at once; token confirm; route edit (Run and the chip's edit controls; the map's route-click swap
+  is source-pinned); private power modal; licence modal; Proceed / par / Undo; automatic presses in the landed-not-drained window; a
+  derived dispatch never releases a held press. Every press case asserts exactly one message on the wire.
 - **Mutation checks:** reverting the RED R1 latch rule in App.tsx (4 fail across the W3-B suites) or in the suite's shell stand-in (7
   fail); restoring the derived null (pins fail; stand-in: 1 behaviour fails); removing the latch from BuyLicenseModal, Proceed, the par
   confirm, the power modal, the token ring or Undo, or the Auto-Pass / Auto-Buy waits (each fails); adding an unclassified site, a `!`
@@ -1226,14 +1226,16 @@ not merged to main (`e1f1280` unmoved). Record: `consolidated_pre_playtest_integ
   home-station suites, meta): 2053 passed, 4 failed -- the same 4 meta failures as `b8d5246` on the same list (sourceGuards sweep with the
   same 7 entries, boardInEffect 1, liveHygiene 2); accounting PASS; `git diff --check` clean.
 - **Independent review:** RED R1 APPROVE (the one NIT -- the commit's causal wording -- corrected in the RED commit before push);
-  composition APPROVE WITH NITS, every LOW / NIT fixed in `f855b8b` except as recorded below.
+  composition APPROVE WITH NITS, every LOW / NIT fixed in `f855b8b` except as recorded below. Re-review of the rebuilt history: RED
+  APPROVE, fixes APPROVE, tracking APPROVE WITH NITS (wording; applied, with the `.call` / `.apply` / `.bind` stray-reference NIT, in the
+  follow-up commit). The validation figures above are the author's; the reviewer re-ran nine narrow suites (280 passed).
 - **W3-B = COMPLETE** (AUD-25.01 integrated earlier; AUD-14.06, P3-N021 implemented here). Pre-Phase-4 lane E is done on its branch,
   pending integration.
 - **Residuals:** (LOW, accepted at AUD-25.01, unchanged) RED R5 -- another seat's entry passing the press's index mid-hold leaves only the
   link holding, so the controls can re-arm for the drain's few milliseconds after the press's own `applied` answer. (LOW, owner ruling
   only if the no-server / Firestore path stays supported) the RED R4 derived effects do not wait for the latch there -- outside this
-  slice's OD-12 grant; on the server path they are never sent. (Coverage) the Auto-Pass / Auto-Buy waits are source-pinned only (the
-  effects live in the shell). (Pre-existing, not W3-B's) on a legacy unpinned room the Yellow Sign follow-on dispatch runs inside the
+  slice's OD-12 grant; on the server path they are never sent. (Coverage) the Auto-Pass / Auto-Buy waits and the map's route-click swap
+  (`ROUTE_EDIT_WHILE_IN_FLIGHT`) are source-pinned only (they live in the shell). (Pre-existing, not W3-B's) on a legacy unpinned room the Yellow Sign follow-on dispatch runs inside the
   drain and is refused by W3-J's catching-up gate.
 
 ## Highest-risk systems (characterization carried as an item)

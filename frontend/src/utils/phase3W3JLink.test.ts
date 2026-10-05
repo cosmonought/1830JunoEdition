@@ -203,6 +203,30 @@ describe("W3-J AUD-25.07: an `internal` error that names no submission does not 
     expect(h.sent.filter((frame) => frame.kind === "submit").at(-1)).toMatchObject({ baseIndex: 1, baseId: "e1" });
   });
 
+  it("(review fix) a hello answered `held` is consumed -- a later resync's fresh catch-up is applied, and the link recovers", async () => {
+    const entries: number[][] = [];
+    const h = harness({ onEntries: (batch) => entries.push(batch.map((item) => item.index)) });
+    // The socket drops and comes back; the reconnect's hello is answered with a maintenance hold (no catch-up).
+    h.socket.close();
+    h.scheduled.shift()?.();
+    h.socket.onopen?.({});
+    h.deliver({ kind: "error", code: "held", reason: "The room is paused for maintenance." });
+    // A move goes out behind it, and the room answers that this tab's history is not its own.
+    const move = h.link.submit({ PassTurn: { game_id: 0 } } as never);
+    h.deliver({ kind: "refused", code: "resync", reason: "fork", build: BUILD, inReplyTo: "n1" });
+    entries.length = 0;
+    // The resync's own catch-up is the fresh history: applied (it used to be dropped as an earlier hello's).
+    h.deliver({ kind: "catch-up", build: BUILD, digest: DIGEST, entries: [entry(0), entry(1), entry(2)] });
+    expect(entries).toEqual([[0, 1, 2]]);
+    expect(await move).toBeNull(); // it did not land -- settled by the reconciliation, not left pending
+    // And the link is live again: newer entries apply, and a new move is sent rather than refused.
+    h.deliver({ kind: "applied", build: BUILD, digest: DIGEST, entries: [entry(3)] });
+    expect(entries).toEqual([[0, 1, 2], [3]]);
+    const submits = h.sent.filter((frame) => frame.kind === "submit").length;
+    void h.link.submit({ PassTurn: { game_id: 0 } } as never);
+    expect(h.sent.filter((frame) => frame.kind === "submit")).toHaveLength(submits + 1);
+  });
+
   it("an error that NAMES its submission is settled exactly as before", async () => {
     const h = harness();
     const move = h.link.submit({ BuyStock: { game_id: 0 } } as never);

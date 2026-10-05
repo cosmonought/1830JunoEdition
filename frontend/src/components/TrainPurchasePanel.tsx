@@ -723,10 +723,15 @@ export function TrainPurchasePanel({
          says so ("Queued — will send on reconnect." / the sending line); if the send does not land -- dropped, refused
          -- the form is simply live again, with what was typed.
        - THE BOARD CLOSES IT, when the proposal lands: an offer standing on the board raises the hold
-         (`blockedReason`), which withdraws every roster badge (`canTrade`), and a same-president sale that settled
-         moves the train, which changes the rosters the badge was read off. Either withdraws the opener the form was
-         opened from, so the form goes with it -- keyed on the board, never on the press. A board that has not moved
-         (a dropped or refused send) leaves it open.
+         (`blockedReason`), which withdraws every roster badge, and a same-president sale that settled moves the
+         train, which changes the rosters the badge was read off. Either withdraws the opener the form was opened
+         from, so the form goes with it -- keyed on the board, never on the press. A board that has not moved (a
+         dropped or refused send) leaves it open.
+         KEYED ON THE BOARD'S FACTS ALONE (W3-J review fix): `canAct` (this viewer presides over the buyer), the hold,
+         and the rosters -- NOT `canTrade`, which also carries `sessionReady`. The shell hands the bar
+         `sessionReady={controlsEnabled && isMyTurn && !actionInFlight}`, and the press itself sets `actionInFlight`,
+         so keying on `canTrade` closed the form on the very next commit -- the fix undone in the real shell. While the
+         session is not ready, `canPropose` (through `canTrade`) already greys Send.
        - `sendLatch` covers the one window those cannot: a second press in the same task, before React has committed
          the first. Released after the next commit (`setSendCommit` guarantees one follows the press). */
   const sendLatch = useRef(false);
@@ -737,11 +742,13 @@ export function TrainPurchasePanel({
   const rostersKey = companies
     .map((entry) => `${entry.company_id}:${entry.owned_trains == null ? "?" : entry.owned_trains.join(",")}`)
     .join(";");
+  const boardHolds = blockedReason !== null;
   useEffect(() => {
-    /* Runs only when the board moved under the form (the hold arrived or left, or a train changed hands) -- a badge
-       click changes neither -- so any open form here was opened on a board that is gone. */
+    /* Runs only when the board moved under the form (the viewer's presidency, the hold arrived or left, or a train
+       changed hands) -- a badge click or a press changes none of them -- so any open form here was opened on a board
+       that is gone. */
     setSelection(null);
-  }, [canTrade, rostersKey]);
+  }, [canAct, boardHolds, rostersKey]);
 
   return (
     <div

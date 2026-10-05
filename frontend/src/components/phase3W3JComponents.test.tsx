@@ -36,6 +36,7 @@ import { dockHoldView } from "../utils/dockHoldView";
 import { apply, M } from "../utils/offerMatrix74Support";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { depotInventory, openDepotTiers } from "../gameEngine/gamePhase";
+import { readShell, readStripped } from "../utils/sourceScan"; // W3-J review fix (AUD-25.13 item 3)
 import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
 import { limitInForce } from "../gameEngine/sandboxSession";
 import * as S from "../utils/gentleRustPresentationSupport";
@@ -406,14 +407,19 @@ describe("W3-J AUD-25.13 item 3: Buy Trains from a Corporation keeps the typed o
   const textOf = (node: Element) => (node.textContent ?? "").replace(/\s+/g, " ").trim();
 
   /** The roster exactly as the shell mounts it: the hold from `dockHoldView`, the sale's authority bound to the board. */
-  function drawRoster(state: GameStateResponse, onProposeTrade: (proposal: unknown) => void, linkQueue: LinkQueueView = IDLE_LINK_QUEUE_VIEW) {
+  function drawRoster(
+    state: GameStateResponse,
+    onProposeTrade: (proposal: unknown) => void,
+    linkQueue: LinkQueueView = IDLE_LINK_QUEUE_VIEW,
+    sessionReady = true,
+  ) {
     const companies = state.public_companies as unknown as TrainPurchaseCompany[];
     render(
       <TrainPurchasePanel
         depot={depotInventory(state)}
         buyer={companies.find((entry) => entry.company_id === F.PRR) ?? null}
         companies={companies}
-        sessionReady
+        sessionReady={sessionReady}
         canAct
         blockedReason={dockHoldView({ state, labelFor }).proposeTrainPurchase}
         onBuyFromBank={() => undefined}
@@ -480,6 +486,33 @@ describe("W3-J AUD-25.13 item 3: Buy Trains from a Corporation keeps the typed o
     // The link gave the submission up (dropped): nothing landed, so the form is live again with what was typed.
     drawRoster(state, onPropose, IDLE_LINK_QUEUE_VIEW);
     expect(queuedNote()).toBeNull();
+    expect(priceInput()?.value).toBe("150");
+    expect(send().disabled).toBe(false);
+  });
+
+  it("REVIEW FIX: in the shell's own sequence -- the press sets actionInFlight, so the bar's sessionReady drops -- the form stays", () => {
+    // The shell: `sessionReady={controlsEnabled && isMyTurn && !actionInFlight}`, forwarded unchanged to the panel.
+    const shell = readShell();
+    const bar = shell.indexOf("<ContextualActionBar");
+    const ready = shell.indexOf("sessionReady={controlsEnabled && isMyTurn && !actionInFlight}");
+    expect(bar).toBeGreaterThan(-1);
+    expect(ready).toBeGreaterThan(bar);
+    expect(shell.lastIndexOf("<ContextualActionBar", ready)).toBe(bar); // the bar's own prop, not another mount's
+    expect(readStripped("panels/ContextualActionBar.tsx")).toContain("sessionReady={sessionReady}");
+    const sent: unknown[] = [];
+    const state = F.operatingBoard();
+    const onPropose = (proposal: unknown) => sent.push(proposal);
+    drawRoster(state, onPropose);
+    chooseAndType("150");
+    click(send());
+    expect(sent).toHaveLength(1);
+    // Next commit: the latch is up (sessionReady false) and the link holds the submission.
+    drawRoster(state, onPropose, QUEUED, false);
+    expect(priceInput()?.value).toBe("150");
+    expect(queuedNote()).toBe(LINK_QUEUED_NOTE);
+    expect(send().disabled).toBe(true);
+    // Dropped or refused: the latch releases, the link is idle, the board never moved -- the typed offer is live again.
+    drawRoster(state, onPropose, IDLE_LINK_QUEUE_VIEW, true);
     expect(priceInput()?.value).toBe("150");
     expect(send().disabled).toBe(false);
   });

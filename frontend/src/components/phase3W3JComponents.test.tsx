@@ -20,6 +20,15 @@ import type { RoundType } from "../gameEngine/gameState";
 import { IDLE_LINK_QUEUE_VIEW, LINK_QUEUED_NOTE, LINK_SENDING_NOTE, linkQueueView, type LinkQueueView } from "../utils/useLinkQueue";
 import * as T from "../utils/stockRoundPrivateTrade";
 import * as F from "../utils/offerFixtures74";
+import {
+  MH_EXCHANGE_EXPIRED_SENTENCE,
+  mhExchangeRequestedSentence,
+  mhQueuedAcknowledgement,
+  mhSettlementSentence,
+  pendingMhExchangeView,
+  withPendingMhExchangeChip,
+} from "../utils/mhQueuedExchange";
+import { MH_PRIVATE_ID } from "../gameEngine/privateExchange";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { depotInventory, openDepotTiers } from "../gameEngine/gamePhase";
 import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
@@ -270,5 +279,56 @@ describe("W3-J AUD-25.10 (c): the Stock Round panel and its Private Companies se
     drawPanel(IDLE_LINK_QUEUE_VIEW);
     expect(sectionLine()).toBe("Sending your last action — one moment.");
     expect(panelLine()).toBe("Sending your last action — one moment.");
+  });
+});
+
+/* ================================================================================================= */
+/* AUD-25.10 (d) -- "QUEUED" MEANS ONE THING                                                         */
+/* ================================================================================================= */
+
+describe("W3-J AUD-25.10 (d): the M&H status says requested / executed / expired; only the link note says Queued", () => {
+  const P1 = "p1";
+  const nameFor = (address: string) => (address === P1 ? "Alice" : address);
+  const pending = { player: P1, private_id: MH_PRIVATE_ID, company_id: NYC, source: "Ipo" as const };
+  /** A reader's board: the M&H open and owned, NYC on the table, the request standing or not. */
+  const withRequest = (standing: boolean): GameStateResponse =>
+    ({
+      private_companies: [
+        { private_id: MH_PRIVATE_ID, name: "Mohawk & Hudson", cost: "110", revenue_per_or: "20", owner: P1, owner_protocol_id: null, closed: false },
+      ],
+      public_companies: [{ company_id: NYC, ticker: "NYC", player_holdings: [] }],
+      pending_mh_exchange: standing ? pending : null,
+    }) as unknown as GameStateResponse;
+  const before = withRequest(false);
+  const after = withRequest(true);
+
+  it("every M&H status line -- log, toast, marker, chip, expiry -- avoids 'queued' and keeps its meaning", () => {
+    const view = pendingMhExchangeView(after, nameFor)!;
+    const chip = withPendingMhExchangeChip([{ abilityKey: "mh-exchange", chipLabel: "MH exchange" }], view)[0];
+    const lines = [
+      mhExchangeRequestedSentence(after, pending, nameFor),
+      mhQueuedAcknowledgement(before, after, P1)!,
+      view.marker,
+      view.sentence,
+      view.chipLabel,
+      chip.blockedReason!,
+      mhSettlementSentence(after, before, nameFor)!,
+    ];
+    for (const line of lines) expect(line).not.toMatch(/queue/i);
+    expect(lines[0]).toBe(
+      "M&H exchange REQUESTED — Alice asked to exchange the Mohawk & Hudson for a 10% share of NYC from the IPO. " +
+        "It is requested, not executed yet — it executes at the next turn boundary only if it is still legal then.",
+    );
+    expect(lines[1]).toContain("is requested, not executed yet. It executes at the next turn boundary only if it is still legal then");
+    expect(lines[1]).toContain("nothing is reserved until it does.");
+    expect(view.sentence).toContain("Requested, not executed yet — it executes at the next turn boundary");
+    // The generic expiry is unchanged (OD-3: no reason recorded, none guessed).
+    expect(lines[6]).toBe(`Alice's ${MH_EXCHANGE_EXPIRED_SENTENCE}`);
+    expect(MH_EXCHANGE_EXPIRED_SENTENCE).toBe("M&H exchange request expired before it could execute.");
+  });
+
+  it("the W3-I link note is the one status line that says Queued", () => {
+    expect(LINK_QUEUED_NOTE).toBe("Queued — will send on reconnect.");
+    expect(LINK_QUEUED_NOTE).toMatch(/^Queued\b/);
   });
 });

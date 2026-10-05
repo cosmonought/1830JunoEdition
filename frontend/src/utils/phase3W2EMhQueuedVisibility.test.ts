@@ -157,9 +157,10 @@ describe("1. a queued request reads REQUESTED, and only the requester is acknowl
 
     expect(mhExchangeDispatchOutcome(seed, queued, { private_id: MH_PRIVATE_ID, player: P1 })).toBe("requested");
     const line = narrate(EXCHANGE("Ipo"), seed, queued)!;
+    // Phase 3 W3-J (AUD-25.10 (d)): OD-3's "requested", not "queued" -- the link note owns that word.
     expect(line).toBe(
       "M&H exchange REQUESTED — Alice asked to exchange the Mohawk & Hudson for a 10% share of NYC from the IPO. " +
-        "It is queued, not executed: it executes at the next turn boundary only if it is still legal then.",
+        "It is requested, not executed yet — it executes at the next turn boundary only if it is still legal then.",
     );
     expect(line).not.toContain("EXECUTED");
     expect(line).not.toContain("closes");
@@ -169,8 +170,9 @@ describe("1. a queued request reads REQUESTED, and only the requester is acknowl
 
   it("the acknowledgement goes to the requester, and to nobody else", () => {
     const { seed, queued } = queuedThenBoundary("Ipo");
+    // Phase 3 W3-J (AUD-25.10 (d)): "requested, not executed yet" rather than "queued".
     expect(mhQueuedAcknowledgement(seed, queued, P1)).toBe(
-      "Your M&H exchange request (a 10% NYC share from the IPO) is queued, not executed. " +
+      "Your M&H exchange request (a 10% NYC share from the IPO) is requested, not executed yet. " +
         "It executes at the next turn boundary only if it is still legal then; nothing is reserved until it does.",
     );
     expect(mhQueuedAcknowledgement(seed, queued, P2)).toBeNull();
@@ -197,7 +199,7 @@ describe("2. the request stays visibly pending until the boundary, and not one s
       expect(view.marker).toBe("Exchange requested — pending");
       expect(view.chipLabel).toBe("MH exchange pending");
       expect(view.sentence).toContain("Alice has requested to exchange the Mohawk & Hudson for a 10% share of NYC from the IPO.");
-      expect(view.sentence).toContain("Queued, not executed");
+      expect(view.sentence).toContain("Requested, not executed yet"); // Phase 3 W3-J (AUD-25.10 (d))
     }
     expect(mhSettlementSentence(queued, midTurn, nameFor)).toBeNull();
     expect(pendingMhExchangeView(settled, nameFor)).toBeNull();

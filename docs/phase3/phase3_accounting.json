@@ -4129,7 +4129,7 @@
    "od": "—",
    "p4": "—",
    "notes": "OWNER (2026-10-05): a REQUIRED PHASE-3 BUGFIX. Narrow: the duplicate-prompt defect only. The fix must prove: exactly one intended offer presentation; only the legitimate answering seat has live answer controls; the third seat gets status only; the proposer gets the correct status / rescind behaviour; server authority unchanged. Not built during the integration.",
-   "status": "OPEN — REQUIRED PHASE-3 FOLLOW-UP (owner, 2026-10-05), pre-Phase-4 lane C; not started."
+   "status": "IMPLEMENTED on `phase3/preplaytest-p3n027-emergency-offer` (`0458481`, from `b8d5246`; not merged): TrainTradePrompt reuses W3-J's AUD-25.13 #2 stand-aside gate -- while the emergency waiting card or the obligated president's presented forced modal already presents the offer, the prompt renders only for the answering seller president. Reproduced first (third seat, watcher, spectating proposer: card + dead-button prompt; proposer: modal Withdraw + prompt Rescind behind the scrim). No authority / rules / protocol / server / RED change."
   }
  ],
  "bullets": {
@@ -6051,6 +6051,21 @@
    "W1-K: AUD-19.02 cross-tab Keplr single flight (NOT STARTED; not among the owner's lanes A-E)",
    "P0: AUD-00.02 the roadmap-order docs update",
    "W3-F: closure bookkeeping (AUD-25.14), the Phase-4 checklist, the broad owner gate"
+  ]
+ },
+ "p3n027_emergency_offer": {
+  "branch": "phase3/preplaytest-p3n027-emergency-offer",
+  "base": "b8d5246",
+  "fix": "0458481",
+  "source": "TrainTradePrompt mounted for every seat with a standing train_purchase_offer, independent of the emergency surfaces (waiting card for non-actors; forced modal for the obligated president).",
+  "fix_summary": "`standAside` prop on TrainTradePrompt (W3-J 8673b4e's gate); App passes `emergencyWaiting !== null || (presentedNotice === \"emergency\" && emergencyModalPlan !== null)`. Absent -> unchanged; a proposer whose modal is deferred by the notice chain keeps the prompt.",
+  "tests": "emergencyPurchaseW2G +14 (3-seat v13 board via the real reducer): proposer (presented / deferred), answerer, third seat, watcher, spectating proposer; accept / reject / rescind; reload; in flight; ordinary offer unchanged; shell prop pinned. Mutations: gate removed 6 fail, answerer hidden 4 fail, modal arm dropped 1 fail.",
+  "validation": "72 adjacent suites 1748 passed / 5 failed, the 5 pre-existing meta failures identical to b8d5246 message for message (liveHygiene 2, stage103bChartCoreAtomicity 1, sourceGuards 1, boardInEffect 1); typecheck clean; build green, scanDevIdentity clean, ESLint warnings identical to b8d5246 modulo line numbers.",
+  "review": "independent review PASS WITH NITS (no HIGH / MEDIUM).",
+  "residuals": [
+   "Pre-existing, not introduced: the answering seller president in spectate mode keeps live Accept / Reject (trainOfferConsentRoles ignores spectate; same as W3-J's funding prompt and the ordinary offer).",
+   "Pre-existing, out of scope: during the funding private-offer stage the obligated president's FundingPrivateOfferPrompt (dead buttons) still renders behind the presented forced modal -- the same proposer-side shape fixed here for the train offer.",
+   "Tests mirror App's memos (W3-J pattern); the shell's standAside and modal-plan expressions are source-pinned."
   ]
  }
 }

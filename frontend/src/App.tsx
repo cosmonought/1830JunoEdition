@@ -4633,7 +4633,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
      ==================================================================
      `committedRouteRevenue` held the total this session watched a corporation commit at Run Routes, and
      `dividendDeclaration` preferred it over `last_route_revenue`. It existed because #492 found the field
-     singular -- one `RunManualRoute` per train, each overwriting the last -- so a three-train turn left only
+     singular -- one `RunManualRoute` per train (as a run was sent before #968), each overwriting the last -- so a three-train turn left only
      the third train's figure standing.
      BOTH OF ITS REASONS HAVE SINCE BEEN FIXED IN THE FIELD ITSELF. #903's arm accumulates across the batch
      instead of overwriting, and #777 clears the figure on the turn change so it can no longer carry a
@@ -4795,7 +4795,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     setRouteFeedback(null);
   }, []);
 
-  /* Auto Route pre-fills the manual builder and needs no chain; it is a suggestion, dispatched through the same RunManualRoute.
+  /* Auto Route pre-fills the manual builder and needs no chain; it is a suggestion, run by the same Run Routes press (one
+     `RunMultipleRoutes`, #968). Phase 3 W3-J (AUD-25.10 (g)): this said RunManualRoute, which no run sends any more.
      See docs/ai_architecture/routing_pathfinding.md - App.tsx #202 */
   const handleAutoRoute = useCallback(() => {
     const corporation = gameState?.public_companies.find(
@@ -10473,8 +10474,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
       return;
     }
 
-    /* One RunManualRoute per train, awaited in sequence. Invalid drafts are skipped, not refused - the good
-       routes are not hostage to the bad one.
+    /* Every runnable draft goes in ONE `RunMultipleRoutes` (#968, below). Invalid drafts are skipped, not refused - the
+       good routes are not hostage to the bad one. Phase 3 W3-J (AUD-25.10 (g)): this said "one RunManualRoute per train,
+       awaited in sequence", the loop #968 retired.
        See docs/ai_architecture/routing_pathfinding.md - App.tsx #275
        Design note #883: BOTH RULES LEFT. Which drafts may run, and -- when none may -- which of several true
        complaints the player is shown, were a filter and four ordered `if`s inside this callback. The ORDER

@@ -12,6 +12,7 @@
 // Both now quote the Rules Reference's own sentences verbatim, and the sentences' claims are asked of the engine.
 
 import { readFileSync } from "fs";
+import { readShell, readShellRaw, sliceBetween } from "../utils/sourceScan"; // AUD-25.10 (g)
 import { join } from "path";
 
 import { STOCK_ROUND_TUTORIAL } from "./TutorialModal";
@@ -92,5 +93,22 @@ describe("W3-J AUD-25.12: the M&H catalog entry is the Rules Reference card's te
     // "Requested at any other time, it is queued ..."
     expect(mhExchangeDisposition(board("StockRound", 1), request)).toBe("queue");
     expect(mhExchangeDisposition(board("OperatingRound", 0), request)).toBe("queue");
+  });
+});
+
+describe("AUD-25.10 (g): the route comments describe the run the shell sends (one RunMultipleRoutes, #968)", () => {
+  const raw = readShellRaw();
+
+  it("Auto Route's and Run Routes' notes no longer say a run is a RunManualRoute per train", () => {
+    expect(raw).not.toContain("dispatched through the same RunManualRoute");
+    expect(raw).not.toContain("/* One RunManualRoute per train, awaited in sequence.");
+    expect(raw).toContain("run by the same Run Routes press (one\n     `RunMultipleRoutes`, #968)");
+    expect(raw).toContain("/* Every runnable draft goes in ONE `RunMultipleRoutes` (#968, below).");
+  });
+
+  it("the run handler does send one RunMultipleRoutes, and no RunManualRoute", () => {
+    const run = sliceBetween(readShell(), "const handleRunTrains = useCallback(", "const handlePayDividends = useCallback(");
+    expect(run).toContain("RunMultipleRoutes: {");
+    expect(run).not.toContain("RunManualRoute: {");
   });
 });

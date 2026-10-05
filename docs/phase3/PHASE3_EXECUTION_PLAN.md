@@ -713,7 +713,7 @@ gates.
   R-PRIVEXCH (`PrivatePowerFlowModal`), group "powers"; RED R1 only under OD-12 and the RED serialization rule.
   **Pins likely to move:** `doubleActionWindow` (pins submit-half text). **Depends on:** W2-A, W2-D, W3-H. **Gates:** OD-12
   for P3-N021.
-- **Status (2026-10-04):** PARTIAL — INTEGRATED THROUGH AUD-25.01. AUD-25.01 (U-46, MEDIUM, from the W3-G audit) IMPLEMENTED on the slice branch `phase3/w3-b-action-latch-linkqueue` (`26f5982` + review fix `5fd3a7b` + tracking `7efda71`, from `d29bb2f`) and **INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration`** (merge `00b2b3c`, parents `d29bb2f` / `7efda71`; the current provisional baseline). No RED region edited (OD-12 not used). Accepted LOW residue (RED R5): a held press can briefly re-arm once its own move lands if another seat's move landed meanwhile. OPEN: AUD-14.06 and P3-N021 NOT STARTED (W3-H; OD-12).
+- **Status (2026-10-04):** PARTIAL — INTEGRATED THROUGH AUD-25.01. AUD-25.01 (U-46, MEDIUM, from the W3-G audit) IMPLEMENTED on the slice branch `phase3/w3-b-action-latch-linkqueue` (`26f5982` + review fix `5fd3a7b` + tracking `7efda71`, from `d29bb2f`) and **INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-w3g-w3b-v13cert-integration`** (merge `00b2b3c`, parents `d29bb2f` / `7efda71`; then the provisional baseline, superseded 2026-10-05 by `phase3/consolidated-pre-playtest-integration`). No RED region edited (OD-12 not used). Accepted LOW residue (RED R5): a held press can briefly re-arm once its own move lands if another seat's move landed meanwhile. OPEN: AUD-14.06 and P3-N021 NOT STARTED (W3-H; OD-12).
 - **Consolidated integration (2026-10-05):** still PARTIAL, re-evaluated on the combined tree: AUD-14.06 (`BuyLicenseModal`, `PrivatePowerFlowModal`, the token confirm, route edits -- none reads a latch) and P3-N021 (the automatic presses' latch / serialisation order, OD-12 RED R1) are NOT STARTED; no later slice closed either. They are pre-Phase-4 lane E.
 
 #### W3-C
@@ -735,7 +735,7 @@ gates.
 - **Depends on:** W2-H, W3-A. **Gates:** OD-15.
 - **OD-15 RULED (transcribed 2026-10-04, §7.3):** the intro and end-game videos are full-viewport cinematic takeovers (not NativeModal / `<dialog>`, not modal-looking), sized by true viewport geometry with the counter-scale removed (`GameIntroOverlay.tsx`, AUD-13.05; `GameOutroOverlay.tsx` likewise); genuine modals stay on the native dialog / top layer, with no second manual modal / inert architecture (AUD-13.06). AUD-13.04 (tutorials as native dialogs) is tutorial work: OD-5's ruled ordering sequences it to the final tutorial/UI pass.
 - **OD-15 RULED (2026-10-04, §7.3).** Status: **PARTIAL** on its slice branch `phase3/w3-d` (from `phase3/wave3-i-w2i-w2j-w3c-w3g-v13cert-integration` @ `d29bb2f`; NOT integrated): AUD-13.05 (OD-15(a): the intro and the end-game film are full-viewport takeovers outside every scaled root, no counter-zoom, no dialog semantics, the shell root `inert` beneath them) and AUD-13.06 (OD-15(b): `ModalPortal`'s last consumer outside `NativeModal` removed, no manual inert; `PrivateTradePanel`'s unreachable false-modal shape deleted) IMPLEMENTED, each C → B under the ruling. **AUD-13.04 (tutorials as native dialogs) is BLOCKED ONLY ON W3-A INTEGRATION** (the owner reports OD-5 ruled in W3-A's lane; W3-A records it, and R-TUT is W3-A's while it is active). Dock-control keyboard reach stays OD-10(b). Record: Project `claude/PHASE3_W3D_PARTIAL_OD15_2026-10-04.md`.
-- **Consolidated integration (2026-10-05):** PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `a57b01a`): AUD-13.05 and AUD-13.06 IMPLEMENTED under the canonical OD-15. `ModalPortal` is kept (on the combined tree its one consumer is `NativeModal`, as its scaled destination). **AUD-13.04 is DEFERRED to the final tutorial pass (OD-5)** -- not "blocked on W3-A integration" (superseded) and not a pre-Phase-4 lane. Dock-control keyboard reach is OD-10(b) = Phase 5.
+- **Consolidated integration (2026-10-05):** PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `a57b01a`): AUD-13.05 and AUD-13.06 IMPLEMENTED under the canonical OD-15. `ModalPortal` is kept (on the combined tree its one consumer is `NativeModal`, as its scaled destination). **AUD-13.04 is DEFERRED to the final tutorial pass (OD-5)** -- not "blocked on W3-A integration" (superseded); by the closure contract (§11 item 2) the LAST Phase-3 lane (F) before the Phase-4 baseline, unless the owner places it after Phase 4 (an owner decision open). Dock-control keyboard reach is OD-10(b) = Phase 5.
 
 #### W3-E
 **City bypass control (conditional)** · L4 · **5–8 h, only if OD-11 = build**
@@ -829,8 +829,9 @@ The remaining Phase-3 work that MUST land before Phase-4 human playtesting, each
 | **C** | **Emergency `train-offer` third-seat duplicate prompt** (the first post-integration bugfix lane) | P3-N027 | narrow; prove one presentation, live controls only for the answering seat, status-only third seat, correct proposer status / rescind; server authority unchanged |
 | **D** | **Terms route / page shell and Terms / deposit link infrastructure** (OD-16) | AUD-20.08 | NO invented Terms prose -- an owner-copy slot only; final Terms are a Phase-7 / mainnet gate |
 | **E** | **W3-B latch residue** | AUD-14.06, P3-N021 | P3-N021 only via an OD-12 RED R1 commit |
+| **F (last)** | **The FINAL tutorial pass** (OD-5(A): contextual whitebox / spotlight, built LAST, after the shell/UI is stable) | AUD-13.04 + the tutorial system | TIMING IS AN OWNER DECISION OPEN: the closure contract (§11 item 2) puts every A row before Phase-3 closure and the Phase-4 baseline; if the owner means after Phase 4, AUD-13.04 moves to E with that ruling |
 
-**Not pre-Phase-4:** AUD-13.04 and the tutorial system (the FINAL tutorial pass, OD-5(A)); D-17 (a Phase-4 observation); phone-width layout and keyboard map access (Phase 5, OD-10(b)). **Asset dependency:** the official Keplr logo (AUD-18.05, ASSET PENDING).
+**Also before the Phase-4 baseline under the closure contract (§11), though not among the owner's lanes A–E:** W1-K (AUD-19.02, cross-tab Keplr single flight -- NOT STARTED), AUD-00.02 (P0 docs), W3-F (AUD-25.14, the Phase-4 checklist, the broad owner gate). **Not pre-Phase-4:** D-17 (a Phase-4 observation); phone-width layout and keyboard map access (Phase 5, OD-10(b)). **Asset dependency:** the official Keplr logo (AUD-18.05, ASSET PENDING).
 
 ## 7. Owner decisions
 
@@ -841,7 +842,7 @@ answered here. Where a draft question was already decided, it is removed (§7.2)
 planning defaults, inferred choices and implementation decisions are NOT owner rulings. A ruling is recorded only from the
 owner's own words (a brief, a decision, or an explicit approval); a ruling the owner gives in conversation is transcribed
 into `owner_rulings`, this table and §7.3 in the same pass, so a later lane never has to re-ask it. The genuinely open
-list is kept current in `docs/phase3/README.md` ("Still open").
+list is kept current in `docs/phase3/README.md` ("Status after the consolidated integration").
 
 | ID | Type | The decision | What exists now | Gates | Needs Phase 4 first? |
 |---|---|---|---|---|---|
@@ -1085,7 +1086,7 @@ transcribed above, from the W3-G owner-review brief (2026-10-04; AUD-25.15). W2-
 - Reconsider these only after Phase-4 human playtesting.
 - *Effect on this plan:* AUD-11.04 (U-10) and AUD-19.04 RULED — placed after Phase-4 human playtesting, not Phase-3 work. U-10 as worded here also names a "pause cap"; the ruling does not name it and it is not inferred; the owner may confirm whether it falls under this later placement (README, "Still open"). The C → E disposition move is left to W3-F's closure reconciliation.
 
-Status: see `docs/phase3/README.md` ("Status after the consolidated integration"), the single maintained list -- no owner decision is open (2026-10-05). Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
+Status: see `docs/phase3/README.md` ("Status after the consolidated integration"), the single maintained list -- two owner decisions remain open (the placement of AUD-04.04 / AUD-08.01; the final tutorial pass's timing). Part D of `RULES_HARDENING_BACKLOG.md` should record OD-2 and OD-7 when the backlog is next updated (closure contract item 3).
 
 ---
 
@@ -1184,7 +1185,7 @@ flow is PROVISIONAL and expected to be redesigned: no deeper coupling, no broad 
 endorsed final architecture. Bounded residuals carried, not solved: another device may replace the linked wallet while a
 Keplr prompt is open; local clock skew can trigger one unnecessary free re-proof.
 
-Still open as an OWNER DECISION: **none** (see `docs/phase3/README.md`, "Status after the consolidated integration").
+Still open as an OWNER DECISION (neither created by this integration; see `docs/phase3/README.md`, "Status after the consolidated integration"): (1) placement of AUD-04.04 (DH-1) and AUD-08.01 (GR-1 / S10-27): approved, derivation-only defects (no version bump) that OD-10(a) kept out of the v13 batch; no owner ruling places them in a slice (Phase 3 or later) -- open since the v13 scope verification, not created by this integration; (2) timing of the FINAL tutorial pass (AUD-13.04 and the tutorial system, OD-5(A) "built last, after the gameplay shell/UI is stable"): the plan's closure contract (§11 item 2) requires every A/B row fixed before Phase-3 closure, where the Phase-4 baseline is recorded -- so by default the final tutorial pass is the LAST Phase-3 lane (F), after lanes A-E; if the owner means after Phase 4, AUD-13.04 moves to E with that ruling.
 
 ## 8. Phase-4 deferrals
 
@@ -1216,7 +1217,7 @@ No known Phase-3 defect is moved to Phase 4. Every row needs a reproducible obse
 | AUD-16.08 Ctrl+wheel zoom | Audit [PT] | — | 50–200% sweep; overflow or misplaced overlays |
 | AUD-16.09 SR / OR at phone width | Audit [PT] | OD-10(b) scope | 360 / 390 / 430 px: every unreachable control |
 | AUD-17.04 screen readers | Audit [PT] | W1-O, W3-A heading, W3-D | NVDA and VoiceOver walk-through; every unlabelled control |
-| Observation columns on non-D rows (VF/D-17 low-end devices; P3-N022 shell-local OR facts) | Need a real device / real play | W3-H trace; — | Frame rate during a lay; bar step vs server step on every derived skip |
+| Observation columns on non-D rows (P3-N022 shell-local OR facts; VF/D-17 is a D row since 2026-10-05) | Need a real device / real play | W3-H trace; — | Frame rate during a lay; bar step vs server step on every derived skip |
 
 **Phase-4 observation items carried by the consolidated integration (2026-10-05)** -- every one is for real browsers and real people; none is closed because a jsdom test passes:
 

@@ -1282,7 +1282,7 @@ lay never arrives) and on a board change; a new ghost is a new send and plays. P
 in `tileTransitionStaging.test.ts`. **Still as #1145 left it:** a dropped ghost shows the old tile until the lay
 lands.
 
-### D-21 · `OPEN` · Rail-less printed centres pair by position, and some facings tie
+### D-21 · `RESOLVED` (W3-H, 2026-10-04) · Rail-less printed centres pair by position, and some facings tie
 Centres with rails correspond uniquely — across the 67,308 currently accepted transitions (what the placement
 filter's walk accepts on the three tables; accepted is not a claim of rules legality) the audit found no tie and
 no split, and every anchored token's game destination matched the flourish. **Merge evidence, re-run without
@@ -1300,6 +1300,20 @@ printed double town → #633 at 0 and 3. Deterministic, and the two answers are 
 wrong. **The token half:** a token on a printed OO circle has no rails, so the game lets the president choose its
 city (#824, #878); it rides to that city whatever the circles do, and can leave the circle it stood in.
 Presentation only; nothing changed.
+**RESOLVED by W3-H** — the nearest-first pairing of rail-less centres now breaks ties by a stated rule instead of
+float noise (`assignMarkers` in `tileTransition.ts`): candidate distances within `PAIR_TIE` (1e-6 unit, five times the
+largest rounding difference above) of the nearest open pair are one tie; the tie goes to the pair whose destination
+lies counter-clockwise on screen about the hex centre from its source for a city, clockwise for a town (`tieTurn`, a
+reading that turns with the hex), and where turns are equal within the same tolerance to the lower source, then
+destination, index. The directions are not a principle but what the rounding happened to give, so every pairing is
+preserved: the eight named tie facings keep their outcome, and a one-off comparison of old and new over every
+rail-less printed start the placement filter accepts (standard, expanded and LPF boards with their trays, plus the
+18XX+ tray on the standard board and the standard tray on the expanded: 5,865 transitions) changed none. Outside the
+accepted set some pairings the filter never offers do change — a single centred printed or yellow centre handed a
+two-centre tile (e.g. #5 → #54, printed single city → #35), and printed OO → brown #68, which skips green — where the
+old answer was equally the rounding's. Pinned by `components/w3hTileFlourish.test.ts` (D-21 case: the eight named
+facings keep today's pairing, and seeded noise of up to 2e-7 per coordinate on the printed centres — which flips
+raw nearest-first — does not flip it).
 
 ### D-22 · `OPEN` · Rules cross-reference: #59 → brown OO facings that break fixed OO
 This implementation plays fixed OO; the optional Variable OO Cities rule is not used and was never requested.

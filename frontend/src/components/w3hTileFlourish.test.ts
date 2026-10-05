@@ -14,11 +14,13 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { HexGridRenderer } from "./HexGridRenderer";
-import { STATIC_BOARD_HEXES } from "./hexBoardData";
-import { axialToPixel } from "./hexGeometry";
+import { STATIC_BOARD_HEXES, YELLOW_OO_HEXES } from "./hexBoardData";
+import * as hexGeometry from "./hexGeometry";
 import { TILE_CATALOG_BY_ID } from "./hexTileCatalog";
 import { filterSandboxPlacements } from "./sandboxTileLegality";
-import { BEAT_MS, smoothstep, windowProgress } from "./tileTransition";
+import { BEAT_MS, hexArtForPrinted, hexArtForTile, planTileTransition, smoothstep, windowProgress } from "./tileTransition";
+
+const { axialToPixel } = hexGeometry;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -499,5 +501,85 @@ describe("W3-H (VF D-13): route drawing is held on a hex until its flourish comm
     const fading = routeCalls(reducedFrame.primitives);
     expect(fading.some((call) => call.name === "drawRouteOverlays")).toBe(true);
     for (const call of fading) expect(holdsOut(call, f16)).toBe(false);
+  });
+});
+
+/* ==================================================================
+    VF D-21: A TIE BETWEEN RAIL-LESS CENTRES IS BROKEN BY A STATED RULE
+   ================================================================== */
+describe("W3-H (VF D-21): rail-less printed centres pair by an explicit tie-break, not by rounding", () => {
+  const OO = STATIC_BOARD_HEXES.find((hex) => YELLOW_OO_HEXES.has(hex.label))!.label;
+  const DT = STATIC_BOARD_HEXES.find((hex) => hex.townDesignation === "double")!.label;
+  // Each named tie and the pairing the board has always drawn there: [destination, [its source]] per centre.
+  const TIES = [
+    { label: OO, tileId: 59, facing: 0, pairs: [[0, [1]], [1, [0]]] },
+    { label: OO, tileId: 59, facing: 3, pairs: [[0, [0]], [1, [1]]] },
+    { label: DT, tileId: 55, facing: 2, pairs: [[0, [1]], [1, [0]]] },
+    { label: DT, tileId: 55, facing: 5, pairs: [[0, [0]], [1, [1]]] },
+    { label: OO, tileId: 626, facing: 2, pairs: [[0, [0]], [1, [1]]] },
+    { label: OO, tileId: 626, facing: 5, pairs: [[0, [1]], [1, [0]]] },
+    { label: DT, tileId: 633, facing: 0, pairs: [[0, [1]], [1, [0]]] },
+    { label: DT, tileId: 633, facing: 3, pairs: [[0, [0]], [1, [1]]] },
+  ];
+  const pairing = (label: string, tileId: number, facing: number) =>
+    planTileTransition({ from: { kind: "printed", label }, to: { tileId, orientation: facing } })!.cities.map((city) => [city.dest, city.sources]);
+  /** Every source-destination distance of the pair, as the old nearest-first sort saw it. */
+  const distances = (label: string, tileId: number, facing: number) => {
+    const from = hexArtForPrinted(label)!;
+    const to = hexArtForTile(tileId, facing)!;
+    return from.markers.map((marker) => to.markers.map((candidate) => Math.hypot(marker.at.x - candidate.at.x, marker.at.y - candidate.at.y)));
+  };
+  /** What nearest-first by raw distance alone -- the rule before W3-H -- would pair: [destination, [source]]. */
+  const rawNearestFirst = (d: number[][]) => {
+    const pairs = d.flatMap((row, i) => row.map((value, j) => ({ i, j, value }))).sort((a, b) => a.value - b.value || a.i - b.i || a.j - b.j);
+    const sourceOf = new Map<number, number>();
+    const used = new Set<number>();
+    for (const pair of pairs) {
+      if (used.has(pair.i) || sourceOf.has(pair.j)) continue;
+      sourceOf.set(pair.j, pair.i);
+      used.add(pair.i);
+    }
+    return d[0].map((_, j) => [j, sourceOf.has(j) ? [sourceOf.get(j)] : []]);
+  };
+
+  it("keeps today's pairing at every named tie, and noise within the tolerance does not flip it", () => {
+    for (const tie of TIES) {
+      // Each really is a tie: the two nearest distances differ, but by rounding only.
+      const sorted = distances(tie.label, tie.tileId, tie.facing).flat().sort((a, b) => a - b);
+      expect(sorted[1] - sorted[0]).toBeLessThan(1e-6);
+      expect(pairing(tie.label, tie.tileId, tie.facing)).toEqual(tie.pairs);
+    }
+
+    // Noise: the printed centres moved by up to 2e-7 of a hex per coordinate -- every distance by under 3e-7, so every
+    // tie stays well inside the 1e-6 tolerance -- in seeded trials. Raw distance alone flips some of them.
+    const real = hexGeometry.twoNodePositions;
+    let seed = 1830;
+    const noise = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return (seed / 2147483648 - 0.5) * 4e-7;
+    };
+    let wouldHaveFlipped = 0;
+    const spy = jest.spyOn(hexGeometry, "twoNodePositions");
+    try {
+      for (const tie of TIES) {
+        for (let trial = 0; trial < 16; trial += 1) {
+          const offsets = [noise(), noise(), noise(), noise()];
+          spy.mockImplementation((center, size) => {
+            const [a, b] = real(center, size);
+            return [
+              { x: a.x + offsets[0] * size, y: a.y + offsets[1] * size },
+              { x: b.x + offsets[2] * size, y: b.y + offsets[3] * size },
+            ];
+          });
+          const d = distances(tie.label, tie.tileId, tie.facing);
+          if (JSON.stringify(rawNearestFirst(d)) !== JSON.stringify(tie.pairs)) wouldHaveFlipped += 1;
+          expect(pairing(tie.label, tie.tileId, tie.facing)).toEqual(tie.pairs);
+        }
+      }
+    } finally {
+      spy.mockRestore();
+    }
+    // The noise really reaches the decision: without the tie-break, rounding-sized noise changes the answer.
+    expect(wouldHaveFlipped).toBeGreaterThan(0);
   });
 });

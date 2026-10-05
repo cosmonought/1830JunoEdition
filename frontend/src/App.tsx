@@ -6598,7 +6598,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
           replayingRef.current
         ) {
           setSandboxRoomError(CATCHING_UP_BANNER);
-          return;
+          return false; // Phase 3 W3-J (AUD-25.05, OD-12 RED R1): not sent -- the caller takes back what it set
         }
         const boardNow = sandboxStateRef.current;
         const onTurnNow =
@@ -6645,7 +6645,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
             );
           }
           setSandboxRoomError(TURN_REFUSAL);
-          return;
+          return false; // Phase 3 W3-J (AUD-25.05, OD-12 RED R1): not sent -- the caller takes back what it set
         }
 
         /* The render gate guarantees a room, but the ref is typed nullable and narrowing here is cheaper than asserting.
@@ -6707,7 +6707,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
             console.warn(`[link] ${Object.keys(msg)[0]} dispatched while the room link was down — not sent`);
             setSandboxRoomError("The room link is reconnecting — try that again in a moment.");
             setPendingAppendIndex((current) => (current === appendAt ? null : current));
-            return;
+            return false; // Phase 3 W3-J (AUD-25.05, OD-12 RED R1): not sent -- the caller takes back what it set
           }
 
           // #1218: cleared here so the callbacks below can claim it for THIS submission and no other.

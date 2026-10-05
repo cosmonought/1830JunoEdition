@@ -10,6 +10,7 @@
 
 import { readShell, sliceBetween } from "./sourceScan";
 import { NO_ROOM_NOTICES, TURN_REFUSAL, roomNoticesReducer, type RoomNoticeAction, type RoomNotices } from "./roomNotices";
+import { rollBackIfRefused } from "./submissionAnswer";
 
 const shell = readShell();
 const run = (...actions: RoomNoticeAction[]): RoomNotices => actions.reduce(roomNoticesReducer, NO_ROOM_NOTICES);
@@ -68,5 +69,25 @@ describe("RED R1 (AUD-25.13, W2-D deferred): an `automatic` player decision no l
     const turnGate = sliceBetween(shell, "const onTurnNow =", "setSandboxRoomError(TURN_REFUSAL);");
     expect(turnGate).toContain("options?.automatic !== true");
     expect(turnGate).toContain("options?.offTurn !== true");
+  });
+});
+
+describe("RED R1 (AUD-25.05, pre-send half): the client's own gates answer `false`, so a refused-before-sending move rolls back", () => {
+  it("the catching-up, turn and link-down gates each return `false` after saying why", () => {
+    const at = (needle: string) => {
+      const i = shell.indexOf(needle);
+      expect(i).toBeGreaterThan(-1);
+      return shell.slice(i, shell.indexOf("}", i));
+    };
+    expect(at("setSandboxRoomError(CATCHING_UP_BANNER);")).toContain("return false;");
+    expect(at("setSandboxRoomError(TURN_REFUSAL);")).toContain("return false;");
+    expect(at('setSandboxRoomError("The room link is reconnecting — try that again in a moment.");')).toContain("return false;");
+  });
+
+  it("`false` is what the handlers' rollback acts on (W3-C's helper); `undefined` -- the old answer -- rolled back nothing", async () => {
+    const rolledBack: string[] = [];
+    await rollBackIfRefused(Promise.resolve(false), () => rolledBack.push("gate"));
+    await rollBackIfRefused(Promise.resolve(undefined), () => rolledBack.push("old"));
+    expect(rolledBack).toEqual(["gate"]);
   });
 });

@@ -827,6 +827,7 @@ export default function ContextualActionBar({
   turnActionTaken,
   onPlaceStationTokenHint,
   stationTokenCost,
+  paidStationRefusal = null,
   maxRouteRevenue = null,
   activeCorporation,
   pendingTreasury = null,
@@ -965,6 +966,10 @@ export default function ContextualActionBar({
    *  label. A number rather than a formatted string so the caller cannot
    *  quietly change the currency here. */
   stationTokenCost: number;
+  /** Phase 3 W3-J (AUD-25.08): why a PAID station cannot be placed now (`paidStationRefusal`: the token limit, the
+   *  treasury against the next station's cost, a reachable city), or `null`. The D&H's free station is its own control,
+   *  so this greys the paid button even while that station keeps the step open. Omitted reads as `null`. */
+  paidStationRefusal?: string | null;
   /** Design note #707: the best total `assignRouteSet` can find for the acting corporation -- `0` for
    *  "nothing to run", `null` for "could not tell". The Routes step's Skip is withdrawn on a positive figure
    *  and on nothing else; see `routeStep.ts` for why `null` must never block. */
@@ -1963,7 +1968,12 @@ export default function ContextualActionBar({
             // whose size the UI knew and did not say.
             label: `Place Station Token for $${stationTokenCost}`,
             onClick: onPlaceStationTokenHint,
-            title: `Costs $${stationTokenCost} from this corporation's treasury. Click a city hex on the Rail Map to place it.`,
+            // Phase 3 W3-J (AUD-25.08): the paid station's own verdict -- including the treasury while the D&H's free
+            // station keeps the step open.
+            disabled: paidStationRefusal !== null,
+            title:
+              paidStationRefusal ??
+              `Costs $${stationTokenCost} from this corporation's treasury. Click a city hex on the Rail Map to place it.`,
           },
         ];
         break;

@@ -30,6 +30,7 @@ import { connectServerLink, type ServerLink } from "./utils/serverLink";
 import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
 import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
 import { rollBackIfRefused, submissionRefused } from "./utils/submissionAnswer"; // Phase 3 W3-C (P3-N020)
+import { paidStationRefusal } from "./utils/paidStationView"; // Phase 3 W3-J (AUD-25.08)
 import { RoomNoticeSlots } from "./components/RoomNoticeSlots"; // Phase 3 W3-C (AUD-14.01)
 import { boardRulesVersion } from "./utils/buildStamp"; // Phase 3 W2-I / OD-6 (AUD-01.07)
 /* #1223: the alarm #1207 argued for and nobody connected. The comparison lives in its own module so it is
@@ -1738,6 +1739,22 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const [liveMapGrid, setMapGrid] = useState<MapGridResponse>(MOCK_MAP_GRID);
   // #1425: the replayed grid while scrubbing; the live one otherwise. Writers keep `setMapGrid`.
   const mapGrid = replaySnapshot?.grid ?? liveMapGrid;
+
+  /* Phase 3 W3-J (AUD-25.08): whether the acting corporation can place a PAID station now -- the token limit, the
+     treasury against the next station's cost and a reachable city (`paidStationRefusal`, the step predicate without the
+     D&H's free station). It greys the bar's "Place Station Token for $X" and refuses the board click that would stage a
+     paid token; the D&H's free station keeps the step open and is its own control. */
+  const paidStationRefusalNow = useMemo<string | null>(() => {
+    if ((gameState?.current_round_type ?? null) !== "OperatingRound" || orSubPhase !== "Tokens") return null;
+    if (!activeStationCompany) return null;
+    return paidStationRefusal({
+      mapGrid,
+      company: activeStationCompany,
+      allCompanies: gameState?.public_companies ?? [],
+      boardHexes: STATIC_BOARD_HEXES.map((hex) => [hex.q, hex.r] as const),
+      ticker: activeStationCompany.ticker,
+    });
+  }, [gameState, orSubPhase, activeStationCompany, mapGrid]);
 
   /* Design note #757: THE GRID GETS A REF, for #411's reason and #723's. An Undo replays the whole log in
      one burst, so a legality check reading React state would judge every lay in that burst against the board
@@ -10996,6 +11013,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       nodeX: number;
       nodeY: number;
     }) => {
+      /* Phase 3 W3-J (AUD-25.08): a paid token this corporation cannot pay for (or has none left of, or can reach no
+         city for) is refused at the click with that reason -- the geometry below never asked the treasury. */
+      if (paidStationRefusalNow !== null) {
+        showActionToast(paidStationRefusalNow);
+        return;
+      }
       /* evaluateStationPlacement applies the same three refusals the contract does, before a signature, and returns the sentence explaining which bit.
          See docs/ai_architecture/canvas_rendering.md - App.tsx #238 */
       const placement = activeStationCompany
@@ -11044,7 +11067,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         offsetY: nodeY,
       });
     },
-    [mapGrid, activeStationCompany, gameState, showActionToast],
+    [mapGrid, activeStationCompany, gameState, showActionToast, paidStationRefusalNow],
   );
 
   /** The green check. THIS is where the token is placed and the treasury
@@ -14527,6 +14550,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
            ask the stock authority for what is still open. */
         onPlaceStationTokenHint={handlePlaceStationTokenHint}
         stationTokenCost={stationTokenCost}
+        paidStationRefusal={paidStationRefusalNow} // Phase 3 W3-J (AUD-25.08)
         /* Design note #707: the same probe the Routes panel's Auto Route runs, so the button and
            the search cannot disagree about whether a run exists. */
         maxRouteRevenue={maxRouteRevenue}

@@ -87,10 +87,10 @@ export function resetTutorials(topicKeys: readonly string[]): void {
    through a game and a new game invalidates it; the off switch is a standing
    preference about the APPLICATION that no in-game action should overturn.
 
-   W3-A / OD-5(d) (RULED 2026-10-04): "Tutorials automatically arm ONCE PER PROFILE ... Do not re-arm on reload,
-   on reconnect, on new game, on zero-state remount." So nothing calls this automatically any more -- the shell's
-   zero-state effect that did (AUD-01.06) is gone, and the SEEN flags are the once-per-profile record. Kept for an
-   explicit "show tutorials again" control, which W3-A does not add. */
+   W3-A (AUD-01.06, INTERIM): nothing calls this automatically any more -- the shell's zero-state effect that did,
+   on every zero-state mount (and the default scenario is the zero state), is gone; it was a known bad auto-reset.
+   That is all that changed. The tutorial system and its re-arm policy are the FINAL tutorial pass's (owner ruling
+   OD-5: contextual whitebox / spotlight, built last). Kept for any explicit "show tutorials again" control. */
 export function replayTutorials(topicKeys: readonly string[]): void {
   for (const key of topicKeys) writeFlag(SEEN_PREFIX + key, false);
 }
@@ -792,27 +792,16 @@ export interface TutorialModalProps {
   /** Whether the phase this explains is currently active. The modal only
    *  ever appears while this is true. */
   active: boolean;
-  /** W3-A (OD-5(c)): another forced notice has the screen. An armed tutorial stays armed and waits -- it is the
-   *  lowest-priority notice -- rather than drawing over (or under) it. Default false. */
-  held?: boolean;
-  /** W3-A (OD-5(c)): told whenever this tutorial becomes armed-and-unanswered or stops being so (including on
-   *  unmount), so the notice chain knows a tutorial is due. */
-  onOpenChange?: (topicKey: string, open: boolean) => void;
 }
 
-export function TutorialModal({ topicKey, heading, pages, active, held = false, onOpenChange }: TutorialModalProps) {
+/* PHASE 3 CONSOLIDATED INTEGRATION (2026-10-05): W3-A's `held` / `onOpenChange` props -- which made a tutorial the
+   sixth entry of the forced-notice chain -- are removed. Owner ruling OD-5: Tutorial is NOT part of the forced-notice
+   chain, and tutorial behaviour is deferred to the final tutorial pass. This component presents exactly as it did
+   before W3-A. */
+export function TutorialModal({ topicKey, heading, pages, active }: TutorialModalProps) {
   const seenKey = SEEN_PREFIX + topicKey;
   const [open, setOpen] = useState(false);
   const [turnOff, setTurnOff] = useState(false);
-
-  /* W3-A: due is "armed and not yet answered", which is `open` with pages to show -- the same condition the
-     render below uses, so the chain never waits on a tutorial that would render nothing. */
-  const due = open && pages.length > 0;
-  useEffect(() => {
-    if (!onOpenChange) return undefined;
-    onOpenChange(topicKey, due);
-    return () => onOpenChange(topicKey, false);
-  }, [onOpenChange, topicKey, due]);
 
   // Opens once, when the phase becomes active, if tutorials are on and this
   // topic has not been seen. Keyed on `active` alone so re-renders during
@@ -835,9 +824,6 @@ export function TutorialModal({ topicKey, heading, pages, active, held = false, 
      what all three routes call. There is no second, flag-free exit and this batch did not add one. */
 
   if (!open || pages.length === 0) return null;
-  /* W3-A (OD-5(c)): yielding draws nothing and answers nothing -- `open` and the seen flag are untouched, so the
-     tutorial appears, unread, the moment the notices above it are answered. */
-  if (held) return null;
 
   return (
     <div

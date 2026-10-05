@@ -1142,10 +1142,6 @@ function withSeededChart(
   };
 }
 
-/** W3-A / OD-5(c): the shell's four tutorials, in their mount order -- the order the notice chain presents them in
- *  when more than one is armed at once (the market lesson can arm during an Operating Round). */
-const TUTORIAL_CHAIN_ORDER: readonly string[] = ["waterfall-auction", "stock-round", "operating-round", "stock-market"];
-
 function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, watchOnly = false }: AppShellProps) {
   const wallet = useWallet();
   const session = useGameSession();
@@ -1173,12 +1169,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
   /** Design note #9 in `sandboxState.ts`: the turn-1 fixture. */
   const sandboxIsZeroState = sandboxScenario(sandboxScenarioId).zeroState === true;
 
-  /* W3-A / OD-5(d), AUD-01.06: TUTORIALS ARM ONCE PER PROFILE. Design note #301's effect cleared every tutorial's
-     "seen" flag whenever this shell mounted in the zero state -- and the default scenario IS the zero state, so every
-     table, reload and remount taught the player again. RULED (2026-10-04): "Once the player has completed/dismissed
-     the tutorial sequence, ordinary game mounts and zero-state remounts must not automatically re-arm it again."
-     The effect is gone; `TutorialModal`'s per-profile `localStorage` flags are the whole record, and nothing in the
-     shell clears them. */
+  /* W3-A, AUD-01.06 (INTERIM -- a known bad auto-reset removed, not the tutorial redesign): Design note #301's effect
+     cleared every tutorial's "seen" flag whenever this shell mounted in the zero state -- and the default scenario IS
+     the zero state, so every table, reload and remount taught the player again. The effect is gone, so the existing
+     `TutorialModal` "seen" flags (`localStorage`) are no longer reset by a mount; nothing else about the tutorials
+     changed. The tutorial system itself -- the contextual whitebox / spotlight design and its re-arm policy -- is the
+     FINAL tutorial pass's (owner ruling OD-5; the consolidated integration, 2026-10-05, keeps this removal and
+     classifies it exactly so). */
 
   /* Design note #1 in `PrivatePowerPanel.tsx`: which abilities have fired.
      Local, because there is no contract message to read it back from --
@@ -12239,20 +12236,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     }
   }, [noticeLedger, noticeLedgerStorageKey]);
 
-  /* OD-5(c): the tutorials report whether they are armed and unanswered, so the chain can hold them -- the lowest
-     priority -- and present one at a time, in mount order. */
-  const [openTutorials, setOpenTutorials] = useState<readonly string[]>([]);
-  const handleTutorialOpenChange = useCallback((topicKey: string, open: boolean) => {
-    setOpenTutorials((current) => {
-      if (open) return current.includes(topicKey) ? current : [...current, topicKey];
-      return current.includes(topicKey) ? current.filter((key) => key !== topicKey) : current;
-    });
-  }, []);
-
   /* OD-5(b)+(c), AUD-01.03 / AUD-13.02 / AUD-13.07: ONE FORCED NOTICE AT A TIME, in the ruled order (Emergency,
-     Fleet Loss, Private Revenue, Phase Three, Herald, Tutorial), none of them over or under another native dialog;
-     when the chain is exhausted, focus goes to the game-screen heading. An answered notice is never due, whichever
-     of this player's tabs answered it. */
+     Fleet Loss, Private Revenue, Phase Three, Herald), none of them over or under another native dialog; when the
+     chain is exhausted, focus goes to the game-screen heading. An answered notice is never due, whichever of this
+     player's tabs answered it. Tutorial is NOT part of this chain (owner ruling OD-5; the consolidated integration,
+     2026-10-05, removed the sixth entry W3-A had added): the tutorial modals below keep their own presentation until
+     the final tutorial pass. */
   const gameScreenHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const { presented: presentedNotice } = useNoticeChain(
     {
@@ -12265,14 +12254,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
       herald:
         heraldFloatNotice !== null &&
         !noticeLedger.isAcknowledged(heraldFloatNoticeKey(heraldFloatNotice.companyId)),
-      tutorial: openTutorials.length > 0,
     },
     gameScreenHeadingRef,
   );
-  const presentedTutorial =
-    presentedNotice === "tutorial"
-      ? TUTORIAL_CHAIN_ORDER.find((topicKey) => openTutorials.includes(topicKey)) ?? null
-      : null;
 
   /* OD-5(a): answering the payout and the Phase 3 notice is this player's acknowledgement for this game. */
   const acknowledgePrivateRevenue = useCallback(() => {
@@ -14346,8 +14330,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         /* DA-6 (DA-F8h): the Delayed Auction arrives mid-game -- its own last page, not the opening auction's. */
         pages={tableVariants.delayedAuction ? DELAYED_WATERFALL_AUCTION_TUTORIAL : WATERFALL_AUCTION_TUTORIAL}
         active={isWaterfallPhase}
-        held={presentedTutorial !== "waterfall-auction"}
-        onOpenChange={handleTutorialOpenChange}
       />
       <TutorialModal
         topicKey="stock-round"
@@ -14355,16 +14337,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         /* DA-6 (DA-F8h): a Delayed Auction table's Stock Round 1 follows no auction. */
         pages={tableVariants.delayedAuction ? DELAYED_STOCK_ROUND_TUTORIAL : STOCK_ROUND_TUTORIAL}
         active={gameState?.current_round_type === "StockRound"}
-        held={presentedTutorial !== "stock-round"}
-        onOpenChange={handleTutorialOpenChange}
       />
       <TutorialModal
         topicKey="operating-round"
         heading="Operating Round"
         pages={OPERATING_ROUND_TUTORIAL}
         active={gameState?.current_round_type === "OperatingRound"}
-        held={presentedTutorial !== "operating-round"}
-        onOpenChange={handleTutorialOpenChange}
       />
       {/* Design note #44: the only tutorial not keyed to a round type. It
           opens on an event -- the player's first OR turn ending -- and the
@@ -14374,8 +14352,6 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         heading="The Stock Market"
         pages={STOCK_MARKET_TUTORIAL}
         active={marketTutorialArmed}
-        held={presentedTutorial !== "stock-market"}
-        onOpenChange={handleTutorialOpenChange}
       />
 
       {/* Design note #332: the mandatory buy the treasury cannot fund. Mounted at shell level beside the
@@ -16036,9 +16012,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         stackIndex={dividendPayout ? 1 : 0}
       />
       {/* W3-A / OD-5(c): WHICH NOTICE PRESENTS IS THE NOTICE CHAIN'S DECISION (`useNoticeChain`, in the ruled order
-          Emergency, Fleet Loss, Private Revenue, Phase Three, Herald, Tutorial), not this source order and not
-          z-index -- at most one of the forced notices below is mounted at a time. (#1049's payout-first order was
-          superseded by the ruling.) */}
+          Emergency, Fleet Loss, Private Revenue, Phase Three, Herald), not this source order and not z-index -- at
+          most one of the forced notices below is mounted at a time. (#1049's payout-first order was superseded by
+          the ruling.) */}
       {/* Design note #1332: PRR on the Level Playing Field / 18XX+ floats owing no token -- said, not left to
           be noticed. */}
       <HeraldHomeFloatModal

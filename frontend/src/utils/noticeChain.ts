@@ -3,13 +3,16 @@
 /* ==================================================================
     W3-A / OD-5(c): ONE FORCED NOTICE AT A TIME, IN THE RULED ORDER
    ==================================================================
-   RULED (OD-5(c), 2026-10-04): "Use this deterministic priority when multiple forced notices are due:
-   1. Emergency 2. Fleet Loss 3. Private Revenue 4. Phase Three 5. Herald 6. Tutorial. Only one forced notice is
-   presented at a time." After an acknowledgement the next due notice presents; when none is due, focus goes to
-   the game-screen heading (OD-5(b), `useNoticeChain`).
+   RULED (OD-5, the owner's forced-notice order -- W3-A's "(c)"): the forced-notice chain is "1. Emergency 2. Fleet
+   Loss 3. Private Revenue 4. Phase Three 5. Herald. Only one is shown at a time. Tutorial is NOT part of this
+   forced-notice chain." After an acknowledgement the next due notice presents; when none is due, focus goes to the
+   game-screen heading (OD-5's focus ruling, W3-A's "(b)"; `useNoticeChain`).
+   PHASE 3 CONSOLIDATED INTEGRATION (2026-10-05): W3-A had transcribed a sixth entry, Tutorial; the owner's ruling
+   has five, so the chain has five. Tutorials keep their own (pre-W3-A) presentation until the FINAL tutorial pass,
+   which replaces them with the contextual whitebox / spotlight design -- this file says nothing about them.
 
    PRESENTATION ONLY. Whether a notice is DUE is still each notice's own question -- the reducer's emergency
-   obligation, the fleet-loss queue, the payout phase, the phase edge, the float, a tutorial's own arming. This
+   obligation, the fleet-loss queue, the payout phase, the phase edge, the float. This
    file answers the one question none of them can: which of several due notices takes the screen.
 
    NO NOTICE STACKS WITH ANOTHER NATIVE DIALOG (AUD-13.07): while a native dialog that is not one of these notices
@@ -24,7 +27,6 @@ export const NOTICE_PRIORITY = [
   "privateRevenue",
   "phaseThree",
   "herald",
-  "tutorial",
 ] as const;
 
 export type NoticeKind = (typeof NOTICE_PRIORITY)[number];

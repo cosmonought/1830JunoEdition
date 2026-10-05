@@ -3,7 +3,9 @@
 //
 // THE REAL NOTICES, DRIVEN BY THE REAL CHAIN. `useNoticeChain` and the five notice components below are the shell's
 // own, mounted the way the shell mounts them: each one handed its notice only when the chain presents it, the
-// tutorial `held` unless it is presented, the heading beside them. No test in this repository renders `AppShell`
+// heading beside them, and a tutorial mounted as the shell mounts it -- OUTSIDE the chain (owner ruling OD-5: the
+// forced-notice chain is Emergency, Fleet Loss, Private Revenue, Phase Three, Herald; Tutorial is not part of it.
+// The consolidated integration, 2026-10-05, removed the sixth entry W3-A had added). No test in this repository renders `AppShell`
 // (it needs a room, a link and a reducer); `noticeChainShellWiring` below pins that the shell is wired exactly this
 // way, which is the one part a render here cannot see.
 //
@@ -14,7 +16,7 @@
 // jsdom 16.7 has `HTMLDialogElement` without `showModal` / `close`, so they are stubbed to toggle `open`, as
 // `nativeModalBoundary.test.tsx` does.
 
-import React, { act, useCallback, useRef, useState } from "react";
+import React, { act, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 
 import { ModalLayerHost } from "./ModalPortal";
@@ -99,12 +101,6 @@ function Shell({ initial }: { initial: Due }) {
   const [due, setDue] = useState(initial);
   update = (patch) => setDue((current) => ({ ...current, ...patch }));
   const headingRef = useRef<HTMLHeadingElement | null>(null);
-  const [openTutorials, setOpenTutorials] = useState<readonly string[]>([]);
-  const onOpenChange = useCallback((topicKey: string, open: boolean) => {
-    setOpenTutorials((current) =>
-      open ? (current.includes(topicKey) ? current : [...current, topicKey]) : current.filter((key) => key !== topicKey),
-    );
-  }, []);
   const { presented } = useNoticeChain(
     {
       emergency: due.emergency,
@@ -112,7 +108,6 @@ function Shell({ initial }: { initial: Due }) {
       privateRevenue: due.revenue !== null,
       phaseThree: due.phaseThree,
       herald: due.herald !== null,
-      tutorial: openTutorials.length > 0,
     },
     headingRef,
   );
@@ -169,8 +164,6 @@ function Shell({ initial }: { initial: Due }) {
         heading={TUTORIAL_HEADING}
         pages={[{ title: "One", body: "The only page." }]}
         active={due.tutorialActive}
-        held={presented !== "tutorial"}
-        onOpenChange={onOpenChange}
       />
     </>
   );
@@ -248,12 +241,13 @@ describe("AUD-01.03 / OD-5(b): the game screen has a stable, accessible heading"
 });
 
 describe("8-10. AUD-13.07 / OD-5(c): forced notices present one at a time, in the ruled order", () => {
-  it("is the ruled order", () => {
-    expect([...NOTICE_PRIORITY]).toEqual(["emergency", "fleetLoss", "privateRevenue", "phaseThree", "herald", "tutorial"]);
+  it("is the ruled order -- five forced notices; Tutorial is not one of them (owner ruling OD-5)", () => {
+    expect([...NOTICE_PRIORITY]).toEqual(["emergency", "fleetLoss", "privateRevenue", "phaseThree", "herald"]);
+    expect(NOTICE_PRIORITY as readonly string[]).not.toContain("tutorial");
   });
 
-  it("with all six due at once, presents each alone and advances on each answer", () => {
-    render({ ...NOTHING, emergency: true, fleet: FLEET, revenue: ROUND, phaseThree: true, herald: HERALD, tutorialActive: true });
+  it("with all five due at once, presents each alone and advances on each answer", () => {
+    render({ ...NOTHING, emergency: true, fleet: FLEET, revenue: ROUND, phaseThree: true, herald: HERALD });
     const seen: string[][] = [];
     seen.push(surfaces());
     act(() => update({ emergency: false })); // the obligation is met: nothing to click on a forced workflow
@@ -266,15 +260,12 @@ describe("8-10. AUD-13.07 / OD-5(c): forced notices present one at a time, in th
     seen.push(surfaces());
     click(/Understood/);
     seen.push(surfaces());
-    click(/^Got it$/); // the tutorial's last page
-    seen.push(surfaces());
-    expect(seen.map((step) => step.length)).toEqual([1, 1, 1, 1, 1, 1, 0]);
+    expect(seen.map((step) => step.length)).toEqual([1, 1, 1, 1, 1, 0]);
     expect(seen[0]).toEqual(["Emergency Train Purchase"]);
     expect(seen[1]).toEqual(["PRR lost one train to rust"]); // Fleet Loss names itself by its headline
     expect(seen[2]).toEqual(["Private company payouts"]);
     expect(seen[3]).toEqual(["Phase 3: private companies are for sale"]);
     expect(seen[4]).toEqual(["PRR has floated"]);
-    expect(seen[5]).toEqual([TUTORIAL_HEADING]);
   });
 
   it("a higher notice raised while a lower one is up takes the screen; the lower one waits, unanswered", () => {
@@ -287,18 +278,22 @@ describe("8-10. AUD-13.07 / OD-5(c): forced notices present one at a time, in th
     expect(surfaces()).toEqual(["Phase 3: private companies are for sale"]);
   });
 
-  it("an armed tutorial stays armed while it is held, and appears when the notices above it are answered", () => {
+  it("a tutorial is not part of the chain: the chain neither holds it nor waits for it (owner ruling OD-5)", () => {
+    /* The consolidated integration's correction of W3-A's sixth entry. A tutorial keeps the presentation it had before
+       W3-A -- it opens on its own arming -- until the final tutorial pass replaces it; this pins only that the forced
+       chain does not own it, not how the interim tutorial and a forced notice should share the screen. */
     render({ ...NOTHING, herald: HERALD, tutorialActive: true });
-    expect(surfaces()).toEqual(["PRR has floated"]);
-    expect(window.localStorage.getItem(`1830juno.tutorial_seen.v1.${TOPIC}`)).toBeNull();
+    expect(surfaces()).toContain("PRR has floated");
+    expect(surfaces()).toContain(TUTORIAL_HEADING);
     click(/Understood/);
-    expect(surfaces()).toEqual([TUTORIAL_HEADING]);
+    expect(surfaces()).toEqual([TUTORIAL_HEADING]); // the chain ended; the tutorial is still the player's to answer
+    expect(window.localStorage.getItem(`1830juno.tutorial_seen.v1.${TOPIC}`)).toBeNull();
   });
 });
 
 describe("10. AUD-13.07: no notice stacks with another native dialog", () => {
   it("every notice -- the emergency included -- waits while a dialog that is not a notice is open", () => {
-    render({ ...NOTHING, foreign: true, emergency: true, fleet: FLEET, tutorialActive: true });
+    render({ ...NOTHING, foreign: true, emergency: true, fleet: FLEET });
     expect(surfaces()).toEqual(["Market peek"]);
     click(/Close peek/);
     expect(surfaces()).toEqual(["Emergency Train Purchase"]);
@@ -355,7 +350,7 @@ describe("11-12. AUD-13.02 / OD-5(b): where focus lands, and when it does not mo
     expect(document.activeElement).toBe(heading());
   });
 
-  it("lands on the heading after a notice that restores its opener, too (Phase 3, Herald, tutorial)", () => {
+  it("lands on the heading after a notice that restores its opener, too (Phase 3, Herald)", () => {
     render(NOTHING);
     const control = document.querySelector<HTMLButtonElement>("[data-testid='board-control']");
     act(() => control?.focus());
@@ -403,8 +398,11 @@ describe("11-12. AUD-13.02 / OD-5(b): where focus lands, and when it does not mo
   });
 });
 
-describe("6-7. AUD-01.06 / OD-5(d): tutorials arm once per profile", () => {
-  it("does not re-arm on a zero-state remount, nor in a later game, once answered", () => {
+describe("6-7. AUD-01.06 (INTERIM): the zero-state auto-reset is gone -- not the tutorial redesign", () => {
+  /* W3-A removed design note #301's effect, which cleared every tutorial's seen flag on each zero-state mount (the
+     default scenario). That removal is kept; it is a known bad auto-reset gone, nothing more. The tutorial system and
+     its re-arm policy are the FINAL tutorial pass's (owner ruling OD-5): the existing seen flags simply stay set. */
+  it("an answered tutorial does not come back on a zero-state remount, nor when its round becomes active again", () => {
     render({ ...NOTHING, tutorialActive: true });
     expect(surfaces()).toEqual([TUTORIAL_HEADING]);
     click(/^Got it$/);
@@ -432,10 +430,16 @@ describe("noticeChainShellWiring: the shell mounts every forced notice through t
     expect(APP).toContain('round={presentedNotice === "privateRevenue" ? privatePayoutPhase : null}');
     expect(APP).toContain('open={presentedNotice === "phaseThree"}');
     expect(APP).toContain('notice={presentedNotice === "herald" ? heraldFloatNotice : null}');
-    for (const topic of ["waterfall-auction", "stock-round", "operating-round", "stock-market"]) {
-      expect(APP).toContain(`held={presentedTutorial !== "${topic}"}`);
-    }
     expect(APP).toContain("<GameScreenHeading ref={gameScreenHeadingRef} />");
+  });
+
+  it("does not put the tutorials in the chain (owner ruling OD-5; the consolidated integration's correction)", () => {
+    expect(APP).not.toContain("presentedTutorial");
+    expect(APP).not.toContain("TUTORIAL_CHAIN_ORDER");
+    expect(APP).not.toContain("handleTutorialOpenChange");
+    const modal = readStripped("components/TutorialModal.tsx");
+    expect(modal).not.toContain("onOpenChange");
+    expect(modal).not.toContain("held?: boolean");
   });
 
   it("feeds the chain the ruled due notices, an answered one never due", () => {
@@ -445,7 +449,7 @@ describe("noticeChainShellWiring: the shell mounts every forced notice through t
     expect(chain).toContain("!noticeLedger.isAcknowledged(privateRevenueNoticeKey(privatePayoutPhase.roundLabel))");
     expect(chain).toContain("!noticeLedger.isAcknowledged(PHASE_THREE_NOTICE_KEY)");
     expect(chain).toContain("!noticeLedger.isAcknowledged(heraldFloatNoticeKey(heraldFloatNotice.companyId))");
-    expect(chain).toContain("tutorial: openTutorials.length > 0");
+    expect(chain).not.toContain("tutorial:");
   });
 
   it("review fixes: cross-tab answers drop from the fleet queue; nothing is stored before the record is known; Phase 3 is armed after the load", () => {

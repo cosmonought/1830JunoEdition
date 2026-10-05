@@ -44,7 +44,9 @@ export type RoomOp =
   | "presence"
   | "kick"
   | "transfer-host"
-  | "cancel-room";
+  | "cancel-room"
+  | "clock-pause"
+  | "clock-resume";
 
 export interface AuthzContext {
   /** `null`: no such game. */
@@ -101,6 +103,11 @@ export const AUTHZ_TABLE: Readonly<Record<RoomOp, { stages: Partial<Record<Stage
   kick: { stages: { W: R("H") }, denial: "forbidden" },
   /* #24 transfer host: the host, waiting or active (held included: it never interprets the log). */
   "transfer-host": { stages: { W: R("H"), A: R("H"), Hd: R("H") }, denial: "forbidden" },
+  /* Phase 3 lane A (AUD-11.04): pause / resume the gameplay CLOCK (never gameplay): the host, while the game is being
+     played and not held. Who may pause is an owner decision still open; the host -- the table's existing authority for
+     undo, kick and transfer -- is the conservative default, and no pause cap is applied (none is approved). */
+  "clock-pause": { stages: { A: R("H") }, denial: "forbidden" },
+  "clock-resume": { stages: { A: R("H") }, denial: "forbidden" },
 });
 
 /** The caller's role in this game, from the record alone. */

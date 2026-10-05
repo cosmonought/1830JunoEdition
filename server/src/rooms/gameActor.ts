@@ -69,6 +69,7 @@ import {
   type Hold,
 } from "./committedView";
 import { HELD_PLAYER_SENTENCE, type HoldCode } from "./lifecycle";
+import type { ClockFacts } from "./gameClock";
 
 /** E-7: tasks waiting behind the running one, per game. LIVE-2's per-game submit rate keeps this far away. */
 export const ACTOR_QUEUE_BOUND = 256;
@@ -301,6 +302,13 @@ export interface GameActorDeps {
   /** LIVE-3C: reconcile the record against the whole durable log and the replayed session, at the load. A `hold`
    *  verdict is written down (`persistHold`) and installed; no history is then served. Pure; must not throw. */
   reconcileAtLoad?(input: { readonly record: Readonly<GameRecord>; readonly entries: readonly ServerLogEntry[]; readonly session: RoomSession }): LoadVerdict;
+  /** Phase 3 lane A (AUD-11.04): what a committed board says about timing (`gameClock.ts` `clockFactsOf`), read into
+   *  every view this actor builds. Never throws (a reader that does is contained). Absent: views carry no clock facts. */
+  clockFacts?(session: RoomSession): ClockFacts | null;
+  /** Phase 3 lane A: called synchronously inside the publish that installed a view whose clock facts are new (a
+   *  committed batch, a read-back, an adoption). The clock keeper observes it; it must not throw and must not queue
+   *  gameplay. */
+  onClockFacts?(view: CommittedView): void;
   /** LIVE-3C (review): entries whose outcome was unknown were found in the store and ADOPTED (a late commit, a read-
    *  back after an uncertain write). The record's log-implied fields may lag them (a deal, GameEnd, CloseRoom that
    *  no record sync followed), so the host treats the game as unreconciled until its record has caught up. */
@@ -554,6 +562,7 @@ export class GameActor {
       explainDivergence: this.deps.explainDivergence,
       version: 1,
       ...(hold === null ? {} : { hold }),
+      clock: this.clockReader(),
     });
     this.loaded = true;
   }
@@ -980,7 +989,14 @@ export class GameActor {
       record: before.record,
       explainDivergence: this.deps.explainDivergence,
       version: before.version + 1,
+      clock: this.clockReader(),
     });
+  }
+
+  /** Phase 3 lane A: the server's clock reader for a view build, or none. */
+  private clockReader(): ((session: RoomSession) => ClockFacts | null) | null {
+    const read = this.deps.clockFacts;
+    return read === undefined ? null : (session) => read.call(this.deps, session);
   }
 
   /** Reload the game from the store and build its view -- the log wins -- provided the store still begins with
@@ -1167,6 +1183,15 @@ export class GameActor {
         delivery.after();
       } catch (error) {
         this.deps.warn(`  actor: a publish's broadcast threw for ${this.gameId} — ${describe(error)}`);
+      }
+    }
+    /* Phase 3 lane A (AUD-11.04): the clock keeper sees every view whose board facts are new -- last, after everything
+       the publish owed gameplay, and contained: the clock never delays or fails a publish. */
+    if (view.clock !== undefined && view.clock !== previous?.clock) {
+      try {
+        this.deps.onClockFacts?.(view);
+      } catch (error) {
+        this.deps.warn(`  actor: the clock hook threw for ${this.gameId} — ${describe(error)}`);
       }
     }
   }

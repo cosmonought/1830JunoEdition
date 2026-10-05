@@ -30,6 +30,7 @@ import { connectServerLink, type ServerLink } from "./utils/serverLink";
 import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
 import { useActionLatch } from "./utils/actionLatch"; // Phase 3 W3-B (AUD-25.01)
 import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
+import { GameClockChip } from "./components/GameClockChip"; // Phase 3 lane A (AUD-11.04)
 import { delayedAuctionStatus } from "./utils/delayedAuctionStatus"; // Phase 3 W3-J (AUD-25.10 (e))
 import { rollBackIfRefused, submissionRefused } from "./utils/submissionAnswer"; // Phase 3 W3-C (P3-N020)
 import {
@@ -14687,6 +14688,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
                (D-55) -- read off the shown board (`delayedAuctionStatus`), on hosted, sandbox and legacy tables alike.
                Silent outside the variant, during the auction itself (its dashboard says so) and at GameEnd. */}
             <DelayedAuctionStatusChip board={gameState} />
+            {/* Phase 3 lane A (AUD-11.04): the gameplay clock -- Live / Async, whose turn is timed, the server's figure,
+               paused / "Time expired". Presentation only: it decides nothing in the game, and a tab that is not current
+               (a connection notice standing, a board that is not the room's, a held table) shows no countdown. */}
+            {sandboxRoomCode && sandboxRoom?.clock !== undefined && (
+              <GameClockChip
+                gameId={sandboxRoomCode}
+                clock={sandboxRoom.clock}
+                players={sandboxRoom.players}
+                viewerPlayerId={localId === "" ? null : localId}
+                isHost={sandboxRoom.you.role === "host"}
+                current={roomNotices.connections.length === 0 && boardCurrency.current && sandboxRoom.holdKind === null}
+                boardSeat={liveState ? actingAddress(liveState, sandboxWaterfall ?? liveWaterfallState) : null}
+              />
+            )}
             {chatError && <span style={styles.roomStripError}>{chatError}</span>}
             {/* Design note #1083: the room's own error moved here with the room's name. It reports the same
                KIND of fact `chatError` does -- this room's connection is unhappy -- and the bar that used to

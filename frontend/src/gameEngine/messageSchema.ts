@@ -865,6 +865,8 @@ function createVariantsOk(value: unknown): boolean {
 }
 
 const isVisibility: FrameCheck = (value) => value === "public" || value === "private";
+/** A clock revision (`RoomClockView.revision`): a positive safe integer. */
+const isClockRevision: FrameCheck = (value) => Number.isSafeInteger(value) && (value as number) >= 1;
 
 /** Every room-op body, CLOSED (LIVE-2 Appendix B). No op names a record field, a host id (but `transfer-host`'s
  *  target), a seat's owner or a partial document. Transfer and reclaim are LIVE-2E's and are not here. */
@@ -897,6 +899,9 @@ const ROOM_OPS: Readonly<Record<string, FrameFields>> = nullTable<FrameFields>({
   "transfer-host": nullTable({ type: req(str(16)), toPlayerId: req(str(40, PLAYER_ID_PATTERN)) }),
   "start-game": nullTable({ type: req(str(16)) }),
   "cancel-room": nullTable({ type: req(str(16)) }),
+  /* Phase 3 lane A (AUD-11.04): the host pauses / resumes the gameplay clock, bound to the clock revision the tab saw. */
+  "clock-pause": nullTable({ type: req(str(16)), revision: req(isClockRevision) }),
+  "clock-resume": nullTable({ type: req(str(16)), revision: req(isClockRevision) }),
   /* LIVE-2F/3D (C9-01): a READ, on the lobby channel -- the caller's own tables ("Your tables"). Names no game. */
   "my-tables": nullTable({ type: req(str(16)) }),
 });

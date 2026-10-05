@@ -108,6 +108,7 @@
 import type { Server } from "http";
 
 import type { TransactWriteItem } from "@aws-sdk/client-dynamodb";
+import type { ClockPolicy, ClockStore } from "../../rooms/gameClock";
 
 import { compatibilityKey, type DeploymentCapability } from "../../../../frontend/src/gameEngine/compat/deploymentCapability";
 import type { GameIdentityFacts } from "../../../../frontend/src/gameEngine/compat/continuationIdentity";
@@ -216,6 +217,8 @@ export interface AwsGameStores {
   readonly readLogFormat: (gameId: string) => Promise<FormatFact>;
   readonly records: RecordStore;
   readonly holds: HoldStore;
+  /** Phase 3 lane A (AUD-11.04): the tables' gameplay clocks (optional: a substrate without one keeps them in memory). */
+  readonly clocks?: ClockStore;
   /** LIVE-6 L6-7: `openMoneyGameIds` -- every OPEN money game (FINKEYS -> FINIDX#, strict): what the escrow load and its
    *  chain sweep visit, instead of every money game ever made. */
   readonly financial: FinancialGameStore & OpenMoneyGames & { openMoneyGameIds(): Promise<string[]> };
@@ -321,6 +324,8 @@ export interface AwsRuntimeInput<W extends PoolWriterPort, L extends Inspectable
   readonly bindHost: string;
   /** `ESCROW_MONEY_TABLES` (as in PROCESS mode). */
   readonly moneySwitch: string | undefined;
+  /** Phase 3 lane A (AUD-11.04): the gameplay clock's per-mode durations (absent: none approved -- the clock counts up). */
+  readonly clockPolicy?: ClockPolicy;
   /** LIVE-6 L6-6: mount `/gs/diag/edge` (`GS_EDGE_DIAGNOSTIC=staging`, checked by `awsMain.ts`; never beside a mainnet
    *  escrow configuration). Absent or false: no such route. */
   readonly edgeDiagnostic?: boolean;
@@ -1127,6 +1132,9 @@ export async function startAwsRuntime<W extends PoolWriterPort, L extends Inspec
       legacyLogs: "refuse",
       onRestartRequired: (room, detail) => failFast(room, detail, "game"),
       holds: stores.holds,
+      /* Phase 3 lane A (AUD-11.04): each dealt table's gameplay clock (`GAME#<g>/CLOCK`, fenced like every game write). */
+      ...(stores.clocks !== undefined ? { clocks: stores.clocks } : {}),
+      ...(input.clockPolicy !== undefined ? { clockPolicy: input.clockPolicy } : {}),
       ops: input.ops,
       statusExtras,
       ownership,

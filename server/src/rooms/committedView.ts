@@ -32,6 +32,7 @@ import type { GameRecord } from "./gameRecord";
 import type { HoldCode } from "./lifecycle";
 import type { BuildId, ServerMessage } from "../../../frontend/src/utils/serverProtocol";
 import { fieldDigests, stateDigest } from "../../../frontend/src/gameEngine";
+import type { ClockFacts } from "./gameClock";
 
 /** `version`: #1520. `uncertain`: a store outcome not yet known (§17 class 4). `corrupt`: LIVE-3B -- the load found
  *  damage that is not a torn final batch, so no history is served until an operator repairs the file (§8.5).
@@ -67,6 +68,10 @@ export interface CommittedView {
   readonly hold: Hold | null;
   readonly incompatible: ServerMessage | null;
   readonly version: number;
+  /** Phase 3 lane A (AUD-11.04): what this committed board says about timing -- the acting seat and its turn, GameEnd,
+   *  CloseRoom (`gameClock.ts` `clockFactsOf`). Read by the clock keeper only; nothing in gameplay reads it. Absent from
+   *  a view built without the server's clock reader (tests, tools). */
+  readonly clock?: ClockFacts | null;
 }
 
 /** Freeze the committed history. Entries are already immutable by convention -- `RoomSession` never edits one
@@ -86,6 +91,8 @@ export function buildCommittedView(input: {
   hold?: Hold | null;
   explainDivergence: boolean;
   version: number;
+  /** Phase 3 lane A: the server's clock reader for this board (never throws; `null` when it cannot say). */
+  clock?: ((session: RoomSession) => ClockFacts | null) | null;
 }): CommittedView {
   const { session } = input;
   const incompatible = session.heldAnswer();
@@ -104,7 +111,18 @@ export function buildCommittedView(input: {
     hold,
     incompatible,
     version: input.version,
+    ...(input.clock ? { clock: readClock(input.clock, session) } : {}),
   });
+}
+
+/** The clock reader, contained: a reader that throws says nothing (the view -- the game's authority -- never fails for
+ *  the clock's sake). */
+function readClock(reader: (session: RoomSession) => ClockFacts | null, session: RoomSession): ClockFacts | null {
+  try {
+    return reader(session);
+  } catch {
+    return null;
+  }
 }
 
 /** LIVE-2C: the same view with a different GameRecord, for a publish that changed only the record. */

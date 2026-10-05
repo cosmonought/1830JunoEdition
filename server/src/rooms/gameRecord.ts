@@ -25,6 +25,7 @@ import { base32Lower } from "../identity/ids";
 import type { GameVariants } from "../../../frontend/src/gameEngine/gameVariants";
 import type { UndoPolicy } from "../../../frontend/src/gameEngine/logRevert";
 import type { MyTableMoneySummary, RoomMoneyView, RoomStakeSummary } from "../../../frontend/src/utils/moneyProtocol";
+import type { RoomClockView } from "../../../frontend/src/utils/clockProtocol";
 
 /* ---------------------------------------------------------------------------
     IDENTIFIERS (LIVE-2 §3.2)
@@ -411,6 +412,10 @@ export interface RoomView {
   /** ESCROW-4 (additive and optional): a real-money table's projection for THIS viewer (`frontend/src/utils/
    *  moneyProtocol.ts`). Absent for a no-money table, whose view is exactly as before. */
   money?: RoomMoneyView;
+  /** Phase 3 lane A (AUD-11.04; additive and optional): the gameplay clock, the same for every viewer
+   *  (`frontend/src/utils/clockProtocol.ts`, `clockKeeper.ts`). Absent before the deal, while the clock is being read,
+   *  and from an older server. Presentation only: nothing in the game reads it. */
+  clock?: RoomClockView;
 }
 
 export interface RoomSummary {
@@ -475,7 +480,7 @@ export function roomViewFor(
   record: GameRecord,
   facts: LogFacts,
   principalId: string,
-  context: { now: number; held: boolean; holdKind?: HoldKind; holdReason?: string | null; online: (playerId: string) => boolean; canStart: boolean; money?: RoomMoneyView | null },
+  context: { now: number; held: boolean; holdKind?: HoldKind; holdReason?: string | null; online: (playerId: string) => boolean; canStart: boolean; money?: RoomMoneyView | null; clock?: RoomClockView | null },
 ): RoomView {
   const lifecycle = effectiveStatus(record, facts, context.now);
   const seat = seatOf(record, principalId);
@@ -509,6 +514,7 @@ export function roomViewFor(
     undoPolicy: { host_undo: record.policy.host_undo },
     you: { role, playerId: seat?.player_id ?? null, kicked: isKicked(record, principalId), canStart: host && context.canStart },
     ...(record.money !== null && context.money != null ? { money: context.money } : {}),
+    ...(context.clock != null ? { clock: context.clock } : {}),
   };
 }
 

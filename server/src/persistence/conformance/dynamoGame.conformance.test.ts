@@ -37,6 +37,9 @@ import { createDynamoHoldStore } from "../../aws/game/dynamoHoldStore";
 import { createDynamoFinancialStore, financialIdentityKey } from "../../aws/game/dynamoFinancialStore";
 import { createDynamoIntentStore } from "../../aws/game/dynamoIntentStore";
 import { createDynamoTicketStore } from "../../aws/game/dynamoTicketStore";
+import { createDynamoClockStore } from "../../aws/game/dynamoClockStore";
+import { CLOCK_FORMAT } from "../../rooms/gameClock";
+import { CLOCK_CASES, type ClockSubject } from "./clockStore.conformance";
 import type { ResendTiming } from "../../aws/game/transact";
 import { createFileLogStore } from "../../fileLogStore";
 import { CHAIN_INTENT_FORMAT, confirmedIntent, heldIntent } from "../../escrow/chainIntents";
@@ -464,7 +467,40 @@ runConformance("GameRecord", [dynamoRecordSubject], RECORD_CASES);
 runConformance("hold", [dynamoHoldSubject], HOLD_CASES);
 runConformance("financial record", [dynamoFinancialSubject], FINANCIAL_CASES);
 runConformance("chain intent", [dynamoIntentSubject], INTENT_CASES);
+/* ---- Phase 3 lane A (AUD-11.04): the gameplay clock ---- */
+
+const clockHooks = faultHooks((_ctx, game) => names(gamePk(game), "CLOCK"));
+
+const dynamoClockSubject: ClockSubject = {
+  name: "dynamodb (createDynamoClockStore)",
+  backend: "dynamodb",
+  capabilities: [...DYNAMO_CAPABILITIES, "validates-shape"],
+  async open(ctx) {
+    const epoch = ctx.fence.epoch;
+    const store = createDynamoClockStore(await options(ctx));
+    return {
+      ...store,
+      async save(record, expected) {
+        await claimedForCurrent(ctx, epoch, record.game_id);
+        return store.save(record, expected);
+      },
+    };
+  },
+  async stored(ctx, game) {
+    return body(ctx, gamePk(game), "CLOCK");
+  },
+  async plant(ctx, game, what) {
+    if (what === "corrupt") {
+      await putRaw(ctx, { pk: S(gamePk(game)), sk: S("CLOCK"), body: S(`{"format":"${CLOCK_FORMAT}",`) });
+      return;
+    }
+    await putRaw(ctx, { pk: S(gamePk(game)), sk: S("CLOCK"), body: S(JSON.stringify({ format: CLOCK_FORMAT, version: 99, game_id: game })), revision: N(1) });
+  },
+  ...clockHooks,
+};
+
 runConformance("wallet ticket", [dynamoTicketSubject], TICKET_CASES);
+runConformance("clock", [dynamoClockSubject], CLOCK_CASES);
 
 /* ================================================================== */
 /*  2-3. What only a DynamoDB adapter can be asked                     */

@@ -67,6 +67,8 @@ import { GAME_ID_PATTERN, seatOf, type GameRecord } from "./rooms/gameRecord";
 /* LIVE-3C: restore, reconciliation, durable holds, the terminal seal, the operator's view. */
 import { isMaintenanceHold, type CommittedView } from "./rooms/committedView";
 import { createMemoryHoldStore, HoldUnreadableError, makeHold, type HoldStore } from "./rooms/holdStore";
+import { clockFactsOf, type ClockPolicy, type ClockStore } from "./rooms/gameClock";
+import type { ClockTimers } from "./rooms/clockKeeper";
 import { handleReadiness, type ReadinessAnswer } from "./ingress/readiness";
 import { handleEdgeDiagnostic } from "./ingress/edgeDiagnostic";
 import { admissibleAfterSeal, GAME_OVER_SENTENCE, NO_MONEY_SETTLEMENT, RECONCILING_SENTENCE, UNAVAILABLE_PLAYER_SENTENCE, type SettlementLifecycle } from "./rooms/lifecycle";
@@ -273,6 +275,15 @@ export interface GameServerOptions {
   holds?: HoldStore;
   /** LIVE-3C: the audit lines and the status snapshot (`persistence/opsRecorder.ts`). Nothing when absent. */
   ops?: OpsRecorder;
+  /** Phase 3 lane A (AUD-11.04): the tables' durable gameplay clocks (`rooms/gameClock.ts`). In memory when absent -- a
+   *  clock then lasts as long as the process; `start.ts` passes the file store, the AWS runtime the DynamoDB one. */
+  clocks?: ClockStore;
+  /** Phase 3 lane A: the per-mode turn allowances (owner-gated configuration). Absent: NO duration for either mode --
+   *  there is no owner-approved Live or Async duration; the clock counts up and never expires. */
+  clockPolicy?: ClockPolicy;
+  /** Phase 3 lane A, TESTS: the clock's time and timers (controlled time). `Date.now` / real timers when absent. */
+  clockNow?: () => number;
+  clockTimers?: ClockTimers;
   /** LIVE-3C: the terminal seam ESCROW-3 plugs into (`rooms/lifecycle.ts`). No-money when absent. */
   settlement?: SettlementLifecycle;
   /** LIVE-4 (L4-2): THIS POOL'S DEPLOYMENT CAPABILITY, built once at startup (`start.ts`: `thisDeploymentCapability` over
@@ -776,6 +787,10 @@ export function createGameServer(options: GameServerOptions): {
         onRecordPublished: (record) => roomHost?.onRecordPublished(record as GameRecord),
         /* LIVE-4 (L4-2): the actor stopped serving the game (its serving review, or a rebuild it had not published). */
         onNotServed: (gameId, source) => roomHost?.onNotServed(gameId, source),
+        /* Phase 3 lane A (AUD-11.04): what each committed board says about timing, and the clock keeper told of it
+           after each publish -- never inside gameplay's decision, never able to fail it. */
+        clockFacts: (session) => clockFactsOf({ state: session.state, entries: session.entries }, boardFacts(code, session)),
+        onClockFacts: (view) => roomHost?.onClockFacts(view),
         now: () => Date.now(),
         // eslint-disable-next-line no-console
         warn: (line) => console.warn(line),
@@ -1398,6 +1413,11 @@ export function createGameServer(options: GameServerOptions): {
     warn: (line) => console.warn(line),
     /* LIVE-3C */
     holds: holdStore,
+    /* Phase 3 lane A (AUD-11.04): the gameplay clock. */
+    ...(options.clocks !== undefined ? { clocks: options.clocks } : {}),
+    ...(options.clockPolicy !== undefined ? { clockPolicy: options.clockPolicy } : {}),
+    ...(options.clockNow !== undefined ? { clockNow: options.clockNow } : {}),
+    ...(options.clockTimers !== undefined ? { clockTimers: options.clockTimers } : {}),
     logs: {
       listGameLogs: options.store?.listGameLogs?.bind(options.store),
       /* Without a store there are no durable logs at all: every head is known to be empty. A store that cannot peek at
@@ -2177,6 +2197,7 @@ export function createGameServer(options: GameServerOptions): {
       new Promise<void>((resolve) => {
         clearInterval(keepalive);
         clearInterval(identitySweep);
+        host.clocks.close();
         games.close();
         for (const socket of contexts.keys()) socket.close(1001, "server stopping");
         try {

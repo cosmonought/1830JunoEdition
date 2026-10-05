@@ -28,6 +28,7 @@ import { SESSION_COOKIE_NAME } from "./identity/cookies";
 import { createDevAuthenticator } from "./identity/devAuthenticator";
 import { createJournalIdentityStore, type JournalIdentityStore } from "./identity/journalStore";
 import { createFileHoldStore } from "./rooms/holdStore";
+import { clockPolicyFromEnv, createFileClockStore, describeClockPolicy } from "./rooms/gameClock";
 import { createFileFinancialGameStore } from "./escrow/financialGameStore";
 import type { FinancialGameRecord } from "./escrow/moneyLifecycle";
 import { dealIdentityOnDisk, logFormatOnDisk } from "./escrow/dealIdentity";
@@ -116,6 +117,20 @@ if (!storage.ok) {
   process.exit(2);
 }
 
+/* ==================================================================
+    PHASE 3 LANE A (AUD-11.04): THE GAMEPLAY CLOCK'S DURATIONS -- OWNER-GATED, UNSET BY DEFAULT
+   ==================================================================
+   `GS_CLOCK_LIVE_TURN_SECONDS` / `GS_CLOCK_ASYNC_TURN_SECONDS`: whole seconds per turn for each mode. Absent (the
+   shipped default): NO duration -- there is no owner-approved Live or Async value, so the clock counts each turn up and
+   never expires. An unreadable value is exit 2, never a guess. Expiry has no automatic consequence either way. Read here
+   for both storage modes (the AWS start is handed the same answer). */
+const clockPolicy = clockPolicyFromEnv(process.env);
+if (!clockPolicy.ok) {
+  // eslint-disable-next-line no-console
+  console.error(`Refusing to start: ${clockPolicy.reason}`);
+  process.exit(2);
+}
+
 /** #1250: where the rooms live between restarts. A directory beside the server by default, so `cat` is the
  *  whole of the tooling needed to read a game back; `--data <dir>` or `DATA_DIR` to put it elsewhere. */
 const dataDir = path.resolve(process.env.DATA_DIR ?? flagValue("--data") ?? path.join(process.cwd(), "data"));
@@ -151,7 +166,7 @@ async function main(): Promise<void> {
   if (storage.ok && storage.kind === "aws") {
     /* Loaded only here: PROCESS mode never loads any AWS code. */
     const { runAwsStorageMode } = await import("./aws/runtime/awsMain");
-    await runAwsStorageMode({ argv: flags, env: process.env, server: config, build, port });
+    await runAwsStorageMode({ argv: flags, env: process.env, server: config, build, port, clockPolicy: clockPolicy.ok ? clockPolicy.policy : undefined });
     return;
   }
   const acquired = await acquireDataLock(dataDir, {
@@ -425,6 +440,10 @@ async function main(): Promise<void> {
     /* LIVE-3C: durable holds (`games/holds/`), found by discovery or a load and lifted only by an operator's verified
        release (`npm run gamesDoctor -- release`); the audit lines and the status snapshot (`ops/`). */
     holds: createFileHoldStore(dataDir, { writerCheck: () => held.verify() }),
+    /* Phase 3 lane A (AUD-11.04): each dealt table's gameplay clock (`games/clocks/<game_id>.json`), control-plane only:
+       read back at every load, so a restart, a reload or a reconnect never resets a turn's clock. */
+    clocks: createFileClockStore(dataDir, { writerCheck: () => held.verify() }),
+    ...(clockPolicy.ok ? { clockPolicy: clockPolicy.policy } : {}),
     ops,
     statusExtras: () => {
       const health = identityStore.health();
@@ -593,6 +612,7 @@ function printBanner(instanceId: string, capability: DeploymentCapability): void
         ? "LEGACY LOGS ADMITTED (--legacy-logs development-corpus): an unpinned log replays under this engine (#1520)"
         : "an unpinned (legacy) log is held, not replayed (#1520)") +
       "\n  legacy JUNO-XXX rooms are not served (LIVE-2D); read their logs with `npm run replay` / `npm run logDoctor`\n" +
+      `  ${describeClockPolicy(clockPolicy.ok ? clockPolicy.policy : { live: { turnAllowanceMs: null }, async: { turnAllowanceMs: null } })}\n` +
       bannerLines(compatibilityDescriptor(capability, { build_id: build })).join("\n"),
   );
 }

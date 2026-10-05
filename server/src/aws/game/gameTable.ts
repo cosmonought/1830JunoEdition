@@ -21,6 +21,7 @@
 //   GAME#<g>                   FIN                              the financial record (body), record_version
 //   GAME#<g>                   TICKETS                          the wallet-ticket ledger (body = the file store's envelope), version
 //   GAME#<g>                   INTENT#<intent_id>               one chain intent (body), record_version
+//   GAME#<g>                   CLOCK                            Phase 3 lane A: the gameplay clock (body), revision
 //   POOL#<pool>                POOL                             writer_epoch, writer_task, taken_at (the pool's newest task)
 //   JOIN#<code>                JOIN                             game_id (a hint: the record decides)
 //   DIR#<yyyymm>               <created %013d>#<g>              game_id, pool, money (the game directory; written at record creation)
@@ -77,6 +78,8 @@ export const META_SK = "META";
 export const HOLD_SK = "HOLD";
 export const FIN_SK = "FIN";
 export const TICKETS_SK = "TICKETS";
+/** Phase 3 lane A (AUD-11.04): a table's gameplay clock (`dynamoClockStore.ts`; control-plane, never gameplay). */
+export const CLOCK_SK = "CLOCK";
 export const LOG_PREFIX = "LOG#";
 export const CHAT_PREFIX = "CHAT#";
 export const HOLDREL_PREFIX = "HOLDREL#";

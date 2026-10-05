@@ -67,6 +67,8 @@ import {
   type MyTableSummary,
 } from "./gameRecord";
 import { createMemoryHoldStore, type HoldStore } from "./holdStore";
+import { createClockKeeper, type ClockTimers } from "./clockKeeper";
+import { createMemoryClockStore, NO_APPROVED_CLOCK_POLICY, type ClockPolicy, type ClockStore } from "./gameClock";
 import type { MoneyContinuationFacts } from "../escrow/moneyContinuation";
 import type { ContinuationWiring } from "../continuationWiring";
 import { disabledMoneyView, disabledStake, type MoneyRoomPort, type MoneyTables } from "../escrow/moneyTables";
@@ -192,6 +194,15 @@ export interface RoomHostDeps {
    *  route, when there is one to answer (true: answered -- the route frame, or the read authorization's refusal).
    *  False, or absent: the answer is exactly as before (`unavailableFor`). */
   answerRouted?: (socket: WebSocket, gameId: string, routed: GameRoutedError) => Promise<boolean>;
+  /** Phase 3 lane A (AUD-11.04): the tables' durable clocks (in memory when absent -- a clock then lasts as long as the
+   *  process). */
+  clocks?: ClockStore;
+  /** Phase 3 lane A: the per-mode turn allowances. `NO_APPROVED_CLOCK_POLICY` when absent: no duration, the clock counts
+   *  up and never expires (there is no owner-approved Live or Async duration). */
+  clockPolicy?: ClockPolicy;
+  /** Phase 3 lane A: the clock's time (`Date.now` when absent) and timers -- tests control both. */
+  clockNow?: () => number;
+  clockTimers?: ClockTimers;
 }
 
 /** The board's own end and close, read off a session. */
@@ -311,6 +322,8 @@ export function createRoomHost(deps: RoomHostDeps) {
   const joinFailIp = new IpBuckets(rooms.joinFailuresPerIp, now, factor, keys);
   const joinFailGlobal = new KeyedBuckets(rooms.joinFailuresGlobal, now, 1);
   const membership = new KeyedBuckets(rooms.membershipOpsPerPrincipal, now, keys);
+  /* Phase 3 lane A: the host's clock pause / resume -- each one a durable write -- budgeted like a membership op. */
+  const clockOps = new KeyedBuckets(rooms.membershipOpsPerPrincipal, now, keys);
   const submitsSeat = new KeyedBuckets(rooms.submitsPerSeat, now, keys);
   const submitsGame = new KeyedBuckets(rooms.submitsPerGame, now, keys);
   const chatSeat = new KeyedBuckets(rooms.chatPerSeat, now, keys);
@@ -341,6 +354,21 @@ export function createRoomHost(deps: RoomHostDeps) {
   };
   const holds = deps.holds ?? createMemoryHoldStore();
   const ops = deps.ops ?? NO_OPS;
+  /* Phase 3 lane A (AUD-11.04): the gameplay clock. It is told about committed boards after the fact and answers with
+     its own record and a view; it never queues gameplay, and a failing clock store never costs a move. */
+  const clocks = createClockKeeper({
+    store: deps.clocks ?? createMemoryClockStore(),
+    policy: deps.clockPolicy ?? NO_APPROVED_CLOCK_POLICY,
+    now: deps.clockNow ?? (() => Date.now()),
+    ops,
+    warn: (line) => deps.warn(line),
+    onChange: (gameId) => broadcastView(gameId),
+    serving: (gameId) => {
+      const game = peekLoaded(gameId);
+      return game !== undefined && !game.fenced;
+    },
+    ...(deps.clockTimers !== undefined ? { timers: deps.clockTimers } : {}),
+  });
   const settlement = deps.settlement ?? NO_MONEY_SETTLEMENT;
   /** LIVE-4 (L4-2): what the view says about the game -- the session's verdict decided it; no build is compared. */
   const kindOf = (view: CommittedView): HoldKind => holdKindOf(view);
@@ -530,6 +558,9 @@ export function createRoomHost(deps: RoomHostDeps) {
     }
     const record = view.record;
     if (record === null) return;
+    /* Phase 3 lane A: the table's clock is read back at every load (a restart, a reload after eviction): the same turn
+       keeps its start, pause and paused total. A held view is read, never timed or written. */
+    void clocks.load(game.gameId, { mode: resolveVariants(record.variants).mode, facts: view.clock ?? null, held: view.hold !== null || view.incompatible !== null });
     if (isMaintenanceHold(view.hold) || view.incompatible !== null || view.hold?.reason === "version") {
       settle(game.gameId, classOfView(game.gameId, view));
       return;
@@ -677,6 +708,8 @@ export function createRoomHost(deps: RoomHostDeps) {
         /* ESCROW-4: a real-money table starts from the chain's funding (the money view says when; never `ready`). */
         canStart: record.money === null ? !facts.dealt && waitingBlock(record) === null && view.hold === null : !facts.dealt && view.hold === null && money?.start.canStart === true,
         money,
+        /* Phase 3 lane A (AUD-11.04): the gameplay clock, the same for every viewer; shown as held while the table is. */
+        clock: clocks.viewOf(record.game_id, { mode: resolveVariants(record.variants).mode, held: view.hold !== null || view.incompatible !== null, dealt: facts.dealt }),
       }),
     };
   }
@@ -1235,6 +1268,13 @@ export function createRoomHost(deps: RoomHostDeps) {
     }
     if (game === null) return ack(socket, requestId, { ok: false, code: "not-found", reason: "There is no such game." });
     if (type === "start-game") return ack(socket, requestId, await startGame(game, ctx.principalId));
+    if (type === "clock-pause" || type === "clock-resume") {
+      if (clockOps.take(ctx.principalId) > 0) {
+        deny("clock-ops");
+        return ack(socket, requestId, { ok: false, code: "rate-limited", reason: "Too many changes too quickly. Wait a moment." });
+      }
+      return ack(socket, requestId, await clockOp(game, ctx.principalId, type, op.revision));
+    }
     const opName = OP_NAMES[type] ?? null;
     let claimingSeat = false;
     if (type === "take-seat") {
@@ -1294,6 +1334,29 @@ export function createRoomHost(deps: RoomHostDeps) {
     } finally {
       if (claimingSeat) adjust(pendingSeats, ctx.principalId, -1);
     }
+  }
+
+  /* ---- Phase 3 lane A (AUD-11.04): the gameplay clock's pause / resume ---- */
+
+  /** The host pauses or resumes the CLOCK -- never gameplay: moves are taken exactly as before while it is paused. Bound
+   *  to the clock revision the host's tab saw (a stale tab is refused `clock-stale`), durable before acknowledged, and
+   *  re-broadcast to every viewer once it is. */
+  async function clockOp(game: GameActor, principalId: string, type: "clock-pause" | "clock-resume", revision: unknown): Promise<{ ok: true } | { ok: false; code: string; reason: string }> {
+    if (awaitingReconciliation(game)) return { ok: false, code: "unavailable", reason: UNAVAILABLE_PLAYER_SENTENCE };
+    const verdict = authorizeNow(game, principalId, type);
+    if (!verdict.ok) return { ok: false, code: verdict.code, reason: verdict.reason };
+    const view = game.view;
+    if (view.hold !== null || view.incompatible !== null) return { ok: false, code: "wrong-state", reason: "This table is held; its clock cannot change now." };
+    const playerId = view.record === null ? null : (seatOf(view.record, principalId)?.player_id ?? null);
+    if (playerId === null || typeof revision !== "number") return { ok: false, code: "bad-frame", reason: "That is not a clock operation." };
+    return type === "clock-pause" ? clocks.pause(game.gameId, playerId, revision) : clocks.resume(game.gameId, playerId, revision);
+  }
+
+  /** Phase 3 lane A: a published view's board facts, for the clock (the actor's publish, synchronously). */
+  function onClockFacts(view: CommittedView): void {
+    const record = view.record;
+    if (record === null) return;
+    clocks.observe(view.gameId, view.clock ?? null, view.hold !== null || view.incompatible !== null, resolveVariants(record.variants).mode);
   }
 
   /* ---- start (§8) ---- */
@@ -2014,6 +2077,8 @@ export function createRoomHost(deps: RoomHostDeps) {
               index: report.index === null ? null : { rebuilt: report.index.rebuilt, added: report.index.added, repointed: report.index.repointed, orphans: report.index.orphans },
             },
       rooms: { ...counters },
+      /* Phase 3 lane A (AUD-11.04): the clock's instrumentation, for the Phase-4 playtest. */
+      clocks: { resident: clocks.size(), ...clocks.counters },
       ...(deps.statusExtras ? deps.statusExtras() : {}),
     });
   }
@@ -2021,12 +2086,14 @@ export function createRoomHost(deps: RoomHostDeps) {
   function prune(): void {
     sweepExpired();
     sweepArchive();
+    /* Phase 3 lane A: the clocks of games no longer resident here are dropped (their records stay in the store). */
+    clocks.sweep();
     /* LIVE-4 (L4-2): the serving review (a no-op on a primary pool). */
     void reviewServing().catch((error) => deps.warn(`  serving: the review failed -- ${error instanceof Error ? error.message : String(error)}`));
     publishStatus();
     for (const gameId of [...chats.keys()]) if (!viewSubs.has(gameId)) chats.delete(gameId);
     for (const gameId of [...presence.keys()]) if (!viewSubs.has(gameId)) presence.delete(gameId);
-    for (const buckets of [createsPrincipal, createsGlobal, joinFailPrincipal, joinFailGlobal, membership, submitsSeat, submitsGame, chatSeat, rotations]) buckets.prune();
+    for (const buckets of [createsPrincipal, createsGlobal, joinFailPrincipal, joinFailGlobal, membership, clockOps, submitsSeat, submitsGame, chatSeat, rotations]) buckets.prune();
     createsIp.prune();
     joinFailIp.prune();
     const cutoff = now();
@@ -2150,6 +2217,9 @@ export function createRoomHost(deps: RoomHostDeps) {
     viewGameOf: (socket: WebSocket) => viewGameOf.get(socket),
     unknownGameCount: () => unknownGames.size,
     recordIndexSize: () => recordIndex.size,
+    /* Phase 3 lane A (AUD-11.04) */
+    onClockFacts,
+    clocks,
     /* LIVE-3C */
     onActorLoaded,
     onStoreAdopted,

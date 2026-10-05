@@ -429,6 +429,9 @@ const ORACLE: Record<RoomOp, Partial<Record<Stage, string>>> = {
   presence: { W: "SH", A: "SH" },
   kick: { W: "H" },
   "transfer-host": { W: "H", A: "H", Hd: "H" },
+  /* Phase 3 lane A (AUD-11.04): the gameplay clock's pause / resume -- the host, while the game is played and not held. */
+  "clock-pause": { A: "H" },
+  "clock-resume": { A: "H" },
 };
 
 function expected(op: RoomOp, role: Role, stage: Stage): string {

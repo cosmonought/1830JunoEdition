@@ -38,6 +38,7 @@ import { ssmParameterSource, type ParameterSource } from "./configSource";
 import { createConsoleOpsRecorder } from "./consoleOps";
 import { createEmfSink, METRICS_PROFILE_ENV, metricsProfileSwitch } from "./runtimeMetrics";
 import { awsStartupReferences, checkEscrowConfigForAws, parseAwsRuntimeConfigText, type AwsRuntimeConfig } from "./runtimeConfig";
+import { describeClockPolicy, NO_APPROVED_CLOCK_POLICY, type ClockPolicy } from "../../rooms/gameClock";
 
 /** Where an AWS task listens: its own interface (awsvpc -- the task's ENI, which only the load balancer's security group
  *  reaches; L5-8). PROCESS mode keeps loopback (`GAME_SERVER_BIND_HOST`). */
@@ -98,7 +99,15 @@ export async function loadAwsStartup(input: {
 export const newTaskId = (): string => `t-${randomBytes(8).toString("hex")}`;
 
 /** `start.ts`, with `GS_STORAGE=aws`. Never returns normally before the process exits on a signal. */
-export async function runAwsStorageMode(input: { readonly argv: readonly string[]; readonly env: NodeJS.ProcessEnv; readonly server: ServerConfig; readonly build: string; readonly port: number }): Promise<void> {
+export async function runAwsStorageMode(input: {
+  readonly argv: readonly string[];
+  readonly env: NodeJS.ProcessEnv;
+  readonly server: ServerConfig;
+  readonly build: string;
+  readonly port: number;
+  /** Phase 3 lane A (AUD-11.04): the gameplay clock's per-mode durations, read by `start.ts` (absent: none approved). */
+  readonly clockPolicy?: ClockPolicy;
+}): Promise<void> {
   /* eslint-disable no-console */
   let exited = false;
   const exit = (code: number) => {
@@ -184,6 +193,7 @@ export async function runAwsStorageMode(input: { readonly argv: readonly string[
       bindHost: AWS_BIND_HOST,
       moneySwitch: input.env.ESCROW_MONEY_TABLES ?? flagValue(input.argv, "--money-tables"),
       edgeDiagnostic: edge.enabled,
+      ...(input.clockPolicy !== undefined ? { clockPolicy: input.clockPolicy } : {}),
       task,
       substrate: realAwsSubstrate({ config, clients: createAwsClients(config) }),
       ops,
@@ -214,7 +224,7 @@ function flagValue(argv: readonly string[], name: string): string | undefined {
   return at >= 0 ? argv[at + 1] : undefined;
 }
 
-function printAwsBanner(runtime: AwsRuntime, config: AwsRuntimeConfig, input: { readonly server: ServerConfig; readonly build: string; readonly port: number }): void {
+function printAwsBanner(runtime: AwsRuntime, config: AwsRuntimeConfig, input: { readonly server: ServerConfig; readonly build: string; readonly port: number; readonly clockPolicy?: ClockPolicy }): void {
   const lines = [
     `1830 game server listening on ws://${AWS_BIND_HOST}:${input.port} (build "${input.build}", GS_MODE=${input.server.mode}, GS_STORAGE=aws, ${runtime.role.toUpperCase()})`,
     `  PRODUCTION IDENTITY: the session cookie, bootstrapped at POST /gs/api/session; trusted proxy hops ${input.server.trustedProxyHops}; allowed origins ${input.server.allowedOrigins.join(", ")}`,
@@ -226,6 +236,7 @@ function printAwsBanner(runtime: AwsRuntime, config: AwsRuntimeConfig, input: { 
       ? `  routes: none (${config.format}): a game this task does not serve is answered unavailable, as before`
       : `  routes (${config.format}): ${Object.entries(config.routes).map(([pool, entry]) => `${pool} -> ${entry.wsPath}${entry.bundlePath !== undefined ? ` (bundle ${entry.bundlePath})` : ""}`).join(", ")}; the load balancer must send each ws_path to its pool; a routing flip restarts a task into its new role (exit 5)`,
     `  rules engine version ${RULES_ENGINE_VERSION} (supports [${SUPPORTED_RULES_ENGINE_VERSIONS.join(", ")}]); an unpinned (legacy) log is held, not replayed (#1520)`,
+    `  ${describeClockPolicy(input.clockPolicy ?? NO_APPROVED_CLOCK_POLICY)}`,
   ];
   if (runtime.server !== null) lines.push(...bannerLines(compatibilityDescriptor(runtime.server.lifecycle.capability, { build_id: input.build })));
   // eslint-disable-next-line no-console

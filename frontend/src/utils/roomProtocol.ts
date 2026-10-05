@@ -24,6 +24,7 @@ import type { GameVariants } from "../gameEngine/gameVariants";
 import type { UndoPolicy } from "../gameEngine/logRevert";
 import { GAME_ID_PATTERN } from "../gameEngine/messageSchema";
 import type { MyTableMoneySummary, RoomMoneyView, RoomStakeSummary } from "./moneyProtocol";
+import type { RoomClockView } from "./clockProtocol";
 import type { PresenceState } from "./presence";
 
 export type RoomRole = "host" | "player" | "member" | "viewer";
@@ -82,6 +83,9 @@ export interface RoomView {
   /** ESCROW-4 (additive, optional): a real-money table's projection for this viewer (`moneyProtocol.ts`). Absent for a
    *  no-money table (and from any server that has no money layer). */
   money?: RoomMoneyView;
+  /** Phase 3 lane A (AUD-11.04; additive, optional): the gameplay clock (`clockProtocol.ts`). Absent before the deal,
+   *  while the server reads the clock, and from an older server. Presentation only. */
+  clock?: RoomClockView;
 }
 
 /** A public list entry: names yes, ids no (beyond gameId and code). */
@@ -208,6 +212,10 @@ export type RoomOpBody =
   | { type: "transfer-host"; toPlayerId: string }
   | { type: "start-game" }
   | { type: "cancel-room" }
+  /** Phase 3 lane A (AUD-11.04): the host pauses / resumes the gameplay clock (never gameplay itself), bound to the
+   *  clock revision this tab saw (`RoomClockView.revision`); a stale tab is refused `clock-stale`. */
+  | { type: "clock-pause"; revision: number }
+  | { type: "clock-resume"; revision: number }
   /** LIVE-2F/3D (C9-01): a read -- the caller's own tables, answered `{tables: MyTableSummary[]}`. */
   | { type: "my-tables" };
 

@@ -30,6 +30,7 @@ import { GAME_ID_PATTERN } from "../../rooms/gameRecord";
 import { createDynamoDbClient, createKmsClient } from "../awsClients";
 import { createDynamoFinancialStore } from "../game/dynamoFinancialStore";
 import { createDynamoHoldStore } from "../game/dynamoHoldStore";
+import { createDynamoClockStore } from "../game/dynamoClockStore";
 import { createDynamoIntentStore } from "../game/dynamoIntentStore";
 import { createDynamoLogStore } from "../game/dynamoLogStore";
 import { createDynamoRecordStore } from "../game/dynamoRecordStore";
@@ -135,6 +136,7 @@ export function realAwsSubstrate(options: AwsSubstrateOptions): AwsSubstrate<Poo
         },
         records: createDynamoRecordStore(base),
         holds: createDynamoHoldStore(base),
+        clocks: createDynamoClockStore(base),
         financial: createDynamoFinancialStore(base),
         tickets: createDynamoTicketStore(base),
         intents: relayQueue === null ? null : createDynamoIntentStore({ ...base, relayQueue }),

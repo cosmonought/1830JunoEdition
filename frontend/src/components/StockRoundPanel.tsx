@@ -2206,7 +2206,13 @@ function CorporationRoster({
           return (
             <div
               key={company.company_id}
-              ref={floatFocusedHere ? floatCardRef : undefined}
+              /* W3-H (found answering VF E-5): THE REF FOLLOWS THE SEQUENCE, NOT THE MEASUREMENT. It was attached
+                 only once `floatFocusedHere` was true -- but in full motion that needs `floatTarget`, which
+                 `useFloatCardTarget` can only produce by measuring THIS ref. The cycle never started: every
+                 full-motion float rendered the plain card, silently (real-browser trace, 115 frames, no lift).
+                 The card the sequence names is the card to measure; A-3's fallback is unchanged, because a
+                 measurement that fails still returns `null` and `floatFocusedHere` still waits for it. */
+              ref={floatSequence !== null && floatSequence.companyId === committed.company_id ? floatCardRef : undefined}
               /* W3-H: how the launch gates above find this card to ask whether anyone can see it. */
               data-stock-card={company.company_id}
               className="app-stock-card"

@@ -494,11 +494,16 @@ const REGISTRY: CallSiteEntry[] = [
     key: "closeRoom :: CloseRoom",
     verdict: "exempt",
     why:
-      "Post-game and idempotent by rule: any seat may close a finished room and the reducer takes the first CloseRoom, " +
-      "refusing every later one as a no-op (#899) -- a duplicate cannot change the game. The auto-close timer sends it once " +
-      "per seat by design (LIVE-2 §9.3). The press itself takes the latch since P3-N021 (`automatic`, not `derived`), and " +
-      "the bar's Close Room reads sessionReady with every contextual button.",
-    evidence: [{ file: "shell", text: 'void runGameplayActionRef.current?.("closing the room", { CloseRoom: {} }, { automatic: true });' }],
+      "Post-game and idempotent by rule (#899): any seat may close a finished room, the first CloseRoom closes it, and a " +
+      "later one changes nothing (at most an unchanged no-op entry) -- a duplicate cannot change the game. Its live doors " +
+      "are the GameOver modal's Close Room (`onCloseRoom={roomClosed ? null : () => closeRoom(\"manual\")}`, which reads " +
+      "no latch) and the auto-close timer, which fires once per seat by design (LIVE-2 §9.3; the remaining time clamps at " +
+      "0). At GameEnd the action bar is replaced by the game-over strip. The press itself takes the latch since P3-N021 " +
+      "(`automatic`, not `derived`).",
+    evidence: [
+      { file: "shell", text: 'void runGameplayActionRef.current?.("closing the room", { CloseRoom: {} }, { automatic: true });' },
+      { file: "shell", text: 'onCloseRoom={roomClosed ? null : () => closeRoom("manual")}' },
+    ],
   },
   {
     key: "handleProceedToStockRound :: OpenStockRound",
@@ -532,8 +537,10 @@ const REGISTRY: CallSiteEntry[] = [
     count: 3,
     verdict: "exempt",
     why:
-      "A follow-on dispatch from INSIDE the apply half (RED R2) of a landed RunMultipleRoutes, on a legacy unpinned board " +
-      "only (`!signPinned`) -- no control reaches it, and it runs once per applied run. Silent in the log (#1375).",
+      "A follow-on dispatch from INSIDE the apply half (RED R2) of an applied RunMultipleRoutes, on a legacy unpinned " +
+      "board only (`!signPinned`; unreachable on a pinned table) -- no control reaches it. In a room it runs inside the " +
+      "drain, where W3-J's catching-up gate refuses it before the latch line; with no room (local play) it applies at " +
+      "once and takes no latch. Silent in the log (#1375).",
     evidence: [{ file: "shell", text: "if (!signPinned) {" }],
   },
   {
@@ -812,6 +819,8 @@ interface CallSite {
   key: string;
 }
 function calleeName(expression: import("typescript").Expression): string | null {
+  // W3-B review: `runGameplayActionRef.current!(...)` and `(runGameplayAction)(...)` are the same call.
+  if (ts.isNonNullExpression(expression) || ts.isParenthesizedExpression(expression)) return calleeName(expression.expression);
   if (ts.isIdentifier(expression)) return expression.text;
   if (ts.isPropertyAccessExpression(expression)) {
     const left = calleeName(expression.expression);
@@ -935,6 +944,66 @@ describe("AUD-14.06: every `runGameplayAction` call site is latched or exempt wi
   });
 });
 
+/* W3-B review: THE DOORS ARE COUNTED TOO. The registry classifies call SITES; a new button wired to an already-latched
+   handler would add a door without adding a site. Every handler (and wrapper) a latched entry rests on is pinned to its
+   reference count in the comment-stripped shell -- declaration + the doors the registry names + dependency-array and
+   wrapper uses -- so a new reference fails here until its door is checked and the count (and the entry's `why`) moved. */
+const HANDLER_REFERENCES: Readonly<Record<string, number>> = {
+  kanawhaLicenseControl: 5, closeRoom: 5, handleProceedToStockRound: 3, runPrivateExchange: 3, handlePassTurn: 6,
+  handleUndoLastAction: 2, buyOneShare: 5, handleBuyShare: 2, commitFreeStationPlacement: 3, handleConfirmBoPar: 2,
+  handleBuyDoubleCertificate: 2, handleSellShares: 2, handleRunTrains: 2, declareDividendsChoice: 7, handlePayDividends: 2,
+  handleWithholdRevenue: 2, withholdRevenueAutomatically: 3, handleBuyTrainsFromBank: 2, handleExchangeForDiesel: 2,
+  handleBuyReturnedTrain: 2, handleProposePrivatePurchase: 2, handleAcceptPrivateOffer: 2, handleRejectPrivateOffer: 2,
+  handleRescindPrivateOffer: 2, handleProposePrivateTrade: 2, handleAnswerPrivateTrade: 3, handleRescindPrivateTrade: 3,
+  handleWaterfallBuyLowest: 2, handleWaterfallBidHigher: 2, handleWaterfallPass: 2, handleWaterfallMiniAuctionRaise: 2,
+  handleWaterfallMiniAuctionPass: 2, handleConfirmTokenPlacement: 2, skipSubPhase: 5, handleSkipSubPhase: 2,
+  skipSubPhaseAutomatically: 3, endTurnAutomatically: 3, handleEndOperatingTurn: 2, handleMakeTrainOffer: 4,
+  handleProposeTrainTrade: 3, handleAnswerFundingPrivateOffer: 3, handleDiscardTrain: 2, handleAcceptSandboxTrainOffer: 2,
+  handleRejectSandboxTrainOffer: 2, handleRescindSandboxTrainOffer: 2, handleSandboxLayTile: 3, handleConfirmRadialLay: 2,
+  handlePowerFlowAct: 2,
+};
+
+describe("AUD-14.06: the dispatch is only ever CALLED, and no door is added unseen", () => {
+  it("`runGameplayAction` / `runGameplayActionRef.current` appear only as a callee, in a dependency list, or in their own wiring", () => {
+    const strays: string[] = [];
+    for (const file of shellFiles()) {
+      const source = readSource(file);
+      const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+      const visit = (node: import("typescript").Node) => {
+        const isDispatch =
+          (ts.isIdentifier(node) && node.text === "runGameplayAction") ||
+          (ts.isPropertyAccessExpression(node) && calleeName(node) === "runGameplayActionRef.current");
+        if (isDispatch && !(ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node && ts.isIdentifier(node))) {
+          let up: import("typescript").Node = node.parent;
+          while (ts.isNonNullExpression(up) || ts.isParenthesizedExpression(up)) up = up.parent;
+          const asCallee = ts.isCallExpression(up) && calleeName(up.expression) !== null && up.expression.getStart(sf) === node.getStart(sf);
+          const inDeps = ts.isArrayLiteralExpression(up);
+          const ownDeclaration = ts.isVariableDeclaration(up) && up.name === node;
+          const refWiring =
+            ts.isBinaryExpression(up) &&
+            up.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+            up.getText(sf).replace(/\s+/g, " ") === "runGameplayActionRef.current = runGameplayAction";
+          if (!asCallee && !inDeps && !ownDeclaration && !refWiring) {
+            strays.push(`${file}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1} ${up.getText(sf).slice(0, 80)}`);
+          }
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(sf);
+    }
+    expect(strays).toEqual([]);
+  });
+
+  it("every handler a latched entry rests on has exactly the references its doors account for", () => {
+    const shell = readShell();
+    const drift = Object.entries(HANDLER_REFERENCES)
+      .map(([name, expected]) => [name, expected, (shell.match(new RegExp(`\\b${name}\\b`, "g")) ?? []).length] as const)
+      .filter(([, expected, found]) => expected !== found)
+      .map(([name, expected, found]) => `${name}: pinned ${expected}, shell ${found}`);
+    expect(drift).toEqual([]);
+  });
+});
+
 /* ================================================================================================================ */
 /*  P3-N021: THE AUTOMATIC PRESSES TAKE THE LATCH (RED R1)                                                             */
 /* ================================================================================================================ */
@@ -975,7 +1044,8 @@ describe("P3-N021: an `automatic` press is serialised with every other press", (
     act(() => shell().press(SKIP));
     link.land("n1", 0); // the link has let go of the Skip; the drain has not applied it
     expect(busy()).toBe(true);
-    // The Skip's own local step change fires the auto-skip / forced withhold: `derived`, not sent on the server path.
+    // An auto-skip / forced withhold fires while the Skip is still held (an earlier entry drained and moved the step):
+    // `derived`, not sent on the server path.
     act(() => shell().press(WITHHOLD, { automatic: true, derived: true }));
     expect(busy()).toBe(true); // before P3-N021 this set the latch to null: the controls re-armed on a stale board
     expect(link.kinds()).toEqual(["AdvanceOperatingSubPhase"]);
@@ -1292,6 +1362,58 @@ describe("AUD-14.06 / P3-N021: Undo", () => {
     expect(undo().disabled).toBe(true);
     click(undo());
     expect(link.kinds()).toEqual(["RevertTo"]);
+  });
+});
+
+describe("P3-N021 through the surfaces: an automatic press holds them in the window between LANDING and the DRAIN", () => {
+  /* W3-B review: with the link down, the link's own hold keeps every control busy whether or not the press latched. The
+     window that only the latch covers is after the link lets go (`applied`) and before the drain applies the entry --
+     #1173's one round trip. Before P3-N021 an `automatic` press took no latch, so each surface below re-armed in it. */
+  const probe = (shell: ShellApi) => (
+    <button type="button" data-testid="probe" disabled={shell.actionInFlight} onClick={noop}>
+      probe
+    </button>
+  );
+  type Case = [string, (shell: ShellApi) => React.ReactNode, () => void, () => void, () => boolean, string];
+  const cases: Case[] = [
+    ["Proceed (OpenStockRound)", (shell) => <AuctionHarness shell={shell} par={false} />, () => click(byTestId("auction-proceed")), noop,
+      () => must(byTestId("auction-proceed"), "Proceed").disabled, "OpenStockRound"],
+    ["the M&H exchange (ExchangePrivate)", (shell) => <PowerFlowHarness shell={shell} />, () => click(byTestId("power-flow-act-exchange-ipo")),
+      () => click(byTestId("open-flow")), () => must(byTestId("power-flow-act-exchange-ipo"), "IPO act").disabled, "ExchangePrivate"],
+    ["a free home station (PlaceHomeStation)", (shell) => <TokenHarness shell={shell} free />, () => click(tokenTick()),
+      () => click(byTestId("stage-token")), () => tokenTick().disabled, "PlaceHomeStation"],
+    ["the B&O par (SetBoPar)",
+      (shell) => <button type="button" data-testid="par" onClick={() => shell.press(SET_PAR, { automatic: true })}>par</button>,
+      () => click(byTestId("par")), noop, () => must(byTestId("probe"), "probe").disabled, "SetBoPar"],
+    ["Undo (RevertTo)", (shell) => <ContextualActionBar {...barProps(shell, "StockRound", "Track")} />,
+      () => click(buttonNamed(/^Undo Last Action/)), noop, () => buttonNamed(/^Undo Last Action/).disabled, "RevertTo"],
+  ];
+
+  it.each(cases)("%s: its surface and every other control stay greyed until the drain applies it", (_name, surface, press, reopen, greyed, kind) => {
+    const link = liveRoom();
+    act(() =>
+      root.render(
+        <Shell link={link}>
+          {(shell) => (
+            <>
+              {surface(shell)}
+              {probe(shell)}
+            </>
+          )}
+        </Shell>,
+      ),
+    );
+    expect(greyed()).toBe(false);
+    press();
+    reopen(); // what the press closed (the modal, the ring), as a player would
+    link.land("n1", 0);
+    expect(link.client.queue.unsettled).toBe(0); // the link has let go: only the latch covers this window
+    expect(link.kinds()).toEqual([kind]);
+    expect(greyed()).toBe(true);
+    expect(must(byTestId("probe"), "probe").disabled).toBe(true);
+    act(() => link.drain());
+    expect(greyed()).toBe(false);
+    expect(must(byTestId("probe"), "probe").disabled).toBe(false);
   });
 });
 

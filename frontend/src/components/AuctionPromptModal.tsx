@@ -316,7 +316,9 @@ export function AuctionPromptModal({
                   : (inFlightReason ?? undefined)
               }
             >
-              {confirmHeld
+              {/* W3-B review: "Sending…" names THIS card's own send (or the link's hold); a different press in flight only
+                  greys the button, with its own sentence in the title. */}
+              {ownHold
                 ? "Sending…"
                 : <>Take the President&rsquo;s Certificate at ${selected}</>}
             </button>
@@ -326,7 +328,7 @@ export function AuctionPromptModal({
                 {LINK_QUEUED_NOTE}
               </span>
             )}
-            {!confirmHeld && notLanded && (
+            {!ownHold && notLanded && (
               <span style={styles.waiting} role="status">
                 {PAR_NOT_LANDED_NOTE}
               </span>

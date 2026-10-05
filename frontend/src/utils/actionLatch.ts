@@ -15,10 +15,11 @@
    forms read the queue.
 
    THE LINK IS THE LONG-DURATION GUARD. Two rules, one answer for every control that reads `actionInFlight`:
-     1. BUSY while the link holds a submission from this tab, latch or no latch. Some presses never take the latch
-        (`automatic`-flagged presses: the par answer, the M&H exchange, a home station, Undo) yet still travel the
-        link; and every message on this link is a game-log submission (`ServerLink.submit` is called from the gameplay
-        dispatch alone), so a held one means the board every control is judging is stale.
+     1. BUSY while the link holds a submission from this tab, latch or no latch. (When W3-B's AUD-25.01 landed, the
+        `automatic`-flagged presses -- the par answer, the M&H exchange, a home station, Undo -- took no latch yet still
+        travelled the link; since W3-B's P3-N021 RED R1 commit every press but a `derived` one takes it.) Every message
+        on this link is a game-log submission (`ServerLink.submit` is called from the gameplay dispatch alone), so a
+        held one means the board every control is judging is stale.
      2. THE BACKSTOP DOES NOT RUN WHILE THE LINK HOLDS. It starts (afresh) only once the link holds nothing, so the
         ordinary releases decide: the drain on the landed entry (the link settles an `applied` frame in the same turn
         that hands the entries to the shell, whose drain applies them later -- releasing at the link's settlement

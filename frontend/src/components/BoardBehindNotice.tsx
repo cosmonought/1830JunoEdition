@@ -11,7 +11,8 @@
    its one remedy is the one that works, because the log is the game (#522): a reload replays the room's history from
    the start. "Back to the lobby" is the other way out. A digest disagreement goes when a later settle point agrees; a
    drain pass that threw is latched for the tab's life on that table (the entries it skipped are never re-applied), so
-   only a reload clears it -- and a cause that recurs on every load keeps the table blocked (a recorded residual).
+   only a fresh shell clears it (a reload, or the Lobby and back) -- and a cause that recurs on every load keeps the
+   table blocked (a recorded residual).
    The shell's send gate and the room link refuse a move from such a board as well -- this is the surface, not the
    guarantee. */
 

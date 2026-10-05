@@ -1030,7 +1030,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
           return;
         }
         /* W3-J (review fix, AUD-25.07 / 11db86f): a HELLO answered with any other unaddressed error (a maintenance
-           hold, an incompatible room, an unavailable store) has been answered -- no catch-up will come for it. Not
+           hold, an unavailable store, a refused hello) has been answered -- no catch-up will come for it. Not
            consuming it left `hellosInFlight` up, so a later resync's own fresh catch-up was dropped as "an earlier
            hello's" and the link stayed resyncing (applied frames dropped, every submission refused) until the socket
            happened to drop. `awaitingHello` is unchanged: the history still has to arrive. */

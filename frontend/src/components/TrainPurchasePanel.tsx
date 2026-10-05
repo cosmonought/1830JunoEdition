@@ -727,7 +727,8 @@ export function TrainPurchasePanel({
          train, which changes the rosters the badge was read off. Either withdraws the opener the form was opened
          from, so the form goes with it -- keyed on the board, never on the press. A board that has not moved (a
          dropped or refused send) leaves it open.
-         KEYED ON THE BOARD'S FACTS ALONE (W3-J review fix): `canAct` (this viewer presides over the buyer), the hold,
+         KEYED ON THE BOARD'S FACTS ALONE (W3-J review fix): `canAct` (the shell's seat fact -- at a table, always true),
+         the hold,
          and the rosters -- NOT `canTrade`, which also carries `sessionReady`. The shell hands the bar
          `sessionReady={controlsEnabled && isMyTurn && !actionInFlight}`, and the press itself sets `actionInFlight`,
          so keying on `canTrade` closed the form on the very next commit -- the fix undone in the real shell. While the

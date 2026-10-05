@@ -207,7 +207,7 @@ export const PRIVATE_COMPANY_CATALOG: Readonly<Record<number, PrivateCatalogEntr
          the card's queued-timing and closure sentences said short; the long form below is the card's, verbatim.
          W3-J review (AUD-25.10 (d)): said WITHOUT "queued" -- this row sits in the panel that shows the link's own
          "Queued — will send on reconnect.", and one word should not mean both. */
-      "Executes at once on the owner's Stock Round turn, else at the next turn boundary; it closes the M&H.",
+      "Executes on the owner's Stock Round turn, else at the next turn boundary if legal; closes the M&H.",
     ],
     ability:
       "A player owning Mohawk & Hudson may exchange it for one 10% share of New York Central. " +

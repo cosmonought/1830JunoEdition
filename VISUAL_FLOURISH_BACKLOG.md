@@ -1140,12 +1140,22 @@ ghost is drawn by the tile pass exactly as the laid tile will be, so nothing shi
 the grid lands (the ghost's fixed-corner revenue display, #486, went with the ghost pass). A refused lay is not withdrawn by the room: the flourish plays in full on the sent picture, and the
 hex returns to its old tile when the ghost's four-second clock releases it (see D-20 for a late arrival).
 
-### D-12 · `OPEN` · What switches on the first frame
+### D-12 · `RESOLVED` (W3-H, 2026-10-04) · What switches on the first frame
 A proposal counts as laid for every printed pass (#1471), so on a confirmed proposal nothing switches at the
 confirm but the rim's dashes and the lay's moving parts. A lay nobody proposed here counts as laid from its first
 frame: its printed value fades out as the proposal arrives, and the frame redraws the printed track, stations and
 dits it starts from, but the printed terrain icon, the printed name label and the terrain-cost badge disappear on
 the first frame rather than fading.
+**RESOLVED by W3-H** — on a lay nobody proposed here over a printed hex, the terrain icon, every printed name pass
+(landmark, single, OO and double-town) and the terrain-cost badge (plain box or compound pill) now fade on the printed
+value's own clock and curve (`badgePresentationAt(...).outgoingAlpha`: out over the 128 ms lead, or the reduced-motion
+crossfade). They are laid out as the printed hex laid them out — against the grid without the new tile, on a scratch
+slot ledger they share with the outgoing value — so nothing jumps and nothing takes a slot from the incoming tile. The
+cost badge asks the fee ledger as the previous render held it (after the lay the fee is paid). The icon is drawn whole
+because it sits under the tile pass, whose arriving proposal fill rises on that same curve; names and cost, over the
+tile, are painted at the fade. A confirmed proposal is unchanged (its transition carries no printed start). Pinned by
+`components/w3hTileFlourish.test.ts` (D-12 cases: C17's icon and cost box, Scranton's name and compound badge, each
+at the value's alpha and in its printed slot; a confirmed proposal shows neither).
 
 ### D-13 · `OPEN` · Overlays are not staged
 Route overlays, the focus veil and hover highlights draw from authoritative state over a hex mid-flourish, so a

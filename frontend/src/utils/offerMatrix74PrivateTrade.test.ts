@@ -408,8 +408,9 @@ describe("§6 D-26: every unexercised ownership-dependent power follows the card
     expect(currentPrivateOwner(toOperating(traded), DH)).toBe(P1);
     const bought = apply(toOperating(traded), M.buyPrivate(PRR, DH, "70"), P1);
     expect(ownsPrivateByCorporation(bought, DH, PRR)).toBe(true);
-    expect(dhFreeStationAvailableFor({ companyId: PRR, privates: bought.private_companies, usedAbilities: bought.used_private_abilities ?? [], dhHexBuilt: false })).toBe(true);
-    expect(dhFreeStationAvailableFor({ companyId: NYC, privates: bought.private_companies, usedAbilities: bought.used_private_abilities ?? [], dhHexBuilt: false })).toBe(false);
+    // AUD-04.04: the power is asked inside a lay's own window (`stationPending`), so only ownership decides these two.
+    expect(dhFreeStationAvailableFor({ companyId: PRR, privates: bought.private_companies, usedAbilities: bought.used_private_abilities ?? [], dhHexBuilt: false, stationPending: PRR })).toBe(true);
+    expect(dhFreeStationAvailableFor({ companyId: NYC, privates: bought.private_companies, usedAbilities: bought.used_private_abilities ?? [], dhHexBuilt: false, stationPending: NYC })).toBe(false);
   });
 
   it("an already-used ability stays used through the trade and through the later corporate purchase", () => {
@@ -418,7 +419,7 @@ describe("§6 D-26: every unexercised ownership-dependent power follows the card
     expect(traded.used_private_abilities).toEqual(["dh-tile", "dh-token"]);
     expect(differing(before, traded)).not.toContain("used_private_abilities");
     const bought = apply(toOperating(traded), M.buyPrivate(PRR, DH, "70"), P1);
-    expect(dhFreeStationAvailableFor({ companyId: PRR, privates: bought.private_companies, usedAbilities: bought.used_private_abilities ?? [], dhHexBuilt: false })).toBe(false);
+    expect(dhFreeStationAvailableFor({ companyId: PRR, privates: bought.private_companies, usedAbilities: bought.used_private_abilities ?? [], dhHexBuilt: false, stationPending: PRR })).toBe(false);
   });
 
   it("the C&SL: the corporate power goes to whichever corporation buys it from its NEW owner; the old owner can no longer sell it", () => {

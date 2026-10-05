@@ -856,7 +856,7 @@ export class RoomSession {
         this.rebuild();
         return this.incompatibleFrame(this.incompatibility ?? held);
       }
-      const owed = this.engine.settleOwed((msg) => this.appendDerived(msg, input.actor));
+      const owed = this.engine.settleOwed((msg) => this.appendDerived(msg, input.actor), this.derivedRetraction);
       return {
         kind: "applied",
         entries: [...repaired, entry, ...owed],
@@ -866,7 +866,7 @@ export class RoomSession {
       };
     }
 
-    const settled = this.engine.submit(entry, (msg) => this.appendDerived(msg, input.actor));
+    const settled = this.engine.submit(entry, (msg) => this.appendDerived(msg, input.actor), this.derivedRetraction);
 
     /* ==================================================================
         DESIGN NOTE 1685 (Stage 10.2, S10-1): WHAT THE REDUCER DECLINED IS NOT APPENDED
@@ -984,6 +984,21 @@ export class RoomSession {
     return entry;
   }
 
+  /** AUD-08.01: the engine's `retract` -- a derived entry `appendDerived` pushed and the authority then refused comes
+   *  back off the log, so it is never stored, broadcast, hashed or counted, and `nextIndex` is where it was. It is
+   *  always the last entry (the engine mints nothing between the mint and the verdict); anything else is a broken
+   *  invariant and throws rather than popping the wrong entry. Mirrors #1685's take-back of a declined player move;
+   *  a derived entry carries no nonce, so there is none to forget. */
+  private readonly derivedRetraction = {
+    retract: (minted: ReplayEntry): void => {
+      const last = this.log[this.log.length - 1];
+      if (last === undefined || last.index !== minted.index || last.id !== minted.id || last.derived !== true) {
+        throw new Error(`RoomSession: a refused derived entry (${minted.index}) is not the log's last entry.`);
+      }
+      this.log.pop();
+    },
+  };
+
   /** Finish a burst a crash left half-applied, and return what that took.
    *
    *  RE-DERIVED RATHER THAN REMEMBERED (#1208). The engine replayed the log on restore, so it knows what the
@@ -992,6 +1007,6 @@ export class RoomSession {
     /* THE ACTOR IS THE ONE WHOSE MOVE WAS INTERRUPTED -- read off the last entry, because that is whose burst
        this finishes. A repair with no author would be the one entry in the log #549 cannot attribute. */
     const provoker = this.log.length === 0 ? "" : this.log[this.log.length - 1].actor;
-    return this.engine.settleOwed((msg) => this.appendDerived(msg, provoker));
+    return this.engine.settleOwed((msg) => this.appendDerived(msg, provoker), this.derivedRetraction);
   }
 }

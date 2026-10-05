@@ -88,7 +88,7 @@ import type { GameStateResponse, WaterfallStateResponse } from "./gameState";
 import type { GameplayExecuteMsg } from "../utils/sessionKey";
 import type { SandboxLogMsg } from "./gameSetup";
 import type { MapGridResponse } from "../components/hexContractTypes";
-import { atomsUnchanged, type AuthoritativeAtoms } from "./actionOutcome"; // #1685 (Stage 10.2)
+import { atomsUnchanged, authorityDeclined, type AuthoritativeAtoms } from "./actionOutcome"; // #1685 (Stage 10.2); AUD-08.01
 
 /** One entry as the log stores it. Structurally `SandboxAction`, restated so this module does not depend on
  *  the Firestore layer -- a log read from a file and a log read from a room must replay identically, and a
@@ -371,6 +371,16 @@ export type ReplayObserver = (event: {
 }) => void;
 
 
+/** Options for `RoomEngine.submit` / `settleOwed`. */
+export interface SettleOwedOptions {
+  mapGrid?: MapGridResponse;
+  extraStationAvailable?: boolean;
+  /** AUD-08.01: take a minted derived entry back out of the caller's store because the authority refused it. A caller
+   *  whose `mint` stores what it mints (`RoomSession`'s `appendDerived` pushes onto the log) must pass this; a caller
+   *  whose `mint` only builds the entry need not -- a refused entry is never returned either way. */
+  retract?: (entry: ReplayEntry) => void;
+}
+
 /** One room's live state, advanced an action at a time.
  *
  *  ==================================================================
@@ -591,7 +601,7 @@ export class RoomEngine {
   submit(
     entry: ReplayEntry,
     mint: (msg: GameplayExecuteMsg, reason: string) => ReplayEntry,
-    options?: { mapGrid?: MapGridResponse; extraStationAvailable?: boolean },
+    options?: SettleOwedOptions,
   ): { derived: ReplayEntry[]; state: GameStateResponse; changed: boolean } {
     /* ==================================================================
         DESIGN NOTE 1685 (Stage 10.2, S10-1): APPLY, THEN JUDGE, THEN SETTLE
@@ -618,9 +628,12 @@ export class RoomEngine {
    *  history that nobody made. */
   settleOwed(
     mint: (msg: GameplayExecuteMsg, reason: string) => ReplayEntry,
-    options?: { mapGrid?: MapGridResponse; extraStationAvailable?: boolean },
+    options?: SettleOwedOptions,
   ): ReplayEntry[] {
     const derived: ReplayEntry[] = [];
+    /* AUD-08.01: the keys THIS CALL derived and the authority refused (see the note at the refusal below). Asked
+       beside `emitted` so the loop moves past a refusal exactly as it always did, and never persisted. */
+    const refused = new Set<string>();
     /* A CAP, AND IT IS NOT DEFENSIVE PROGRAMMING. Each answer is computed against the board the previous one
        produced, so a rule that failed to advance the cursor would spin forever and take the room with it --
        the shape #876 describes, where a skip fired against the last step and moved nothing. The guard set
@@ -643,15 +656,55 @@ export class RoomEngine {
           nextDerivedAction({
             state: this.state,
             mapGrid: options?.mapGrid ?? this.grid,
-            emitted: this.emitted,
+            emitted: refused.size === 0 ? this.emitted : new Set([...Array.from(this.emitted), ...Array.from(refused)]),
             extraStationAvailable: options?.extraStationAvailable,
           }),
         routeRulesRevisionOf(this.state),
       );
       if (!next) break;
+      /* ==================================================================
+          PHASE 3 AUD-08.01 (GR-1 / S10-27): A DERIVED ACTION THE AUTHORITY REFUSES IS NOT APPENDED
+         ==================================================================
+         FOUND BY THE H-01 PROBE (6.5-A, GR-1): on a Gentle Rust board this loop derived a $0 forced withhold the
+         reducer refused (the declaration must match the run), and the refused entry was STILL minted, applied as a
+         no-op and handed back -- so the room appended it as `derived: true`, broadcast it, committed it in the log
+         hash, and its turn key was spent as though the game had acted. The seam is generic: nothing here asked
+         whether a derived action landed. A player's own move has been asked that since #1685 (`RoomSession.submit`
+         takes a declined entry back off the log); the game's own moves never were.
+         THE SAME QUESTION, THE SAME DEFINITION. `authorityDeclined` is #1685's single answer to "the authority
+         declined this" -- the engine's authoritative atoms unchanged by content, for a message whose design is not
+         a no-op (no derived kind is) -- judged on the board the action was derived on. When it says declined:
+           * the engine is put back exactly as it stood -- state, grid, the `emitted` keys this attempt recorded,
+             the unparseable list -- so the board is the board the shorter log describes, and a rebuild from that
+             log (which never sees the entry) reaches the same engine, `emitted` included (#1208);
+           * the caller's `retract` takes the minted entry back out of its store (`RoomSession` pops it: it is
+             still the last entry, nothing is minted in between), so no index or cursor advances for it;
+           * it is not returned, so no frame carries it;
+           * its key is remembered for THIS CALL ONLY (`refused`), so the loop goes on to whatever else the board
+             owes -- deterministically, the order `nextDerivedAction` already gives -- instead of re-deriving the
+             same refusal; the guard below still caps the loop. The next settle asks afresh: the board may have
+             changed so that the action now lands, and an unchanged board is simply refused again, appending nothing.
+         An action that MOVES the board is unaffected, including a stale accepted-offer settlement whose refusal
+         retires the offer (#1596): the board changed, so it is appended exactly as before. Stored logs are
+         untouched: `apply` still applies every stored derived entry, refused or not, as the no-op it always was. */
+      const stateBefore = this.state;
+      const gridBefore = this.grid;
+      const before: AuthoritativeAtoms = { state: stateBefore, grid: gridBefore };
+      const emittedMark = this.emitted.size;
+      const unparseableMark = this.unparseable.length;
       this.emitted.add(next.key);
       const minted = mint(next.msg, next.reason);
       this.apply(minted);
+      if (authorityDeclined(next.msg, before, { state: this.state, grid: this.grid })) {
+        this.state = stateBefore;
+        this.grid = gridBefore;
+        // A Set iterates in insertion order, so the keys this attempt added are exactly the tail past the mark.
+        for (const key of Array.from(this.emitted).slice(emittedMark)) this.emitted.delete(key);
+        this.unparseable.length = unparseableMark;
+        options?.retract?.(minted);
+        refused.add(next.key);
+        continue;
+      }
       derived.push(minted);
     }
 

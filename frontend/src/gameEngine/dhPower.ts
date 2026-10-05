@@ -414,7 +414,25 @@ export function privateSelfLayWarning(input: {
    president owns the D&H -- stated once, here, so the shell and the engine cannot disagree about it (#1184).
 
    SCOPED TO THE OWNER, read from the roster. `dhPowerState` knows whether the ability is spent, not whose it
-   is; a rival mid-turn must not have its Tokens step held open by somebody else's private (#781). */
+   is; a rival mid-turn must not have its Tokens step held open by somebody else's private (#781).
+
+   ==================================================================
+    PHASE 3 AUD-04.04 (DH-1): AND SCOPED TO THE TURN, AS THE STATION AUTHORITY ALREADY IS
+   ==================================================================
+   FOUND BY THE H-01 PROBE (6.5-A, DH-1): this rule asked whether the free station had been SPENT, never whether
+   it was still IN ITS WINDOW. `used_private_abilities` is additive and un-timestamped (#1660), so once the D&H's
+   lay had happened and its station had not been placed, the answer stayed "available" on every later turn of the
+   owning corporation -- and `nextDerivedAction` handed that to `stationPlacementBlockReason` as "a placement
+   exists", so the owner's Tokens step was never auto-skipped again, though `dhStationRefusal` refuses the very
+   placement this rule was waiting for ("only comes with the same turn's lay").
+   THE WINDOW IS ALREADY ON THE BOARD. `dh_station_pending` (gameState.ts #1660) is the company id whose same-turn
+   lay opened it, cleared at the turn boundary and by the placement itself, and it is the one fact the authority's
+   timing arm reads. This rule now reads it too, so the derivation and the authority cannot disagree about WHEN.
+   REQUIRED, not optional: a caller that does not say which window stands would silently get one answer or the
+   other, which is how the old default (#1237) went wrong. A reload rebuilds the field from the log like every
+   other turn-scoped fact, so a legitimately pending station survives one.
+   DERIVATION ONLY. The station's legality (`dhStationRefusal`) is untouched; this rule decides only whether the
+   game waits at Tokens or moves on. */
 export function dhFreeStationAvailableFor(input: {
   /** The operating corporation, by protocol id. */
   companyId: number;
@@ -423,10 +441,15 @@ export function dhFreeStationAvailableFor(input: {
   usedAbilities: ReadonlyArray<string>;
   /** Whether the D&H's hex has been built on -- the forfeit condition, from the tile grid. */
   dhHexBuilt: boolean;
+  /** AUD-04.04: the board's `dh_station_pending` -- the corporation whose same-turn D&H lay opened the free-station
+   *  window, or absent / `null` when no window stands. */
+  stationPending: number | null | undefined;
 }): boolean {
   const dh = input.privates.find((entry) => entry.private_id === DH_PRIVATE_ID);
   if (!dh || dh.closed === true) return false;
   if ((dh.owner_protocol_id ?? null) !== input.companyId) return false;
+  // AUD-04.04: outside the lay's own turn the free station is gone (`dhStationRefusal`'s timing arm, #1660).
+  if ((input.stationPending ?? null) !== input.companyId) return false;
   const power = dhPowerState({
     hexBuilt: input.dhHexBuilt,
     layUsed: input.usedAbilities.includes("dh-tile"),

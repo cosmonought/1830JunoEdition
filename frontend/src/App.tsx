@@ -12984,6 +12984,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         replayingRef.current = false;
         // #1407: the catch-up notice was about this drain, which is over. W3-C: retired by its kind, not its text.
         dispatchRoomNotice({ type: "clear-connection", kind: "catching-up" });
+        /* Phase 3 W3-J (AUD-25.06, OD-12 RED R5): and the resync notice ("reloading the room's history") is about the
+           rebuild a resync asks for -- this drain, once the fresh catch-up has arrived -- so it is retired here too. It
+           was retired only by this tab's own landed move, so a seat not on turn kept it indefinitely. */
+        dispatchRoomNotice({ type: "clear-connection", kind: "resync" });
       }
     };
 

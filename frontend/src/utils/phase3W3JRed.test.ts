@@ -9,7 +9,15 @@
 // the submission-answer helper, the real room link). Each `describe` is one separately reviewed RED commit.
 
 import { readShell, sliceBetween } from "./sourceScan";
-import { NO_ROOM_NOTICES, TURN_REFUSAL, roomNoticesReducer, type RoomNoticeAction, type RoomNotices } from "./roomNotices";
+import {
+  NO_ROOM_NOTICES,
+  RESYNC_BANNER,
+  TURN_REFUSAL,
+  connectionOf,
+  roomNoticesReducer,
+  type RoomNoticeAction,
+  type RoomNotices,
+} from "./roomNotices";
 import { rollBackIfRefused } from "./submissionAnswer";
 
 const shell = readShell();
@@ -116,5 +124,56 @@ describe("RED R1 (AUD-25.16, OD-19): the send gate refuses a move from a board t
     expect(shell).toContain("boardSendRefusalRef.current = () => boardSendRefusal({ watchOnly, currency: syncBoardCurrency() });");
     expect(shell).toContain("drainFailed: drainFailedRoomRef.current !== null && drainFailedRoomRef.current === sandboxRoomRef.current,");
     expect(shell).toContain("divergedAt: divergenceReportedAtRef.current,");
+  });
+});
+
+/* ------------------------------------------------------------------------------------------------ RED R5 */
+
+const { connectServerLink } = require("./serverLink") as typeof import("./serverLink");
+type SocketLike = import("./serverLink").SocketLike;
+
+/** The drain effect's body, from its first line to its teardown. */
+const drainEffect = () => sliceBetween(shell, "const drain = async (incoming: SandboxAction[]) => {", "return () => {\n      live = false;");
+
+describe("RED R5 (AUD-25.06): the resync notice is retired when the rebuild's drain settles", () => {
+  it("the drain's `finally` retires `resync` beside `catching-up`", () => {
+    const finallyBlock = sliceBetween(drainEffect(), "} finally {\n        replayingRef.current = false;", "};");
+    expect(finallyBlock).toContain('dispatchRoomNotice({ type: "clear-connection", kind: "catching-up" });');
+    expect(finallyBlock).toContain('dispatchRoomNotice({ type: "clear-connection", kind: "resync" });');
+  });
+
+  it("through the real link, wired as the shell wires it: the resync notice alone during the rebuild, and gone after it", async () => {
+    let notices = NO_ROOM_NOTICES;
+    const dispatch = (action: RoomNoticeAction) => (notices = roomNoticesReducer(notices, action));
+    const socket: SocketLike = { send: () => {}, close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null };
+    let ids = 0;
+    const link = connectServerLink({
+      url: "ws://test",
+      gameId: "g_0123456789abcdefghjkmnpqr0",
+      build: "b",
+      socketFactory: () => socket,
+      mintSubmissionId: () => `n${(ids += 1)}`,
+      // The shell's R5 callbacks (the stale sentence, the resync notice), and the drain's end (both clears).
+      onStale: () => dispatch({ type: "refusal", text: "The room had moved on — this tab has caught up. Try that again." }),
+      onResync: () => dispatch({ type: "connection", kind: "resync", text: RESYNC_BANNER }),
+      onEntries: () => {
+        dispatch({ type: "clear-connection", kind: "catching-up" });
+        dispatch({ type: "clear-connection", kind: "resync" });
+      },
+    });
+    const deliver = (frame: unknown) => socket.onmessage?.({ data: JSON.stringify(frame) });
+    socket.onopen?.({});
+    deliver({ kind: "catch-up", build: "b", digest: null, entries: [{ index: 0, id: "e0", actor: "a", payload: "{}" }] });
+    const move = link.submit({ PassTurn: { game_id: 0 } } as never);
+    deliver({ kind: "error", code: "resync", reason: "history mismatch" });
+    // During the rebuild: the resync notice, and no contradicting stale refusal beside it.
+    expect(connectionOf(notices, "resync")?.text).toBe(RESYNC_BANNER);
+    expect(notices.refusal).toBeNull();
+    // The fresh catch-up arrives and its drain settles: the notice is retired, whoever's turn it is.
+    deliver({ kind: "catch-up", build: "b", digest: null, entries: [{ index: 0, id: "e0", actor: "a", payload: "{}" }] });
+    expect(connectionOf(notices, "resync")).toBeNull();
+    await expect(move).resolves.toBeNull(); // it did not land -- and only now is that said
+    expect(notices.refusal).toBe("The room had moved on — this tab has caught up. Try that again.");
+    link.close();
   });
 });

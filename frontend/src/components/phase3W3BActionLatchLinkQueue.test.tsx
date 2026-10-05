@@ -8,8 +8,9 @@
  *
  * Everything here runs against the REAL link (`connectServerLink`) over a hand-driven socket, read through the REAL
  * hooks (`useLinkQueue`, `useActionLatch`) and rendered through the REAL controls. The one stand-in is the shell's
- * dispatch, reduced to the three latch lines `runGameplayAction` runs (RED R1, unchanged by W3-B: set before the await,
- * released on a `null`) and the drain's index release (RED R5, unchanged) -- pinned against App.tsx at the bottom.
+ * dispatch, reduced to the three latch lines `runGameplayAction` runs (RED R1: set before the await -- for every press
+ * but a `derived` one since W3-B's P3-N021 commit -- released on a `null`) and the drain's index release (RED R5,
+ * unchanged) -- pinned against App.tsx at the bottom. The residue's own suite is `phase3W3BLatchResidue.test.tsx`.
  * A landed entry is applied through the real reducer, so "re-arms" is the authority's next answer, never the test's.
  */
 import React, { act, useCallback, useRef, useState, type ComponentProps } from "react";

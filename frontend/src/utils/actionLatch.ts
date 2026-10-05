@@ -40,6 +40,8 @@
 
 import { useEffect, type Dispatch, type SetStateAction } from "react";
 
+import { LINK_SENDING_NOTE, type LinkQueueView } from "./useLinkQueue";
+
 /** The shell's busy answer: a press of this tab's is latched, or the room link still holds one of its submissions. */
 export function actionLatchBusy(pendingAppendIndex: number | null, linkHolds: boolean): boolean {
   return pendingAppendIndex !== null || linkHolds;
@@ -67,4 +69,17 @@ export function useActionLatch(
     return () => window.clearTimeout(timer);
   }, [pendingAppendIndex, setPendingAppendIndex, linkHolds, backstopMs]);
   return actionLatchBusy(pendingAppendIndex, linkHolds);
+}
+
+/* ==================================================================
+    PHASE 3 W3-B (AUD-14.06): THE ONE SENTENCE FOR THE ONE FLAG
+   ==================================================================
+   The surfaces AUD-14.06 latched (the licence modal, the private-power modal, the auction prompt, the token confirm,
+   Undo) say why they are greyed in the words the Stocks tab already uses for the same held press (W3-J AUD-25.10 (c)):
+   the link's own sentence while it holds one of this tab's submissions ("Queued -- will send on reconnect." while it
+   waits for a socket), otherwise the latch's. `null` when nothing is in flight. A READING of `actionInFlight` and W3-I's
+   view, never a second busy state: it cannot be busy when the flag is not. */
+export function actionLatchReason(actionInFlight: boolean, link: LinkQueueView): string | null {
+  if (!actionInFlight) return null;
+  return link.blocked && link.reason !== null ? link.reason : LINK_SENDING_NOTE;
 }

@@ -390,7 +390,8 @@ describe("one call site, threaded to every consumer (source scan over the commen
     expect(sliceBetween(SHELL, "const tileLayDisabledReason = useMemo(", "const canLayTileNow")).toContain(
       `if (dockHold.layTile !== null) return \`Planning Mode: Tile lay disabled — ${String.fromCharCode(36)}{dockHold.layTile}\`;`,
     );
-    expect(SHELL).toContain("canConfirm={controlsEnabled && pendingTokenHold === null}");
+    // Phase 3 W3-B (AUD-14.06): the hold arm is unchanged; the in-flight latch joins it last.
+    expect(SHELL).toContain("canConfirm={controlsEnabled && pendingTokenHold === null && !actionInFlight}");
     expect(sliceBetween(SHELL, "const pendingTokenHold =", ";")).toMatch(/dockHold\.placeStationToken[\s\S]*dockHold\.placeHomeStation[\s\S]*dockHold\.placeDhStation/);
     expect(SHELL).toContain("blockedReason: dockHold.proposeTrainPurchase,");
     expect(SHELL).toContain("bankBlockedReason: dockHold.buyTrainFromBank,");

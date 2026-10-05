@@ -197,6 +197,18 @@ describe("3. another game, and another seat, have their own records", () => {
     expect(mount(noticeLedgerKey(viewer("g_B", "p-bo"))).isAcknowledged(PHASE_THREE_NOTICE_KEY)).toBe(false);
   });
 
+  it("a seat change within the same game keeps the load's history marks (review NIT)", () => {
+    let loading = true;
+    const ledger = new NoticeLedger(() => loading);
+    ledger.bind(noticeLedgerKey(viewer("g_A", null))); // a watcher loads the table
+    expect(ledger.has(fleetLossNoticeKey(RUST))).toBe(true);
+    loading = false;
+    ledger.bind(noticeLedgerKey(viewer("g_A", "p-bo"))); // takes a seat in the same game
+    expect(ledger.has(fleetLossNoticeKey(RUST))).toBe(true);
+    ledger.bind(noticeLedgerKey(viewer("g_B", "p-bo"))); // another game: its own history
+    expect(ledger.has(fleetLossNoticeKey(RUST))).toBe(false);
+  });
+
   it("moving the ledger to another record carries nothing across", () => {
     const ledger = mount(KEY_A);
     ledger.acknowledge(PHASE_THREE_NOTICE_KEY);

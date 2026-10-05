@@ -454,6 +454,7 @@ describe("noticeChainShellWiring: the shell mounts every forced notice through t
     expect(storage).toContain("setPendingFleetNotices(open);");
     expect(APP).toMatch(/if \(!noticeLedgerStorageKey\) return;\s*for \(const notice of pendingFleetNotices\)/);
     expect(APP).toContain("payload: privateRevenuePayloadForStorage(");
+    expect(APP).toContain("if (president !== null && viewerAddress !== null && president !== viewerAddress) continue;");
     expect(APP).toContain("if (!phaseThreeEdgeArmedRef.current) return;");
     const arming = sliceBetween(APP, "initialHistoryLoadRef.current = sandboxRoomCode !== null && sandboxAppliedCount === 0;", "}, [sandboxRoomCode, sandboxAppliedCount, currentPhase]);");
     expect(arming).toContain("phaseThreeEdgeArmedRef.current = true;");

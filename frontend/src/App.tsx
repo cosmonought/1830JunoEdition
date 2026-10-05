@@ -12008,6 +12008,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
        a roster that could not yet be read (below). */
     if (!noticeLedgerStorageKey) return;
     for (const notice of pendingFleetNotices) {
+      /* Only a notice this viewer will be shown -- their own corporation's (#981's audience). The queue holds every
+         corporation's; storing the rest would leave them pending for ever in a record nobody answers. */
+      const president =
+        gameState?.public_companies?.find((entry) => entry.company_id === notice.companyId)?.president ?? null;
+      if (president !== null && viewerAddress !== null && president !== viewerAddress) continue;
       noticeLedger.remember({ kind: "fleetLoss", key: noticeDismissKey(notice), payload: notice });
     }
     if (privatePayoutPhase) {
@@ -12031,7 +12036,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         payload: heraldFloatNotice,
       });
     }
-  }, [noticeLedger, noticeLedgerStorageKey, pendingFleetNotices, privatePayoutPhase, phaseThreeNotice, heraldFloatNotice, sandboxRoomDoc]);
+  }, [noticeLedger, noticeLedgerStorageKey, pendingFleetNotices, privatePayoutPhase, phaseThreeNotice, heraldFloatNotice, sandboxRoomDoc, gameState?.public_companies, viewerAddress]);
 
   /* OD-5(a), AUD-11.02: AND IT COMES BACK AFTER A RELOAD, A NEW TAB OR A REMOUNT -- from this player's own record,
      once the record is known. Only what they witnessed and left unanswered; a late joiner's record is empty. A

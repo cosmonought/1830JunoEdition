@@ -92,6 +92,14 @@ export interface NoticeLedgerViewer {
   readonly you: { readonly playerId: string | null };
 }
 
+/** The game a ledger key belongs to, or `null`. */
+function gameOfLedgerKey(key: string | null): string | null {
+  if (!key || !key.startsWith(NOTICE_ACK_STORAGE_PREFIX)) return null;
+  const rest = key.slice(NOTICE_ACK_STORAGE_PREFIX.length);
+  const seatAt = rest.lastIndexOf(".");
+  return seatAt < 0 ? rest : rest.slice(0, seatAt);
+}
+
 /** The storage key for this viewer's record in this game, or `null` while there is no game to key it by. */
 export function noticeLedgerKey(view: NoticeLedgerViewer | null | undefined): string | null {
   if (!view || !view.gameId) return null;
@@ -274,7 +282,9 @@ export class NoticeLedger {
        tables and anything left in memory belongs to the one that ended. */
     const fromMemory = this.key === null && !this.everBound;
     if (key !== null) this.everBound = true;
-    if (!fromMemory) this.historical = new Set<string>();
+    /* The history marks belong to the GAME this mount loaded, not the seat: a seat change within one game (a watcher
+       taking a seat) keeps them, so a later Undo cannot re-raise what the load treated as history. */
+    if (!fromMemory && gameOfLedgerKey(key) !== gameOfLedgerKey(this.key)) this.historical = new Set<string>();
     const carriedAcknowledged = fromMemory ? Array.from(this.acknowledged) : [];
     const carriedPending = fromMemory ? this.pending : [];
     this.key = key;

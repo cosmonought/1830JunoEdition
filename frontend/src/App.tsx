@@ -31,7 +31,18 @@ import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
 import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
 import { delayedAuctionStatus } from "./utils/delayedAuctionStatus"; // Phase 3 W3-J (AUD-25.10 (e))
 import { rollBackIfRefused, submissionRefused } from "./utils/submissionAnswer"; // Phase 3 W3-C (P3-N020)
+import {
+  errandAfterRefusedLay,
+  ghostAfterRefusedLay,
+  tabAfterRefusedErrandLay,
+} from "./utils/refusedPressRollback"; // Phase 3 W3-J (AUD-25.05, AUD-25.13 #8)
 import { paidStationRefusal } from "./utils/paidStationView"; // Phase 3 W3-J (AUD-25.08)
+import {
+  freeStationSettlement,
+  homePromptPending,
+  inFlightReleasedByBoard,
+  type FreeStationInFlight,
+} from "./utils/freeStationInFlight"; // Phase 3 W3-J (AUD-25.04)
 import {
   BOARD_CURRENT,
   WATCHING_NO_SEAT,
@@ -9610,6 +9621,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     options?: ReadonlyArray<{ hexLabel: string; q: number; r: number }>;
   } | null>(null);
 
+  /* Phase 3 W3-J (AUD-25.04): the free placement sent and not yet settled -- see `freeStationInFlight.ts`. The press
+     clears the errand, so this is what keeps the home prompt from asking again while the room answers (or the link
+     holds the submission through an outage). Released by a refusal, or by the board once it stops owing the token. */
+  const [freeStationInFlight, setFreeStationInFlight] = useState<FreeStationInFlight | null>(null);
+  useEffect(() => {
+    if (inFlightReleasedByBoard(freeStationInFlight, pendingHomeToken)) setFreeStationInFlight(null);
+  }, [freeStationInFlight, pendingHomeToken]);
+
   /* ==================================================================
      DESIGN NOTE 818: THE FREE STATION, ASKED FOR
      ==================================================================
@@ -9836,7 +9855,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         placement.options?.find((option) => option.q === q && option.r === r)?.hexLabel ??
         placement.hexLabel;
       // Design note #550: through the log, so the token lands on every board.
-      void runGameplayActionRef.current?.(
+      // Phase 3 W3-J (AUD-25.04): and its answer is kept, so a refused placement takes back what this press set.
+      const answer = runGameplayActionRef.current?.(
         placement.kind === "home-station"
           ? `${ticker} places its home station token on ${hexLabel}.`
           : `${ticker} places a free station token on ${hexLabel} using the Delaware & Hudson.`,
@@ -9862,6 +9882,30 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
       // Back where they came from -- see the state's own note on why this
       // is captured rather than hardcoded to the Stocks tab.
       setActiveMainTab(placement.returnTab);
+      /* Phase 3 W3-J (AUD-25.04): IN FLIGHT UNTIL THE ROOM ANSWERS. The marker keeps the home prompt from asking
+         again for the round trip; a refusal releases it and takes back the power key the press recorded, so the
+         D&H's flow asks again (its standing obligation) and the home prompt returns for a second try. An applied
+         placement holds the marker until the board stops owing the token (the effect above). */
+      const marker: FreeStationInFlight = {
+        companyId: placement.companyId,
+        kind: placement.kind === "home-station" ? "home-station" : "private-station",
+      };
+      setFreeStationInFlight(marker);
+      const spentKey = placement.abilityKey;
+      return Promise.resolve(answer).then((settled) => {
+        const settlement = freeStationSettlement(settled);
+        if (settlement === "hold" && marker.kind === "home-station") return settled;
+        setFreeStationInFlight((current) => (current === marker ? null : current));
+        if (settlement === "refused" && spentKey !== null) {
+          setUsedPrivateAbilities((prev) => {
+            if (!prev.has(spentKey)) return prev;
+            const next = new Set(prev);
+            next.delete(spentKey);
+            return next;
+          });
+        }
+        return settled;
+      });
     },
     // Design note #550: `logInfo` went with the local write. The log line is
     // written by the replay handler now, on every client rather than only on
@@ -11153,12 +11197,17 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
        closes on the click and the city stays bare for the whole round trip.
        RECORDED HERE AND OVERLAID ONLY ON THE CANVAS -- see `boardCompanies`. The ring still closes at once,
        because the player answered it. */
-    setCommittedStation({
+    const committed = {
       companyId: pendingToken.companyId ?? actingProtocolId,
       q,
       r,
       cityIndex,
-    });
+    };
+    setCommittedStation(committed);
+    /* Phase 3 W3-J (AUD-25.05): A REFUSED TOKEN IS NOT DRAWN. The picture above is held until the board brings the
+       token or its 4 s clock runs out; when the room says the placement was not applied, the picture goes at once
+       (only this one -- a later press's picture is its own). */
+    const dropPicture = () => setCommittedStation((current) => (current === committed ? null : current));
     /* Design note #866: the standing request ends when the placement does. The board re-answers it on every
        view change, so a confirmed token that left the request set would immediately stage a second one. */
     setAutoStageStation(null);
@@ -11167,7 +11216,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
        See docs/ai_architecture/contract_economy.md - App.tsx #239 */
     if (kind === "free") {
       // Design note #560: the slot travels with the placement.
-      commitFreeStationPlacement({ q, r, cityIndex });
+      void rollBackIfRefused(commitFreeStationPlacement({ q, r, cityIndex }), dropPicture);
       return;
     }
 
@@ -11176,7 +11225,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     // is done -- the same "the action completes the step" rule the tile
     // lay follows. Routes is next in `OPERATING_SUB_PHASE_ORDER`.
     setLiveOrSubPhase("Routes");
-    runGameplayAction("PlaceStationToken", {
+      /* Phase 3 W3-J (AUD-25.05): the answer is kept. A refused placement leaves the step where it was: the local cursor
+       goes back to Tokens if this press moved it (and nothing has moved it since), and targeting is re-armed so the
+       player is where they were before pressing -- the step-change effect below disarms it again if the step is not
+       Tokens. Nothing is judged here; the refusal and its sentence are the room's. */
+    const placed = runGameplayAction("PlaceStationToken", {
       PlaceStationToken: {
         game_id: gameId,
         protocol_id: actingProtocolId,
@@ -11186,6 +11239,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
            See docs/ai_architecture/canvas_rendering.md - App.tsx #453 */
         ...(cityIndex === null ? {} : { city_index: cityIndex }),
       },
+    });
+    void rollBackIfRefused(placed, () => {
+      dropPicture();
+      setLiveOrSubPhase((current) => (current === "Routes" ? "Tokens" : current));
+      // Only for a seat still on turn; off the Tokens step the effect above disarms it again.
+      if (isMyTurnRef.current) setTokenTargetMode(true);
     });
   }, [pendingToken, gameId, runGameplayAction, actingProtocolId, commitFreeStationPlacement]);
 
@@ -12063,12 +12122,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
       (gameState?.public_companies ?? []).some((c) => c.president === viewerAddress);
     const isFirstOperatingRound = (gameState?.macro_round_number ?? 0) <= 1;
 
-    handlePassTurn();
+    const passed = handlePassTurn();
     setLiveOrSubPhase("Track");
 
+    /* Phase 3 W3-J (AUD-25.05): THE LESSON FOLLOWS A TURN THAT ENDED. The navigation and the arm waited for nothing,
+       so a refused End Turn still took the president to the market lesson with their turn unfinished. They now run
+       once the room has answered, and not when it says the pass was not applied; the solo sandbox answers at once. */
     if (viewerIsPresident && isFirstOperatingRound) {
-      if (tutorialModeEnabled()) setActiveMainTab("stock");
-      setMarketTutorialArmed(true);
+      void Promise.resolve(passed).then((answer) => {
+        if (submissionRefused(answer)) return;
+        if (tutorialModeEnabled()) setActiveMainTab("stock");
+        setMarketTutorialArmed(true);
+      });
     }
   }, [handlePassTurn, viewerAddress, gameState]);
 
@@ -13625,6 +13690,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
        takes back exactly what this handler set for it: the power key added to the shell's fallback set, and the
        JK's arm (pressed again, it would have been armed). The board never recorded either -- it applied nothing. */
     const errandKey = errandClaimsLay(homeStationPlacement, q, r) ? homeStationPlacement?.abilityKey ?? null : null;
+    /* Phase 3 W3-J (AUD-25.13 #8): the errand this lay closed, so a refusal can reopen it. */
+    const closedErrand = errandClaimsLay(homeStationPlacement, q, r) ? homeStationPlacement : null;
     void rollBackIfRefused(layAnswer, () => {
       if (errandKey !== null) {
         setUsedPrivateAbilities((prev) => {
@@ -13635,6 +13702,20 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
         });
       }
       if (spentAbility === JK_TILE_ABILITY_KEY) setJkLayArmed(true);
+      /* Phase 3 W3-J (AUD-25.05): the held ghost (#1145) is a claim the lay is on its way. The room said it is not,
+         so the picture goes now rather than on its 4 s clock -- and the lay controls it was holding busy come back. */
+      setPreviewTile((current) => ghostAfterRefusedLay(current, { q, r, tileId }));
+      /* Phase 3 W3-J (AUD-25.13 #8): A REFUSED ERRAND LAY REOPENS THE ERRAND. The lay closed the errand and sent the
+         player back to the tab it was armed from; the room did not apply it, so the errand stands again, exactly as
+         it was armed (its own return tab), and the map comes back if the player is still where the lay sent them.
+         Not over another errand the player has armed since, and not past its step (`errandSurvivesStep`). */
+      if (closedErrand !== null) {
+        const step = orSubPhaseRef.current;
+        setHomeStationPlacement((current) => errandAfterRefusedLay(closedErrand, current, step));
+        if (errandAfterRefusedLay(closedErrand, null, step) !== null) {
+          setActiveMainTab((tab) => tabAfterRefusedErrandLay(tab, closedErrand, "map"));
+        }
+      }
     });
     // Design note #1145: closes the ring, keeps the tile.
     handleRingConfirmed();
@@ -14152,7 +14233,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
          over the board they were just asked to click would be the flow blocking its own final step.
          `pendingHomeToken` stays true throughout, which brings the prompt back if the placement is abandoned. */}
       <HomeStationPrompt
-        pending={homeStationPlacement ? null : pendingHomeToken}
+        /* Phase 3 W3-J (AUD-25.04): nor while that corporation's placement is in flight -- the board still owes it
+           until the entry arrives, and asking again then invites a second PlaceHomeStation. */
+        pending={homePromptPending(pendingHomeToken, homeStationPlacement !== null, freeStationInFlight)}
         presidentLabel={
           pendingHomeToken?.president
             ? sandboxPlayerLabel(pendingHomeToken.president) ??

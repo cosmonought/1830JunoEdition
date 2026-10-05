@@ -459,6 +459,9 @@ gates.
 #### W1-K
 **Cross-tab Keplr single flight** · L7 · **2.5–3.5 h**
 - **Status (Wave-1 integration, 2026-10-03):** NOT STARTED — not one of the seven Wave-1 lane branches.
+- **Status (2026-10-05):** COMPLETE — FOLDED INTO W3-L (owner: "Fold W1-K into this lane rather than creating a competing wallet
+  branch"). AUD-19.02 IMPLEMENTED in `9afc74a` on `phase3/preplaytest-profile-account-wallet` (NOT integrated): Web Locks with the storage-lease fallback, re-evaluated
+  and kept, hardened (a settle re-read, a 10-minute max hold, a fallback when the lock manager refuses). See W3-L.
 - **Rows:** implements AUD-19.02 (U-45)
 - **Change:** take a cross-tab lock (`navigator.locks` with a storage-lease fallback) **before** Keplr opens, in
   `money/moneyActions.ts` / `money/pendingTx.ts`; the second tab is told another tab is opening the table.
@@ -683,7 +686,7 @@ gates.
   redesigned/rebuilt later. Until then: do not deepen coupling to it, add abstractions to preserve today's UX, make the
   roster tag a wallet/proof authority, or spread the linkage/proof distinction to more surfaces unless correctness needs
   it; prefer minimal, easily removed compatibility changes. A constraint on later work, not a claim that today's flow
-  is the desired final design.
+  is the desired final design. **That redesign is W3-L (P3-ACCT, 2026-10-05); W2-M's rows keep their behaviour under it.**
 - **OD-16 RULED (transcribed 2026-10-04, §7.3):** W2-M builds the Terms route / page shell and the Terms / deposit link infrastructure; the substantive copy is owner-authored and never invented, and the final Terms are a Phase-7 / mainnet gate.
 - **Consolidated integration (2026-10-05):** PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `dc6020a`): AUD-20.02 … 20.07, 20.13, 20.14 IMPLEMENTED. **AUD-20.08 is NOT owner-gated:** OD-16 is ruled; it is READY / OPEN IMPLEMENTATION (pre-Phase-4 lane D) -- the Terms route/page shell and the Terms/deposit link infrastructure, no invented prose; nothing is built yet. The "stays OWNER-GATED on OD-16" status above is superseded. Residuals (LOW, recorded, not expanded here): another device may replace the linked wallet while a Keplr prompt is open; device clock skew can cost one free re-proof.
 
@@ -816,6 +819,23 @@ gates.
 - **Procedure:** settlement certification for v13 through ESCROW-3A's procedure (goldens beside the old ones, then the literal in its own reviewed change), with bankruptcy vectors: `V13_SETTLEMENT_CERTIFICATION_VECTORS.md`. **Gameplay and settlement versions are separate axes:** v13 is not settlement-certified until that change lands.
 - **Not deployable alone:** the deployment that ships revision 2 needs the removal of Auto-Buy's stage Pass and W2-B's single "Pass Turn" control, W2-G reconciled to the v13 emergency authority, the dedicated v13 settlement certification, drained pinned v12 rooms and the final integrated owner gate. (W1-A, W2-A and the Wave-2A reconciliation are done on `phase3/wave2a-v13-integration`; W2-B, the v13 W2-G and the v13 settlement certification are integrated on `phase3/wave2-bcg-v13cert-integration`; drained v12 rooms and the final owner gate remain.)
 
+#### W3-L
+**Profile / account / wallet onboarding (P3-ACCT)** · one lane · **owner brief 2026-10-05**
+- **Owner brief (2026-10-05):** replace the profile / recovery-key experience BEFORE Phase-4 human playtesting: PUBLIC FIRST (the
+  homepage, public tables, Rules and Watch without an account; an account at Host / Join / a seat / money, then the action resumes);
+  USERNAME + PASSWORD accounts (no recovery key for new accounts; no password or key re-entry for routine play); a persistent,
+  cryptographically verified profile wallet; one "ANTE X JUNO" button; factual trust indicators (no score); the homepage overlap fix;
+  W1-K folded in; AUD-20.08's shell (lane D) folded in.
+- **Rows:** implements P3-N029 (accounts / onboarding), P3-N030 (trust indicators), P3-N028 (homepage overlap), AUD-19.02 (W1-K) and
+  AUD-20.08 (shell + links).
+- **Status (2026-10-05):** COMPLETE on the slice branch `phase3/preplaytest-profile-account-wallet` @ `9afc74a` (from `b8d5246`); NOT integrated; no broad owner gate.
+  Every row IMPLEMENTED; the "established opponents" count (no definition exists) and the substantive Terms copy (OD-16, Phase-7) are
+  NOT closed. Pins 13 / [13] / [10, 11, 12, 13]; no escrow message, codec, contract, settlement or financial-protocol change. Record:
+  `PHASE3_AUDIT_RECONCILIATION.md` "W3-L slice status"; `w3l_profile_account_wallet` in the JSON.
+- **Owner decisions open (not invented):** password minimum length (provisional 8); username syntax beyond the mechanism's bounds;
+  the "established" definition; password change / reset (no email; security review M4 / N-2); lockout thresholds; KDF parameters
+  against the production host; the visitor scope (public chat, watcher slots, 6 visitor sockets per browser).
+
 ---
 
 ### Pre-Phase-4 implementation lanes (after the consolidated integration, 2026-10-05)
@@ -827,10 +847,10 @@ The remaining Phase-3 work that MUST land before Phase-4 human playtesting, each
 | **A** | **Live / Async clocks (U-10, OD-18 superseded in part):** clock / timing infrastructure; visible clock state; pause / resume semantics the model needs (the "pause cap" is part of this design); durable timing state; reconnect / reload; server-authoritative timing where required; Phase-4 instrumentation / status | AUD-11.04 | NO automatic forfeiture on expiry, NO automatic trade decline, NO host succession (AUD-19.04, deferred pending Phase 4); no Forfeit / Clemency settlement payload; no settlement / escrow change |
 | **B** | **D-35 OO reservation marker:** the marker follows its own city identity through the animated transition and resolves to the final city at commit | VF/D-35 | presentation only; no gameplay / state / rules change |
 | **C** | **Emergency `train-offer` third-seat duplicate prompt** (the first post-integration bugfix lane) | P3-N027 | narrow; prove one presentation, live controls only for the answering seat, status-only third seat, correct proposer status / rescind; server authority unchanged |
-| **D** | **Terms route / page shell and Terms / deposit link infrastructure** (OD-16) | AUD-20.08 | NO invented Terms prose -- an owner-copy slot only; final Terms are a Phase-7 / mainnet gate |
+| **D** | **Terms route / page shell and Terms / deposit link infrastructure** (OD-16) -- **built inside W3-L (2026-10-05, `9afc74a`, not integrated)** | AUD-20.08 | NO invented Terms prose -- an owner-copy slot only; final Terms are a Phase-7 / mainnet gate |
 | **E** | **W3-B latch residue** | AUD-14.06, P3-N021 | P3-N021 only via an OD-12 RED R1 commit |
 
-**Also before the Phase-4 baseline under the closure contract (§11), though not among the owner's lanes A–E:** **F (last)** the FINAL tutorial pass -- AUD-13.04 and the tutorial system (OD-5(A): contextual whitebox / spotlight, built LAST, after the shell/UI is stable); the closure contract (§11 item 2) puts every A row before Phase-3 closure and the Phase-4 baseline, so by default it follows lanes A–E, but its TIMING IS AN OWNER DECISION OPEN -- if the owner means after Phase 4, AUD-13.04 moves to E with that ruling. W1-K (AUD-19.02, cross-tab Keplr single flight -- NOT STARTED), AUD-00.02 (P0 docs), W3-F (AUD-25.14, the Phase-4 checklist, the broad owner gate). **Not pre-Phase-4:** D-17 (a Phase-4 observation); phone-width layout and keyboard map access (Phase 5, OD-10(b)). **Asset dependency:** the official Keplr logo (AUD-18.05, ASSET PENDING).
+**Also before the Phase-4 baseline under the closure contract (§11), though not among the owner's lanes A–E:** **F (last)** the FINAL tutorial pass -- AUD-13.04 and the tutorial system (OD-5(A): contextual whitebox / spotlight, built LAST, after the shell/UI is stable); the closure contract (§11 item 2) puts every A row before Phase-3 closure and the Phase-4 baseline, so by default it follows lanes A–E, but its TIMING IS AN OWNER DECISION OPEN -- if the owner means after Phase 4, AUD-13.04 moves to E with that ruling. W1-K (AUD-19.02, cross-tab Keplr single flight -- folded into W3-L 2026-10-05, IMPLEMENTED there, not integrated), AUD-00.02 (P0 docs), W3-F (AUD-25.14, the Phase-4 checklist, the broad owner gate). **Not pre-Phase-4:** D-17 (a Phase-4 observation); phone-width layout and keyboard map access (Phase 5, OD-10(b)). **Asset dependency:** the official Keplr logo (AUD-18.05, ASSET PENDING).
 
 ## 7. Owner decisions
 

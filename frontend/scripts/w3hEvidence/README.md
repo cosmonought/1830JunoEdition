@@ -33,6 +33,7 @@ cd frontend/scripts/w3hEvidence
 ESBUILD=$SCRATCH/node_modules/esbuild node build.mjs $W3H_BUNDLE_DIR
 node k4.mjs     # VF/K-4  fallback capacity glyph
 node e5.mjs     # VF/E-5  float card vs sticky dock stacking (+ ref-cycle defect check)
+node c10.mjs    # VF/C-10 roster row-glide FLIP, per-frame transforms (trace -> $W3H_TRACE_DIR, not committed)
 ```
 
 Each driver overwrites its own PNG/JSON files under `docs/phase3/evidence/w3h/`. The JSON records the

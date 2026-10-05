@@ -1044,10 +1044,28 @@ figures still advance on the same clock, simply unchased by a chip. Drops the tr
 glide. **Open:** whether that still reads as a transaction to someone using the preference, or as figures
 changing on their own.
 
-### C-10 · `OPEN` · The row glide has never been observed
+### C-10 · `RESOLVED` (W3-H evidence, 2026-10-04) · The row glide has never been observed
 jsdom reports every `offsetTop` as 0, so the FLIP cannot be exercised in a test: the suite asserts that the
 roster *order* changes on the right beat, but the transition itself is unverified. It is the single largest
 untested surface in VF-1 and the first thing to watch in playtest.
+
+**W3-H evidence** — observed in headless Chromium 1243 (real `StockRoundPanel`, fixture = `stockCardFocus.test.tsx`'s
+"a buy that takes the presidency" plus a 10% bystander, CAROL), sampling every row's computed `transform` on
+every animation frame (56 rAF samples over 900 ms, mean frame 16.5 ms), with a CDP screencast and a Playwright
+trace. **The FLIP runs and lands.** At the crown handover (first displaced frame 492.6 ms after the event =
+the presidency stage at `TRANSFER_MS` 260 + `HANDOVER_AT_MS` 215 + one frame of commit latency) BOB and ALICE
+swap rows: BOB's computed translateY per frame `21, 15.29, 10.40, 6.79, 4.30, 2.59, 1.47, 0.73, 0.29, 0.06, 0`
+and ALICE's the mirror (`−21 … −0.06, 0`), monotonic, ending at 657.6 ms — 165 ms, i.e. `HANDOVER_MS`, on the
+`cubic-bezier(0.22, 0.61, 0.36, 1)` curve; visual tops move 94.0 → 73.0 px and 73.2 → 94.2 px inside the table.
+The bystander row does not take part in the swap. Two things a reader may notice: (1) the swapping rows
+pass straight through each other, so for ~2–3 frames mid-glide the two names and figures overprint
+(`c10_glide_2_early.png`) — no z-order or opacity treatment; a PLAYTEST question, not a fault. (2) At the
+presidency stage start (~275 ms) the outgoing president's row grows ~1.2 px, and the FLIP inverts that too as
+a 1 px glide (`−1 → 0` over 165 ms) on BOB's and CAROL's rows; invisible, and up to 0.5 px of it is lost to
+`offsetTop`'s integer rounding (the rows' real tops are fractional, e.g. 93.19). One presidency cue fired.
+Artifacts: `docs/phase3/evidence/w3h/c10_row_glide.json` (per-frame sequences, visual tops, timings),
+`c10_glide_1_before.png` … `c10_glide_4_after.png` (487 ms, 523 ms, 565 ms, settled); the trace (~1.0 MB,
+screencast + DOM snapshots) is not committed and regenerates with `frontend/scripts/w3hEvidence/c10.mjs`.
 
 ### C-11 · `OWNER DECISION` · A mid-sequence remount replays the whole presentation
 The corps tab is conditionally rendered, so switching away and back inside the ~730 ms window unmounts and

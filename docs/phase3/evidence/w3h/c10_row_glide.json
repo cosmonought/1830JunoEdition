@@ -1,0 +1,334 @@
+{
+  "row": "VF/C-10",
+  "date": "2026-10-04",
+  "browser": "153.0.8010.12",
+  "fixture": "stockCardFocus.test.tsx 'a buy that takes the presidency' + CAROL 10% bystander",
+  "constants": {
+    "TRANSFER_RESOLVE_AT_MS": 200,
+    "HANDOVER_AT_MS": 215,
+    "HANDOVER_MS": 165,
+    "PRESIDENCY_MS": 380
+  },
+  "rafSamples": 56,
+  "meanFrameMs": 16.47,
+  "holders": [
+    "Ipo",
+    "Bank",
+    "juno1bob",
+    "juno1alice",
+    "juno1carol"
+  ],
+  "movedRows": [
+    "juno1bob",
+    "juno1alice",
+    "juno1carol"
+  ],
+  "glide": {
+    "juno1bob": {
+      "startMsAfterRun": 274.5,
+      "endMsAfterRun": 657.6,
+      "firstTranslateY": -1,
+      "translateYSequence": [
+        -1,
+        -0.73,
+        -0.5,
+        -0.32,
+        -0.2,
+        -0.12,
+        -0.07,
+        -0.03,
+        -0.01,
+        21,
+        15.29,
+        10.4,
+        6.79,
+        4.3,
+        2.59,
+        1.47,
+        0.73,
+        0.29,
+        0.06
+      ],
+      "offsetTopBefore": 72,
+      "offsetTopAfter": 72,
+      "visualTopSequence": [
+        [
+          -32.3,
+          73
+        ],
+        [
+          12.5,
+          93
+        ],
+        [
+          274.5,
+          93.19
+        ],
+        [
+          294.9,
+          93.46
+        ],
+        [
+          308.2,
+          93.69
+        ],
+        [
+          323.8,
+          93.86
+        ],
+        [
+          340.5,
+          93.98
+        ],
+        [
+          357.3,
+          94.06
+        ],
+        [
+          373.8,
+          94.12
+        ],
+        [
+          390.4,
+          94.15
+        ],
+        [
+          407.1,
+          94.17
+        ],
+        [
+          424.2,
+          94.18
+        ],
+        [
+          492.6,
+          94
+        ],
+        [
+          508.6,
+          88.29
+        ],
+        [
+          523.8,
+          83.4
+        ],
+        [
+          540.3,
+          79.79
+        ],
+        [
+          557.1,
+          77.3
+        ],
+        [
+          573.6,
+          75.59
+        ],
+        [
+          590.4,
+          74.47
+        ],
+        [
+          607.1,
+          73.73
+        ],
+        [
+          623.8,
+          73.29
+        ],
+        [
+          640.3,
+          73.06
+        ],
+        [
+          657.6,
+          73
+        ],
+        [
+          873.8,
+          73
+        ]
+      ],
+      "monotonic": false
+    },
+    "juno1alice": {
+      "startMsAfterRun": 492.6,
+      "endMsAfterRun": 657.6,
+      "firstTranslateY": -21,
+      "translateYSequence": [
+        -21,
+        -15.29,
+        -10.4,
+        -6.79,
+        -4.3,
+        -2.59,
+        -1.47,
+        -0.73,
+        -0.29,
+        -0.06
+      ],
+      "offsetTopBefore": 92,
+      "offsetTopAfter": 93,
+      "visualTopSequence": [
+        [
+          -32.3,
+          93
+        ],
+        [
+          12.5,
+          73
+        ],
+        [
+          492.6,
+          73.19
+        ],
+        [
+          508.6,
+          78.9
+        ],
+        [
+          523.8,
+          83.79
+        ],
+        [
+          540.3,
+          87.4
+        ],
+        [
+          557.1,
+          89.89
+        ],
+        [
+          573.6,
+          91.59
+        ],
+        [
+          590.4,
+          92.72
+        ],
+        [
+          607.1,
+          93.46
+        ],
+        [
+          623.8,
+          93.9
+        ],
+        [
+          640.3,
+          94.13
+        ],
+        [
+          657.6,
+          94.19
+        ],
+        [
+          873.8,
+          94.19
+        ]
+      ],
+      "monotonic": true
+    },
+    "juno1carol": {
+      "startMsAfterRun": 274.5,
+      "endMsAfterRun": 424.2,
+      "firstTranslateY": -1,
+      "translateYSequence": [
+        -1,
+        -0.73,
+        -0.5,
+        -0.32,
+        -0.2,
+        -0.12,
+        -0.07,
+        -0.03,
+        -0.01
+      ],
+      "offsetTopBefore": 112,
+      "offsetTopAfter": 113,
+      "visualTopSequence": [
+        [
+          -32.3,
+          113
+        ],
+        [
+          274.5,
+          113.19
+        ],
+        [
+          294.9,
+          113.46
+        ],
+        [
+          308.2,
+          113.69
+        ],
+        [
+          323.8,
+          113.86
+        ],
+        [
+          340.5,
+          113.98
+        ],
+        [
+          357.3,
+          114.06
+        ],
+        [
+          373.8,
+          114.12
+        ],
+        [
+          390.4,
+          114.15
+        ],
+        [
+          407.1,
+          114.17
+        ],
+        [
+          424.2,
+          114.18
+        ],
+        [
+          873.8,
+          114.19
+        ]
+      ],
+      "monotonic": true
+    }
+  },
+  "reorderGlide": {
+    "startMsAfterRun": 492.6,
+    "lastDisplacedFrameMsAfterRun": 573.6,
+    "framesDisplaced": 6
+  },
+  "screencastFrames": 41,
+  "screencastFramesInsideGlide": 6,
+  "screenshots": [
+    {
+      "file": "docs/phase3/evidence/w3h/c10_glide_1_before.png",
+      "msAfterRun": 487.4
+    },
+    {
+      "file": "docs/phase3/evidence/w3h/c10_glide_2_early.png",
+      "msAfterRun": 522.7
+    },
+    {
+      "file": "docs/phase3/evidence/w3h/c10_glide_3_late.png",
+      "msAfterRun": 565.2
+    },
+    {
+      "file": "docs/phase3/evidence/w3h/c10_glide_4_after.png",
+      "msAfterRun": "settled (screenshot taken after sampling)"
+    }
+  ],
+  "presidencyCues": 1,
+  "trace": {
+    "file": "(not committed) c10_trace.zip",
+    "bytes": 1038172,
+    "contents": "Playwright trace: screencast + DOM snapshots across the run; rerun c10.mjs to regenerate (W3H_TRACE_DIR)."
+  },
+  "pageErrors": []
+}

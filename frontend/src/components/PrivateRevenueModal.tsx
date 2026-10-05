@@ -32,6 +32,9 @@
 //   `App.tsx` #1049a. This modal is shown FIRST and the fleet-loss modal is withheld until it is gone, so the
 //   two never appear as an undifferentiated stack of things to click through. That ordering is also the
 //   physical one: everybody collects, and then the first corporation acts.
+//   W3-A / OD-5(c) (RULED 2026-10-04) SUPERSEDES THE ORDER, NOT THE SEQUENCE: Fleet Loss now comes BEFORE this
+//   modal, and the shell's notice chain (`utils/noticeChain.ts`) -- no longer a hold in `App.tsx` -- presents one
+//   forced notice at a time, so the two are still never a stack.
 //
 // THERE IS NO SILENCE TOGGLE, and its absence is deliberate enough to be worth a line. `FleetLossModal` #896
 // offers one because that notice is a WARNING, and a player who already knows the rule gains nothing from
@@ -404,7 +407,9 @@ const styles: Record<string, React.CSSProperties> = {
        THE Z-INDEX IS NOT WHAT ENFORCES THAT. `App.tsx` withholds the fleet notice entirely while this is
        open, so the two are never mounted together and nothing is stacked behind anything. This value is here
        so that if that suppression is ever lost, the failure is a modal in the wrong order rather than a modal
-       invisible underneath another one -- the recoverable direction. */
+       invisible underneath another one -- the recoverable direction.
+       W3-A / OD-5(c): SUPERSEDED -- the fleet notice is no longer withheld here and now comes first; the notice chain
+       (`utils/noticeChain.ts`) keeps the two from ever being mounted together. */
     /* #1651: the `zIndex: 3900` that stood here is gone -- this scrim is a `<dialog>` in the top layer, which
        is above the whole document by definition, so the number decided nothing. */
     display: "flex",

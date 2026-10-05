@@ -101,6 +101,27 @@ export function noticeLedgerKey(view: NoticeLedgerViewer | null | undefined): st
 }
 
 /* ------------------------------------------------------------------ */
+/* What may be stored -- LIVE-2D                                       */
+/* ------------------------------------------------------------------ */
+
+/** The payout payload with every name that is a seat's id (or the shortened form of one) replaced by that seat's
+ *  nickname, or "Seat N" when it has none. The payout names players as the shell labels them, and a seat whose
+ *  nickname had not resolved is labelled by its shortened id -- which the client must not persist (LIVE-2D). */
+export function privateRevenuePayloadForStorage<T extends { viewerName: string; others: ReadonlyArray<{ name: string }> }>(
+  payload: T,
+  roster: ReadonlyArray<{ readonly id: string; readonly nickname: string }>,
+  shorten: (id: string) => string,
+): T {
+  const safe = (name: string): string => {
+    const index = roster.findIndex((player) => player.id === name || shorten(player.id) === name || name.includes(player.id));
+    if (index < 0) return name;
+    const nickname = roster[index].nickname.trim();
+    return nickname && nickname !== name && !nickname.includes(roster[index].id) ? nickname : `Seat ${index + 1}`;
+  };
+  return { ...payload, viewerName: safe(payload.viewerName), others: payload.others.map((other) => ({ ...other, name: safe(other.name) })) };
+}
+
+/* ------------------------------------------------------------------ */
 /* Payload checks -- a stored record is untrusted input               */
 /* ------------------------------------------------------------------ */
 
@@ -224,8 +245,14 @@ function pruneRecords(keep: string): void {
 
 export class NoticeLedger {
   private key: string | null = null;
+  /** Whether the ledger has ever been bound to a real record (see `bind`). */
+  private everBound = false;
   private acknowledged = new Set<string>();
   private pending: PendingOneShotNotice[] = [];
+  /** Events this mount treated as history the viewer did not witness. IN MEMORY ONLY: a reload suppresses them
+   *  again during its own load, and keeping them here is what stops a LATER full replay -- an Undo, a #668
+   *  reorder -- from queueing them as new once the first load has finished. */
+  private historical = new Set<string>();
 
   /** `historyIsUnwitnessed`: true while this mount is loading a history it did not watch happen. Read at call
    *  time, because the raiser asks it in the middle of the replay. */
@@ -243,7 +270,11 @@ export class NoticeLedger {
    *  records carries nothing: they are different games or different seats. */
   bind(key: string | null): boolean {
     if (key === this.key) return false;
-    const fromMemory = this.key === null;
+    /* Only what was gathered before the FIRST real record is carried; after that, a null key is a gap between two
+       tables and anything left in memory belongs to the one that ended. */
+    const fromMemory = this.key === null && !this.everBound;
+    if (key !== null) this.everBound = true;
+    if (!fromMemory) this.historical = new Set<string>();
     const carriedAcknowledged = fromMemory ? Array.from(this.acknowledged) : [];
     const carriedPending = fromMemory ? this.pending : [];
     this.key = key;
@@ -278,7 +309,11 @@ export class NoticeLedger {
   /** The fleet-loss raiser's question: should this event NOT be queued? Answered, or historical to this viewer. */
   has(key: string): boolean {
     if (this.acknowledged.has(key)) return true;
-    return this.historyIsUnwitnessed() && !this.isPending(key);
+    if (this.historical.has(key)) return true;
+    if (this.isPending(key)) return false;
+    if (!this.historyIsUnwitnessed()) return false;
+    this.historical.add(key);
+    return true;
   }
 
   /** The player answered this event. */
@@ -320,6 +355,11 @@ export class NoticeLedger {
   private persist(): void {
     const key = this.key;
     if (!key) return;
+    /* READ, MERGE, WRITE: another of this player's tabs may have acknowledged something this one has not heard about
+       yet, and a blind write of this tab's memory would drop it. Acknowledgements only accumulate. */
+    const stored = readRecord(key);
+    for (const acknowledgedKey of stored.acknowledged) this.acknowledged.add(acknowledgedKey);
+    this.pending = this.pending.filter((entry) => !this.acknowledged.has(entry.key));
     const record = {
       v: 1,
       updatedAt: Date.now(),

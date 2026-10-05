@@ -14,8 +14,10 @@ import {
   heraldFloatNoticeKey,
   noticeLedgerKey,
   privateRevenueNoticeKey,
+  privateRevenuePayloadForStorage,
   type NoticeLedgerViewer,
 } from "./noticeAcknowledgements";
+import { truncateAddress } from "./address";
 import { nextDueNotice, type FleetLossNotice } from "./fleetLossNotice";
 
 const RUST: FleetLossNotice = {
@@ -106,6 +108,16 @@ describe("1-2. an acknowledged notice stays acknowledged (P3-N019, AUD-11.02)", 
     expect(reloaded.isAcknowledged(heraldFloatNoticeKey(3))).toBe(true);
   });
 
+  it("two tabs answering different notices both keep their answers (read, merge, write -- review LOW)", () => {
+    const tabOne = mount(KEY_A);
+    const tabTwo = mount(KEY_A);
+    tabOne.acknowledge(PHASE_THREE_NOTICE_KEY);
+    tabTwo.acknowledge(heraldFloatNoticeKey(3)); // before tab two heard about tab one's write
+    const reloaded = mount(KEY_A);
+    expect(reloaded.isAcknowledged(PHASE_THREE_NOTICE_KEY)).toBe(true);
+    expect(reloaded.isAcknowledged(heraldFloatNoticeKey(3))).toBe(true);
+  });
+
   it("closes a notice another of this player's tabs answered (reload on the storage event)", () => {
     const tabOne = mount(KEY_A);
     const tabTwo = mount(KEY_A);
@@ -176,6 +188,15 @@ describe("3. another game, and another seat, have their own records", () => {
     expect(ann.isAcknowledged(PHASE_THREE_NOTICE_KEY)).toBe(false);
   });
 
+  it("a gap with no record between two tables carries nothing into the second (review NIT)", () => {
+    const ledger = mount(KEY_A);
+    ledger.bind(null);
+    ledger.acknowledge(PHASE_THREE_NOTICE_KEY); // a leftover of the first table, answered in the gap
+    ledger.bind(noticeLedgerKey(viewer("g_B", "p-bo")));
+    expect(ledger.isAcknowledged(PHASE_THREE_NOTICE_KEY)).toBe(false);
+    expect(mount(noticeLedgerKey(viewer("g_B", "p-bo"))).isAcknowledged(PHASE_THREE_NOTICE_KEY)).toBe(false);
+  });
+
   it("moving the ledger to another record carries nothing across", () => {
     const ledger = mount(KEY_A);
     ledger.acknowledge(PHASE_THREE_NOTICE_KEY);
@@ -189,9 +210,9 @@ describe("4-5. a late joiner gets no backlog; Fleet Loss does not replay old his
     let loading = true;
     const lateJoiner = mount(noticeLedgerKey(viewer("g_A", "p-cy")), () => loading);
     expect(lateJoiner.has(fleetLossNoticeKey(RUST))).toBe(true);
-    expect(lateJoiner.has(fleetLossNoticeKey(LIMIT))).toBe(true);
     loading = false; // the table has loaded: what happens now is witnessed
-    expect(lateJoiner.has(fleetLossNoticeKey(RUST))).toBe(false);
+    expect(lateJoiner.has(fleetLossNoticeKey(LIMIT))).toBe(false); // a new event is new
+    expect(lateJoiner.has(fleetLossNoticeKey(RUST))).toBe(true); // the load's history stays history
   });
 
   it("except this player's own unanswered notices, which their record brings back", () => {
@@ -202,10 +223,49 @@ describe("4-5. a late joiner gets no backlog; Fleet Loss does not replay old his
     expect(reloading.pendingOf("fleetLoss").map((entry) => entry.payload)).toEqual([RUST]);
   });
 
+  it("an event suppressed at load stays suppressed through a later full replay (an Undo) in the same mount", () => {
+    /* Review MEDIUM 1: an Undo rebuilds and replays the whole log after the first load has finished, when the
+       history is no longer "unwitnessed". What the load treated as history must not come back as new then. */
+    let loading = true;
+    const ledger = mount(KEY_A, () => loading);
+    expect(ledger.has(fleetLossNoticeKey(RUST))).toBe(true); // the first load: history
+    loading = false; // load done; now somebody presses Undo and the drain replays everything again
+    expect(ledger.has(fleetLossNoticeKey(RUST))).toBe(true);
+    expect(nextDueNotice([RUST], ledger)).toBeNull();
+    expect(ledger.has(fleetLossNoticeKey(LIMIT))).toBe(false); // never seen at load: a live event is still new
+  });
+
   it("an answered event stays answered whatever the history is doing", () => {
     mount(KEY_A).acknowledge(fleetLossNoticeKey(RUST));
     expect(mount(KEY_A, () => true).has(fleetLossNoticeKey(RUST))).toBe(true);
     expect(mount(KEY_A, () => false).has(fleetLossNoticeKey(RUST))).toBe(true);
+  });
+});
+
+describe("LIVE-2D: a stored payout names no seat by its id (review LOW)", () => {
+  const ROSTER = [
+    { id: "p-0123456789abcdef", nickname: "" },
+    { id: "p-fedcba9876543210", nickname: "Bo" },
+  ];
+  it("replaces a label that is a shortened id with the seat's nickname, or its table position", () => {
+    const payload = {
+      ...REVENUE,
+      viewerName: truncateAddress(ROSTER[0].id),
+      others: [{ name: truncateAddress(ROSTER[1].id), seatColor: null, total: 5, cashAfter: 10 }],
+    };
+    const stored = privateRevenuePayloadForStorage(payload, ROSTER, (id) => truncateAddress(id));
+    expect(stored.viewerName).toBe("Seat 1");
+    expect(stored.others[0].name).toBe("Bo");
+    const ledger = mount(KEY_A);
+    ledger.remember({ kind: "privateRevenue", key: privateRevenueNoticeKey("OR 2.1"), payload: stored });
+    const everything = Object.values({ ...window.localStorage }).join(" ");
+    expect(everything).not.toContain("0123456789");
+    expect(everything).not.toContain("9876543210");
+  });
+
+  it("leaves a real nickname alone", () => {
+    const stored = privateRevenuePayloadForStorage({ ...REVENUE, viewerName: "Ann" }, ROSTER, (id) => truncateAddress(id));
+    expect(stored.viewerName).toBe("Ann");
   });
 });
 

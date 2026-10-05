@@ -642,6 +642,7 @@ import {
   isPrivateRevenuePayload,
   noticeLedgerKey,
   privateRevenueNoticeKey,
+  privateRevenuePayloadForStorage,
 } from "./utils/noticeAcknowledgements";
 import { useNoticeChain } from "./utils/useNoticeChain";
 import GameScreenHeading from "./components/GameScreenHeading";
@@ -1558,7 +1559,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.key !== null && event.key !== noticeLedger.storageKey) return;
-      if (noticeLedger.reload()) bumpNoticeLedgerRevision();
+      if (!noticeLedger.reload()) return;
+      bumpNoticeLedgerRevision();
+      /* The fleet memo reads the queue, not the ledger: drop what was answered elsewhere so the next queued notice
+         for that corporation can present here at once. */
+      const queue = pendingFleetNoticesRef.current;
+      const open = queue.filter((notice) => !noticeLedger.isAcknowledged(noticeDismissKey(notice)));
+      if (open.length !== queue.length) {
+        pendingFleetNoticesRef.current = open;
+        setPendingFleetNotices(open);
+      }
     };
     window.addEventListener("storage", onStorage);
     return () => window.removeEventListener("storage", onStorage);
@@ -2659,6 +2669,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      goes through that helper rather than a bare `setTimeout` here. */
   const [phaseThreeNotice, setPhaseThreeNotice] = useState(false);
   const previousPhaseTier = useRef<string | null | undefined>(undefined);
+  /** W3-A / OD-5(a): whether a 2 -> 3 edge can be one this viewer witnessed (set beside `sandboxAppliedCount`). */
+  const phaseThreeEdgeArmedRef = useRef(false);
   useEffect(() => {
     const tier = currentPhase?.known ? currentPhase.tier : null;
     const previous = previousPhaseTier.current;
@@ -2666,8 +2678,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     if (previous === undefined) return; // the first observation seeds; it is not an edge
     /* W3-A / OD-5(a): an edge crossed while this mount is still loading the table's history happened before this
        viewer arrived -- no backlog for a late joiner. A player who did see it and had not answered gets it back
-       from their ledger instead (the restore effect beside the notice chain). */
-    if (initialHistoryLoadRef.current) return;
+       from their ledger instead (the restore effect beside the notice chain). ARMED by the effect beside
+       `sandboxAppliedCount` once the first load has landed, and re-seeded there -- React may batch the whole first
+       drain into one render, so "is the load still running" cannot be read here at the moment of the edge. */
+    if (!phaseThreeEdgeArmedRef.current) return;
     if (previous === "2" && tier === "3") {
       holdForPhaseBadgeFlip("settled", () => setPhaseThreeNotice(true));
     }
@@ -4409,6 +4423,18 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      witness, so it is no backlog of theirs (`NoticeLedger.has`, the Phase 3 edge). Written during render, read by the
      raisers inside the dispatch. */
   initialHistoryLoadRef.current = sandboxRoomCode !== null && sandboxAppliedCount === 0;
+  /* W3-A / OD-5(a): arm the Phase 3 edge once the first load has landed, SEEDED with the phase it landed on, so a
+     history crossing into Phase 3 is not mistaken for a live edge; disarm when the table changes. Declared after the
+     edge's own effect, so in a render where the load and the phase change land together the edge sees "not armed". */
+  useEffect(() => {
+    if (initialHistoryLoadRef.current) {
+      phaseThreeEdgeArmedRef.current = false;
+      return;
+    }
+    if (phaseThreeEdgeArmedRef.current) return;
+    phaseThreeEdgeArmedRef.current = true;
+    previousPhaseTier.current = currentPhase?.known ? currentPhase.tier : null;
+  }, [sandboxRoomCode, sandboxAppliedCount, currentPhase]);
   /* ==================================================================
       DESIGN NOTE 1173: THE TURN GATE WAS READING A STATE ONE ROUND TRIP OLD
      ==================================================================
@@ -11978,6 +12004,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
      History this viewer did not witness never reaches here: the raisers refuse it (`NoticeLedger.has`, #825's
      `replayingHistory` guards, the Phase 3 edge's load guard). */
   useEffect(() => {
+    /* NOT BEFORE THE SEAT'S RECORD IS KNOWN: this re-runs when it is, so nothing is lost, and nothing is written with
+       a roster that could not yet be read (below). */
+    if (!noticeLedgerStorageKey) return;
     for (const notice of pendingFleetNotices) {
       noticeLedger.remember({ kind: "fleetLoss", key: noticeDismissKey(notice), payload: notice });
     }
@@ -11985,7 +12014,13 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       noticeLedger.remember({
         kind: "privateRevenue",
         key: privateRevenueNoticeKey(privatePayoutPhase.roundLabel),
-        payload: privatePayoutPhase,
+        /* LIVE-2D: the payout names seats as the shell labels them, and an unresolved nickname is labelled by the
+           seat's shortened id -- which must not be persisted. */
+        payload: privateRevenuePayloadForStorage(
+          privatePayoutPhase,
+          sandboxRoomDoc?.players.map((player) => ({ id: player.id, nickname: player.nickname })) ?? [],
+          (id) => truncateAddress(id),
+        ),
       });
     }
     if (phaseThreeNotice) noticeLedger.remember({ kind: "phaseThree", key: PHASE_THREE_NOTICE_KEY, payload: null });
@@ -11996,7 +12031,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         payload: heraldFloatNotice,
       });
     }
-  }, [noticeLedger, noticeLedgerStorageKey, pendingFleetNotices, privatePayoutPhase, phaseThreeNotice, heraldFloatNotice]);
+  }, [noticeLedger, noticeLedgerStorageKey, pendingFleetNotices, privatePayoutPhase, phaseThreeNotice, heraldFloatNotice, sandboxRoomDoc]);
 
   /* OD-5(a), AUD-11.02: AND IT COMES BACK AFTER A RELOAD, A NEW TAB OR A REMOUNT -- from this player's own record,
      once the record is known. Only what they witnessed and left unanswered; a late joiner's record is empty. A

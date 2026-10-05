@@ -25,6 +25,8 @@ import PhaseThreeNoticeModal from "./PhaseThreeNoticeModal";
 import HeraldHomeFloatModal from "./HeraldHomeFloatModal";
 import TutorialModal from "./TutorialModal";
 import GameScreenHeading, { GAME_SCREEN_HEADING_TEXT } from "./GameScreenHeading";
+import GameOverModal from "./GameOverModal";
+import { NativeModalTurn } from "./NativeModalTurn";
 import { useNoticeChain } from "../utils/useNoticeChain";
 import { NOTICE_PRIORITY } from "../utils/noticeChain";
 import { openNativeModalCount } from "../utils/nativeModalRegistry";
@@ -74,6 +76,8 @@ type Due = {
   herald: typeof HERALD | null;
   tutorialActive: boolean;
   foreign: boolean;
+  gameOver: boolean;
+  selfOpening: boolean;
   tick: number;
 };
 const NOTHING: Due = {
@@ -84,6 +88,8 @@ const NOTHING: Due = {
   herald: null,
   tutorialActive: false,
   foreign: false,
+  gameOver: false,
+  selfOpening: false,
   tick: 0,
 };
 
@@ -122,6 +128,23 @@ function Shell({ initial }: { initial: Due }) {
             Close peek
           </button>
         </NativeModal>
+      )}
+      <GameOverModal
+        reason={due.gameOver ? "bank-broken" : null}
+        standings={[]}
+        viewerAddress={null}
+        bankruptLabel={null}
+        onDismiss={() => update({ gameOver: false })}
+        onCloseRoom={null}
+        autoCloseIn={null}
+        roomClosed={false}
+      />
+      {due.selfOpening && (
+        <NativeModalTurn>
+          <NativeModal name="Set the B&O par value" dismissible={false} restoreOpener={false} scrimStyle={{}}>
+            <p>Par</p>
+          </NativeModal>
+        </NativeModalTurn>
       )}
       {presented === "emergency" && (
         <NativeModal name="Emergency Train Purchase" dismissible={false} restoreOpener={false} chainedNotice scrimStyle={{}}>
@@ -291,6 +314,37 @@ describe("10. AUD-13.07: no notice stacks with another native dialog", () => {
   });
 });
 
+describe("10. AUD-13.07: a dialog that opens itself waits for the screen (NativeModalTurn)", () => {
+  it("Game Over arriving over a dialog the player opened waits, then opens alone", () => {
+    render({ ...NOTHING, foreign: true });
+    act(() => update({ gameOver: true }));
+    expect(surfaces()).toEqual(["Market peek"]);
+    click(/Close peek/);
+    expect(surfaces()).toEqual(["Game Over"]);
+  });
+
+  it("two dialogs that open themselves in the same moment do not stack: the first claims, the second waits", () => {
+    render({ ...NOTHING, gameOver: true, selfOpening: true });
+    expect(surfaces()).toHaveLength(1);
+    expect(surfaces()[0]).toBe("Game Over");
+  });
+
+  it("a self-opening dialog and a forced notice due together never share the screen, and the notice comes back", () => {
+    render({ ...NOTHING, selfOpening: true, phaseThree: true });
+    expect(surfaces()).toHaveLength(1);
+    act(() => update({ selfOpening: false }));
+    expect(surfaces()).toEqual(["Phase 3: private companies are for sale"]);
+  });
+
+  it("a notice already on screen keeps it; the self-opening dialog waits for its answer", () => {
+    render({ ...NOTHING, phaseThree: true });
+    act(() => update({ gameOver: true }));
+    expect(surfaces()).toEqual(["Phase 3: private companies are for sale"]);
+    click(/^Got it$/);
+    expect(surfaces()).toEqual(["Game Over"]);
+  });
+});
+
 describe("11-12. AUD-13.02 / OD-5(b): where focus lands, and when it does not move", () => {
   it("after the chain is exhausted, focus is on the game-screen heading", () => {
     render({ ...NOTHING, fleet: FLEET, revenue: ROUND });
@@ -392,6 +446,24 @@ describe("noticeChainShellWiring: the shell mounts every forced notice through t
     expect(chain).toContain("!noticeLedger.isAcknowledged(PHASE_THREE_NOTICE_KEY)");
     expect(chain).toContain("!noticeLedger.isAcknowledged(heraldFloatNoticeKey(heraldFloatNotice.companyId))");
     expect(chain).toContain("tutorial: openTutorials.length > 0");
+  });
+
+  it("review fixes: cross-tab answers drop from the fleet queue; nothing is stored before the record is known; Phase 3 is armed after the load", () => {
+    const storage = sliceBetween(APP, "const onStorage = (event: StorageEvent) => {", 'window.addEventListener("storage", onStorage);');
+    expect(storage).toContain("!noticeLedger.isAcknowledged(noticeDismissKey(notice))");
+    expect(storage).toContain("setPendingFleetNotices(open);");
+    expect(APP).toMatch(/if \(!noticeLedgerStorageKey\) return;\s*for \(const notice of pendingFleetNotices\)/);
+    expect(APP).toContain("payload: privateRevenuePayloadForStorage(");
+    expect(APP).toContain("if (!phaseThreeEdgeArmedRef.current) return;");
+    const arming = sliceBetween(APP, "initialHistoryLoadRef.current = sandboxRoomCode !== null && sandboxAppliedCount === 0;", "}, [sandboxRoomCode, sandboxAppliedCount, currentPhase]);");
+    expect(arming).toContain("phaseThreeEdgeArmedRef.current = true;");
+    expect(arming).toContain("previousPhaseTier.current = currentPhase?.known ? currentPhase.tier : null;");
+  });
+
+  it("the dialogs that open themselves wait for the screen", () => {
+    for (const file of ["components/GameOverModal.tsx", "components/AuctionPromptModal.tsx", "components/PrivatePowerFlowModal.tsx"]) {
+      expect([file, readStripped(file).includes("<NativeModalTurn>")]).toEqual([file, true]);
+    }
   });
 
   it("AUD-01.06: nothing in the shell re-arms the tutorials", () => {

@@ -290,7 +290,9 @@ describe("the bed ducks by how much the clip needs", () => {
        competes with the bed asks for the other by name, which is where a reader looking for "why is the radio
        so quiet" will find the answer. */
     const audio = readStripped("utils/audio.ts");
-    expect(audio).toContain("export function duckRadio(depth: number = DUCK_FOR_CUE)");
-    expect(APP).toContain("duckRadio(DUCK_FOR_VIDEO)");
+    // W3-H (A-19): the signature gained an optional supersession slot after the depth; the default is unchanged.
+    expect(audio).toMatch(/export function duckRadio\(depth: number = DUCK_FOR_CUE[,)]/);
+    // W3-H (A-19): the haunting names its slot too (`HAUNTING_DUCK_SLOT`); its depth is still asked for by name.
+    expect(APP).toContain("duckRadio(DUCK_FOR_VIDEO, HAUNTING_DUCK_SLOT)");
   });
 });

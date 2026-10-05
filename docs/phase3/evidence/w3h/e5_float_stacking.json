@@ -5,6 +5,92 @@
   "viewport": "1280x720",
   "target": "B&O",
   "fullMotion": {
+    "hitTestMidLift": {
+      "overlap": {
+        "x0": 223.4547576904297,
+        "x1": 726.3575286865234,
+        "y0": 2,
+        "y1": 68
+      },
+      "points": 36,
+      "dock": 36,
+      "card": 0,
+      "other": 0,
+      "samples": [
+        {
+          "x": 223,
+          "y": 2,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 223,
+          "y": 24,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 223,
+          "y": 46,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 223,
+          "y": 68,
+          "hit": "dock",
+          "tag": "DIV"
+        }
+      ],
+      "controlBelowDock": {
+        "x": 475,
+        "y": 100,
+        "hit": "card"
+      }
+    },
+    "hitTestLifted": {
+      "overlap": {
+        "x0": 348.50390625,
+        "x1": 931.49609375,
+        "y0": 2,
+        "y1": 68
+      },
+      "points": 36,
+      "dock": 36,
+      "card": 0,
+      "other": 0,
+      "samples": [
+        {
+          "x": 349,
+          "y": 2,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 349,
+          "y": 24,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 349,
+          "y": 46,
+          "hit": "dock",
+          "tag": "DIV"
+        },
+        {
+          "x": 349,
+          "y": 68,
+          "hit": "dock",
+          "tag": "DIV"
+        }
+      ],
+      "controlBelowDock": {
+        "x": 640,
+        "y": 100,
+        "hit": "card"
+      }
+    },
     "scrollY": 655,
     "geometryBefore": {
       "card": {
@@ -33,32 +119,23 @@
       "FLOAT_SCALE": 1.5
     },
     "summary": {
-      "frames": 115,
-      "anyCardTransform": false,
-      "anyStamp": false,
-      "anyFlip": false,
-      "anyMuted": false,
+      "frames": 116,
+      "anyCardTransform": true,
+      "anyStamp": true,
+      "anyFlip": true,
+      "anyMuted": true,
       "distinctInnerTransforms": [
         "none"
       ],
       "distinctCardZ": [
-        "auto"
+        "auto",
+        "5"
       ]
     },
-    "floatCuesFired": 0,
+    "floatCuesFired": 1,
     "firstFrames": [
       {
-        "t": 0,
-        "cardTransform": "none",
-        "cardZ": "auto",
-        "innerTransform": "none",
-        "stamp": false,
-        "flip": false,
-        "muted": false,
-        "top": 193
-      },
-      {
-        "t": 17,
+        "t": 1,
         "cardTransform": "none",
         "cardZ": "auto",
         "innerTransform": "none",
@@ -69,22 +146,35 @@
       },
       {
         "t": 34,
-        "cardTransform": "none",
-        "cardZ": "auto",
+        "cardTransform": "matrix(1, 0, 0, 1, 0, 0)",
+        "cardZ": "5",
         "innerTransform": "none",
         "stamp": false,
         "flip": false,
-        "muted": false,
+        "muted": true,
+        "top": 193
+      },
+      {
+        "t": 37,
+        "cardTransform": "matrix(1, 0, 0, 1, 0, 0)",
+        "cardZ": "5",
+        "innerTransform": "none",
+        "stamp": false,
+        "flip": false,
+        "muted": true,
         "top": 193
       }
     ],
     "pageErrors": [],
-    "screenshot": "docs/phase3/evidence/w3h/e5_fullmotion_midlift_nolift.png"
+    "screenshots": [
+      "docs/phase3/evidence/w3h/e5_fullmotion_midlift.png",
+      "docs/phase3/evidence/w3h/e5_fullmotion_lifted.png"
+    ]
   },
   "reducedMotion": {
     "scrollY": 798,
     "summary": {
-      "frames": 54,
+      "frames": 59,
       "anyCardTransform": false,
       "anyStamp": true,
       "anyFlip": false,
@@ -92,10 +182,10 @@
       "distinctInnerTransforms": [
         "none",
         "matrix(1.12, 0, 0, 1.12, 0, 0)",
-        "matrix(1.1, 0, 0, 1.1, 0, 0)",
-        "matrix(1.08158, 0, 0, 1.08158, 0, 0)",
+        "matrix(1.09999, 0, 0, 1.09999, 0, 0)",
+        "matrix(1.08157, 0, 0, 1.08157, 0, 0)",
         "matrix(1.06458, 0, 0, 1.06458, 0, 0)",
-        "matrix(1.04915, 0, 0, 1.04915, 0, 0)"
+        "matrix(1.04914, 0, 0, 1.04914, 0, 0)"
       ],
       "distinctCardZ": [
         "auto",
@@ -159,8 +249,8 @@
     "computedTransformAtRest": "matrix(1.5, 0, 0, 1.5, 403.336, -283.625)",
     "hitTestMidLift": {
       "overlap": {
-        "x0": 280.0839538574219,
-        "x1": 819.2557067871094,
+        "x0": 289.82568359375,
+        "x1": 835.236572265625,
         "y0": 2,
         "y1": 68
       },
@@ -170,32 +260,32 @@
       "other": 0,
       "samples": [
         {
-          "x": 280,
+          "x": 290,
           "y": 2,
           "hit": "dock",
           "tag": "DIV"
         },
         {
-          "x": 280,
+          "x": 290,
           "y": 24,
           "hit": "dock",
           "tag": "DIV"
         },
         {
-          "x": 280,
+          "x": 290,
           "y": 46,
           "hit": "dock",
           "tag": "DIV"
         },
         {
-          "x": 280,
+          "x": 290,
           "y": 68,
           "hit": "dock",
           "tag": "DIV"
         }
       ],
       "controlBelowDock": {
-        "x": 550,
+        "x": 563,
         "y": 100,
         "hit": "card"
       }

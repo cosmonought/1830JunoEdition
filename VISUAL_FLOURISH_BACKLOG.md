@@ -1647,7 +1647,7 @@ other. **Nobody has watched the two run on the same card at once** — a purchas
 crosses 60% would show the ownership-transfer border/proxy and the float lift/stamp/flip simultaneously.
 Recorded so a busy-looking card in that exact moment is read as this deliberate choice, not as a bug.
 
-### E-5 · `OPEN` · The stacking-context claim is reasoned, not screenshotted
+### E-5 · `RESOLVED` (W3-H, 2026-10-04) · The stacking-context claim is reasoned, not screenshotted
 The report accompanying this batch reasons from the CSS spec (a `transform`-bearing element opens its own
 stacking context; the sticky action dock's `zIndex: 50` lives in a separate branch of the tree with no
 intervening ancestor `z-index`) that the lifted card can never paint over the sticky header without a
@@ -1681,6 +1681,16 @@ path, which does not lift. Re-run after the ref cycle is fixed. **Side observati
 card face at its edges (header text cut, visible in the screenshot) rather than growing the card. All numbers:
 `docs/phase3/evidence/w3h/e5_float_stacking.json`; harness `entries/e5.tsx`, `e5.mjs`.
 
+**RESOLVED by W3-H** — after the ref-cycle defect above was fixed (`4c89333`: the card's ref now follows the float
+sequence's named card, so `useFloatCardTarget` can measure it; pinned by `components/w3hFloatCeremonyMeasures.test.tsx`),
+the harness was re-run on the **shipped path** (full motion, same scroll: the roster grid's centre behind the dock).
+The ceremony now plays — card transform, stamp, flip, muted livery, z-index 5, one float cue over 116 frames — and the
+real lifted card settles behind the dock: 36/36 `elementFromPoint` samples in the dock/card overlap hit the dock
+mid-lift and 36/36 once settled at the centre; the control point below the dock hits the card
+(`e5_fullmotion_midlift.png`, `e5_fullmotion_lifted.png`; numbers under `fullMotion` in `e5_float_stacking.json`;
+driver `e5.mjs`). `e5_fullmotion_midlift_nolift.png` is kept as the pre-fix record of the defect. The reduced-motion
+crop noted above (the 1.12 emphasis inside `overflow: hidden`) is a separate observation, left for playtest.
+
 ### E-6 · `RESOLVED` (W3-H, 2026-10-04) · Off-screen/inactive-tab cost, same shape as C-7
 The float timers and the geometry measurement run whether or not the "corps" tab is the active main tab or
 the card is scrolled into view — `useFloatCardTarget`'s early return only catches a genuinely unmounted
@@ -1701,7 +1711,9 @@ each fails with the gate reverted. **Found while closing this, not fixed (outsid
 `floatCardRef` — so the full-motion card can never measure itself and every full-motion float takes the A-3
 fallback, in a real browser as well as in jsdom (E-1 may be watching for a ceremony that cannot currently
 play). A local probe attaching the ref whenever the float sequence names the card made the stamp appear and
-the cue fire.
+the cue fire. **Since fixed in W3-H** (`4c89333`, under E-5, which could not be answered on the shipped path
+without it): the ref follows the float sequence's named card; see E-5 for the real-browser re-run. E-1's
+playtest can now watch the ceremony.
 
 ## Part F — Open review items (VF-2)
 

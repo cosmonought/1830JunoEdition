@@ -109,9 +109,17 @@ const summarise = (frames) => ({
   const sampling = sample(page, c.FLOAT_TOTAL_MS + 100);
   await page.evaluate(() => window.__float(4, 1));
   await page.waitForTimeout(Math.round(c.FLOAT_LIFT_MS / 2));
-  await page.screenshot({ path: join(EVIDENCE, "e5_fullmotion_midlift_nolift.png") });
+  // W3-H (after the ref-cycle fix, 4c89333): the REAL lifted card, hit-tested against the dock mid-lift and
+  // once it has settled at the centre (the stamp beat), which is the question E-5 asks.
+  const realMidLift = await hitTest(page);
+  await page.screenshot({ path: join(EVIDENCE, "e5_fullmotion_midlift.png") });
+  await page.waitForTimeout(Math.round(c.FLOAT_LIFT_MS / 2) + 120);
+  const realLifted = await hitTest(page);
+  await page.screenshot({ path: join(EVIDENCE, "e5_fullmotion_lifted.png") });
   const frames = await sampling;
   result.fullMotion = {
+    hitTestMidLift: realMidLift,
+    hitTestLifted: realLifted,
     scrollY: scrollTo,
     geometryBefore: g,
     constants: { FLOAT_LIFT_MS: c.FLOAT_LIFT_MS, FLOAT_TOTAL_MS: c.FLOAT_TOTAL_MS, FLOAT_SCALE: c.FLOAT_SCALE },
@@ -119,7 +127,7 @@ const summarise = (frames) => ({
     floatCuesFired: await page.evaluate(() => window.__cues ?? 0),
     firstFrames: frames.slice(0, 3),
     pageErrors: errors,
-    screenshot: "docs/phase3/evidence/w3h/e5_fullmotion_midlift_nolift.png",
+    screenshots: ["docs/phase3/evidence/w3h/e5_fullmotion_midlift.png", "docs/phase3/evidence/w3h/e5_fullmotion_lifted.png"],
   };
   await page.close();
 }

@@ -67,7 +67,8 @@ function balances(state: GameStateResponse | null | undefined): Map<number, numb
   return out;
 }
 
-/** Every corporate treasury this message moved, and whether the message can account for it. */
+/** Every corporate treasury this message moved, and whether the message can account for it -- except a float's
+ *  capital, which the float line states (Phase 3 W3-J, AUD-25.13 #4: see below). */
 export function describeTreasuryMoves(
   msg: unknown,
   before: GameStateResponse | null | undefined,
@@ -75,6 +76,9 @@ export function describeTreasuryMoves(
 ): readonly TreasuryMove[] {
   if (!after) return [];
   const was = balances(before);
+  const unfloated = new Set(
+    (before?.public_companies ?? []).filter((company) => !company.is_floated).map((company) => company.company_id),
+  );
   const key =
     typeof msg === "object" && msg !== null ? (Object.keys(msg)[0] ?? "") : String(msg ?? "");
   const expected = TREASURY_MOVERS.includes(key);
@@ -87,6 +91,15 @@ export function describeTreasuryMoves(
     if (from === undefined) continue;
     const to = Number(company.treasury) || 0;
     if (from === to) continue;
+    /* Phase 3 W3-J (AUD-25.13 #4): ONE FLOAT, ONE SENTENCE. A corporation that floats on this transition (W2-J's
+       `describeFloat` edge, `is_floated` false -> true) from an empty treasury has its whole movement stated by the
+       float line -- "<CORP> has floated. It received $<treasury>." -- which the shell prints off these same two
+       boards for every message. A BuyStock float was already silent here (#1343, `sentenceStatesTreasury`); the M&H
+       exchange (on the owner's turn, or settled at a turn boundary inside a PassTurn) and the C&A grant (an auction
+       step) printed this line beside it -- on the direct paths flagged UNEXPLAINED. Omitted here, so the shell's
+       loop is untouched. A floated corporation re-capitalised (#750's own hypothesis), a float from a non-empty
+       treasury, and every other corporation's movement on the same entry are still reported. */
+    if (from === 0 && unfloated.has(company.company_id) && company.is_floated) continue;
     /* UR-3 (OD-UR-1): ON A PINNED UNPREDICTABLE REVENUE TABLE THE MARK LANDS IN THE RUN'S OWN ENTRY, and it mints its
        award there -- a treasury movement no run made before. It is explained for exactly the corporation whose run
        recorded a Mark, and exactly by that award; any other treasury a run moves is still the surprise #750 exists to

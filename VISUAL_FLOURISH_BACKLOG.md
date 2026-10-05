@@ -2047,12 +2047,14 @@ motions on one element read as a rendering fault, and the thing they were counti
 for a whole round suddenly stops, oxidises and fractures. The transition from a deep fade to full-opacity
 oxide may read as the chip *recovering* for an instant before it dies.
 
-### I-10 · `OPEN` · Rust's static badge icon is not implemented
+### I-10 · `RESOLVED` (W3-H, 2026-10-04) · Rust's static badge icon is not implemented
 The brief asks that the flourish's vocabulary be structured so a later badge-identification pass can derive
 the static warning icon from it — a fractured train, a cracked wheel, a crack mark. `crackPath` is the piece
 that pass would reuse: it produces a resolution-free fracture from a seed, so a badge icon can be the same
 mark at a fixed seed. **Deliberately not implemented here** — the brief says not to unless the implementation
 required it, and it did not.
+
+**RESOLVED (verified by W3-H; OD-14(h) RULED "use static rust/discard icon treatment")** — already built by the warning-marks pass: `RustMark` in `WarningMarks.tsx` is `crackPath(41, 3)` in a square tile, exactly as this entry proposed (Part K, K-1 … K-6), and its identity with the generator is pinned in `warningMarks.test.tsx`. This entry's `OPEN` was stale; W3-H adds the discard half (J-6) and a badge-size guard (K-6) and changes nothing here.
 
 ---
 
@@ -2116,12 +2118,14 @@ Left unwired rather than threaded through a fourth panel; A-3's fallback behavin
 
 **RESOLVED by W3-H** — wired with I-8, the same way: the Ledger's Corporation Assets rows receive the discard event and stage the cut on the discarding corporation only. Pinned by `components/w3hLedgerFlourishEvents.test.tsx`.
 
-### J-6 · `OPEN` · The discard's static badge icon is not implemented
+### J-6 · `RESOLVED` (W3-H, 2026-10-04) · The discard's static badge icon is not implemented
 The brief asks that the vocabulary be structured so a later badge pass can derive a static "train limit
 exceeded" mark from it. `discardCut` is the piece that pass would reuse — it produces a position and a slant
 from a seed, so a badge can be the same blade at a fixed seed, and the contrast with VF-7's `crackPath`
 badge (I-10) is already built in: a straight line against a fracture. **Deliberately not implemented here**,
 on the brief's instruction not to unless the implementation required it, and it did not.
+
+**RESOLVED by W3-H** (OD-14(h) RULED "use static rust/discard icon treatment") — `DiscardMark` in `WarningMarks.tsx`: the rust mark's own tile and weights, parted in two by ONE straight blade taken from `discardCut(110)` (x 50%, slant +3%) — the clean cut against the rust mark's branching fracture. Shown before the title of the train-limit prompt (`TrainDiscardPrompt`), as the warning badges carry theirs; decorative (`aria-hidden`), the title carries the words. Pinned by `components/w3hStaticMarks.test.tsx` (straight, unbranched, edge to edge, at the generator's position; tile parted; distinct from the fracture; on the prompt — that case fails with the prompt unwired). **Watch (playtest):** whether the parted tile reads as "cut" at 12px and at uiScale 0.63.
 
 ### J-7 · `OWNER DECISION` · Two staging sources now share one chip row, and rust wins the tie
 `TrainChips` stages a pre-rust roster or a pre-discard one, and if both were ever live for one corporation
@@ -2198,13 +2202,15 @@ worth of numerals in one pill. **What to watch:** whether the eye reads `4→3` 
 rather than as a mark. It is set a hair smaller with extra letter-spacing to hold it apart; if that is not
 enough the next lever is a thin divider, NOT a colour (brief §2) and NOT a box (brief §7).
 
-### K-6 · `OPEN` · The rust mark and VF-7's chips can now disagree about a fracture, in one direction
+### K-6 · `RESOLVED` (W3-H, 2026-10-04) · The rust mark and VF-7's chips can now disagree about a fracture, in one direction
 The badge calls `crackPath(41, 3)` and the chips call it with the default 4. A change to the generator's
 SHAPE rules moves both, which is the point of reusing it — but a change that only makes sense at four
 steps (a fifth vertex, say, or a second branch) could quietly make the badge worse without failing
 anything. The harness asserts identity with `crackPath(41, 3)`, so the badge will keep matching the
 generator; what it cannot assert is that the result still looks like a break at 12px. **Whoever next edits
 `crackPath`: rasterise the badge as well as the chip.**
+
+**RESOLVED by W3-H** — the guard exists: `components/w3hStaticMarks.test.tsx` rasterises the badge's fracture at its real size (12.6px, K-2's figure for uiScale 1.0) and requires it to still read as a break — the fork at least 1.5px and at least 35° off the run, the run bent at least 1px off its chord, a turn of at least 20°, no segment under 1.5px, at least one pixel lit by the fork alone and at least two off the chord. Measured today: 2.0px / 54° / 1.34px / 29° / 3.3px / 3 / 11. A straight slash, a lost fork and a bunched zig each fail it (asserted). A `crackPath` change that only suits four steps now fails a test instead of quietly worsening the badge. At 8px (uiScale 0.63) the same mark measures fork 1.28px, bend 0.85px, one fork-only pixel — K-2's open playtest question, recorded there rather than gated here.
 
 ### K-7 · `PLAYTEST` · The chip in pieces, at 24px and at speed
 Added by the audio wiring pass, and it is the visual half of that batch. The failing chip now breaks into

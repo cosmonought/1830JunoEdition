@@ -37,6 +37,7 @@ import PresidentCrown from "./PresidentCrown";
 /* Design note (VF-8): one rule borrowed from the discard flourish -- the Bank Pool acknowledging an
    arrival is that event seen from the other end, so the two lengths live in one file. */
 import { TRAIN_DISCARD_CSS } from "./trainDiscardFlourish";
+import { DiscardMark } from "./WarningMarks"; // W3-H (VF J-6)
 import type { DepotTier, PhaseTint } from "../gameEngine/gamePhase";
 // Design note #632: one tier-to-era lookup, shared with the phase badge.
 // Design note #1007: the shared namer, so this panel and the rust badges spell a tier the same way. It used to
@@ -1914,7 +1915,11 @@ export function TrainDiscardPrompt({
     <div style={styles.promptRoot} role="alertdialog" aria-label="Train limit">
       <div style={styles.promptHeader}>
         <span style={styles.promptDot} aria-hidden="true" />
-        <span style={styles.promptTitle}>Train limit</span>
+        {/* W3-H (VF J-6, OD-14(h)): the static discard mark -- VF-8's blade at a fixed seed, the clean cut that
+            answers the rust badge's fracture -- before the title, as the warning badges carry theirs. */}
+        <span style={styles.promptTitle}>
+          <DiscardMark /> Train limit
+        </span>
       </div>
       <p style={styles.promptBody}>
         <strong>{due.ticker}</strong> holds {due.excess === 1 ? "one train" : `${due.excess} trains`} more than the

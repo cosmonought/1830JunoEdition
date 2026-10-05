@@ -1157,10 +1157,18 @@ tile, are painted at the fade. A confirmed proposal is unchanged (its transition
 `components/w3hTileFlourish.test.ts` (D-12 cases: C17's icon and cost box, Scranton's name and compound badge, each
 at the value's alpha and in its printed slot; a confirmed proposal shows neither).
 
-### D-13 · `OPEN` · Overlays are not staged
+### D-13 · `RESOLVED` (W3-H, 2026-10-04) · Overlays are not staged
 Route overlays, the focus veil and hover highlights draw from authoritative state over a hex mid-flourish, so a
 route could be drawn along rail still under construction. Routes are planned after the lay, so this should be
 rare.
+**RESOLVED by W3-H** — route overlays and the travelling route signal are now held on a hex mid-flourish: both are
+drawn under an even-odd clip that leaves out every hex whose flourish is still running, so no route is drawn along
+rail the frame has not built; the hex gets its route back on the first frame after its flourish commits. Everywhere
+else, and the pointer's route hit geometry, are unchanged; the route-signal frame clock is untouched. Reduced motion's
+240 ms fade builds nothing piecemeal and holds nothing (unchanged). The focus veil and hover were reviewed and left as
+they are: the veil is a tint and hover only restyles a nameplate — neither draws rail, so neither shows the unfinished
+tile as anything it is not. Pinned by `components/w3hTileFlourish.test.ts` (D-13 case: mid-flourish the route line is
+drawn with Scranton held out, after it with nothing held out, and under reduced motion with nothing held out).
 
 ### D-14 · `PLAYTEST` · Reservation markers ride with their city
 Since #1473 a home reservation marker is a piece in its city, as a token is (D-32), on every lay — a confirmed

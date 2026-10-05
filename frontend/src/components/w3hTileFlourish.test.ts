@@ -27,7 +27,8 @@ declare global {
 global.IS_REACT_ACT_ENVIRONMENT = true;
 
 /* ---- the board's printed-element primitives, wrapped to record what each was asked to paint ---- */
-type PrimitiveCall = { name: string; args: unknown[]; alpha: number; onBoard: boolean };
+type ClipRecord = { rule: unknown; ops: Array<{ op: string; args: number[] }> };
+type PrimitiveCall = { name: string; args: unknown[]; alpha: number; onBoard: boolean; clips: ClipRecord[] };
 const mockPrimitiveCalls: PrimitiveCall[] = [];
 jest.mock("./hexCanvasPrimitives", () => {
   const actual = jest.requireActual("./hexCanvasPrimitives");
@@ -40,11 +41,19 @@ jest.mock("./hexCanvasPrimitives", () => {
     "drawStackedNameLabel",
     "drawHexNameLabel",
     "drawValueBadge",
+    "drawRouteOverlays",
+    "drawRouteSignalBand",
   ]) {
     wrapped[name] = (...args: unknown[]) => {
-      const target = args[0] as { globalAlpha: number; canvas?: { isConnected?: boolean } };
+      const target = args[0] as { globalAlpha: number; canvas?: { isConnected?: boolean }; __clips?: ClipRecord[] };
       // The board's own canvas is in the document; a scratch layer never is.
-      mockPrimitiveCalls.push({ name, args, alpha: target.globalAlpha, onBoard: target.canvas?.isConnected === true });
+      mockPrimitiveCalls.push({
+        name,
+        args,
+        alpha: target.globalAlpha,
+        onBoard: target.canvas?.isConnected === true,
+        clips: [...(target.__clips ?? [])],
+      });
       return (actual[name] as (...a: unknown[]) => unknown)(...args);
     };
   }
@@ -82,21 +91,39 @@ const multiply = (m: Matrix, n: Matrix): Matrix => ({
 
 function recordingContext(canvas: HTMLCanvasElement): unknown {
   const id = (nextContext += 1);
-  type State = { props: Record<string, unknown>; transform: Matrix; clipped: number };
-  let state: State = { props: { globalAlpha: 1, lineWidth: 1, font: "10px sans-serif" }, transform: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, clipped: 0 };
+  type State = { props: Record<string, unknown>; transform: Matrix; clipped: number; clips: ClipRecord[] };
+  let state: State = {
+    props: { globalAlpha: 1, lineWidth: 1, font: "10px sans-serif" },
+    transform: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 },
+    clipped: 0,
+    clips: [],
+  };
   const stack: State[] = [];
+  // The current path, as its ops, so each clip records the shape it clips to.
+  let path: Array<{ op: string; args: number[] }> = [];
+  const pathOp = (op: string) => (...args: number[]) => {
+    path.push({ op, args });
+  };
   const record = (name: string, args: unknown[]) =>
     ctxCalls.push({ ctx: id, onBoard: canvas.isConnected, name, args, alpha: state.props.globalAlpha as number, transform: { ...state.transform }, clipped: state.clipped });
   const methods: Record<string, (...args: never[]) => unknown> = {
     save: () => {
-      stack.push({ props: { ...state.props }, transform: { ...state.transform }, clipped: state.clipped });
+      stack.push({ props: { ...state.props }, transform: { ...state.transform }, clipped: state.clipped, clips: [...state.clips] });
     },
+    beginPath: () => {
+      path = [];
+    },
+    moveTo: pathOp("moveTo"),
+    lineTo: pathOp("lineTo"),
+    rect: pathOp("rect"),
+    closePath: pathOp("closePath"),
     restore: () => {
       const popped = stack.pop();
       if (popped) state = popped;
     },
-    clip: () => {
+    clip: (rule?: unknown) => {
       state.clipped += 1;
+      state.clips = [...state.clips, { rule: rule as unknown, ops: [...path] }];
     },
     measureText: (text: string) => ({ width: String(text).length * 6, actualBoundingBoxAscent: 5, actualBoundingBoxDescent: 2 }),
     getTransform: () => ({ ...state.transform }),
@@ -128,6 +155,7 @@ function recordingContext(canvas: HTMLCanvasElement): unknown {
     {
       get(_target, prop: string) {
         if (prop === "canvas") return canvas;
+        if (prop === "__clips") return state.clips;
         if (prop in methods) {
           return (...args: never[]) => {
             record(prop, args);
@@ -409,5 +437,67 @@ describe("W3-H (VF D-30): the value badge is finished per side in a scratch laye
       for (const badge of frame.primitives) expect(badge.onBoard).toBe(true);
       expect(frame.calls.filter((call) => call.name === "drawImage")).toHaveLength(0);
     }
+  });
+});
+
+/* ==================================================================
+    VF D-13: A ROUTE IS NOT DRAWN ALONG RAIL STILL UNDER CONSTRUCTION
+   ================================================================== */
+describe("W3-H (VF D-13): route drawing is held on a hex until its flourish commits", () => {
+  const F16 = hexAt("F16");
+  const f16 = axialToPixel(F16.q, F16.r, HEX);
+  const route = [{ trainLabel: "2", color: "#d0342c", hexes: [[F16.q, F16.r - 1], [F16.q, F16.r], [F16.q, F16.r + 1]] as Array<[number, number]>, trainIndex: 0 }];
+  /** Whether a primitive call was made under an even-odd clip that leaves out the hex centred on `at`. */
+  const holdsOut = (call: PrimitiveCall, at: { x: number; y: number }) =>
+    call.clips.some(
+      (clip) =>
+        clip.rule === "evenodd" &&
+        clip.ops.some((op) => op.op === "rect") &&
+        clip.ops.filter((op) => op.op === "moveTo" || op.op === "lineTo").some((op) => Math.abs(Math.hypot(op.args[0] - at.x, op.args[1] - at.y) - HEX) < 1e-6),
+    );
+  const routeCalls = (primitives: PrimitiveCall[]) =>
+    primitives.filter((call) => call.name === "drawRouteOverlays" || call.name === "drawRouteSignalBand");
+
+  function lay(reducedMotion: boolean) {
+    const originalMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({ matches: reducedMotion && query.includes("reduce"), media: query, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
+    try {
+      const o57 = facing("F16", { kind: "printed", label: "F16" }, 57);
+      act(() => {
+        root.render(createElement(HexGridRenderer, { mapGrid: grid(), routeOverlays: route, width: 900, height: 700, hexSize: HEX }));
+      });
+      const startedAt = (clock += 5_000);
+      act(() => {
+        root.render(createElement(HexGridRenderer, { mapGrid: grid(["F16", 57, o57]), routeOverlays: route, width: 900, height: 700, hexSize: HEX }));
+      });
+      return { startedAt, frame: (ms: number) => frameAt(startedAt, ms) };
+    } finally {
+      window.matchMedia = originalMatchMedia;
+    }
+  }
+
+  it("leaves the hex out of the route line mid-flourish, draws it there once committed, and holds nothing under reduced motion", () => {
+    const { frame } = lay(false);
+    const mid = routeCalls(frame(200).primitives);
+    expect(mid.some((call) => call.name === "drawRouteOverlays")).toBe(true);
+    // (The travelling band goes through the same hold; this route's neighbours carry no rail, so it has none to draw.)
+    for (const call of mid) expect(holdsOut(call, f16)).toBe(true);
+    const done = routeCalls(frame(5_000).primitives);
+    expect(done.some((call) => call.name === "drawRouteOverlays")).toBe(true);
+    for (const call of done) expect(holdsOut(call, f16)).toBe(false);
+
+    // Reduced motion's fade builds nothing piecemeal, so it holds nothing: unchanged.
+    act(() => root.unmount());
+    root = createRoot(container);
+    const reduced = lay(true);
+    const reducedFrame = reduced.frame(100);
+    // The fade is running (the new value is still part-strength)...
+    expect(
+      reducedFrame.primitives.some((call) => call.name === "drawValueBadge" && call.args[2] === F16.q && call.args[3] === F16.r && call.alpha < 1),
+    ).toBe(true);
+    // ...and the route is drawn over it as before.
+    const fading = routeCalls(reducedFrame.primitives);
+    expect(fading.some((call) => call.name === "drawRouteOverlays")).toBe(true);
+    for (const call of fading) expect(holdsOut(call, f16)).toBe(false);
   });
 });

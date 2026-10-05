@@ -113,6 +113,7 @@ import {
   axialToPixel,
   boardHexLabel,
   claimHexSlotPreferring,
+  cornerAngleRad,
   deadEdgesAt,
   describeHex,
   describeHexDesignationForLog,
@@ -128,6 +129,7 @@ import {
   localCatalogPlacements,
   marginLabelReserve,
   pixelToAxial,
+  pointOnCircle,
   resolveSlotOverride,
   rotateConnections,
   singleNodeNameplateAnchor,
@@ -2117,15 +2119,51 @@ export function HexGridRenderer({
       return landmark?.label;
     };
 
-    routeHitRef.current = drawRouteOverlays(
-      ctx,
-      hexSize,
-      emphasised,
-      tilesAtForRoutes,
-      // Endpoints resolve to a single authored rail, so no branch needs to know how a hex was drawn. #215: the printed label, so a route across a gray hex lights the ONE rail it runs along.
-      // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #226
-      printedLabelAtForRoutes,
-    );
+    /* W3-H (VF D-13): A ROUTE IS NOT DRAWN ALONG RAIL STILL UNDER CONSTRUCTION. Routes are read from authoritative
+       state, so over a hex mid-flourish the overlay -- and the travelling signal along it -- would run along rail the
+       frame has not built yet. Their drawing is held on that hex, by a clip that leaves it out, until its flourish
+       commits; everywhere else, and the pointer's hit geometry, are unchanged. Reduced motion's 240 ms fade builds
+       nothing piecemeal and holds nothing. The veil and hover are left as they are: a tint and a nameplate style,
+       neither draws rail, so neither shows the unfinished tile as anything it is not. */
+    const routesHeldAt: Array<{ x: number; y: number }> = [];
+    tileTransitionsRef.current.forEach((transition, key) => {
+      if (transition.plan.reducedMotion) return;
+      const [q, r] = key.split(",").map(Number);
+      if (transitionAt(q, r)?.transition === transition) routesHeldAt.push(axialToPixel(q, r, hexSize));
+    });
+    const withRoutesHeld = (paint: () => void) => {
+      if (routesHeldAt.length === 0) {
+        paint();
+        return;
+      }
+      ctx.save();
+      ctx.beginPath();
+      const reach = 1e6; // board units: past any board, pan or zoom
+      ctx.rect(-reach, -reach, reach * 2, reach * 2);
+      for (const held of routesHeldAt) {
+        for (let corner = 0; corner < 6; corner += 1) {
+          const at = pointOnCircle(held, hexSize, cornerAngleRad(corner));
+          if (corner === 0) ctx.moveTo(at.x, at.y);
+          else ctx.lineTo(at.x, at.y);
+        }
+        ctx.closePath();
+      }
+      ctx.clip("evenodd");
+      paint();
+      ctx.restore();
+    };
+
+    withRoutesHeld(() => {
+      routeHitRef.current = drawRouteOverlays(
+        ctx,
+        hexSize,
+        emphasised,
+        tilesAtForRoutes,
+        // Endpoints resolve to a single authored rail, so no branch needs to know how a hex was drawn. #215: the printed label, so a route across a gray hex lights the ONE rail it runs along.
+        // See docs/ai_architecture/canvas_rendering.md - HexGridRenderer.tsx #226
+        printedLabelAtForRoutes,
+      );
+    });
 
     /* ==================================================================
         TRAIN ROUTE PULSE / REVENUE BADGE ANIMATION
@@ -2200,7 +2238,8 @@ export function HexGridRenderer({
         const bandSpan = Math.min(track.totalLength * 0.14, 0.4);
         const head = pointOnRouteTrack(track, distance, hexSize);
         const tail = pointOnRouteTrack(track, distance - bandSpan, hexSize);
-        if (head && tail) drawRouteSignalBand(ctx, hexSize, tail, head, overlay.color);
+        // W3-H (VF D-13): held on a hex mid-flourish, with the route line it travels along.
+        if (head && tail) withRoutesHeld(() => drawRouteSignalBand(ctx, hexSize, tail, head, overlay.color));
       }
     }
 

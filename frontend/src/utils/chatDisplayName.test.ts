@@ -80,7 +80,15 @@ describe("the chat is handed the roster nickname in a sandbox room", () => {
     /* Design note #1169 re-anchored this: `sandboxRoom` is no longer the raw state but a memo over it and the
        in-flight seat, so BOTH have to sit above the hook -- and the memo is precisely the form the note above
        says `tsc` does not catch. Asserting the pair, in order, rather than the one name that used to be both. */
-    expectOrder(APP, "const [sandboxRoomDoc, setSandboxRoom]", "const sandboxRoom = useMemo(", "const sandboxChatName =");
+    /* Phase 3 W3-J (OD-19, AUD-25.16) added one more memo in the same chain: the server's view, then the view as this
+       tab presents it (a watcher's in a Watch tab), then the seat overlay -- all three above the hook. */
+    expectOrder(
+      APP,
+      "const [sandboxRoomServerView, setSandboxRoom]",
+      "const sandboxRoomDoc = useMemo(",
+      "const sandboxRoom = useMemo(",
+      "const sandboxChatName =",
+    );
   });
 });
 

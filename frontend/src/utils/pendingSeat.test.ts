@@ -145,7 +145,9 @@ describe("the echo stops when the commit lands", () => {
   it("cannot outlive a plausible round trip", () => {
     /* LIVE-2D: an op the server refuses (or never answers) withdraws its echo at once; a dropped socket is the same
        silence from the seat's point of view, so the backstop stays. */
-    const runRoomOp = sliceBetween(APP, "const runRoomOp = useCallback(", "[sayRoomRefusal],");
+    /* Phase 3 W3-J (OD-19, AUD-25.16): a Watch tab sends no room op, so the callback also reads `watchOnly` -- the
+       dependency list that closes it grew; the round trip it pins did not change. */
+    const runRoomOp = sliceBetween(APP, "const runRoomOp = useCallback(", "[sayRoomRefusal, watchOnly, setSandboxRoomError],");
     expect(runRoomOp).toContain("if (!answer.ok) {");
     expect(runRoomOp).toContain("return false;");
     expect(PENDING_SEAT_BACKSTOP_MS).toBe(6000);
@@ -157,7 +159,11 @@ describe("the shell draws one room, not a room and three opinions", () => {
   it("overlays once, where every reader is looking", () => {
     /* #891 is this codebase's most-repeated fault. A swatch holding a private idea of its own colour while
        the roster underneath shows another is that fault with a 400ms lifetime. */
-    expect(APP).toContain("const [sandboxRoomDoc, setSandboxRoom] = useState<RoomView | null>(null);");
+    /* Phase 3 W3-J (OD-19, AUD-25.16): the server's view is the raw state, and `sandboxRoomDoc` is that view as this
+       tab may present it -- a watcher's `you` in a Watch tab, the server's own otherwise. Still ONE room: the overlay
+       is applied once, to that one document. */
+    expect(APP).toContain("const [sandboxRoomServerView, setSandboxRoom] = useState<RoomView | null>(null);");
+    expect(APP).toContain("watchOnly ? watcherRoomView(sandboxRoomServerView) : sandboxRoomServerView");
     expect(APP).toContain("applyPendingSeat(sandboxRoomDoc, localId, pendingSeat)");
   });
 

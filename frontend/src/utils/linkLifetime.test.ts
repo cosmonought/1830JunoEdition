@@ -29,7 +29,9 @@ describe("#1242: the transport effect does not depend on the dispatcher's identi
     expect(APP).toContain("if (!link && GAME_SERVER_URL) {");
     const branch = sliceFrom(APP, "if (!link && GAME_SERVER_URL) {", { length: 700 });
     expect(branch).toContain("setPendingAppendIndex((current) => (current === appendAt ? null : current));");
-    expect(branch).toContain("return;");
+    /* Phase 3 W3-J (AUD-25.05, OD-12 RED R1 `b9afbdf`): the refusal answers `false` -- "not sent" -- so the caller
+       takes back what it set; it still returns before the transport choice. */
+    expect(branch).toContain("return false;");
     // The refusal comes BEFORE the transport choice, so the Firestore branch is not reachable from it.
     expectOrder(APP, "if (!link && GAME_SERVER_URL) {", "const allocated = link");
   });

@@ -2062,12 +2062,25 @@ as a generic "item" box rather than as a train, in which case the mark says "som
 than "a train is". **What to watch:** whether anyone reads it as a train at all without being told; if
 nobody does, the tile is doing less work than it costs and K-2's first fix (drop it) gets easier.
 
-### K-4 · `OPEN` · The fallback capacity glyph has never been rendered in the product
+### K-4 · `RESOLVED` (W3-H evidence, 2026-10-04) · The fallback capacity glyph has never been rendered in the product
 `CapacityMark` falls back to a ceiling-and-down-arrow when `capacity` is null, per the brief's "do not
 fabricate numbers". It is unreachable from the Action Bar: `purchaseWarnings` constructs the train-limit
 warning only inside the guard that computes both figures. Asserted in the harness and drawn nowhere else.
 **If a future variant ever produces a limit change the depot cannot resolve**, this is the branch that
 runs, and it will be the first time anyone has seen it.
+
+**W3-H evidence** — rendered in headless Chromium 1243 (real `CapacityMark capacity={null}`, beside the real
+`4→3` mark and `RustMark`, inside the product's own `styles.phaseShiftBadge` + Warn/Critical capsules, pulse
+frozen) at uiScale 0.63 / 1.0 / 1.5, both through `chromeZoomFor` (the product's CSS zoom) and through plain
+label font-size scaling. The two mechanisms give identical mark boxes: the fallback and rust marks are
+7.97 / 12.64 / 18.97 CSS px square (1.15em of the 11px label, times the scale) and the `4→3` mark is
+15.6×8 / 24.7×13 / 37.1×19. The fallback draws exactly its two paths (ceiling bar + down arrow), no text and
+no figures. It reads as a ceiling-with-down-arrow at 1.0 and 1.5; at 0.63 on a 1× display it is ~8 device px
+and survives as a recognisable "↧", still clearly distinct from the boxed fracture beside it, with the
+ceiling bar at the edge of legibility. The branch remains unreachable from the bar (unchanged); this closes
+"never seen". Artifacts: `docs/phase3/evidence/w3h/k4_capacity_marks.png` (all sizes, DSF 2),
+`k4_scale063_dsf1.png` / `k4_scale063_dsf4.png` (0.63 close-ups), `k4_capacity_marks.json`; harness
+`frontend/scripts/w3hEvidence/` (`entries/k4.tsx`, `k4.mjs`).
 
 ### K-5 · `PLAYTEST` · `4→3` beside a label that does not carry the figures
 #889 deliberately took "Limit X → Y" off this badge because it was the busiest string in the row, and this

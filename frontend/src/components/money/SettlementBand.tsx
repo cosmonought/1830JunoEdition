@@ -23,9 +23,8 @@ import { formatAmount, shortWallet } from "../../utils/moneyProtocol";
 import type { RoomView } from "../../utils/roomProtocol";
 import type { SessionPort } from "../../utils/sessionBootstrap";
 import { ConfirmItsYou } from "../ConfirmItsYou";
-import type { SettlementActionKind } from "../../money/moneyFlow";
+import { disputeConfirmSentence, disputeRecordLines, type SettlementActionKind } from "../../money/moneyFlow";
 import type { MoneyServices } from "../../money/moneySession";
-import { formatMoneyTime } from "../../money/moneyTime";
 import { useMoneyTable } from "../../money/useMoneyTable";
 import { buttonStyle, moneyStyles as styles } from "./moneyStyles";
 
@@ -42,7 +41,7 @@ export interface SettlementBandProps {
 
 export function SettlementBand({ room, log = null, board = null, compact = false, port, services }: SettlementBandProps): JSX.Element | null {
   const money = room.money ?? null;
-  const table = useMoneyTable({ gameId: room.gameId, view: money, variants: room.variants, isHost: room.you.role === "host", log, board, port, services });
+  const table = useMoneyTable({ gameId: room.gameId, view: money, variants: room.variants, isHost: room.you.role === "host", log, board, port, services, disputeRecord: !compact });
   const [asking, setAsking] = useState<SettlementActionKind | null>(null);
   if (money === null || table.settlement === null || money.you === null) {
     return money === null || compact ? null : (
@@ -62,7 +61,8 @@ export function SettlementBand({ room, log = null, board = null, compact = false
   const consequence = (kind: SettlementActionKind): string => {
     switch (kind) {
       case "challenge":
-        return `Dispute the payout recorded on Juno? Keplr attaches the ${fmt(s?.bond ?? null)} bond. The resolver decides by ${formatMoneyTime(s?.resolverTimeoutAt ?? null, { now: table.now }) || "its deadline"}; if the dispute fails, the bond joins the pool.`;
+        /* W2-M (AUD-20.07, JX-6E): the resolver's deadline as a time, from Juno's own resolver window. */
+        return disputeConfirmSentence(money, table.disputeTerms, table.now);
       case "liveness-settle":
         return "Close the table on Juno and pay everyone from the last recorded standings? This can't be undone; the payout is then released after its own challenge window.";
       case "annul":
@@ -80,8 +80,10 @@ export function SettlementBand({ room, log = null, board = null, compact = false
       void table.run(kind);
       return;
     }
+    if (kind === "challenge") table.readDisputeTerms();
     setAsking(kind);
   };
+  const record = compact ? [] : disputeRecordLines(money, table.disputeRecord, table.now);
 
   if (compact) {
     /* The table bar shows only what needs this player now -- not a standing "cancel this game" or key move all game. */
@@ -149,6 +151,15 @@ export function SettlementBand({ room, log = null, board = null, compact = false
       ) : null}
       {table.verification !== null && table.verification.result !== "match" && s?.status === "recorded" ? <p style={styles.faint}>{table.verification.detail}</p> : null}
       {s?.lastCheckpoint ? <p style={styles.faint}>Standings last recorded on Juno at {s.lastCheckpoint.roundKey}.</p> : null}
+      {record.length > 0 ? (
+        <div role="group" data-testid="settlement-dispute-record" aria-label="Dispute record">
+          {record.map((line) => (
+            <p key={line} style={styles.detail}>
+              {line}
+            </p>
+          ))}
+        </div>
+      ) : null}
 
       {asking !== null ? (
         <div style={styles.confirm} role="group" aria-label="Confirm" data-testid="settlement-confirm">

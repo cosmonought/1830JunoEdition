@@ -43,6 +43,12 @@ const chainFacts = (over: Partial<ChainGameFacts> = {}): ChainGameFacts => ({
   domain: null,
   trustedSeq: null,
   settlement: null,
+  /* W2-M: the dispute facts (JX-6C/6E); a funding game has none. */
+  bond: null,
+  challengeWindowEndMs: null,
+  resolverTimeoutAtMs: null,
+  resolverTimeoutSecs: null,
+  dispute: null,
   ...over,
 });
 

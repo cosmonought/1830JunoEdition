@@ -133,6 +133,8 @@ const CONFIRM_PURPOSE: Partial<Record<MoneyActionKind, string>> = {
   link: "To link a wallet to this table",
   relink: "To relink your deposit to your seat",
   "replace-link": "To replace this seat's wallet",
+  "replace-confirmed": "To replace this seat's wallet",
+  reprove: "To prove your wallet again for this table",
   approve: "To set up this device's signing key for your deposit",
   "move-signing-key": "To set up signing on this device",
 };
@@ -208,11 +210,18 @@ export function MoneyPanel({ room, onStart, busy = false, port, services }: Mone
       ) : null}
       {table.needs !== null && table.needs.kind === "replace" ? (
         <div style={styles.confirm} role="group" aria-label="Replace the linked wallet" data-testid="money-replace">
-          <p style={styles.detail}>This seat is linked to another wallet. Replace it with {shortWallet(wallet)}? The old link stops working; nothing is charged.</p>
+          {/* W2-M (AUD-20.03): asked BEFORE Keplr signs, so the replacement is one signature (or, when the server had
+              to ask, one more -- and it says so). */}
+          <p style={styles.detail} data-testid="money-replace-question">
+            {table.needs.said !== null ? table.needs.said : `This seat is linked to ${table.needs.from === null ? "another wallet" : shortWallet(table.needs.from)}. Replace it with ${shortWallet(table.needs.to ?? wallet)}?`} The old link stops working; nothing is charged.{" "}
+            {table.needs.to === null ? "Connect Keplr on the wallet you want, then link again." : table.needs.again ? "Keplr asks you to sign the link message once more." : "Keplr then asks you to sign one link message."}
+          </p>
           <div style={styles.row}>
-            <button type="button" className="wr-touch" style={buttonStyle("primary", inFlight)} disabled={inFlight} onClick={() => void table.run("replace-link")} data-testid="money-replace-confirm">
-              Replace wallet
-            </button>
+            {table.needs.to !== null ? (
+              <button type="button" className="wr-touch" style={buttonStyle("primary", inFlight)} disabled={inFlight} onClick={() => void table.run("replace-confirmed")} data-testid="money-replace-confirm">
+                Replace wallet
+              </button>
+            ) : null}
             <button type="button" className="wr-touch" style={buttonStyle("secondary", inFlight)} disabled={inFlight} onClick={table.cancelNeeds}>
               Keep the linked wallet
             </button>

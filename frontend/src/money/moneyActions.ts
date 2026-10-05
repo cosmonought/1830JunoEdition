@@ -43,7 +43,8 @@ import {
   walletLink,
   type MoneyFailure,
 } from "./moneyApi";
-import { bumpLocal, moneyServices, updateMoneySession, type MoneyServices } from "./moneySession";
+import { linkRequestEndedSentence, reconfirmSentence, type DisputeRead } from "./moneyFlow";
+import { bumpLocal, moneyServices, moneySession, recordProofRenewed, updateMoneySession, type MoneyServices } from "./moneySession";
 import type { PendingWalletTx } from "./pendingTx";
 import { checkTerminalSettlement, type SealedReplay } from "./settlementCheck";
 import {
@@ -51,6 +52,7 @@ import {
   cancelMessage,
   chainGameProblemForJoin,
   challengeMessage,
+  challengeProblem,
   checkLinkChallenge,
   createGameMessage,
   finalizeMessage,
@@ -63,20 +65,30 @@ import {
   type WalletMessage,
 } from "./walletChecks";
 
+/** The step a refusal asks for before the action can run again. W2-M adds `reprove`: the server refused a deposit's
+ *  approval for want of a fresh wallet proof (AUD-20.02). */
+export type OutcomeNeeds = "confirm" | "connect" | "replace" | "reprove";
+
 export type ActionOutcome =
   | { readonly ok: true; readonly notice?: string }
-  | { readonly ok: false; readonly reason: string; readonly needs?: "confirm" | "connect" | "replace" };
+  | { readonly ok: false; readonly reason: string; readonly needs?: OutcomeNeeds; readonly replace?: { readonly from: string; readonly to: string } };
 
 const done = (notice?: string): ActionOutcome => ({ ok: true, ...(notice !== undefined ? { notice } : {}) });
-const refuse = (reason: string, needs?: "confirm" | "connect" | "replace"): ActionOutcome => ({ ok: false, reason, ...(needs !== undefined ? { needs } : {}) });
+const refuse = (reason: string, needs?: OutcomeNeeds): ActionOutcome => ({ ok: false, reason, ...(needs !== undefined ? { needs } : {}) });
 
-/** A failure from the money routes, as an outcome: "Confirm it's you" when that is what the server asked for. */
-function fromApi(failure: MoneyFailure): ActionOutcome {
+/** A failure from the money routes, as an outcome: "Confirm it's you" when that is what the server asked for -- said
+ *  specifically when this page believed it held the grant (W2-M, AUD-20.04: when it lapsed, or that the server ended
+ *  it early), the server's own sentence otherwise; the free re-proof when a deposit's approval needs a fresh proof. */
+function fromApi(failure: MoneyFailure, services?: MoneyServices): ActionOutcome {
   if (failure.code === "reauth-required") {
+    const believed = moneySession().confirmedUntil;
     updateMoneySession({ confirmedUntil: null });
-    return refuse(failure.reason, "confirm");
+    return refuse(reconfirmSentence(believed, services?.now() ?? Date.now()) ?? failure.reason, "confirm");
   }
   if (failure.code === "replace-required") return refuse(failure.reason, "replace");
+  /* `link-first` answers a join approval whose seat has no usable proof (missing or older than the server accepts) or
+     ticket: the cure for every one is the same free re-proof of the linked wallet. */
+  if (failure.code === "link-first") return refuse(failure.reason, "reprove");
   return refuse(failure.reason);
 }
 
@@ -155,7 +167,7 @@ async function registeredLocalKey(ctx: TableContext, services: MoneyServices, pi
   bumpLocal();
   if (!made.ok) return { ok: false, outcome: refuse(made.reason) };
   const answer = await registerConsentKey(ctx.gameId, made.pubkey, ctx.port);
-  if (!answer.ok) return { ok: false, outcome: fromApi(answer) };
+  if (!answer.ok) return { ok: false, outcome: fromApi(answer, services) };
   return { ok: true, pubkey: made.pubkey };
 }
 
@@ -163,8 +175,22 @@ async function registeredLocalKey(ctx: TableContext, services: MoneyServices, pi
     LINK (and relink)
    ================================================================== */
 
+export interface LinkOptions {
+  /** Replace the seat's standing link with this wallet (asked of the player BEFORE this runs: W2-M, AUD-20.03). */
+  readonly replace?: boolean;
+  /** The wallet the player chose (a replacement's, or the linked one being re-proven): if Keplr is on another account
+   *  now, nothing is asked of Keplr and nothing is linked (W2-M). */
+  readonly expectWallet?: string;
+  /** This is the free re-proof of the seat's linked wallet (W2-M, AUD-20.02): say so when it lands. */
+  readonly reprove?: boolean;
+  /** With `replace`: the linked wallet the player agreed to replace (W2-M, AUD-20.14). If the seat's standing link is
+   *  no longer that wallet -- by the server's challenge answer, or by the view from a server that doesn't say -- nothing
+   *  is signed and the player is asked again. */
+  readonly expectReplaces?: string;
+}
+
 /** Link the Keplr account to this seat: challenge -> this browser reads it -> Keplr signs it (ADR-036) -> link. */
-export async function linkWallet(ctx: TableContext, options: { readonly replace?: boolean } = {}): Promise<ActionOutcome> {
+export async function linkWallet(ctx: TableContext, options: LinkOptions = {}): Promise<ActionOutcome> {
   const services = ctx.services ?? moneyServices();
   const pinned = pinOf(services);
   if (!pinned.ok) return pinned.outcome;
@@ -176,8 +202,28 @@ export async function linkWallet(ctx: TableContext, options: { readonly replace?
   const account = await currentAccount(services, pin);
   if (!account.ok) return account.outcome;
   const wallet = account.address;
+  if (options.expectWallet !== undefined && wallet !== options.expectWallet) {
+    return refuse(`Keplr is on ${wallet} now, not ${options.expectWallet}. Nothing was signed or linked; switch accounts in Keplr and press the button again.`);
+  }
   const challenge = await walletChallenge(ctx.gameId, wallet, ctx.port);
-  if (!challenge.ok) return fromApi(challenge);
+  if (!challenge.ok) return fromApi(challenge, services);
+  /* W2-M (AUD-20.14): the server says, before Keplr signs, which wallet this link would replace. Unasked, the player
+     is asked first (nothing signed; this unspent challenge is simply superseded by the next one). Asked, the wallet
+     named in the question must still be the one standing. A server that doesn't say leaves the view's link as the
+     check and its own `replace-required` as the answer. */
+  const standing = challenge.value.replaces;
+  if (options.replace === true) {
+    if (options.expectReplaces !== undefined && (standing !== undefined ? standing : (you.link?.wallet ?? null)) !== options.expectReplaces) {
+      return refuse("This seat's linked wallet changed since you were asked, so nothing was signed. Look at it again before replacing it.");
+    }
+    /* Asked without a named wallet (the server's own question after a signature): now that the server names the
+       standing wallet, ask about THAT one before signing, rather than replace a wallet the player wasn't shown. */
+    if (options.expectReplaces === undefined && typeof standing === "string" && standing !== wallet) {
+      return { ok: false, reason: `This seat is linked to ${standing}. Replace it with ${wallet}?`, needs: "replace", replace: { from: standing, to: wallet } };
+    }
+  } else if (standing !== undefined && standing !== null && standing !== wallet) {
+    return { ok: false, reason: `This seat is linked to ${standing}. Replace it with ${wallet}?`, needs: "replace", replace: { from: standing, to: wallet } };
+  }
   const site = ctx.site ?? (typeof window === "undefined" ? "" : window.location.origin);
   const checked = checkLinkChallenge(challenge.value.text, { appName: APP_NAME, site, pin, gameId: ctx.gameId, playerId: you.playerId, wallet, now: services.now() });
   if (!checked.ok) return refuse(checked.reason);
@@ -192,9 +238,35 @@ export async function linkWallet(ctx: TableContext, options: { readonly replace?
     if (!made.ok) return refuse(made.reason);
     consentKey = made.pubkey;
   }
+  /* The proof the server records is verified after this instant: a conservative "proven at" for this page. */
+  const sentAt = services.now();
   const linked = await walletLink({ gameId: ctx.gameId, nonce: challenge.value.nonce, pubKey: signed.value.pubKey, signature: signed.value.signature, consentKey, ...(options.replace === true ? { replace: true } : {}) }, ctx.port);
-  if (!linked.ok) return fromApi(linked);
-  return done(linked.value.mode === "relinked" ? "Your deposit is linked to your seat again. Nothing was charged." : linked.value.mode === "unchanged" ? "That wallet is already linked to your seat." : `Wallet linked: ${linked.value.wallet}.`);
+  if (!linked.ok) {
+    /* W2-M (AUD-20.04): the server no longer holds the request -- say whether it expired or was dropped. */
+    if (linked.code === "challenge-expired") return refuse(linkRequestEndedSentence(checked.value.expiresAt, services.now()));
+    return fromApi(linked, services);
+  }
+  /* Every accepted link (issued, relinked, or the same wallet again) carries a proof the server verified just now. */
+  recordProofRenewed(ctx.gameId, you.playerId, linked.value.wallet, sentAt);
+  if (linked.value.mode === "unchanged") return done(options.reprove === true ? "Wallet proof renewed: you can deposit now. Nothing was charged." : "That wallet is already linked to your seat.");
+  return done(linked.value.mode === "relinked" ? "Your deposit is linked to your seat again. Nothing was charged." : `Wallet linked: ${linked.value.wallet}.`);
+}
+
+/** W2-M (AUD-20.03, JX-3A E-2): "Change wallet", BEFORE anything is signed. Keplr's account is read now (no prompt):
+ *  the seat's own linked wallet is not a change (nothing is asked of Keplr); any other is what the player is asked
+ *  to confirm replacing it with -- and only then does Keplr sign, once, with the replacement stated up front. */
+export async function prepareReplace(ctx: TableContext): Promise<{ readonly ok: true; readonly from: string; readonly to: string } | { readonly ok: false; readonly outcome: ActionOutcome }> {
+  const services = ctx.services ?? moneyServices();
+  const pinned = pinOf(services);
+  if (!pinned.ok) return { ok: false, outcome: pinned.outcome };
+  const from = ctx.view.you?.link?.wallet ?? null;
+  if (from === null) return { ok: false, outcome: refuse("This seat has no linked wallet to change.") };
+  const account = await currentAccount(services, pinned.pin);
+  if (!account.ok) return account;
+  if (account.address === from) {
+    return { ok: false, outcome: refuse(`Keplr is on the wallet already linked to this seat (${from}). To use another wallet, switch accounts in Keplr first, then press Change wallet.`) };
+  }
+  return { ok: true, from, to: account.address };
 }
 
 /* ==================================================================
@@ -371,7 +443,7 @@ export async function approveDeposit(ctx: TableContext): Promise<ActionOutcome> 
   if (!config.ok) return refuse(config.reason);
   if (config.value.paused) return refuse("Deposits are paused on Juno right now, so nothing was sent. Try again later.");
   const asked = await joinAdmission(ctx.gameId, ctx.port);
-  if (!asked.ok) return fromApi(asked);
+  if (!asked.ok) return fromApi(asked, services);
   const problem = await admissionProblem(pin, view, asked.value, { wallet: you.link.wallet, now: services.now(), admissionKey: config.value.admissionPubkey });
   if (problem !== null) return refuse(problem);
   const facts = await services.wallet.chainGame(pin, asked.value.chain_game_id);
@@ -449,7 +521,7 @@ export async function moveSigningKeyHere(ctx: TableContext): Promise<ActionOutco
   bumpLocal();
   if (!made.ok) return refuse(made.reason);
   const registered = await registerConsentKey(ctx.gameId, made.pubkey, ctx.port);
-  if (!registered.ok) return fromApi(registered);
+  if (!registered.ok) return fromApi(registered, services);
   const message = setConsentKeyMessage(pin, ctx.view.escrow.chainGameId, made.pubkey);
   if (!message.ok) return refuse(message.reason);
   const sent = await signKeepSend(services, pin, { gameId: ctx.gameId, playerId: you.playerId, wallet }, message.value, ctx.port);
@@ -560,7 +632,7 @@ export async function approvePayout(ctx: TableContext, verification: Verificatio
   const signature = await services.keys.signDigest(signingKey, consentDigestV1(domain, BigInt(seq), settleDigest));
   if (signature === null) return refuse("This device couldn't sign with the seat's key.");
   const relayed = await relayConsent(ctx.gameId, signature, ctx.port);
-  if (!relayed.ok) return fromApi(relayed);
+  if (!relayed.ok) return fromApi(relayed, services);
   return done(relayed.value.status === "on-chain" ? "Your approval is on Juno." : "Approved — your approval is on its way to Juno. If every player approves, the payout is released at once.");
 }
 
@@ -583,7 +655,7 @@ export async function agreeToAnnul(ctx: TableContext): Promise<ActionOutcome> {
   const signature = await services.keys.signDigest(own.key, annulDigestV1(facts.value.domain, BigInt(facts.value.trustedSeq)));
   if (signature === null) return refuse("This device couldn't sign with the seat's key.");
   const answer = await submitAnnul(ctx.gameId, signature, ctx.port);
-  if (!answer.ok) return fromApi(answer);
+  if (!answer.ok) return fromApi(answer, services);
   return done(answer.value.submitted ? "Every player agreed: the cancellation is on its way to Juno." : `Your agreement is recorded (${answer.value.collected.length} of ${answer.value.needed}). The game is cancelled only if every player agrees.`);
 }
 
@@ -612,7 +684,15 @@ export async function settlementTx(ctx: TableContext, kind: "challenge" | "relea
       evidenceHash = "";
     }
     if (!/^[0-9a-f]{64}$/.test(evidenceHash)) evidenceHash = sha256Hex(`18COSMOS/DISPUTE/v1\n${ctx.gameId}\n${ctx.view.settlement?.seq ?? ""}`);
-    message = challengeMessage(pin, chainGameId, evidenceHash, ctx.view.settlement?.bond ?? null);
+    /* W2-M (AUD-20.06, JX-6C): Juno itself, re-read through the pinned endpoint before Keplr opens -- still open to a
+       challenge, storing exactly the payout this page showed, asking exactly the bond it showed, the window not
+       closed. The bond attached is Juno's (equal to the shown one, or nothing is signed). */
+    if (chainGameId === null) return refuse("This table isn't open on Juno.");
+    const facts = await services.wallet.chainGame(pin, chainGameId);
+    if (!facts.ok) return refuse(facts.reason);
+    const problem = challengeProblem(ctx.view, facts.value, services.now());
+    if (problem !== null) return refuse(problem);
+    message = challengeMessage(pin, chainGameId, evidenceHash, facts.value.bond);
   }
   if (!message.ok) return refuse(message.reason);
   let sender = wallet;
@@ -624,4 +704,17 @@ export async function settlementTx(ctx: TableContext, kind: "challenge" | "relea
     sender = account.address;
   }
   return signKeepSend(services, pin, { gameId: ctx.gameId, playerId: you?.playerId ?? "", wallet: sender }, message.value, ctx.port);
+}
+
+/** W2-M (AUD-20.07, JX-6E): what the dispute confirm and the band's dispute record read from Juno -- through this
+ *  build's pinned endpoint, never the server -- the game's resolver window, its bond, its dispute record and its seats'
+ *  wallets (to name which seat disputed). Never throws; a failed read is a sentence. */
+export async function disputeChainFacts(view: RoomMoneyView, services: MoneyServices = moneyServices()): Promise<DisputeRead> {
+  const pinned = services.pin();
+  if (!pinned.ok) return { kind: "unavailable", reason: pinned.reason };
+  const chainGameId = view.escrow.chainGameId;
+  if (chainGameId === null) return { kind: "unavailable", reason: "This table isn't open on Juno." };
+  const facts = await services.wallet.chainGame(pinned.pin, chainGameId);
+  if (!facts.ok) return { kind: "unavailable", reason: facts.reason };
+  return { kind: "read", resolverTimeoutSecs: facts.value.resolverTimeoutSecs, bond: facts.value.bond, dispute: facts.value.dispute, seats: facts.value.seats.map((seat) => seat.wallet) };
 }

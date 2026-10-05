@@ -170,6 +170,11 @@ describe("ESCROW-4: the chain game, read by this browser, must be exactly the ta
     domain: null,
     trustedSeq: null,
     settlement: null,
+    bond: null,
+    challengeWindowEndMs: null,
+    resolverTimeoutAtMs: null,
+    resolverTimeoutSecs: null,
+    dispute: null,
   };
   it("matching terms pass; every disagreement is refused with its reason", () => {
     const problem = (over: Partial<ChainGameFacts>, wallet = TEST_WALLET) => chainGameProblemForJoin(TEST_PIN, view, VARIANTS, { ...facts, ...over }, wallet, T0);

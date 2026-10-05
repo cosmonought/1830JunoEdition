@@ -142,6 +142,9 @@ export interface MoneyYouView {
     ticket: string;
     /** Server ms when the link was made. */
     linkedAt: number;
+    /** W2-M (AUD-20.13, additive): server ms when the link's wallet proof was last verified (a same-wallet re-proof
+     *  renews it, `linkedAt` stays). Absent from an older server: the browser then infers from `linkedAt`. */
+    proofVerifiedAt?: number;
     /** Consent keys registered for this seat (the initial one at the link; replacements after "Confirm it's you"). */
     consentKeys: string[];
   } | null;

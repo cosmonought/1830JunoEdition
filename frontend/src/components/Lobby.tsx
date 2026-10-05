@@ -52,7 +52,6 @@ import { profileNickname } from "../utils/profileApi";
 // #1415: the host's setup card -- type, pace, visibility, then the house rules -- before the room exists; and
 // the join card, the code box for an unlisted table.
 import { HostSetupCard } from "./HostSetupCard";
-import { ModalPortal } from "./ModalPortal";
 import { JoinGameCard } from "./JoinGameCard";
 import { LobbyRoomList } from "./LobbyRoomList";
 import { roomLinkAvailable } from "../utils/roomLink";
@@ -516,15 +515,17 @@ export function Lobby({ onEnterSandbox }: LobbyProps) {
           inside it, so a later batch can make this screen `inert` without disabling the dialog. React context
           and event bubbling follow the React tree, not the DOM, so everything this card is handed still
           arrives and `onClose` still runs here. */}
+      {/* Phase 3 W3-D (OD-15(b), AUD-13.06): THE PILOT'S WRAPPER IS GONE. `HostSetupCard` has been a `NativeModal` since
+          #1651, and `NativeModal` puts its own `<dialog>` in the layer -- so this outer `ModalPortal` was a second,
+          redundant route into the same host, and the last one outside `NativeModal`. The DOM is unchanged: the
+          dialog lands in the layer exactly as before, and `hostSetup` still decides whether the card exists. */}
       {hostSetup && (
-        <ModalPortal>
-          <HostSetupCard
-            busy={sandboxRoomBusy}
-            error={sandboxRoomError}
-            onClose={() => setHostSetup(false)}
-            onCreate={(variants, setup) => void handleHostSandboxRoom(variants, setup)}
-          />
-        </ModalPortal>
+        <HostSetupCard
+          busy={sandboxRoomBusy}
+          error={sandboxRoomError}
+          onClose={() => setHostSetup(false)}
+          onCreate={(variants, setup) => void handleHostSandboxRoom(variants, setup)}
+        />
       )}
       {/* Design note #1440: the code box alone -- the public list moved onto the page (`LobbyRoomList`).
           Watching a game is entering the room with no seat, which is the shell's own watcher path, so the

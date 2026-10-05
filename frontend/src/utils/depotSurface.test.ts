@@ -79,7 +79,14 @@ describe("the panel sits above its surroundings, not below them", () => {
        RE-CHECKED RATHER THAN ASSUMED, as the note below insists: panel L* 10.27, private panel L* 4.31, the
        bar's card L* 4.31. The panel still clears both, and the margin is wider than it was before the
        re-theme -- the two neighbours converged on one ground while the panel stayed a step above them. */
-    expect(strip(read("components/PrivateTradePanel.tsx"))).toContain('backgroundColor: "#0f0f0f"');
+    /* Phase 3 W3-D (AUD-13.06): this read `backgroundColor: "#0f0f0f"` off `PrivateTradePanel.tsx` -- and the only
+       object carrying it was the floating `card`, a shape no caller rendered. That shape is deleted. The private
+       panel the player actually sees (`embeddedCard`, #864) has no ground of its own and sits on the bar's card,
+       whose `#0f0f0f` is the appStyles line asserted above; so the ordering this case defends still holds, now
+       against the surface that is really there. */
+    const privatePanel = strip(read("components/PrivateTradePanel.tsx"));
+    const embedded = privatePanel.slice(privatePanel.indexOf("  embeddedCard: {"));
+    expect(embedded.slice(0, embedded.indexOf("},"))).not.toContain("backgroundColor");
     /* #1092 retoned this panel and its neighbours, and THIS LINE IS WHY THE PANEL IS NOT `#161616`: the
        re-theme's lightness bands mapped it there, which would have put it BELOW the private panel and
        rebuilt the well #810 removed. The figures, so the next pass does not have to re-derive them --

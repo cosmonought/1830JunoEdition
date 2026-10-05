@@ -429,9 +429,14 @@ describe("the layer is wired where the topology requires", () => {
     });
   });
 
-  it("is what the Lobby renders Host Game through", () => {
+  it("is where Host Game lands, through NativeModal alone", () => {
+    /* Phase 3 W3-D (OD-15(b), AUD-13.06): this asserted `lobby.includes("<ModalPortal>")` -- the #1648 pilot's
+       wrapper. Host Game has been a `NativeModal` since #1651 and `NativeModal` renders its `<dialog>` into this
+       layer itself, so the outer wrapper was a redundant second route and is removed. The DOM destination is the
+       same (the cases above still find the dialog in the layer); the route is now the one architecture. */
     const lobby = readStripped("components/Lobby.tsx");
-    expect(lobby.includes("<ModalPortal>")).toBe(true);
+    expect(lobby.includes("<ModalPortal>")).toBe(false);
+    expect(readStripped("components/HostSetupCard.tsx").includes("<NativeModal")).toBe(true);
     /* The mount lifecycle is unchanged: `hostSetup` still decides existence, so closing still unmounts. */
     expect(lobby.includes("{hostSetup && (")).toBe(true);
   });

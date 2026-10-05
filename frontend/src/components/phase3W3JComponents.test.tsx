@@ -29,6 +29,8 @@ import {
   withPendingMhExchangeChip,
 } from "../utils/mhQueuedExchange";
 import { MH_PRIVATE_ID } from "../gameEngine/privateExchange";
+import RulesReference, { type RulesReferenceProps } from "./RulesReference";
+import { DELAYED_AUCTION_STATUS_COPY, delayedAuctionStatus } from "../utils/delayedAuctionStatus";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { depotInventory, openDepotTiers } from "../gameEngine/gamePhase";
 import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
@@ -330,5 +332,62 @@ describe("W3-J AUD-25.10 (d): the M&H status says requested / executed / expired
   it("the W3-I link note is the one status line that says Queued", () => {
     expect(LINK_QUEUED_NOTE).toBe("Queued — will send on reconnect.");
     expect(LINK_QUEUED_NOTE).toMatch(/^Queued\b/);
+  });
+});
+
+/* ================================================================================================= */
+/* AUD-25.10 (e) -- A CANCELLED DELAYED AUCTION IS NOT TICKED COMPLETED                              */
+/* ================================================================================================= */
+
+describe("W3-J AUD-25.10 (e): the Rules Reference's Game Flow says cancelled, not completed, for a D-55 auction", () => {
+  const DELAYED = { delayedAuction: true } as RulesReferenceProps["variants"];
+  const PRIVATES_CLOSED_UNSOLD = [
+    { private_id: 1, closed: true, owner: null, owner_protocol_id: null },
+    { private_id: 2, closed: true, owner: null, owner_protocol_id: null },
+  ];
+  const PRIVATES_SOLD = [
+    { private_id: 1, closed: false, owner: "p1", owner_protocol_id: null },
+    { private_id: 2, closed: true, owner: "p2", owner_protocol_id: null },
+  ];
+  /** The status exactly as App.tsx's mount derives it, from the board's own fields. */
+  const statusOf = (privates: unknown[], complete: boolean) =>
+    delayedAuctionStatus({
+      variants: { delayedAuction: true },
+      private_auction_complete: complete,
+      private_companies: privates,
+      current_round_type: "OperatingRound",
+    } as never);
+  const chain = () => host.querySelector<HTMLElement>('[data-testid="rules-game-flow-chain"]')!;
+  const auctionStage = () => chain().querySelector<HTMLElement>('button[aria-label="Auction"]')!;
+  const mount = (props: RulesReferenceProps) => render(<RulesReference roundType="OperatingRound" roundLabel="OR 5.1" {...props} />);
+
+  it("cancelled (D-55): no completed tick on the auction stage, and the stage says Cancelled", () => {
+    const status = statusOf(PRIVATES_CLOSED_UNSOLD, true);
+    expect(status).toBe("cancelled");
+    mount({ variants: DELAYED, auctionComplete: true, delayedAuctionStatus: status });
+    expect(auctionStage().querySelector('[aria-label="completed"]')).toBeNull();
+    expect(chain().querySelector('[aria-label="completed"]')).toBeNull();
+    expect(auctionStage().textContent).toContain("Cancelled");
+    expect(auctionStage().querySelector<HTMLElement>("[title]")?.title).toBe(DELAYED_AUCTION_STATUS_COPY.cancelled.title);
+  });
+
+  it("a delayed auction that was held is still ticked completed; one still owed still says Delayed", () => {
+    const held = statusOf(PRIVATES_SOLD, true);
+    expect(held).toBeNull();
+    mount({ variants: DELAYED, auctionComplete: true, delayedAuctionStatus: held });
+    expect(auctionStage().querySelector('[aria-label="completed"]')).not.toBeNull();
+    expect(auctionStage().textContent).not.toContain("Cancelled");
+
+    const owed = statusOf(PRIVATES_SOLD, false);
+    expect(owed).toBe("owed");
+    mount({ variants: DELAYED, auctionComplete: false, delayedAuctionStatus: owed });
+    expect(auctionStage().querySelector('[aria-label="completed"]')).toBeNull();
+    expect(auctionStage().textContent).toContain("Delayed");
+  });
+
+  it("the standard game's opening auction is unchanged: ticked completed, no status needed", () => {
+    mount({});
+    expect(auctionStage().querySelector('[aria-label="completed"]')).not.toBeNull();
+    expect(auctionStage().textContent).not.toContain("Cancelled");
   });
 });

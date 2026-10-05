@@ -29,6 +29,7 @@ import { connectServerLink, type ServerLink } from "./utils/serverLink";
 // Phase 3 W3-I: the active room link's read-only queue, for the par prompt and the offer forms.
 import { linkQueueView, useLinkQueue } from "./utils/useLinkQueue";
 import { DelayedAuctionStatusChip } from "./components/DelayedAuctionStatusChip"; // Phase 3 W2-I (AUD-02.08)
+import { delayedAuctionStatus } from "./utils/delayedAuctionStatus"; // Phase 3 W3-J (AUD-25.10 (e))
 import { rollBackIfRefused, submissionRefused } from "./utils/submissionAnswer"; // Phase 3 W3-C (P3-N020)
 import { paidStationRefusal } from "./utils/paidStationView"; // Phase 3 W3-J (AUD-25.08)
 import {
@@ -15572,6 +15573,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
              the auction-complete flag lets the Overview mark a delayed auction as pending or done. */
           variants={tableVariants}
           auctionComplete={gameState?.private_auction_complete ?? null}
+          delayedAuctionStatus={delayedAuctionStatus(gameState)} // Phase 3 W3-J (AUD-25.10 (e)): cancelled is not completed.
           /* Phase 3 W2-I (AUD-11.03): the ended game is its own state, not "No live round" (the round type stays null --
              #898 above). OD-6 (AUD-01.07): the table's pinned rules version beside the build stamp, from the live
              board's own `rules_engine_version` (`null` on a legacy unpinned board, omitted with no board) -- the LIVE

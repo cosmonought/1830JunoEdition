@@ -56,6 +56,8 @@ import { UI_BUILD_ID, UI_BUILD_LABEL } from "../utils/buildStamp";
 import { zoomAwareMediaCss } from "../utils/uiScale";
 import { useUiScale } from "../utils/useUiScale";
 import type { GameVariants } from "../gameEngine/gameVariants";
+/* Phase 3 W3-J (AUD-25.10 (e)): the board's Delayed Auction status (owed / cancelled), as a display value. */
+import { DELAYED_AUCTION_STATUS_COPY, type DelayedAuctionStatus } from "../utils/delayedAuctionStatus";
 /* The player-count limits the lobby deals from -- read, not retyped, so this page and the Stocks tab agree. */
 import {
   CERT_LIMIT_BY_PLAYER_COUNT,
@@ -2454,6 +2456,12 @@ export interface RulesReferenceProps {
   /** `GameStateResponse.private_auction_complete` -- whether the Private Company Auction has concluded.
    *  Absent on older logs and in standard games, where the auction is the opening round. */
   auctionComplete?: boolean | null;
+  /** Phase 3 W3-J (AUD-25.10 (e)): the board's Delayed Auction status as `delayedAuctionStatus` reads it -- `"owed"`,
+   *  `"cancelled"` (the first 5-train cancelled it, D-55), or `null`. A display value, not the board: the reference
+   *  still never takes `gameState`. `private_auction_complete` is true for an auction that RAN and for one D-55
+   *  CANCELLED, so `auctionComplete` alone ticked a cancelled auction as completed; with `"cancelled"` the Game Flow
+   *  chain says so instead. Absent / `null`: as before. */
+  delayedAuctionStatus?: DelayedAuctionStatus | null;
   /** Phase 3 W2-I (AUD-11.03): the game has ended (`current_round_type === "GameEnd"`, which `roundType` does not
    *  carry -- #898). The reference then says the game is over instead of "No live round". Display only. */
   gameOver?: boolean | null;
@@ -2786,6 +2794,7 @@ function ChainStage({
   done,
   live,
   onNavigate,
+  title,
 }: {
   accent: Accent;
   label: string;
@@ -2794,6 +2803,8 @@ function ChainStage({
   done?: boolean;
   live?: boolean;
   onNavigate?: () => void;
+  /** Phase 3 W3-J (AUD-25.10 (e)): the sentence behind a stage's state word, where it has one. */
+  title?: string;
 }) {
   const body = (
     <>
@@ -2805,7 +2816,11 @@ function ChainStage({
           ✓
         </span>
       )}
-      {state && <span style={live ? styles.chainStateLive : styles.chainState}>{state}</span>}
+      {state && (
+        <span style={live ? styles.chainStateLive : styles.chainState} title={title}>
+          {state}
+        </span>
+      )}
     </>
   );
   if (!onNavigate) return <span style={styles.chainItem}>{body}</span>;
@@ -2822,6 +2837,7 @@ function ChainStage({
 function GameFlowDisclosure({
   roundType,
   auctionDone,
+  auctionCancelled = false,
   delayed,
   orPerStockRound,
   open,
@@ -2830,6 +2846,8 @@ function GameFlowDisclosure({
 }: {
   roundType: RulesRoundType | null;
   auctionDone: boolean;
+  /** Phase 3 W3-J (AUD-25.10 (e)): the delayed auction was cancelled (D-55), not held. */
+  auctionCancelled?: boolean;
   delayed: boolean;
   orPerStockRound: string | null;
   open: boolean;
@@ -2837,7 +2855,19 @@ function GameFlowDisclosure({
   onNavigate: (section: RulesSection) => void;
 }) {
   const auctionLive = roundType === "WaterfallAuction";
-  const auctionState = auctionLive ? "Now" : auctionDone ? undefined : delayed ? "Delayed" : "First";
+  /* Phase 3 W3-J (AUD-25.10 (e)): A CANCELLED AUCTION IS NOT A COMPLETED ONE. `auctionDone` reads "no auction is
+     owed", which D-55's cancellation also reaches (`cancelPendingDelayedAuction` sets `private_auction_complete`
+     without selling anything), so the stage was ticked "completed" for an auction that never ran. Cancelled, it
+     carries the word instead of the tick -- the same "a word first" rule `ChainStage` states. */
+  const auctionState = auctionLive
+    ? "Now"
+    : auctionCancelled
+      ? "Cancelled"
+      : auctionDone
+        ? undefined
+        : delayed
+          ? "Delayed"
+          : "First";
   const stages: readonly { section: RulesSection; accent: Accent; label: string; text: string }[] = [
     {
       section: "auction",
@@ -2872,8 +2902,9 @@ function GameFlowDisclosure({
           label="Auction"
           short="Auction"
           state={auctionState}
-          done={auctionDone}
+          done={auctionDone && !auctionCancelled}
           live={auctionLive}
+          title={auctionCancelled && !auctionLive ? DELAYED_AUCTION_STATUS_COPY.cancelled.title : undefined}
           onNavigate={() => onNavigate("auction")}
         />
         {/* A CONNECTOR NEVER ENDS A LINE. Each joiner is grouped with the stage it leads to, so when the
@@ -3181,6 +3212,7 @@ function OverviewPage({
   livePhase,
   playerCount,
   auctionDone,
+  auctionCancelled = false,
   flowOpen,
   onToggleFlow,
   onNavigate,
@@ -3199,6 +3231,8 @@ function OverviewPage({
   livePhase: string | null;
   playerCount: number | null;
   auctionDone: boolean;
+  /** Phase 3 W3-J (AUD-25.10 (e)): the delayed auction was cancelled, not held. */
+  auctionCancelled?: boolean;
   flowOpen: boolean;
   onToggleFlow: () => void;
   onNavigate: (section: RulesSection) => void;
@@ -3606,6 +3640,7 @@ function OverviewPage({
       <GameFlowDisclosure
         roundType={roundType}
         auctionDone={auctionDone}
+        auctionCancelled={auctionCancelled}
         delayed={delayed}
         orPerStockRound={orPerStockRound}
         open={flowOpen}
@@ -5490,6 +5525,7 @@ export function RulesReference({
   rulesetLabel,
   variants,
   auctionComplete,
+  delayedAuctionStatus = null,
   gameOver: gameOverProp,
   rulesEngineVersion,
 }: RulesReferenceProps) {
@@ -5501,6 +5537,8 @@ export function RulesReference({
      it is done; a delayed auction is done only when the state says so. */
   const auctionDone: boolean =
     roundType !== null && roundType !== "WaterfallAuction" && (activeScopes.has("delayedAuction") ? auctionComplete === true : true);
+  /* Phase 3 W3-J (AUD-25.10 (e)): "done" includes D-55's cancellation; the helper's reading tells the two apart. */
+  const auctionCancelled = activeScopes.has("delayedAuction") && delayedAuctionStatus === "cancelled";
   /* Phase 3 W1-I (AUD-06.07): while the home station is owed the turn is BEFORE step 1, so no numbered step is live
      -- the shell's cursor still reads Lay Track then -- and the home-station pre-step is marked instead. */
   const homeStationLive = roundType === "OperatingRound" && homeStationOwed === true;
@@ -5646,6 +5684,7 @@ export function RulesReference({
           livePhase={livePhase}
           playerCount={playerCount ?? null}
           auctionDone={auctionDone}
+          auctionCancelled={auctionCancelled}
           flowOpen={flowOpen}
           onToggleFlow={() => setFlowOpen((wasOpen) => !wasOpen)}
           onNavigate={setSection}

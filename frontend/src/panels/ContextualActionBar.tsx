@@ -61,7 +61,7 @@ import {
 import { desaturatedLiveryInk } from "../styles/corporationLivery";
 import type { StationTokenSlot } from "../gameEngine/stationTokens";
 import type { PrivateCompanyState } from "../gameEngine/gameState";
-import type { RoundType, TileColor } from "../gameEngine/gameState";
+import type { GameStateResponse, RoundType, TileColor } from "../gameEngine/gameState";
 import {
   type GamePhase,
   type TierRustOutlook,
@@ -1268,6 +1268,8 @@ export default function ContextualActionBar({
     blockedReason: string | null;
     /** Phase 3 W2-A (OD-1): the hold's refusal of the depot's `BuyHardwareFromPool`, forwarded. */
     bankBlockedReason?: string | null;
+    /** Phase 3 W3-J (AUD-25.10 (a)): the board the depot Buy asks `trainPurchaseRefusal` on, forwarded. */
+    board?: GameStateResponse | null;
     /** Phase 3 W2-C (AUD-09.02): the sale's authority, bound by the shell (`TrainPurchasePanel`'s `offerRefusal`). */
     offerRefusal?: (offer: TrainOfferIntent) => string | null;
     /** Phase 3 W3-I (AUD-19.01): the room link's queue (`linkQueueView`), forwarded to the offer form. */
@@ -4548,6 +4550,8 @@ export default function ContextualActionBar({
           blockedReason={trainPurchase.blockedReason}
           // Phase 3 W2-A (OD-1): the hold's refusal of the depot purchase.
           bankBlockedReason={trainPurchase.bankBlockedReason ?? null}
+          // Phase 3 W3-J (AUD-25.10 (a)): the board the depot Buy asks the purchase's own gate on.
+          board={trainPurchase.board ?? null}
           onBuyFromBank={trainPurchase.onBuyFromBank}
           openTiers={trainPurchase.openTiers}
           /* Design note #1101: resolved by the shell, which owns the step list -- see the panel's prop.

@@ -58,6 +58,11 @@ import type { DieselExchangeOffer } from "../gameEngine/dieselExchange";
 import { WaitingOnLine } from "./WaitingOnLine";
 // Phase 3 W3-I (AUD-19.01): the room link's queue, as the shell reads it.
 import { type LinkQueueView } from "../utils/useLinkQueue";
+/* Phase 3 W3-J (AUD-25.10 (a)): the depot purchase's own authority -- the gameEngine gate the reducer asks, not the
+   unrelated same-named obligation helper in `utils/trainObligation.ts` -- and the limit the reducer judges by. */
+import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
+import { limitInForce } from "../gameEngine/sandboxSession";
+import type { GameStateResponse } from "../gameEngine/gameState";
 export type { DieselExchangeOffer };
 
 /** The subset of a corporation both sections need. */
@@ -146,6 +151,11 @@ export interface TrainPurchasePanelProps {
   /** Phase 3 W2-A (OD-1): a standing authoritative hold's refusal of the depot's `BuyHardwareFromPool`, or `null`.
    *  Outranks every depot reason but the empty depot; absent is `null` (no hold). */
   bankBlockedReason?: string | null;
+  /** Phase 3 W3-J (AUD-25.10 (a)): the board the depot purchase is judged on, so the Buy asks the reducer's own gate
+   *  (`trainPurchaseRefusal`) for the train-limit and treasury verdict instead of restating them. Absent / `null`: the
+   *  panel states no limit or funds rule of its own -- only the empty depot and the hold grey -- and the dispatch is
+   *  judged at the door, exactly as the offer form does without `offerRefusal`. */
+  board?: GameStateResponse | null;
   /** One `BuyHardwareFromPool` -- design note #1255: one train per press. */
   onBuyFromBank: (tier: string) => void;
   /** Design note #1326: THE OPEN SHELF. The rows a corporation may buy from right now -- one in the printed
@@ -257,6 +267,7 @@ export function TrainPurchasePanel({
   canAct,
   blockedReason,
   bankBlockedReason = null,
+  board = null,
   onBuyFromBank,
   openTiers,
   endsTurnAtLimit = false,
@@ -559,33 +570,32 @@ export function TrainPurchasePanel({
     : `Pay $${bankTotal || (nextTier?.cost ?? 0)}${
         fillsTrainLimit && endsTurnAtLimit && !exchangeMayFollow ? " and End Turn" : ""
       }`;
+  /* ==================================================================
+      PHASE 3 W3-J (AUD-25.10 (a)): THE DEPOT BUY ASKS THE PURCHASE'S AUTHORITY
+     ==================================================================
+     The train-limit arm (#230 / #485 / #703) and the treasury arm here were this panel's copy of the rule the reducer
+     judges a `BuyHardwareFromPool` by (`trainPurchaseRefusal`, design note #1019) -- the same limit read through
+     `isTrainLocked` / `countableTrainCount`, the same `treasury < cost`, in the panel's own words ("... for this
+     phase."). Two statements of one rule is how the panel and the gate came to disagree before (#703, #979).
+     NOW THE BUTTON ASKS THE GATE, on the board the shell hands in, with the arguments the reducer passes it: the
+     chosen shelf row's price and the limit in force (`limitInForce`, #1530), funds required. Its sentence is shown as
+     it is. #485's point survives in the gate's own sentence, which names the lock and gives no instruction.
+     KEPT, because they are not the gate's to say: the empty depot (there is no row to price, so nothing to ask) and
+     the W2-A hold (`bankBlockedReason`), which outranks every depot reason. Without a board the panel states no limit
+     or funds rule of its own. The label / projection / ceiling caption still read `atTrainLimit`: display, not a
+     verdict. */
   const bankProblem: string | null =
     nextTier === null
       ? "The Bank Depot is empty — every printed train has been bought."
       : /* Phase 3 W2-A (OD-1): while a hold stands the purchase is refused with the hold's sentence, whatever else. */
         bankBlockedReason !== null
         ? bankBlockedReason
-        : atTrainLimit
-        ? /* Design note #230: the phase's own ceiling, named as such -- this
-             says what is true rather than asking for a smaller number.
-
-             Design note #485: it no longer says what to DO about it. Both
-             strings used to end by directing the president to sell or scrap
-             a train first, and 1830 permits neither: there is no voluntary
-             discard, and the Bank never buys a train back. A corporation at
-             its limit is simply train-locked. The only thing that can move a
-             train off its roster is ANOTHER corporation buying it, which is
-             that corporation's decision and not an action available on this
-             panel -- so an instruction here could not be followed even in
-             principle. Naming the lock and stopping is the honest end of the
-             sentence. */
-          /* Design note #703: ONE SENTENCE, because there is one rule. The `limitDropsOnPurchase` variant read
-             "Buying a 4-train would start the next phase and cut the limit to 3, and NNH already holds 3" --
-             a prohibition 1830 does not contain, and the only message on this panel that could fire while the
-             corporation was legally under its limit. */
-          `Train limit reached — ${buyer?.ticker ?? "this corporation"} already holds ${ownedTrainCount} of a maximum ${trainLimit} for this phase.`
-        : bankTotal > treasury
-          ? `${buyer?.ticker ?? "This corporation"}'s treasury holds $${treasury} — it cannot pay $${bankTotal}.`
+        : board !== null && buyer !== null
+          ? trainPurchaseRefusal(board, buyer.company_id, {
+              cost: nextTier.cost,
+              trainLimit: limitInForce(board) ?? nextTier.trainLimit,
+              requireFunds: true,
+            })
           : null;
 
   /* Design note #281: THE LIMIT IS A LIMIT ON HOLDINGS, NOT ON THE BANK. #230 had enforced the cap on the

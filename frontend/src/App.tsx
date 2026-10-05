@@ -14826,6 +14826,7 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
                 blockedReason: dockHold.proposeTrainPurchase,
                 // Phase 3 W2-A: the hold's refusal of `BuyHardwareFromPool`, for the depot's own Buy.
                 bankBlockedReason: dockHold.buyTrainFromBank,
+                board: gameState, // Phase 3 W3-J (AUD-25.10 (a)): the depot Buy asks `trainPurchaseRefusal` on this board.
                 // Phase 3 W2-C (AUD-09.02): the sale's own authority, on the roster and the offer form.
                 offerRefusal: trainOfferRefusalFor,
                 // Phase 3 W3-I (AUD-19.01): the room link's queue on the offer form.

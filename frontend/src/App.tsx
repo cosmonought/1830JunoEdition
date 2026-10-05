@@ -13259,7 +13259,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     });
   boardSendRefusalRef.current = () => boardSendRefusal({ watchOnly, currency: syncBoardCurrency() });
   /* The settle point writes its verdict into `divergenceReportedAtRef` (R5) inside the drain's pass, and the pass's own
-     state updates render; this mirrors the standing verdict into state after that render, so the surfaces follow it. */
+     state updates render; this mirrors the standing verdict into state after that render, so the surfaces follow it.
+     EVERY RENDER ON PURPOSE: a ref cannot be a dependency, and the functional update returns `current` unchanged when
+     nothing moved, so React bails out -- it cannot loop. */
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const divergedAt = divergenceReportedAtRef.current;
     setBoardDivergedAt((current) => (current === divergedAt ? current : divergedAt));

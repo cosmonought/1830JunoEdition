@@ -414,6 +414,28 @@ describe("Phase 3 lane A: the keeper, on controlled time", () => {
     assert.equal(again.keeper.viewOf(gameId, { mode: "live", held: false, dealt: true })?.turnStartedAt, T0, "the answer was not taken for a hand-over");
   });
 
+  test("a vouch never stretches a turn across hand-overs it was queued behind (review A1)", async () => {
+    const { keeper, time } = keeperOn();
+    const gameId = mintGameId();
+    await keeper.load(gameId, { mode: "live", facts: null, held: false });
+    const alice = factsAfter(0);
+    keeper.observe(gameId, alice, false, "live");
+    await keeper.settled(gameId);
+    await time.advance(30_000);
+    const bob = factsAfter(1);
+    /* Synchronously -- nothing on the keeper's chain runs in between: Bob answers off-turn, Alice hands over, Bob hands back. */
+    keeper.observe(gameId, { ...alice, watermark: alice.watermark + 1, lastForeignIndex: alice.watermark + 1 }, false, "live");
+    keeper.observe(gameId, { ...bob, watermark: alice.watermark + 2 }, false, "live");
+    keeper.observe(gameId, { ...alice, watermark: alice.watermark + 3, lastForeignIndex: alice.watermark + 3 }, false, "live");
+    /* ...and Bob answers off-turn again, inside Alice's new turn, before any of it is settled. */
+    keeper.observe(gameId, { ...alice, watermark: alice.watermark + 4, lastForeignIndex: alice.watermark + 4 }, false, "live");
+    await keeper.settled(gameId);
+    const record = keeper.recordOf(gameId);
+    assert.equal(record?.turn?.seat, ALICE);
+    assert.equal(record?.turn?.started_at, T0 + 30_000, "Alice's NEW turn, never merged into her first");
+    assert.equal(record?.turn?.continued_to, alice.watermark + 4, "and the new turn is vouched for through the second answer");
+  });
+
   test("a failing clock store costs the clock, never a throw: the keeper rereads and the restart evidence holds", async () => {
     const store = createMemoryClockStore();
     const { keeper, time } = keeperOn(store);

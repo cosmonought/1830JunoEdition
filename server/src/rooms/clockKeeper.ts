@@ -43,7 +43,6 @@ import {
   noteExpiry,
   observeFacts,
   pauseClock,
-  vouchTurn,
   resumeClock,
   unavailableClockView,
   CLOCK_STALE_REASON,
@@ -134,6 +133,11 @@ interface Entry {
   expiryTimer: unknown | null;
   retryTimer: unknown | null;
   retryMs: number;
+  /** The watermark at which this process last SAW the turn key change (-1: not since the load). */
+  keyChangedAt: number;
+  /** In this process, another seat moved and the turn stayed (an offer's answer) -- the turn is vouched for up to this
+   *  watermark. Cleared by any key change; re-applied at every settle until it is durable (review A1, A2). */
+  vouchedTo: number | null;
   /** +1 per load: a timer armed for an older load does nothing. */
   epoch: number;
 }
@@ -287,21 +291,6 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
   }
 
   /** Bring the record in line with the newest served facts. `source` says where the turn's start comes from. */
-  /** Another seat moved and the turn did not change: the record vouches for the turn up to here, so a reload keeps it. */
-  async function vouch(entry: Entry): Promise<void> {
-    if (entries.get(entry.gameId) !== entry || entry.unreadable || entry.facts === null) return;
-    if (entry.stale) {
-      await settle(entry, "retry");
-      return;
-    }
-    const record = entry.record;
-    if (record === null) return;
-    const next = vouchTurn(record, entry.facts, now());
-    if (next === null) return;
-    entry.record = next;
-    await write(entry, next);
-  }
-
   async function settle(entry: Entry, source: "load" | "commit" | "retry"): Promise<void> {
     if (entries.get(entry.gameId) !== entry) return;
     if (entry.unreadable) return;
@@ -313,16 +302,24 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
       armExpiry(entry);
       return;
     }
-    const base = entry.record ?? newClockRecord(entry.gameId, entry.mode, deps.policy, now());
+    const original = entry.record;
+    let base = original ?? newClockRecord(entry.gameId, entry.mode, deps.policy, now());
+    /* A VOUCH this process saw (another seat moved, the turn stayed) is applied to the turn it was seen in -- and only
+       to it: the record's turn must have begun at or after the last key change this process saw, so a vouch can never
+       stretch an older turn of the same key across a hand-over still being settled (review A1). */
+    const running = base.turn;
+    if (entry.vouchedTo !== null && running !== null && base.stopped_at === null && running.key === facts.turnKey && running.from_index >= entry.keyChangedAt && entry.vouchedTo > running.continued_to) {
+      base = { ...base, revision: base.revision + 1, turn: { ...running, continued_to: entry.vouchedTo }, updated_at: now() };
+    }
     /* At a load (or a reread), a turn the record does not know starts at the hand-over's server stamp -- the durable
        evidence of when it began. A live commit's turn starts when it was observed. */
     const since = source === "commit" ? entry.since : Math.min(entry.since, facts.handoverAt ?? facts.lastAt ?? entry.since);
     const { record: next, ended } = observeFacts(base, facts, since, now());
-    if (next === base && entry.record !== null) {
+    if (next === original && original !== null) {
       armExpiry(entry);
       return;
     }
-    const startedTurn = next.turn !== null && next.turn !== base.turn && next.turn.key !== base.turn?.key;
+    const startedTurn = next.turn !== null && next.turn.key !== base.turn?.key;
     entry.record = next;
     if (startedTurn) counters.turnsStarted += 1;
     auditTurn(entry, ended, source !== "commit");
@@ -404,6 +401,8 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
       expiryTimer: null,
       retryTimer: null,
       retryMs: 0,
+      keyChangedAt: -1,
+      vouchedTo: null,
       epoch: (previous?.epoch ?? 0) + 1,
     };
   }
@@ -442,16 +441,23 @@ export function createClockKeeper(deps: ClockKeeperDeps) {
       const entry = found;
       if (entry.facts !== null && facts.watermark < entry.facts.watermark) return; // older than what was seen: ignored
       if (entry.facts?.turnKey !== facts.turnKey || entry.facts?.ended !== facts.ended || entry.facts?.closed !== facts.closed) {
-        if (entry.facts?.turnKey !== facts.turnKey) entry.since = now();
+        if (entry.facts?.turnKey !== facts.turnKey) {
+          entry.since = now();
+          entry.keyChangedAt = facts.watermark;
+          entry.vouchedTo = null;
+        }
         entry.facts = facts;
         void enqueue(entry, () => settle(entry, "commit")).catch((error) => deps.warn(`  clock: ${gameId}: a clock update threw -- ${describe(error)}`));
         return;
       }
       const moved = entry.facts !== null && facts.lastForeignIndex !== entry.facts.lastForeignIndex;
       entry.facts = facts;
-      /* Another seat moved and the turn stayed (an offer's answer): vouch for the turn, so a reload does not take that
-         move for a hand-over (review A). */
-      if (moved) void enqueue(entry, () => vouch(entry)).catch((error) => deps.warn(`  clock: ${gameId}: a clock update threw -- ${describe(error)}`));
+      /* Another seat moved and the turn stayed (an offer's answer): vouch for the turn -- noted NOW, synchronously, with
+         the watermark that proves it -- so a reload does not take that move for a hand-over (review A). */
+      if (moved) {
+        entry.vouchedTo = facts.watermark;
+        void enqueue(entry, () => settle(entry, "commit")).catch((error) => deps.warn(`  clock: ${gameId}: a clock update threw -- ${describe(error)}`));
+      }
     },
 
     /** The host's pause (`by`: the host's player id), bound to the revision its tab saw. */

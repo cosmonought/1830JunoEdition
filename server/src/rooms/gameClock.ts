@@ -123,8 +123,8 @@ export interface ClockFacts {
   readonly watermark: number;
   /** The newest committed entry's server stamp (`at`), or `null` (no entries, or an unstamped legacy entry). */
   readonly lastAt: number | null;
-  /** The newest undo that still STANDS (`RevertTo`: everything from `target` up to its own `index` did not happen), or
-   *  `null`. A running turn that began inside that range was undone. */
+  /** The newest undo that still STANDS (`RevertTo`: everything from `target` up to its own `index` did not happen) and is
+   *  newer than the hand-over, or `null`. A running turn that began inside that range was undone. */
   readonly undo: { readonly target: number; readonly index: number } | null;
   /** The newest STANDING move (non-derived, not an undo, not taken back by one) by a seat OTHER than the acting one, or
    *  -1. A stored turn of the same key is the same turn only if no other seat has moved since the server last saw it
@@ -184,7 +184,9 @@ export function clockFactsOf(input: { readonly state: GameStateResponse; readonl
       lastForeignIndex = entry.index;
       handoverAt = stampOf(entry) ?? handoverAt;
     }
-    if ((seat === null || lastForeignIndex !== -1) && undo !== null) break;
+    /* Done at the hand-over: an undo older than it ends before the running turn began, so it cannot have undone it
+       (review A3: a log with no undo is not read whole on every commit). With no seat, the newest undo is still sought. */
+    if (lastForeignIndex !== -1 || (seat === null && undo !== null)) break;
   }
   return Object.freeze({ dealt, ended: board.ended, closed: board.closed, seat, turnKey, watermark, lastAt, undo, lastForeignIndex, handoverAt });
 }

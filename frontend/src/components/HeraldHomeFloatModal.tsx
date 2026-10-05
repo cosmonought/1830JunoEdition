@@ -74,6 +74,8 @@ export function HeraldHomeFloatModal({ notice, liveryColor, liveryInk, onDismiss
   return (
     <NativeModal
       name={`${notice.ticker} has floated`}
+      /* W3-A (OD-5(c)): one of the forced notices; the shell's notice chain decides when it presents. */
+      chainedNotice
       dismissible
       onDismiss={onDismiss}
       onScrimClick={onDismiss}

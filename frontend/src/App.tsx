@@ -632,6 +632,19 @@ import {
   noticeDismissKey,
   type FleetLossNotice,
 } from "./utils/fleetLossNotice";
+/* W3-A / OD-5: the per-player, per-game acknowledgement ledger, the forced-notice chain, and its focus target. */
+import {
+  NoticeLedger,
+  PHASE_THREE_NOTICE_KEY,
+  heraldFloatNoticeKey,
+  isFleetLossNoticePayload,
+  isHeraldFloatPayload,
+  isPrivateRevenuePayload,
+  noticeLedgerKey,
+  privateRevenueNoticeKey,
+} from "./utils/noticeAcknowledgements";
+import { useNoticeChain } from "./utils/useNoticeChain";
+import GameScreenHeading from "./components/GameScreenHeading";
 import { operatingCorporationId } from "./gameEngine/dividendGate";
 // Design note #1683 (Stage 10.1): the one `LayTile` authority the grid asks, and the one board geometry it is handed.
 import { layTileRefusal, layTimingRefusal } from "./gameEngine/layTileAuthority";
@@ -726,8 +739,6 @@ import TutorialModal, {
   WATERFALL_AUCTION_TUTORIAL,
   DELAYED_STOCK_ROUND_TUTORIAL, // DA-6
   DELAYED_WATERFALL_AUCTION_TUTORIAL, // DA-6
-  TUTORIAL_LIBRARY,
-  replayTutorials,
   tutorialModeEnabled,
 } from "./components/TutorialModal";
 import { useRoomChat } from "./components/ChatBox";
@@ -1096,6 +1107,10 @@ function withSeededChart(
   };
 }
 
+/** W3-A / OD-5(c): the shell's four tutorials, in their mount order -- the order the notice chain presents them in
+ *  when more than one is armed at once (the market lesson can arm during an Operating Round). */
+const TUTORIAL_CHAIN_ORDER: readonly string[] = ["waterfall-auction", "stock-round", "operating-round", "stock-market"];
+
 function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }: AppShellProps) {
   const wallet = useWallet();
   const session = useGameSession();
@@ -1123,12 +1138,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   /** Design note #9 in `sandboxState.ts`: the turn-1 fixture. */
   const sandboxIsZeroState = sandboxScenario(sandboxScenarioId).zeroState === true;
 
-  /* Entering the zero state clears tutorial "seen" flags so a first game teaches them again; mid-game fixtures leave them alone.
-     See docs/ai_architecture/state_machine.md - App.tsx #301 */
-  useEffect(() => {
-    if (!sandbox || !sandboxIsZeroState) return;
-    replayTutorials(TUTORIAL_LIBRARY.map((topic) => topic.topicKey));
-  }, [sandbox, sandboxIsZeroState, sandboxScenarioId]);
+  /* W3-A / OD-5(d), AUD-01.06: TUTORIALS ARM ONCE PER PROFILE. Design note #301's effect cleared every tutorial's
+     "seen" flag whenever this shell mounted in the zero state -- and the default scenario IS the zero state, so every
+     table, reload and remount taught the player again. RULED (2026-10-04): "Once the player has completed/dismissed
+     the tutorial sequence, ordinary game mounts and zero-state remounts must not automatically re-arm it again."
+     The effect is gone; `TutorialModal`'s per-profile `localStorage` flags are the whole record, and nothing in the
+     shell clears them. */
 
   /* Design note #1 in `PrivatePowerPanel.tsx`: which abilities have fired.
      Local, because there is no contract message to read it back from --
@@ -1500,64 +1515,54 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const pendingFleetNoticesRef = useRef<FleetLossNotice[]>([]);
   const [pendingFleetNotices, setPendingFleetNotices] = useState<FleetLossNotice[]>([]);
   /** ==================================================================
-   *   DESIGN NOTE 1107: A DISMISSAL HAS TO OUTLIVE THE PAGE, NOT JUST THE UNDO
+   *   DESIGN NOTE 1107, SUPERSEDED BY W3-A / OD-5(a): THE ACKNOWLEDGEMENT IS THE PLAYER'S, PER GAME
    *  ==================================================================
    *
-   * REPORTED: "refreshing the page triggered the Rust modal despite it having fired several subphases before."
+   * #1107 kept fleet-loss dismissals in `sessionStorage` per room. That survived a refresh but not a new tab: the
+   * fresh tab began with an empty set and the replay raised every loss in the game again (P3-N019). RULED (OD-5(a),
+   * 2026-10-04): acknowledgement is persistent per user / per game, `sessionStorage` is not the durable authority,
+   * and a late joiner receives no backlog of historical notices. `NoticeLedger` (`noticeAcknowledgements.ts`) is that
+   * record for all four one-shot notices -- Fleet Loss, Private Revenue, Phase Three and Herald -- and its header
+   * says why it is keyed as it is. #896's rule still stands: an acknowledgement is not game state and never enters
+   * the log every client replays.
    *
-   * #1032 MADE THIS KEY THE EVENT rather than the turn, and its note says a rebuild "produces the same key
-   * and a dismissed notice stays dismissed." TRUE OF AN UNDO, where the ref survives because the page does.
-   * FALSE OF A REFRESH, which is the other kind of rebuild: the ref is reconstructed empty, the replay
-   * re-queues the notice, and the modal interrupts a player who acknowledged it half a turn ago. The same
-   * shape as #1094's era toast -- a guard that covers one kind of rebuild and silently not the other.
+   * `dismissedFleetNoticesRef` KEEPS ITS NAME AND ITS ONE QUESTION, `has(key)`, so the fleet-loss raiser in the
+   * apply half reads the ledger without a line of it changing: answered, or historical to this viewer, means "do
+   * not queue".
    *
-   * `sessionStorage`, NOT THE LOG. #896 considered and rejected an acknowledgement ACTION: "a purely
-   * cosmetic dismissal that Undo could then rewind". Whether one viewer clicked a modal is not game state and
-   * must not enter the log every client replays. It is a per-viewer, per-session fact, which is what this
-   * storage is for -- and what `Lobby` #114 already chose for the same reason ("rejoining a stale room in a
-   * new tab" should not inherit the old one).
-   *
-   * KEYED BY ROOM, so two games in one session cannot inherit each other's acknowledgements.
-   *
-   * WRAPPED, because storage throws in a private window and on a browser with site data blocked -- and the
-   * failure direction is the harmless one: an unreadable store means the modal shows again, which is the
-   * behaviour that was there before this note. */
-  /* Design note #1107: IN THE APP'S OWN STORAGE NAMESPACE, `1830juno.`, and versioned -- the shape
-     `TutorialModal` and `fleetLossNotice`'s silence prefix already use. `appNaming.test.ts` #38 enforces it
-     and explains why the namespace rather than an enumeration is the property: "a `localStorage` key is a
-     persisted identifier -- renaming one silently discards every player's saved preference". My first draft
-     wrote a bare `1830.` prefix and that suite caught it, which is exactly what it is for. */
-  const dismissedStorageKey = sandboxRoomCode
-    ? `1830juno.fleet_loss_dismissed.v1.${sandboxRoomCode}`
-    : null;
-  const dismissedFleetNoticesRef = useRef<Set<string>>(new Set());
-  const dismissedLoadedForRef = useRef<string | null>(null);
-  if (dismissedStorageKey && dismissedLoadedForRef.current !== dismissedStorageKey) {
-    dismissedLoadedForRef.current = dismissedStorageKey;
-    try {
-      const saved = window.sessionStorage.getItem(dismissedStorageKey);
-      dismissedFleetNoticesRef.current = new Set<string>(saved ? JSON.parse(saved) : []);
-    } catch {
-      dismissedFleetNoticesRef.current = new Set<string>();
-    }
+   * BOUND DURING RENDER, as #1107's load was: the raiser runs inside a dispatch and must see this viewer's record
+   * the moment the room view names the seat. Binding is idempotent. */
+  const initialHistoryLoadRef = useRef(true);
+  const noticeLedgerRef = useRef<NoticeLedger | null>(null);
+  if (noticeLedgerRef.current === null) {
+    /* UNWITNESSED HISTORY: the drain is replaying history (`replayingHistory`) for a table this mount has not finished
+       loading yet (`initialHistoryLoadRef`, written beside `sandboxAppliedCount`). A reconnect's catch-up, or an
+       Undo's rebuild, in a tab that was already at the table is NOT unwitnessed -- that player was here. */
+    noticeLedgerRef.current = new NoticeLedger(() => replayingHistory && initialHistoryLoadRef.current);
   }
-  /** Design note #1107: written on every acknowledgement, so a refresh mid-turn keeps what was clicked. */
+  const noticeLedger = noticeLedgerRef.current;
+  const noticeLedgerStorageKey = noticeLedgerKey(sandboxRoomDoc);
+  noticeLedger.bind(noticeLedgerStorageKey);
+  /** Re-renders what reads the ledger after it changes outside a state update -- an acknowledgement, another tab. */
+  const [, bumpNoticeLedgerRevision] = useReducer((count: number) => count + 1, 0);
+  const dismissedFleetNoticesRef = useRef<{ has(key: string): boolean }>(noticeLedger);
+  /** The fleet-loss acknowledgement, through the ledger: durable for this player in this game. */
   const rememberDismissed = useCallback(
     (key: string) => {
-      dismissedFleetNoticesRef.current.add(key);
-      if (!dismissedStorageKey) return;
-      try {
-        window.sessionStorage.setItem(
-          dismissedStorageKey,
-          JSON.stringify(Array.from(dismissedFleetNoticesRef.current)),
-        );
-      } catch {
-        /* A viewer whose browser refuses storage keeps the in-memory set and sees the modal again after a
-           refresh -- the behaviour this note is improving on, not a new failure. */
-      }
+      noticeLedger.acknowledge(key);
+      bumpNoticeLedgerRevision();
     },
-    [dismissedStorageKey],
+    [noticeLedger],
   );
+  /* Another of this player's tabs answered something: read it, so the same notice closes here as well. */
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== null && event.key !== noticeLedger.storageKey) return;
+      if (noticeLedger.reload()) bumpNoticeLedgerRevision();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [noticeLedger]);
 
   // Renders the whole depot tier by tier; depotInventory already applies the cheapest-first queue rule.
   // See docs/ai_architecture/contract_economy.md - App.tsx #203
@@ -2206,7 +2211,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     revenue: number;
     firstTokenCost: number;
   } | null>(null);
-  const dismissHeraldFloatNotice = useCallback(() => setHeraldFloatNotice(null), []);
+  /* W3-A / OD-5(a): the dismissal is this player's acknowledgement for this game, so a reload or a new tab does not
+     raise the float again. */
+  const dismissHeraldFloatNotice = useCallback(() => {
+    if (heraldFloatNotice) {
+      noticeLedger.acknowledge(heraldFloatNoticeKey(heraldFloatNotice.companyId));
+      bumpNoticeLedgerRevision();
+    }
+    setHeraldFloatNotice(null);
+  }, [heraldFloatNotice, noticeLedger]);
 
   /* Design note #1299: the hex is the door. Open from a click on L8 (HexGridRenderer's intercept, only wired
      while licences are in play); the Buy button is live exactly when `kanawhaLicenseControl` would be. */
@@ -2651,6 +2664,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     const previous = previousPhaseTier.current;
     previousPhaseTier.current = tier;
     if (previous === undefined) return; // the first observation seeds; it is not an edge
+    /* W3-A / OD-5(a): an edge crossed while this mount is still loading the table's history happened before this
+       viewer arrived -- no backlog for a late joiner. A player who did see it and had not answered gets it back
+       from their ledger instead (the restore effect beside the notice chain). */
+    if (initialHistoryLoadRef.current) return;
     if (previous === "2" && tier === "3") {
       holdForPhaseBadgeFlip("settled", () => setPhaseThreeNotice(true));
     }
@@ -4387,6 +4404,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
   const setSandboxRoomError = useCallback((sentence: string) => dispatchRoomNotice(noticeActionFor(sentence)), []);
   const [sandboxRoomBusy, setSandboxRoomBusy] = useState(false);
   const [sandboxAppliedCount, setSandboxAppliedCount] = useState(0);
+  /* W3-A / OD-5(a): this mount is still loading the table's history until its first drain pass lands -- entering or
+     leaving a table resets the count to 0. What the replay raises before then is history this viewer did not
+     witness, so it is no backlog of theirs (`NoticeLedger.has`, the Phase 3 edge). Written during render, read by the
+     raisers inside the dispatch. */
+  initialHistoryLoadRef.current = sandboxRoomCode !== null && sandboxAppliedCount === 0;
   /* ==================================================================
       DESIGN NOTE 1173: THE TURN GATE WAS READING A STATE ONE ROUND TRIP OLD
      ==================================================================
@@ -11965,6 +11987,118 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
     live: orSubPhase,
   });
 
+  /* ==================================================================
+      W3-A / OD-5: THE ONE-SHOT NOTICES, PERSISTED; THE FORCED NOTICES, CHAINED; FOCUS WHEN THE CHAIN ENDS
+     ==================================================================
+     OUTSIDE RED R4 (which ends with `displayedSubPhase` above). Every raiser is unchanged: the apply half still
+     queues fleet losses and raises the float, the payout and Phase 3 still arrive through their own guarded paths.
+     What this adds is what happens to them afterwards. */
+
+  /* OD-5(a): A NOTICE THIS PLAYER WITNESSED IS REMEMBERED UNTIL THEY ANSWER IT. Re-run whenever a notice is raised
+     or the record is bound, so a raise that came before the room view named the seat is written once it does.
+     History this viewer did not witness never reaches here: the raisers refuse it (`NoticeLedger.has`, #825's
+     `replayingHistory` guards, the Phase 3 edge's load guard). */
+  useEffect(() => {
+    for (const notice of pendingFleetNotices) {
+      noticeLedger.remember({ kind: "fleetLoss", key: noticeDismissKey(notice), payload: notice });
+    }
+    if (privatePayoutPhase) {
+      noticeLedger.remember({
+        kind: "privateRevenue",
+        key: privateRevenueNoticeKey(privatePayoutPhase.roundLabel),
+        payload: privatePayoutPhase,
+      });
+    }
+    if (phaseThreeNotice) noticeLedger.remember({ kind: "phaseThree", key: PHASE_THREE_NOTICE_KEY, payload: null });
+    if (heraldFloatNotice) {
+      noticeLedger.remember({
+        kind: "herald",
+        key: heraldFloatNoticeKey(heraldFloatNotice.companyId),
+        payload: heraldFloatNotice,
+      });
+    }
+  }, [noticeLedger, noticeLedgerStorageKey, pendingFleetNotices, privatePayoutPhase, phaseThreeNotice, heraldFloatNotice]);
+
+  /* OD-5(a), AUD-11.02: AND IT COMES BACK AFTER A RELOAD, A NEW TAB OR A REMOUNT -- from this player's own record,
+     once the record is known. Only what they witnessed and left unanswered; a late joiner's record is empty. A
+     notice already on screen or already queued is left as it is. */
+  useEffect(() => {
+    if (!noticeLedgerStorageKey) return;
+    const restoredFleet = noticeLedger
+      .pendingOf("fleetLoss")
+      .map((entry) => entry.payload)
+      .filter(isFleetLossNoticePayload);
+    const queue = pendingFleetNoticesRef.current;
+    const missing = restoredFleet.filter(
+      (notice) => !queue.some((queued) => noticeDismissKey(queued) === noticeDismissKey(notice)),
+    );
+    if (missing.length > 0) {
+      const next = [...queue, ...missing];
+      pendingFleetNoticesRef.current = next;
+      setPendingFleetNotices(next);
+    }
+    const revenue = noticeLedger.pendingOf("privateRevenue")[0];
+    if (revenue && isPrivateRevenuePayload(revenue.payload)) {
+      const restored = revenue.payload as NonNullable<typeof privatePayoutPhase>;
+      setPrivatePayoutPhase((current) => current ?? restored);
+    }
+    if (noticeLedger.pendingOf("phaseThree").length > 0) setPhaseThreeNotice(true);
+    const herald = noticeLedger.pendingOf("herald")[0];
+    if (herald && isHeraldFloatPayload(herald.payload)) {
+      const restored = herald.payload as NonNullable<typeof heraldFloatNotice>;
+      setHeraldFloatNotice((current) => current ?? restored);
+    }
+  }, [noticeLedger, noticeLedgerStorageKey]);
+
+  /* OD-5(c): the tutorials report whether they are armed and unanswered, so the chain can hold them -- the lowest
+     priority -- and present one at a time, in mount order. */
+  const [openTutorials, setOpenTutorials] = useState<readonly string[]>([]);
+  const handleTutorialOpenChange = useCallback((topicKey: string, open: boolean) => {
+    setOpenTutorials((current) => {
+      if (open) return current.includes(topicKey) ? current : [...current, topicKey];
+      return current.includes(topicKey) ? current.filter((key) => key !== topicKey) : current;
+    });
+  }, []);
+
+  /* OD-5(b)+(c), AUD-01.03 / AUD-13.02 / AUD-13.07: ONE FORCED NOTICE AT A TIME, in the ruled order (Emergency,
+     Fleet Loss, Private Revenue, Phase Three, Herald, Tutorial), none of them over or under another native dialog;
+     when the chain is exhausted, focus goes to the game-screen heading. An answered notice is never due, whichever
+     of this player's tabs answered it. */
+  const gameScreenHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const { presented: presentedNotice } = useNoticeChain(
+    {
+      emergency: emergencyModalPlan !== null && emergencyModalPlan.stage !== "legacy",
+      fleetLoss: dueFleetNotice !== null && !noticeLedger.isAcknowledged(noticeDismissKey(dueFleetNotice)),
+      privateRevenue:
+        privatePayoutPhase !== null &&
+        !noticeLedger.isAcknowledged(privateRevenueNoticeKey(privatePayoutPhase.roundLabel)),
+      phaseThree: phaseThreeNotice && !noticeLedger.isAcknowledged(PHASE_THREE_NOTICE_KEY),
+      herald:
+        heraldFloatNotice !== null &&
+        !noticeLedger.isAcknowledged(heraldFloatNoticeKey(heraldFloatNotice.companyId)),
+      tutorial: openTutorials.length > 0,
+    },
+    gameScreenHeadingRef,
+  );
+  const presentedTutorial =
+    presentedNotice === "tutorial"
+      ? TUTORIAL_CHAIN_ORDER.find((topicKey) => openTutorials.includes(topicKey)) ?? null
+      : null;
+
+  /* OD-5(a): answering the payout and the Phase 3 notice is this player's acknowledgement for this game. */
+  const acknowledgePrivateRevenue = useCallback(() => {
+    if (privatePayoutPhase) {
+      noticeLedger.acknowledge(privateRevenueNoticeKey(privatePayoutPhase.roundLabel));
+      bumpNoticeLedgerRevision();
+    }
+    setPrivatePayoutPhase(null);
+  }, [privatePayoutPhase, noticeLedger]);
+  const acknowledgePhaseThree = useCallback(() => {
+    noticeLedger.acknowledge(PHASE_THREE_NOTICE_KEY);
+    bumpNoticeLedgerRevision();
+    setPhaseThreeNotice(false);
+  }, [noticeLedger]);
+
   // End Turn dispatches the same PassTurn the Stock Round uses. #44: the first-OR market lesson interrupts, guarded three ways; #412 gates only the NAVIGATION on tutorialMode.
   // See docs/ai_architecture/state_machine.md - App.tsx #44
   const handleEndOperatingTurn = useCallback(() => {
@@ -13923,6 +14057,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         /* DA-6 (DA-F8h): the Delayed Auction arrives mid-game -- its own last page, not the opening auction's. */
         pages={tableVariants.delayedAuction ? DELAYED_WATERFALL_AUCTION_TUTORIAL : WATERFALL_AUCTION_TUTORIAL}
         active={isWaterfallPhase}
+        held={presentedTutorial !== "waterfall-auction"}
+        onOpenChange={handleTutorialOpenChange}
       />
       <TutorialModal
         topicKey="stock-round"
@@ -13930,12 +14066,16 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         /* DA-6 (DA-F8h): a Delayed Auction table's Stock Round 1 follows no auction. */
         pages={tableVariants.delayedAuction ? DELAYED_STOCK_ROUND_TUTORIAL : STOCK_ROUND_TUTORIAL}
         active={gameState?.current_round_type === "StockRound"}
+        held={presentedTutorial !== "stock-round"}
+        onOpenChange={handleTutorialOpenChange}
       />
       <TutorialModal
         topicKey="operating-round"
         heading="Operating Round"
         pages={OPERATING_ROUND_TUTORIAL}
         active={gameState?.current_round_type === "OperatingRound"}
+        held={presentedTutorial !== "operating-round"}
+        onOpenChange={handleTutorialOpenChange}
       />
       {/* Design note #44: the only tutorial not keyed to a round type. It
           opens on an event -- the player's first OR turn ending -- and the
@@ -13945,6 +14085,8 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         heading="The Stock Market"
         pages={STOCK_MARKET_TUTORIAL}
         active={marketTutorialArmed}
+        held={presentedTutorial !== "stock-market"}
+        onOpenChange={handleTutorialOpenChange}
       />
 
       {/* Design note #332: the mandatory buy the treasury cannot fund. Mounted at shell level beside the
@@ -14029,7 +14171,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           on that president's own screen (`emergencyForPresident`); keyed on the obligation so a new one starts clean. */}
       <EmergencyTrainPurchaseModal
         key={emergencyFunding?.automatic?.obligation ?? (emergencyModalPlan ? `emergency:${emergencyModalPlan.corporationId}` : "emergency:none")}
-        plan={emergencyModalPlan}
+        /* W3-A / OD-5(c): first in the notice chain, so it presents whenever it is owed -- unless a dialog the president
+           had already opened is still up, which it waits for rather than stacking over (AUD-13.07). */
+        plan={presentedNotice === "emergency" ? emergencyModalPlan : null}
         sandbox={sandbox}
         actionInFlight={actionInFlight}
         labelForAddress={(address) => sandboxPlayerLabel(address) ?? truncateAddress(address)}
@@ -14187,6 +14331,9 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
       {/* Design note #34: one bar. The room context is the middle of the single header now. It still says WHICH
          room this shell is bound to, and is still the only place `chatError` surfaces -- chat failing silently
          is worse than chat saying it is broken. */}
+      {/* W3-A / OD-5(b), AUD-01.03: the game screen's heading -- stable, visually hidden, and where focus lands when
+          the forced-notice chain is exhausted. */}
+      <GameScreenHeading ref={gameScreenHeadingRef} />
       <TopBar
         onLeaveGame={onLeaveGame}
         // W1-N / AUD-01.09: the visible log export -- the same `copySandboxLog` as Ctrl+Shift+L; only in a room.
@@ -15591,14 +15738,14 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         onDone={handleTreasuryMachineDone}
         stackIndex={dividendPayout ? 1 : 0}
       />
-      {/* Design note #1049: the phase before any corporation acts, so it is mounted before the modal about the
-          corporation that acts first. The ordering is enforced in `dueFleetNotice` (#1049a) rather than by
-          this position or by z-index; source order here simply agrees with it, so a reader is not looking at
-          two files that appear to disagree about which comes first. */}
+      {/* W3-A / OD-5(c): WHICH NOTICE PRESENTS IS THE NOTICE CHAIN'S DECISION (`useNoticeChain`, in the ruled order
+          Emergency, Fleet Loss, Private Revenue, Phase Three, Herald, Tutorial), not this source order and not
+          z-index -- at most one of the forced notices below is mounted at a time. (#1049's payout-first order was
+          superseded by the ruling.) */}
       {/* Design note #1332: PRR on the Level Playing Field / 18XX+ floats owing no token -- said, not left to
           be noticed. */}
       <HeraldHomeFloatModal
-        notice={heraldFloatNotice}
+        notice={presentedNotice === "herald" ? heraldFloatNotice : null}
         liveryColor={heraldFloatNotice ? stationTickerColor(heraldFloatNotice.companyId) : "#0f0f0f"}
         liveryInk={
           heraldFloatNotice
@@ -15618,10 +15765,11 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
         treasuryBefore={licenseModalFacts?.treasury ?? null}
         onBuy={() => kanawhaLicenseControl?.onBuy()}
       />
+      {/* W3-A / OD-5(c): every forced notice below presents only when the notice chain gives it the screen. */}
       <PrivateRevenueModal
-        round={privatePayoutPhase}
+        round={presentedNotice === "privateRevenue" ? privatePayoutPhase : null}
         roundLabel={privatePayoutPhase?.roundLabel ?? null}
-        onAcknowledge={() => setPrivatePayoutPhase(null)}
+        onAcknowledge={acknowledgePrivateRevenue}
       />
       {/* Design note #896: unskippable, and above everything -- the turn does not start until it is answered.
           Design note (VF-8): the `key` used to exist so the silence checkbox re-seeded per notice; the
@@ -15629,15 +15777,15 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null }:
           notice's dismissal state being reused by the next. */}
       <FleetLossModal
         key={dueFleetNotice ? `${dueFleetNotice.companyId}:${dueFleetNotice.cause}` : "none"}
-        notice={dueFleetNotice}
+        notice={presentedNotice === "fleetLoss" ? dueFleetNotice : null}
         onAcknowledge={acknowledgeFleetNotice}
       />
 
       {/* #1441: every player hears that privates are for sale, once, when Phase 3 begins.
           DA-6: under the Delayed Auction the auction is still owed at that edge, and the notice says so instead. */}
       <PhaseThreeNoticeModal
-        open={phaseThreeNotice}
-        onAcknowledge={() => setPhaseThreeNotice(false)}
+        open={presentedNotice === "phaseThree"}
+        onAcknowledge={acknowledgePhaseThree}
         delayedAuctionPending={tableVariants.delayedAuction === true && gameState?.private_auction_complete === false}
       />
 

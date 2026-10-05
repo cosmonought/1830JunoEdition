@@ -558,7 +558,9 @@ describe("Tutorial policy", () => {
     // The queue itself is untouched -- what went is the second opinion, not the notice.
     const due = sliceBetween(NOTICE, "export function nextDueNotice(", "): FleetLossNotice | null {");
     expect(due).toContain("queued: readonly FleetLossNotice[],");
-    expect(due).toContain("dismissed: ReadonlySet<string>,");
+    /* W3-A (OD-5(a)): still exactly these two parameters; `dismissed` is typed by the one method asked of it, so the
+       shell's per-player ledger answers it as a `Set` would. */
+    expect(due).toContain("dismissed: { has(key: string): boolean },");
     // And the dialog that hosted the checkbox no longer offers one.
     const MODAL = readStripped("components/FleetLossModal.tsx");
     expect(MODAL).not.toContain('type="checkbox"');

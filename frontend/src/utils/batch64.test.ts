@@ -431,34 +431,41 @@ describe("a replayed tile lay is judged against the reducer's phase", () => {
   });
 });
 
-describe("a dismissed fleet notice survives a refresh", () => {
+describe("a dismissed fleet notice survives a refresh -- and, since W3-A / OD-5(a), a new tab", () => {
+  /* ==================================================================
+      SUPERSEDED BY W3-A / OD-5(a), NOT LOOSENED
+     ==================================================================
+     These three cases pinned #1107's `sessionStorage` store, keyed by room. It outlived a refresh and not a new tab:
+     the fresh tab's empty session let the replay raise every loss in the game again (P3-N019). RULED (2026-10-04):
+     acknowledgement is persistent per user / per game, and `sessionStorage` is not the durable authority. Each case
+     keeps its claim and now checks it against `NoticeLedger` (`noticeAcknowledgements.ts`), whose behaviour --
+     remount, new tab, another game, refusing storage -- is `noticeAcknowledgements.test.ts`'s. */
+  const LEDGER = readStripped("utils/noticeAcknowledgements.ts");
+
   it("remembers the acknowledgement outside the page's memory", () => {
     /* REPORTED: "refreshing the page triggered the Rust modal despite it having fired several subphases
-       before."
-       #1032 KEYED DISMISSAL ON THE EVENT so a rebuild reaches the same key -- true of an UNDO, where the ref
-       survives because the page does, and false of a REFRESH, which reconstructs it empty. The same shape as
-       #1094's era toast: a guard that covers one kind of rebuild and silently not the other. */
-    /* Design note #1107: in the app's own `1830juno.` storage namespace and versioned, the shape the other
-       persisted keys use -- `appNaming.test.ts` enforces that namespace and caught the bare prefix I wrote
-       first. */
-    expect(APP).toContain("1830juno.fleet_loss_dismissed.v1.");
+       before." #1032 KEYED DISMISSAL ON THE EVENT so a rebuild reaches the same key; the acknowledgement must then
+       outlive the page. It still goes through the one helper, which now writes the player's ledger. */
     expect(APP).toContain("rememberDismissed(noticeDismissKey(notice));");
+    expect(APP).toContain("noticeLedger.acknowledge(key);");
+    expect(APP).not.toContain("1830juno.fleet_loss_dismissed.v1.");
+    /* Still in the app's own `1830juno.` namespace and versioned (`appNaming.test.ts` #38). */
+    expect(LEDGER).toContain('export const NOTICE_ACK_STORAGE_PREFIX = "1830juno.notice_ack.v1.";');
   });
 
-  it("keeps it out of the log, which #896 ruled against", () => {
-    /* "A purely cosmetic dismissal that Undo could then rewind." Whether one viewer clicked a modal is not
-       game state and must not enter the log every client replays -- so it lives in `sessionStorage`, keyed by
-       room so two games in a session cannot inherit each other's acknowledgements. */
-    expect(APP).toContain("window.sessionStorage.setItem(\n          dismissedStorageKey,");
+  it("keeps it out of the log, which #896 ruled against -- and out of sessionStorage, which OD-5(a) ruled against", () => {
+    /* "A purely cosmetic dismissal that Undo could then rewind." Whether one viewer clicked a modal is not game state
+       and must not enter the log every client replays. */
     expect(APP).not.toContain("AcknowledgeFleetNotice");
+    expect(APP).not.toMatch(/sessionStorage\.(getItem|setItem)\(\s*dismissedStorageKey/);
+    expect(LEDGER).not.toContain("sessionStorage");
   });
 
   it("fails toward showing the modal when storage refuses", () => {
-    /* A PRIVATE WINDOW THROWS on `sessionStorage`, and the harmless direction is the one that was already the
-       behaviour: the notice shows again. Both the read and the write are wrapped. */
-    const load = sliceBetween(APP, "const saved = window.sessionStorage.getItem", "}");
-    expect(load.length).toBeGreaterThan(0);
-    expect(APP).toContain("dismissedFleetNoticesRef.current = new Set<string>();");
+    /* A PRIVATE WINDOW THROWS on storage, and the harmless direction is unchanged: an unreadable record reads as
+       empty, a refused write keeps this mount's memory. Both the read and the write are wrapped. */
+    expect(LEDGER).toMatch(/try \{\s*const raw = window\.localStorage\.getItem\(key\);/);
+    expect(LEDGER).toMatch(/try \{\s*window\.localStorage\.setItem\(key, JSON\.stringify\(record\)\);\s*\} catch/);
   });
 });
 

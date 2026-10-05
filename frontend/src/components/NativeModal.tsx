@@ -56,6 +56,7 @@ import React, { useEffect, useLayoutEffect, useRef } from "react";
 
 import { ModalPortal } from "./ModalPortal";
 import { useScrollLock } from "../utils/useScrollLock";
+import { registerNativeModal } from "../utils/nativeModalRegistry";
 
 /** The attribute the `::backdrop` rule and the tests find these by. */
 export const NATIVE_MODAL_ATTRIBUTE = "data-native-modal";
@@ -139,6 +140,9 @@ export type NativeModalProps = {
   scrimStyle: React.CSSProperties;
   className?: string;
   testId?: string;
+  /** W3-A (OD-5(c)): one of the forced notices whose turn the notice chain decides (`useNoticeChain`). Recorded in
+   *  `nativeModalRegistry` so the chain does not count its own presented notice as a foreign dialog. Default false. */
+  chainedNotice?: boolean;
   children: React.ReactNode;
 };
 
@@ -154,6 +158,7 @@ export function NativeModal({
   scrimStyle,
   className,
   testId,
+  chainedNotice = false,
   children,
 }: NativeModalProps) {
   const ref = useRef<HTMLDialogElement | null>(null);
@@ -196,6 +201,16 @@ export function NativeModal({
     capturedRef.current = true;
     openerRef.current = typeof document === "undefined" ? null : document.activeElement;
   }
+
+  /* W3-A (AUD-13.07): REGISTERED FOR AS LONG AS REACT HOLDS THIS DIALOG, whether or not the engine has `showModal`
+     -- the fallback keeps the surface on screen either way, so it is open either way. A layout effect, so the
+     registry answers before the browser paints: a lower notice that must yield to this dialog is withdrawn in the
+     same frame rather than one frame later. `chainedNotice` is read once; a surface does not change kind. */
+  useLayoutEffect(
+    () => registerNativeModal(chainedNotice),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   useLayoutEffect(() => {
     const node = ref.current;

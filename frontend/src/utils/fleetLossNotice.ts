@@ -287,7 +287,9 @@ export function noticeDismissKey(notice: FleetLossNotice): string {
  *  so there is nothing to keep apart and the only question left is whether this event was answered. */
 export function nextDueNotice(
   queued: readonly FleetLossNotice[],
-  dismissed: ReadonlySet<string>,
+  /* W3-A (OD-5(a)): only `has` is asked, so the shell's per-player, per-game ledger (`noticeAcknowledgements.ts`)
+     answers it as well as a plain `Set` does. */
+  dismissed: { has(key: string): boolean },
 ): FleetLossNotice | null {
   for (const notice of queued) {
     if (dismissed.has(noticeDismissKey(notice))) continue;

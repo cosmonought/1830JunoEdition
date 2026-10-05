@@ -264,9 +264,11 @@ describe("the payout is read before the fleet loss", () => {
     /* THE GAP THIS PROJECT KEEPS FINDING (#1006): a correct predicate the deciding caller never asks, or in
        this case a piece of state nothing renders. Asserted at the mount and at the exit, because a modal with
        no way to clear its state is a soft-lock and a state with no mount is invisible. */
+    /* W3-A: mounted through the notice chain, and the exit is the acknowledgement (OD-5(a)), which clears the state. */
     expect(APP).toContain("<PrivateRevenueModal");
-    expect(APP).toContain("round={privatePayoutPhase}");
-    expect(APP).toContain("onAcknowledge={() => setPrivatePayoutPhase(null)}");
+    expect(APP).toContain('round={presentedNotice === "privateRevenue" ? privatePayoutPhase : null}');
+    expect(APP).toContain("onAcknowledge={acknowledgePrivateRevenue}");
+    expect(sliceBetween(APP, "const acknowledgePrivateRevenue = useCallback(", "}, [")).toContain("setPrivatePayoutPhase(null);");
   });
 
   it("sits above the fleet-loss modal if the suppression is ever lost", () => {

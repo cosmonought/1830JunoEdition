@@ -25,7 +25,7 @@ import {
 } from "./freeStationInFlight";
 import { errandAfterRefusedLay, ghostAfterRefusedLay, tabAfterRefusedErrandLay } from "./refusedPressRollback";
 import { rollBackIfRefused } from "./submissionAnswer";
-import { readShell, sliceBetween } from "./sourceScan";
+import { expectOrder, readShell, sliceBetween, sliceFrom } from "./sourceScan";
 
 afterAll(() => activateBoard(STANDARD_BOARD));
 
@@ -123,9 +123,9 @@ describe("AUD-25.04: a refused D&H station gives the power back (the shell's cal
   });
 
   it("only a refusal deletes the spent key (`dh-token`) -- an applied placement keeps it", () => {
-    const refusedArm = committer.slice(committer.indexOf('if (settlement === "refused" && spentKey !== null) {'));
+    const refusedArm = sliceFrom(committer, 'if (settlement === "refused" && spentKey !== null) {');
     expect(refusedArm).toContain("next.delete(spentKey);");
-    expect(committer.indexOf("next.delete(spentKey);")).toBeGreaterThan(committer.indexOf('settlement === "refused"'));
+    expectOrder(committer, 'settlement === "refused"', "next.delete(spentKey);");
   });
 
   it("the prompt's mount and the board's release are wired", () => {
@@ -209,7 +209,7 @@ describe("AUD-25.05 / AUD-25.13 #8: the shell's call sites (outside every RED re
     const confirm = sliceBetween(shell, "const handleConfirmTokenPlacement = useCallback(", "const handleCancelTokenPlacement = useCallback(");
     expect(confirm).toContain("const dropPicture = () => setCommittedStation((current) => (current === committed ? null : current));");
     expect(confirm).toContain("void rollBackIfRefused(commitFreeStationPlacement({ q, r, cityIndex }), dropPicture);");
-    const paid = confirm.slice(confirm.indexOf("void rollBackIfRefused(placed, () => {"));
+    const paid = sliceFrom(confirm, "void rollBackIfRefused(placed, () => {");
     expect(paid).toContain("dropPicture();");
     expect(paid).toContain('setLiveOrSubPhase((current) => (current === "Routes" ? "Tokens" : current));');
     expect(paid).toContain("if (isMyTurnRef.current) setTokenTargetMode(true);");
@@ -218,9 +218,7 @@ describe("AUD-25.05 / AUD-25.13 #8: the shell's call sites (outside every RED re
   it("End Turn's market lesson waits for the pass, and not for a refused one", () => {
     const endTurn = sliceBetween(shell, "const handleEndOperatingTurn = useCallback(", "}, [handlePassTurn, viewerAddress, gameState]);");
     expect(endTurn).toContain("const passed = handlePassTurn();");
-    const lesson = endTurn.slice(endTurn.indexOf("void Promise.resolve(passed).then((answer) => {"));
-    expect(lesson.indexOf("if (submissionRefused(answer)) return;")).toBeGreaterThan(-1);
-    expect(lesson.indexOf("if (submissionRefused(answer)) return;")).toBeLessThan(lesson.indexOf("setMarketTutorialArmed(true);"));
-    expect(lesson.indexOf("setMarketTutorialArmed(true);")).toBeGreaterThan(-1);
+    const lesson = sliceFrom(endTurn, "void Promise.resolve(passed).then((answer) => {");
+    expectOrder(lesson, "if (submissionRefused(answer)) return;", "setMarketTutorialArmed(true);");
   });
 });

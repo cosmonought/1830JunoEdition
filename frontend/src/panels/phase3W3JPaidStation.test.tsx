@@ -23,7 +23,7 @@ import { boardHomeHexToAxial } from "../gameEngine/homeStationAuthority";
 import { DH_PRIVATE_ID } from "../gameEngine/dhPower";
 import { RULES_ENGINE_VERSION } from "../gameEngine/rulesVersion";
 import type { GameStateResponse } from "../gameEngine/gameState";
-import { readShell } from "../utils/sourceScan";
+import { expectOrder, readShell, sliceBetween } from "../utils/sourceScan";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -161,9 +161,8 @@ describe("W3-J AUD-25.08: the shell passes the verdict to the control and asks i
     expect(shell).toContain("paidStationRefusal={paidStationRefusalNow}");
   });
   it("the token click refuses before staging, ahead of the geometry", () => {
-    const click = shell.slice(shell.indexOf("const handleTokenHexClick = useCallback("), shell.indexOf("/** The green check."));
-    expect(click.indexOf("if (paidStationRefusalNow !== null)")).toBeGreaterThan(-1);
-    expect(click.indexOf("if (paidStationRefusalNow !== null)")).toBeLessThan(click.indexOf("evaluateStationPlacement({"));
-    expect(click.indexOf("if (paidStationRefusalNow !== null)")).toBeLessThan(click.indexOf("setPendingToken({"));
+    const click = sliceBetween(shell, "const handleTokenHexClick = useCallback(", "const handleConfirmTokenPlacement = useCallback(");
+    expectOrder(click, "if (paidStationRefusalNow !== null)", "evaluateStationPlacement({");
+    expectOrder(click, "if (paidStationRefusalNow !== null)", "setPendingToken({");
   });
 });

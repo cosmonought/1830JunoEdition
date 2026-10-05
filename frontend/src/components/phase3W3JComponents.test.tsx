@@ -36,7 +36,7 @@ import { dockHoldView } from "../utils/dockHoldView";
 import { apply, M } from "../utils/offerMatrix74Support";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import { depotInventory, openDepotTiers } from "../gameEngine/gamePhase";
-import { readShell, readStripped } from "../utils/sourceScan"; // W3-J review fix (AUD-25.13 item 3)
+import { occurrences, readShell, readStripped, sliceBetween } from "../utils/sourceScan"; // W3-J review fix (AUD-25.13 item 3)
 import { trainPurchaseRefusal } from "../gameEngine/trainPurchaseGate";
 import { limitInForce } from "../gameEngine/sandboxSession";
 import * as S from "../utils/gentleRustPresentationSupport";
@@ -493,11 +493,8 @@ describe("W3-J AUD-25.13 item 3: Buy Trains from a Corporation keeps the typed o
   it("REVIEW FIX: in the shell's own sequence -- the press sets actionInFlight, so the bar's sessionReady drops -- the form stays", () => {
     // The shell: `sessionReady={controlsEnabled && isMyTurn && !actionInFlight}`, forwarded unchanged to the panel.
     const shell = readShell();
-    const bar = shell.indexOf("<ContextualActionBar");
-    const ready = shell.indexOf("sessionReady={controlsEnabled && isMyTurn && !actionInFlight}");
-    expect(bar).toBeGreaterThan(-1);
-    expect(ready).toBeGreaterThan(bar);
-    expect(shell.lastIndexOf("<ContextualActionBar", ready)).toBe(bar); // the bar's own prop, not another mount's
+    const barProps = sliceBetween(shell, "<ContextualActionBar", "sessionReady={controlsEnabled && isMyTurn && !actionInFlight}");
+    expect(occurrences(barProps, "<ContextualActionBar")).toHaveLength(1); // the bar's own prop, not another mount's
     expect(readStripped("panels/ContextualActionBar.tsx")).toContain("sessionReady={sessionReady}");
     const sent: unknown[] = [];
     const state = F.operatingBoard();

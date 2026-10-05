@@ -56,7 +56,7 @@ import { tileEraFor } from "../gameEngine/gameConstants";
 import { routeBlockedCityReason, routePointsToWaypoints, routeTokenBlockReason, type RoutePoint } from "../utils/routeWaypoints";
 import { bypassedStationReason } from "../utils/manualBypass";
 import { runnableDrafts } from "../utils/runTrainsRules";
-import { readShell, readStripped, sliceBetween } from "../utils/sourceScan";
+import { expectOrder, readShell, readStripped, sliceBetween } from "../utils/sourceScan";
 
 interface Job {
   board: CorpusBoard;
@@ -312,7 +312,6 @@ describe("AUD-25.09: the mirror above is App's own derivation (source pins)", ()
 
   it("`handleRunTrains` sends `runnableDrafts(trainDrafts)` and asks `routeSetRefusal` first", () => {
     const block = sliceBetween(APP, "const runnable = runnableDrafts(trainDrafts);", "setLiveOrSubPhase(");
-    expect(block.indexOf("routeSetRefusal(")).toBeGreaterThan(-1);
-    expect(block.indexOf("routeSetRefusal(")).toBeLessThan(block.indexOf('runGameplayAction("RunMultipleRoutes"'));
+    expectOrder(block, "routeSetRefusal(", 'runGameplayAction("RunMultipleRoutes"');
   });
 });

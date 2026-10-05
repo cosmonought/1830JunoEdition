@@ -322,11 +322,11 @@ describe("W3-J AUD-25.16 (C): a move chosen on a board resting behind the room i
 });
 
 describe("W3-J AUD-25.16: shell wiring (source-pinned: the shell cannot be mounted in a unit test)", () => {
-  const { readShell } = require("../utils/sourceScan") as typeof import("../utils/sourceScan");
+  const { expectOrder, readShell, sliceBetween } = require("../utils/sourceScan") as typeof import("../utils/sourceScan");
   const shell = readShell();
 
   it("a board that is not current is nobody's turn (OD-19: a stale view of whose turn it is enables no move)", () => {
-    const memo = shell.slice(shell.indexOf("const isMyTurn = useMemo(() => {"), shell.indexOf("}, [viewerAddress, gameState, waterfallState, scrubbing, boardCurrency]);"));
+    const memo = sliceBetween(shell, "const isMyTurn = useMemo(() => {", "}, [viewerAddress, gameState, waterfallState, scrubbing, boardCurrency]);");
     expect(memo).toContain("if (!boardCurrency.current) return false;");
   });
 
@@ -339,15 +339,15 @@ describe("W3-J AUD-25.16: shell wiring (source-pinned: the shell cannot be mount
   it("a Watch tab leaves without acting for the seat, offers no Take a seat, and sends no room op (review MEDIUM)", () => {
     expect(shell).toContain('if (leaving && roomLost === null && !watchOnly) void roomOp({ type: "leave" }, leaving);');
     expect(shell).toContain("onTakeSeat={!watchOnly && !seated && !sandboxRoom.you.kicked && sandboxRoom.joinable ? handleTakeSeat : undefined}");
-    const op = shell.slice(shell.indexOf("const runRoomOp = useCallback("), shell.indexOf("const enterHostedGame = useCallback("));
+    const op = sliceBetween(shell, "const runRoomOp = useCallback(", "const enterHostedGame = useCallback(");
     expect(op).toContain("if (watchOnly) {");
     expect(op).toContain("setSandboxRoomError(WATCHING_NO_SEAT);");
   });
 
   it("(review fix) a Watch tab's Leave goes back to the Lobby, so no table is hosted or joined inside a Watch tab", () => {
-    const leave = shell.slice(shell.indexOf("const handleLeaveSandboxRoom = useCallback("), shell.indexOf("}, [roomLost, watchOnly, onLeaveGame]);"));
+    const leave = sliceBetween(shell, "const handleLeaveSandboxRoom = useCallback(", "}, [roomLost, watchOnly, onLeaveGame]);");
     expect(leave).toContain("if (watchOnly) onLeaveGame();");
     // After the shell has forgotten the table (the gate's Host / Join would otherwise follow).
-    expect(leave.indexOf("if (watchOnly) onLeaveGame();")).toBeGreaterThan(leave.indexOf("setSandboxRoomCode(null);"));
+    expectOrder(leave, "setSandboxRoomCode(null);", "if (watchOnly) onLeaveGame();");
   });
 });

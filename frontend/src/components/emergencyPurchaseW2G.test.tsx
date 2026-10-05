@@ -66,7 +66,7 @@ import {
 } from "../utils/emergencyPurchaseView";
 import { dockHoldView } from "../utils/dockHoldView";
 import { noServerDerivedToSend } from "../utils/noServerDerivedForwarding";
-import { readShell, readStripped } from "../utils/sourceScan";
+import { readShell, readStripped, sliceBetween } from "../utils/sourceScan";
 import type { GameStateResponse } from "../gameEngine/gameState";
 import type { MapGridResponse } from "./hexContractTypes";
 
@@ -1169,7 +1169,7 @@ describe("W3-J AUD-25.13 #2: a funding private offer is presented once to a seat
 
   it("the shell hands the prompt the card's own mount condition", () => {
     const app = readShell();
-    const mount = app.slice(app.indexOf("<FundingPrivateOfferPrompt"), app.indexOf("/>", app.indexOf("<FundingPrivateOfferPrompt")));
+    const mount = sliceBetween(app, "<FundingPrivateOfferPrompt", "/>");
     expect(mount).toContain("standAside={emergencyWaiting !== null}");
     expect(app).toContain("<EmergencyPurchaseWaitingCard sentence={emergencyWaiting} />");
   });

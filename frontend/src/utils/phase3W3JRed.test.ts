@@ -8,7 +8,7 @@
 // edit is pinned at its line here AND its behaviour is exercised through the real model it feeds (the notice reducer,
 // the submission-answer helper, the real room link). Each `describe` is one separately reviewed RED commit.
 
-import { readShell, sliceBetween } from "./sourceScan";
+import { expectOrder, readShell, requireMatch, sliceBetween } from "./sourceScan";
 import {
   NO_ROOM_NOTICES,
   RESYNC_BANNER,
@@ -43,9 +43,7 @@ describe("RED R1 (AUD-25.03): a landed PLAYER decision retires the refusal, auto
     ["Undo", "RevertTo"],
   ])("%s is a player decision sent `automatic: true` -- and its landing retires a standing refusal", (_label, message) => {
     // The dispatch sites (outside RED) still send these `automatic` (the turn gate must not judge them) and never `derived`.
-    const at = shell.indexOf(`${message}: {`);
-    expect(at).toBeGreaterThan(-1);
-    const site = shell.slice(at, shell.indexOf(");", at) + 2);
+    const site = sliceBetween(shell, `${message}: {`, ");");
     expect(site).toContain("{ automatic: true }");
     expect(site).not.toContain("derived: true");
     // The R1 rule for that dispatch: not derived -> `submission-landed`, which retires the refusal (P3-N004).
@@ -55,11 +53,8 @@ describe("RED R1 (AUD-25.03): a landed PLAYER decision retires the refusal, auto
 });
 
 /** The #1407 catching-up guard: the first `if (` after its note, up to its body. */
-const catchingUpGuard = () => {
-  const from = shell.indexOf("setSandboxRoomError(CATCHING_UP_BANNER);");
-  const start = shell.lastIndexOf("if (", from);
-  return shell.slice(start, from);
-};
+const catchingUpGuard = () =>
+  requireMatch(shell, /if \(([^{}]*?)\)\s*\{\s*setSandboxRoomError\(CATCHING_UP_BANNER\);/, "the catching-up guard")[0];
 
 describe("RED R1 (AUD-25.13, W2-D deferred): an `automatic` player decision no longer bypasses the catching-up guard", () => {
   it("the guard exempts only the replay and the derived actions -- not `automatic`", () => {
@@ -84,11 +79,7 @@ describe("RED R1 (AUD-25.13, W2-D deferred): an `automatic` player decision no l
 
 describe("RED R1 (AUD-25.05, pre-send half): the client's own gates answer `false`, so a refused-before-sending move rolls back", () => {
   it("the catching-up, turn and link-down gates each return `false` after saying why", () => {
-    const at = (needle: string) => {
-      const i = shell.indexOf(needle);
-      expect(i).toBeGreaterThan(-1);
-      return shell.slice(i, shell.indexOf("}", i));
-    };
+    const at = (needle: string) => sliceBetween(shell, needle, "}");
     expect(at("setSandboxRoomError(CATCHING_UP_BANNER);")).toContain("return false;");
     expect(at("setSandboxRoomError(TURN_REFUSAL);")).toContain("return false;");
     expect(at('setSandboxRoomError("The room link is reconnecting — try that again in a moment.");')).toContain("return false;");
@@ -103,11 +94,12 @@ describe("RED R1 (AUD-25.05, pre-send half): the client's own gates answer `fals
 });
 
 describe("RED R1 (AUD-25.16, OD-19): the send gate refuses a move from a board that is not current, or from a Watch tab", () => {
-  const gate = () => {
-    const at = shell.indexOf("const notLive = boardSendRefusalRef.current();");
-    expect(at).toBeGreaterThan(-1);
-    return shell.slice(shell.lastIndexOf("if (", at), shell.indexOf("const boardNow = sandboxStateRef.current;", at));
-  };
+  const gate = () =>
+    requireMatch(
+      shell,
+      /if \(([^{}]*?)\)\s*\{\s*const notLive = boardSendRefusalRef\.current\(\);[\s\S]*?(?=const boardNow = sandboxStateRef\.current;)/,
+      "the send gate",
+    )[0];
 
   it("asks the board's currency for every dispatch but the replay and the derived actions -- automatic player decisions included", () => {
     expect(gate()).toContain("if (options?.isRemoteReplay !== true && options?.derived !== true) {");
@@ -117,9 +109,7 @@ describe("RED R1 (AUD-25.16, OD-19): the send gate refuses a move from a board t
   });
 
   it("runs after the catching-up gate and BEFORE the turn gate -- a stale view of whose turn it is enables nothing", () => {
-    const send = shell.indexOf("const notLive = boardSendRefusalRef.current();");
-    expect(send).toBeGreaterThan(shell.indexOf("setSandboxRoomError(CATCHING_UP_BANNER);"));
-    expect(send).toBeLessThan(shell.indexOf("const onTurnNow ="));
+    expectOrder(shell, "setSandboxRoomError(CATCHING_UP_BANNER);", "const notLive = boardSendRefusalRef.current();", "const onTurnNow =");
   });
 
   it("the answer it reads is the shell's synchronous one (refs, read at the click), assigned outside the RED region", () => {

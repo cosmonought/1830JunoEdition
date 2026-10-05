@@ -673,6 +673,15 @@ gates.
   codec, settlement, protocol, rules or App.tsx change). AUD-20.08 stays OWNER-GATED on OD-16 (nothing hosted). Server
   follow-ups for the owner: project the wallet proof's `verified_at` (exact E-1 freshness after a reload); a
   `replace-required` answer spends the link challenge (the server-asked replacement costs a second signature).
+- **Follow-ups (owner-approved 2026-10-04; the browser-only boundary relaxed for exactly these):** AUD-20.13
+  IMPLEMENTED (the room view's `you.link.proofVerifiedAt`, the stored proof time) and AUD-20.14 IMPLEMENTED
+  (`wallet-challenge` names the wallet a link would replace before Keplr signs; single use and replay unchanged), in
+  `a97b1d1` + `9637ca7`. The roster's "Wallet linked" is accepted temporarily (linkage, not proof freshness).
+- **Design direction (owner, 2026-10-04):** the Profile + Keplr flow is PROVISIONAL and expected to be substantially
+  redesigned/rebuilt later. Until then: do not deepen coupling to it, add abstractions to preserve today's UX, make the
+  roster tag a wallet/proof authority, or spread the linkage/proof distinction to more surfaces unless correctness needs
+  it; prefer minimal, easily removed compatibility changes. A constraint on later work, not a claim that today's flow
+  is the desired final design.
 
 ### Wave 3
 

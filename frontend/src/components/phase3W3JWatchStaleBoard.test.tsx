@@ -28,6 +28,7 @@ import type { MyTableSummary, RoomSummary, RoomView } from "../utils/roomProtoco
 import { ACTIVE_GAME_STORAGE_KEY, readActiveGame } from "../utils/activeGame";
 import { watcherRoomView } from "../utils/watchView";
 import {
+  BOARD_CURRENT,
   BOARD_DIVERGED_NOTICE,
   BOARD_DRAIN_FAILED_NOTICE,
   WATCHING_NO_SEAT,
@@ -246,19 +247,24 @@ describe("W3-J AUD-25.16 (C): a move chosen on a board resting behind the room i
     const socket: SocketLike = { send: (data) => wire.push(JSON.parse(data)), close: () => {}, onopen: null, onmessage: null, onclose: null, onerror: null };
     const delivered = session.entries.map((entry) => ({ ...entry }));
     let applied = [delivered[0]];
+    let stale = 0;
+    let ids = 0;
     const link = connectServerLink({
       url: "ws://test",
       gameId: GAME,
       build: BUILD,
       socketFactory: () => socket,
-      mintSubmissionId: () => "n1",
+      mintSubmissionId: () => `n${(ids += 1)}`,
       onEntries: () => {},
-      appliedPosition: () => ({ index: applied[applied.length - 1].index, id: applied[applied.length - 1].id }),
+      onStale: () => (stale += 1),
+      // W3-J review (LOW-4): the shell's own derivation over the drain's applied log, not a hand-written position.
+      appliedPosition: () =>
+        appliedPositionFor({ watchOnly: false, currency: BOARD_CURRENT, replaying: false, log: applied, catchingUpNotice: CATCHING_UP_BANNER }),
     });
     socket.onopen?.({});
     socket.onmessage?.({ data: JSON.stringify({ kind: "catch-up", build: BUILD, digest: null, entries: delivered }) });
     expect(link.appliedIndex).toBe(2); // the link has DELIVERED through 2 ...
-    void link.submit(BUY_LOWEST);
+    const move = link.submit(BUY_LOWEST);
     const submit = wire.find((frame) => frame.kind === "submit")!;
     expect(submit).toMatchObject({ baseIndex: 0, baseId: delivered[0].id }); // ... but the move is bound to what the board APPLIED
 
@@ -266,6 +272,11 @@ describe("W3-J AUD-25.16 (C): a move chosen on a board resting behind the room i
     const answer = session.submit({ actor: owner, build: BUILD, msg: BUY_LOWEST, baseIndex: submit.baseIndex as number, baseId: submit.baseId as string, submissionId: "n1" });
     expect(answer.kind).toBe("catch-up");
     expect(session.nextIndex - 1).toBe(2); // the move did not land
+    // ... and that answer, back over the wire to the link (as the server sends it: in reply to the submission), settles
+    // the move NOT APPLIED and raises the stale sentence -- the shell's rollbacks act on exactly this `null`.
+    socket.onmessage?.({ data: JSON.stringify({ ...answer, inReplyTo: submit.submissionId }) });
+    expect(await move).toBeNull();
+    expect(stale).toBe(1);
 
     // Once the board has applied everything, the same move is bound to the tip and is judged on the real board.
     applied = delivered;
@@ -331,5 +342,12 @@ describe("W3-J AUD-25.16: shell wiring (source-pinned: the shell cannot be mount
     const op = shell.slice(shell.indexOf("const runRoomOp = useCallback("), shell.indexOf("const enterHostedGame = useCallback("));
     expect(op).toContain("if (watchOnly) {");
     expect(op).toContain("setSandboxRoomError(WATCHING_NO_SEAT);");
+  });
+
+  it("(review fix) a Watch tab's Leave goes back to the Lobby, so no table is hosted or joined inside a Watch tab", () => {
+    const leave = shell.slice(shell.indexOf("const handleLeaveSandboxRoom = useCallback("), shell.indexOf("}, [roomLost, watchOnly, onLeaveGame]);"));
+    expect(leave).toContain("if (watchOnly) onLeaveGame();");
+    // After the shell has forgotten the table (the gate's Host / Join would otherwise follow).
+    expect(leave.indexOf("if (watchOnly) onLeaveGame();")).toBeGreaterThan(leave.indexOf("setSandboxRoomCode(null);"));
   });
 });

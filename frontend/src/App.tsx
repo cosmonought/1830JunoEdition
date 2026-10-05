@@ -13373,7 +13373,12 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
     dispatchRoomNotice({ type: "reset" }); // W3-C: nothing on the strip belongs to the next table
     appliedIndexRef.current = 0;
     setSandboxAppliedCount(0);
-  }, [roomLost, watchOnly]);
+    /* Phase 3 W3-J (OD-19, review fix): AND A WATCH TAB GOES BACK TO THE LOBBY. Leaving alone lands on the shell's own
+       gate (Host / Join), and a table hosted or joined from there would open in this Watch tab -- seated, but drawn as
+       a watcher's view, every room op and move refused, and a reload keeping it read-only. A seat is taken through the
+       participant path, which starts from the Lobby (OD-19). */
+    if (watchOnly) onLeaveGame();
+  }, [roomLost, watchOnly, onLeaveGame]);
 
   /** W1-N / A-12 (AUD-18.01): leave the table AND go to the Lobby -- Game Over's "Leave game". Leaving alone drops the
    *  player on the sandbox gate ("Open a room or join one"), a screen nobody at a finished table asked for; the

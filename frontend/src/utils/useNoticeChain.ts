@@ -73,7 +73,9 @@ export function useNoticeChain(
     shownRef.current = false;
     const heading = headingRef.current;
     if (!heading || !heading.isConnected) return;
-    if (focusIsInsideAnotherSurface()) return;
+    if (focusIsInsideAnotherSurface()) return; // W3-A's original check; the next one subsumes it (kept as written)
+    /* A BLOCKED MOVE IS DROPPED, NOT DEFERRED (recorded residual, AUD-13.02 / AUD-13.04): when the other surface later
+       closes, focus is not brought to the heading -- it lands wherever that surface's own close leaves it. */
     if (anotherSurfaceHasTheScreen(heading)) return;
     heading.focus({ preventScroll: true });
   }, [presented, exhausted, headingRef]);

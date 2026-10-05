@@ -24,8 +24,8 @@
    THE ONE DELIBERATE EXCEPTION (recorded at the Phase-3 consolidated integration, 2026-10-05): W3-J's stale-board
    notice (`BoardBehindNotice`, AUD-25.16 / OD-19). It is a plain `NativeModal` -- registered as FOREIGN, so while
    it stands every forced notice waits behind it -- and it opens itself at once rather than through
-   `NativeModalTurn`, so it can open over a dialog that already holds the screen and be the one on top. Both are the
-   fail-closed choice OD-19 asks for: a board that is not the room's must stop the table now, before anything else
+   `NativeModalTurn`, so it can open over a dialog that already holds the screen and be the one on top. Both are
+   consistent with OD-19's fail-closed requirement: a board that is not the room's must stop the table now, before anything else
    on it is answered. Pinned by `noticeChain.test.tsx`. */
 
 export const NOTICE_PRIORITY = [

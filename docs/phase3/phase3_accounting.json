@@ -1409,7 +1409,7 @@
    "disp": "A",
    "od": "OD-5",
    "p4": "—",
-   "notes": "—",
+   "notes": "Residual (consolidated integration, 2026-10-05; review LOW): when the forced-notice chain ends while another surface has the screen -- an interim tutorial card, or the shell inert under a cinematic takeover -- the one focus move to the game-screen heading is skipped and DROPPED, not deferred: when that surface closes, focus lands wherever its own close leaves it (likely <body>). Better than focus behind a card; for the final tutorial pass and a Phase-4 observation.",
    "status": "IMPLEMENTED — W3-A `b70f087`: when the forced-notice chain is exhausted, focus moves once to the game-screen heading (`utils/useNoticeChain.ts`), never during ordinary play and never into another open dialog (OD-5(b)); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05)"
   },
   {
@@ -1436,7 +1436,7 @@
    "disp": "A",
    "od": "—",
    "p4": "—",
-   "notes": "—",
+   "notes": "Residual (consolidated integration, 2026-10-05; review LOW): when the forced-notice chain ends while another surface has the screen -- an interim tutorial card, or the shell inert under a cinematic takeover -- the one focus move to the game-screen heading is skipped and DROPPED, not deferred: when that surface closes, focus lands wherever its own close leaves it (likely <body>). Better than focus behind a card; for the final tutorial pass and a Phase-4 observation.",
    "status": "NOT STARTED — DEFERRED TO THE FINAL TUTORIAL PASS (owner ruling OD-5: the tutorial design is contextual whitebox / spotlight work, built LAST, after the gameplay shell/UI is stable). Not forced complete now. TIMING: the plan's closure contract (§11 item 2) requires every A row fixed before Phase-3 closure, where the Phase-4 baseline is recorded -- so by default this is the LAST Phase-3 lane (F, the final tutorial pass), after lanes A-E; whether the owner means it to land after Phase 4 instead (then E) is recorded as an OWNER DECISION OPEN. Until then the two `TutorialModal` `role=\"dialog\"` / `aria-modal` divs stay as they are, outside the forced-notice chain (W3-A's sixth chain entry was removed at the consolidated integration). W3-D stays PARTIAL on this row alone (the owner's Phase-3 consolidated-integration brief (2026-10-05))."
   },
   {
@@ -1479,7 +1479,7 @@
    "od": "OD-5",
    "p4": "—",
    "notes": "Not in the draft map. Policy = which notice yields; see OD-5.",
-   "status": "IMPLEMENTED — (W3-A's six-entry order, CORRECTED to the owner's five -- see the end of this status) W3-A `b70f087` + RED R4 `e8b9504` + `ac78dc9`: the forced notices present one at a time in the ruled order Emergency > Fleet Loss > Private Revenue > Phase Three > Herald > Tutorial (`utils/noticeChain.ts`), every one waiting while a non-notice native dialog is open (`utils/nativeModalRegistry.ts`); dialogs that open themselves (Game Over, B&O par prompt, private power flow) wait for the screen (`components/NativeModalTurn.tsx`); no two native dialogs at once (OD-5(c)); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05). Consolidated integration (2026-10-05): the chain is the owner's five -- Emergency, Fleet Loss, Private Revenue, Phase Three, Herald; W3-A's sixth entry (Tutorial) removed (owner ruling OD-5: Tutorial is NOT part of the forced-notice chain); tutorials keep their pre-W3-A presentation until the final tutorial pass."
+   "status": "IMPLEMENTED — (W3-A's six-entry order, CORRECTED to the owner's five -- see the end of this status) W3-A `b70f087` + RED R4 `e8b9504` + `ac78dc9`: the forced notices present one at a time in the ruled order Emergency > Fleet Loss > Private Revenue > Phase Three > Herald > Tutorial (`utils/noticeChain.ts`), every one waiting while a non-notice native dialog is open (`utils/nativeModalRegistry.ts`); dialogs that open themselves (Game Over, B&O par prompt, private power flow) wait for the screen (`components/NativeModalTurn.tsx`); no two native dialogs at once (OD-5(c)) -- with one deliberate, pinned exception: W3-J's stale-board BoardBehindNotice, a foreign dialog that opens at once and holds every forced notice (OD-19 fail-closed); INTEGRATED on `phase3/consolidated-pre-playtest-integration` (2026-10-05). Consolidated integration (2026-10-05): the chain is the owner's five -- Emergency, Fleet Loss, Private Revenue, Phase Three, Herald; W3-A's sixth entry (Tutorial) removed (owner ruling OD-5: Tutorial is NOT part of the forced-notice chain); tutorials keep their pre-W3-A presentation until the final tutorial pass."
   },
   {
    "key": "AUD-13.08",
@@ -5999,7 +5999,10 @@
    "tile-ring first facing (AUD-05.04)",
    "recovery R1-R12 (AUD-19.03)",
    "Live / Async clock behaviour once lane A lands",
-   "the VF PLAYTEST entries"
+   "the VF PLAYTEST entries",
+   "a forced notice presenting over a cinematic film (native top layer over the takeover)",
+   "BoardBehindNotice standing during a film (it holds the film's Skip until the film ends)",
+   "focus after the chain ends under an interim tutorial or a takeover (the dropped focus move, AUD-13.02 / AUD-13.04)"
   ],
   "owner_decisions_open": [
    "placement of AUD-04.04 (DH-1) and AUD-08.01 (GR-1 / S10-27): approved, derivation-only defects (no version bump) that OD-10(a) kept out of the v13 batch; no owner ruling places them in a slice (Phase 3 or later) -- open since the v13 scope verification, not created by this integration",
@@ -6018,8 +6021,31 @@
    ],
    "keys": "unchanged (dc1-e8d0b4792a7ba07e67199ad2 no escrow, dc1-32fcc4967978e78f10874490 the fixture pin)"
   },
-  "validation": "PENDING -- recorded by the validation commit",
-  "independent_review": "PENDING -- recorded by the validation commit",
+  "validation": {
+   "typecheck": "tsc --noEmit clean (final tree)",
+   "production_build": "npm run build green; scanDevIdentity clean; ESLint warnings 54 = 54, identical to 9ebca03 by file / message / rule",
+   "focused_per_merge": "W1-I 84 suites; W2-M 21 frontend suites + 9 server suites (255 tests); W3-A 61; W3-D 50; W3-J 107; W3-H 73; Rules Reference 29; tutorial / notice 18; review fixes 34 suites (805 tests)",
+   "final_adjacent_set": "412 suites (every suite importing a module changed since 9ebca03, every changed test, every App.tsx source reader): 7494 passed, 10 failed in 7 suites -- the 11 failure entries are IDENTICAL to 9ebca03 (the four meta failures; five corpus-dependent tests and replayJunoCV4, whose local corpus / sandbox-log files are absent from this clone)",
+   "server": "W2-M server suites: every escrow suite touching moneyTables / moneyHttpApi / walletProof / walletTickets, 255 / 255",
+   "accounting": "check_phase3_accounting.py PASS (303 rows; 20 owner rulings)",
+   "diff_check": "git diff --check 9ebca03..HEAD clean",
+   "meta": "sourceGuards 1, boardInEffect 1, liveHygiene 2 -- identical to 9ebca03, same offenders (normalised digest compared)",
+   "versions": "RULES_ENGINE_VERSION 13; supported [13]; settlement-certified [10, 11, 12, 13] -- unchanged; no gameEngine / contracts diff",
+   "stale_pins_found": "five source-pin cases in five suites that failed on the W1-I / W3-J heads themselves (outside those slices' own validation sets) -- fixed by d4f7c53 and 9b77f18"
+  },
+  "independent_review": {
+   "round_1": "three independent reviewers. Safety / RED / state machine: APPROVE WITH NITS (no HIGH / MEDIUM; App.tsx and RED composition clean; every input line survives; R1-R5 carry only their protected commits; latch x resync clean; Watch and stale-board authority clean; no gameplay / rules / version change; wallet replay safety clean). Notices / modals / copy: APPROVE WITH NITS (two LOW composition findings: focus behind an interim tutorial; focus into an inert shell under a takeover). Tracking: REQUEST CHANGES (1 HIGH -- \"no owner decision open\" was false; 5 MEDIUM -- tutorial timing vs the closure contract, stale slice statuses, per-row \"not integrated\", W3-A six-entry lines, superseded baseline called current; LOWs / NITs).",
+   "fixes": "3044129 (code: the focus guard + BoardBehindNotice documentation and pins); 4db09fc (tracking); the final commit (re-review LOWs / NITs)",
+   "round_2": "independent re-review of 3044129 and 4db09fc: APPROVE WITH NITS -- every prior finding RESOLVED; LOWs / NITs (lane F out of the MUST table; record the dropped focus move and the two film residuals; AUD-13.07's exception clause; a comment's attribution; a parenthesis) applied in the final commit, comment / docs only.",
+   "recorded_not_fixed": [
+    "a forced notice can present over a cinematic film; BoardBehindNotice during a film holds the film's Skip (Phase 4, OD-15)",
+    "the dropped (not deferred) focus move when another surface has the screen (AUD-13.02 / AUD-13.04; final tutorial pass)",
+    "ContextualActionBar.tsx's \"The panel is no longer inside the sticky element\" comment predates 9ebca03 and contradicts the inside placement (pre-existing)",
+    "W3-H residual: a silent fog replacing an audible haunting holds the radio duck <= ~6 s",
+    "W2-M residuals: another device may replace the linked wallet while a Keplr prompt is open; device clock skew can cost one free re-proof"
+   ],
+   "verdict": "no open HIGH or MEDIUM integration defect"
+  },
   "also_required_before_phase4_baseline_by_the_closure_contract": [
    "F (LAST): the final tutorial pass -- AUD-13.04 and the tutorial system (timing: an owner decision open)",
    "W1-K: AUD-19.02 cross-tab Keplr single flight (NOT STARTED; not among the owner's lanes A-E)",

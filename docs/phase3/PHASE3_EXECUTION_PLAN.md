@@ -829,9 +829,8 @@ The remaining Phase-3 work that MUST land before Phase-4 human playtesting, each
 | **C** | **Emergency `train-offer` third-seat duplicate prompt** (the first post-integration bugfix lane) | P3-N027 | narrow; prove one presentation, live controls only for the answering seat, status-only third seat, correct proposer status / rescind; server authority unchanged |
 | **D** | **Terms route / page shell and Terms / deposit link infrastructure** (OD-16) | AUD-20.08 | NO invented Terms prose -- an owner-copy slot only; final Terms are a Phase-7 / mainnet gate |
 | **E** | **W3-B latch residue** | AUD-14.06, P3-N021 | P3-N021 only via an OD-12 RED R1 commit |
-| **F (last)** | **The FINAL tutorial pass** (OD-5(A): contextual whitebox / spotlight, built LAST, after the shell/UI is stable) | AUD-13.04 + the tutorial system | TIMING IS AN OWNER DECISION OPEN: the closure contract (§11 item 2) puts every A row before Phase-3 closure and the Phase-4 baseline; if the owner means after Phase 4, AUD-13.04 moves to E with that ruling |
 
-**Also before the Phase-4 baseline under the closure contract (§11), though not among the owner's lanes A–E:** W1-K (AUD-19.02, cross-tab Keplr single flight -- NOT STARTED), AUD-00.02 (P0 docs), W3-F (AUD-25.14, the Phase-4 checklist, the broad owner gate). **Not pre-Phase-4:** D-17 (a Phase-4 observation); phone-width layout and keyboard map access (Phase 5, OD-10(b)). **Asset dependency:** the official Keplr logo (AUD-18.05, ASSET PENDING).
+**Also before the Phase-4 baseline under the closure contract (§11), though not among the owner's lanes A–E:** **F (last)** the FINAL tutorial pass -- AUD-13.04 and the tutorial system (OD-5(A): contextual whitebox / spotlight, built LAST, after the shell/UI is stable); the closure contract (§11 item 2) puts every A row before Phase-3 closure and the Phase-4 baseline, so by default it follows lanes A–E, but its TIMING IS AN OWNER DECISION OPEN -- if the owner means after Phase 4, AUD-13.04 moves to E with that ruling. W1-K (AUD-19.02, cross-tab Keplr single flight -- NOT STARTED), AUD-00.02 (P0 docs), W3-F (AUD-25.14, the Phase-4 checklist, the broad owner gate). **Not pre-Phase-4:** D-17 (a Phase-4 observation); phone-width layout and keyboard map access (Phase 5, OD-10(b)). **Asset dependency:** the official Keplr logo (AUD-18.05, ASSET PENDING).
 
 ## 7. Owner decisions
 
@@ -1234,6 +1233,7 @@ No known Phase-3 defect is moved to Phase 4. Every row needs a reproducible obse
 | Live / Async clocks (lane A) | Once lane A lands: clock visibility, pause / resume, reload / reconnect continuity, server timing; that expiry creates NO forfeiture |
 | VF PLAYTEST entries | Every `VF/*` row at D (now including D-17) |
 | OD-10(b) | Real-device / mobile / keyboard behaviour: observe and report only (implementation is Phase 5) |
+| Integration residuals (recorded 2026-10-05) | A forced notice presenting over a cinematic film; the stale-board notice during a film (it holds the film's Skip); focus after the chain ends under an interim tutorial or a takeover (the move is dropped -- AUD-13.02 / AUD-13.04) |
 
 *Tooling option, not a defect:* the 6.5 preflight's instrumentation findings (its own IDs "I-1…I-7", unrelated to the 6.5-B
 review items) are built in Phase 4 only if a Phase-4 observation needs them.

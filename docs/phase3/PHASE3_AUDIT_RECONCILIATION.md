@@ -1185,7 +1185,8 @@ not merged to main (`e1f1280` unmoved). Record: `consolidated_pre_playtest_integ
 - **Before Phase 4 (plan §6, "Pre-Phase-4 implementation lanes"):** A clocks (AUD-11.04) · B D-35 (VF/D-35) · C third-seat emergency
   offer (P3-N027) · D Terms shell / links (AUD-20.08) · E W3-B latch residue (AUD-14.06, P3-N021). **Asset pending:** the Keplr logo.
 - **Versions:** `RULES_ENGINE_VERSION` 13; supported live `[13]`; settlement-certified `[10, 11, 12, 13]`; keys and fixtures unchanged.
-- **Validation and independent review:** recorded by the validation commit on this branch.
+- **Validation:** typecheck clean; production build green, ESLint warnings identical to 9ebca03 (54 = 54); 412 adjacent suites -- 7494 passed, the 11 failure entries identical to 9ebca03 (4 meta, 6 corpus-file-dependent); W2-M server suites 255 / 255; accounting PASS; `git diff --check` clean; meta identical (sourceGuards 1, boardInEffect 1, liveHygiene 2, same offenders); pins 13 / [13] / [10, 11, 12, 13].
+- **Independent review:** round 1 -- safety / RED APPROVE WITH NITS, notices / modals APPROVE WITH NITS (two LOW composition findings, fixed `3044129`), tracking REQUEST CHANGES (1 HIGH, 5 MEDIUM, fixed `4db09fc`); round 2 re-review APPROVE WITH NITS, its LOWs / NITs applied (comments / docs). No open HIGH or MEDIUM. Recorded residuals: in the JSON record.
 
 ## Highest-risk systems (characterization carried as an item)
 

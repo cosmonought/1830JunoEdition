@@ -960,7 +960,7 @@ branch. No engine, server, contract, rules-version or settlement change; pins 13
 | **AUD-14.03** · U-30 · §14<br>Replayed stock refusals carry no reason. | [D] | PARTIAL — `utils/refusedAction.ts`:185-347 has BuyStock/SellStock arms, but the server path passes no `marketZoneFor` (`roomSession.ts`:915), so BuyStock refusals read generically. | W1-H | **A** | — | — | — |
 | **AUD-14.04** · U-29 · §14<br>Refused private and train purchases look like a button that did nothing. | [UX] | CONFIRMED (Part C U-29) — no arms for the proposal/rescind messages in `refusedAction.ts`. | W1-H | **A** | — | — | — |
 | **AUD-14.05** · ING-2 / I-6 · §14<br>Generic refusal wording; client wording that differs from the server's. | [UX] | CONFIRMED (6.5-A register) — e.g. Pass with a train owed gets a generic refusal. | W1-H | **B** | — | — | Not explicit in the draft map. |
-| **AUD-14.06** · — · §14<br>The in-flight latch covers only the action bar and the SR panel; dashboard, token and tile confirms, private-power modal, route edits and consent answers can double-send. | [UX] ★ | CONFIRMED — `actionInFlight` reaches the bar, `StockRoundPanel` and `PlayerPrivateTradePrompt` only (`frontend/src/App.tsx`:4219, 13960, 14555, 15241). | W3-B | **A** | — | — | Latching is distributed: W1-B (dashboard), W1-D (consent prompts), W1-E (ring confirm), W2-C (embedded proposal), W2-G (emergency); W3-B closes the residue and owns the coverage test. **Consolidated integration (owner, 2026-10-05):** NOT STARTED -- re-evaluated on the combined tree: BuyLicenseModal and PrivatePowerFlowModal read no latch; token confirm and route edits uncovered. W3-B residue, pre-Phase-4 lane E. |
+| **AUD-14.06** · — · §14<br>The in-flight latch covers only the action bar and the SR panel; dashboard, token and tile confirms, private-power modal, route edits and consent answers can double-send. | [UX] ★ | CONFIRMED — `actionInFlight` reaches the bar, `StockRoundPanel` and `PlayerPrivateTradePrompt` only (`frontend/src/App.tsx`:4219, 13960, 14555, 15241). | W3-B | **A** | — | — | Latching is distributed: W1-B (dashboard), W1-D (consent prompts), W1-E (ring confirm), W2-C (embedded proposal), W2-G (emergency); W3-B closes the residue and owns the coverage test. **Consolidated integration (owner, 2026-10-05):** NOT STARTED -- re-evaluated on the combined tree: BuyLicenseModal and PrivatePowerFlowModal read no latch; token confirm and route edits uncovered. W3-B residue, pre-Phase-4 lane E. **W3-B latch residue (2026-10-05): IMPLEMENTED** on `phase3/preplaytest-w3b-latch-residue` (`2cea8c4` + review fixes `f855b8b`; no RED region; NOT integrated): BuyLicenseModal, PrivatePowerFlowModal, the auction prompt (par + Proceed), the token confirm, Undo and the map's route edits read the one integrated flag; coverage registry `phase3W3BLatchResidue.test.tsx` -- all 53 `runGameplayAction` call sites LATCHED (with evidence for every door) or EXEMPT (with a reason). |
 
 ## §15 Animation / audio (non-ledger items)
 
@@ -1188,6 +1188,54 @@ not merged to main (`e1f1280` unmoved). Record: `consolidated_pre_playtest_integ
 - **Validation:** typecheck clean; production build green, ESLint warnings identical to 9ebca03 (54 = 54); 412 adjacent suites -- 7494 passed, the 11 failure entries identical to 9ebca03 (4 meta, 6 corpus-file-dependent); W2-M server suites 255 / 255; accounting PASS; `git diff --check` clean; meta identical (sourceGuards 1, boardInEffect 1, liveHygiene 2, same offenders); pins 13 / [13] / [10, 11, 12, 13].
 - **Independent review:** round 1 -- safety / RED APPROVE WITH NITS, notices / modals APPROVE WITH NITS (two LOW composition findings, fixed `3044129`), tracking REQUEST CHANGES (1 HIGH, 5 MEDIUM, fixed `4db09fc`); round 2 re-review APPROVE WITH NITS, its LOWs / NITs applied (comments / docs). No open HIGH or MEDIUM. Recorded residuals: in the JSON record.
 
+## W3-B latch residue slice status (2026-10-05)
+
+- **Branch:** `phase3/preplaytest-w3b-latch-residue` @ `f855b8b` + this tracking commit, from `phase3/consolidated-pre-playtest-integration`
+  @ `b8d5246` exactly. **NOT integrated**; no broad owner gate; `main` untouched; nothing deployed. No rules / protocol / version change
+  (13 / [13] / [10, 11, 12, 13]).
+- **Commits:** `0b2f360` OD-12 RED R1 (P3-N021, its own commit: two lines in the submit half + the pins that quote them) · `2cea8c4`
+  AUD-14.06 + P3-N021 non-RED · `f855b8b` independent-review fixes.
+- **P3-N021 -- IMPLEMENTED.** RED R1: `if (options?.derived !== true) setPendingAppendIndex(appendAt);` -- the `automatic`-flagged
+  player decisions (OpenStockRound, SetBoPar, ExchangePrivate, PlaceHomeStation, RevertTo, CloseRoom) take the latch with every other
+  press (#668: `automatic` = skip the turn gate; `derived` = the game's own action); the server-path `derived` early return no longer
+  sets the latch to null (it took none, so it could only release a player's held press). The W3-J catching-up gate, the board-currency
+  gate (AUD-25.16) and the turn gate still precede the latch (order pinned). Non-RED: the Auto-Pass / Auto-Buy effects return while a
+  press is in flight and re-run when it lets go.
+- **AUD-14.06 -- IMPLEMENTED.** Re-audited on the `b8d5246` dispatch sites (53 calls, AST-enumerated). Newly latched: BuyLicenseModal's
+  Buy; PrivatePowerFlowModal's act buttons (declines send nothing and are unchanged); the auction prompt's par confirm (W3-I hold kept)
+  and Proceed; the token confirm (`canConfirm` + guarded press: PlaceStationToken and the free PlaceHomeStation); Undo
+  (`undoBlockedReason`); the map's route clicks (consumed while in flight; the chip's edits and Run already read `sessionReady`).
+  One flag, no second busy state: `actionInFlight` (W3-B AUD-25.01, link-bounded) and its one sentence `actionInFlightReason`
+  (`actionLatchReason`: the link's words first, then the latch's).
+- **Coverage registry** (`frontend/src/components/phase3W3BLatchResidue.test.tsx`): 53 call sites / 51 keys -- 46 LATCHED, each with
+  source evidence for every door; 5 EXEMPT with a precise reason (CloseRoom: post-game and idempotent, #899; YellowSignEvent x3: a
+  follow-on inside RED R2 on unpinned boards only; `endTurnAutomatically` and the no-server derived purchase: `derived`; the drain:
+  `isRemoteReplay`). A new or renamed call site, a `!`/parenthesised call, an aliased reference to the dispatch, or a new reference to a
+  latched handler (a new door) fails the registry until classified.
+- **Behaviour** (real link, hand-driven socket, real hooks and surfaces): double click; held > 6 s; network loss and reconnect (one
+  message); the same player's submission landing (held until the drain applies it); another seat's move (nothing greys; mid-hold the link
+  keeps controls busy); refusal re-arms at once; token confirm; route edit; private power modal; licence modal; Proceed / par / Undo;
+  automatic presses in the landed-not-drained window; a derived dispatch never releases a held press. Every case asserts one message on
+  the wire.
+- **Mutation checks:** reverting the RED R1 latch rule in App.tsx (4 fail across the W3-B suites) or in the suite's shell stand-in (7
+  fail); restoring the derived null (pins fail; stand-in: 1 behaviour fails); removing the latch from BuyLicenseModal, Proceed, the par
+  confirm, the power modal, the token ring or Undo, or the Auto-Pass / Auto-Buy waits (each fails); adding an unclassified site, a `!`
+  call, an alias, or a new door (each fails).
+- **Validation:** `tsc --noEmit` clean; production build green, ESLint warnings identical to `b8d5246` (54 = 54); 93 affected suites
+  together (W3-B, W3-I, W3-J queue / resync / RED / Watch, W3-C, the modal / route / token / auction / undo / auto-buy / auto-pass /
+  home-station suites, meta): 2053 passed, 4 failed -- the same 4 meta failures as `b8d5246` on the same list (sourceGuards sweep with the
+  same 7 entries, boardInEffect 1, liveHygiene 2); accounting PASS; `git diff --check` clean.
+- **Independent review:** RED R1 APPROVE (the one NIT -- the commit's causal wording -- corrected in the RED commit before push);
+  composition APPROVE WITH NITS, every LOW / NIT fixed in `f855b8b` except as recorded below.
+- **W3-B = COMPLETE** (AUD-25.01 integrated earlier; AUD-14.06, P3-N021 implemented here). Pre-Phase-4 lane E is done on its branch,
+  pending integration.
+- **Residuals:** (LOW, accepted at AUD-25.01, unchanged) RED R5 -- another seat's entry passing the press's index mid-hold leaves only the
+  link holding, so the controls can re-arm for the drain's few milliseconds after the press's own `applied` answer. (LOW, owner ruling
+  only if the no-server / Firestore path stays supported) the RED R4 derived effects do not wait for the latch there -- outside this
+  slice's OD-12 grant; on the server path they are never sent. (Coverage) the Auto-Pass / Auto-Buy waits are source-pinned only (the
+  effects live in the shell). (Pre-existing, not W3-B's) on a legacy unpinned room the Yellow Sign follow-on dispatch runs inside the
+  drain and is refused by W3-J's catching-up gate.
+
 ## Highest-risk systems (characterization carried as an item)
 
 | AUDIT ITEM | AUDIT CLASSIFICATION | CURRENT-SOURCE STATUS (8e897f9) | EXECUTION SLICE | FINAL DISPOSITION | OWNER DECISION | PHASE-4 OBSERVATION | NOTES |
@@ -1337,7 +1385,7 @@ reuse U/K/H/A IDs; any legacy alias is shown.
 | **P3-N018** · draft W2-G · draft execution map<br>The emergency modal's funding-offer legality is computed locally, not by `fundingPrivateOfferRefusal`. | NEW-SOURCE-FINDING | CONFIRMED — `EmergencyTrainPurchaseModal.tsx`:368-375; `gameEngine/emergencyFunding.ts`:321. | W2-G | **A** | — | — | — |
 | **P3-N019** · draft NEW-1 (fleet loss) · draft execution map<br>The FleetLoss notice replays history in a fresh tab (dismissal is per-tab `sessionStorage`). | NEW-SOURCE-FINDING | CONFIRMED — `frontend/src/App.tsx`:11295-11405 (inside RED OR-verdict region), `rememberDismissed` (sessionStorage). | W3-A | **A** | OD-5; OD-12 if the prune region must change | — | The draft placed this fix in 11295-11405 without flagging that the range is inside its own RED region 11136-11659. Prefer a fix in the dismissal store. |
 | **P3-N020** · draft §9 rollbacks · draft execution map<br>Refused-action rollbacks: an ability/JK spend survives a refused lay; `ran:true` and the step advance survive a refused run. | NEW-SOURCE-FINDING | CONFIRMED by reading — needs a per-action refusal signal from the link callbacks (RED). | W3-C | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | The draft deferred this to Phase 4. It is a known defect; it stays in Phase 3 behind OD-12. |
-| **P3-N021** · draft §9 press latch · draft execution map<br>The `press:true` latch does not cover the automatic presses (OpenStockRound, M&H exchange, Undo, PlaceHomeStation, SetBoPar). | NEW-SOURCE-FINDING | CONFIRMED by reading — `utils/doubleActionWindow.test.ts` pins the submit-half text. | W3-B | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | **Consolidated integration (owner, 2026-10-05):** NOT STARTED -- the automatic presses still bypass the press latch; W3-B's AUD-25.01 and W3-J's `derived` rule narrow it but do not latch them. W3-B residue, pre-Phase-4 lane E (OD-12 RED R1). |
+| **P3-N021** · draft §9 press latch · draft execution map<br>The `press:true` latch does not cover the automatic presses (OpenStockRound, M&H exchange, Undo, PlaceHomeStation, SetBoPar). | NEW-SOURCE-FINDING | CONFIRMED by reading — `utils/doubleActionWindow.test.ts` pins the submit-half text. | W3-B | **A** | OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each) | — | **Consolidated integration (owner, 2026-10-05):** NOT STARTED -- the automatic presses still bypass the press latch; W3-B's AUD-25.01 and W3-J's `derived` rule narrow it but do not latch them. W3-B residue, pre-Phase-4 lane E (OD-12 RED R1). **W3-B latch residue (2026-10-05): IMPLEMENTED** -- OD-12 RED R1 commit `0b2f360` (own commit, two lines, independently reviewed APPROVE): every press but a `derived` one takes the latch, and the server-path `derived` return no longer releases a held press; the Auto-Pass / Auto-Buy effects wait for the press in flight (`2cea8c4`). NOT integrated. |
 | **P3-N022** · SI ledger / DH-3 / draft §9 · draft execution map<br>Shell-local OR facts: `routesRunThisTurn`, `mustBuyTrain`, the D&H optimistic ability set and `dhStationForfeited` (DH-3), client auto-skip verdicts vs `nextDerivedAction`. | NEW-SOURCE-FINDING | CONFIRMED (App decomposition audit, 6.5-A §5.5). | Phase 5 (Pass E) | **E** | — | On every derived skip, compare the bar's step with the server's `operating_sub_phase` (export the log). | These are the refactor's behaviour passes (App decomposition plan "Pass E"); the owner's fixed roadmap (plan §1) places the major App.tsx refactor in Phase 5. |
 | **P3-N023** · SBS-3 (6.5-A) · draft execution map<br>Brown Pool Buy → Sell → Buy is accepted (authority too loose). | NEW-SOURCE-FINDING | CONFIRMED — V13_SCOPE_VERIFICATION §4.3 (APPROVED DEFECT, reproduced at 6455b6e). | W3-K (rules v13) | **A** | OD-10(a) (RULED 2026-10-03: in the v13 batch, the official Brown rule) | — | Official Brown rule only; V-6.3 "Buy All" is NOT implemented. **Status:** IMPLEMENTED — W3-K, `phase3/w3-k-rules-v13` (integrated on `phase3/wave2a-v13-integration`, merge `ed5e69a`): the turn-scoped Brown Bank Pool continuation closes on any sale; Pool → Sell → Pool refused (`rulesV13StockRound.test.ts`). |
 | **P3-N024** · SBS-4 / OD-A-4 · draft execution map<br>A Brown IPO first purchase opens the Pool continuation. | NEW-SOURCE-FINDING | CONFIRMED — V13_SCOPE_VERIFICATION §5 precise reproduction: the first purchase of the turn from a STARTED Brown-zone corporation's IPO opened the Pool continuation (the owner's par-space objection applies only to a corporation's first-ever purchase). | W3-K (rules v13) | **A** | OD-2 (SBS-4 part) resolved by the precise reproduction + OD-10(a) (RULED 2026-10-03) | — | Formerly G (needs a precise reproduction); reproduced in V13_SCOPE_VERIFICATION §5, then implemented. **Status:** IMPLEMENTED — W3-K, `phase3/w3-k-rules-v13` (integrated on `phase3/wave2a-v13-integration`, merge `ed5e69a`): only a Brown-zone Bank Pool purchase opens the continuation; IPO → Pool and Pool → IPO refused (`rulesV13StockRound.test.ts`). |

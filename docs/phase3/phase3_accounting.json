@@ -1575,7 +1575,7 @@
    "od": "—",
    "p4": "—",
    "notes": "Latching is distributed: W1-B (dashboard), W1-D (consent prompts), W1-E (ring confirm), W2-C (embedded proposal), W2-G (emergency); W3-B closes the residue and owns the coverage test.",
-   "status": "NOT STARTED — W3-B residue, pre-Phase-4 lane E (re-evaluated on the combined tree, 2026-10-05): no later slice closed it -- `BuyLicenseModal` and `PrivatePowerFlowModal` read no latch (no `actionInFlight` / in-flight guard), and the token confirm and route edits are not covered either. W3-B's AUD-25.01 latch (integrated) bounds the bar, Stock Round, consent and emergency surfaces only."
+   "status": "IMPLEMENTED — W3-B latch residue on `phase3/preplaytest-w3b-latch-residue` (from `b8d5246`; `2cea8c4` + review fixes `f855b8b`; no RED region; NOT integrated): BuyLicenseModal (Buy), PrivatePowerFlowModal (every act button), the auction prompt (par confirm + Proceed), the token confirm (canConfirm + guarded press; PlaceStationToken and the free PlaceHomeStation), Undo (`undoBlockedReason`) and the map's route edits read the one integrated flag (`actionInFlight` / `actionInFlightReason` = `actionLatchReason`); the Auto-Pass / Auto-Buy effects wait for it. Coverage: `components/phase3W3BLatchResidue.test.tsx` -- an AST-enumerated registry of all 53 `runGameplayAction` call sites (51 keys): 46 LATCHED with source evidence for every door, 5 EXEMPT with a precise reason (CloseRoom: post-game and idempotent; YellowSignEvent ×3: a follow-on inside RED R2 on unpinned boards; `endTurnAutomatically` and the no-server derived purchase: `derived`; the drain: `isRemoteReplay`); a new call site, an aliased dispatch, or a new door on a latched handler fails it."
   },
   {
    "key": "AUD-15.01",
@@ -4048,7 +4048,7 @@
    "od": "OD-12 (RULED 2026-10-03: narrowly controlled RED fixes; one reviewed commit each)",
    "p4": "—",
    "notes": "—",
-   "status": "NOT STARTED — W3-B residue, pre-Phase-4 lane E (re-evaluated on the combined tree, 2026-10-05): the automatic presses (OpenStockRound, M&H exchange, Undo, PlaceHomeStation, SetBoPar) still bypass the `press:true` latch; W3-B's AUD-25.01 narrows it (an automatic press greys the controls while the link holds it) and W3-J's `derived` rule (`6378dea`, `77b0b38`) fixed the refusal / catching-up halves, but neither latches the press nor fixes the serialisation order. Needs an OD-12 RED R1 commit."
+   "status": "IMPLEMENTED — W3-B latch residue (`phase3/preplaytest-w3b-latch-residue`; NOT integrated): OD-12 RED R1 commit `0b2f360` (its own commit, two lines, independently reviewed: APPROVE) -- every press but a `derived` one takes the latch (`if (options?.derived !== true) setPendingAppendIndex(appendAt);`), so the automatic presses (OpenStockRound, M&H exchange, Undo, PlaceHomeStation, SetBoPar, CloseRoom) are serialised with every other press; and the server-path `derived` return no longer sets the latch to null (it could only release a player's held press). The W3-J catching-up / board-currency / turn gates still precede the latch (pinned). Non-RED (`2cea8c4`): the Auto-Pass / Auto-Buy effects wait while a press is in flight; the automatic presses' surfaces read the latch (AUD-14.06)."
   },
   {
    "key": "P3-N022",
@@ -5178,7 +5178,7 @@
   "W2-L": "COMPLETE — `phase3/w2-postgame-statistics` `e16aa5a` (derived history only); integrated at the safe Wave-2 integration (`615e183`). AUD-12.07 RULED by OD-14(d) (\"traded\" kept); S10-21's non-UR remainder stays open",
   "W2-M": "PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `dc6020a` of `phase3/w2-m-wallet-dispute-ux` @ `d68602d`): AUD-20.02 ... AUD-20.07, AUD-20.13, AUD-20.14 IMPLEMENTED. AUD-20.08 OPEN -- READY FOR IMPLEMENTATION under OD-16 (pre-Phase-4 lane D: the Terms route/page shell and link infrastructure, no invented prose); NOT owner-gated. The Profile + Keplr flow is PROVISIONAL (owner direction): no deeper coupling, no broad abstractions. Residuals (LOW, recorded): another device may replace the linked wallet while a Keplr prompt is open; device clock skew can cost one free re-proof.",
   "W3-A": "COMPLETE — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `ead4034` of `phase3/w3-a` @ `bb20225`; RED R4 `e8b9504`). Integration correction `15fd1d0` (owner ruling OD-5): Tutorial removed from the forced-notice chain (the chain is Emergency, Fleet Loss, Private Revenue, Phase Three, Herald); the tutorial modals keep their pre-W3-A presentation. AUD-01.06 is the zero-state auto-reset removed (DEFECT ONLY, INTERIM), not the tutorial redesign, which the final tutorial pass owns.",
-  "W3-B": "PARTIAL — INTEGRATED THROUGH AUD-25.01 (merge `00b2b3c`, in the 9ebca03 baseline; carried into `phase3/consolidated-pre-playtest-integration`). Re-evaluated on the combined tree (2026-10-05): AUD-14.06 (BuyLicenseModal, PrivatePowerFlowModal, token confirm, route edits) and P3-N021 (the automatic presses' latch / serialisation order, OD-12 RED R1) are NOT STARTED -- no later slice closed either. Pre-Phase-4 lane E. Accepted LOW (RED R5): a held press can briefly re-arm once its own move lands if another seat's move landed meanwhile.",
+  "W3-B": "COMPLETE — on the slice branch `phase3/preplaytest-w3b-latch-residue` @ `f855b8b` (from `b8d5246`; NOT integrated; no broad owner gate): AUD-25.01 INTEGRATED earlier (merge `00b2b3c`); AUD-14.06 and P3-N021 IMPLEMENTED (RED R1 `0b2f360`, non-RED `2cea8c4`, review fixes `f855b8b`). Accepted LOW residue unchanged (RED R5): a held press can briefly re-arm once its own move lands if another seat's move landed meanwhile. Recorded residual (needs an owner ruling only if the no-server path stays supported): on the Firestore / no-server path the RED R4 derived effects (auto-skip, forced withhold, derived purchase) do not wait for the latch -- outside this slice's OD-12 grant; on the server path they are never sent.",
   "W3-C": "COMPLETE — ACCEPTED and INTEGRATED on `phase3/wave3-i-w2i-w2j-w3c-v13cert-integration` (2026-10-04, merge `b32ef6e` of `phase3/w3-c-refusal-display` @ `3454daa`, parents `18d4762` / `3454daa`, its 7 commits carried unchanged). slice branch `phase3/w3-c-refusal-display` support `3c75394` + `bfec83c`, RED R1 `08d857b`, RED R5 `21d6b15`, implementation `6cb86e4`, review fix `6c28662` (from `phase3/wave3-i-w2i-w2j-v13cert-integration` @ `18d4762`). AUD-14.01, P3-N004, P3-N020 IMPLEMENTED. OD-12 followed: two RED commits, each its own and independently reviewed -- R1 (two lines: the landed-submission clear and the room branch's answer) and R5 (the server-link callbacks, the drain's catching-up clear and its divergence write; the latter two sit in R5 outside the plan's line range and are named by AUD-14.01's own source). Dependencies W2-J and W1-H integrated in the base. Recorded follow-ups (LOW): the client's own pre-send gates (turn, catching-up, link-down) answer `undefined` and roll nothing back (needs further R1 lines); a resync can settle a landed move null and roll back its shell state (the board stays authoritative); an `error` frame answering a submission is shown as a `transport` connection notice and is not retired by a landed move (unchanged from before); the App wiring of the rollbacks is source-pinned. Presentation only: no engine, server, rules-version or settlement change",
   "W3-D": "PARTIAL — INTEGRATED on `phase3/consolidated-pre-playtest-integration` (merge `a57b01a` of `phase3/w3-d` @ `746aa6f`): AUD-13.05 and AUD-13.06 IMPLEMENTED under OD-15 (cinematic takeovers, the shell root inert beneath them, one native modal architecture; ModalPortal kept as NativeModal's scaled destination). AUD-13.04 (TutorialModal as a native dialog) DEFERRED to the final tutorial pass (OD-5) -- the only open row; by the closure contract the last Phase-3 lane (F) unless the owner places it after Phase 4.",
   "W3-E": "COMPLETE — `phase3/w3-manual-city-bypass` `07454d0` + review follow-ups `6d7cfa1`; integrated at the safe Wave-2 integration (`a860178`) under OD-11",
@@ -6051,6 +6051,42 @@
    "W1-K: AUD-19.02 cross-tab Keplr single flight (NOT STARTED; not among the owner's lanes A-E)",
    "P0: AUD-00.02 the roadmap-order docs update",
    "W3-F: closure bookkeeping (AUD-25.14), the Phase-4 checklist, the broad owner gate"
+  ]
+ },
+ "w3b_latch_residue": {
+  "branch": "phase3/preplaytest-w3b-latch-residue",
+  "base": "b8d5246c579d32ad4f9a2fccd7c293d1655ff81a (phase3/consolidated-pre-playtest-integration), exactly",
+  "status": "COMPLETE on the slice branch; NOT integrated; no broad owner gate; main untouched; versions and keys unchanged (13 / [13] / [10, 11, 12, 13])",
+  "rows": {
+   "AUD-14.06": "IMPLEMENTED",
+   "P3-N021": "IMPLEMENTED"
+  },
+  "commits": [
+   "0b2f360 OD-12 RED R1 (P3-N021): the latch rule and the derived return -- its own commit, two lines + the pins that quote them",
+   "2cea8c4 AUD-14.06 + P3-N021 non-RED: surfaces, Auto-Pass / Auto-Buy waits, coverage registry and behaviour suite",
+   "f855b8b independent-review fixes (par label, stale note, registry hardening, landed-not-drained cases)",
+   "tracking commit (this record)"
+  ],
+  "red_commits_od12": {
+   "R1": [
+    "0b2f360 P3-N021"
+   ],
+   "R2": "none",
+   "R3": "none",
+   "R4": "none",
+   "R5": "none"
+  },
+  "composition": "One flag: every new reader reads `actionInFlight` (W3-B AUD-25.01, link-bounded) or `actionInFlightReason` (`actionLatchReason`, a pure reading of the flag and W3-I's view). No new busy state, no new timer. W3-J catching-up / board-currency / turn gates precede the latch (pinned); W3-I par hold kept; W3-J AUD-25.04 free-station marker kept.",
+  "coverage_test": "frontend/src/components/phase3W3BLatchResidue.test.tsx: 53 call sites / 51 keys (46 LATCHED, 5 EXEMPT); enumerated from the AST (non-null / parenthesised callees unwrapped); stray (aliased) references fail; handler reference counts pinned so a new door fails.",
+  "independent_review": {
+   "red_commit": "APPROVE (no finding above NIT; the NIT -- the commit's causal wording -- corrected in the rebuilt RED commit before push)",
+   "composition": "APPROVE WITH NITS -> every LOW / NIT fixed in f855b8b except: the Auto-Pass / Auto-Buy waits are source-pinned only (the effects live in the shell); the no-server-path R4 residual (recorded above)"
+  },
+  "validation": "See PHASE3_AUDIT_RECONCILIATION.md \"W3-B latch residue slice status\".",
+  "residuals": [
+   "RED R5 LOW (accepted at AUD-25.01, unchanged): another seat's entry passing the press's index mid-hold leaves only the link holding; the controls can re-arm for the drain's few milliseconds after the press's own applied answer.",
+   "No-server / Firestore path (LOW, owner ruling only if that path stays supported): the RED R4 derived effects do not wait for the latch; outside this slice's OD-12 grant (R1 only).",
+   "Pre-existing, not W3-B's (reviewer note): on a legacy UNPINNED room the Yellow Sign follow-on dispatch runs inside the drain and is refused by W3-J's catching-up gate."
   ]
  }
 }

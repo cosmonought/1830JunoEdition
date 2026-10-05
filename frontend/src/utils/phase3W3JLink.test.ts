@@ -29,9 +29,10 @@ const entry = (index: number, submissionId?: string) => ({
   ...(submissionId ? { submission_id: submissionId } : {}),
 });
 
-function harness() {
+function harness(over: Partial<Parameters<typeof connectServerLink>[0]> = {}) {
   const sent: Array<Record<string, unknown>> = [];
   const events: string[] = [];
+  const scheduled: Array<() => void> = [];
   const socket: SocketLike = {
     send: (data) => sent.push(JSON.parse(data) as Record<string, unknown>),
     close: () => socket.onclose?.({}),
@@ -52,6 +53,10 @@ function harness() {
     onStale: () => events.push("stale"),
     onResync: () => events.push("resync"),
     onError: (message) => events.push(`error:${message}`),
+    onStatus: (status) => events.push(`status:${status}`),
+    // Reconnects are driven by hand, so nothing outlives a test.
+    schedule: (callback) => scheduled.push(callback),
+    ...over,
   });
   socket.onopen?.({});
   const deliver = (frame: unknown) => socket.onmessage?.({ data: JSON.stringify(frame) });
@@ -59,7 +64,7 @@ function harness() {
   deliver({ kind: "catch-up", build: BUILD, digest: DIGEST, entries: [entry(0), entry(1)] });
   events.length = 0;
   const hellos = () => sent.filter((frame) => frame.kind === "hello");
-  return { link, sent, events, deliver, hellos };
+  return { link, sent, events, deliver, hellos, scheduled, socket };
 }
 
 /** Resolves on the next macrotask; a settled promise's value, or "pending". */
@@ -154,14 +159,48 @@ describe("W3-J AUD-25.07: an `internal` error that names no submission does not 
     expect(h.hellos()).toHaveLength(helloCount);
   });
 
-  it("an `internal` answer to the reconciling hello itself is not answered with another hello (no loop)", () => {
+  it("an `internal` answer to the reconciling hello itself is not answered with another hello on that socket (no loop) -- the socket is recycled", () => {
     const h = harness();
     void h.link.submit({ BuyStock: { game_id: 0 } } as never);
     h.deliver({ kind: "error", code: "internal", reason: "boom" });
     const helloCount = h.hellos().length;
     h.deliver({ kind: "error", code: "internal", reason: "boom again" });
     expect(h.hellos()).toHaveLength(helloCount);
-    expect(h.events).toEqual(["refused:boom", "error:boom again"]);
+    expect(h.events).toEqual(["refused:boom", "error:boom again", "status:reconnecting"]);
+    // The reconnect (with its backoff) says hello again -- once -- and its catch-up settles what is outstanding.
+    expect(h.scheduled).toHaveLength(1);
+  });
+
+  it("(review) a resync while the AUD-25.07 re-hello is still outstanding takes only the resync's own catch-up as fresh", async () => {
+    const entries: number[][] = [];
+    const h = harness({ onEntries: (batch) => entries.push(batch.map((item) => item.index)) });
+    const move = h.link.submit({ BuyStock: { game_id: 0 } } as never);
+    const other = h.link.submit({ PassTurn: { game_id: 0 } } as never);
+    h.deliver({ kind: "error", code: "internal", reason: "boom" }); // re-hello from index 1 (outstanding)
+    h.deliver({ kind: "refused", code: "resync", reason: "fork", build: BUILD, inReplyTo: "n2" }); // resync hello from -1
+    expect(h.hellos().slice(-2).map((frame) => frame.baseIndex)).toEqual([1, -1]);
+    entries.length = 0;
+    // The re-hello's (partial) catch-up arrives first: it is NOT the fresh history, and is dropped whole.
+    h.deliver({ kind: "catch-up", build: BUILD, digest: DIGEST, entries: [entry(2)] });
+    expect(entries).toEqual([]);
+    // The resync's own catch-up is the whole history: applied, and it settles both moves.
+    h.deliver({ kind: "catch-up", build: BUILD, digest: DIGEST, entries: [entry(0), entry(1), entry(2, "n1")] });
+    expect(entries).toEqual([[0, 1, 2]]);
+    expect(await move).toBe(2);
+    expect(await other).toBeNull();
+  });
+
+  it("(review) between a resync and its fresh catch-up a binding consumer sends nothing -- the board is the rejected history", async () => {
+    const h = harness({ appliedPosition: () => ({ index: 1, id: "e1" }) });
+    h.deliver({ kind: "error", code: "resync", reason: "fork" });
+    const sentBefore = h.sent.filter((frame) => frame.kind === "submit").length;
+    await expect(h.link.submit({ PassTurn: { game_id: 0 } } as never)).resolves.toBeNull();
+    expect(h.sent.filter((frame) => frame.kind === "submit")).toHaveLength(sentBefore);
+    expect(h.events).toContain("refused:This tab's copy of the room did not match the server's — reloading the room's history.");
+    // After the fresh catch-up, it sends again, bound to the board's position.
+    h.deliver({ kind: "catch-up", build: BUILD, digest: DIGEST, entries: [entry(0), entry(1)] });
+    void h.link.submit({ PassTurn: { game_id: 0 } } as never);
+    expect(h.sent.filter((frame) => frame.kind === "submit").at(-1)).toMatchObject({ baseIndex: 1, baseId: "e1" });
   });
 
   it("an error that NAMES its submission is settled exactly as before", async () => {

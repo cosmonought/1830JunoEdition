@@ -31,6 +31,8 @@ import {
   type RoomNotices,
 } from "../utils/roomNotices";
 import { readShell } from "../utils/sourceScan";
+import { BOARD_DIVERGED_NOTICE, BOARD_DRAIN_FAILED_NOTICE } from "../utils/boardCurrency";
+import { CATCHING_UP_BANNER, RESYNC_BANNER } from "../utils/roomNotices";
 
 declare global {
   // eslint-disable-next-line no-var
@@ -156,5 +158,24 @@ describe("W3-J: the strip draws every standing connection notice", () => {
   it("the room's standing hold notice is still never repeated", () => {
     draw(run({ type: "connection", kind: "room-status", text: PAUSE }, { type: "connection", kind: "reconnecting", text: RECONNECTING_BANNER }), PAUSE);
     expect(kinds()).toEqual(["reconnecting"]);
+  });
+});
+
+describe("W3-J AUD-25.16 (review): a refusal whose sentence IS a connection notice files as that notice", () => {
+  it.each([
+    ["catching-up", CATCHING_UP_BANNER],
+    ["resync", RESYNC_BANNER],
+    ["board-behind", BOARD_DRAIN_FAILED_NOTICE],
+    ["board-behind", BOARD_DIVERGED_NOTICE],
+  ] as const)("%s: the link's or the gate's refusal with that sentence stands in the connection slot, and its clear retires it", (kind, text) => {
+    const state = run({ type: "refusal", text });
+    expect(state.refusal).toBeNull();
+    expect(connectionOf(state, kind)?.text).toBe(text);
+    expect(roomNoticesReducer(state, { type: "clear-connection", kind }).connections).toEqual([]);
+    expect(noticeActionFor(text)).toEqual({ type: "connection", kind, text });
+  });
+
+  it("every other sentence is still a refusal", () => {
+    expect(run({ type: "refusal", text: TURN_REFUSAL }).refusal).toBe(TURN_REFUSAL);
   });
 });

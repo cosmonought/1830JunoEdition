@@ -134,6 +134,7 @@ import { THIS_BUNDLE_ANNOUNCEMENT, withClientAnnouncement } from "./clientAnnoun
 import { CLIENT_ANSWER_CLOSE_CODE, CLIENT_ANSWER_SENTENCES, routeTargetOf, type ClientAnswerFrame } from "./clientAnswers";
 import { MAX_ROUTE_HOPS, clientUpdatePort, type ClientUpdatePort } from "./clientUpdate";
 import type { AppliedPosition } from "./boardCurrency";
+import { RESYNC_BANNER } from "./roomNotices";
 
 /** The slice of `WebSocket` this file uses. Injected so a test needs no browser and no server. */
 export interface SocketLike {
@@ -381,6 +382,10 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
   let inFlight = new Set<string>();
   /** LIVE-3A: between a resync and the fresh catch-up that answers it, every other frame is dropped. */
   let resyncing = false;
+  /** Phase 3 W3-J (AUD-25.07 review): hellos on the current socket not yet answered by their catch-up. A hello names
+   *  no correlation, so when a resync's hello follows one still outstanding (the AUD-25.07 re-hello), the EARLIER
+   *  catch-up must not be taken for the resync's fresh one -- it is a partial history the fresh one contains whole. */
+  let hellosInFlight = 0;
   let resyncs = 0;
   /** LIVE-3A: every entry id already handed to `onEntries` since the last resync. The actor answers a stale
    *  submit AFTER the fan-out of the moves that made it stale, so its catch-up repeats entries this client has
@@ -437,7 +442,14 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       if (!item.sent) {
         /* Phase 3 W3-J (AUD-25.16): bound to the position the board APPLIED, asked now -- for a submission queued while
            the wire was down too, so it is judged against the board as it stands when it goes out (#1253's rule). */
-        const position = options.appliedPosition ? options.appliedPosition() : { index: appliedIndex, id: appliedId };
+        /* W3-J (AUD-25.16 review): between a resync and its fresh catch-up the board's tip is the very history the
+           server has just rejected -- a board that is not current (OD-19), so a consumer that binds its submissions
+           sends nothing then either. */
+        const position = options.appliedPosition
+          ? resyncing
+            ? { notCurrent: RESYNC_BANNER }
+            : options.appliedPosition()
+          : { index: appliedIndex, id: appliedId };
         if ("notCurrent" in position) {
           pending.splice(pending.indexOf(item), 1);
           options.onRefused?.(position.notCurrent);
@@ -503,6 +515,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
     resyncing = true;
     if (open && socket) {
       awaitingHello = true;
+      hellosInFlight += 1;
       socket.send(helloFrame());
     }
     noteQueue();
@@ -742,6 +755,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
          sent the whole thing: `-1` on a fresh join, the last applied index on a reconnect (#1209 mechanism
          2). The catch-up it earns is the reconciliation point for anything that was in flight. */
       awaitingHello = true;
+      hellosInFlight = 1;
       current.send(helloFrame());
       if (everOpened) options.onStatus?.("open");
       everOpened = true;
@@ -765,6 +779,7 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
       if (socket !== current) return;
       open = false;
       awaitingHello = false;
+      hellosInFlight = 0;
       const closeCode = (event as { code?: unknown } | null)?.code;
       /* LIVE-4 (L4-3): this link closed its own socket to follow a route to another path: reconnect there now. The
          server's 4426 behind the route frame, if it gets here first, is the same close. */
@@ -865,6 +880,9 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
            flight when the previous socket dropped, and then the submissions queued while the wire was down
            go out -- after it, so their `baseIndex` and the server's idea of this client agree. */
         if (awaitingHello && answers === undefined) {
+          hellosInFlight = Math.max(0, hellosInFlight - 1);
+          // W3-J (AUD-25.07 review): an earlier hello's catch-up while the resync's own is still coming -- dropped whole.
+          if (resyncing && hellosInFlight > 0) return;
           resyncing = false;
           if (!applyEntries(message.entries, message.digest ?? null, message.fields ?? null, "catch-up")) return;
           awaitingHello = false;
@@ -961,6 +979,8 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
         const reason = message.reason ?? "The game server refused that.";
         /* LIVE-3A: the hello's history is not the room's -- the same resync as a submit's `ahead`. */
         if (code === "resync") {
+          // W3-J: this answers (consumes) the outstanding hello; only the resync's own hello is now awaited.
+          if (awaitingHello) hellosInFlight = Math.max(0, hellosInFlight - 1);
           resync(reason);
           return;
         }
@@ -995,9 +1015,19 @@ export function connectServerLink(options: ServerLinkOptions): ServerLink {
             if (options.onRefused) options.onRefused(reason);
             else options.onError?.(reason);
             awaitingHello = true;
+            hellosInFlight += 1;
             socket.send(helloFrame());
             return;
           }
+        }
+        /* W3-J (AUD-25.07 review): a HELLO answered `internal` -- the only frame outstanding then -- left the link waiting
+           for a catch-up that would never come: orphans pending and, after a resync, every newer answer dropped until the
+           socket happened to drop. The socket is recycled instead, so the reconnect's hello (with its backoff) settles
+           what is outstanding. */
+        if (answers === undefined && code === "internal" && awaitingHello && open && socket) {
+          options.onError?.(reason);
+          socket.close();
+          return;
         }
         options.onError?.(reason);
         if (answers !== undefined) settleById(answers, null);

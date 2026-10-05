@@ -25,6 +25,8 @@
    NOTHING HERE DECIDES A REFUSAL. The sentences are the authorities' own -- the server's `refused` reason, the
    turn gate's `TURN_REFUSAL`, `refusalMessage(code)` for a room op -- passed through unchanged. */
 
+import { BOARD_DIVERGED_NOTICE, BOARD_DRAIN_FAILED_NOTICE } from "./boardCurrency";
+
 /** #1253: the room-error banner while the link is between sockets. */
 export const RECONNECTING_BANNER = "Connection to the room was lost — reconnecting…";
 /** #1407: the turn refusal's one wording -- the client gate's and `turnAuthority`'s. */
@@ -105,6 +107,12 @@ export function roomNoticesReducer(state: RoomNotices, action: RoomNoticeAction)
     case "clear-connection":
       return connectionOf(state, action.kind) === null ? state : { ...state, connections: withoutKind(state.connections, action.kind) };
     case "refusal":
+      /* Phase 3 W3-J (AUD-25.16 review): a "refusal" whose sentence IS a connection notice (the link refusing a move
+         because the board is catching up, rebuilding or not the room's) files as that notice, so the clear that retires
+         the notice retires it too -- a refusal copy of it would outlive the fact. */
+      if (connectionKindOfSentence(action.text) !== null) {
+        return roomNoticesReducer(state, { type: "connection", kind: connectionKindOfSentence(action.text)!, text: action.text });
+      }
       /* W3-J (AUD-25.10, NIT): the link-down pre-send line only restated the reconnecting banner standing beside it
          ("The room link is reconnecting" next to "Connection to the room was lost — reconnecting…"). While that banner
          stands it says everything the line would; without it (#1242's should-be-unreachable case) the line still shows. */
@@ -124,14 +132,23 @@ export function roomNoticesReducer(state: RoomNotices, action: RoomNoticeAction)
   }
 }
 
+/** The connection kind a sentence IS, by identity with the constants that are connection notices by construction --
+ *  or `null` for every other sentence (a refusal of an action). */
+export function connectionKindOfSentence(text: string): ConnectionNoticeKind | null {
+  if (text === CATCHING_UP_BANNER) return "catching-up";
+  if (text === RECONNECTING_BANNER) return "reconnecting";
+  if (text === RESYNC_BANNER) return "resync";
+  // Phase 3 W3-J (AUD-25.16): a board that is not the room's is a standing fact about the link's board, not a refusal.
+  if (text === BOARD_DRAIN_FAILED_NOTICE || text === BOARD_DIVERGED_NOTICE) return "board-behind";
+  return null;
+}
+
 /** The kind a sentence written through the shell's one-string setter belongs to: the constants that are connection
  *  notices by construction, by identity; every other sentence is a refusal of an action. Used only by the writers that
  *  still hand a bare sentence (the turn gate, the send-failure lines, the room's own refusals). */
 export function noticeActionFor(text: string): RoomNoticeAction {
-  if (text === CATCHING_UP_BANNER) return { type: "connection", kind: "catching-up", text };
-  if (text === RECONNECTING_BANNER) return { type: "connection", kind: "reconnecting", text };
-  if (text === RESYNC_BANNER) return { type: "connection", kind: "resync", text };
-  return { type: "refusal", text };
+  const kind = connectionKindOfSentence(text);
+  return kind === null ? { type: "refusal", text } : { type: "connection", kind, text };
 }
 
 /** The order the strip and the one-line surfaces read standing connection notices in: what ends or freezes the room

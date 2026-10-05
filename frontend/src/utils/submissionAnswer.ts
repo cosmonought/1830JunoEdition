@@ -11,10 +11,10 @@
 
    THE ANSWER IS THE ROOM'S, PER ACTION. `runGameplayAction`'s room branch resolves `allocated !== null`
    (OD-12 RED R1): `true` -- the room applied it; `false` -- the link sent or queued it and it settled without an
-   index (the server refused it, answered stale or build-skewed, or the link resynced or closed); `undefined` -- every
-   other path: the solo sandbox and the chain, and the client's own gates that return before sending (the turn gate,
-   the catching-up gate, the link-down line), which leave their handler's writes standing (recorded follow-up). Only
-   `false` takes anything back. Nothing here judges legality: the refusal is the server's, and its sentence is in the
+   index (the server refused it, answered stale or build-skewed, or the link resynced or closed) -- and, since Phase 3
+   W3-J (AUD-25.05, OD-12 RED R1), the client's own gates that return before sending: the turn gate, the catching-up
+   gate, the link-down line and the board-currency gate (AUD-25.16); `undefined` -- every other path: the solo sandbox
+   and the chain. Only `false` takes anything back. Nothing here judges legality: the refusal is the server's, and its sentence is in the
    strip. */
 
 /** The room said it did not apply this submission. */

@@ -1,0 +1,2291 @@
+{
+  "row": "VF/D-16",
+  "date": "2026-10-04",
+  "browser": "153.0.8010.12",
+  "method": "Static tile pass copied from HexGridRenderer.tsx's per-tile loop vs drawTileTransitionFill + withHexClip(drawTileTransitionArt) on the same canvas size; background #1e1f24; per-pixel max RGB channel delta. last_drawn = the last frame the board's clock can paint before t >= 1 hands over (t = 1 - 16.7 ms / durationMs). Pairs = tileTransition.test.ts's walk (standard rules, 10 city/town labels, one accepted facing per distinct pair).",
+  "pairs": 33,
+  "proposalMontage": "docs/phase3/evidence/w3h/d16_proposal_montage.png (proposal drawn solid | confirmed plan t=0 | |diff|x4, 4 worst at 64px@2x)",
+  "summary": {
+    "40@1x": {
+      "first_t0": {
+        "transitions": 11,
+        "identical": 0,
+        "maxChannelDelta": {
+          "n": 11,
+          "min": 27,
+          "median": 45,
+          "p95": 103,
+          "max": 103,
+          "mean": 47.36
+        },
+        "pixelsAnyDelta": {
+          "n": 11,
+          "min": 99,
+          "median": 236,
+          "p95": 363,
+          "max": 363,
+          "mean": 236.64
+        },
+        "pixelsDeltaOver8": {
+          "n": 11,
+          "min": 5,
+          "median": 18,
+          "p95": 138,
+          "max": 138,
+          "mean": 39.82
+        },
+        "pixelsDeltaOver32": {
+          "n": 11,
+          "min": 0,
+          "median": 1,
+          "p95": 25,
+          "max": 25,
+          "mean": 4.91
+        },
+        "pixelsDeltaOver96": {
+          "n": 11,
+          "min": 0,
+          "median": 0,
+          "p95": 1,
+          "max": 1,
+          "mean": 0.09
+        },
+        "canvasPixels": 8464,
+        "worst": [
+          {
+            "key": "14->63",
+            "label": "H10",
+            "pixels": 8464,
+            "any": 345,
+            "over8": 138,
+            "over32": 25,
+            "over96": 1,
+            "max": 103
+          },
+          {
+            "key": "54->62",
+            "label": "G19",
+            "pixels": 8464,
+            "any": 363,
+            "over8": 112,
+            "over32": 24,
+            "over96": 0,
+            "max": 70
+          },
+          {
+            "key": "59->64",
+            "label": "E11",
+            "pixels": 8464,
+            "any": 236,
+            "over8": 18,
+            "over32": 1,
+            "over96": 0,
+            "max": 45
+          },
+          {
+            "key": "59->65",
+            "label": "E11",
+            "pixels": 8464,
+            "any": 236,
+            "over8": 18,
+            "over32": 1,
+            "over96": 0,
+            "max": 45
+          },
+          {
+            "key": "59->66",
+            "label": "E11",
+            "pixels": 8464,
+            "any": 236,
+            "over8": 18,
+            "over32": 1,
+            "over96": 0,
+            "max": 45
+          }
+        ]
+      },
+      "last_drawn": {
+        "transitions": 33,
+        "identical": 0,
+        "maxChannelDelta": {
+          "n": 33,
+          "min": 24,
+          "median": 67,
+          "p95": 84,
+          "max": 85,
+          "mean": 63.36
+        },
+        "pixelsAnyDelta": {
+          "n": 33,
+          "min": 239,
+          "median": 486,
+          "p95": 750,
+          "max": 758,
+          "mean": 500.76
+        },
+        "pixelsDeltaOver8": {
+          "n": 33,
+          "min": 12,
+          "median": 121,
+          "p95": 296,
+          "max": 296,
+          "mean": 130.67
+        },
+        "pixelsDeltaOver32": {
+          "n": 33,
+          "min": 0,
+          "median": 22,
+          "p95": 72,
+          "max": 72,
+          "mean": 24.21
+        },
+        "pixelsDeltaOver96": {
+          "n": 33,
+          "min": 0,
+          "median": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "canvasPixels": 8464,
+        "worst": [
+          {
+            "key": "printed:G7->1",
+            "label": "G7",
+            "pixels": 8464,
+            "any": 599,
+            "over8": 296,
+            "over32": 72,
+            "over96": 0,
+            "max": 82
+          },
+          {
+            "key": "printed:F20->1",
+            "label": "F20",
+            "pixels": 8464,
+            "any": 599,
+            "over8": 296,
+            "over32": 72,
+            "over96": 0,
+            "max": 82
+          },
+          {
+            "key": "printed:G7->56",
+            "label": "G7",
+            "pixels": 8464,
+            "any": 570,
+            "over8": 271,
+            "over32": 66,
+            "over96": 0,
+            "max": 74
+          },
+          {
+            "key": "printed:F20->56",
+            "label": "F20",
+            "pixels": 8464,
+            "any": 570,
+            "over8": 271,
+            "over32": 66,
+            "over96": 0,
+            "max": 74
+          },
+          {
+            "key": "59->65",
+            "label": "E11",
+            "pixels": 8464,
+            "any": 637,
+            "over8": 196,
+            "over32": 48,
+            "over96": 0,
+            "max": 82
+          }
+        ]
+      },
+      "last_t1": {
+        "transitions": 33,
+        "identical": 2,
+        "maxChannelDelta": {
+          "n": 33,
+          "min": 0,
+          "median": 64,
+          "p95": 99,
+          "max": 103,
+          "mean": 58.12
+        },
+        "pixelsAnyDelta": {
+          "n": 33,
+          "min": 0,
+          "median": 260,
+          "p95": 503,
+          "max": 503,
+          "mean": 259.76
+        },
+        "pixelsDeltaOver8": {
+          "n": 33,
+          "min": 0,
+          "median": 88,
+          "p95": 275,
+          "max": 275,
+          "mean": 107.85
+        },
+        "pixelsDeltaOver32": {
+          "n": 33,
+          "min": 0,
+          "median": 16,
+          "p95": 73,
+          "max": 73,
+          "mean": 21.15
+        },
+        "pixelsDeltaOver96": {
+          "n": 33,
+          "min": 0,
+          "median": 0,
+          "p95": 1,
+          "max": 1,
+          "mean": 0.09
+        },
+        "canvasPixels": 8464,
+        "worst": [
+          {
+            "key": "printed:G7->1",
+            "label": "G7",
+            "pixels": 8464,
+            "any": 365,
+            "over8": 275,
+            "over32": 73,
+            "over96": 0,
+            "max": 82
+          },
+          {
+            "key": "printed:F20->1",
+            "label": "F20",
+            "pixels": 8464,
+            "any": 365,
+            "over8": 275,
+            "over32": 73,
+            "over96": 0,
+            "max": 82
+          },
+          {
+            "key": "printed:G7->56",
+            "label": "G7",
+            "pixels": 8464,
+            "any": 350,
+            "over8": 253,
+            "over32": 62,
+            "over96": 0,
+            "max": 74
+          },
+          {
+            "key": "printed:F20->56",
+            "label": "F20",
+            "pixels": 8464,
+            "any": 350,
+            "over8": 253,
+            "over32": 62,
+            "over96": 0,
+            "max": 74
+          },
+          {
+            "key": "59->65",
+            "label": "E11",
+            "pixels": 8464,
+            "any": 420,
+            "over8": 160,
+            "over32": 41,
+            "over96": 0,
+            "max": 82
+          }
+        ]
+      },
+      "proposal_first_t0": {
+        "transitions": 33,
+        "identical": 4,
+        "maxChannelDelta": {
+          "n": 33,
+          "min": 0,
+          "median": 245,
+          "p95": 251,
+          "max": 251,
+          "mean": 213.12
+        },
+        "pixelsAnyDelta": {
+          "n": 33,
+          "min": 0,
+          "median": 170,
+          "p95": 762,
+          "max": 764,
+          "mean": 326.45
+        },
+        "pixelsDeltaOver8": {
+          "n": 33,
+          "min": 0,
+          "median": 170,
+          "p95": 746,
+          "max": 746,
+          "mean": 317.48
+        },
+        "pixelsDeltaOver32": {
+          "n": 33,
+          "min": 0,
+          "median": 162,
+          "p95": 700,
+          "max": 704,
+          "mean": 294.58
+        },
+        "pixelsDeltaOver96": {
+          "n": 33,
+          "min": 0,
+          "median": 142,
+          "p95": 562,
+          "max": 569,
+          "mean": 236.15
+        },
+        "canvasPixels": 8464,
+        "worst": [
+          {
+            "key": "59->65",
+            "label": "E11",
+            "pixels": 8464,
+            "any": 764,
+            "over8": 746,
+            "over32": 704,
+            "over96": 569,
+            "max": 245
+          },
+          {
+            "key": "59->64",
+            "label": "E11",
+            "pixels": 8464,
+            "any": 762,
+            "over8": 743,
+            "over32": 700,
+            "over96": 560,
+            "max": 245
+          },
+          {
+            "key": "59->66",
+            "label": "E11",
+            "pixels": 8464,
+            "any": 762,
+            "over8": 746,
+            "over32": 698,
+            "over96": 554,
+            "max": 245
+          },
+          {
+            "key": "printed:G19->54",
+            "label": "G19",
+            "pixels": 8464,
+            "any": 736,
+            "over8": 706,
+            "over32": 655,
+            "over96": 543,
+            "max": 245
+          },
+          {
+            "key": "printed:E11->59",
+            "label": "E11",
+            "pixels": 8464,
+            "any": 697,
+            "over8": 681,
+            "over32": 647,
+            "over96": 562,
+            "max": 192
+          }
+        ]
+      }
+    },
+    "64@2x": {
+      "first_t0": {
+        "transitions": 11,
+        "identical": 0,
+        "maxChannelDelta": {
+          "n": 11,
+          "min": 47,
+          "median": 63,
+          "p95": 82,
+          "max": 82,
+          "mean": 66.18
+        },
+        "pixelsAnyDelta": {
+          "n": 11,
+          "min": 368,
+          "median": 904,
+          "p95": 1424,
+          "max": 1424,
+          "mean": 914.18
+        },
+        "pixelsDeltaOver8": {
+          "n": 11,
+          "min": 203,
+          "median": 397,
+          "p95": 808,
+          "max": 808,
+          "mean": 423.91
+        },
+        "pixelsDeltaOver32": {
+          "n": 11,
+          "min": 21,
+          "median": 60,
+          "p95": 173,
+          "max": 173,
+          "mean": 63
+        },
+        "pixelsDeltaOver96": {
+          "n": 11,
+          "min": 0,
+          "median": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "canvasPixels": 87616,
+        "worst": [
+          {
+            "key": "54->62",
+            "label": "G19",
+            "pixels": 87616,
+            "any": 1424,
+            "over8": 808,
+            "over32": 173,
+            "over96": 0,
+            "max": 80
+          },
+          {
+            "key": "57->14",
+            "label": "H10",
+            "pixels": 87616,
+            "any": 368,
+            "over8": 203,
+            "over32": 63,
+            "over96": 0,
+            "max": 82
+          },
+          {
+            "key": "57->15",
+            "label": "H10",
+            "pixels": 87616,
+            "any": 368,
+            "over8": 203,
+            "over32": 63,
+            "over96": 0,
+            "max": 82
+          },
+          {
+            "key": "59->64",
+            "label": "E11",
+            "pixels": 87616,
+            "any": 904,
+            "over8": 397,
+            "over32": 60,
+            "over96": 0,
+            "max": 63
+          },
+          {
+            "key": "59->65",
+            "label": "E11",
+            "pixels": 87616,
+            "any": 904,
+            "over8": 397,
+            "over32": 60,
+            "over96": 0,
+            "max": 63
+          }
+        ]
+      },
+      "last_drawn": {
+        "transitions": 33,
+        "identical": 0,
+        "maxChannelDelta": {
+          "n": 33,
+          "min": 24,
+          "median": 79,
+          "p95": 92,
+          "max": 108,
+          "mean": 70.3
+        },
+        "pixelsAnyDelta": {
+          "n": 33,
+          "min": 1295,
+          "median": 2231,
+          "p95": 2839,
+          "max": 2839,
+          "mean": 2120.21
+        },
+        "pixelsDeltaOver8": {
+          "n": 33,
+          "min": 32,
+          "median": 569,
+          "p95": 1162,
+          "max": 1162,
+          "mean": 629.12
+        },
+        "pixelsDeltaOver32": {
+          "n": 33,
+          "min": 0,
+          "median": 73,
+          "p95": 294,
+          "max": 294,
+          "mean": 107.06
+        },
+        "pixelsDeltaOver96": {
+          "n": 33,
+          "min": 0,
+          "median": 0,
+          "p95": 0,
+          "max": 1,
+          "mean": 0.03
+        },
+        "canvasPixels": 87616,
+        "worst": [
+          {
+            "key": "printed:G7->1",
+            "label": "G7",
+            "pixels": 87616,
+            "any": 2388,
+            "over8": 1162,
+            "over32": 294,
+            "over96": 0,
+            "max": 83
+          },
+          {
+            "key": "printed:F20->1",
+            "label": "F20",
+            "pixels": 87616,
+            "any": 2388,
+            "over8": 1162,
+            "over32": 294,
+            "over96": 0,
+            "max": 83
+          },
+          {
+            "key": "printed:G7->56",
+            "label": "G7",
+            "pixels": 87616,
+            "any": 2231,
+            "over8": 1066,
+            "over32": 270,
+            "over96": 0,
+            "max": 81
+          },
+          {
+            "key": "printed:F20->56",
+            "label": "F20",
+            "pixels": 87616,
+            "any": 2231,
+            "over8": 1066,
+            "over32": 270,
+            "over96": 0,
+            "max": 81
+          },
+          {
+            "key": "printed:G19->54",
+            "label": "G19",
+            "pixels": 87616,
+            "any": 2137,
+            "over8": 840,
+            "over32": 207,
+            "over96": 0,
+            "max": 80
+          }
+        ]
+      },
+      "last_t1": {
+        "transitions": 33,
+        "identical": 0,
+        "maxChannelDelta": {
+          "n": 33,
+          "min": 1,
+          "median": 76,
+          "p95": 91,
+          "max": 92,
+          "mean": 66.61
+        },
+        "pixelsAnyDelta": {
+          "n": 33,
+          "min": 462,
+          "median": 1385,
+          "p95": 2044,
+          "max": 2045,
+          "mean": 1291.85
+        },
+        "pixelsDeltaOver8": {
+          "n": 33,
+          "min": 0,
+          "median": 493,
+          "p95": 1112,
+          "max": 1112,
+          "mean": 574.97
+        },
+        "pixelsDeltaOver32": {
+          "n": 33,
+          "min": 0,
+          "median": 71,
+          "p95": 286,
+          "max": 286,
+          "mean": 97.21
+        },
+        "pixelsDeltaOver96": {
+          "n": 33,
+          "min": 0,
+          "median": 0,
+          "p95": 0,
+          "max": 0,
+          "mean": 0
+        },
+        "canvasPixels": 87616,
+        "worst": [
+          {
+            "key": "printed:G7->1",
+            "label": "G7",
+            "pixels": 87616,
+            "any": 1509,
+            "over8": 1112,
+            "over32": 286,
+            "over96": 0,
+            "max": 83
+          },
+          {
+            "key": "printed:F20->1",
+            "label": "F20",
+            "pixels": 87616,
+            "any": 1509,
+            "over8": 1112,
+            "over32": 286,
+            "over96": 0,
+            "max": 83
+          },
+          {
+            "key": "printed:G7->56",
+            "label": "G7",
+            "pixels": 87616,
+            "any": 1403,
+            "over8": 1029,
+            "over32": 265,
+            "over96": 0,
+            "max": 81
+          },
+          {
+            "key": "printed:F20->56",
+            "label": "F20",
+            "pixels": 87616,
+            "any": 1403,
+            "over8": 1029,
+            "over32": 265,
+            "over96": 0,
+            "max": 81
+          },
+          {
+            "key": "59->65",
+            "label": "E11",
+            "pixels": 87616,
+            "any": 1694,
+            "over8": 1011,
+            "over32": 186,
+            "over96": 0,
+            "max": 83
+          }
+        ]
+      },
+      "proposal_first_t0": {
+        "transitions": 33,
+        "identical": 4,
+        "maxChannelDelta": {
+          "n": 33,
+          "min": 0,
+          "median": 245,
+          "p95": 255,
+          "max": 255,
+          "mean": 215.21
+        },
+        "pixelsAnyDelta": {
+          "n": 33,
+          "min": 0,
+          "median": 1560,
+          "p95": 7126,
+          "max": 7163,
+          "mean": 2962.06
+        },
+        "pixelsDeltaOver8": {
+          "n": 33,
+          "min": 0,
+          "median": 1544,
+          "p95": 7059,
+          "max": 7102,
+          "mean": 2925.97
+        },
+        "pixelsDeltaOver32": {
+          "n": 33,
+          "min": 0,
+          "median": 1520,
+          "p95": 6888,
+          "max": 6890,
+          "mean": 2845.73
+        },
+        "pixelsDeltaOver96": {
+          "n": 33,
+          "min": 0,
+          "median": 1462,
+          "p95": 6441,
+          "max": 6469,
+          "mean": 2657
+        },
+        "canvasPixels": 87616,
+        "worst": [
+          {
+            "key": "59->65",
+            "label": "E11",
+            "pixels": 87616,
+            "any": 7126,
+            "over8": 7059,
+            "over32": 6890,
+            "over96": 6441,
+            "max": 246
+          },
+          {
+            "key": "59->64",
+            "label": "E11",
+            "pixels": 87616,
+            "any": 7125,
+            "over8": 7056,
+            "over32": 6888,
+            "over96": 6425,
+            "max": 245
+          },
+          {
+            "key": "59->66",
+            "label": "E11",
+            "pixels": 87616,
+            "any": 7163,
+            "over8": 7102,
+            "over32": 6827,
+            "over96": 6469,
+            "max": 245
+          },
+          {
+            "key": "printed:E11->59",
+            "label": "E11",
+            "pixels": 87616,
+            "any": 6643,
+            "over8": 6596,
+            "over32": 6507,
+            "over96": 6194,
+            "max": 192
+          },
+          {
+            "key": "printed:D10->59",
+            "label": "D10",
+            "pixels": 87616,
+            "any": 6643,
+            "over8": 6596,
+            "over32": 6507,
+            "over96": 6194,
+            "max": 192
+          }
+        ]
+      }
+    }
+  },
+  "montage": "docs/phase3/evidence/w3h/d16_handover_montage.png (rows: static | frame | |diff|x4 at 64px@2x: 2 worst last frames, 2 worst first frames by >32-delta pixel count, then a median last and a median first frame)",
+  "perTransition": [
+    {
+      "key": "printed:H10->57",
+      "label": "H10",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        340,
+        0,
+        32
+      ],
+      "last_t1": [
+        99,
+        0,
+        32
+      ],
+      "proposal_first_t0": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "57->14",
+      "label": "H10",
+      "size": 40,
+      "dpr": 1,
+      "first_t0": [
+        99,
+        0,
+        32
+      ],
+      "last_drawn": [
+        606,
+        20,
+        69
+      ],
+      "last_t1": [
+        345,
+        25,
+        103
+      ],
+      "proposal_first_t0": [
+        235,
+        205,
+        245
+      ]
+    },
+    {
+      "key": "14->63",
+      "label": "H10",
+      "size": 40,
+      "dpr": 1,
+      "first_t0": [
+        345,
+        25,
+        103
+      ],
+      "last_drawn": [
+        758,
+        12,
+        85
+      ],
+      "last_t1": [
+        503,
+        10,
+        99
+      ],
+      "proposal_first_t0": [
+        462,
+        408,
+        246
+      ]
+    },
+    {
+      "key": "57->15",
+      "label": "H10",
+      "size": 40,
+      "dpr": 1,
+      "first_t0": [
+        99,
+        0,
+        32
+      ],
+      "last_drawn": [
+        585,
+        16,
+        82
+      ],
+      "last_t1": [
+        254,
+        0,
+        27
+      ],
+      "proposal_first_t0": [
+        237,
+        199,
+        245
+      ]
+    },
+    {
+      "key": "15->63",
+      "label": "H10",
+      "size": 40,
+      "dpr": 1,
+      "first_t0": [
+        254,
+        0,
+        27
+      ],
+      "last_drawn": [
+        750,
+        12,
+        84
+      ],
+      "last_t1": [
+        503,
+        10,
+        99
+      ],
+      "proposal_first_t0": [
+        518,
+        468,
+        246
+      ]
+    },
+    {
+      "key": "printed:I15->53",
+      "label": "I15",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        486,
+        11,
+        57
+      ],
+      "last_t1": [
+        263,
+        0,
+        32
+      ],
+      "proposal_first_t0": [
+        586,
+        514,
+        245
+      ]
+    },
+    {
+      "key": "53->61",
+      "label": "I15",
+      "size": 40,
+      "dpr": 1,
+      "first_t0": [
+        263,
+        0,
+        32
+      ],
+      "last_drawn": [
+        476,
+        0,
+        32
+      ],
+      "last_t1": [
+        260,
+        0,
+        32
+      ],
+      "proposal_first_t0": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "printed:E23->53",
+      "label": "E23",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        492,
+        0,
+        32
+      ],
+      "last_t1": [
+        275,
+        0,
+        32
+      ],
+      "proposal_first_t0": [
+        594,
+        513,
+        245
+      ]
+    },
+    {
+      "key": "printed:G19->54",
+      "label": "G19",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        588,
+        42,
+        82
+      ],
+      "last_t1": [
+        363,
+        24,
+        70
+      ],
+      "proposal_first_t0": [
+        736,
+        655,
+        245
+      ]
+    },
+    {
+      "key": "54->62",
+      "label": "G19",
+      "size": 40,
+      "dpr": 1,
+      "first_t0": [
+        363,
+        24,
+        70
+      ],
+      "last_drawn": [
+        685,
+        25,
+        64
+      ],
+      "last_t1": [
+        361,
+        16,
+        64
+      ],
+      "proposal_first_t0": [
+        484,
+        423,
+        245
+      ]
+    },
+    {
+      "key": "printed:E11->59",
+      "label": "E11",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        465,
+        8,
+        76
+      ],
+      "last_t1": [
+        236,
+        1,
+        45
+      ],
+      "proposal_first_t0": [
+        697,
+        647,
+        192
+      ]
+    },
+    {
+      "key": "59->64",
+      "label": "E11",
+      "size": 40,
+      "dpr": 1,
+      "first_t0": [
+        236,
+        1,
+        45
+      ],
+      "last_drawn": [
+        655,
+        44,
+        72
+      ],
+      "last_t1": [
+        419,
+        28,
+        71
+      ],
+      "proposal_first_t0": [
+        762,
+        700,
+        245
+      ]
+    },
+    {
+      "key": "59->65",
+      "label": "E11",
+      "size": 40,
+      "dpr": 1,
+      "first_t0": [
+        236,
+        1,
+        45
+      ],
+      "last_drawn": [
+        637,
+        48,
+        82
+      ],
+      "last_t1": [
+        420,
+        41,
+        82
+      ],
+      "proposal_first_t0": [
+        764,
+        704,
+        245
+      ]
+    },
+    {
+      "key": "59->66",
+      "label": "E11",
+      "size": 40,
+      "dpr": 1,
+      "first_t0": [
+        236,
+        1,
+        45
+      ],
+      "last_drawn": [
+        502,
+        22,
+        59
+      ],
+      "last_t1": [
+        281,
+        11,
+        47
+      ],
+      "proposal_first_t0": [
+        762,
+        698,
+        245
+      ]
+    },
+    {
+      "key": "59->67",
+      "label": "E11",
+      "size": 40,
+      "dpr": 1,
+      "first_t0": [
+        236,
+        1,
+        45
+      ],
+      "last_drawn": [
+        582,
+        14,
+        62
+      ],
+      "last_t1": [
+        342,
+        15,
+        62
+      ],
+      "proposal_first_t0": [
+        534,
+        447,
+        245
+      ]
+    },
+    {
+      "key": "59->68",
+      "label": "E11",
+      "size": 40,
+      "dpr": 1,
+      "first_t0": [
+        236,
+        1,
+        45
+      ],
+      "last_drawn": [
+        574,
+        3,
+        47
+      ],
+      "last_t1": [
+        356,
+        3,
+        47
+      ],
+      "proposal_first_t0": [
+        533,
+        441,
+        245
+      ]
+    },
+    {
+      "key": "printed:G7->1",
+      "label": "G7",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        599,
+        72,
+        82
+      ],
+      "last_t1": [
+        365,
+        73,
+        82
+      ],
+      "proposal_first_t0": [
+        170,
+        162,
+        245
+      ]
+    },
+    {
+      "key": "printed:G7->2",
+      "label": "G7",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        368,
+        35,
+        82
+      ],
+      "last_t1": [
+        121,
+        35,
+        82
+      ],
+      "proposal_first_t0": [
+        170,
+        161,
+        249
+      ]
+    },
+    {
+      "key": "printed:G7->55",
+      "label": "G7",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        457,
+        1,
+        40
+      ],
+      "last_t1": [
+        214,
+        0,
+        29
+      ],
+      "proposal_first_t0": [
+        170,
+        160,
+        250
+      ]
+    },
+    {
+      "key": "printed:G7->56",
+      "label": "G7",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        570,
+        66,
+        74
+      ],
+      "last_t1": [
+        350,
+        62,
+        74
+      ],
+      "proposal_first_t0": [
+        170,
+        162,
+        246
+      ]
+    },
+    {
+      "key": "printed:G7->69",
+      "label": "G7",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        432,
+        24,
+        67
+      ],
+      "last_t1": [
+        178,
+        26,
+        67
+      ],
+      "proposal_first_t0": [
+        170,
+        160,
+        251
+      ]
+    },
+    {
+      "key": "printed:E7->3",
+      "label": "E7",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        354,
+        30,
+        66
+      ],
+      "last_t1": [
+        117,
+        32,
+        67
+      ],
+      "proposal_first_t0": [
+        118,
+        112,
+        245
+      ]
+    },
+    {
+      "key": "printed:E7->4",
+      "label": "E7",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        239,
+        0,
+        24
+      ],
+      "last_t1": [
+        0,
+        0,
+        0
+      ],
+      "proposal_first_t0": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "printed:E7->58",
+      "label": "E7",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        418,
+        30,
+        64
+      ],
+      "last_t1": [
+        183,
+        30,
+        64
+      ],
+      "proposal_first_t0": [
+        118,
+        109,
+        245
+      ]
+    },
+    {
+      "key": "printed:D10->59",
+      "label": "D10",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        465,
+        8,
+        76
+      ],
+      "last_t1": [
+        236,
+        1,
+        45
+      ],
+      "proposal_first_t0": [
+        697,
+        647,
+        192
+      ]
+    },
+    {
+      "key": "printed:B20->3",
+      "label": "B20",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        359,
+        28,
+        66
+      ],
+      "last_t1": [
+        117,
+        29,
+        66
+      ],
+      "proposal_first_t0": [
+        118,
+        112,
+        245
+      ]
+    },
+    {
+      "key": "printed:B20->4",
+      "label": "B20",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        239,
+        0,
+        24
+      ],
+      "last_t1": [
+        0,
+        0,
+        0
+      ],
+      "proposal_first_t0": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "printed:B20->58",
+      "label": "B20",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        418,
+        30,
+        64
+      ],
+      "last_t1": [
+        183,
+        30,
+        64
+      ],
+      "proposal_first_t0": [
+        118,
+        109,
+        245
+      ]
+    },
+    {
+      "key": "printed:F20->1",
+      "label": "F20",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        599,
+        72,
+        82
+      ],
+      "last_t1": [
+        365,
+        73,
+        82
+      ],
+      "proposal_first_t0": [
+        170,
+        162,
+        245
+      ]
+    },
+    {
+      "key": "printed:F20->2",
+      "label": "F20",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        368,
+        35,
+        82
+      ],
+      "last_t1": [
+        121,
+        35,
+        82
+      ],
+      "proposal_first_t0": [
+        170,
+        161,
+        249
+      ]
+    },
+    {
+      "key": "printed:F20->55",
+      "label": "F20",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        457,
+        1,
+        40
+      ],
+      "last_t1": [
+        214,
+        0,
+        29
+      ],
+      "proposal_first_t0": [
+        170,
+        160,
+        250
+      ]
+    },
+    {
+      "key": "printed:F20->56",
+      "label": "F20",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        570,
+        66,
+        74
+      ],
+      "last_t1": [
+        350,
+        62,
+        74
+      ],
+      "proposal_first_t0": [
+        170,
+        162,
+        246
+      ]
+    },
+    {
+      "key": "printed:F20->69",
+      "label": "F20",
+      "size": 40,
+      "dpr": 1,
+      "last_drawn": [
+        432,
+        24,
+        67
+      ],
+      "last_t1": [
+        178,
+        26,
+        67
+      ],
+      "proposal_first_t0": [
+        170,
+        160,
+        251
+      ]
+    },
+    {
+      "key": "printed:H10->57",
+      "label": "H10",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        1821,
+        63,
+        82
+      ],
+      "last_t1": [
+        996,
+        63,
+        82
+      ],
+      "proposal_first_t0": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "57->14",
+      "label": "H10",
+      "size": 64,
+      "dpr": 2,
+      "first_t0": [
+        368,
+        63,
+        82
+      ],
+      "last_drawn": [
+        2345,
+        54,
+        87
+      ],
+      "last_t1": [
+        1424,
+        40,
+        64
+      ],
+      "proposal_first_t0": [
+        1956,
+        1860,
+        245
+      ]
+    },
+    {
+      "key": "14->63",
+      "label": "H10",
+      "size": 64,
+      "dpr": 2,
+      "first_t0": [
+        1422,
+        40,
+        64
+      ],
+      "last_drawn": [
+        2839,
+        72,
+        87
+      ],
+      "last_t1": [
+        2044,
+        67,
+        76
+      ],
+      "proposal_first_t0": [
+        4137,
+        3953,
+        246
+      ]
+    },
+    {
+      "key": "57->15",
+      "label": "H10",
+      "size": 64,
+      "dpr": 2,
+      "first_t0": [
+        368,
+        63,
+        82
+      ],
+      "last_drawn": [
+        2107,
+        69,
+        62
+      ],
+      "last_t1": [
+        837,
+        21,
+        47
+      ],
+      "proposal_first_t0": [
+        1953,
+        1838,
+        245
+      ]
+    },
+    {
+      "key": "15->63",
+      "label": "H10",
+      "size": 64,
+      "dpr": 2,
+      "first_t0": [
+        836,
+        21,
+        47
+      ],
+      "last_drawn": [
+        2839,
+        80,
+        87
+      ],
+      "last_t1": [
+        2045,
+        67,
+        76
+      ],
+      "proposal_first_t0": [
+        4732,
+        4542,
+        246
+      ]
+    },
+    {
+      "key": "printed:I15->53",
+      "label": "I15",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2176,
+        50,
+        58
+      ],
+      "last_t1": [
+        1118,
+        33,
+        58
+      ],
+      "proposal_first_t0": [
+        5276,
+        5040,
+        245
+      ]
+    },
+    {
+      "key": "53->61",
+      "label": "I15",
+      "size": 64,
+      "dpr": 2,
+      "first_t0": [
+        1118,
+        33,
+        58
+      ],
+      "last_drawn": [
+        1733,
+        34,
+        59
+      ],
+      "last_t1": [
+        1109,
+        34,
+        59
+      ],
+      "proposal_first_t0": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "printed:E23->53",
+      "label": "E23",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2179,
+        37,
+        59
+      ],
+      "last_t1": [
+        1439,
+        37,
+        59
+      ],
+      "proposal_first_t0": [
+        5283,
+        5054,
+        245
+      ]
+    },
+    {
+      "key": "printed:G19->54",
+      "label": "G19",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2137,
+        207,
+        80
+      ],
+      "last_t1": [
+        1424,
+        173,
+        80
+      ],
+      "proposal_first_t0": [
+        6729,
+        6478,
+        245
+      ]
+    },
+    {
+      "key": "54->62",
+      "label": "G19",
+      "size": 64,
+      "dpr": 2,
+      "first_t0": [
+        1424,
+        173,
+        80
+      ],
+      "last_drawn": [
+        2422,
+        149,
+        108
+      ],
+      "last_t1": [
+        1210,
+        120,
+        92
+      ],
+      "proposal_first_t0": [
+        4084,
+        3829,
+        245
+      ]
+    },
+    {
+      "key": "printed:E11->59",
+      "label": "E11",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        1762,
+        73,
+        63
+      ],
+      "last_t1": [
+        904,
+        60,
+        63
+      ],
+      "proposal_first_t0": [
+        6643,
+        6507,
+        192
+      ]
+    },
+    {
+      "key": "59->64",
+      "label": "E11",
+      "size": 64,
+      "dpr": 2,
+      "first_t0": [
+        904,
+        60,
+        63
+      ],
+      "last_drawn": [
+        2299,
+        168,
+        83
+      ],
+      "last_t1": [
+        1678,
+        134,
+        71
+      ],
+      "proposal_first_t0": [
+        7125,
+        6888,
+        245
+      ]
+    },
+    {
+      "key": "59->65",
+      "label": "E11",
+      "size": 64,
+      "dpr": 2,
+      "first_t0": [
+        904,
+        60,
+        63
+      ],
+      "last_drawn": [
+        2287,
+        196,
+        80
+      ],
+      "last_t1": [
+        1694,
+        186,
+        83
+      ],
+      "proposal_first_t0": [
+        7126,
+        6890,
+        246
+      ]
+    },
+    {
+      "key": "59->66",
+      "label": "E11",
+      "size": 64,
+      "dpr": 2,
+      "first_t0": [
+        904,
+        60,
+        63
+      ],
+      "last_drawn": [
+        2318,
+        155,
+        80
+      ],
+      "last_t1": [
+        1705,
+        136,
+        80
+      ],
+      "proposal_first_t0": [
+        7163,
+        6827,
+        245
+      ]
+    },
+    {
+      "key": "59->67",
+      "label": "E11",
+      "size": 64,
+      "dpr": 2,
+      "first_t0": [
+        904,
+        60,
+        63
+      ],
+      "last_drawn": [
+        2517,
+        72,
+        62
+      ],
+      "last_t1": [
+        1887,
+        72,
+        62
+      ],
+      "proposal_first_t0": [
+        4521,
+        4211,
+        245
+      ]
+    },
+    {
+      "key": "59->68",
+      "label": "E11",
+      "size": 64,
+      "dpr": 2,
+      "first_t0": [
+        904,
+        60,
+        63
+      ],
+      "last_drawn": [
+        2654,
+        71,
+        66
+      ],
+      "last_t1": [
+        2032,
+        71,
+        65
+      ],
+      "proposal_first_t0": [
+        4513,
+        4155,
+        245
+      ]
+    },
+    {
+      "key": "printed:G7->1",
+      "label": "G7",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2388,
+        294,
+        83
+      ],
+      "last_t1": [
+        1509,
+        286,
+        83
+      ],
+      "proposal_first_t0": [
+        1560,
+        1514,
+        255
+      ]
+    },
+    {
+      "key": "printed:G7->2",
+      "label": "G7",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2108,
+        94,
+        92
+      ],
+      "last_t1": [
+        1240,
+        88,
+        91
+      ],
+      "proposal_first_t0": [
+        1560,
+        1520,
+        255
+      ]
+    },
+    {
+      "key": "printed:G7->55",
+      "label": "G7",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2421,
+        5,
+        40
+      ],
+      "last_t1": [
+        1577,
+        5,
+        40
+      ],
+      "proposal_first_t0": [
+        1560,
+        1512,
+        255
+      ]
+    },
+    {
+      "key": "printed:G7->56",
+      "label": "G7",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2231,
+        270,
+        81
+      ],
+      "last_t1": [
+        1403,
+        265,
+        81
+      ],
+      "proposal_first_t0": [
+        1560,
+        1518,
+        255
+      ]
+    },
+    {
+      "key": "printed:G7->69",
+      "label": "G7",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2268,
+        24,
+        50
+      ],
+      "last_t1": [
+        1385,
+        13,
+        49
+      ],
+      "proposal_first_t0": [
+        1560,
+        1518,
+        255
+      ]
+    },
+    {
+      "key": "printed:E7->3",
+      "label": "E7",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        1295,
+        105,
+        79
+      ],
+      "last_t1": [
+        465,
+        97,
+        76
+      ],
+      "proposal_first_t0": [
+        1066,
+        1043,
+        245
+      ]
+    },
+    {
+      "key": "printed:E7->4",
+      "label": "E7",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        1580,
+        0,
+        24
+      ],
+      "last_t1": [
+        756,
+        0,
+        1
+      ],
+      "proposal_first_t0": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "printed:E7->58",
+      "label": "E7",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        1589,
+        162,
+        75
+      ],
+      "last_t1": [
+        757,
+        161,
+        84
+      ],
+      "proposal_first_t0": [
+        1066,
+        1040,
+        245
+      ]
+    },
+    {
+      "key": "printed:D10->59",
+      "label": "D10",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        1762,
+        73,
+        63
+      ],
+      "last_t1": [
+        904,
+        60,
+        63
+      ],
+      "proposal_first_t0": [
+        6643,
+        6507,
+        192
+      ]
+    },
+    {
+      "key": "printed:B20->3",
+      "label": "B20",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        1305,
+        107,
+        85
+      ],
+      "last_t1": [
+        462,
+        101,
+        84
+      ],
+      "proposal_first_t0": [
+        1066,
+        1043,
+        245
+      ]
+    },
+    {
+      "key": "printed:B20->4",
+      "label": "B20",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        1580,
+        0,
+        24
+      ],
+      "last_t1": [
+        756,
+        0,
+        1
+      ],
+      "proposal_first_t0": [
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "printed:B20->58",
+      "label": "B20",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        1589,
+        162,
+        75
+      ],
+      "last_t1": [
+        757,
+        161,
+        84
+      ],
+      "proposal_first_t0": [
+        1066,
+        1040,
+        245
+      ]
+    },
+    {
+      "key": "printed:F20->1",
+      "label": "F20",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2388,
+        294,
+        83
+      ],
+      "last_t1": [
+        1509,
+        286,
+        83
+      ],
+      "proposal_first_t0": [
+        1560,
+        1514,
+        255
+      ]
+    },
+    {
+      "key": "printed:F20->2",
+      "label": "F20",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2108,
+        94,
+        92
+      ],
+      "last_t1": [
+        1240,
+        88,
+        91
+      ],
+      "proposal_first_t0": [
+        1560,
+        1520,
+        255
+      ]
+    },
+    {
+      "key": "printed:F20->55",
+      "label": "F20",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2421,
+        5,
+        40
+      ],
+      "last_t1": [
+        1577,
+        5,
+        40
+      ],
+      "proposal_first_t0": [
+        1560,
+        1512,
+        255
+      ]
+    },
+    {
+      "key": "printed:F20->56",
+      "label": "F20",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2231,
+        270,
+        81
+      ],
+      "last_t1": [
+        1403,
+        265,
+        81
+      ],
+      "proposal_first_t0": [
+        1560,
+        1518,
+        255
+      ]
+    },
+    {
+      "key": "printed:F20->69",
+      "label": "F20",
+      "size": 64,
+      "dpr": 2,
+      "last_drawn": [
+        2268,
+        24,
+        50
+      ],
+      "last_t1": [
+        1385,
+        13,
+        49
+      ],
+      "proposal_first_t0": [
+        1560,
+        1518,
+        255
+      ]
+    }
+  ],
+  "perTransitionLegend": "[pixels with any delta, pixels with delta > 32, max channel delta]",
+  "pageErrors": []
+}

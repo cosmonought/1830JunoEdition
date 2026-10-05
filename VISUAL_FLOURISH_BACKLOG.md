@@ -1209,7 +1209,7 @@ city new — are rules-illegal under fixed OO (D-22), so there is no intended em
 the 67,308 currently accepted transitions nothing else produces one. The description keeps its emerge event
 (it describes whatever pair it is handed); nothing was added for #59.
 
-### D-16 · `OPEN` · The hand-over at pixel level
+### D-16 · `RESOLVED` (W3-H evidence, 2026-10-04) · The hand-over at pixel level
 First and last frames stroke every line exactly once (tested) and match the tile pass to rasterisation noise:
 curved rail is drawn as polylines (within 0.04 px of the curve at hex size 64) and a pill's outline as a fattened
 stroke rather than a capsule path. One difference is by design: rail carried over from a green crossing tile
@@ -1219,6 +1219,32 @@ If a flicker is ever seen as a flourish starts or ends, look here first. Since #
 #1470's to within one intensity level (the old tier no longer sits under the destination's fill), a confirmed
 proposal's first frame differs from the proposal only inside its moving parts' footprint, and a lay nobody
 proposed here starts on #1470's first frame (checked on every 7th currently accepted transition).
+
+**W3-H evidence** — rasterised in headless Chromium 1243 on real canvases, for all 33 distinct accepted pairs that
+`tileTransition.test.ts`'s walk reaches (standard rules, its ten city/town labels; 11 of them tile → tile),
+at hex size 40 @1× and 64 @2×. The static side is HexGridRenderer.tsx's per-tile loop body copied statement for
+statement (fill `ERA_TILE_FILL`, 2 px `COLOR_TIER_STROKE` rim, `drawTrackPath(…, false, undefined, false)` under
+`withHexClip`); the flourish side is the renderer's own staged branch (`drawTileTransitionFill` +
+`withHexClip(drawTileTransitionArt)`); per-pixel max RGB delta on an opaque background. **The hand-over is
+rasterisation noise.** Last frame (t = 1) vs the new tile pass: at 40 @1× median 260 / max 503 of 8,464 pixels
+differ at all, median 16 / max 73 by more than 32 levels, max channel delta 103, at most 1 pixel over 96; at
+64 @2× median 1,385 / max 2,045 of 87,616 differ, median 71 / max 286 over 32, max delta 92, none over 96. The
+last frame the board's clock actually paints (t = 1 − 16.7 ms/duration) is within the same band (40 @1×: max
+delta 85, 0 px over 96; 64 @2×: max delta 108, 1 px over 96). First frame (t = 0) vs the old tile pass, 11
+tile → tile pairs: 40 @1× max delta 103, median 1 / max 25 px over 32; 64 @2× max delta 82, median 60 / max
+173 px over 32, none over 96. Every difference is a one-pixel fringe along curved rail (the polyline-vs-arc
+note above) and station outlines (fattened stroke vs path); none is a missing, extra or displaced element
+(`d16_handover_montage.png`: static | frame | |diff|×4 for the two worst last frames, two worst first frames, and
+a median of each). Worst cases: `printed:G7→#1` / `printed:F20→#1` last frame, `#54→#62` first frame. **One
+deliberate difference, now seen:** a confirmed proposal's t = 0 frame against the proposal drawn solid
+(`proposedTileFrame`) differs exactly in its moving parts — the old tile's cities reappear in full colour at
+their old positions over the washed proposal and then migrate (up to 704 px at 40 @1×, 6,890 at 64 @2×, max
+delta 245–255, worst `#59→#64/#65/#66`; identical for 4 of 33 pairs with nothing moving;
+`d16_proposal_montage.png`). That is the behaviour this entry describes ("differs from the proposal only inside
+its moving parts' footprint"), but at the confirm click it is a visible pop of two full-colour stations onto a
+washed tile; flagged for playtest, not a hand-over fault. Scope: a lone hex (no neighbours, value-badge pass
+not included). Numbers: `docs/phase3/evidence/w3h/d16_handover_pixels.json` (per transition); harness
+`entries/d16.tsx`, `d16.mjs`.
 
 ### D-17 · `OPEN` · Whole-board repaint while a flourish runs
 The frame clock (#463's pattern) repaints the whole board canvas every animation frame while any transition runs

@@ -6756,8 +6756,10 @@ function AppShell({ gameId, roomId, onLeaveGame, mode, sandboxRoomSeed = null, w
                divergence verdict are about other facts and stand. */
             /* Phase 3 W3-C (AUD-14.01 / P3-N004, OD-12 RED R1): a landed move retires the REFUSAL SLOT -- any refusal,
                not only the turn refusal (a server `refused` or stale answer stayed up after the turn was played on) --
-               and the two connection kinds a landed move contradicts (`roomNotices.ts`). No sentence is compared. */
-            if (options?.automatic !== true) {
+               and the two connection kinds a landed move contradicts (`roomNotices.ts`). No sentence is compared.
+               Phase 3 W3-J (AUD-25.03, OD-12 RED R1): every PLAYER decision that lands retires it -- the B&O par, the home
+               station, the M&H exchange and Undo are sent `automatic` too; only the game's own derived actions are not. */
+            if (options?.derived !== true) {
               dispatchRoomNotice({ type: "submission-landed" });
             }
           }
